@@ -1,0 +1,12 @@
+ezdxf==1.4.2
+fastapi==0.128.8
+pydantic==2.13.4
+pydantic_core==2.46.4
+starlette==0.49.3
+uvicorn==0.39.0
+openpyxl==3.1.5
+python-multipart==0.0.20
+lxml==6.1.1
+reportlab==5.0.0
+svglib==2.0.2
+shapely==2.0.7

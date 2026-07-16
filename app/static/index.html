@@ -1,0 +1,4229 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<title>ЖБИ</title>
+<!-- Three.js — локально (не CDN), см. Docs/backlog.md ("3D-режим схемы").
+     Подключается через import map, чтобы bare-специфайер "three" внутри
+     OrbitControls.js разрешался в локальный файл — сама библиотека
+     подгружается лениво (динамический import()) только при первом
+     включении 3D, а не на каждой загрузке страницы. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three/three.module.min.js"
+  }
+}
+</script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --color-primary: #1353d6;
+    --color-primary-hover: #0f43ad;
+    --color-bg: #f2f4f7;
+    --color-surface: #ffffff;
+    --color-surface-2: #f7f8fa;
+    --color-border: #dde1e6;
+    --color-text: #1a1d21;
+    --color-text-muted: #6b7280;
+    --color-danger: #c0392b;
+    --radius: 10px;
+    --radius-sm: 7px;
+    --shadow-sm: 0 1px 3px rgba(20,30,50,.08);
+    --shadow-md: 0 12px 32px rgba(20,30,50,.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-bg: #14161a;
+      --color-surface: #1e2126;
+      --color-surface-2: #262a30;
+      --color-border: #33373e;
+      --color-text: #e8eaed;
+      --color-text-muted: #9aa0a6;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,.3);
+      --shadow-md: 0 12px 32px rgba(0,0,0,.45);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--color-bg);
+    color: var(--color-text);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  button { font-family: inherit; }
+
+  /* -------- тулбар -------- */
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    box-shadow: var(--shadow-sm);
+    flex-shrink: 0;
+    font-size: 13px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    z-index: 10;
+  }
+  #toolbar h1 { font-size: 13px; font-weight: 600; margin: 0 6px 0 0; white-space: nowrap; color: var(--color-text); flex-shrink: 0; }
+  #toolbar select, #toolbar input {
+    font-size: 13px; padding: 6px 9px; border-radius: var(--radius-sm); border: 1px solid var(--color-border);
+    background: var(--color-surface); color: var(--color-text);
+  }
+  #toolbar select:focus, #toolbar input:focus, .modal select:focus, .modal input:focus {
+    outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(19,83,214,.15);
+  }
+  .btn {
+    font-size: 13px; padding: 6px 12px; border-radius: var(--radius-sm); cursor: pointer;
+    border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text);
+    transition: background .12s, border-color .12s, box-shadow .12s;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .btn:hover { border-color: var(--color-primary); }
+  .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+  .btn-primary:hover { background: var(--color-primary-hover); border-color: var(--color-primary-hover); }
+  .btn-secondary { background: var(--color-surface-2); }
+  .btn-danger { background: var(--color-danger); color: #fff; border-color: var(--color-danger); }
+  .btn-sm { font-size: 11px; padding: 4px 8px; }
+  .view-mode-switch {
+    display: flex; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    overflow: hidden; flex-shrink: 0;
+  }
+  .view-mode-btn {
+    border: none; background: var(--color-surface); color: var(--color-text-muted);
+    font-size: 13px; padding: 8px 14px; cursor: pointer; font-weight: 500;
+  }
+  .view-mode-btn + .view-mode-btn { border-left: 1px solid var(--color-border); }
+  .view-mode-btn:hover { background: var(--color-surface-2); }
+  .view-mode-btn.active { background: var(--color-primary); color: #fff; }
+  .view-mode-btn:disabled { opacity: .6; cursor: default; }
+  #toolbar .spacer { flex: 1 1 12px; }
+  #workdate-box { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--color-text-muted); flex-shrink: 0; }
+  #workdate-input { font-size: 12px; padding: 5px 6px; width: 192px; }
+  #workdate-box.active { color: var(--color-primary); font-weight: 600; }
+  #workdate-box.active input { border-color: var(--color-primary); }
+  #user-box { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; }
+  #user-box b { color: var(--color-text); }
+
+  /* -------- рабочая область -------- */
+  #body { flex: 1; display: flex; min-height: 0; }
+  #stage { flex: 1; position: relative; overflow: hidden; background: #ffffff; cursor: grab; }
+  #stage.dragging { cursor: grabbing; }
+  #stage-3d { flex: 1; position: relative; overflow: hidden; background: #f3f4f6; }
+  #stage-3d canvas { display: block; }
+  #stage-3d-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); }
+  #tooltip-3d {
+    position: absolute; top: 0; left: 0; z-index: 20; pointer-events: none;
+    background: rgba(30,32,38,.92); color: #fff; font-size: 12px; line-height: 1.5;
+    padding: 6px 10px; border-radius: var(--radius-sm); white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+  }
+  svg { width: 100%; height: 100%; display: block; }
+  .mark-label { pointer-events: none; fill: #333; }
+  #axis-layer text { pointer-events: none; }
+  /* -------- зоны (захватка/кран/стоянка) — см. Docs/backlog.md,
+     "Разбор структурированных имён слоёв DWG/DXF..." -------- */
+  /* Подложка: полупрозрачная заливка + полупрозрачная (не сплошная) обводка
+     — зона видна как фон, но не "спорит" с маркерами/подписями элементов,
+     которые рисуются поверх неё (см. порядок #zones-layer/#elements-layer
+     ниже и Docs/backlog.md). */
+  #zones-layer polygon { pointer-events: none; fill-opacity: .07; stroke-opacity: .5; }
+  #zones-layer text { pointer-events: none; }
+  #zones-layer polygon.zone-Захватка { stroke: #1353d6; fill: #1353d6; }
+  #zones-layer polygon.zone-Кран { stroke: #c0392b; fill: #c0392b; }
+  #zones-layer polygon.zone-Стоянка { stroke: #7c3aed; fill: #7c3aed; }
+  #zones-layer polygon.zone-unresolved { stroke-dasharray: 6 4; }
+  #zones-layer text.zone-Захватка { fill: #1353d6; }
+  #zones-layer text.zone-Кран { fill: #c0392b; }
+  #zones-layer text.zone-Стоянка { fill: #7c3aed; }
+
+  /* -------- справочник подтипов -------- */
+  .subtype-row { margin-bottom: 14px; }
+  .subtype-row h4 { font-size: 12px; margin: 0 0 6px; font-weight: 600; }
+  .subtype-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .subtype-chip {
+    display: inline-flex; align-items: center; gap: 6px; background: var(--color-surface-2);
+    border: 1px solid var(--color-border); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 12px;
+  }
+  .subtype-chip button { border: none; background: none; cursor: pointer; color: var(--color-text-muted); font-size: 13px; line-height: 1; padding: 2px; }
+  .subtype-chip button:hover { color: var(--color-danger); }
+  .subtype-add-row { display: flex; gap: 6px; }
+  .subtype-add-row input { flex: 1; }
+  .element-shape { cursor: pointer; }
+  .element-shape:hover { stroke-width: 3; }
+
+  #resize-handle { width: 6px; flex-shrink: 0; cursor: col-resize; background: transparent; position: relative; }
+  #resize-handle:hover, #resize-handle.dragging { background: var(--color-primary); opacity: .3; }
+
+  #sidebar {
+    width: 320px; flex-shrink: 0; background: var(--color-surface); border-left: 1px solid var(--color-border);
+    padding: 16px; overflow-y: auto; font-size: 13px;
+  }
+  #sidebar h3 { font-size: 12px; margin: 18px 0 8px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .03em; font-weight: 600; }
+  #sidebar h3:first-child { margin-top: 0; }
+  .tabs { display: flex; gap: 4px; margin: -16px -16px 16px; padding: 0 8px; border-bottom: 1px solid var(--color-border); }
+  .tab-btn {
+    flex: 1; background: none; border: none; padding: 10px 4px; font-size: 12px; font-weight: 600;
+    color: var(--color-text-muted); cursor: pointer; border-bottom: 2px solid transparent;
+  }
+  .tab-btn:hover { color: var(--color-text); }
+  .tab-btn.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .tab-panel h3:first-child { margin-top: 0; }
+  .display-settings-row { display: flex; gap: 20px; margin-bottom: 4px; }
+  .display-settings-col { flex: 1; min-width: 0; }
+  .display-settings-col h4 { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 8px; font-weight: 600; }
+  .filter-group { margin-bottom: 14px; }
+  .filter-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .filter-group-header span { font-size: 12px; font-weight: 600; flex: 1; }
+  .link-btn { background: none; border: none; padding: 0; font-size: 11px; color: var(--color-primary); cursor: pointer; }
+  .link-btn:hover { text-decoration: underline; }
+  .filter-group .toggle { margin-top: 4px; }
+  .filter-group .toggle.filter-parent { font-weight: 600; margin-top: 0; flex: 1; }
+  .filter-group .toggle.filter-child { margin-left: 20px; font-weight: 400; }
+  .filter-group .toggle.filter-disabled { opacity: .4; }
+  .filter-group .toggle.filter-disabled input[type="checkbox"] { cursor: not-allowed; }
+  .filter-parent-row { display: flex; align-items: center; margin-top: 8px; }
+  .filter-expand-btn {
+    background: none; border: none; cursor: pointer; padding: 0; margin-right: 4px;
+    width: 14px; flex-shrink: 0; font-size: 10px; color: var(--color-text-muted); line-height: 1;
+  }
+  .filter-expand-btn:hover { color: var(--color-text); }
+  .filter-expand-spacer { display: inline-block; width: 14px; margin-right: 4px; flex-shrink: 0; }
+  .filter-children { display: none; }
+  .filter-children.open { display: block; }
+  .card-block { margin-bottom: 14px; }
+  .card-block h4 { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 4px; font-weight: 600; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
+  .legend-table { border-collapse: collapse; font-size: 11px; width: 100%; }
+  .legend-table th, .legend-table td { padding: 3px 6px; text-align: right; white-space: nowrap; }
+  .legend-table th { color: var(--color-text-muted); font-weight: 500; border-bottom: 1px solid var(--color-border); }
+  .legend-table td:first-child, .legend-table th:first-child { text-align: left; }
+  .legend-label { display: flex; align-items: center; }
+  .legend-total-row td { border-top: 1px solid var(--color-border); font-weight: 600; }
+  #card table { width: 100%; border-collapse: collapse; }
+  #card td { padding: 5px 2px; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+  #card td.k { color: var(--color-text-muted); white-space: nowrap; padding-right: 10px; font-size: 12px; }
+  #history-table { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 12px; }
+  #history-table td, #history-table th { padding: 4px 4px; border-bottom: 1px solid var(--color-border); text-align: left; }
+  #history-table th { color: var(--color-text-muted); font-weight: 500; }
+  #placeholder { color: var(--color-text-muted); }
+  label.toggle { font-size: 12px; display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  #card select { font-size: 12px; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
+
+  /* -------- контекстное меню статуса -------- */
+  #ctx-menu {
+    position: fixed; z-index: 50; background: var(--color-surface); border: 1px solid var(--color-border);
+    border-radius: var(--radius); box-shadow: var(--shadow-md); padding: 4px; display: none; min-width: 230px; font-size: 13px;
+  }
+  #ctx-menu .ctx-title { padding: 8px 10px 4px; font-weight: 600; color: var(--color-text-muted); font-size: 12px; }
+  #ctx-menu .ctx-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  }
+  #ctx-menu .ctx-item:hover { background: var(--color-surface-2); }
+  #ctx-menu .ctx-item.current { font-weight: 600; }
+
+  /* -------- выпадающее меню "Настройки" -------- */
+  /* position: fixed (не absolute) + координаты выставляются в JS при открытии —
+     иначе меню обрезается overflow тулбара (см. #toolbar overflow-y: hidden выше). */
+  .dropdown { position: relative; }
+  .dropdown-menu {
+    display: none; position: fixed; background: var(--color-surface);
+    border: 1px solid var(--color-border); border-radius: var(--radius); box-shadow: var(--shadow-md);
+    min-width: 240px; z-index: 60; padding: 6px;
+  }
+  .dropdown-menu.open { display: block; }
+  .dropdown-menu button {
+    display: block; width: 100%; text-align: left; border: none; background: none;
+    padding: 9px 10px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; color: var(--color-text);
+  }
+  .dropdown-menu button:hover { background: var(--color-surface-2); }
+  .dropdown-divider {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--color-text-muted);
+    padding: 10px 10px 4px; border-top: 1px solid var(--color-border); margin-top: 4px; font-weight: 600;
+  }
+  .dropdown-menu > .dropdown-divider:first-child { border-top: none; margin-top: 0; }
+
+  /* -------- модалки -------- */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(15,20,30,.45); display: none;
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--color-surface); border-radius: var(--radius); padding: 22px 24px; min-width: 340px; max-width: 480px;
+    max-height: 82vh; overflow-y: auto; font-size: 13px; box-shadow: var(--shadow-md);
+  }
+  .modal.wide { max-width: 780px; }
+  .modal h2 { font-size: 16px; margin: 0 0 14px; font-weight: 600; }
+  .modal .row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; gap: 10px; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .modal input[type="color"] { width: 40px; height: 28px; border: none; padding: 0; background: none; }
+  .modal input[type="date"], .modal input[type="datetime-local"], .modal input[type="text"],
+  .modal input[type="password"], .modal input[type="number"], .modal select {
+    font-size: 13px; padding: 7px 10px; border-radius: var(--radius-sm); border: 1px solid var(--color-border);
+    width: 100%; background: var(--color-surface); color: var(--color-text);
+  }
+  .modal label.field { display: block; font-size: 12px; color: var(--color-text-muted); margin: 10px 0 4px; }
+  .modal label.radio { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; }
+  .modal label.checkbox { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; }
+  .modal .btn { font-size: 13px; padding: 8px 16px; }
+  .error-text { color: var(--color-danger); font-size: 12px; margin-top: 8px; }
+  .warning-text { color: #b8860b; font-size: 12px; margin-top: 6px; }
+  .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
+
+  #users-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+  #users-table td, #users-table th { padding: 7px 8px; border-bottom: 1px solid var(--color-border); text-align: left; }
+  #users-table th { color: var(--color-text-muted); font-weight: 500; }
+  #users-table button { margin-right: 4px; }
+  .default-contract-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
+
+  /* -------- выбор файлов/слоёв (п.5, п.13 третьего раунда) -------- */
+  #file-select-menu { max-height: 60vh; overflow-y: auto; min-width: 320px; }
+  .file-select-row { padding: 4px 0; border-bottom: 1px solid var(--color-border); }
+  .file-select-row:last-child { border-bottom: none; }
+  .file-select-row > label.checkbox { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; font-weight: 600; }
+  .layer-list { padding-left: 22px; display: flex; flex-direction: column; }
+  .layer-list label.checkbox { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; font-weight: 400; font-size: 12px; }
+  #file-select-summary { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
+
+  /* -------- контракты: контракт + строки по типам (п.8 третьего раунда) -------- */
+  .contract-block { border: 1px solid var(--color-border); border-radius: var(--radius-sm); margin-bottom: 10px; padding: 10px 12px; }
+  .contract-block-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .contract-block-header b { font-size: 13px; }
+  .contract-lines-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .contract-lines-table td, .contract-lines-table th { padding: 4px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
+  .contract-lines-table tr.exceeded td { color: var(--color-danger); font-weight: 600; }
+  .bulk-status-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+  .bulk-status-table td, .bulk-status-table th { padding: 4px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
+  .bulk-status-table select { max-width: 220px; }
+  .bulk-status-status-cell { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+  .bulk-row-remove { background: none; border: none; color: var(--color-text-muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; }
+  .bulk-row-remove:hover { color: var(--color-danger); }
+  .ce-line-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
+  .ce-line-row input[type=text] { flex: 2; }
+  .ce-line-row input[type=number] { flex: 1; }
+  .ce-incident-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
+  .ce-incident-row input[type=date] { flex: 1.2; }
+  .ce-incident-row input[type=text].ce-incident-type { flex: 1.4; }
+  .ce-incident-row input[type=number] { flex: 0.8; }
+  .ce-incident-row input[type=text].ce-incident-desc { flex: 2.5; }
+
+  /* -------- удаление записи истории (п.3 третьего раунда) -------- */
+  #history-table button.hist-del { border: none; background: none; color: var(--color-danger); cursor: pointer; font-size: 12px; padding: 2px 6px; }
+  #history-table button.hist-del:hover { text-decoration: underline; }
+
+  /* -------- полосы прокрутки рабочей области (п.10 третьего раунда) -------- */
+  #vscroll, #hscroll { position: absolute; background: rgba(120,120,120,.12); z-index: 5; }
+  #vscroll { top: 0; right: 0; width: 10px; bottom: 10px; }
+  #hscroll { left: 0; bottom: 0; height: 10px; right: 10px; }
+  #vscroll-thumb, #hscroll-thumb { position: absolute; background: rgba(90,90,90,.45); border-radius: 5px; cursor: pointer; }
+  #vscroll-thumb:hover, #hscroll-thumb:hover, #vscroll-thumb.dragging, #hscroll-thumb.dragging { background: rgba(60,60,60,.65); }
+  #vscroll-thumb { left: 1px; right: 1px; }
+  #hscroll-thumb { top: 1px; bottom: 1px; }
+
+  /* -------- индикатор зума (п.12 третьего раунда) -------- */
+  #zoom-indicator {
+    position: absolute; right: 16px; bottom: 16px; z-index: 6; display: flex; align-items: center; gap: 6px;
+    background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-sm); padding: 5px 8px; font-size: 12px; color: var(--color-text-muted);
+  }
+  #zoom-value { min-width: 42px; text-align: right; color: var(--color-text); font-weight: 600; }
+
+  /* -------- тосты -------- */
+  #toast-container { position: fixed; top: 16px; right: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    background: var(--color-surface); border: 1px solid var(--color-border); border-left: 4px solid var(--color-danger);
+    border-radius: var(--radius-sm); box-shadow: var(--shadow-md); padding: 12px 14px; font-size: 13px; max-width: 340px;
+    animation: toast-in .15s ease-out;
+  }
+  @keyframes toast-in { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+  /* -------- экран логина -------- */
+  #login-screen {
+    position: fixed; inset: 0; background: var(--color-bg); display: flex; align-items: center; justify-content: center; z-index: 200;
+  }
+  #login-screen.hidden { display: none; }
+  #login-box {
+    background: #fff; color: #1a1a1a; border-radius: 14px; padding: 32px 36px; width: 340px; box-shadow: var(--shadow-md);
+  }
+  #login-logo { display: block; margin: 0 auto 18px; }
+  #login-box h1 { font-size: 17px; margin: 0 0 20px; text-align: center; font-weight: 600; }
+  #login-box label.field { display: block; font-size: 12px; color: #666; margin: 12px 0 4px; }
+  #login-box input, #login-box select {
+    width: 100%; font-size: 14px; padding: 9px 11px; border-radius: 8px; border: 1px solid #d5d8dc; color: #1a1a1a; background: #fff;
+  }
+  #login-box input:focus, #login-box select:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(19,83,214,.15); }
+  #login-box button {
+    width: 100%; margin-top: 18px; padding: 10px; border-radius: 8px; border: none;
+    background: var(--color-primary); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .12s;
+  }
+  #login-box button:hover { background: var(--color-primary-hover); }
+
+  /* #app-root не был полноценным flex-контейнером (только display:none под .hidden) —
+     из-за этого #body{flex:1} ниже по дереву не имел эффекта (родитель не flex),
+     а высота #stage/#sidebar определялась содержимым сайдбара, а не вьюпортом.
+     При росте карточки элемента (доп. поля, история) вся схема реально меняла
+     размер и "подпрыгивала" из-за пересчёта preserveAspectRatio у <svg> — не
+     только из-за перетаскивания (см. также DRAG_THRESHOLD_PX выше). */
+  #app-root { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  #app-root.hidden { display: none; }
+
+  .element-shape.selected { stroke: var(--color-primary) !important; stroke-width: 4 !important; }
+  /* Групповое выделение рамкой (Shift+перетаскивание) — отличается от
+     одиночного .selected (карточка в сайдбаре) цветом/пунктиром, т.к.
+     оба класса могут быть на разных элементах одновременно. */
+  .element-shape.multi-selected { stroke: #e67e22 !important; stroke-width: 3 !important; stroke-dasharray: 4 2 !important; }
+  #rubber-band {
+    position: absolute; display: none; z-index: 15; pointer-events: none;
+    border: 1.5px dashed var(--color-primary); background: rgba(19,83,214,.12);
+  }
+  #multi-select-panel {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 16;
+    display: none; align-items: center; gap: 10px; padding: 8px 14px;
+    background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    box-shadow: 0 2px 10px rgba(0,0,0,.15); font-size: 13px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    #stage { background: #ffffff; }
+  }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <div id="login-box">
+    <img id="login-logo" src="/static/logo.svg" width="169" height="37" alt="МСУ-1"/>
+    <h1>ЖБИ — вход</h1>
+    <label class="field">Пользователь</label>
+    <select id="login-domain"></select>
+    <label class="field">Пароль</label>
+    <input type="password" id="login-password" autocomplete="current-password"/>
+    <div class="error-text" id="login-error"></div>
+    <button id="login-submit">Войти</button>
+  </div>
+</div>
+
+<div id="app-root" class="hidden">
+
+<div id="toolbar">
+  <img id="toolbar-logo" src="/static/logo.svg" style="height:24px; width:auto; flex-shrink:0;" alt="МСУ-1"/>
+  <h1>ЖБИ</h1>
+  <div class="dropdown" id="file-select-dropdown">
+    <button class="btn" id="btn-file-select">Чертёж: <span id="file-select-summary">—</span> ▾</button>
+    <div class="dropdown-menu" id="file-select-menu">
+      <div id="file-select-list"></div>
+      <div class="dropdown-divider"></div>
+      <button id="file-select-done">Готово</button>
+    </div>
+  </div>
+  <button class="btn" id="btn-upload">Загрузить чертёж</button>
+  <div class="view-mode-switch" id="view-mode-switch" role="group" aria-label="Режим отображения">
+    <button type="button" class="view-mode-btn active" id="btn-view-2d" data-mode="2d">2D</button>
+    <button type="button" class="view-mode-btn" id="btn-view-3d" data-mode="3d">3D</button>
+  </div>
+  <span class="spacer"></span>
+  <div id="workdate-box">
+    <label for="workdate-input">Рабочая дата</label>
+    <input type="datetime-local" id="workdate-input"/>
+    <button class="btn btn-sm btn-secondary" id="workdate-reset" title="Сбросить на текущий момент">Сейчас</button>
+  </div>
+  <div class="dropdown" id="settings-dropdown">
+    <button class="btn" id="btn-settings-menu">Настройки ▾</button>
+    <div class="dropdown-menu" id="settings-menu">
+      <button id="menu-change-password">Сменить пароль</button>
+      <div class="dropdown-divider admin-only">Управление</div>
+      <button id="menu-colors" class="admin-only">Цвета статусов</button>
+      <button id="menu-shapes" class="admin-only">Форма маркеров</button>
+      <button id="menu-zone-colors" class="admin-only">Цвета зон</button>
+      <button id="menu-subtypes" class="admin-only">Справочник подтипов</button>
+      <button id="menu-users" class="admin-only">Пользователи</button>
+      <button id="menu-contracts" class="admin-only">Контракты</button>
+      <div class="dropdown-divider admin-only">Обмен данными</div>
+      <button id="btn-export" class="admin-only">Экспорт в XLS</button>
+      <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
+      <button id="menu-history-import" class="admin-only">Импорт истории из XLS</button>
+      <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
+    </div>
+  </div>
+  <div id="user-box">
+    <span><b id="user-name"></b></span>
+    <button class="btn btn-sm btn-secondary" id="btn-logout">Выйти</button>
+  </div>
+</div>
+
+<div id="body">
+  <div id="stage">
+    <svg id="svg-root" preserveAspectRatio="xMidYMid meet">
+      <g id="flip" transform="scale(1,-1)">
+        <g id="axis-layer"></g>
+        <g id="zones-layer"></g>
+        <g id="elements-layer"></g>
+      </g>
+    </svg>
+    <div id="vscroll"><div id="vscroll-thumb"></div></div>
+    <div id="hscroll"><div id="hscroll-thumb"></div></div>
+    <div id="zoom-indicator">
+      <span id="zoom-value">100%</span>
+      <button class="btn btn-sm btn-secondary" id="zoom-reset" title="Сбросить на всю схему">⟲</button>
+    </div>
+    <div id="rubber-band"></div>
+    <div id="multi-select-panel">
+      <span id="multi-select-count">Выделено: 0</span>
+      <button class="btn btn-sm btn-primary" id="multi-select-status-btn">Изменить статус…</button>
+      <button class="btn btn-sm btn-secondary" id="multi-select-clear">✕</button>
+    </div>
+  </div>
+  <div id="stage-3d" style="display:none;">
+    <div id="stage-3d-hint" class="hint-text">Загрузка 3D…</div>
+    <div id="tooltip-3d" style="display:none;"></div>
+  </div>
+  <div id="resize-handle"></div>
+  <div id="sidebar">
+    <div class="tabs">
+      <button type="button" class="tab-btn active" data-tab="properties">Свойства</button>
+      <button type="button" class="tab-btn" data-tab="filters">Фильтры</button>
+    </div>
+    <div id="tab-properties" class="tab-panel active">
+      <h3>Статусы</h3>
+      <div id="legend"></div>
+      <h3>Карточка элемента</h3>
+      <div id="card"><div id="placeholder">Кликните по элементу на схеме</div></div>
+    </div>
+    <div id="tab-filters" class="tab-panel">
+      <h3>Настройка отображения</h3>
+      <div class="display-settings-row">
+        <div class="display-settings-col">
+          <h4>Отображение зон</h4>
+          <div id="zone-toggles"></div>
+        </div>
+        <div class="display-settings-col">
+          <h4>Подписи</h4>
+          <div id="label-toggles"></div>
+        </div>
+      </div>
+      <h3>Фильтры</h3>
+      <div id="placement-filters"></div>
+    </div>
+  </div>
+</div>
+
+<div id="ctx-menu"></div>
+<div id="toast-container"></div>
+
+<div class="modal-backdrop" id="upload-backdrop">
+  <div class="modal">
+    <h2>Загрузить чертёж</h2>
+    <input type="file" id="upload-file-input" accept=".dxf"/>
+    <div id="upload-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="upload-cancel">Отмена</button>
+      <button class="btn btn-primary" id="upload-submit">Обработать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="settings-backdrop">
+  <div class="modal">
+    <h2>Цвет по статусу</h2>
+    <div id="settings-rows"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="settings-cancel">Отмена</button>
+      <button class="btn btn-primary" id="settings-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="subtypes-backdrop">
+  <div class="modal">
+    <h2>Справочник подтипов</h2>
+    <p class="hint-text">Допустимые подтипы по типу элемента для нового стандарта имён слоёв — не зашиты в код разбора, полный список ярусов и т.п. уточняется по мере поступления данных.</p>
+    <div id="subtypes-rows"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="subtypes-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="shapes-backdrop">
+  <div class="modal">
+    <h2>Форма маркеров по слою и типу элемента</h2>
+    <div id="shapes-rows"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="shapes-cancel">Отмена</button>
+      <button class="btn btn-primary" id="shapes-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="zone-colors-backdrop">
+  <div class="modal">
+    <h2>Цвета зон (по крану)</h2>
+    <div class="hint-text" style="margin-bottom:10px;">Стоянки крана окрашиваются тем же цветом на схеме, отдельно не настраиваются.</div>
+    <div id="zone-colors-rows"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="zone-colors-cancel">Отмена</button>
+      <button class="btn btn-primary" id="zone-colors-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="export-backdrop">
+  <div class="modal">
+    <h2>Экспорт в XLS</h2>
+    <label class="radio"><input type="radio" name="export-mode" value="history" checked/> История изменений за период</label>
+    <div id="export-history-fields" style="padding-left:24px; display:flex; gap:8px; align-items:center;">
+      <span>с</span><input type="date" id="export-date-from"/>
+      <span>по</span><input type="date" id="export-date-to"/>
+    </div>
+    <label class="radio"><input type="radio" name="export-mode" value="snapshot"/> Актуальный статус на дату</label>
+    <div id="export-snapshot-fields" style="padding-left:24px; display:none; align-items:center; gap:8px;">
+      <span>на дату</span><input type="date" id="export-date"/>
+      <span style="color:var(--color-text-muted)">(пусто — текущий статус)</span>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="export-cancel">Отмена</button>
+      <button class="btn btn-primary" id="export-download">Скачать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="export-pdf-backdrop">
+  <div class="modal">
+    <h2>Экспорт в PDF</h2>
+    <p class="hint-text">Отчёт со всей схемой (авто-масштаб), легендой статусов и местом для подписи.</p>
+    <label class="field">Статусы актуальны на дату</label>
+    <input type="date" id="export-pdf-date"/>
+    <span class="hint-text">(пусто — текущие статусы)</span>
+    <div class="actions">
+      <button class="btn btn-secondary" id="export-pdf-cancel">Отмена</button>
+      <button class="btn btn-primary" id="export-pdf-download">Скачать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="change-password-backdrop">
+  <div class="modal">
+    <h2>Сменить пароль</h2>
+    <label class="field">Новый пароль (пусто — снять пароль)</label>
+    <input type="password" id="change-password-value"/>
+    <div class="error-text" id="change-password-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="change-password-cancel">Отмена</button>
+      <button class="btn btn-primary" id="change-password-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="users-backdrop">
+  <div class="modal wide">
+    <h2>Пользователи</h2>
+    <table id="users-table"></table>
+    <button class="btn btn-secondary" id="users-add">Добавить пользователя</button>
+    <div class="actions">
+      <button class="btn btn-secondary" id="users-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="user-edit-backdrop">
+  <div class="modal">
+    <h2 id="user-edit-title">Пользователь</h2>
+    <label class="field">Фамилия</label><input type="text" id="ue-last-name"/>
+    <label class="field">Имя</label><input type="text" id="ue-first-name"/>
+    <label class="field">Отчество</label><input type="text" id="ue-patronymic"/>
+    <label class="field">Должность</label><input type="text" id="ue-position"/>
+    <label class="field">Подразделение</label><input type="text" id="ue-department"/>
+    <label class="field">Доменное имя</label><input type="text" id="ue-domain-login"/>
+    <label class="field">Роль</label>
+    <select id="ue-role">
+      <option value="admin">Администратор</option>
+      <option value="user">Пользователь</option>
+      <option value="view">Просмотр</option>
+    </select>
+    <div class="error-text" id="user-edit-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="user-edit-cancel">Отмена</button>
+      <button class="btn btn-primary" id="user-edit-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="user-password-backdrop">
+  <div class="modal">
+    <h2>Задать пароль</h2>
+    <label class="field">Новый пароль (пусто — снять пароль)</label>
+    <input type="password" id="up-password-value"/>
+    <div class="error-text" id="user-password-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="user-password-cancel">Отмена</button>
+      <button class="btn btn-primary" id="user-password-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="settings-io-backdrop">
+  <div class="modal">
+    <h2>Экспорт/импорт настроек проекта</h2>
+    <p class="hint-text">Пользователи, цвета статусов, видимость подписей по типам — для переноса на другой сервер или резервной копии.</p>
+    <button class="btn btn-secondary" id="settings-io-export">Скачать настройки (.json)</button>
+    <label class="field" style="margin-top:16px;">Загрузить настройки из файла</label>
+    <input type="file" id="settings-io-file" accept=".json"/>
+    <div id="settings-io-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="settings-io-close">Закрыть</button>
+      <button class="btn btn-primary" id="settings-io-import">Загрузить настройки</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="history-import-backdrop">
+  <div class="modal">
+    <h2>Импорт истории статусов из XLS</h2>
+    <label class="field">Файл для источника</label>
+    <div class="hint-text" id="history-import-source"></div>
+    <label class="field">Файл .xlsx (лист "История статусов")</label>
+    <input type="file" id="history-import-file" accept=".xlsx"/>
+    <label class="radio" style="margin-top:12px;"><input type="radio" name="history-import-mode" value="merge" checked/> Дополнить (пропускать дубли: тот же статус в ту же дату)</label>
+    <label class="radio"><input type="radio" name="history-import-mode" value="replace"/> Заменить (удалить текущую историю сопоставленных элементов)</label>
+    <div id="history-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="history-import-cancel">Отмена</button>
+      <button class="btn btn-primary" id="history-import-submit">Импортировать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="contracts-backdrop">
+  <div class="modal wide">
+    <h2>Контракты</h2>
+    <div id="contracts-list"></div>
+    <button class="btn btn-secondary" id="contracts-add">Добавить контракт</button>
+    <h3 style="margin-top:20px;">Контракт по умолчанию по типу элемента</h3>
+    <p class="hint-text">Подставляется элементу автоматически, если контракт не указан явно в диалоге при уходе со статуса "Запланирован".</p>
+    <div id="default-contracts-rows"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="contracts-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="status-contract-backdrop">
+  <div class="modal">
+    <h2>Выбор контракта</h2>
+    <p class="hint-text">Элемент переходит со статуса «Запланирован» на «<span id="sc-status-label"></span>». Укажите, по какому контракту он поставляется.</p>
+    <label class="field">Контракт</label>
+    <select id="sc-contract-select"></select>
+    <div class="actions">
+      <button class="btn btn-secondary" id="sc-cancel">Отмена</button>
+      <button class="btn btn-primary" id="sc-confirm">Подтвердить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="bulk-status-backdrop">
+  <div class="modal wide">
+    <h2 id="bulk-status-title">Массовая смена статуса</h2>
+    <div class="row">
+      <label class="field" style="margin:0;">Новый статус</label>
+      <select id="bulk-status-select"></select>
+    </div>
+    <div class="row">
+      <label class="field" style="margin:0;">Контракт для незаполненных строк</label>
+      <select id="bulk-fill-contract-select"></select>
+      <button class="btn btn-sm btn-secondary" id="bulk-fill-contract-apply">Заполнить пустые</button>
+    </div>
+    <table class="bulk-status-table">
+      <thead>
+        <tr><th>ID</th><th>Марка</th><th>Тип</th><th>Текущий статус</th><th>Контракт</th><th></th></tr>
+      </thead>
+      <tbody id="bulk-status-tbody"></tbody>
+    </table>
+    <div class="error-text" id="bulk-status-error"></div>
+    <div class="warning-text" id="bulk-status-contract-warning"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="bulk-status-cancel">Отмена</button>
+      <button class="btn btn-primary" id="bulk-status-apply">Применить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="contract-edit-backdrop">
+  <div class="modal wide">
+    <h2 id="contract-edit-title">Контракт</h2>
+    <label class="field">Название/номер</label><input type="text" id="ce-name"/>
+    <label class="field">Поставщик</label><input type="text" id="ce-supplier"/>
+    <label class="field" style="margin-bottom:2px;">Строки: тип элемента + количество</label>
+    <div id="ce-lines"></div>
+    <datalist id="ce-known-types"></datalist>
+    <button class="btn btn-secondary btn-sm" id="ce-add-line" style="margin-top:6px;">+ строка</button>
+    <label class="field" style="margin-bottom:2px; margin-top:14px;">Инциденты повреждений на стройке</label>
+    <div id="ce-incidents"></div>
+    <button class="btn btn-secondary btn-sm" id="ce-add-incident" style="margin-top:6px;">+ инцидент</button>
+    <div class="error-text" id="contract-edit-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="contract-edit-cancel">Отмена</button>
+      <button class="btn btn-primary" id="contract-edit-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+</div><!-- #app-root -->
+
+<script>
+const SVG_NS = "http://www.w3.org/2000/svg";
+const IN_PROJECT_STROKE = "#1a1a1a";
+const NO_AXIS_DASH = "4 3"; // пунктир у элементов без данных по осям (outside_axis_grid / no_axis_grid)
+const MAX_MARKER_PX = 18;    // предел радиуса маркера на экране (п.11, удвоено по п.6 второго раунда)
+const MAX_LABEL_FONT_PX = 24; // предел размера шрифта подписи марки на экране (п.5, удвоено по п.6 второго раунда)
+const MAX_AXIS_FONT_PX = 13; // предел размера шрифта подписи оси на экране (п.1 второго раунда)
+const MAX_ZONE_FONT_PX = 20; // предел размера шрифта названия зоны на экране — та же логика, что у MAX_LABEL_FONT_PX/MAX_AXIS_FONT_PX (см. Docs/backlog.md)
+const WORKDATE_KEY = "zhbi_workdate";
+
+let state = {
+  currentUser: null,
+  sourceFile: null, // "основной" файл для одно-файловых операций (экспорт, импорт истории) — последний включённый в выборке
+  knownFiles: [], // [{source_file, count}] — из /source-files
+  selection: new Map(), // source_file -> Set(layer) | null (null = все слои файла); сеансовый выбор, не сохраняется (п.13)
+  elements: [],
+  byId: new Map(),
+  shapeById: new Map(),
+  labelById: new Map(),
+  labelOffsetById: new Map(), // id -> {dx, dy, anchor} в единицах базового радиуса — направление подписи, выбранное один раз при разводке коллизий
+  selectedId: null,
+  // Групповое выделение рамкой (Shift+перетаскивание, см. Docs/backlog.md,
+  // "Групповая смена статуса") — параллельно одиночному selectedId
+  // (карточка в сайдбаре), не заменяет его. Своя подсветка на схеме
+  // (styleShape, класс .multi-selected) и своя плавающая панель.
+  multiSelectedIds: new Set(),
+  statusColors: {},
+  statusOrder: [],
+  statusLabels: {},
+  labelVisibility: {},
+  contracts: [],
+  defaultContracts: {},
+  elementShapes: {}, // "layer element_type" -> имя формы
+  zones: [], // [{id, category, elevation_mm, name, outline, match_status}]
+  zoneVisibility: { "Захватка": true, "Кран": true, "Стоянка": true },
+  zoneLabelEls: [], // [{el, baseFontSize}] — для предела размера шрифта при зуме (см. renderZones/updateSizesForZoom)
+  // Фильтр по размещению (сайдбар → Фильтры) — для каждой категории Set
+  // ИСКЛЮЧЁННЫХ значений (пусто = категория не фильтрует ничего). См.
+  // renderPlacementFilters/applyPlacementFilters, Docs/backlog.md.
+  placementFilters: {
+    zakhvatka: new Set(), crane: new Set(), stance: new Set(), elevation: new Set(),
+    elementType: new Set(), subtype: new Set(), status: new Set(),
+    supplier: new Set(), contract: new Set(),
+  },
+  // Какие родители иерархических групп фильтра сейчас развёрнуты — чисто
+  // UI-состояние навигации, но хранится в state (не в DOM), иначе
+  // разворот сбрасывался бы при каждой полной перерисовке фильтров
+  // (onPlacementFilterChange пересобирает DOM заново на любой клик).
+  placementGroupsExpanded: { crane: new Set(), elementType: new Set(), supplier: new Set() },
+  baseMarkerRadius: 1,
+  view: null,
+  initialView: null, // вид "вся схема целиком" — для сброса зума (п.12) и индикатора 100%
+  axisNumeric: [], // [{label, x, elTop, elBottom}] отсортировано по x
+  axisLetter: [],  // [{label, y, el}] отсортировано по y
+  // 3D-режим схемы (см. Docs/backlog.md) — Three.js, подключается лениво
+  // при первом включении кнопкой "3D". scene/camera/renderer/controls
+  // создаются один раз (init3DScene), дальше только пересобираются меши
+  // (build3DScene) при смене данных.
+  view3d: {
+    active: false,
+    scene: null, camera: null, renderer: null, controls: null,
+    raycaster: null, mouse: null,
+    meshById: new Map(),
+    zoneMeshById: new Map(), // zone.id -> THREE.Mesh (захватка/кран/стоянка)
+    animationFrameId: null,
+  },
+};
+
+function el(tag, attrs = {}, ns = SVG_NS) {
+  const e = document.createElementNS(ns, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+}
+
+let onUnauthorized = null;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (res.status === 401) {
+    if (onUnauthorized) onUnauthorized();
+    throw new Error("Не авторизован");
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const detail = (body && body.detail) ? body.detail : `${res.status} ${res.statusText}`;
+    throw new Error(detail);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+// ==================== ТОСТЫ ====================
+function showToast(message, kind = "warning") {
+  const container = document.getElementById("toast-container");
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${kind}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 7000);
+}
+
+function maybeWarnContract(result) {
+  if (result && result.contract_warning) {
+    const w = result.contract_warning;
+    const damagedPart = w.damaged ? `, повреждено ${w.damaged}` : "";
+    showToast(`Превышение по контракту «${w.contract_name}»: законтрактовано ${w.quantity}, отмечено на схеме ${w.fact}${damagedPart}.`);
+  }
+}
+
+// ==================== АУТЕНТИФИКАЦИЯ ====================
+
+function showLoginScreen() {
+  document.getElementById("login-screen").classList.remove("hidden");
+  document.getElementById("app-root").classList.add("hidden");
+}
+
+function showApp() {
+  document.getElementById("login-screen").classList.add("hidden");
+  document.getElementById("app-root").classList.remove("hidden");
+}
+
+function applyRolePermissions() {
+  const role = state.currentUser.role;
+  const canEdit = role === "admin" || role === "user";
+  document.getElementById("btn-upload").style.display = canEdit ? "" : "none";
+  // Меню "Настройки" теперь видно всем ролям — в нём же живёт самообслуживание
+  // смены пароля (п.10 третьего раунда). Admin-специфичные пункты скрываются
+  // адресно по классу .admin-only, а не всё меню целиком.
+  document.querySelectorAll("#settings-menu .admin-only").forEach(elm => {
+    elm.style.display = role === "admin" ? "" : "none";
+  });
+}
+
+async function loadLoginUsers() {
+  try {
+    const users = await api("/login-users");
+    const select = document.getElementById("login-domain");
+    select.innerHTML = "";
+    for (const u of users) {
+      const opt = document.createElement("option");
+      opt.value = u.domain_login;
+      opt.textContent = `${u.display_name} (${u.domain_login})`;
+      select.appendChild(opt);
+    }
+  } catch (e) {
+    // экран входа должен работать, даже если список почему-то не подгрузился
+  }
+}
+
+async function checkAuth() {
+  try {
+    const user = await api("/me");
+    state.currentUser = user;
+    document.getElementById("user-name").textContent = user.display_name;
+    applyRolePermissions();
+    showApp();
+    return true;
+  } catch (e) {
+    await loadLoginUsers();
+    showLoginScreen();
+    return false;
+  }
+}
+
+onUnauthorized = () => { state.currentUser = null; showLoginScreen(); };
+
+document.getElementById("login-submit").addEventListener("click", async () => {
+  const domain_login = document.getElementById("login-domain").value;
+  const password = document.getElementById("login-password").value;
+  const errorEl = document.getElementById("login-error");
+  errorEl.textContent = "";
+  try {
+    await api("/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain_login, password }),
+    });
+    document.getElementById("login-password").value = "";
+    await bootApp();
+  } catch (e) {
+    errorEl.textContent = e.message;
+  }
+});
+document.getElementById("login-password").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("login-submit").click();
+});
+
+document.getElementById("btn-logout").addEventListener("click", async () => {
+  await api("/logout", { method: "POST" });
+  state.currentUser = null;
+  showLoginScreen();
+});
+
+// ---------- смена собственного пароля ----------
+const changePasswordBackdrop = document.getElementById("change-password-backdrop");
+document.getElementById("menu-change-password").addEventListener("click", () => {
+  document.getElementById("settings-menu").classList.remove("open");
+  document.getElementById("change-password-value").value = "";
+  document.getElementById("change-password-error").textContent = "";
+  changePasswordBackdrop.classList.add("open");
+});
+document.getElementById("change-password-cancel").addEventListener("click", () => changePasswordBackdrop.classList.remove("open"));
+document.getElementById("change-password-save").addEventListener("click", async () => {
+  const password = document.getElementById("change-password-value").value;
+  try {
+    await api(`/users/${state.currentUser.id}/set-password`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }),
+    });
+    changePasswordBackdrop.classList.remove("open");
+  } catch (e) {
+    document.getElementById("change-password-error").textContent = e.message;
+  }
+});
+
+// ==================== РАБОЧАЯ ДАТА (п.8) ====================
+const workdateInput = document.getElementById("workdate-input");
+const workdateBox = document.getElementById("workdate-box");
+
+function updateWorkdateStyle() {
+  workdateBox.classList.toggle("active", !!workdateInput.value);
+}
+workdateInput.value = localStorage.getItem(WORKDATE_KEY) || "";
+updateWorkdateStyle();
+workdateInput.addEventListener("change", () => {
+  localStorage.setItem(WORKDATE_KEY, workdateInput.value);
+  updateWorkdateStyle();
+});
+document.getElementById("workdate-reset").addEventListener("click", () => {
+  // Явно ЗАПОЛНЯЕТ поле текущими датой/временем (не очищает) — по прямому
+  // указанию заказчика ("должна устанавливать дату и время текущими
+  // значениями"), предыдущий вариант с очисткой+вспышкой был неверным
+  // прочтением исходной жалобы.
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const localValue = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  workdateInput.value = localValue;
+  localStorage.setItem(WORKDATE_KEY, localValue);
+  updateWorkdateStyle();
+});
+
+function currentChangedAt() {
+  // "datetime-local" отдаёт "YYYY-MM-DDTHH:MM" — серверу нужно "YYYY-MM-DD HH:MM:SS"
+  if (!workdateInput.value) return null;
+  return workdateInput.value.replace("T", " ") + ":00";
+}
+
+// ==================== ВЫБОР ФАЙЛОВ И СЛОЁВ (п.5, п.13 третьего раунда) ====================
+// state.selection: source_file -> Set(layer) | null (все слои). Сеансовый выбор — не
+// сохраняется ни на сервере, ни в localStorage, сбрасывается на дефолт при каждой перезагрузке
+// страницы (согласовано явно — см. обсуждение бэклога).
+
+async function loadSourceFiles() {
+  state.knownFiles = await api("/source-files");
+  if (state.knownFiles.length && state.selection.size === 0) {
+    const first = state.knownFiles[0].source_file;
+    state.selection.set(first, null);
+    state.sourceFile = first;
+  }
+  updateFileSelectSummary();
+}
+
+function updateFileSelectSummary() {
+  const summary = document.getElementById("file-select-summary");
+  const n = state.selection.size;
+  if (n === 0) summary.textContent = "не выбрано";
+  else if (n === 1) summary.textContent = Array.from(state.selection.keys())[0];
+  else summary.textContent = `${n} файла`;
+}
+
+const layersCache = new Map(); // source_file -> [{layer, count}], кэш на сеанс
+
+async function getLayersFor(sourceFile) {
+  if (!layersCache.has(sourceFile)) {
+    layersCache.set(sourceFile, await api(`/layers?source_file=${encodeURIComponent(sourceFile)}`));
+  }
+  return layersCache.get(sourceFile);
+}
+
+async function renderLayerCheckboxes(sourceFile, container) {
+  const layers = await getLayersFor(sourceFile);
+  const selectedSet = state.selection.get(sourceFile); // null = все
+  container.innerHTML = layers.map(l => {
+    const checked = selectedSet === null || selectedSet === undefined || selectedSet.has(l.layer);
+    return `<label class="checkbox"><input type="checkbox" data-layer="${l.layer}" ${checked ? "checked" : ""}/> ${l.layer} (${l.count})</label>`;
+  }).join("");
+  container.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener("change", async () => {
+      const all = Array.from(container.querySelectorAll('input[type=checkbox]'));
+      const checkedLayers = all.filter(c => c.checked).map(c => c.dataset.layer);
+      if (checkedLayers.length === all.length) state.selection.set(sourceFile, null);
+      else state.selection.set(sourceFile, new Set(checkedLayers));
+      await loadPlan();
+    });
+  });
+}
+
+async function renderFileSelectMenu() {
+  const container = document.getElementById("file-select-list");
+  container.innerHTML = "";
+  for (const f of state.knownFiles) {
+    const included = state.selection.has(f.source_file);
+    const row = document.createElement("div");
+    row.className = "file-select-row";
+    row.innerHTML = `
+      <label class="checkbox">
+        <input type="checkbox" data-file="${f.source_file}" ${included ? "checked" : ""}/>
+        ${f.source_file} (${f.count})
+      </label>
+      <div class="layer-list" style="display:${included ? "block" : "none"};"></div>
+    `;
+    container.appendChild(row);
+    const layerList = row.querySelector(".layer-list");
+    const fileCheckbox = row.querySelector('input[data-file]');
+    fileCheckbox.addEventListener("change", async (e) => {
+      if (e.target.checked) {
+        state.selection.set(f.source_file, null);
+        state.sourceFile = f.source_file; // последний включённый файл — "основной" для экспорта/импорта истории
+        layerList.style.display = "block";
+        await renderLayerCheckboxes(f.source_file, layerList);
+      } else {
+        state.selection.delete(f.source_file);
+        layerList.style.display = "none";
+        if (state.sourceFile === f.source_file) {
+          const remaining = Array.from(state.selection.keys());
+          state.sourceFile = remaining.length ? remaining[remaining.length - 1] : null;
+        }
+      }
+      updateFileSelectSummary();
+      // false — не preserveView: смена СОСТАВА ФАЙЛОВ (в отличие от смены
+      // слоёв внутри уже выбранного файла, см. renderLayerCheckboxes) меняет
+      // сам охват схемы (у каждого файла своя сетка осей), и если оставить
+      // старый вид как есть, подписи осей — они пинятся к краям ТЕКУЩЕГО
+      // viewBox (updateAxisLabelSizing) — окажутся привязаны к границам
+      // уже неактуального охвата, визуально "плывя" к центру. Рефит и на
+      // включении, и на выключении файла — гарантия, что подписи всегда
+      // ровно по краю, независимо от порядка кликов (см. Docs/backlog.md).
+      await loadPlan(false);
+    });
+    if (included) await renderLayerCheckboxes(f.source_file, layerList);
+  }
+}
+
+// ---------- вкладки сайдбара: Свойства / Фильтры ----------
+function switchTab(name) {
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
+}
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+});
+
+document.getElementById("btn-file-select").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const menu = document.getElementById("file-select-menu");
+  const willOpen = !menu.classList.contains("open");
+  if (willOpen) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    menu.style.left = rect.left + "px";
+    menu.style.top = (rect.bottom + 6) + "px";
+    await renderFileSelectMenu();
+  }
+  menu.classList.toggle("open");
+});
+document.getElementById("file-select-done").addEventListener("click", () => {
+  document.getElementById("file-select-menu").classList.remove("open");
+});
+document.addEventListener("click", (e) => {
+  const menu = document.getElementById("file-select-menu");
+  if (!menu.contains(e.target) && e.target.id !== "btn-file-select") menu.classList.remove("open");
+});
+
+// ==================== РЕНДЕР СХЕМЫ ====================
+
+function flippedText(x, y, text, fontSize, anchor, extraAttrs = {}) {
+  const g = el("text", {
+    transform: `translate(${x},${y}) scale(1,-1)`,
+    x: 0, y: 0, "text-anchor": anchor, "font-size": fontSize.toFixed(2),
+    ...extraAttrs,
+  });
+  g.textContent = text;
+  return g;
+}
+
+// ---------- зоны (захватка/кран/стоянка) — см. Docs/backlog.md,
+// "Разбор структурированных имён слоёв DWG/DXF..." ----------
+function renderZones() {
+  const layer = document.getElementById("zones-layer");
+  layer.innerHTML = "";
+  state.zoneLabelEls = []; // {el, baseFontSize} — для предела размера при зуме, см. updateSizesForZoom
+  if (!state.zones.length) return;
+
+  // Базовый (немасштабированный экраном) размер шрифта подписи зоны — сам
+  // по себе он в мировых координатах, поэтому растёт при зуме, как и всё
+  // остальное на схеме через viewBox; фактический предел на экране
+  // накладывается в updateSizesForZoom() (MAX_ZONE_FONT_PX), той же логикой,
+  // что и у подписей марок/осей — п.5 бэклога "проверь, что на названия
+  // зон распространяются общие правила по максимальному размеру текста".
+  const xs = state.zones.flatMap(z => z.outline.map(p => p[0]));
+  const baseFontSize = xs.length ? (Math.max(...xs) - Math.min(...xs)) * 0.01 : 100;
+
+  for (const zone of state.zones) {
+    if (state.zoneVisibility[zone.category] === false) continue;
+    const points = zone.outline.map(p => `${p[0]},${p[1]}`).join(" ");
+    const unresolved = zone.match_status !== "matched";
+    const poly = el("polygon", {
+      points, class: `zone-${zone.category}${unresolved ? " zone-unresolved" : ""}`,
+      "stroke-width": 2, "vector-effect": "non-scaling-stroke",
+    });
+    // Индивидуальный цвет крана (и унаследованный его стоянками) —
+    // переопределяет цвет CSS-класса категории через ИНЛАЙН-СТИЛЬ, а не
+    // атрибут fill/stroke — обычный SVG-атрибут fill="..." всегда
+    // проигрывает CSS-правилу класса (.zone-Кран { fill: ... }),
+    // независимо от порядка в DOM, это и было причиной, что все краны
+    // красились в один и тот же цвет вопреки настройке (см.
+    // Docs/backlog.md). У Захватки color всегда null — остаётся единая
+    // раскраска по категории из CSS.
+    if (zone.color) {
+      poly.style.fill = zone.color;
+      poly.style.stroke = zone.color;
+    }
+    layer.appendChild(poly);
+
+    // Подпись — по центроиду полигона, внутри контура зоны (запрошено
+    // явно, см. Docs/backlog.md, item 5 — разворот предыдущего решения,
+    // когда подпись специально выносили НАД верхним краем, чтобы не
+    // перекрывалась с марками элементов внутри зоны; с появлением
+    // индивидуального цвета на каждый кран, см. item 7, заказчик счёл,
+    // что читается нормально и внутри).
+    const cx = zone.outline.reduce((s, p) => s + p[0], 0) / zone.outline.length;
+    const cy = zone.outline.reduce((s, p) => s + p[1], 0) / zone.outline.length;
+    const label = zone.name || (zone.match_status === "unmatched" ? "название не найдено" : "требует проверки");
+    const text = flippedText(cx, cy, label, baseFontSize, "middle", { class: `zone-${zone.category}` });
+    if (zone.color) text.style.fill = zone.color;
+    layer.appendChild(text);
+    state.zoneLabelEls.push({ el: text, baseFontSize });
+  }
+  updateSizesForZoom(); // сразу применить предел размера шрифта под текущий зум
+}
+
+function renderZoneToggles() {
+  const box = document.getElementById("zone-toggles");
+  box.innerHTML = "";
+  const categories = ["Захватка", "Кран", "Стоянка"];
+  const present = new Set(state.zones.map(z => z.category));
+  if (!present.size) { box.innerHTML = '<div style="color:var(--color-text-muted)">нет данных</div>'; return; }
+  for (const category of categories) {
+    if (!present.has(category)) continue;
+    const label = document.createElement("label");
+    label.className = "toggle";
+    const checked = state.zoneVisibility[category] !== false;
+    label.innerHTML = `<input type="checkbox" data-category="${category}" ${checked ? "checked" : ""}/> ${category}`;
+    label.querySelector("input").addEventListener("change", (e) => {
+      state.zoneVisibility[category] = e.target.checked;
+      renderZones();
+      apply3DZoneVisibility(); // тот же тумблер действует и на 3D-сцену, если она уже построена
+    });
+    box.appendChild(label);
+  }
+}
+
+// ---------- фильтр по размещению (сайдбар → Фильтры) — Захватка/Кран+
+// Стоянка (иерархически)/Отметка/Тип элемента+Подтип (иерархически)/
+// Статус. Значения — только те, что реально встречаются у элементов
+// текущей выборки (не жёстко зашитый список). Комбинация категорий — И,
+// значения внутри категории — ИЛИ (элемент проходит, если хоть одно из
+// включённых значений совпадает; для иерархических категорий "родитель" и
+// "потомок" — по-прежнему ДВЕ независимые категории/excludedSet, клик по
+// родителю просто синхронизирует чекбоксы потомков — см. buildHierarchical
+// FilterGroup — так проще и даёт корректный результат без слияния булевой
+// семантики). Каскад (см. distinctValuesFor): список значений КАЖДОЙ
+// категории считается по элементам, прошедшим фильтры ВСЕХ ОСТАЛЬНЫХ
+// категорий — выбор в одном фильтре сужает варианты в других. Применяется
+// на клиенте — скрытием уже отрисованных <g> элементов, без обращения к
+// серверу (см. Docs/backlog.md). ----------
+const PLACEMENT_NONE = "__none__"; // сентинел «нет данных/не применимо»
+const PLACEMENT_ZONE_CATEGORY = { zakhvatka: "Захватка", crane: "Кран", stance: "Стоянка" };
+
+// Значение фильтра — id зоны, НЕ имя. Имена зон не уникальны глобально:
+// каждый кран нумерует свои стоянки заново (у каждого крана есть своя
+// "Стоянка 1"), поэтому сравнение/группировка по имени схлопывала разные
+// физические зоны в один пункт фильтра — реальный баг, см. Docs/backlog.md.
+// id у элемента (zone_crane_id и т.п.) уже есть готовый, резолвить зону
+// целиком незачем — имя нужно только для подписи чекбокса (см. zoneNameById).
+function zoneFilterValue(element, idField, statusField) {
+  return element[statusField] === "matched" ? element[idField] : PLACEMENT_NONE;
+}
+
+function zoneNameById(zoneId) {
+  const zone = state.zones.find(z => z.id === zoneId);
+  return zone ? (zone.name || `зона #${zone.id}`) : `зона #${zoneId}`;
+}
+
+// "Стоянка крана" — это не точка, а рабочая зона крана в конкретной
+// позиции (см. Docs/backlog.md) — элемент может физически находиться в
+// зоне работы крана, но не в контуре ни одной конкретной стоянки внутри
+// неё. Такой элемент — это НЕ "непонятно какой кран", кран у него как
+// раз известен (zone_crane_status="matched") — поэтому вместо общего
+// PLACEMENT_NONE используем псевдо-значение, привязанное к конкретному
+// крану (`no-stance:<id крана>`), чтобы оно корректно легло дочерним
+// пунктом ИМЕННО под этот кран в иерархии фильтра, а не потерялось в
+// одном общем пункте вне всех кранов. Настоящий PLACEMENT_NONE остаётся
+// только когда и кран тоже не определён (крайне редкий случай).
+const NO_STANCE_PREFIX = "no-stance:";
+function noStanceValueForCrane(craneId) { return `${NO_STANCE_PREFIX}${craneId}`; }
+function isNoStanceValue(v) { return typeof v === "string" && v.startsWith(NO_STANCE_PREFIX); }
+function craneIdFromNoStanceValue(v) { return Number(v.slice(NO_STANCE_PREFIX.length)); }
+
+function stanceFilterValue(element) {
+  if (element.zone_stance_status === "matched") return element.zone_stance_id;
+  if (element.zone_crane_status === "matched") return noStanceValueForCrane(element.zone_crane_id);
+  return PLACEMENT_NONE;
+}
+
+function elevationFilterValue(element) {
+  return (element.elevation_mm === null || element.elevation_mm === undefined) ? PLACEMENT_NONE : element.elevation_mm;
+}
+
+function subtypeFilterValue(element) {
+  return element.subtype || PLACEMENT_NONE;
+}
+
+// Поставщик/Контракт — та же иерархическая пара, что Кран/Стоянка и
+// Тип/Подтип, только источник значений не зоны, а state.contracts (см.
+// Docs/backlog.md, "Групповая смена статуса"). element.contract_id —
+// уже готовый денормализованный кэш (см. app/contracts.py), резолвить
+// контракт целиком нужно только для подписи (поставщик контракта).
+function contractIdFilterValue(element) {
+  return element.contract_id || PLACEMENT_NONE;
+}
+function supplierFilterValue(element) {
+  if (!element.contract_id) return PLACEMENT_NONE;
+  const c = state.contracts.find(c => c.id === element.contract_id);
+  return c ? c.supplier : PLACEMENT_NONE;
+}
+
+// Единый список определений категорий — используется и для проверки
+// "проходит ли элемент фильтр", и для расчёта доступности значений.
+const PLACEMENT_FILTER_DEFS = [
+  { key: "zakhvatka", valueFn: e => zoneFilterValue(e, "zone_zakhvatka_id", "zone_zakhvatka_status") },
+  { key: "crane", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status") },
+  { key: "stance", valueFn: stanceFilterValue },
+  { key: "elevation", valueFn: elevationFilterValue },
+  { key: "elementType", valueFn: e => e.element_type },
+  { key: "subtype", valueFn: subtypeFilterValue },
+  { key: "status", valueFn: e => e.current_status },
+  { key: "supplier", valueFn: supplierFilterValue },
+  { key: "contract", valueFn: contractIdFilterValue },
+];
+
+function passesPlacementFilters(element) {
+  for (const def of PLACEMENT_FILTER_DEFS) {
+    if (state.placementFilters[def.key].has(def.valueFn(element))) return false;
+  }
+  return true;
+}
+
+// Пары категорий, связанные UI-каскадом родитель→потомок (клик по крану
+// ставит/снимает его стоянки, клик по типу — его подтипы, см.
+// buildHierarchicalFilterGroup). При проверке доступности ОДНОЙ из пары
+// нужно игнорировать фильтр ОБЕИХ — иначе получается самоблокирующийся
+// цикл: снятие галочки с "Колонна" каскадом исключает все подтипы
+// колонны, а потом доступность самой "Колонна" считается по "остальным"
+// фильтрам, включая только что исключённые её же подтипы — "Колонна"
+// навсегда остаётся недоступной для повторного включения. См.
+// Docs/backlog.md.
+const PLACEMENT_CASCADE_GROUPS = [["elementType", "subtype"], ["crane", "stance"], ["supplier", "contract"]];
+
+function cascadeGroupFor(key) {
+  return PLACEMENT_CASCADE_GROUPS.find(g => g.includes(key)) || [key];
+}
+
+function elementPassesExceptKeys(element, exceptKeys) {
+  for (const def of PLACEMENT_FILTER_DEFS) {
+    if (exceptKeys.includes(def.key)) continue;
+    if (state.placementFilters[def.key].has(def.valueFn(element))) return false;
+  }
+  return true;
+}
+
+// ПОЛНЫЙ список значений категории — НЕ зависит ни от одного текущего
+// фильтра (ни своего, ни чужих), поэтому пункт списка никогда не
+// пропадает из формы (см. Docs/backlog.md: "не убирай с формы отборы,
+// которые становятся неактуальными... а делай их недоступными" — было
+// найдено 2 реальных бага от прежнего поведения, когда список СУЖАЛСЯ:
+// (1) снятие галочки с "Колонна" убирало саму "Колонна" из списка —
+// её нельзя было вернуть без полного сброса фильтров, потому что
+// каскад по подтипам исключал все элементы этого типа ещё и из
+// подсчёта "остальных" фильтров; (2) стоянки крана пропадали из
+// иерархии целиком, если сам кран оказывался исключён в фильтре "Кран"
+// — тот же механизм). Для зон (Захватка/Кран/Стоянка) список
+// дополнительно объединяется с id зон из state.zones — иначе зона без
+// НИ ОДНОГО привязанного элемента (например, пустая стоянка) вообще не
+// попала бы в список, хотя видна на схеме.
+function allValuesFor(key) {
+  const def = PLACEMENT_FILTER_DEFS.find(d => d.key === key);
+  const set = new Set();
+  const category = PLACEMENT_ZONE_CATEGORY[key];
+  if (category) {
+    for (const z of state.zones) {
+      if (z.category === category) set.add(z.id);
+    }
+  }
+  // Контракт/поставщик без ни одного привязанного элемента — тот же приём,
+  // что и у зон выше (см. комментарий): всё равно должен быть в списке
+  // фильтра, а не появляться только после того, как элементы к нему
+  // привязали.
+  if (key === "contract") { for (const c of state.contracts) set.add(c.id); }
+  if (key === "supplier") { for (const c of state.contracts) set.add(c.supplier); }
+  for (const e of state.elements) set.add(def.valueFn(e));
+  return set;
+}
+
+// Доступно ли значение ПРЯМО СЕЙЧАС — есть ли хоть один элемент с этим
+// значением, проходящий все ОСТАЛЬНЫЕ активные фильтры (саму категорию
+// key не проверяем — иначе включение/выключение самого значения влияло
+// бы на его же доступность). Используется только для disabled/серого
+// вида чекбокса — сам чекбокс из формы никогда не убирается (см.
+// allValuesFor выше).
+function isValueEnabled(key, value) {
+  const def = PLACEMENT_FILTER_DEFS.find(d => d.key === key);
+  const exceptKeys = cascadeGroupFor(key);
+  for (const e of state.elements) {
+    if (def.valueFn(e) !== value) continue;
+    if (elementPassesExceptKeys(e, exceptKeys)) return true;
+  }
+  return false;
+}
+
+// Скрывает/показывает уже отрисованные элементы по текущим фильтрам —
+// без перерисовки схемы (см. renderElements — group это shape.parentElement).
+function applyPlacementFilters() {
+  for (const element of state.elements) {
+    const passes = passesPlacementFilters(element);
+    const shape = state.shapeById.get(element.id);
+    if (shape && shape.parentElement) shape.parentElement.style.display = passes ? "" : "none";
+    // Тот же фильтр — и на 3D-меш, если сцена уже построена (см. "3D-режим схемы").
+    const mesh = state.view3d.meshById.get(element.id);
+    if (mesh) mesh.visible = passes;
+  }
+}
+
+// Что происходит после ЛЮБОГО изменения в фильтре по размещению: заново
+// показать/скрыть элементы на схеме, пересчитать легенду статусов (см.
+// renderLegend — теперь тоже считает по отфильтрованным элементам,
+// Docs/backlog.md), и заново отрисовать сами фильтры — список значений
+// (allValuesFor) не меняется, но доступность (isValueEnabled/disabled) в
+// ДРУГИХ категориях могла измениться. Состояние (excludedSet) не в DOM, а
+// в state.placementFilters, поэтому полная перерисовка чекбоксов не
+// теряет отметки пользователя.
+function onPlacementFilterChange() {
+  applyPlacementFilters();
+  renderLegend();
+  renderPlacementFilters();
+}
+
+function placementNoneLabel(kind) {
+  if (kind === "elevation") return "— без отметки —";
+  if (kind === "subtype") return "— без подтипа —";
+  if (kind === "supplier") return "— без поставщика —";
+  if (kind === "contract") return "— без контракта —";
+  return "— не определено —";
+}
+
+// compareRaw — сравнивать значения как есть (a - b), а не по подписи.
+// Годится ТОЛЬКО для категорий, где сама величина осмысленна как число
+// (Отметка, мм) — для зональных категорий (Кран/Стоянка/Захватка)
+// значение теперь id зоны (см. zoneFilterValue), а id — это внутренний
+// идентификатор БД без смыслового порядка, сортировать его как число
+// было бы неправильно, нужно сравнивать по РЕЗОЛВЛЕННОМУ имени.
+function placementComparator(labelFor, { compareRaw = false } = {}) {
+  // "Служебные" псевдо-значения (нет данных / нет конкретной стоянки) —
+  // всегда в конце списка, после реальных значений.
+  const isTrailing = v => v === PLACEMENT_NONE || isNoStanceValue(v);
+  return (a, b) => {
+    if (isTrailing(a) && !isTrailing(b)) return 1;
+    if (isTrailing(b) && !isTrailing(a)) return -1;
+    if (compareRaw && typeof a === "number" && typeof b === "number") return a - b;
+    // numeric:true — естественная сортировка чисел внутри строки
+    // ("Стоянка 2" перед "Стоянка 10"), а не лексикографическая
+    // ("Стоянка 10" перед "Стоянка 2").
+    return String(labelFor(a)).localeCompare(String(labelFor(b)), "ru", { numeric: true });
+  };
+}
+
+function filterGroupShell(title) {
+  const wrap = document.createElement("div");
+  wrap.className = "filter-group";
+  const header = document.createElement("div");
+  header.className = "filter-group-header";
+  const titleEl = document.createElement("span");
+  titleEl.textContent = title;
+  header.appendChild(titleEl);
+  const btnAll = document.createElement("button");
+  btnAll.type = "button"; btnAll.className = "link-btn"; btnAll.textContent = "все";
+  const btnNone = document.createElement("button");
+  btnNone.type = "button"; btnNone.className = "link-btn"; btnNone.textContent = "ничего";
+  header.appendChild(btnAll);
+  header.appendChild(btnNone);
+  wrap.appendChild(header);
+  return { wrap, btnAll, btnNone };
+}
+
+// Отмечает чекбокс как временно недоступный (0 элементов проходит
+// остальные фильтры при этом значении) — checked-состояние и сам пункт
+// формы при этом не трогаются, см. Docs/backlog.md ("не убирай с формы
+// отборы... а делай их недоступными").
+function applyEnabledState(input, label, enabled) {
+  input.disabled = !enabled;
+  label.classList.toggle("filter-disabled", !enabled);
+}
+
+// Плоская группа (Захватка/Отметка/Статус) — просто список чекбоксов.
+// isEnabledFn(value) — влияет только на disabled/серый вид, не на состав
+// списка (values — уже ПОЛНЫЙ список, см. allValuesFor).
+function buildFilterGroup(title, values, excludedSet, labelFor, isEnabledFn, onChange, sortOptions) {
+  const { wrap, btnAll, btnNone } = filterGroupShell(title);
+  const sorted = Array.from(values).sort(placementComparator(labelFor, sortOptions));
+
+  const checkboxes = [];
+  for (const v of sorted) {
+    const label = document.createElement("label");
+    label.className = "toggle";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !excludedSet.has(v);
+    applyEnabledState(input, label, isEnabledFn(v));
+    input.addEventListener("change", () => {
+      if (input.checked) excludedSet.delete(v); else excludedSet.add(v);
+      onChange();
+    });
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(" " + labelFor(v)));
+    wrap.appendChild(label);
+    checkboxes.push(input);
+  }
+
+  btnAll.addEventListener("click", () => {
+    excludedSet.clear();
+    checkboxes.forEach(cb => { cb.checked = true; });
+    onChange();
+  });
+  btnNone.addEventListener("click", () => {
+    sorted.forEach(v => excludedSet.add(v));
+    checkboxes.forEach(cb => { cb.checked = false; });
+    onChange();
+  });
+
+  return wrap;
+}
+
+// Иерархическая группа (Кран→Стоянка крана, Тип элемента→Подтип) — родитель
+// и его потомки остаются ДВУМЯ независимыми excludedSet (см. комментарий
+// над PLACEMENT_FILTER_DEFS), клик по родителю ставит/снимает всех его
+// потомков разом (item 3/8, Docs/backlog.md). parentIsEnabledFn/
+// childIsEnabledFn — отдельные функции доступности, категории-то разные.
+// Дочерние чекбоксы каждого родителя свёрнуты по умолчанию (только
+// родитель виден — "по умолчанию выбирается вся группа крана") и
+// разворачиваются по клику на стрелку рядом с родителем, если у него
+// вообще есть дети (см. Docs/backlog.md). Родительский чекбокс работает
+// как раньше (каскад на всех потомков) независимо от того, развёрнута
+// группа сейчас или нет.
+function buildHierarchicalFilterGroup(
+  title, parents, parentExcludedSet, parentLabelFor, parentIsEnabledFn,
+  childrenForParent, childExcludedSet, childLabelFor, childIsEnabledFn, onChange, expandedSet
+) {
+  const { wrap, btnAll, btnNone } = filterGroupShell(title);
+  const parentCheckboxes = [];
+  const allChildCheckboxes = [];
+
+  for (const pv of parents) {
+    const children = childrenForParent(pv);
+
+    const pRow = document.createElement("div");
+    pRow.className = "filter-parent-row";
+
+    const childrenBox = document.createElement("div");
+    childrenBox.className = "filter-children";
+    const isOpen = expandedSet.has(pv);
+    if (isOpen) childrenBox.classList.add("open");
+
+    let expandBtn = null;
+    if (children.length) {
+      expandBtn = document.createElement("button");
+      expandBtn.type = "button";
+      expandBtn.className = "filter-expand-btn";
+      expandBtn.textContent = isOpen ? "▾" : "▸";
+      expandBtn.title = isOpen ? "Свернуть" : "Развернуть";
+      expandBtn.addEventListener("click", () => {
+        const open = childrenBox.classList.toggle("open");
+        expandBtn.textContent = open ? "▾" : "▸";
+        expandBtn.title = open ? "Свернуть" : "Развернуть";
+        if (open) expandedSet.add(pv); else expandedSet.delete(pv);
+      });
+      pRow.appendChild(expandBtn);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "filter-expand-spacer";
+      pRow.appendChild(spacer);
+    }
+
+    const pLabel = document.createElement("label");
+    pLabel.className = "toggle filter-parent";
+    const pInput = document.createElement("input");
+    pInput.type = "checkbox";
+    pInput.checked = !parentExcludedSet.has(pv);
+    applyEnabledState(pInput, pLabel, parentIsEnabledFn(pv));
+    pLabel.appendChild(pInput);
+    pLabel.appendChild(document.createTextNode(" " + parentLabelFor(pv)));
+    pRow.appendChild(pLabel);
+    wrap.appendChild(pRow);
+    parentCheckboxes.push(pInput);
+
+    const childEntries = [];
+    for (const cv of children) {
+      const cLabel = document.createElement("label");
+      cLabel.className = "toggle filter-child";
+      const cInput = document.createElement("input");
+      cInput.type = "checkbox";
+      cInput.checked = !childExcludedSet.has(cv);
+      applyEnabledState(cInput, cLabel, childIsEnabledFn(cv));
+      cInput.addEventListener("change", () => {
+        if (cInput.checked) {
+          childExcludedSet.delete(cv);
+          // Включили конкретную стоянку, а сам кран сейчас выключен —
+          // включаем и кран (иначе элемент всё равно не пройдёт фильтр,
+          // см. Docs/backlog.md), но остальные его стоянки не трогаем —
+          // только прямой клик по родителю каскадно ставит/снимает всех
+          // потомков разом (см. обработчик pInput ниже).
+          parentExcludedSet.delete(pv);
+        } else {
+          childExcludedSet.add(cv);
+        }
+        onChange();
+      });
+      cLabel.appendChild(cInput);
+      cLabel.appendChild(document.createTextNode(" " + childLabelFor(cv)));
+      childrenBox.appendChild(cLabel);
+      childEntries.push({ input: cInput, value: cv });
+      allChildCheckboxes.push({ input: cInput, value: cv });
+    }
+    wrap.appendChild(childrenBox);
+
+    pInput.addEventListener("change", () => {
+      if (pInput.checked) parentExcludedSet.delete(pv); else parentExcludedSet.add(pv);
+      childEntries.forEach(({ value }) => {
+        if (pInput.checked) childExcludedSet.delete(value); else childExcludedSet.add(value);
+      });
+      onChange();
+    });
+  }
+
+  btnAll.addEventListener("click", () => {
+    parentExcludedSet.clear();
+    childExcludedSet.clear();
+    parentCheckboxes.forEach(cb => { cb.checked = true; });
+    allChildCheckboxes.forEach(({ input }) => { input.checked = true; });
+    onChange();
+  });
+  btnNone.addEventListener("click", () => {
+    parents.forEach(pv => parentExcludedSet.add(pv));
+    allChildCheckboxes.forEach(({ value }) => childExcludedSet.add(value));
+    parentCheckboxes.forEach(cb => { cb.checked = false; });
+    allChildCheckboxes.forEach(({ input }) => { input.checked = false; });
+    onChange();
+  });
+
+  return wrap;
+}
+
+// К id какого крана относится значение категории "stance" — три случая:
+// (1) псевдо-значение "нет конкретной стоянки, но кран известен"
+// (noStanceValueForCrane) — id крана уже зашит в самом значении, брать
+// неоткуда больше; (2) настоящая зона-стоянка — id крана берём из связи
+// между зонами, вычисленной при разборе файла (parent_zone_id, см.
+// zone_parser._link_stances_to_cranes, Docs/backlog.md) — это связь
+// МЕЖДУ ЗОНАМИ (стоянка физически внутри рабочей зоны крана), отдельная
+// от того, к какому крану привязан сам ЭЛЕМЕНТ; (3) ни кран, ни стоянка
+// не определены (PLACEMENT_NONE) — не относится ни к какому крану.
+// Принимает и возвращает id зоны, НЕ имя (см. zoneFilterValue) — у разных
+// кранов стоянки могут называться одинаково ("Стоянка 1" есть у каждого
+// крана), поэтому только id однозначно определяет зону.
+function craneIdForStanceId(stanceId) {
+  if (stanceId === PLACEMENT_NONE) return PLACEMENT_NONE;
+  if (isNoStanceValue(stanceId)) return craneIdFromNoStanceValue(stanceId);
+  const stanceZone = state.zones.find(z => z.id === stanceId);
+  if (!stanceZone || stanceZone.parent_match_status !== "matched" || stanceZone.parent_zone_id == null) return PLACEMENT_NONE;
+  return stanceZone.parent_zone_id;
+}
+
+function typesForSubtypeValue(subtypeValue) {
+  const types = new Set();
+  for (const e of state.elements) {
+    if (subtypeFilterValue(e) === subtypeValue) types.add(e.element_type);
+  }
+  return types;
+}
+
+function renderPlacementFilters() {
+  const container = document.getElementById("placement-filters");
+  container.innerHTML = "";
+  if (!state.elements.length) {
+    container.innerHTML = '<div style="color:var(--color-text-muted)">нет данных</div>';
+    return;
+  }
+
+  const zoneLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("zone") : zoneNameById(v);
+  // Стоянки — отдельная подпись: помимо реальных зон и PLACEMENT_NONE,
+  // тут ещё бывает псевдо-значение "нет конкретной стоянки, но кран
+  // известен" (см. stanceFilterValue) — показываем явным текстом, а не
+  // пытаемся резолвить как обычную зону по id (там нечего резолвить).
+  const stanceLabelFor = v => {
+    if (v === PLACEMENT_NONE) return placementNoneLabel("zone");
+    if (isNoStanceValue(v)) return "вне стоянок";
+    return zoneNameById(v);
+  };
+  const elevationLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("elevation") : `${v} мм`;
+  const subtypeLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("subtype") : v;
+  const statusLabelFor = v => state.statusLabels[v] || v;
+  const enabledFor = key => v => isValueEnabled(key, v);
+
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "btn btn-sm btn-secondary";
+  resetBtn.style.cssText = "margin-bottom:14px; width:100%;";
+  resetBtn.textContent = "Сбросить все фильтры";
+  resetBtn.addEventListener("click", () => {
+    for (const key of Object.keys(state.placementFilters)) state.placementFilters[key].clear();
+    onPlacementFilterChange();
+  });
+  container.appendChild(resetBtn);
+
+  container.appendChild(buildFilterGroup(
+    "Захватка", allValuesFor("zakhvatka"), state.placementFilters.zakhvatka, zoneLabelFor, enabledFor("zakhvatka"), onPlacementFilterChange
+  ));
+
+  // Кран / Стоянка крана — иерархически (item 3). Заголовки — объединение
+  // ПОЛНОГО списка кранов и стоянок (allValuesFor — не сужается фильтрами,
+  // см. комментарий над allValuesFor) — стоянка всегда под своим краном,
+  // независимо от того, что сейчас включено/выключено в других фильтрах.
+  //
+  // "Стоянка крана" — не точка, а рабочая зона крана в конкретной позиции
+  // (заказчик уточнил, см. Docs/backlog.md) — элемент вполне может быть в
+  // зоне работы крана, но не в контуре ни одной конкретной стоянки внутри
+  // неё. Такой элемент получает псевдо-значение "нет конкретной стоянки,
+  // но кран известен" (см. stanceFilterValue/noStanceValueForCrane) —
+  // корректно ложится ДОЧЕРНИМ пунктом под СВОЙ кран, а не в общий пункт
+  // вне иерархии (это и было исходным багом). Настоящий PLACEMENT_NONE
+  // теперь остаётся только для действительно редкого случая — когда и
+  // кран у элемента, и стоянка не определены; такие элементы, а также
+  // зоны-стоянки без крана-хозяина (недочёт в самом чертеже,
+  // craneIdForStanceId вернёт для них PLACEMENT_NONE), собираются под
+  // настоящим заголовком "Кран: не определено".
+  const craneValues = allValuesFor("crane");
+  const stanceValues = allValuesFor("stance");
+  const stancesByCrane = new Map();
+  for (const sv of stanceValues) {
+    if (sv === PLACEMENT_NONE) continue; // ни кран, ни стоянка — отдельным пунктом ниже
+    const cv = craneIdForStanceId(sv); // no-stance:X → id этого крана; реальная зона → её кран или PLACEMENT_NONE
+    if (!stancesByCrane.has(cv)) stancesByCrane.set(cv, []);
+    stancesByCrane.get(cv).push(sv);
+  }
+  const craneHeadings = Array.from(new Set([...craneValues, ...stancesByCrane.keys()])).sort(placementComparator(zoneLabelFor));
+  for (const h of craneHeadings) stancesByCrane.get(h)?.sort(placementComparator(stanceLabelFor));
+  container.appendChild(buildHierarchicalFilterGroup(
+    "Кран / Стоянка крана", craneHeadings, state.placementFilters.crane, zoneLabelFor, enabledFor("crane"),
+    cv => stancesByCrane.get(cv) || [], state.placementFilters.stance, stanceLabelFor, enabledFor("stance"),
+    onPlacementFilterChange, state.placementGroupsExpanded.crane
+  ));
+
+  // Ни кран, ни стоянка не определены вовсе — редкий случай (для
+  // большинства файлов пусто и пункт не показывается).
+  if (stanceValues.has(PLACEMENT_NONE)) {
+    container.appendChild(buildFilterGroup(
+      "Кран и стоянка — не определены", new Set([PLACEMENT_NONE]), state.placementFilters.stance,
+      () => "ни кран, ни стоянка не определены", enabledFor("stance"), onPlacementFilterChange
+    ));
+  }
+
+  container.appendChild(buildFilterGroup(
+    "Отметка (высота)", allValuesFor("elevation"), state.placementFilters.elevation, elevationLabelFor, enabledFor("elevation"), onPlacementFilterChange, { compareRaw: true }
+  ));
+
+  // Тип элемента / Подтип — иерархически (item 8), тем же приёмом.
+  const typeValues = allValuesFor("elementType");
+  const subtypeValues = allValuesFor("subtype");
+  const subtypesByType = new Map();
+  for (const sv of subtypeValues) {
+    const types = typesForSubtypeValue(sv);
+    const owners = types.size ? Array.from(types) : [PLACEMENT_NONE];
+    for (const t of owners) {
+      if (!subtypesByType.has(t)) subtypesByType.set(t, []);
+      subtypesByType.get(t).push(sv);
+    }
+  }
+  const typeHeadings = Array.from(new Set([...typeValues, ...subtypesByType.keys()])).sort(placementComparator(v => v));
+  for (const h of typeHeadings) subtypesByType.get(h)?.sort(placementComparator(subtypeLabelFor));
+  container.appendChild(buildHierarchicalFilterGroup(
+    "Тип элемента / Подтип", typeHeadings, state.placementFilters.elementType, v => v, enabledFor("elementType"),
+    t => subtypesByType.get(t) || [], state.placementFilters.subtype, subtypeLabelFor, enabledFor("subtype"),
+    onPlacementFilterChange, state.placementGroupsExpanded.elementType
+  ));
+
+  container.appendChild(buildFilterGroup(
+    "Статус", allValuesFor("status"), state.placementFilters.status, statusLabelFor, enabledFor("status"), onPlacementFilterChange
+  ));
+
+  // Поставщик / Контракт — иерархически, тем же приёмом, что Кран/Стоянка
+  // и Тип/Подтип (см. Docs/backlog.md, "Групповая смена статуса"), но
+  // источник значений — не элементы/зоны, а сам справочник контрактов
+  // (state.contracts) — поставщик и контракт без ни одного элемента
+  // всё равно должны быть в списке (см. allValuesFor).
+  const supplierLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("supplier") : v;
+  const contractLabelFor = v => {
+    if (v === PLACEMENT_NONE) return placementNoneLabel("contract");
+    const c = state.contracts.find(c => c.id === v);
+    return c ? c.name : `контракт #${v}`;
+  };
+  const supplierValues = allValuesFor("supplier");
+  const contractValues = allValuesFor("contract");
+  const contractsBySupplier = new Map();
+  for (const cv of contractValues) {
+    if (cv === PLACEMENT_NONE) continue; // элементы без контракта — отдельным пунктом ниже, не под поставщиком
+    const c = state.contracts.find(c => c.id === cv);
+    const sv = c ? c.supplier : PLACEMENT_NONE;
+    if (!contractsBySupplier.has(sv)) contractsBySupplier.set(sv, []);
+    contractsBySupplier.get(sv).push(cv);
+  }
+  const supplierHeadings = Array.from(new Set([...supplierValues, ...contractsBySupplier.keys()])).sort(placementComparator(supplierLabelFor));
+  for (const h of supplierHeadings) contractsBySupplier.get(h)?.sort(placementComparator(contractLabelFor));
+  container.appendChild(buildHierarchicalFilterGroup(
+    "Поставщик / Контракт", supplierHeadings, state.placementFilters.supplier, supplierLabelFor, enabledFor("supplier"),
+    sv => contractsBySupplier.get(sv) || [], state.placementFilters.contract, contractLabelFor, enabledFor("contract"),
+    onPlacementFilterChange, state.placementGroupsExpanded.supplier
+  ));
+
+  // Ни поставщик, ни контракт не определены вовсе (у элемента нет
+  // contract_id) — отдельным пунктом вне иерархии, по аналогии с "Кран и
+  // стоянка — не определены" выше.
+  if (contractValues.has(PLACEMENT_NONE)) {
+    container.appendChild(buildFilterGroup(
+      "Без контракта", new Set([PLACEMENT_NONE]), state.placementFilters.contract,
+      () => "элементы без контракта", enabledFor("contract"), onPlacementFilterChange
+    ));
+  }
+}
+
+function renderAxisGrid(data) {
+  const layer = document.getElementById("axis-layer");
+  layer.innerHTML = "";
+  state.axisNumeric = [];
+  state.axisLetter = [];
+  const { numeric, letter } = data.axis_grid;
+  const numKeys = Object.keys(numeric), letKeys = Object.keys(letter);
+  if (!numKeys.length || !letKeys.length) return;
+
+  const numVals = Object.values(numeric), letVals = Object.values(letter);
+  const xMin = Math.min(...numVals), xMax = Math.max(...numVals);
+  const yMin = Math.min(...letVals), yMax = Math.max(...letVals);
+  const margin = Math.max(xMax - xMin, yMax - yMin) * 0.03;
+  const labelOffset = margin * 1.8;
+  const fontSize = data.marker_radius * 2.2;
+
+  const g = el("g", { stroke: "#c4c4c4", fill: "#9a9a9a" });
+
+  const numEntries = Object.entries(numeric).sort((a, b) => a[1] - b[1]);
+  for (const [label, x] of numEntries) {
+    const y0 = yMin - margin, y1 = yMax + margin;
+    g.appendChild(el("line", { x1: x, y1: y0, x2: x, y2: y1, "vector-effect": "non-scaling-stroke", "stroke-width": 1 }));
+    const elTop = flippedText(x, y0 - labelOffset, label, fontSize, "middle");
+    const elBottom = flippedText(x, y1 + labelOffset, label, fontSize, "middle");
+    g.appendChild(elTop);
+    g.appendChild(elBottom);
+    state.axisNumeric.push({ label, x, elTop, elBottom });
+  }
+  const letEntries = Object.entries(letter).sort((a, b) => a[1] - b[1]);
+  for (const [label, y] of letEntries) {
+    const x0 = xMin - margin, x1 = xMax + margin;
+    g.appendChild(el("line", { x1: x0, y1: y, x2: x1, y2: y, "vector-effect": "non-scaling-stroke", "stroke-width": 1 }));
+    const elText = flippedText(x0 - labelOffset, y, label, fontSize, "middle");
+    g.appendChild(elText);
+    state.axisLetter.push({ label, y, el: elText });
+  }
+  layer.appendChild(g);
+}
+
+function colorFor(status) {
+  return state.statusColors[status] || "#999999";
+}
+
+// ---------- форма маркера по (слой, тип элемента) — п.11 третьего раунда,
+// "как в оригинале" (outline) — реальный контур вытянутых элементов вместо
+// условного маркера фиксированного размера (см. Docs/backlog.md). ----------
+const SHAPE_TAGS = { circle: "circle", square: "rect", triangle: "polygon", diamond: "polygon", hexagon: "polygon", outline: "polygon" };
+
+function shapeKeyFor(layer, elementType) { return `${layer} ${elementType}`; }
+// По умолчанию — "как в оригинале" (реальный контур из DXF), а не условный
+// маркер: см. Docs/backlog.md. Переопределяется в "Настройки → Форма
+// маркеров" (element_shapes в БД), настройка сохраняется на сервере.
+function shapeNameFor(element) { return state.elementShapes[shapeKeyFor(element.layer, element.element_type)] || "outline"; }
+
+// Форма "outline" нарисуема только если у элемента реально есть сохранённый
+// контур (только у элементов из LWPOLYLINE — см. app/main.py /plan-data).
+// Если назначена "outline", но контура нет (например, колонна из
+// INSERT-блока), молча откатываемся на круг — не оставляем элемент без
+// маркера вообще.
+function effectiveShapeNameFor(element) {
+  const assigned = shapeNameFor(element);
+  if (assigned === "outline" && (!element.outline || element.outline.length < 3)) return "circle";
+  return assigned;
+}
+
+function polygonPoints(cx, cy, r, sides, rotate) {
+  const pts = [];
+  for (let i = 0; i < sides; i++) {
+    const a = rotate + i * (2 * Math.PI / sides);
+    pts.push(`${(cx + r * Math.cos(a)).toFixed(2)},${(cy + r * Math.sin(a)).toFixed(2)}`);
+  }
+  return pts.join(" ");
+}
+
+function shapeGeometryAttrs(shapeName, cx, cy, r, outline) {
+  switch (shapeName) {
+    case "square": return { x: cx - r, y: cy - r, width: r * 2, height: r * 2 };
+    case "triangle": return { points: polygonPoints(cx, cy, r, 3, -Math.PI / 2) };
+    case "diamond": return { points: polygonPoints(cx, cy, r, 4, -Math.PI / 4) };
+    case "hexagon": return { points: polygonPoints(cx, cy, r, 6, 0) };
+    // Контур уже в мировых координатах (как оси/сетка) — рисуется как есть,
+    // без привязки к cx/cy/r условного маркера.
+    case "outline": return { points: outline.map(p => `${p[0]},${p[1]}`).join(" ") };
+    default: return { cx, cy, r };
+  }
+}
+
+function updateShapeGeometry(node, shapeName, cx, cy, r, outline) {
+  const attrs = shapeGeometryAttrs(shapeName, cx, cy, r, outline);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+}
+
+function styleShape(shape, element) {
+  const selected = state.selectedId === element.id;
+  shape.setAttribute("fill", colorFor(element.current_status));
+  shape.setAttribute("fill-opacity", "1");
+  shape.classList.toggle("selected", selected);
+  shape.classList.toggle("multi-selected", state.multiSelectedIds.has(element.id));
+  if (!selected) {
+    shape.setAttribute("stroke", IN_PROJECT_STROKE);
+    if (element.axis_status === "outside_axis_grid" || element.axis_status === "no_axis_grid") {
+      shape.setAttribute("stroke-dasharray", NO_AXIS_DASH);
+    } else {
+      shape.removeAttribute("stroke-dasharray");
+    }
+  } else {
+    shape.removeAttribute("stroke-dasharray");
+  }
+  update3DElementAppearance(element, selected);
+}
+
+// Тот же цвет статуса и та же подсветка выбора, что и у 2D-фигуры (см.
+// styleShape выше) — переносим на 3D-меш, если сцена уже построена
+// ("3D-режим схемы", Docs/backlog.md). Не пересобирает геометрию, только
+// материал — дёшево, можно дёргать на каждую смену статуса/выбора.
+function update3DElementAppearance(element, selected) {
+  const mesh = state.view3d.meshById.get(element.id);
+  if (!mesh) return;
+  mesh.material.color.set(colorFor(element.current_status));
+  mesh.material.emissive.set(selected ? 0x333333 : 0x000000);
+}
+
+// ---------- разводка накладывающихся подписей марок ----------
+const LABEL_CANDIDATES = [
+  { dx: 1.3, dy: 0, anchor: "start" },
+  { dx: 1.0, dy: 1.2, anchor: "start" },
+  { dx: 1.0, dy: -1.2, anchor: "start" },
+  { dx: 0, dy: 1.4, anchor: "middle" },
+  { dx: 0, dy: -1.4, anchor: "middle" },
+  { dx: -1.3, dy: 0, anchor: "end" },
+];
+
+function computeLabelOffsets(elements, baseRadius) {
+  const fontSize = baseRadius * 1.3;
+  const charW = fontSize * 0.62;
+  const bucketSize = Math.max(fontSize * 6, baseRadius * 10);
+  const buckets = new Map();
+  const offsets = new Map();
+
+  function bucketKey(x, y) { return `${Math.floor(x / bucketSize)},${Math.floor(y / bucketSize)}`; }
+  function nearbyBoxes(x, y) {
+    const bx = Math.floor(x / bucketSize), by = Math.floor(y / bucketSize);
+    const result = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const arr = buckets.get(`${bx + dx},${by + dy}`);
+        if (arr) result.push(...arr);
+      }
+    }
+    return result;
+  }
+  function overlaps(a, b) { return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY; }
+  function boxFor(element, cand) {
+    const cx = element.x + cand.dx * baseRadius;
+    const cy = element.y + cand.dy * baseRadius;
+    const w = ((element.mark || "").length || 1) * charW;
+    const h = fontSize * 1.2;
+    let minX, maxX;
+    if (cand.anchor === "start") { minX = cx; maxX = cx + w; }
+    else if (cand.anchor === "end") { minX = cx - w; maxX = cx; }
+    else { minX = cx - w / 2; maxX = cx + w / 2; }
+    return { minX, maxX, minY: cy - h / 2, maxY: cy + h / 2 };
+  }
+
+  for (const element of elements) {
+    if (!element.mark) { offsets.set(element.id, LABEL_CANDIDATES[0]); continue; }
+    let chosen = LABEL_CANDIDATES[0];
+    let chosenBox = boxFor(element, chosen);
+    for (const cand of LABEL_CANDIDATES) {
+      const box = boxFor(element, cand);
+      const near = nearbyBoxes(element.x, element.y);
+      if (!near.some(b => overlaps(b, box))) { chosen = cand; chosenBox = box; break; }
+    }
+    offsets.set(element.id, chosen);
+    const key = bucketKey(element.x, element.y);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(chosenBox);
+  }
+  return offsets;
+}
+
+function renderElements(data) {
+  const layer = document.getElementById("elements-layer");
+  layer.innerHTML = "";
+  state.byId.clear();
+  state.shapeById.clear();
+  state.labelById.clear();
+
+  const r = data.marker_radius;
+  state.labelOffsetById = computeLabelOffsets(data.elements, r);
+
+  for (const element of data.elements) {
+    state.byId.set(element.id, element);
+
+    const shapeName = effectiveShapeNameFor(element);
+    const shape = el(SHAPE_TAGS[shapeName] || "circle", {
+      ...shapeGeometryAttrs(shapeName, element.x, element.y, r, element.outline),
+      "stroke-width": 1.4, "vector-effect": "non-scaling-stroke",
+      "data-id": element.id, "data-shape": shapeName, class: "element-shape",
+    });
+    styleShape(shape, element);
+
+    const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
+    const label = flippedText(
+      element.x + cand.dx * r, element.y + cand.dy * r, element.mark || "", r * 1.3, cand.anchor,
+      { class: "mark-label", "data-type": element.element_type }
+    );
+    if (state.labelVisibility[element.element_type] === false) label.style.display = "none";
+
+    const group = el("g");
+    group.appendChild(shape);
+    group.appendChild(label);
+    layer.appendChild(group);
+
+    state.shapeById.set(element.id, shape);
+    state.labelById.set(element.id, label);
+  }
+
+  updateSizesForZoom();
+}
+
+// Статусы x типы элементов — сколько элементов каждого типа сейчас в
+// каждом статусе (не зависит от фильтров отображения на схеме, см.
+// applyPlacementFilters — легенда всегда показывает полный набор
+// выбранных файлов/слоёв, а не то, что видно на экране прямо сейчас).
+function renderLegend() {
+  const legend = document.getElementById("legend");
+  legend.innerHTML = "";
+  // Легенда считается по элементам, прошедшим текущий фильтр по
+  // размещению (сайдбар → Фильтры) — сознательно ОТЛИЧИЕ от прежнего
+  // поведения (было: полная выборка файлов/слоёв, без учёта фильтра) —
+  // запрошено явно, см. Docs/backlog.md, item 10.
+  const visible = state.elements.filter(passesPlacementFilters);
+  if (!visible.length) {
+    legend.innerHTML = '<div style="color:var(--color-text-muted)">нет данных</div>';
+    return;
+  }
+
+  const types = Array.from(new Set(visible.map(e => e.element_type))).sort((a, b) => a.localeCompare(b, "ru"));
+  const counts = {}; // status -> type -> n
+  for (const status of state.statusOrder) counts[status] = {};
+  for (const e of visible) {
+    const byType = counts[e.current_status];
+    if (!byType) continue; // неизвестный статус — не должно случаться, но не падаем
+    byType[e.element_type] = (byType[e.element_type] || 0) + 1;
+  }
+
+  const wrap = document.createElement("div");
+  wrap.style.overflowX = "auto";
+  const table = document.createElement("table");
+  table.className = "legend-table";
+
+  const headRow = document.createElement("tr");
+  headRow.appendChild(document.createElement("th"));
+  for (const t of types) {
+    const th = document.createElement("th");
+    th.textContent = t;
+    headRow.appendChild(th);
+  }
+  const thTotal = document.createElement("th");
+  thTotal.textContent = "Всего";
+  headRow.appendChild(thTotal);
+  table.appendChild(headRow);
+
+  const colTotals = types.map(() => 0);
+  let grandTotal = 0;
+  for (const status of state.statusOrder) {
+    const tr = document.createElement("tr");
+    const tdLabel = document.createElement("td");
+    tdLabel.className = "legend-label";
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = colorFor(status);
+    tdLabel.appendChild(swatch);
+    tdLabel.appendChild(document.createTextNode(state.statusLabels[status]));
+    tr.appendChild(tdLabel);
+
+    let rowTotal = 0;
+    types.forEach((t, i) => {
+      const n = counts[status][t] || 0;
+      rowTotal += n;
+      colTotals[i] += n;
+      const td = document.createElement("td");
+      td.textContent = n || "";
+      tr.appendChild(td);
+    });
+    const tdRowTotal = document.createElement("td");
+    tdRowTotal.textContent = rowTotal;
+    tdRowTotal.style.fontWeight = "600";
+    tr.appendChild(tdRowTotal);
+    grandTotal += rowTotal;
+    table.appendChild(tr);
+  }
+
+  const totalRow = document.createElement("tr");
+  totalRow.className = "legend-total-row";
+  const tdTotalLabel = document.createElement("td");
+  tdTotalLabel.textContent = "Итого";
+  totalRow.appendChild(tdTotalLabel);
+  colTotals.forEach(n => {
+    const td = document.createElement("td");
+    td.textContent = n;
+    totalRow.appendChild(td);
+  });
+  const tdGrand = document.createElement("td");
+  tdGrand.textContent = grandTotal;
+  totalRow.appendChild(tdGrand);
+  table.appendChild(totalRow);
+
+  wrap.appendChild(table);
+  legend.appendChild(wrap);
+}
+
+function renderLabelToggles() {
+  const box = document.getElementById("label-toggles");
+  box.innerHTML = "";
+  const types = Object.keys(state.labelVisibility);
+  if (!types.length) {
+    box.innerHTML = '<div style="color:var(--color-text-muted)">нет данных</div>';
+    return;
+  }
+  for (const type of types) {
+    const label = document.createElement("label");
+    label.className = "toggle";
+    const checked = state.labelVisibility[type] !== false;
+    label.innerHTML = `<input type="checkbox" data-type="${type}" ${checked ? "checked" : ""}/> ${type}`;
+    label.querySelector("input").addEventListener("change", (e) => {
+      state.labelVisibility[type] = e.target.checked;
+      document.querySelectorAll(`.mark-label[data-type="${type}"]`).forEach(t => {
+        t.style.display = e.target.checked ? "" : "none";
+      });
+    });
+    box.appendChild(label);
+  }
+}
+
+// ---------- предел размера маркеров/подписей + прореживание подписей осей при zoom ----------
+function updateSizesForZoom() {
+  if (!state.view) return;
+  const stage = document.getElementById("stage");
+  const pxPerUnitX = stage.clientWidth / state.view.w;
+  const pxPerUnitY = stage.clientHeight / state.view.h;
+  const pxPerUnit = Math.min(pxPerUnitX, pxPerUnitY) || 1;
+
+  const baseR = state.baseMarkerRadius;
+  const effectiveR = Math.min(baseR, MAX_MARKER_PX / pxPerUnit);
+  const baseFont = baseR * 1.3;
+  const effectiveFont = Math.min(baseFont, MAX_LABEL_FONT_PX / pxPerUnit);
+
+  for (const element of state.elements) {
+    const shape = state.shapeById.get(element.id);
+    if (shape) {
+      const shapeName = shape.dataset.shape || "circle";
+      // "outline" — реальный контур в мировых координатах, уже корректно
+      // масштабируется вместе со всем слоем через viewBox SVG (как сетка
+      // осей) — пересчитывать геометрию на каждый zoom не нужно, в отличие
+      // от условных маркеров с экранным пределом размера.
+      if (shapeName !== "outline") updateShapeGeometry(shape, shapeName, element.x, element.y, effectiveR);
+    }
+
+    const label = state.labelById.get(element.id);
+    if (!label) continue;
+    const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
+    const x = element.x + cand.dx * effectiveR;
+    const y = element.y + cand.dy * effectiveR;
+    label.setAttribute("transform", `translate(${x},${y}) scale(1,-1)`);
+    label.setAttribute("font-size", effectiveFont.toFixed(2));
+  }
+
+  const effectiveZoneFont = MAX_ZONE_FONT_PX / pxPerUnit;
+  for (const { el: labelEl, baseFontSize } of state.zoneLabelEls) {
+    labelEl.setAttribute("font-size", Math.min(baseFontSize, effectiveZoneFont).toFixed(2));
+  }
+
+  updateAxisLabelSizing(pxPerUnit);
+  updateLabelCollisionVisibility(effectiveR, effectiveFont);
+  updateScrollbars();
+  updateZoomIndicator(pxPerUnit);
+}
+
+// ---------- скрыть подписи марок, которые пересекаются при текущем масштабе, показать
+// обратно по мере приближения (п.4 третьего раунда — тот же паттерн, что у подписей осей).
+// effectiveFont уменьшается в мировых единицах по мере зума — при приближении боксы
+// подписей "сжимаются" относительно неизменного мирового расстояния между элементами,
+// поэтому часть подписей естественно открывается без отдельной логики "показывать больше". ----------
+const LABEL_COLLISION_BUCKET_MIN = 1e-6;
+
+function updateLabelCollisionVisibility(effectiveR, effectiveFont) {
+  const charW = effectiveFont * 0.62;
+  const bucketSize = Math.max(effectiveFont * 6, effectiveR * 10, LABEL_COLLISION_BUCKET_MIN);
+  const buckets = new Map();
+
+  function bucketKey(x, y) { return `${Math.floor(x / bucketSize)},${Math.floor(y / bucketSize)}`; }
+  function nearbyBoxes(x, y) {
+    const bx = Math.floor(x / bucketSize), by = Math.floor(y / bucketSize);
+    const result = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const arr = buckets.get(`${bx + dx},${by + dy}`);
+        if (arr) result.push(...arr);
+      }
+    }
+    return result;
+  }
+  function overlaps(a, b) { return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY; }
+
+  for (const element of state.elements) {
+    const label = state.labelById.get(element.id);
+    if (!label || !element.mark) continue;
+    if (state.labelVisibility[element.element_type] === false) continue; // уже скрыто настройкой типа — не занимает место в сетке
+
+    const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
+    const cx = element.x + cand.dx * effectiveR;
+    const cy = element.y + cand.dy * effectiveR;
+    const w = (element.mark.length || 1) * charW;
+    const h = effectiveFont * 1.2;
+    let minX, maxX;
+    if (cand.anchor === "start") { minX = cx; maxX = cx + w; }
+    else if (cand.anchor === "end") { minX = cx - w; maxX = cx; }
+    else { minX = cx - w / 2; maxX = cx + w / 2; }
+    const box = { minX, maxX, minY: cy - h / 2, maxY: cy + h / 2 };
+
+    const collides = nearbyBoxes(element.x, element.y).some(b => overlaps(b, box));
+    label.style.display = collides ? "none" : "";
+    if (!collides) {
+      const key = bucketKey(element.x, element.y);
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(box);
+    }
+  }
+}
+
+// ---------- подписи осей: закреплены на границах видимой области + прореживание при коллизии
+// (п.1 второго раунда — предел размера; п.5 третьего раунда — закрепление на границах экрана,
+// как замороженные заголовки строки/столбца в таблице, а не только предел размера). ----------
+function updateAxisLabelSizing(pxPerUnit) {
+  const v = state.view;
+  // Видимая в данный момент область в мировых координатах (см. setView/loadPlan:
+  // viewBox.y = -max_y, поэтому мировой Y восстанавливается обратным знаком).
+  const visMinX = v.x, visMaxX = v.x + v.w;
+  const visMinY = -(v.y + v.h), visMaxY = -v.y;
+  const insetWorld = (MAX_AXIS_FONT_PX * 1.6) / pxPerUnit; // постоянный отступ от края экрана в px, вне зависимости от zoom
+  const axisFont = MAX_AXIS_FONT_PX / pxPerUnit;
+  const neededPx = MAX_AXIS_FONT_PX * 2.2; // приблизительная ширина, нужная подписи, чтобы не слипаться с соседней
+
+  function thin(entries, coordKey, visMin, visMax, applyFn) {
+    entries.forEach(e => applyFn(e, false));
+    const visible = entries.filter(e => e[coordKey] >= visMin && e[coordKey] <= visMax);
+    if (!visible.length) return;
+    if (visible.length === 1) { applyFn(visible[0], true); return; }
+    let minGap = Infinity;
+    for (let i = 1; i < visible.length; i++) {
+      minGap = Math.min(minGap, visible[i][coordKey] - visible[i - 1][coordKey]);
+    }
+    const gapPx = minGap * pxPerUnit;
+    const step = gapPx > 0 ? Math.max(1, Math.ceil(neededPx / gapPx)) : visible.length;
+    visible.forEach((e, i) => applyFn(e, i % step === 0));
+  }
+
+  thin(state.axisNumeric, "x", visMinX, visMaxX, (e, visible) => {
+    e.elTop.style.display = visible ? "" : "none";
+    e.elBottom.style.display = visible ? "" : "none";
+    if (visible) {
+      e.elTop.setAttribute("transform", `translate(${e.x},${visMaxY - insetWorld}) scale(1,-1)`);
+      e.elTop.setAttribute("font-size", axisFont.toFixed(2));
+      e.elBottom.setAttribute("transform", `translate(${e.x},${visMinY + insetWorld}) scale(1,-1)`);
+      e.elBottom.setAttribute("font-size", axisFont.toFixed(2));
+    }
+  });
+  thin(state.axisLetter, "y", visMinY, visMaxY, (e, visible) => {
+    e.el.style.display = visible ? "" : "none";
+    if (visible) {
+      e.el.setAttribute("transform", `translate(${visMinX + insetWorld},${e.y}) scale(1,-1)`);
+      e.el.setAttribute("font-size", axisFont.toFixed(2));
+    }
+  });
+}
+
+function setView(v) {
+  state.view = v;
+  document.getElementById("svg-root").setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+  updateSizesForZoom();
+}
+
+// preserveView=true (по умолчанию) — не трогать текущий масштаб/пан при
+// перезагрузке данных (смена состава слоёв/файлов, сохранение настроек и
+// т.п. не должны "дёргать" схему). preserveView=false — пересчитать вид
+// "по всей схеме" заново: нужно только при первой загрузке приложения и
+// после загрузки СОВСЕМ ДРУГОГО чертежа (другие координаты/масштаб).
+// Пустой выбор (сняты все галочки файлов) — не "нечего делать", а явное
+// состояние "показывать нечего": рабочая область и карточка должны
+// реально очиститься, а не оставлять последний отрисованный чертёж на
+// экране (см. Docs/backlog.md).
+function clearWorkspace() {
+  document.getElementById("axis-layer").innerHTML = "";
+  document.getElementById("zones-layer").innerHTML = "";
+  document.getElementById("elements-layer").innerHTML = "";
+  state.elements = [];
+  state.zones = [];
+  state.zoneLabelEls = [];
+  state.byId.clear();
+  state.shapeById.clear();
+  state.labelById.clear();
+  state.labelOffsetById.clear();
+  state.selectedId = null;
+  state.axisNumeric = [];
+  state.axisLetter = [];
+  state.view = null;
+  state.initialView = null;
+  for (const key of Object.keys(state.placementFilters)) state.placementFilters[key].clear();
+  for (const key of Object.keys(state.placementGroupsExpanded)) state.placementGroupsExpanded[key].clear();
+  renderLegend();
+  renderLabelToggles();
+  renderZoneToggles();
+  renderPlacementFilters();
+  showPlaceholderCard();
+  updateScrollbars();
+  updateZoomIndicator();
+  if (state.view3d.active) build3DScene(); // очистит сцену (state.elements сейчас пуст)
+}
+
+async function loadPlan(preserveView = true) {
+  if (!state.selection.size) { clearWorkspace(); return; }
+  const selection = Array.from(state.selection.entries()).map(([source_file, layers]) => ({
+    source_file, layers: layers ? Array.from(layers) : null,
+  }));
+  const data = await api("/plan-data", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selection }),
+  });
+  state.elements = data.elements;
+  state.statusColors = data.status_colors;
+  state.statusOrder = data.status_order;
+  state.statusLabels = data.status_labels;
+  state.labelVisibility = data.label_visibility;
+  state.contracts = data.contracts || [];
+  state.defaultContracts = data.default_contracts || {};
+  state.elementShapes = data.element_shapes || {};
+  state.zones = data.zones || [];
+  state.baseMarkerRadius = data.marker_radius;
+  state.selectedId = null;
+
+  renderAxisGrid(data);
+  renderZones();
+  renderElements(data);
+  renderLegend();
+  renderLabelToggles();
+  renderZoneToggles();
+  renderPlacementFilters();
+  applyPlacementFilters();
+  showPlaceholderCard();
+
+  const b = data.bbox;
+  state.initialView = { x: b.min_x, y: -b.max_y, w: b.max_x - b.min_x, h: b.max_y - b.min_y };
+  if (preserveView && state.view) {
+    // Масштаб/пан не трогаем — но размеры маркеров/подписей/зон под
+    // текущий (неизменившийся) viewBox уже пересчитаны внутри renderElements()
+    // выше через updateSizesForZoom(), обновлять здесь нечего ещё раз.
+  } else {
+    setView({ ...state.initialView });
+  }
+  // 3D — только если пользователь уже включал 3D в этом сеансе (ленивая
+  // пересборка, см. "3D-режим схемы", Docs/backlog.md); иначе соберётся
+  // сама при первом включении кнопкой.
+  if (state.view3d.active) build3DScene();
+}
+
+// ==================== КАРТОЧКА ЭЛЕМЕНТА (сгруппирована по темам, п.11) ====================
+
+const FIELD_LABELS = {
+  id: "ID", dxf_handle: "DXF handle", layer: "Слой", element_type: "Тип",
+  mark: "Марка", mark_source: "Источник марки", address: "Адрес по осям",
+  axis_status: "Статус адресации", axis_number: "Числовая ось", axis_letter: "Буквенная ось",
+  nearest_axis_number: "Ближайшая числовая ось", nearest_axis_letter: "Ближайшая буквенная ось",
+  offset_x_mm: "Смещение X, мм", offset_y_mm: "Смещение Y, мм", x: "X, мм", y: "Y, мм",
+  current_status: "Текущий статус", subtype: "Подтип", elevation_mm: "Отметка, мм",
+};
+
+const FIELD_GROUPS = [
+  { title: "Идентификатор", fields: ["id", "dxf_handle", "layer"] },
+  { title: "Тип и марка", fields: ["element_type", "subtype", "mark", "mark_source"] },
+  { title: "Адрес по осям", fields: ["address", "axis_status", "axis_number", "axis_letter", "nearest_axis_number", "nearest_axis_letter", "offset_x_mm", "offset_y_mm"] },
+  { title: "Статус", fields: ["current_status"] },
+  { title: "Координаты", fields: ["x", "y", "elevation_mm"] },
+];
+
+function fieldRowsHtml(element, fields) {
+  return fields.map(k => {
+    let v = element[k];
+    if (k === "current_status") v = state.statusLabels[v] || v;
+    if (v === null || v === undefined || v === "") v = "—";
+    return `<tr><td class="k">${FIELD_LABELS[k] || k}</td><td>${v}</td></tr>`;
+  }).join("");
+}
+
+function showPlaceholderCard() {
+  document.getElementById("card").innerHTML = '<div id="placeholder">Кликните по элементу на схеме</div>';
+}
+
+function contractLabelText(element) {
+  // Контракт — только для чтения (п.7 третьего раунда): показывается по
+  // текущему кэшу elements.contract_id, который всегда зеркалит contract_id
+  // самой последней записи истории. Меняется только через диалог
+  // подтверждения при смене статуса (openStatusContractDialog), не напрямую.
+  if (!element.contract_id) return "—";
+  const c = state.contracts.find(c => c.id === element.contract_id);
+  return c ? `${c.name} (${c.supplier})` : `#${element.contract_id}`;
+}
+
+// ---------- привязка к зонам (захватка/кран/стоянка) — только для элементов
+// нового стандарта имён слоёв, у старых zone_*_status всегда null ----------
+const ZONE_STATUS_LABELS_RU = { unmatched: "не определено", needs_review: "требует проверки", not_applicable: "неприменимо" };
+
+function zoneBindingText(element, idField, statusField) {
+  const status = element[statusField];
+  if (status === "matched") {
+    const zone = state.zones.find(z => z.id === element[idField]);
+    return zone ? (zone.name || `зона #${zone.id} (без названия)`) : `#${element[idField]}`;
+  }
+  return ZONE_STATUS_LABELS_RU[status] || status;
+}
+
+async function showCard(element) {
+  const card = document.getElementById("card");
+  const canEdit = state.currentUser.role === "admin" || state.currentUser.role === "user";
+  const groupsHtml = FIELD_GROUPS.map(g => `
+    <div class="card-block"><h4>${g.title}</h4><table>${fieldRowsHtml(element, g.fields)}</table></div>
+  `).join("");
+  const hasZoneData = element.zone_zakhvatka_status || element.zone_crane_status || element.zone_stance_status;
+  const zonesBlockHtml = hasZoneData ? `
+    <div class="card-block"><h4>Зоны</h4><table>
+      <tr><td class="k">Захватка</td><td>${zoneBindingText(element, "zone_zakhvatka_id", "zone_zakhvatka_status")}</td></tr>
+      <tr><td class="k">Кран</td><td>${zoneBindingText(element, "zone_crane_id", "zone_crane_status")}</td></tr>
+      <tr><td class="k">Стоянка</td><td>${zoneBindingText(element, "zone_stance_id", "zone_stance_status")}</td></tr>
+    </table></div>
+  ` : "";
+  card.innerHTML = `
+    ${groupsHtml}
+    <div class="card-block"><h4>Контракт</h4><div>${contractLabelText(element)}</div></div>
+    ${zonesBlockHtml}
+    <h3 style="margin-bottom:4px;">История статусов</h3><div id="history-box">Загрузка…</div>
+  `;
+
+  try {
+    const detail = await api(`/elements/${element.id}`);
+    const historyBox = document.getElementById("history-box");
+    if (!historyBox) return;
+    if (!detail.history.length) { historyBox.textContent = "нет записей"; return; }
+    const rowsHtml = detail.history.slice().reverse().map(h => `
+      <tr>
+        <td>${h.changed_at}</td><td>${state.statusLabels[h.status] || h.status}</td><td>${h.changed_by || "—"}</td>
+        <td>${canEdit ? `<button class="hist-del" data-hist-id="${h.id}" title="Удалить запись">✕</button>` : ""}</td>
+      </tr>
+    `).join("");
+    historyBox.innerHTML = `<table id="history-table"><tr><th>Когда</th><th>Статус</th><th>Кто</th><th></th></tr>${rowsHtml}</table>`;
+    if (canEdit) {
+      historyBox.querySelectorAll(".hist-del").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          if (!confirm("Удалить эту запись истории статусов?")) return;
+          try {
+            const updated = await api(`/elements/${element.id}/history/${btn.dataset.histId}`, { method: "DELETE" });
+            Object.assign(element, updated);
+            state.byId.set(element.id, element);
+            styleShape(state.shapeById.get(element.id), element);
+            renderLegend();
+            await showCard(element);
+          } catch (e) {
+            alert("Не удалось удалить запись: " + e.message);
+          }
+        });
+      });
+    }
+  } catch (e) {
+    const historyBox = document.getElementById("history-box");
+    if (historyBox) historyBox.textContent = "не удалось загрузить историю";
+  }
+}
+
+function selectElement(element) {
+  const prevId = state.selectedId;
+  state.selectedId = element.id;
+  if (prevId !== null && prevId !== element.id) {
+    const prevEl = state.byId.get(prevId);
+    const prevShape = state.shapeById.get(prevId);
+    if (prevEl && prevShape) styleShape(prevShape, prevEl);
+  }
+  styleShape(state.shapeById.get(element.id), element);
+  showCard(element);
+  switchTab("properties");
+}
+
+function clearSelection() {
+  if (state.selectedId === null) return;
+  const prevEl = state.byId.get(state.selectedId);
+  const prevShape = state.shapeById.get(state.selectedId);
+  state.selectedId = null;
+  if (prevEl && prevShape) styleShape(prevShape, prevEl);
+  showPlaceholderCard();
+}
+
+// ---------- контекстное меню статуса — по ПКМ/двойному клику (п.3 второго раунда) ----------
+const ctxMenu = document.getElementById("ctx-menu");
+
+function openCtxMenu(element, clientX, clientY) {
+  if (state.currentUser.role === "view") return;
+  ctxMenu.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "ctx-title";
+  title.textContent = `${element.mark || element.id} — сменить статус`;
+  ctxMenu.appendChild(title);
+
+  for (const status of state.statusOrder) {
+    const item = document.createElement("div");
+    item.className = "ctx-item" + (status === element.current_status ? " current" : "");
+    item.innerHTML = `<span class="swatch" style="background:${colorFor(status)}"></span>${state.statusLabels[status]}`;
+    item.addEventListener("click", () => applyStatus(element, status));
+    ctxMenu.appendChild(item);
+  }
+
+  ctxMenu.style.left = Math.min(clientX, window.innerWidth - 240) + "px";
+  ctxMenu.style.top = Math.min(clientY, window.innerHeight - 260) + "px";
+  ctxMenu.style.display = "block";
+}
+
+function closeCtxMenu() { ctxMenu.style.display = "none"; }
+
+// ---------- подтверждение контракта при уходе со статуса "Запланирован" (п.4 третьего раунда) ----------
+const statusContractBackdrop = document.getElementById("status-contract-backdrop");
+let pendingStatusChange = null;
+
+async function applyStatus(element, status) {
+  closeCtxMenu();
+  if (element.current_status === "planned" && status !== "planned") {
+    openStatusContractDialog(element, status);
+    return;
+  }
+  await doApplyStatus(element, status, undefined);
+}
+
+function openStatusContractDialog(element, status) {
+  pendingStatusChange = { element, status };
+  document.getElementById("sc-status-label").textContent = state.statusLabels[status] || status;
+  const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
+  const matching = state.contracts.filter(c => c.element_types.includes(element.element_type));
+  const options = ['<option value="">— без контракта —</option>'].concat(
+    matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${c.name} (${c.supplier})</option>`)
+  );
+  document.getElementById("sc-contract-select").innerHTML = options.join("");
+  statusContractBackdrop.classList.add("open");
+}
+document.getElementById("sc-cancel").addEventListener("click", () => {
+  pendingStatusChange = null;
+  statusContractBackdrop.classList.remove("open");
+});
+document.getElementById("sc-confirm").addEventListener("click", async () => {
+  if (!pendingStatusChange) return;
+  const value = document.getElementById("sc-contract-select").value;
+  const contractId = value ? Number(value) : null;
+  const { element, status } = pendingStatusChange;
+  pendingStatusChange = null;
+  statusContractBackdrop.classList.remove("open");
+  await doApplyStatus(element, status, contractId);
+});
+
+async function doApplyStatus(element, status, explicitContractId) {
+  try {
+    const body = { status };
+    const changedAt = currentChangedAt();
+    if (changedAt) body.changed_at = changedAt;
+    // explicitContractId !== undefined значит поле реально выбрано в диалоге
+    // (даже null — "без контракта") — бэкенд различает "поле было в теле
+    // запроса" от "поля не было" через model_fields_set (см. app/main.py).
+    if (explicitContractId !== undefined) body.contract_id = explicitContractId;
+    const updated = await api(`/elements/${element.id}/status`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    Object.assign(element, updated);
+    state.byId.set(element.id, element);
+    styleShape(state.shapeById.get(element.id), element);
+    renderLegend();
+    showCard(element);
+    maybeWarnContract(updated);
+  } catch (e) {
+    alert("Не удалось изменить статус: " + e.message);
+  }
+}
+
+// ---------- массовая смена статуса выделенной рамкой группы (см. Docs/backlog.md) ----------
+function hexToRgba(hex, alpha) {
+  const h = (hex || "#999999").replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function bulkContractOptionsForType(elementType) {
+  return state.contracts.filter(c => c.element_types.includes(elementType));
+}
+
+function updateBulkStatusTitle() {
+  document.getElementById("bulk-status-title").textContent = `Массовая смена статуса (${state.multiSelectedIds.size} элементов)`;
+}
+
+// Кнопка "Применить" заблокирована, пока хоть у одной строки контракт не
+// выбран ("— выберите —", value="") — "без контракта" (value="none") это
+// ОСМЫСЛЕННЫЙ выбор и валидацию проходит, см. Docs/backlog.md.
+function updateBulkStatusValidation() {
+  const selects = document.querySelectorAll("#bulk-status-tbody .bulk-row-contract");
+  const emptyCount = Array.from(selects).filter(s => s.value === "").length;
+  document.getElementById("bulk-status-apply").disabled = emptyCount > 0 || selects.length === 0;
+  document.getElementById("bulk-status-error").textContent = emptyCount > 0 ? `Не указан контракт у ${emptyCount} элемент(ов)` : "";
+  updateBulkContractWarning();
+}
+
+// Снимок остатков строк контрактов (quantity-fact), берётся один раз при
+// открытии модалки (GET /contracts, включает quantity/fact/remaining —
+// в отличие от state.contracts из /plan-data, где этих полей нет). Не
+// блокирует применение — только предупреждает, см. Docs/backlog.md,
+// "Проверка остатка контракта при групповой установке".
+let bulkContractLines = [];
+
+// Пересчитывается при КАЖДОМ изменении (выбор контракта в строке или
+// "Заполнить пустые") — по каждой связке (контракт, тип элемента) в
+// текущей пачке считает, сколько элементов НОВО получат этот контракт
+// (те, у кого он уже был — не в счёт, они уже учтены в fact), сравнивает
+// с остатком строки контракта. Приближённо (не учитывает переход
+// планового статуса туда-обратно) — предупреждение неблокирующее.
+function updateBulkContractWarning() {
+  const warnEl = document.getElementById("bulk-status-contract-warning");
+  if (!bulkContractLines.length) { warnEl.textContent = ""; return; }
+
+  const requested = new Map(); // contractId -> Map(elementType -> count)
+  const already = new Map();
+  const bump = (map, contractId, type) => {
+    if (!map.has(contractId)) map.set(contractId, new Map());
+    const inner = map.get(contractId);
+    inner.set(type, (inner.get(type) || 0) + 1);
+  };
+  document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
+    const raw = tr.querySelector(".bulk-row-contract").value;
+    if (!raw || raw === "none") return;
+    const contractId = Number(raw);
+    const element = state.byId.get(Number(tr.dataset.elementId));
+    if (!element) return;
+    bump(requested, contractId, element.element_type);
+    if (element.contract_id === contractId) bump(already, contractId, element.element_type);
+  });
+
+  const problems = [];
+  for (const [contractId, types] of requested) {
+    for (const [elementType, count] of types) {
+      const newlyRequested = count - (already.get(contractId)?.get(elementType) || 0);
+      if (newlyRequested <= 0) continue;
+      const line = bulkContractLines.find(l => l.contract_id === contractId && l.element_type === elementType);
+      if (!line || newlyRequested <= line.remaining) continue;
+      problems.push(`«${line.contract_name}» / ${elementType}: запрошено ${newlyRequested}, доступно ${line.remaining}`);
+    }
+  }
+  warnEl.textContent = problems.length ? `Превышение остатка контракта — ${problems.join("; ")}` : "";
+}
+
+function renderBulkStatusTable() {
+  const tbody = document.getElementById("bulk-status-tbody");
+  tbody.innerHTML = "";
+  for (const id of Array.from(state.multiSelectedIds)) {
+    const element = state.byId.get(id);
+    if (!element) continue;
+    const tr = document.createElement("tr");
+    tr.dataset.elementId = element.id;
+
+    const idTd = document.createElement("td"); idTd.textContent = element.id;
+    const markTd = document.createElement("td"); markTd.textContent = element.mark || "—";
+    const typeTd = document.createElement("td"); typeTd.textContent = element.element_type;
+
+    const statusTd = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className = "bulk-status-status-cell";
+    const color = colorFor(element.current_status);
+    badge.style.background = hexToRgba(color, 0.18);
+    badge.style.color = color;
+    badge.style.border = `1px solid ${color}`;
+    badge.textContent = state.statusLabels[element.current_status] || element.current_status;
+    statusTd.appendChild(badge);
+
+    const contractTd = document.createElement("td");
+    const select = document.createElement("select");
+    select.className = "bulk-row-contract";
+    const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
+    const matching = bulkContractOptionsForType(element.element_type);
+    const options = ['<option value="">— выберите —</option>', '<option value="none">без контракта</option>'].concat(
+      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${c.name} (${c.supplier})</option>`)
+    );
+    select.innerHTML = options.join("");
+    select.addEventListener("change", updateBulkStatusValidation);
+    contractTd.appendChild(select);
+
+    const removeTd = document.createElement("td");
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "bulk-row-remove";
+    removeBtn.title = "Убрать из выборки — если рамка захватила лишнее";
+    removeBtn.textContent = "✕";
+    removeBtn.addEventListener("click", () => {
+      state.multiSelectedIds.delete(element.id);
+      styleShape(state.shapeById.get(element.id), element);
+      tr.remove();
+      updateMultiSelectionPanel();
+      updateBulkStatusTitle();
+      updateBulkStatusValidation();
+      if (state.multiSelectedIds.size === 0) bulkStatusBackdrop.classList.remove("open");
+    });
+    removeTd.appendChild(removeBtn);
+
+    tr.append(idTd, markTd, typeTd, statusTd, contractTd, removeTd);
+    tbody.appendChild(tr);
+  }
+  updateBulkStatusTitle();
+  updateBulkStatusValidation();
+}
+
+const bulkStatusBackdrop = document.getElementById("bulk-status-backdrop");
+
+async function openBulkStatusModal() {
+  if (state.multiSelectedIds.size === 0) return;
+  document.getElementById("bulk-status-select").innerHTML =
+    state.statusOrder.map(s => `<option value="${s}">${state.statusLabels[s]}</option>`).join("");
+  document.getElementById("bulk-fill-contract-select").innerHTML = ['<option value="">— выберите контракт —</option>'].concat(
+    state.contracts.map(c => `<option value="${c.id}">${c.name} (${c.supplier}) — ${c.element_types.join(", ")}</option>`)
+  ).join("");
+  try {
+    const contracts = await api("/contracts");
+    bulkContractLines = contracts.flatMap(c => c.lines.map(l => ({
+      contract_id: c.id, contract_name: c.name, element_type: l.element_type, remaining: l.remaining,
+    })));
+  } catch (e) {
+    bulkContractLines = []; // проверка остатка просто не покажет предупреждений — не блокирует открытие модалки
+  }
+  renderBulkStatusTable();
+  bulkStatusBackdrop.classList.add("open");
+}
+
+document.getElementById("bulk-status-cancel").addEventListener("click", () => bulkStatusBackdrop.classList.remove("open"));
+
+// Заполняет контрактом из шапки только строки, у которых контракт ещё не
+// выбран ("— выберите —"), и только если этот контракт подходит типу
+// элемента строки — иначе строка пропускается (не перезаписываем то, что
+// уже выбрано/подходит другому типу), см. Docs/backlog.md.
+document.getElementById("bulk-fill-contract-apply").addEventListener("click", () => {
+  const value = document.getElementById("bulk-fill-contract-select").value;
+  if (!value) return;
+  let filled = 0, skipped = 0;
+  document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
+    const select = tr.querySelector(".bulk-row-contract");
+    if (select.value !== "") return;
+    const optionExists = Array.from(select.options).some(o => o.value === value);
+    if (optionExists) { select.value = value; filled++; } else { skipped++; }
+  });
+  updateBulkStatusValidation();
+  showToast(`Заполнено ${filled}${skipped ? `, пропущено ${skipped} (тип не подходит)` : ""}`, "info");
+});
+
+document.getElementById("bulk-status-apply").addEventListener("click", async () => {
+  const status = document.getElementById("bulk-status-select").value;
+  const items = [];
+  document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
+    const raw = tr.querySelector(".bulk-row-contract").value;
+    if (raw === "") return; // кнопка и так заблокирована, подстраховка
+    items.push({ element_id: Number(tr.dataset.elementId), contract_id: raw === "none" ? null : Number(raw) });
+  });
+  if (!items.length) return;
+  try {
+    const body = { items, status };
+    const changedAt = currentChangedAt();
+    if (changedAt) body.changed_at = changedAt;
+    const result = await api("/elements/bulk-status", {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    for (const updated of result.updated) {
+      const existing = state.byId.get(updated.id);
+      if (existing) {
+        Object.assign(existing, updated);
+        styleShape(state.shapeById.get(updated.id), existing);
+      }
+    }
+    renderLegend();
+    bulkStatusBackdrop.classList.remove("open");
+    clearMultiSelection();
+    showToast(`Статус изменён у ${result.updated.length} элементов`, "success");
+  } catch (e) {
+    document.getElementById("bulk-status-error").textContent = "Не удалось изменить статус: " + e.message;
+  }
+});
+
+const svgRoot = document.getElementById("svg-root");
+svgRoot.addEventListener("click", (e) => {
+  if (dragMoved) return; // не выбираем элемент сразу после перетаскивания схемы
+  const shape = e.target.closest(".element-shape");
+  if (!shape) { closeCtxMenu(); clearSelection(); clearMultiSelection(); return; }
+  const element = state.byId.get(Number(shape.getAttribute("data-id")));
+  if (!element) return;
+  selectElement(element);
+});
+svgRoot.addEventListener("dblclick", (e) => {
+  const shape = e.target.closest(".element-shape");
+  if (!shape) return;
+  const element = state.byId.get(Number(shape.getAttribute("data-id")));
+  if (!element) return;
+  selectElement(element);
+  openCtxMenu(element, e.clientX, e.clientY);
+});
+svgRoot.addEventListener("contextmenu", (e) => {
+  const shape = e.target.closest(".element-shape");
+  if (!shape) return;
+  e.preventDefault();
+  const element = state.byId.get(Number(shape.getAttribute("data-id")));
+  if (!element) return;
+  selectElement(element);
+  openCtxMenu(element, e.clientX, e.clientY);
+});
+document.addEventListener("click", (e) => {
+  if (!ctxMenu.contains(e.target) && !e.target.closest(".element-shape")) closeCtxMenu();
+});
+
+// ==================== PAN/ZOOM ====================
+const stageEl = document.getElementById("stage");
+
+stageEl.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (!state.view) return;
+  const rect = stageEl.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) / rect.width;
+  const my = (e.clientY - rect.top) / rect.height;
+  const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+  const v = state.view;
+  const newW = v.w * factor, newH = v.h * factor;
+  setView({ x: v.x + (v.w - newW) * mx, y: v.y + (v.h - newH) * my, w: newW, h: newH });
+}, { passive: false });
+
+// Порог в пикселях перед тем, как считать движение мыши перетаскиванием — без него
+// обычное реальное дрожание мыши между mousedown/mouseup (1-2px) уже трактовалось как
+// намеренный pan, и схема слегка "дёргалась" при простом клике по элементу (п.6 третьего раунда).
+const DRAG_THRESHOLD_PX = 4;
+let dragging = false, dragMoved = false, startX = 0, startY = 0, lastX = 0, lastY = 0;
+// Shift+перетаскивание — рамка группового выделения вместо панорамирования
+// (см. Docs/backlog.md, "Групповая смена статуса"). Обычное перетаскивание
+// без Shift — как раньше, панорамирование.
+let rubberBandActive = false, rbCurX = 0, rbCurY = 0;
+const rubberBandEl = document.getElementById("rubber-band");
+
+stageEl.addEventListener("mousedown", (e) => {
+  dragging = true; dragMoved = false;
+  rubberBandActive = e.shiftKey;
+  startX = lastX = rbCurX = e.clientX; startY = lastY = rbCurY = e.clientY;
+});
+window.addEventListener("mouseup", () => {
+  if (dragging && rubberBandActive && dragMoved) finishRubberBand();
+  dragging = false;
+  rubberBandActive = false;
+  stageEl.classList.remove("dragging");
+  rubberBandEl.style.display = "none";
+});
+window.addEventListener("mousemove", (e) => {
+  if (!dragging || !state.view) return;
+  if (!dragMoved) {
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD_PX) return;
+    dragMoved = true;
+    if (!rubberBandActive) stageEl.classList.add("dragging");
+  }
+  if (rubberBandActive) {
+    rbCurX = e.clientX; rbCurY = e.clientY;
+    updateRubberBandRect(startX, startY, rbCurX, rbCurY);
+    return;
+  }
+  const rect = stageEl.getBoundingClientRect();
+  const v = state.view;
+  const dx = (e.clientX - lastX) / rect.width * v.w;
+  const dy = (e.clientY - lastY) / rect.height * v.h;
+  setView({ x: v.x - dx, y: v.y - dy, w: v.w, h: v.h });
+  lastX = e.clientX; lastY = e.clientY;
+});
+
+function updateRubberBandRect(x1, y1, x2, y2) {
+  const rect = stageEl.getBoundingClientRect();
+  rubberBandEl.style.display = "block";
+  rubberBandEl.style.left = (Math.min(x1, x2) - rect.left) + "px";
+  rubberBandEl.style.top = (Math.min(y1, y2) - rect.top) + "px";
+  rubberBandEl.style.width = Math.abs(x2 - x1) + "px";
+  rubberBandEl.style.height = Math.abs(y2 - y1) + "px";
+}
+
+// Экран -> мировые координаты прямоугольника выделения. viewBox сам по
+// себе — стандартное SVG-пространство (Y вниз), но всё содержимое схемы
+// нарисовано внутри <g id="flip" transform="scale(1,-1)"> реальными
+// мировыми координатами БЕЗ инверсии (см. renderElements) — видимую
+// ориентацию "Y вверх" даёт именно этот flip. Поэтому world.Y = -viewBox.Y,
+// а не прямое соответствие, как у X.
+function screenRectToWorldBBox(sx1, sy1, sx2, sy2) {
+  const rect = stageEl.getBoundingClientRect();
+  const v = state.view;
+  const vx1 = v.x + (Math.min(sx1, sx2) - rect.left) / rect.width * v.w;
+  const vx2 = v.x + (Math.max(sx1, sx2) - rect.left) / rect.width * v.w;
+  const vy1 = v.y + (Math.min(sy1, sy2) - rect.top) / rect.height * v.h;
+  const vy2 = v.y + (Math.max(sy1, sy2) - rect.top) / rect.height * v.h;
+  return { minX: vx1, maxX: vx2, minY: -vy2, maxY: -vy1 };
+}
+
+function finishRubberBand() {
+  const box = screenRectToWorldBBox(startX, startY, rbCurX, rbCurY);
+  // Накопительное выделение (см. Docs/backlog.md) — новая рамка ДОБАВЛЯЕТ
+  // захваченные элементы к уже выделенным, никогда не снимает выделение с
+  // того, что было выбрано раньше; "✕" на плавающей панели — единственный
+  // способ сбросить всё и начать заново.
+  const ids = new Set(state.multiSelectedIds);
+  for (const element of state.elements) {
+    if (!passesPlacementFilters(element)) continue; // выделяем только то, что сейчас реально видно
+    if (element.x >= box.minX && element.x <= box.maxX && element.y >= box.minY && element.y <= box.maxY) {
+      ids.add(element.id);
+    }
+  }
+  setMultiSelection(ids);
+}
+
+// ---------- групповое выделение (плавающая панель + подсветка, см. Docs/backlog.md) ----------
+function setMultiSelection(idsSet) {
+  const prev = state.multiSelectedIds;
+  state.multiSelectedIds = idsSet;
+  const touched = new Set([...prev, ...idsSet]);
+  for (const id of touched) {
+    const element = state.byId.get(id);
+    const shape = state.shapeById.get(id);
+    if (element && shape) styleShape(shape, element);
+  }
+  updateMultiSelectionPanel();
+}
+
+function clearMultiSelection() {
+  if (state.multiSelectedIds.size === 0) return;
+  setMultiSelection(new Set());
+}
+
+function updateMultiSelectionPanel() {
+  const panel = document.getElementById("multi-select-panel");
+  const n = state.multiSelectedIds.size;
+  if (n === 0) { panel.style.display = "none"; return; }
+  panel.style.display = "flex";
+  document.getElementById("multi-select-count").textContent = `Выделено: ${n}`;
+}
+
+document.getElementById("multi-select-clear").addEventListener("click", clearMultiSelection);
+document.getElementById("multi-select-status-btn").addEventListener("click", openBulkStatusModal);
+
+// ==================== ИНДИКАТОР ЗУМА + СБРОС (п.12 третьего раунда) ====================
+function updateZoomIndicator(pxPerUnit) {
+  const valueEl = document.getElementById("zoom-value");
+  if (!state.initialView || !state.view) { valueEl.textContent = "—"; return; }
+  const initPxPerUnitX = stageEl.clientWidth / state.initialView.w;
+  const initPxPerUnitY = stageEl.clientHeight / state.initialView.h;
+  const initPxPerUnit = Math.min(initPxPerUnitX, initPxPerUnitY) || 1;
+  valueEl.textContent = `${Math.round((pxPerUnit / initPxPerUnit) * 100)}%`;
+}
+document.getElementById("zoom-reset").addEventListener("click", () => {
+  if (state.initialView) setView({ ...state.initialView });
+});
+
+// ==================== ПОЛОСЫ ПРОКРУТКИ РАБОЧЕЙ ОБЛАСТИ (п.10 третьего раунда) ====================
+// Кастомные, не нативные — вид управляется через viewBox SVG (pan/zoom), обычный
+// overflow-скролл тут не применим. Ползунок отражает текущий видовой прямоугольник
+// (state.view) относительно "всей схемы целиком" (state.initialView).
+function updateScrollbars() {
+  const vThumb = document.getElementById("vscroll-thumb");
+  const hThumb = document.getElementById("hscroll-thumb");
+  const vTrack = document.getElementById("vscroll");
+  const hTrack = document.getElementById("hscroll");
+  if (!state.view || !state.initialView) { vThumb.style.display = "none"; hThumb.style.display = "none"; return; }
+  const full = state.initialView, v = state.view;
+
+  const trackH = vTrack.clientHeight;
+  const hFrac = Math.min(1, v.h / full.h);
+  let topFrac = full.h > 0 ? (v.y - full.y) / full.h : 0;
+  topFrac = Math.max(0, Math.min(1 - hFrac, topFrac));
+  vThumb.style.display = hFrac >= 0.999 ? "none" : "block";
+  vThumb.style.top = (topFrac * trackH) + "px";
+  vThumb.style.height = Math.max(20, hFrac * trackH) + "px";
+
+  const trackW = hTrack.clientWidth;
+  const wFrac = Math.min(1, v.w / full.w);
+  let leftFrac = full.w > 0 ? (v.x - full.x) / full.w : 0;
+  leftFrac = Math.max(0, Math.min(1 - wFrac, leftFrac));
+  hThumb.style.display = wFrac >= 0.999 ? "none" : "block";
+  hThumb.style.left = (leftFrac * trackW) + "px";
+  hThumb.style.width = Math.max(20, wFrac * trackW) + "px";
+}
+
+function setupScrollbar(thumbId, trackId, axis) {
+  const thumb = document.getElementById(thumbId);
+  const track = document.getElementById(trackId);
+  let draggingThumb = false, startClient = 0, startCoord = 0;
+
+  thumb.addEventListener("mousedown", (e) => {
+    e.stopPropagation(); e.preventDefault(); // не даём этому же mousedown запустить pan схемы (см. #stage выше)
+    draggingThumb = true;
+    thumb.classList.add("dragging");
+    startClient = axis === "v" ? e.clientY : e.clientX;
+    startCoord = axis === "v" ? state.view.y : state.view.x;
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!draggingThumb || !state.view || !state.initialView) return;
+    const full = state.initialView, v = state.view;
+    if (axis === "v") {
+      if (v.h >= full.h) return;
+      const deltaWorld = ((e.clientY - startClient) / track.clientHeight) * full.h;
+      const newY = Math.max(full.y, Math.min(full.y + full.h - v.h, startCoord + deltaWorld));
+      setView({ x: v.x, y: newY, w: v.w, h: v.h });
+    } else {
+      if (v.w >= full.w) return;
+      const deltaWorld = ((e.clientX - startClient) / track.clientWidth) * full.w;
+      const newX = Math.max(full.x, Math.min(full.x + full.w - v.w, startCoord + deltaWorld));
+      setView({ x: newX, y: v.y, w: v.w, h: v.h });
+    }
+  });
+  window.addEventListener("mouseup", () => { if (draggingThumb) { draggingThumb = false; thumb.classList.remove("dragging"); } });
+
+  track.addEventListener("mousedown", (e) => {
+    e.stopPropagation();
+    if (e.target === thumb || !state.view || !state.initialView) return;
+    const full = state.initialView, v = state.view;
+    const rect = track.getBoundingClientRect();
+    if (axis === "v") {
+      if (v.h >= full.h) return;
+      const frac = (e.clientY - rect.top) / rect.height;
+      const newY = Math.max(full.y, Math.min(full.y + full.h - v.h, full.y + frac * full.h - v.h / 2));
+      setView({ x: v.x, y: newY, w: v.w, h: v.h });
+    } else {
+      if (v.w >= full.w) return;
+      const frac = (e.clientX - rect.left) / rect.width;
+      const newX = Math.max(full.x, Math.min(full.x + full.w - v.w, full.x + frac * full.w - v.w / 2));
+      setView({ x: newX, y: v.y, w: v.w, h: v.h });
+    }
+  });
+}
+setupScrollbar("vscroll-thumb", "vscroll", "v");
+setupScrollbar("hscroll-thumb", "hscroll", "h");
+
+// ==================== ИЗМЕНЯЕМАЯ ШИРИНА САЙДБАРА (п.10 второго раунда) ====================
+const SIDEBAR_WIDTH_KEY = "zhbi_sidebar_width";
+const sidebarEl = document.getElementById("sidebar");
+const resizeHandle = document.getElementById("resize-handle");
+
+const savedWidth = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+if (savedWidth) sidebarEl.style.width = savedWidth + "px";
+
+let resizingSidebar = false;
+resizeHandle.addEventListener("mousedown", (e) => {
+  resizingSidebar = true;
+  resizeHandle.classList.add("dragging");
+  e.preventDefault();
+});
+window.addEventListener("mouseup", () => {
+  if (resizingSidebar) { resizingSidebar = false; resizeHandle.classList.remove("dragging"); }
+});
+window.addEventListener("mousemove", (e) => {
+  if (!resizingSidebar) return;
+  const width = Math.min(600, Math.max(220, window.innerWidth - e.clientX));
+  sidebarEl.style.width = width + "px";
+  localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+});
+
+// ==================== Esc ЗАКРЫВАЕТ ЛЮБУЮ ОТКРЫТУЮ ФОРМУ (п.5 второго раунда) ====================
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  document.querySelectorAll(".modal-backdrop.open").forEach(m => m.classList.remove("open"));
+  closeCtxMenu();
+  document.getElementById("settings-menu").classList.remove("open");
+});
+
+// ==================== МЕНЮ "НАСТРОЙКИ" ====================
+const settingsMenu = document.getElementById("settings-menu");
+document.getElementById("btn-settings-menu").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const willOpen = !settingsMenu.classList.contains("open");
+  if (willOpen) {
+    // position: fixed + координаты в JS (не CSS-якорь top/right родителя) — иначе
+    // меню обрезается overflow-y:hidden тулбара (баг: "меню открывается под схемой").
+    const rect = e.currentTarget.getBoundingClientRect();
+    const menuWidth = 260;
+    settingsMenu.style.left = Math.min(rect.left, window.innerWidth - menuWidth - 8) + "px";
+    settingsMenu.style.top = (rect.bottom + 6) + "px";
+  }
+  settingsMenu.classList.toggle("open");
+});
+document.addEventListener("click", () => settingsMenu.classList.remove("open"));
+
+// ---------- цвета статусов ----------
+const settingsBackdrop = document.getElementById("settings-backdrop");
+document.getElementById("menu-colors").addEventListener("click", () => {
+  const rows = document.getElementById("settings-rows");
+  rows.innerHTML = "";
+  for (const status of state.statusOrder) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `<span>${state.statusLabels[status]}</span>
+      <input type="color" data-status="${status}" value="${colorFor(status)}"/>`;
+    rows.appendChild(row);
+  }
+  settingsBackdrop.classList.add("open");
+});
+document.getElementById("settings-cancel").addEventListener("click", () => settingsBackdrop.classList.remove("open"));
+document.getElementById("settings-save").addEventListener("click", async () => {
+  const inputs = document.querySelectorAll("#settings-rows input[type=color]");
+  const colors = {};
+  inputs.forEach(inp => { colors[inp.dataset.status] = inp.value; });
+  const saved = await api("/status-colors", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(colors),
+  });
+  state.statusColors = saved;
+  for (const element of state.elements) styleShape(state.shapeById.get(element.id), element);
+  renderLegend();
+  settingsBackdrop.classList.remove("open");
+});
+
+// ---------- форма маркеров по (слой, тип элемента) — п.11 третьего раунда ----------
+const shapesBackdrop = document.getElementById("shapes-backdrop");
+const SHAPE_OPTIONS = ["circle", "square", "triangle", "diamond", "hexagon", "outline"];
+const SHAPE_LABELS_RU = {
+  circle: "круг", square: "квадрат", triangle: "треугольник", diamond: "ромб", hexagon: "шестиугольник",
+  outline: "как в оригинале (контур)",
+};
+
+document.getElementById("menu-shapes").addEventListener("click", async () => {
+  const combos = await api("/layer-type-combinations");
+  const rows = document.getElementById("shapes-rows");
+  rows.innerHTML = combos.length
+    ? combos.map(c => `
+        <div class="row">
+          <span>${c.layer} / ${c.element_type}</span>
+          <select data-layer="${c.layer}" data-type="${c.element_type}">
+            ${SHAPE_OPTIONS.map(s => `<option value="${s}" ${s === c.shape ? "selected" : ""}>${SHAPE_LABELS_RU[s]}</option>`).join("")}
+          </select>
+        </div>
+      `).join("")
+    : '<div class="hint-text">нет данных — загрузите чертёж</div>';
+  shapesBackdrop.classList.add("open");
+});
+document.getElementById("shapes-cancel").addEventListener("click", () => shapesBackdrop.classList.remove("open"));
+document.getElementById("shapes-save").addEventListener("click", async () => {
+  const selects = document.querySelectorAll("#shapes-rows select");
+  const payload = Array.from(selects).map(s => ({ layer: s.dataset.layer, element_type: s.dataset.type, shape: s.value }));
+  await api("/element-shapes", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  shapesBackdrop.classList.remove("open");
+  await loadPlan();
+});
+
+// ---------- цвета зон по крану (item 7, Docs/backlog.md) — DOM строится
+// через createElement/textContent, не innerHTML: имя крана приходит из
+// текста на чертеже (MULTILEADER), не доверенная строка. ----------
+const zoneColorsBackdrop = document.getElementById("zone-colors-backdrop");
+document.getElementById("menu-zone-colors").addEventListener("click", async () => {
+  const items = await api("/zone-colors");
+  const rows = document.getElementById("zone-colors-rows");
+  rows.innerHTML = "";
+  if (!items.length) {
+    rows.innerHTML = '<div class="hint-text">нет данных — загрузите чертёж с кранами</div>';
+  } else {
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const span = document.createElement("span");
+      span.textContent = `${item.name} (${item.source_file})`;
+      const input = document.createElement("input");
+      input.type = "color";
+      input.value = item.color;
+      input.dataset.sourceFile = item.source_file;
+      input.dataset.name = item.name;
+      row.appendChild(span);
+      row.appendChild(input);
+      rows.appendChild(row);
+    }
+  }
+  zoneColorsBackdrop.classList.add("open");
+});
+document.getElementById("zone-colors-cancel").addEventListener("click", () => zoneColorsBackdrop.classList.remove("open"));
+document.getElementById("zone-colors-save").addEventListener("click", async () => {
+  const inputs = document.querySelectorAll("#zone-colors-rows input[type=color]");
+  const payload = Array.from(inputs).map(inp => ({
+    source_file: inp.dataset.sourceFile, name: inp.dataset.name, color: inp.value,
+  }));
+  await api("/zone-colors", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  zoneColorsBackdrop.classList.remove("open");
+  await loadPlan();
+});
+
+// ---------- справочник подтипов (новый стандарт имён слоёв) ----------
+const subtypesBackdrop = document.getElementById("subtypes-backdrop");
+
+async function renderSubtypesModal() {
+  const data = await api("/allowed-subtypes"); // {element_type: [subtype, ...]}
+  const box = document.getElementById("subtypes-rows");
+  box.innerHTML = "";
+  for (const [elementType, subtypes] of Object.entries(data)) {
+    const row = document.createElement("div");
+    row.className = "subtype-row";
+    const chipsHtml = subtypes.length
+      ? subtypes.map(s => `<span class="subtype-chip">${s}<button type="button" data-remove="${s}">✕</button></span>`).join("")
+      : '<span class="hint-text">нет подтипов</span>';
+    row.innerHTML = `
+      <h4>${elementType}</h4>
+      <div class="subtype-chips">${chipsHtml}</div>
+      <div class="subtype-add-row">
+        <input type="text" placeholder="новый подтип" data-add-input/>
+        <button class="btn btn-sm btn-secondary" data-add-btn>Добавить</button>
+      </div>
+    `;
+    row.querySelectorAll("[data-remove]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        await api(`/allowed-subtypes/${encodeURIComponent(elementType)}/${encodeURIComponent(btn.dataset.remove)}`, { method: "DELETE" });
+        await renderSubtypesModal();
+      });
+    });
+    const input = row.querySelector("[data-add-input]");
+    const addBtn = row.querySelector("[data-add-btn]");
+    const submitAdd = async () => {
+      const subtype = input.value.trim();
+      if (!subtype) return;
+      await api("/allowed-subtypes", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ element_type: elementType, subtype }),
+      });
+      await renderSubtypesModal();
+    };
+    addBtn.addEventListener("click", submitAdd);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAdd(); });
+    box.appendChild(row);
+  }
+}
+
+document.getElementById("menu-subtypes").addEventListener("click", async () => {
+  subtypesBackdrop.classList.add("open");
+  await renderSubtypesModal();
+});
+document.getElementById("subtypes-close").addEventListener("click", () => subtypesBackdrop.classList.remove("open"));
+
+// ---------- пользователи ----------
+const usersBackdrop = document.getElementById("users-backdrop");
+const userEditBackdrop = document.getElementById("user-edit-backdrop");
+const userPasswordBackdrop = document.getElementById("user-password-backdrop");
+const ROLE_LABELS = { admin: "Администратор", user: "Пользователь", view: "Просмотр" };
+let editingUserId = null;
+let passwordTargetUserId = null;
+
+async function renderUsersTable() {
+  const users = await api("/users");
+  const table = document.getElementById("users-table");
+  const rowsHtml = users.map(u => `
+    <tr>
+      <td>${u.display_name}</td>
+      <td>${u.position || "—"}</td>
+      <td>${u.department || "—"}</td>
+      <td>${u.domain_login}</td>
+      <td>${ROLE_LABELS[u.role] || u.role}</td>
+      <td>${u.has_password ? "задан" : "пустой"}</td>
+      <td>
+        <button class="btn btn-sm btn-secondary" data-edit="${u.id}">Изменить</button>
+        <button class="btn btn-sm btn-secondary" data-pwd="${u.id}">Пароль</button>
+      </td>
+    </tr>
+  `).join("");
+  table.innerHTML = `<tr><th>ФИО</th><th>Должность</th><th>Подразделение</th><th>Логин</th><th>Роль</th><th>Пароль</th><th></th></tr>${rowsHtml}`;
+  table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openUserEdit(users.find(u => u.id === Number(btn.dataset.edit)))));
+  table.querySelectorAll("[data-pwd]").forEach(btn => btn.addEventListener("click", () => openUserPassword(Number(btn.dataset.pwd))));
+}
+
+document.getElementById("menu-users").addEventListener("click", async () => {
+  usersBackdrop.classList.add("open");
+  await renderUsersTable();
+});
+document.getElementById("users-close").addEventListener("click", () => usersBackdrop.classList.remove("open"));
+
+function openUserEdit(user) {
+  editingUserId = user ? user.id : null;
+  document.getElementById("user-edit-title").textContent = user ? "Изменить пользователя" : "Новый пользователь";
+  document.getElementById("ue-last-name").value = user ? user.last_name : "";
+  document.getElementById("ue-first-name").value = user ? user.first_name : "";
+  document.getElementById("ue-patronymic").value = user && user.patronymic ? user.patronymic : "";
+  document.getElementById("ue-position").value = user && user.position ? user.position : "";
+  document.getElementById("ue-department").value = user && user.department ? user.department : "";
+  document.getElementById("ue-domain-login").value = user ? user.domain_login : "";
+  document.getElementById("ue-role").value = user ? user.role : "user";
+  document.getElementById("user-edit-error").textContent = "";
+  userEditBackdrop.classList.add("open");
+}
+document.getElementById("users-add").addEventListener("click", () => openUserEdit(null));
+document.getElementById("user-edit-cancel").addEventListener("click", () => userEditBackdrop.classList.remove("open"));
+document.getElementById("user-edit-save").addEventListener("click", async () => {
+  const body = {
+    last_name: document.getElementById("ue-last-name").value.trim(),
+    first_name: document.getElementById("ue-first-name").value.trim(),
+    patronymic: document.getElementById("ue-patronymic").value.trim() || null,
+    position: document.getElementById("ue-position").value.trim() || null,
+    department: document.getElementById("ue-department").value.trim() || null,
+    domain_login: document.getElementById("ue-domain-login").value.trim(),
+    role: document.getElementById("ue-role").value,
+  };
+  try {
+    if (editingUserId) {
+      await api(`/users/${editingUserId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } else {
+      await api("/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    }
+    userEditBackdrop.classList.remove("open");
+    await renderUsersTable();
+  } catch (e) {
+    document.getElementById("user-edit-error").textContent = e.message;
+  }
+});
+
+function openUserPassword(userId) {
+  passwordTargetUserId = userId;
+  document.getElementById("up-password-value").value = "";
+  document.getElementById("user-password-error").textContent = "";
+  userPasswordBackdrop.classList.add("open");
+}
+document.getElementById("user-password-cancel").addEventListener("click", () => userPasswordBackdrop.classList.remove("open"));
+document.getElementById("user-password-save").addEventListener("click", async () => {
+  try {
+    await api(`/users/${passwordTargetUserId}/set-password`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: document.getElementById("up-password-value").value }),
+    });
+    userPasswordBackdrop.classList.remove("open");
+    await renderUsersTable();
+  } catch (e) {
+    document.getElementById("user-password-error").textContent = e.message;
+  }
+});
+
+// ---------- контракты (п.9 второго раунда) ----------
+const contractsBackdrop = document.getElementById("contracts-backdrop");
+const contractEditBackdrop = document.getElementById("contract-edit-backdrop");
+let editingContractId = null;
+
+async function renderContractsList() {
+  const contracts = await api("/contracts");
+  const box = document.getElementById("contracts-list");
+  box.innerHTML = "";
+  if (!contracts.length) { box.innerHTML = '<div class="hint-text">нет контрактов</div>'; return contracts; }
+  for (const c of contracts) {
+    const block = document.createElement("div");
+    block.className = "contract-block";
+    const linesHtml = c.lines.length
+      ? c.lines.map(l => `
+          <tr class="${l.exceeded ? "exceeded" : ""}">
+            <td>${l.element_type}</td><td>${l.quantity}</td><td>${l.fact}</td><td>${l.damaged}</td><td>${l.remaining}</td>
+          </tr>
+        `).join("")
+      : '<tr><td colspan="5" class="hint-text">нет строк</td></tr>';
+    block.innerHTML = `
+      <div class="contract-block-header">
+        <b>${c.name} (${c.supplier})</b>
+        <button class="btn btn-sm btn-secondary" data-edit-contract="${c.id}">Изменить</button>
+      </div>
+      <table class="contract-lines-table">
+        <tr><th>Тип элемента</th><th>План</th><th>Факт</th><th>Повреждено</th><th>Остаток</th></tr>
+        ${linesHtml}
+      </table>
+    `;
+    box.appendChild(block);
+    block.querySelector("[data-edit-contract]").addEventListener("click", () => openContractEdit(c));
+  }
+  return contracts;
+}
+
+async function renderDefaultContracts(contracts) {
+  const box = document.getElementById("default-contracts-rows");
+  const defaultMap = await api("/contracts/default-map");
+  const types = Object.keys(state.labelVisibility);
+  box.innerHTML = "";
+  if (!types.length) { box.innerHTML = '<div class="hint-text">нет типов элементов</div>'; return; }
+  for (const type of types) {
+    const row = document.createElement("div");
+    row.className = "default-contract-row";
+    const matching = contracts.filter(c => c.lines.some(l => l.element_type === type));
+    const options = ['<option value="">— не задан —</option>'].concat(
+      matching.map(c => `<option value="${c.id}" ${defaultMap[type] === c.id ? "selected" : ""}>${c.name} (${c.supplier})</option>`)
+    );
+    row.innerHTML = `<span>${type}</span><select data-type="${type}">${options.join("")}</select>`;
+    row.querySelector("select").addEventListener("change", async (e) => {
+      const value = e.target.value ? Number(e.target.value) : null;
+      await api("/contracts/default-map", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [type]: value }),
+      });
+    });
+    box.appendChild(row);
+  }
+}
+
+document.getElementById("menu-contracts").addEventListener("click", async () => {
+  contractsBackdrop.classList.add("open");
+  const contracts = await renderContractsList();
+  await renderDefaultContracts(contracts);
+});
+document.getElementById("contracts-close").addEventListener("click", () => contractsBackdrop.classList.remove("open"));
+
+// ---------- редактирование контракта: динамический список строк тип+количество (п.8 третьего раунда) ----------
+function addContractLineRow(elementType, quantity) {
+  const container = document.getElementById("ce-lines");
+  const row = document.createElement("div");
+  row.className = "ce-line-row";
+  row.innerHTML = `
+    <input type="text" class="ce-line-type" list="ce-known-types" placeholder="тип элемента" value="${elementType || ""}"/>
+    <input type="number" class="ce-line-qty" min="0" placeholder="кол-во" value="${quantity != null ? quantity : ""}"/>
+    <button class="btn btn-sm btn-secondary ce-line-remove" type="button">✕</button>
+  `;
+  row.querySelector(".ce-line-remove").addEventListener("click", () => row.remove());
+  container.appendChild(row);
+}
+document.getElementById("ce-add-line").addEventListener("click", () => addContractLineRow());
+
+// ---------- редактирование контракта: инциденты повреждений (см. Docs/backlog.md,
+// "Учёт повреждённых элементов...") — через createElement/.value, БЕЗ innerHTML
+// с шаблонными литералами (в отличие от addContractLineRow выше — известный,
+// отдельно задокументированный техдолг, не трогаем существующий код, но новый
+// пишем сразу безопасно) ----------
+function addContractIncidentRow(elementType, quantity, incidentDate, description) {
+  const container = document.getElementById("ce-incidents");
+  const row = document.createElement("div");
+  row.className = "ce-incident-row";
+
+  const dateInput = document.createElement("input");
+  dateInput.type = "date";
+  dateInput.className = "ce-incident-date";
+  dateInput.value = incidentDate ? incidentDate.slice(0, 10) : "";
+
+  const typeInput = document.createElement("input");
+  typeInput.type = "text";
+  typeInput.className = "ce-incident-type";
+  typeInput.setAttribute("list", "ce-known-types");
+  typeInput.placeholder = "тип элемента";
+  typeInput.value = elementType || "";
+
+  const qtyInput = document.createElement("input");
+  qtyInput.type = "number";
+  qtyInput.min = "0";
+  qtyInput.className = "ce-incident-qty";
+  qtyInput.placeholder = "кол-во";
+  qtyInput.value = quantity != null ? quantity : "";
+
+  const descInput = document.createElement("input");
+  descInput.type = "text";
+  descInput.className = "ce-incident-desc";
+  descInput.placeholder = "описание";
+  descInput.value = description || "";
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "btn btn-sm btn-secondary ce-incident-remove";
+  removeBtn.textContent = "✕";
+  removeBtn.addEventListener("click", () => row.remove());
+
+  row.append(dateInput, typeInput, qtyInput, descInput, removeBtn);
+  container.appendChild(row);
+}
+document.getElementById("ce-add-incident").addEventListener("click", () => addContractIncidentRow());
+
+function openContractEdit(contract) {
+  editingContractId = contract ? contract.id : null;
+  document.getElementById("contract-edit-title").textContent = contract ? "Изменить контракт" : "Новый контракт";
+  document.getElementById("ce-name").value = contract ? contract.name : "";
+  document.getElementById("ce-supplier").value = contract ? contract.supplier : "";
+  // Известные типы элементов после загрузки файла — подсказка в поле
+  // "тип элемента" строки контракта (datalist, не строгий список —
+  // ввести что-то нестандартное по-прежнему можно), см. Docs/backlog.md.
+  document.getElementById("ce-known-types").innerHTML =
+    Object.keys(state.labelVisibility).map(t => `<option value="${t}"></option>`).join("");
+  document.getElementById("ce-lines").innerHTML = "";
+  if (contract && contract.lines.length) {
+    for (const l of contract.lines) addContractLineRow(l.element_type, l.quantity);
+  } else {
+    addContractLineRow();
+  }
+  // Инциденты — без принудительной пустой строки по умолчанию (в отличие
+  // от строк плана выше): ноль инцидентов — обычный, ожидаемый случай.
+  document.getElementById("ce-incidents").innerHTML = "";
+  if (contract && contract.incidents) {
+    for (const inc of contract.incidents) {
+      addContractIncidentRow(inc.element_type, inc.quantity, inc.incident_date, inc.description);
+    }
+  }
+  document.getElementById("contract-edit-error").textContent = "";
+  contractEditBackdrop.classList.add("open");
+}
+document.getElementById("contracts-add").addEventListener("click", () => openContractEdit(null));
+document.getElementById("contract-edit-cancel").addEventListener("click", () => contractEditBackdrop.classList.remove("open"));
+document.getElementById("contract-edit-save").addEventListener("click", async () => {
+  const lines = Array.from(document.querySelectorAll("#ce-lines .ce-line-row")).map(row => ({
+    element_type: row.querySelector(".ce-line-type").value.trim(),
+    quantity: Number(row.querySelector(".ce-line-qty").value || 0),
+  })).filter(l => l.element_type);
+  const incidents = Array.from(document.querySelectorAll("#ce-incidents .ce-incident-row")).map(row => ({
+    element_type: row.querySelector(".ce-incident-type").value.trim(),
+    quantity: Number(row.querySelector(".ce-incident-qty").value || 0),
+    incident_date: row.querySelector(".ce-incident-date").value,
+    description: row.querySelector(".ce-incident-desc").value.trim() || null,
+  })).filter(inc => inc.element_type && inc.incident_date);
+  const body = {
+    name: document.getElementById("ce-name").value.trim(),
+    supplier: document.getElementById("ce-supplier").value.trim(),
+    lines,
+    incidents,
+  };
+  try {
+    if (editingContractId) {
+      await api(`/contracts/${editingContractId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } else {
+      await api("/contracts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    }
+    contractEditBackdrop.classList.remove("open");
+    const contracts = await renderContractsList();
+    await renderDefaultContracts(contracts);
+    await loadPlan(); // обновить список контрактов в state для карточки элемента
+  } catch (e) {
+    document.getElementById("contract-edit-error").textContent = e.message;
+  }
+});
+
+// ---------- экспорт/импорт настроек проекта ----------
+const settingsIoBackdrop = document.getElementById("settings-io-backdrop");
+document.getElementById("menu-settings-io").addEventListener("click", () => {
+  document.getElementById("settings-io-file").value = "";
+  document.getElementById("settings-io-status").textContent = "";
+  settingsIoBackdrop.classList.add("open");
+});
+document.getElementById("settings-io-close").addEventListener("click", () => settingsIoBackdrop.classList.remove("open"));
+document.getElementById("settings-io-export").addEventListener("click", () => {
+  window.location.href = "/settings/export";
+});
+document.getElementById("settings-io-import").addEventListener("click", async () => {
+  const file = document.getElementById("settings-io-file").files[0];
+  const statusEl = document.getElementById("settings-io-status");
+  if (!file) { statusEl.textContent = "Сначала выберите файл .json"; statusEl.style.color = "var(--color-danger)"; return; }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const res = await fetch("/settings/import", { method: "POST", body: formData });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      statusEl.textContent = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
+      statusEl.style.color = "var(--color-danger)";
+      return;
+    }
+    statusEl.textContent = `Готово: пользователей ${body.users_upserted}, цветов ${body.status_colors}, настроек подписей ${body.label_visibility}.`;
+    statusEl.style.color = "var(--color-text-muted)";
+    await loadPlan();
+  } catch (e) {
+    statusEl.textContent = "Не удалось связаться с сервером: " + e.message;
+    statusEl.style.color = "var(--color-danger)";
+  }
+});
+
+// ---------- импорт истории статусов из XLS ----------
+const historyImportBackdrop = document.getElementById("history-import-backdrop");
+const historyImportFile = document.getElementById("history-import-file");
+const historyImportSubmit = document.getElementById("history-import-submit");
+
+function setHistoryImportStatus(text, isError) {
+  const elm = document.getElementById("history-import-status");
+  elm.textContent = text;
+  elm.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+document.getElementById("menu-history-import").addEventListener("click", () => {
+  historyImportFile.value = "";
+  setHistoryImportStatus("", false);
+  document.getElementById("history-import-source").textContent = state.sourceFile || "(источник не выбран)";
+  historyImportBackdrop.classList.add("open");
+});
+document.getElementById("history-import-cancel").addEventListener("click", () => historyImportBackdrop.classList.remove("open"));
+
+historyImportSubmit.addEventListener("click", async () => {
+  const file = historyImportFile.files[0];
+  if (!file) { setHistoryImportStatus("Сначала выберите файл .xlsx", true); return; }
+  if (!state.sourceFile) { setHistoryImportStatus("Сначала выберите источник (чертёж) в тулбаре", true); return; }
+
+  const mode = document.querySelector('input[name="history-import-mode"]:checked').value;
+  historyImportSubmit.disabled = true;
+  setHistoryImportStatus("Импорт истории…", false);
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("source_file", state.sourceFile);
+  formData.append("mode", mode);
+
+  try {
+    const res = await fetch("/import-history-xlsx", { method: "POST", body: formData });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      setHistoryImportStatus((body && body.detail) ? body.detail : `Ошибка ${res.status}`, true);
+      return;
+    }
+    let msg = `Готово: сопоставлено элементов ${body.matched_elements}, добавлено записей ${body.inserted}, ` +
+      `пропущено дублей ${body.skipped_duplicate}, не найдено в этой БД ${body.unmatched_elements}.`;
+    if (body.unmatched_handles.length) msg += ` Примеры handle без совпадения: ${body.unmatched_handles.join(", ")}.`;
+    setHistoryImportStatus(msg, false);
+    await loadPlan();
+  } catch (e) {
+    setHistoryImportStatus("Не удалось связаться с сервером: " + e.message, true);
+  } finally {
+    historyImportSubmit.disabled = false;
+  }
+});
+
+// ---------- экспорт XLS ----------
+const exportBackdrop = document.getElementById("export-backdrop");
+document.getElementById("btn-export").addEventListener("click", () => exportBackdrop.classList.add("open"));
+document.getElementById("export-cancel").addEventListener("click", () => exportBackdrop.classList.remove("open"));
+document.querySelectorAll('input[name="export-mode"]').forEach(r => r.addEventListener("change", () => {
+  const mode = document.querySelector('input[name="export-mode"]:checked').value;
+  document.getElementById("export-history-fields").style.display = mode === "history" ? "flex" : "none";
+  document.getElementById("export-snapshot-fields").style.display = mode === "snapshot" ? "flex" : "none";
+}));
+document.getElementById("export-download").addEventListener("click", () => {
+  const mode = document.querySelector('input[name="export-mode"]:checked').value;
+  const params = new URLSearchParams({ mode, source_file: state.sourceFile });
+  if (mode === "history") {
+    const from = document.getElementById("export-date-from").value;
+    const to = document.getElementById("export-date-to").value;
+    if (from) params.set("date_from", from);
+    if (to) params.set("date_to", to);
+  } else {
+    const date = document.getElementById("export-date").value;
+    if (date) params.set("date", date);
+  }
+  window.location.href = `/export.xlsx?${params.toString()}`;
+  exportBackdrop.classList.remove("open");
+});
+
+// ---------- экспорт в PDF ----------
+const exportPdfBackdrop = document.getElementById("export-pdf-backdrop");
+document.getElementById("btn-export-pdf").addEventListener("click", () => {
+  document.getElementById("export-pdf-date").value = "";
+  exportPdfBackdrop.classList.add("open");
+});
+document.getElementById("export-pdf-cancel").addEventListener("click", () => exportPdfBackdrop.classList.remove("open"));
+document.getElementById("export-pdf-download").addEventListener("click", () => {
+  const params = new URLSearchParams({ source_file: state.sourceFile });
+  const date = document.getElementById("export-pdf-date").value;
+  if (date) params.set("date", date);
+  window.location.href = `/export.pdf?${params.toString()}`;
+  exportPdfBackdrop.classList.remove("open");
+});
+
+// ==================== ЗАГРУЗКА ЧЕРТЕЖА ====================
+const uploadBackdrop = document.getElementById("upload-backdrop");
+const uploadFileInput = document.getElementById("upload-file-input");
+const uploadStatus = document.getElementById("upload-status");
+const uploadSubmit = document.getElementById("upload-submit");
+
+function setUploadStatus(text, isError) {
+  uploadStatus.textContent = text;
+  uploadStatus.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+document.getElementById("btn-upload").addEventListener("click", () => {
+  uploadFileInput.value = "";
+  setUploadStatus("", false);
+  uploadSubmit.disabled = false;
+  uploadFileInput.disabled = false;
+  uploadBackdrop.classList.add("open");
+});
+document.getElementById("upload-cancel").addEventListener("click", () => uploadBackdrop.classList.remove("open"));
+
+uploadSubmit.addEventListener("click", async () => {
+  const file = uploadFileInput.files[0];
+  if (!file) { setUploadStatus("Сначала выберите файл .dxf", true); return; }
+
+  uploadSubmit.disabled = true;
+  uploadFileInput.disabled = true;
+  setUploadStatus("Обработка чертежа… это может занять до минуты для больших файлов.", false);
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await fetch("/import-dxf", { method: "POST", body: formData });
+    const body = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      const detail = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
+      setUploadStatus(detail, true);
+      uploadSubmit.disabled = false;
+      uploadFileInput.disabled = false;
+      return;
+    }
+
+    const marks = Object.entries(body.by_mark_source).map(([k, v]) => `${k}: ${v}`).join(", ");
+    const axes = Object.entries(body.by_axis_status).map(([k, v]) => `${k}: ${v}`).join(", ");
+    setUploadStatus(
+      `Готово: ${body.total} элементов (новых: ${body.inserted}, обновлено: ${body.updated}). ` +
+      `Марки — ${marks}. Адресация — ${axes}. Оси: ${body.axis_grid.numeric} числовых, ${body.axis_grid.letter} буквенных.`,
+      false
+    );
+
+    layersCache.delete(body.source_file);
+    await loadSourceFiles();
+    state.selection = new Map([[body.source_file, null]]);
+    state.sourceFile = body.source_file;
+    updateFileSelectSummary();
+    await loadPlan(false); // новый/другой чертёж — координаты другие, старый масштаб бессмысленен
+
+    setTimeout(() => uploadBackdrop.classList.remove("open"), 1200);
+  } catch (e) {
+    setUploadStatus("Не удалось связаться с сервером: " + e.message, true);
+  } finally {
+    uploadSubmit.disabled = false;
+    uploadFileInput.disabled = false;
+  }
+});
+
+// ==================== 3D-РЕЖИМ СХЕМЫ (Three.js, см. Docs/backlog.md) ====================
+// Библиотека — локально (app/static/vendor/three/, не CDN), подключается
+// ЛЕНИВО через динамический import() при первом включении кнопкой "3D",
+// а не на каждой загрузке страницы (~700 КБ, нужен не всем). Клики по
+// элементам, карточка, контекстное меню статуса, фильтр по размещению —
+// переиспользуют ровно те же функции, что и 2D (selectElement/
+// openCtxMenu/passesPlacementFilters/styleShape), никакой отдельной
+// копии этой логики здесь нет — 3D-код отвечает только за геометрию и
+// рендер.
+
+let THREE = null;
+let OrbitControls = null;
+
+async function ensureThreeLoaded() {
+  if (THREE) return;
+  THREE = await import("three");
+  ({ OrbitControls } = await import("/static/vendor/three/OrbitControls.js"));
+}
+
+// ---------- высота элемента в 3D ----------
+
+// Список уникальных отметок (мм) именно у КОЛОНН (не у всех элементов) —
+// это и есть "ярусы" в смысле высоты колонны: следующий уровень для
+// колонны должен быть следующим этажом колонн, а не отметкой случайно
+// подвернувшегося ригеля на промежуточной высоте (например, ригель-
+// парапет на +5000 между этажами колонн 0 и +15800 — если бы уровни
+// считались по всем элементам, колонна с отметки 0 получила бы высоту
+// всего 5000мм вместо реальных 15800). Заказчик подтвердил правило
+// "высота колонны — до следующего уровня" именно в смысле этажей
+// колонн, см. Docs/backlog.md.
+function computeColumnLevels() {
+  const set = new Set();
+  for (const e of state.elements) {
+    if (e.element_type === "Колонна" && e.elevation_mm !== null && e.elevation_mm !== undefined) set.add(e.elevation_mm);
+  }
+  return Array.from(set).sort((a, b) => a - b);
+}
+
+// Площадь и периметр контура по формуле шнурков — устойчиво к повороту
+// элемента на плане, в отличие от габаритного прямоугольника (bounding
+// box), который на повёрнутом прямоугольнике завышает обе стороны.
+// Контур ригеля/плиты/панели считаем прямоугольником (или близко к
+// нему): тогда из площади S и полупериметра P=(a+b) обе стороны —
+// корни уравнения a*b=S, a+b=P. Возвращаем МЕНЬШИЙ корень — это и есть
+// ширина сечения (заказчик подтвердил: сечение квадратное, высота
+// экструзии = эта ширина, см. Docs/backlog.md).
+function crossSectionWidth(outline) {
+  if (!outline || outline.length < 3) return null;
+  let area2 = 0, perimeter = 0;
+  const n = outline.length;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = outline[i], [x2, y2] = outline[(i + 1) % n];
+    area2 += x1 * y2 - x2 * y1;
+    perimeter += Math.hypot(x2 - x1, y2 - y1);
+  }
+  const area = Math.abs(area2) / 2;
+  if (area === 0) return null;
+  const halfPerimeter = perimeter / 2;
+  const disc = halfPerimeter * halfPerimeter - 4 * area;
+  if (disc < 0) return Math.sqrt(area); // не должно случаться для прямоугольника — запасной вариант
+  const width = (halfPerimeter - Math.sqrt(disc)) / 2;
+  return width > 0 ? width : Math.sqrt(area);
+}
+
+const DEFAULT_EXTRUSION_HEIGHT = 3000; // мм — запасной вариант, если высоту иначе не определить
+
+// - Колонна — от своей отметки до следующего яруса; для самого верхнего
+//   яруса запасной вариант — высота предыдущего яруса (или дефолт, если
+//   ярус всего один).
+// - Ригель/Плита/Панель — квадратное сечение, высота = ширина контура.
+function elementExtrusionHeight(element, levels) {
+  if (element.element_type === "Колонна") {
+    const idx = levels.indexOf(element.elevation_mm);
+    if (idx !== -1 && idx < levels.length - 1) return levels[idx + 1] - levels[idx];
+    if (idx > 0) return levels[idx] - levels[idx - 1];
+    return DEFAULT_EXTRUSION_HEIGHT;
+  }
+  return crossSectionWidth(element.outline) || DEFAULT_EXTRUSION_HEIGHT;
+}
+
+// ---------- построение сцены ----------
+
+function build3DMeshForElement(element, levels) {
+  if (!element.outline || element.outline.length < 3) return null; // нечего экструдировать
+  const height = elementExtrusionHeight(element, levels);
+  // Shape строится в локальной плоскости XY, shapeY = мировой Y как есть
+  // (БЕЗ инверсии — см. Docs/backlog.md, "3D — зеркальность"). После
+  // поворота geometry.rotateX(-90°) локальная (x,y,z) -> мировая (x,z,-y):
+  // локальная ось экструзии (z: 0..height) становится мировой "вверх"
+  // (Y), а мировая Z = -мировая Y элемента. Это НЕ ошибка и не "зеркалит"
+  // план — это единственный способ у право-ориентированной (как и везде
+  // в Three.js/WebGL) системы координат с Y-вверх корректно, без
+  // зеркальности, показать план, лежащий в исходных данных в плоскости
+  // X-Y (Y-вверх на бумаге), если смотреть на сцену сверху так же, как
+  // смотрят на 2D-чертёж (X вправо, "северное" +Y дальше от зрителя).
+  // Была допущена обратная ошибка (плюс вместо минуса) — из-за нее план
+  // в 3D действительно зеркалился по одной из осей при взгляде сверху.
+  const points = element.outline.map(([x, y]) => new THREE.Vector2(x, y));
+  const shape = new THREE.Shape(points);
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
+  geometry.rotateX(-Math.PI / 2);
+  // DoubleSide — смена знака выше меняет и порядок обхода контура
+  // (winding), а с ним и направление нормалей граней; чтобы это не
+  // привело к отбраковке "невидимых" граней (backface culling у
+  // MeshStandardMaterial по умолчанию), рисуем обе стороны.
+  const material = new THREE.MeshStandardMaterial({ color: colorFor(element.current_status), side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(0, element.elevation_mm || 0, 0);
+  mesh.userData.elementId = element.id;
+  return mesh;
+}
+
+// Нижний и верхний уровень здания (мм) — по ярусам КОЛОНН (см.
+// computeColumnLevels): низ — самый нижний ярус, верх — верхний ярус
+// колонн плюс высота последнего пролёта (тот же запасной вариант, что
+// и у самой верхней колонны в elementExtrusionHeight, см. Docs/backlog.md).
+// Используется для захватки — "объём во всю высоту здания".
+function computeBuildingHeightRange() {
+  const levels = computeColumnLevels();
+  if (!levels.length) return { bottom: 0, top: DEFAULT_EXTRUSION_HEIGHT };
+  const bottom = levels[0];
+  const lastGap = levels.length > 1 ? levels[levels.length - 1] - levels[levels.length - 2] : DEFAULT_EXTRUSION_HEIGHT;
+  const top = levels[levels.length - 1] + lastGap;
+  return { bottom, top };
+}
+
+// Цвет по категории — запасной вариант, если у зоны нет своего color
+// (Захватка своих цветов не имеет вовсе, см. 6.6 ТЗ; те же оттенки, что
+// и у 2D-подложки, см. CSS .zone-Захватка/.zone-Кран/.zone-Стоянка).
+const ZONE_CATEGORY_COLOR_3D = { "Захватка": 0x1353d6, "Кран": 0xc0392b, "Стоянка": 0x7c3aed };
+
+// Захватка — объём НА ВСЮ ВЫСОТУ здания (заказчик подтвердил, см.
+// Docs/backlog.md), сильно полупрозрачный, чтобы элементы внутри
+// оставались хорошо видны. Кран/Стоянка — плоские полигоны на уровне
+// земли (Y=0), не объём — они привязаны к отметке крана/стоянки на
+// плане, а не к высоте здания. depthWrite:false у обоих — иначе
+// несколько полупрозрачных зон, перекрывающих друг друга (например,
+// захватка и кран на одном участке плана), давали бы артефакты
+// сортировки глубины.
+function build3DZoneMesh(zone, heightRange) {
+  if (!zone.outline || zone.outline.length < 3) return null;
+  // Без инверсии Y — та же поправка, что и у элементов (см.
+  // build3DMeshForElement, Docs/backlog.md "3D — зеркальность").
+  const points = zone.outline.map(([x, y]) => new THREE.Vector2(x, y));
+  const shape = new THREE.Shape(points);
+
+  let geometry, positionY, opacity;
+  if (zone.category === "Захватка") {
+    geometry = new THREE.ExtrudeGeometry(shape, { depth: heightRange.top - heightRange.bottom, bevelEnabled: false, steps: 1 });
+    geometry.rotateX(-Math.PI / 2);
+    positionY = heightRange.bottom;
+    opacity = 0.07; // как у 2D-подложки (fill-opacity:.07) — элементы внутри не теряются
+  } else {
+    geometry = new THREE.ShapeGeometry(shape);
+    geometry.rotateX(-Math.PI / 2);
+    positionY = 10; // небольшой отступ от 0 — не мерцает поверх сетки/пола
+    opacity = 0.35;
+  }
+
+  const color = zone.color ? Number(("0x" + zone.color.replace("#", ""))) : ZONE_CATEGORY_COLOR_3D[zone.category] || 0x999999;
+  const material = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(0, positionY, 0);
+  mesh.visible = state.zoneVisibility[zone.category] !== false;
+  return mesh;
+}
+
+// Видимость 3D-зон по тумблерам "Зоны" (сайдбар → Фильтры) — те же
+// state.zoneVisibility, что и у 2D renderZones(), без пересборки
+// геометрии (см. renderZoneToggles).
+function apply3DZoneVisibility() {
+  for (const [zoneId, mesh] of state.view3d.zoneMeshById) {
+    const zone = state.zones.find(z => z.id === zoneId);
+    if (zone) mesh.visible = state.zoneVisibility[zone.category] !== false;
+  }
+}
+
+function build3DScene() {
+  const v3 = state.view3d;
+  if (!v3.scene) return;
+  for (const mesh of v3.meshById.values()) {
+    v3.scene.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+  v3.meshById.clear();
+  for (const mesh of v3.zoneMeshById.values()) {
+    v3.scene.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+  v3.zoneMeshById.clear();
+
+  const levels = computeColumnLevels();
+  for (const element of state.elements) {
+    const mesh = build3DMeshForElement(element, levels);
+    if (!mesh) continue;
+    mesh.visible = passesPlacementFilters(element);
+    if (state.selectedId === element.id) mesh.material.emissive.set(0x333333);
+    v3.scene.add(mesh);
+    v3.meshById.set(element.id, mesh);
+  }
+
+  const heightRange = computeBuildingHeightRange();
+  for (const zone of state.zones) {
+    const mesh = build3DZoneMesh(zone, heightRange);
+    if (!mesh) continue;
+    v3.scene.add(mesh);
+    v3.zoneMeshById.set(zone.id, mesh);
+  }
+
+  fit3DCameraToData();
+}
+
+// ---------- сцена, камера, свет, управление ----------
+
+function init3DScene() {
+  const v3 = state.view3d;
+  if (v3.scene) return; // однократно — дальше только build3DScene() пересобирает меши
+  const container = document.getElementById("stage-3d");
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xeceff3);
+
+  const camera = new THREE.PerspectiveCamera(50, container.clientWidth / Math.max(container.clientHeight, 1), 10, 5_000_000);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  container.appendChild(renderer.domElement);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x505050, 1.3));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  dirLight.position.set(1, 2, 1);
+  scene.add(dirLight);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  // Дефолт библиотеки (zoomSpeed=1) рассчитан на "стандартный" масштаб
+  // сцены — у нас мировые координаты в мм, десятки-сотни тысяч единиц.
+  // OrbitControls.getZoomScale() нормализует шаг зума через
+  // event.deltaY/(100*devicePixelRatio) — трекпад Mac шлёт много событий
+  // с очень маленьким deltaY (плавная инерциальная прокрутка), из-за чего
+  // с дефолтной чувствительностью один "тик" меняет масштаб на доли
+  // процента — приблизить/отдалить требует очень долгой прокрутки. Не
+  // зависит от масштаба сцены как такового, но субъективно ощущается
+  // именно на такой крупной модели. Ускоряем множителем, не трогая саму
+  // библиотеку.
+  controls.zoomSpeed = 4;
+
+  v3.scene = scene;
+  v3.camera = camera;
+  v3.renderer = renderer;
+  v3.controls = controls;
+  v3.raycaster = new THREE.Raycaster();
+  v3.mouse = new THREE.Vector2();
+
+  renderer.domElement.addEventListener("click", on3DClick);
+  renderer.domElement.addEventListener("dblclick", on3DContextMenu);
+  renderer.domElement.addEventListener("contextmenu", on3DContextMenu);
+  renderer.domElement.addEventListener("mousemove", on3DMouseMove);
+  renderer.domElement.addEventListener("mouseleave", hide3DTooltip);
+  window.addEventListener("resize", on3DResize);
+}
+
+// Вписывает камеру по охвату текущих данных — как "вся схема целиком" у
+// 2D (state.initialView), но для 3D: центр по X/Y плана и по среднему
+// уровню высот, камера отведена по диагонали на расстояние, пропорциональное
+// охвату плана.
+function fit3DCameraToData() {
+  const v3 = state.view3d;
+  if (!v3.camera || !state.elements.length) return;
+  const xs = state.elements.map(e => e.x);
+  const ys = state.elements.map(e => e.y);
+  const zs = state.elements.map(e => e.elevation_mm || 0);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const minZ = Math.min(...zs), maxZ = Math.max(...zs);
+  // world.Z = -мировая Y элемента (см. build3DMeshForElement) — центр
+  // по Z берём с тем же знаком, иначе камера целилась бы не в центр
+  // модели, а в его зеркальное отражение.
+  const cx = (minX + maxX) / 2, cz = -(minY + maxY) / 2, cy = (minZ + maxZ) / 2;
+  const size = Math.max(maxX - minX, maxY - minY, 2000);
+
+  v3.controls.target.set(cx, cy, cz);
+  v3.camera.position.set(cx + size * 0.6, cy + size * 0.6, cz + size * 0.6);
+  v3.camera.near = Math.max(size / 1000, 1);
+  v3.camera.far = size * 20;
+  v3.camera.updateProjectionMatrix();
+  v3.controls.update();
+}
+
+function on3DResize() {
+  const v3 = state.view3d;
+  if (!v3.active || !v3.renderer) return;
+  const container = document.getElementById("stage-3d");
+  const w = container.clientWidth, h = Math.max(container.clientHeight, 1);
+  v3.camera.aspect = w / h;
+  v3.camera.updateProjectionMatrix();
+  v3.renderer.setSize(w, h);
+}
+
+function animate3D() {
+  const v3 = state.view3d;
+  if (!v3.active) return;
+  v3.controls.update();
+  v3.renderer.render(v3.scene, v3.camera);
+  v3.animationFrameId = requestAnimationFrame(animate3D);
+}
+
+// ---------- клики — та же интерактивность, что у 2D (selectElement/openCtxMenu) ----------
+
+let threeDragging = false; // аналог dragMoved у 2D — не выбирать элемент сразу после вращения камеры
+
+function pick3DElementAt(clientX, clientY) {
+  const v3 = state.view3d;
+  const rect = v3.renderer.domElement.getBoundingClientRect();
+  v3.mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  v3.mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  v3.raycaster.setFromCamera(v3.mouse, v3.camera);
+  const visibleMeshes = Array.from(v3.meshById.values()).filter(m => m.visible);
+  const intersects = v3.raycaster.intersectObjects(visibleMeshes);
+  if (!intersects.length) return null;
+  return state.byId.get(intersects[0].object.userData.elementId) || null;
+}
+
+function on3DClick(e) {
+  if (threeDragging) return;
+  hide3DTooltip();
+  const element = pick3DElementAt(e.clientX, e.clientY);
+  if (!element) { closeCtxMenu(); clearSelection(); return; }
+  selectElement(element);
+}
+
+function on3DContextMenu(e) {
+  e.preventDefault();
+  hide3DTooltip();
+  const element = pick3DElementAt(e.clientX, e.clientY);
+  if (!element) return;
+  selectElement(element);
+  openCtxMenu(element, e.clientX, e.clientY);
+}
+
+// ---------- подсказка при наведении — появляется, если курсор задержался
+// на одном элементе дольше 1с (не сразу, чтобы не мельтешить при вращении) ----------
+
+let hover3DTimer = null;
+let hover3DElementId = null;
+
+function hide3DTooltip() {
+  clearTimeout(hover3DTimer);
+  hover3DTimer = null;
+  hover3DElementId = null;
+  const tip = document.getElementById("tooltip-3d");
+  if (tip) tip.style.display = "none";
+}
+
+function position3DTooltip(clientX, clientY) {
+  const tip = document.getElementById("tooltip-3d");
+  const stage = document.getElementById("stage-3d");
+  const rect = stage.getBoundingClientRect();
+  const offset = 14;
+  let left = clientX - rect.left + offset;
+  let top = clientY - rect.top + offset;
+  if (left + tip.offsetWidth > rect.width) left = clientX - rect.left - tip.offsetWidth - offset;
+  if (top + tip.offsetHeight > rect.height) top = clientY - rect.top - tip.offsetHeight - offset;
+  tip.style.left = Math.max(0, left) + "px";
+  tip.style.top = Math.max(0, top) + "px";
+}
+
+function show3DTooltip(element, clientX, clientY) {
+  const tip = document.getElementById("tooltip-3d");
+  tip.textContent = "";
+  const rows = [
+    ["Тип", element.element_type],
+    ["Подтип", element.subtype],
+    ["Марка", element.mark],
+    ["ID", element.id],
+    ["Адрес", element.address],
+    ["Отметка", (element.elevation_mm === null || element.elevation_mm === undefined) ? null : element.elevation_mm + " мм"],
+  ];
+  for (const [label, value] of rows) {
+    const line = document.createElement("div");
+    line.textContent = label + ": " + ((value === null || value === undefined || value === "") ? "—" : value);
+    tip.appendChild(line);
+  }
+  tip.style.display = "block";
+  position3DTooltip(clientX, clientY);
+}
+
+function on3DMouseMove(e) {
+  if (threeDragging) { hide3DTooltip(); return; }
+  const element = pick3DElementAt(e.clientX, e.clientY);
+  const elementId = element ? element.id : null;
+
+  if (elementId !== hover3DElementId) {
+    hide3DTooltip();
+    hover3DElementId = elementId;
+    if (elementId !== null) {
+      const cx = e.clientX, cy = e.clientY;
+      hover3DTimer = setTimeout(() => {
+        if (hover3DElementId === elementId) show3DTooltip(element, cx, cy);
+      }, 1000);
+    }
+    return;
+  }
+  if (elementId !== null) position3DTooltip(e.clientX, e.clientY);
+}
+
+// ---------- переключатель 2D/3D — сегментированный, оба режима видны
+// одновременно, активный подсвечен (не залипающая кнопка-тумблер) ----------
+
+const btnView2D = document.getElementById("btn-view-2d");
+const btnView3D = document.getElementById("btn-view-3d");
+
+async function setViewMode(mode) {
+  const v3 = state.view3d;
+  const stage2d = document.getElementById("stage");
+  const stage3d = document.getElementById("stage-3d");
+  if ((mode === "3d") === v3.active) return; // уже в этом режиме
+
+  if (mode === "2d") {
+    v3.active = false;
+    if (v3.animationFrameId) cancelAnimationFrame(v3.animationFrameId);
+    hide3DTooltip();
+    stage3d.style.display = "none";
+    stage2d.style.display = "";
+    btnView2D.classList.add("active");
+    btnView3D.classList.remove("active");
+    return;
+  }
+
+  btnView3D.disabled = true;
+  try {
+    await ensureThreeLoaded();
+  } catch (e) {
+    showToast("Не удалось загрузить 3D: " + e.message, "warning");
+    btnView3D.disabled = false;
+    return;
+  }
+
+  stage2d.style.display = "none";
+  stage3d.style.display = "block";
+  const hint = document.getElementById("stage-3d-hint");
+  if (hint) hint.style.display = "none";
+
+  init3DScene();
+  build3DScene();
+  v3.active = true;
+  btnView2D.classList.remove("active");
+  btnView3D.classList.add("active");
+  btnView3D.disabled = false;
+  on3DResize();
+  animate3D();
+}
+
+btnView2D.addEventListener("click", () => {
+  setViewMode("2d").catch(e => showToast("Ошибка: " + e.message, "warning"));
+});
+btnView3D.addEventListener("click", () => {
+  setViewMode("3d").catch(e => showToast("Ошибка 3D: " + e.message, "warning"));
+});
+document.addEventListener("pointerdown", (e) => {
+  if (e.target.closest("#stage-3d")) threeDragging = false;
+});
+document.addEventListener("pointermove", (e) => {
+  if (e.buttons && e.target.closest("#stage-3d")) threeDragging = true;
+});
+
+// ==================== СТАРТ ====================
+async function bootApp() {
+  const ok = await checkAuth();
+  if (!ok) return;
+  await loadSourceFiles();
+  await loadPlan(false); // первая загрузка — вписать схему целиком
+}
+
+bootApp();
+</script>
+</body>
+</html>
