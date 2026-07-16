@@ -3809,9 +3809,18 @@ function crossSectionWidth(outline) {
 
 const DEFAULT_EXTRUSION_HEIGHT = 3000; // мм — запасной вариант, если высоту иначе не определить
 
+// Фиксированная толщина плиты перекрытия (заказчик подтвердил, см.
+// Docs/backlog.md, "Новый файл — плиты перекрытия") — весь тип "Плита
+// перекрытия" целиком, а не только конкретный подтип/отметка; НЕ
+// распространяется на тип "Плита" (генерик, отдельный от "Плита
+// перекрытия", пока не встречался в реальных данных) — тот при появлении
+// продолжит считаться по допущению "квадратное сечение" ниже.
+const FLOOR_SLAB_THICKNESS_MM = 300;
+
 // - Колонна — от своей отметки до следующего яруса; для самого верхнего
 //   яруса запасной вариант — высота предыдущего яруса (или дефолт, если
 //   ярус всего один).
+// - Плита перекрытия — фиксированная толщина (см. FLOOR_SLAB_THICKNESS_MM).
 // - Ригель/Плита/Панель — квадратное сечение, высота = ширина контура.
 function elementExtrusionHeight(element, levels) {
   if (element.element_type === "Колонна") {
@@ -3819,6 +3828,9 @@ function elementExtrusionHeight(element, levels) {
     if (idx !== -1 && idx < levels.length - 1) return levels[idx + 1] - levels[idx];
     if (idx > 0) return levels[idx] - levels[idx - 1];
     return DEFAULT_EXTRUSION_HEIGHT;
+  }
+  if (element.element_type === "Плита перекрытия") {
+    return FLOOR_SLAB_THICKNESS_MM;
   }
   return crossSectionWidth(element.outline) || DEFAULT_EXTRUSION_HEIGHT;
 }

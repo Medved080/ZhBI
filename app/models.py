@@ -146,7 +146,7 @@ class ElementShapeIn(BaseModel):
 # Дублирует layer_naming.ZHBI_TYPES (scripts/) — держим отдельной константой
 # здесь, чтобы app/main.py не зависел от порядка попадания scripts/ в
 # sys.path (см. app/dxf_import.py).
-ZHBI_ELEMENT_TYPES = ("Колонна", "Ригель", "Плита", "Панель")
+ZHBI_ELEMENT_TYPES = ("Колонна", "Ригель", "Плита", "Панель", "Плита перекрытия")
 
 
 class AllowedSubtypeIn(BaseModel):
