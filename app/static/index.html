@@ -242,6 +242,8 @@
   }
   #ctx-menu .ctx-item:hover { background: var(--color-surface-2); }
   #ctx-menu .ctx-item.current { font-weight: 600; }
+  #ctx-menu .ctx-item.disabled { cursor: not-allowed; opacity: .45; }
+  #ctx-menu .ctx-item.disabled:hover { background: none; }
 
   /* -------- выпадающее меню "Настройки" -------- */
   /* position: fixed (не absolute) + координаты выставляются в JS при открытии —
@@ -449,7 +451,8 @@
   <div id="workdate-box">
     <label for="workdate-input">Рабочая дата</label>
     <input type="datetime-local" id="workdate-input"/>
-    <button class="btn btn-sm btn-secondary" id="workdate-reset" title="Сбросить на текущий момент">Сейчас</button>
+    <button class="btn btn-sm btn-secondary" id="workdate-reset" title="Заполнить текущими датой/временем">Сейчас</button>
+    <button class="btn btn-sm btn-secondary" id="workdate-clear" title="Очистить — система всегда будет использовать текущие дату/время">✕</button>
   </div>
   <div class="dropdown" id="settings-dropdown">
     <button class="btn" id="btn-settings-menu">Настройки ▾</button>
@@ -735,12 +738,20 @@
 
 <div class="modal-backdrop" id="status-contract-backdrop">
   <div class="modal">
-    <h2>Выбор контракта</h2>
-    <p class="hint-text">Элемент переходит со статуса «Запланирован» на «<span id="sc-status-label"></span>». Укажите, по какому контракту он поставляется.</p>
-    <label class="field">Контракт</label>
-    <select id="sc-contract-select"></select>
-    <label class="field">Партия (если уже известна)</label>
-    <select id="sc-batch-select" disabled></select>
+    <h2>Смена статуса</h2>
+    <p class="hint-text">Новый статус: «<span id="sc-status-label"></span>».</p>
+    <label class="field">Дата и время</label>
+    <div class="row" style="gap:6px; align-items:center;">
+      <input type="datetime-local" id="sc-datetime" style="flex:1;"/>
+      <button class="btn btn-sm btn-secondary" id="sc-datetime-clear" title="Очистить — сервер применит текущий момент">✕</button>
+    </div>
+    <div id="sc-contract-section">
+      <p class="hint-text">Элемент переходит со статуса «Запланирован» — укажите, по какому контракту он поставляется, и партию, если уже известна.</p>
+      <label class="field">Контракт</label>
+      <select id="sc-contract-select"></select>
+      <label class="field">Партия (если уже известна)</label>
+      <select id="sc-batch-select" disabled></select>
+    </div>
     <div class="actions">
       <button class="btn btn-secondary" id="sc-cancel">Отмена</button>
       <button class="btn btn-primary" id="sc-confirm">Подтвердить</button>
@@ -1156,6 +1167,22 @@ document.getElementById("label-color-reset").addEventListener("click", () => sav
 const workdateInput = document.getElementById("workdate-input");
 const workdateBox = document.getElementById("workdate-box");
 
+// "datetime-local" в местном времени браузера — переиспользуется и
+// тулбаром ("Сейчас"), и дефолтом в диалоге смены статуса (см.
+// Docs/backlog.md, "явно показывать дату и время...").
+function nowAsDatetimeLocal() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+// "datetime-local" отдаёт "YYYY-MM-DDTHH:MM" — серверу нужно "YYYY-MM-DD HH:MM:SS".
+// Пустое значение -> null (сервер сам подставит текущий момент, datetime('now')).
+function datetimeLocalToServer(value) {
+  if (!value) return null;
+  return value.replace("T", " ") + ":00";
+}
+
 function updateWorkdateStyle() {
   workdateBox.classList.toggle("active", !!workdateInput.value);
 }
@@ -1170,18 +1197,24 @@ document.getElementById("workdate-reset").addEventListener("click", () => {
   // указанию заказчика ("должна устанавливать дату и время текущими
   // значениями"), предыдущий вариант с очисткой+вспышкой был неверным
   // прочтением исходной жалобы.
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const localValue = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const localValue = nowAsDatetimeLocal();
   workdateInput.value = localValue;
   localStorage.setItem(WORKDATE_KEY, localValue);
   updateWorkdateStyle();
 });
+// Именно ОЧИСТКА (не заполнение "сейчас") — отдельная кнопка от "Сейчас"
+// выше: пустое поле означает "рабочая дата неактивна", сервер всегда
+// использует свой текущий момент на запись, а не замороженное клиентом
+// значение (см. Docs/backlog.md — стик рабочей даты в localStorage был
+// причиной, почему смена статуса "не срабатывала" визуально).
+document.getElementById("workdate-clear").addEventListener("click", () => {
+  workdateInput.value = "";
+  localStorage.removeItem(WORKDATE_KEY);
+  updateWorkdateStyle();
+});
 
 function currentChangedAt() {
-  // "datetime-local" отдаёт "YYYY-MM-DDTHH:MM" — серверу нужно "YYYY-MM-DD HH:MM:SS"
-  if (!workdateInput.value) return null;
-  return workdateInput.value.replace("T", " ") + ":00";
+  return datetimeLocalToServer(workdateInput.value);
 }
 
 // ==================== ВЫБОР ФАЙЛОВ И СЛОЁВ (п.5, п.13 третьего раунда) ====================
@@ -2233,7 +2266,7 @@ function update3DElementAppearance(element, selected) {
   if (!mesh) return;
   mesh.material.color.set(colorFor(element.current_status));
   mesh.material.emissive.set(selected ? 0x333333 : 0x000000);
-  if (mesh.userData.edges) mesh.userData.edges.material.color.copy(darkerColor(colorFor(element.current_status)));
+  if (mesh.userData.outline) mesh.userData.outline.material.color.copy(darkerColor(colorFor(element.current_status)));
 }
 
 // ---------- допстрока подписи (партия), см. Docs/backlog.md, "Партия —
@@ -2969,19 +3002,26 @@ function openCtxMenu(element, clientX, clientY) {
 
   // Партия — независимое действие (не привязано к смене статуса, в
   // отличие от контракта), но доступно из ТОГО ЖЕ меню — единый
-  // список действий над элементом, см. Docs/backlog.md. Только если у
-  // элемента уже есть контракт (партия — его дочерняя сущность).
-  if (element.contract_id) {
-    const sep = document.createElement("div");
-    sep.className = "ctx-title";
-    sep.textContent = "Партия";
-    ctxMenu.appendChild(sep);
-    const batchItem = document.createElement("div");
-    batchItem.className = "ctx-item";
-    batchItem.textContent = "Выбрать партию…";
-    batchItem.addEventListener("click", () => { closeCtxMenu(); openBatchAssignDialog(element); });
-    ctxMenu.appendChild(batchItem);
-  }
+  // список действий над элементом, см. Docs/backlog.md. ВСЕГДА в меню
+  // (не пропадает условно) — как и остальные фильтры/действия в этом
+  // приложении, "полный список всегда виден + недоступен (disabled),
+  // не сужается"; недоступен, только если у элемента ещё нет контракта
+  // (партия — его дочерняя сущность), с явной подсказкой почему.
+  const sep = document.createElement("div");
+  sep.className = "ctx-title";
+  sep.textContent = "Партия";
+  ctxMenu.appendChild(sep);
+  const batchItem = document.createElement("div");
+  const hasContract = !!element.contract_id;
+  batchItem.className = "ctx-item" + (hasContract ? "" : " disabled");
+  batchItem.textContent = element.batch_id ? "Изменить партию…" : "Выбрать партию…";
+  if (!hasContract) batchItem.title = "У элемента нет контракта — сначала укажите контракт";
+  batchItem.addEventListener("click", () => {
+    if (!hasContract) return;
+    closeCtxMenu();
+    openBatchAssignDialog(element);
+  });
+  ctxMenu.appendChild(batchItem);
 
   ctxMenu.style.left = Math.min(clientX, window.innerWidth - 240) + "px";
   ctxMenu.style.top = Math.min(clientY, window.innerHeight - 260) + "px";
@@ -2994,30 +3034,45 @@ function closeCtxMenu() { ctxMenu.style.display = "none"; }
 const statusContractBackdrop = document.getElementById("status-contract-backdrop");
 let pendingStatusChange = null;
 
+// Диалог смены статуса теперь открывается ВСЕГДА (не только при уходе
+// с "Запланирован") — заказчик явно попросил всегда видеть и иметь
+// возможность поменять дату/время применения статуса, см.
+// Docs/backlog.md. Секция контракта/партии внутри диалога показывается
+// только когда это актуально (уход с "Запланирован") — остальным
+// переходам контракт не нужен (наследуется от предыдущей записи).
 async function applyStatus(element, status) {
   closeCtxMenu();
-  if (element.current_status === "planned" && status !== "planned") {
-    openStatusContractDialog(element, status);
-    return;
-  }
-  await doApplyStatus(element, status, undefined);
+  openStatusDialog(element, status);
 }
 
-function openStatusContractDialog(element, status) {
+function openStatusDialog(element, status) {
   pendingStatusChange = { element, status };
   document.getElementById("sc-status-label").textContent = state.statusLabels[status] || status;
-  const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
-  const matching = state.contracts.filter(c => c.element_types.includes(element.element_type));
-  const options = ['<option value="">— без контракта —</option>'].concat(
-    matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
-  );
-  document.getElementById("sc-contract-select").innerHTML = options.join("");
-  refreshStatusDialogBatchSelect();
+
+  // Дата/время — по умолчанию рабочая дата, если она сейчас активна в
+  // тулбаре, иначе текущий момент; в любом случае можно поменять прямо
+  // здесь, не трогая сам тулбар (одноразовое значение для этого действия).
+  document.getElementById("sc-datetime").value = workdateInput.value || nowAsDatetimeLocal();
+
+  const showContract = element.current_status === "planned" && status !== "planned";
+  document.getElementById("sc-contract-section").style.display = showContract ? "" : "none";
+  if (showContract) {
+    const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
+    const matching = state.contracts.filter(c => c.element_types.includes(element.element_type));
+    const options = ['<option value="">— без контракта —</option>'].concat(
+      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
+    );
+    document.getElementById("sc-contract-select").innerHTML = options.join("");
+    refreshStatusDialogBatchSelect();
+  }
   statusContractBackdrop.classList.add("open");
 }
 document.getElementById("sc-cancel").addEventListener("click", () => {
   pendingStatusChange = null;
   statusContractBackdrop.classList.remove("open");
+});
+document.getElementById("sc-datetime-clear").addEventListener("click", () => {
+  document.getElementById("sc-datetime").value = "";
 });
 
 // Партию можно указать СРАЗУ в том же диалоге, что и контракт — не
@@ -3050,21 +3105,28 @@ async function refreshStatusDialogBatchSelect() {
 
 document.getElementById("sc-confirm").addEventListener("click", async () => {
   if (!pendingStatusChange) return;
-  const value = document.getElementById("sc-contract-select").value;
-  const contractId = value ? Number(value) : null;
-  const batchValue = document.getElementById("sc-batch-select").value;
+  const showContract = document.getElementById("sc-contract-section").style.display !== "none";
+  const contractId = showContract
+    ? (document.getElementById("sc-contract-select").value ? Number(document.getElementById("sc-contract-select").value) : null)
+    : undefined;
+  const batchValue = showContract ? document.getElementById("sc-batch-select").value : "";
   const batchId = batchValue ? Number(batchValue) : null;
+  const explicitChangedAt = datetimeLocalToServer(document.getElementById("sc-datetime").value);
   const { element, status } = pendingStatusChange;
   pendingStatusChange = null;
   statusContractBackdrop.classList.remove("open");
-  await doApplyStatus(element, status, contractId, batchId);
+  await doApplyStatus(element, status, contractId, batchId, explicitChangedAt);
 });
 
-async function doApplyStatus(element, status, explicitContractId, explicitBatchId) {
+async function doApplyStatus(element, status, explicitContractId, explicitBatchId, explicitChangedAt) {
   try {
     const body = { status };
-    const changedAt = currentChangedAt();
-    if (changedAt) body.changed_at = changedAt;
+    // explicitChangedAt приходит из диалога смены статуса (см.
+    // openStatusDialog) — всегда явно задан пользователем на момент
+    // подтверждения (по умолчанию рабочая дата или текущий момент, но
+    // могла быть изменена/очищена прямо в диалоге), не тот же самый
+    // currentChangedAt() из тулбара.
+    if (explicitChangedAt) body.changed_at = explicitChangedAt;
     // explicitContractId !== undefined значит поле реально выбрано в диалоге
     // (даже null — "без контракта") — бэкенд различает "поле было в теле
     // запроса" от "поля не было" через model_fields_set (см. app/main.py).
@@ -4736,6 +4798,49 @@ function darkerColor(hex, factor = 0.55) {
   return new THREE.Color(hex).multiplyScalar(factor);
 }
 
+// Увеличивает контур от его собственного центроида на factor (1.0 —
+// без изменений) — для "ободка"-границы ниже. Не настоящий полигон-
+// offset (который для произвольных контуров сложнее и рискованнее
+// проверить без браузера), а равномерное масштабирование от центроида —
+// для типичных прямоугольных/выпуклых сечений ЖБИ даёт визуально тот же
+// эффект, не требуя отдельной геометрической библиотеки на клиенте.
+function scaledOutline(outline, factor) {
+  const n = outline.length;
+  const cx = outline.reduce((s, p) => s + p[0], 0) / n;
+  const cy = outline.reduce((s, p) => s + p[1], 0) / n;
+  return outline.map(([x, y]) => [cx + (x - cx) * factor, cy + (y - cy) * factor]);
+}
+
+const OUTLINE_MARGIN_SCALE = 1.08; // насколько шире контур "ободка" границы
+const OUTLINE_MARGIN_DEPTH_MM = 25; // на сколько ниже верх "ободка" относительно верха элемента
+
+// "Ободок" границы элемента — темнее заливки того же статуса (см.
+// Docs/backlog.md, по скриншоту из test_data/: однотипные примыкающие
+// элементы сливались в одно пятно). НЕ THREE.LineSegments/EdgesGeometry
+// (первая версия) — THREE.LineBasicMaterial.linewidth не работает в
+// большинстве браузеров (ANGLE клэмпит к 1px, известное ограничение
+// WebGL1), из-за чего рёбра оказались практически невидимы на реальном
+// скриншоте. Вместо GL-линии — отдельный меш: НЕМНОГО ШИРЕ и НИЖЕ
+// основного. В центре, где оба перекрываются, более высокий основной
+// меш закрывает "ободок" сверху; виден только по краям, куда основной
+// меш не доходит — та самая тёмная кайма на стыке соседних элементов
+// при взгляде сверху, тот же эффект, что даёт обводка в 2D, но
+// геометрией, а не линией (работает при любом масштабе/браузере).
+function build3DOutlineMesh(element, height) {
+  if (!element.outline || element.outline.length < 3) return null;
+  const scaled = scaledOutline(element.outline, OUTLINE_MARGIN_SCALE);
+  const points = scaled.map(([x, y]) => new THREE.Vector2(x, y));
+  const shape = new THREE.Shape(points);
+  const marginHeight = Math.max(height - OUTLINE_MARGIN_DEPTH_MM, height * 0.5);
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: marginHeight, bevelEnabled: false, steps: 1 });
+  geometry.rotateX(-Math.PI / 2);
+  const material = new THREE.MeshBasicMaterial({ color: darkerColor(colorFor(element.current_status)), side: THREE.DoubleSide });
+  // Позиция НЕ выставляется — добавляется дочерним объектом основного
+  // меша (см. build3DMeshForElement), позиция/элevation наследуются от
+  // родителя автоматически; свой mesh.position здесь удвоил бы смещение.
+  return new THREE.Mesh(geometry, material);
+}
+
 function build3DMeshForElement(element, levels) {
   if (!element.outline || element.outline.length < 3) return null; // нечего экструдировать
   const height = elementExtrusionHeight(element, levels);
@@ -4764,18 +4869,13 @@ function build3DMeshForElement(element, levels) {
   mesh.position.set(0, element.elevation_mm || 0, 0);
   mesh.userData.elementId = element.id;
 
-  // Рёбра силуэта — иначе однотипные примыкающие элементы одного статуса
-  // (одинаковая заливка) визуально сливаются в одно пятно без видимой
-  // границы между ними (см. Docs/backlog.md, по скриншоту из test_data/).
-  // Цвет — затемнённая версия ТОГО ЖЕ статусного цвета (не фиксированный
-  // чёрный), дочерний объект меша — трансформация/позиция наследуются
-  // автоматически, отдельно двигать не нужно.
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(geometry),
-    new THREE.LineBasicMaterial({ color: darkerColor(colorFor(element.current_status)) })
-  );
-  mesh.add(edges);
-  mesh.userData.edges = edges;
+  // Граница элемента — см. build3DOutlineMesh выше; дочерний объект
+  // меша, позиция/elevation наследуются автоматически.
+  const outline = build3DOutlineMesh(element, height);
+  if (outline) {
+    mesh.add(outline);
+    mesh.userData.outline = outline;
+  }
 
   return mesh;
 }
@@ -4957,6 +5057,12 @@ function build3DScene() {
     v3.scene.remove(mesh);
     mesh.geometry.dispose();
     mesh.material.dispose();
+    // "Ободок" границы — дочерний меш (см. build3DOutlineMesh), у него
+    // своя geometry/material, родительский dispose() выше их не трогает.
+    if (mesh.userData.outline) {
+      mesh.userData.outline.geometry.dispose();
+      mesh.userData.outline.material.dispose();
+    }
   }
   v3.meshById.clear();
   for (const mesh of v3.zoneMeshById.values()) {
