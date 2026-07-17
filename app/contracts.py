@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import get_current_user, require_admin
+from app.batches import clear_stale_batch_assignment, enrich_element_row
 from app.db import get_connection
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
@@ -57,6 +58,11 @@ class ContractIncidentOut(ContractIncidentIn):
 class ContractIn(BaseModel):
     name: str
     supplier: str
+    # Дата подписания контракта (бизнес-дата, не created_at) и короткий
+    # код контрагента — оба нужны для формулы метки партии/допстроки
+    # подписи на схеме, см. Docs/backlog.md, "Партия — учёт по маркам".
+    contract_date: Optional[str] = None
+    code: Optional[str] = None
     lines: list[ContractLineIn]
     incidents: list[ContractIncidentIn] = []
 
@@ -65,6 +71,8 @@ class ContractOut(BaseModel):
     id: int
     name: str
     supplier: str
+    contract_date: Optional[str] = None
+    code: Optional[str] = None
     lines: list[ContractLineOut]
     incidents: list[ContractIncidentOut]
 
@@ -114,6 +122,7 @@ def _to_contract_out(conn, contract_row) -> ContractOut:
     ]
     return ContractOut(
         id=contract_row["id"], name=contract_row["name"], supplier=contract_row["supplier"],
+        contract_date=contract_row["contract_date"], code=contract_row["code"],
         lines=lines, incidents=incidents,
     )
 
@@ -132,7 +141,10 @@ def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
 def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(require_admin)):
     conn = get_connection()
     try:
-        conn.execute("INSERT INTO contracts (name, supplier) VALUES (?, ?)", (body.name, body.supplier))
+        conn.execute(
+            "INSERT INTO contracts (name, supplier, contract_date, code) VALUES (?, ?, ?, ?)",
+            (body.name, body.supplier, body.contract_date, body.code),
+        )
         contract_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         for line in body.lines:
             conn.execute(
@@ -160,8 +172,8 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         if not existing:
             raise HTTPException(status_code=404, detail="Контракт не найден")
         conn.execute(
-            "UPDATE contracts SET name=?, supplier=?, updated_at=datetime('now') WHERE id=?",
-            (body.name, body.supplier, contract_id),
+            "UPDATE contracts SET name=?, supplier=?, contract_date=?, code=?, updated_at=datetime('now') WHERE id=?",
+            (body.name, body.supplier, body.contract_date, body.code, contract_id),
         )
         # Полная замена строк/инцидентов — список редактируется в UI
         # целиком, проще и предсказуемее частичного патча по id строки.
@@ -300,6 +312,9 @@ def apply_status_change(
     )
 
     element_contract_id = recompute_element_contract_cache(conn, element_id)
+    # Контракт мог смениться (или пропасть) — партия чужого контракта не
+    # должна молча остаться привязанной к элементу, см. app/batches.py.
+    clear_stale_batch_assignment(conn, element_id, element_contract_id)
     warning = contract_line_warning(conn, element_contract_id, row["element_type"])
 
     updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
@@ -309,6 +324,7 @@ def apply_status_change(
     data = dict(updated_row)
     data["history"] = [dict(h) for h in history_rows]
     data["contract_warning"] = warning
+    enrich_element_row(conn, data)
     return data
 
 

@@ -136,6 +136,7 @@ class UserOut(BaseModel):
     role: str
     display_name: str
     has_password: bool
+    label_color: Optional[str] = None  # персональный цвет подписей марок (2D/3D), NULL = дефолт
 
 
 def user_out(user: sqlite3.Row) -> UserOut:
@@ -150,6 +151,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
         role=user["role"],
         display_name=format_display_name(user),
         has_password=user["password_hash"] is not None,
+        label_color=user["label_color"],
     )
 
 

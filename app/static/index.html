@@ -125,7 +125,18 @@
     padding: 6px 10px; border-radius: var(--radius-sm); white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.25);
   }
   svg { width: 100%; height: 100%; display: block; }
-  .mark-label { pointer-events: none; fill: #333; }
+  /* Белый контур вокруг букв (не буквальная подложка-прямоугольник —
+     в SVG с уже применённым scale(1,-1)-контрфлипом текста позиционирование
+     отдельного <rect> позади рискованно проверить без браузера, см.
+     Docs/backlog.md) — даёт тот же эффект контрастности на любом фоне. */
+  .mark-label {
+    pointer-events: none; fill: var(--mark-label-color, #222222);
+    stroke: #fff; stroke-width: 3px; stroke-linejoin: round; paint-order: stroke;
+  }
+  .mark-sublabel {
+    pointer-events: none; fill: #555;
+    stroke: #fff; stroke-width: 2.4px; stroke-linejoin: round; paint-order: stroke;
+  }
   #axis-layer text { pointer-events: none; }
   /* -------- зоны (захватка/кран/стоянка) — см. Docs/backlog.md,
      "Разбор структурированных имён слоёв DWG/DXF..." -------- */
@@ -184,6 +195,7 @@
   .filter-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .filter-group-header span { font-size: 12px; font-weight: 600; flex: 1; }
   .link-btn { background: none; border: none; padding: 0; font-size: 11px; color: var(--color-primary); cursor: pointer; }
+  .card-batch-link { color: var(--color-primary); cursor: pointer; text-decoration: underline; }
   .link-btn:hover { text-decoration: underline; }
   .filter-group .toggle { margin-top: 4px; }
   .filter-group .toggle.filter-parent { font-weight: 600; margin-top: 0; flex: 1; }
@@ -316,6 +328,8 @@
   .ce-incident-row input[type=text].ce-incident-type { flex: 1.4; }
   .ce-incident-row input[type=number] { flex: 0.8; }
   .ce-incident-row input[type=text].ce-incident-desc { flex: 2.5; }
+  .be-line-row select { flex: 1; }
+  .be-line-row input[type=number].be-line-qty { flex: 0.6; }
 
   /* -------- удаление записи истории (п.3 третьего раунда) -------- */
   #history-table button.hist-del { border: none; background: none; color: var(--color-danger); cursor: pointer; font-size: 12px; padding: 2px 6px; }
@@ -441,6 +455,7 @@
     <button class="btn" id="btn-settings-menu">Настройки ▾</button>
     <div class="dropdown-menu" id="settings-menu">
       <button id="menu-change-password">Сменить пароль</button>
+      <button id="menu-label-color">Цвет подписей марок</button>
       <div class="dropdown-divider admin-only">Управление</div>
       <button id="menu-colors" class="admin-only">Цвета статусов</button>
       <button id="menu-shapes" class="admin-only">Форма маркеров</button>
@@ -480,6 +495,7 @@
     <div id="multi-select-panel">
       <span id="multi-select-count">Выделено: 0</span>
       <button class="btn btn-sm btn-primary" id="multi-select-status-btn">Изменить статус…</button>
+      <button class="btn btn-sm btn-secondary" id="multi-select-batch-btn">Назначить партию…</button>
       <button class="btn btn-sm btn-secondary" id="multi-select-clear">✕</button>
     </div>
   </div>
@@ -762,6 +778,8 @@
     <h2 id="contract-edit-title">Контракт</h2>
     <label class="field">Название/номер</label><input type="text" id="ce-name"/>
     <label class="field">Поставщик</label><input type="text" id="ce-supplier"/>
+    <label class="field">Дата контракта</label><input type="date" id="ce-contract-date"/>
+    <label class="field">Код контрагента</label><input type="text" id="ce-code" placeholder="для компактной подписи на схеме"/>
     <label class="field" style="margin-bottom:2px;">Строки: тип элемента + количество</label>
     <div id="ce-lines"></div>
     <datalist id="ce-known-types"></datalist>
@@ -777,11 +795,91 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="batches-backdrop">
+  <div class="modal wide">
+    <h2 id="batches-title">Партии контракта</h2>
+    <div id="batches-list"></div>
+    <button class="btn btn-secondary" id="batches-add">Добавить партию</button>
+    <div class="actions">
+      <button class="btn btn-secondary" id="batches-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="batch-edit-backdrop">
+  <div class="modal wide">
+    <h2 id="batch-edit-title">Партия</h2>
+    <label class="field">Плановая дата поставки</label><input type="date" id="be-date"/>
+    <label class="field" style="margin-bottom:2px;">Строки: тип / подтип / марка / количество</label>
+    <div id="be-lines"></div>
+    <button class="btn btn-secondary btn-sm" id="be-add-line" style="margin-top:6px;">+ строка</button>
+    <div class="error-text" id="batch-edit-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="batch-edit-cancel">Отмена</button>
+      <button class="btn btn-primary" id="batch-edit-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="batch-assign-backdrop">
+  <div class="modal">
+    <h2>Выбор партии</h2>
+    <p class="hint-text">Показаны только партии, где есть строка, подходящая под тип/подтип/марку этого элемента.</p>
+    <label class="field">Партия</label>
+    <select id="ba-batch-select"></select>
+    <div class="error-text" id="batch-assign-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="ba-cancel">Отмена</button>
+      <button class="btn btn-primary" id="ba-confirm">Подтвердить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="bulk-batch-backdrop">
+  <div class="modal wide">
+    <h2 id="bulk-batch-title">Назначить партию</h2>
+    <table class="bulk-status-table">
+      <thead>
+        <tr><th>ID</th><th>Марка</th><th>Тип</th><th>Контракт</th><th>Партия</th><th></th></tr>
+      </thead>
+      <tbody id="bulk-batch-tbody"></tbody>
+    </table>
+    <div class="error-text" id="bulk-batch-error"></div>
+    <div class="warning-text" id="bulk-batch-warning"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="bulk-batch-cancel">Отмена</button>
+      <button class="btn btn-primary" id="bulk-batch-apply">Применить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="label-color-backdrop">
+  <div class="modal">
+    <h2>Цвет подписей марок</h2>
+    <p class="hint-text">Персональная настройка — влияет только на то, что видите вы (2D и 3D).</p>
+    <label class="field">Цвет</label>
+    <input type="color" id="label-color-value"/>
+    <div class="error-text" id="label-color-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="label-color-reset">Сбросить на дефолт</button>
+      <button class="btn btn-secondary" id="label-color-cancel">Отмена</button>
+      <button class="btn btn-primary" id="label-color-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 </div><!-- #app-root -->
 
 <script>
 const SVG_NS = "http://www.w3.org/2000/svg";
 const IN_PROJECT_STROKE = "#1a1a1a";
+// Единый дефолт цвета подписей марок (2D fill / 3D canvas text) — заменяет
+// два ранее несогласованных значения (#333 в 2D, #222 в 3D). Персонально
+// переопределяется через state.currentUser.label_color, см. Docs/backlog.md.
+const DEFAULT_LABEL_COLOR = "#222222";
+function currentLabelColor() {
+  return (state.currentUser && state.currentUser.label_color) || DEFAULT_LABEL_COLOR;
+}
 const NO_AXIS_DASH = "4 3"; // пунктир у элементов без данных по осям (outside_axis_grid / no_axis_grid)
 const MAX_MARKER_PX = 18;    // предел радиуса маркера на экране (п.11, удвоено по п.6 второго раунда)
 const MAX_LABEL_FONT_PX = 24; // предел размера шрифта подписи марки на экране (п.5, удвоено по п.6 второго раунда)
@@ -798,6 +896,8 @@ let state = {
   byId: new Map(),
   shapeById: new Map(),
   labelById: new Map(),
+  subLabelById: new Map(), // id -> <text> допстроки (партия), только у элементов, где она сейчас видна — см. elementSubLabelText
+  batchCache: new Map(), // batch.id -> BatchOut, ленивая подгрузка (карточка элемента, диалоги назначения) — см. Docs/backlog.md
   labelOffsetById: new Map(), // id -> {dx, dy, anchor} в единицах базового радиуса — направление подписи, выбранное один раз при разводке коллизий
   selectedId: null,
   // Групповое выделение рамкой (Shift+перетаскивание, см. Docs/backlog.md,
@@ -900,6 +1000,13 @@ function maybeWarnContract(result) {
   }
 }
 
+function maybeWarnBatch(result) {
+  if (result && result.batch_warning) {
+    const w = result.batch_warning;
+    showToast(`Превышение по партии «${w.batch_label}»: запланировано ${w.quantity}, назначено ${w.fact}.`);
+  }
+}
+
 // ==================== АУТЕНТИФИКАЦИЯ ====================
 
 function showLoginScreen() {
@@ -946,6 +1053,7 @@ async function checkAuth() {
     state.currentUser = user;
     document.getElementById("user-name").textContent = user.display_name;
     applyRolePermissions();
+    applyLabelColor();
     showApp();
     return true;
   } catch (e) {
@@ -1003,6 +1111,44 @@ document.getElementById("change-password-save").addEventListener("click", async 
     document.getElementById("change-password-error").textContent = e.message;
   }
 });
+
+// ---------- цвет подписей марок — персональная настройка (см.
+// Docs/backlog.md, "Партия — учёт по маркам"), тот же паттерн
+// самообслуживания, что у смены пароля выше ----------
+function applyLabelColor() {
+  document.documentElement.style.setProperty("--mark-label-color", currentLabelColor());
+}
+
+const labelColorBackdrop = document.getElementById("label-color-backdrop");
+document.getElementById("menu-label-color").addEventListener("click", () => {
+  document.getElementById("settings-menu").classList.remove("open");
+  document.getElementById("label-color-value").value = currentLabelColor();
+  document.getElementById("label-color-error").textContent = "";
+  labelColorBackdrop.classList.add("open");
+});
+document.getElementById("label-color-cancel").addEventListener("click", () => labelColorBackdrop.classList.remove("open"));
+
+async function saveLabelColor(color) {
+  try {
+    const updated = await api(`/users/${state.currentUser.id}/label-color`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label_color: color }),
+    });
+    state.currentUser.label_color = updated.label_color;
+    applyLabelColor();
+    // 3D-спрайты — canvas-текстура, "запекается" один раз при создании,
+    // на CSS-переменную не реагирует (в отличие от 2D) — нужен пересбор,
+    // чтобы взять новый цвет немедленно, а не после следующей перезагрузки
+    // данных (build3DScene() уже дёшево вызывать по факту, см. loadPlan()).
+    if (state.view3d.active) build3DScene();
+    labelColorBackdrop.classList.remove("open");
+  } catch (e) {
+    document.getElementById("label-color-error").textContent = e.message;
+  }
+}
+document.getElementById("label-color-save").addEventListener("click", () => {
+  saveLabelColor(document.getElementById("label-color-value").value);
+});
+document.getElementById("label-color-reset").addEventListener("click", () => saveLabelColor(null));
 
 // ==================== РАБОЧАЯ ДАТА (п.8) ====================
 const workdateInput = document.getElementById("workdate-input");
@@ -2085,6 +2231,60 @@ function update3DElementAppearance(element, selected) {
   if (!mesh) return;
   mesh.material.color.set(colorFor(element.current_status));
   mesh.material.emissive.set(selected ? 0x333333 : 0x000000);
+  if (mesh.userData.edges) mesh.userData.edges.material.color.copy(darkerColor(colorFor(element.current_status)));
+}
+
+// ---------- допстрока подписи (партия), см. Docs/backlog.md, "Партия —
+// учёт по маркам" — вторая, более мелкая строка под маркой, если элемент
+// в процессе поставки (Контрактация/В производстве/Отгружен) уже
+// назначен на партию. Пропадает, когда элемент физически на площадке
+// (Доставлен и далее) — плановая дата поставки партии там уже неактуальна. ----------
+const BATCH_SUBLABEL_STATUSES = new Set(["contracting", "in_production", "shipped"]);
+const SUBLABEL_FONT_SCALE = 0.75; // мельче основной подписи — вторична по значимости
+const SUBLABEL_GAP_SCALE = 1.5; // множитель font-size — вертикальный зазор между строками
+
+function elementSubLabelText(element) {
+  if (!element.batch_id || !BATCH_SUBLABEL_STATUSES.has(element.current_status)) return null;
+  if (!element.batch_planned_date) return null; // партия не резолвилась — не показываем мусор
+  return element.contract_code ? `${element.contract_code}. ${element.batch_planned_date}` : element.batch_planned_date;
+}
+
+// Точечное обновление допстроки ОДНОГО элемента после смены статуса/
+// партии — без полного renderElements(). Создаёт/обновляет/удаляет DOM-
+// узел по необходимости; если элемент сейчас не отрисован на схеме
+// (скрыт фильтром через display:none у родителя — сама подпись при этом
+// всё равно существует в DOM) или вовсе не отрисован (другой файл/слои),
+// state.labelById не найдёт узел — тихо выходим.
+function updateElementSubLabel(element) {
+  const label = state.labelById.get(element.id);
+  if (label && state.view) {
+    const subText = elementSubLabelText(element);
+    let subLabel = state.subLabelById.get(element.id);
+    if (!subText) {
+      if (subLabel) {
+        subLabel.remove();
+        state.subLabelById.delete(element.id);
+      }
+    } else {
+      const { effectiveR, effectiveFont } = computeEffectiveMarkerSizing();
+      const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
+      const x = element.x + cand.dx * effectiveR;
+      const y = element.y + cand.dy * effectiveR - effectiveFont * SUBLABEL_GAP_SCALE;
+      if (!subLabel) {
+        subLabel = flippedText(x, y, subText, effectiveFont * SUBLABEL_FONT_SCALE, cand.anchor, {
+          class: "mark-sublabel", "data-type": element.element_type,
+        });
+        if (state.labelVisibility[element.element_type] === false) subLabel.style.display = "none";
+        label.parentNode.appendChild(subLabel);
+        state.subLabelById.set(element.id, subLabel);
+      } else {
+        subLabel.textContent = subText;
+        subLabel.setAttribute("transform", `translate(${x},${y}) scale(1,-1)`);
+        subLabel.setAttribute("font-size", (effectiveFont * SUBLABEL_FONT_SCALE).toFixed(2));
+      }
+    }
+  }
+  rebuild3DLabelSprite(element); // независимо от 2D — своя ветка на v3.scene ? null внутри
 }
 
 // ---------- разводка накладывающихся подписей марок ----------
@@ -2152,6 +2352,7 @@ function renderElements(data) {
   state.byId.clear();
   state.shapeById.clear();
   state.labelById.clear();
+  state.subLabelById.clear();
 
   const r = data.marker_radius;
   state.labelOffsetById = computeLabelOffsets(data.elements, r);
@@ -2177,6 +2378,19 @@ function renderElements(data) {
     const group = el("g");
     group.appendChild(shape);
     group.appendChild(label);
+
+    const subText = elementSubLabelText(element);
+    let subLabel = null;
+    if (subText) {
+      subLabel = flippedText(
+        element.x + cand.dx * r, element.y + cand.dy * r, subText, r * 1.3 * SUBLABEL_FONT_SCALE, cand.anchor,
+        { class: "mark-sublabel", "data-type": element.element_type }
+      );
+      if (state.labelVisibility[element.element_type] === false) subLabel.style.display = "none";
+      group.appendChild(subLabel);
+      state.subLabelById.set(element.id, subLabel);
+    }
+
     layer.appendChild(group);
 
     state.shapeById.set(element.id, shape);
@@ -2293,7 +2507,7 @@ function renderLabelToggles() {
     label.innerHTML = `<input type="checkbox" data-type="${escapeHtml(type)}" ${checked ? "checked" : ""}/> ${escapeHtml(type)}`;
     label.querySelector("input").addEventListener("change", (e) => {
       state.labelVisibility[type] = e.target.checked;
-      document.querySelectorAll(`.mark-label[data-type="${type}"]`).forEach(t => {
+      document.querySelectorAll(`.mark-label[data-type="${type}"], .mark-sublabel[data-type="${type}"]`).forEach(t => {
         t.style.display = e.target.checked ? "" : "none";
       });
       apply3DLabelVisibility();
@@ -2302,18 +2516,25 @@ function renderLabelToggles() {
   }
 }
 
-// ---------- предел размера маркеров/подписей + прореживание подписей осей при zoom ----------
-function updateSizesForZoom() {
-  if (!state.view) return;
+// Вынесено из updateSizesForZoom — переиспользуется точечным
+// updateElementSubLabel (не гонять полный цикл по всем элементам ради
+// одной допстроки после смены статуса/партии одного элемента).
+function computeEffectiveMarkerSizing() {
   const stage = document.getElementById("stage");
   const pxPerUnitX = stage.clientWidth / state.view.w;
   const pxPerUnitY = stage.clientHeight / state.view.h;
   const pxPerUnit = Math.min(pxPerUnitX, pxPerUnitY) || 1;
-
   const baseR = state.baseMarkerRadius;
   const effectiveR = Math.min(baseR, MAX_MARKER_PX / pxPerUnit);
   const baseFont = baseR * 1.3;
   const effectiveFont = Math.min(baseFont, MAX_LABEL_FONT_PX / pxPerUnit);
+  return { pxPerUnit, effectiveR, effectiveFont };
+}
+
+// ---------- предел размера маркеров/подписей + прореживание подписей осей при zoom ----------
+function updateSizesForZoom() {
+  if (!state.view) return;
+  const { pxPerUnit, effectiveR, effectiveFont } = computeEffectiveMarkerSizing();
 
   for (const element of state.elements) {
     const shape = state.shapeById.get(element.id);
@@ -2333,6 +2554,16 @@ function updateSizesForZoom() {
     const y = element.y + cand.dy * effectiveR;
     label.setAttribute("transform", `translate(${x},${y}) scale(1,-1)`);
     label.setAttribute("font-size", effectiveFont.toFixed(2));
+
+    const subLabel = state.subLabelById.get(element.id);
+    if (subLabel) {
+      const subFont = effectiveFont * SUBLABEL_FONT_SCALE;
+      // Меньшая мировая Y — ниже на экране (viewBox.y = -max_y даёт
+      // "мировой Y вверх = экранный верх", см. Docs/backlog.md).
+      const subY = y - effectiveFont * SUBLABEL_GAP_SCALE;
+      subLabel.setAttribute("transform", `translate(${x},${subY}) scale(1,-1)`);
+      subLabel.setAttribute("font-size", subFont.toFixed(2));
+    }
   }
 
   const effectiveZoneFont = MAX_ZONE_FONT_PX / pxPerUnit;
@@ -2390,6 +2621,12 @@ function updateLabelCollisionVisibility(effectiveR, effectiveFont) {
 
     const collides = nearbyBoxes(element.x, element.y).some(b => overlaps(b, box));
     label.style.display = collides ? "none" : "";
+    // Допстрока (партия) не участвует в отдельном расчёте коллизий —
+    // видимость просто наследуется от основной строки (см. Docs/backlog.md,
+    // "Партия — учёт по маркам") — простое решение для первой итерации,
+    // как уже применялось к 3D-подписям в прошлом раунде.
+    const subLabel = state.subLabelById.get(element.id);
+    if (subLabel) subLabel.style.display = collides ? "none" : "";
     if (!collides) {
       const key = bucketKey(element.x, element.y);
       if (!buckets.has(key)) buckets.set(key, []);
@@ -2469,6 +2706,7 @@ function clearWorkspace() {
   state.byId.clear();
   state.shapeById.clear();
   state.labelById.clear();
+  state.subLabelById.clear();
   state.labelOffsetById.clear();
   state.selectedId = null;
   state.axisNumeric = [];
@@ -2574,6 +2812,45 @@ function contractLabelText(element) {
   return c ? `${escapeHtml(c.name)} (${escapeHtml(c.supplier)})` : `#${element.contract_id}`;
 }
 
+// Партия — внутри блока "Контракт" (по просьбе), не отдельным блоком.
+// Кликабельна только для admin (партии, как и контракты, редактируются
+// только им) — клик открывает ту же форму редактирования, что и модалка
+// "Партии контракта" (openBatchEdit), см. Docs/backlog.md. Асинхронно —
+// как и история статусов ниже — сама карточка уже отрисована синхронно
+// с плейсхолдером ("Партия: загрузка…"/"Партия: —").
+async function renderCardBatchLabel(element) {
+  const box = document.getElementById("card-batch-label");
+  if (!box || !element.batch_id) return;
+  try {
+    let batch = state.batchCache.get(element.batch_id);
+    if (!batch) {
+      batch = await api(`/batches/${element.batch_id}`);
+      state.batchCache.set(element.batch_id, batch);
+    }
+    // Пока грузили — карточка могла перерисоваться для другого элемента.
+    if (state.selectedId !== element.id) return;
+    const freshBox = document.getElementById("card-batch-label");
+    if (!freshBox) return;
+    freshBox.textContent = "Партия: ";
+    if (state.currentUser.role === "admin") {
+      const link = document.createElement("a");
+      link.href = "#";
+      link.className = "card-batch-link";
+      link.textContent = batch.label;
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        openBatchEdit(batch);
+      });
+      freshBox.appendChild(link);
+    } else {
+      freshBox.appendChild(document.createTextNode(batch.label));
+    }
+  } catch (e) {
+    const freshBox = document.getElementById("card-batch-label");
+    if (freshBox) freshBox.textContent = "Партия: ошибка загрузки";
+  }
+}
+
 // ---------- привязка к зонам (захватка/кран/стоянка) — только для элементов
 // нового стандарта имён слоёв, у старых zone_*_status всегда null ----------
 const ZONE_STATUS_LABELS_RU = { unmatched: "не определено", needs_review: "требует проверки", not_applicable: "неприменимо" };
@@ -2603,10 +2880,14 @@ async function showCard(element) {
   ` : "";
   card.innerHTML = `
     ${groupsHtml}
-    <div class="card-block"><h4>Контракт</h4><div>${contractLabelText(element)}</div></div>
+    <div class="card-block"><h4>Контракт</h4>
+      <div>${contractLabelText(element)}</div>
+      <div id="card-batch-label" class="hint-text">${element.batch_id ? "Партия: загрузка…" : "Партия: —"}</div>
+    </div>
     ${zonesBlockHtml}
     <h3 style="margin-bottom:4px;">История статусов</h3><div id="history-box">Загрузка…</div>
   `;
+  renderCardBatchLabel(element);
 
   try {
     const detail = await api(`/elements/${element.id}`);
@@ -2684,6 +2965,22 @@ function openCtxMenu(element, clientX, clientY) {
     ctxMenu.appendChild(item);
   }
 
+  // Партия — независимое действие (не привязано к смене статуса, в
+  // отличие от контракта), но доступно из ТОГО ЖЕ меню — единый
+  // список действий над элементом, см. Docs/backlog.md. Только если у
+  // элемента уже есть контракт (партия — его дочерняя сущность).
+  if (element.contract_id) {
+    const sep = document.createElement("div");
+    sep.className = "ctx-title";
+    sep.textContent = "Партия";
+    ctxMenu.appendChild(sep);
+    const batchItem = document.createElement("div");
+    batchItem.className = "ctx-item";
+    batchItem.textContent = "Выбрать партию…";
+    batchItem.addEventListener("click", () => { closeCtxMenu(); openBatchAssignDialog(element); });
+    ctxMenu.appendChild(batchItem);
+  }
+
   ctxMenu.style.left = Math.min(clientX, window.innerWidth - 240) + "px";
   ctxMenu.style.top = Math.min(clientY, window.innerHeight - 260) + "px";
   ctxMenu.style.display = "block";
@@ -2744,6 +3041,7 @@ async function doApplyStatus(element, status, explicitContractId) {
     Object.assign(element, updated);
     state.byId.set(element.id, element);
     styleShape(state.shapeById.get(element.id), element);
+    updateElementSubLabel(element); // статус мог войти/выйти из диапазона, где допстрока видна
     renderLegend();
     showCard(element);
     maybeWarnContract(updated);
@@ -2751,6 +3049,65 @@ async function doApplyStatus(element, status, explicitContractId) {
     alert("Не удалось изменить статус: " + e.message);
   }
 }
+
+// ---------- назначение партии одному элементу (независимо от статуса,
+// см. Docs/backlog.md, "Партия — учёт по маркам") ----------
+const batchAssignBackdrop = document.getElementById("batch-assign-backdrop");
+let pendingBatchAssign = null;
+
+function batchLineMatches(line, element) {
+  return line.element_type === element.element_type
+    && (line.subtype || null) === (element.subtype || null)
+    && (line.mark || null) === (element.mark || null);
+}
+
+async function openBatchAssignDialog(element) {
+  pendingBatchAssign = element;
+  document.getElementById("batch-assign-error").textContent = "";
+  const select = document.getElementById("ba-batch-select");
+  select.innerHTML = "";
+  try {
+    const batches = await api(`/batches?contract_id=${element.contract_id}`);
+    // Клиентский фильтр — только партии, где есть строка под марку этого
+    // элемента (сервер всё равно перепроверит при подтверждении — это
+    // только для UX, не граница безопасности).
+    const matching = batches.filter(b => b.lines.some(l => batchLineMatches(l, element)));
+    const options = ['<option value="">— без партии —</option>'].concat(
+      matching.map(b => `<option value="${b.id}" ${String(b.id) === String(element.batch_id) ? "selected" : ""}>${escapeHtml(b.label)}</option>`)
+    );
+    select.innerHTML = options.join("");
+    if (!matching.length) {
+      document.getElementById("batch-assign-error").textContent = "Нет партий с подходящей строкой для этой марки";
+    }
+  } catch (e) {
+    document.getElementById("batch-assign-error").textContent = e.message;
+  }
+  batchAssignBackdrop.classList.add("open");
+}
+document.getElementById("ba-cancel").addEventListener("click", () => {
+  pendingBatchAssign = null;
+  batchAssignBackdrop.classList.remove("open");
+});
+document.getElementById("ba-confirm").addEventListener("click", async () => {
+  if (!pendingBatchAssign) return;
+  const value = document.getElementById("ba-batch-select").value;
+  const batchId = value ? Number(value) : null;
+  const element = pendingBatchAssign;
+  try {
+    const updated = await api(`/elements/${element.id}/batch`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batch_id: batchId }),
+    });
+    Object.assign(element, updated);
+    state.byId.set(element.id, element);
+    pendingBatchAssign = null;
+    batchAssignBackdrop.classList.remove("open");
+    showCard(element);
+    updateElementSubLabel(element);
+    maybeWarnBatch(updated);
+  } catch (e) {
+    document.getElementById("batch-assign-error").textContent = e.message;
+  }
+});
 
 // ---------- массовая смена статуса выделенной рамкой группы (см. Docs/backlog.md) ----------
 function hexToRgba(hex, alpha) {
@@ -2946,6 +3303,7 @@ document.getElementById("bulk-status-apply").addEventListener("click", async () 
       if (existing) {
         Object.assign(existing, updated);
         styleShape(state.shapeById.get(updated.id), existing);
+        updateElementSubLabel(existing);
       }
     }
     renderLegend();
@@ -2956,6 +3314,131 @@ document.getElementById("bulk-status-apply").addEventListener("click", async () 
     document.getElementById("bulk-status-error").textContent = "Не удалось изменить статус: " + e.message;
   }
 });
+
+// ---------- массовое назначение партии (см. Docs/backlog.md, "Партия —
+// учёт по маркам") — отдельное действие от массовой смены статуса, тем
+// же приёмом (таблица выбранных элементов, select на строку) ----------
+const bulkBatchBackdrop = document.getElementById("bulk-batch-backdrop");
+let bulkBatchesByContract = new Map(); // contract_id -> [BatchOut] — снимок на момент открытия модалки
+
+async function openBulkBatchModal() {
+  if (state.multiSelectedIds.size === 0) return;
+  const contractIds = new Set(
+    Array.from(state.multiSelectedIds)
+      .map(id => state.byId.get(id))
+      .filter(e => e && e.contract_id)
+      .map(e => e.contract_id)
+  );
+  bulkBatchesByContract = new Map();
+  await Promise.all(Array.from(contractIds).map(async cid => {
+    try {
+      bulkBatchesByContract.set(cid, await api(`/batches?contract_id=${cid}`));
+    } catch (e) {
+      bulkBatchesByContract.set(cid, []);
+    }
+  }));
+  document.getElementById("bulk-batch-error").textContent = "";
+  renderBulkBatchTable();
+  bulkBatchBackdrop.classList.add("open");
+}
+
+function renderBulkBatchTable() {
+  const tbody = document.getElementById("bulk-batch-tbody");
+  tbody.innerHTML = "";
+  for (const id of Array.from(state.multiSelectedIds)) {
+    const element = state.byId.get(id);
+    if (!element) continue;
+    const tr = document.createElement("tr");
+    tr.dataset.elementId = element.id;
+
+    const idTd = document.createElement("td"); idTd.textContent = element.id;
+    const markTd = document.createElement("td"); markTd.textContent = element.mark || "—";
+    const typeTd = document.createElement("td"); typeTd.textContent = element.element_type;
+    const contractTd = document.createElement("td");
+    const contract = state.contracts.find(c => c.id === element.contract_id);
+    contractTd.textContent = contract ? `${contract.name} (${contract.supplier})` : "—";
+
+    const batchTd = document.createElement("td");
+    const select = document.createElement("select");
+    select.className = "bulk-row-batch";
+    if (!element.contract_id) {
+      select.disabled = true;
+      const opt = document.createElement("option");
+      opt.textContent = "нет контракта";
+      select.appendChild(opt);
+    } else {
+      const batches = bulkBatchesByContract.get(element.contract_id) || [];
+      const matching = batches.filter(b => b.lines.some(l => batchLineMatches(l, element)));
+      if (!matching.length) {
+        select.disabled = true;
+        const opt = document.createElement("option");
+        opt.textContent = "нет подходящих партий";
+        select.appendChild(opt);
+      } else {
+        const options = ['<option value="">— без партии —</option>'].concat(
+          matching.map(b => `<option value="${b.id}" ${String(b.id) === String(element.batch_id) ? "selected" : ""}>${escapeHtml(b.label)}</option>`)
+        );
+        select.innerHTML = options.join("");
+      }
+    }
+    batchTd.appendChild(select);
+
+    const removeTd = document.createElement("td");
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "bulk-row-remove";
+    removeBtn.title = "Убрать из выборки";
+    removeBtn.textContent = "✕";
+    removeBtn.addEventListener("click", () => {
+      state.multiSelectedIds.delete(element.id);
+      styleShape(state.shapeById.get(element.id), element);
+      tr.remove();
+      updateMultiSelectionPanel();
+      if (state.multiSelectedIds.size === 0) bulkBatchBackdrop.classList.remove("open");
+    });
+    removeTd.appendChild(removeBtn);
+
+    tr.append(idTd, markTd, typeTd, contractTd, batchTd, removeTd);
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById("bulk-batch-cancel").addEventListener("click", () => bulkBatchBackdrop.classList.remove("open"));
+
+document.getElementById("bulk-batch-apply").addEventListener("click", async () => {
+  const items = [];
+  let skipped = 0;
+  document.querySelectorAll("#bulk-batch-tbody tr").forEach(tr => {
+    const select = tr.querySelector(".bulk-row-batch");
+    if (select.disabled) { skipped++; return; }
+    items.push({ element_id: Number(tr.dataset.elementId), batch_id: select.value ? Number(select.value) : null });
+  });
+  if (!items.length) {
+    document.getElementById("bulk-batch-error").textContent = "Нет элементов с подходящей партией для назначения";
+    return;
+  }
+  try {
+    const result = await api("/elements/bulk-batch", {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }),
+    });
+    const warnings = [];
+    for (const updated of result.updated) {
+      const existing = state.byId.get(updated.id);
+      if (existing) {
+        Object.assign(existing, updated);
+        updateElementSubLabel(existing);
+      }
+      if (updated.batch_warning) warnings.push(updated.batch_warning);
+    }
+    bulkBatchBackdrop.classList.remove("open");
+    clearMultiSelection();
+    showToast(`Партия назначена у ${result.updated.length} элементов${skipped ? `, пропущено ${skipped} (нет контракта/подходящей партии)` : ""}`, "success");
+    warnings.forEach(w => showToast(`Превышение по партии «${w.batch_label}»: запланировано ${w.quantity}, назначено ${w.fact}.`));
+  } catch (e) {
+    document.getElementById("bulk-batch-error").textContent = "Не удалось назначить партию: " + e.message;
+  }
+});
+document.getElementById("multi-select-batch-btn").addEventListener("click", openBulkBatchModal);
 
 const svgRoot = document.getElementById("svg-root");
 svgRoot.addEventListener("click", (e) => {
@@ -3110,6 +3593,10 @@ function updateMultiSelectionPanel() {
   if (n === 0) { panel.style.display = "none"; return; }
   panel.style.display = "flex";
   document.getElementById("multi-select-count").textContent = `Выделено: ${n}`;
+  const hasContract = Array.from(state.multiSelectedIds).some(id => state.byId.get(id)?.contract_id);
+  const batchBtn = document.getElementById("multi-select-batch-btn");
+  batchBtn.disabled = !hasContract;
+  batchBtn.title = hasContract ? "" : "Ни у одного выбранного элемента нет контракта";
 }
 
 document.getElementById("multi-select-clear").addEventListener("click", clearMultiSelection);
@@ -3527,6 +4014,7 @@ async function renderContractsList() {
       <div class="contract-block-header">
         <b>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</b>
         <button class="btn btn-sm btn-secondary" data-edit-contract="${c.id}">Изменить</button>
+        <button class="btn btn-sm btn-secondary" data-batches-contract="${c.id}">Партии</button>
       </div>
       <table class="contract-lines-table">
         <tr><th>Тип элемента</th><th>План</th><th>Факт</th><th>Повреждено</th><th>Остаток</th></tr>
@@ -3535,6 +4023,7 @@ async function renderContractsList() {
     `;
     box.appendChild(block);
     block.querySelector("[data-edit-contract]").addEventListener("click", () => openContractEdit(c));
+    block.querySelector("[data-batches-contract]").addEventListener("click", () => openBatchesModal(c));
   }
   return contracts;
 }
@@ -3637,6 +4126,8 @@ function openContractEdit(contract) {
   document.getElementById("contract-edit-title").textContent = contract ? "Изменить контракт" : "Новый контракт";
   document.getElementById("ce-name").value = contract ? contract.name : "";
   document.getElementById("ce-supplier").value = contract ? contract.supplier : "";
+  document.getElementById("ce-contract-date").value = contract && contract.contract_date ? contract.contract_date.slice(0, 10) : "";
+  document.getElementById("ce-code").value = contract && contract.code ? contract.code : "";
   // Известные типы элементов после загрузки файла — подсказка в поле
   // "тип элемента" строки контракта (datalist, не строгий список —
   // ввести что-то нестандартное по-прежнему можно), см. Docs/backlog.md.
@@ -3675,6 +4166,8 @@ document.getElementById("contract-edit-save").addEventListener("click", async ()
   const body = {
     name: document.getElementById("ce-name").value.trim(),
     supplier: document.getElementById("ce-supplier").value.trim(),
+    contract_date: document.getElementById("ce-contract-date").value || null,
+    code: document.getElementById("ce-code").value.trim() || null,
     lines,
     incidents,
   };
@@ -3690,6 +4183,205 @@ document.getElementById("contract-edit-save").addEventListener("click", async ()
     await loadPlan(); // обновить список контрактов в state для карточки элемента
   } catch (e) {
     document.getElementById("contract-edit-error").textContent = e.message;
+  }
+});
+
+// ---------- Партии контракта (см. Docs/backlog.md, "Партия — учёт по маркам") ----------
+const batchesBackdrop = document.getElementById("batches-backdrop");
+const batchEditBackdrop = document.getElementById("batch-edit-backdrop");
+let batchesContractId = null; // контракт, чьи партии сейчас показаны в #batches-backdrop
+let editingBatchId = null;
+let editingBatchContractId = null; // контракт редактируемой партии (нужен для POST и для решения, перерисовывать ли список)
+
+// Тип -> подтипы -> марки, построено сканированием state.elements — тот же
+// приём, что renderPlacementFilters использует для subtypesByType/
+// marksBySubtype (сайдбар "Фильтры"), не расшаренный код, тот же принцип.
+// Нужен для каскадного выбора тип/подтип/марка в строке партии — 3
+// <select>, не текст+datalist (как у строк контракта): здесь нужно ТОЧНОЕ
+// совпадение для проверки при назначении, опечатка в свободном тексте
+// сломала бы контроль.
+function buildTypeSubtypeMarkMaps() {
+  const subtypesByType = new Map(); // type -> Set(subtype-or-"")
+  const marksBySubtype = new Map(); // `${type} ${subtype}` -> Set(mark-or-"")
+  for (const e of state.elements) {
+    const type = e.element_type;
+    const subtype = e.subtype || "";
+    const mark = e.mark || "";
+    if (!subtypesByType.has(type)) subtypesByType.set(type, new Set());
+    subtypesByType.get(type).add(subtype);
+    const key = `${type} ${subtype}`;
+    if (!marksBySubtype.has(key)) marksBySubtype.set(key, new Set());
+    marksBySubtype.get(key).add(mark);
+  }
+  return { subtypesByType, marksBySubtype };
+}
+
+async function openBatchesModal(contract) {
+  batchesContractId = contract.id;
+  document.getElementById("batches-title").textContent = `Партии контракта «${contract.name}»`;
+  await renderBatchesList();
+  batchesBackdrop.classList.add("open");
+}
+
+async function renderBatchesList() {
+  const box = document.getElementById("batches-list");
+  box.innerHTML = "";
+  const batches = await api(`/batches?contract_id=${batchesContractId}`);
+  if (!batches.length) { box.innerHTML = '<div class="hint-text">нет партий</div>'; return; }
+  for (const b of batches) {
+    const block = document.createElement("div");
+    block.className = "contract-block";
+    const linesHtml = b.lines.length
+      ? b.lines.map(l => `
+          <tr class="${l.exceeded ? "exceeded" : ""}">
+            <td>${escapeHtml(l.element_type)}</td><td>${escapeHtml(l.subtype || "—")}</td><td>${escapeHtml(l.mark || "—")}</td>
+            <td>${l.quantity}</td><td>${l.fact}</td><td>${l.remaining}</td>
+          </tr>
+        `).join("")
+      : '<tr><td colspan="6" class="hint-text">нет строк</td></tr>';
+    block.innerHTML = `
+      <div class="contract-block-header">
+        <b>${escapeHtml(b.label)}</b>
+        <button class="btn btn-sm btn-secondary" data-edit-batch="${b.id}">Изменить</button>
+        <button class="btn btn-sm btn-secondary" data-delete-batch="${b.id}">Удалить</button>
+      </div>
+      <table class="contract-lines-table">
+        <tr><th>Тип</th><th>Подтип</th><th>Марка</th><th>План</th><th>Факт</th><th>Остаток</th></tr>
+        ${linesHtml}
+      </table>
+    `;
+    box.appendChild(block);
+    block.querySelector("[data-edit-batch]").addEventListener("click", () => openBatchEdit(b));
+    block.querySelector("[data-delete-batch]").addEventListener("click", async () => {
+      if (!confirm(`Удалить партию «${b.label}»?`)) return;
+      await api(`/batches/${b.id}`, { method: "DELETE" });
+      await renderBatchesList();
+      await loadPlan(); // элементы, привязанные к ней, потеряли batch_id
+    });
+  }
+}
+document.getElementById("batches-add").addEventListener("click", () => openBatchEdit(null, batchesContractId));
+document.getElementById("batches-close").addEventListener("click", () => batchesBackdrop.classList.remove("open"));
+
+// contractId нужен только при СОЗДАНИИ новой партии (batch=null) — у уже
+// существующей партии контракт уже известен (batch.contract_id), не
+// меняется. Вызывается и из списка партий контракта, и из карточки
+// элемента (см. showCard) — единая точка редактирования партии.
+function openBatchEdit(batch, contractId) {
+  editingBatchId = batch ? batch.id : null;
+  editingBatchContractId = batch ? batch.contract_id : contractId;
+  document.getElementById("batch-edit-title").textContent = batch ? "Изменить партию" : "Новая партия";
+  document.getElementById("be-date").value = batch && batch.planned_date ? batch.planned_date.slice(0, 10) : "";
+  document.getElementById("be-lines").innerHTML = "";
+  const maps = buildTypeSubtypeMarkMaps();
+  if (batch && batch.lines.length) {
+    for (const l of batch.lines) addBatchLineRow(maps, l.element_type, l.subtype, l.mark, l.quantity);
+  } else {
+    addBatchLineRow(maps);
+  }
+  document.getElementById("batch-edit-error").textContent = "";
+  batchEditBackdrop.classList.add("open");
+}
+document.getElementById("batch-edit-cancel").addEventListener("click", () => batchEditBackdrop.classList.remove("open"));
+document.getElementById("be-add-line").addEventListener("click", () => addBatchLineRow(buildTypeSubtypeMarkMaps()));
+
+function fillTypeSelect(select, types, selected) {
+  select.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = ""; opt0.textContent = "— выберите тип —"; opt0.disabled = true;
+  if (!selected) opt0.selected = true;
+  select.appendChild(opt0);
+  for (const t of types) {
+    const opt = document.createElement("option");
+    opt.value = t; opt.textContent = t;
+    if (t === selected) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+// "" — легитимное значение (элемент без подтипа/марки), а не "ничего не
+// выбрано" — плейсхолдер здесь не нужен, в отличие от типа выше.
+function fillSubMarkSelect(select, values, selected, emptyLabel) {
+  select.innerHTML = "";
+  const sorted = Array.from(values).sort();
+  if (!sorted.length) sorted.push("");
+  for (const v of sorted) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v || emptyLabel;
+    if (v === (selected || "")) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+function addBatchLineRow(maps, elementType, subtype, mark, quantity) {
+  const container = document.getElementById("be-lines");
+  const row = document.createElement("div");
+  row.className = "ce-line-row be-line-row";
+
+  const typeSelect = document.createElement("select");
+  typeSelect.className = "be-line-type";
+  const subtypeSelect = document.createElement("select");
+  subtypeSelect.className = "be-line-subtype";
+  const markSelect = document.createElement("select");
+  markSelect.className = "be-line-mark";
+  const qtyInput = document.createElement("input");
+  qtyInput.type = "number"; qtyInput.min = "0"; qtyInput.className = "be-line-qty"; qtyInput.placeholder = "кол-во";
+  qtyInput.value = quantity != null ? quantity : "";
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button"; removeBtn.className = "btn btn-sm btn-secondary be-line-remove"; removeBtn.textContent = "✕";
+  removeBtn.addEventListener("click", () => row.remove());
+
+  function refreshSubtypes(selectedSubtype, selectedMark) {
+    const type = typeSelect.value;
+    const subtypes = type && maps.subtypesByType.has(type) ? maps.subtypesByType.get(type) : new Set();
+    fillSubMarkSelect(subtypeSelect, subtypes, selectedSubtype, "— без подтипа —");
+    refreshMarks(selectedMark);
+  }
+  function refreshMarks(selectedMark) {
+    const type = typeSelect.value;
+    const key = `${type} ${subtypeSelect.value}`;
+    const marks = type && maps.marksBySubtype.has(key) ? maps.marksBySubtype.get(key) : new Set();
+    fillSubMarkSelect(markSelect, marks, selectedMark, "— без марки —");
+  }
+
+  const types = Array.from(maps.subtypesByType.keys()).sort();
+  fillTypeSelect(typeSelect, types, elementType);
+  typeSelect.addEventListener("change", () => refreshSubtypes());
+  subtypeSelect.addEventListener("change", () => refreshMarks());
+  refreshSubtypes(subtype || "", mark || "");
+
+  row.append(typeSelect, subtypeSelect, markSelect, qtyInput, removeBtn);
+  container.appendChild(row);
+}
+
+document.getElementById("batch-edit-save").addEventListener("click", async () => {
+  const lines = Array.from(document.querySelectorAll("#be-lines .be-line-row")).map(row => ({
+    element_type: row.querySelector(".be-line-type").value,
+    subtype: row.querySelector(".be-line-subtype").value || null,
+    mark: row.querySelector(".be-line-mark").value || null,
+    quantity: Number(row.querySelector(".be-line-qty").value || 0),
+  })).filter(l => l.element_type);
+  const plannedDate = document.getElementById("be-date").value;
+  if (!plannedDate) {
+    document.getElementById("batch-edit-error").textContent = "Укажите плановую дату поставки";
+    return;
+  }
+  const body = { planned_date: plannedDate, lines };
+  try {
+    if (editingBatchId) {
+      await api(`/batches/${editingBatchId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } else {
+      await api("/batches", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, contract_id: editingBatchContractId }),
+      });
+    }
+    batchEditBackdrop.classList.remove("open");
+    if (batchesContractId === editingBatchContractId) await renderBatchesList();
+    await loadPlan(); // допстрока подписи на схеме и карточка элемента подхватывают изменение сразу
+  } catch (e) {
+    document.getElementById("batch-edit-error").textContent = e.message;
   }
 });
 
@@ -3981,6 +4673,15 @@ function elementExtrusionHeight(element, levels) {
 
 // ---------- построение сцены ----------
 
+// Затемнённая версия hex-цвета — для рёбер силуэта элемента в 3D (см.
+// ниже) и вообще везде, где нужен "тот же цвет, но темнее" вместо
+// фиксированного чёрного, чтобы граница читалась при любом цвете статуса,
+// включая уже тёмные. THREE.Color.multiplyScalar(factor<1) равномерно
+// затемняет все каналы, не уходя в чистый чёрный при разумном factor.
+function darkerColor(hex, factor = 0.55) {
+  return new THREE.Color(hex).multiplyScalar(factor);
+}
+
 function build3DMeshForElement(element, levels) {
   if (!element.outline || element.outline.length < 3) return null; // нечего экструдировать
   const height = elementExtrusionHeight(element, levels);
@@ -4008,6 +4709,20 @@ function build3DMeshForElement(element, levels) {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(0, element.elevation_mm || 0, 0);
   mesh.userData.elementId = element.id;
+
+  // Рёбра силуэта — иначе однотипные примыкающие элементы одного статуса
+  // (одинаковая заливка) визуально сливаются в одно пятно без видимой
+  // границы между ними (см. Docs/backlog.md, по скриншоту из test_data/).
+  // Цвет — затемнённая версия ТОГО ЖЕ статусного цвета (не фиксированный
+  // чёрный), дочерний объект меша — трансформация/позиция наследуются
+  // автоматически, отдельно двигать не нужно.
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry),
+    new THREE.LineBasicMaterial({ color: darkerColor(colorFor(element.current_status)) })
+  );
+  mesh.add(edges);
+  mesh.userData.edges = edges;
+
   return mesh;
 }
 
@@ -4024,14 +4739,35 @@ function build3DLabelSprite(element, topY) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const fontPx = 48; // размер текстуры холста — не экранный размер, см. sprite.scale ниже
+  const subFontPx = fontPx * SUBLABEL_FONT_SCALE;
+  const subText = elementSubLabelText(element);
+  const paddingX = 8, paddingY = 8, lineGap = 4;
+
   ctx.font = `${fontPx}px sans-serif`;
-  const textWidth = ctx.measureText(element.mark).width;
-  canvas.width = Math.ceil(textWidth) + 16;
-  canvas.height = fontPx + 16;
-  ctx.font = `${fontPx}px sans-serif`; // размер холста сбрасывает контекст — выставить заново
-  ctx.fillStyle = "#222";
+  const markWidth = ctx.measureText(element.mark).width;
+  let subWidth = 0;
+  if (subText) {
+    ctx.font = `${subFontPx}px sans-serif`;
+    subWidth = ctx.measureText(subText).width;
+  }
+  canvas.width = Math.ceil(Math.max(markWidth, subWidth)) + paddingX * 2;
+  canvas.height = Math.ceil(fontPx + (subText ? lineGap + subFontPx : 0)) + paddingY * 2;
+
+  // Полупрозрачная белая подложка — контраст на любом цвете элемента под
+  // спрайтом (буквально то, что запрошено, см. Docs/backlog.md; в canvas,
+  // в отличие от 2D SVG, это простая безопасная операция).
+  ctx.fillStyle = "rgba(255,255,255,0.72)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = currentLabelColor();
   ctx.textBaseline = "middle";
-  ctx.fillText(element.mark, 8, canvas.height / 2);
+  ctx.font = `${fontPx}px sans-serif`;
+  ctx.fillText(element.mark, paddingX, paddingY + fontPx / 2);
+  if (subText) {
+    ctx.font = `${subFontPx}px sans-serif`;
+    ctx.fillStyle = "#555";
+    ctx.fillText(subText, paddingX, paddingY + fontPx + lineGap + subFontPx / 2);
+  }
 
   const texture = new THREE.CanvasTexture(canvas);
   const material = new THREE.SpriteMaterial({ map: texture, depthTest: true, sizeAttenuation: true });
@@ -4039,9 +4775,15 @@ function build3DLabelSprite(element, topY) {
   // Масштаб в мировых единицах (мм) — опирается на уже посчитанный
   // baseMarkerRadius (тот же параметр, что задаёт размер 2D-маркеров/
   // подписей, см. app/main.py:estimate_marker_radius) — единая логика
-  // масштаба между 2D и 3D, ничего заново не подбирать.
-  const worldHeight = state.baseMarkerRadius * 3;
-  sprite.scale.set(worldHeight * (canvas.width / canvas.height), worldHeight, 1);
+  // масштаба между 2D и 3D, ничего заново не подбирать. worldPerPx —
+  // отношение мировых единиц к пикселю холста, зафиксировано по
+  // ОДНОСТРОЧНОЙ высоте (как было раньше), чтобы марка визуально не
+  // меняла размер при появлении/исчезновении второй строки — просто
+  // спрайт становится выше/ниже.
+  const referenceCanvasHeight = fontPx + paddingY * 2;
+  const worldPerPx = (state.baseMarkerRadius * 3) / referenceCanvasHeight;
+  const worldHeight = canvas.height * worldPerPx;
+  sprite.scale.set(canvas.width * worldPerPx, worldHeight, 1);
   // world.X=dxf.x, world.Y=высота, world.Z=-dxf.y (см. build3DMeshForElement
   // выше) — подпись чуть выше верхней грани элемента.
   sprite.position.set(element.x, topY + worldHeight * 0.6, -element.y);
@@ -4127,6 +4869,31 @@ function apply3DLabelVisibility() {
     if (!element) continue;
     sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
   }
+}
+
+// Точечная пересборка ОДНОГО 3D-спрайта после смены статуса/партии —
+// холст-текстура запекается один раз при создании, точечно её не
+// перерисовать, проще пересоздать сам спрайт (тот же приём, что для 2D
+// делает updateElementSubLabel, только здесь весь спрайт, не только
+// вторая строка). Ничего не делает, если 3D ни разу не открывали в этом
+// сеансе (v3.scene ещё null — сцена просто не построена).
+function rebuild3DLabelSprite(element) {
+  const v3 = state.view3d;
+  if (!v3.scene) return;
+  const old = v3.labelSpriteById.get(element.id);
+  if (old) {
+    v3.scene.remove(old);
+    old.material.map.dispose();
+    old.material.dispose();
+    v3.labelSpriteById.delete(element.id);
+  }
+  const levels = computeColumnLevels();
+  const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels);
+  const sprite = build3DLabelSprite(element, topY);
+  if (!sprite) return;
+  sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+  v3.scene.add(sprite);
+  v3.labelSpriteById.set(element.id, sprite);
 }
 
 function build3DScene() {

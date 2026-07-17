@@ -150,6 +150,42 @@ CREATE TABLE IF NOT EXISTS default_contracts (
     contract_id INTEGER REFERENCES contracts (id) ON DELETE SET NULL
 );
 
+-- Партия — конкретная поставка в рамках контракта: плановая дата +
+-- разбивка по маркам (см. Docs/backlog.md, "Партия — учёт по маркам").
+-- В отличие от contract_lines (план по ТИПУ на весь контракт),
+-- batch_lines детализируют план до марки и относятся к одной партии.
+-- CASCADE (не SET NULL, как у elements.contract_id/batch_id) — партия
+-- без контракта бессмысленна, метку не собрать.
+CREATE TABLE IF NOT EXISTS batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE CASCADE,
+    planned_date TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_batches_contract ON batches (contract_id);
+
+-- Строка партии: тип+подтип+марка -> плановое количество. subtype/mark
+-- допускают NULL (элемент может быть без подтипа/марки) — сравнение с
+-- элементом при назначении обязано быть NULL-safe (SQL IS, не =).
+CREATE TABLE IF NOT EXISTS batch_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES batches (id) ON DELETE CASCADE,
+    element_type TEXT NOT NULL,
+    subtype TEXT,
+    mark TEXT,
+    quantity INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_lines_batch ON batch_lines (batch_id);
+
+-- NULL-safe уникальность: subtype/mark часто NULL, а обычный UNIQUE(...)
+-- в SQLite не считает NULL=NULL — без COALESCE две "одинаковые" строки
+-- (тип, без подтипа, без марки) беспрепятственно продублировались бы.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_batch_lines_unique
+    ON batch_lines (batch_id, element_type, COALESCE(subtype, ''), COALESCE(mark, ''));
+
 -- Форма маркера на схеме по комбинации (слой, тип элемента) — см.
 -- Docs/backlog.md. По умолчанию всё рисуется "как в оригинале" (реальный
 -- контур из DXF, отсутствие строки в этой таблице = outline), таблица

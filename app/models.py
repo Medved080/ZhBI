@@ -60,6 +60,12 @@ class ElementOut(BaseModel):
     offset_y_mm: Optional[float]
     current_status: Status
     contract_id: Optional[int] = None
+    batch_id: Optional[int] = None
+    # Денормализованные скаляры для допстроки подписи на схеме (см.
+    # Docs/backlog.md) — вычисляются на сервере (JOIN/lookup), не хранятся
+    # как отдельные колонки elements.
+    contract_code: Optional[str] = None
+    batch_planned_date: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -117,6 +123,39 @@ class BulkStatusUpdateIn(BaseModel):
 
 class BulkStatusUpdateResult(BaseModel):
     updated: list[StatusUpdateResult]
+
+
+class BatchWarning(BaseModel):
+    """Неблокирующее предупреждение о превышении по СТРОКЕ партии (см.
+    ContractWarning — та же форма, только в разрезе марки, не типа)."""
+    batch_id: int
+    batch_label: str
+    element_type: str
+    subtype: Optional[str] = None
+    mark: Optional[str] = None
+    quantity: int
+    fact: int
+
+
+class ElementBatchIn(BaseModel):
+    batch_id: Optional[int] = None  # null — явно снять партию
+
+
+class ElementBatchUpdateResult(ElementDetailOut):
+    batch_warning: Optional[BatchWarning] = None
+
+
+class BulkBatchItem(BaseModel):
+    element_id: int
+    batch_id: Optional[int] = None  # всегда явно, как BulkStatusItem.contract_id
+
+
+class BulkBatchUpdateIn(BaseModel):
+    items: list[BulkBatchItem]
+
+
+class BulkBatchUpdateResult(BaseModel):
+    updated: list[ElementBatchUpdateResult]
 
 
 class StatusSummaryEntry(BaseModel):

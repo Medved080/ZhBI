@@ -37,6 +37,10 @@ class SetPasswordIn(BaseModel):
     password: str = ""  # пустая строка — сбросить в "пароль не задан"
 
 
+class SetLabelColorIn(BaseModel):
+    label_color: Optional[str] = None  # null — сброс на дефолт
+
+
 VALID_ROLES = {"admin", "user", "view"}
 
 
@@ -132,6 +136,31 @@ def set_password(
         conn.execute(
             "UPDATE users SET password_hash = ?, password_salt = ?, updated_at = datetime('now') WHERE id = ?",
             (password_hash, password_salt, user_id),
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return user_out(updated)
+    finally:
+        conn.close()
+
+
+@router.patch("/{user_id}/label-color", response_model=UserOut)
+def set_label_color(
+    user_id: int, body: SetLabelColorIn, current: sqlite3.Row = Depends(get_current_user)
+):
+    """Персональная настройка (см. Docs/backlog.md) — тот же guard, что у
+    set_password: менять можно только себе, если ты не admin."""
+    if current["role"] != "admin" and current["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Можно менять только свой цвет подписей")
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        conn.execute(
+            "UPDATE users SET label_color = ?, updated_at = datetime('now') WHERE id = ?",
+            (body.label_color, user_id),
         )
         conn.commit()
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()

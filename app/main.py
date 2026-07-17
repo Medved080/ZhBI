@@ -11,6 +11,8 @@ from shapely.strtree import STRtree
 
 from app.auth import format_display_name, get_current_user, require_admin, require_editor
 from app.auth import router as auth_router
+from app.batches import clear_stale_batch_assignment, enrich_element_row, batch_line_warning, validate_and_resolve_batch_assignment
+from app.batches import router as batches_router
 from app.contracts import apply_status_change, contract_line_warning, recompute_element_contract_cache
 from app.contracts import router as contracts_router
 from app.db import get_connection, init_db
@@ -23,8 +25,12 @@ from app.models import (
     STATUS_ORDER,
     ZHBI_ELEMENT_TYPES,
     AllowedSubtypeIn,
+    BulkBatchUpdateIn,
+    BulkBatchUpdateResult,
     BulkStatusUpdateIn,
     BulkStatusUpdateResult,
+    ElementBatchIn,
+    ElementBatchUpdateResult,
     ElementShapeIn,
     Status,
     DxfImportResult,
@@ -44,6 +50,7 @@ app = FastAPI(title="ЖБИ")
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(contracts_router)
+app.include_router(batches_router)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -186,6 +193,7 @@ def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
         ).fetchall()
         data = dict(row)
         data["history"] = [dict(h) for h in history_rows]
+        enrich_element_row(conn, data)
         return data
     finally:
         conn.close()
@@ -248,6 +256,88 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(req
         conn.close()
 
 
+@app.patch("/elements/{element_id}/batch", response_model=ElementBatchUpdateResult)
+def update_element_batch(element_id: int, body: ElementBatchIn, user: sqlite3.Row = Depends(require_editor)):
+    """Назначение партии элементу — независимое действие, НЕ привязанное
+    к смене статуса (в отличие от контракта), см. Docs/backlog.md."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Элемент не найден")
+        try:
+            validate_and_resolve_batch_assignment(conn, row, body.batch_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        conn.execute("UPDATE elements SET batch_id = ?, updated_at = datetime('now') WHERE id = ?", (body.batch_id, element_id))
+        warning = None
+        if body.batch_id is not None:
+            warning = batch_line_warning(conn, body.batch_id, row["element_type"], row["subtype"], row["mark"])
+        conn.commit()
+
+        updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
+        history_rows = conn.execute(
+            "SELECT * FROM status_history WHERE element_id = ? ORDER BY changed_at", (element_id,)
+        ).fetchall()
+        data = dict(updated_row)
+        data["history"] = [dict(h) for h in history_rows]
+        data["batch_warning"] = warning
+        enrich_element_row(conn, data)
+        return data
+    finally:
+        conn.close()
+
+
+@app.patch("/elements/bulk-batch", response_model=BulkBatchUpdateResult)
+def update_element_batch_bulk(body: BulkBatchUpdateIn, user: sqlite3.Row = Depends(require_editor)):
+    """Массовое назначение партии — атомарно: сначала валидируются ВСЕ
+    элементы пачки, при наличии хоть одной ошибки ничего не применяется
+    (единый 400 со списком проблем), затем всё применяется одним коммитом."""
+    if not body.items:
+        raise HTTPException(status_code=400, detail="Пустой список элементов")
+    conn = get_connection()
+    try:
+        rows_by_id = {}
+        errors = []
+        for item in body.items:
+            row = conn.execute("SELECT * FROM elements WHERE id = ?", (item.element_id,)).fetchone()
+            if row is None:
+                errors.append(f"Элемент {item.element_id} не найден")
+                continue
+            rows_by_id[item.element_id] = row
+            try:
+                validate_and_resolve_batch_assignment(conn, row, item.batch_id)
+            except ValueError as e:
+                errors.append(str(e))
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+
+        updated = []
+        for item in body.items:
+            row = rows_by_id[item.element_id]
+            conn.execute(
+                "UPDATE elements SET batch_id = ?, updated_at = datetime('now') WHERE id = ?",
+                (item.batch_id, item.element_id),
+            )
+            warning = None
+            if item.batch_id is not None:
+                warning = batch_line_warning(conn, item.batch_id, row["element_type"], row["subtype"], row["mark"])
+            updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (item.element_id,)).fetchone()
+            history_rows = conn.execute(
+                "SELECT * FROM status_history WHERE element_id = ? ORDER BY changed_at", (item.element_id,)
+            ).fetchall()
+            data = dict(updated_row)
+            data["history"] = [dict(h) for h in history_rows]
+            data["batch_warning"] = warning
+            enrich_element_row(conn, data)
+            updated.append(data)
+        conn.commit()
+        return {"updated": updated}
+    finally:
+        conn.close()
+
+
 @app.delete("/elements/{element_id}/history/{history_id}", response_model=StatusUpdateResult)
 def delete_history_entry(
     element_id: int, history_id: int, user: sqlite3.Row = Depends(require_editor)
@@ -284,6 +374,7 @@ def delete_history_entry(
             (latest["status"], element_id),
         )
         element_contract_id = recompute_element_contract_cache(conn, element_id)
+        clear_stale_batch_assignment(conn, element_id, element_contract_id)
         contract_warning = contract_line_warning(conn, element_contract_id, row["element_type"])
         conn.commit()
 
@@ -295,6 +386,7 @@ def delete_history_entry(
         data = dict(updated_row)
         data["history"] = [dict(h) for h in history_rows]
         data["contract_warning"] = contract_warning
+        enrich_element_row(conn, data)
         return data
     finally:
         conn.close()
@@ -631,6 +723,22 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 else:
                     z["color"] = None
             zones.extend(file_zones)
+
+        # Допстрока подписи марки на схеме (2D/3D, см. Docs/backlog.md,
+        # "Партия — учёт по маркам") показывается для КАЖДОГО видимого
+        # элемента с партией — отдельный запрос на партию/контракт под
+        # каждый элемент был бы неприемлем при сотнях элементов, поэтому
+        # обогащаем весь список одной парой лёгких выборок (id -> скаляр),
+        # а не полными объектами партий/контрактов.
+        contract_code_by_id = {
+            r["id"]: r["code"] for r in conn.execute("SELECT id, code FROM contracts").fetchall()
+        }
+        batch_date_by_id = {
+            r["id"]: r["planned_date"] for r in conn.execute("SELECT id, planned_date FROM batches").fetchall()
+        }
+        for el in elements:
+            el["contract_code"] = contract_code_by_id.get(el.get("contract_id"))
+            el["batch_planned_date"] = batch_date_by_id.get(el.get("batch_id"))
 
         numeric_axes = {r["label"]: r["coord"] for r in axis_rows_all if r["kind"] == "numeric"}
         letter_axes = {r["label"]: r["coord"] for r in axis_rows_all if r["kind"] == "letter"}

@@ -43,6 +43,19 @@ _COLUMN_MIGRATIONS = [
     # scripts/zone_parser._link_stances_to_cranes, Docs/backlog.md).
     ("zones", "parent_zone_id", "INTEGER REFERENCES zones(id) ON DELETE SET NULL"),
     ("zones", "parent_match_status", "TEXT"),
+    # Партия (см. Docs/backlog.md, "Партия — учёт по маркам") — дата
+    # подписания контракта и короткий код контрагента (для компактной
+    # допстроки подписи на схеме), у старых контрактов остаются NULL.
+    ("contracts", "contract_date", "TEXT"),
+    ("contracts", "code", "TEXT"),
+    # Живое поле, БЕЗ версионирования по status_history (назначение партии
+    # не привязано к смене статуса, см. план) — таблица batches уже
+    # существует к этому моменту (executescript схемы отрабатывает раньше
+    # миграций, см. init_db ниже), так что FK можно объявить сразу.
+    ("elements", "batch_id", "INTEGER REFERENCES batches(id) ON DELETE SET NULL"),
+    # Персональный цвет подписей марок (2D/3D) — NULL = использовать
+    # дефолт (см. DEFAULT_LABEL_COLOR на фронтенде).
+    ("users", "label_color", "TEXT"),
 ]
 
 
