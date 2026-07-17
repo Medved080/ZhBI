@@ -187,7 +187,8 @@
   .link-btn:hover { text-decoration: underline; }
   .filter-group .toggle { margin-top: 4px; }
   .filter-group .toggle.filter-parent { font-weight: 600; margin-top: 0; flex: 1; }
-  .filter-group .toggle.filter-child { margin-left: 20px; font-weight: 400; }
+  .filter-group .toggle.filter-child { margin-left: 20px; font-weight: 400; flex: 1; }
+  .filter-group .toggle.filter-grandchild { margin-left: 40px; font-weight: 400; }
   .filter-group .toggle.filter-disabled { opacity: .4; }
   .filter-group .toggle.filter-disabled input[type="checkbox"] { cursor: not-allowed; }
   .filter-parent-row { display: flex; align-items: center; margin-top: 8px; }
@@ -819,14 +820,16 @@ let state = {
   // renderPlacementFilters/applyPlacementFilters, Docs/backlog.md.
   placementFilters: {
     zakhvatka: new Set(), crane: new Set(), stance: new Set(), elevation: new Set(),
-    elementType: new Set(), subtype: new Set(), status: new Set(),
+    elementType: new Set(), subtype: new Set(), mark: new Set(), status: new Set(),
     supplier: new Set(), contract: new Set(),
   },
   // Какие родители иерархических групп фильтра сейчас развёрнуты — чисто
   // UI-состояние навигации, но хранится в state (не в DOM), иначе
   // разворот сбрасывался бы при каждой полной перерисовке фильтров
   // (onPlacementFilterChange пересобирает DOM заново на любой клик).
-  placementGroupsExpanded: { crane: new Set(), elementType: new Set(), supplier: new Set() },
+  // subtype — состояние разворота 3-го уровня (Марка) под каждым подтипом
+  // в группе "Тип элемента / Подтип / Марка", ключ — значение подтипа.
+  placementGroupsExpanded: { crane: new Set(), elementType: new Set(), subtype: new Set(), supplier: new Set() },
   baseMarkerRadius: 1,
   view: null,
   initialView: null, // вид "вся схема целиком" — для сброса зума (п.12) и индикатора 100%
@@ -842,9 +845,20 @@ let state = {
     raycaster: null, mouse: null,
     meshById: new Map(),
     zoneMeshById: new Map(), // zone.id -> THREE.Mesh (захватка/кран/стоянка)
+    labelSpriteById: new Map(), // element.id -> THREE.Sprite (постоянная подпись марки)
     animationFrameId: null,
   },
 };
+
+// Экранирование для мест, где текст из БД/DXF/пользовательского ввода
+// (не хардкод) подставляется в innerHTML шаблонным литералом — иначе
+// сохранённый XSS (см. Docs/backlog.md, "Исправления по безопасности").
+function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]));
+}
 
 function el(tag, attrs = {}, ns = SVG_NS) {
   const e = document.createElementNS(ns, tag);
@@ -1059,7 +1073,7 @@ async function renderLayerCheckboxes(sourceFile, container) {
   const selectedSet = state.selection.get(sourceFile); // null = все
   container.innerHTML = layers.map(l => {
     const checked = selectedSet === null || selectedSet === undefined || selectedSet.has(l.layer);
-    return `<label class="checkbox"><input type="checkbox" data-layer="${l.layer}" ${checked ? "checked" : ""}/> ${l.layer} (${l.count})</label>`;
+    return `<label class="checkbox"><input type="checkbox" data-layer="${escapeHtml(l.layer)}" ${checked ? "checked" : ""}/> ${escapeHtml(l.layer)} (${l.count})</label>`;
   }).join("");
   container.querySelectorAll('input[type=checkbox]').forEach(cb => {
     cb.addEventListener("change", async () => {
@@ -1081,8 +1095,8 @@ async function renderFileSelectMenu() {
     row.className = "file-select-row";
     row.innerHTML = `
       <label class="checkbox">
-        <input type="checkbox" data-file="${f.source_file}" ${included ? "checked" : ""}/>
-        ${f.source_file} (${f.count})
+        <input type="checkbox" data-file="${escapeHtml(f.source_file)}" ${included ? "checked" : ""}/>
+        ${escapeHtml(f.source_file)} (${f.count})
       </label>
       <div class="layer-list" style="display:${included ? "block" : "none"};"></div>
     `;
@@ -1226,7 +1240,7 @@ function renderZoneToggles() {
     const label = document.createElement("label");
     label.className = "toggle";
     const checked = state.zoneVisibility[category] !== false;
-    label.innerHTML = `<input type="checkbox" data-category="${category}" ${checked ? "checked" : ""}/> ${category}`;
+    label.innerHTML = `<input type="checkbox" data-category="${escapeHtml(category)}" ${checked ? "checked" : ""}/> ${escapeHtml(category)}`;
     label.querySelector("input").addEventListener("change", (e) => {
       state.zoneVisibility[category] = e.target.checked;
       renderZones();
@@ -1297,6 +1311,10 @@ function subtypeFilterValue(element) {
   return element.subtype || PLACEMENT_NONE;
 }
 
+function markFilterValue(element) {
+  return element.mark || PLACEMENT_NONE;
+}
+
 // Поставщик/Контракт — та же иерархическая пара, что Кран/Стоянка и
 // Тип/Подтип, только источник значений не зоны, а state.contracts (см.
 // Docs/backlog.md, "Групповая смена статуса"). element.contract_id —
@@ -1320,6 +1338,7 @@ const PLACEMENT_FILTER_DEFS = [
   { key: "elevation", valueFn: elevationFilterValue },
   { key: "elementType", valueFn: e => e.element_type },
   { key: "subtype", valueFn: subtypeFilterValue },
+  { key: "mark", valueFn: markFilterValue },
   { key: "status", valueFn: e => e.current_status },
   { key: "supplier", valueFn: supplierFilterValue },
   { key: "contract", valueFn: contractIdFilterValue },
@@ -1341,7 +1360,7 @@ function passesPlacementFilters(element) {
 // фильтрам, включая только что исключённые её же подтипы — "Колонна"
 // навсегда остаётся недоступной для повторного включения. См.
 // Docs/backlog.md.
-const PLACEMENT_CASCADE_GROUPS = [["elementType", "subtype"], ["crane", "stance"], ["supplier", "contract"]];
+const PLACEMENT_CASCADE_GROUPS = [["elementType", "subtype", "mark"], ["crane", "stance"], ["supplier", "contract"]];
 
 function cascadeGroupFor(key) {
   return PLACEMENT_CASCADE_GROUPS.find(g => g.includes(key)) || [key];
@@ -1414,6 +1433,8 @@ function applyPlacementFilters() {
     // Тот же фильтр — и на 3D-меш, если сцена уже построена (см. "3D-режим схемы").
     const mesh = state.view3d.meshById.get(element.id);
     if (mesh) mesh.visible = passes;
+    const sprite = state.view3d.labelSpriteById.get(element.id);
+    if (sprite) sprite.visible = passes && state.labelVisibility[element.element_type] !== false;
   }
 }
 
@@ -1434,6 +1455,7 @@ function onPlacementFilterChange() {
 function placementNoneLabel(kind) {
   if (kind === "elevation") return "— без отметки —";
   if (kind === "subtype") return "— без подтипа —";
+  if (kind === "mark") return "— без марки —";
   if (kind === "supplier") return "— без поставщика —";
   if (kind === "contract") return "— без контракта —";
   return "— не определено —";
@@ -1526,24 +1548,33 @@ function buildFilterGroup(title, values, excludedSet, labelFor, isEnabledFn, onC
   return wrap;
 }
 
-// Иерархическая группа (Кран→Стоянка крана, Тип элемента→Подтип) — родитель
-// и его потомки остаются ДВУМЯ независимыми excludedSet (см. комментарий
-// над PLACEMENT_FILTER_DEFS), клик по родителю ставит/снимает всех его
-// потомков разом (item 3/8, Docs/backlog.md). parentIsEnabledFn/
-// childIsEnabledFn — отдельные функции доступности, категории-то разные.
-// Дочерние чекбоксы каждого родителя свёрнуты по умолчанию (только
-// родитель виден — "по умолчанию выбирается вся группа крана") и
-// разворачиваются по клику на стрелку рядом с родителем, если у него
-// вообще есть дети (см. Docs/backlog.md). Родительский чекбокс работает
-// как раньше (каскад на всех потомков) независимо от того, развёрнута
-// группа сейчас или нет.
+// Иерархическая группа (Кран→Стоянка крана, Тип элемента→Подтип, Тип
+// элемента→Подтип→Марка) — родитель и его потомки остаются НЕЗАВИСИМЫМИ
+// excludedSet (см. комментарий над PLACEMENT_FILTER_DEFS), клик по
+// родителю ставит/снимает всех его потомков разом (item 3/8,
+// Docs/backlog.md). parentIsEnabledFn/childIsEnabledFn — отдельные
+// функции доступности, категории-то разные. Дочерние чекбоксы каждого
+// родителя свёрнуты по умолчанию (только родитель виден — "по умолчанию
+// выбирается вся группа крана") и разворачиваются по клику на стрелку
+// рядом с родителем, если у него вообще есть дети (см. Docs/backlog.md).
+// Родительский чекбокс работает как раньше (каскад на всех потомков)
+// независимо от того, развёрнута группа сейчас или нет.
+//
+// grandchildConfig (опционально) — 3-й уровень (сейчас единственный
+// случай: Марка под Подтипом, см. "Раунд из 3 пунктов", 2026-07-17):
+// { childrenForChild(cv), excludedSet, labelFor(gv), isEnabledFn(gv), expandedSet }.
+// Остальные 2 вызова (Кран/Стоянка, Поставщик/Контракт) НЕ передают этот
+// параметр и работают ровно как раньше — весь код ниже под
+// `if (grandchildConfig)` для них не выполняется.
 function buildHierarchicalFilterGroup(
   title, parents, parentExcludedSet, parentLabelFor, parentIsEnabledFn,
-  childrenForParent, childExcludedSet, childLabelFor, childIsEnabledFn, onChange, expandedSet
+  childrenForParent, childExcludedSet, childLabelFor, childIsEnabledFn, onChange, expandedSet,
+  grandchildConfig
 ) {
   const { wrap, btnAll, btnNone } = filterGroupShell(title);
   const parentCheckboxes = [];
   const allChildCheckboxes = [];
+  const allGrandchildCheckboxes = [];
 
   for (const pv of parents) {
     const children = childrenForParent(pv);
@@ -1590,31 +1621,103 @@ function buildHierarchicalFilterGroup(
 
     const childEntries = [];
     for (const cv of children) {
+      const grandchildren = grandchildConfig ? (grandchildConfig.childrenForChild(cv) || []) : [];
+
+      const cRow = document.createElement("div");
+      cRow.className = "filter-parent-row";
+
+      const grandchildBox = document.createElement("div");
+      grandchildBox.className = "filter-children";
+      const gOpen = grandchildren.length && grandchildConfig.expandedSet.has(cv);
+      if (gOpen) grandchildBox.classList.add("open");
+
+      if (grandchildren.length) {
+        const gExpandBtn = document.createElement("button");
+        gExpandBtn.type = "button";
+        gExpandBtn.className = "filter-expand-btn";
+        gExpandBtn.textContent = gOpen ? "▾" : "▸";
+        gExpandBtn.title = gOpen ? "Свернуть" : "Развернуть";
+        gExpandBtn.addEventListener("click", () => {
+          const open = grandchildBox.classList.toggle("open");
+          gExpandBtn.textContent = open ? "▾" : "▸";
+          gExpandBtn.title = open ? "Свернуть" : "Развернуть";
+          if (open) grandchildConfig.expandedSet.add(cv); else grandchildConfig.expandedSet.delete(cv);
+        });
+        cRow.appendChild(gExpandBtn);
+      } else if (grandchildConfig) {
+        const spacer = document.createElement("span");
+        spacer.className = "filter-expand-spacer";
+        cRow.appendChild(spacer);
+      }
+
       const cLabel = document.createElement("label");
       cLabel.className = "toggle filter-child";
       const cInput = document.createElement("input");
       cInput.type = "checkbox";
       cInput.checked = !childExcludedSet.has(cv);
       applyEnabledState(cInput, cLabel, childIsEnabledFn(cv));
+
+      const grandchildEntries = [];
       cInput.addEventListener("change", () => {
         if (cInput.checked) {
           childExcludedSet.delete(cv);
-          // Включили конкретную стоянку, а сам кран сейчас выключен —
-          // включаем и кран (иначе элемент всё равно не пройдёт фильтр,
-          // см. Docs/backlog.md), но остальные его стоянки не трогаем —
-          // только прямой клик по родителю каскадно ставит/снимает всех
-          // потомков разом (см. обработчик pInput ниже).
+          // Включили конкретный подтип (или стоянку), а сам родитель
+          // сейчас выключен — включаем и его (иначе элемент всё равно не
+          // пройдёт фильтр, см. Docs/backlog.md), но остальных детей
+          // родителя не трогаем — только прямой клик по родителю
+          // каскадно ставит/снимает всех потомков разом (см. обработчик
+          // pInput ниже).
           parentExcludedSet.delete(pv);
         } else {
           childExcludedSet.add(cv);
+        }
+        // Каскад вниз, на марки этого подтипа — симметрично тому, как
+        // клик по типу (см. pInput ниже) каскадом трогает все подтипы.
+        if (grandchildConfig) {
+          grandchildren.forEach(gv => {
+            if (cInput.checked) grandchildConfig.excludedSet.delete(gv); else grandchildConfig.excludedSet.add(gv);
+          });
+          grandchildEntries.forEach(({ input }) => { input.checked = cInput.checked; });
         }
         onChange();
       });
       cLabel.appendChild(cInput);
       cLabel.appendChild(document.createTextNode(" " + childLabelFor(cv)));
-      childrenBox.appendChild(cLabel);
+      cRow.appendChild(cLabel);
+      childrenBox.appendChild(cRow);
       childEntries.push({ input: cInput, value: cv });
       allChildCheckboxes.push({ input: cInput, value: cv });
+
+      if (grandchildConfig) {
+        for (const gv of grandchildren) {
+          const gLabel = document.createElement("label");
+          gLabel.className = "toggle filter-grandchild";
+          const gInput = document.createElement("input");
+          gInput.type = "checkbox";
+          gInput.checked = !grandchildConfig.excludedSet.has(gv);
+          applyEnabledState(gInput, gLabel, grandchildConfig.isEnabledFn(gv));
+          gInput.addEventListener("change", () => {
+            if (gInput.checked) {
+              grandchildConfig.excludedSet.delete(gv);
+              // Марке нужно снятие исключения сразу на ОБА уровня вверх
+              // (подтип И тип) — иначе элемент всё равно не пройдёт
+              // фильтр: passesPlacementFilters — это AND по всем
+              // категориям одновременно, а не только по своей.
+              childExcludedSet.delete(cv);
+              parentExcludedSet.delete(pv);
+            } else {
+              grandchildConfig.excludedSet.add(gv);
+            }
+            onChange();
+          });
+          gLabel.appendChild(gInput);
+          gLabel.appendChild(document.createTextNode(" " + grandchildConfig.labelFor(gv)));
+          grandchildBox.appendChild(gLabel);
+          grandchildEntries.push({ input: gInput, value: gv });
+          allGrandchildCheckboxes.push({ input: gInput, value: gv });
+        }
+        childrenBox.appendChild(grandchildBox);
+      }
     }
     wrap.appendChild(childrenBox);
 
@@ -1623,6 +1726,15 @@ function buildHierarchicalFilterGroup(
       childEntries.forEach(({ value }) => {
         if (pInput.checked) childExcludedSet.delete(value); else childExcludedSet.add(value);
       });
+      // Каскад на все марки всех подтипов этого типа — тем же приёмом.
+      if (grandchildConfig) {
+        for (const cv2 of children) {
+          const gvs = grandchildConfig.childrenForChild(cv2) || [];
+          gvs.forEach(gv => {
+            if (pInput.checked) grandchildConfig.excludedSet.delete(gv); else grandchildConfig.excludedSet.add(gv);
+          });
+        }
+      }
       onChange();
     });
   }
@@ -1630,15 +1742,19 @@ function buildHierarchicalFilterGroup(
   btnAll.addEventListener("click", () => {
     parentExcludedSet.clear();
     childExcludedSet.clear();
+    if (grandchildConfig) grandchildConfig.excludedSet.clear();
     parentCheckboxes.forEach(cb => { cb.checked = true; });
     allChildCheckboxes.forEach(({ input }) => { input.checked = true; });
+    allGrandchildCheckboxes.forEach(({ input }) => { input.checked = true; });
     onChange();
   });
   btnNone.addEventListener("click", () => {
     parents.forEach(pv => parentExcludedSet.add(pv));
     allChildCheckboxes.forEach(({ value }) => childExcludedSet.add(value));
+    if (grandchildConfig) allGrandchildCheckboxes.forEach(({ value }) => grandchildConfig.excludedSet.add(value));
     parentCheckboxes.forEach(cb => { cb.checked = false; });
     allChildCheckboxes.forEach(({ input }) => { input.checked = false; });
+    allGrandchildCheckboxes.forEach(({ input }) => { input.checked = false; });
     onChange();
   });
 
@@ -1693,6 +1809,7 @@ function renderPlacementFilters() {
   };
   const elevationLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("elevation") : `${v} мм`;
   const subtypeLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("subtype") : v;
+  const markLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("mark") : v;
   const statusLabelFor = v => state.statusLabels[v] || v;
   const enabledFor = key => v => isValueEnabled(key, v);
 
@@ -1758,7 +1875,10 @@ function renderPlacementFilters() {
     "Отметка (высота)", allValuesFor("elevation"), state.placementFilters.elevation, elevationLabelFor, enabledFor("elevation"), onPlacementFilterChange, { compareRaw: true }
   ));
 
-  // Тип элемента / Подтип — иерархически (item 8), тем же приёмом.
+  // Тип элемента / Подтип / Марка — иерархически, 3 уровня (item 8 +
+  // "Раунд из 3 пунктов", 2026-07-17, п.1). Марка — прямой список без
+  // поиска (заказчик выбрал этот вариант — некоторые подтипы содержат
+  // 300+ уникальных марок, длинные плоские списки ожидаемы и приняты).
   const typeValues = allValuesFor("elementType");
   const subtypeValues = allValuesFor("subtype");
   const subtypesByType = new Map();
@@ -1772,10 +1892,33 @@ function renderPlacementFilters() {
   }
   const typeHeadings = Array.from(new Set([...typeValues, ...subtypesByType.keys()])).sort(placementComparator(v => v));
   for (const h of typeHeadings) subtypesByType.get(h)?.sort(placementComparator(subtypeLabelFor));
+
+  // Марки группируются по значению ПОДТИПА (не по паре тип+подтип) — тем
+  // же приёмом, что subtypesByType группирует подтипы по значению типа
+  // выше (там тоже возможна коллизия, если одно и то же значение подтипа
+  // встречается у нескольких типов — принятый в этом коде компромисс).
+  const marksBySubtype = new Map();
+  for (const e of state.elements) {
+    const sv = subtypeFilterValue(e);
+    const mv = markFilterValue(e);
+    if (!marksBySubtype.has(sv)) marksBySubtype.set(sv, new Set());
+    marksBySubtype.get(sv).add(mv);
+  }
+  for (const [sv, set] of marksBySubtype) {
+    marksBySubtype.set(sv, Array.from(set).sort(placementComparator(markLabelFor)));
+  }
+
   container.appendChild(buildHierarchicalFilterGroup(
-    "Тип элемента / Подтип", typeHeadings, state.placementFilters.elementType, v => v, enabledFor("elementType"),
+    "Тип элемента / Подтип / Марка", typeHeadings, state.placementFilters.elementType, v => v, enabledFor("elementType"),
     t => subtypesByType.get(t) || [], state.placementFilters.subtype, subtypeLabelFor, enabledFor("subtype"),
-    onPlacementFilterChange, state.placementGroupsExpanded.elementType
+    onPlacementFilterChange, state.placementGroupsExpanded.elementType,
+    {
+      childrenForChild: sv => marksBySubtype.get(sv) || [],
+      excludedSet: state.placementFilters.mark,
+      labelFor: markLabelFor,
+      isEnabledFn: enabledFor("mark"),
+      expandedSet: state.placementGroupsExpanded.subtype,
+    }
   ));
 
   container.appendChild(buildFilterGroup(
@@ -2147,12 +2290,13 @@ function renderLabelToggles() {
     const label = document.createElement("label");
     label.className = "toggle";
     const checked = state.labelVisibility[type] !== false;
-    label.innerHTML = `<input type="checkbox" data-type="${type}" ${checked ? "checked" : ""}/> ${type}`;
+    label.innerHTML = `<input type="checkbox" data-type="${escapeHtml(type)}" ${checked ? "checked" : ""}/> ${escapeHtml(type)}`;
     label.querySelector("input").addEventListener("change", (e) => {
       state.labelVisibility[type] = e.target.checked;
       document.querySelectorAll(`.mark-label[data-type="${type}"]`).forEach(t => {
         t.style.display = e.target.checked ? "" : "none";
       });
+      apply3DLabelVisibility();
     });
     box.appendChild(label);
   }
@@ -2412,7 +2556,7 @@ function fieldRowsHtml(element, fields) {
     let v = element[k];
     if (k === "current_status") v = state.statusLabels[v] || v;
     if (v === null || v === undefined || v === "") v = "—";
-    return `<tr><td class="k">${FIELD_LABELS[k] || k}</td><td>${v}</td></tr>`;
+    return `<tr><td class="k">${escapeHtml(FIELD_LABELS[k] || k)}</td><td>${escapeHtml(v)}</td></tr>`;
   }).join("");
 }
 
@@ -2427,7 +2571,7 @@ function contractLabelText(element) {
   // подтверждения при смене статуса (openStatusContractDialog), не напрямую.
   if (!element.contract_id) return "—";
   const c = state.contracts.find(c => c.id === element.contract_id);
-  return c ? `${c.name} (${c.supplier})` : `#${element.contract_id}`;
+  return c ? `${escapeHtml(c.name)} (${escapeHtml(c.supplier)})` : `#${element.contract_id}`;
 }
 
 // ---------- привязка к зонам (захватка/кран/стоянка) — только для элементов
@@ -2438,7 +2582,7 @@ function zoneBindingText(element, idField, statusField) {
   const status = element[statusField];
   if (status === "matched") {
     const zone = state.zones.find(z => z.id === element[idField]);
-    return zone ? (zone.name || `зона #${zone.id} (без названия)`) : `#${element[idField]}`;
+    return zone ? escapeHtml(zone.name || `зона #${zone.id} (без названия)`) : `#${element[idField]}`;
   }
   return ZONE_STATUS_LABELS_RU[status] || status;
 }
@@ -2471,7 +2615,7 @@ async function showCard(element) {
     if (!detail.history.length) { historyBox.textContent = "нет записей"; return; }
     const rowsHtml = detail.history.slice().reverse().map(h => `
       <tr>
-        <td>${h.changed_at}</td><td>${state.statusLabels[h.status] || h.status}</td><td>${h.changed_by || "—"}</td>
+        <td>${escapeHtml(h.changed_at)}</td><td>${escapeHtml(state.statusLabels[h.status] || h.status)}</td><td>${escapeHtml(h.changed_by || "—")}</td>
         <td>${canEdit ? `<button class="hist-del" data-hist-id="${h.id}" title="Удалить запись">✕</button>` : ""}</td>
       </tr>
     `).join("");
@@ -2535,7 +2679,7 @@ function openCtxMenu(element, clientX, clientY) {
   for (const status of state.statusOrder) {
     const item = document.createElement("div");
     item.className = "ctx-item" + (status === element.current_status ? " current" : "");
-    item.innerHTML = `<span class="swatch" style="background:${colorFor(status)}"></span>${state.statusLabels[status]}`;
+    item.innerHTML = `<span class="swatch" style="background:${colorFor(status)}"></span>${escapeHtml(state.statusLabels[status])}`;
     item.addEventListener("click", () => applyStatus(element, status));
     ctxMenu.appendChild(item);
   }
@@ -2566,7 +2710,7 @@ function openStatusContractDialog(element, status) {
   const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
   const matching = state.contracts.filter(c => c.element_types.includes(element.element_type));
   const options = ['<option value="">— без контракта —</option>'].concat(
-    matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${c.name} (${c.supplier})</option>`)
+    matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
   );
   document.getElementById("sc-contract-select").innerHTML = options.join("");
   statusContractBackdrop.classList.add("open");
@@ -2710,7 +2854,7 @@ function renderBulkStatusTable() {
     const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
     const matching = bulkContractOptionsForType(element.element_type);
     const options = ['<option value="">— выберите —</option>', '<option value="none">без контракта</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${c.name} (${c.supplier})</option>`)
+      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
     );
     select.innerHTML = options.join("");
     select.addEventListener("change", updateBulkStatusValidation);
@@ -2745,9 +2889,9 @@ const bulkStatusBackdrop = document.getElementById("bulk-status-backdrop");
 async function openBulkStatusModal() {
   if (state.multiSelectedIds.size === 0) return;
   document.getElementById("bulk-status-select").innerHTML =
-    state.statusOrder.map(s => `<option value="${s}">${state.statusLabels[s]}</option>`).join("");
+    state.statusOrder.map(s => `<option value="${s}">${escapeHtml(state.statusLabels[s])}</option>`).join("");
   document.getElementById("bulk-fill-contract-select").innerHTML = ['<option value="">— выберите контракт —</option>'].concat(
-    state.contracts.map(c => `<option value="${c.id}">${c.name} (${c.supplier}) — ${c.element_types.join(", ")}</option>`)
+    state.contracts.map(c => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.supplier)}) — ${escapeHtml(c.element_types.join(", "))}</option>`)
   ).join("");
   try {
     const contracts = await api("/contracts");
@@ -3120,7 +3264,7 @@ document.getElementById("menu-colors").addEventListener("click", () => {
   for (const status of state.statusOrder) {
     const row = document.createElement("div");
     row.className = "row";
-    row.innerHTML = `<span>${state.statusLabels[status]}</span>
+    row.innerHTML = `<span>${escapeHtml(state.statusLabels[status])}</span>
       <input type="color" data-status="${status}" value="${colorFor(status)}"/>`;
     rows.appendChild(row);
   }
@@ -3226,10 +3370,10 @@ async function renderSubtypesModal() {
     const row = document.createElement("div");
     row.className = "subtype-row";
     const chipsHtml = subtypes.length
-      ? subtypes.map(s => `<span class="subtype-chip">${s}<button type="button" data-remove="${s}">✕</button></span>`).join("")
+      ? subtypes.map(s => `<span class="subtype-chip">${escapeHtml(s)}<button type="button" data-remove="${escapeHtml(s)}">✕</button></span>`).join("")
       : '<span class="hint-text">нет подтипов</span>';
     row.innerHTML = `
-      <h4>${elementType}</h4>
+      <h4>${escapeHtml(elementType)}</h4>
       <div class="subtype-chips">${chipsHtml}</div>
       <div class="subtype-add-row">
         <input type="text" placeholder="новый подтип" data-add-input/>
@@ -3278,10 +3422,10 @@ async function renderUsersTable() {
   const table = document.getElementById("users-table");
   const rowsHtml = users.map(u => `
     <tr>
-      <td>${u.display_name}</td>
-      <td>${u.position || "—"}</td>
-      <td>${u.department || "—"}</td>
-      <td>${u.domain_login}</td>
+      <td>${escapeHtml(u.display_name)}</td>
+      <td>${escapeHtml(u.position || "—")}</td>
+      <td>${escapeHtml(u.department || "—")}</td>
+      <td>${escapeHtml(u.domain_login)}</td>
       <td>${ROLE_LABELS[u.role] || u.role}</td>
       <td>${u.has_password ? "задан" : "пустой"}</td>
       <td>
@@ -3375,13 +3519,13 @@ async function renderContractsList() {
     const linesHtml = c.lines.length
       ? c.lines.map(l => `
           <tr class="${l.exceeded ? "exceeded" : ""}">
-            <td>${l.element_type}</td><td>${l.quantity}</td><td>${l.fact}</td><td>${l.damaged}</td><td>${l.remaining}</td>
+            <td>${escapeHtml(l.element_type)}</td><td>${l.quantity}</td><td>${l.fact}</td><td>${l.damaged}</td><td>${l.remaining}</td>
           </tr>
         `).join("")
       : '<tr><td colspan="5" class="hint-text">нет строк</td></tr>';
     block.innerHTML = `
       <div class="contract-block-header">
-        <b>${c.name} (${c.supplier})</b>
+        <b>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</b>
         <button class="btn btn-sm btn-secondary" data-edit-contract="${c.id}">Изменить</button>
       </div>
       <table class="contract-lines-table">
@@ -3406,9 +3550,9 @@ async function renderDefaultContracts(contracts) {
     row.className = "default-contract-row";
     const matching = contracts.filter(c => c.lines.some(l => l.element_type === type));
     const options = ['<option value="">— не задан —</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${defaultMap[type] === c.id ? "selected" : ""}>${c.name} (${c.supplier})</option>`)
+      matching.map(c => `<option value="${c.id}" ${defaultMap[type] === c.id ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
     );
-    row.innerHTML = `<span>${type}</span><select data-type="${type}">${options.join("")}</select>`;
+    row.innerHTML = `<span>${escapeHtml(type)}</span><select data-type="${escapeHtml(type)}">${options.join("")}</select>`;
     row.querySelector("select").addEventListener("change", async (e) => {
       const value = e.target.value ? Number(e.target.value) : null;
       await api("/contracts/default-map", {
@@ -3433,7 +3577,7 @@ function addContractLineRow(elementType, quantity) {
   const row = document.createElement("div");
   row.className = "ce-line-row";
   row.innerHTML = `
-    <input type="text" class="ce-line-type" list="ce-known-types" placeholder="тип элемента" value="${elementType || ""}"/>
+    <input type="text" class="ce-line-type" list="ce-known-types" placeholder="тип элемента" value="${escapeHtml(elementType || "")}"/>
     <input type="number" class="ce-line-qty" min="0" placeholder="кол-во" value="${quantity != null ? quantity : ""}"/>
     <button class="btn btn-sm btn-secondary ce-line-remove" type="button">✕</button>
   `;
@@ -3867,6 +4011,44 @@ function build3DMeshForElement(element, levels) {
   return mesh;
 }
 
+// Постоянная подпись марки в 3D (см. Docs/backlog.md, "Раунд из 3
+// пунктов", 2026-07-17, п.3) — THREE.Sprite с canvas-текстурой: билборд
+// к камере автоматический (не нужно ничего обновлять per-frame в
+// animate3D()), в отличие от плоскости/TextGeometry. Провендорено только
+// ядро Three.js (Sprite/SpriteMaterial — его часть) — CSS2DRenderer/
+// TextGeometry НЕ провендорены, а по правилу проекта новый сторонний код
+// требует отдельного подтверждения (см. CLAUDE.md), поэтому выбран путь
+// без нового вендоринга.
+function build3DLabelSprite(element, topY) {
+  if (!element.mark) return null;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const fontPx = 48; // размер текстуры холста — не экранный размер, см. sprite.scale ниже
+  ctx.font = `${fontPx}px sans-serif`;
+  const textWidth = ctx.measureText(element.mark).width;
+  canvas.width = Math.ceil(textWidth) + 16;
+  canvas.height = fontPx + 16;
+  ctx.font = `${fontPx}px sans-serif`; // размер холста сбрасывает контекст — выставить заново
+  ctx.fillStyle = "#222";
+  ctx.textBaseline = "middle";
+  ctx.fillText(element.mark, 8, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, depthTest: true, sizeAttenuation: true });
+  const sprite = new THREE.Sprite(material);
+  // Масштаб в мировых единицах (мм) — опирается на уже посчитанный
+  // baseMarkerRadius (тот же параметр, что задаёт размер 2D-маркеров/
+  // подписей, см. app/main.py:estimate_marker_radius) — единая логика
+  // масштаба между 2D и 3D, ничего заново не подбирать.
+  const worldHeight = state.baseMarkerRadius * 3;
+  sprite.scale.set(worldHeight * (canvas.width / canvas.height), worldHeight, 1);
+  // world.X=dxf.x, world.Y=высота, world.Z=-dxf.y (см. build3DMeshForElement
+  // выше) — подпись чуть выше верхней грани элемента.
+  sprite.position.set(element.x, topY + worldHeight * 0.6, -element.y);
+  sprite.userData.elementId = element.id;
+  return sprite;
+}
+
 // Нижний и верхний уровень здания (мм) — по ярусам КОЛОНН (см.
 // computeColumnLevels): низ — самый нижний ярус, верх — верхний ярус
 // колонн плюс высота последнего пролёта (тот же запасной вариант, что
@@ -3934,6 +4116,19 @@ function apply3DZoneVisibility() {
   }
 }
 
+// Видимость постоянных 3D-подписей марок — переиспользует ТОТ ЖЕ
+// state.labelVisibility, что и 2D (не заводим отдельное состояние), тем
+// же приёмом, что apply3DZoneVisibility выше для зон. Учитывает и
+// текущие фильтры (элемент, скрытый фильтром, не должен показывать
+// подпись), см. также applyPlacementFilters.
+function apply3DLabelVisibility() {
+  for (const [id, sprite] of state.view3d.labelSpriteById) {
+    const element = state.byId.get(id);
+    if (!element) continue;
+    sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+  }
+}
+
 function build3DScene() {
   const v3 = state.view3d;
   if (!v3.scene) return;
@@ -3949,15 +4144,30 @@ function build3DScene() {
     mesh.material.dispose();
   }
   v3.zoneMeshById.clear();
+  for (const sprite of v3.labelSpriteById.values()) {
+    v3.scene.remove(sprite);
+    sprite.material.map.dispose();
+    sprite.material.dispose();
+  }
+  v3.labelSpriteById.clear();
 
   const levels = computeColumnLevels();
   for (const element of state.elements) {
     const mesh = build3DMeshForElement(element, levels);
     if (!mesh) continue;
-    mesh.visible = passesPlacementFilters(element);
+    const passes = passesPlacementFilters(element);
+    mesh.visible = passes;
     if (state.selectedId === element.id) mesh.material.emissive.set(0x333333);
     v3.scene.add(mesh);
     v3.meshById.set(element.id, mesh);
+
+    const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels);
+    const sprite = build3DLabelSprite(element, topY);
+    if (sprite) {
+      sprite.visible = passes && state.labelVisibility[element.element_type] !== false;
+      v3.scene.add(sprite);
+      v3.labelSpriteById.set(element.id, sprite);
+    }
   }
 
   const heightRange = computeBuildingHeightRange();

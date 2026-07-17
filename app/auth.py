@@ -8,8 +8,10 @@
 """
 
 import hashlib
+import os
 import secrets
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -22,7 +24,33 @@ SESSION_COOKIE = "zhbi_session"
 SESSION_TTL_DAYS = 30
 PBKDF2_ITERATIONS = 260_000
 
+# По умолчанию выключено — деплой сейчас на чистом HTTP внутри локальной
+# сети (см. Docs/DEPLOYMENT_WINDOWS.md, там нигде нет TLS/reverse-proxy),
+# secure=True безусловно сломал бы вход. Включить переменной окружения
+# ZHBI_SECURE_COOKIES=1, если/когда появится HTTPS.
+SECURE_COOKIES = os.environ.get("ZHBI_SECURE_COOKIES") == "1"
+
 router = APIRouter()
+
+# Блокировка подбора пароля — по IP клиента, не по логину: логины и так
+# публично видны через GET /login-users, блокировка по логину позволила
+# бы атакующему намеренно запереть чужого пользователя, зная только его
+# логин. In-memory (один процесс uvicorn, без внешнего кэша).
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = 300
+LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 5
+_login_attempts: dict[str, list[float]] = {}
+
+
+def _check_login_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    attempts = [t for t in _login_attempts.get(client_ip, []) if now - t < LOGIN_RATE_LIMIT_WINDOW_SECONDS]
+    _login_attempts[client_ip] = attempts
+    if len(attempts) >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Слишком много попыток входа, попробуйте позже")
+
+
+def _record_login_failure(client_ip: str) -> None:
+    _login_attempts.setdefault(client_ip, []).append(time.time())
 
 
 def hash_password(password: str, salt: Optional[str] = None) -> tuple[str, str]:
@@ -149,20 +177,26 @@ def login_users():
 
 
 @router.post("/login", response_model=UserOut)
-def login(body: LoginRequest, response: Response):
+def login(body: LoginRequest, request: Request, response: Response):
+    client_ip = request.client.host if request.client else "unknown"
+    _check_login_rate_limit(client_ip)
+
     conn = get_connection()
     try:
         user = conn.execute(
             "SELECT * FROM users WHERE domain_login = ?", (body.domain_login,)
         ).fetchone()
         if user is None or not verify_password(body.password, user["password_hash"], user["password_salt"]):
+            _record_login_failure(client_ip)
             raise HTTPException(status_code=401, detail="Неверный логин или пароль")
         token = create_session(conn, user["id"])
+        _login_attempts.pop(client_ip, None)
     finally:
         conn.close()
 
     response.set_cookie(
-        SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=SESSION_TTL_DAYS * 86400
+        SESSION_COOKIE, token, httponly=True, samesite="lax", secure=SECURE_COOKIES,
+        max_age=SESSION_TTL_DAYS * 86400,
     )
     return user_out(user)
 
