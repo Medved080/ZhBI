@@ -6,6 +6,8 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from shapely.geometry import Point
+from shapely.strtree import STRtree
 
 from app.auth import format_display_name, get_current_user, require_admin, require_editor
 from app.auth import router as auth_router
@@ -77,25 +79,50 @@ def _import_input_dir() -> None:
             print(f"[startup] Input/{name}: ОШИБКА обработки — {e.message}")
 
 
+SAME_FOOTPRINT_TOLERANCE_MM = 50.0  # см. docstring estimate_marker_radius
+
+
 def estimate_marker_radius(points, bbox_diag, fraction=0.25):
-    """Радиус маркера от медианного расстояния до ближайшего соседа (см. render_plan.py)."""
+    """Радиус маркера от медианного расстояния до ближайшего РАЗЛИЧНОГО
+    соседа (см. render_plan.py).
+
+    Многоярусные конструкции (колонна/ригель одного и того же следа на
+    плане, но на разных отметках — на 2D-схеме это одна и та же точка
+    (x, y)) дают координаты, совпадающие или почти совпадающие
+    (миллиметровые расхождения из-за округления при разборе разных
+    DXF-полилиний одного контура на разных ярусах). Если их не
+    исключать, при росте числа ярусов доля таких "нулевых" соседей
+    приближается к половине точек — медиана обрушивается почти до нуля,
+    и маркеры/подписи становятся невидимыми на любом масштабе (см.
+    Docs/backlog.md, "Подписи марок пропали на плотных многоярусных
+    файлах"). Поэтому точки одного следа сначала схлопываются в одного
+    представителя (решётка с ячейкой SAME_FOOTPRINT_TOLERANCE_MM —
+    точной кластеризации для оценки шага между РАЗНЫМИ позициями не
+    нужно, приближения достаточно), а медиана считается уже по ним.
+
+    Реализовано через shapely.strtree.STRtree (O(n log n)), а не
+    наивным перебором пар (O(n²)) — на плотном многоярусном файле
+    (~5300 элементов) наивный вариант занимал ~4 секунды на каждый
+    запрос /plan-data, STRtree — ~0.03 секунды.
+    """
     n = len(points)
     if n < 2:
         return bbox_diag * 0.01
-    nearest = []
-    for i, (xi, yi) in enumerate(points):
-        best = None
-        for j, (xj, yj) in enumerate(points):
-            if i == j:
-                continue
-            d2 = (xi - xj) ** 2 + (yi - yj) ** 2
-            if best is None or d2 < best:
-                best = d2
-        if best is not None and best > 0:
-            nearest.append(best ** 0.5)
-    if not nearest:
+
+    seen = {}
+    for x, y in points:
+        key = (round(x / SAME_FOOTPRINT_TOLERANCE_MM), round(y / SAME_FOOTPRINT_TOLERANCE_MM))
+        seen.setdefault(key, (x, y))
+    distinct = list(seen.values())
+    if len(distinct) < 2:
         return bbox_diag * 0.01
-    nearest.sort()
+
+    shapely_points = [Point(x, y) for x, y in distinct]
+    tree = STRtree(shapely_points)
+    _, dist = tree.query_nearest(shapely_points, exclusive=True, all_matches=False, return_distance=True)
+    if len(dist) == 0:
+        return bbox_diag * 0.01
+    nearest = sorted(dist)
     return nearest[len(nearest) // 2] * fraction
 
 
