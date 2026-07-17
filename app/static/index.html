@@ -739,6 +739,8 @@
     <p class="hint-text">Элемент переходит со статуса «Запланирован» на «<span id="sc-status-label"></span>». Укажите, по какому контракту он поставляется.</p>
     <label class="field">Контракт</label>
     <select id="sc-contract-select"></select>
+    <label class="field">Партия (если уже известна)</label>
+    <select id="sc-batch-select" disabled></select>
     <div class="actions">
       <button class="btn btn-secondary" id="sc-cancel">Отмена</button>
       <button class="btn btn-primary" id="sc-confirm">Подтвердить</button>
@@ -3010,23 +3012,55 @@ function openStatusContractDialog(element, status) {
     matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
   );
   document.getElementById("sc-contract-select").innerHTML = options.join("");
+  refreshStatusDialogBatchSelect();
   statusContractBackdrop.classList.add("open");
 }
 document.getElementById("sc-cancel").addEventListener("click", () => {
   pendingStatusChange = null;
   statusContractBackdrop.classList.remove("open");
 });
+
+// Партию можно указать СРАЗУ в том же диалоге, что и контракт — не
+// отдельным действием после (см. Docs/backlog.md): список партий
+// зависит от ВЫБРАННОГО в этом же диалоге контракта (не обязательно
+// текущего у элемента), поэтому пересчитывается при каждой смене
+// контракта в селекте, а не только один раз при открытии.
+document.getElementById("sc-contract-select").addEventListener("change", () => refreshStatusDialogBatchSelect());
+
+async function refreshStatusDialogBatchSelect() {
+  const select = document.getElementById("sc-batch-select");
+  const element = pendingStatusChange ? pendingStatusChange.element : null;
+  const contractValue = document.getElementById("sc-contract-select").value;
+  select.innerHTML = '<option value="">— без партии —</option>';
+  select.disabled = true;
+  if (!element || !contractValue) return;
+  try {
+    const batches = await api(`/batches?contract_id=${contractValue}`);
+    const matching = batches.filter(b => b.lines.some(l => batchLineMatches(l, element)));
+    if (!matching.length) return;
+    const options = ['<option value="">— без партии —</option>'].concat(
+      matching.map(b => `<option value="${b.id}" ${String(b.id) === String(element.batch_id) ? "selected" : ""}>${escapeHtml(b.label)}</option>`)
+    );
+    select.innerHTML = options.join("");
+    select.disabled = false;
+  } catch (e) {
+    // тихо — партия необязательна в этом диалоге, не блокируем смену статуса/контракта
+  }
+}
+
 document.getElementById("sc-confirm").addEventListener("click", async () => {
   if (!pendingStatusChange) return;
   const value = document.getElementById("sc-contract-select").value;
   const contractId = value ? Number(value) : null;
+  const batchValue = document.getElementById("sc-batch-select").value;
+  const batchId = batchValue ? Number(batchValue) : null;
   const { element, status } = pendingStatusChange;
   pendingStatusChange = null;
   statusContractBackdrop.classList.remove("open");
-  await doApplyStatus(element, status, contractId);
+  await doApplyStatus(element, status, contractId, batchId);
 });
 
-async function doApplyStatus(element, status, explicitContractId) {
+async function doApplyStatus(element, status, explicitContractId, explicitBatchId) {
   try {
     const body = { status };
     const changedAt = currentChangedAt();
@@ -3044,6 +3078,26 @@ async function doApplyStatus(element, status, explicitContractId) {
     updateElementSubLabel(element); // статус мог войти/выйти из диапазона, где допстрока видна
     renderLegend();
     showCard(element);
+
+    // Партия — сразу вместе со статусом/контрактом, если указана в том же
+    // диалоге (см. Docs/backlog.md, "давай отменим ограничение..."). Отдельный
+    // запрос ПОСЛЕ смены статуса, не тот же PATCH — партии требуется уже
+    // сохранённый contract_id, который к этому моменту гарантированно
+    // применён (apply_status_change уже отработал выше).
+    if (explicitBatchId) {
+      try {
+        const batchUpdated = await api(`/elements/${element.id}/batch`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batch_id: explicitBatchId }),
+        });
+        Object.assign(element, batchUpdated);
+        state.byId.set(element.id, element);
+        updateElementSubLabel(element);
+        showCard(element);
+        maybeWarnBatch(batchUpdated);
+      } catch (e) {
+        alert("Статус изменён, но не удалось назначить партию: " + e.message);
+      }
+    }
     maybeWarnContract(updated);
   } catch (e) {
     alert("Не удалось изменить статус: " + e.message);
