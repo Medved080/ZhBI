@@ -14,6 +14,7 @@
 
 import argparse
 import csv
+import math
 import sys
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -248,6 +249,11 @@ def collect_annotations(msp, layers=None):
                     "handle": entity.dxf.handle,
                     "point": to_vec2(entity.dxf.insert),
                     "text": get_text_content(entity),
+                    # Поворот текста (градусы) — нужен только
+                    # resolve_via_polygon_texts (порядок чтения фрагментов
+                    # марки внутри контура элемента), для остальных путей
+                    # резолвинга марки не используется.
+                    "rotation": getattr(entity.dxf, "rotation", 0) or 0,
                 }
             )
 
@@ -331,6 +337,120 @@ def resolve_via_leaders(pending: list[dict], leader_pool: list[dict]) -> dict:
         result[e_idx] = leader_pool[l_idx]["text"]
         used_elements.add(e_idx)
         used_leaders.add(l_idx)
+
+    return result
+
+
+# Допуск на то, что точка вставки текста лежит точно на границе контура
+# элемента (независимое округление координат в DXF — тот же класс
+# проблемы, что и в zone_binding.POINT_MATCH_TOLERANCE_MM).
+TEXT_INSIDE_POLYGON_TOLERANCE_MM = 1.0
+
+
+def _to_polygon_or_none(outline):
+    if not outline or len(outline) < 3:
+        return None
+    from shapely.geometry import Polygon
+    from shapely.validation import make_valid
+
+    poly = Polygon(outline)
+    if not poly.is_valid:
+        poly = make_valid(poly)
+        if poly.geom_type != "Polygon":
+            polys = [g for g in getattr(poly, "geoms", []) if g.geom_type == "Polygon"]
+            poly = max(polys, key=lambda p: p.area) if polys else None
+    return poly
+
+
+def resolve_via_polygon_texts(pending: list[dict], texts: list[dict]) -> dict:
+    """
+    Альтернативный способ определить марку — не через ближайшую выноску, а
+    через текстовые фрагменты (TEXT/MTEXT), чья точка вставки физически
+    лежит ВНУТРИ контура элемента. Нужно для чертежей, где марка нарисована
+    не одной выноской, а несколькими отдельными надписями прямо на
+    элементе — например плиты перекрытия, где марка "4П-1" нарисована как
+    три отдельных TEXT ("4П", "-", "1") без единой выноски-указателя (см.
+    Docs/backlog.md, "Плиты перекрытия — марка из нескольких текстовых
+    фрагментов"). resolve_via_leaders в этом случае ошибается — жадно
+    отдаёт каждому элементу ближайший ОДИНОЧНЫЙ фрагмент, а не все, что
+    относятся именно к нему.
+
+    Фрагменты внутри одного контура сортируются по направлению чтения
+    (проекция координаты на направление поворота текста — общая формула,
+    работает для горизонтального text (rotation=0) и для повёрнутого
+    одинаково) и склеиваются без разделителя. Для одиночного фрагмента
+    внутри контура (обычная надпись целиком на элементе, ничего делить не
+    нужно) результат не отличается от использования этого текста как есть
+    — один и тот же код корректно обслуживает оба случая.
+
+    Возвращает {element_index: (mark_text, {id(text_entry), ...})} —
+    второй элемент пары нужен вызывающему коду, чтобы исключить
+    использованные фрагменты из пула выносок для остальных элементов.
+
+    Реализация — через STRtree (пространственный индекс), а не наивный
+    двойной перебор: на реальном файле (1997 плит x 5947 фрагментов
+    марок) двойной перебор — это ~11.9М проверок точка-в-полигоне,
+    заметно (десятки секунд) замедляло импорт; с STRtree то же самое —
+    доли секунды, порядок сложности O(m log n) вместо O(m*n).
+
+    Кандидаты (элемент, фрагмент) собираются через ЧУТЬ расширенный
+    контур (см. TEXT_INSIDE_POLYGON_TOLERANCE_MM) — иначе, при строгом
+    contains(), фрагмент, чья точка вставки лежит ТОЧНО на границе
+    контура (например ровно на общей стороне двух соседних плит —
+    подтверждено на реальном файле: расстояние 0.0 до ОБЕИХ соседних
+    плит одновременно, не отличить чисто геометрически), не достался бы
+    вообще никому. Но сам допуск делает такую точку "кандидатом" сразу у
+    обеих соседних плит — поэтому финальное присвоение делается ГЛОБАЛЬНО
+    и ЖАДНО, как в resolve_via_leaders выше: кандидаты сортируются по
+    расстоянию до ЦЕНТРОИДА элемента, каждый текстовый фрагмент достаётся
+    только одному элементу (тому, для кого он ближе) — так пограничный
+    фрагмент уходит своему настоящему хозяину, а не размножается на
+    обоих соседей.
+    """
+    if not texts:
+        return {}
+
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+
+    points = [Point(t["point"].x, t["point"].y) for t in texts]
+    tree = STRtree(points)
+
+    polygons = [_to_polygon_or_none(item["record"].outline) for item in pending]
+
+    # (расстояние_до_центроида, element_idx, text_idx)
+    pairs = []
+    for e_idx, (item, poly) in enumerate(zip(pending, polygons)):
+        if poly is None:
+            continue
+        candidate_idx = tree.query(poly.buffer(TEXT_INSIDE_POLYGON_TOLERANCE_MM), predicate="contains")
+        for t_idx in candidate_idx:
+            t = texts[t_idx]
+            if not t["text"]:
+                continue
+            dist = item["point"].distance(t["point"])
+            pairs.append((dist, e_idx, t_idx))
+
+    pairs.sort(key=lambda p: p[0])
+
+    fragments_by_element = {}  # element_idx -> [text_entry, ...]
+    used_texts = set()
+    for dist, e_idx, t_idx in pairs:
+        if t_idx in used_texts:
+            continue
+        fragments_by_element.setdefault(e_idx, []).append(texts[t_idx])
+        used_texts.add(t_idx)
+
+    def _reading_key(t):
+        angle = math.radians(t.get("rotation") or 0)
+        return t["point"].x * math.cos(angle) + t["point"].y * math.sin(angle)
+
+    result = {}
+    for e_idx, fragments in fragments_by_element.items():
+        fragments.sort(key=_reading_key)
+        mark = "".join(t["text"] for t in fragments)
+        if mark:
+            result[e_idx] = (mark, {id(t) for t in fragments})
 
     return result
 

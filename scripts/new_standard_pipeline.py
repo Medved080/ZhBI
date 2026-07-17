@@ -25,6 +25,7 @@ from parse_zhbi import (
     is_effectively_closed,
     polyline_centroid,
     resolve_via_leaders,
+    resolve_via_polygon_texts,
 )
 from zone_binding import bind_element_to_zones, build_stance_level_polygons, compute_column_tier_elevations
 from zone_parser import build_zone_registry_from_classified, classify_layers
@@ -92,11 +93,42 @@ def parse_new_standard_elements(msp, zhbi_groups: dict) -> list:
         mark_layer = roles["Марка"]
         if mark_layer and pending:
             old_leaders, multi_leaders, texts = collect_annotations(msp, layers={mark_layer})
-            leader_pool = build_leader_pool(old_leaders, multi_leaders, texts)
-            matches = resolve_via_leaders(pending, leader_pool)
-            for idx, mark in matches.items():
-                pending[idx]["record"].mark = mark
-                pending[idx]["record"].source = "leader"
+
+            # Марка как текстовые фрагменты ВНУТРИ контура элемента (плиты
+            # перекрытия: "4П"+"-"+"1" без единой выноски, см.
+            # Docs/backlog.md) — ТОЛЬКО когда на этом слое марок нет вообще
+            # НИ ОДНОЙ настоящей выноски (LEADER/MULTILEADER). Проверено на
+            # реальном файле: если применять этот путь всегда (в т.ч. когда
+            # выноски есть, как у Ригеля/Колонны) — часть "голых" TEXT,
+            # которые на самом деле являются текстом ИМЕННО этой выноски
+            # (find_nearest_text_entry ищет его в build_leader_pool), по
+            # ошибке уходит в группировку по контуру раньше, чем до неё
+            # доходит очередь — резолвинг через выноски остаётся без
+            # текста и часть элементов, которые раньше находили свою марку
+            # верно, становится unresolved (было 2004/2004 через leader на
+            # Ригеле, стало 1746 leader + 128 unresolved после ошибки).
+            if old_leaders or multi_leaders:
+                leader_pool = build_leader_pool(old_leaders, multi_leaders, texts)
+                matches = resolve_via_leaders(pending, leader_pool)
+                for idx, mark in matches.items():
+                    pending[idx]["record"].mark = mark
+                    pending[idx]["record"].source = "leader"
+            else:
+                poly_matches = resolve_via_polygon_texts(pending, texts)
+                used_text_ids = set()
+                for idx, (mark, text_ids) in poly_matches.items():
+                    pending[idx]["record"].mark = mark
+                    pending[idx]["record"].source = "grouped_text"
+                    used_text_ids.update(text_ids)
+
+                remaining = [p for i, p in enumerate(pending) if i not in poly_matches]
+                if remaining:
+                    remaining_texts = [t for t in texts if id(t) not in used_text_ids]
+                    leader_pool = build_leader_pool(old_leaders, multi_leaders, remaining_texts)
+                    matches = resolve_via_leaders(remaining, leader_pool)
+                    for idx, mark in matches.items():
+                        remaining[idx]["record"].mark = mark
+                        remaining[idx]["record"].source = "leader"
 
     return records
 
