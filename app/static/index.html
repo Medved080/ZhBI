@@ -4811,8 +4811,29 @@ function scaledOutline(outline, factor) {
   return outline.map(([x, y]) => [cx + (x - cx) * factor, cy + (y - cy) * factor]);
 }
 
-const OUTLINE_MARGIN_SCALE = 1.08; // насколько шире контур "ободка" границы
-const OUTLINE_MARGIN_DEPTH_MM = 25; // на сколько ниже верх "ободка" относительно верха элемента
+// в мм: цветной (статусный) меш строится УЖЕ истинного контура на эту
+// долю (0.94 — уже на 6%), а "ободок" границы — РОВНО истинного
+// контура (1.0, не шире). Первая версия делала наоборот (ободок ШИРЕ
+// истинного контура) — у элементов, примыкающих ВПРИТЫК (без реального
+// зазора, например плиты перекрытия одного яруса), расширение ободка
+// одного элемента заходило на территорию соседа и там перекрывалось ЕГО
+// собственным основным мешом (тот выше = ближе к камере сверху) — граница
+// оставалась видна только там, где между элементами есть настоящий зазор.
+// Сузив именно ЦВЕТНОЙ меш (а не расширив ободок), граница каждого
+// элемента остаётся строго в его собственных истинных границах — у
+// соседних впритык элементов их ободки СОПРИКАСАЮТСЯ по стыку без
+// нахлёста, давая видимую тёмную кайму именно там.
+const OUTLINE_INNER_SCALE = 0.94;
+// По высоте цветной меш ВЫШЕ истинного диапазона на эту величину — на
+// tOP уровне это уже описанный приём (цветной перекрывает "ободок"
+// сверху в области, где сам ободок под ним = внутри своего контура);
+// СНИЗУ этот же отступ впервые нужен целенаправленно — оба меша (цветной
+// и ободок) в прошлой версии имели ОДИНАКОВУЮ нижнюю грань (обе начинались
+// у elevation_mm), что давало две ровно совпадающие по глубине
+// поверхности и мерцание (z-fighting) при взгляде СНИЗУ — заказчик
+// поймал это на реальном скриншоте. Раздвинув диапазоны по ОБОИМ концам
+// (не только сверху), z-fighting нет ни сверху, ни снизу.
+const OUTLINE_VERTICAL_MARGIN_MM = 15;
 
 // "Ободок" границы элемента — темнее заливки того же статуса (см.
 // Docs/backlog.md, по скриншоту из test_data/: однотипные примыкающие
@@ -4820,24 +4841,16 @@ const OUTLINE_MARGIN_DEPTH_MM = 25; // на сколько ниже верх "о
 // (первая версия) — THREE.LineBasicMaterial.linewidth не работает в
 // большинстве браузеров (ANGLE клэмпит к 1px, известное ограничение
 // WebGL1), из-за чего рёбра оказались практически невидимы на реальном
-// скриншоте. Вместо GL-линии — отдельный меш: НЕМНОГО ШИРЕ и НИЖЕ
-// основного. В центре, где оба перекрываются, более высокий основной
-// меш закрывает "ободок" сверху; виден только по краям, куда основной
-// меш не доходит — та самая тёмная кайма на стыке соседних элементов
-// при взгляде сверху, тот же эффект, что даёт обводка в 2D, но
-// геометрией, а не линией (работает при любом масштабе/браузере).
+// скриншоте. Вместо GL-линии — отдельный меш РОВНО истинного контура и
+// истинной высоты (см. константы выше — сужен именно цветной меш,
+// не этот).
 function build3DOutlineMesh(element, height) {
   if (!element.outline || element.outline.length < 3) return null;
-  const scaled = scaledOutline(element.outline, OUTLINE_MARGIN_SCALE);
-  const points = scaled.map(([x, y]) => new THREE.Vector2(x, y));
+  const points = element.outline.map(([x, y]) => new THREE.Vector2(x, y));
   const shape = new THREE.Shape(points);
-  const marginHeight = Math.max(height - OUTLINE_MARGIN_DEPTH_MM, height * 0.5);
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth: marginHeight, bevelEnabled: false, steps: 1 });
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
   geometry.rotateX(-Math.PI / 2);
   const material = new THREE.MeshBasicMaterial({ color: darkerColor(colorFor(element.current_status)), side: THREE.DoubleSide });
-  // Позиция НЕ выставляется — добавляется дочерним объектом основного
-  // меша (см. build3DMeshForElement), позиция/элevation наследуются от
-  // родителя автоматически; свой mesh.position здесь удвоил бы смещение.
   return new THREE.Mesh(geometry, material);
 }
 
@@ -4856,9 +4869,16 @@ function build3DMeshForElement(element, levels) {
   // смотрят на 2D-чертёж (X вправо, "северное" +Y дальше от зрителя).
   // Была допущена обратная ошибка (плюс вместо минуса) — из-за нее план
   // в 3D действительно зеркалился по одной из осей при взгляде сверху.
-  const points = element.outline.map(([x, y]) => new THREE.Vector2(x, y));
+  //
+  // Контур ЦВЕТНОГО (статусного) меша — чуть УЖЕ истинного и по высоте
+  // чуть ВЫШЕ/НИЖЕ истинного диапазона (см. константы OUTLINE_INNER_SCALE/
+  // OUTLINE_VERTICAL_MARGIN_MM выше) — не спорит по глубине ни сверху, ни
+  // снизу с "ободком" границы (build3DOutlineMesh) и не заходит на
+  // территорию соседнего элемента.
+  const innerOutline = scaledOutline(element.outline, OUTLINE_INNER_SCALE);
+  const points = innerOutline.map(([x, y]) => new THREE.Vector2(x, y));
   const shape = new THREE.Shape(points);
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height + OUTLINE_VERTICAL_MARGIN_MM * 2, bevelEnabled: false, steps: 1 });
   geometry.rotateX(-Math.PI / 2);
   // DoubleSide — смена знака выше меняет и порядок обхода контура
   // (winding), а с ним и направление нормалей граней; чтобы это не
@@ -4866,13 +4886,17 @@ function build3DMeshForElement(element, levels) {
   // MeshStandardMaterial по умолчанию), рисуем обе стороны.
   const material = new THREE.MeshStandardMaterial({ color: colorFor(element.current_status), side: THREE.DoubleSide });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(0, element.elevation_mm || 0, 0);
+  mesh.position.set(0, (element.elevation_mm || 0) - OUTLINE_VERTICAL_MARGIN_MM, 0);
   mesh.userData.elementId = element.id;
 
   // Граница элемента — см. build3DOutlineMesh выше; дочерний объект
-  // меша, позиция/elevation наследуются автоматически.
+  // основного меша, но со своим ЛОКАЛЬНЫМ смещением +OUTLINE_VERTICAL_
+  // MARGIN_MM — компенсирует то, что родитель (основной меш) сам сдвинут
+  // вниз на эту же величину (см. mesh.position.set выше), так что мировая
+  // позиция "ободка" в итоге РОВНО у истинного elevation_mm элемента.
   const outline = build3DOutlineMesh(element, height);
   if (outline) {
+    outline.position.set(0, OUTLINE_VERTICAL_MARGIN_MM, 0);
     mesh.add(outline);
     mesh.userData.outline = outline;
   }
