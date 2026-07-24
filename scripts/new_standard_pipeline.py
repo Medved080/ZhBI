@@ -163,8 +163,20 @@ def process(msp, known_old_layers: set, allowed_subtypes: dict, axis_grid=None):
 
     zones, review = build_zone_registry_from_classified(msp, classified)
 
+    # "Лесенка" (build_stance_level_polygons) синтезирует полигоны стоянок
+    # для ярусов ВЫШЕ земли из ОДНОГО физического полигона — нужна только
+    # когда в файле есть лишь один нарисованный ярус стоянок (старый
+    # формат чертежа). Если заказчик уже нарисовал РЕАЛЬНЫЕ полигоны
+    # стоянок на нескольких ярусах (несколько разных elevation_mm среди
+    # zones категории "Стоянка"), синтетическая лесенка не нужна и вредна:
+    # она группирует стоянки по номеру в ряду БЕЗ учёта яруса, из-за чего
+    # 4 яруса × N стоянок превращаются в один длинный "ряд" из 4N записей
+    # и бо́льшая часть элементов уходит в needs_review (см. Docs/backlog.md,
+    # 260722). В этом случае привязка идёт по прямому снэпу на ближайший
+    # ниже РЕАЛЬНО нарисованный ярус — см. zone_binding._candidates_for_category.
     stance_level_polys, tier_elevations = None, None
-    if axis_grid is not None:
+    stance_elevations = {z.elevation_mm for z in zones if z.category == "Стоянка" and z.elevation_mm is not None}
+    if axis_grid is not None and len(stance_elevations) <= 1:
         tier_elevations = compute_column_tier_elevations(element_records)
         stance_level_polys = build_stance_level_polygons(
             zones, axis_grid.numeric_axes, axis_grid.letter_axes, tier_elevations

@@ -132,6 +132,19 @@ def _group_zone_layers(classified: dict) -> dict:
 # границы полигона вместо точного предиката (см. Docs/backlog.md).
 NAME_MATCH_TOLERANCE_MM = 1.0
 
+# Запасной путь, если острие выноски не попало в допуск NAME_MATCH_
+# TOLERANCE_MM ни у одного полигона — на реальных чертежах острие
+# MULTILEADER иногда ложится за пределами полигона на несколько мм и
+# больше (не 1e-11 мм в 10-м знаке, как для "стыка по границе", а
+# полноценный зазор — до ~20мм на живых данных, см. Docs/backlog.md,
+# 2026-07-22). Считаем текст сопоставленным ближайшему полигону, ТОЛЬКО
+# если тот заметно (NAME_NEAR_MISS_MARGIN_MM) ближе любого другого
+# кандидата — иначе рискуем угадать не ту зону там, где несколько стоянок
+# стоят вплотную. На реальных случаях правильный кандидат был в 2-18мм,
+# ложные — дальше 1000мм, так что оба порога — с большим запасом.
+NAME_NEAR_MISS_TOLERANCE_MM = 50.0
+NAME_NEAR_MISS_MARGIN_MM = 200.0
+
 
 def match_names_to_zones(zone_polys: list, name_texts: list):
     """
@@ -148,6 +161,13 @@ def match_names_to_zones(zone_polys: list, name_texts: list):
     for text_handle, text, (tx, ty) in name_texts:
         pt = Point(tx, ty)
         containing = [handle for handle, poly in zone_polys if poly.distance(pt) <= NAME_MATCH_TOLERANCE_MM]
+        if not containing and zone_polys:
+            distances = sorted((poly.distance(pt), handle) for handle, poly in zone_polys)
+            nearest_d, nearest_handle = distances[0]
+            if nearest_d <= NAME_NEAR_MISS_TOLERANCE_MM and (
+                len(distances) == 1 or distances[1][0] - nearest_d >= NAME_NEAR_MISS_MARGIN_MM
+            ):
+                containing = [nearest_handle]
         if len(containing) == 1:
             candidates_by_zone[containing[0]].append(text)
         elif len(containing) == 0:
@@ -171,15 +191,48 @@ def match_names_to_zones(zone_polys: list, name_texts: list):
     return zone_name_by_handle, review
 
 
+def _polygon_to_outline(poly) -> Optional[list]:
+    """shapely Polygon -> [(x, y), ...] без повторения замыкающей вершины
+    (тот же формат, что и ZoneRecord.outline из DXF). MultiPolygon/
+    GeometryCollection (пересечение невыпуклых контуров иногда даёт их) —
+    берём крупнейший кусок, тот же приём, что и в _to_shapely_polygon."""
+    if poly.geom_type != "Polygon":
+        polys = [g for g in getattr(poly, "geoms", []) if g.geom_type == "Polygon"]
+        poly = max(polys, key=lambda p: p.area) if polys else None
+        if poly is None:
+            return None
+    coords = list(poly.exterior.coords)
+    if len(coords) > 1 and coords[0] == coords[-1]:
+        coords = coords[:-1]
+    return coords if len(coords) >= 3 else None
+
+
 def _link_stances_to_cranes(zones: list) -> list:
-    """Заполняет ZoneRecord.parent_zone_handle/parent_match_status у зон
-    категории "Стоянка" — определяет, в полигоне какой зоны категории
-    "Кран" физически находится центроид стоянки (тем же приёмом
-    point-in-polygon, что и привязка элементов к зонам, см.
-    scripts/zone_binding.py). Не совпало ни с одной, или совпало сразу с
-    несколькими — не гадаем, "unmatched"/"ambiguous", см. Docs/backlog.md
-    ("Добавь при чтении файла в свойствах стоянки крана связь с краном").
-    Возвращает список ZoneReviewItem с деталями по каждой такой стоянке."""
+    """Определяет связь каждой зоны категории "Стоянка" с зоной(ами)
+    категории "Кран" — по факту ГЕОМЕТРИЧЕСКОГО ПЕРЕСЕЧЕНИЯ (площадь > 0),
+    не по центроиду: на части ярусов (см. Docs/backlog.md, 2026-07-23)
+    стоянка нарисована ОДНИМ вытянутым прямоугольником сразу для всех
+    кранов (заказчик подтвердил на реальном файле — каждая стоянка яруса
+    +25800/+34700 пересекает все 3 крана заметной площадью, а не только
+    ближайший по центроиду), а не отдельным прямоугольником на кран, как
+    на ярусах 0/+15800.
+
+    - Пересекает РОВНО один кран (любой ненулевой площадью) — обычный
+      случай (0/+15800 в реальном файле) — ничего не меняем, тот же
+      ZoneRecord, parent_zone_handle на этот кран, контур КАК ЕСТЬ, без
+      обрезки (заказчик подтвердил — на этих ярусах трогать не нужно).
+    - Не пересекает НИ ОДНОГО крана — как раньше, "unmatched".
+    - Пересекает НЕСКОЛЬКО кранов заметной площадью — это не одна зона, а
+      общая заготовка "стоянка N для любого крана" (+25800/+34700 в
+      реальном файле) — заменяем ОДНОЙ записью на КАЖДЫЙ кран, контур
+      каждой — пересечение исходного контура с зоной этого крана (заказчик
+      подтвердил: "по любому ненулевому" пересечению, без минимального
+      порога площади). Handle — составной (исходный#кран), чтобы не
+      конфликтовать с UNIQUE(source_file, dxf_handle) в БД.
+
+    Мутирует список zones НА МЕСТЕ (заменяет записи категории "Стоянка"),
+    как и раньше. Возвращает список ZoneReviewItem с деталями по каждой
+    несопоставленной стоянке."""
     cranes = []
     for z in zones:
         if z.category != "Кран":
@@ -189,27 +242,48 @@ def _link_stances_to_cranes(zones: list) -> list:
             cranes.append((z, poly))
 
     review = []
+    new_stances = []
     for z in zones:
         if z.category != "Стоянка":
             continue
         poly = _to_shapely_polygon(z.outline)
         if poly is None or poly.is_empty:
             z.parent_match_status = "unmatched"
+            new_stances.append(z)
             continue
-        centroid = poly.centroid
-        matched = [cz for cz, cpoly in cranes if cpoly.distance(centroid) <= NAME_MATCH_TOLERANCE_MM]
 
-        if len(matched) == 1:
-            z.parent_zone_handle = matched[0].handle
-            z.parent_match_status = "matched"
-        elif len(matched) == 0:
+        overlapping = []
+        for cz, cpoly in cranes:
+            inter = poly.intersection(cpoly)
+            if not inter.is_empty and inter.area > 0:
+                overlapping.append((cz, inter))
+
+        if len(overlapping) == 0:
             z.parent_match_status = "unmatched"
+            new_stances.append(z)
             review.append(ZoneReviewItem("stance_no_crane", {"handle": z.handle}))
+        elif len(overlapping) == 1:
+            cz, _inter = overlapping[0]
+            z.parent_zone_handle = cz.handle
+            z.parent_match_status = "matched"
+            new_stances.append(z)
         else:
-            z.parent_match_status = "ambiguous"
-            review.append(
-                ZoneReviewItem("stance_multiple_cranes", {"handle": z.handle, "cranes": [c.handle for c in matched]})
-            )
+            for cz, inter in overlapping:
+                outline = _polygon_to_outline(inter)
+                if outline is None:
+                    continue
+                new_stances.append(ZoneRecord(
+                    handle=f"{z.handle}#{cz.handle}",
+                    category=z.category,
+                    elevation_mm=z.elevation_mm,
+                    outline=outline,
+                    name=z.name,
+                    match_status=z.match_status,
+                    parent_zone_handle=cz.handle,
+                    parent_match_status="matched",
+                ))
+
+    zones[:] = [z for z in zones if z.category != "Стоянка"] + new_stances
     return review
 
 

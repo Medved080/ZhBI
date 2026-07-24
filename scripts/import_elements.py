@@ -111,13 +111,15 @@ def read_rows(csv_path):
 
 
 def ensure_label_visibility(conn, element_types):
-    """Заводит запись в label_visibility (видна по умолчанию) для каждого
-    нового element_type — типы элементов не жёстко зашиты (сейчас
-    "Колонна"/"Ригель", остальные появятся позже), поэтому настройка
-    самообслуживается по мере импорта, а не заполняется заранее."""
+    """Заводит запись в label_visibility (ВЫКЛЮЧЕНА по умолчанию — заказчик
+    сам включает нужные из "Настройки", см. Docs/backlog.md, быстродействие
+    на больших файлах) для каждого нового element_type — типы элементов не
+    жёстко зашиты (сейчас "Колонна"/"Ригель", остальные появятся позже),
+    поэтому настройка самообслуживается по мере импорта, а не заполняется
+    заранее."""
     for element_type in element_types:
         conn.execute(
-            "INSERT OR IGNORE INTO label_visibility (element_type, visible) VALUES (?, 1)",
+            "INSERT OR IGNORE INTO label_visibility (element_type, visible) VALUES (?, 0)",
             (element_type,),
         )
 

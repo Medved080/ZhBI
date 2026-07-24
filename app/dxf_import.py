@@ -11,7 +11,6 @@ CLI-скриптов) — открытый ezdxf-документ переисп
 """
 
 import logging
-import shutil
 import sys
 from pathlib import Path
 
@@ -27,6 +26,7 @@ from layer_naming import LayerNameError
 
 from app.db import get_connection, init_db
 from app.models import DxfImportResult, ZoneImportSummary
+from app.upload_limits import copy_upload_limited
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
@@ -62,8 +62,7 @@ def save_uploaded_file(upload_file, uploads_dir: Path = UPLOADS_DIR) -> Path:
 
     uploads_dir.mkdir(parents=True, exist_ok=True)
     dest = uploads_dir / filename
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(upload_file.file, f)
+    copy_upload_limited(upload_file.file, dest)
     return dest
 
 

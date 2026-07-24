@@ -1,0 +1,23 @@
+# Данные — монтируются как volume, в образ не попадают никогда (см.
+# Docs/DEPLOYMENT_LINUX.md — разделение код/данные).
+data/
+Input/
+uploads/
+test_data/
+output/
+
+# Локальное окружение разработчика / служебное
+.venv/
+.git/
+.claude/
+.DS_Store
+__pycache__/
+*.pyc
+
+# Не нужно внутри образа для запуска сервера
+scripts/linux/
+Docs/
+CLAUDE.md
+docker-compose.yml
+.env
+.env.example

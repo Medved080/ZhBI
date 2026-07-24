@@ -1,10 +1,11 @@
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from shapely.geometry import Point
 from shapely.strtree import STRtree
@@ -44,9 +45,93 @@ from app.models import (
     ZoneColorIn,
 )
 from app.pdf_export import build_schema_pdf
+from app.upload_limits import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, read_upload_limited
 from app.users import router as users_router
 
-app = FastAPI(title="ЖБИ")
+# Интерактивная документация (/docs, /redoc) и схема (/openapi.json)
+# анонимному пользователю сети не нужны и раскрывают всю карту API —
+# выключены по умолчанию (см. Docs/backlog.md, аудит безопасности),
+# включаются явно для локальной разработки через ZHBI_ENABLE_DOCS=1.
+_ENABLE_DOCS = os.environ.get("ZHBI_ENABLE_DOCS") == "1"
+app = FastAPI(
+    title="ЖБИ",
+    docs_url="/docs" if _ENABLE_DOCS else None,
+    redoc_url="/redoc" if _ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if _ENABLE_DOCS else None,
+)
+# Вся статика — локальная (см. CLAUDE.md, "3D-режим": Three.js вендорено,
+# не CDN), инлайновых обработчиков событий (onclick=...) в разметке нет —
+# только инлайновые style="..." (динамические цвета статусов/зон, см.
+# app/static/app.js), поэтому style-src не может обойтись без
+# 'unsafe-inline', а script-src — может (весь JS вынесен в
+# /static/app.js специально ради этого, см. Docs/backlog.md).
+#
+# Единственное исключение — `<script type="importmap">` в <head>
+# index.html (bare-специфайер "three" -> локальный vendor-файл, см. его
+# собственный комментарий там же): CSP относит import map к обычным
+# инлайновым скриптам, 'self' их не пускает. Вместо ослабления всей
+# политики до 'unsafe-inline' — точечный sha256-хэш ИМЕННО этого блока
+# (статический контент, не меняется в рантайме). ВАЖНО: при любом
+# изменении текста import map (например, обновлении версии Three.js)
+# хэш ниже нужно пересчитать — иначе 3D-режим молча перестанет
+# резолвить "three" (ровно так это один раз и сломалось при выносе
+# инлайнового JS в /static/app.js, см. Docs/backlog.md).
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'sha256-GGgqHO/YpgtINWBQBdyPoj2n6zSoZ9PEznPWfb/aFu4='; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    # StaticFiles по умолчанию не выставляет Cache-Control — браузер сам
+    # решает, когда перепроверять файл, и на практике часто показывает
+    # старую копию app.js/index.html после правки на сервере (несколько
+    # раз путало живую проверку в этой сессии, см. Docs/backlog.md —
+    # помогала только жёсткая перезагрузка). no-cache (не no-store) —
+    # браузер ОБЯЗАН на каждый запрос спросить сервер "не устарело ли"
+    # (условный GET по ETag/Last-Modified, которые StaticFiles уже
+    # проставляет сама) — не полный передекачивание при каждой загрузке,
+    # но и не молчаливая раздача устаревшей копии из кэша.
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.middleware("http")
+async def limit_upload_size(request, call_next):
+    """Быстрый отказ ДО чтения тела запроса, если клиент честно объявил
+    Content-Length больше лимита (у браузерных multipart-форм так и
+    есть всегда — см. app/upload_limits.py). Второй, более медленный
+    барьер — copy_upload_limited/read_upload_limited на самих точках
+    чтения файла, на случай запроса без Content-Length."""
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            too_big = int(content_length) > MAX_UPLOAD_BYTES
+        except ValueError:
+            too_big = False
+        if too_big:
+            return JSONResponse(
+                {"detail": f"Файл слишком большой (максимум {MAX_UPLOAD_MB} МБ)"}, status_code=413
+            )
+    return await call_next(request)
+
+
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(contracts_router)
@@ -133,9 +218,32 @@ def estimate_marker_radius(points, bbox_diag, fraction=0.25):
     return nearest[len(nearest) // 2] * fraction
 
 
+def _warn_users_without_password() -> None:
+    """password_hash IS NULL = вход для этого аккаунта запрещён (см.
+    app/auth.py verify_password) — это не "тихая" деградация, а рабочая
+    учётка, которой прямо сейчас никто не может воспользоваться (в
+    частности — свежесозданная БД с дефолтным admin, см. schema.sql).
+    Громкий лог при каждом старте — чтобы это не потерялось молча."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT domain_login FROM users WHERE password_hash IS NULL ORDER BY domain_login"
+        ).fetchall()
+    finally:
+        conn.close()
+    if rows:
+        logins = ", ".join(r["domain_login"] for r in rows)
+        print(
+            f"[startup] ВНИМАНИЕ: без пароля (вход запрещён, пока не задан): {logins}. "
+            f"Задайте пароль через UI (если есть доступ хоть с одной учётки admin) "
+            f"или scripts/reset_password.py <domain_login>."
+        )
+
+
 @app.on_event("startup")
 def on_startup():
     init_db()
+    _warn_users_without_password()
     _import_input_dir()
 
 
@@ -899,7 +1007,7 @@ def import_history_xlsx(
     mode: str = Form(...),
     admin: sqlite3.Row = Depends(require_admin),
 ):
-    content = file.file.read()
+    content = read_upload_limited(file.file)
     conn = get_connection()
     try:
         rows = parse_history_xlsx(content)
@@ -947,7 +1055,7 @@ def export_settings(admin: sqlite3.Row = Depends(require_admin)):
 @app.post("/settings/import")
 def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_admin)):
     try:
-        payload = json.loads(file.file.read())
+        payload = json.loads(read_upload_limited(file.file))
     except json.JSONDecodeError:
         raise HTTPException(status_code=422, detail="Файл повреждён или не является корректным JSON")
 

@@ -4,10 +4,13 @@
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.auth import get_current_user, hash_password, require_admin, user_out, UserOut
+from app.auth import (
+    SESSION_COOKIE, get_current_user, hash_password, require_admin,
+    user_out, validate_password_strength, UserOut,
+)
 from app.db import get_connection
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -117,10 +120,23 @@ def update_user(user_id: int, body: UserUpdateIn, admin: sqlite3.Row = Depends(r
 
 @router.post("/{user_id}/set-password", response_model=UserOut)
 def set_password(
-    user_id: int, body: SetPasswordIn, current: sqlite3.Row = Depends(get_current_user)
+    user_id: int, body: SetPasswordIn, request: Request, current: sqlite3.Row = Depends(get_current_user)
 ):
     if current["role"] != "admin" and current["id"] != user_id:
         raise HTTPException(status_code=403, detail="Можно менять только свой пароль")
+
+    if body.password == "":
+        # password_hash=NULL теперь означает "вход запрещён" (см.
+        # app/auth.py verify_password), а не "пароль не требуется" — то
+        # есть это осознанная БЛОКИРОВКА аккаунта, не самообслуживание.
+        # Разрешаем только админу и только над чужим аккаунтом.
+        if current["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Нельзя снять собственный пароль")
+    else:
+        try:
+            validate_password_strength(body.password)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
     conn = get_connection()
     try:
@@ -137,6 +153,21 @@ def set_password(
             "UPDATE users SET password_hash = ?, password_salt = ?, updated_at = datetime('now') WHERE id = ?",
             (password_hash, password_salt, user_id),
         )
+        # Смена пароля обесценивает уже выданные cookie этого пользователя —
+        # иначе украденная или оставленная в общем браузере сессия
+        # продолжала бы работать даже после того, как владелец (сам или
+        # через админа) поменял пароль именно потому, что заподозрил её
+        # компрометацию. Сессия, которой ПРЯМО СЕЙЧАС пользуется вызывающий
+        # (самообслуживание — меняешь себе, останешься в ней же), не
+        # трогается — иначе смена собственного пароля мгновенно
+        # разлогинивала бы автора действия.
+        current_token = request.cookies.get(SESSION_COOKIE)
+        if current_token:
+            conn.execute(
+                "DELETE FROM sessions WHERE user_id = ? AND token != ?", (user_id, current_token)
+            )
+        else:
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         conn.commit()
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return user_out(updated)

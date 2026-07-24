@@ -3,8 +3,12 @@
 Пароль хранится как PBKDF2-HMAC-SHA256 хэш с индивидуальной солью — без
 внешних зависимостей (hashlib из стандартной библиотеки достаточно для
 внутреннего инструмента такого масштаба). password_hash IS NULL означает
-"пароль не задан" — вход разрешён с пустым паролем, пока кто-то (сам
-пользователь или админ) не установит настоящий через UI.
+"пароль не задан" — вход в систему для такого пользователя ЗАПРЕЩЁН (см.
+verify_password), а не разрешён с пустым паролем, как было раньше: пустой
+пароль был бы дырой в открытом интернете (см. Docs/backlog.md, аудит
+безопасности). Единственный способ ожить такому аккаунту — админ
+задаёт пароль через UI, либо (если админов не осталось) —
+scripts/reset_password.py напрямую в БД.
 """
 
 import hashlib
@@ -24,21 +28,48 @@ SESSION_COOKIE = "zhbi_session"
 SESSION_TTL_DAYS = 30
 PBKDF2_ITERATIONS = 260_000
 
+# Минимальные требования к сложности пароля — проверяются при установке/смене
+# (POST /users/{id}/set-password и scripts/reset_password.py), НЕ при входе:
+# на существующие хэши задним числом не действуют, иначе пользователи с уже
+# заданным паролем короче MIN_PASSWORD_LENGTH оказались бы заперты снаружи.
+MIN_PASSWORD_LENGTH = 8
+
 # По умолчанию выключено — деплой сейчас на чистом HTTP внутри локальной
 # сети (см. Docs/DEPLOYMENT_WINDOWS.md, там нигде нет TLS/reverse-proxy),
 # secure=True безусловно сломал бы вход. Включить переменной окружения
 # ZHBI_SECURE_COOKIES=1, если/когда появится HTTPS.
 SECURE_COOKIES = os.environ.get("ZHBI_SECURE_COOKIES") == "1"
 
+# По умолчанию выключено. Если сервер стоит НАПРЯМУЮ (как сейчас, см.
+# DEPLOYMENT_WINDOWS.md) — request.client.host уже настоящий IP клиента,
+# доверять заголовку X-Forwarded-For НЕЛЬЗЯ: любой клиент сам его
+# подставляет и тривиально обходит rate-limit (или запирает чужой IP).
+# Включать ТОЛЬКО если перед сервером реально стоит доверенный
+# reverse-proxy (nginx/Caddy и т.п.), который сам перезаписывает этот
+# заголовок настоящим адресом клиента — тогда request.client.host видел
+# бы адрес самого прокси, и блокировка по IP иначе била бы по ВСЕМ
+# пользователям сразу после 5 неудачных попыток КОГО УГОДНО.
+TRUST_PROXY_HEADERS = os.environ.get("ZHBI_TRUST_PROXY_HEADERS") == "1"
+
 router = APIRouter()
 
-# Блокировка подбора пароля — по IP клиента, не по логину: логины и так
-# публично видны через GET /login-users, блокировка по логину позволила
-# бы атакующему намеренно запереть чужого пользователя, зная только его
-# логин. In-memory (один процесс uvicorn, без внешнего кэша).
+# Блокировка подбора пароля — по IP клиента, не по логину: блокировка по
+# логину позволила бы атакующему намеренно запереть чужого пользователя,
+# зная только его логин (а логин угадать/перебрать несравнимо проще, чем
+# пароль). In-memory (один процесс uvicorn, без внешнего кэша).
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = 300
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 5
 _login_attempts: dict[str, list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    if TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            # Самый левый адрес — тот, кто ПЕРВЫМ отправил запрос (каждый
+            # промежуточный прокси добавляет свой адрес В КОНЕЦ списка).
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _check_login_rate_limit(client_ip: str) -> None:
@@ -63,11 +94,27 @@ def hash_password(password: str, salt: Optional[str] = None) -> tuple[str, str]:
 
 def verify_password(password: str, password_hash: Optional[str], password_salt: Optional[str]) -> bool:
     if password_hash is None:
-        return password == ""
+        # Пароль не задан (или явно снят админом) — вход запрещён, а не
+        # разрешён с пустой строкой (см. модуль docstring).
+        return False
     if password_salt is None:
         return False
     derived, _ = hash_password(password, password_salt)
     return secrets.compare_digest(derived, password_hash)
+
+
+def validate_password_strength(password: str) -> None:
+    """Требования к новому/меняемому паролю. Вызывается ДО hash_password в
+    местах, где пароль реально становится непустым (не в момент входа —
+    verify_password существующие хэши не проверяет на соответствие этим
+    правилам задним числом). Raises ValueError с русским текстом для
+    прямого показа пользователю."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Пароль должен быть не короче {MIN_PASSWORD_LENGTH} символов")
+    has_letter = any(ch.isalpha() for ch in password)
+    has_digit = any(ch.isdigit() for ch in password)
+    if not (has_letter and has_digit):
+        raise ValueError("Пароль должен содержать и буквы, и цифры")
 
 
 def format_display_name(user: sqlite3.Row) -> str:
@@ -155,32 +202,9 @@ def user_out(user: sqlite3.Row) -> UserOut:
     )
 
 
-class PublicUserOut(BaseModel):
-    domain_login: str
-    display_name: str
-
-
-@router.get("/login-users", response_model=list[PublicUserOut])
-def login_users():
-    """
-    Публичный (без авторизации — им же и пользуется форма входа до логина)
-    список для выпадающего списка на экране входа (п.7 бэклога). Отдаёт
-    ТОЛЬКО ФИО и логин, никаких ролей/паролей — это осознанный компромисс:
-    раскрывает список валидных логинов неаутентифицированному клиенту ради
-    удобства входа, приемлемо для внутреннего инструмента, но не годится,
-    если сервис когда-нибудь станет публично доступным.
-    """
-    conn = get_connection()
-    try:
-        rows = conn.execute("SELECT * FROM users ORDER BY last_name, first_name").fetchall()
-        return [PublicUserOut(domain_login=r["domain_login"], display_name=format_display_name(r)) for r in rows]
-    finally:
-        conn.close()
-
-
 @router.post("/login", response_model=UserOut)
 def login(body: LoginRequest, request: Request, response: Response):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip(request)
     _check_login_rate_limit(client_ip)
 
     conn = get_connection()

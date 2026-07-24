@@ -1,0 +1,12 @@
+services:
+  zhbi:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./Input:/app/Input
+      - ./uploads:/app/uploads

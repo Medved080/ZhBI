@@ -43,6 +43,17 @@ POINT_MATCH_TOLERANCE_MM = 1.0
 # Типы элементов, которые привязываются по точке вставки, а не по контуру.
 POINT_BASED_TYPES = {"Колонна"}
 
+# Типы, которые физически ВЕНЧАЮТ ярус СНИЗУ (лежат на колоннах/ригелях
+# нижнего яруса), хотя в имени слоя стоят под отметкой яруса, который они
+# венчают, а не яруса, на котором стоят — заказчик подтвердил на реальных
+# данных 2026-07-23: Ригель сидит ТОЧНО на отметках яруса колонн
+# (15800/25800/34700 в реальном файле), Плита перекрытия — близко к ним
+# (15000 против 15800 — на толщину плиты). Привязка к стоянке/крану для
+# этих типов ищет ярус СТРОГО НИЖЕ собственной отметки элемента (не <=,
+# как для остальных типов, включая саму Колонну — она относится к своему
+# ярусу). См. Docs/backlog.md.
+TIER_CAPPING_TYPES = {"Плита перекрытия", "Ригель"}
+
 
 @dataclass
 class ZoneBindingResult:
@@ -63,14 +74,52 @@ def _to_valid_polygon(outline):
     return poly
 
 
-def _candidates_for_category(zones, category, element_elevation_mm):
+def _candidates_for_category(zones, category, element_elevation_mm, own_crane_handle=None, strict_below=False):
     """None означает "неприменимо" (нельзя определить уровень элемента —
-    сравнение со стоянками невозможно), а не "нет кандидатов"."""
+    сравнение со стоянками невозможно), а не "нет кандидатов".
+
+    "Стоянка" — снэп на ближайший НИЖЕ реально нарисованный ярус стоянок
+    (не точное совпадение отметки) — заказчик подтвердил правило: ригель
+    на +5000 относится к стоянкам на 0, элементы на +47000 — к стоянкам
+    на +34700 (см. Docs/backlog.md, 2026-07-22). Раньше было точное
+    совпадение — этот путь используется только когда build_element_zones
+    НЕ передаёт "лесенку" (stance_level_polys/tier_elevations), т.е. для
+    файлов, где на каждом ярусе уже нарисованы РЕАЛЬНЫЕ полигоны стоянок
+    (несколько отметок в zones) — синтетическая лесенка там не нужна и
+    вредна (путает "номер стоянки в ряду" с "ярус", см.
+    build_stance_level_polygons).
+
+    strict_below — для TIER_CAPPING_TYPES (Ригель/Плита перекрытия):
+    снэп ищет ярус стоянки СТРОГО ниже отметки элемента (e < elevation),
+    а не e <= elevation — эти типы венчают ярус снизу, поэтому при
+    отметке, совпадающей с отметкой яруса стоянки, должны уйти на ярус
+    ниже, а не остаться на этом же (см. TIER_CAPPING_TYPES).
+
+    own_crane_handle — если передан, кандидаты СНАЧАЛА сужаются до стоянок
+    ИМЕННО этого крана (parent_zone_handle), а снэп по высоте считается
+    уже только среди НИХ. Без этого элемент на ярусе, где у ЕГО крана нет
+    своей стоянки, мог геометрически "зацепиться" за стоянку СОСЕДНЕГО
+    крана, если её полигон там просто оказался рядом — реальный случай
+    (элемент 28083, живая проверка, см. Docs/backlog.md, 2026-07-22).
+    Заказчик подтвердил: стоянка — часть рабочей зоны конкретного крана,
+    привязка не должна пересекать на чужой кран, даже если его полигон
+    геометрически совпал; если у своего крана на этом ярусе стоянки нет —
+    снэп ещё ниже, до ближайшего яруса, где она у НЕГО есть."""
     matching = [z for z in zones if z.category == category]
     if category == "Стоянка":
         if element_elevation_mm is None:
             return None
-        matching = [z for z in matching if z.elevation_mm == element_elevation_mm]
+        if own_crane_handle is not None:
+            matching = [z for z in matching if z.parent_zone_handle == own_crane_handle]
+        stance_elevations = sorted({z.elevation_mm for z in matching if z.elevation_mm is not None})
+        if not stance_elevations:
+            return []
+        if strict_below:
+            below = [e for e in stance_elevations if e < element_elevation_mm]
+        else:
+            below = [e for e in stance_elevations if e <= element_elevation_mm]
+        snapped = below[-1] if below else stance_elevations[0]
+        matching = [z for z in matching if z.elevation_mm == snapped]
     return matching
 
 
@@ -176,16 +225,21 @@ def compute_column_tier_elevations(element_records):
     return tiers or [0]
 
 
-def _tier_index(elevation_mm, tier_elevations):
+def _tier_index(elevation_mm, tier_elevations, strict_below=False):
     """Индекс яруса для отметки элемента — последний ярус с elevation <=
     elevation_mm; отметки ниже/выше диапазона зажимаются к крайнему ярусу
     (чтобы ни один элемент не остался без возможности отнесения к
-    стоянке из-за отметки чуть вне диапазона известных ярусов колонн)."""
+    стоянке из-за отметки чуть вне диапазона известных ярусов колонн).
+
+    strict_below — для TIER_CAPPING_TYPES (Ригель/Плита перекрытия):
+    ищет последний ярус СТРОГО ниже elevation_mm (t < elevation_mm), а не
+    t <= elevation_mm — эти типы венчают ярус снизу, значит при отметке,
+    совпадающей с отметкой яруса колонн, должны попасть на ярус ниже."""
     if elevation_mm is None or not tier_elevations:
         return None
     idx = 0
     for i, t in enumerate(tier_elevations):
-        if t <= elevation_mm:
+        if (t < elevation_mm) if strict_below else (t <= elevation_mm):
             idx = i
         else:
             break
@@ -344,11 +398,12 @@ def bind_element_to_zones(
     """
     use_point = element_type in POINT_BASED_TYPES or not outline
     use_tiered_stances = stance_level_polys is not None and tier_elevations is not None
+    strict_below = element_type in TIER_CAPPING_TYPES
 
     result = {}
     for category in ZONE_CATEGORIES:
         if category == "Стоянка" and use_tiered_stances:
-            level = _tier_index(elevation_mm, tier_elevations)
+            level = _tier_index(elevation_mm, tier_elevations, strict_below=strict_below)
             if level is None:
                 result[category] = ZoneBindingResult(None, "not_applicable")
                 continue
@@ -362,7 +417,17 @@ def bind_element_to_zones(
             )
             continue
 
-        candidates = _candidates_for_category(zones, category, elevation_mm)
+        if category == "Стоянка":
+            # "Кран" уже обработан на этой итерации (см. порядок
+            # ZONE_CATEGORIES выше) — сужаем стоянки СВОИМ краном элемента,
+            # см. docstring _candidates_for_category.
+            crane_result = result.get("Кран")
+            own_crane_handle = crane_result.zone_handle if crane_result and crane_result.status == "matched" else None
+            candidates = _candidates_for_category(
+                zones, category, elevation_mm, own_crane_handle=own_crane_handle, strict_below=strict_below
+            )
+        else:
+            candidates = _candidates_for_category(zones, category, elevation_mm)
         if use_point:
             result[category] = _bind_point(x, y, candidates)
         else:
