@@ -1,0 +1,49 @@
+variables:
+  CONTAINER_IMAGE: $HARBOR_REGISTRY/$HARBOR_PROJECT/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME
+
+stages:
+  - build-img
+  - reload-app
+
+BuildPushImg:
+  image: docker:git
+  tags:
+    - docker-builder
+  stage: build-img
+  script:
+    - echo "$HARBOR_TOKEN" | docker login "$HARBOR_REGISTRY" -u "$HARBOR_USER" --password-stdin
+    - docker build -t "$CONTAINER_IMAGE:$CI_PIPELINE_ID" -f Dockerfile .
+    - docker push "$CONTAINER_IMAGE:$CI_PIPELINE_ID"
+  only:
+    - develop
+    - production
+
+Redeploy_backend_dev:
+  image: harbor.mcy-1.ru/mcy-1/docker/compose:v2
+  tags:
+    - dev
+  stage: reload-app
+  before_script:
+    - echo "$HARBOR_TOKEN" | docker login "$HARBOR_REGISTRY" -u "$HARBOR_USER" --password-stdin
+    - echo "${env_develop}" | tr ' ' '\n' > .env.run
+    - docker pull "$CONTAINER_IMAGE:$CI_PIPELINE_ID"
+  script:
+    - docker-compose -f docker-compose.yml down || true
+    - docker-compose -f docker-compose.yml up -d
+  only:
+    - develop
+
+Redeploy_backend_prod:
+  image: harbor.mcy-1.ru/mcy-1/docker/compose:v2
+  tags:
+    - prod
+  stage: reload-app
+  before_script:
+    - echo "$HARBOR_TOKEN" | docker login "$HARBOR_REGISTRY" -u "$HARBOR_USER" --password-stdin
+    - echo "${env_production}" | tr ' ' '\n' > .env.run
+    - docker pull "$CONTAINER_IMAGE:$CI_PIPELINE_ID"
+  script:
+    - docker-compose -f docker-compose.yml down || true
+    - docker-compose -f docker-compose.yml up -d
+  only:
+    - production
