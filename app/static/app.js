@@ -102,7 +102,8 @@ let state = {
     zoneMeshById: new Map(), // zone.id -> THREE.Mesh (захватка/кран/стоянка)
     zoneLabelSpriteById: new Map(), // zone.id -> THREE.Sprite (подпись Кран/Стоянка в основании объёма)
     siteBaseMesh: null, // едва заметная подложка границ всего проекта — см. build3DSiteBaseMesh
-    labelSpriteById: new Map(), // element.id -> THREE.Sprite (постоянная подпись марки)
+    labelSpriteById: new Map(), // element.id -> THREE.Sprite (постоянная подпись марки, запасной вариант)
+    markDecalById: new Map(), // element.id -> THREE.Group (наклейка марки на грани — см. build3DMarkDecal)
     edgeMaterial: null, // общий LineMaterial на ВСЕ рёбра силуэта — см. init3DScene
     materialByStatus: new Map(), // статус -> общий MeshStandardMaterial всех НЕвыбранных элементов этого статуса
     highlightMaterial: null, // единственный материал ВЫБРАННОГО элемента (пересвечивается под его цвет статуса)
@@ -523,6 +524,63 @@ function flippedText(x, y, text, fontSize, anchor, extraAttrs = {}) {
   });
   g.textContent = text;
   return g;
+}
+
+// ---------- подложка подписей МАРКИ (не зон/осей) — "как в 3D": тёмный
+// текст на светлой подложке-плашке, а не светлый контур вокруг тёмных
+// букв (живой репорт пользователя 2026-07-24; та же заливка/прозрачность,
+// что уже подтверждена для 3D-спрайтов, см. build3DLabelSprite). Оценка
+// текстового бокса — БЕЗ getBBox() (форсирует layout — дорого при
+// тысячах элементов на каждый тик зума, см. updateSizesForZoom, её же
+// O(n) без throttle отмечен в Docs/backlog.md); та же оценка ширины
+// символа (0.62×fontSize), что уже использует updateLabelCollisionVisibility
+// — согласована с уже посчитанными коллизионными боксами. ----------
+const LABEL_BG_CHAR_WIDTH_RATIO = 0.62;
+const LABEL_BG_PAD_X_SCALE = 0.25; // доля fontSize, с каждой стороны текста
+const LABEL_BG_ABOVE_BASELINE = 0.78; // доля fontSize выше базовой линии
+const LABEL_BG_BELOW_BASELINE = 0.28; // доля fontSize ниже базовой линии
+
+function updateLabelBgRect(bg, text, fontSize, anchor, x, y) {
+  const textWidth = (text.length || 1) * fontSize * LABEL_BG_CHAR_WIDTH_RATIO;
+  const padX = fontSize * LABEL_BG_PAD_X_SCALE;
+  const w = textWidth + padX * 2;
+  const h = fontSize * (LABEL_BG_ABOVE_BASELINE + LABEL_BG_BELOW_BASELINE);
+  let rectX;
+  if (anchor === "middle") rectX = -w / 2;
+  else if (anchor === "end") rectX = -textWidth - padX;
+  else rectX = -padX; // "start" (по умолчанию)
+  const rectY = -fontSize * LABEL_BG_ABOVE_BASELINE;
+  bg.setAttribute("transform", `translate(${x},${y}) scale(1,-1)`);
+  bg.setAttribute("x", rectX.toFixed(2));
+  bg.setAttribute("y", rectY.toFixed(2));
+  bg.setAttribute("width", w.toFixed(2));
+  bg.setAttribute("height", h.toFixed(2));
+  bg.setAttribute("rx", (fontSize * 0.15).toFixed(2));
+}
+
+// <text> подписи марки -> её <rect>-подложка — чтобы прятать/показывать
+// подложку СИНХРОННО с текстом везде, где меняется display (мест
+// несколько — фильтр видимости по типу, коллизии соседних подписей, см.
+// setLabelDisplay ниже) — WeakMap по самому DOM-узлу текста, без
+// отдельной Map по elementId в каждом месте.
+const labelBgByText = new WeakMap();
+
+function setLabelDisplay(textEl, value) {
+  textEl.style.display = value;
+  const bg = labelBgByText.get(textEl);
+  if (bg) bg.style.display = value;
+}
+
+// Создаёт <rect>-подложку + <text> подписи марки, вставляет ОБА в parent
+// (подложка — ПЕРЕД текстом, чтобы текст всегда рисовался поверх неё).
+function appendMarkLabel(parent, x, y, text, fontSize, anchor, extraAttrs) {
+  const bg = el("rect", { class: `${extraAttrs.class}-bg`, "data-type": extraAttrs["data-type"] });
+  updateLabelBgRect(bg, text, fontSize, anchor, x, y);
+  parent.appendChild(bg);
+  const textEl = flippedText(x, y, text, fontSize, anchor, extraAttrs);
+  parent.appendChild(textEl);
+  labelBgByText.set(textEl, bg);
+  return textEl;
 }
 
 // ---------- зоны (захватка/кран/стоянка) — см. Docs/backlog.md,
@@ -1083,6 +1141,8 @@ function applyPlacementFilters() {
     if (mesh) mesh.visible = passes;
     const sprite = state.view3d.labelSpriteById.get(element.id);
     if (sprite) sprite.visible = passes && state.labelVisibility[element.element_type] !== false;
+    const decal = state.view3d.markDecalById.get(element.id);
+    if (decal) decal.visible = passes && state.labelVisibility[element.element_type] !== false;
   }
 }
 
@@ -1864,6 +1924,8 @@ function updateElementSubLabel(element) {
     let subLabel = state.subLabelById.get(element.id);
     if (!subText) {
       if (subLabel) {
+        const bg = labelBgByText.get(subLabel);
+        if (bg) bg.remove();
         subLabel.remove();
         state.subLabelById.delete(element.id);
       }
@@ -1872,17 +1934,19 @@ function updateElementSubLabel(element) {
       const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
       const x = element.x + cand.dx * effectiveR;
       const y = element.y + cand.dy * effectiveR - effectiveFont * SUBLABEL_GAP_SCALE;
+      const fontSize = effectiveFont * SUBLABEL_FONT_SCALE;
       if (!subLabel) {
-        subLabel = flippedText(x, y, subText, effectiveFont * SUBLABEL_FONT_SCALE, cand.anchor, {
+        subLabel = appendMarkLabel(label.parentNode, x, y, subText, fontSize, cand.anchor, {
           class: "mark-sublabel", "data-type": element.element_type,
         });
-        if (state.labelVisibility[element.element_type] === false) subLabel.style.display = "none";
-        label.parentNode.appendChild(subLabel);
+        if (state.labelVisibility[element.element_type] === false) setLabelDisplay(subLabel, "none");
         state.subLabelById.set(element.id, subLabel);
       } else {
         subLabel.textContent = subText;
         subLabel.setAttribute("transform", `translate(${x},${y}) scale(1,-1)`);
-        subLabel.setAttribute("font-size", (effectiveFont * SUBLABEL_FONT_SCALE).toFixed(2));
+        subLabel.setAttribute("font-size", fontSize.toFixed(2));
+        const bg = labelBgByText.get(subLabel);
+        if (bg) updateLabelBgRect(bg, subText, fontSize, cand.anchor, x, y);
       }
     }
   }
@@ -2024,22 +2088,20 @@ function renderElements(data) {
     state.labelGroupById.set(element.id, labelGroup);
 
     const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
-    const label = flippedText(
-      element.x + cand.dx * r, element.y + cand.dy * r, element.mark || "", r * 1.3, cand.anchor,
+    const label = appendMarkLabel(
+      labelGroup, element.x + cand.dx * r, element.y + cand.dy * r, element.mark || "", r * 1.3, cand.anchor,
       { class: "mark-label", "data-type": element.element_type }
     );
-    if (state.labelVisibility[element.element_type] === false) label.style.display = "none";
-    labelGroup.appendChild(label);
+    if (state.labelVisibility[element.element_type] === false) setLabelDisplay(label, "none");
     state.labelById.set(element.id, label);
 
     const subText = elementSubLabelText(element);
     if (subText) {
-      const subLabel = flippedText(
-        element.x + cand.dx * r, element.y + cand.dy * r, subText, r * 1.3 * SUBLABEL_FONT_SCALE, cand.anchor,
+      const subLabel = appendMarkLabel(
+        labelGroup, element.x + cand.dx * r, element.y + cand.dy * r, subText, r * 1.3 * SUBLABEL_FONT_SCALE, cand.anchor,
         { class: "mark-sublabel", "data-type": element.element_type }
       );
-      if (state.labelVisibility[element.element_type] === false) subLabel.style.display = "none";
-      labelGroup.appendChild(subLabel);
+      if (state.labelVisibility[element.element_type] === false) setLabelDisplay(subLabel, "none");
       state.subLabelById.set(element.id, subLabel);
     }
   }
@@ -2186,7 +2248,10 @@ function renderLabelToggles() {
         // ниже пропускает выключенные типы целиком (см. её же проверку
         // state.labelVisibility[...] === false) и не тронет их display,
         // так что снятие галочки нужно применить явно и немедленно.
-        document.querySelectorAll(`.mark-label[data-type="${type}"], .mark-sublabel[data-type="${type}"]`).forEach(t => {
+        document.querySelectorAll(
+          `.mark-label[data-type="${type}"], .mark-sublabel[data-type="${type}"], `
+          + `.mark-label-bg[data-type="${type}"], .mark-sublabel-bg[data-type="${type}"]`
+        ).forEach(t => {
           t.style.display = "none";
         });
       } else {
@@ -2243,6 +2308,8 @@ function updateSizesForZoom() {
     const y = element.y + cand.dy * effectiveR;
     label.setAttribute("transform", `translate(${x},${y}) scale(1,-1)`);
     label.setAttribute("font-size", effectiveFont.toFixed(2));
+    const labelBg = labelBgByText.get(label);
+    if (labelBg) updateLabelBgRect(labelBg, label.textContent, effectiveFont, cand.anchor, x, y);
 
     const subLabel = state.subLabelById.get(element.id);
     if (subLabel) {
@@ -2252,6 +2319,8 @@ function updateSizesForZoom() {
       const subY = y - effectiveFont * SUBLABEL_GAP_SCALE;
       subLabel.setAttribute("transform", `translate(${x},${subY}) scale(1,-1)`);
       subLabel.setAttribute("font-size", subFont.toFixed(2));
+      const subBg = labelBgByText.get(subLabel);
+      if (subBg) updateLabelBgRect(subBg, subLabel.textContent, subFont, cand.anchor, x, subY);
     }
   }
 
@@ -2327,13 +2396,13 @@ function updateLabelCollisionVisibility(effectiveR, effectiveFont) {
     const box = { minX: minX - margin, maxX: maxX + margin, minY: cy - h / 2 - margin, maxY: cy + h / 2 + margin };
 
     const collides = nearbyBoxes(element.x, element.y).some(b => overlaps(b, box));
-    label.style.display = collides ? "none" : "";
+    setLabelDisplay(label, collides ? "none" : "");
     // Допстрока (партия) не участвует в отдельном расчёте коллизий —
     // видимость просто наследуется от основной строки (см. Docs/backlog.md,
     // "Партия — учёт по маркам") — простое решение для первой итерации,
     // как уже применялось к 3D-подписям в прошлом раунде.
     const subLabel = state.subLabelById.get(element.id);
-    if (subLabel) subLabel.style.display = collides ? "none" : "";
+    if (subLabel) setLabelDisplay(subLabel, collides ? "none" : "");
     if (!collides) {
       const key = bucketKey(element.x, element.y);
       if (!buckets.has(key)) buckets.set(key, []);
@@ -4793,6 +4862,344 @@ function label3DWorldHeight(element) {
   return Math.max((width || 0) * LABEL_3D_WIDTH_FRACTION, MIN_LABEL_3D_WORLD_MM);
 }
 
+// ---------- 3D "наклейка" марки — вместо плавающей таблички-спрайта,
+// прямо на грани элемента (заказчик запросил явно, 2026-07-24): текст
+// идёт ВДОЛЬ элемента, по центру его длины, буквами во всю его ширину.
+// Плита перекрытия/Ригель — на верхней и нижней (горизонтальных) гранях;
+// Колонна — на всех боковых (вертикальных) гранях, текст читается СНИЗУ
+// ВВЕРХ вдоль высоты (заказчик подтвердил именно так, не на торце —
+// колонна вертикальная, её "длина" в этом смысле высота, а не крошечное
+// сечение). Если марка не помещается по длине (короткий ригель и т.п.) —
+// null, вызывающий код падает назад на плавающую табличку
+// (build3DLabelSprite), как раньше. ----------
+const DECAL_TYPES = new Set(["Плита перекрытия", "Ригель", "Колонна"]);
+// Та же оценка ширины текста, что и в 2D (см. updateLabelBgRect) —
+// согласованно, без per-glyph измерения на каждый элемент.
+const DECAL_CHAR_WIDTH_RATIO = 0.62;
+// Текст не должен занимать больше этой доли длины — небольшой запас,
+// чтобы не "впритык" по самому краю.
+const DECAL_FIT_MARGIN = 0.92;
+// Небольшой вынос наклейки от истинной поверхности грани наружу —
+// иначе плоскость наклейки лежит РОВНО на грани элемента (тот же
+// z-fighting, что уже чинили для рёбер силуэта, см. polygonOffset
+// выше) — саму геометрию элемента это не меняет, наклейка лишь
+// декоративный оверлей поверх неё, в отличие от структурной геометрии
+// (там заказчик потребовал точное соответствие входным данным).
+const DECAL_SURFACE_OFFSET_MM = 5;
+
+// Текстура наклейки — ОБЩАЯ на все элементы с ОДНОЙ и той же маркой, не
+// своя на каждый элемент — марки часто повторяются десятки раз по всему
+// зданию (см. Docs/backlog.md, "31 экземпляр марки 2Рк2 на одной
+// отметке") — отдельная текстура на каждый экземпляр была бы тем же
+// классом проблемы с производительностью, что уже чинили для материалов
+// (см. getStatusMeshMaterial).
+const decalTextureCache = new Map(); // марка -> THREE.CanvasTexture
+
+function getDecalTexture(mark) {
+  let texture = decalTextureCache.get(mark);
+  if (texture) return texture;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const fontPx = 64; // разрешение текстуры — не мировой размер, наклейка растягивается под реальные мм на плоскости
+  ctx.font = `bold ${fontPx}px sans-serif`;
+  const textWidthPx = ctx.measureText(mark).width;
+  const paddingX = fontPx * 0.3;
+  canvas.width = Math.max(1, Math.ceil(textWidthPx) + paddingX * 2);
+  canvas.height = Math.ceil(fontPx * 1.3);
+  // Та же подложка/цвет, что уже подтверждена для плавающей 3D-таблички
+  // (build3DLabelSprite) — визуальная согласованность между "наклейкой"
+  // и запасным вариантом для коротких элементов.
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = currentLabelColor();
+  ctx.textBaseline = "middle";
+  ctx.font = `bold ${fontPx}px sans-serif`;
+  ctx.fillText(mark, paddingX, canvas.height / 2);
+  texture = new THREE.CanvasTexture(canvas);
+  texture.userData.aspect = canvas.width / canvas.height;
+  decalTextureCache.set(mark, texture);
+  return texture;
+}
+
+// Направление самой длинной стороны контура — устойчиво к лишним
+// коллинеарным точкам-серединам в контуре (частый случай в реальных
+// DXF, см. offsetOutlineMM выше): даже разрезанная пополам длинная
+// сторона всё равно длиннее короткой.
+function footprintLongAxisAngle(outline) {
+  let bestLen = -1, bestDx = 1, bestDy = 0;
+  const n = outline.length;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = outline[i], [x2, y2] = outline[(i + 1) % n];
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    if (len > bestLen) { bestLen = len; bestDx = dx; bestDy = dy; }
+  }
+  return Math.atan2(bestDy, bestDx);
+}
+
+// Ширина/длина контура — тот же подход (прямоугольник по площади и
+// периметру), что и crossSectionWidth выше, но возвращает ОБА корня
+// (crossSectionWidth — только меньший).
+function footprintDimensions(outline) {
+  let area2 = 0, perimeter = 0;
+  const n = outline.length;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = outline[i], [x2, y2] = outline[(i + 1) % n];
+    area2 += x1 * y2 - x2 * y1;
+    perimeter += Math.hypot(x2 - x1, y2 - y1);
+  }
+  const area = Math.abs(area2) / 2;
+  if (area === 0) return null;
+  const halfPerimeter = perimeter / 2;
+  const disc = halfPerimeter * halfPerimeter - 4 * area;
+  if (disc < 0) { const s = Math.sqrt(area); return { width: s, length: s }; }
+  const width = (halfPerimeter - Math.sqrt(disc)) / 2;
+  return { width, length: halfPerimeter - width };
+}
+
+// Стороны контура с объединением коллинеарных соседей (та же проблема
+// лишних точек-середин, что у offsetOutlineMM) — нужны ЦЕЛЬНЫЕ стороны
+// многоугольника: наклейка на боковой грани колонны — одна на КАЖДУЮ
+// реальную сторону, не на каждый отрезок между соседними точками контура.
+function polygonSides(outline) {
+  const pts = [];
+  for (const p of outline) {
+    const last = pts[pts.length - 1];
+    if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 1e-6) pts.push(p);
+  }
+  if (pts.length > 1) {
+    const [fx, fy] = pts[0], [lx, ly] = pts[pts.length - 1];
+    if (Math.hypot(fx - lx, fy - ly) < 1e-6) pts.pop();
+  }
+  const n = pts.length;
+  if (n < 3) return [];
+  const raw = [];
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (len > 1e-6) raw.push({ a, b, dir: [(b[0] - a[0]) / len, (b[1] - a[1]) / len] });
+  }
+  const sides = [];
+  for (const edge of raw) {
+    const prev = sides[sides.length - 1];
+    if (prev) {
+      const cross = prev.dir[0] * edge.dir[1] - prev.dir[1] * edge.dir[0];
+      const dot = prev.dir[0] * edge.dir[0] + prev.dir[1] * edge.dir[1];
+      if (Math.abs(cross) < 1e-6 && dot > 0) { prev.b = edge.b; continue; }
+    }
+    sides.push({ a: edge.a, b: edge.b, dir: edge.dir });
+  }
+  if (sides.length > 1) {
+    const first = sides[0], last = sides[sides.length - 1];
+    const cross = last.dir[0] * first.dir[1] - last.dir[1] * first.dir[0];
+    const dot = last.dir[0] * first.dir[0] + last.dir[1] * first.dir[1];
+    if (Math.abs(cross) < 1e-6 && dot > 0) {
+      sides[sides.length - 1] = { a: last.a, b: first.b, dir: last.dir };
+      sides.shift();
+    }
+  }
+  return sides;
+}
+
+// Центр контура — через ограничивающий прямоугольник (min+max по
+// каждой координате), НЕ среднее по вершинам. Простое среднее ломается
+// на реальных DXF-контурах с лишними коллинеарными точками-серединами
+// на длинных сторонах (частый случай, см. offsetOutlineMM выше) —
+// смещается на десятки мм от истинного центра, потому что вершины
+// распределены по контуру неравномерно (см. Docs/backlog.md, живой
+// репорт пользователя 2026-07-25: на узком 600-мм сечении ригеля такое
+// смещение утапливало одну из боковых наклеек НА 40+ мм ВНУТРЬ
+// сплошного тела элемента, где её полностью закрывала собственная
+// непрозрачная грань — снаружи выглядело как "надписи вообще нет").
+// Min+max устойчив к любому числу лишних точек на прямых сторонах — и
+// для ЛЮБОГО прямоугольника (в том числе повёрнутого — прямоугольник
+// центрально-симметричен, его ограничивающий прямоугольник по осям XY
+// всегда центрирован в ту же точку, независимо от угла поворота).
+function footprintCentroid(outline) {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of outline) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return [(minX + maxX) / 2, (minY + maxY) / 2];
+}
+
+// Ориентирует плоскую наклейку через явный базис (право/верх/нормаль) —
+// надёжнее, чем подбирать углы поворота вручную (тот же класс ошибок,
+// что уже ловили на зеркальности всей 3D-сцены, см. Docs/backlog.md,
+// "3D — зеркальность"): right/normal/up — ортонормированная тройка,
+// right×up=normal (правая система), PlaneGeometry по умолчанию лежит в
+// локальной XY с нормалью +Z — базис ставит локальный X на right,
+// Y на up, Z на normal.
+function orientDecalMesh(mesh, center, right, normal) {
+  const up = new THREE.Vector3().crossVectors(normal, right).normalize();
+  const basis = new THREE.Matrix4().makeBasis(right, up, normal);
+  mesh.quaternion.setFromRotationMatrix(basis);
+  mesh.position.copy(center);
+}
+
+function buildDecalPlane(texture, worldWidth, worldHeight, center, right, normal) {
+  const geometry = new THREE.PlaneGeometry(worldWidth, worldHeight);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  orientDecalMesh(mesh, center, right, normal);
+  // Сохраняем "базовую" (немодифицированную) ориентацию — см.
+  // updateDecalOrientation ниже: при вращении камеры вокруг элемента
+  // текст на плоской наклейке (не билборд — лежит на грани) со
+  // временем оказывается развёрнут "верх ногами" относительно текущего
+  // ракурса (заказчик явно попросил это исправить, 2026-07-25) —
+  // единственный выход из двух читаемых вариантов (право/лево = базовое
+  // направление или развёрнутое на 180° вокруг нормали) выбирается
+  // заново при каждом повороте камеры, без пересборки геометрии/текстуры.
+  mesh.userData.decalCenter = center.clone();
+  mesh.userData.decalNormal = normal.clone();
+  mesh.userData.decalBaseRight = right.clone();
+  return mesh;
+}
+
+// Разворачивает наклейку на 180° вокруг нормали, если её "верх" сейчас
+// смотрит НА камеру — то есть зритель стоит с "дальней" стороны текста
+// (там, куда указывает верх букв), а не с "ближней" (где строка
+// начинается) — тот же принцип, что у листа на столе: читают его СО
+// СТОРОНЫ, противоположной верху страницы (верх "уходит" от читателя), не
+// с той, куда верх направлен. Раньше знак был перепутан на обратный —
+// разворачивало ИМЕННО тогда, когда не нужно, и наоборот, поэтому вверх
+// ногами оказывались вообще все наклейки на любом ракурсе, а не только
+// часть (живой репорт пользователя 2026-07-25, см. Docs/backlog.md).
+// Дёшево: только пересчёт кватерниона (см. orientDecalMesh), без
+// пересборки geometry/texture.
+function updateDecalOrientation(mesh, camera) {
+  const { decalCenter, decalNormal, decalBaseRight } = mesh.userData;
+  if (!decalCenter) return;
+  const up = new THREE.Vector3().crossVectors(decalNormal, decalBaseRight).normalize();
+  // Динамический разворот имеет смысл ТОЛЬКО когда "верх" текста
+  // ГОРИЗОНТАЛЬНЫЙ (верх/низ плиты/ригеля — там при обходе камеры вокруг
+  // здания по азимуту верх текста то смотрит на зрителя, то от него,
+  // ровно то, что чинили). На боковых (вертикальных) гранях (колонна,
+  // боковые грани ригеля) "верх" текста ВЕРТИКАЛЬНЫЙ — буквы стоят прямо
+  // и не должны переворачиваться от того, выше или ниже камера конкретного
+  // элемента: раньше это давало переворот "через раз" в зависимости от
+  // высоты камеры относительно КАЖДОГО элемента по отдельности (живой
+  // репорт пользователя 2026-07-25, см. Docs/backlog.md) — для них
+  // используем ту базовую ориентацию, что задана при постройке, всегда.
+  if (Math.abs(up.y) > 0.5) {
+    orientDecalMesh(mesh, decalCenter, decalBaseRight, decalNormal);
+    return;
+  }
+  const toCamera = new THREE.Vector3().subVectors(camera.position, decalCenter).normalize();
+  const flip = up.dot(toCamera) > 0;
+  const right = flip ? decalBaseRight.clone().negate() : decalBaseRight;
+  orientDecalMesh(mesh, decalCenter, right, decalNormal);
+}
+
+function updateAllDecalOrientations() {
+  const v3 = state.view3d;
+  if (!v3.camera || !v3.markDecalById.size) return;
+  for (const group of v3.markDecalById.values()) {
+    for (const mesh of group.children) updateDecalOrientation(mesh, v3.camera);
+  }
+}
+
+// Пытается построить "наклейку" на грани(ях) элемента — только для
+// DECAL_TYPES и только если марка помещается по длине; иначе null —
+// вызывающий код падает на build3DLabelSprite (см. rebuild3DLabelSprite/
+// build3DScene).
+function build3DMarkDecal(element, levels) {
+  if (!DECAL_TYPES.has(element.element_type)) return null;
+  if (!element.mark || !element.outline || element.outline.length < 3) return null;
+
+  const texture = getDecalTexture(element.mark);
+  const aspect = texture.userData.aspect;
+  const group = new THREE.Group();
+  // world.X=dxf.x, world.Z=-dxf.y (см. build3DMeshForElement) — та же
+  // поправка знака применяется здесь для всех мировых координат наклейки.
+
+  if (element.element_type === "Колонна") {
+    const height = elementExtrusionHeight(element, levels);
+    const sides = polygonSides(element.outline);
+    const centroid = footprintCentroid(element.outline);
+    let any = false;
+    for (const side of sides) {
+      const width = Math.hypot(side.b[0] - side.a[0], side.b[1] - side.a[1]);
+      const fontSize = width;
+      const textWidth = element.mark.length * fontSize * DECAL_CHAR_WIDTH_RATIO;
+      if (textWidth > height * DECAL_FIT_MARGIN) continue; // не влезает по высоте на этой стороне
+      any = true;
+      const midX = (side.a[0] + side.b[0]) / 2, midY = (side.a[1] + side.b[1]) / 2;
+      // "Наружу" — от центроида контура к середине стороны (устойчивее,
+      // чем гадать знак перпендикуляра ребра отдельно).
+      let nx = midX - centroid[0], ny = midY - centroid[1];
+      const nlen = Math.hypot(nx, ny) || 1;
+      nx /= nlen; ny /= nlen;
+      const normal = new THREE.Vector3(nx, 0, -ny);
+      const right = new THREE.Vector3(0, 1, 0); // текст снизу вверх вдоль высоты
+      const center = new THREE.Vector3(midX, (element.elevation_mm || 0) + height / 2, -midY);
+      center.addScaledVector(normal, DECAL_SURFACE_OFFSET_MM);
+      group.add(buildDecalPlane(texture, fontSize * aspect, fontSize, center, right, normal));
+    }
+    if (!any) return null;
+    return group;
+  }
+
+  // Плита перекрытия / Ригель — верх и низ, вдоль длинной стороны контура.
+  const dims = footprintDimensions(element.outline);
+  if (!dims) return null;
+  const fontSize = dims.width;
+  const textWidth = element.mark.length * fontSize * DECAL_CHAR_WIDTH_RATIO;
+  if (textWidth > dims.length * DECAL_FIT_MARGIN) return null;
+
+  const angle = footprintLongAxisAngle(element.outline);
+  const right = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle));
+  const height = elementExtrusionHeight(element, levels);
+  const [cx0, cy0] = footprintCentroid(element.outline);
+  const cx = cx0, cz = -cy0;
+  const decalWorldWidth = fontSize * aspect;
+
+  const topCenter = new THREE.Vector3(cx, (element.elevation_mm || 0) + height + DECAL_SURFACE_OFFSET_MM, cz);
+  group.add(buildDecalPlane(texture, decalWorldWidth, fontSize, topCenter, right, new THREE.Vector3(0, 1, 0)));
+
+  const bottomCenter = new THREE.Vector3(cx, (element.elevation_mm || 0) - DECAL_SURFACE_OFFSET_MM, cz);
+  group.add(buildDecalPlane(texture, decalWorldWidth, fontSize, bottomCenter, right, new THREE.Vector3(0, -1, 0)));
+
+  // Ригель — ЕЩЁ 2 наклейки, на боковых (вертикальных) гранях вдоль
+  // длины (не только верх/низ) — заказчик явно попросил "с четырёх
+  // сторон, а не с двух" (2026-07-25): сечение квадратное (ширина
+  // контура = высота экструзии, см. crossSectionWidth), поэтому боковые
+  // грани — те же LENGTH×WIDTH, что и верх/низ, тем же fontSize.
+  // Плиту перекрытия не трогаем — про неё явно шла речь только про
+  // верх/низ ("Сверху и снизу"), четыре стороны просил только для
+  // ригелей.
+  if (element.element_type === "Ригель") {
+    // Перпендикуляр к длинной оси в плоскости DXF (поворот на 90°).
+    const perpX = -Math.sin(angle), perpY = Math.cos(angle);
+    const halfWidth = dims.width / 2;
+    for (const sign of [1, -1]) {
+      const sideCx = cx0 + perpX * halfWidth * sign;
+      const sideCy = cy0 + perpY * halfWidth * sign;
+      const normal = new THREE.Vector3(perpX * sign, 0, -perpY * sign);
+      const center = new THREE.Vector3(sideCx, (element.elevation_mm || 0) + height / 2, -sideCy);
+      center.addScaledVector(normal, DECAL_SURFACE_OFFSET_MM);
+      // "право" ОБЯЗАНО зависеть от sign, не общее на обе стороны — иначе
+      // "верх" текста (cross(normal,право)) у одной из двух граней
+      // математически ВСЕГДА получается направлен вниз (доказано:
+      // up.y = -sign при общем "право" на обе стороны — не эвристика,
+      // подставлено и упрощено аналитически) — ровно то, что сообщил
+      // пользователь (боковая грань к зрителю — вверх ногами, живой
+      // репорт 2026-07-25, см. Docs/backlog.md). Домножение на -sign
+      // даёт up.y=+1 (стабильно "вверх") на ОБЕИХ сторонах.
+      const sideRight = right.clone().multiplyScalar(-sign);
+      group.add(buildDecalPlane(texture, decalWorldWidth, fontSize, center, sideRight, normal));
+    }
+  }
+
+  return group;
+}
+
 // Постоянная подпись марки в 3D (см. Docs/backlog.md, "Раунд из 3
 // пунктов", 2026-07-17, п.3) — THREE.Sprite с canvas-текстурой: билборд
 // к камере автоматический (не нужно ничего обновлять per-frame в
@@ -5017,6 +5424,11 @@ function apply3DLabelVisibility() {
     if (!element) continue;
     sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
   }
+  for (const [id, decal] of state.view3d.markDecalById) {
+    const element = state.byId.get(id);
+    if (!element) continue;
+    decal.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+  }
 }
 
 // Точечная пересборка ОДНОГО 3D-спрайта после смены статуса/партии —
@@ -5028,6 +5440,10 @@ function apply3DLabelVisibility() {
 function rebuild3DLabelSprite(element) {
   const v3 = state.view3d;
   if (!v3.scene) return;
+  // Элемент на "наклейке" (см. build3DMarkDecal) — она показывает только
+  // марку, не допстроку партии, и от смены допстроки не зависит вовсе —
+  // пересобирать нечего.
+  if (v3.markDecalById.has(element.id)) return;
   const old = v3.labelSpriteById.get(element.id);
   if (old) {
     v3.scene.remove(old);
@@ -5121,6 +5537,18 @@ function build3DScene() {
     sprite.material.dispose();
   }
   v3.labelSpriteById.clear();
+  for (const decal of v3.markDecalById.values()) {
+    v3.scene.remove(decal);
+    for (const mesh of decal.children) {
+      mesh.geometry.dispose();
+      // НЕ mesh.material.map.dispose() — текстура ОБЩАЯ на марку
+      // (decalTextureCache, см. getDecalTexture), живёт всю сессию, не
+      // пересоздаётся на каждую перестройку сцены; сам материал (не
+      // общий, свой на каждую грань-наклейку) — диспозится как обычно.
+      mesh.material.dispose();
+    }
+  }
+  v3.markDecalById.clear();
 
   const levels = computeColumnLevels();
   for (const element of state.elements) {
@@ -5136,12 +5564,23 @@ function build3DScene() {
     v3.scene.add(mesh);
     v3.meshById.set(element.id, mesh);
 
-    const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels);
-    const sprite = build3DLabelSprite(element, topY);
-    if (sprite) {
-      sprite.visible = passes && state.labelVisibility[element.element_type] !== false;
-      v3.scene.add(sprite);
-      v3.labelSpriteById.set(element.id, sprite);
+    // Наклейка на грани (см. build3DMarkDecal) — только для Плиты
+    // перекрытия/Ригеля/Колонны и только если марка помещается по длине;
+    // иначе — прежняя плавающая табличка-спрайт (build3DLabelSprite).
+    const labelVisible = passes && state.labelVisibility[element.element_type] !== false;
+    const decal = build3DMarkDecal(element, levels);
+    if (decal) {
+      decal.visible = labelVisible;
+      v3.scene.add(decal);
+      v3.markDecalById.set(element.id, decal);
+    } else {
+      const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels);
+      const sprite = build3DLabelSprite(element, topY);
+      if (sprite) {
+        sprite.visible = labelVisible;
+        v3.scene.add(sprite);
+        v3.labelSpriteById.set(element.id, sprite);
+      }
     }
   }
 
@@ -5169,6 +5608,7 @@ function build3DScene() {
   if (v3.siteBaseMesh) v3.scene.add(v3.siteBaseMesh);
 
   fit3DCameraToData();
+  updateAllDecalOrientations(); // начальный ракурс — тоже должен быть читаемым, не только после первого поворота
 }
 
 // ---------- сцена, камера, свет, управление ----------
@@ -5210,8 +5650,11 @@ function init3DScene() {
   scene.add(dirLight);
 
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.1;
+  // enableDamping=false — камера должна чётко следовать за курсором и
+  // останавливаться сразу, как только оператор отпустил кнопку/колесо, а
+  // не "докручиваться" по инерции ещё какое-то время (живой репорт
+  // пользователя 2026-07-25: ощущалось как будто модель имеет массу).
+  controls.enableDamping = false;
   // Дефолт библиотеки (zoomSpeed=1) рассчитан на "стандартный" масштаб
   // сцены — у нас мировые координаты в мм, десятки-сотни тысяч единиц.
   // OrbitControls.getZoomScale() нормализует шаг зума через
@@ -5224,6 +5667,13 @@ function init3DScene() {
   // библиотеку.
   controls.zoomSpeed = 4;
   controls.addEventListener("change", updateZoomIndicator3D);
+  // Наклейки марок (build3DMarkDecal) лежат плоско на грани, не билборд —
+  // при повороте камеры вокруг элемента текст может оказаться "вверх
+  // ногами" с текущего ракурса; пересчитываем на каждое движение камеры
+  // (заказчик попросил явно, 2026-07-25), не только один раз при
+  // построении — дёшево, только смена кватерниона у уже существующих
+  // мешей, без пересборки geometry/texture (см. updateDecalOrientation).
+  controls.addEventListener("change", updateAllDecalOrientations);
 
   // Один общий материал на ВСЕ рёбра всех элементов — раньше был свой
   // экземпляр LineMaterial на каждый элемент (нужен был свой цвет

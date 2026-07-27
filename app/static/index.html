@@ -164,26 +164,21 @@
     padding: 6px 10px; border-radius: var(--radius-sm); white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.25);
   }
   svg { width: 100%; height: 100%; display: block; }
-  /* Белый контур вокруг букв (не буквальная подложка-прямоугольник —
-     в SVG с уже применённым scale(1,-1)-контрфлипом текста позиционирование
-     отдельного <rect> позади рискованно проверить без браузера, см.
-     Docs/backlog.md) — даёт тот же эффект контрастности на любом фоне. */
-  /* vector-effect: non-scaling-stroke — иначе stroke-width в мировых
-     единицах (мм) масштабируется вместе с viewBox: на дальнем зуме
-     (весь план) это незаметно, но на ближнем (нужен, чтобы вообще
-     прочитать марку) шрифт по MAX_LABEL_FONT_PX сжимается в мировых
-     единицах, а обводка — нет, и в какой-то момент 3мм-обводка
-     становится ТОЛЩЕ самих букв — подписи пропадали (белое пятно вместо
-     текста) именно на том зуме, где их обычно и читают, см. Docs/backlog.md. */
+  /* Тёмный текст на светлой подложке-плашке — "как в 3D" (см.
+     build3DLabelSprite, app.js), не светлый контур вокруг тёмных букв,
+     как было раньше (живой репорт пользователя 2026-07-24). Подложка —
+     отдельный <rect class="mark-label-bg"/mark-sublabel-bg">, вставлен
+     ПЕРЕД текстом в DOM (см. appendMarkLabel, app.js) — тот же приём
+     transform, что и у самого текста (см. flippedText), размер оценён по
+     числу символов (см. updateLabelBgRect) без getBBox(). */
   .mark-label {
     pointer-events: none; fill: var(--mark-label-color, #222222);
-    stroke: #fff; stroke-width: 3px; stroke-linejoin: round; paint-order: stroke;
-    vector-effect: non-scaling-stroke;
   }
   .mark-sublabel {
     pointer-events: none; fill: #555;
-    stroke: #fff; stroke-width: 2.4px; stroke-linejoin: round; paint-order: stroke;
-    vector-effect: non-scaling-stroke;
+  }
+  .mark-label-bg, .mark-sublabel-bg {
+    pointer-events: none; fill: rgba(255,255,255,0.72);
   }
   #axis-layer text { pointer-events: none; }
   /* -------- зоны (захватка/кран/стоянка) — см. Docs/backlog.md,
