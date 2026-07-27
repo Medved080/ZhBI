@@ -906,10 +906,6 @@ function subtypeTextForLogicalKey(key) {
   const idx = key.indexOf(SUBTYPE_KEY_SEP);
   return idx === -1 ? key : key.slice(idx + SUBTYPE_KEY_SEP.length);
 }
-function subtypeElementTypeForLogicalKey(key) {
-  const idx = key.indexOf(SUBTYPE_KEY_SEP);
-  return idx === -1 ? PLACEMENT_NONE : key.slice(0, idx);
-}
 // Типы, у которых текст подтипа — это фактически отметка ("на отм.
 // +15.000" и т.п., см. allowed_subtypes/Docs/TZ.md §3.7) — избыточно
 // показывать промежуточный уровень "Подтип" в дереве фильтра, когда для
@@ -926,11 +922,17 @@ const FLAT_MARK_TYPES = new Set(["Плита перекрытия", "Ригел�
 function subtypeFilterValue(element) {
   // Для FLAT_MARK_TYPES "слот подтипа" в дереве фильтра занимает МАРКА
   // (см. комментарий выше) — тот же составной ключ (тип+текст), только
-  // текст — марка, а не подтип.
+  // текст — марка, а не подтип. ВСЕГДА составной ключ, даже когда
+  // подтипа/марки нет (тогда текстовая часть — сам PLACEMENT_NONE) — не
+  // голый сентинел: иначе "нет подтипа" у РАЗНЫХ типов схлопывалось бы в
+  // один и тот же ключ "__none__", и marksBySubtype (ниже) смешивал бы
+  // марки одного типа в группу "без подтипа" другого — та же природа
+  // бага, что уже чинили для типа-заголовка (subtypesByType), только
+  // уровнем глубже (живой репорт пользователя, см. Docs/backlog.md).
   if (FLAT_MARK_TYPES.has(element.element_type)) {
-    return element.mark ? subtypeLogicalKey(element.element_type, element.mark) : PLACEMENT_NONE;
+    return subtypeLogicalKey(element.element_type, element.mark || PLACEMENT_NONE);
   }
-  return element.subtype ? subtypeLogicalKey(element.element_type, element.subtype) : PLACEMENT_NONE;
+  return subtypeLogicalKey(element.element_type, element.subtype || PLACEMENT_NONE);
 }
 
 function markFilterValue(element) {
@@ -1372,7 +1374,12 @@ function buildHierarchicalFilterGroup(
 
     const childEntries = [];
     for (const cv of children) {
-      const grandchildren = grandchildConfig ? (grandchildConfig.childrenForChild(cv) || []) : [];
+      // Передаём и родителя (pv) — childrenForChild не может надёжно
+      // восстановить его из cv одним лишь разбором строки: составной
+      // ключ подтипа несёт тип-владельца, но "нет подтипа"/"нет марки"
+      // — это один и тот же сентинел PLACEMENT_NONE у ЛЮБОГО типа, из
+      // него тип не восстановить (был баг — см. Docs/backlog.md).
+      const grandchildren = grandchildConfig ? (grandchildConfig.childrenForChild(cv, pv) || []) : [];
 
       const cRow = document.createElement("div");
       cRow.className = "filter-parent-row";
@@ -1561,7 +1568,12 @@ function renderPlacementFilters() {
   };
   const elevationLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("elevation") : `${v} мм`;
   const floorLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("floor") : `Этаж ${v}`;
-  const subtypeLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("subtype") : subtypeTextForLogicalKey(v);
+  // v теперь ВСЕГДА составной ключ (см. subtypeFilterValue) — сравниваем
+  // с PLACEMENT_NONE текстовую часть после разбора, не весь ключ целиком.
+  const subtypeLabelFor = v => {
+    const text = subtypeTextForLogicalKey(v);
+    return text === PLACEMENT_NONE ? placementNoneLabel("subtype") : text;
+  };
   const markLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("mark") : v;
   const statusLabelFor = v => state.statusLabels[v] || v;
   const enabledFor = key => v => isValueEnabled(key, v);
@@ -1641,20 +1653,28 @@ function renderPlacementFilters() {
   // поиска (заказчик выбрал этот вариант — некоторые подтипы содержат
   // 300+ уникальных марок, длинные плоские списки ожидаемы и приняты).
   const typeValues = allValuesFor("elementType");
-  // Ключ подтипа теперь составной (тип+текст, см. subtypeLogicalKey) —
-  // у него ровно ОДИН тип-владелец, зашитый в сам ключ, парсить его из
-  // state.elements больше не нужно (раньше был отдельный
-  // typesForSubtypeValue-скан — источник бага с общим текстом подтипа
-  // у разных типов, см. комментарий у subtypeLogicalKey).
-  const subtypeValues = allValuesFor("subtype");
+  // Строим по ЭЛЕМЕНТАМ (тот же приём, что marksBySubtype ниже), не по
+  // уже обезличенному множеству значений подтипа: составной ключ подтипа
+  // несёт тип-владельца только когда подтип РЕАЛЬНО есть (см.
+  // subtypeLogicalKey) — а "нет подтипа"/"нет марки" для ЛЮБОГО типа
+  // схлопывается в один и тот же голый сентинел PLACEMENT_NONE
+  // (subtypeFilterValue), из которого тип обратно не восстановить.
+  // Раньше (парсинг строки значения через subtypeElementTypeForLogicalKey)
+  // это давало отдельный фантомный заголовок "__none__" в дереве —
+  // подтипы/марки без значения у ЛЮБОГО типа складывались в один общий
+  // узел вместо своего настоящего типа, да ещё и с "сырым" именем
+  // сентинела на экране (живой репорт пользователя, см. Docs/backlog.md).
   const subtypesByType = new Map();
-  for (const sv of subtypeValues) {
-    const t = subtypeElementTypeForLogicalKey(sv);
-    if (!subtypesByType.has(t)) subtypesByType.set(t, []);
-    subtypesByType.get(t).push(sv);
+  for (const e of state.elements) {
+    if (!subtypesByType.has(e.element_type)) subtypesByType.set(e.element_type, new Set());
+    subtypesByType.get(e.element_type).add(subtypeFilterValue(e));
   }
   const typeHeadings = Array.from(new Set([...typeValues, ...subtypesByType.keys()])).sort(placementComparator(v => v));
-  for (const h of typeHeadings) subtypesByType.get(h)?.sort(placementComparator(subtypeLabelFor));
+  for (const h of typeHeadings) {
+    const arr = Array.from(subtypesByType.get(h) || []);
+    arr.sort(placementComparator(subtypeLabelFor));
+    subtypesByType.set(h, arr);
+  }
 
   // Марки группируются по составному ключу подтипа (тип уже зашит в него,
   // см. subtypeLogicalKey выше) — коллизия одинакового текста подтипа у
@@ -1679,8 +1699,11 @@ function renderPlacementFilters() {
       // FLAT_MARK_TYPES (Плита перекрытия/Ригель) — "подтип" в дереве уже
       // и есть марка (см. subtypeFilterValue), дальше вглубь идти некуда —
       // без этой проверки марка задваивалась бы сама под собой третьим
-      // уровнем.
-      childrenForChild: sv => (FLAT_MARK_TYPES.has(subtypeElementTypeForLogicalKey(sv)) ? [] : (marksBySubtype.get(sv) || [])),
+      // уровнем. Проверяем РЕАЛЬНОГО родителя (pv, передан из
+      // buildHierarchicalFilterGroup), а не пытаемся угадать тип по sv —
+      // для "нет подтипа"/"нет марки" (голый PLACEMENT_NONE) это
+      // невозможно сделать надёжно, см. комментарий у subtypesByType.
+      childrenForChild: (sv, pv) => (FLAT_MARK_TYPES.has(pv) ? [] : (marksBySubtype.get(sv) || [])),
       excludedSet: state.placementFilters.mark,
       labelFor: markLabelFor,
       isEnabledFn: enabledFor("mark"),
