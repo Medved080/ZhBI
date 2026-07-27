@@ -286,7 +286,19 @@ def apply_status_change(
     if row is None:
         raise LookupError(f"Элемент {element_id} не найден")
 
-    row_contract_id = resolve_contract_for_new_row(conn, element_id, contract_explicit, contract_value)
+    # Откат на "Запланирован" всегда снимает контракт — и тем самым
+    # поставщика: у элемента нет отдельного поля "поставщик", он везде
+    # резолвится ОТ контракта (см. supplierFilterValue на фронтенде), так
+    # что снятия contract_id достаточно. Действует БЕЗУСЛОВНО, даже если
+    # contract_id передан явно — для перехода именно НА "Запланирован"
+    # диалог выбора контракта на фронте не показывается (см. Docs/TZ.md
+    # §5: диалог — только при уходе СО статуса "Запланирован"), явного
+    # намерения "оставить контракт" в этом направлении быть не может
+    # (живой запрос пользователя, см. Docs/backlog.md).
+    if status == "planned":
+        row_contract_id = None
+    else:
+        row_contract_id = resolve_contract_for_new_row(conn, element_id, contract_explicit, contract_value)
 
     if changed_at:
         conn.execute(

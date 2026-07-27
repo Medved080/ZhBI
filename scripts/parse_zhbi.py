@@ -103,6 +103,10 @@ class ElementRecord:
     # None для элементов старого конвейера (LAYER_CONFIG).
     subtype: Optional[str] = None
     elevation_mm: Optional[int] = None
+    # Этаж из суффикса "_этаж N" в конце имени слоя (см. scripts/layer_naming.py,
+    # parse_floor_token) — None, пока заказчик не начал проставлять его в
+    # чертежах; заполняется только новым конвейером, как subtype/elevation_mm.
+    floor: Optional[int] = None
     # {"Захватка": zone_binding.ZoneBindingResult, "Кран": ..., "Стоянка": ...}
     # — заполняется только новым конвейером (scripts/new_standard_pipeline.py),
     # None для элементов старого конвейера.

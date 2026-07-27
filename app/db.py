@@ -56,6 +56,10 @@ _COLUMN_MIGRATIONS = [
     # Персональный цвет подписей марок (2D/3D) — NULL = использовать
     # дефолт (см. DEFAULT_LABEL_COLOR на фронтенде).
     ("users", "label_color", "TEXT"),
+    # Этаж — из суффикса "_этаж N" в конце имени слоя нового стандарта
+    # (см. scripts/layer_naming.py, Docs/backlog.md, "Свойство 'этаж'").
+    # NULL у элементов, чьи слои этот суффикс ещё не проставляют.
+    ("elements", "floor", "INTEGER"),
 ]
 
 

@@ -67,7 +67,7 @@ let state = {
   // ИСКЛЮЧЁННЫХ значений (пусто = категория не фильтрует ничего). См.
   // renderPlacementFilters/applyPlacementFilters, Docs/backlog.md.
   placementFilters: {
-    zakhvatka: new Set(), crane: new Set(), stance: new Set(), elevation: new Set(),
+    zakhvatka: new Set(), crane: new Set(), stance: new Set(), elevation: new Set(), floor: new Set(),
     elementType: new Set(), subtype: new Set(), mark: new Set(), status: new Set(),
     supplier: new Set(), contract: new Set(),
   },
@@ -84,7 +84,7 @@ let state = {
   // ходового фильтра (см. Docs/backlog.md, разбор UX: список фильтров
   // разросся настолько, что до "Статус" нужно было проскроллить и Захватку,
   // и Кран/Стоянку, и Отметку).
-  topFilterCollapsed: new Set(["zakhvatka", "craneStance", "craneStanceNone", "elevation", "elementType", "supplier", "noContract"]),
+  topFilterCollapsed: new Set(["zakhvatka", "craneStance", "craneStanceNone", "elevation", "floor", "elementType", "supplier", "noContract"]),
   baseMarkerRadius: 1,
   view: null,
   initialView: null, // вид "вся схема целиком" — для сброса зума (п.12) и индикатора 100%
@@ -877,6 +877,14 @@ function elevationFilterValue(element) {
   return (element.elevation_mm === null || element.elevation_mm === undefined) ? PLACEMENT_NONE : element.elevation_mm;
 }
 
+// Этаж — из суффикса "_этаж N" в имени слоя нового стандарта (см.
+// scripts/layer_naming.py, Docs/backlog.md, "Свойство 'этаж'"). Плоский
+// фильтр, та же природа, что и "Отметка (высота)" — не иерархический,
+// PLACEMENT_NONE для элементов, чьи слои этот суффикс не проставляют.
+function floorFilterValue(element) {
+  return (element.floor === null || element.floor === undefined) ? PLACEMENT_NONE : element.floor;
+}
+
 // Ключ подтипа в фильтре — составной (тип элемента + текст подтипа), а не
 // голый текст подтипа: разные типы могут буквально совпадать текстом
 // подтипа — например, "на отм. +15.000" одновременно у Ригеля и у Плиты
@@ -950,6 +958,7 @@ const PLACEMENT_FILTER_DEFS = [
   { key: "crane", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status") },
   { key: "stance", valueFn: stanceFilterValue },
   { key: "elevation", valueFn: elevationFilterValue },
+  { key: "floor", valueFn: floorFilterValue },
   { key: "elementType", valueFn: e => e.element_type },
   { key: "subtype", valueFn: subtypeFilterValue },
   { key: "mark", valueFn: markFilterValue },
@@ -1162,6 +1171,7 @@ function onPlacementFilterChange() {
 
 function placementNoneLabel(kind) {
   if (kind === "elevation") return "— без отметки —";
+  if (kind === "floor") return "— без этажа —";
   if (kind === "subtype") return "— без подтипа —";
   if (kind === "mark") return "— без марки —";
   if (kind === "supplier") return "— без поставщика —";
@@ -1550,6 +1560,7 @@ function renderPlacementFilters() {
     return stanceNameForLogicalKey(v);
   };
   const elevationLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("elevation") : `${v} мм`;
+  const floorLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("floor") : `Этаж ${v}`;
   const subtypeLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("subtype") : subtypeTextForLogicalKey(v);
   const markLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("mark") : v;
   const statusLabelFor = v => state.statusLabels[v] || v;
@@ -1612,6 +1623,14 @@ function renderPlacementFilters() {
       () => "ни кран, ни стоянка не определены", enabledFor("stance"), onPlacementFilterChange
     ));
   }
+
+  // Этаж — из суффикса "_этаж N" в имени слоя (см. floorFilterValue,
+  // Docs/backlog.md, "Свойство 'этаж'"); плоский список, тот же приём,
+  // что и у "Отметка (высота)" рядом (compareRaw — сортировать как
+  // числа, не по подписи).
+  container.appendChild(buildFilterGroup(
+    "Этаж", "floor", allValuesFor("floor"), state.placementFilters.floor, floorLabelFor, enabledFor("floor"), onPlacementFilterChange, { compareRaw: true }
+  ));
 
   container.appendChild(buildFilterGroup(
     "Отметка (высота)", "elevation", allValuesFor("elevation"), state.placementFilters.elevation, elevationLabelFor, enabledFor("elevation"), onPlacementFilterChange, { compareRaw: true }
@@ -2602,7 +2621,7 @@ const FIELD_LABELS = {
   axis_status: "Статус адресации", axis_number: "Числовая ось", axis_letter: "Буквенная ось",
   nearest_axis_number: "Ближайшая числовая ось", nearest_axis_letter: "Ближайшая буквенная ось",
   offset_x_mm: "Смещение X, мм", offset_y_mm: "Смещение Y, мм", x: "X, мм", y: "Y, мм",
-  current_status: "Текущий статус", subtype: "Подтип", elevation_mm: "Отметка, мм",
+  current_status: "Текущий статус", subtype: "Подтип", elevation_mm: "Отметка, мм", floor: "Этаж",
 };
 
 // Разбор по важности для повседневной работы (см. Docs/backlog.md,
@@ -2616,7 +2635,7 @@ const FIELD_LABELS = {
 const TECHNICAL_FIELD_GROUPS = [
   { title: "Идентификатор", fields: ["id", "dxf_handle", "layer", "mark_source"] },
   { title: "Адрес по осям", fields: ["address", "axis_status", "axis_number", "axis_letter", "nearest_axis_number", "nearest_axis_letter", "offset_x_mm", "offset_y_mm"] },
-  { title: "Координаты", fields: ["x", "y", "elevation_mm"] },
+  { title: "Координаты", fields: ["x", "y", "elevation_mm", "floor"] },
 ];
 
 function fieldRowsHtml(element, fields) {
@@ -3428,6 +3447,17 @@ svgRoot.addEventListener("click", (e) => {
   if (!shape) { closeCtxMenu(); clearSelection(); clearMultiSelection(); return; }
   const element = state.byId.get(Number(shape.getAttribute("data-id")));
   if (!element) return;
+  // Ctrl/Cmd+клик по элементу, УЖЕ входящему в групповое выделение (рамка,
+  // см. finishRubberBand) — убирает именно его из группы, не трогая
+  // остальных и не открывая карточку (живой запрос пользователя, см.
+  // Docs/backlog.md). Вне группового выделения (или по элементу, которого
+  // в нём нет) Ctrl+клик не даёт ничего особого — обычный selectElement.
+  if ((e.ctrlKey || e.metaKey) && state.multiSelectedIds.has(element.id)) {
+    const ids = new Set(state.multiSelectedIds);
+    ids.delete(element.id);
+    setMultiSelection(ids);
+    return;
+  }
   selectElement(element);
 });
 svgRoot.addEventListener("dblclick", (e) => {
@@ -3485,6 +3515,19 @@ stageEl.addEventListener("mousedown", (e) => {
   dragging = true; dragMoved = false;
   rubberBandActive = e.shiftKey;
   startX = lastX = rbCurX = e.clientX; startY = lastY = rbCurY = e.clientY;
+  // Shift+перетаскивание иначе запускает нативное выделение ТЕКСТА
+  // браузера (подписи осей — SVG <text>, текст сайдбара) — рамка рисуется
+  // поверх, но пользователь одновременно видит подсвеченный синим текст
+  // интерфейса под ней (живой репорт пользователя, см. Docs/backlog.md).
+  // preventDefault на mousedown — стандартный приём, отменяет привязку
+  // нативного выделения к этой точке на весь последующий драг;
+  // .rubber-band-active на body — подстраховка (user-select:none) на
+  // случай браузеров, которые всё равно выделяют текст при перетаскивании
+  // курсора за пределы исходного элемента.
+  if (rubberBandActive) {
+    e.preventDefault();
+    document.body.classList.add("rubber-band-active");
+  }
 });
 window.addEventListener("mouseup", () => {
   if (dragging && rubberBandActive && dragMoved) finishRubberBand();
@@ -3492,6 +3535,7 @@ window.addEventListener("mouseup", () => {
   rubberBandActive = false;
   stageEl.classList.remove("dragging");
   rubberBandEl.style.display = "none";
+  document.body.classList.remove("rubber-band-active");
 });
 window.addEventListener("mousemove", (e) => {
   if (!dragging || !state.view) return;
@@ -3538,6 +3582,22 @@ function screenRectToWorldBBox(sx1, sy1, sx2, sy2) {
   return { minX: vx1, maxX: vx2, minY: -vy2, maxY: -vy1 };
 }
 
+// Точка "где физически находится элемент" для попадания в рамку — центр
+// его РЕАЛЬНОГО контура (footprintCentroid — тот же приём, что уже
+// используется для наклеек марок/привязки конца ригеля к колонне), а не
+// element.x/element.y: это позиция ВЫНОСКИ/лидера марки, которая часто
+// заметно смещена от самой фигуры (источник марки "leader") — из-за
+// этого элементы, чья фигура визуально целиком внутри рамки, не
+// попадали в выделение, если их выноска оказывалась снаружи (живой
+// репорт пользователя, см. Docs/backlog.md). Для элементов без контура
+// (INSERT-блоки старого конвейера) — запасной вариант, x/y как раньше.
+function rubberBandTestPoint(element) {
+  if (element.outline && element.outline.length >= 3) {
+    return footprintCentroid(element.outline);
+  }
+  return [element.x, element.y];
+}
+
 function finishRubberBand() {
   const box = screenRectToWorldBBox(startX, startY, rbCurX, rbCurY);
   // Накопительное выделение (см. Docs/backlog.md) — новая рамка ДОБАВЛЯЕТ
@@ -3547,7 +3607,8 @@ function finishRubberBand() {
   const ids = new Set(state.multiSelectedIds);
   for (const element of state.elements) {
     if (!passesPlacementFilters(element)) continue; // выделяем только то, что сейчас реально видно
-    if (element.x >= box.minX && element.x <= box.maxX && element.y >= box.minY && element.y <= box.maxY) {
+    const [px, py] = rubberBandTestPoint(element);
+    if (px >= box.minX && px <= box.maxX && py >= box.minY && py <= box.maxY) {
       ids.add(element.id);
     }
   }
@@ -4409,6 +4470,30 @@ document.getElementById("settings-io-import").addEventListener("click", async ()
   } catch (e) {
     statusEl.textContent = "Не удалось связаться с сервером: " + e.message;
     statusEl.style.color = "var(--color-danger)";
+  }
+});
+
+// ---------- очистка истории статусов (только для тестирования) ----------
+document.getElementById("menu-reset-history").addEventListener("click", async () => {
+  document.getElementById("settings-menu").classList.remove("open");
+  // Двойное предупреждение — действие затрагивает АБСОЛЮТНО ВСЕ элементы
+  // во всех загруженных чертежах разом и необратимо через интерфейс (см.
+  // Docs/backlog.md, живой запрос пользователя — функция именно "на
+  // время тестирования", не для повседневного использования).
+  if (!confirm(
+    "Это удалит историю статусов у ВСЕХ элементов во ВСЕХ чертежах и вернёт " +
+    "их в статус «Запланирован» (контракт и партия тоже снимутся). " +
+    "Действие необратимо через интерфейс. Продолжить?"
+  )) return;
+  if (!confirm("Точно? Это затронет всю базу целиком, не только текущий чертёж.")) return;
+  try {
+    const result = await api("/admin/reset-status-history", { method: "POST" });
+    showToast(`История сброшена у ${result.reset_count} элементов.`, "success");
+    clearSelection();
+    clearMultiSelection();
+    await loadPlan();
+  } catch (e) {
+    showToast("Не удалось сбросить историю: " + e.message);
   }
 });
 

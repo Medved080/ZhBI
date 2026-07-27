@@ -27,7 +27,12 @@ from parse_zhbi import (
     resolve_via_leaders,
     resolve_via_polygon_texts,
 )
-from zone_binding import bind_element_to_zones, build_stance_level_polygons, compute_column_tier_elevations
+from zone_binding import (
+    assign_fallback_floors,
+    bind_element_to_zones,
+    build_stance_level_polygons,
+    compute_column_tier_elevations,
+)
 from zone_parser import build_zone_registry_from_classified, classify_layers
 
 
@@ -43,12 +48,15 @@ def discover_unclaimed_web_layers(msp, known_old_layers: set) -> set:
 
 
 def _group_zhbi_layers(classified: dict) -> dict:
-    """{(тип, подтип, отметка): {"Элемент": имя_слоя_или_None, "Марка": имя_слоя_или_None}}"""
+    """{(тип, подтип, отметка, этаж): {"Элемент": имя_слоя_или_None, "Марка": имя_слоя_или_None}}
+    Этаж — часть ключа группировки (см. layer_naming.parse_floor_token):
+    слои "Элемент" и "Марка" одной логической группы должны нести один и
+    тот же суффикс "_этаж N" (обе половины одной физической сущности)."""
     groups = {}
     for layer_name, parsed in classified.items():
         if parsed.group != "zhbi":
             continue
-        key = (parsed.type_or_category, parsed.subtype, parsed.elevation_mm)
+        key = (parsed.type_or_category, parsed.subtype, parsed.elevation_mm, parsed.floor)
         groups.setdefault(key, {"Элемент": None, "Марка": None})
         groups[key][parsed.role] = layer_name
     return groups
@@ -62,7 +70,7 @@ def parse_new_standard_elements(msp, zhbi_groups: dict) -> list:
     другу выноски."""
     records: list[ElementRecord] = []
 
-    for (element_type, subtype, elevation_mm), roles in zhbi_groups.items():
+    for (element_type, subtype, elevation_mm, floor), roles in zhbi_groups.items():
         elem_layer = roles["Элемент"]
         if not elem_layer:
             # Есть слой "Марка" для этой группы, но нет "Элемент" — геометрии
@@ -86,6 +94,7 @@ def parse_new_standard_elements(msp, zhbi_groups: dict) -> list:
                 outline=outline,
                 subtype=subtype,
                 elevation_mm=elevation_mm,
+                floor=floor,
             )
             records.append(record)
             pending.append({"record": record, "point": polyline_centroid(e)})
@@ -188,5 +197,12 @@ def process(msp, known_old_layers: set, allowed_subtypes: dict, axis_grid=None):
             stance_level_polys=stance_level_polys, tier_elevations=tier_elevations,
         )
         record.zone_bindings = bindings
+
+    # Временно, пока заказчик не начал проставлять суффикс "_этаж N" в
+    # самих слоях (см. layer_naming.parse_floor_token) — считаем этаж по
+    # отметке, тем же приёмом, что уже используется для привязки к
+    # стоянке крана. Трогает только записи, где floor всё ещё None —
+    # реальный суффикс (когда появится) не подменяется.
+    assign_fallback_floors(element_records)
 
     return element_records, zones, review

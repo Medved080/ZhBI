@@ -500,6 +500,38 @@ def delete_history_entry(
         conn.close()
 
 
+@app.post("/admin/reset-status-history")
+def reset_status_history(user: sqlite3.Row = Depends(require_admin)):
+    """Массовый сброс истории статусов ВСЕХ элементов — только для
+    тестирования (живой запрос пользователя, см. Docs/backlog.md), НЕ
+    ограничен одним чертежом/файлом. Каждый элемент возвращается в
+    состояние "только что импортирован": одна запись истории 'planned',
+    current_status='planned', контракт и партия сняты — тот же принцип,
+    что при обычном откате на "Запланирован" (apply_status_change,
+    app/contracts.py), только прямым SQL по всей таблице разом, а не
+    поэлементно через apply_status_change — на базе в тысячи элементов
+    поэлементный цикл был бы заметно медленнее и не даёт тут никакой
+    дополнительной пользы (каждый элемент всё равно приходит к одному и
+    тому же состоянию)."""
+    conn = get_connection()
+    try:
+        n = conn.execute("SELECT COUNT(*) AS n FROM elements").fetchone()["n"]
+        conn.execute("DELETE FROM status_history")
+        conn.execute(
+            "UPDATE elements SET current_status='planned', contract_id=NULL, "
+            "batch_id=NULL, updated_at=datetime('now')"
+        )
+        conn.execute(
+            "INSERT INTO status_history (element_id, status, changed_by, changed_by_user_id, comment) "
+            "SELECT id, 'planned', ?, ?, 'массовый сброс истории (тестирование)' FROM elements",
+            (format_display_name(user), user["id"]),
+        )
+        conn.commit()
+        return {"reset_count": n}
+    finally:
+        conn.close()
+
+
 @app.get("/status-summary", response_model=list[StatusSummaryEntry])
 def status_summary(
     source_file: Optional[str] = Query(None), user: sqlite3.Row = Depends(get_current_user)

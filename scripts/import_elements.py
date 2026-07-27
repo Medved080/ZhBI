@@ -81,6 +81,10 @@ def build_row(record: ElementRecord, address: dict) -> dict:
         # всегда None у элементов старого конвейера (LAYER_CONFIG).
         "subtype": record.subtype,
         "elevation_mm": record.elevation_mm,
+        # Только у элементов, чей слой несёт суффикс "_этаж N" (см.
+        # scripts/layer_naming.py) — иначе None, как subtype/elevation_mm
+        # у элементов без нового стандарта имён слоёв.
+        "floor": record.floor,
     }
 
 
@@ -150,6 +154,7 @@ def upsert_elements(conn, rows, source_file):
                     nearest_axis_letter=:nearest_axis_letter,
                     offset_x_mm=:offset_x_mm, offset_y_mm=:offset_y_mm,
                     outline_json=:outline_json, subtype=:subtype, elevation_mm=:elevation_mm,
+                    floor=:floor,
                     updated_at=datetime('now')
                 WHERE source_file=:source_file AND dxf_handle=:dxf_handle
                 """,
@@ -164,13 +169,13 @@ def upsert_elements(conn, rows, source_file):
                     mark_source, x, y, z, address, axis_status,
                     axis_number, axis_letter, nearest_axis_number,
                     nearest_axis_letter, offset_x_mm, offset_y_mm, outline_json,
-                    subtype, elevation_mm
+                    subtype, elevation_mm, floor
                 ) VALUES (
                     :source_file, :dxf_handle, :layer, :element_type, :mark,
                     :mark_source, :x, :y, :z, :address, :axis_status,
                     :axis_number, :axis_letter, :nearest_axis_number,
                     :nearest_axis_letter, :offset_x_mm, :offset_y_mm, :outline_json,
-                    :subtype, :elevation_mm
+                    :subtype, :elevation_mm, :floor
                 )
                 """,
                 values,

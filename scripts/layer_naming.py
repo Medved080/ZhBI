@@ -88,6 +88,7 @@ class ParsedLayerName:
     subtype: Optional[str]  # только group="zhbi"
     elevation_mm: Optional[int]  # со знаком; None — отметки в имени нет
     role: str  # ZHBI_ROLES или "Зона"/"Наименование" в зависимости от group
+    floor: Optional[int] = None  # см. parse_floor_token — None, пока заказчик не начал проставлять "_этаж N"
 
 
 def _ci_lookup(token: str, canonical_values) -> Optional[str]:
@@ -112,6 +113,21 @@ def parse_elevation_token(token: str) -> Optional[int]:
     return -value if sign_letter.upper() == "М" else value
 
 
+# Новый (готовящийся) суффикс "_этаж <N>" в самом конце имени слоя — ЕЩЁ
+# ОДИН токен ПОСЛЕ роли (не вместо неё), см. Docs/backlog.md, "Свойство
+# 'этаж'". Пробел внутри "этаж N" не разбивается split("_") (разделитель
+# только "_"), поэтому это ОДИН токен вида "этаж 1", "Этаж 12" и т.п. —
+# регистр не важен (та же политика, что и у остальной грамматики).
+_FLOOR_RE = re.compile(r"^этаж\s*(\d+)$", re.IGNORECASE)
+
+
+def parse_floor_token(token: str) -> Optional[int]:
+    """'этаж 1' -> 1, 'Этаж12' -> 12. None, если токен не похож на этаж —
+    не ошибка сама по себе (вызывающий код решает дальше)."""
+    m = _FLOOR_RE.match(token)
+    return int(m.group(1)) if m else None
+
+
 def parse_layer_name(name: str, allowed_subtypes: dict) -> Optional[ParsedLayerName]:
     """
     allowed_subtypes: {Тип: {допустимый_подтип, ...}} — справочник,
@@ -132,19 +148,35 @@ def parse_layer_name(name: str, allowed_subtypes: dict) -> Optional[ParsedLayerN
         return None
 
     tokens = name.split("_")
+
+    # "_этаж N" — если есть, это ВСЕГДА самый последний токен (см.
+    # parse_floor_token) — снимаем его ДО разбора остальной грамматики,
+    # иначе он попал бы на место роли (см. ниже, роль — тоже tokens[-1])
+    # и грамматика ошибочно решила бы, что роль "Марка"/"Элемент" не
+    # указана вовсе.
+    floor = None
+    if len(tokens) > 1:
+        maybe_floor = parse_floor_token(tokens[-1])
+        if maybe_floor is not None:
+            floor = maybe_floor
+            tokens = tokens[:-1]
+
     # tokens[0] == "WEB" всегда. tokens[1] — обязательный признак вида
     # слоя: "констр" (ЖБИ) или "тех" (служебный/зона).
     namespace = tokens[1].lower() if len(tokens) >= 2 else ""
 
     if namespace == "тех":
-        return _parse_zone_layer(name, tokens)
-    if namespace == "констр":
-        return _parse_zhbi_layer(name, tokens, allowed_subtypes)
-    raise LayerNameError(
-        name,
-        f"неизвестный второй токен {(tokens[1] if len(tokens) >= 2 else '')!r}, "
-        f"ожидается 'констр' (слой ЖБИ) или 'тех' (служебный слой)",
-    )
+        result = _parse_zone_layer(name, tokens)
+    elif namespace == "констр":
+        result = _parse_zhbi_layer(name, tokens, allowed_subtypes)
+    else:
+        raise LayerNameError(
+            name,
+            f"неизвестный второй токен {(tokens[1] if len(tokens) >= 2 else '')!r}, "
+            f"ожидается 'констр' (слой ЖБИ) или 'тех' (служебный слой)",
+        )
+    result.floor = floor
+    return result
 
 
 def _parse_zhbi_layer(name: str, tokens: list, allowed_subtypes: dict) -> ParsedLayerName:
