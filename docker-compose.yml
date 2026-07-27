@@ -1,12 +1,13 @@
 services:
   zhbi:
-    build: .
+    image: ${CONTAINER_IMAGE}:${CI_PIPELINE_ID}
     restart: unless-stopped
     ports:
       - "${PORT:-8000}:8000"
     env_file:
-      - .env
+      - .env.run
     volumes:
-      - ./data:/app/data
-      - ./Input:/app/Input
-      - ./uploads:/app/uploads
+      - /opt/zhbi/data:/app/data
+      - /opt/zhbi/Input:/app/Input
+      - /opt/zhbi/uploads:/app/uploads
+
