@@ -4680,15 +4680,19 @@ function computeTopColumnCeiling(levels) {
 // - Колонна — от своей отметки до следующего яруса; для самого верхнего
 //   яруса — до ближайшей плиты перекрытия выше (см. computeTopColumnCeiling),
 //   а если такой нет — запасной вариант, высота предыдущего яруса (или
-//   дефолт, если ярус всего один).
+//   дефолт, если ярус всего один). Если эта же колонна стоит под КОНЦОМ
+//   ригеля ЕЩЁ ВЫШЕ (см. computeColumnEndExtensions, columnTopOverrides)
+//   — вытягивается до него вместо базового потолка.
 // - Плита перекрытия — фиксированная толщина (см. FLOOR_SLAB_THICKNESS_MM).
 // - Ригель/Плита/Панель — квадратное сечение, высота = ширина контура.
-function elementExtrusionHeight(element, levels) {
+function elementExtrusionHeight(element, levels, columnTopOverrides) {
   if (element.element_type === "Колонна") {
     const idx = levels.indexOf(element.elevation_mm);
     if (idx !== -1 && idx < levels.length - 1) return levels[idx + 1] - levels[idx];
     if (idx === levels.length - 1) {
-      const ceiling = computeTopColumnCeiling(levels);
+      let ceiling = computeTopColumnCeiling(levels);
+      const override = columnTopOverrides && columnTopOverrides.get(element.id);
+      if (override !== undefined && (ceiling === null || override > ceiling)) ceiling = override;
       if (ceiling !== null) return ceiling - element.elevation_mm;
     }
     if (idx > 0) return levels[idx] - levels[idx - 1];
@@ -4762,9 +4766,9 @@ function getHighlightMeshMaterial(status) {
   return v3.highlightMaterial;
 }
 
-function build3DMeshForElement(element, levels) {
+function build3DMeshForElement(element, levels, columnTopOverrides) {
   if (!element.outline || element.outline.length < 3) return null; // нечего экструдировать
-  const height = elementExtrusionHeight(element, levels);
+  const height = elementExtrusionHeight(element, levels, columnTopOverrides);
   // Shape строится в локальной плоскости XY, shapeY = мировой Y как есть
   // (БЕЗ инверсии — см. Docs/backlog.md, "3D — зеркальность"). После
   // поворота geometry.rotateX(-90°) локальная (x,y,z) -> мировая (x,z,-y):
@@ -5026,6 +5030,67 @@ function footprintCentroid(outline) {
   return [(minX + maxX) / 2, (minY + maxY) / 2];
 }
 
+// Толерантность привязки конца ригеля к ближайшей колонне верхнего
+// яруса — по факту на реальных данных (260723_Чертежи для WEB.dxf,
+// 34 ригеля/68 концов на отметке 39200) максимальное расстояние конец-
+// ригеля-до-центра-опорной-колонны около 1000мм (адресация со
+// смещением от оси — offset_x_mm/offset_y_mm — сдвигает колонну
+// относительно "чистой" точки сетки), проверено live-скриптом на живой
+// БД (см. Docs/backlog.md).
+const COLUMN_BEAM_END_MATCH_TOLERANCE_MM = 1000;
+
+// Колонны верхнего яруса, которые нужно вытянуть ВЫШЕ базового потолка
+// (computeTopColumnCeiling) — конкретно те, что стоят под КОНЦОМ ригеля
+// на ещё более высокой отметке (например, локальная кровля техпомещения
+// над основной крышей — новый ярус ригелей/плит выше уже учтённого
+// потолка). Колонна, которая просто оказалась ГЕОМЕТРИЧЕСКИ под
+// серединой пролёта такого ригеля (не под его концом), высоту НЕ меняет
+// — так и должно быть, ригель на неё не опирается (живой запрос
+// пользователя, см. Docs/backlog.md). Только "Ригель" — по условию
+// заказчика плита перекрытия лежит на ригеле, а не на колонне напрямую.
+// Возвращает Map(id колонны -> самая высокая подходящая отметка).
+function computeColumnEndExtensions(levels) {
+  const overrides = new Map();
+  if (!levels.length) return overrides;
+  const topLevel = levels[levels.length - 1];
+  const baseCeiling = computeTopColumnCeiling(levels);
+  if (baseCeiling === null) return overrides;
+
+  const topColumns = [];
+  for (const e of state.elements) {
+    if (e.element_type === "Колонна" && e.elevation_mm === topLevel && e.outline && e.outline.length >= 3) {
+      const [ccx, ccy] = footprintCentroid(e.outline);
+      topColumns.push({ id: e.id, cx: ccx, cy: ccy });
+    }
+  }
+  if (!topColumns.length) return overrides;
+
+  for (const beam of state.elements) {
+    if (beam.element_type !== "Ригель") continue;
+    if (beam.elevation_mm == null || beam.elevation_mm <= baseCeiling) continue; // уже накрыт базовым потолком
+    if (!beam.outline || beam.outline.length < 3) continue;
+    const dims = footprintDimensions(beam.outline);
+    if (!dims) continue;
+    const angle = footprintLongAxisAngle(beam.outline);
+    const [bcx, bcy] = footprintCentroid(beam.outline);
+    const halfLen = dims.length / 2;
+    const dx = Math.cos(angle) * halfLen, dy = Math.sin(angle) * halfLen;
+    const ends = [[bcx + dx, bcy + dy], [bcx - dx, bcy - dy]];
+    for (const [ex, ey] of ends) {
+      let best = null;
+      for (const col of topColumns) {
+        const d = Math.hypot(col.cx - ex, col.cy - ey);
+        if (!best || d < best.d) best = { d, id: col.id };
+      }
+      if (best && best.d <= COLUMN_BEAM_END_MATCH_TOLERANCE_MM) {
+        const prev = overrides.get(best.id);
+        if (prev === undefined || beam.elevation_mm > prev) overrides.set(best.id, beam.elevation_mm);
+      }
+    }
+  }
+  return overrides;
+}
+
 // Ориентирует плоскую наклейку через явный базис (право/верх/нормаль) —
 // надёжнее, чем подбирать углы поворота вручную (тот же класс ошибок,
 // что уже ловили на зеркальности всей 3D-сцены, см. Docs/backlog.md,
@@ -5109,7 +5174,7 @@ function updateAllDecalOrientations() {
 // DECAL_TYPES и только если марка помещается по длине; иначе null —
 // вызывающий код падает на build3DLabelSprite (см. rebuild3DLabelSprite/
 // build3DScene).
-function build3DMarkDecal(element, levels) {
+function build3DMarkDecal(element, levels, columnTopOverrides) {
   if (!DECAL_TYPES.has(element.element_type)) return null;
   if (!element.mark || !element.outline || element.outline.length < 3) return null;
 
@@ -5120,7 +5185,7 @@ function build3DMarkDecal(element, levels) {
   // поправка знака применяется здесь для всех мировых координат наклейки.
 
   if (element.element_type === "Колонна") {
-    const height = elementExtrusionHeight(element, levels);
+    const height = elementExtrusionHeight(element, levels, columnTopOverrides);
     const sides = polygonSides(element.outline);
     const centroid = footprintCentroid(element.outline);
     let any = false;
@@ -5155,7 +5220,7 @@ function build3DMarkDecal(element, levels) {
 
   const angle = footprintLongAxisAngle(element.outline);
   const right = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle));
-  const height = elementExtrusionHeight(element, levels);
+  const height = elementExtrusionHeight(element, levels, columnTopOverrides);
   const [cx0, cy0] = footprintCentroid(element.outline);
   const cx = cx0, cz = -cy0;
   const decalWorldWidth = fontSize * aspect;
@@ -5452,7 +5517,8 @@ function rebuild3DLabelSprite(element) {
     v3.labelSpriteById.delete(element.id);
   }
   const levels = computeColumnLevels();
-  const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels);
+  const columnTopOverrides = computeColumnEndExtensions(levels);
+  const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
   const sprite = build3DLabelSprite(element, topY);
   if (!sprite) return;
   sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
@@ -5551,8 +5617,9 @@ function build3DScene() {
   v3.markDecalById.clear();
 
   const levels = computeColumnLevels();
+  const columnTopOverrides = computeColumnEndExtensions(levels);
   for (const element of state.elements) {
-    const mesh = build3DMeshForElement(element, levels);
+    const mesh = build3DMeshForElement(element, levels, columnTopOverrides);
     if (!mesh) continue;
     const passes = passesPlacementFilters(element);
     mesh.visible = passes;
@@ -5568,13 +5635,13 @@ function build3DScene() {
     // перекрытия/Ригеля/Колонны и только если марка помещается по длине;
     // иначе — прежняя плавающая табличка-спрайт (build3DLabelSprite).
     const labelVisible = passes && state.labelVisibility[element.element_type] !== false;
-    const decal = build3DMarkDecal(element, levels);
+    const decal = build3DMarkDecal(element, levels, columnTopOverrides);
     if (decal) {
       decal.visible = labelVisible;
       v3.scene.add(decal);
       v3.markDecalById.set(element.id, decal);
     } else {
-      const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels);
+      const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
       const sprite = build3DLabelSprite(element, topY);
       if (sprite) {
         sprite.visible = labelVisible;
