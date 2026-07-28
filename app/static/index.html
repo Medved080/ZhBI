@@ -650,6 +650,7 @@
         <button id="btn-export" class="admin-only">Экспорт в XLS</button>
         <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
         <button id="menu-history-import" class="admin-only">Импорт истории из XLS</button>
+        <button id="menu-status-restore" class="admin-only">Восстановить статусы из выгрузки</button>
         <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
         <button id="menu-schedule-import" class="admin-only">Импорт графика МС Project из XLS</button>
         <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
@@ -921,6 +922,30 @@
     <div class="actions">
       <button class="btn btn-secondary" id="history-import-cancel">Отмена</button>
       <button class="btn btn-primary" id="history-import-submit">Импортировать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="status-restore-backdrop">
+  <div class="modal">
+    <h2>Восстановление статусов из выгрузки</h2>
+    <p class="hint-text">
+      Для случая, когда история статусов элементов была потеряна (например, после
+      аварийной пересборки БД) — принимает файл выгрузки "Статус на дату"
+      (Настройки → Экспорт в XLS) или "История статусов". Для КАЖДОГО элемента,
+      найденного в файле, история пересоздаётся заново по нему (режим "Заменить") —
+      обычное "Дополнить" здесь не сработает: у только что пересозданных импортом
+      чертежа элементов уже есть свежая запись "Запланирован" с сегодняшней датой,
+      она новее восстанавливаемых дат и "победит" как последняя.
+    </p>
+    <label class="field">Файл для источника</label>
+    <div class="hint-text" id="status-restore-source"></div>
+    <label class="field">Файл .xlsx (выгрузка статусов)</label>
+    <input type="file" id="status-restore-file" accept=".xlsx"/>
+    <div id="status-restore-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="status-restore-cancel">Отмена</button>
+      <button class="btn btn-primary" id="status-restore-submit">Восстановить</button>
     </div>
   </div>
 </div>

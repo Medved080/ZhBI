@@ -5158,6 +5158,65 @@ historyImportSubmit.addEventListener("click", async () => {
   }
 });
 
+// ---------- восстановление статусов из выгрузки (авария БД) ----------
+// Тот же backend (/import-history-xlsx), что и обычный импорт истории выше
+// (app/history_import.py принимает и лист "История статусов", и "Статус на
+// дату" — см. Docs/backlog.md, 2026-07-28), но mode ЖЁСТКО "replace", а не
+// выбор пользователя: сразу после пересборки БД у каждого элемента уже есть
+// свежая запись "Запланирован" с сегодняшней датой — "Дополнить" её не
+// перекроет (она новее восстанавливаемых дат), только "Заменить" реально
+// восстанавливает статус. Отдельный пункт меню вместо переиспользования
+// диалога выше — чтобы не дать выбрать неработающий здесь режим.
+const statusRestoreBackdrop = document.getElementById("status-restore-backdrop");
+const statusRestoreFile = document.getElementById("status-restore-file");
+const statusRestoreSubmit = document.getElementById("status-restore-submit");
+
+function setStatusRestoreStatus(text, isError) {
+  const elm = document.getElementById("status-restore-status");
+  elm.textContent = text;
+  elm.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+document.getElementById("menu-status-restore").addEventListener("click", () => {
+  statusRestoreFile.value = "";
+  setStatusRestoreStatus("", false);
+  document.getElementById("status-restore-source").textContent = state.sourceFile || "(источник не выбран)";
+  statusRestoreBackdrop.classList.add("open");
+});
+document.getElementById("status-restore-cancel").addEventListener("click", () => statusRestoreBackdrop.classList.remove("open"));
+
+statusRestoreSubmit.addEventListener("click", async () => {
+  const file = statusRestoreFile.files[0];
+  if (!file) { setStatusRestoreStatus("Сначала выберите файл .xlsx", true); return; }
+  if (!state.sourceFile) { setStatusRestoreStatus("Сначала выберите источник (чертёж) в тулбаре", true); return; }
+
+  statusRestoreSubmit.disabled = true;
+  setStatusRestoreStatus("Восстановление статусов…", false);
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("source_file", state.sourceFile);
+  formData.append("mode", "replace");
+
+  try {
+    const res = await fetch("/import-history-xlsx", { method: "POST", body: formData });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      setStatusRestoreStatus((body && body.detail) ? body.detail : `Ошибка ${res.status}`, true);
+      return;
+    }
+    let msg = `Готово: сопоставлено элементов ${body.matched_elements}, восстановлено записей ${body.inserted}, ` +
+      `не найдено в этой БД ${body.unmatched_elements}.`;
+    if (body.unmatched_handles.length) msg += ` Примеры handle без совпадения: ${body.unmatched_handles.join(", ")}.`;
+    setStatusRestoreStatus(msg, false);
+    await loadPlan();
+  } catch (e) {
+    setStatusRestoreStatus("Не удалось связаться с сервером: " + e.message, true);
+  } finally {
+    statusRestoreSubmit.disabled = false;
+  }
+});
+
 // ---------- экспорт XLS ----------
 const exportBackdrop = document.getElementById("export-backdrop");
 document.getElementById("btn-export").addEventListener("click", () => exportBackdrop.classList.add("open"));

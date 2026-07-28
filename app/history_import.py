@@ -1,7 +1,10 @@
 """
 Импорт истории статусов из .xlsx (обратная операция к export.build_history_xlsx)
 — переносит прогресс поставки/монтажа на другой сервер, где тот же чертёж уже
-загружен (тот же source_file, те же dxf_handle).
+загружен (тот же source_file, те же dxf_handle). Тот же механизм используется
+для аварийного восстановления статусов после потери БД (см. Docs/backlog.md,
+2026-07-28) — по заранее сохранённой выгрузке "Статус на дату"
+(export.build_snapshot_xlsx).
 
 Сопоставление элементов — по (source_file, dxf_handle), как и при обычном
 upsert элементов. Элементы, которых нет в целевой БД, пропускаются и
@@ -12,17 +15,28 @@ DXF на новом сервере.
 перед импортом. Режим "merge" — история дополняется, но не создаёт дубли:
 если у элемента уже есть запись с тем же статусом в ту же дату, строка из
 файла пропускается (см. Docs/backlog.md п.3).
+
+Принимает ДВА разных формата листа с одинаковой сутью строки "элемент
+получил такой-то статус в такой-то момент": "История статусов"
+(build_history_xlsx, колонка "Изменено", по записи на КАЖДОЕ событие) и
+"Статус на дату" (build_snapshot_xlsx, колонка "Статус изменён", ОДНА
+запись на элемент — его статус на момент выгрузки). Для восстановления
+после потери БД это ничем не хуже: строка снимка становится единственной
+записью истории элемента, current_status после импорта — то, что было в
+снимке (см. import_history ниже).
 """
 
 import io
 
 from openpyxl import load_workbook
 
+from app.contracts import recompute_status_and_actual_date
 from app.models import STATUS_LABELS_RU
 
 STATUS_LABEL_TO_VALUE = {label: status.value for status, label in STATUS_LABELS_RU.items()}
 
-REQUIRED_HEADERS = ["DXF handle", "Статус", "Изменено"]
+REQUIRED_HEADERS = ["DXF handle", "Статус"]
+CHANGED_AT_HEADER_CANDIDATES = ["Изменено", "Статус изменён"]
 
 
 class HistoryImportError(Exception):
@@ -51,6 +65,13 @@ def parse_history_xlsx(content: bytes):
         raise HistoryImportError(
             422, f"В файле нет обязательных колонок: {', '.join(missing)}"
         )
+    changed_at_header = next((h for h in CHANGED_AT_HEADER_CANDIDATES if h in header), None)
+    if changed_at_header is None:
+        raise HistoryImportError(
+            422,
+            "В файле нет колонки с датой/временем статуса "
+            f"({' или '.join(CHANGED_AT_HEADER_CANDIDATES)})",
+        )
     col = {name: idx for idx, name in enumerate(header)}
 
     def get(row, name):
@@ -63,7 +84,7 @@ def parse_history_xlsx(content: bytes):
     for row in rows:
         dxf_handle = get(row, "DXF handle")
         status_label = get(row, "Статус")
-        changed_at = get(row, "Изменено")
+        changed_at = get(row, changed_at_header)
         if not dxf_handle or not status_label or not changed_at:
             continue
         status = STATUS_LABEL_TO_VALUE.get(str(status_label).strip())
@@ -133,16 +154,14 @@ def import_history(conn, source_file: str, rows: list, mode: str):
         inserted += 1
         touched_element_ids.add(element_id)
 
+    # recompute_status_and_actual_date (app/contracts.py) — тот же
+    # пересчёт, что после обычной смены статуса/отката: current_status
+    # ПЛЮС actual_delivery_date (сбрасывается/выставляется по фактическому
+    # статусу "Доставлено"), не только current_status в одиночку — иначе
+    # актуальная дата поставки молча разошлась бы с восстановленным
+    # статусом (см. Docs/backlog.md, 2026-07-28, восстановление статусов).
     for element_id in touched_element_ids:
-        latest = conn.execute(
-            "SELECT status FROM status_history WHERE element_id = ? ORDER BY changed_at DESC LIMIT 1",
-            (element_id,),
-        ).fetchone()
-        if latest:
-            conn.execute(
-                "UPDATE elements SET current_status = ?, updated_at = datetime('now') WHERE id = ?",
-                (latest["status"], element_id),
-            )
+        recompute_status_and_actual_date(conn, element_id)
 
     conn.commit()
 
