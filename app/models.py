@@ -173,6 +173,19 @@ class PlanSelectionIn(BaseModel):
     selection: list[PlanSelectionItem]
 
 
+class ExportRequestIn(BaseModel):
+    # POST, а не GET+query — element_ids может нести тысячи id (экспорт с
+    # учётом текущего фильтра на схеме, см. Docs/backlog.md), не влезает в
+    # длину URL. Сами фильтры (passesPlacementFilters) целиком живут на
+    # фронтенде — сюда приходит уже готовый список id, не критерии фильтра.
+    mode: str  # "snapshot" | "history"
+    source_file: Optional[str] = None
+    date: Optional[str] = None  # для mode="snapshot"
+    date_from: Optional[str] = None  # для mode="history"
+    date_to: Optional[str] = None  # для mode="history"
+    element_ids: Optional[list[int]] = None  # None — без ограничения (все элементы)
+
+
 SHAPES = ("circle", "square", "triangle", "diamond", "hexagon", "outline")
 
 

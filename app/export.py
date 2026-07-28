@@ -109,7 +109,24 @@ def _day_bounds(date_from, date_to):
     return lo, hi
 
 
-def build_snapshot_xlsx(conn, source_file, date):
+def _element_ids_clause(element_ids, column="id"):
+    """element_ids — None (без ограничения, экспорт "все элементы") или
+    список id, уже отфильтрованных на клиенте текущим состоянием фильтров
+    (см. Docs/backlog.md, "Экспорт с учётом фильтра") — фильтры сложные и
+    целиком живут в app.js (passesPlacementFilters), пересчитывать их на
+    бэкенде было бы дублированием логики; вместо этого клиент присылает
+    готовый список id. Пустой список — легитимный результат (фильтр не
+    оставил ни одного элемента), не ошибка — возвращает заведомо ложное
+    условие, а не пытается собрать "IN ()" (невалидный SQL)."""
+    if element_ids is None:
+        return None, []
+    if not element_ids:
+        return "1=0", []
+    placeholders = ",".join("?" * len(element_ids))
+    return f"{column} IN ({placeholders})", list(element_ids)
+
+
+def build_snapshot_xlsx(conn, source_file, date, element_ids=None):
     wb = Workbook()
     ws = wb.active
     ws.title = "Статус на дату"
@@ -120,33 +137,45 @@ def build_snapshot_xlsx(conn, source_file, date):
     header = (
         [label for _, label in ELEMENT_COLUMNS]
         + [label for _, _, label in ZONE_COLUMNS]
-        + ["Контракт", "Статус", "Статус изменён"]
+        + ["Контракт", "Статус", "Статус изменён", "Кто изменил"]
     )
     ws.append(header)
 
-    clause = "WHERE source_file = ?" if source_file else ""
-    params = (source_file,) if source_file else ()
-    elements = conn.execute(f"SELECT * FROM elements {clause} ORDER BY id", params).fetchall()
+    clauses = []
+    params = []
+    if source_file:
+        clauses.append("source_file = ?")
+        params.append(source_file)
+    ids_clause, ids_params = _element_ids_clause(element_ids)
+    if ids_clause:
+        clauses.append(ids_clause)
+        params.extend(ids_params)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    elements = conn.execute(f"SELECT * FROM elements {where} ORDER BY id", params).fetchall()
 
     for el in elements:
+        # Всегда через status_history (не el["current_status"]/["updated_at"]
+        # напрямую даже без date) — только там есть changed_by (ФИО того, кто
+        # менял статус, живой запрос пользователя), а без date нужна именно
+        # САМАЯ ПОЗДНЯЯ запись — тот же инвариант, что у current_status
+        # (см. recompute_status_and_actual_date, app/contracts.py).
+        query = "SELECT status, changed_at, changed_by FROM status_history WHERE element_id = ?"
+        query_params = [el["id"]]
         if date:
-            hi = f"{date} 23:59:59"
-            row = conn.execute(
-                "SELECT status, changed_at FROM status_history "
-                "WHERE element_id = ? AND changed_at <= ? ORDER BY changed_at DESC LIMIT 1",
-                (el["id"], hi),
-            ).fetchone()
-            status = row["status"] if row else None
-            changed_at = row["changed_at"] if row else None
-        else:
-            status = el["current_status"]
-            changed_at = el["updated_at"]
+            query += " AND changed_at <= ?"
+            query_params.append(f"{date} 23:59:59")
+        query += " ORDER BY changed_at DESC LIMIT 1"
+        row = conn.execute(query, query_params).fetchone()
+        status = row["status"] if row else None
+        changed_at = row["changed_at"] if row else None
+        changed_by = row["changed_by"] if row else None
 
         values = [el[key] for key, _ in ELEMENT_COLUMNS]
         values.extend(_zone_cell(el, id_field, status_field, zone_names) for id_field, status_field, _ in ZONE_COLUMNS)
         values.append(_contract_cell(el["contract_id"], contract_labels))
         values.append(STATUS_LABELS_RU.get(status, status) if status else "(нет данных на эту дату)")
         values.append(changed_at or "")
+        values.append(changed_by or "")
         ws.append(values)
 
     _autosize(ws)
@@ -155,7 +184,7 @@ def build_snapshot_xlsx(conn, source_file, date):
     return buf.getvalue()
 
 
-def build_history_xlsx(conn, source_file, date_from, date_to):
+def build_history_xlsx(conn, source_file, date_from, date_to, element_ids=None):
     wb = Workbook()
     ws = wb.active
     ws.title = "История статусов"
@@ -182,6 +211,10 @@ def build_history_xlsx(conn, source_file, date_from, date_to):
     if hi:
         clauses.append("sh.changed_at <= ?")
         params.append(hi)
+    ids_clause, ids_params = _element_ids_clause(element_ids, column="e.id")
+    if ids_clause:
+        clauses.append(ids_clause)
+        params.extend(ids_params)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
     rows = conn.execute(

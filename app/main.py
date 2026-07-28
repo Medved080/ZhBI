@@ -14,6 +14,7 @@ from shapely.strtree import STRtree
 
 from app.auth import format_display_name, get_current_user, require_admin, require_editor
 from app.auth import router as auth_router
+from app.changelog import CHANGELOG
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
 from app.contracts import (
     apply_status_change,
@@ -44,6 +45,7 @@ from app.models import (
     ElementPlannedDateIn,
     ElementPlannedDateUpdateResult,
     ElementShapeIn,
+    ExportRequestIn,
     Status,
     DxfImportResult,
     ElementDetailOut,
@@ -357,6 +359,14 @@ def on_startup():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/changelog")
+def get_changelog(user: sqlite3.Row = Depends(get_current_user)):
+    # Требует входа, как и весь остальной функционал (см. Docs/TZ.md) —
+    # список релизов не публичный. Порядок — как в app/changelog.py (от
+    # новой версии к старой), фронтенд ничего не сортирует сам.
+    return CHANGELOG
 
 
 @app.get("/elements", response_model=list[ElementOut])
@@ -1092,22 +1102,17 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
     }
 
 
-@app.get("/export.xlsx")
-def export_xlsx(
-    source_file: Optional[str] = Query(None),
-    mode: str = Query(..., pattern="^(snapshot|history)$"),
-    date: Optional[str] = Query(None, description="Для mode=snapshot: статус на эту дату (YYYY-MM-DD)"),
-    date_from: Optional[str] = Query(None, description="Для mode=history: начало периода (YYYY-MM-DD)"),
-    date_to: Optional[str] = Query(None, description="Для mode=history: конец периода (YYYY-MM-DD)"),
-    user: sqlite3.Row = Depends(get_current_user),
-):
+@app.post("/export.xlsx")
+def export_xlsx(body: ExportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    if body.mode not in ("snapshot", "history"):
+        raise HTTPException(status_code=422, detail="mode должен быть 'snapshot' или 'history'")
     conn = get_connection()
     try:
-        if mode == "snapshot":
-            content = build_snapshot_xlsx(conn, source_file, date)
-            name = f"elements_snapshot{'_' + date if date else ''}.xlsx"
+        if body.mode == "snapshot":
+            content = build_snapshot_xlsx(conn, body.source_file, body.date, body.element_ids)
+            name = f"elements_snapshot{'_' + body.date if body.date else ''}.xlsx"
         else:
-            content = build_history_xlsx(conn, source_file, date_from, date_to)
+            content = build_history_xlsx(conn, body.source_file, body.date_from, body.date_to, body.element_ids)
             name = "elements_history.xlsx"
     finally:
         conn.close()

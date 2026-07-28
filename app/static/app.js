@@ -52,6 +52,7 @@ let state = {
   statusLabels: {},
   labelVisibility: {},
   labelDatesVisibility: {},
+  changelog: null, // кэш GET /changelog на время сеанса, см. btn-changelog
   contracts: [],
   defaultContracts: {},
   elementShapes: {}, // "layer element_type" -> имя формы
@@ -905,18 +906,20 @@ function subtypeTextForLogicalKey(key) {
   const idx = key.indexOf(SUBTYPE_KEY_SEP);
   return idx === -1 ? key : key.slice(idx + SUBTYPE_KEY_SEP.length);
 }
-// Типы, у которых текст подтипа — это фактически отметка ("на отм.
-// +15.000" и т.п., см. allowed_subtypes/Docs/TZ.md §3.7) — избыточно
-// показывать промежуточный уровень "Подтип" в дереве фильтра, когда для
-// этого уже есть отдельный фильтр "Отметка (высота)" (живой репорт
-// пользователя 2026-07-24: "группировка по отметке внутри Плиты
-// перекрытия/Ригеля не нужна"). Для этих типов марки — ПРЯМЫЕ дети типа
-// в дереве (Тип → Марка), без промежуточного уровня подтипа; фильтрация
-// по отметке продолжает работать как раньше, независимо, через
-// elevationFilterValue — просто в дереве ей больше не задваивают
-// подтип. У Колонны подтип — смысловое название яруса ("нижняя"/
-// "верхняя"), не голая отметка, поэтому её не трогаем.
-const FLAT_MARK_TYPES = new Set(["Плита перекрытия", "Ригель"]);
+// Раньше (до 2026-07-28) сюда входили "Плита перекрытия" и "Ригель" —
+// предполагалось, что у этих типов текст подтипа ВСЕГДА фактически
+// отметка ("на отм. +15.000" и т.п.), поэтому уровень "Подтип" в дереве
+// фильтра скрывался целиком, марки шли прямыми детьми типа (Тип → Марка).
+// Живой репорт пользователя — предположение оказалось неверным: у Ригеля
+// появился подтип "периметральный" (справочник подтипов, allowed_subtypes)
+// — это не отметка, а самостоятельная смысловая категория, как "нижняя"/
+// "верхняя" у Колонны, но с флаттингом её было невозможно отфильтровать
+// отдельно от обычных ригелей (она пряталась среди марок). Множество
+// снова пустое — уровень "Подтип" в дереве теперь одинаково показывается
+// для ВСЕХ типов элементов (elevationFilterValue/"Отметка (высота)"
+// рядом продолжает работать независимо, для быстрого отбора по высоте
+// без захода в дерево).
+const FLAT_MARK_TYPES = new Set([]);
 
 function subtypeFilterValue(element) {
   // Для FLAT_MARK_TYPES "слот подтипа" в дереве фильтра занимает МАРКА
@@ -2549,13 +2552,40 @@ function renderLabelToggles() {
     label.className = "toggle";
     const checked = state.labelVisibility[type] !== false;
     label.innerHTML = `<input type="checkbox" data-type="${escapeHtml(type)}" ${checked ? "checked" : ""}/> ${escapeHtml(type)}`;
+
+    // Подпункт "Даты" (живой запрос пользователя) — код контрагента +
+    // плановая дата в допстроке наклейки. Создан ЗДЕСЬ (до обработчика
+    // основного чекбокса выше), не после, потому что обработчику нужна
+    // ссылка на него для каскада — см. ниже. Сессионное состояние, как и
+    // основной чекбокс (не сохраняется на сервер этим переключателем —
+    // только через "Настройки → Экспорт/импорт настроек", см. app/main.py).
+    const datesLabel = document.createElement("label");
+    datesLabel.className = "toggle toggle-sub";
+    const datesChecked = state.labelDatesVisibility[type] !== false;
+    datesLabel.innerHTML = `<input type="checkbox" data-dates-type="${escapeHtml(type)}" ${datesChecked ? "checked" : ""} ${checked ? "" : "disabled"}/> Даты`;
+    const datesInput = datesLabel.querySelector("input");
+
     label.querySelector("input").addEventListener("change", (e) => {
-      state.labelVisibility[type] = e.target.checked;
-      if (!e.target.checked) {
+      const isChecked = e.target.checked;
+      state.labelVisibility[type] = isChecked;
+
+      // "Даты" зависит от видимости типа — иерархия, как и везде в
+      // фильтрах (родитель ставит/снимает потомков разом, живой запрос
+      // пользователя, 2026-07-28): выключение марки выключает и её даты,
+      // включение марки снова включает и даты. Пока тип включён, "Даты"
+      // по-прежнему можно выключить отдельно (марка без дат) — это НЕ
+      // каскад в обратную сторону, датчик потомка не трогает родителя.
+      state.labelDatesVisibility[type] = isChecked;
+      datesInput.checked = isChecked;
+      datesInput.disabled = !isChecked;
+
+      if (!isChecked) {
         // Скрыть — можно форсировать сразу: updateLabelCollisionVisibility
         // ниже пропускает выключенные типы целиком (см. её же проверку
         // state.labelVisibility[...] === false) и не тронет их display,
         // так что снятие галочки нужно применить явно и немедленно.
+        // Содержимое наклеек пересобирать не нужно — они просто скрыты,
+        // а не удалены, и заново соберутся при следующем включении типа.
         document.querySelectorAll(
           `.mark-label[data-type="${type}"], .mark-sublabel[data-type="${type}"], `
           + `.mark-label-bg[data-type="${type}"], .mark-sublabel-bg[data-type="${type}"], `
@@ -2570,31 +2600,23 @@ function renderLabelToggles() {
         // уместить) — на плотных участках подписи наползали друг на друга
         // сплошной стеной (см. Docs/backlog.md, живой разбор).
         // Пересчитываем видимость тем же алгоритмом, что и обычный зум/пан.
-        // "Наклейки" в этом прореживании не участвуют вовсе (см.
-        // updateLabelCollisionVisibility/computeStickerLayout) — просто
-        // показать все разом.
         updateSizesForZoom();
-        document.querySelectorAll(`.mark-sticker[data-type="${type}"]`).forEach(t => {
-          t.style.display = "";
-        });
+        // "Наклейки" (мark-sticker) в прореживании выше не участвуют — но
+        // раз "Даты" только что каскадом вернулись к "включено", у уже
+        // существующих наклеек могло не быть допстроки в разметке (если
+        // "Даты" выключали отдельно ДО того, как выключили сам тип) —
+        // простого display:"" недостаточно, пересобираем содержимое через
+        // тот же updateElementSubLabel, что и обработчик "Даты" ниже (он
+        // сам корректно проставит display по текущему state.labelVisibility).
+        for (const element of state.elements) {
+          if (element.element_type === type) updateElementSubLabel(element);
+        }
       }
       apply3DLabelVisibility();
     });
     row.appendChild(label);
 
-    // Подпункт "Даты" (живой запрос пользователя) — код контрагента +
-    // плановая дата в допстроке наклейки, независимо от видимости самой
-    // марки выше. Сессионное состояние, как и основной чекбокс (не
-    // сохраняется на сервер этим переключателем — только через
-    // "Настройки → Экспорт/импорт настроек", см. app/main.py). Дёшево
-    // пересобрать допстроку только у элементов ЭТОГО типа —
-    // updateElementSubLabel уже умеет и 2D-наклейку/запасной вариант, и
-    // 3D одним вызовом, переиспользуем как есть.
-    const datesLabel = document.createElement("label");
-    datesLabel.className = "toggle toggle-sub";
-    const datesChecked = state.labelDatesVisibility[type] !== false;
-    datesLabel.innerHTML = `<input type="checkbox" data-dates-type="${escapeHtml(type)}" ${datesChecked ? "checked" : ""}/> Даты`;
-    datesLabel.querySelector("input").addEventListener("change", (e) => {
+    datesInput.addEventListener("change", (e) => {
       state.labelDatesVisibility[type] = e.target.checked;
       for (const element of state.elements) {
         if (element.element_type === type) updateElementSubLabel(element);
@@ -5283,29 +5305,119 @@ statusRestoreSubmit.addEventListener("click", async () => {
   }
 });
 
+// ---------- журнал версий ("?" в тулбаре, живой запрос пользователя) ----------
+// Список — app/changelog.py (единственный источник данных, порядок уже
+// от новой версии к старой — новую запись согласовывать с пользователем
+// ПЕРЕД добавлением в тот файл, см. его собственный докстринг), сюда
+// приходит уже готовым, фронтенд просто рендерит как есть, ни разу не
+// пересортировывая. Кэшируется на время сеанса (state.changelog) — список
+// не меняется, пока сервис не перезапустят с новой версией, повторный
+// запрос при каждом открытии модалки не нужен.
+document.getElementById("btn-changelog").addEventListener("click", async () => {
+  const box = document.getElementById("changelog-list");
+  const backdrop = document.getElementById("changelog-backdrop");
+  if (!state.changelog) {
+    box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+    backdrop.classList.add("open");
+    try {
+      state.changelog = await api("/changelog");
+    } catch (e) {
+      box.innerHTML = `<div class="error-text">Не удалось загрузить: ${escapeHtml(e.message)}</div>`;
+      return;
+    }
+  } else {
+    backdrop.classList.add("open");
+  }
+  box.innerHTML = state.changelog.map(entry => `
+    <div class="changelog-entry">
+      <div class="changelog-eyebrow">
+        <span class="changelog-version">v${escapeHtml(entry.version)}</span>
+        <span class="changelog-date">${escapeHtml(entry.date)}</span>
+      </div>
+      <h3>${escapeHtml(entry.title)}</h3>
+      <ul>${entry.items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+    </div>
+  `).join("");
+});
+document.getElementById("changelog-close").addEventListener("click", () => {
+  document.getElementById("changelog-backdrop").classList.remove("open");
+});
+
 // ---------- экспорт XLS ----------
+// "Учитывать текущий фильтр" (живой запрос пользователя, см.
+// Docs/backlog.md) — фильтры (passesPlacementFilters) целиком считаются
+// на клиенте, пересчитывать их на бэкенде было бы дублированием логики;
+// вместо этого при отмеченном чекбоксе шлём уже готовый список id
+// element_ids, потенциально тысячи штук — не помещается в query string
+// GET-запроса, поэтому /export.xlsx теперь POST с JSON-телом и скачивание
+// через blob, а не window.location.href (тот же паттерн, что уже есть у
+// экспорта настроек — только там payload маленький, GET годился).
 const exportBackdrop = document.getElementById("export-backdrop");
-document.getElementById("btn-export").addEventListener("click", () => exportBackdrop.classList.add("open"));
+
+function updateExportFilterCount() {
+  const el = document.getElementById("export-filter-count");
+  if (!document.getElementById("export-use-filter").checked) { el.textContent = ""; return; }
+  const count = state.elements.filter(passesPlacementFilters).length;
+  el.textContent = `Сейчас проходит фильтр: ${count} из ${state.elements.length} элементов.`;
+}
+document.getElementById("btn-export").addEventListener("click", () => {
+  exportBackdrop.classList.add("open");
+  document.getElementById("export-error").textContent = "";
+  updateExportFilterCount();
+});
 document.getElementById("export-cancel").addEventListener("click", () => exportBackdrop.classList.remove("open"));
+document.getElementById("export-use-filter").addEventListener("change", updateExportFilterCount);
 document.querySelectorAll('input[name="export-mode"]').forEach(r => r.addEventListener("change", () => {
   const mode = document.querySelector('input[name="export-mode"]:checked').value;
   document.getElementById("export-history-fields").style.display = mode === "history" ? "flex" : "none";
   document.getElementById("export-snapshot-fields").style.display = mode === "snapshot" ? "flex" : "none";
 }));
-document.getElementById("export-download").addEventListener("click", () => {
+document.getElementById("export-download").addEventListener("click", async () => {
   const mode = document.querySelector('input[name="export-mode"]:checked').value;
-  const params = new URLSearchParams({ mode, source_file: state.sourceFile });
+  const errorEl = document.getElementById("export-error");
+  errorEl.textContent = "";
+  const body = { mode, source_file: state.sourceFile };
   if (mode === "history") {
     const from = document.getElementById("export-date-from").value;
     const to = document.getElementById("export-date-to").value;
-    if (from) params.set("date_from", from);
-    if (to) params.set("date_to", to);
+    if (from) body.date_from = from;
+    if (to) body.date_to = to;
   } else {
     const date = document.getElementById("export-date").value;
-    if (date) params.set("date", date);
+    if (date) body.date = date;
   }
-  window.location.href = `/export.xlsx?${params.toString()}`;
-  exportBackdrop.classList.remove("open");
+  if (document.getElementById("export-use-filter").checked) {
+    body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
+  }
+
+  const downloadBtn = document.getElementById("export-download");
+  downloadBtn.disabled = true;
+  try {
+    const res = await fetch("/export.xlsx", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => null);
+      throw new Error((errBody && errBody.detail) ? errBody.detail : `Ошибка ${res.status}`);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+    const filename = match ? decodeURIComponent(match[1]) : "export.xlsx";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    exportBackdrop.classList.remove("open");
+  } catch (e) {
+    errorEl.textContent = "Не удалось скачать: " + e.message;
+  } finally {
+    downloadBtn.disabled = false;
+  }
 });
 
 // ---------- экспорт в PDF ----------

@@ -373,6 +373,8 @@
   .label-toggle-row { display: flex; align-items: center; gap: 14px; }
   .label-toggle-row .toggle { flex: 1; }
   label.toggle.toggle-sub { color: var(--color-text-muted); margin-top: 6px; }
+  label.toggle.toggle-sub:has(input:disabled) { opacity: .45; }
+  label.toggle.toggle-sub input:disabled { cursor: not-allowed; }
   #card select { font-size: 12px; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
 
   /* -------- поиск по маркам (Фильтры) -------- */
@@ -446,6 +448,26 @@
   }
   .modal-sticky-foot .actions { margin-top: 10px; }
   .modal h2 { font-size: 16px; margin: 0 0 14px; font-weight: 600; }
+  /* Кнопка "?" ("Что нового", живой запрос пользователя) — та же
+     .btn.btn-sm.btn-secondary база, что и остальные кнопки тулбара,
+     только круглая и без текста. */
+  .btn-icon-round {
+    width: 28px; height: 28px; padding: 0; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 700; flex-shrink: 0;
+  }
+  /* Журнал версий — новые сверху (порядок задаёт сам app/changelog.py,
+     фронтенд не сортирует), самая первая версия — только проскроллив до
+     конца .modal-sticky-scroll. */
+  .changelog-entry { padding: 14px 0; border-bottom: 1px solid var(--color-border); }
+  .changelog-entry:last-child { border-bottom: none; padding-bottom: 0; }
+  .changelog-entry:first-child { padding-top: 0; }
+  .changelog-eyebrow { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .changelog-version { font-size: 12px; font-weight: 700; color: var(--color-primary); }
+  .changelog-date { font-size: 12px; color: var(--color-text-muted); }
+  .changelog-entry h3 { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
+  .changelog-entry ul { margin: 0; padding-left: 18px; }
+  .changelog-entry li { margin: 3px 0; }
   .modal .row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; gap: 10px; }
   /* date-инпут внутри .row рядом с текстовым flex:1 — без этого width:100%
      (см. .modal input[type=date] ниже) становится его flex-basis (flex-basis:
@@ -665,6 +687,7 @@
       <span><b id="user-name"></b></span>
       <button class="btn btn-sm btn-secondary" id="btn-logout">Выйти</button>
     </div>
+    <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-changelog" title="Что нового">?</button>
   </div>
 </div>
 <div id="workdate-banner" class="hidden">
@@ -816,6 +839,11 @@
       <span>на дату</span><input type="date" id="export-date"/>
       <span style="color:var(--color-text-muted)">(пусто — текущий статус)</span>
     </div>
+    <label class="toggle" style="margin-top:12px;">
+      <input type="checkbox" id="export-use-filter"/> Учитывать текущий фильтр (только отображаемые сейчас элементы)
+    </label>
+    <div class="hint-text" id="export-filter-count"></div>
+    <div class="error-text" id="export-error"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="export-cancel">Отмена</button>
       <button class="btn btn-primary" id="export-download">Скачать</button>
@@ -949,6 +977,20 @@
     <div class="actions">
       <button class="btn btn-secondary" id="status-restore-cancel">Отмена</button>
       <button class="btn btn-primary" id="status-restore-submit">Восстановить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="changelog-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Что нового</h2>
+    </div>
+    <div class="modal-sticky-scroll" id="changelog-list"></div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="changelog-close">Закрыть</button>
+      </div>
     </div>
   </div>
 </div>
