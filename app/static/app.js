@@ -30,10 +30,17 @@ let state = {
   byId: new Map(),
   shapeById: new Map(),
   labelById: new Map(),
-  subLabelById: new Map(), // id -> <text> допстроки (партия), только у элементов, где она сейчас видна — см. elementSubLabelText
-  labelGroupById: new Map(), // id -> <g> в labels-layer, обёртка над label(+subLabel) ОДНОГО элемента — см. renderElements/applyPlacementFilters
-  batchCache: new Map(), // batch.id -> BatchOut, ленивая подгрузка (карточка элемента, диалоги назначения) — см. Docs/backlog.md
+  subLabelById: new Map(), // id -> <text> допстроки (плановая дата + код контрагента), только у элементов, где она сейчас видна — см. elementSubLabelText
+  stickerById: new Map(), // id -> <g class="mark-sticker"> — марка(+допстрока) как "наклейка" на контуре элемента, см. computeStickerLayout/buildStickerGroup. Элементы БЕЗ пригодного контура остаются на labelById/subLabelById (запасной вариант).
+  labelGroupById: new Map(), // id -> <g> в labels-layer, обёртка над label+subLabel ИЛИ sticker ОДНОГО элемента — см. renderElements/applyPlacementFilters
   labelOffsetById: new Map(), // id -> {dx, dy, anchor} в единицах базового радиуса — направление подписи, выбранное один раз при разводке коллизий
+  // Порог опоздания поставки (дней) — серверная настройка (app/settings.py),
+  // загружается один раз при старте; используется для красного/зелёного
+  // цвета допстроки марки (см. elementSubLabelText) и всплывающей
+  // подсказки (computeTooltipDateRows). Раньше была ещё и отдельная
+  // инфо-плашка на схеме — убрана целиком (живая жалоба пользователя на
+  // быстродействие на файлах с тысячами элементов, см. Docs/backlog.md).
+  lateThresholdDays: 0,
   selectedId: null,
   // Групповое выделение рамкой (Shift+перетаскивание, см. Docs/backlog.md,
   // "Групповая смена статуса") — параллельно одиночному selectedId
@@ -158,13 +165,6 @@ function maybeWarnContract(result) {
     const w = result.contract_warning;
     const damagedPart = w.damaged ? `, повреждено ${w.damaged}` : "";
     showToast(`Превышение по контракту «${w.contract_name}»: законтрактовано ${w.quantity}, отмечено на схеме ${w.fact}${damagedPart}.`);
-  }
-}
-
-function maybeWarnBatch(result) {
-  if (result && result.batch_warning) {
-    const w = result.batch_warning;
-    showToast(`Превышение по партии «${w.batch_label}»: запланировано ${w.quantity}, назначено ${w.fact}.`);
   }
 }
 
@@ -895,9 +895,7 @@ function floorFilterValue(element) {
 // заодно скрывало элементы "Плита перекрытия" с тем же текстом подтипа
 // (живой репорт пользователя 2026-07-24: "при снятии галочки с ригелей
 // исчезают плиты перекрытий", см. Docs/backlog.md). Тот же приём
-// составного ключа, что уже применён для стоянок (stanceLogicalKey) —
-// и уже (независимо) применён для этой же пары тип/подтип в диалоге
-// партии, см. `${type} ${subtype}` в buildBatchDialogMaps ниже.
+// составного ключа, что уже применён для стоянок (stanceLogicalKey).
 const SUBTYPE_KEY_SEP = "::";
 function subtypeLogicalKey(elementType, subtype) {
   return `${elementType}${SUBTYPE_KEY_SEP}${subtype}`;
@@ -939,18 +937,20 @@ function markFilterValue(element) {
   return element.mark || PLACEMENT_NONE;
 }
 
-// Поставщик/Контракт — та же иерархическая пара, что Кран/Стоянка и
+// Контрагент/Контракт — та же иерархическая пара, что Кран/Стоянка и
 // Тип/Подтип, только источник значений не зоны, а state.contracts (см.
-// Docs/backlog.md, "Групповая смена статуса"). element.contract_id —
-// уже готовый денормализованный кэш (см. app/contracts.py), резолвить
-// контракт целиком нужно только для подписи (поставщик контракта).
+// Docs/backlog.md, "Контрактация 2.0" — контракт теперь ссылается на
+// Контрагента через цепочку Спецификация->Договор->Контрагент, а не
+// хранит свободнотекстового "поставщика"). element.contract_id — уже
+// готовый денормализованный кэш (см. app/contracts.py), резолвить
+// контракт целиком нужно только для подписи.
 function contractIdFilterValue(element) {
   return element.contract_id || PLACEMENT_NONE;
 }
 function supplierFilterValue(element) {
   if (!element.contract_id) return PLACEMENT_NONE;
   const c = state.contracts.find(c => c.id === element.contract_id);
-  return c ? c.supplier : PLACEMENT_NONE;
+  return c ? c.counterparty_short_name : PLACEMENT_NONE;
 }
 
 // Единый список определений категорий — используется и для проверки
@@ -1032,7 +1032,7 @@ function allValuesFor(key) {
   // фильтра, а не появляться только после того, как элементы к нему
   // привязали.
   if (key === "contract") { for (const c of state.contracts) set.add(c.id); }
-  if (key === "supplier") { for (const c of state.contracts) set.add(c.supplier); }
+  if (key === "supplier") { for (const c of state.contracts) set.add(c.counterparty_short_name); }
   for (const e of state.elements) set.add(def.valueFn(e));
   return set;
 }
@@ -1176,7 +1176,7 @@ function placementNoneLabel(kind) {
   if (kind === "floor") return "— без этажа —";
   if (kind === "subtype") return "— без подтипа —";
   if (kind === "mark") return "— без марки —";
-  if (kind === "supplier") return "— без поставщика —";
+  if (kind === "supplier") return "— без контрагента —";
   if (kind === "contract") return "— без контракта —";
   return "— не определено —";
 }
@@ -1715,10 +1715,10 @@ function renderPlacementFilters() {
     "Статус", "status", allValuesFor("status"), state.placementFilters.status, statusLabelFor, enabledFor("status"), onPlacementFilterChange
   ));
 
-  // Поставщик / Контракт — иерархически, тем же приёмом, что Кран/Стоянка
-  // и Тип/Подтип (см. Docs/backlog.md, "Групповая смена статуса"), но
-  // источник значений — не элементы/зоны, а сам справочник контрактов
-  // (state.contracts) — поставщик и контракт без ни одного элемента
+  // Контрагент / Контракт — иерархически, тем же приёмом, что Кран/Стоянка
+  // и Тип/Подтип (см. Docs/backlog.md, "Контрактация 2.0"), но источник
+  // значений — не элементы/зоны, а сам справочник контрактов
+  // (state.contracts) — контрагент и контракт без ни одного элемента
   // всё равно должны быть в списке (см. allValuesFor).
   const supplierLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("supplier") : v;
   const contractLabelFor = v => {
@@ -1730,16 +1730,16 @@ function renderPlacementFilters() {
   const contractValues = allValuesFor("contract");
   const contractsBySupplier = new Map();
   for (const cv of contractValues) {
-    if (cv === PLACEMENT_NONE) continue; // элементы без контракта — отдельным пунктом ниже, не под поставщиком
+    if (cv === PLACEMENT_NONE) continue; // элементы без контракта — отдельным пунктом ниже, не под контрагентом
     const c = state.contracts.find(c => c.id === cv);
-    const sv = c ? c.supplier : PLACEMENT_NONE;
+    const sv = c ? c.counterparty_short_name : PLACEMENT_NONE;
     if (!contractsBySupplier.has(sv)) contractsBySupplier.set(sv, []);
     contractsBySupplier.get(sv).push(cv);
   }
   const supplierHeadings = Array.from(new Set([...supplierValues, ...contractsBySupplier.keys()])).sort(placementComparator(supplierLabelFor));
   for (const h of supplierHeadings) contractsBySupplier.get(h)?.sort(placementComparator(contractLabelFor));
   container.appendChild(buildHierarchicalFilterGroup(
-    "Поставщик / Контракт", "supplier", supplierHeadings, state.placementFilters.supplier, supplierLabelFor, enabledFor("supplier"),
+    "Контрагент / Контракт", "supplier", supplierHeadings, state.placementFilters.supplier, supplierLabelFor, enabledFor("supplier"),
     sv => contractsBySupplier.get(sv) || [], state.placementFilters.contract, contractLabelFor, enabledFor("contract"),
     onPlacementFilterChange, state.placementGroupsExpanded.supplier
   ));
@@ -1923,12 +1923,12 @@ function update3DElementAppearance(element, selected) {
   // пересчитываются при смене статуса.
 }
 
-// ---------- допстрока подписи (партия), см. Docs/backlog.md, "Партия —
-// учёт по маркам" — вторая, более мелкая строка под маркой, если элемент
-// в процессе поставки (Контрактация/В производстве/Отгружен) уже
-// назначен на партию. Пропадает, когда элемент физически на площадке
-// (Доставлен и далее) — плановая дата поставки партии там уже неактуальна. ----------
-const BATCH_SUBLABEL_STATUSES = new Set(["contracting", "in_production", "shipped"]);
+// ---------- допстрока подписи (плановая дата поставки + код контрагента),
+// см. Docs/backlog.md, "Контрактация 2.0" — вторая, более мелкая строка
+// под маркой. В отличие от прежней версии (партия) — НЕ зависит от
+// статуса элемента, показывается всегда, когда есть хотя бы одно из
+// значений (менеджеры смотрят плановую дату и на площадке, не только до
+// поставки). ----------
 const SUBLABEL_FONT_SCALE = 0.75; // мельче основной подписи — вторична по значимости
 const SUBLABEL_GAP_SCALE = 1.5; // множитель font-size — вертикальный зазор между строками
 // Запас вокруг бокса подписи марки при проверке пересечений (и при
@@ -1947,10 +1947,240 @@ const SUBLABEL_GAP_SCALE = 1.5; // множитель font-size — вертик
 // типовой шаг между соседними элементами.
 const LABEL_GAP_MARGIN_SCALE = 0.08;
 
+// Даты с сервера — ISO "YYYY-MM-DD" (planned/project) или полный
+// datetime "YYYY-MM-DD HH:MM:SS" (actual, из status_history.changed_at).
+// Единый формат отображения везде в интерфейсе — "ДД.ММ.ГГГГ" (живой
+// запрос пользователя), без времени даже у фактической даты — точность
+// до дня достаточна для сравнения с проектной/плановой.
+function formatDateRu(dateStr) {
+  if (!dateStr) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : dateStr;
+}
+
 function elementSubLabelText(element) {
-  if (!element.batch_id || !BATCH_SUBLABEL_STATUSES.has(element.current_status)) return null;
-  if (!element.batch_planned_date) return null; // партия не резолвилась — не показываем мусор
-  return element.contract_code ? `${element.contract_code}. ${element.batch_planned_date}` : element.batch_planned_date;
+  if (!element.planned_delivery_date && !element.counterparty_code) return null;
+  if (element.counterparty_code && element.planned_delivery_date) {
+    return `${element.counterparty_code}. ${formatDateRu(element.planned_delivery_date)}`;
+  }
+  return element.counterparty_code || formatDateRu(element.planned_delivery_date);
+}
+
+// Класс допстроки (2D <text class="mark-sublabel ...">) — красный при
+// опоздании плановой/фактической даты против проектной, зелёный, если
+// опоздания нет и проектная дата вообще есть (иначе — нейтральный цвет
+// по умолчанию, сравнивать не с чем). Живой запрос пользователя — замена
+// убранной отдельной инфо-плашки (см. Docs/backlog.md), та же логика
+// опоздания (computeDeliveryLateStatus), просто раскрашивает уже
+// существующую подпись вместо отдельного DOM-узла на элемент.
+function deliveryClass(element) {
+  const info = computeDeliveryLateStatus(element, state.lateThresholdDays);
+  if (!info) return "";
+  return (info.planLate || info.actualLate) ? "delivery-late" : "delivery-ok";
+}
+function subLabelClass(element) {
+  const cls = deliveryClass(element);
+  return cls ? `mark-sublabel ${cls}` : "mark-sublabel";
+}
+
+// Цвет допстроки в HEX — та же градация ok/late/нейтральный, что и
+// subLabelClass (CSS-класс для 2D), нужен там, где красится canvas
+// (3D-наклейка/плавающая табличка), не DOM-класс.
+function deliveryColorHex(element) {
+  const info = computeDeliveryLateStatus(element, state.lateThresholdDays);
+  if (!info) return "#555";
+  return (info.planLate || info.actualLate) ? "#c0392b" : "#2f7d3c";
+}
+
+// ---------- подпись марки как "наклейка" на контуре элемента (живой
+// запрос пользователя: "размер подписей не должен уменьшаться при
+// масштабировании, должна быть как наклейка на элементе во всю его
+// ширину") — та же идея, что уже реализована для 3D (build3DMarkDecal):
+// размер ШРИФТА в МИРОВЫХ единицах, привязанный к реальной ширине
+// контура элемента, а не к экранным пикселям (см. computeEffectiveMarkerSizing
+// — тот, старый подход, оставлен только как ЗАПАСНОЙ вариант для
+// элементов без пригодного контура, см. ниже). Марка и допстрока (код
+// контрагента + плановая дата) — ОДНА группа с ОДНОЙ подложкой, не два
+// независимых блока (живой репорт: "надпись вышла не вместе с подписью
+// элемента, а отдельно от него" — раньше объединялись только позицией,
+// не общим визуальным блоком). Т.к. размер завязан на геометрию
+// элемента, а не на текущий зум — обновляется ТОЛЬКО при пересборке
+// схемы/смене статуса или плановой даты, НЕ на каждый тик зума (в
+// отличие от старого запасного варианта) — дополнительный выигрыш в
+// быстродействии на больших файлах. ----------
+const STICKER_CHAR_WIDTH_RATIO = 0.62; // та же оценка, что и везде (LABEL_BG_CHAR_WIDTH_RATIO/DECAL_CHAR_WIDTH_RATIO)
+const STICKER_FIT_MARGIN = 0.92; // небольшой запас от самого края контура
+
+// Считает геометрию наклейки (центр/угол/размер шрифта) из РЕАЛЬНОГО
+// контура элемента — null, если контура нет/меньше 3 точек, или марки
+// нет вовсе (тогда вызывающий код использует старый запасной вариант).
+// Марка и допстрока — ОДНА строка (живой запрос пользователя: "должна
+// быть в одну строку с маркой", раньше пробовали в 2 строки — при
+// длинной допстроке блок по высоте вылезал за короткую сторону контура,
+// "надписи выходят за границы элемента"), поэтому высота ВСЕГДА ровно
+// одна строка — не может вылезти за dims.width НИ ПРИ КАКОЙ длине
+// текста, только ширина ограничена через maxFontByLength (fontSize
+// уменьшается для длинного текста, а не блок растёт по высоте). Тот же
+// приём, что 3D-наклейка, перенесённый на 2D без изменений в математике
+// (footprintDimensions/footprintLongAxisAngle/footprintCentroid уже
+// написаны для 3D, ниже по файлу, но не содержат ничего 3D-специфичного
+// — чистая геометрия по outline, переиспользуется как есть).
+function computeStickerLayout(element) {
+  if (!element.outline || element.outline.length < 3 || !element.mark) return null;
+  const dims = footprintDimensions(element.outline);
+  if (!dims || !(dims.width > 0) || !(dims.length > 0)) return null;
+  const subText = elementSubLabelText(element);
+  const lineUnit = LABEL_BG_ABOVE_BASELINE + LABEL_BG_BELOW_BASELINE;
+  let fontSize = dims.width / lineUnit;
+  const combinedLen = element.mark.length + (subText ? subText.length + 1 : 0); // +1 — разделяющий пробел
+  // Живой баг (Docs/backlog.md): формула считала только ширину ТЕКСТА, не
+  // всей рамки — реальная ширина рамки ещё + LABEL_BG_PAD_X_SCALE*2*fontSize
+  // отступов, из-за чего у почти квадратных элементов (колонны — короткая
+  // сторона контура) рамка вылезала за контур даже с запасом
+  // STICKER_FIT_MARGIN=0.92 (текст умещался, отступы — нет). Отступы
+  // включены в знаменатель — вся рамка (текст+отступы) теперь гарантированно
+  // укладывается в dims.length*STICKER_FIT_MARGIN.
+  const maxFontByLength = (dims.length * STICKER_FIT_MARGIN) / (combinedLen * STICKER_CHAR_WIDTH_RATIO + LABEL_BG_PAD_X_SCALE * 2);
+  fontSize = Math.min(fontSize, maxFontByLength);
+  if (!(fontSize > 0)) return null;
+  const [cx, cy] = footprintCentroid(element.outline);
+  // Знак — НЕ минус: см. живую проверку в Docs/backlog.md, вывод из
+  // композиции transform (translate·rotate·scale(1,-1)) на группе против
+  // одиночного scale(1,-1) у контура элемента — тот же угол, без инверсии.
+  const angleDeg = footprintLongAxisAngle(element.outline) * 180 / Math.PI;
+  return { cx, cy, angleDeg, fontSize, subText, combinedLen };
+}
+
+// Строит/пересобирает наклейку ОДНОГО элемента внутри его labelGroup —
+// вызывается один раз при первой отрисовке (renderElements) и заново
+// целиком при смене статуса/плановой даты (updateElementSubLabel) —
+// пересобрать дешевле, чем точечно патчить. Марка и допстрока — ОДНА
+// строка, ДВА <tspan> внутри ОДНОГО <text> (не два отдельных <text>) —
+// text-anchor="middle" на родителе центрирует их как единый текстовый
+// прогон (tspan без своего x продолжает текущий "chunk"), допстрока
+// просто красится своим классом поверх унаследованного цвета марки.
+function buildOrRebuildSticker(labelGroup, element) {
+  const old = state.stickerById.get(element.id);
+  if (old) old.remove();
+  const layout = computeStickerLayout(element);
+  if (!layout) { state.stickerById.delete(element.id); return null; }
+
+  const group = el("g", {
+    class: "mark-sticker",
+    "data-type": element.element_type,
+    transform: `translate(${layout.cx},${layout.cy}) rotate(${layout.angleDeg.toFixed(2)}) scale(1,-1)`,
+  });
+
+  const boxWidth = layout.combinedLen * layout.fontSize * STICKER_CHAR_WIDTH_RATIO + layout.fontSize * LABEL_BG_PAD_X_SCALE * 2;
+  const boxHeight = layout.fontSize * (LABEL_BG_ABOVE_BASELINE + LABEL_BG_BELOW_BASELINE);
+  // Базовая линия текста — НЕ визуальный центр буквы: выше неё
+  // ABOVE_BASELINE=0.78·fontSize, ниже — BELOW_BASELINE=0.28·fontSize
+  // (несимметрично). При y=0 центр рамки (=центроид контура) совпадал бы
+  // с базовой линией, а не с центром буквы — буква визуально "плыла"
+  // вверх относительно контура (живой скриншот: снизу подписи — отступ,
+  // сверху — заходит на соседний элемент). Сдвигаем базовую линию вниз
+  // на разницу половин, чтобы центр буквы, а не базовая линия, совпадал
+  // с центром контура.
+  const baselineY = layout.fontSize * (LABEL_BG_ABOVE_BASELINE - LABEL_BG_BELOW_BASELINE) / 2;
+
+  const rect = el("rect", {
+    class: "mark-sticker-bg",
+    x: (-boxWidth / 2).toFixed(2), y: (-boxHeight / 2).toFixed(2),
+    width: boxWidth.toFixed(2), height: boxHeight.toFixed(2), rx: (layout.fontSize * 0.12).toFixed(2),
+  });
+  group.appendChild(rect);
+
+  const textEl = el("text", {
+    class: "mark-sticker-mark", x: 0, y: baselineY.toFixed(2), "text-anchor": "middle", "font-size": layout.fontSize.toFixed(2),
+  });
+  const markTspan = el("tspan", {});
+  markTspan.textContent = layout.subText ? element.mark + " " : element.mark;
+  textEl.appendChild(markTspan);
+  if (layout.subText) {
+    const subCls = deliveryClass(element);
+    const subTspan = el("tspan", { class: subCls ? `mark-sticker-sub ${subCls}` : "mark-sticker-sub" });
+    subTspan.textContent = layout.subText;
+    textEl.appendChild(subTspan);
+  }
+  group.appendChild(textEl);
+
+  labelGroup.appendChild(group);
+  state.stickerById.set(element.id, group);
+  return group;
+}
+
+// После смены порога опоздания в Настройках — перекрасить уже
+// отрисованные допстроки (только те, что реально сейчас существуют,
+// state.subLabelById, не все state.elements — дёшево).
+function refreshSubLabelDeliveryColors() {
+  for (const [id, subLabel] of state.subLabelById) {
+    const element = state.byId.get(id);
+    if (element) subLabel.setAttribute("class", subLabelClass(element));
+  }
+  const stickerIdsWithDates = [];
+  for (const [id, sticker] of state.stickerById) {
+    const element = state.byId.get(id);
+    if (!element) continue;
+    const subEl = sticker.querySelector(".mark-sticker-sub");
+    if (subEl) {
+      const cls = deliveryClass(element);
+      subEl.setAttribute("class", cls ? `mark-sticker-sub ${cls}` : "mark-sticker-sub");
+      stickerIdsWithDates.push(id);
+    }
+  }
+  if (state.view3d.active) {
+    for (const id of [...state.subLabelById.keys(), ...stickerIdsWithDates]) {
+      const element = state.byId.get(id);
+      if (element) rebuild3DLabelSprite(element);
+    }
+  }
+}
+
+// ---------- сравнение плановой/фактической даты поставки с проектной
+// (из графика MS Project, см. app/schedule_import.py) — общая точка,
+// которой пользуются допстрока марки (subLabelClass), всплывающая
+// подсказка (computeTooltipDateRows) и карточка элемента. "late", если
+// плановая ИЛИ фактическая дата превышает проектную больше чем на
+// threshold дней (Настройки → Порог опоздания поставки); иначе "ok".
+// Если проектной даты нет вовсе — сравнивать не с чем, null. ----------
+function diffDaysFromDate(dateStr, baseDateStr) {
+  const a = new Date(dateStr.slice(0, 10));
+  const b = new Date(baseDateStr.slice(0, 10));
+  return Math.round((a - b) / 86400000);
+}
+
+function computeDeliveryLateStatus(element, thresholdDays) {
+  if (!element.project_delivery_date) return null;
+  const deltaPlan = element.planned_delivery_date
+    ? diffDaysFromDate(element.planned_delivery_date, element.project_delivery_date) : null;
+  const deltaActual = element.actual_delivery_date
+    ? diffDaysFromDate(element.actual_delivery_date, element.project_delivery_date) : null;
+  const planLate = deltaPlan !== null && deltaPlan > thresholdDays;
+  const actualLate = deltaActual !== null && deltaActual > thresholdDays;
+  return {
+    status: (planLate || actualLate) ? "late" : "ok",
+    planLate, actualLate, deltaPlan, deltaActual,
+  };
+}
+
+// Строки для всплывающей подсказки (2D и 3D) — дата+дни опоздания,
+// цвет строки (cls) — "ok"/"late"/"neutral", тем же критерием, что и
+// computeDeliveryLateStatus.
+function computeTooltipDateRows(element) {
+  const info = computeDeliveryLateStatus(element, state.lateThresholdDays);
+  if (!info) return null;
+  const planLateText = info.planLate ? ` (опоздание ${info.deltaPlan} дн.)` : "";
+  const actualLateText = info.actualLate ? ` (опоздание ${info.deltaActual} дн.)` : "";
+  const plannedDatePart = element.planned_delivery_date ? formatDateRu(element.planned_delivery_date) : "—";
+  const plannedText = element.counterparty_code ? `${plannedDatePart} · ${element.counterparty_code}` : plannedDatePart;
+  return [
+    { cls: "neutral", text: `Проектная: ${formatDateRu(element.project_delivery_date)}` },
+    { cls: info.planLate ? "late" : "ok", text: `Плановая: ${plannedText}${planLateText}` },
+    {
+      cls: info.actualLate ? "late" : (element.actual_delivery_date ? "ok" : "neutral"),
+      text: `Фактическая: ${element.actual_delivery_date ? formatDateRu(element.actual_delivery_date) : "—"}${actualLateText}`,
+    },
+  ];
 }
 
 // Точечное обновление допстроки ОДНОГО элемента после смены статуса/
@@ -1960,35 +2190,47 @@ function elementSubLabelText(element) {
 // всё равно существует в DOM) или вовсе не отрисован (другой файл/слои),
 // state.labelById не найдёт узел — тихо выходим.
 function updateElementSubLabel(element) {
-  const label = state.labelById.get(element.id);
-  if (label && state.view) {
-    const subText = elementSubLabelText(element);
-    let subLabel = state.subLabelById.get(element.id);
-    if (!subText) {
-      if (subLabel) {
-        const bg = labelBgByText.get(subLabel);
-        if (bg) bg.remove();
-        subLabel.remove();
-        state.subLabelById.delete(element.id);
-      }
+  const labelGroup = state.labelGroupById.get(element.id);
+  if (labelGroup) {
+    if (state.stickerById.has(element.id)) {
+      // Наклейка — цельная группа, точечно менять нечего (текст/размер/
+      // цвет допстроки все зависят от одного и того же пересчёта), проще
+      // пересобрать целиком — узлов немного (rect + 1-2 text).
+      const sticker = buildOrRebuildSticker(labelGroup, element);
+      if (sticker && state.labelVisibility[element.element_type] === false) sticker.style.display = "none";
     } else {
-      const { effectiveR, effectiveFont } = computeEffectiveMarkerSizing();
-      const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
-      const x = element.x + cand.dx * effectiveR;
-      const y = element.y + cand.dy * effectiveR - effectiveFont * SUBLABEL_GAP_SCALE;
-      const fontSize = effectiveFont * SUBLABEL_FONT_SCALE;
-      if (!subLabel) {
-        subLabel = appendMarkLabel(label.parentNode, x, y, subText, fontSize, cand.anchor, {
-          class: "mark-sublabel", "data-type": element.element_type,
-        });
-        if (state.labelVisibility[element.element_type] === false) setLabelDisplay(subLabel, "none");
-        state.subLabelById.set(element.id, subLabel);
-      } else {
-        subLabel.textContent = subText;
-        subLabel.setAttribute("transform", `translate(${x},${y}) scale(1,-1)`);
-        subLabel.setAttribute("font-size", fontSize.toFixed(2));
-        const bg = labelBgByText.get(subLabel);
-        if (bg) updateLabelBgRect(bg, subText, fontSize, cand.anchor, x, y);
+      const label = state.labelById.get(element.id);
+      if (label && state.view) {
+        const subText = elementSubLabelText(element);
+        let subLabel = state.subLabelById.get(element.id);
+        if (!subText) {
+          if (subLabel) {
+            const bg = labelBgByText.get(subLabel);
+            if (bg) bg.remove();
+            subLabel.remove();
+            state.subLabelById.delete(element.id);
+          }
+        } else {
+          const { effectiveR, effectiveFont } = computeEffectiveMarkerSizing();
+          const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
+          const x = element.x + cand.dx * effectiveR;
+          const y = element.y + cand.dy * effectiveR - effectiveFont * SUBLABEL_GAP_SCALE;
+          const fontSize = effectiveFont * SUBLABEL_FONT_SCALE;
+          if (!subLabel) {
+            subLabel = appendMarkLabel(label.parentNode, x, y, subText, fontSize, cand.anchor, {
+              class: subLabelClass(element), "data-type": element.element_type,
+            });
+            if (state.labelVisibility[element.element_type] === false) setLabelDisplay(subLabel, "none");
+            state.subLabelById.set(element.id, subLabel);
+          } else {
+            subLabel.textContent = subText;
+            subLabel.setAttribute("transform", `translate(${x},${y}) scale(1,-1)`);
+            subLabel.setAttribute("font-size", fontSize.toFixed(2));
+            subLabel.setAttribute("class", subLabelClass(element));
+            const bg = labelBgByText.get(subLabel);
+            if (bg) updateLabelBgRect(bg, subText, fontSize, cand.anchor, x, y);
+          }
+        }
       }
     }
   }
@@ -2087,6 +2329,7 @@ function renderElements(data) {
   state.shapeById.clear();
   state.labelById.clear();
   state.subLabelById.clear();
+  state.stickerById.clear();
   state.labelGroupById.clear();
 
   const r = data.marker_radius;
@@ -2129,22 +2372,31 @@ function renderElements(data) {
     labelsLayer.appendChild(labelGroup);
     state.labelGroupById.set(element.id, labelGroup);
 
-    const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
-    const label = appendMarkLabel(
-      labelGroup, element.x + cand.dx * r, element.y + cand.dy * r, element.mark || "", r * 1.3, cand.anchor,
-      { class: "mark-label", "data-type": element.element_type }
-    );
-    if (state.labelVisibility[element.element_type] === false) setLabelDisplay(label, "none");
-    state.labelById.set(element.id, label);
-
-    const subText = elementSubLabelText(element);
-    if (subText) {
-      const subLabel = appendMarkLabel(
-        labelGroup, element.x + cand.dx * r, element.y + cand.dy * r, subText, r * 1.3 * SUBLABEL_FONT_SCALE, cand.anchor,
-        { class: "mark-sublabel", "data-type": element.element_type }
+    // "Наклейка" на реальном контуре — основной путь (см.
+    // computeStickerLayout/buildOrRebuildSticker); только если контура
+    // нет/меньше 3 точек или марки вовсе нет — старый запасной вариант
+    // (экранный размер шрифта + разводка коллизий по офсету от центра).
+    const sticker = buildOrRebuildSticker(labelGroup, element);
+    if (sticker) {
+      if (state.labelVisibility[element.element_type] === false) sticker.style.display = "none";
+    } else {
+      const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
+      const label = appendMarkLabel(
+        labelGroup, element.x + cand.dx * r, element.y + cand.dy * r, element.mark || "", r * 1.3, cand.anchor,
+        { class: "mark-label", "data-type": element.element_type }
       );
-      if (state.labelVisibility[element.element_type] === false) setLabelDisplay(subLabel, "none");
-      state.subLabelById.set(element.id, subLabel);
+      if (state.labelVisibility[element.element_type] === false) setLabelDisplay(label, "none");
+      state.labelById.set(element.id, label);
+
+      const subText = elementSubLabelText(element);
+      if (subText) {
+        const subLabel = appendMarkLabel(
+          labelGroup, element.x + cand.dx * r, element.y + cand.dy * r, subText, r * 1.3 * SUBLABEL_FONT_SCALE, cand.anchor,
+          { class: subLabelClass(element), "data-type": element.element_type }
+        );
+        if (state.labelVisibility[element.element_type] === false) setLabelDisplay(subLabel, "none");
+        state.subLabelById.set(element.id, subLabel);
+      }
     }
   }
 
@@ -2292,19 +2544,25 @@ function renderLabelToggles() {
         // так что снятие галочки нужно применить явно и немедленно.
         document.querySelectorAll(
           `.mark-label[data-type="${type}"], .mark-sublabel[data-type="${type}"], `
-          + `.mark-label-bg[data-type="${type}"], .mark-sublabel-bg[data-type="${type}"]`
+          + `.mark-label-bg[data-type="${type}"], .mark-sublabel-bg[data-type="${type}"], `
+          + `.mark-sticker[data-type="${type}"]`
         ).forEach(t => {
           t.style.display = "none";
         });
       } else {
-        // Показать — НЕ форсировать display:"" напрямую на все подписи
-        // этого типа разом: это включало ВСЕ марки без прореживания по
-        // коллизиям (даже там, где их физически некуда уместить) — на
-        // плотных участках подписи наползали друг на друга сплошной стеной
-        // (см. Docs/backlog.md, живой разбор). Пересчитываем видимость тем
-        // же алгоритмом, что и обычный зум/пан — ровно как если бы
-        // прокрутили колесо мыши на текущем месте.
+        // Показать — НЕ форсировать display:"" напрямую на ЗАПАСНЫЕ (не
+        // "наклейка") подписи этого типа разом: это включало ВСЕ марки без
+        // прореживания по коллизиям (даже там, где их физически некуда
+        // уместить) — на плотных участках подписи наползали друг на друга
+        // сплошной стеной (см. Docs/backlog.md, живой разбор).
+        // Пересчитываем видимость тем же алгоритмом, что и обычный зум/пан.
+        // "Наклейки" в этом прореживании не участвуют вовсе (см.
+        // updateLabelCollisionVisibility/computeStickerLayout) — просто
+        // показать все разом.
         updateSizesForZoom();
+        document.querySelectorAll(`.mark-sticker[data-type="${type}"]`).forEach(t => {
+          t.style.display = "";
+        });
       }
       apply3DLabelVisibility();
     });
@@ -2569,6 +2827,7 @@ function clearWorkspace() {
   state.shapeById.clear();
   state.labelById.clear();
   state.subLabelById.clear();
+  state.stickerById.clear();
   state.labelGroupById.clear();
   state.labelOffsetById.clear();
   state.selectedId = null;
@@ -2679,53 +2938,58 @@ function showPlaceholderCard() {
   document.getElementById("card").innerHTML = '<div id="placeholder">Кликните по элементу на схеме</div>';
 }
 
-function contractLabelText(element) {
-  // Контракт — только для чтения (п.7 третьего раунда): показывается по
-  // текущему кэшу elements.contract_id, который всегда зеркалит contract_id
-  // самой последней записи истории. Меняется только через диалог
-  // подтверждения при смене статуса (openStatusContractDialog), не напрямую.
-  if (!element.contract_id) return "—";
+// Контрагент/Договор/Спецификация — только для чтения (см. Docs/backlog.md,
+// "Контрактация 2.0"): показывается по текущему кэшу elements.contract_id,
+// который всегда зеркалит contract_id самой последней записи истории.
+// Меняется только через диалог подтверждения при смене статуса
+// (openStatusContractDialog), не напрямую. state.contracts (из /plan-data)
+// уже несёт всю цепочку — резолвить контракт целиком нужно только для
+// подписи, отдельного запроса на элемент не требуется.
+function contractDetailsHtml(element) {
+  if (!element.contract_id) return `<div class="hint-text">Контракт не назначен</div>`;
   const c = state.contracts.find(c => c.id === element.contract_id);
-  return c ? `${escapeHtml(c.name)} (${escapeHtml(c.supplier)})` : `#${element.contract_id}`;
+  if (!c) return `<div class="hint-text">#${element.contract_id}</div>`;
+  const counterpartyText = c.counterparty_code
+    ? `${escapeHtml(c.counterparty_short_name)} <span class="hint-text">(${escapeHtml(c.counterparty_code)})</span>`
+    : escapeHtml(c.counterparty_short_name);
+  const agreementText = c.agreement_date ? `${escapeHtml(c.agreement_number)} от ${formatDateRu(c.agreement_date)}` : escapeHtml(c.agreement_number);
+  const specText = c.specification_date ? `${escapeHtml(c.specification_number)} от ${formatDateRu(c.specification_date)}` : escapeHtml(c.specification_number);
+  return `
+    <table>
+      <tr><td class="k">Контрагент</td><td>${counterpartyText}</td></tr>
+      <tr><td class="k">Договор</td><td>${agreementText}</td></tr>
+      <tr><td class="k">Спецификация</td><td>${specText}</td></tr>
+    </table>
+  `;
 }
 
-// Партия — внутри блока "Контракт" (по просьбе), не отдельным блоком.
-// Кликабельна только для admin (партии, как и контракты, редактируются
-// только им) — клик открывает ту же форму редактирования, что и модалка
-// "Партии контракта" (openBatchEdit), см. Docs/backlog.md. Асинхронно —
-// как и история статусов ниже — сама карточка уже отрисована синхронно
-// с плейсхолдером ("Партия: загрузка…"/"Партия: —").
-async function renderCardBatchLabel(element) {
-  const box = document.getElementById("card-batch-label");
-  if (!box || !element.batch_id) return;
-  try {
-    let batch = state.batchCache.get(element.batch_id);
-    if (!batch) {
-      batch = await api(`/batches/${element.batch_id}`);
-      state.batchCache.set(element.batch_id, batch);
-    }
-    // Пока грузили — карточка могла перерисоваться для другого элемента.
-    if (state.selectedId !== element.id) return;
-    const freshBox = document.getElementById("card-batch-label");
-    if (!freshBox) return;
-    freshBox.textContent = "Партия: ";
-    if (state.currentUser.role === "admin") {
-      const link = document.createElement("a");
-      link.href = "#";
-      link.className = "card-batch-link";
-      link.textContent = batch.label;
-      link.addEventListener("click", (e) => {
-        e.preventDefault();
-        openBatchEdit(batch);
-      });
-      freshBox.appendChild(link);
-    } else {
-      freshBox.appendChild(document.createTextNode(batch.label));
-    }
-  } catch (e) {
-    const freshBox = document.getElementById("card-batch-label");
-    if (freshBox) freshBox.textContent = "Партия: ошибка загрузки";
-  }
+// Плановая/проектная/фактическая даты поставки (см. Docs/backlog.md,
+// "Контрактация 2.0") — три независимые шкалы: плановая проставляется
+// менеджером вручную (card-planned-date-btn, task openPlannedDateDialog),
+// проектная — импортом графика MS Project (app/schedule_import.py),
+// фактическая — автоматически по моменту перехода в статус "Доставлено"
+// (recompute_status_and_actual_date, app/contracts.py), read-only.
+function deliveryDatesHtml(element) {
+  // Порядок и подсветка — тот же критерий "позже проектной", что и у
+  // инфо-плашки (см. computeDeliveryLateStatus), но здесь без порога в днях
+  // (Настройки → порог влияет только на цвет плашки/подсказки, в карточке —
+  // сравнение простое, живой запрос пользователя: "Подсвечиваем если
+  // Плановая дата или Фактическая больше Проектной").
+  const projectDate = element.project_delivery_date;
+  const plannedLate = !!(projectDate && element.planned_delivery_date && element.planned_delivery_date > projectDate);
+  const actualLate = !!(projectDate && element.actual_delivery_date && element.actual_delivery_date.slice(0, 10) > projectDate);
+  const plannedDatePart = element.planned_delivery_date ? formatDateRu(element.planned_delivery_date) : "—";
+  const plannedText = element.counterparty_code
+    ? `${plannedDatePart} <span class="hint-text">· ${escapeHtml(element.counterparty_code)}</span>`
+    : plannedDatePart;
+  return `
+    <table>
+      <tr><td class="k">Проектная дата</td><td>${projectDate ? formatDateRu(projectDate) : "—"}</td></tr>
+      <tr class="${plannedLate ? "date-row-late" : ""}"><td class="k">Плановая дата</td><td>${plannedText}</td></tr>
+      <tr class="${actualLate ? "date-row-late" : ""}"><td class="k">Фактическая дата</td><td>${element.actual_delivery_date ? formatDateRu(element.actual_delivery_date) : "—"}</td></tr>
+      <tr><td class="k">Начало СМР</td><td>${element.project_smr_start_date ? formatDateRu(element.project_smr_start_date) : "—"}</td></tr>
+    </table>
+  `;
 }
 
 // ---------- привязка к зонам (захватка/кран/стоянка) — только для элементов
@@ -2796,13 +3060,15 @@ async function showCard(element) {
       ${canEdit ? `
         <div class="card-actions">
           <button type="button" class="btn btn-sm btn-secondary" id="card-change-status-btn">Изменить статус…</button>
-          <button type="button" class="btn btn-sm btn-secondary" id="card-batch-btn">${element.batch_id ? "Изменить партию…" : "Выбрать партию…"}</button>
+          <button type="button" class="btn btn-sm btn-secondary" id="card-planned-date-btn">${element.planned_delivery_date ? "Изменить плановую дату…" : "Задать плановую дату…"}</button>
         </div>
       ` : ""}
     </div>
-    <div class="card-block"><h4>Контракт</h4>
-      <div>${contractLabelText(element)}</div>
-      <div id="card-batch-label" class="hint-text">${element.batch_id ? "Партия: загрузка…" : "Партия: —"}</div>
+    <div class="card-block"><h4>Контрактация</h4>
+      ${contractDetailsHtml(element)}
+    </div>
+    <div class="card-block"><h4>Даты поставки</h4>
+      ${deliveryDatesHtml(element)}
     </div>
     ${zonesBlockHtml}
     <details class="card-technical">
@@ -2811,19 +3077,14 @@ async function showCard(element) {
     </details>
     <h3 style="margin-bottom:4px;">История статусов</h3><div id="history-box">Загрузка…</div>
   `;
-  renderCardBatchLabel(element);
 
   if (canEdit) {
     document.getElementById("card-change-status-btn").addEventListener("click", (e) => {
       const rect = e.currentTarget.getBoundingClientRect();
       openCtxMenu(element, rect.left, rect.bottom + 4);
     });
-    document.getElementById("card-batch-btn").addEventListener("click", () => {
-      if (!element.contract_id) {
-        showToast("У элемента нет контракта — сначала укажите его при смене статуса.");
-        return;
-      }
-      openBatchAssignDialog(element);
+    document.getElementById("card-planned-date-btn").addEventListener("click", () => {
+      openPlannedDateDialog(element);
     });
   }
 
@@ -2907,28 +3168,24 @@ function openCtxMenu(element, clientX, clientY) {
     ctxMenu.appendChild(item);
   }
 
-  // Партия — независимое действие (не привязано к смене статуса, в
-  // отличие от контракта), но доступно из ТОГО ЖЕ меню — единый
-  // список действий над элементом, см. Docs/backlog.md. ВСЕГДА в меню
-  // (не пропадает условно) — как и остальные фильтры/действия в этом
-  // приложении, "полный список всегда виден + недоступен (disabled),
-  // не сужается"; недоступен, только если у элемента ещё нет контракта
-  // (партия — его дочерняя сущность), с явной подсказкой почему.
+  // Плановая дата поставки — независимое действие (не привязано к смене
+  // статуса), но доступно из ТОГО ЖЕ меню — единый список действий над
+  // элементом, см. Docs/backlog.md, "Контрактация 2.0". В отличие от
+  // прежней "Партии" — НЕ завязана на наличие контракта у элемента
+  // (простое живое поле elements.planned_delivery_date), поэтому пункт
+  // всегда активен.
   const sep = document.createElement("div");
   sep.className = "ctx-title";
-  sep.textContent = "Партия";
+  sep.textContent = "Плановая дата поставки";
   ctxMenu.appendChild(sep);
-  const batchItem = document.createElement("div");
-  const hasContract = !!element.contract_id;
-  batchItem.className = "ctx-item" + (hasContract ? "" : " disabled");
-  batchItem.textContent = element.batch_id ? "Изменить партию…" : "Выбрать партию…";
-  if (!hasContract) batchItem.title = "У элемента нет контракта — сначала укажите контракт";
-  batchItem.addEventListener("click", () => {
-    if (!hasContract) return;
+  const plannedDateItem = document.createElement("div");
+  plannedDateItem.className = "ctx-item";
+  plannedDateItem.textContent = element.planned_delivery_date ? "Изменить плановую дату…" : "Задать плановую дату…";
+  plannedDateItem.addEventListener("click", () => {
     closeCtxMenu();
-    openBatchAssignDialog(element);
+    openPlannedDateDialog(element);
   });
-  ctxMenu.appendChild(batchItem);
+  ctxMenu.appendChild(plannedDateItem);
 
   ctxMenu.style.left = Math.min(clientX, window.innerWidth - 240) + "px";
   ctxMenu.style.top = Math.min(clientY, window.innerHeight - 260) + "px";
@@ -2967,10 +3224,9 @@ function openStatusDialog(element, status) {
     const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
     const matching = state.contracts.filter(c => c.element_types.includes(element.element_type));
     const options = ['<option value="">— без контракта —</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
+      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.counterparty_short_name)})</option>`)
     );
     document.getElementById("sc-contract-select").innerHTML = options.join("");
-    refreshStatusDialogBatchSelect();
   }
   statusContractBackdrop.classList.add("open");
 }
@@ -2982,50 +3238,20 @@ document.getElementById("sc-datetime-clear").addEventListener("click", () => {
   document.getElementById("sc-datetime").value = "";
 });
 
-// Партию можно указать СРАЗУ в том же диалоге, что и контракт — не
-// отдельным действием после (см. Docs/backlog.md): список партий
-// зависит от ВЫБРАННОГО в этом же диалоге контракта (не обязательно
-// текущего у элемента), поэтому пересчитывается при каждой смене
-// контракта в селекте, а не только один раз при открытии.
-document.getElementById("sc-contract-select").addEventListener("change", () => refreshStatusDialogBatchSelect());
-
-async function refreshStatusDialogBatchSelect() {
-  const select = document.getElementById("sc-batch-select");
-  const element = pendingStatusChange ? pendingStatusChange.element : null;
-  const contractValue = document.getElementById("sc-contract-select").value;
-  select.innerHTML = '<option value="">— без партии —</option>';
-  select.disabled = true;
-  if (!element || !contractValue) return;
-  try {
-    const batches = await api(`/batches?contract_id=${contractValue}`);
-    const matching = batches.filter(b => b.lines.some(l => batchLineMatches(l, element)));
-    if (!matching.length) return;
-    const options = ['<option value="">— без партии —</option>'].concat(
-      matching.map(b => `<option value="${b.id}" ${String(b.id) === String(element.batch_id) ? "selected" : ""}>${escapeHtml(b.label)}</option>`)
-    );
-    select.innerHTML = options.join("");
-    select.disabled = false;
-  } catch (e) {
-    // тихо — партия необязательна в этом диалоге, не блокируем смену статуса/контракта
-  }
-}
-
 document.getElementById("sc-confirm").addEventListener("click", async () => {
   if (!pendingStatusChange) return;
   const showContract = document.getElementById("sc-contract-section").style.display !== "none";
   const contractId = showContract
     ? (document.getElementById("sc-contract-select").value ? Number(document.getElementById("sc-contract-select").value) : null)
     : undefined;
-  const batchValue = showContract ? document.getElementById("sc-batch-select").value : "";
-  const batchId = batchValue ? Number(batchValue) : null;
   const explicitChangedAt = datetimeLocalToServer(document.getElementById("sc-datetime").value);
   const { element, status } = pendingStatusChange;
   pendingStatusChange = null;
   statusContractBackdrop.classList.remove("open");
-  await doApplyStatus(element, status, contractId, batchId, explicitChangedAt);
+  await doApplyStatus(element, status, contractId, explicitChangedAt);
 });
 
-async function doApplyStatus(element, status, explicitContractId, explicitBatchId, explicitChangedAt) {
+async function doApplyStatus(element, status, explicitContractId, explicitChangedAt) {
   try {
     const body = { status };
     // explicitChangedAt приходит из диалога смены статуса (см.
@@ -3047,88 +3273,46 @@ async function doApplyStatus(element, status, explicitContractId, explicitBatchI
     updateElementSubLabel(element); // статус мог войти/выйти из диапазона, где допстрока видна
     renderLegend();
     showCard(element);
-
-    // Партия — сразу вместе со статусом/контрактом, если указана в том же
-    // диалоге (см. Docs/backlog.md, "давай отменим ограничение..."). Отдельный
-    // запрос ПОСЛЕ смены статуса, не тот же PATCH — партии требуется уже
-    // сохранённый contract_id, который к этому моменту гарантированно
-    // применён (apply_status_change уже отработал выше).
-    if (explicitBatchId) {
-      try {
-        const batchUpdated = await api(`/elements/${element.id}/batch`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batch_id: explicitBatchId }),
-        });
-        Object.assign(element, batchUpdated);
-        state.byId.set(element.id, element);
-        updateElementSubLabel(element);
-        showCard(element);
-        maybeWarnBatch(batchUpdated);
-      } catch (e) {
-        alert("Статус изменён, но не удалось назначить партию: " + e.message);
-      }
-    }
     maybeWarnContract(updated);
   } catch (e) {
     alert("Не удалось изменить статус: " + e.message);
   }
 }
 
-// ---------- назначение партии одному элементу (независимо от статуса,
-// см. Docs/backlog.md, "Партия — учёт по маркам") ----------
-const batchAssignBackdrop = document.getElementById("batch-assign-backdrop");
-let pendingBatchAssign = null;
+// ---------- назначение плановой даты поставки одному элементу
+// (независимо от статуса, см. Docs/backlog.md, "Контрактация 2.0") ----------
+const plannedDateBackdrop = document.getElementById("planned-date-backdrop");
+let pendingPlannedDateElement = null;
 
-function batchLineMatches(line, element) {
-  return line.element_type === element.element_type
-    && (line.subtype || null) === (element.subtype || null)
-    && (line.mark || null) === (element.mark || null);
+function openPlannedDateDialog(element) {
+  pendingPlannedDateElement = element;
+  document.getElementById("planned-date-error").textContent = "";
+  document.getElementById("pd-date").value = element.planned_delivery_date || "";
+  plannedDateBackdrop.classList.add("open");
 }
-
-async function openBatchAssignDialog(element) {
-  pendingBatchAssign = element;
-  document.getElementById("batch-assign-error").textContent = "";
-  const select = document.getElementById("ba-batch-select");
-  select.innerHTML = "";
-  try {
-    const batches = await api(`/batches?contract_id=${element.contract_id}`);
-    // Клиентский фильтр — только партии, где есть строка под марку этого
-    // элемента (сервер всё равно перепроверит при подтверждении — это
-    // только для UX, не граница безопасности).
-    const matching = batches.filter(b => b.lines.some(l => batchLineMatches(l, element)));
-    const options = ['<option value="">— без партии —</option>'].concat(
-      matching.map(b => `<option value="${b.id}" ${String(b.id) === String(element.batch_id) ? "selected" : ""}>${escapeHtml(b.label)}</option>`)
-    );
-    select.innerHTML = options.join("");
-    if (!matching.length) {
-      document.getElementById("batch-assign-error").textContent = "Нет партий с подходящей строкой для этой марки";
-    }
-  } catch (e) {
-    document.getElementById("batch-assign-error").textContent = e.message;
-  }
-  batchAssignBackdrop.classList.add("open");
-}
-document.getElementById("ba-cancel").addEventListener("click", () => {
-  pendingBatchAssign = null;
-  batchAssignBackdrop.classList.remove("open");
+document.getElementById("pd-cancel").addEventListener("click", () => {
+  pendingPlannedDateElement = null;
+  plannedDateBackdrop.classList.remove("open");
 });
-document.getElementById("ba-confirm").addEventListener("click", async () => {
-  if (!pendingBatchAssign) return;
-  const value = document.getElementById("ba-batch-select").value;
-  const batchId = value ? Number(value) : null;
-  const element = pendingBatchAssign;
+document.getElementById("pd-clear").addEventListener("click", () => {
+  document.getElementById("pd-date").value = "";
+});
+document.getElementById("pd-confirm").addEventListener("click", async () => {
+  if (!pendingPlannedDateElement) return;
+  const value = document.getElementById("pd-date").value || null;
+  const element = pendingPlannedDateElement;
   try {
-    const updated = await api(`/elements/${element.id}/batch`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batch_id: batchId }),
+    const updated = await api(`/elements/${element.id}/planned-delivery-date`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planned_delivery_date: value }),
     });
     Object.assign(element, updated);
     state.byId.set(element.id, element);
-    pendingBatchAssign = null;
-    batchAssignBackdrop.classList.remove("open");
+    pendingPlannedDateElement = null;
+    plannedDateBackdrop.classList.remove("open");
     showCard(element);
     updateElementSubLabel(element);
-    maybeWarnBatch(updated);
   } catch (e) {
-    document.getElementById("batch-assign-error").textContent = e.message;
+    document.getElementById("planned-date-error").textContent = e.message;
   }
 });
 
@@ -3338,35 +3522,21 @@ document.getElementById("bulk-status-apply").addEventListener("click", async () 
   }
 });
 
-// ---------- массовое назначение партии (см. Docs/backlog.md, "Партия —
-// учёт по маркам") — отдельное действие от массовой смены статуса, тем
-// же приёмом (таблица выбранных элементов, select на строку) ----------
-const bulkBatchBackdrop = document.getElementById("bulk-batch-backdrop");
-let bulkBatchesByContract = new Map(); // contract_id -> [BatchOut] — снимок на момент открытия модалки
+// ---------- массовое назначение плановой даты поставки (см.
+// Docs/backlog.md, "Контрактация 2.0") — отдельное действие от массовой
+// смены статуса, тем же приёмом (таблица выбранных элементов, поле на
+// строку) ----------
+const bulkPlannedDateBackdrop = document.getElementById("bulk-planned-date-backdrop");
 
-async function openBulkBatchModal() {
+function openBulkPlannedDateModal() {
   if (state.multiSelectedIds.size === 0) return;
-  const contractIds = new Set(
-    Array.from(state.multiSelectedIds)
-      .map(id => state.byId.get(id))
-      .filter(e => e && e.contract_id)
-      .map(e => e.contract_id)
-  );
-  bulkBatchesByContract = new Map();
-  await Promise.all(Array.from(contractIds).map(async cid => {
-    try {
-      bulkBatchesByContract.set(cid, await api(`/batches?contract_id=${cid}`));
-    } catch (e) {
-      bulkBatchesByContract.set(cid, []);
-    }
-  }));
-  document.getElementById("bulk-batch-error").textContent = "";
-  renderBulkBatchTable();
-  bulkBatchBackdrop.classList.add("open");
+  document.getElementById("bulk-planned-date-error").textContent = "";
+  renderBulkPlannedDateTable();
+  bulkPlannedDateBackdrop.classList.add("open");
 }
 
-function renderBulkBatchTable() {
-  const tbody = document.getElementById("bulk-batch-tbody");
+function renderBulkPlannedDateTable() {
+  const tbody = document.getElementById("bulk-planned-date-tbody");
   tbody.innerHTML = "";
   for (const id of Array.from(state.multiSelectedIds)) {
     const element = state.byId.get(id);
@@ -3377,34 +3547,13 @@ function renderBulkBatchTable() {
     const idTd = document.createElement("td"); idTd.textContent = element.id;
     const markTd = document.createElement("td"); markTd.textContent = element.mark || "—";
     const typeTd = document.createElement("td"); typeTd.textContent = element.element_type;
-    const contractTd = document.createElement("td");
-    const contract = state.contracts.find(c => c.id === element.contract_id);
-    contractTd.textContent = contract ? `${contract.name} (${contract.supplier})` : "—";
 
-    const batchTd = document.createElement("td");
-    const select = document.createElement("select");
-    select.className = "bulk-row-batch";
-    if (!element.contract_id) {
-      select.disabled = true;
-      const opt = document.createElement("option");
-      opt.textContent = "нет контракта";
-      select.appendChild(opt);
-    } else {
-      const batches = bulkBatchesByContract.get(element.contract_id) || [];
-      const matching = batches.filter(b => b.lines.some(l => batchLineMatches(l, element)));
-      if (!matching.length) {
-        select.disabled = true;
-        const opt = document.createElement("option");
-        opt.textContent = "нет подходящих партий";
-        select.appendChild(opt);
-      } else {
-        const options = ['<option value="">— без партии —</option>'].concat(
-          matching.map(b => `<option value="${b.id}" ${String(b.id) === String(element.batch_id) ? "selected" : ""}>${escapeHtml(b.label)}</option>`)
-        );
-        select.innerHTML = options.join("");
-      }
-    }
-    batchTd.appendChild(select);
+    const dateTd = document.createElement("td");
+    const input = document.createElement("input");
+    input.type = "date";
+    input.className = "bulk-row-planned-date";
+    input.value = element.planned_delivery_date || "";
+    dateTd.appendChild(input);
 
     const removeTd = document.createElement("td");
     const removeBtn = document.createElement("button");
@@ -3417,51 +3566,58 @@ function renderBulkBatchTable() {
       styleShape(state.shapeById.get(element.id), element);
       tr.remove();
       updateMultiSelectionPanel();
-      if (state.multiSelectedIds.size === 0) bulkBatchBackdrop.classList.remove("open");
+      if (state.multiSelectedIds.size === 0) bulkPlannedDateBackdrop.classList.remove("open");
     });
     removeTd.appendChild(removeBtn);
 
-    tr.append(idTd, markTd, typeTd, contractTd, batchTd, removeTd);
+    tr.append(idTd, markTd, typeTd, dateTd, removeTd);
     tbody.appendChild(tr);
   }
 }
 
-document.getElementById("bulk-batch-cancel").addEventListener("click", () => bulkBatchBackdrop.classList.remove("open"));
+document.getElementById("bulk-planned-date-cancel").addEventListener("click", () => bulkPlannedDateBackdrop.classList.remove("open"));
 
-document.getElementById("bulk-batch-apply").addEventListener("click", async () => {
-  const items = [];
-  let skipped = 0;
-  document.querySelectorAll("#bulk-batch-tbody tr").forEach(tr => {
-    const select = tr.querySelector(".bulk-row-batch");
-    if (select.disabled) { skipped++; return; }
-    items.push({ element_id: Number(tr.dataset.elementId), batch_id: select.value ? Number(select.value) : null });
+// "Заполнить одной датой" — тот же приём удобства, что уже был у
+// "bulk-fill-contract" в массовой смене статуса: заполняет ТОЛЬКО пустые
+// поля, не перезаписывает уже введённые построчно значения.
+document.getElementById("bulk-fill-planned-date-apply").addEventListener("click", () => {
+  const value = document.getElementById("bulk-fill-planned-date").value;
+  if (!value) return;
+  let filled = 0;
+  document.querySelectorAll("#bulk-planned-date-tbody .bulk-row-planned-date").forEach(input => {
+    if (input.value) return;
+    input.value = value;
+    filled++;
   });
-  if (!items.length) {
-    document.getElementById("bulk-batch-error").textContent = "Нет элементов с подходящей партией для назначения";
-    return;
-  }
+  showToast(`Заполнено ${filled}`, "info");
+});
+
+document.getElementById("bulk-planned-date-apply").addEventListener("click", async () => {
+  const items = [];
+  document.querySelectorAll("#bulk-planned-date-tbody tr").forEach(tr => {
+    const input = tr.querySelector(".bulk-row-planned-date");
+    items.push({ element_id: Number(tr.dataset.elementId), planned_delivery_date: input.value || null });
+  });
+  if (!items.length) return;
   try {
-    const result = await api("/elements/bulk-batch", {
+    const result = await api("/elements/bulk-planned-delivery-date", {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }),
     });
-    const warnings = [];
     for (const updated of result.updated) {
       const existing = state.byId.get(updated.id);
       if (existing) {
         Object.assign(existing, updated);
         updateElementSubLabel(existing);
       }
-      if (updated.batch_warning) warnings.push(updated.batch_warning);
     }
-    bulkBatchBackdrop.classList.remove("open");
+    bulkPlannedDateBackdrop.classList.remove("open");
     clearMultiSelection();
-    showToast(`Партия назначена у ${result.updated.length} элементов${skipped ? `, пропущено ${skipped} (нет контракта/подходящей партии)` : ""}`, "success");
-    warnings.forEach(w => showToast(`Превышение по партии «${w.batch_label}»: запланировано ${w.quantity}, назначено ${w.fact}.`));
+    showToast(`Плановая дата поставки изменена у ${result.updated.length} элементов`, "success");
   } catch (e) {
-    document.getElementById("bulk-batch-error").textContent = "Не удалось назначить партию: " + e.message;
+    document.getElementById("bulk-planned-date-error").textContent = "Не удалось изменить плановую дату: " + e.message;
   }
 });
-document.getElementById("multi-select-batch-btn").addEventListener("click", openBulkBatchModal);
+document.getElementById("multi-select-planned-date-btn").addEventListener("click", openBulkPlannedDateModal);
 
 const svgRoot = document.getElementById("svg-root");
 svgRoot.addEventListener("click", (e) => {
@@ -3638,6 +3794,93 @@ function finishRubberBand() {
   setMultiSelection(ids);
 }
 
+// ---------- всплывающая подсказка при наведении (2D) — те же даты/статус
+// опоздания, что на инфо-плашке (см. computeTooltipDateRows), плюс
+// количество дней опоздания в тексте. Задержка и приём (таймер + "тот же
+// элемент под курсором") — тот же паттерн, что уже был у 3D-подсказки
+// (см. hover3DTimer/show3DTooltip ниже). ----------
+let hover2DTimer = null;
+let hover2DElementId = null;
+
+function hide2DTooltip() {
+  clearTimeout(hover2DTimer);
+  hover2DTimer = null;
+  hover2DElementId = null;
+  const tip = document.getElementById("tooltip-2d");
+  if (tip) tip.style.display = "none";
+}
+
+function position2DTooltip(clientX, clientY) {
+  const tip = document.getElementById("tooltip-2d");
+  const rect = stageEl.getBoundingClientRect();
+  const offset = 14;
+  let left = clientX - rect.left + offset;
+  let top = clientY - rect.top + offset;
+  if (left + tip.offsetWidth > rect.width) left = clientX - rect.left - tip.offsetWidth - offset;
+  if (top + tip.offsetHeight > rect.height) top = clientY - rect.top - tip.offsetHeight - offset;
+  tip.style.left = Math.max(0, left) + "px";
+  tip.style.top = Math.max(0, top) + "px";
+}
+
+function show2DTooltip(element, clientX, clientY) {
+  const tip = document.getElementById("tooltip-2d");
+  tip.textContent = "";
+  const title = document.createElement("div");
+  title.className = "t2d-title";
+  title.textContent = element.mark || element.element_type || `Элемент #${element.id}`;
+  tip.appendChild(title);
+  const basicRows = [
+    ["Тип", element.element_type],
+    ["Подтип", element.subtype],
+    ["Отметка", (element.elevation_mm === null || element.elevation_mm === undefined) ? null : element.elevation_mm + " мм"],
+  ];
+  for (const [label, value] of basicRows) {
+    const line = document.createElement("div");
+    line.textContent = label + ": " + ((value === null || value === undefined || value === "") ? "—" : value);
+    tip.appendChild(line);
+  }
+  const dateRows = computeTooltipDateRows(element);
+  if (dateRows) {
+    for (const row of dateRows) {
+      const line = document.createElement("div");
+      line.className = "t2d-row " + row.cls;
+      line.textContent = row.text;
+      tip.appendChild(line);
+    }
+  } else {
+    const line = document.createElement("div");
+    line.className = "t2d-row neutral";
+    line.textContent = "Проектная дата не задана";
+    tip.appendChild(line);
+  }
+  tip.style.display = "block";
+  position2DTooltip(clientX, clientY);
+}
+
+function on2DMouseMove(e) {
+  // Во время панорамирования/рамки выделения подсказка мешает и правдой
+  // не является (курсор летит по схеме, а не "стоит" на элементе).
+  if (dragging && dragMoved) { hide2DTooltip(); return; }
+  const shape = e.target.closest(".element-shape");
+  const elementId = shape ? Number(shape.getAttribute("data-id")) : null;
+  if (elementId !== hover2DElementId) {
+    hide2DTooltip();
+    hover2DElementId = elementId;
+    if (elementId !== null) {
+      const element = state.byId.get(elementId);
+      const cx = e.clientX, cy = e.clientY;
+      hover2DTimer = setTimeout(() => {
+        if (hover2DElementId === elementId && element) show2DTooltip(element, cx, cy);
+      }, 1000);
+    }
+    return;
+  }
+  if (elementId !== null) position2DTooltip(e.clientX, e.clientY);
+}
+
+svgRoot.addEventListener("mousemove", on2DMouseMove);
+svgRoot.addEventListener("mouseleave", hide2DTooltip);
+
 // ---------- групповое выделение (плавающая панель + подсветка, см. Docs/backlog.md) ----------
 function setMultiSelection(idsSet) {
   const prev = state.multiSelectedIds;
@@ -3662,10 +3905,6 @@ function updateMultiSelectionPanel() {
   if (n === 0) { panel.style.display = "none"; return; }
   panel.style.display = "flex";
   document.getElementById("multi-select-count").textContent = `Выделено: ${n}`;
-  const hasContract = Array.from(state.multiSelectedIds).some(id => state.byId.get(id)?.contract_id);
-  const batchBtn = document.getElementById("multi-select-batch-btn");
-  batchBtn.disabled = !hasContract;
-  batchBtn.title = hasContract ? "" : "Ни у одного выбранного элемента нет контракта";
 }
 
 document.getElementById("multi-select-clear").addEventListener("click", clearMultiSelection);
@@ -3790,10 +4029,24 @@ window.addEventListener("mousemove", (e) => {
   localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
 });
 
-// ==================== Esc ЗАКРЫВАЕТ ЛЮБУЮ ОТКРЫТУЮ ФОРМУ (п.5 второго раунда) ====================
+// ==================== Esc ЗАКРЫВАЕТ ВЕРХНЮЮ ОТКРЫТУЮ ФОРМУ ====================
+// Раньше Esc закрывал ВСЕ открытые модалки разом — если из списка
+// (контракты/контрагенты) была открыта форма элемента (изменить
+// контракт/контрагента), Esc закрывал и форму, и список одним нажатием.
+// Живой запрос пользователя: первый Esc должен закрывать только форму,
+// список — оставаться открытым для дальнейшей работы; второй Esc
+// закрывает уже список. Вложенные модалки (форма поверх списка) везде
+// в разметке объявлены ПОСЛЕ своего родительского списка (см.
+// contracts-backdrop/contract-edit-backdrop,
+// counterparties-backdrop/counterparty-edit-backdrop) — последняя среди
+// открытых в DOM-порядке и есть верхняя по стеку, закрывать её одну.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  document.querySelectorAll(".modal-backdrop.open").forEach(m => m.classList.remove("open"));
+  const openModals = document.querySelectorAll(".modal-backdrop.open");
+  if (openModals.length) {
+    openModals[openModals.length - 1].classList.remove("open");
+    return;
+  }
   closeCtxMenu();
   document.getElementById("settings-menu").classList.remove("open");
 });
@@ -4066,41 +4319,431 @@ document.getElementById("user-password-save").addEventListener("click", async ()
   }
 });
 
-// ---------- контракты (п.9 второго раунда) ----------
+// ---------- Контрагенты / Договоры / Спецификации (см. Docs/backlog.md,
+// "Контрактация 2.0") ----------
+const counterpartiesBackdrop = document.getElementById("counterparties-backdrop");
+const counterpartyEditBackdrop = document.getElementById("counterparty-edit-backdrop");
+let editingCounterpartyId = null;
+
+async function renderCounterpartiesList() {
+  const list = await api("/counterparties");
+  const box = document.getElementById("counterparties-list");
+  box.innerHTML = "";
+  if (!list.length) { box.innerHTML = '<div class="hint-text">нет контрагентов</div>'; return; }
+  for (const cp of list) {
+    const block = document.createElement("div");
+    block.className = "contract-block";
+    block.innerHTML = `
+      <div class="contract-block-header">
+        <b>${escapeHtml(cp.short_name)}</b>
+        <span class="hint-text">${escapeHtml(cp.full_name)}${cp.inn ? " · ИНН " + escapeHtml(cp.inn) : ""}${cp.code ? " · код " + escapeHtml(cp.code) : ""}</span>
+        <button class="btn btn-sm btn-secondary" data-edit-counterparty="${cp.id}">Изменить</button>
+      </div>
+    `;
+    box.appendChild(block);
+    block.querySelector("[data-edit-counterparty]").addEventListener("click", () => openCounterpartyEdit(cp));
+  }
+}
+
+document.getElementById("menu-counterparties").addEventListener("click", async () => {
+  counterpartiesBackdrop.classList.add("open");
+  await renderCounterpartiesList();
+});
+document.getElementById("counterparties-close").addEventListener("click", () => counterpartiesBackdrop.classList.remove("open"));
+document.getElementById("counterparties-add").addEventListener("click", () => openCounterpartyEdit(null));
+
+async function renderCounterpartyAgreements() {
+  const box = document.getElementById("cpe-agreements-list");
+  box.innerHTML = "Загрузка…";
+  const agreements = await api(`/agreements?counterparty_id=${editingCounterpartyId}`);
+  box.innerHTML = "";
+  if (!agreements.length) box.innerHTML = '<div class="hint-text">нет договоров</div>';
+  for (const a of agreements) {
+    const row = document.createElement("div");
+    row.className = "contract-block";
+    row.innerHTML = `
+      <div class="contract-block-header">
+        <button type="button" class="hyperlink cpe-edit-agreement"><b>${escapeHtml(a.number)}</b><span class="hint-text">${a.agreement_date ? " от " + formatDateRu(a.agreement_date) : ""}</span></button>
+      </div>
+      <div class="cpe-specs-list"></div>
+      <div class="row" style="gap:6px; margin-top:6px;">
+        <input type="text" class="cpe-new-spec-number" placeholder="номер спецификации" style="flex:1;"/>
+        <input type="date" class="cpe-new-spec-date"/>
+        <button class="btn btn-sm btn-secondary cpe-add-spec" type="button">+ Спецификация</button>
+      </div>
+    `;
+    box.appendChild(row);
+
+    // Редактирование договора — тот же приём, что и у формы контрагента:
+    // заменяем статичную шапку на инпуты, "Отмена" — просто перерисовка
+    // всего списка (без ручного отслеживания "исходного" состояния).
+    row.querySelector(".cpe-edit-agreement").addEventListener("click", () => {
+      const header = row.querySelector(".contract-block-header");
+      // .contract-block-header — flex-строка с justify-content:space-between
+      // (нормально для статичного вида "текст + кнопка"), но с 4 полями
+      // редактирования сжимала бы текстовый инпут почти до нуля — форма
+      // редактирования получает свой собственный блочный контейнер, не
+      // наследует flex-row родителя.
+      header.style.display = "block";
+      header.innerHTML = `
+        <div class="row" style="gap:6px;">
+          <input type="text" class="cpe-edit-agreement-number" value="${escapeHtml(a.number)}" style="flex:1; min-width:0;"/>
+          <input type="date" class="cpe-edit-agreement-date" value="${a.agreement_date || ""}"/>
+        </div>
+        <div class="row" style="gap:6px; margin-top:6px;">
+          <button class="btn btn-sm btn-primary cpe-save-agreement" type="button">Сохранить</button>
+          <button class="btn btn-sm btn-secondary cpe-cancel-agreement" type="button">Отмена</button>
+        </div>
+      `;
+      header.querySelector(".cpe-cancel-agreement").addEventListener("click", renderCounterpartyAgreements);
+      header.querySelector(".cpe-save-agreement").addEventListener("click", async () => {
+        const number = header.querySelector(".cpe-edit-agreement-number").value.trim();
+        if (!number) return;
+        const date = header.querySelector(".cpe-edit-agreement-date").value || null;
+        await api(`/agreements/${a.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ counterparty_id: editingCounterpartyId, number, agreement_date: date }),
+        });
+        await renderCounterpartyAgreements();
+      });
+    });
+
+    const specsBox = row.querySelector(".cpe-specs-list");
+    const specs = await api(`/specifications?agreement_id=${a.id}`);
+    if (!specs.length) {
+      specsBox.innerHTML = '<div class="hint-text">нет спецификаций</div>';
+    } else {
+      specsBox.innerHTML = "";
+      for (const s of specs) {
+        const specRow = document.createElement("div");
+        specRow.className = "row";
+        specRow.style.cssText = "gap:6px; align-items:center; margin-top:2px;";
+        specRow.innerHTML = `
+          <button type="button" class="hyperlink cpe-edit-spec" style="flex:1;">— ${escapeHtml(s.number)}${s.specification_date ? " от " + formatDateRu(s.specification_date) : ""}</button>
+        `;
+        specsBox.appendChild(specRow);
+        specRow.querySelector(".cpe-edit-spec").addEventListener("click", () => {
+          // .row — flex со space-between (см. CSS), с 4 полями сжало бы
+          // текстовый инпут почти до нуля (тот же фикс, что у договора выше)
+          // — переключаем сам specRow на block-раскладку для режима правки.
+          specRow.style.display = "block";
+          specRow.innerHTML = `
+            <div class="row" style="gap:6px;">
+              <input type="text" class="cpe-edit-spec-number" value="${escapeHtml(s.number)}" style="flex:1; min-width:0;"/>
+              <input type="date" class="cpe-edit-spec-date" value="${s.specification_date || ""}"/>
+            </div>
+            <div class="row" style="gap:6px; margin-top:6px;">
+              <button class="btn btn-sm btn-primary cpe-save-spec" type="button">Сохранить</button>
+              <button class="btn btn-sm btn-secondary cpe-cancel-spec" type="button">Отмена</button>
+            </div>
+          `;
+          specRow.querySelector(".cpe-cancel-spec").addEventListener("click", renderCounterpartyAgreements);
+          specRow.querySelector(".cpe-save-spec").addEventListener("click", async () => {
+            const number = specRow.querySelector(".cpe-edit-spec-number").value.trim();
+            if (!number) return;
+            const date = specRow.querySelector(".cpe-edit-spec-date").value || null;
+            await api(`/specifications/${s.id}`, {
+              method: "PATCH", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ agreement_id: a.id, number, specification_date: date }),
+            });
+            await renderCounterpartyAgreements();
+          });
+        });
+      }
+    }
+
+    row.querySelector(".cpe-add-spec").addEventListener("click", async () => {
+      const number = row.querySelector(".cpe-new-spec-number").value.trim();
+      if (!number) return;
+      const date = row.querySelector(".cpe-new-spec-date").value || null;
+      await api("/specifications", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreement_id: a.id, number, specification_date: date }),
+      });
+      await renderCounterpartyAgreements();
+    });
+  }
+}
+
+document.getElementById("cpe-add-agreement").addEventListener("click", async () => {
+  if (!editingCounterpartyId) return; // только у уже сохранённого контрагента
+  const number = document.getElementById("cpe-new-agreement-number").value.trim();
+  if (!number) return;
+  const date = document.getElementById("cpe-new-agreement-date").value || null;
+  await api("/agreements", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ counterparty_id: editingCounterpartyId, number, agreement_date: date }),
+  });
+  document.getElementById("cpe-new-agreement-number").value = "";
+  document.getElementById("cpe-new-agreement-date").value = "";
+  await renderCounterpartyAgreements();
+});
+
+async function openCounterpartyEdit(cp) {
+  editingCounterpartyId = cp ? cp.id : null;
+  document.getElementById("counterparty-edit-title").textContent = cp ? "Изменить контрагента" : "Новый контрагент";
+  document.getElementById("cpe-full-name").value = cp ? cp.full_name : "";
+  document.getElementById("cpe-short-name").value = cp ? cp.short_name : "";
+  document.getElementById("cpe-inn").value = (cp && cp.inn) || "";
+  document.getElementById("cpe-kpp").value = (cp && cp.kpp) || "";
+  document.getElementById("cpe-ogrn").value = (cp && cp.ogrn) || "";
+  document.getElementById("cpe-legal-address").value = (cp && cp.legal_address) || "";
+  document.getElementById("cpe-contact-person").value = (cp && cp.contact_person) || "";
+  document.getElementById("cpe-contact-phone").value = (cp && cp.contact_phone) || "";
+  document.getElementById("cpe-code").value = (cp && cp.code) || "";
+  document.getElementById("counterparty-edit-error").textContent = "";
+  // Договоры/спецификации — только у уже существующего контрагента
+  // (у нового ещё нет id, договор ссылается на counterparty_id).
+  document.getElementById("counterparty-agreements-section").style.display = cp ? "" : "none";
+  if (cp) await renderCounterpartyAgreements();
+  counterpartyEditBackdrop.classList.add("open");
+}
+document.getElementById("counterparty-edit-cancel").addEventListener("click", () => counterpartyEditBackdrop.classList.remove("open"));
+document.getElementById("counterparty-edit-save").addEventListener("click", async () => {
+  const body = {
+    full_name: document.getElementById("cpe-full-name").value.trim(),
+    short_name: document.getElementById("cpe-short-name").value.trim(),
+    inn: document.getElementById("cpe-inn").value.trim() || null,
+    kpp: document.getElementById("cpe-kpp").value.trim() || null,
+    ogrn: document.getElementById("cpe-ogrn").value.trim() || null,
+    legal_address: document.getElementById("cpe-legal-address").value.trim() || null,
+    contact_person: document.getElementById("cpe-contact-person").value.trim() || null,
+    contact_phone: document.getElementById("cpe-contact-phone").value.trim() || null,
+    code: document.getElementById("cpe-code").value.trim() || null,
+  };
+  if (!body.full_name || !body.short_name) {
+    document.getElementById("counterparty-edit-error").textContent = "Укажите полное и краткое наименование";
+    return;
+  }
+  try {
+    if (editingCounterpartyId) {
+      await api(`/counterparties/${editingCounterpartyId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } else {
+      const created = await api("/counterparties", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      editingCounterpartyId = created.id;
+    }
+    await renderCounterpartiesList();
+    // Договоры доступны только после сохранения — перерисовываем форму,
+    // не закрываем её, чтобы сразу можно было добавить первый договор.
+    document.getElementById("counterparty-agreements-section").style.display = "";
+    await renderCounterpartyAgreements();
+  } catch (e) {
+    document.getElementById("counterparty-edit-error").textContent = e.message;
+  }
+});
+
+// ---------- справочник префиксов марок (см. Docs/backlog.md,
+// "Контрактация 2.0" — эвристика "префикс -> тип", донастраиваемая
+// администратором) ----------
+const markTypePrefixesBackdrop = document.getElementById("mark-type-prefixes-backdrop");
+
+async function renderMarkTypePrefixesList() {
+  const list = await api("/mark-type-prefixes");
+  const box = document.getElementById("mark-type-prefixes-list");
+  box.innerHTML = "";
+  if (!list.length) { box.innerHTML = '<div class="hint-text">нет префиксов</div>'; return; }
+  for (const item of list) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.cssText = "gap:6px; align-items:center; margin-bottom:4px;";
+    row.innerHTML = `
+      <span style="flex:1;"><b>${escapeHtml(item.prefix)}</b> → ${escapeHtml(item.element_type)}</span>
+      <button class="btn btn-sm btn-secondary" data-remove-prefix="${escapeHtml(item.prefix)}">✕</button>
+    `;
+    box.appendChild(row);
+    row.querySelector("[data-remove-prefix]").addEventListener("click", async () => {
+      await api(`/mark-type-prefixes/${encodeURIComponent(item.prefix)}`, { method: "DELETE" });
+      await renderMarkTypePrefixesList();
+    });
+  }
+}
+document.getElementById("menu-mark-prefixes").addEventListener("click", async () => {
+  // Тот же приём, что уже используется для ce-known-types (форма
+  // контракта) — известные типы элементов из текущей загрузки, а не
+  // отдельная захардкоженная копия серверного словаря ZHBI_TYPES.
+  document.getElementById("mtp-new-type").innerHTML =
+    Object.keys(state.labelVisibility).map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+  await renderMarkTypePrefixesList();
+  markTypePrefixesBackdrop.classList.add("open");
+});
+document.getElementById("mark-type-prefixes-close").addEventListener("click", () => markTypePrefixesBackdrop.classList.remove("open"));
+document.getElementById("mtp-add").addEventListener("click", async () => {
+  const prefix = document.getElementById("mtp-new-prefix").value.trim();
+  if (!prefix) return;
+  const elementType = document.getElementById("mtp-new-type").value;
+  await api("/mark-type-prefixes", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prefix, element_type: elementType }),
+  });
+  document.getElementById("mtp-new-prefix").value = "";
+  await renderMarkTypePrefixesList();
+});
+
+// ---------- порог опоздания поставки — серверная настройка, общая для
+// всех менеджеров; влияет на цвет допстроки марки (subLabelClass) и
+// всплывающей подсказки (computeTooltipDateRows) ----------
+const infoPlateSettingsBackdrop = document.getElementById("info-plate-settings-backdrop");
+document.getElementById("menu-info-plate-settings").addEventListener("click", async () => {
+  document.getElementById("info-plate-settings-error").textContent = "";
+  try {
+    const settings = await api("/settings/info-plate");
+    document.getElementById("ips-threshold").value = settings.late_threshold_days;
+    infoPlateSettingsBackdrop.classList.add("open");
+  } catch (e) {
+    alert("Не удалось загрузить настройку: " + e.message);
+  }
+});
+document.getElementById("info-plate-settings-cancel").addEventListener("click", () => infoPlateSettingsBackdrop.classList.remove("open"));
+document.getElementById("info-plate-settings-save").addEventListener("click", async () => {
+  const value = Number(document.getElementById("ips-threshold").value);
+  try {
+    const settings = await api("/settings/info-plate", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ late_threshold_days: value }),
+    });
+    state.lateThresholdDays = settings.late_threshold_days;
+    infoPlateSettingsBackdrop.classList.remove("open");
+    refreshSubLabelDeliveryColors();
+  } catch (e) {
+    document.getElementById("info-plate-settings-error").textContent = e.message;
+  }
+});
+
+// ---------- импорт контрактации / графика МС Project (см.
+// Docs/backlog.md, "Контрактация 2.0", п.2/6) ----------
+const contractingImportBackdrop = document.getElementById("contracting-import-backdrop");
+document.getElementById("menu-contracting-import").addEventListener("click", () => {
+  document.getElementById("contracting-import-file").value = "";
+  document.getElementById("contracting-import-status").textContent = "";
+  contractingImportBackdrop.classList.add("open");
+});
+document.getElementById("contracting-import-cancel").addEventListener("click", () => contractingImportBackdrop.classList.remove("open"));
+document.getElementById("contracting-import-submit").addEventListener("click", async () => {
+  const file = document.getElementById("contracting-import-file").files[0];
+  const statusEl = document.getElementById("contracting-import-status");
+  if (!file) { statusEl.textContent = "Сначала выберите файл .xlsx"; statusEl.style.color = "var(--color-danger)"; return; }
+  statusEl.textContent = "Импорт…"; statusEl.style.color = "var(--color-text-muted)";
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const res = await fetch("/import-contracting-xlsx", { method: "POST", body: formData });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      statusEl.textContent = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
+      statusEl.style.color = "var(--color-danger)";
+      return;
+    }
+    let msg = `Готово: строк обработано ${body.rows_processed}, контрактов затронуто ${body.contracts_touched}, ` +
+      `позиций создано ${body.lines_inserted}, обновлено ${body.lines_updated}.`;
+    if (body.unresolved_type_marks.length) msg += ` Тип не определён для марок: ${body.unresolved_type_marks.slice(0, 10).join(", ")}${body.unresolved_type_marks.length > 10 ? "…" : ""}.`;
+    if (body.date_warnings.length) msg += ` Предупреждения по датам: ${body.date_warnings.length}.`;
+    statusEl.textContent = msg;
+    statusEl.style.color = "var(--color-text-muted)";
+    await loadPlan();
+  } catch (e) {
+    statusEl.textContent = "Не удалось связаться с сервером: " + e.message;
+    statusEl.style.color = "var(--color-danger)";
+  }
+});
+
+const scheduleImportBackdrop = document.getElementById("schedule-import-backdrop");
+document.getElementById("menu-schedule-import").addEventListener("click", () => {
+  document.getElementById("schedule-import-file").value = "";
+  document.getElementById("schedule-import-status").textContent = "";
+  scheduleImportBackdrop.classList.add("open");
+});
+document.getElementById("schedule-import-cancel").addEventListener("click", () => scheduleImportBackdrop.classList.remove("open"));
+document.getElementById("schedule-import-submit").addEventListener("click", async () => {
+  const file = document.getElementById("schedule-import-file").files[0];
+  const statusEl = document.getElementById("schedule-import-status");
+  if (!file) { statusEl.textContent = "Сначала выберите файл .xlsx"; statusEl.style.color = "var(--color-danger)"; return; }
+  statusEl.textContent = "Импорт…"; statusEl.style.color = "var(--color-text-muted)";
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const res = await fetch("/import-schedule-xlsx", { method: "POST", body: formData });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      statusEl.textContent = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
+      statusEl.style.color = "var(--color-danger)";
+      return;
+    }
+    let msg = `Готово: строк обработано ${body.rows_processed}, пропущено ${body.rows_skipped}, элементов обновлено ${body.elements_updated}.`;
+    if (body.unmatched_blocks.length) msg += ` Блоков без совпадений: ${body.unmatched_blocks.length}.`;
+    statusEl.textContent = msg;
+    statusEl.style.color = "var(--color-text-muted)";
+    await loadPlan();
+  } catch (e) {
+    statusEl.textContent = "Не удалось связаться с сервером: " + e.message;
+    statusEl.style.color = "var(--color-danger)";
+  }
+});
+
+// ---------- контракты (см. Docs/backlog.md, "Контрактация 2.0") ----------
 const contractsBackdrop = document.getElementById("contracts-backdrop");
 const contractEditBackdrop = document.getElementById("contract-edit-backdrop");
 let editingContractId = null;
+let editingContract = null; // полный объект (с .lines) — нужен вкладке "Развёрнуто" для остатка, см. renderContractExpandedView
+let counterpartiesFullCache = null; // снимок GET /counterparties/full на время открытой формы контракта
 
 async function renderContractsList() {
   const contracts = await api("/contracts");
   const box = document.getElementById("contracts-list");
   box.innerHTML = "";
   if (!contracts.length) { box.innerHTML = '<div class="hint-text">нет контрактов</div>'; return contracts; }
+  // Плоская таблица — Контрагент/Договор/Спецификация (живой запрос
+  // пользователя, см. Docs/backlog.md, "Контрактация 2.0"). "Изменить" —
+  // та же форма, что и создание, предзаполненная текущим содержимым
+  // (openContractEdit(c) уже поддерживает оба случая) — "Развёрнуто"
+  // теперь вкладка ВНУТРИ этой формы (см. setCeView), не отдельная
+  // модалка. "Позиции" — план/факт/повреждено/остаток по (тип, марка),
+  // СВЁРНУТО по умолчанию — не занимает место, пока не нужна.
+  const table = document.createElement("table");
+  table.className = "contract-lines-table";
+  table.innerHTML = `
+    <tr><th>Контрагент</th><th>Договор</th><th>Спецификация</th><th></th></tr>
+  `;
   for (const c of contracts) {
-    const block = document.createElement("div");
-    block.className = "contract-block";
+    const agreementText = c.agreement_date ? `${escapeHtml(c.agreement_number)} от ${formatDateRu(c.agreement_date)}` : escapeHtml(c.agreement_number);
+    const specText = c.specification_date ? `${escapeHtml(c.specification_number)} от ${formatDateRu(c.specification_date)}` : escapeHtml(c.specification_number);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(c.counterparty_short_name)}</td>
+      <td>${agreementText}</td>
+      <td>${specText}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-sm btn-secondary" data-edit-contract="${c.id}">Изменить</button>
+        <button class="btn btn-sm btn-secondary" data-toggle-lines="${c.id}">Позиции…</button>
+      </td>
+    `;
+    tr.querySelector("[data-edit-contract]").addEventListener("click", () => openContractEdit(c));
+    table.appendChild(tr);
+
+    const linesRow = document.createElement("tr");
+    linesRow.style.display = "none";
     const linesHtml = c.lines.length
       ? c.lines.map(l => `
           <tr class="${l.exceeded ? "exceeded" : ""}">
-            <td>${escapeHtml(l.element_type)}</td><td>${l.quantity}</td><td>${l.fact}</td><td>${l.damaged}</td><td>${l.remaining}</td>
+            <td>${escapeHtml(l.element_type || "тип не определён")}</td><td>${escapeHtml(l.mark || "—")}</td>
+            <td>${l.quantity}</td><td>${l.fact}</td><td>${l.damaged}</td><td>${l.remaining}</td>
           </tr>
         `).join("")
-      : '<tr><td colspan="5" class="hint-text">нет строк</td></tr>';
-    block.innerHTML = `
-      <div class="contract-block-header">
-        <b>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</b>
-        <button class="btn btn-sm btn-secondary" data-edit-contract="${c.id}">Изменить</button>
-        <button class="btn btn-sm btn-secondary" data-batches-contract="${c.id}">Партии</button>
-      </div>
-      <table class="contract-lines-table">
-        <tr><th>Тип элемента</th><th>План</th><th>Факт</th><th>Повреждено</th><th>Остаток</th></tr>
-        ${linesHtml}
-      </table>
+      : '<tr><td colspan="6" class="hint-text">нет строк</td></tr>';
+    linesRow.innerHTML = `
+      <td colspan="4">
+        <table class="contract-lines-table">
+          <tr><th>Тип элемента</th><th>Марка</th><th>План</th><th>Факт</th><th>Повреждено</th><th>Остаток</th></tr>
+          ${linesHtml}
+        </table>
+      </td>
     `;
-    box.appendChild(block);
-    block.querySelector("[data-edit-contract]").addEventListener("click", () => openContractEdit(c));
-    block.querySelector("[data-batches-contract]").addEventListener("click", () => openBatchesModal(c));
+    table.appendChild(linesRow);
+    const toggleBtn = tr.querySelector("[data-toggle-lines]");
+    toggleBtn.addEventListener("click", () => {
+      const open = linesRow.style.display !== "none";
+      linesRow.style.display = open ? "none" : "table-row";
+      toggleBtn.textContent = open ? "Позиции…" : "Скрыть позиции";
+    });
   }
+  box.appendChild(table);
   return contracts;
 }
 
@@ -4115,7 +4758,7 @@ async function renderDefaultContracts(contracts) {
     row.className = "default-contract-row";
     const matching = contracts.filter(c => c.lines.some(l => l.element_type === type));
     const options = ['<option value="">— не задан —</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${defaultMap[type] === c.id ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
+      matching.map(c => `<option value="${c.id}" ${defaultMap[type] === c.id ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.counterparty_short_name)})</option>`)
     );
     row.innerHTML = `<span>${escapeHtml(type)}</span><select data-type="${escapeHtml(type)}">${options.join("")}</select>`;
     row.querySelector("select").addEventListener("change", async (e) => {
@@ -4136,13 +4779,96 @@ document.getElementById("menu-contracts").addEventListener("click", async () => 
 });
 document.getElementById("contracts-close").addEventListener("click", () => contractsBackdrop.classList.remove("open"));
 
-// ---------- редактирование контракта: динамический список строк тип+количество (п.8 третьего раунда) ----------
-function addContractLineRow(elementType, quantity) {
+// ---------- "Развёрнуто" — вкладка ВНУТРИ формы контракта (живой запрос
+// пользователя, была отдельной модалкой по кнопке "Развернуть…", см.
+// Docs/backlog.md), не отдельная модалка. Сначала — физические элементы
+// схемы, УЖЕ привязанные к контракту (с указанием, к какому элементу
+// схемы привязана позиция, его статусом и датами поставки), следом —
+// строки контракта, ещё не выбранные полностью (остаток), одной строкой
+// на позицию, не по штуке — при остатке в сотни штук сотни пустых строк
+// были бы бесполезны. ----------
+function setCeView(view) {
+  document.querySelectorAll("#ce-view-toggle .view-mode-btn").forEach(b => b.classList.toggle("active", b.dataset.ceView === view));
+  document.getElementById("ce-view-main").style.display = view === "main" ? "" : "none";
+  document.getElementById("ce-view-expanded").style.display = view === "expanded" ? "" : "none";
+  if (view === "expanded") renderContractExpandedView();
+}
+document.querySelectorAll("#ce-view-toggle .view-mode-btn").forEach(btn => {
+  btn.addEventListener("click", () => setCeView(btn.dataset.ceView));
+});
+
+async function renderContractExpandedView() {
+  const tbody = document.getElementById("contract-elements-tbody");
+  document.getElementById("contract-elements-error").textContent = "";
+  if (!editingContractId) {
+    tbody.innerHTML = '<tr><td colspan="7" class="hint-text">Сначала сохраните контракт — развёрнутый вид доступен только для уже сохранённого</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '<tr><td colspan="7" class="hint-text">Загрузка…</td></tr>';
+  try {
+    const rows = await api(`/contracts/${editingContractId}/elements`);
+    tbody.innerHTML = "";
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>№${r.id}${r.mark ? " · " + escapeHtml(r.mark) : ""}</td>
+        <td>${escapeHtml(r.element_type || "—")}</td>
+        <td>${escapeHtml(r.mark || "—")}</td>
+        <td>${escapeHtml(state.statusLabels[r.current_status] || r.current_status)}</td>
+        <td>${r.project_delivery_date ? formatDateRu(r.project_delivery_date) : "—"}</td>
+        <td><input type="date" class="ce-elem-planned-date" data-element-id="${r.id}" value="${r.planned_delivery_date || ""}"/></td>
+        <td>${r.actual_delivery_date ? formatDateRu(r.actual_delivery_date) : "—"}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+    // Остаток — строки контракта, ещё не выбранные полностью физическими
+    // элементами схемы (та же цифра, что и в "Позиции…" в списке контрактов).
+    if (editingContract) {
+      for (const l of editingContract.lines) {
+        if (l.remaining <= 0) continue;
+        const tr = document.createElement("tr");
+        tr.className = "hint-text";
+        tr.innerHTML = `
+          <td>—</td>
+          <td>${escapeHtml(l.element_type || "тип не определён")}</td>
+          <td>${escapeHtml(l.mark || "—")}</td>
+          <td colspan="4">без привязки к элементу схемы · остаток ${l.remaining} шт.</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+    if (!tbody.children.length) tbody.innerHTML = '<tr><td colspan="7" class="hint-text">нет элементов</td></tr>';
+    tbody.querySelectorAll(".ce-elem-planned-date").forEach(input => {
+      // Пишет сразу по change, без отдельной кнопки "Сохранить" — тот же
+      // приём, что уже работает у renderDefaultContracts выше.
+      input.addEventListener("change", async () => {
+        try {
+          const updated = await api(`/elements/${input.dataset.elementId}/planned-delivery-date`, {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ planned_delivery_date: input.value || null }),
+          });
+          const existing = state.byId.get(updated.id);
+          if (existing) { Object.assign(existing, updated); updateElementSubLabel(existing); }
+        } catch (e) {
+          document.getElementById("contract-elements-error").textContent = "Не удалось сохранить дату: " + e.message;
+        }
+      });
+    });
+  } catch (e) {
+    tbody.innerHTML = "";
+    document.getElementById("contract-elements-error").textContent = e.message;
+  }
+}
+
+// ---------- редактирование контракта: динамический список строк тип+марка+количество
+// (см. Docs/backlog.md, "Контрактация 2.0" — марка добавлена к типу) ----------
+function addContractLineRow(elementType, mark, quantity) {
   const container = document.getElementById("ce-lines");
   const row = document.createElement("div");
   row.className = "ce-line-row";
   row.innerHTML = `
     <input type="text" class="ce-line-type" list="ce-known-types" placeholder="тип элемента" value="${escapeHtml(elementType || "")}"/>
+    <input type="text" class="ce-line-mark" list="ce-known-marks" placeholder="марка (необязательно)" value="${escapeHtml(mark || "")}"/>
     <input type="number" class="ce-line-qty" min="0" placeholder="кол-во" value="${quantity != null ? quantity : ""}"/>
     <button class="btn btn-sm btn-secondary ce-line-remove" type="button">✕</button>
   `;
@@ -4197,21 +4923,75 @@ function addContractIncidentRow(elementType, quantity, incidentDate, description
 }
 document.getElementById("ce-add-incident").addEventListener("click", () => addContractIncidentRow());
 
-function openContractEdit(contract) {
+// Каскадные Контрагент -> Договор -> Спецификация (см. Docs/backlog.md,
+// "Контрактация 2.0" — заменяет свободнотекстовое поле "Поставщик").
+// counterpartiesFullCache — снимок GET /counterparties/full на время
+// открытой формы, тот же приём, что buildTypeSubtypeMarkMaps использовал
+// для partии (state сканируется один раз при открытии, не на каждое
+// изменение селекта).
+function refreshAgreementSelect(selectedAgreementId) {
+  const cp = counterpartiesFullCache.find(c => String(c.id) === document.getElementById("ce-counterparty").value);
+  const agreements = cp ? cp.agreements : [];
+  const agrSelect = document.getElementById("ce-agreement");
+  agrSelect.innerHTML = agreements.map(a =>
+    `<option value="${a.id}" ${String(a.id) === String(selectedAgreementId) ? "selected" : ""}>${escapeHtml(a.number)}${a.agreement_date ? " от " + formatDateRu(a.agreement_date) : ""}</option>`
+  ).join("");
+  refreshSpecificationSelect(agreements, undefined);
+}
+function refreshSpecificationSelect(agreements, selectedSpecificationId) {
+  const agrSelect = document.getElementById("ce-agreement");
+  const agr = agreements.find(a => String(a.id) === agrSelect.value);
+  const specs = agr ? agr.specifications : [];
+  const specSelect = document.getElementById("ce-specification");
+  specSelect.innerHTML = specs.map(s =>
+    `<option value="${s.id}" ${String(s.id) === String(selectedSpecificationId) ? "selected" : ""}>${escapeHtml(s.number)}${s.specification_date ? " от " + formatDateRu(s.specification_date) : ""}</option>`
+  ).join("");
+}
+document.getElementById("ce-counterparty").addEventListener("change", () => refreshAgreementSelect());
+document.getElementById("ce-agreement").addEventListener("change", () => {
+  const cp = counterpartiesFullCache.find(c => String(c.id) === document.getElementById("ce-counterparty").value);
+  refreshSpecificationSelect(cp ? cp.agreements : []);
+});
+
+async function openContractEdit(contract) {
   editingContractId = contract ? contract.id : null;
+  editingContract = contract;
+  setCeView("main");
   document.getElementById("contract-edit-title").textContent = contract ? "Изменить контракт" : "Новый контракт";
   document.getElementById("ce-name").value = contract ? contract.name : "";
-  document.getElementById("ce-supplier").value = contract ? contract.supplier : "";
   document.getElementById("ce-contract-date").value = contract && contract.contract_date ? contract.contract_date.slice(0, 10) : "";
-  document.getElementById("ce-code").value = contract && contract.code ? contract.code : "";
-  // Известные типы элементов после загрузки файла — подсказка в поле
-  // "тип элемента" строки контракта (datalist, не строгий список —
-  // ввести что-то нестандартное по-прежнему можно), см. Docs/backlog.md.
+
+  counterpartiesFullCache = await api("/counterparties/full");
+  const cpSelect = document.getElementById("ce-counterparty");
+  if (!counterpartiesFullCache.length) {
+    document.getElementById("contract-edit-error").textContent = "Сначала добавьте хотя бы одного контрагента (Настройки → Контрагенты)";
+  }
+  cpSelect.innerHTML = counterpartiesFullCache.map(cp => `<option value="${cp.id}">${escapeHtml(cp.short_name)}</option>`).join("");
+  if (contract) {
+    cpSelect.value = String(contract.counterparty_id);
+    refreshAgreementSelect(contract.agreement_id);
+    document.getElementById("ce-agreement").value = String(contract.agreement_id);
+    const cp = counterpartiesFullCache.find(c => String(c.id) === cpSelect.value);
+    refreshSpecificationSelect(cp ? cp.agreements : [], contract.specification_id);
+    document.getElementById("ce-specification").value = String(contract.specification_id);
+  } else if (counterpartiesFullCache.length) {
+    cpSelect.value = String(counterpartiesFullCache[0].id);
+    refreshAgreementSelect();
+  }
+
+  // Известные типы элементов/марки после загрузки файла — подсказка
+  // (datalist, не строгий список — ввести что-то нестандартное
+  // по-прежнему можно, напр. марку, которой ещё нет на схеме), см.
+  // Docs/backlog.md.
   document.getElementById("ce-known-types").innerHTML =
-    Object.keys(state.labelVisibility).map(t => `<option value="${t}"></option>`).join("");
+    Object.keys(state.labelVisibility).map(t => `<option value="${escapeHtml(t)}"></option>`).join("");
+  const knownMarks = new Set(state.elements.map(e => e.mark).filter(Boolean));
+  document.getElementById("ce-known-marks").innerHTML =
+    Array.from(knownMarks).sort().map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
+
   document.getElementById("ce-lines").innerHTML = "";
   if (contract && contract.lines.length) {
-    for (const l of contract.lines) addContractLineRow(l.element_type, l.quantity);
+    for (const l of contract.lines) addContractLineRow(l.element_type, l.mark, l.quantity);
   } else {
     addContractLineRow();
   }
@@ -4230,20 +5010,25 @@ document.getElementById("contracts-add").addEventListener("click", () => openCon
 document.getElementById("contract-edit-cancel").addEventListener("click", () => contractEditBackdrop.classList.remove("open"));
 document.getElementById("contract-edit-save").addEventListener("click", async () => {
   const lines = Array.from(document.querySelectorAll("#ce-lines .ce-line-row")).map(row => ({
-    element_type: row.querySelector(".ce-line-type").value.trim(),
+    element_type: row.querySelector(".ce-line-type").value.trim() || null,
+    mark: row.querySelector(".ce-line-mark").value.trim() || null,
     quantity: Number(row.querySelector(".ce-line-qty").value || 0),
-  })).filter(l => l.element_type);
+  })).filter(l => l.element_type || l.mark);
   const incidents = Array.from(document.querySelectorAll("#ce-incidents .ce-incident-row")).map(row => ({
     element_type: row.querySelector(".ce-incident-type").value.trim(),
     quantity: Number(row.querySelector(".ce-incident-qty").value || 0),
     incident_date: row.querySelector(".ce-incident-date").value,
     description: row.querySelector(".ce-incident-desc").value.trim() || null,
   })).filter(inc => inc.element_type && inc.incident_date);
+  const specificationId = document.getElementById("ce-specification").value;
+  if (!specificationId) {
+    document.getElementById("contract-edit-error").textContent = "Выберите контрагента, договор и спецификацию";
+    return;
+  }
   const body = {
     name: document.getElementById("ce-name").value.trim(),
-    supplier: document.getElementById("ce-supplier").value.trim(),
+    specification_id: Number(specificationId),
     contract_date: document.getElementById("ce-contract-date").value || null,
-    code: document.getElementById("ce-code").value.trim() || null,
     lines,
     incidents,
   };
@@ -4259,205 +5044,6 @@ document.getElementById("contract-edit-save").addEventListener("click", async ()
     await loadPlan(); // обновить список контрактов в state для карточки элемента
   } catch (e) {
     document.getElementById("contract-edit-error").textContent = e.message;
-  }
-});
-
-// ---------- Партии контракта (см. Docs/backlog.md, "Партия — учёт по маркам") ----------
-const batchesBackdrop = document.getElementById("batches-backdrop");
-const batchEditBackdrop = document.getElementById("batch-edit-backdrop");
-let batchesContractId = null; // контракт, чьи партии сейчас показаны в #batches-backdrop
-let editingBatchId = null;
-let editingBatchContractId = null; // контракт редактируемой партии (нужен для POST и для решения, перерисовывать ли список)
-
-// Тип -> подтипы -> марки, построено сканированием state.elements — тот же
-// приём, что renderPlacementFilters использует для subtypesByType/
-// marksBySubtype (сайдбар "Фильтры"), не расшаренный код, тот же принцип.
-// Нужен для каскадного выбора тип/подтип/марка в строке партии — 3
-// <select>, не текст+datalist (как у строк контракта): здесь нужно ТОЧНОЕ
-// совпадение для проверки при назначении, опечатка в свободном тексте
-// сломала бы контроль.
-function buildTypeSubtypeMarkMaps() {
-  const subtypesByType = new Map(); // type -> Set(subtype-or-"")
-  const marksBySubtype = new Map(); // `${type} ${subtype}` -> Set(mark-or-"")
-  for (const e of state.elements) {
-    const type = e.element_type;
-    const subtype = e.subtype || "";
-    const mark = e.mark || "";
-    if (!subtypesByType.has(type)) subtypesByType.set(type, new Set());
-    subtypesByType.get(type).add(subtype);
-    const key = `${type} ${subtype}`;
-    if (!marksBySubtype.has(key)) marksBySubtype.set(key, new Set());
-    marksBySubtype.get(key).add(mark);
-  }
-  return { subtypesByType, marksBySubtype };
-}
-
-async function openBatchesModal(contract) {
-  batchesContractId = contract.id;
-  document.getElementById("batches-title").textContent = `Партии контракта «${contract.name}»`;
-  await renderBatchesList();
-  batchesBackdrop.classList.add("open");
-}
-
-async function renderBatchesList() {
-  const box = document.getElementById("batches-list");
-  box.innerHTML = "";
-  const batches = await api(`/batches?contract_id=${batchesContractId}`);
-  if (!batches.length) { box.innerHTML = '<div class="hint-text">нет партий</div>'; return; }
-  for (const b of batches) {
-    const block = document.createElement("div");
-    block.className = "contract-block";
-    const linesHtml = b.lines.length
-      ? b.lines.map(l => `
-          <tr class="${l.exceeded ? "exceeded" : ""}">
-            <td>${escapeHtml(l.element_type)}</td><td>${escapeHtml(l.subtype || "—")}</td><td>${escapeHtml(l.mark || "—")}</td>
-            <td>${l.quantity}</td><td>${l.fact}</td><td>${l.remaining}</td>
-          </tr>
-        `).join("")
-      : '<tr><td colspan="6" class="hint-text">нет строк</td></tr>';
-    block.innerHTML = `
-      <div class="contract-block-header">
-        <b>${escapeHtml(b.label)}</b>
-        <button class="btn btn-sm btn-secondary" data-edit-batch="${b.id}">Изменить</button>
-        <button class="btn btn-sm btn-secondary" data-delete-batch="${b.id}">Удалить</button>
-      </div>
-      <table class="contract-lines-table">
-        <tr><th>Тип</th><th>Подтип</th><th>Марка</th><th>План</th><th>Факт</th><th>Остаток</th></tr>
-        ${linesHtml}
-      </table>
-    `;
-    box.appendChild(block);
-    block.querySelector("[data-edit-batch]").addEventListener("click", () => openBatchEdit(b));
-    block.querySelector("[data-delete-batch]").addEventListener("click", async () => {
-      if (!confirm(`Удалить партию «${b.label}»?`)) return;
-      await api(`/batches/${b.id}`, { method: "DELETE" });
-      await renderBatchesList();
-      await loadPlan(); // элементы, привязанные к ней, потеряли batch_id
-    });
-  }
-}
-document.getElementById("batches-add").addEventListener("click", () => openBatchEdit(null, batchesContractId));
-document.getElementById("batches-close").addEventListener("click", () => batchesBackdrop.classList.remove("open"));
-
-// contractId нужен только при СОЗДАНИИ новой партии (batch=null) — у уже
-// существующей партии контракт уже известен (batch.contract_id), не
-// меняется. Вызывается и из списка партий контракта, и из карточки
-// элемента (см. showCard) — единая точка редактирования партии.
-function openBatchEdit(batch, contractId) {
-  editingBatchId = batch ? batch.id : null;
-  editingBatchContractId = batch ? batch.contract_id : contractId;
-  document.getElementById("batch-edit-title").textContent = batch ? "Изменить партию" : "Новая партия";
-  document.getElementById("be-date").value = batch && batch.planned_date ? batch.planned_date.slice(0, 10) : "";
-  document.getElementById("be-lines").innerHTML = "";
-  const maps = buildTypeSubtypeMarkMaps();
-  if (batch && batch.lines.length) {
-    for (const l of batch.lines) addBatchLineRow(maps, l.element_type, l.subtype, l.mark, l.quantity);
-  } else {
-    addBatchLineRow(maps);
-  }
-  document.getElementById("batch-edit-error").textContent = "";
-  batchEditBackdrop.classList.add("open");
-}
-document.getElementById("batch-edit-cancel").addEventListener("click", () => batchEditBackdrop.classList.remove("open"));
-document.getElementById("be-add-line").addEventListener("click", () => addBatchLineRow(buildTypeSubtypeMarkMaps()));
-
-function fillTypeSelect(select, types, selected) {
-  select.innerHTML = "";
-  const opt0 = document.createElement("option");
-  opt0.value = ""; opt0.textContent = "— выберите тип —"; opt0.disabled = true;
-  if (!selected) opt0.selected = true;
-  select.appendChild(opt0);
-  for (const t of types) {
-    const opt = document.createElement("option");
-    opt.value = t; opt.textContent = t;
-    if (t === selected) opt.selected = true;
-    select.appendChild(opt);
-  }
-}
-
-// "" — легитимное значение (элемент без подтипа/марки), а не "ничего не
-// выбрано" — плейсхолдер здесь не нужен, в отличие от типа выше.
-function fillSubMarkSelect(select, values, selected, emptyLabel) {
-  select.innerHTML = "";
-  const sorted = Array.from(values).sort();
-  if (!sorted.length) sorted.push("");
-  for (const v of sorted) {
-    const opt = document.createElement("option");
-    opt.value = v;
-    opt.textContent = v || emptyLabel;
-    if (v === (selected || "")) opt.selected = true;
-    select.appendChild(opt);
-  }
-}
-
-function addBatchLineRow(maps, elementType, subtype, mark, quantity) {
-  const container = document.getElementById("be-lines");
-  const row = document.createElement("div");
-  row.className = "ce-line-row be-line-row";
-
-  const typeSelect = document.createElement("select");
-  typeSelect.className = "be-line-type";
-  const subtypeSelect = document.createElement("select");
-  subtypeSelect.className = "be-line-subtype";
-  const markSelect = document.createElement("select");
-  markSelect.className = "be-line-mark";
-  const qtyInput = document.createElement("input");
-  qtyInput.type = "number"; qtyInput.min = "0"; qtyInput.className = "be-line-qty"; qtyInput.placeholder = "кол-во";
-  qtyInput.value = quantity != null ? quantity : "";
-  const removeBtn = document.createElement("button");
-  removeBtn.type = "button"; removeBtn.className = "btn btn-sm btn-secondary be-line-remove"; removeBtn.textContent = "✕";
-  removeBtn.addEventListener("click", () => row.remove());
-
-  function refreshSubtypes(selectedSubtype, selectedMark) {
-    const type = typeSelect.value;
-    const subtypes = type && maps.subtypesByType.has(type) ? maps.subtypesByType.get(type) : new Set();
-    fillSubMarkSelect(subtypeSelect, subtypes, selectedSubtype, "— без подтипа —");
-    refreshMarks(selectedMark);
-  }
-  function refreshMarks(selectedMark) {
-    const type = typeSelect.value;
-    const key = `${type} ${subtypeSelect.value}`;
-    const marks = type && maps.marksBySubtype.has(key) ? maps.marksBySubtype.get(key) : new Set();
-    fillSubMarkSelect(markSelect, marks, selectedMark, "— без марки —");
-  }
-
-  const types = Array.from(maps.subtypesByType.keys()).sort();
-  fillTypeSelect(typeSelect, types, elementType);
-  typeSelect.addEventListener("change", () => refreshSubtypes());
-  subtypeSelect.addEventListener("change", () => refreshMarks());
-  refreshSubtypes(subtype || "", mark || "");
-
-  row.append(typeSelect, subtypeSelect, markSelect, qtyInput, removeBtn);
-  container.appendChild(row);
-}
-
-document.getElementById("batch-edit-save").addEventListener("click", async () => {
-  const lines = Array.from(document.querySelectorAll("#be-lines .be-line-row")).map(row => ({
-    element_type: row.querySelector(".be-line-type").value,
-    subtype: row.querySelector(".be-line-subtype").value || null,
-    mark: row.querySelector(".be-line-mark").value || null,
-    quantity: Number(row.querySelector(".be-line-qty").value || 0),
-  })).filter(l => l.element_type);
-  const plannedDate = document.getElementById("be-date").value;
-  if (!plannedDate) {
-    document.getElementById("batch-edit-error").textContent = "Укажите плановую дату поставки";
-    return;
-  }
-  const body = { planned_date: plannedDate, lines };
-  try {
-    if (editingBatchId) {
-      await api(`/batches/${editingBatchId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    } else {
-      await api("/batches", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...body, contract_id: editingBatchContractId }),
-      });
-    }
-    batchEditBackdrop.classList.remove("open");
-    if (batchesContractId === editingBatchContractId) await renderBatchesList();
-    await loadPlan(); // допстрока подписи на схеме и карточка элемента подхватывают изменение сразу
-  } catch (e) {
-    document.getElementById("batch-edit-error").textContent = e.message;
   }
 });
 
@@ -4991,6 +5577,14 @@ const DECAL_CHAR_WIDTH_RATIO = 0.62;
 // Текст не должен занимать больше этой доли длины — небольшой запас,
 // чтобы не "впритык" по самому краю.
 const DECAL_FIT_MARGIN = 0.92;
+// Горизонтальный отступ текстуры (getDecalTexture: paddingX=fontPx*0.3
+// с каждой стороны) в тех же "долях символа", что и DECAL_CHAR_WIDTH_RATIO
+// — canvas.height=fontPx*1.3, значит суммарный отступ (0.3*2=0.6 в долях
+// fontPx) в мировых единицах составляет 0.6/1.3 доли world-высоты
+// (=fontSize). Без этого слагаемого в maxFontByLength (см. ниже)
+// формула считала только текст, реальная ширина наклейки (текст+отступы)
+// вылезала за контур — тот же живой баг, что и у 2D-наклейки (Docs/backlog.md).
+const DECAL_PAD_WIDTH_RATIO = 0.6 / 1.3;
 // Небольшой вынос наклейки от истинной поверхности грани наружу —
 // иначе плоскость наклейки лежит РОВНО на грани элемента (тот же
 // z-fighting, что уже чинили для рёбер силуэта, см. polygonOffset
@@ -5005,31 +5599,52 @@ const DECAL_SURFACE_OFFSET_MM = 5;
 // отметке") — отдельная текстура на каждый экземпляр была бы тем же
 // классом проблемы с производительностью, что уже чинили для материалов
 // (см. getStatusMeshMaterial).
-const decalTextureCache = new Map(); // марка -> THREE.CanvasTexture
+// Ключ кэша — марка + допстрока + её цвет (не только марка) — допстрока
+// (код контрагента + плановая дата) отличается у РАЗНЫХ физических
+// элементов с ОДНОЙ и той же маркой (разные контракты/плановые даты),
+// текстуру по одной марке больше нельзя было бы безусловно шарить между
+// ними (живой запрос пользователя: "в 3Д информации о дате и контрагенте
+// не появилось вообще" — раньше наклейка вообще не показывала допстроку,
+// только марку). Элементы БЕЗ допстроки (нет плановой даты/кода) по-прежнему
+// делят одну текстуру на марку — самый частый случай, кэш не деградирует.
+const decalTextureCache = new Map(); // "марка::допстрока::цвет" -> THREE.CanvasTexture
 
-function getDecalTexture(mark) {
-  let texture = decalTextureCache.get(mark);
+// Марка и допстрока — ОДНА строка, не две (живой запрос пользователя:
+// "в одну строку марка и дата" — раньше 2 строки делали наклейку выше,
+// из-за чего она реже проходила проверку "помещается по высоте
+// стороны" в build3DMarkDecal и элемент чаще падал на плавающую
+// табличку, которая визуально "отрывается" от поверхности).
+function getDecalTexture(mark, subText, subColor) {
+  const key = `${mark}::${subText || ""}::${subColor || ""}`;
+  let texture = decalTextureCache.get(key);
   if (texture) return texture;
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const fontPx = 64; // разрешение текстуры — не мировой размер, наклейка растягивается под реальные мм на плоскости
   ctx.font = `bold ${fontPx}px sans-serif`;
-  const textWidthPx = ctx.measureText(mark).width;
+  const markWidthPx = ctx.measureText(mark + (subText ? " " : "")).width;
+  let subWidthPx = 0;
+  if (subText) { ctx.font = `${fontPx}px sans-serif`; subWidthPx = ctx.measureText(subText).width; }
   const paddingX = fontPx * 0.3;
-  canvas.width = Math.max(1, Math.ceil(textWidthPx) + paddingX * 2);
+  canvas.width = Math.max(1, Math.ceil(markWidthPx + subWidthPx) + paddingX * 2);
   canvas.height = Math.ceil(fontPx * 1.3);
   // Та же подложка/цвет, что уже подтверждена для плавающей 3D-таблички
   // (build3DLabelSprite) — визуальная согласованность между "наклейкой"
   // и запасным вариантом для коротких элементов.
   ctx.fillStyle = "rgba(255,255,255,0.85)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = currentLabelColor();
   ctx.textBaseline = "middle";
+  ctx.fillStyle = currentLabelColor();
   ctx.font = `bold ${fontPx}px sans-serif`;
   ctx.fillText(mark, paddingX, canvas.height / 2);
+  if (subText) {
+    ctx.font = `${fontPx}px sans-serif`;
+    ctx.fillStyle = subColor || "#555";
+    ctx.fillText(subText, paddingX + markWidthPx, canvas.height / 2);
+  }
   texture = new THREE.CanvasTexture(canvas);
   texture.userData.aspect = canvas.width / canvas.height;
-  decalTextureCache.set(mark, texture);
+  decalTextureCache.set(key, texture);
   return texture;
 }
 
@@ -5278,15 +5893,29 @@ function updateAllDecalOrientations() {
   }
 }
 
-// Пытается построить "наклейку" на грани(ях) элемента — только для
-// DECAL_TYPES и только если марка помещается по длине; иначе null —
-// вызывающий код падает на build3DLabelSprite (см. rebuild3DLabelSprite/
-// build3DScene).
+// Строит "наклейку" на грани(ях) элемента — только для DECAL_TYPES с
+// пригодным контуром; шрифт уменьшается, если марка+допстрока не
+// помещаются по длине стороны (живой запрос пользователя — наклейка
+// должна ВСЕГДА лежать на поверхности, не падать на плавающую табличку
+// build3DLabelSprite из-за длинного текста). null — только если контура
+// совсем нет/не того типа/марки нет вовсе (см. rebuild3DLabelSprite/
+// build3DScene — тогда используется build3DLabelSprite).
 function build3DMarkDecal(element, levels, columnTopOverrides) {
   if (!DECAL_TYPES.has(element.element_type)) return null;
   if (!element.mark || !element.outline || element.outline.length < 3) return null;
 
-  const texture = getDecalTexture(element.mark);
+  // Допстрока (код контрагента + плановая дата) — та же информация, что
+  // у плавающей 3D-подписи (build3DLabelSprite) и у 2D-наклейки, теперь
+  // и на самой наклейке на грани (раньше наклейка несла только марку —
+  // живой запрос пользователя, см. Docs/backlog.md). Цвет — тот же
+  // критерий опоздания, что у допстроки везде (computeDeliveryLateStatus).
+  const subText = elementSubLabelText(element);
+  const subColor = deliveryColorHex(element);
+  // Марка+допстрока — ОДНА строка (см. getDecalTexture) — длина для
+  // фит-чека суммарная, не максимум из двух отдельных строк.
+  const maxTextLen = element.mark.length + (subText ? subText.length + 1 : 0);
+
+  const texture = getDecalTexture(element.mark, subText, subColor);
   const aspect = texture.userData.aspect;
   const group = new THREE.Group();
   // world.X=dxf.x, world.Z=-dxf.y (см. build3DMeshForElement) — та же
@@ -5299,9 +5928,12 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
     let any = false;
     for (const side of sides) {
       const width = Math.hypot(side.b[0] - side.a[0], side.b[1] - side.a[1]);
-      const fontSize = width;
-      const textWidth = element.mark.length * fontSize * DECAL_CHAR_WIDTH_RATIO;
-      if (textWidth > height * DECAL_FIT_MARGIN) continue; // не влезает по высоте на этой стороне
+      // Шрифт УМЕНЬШАЕТСЯ, если марка+допстрока не помещаются по высоте
+      // этой стороны, а не отменяет наклейку целиком (живой запрос
+      // пользователя: "точно как наклейка в пределах элемента" — всегда
+      // на поверхности, а не иногда падать на плавающую табличку).
+      const maxFontByLength = (height * DECAL_FIT_MARGIN) / (maxTextLen * DECAL_CHAR_WIDTH_RATIO + DECAL_PAD_WIDTH_RATIO);
+      const fontSize = Math.min(width, maxFontByLength);
       any = true;
       const midX = (side.a[0] + side.b[0]) / 2, midY = (side.a[1] + side.b[1]) / 2;
       // "Наружу" — от центроида контура к середине стороны (устойчивее,
@@ -5322,9 +5954,10 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
   // Плита перекрытия / Ригель — верх и низ, вдоль длинной стороны контура.
   const dims = footprintDimensions(element.outline);
   if (!dims) return null;
-  const fontSize = dims.width;
-  const textWidth = element.mark.length * fontSize * DECAL_CHAR_WIDTH_RATIO;
-  if (textWidth > dims.length * DECAL_FIT_MARGIN) return null;
+  // Шрифт уменьшается, если марка+допстрока не помещаются по длине —
+  // не отменяет наклейку целиком (см. комментарий у Колонны выше).
+  const maxFontByLength = (dims.length * DECAL_FIT_MARGIN) / (maxTextLen * DECAL_CHAR_WIDTH_RATIO + DECAL_PAD_WIDTH_RATIO);
+  const fontSize = Math.min(dims.width, maxFontByLength);
 
   const angle = footprintLongAxisAngle(element.outline);
   const right = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle));
@@ -5386,19 +6019,17 @@ function build3DLabelSprite(element, topY) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const fontPx = 48; // размер текстуры холста — не экранный размер, см. sprite.scale ниже
-  const subFontPx = fontPx * SUBLABEL_FONT_SCALE;
   const subText = elementSubLabelText(element);
-  const paddingX = 8, paddingY = 8, lineGap = 4;
+  const paddingX = 8, paddingY = 8;
 
+  // Марка и допстрока — ОДНА строка (живой запрос пользователя: "должна
+  // быть ... в одну строку марка и дата"), не две — та же причина и то
+  // же решение, что и у наклейки на грани, см. getDecalTexture.
   ctx.font = `${fontPx}px sans-serif`;
-  const markWidth = ctx.measureText(element.mark).width;
-  let subWidth = 0;
-  if (subText) {
-    ctx.font = `${subFontPx}px sans-serif`;
-    subWidth = ctx.measureText(subText).width;
-  }
-  canvas.width = Math.ceil(Math.max(markWidth, subWidth)) + paddingX * 2;
-  canvas.height = Math.ceil(fontPx + (subText ? lineGap + subFontPx : 0)) + paddingY * 2;
+  const markWidth = ctx.measureText(element.mark + (subText ? " " : "")).width;
+  const subWidth = subText ? ctx.measureText(subText).width : 0;
+  canvas.width = Math.ceil(markWidth + subWidth) + paddingX * 2;
+  canvas.height = Math.ceil(fontPx) + paddingY * 2;
 
   // Полупрозрачная белая подложка — контраст на любом цвете элемента под
   // спрайтом (буквально то, что запрошено, см. Docs/backlog.md; в canvas,
@@ -5406,14 +6037,15 @@ function build3DLabelSprite(element, topY) {
   ctx.fillStyle = "rgba(255,255,255,0.72)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.fillStyle = currentLabelColor();
   ctx.textBaseline = "middle";
   ctx.font = `${fontPx}px sans-serif`;
+  ctx.fillStyle = currentLabelColor();
   ctx.fillText(element.mark, paddingX, paddingY + fontPx / 2);
   if (subText) {
-    ctx.font = `${subFontPx}px sans-serif`;
-    ctx.fillStyle = "#555";
-    ctx.fillText(subText, paddingX, paddingY + fontPx + lineGap + subFontPx / 2);
+    // Цвет — по опозданию против проектной даты (тот же критерий, что и
+    // 2D-допстрока, см. subLabelClass) — красный/зелёный/нейтральный.
+    ctx.fillStyle = deliveryColorHex(element);
+    ctx.fillText(subText, paddingX + markWidth, paddingY + fontPx / 2);
   }
 
   const texture = new THREE.CanvasTexture(canvas);
@@ -5421,10 +6053,6 @@ function build3DLabelSprite(element, topY) {
   const sprite = new THREE.Sprite(material);
   // Масштаб в мировых единицах (мм) — от собственного размера элемента
   // (см. label3DWorldHeight выше), не от глобального baseMarkerRadius.
-  // worldPerPx — отношение мировых единиц к пикселю холста, зафиксировано
-  // по ОДНОСТРОЧНОЙ высоте (как было раньше), чтобы марка визуально не
-  // меняла размер при появлении/исчезновении второй строки — просто
-  // спрайт становится выше/ниже.
   const referenceCanvasHeight = fontPx + paddingY * 2;
   const worldPerPx = label3DWorldHeight(element) / referenceCanvasHeight;
   const worldHeight = canvas.height * worldPerPx;
@@ -5613,25 +6241,45 @@ function apply3DLabelVisibility() {
 function rebuild3DLabelSprite(element) {
   const v3 = state.view3d;
   if (!v3.scene) return;
-  // Элемент на "наклейке" (см. build3DMarkDecal) — она показывает только
-  // марку, не допстроку партии, и от смены допстроки не зависит вовсе —
-  // пересобирать нечего.
-  if (v3.markDecalById.has(element.id)) return;
-  const old = v3.labelSpriteById.get(element.id);
-  if (old) {
-    v3.scene.remove(old);
-    old.material.map.dispose();
-    old.material.dispose();
-    v3.labelSpriteById.delete(element.id);
-  }
   const levels = computeColumnLevels();
   const columnTopOverrides = computeColumnEndExtensions(levels);
   const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
-  const sprite = build3DLabelSprite(element, topY);
-  if (!sprite) return;
-  sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
-  v3.scene.add(sprite);
-  v3.labelSpriteById.set(element.id, sprite);
+
+  // Элемент на "наклейке" (см. build3DMarkDecal) — теперь ТОЖЕ несёт
+  // допстроку (код контрагента + плановая дата, живой запрос
+  // пользователя — раньше наклейка показывала только марку), значит
+  // тоже нуждается в пересборке при смене статуса/плановой даты, не
+  // только плавающая табличка.
+  if (v3.markDecalById.has(element.id)) {
+    const oldDecal = v3.markDecalById.get(element.id);
+    v3.scene.remove(oldDecal);
+    for (const mesh of oldDecal.children) {
+      mesh.geometry.dispose();
+      // НЕ mesh.material.map.dispose() — текстура общая на (марка+допстрока+цвет), см. decalTextureCache
+      mesh.material.dispose();
+    }
+    v3.markDecalById.delete(element.id);
+    const decal = build3DMarkDecal(element, levels, columnTopOverrides);
+    if (decal) {
+      decal.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+      v3.scene.add(decal);
+      v3.markDecalById.set(element.id, decal);
+    }
+  } else {
+    const old = v3.labelSpriteById.get(element.id);
+    if (old) {
+      v3.scene.remove(old);
+      old.material.map.dispose();
+      old.material.dispose();
+      v3.labelSpriteById.delete(element.id);
+    }
+    const sprite = build3DLabelSprite(element, topY);
+    if (sprite) {
+      sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+      v3.scene.add(sprite);
+      v3.labelSpriteById.set(element.id, sprite);
+    }
+  }
 }
 
 // Едва заметная подложка ГРАНИЦ ВСЕГО ПРОЕКТА — прямоугольник по охвату
@@ -5739,6 +6387,8 @@ function build3DScene() {
     v3.scene.add(mesh);
     v3.meshById.set(element.id, mesh);
 
+    const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
+
     // Наклейка на грани (см. build3DMarkDecal) — только для Плиты
     // перекрытия/Ригеля/Колонны и только если марка помещается по длине;
     // иначе — прежняя плавающая табличка-спрайт (build3DLabelSprite).
@@ -5749,7 +6399,6 @@ function build3DScene() {
       v3.scene.add(decal);
       v3.markDecalById.set(element.id, decal);
     } else {
-      const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
       const sprite = build3DLabelSprite(element, topY);
       if (sprite) {
         sprite.visible = labelVisible;
@@ -6025,6 +6674,18 @@ function show3DTooltip(element, clientX, clientY) {
     line.textContent = label + ": " + ((value === null || value === undefined || value === "") ? "—" : value);
     tip.appendChild(line);
   }
+  // Проектная/плановая/фактическая дата + опоздание — та же информация,
+  // что на инфо-плашке (см. computeTooltipDateRows), только для элементов
+  // с проектной датой (иначе сравнивать не с чем, см. computeDeliveryLateStatus).
+  const dateRows = computeTooltipDateRows(element);
+  if (dateRows) {
+    for (const row of dateRows) {
+      const line = document.createElement("div");
+      line.className = "t3d-row " + row.cls;
+      line.textContent = row.text;
+      tip.appendChild(line);
+    }
+  }
   tip.style.display = "block";
   position3DTooltip(clientX, clientY);
 }
@@ -6112,6 +6773,14 @@ document.addEventListener("pointermove", (e) => {
 async function bootApp() {
   const ok = await checkAuth();
   if (!ok) return;
+  try {
+    const settings = await api("/settings/info-plate");
+    state.lateThresholdDays = settings.late_threshold_days;
+  } catch (e) {
+    // тихо — допстрока/подсказка просто будут использовать порог по
+    // умолчанию (0), пока настройка недоступна (напр. только что
+    // развёрнутый сервер)
+  }
   await loadSourceFiles();
   await loadPlan(false); // первая загрузка — вписать схему целиком
 }

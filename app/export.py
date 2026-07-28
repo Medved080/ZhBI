@@ -25,6 +25,13 @@ ELEMENT_COLUMNS = [
     ("nearest_axis_letter", "Ближайшая буквенная ось"),
     ("offset_x_mm", "Смещение X, мм"),
     ("offset_y_mm", "Смещение Y, мм"),
+    # "Контрактация 2.0" (см. Docs/backlog.md) — четыре независимые шкалы
+    # дат поставки, простые колонки elements, доступны в обоих экспортах
+    # (снимок на дату и полная история) без отдельной логики.
+    ("planned_delivery_date", "Плановая дата поставки"),
+    ("project_delivery_date", "Проектная дата поставки"),
+    ("project_smr_start_date", "Начало СМР"),
+    ("actual_delivery_date", "Фактическая дата поставки"),
 ]
 
 # Привязка к зонам (см. Docs/backlog.md, "Разбор структурированных имён
@@ -48,9 +55,20 @@ def _zone_names(conn) -> dict:
 
 
 def _contract_labels(conn) -> dict:
+    # "Контрактация 2.0" (см. Docs/backlog.md) — contracts.supplier убран,
+    # контрагент резолвится через цепочку specification->agreement->
+    # counterparty, та же схема, что app/contracts.py:_specification_chain.
     return {
-        r["id"]: f"{r['name']} ({r['supplier']})"
-        for r in conn.execute("SELECT id, name, supplier FROM contracts").fetchall()
+        r["id"]: f"{r['name']} ({r['counterparty_short_name']})"
+        for r in conn.execute(
+            """
+            SELECT co.id AS id, co.name AS name, c.short_name AS counterparty_short_name
+            FROM contracts co
+            JOIN specifications s ON s.id = co.specification_id
+            JOIN agreements a ON a.id = s.agreement_id
+            JOIN counterparties c ON c.id = a.counterparty_id
+            """
+        ).fetchall()
     }
 
 

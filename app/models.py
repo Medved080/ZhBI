@@ -60,12 +60,21 @@ class ElementOut(BaseModel):
     offset_y_mm: Optional[float]
     current_status: Status
     contract_id: Optional[int] = None
-    batch_id: Optional[int] = None
-    # Денормализованные скаляры для допстроки подписи на схеме (см.
-    # Docs/backlog.md) — вычисляются на сервере (JOIN/lookup), не хранятся
-    # как отдельные колонки elements.
-    contract_code: Optional[str] = None
-    batch_planned_date: Optional[str] = None
+    # Денормализованный скаляр для допстроки подписи на схеме (см.
+    # Docs/backlog.md) — вычисляется на сервере (JOIN по цепочке
+    # contract->specification->agreement->counterparty), не хранится как
+    # отдельная колонка elements. Ранее — contract_code (контракт нёс
+    # свой code); "Контрактация 2.0" переносит короткий код на
+    # counterparties.code.
+    counterparty_code: Optional[str] = None
+    # "Контрактация 2.0" (см. Docs/backlog.md) — четыре независимые шкалы
+    # дат поставки. planned/actual — простые живые поля элемента (партии
+    # убраны); project_* — заполняются импортом графика MS Project по
+    # блоку Кран/Стоянка/Этаж/Тип/Подтип (app/schedule_import.py).
+    planned_delivery_date: Optional[str] = None
+    project_delivery_date: Optional[str] = None
+    project_smr_start_date: Optional[str] = None
+    actual_delivery_date: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -125,37 +134,28 @@ class BulkStatusUpdateResult(BaseModel):
     updated: list[StatusUpdateResult]
 
 
-class BatchWarning(BaseModel):
-    """Неблокирующее предупреждение о превышении по СТРОКЕ партии (см.
-    ContractWarning — та же форма, только в разрезе марки, не типа)."""
-    batch_id: int
-    batch_label: str
-    element_type: str
-    subtype: Optional[str] = None
-    mark: Optional[str] = None
-    quantity: int
-    fact: int
+class ElementPlannedDateIn(BaseModel):
+    # null — явно снять плановую дату. Простое живое поле элемента (см.
+    # app/element_dates.py) — НЕ версионируется по status_history, партии
+    # убраны (см. Docs/backlog.md, "Контрактация 2.0").
+    planned_delivery_date: Optional[str] = None
 
 
-class ElementBatchIn(BaseModel):
-    batch_id: Optional[int] = None  # null — явно снять партию
+class ElementPlannedDateUpdateResult(ElementDetailOut):
+    pass
 
 
-class ElementBatchUpdateResult(ElementDetailOut):
-    batch_warning: Optional[BatchWarning] = None
-
-
-class BulkBatchItem(BaseModel):
+class BulkPlannedDateItem(BaseModel):
     element_id: int
-    batch_id: Optional[int] = None  # всегда явно, как BulkStatusItem.contract_id
+    planned_delivery_date: Optional[str] = None
 
 
-class BulkBatchUpdateIn(BaseModel):
-    items: list[BulkBatchItem]
+class BulkPlannedDateUpdateIn(BaseModel):
+    items: list[BulkPlannedDateItem]
 
 
-class BulkBatchUpdateResult(BaseModel):
-    updated: list[ElementBatchUpdateResult]
+class BulkPlannedDateUpdateResult(BaseModel):
+    updated: list[ElementPlannedDateUpdateResult]
 
 
 class StatusSummaryEntry(BaseModel):

@@ -167,6 +167,10 @@
     background: rgba(30,32,38,.92); color: #fff; font-size: 12px; line-height: 1.5;
     padding: 6px 10px; border-radius: var(--radius-sm); white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.25);
   }
+  #tooltip-3d .t3d-row { margin-top: 2px; padding-top: 2px; border-top: 1px solid rgba(255,255,255,.15); }
+  #tooltip-3d .t3d-row.ok { color: #9fd6a8; }
+  #tooltip-3d .t3d-row.late { color: #f2a79c; }
+  #tooltip-3d .t3d-row.neutral { color: #cfd2d8; }
   svg { width: 100%; height: 100%; display: block; }
   /* Тёмный текст на светлой подложке-плашке — "как в 3D" (см.
      build3DLabelSprite, app.js), не светлый контур вокруг тёмных букв,
@@ -184,6 +188,37 @@
   .mark-label-bg, .mark-sublabel-bg {
     pointer-events: none; fill: rgba(255,255,255,0.72);
   }
+  /* Допстрока марки (код контрагента + плановая дата, см.
+     elementSubLabelText, app.js) — цвет зависит от опоздания против
+     проектной даты (живой запрос пользователя — отдельная плашка была
+     убрана целиком из-за нагрузки на быстродействие, см. Docs/backlog.md,
+     "не грузили пользовательский компьютер"). Без даты — нейтральный
+     .mark-sublabel выше. */
+  .mark-sublabel.delivery-ok { fill: #2f7d3c; }
+  .mark-sublabel.delivery-late { fill: #c0392b; }
+  /* Марка как "наклейка" на реальном контуре элемента (см.
+     computeStickerLayout/buildOrRebuildSticker, app.js) — размер шрифта
+     в МИРОВЫХ единицах, привязан к ширине контура, не к экрану (живой
+     запрос пользователя: "не должен уменьшаться при масштабировании,
+     должна быть как наклейка ... во всю его ширину"). pointer-events:none
+     на всей группе — иначе наклейка перекрывает клик/наведение по фигуре
+     под ней (тот же класс бага, что уже чинили для инфо-плашки). */
+  .mark-sticker { pointer-events: none; }
+  .mark-sticker-bg { fill: rgba(255,255,255,0.72); }
+  .mark-sticker-mark { fill: var(--mark-label-color, #222222); font-weight: 600; }
+  .mark-sticker-sub { fill: #555; }
+  .mark-sticker-sub.delivery-ok { fill: #2f7d3c; }
+  .mark-sticker-sub.delivery-late { fill: #c0392b; }
+  #tooltip-2d {
+    position: absolute; top: 0; left: 0; z-index: 20; pointer-events: none;
+    background: rgba(30,32,38,.94); color: #fff; font-size: 12px; line-height: 1.6;
+    padding: 8px 11px; border-radius: var(--radius-sm); white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    display: none;
+  }
+  #tooltip-2d .t2d-title { font-weight: 700; margin-bottom: 2px; }
+  #tooltip-2d .t2d-row.ok { color: #9fd6a8; }
+  #tooltip-2d .t2d-row.late { color: #f2a79c; }
+  #tooltip-2d .t2d-row.neutral { color: #cfd2d8; }
   #axis-layer text { pointer-events: none; }
   /* -------- зоны (захватка/кран/стоянка) — см. Docs/backlog.md,
      "Разбор структурированных имён слоёв DWG/DXF..." -------- */
@@ -251,8 +286,12 @@
   .filter-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .filter-group-header span { font-size: 12px; font-weight: 600; flex: 1; }
   .link-btn { background: none; border: none; padding: 0; font-size: 11px; color: var(--color-primary); cursor: pointer; }
-  .card-batch-link { color: var(--color-primary); cursor: pointer; text-decoration: underline; }
   .link-btn:hover { text-decoration: underline; }
+  /* Полноразмерная текстовая ссылка (номер+дата договора/спецификации,
+     см. app.js renderCounterpartyAgreements) — открывает форму
+     редактирования по клику, вместо отдельной кнопки "Изменить". */
+  .hyperlink { background: none; border: none; padding: 0; font: inherit; color: var(--color-primary); cursor: pointer; text-decoration: underline; text-align: left; }
+  .hyperlink:hover { text-decoration: none; }
   .filter-group .toggle { margin-top: 4px; }
   .filter-group .toggle.filter-parent { font-weight: 600; margin-top: 0; flex: 1; }
   .filter-group .toggle.filter-child { margin-left: 20px; font-weight: 400; flex: 1; }
@@ -324,6 +363,8 @@
   #card table { width: 100%; border-collapse: collapse; }
   #card td { padding: 5px 2px; border-bottom: 1px solid var(--color-border); vertical-align: top; }
   #card td.k { color: var(--color-text-muted); white-space: nowrap; padding-right: 10px; font-size: 12px; }
+  #card tr.date-row-late td { color: #9c3428; font-weight: 600; }
+  #card tr.date-row-late td.k { color: #9c3428; }
   #history-table { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 12px; }
   #history-table td, #history-table th { padding: 4px 4px; border-bottom: 1px solid var(--color-border); text-align: left; }
   #history-table th { color: var(--color-text-muted); font-weight: 500; }
@@ -403,6 +444,12 @@
   .modal-sticky-foot .actions { margin-top: 10px; }
   .modal h2 { font-size: 16px; margin: 0 0 14px; font-weight: 600; }
   .modal .row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; gap: 10px; }
+  /* date-инпут внутри .row рядом с текстовым flex:1 — без этого width:100%
+     (см. .modal input[type=date] ниже) становится его flex-basis (flex-basis:
+     auto наследует width), почти вся строка уходит под дату, текстовое поле
+     номера сжимается до нескольких пикселей (живой баг, см. Docs/backlog.md,
+     формы редактирования договора/спецификации). */
+  .modal .row input[type="date"] { flex: 0 0 auto; width: auto; }
   .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
   .modal input[type="color"] { width: 40px; height: 28px; border: none; padding: 0; background: none; }
   .modal input[type="date"], .modal input[type="datetime-local"], .modal input[type="text"],
@@ -594,12 +641,17 @@
         <button id="menu-shapes" class="admin-only">Форма маркеров</button>
         <button id="menu-zone-colors" class="admin-only">Цвета зон</button>
         <button id="menu-subtypes" class="admin-only">Справочник подтипов</button>
+        <button id="menu-mark-prefixes" class="admin-only">Справочник префиксов марок</button>
         <button id="menu-users" class="admin-only">Пользователи</button>
+        <button id="menu-counterparties" class="admin-only">Контрагенты</button>
         <button id="menu-contracts" class="admin-only">Контракты</button>
+        <button id="menu-info-plate-settings" class="admin-only">Порог опоздания поставки</button>
         <div class="dropdown-divider admin-only">Обмен данными</div>
         <button id="btn-export" class="admin-only">Экспорт в XLS</button>
         <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
         <button id="menu-history-import" class="admin-only">Импорт истории из XLS</button>
+        <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
+        <button id="menu-schedule-import" class="admin-only">Импорт графика МС Project из XLS</button>
         <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
         <div class="dropdown-divider admin-only">Тестирование</div>
         <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов…</button>
@@ -633,10 +685,11 @@
       <button class="btn btn-sm btn-secondary" id="zoom-reset" title="Сбросить на всю схему">⟲</button>
     </div>
     <div id="rubber-band"></div>
+    <div id="tooltip-2d"></div>
     <div id="multi-select-panel">
       <span id="multi-select-count">Выделено: 0</span>
       <button class="btn btn-sm btn-primary" id="multi-select-status-btn">Изменить статус…</button>
-      <button class="btn btn-sm btn-secondary" id="multi-select-batch-btn">Назначить партию…</button>
+      <button class="btn btn-sm btn-secondary" id="multi-select-planned-date-btn">Плановая дата поставки…</button>
       <button class="btn btn-sm btn-secondary" id="multi-select-clear">✕</button>
     </div>
   </div>
@@ -872,6 +925,104 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="contracting-import-backdrop">
+  <div class="modal">
+    <h2>Импорт контрактации из XLS</h2>
+    <p class="hint-text">Создаёт/находит Контрагентов, Договоры, Спецификации и Контракты с позициями по файлу.</p>
+    <label class="field">Файл .xlsx (лист "Контрактация")</label>
+    <input type="file" id="contracting-import-file" accept=".xlsx"/>
+    <div id="contracting-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="contracting-import-cancel">Отмена</button>
+      <button class="btn btn-primary" id="contracting-import-submit">Импортировать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="schedule-import-backdrop">
+  <div class="modal">
+    <h2>Импорт графика МС Project из XLS</h2>
+    <p class="hint-text">Заполняет проектную дату поставки и начало СМР элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип.</p>
+    <label class="field">Файл .xlsx (лист графика)</label>
+    <input type="file" id="schedule-import-file" accept=".xlsx"/>
+    <div id="schedule-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="schedule-import-cancel">Отмена</button>
+      <button class="btn btn-primary" id="schedule-import-submit">Импортировать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="counterparties-backdrop">
+  <div class="modal wide">
+    <h2>Контрагенты</h2>
+    <div id="counterparties-list"></div>
+    <button class="btn btn-secondary" id="counterparties-add">Добавить контрагента</button>
+    <div class="actions">
+      <button class="btn btn-secondary" id="counterparties-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="counterparty-edit-backdrop">
+  <div class="modal wide">
+    <h2 id="counterparty-edit-title">Контрагент</h2>
+    <label class="field">Полное наименование</label><input type="text" id="cpe-full-name"/>
+    <label class="field">Краткое наименование</label><input type="text" id="cpe-short-name"/>
+    <label class="field">ИНН</label><input type="text" id="cpe-inn"/>
+    <label class="field">КПП</label><input type="text" id="cpe-kpp"/>
+    <label class="field">ОГРН</label><input type="text" id="cpe-ogrn"/>
+    <label class="field">Юридический адрес</label><input type="text" id="cpe-legal-address"/>
+    <label class="field">Контактное лицо</label><input type="text" id="cpe-contact-person"/>
+    <label class="field">Контактный телефон</label><input type="text" id="cpe-contact-phone"/>
+    <label class="field">Код (для компактной подписи на схеме)</label><input type="text" id="cpe-code"/>
+    <div class="error-text" id="counterparty-edit-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="counterparty-edit-cancel">Отмена</button>
+      <button class="btn btn-primary" id="counterparty-edit-save">Сохранить</button>
+    </div>
+    <div id="counterparty-agreements-section" style="display:none; margin-top:18px; border-top:1px solid var(--color-border); padding-top:12px;">
+      <h3>Договоры</h3>
+      <div id="cpe-agreements-list"></div>
+      <div class="row" style="gap:6px; margin-top:8px;">
+        <input type="text" id="cpe-new-agreement-number" placeholder="номер договора" style="flex:1;"/>
+        <input type="date" id="cpe-new-agreement-date"/>
+        <button class="btn btn-sm btn-secondary" id="cpe-add-agreement">+ Договор</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="mark-type-prefixes-backdrop">
+  <div class="modal">
+    <h2>Справочник префиксов марок</h2>
+    <p class="hint-text">Используется импортом контрактации для определения типа элемента по марке, если она ещё не встречается ни у одного загруженного элемента.</p>
+    <div id="mark-type-prefixes-list"></div>
+    <div class="row" style="gap:6px; margin-top:10px;">
+      <input type="text" id="mtp-new-prefix" placeholder="префикс, напр. ПП" style="flex:1;"/>
+      <select id="mtp-new-type"></select>
+      <button class="btn btn-sm btn-secondary" id="mtp-add">+ Добавить</button>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="mark-type-prefixes-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="info-plate-settings-backdrop">
+  <div class="modal">
+    <h2>Порог опоздания поставки</h2>
+    <p class="hint-text">Плановая или фактическая дата поставки считается опозданием (подсветка в подсказке при наведении и в подписи марки), если превышает проектную дату больше чем на это число дней.</p>
+    <label class="field">Порог, дней</label>
+    <input type="number" id="ips-threshold" min="0"/>
+    <div class="error-text" id="info-plate-settings-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="info-plate-settings-cancel">Отмена</button>
+      <button class="btn btn-primary" id="info-plate-settings-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="contracts-backdrop">
   <div class="modal wide">
     <h2>Контракты</h2>
@@ -896,11 +1047,9 @@
       <button class="btn btn-sm btn-secondary" id="sc-datetime-clear" title="Очистить — сервер применит текущий момент">✕</button>
     </div>
     <div id="sc-contract-section">
-      <p class="hint-text">Элемент переходит со статуса «Запланирован» — укажите, по какому контракту он поставляется, и партию, если уже известна.</p>
+      <p class="hint-text">Элемент переходит со статуса «Запланирован» — укажите, по какому контракту он поставляется.</p>
       <label class="field">Контракт</label>
       <select id="sc-contract-select"></select>
-      <label class="field">Партия (если уже известна)</label>
-      <select id="sc-batch-select" disabled></select>
     </div>
     <div class="actions">
       <button class="btn btn-secondary" id="sc-cancel">Отмена</button>
@@ -943,81 +1092,85 @@
 </div>
 
 <div class="modal-backdrop" id="contract-edit-backdrop">
-  <div class="modal wide">
-    <h2 id="contract-edit-title">Контракт</h2>
-    <label class="field">Название/номер</label><input type="text" id="ce-name"/>
-    <label class="field">Поставщик</label><input type="text" id="ce-supplier"/>
-    <label class="field">Дата контракта</label><input type="date" id="ce-contract-date"/>
-    <label class="field">Код контрагента</label><input type="text" id="ce-code" placeholder="для компактной подписи на схеме"/>
-    <label class="field" style="margin-bottom:2px;">Строки: тип элемента + количество</label>
-    <div id="ce-lines"></div>
-    <datalist id="ce-known-types"></datalist>
-    <button class="btn btn-secondary btn-sm" id="ce-add-line" style="margin-top:6px;">+ строка</button>
-    <label class="field" style="margin-bottom:2px; margin-top:14px;">Инциденты повреждений на стройке</label>
-    <div id="ce-incidents"></div>
-    <button class="btn btn-secondary btn-sm" id="ce-add-incident" style="margin-top:6px;">+ инцидент</button>
-    <div class="error-text" id="contract-edit-error"></div>
-    <div class="actions">
-      <button class="btn btn-secondary" id="contract-edit-cancel">Отмена</button>
-      <button class="btn btn-primary" id="contract-edit-save">Сохранить</button>
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2 id="contract-edit-title">Контракт</h2>
+      <div class="view-mode-switch" id="ce-view-toggle" role="group" aria-label="Вид">
+        <button type="button" class="view-mode-btn active" data-ce-view="main">Основное</button>
+        <button type="button" class="view-mode-btn" data-ce-view="expanded">Развёрнуто</button>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="ce-view-main">
+        <label class="field">Название/номер</label><input type="text" id="ce-name"/>
+        <label class="field">Контрагент</label><select id="ce-counterparty"></select>
+        <label class="field">Договор</label><select id="ce-agreement"></select>
+        <label class="field">Спецификация</label><select id="ce-specification"></select>
+        <label class="field">Дата контракта</label><input type="date" id="ce-contract-date"/>
+        <label class="field" style="margin-bottom:2px;">Строки: тип элемента + марка + количество</label>
+        <div id="ce-lines"></div>
+        <datalist id="ce-known-types"></datalist>
+        <datalist id="ce-known-marks"></datalist>
+        <button class="btn btn-secondary btn-sm" id="ce-add-line" style="margin-top:6px;">+ строка</button>
+        <label class="field" style="margin-bottom:2px; margin-top:14px;">Инциденты повреждений на стройке</label>
+        <div id="ce-incidents"></div>
+        <button class="btn btn-secondary btn-sm" id="ce-add-incident" style="margin-top:6px;">+ инцидент</button>
+      </div>
+      <div id="ce-view-expanded" style="display:none;">
+        <p class="hint-text">Сначала — физические элементы схемы, уже привязанные к контракту (плановую дату можно проставить прямо здесь или через схему 2D/3D), затем — незаполненные позиции контракта (ещё без привязки).</p>
+        <table class="bulk-status-table">
+          <thead>
+            <tr><th>Элемент схемы</th><th>Тип</th><th>Марка</th><th>Статус</th><th>Проектная дата</th><th>Плановая дата</th><th>Фактическая дата</th></tr>
+          </thead>
+          <tbody id="contract-elements-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="error-text" id="contract-edit-error"></div>
+      <div class="error-text" id="contract-elements-error"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="contract-edit-cancel">Отмена</button>
+        <button class="btn btn-primary" id="contract-edit-save">Сохранить</button>
+      </div>
     </div>
   </div>
 </div>
 
-<div class="modal-backdrop" id="batches-backdrop">
-  <div class="modal wide">
-    <h2 id="batches-title">Партии контракта</h2>
-    <div id="batches-list"></div>
-    <button class="btn btn-secondary" id="batches-add">Добавить партию</button>
-    <div class="actions">
-      <button class="btn btn-secondary" id="batches-close">Закрыть</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-backdrop" id="batch-edit-backdrop">
-  <div class="modal wide">
-    <h2 id="batch-edit-title">Партия</h2>
-    <label class="field">Плановая дата поставки</label><input type="date" id="be-date"/>
-    <label class="field" style="margin-bottom:2px;">Строки: тип / подтип / марка / количество</label>
-    <div id="be-lines"></div>
-    <button class="btn btn-secondary btn-sm" id="be-add-line" style="margin-top:6px;">+ строка</button>
-    <div class="error-text" id="batch-edit-error"></div>
-    <div class="actions">
-      <button class="btn btn-secondary" id="batch-edit-cancel">Отмена</button>
-      <button class="btn btn-primary" id="batch-edit-save">Сохранить</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-backdrop" id="batch-assign-backdrop">
+<div class="modal-backdrop" id="planned-date-backdrop">
   <div class="modal">
-    <h2>Выбор партии</h2>
-    <p class="hint-text">Показаны только партии, где есть строка, подходящая под тип/подтип/марку этого элемента.</p>
-    <label class="field">Партия</label>
-    <select id="ba-batch-select"></select>
-    <div class="error-text" id="batch-assign-error"></div>
+    <h2>Плановая дата поставки</h2>
+    <label class="field">Дата</label>
+    <div class="row" style="gap:6px; align-items:center;">
+      <input type="date" id="pd-date" style="flex:1;"/>
+      <button class="btn btn-sm btn-secondary" id="pd-clear" title="Очистить">✕</button>
+    </div>
+    <div class="error-text" id="planned-date-error"></div>
     <div class="actions">
-      <button class="btn btn-secondary" id="ba-cancel">Отмена</button>
-      <button class="btn btn-primary" id="ba-confirm">Подтвердить</button>
+      <button class="btn btn-secondary" id="pd-cancel">Отмена</button>
+      <button class="btn btn-primary" id="pd-confirm">Подтвердить</button>
     </div>
   </div>
 </div>
 
-<div class="modal-backdrop" id="bulk-batch-backdrop">
+<div class="modal-backdrop" id="bulk-planned-date-backdrop">
   <div class="modal wide">
-    <h2 id="bulk-batch-title">Назначить партию</h2>
+    <h2 id="bulk-planned-date-title">Плановая дата поставки</h2>
+    <div class="row">
+      <label class="field" style="margin:0;">Дата для незаполненных строк</label>
+      <input type="date" id="bulk-fill-planned-date"/>
+      <button class="btn btn-sm btn-secondary" id="bulk-fill-planned-date-apply">Заполнить пустые</button>
+    </div>
     <table class="bulk-status-table">
       <thead>
-        <tr><th>ID</th><th>Марка</th><th>Тип</th><th>Контракт</th><th>Партия</th><th></th></tr>
+        <tr><th>ID</th><th>Марка</th><th>Тип</th><th>Плановая дата</th><th></th></tr>
       </thead>
-      <tbody id="bulk-batch-tbody"></tbody>
+      <tbody id="bulk-planned-date-tbody"></tbody>
     </table>
-    <div class="error-text" id="bulk-batch-error"></div>
-    <div class="warning-text" id="bulk-batch-warning"></div>
+    <div class="error-text" id="bulk-planned-date-error"></div>
     <div class="actions">
-      <button class="btn btn-secondary" id="bulk-batch-cancel">Отмена</button>
-      <button class="btn btn-primary" id="bulk-batch-apply">Применить</button>
+      <button class="btn btn-secondary" id="bulk-planned-date-cancel">Отмена</button>
+      <button class="btn btn-primary" id="bulk-planned-date-apply">Применить</button>
     </div>
   </div>
 </div>

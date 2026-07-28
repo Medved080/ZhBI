@@ -108,26 +108,98 @@ CREATE TABLE IF NOT EXISTS label_visibility (
     visible INTEGER NOT NULL DEFAULT 1
 );
 
--- Контракты (см. Docs/backlog.md, второй раунд п.9, третий раунд п.8).
--- Один контракт = один поставщик, с расшифровкой законтрактованных
--- количеств по типам элементов в contract_lines. Не привязаны к конкретному
+-- Контрагенты/Договоры/Спецификации (см. Docs/backlog.md, "Контрактация 2.0") —
+-- заменяют старое свободнотекстовое contracts.supplier настоящей юридической
+-- иерархией. Контрагент — юрлицо-поставщик, Договор — конкретный договор с
+-- ним (номер+дата), Спецификация — приложение к договору (номер+дата), к
+-- которому уже привязывается сам Контракт (см. ниже).
+CREATE TABLE IF NOT EXISTS counterparties (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    full_name TEXT NOT NULL,
+    short_name TEXT NOT NULL,
+    inn TEXT,
+    kpp TEXT,
+    ogrn TEXT,
+    legal_address TEXT,
+    contact_person TEXT,
+    contact_phone TEXT,
+    code TEXT,                 -- короткий код для допстроки подписи на схеме
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS agreements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    counterparty_id INTEGER NOT NULL REFERENCES counterparties (id) ON DELETE CASCADE,
+    number TEXT NOT NULL,
+    agreement_date TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (counterparty_id, number)
+);
+
+CREATE TABLE IF NOT EXISTS specifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agreement_id INTEGER NOT NULL REFERENCES agreements (id) ON DELETE CASCADE,
+    number TEXT NOT NULL,
+    specification_date TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (agreement_id, number)
+);
+
+-- Эвристика "префикс марки -> тип элемента", используется импортом файла
+-- контрактации, когда марка позиции ещё не встречается ни у одного
+-- загруженного элемента (справочник донастраивается администратором, не
+-- хардкод — см. Docs/backlog.md).
+CREATE TABLE IF NOT EXISTS mark_type_prefixes (
+    prefix TEXT PRIMARY KEY,
+    element_type TEXT NOT NULL
+);
+
+-- Общие настройки приложения (ключ-значение) — напр. порог "красной"
+-- инфо-плашки в днях (см. Docs/backlog.md, "Контрактация 2.0").
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+-- Контракты (см. Docs/backlog.md, второй раунд п.9, третий раунд п.8,
+-- "Контрактация 2.0"). Контракт привязан к одной Спецификации (а через неё —
+-- транзитивно к Договору и Контрагенту), с расшифровкой законтрактованных
+-- количеств по (тип, марка) в contract_lines. Не привязан к конкретному
 -- source_file — контракт на поставку колонн действует в рамках всего
 -- проекта, не одного чертежа.
 CREATE TABLE IF NOT EXISTS contracts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    supplier TEXT NOT NULL,
+    specification_id INTEGER NOT NULL REFERENCES specifications (id) ON DELETE RESTRICT,
+    contract_date TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Строка контракта — план по (тип, марка). mark допускает NULL (позиция
+-- может быть без марки) — сравнение с элементом обязано быть NULL-safe
+-- (SQL IS, не =), как раньше делали batch_lines (см. Docs/backlog.md).
+-- element_type ТОЖЕ допускает NULL — импорт файла контрактации
+-- (app/contracting_import.py) не всегда может определить тип по марке
+-- (эвристика по префиксу, справочник mark_type_prefixes); такая позиция
+-- создаётся с element_type=NULL и попадает в сводку импорта как
+-- "тип не определён", администратор донастраивает вручную.
 CREATE TABLE IF NOT EXISTS contract_lines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE CASCADE,
-    element_type TEXT NOT NULL,
-    quantity INTEGER NOT NULL,
-    UNIQUE (contract_id, element_type)
+    element_type TEXT,
+    mark TEXT,
+    quantity INTEGER NOT NULL
 );
+
+-- NULL-safe уникальность (contract_id, element_type, mark) — см.
+-- app/db.py:_ensure_contract_lines_index(). НЕ здесь: на существующей БД
+-- (ещё старой формы, до _migrate_contracts_hierarchy) contract_lines в
+-- момент выполнения этого скрипта может не иметь колонки mark —
+-- CREATE INDEX сразу упал бы, executescript отрабатывает раньше миграций.
 
 -- Инциденты повреждения элементов на стройке в рамках контракта — только
 -- количество (тип + число), без привязки к конкретным elements.id и без
@@ -149,42 +221,6 @@ CREATE TABLE IF NOT EXISTS default_contracts (
     element_type TEXT PRIMARY KEY,
     contract_id INTEGER REFERENCES contracts (id) ON DELETE SET NULL
 );
-
--- Партия — конкретная поставка в рамках контракта: плановая дата +
--- разбивка по маркам (см. Docs/backlog.md, "Партия — учёт по маркам").
--- В отличие от contract_lines (план по ТИПУ на весь контракт),
--- batch_lines детализируют план до марки и относятся к одной партии.
--- CASCADE (не SET NULL, как у elements.contract_id/batch_id) — партия
--- без контракта бессмысленна, метку не собрать.
-CREATE TABLE IF NOT EXISTS batches (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE CASCADE,
-    planned_date TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_batches_contract ON batches (contract_id);
-
--- Строка партии: тип+подтип+марка -> плановое количество. subtype/mark
--- допускают NULL (элемент может быть без подтипа/марки) — сравнение с
--- элементом при назначении обязано быть NULL-safe (SQL IS, не =).
-CREATE TABLE IF NOT EXISTS batch_lines (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    batch_id INTEGER NOT NULL REFERENCES batches (id) ON DELETE CASCADE,
-    element_type TEXT NOT NULL,
-    subtype TEXT,
-    mark TEXT,
-    quantity INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_batch_lines_batch ON batch_lines (batch_id);
-
--- NULL-safe уникальность: subtype/mark часто NULL, а обычный UNIQUE(...)
--- в SQLite не считает NULL=NULL — без COALESCE две "одинаковые" строки
--- (тип, без подтипа, без марки) беспрепятственно продублировались бы.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_batch_lines_unique
-    ON batch_lines (batch_id, element_type, COALESCE(subtype, ''), COALESCE(mark, ''));
 
 -- Форма маркера на схеме по комбинации (слой, тип элемента) — см.
 -- Docs/backlog.md. По умолчанию всё рисуется "как в оригинале" (реальный

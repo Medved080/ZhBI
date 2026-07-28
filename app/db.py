@@ -43,16 +43,14 @@ _COLUMN_MIGRATIONS = [
     # scripts/zone_parser._link_stances_to_cranes, Docs/backlog.md).
     ("zones", "parent_zone_id", "INTEGER REFERENCES zones(id) ON DELETE SET NULL"),
     ("zones", "parent_match_status", "TEXT"),
-    # Партия (см. Docs/backlog.md, "Партия — учёт по маркам") — дата
-    # подписания контракта и короткий код контрагента (для компактной
-    # допстроки подписи на схеме), у старых контрактов остаются NULL.
+    # Дата подписания контракта, у старых контрактов остаётся NULL.
+    # ("contracts", "code", ...) сюда сознательно НЕ входит и был убран —
+    # "Контрактация 2.0" (см. Docs/backlog.md) переносит короткий код на
+    # counterparties.code; если оставить эту миграцию, _apply_migrations
+    # будет молча возвращать contracts.code на каждом следующем старте
+    # приложения (_migrate_contracts_hierarchy — одноразовая по маркеру
+    # supplier, снять код второй раз ей уже нечем).
     ("contracts", "contract_date", "TEXT"),
-    ("contracts", "code", "TEXT"),
-    # Живое поле, БЕЗ версионирования по status_history (назначение партии
-    # не привязано к смене статуса, см. план) — таблица batches уже
-    # существует к этому моменту (executescript схемы отрабатывает раньше
-    # миграций, см. init_db ниже), так что FK можно объявить сразу.
-    ("elements", "batch_id", "INTEGER REFERENCES batches(id) ON DELETE SET NULL"),
     # Персональный цвет подписей марок (2D/3D) — NULL = использовать
     # дефолт (см. DEFAULT_LABEL_COLOR на фронтенде).
     ("users", "label_color", "TEXT"),
@@ -60,6 +58,15 @@ _COLUMN_MIGRATIONS = [
     # (см. scripts/layer_naming.py, Docs/backlog.md, "Свойство 'этаж'").
     # NULL у элементов, чьи слои этот суффикс ещё не проставляют.
     ("elements", "floor", "INTEGER"),
+    # "Контрактация 2.0" (см. Docs/backlog.md) — четыре независимые шкалы
+    # дат поставки элемента. planned/actual пишутся индивидуально на каждый
+    # физический элемент (не на партию, партии убраны); project_* —
+    # заполняются импортом графика MS Project по блоку
+    # Кран/Стоянка/Этаж/Тип/Подтип (см. app/schedule_import.py).
+    ("elements", "planned_delivery_date", "TEXT"),
+    ("elements", "project_delivery_date", "TEXT"),
+    ("elements", "project_smr_start_date", "TEXT"),
+    ("elements", "actual_delivery_date", "TEXT"),
 ]
 
 
@@ -144,6 +151,116 @@ def _migrate_contracts_structure(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE contracts_old")
 
 
+def _migrate_contracts_hierarchy(conn: sqlite3.Connection) -> None:
+    """
+    "Контрактация 2.0" (см. Docs/backlog.md) заменяет contracts.supplier
+    (свободный текст) на цепочку specification_id -> agreements ->
+    counterparties, а contract_lines получает mark. Живой запрос
+    пользователя — тестовый контур, старые contracts/contract_lines/
+    contract_incidents/batches/batch_lines НЕ переносятся, а сбрасываются
+    (маркер старой формы — наличие столбца supplier в contracts; на новой
+    БД CREATE TABLE IF NOT EXISTS в schema.sql уже создаёт новую форму
+    сразу, эта функция тогда не находит supplier и сразу возвращается).
+    Тот же rename->create->drop приём, что уже применялся в
+    _migrate_contracts_structure выше (там же — почему PRAGMA foreign_keys
+    выключается на время rename+drop).
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(contracts)")}
+    if "supplier" not in cols:
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("DELETE FROM contract_incidents")
+    conn.execute("DELETE FROM contract_lines")
+    has_batches = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='batches'"
+    ).fetchone()
+    if has_batches:
+        conn.execute("DELETE FROM batch_lines")
+        conn.execute("DELETE FROM batches")
+    conn.execute("UPDATE elements SET contract_id = NULL")
+    if "batch_id" in {row["name"] for row in conn.execute("PRAGMA table_info(elements)")}:
+        conn.execute("UPDATE elements SET batch_id = NULL")
+    conn.execute("UPDATE status_history SET contract_id = NULL")
+    conn.execute("UPDATE default_contracts SET contract_id = NULL")
+
+    conn.execute("ALTER TABLE contracts RENAME TO contracts_old_v3")
+    conn.execute(
+        """
+        CREATE TABLE contracts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            specification_id INTEGER NOT NULL REFERENCES specifications (id) ON DELETE RESTRICT,
+            contract_date TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute("DROP TABLE contracts_old_v3")
+
+    conn.execute("ALTER TABLE contract_lines RENAME TO contract_lines_old_v3")
+    conn.execute(
+        """
+        CREATE TABLE contract_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE CASCADE,
+            element_type TEXT,
+            mark TEXT,
+            quantity INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute("DROP TABLE contract_lines_old_v3")
+
+    conn.execute("DROP TABLE IF EXISTS batch_lines")
+    conn.execute("DROP TABLE IF EXISTS batches")
+
+
+def _ensure_contract_lines_index(conn: sqlite3.Connection) -> None:
+    """Создаётся отдельно от schema.sql, а не CREATE INDEX IF NOT EXISTS
+    прямо в скрипте — на существующей БД, ещё не прошедшей
+    _migrate_contracts_hierarchy к моменту выполнения executescript,
+    contract_lines может быть старой формы (без колонки mark), и CREATE
+    INDEX упал бы раньше, чем миграция успела бы пересоздать таблицу.
+    Вызывается после обеих структурных миграций, когда форма уже
+    гарантированно новая — что на свежей БД (schema.sql создал сразу),
+    что на мигрированной. COALESCE на ОБЕИХ колонках — element_type тоже
+    допускает NULL (импорт с нераспознанным типом марки, см.
+    app/contracting_import.py), обычный UNIQUE(...) в SQLite не считает
+    NULL=NULL, без COALESCE две строки-дубликата с одинаковой маркой без
+    определённого типа продублировались бы молча."""
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_lines_unique "
+        "ON contract_lines (contract_id, COALESCE(element_type, ''), COALESCE(mark, ''))"
+    )
+
+
+_MARK_TYPE_PREFIX_SEED = [
+    ("КН", "Колонна"), ("Кн", "Колонна"), ("Кс", "Колонна"), ("кс", "Колонна"),
+    ("П-", "Плита перекрытия"), ("ПИ-", "Плита перекрытия"), ("Пд-", "Плита перекрытия"),
+    ("Р", "Ригель"), ("РИ", "Ригель"), ("Рк", "Ригель"),
+    ("ПЦ-", "Панель"),
+]
+
+_APP_SETTINGS_SEED = [
+    ("info_plate_late_threshold_days", "0"),
+]
+
+
+def _seed_reference_data(conn: sqlite3.Connection) -> None:
+    """Идемпотентный сидинг (INSERT OR IGNORE) — безопасно гонять на каждом
+    старте, как и _normalize_element_type_vocabulary ниже."""
+    conn.executemany(
+        "INSERT OR IGNORE INTO mark_type_prefixes (prefix, element_type) VALUES (?, ?)",
+        _MARK_TYPE_PREFIX_SEED,
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
+        _APP_SETTINGS_SEED,
+    )
+
+
 # Старый конвейер (LAYER_CONFIG в scripts/parse_zhbi.py) когда-то отдавал
 # английские element_type ("column"/"beam"), новый стандарт имён слоёв —
 # русские ("Колонна"/"Ригель"/...) — парсер уже приведён к единому русскому
@@ -213,7 +330,10 @@ def init_db() -> None:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         _apply_migrations(conn)
         _migrate_contracts_structure(conn)
+        _migrate_contracts_hierarchy(conn)
+        _ensure_contract_lines_index(conn)
         _normalize_element_type_vocabulary(conn)
+        _seed_reference_data(conn)
         conn.commit()
     finally:
         conn.close()

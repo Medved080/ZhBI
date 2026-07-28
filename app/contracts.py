@@ -1,18 +1,23 @@
 """
-Контракты: поставщик x несколько строк "тип элемента + количество"
-(Docs/backlog.md, третий раунд, п.8 — переход от одной строки на контракт
-к нормальной структуре контракт+строки, было: раунд 2, п.9). Контракты не
-привязаны к source_file — контракт на поставку колонн действует в рамках
-всего проекта, не одного чертежа.
+Контракты (см. Docs/backlog.md, "Контрактация 2.0"): контракт привязан к
+одной Спецификации (app/counterparties.py) — а через неё транзитивно к
+Договору и Контрагенту, с расшифровкой законтрактованных количеств по
+(тип, марка) в contract_lines. Контракты не привязаны к конкретному
+source_file — контракт на поставку колонн действует в рамках всего
+проекта, не одного чертежа.
 
 "Факт" по строке контракта — количество элементов с этим contract_id, этим
-element_type и статусом НЕ "planned". Привязка элемента к контракту хранится
-в каждой записи status_history (не напрямую у элемента, см. п.7 третьего
-раунда — поле у элемента стало только для чтения) — elements.contract_id
-остаётся денормализованным кэшем "текущего" контракта (= contract_id самой
-последней по changed_at записи истории), пересчитывается бэкендом при
-каждом добавлении/удалении записи истории, никогда не устанавливается
-напрямую через отдельный API-эндпоинт.
+(element_type, mark) и статусом НЕ "planned". Привязка элемента к контракту
+хранится в каждой записи status_history (не напрямую у элемента) —
+elements.contract_id остаётся денормализованным кэшем "текущего" контракта
+(= contract_id самой последней по changed_at записи истории), пересчитывается
+бэкендом при каждом добавлении/удалении записи истории, никогда не
+устанавливается напрямую через отдельный API-эндпоинт.
+
+Партии (batches) убраны целиком (см. Docs/backlog.md) — плановая дата
+поставки теперь простое живое поле на самом элементе
+(elements.planned_delivery_date, app/element_dates.py), а не отдельная
+сущность с разбивкой по маркам.
 """
 
 import sqlite3
@@ -22,14 +27,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import get_current_user, require_admin
-from app.batches import clear_stale_batch_assignment, enrich_element_row
 from app.db import get_connection
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
 
 
 class ContractLineIn(BaseModel):
-    element_type: str
+    # None — тип не определён (см. app/contracting_import.py: марка не
+    # найдена ни у одного элемента, эвристика по префиксу тоже не дала
+    # результата); администратор донастраивает вручную в справочнике.
+    # Форма создания контракта в UI требует выбор типа явно (не
+    # позволяет отправить None), но модель должна уметь прочитать уже
+    # существующую такую строку обратно.
+    element_type: Optional[str] = None
+    mark: Optional[str] = None
     quantity: int
 
 
@@ -42,8 +53,10 @@ class ContractLineOut(ContractLineIn):
 
 
 # Инцидент повреждения элементов на стройке — только количество (тип +
-# число), без привязки к конкретным elements.id и без отдельного статуса
-# подтверждения (см. Docs/backlog.md, "Учёт повреждённых элементов...").
+# число), без привязки к конкретным elements.id, без марки и без
+# отдельного статуса подтверждения (см. Docs/backlog.md, "Учёт
+# повреждённых элементов..." — сознательно не расширяем маркой вместе с
+# "Контрактация 2.0", это отдельная тема).
 class ContractIncidentIn(BaseModel):
     element_type: str
     quantity: int
@@ -57,12 +70,8 @@ class ContractIncidentOut(ContractIncidentIn):
 
 class ContractIn(BaseModel):
     name: str
-    supplier: str
-    # Дата подписания контракта (бизнес-дата, не created_at) и короткий
-    # код контрагента — оба нужны для формулы метки партии/допстроки
-    # подписи на схеме, см. Docs/backlog.md, "Партия — учёт по маркам".
+    specification_id: int
     contract_date: Optional[str] = None
-    code: Optional[str] = None
     lines: list[ContractLineIn]
     incidents: list[ContractIncidentIn] = []
 
@@ -70,18 +79,25 @@ class ContractIn(BaseModel):
 class ContractOut(BaseModel):
     id: int
     name: str
-    supplier: str
     contract_date: Optional[str] = None
-    code: Optional[str] = None
+    specification_id: int
+    specification_number: str
+    specification_date: Optional[str] = None
+    agreement_id: int
+    agreement_number: str
+    agreement_date: Optional[str] = None
+    counterparty_id: int
+    counterparty_short_name: str
+    counterparty_code: Optional[str] = None
     lines: list[ContractLineOut]
     incidents: list[ContractIncidentOut]
 
 
-def _line_fact(conn, contract_id: int, element_type: str) -> int:
+def _line_fact(conn, contract_id: int, element_type: Optional[str], mark: Optional[str]) -> int:
     row = conn.execute(
         "SELECT COUNT(*) as n FROM elements "
-        "WHERE contract_id = ? AND element_type = ? AND current_status != 'planned'",
-        (contract_id, element_type),
+        "WHERE contract_id = ? AND element_type IS ? AND mark IS ? AND current_status != 'planned'",
+        (contract_id, element_type, mark),
     ).fetchone()
     return row["n"]
 
@@ -94,17 +110,38 @@ def _line_damaged(conn, contract_id: int, element_type: str) -> int:
     return row["n"]
 
 
+def _specification_chain(conn, specification_id: int):
+    """Джойн specification -> agreement -> counterparty — единственное
+    место, откуда резолвится всё, что раньше лежало прямо в
+    contracts.supplier/contracts.code."""
+    row = conn.execute(
+        """
+        SELECT
+            s.id AS specification_id, s.number AS specification_number, s.specification_date AS specification_date,
+            a.id AS agreement_id, a.number AS agreement_number, a.agreement_date AS agreement_date,
+            c.id AS counterparty_id, c.short_name AS counterparty_short_name, c.code AS counterparty_code
+        FROM specifications s
+        JOIN agreements a ON a.id = s.agreement_id
+        JOIN counterparties c ON c.id = a.counterparty_id
+        WHERE s.id = ?
+        """,
+        (specification_id,),
+    ).fetchone()
+    return row
+
+
 def _to_contract_out(conn, contract_row) -> ContractOut:
+    chain = _specification_chain(conn, contract_row["specification_id"])
     line_rows = conn.execute(
-        "SELECT * FROM contract_lines WHERE contract_id = ? ORDER BY element_type", (contract_row["id"],)
+        "SELECT * FROM contract_lines WHERE contract_id = ? ORDER BY element_type, mark", (contract_row["id"],)
     ).fetchall()
     lines = []
     for lr in line_rows:
-        fact = _line_fact(conn, contract_row["id"], lr["element_type"])
+        fact = _line_fact(conn, contract_row["id"], lr["element_type"], lr["mark"])
         damaged = _line_damaged(conn, contract_row["id"], lr["element_type"])
         lines.append(
             ContractLineOut(
-                id=lr["id"], element_type=lr["element_type"], quantity=lr["quantity"],
+                id=lr["id"], element_type=lr["element_type"], mark=lr["mark"], quantity=lr["quantity"],
                 fact=fact, damaged=damaged, remaining=lr["quantity"] - fact - damaged,
                 exceeded=(fact + damaged) > lr["quantity"],
             )
@@ -121,8 +158,13 @@ def _to_contract_out(conn, contract_row) -> ContractOut:
         for ir in incident_rows
     ]
     return ContractOut(
-        id=contract_row["id"], name=contract_row["name"], supplier=contract_row["supplier"],
-        contract_date=contract_row["contract_date"], code=contract_row["code"],
+        id=contract_row["id"], name=contract_row["name"], contract_date=contract_row["contract_date"],
+        specification_id=chain["specification_id"], specification_number=chain["specification_number"],
+        specification_date=chain["specification_date"],
+        agreement_id=chain["agreement_id"], agreement_number=chain["agreement_number"],
+        agreement_date=chain["agreement_date"],
+        counterparty_id=chain["counterparty_id"], counterparty_short_name=chain["counterparty_short_name"],
+        counterparty_code=chain["counterparty_code"],
         lines=lines, incidents=incidents,
     )
 
@@ -131,25 +173,44 @@ def _to_contract_out(conn, contract_row) -> ContractOut:
 def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT * FROM contracts ORDER BY name, supplier").fetchall()
+        rows = conn.execute("SELECT * FROM contracts ORDER BY name").fetchall()
         return [_to_contract_out(conn, r) for r in rows]
     finally:
         conn.close()
+
+
+def find_or_create_contract(conn, specification_id: int, name: str, contract_date: Optional[str] = None) -> int:
+    """Один Контракт на Спецификацию — используется импортом файла
+    контрактации (app/contracting_import.py), где строка файла уже
+    однозначно определяет (Контрагент, Договор, Спецификация)."""
+    row = conn.execute(
+        "SELECT id FROM contracts WHERE specification_id = ?", (specification_id,)
+    ).fetchone()
+    if row:
+        return row["id"]
+    conn.execute(
+        "INSERT INTO contracts (name, specification_id, contract_date) VALUES (?, ?, ?)",
+        (name, specification_id, contract_date),
+    )
+    return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
 
 @router.post("", response_model=ContractOut)
 def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(require_admin)):
     conn = get_connection()
     try:
+        spec = conn.execute("SELECT id FROM specifications WHERE id = ?", (body.specification_id,)).fetchone()
+        if not spec:
+            raise HTTPException(status_code=404, detail="Спецификация не найдена")
         conn.execute(
-            "INSERT INTO contracts (name, supplier, contract_date, code) VALUES (?, ?, ?, ?)",
-            (body.name, body.supplier, body.contract_date, body.code),
+            "INSERT INTO contracts (name, specification_id, contract_date) VALUES (?, ?, ?)",
+            (body.name, body.specification_id, body.contract_date),
         )
         contract_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         for line in body.lines:
             conn.execute(
-                "INSERT INTO contract_lines (contract_id, element_type, quantity) VALUES (?, ?, ?)",
-                (contract_id, line.element_type, line.quantity),
+                "INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)",
+                (contract_id, line.element_type, line.mark, line.quantity),
             )
         for inc in body.incidents:
             conn.execute(
@@ -171,17 +232,20 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         existing = conn.execute("SELECT id FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Контракт не найден")
+        spec = conn.execute("SELECT id FROM specifications WHERE id = ?", (body.specification_id,)).fetchone()
+        if not spec:
+            raise HTTPException(status_code=404, detail="Спецификация не найдена")
         conn.execute(
-            "UPDATE contracts SET name=?, supplier=?, contract_date=?, code=?, updated_at=datetime('now') WHERE id=?",
-            (body.name, body.supplier, body.contract_date, body.code, contract_id),
+            "UPDATE contracts SET name=?, specification_id=?, contract_date=?, updated_at=datetime('now') WHERE id=?",
+            (body.name, body.specification_id, body.contract_date, contract_id),
         )
         # Полная замена строк/инцидентов — список редактируется в UI
         # целиком, проще и предсказуемее частичного патча по id строки.
         conn.execute("DELETE FROM contract_lines WHERE contract_id = ?", (contract_id,))
         for line in body.lines:
             conn.execute(
-                "INSERT INTO contract_lines (contract_id, element_type, quantity) VALUES (?, ?, ?)",
-                (contract_id, line.element_type, line.quantity),
+                "INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)",
+                (contract_id, line.element_type, line.mark, line.quantity),
             )
         conn.execute("DELETE FROM contract_incidents WHERE contract_id = ?", (contract_id,))
         for inc in body.incidents:
@@ -193,6 +257,28 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         conn.commit()
         row = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         return _to_contract_out(conn, row)
+    finally:
+        conn.close()
+
+
+@router.get("/{contract_id}/elements")
+def list_contract_elements(contract_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Развёрнутый вид контракта (см. Docs/backlog.md, "Контрактация 2.0",
+    п.3) — одна строка на физический элемент, не на аггрегат по марке.
+    Намеренно БЕЗ лимита пагинации, в отличие от GET /elements (максимум
+    5000 там) — реалистичный контракт заведомо укладывается в память."""
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT id FROM contracts WHERE id = ?", (contract_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Контракт не найден")
+        rows = conn.execute(
+            "SELECT id, element_type, mark, current_status, planned_delivery_date, "
+            "project_delivery_date, project_smr_start_date, actual_delivery_date "
+            "FROM elements WHERE contract_id = ? ORDER BY element_type, mark, id",
+            (contract_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -232,8 +318,8 @@ def resolve_contract_for_new_row(
     значение в диалоге подтверждения (`explicit=True` — поле было в теле
     запроса, даже если это null для "без контракта"), используется оно.
     Иначе — наследуется от самой свежей ПРЕДЫДУЩЕЙ записи истории этого
-    элемента, где contract_id не пуст (п.2 третьего раунда: "все следующие
-    статусы после контрактации берут контракт из предыдущего статуса").
+    элемента, где contract_id не пуст ("все следующие статусы после
+    контрактации берут контракт из предыдущего статуса").
     """
     if explicit:
         return value
@@ -250,7 +336,7 @@ def recompute_element_contract_cache(conn, element_id: int) -> Optional[int]:
     elements.contract_id — денормализованный кэш "текущего" контракта,
     всегда равный contract_id самой поздней по changed_at записи истории
     (та же логика пересчёта, что уже используется для current_status —
-    важно для корректной работы после backdating и удаления записей, п.3).
+    важно для корректной работы после backdating и удаления записей).
     """
     latest = conn.execute(
         "SELECT contract_id FROM status_history WHERE element_id = ? ORDER BY changed_at DESC, id DESC LIMIT 1",
@@ -261,19 +347,69 @@ def recompute_element_contract_cache(conn, element_id: int) -> Optional[int]:
     return contract_id
 
 
+def recompute_status_and_actual_date(conn, element_id: int) -> tuple[str, Optional[str]]:
+    """
+    elements.current_status и elements.actual_delivery_date — денормализованные
+    кэши самой поздней по changed_at записи истории (тот же приём, что и у
+    recompute_element_contract_cache выше). actual_delivery_date = момент
+    перехода в статус "Доставлено" (Status.DELIVERED, см. Docs/backlog.md,
+    "Контрактация 2.0", п.8) — если текущий эффективный статус не
+    "delivered" (в т.ч. после отката/удаления записи истории), дата
+    сбрасывается в NULL, а не остаётся висеть от прошлого визита в
+    "Доставлено". Общая точка для apply_status_change ниже,
+    delete_history_entry (app/main.py) и import_history
+    (app/history_import.py) — раньше каждый пересчитывал только
+    current_status по отдельности, actual_delivery_date могла бы протухнуть.
+    """
+    latest = conn.execute(
+        "SELECT status, changed_at FROM status_history WHERE element_id = ? ORDER BY changed_at DESC, id DESC LIMIT 1",
+        (element_id,),
+    ).fetchone()
+    effective_status = latest["status"]
+    actual_delivery_date = latest["changed_at"] if effective_status == "delivered" else None
+    conn.execute(
+        "UPDATE elements SET current_status = ?, actual_delivery_date = ?, updated_at = datetime('now') WHERE id = ?",
+        (effective_status, actual_delivery_date, element_id),
+    )
+    return effective_status, actual_delivery_date
+
+
+def enrich_element_row(conn, row_dict: dict) -> dict:
+    """Добавляет counterparty_code (денормализованный скаляр для допстроки
+    подписи на схеме) в уже собранный словарь ответа элемента —
+    используется везде, где элемент возвращается клиенту
+    (apply_status_change, app/element_dates.py, GET /elements/{id}), не
+    только в /plan-data."""
+    contract_id = row_dict.get("contract_id")
+    row_dict["counterparty_code"] = None
+    if contract_id is not None:
+        r = conn.execute(
+            """
+            SELECT c.code FROM contracts co
+            JOIN specifications s ON s.id = co.specification_id
+            JOIN agreements a ON a.id = s.agreement_id
+            JOIN counterparties c ON c.id = a.counterparty_id
+            WHERE co.id = ?
+            """,
+            (contract_id,),
+        ).fetchone()
+        row_dict["counterparty_code"] = r["code"] if r else None
+    return row_dict
+
+
 def apply_status_change(
     conn, element_id: int, status: str, contract_explicit: bool, contract_value: Optional[int],
     changed_at: Optional[str], comment: Optional[str], changed_by: str, changed_by_user_id: int,
 ) -> dict:
     """
     Общее тело смены статуса ОДНОГО элемента — INSERT в status_history ->
-    пересчёт current_status (по самой поздней записи, не обязательно
-    только что вставленной, важно для backdating) -> пересчёт кэша
-    elements.contract_id -> contract_line_warning. НЕ коммитит сама —
-    вызывающая сторона решает, когда коммитить (одиночный PATCH — сразу
-    после вызова; массовая смена статуса — один раз после цикла по всем
-    элементам, см. update_status_bulk в app/main.py). Используется и
-    одиночным, и массовым эндпоинтом — не дублировать эту
+    пересчёт current_status/actual_delivery_date (по самой поздней записи,
+    не обязательно только что вставленной, важно для backdating) ->
+    пересчёт кэша elements.contract_id -> contract_line_warning. НЕ
+    коммитит сама — вызывающая сторона решает, когда коммитить (одиночный
+    PATCH — сразу после вызова; массовая смена статуса — один раз после
+    цикла по всем элементам, см. update_status_bulk в app/main.py).
+    Используется и одиночным, и массовым эндпоинтом — не дублировать эту
     последовательность действий в другом месте.
 
     contract_explicit/contract_value — та же пара, что раньше собиралась
@@ -288,13 +424,14 @@ def apply_status_change(
 
     # Откат на "Запланирован" всегда снимает контракт — и тем самым
     # поставщика: у элемента нет отдельного поля "поставщик", он везде
-    # резолвится ОТ контракта (см. supplierFilterValue на фронтенде), так
-    # что снятия contract_id достаточно. Действует БЕЗУСЛОВНО, даже если
-    # contract_id передан явно — для перехода именно НА "Запланирован"
-    # диалог выбора контракта на фронте не показывается (см. Docs/TZ.md
-    # §5: диалог — только при уходе СО статуса "Запланирован"), явного
-    # намерения "оставить контракт" в этом направлении быть не может
-    # (живой запрос пользователя, см. Docs/backlog.md).
+    # резолвится ОТ контракта (см. counterpartyFilterValue на фронтенде),
+    # так что снятия contract_id достаточно. Действует БЕЗУСЛОВНО, даже
+    # если contract_id передан явно — для перехода именно НА
+    # "Запланирован" диалог выбора контракта на фронте не показывается
+    # (см. Docs/TZ.md §5: диалог — только при уходе СО статуса
+    # "Запланирован"), явного намерения "оставить контракт" в этом
+    # направлении быть не может (живой запрос пользователя, см.
+    # Docs/backlog.md).
     if status == "planned":
         row_contract_id = None
     else:
@@ -313,21 +450,9 @@ def apply_status_change(
             (element_id, status, changed_by, changed_by_user_id, comment, row_contract_id),
         )
 
-    latest = conn.execute(
-        "SELECT status FROM status_history WHERE element_id = ? ORDER BY changed_at DESC LIMIT 1",
-        (element_id,),
-    ).fetchone()
-    effective_status = latest["status"]
-    conn.execute(
-        "UPDATE elements SET current_status = ?, updated_at = datetime('now') WHERE id = ?",
-        (effective_status, element_id),
-    )
-
+    recompute_status_and_actual_date(conn, element_id)
     element_contract_id = recompute_element_contract_cache(conn, element_id)
-    # Контракт мог смениться (или пропасть) — партия чужого контракта не
-    # должна молча остаться привязанной к элементу, см. app/batches.py.
-    clear_stale_batch_assignment(conn, element_id, element_contract_id)
-    warning = contract_line_warning(conn, element_contract_id, row["element_type"])
+    warning = contract_line_warning(conn, element_contract_id, row["element_type"], row["mark"])
 
     updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
     history_rows = conn.execute(
@@ -340,19 +465,21 @@ def apply_status_change(
     return data
 
 
-def contract_line_warning(conn, contract_id: Optional[int], element_type: str) -> Optional[dict]:
+def contract_line_warning(conn, contract_id: Optional[int], element_type: str, mark: Optional[str]) -> Optional[dict]:
     """Неблокирующее предупреждение о превышении по СТРОКЕ контракта (не по
     контракту в целом) — факт плюс подтверждённые повреждения (см.
-    Docs/backlog.md, "Учёт повреждённых элементов...") против плана."""
+    Docs/backlog.md, "Учёт повреждённых элементов...") против плана.
+    Строка теперь ключуется (element_type, mark) NULL-safe, не только
+    типом — см. "Контрактация 2.0"."""
     if contract_id is None:
         return None
     line = conn.execute(
-        "SELECT * FROM contract_lines WHERE contract_id = ? AND element_type = ?",
-        (contract_id, element_type),
+        "SELECT * FROM contract_lines WHERE contract_id = ? AND element_type = ? AND mark IS ?",
+        (contract_id, element_type, mark),
     ).fetchone()
     if not line:
         return None
-    fact = _line_fact(conn, contract_id, element_type)
+    fact = _line_fact(conn, contract_id, element_type, mark)
     damaged = _line_damaged(conn, contract_id, element_type)
     if (fact + damaged) <= line["quantity"]:
         return None

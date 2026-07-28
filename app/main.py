@@ -12,12 +12,19 @@ from shapely.strtree import STRtree
 
 from app.auth import format_display_name, get_current_user, require_admin, require_editor
 from app.auth import router as auth_router
-from app.batches import clear_stale_batch_assignment, enrich_element_row, batch_line_warning, validate_and_resolve_batch_assignment
-from app.batches import router as batches_router
-from app.contracts import apply_status_change, contract_line_warning, recompute_element_contract_cache
+from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
+from app.contracts import (
+    apply_status_change,
+    contract_line_warning,
+    enrich_element_row,
+    recompute_element_contract_cache,
+    recompute_status_and_actual_date,
+)
 from app.contracts import router as contracts_router
+from app.counterparties import router as counterparties_router
 from app.db import get_connection, init_db
 from app.dxf_import import DxfProcessingError, UPLOADS_DIR, import_dxf_file, process_upload
+from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
 from app.history_import import HistoryImportError, import_history, parse_history_xlsx
 from app.models import (
@@ -26,12 +33,12 @@ from app.models import (
     STATUS_ORDER,
     ZHBI_ELEMENT_TYPES,
     AllowedSubtypeIn,
-    BulkBatchUpdateIn,
-    BulkBatchUpdateResult,
+    BulkPlannedDateUpdateIn,
+    BulkPlannedDateUpdateResult,
     BulkStatusUpdateIn,
     BulkStatusUpdateResult,
-    ElementBatchIn,
-    ElementBatchUpdateResult,
+    ElementPlannedDateIn,
+    ElementPlannedDateUpdateResult,
     ElementShapeIn,
     Status,
     DxfImportResult,
@@ -45,6 +52,8 @@ from app.models import (
     ZoneColorIn,
 )
 from app.pdf_export import build_schema_pdf
+from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
+from app.settings import router as settings_router
 from app.upload_limits import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, read_upload_limited
 from app.users import router as users_router
 
@@ -135,7 +144,8 @@ async def limit_upload_size(request, call_next):
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(contracts_router)
-app.include_router(batches_router)
+app.include_router(counterparties_router)
+app.include_router(settings_router)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -364,82 +374,45 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(req
         conn.close()
 
 
-@app.patch("/elements/{element_id}/batch", response_model=ElementBatchUpdateResult)
-def update_element_batch(element_id: int, body: ElementBatchIn, user: sqlite3.Row = Depends(require_editor)):
-    """Назначение партии элементу — независимое действие, НЕ привязанное
-    к смене статуса (в отличие от контракта), см. Docs/backlog.md."""
+@app.patch("/elements/{element_id}/planned-delivery-date", response_model=ElementPlannedDateUpdateResult)
+def update_element_planned_delivery_date(
+    element_id: int, body: ElementPlannedDateIn, user: sqlite3.Row = Depends(require_editor)
+):
+    """Плановая дата поставки — независимое действие, НЕ привязанное к
+    смене статуса (партии убраны, см. Docs/backlog.md, "Контрактация
+    2.0") — единая точка записи, см. app/element_dates.py (та же функция,
+    которую зовёт и развёрнутая таблица контракта на фронте)."""
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
-        if row is None:
+        data = set_planned_delivery_date(conn, element_id, body.planned_delivery_date)
+        if data is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
-        try:
-            validate_and_resolve_batch_assignment(conn, row, body.batch_id)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        conn.execute("UPDATE elements SET batch_id = ?, updated_at = datetime('now') WHERE id = ?", (body.batch_id, element_id))
-        warning = None
-        if body.batch_id is not None:
-            warning = batch_line_warning(conn, body.batch_id, row["element_type"], row["subtype"], row["mark"])
         conn.commit()
-
-        updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
-        history_rows = conn.execute(
-            "SELECT * FROM status_history WHERE element_id = ? ORDER BY changed_at", (element_id,)
-        ).fetchall()
-        data = dict(updated_row)
-        data["history"] = [dict(h) for h in history_rows]
-        data["batch_warning"] = warning
-        enrich_element_row(conn, data)
         return data
     finally:
         conn.close()
 
 
-@app.patch("/elements/bulk-batch", response_model=BulkBatchUpdateResult)
-def update_element_batch_bulk(body: BulkBatchUpdateIn, user: sqlite3.Row = Depends(require_editor)):
-    """Массовое назначение партии — атомарно: сначала валидируются ВСЕ
-    элементы пачки, при наличии хоть одной ошибки ничего не применяется
-    (единый 400 со списком проблем), затем всё применяется одним коммитом."""
+@app.patch("/elements/bulk-planned-delivery-date", response_model=BulkPlannedDateUpdateResult)
+def update_element_planned_delivery_date_bulk(
+    body: BulkPlannedDateUpdateIn, user: sqlite3.Row = Depends(require_editor)
+):
     if not body.items:
         raise HTTPException(status_code=400, detail="Пустой список элементов")
     conn = get_connection()
     try:
-        rows_by_id = {}
-        errors = []
-        for item in body.items:
-            row = conn.execute("SELECT * FROM elements WHERE id = ?", (item.element_id,)).fetchone()
-            if row is None:
-                errors.append(f"Элемент {item.element_id} не найден")
-                continue
-            rows_by_id[item.element_id] = row
-            try:
-                validate_and_resolve_batch_assignment(conn, row, item.batch_id)
-            except ValueError as e:
-                errors.append(str(e))
-        if errors:
-            raise HTTPException(status_code=400, detail="; ".join(errors))
+        ids = [item.element_id for item in body.items]
+        placeholders = ",".join("?" * len(ids))
+        existing_ids = {
+            r["id"] for r in conn.execute(f"SELECT id FROM elements WHERE id IN ({placeholders})", ids)
+        }
+        missing = [i for i in ids if i not in existing_ids]
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Элементы не найдены: {missing}")
 
-        updated = []
-        for item in body.items:
-            row = rows_by_id[item.element_id]
-            conn.execute(
-                "UPDATE elements SET batch_id = ?, updated_at = datetime('now') WHERE id = ?",
-                (item.batch_id, item.element_id),
-            )
-            warning = None
-            if item.batch_id is not None:
-                warning = batch_line_warning(conn, item.batch_id, row["element_type"], row["subtype"], row["mark"])
-            updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (item.element_id,)).fetchone()
-            history_rows = conn.execute(
-                "SELECT * FROM status_history WHERE element_id = ? ORDER BY changed_at", (item.element_id,)
-            ).fetchall()
-            data = dict(updated_row)
-            data["history"] = [dict(h) for h in history_rows]
-            data["batch_warning"] = warning
-            enrich_element_row(conn, data)
-            updated.append(data)
+        updated = set_planned_delivery_dates_bulk(
+            conn, [(item.element_id, item.planned_delivery_date) for item in body.items]
+        )
         conn.commit()
         return {"updated": updated}
     finally:
@@ -473,17 +446,9 @@ def delete_history_entry(
 
         conn.execute("DELETE FROM status_history WHERE id = ?", (history_id,))
 
-        latest = conn.execute(
-            "SELECT status FROM status_history WHERE element_id = ? ORDER BY changed_at DESC LIMIT 1",
-            (element_id,),
-        ).fetchone()
-        conn.execute(
-            "UPDATE elements SET current_status = ?, updated_at = datetime('now') WHERE id = ?",
-            (latest["status"], element_id),
-        )
+        recompute_status_and_actual_date(conn, element_id)
         element_contract_id = recompute_element_contract_cache(conn, element_id)
-        clear_stale_batch_assignment(conn, element_id, element_contract_id)
-        contract_warning = contract_line_warning(conn, element_contract_id, row["element_type"])
+        contract_warning = contract_line_warning(conn, element_contract_id, row["element_type"], row["mark"])
         conn.commit()
 
         updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
@@ -506,20 +471,22 @@ def reset_status_history(user: sqlite3.Row = Depends(require_admin)):
     тестирования (живой запрос пользователя, см. Docs/backlog.md), НЕ
     ограничен одним чертежом/файлом. Каждый элемент возвращается в
     состояние "только что импортирован": одна запись истории 'planned',
-    current_status='planned', контракт и партия сняты — тот же принцип,
-    что при обычном откате на "Запланирован" (apply_status_change,
-    app/contracts.py), только прямым SQL по всей таблице разом, а не
-    поэлементно через apply_status_change — на базе в тысячи элементов
-    поэлементный цикл был бы заметно медленнее и не даёт тут никакой
-    дополнительной пользы (каждый элемент всё равно приходит к одному и
-    тому же состоянию)."""
+    current_status='planned', контракт снят и фактическая дата поставки
+    сброшена (тот же принцип, что при обычном откате на "Запланирован",
+    apply_status_change/recompute_status_and_actual_date, app/contracts.py)
+    — только прямым SQL по всей таблице разом, а не поэлементно через
+    apply_status_change — на базе в тысячи элементов поэлементный цикл был
+    бы заметно медленнее и не даёт тут никакой дополнительной пользы
+    (каждый элемент всё равно приходит к одному и тому же состоянию).
+    planned_delivery_date НЕ трогается — она не зависит от истории
+    статусов (партии убраны, см. "Контрактация 2.0")."""
     conn = get_connection()
     try:
         n = conn.execute("SELECT COUNT(*) AS n FROM elements").fetchone()["n"]
         conn.execute("DELETE FROM status_history")
         conn.execute(
             "UPDATE elements SET current_status='planned', contract_id=NULL, "
-            "batch_id=NULL, updated_at=datetime('now')"
+            "actual_delivery_date=NULL, updated_at=datetime('now')"
         )
         conn.execute(
             "INSERT INTO status_history (element_id, status, changed_by, changed_by_user_id, comment) "
@@ -865,20 +832,25 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             zones.extend(file_zones)
 
         # Допстрока подписи марки на схеме (2D/3D, см. Docs/backlog.md,
-        # "Партия — учёт по маркам") показывается для КАЖДОГО видимого
-        # элемента с партией — отдельный запрос на партию/контракт под
-        # каждый элемент был бы неприемлем при сотнях элементов, поэтому
-        # обогащаем весь список одной парой лёгких выборок (id -> скаляр),
-        # а не полными объектами партий/контрактов.
-        contract_code_by_id = {
-            r["id"]: r["code"] for r in conn.execute("SELECT id, code FROM contracts").fetchall()
-        }
-        batch_date_by_id = {
-            r["id"]: r["planned_date"] for r in conn.execute("SELECT id, planned_date FROM batches").fetchall()
+        # "Контрактация 2.0") показывается для КАЖДОГО видимого элемента с
+        # плановой датой/контрагентом — отдельный запрос под каждый
+        # элемент был бы неприемлем при сотнях элементов, поэтому
+        # обогащаем весь список одной лёгкой выборкой (contract_id ->
+        # counterparty_code), не полными объектами контрактов.
+        counterparty_code_by_contract_id = {
+            r["id"]: r["code"]
+            for r in conn.execute(
+                """
+                SELECT co.id AS id, c.code AS code
+                FROM contracts co
+                JOIN specifications s ON s.id = co.specification_id
+                JOIN agreements a ON a.id = s.agreement_id
+                JOIN counterparties c ON c.id = a.counterparty_id
+                """
+            ).fetchall()
         }
         for el in elements:
-            el["contract_code"] = contract_code_by_id.get(el.get("contract_id"))
-            el["batch_planned_date"] = batch_date_by_id.get(el.get("batch_id"))
+            el["counterparty_code"] = counterparty_code_by_contract_id.get(el.get("contract_id"))
 
         numeric_axes = {r["label"]: r["coord"] for r in axis_rows_all if r["kind"] == "numeric"}
         letter_axes = {r["label"]: r["coord"] for r in axis_rows_all if r["kind"] == "letter"}
@@ -890,14 +862,32 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             r["element_type"]: bool(r["visible"])
             for r in conn.execute("SELECT element_type, visible FROM label_visibility").fetchall()
         }
-        contract_rows = conn.execute("SELECT id, name, supplier FROM contracts").fetchall()
+        contract_rows = conn.execute(
+            """
+            SELECT co.id AS id, co.name AS name, co.contract_date AS contract_date,
+                   c.id AS counterparty_id, c.short_name AS counterparty_short_name, c.code AS counterparty_code,
+                   a.id AS agreement_id, a.number AS agreement_number, a.agreement_date AS agreement_date,
+                   s.id AS specification_id, s.number AS specification_number, s.specification_date AS specification_date
+            FROM contracts co
+            JOIN specifications s ON s.id = co.specification_id
+            JOIN agreements a ON a.id = s.agreement_id
+            JOIN counterparties c ON c.id = a.counterparty_id
+            """
+        ).fetchall()
         line_rows = conn.execute("SELECT contract_id, element_type FROM contract_lines").fetchall()
         types_by_contract = {}
         for lr in line_rows:
             types_by_contract.setdefault(lr["contract_id"], []).append(lr["element_type"])
         contracts = [
             {
-                "id": r["id"], "name": r["name"], "supplier": r["supplier"],
+                "id": r["id"], "name": r["name"], "contract_date": r["contract_date"],
+                "counterparty_id": r["counterparty_id"],
+                "counterparty_short_name": r["counterparty_short_name"],
+                "counterparty_code": r["counterparty_code"],
+                "agreement_id": r["agreement_id"], "agreement_number": r["agreement_number"],
+                "agreement_date": r["agreement_date"],
+                "specification_id": r["specification_id"], "specification_number": r["specification_number"],
+                "specification_date": r["specification_date"],
                 "element_types": types_by_contract.get(r["id"], []),
             }
             for r in contract_rows
@@ -1045,6 +1035,38 @@ def import_history_xlsx(
         rows = parse_history_xlsx(content)
         return import_history(conn, source_file, rows, mode)
     except HistoryImportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+@app.post("/import-contracting-xlsx")
+def import_contracting_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_admin)):
+    """Файл "Контрактация" (см. app/contracting_import.py, Docs/backlog.md,
+    "Контрактация 2.0") — создаёт/находит Контрагентов/Договоры/
+    Спецификации/Контракты и их позиции по (тип, марка)."""
+    content = read_upload_limited(file.file)
+    conn = get_connection()
+    try:
+        parsed = parse_contracting_xlsx(content)
+        return import_contracting(conn, parsed)
+    except ContractingImportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+@app.post("/import-schedule-xlsx")
+def import_schedule_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_admin)):
+    """Файл графика MS Project (см. app/schedule_import.py, Docs/backlog.md,
+    "Контрактация 2.0") — заполняет project_delivery_date/
+    project_smr_start_date элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип."""
+    content = read_upload_limited(file.file)
+    conn = get_connection()
+    try:
+        parsed = parse_schedule_xlsx(content)
+        return import_schedule(conn, parsed)
+    except ScheduleImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         conn.close()
