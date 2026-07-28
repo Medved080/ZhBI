@@ -330,18 +330,23 @@ def _attempt_migration_recovery(exc: Exception) -> bool:
 
 @app.on_event("startup")
 def on_startup():
+    # Обычный старт импортирует ТОЛЬКО *.dxf из Input/, как и раньше —
+    # xlsx (Контрактация/Прогноз СМР) на регулярный рестарт НЕ переигрывается
+    # (это разовые ручные загрузки, источник истины — уже то, что в БД;
+    # переимпорт xlsx нужен только при полной пересборке — см.
+    # scripts/rebuild_db.py и _attempt_migration_recovery ниже).
+    #
     # ВАЖНО: битая FK-ссылка на удалённую по ходу миграции таблицу (см.
     # _attempt_migration_recovery) на практике может НЕ проявиться внутри
     # самого init_db() (миграции-то уже отметились как выполненные и молча
     # возвращаются) — а вылезти позже, на первой же реальной операции с
     # затронутой таблицей: живой прогон показал падение именно в
     # import_input_dxf() → upsert_elements(), уже ПОСЛЕ успешного init_db().
-    # Поэтому в try/except — весь стартовый импорт, не только init_db().
+    # Поэтому в try/except — весь обычный стартовый путь, не только init_db().
     try:
         init_db()
         _warn_users_without_password()
         import_input_dxf()
-        import_input_xlsx()
     except Exception as e:
         if not _attempt_migration_recovery(e):
             raise
