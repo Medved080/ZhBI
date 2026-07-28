@@ -225,7 +225,7 @@ def import_contracting(conn, parsed: dict) -> dict:
         specification_id = find_or_create_specification(
             conn, agreement_id, specification_number, specification_date
         )
-        contract_id = find_or_create_contract(conn, specification_id, name=row["supplier"])
+        contract_id = find_or_create_contract(conn, specification_id)
         contracts_touched.add(contract_id)
 
         element_type = _resolve_element_type(row["mark"], mark_lookup, prefix_map)

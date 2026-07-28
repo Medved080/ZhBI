@@ -3,6 +3,7 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
+from app.contracts import build_contract_name
 from app.models import STATUS_LABELS_RU
 
 ELEMENT_COLUMNS = [
@@ -29,7 +30,7 @@ ELEMENT_COLUMNS = [
     # дат поставки, простые колонки elements, доступны в обоих экспортах
     # (снимок на дату и полная история) без отдельной логики.
     ("planned_delivery_date", "Плановая дата поставки"),
-    ("project_delivery_date", "Проектная дата поставки"),
+    ("project_delivery_date", "Дата завершения СМР"),
     ("project_smr_start_date", "Начало СМР"),
     ("actual_delivery_date", "Фактическая дата поставки"),
 ]
@@ -58,11 +59,20 @@ def _contract_labels(conn) -> dict:
     # "Контрактация 2.0" (см. Docs/backlog.md) — contracts.supplier убран,
     # контрагент резолвится через цепочку specification->agreement->
     # counterparty, та же схема, что app/contracts.py:_specification_chain.
+    # Наименование контракта не хранится — генерируется build_contract_name
+    # (та же функция, что и /contracts, /plan-data, живой запрос
+    # пользователя, 2026-07-28), не дублируем логику.
     return {
-        r["id"]: f"{r['name']} ({r['counterparty_short_name']})"
+        r["id"]: build_contract_name(
+            r["counterparty_short_name"], r["agreement_number"], r["agreement_date"],
+            r["specification_number"], r["specification_date"], r["theme"],
+        )
         for r in conn.execute(
             """
-            SELECT co.id AS id, co.name AS name, c.short_name AS counterparty_short_name
+            SELECT co.id AS id, co.theme AS theme,
+                   c.short_name AS counterparty_short_name,
+                   a.number AS agreement_number, a.agreement_date AS agreement_date,
+                   s.number AS specification_number, s.specification_date AS specification_date
             FROM contracts co
             JOIN specifications s ON s.id = co.specification_id
             JOIN agreements a ON a.id = s.agreement_id

@@ -20,6 +20,7 @@ elements.contract_id остаётся денормализованным кэш�
 сущность с разбивкой по маркам.
 """
 
+import re
 import sqlite3
 from typing import Optional
 
@@ -69,17 +70,22 @@ class ContractIncidentOut(ContractIncidentIn):
 
 
 class ContractIn(BaseModel):
-    name: str
+    # Наименование контракта (name в ContractOut ниже) больше не вводится
+    # руками — генерируется всегда заново из цепочки Контрагент/Договор/
+    # Спецификация + theme (см. build_contract_name, живой запрос
+    # пользователя, 2026-07-28). theme — единственное свободное поле,
+    # относящееся к "названию". contract_date убрана целиком — дата
+    # контракта избыточна, есть дата спецификации (specification_date).
     specification_id: int
-    contract_date: Optional[str] = None
+    theme: Optional[str] = None
     lines: list[ContractLineIn]
     incidents: list[ContractIncidentIn] = []
 
 
 class ContractOut(BaseModel):
     id: int
-    name: str
-    contract_date: Optional[str] = None
+    name: str  # всегда сгенерировано (build_contract_name), не хранится как есть
+    theme: Optional[str] = None
     specification_id: int
     specification_number: str
     specification_date: Optional[str] = None
@@ -91,6 +97,37 @@ class ContractOut(BaseModel):
     counterparty_code: Optional[str] = None
     lines: list[ContractLineOut]
     incidents: list[ContractIncidentOut]
+
+
+def _ru_date(date_str: Optional[str]) -> Optional[str]:
+    """"YYYY-MM-DD..." -> "ДД.ММ.ГГГГ" — тот же формат, что formatDateRu на
+    фронтенде (app.js), нужен здесь только для build_contract_name (единое
+    место генерации имени контракта, используется и API, и XLS-экспортом,
+    см. app/export.py)."""
+    if not date_str:
+        return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", date_str)
+    return f"{m.group(3)}.{m.group(2)}.{m.group(1)}" if m else date_str
+
+
+def build_contract_name(
+    counterparty_short_name: str, agreement_number: str, agreement_date: Optional[str],
+    specification_number: str, specification_date: Optional[str], theme: Optional[str],
+) -> str:
+    """Наименование контракта — ВСЕГДА генерируется из цепочки
+    Контрагент/Договор/Спецификация (+ Тема, если задана), не хранится как
+    отдельное поле (живой запрос пользователя, 2026-07-28) — нет риска,
+    что имя разойдётся с реальными реквизитами после их правки.
+    Единственное место генерации, переиспользуется _to_contract_out ниже,
+    /plan-data (app/main.py) и XLS-экспортом (app/export.py)."""
+    agreement_text = f"{agreement_number} от {_ru_date(agreement_date)}" if agreement_date else agreement_number
+    specification_text = (
+        f"{specification_number} от {_ru_date(specification_date)}" if specification_date else specification_number
+    )
+    name = f"{counterparty_short_name}/{agreement_text}/{specification_text}"
+    if theme:
+        name += f" ({theme})"
+    return name
 
 
 def _line_fact(conn, contract_id: int, element_type: Optional[str], mark: Optional[str]) -> int:
@@ -157,8 +194,12 @@ def _to_contract_out(conn, contract_row) -> ContractOut:
         )
         for ir in incident_rows
     ]
+    name = build_contract_name(
+        chain["counterparty_short_name"], chain["agreement_number"], chain["agreement_date"],
+        chain["specification_number"], chain["specification_date"], contract_row["theme"],
+    )
     return ContractOut(
-        id=contract_row["id"], name=contract_row["name"], contract_date=contract_row["contract_date"],
+        id=contract_row["id"], name=name, theme=contract_row["theme"],
         specification_id=chain["specification_id"], specification_number=chain["specification_number"],
         specification_date=chain["specification_date"],
         agreement_id=chain["agreement_id"], agreement_number=chain["agreement_number"],
@@ -173,24 +214,36 @@ def _to_contract_out(conn, contract_row) -> ContractOut:
 def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT * FROM contracts ORDER BY name").fetchall()
+        # ORDER BY name невозможен — name больше не столбец, а генерируется
+        # в _to_contract_out; сортируем по тому же порядку компонентов, что
+        # и само наименование (Контрагент/Договор/Спецификация).
+        rows = conn.execute(
+            """
+            SELECT co.* FROM contracts co
+            JOIN specifications s ON s.id = co.specification_id
+            JOIN agreements a ON a.id = s.agreement_id
+            JOIN counterparties c ON c.id = a.counterparty_id
+            ORDER BY c.short_name, a.number, s.number
+            """
+        ).fetchall()
         return [_to_contract_out(conn, r) for r in rows]
     finally:
         conn.close()
 
 
-def find_or_create_contract(conn, specification_id: int, name: str, contract_date: Optional[str] = None) -> int:
+def find_or_create_contract(conn, specification_id: int, theme: Optional[str] = None) -> int:
     """Один Контракт на Спецификацию — используется импортом файла
     контрактации (app/contracting_import.py), где строка файла уже
-    однозначно определяет (Контрагент, Договор, Спецификация)."""
+    однозначно определяет (Контрагент, Договор, Спецификация). Наименование
+    не передаётся — оно всегда генерируется (см. build_contract_name)."""
     row = conn.execute(
         "SELECT id FROM contracts WHERE specification_id = ?", (specification_id,)
     ).fetchone()
     if row:
         return row["id"]
     conn.execute(
-        "INSERT INTO contracts (name, specification_id, contract_date) VALUES (?, ?, ?)",
-        (name, specification_id, contract_date),
+        "INSERT INTO contracts (specification_id, theme) VALUES (?, ?)",
+        (specification_id, theme),
     )
     return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
@@ -203,8 +256,8 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(require_admin
         if not spec:
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
         conn.execute(
-            "INSERT INTO contracts (name, specification_id, contract_date) VALUES (?, ?, ?)",
-            (body.name, body.specification_id, body.contract_date),
+            "INSERT INTO contracts (specification_id, theme) VALUES (?, ?)",
+            (body.specification_id, body.theme),
         )
         contract_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         for line in body.lines:
@@ -236,8 +289,8 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         if not spec:
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
         conn.execute(
-            "UPDATE contracts SET name=?, specification_id=?, contract_date=?, updated_at=datetime('now') WHERE id=?",
-            (body.name, body.specification_id, body.contract_date, contract_id),
+            "UPDATE contracts SET specification_id=?, theme=?, updated_at=datetime('now') WHERE id=?",
+            (body.specification_id, body.theme, contract_id),
         )
         # Полная замена строк/инцидентов — список редактируется в UI
         # целиком, проще и предсказуемее частичного патча по id строки.

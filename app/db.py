@@ -43,14 +43,19 @@ _COLUMN_MIGRATIONS = [
     # scripts/zone_parser._link_stances_to_cranes, Docs/backlog.md).
     ("zones", "parent_zone_id", "INTEGER REFERENCES zones(id) ON DELETE SET NULL"),
     ("zones", "parent_match_status", "TEXT"),
-    # Дата подписания контракта, у старых контрактов остаётся NULL.
     # ("contracts", "code", ...) сюда сознательно НЕ входит и был убран —
     # "Контрактация 2.0" (см. Docs/backlog.md) переносит короткий код на
     # counterparties.code; если оставить эту миграцию, _apply_migrations
     # будет молча возвращать contracts.code на каждом следующем старте
     # приложения (_migrate_contracts_hierarchy — одноразовая по маркеру
     # supplier, снять код второй раз ей уже нечем).
-    ("contracts", "contract_date", "TEXT"),
+    # ("contracts", "contract_date", ...) — та же ловушка, тем же способом
+    # убрана отсюда 2026-07-28: contract_date больше не поле контракта
+    # (наименование генерируется, дата — из спецификации, см.
+    # _migrate_contracts_theme ниже) — если бы миграция осталась здесь,
+    # _apply_migrations молча возвращала бы contract_date на каждом
+    # старте, а _migrate_contracts_theme (одноразовая, по маркеру "name")
+    # снять её второй раз уже не сможет.
     # Персональный цвет подписей марок (2D/3D) — NULL = использовать
     # дефолт (см. DEFAULT_LABEL_COLOR на фронтенде).
     ("users", "label_color", "TEXT"),
@@ -67,6 +72,11 @@ _COLUMN_MIGRATIONS = [
     ("elements", "project_delivery_date", "TEXT"),
     ("elements", "project_smr_start_date", "TEXT"),
     ("elements", "actual_delivery_date", "TEXT"),
+    # Подпункт "Даты" в Настройках (см. Docs/backlog.md) — независимый от
+    # visible переключатель допстроки (код контрагента + плановая дата) по
+    # типу элемента. NOT NULL DEFAULT 1 — сохраняет прежнее поведение
+    # (допстрока показывалась всегда) для уже накопленных БД.
+    ("label_visibility", "dates_visible", "INTEGER NOT NULL DEFAULT 1"),
 ]
 
 
@@ -240,6 +250,51 @@ def _migrate_contracts_hierarchy(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS batches")
 
 
+def _migrate_contracts_theme(conn: sqlite3.Connection) -> None:
+    """
+    Наименование контракта больше не хранится, генерируется всегда заново
+    из цепочки Контрагент/Договор/Спецификация + theme (см.
+    build_contract_name, app/contracts.py, живой запрос пользователя,
+    2026-07-28) — "name" и "contract_date" убраны из contracts, добавлена
+    "theme" (свободный текст). Маркер старой формы — наличие столбца
+    "name" (на новой БД CREATE TABLE в schema.sql уже создаёт новую форму
+    сразу, эта функция тогда не находит "name" и сразу возвращается).
+    ALTER TABLE ... DROP COLUMN — обычная rename→create→drop миграция
+    здесь не нужна: DROP COLUMN не переименовывает саму таблицу "contracts"
+    (в отличие от _migrate_contracts_hierarchy выше), поэтому FK-ссылки на
+    неё в других таблицах (contract_lines.contract_id и т.д.) не рискуют
+    быть молча переписаны на временное имя — тот баг, из-за которого
+    ПЕРЕД PRAGMA foreign_keys = OFF выше стоит commit(), здесь просто не
+    может произойти. Commit перед ALTER всё равно ставим — тот же общий
+    принцип (не полагаться на состояние транзакции, оставшееся от
+    предыдущей миграции).
+
+    ВАЖНО: три условия ("name" есть / "contract_date" есть / "theme" нет)
+    проверяются и применяются НЕЗАВИСИМО, не одним общим ранним return по
+    "name" — живой пойманный случай: столбец "contract_date" одно время
+    ОДНОВРЕМЕННО был и в _COLUMN_MIGRATIONS (ADD COLUMN, ещё старая
+    запись), и уже удалялся этой функцией. При автоперезагрузке сервера
+    (uvicorn --reload) между двумя правками этого файла порядок миграций
+    в одном запуске воскрешал "contract_date" уже ПОСЛЕ того, как "name"
+    была снята — общий ранний return по "name" тогда молча пропустил бы
+    повторное удаление "contract_date" навсегда (тот же класс ошибки, что
+    и историческая ловушка с contracts.code, см. _COLUMN_MIGRATIONS выше).
+    Независимые проверки каждого столбца самовосстанавливаются от любого
+    такого частичного состояния, а не только от чистого "до"/"после".
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(contracts)")}
+    if "name" not in cols and "contract_date" not in cols and "theme" in cols:
+        return
+    if conn.in_transaction:
+        conn.commit()
+    if "name" in cols:
+        conn.execute("ALTER TABLE contracts DROP COLUMN name")
+    if "contract_date" in cols:
+        conn.execute("ALTER TABLE contracts DROP COLUMN contract_date")
+    if "theme" not in cols:
+        conn.execute("ALTER TABLE contracts ADD COLUMN theme TEXT")
+
+
 def _ensure_contract_lines_index(conn: sqlite3.Connection) -> None:
     """Создаётся отдельно от schema.sql, а не CREATE INDEX IF NOT EXISTS
     прямо в скрипте — на существующей БД, ещё не прошедшей
@@ -354,6 +409,7 @@ def init_db() -> None:
         _apply_migrations(conn)
         _migrate_contracts_structure(conn)
         _migrate_contracts_hierarchy(conn)
+        _migrate_contracts_theme(conn)
         _ensure_contract_lines_index(conn)
         _normalize_element_type_vocabulary(conn)
         _seed_reference_data(conn)

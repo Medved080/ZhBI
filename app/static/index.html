@@ -190,7 +190,7 @@
   }
   /* Допстрока марки (код контрагента + плановая дата, см.
      elementSubLabelText, app.js) — цвет зависит от опоздания против
-     проектной даты (живой запрос пользователя — отдельная плашка была
+     начала СМР (живой запрос пользователя — отдельная плашка была
      убрана целиком из-за нагрузки на быстродействие, см. Docs/backlog.md,
      "не грузили пользовательский компьютер"). Без даты — нейтральный
      .mark-sublabel выше. */
@@ -370,6 +370,9 @@
   #history-table th { color: var(--color-text-muted); font-weight: 500; }
   #placeholder { color: var(--color-text-muted); }
   label.toggle { font-size: 12px; display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .label-toggle-row { display: flex; align-items: center; gap: 14px; }
+  .label-toggle-row .toggle { flex: 1; }
+  label.toggle.toggle-sub { color: var(--color-text-muted); margin-top: 6px; }
   #card select { font-size: 12px; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
 
   /* -------- поиск по маркам (Фильтры) -------- */
@@ -967,7 +970,7 @@
 <div class="modal-backdrop" id="schedule-import-backdrop">
   <div class="modal">
     <h2>Импорт графика МС Project из XLS</h2>
-    <p class="hint-text">Заполняет проектную дату поставки и начало СМР элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип.</p>
+    <p class="hint-text">Заполняет дату завершения СМР и начало СМР элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип.</p>
     <label class="field">Файл .xlsx (лист графика)</label>
     <input type="file" id="schedule-import-file" accept=".xlsx"/>
     <div id="schedule-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
@@ -1037,7 +1040,7 @@
 <div class="modal-backdrop" id="info-plate-settings-backdrop">
   <div class="modal">
     <h2>Порог опоздания поставки</h2>
-    <p class="hint-text">Плановая или фактическая дата поставки считается опозданием (подсветка в подсказке при наведении и в подписи марки), если превышает проектную дату больше чем на это число дней.</p>
+    <p class="hint-text">Плановая или фактическая дата поставки считается опозданием (подсветка в подсказке при наведении и в подписи марки), если позже начала СМР больше чем на это число дней — к началу СМР изделия должны быть на площадке.</p>
     <label class="field">Порог, дней</label>
     <input type="number" id="ips-threshold" min="0"/>
     <div class="error-text" id="info-plate-settings-error"></div>
@@ -1127,11 +1130,12 @@
     </div>
     <div class="modal-sticky-scroll">
       <div id="ce-view-main">
-        <label class="field">Название/номер</label><input type="text" id="ce-name"/>
+        <label class="field">Наименование</label>
+        <div class="hint-text" id="ce-name-preview" style="margin-bottom:10px;"></div>
         <label class="field">Контрагент</label><select id="ce-counterparty"></select>
         <label class="field">Договор</label><select id="ce-agreement"></select>
         <label class="field">Спецификация</label><select id="ce-specification"></select>
-        <label class="field">Дата контракта</label><input type="date" id="ce-contract-date"/>
+        <label class="field">Тема контракта</label><input type="text" id="ce-theme" placeholder="необязательно"/>
         <label class="field" style="margin-bottom:2px;">Строки: тип элемента + марка + количество</label>
         <div id="ce-lines"></div>
         <datalist id="ce-known-types"></datalist>
@@ -1145,7 +1149,7 @@
         <p class="hint-text">Сначала — физические элементы схемы, уже привязанные к контракту (плановую дату можно проставить прямо здесь или через схему 2D/3D), затем — незаполненные позиции контракта (ещё без привязки).</p>
         <table class="bulk-status-table">
           <thead>
-            <tr><th>Элемент схемы</th><th>Тип</th><th>Марка</th><th>Статус</th><th>Проектная дата</th><th>Плановая дата</th><th>Фактическая дата</th></tr>
+            <tr><th>Элемент схемы</th><th>Тип</th><th>Марка</th><th>Статус</th><th>Завершение СМР</th><th>Плановая дата</th><th>Фактическая дата</th></tr>
           </thead>
           <tbody id="contract-elements-tbody"></tbody>
         </table>

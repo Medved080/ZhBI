@@ -51,6 +51,7 @@ let state = {
   statusOrder: [],
   statusLabels: {},
   labelVisibility: {},
+  labelDatesVisibility: {},
   contracts: [],
   defaultContracts: {},
   elementShapes: {}, // "layer element_type" -> имя формы
@@ -1951,14 +1952,20 @@ const LABEL_GAP_MARGIN_SCALE = 0.08;
 // datetime "YYYY-MM-DD HH:MM:SS" (actual, из status_history.changed_at).
 // Единый формат отображения везде в интерфейсе — "ДД.ММ.ГГГГ" (живой
 // запрос пользователя), без времени даже у фактической даты — точность
-// до дня достаточна для сравнения с проектной/плановой.
+// до дня достаточна для сравнения с началом СМР/плановой.
 function formatDateRu(dateStr) {
   if (!dateStr) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
   return m ? `${m[3]}.${m[2]}.${m[1]}` : dateStr;
 }
 
+// Допстрока (код контрагента + плановая дата) — только если для ТИПА
+// элемента включён подпункт "Даты" (Настройки → Вид → Подписи,
+// state.labelDatesVisibility, дефолт true — см. Docs/backlog.md). Единая
+// точка гейтинга — все потребители (2D-наклейка, 3D-наклейка/спрайт)
+// вызывают только эту функцию, отдельно флаг нигде больше не проверяется.
 function elementSubLabelText(element) {
+  if (state.labelDatesVisibility[element.element_type] === false) return null;
   if (!element.planned_delivery_date && !element.counterparty_code) return null;
   if (element.counterparty_code && element.planned_delivery_date) {
     return `${element.counterparty_code}. ${formatDateRu(element.planned_delivery_date)}`;
@@ -1967,8 +1974,8 @@ function elementSubLabelText(element) {
 }
 
 // Класс допстроки (2D <text class="mark-sublabel ...">) — красный при
-// опоздании плановой/фактической даты против проектной, зелёный, если
-// опоздания нет и проектная дата вообще есть (иначе — нейтральный цвет
+// опоздании плановой/фактической даты против начала СМР, зелёный, если
+// опоздания нет и начало СМР вообще задано (иначе — нейтральный цвет
 // по умолчанию, сравнивать не с чем). Живой запрос пользователя — замена
 // убранной отдельной инфо-плашки (см. Docs/backlog.md), та же логика
 // опоздания (computeDeliveryLateStatus), просто раскрашивает уже
@@ -2136,13 +2143,17 @@ function refreshSubLabelDeliveryColors() {
   }
 }
 
-// ---------- сравнение плановой/фактической даты поставки с проектной
-// (из графика MS Project, см. app/schedule_import.py) — общая точка,
-// которой пользуются допстрока марки (subLabelClass), всплывающая
-// подсказка (computeTooltipDateRows) и карточка элемента. "late", если
-// плановая ИЛИ фактическая дата превышает проектную больше чем на
-// threshold дней (Настройки → Порог опоздания поставки); иначе "ok".
-// Если проектной даты нет вовсе — сравнивать не с чем, null. ----------
+// ---------- сравнение плановой/фактической даты поставки с началом СМР
+// (project_smr_start_date, из графика MS Project, см.
+// app/schedule_import.py) — общая точка, которой пользуются допстрока
+// марки (subLabelClass), всплывающая подсказка (computeTooltipDateRows) и
+// карточка элемента. К началу СМР изделия должны быть на площадке (живой
+// запрос пользователя) — "late", если плановая ИЛИ фактическая дата
+// превышает начало СМР больше чем на threshold дней (Настройки → Порог
+// опоздания поставки); иначе "ok". Если начало СМР не задано — сравнивать
+// не с чем, null. Раньше сравнивали с датой завершения СМР
+// (project_delivery_date) — изменено на начало СМР, т.к. критично именно
+// наличие изделий на площадке к НАЧАЛУ работ, а не к их завершению. ----------
 function diffDaysFromDate(dateStr, baseDateStr) {
   const a = new Date(dateStr.slice(0, 10));
   const b = new Date(baseDateStr.slice(0, 10));
@@ -2150,11 +2161,11 @@ function diffDaysFromDate(dateStr, baseDateStr) {
 }
 
 function computeDeliveryLateStatus(element, thresholdDays) {
-  if (!element.project_delivery_date) return null;
+  if (!element.project_smr_start_date) return null;
   const deltaPlan = element.planned_delivery_date
-    ? diffDaysFromDate(element.planned_delivery_date, element.project_delivery_date) : null;
+    ? diffDaysFromDate(element.planned_delivery_date, element.project_smr_start_date) : null;
   const deltaActual = element.actual_delivery_date
-    ? diffDaysFromDate(element.actual_delivery_date, element.project_delivery_date) : null;
+    ? diffDaysFromDate(element.actual_delivery_date, element.project_smr_start_date) : null;
   const planLate = deltaPlan !== null && deltaPlan > thresholdDays;
   const actualLate = deltaActual !== null && deltaActual > thresholdDays;
   return {
@@ -2174,7 +2185,7 @@ function computeTooltipDateRows(element) {
   const plannedDatePart = element.planned_delivery_date ? formatDateRu(element.planned_delivery_date) : "—";
   const plannedText = element.counterparty_code ? `${plannedDatePart} · ${element.counterparty_code}` : plannedDatePart;
   return [
-    { cls: "neutral", text: `Проектная: ${formatDateRu(element.project_delivery_date)}` },
+    { cls: "neutral", text: `Начало СМР: ${formatDateRu(element.project_smr_start_date)}` },
     { cls: info.planLate ? "late" : "ok", text: `Плановая: ${plannedText}${planLateText}` },
     {
       cls: info.actualLate ? "late" : (element.actual_delivery_date ? "ok" : "neutral"),
@@ -2531,6 +2542,9 @@ function renderLabelToggles() {
     return;
   }
   for (const type of types) {
+    const row = document.createElement("div");
+    row.className = "label-toggle-row";
+
     const label = document.createElement("label");
     label.className = "toggle";
     const checked = state.labelVisibility[type] !== false;
@@ -2566,7 +2580,29 @@ function renderLabelToggles() {
       }
       apply3DLabelVisibility();
     });
-    box.appendChild(label);
+    row.appendChild(label);
+
+    // Подпункт "Даты" (живой запрос пользователя) — код контрагента +
+    // плановая дата в допстроке наклейки, независимо от видимости самой
+    // марки выше. Сессионное состояние, как и основной чекбокс (не
+    // сохраняется на сервер этим переключателем — только через
+    // "Настройки → Экспорт/импорт настроек", см. app/main.py). Дёшево
+    // пересобрать допстроку только у элементов ЭТОГО типа —
+    // updateElementSubLabel уже умеет и 2D-наклейку/запасной вариант, и
+    // 3D одним вызовом, переиспользуем как есть.
+    const datesLabel = document.createElement("label");
+    datesLabel.className = "toggle toggle-sub";
+    const datesChecked = state.labelDatesVisibility[type] !== false;
+    datesLabel.innerHTML = `<input type="checkbox" data-dates-type="${escapeHtml(type)}" ${datesChecked ? "checked" : ""}/> Даты`;
+    datesLabel.querySelector("input").addEventListener("change", (e) => {
+      state.labelDatesVisibility[type] = e.target.checked;
+      for (const element of state.elements) {
+        if (element.element_type === type) updateElementSubLabel(element);
+      }
+    });
+    row.appendChild(datesLabel);
+
+    box.appendChild(row);
   }
 }
 
@@ -2862,6 +2898,7 @@ async function loadPlan(preserveView = true) {
   state.statusOrder = data.status_order;
   state.statusLabels = data.status_labels;
   state.labelVisibility = data.label_visibility;
+  state.labelDatesVisibility = data.label_dates_visibility || {};
   state.contracts = data.contracts || [];
   state.defaultContracts = data.default_contracts || {};
   state.elementShapes = data.element_shapes || {};
@@ -2963,31 +3000,33 @@ function contractDetailsHtml(element) {
   `;
 }
 
-// Плановая/проектная/фактическая даты поставки (см. Docs/backlog.md,
-// "Контрактация 2.0") — три независимые шкалы: плановая проставляется
-// менеджером вручную (card-planned-date-btn, task openPlannedDateDialog),
-// проектная — импортом графика MS Project (app/schedule_import.py),
-// фактическая — автоматически по моменту перехода в статус "Доставлено"
-// (recompute_status_and_actual_date, app/contracts.py), read-only.
+// Плановая/дата завершения СМР/фактическая даты поставки (см.
+// Docs/backlog.md, "Контрактация 2.0") — три независимые шкалы: плановая
+// проставляется менеджером вручную (card-planned-date-btn, task
+// openPlannedDateDialog), завершение СМР и начало СМР — импортом графика
+// MS Project (app/schedule_import.py), фактическая — автоматически по
+// моменту перехода в статус "Доставлено" (recompute_status_and_actual_date,
+// app/contracts.py), read-only.
 function deliveryDatesHtml(element) {
-  // Порядок и подсветка — тот же критерий "позже проектной", что и у
-  // инфо-плашки (см. computeDeliveryLateStatus), но здесь без порога в днях
-  // (Настройки → порог влияет только на цвет плашки/подсказки, в карточке —
-  // сравнение простое, живой запрос пользователя: "Подсвечиваем если
-  // Плановая дата или Фактическая больше Проектной").
-  const projectDate = element.project_delivery_date;
-  const plannedLate = !!(projectDate && element.planned_delivery_date && element.planned_delivery_date > projectDate);
-  const actualLate = !!(projectDate && element.actual_delivery_date && element.actual_delivery_date.slice(0, 10) > projectDate);
+  // Подсветка — тот же критерий "позже начала СМР", что и у допстрока
+  // марки/подсказки (см. computeDeliveryLateStatus), но здесь без порога в
+  // днях (Настройки → порог влияет только на цвет допстроки/подсказки, в
+  // карточке — сравнение простое: "Подсвечиваем если Плановая дата или
+  // Фактическая позже Начала СМР" — к началу СМР изделия должны быть на
+  // площадке, живой запрос пользователя).
+  const smrStartDate = element.project_smr_start_date;
+  const plannedLate = !!(smrStartDate && element.planned_delivery_date && element.planned_delivery_date > smrStartDate);
+  const actualLate = !!(smrStartDate && element.actual_delivery_date && element.actual_delivery_date.slice(0, 10) > smrStartDate);
   const plannedDatePart = element.planned_delivery_date ? formatDateRu(element.planned_delivery_date) : "—";
   const plannedText = element.counterparty_code
     ? `${plannedDatePart} <span class="hint-text">· ${escapeHtml(element.counterparty_code)}</span>`
     : plannedDatePart;
   return `
     <table>
-      <tr><td class="k">Проектная дата</td><td>${projectDate ? formatDateRu(projectDate) : "—"}</td></tr>
+      <tr><td class="k">Начало СМР</td><td>${smrStartDate ? formatDateRu(smrStartDate) : "—"}</td></tr>
       <tr class="${plannedLate ? "date-row-late" : ""}"><td class="k">Плановая дата</td><td>${plannedText}</td></tr>
       <tr class="${actualLate ? "date-row-late" : ""}"><td class="k">Фактическая дата</td><td>${element.actual_delivery_date ? formatDateRu(element.actual_delivery_date) : "—"}</td></tr>
-      <tr><td class="k">Начало СМР</td><td>${element.project_smr_start_date ? formatDateRu(element.project_smr_start_date) : "—"}</td></tr>
+      <tr><td class="k">Дата завершения СМР</td><td>${element.project_delivery_date ? formatDateRu(element.project_delivery_date) : "—"}</td></tr>
     </table>
   `;
 }
@@ -3224,7 +3263,7 @@ function openStatusDialog(element, status) {
     const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
     const matching = state.contracts.filter(c => c.element_types.includes(element.element_type));
     const options = ['<option value="">— без контракта —</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.counterparty_short_name)})</option>`)
+      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
     );
     document.getElementById("sc-contract-select").innerHTML = options.join("");
   }
@@ -3418,7 +3457,7 @@ function renderBulkStatusTable() {
     const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
     const matching = bulkContractOptionsForType(element.element_type);
     const options = ['<option value="">— выберите —</option>', '<option value="none">без контракта</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.supplier)})</option>`)
+      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
     );
     select.innerHTML = options.join("");
     select.addEventListener("change", updateBulkStatusValidation);
@@ -3455,7 +3494,7 @@ async function openBulkStatusModal() {
   document.getElementById("bulk-status-select").innerHTML =
     state.statusOrder.map(s => `<option value="${s}">${escapeHtml(state.statusLabels[s])}</option>`).join("");
   document.getElementById("bulk-fill-contract-select").innerHTML = ['<option value="">— выберите контракт —</option>'].concat(
-    state.contracts.map(c => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.supplier)}) — ${escapeHtml(c.element_types.join(", "))}</option>`)
+    state.contracts.map(c => `<option value="${c.id}">${escapeHtml(c.name)} — ${escapeHtml(c.element_types.join(", "))}</option>`)
   ).join("");
   try {
     const contracts = await api("/contracts");
@@ -3850,7 +3889,7 @@ function show2DTooltip(element, clientX, clientY) {
   } else {
     const line = document.createElement("div");
     line.className = "t2d-row neutral";
-    line.textContent = "Проектная дата не задана";
+    line.textContent = "Начало СМР не задано";
     tip.appendChild(line);
   }
   tip.style.display = "block";
@@ -4699,7 +4738,7 @@ async function renderContractsList() {
   const table = document.createElement("table");
   table.className = "contract-lines-table";
   table.innerHTML = `
-    <tr><th>Контрагент</th><th>Договор</th><th>Спецификация</th><th></th></tr>
+    <tr><th>Контрагент</th><th>Договор</th><th>Спецификация</th><th>Тема</th><th></th></tr>
   `;
   for (const c of contracts) {
     const agreementText = c.agreement_date ? `${escapeHtml(c.agreement_number)} от ${formatDateRu(c.agreement_date)}` : escapeHtml(c.agreement_number);
@@ -4709,6 +4748,7 @@ async function renderContractsList() {
       <td>${escapeHtml(c.counterparty_short_name)}</td>
       <td>${agreementText}</td>
       <td>${specText}</td>
+      <td>${c.theme ? escapeHtml(c.theme) : "—"}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-sm btn-secondary" data-edit-contract="${c.id}">Изменить</button>
         <button class="btn btn-sm btn-secondary" data-toggle-lines="${c.id}">Позиции…</button>
@@ -4728,7 +4768,7 @@ async function renderContractsList() {
         `).join("")
       : '<tr><td colspan="6" class="hint-text">нет строк</td></tr>';
     linesRow.innerHTML = `
-      <td colspan="4">
+      <td colspan="5">
         <table class="contract-lines-table">
           <tr><th>Тип элемента</th><th>Марка</th><th>План</th><th>Факт</th><th>Повреждено</th><th>Остаток</th></tr>
           ${linesHtml}
@@ -4758,7 +4798,7 @@ async function renderDefaultContracts(contracts) {
     row.className = "default-contract-row";
     const matching = contracts.filter(c => c.lines.some(l => l.element_type === type));
     const options = ['<option value="">— не задан —</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${defaultMap[type] === c.id ? "selected" : ""}>${escapeHtml(c.name)} (${escapeHtml(c.counterparty_short_name)})</option>`)
+      matching.map(c => `<option value="${c.id}" ${defaultMap[type] === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
     );
     row.innerHTML = `<span>${escapeHtml(type)}</span><select data-type="${escapeHtml(type)}">${options.join("")}</select>`;
     row.querySelector("select").addEventListener("change", async (e) => {
@@ -4947,19 +4987,45 @@ function refreshSpecificationSelect(agreements, selectedSpecificationId) {
     `<option value="${s.id}" ${String(s.id) === String(selectedSpecificationId) ? "selected" : ""}>${escapeHtml(s.number)}${s.specification_date ? " от " + formatDateRu(s.specification_date) : ""}</option>`
   ).join("");
 }
-document.getElementById("ce-counterparty").addEventListener("change", () => refreshAgreementSelect());
+document.getElementById("ce-counterparty").addEventListener("change", () => { refreshAgreementSelect(); updateContractNamePreview(); });
 document.getElementById("ce-agreement").addEventListener("change", () => {
   const cp = counterpartiesFullCache.find(c => String(c.id) === document.getElementById("ce-counterparty").value);
   refreshSpecificationSelect(cp ? cp.agreements : []);
+  updateContractNamePreview();
 });
+document.getElementById("ce-specification").addEventListener("change", updateContractNamePreview);
+document.getElementById("ce-theme").addEventListener("input", updateContractNamePreview);
+
+// Наименование контракта — ВСЕГДА генерируется (build_contract_name,
+// app/contracts.py), не вводится руками (живой запрос пользователя,
+// 2026-07-28). Превью здесь — только для удобства (видно, что получится,
+// до сохранения); авторитетное значение всегда приходит с бэкенда после
+// сохранения (state.contracts из /plan-data) — та же формула, продублирована
+// намеренно (простой однострочный шаблон, не бизнес-логика).
+function buildContractNamePreviewText() {
+  const cp = counterpartiesFullCache.find(c => String(c.id) === document.getElementById("ce-counterparty").value);
+  if (!cp) return "";
+  const agr = (cp.agreements || []).find(a => String(a.id) === document.getElementById("ce-agreement").value);
+  if (!agr) return "";
+  const spec = (agr.specifications || []).find(s => String(s.id) === document.getElementById("ce-specification").value);
+  if (!spec) return "";
+  const agreementText = agr.agreement_date ? `${agr.number} от ${formatDateRu(agr.agreement_date)}` : agr.number;
+  const specText = spec.specification_date ? `${spec.number} от ${formatDateRu(spec.specification_date)}` : spec.number;
+  const theme = document.getElementById("ce-theme").value.trim();
+  let name = `${cp.short_name}/${agreementText}/${specText}`;
+  if (theme) name += ` (${theme})`;
+  return name;
+}
+function updateContractNamePreview() {
+  document.getElementById("ce-name-preview").textContent = buildContractNamePreviewText() || "—";
+}
 
 async function openContractEdit(contract) {
   editingContractId = contract ? contract.id : null;
   editingContract = contract;
   setCeView("main");
   document.getElementById("contract-edit-title").textContent = contract ? "Изменить контракт" : "Новый контракт";
-  document.getElementById("ce-name").value = contract ? contract.name : "";
-  document.getElementById("ce-contract-date").value = contract && contract.contract_date ? contract.contract_date.slice(0, 10) : "";
+  document.getElementById("ce-theme").value = contract && contract.theme ? contract.theme : "";
 
   counterpartiesFullCache = await api("/counterparties/full");
   const cpSelect = document.getElementById("ce-counterparty");
@@ -4978,6 +5044,7 @@ async function openContractEdit(contract) {
     cpSelect.value = String(counterpartiesFullCache[0].id);
     refreshAgreementSelect();
   }
+  updateContractNamePreview();
 
   // Известные типы элементов/марки после загрузки файла — подсказка
   // (datalist, не строгий список — ввести что-то нестандартное
@@ -5026,9 +5093,8 @@ document.getElementById("contract-edit-save").addEventListener("click", async ()
     return;
   }
   const body = {
-    name: document.getElementById("ce-name").value.trim(),
     specification_id: Number(specificationId),
-    contract_date: document.getElementById("ce-contract-date").value || null,
+    theme: document.getElementById("ce-theme").value.trim() || null,
     lines,
     incidents,
   };
@@ -5073,7 +5139,7 @@ document.getElementById("settings-io-import").addEventListener("click", async ()
       statusEl.style.color = "var(--color-danger)";
       return;
     }
-    statusEl.textContent = `Готово: пользователей ${body.users_upserted}, цветов ${body.status_colors}, настроек подписей ${body.label_visibility}.`;
+    statusEl.textContent = `Готово: пользователей ${body.users_upserted}, цветов ${body.status_colors}, настроек подписей ${body.label_visibility}, настроек дат ${body.label_dates_visibility}.`;
     statusEl.style.color = "var(--color-text-muted)";
     await loadPlan();
   } catch (e) {
@@ -6101,7 +6167,7 @@ function build3DLabelSprite(element, topY) {
   ctx.fillStyle = currentLabelColor();
   ctx.fillText(element.mark, paddingX, paddingY + fontPx / 2);
   if (subText) {
-    // Цвет — по опозданию против проектной даты (тот же критерий, что и
+    // Цвет — по опозданию против начала СМР (тот же критерий, что и
     // 2D-допстрока, см. subLabelClass) — красный/зелёный/нейтральный.
     ctx.fillStyle = deliveryColorHex(element);
     ctx.fillText(subText, paddingX + markWidth, paddingY + fontPx / 2);
@@ -6733,9 +6799,9 @@ function show3DTooltip(element, clientX, clientY) {
     line.textContent = label + ": " + ((value === null || value === undefined || value === "") ? "—" : value);
     tip.appendChild(line);
   }
-  // Проектная/плановая/фактическая дата + опоздание — та же информация,
+  // Начало СМР/плановая/фактическая дата + опоздание — та же информация,
   // что на инфо-плашке (см. computeTooltipDateRows), только для элементов
-  // с проектной датой (иначе сравнивать не с чем, см. computeDeliveryLateStatus).
+  // с заданным началом СМР (иначе сравнивать не с чем, см. computeDeliveryLateStatus).
   const dateRows = computeTooltipDateRows(element);
   if (dateRows) {
     for (const row of dateRows) {

@@ -103,9 +103,15 @@ INSERT OR IGNORE INTO status_colors (status, color) VALUES
 -- Видимость подписей марок по типу элемента (сейчас только "column", но
 -- слои под ригели/плиты уже заложены в parse_zhbi.LAYER_CONFIG — строки
 -- заводятся лениво при импорте, см. import_elements.ensure_label_visibility).
+-- dates_visible — подпункт "Даты" (см. Docs/backlog.md): управляет ТОЛЬКО
+-- допстрокой наклейки (код контрагента + плановая дата у этого типа
+-- элемента), независимо от visible (видимость самой марки). По умолчанию
+-- включён — сохраняет прежнее поведение (допстрока показывалась всегда,
+-- без возможности отключить по типу).
 CREATE TABLE IF NOT EXISTS label_visibility (
     element_type TEXT PRIMARY KEY,
-    visible INTEGER NOT NULL DEFAULT 1
+    visible INTEGER NOT NULL DEFAULT 1,
+    dates_visible INTEGER NOT NULL DEFAULT 1
 );
 
 -- Контрагенты/Договоры/Спецификации (см. Docs/backlog.md, "Контрактация 2.0") —
@@ -170,11 +176,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- количеств по (тип, марка) в contract_lines. Не привязан к конкретному
 -- source_file — контракт на поставку колонн действует в рамках всего
 -- проекта, не одного чертежа.
+-- name НЕ хранится — наименование контракта ВСЕГДА генерируется из цепочки
+-- Контрагент/Договор/Спецификация + theme (build_contract_name,
+-- app/contracts.py, живой запрос пользователя, 2026-07-28), не может
+-- разойтись с реальными реквизитами. contract_date тоже не хранится —
+-- избыточна, есть дата спецификации (specifications.specification_date).
+-- theme — единственное свободное поле, относящееся к названию.
 CREATE TABLE IF NOT EXISTS contracts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
     specification_id INTEGER NOT NULL REFERENCES specifications (id) ON DELETE RESTRICT,
-    contract_date TEXT,
+    theme TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

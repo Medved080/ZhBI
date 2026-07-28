@@ -17,6 +17,7 @@ from app.auth import router as auth_router
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
 from app.contracts import (
     apply_status_change,
+    build_contract_name,
     contract_line_warning,
     enrich_element_row,
     recompute_element_contract_cache,
@@ -691,6 +692,37 @@ def set_label_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(
         conn.close()
 
 
+# Подпункт "Даты" (см. Docs/backlog.md) — тот же паттерн, что
+# /label-visibility выше, отдельный столбец той же таблицы: управляет
+# ТОЛЬКО допстрокой наклейки (код контрагента + плановая дата поставки),
+# не самой видимостью марки.
+@app.get("/label-dates-visibility")
+def get_label_dates_visibility(user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT element_type, dates_visible FROM label_visibility").fetchall()
+        return {r["element_type"]: bool(r["dates_visible"]) for r in rows}
+    finally:
+        conn.close()
+
+
+@app.put("/label-dates-visibility")
+def set_label_dates_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(require_admin)):
+    conn = get_connection()
+    try:
+        for element_type, visible in settings.items():
+            conn.execute(
+                "INSERT INTO label_visibility (element_type, dates_visible) VALUES (?, ?) "
+                "ON CONFLICT(element_type) DO UPDATE SET dates_visible = excluded.dates_visible",
+                (element_type, int(visible)),
+            )
+        conn.commit()
+        rows = conn.execute("SELECT element_type, dates_visible FROM label_visibility").fetchall()
+        return {r["element_type"]: bool(r["dates_visible"]) for r in rows}
+    finally:
+        conn.close()
+
+
 @app.get("/layer-type-combinations")
 def list_layer_type_combinations(user: sqlite3.Row = Depends(get_current_user)):
     """Для экрана настроек формы маркера (п.11 третьего раунда) — все
@@ -958,9 +990,13 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             r["element_type"]: bool(r["visible"])
             for r in conn.execute("SELECT element_type, visible FROM label_visibility").fetchall()
         }
+        label_dates_visibility = {
+            r["element_type"]: bool(r["dates_visible"])
+            for r in conn.execute("SELECT element_type, dates_visible FROM label_visibility").fetchall()
+        }
         contract_rows = conn.execute(
             """
-            SELECT co.id AS id, co.name AS name, co.contract_date AS contract_date,
+            SELECT co.id AS id, co.theme AS theme,
                    c.id AS counterparty_id, c.short_name AS counterparty_short_name, c.code AS counterparty_code,
                    a.id AS agreement_id, a.number AS agreement_number, a.agreement_date AS agreement_date,
                    s.id AS specification_id, s.number AS specification_number, s.specification_date AS specification_date
@@ -976,7 +1012,12 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             types_by_contract.setdefault(lr["contract_id"], []).append(lr["element_type"])
         contracts = [
             {
-                "id": r["id"], "name": r["name"], "contract_date": r["contract_date"],
+                "id": r["id"],
+                "name": build_contract_name(
+                    r["counterparty_short_name"], r["agreement_number"], r["agreement_date"],
+                    r["specification_number"], r["specification_date"], r["theme"],
+                ),
+                "theme": r["theme"],
                 "counterparty_id": r["counterparty_id"],
                 "counterparty_short_name": r["counterparty_short_name"],
                 "counterparty_code": r["counterparty_code"],
@@ -1043,6 +1084,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         "status_order": [s.value for s in STATUS_ORDER],
         "status_labels": {s.value: STATUS_LABELS_RU[s] for s in STATUS_ORDER},
         "label_visibility": label_visibility,
+        "label_dates_visibility": label_dates_visibility,
         "contracts": contracts,
         "default_contracts": default_contracts,
         "element_shapes": element_shapes,
@@ -1188,10 +1230,17 @@ def export_settings(admin: sqlite3.Row = Depends(require_admin)):
             r["element_type"]: bool(r["visible"])
             for r in conn.execute("SELECT element_type, visible FROM label_visibility").fetchall()
         }
+        label_dates_visibility = {
+            r["element_type"]: bool(r["dates_visible"])
+            for r in conn.execute("SELECT element_type, dates_visible FROM label_visibility").fetchall()
+        }
     finally:
         conn.close()
 
-    payload = {"users": users, "status_colors": colors, "label_visibility": label_visibility}
+    payload = {
+        "users": users, "status_colors": colors, "label_visibility": label_visibility,
+        "label_dates_visibility": label_dates_visibility,
+    }
 
     from urllib.parse import quote
     headers = {"Content-Disposition": "attachment; filename*=UTF-8''" + quote("zhbi_settings.json")}
@@ -1264,6 +1313,13 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
                 (element_type, int(visible)),
             )
 
+        for element_type, visible in payload.get("label_dates_visibility", {}).items():
+            conn.execute(
+                "INSERT INTO label_visibility (element_type, dates_visible) VALUES (?, ?) "
+                "ON CONFLICT(element_type) DO UPDATE SET dates_visible = excluded.dates_visible",
+                (element_type, int(visible)),
+            )
+
         conn.commit()
     finally:
         conn.close()
@@ -1272,6 +1328,7 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
         "users_upserted": users_upserted,
         "status_colors": len(payload.get("status_colors", {})),
         "label_visibility": len(payload.get("label_visibility", {})),
+        "label_dates_visibility": len(payload.get("label_dates_visibility", {})),
     }
 
 
