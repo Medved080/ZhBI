@@ -1,6 +1,8 @@
 import json
 import os
+import shutil
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -22,11 +24,12 @@ from app.contracts import (
 )
 from app.contracts import router as contracts_router
 from app.counterparties import router as counterparties_router
-from app.db import get_connection, init_db
+from app.db import DB_PATH, get_connection, init_db
 from app.dxf_import import DxfProcessingError, UPLOADS_DIR, import_dxf_file, process_upload
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
 from app.history_import import HistoryImportError, import_history, parse_history_xlsx
+from app.input_import import import_input_dxf, import_input_xlsx
 from app.models import (
     SHAPES,
     STATUS_LABELS_RU,
@@ -166,19 +169,10 @@ def _input_dir_filenames() -> set:
     return {p.name for p in INPUT_DIR.glob("*.dxf")}
 
 
-def _import_input_dir() -> None:
-    filenames = sorted(_input_dir_filenames())
-    if not filenames:
-        return
-    for name in filenames:
-        try:
-            result = process_upload(INPUT_DIR / name, name)
-            print(f"[startup] Input/{name}: {result.total} элементов ({result.inserted} новых, {result.updated} обновлено)")
-        except DxfProcessingError as e:
-            # Один битый/не подходящий файл не должен блокировать старт
-            # сервера с уже рабочими данными остальных файлов — громко
-            # логируем и переходим к следующему (см. Docs/backlog.md).
-            print(f"[startup] Input/{name}: ОШИБКА обработки — {e.message}")
+# Сам импорт при старте — app.input_import.import_input_dxf() (общая
+# логика с scripts/rebuild_db.py и аварийным восстановлением ниже, см.
+# _attempt_migration_recovery), _input_dir_filenames выше используется
+# только для /source-files (список имён, не сам импорт).
 
 
 SAME_FOOTPRINT_TOLERANCE_MM = 50.0  # см. docstring estimate_marker_radius
@@ -250,11 +244,94 @@ def _warn_users_without_password() -> None:
         )
 
 
+# ---------- аварийное самовосстановление БД при старте ----------
+#
+# РАЗОВЫЙ защитный механизм на конкретный известный инцидент: после
+# деплоя "Контрактация 2.0" тестовый сервер падал в
+# db._migrate_contracts_hierarchy ("no such table: contracts_old_v3"),
+# точную причину на самом сервере установить не удалось (не было
+# SSH-доступа в моменте, см. Docs/backlog.md, 2026-07-28) — а без
+# доступа единственный способ поднять сервис снова был пуш в git
+# (пайплайн коллеги пересобирает образ и перезапускает контейнер сам).
+# Раз ручного вмешательства на сервере не было, добавлена эта функция,
+# чтобы при следующем падении по ТОЙ ЖЕ причине сервис чинил себя сам.
+#
+# ВАЖНО, прочитать перед тем как трогать этот код снова: срабатывает
+# ТОЛЬКО если БД физически застряла в СТАРОЙ схеме (contracts.supplier
+# всё ещё существует — верный признак, что _migrate_contracts_hierarchy
+# не смогла завершиться) — если это не так, чужая ошибка НЕ маскируется,
+# просто падает как раньше. Пользователи (таблица users, включая пароли)
+# переносятся в новую БД как есть; всё остальное (элементы, контракты,
+# зоны, персональные настройки) — СБРАСЫВАЕТСЯ и грузится заново из
+# Input/, тем же путём, что scripts/rebuild_db.py. Это осознанно
+# приемлемо, ПОКА сервер на тестовом контуре без ценных данных (живое
+# подтверждение пользователя). Если сервер стабилизируется — этот блок
+# стоит УБРАТЬ, не оставлять постоянным механизмом: тихая пересборка БД
+# при любой будущей (в т.ч. никак не связанной) ошибке миграции — риск
+# потерять реальные данные без участия человека.
+def _attempt_migration_recovery(exc: Exception) -> bool:
+    if not DB_PATH.exists():
+        return False
+    raw = sqlite3.connect(DB_PATH)
+    try:
+        cols = {row[1] for row in raw.execute("PRAGMA table_info(contracts)")}
+        if "supplier" not in cols:
+            return False
+        users_rows = raw.execute("SELECT * FROM users").fetchall()
+        users_cols = [d[0] for d in raw.execute("SELECT * FROM users LIMIT 0").description]
+    finally:
+        raw.close()
+
+    print(
+        f"[startup] АВАРИЙНОЕ ВОССТАНОВЛЕНИЕ: init_db() упал ({exc!r}), "
+        f"БД застряла в старой схеме (contracts.supplier ещё есть). "
+        f"Пересобираю БД заново, сохраняя {len(users_rows)} пользователей."
+    )
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = DB_PATH.with_name(f"{DB_PATH.name}.bak-{stamp}")
+    shutil.move(str(DB_PATH), str(backup_path))
+    print(f"[startup] Старая база сохранена как {backup_path.name}.")
+    for suffix in ("-journal", "-wal", "-shm"):
+        stray = DB_PATH.with_name(DB_PATH.name + suffix)
+        if stray.exists():
+            stray.unlink()
+
+    init_db()
+
+    conn = get_connection()
+    try:
+        # Дефолтный admin, которого только что посеяла свежая схема
+        # (schema.sql), иначе конфликтует по PRIMARY KEY с восстанавливаемой
+        # строкой того же пользователя.
+        conn.execute("DELETE FROM users")
+        columns_sql = ", ".join(users_cols)
+        placeholders = ", ".join("?" for _ in users_cols)
+        conn.executemany(
+            f"INSERT INTO users ({columns_sql}) VALUES ({placeholders})",
+            [tuple(row) for row in users_rows],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"[startup] Пользователи восстановлены ({len(users_rows)}).")
+
+    import_input_dxf()
+    import_input_xlsx()
+    print("[startup] Аварийное восстановление завершено.")
+    return True
+
+
 @app.on_event("startup")
 def on_startup():
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        if not _attempt_migration_recovery(e):
+            raise
     _warn_users_without_password()
-    _import_input_dir()
+    import_input_dxf()
+    import_input_xlsx()
 
 
 @app.get("/health")
