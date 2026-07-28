@@ -257,10 +257,18 @@ def _warn_users_without_password() -> None:
 # чтобы при следующем падении по ТОЙ ЖЕ причине сервис чинил себя сам.
 #
 # ВАЖНО, прочитать перед тем как трогать этот код снова: срабатывает
-# ТОЛЬКО если БД физически застряла в СТАРОЙ схеме (contracts.supplier
-# всё ещё существует — верный признак, что _migrate_contracts_hierarchy
-# не смогла завершиться) — если это не так, чужая ошибка НЕ маскируется,
-# просто падает как раньше. Пользователи (таблица users, включая пароли)
+# ТОЛЬКО на sqlite3.OperationalError с текстом "no such table" — это
+# сигнатура застрявшей/повреждённой миграции (переименованная-и-удалённая
+# по ходу ALTER TABLE ... RENAME таблица вроде contracts_old_v3, на
+# которую могла остаться ссылка внешнего ключа в другой таблице — см.
+# Docs/backlog.md, 2026-07-28, "Второй раунд"). Первая версия этой
+# функции проверяла УЗКИЙ признак (наличие contracts.supplier) и не
+# сработала при повторном падении с ТЕМ ЖЕ текстом ошибки, потому что к
+# этому моменту contracts уже был в новой форме — ломалась не сама
+# contracts, а FK-ссылка на уже удалённую contracts_old_v3 в ДРУГОЙ
+# таблице (elements/status_history/default_contracts). Если ошибка не
+# подходит под эту сигнатуру, ничего не делается, чужая ошибка НЕ
+# маскируется — падает как раньше. Пользователи (таблица users, включая пароли)
 # переносятся в новую БД как есть; всё остальное (элементы, контракты,
 # зоны, персональные настройки) — СБРАСЫВАЕТСЯ и грузится заново из
 # Input/, тем же путём, что scripts/rebuild_db.py. Это осознанно
@@ -272,20 +280,18 @@ def _warn_users_without_password() -> None:
 def _attempt_migration_recovery(exc: Exception) -> bool:
     if not DB_PATH.exists():
         return False
+    if not isinstance(exc, sqlite3.OperationalError) or "no such table" not in str(exc):
+        return False
     raw = sqlite3.connect(DB_PATH)
     try:
-        cols = {row[1] for row in raw.execute("PRAGMA table_info(contracts)")}
-        if "supplier" not in cols:
-            return False
         users_rows = raw.execute("SELECT * FROM users").fetchall()
         users_cols = [d[0] for d in raw.execute("SELECT * FROM users LIMIT 0").description]
     finally:
         raw.close()
 
     print(
-        f"[startup] АВАРИЙНОЕ ВОССТАНОВЛЕНИЕ: init_db() упал ({exc!r}), "
-        f"БД застряла в старой схеме (contracts.supplier ещё есть). "
-        f"Пересобираю БД заново, сохраняя {len(users_rows)} пользователей."
+        f"[startup] АВАРИЙНОЕ ВОССТАНОВЛЕНИЕ: init_db() упал ({exc!r}), похоже на "
+        f"застрявшую миграцию. Пересобираю БД заново, сохраняя {len(users_rows)} пользователей."
     )
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -324,14 +330,22 @@ def _attempt_migration_recovery(exc: Exception) -> bool:
 
 @app.on_event("startup")
 def on_startup():
+    # ВАЖНО: битая FK-ссылка на удалённую по ходу миграции таблицу (см.
+    # _attempt_migration_recovery) на практике может НЕ проявиться внутри
+    # самого init_db() (миграции-то уже отметились как выполненные и молча
+    # возвращаются) — а вылезти позже, на первой же реальной операции с
+    # затронутой таблицей: живой прогон показал падение именно в
+    # import_input_dxf() → upsert_elements(), уже ПОСЛЕ успешного init_db().
+    # Поэтому в try/except — весь стартовый импорт, не только init_db().
     try:
         init_db()
+        _warn_users_without_password()
+        import_input_dxf()
+        import_input_xlsx()
     except Exception as e:
         if not _attempt_migration_recovery(e):
             raise
-    _warn_users_without_password()
-    import_input_dxf()
-    import_input_xlsx()
+        _warn_users_without_password()
 
 
 @app.get("/health")

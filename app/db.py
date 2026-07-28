@@ -100,6 +100,18 @@ def _migrate_contracts_structure(conn: sqlite3.Connection) -> None:
     # включаем PRAGMA обратно явно — это соединение короткоживущее (закрывается
     # в конце init_db()), а любое новое соединение уже получает foreign_keys=ON
     # по умолчанию через get_connection().
+    #
+    # PRAGMA foreign_keys — no-op, если вызвана посреди уже открытой
+    # транзакции (документированное поведение SQLite) — тогда foreign_keys
+    # молча ОСТАЁТСЯ включённой, RENAME переписывает FK ДРУГИХ таблиц на
+    # "contracts_old", и после DROP TABLE contracts_old эти FK становятся
+    # битыми НАВСЕГДА (ссылка на несуществующую таблицу, сохраняется в
+    # sqlite_master) — проявляется как "no such table: main.contracts_old"
+    # при следующей же операции с этими таблицами, даже в СЛЕДУЮЩЕМ запуске
+    # сервера. commit() здесь безопасен — все более ранние шаги уже
+    # представляют собой согласованное состояние, не полуготовое.
+    if conn.in_transaction:
+        conn.commit()
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("ALTER TABLE contracts RENAME TO contracts_old")
     conn.execute(
@@ -169,6 +181,17 @@ def _migrate_contracts_hierarchy(conn: sqlite3.Connection) -> None:
     if "supplier" not in cols:
         return
 
+    # PRAGMA foreign_keys — no-op посреди уже открытой транзакции (например,
+    # если _migrate_contracts_structure выше только что сделала свою DML-
+    # тяжёлую миграцию в ЭТОМ ЖЕ соединении и не закоммитила) — тогда
+    # foreign_keys молча остаётся включённой, RENAME ниже переписывает FK
+    # других таблиц на "contracts_old_v3", и после DROP они становятся
+    # битыми навсегда ("no such table: main.contracts_old_v3" при первой же
+    # операции с этими таблицами, в т.ч. на следующем запуске сервера — живой
+    # инцидент, см. Docs/backlog.md). commit() здесь безопасен — то, что
+    # сделала предыдущая миграция, уже согласованное состояние.
+    if conn.in_transaction:
+        conn.commit()
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("DELETE FROM contract_incidents")
     conn.execute("DELETE FROM contract_lines")
