@@ -432,3 +432,276 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
             "total": total,
         },
     }
+
+
+def _dyn_short_date(iso: str) -> str:
+    MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
+    from datetime import date
+    d = date.fromisoformat(iso[:10])
+    return f"{d.day:02d} {MONTHS[d.month - 1]}"
+
+
+def _ru_date_short(iso: Optional[str]) -> str:
+    if not iso:
+        return ""
+    from datetime import date
+    d = date.fromisoformat(iso[:10])
+    return f"{d.day:02d}.{d.month:02d}.{d.year}"
+
+
+DYN_SERIES_ORDER = ["plan_smr", "fact_delivery", "fact_montage"]
+DYN_SERIES_COLORS = {"plan_smr": "#4A86C8", "fact_delivery": "#E8703A", "fact_montage": "#8C99A6"}
+
+
+def build_dynamics_report_pdf(report: dict) -> bytes:
+    """PDF повторяет экранную вёрстку: шапка, два блока, график, две таблицы,
+    открытые вопросы. График рисуется теми же формулами масштабирования, что
+    и SVG на экране (см. buildDynamicsChartSvg в app.js) — своей отрисовкой,
+    без сторонних библиотек графиков."""
+    from io import BytesIO
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Flowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    from app.pdf_export import FONT_BOLD, FONT_REGULAR
+
+    card = report["card"]
+    weeks = report["weeks"]
+
+    class Chart(Flowable):
+        """Свой Flowable: reportlab не умеет графиков, а тащить ради одного
+        рисунка стороннюю библиотеку — новый вендоринг, требующий отдельного
+        подтверждения (см. CLAUDE.md)."""
+
+        def __init__(self, width, height):
+            super().__init__()
+            self.width, self.height = width, height
+
+        def draw(self):
+            c = self.canv
+            L, R, T, B = 34, 8, 26, 34
+            series = report["series"]
+            top = max([1] + [v for k in DYN_SERIES_ORDER for v in series.get(k, [])])
+            pow10 = 10 ** (len(str(int(top))) - 1)
+            max_y = -(-top // (pow10 / 2)) * (pow10 / 2)
+            n = max(len(weeks), 1)
+
+            def X(i):
+                return L + (0 if n == 1 else i * (self.width - L - R) / (n - 1))
+
+            def Y(v):
+                return B + (v / max_y) * (self.height - T - B)
+
+            c.setFont(FONT_REGULAR, 6)
+            for i in range(6):
+                v = max_y * i / 5
+                y = Y(v)
+                c.setStrokeColor(colors.HexColor("#E5E8EC"))
+                c.line(L, y, self.width - R, y)
+                c.setFillColor(colors.HexColor("#8A94A0"))
+                c.drawRightString(L - 3, y - 2, str(int(v)))
+            step = 2 if n > 18 else 1
+            for i, w in enumerate(weeks):
+                if i % step:
+                    continue
+                c.saveState()
+                c.translate(X(i), B - 4)
+                c.rotate(45)
+                c.setFillColor(colors.HexColor("#8A94A0"))
+                c.drawRightString(0, 0, _dyn_short_date(w))
+                c.restoreState()
+
+            for key in DYN_SERIES_ORDER:
+                vals = series.get(key, [])
+                if not any(vals):
+                    continue
+                c.setStrokeColor(colors.HexColor(DYN_SERIES_COLORS[key]))
+                c.setLineWidth(1.2)
+                path = c.beginPath()
+                for i, v in enumerate(vals):
+                    (path.moveTo if i == 0 else path.lineTo)(X(i), Y(v))
+                c.drawPath(path)
+
+            marks = [{"label": "Отчётная дата", "date": report["report_date"]}] + \
+                    [m for m in card.get("milestones", []) if m.get("date")]
+            c.setFont(FONT_REGULAR, 6)
+            for idx, m in enumerate(marks):
+                target = m["date"][:10]
+                i = max([j for j, w in enumerate(weeks) if w <= target] or [0])
+                x = X(i)
+                plan = (series.get("plan_smr") or [0])[i] if i < len(series.get("plan_smr", [])) else 0
+                y = Y(plan)
+                top_y = self.height - 6 - (idx % 2) * 8
+                c.setStrokeColor(colors.HexColor("#C0392B"))
+                c.setFillColor(colors.HexColor("#C0392B"))
+                c.line(x, top_y - 4, x, y + 4)
+                p = c.beginPath(); p.moveTo(x - 2.5, y + 6); p.lineTo(x, y + 1); p.lineTo(x + 2.5, y + 6); p.close()
+                c.drawPath(p, fill=1, stroke=0)
+                text = m["label"] if m["label"] == "Отчётная дата" else f"{m['label']} {_ru_date_short(m['date'])}"
+                (c.drawRightString if x > self.width * 0.75 else c.drawCentredString)(x, top_y, text)
+
+            lx = L
+            for key in DYN_SERIES_ORDER:
+                label = report["series_labels"][key]
+                c.setStrokeColor(colors.HexColor(DYN_SERIES_COLORS[key]))
+                c.setLineWidth(1.4)
+                c.line(lx, 6, lx + 12, 6)
+                c.setFillColor(colors.HexColor("#4A5460"))
+                c.drawString(lx + 15, 4, label)
+                lx += 20 + len(label) * 3.4
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=12 * mm, rightMargin=12 * mm,
+                            topMargin=10 * mm, bottomMargin=10 * mm, title=report["title"])
+    center = ParagraphStyle("c", fontName=FONT_BOLD, fontSize=12, leading=15, alignment=1)
+    sub = ParagraphStyle("s", fontName=FONT_REGULAR, fontSize=8, leading=11, alignment=1)
+    subb = ParagraphStyle("sb", fontName=FONT_BOLD, fontSize=8, leading=11, alignment=1)
+    small = ParagraphStyle("sm", fontName=FONT_REGULAR, fontSize=7.5, leading=10)
+    note = ParagraphStyle("n", fontName=FONT_REGULAR, fontSize=6.5, leading=9,
+                          textColor=colors.HexColor("#777777"))
+
+    story = [
+        Paragraph(f"Ежедневный отчёт за {_ru_date_short(report['report_date'])}", center),
+        Paragraph(card.get("subtitle") or "", sub),
+        Paragraph(card.get("title") or "", subb),
+        Spacer(1, 4 * mm),
+    ]
+
+    def bullet_box(title, items, head_bg):
+        inner = [[Paragraph(f"<b>{title}</b>", small)]]
+        for it in (items or []):
+            inner.append([Paragraph(f"•&nbsp;{it}", small)])
+        if not items:
+            inner.append([Paragraph("не заполнено", note)])
+        t = Table(inner, colWidths=[128 * mm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, 0), colors.HexColor(head_bg)),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#D5D8DC")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        return t
+
+    story.append(Table([[bullet_box("Ключевые события", card.get("key_events"), "#E8F4EA"),
+                         bullet_box("Ключевые задачи", card.get("key_tasks"), "#FDF0E3")]],
+                       colWidths=[133 * mm, 133 * mm],
+                       style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])))
+    story.append(Spacer(1, 4 * mm))
+    story.append(Chart(266 * mm, 62 * mm))
+    story.append(Spacer(1, 4 * mm))
+
+    def status_table(caption, block, footnote):
+        def dev(v):
+            return f"+{v}" if v > 0 else str(v)
+        rows = [
+            [caption, "", "", "", "", "", "", ""],
+            ["Всего в проекте", "Накопительно", "", "", f"На {_ru_date_short(report['report_date'])}", "", "", "%"],
+            ["", "План", "Факт", "Отклонение", "План", "Факт", "Отклонение", ""],
+            [block["total"], block["cumulative"]["plan"], block["cumulative"]["fact"], dev(block["cumulative"]["deviation"]),
+             block["day"]["plan"], block["day"]["fact"], dev(block["day"]["deviation"]), f"{block['percent']}%"],
+        ]
+        t = Table(rows, colWidths=[24 * mm] + [17 * mm] * 6 + [14 * mm])
+        t.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), FONT_REGULAR), ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("FONTNAME", (0, 0), (-1, 2), FONT_BOLD),
+            ("SPAN", (0, 0), (-1, 0)), ("SPAN", (1, 1), (3, 1)), ("SPAN", (4, 1), (6, 1)),
+            ("SPAN", (0, 1), (0, 2)), ("SPAN", (7, 1), (7, 2)),
+            ("BACKGROUND", (0, 0), (-1, 2), colors.HexColor("#EEF2F7")),
+            ("GRID", (0, 1), (-1, -1), 0.4, colors.HexColor("#D5D8DC")),
+            ("ALIGN", (0, 1), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        # Список флоуаблов, а НЕ KeepTogether: внутри ячейки таблицы
+        # KeepTogether заставляет reportlab считать высоту бесконечной и
+        # падает с LayoutError «too large on page».
+        return [t, Paragraph(footnote, note)] if footnote else [t]
+
+    left = (status_table("Статус монтажа ЖБИ", report["montage"],
+                         f"* окончание монтажа изделий {_ru_date_short(card.get('montage_deadline'))}"
+                         if card.get("montage_deadline") else "")
+            + [Spacer(1, 3 * mm)]
+            + status_table("Статус поставки ЖБИ", report["delivery"],
+                           f"** окончание поставки изделий {_ru_date_short(card.get('delivery_deadline'))}"
+                           if card.get("delivery_deadline") else ""))
+
+    story.append(Table([[left, bullet_box("Открытые вопросы", card.get("open_questions"), "#EEF2F7")]],
+                       colWidths=[140 * mm, 126 * mm],
+                       style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])))
+
+    cov = report["plan_coverage"]
+    if cov["smr"] < cov["total"] or cov["delivery"] < cov["total"]:
+        story.append(Spacer(1, 3 * mm))
+        story.append(Paragraph(
+            f"Внимание: план СМР задан у {cov['smr']} изделий из {cov['total']}, "
+            f"план поставки — у {cov['delivery']}. Кривая плана неполная.",
+            ParagraphStyle("w", parent=note, textColor=colors.HexColor("#C0392B"))))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def build_dynamics_report_xlsx(report: dict) -> bytes:
+    """Excel-версия — таблицы и ряды графика числами. График как рисунок не
+    переносим: в Excel его строят из данных, и колонки рядов полезнее
+    картинки."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    card = report["card"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Динамика"
+    ws.append([f"Ежедневный отчёт за {_ru_date_short(report['report_date'])}"])
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.append([card.get("subtitle") or ""])
+    ws.append([card.get("title") or ""])
+    ws.append([])
+
+    for caption, block, deadline in (
+        ("Статус монтажа ЖБИ", report["montage"], card.get("montage_deadline")),
+        ("Статус поставки ЖБИ", report["delivery"], card.get("delivery_deadline")),
+    ):
+        ws.append([caption])
+        ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+        ws.append(["Всего в проекте", "Накопительно: план", "факт", "отклонение",
+                   f"На {_ru_date_short(report['report_date'])}: план", "факт", "отклонение", "%"])
+        for i in range(1, 9):
+            ws.cell(row=ws.max_row, column=i).font = Font(bold=True)
+            ws.cell(row=ws.max_row, column=i).alignment = Alignment(wrap_text=True, horizontal="center")
+        ws.append([block["total"], block["cumulative"]["plan"], block["cumulative"]["fact"],
+                   block["cumulative"]["deviation"], block["day"]["plan"], block["day"]["fact"],
+                   block["day"]["deviation"], block["percent"] / 100])
+        ws.cell(row=ws.max_row, column=8).number_format = "0%"
+        if deadline:
+            ws.append([f"окончание {_ru_date_short(deadline)}"])
+        ws.append([])
+
+    ws.append(["Ряды графика (накопительно по неделям)"])
+    ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+    ws.append(["Неделя"] + [report["series_labels"][k] for k in DYN_SERIES_ORDER])
+    for i in range(1, 5):
+        ws.cell(row=ws.max_row, column=i).font = Font(bold=True)
+    for i, w in enumerate(report["weeks"]):
+        ws.append([w] + [report["series"].get(k, [0] * len(report["weeks"]))[i] for k in DYN_SERIES_ORDER])
+
+    ws.append([])
+    for title, items in (("Ключевые события", card.get("key_events")),
+                         ("Ключевые задачи", card.get("key_tasks")),
+                         ("Открытые вопросы", card.get("open_questions"))):
+        ws.append([title])
+        ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+        for it in (items or []):
+            ws.append([it])
+        ws.append([])
+
+    ws.column_dimensions["A"].width = 46
+    for i in range(2, 9):
+        ws.column_dimensions[get_column_letter(i)].width = 16
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

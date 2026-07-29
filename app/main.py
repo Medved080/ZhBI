@@ -41,7 +41,10 @@ from app.element_dates import set_planned_delivery_date, set_planned_delivery_da
 from app.export import build_history_xlsx, build_snapshot_xlsx
 from app.history_import import HistoryImportError, import_history, parse_history_xlsx
 from app.input_import import import_input_dxf, import_input_xlsx, list_input_files
-from app.reports import build_status_report, build_status_report_pdf, build_status_report_xlsx
+from app.reports import (
+    build_dynamics_report, build_dynamics_report_pdf, build_dynamics_report_xlsx,
+    build_status_report, build_status_report_pdf, build_status_report_xlsx,
+)
 from app.models import (
     SHAPES,
     STATUS_LABELS_RU,
@@ -630,6 +633,9 @@ def delete_history_entry(
 
 class ReportRequestIn(BaseModel):
     source_file: Optional[str] = None
+    # Отчётная дата — только для «Динамики» (ежедневный отчёт «на дату»).
+    # Пусто = сегодня; сервер возвращает фактически применённую дату.
+    report_date: Optional[str] = None
     # Список id — необязательное сужение отчёта текущим фильтром схемы. Тот
     # же приём, что у XLS-экспорта: критерии фильтра живут на клиенте, и
     # дублировать их на сервере значило бы держать две расходящиеся копии.
@@ -645,6 +651,45 @@ def report_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current
         return build_status_report(conn, body.source_file, body.element_ids)
     finally:
         conn.close()
+
+
+@app.post("/reports/dynamics")
+def report_dynamics(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Ежедневный отчёт «Динамика монтажа и поставки ТМЦ»."""
+    conn = get_connection()
+    try:
+        return build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids)
+    finally:
+        conn.close()
+
+
+def _report_file_response(content: bytes, name: str, media_type: str) -> Response:
+    return Response(
+        content=content, media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename=\"report\"; filename*=UTF-8''{quote(name)}"},
+    )
+
+
+@app.post("/reports/dynamics.xlsx")
+def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids)
+    finally:
+        conn.close()
+    return _report_file_response(
+        build_dynamics_report_xlsx(report), "Динамика.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.post("/reports/dynamics.pdf")
+def report_dynamics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids)
+    finally:
+        conn.close()
+    return _report_file_response(build_dynamics_report_pdf(report), "Динамика.pdf", "application/pdf")
 
 
 @app.post("/reports/status.xlsx")

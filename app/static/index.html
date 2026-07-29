@@ -515,6 +515,31 @@
   .btn-icon-square { width: 30px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
   .btn-icon-square img { display: block; }
 
+  /* -------- отчёт «Динамика» -------- */
+  .dyn-head { text-align: center; margin-bottom: 14px; }
+  .dyn-head h3 { margin: 0 0 4px; font-size: 15px; }
+  .dyn-head .dyn-sub { font-size: 12px; color: var(--color-text-muted); }
+  .dyn-boxes { display: flex; gap: 12px; margin-bottom: 14px; }
+  .dyn-box { flex: 1; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
+  .dyn-box > h4 { margin: 0; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+  .dyn-box.events > h4 { background: #E8F4EA; color: #1E7B34; }
+  .dyn-box.tasks > h4 { background: #FDF0E3; color: #B35C00; }
+  .dyn-box.questions > h4 { background: var(--color-surface-2); }
+  .dyn-box ul { margin: 0; padding: 8px 10px 10px 26px; font-size: 12px; }
+  .dyn-box li { margin: 3px 0; }
+  .dyn-box .dyn-empty { padding: 8px 10px; font-size: 12px; color: var(--color-text-muted); }
+  .dyn-chart { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 8px; margin-bottom: 14px; }
+  .dyn-chart svg { display: block; width: 100%; height: auto; }
+  .dyn-bottom { display: flex; gap: 12px; align-items: flex-start; }
+  .dyn-tables { flex: 2; }
+  .dyn-tables table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 4px; }
+  .dyn-tables th, .dyn-tables td { border: 1px solid var(--color-border); padding: 3px 6px; text-align: center; }
+  .dyn-tables th { background: var(--color-surface-2); font-weight: 600; }
+  .dyn-tables caption { text-align: left; font-weight: 600; font-size: 12px; padding: 6px 0 4px; background: var(--color-surface-2); }
+  .dyn-note { font-size: 10px; color: var(--color-text-muted); font-style: italic; margin-bottom: 10px; }
+  .dyn-warn { font-size: 11px; color: var(--color-danger); margin-bottom: 10px; }
+  .dyn-neg { color: var(--color-danger); }
+
   #report-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   #report-table th, #report-table td { padding: 5px 8px; border: 1px solid var(--color-border); }
   #report-table th { background: var(--color-surface-2); font-weight: 600; text-align: center; position: sticky; top: 0; }
@@ -785,6 +810,7 @@
             <button id="menu-mark-prefixes">Префиксы марок</button>
             <button id="menu-counterparties">Контрагенты</button>
             <button id="menu-contracts">Контракты</button>
+            <button id="menu-project-card">Карточка объекта</button>
           </div>
         </div>
         <div class="submenu admin-only">
@@ -815,6 +841,7 @@
           <button type="button" class="submenu-trigger">Отчёты</button>
           <div class="dropdown-menu submenu-panel">
             <button id="menu-report-status">Статусы</button>
+            <button id="menu-report-dynamics">Динамика монтажа и поставки</button>
           </div>
         </div>
         <div class="submenu admin-only">
@@ -1162,13 +1189,52 @@
 <!-- Общая форма отчётов: вид отчёта выбирается кнопками сверху, поэтому
      следующий отчёт добавляется одной кнопкой и одной функцией отрисовки,
      без новой модалки. -->
+<!-- Карточка объекта: всё, чего нет и не может быть в чертеже — описание
+     объекта, контрольные даты, вехи и три текстовых блока ежедневного
+     отчёта. Ведётся вручную, подставляется в отчёт «Динамика». -->
+<div class="modal-backdrop" id="project-card-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head"><h2>Карточка объекта</h2>
+      <p class="hint-text">Используется в отчёте «Динамика монтажа и поставки».</p></div>
+    <div class="modal-sticky-scroll">
+      <label class="field">Наименование объекта</label>
+      <textarea id="pc-title" rows="2" style="width:100%"></textarea>
+      <label class="field">Подзаголовок отчёта</label>
+      <input type="text" id="pc-subtitle"/>
+      <div class="row">
+        <div><label class="field">Окончание монтажа изделий</label><input type="date" id="pc-montage-deadline"/></div>
+        <div><label class="field">Окончание поставки изделий</label><input type="date" id="pc-delivery-deadline"/></div>
+      </div>
+      <label class="field">Вехи на графике (по одной в строке: «Название | ГГГГ-ММ-ДД»)</label>
+      <textarea id="pc-milestones" rows="3" style="width:100%" placeholder="Завершение 1 Захватки | 2026-09-13"></textarea>
+      <label class="field">Ключевые события (по одному в строке)</label>
+      <textarea id="pc-events" rows="4" style="width:100%"></textarea>
+      <label class="field">Ключевые задачи (по одной в строке)</label>
+      <textarea id="pc-tasks" rows="4" style="width:100%"></textarea>
+      <label class="field">Открытые вопросы (по одному в строке)</label>
+      <textarea id="pc-questions" rows="4" style="width:100%"></textarea>
+      <div class="hint-text" id="pc-status"></div>
+    </div>
+    <div class="modal-sticky-foot"><div class="actions">
+      <button class="btn btn-secondary" id="pc-cancel">Отмена</button>
+      <button class="btn btn-primary" id="pc-save">Сохранить</button>
+    </div></div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="reports-backdrop">
   <div class="modal wide modal-sticky">
     <div class="modal-sticky-head">
       <div class="report-head">
         <div class="report-tabs" id="report-tabs" role="group" aria-label="Вид отчёта">
           <button type="button" class="report-tab active" data-report="status">Статусы</button>
+          <button type="button" class="report-tab" data-report="dynamics">Динамика</button>
         </div>
+        <!-- Отчётная дата нужна только «Динамике» (ежедневный отчёт «на
+             дату»); для «Статусов» она бессмысленна и скрывается. -->
+        <label class="field" id="report-date-box" style="display:none; margin:0">
+          На дату <input type="date" id="report-date" style="width:auto"/>
+        </label>
         <span class="spacer"></span>
         <div class="report-actions">
           <button class="btn btn-sm btn-secondary" id="report-print" title="Печать отчёта">Печать</button>

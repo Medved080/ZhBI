@@ -5662,6 +5662,71 @@ function setStatusRestoreStatus(text, isError) {
   elm.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
+// ---------- карточка объекта (данные для отчёта «Динамика») ----------
+const projectCardBackdrop = document.getElementById("project-card-backdrop");
+
+// Списки редактируются как текст «по строке на пункт»: это привычнее
+// таблицы с кнопками «добавить/удалить» для 3-5 коротких фраз, которые
+// правят раз в день, и переживает копирование из письма целиком.
+const linesToList = (v) => v.split("\n").map(s => s.trim()).filter(Boolean);
+const listToLines = (a) => (a || []).join("\n");
+
+document.getElementById("menu-project-card").addEventListener("click", async () => {
+  projectCardBackdrop.classList.add("open");
+  document.getElementById("pc-status").textContent = "";
+  try {
+    const c = await api("/settings/project-card");
+    document.getElementById("pc-title").value = c.title || "";
+    document.getElementById("pc-subtitle").value = c.subtitle || "";
+    document.getElementById("pc-montage-deadline").value = c.montage_deadline || "";
+    document.getElementById("pc-delivery-deadline").value = c.delivery_deadline || "";
+    document.getElementById("pc-milestones").value =
+      (c.milestones || []).map(m => `${m.label} | ${m.date}`).join("\n");
+    document.getElementById("pc-events").value = listToLines(c.key_events);
+    document.getElementById("pc-tasks").value = listToLines(c.key_tasks);
+    document.getElementById("pc-questions").value = listToLines(c.open_questions);
+  } catch (e) {
+    document.getElementById("pc-status").textContent = "Не удалось загрузить: " + e.message;
+  }
+});
+document.getElementById("pc-cancel").addEventListener("click", () => projectCardBackdrop.classList.remove("open"));
+
+document.getElementById("pc-save").addEventListener("click", async () => {
+  const milestones = [];
+  for (const line of linesToList(document.getElementById("pc-milestones").value)) {
+    const [label, date] = line.split("|").map(s => s.trim());
+    // Строку без даты молча не проглатываем: веха без даты не встанет на
+    // график, и пользователь должен узнать об этом здесь, а не гадать потом.
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      document.getElementById("pc-status").textContent =
+        `Веха «${line}» — нужна дата в формате ГГГГ-ММ-ДД после знака «|»`;
+      return;
+    }
+    milestones.push({ label, date });
+  }
+  try {
+    await api("/settings/project-card", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: document.getElementById("pc-title").value.trim(),
+        subtitle: document.getElementById("pc-subtitle").value.trim(),
+        montage_deadline: document.getElementById("pc-montage-deadline").value || null,
+        delivery_deadline: document.getElementById("pc-delivery-deadline").value || null,
+        milestones,
+        key_events: linesToList(document.getElementById("pc-events").value),
+        key_tasks: linesToList(document.getElementById("pc-tasks").value),
+        open_questions: linesToList(document.getElementById("pc-questions").value),
+      }),
+    });
+    projectCardBackdrop.classList.remove("open");
+    showToast("Карточка объекта сохранена", "info");
+    // Открытый отчёт «Динамика» сразу показывает новые данные.
+    if (reportsBackdrop.classList.contains("open") && currentReport === "dynamics") loadReport();
+  } catch (e) {
+    document.getElementById("pc-status").textContent = "Не удалось сохранить: " + e.message;
+  }
+});
+
 // ==================== ОТЧЁТЫ (живой запрос 2026-07-29) ====================
 //
 // Одна форма на все отчёты: вид выбирается кнопками сверху, тело
@@ -5680,6 +5745,12 @@ const REPORTS = {
     endpoint: "/reports/status",
     render: renderTreeReport,
   },
+  dynamics: {
+    title: "Динамика монтажа и поставки ТМЦ",
+    endpoint: "/reports/dynamics",
+    render: renderDynamicsReport,
+    needsDate: true,
+  },
 };
 let currentReport = "status";
 let reportData = null;
@@ -5691,6 +5762,9 @@ function reportRequestBody() {
   const body = { source_file: state.sourceFile || null };
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
+  }
+  if (REPORTS[currentReport].needsDate) {
+    body.report_date = document.getElementById("report-date").value || null;
   }
   return body;
 }
@@ -5726,6 +5800,159 @@ function renderTreeReport(data) {
   return parts.join("");
 }
 
+// ---------- отчёт «Динамика»: график + таблицы + текстовые блоки ----------
+//
+// График рисуется своим кодом в SVG (решение пользователя), а не сторонней
+// библиотекой: те же координаты потом повторяет reportlab в PDF, и никакой
+// новый вендоринг не нужен.
+
+const DYN_COLORS = {
+  plan_smr: "#4A86C8",
+  fact_delivery: "#E8703A",
+  fact_montage: "#8C99A6",
+};
+// Порядок задаёт и порядок в легенде, и порядок отрисовки: факт поверх плана.
+const DYN_SERIES = ["plan_smr", "fact_delivery", "fact_montage"];
+
+function niceMax(value) {
+  // Верх шкалы — «круглое» число над максимумом, иначе подписи оси
+  // получаются вида 9422, 7537, 5651 и читаются плохо.
+  if (value <= 0) return 10;
+  const pow = Math.pow(10, Math.floor(Math.log10(value)));
+  return Math.ceil(value / (pow / 2)) * (pow / 2);
+}
+
+function shortDate(iso) {
+  const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+  const d = new Date(iso + "T00:00:00");
+  return `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]}`;
+}
+
+function buildDynamicsChartSvg(data, width = 1000, height = 330) {
+  const weeks = data.weeks;
+  if (!weeks.length) return "<div class='hint-text'>Нет данных для графика</div>";
+  const L = 52, R = 18, T = 46, B = 64;
+  const maxY = niceMax(Math.max(1, ...DYN_SERIES.flatMap(k => data.series[k] || [])));
+  const x = i => L + (weeks.length === 1 ? 0 : i * (width - L - R) / (weeks.length - 1));
+  const y = v => height - B - (v / maxY) * (height - T - B);
+
+  const parts = [`<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">`];
+
+  // Сетка и ось Y
+  for (let i = 0; i <= 5; i++) {
+    const v = maxY * i / 5, yy = y(v);
+    parts.push(`<line x1="${L}" y1="${yy}" x2="${width - R}" y2="${yy}" stroke="#E5E8EC" stroke-width="1"/>`);
+    parts.push(`<text x="${L - 8}" y="${yy + 4}" font-size="11" fill="#8A94A0" text-anchor="end">${Math.round(v)}</text>`);
+  }
+  // Подписи недель: каждую вторую, если их много — иначе подписи налезают
+  const step = weeks.length > 18 ? 2 : 1;
+  weeks.forEach((w, i) => {
+    if (i % step) return;
+    parts.push(`<text x="${x(i)}" y="${height - B + 16}" font-size="10" fill="#8A94A0" text-anchor="end"
+      transform="rotate(-45 ${x(i)} ${height - B + 16})">${shortDate(w)}</text>`);
+  });
+
+  // Линии
+  for (const key of DYN_SERIES) {
+    const vals = data.series[key] || [];
+    if (!vals.some(v => v > 0)) continue;
+    const d = vals.map((v, i) => `${i ? "L" : "M"} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
+    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"/>`);
+  }
+
+  // Вехи: красная стрелка вниз к линии плана + выноска с датой
+  const weekIndex = (iso) => {
+    const target = iso.slice(0, 10);
+    let best = 0;
+    weeks.forEach((w, i) => { if (w <= target) best = i; });
+    return best;
+  };
+  const marks = [{ label: "Отчётная дата", date: data.report_date }]
+    .concat((data.card.milestones || []).filter(m => m && m.date));
+  marks.forEach((m, n) => {
+    const i = weekIndex(m.date);
+    const px = x(i);
+    const plan = (data.series.plan_smr || [])[i] || 0;
+    const py = y(plan);
+    // Выноски раскладываем на двух высотах через одну — иначе на близких
+    // датах подписи накладываются друг на друга.
+    const topY = 16 + (n % 2) * 16;
+    parts.push(`<line x1="${px}" y1="${topY + 6}" x2="${px}" y2="${py - 6}" stroke="#C0392B" stroke-width="1.4"/>`);
+    parts.push(`<path d="M ${px - 4} ${py - 10} L ${px} ${py - 2} L ${px + 4} ${py - 10} Z" fill="#C0392B"/>`);
+    const text = m.date === data.report_date && !m.label.includes("Захват")
+      ? m.label : `${m.label} ${formatDateRu(m.date)}`;
+    const anchor = px > width * 0.75 ? "end" : (px < width * 0.2 ? "start" : "middle");
+    parts.push(`<text x="${px}" y="${topY}" font-size="10.5" fill="#C0392B" text-anchor="${anchor}">${escapeHtml(text)}</text>`);
+  });
+
+  // Легенда
+  let lx = L;
+  for (const key of DYN_SERIES) {
+    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"/>`);
+    parts.push(`<text x="${lx + 28}" y="${height - 6}" font-size="11" fill="#4A5460">${escapeHtml(data.series_labels[key])}</text>`);
+    lx += 34 + data.series_labels[key].length * 6.2;
+  }
+  parts.push("</svg>");
+  return parts.join("");
+}
+
+function dynBlockTable(caption, block, note) {
+  const dev = (v) => `<td class="${v < 0 ? "dyn-neg" : ""}">${v > 0 ? "+" + v : v}</td>`;
+  return `<table>
+    <caption>${escapeHtml(caption)}</caption>
+    <tr><th rowspan="2">Всего в проекте</th><th colspan="3">Накопительно</th>
+        <th colspan="3">На ${formatDateRu(block.date)}</th><th rowspan="2">%</th></tr>
+    <tr><th>План</th><th>Факт</th><th>Отклонение</th><th>План</th><th>Факт</th><th>Отклонение</th></tr>
+    <tr><td>${block.total}</td>
+        <td>${block.cumulative.plan}</td><td>${block.cumulative.fact}</td>${dev(block.cumulative.deviation)}
+        <td>${block.day.plan}</td><td>${block.day.fact}</td>${dev(block.day.deviation)}
+        <td>${block.percent}%</td></tr>
+  </table>${note ? `<div class="dyn-note">${escapeHtml(note)}</div>` : ""}`;
+}
+
+function dynList(cls, title, items) {
+  const body = (items && items.length)
+    ? `<ul>${items.map(t => `<li>${escapeHtml(t)}</li>`).join("")}</ul>`
+    : `<div class="dyn-empty">не заполнено — «Действия → Справочники → Карточка объекта»</div>`;
+  return `<div class="dyn-box ${cls}"><h4>${escapeHtml(title)}</h4>${body}</div>`;
+}
+
+function renderDynamicsReport(data) {
+  const card = data.card;
+  const cov = data.plan_coverage;
+  // Предупреждение о неполноте плана — обязательно и заметно: кривая по
+  // части изделий внешне неотличима от полного плана и молча вводит в
+  // заблуждение (см. разбор второго отчёта, Docs/backlog.md).
+  const warns = [];
+  if (cov.smr < cov.total) warns.push(`план СМР задан у ${cov.smr} изделий из ${cov.total}`);
+  if (cov.delivery < cov.total) warns.push(`план поставки — у ${cov.delivery} из ${cov.total}`);
+
+  const montage = { ...data.montage, date: data.report_date };
+  const delivery = { ...data.delivery, date: data.report_date };
+
+  return `
+    <div class="dyn-head">
+      <h3>Ежедневный отчёт за ${formatDateRu(data.report_date)}</h3>
+      <div class="dyn-sub">${escapeHtml(card.subtitle || "")}</div>
+      <div class="dyn-sub"><b>${escapeHtml(card.title || "— объект не заполнен —")}</b></div>
+    </div>
+    ${warns.length ? `<div class="dyn-warn">Внимание: ${escapeHtml(warns.join("; "))}. Кривая плана неполная.</div>` : ""}
+    <div class="dyn-boxes">
+      ${dynList("events", "Ключевые события", card.key_events)}
+      ${dynList("tasks", "Ключевые задачи", card.key_tasks)}
+    </div>
+    <div class="dyn-chart">${buildDynamicsChartSvg(data)}</div>
+    <div class="dyn-bottom">
+      <div class="dyn-tables">
+        ${dynBlockTable("Статус монтажа ЖБИ", montage,
+          card.montage_deadline ? `* окончание монтажа изделий ${formatDateRu(card.montage_deadline)}` : "")}
+        ${dynBlockTable("Статус поставки ЖБИ", delivery,
+          card.delivery_deadline ? `** окончание поставки изделий ${formatDateRu(card.delivery_deadline)}` : "")}
+      </div>
+      <div style="flex:1">${dynList("questions", "Открытые вопросы", card.open_questions)}</div>
+    </div>`;
+}
+
 async function loadReport() {
   const def = REPORTS[currentReport];
   document.getElementById("report-title").textContent = def.title;
@@ -5737,26 +5964,42 @@ async function loadReport() {
       body: JSON.stringify(reportRequestBody()),
     });
     // Свёрнуто всё, кроме первой захватки — повторяет вид исходной сводной.
+    // Только у древовидных отчётов: у «Динамики» строк-узлов нет вовсе.
     reportCollapsed = new Set();
-    reportData.rows.forEach((row, i) => {
-      if (i > 0) reportCollapsed.add(row.label);
-      else row.children.forEach((f, j) => { if (j > 0) reportCollapsed.add(`${row.label}/${f.label}`); });
-    });
+    if (reportData.rows) {
+      reportData.rows.forEach((row, i) => {
+        if (i > 0) reportCollapsed.add(row.label);
+        else row.children.forEach((f, j) => { if (j > 0) reportCollapsed.add(`${row.label}/${f.label}`); });
+      });
+    }
     document.getElementById("report-body").innerHTML = def.render(reportData);
-    statusLine.textContent = `Всего изделий: ${reportData.total.values.total}`;
+    statusLine.textContent = reportData.total
+      ? `Всего изделий: ${reportData.total.values.total}`
+      : `Отчётная дата: ${formatDateRu(reportData.report_date)}`;
+    // Поле даты подставляем фактически применённой датой: сервер мог
+    // подставить сегодняшнюю, если поле было пустым.
+    if (def.needsDate && reportData.report_date) {
+      document.getElementById("report-date").value = reportData.report_date;
+    }
   } catch (e) {
     document.getElementById("report-body").innerHTML = "";
     statusLine.textContent = "Не удалось построить отчёт: " + e.message;
   }
 }
 
+function switchReport(key) {
+  currentReport = key;
+  [...document.querySelectorAll(".report-tab")].forEach(b => b.classList.toggle("active", b.dataset.report === key));
+  document.getElementById("report-date-box").style.display = REPORTS[key].needsDate ? "" : "none";
+  loadReport();
+}
+
 document.getElementById("report-tabs").addEventListener("click", (e) => {
   const key = e.target.dataset.report;
   if (!key || key === currentReport) return;
-  currentReport = key;
-  [...document.querySelectorAll(".report-tab")].forEach(b => b.classList.toggle("active", b.dataset.report === key));
-  loadReport();
+  switchReport(key);
 });
+document.getElementById("report-date").addEventListener("change", loadReport);
 
 document.getElementById("report-body").addEventListener("click", (e) => {
   const path = e.target.dataset.path;
@@ -5767,9 +6010,12 @@ document.getElementById("report-body").addEventListener("click", (e) => {
 
 document.getElementById("report-use-filter").addEventListener("change", loadReport);
 document.getElementById("menu-report-status").addEventListener("click", () => {
-  currentReport = "status";
   reportsBackdrop.classList.add("open");
-  loadReport();
+  switchReport("status");
+});
+document.getElementById("menu-report-dynamics").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  switchReport("dynamics");
 });
 document.getElementById("reports-close").addEventListener("click", () => reportsBackdrop.classList.remove("open"));
 document.getElementById("report-print").addEventListener("click", () => window.print());
@@ -5788,8 +6034,9 @@ async function downloadReport(suffix, filename) {
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
-document.getElementById("report-xlsx").addEventListener("click", () => downloadReport(".xlsx", "Статусы.xlsx"));
-document.getElementById("report-pdf").addEventListener("click", () => downloadReport(".pdf", "Статусы.pdf"));
+const reportFileName = (ext) => `${REPORTS[currentReport].title}.${ext}`;
+document.getElementById("report-xlsx").addEventListener("click", () => downloadReport(".xlsx", reportFileName("xlsx")));
+document.getElementById("report-pdf").addEventListener("click", () => downloadReport(".pdf", reportFileName("pdf")));
 
 // ---------- Резервные копии БД (живой запрос 2026-07-29, после инцидента
 // с автоматической пересборкой базы — см. Docs/backlog.md) ----------
