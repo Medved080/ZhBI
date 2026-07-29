@@ -1259,7 +1259,11 @@ function topVisibleLabelIds() {
 // не проходил фильтр (последний элемент цикла решал итоговое состояние
 // общего слоя) — реальный баг, живая проверка, см. Docs/backlog.md.
 // state.labelGroupById — обёртка на подпись(+допстроку) ОДНОГО элемента.
-function applyPlacementFilters() {
+// rebuild3D=false — не пересобирать 3D-сцену: вызывающая сторона сделает
+// это сама следом (loadPlan строит сцену один раз в конце). Без этого
+// признака загрузка данных в 3D-режиме пересобирала сцену ДВАЖДЫ — один
+// раз отсюда, второй из loadPlan.
+function applyPlacementFilters(rebuild3D = true) {
   const topVisible = topVisibleLabelIds(); // только 2D, см. комментарий там же
   for (const element of state.elements) {
     const passes = passesPlacementFilters(element);
@@ -1270,14 +1274,17 @@ function applyPlacementFilters() {
     // Тот же фильтр — и на 3D-меш, если сцена уже построена (см. "3D-режим схемы").
     // 3D-подпись НЕ ограничена topVisible — там ярусы не перекрывают друг
     // друга визуально, каждый виден на своей высоте одновременно.
-    const mesh = state.view3d.meshById.get(element.id);
-    if (mesh) mesh.visible = passes;
-    const sprite = state.view3d.labelSpriteById.get(element.id);
-    if (sprite) sprite.visible = passes && state.labelVisibility[element.element_type] !== false;
-    const decal = state.view3d.markDecalById.get(element.id);
-    if (decal) decal.visible = passes && state.labelVisibility[element.element_type] !== false;
   }
-  requestRender3D(); // сцена изменилась — заказать кадр (см. requestRender3D)
+  // 3D не прячет отфильтрованное, а ПЕРЕСОБИРАЕТ сцену без него (живой
+  // запрос 2026-07-29). Раньше здесь переключалась видимость уже готовых
+  // мешей: они оставались в сцене, занимали память и перебирались
+  // рендерером каждый кадр. Пересборка дороже одного переключения
+  // видимости, но дальше — вращение, зум, развороты наклеек — идёт по
+  // реально нужным элементам, а не по всем.
+  // Ракурс камеры сохраняем: сброс на общий вид при каждой галочке фильтра
+  // сделал бы работу невозможной.
+  if (rebuild3D && state.view3d.active) build3DScene(true);
+  else requestRender3D();
 }
 
 // Что происходит после ЛЮБОГО изменения в фильтре по размещению: заново
@@ -2546,7 +2553,7 @@ function renderElements(data) {
   }
 
   updateSizesForZoom();
-  applyPlacementFilters(); // новые фигуры/подписи ещё не скрыты по текущему фильтру — применить сразу
+  applyPlacementFilters(false); // 3D пересоберёт loadPlan следом — не делать этого дважды
 }
 
 // Статусы x типы элементов — сколько элементов каждого типа сейчас в
@@ -3256,7 +3263,7 @@ async function loadPlan(preserveView = true) {
   renderZoneToggles();
   renderStanceZoneToggles();
   renderPlacementFilters();
-  applyPlacementFilters();
+  applyPlacementFilters(false); // 3D-сцена собирается ниже, одним разом
   showPlaceholderCard();
 
   const b = data.bbox;
@@ -4528,8 +4535,48 @@ document.getElementById("btn-settings-menu").addEventListener("click", (e) => {
     settingsMenu.style.top = (rect.bottom + 6) + "px";
   }
   settingsMenu.classList.toggle("open");
+  if (!settingsMenu.classList.contains("open")) closeAllSubmenus();
 });
-document.addEventListener("click", () => settingsMenu.classList.remove("open"));
+document.addEventListener("click", () => {
+  settingsMenu.classList.remove("open");
+  closeAllSubmenus();
+});
+
+// ---------- подменю (живой запрос 2026-07-29: группы в виде подменю, а не
+// сплошного списка) ----------
+function closeAllSubmenus() {
+  settingsMenu.querySelectorAll(".submenu.open").forEach(el => el.classList.remove("open"));
+}
+
+function openSubmenu(submenu) {
+  if (submenu.classList.contains("open")) return;
+  closeAllSubmenus(); // одновременно раскрыта всегда одна группа
+  submenu.classList.add("open");
+  // Панель по умолчанию уходит влево (кнопка "Действия" у правого края).
+  // Если слева места не хватает — например, окно узкое или меню оказалось
+  // ближе к левому краю — разворачиваем вправо. Проверяем ПОСЛЕ показа:
+  // у скрытого элемента ширина нулевая, и решение было бы неверным.
+  const panel = submenu.querySelector(".submenu-panel");
+  if (!panel) return;
+  panel.classList.remove("submenu-panel-right");
+  const rect = panel.getBoundingClientRect();
+  if (rect.left < 4) panel.classList.add("submenu-panel-right");
+}
+
+settingsMenu.querySelectorAll(".submenu").forEach(submenu => {
+  const trigger = submenu.querySelector(".submenu-trigger");
+  // Клик по заголовку группы НЕ должен закрывать всё меню (документный
+  // обработчик выше), поэтому stopPropagation. Клик — основной способ:
+  // он работает и на сенсорном экране, и при неточном наведении.
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (submenu.classList.contains("open")) submenu.classList.remove("open");
+    else openSubmenu(submenu);
+  });
+  // Наведение — привычное поведение настольного меню: провёл мышью по
+  // группам, увидел содержимое каждой, ничего не нажимая.
+  submenu.addEventListener("mouseenter", () => openSubmenu(submenu));
+});
 
 // ---------- цвета статусов ----------
 const settingsBackdrop = document.getElementById("settings-backdrop");
@@ -6807,6 +6854,11 @@ function updateAllDecalOrientations() {
   const v3 = state.view3d;
   if (!v3.camera || !v3.markDecalById.size) return;
   for (const group of v3.markDecalById.values()) {
+    // Скрытую наклейку разворачивать незачем: её не видно, а функция
+    // вызывается на КАЖДОЕ движение камеры. Без этой проверки вращение
+    // сцены с узким фильтром стоило столько же, сколько без фильтра
+    // (живой запрос 2026-07-29: не обрабатывать то, что отфильтровано).
+    if (!group.visible) continue;
     for (const mesh of group.children) updateDecalOrientation(mesh, v3.camera);
   }
 }
@@ -7235,7 +7287,11 @@ function build3DSiteBaseMesh() {
   return mesh;
 }
 
-function build3DScene() {
+// preserveCamera=true — пересобрать содержимое, НЕ трогая ракурс. Нужно при
+// смене фильтра: сцена пересобирается на каждое изменение отбора (см. цикл
+// по элементам ниже), и сброс камеры на общий вид при каждой галочке делал
+// бы работу с фильтрами невыносимой.
+function build3DScene(preserveCamera = false) {
   const v3 = state.view3d;
   if (!v3.scene) return;
   if (v3.siteBaseMesh) {
@@ -7296,10 +7352,20 @@ function build3DScene() {
   const levels = computeColumnLevels();
   const columnTopOverrides = computeColumnEndExtensions(levels);
   for (const element of state.elements) {
+    // Отфильтрованный элемент НЕ строится вовсе — ни меша, ни наклейки, ни
+    // текстуры (живой запрос 2026-07-29: "система не занимается обработкой
+    // элементов, не попавших в условия, а не просто скрывает их").
+    // Раньше строилось всё, а фильтр применялся уже к готовому мешу через
+    // visible=false: сцена оставалась полной, память тоже, и рендерер
+    // перебирал все ~19 тысяч объектов каждый кадр, пусть и пропуская
+    // скрытые. Теперь узкий фильтр делает сцену буквально маленькой.
+    //
+    // Плата: смена фильтра в 3D требует ПЕРЕСБОРКИ сцены, а не переключения
+    // видимости (см. applyPlacementFilters). Это осознанный размен — чем
+    // уже фильтр, тем дешевле и пересборка, и всё последующее вращение.
+    if (!passesPlacementFilters(element)) continue;
     const mesh = build3DMeshForElement(element, levels, columnTopOverrides);
     if (!mesh) continue;
-    const passes = passesPlacementFilters(element);
-    mesh.visible = passes;
     // Материал теперь общий на статус (см. getStatusMeshMaterial) — менять
     // его emissive прямо здесь подсветило бы ВСЕ элементы этого статуса
     // разом; выбранный элемент получает отдельный, эксклюзивно свой
@@ -7313,7 +7379,9 @@ function build3DScene() {
     // Наклейка на грани (см. build3DMarkDecal) — только для Плиты
     // перекрытия/Ригеля/Колонны и только если марка помещается по длине;
     // иначе — прежняя плавающая табличка-спрайт (build3DLabelSprite).
-    const labelVisible = passes && state.labelVisibility[element.element_type] !== false;
+    // Фильтр здесь уже пройден (иначе элемент пропущен выше), остаётся
+    // только тумблер подписей по типу элемента.
+    const labelVisible = state.labelVisibility[element.element_type] !== false;
     const decal = build3DMarkDecal(element, levels, columnTopOverrides);
     if (decal) {
       decal.visible = labelVisible;
@@ -7352,7 +7420,7 @@ function build3DScene() {
   v3.siteBaseMesh = build3DSiteBaseMesh();
   if (v3.siteBaseMesh) v3.scene.add(v3.siteBaseMesh);
 
-  fit3DCameraToData();
+  if (!preserveCamera) fit3DCameraToData();
   updateAllDecalOrientations(); // начальный ракурс — тоже должен быть читаемым, не только после первого поворота
   requestRender3D();
 }

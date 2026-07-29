@@ -422,6 +422,21 @@
   }
   .dropdown-menu > .dropdown-divider:first-child { border-top: none; margin-top: 0; }
 
+  /* -------- подменю внутри "Действия" -------- */
+  .submenu { position: relative; }
+  .submenu-trigger::after { content: "›"; float: right; color: var(--color-text-muted); font-size: 15px; line-height: 1; }
+  .submenu.open > .submenu-trigger { background: var(--color-surface-2); }
+  /* Родительское .dropdown-menu — position: fixed (координаты ставит JS,
+     см. btn-settings-menu). Вложенной панели fixed не годится: она должна
+     ехать вместе с пунктом-родителем, поэтому absolute относительно .submenu. */
+  .submenu-panel { position: absolute; top: -6px; min-width: 260px; }
+  /* По умолчанию открывается ВЛЕВО: кнопка "Действия" стоит у правого края
+     тулбара, и панель, раскрытая вправо, ушла бы за экран. JS при нехватке
+     места слева переставляет класс на .submenu-panel-right. */
+  .submenu-panel { right: 100%; margin-right: 4px; }
+  .submenu-panel.submenu-panel-right { right: auto; left: 100%; margin-right: 0; margin-left: 4px; }
+  .submenu.open > .submenu-panel { display: block; }
+
   /* -------- модалки -------- */
   .modal-backdrop {
     position: fixed; inset: 0; background: rgba(15,20,30,.45); display: none;
@@ -731,35 +746,58 @@
            внутри него два личных пункта, видимых всем ролям. Без этого у
            прораба (роль user/view) меню начиналось бы с двух пунктов без
            единого заголовка. -->
+      <!-- Подменю, а не сплошной список (живой запрос 2026-07-29): в плоском
+           виде меню занимало два десятка строк и требовало вчитываться в
+           заголовки групп. Теперь верхний уровень — четыре пункта, каждый
+           раскрывает свой список вбок.
+           Триггер группы "Настройки" — единственный БЕЗ admin-only: внутри
+           два личных пункта, доступных всем ролям. Остальные три группы
+           целиком админские, и у прораба их не видно вовсе. -->
       <div class="dropdown-menu" id="settings-menu">
-        <div class="dropdown-divider">Настройки</div>
-        <button id="menu-change-password">Сменить пароль</button>
-        <button id="menu-label-color">Цвет подписей марок</button>
-        <button id="menu-colors" class="admin-only">Цвета статусов</button>
-        <button id="menu-shapes" class="admin-only">Форма маркеров</button>
-        <button id="menu-zone-colors" class="admin-only">Цвета зон</button>
-        <button id="menu-info-plate-settings" class="admin-only">Порог опоздания поставки</button>
-        <button id="menu-users" class="admin-only">Пользователи</button>
-        <div class="dropdown-divider admin-only">Справочники</div>
-        <!-- Слово "Справочник" из названий убрано: под заголовком "Справочники"
-             оно повторялось дважды в каждой строке. -->
-        <button id="menu-subtypes" class="admin-only">Подтипы</button>
-        <button id="menu-mark-prefixes" class="admin-only">Префиксы марок</button>
-        <button id="menu-counterparties" class="admin-only">Контрагенты</button>
-        <button id="menu-contracts" class="admin-only">Контракты</button>
-        <div class="dropdown-divider admin-only">Обмен данными</div>
-        <button id="btn-export" class="admin-only">Экспорт в XLS</button>
-        <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
-        <button id="menu-history-import" class="admin-only">Импорт истории из XLS</button>
-        <button id="menu-status-restore" class="admin-only">Восстановить статусы из выгрузки</button>
-        <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
-        <button id="menu-schedule-import" class="admin-only">Импорт графика МС Project из XLS</button>
-        <button id="menu-backups" class="admin-only">Резервные копии…</button>
-        <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
-        <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
-        <button id="menu-activity" class="admin-only">Журнал действий</button>
-        <div class="dropdown-divider admin-only">Тестирование</div>
-        <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов…</button>
+        <div class="submenu">
+          <button type="button" class="submenu-trigger">Настройки</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="menu-change-password">Сменить пароль</button>
+            <button id="menu-label-color">Цвет подписей марок</button>
+            <button id="menu-colors" class="admin-only">Цвета статусов</button>
+            <button id="menu-shapes" class="admin-only">Форма маркеров</button>
+            <button id="menu-zone-colors" class="admin-only">Цвета зон</button>
+            <button id="menu-info-plate-settings" class="admin-only">Порог опоздания поставки</button>
+            <button id="menu-users" class="admin-only">Пользователи</button>
+            <button id="menu-activity" class="admin-only">Журнал действий</button>
+          </div>
+        </div>
+        <div class="submenu admin-only">
+          <button type="button" class="submenu-trigger">Справочники</button>
+          <div class="dropdown-menu submenu-panel">
+            <!-- Слово "Справочник" из названий убрано: под заголовком
+                 "Справочники" оно повторялось дважды в каждой строке. -->
+            <button id="menu-subtypes">Подтипы</button>
+            <button id="menu-mark-prefixes">Префиксы марок</button>
+            <button id="menu-counterparties">Контрагенты</button>
+            <button id="menu-contracts">Контракты</button>
+          </div>
+        </div>
+        <div class="submenu admin-only">
+          <button type="button" class="submenu-trigger">Обмен данными</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="btn-export">Экспорт в XLS</button>
+            <button id="btn-export-pdf">Экспорт в PDF</button>
+            <button id="menu-history-import">Импорт истории из XLS</button>
+            <button id="menu-status-restore">Восстановить статусы из выгрузки</button>
+            <button id="menu-contracting-import">Импорт контрактации из XLS</button>
+            <button id="menu-schedule-import">Импорт графика МС Project из XLS</button>
+            <button id="menu-import-input">Загрузить из папки Input…</button>
+            <button id="menu-backups">Резервные копии…</button>
+            <button id="menu-settings-io">Экспорт/импорт настроек</button>
+          </div>
+        </div>
+        <div class="submenu admin-only">
+          <button type="button" class="submenu-trigger">Тестирование</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="menu-reset-history" class="menu-item-danger">Очистить историю статусов…</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="user-box">
