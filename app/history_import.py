@@ -30,13 +30,40 @@ import io
 
 from openpyxl import load_workbook
 
-from app.contracts import recompute_status_and_actual_date
+from app.contracting_import import parse_number_and_date
+from app.contracts import (
+    find_or_create_contract,
+    recompute_element_contract_cache,
+    recompute_status_and_actual_date,
+)
+from app.counterparties import (
+    find_or_create_agreement,
+    find_or_create_counterparty,
+    find_or_create_specification,
+)
 from app.models import STATUS_LABELS_RU
 
 STATUS_LABEL_TO_VALUE = {label: status.value for status, label in STATUS_LABELS_RU.items()}
 
 REQUIRED_HEADERS = ["DXF handle", "Статус"]
 CHANGED_AT_HEADER_CANDIDATES = ["Изменено", "Статус изменён"]
+
+# Реквизиты контракта — три колонки, которые выгрузка отдаёт с 2026-07-29
+# (см. app/export.py, CONTRACT_COLUMNS). На листе "История статусов" у тех
+# же колонок есть суффикс "на момент изменения" — принимаем оба варианта,
+# как уже сделано для даты изменения выше.
+CONTRACT_HEADER_CANDIDATES = {
+    "supplier": ["Поставщик", "Поставщик на момент изменения"],
+    "agreement": ["Договор (номер и дата)", "Договор (номер и дата) на момент изменения"],
+    "specification": ["Спецификация (номер и дата)", "Спецификация (номер и дата) на момент изменения"],
+    # Старый формат выгрузки (до 2026-07-29) — одна склеенная колонка
+    # "Контракт" вида "Контрагент/Договор № от .../Спецификация № от ...".
+    # Разбирать её обратно не пытаемся: тема контракта в скобках и слэши
+    # внутри номеров документов (реальный пример: "2/09.04-ПОСТ") делают
+    # разбор неоднозначным. Такие файлы импортируются как раньше, без
+    # реквизитов — об этом сообщается в сводке.
+    "legacy": ["Контракт", "Контракт на момент изменения"],
+}
 
 
 class HistoryImportError(Exception):
@@ -80,6 +107,22 @@ def parse_history_xlsx(content: bytes):
             return None
         return row[idx]
 
+    # Какие из колонок реквизитов реально есть в этом файле
+    contract_headers = {
+        key: next((h for h in candidates if h in header), None)
+        for key, candidates in CONTRACT_HEADER_CANDIDATES.items()
+    }
+    has_contract_columns = all(contract_headers[k] for k in ("supplier", "agreement", "specification"))
+
+    def text(row, header_name):
+        if not header_name:
+            return None
+        value = get(row, header_name)
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value or None
+
     parsed = []
     for row in rows:
         dxf_handle = get(row, "DXF handle")
@@ -97,10 +140,71 @@ def parse_history_xlsx(content: bytes):
                 "changed_at": str(changed_at),
                 "changed_by": get(row, "Кто изменил") or None,
                 "comment": get(row, "Комментарий") or None,
+                "supplier_raw": text(row, contract_headers["supplier"]) if has_contract_columns else None,
+                "agreement_raw": text(row, contract_headers["agreement"]) if has_contract_columns else None,
+                "specification_raw": text(row, contract_headers["specification"]) if has_contract_columns else None,
             }
         )
 
-    return parsed
+    return {
+        "rows": parsed,
+        "has_contract_columns": has_contract_columns,
+        "has_legacy_contract_column": bool(contract_headers["legacy"]),
+    }
+
+
+def _resolve_contract_id(conn, row, cache, warnings, counterparty_by_lower):
+    """Реквизиты строки → contract_id, с созданием недостающих звеньев
+    цепочки Контрагент→Договор→Спецификация→Контракт (согласовано с
+    пользователем: создавать на лету, а не отвергать строку).
+
+    Переиспользует ровно те же find_or_create_*, что и импорт контрактации
+    (app/contracting_import.py), и тот же parse_number_and_date — формат
+    "НОМЕР от ДД.ММ.ГГГГ" разбирается одной и той же функцией, которой он
+    и собирался при выгрузке (build_document_label, app/contracts.py).
+
+    Кэш по тройке (поставщик, договор, спецификация) — в выгрузке тысячи
+    строк на десяток контрактов, без него на каждую строку шли бы четыре
+    SELECT.
+    """
+    supplier = row.get("supplier_raw")
+    agreement_raw = row.get("agreement_raw")
+    specification_raw = row.get("specification_raw")
+    if not supplier or not agreement_raw or not specification_raw:
+        return None  # обычная ситуация: у элемента просто нет контракта
+
+    key = (supplier, agreement_raw, specification_raw)
+    if key in cache:
+        return cache[key]
+
+    agreement_number, agreement_date, agr_warning = parse_number_and_date(agreement_raw)
+    specification_number, specification_date, spec_warning = parse_number_and_date(specification_raw)
+    if agr_warning:
+        warnings.append(f"Договор «{agreement_raw}»: {agr_warning}")
+    if spec_warning:
+        warnings.append(f"Спецификация «{specification_raw}»: {spec_warning}")
+
+    # Регистронезависимое сопоставление кириллицы — ТОЛЬКО на стороне
+    # Python: SQLite без ICU не приводит кириллицу к одному регистру ни
+    # через COLLATE NOCASE, ни через lower() (живой баг на марках
+    # "15КС1.1"/"15кс1.1", см. Docs/backlog.md, "Контрактация 2.0").
+    # find_or_create_counterparty сравнивает short_name точным SQL-равенством,
+    # поэтому "Партнер" и "партнер" в отредактированном вручную файле
+    # создали бы ДВУХ контрагентов. Сначала ищем сами, без учёта регистра.
+    existing_id = counterparty_by_lower.get(supplier.lower())
+    if existing_id is not None:
+        counterparty_id = existing_id
+    else:
+        counterparty_id = find_or_create_counterparty(conn, full_name=supplier, short_name=supplier)
+        counterparty_by_lower[supplier.lower()] = counterparty_id
+
+    agreement_id = find_or_create_agreement(conn, counterparty_id, agreement_number, agreement_date)
+    specification_id = find_or_create_specification(
+        conn, agreement_id, specification_number, specification_date
+    )
+    contract_id = find_or_create_contract(conn, specification_id)
+    cache[key] = contract_id
+    return contract_id
 
 
 def import_history(conn, source_file: str, rows: list, mode: str):
@@ -130,6 +234,19 @@ def import_history(conn, source_file: str, rows: list, mode: str):
     inserted = skipped_duplicate = skipped_unmatched = 0
     touched_element_ids = set()
 
+    # Реквизиты контракта из файла (см. _resolve_contract_id). Счётчик
+    # контрактов ДО импорта — чтобы в сводке честно показать, сколько было
+    # создано новых, а не сколько всего упомянуто.
+    contract_cache: dict = {}
+    contract_warnings: list = []
+    contracts_before = conn.execute("SELECT COUNT(*) AS n FROM contracts").fetchone()["n"]
+    counterparty_by_lower = {
+        r["short_name"].lower(): r["id"]
+        for r in conn.execute("SELECT id, short_name FROM counterparties").fetchall()
+        if r["short_name"]
+    }
+    rows_with_contract = 0
+
     for row in rows:
         element_id = element_ids.get(row["dxf_handle"])
         if element_id is None:
@@ -146,10 +263,16 @@ def import_history(conn, source_file: str, rows: list, mode: str):
             skipped_duplicate += 1
             continue
 
+        contract_id = _resolve_contract_id(
+            conn, row, contract_cache, contract_warnings, counterparty_by_lower
+        )
+        if contract_id is not None:
+            rows_with_contract += 1
+
         conn.execute(
-            "INSERT INTO status_history (element_id, status, changed_at, changed_by, comment) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (element_id, row["status"], row["changed_at"], row["changed_by"], row["comment"]),
+            "INSERT INTO status_history (element_id, status, changed_at, changed_by, comment, contract_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (element_id, row["status"], row["changed_at"], row["changed_by"], row["comment"], contract_id),
         )
         inserted += 1
         touched_element_ids.add(element_id)
@@ -162,8 +285,15 @@ def import_history(conn, source_file: str, rows: list, mode: str):
     # статусом (см. Docs/backlog.md, 2026-07-28, восстановление статусов).
     for element_id in touched_element_ids:
         recompute_status_and_actual_date(conn, element_id)
+        # elements.contract_id — такой же денормализованный кэш последней по
+        # changed_at записи истории, как current_status; без этого вызова
+        # привязка к контракту осталась бы только в status_history, а схема
+        # и карточка элемента показывали бы прежний контракт.
+        recompute_element_contract_cache(conn, element_id)
 
     conn.commit()
+
+    contracts_after = conn.execute("SELECT COUNT(*) AS n FROM contracts").fetchone()["n"]
 
     return {
         "matched_elements": len(element_ids),
@@ -172,4 +302,7 @@ def import_history(conn, source_file: str, rows: list, mode: str):
         "inserted": inserted,
         "skipped_duplicate": skipped_duplicate,
         "skipped_unmatched": skipped_unmatched,
+        "rows_with_contract": rows_with_contract,
+        "contracts_created": contracts_after - contracts_before,
+        "contract_date_warnings": contract_warnings[:20],
     }

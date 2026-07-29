@@ -51,6 +51,22 @@ SECURE_COOKIES = os.environ.get("ZHBI_SECURE_COOKIES") == "1"
 # пользователям сразу после 5 неудачных попыток КОГО УГОДНО.
 TRUST_PROXY_HEADERS = os.environ.get("ZHBI_TRUST_PROXY_HEADERS") == "1"
 
+# Список пользователей на экране входа (выпадающий список вместо ручного
+# ввода логина). ВКЛЮЧЁН по умолчанию — по явному решению пользователя
+# (2026-07-29): сервис работает внутри корпоративного контура и наружу не
+# смотрит, а ручной ввод логина на практике оказался источником неудачных
+# входов (логин в БД может отличаться от того, что человек помнит).
+#
+# Это осознанный компромисс, а не недосмотр: эндпоинт раскрывает список
+# валидных логинов и ФИО НЕаутентифицированному клиенту, то есть снимает с
+# атакующего половину работы (остаётся подобрать только пароль). Ровно по
+# этой причине он был удалён при аудите безопасности 2026-07-23 и сейчас
+# возвращается уже под флагом. **Если сервис когда-нибудь станет доступен
+# извне — выставить ZHBI_PUBLIC_LOGIN_LIST=0.** Форма входа при
+# выключенном флаге сама откатывается на обычное текстовое поле, так что
+# выключение ничего не ломает.
+PUBLIC_LOGIN_LIST = os.environ.get("ZHBI_PUBLIC_LOGIN_LIST", "1") == "1"
+
 router = APIRouter()
 
 # Блокировка подбора пароля — по IP клиента, не по логину: блокировка по
@@ -170,6 +186,31 @@ require_editor = require_roles("admin", "user")  # может менять ст�
 class LoginRequest(BaseModel):
     domain_login: str
     password: str = ""
+
+
+class PublicUserOut(BaseModel):
+    domain_login: str
+    display_name: str
+
+
+@router.get("/login-users", response_model=list[PublicUserOut])
+def login_users():
+    """Список для выпадающего списка на экране входа. Публичный по
+    необходимости — форма входа обращается к нему ДО того, как появится
+    сессия. Отдаёт только логин и ФИО: ни ролей, ни признака наличия
+    пароля, ни любых других сведений, которые помогли бы выбрать цель.
+
+    Управляется флагом PUBLIC_LOGIN_LIST (см. его комментарий выше о том,
+    когда это надо выключать). При выключенном флаге — 404, и форма входа
+    молча возвращается к текстовому полю."""
+    if not PUBLIC_LOGIN_LIST:
+        raise HTTPException(status_code=404, detail="Список пользователей отключён")
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM users ORDER BY last_name, first_name").fetchall()
+        return [PublicUserOut(domain_login=r["domain_login"], display_name=format_display_name(r)) for r in rows]
+    finally:
+        conn.close()
 
 
 class UserOut(BaseModel):

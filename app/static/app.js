@@ -172,9 +172,95 @@ function maybeWarnContract(result) {
 
 // ==================== АУТЕНТИФИКАЦИЯ ====================
 
+// ---------- экран входа: выбор пользователя из списка + показ пароля
+// (живой запрос пользователя 2026-07-29 — ручной ввод логина оказался
+// источником неудачных входов: логин в БД мог отличаться от того, что
+// человек помнит, а форма показывала только "неверный логин или пароль",
+// не различая, что именно не сошлось). Список отдаёт GET /login-users,
+// он же может быть отключён флагом на сервере (ZHBI_PUBLIC_LOGIN_LIST=0,
+// см. app/auth.py) — тогда эндпоинт вернёт 404, и мы молча остаёмся на
+// обычном текстовом поле, как было раньше. ----------
+
+// Какое поле логина сейчас показано — из него и берётся значение при
+// отправке формы (см. обработчик login-submit).
+let loginUsersLoaded = false;
+
+async function loadLoginUsers() {
+  // Флаг ставится ДО await, а не после: showLoginScreen() вызывается больше
+  // одного раза подряд (неудачная проверка сессии при старте + переход на
+  // экран входа), и с проверкой после await оба вызова успевали проскочить —
+  // в сети было видно два одинаковых GET /login-users.
+  if (loginUsersLoaded) return;
+  loginUsersLoaded = true;
+  const list = document.getElementById("login-users-list");
+  const input = document.getElementById("login-domain");
+  if (!list || !input) return; // старая разметка из кэша — см. комментарий у loginPasswordToggle
+  try {
+    const res = await fetch("/login-users");
+    if (!res.ok) return; // 404 = список отключён; поле работает как обычный ввод
+    const users = await res.json();
+    if (!users.length) return;
+    // value — то, что подставится в поле (сам логин); label — то, что видно
+    // в подсказке. ФИО показываем именно в label, чтобы в поле после выбора
+    // оказался чистый логин, а не "Фамилия (логин)".
+    list.innerHTML = users
+      .map(u => `<option value="${escapeHtml(u.domain_login)}" label="${escapeHtml(u.display_name)}"></option>`)
+      .join("");
+    // Пользователь в системе ровно один — подставляем сразу, выбирать не из
+    // чего. Не трогаем, если в поле уже что-то есть (мог подставить браузер).
+    if (!input.value && users.length === 1) input.value = users[0].domain_login;
+  } catch (e) {
+    // Сеть недоступна — поле остаётся обычным вводом, вход всё равно возможен
+  }
+}
+
+// Логин всегда берётся из ТЕКСТОВОГО поля — оно единственный источник
+// истины. Выпадающий список только подставляет в него значение (см.
+// loadLoginUsers), поэтому пользователь может как выбрать из списка, так и
+// вписать логин руками или дать браузеру подставить сохранённую пару
+// логин/пароль.
+function currentLoginValue() {
+  return document.getElementById("login-domain").value;
+}
+
+// Проверка на null здесь ОБЯЗАТЕЛЬНА, в отличие от остальных подобных
+// подписок в этом файле. app.js и index.html — два отдельных запроса, и
+// браузер вполне может взять один из кэша, а другой свежим (Cache-Control:
+// no-cache даёт условный GET, но не гарантирует одновременность). Со СТАРОЙ
+// разметкой и НОВЫМ скриптом этой кнопки в DOM ещё нет, и обращение к
+// .addEventListener у null бросило бы исключение на верхнем уровне модуля —
+// а это значит, что ВЕСЬ остальной app.js ниже по файлу не выполнится,
+// включая обработчик кнопки "Войти". Внешне это выглядит как "нажимаю Войти,
+// и ничего не происходит" — то есть ровно как отказ входа, хотя пароль
+// правильный. Ради одной необязательной кнопки такой риск недопустим.
+const loginPasswordToggle = document.getElementById("login-password-toggle");
+if (loginPasswordToggle) {
+  loginPasswordToggle.addEventListener("click", () => {
+    const input = document.getElementById("login-password");
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    loginPasswordToggle.classList.toggle("active", show);
+    loginPasswordToggle.title = show ? "Скрыть пароль" : "Показать пароль";
+    loginPasswordToggle.setAttribute("aria-label", loginPasswordToggle.title);
+    input.focus();
+  });
+}
+
 function showLoginScreen() {
   document.getElementById("login-screen").classList.remove("hidden");
   document.getElementById("app-root").classList.add("hidden");
+  loadLoginUsers();
+  // Пароль всегда возвращаем в скрытый вид: экран входа показывается и
+  // при обычном выходе, и при истечении сессии — оставлять чужой пароль
+  // открытым на экране нельзя.
+  const pwd = document.getElementById("login-password");
+  const btn = document.getElementById("login-password-toggle");
+  if (pwd) pwd.type = "password";
+  if (btn) {
+    btn.classList.remove("active");
+    btn.title = "Показать пароль";
+    btn.setAttribute("aria-label", btn.title);
+  }
 }
 
 function showApp() {
@@ -212,15 +298,31 @@ async function checkAuth() {
 onUnauthorized = () => { state.currentUser = null; showLoginScreen(); };
 
 document.getElementById("login-submit").addEventListener("click", async () => {
-  const domain_login = document.getElementById("login-domain").value;
+  const domain_login = currentLoginValue();
   const password = document.getElementById("login-password").value;
   const errorEl = document.getElementById("login-error");
   errorEl.textContent = "";
   try {
-    await api("/login", {
+    // Намеренно НЕ через api(): та перехватывает 401 раньше, чем прочитает
+    // тело ответа, и подменяет причину общим "Не авторизован" (это
+    // осознанно — для ЛЮБОГО другого запроса 401 означает "сессия
+    // истекла", и там нужен именно переход на экран входа). Но на самом
+    // ВХОДЕ 401 — это "неверный логин или пароль", и подмена сообщения
+    // делала диагноз невозможным: пользователь видел "Не авторизован" и не
+    // мог понять, ошибся он паролем, логином, или дело в сессии (живой
+    // репорт: "не принимает мой пароль", 2026-07-29). Здесь показываем то,
+    // что реально ответил сервер: "Неверный логин или пароль" (401) либо
+    // "Слишком много попыток входа, попробуйте позже" (429, срабатывает
+    // после 5 неудач за 5 минут и отклоняет даже ПРАВИЛЬНЫЙ пароль, пока
+    // окно не истечёт, — см. app/auth.py).
+    const res = await fetch("/login", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain_login, password }),
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error((body && body.detail) ? body.detail : `${res.status} ${res.statusText}`);
+    }
     document.getElementById("login-password").value = "";
     await bootApp();
   } catch (e) {
@@ -3533,23 +3635,48 @@ function renderBulkStatusTable() {
 
 const bulkStatusBackdrop = document.getElementById("bulk-status-backdrop");
 
-async function openBulkStatusModal() {
+// Окно НЕ ждёт /contracts (живой репорт "долго открывается"): остатки по
+// строкам контрактов нужны только для НЕблокирующего предупреждения об
+// овербукинге, а сам диалог полностью работоспособен без них. Раньше здесь
+// стоял `await api("/contracts")` ПЕРЕД показом модалки — на реальных
+// данных это 2,7 секунды пустого ожидания (см. Docs/backlog.md; сам
+// эндпоинт с тех пор ускорен до единиц миллисекунд, но ждать его показ
+// окна всё равно не должен — при росте числа контрактов всё вернулось бы).
+// Открываем сразу, остатки подтягиваем следом и пересчитываем
+// предупреждение, когда придут.
+//
+// bulkContractRequestId — защита от гонки: пользователь успевает закрыть
+// окно и открыть его с ДРУГОЙ выборкой раньше, чем вернётся предыдущий
+// запрос; ответ, устаревший к моменту прихода, молча отбрасывается.
+let bulkContractRequestId = 0;
+
+function openBulkStatusModal() {
   if (state.multiSelectedIds.size === 0) return;
   document.getElementById("bulk-status-select").innerHTML =
     state.statusOrder.map(s => `<option value="${s}">${escapeHtml(state.statusLabels[s])}</option>`).join("");
+  // Перечисление типов элементов контракта убрано из подписи (живой запрос
+  // пользователя) — остаётся только само наименование
+  // "Контрагент/Договор № от ДАТА/Спецификация № от ДАТА (Тема)",
+  // как оно выглядит во всех остальных местах интерфейса.
   document.getElementById("bulk-fill-contract-select").innerHTML = ['<option value="">— выберите контракт —</option>'].concat(
-    state.contracts.map(c => `<option value="${c.id}">${escapeHtml(c.name)} — ${escapeHtml(c.element_types.join(", "))}</option>`)
+    state.contracts.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
   ).join("");
-  try {
-    const contracts = await api("/contracts");
+
+  bulkContractLines = []; // от прошлого открытия — до прихода свежих остатков предупреждений не показываем
+  renderBulkStatusTable();
+  bulkStatusBackdrop.classList.add("open");
+
+  const requestId = ++bulkContractRequestId;
+  api("/contracts").then(contracts => {
+    if (requestId !== bulkContractRequestId) return; // окно успели переоткрыть — ответ устарел
     bulkContractLines = contracts.flatMap(c => c.lines.map(l => ({
       contract_id: c.id, contract_name: c.name, element_type: l.element_type, remaining: l.remaining,
     })));
-  } catch (e) {
-    bulkContractLines = []; // проверка остатка просто не покажет предупреждений — не блокирует открытие модалки
-  }
-  renderBulkStatusTable();
-  bulkStatusBackdrop.classList.add("open");
+    updateBulkContractWarning(); // остатки пришли — пересчитать предупреждение по уже заполненной таблице
+  }).catch(() => {
+    // Проверка остатка просто не покажет предупреждений — она неблокирующая
+    // и никогда не была условием работы диалога.
+  });
 }
 
 document.getElementById("bulk-status-cancel").addEventListener("click", () => bulkStatusBackdrop.classList.remove("open"));
@@ -3811,10 +3938,18 @@ window.addEventListener("mousemove", (e) => {
     updateRubberBandRect(startX, startY, rbCurX, rbCurY);
     return;
   }
-  const rect = stageEl.getBoundingClientRect();
+  // Тот же корень, что и у рамки выделения (см. screenToWorld): прежний
+  // пересчёт "пиксели -> мировые единицы" через rect.width/v.w игнорировал
+  // вписывание viewBox по preserveAspectRatio и потому был неверен ровно на
+  // ту же долю — схема ехала за курсором чуть медленнее (на контейнере
+  // 2260x1200 — на ~4%). Берём реальный масштаб из матрицы преобразования:
+  // ctm.a — сколько ЭКРАННЫХ пикселей приходится на одну мировую единицу по
+  // X (по Y это ctm.d, со знаком минус из-за flip — поэтому abs).
   const v = state.view;
-  const dx = (e.clientX - lastX) / rect.width * v.w;
-  const dy = (e.clientY - lastY) / rect.height * v.h;
+  const ctm = document.getElementById("flip").getScreenCTM();
+  if (!ctm) return;
+  const dx = (e.clientX - lastX) / ctm.a;
+  const dy = (e.clientY - lastY) / Math.abs(ctm.d);
   setView({ x: v.x - dx, y: v.y - dy, w: v.w, h: v.h });
   lastX = e.clientX; lastY = e.clientY;
 });
@@ -3828,20 +3963,47 @@ function updateRubberBandRect(x1, y1, x2, y2) {
   rubberBandEl.style.height = Math.abs(y2 - y1) + "px";
 }
 
-// Экран -> мировые координаты прямоугольника выделения. viewBox сам по
-// себе — стандартное SVG-пространство (Y вниз), но всё содержимое схемы
-// нарисовано внутри <g id="flip" transform="scale(1,-1)"> реальными
-// мировыми координатами БЕЗ инверсии (см. renderElements) — видимую
-// ориентацию "Y вверх" даёт именно этот flip. Поэтому world.Y = -viewBox.Y,
-// а не прямое соответствие, как у X.
+// Экран -> мировые координаты. Считается СОБСТВЕННЫМ преобразованием SVG
+// (getScreenCTM группы #flip), а не вручную по viewBox и размеру
+// контейнера.
+//
+// Почему не вручную: у <svg> стоит preserveAspectRatio="xMidYMid meet"
+// (см. index.html) — то есть viewBox ВПИСЫВАЕТСЯ в контейнер целиком и
+// центрируется, добавляя поля с двух сторон, если пропорции не совпадают.
+// А совпадают они практически никогда: state.initialView берётся строго по
+// габаритам данных (для файла 260723 аспект 1.741), контейнер — какой
+// получится из размера окна и ширины сайдбара. Прежняя формула
+// (`v.x + (sx - rect.left) / rect.width * v.w`) считала, будто viewBox
+// растянут на весь контейнер ровно, и давала ошибку, НУЛЕВУЮ в центре и
+// максимальную у краёв: на контейнере 2260x1200 это ±8233 мм (79 px) —
+// рамка выделения "съезжала" внутрь с обеих сторон, элементы у её левого
+// и правого края не попадали в выделение, приходилось захватывать пустую
+// область с запасом (живой репорт пользователя, см. Docs/backlog.md).
+//
+// getScreenCTM берётся с группы #flip, а не с <svg>: тогда преобразование
+// сразу включает и вписывание viewBox, и `transform="scale(1,-1)"` этой
+// группы (содержимое схемы нарисовано реальными мировыми координатами БЕЗ
+// инверсии, видимую ориентацию "Y вверх" даёт именно flip) — ручной
+// поправки world.Y = -viewBox.Y больше не требуется, как и вообще какой-
+// либо своей математики: любой будущий CSS-transform или padding у
+// контейнера учтётся сам.
+function screenToWorld(sx, sy) {
+  const ctm = document.getElementById("flip").getScreenCTM();
+  if (!ctm) return null; // схема скрыта (включён 3D) — преобразования не существует
+  const p = new DOMPoint(sx, sy).matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
 function screenRectToWorldBBox(sx1, sy1, sx2, sy2) {
-  const rect = stageEl.getBoundingClientRect();
-  const v = state.view;
-  const vx1 = v.x + (Math.min(sx1, sx2) - rect.left) / rect.width * v.w;
-  const vx2 = v.x + (Math.max(sx1, sx2) - rect.left) / rect.width * v.w;
-  const vy1 = v.y + (Math.min(sy1, sy2) - rect.top) / rect.height * v.h;
-  const vy2 = v.y + (Math.max(sy1, sy2) - rect.top) / rect.height * v.h;
-  return { minX: vx1, maxX: vx2, minY: -vy2, maxY: -vy1 };
+  const a = screenToWorld(sx1, sy1);
+  const b = screenToWorld(sx2, sy2);
+  if (!a || !b) return null;
+  // min/max, а не "первая точка — левый верхний угол": рамку тянут в любую
+  // сторону, а по Y порядок вдобавок переворачивает flip.
+  return {
+    minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x),
+    minY: Math.min(a.y, b.y), maxY: Math.max(a.y, b.y),
+  };
 }
 
 // Точка "где физически находится элемент" для попадания в рамку — центр
@@ -3862,6 +4024,7 @@ function rubberBandTestPoint(element) {
 
 function finishRubberBand() {
   const box = screenRectToWorldBBox(startX, startY, rbCurX, rbCurY);
+  if (!box) return;
   // Накопительное выделение (см. Docs/backlog.md) — новая рамка ДОБАВЛЯЕТ
   // захваченные элементы к уже выделенным, никогда не снимает выделение с
   // того, что было выбрано раньше; "✕" на плавающей панели — единственный
@@ -5075,7 +5238,7 @@ async function openContractEdit(contract) {
   counterpartiesFullCache = await api("/counterparties/full");
   const cpSelect = document.getElementById("ce-counterparty");
   if (!counterpartiesFullCache.length) {
-    document.getElementById("contract-edit-error").textContent = "Сначала добавьте хотя бы одного контрагента (Настройки → Контрагенты)";
+    document.getElementById("contract-edit-error").textContent = "Сначала добавьте хотя бы одного контрагента (Действия → Справочники → Контрагенты)";
   }
   cpSelect.innerHTML = counterpartiesFullCache.map(cp => `<option value="${cp.id}">${escapeHtml(cp.short_name)}</option>`).join("");
   if (contract) {
@@ -5287,6 +5450,60 @@ function setStatusRestoreStatus(text, isError) {
   elm.textContent = text;
   elm.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
+
+// ---------- Загрузка из папки Input (пункт меню, живой запрос 2026-07-29:
+// импорт при старте сервера убран, остаётся только явная команда) ----------
+const importInputBackdrop = document.getElementById("import-input-backdrop");
+const importInputSubmit = document.getElementById("import-input-submit");
+
+document.getElementById("menu-import-input").addEventListener("click", async () => {
+  const filesEl = document.getElementById("import-input-files");
+  const warnEl = document.getElementById("import-input-warning");
+  const reportEl = document.getElementById("import-input-report");
+  reportEl.innerHTML = "";
+  warnEl.textContent = "";
+  filesEl.innerHTML = "<div class='hint-text'>Читаю папку…</div>";
+  importInputSubmit.disabled = true;
+  importInputBackdrop.classList.add("open");
+  try {
+    const data = await api("/admin/input-files");
+    const rows = [];
+    if (data.dxf.length) rows.push(`<b>Чертежи (.dxf):</b><br>${data.dxf.map(escapeHtml).join("<br>")}`);
+    if (data.xlsx.length) rows.push(`<b>Таблицы (.xlsx):</b><br>${data.xlsx.map(escapeHtml).join("<br>")}`);
+    filesEl.innerHTML = rows.length
+      ? `<div class="hint-text">${rows.join("<br><br>")}</div>`
+      : "<div class='hint-text'>Папка Input/ пуста — загружать нечего.</div>";
+    // Предупреждение показываем ТОЛЬКО когда есть что перезаписывать —
+    // пугать пустым предупреждением при пустой папке незачем.
+    if (data.dxf.length) {
+      warnEl.textContent = "Геометрия уже загруженных элементов этих чертежей будет "
+        + "перезаписана. Статусы, история и привязка к контрактам хранятся отдельно "
+        + "и не затрагиваются.";
+    }
+    importInputSubmit.disabled = !(data.dxf.length || data.xlsx.length);
+  } catch (e) {
+    filesEl.innerHTML = `<div class="error-text">Не удалось прочитать папку: ${escapeHtml(e.message)}</div>`;
+  }
+});
+document.getElementById("import-input-cancel").addEventListener("click", () => importInputBackdrop.classList.remove("open"));
+
+importInputSubmit.addEventListener("click", async () => {
+  const reportEl = document.getElementById("import-input-report");
+  importInputSubmit.disabled = true;
+  reportEl.innerHTML = "<div class='hint-text'>Загрузка… это может занять до нескольких минут.</div>";
+  try {
+    const res = await api("/admin/import-input", { method: "POST" });
+    reportEl.innerHTML = `<div class="hint-text"><b>Готово:</b><br>${res.report.map(escapeHtml).join("<br>")}</div>`;
+    // Схема на экране показывает уже устаревшие данные — перечитываем и
+    // список источников (мог появиться новый чертёж), и сам план.
+    await loadSourceFiles();
+    await loadPlan();
+  } catch (e) {
+    reportEl.innerHTML = `<div class="error-text">Ошибка импорта: ${escapeHtml(e.message)}</div>`;
+  } finally {
+    importInputSubmit.disabled = false;
+  }
+});
 
 document.getElementById("menu-status-restore").addEventListener("click", () => {
   statusRestoreFile.value = "";

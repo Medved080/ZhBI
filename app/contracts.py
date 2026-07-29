@@ -139,6 +139,11 @@ def build_contract_name(
 
 
 def _line_fact(conn, contract_id: int, element_type: Optional[str], mark: Optional[str]) -> int:
+    """Факт по ОДНОЙ строке контракта. Остался для contract_line_warning —
+    там нужна ровно одна строка на каждую смену статуса, групповой запрос
+    (_load_contract_bundle) был бы дороже. Быстрый благодаря индексу
+    idx_elements_contract_line (app/db.py) — без него это был полный скан
+    elements на КАЖДЫЙ элемент массовой смены статуса."""
     row = conn.execute(
         "SELECT COUNT(*) as n FROM elements "
         "WHERE contract_id = ? AND element_type IS ? AND mark IS ? AND current_status != 'planned'",
@@ -153,6 +158,64 @@ def _line_damaged(conn, contract_id: int, element_type: str) -> int:
         (contract_id, element_type),
     ).fetchone()
     return row["n"]
+
+
+def _load_contract_bundle(conn, contract_id: Optional[int] = None) -> dict:
+    """Всё, что нужно для сборки ответа по контрактам, ЧЕТЫРЬМЯ групповыми
+    запросами — вместо пары запросов НА КАЖДУЮ строку контракта.
+
+    Так было раньше: `_line_fact` делал `COUNT(*) FROM elements WHERE
+    contract_id=? AND element_type IS ? AND mark IS ?` на каждую строку.
+    Индекса под этот набор колонок нет, то есть каждый вызов — полный скан
+    `elements`. На реальных данных (16 контрактов, 406 строк, 9422
+    элемента) это 860 SQL-запросов и **2757 мс** на один `GET /contracts` —
+    замерено; из них 2841 мс приходилось ровно на 406 сканов (в пределах
+    погрешности — всё время). Диалог массовой смены статуса ЖДАЛ этот
+    ответ перед показом, отсюда живой репорт «долго открывается окно»
+    (см. Docs/backlog.md).
+
+    Ключи `facts` — кортеж (contract_id, element_type, mark), где оба
+    последних могут быть None: `GROUP BY` в SQLite кладёт NULL в
+    собственную группу, что в точности повторяет прежнюю NULL-безопасную
+    семантику `IS ?` (обычное `=` с NULL не совпало бы никогда).
+
+    contract_id — сузить до одного контракта (карточка/создание/правка);
+    None — все сразу (список контрактов).
+    """
+    scope = " AND contract_id = ?" if contract_id is not None else ""
+    args = (contract_id,) if contract_id is not None else ()
+
+    facts = {
+        (r["contract_id"], r["element_type"], r["mark"]): r["n"]
+        for r in conn.execute(
+            "SELECT contract_id, element_type, mark, COUNT(*) AS n FROM elements "
+            f"WHERE contract_id IS NOT NULL AND current_status != 'planned'{scope} "
+            "GROUP BY contract_id, element_type, mark",
+            args,
+        ).fetchall()
+    }
+    damaged = {
+        (r["contract_id"], r["element_type"]): r["n"]
+        for r in conn.execute(
+            "SELECT contract_id, element_type, COALESCE(SUM(quantity), 0) AS n FROM contract_incidents "
+            f"WHERE 1=1{scope} GROUP BY contract_id, element_type",
+            args,
+        ).fetchall()
+    }
+
+    lines: dict = {}
+    for r in conn.execute(
+        f"SELECT * FROM contract_lines WHERE 1=1{scope} ORDER BY contract_id, element_type, mark", args
+    ).fetchall():
+        lines.setdefault(r["contract_id"], []).append(r)
+
+    incidents: dict = {}
+    for r in conn.execute(
+        f"SELECT * FROM contract_incidents WHERE 1=1{scope} ORDER BY contract_id, incident_date DESC, id DESC", args
+    ).fetchall():
+        incidents.setdefault(r["contract_id"], []).append(r)
+
+    return {"facts": facts, "damaged": damaged, "lines": lines, "incidents": incidents}
 
 
 def _specification_chain(conn, specification_id: int):
@@ -175,15 +238,20 @@ def _specification_chain(conn, specification_id: int):
     return row
 
 
-def _to_contract_out(conn, contract_row) -> ContractOut:
+def _to_contract_out(conn, contract_row, bundle: Optional[dict] = None) -> ContractOut:
+    """bundle — предзагруженные агрегаты (см. _load_contract_bundle). Список
+    контрактов строит его ОДИН раз на все контракты и передаёт сюда;
+    одиночные вызовы могут не передавать — тогда он собирается здесь же, но
+    сразу суженный до этого контракта (те же 4 запроса, не 2 на строку)."""
+    cid = contract_row["id"]
+    if bundle is None:
+        bundle = _load_contract_bundle(conn, cid)
     chain = _specification_chain(conn, contract_row["specification_id"])
-    line_rows = conn.execute(
-        "SELECT * FROM contract_lines WHERE contract_id = ? ORDER BY element_type, mark", (contract_row["id"],)
-    ).fetchall()
+    line_rows = bundle["lines"].get(cid, [])
     lines = []
     for lr in line_rows:
-        fact = _line_fact(conn, contract_row["id"], lr["element_type"], lr["mark"])
-        damaged = _line_damaged(conn, contract_row["id"], lr["element_type"])
+        fact = bundle["facts"].get((cid, lr["element_type"], lr["mark"]), 0)
+        damaged = bundle["damaged"].get((cid, lr["element_type"]), 0)
         lines.append(
             ContractLineOut(
                 id=lr["id"], element_type=lr["element_type"], mark=lr["mark"], quantity=lr["quantity"],
@@ -191,10 +259,7 @@ def _to_contract_out(conn, contract_row) -> ContractOut:
                 exceeded=(fact + damaged) > lr["quantity"],
             )
         )
-    incident_rows = conn.execute(
-        "SELECT * FROM contract_incidents WHERE contract_id = ? ORDER BY incident_date DESC, id DESC",
-        (contract_row["id"],),
-    ).fetchall()
+    incident_rows = bundle["incidents"].get(cid, [])
     incidents = [
         ContractIncidentOut(
             id=ir["id"], element_type=ir["element_type"], quantity=ir["quantity"],
@@ -207,7 +272,7 @@ def _to_contract_out(conn, contract_row) -> ContractOut:
         chain["specification_number"], chain["specification_date"], contract_row["theme"],
     )
     return ContractOut(
-        id=contract_row["id"], name=name, theme=contract_row["theme"],
+        id=cid, name=name, theme=contract_row["theme"],
         specification_id=chain["specification_id"], specification_number=chain["specification_number"],
         specification_date=chain["specification_date"],
         agreement_id=chain["agreement_id"], agreement_number=chain["agreement_number"],
@@ -234,7 +299,10 @@ def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
             ORDER BY c.short_name, a.number, s.number
             """
         ).fetchall()
-        return [_to_contract_out(conn, r) for r in rows]
+        # Агрегаты — ОДИН раз на все контракты сразу (см. _load_contract_bundle),
+        # иначе на каждую строку каждого контракта уходило по два запроса.
+        bundle = _load_contract_bundle(conn)
+        return [_to_contract_out(conn, r, bundle) for r in rows]
     finally:
         conn.close()
 
@@ -544,10 +612,24 @@ def contract_line_warning(conn, contract_id: Optional[int], element_type: str, m
     damaged = _line_damaged(conn, contract_id, element_type)
     if (fact + damaged) <= line["quantity"]:
         return None
-    contract_row = conn.execute("SELECT name FROM contracts WHERE id = ?", (contract_id,)).fetchone()
+    # contracts.name как СТОЛБЦА больше нет ("Контрактация 2.0" — имя всегда
+    # генерируется, см. build_contract_name). Здесь оставался забытый
+    # `SELECT name FROM contracts`, который падал с "no such column: name" —
+    # но только при реально СРАБОТАВШЕМ превышении остатка (выше стоит
+    # ранний return), поэтому баг дожил незамеченным до правки соседнего
+    # кода. Резолвим имя тем же способом, что и весь остальной код.
+    contract_row = conn.execute("SELECT specification_id, theme FROM contracts WHERE id = ?", (contract_id,)).fetchone()
+    contract_name = "?"
+    if contract_row:
+        chain = _specification_chain(conn, contract_row["specification_id"])
+        if chain:
+            contract_name = build_contract_name(
+                chain["counterparty_short_name"], chain["agreement_number"], chain["agreement_date"],
+                chain["specification_number"], chain["specification_date"], contract_row["theme"],
+            )
     return {
         "contract_id": contract_id,
-        "contract_name": contract_row["name"] if contract_row else "?",
+        "contract_name": contract_name,
         "quantity": line["quantity"],
         "fact": fact,
         "damaged": damaged,

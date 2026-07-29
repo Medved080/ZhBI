@@ -579,6 +579,27 @@
     background: var(--color-primary); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .12s;
   }
   #login-box button:hover { background: var(--color-primary-hover); }
+  /* Поле пароля с кнопкой "показать". Правила #login-box input/button выше
+     задают width:100% — внутри flex-строки это превратилось бы во
+     flex-basis и раздавило бы поле (тот же класс бага, что уже ловили с
+     <input type=date> в формах договора/спецификации, см. Docs/backlog.md),
+     поэтому здесь и ширина, и вид кнопки переопределяются явно. */
+  /* Общего правила .hidden в этом файле НЕТ — каждое скрытие описано под
+     свой id (#login-screen.hidden, #app-root.hidden, #workdate-banner.hidden).
+     Поэтому классу на полях логина тоже нужно СВОЁ правило: без него
+     class="hidden" не скрывает ничего, и на экране висели оба поля разом —
+     выпадающий список и пустое текстовое под ним (поймано скриншотом,
+     программная проверка "класс проставлен" этого не видела). */
+  /* Поле логина со встроенным списком (<datalist>) — стрелку-раскрывашку
+     браузер рисует сам, отдельных стилей не требуется. */
+  #login-password-row { display: flex; gap: 6px; align-items: stretch; }
+  #login-password-row input { flex: 1; min-width: 0; width: auto; }
+  #login-box button#login-password-toggle {
+    width: 40px; flex: none; margin-top: 0; padding: 0; font-size: 15px; line-height: 1;
+    background: #f2f4f7; color: #444; border: 1px solid #d5d8dc; cursor: pointer;
+  }
+  #login-box button#login-password-toggle:hover { background: #e6e9ee; }
+  #login-box button#login-password-toggle.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 
   /* #app-root не был полноценным flex-контейнером (только display:none под .hidden) —
      из-за этого #body{flex:1} ниже по дереву не имел эффекта (родитель не flex),
@@ -617,9 +638,30 @@
     <img id="login-logo" src="/static/logo.svg" width="169" height="37" alt="МСУ-1"/>
     <h1>ЖБИ — вход</h1>
     <label class="field">Логин</label>
-    <input type="text" id="login-domain" autocomplete="username"/>
+    <!-- ОДНО поле, а не поле + отдельный выпадающий список: список
+         пользователей подключён как <datalist>, то есть встроенная
+         подсказка самого поля (стрелка справа раскрывает список, при вводе
+         фильтруется). Так решаются обе задачи сразу и без второго
+         контрола: пользователя можно выбрать из списка, а поле остаётся
+         обычным <input type="text"> с autocomplete="username".
+         Последнее принципиально: менеджеры паролей браузера ищут пару
+         "текстовое поле логина + поле пароля рядом". Первая версия
+         прятала поле логина под display:none и отправляла значение
+         <select> — пара распадалась, и браузер переставал подставлять
+         сохранённый пароль (живой репорт 2026-07-29: "пароль больше не
+         принимается, я его не менял"). Вторая версия показывала оба
+         контрола сразу — автозаполнение чинило, но выглядело как два
+         поля под одной подписью.
+         Список наполняется из GET /login-users; если он отключён флагом
+         PUBLIC_LOGIN_LIST (app/auth.py) или не отдался — <datalist>
+         просто остаётся пустым, и поле работает как обычный ввод. -->
+    <input type="text" id="login-domain" list="login-users-list" autocomplete="username" placeholder="выберите или введите логин"/>
+    <datalist id="login-users-list"></datalist>
     <label class="field">Пароль</label>
-    <input type="password" id="login-password" autocomplete="current-password"/>
+    <div id="login-password-row">
+      <input type="password" id="login-password" autocomplete="current-password"/>
+      <button type="button" id="login-password-toggle" title="Показать пароль" aria-label="Показать пароль">👁</button>
+    </div>
     <div class="error-text" id="login-error"></div>
     <button id="login-submit">Войти</button>
   </div>
@@ -657,20 +699,31 @@
   </div>
   <div id="toolbar-pinned">
     <div class="dropdown" id="settings-dropdown">
-      <button class="btn" id="btn-settings-menu">Настройки ▾</button>
+      <button class="btn" id="btn-settings-menu">Действия ▾</button>
+      <!-- Группы меню (2026-07-29, живой запрос): "Настройки" — оформление и
+           параметры самой системы, включая личные; "Справочники" — ведение
+           списков; "Обмен данными" — всё, что про файлы; "Тестирование" —
+           необратимое, отдельно и красным.
+           Заголовок "Настройки" НЕ admin-only, в отличие от остальных трёх:
+           внутри него два личных пункта, видимых всем ролям. Без этого у
+           прораба (роль user/view) меню начиналось бы с двух пунктов без
+           единого заголовка. -->
       <div class="dropdown-menu" id="settings-menu">
+        <div class="dropdown-divider">Настройки</div>
         <button id="menu-change-password">Сменить пароль</button>
         <button id="menu-label-color">Цвет подписей марок</button>
-        <div class="dropdown-divider admin-only">Управление</div>
         <button id="menu-colors" class="admin-only">Цвета статусов</button>
         <button id="menu-shapes" class="admin-only">Форма маркеров</button>
         <button id="menu-zone-colors" class="admin-only">Цвета зон</button>
-        <button id="menu-subtypes" class="admin-only">Справочник подтипов</button>
-        <button id="menu-mark-prefixes" class="admin-only">Справочник префиксов марок</button>
+        <button id="menu-info-plate-settings" class="admin-only">Порог опоздания поставки</button>
         <button id="menu-users" class="admin-only">Пользователи</button>
+        <div class="dropdown-divider admin-only">Справочники</div>
+        <!-- Слово "Справочник" из названий убрано: под заголовком "Справочники"
+             оно повторялось дважды в каждой строке. -->
+        <button id="menu-subtypes" class="admin-only">Подтипы</button>
+        <button id="menu-mark-prefixes" class="admin-only">Префиксы марок</button>
         <button id="menu-counterparties" class="admin-only">Контрагенты</button>
         <button id="menu-contracts" class="admin-only">Контракты</button>
-        <button id="menu-info-plate-settings" class="admin-only">Порог опоздания поставки</button>
         <div class="dropdown-divider admin-only">Обмен данными</div>
         <button id="btn-export" class="admin-only">Экспорт в XLS</button>
         <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
@@ -678,6 +731,7 @@
         <button id="menu-status-restore" class="admin-only">Восстановить статусы из выгрузки</button>
         <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
         <button id="menu-schedule-import" class="admin-only">Импорт графика МС Project из XLS</button>
+        <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
         <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
         <div class="dropdown-divider admin-only">Тестирование</div>
         <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов…</button>
@@ -963,7 +1017,7 @@
     <p class="hint-text">
       Для случая, когда история статусов элементов была потеряна (например, после
       аварийной пересборки БД) — принимает файл выгрузки "Статус на дату"
-      (Настройки → Экспорт в XLS) или "История статусов". Для КАЖДОГО элемента,
+      (Действия → Обмен данными → Экспорт в XLS) или "История статусов". Для КАЖДОГО элемента,
       найденного в файле, история пересоздаётся заново по нему (режим "Заменить") —
       обычное "Дополнить" здесь не сработает: у только что пересозданных импортом
       чертежа элементов уже есть свежая запись "Запланирован" с сегодняшней датой,
@@ -977,6 +1031,24 @@
     <div class="actions">
       <button class="btn btn-secondary" id="status-restore-cancel">Отмена</button>
       <button class="btn btn-primary" id="status-restore-submit">Восстановить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="import-input-backdrop">
+  <div class="modal">
+    <h2>Загрузка из папки Input</h2>
+    <p class="hint-text">
+      Загружает файлы, лежащие в папке <code>Input/</code> на сервере. Раньше это
+      происходило автоматически при каждом запуске сервера — то есть на каждый
+      деплой и каждый перезапуск; теперь только по этой команде.
+    </p>
+    <div id="import-input-files"></div>
+    <p class="hint-text" id="import-input-warning"></p>
+    <div id="import-input-report"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="import-input-cancel">Отмена</button>
+      <button class="btn btn-primary" id="import-input-submit">Загрузить</button>
     </div>
   </div>
 </div>

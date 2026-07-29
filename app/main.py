@@ -31,7 +31,7 @@ from app.dxf_import import DxfProcessingError, UPLOADS_DIR, import_dxf_file, pro
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
 from app.history_import import HistoryImportError, import_history, parse_history_xlsx
-from app.input_import import import_input_dxf, import_input_xlsx
+from app.input_import import import_input_dxf, import_input_xlsx, list_input_files
 from app.models import (
     SHAPES,
     STATUS_LABELS_RU,
@@ -280,6 +280,44 @@ def _warn_users_without_password() -> None:
 # стоит УБРАТЬ, не оставлять постоянным механизмом: тихая пересборка БД
 # при любой будущей (в т.ч. никак не связанной) ошибке миграции — риск
 # потерять реальные данные без участия человека.
+def _probe_schema_health() -> None:
+    """Проверка на поломку, ради которой существует
+    _attempt_migration_recovery: FK-ссылка (в реальном инциденте —
+    elements.contract_id), переписанная миграцией на
+    переименованную-и-удалённую таблицу вроде contracts_old_v3. Такая БД
+    проходит init_db() БЕЗ ошибки (маркеры миграций уже современные) и
+    падает только на первой РЕАЛЬНОЙ операции с этой колонкой. Раньше
+    такой операцией оказывался стартовый импорт Input/ — он и служил
+    невольным детектором; импорта на старте больше нет (см. on_startup),
+    поэтому нужен явный.
+
+    Сверяем целевые таблицы всех внешних ключей со списком реально
+    существующих. `PRAGMA foreign_key_list` отдаёт имя цели, разбирать DDL
+    регулярками не нужно.
+
+    Проверено эмпирически на синтетических БД (здоровая и с FK на
+    несуществующую таблицу): здесь ловится, а вот `PRAGMA
+    foreign_key_check`, который напрашивался первым, эту поломку
+    **пропускает** — проходит без ошибки на битой базе. Единственное, что
+    её раньше выявляло, — реальная запись в таблицу.
+
+    Только читает: ни одной операции записи."""
+    conn = get_connection()
+    try:
+        tables = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        for table in sorted(tables):
+            for fk in conn.execute(f'PRAGMA foreign_key_list("{table}")').fetchall():
+                target = fk["table"]
+                if target not in tables:
+                    raise sqlite3.OperationalError(
+                        f"no such table: {target} (внешний ключ {table}.{fk['from']} "
+                        f"ссылается на несуществующую таблицу)"
+                    )
+    finally:
+        conn.close()
+
+
 def _attempt_migration_recovery(exc: Exception) -> bool:
     if not DB_PATH.exists():
         return False
@@ -333,11 +371,23 @@ def _attempt_migration_recovery(exc: Exception) -> bool:
 
 @app.on_event("startup")
 def on_startup():
-    # Обычный старт импортирует ТОЛЬКО *.dxf из Input/, как и раньше —
-    # xlsx (Контрактация/Прогноз СМР) на регулярный рестарт НЕ переигрывается
-    # (это разовые ручные загрузки, источник истины — уже то, что в БД;
-    # переимпорт xlsx нужен только при полной пересборке — см.
-    # scripts/rebuild_db.py и _attempt_migration_recovery ниже).
+    # Обычный старт НЕ импортирует ничего из Input/ (живой запрос
+    # пользователя 2026-07-29: "убрать загрузку данных при старте системы,
+    # данные загружаем только интерактивно").
+    #
+    # Почему это правильно, а не просто удобнее. Раньше здесь стоял
+    # import_input_dxf(), то есть КАЖДЫЙ рестарт сервера переписывал
+    # геометрию всех уже загруженных элементов заново. А рестарт — это не
+    # редкое событие: его делает каждый деплой через CI/CD, каждый
+    # `docker compose up`, каждое падение с автоперезапуском
+    # (restart: unless-stopped). Побочный эффект: любой лишний запуск
+    # сервера превращался в запись в боевые данные — в том числе случайный
+    # второй экземпляр, поднятый рядом на другом порту.
+    #
+    # Импорт из Input/ теперь только по явной команде:
+    # POST /admin/import-input (пункт меню "Загрузить из папки Input"),
+    # плюс два пути полной пересборки, где без него получилась бы пустая
+    # база: scripts/rebuild_db.py и _attempt_migration_recovery ниже.
     #
     # ВАЖНО: битая FK-ссылка на удалённую по ходу миграции таблицу (см.
     # _attempt_migration_recovery) на практике может НЕ проявиться внутри
@@ -345,11 +395,13 @@ def on_startup():
     # возвращаются) — а вылезти позже, на первой же реальной операции с
     # затронутой таблицей: живой прогон показал падение именно в
     # import_input_dxf() → upsert_elements(), уже ПОСЛЕ успешного init_db().
-    # Поэтому в try/except — весь обычный стартовый путь, не только init_db().
+    # Раз импорта на старте больше нет, эта проверка потерялась бы — вместо
+    # неё делаем дешёвый контрольный запрос к elements: он читает ту же
+    # колонку с FK и вылавливает ровно ту же поломку, но ничего не пишет.
     try:
         init_db()
         _warn_users_without_password()
-        import_input_dxf()
+        _probe_schema_health()
     except Exception as e:
         if not _attempt_migration_recovery(e):
             raise
@@ -570,6 +622,37 @@ def delete_history_entry(
         return data
     finally:
         conn.close()
+
+
+@app.get("/admin/input-files")
+def admin_input_files(user: sqlite3.Row = Depends(require_admin)):
+    """Что сейчас лежит в Input/ — для диалога подтверждения перед импортом.
+    Отдельным запросом, а не вместе с самим импортом: оператор должен
+    увидеть список ДО того, как согласится перезаписать геометрию."""
+    return list_input_files()
+
+
+@app.post("/admin/import-input")
+def admin_import_input(user: sqlite3.Row = Depends(require_admin)):
+    """Импорт всех файлов из папки Input/ на сервере — по явной команде из
+    меню. Раньше это происходило само при каждом старте сервера, то есть на
+    каждый деплой и каждый перезапуск контейнера (см. on_startup, где
+    объяснено, почему так делать не следует).
+
+    Порядок вызовов важен и совпадает с scripts/rebuild_db.py: сначала DXF
+    (контрактации нужны уже загруженные марки, графику — уже привязанные к
+    зонам элементы), затем xlsx.
+
+    Возвращает построчный отчёт обоих импортов — то же самое, что уходит в
+    лог сервера, но оператор лог не читает.
+
+    Импорт ПЕРЕЗАПИСЫВАЕТ геометрию уже загруженных элементов (upsert по
+    (source_file, dxf_handle)); статусы и история живут в отдельных
+    таблицах и не затрагиваются. Предупреждение об этом — в диалоге
+    подтверждения на фронтенде."""
+    report = import_input_dxf()
+    report += import_input_xlsx()
+    return {"report": report}
 
 
 @app.post("/admin/reset-status-history")
@@ -1175,8 +1258,18 @@ def import_history_xlsx(
     content = read_upload_limited(file.file)
     conn = get_connection()
     try:
-        rows = parse_history_xlsx(content)
-        return import_history(conn, source_file, rows, mode)
+        parsed = parse_history_xlsx(content)
+        summary = import_history(conn, source_file, parsed["rows"], mode)
+        # Что именно файл дал по реквизитам контракта — важно показать явно:
+        # старая выгрузка (до 2026-07-29) несла одну склеенную колонку
+        # "Контракт", разобрать её обратно нельзя, и импорт молча прошёл бы
+        # без привязки к контрактам (см. CONTRACT_HEADER_CANDIDATES).
+        summary["contract_columns"] = (
+            "реквизиты импортированы" if parsed["has_contract_columns"]
+            else ("старый формат — одна колонка «Контракт», реквизиты не импортированы"
+                  if parsed["has_legacy_contract_column"] else "в файле нет колонок с реквизитами")
+        )
+        return summary
     except HistoryImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:

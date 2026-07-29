@@ -314,6 +314,28 @@ def _ensure_contract_lines_index(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_elements_contract_line_index(conn: sqlite3.Connection) -> None:
+    """Индекс под запрос «сколько элементов уже пришло по этой строке
+    контракта» — (contract_id, element_type, mark) с фильтром по
+    current_status. Без него это полный скан elements, и он выполнялся:
+    (1) на КАЖДУЮ строку каждого контракта при GET /contracts (замерено —
+    406 сканов, 2757 мс, из-за чего долго открывалось окно массовой смены
+    статуса, см. Docs/backlog.md); (2) на КАЖДЫЙ элемент при смене статуса
+    (contract_line_warning → _line_fact, app/contracts.py) — то есть на
+    массовой смене статуса тысячи сканов подряд. Первое устранено
+    групповым запросом (_load_contract_bundle), второе принципиально
+    поштучное и лечится именно индексом.
+
+    Создаётся здесь, а не в schema.sql, по той же причине, что и
+    idx_contract_lines_unique выше: elements.contract_id добавляется
+    миграцией (_COLUMN_MIGRATIONS), а executescript отрабатывает РАНЬШЕ
+    миграций — на ещё не мигрированной БД CREATE INDEX упал бы."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_elements_contract_line "
+        "ON elements (contract_id, element_type, mark, current_status)"
+    )
+
+
 _MARK_TYPE_PREFIX_SEED = [
     ("КН", "Колонна"), ("Кн", "Колонна"), ("Кс", "Колонна"), ("кс", "Колонна"),
     ("П-", "Плита перекрытия"), ("ПИ-", "Плита перекрытия"), ("Пд-", "Плита перекрытия"),
@@ -411,6 +433,7 @@ def init_db() -> None:
         _migrate_contracts_hierarchy(conn)
         _migrate_contracts_theme(conn)
         _ensure_contract_lines_index(conn)
+        _ensure_elements_contract_line_index(conn)
         _normalize_element_type_vocabulary(conn)
         _seed_reference_data(conn)
         conn.commit()
