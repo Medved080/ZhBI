@@ -3,7 +3,7 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
-from app.contracts import build_contract_name
+from app.contracts import build_document_label
 from app.models import STATUS_LABELS_RU
 
 ELEMENT_COLUMNS = [
@@ -55,21 +55,34 @@ def _zone_names(conn) -> dict:
     return {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM zones").fetchall()}
 
 
+# Реквизиты контракта — ТРИ отдельные колонки (Поставщик / Договор /
+# Спецификация) вместо одной склеенной "Контракт" (живой запрос
+# пользователя, 2026-07-28): в выгрузке по ним нужно фильтровать и
+# сводить сводные таблицы, а из строки вида
+# "Контрагент/Договор № 5 от .../Спецификация № 2 от ..." Excel этого не
+# умеет. Формат каждого документа — общий с интерфейсом
+# (build_document_label, app/contracts.py), не своя копия.
+CONTRACT_COLUMNS = ["Поставщик", "Договор (номер и дата)", "Спецификация (номер и дата)"]
+
+_EMPTY_CONTRACT_CELLS = ["", "", ""]
+
+
 def _contract_labels(conn) -> dict:
     # "Контрактация 2.0" (см. Docs/backlog.md) — contracts.supplier убран,
     # контрагент резолвится через цепочку specification->agreement->
     # counterparty, та же схема, что app/contracts.py:_specification_chain.
-    # Наименование контракта не хранится — генерируется build_contract_name
-    # (та же функция, что и /contracts, /plan-data, живой запрос
-    # пользователя, 2026-07-28), не дублируем логику.
+    # Тема контракта (contracts.theme) в выгрузку не попадает — она часть
+    # СКЛЕЕННОГО наименования (build_contract_name), а по отдельным
+    # реквизитам ей места нет.
     return {
-        r["id"]: build_contract_name(
-            r["counterparty_short_name"], r["agreement_number"], r["agreement_date"],
-            r["specification_number"], r["specification_date"], r["theme"],
-        )
+        r["id"]: [
+            r["counterparty_short_name"],
+            build_document_label(r["agreement_number"], r["agreement_date"]),
+            build_document_label(r["specification_number"], r["specification_date"]),
+        ]
         for r in conn.execute(
             """
-            SELECT co.id AS id, co.theme AS theme,
+            SELECT co.id AS id,
                    c.short_name AS counterparty_short_name,
                    a.number AS agreement_number, a.agreement_date AS agreement_date,
                    s.number AS specification_number, s.specification_date AS specification_date
@@ -91,10 +104,14 @@ def _zone_cell(row, id_field, status_field, zone_names) -> str:
     return ZONE_STATUS_LABELS_RU.get(status, status or "")
 
 
-def _contract_cell(contract_id, contract_labels) -> str:
+def _contract_cells(contract_id, contract_labels) -> list:
+    """Три ячейки (Поставщик / Договор / Спецификация) на один contract_id.
+    Контракт, которого уже нет в справочнике (удалён после того, как был
+    записан в историю), не молчит пустотой — попадает в колонку Поставщик
+    как "#id", как и раньше в склеенной колонке."""
     if not contract_id:
-        return ""
-    return contract_labels.get(contract_id, f"#{contract_id}")
+        return list(_EMPTY_CONTRACT_CELLS)
+    return contract_labels.get(contract_id, [f"#{contract_id}", "", ""])
 
 
 def _autosize(ws):
@@ -137,7 +154,8 @@ def build_snapshot_xlsx(conn, source_file, date, element_ids=None):
     header = (
         [label for _, label in ELEMENT_COLUMNS]
         + [label for _, _, label in ZONE_COLUMNS]
-        + ["Контракт", "Статус", "Статус изменён", "Кто изменил"]
+        + CONTRACT_COLUMNS
+        + ["Статус", "Статус изменён", "Кто изменил"]
     )
     ws.append(header)
 
@@ -172,7 +190,7 @@ def build_snapshot_xlsx(conn, source_file, date, element_ids=None):
 
         values = [el[key] for key, _ in ELEMENT_COLUMNS]
         values.extend(_zone_cell(el, id_field, status_field, zone_names) for id_field, status_field, _ in ZONE_COLUMNS)
-        values.append(_contract_cell(el["contract_id"], contract_labels))
+        values.extend(_contract_cells(el["contract_id"], contract_labels))
         values.append(STATUS_LABELS_RU.get(status, status) if status else "(нет данных на эту дату)")
         values.append(changed_at or "")
         values.append(changed_by or "")
@@ -195,7 +213,12 @@ def build_history_xlsx(conn, source_file, date_from, date_to, element_ids=None):
     header = (
         [label for _, label in ELEMENT_COLUMNS]
         + [label for _, _, label in ZONE_COLUMNS]
-        + ["Статус", "Изменено", "Кто изменил", "Комментарий", "Контракт на момент изменения"]
+        + ["Статус", "Изменено", "Кто изменил", "Комментарий"]
+        # "на момент изменения" в заголовке сохранено намеренно (было и у
+        # прежней склеенной колонки): здесь реквизиты берутся из
+        # status_history.contract_id, то есть отражают, что было ТОГДА, а не
+        # текущую привязку элемента.
+        + [f"{label} на момент изменения" for label in CONTRACT_COLUMNS]
     )
     ws.append(header)
 
@@ -239,7 +262,7 @@ def build_history_xlsx(conn, source_file, date_from, date_to, element_ids=None):
         # Контракт НА МОМЕНТ этого события (sh.contract_id), а не текущий
         # контракт элемента — история должна отражать, что было тогда,
         # а не что сейчас (см. Docs/backlog.md).
-        values.append(_contract_cell(r["event_contract_id"], contract_labels))
+        values.extend(_contract_cells(r["event_contract_id"], contract_labels))
         ws.append(values)
 
     _autosize(ws)

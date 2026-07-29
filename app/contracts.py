@@ -110,6 +110,16 @@ def _ru_date(date_str: Optional[str]) -> Optional[str]:
     return f"{m.group(3)}.{m.group(2)}.{m.group(1)}" if m else date_str
 
 
+def build_document_label(number: str, date_str: Optional[str]) -> str:
+    """Реквизиты одного документа (договора или спецификации) — "НОМЕР от
+    ДД.ММ.ГГГГ", а без даты просто "НОМЕР". Отдельная функция, потому что
+    ровно этот же текст нужен не только внутри build_contract_name ниже, но
+    и по отдельности — XLS-экспорт (app/export.py) выводит договор и
+    спецификацию РАЗНЫМИ колонками (живой запрос пользователя, 2026-07-28),
+    и формат должен совпадать с тем, что видно в интерфейсе."""
+    return f"{number} от {_ru_date(date_str)}" if date_str else number
+
+
 def build_contract_name(
     counterparty_short_name: str, agreement_number: str, agreement_date: Optional[str],
     specification_number: str, specification_date: Optional[str], theme: Optional[str],
@@ -120,10 +130,8 @@ def build_contract_name(
     что имя разойдётся с реальными реквизитами после их правки.
     Единственное место генерации, переиспользуется _to_contract_out ниже,
     /plan-data (app/main.py) и XLS-экспортом (app/export.py)."""
-    agreement_text = f"{agreement_number} от {_ru_date(agreement_date)}" if agreement_date else agreement_number
-    specification_text = (
-        f"{specification_number} от {_ru_date(specification_date)}" if specification_date else specification_number
-    )
+    agreement_text = build_document_label(agreement_number, agreement_date)
+    specification_text = build_document_label(specification_number, specification_date)
     name = f"{counterparty_short_name}/{agreement_text}/{specification_text}"
     if theme:
         name += f" ({theme})"

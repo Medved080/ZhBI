@@ -116,7 +116,7 @@ let state = {
     edgeMaterial: null, // общий LineMaterial на ВСЕ рёбра силуэта — см. init3DScene
     materialByStatus: new Map(), // статус -> общий MeshStandardMaterial всех НЕвыбранных элементов этого статуса
     highlightMaterial: null, // единственный материал ВЫБРАННОГО элемента (пересвечивается под его цвет статуса)
-    animationFrameId: null,
+    animationFrameId: null, // заказанный кадр рендера по требованию (см. requestRender3D)
   },
 };
 
@@ -1037,6 +1037,15 @@ function allValuesFor(key) {
   // привязали.
   if (key === "contract") { for (const c of state.contracts) set.add(c.id); }
   if (key === "supplier") { for (const c of state.contracts) set.add(c.counterparty_short_name); }
+  // Статус — список ЗАКРЫТЫЙ и известен заранее (STATUS_ORDER на сервере,
+  // приходит в state.statusOrder), поэтому берём его целиком, а не только
+  // те статусы, что уже встретились у элементов. Тот же приём, что для
+  // зон/контрактов выше, и та же причина: пока по чертежу никто ничего не
+  // отгрузил, "Отгружен"/"Доставлен"/"Смонтирован" отсутствовали в фильтре
+  // вовсе — оператор не мог заранее снять/поставить по ним галочку, а
+  // список пунктов ещё и менялся по мере работы (живой запрос
+  // пользователя). Легенда статусов рядом всегда показывала все семь.
+  if (key === "status") { for (const s of state.statusOrder) set.add(s); }
   for (const e of state.elements) set.add(def.valueFn(e));
   return set;
 }
@@ -1159,6 +1168,7 @@ function applyPlacementFilters() {
     const decal = state.view3d.markDecalById.get(element.id);
     if (decal) decal.visible = passes && state.labelVisibility[element.element_type] !== false;
   }
+  requestRender3D(); // сцена изменилась — заказать кадр (см. requestRender3D)
 }
 
 // Что происходит после ЛЮБОГО изменения в фильтре по размещению: заново
@@ -1191,13 +1201,23 @@ function placementNoneLabel(kind) {
 // значение теперь id зоны (см. zoneFilterValue), а id — это внутренний
 // идентификатор БД без смыслового порядка, сортировать его как число
 // было бы неправильно, нужно сравнивать по РЕЗОЛВЛЕННОМУ имени.
-function placementComparator(labelFor, { compareRaw = false } = {}) {
+function placementComparator(labelFor, { compareRaw = false, order = null } = {}) {
   // "Служебные" псевдо-значения (нет данных / нет конкретной стоянки) —
   // всегда в конце списка, после реальных значений.
   const isTrailing = v => v === PLACEMENT_NONE || isNoStanceValue(v);
   return (a, b) => {
     if (isTrailing(a) && !isTrailing(b)) return 1;
     if (isTrailing(b) && !isTrailing(a)) return -1;
+    // order — заранее заданный порядок значений (сейчас единственный
+    // случай: статусы, state.statusOrder). Алфавит по русской подписи для
+    // них бессмысленен ("В производстве" впереди "Запланирован"), нужен
+    // жизненный цикл, тот же порядок, что у легенды и у выпадающего списка
+    // в диалоге смены статуса. Значение вне списка (теоретически — новый
+    // статус с сервера, ещё не в statusOrder) уходит в конец, а не теряется.
+    if (order) {
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      if (ia !== ib) return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
+    }
     if (compareRaw && typeof a === "number" && typeof b === "number") return a - b;
     // numeric:true — естественная сортировка чисел внутри строки
     // ("Стоянка 2" перед "Стоянка 10"), а не лексикографическая
@@ -1716,7 +1736,8 @@ function renderPlacementFilters() {
   ));
 
   container.appendChild(buildFilterGroup(
-    "Статус", "status", allValuesFor("status"), state.placementFilters.status, statusLabelFor, enabledFor("status"), onPlacementFilterChange
+    "Статус", "status", allValuesFor("status"), state.placementFilters.status, statusLabelFor, enabledFor("status"), onPlacementFilterChange,
+    { order: state.statusOrder }
   ));
 
   // Контрагент / Контракт — иерархически, тем же приёмом, что Кран/Стоянка
@@ -1925,6 +1946,7 @@ function update3DElementAppearance(element, selected) {
   mesh.material = selected ? getHighlightMeshMaterial(element.current_status) : getStatusMeshMaterial(element.current_status);
   // Рёбра — фиксированный чёрный (EDGE_COLOR), не статусный цвет — не
   // пересчитываются при смене статуса.
+  requestRender3D();
 }
 
 // ---------- допстрока подписи (плановая дата поставки + код контрагента),
@@ -4158,6 +4180,7 @@ document.getElementById("settings-save").addEventListener("click", async () => {
   // materialByStatus (см. getStatusMeshMaterial) — сами по себе не
   // подхватят новый цвет статуса, нужно перекрасить их в месте.
   for (const [status, material] of state.view3d.materialByStatus) material.color.set(colorFor(status));
+  requestRender3D(); // перекраска материала сама по себе кадр не рисует
   settingsBackdrop.classList.remove("open");
 });
 
@@ -6246,7 +6269,7 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
 // Постоянная подпись марки в 3D (см. Docs/backlog.md, "Раунд из 3
 // пунктов", 2026-07-17, п.3) — THREE.Sprite с canvas-текстурой: билборд
 // к камере автоматический (не нужно ничего обновлять per-frame в
-// animate3D()), в отличие от плоскости/TextGeometry. Провендорено только
+// render3DFrame()), в отличие от плоскости/TextGeometry. Провендорено только
 // ядро Three.js (Sprite/SpriteMaterial — его часть) — CSS2DRenderer/
 // TextGeometry НЕ провендорены, а по правилу проекта новый сторонний код
 // требует отдельного подтверждения (см. CLAUDE.md), поэтому выбран путь
@@ -6449,6 +6472,7 @@ function apply3DZoneVisibility() {
     const zone = state.zones.find(z => z.id === zoneId);
     if (zone) sprite.visible = zoneMeshVisible(zone);
   }
+  requestRender3D();
 }
 
 // Видимость постоянных 3D-подписей марок — переиспользует ТОТ ЖЕ
@@ -6467,6 +6491,7 @@ function apply3DLabelVisibility() {
     if (!element) continue;
     decal.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
   }
+  requestRender3D();
 }
 
 // Точечная пересборка ОДНОГО 3D-спрайта после смены статуса/партии —
@@ -6517,6 +6542,7 @@ function rebuild3DLabelSprite(element) {
       v3.labelSpriteById.set(element.id, sprite);
     }
   }
+  requestRender3D();
 }
 
 // Едва заметная подложка ГРАНИЦ ВСЕГО ПРОЕКТА — прямоугольник по охвату
@@ -6670,6 +6696,7 @@ function build3DScene() {
 
   fit3DCameraToData();
   updateAllDecalOrientations(); // начальный ракурс — тоже должен быть читаемым, не только после первого поворота
+  requestRender3D();
 }
 
 // ---------- сцена, камера, свет, управление ----------
@@ -6735,6 +6762,12 @@ function init3DScene() {
   // построении — дёшево, только смена кватерниона у уже существующих
   // мешей, без пересборки geometry/texture (см. updateDecalOrientation).
   controls.addEventListener("change", updateAllDecalOrientations);
+  // Главный источник кадров при обычной работе: пока оператор вращает/
+  // зумит/панорамирует, OrbitControls шлёт "change" на каждое движение —
+  // ровно на них и рисуем. Отпустил мышь — события кончились, кадры
+  // тоже (см. requestRender3D). Подписка ПОСЛЕ updateAllDecalOrientations,
+  // чтобы кадр рисовался уже с пересчитанным разворотом наклеек.
+  controls.addEventListener("change", requestRender3D);
 
   // Один общий материал на ВСЕ рёбра всех элементов — раньше был свой
   // экземпляр LineMaterial на каждый элемент (нужен был свой цвет
@@ -6794,6 +6827,7 @@ function fit3DCameraToData() {
   // всей схемы целиком, тот же смысл, что у state.initialView в 2D.
   v3.homeDistance = v3.camera.position.distanceTo(v3.controls.target);
   updateZoomIndicator3D();
+  requestRender3D(); // камера переставлена — нужен кадр с нового ракурса
 }
 
 // ---------- индикатор зума + сброс в 3D (см. Docs/backlog.md, разбор UX —
@@ -6825,15 +6859,64 @@ function on3DResize() {
   // пересчитать; материал теперь ОДИН общий на все элементы (см.
   // init3DScene), поэтому одна строка вместо обхода всех мешей.
   if (v3.edgeMaterial) v3.edgeMaterial.resolution.set(w, h);
+  requestRender3D(); // размер холста изменился — перерисовать под новый вьюпорт
 }
 
-function animate3D() {
+// ---------- рендер ПО ТРЕБОВАНИЮ, а не бесконечным циклом ----------
+//
+// Раньше здесь был обычный для примеров Three.js безусловный цикл
+// (`renderer.render(...); requestAnimationFrame(animate3D)`) — сцена
+// перерисовывалась 60 раз в секунду всё время, пока включён 3D, даже
+// когда с ней вообще ничего не происходило. На реальном файле (9422
+// элемента) один кадр — это ~19 тысяч draw call (меш грани + объект
+// рёбер LineSegments2 на каждый элемент), плюс наклейки марок при
+// включённых подписях; то есть больше миллиона вызовов отрисовки в
+// секунду вхолостую. Живой репорт пользователя: браузер в простое,
+// без единого действия с сервисом, светился в "Мониторинге системы"
+// с энерговоздействием под 2900. Сам браузер это не гасит — rAF
+// тормозится только у ПОЛНОСТЬЮ скрытой вкладки, а окно, просто
+// перекрытое другим окном, для него остаётся видимым и активным.
+//
+// Непрерывный цикл здесь и не нужен: инерции у камеры нет
+// (controls.enableDamping = false, см. init3DScene), анимаций в сцене
+// тоже — новый кадр требуется РОВНО когда что-то изменилось. Все такие
+// точки дёргают requestRender3D(): движение камеры (событие "change" у
+// OrbitControls), пересборка сцены, смена видимости по фильтрам/
+// тумблерам, смена статуса/выбора элемента, пересборка подписи,
+// изменение размера вьюпорта, смена цветовой схемы.
+//
+// requestRender3D можно звать сколько угодно раз подряд — лишний кадр
+// не закажется, пока уже заказанный не отрисуется (animationFrameId).
+function render3DFrame() {
   const v3 = state.view3d;
-  if (!v3.active) return;
+  v3.animationFrameId = null;
+  if (!v3.active || !v3.renderer) return;
   v3.controls.update();
   v3.renderer.render(v3.scene, v3.camera);
-  v3.animationFrameId = requestAnimationFrame(animate3D);
 }
+
+function requestRender3D() {
+  const v3 = state.view3d;
+  if (!v3.active || !v3.renderer) return;
+  if (v3.animationFrameId !== null) return; // кадр уже заказан — хватит одного
+  v3.animationFrameId = requestAnimationFrame(render3DFrame);
+}
+
+// Вкладку свернули/увели на задний план — снимаем уже заказанный кадр
+// (браузер и сам его отложит, но так честнее); вернули — рисуем один
+// кадр, чтобы холст точно был актуален после возможной потери
+// содержимого буфера.
+document.addEventListener("visibilitychange", () => {
+  const v3 = state.view3d;
+  if (document.hidden) {
+    if (v3.animationFrameId !== null) {
+      cancelAnimationFrame(v3.animationFrameId);
+      v3.animationFrameId = null;
+    }
+    return;
+  }
+  requestRender3D();
+});
 
 // ---------- клики — та же интерактивность, что у 2D (selectElement/openCtxMenu) ----------
 
@@ -6960,7 +7043,10 @@ async function setViewMode(mode) {
 
   if (mode === "2d") {
     v3.active = false;
-    if (v3.animationFrameId) cancelAnimationFrame(v3.animationFrameId);
+    if (v3.animationFrameId !== null) {
+      cancelAnimationFrame(v3.animationFrameId);
+      v3.animationFrameId = null;
+    }
     hide3DTooltip();
     stage3d.style.display = "none";
     stage2d.style.display = "";
@@ -6990,7 +7076,7 @@ async function setViewMode(mode) {
   btnView3D.classList.add("active");
   btnView3D.disabled = false;
   on3DResize();
-  animate3D();
+  requestRender3D();
 }
 
 btnView2D.addEventListener("click", () => {
