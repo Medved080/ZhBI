@@ -515,13 +515,24 @@
   .btn-icon-square { width: 30px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
   .btn-icon-square img { display: block; }
 
+  #rn-list { border: 1px solid var(--color-border); border-radius: var(--radius-sm); max-height: 46vh; overflow-y: auto; }
+  .rn-item { padding: 7px 10px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--color-border); }
+  .rn-item:last-child { border-bottom: none; }
+  .rn-item:hover { background: var(--color-surface-2); }
+  .rn-item.active { background: var(--color-primary); color: #fff; }
+  .rn-item .rn-meta { font-size: 11px; opacity: .75; }
+
   /* -------- отчёт «Динамика» -------- */
   .dyn-head { text-align: center; margin-bottom: 14px; }
   .dyn-head h3 { margin: 0 0 4px; font-size: 15px; }
   .dyn-head .dyn-sub { font-size: 12px; color: var(--color-text-muted); }
   .dyn-boxes { display: flex; gap: 12px; margin-bottom: 14px; }
   .dyn-box { flex: 1; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
-  .dyn-box > h4 { margin: 0; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+  .dyn-box > h4 { margin: 0; padding: 6px 10px; font-size: 12px; font-weight: 600;
+    display: flex; align-items: center; justify-content: space-between; }
+  .dyn-edit { border: none; background: none; cursor: pointer; font-size: 13px; color: inherit; opacity: .6; padding: 0 2px; }
+  .dyn-edit:hover { opacity: 1; }
+  @media print { .dyn-edit { display: none; } }
   .dyn-box.events > h4 { background: #E8F4EA; color: #1E7B34; }
   .dyn-box.tasks > h4 { background: #FDF0E3; color: #B35C00; }
   .dyn-box.questions > h4 { background: var(--color-surface-2); }
@@ -811,6 +822,7 @@
             <button id="menu-counterparties">Контрагенты</button>
             <button id="menu-contracts">Контракты</button>
             <button id="menu-project-card">Карточка объекта</button>
+            <button id="menu-report-notes">События, задачи, вопросы</button>
           </div>
         </div>
         <div class="submenu admin-only">
@@ -1199,20 +1211,15 @@
     <div class="modal-sticky-scroll">
       <label class="field">Наименование объекта</label>
       <textarea id="pc-title" rows="2" style="width:100%"></textarea>
-      <label class="field">Подзаголовок отчёта</label>
-      <input type="text" id="pc-subtitle"/>
       <div class="row">
         <div><label class="field">Окончание монтажа изделий</label><input type="date" id="pc-montage-deadline"/></div>
         <div><label class="field">Окончание поставки изделий</label><input type="date" id="pc-delivery-deadline"/></div>
       </div>
       <label class="field">Вехи на графике (по одной в строке: «Название | ГГГГ-ММ-ДД»)</label>
       <textarea id="pc-milestones" rows="3" style="width:100%" placeholder="Завершение 1 Захватки | 2026-09-13"></textarea>
-      <label class="field">Ключевые события (по одному в строке)</label>
-      <textarea id="pc-events" rows="4" style="width:100%"></textarea>
-      <label class="field">Ключевые задачи (по одной в строке)</label>
-      <textarea id="pc-tasks" rows="4" style="width:100%"></textarea>
-      <label class="field">Открытые вопросы (по одному в строке)</label>
-      <textarea id="pc-questions" rows="4" style="width:100%"></textarea>
+      <p class="hint-text">Ключевые события, задачи и открытые вопросы ведутся отдельно —
+        они меняются по ходу стройки и хранятся редакциями на дату:
+        «Действия → Справочники → События, задачи, вопросы».</p>
       <div class="hint-text" id="pc-status"></div>
     </div>
     <div class="modal-sticky-foot"><div class="actions">
@@ -1254,6 +1261,45 @@
     <div class="modal-sticky-foot">
       <div class="actions"><button class="btn btn-secondary" id="reports-close">Закрыть</button></div>
     </div>
+  </div>
+</div>
+
+<!-- Редакции текстовых блоков отчёта. Слева — список дат, справа — сама
+     редакция. Отчёт на дату берёт последнюю редакцию с датой не позже
+     отчётной, поэтому обновлять блоки каждый день не требуется. -->
+<div class="modal-backdrop" id="report-notes-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head"><h2>События, задачи, вопросы</h2>
+      <p class="hint-text">Отчёт «Динамика» на выбранную дату показывает последнюю редакцию,
+        дата которой не позже отчётной. Обновлять каждый день не нужно — достаточно вносить
+        изменения тогда, когда они появились.</p>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div class="row" style="align-items:flex-start; gap:16px">
+        <div style="flex:0 0 220px">
+          <label class="field">Редакции</label>
+          <div id="rn-list"></div>
+          <button class="btn btn-sm btn-secondary" id="rn-add" style="margin-top:8px">+ Новая редакция</button>
+        </div>
+        <div style="flex:1">
+          <label class="field">Действует с даты</label>
+          <input type="date" id="rn-date"/>
+          <label class="field">Ключевые события (по одному в строке)</label>
+          <textarea id="rn-events" rows="4" style="width:100%"></textarea>
+          <label class="field">Ключевые задачи (по одной в строке)</label>
+          <textarea id="rn-tasks" rows="4" style="width:100%"></textarea>
+          <label class="field">Открытые вопросы (по одному в строке)</label>
+          <textarea id="rn-questions" rows="4" style="width:100%"></textarea>
+          <div class="hint-text" id="rn-status"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-sticky-foot"><div class="actions">
+      <button class="btn btn-secondary menu-item-danger" id="rn-delete">Удалить редакцию</button>
+      <span class="spacer"></span>
+      <button class="btn btn-secondary" id="rn-close">Закрыть</button>
+      <button class="btn btn-primary" id="rn-save">Сохранить</button>
+    </div></div>
   </div>
 </div>
 

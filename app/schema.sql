@@ -358,3 +358,28 @@ CREATE INDEX IF NOT EXISTS idx_activity_at ON activity_log (at);
 CREATE INDEX IF NOT EXISTS idx_activity_user_at ON activity_log (user_id, at);
 CREATE INDEX IF NOT EXISTS idx_activity_action_at ON activity_log (action, at);
 CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log (entity_type, entity_id);
+
+-- Редакции текстовых блоков ежедневного отчёта (живой запрос 2026-07-29:
+-- «ключевые события, задачи и вопросы должны обновляться на определённые
+-- даты, отчёт берёт актуальную информацию на выбранную дату»).
+--
+-- Отдельная таблица, а не поля в карточке объекта: это список с историей,
+-- он растёт, выбирается по дате и правится построчно. Карточка (название
+-- объекта, контрольные даты, вехи) осталась одной записью в app_settings —
+-- она меняется редко и версии ей не нужны.
+--
+-- Одна редакция на дату (UNIQUE): повторное сохранение той же даты
+-- заменяет её, а не плодит дубли. Отчёт на дату D берёт САМУЮ ПОЗДНЮЮ
+-- редакцию с effective_date <= D — то есть последнюю действовавшую, даже
+-- если в этот день её не обновляли.
+CREATE TABLE IF NOT EXISTS report_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    effective_date TEXT NOT NULL UNIQUE,
+    key_events TEXT NOT NULL DEFAULT '[]',      -- JSON-массив строк
+    key_tasks TEXT NOT NULL DEFAULT '[]',
+    open_questions TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_notes_date ON report_notes (effective_date);

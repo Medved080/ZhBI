@@ -301,6 +301,10 @@ def build_status_report_pdf(report: dict, subtitle: str = "") -> bytes:
 
 DYNAMICS_TITLE = "Динамика монтажа и поставки ТМЦ"
 
+# Подзаголовок отчёта неизменен и в карточке объекта не хранится (живой
+# запрос 2026-07-29): это часть формы самого отчёта, а не свойство объекта.
+DYNAMICS_SUBTITLE = "о статусе производства работ и поставке ЖБ изделий на объекте строительства:"
+
 
 def _week_start(date_str: str) -> str:
     """Понедельник недели, в которую попадает дата. Точка кривой — неделя,
@@ -329,7 +333,7 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
                           element_ids: Optional[list] = None) -> dict:
     from datetime import date
 
-    from app.settings import get_project_card
+    from app.settings import NOTE_FIELDS, get_notes_for_date, get_project_card
 
     today = report_date or date.today().isoformat()
 
@@ -378,6 +382,12 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     }
 
     card = get_project_card(conn)
+    # Текстовые блоки — НЕ из карточки, а из редакции, действующей на
+    # отчётную дату (живой запрос 2026-07-29). Отчёт за прошлую дату должен
+    # показывать то, что было актуально тогда, а не сегодняшний текст.
+    notes = get_notes_for_date(conn, today)
+    card = dict(card) | {f: notes[f] for f in NOTE_FIELDS}
+    card["notes_effective_date"] = notes["effective_date"]
     weeks = sorted({w for pairs in series_raw.values() for w, _ in pairs} | {_week_start(today)})
     # Вехи и контрольные даты тоже задают правую границу графика — иначе
     # веха «Завершение 3 Захватки» оказалась бы за краем.
@@ -415,6 +425,7 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
 
     return {
         "title": DYNAMICS_TITLE,
+        "subtitle": DYNAMICS_SUBTITLE,
         "report_date": today,
         "card": card,
         "weeks": weeks,
@@ -565,7 +576,7 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
 
     story = [
         Paragraph(f"Ежедневный отчёт за {_ru_date_short(report['report_date'])}", center),
-        Paragraph(card.get("subtitle") or "", sub),
+        Paragraph(report["subtitle"], sub),
         Paragraph(card.get("title") or "", subb),
         Spacer(1, 4 * mm),
     ]
@@ -658,7 +669,7 @@ def build_dynamics_report_xlsx(report: dict) -> bytes:
     ws.title = "Динамика"
     ws.append([f"Ежедневный отчёт за {_ru_date_short(report['report_date'])}"])
     ws["A1"].font = Font(bold=True, size=13)
-    ws.append([card.get("subtitle") or ""])
+    ws.append([report["subtitle"]])
     ws.append([card.get("title") or ""])
     ws.append([])
 

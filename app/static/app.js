@@ -5677,14 +5677,10 @@ document.getElementById("menu-project-card").addEventListener("click", async () 
   try {
     const c = await api("/settings/project-card");
     document.getElementById("pc-title").value = c.title || "";
-    document.getElementById("pc-subtitle").value = c.subtitle || "";
     document.getElementById("pc-montage-deadline").value = c.montage_deadline || "";
     document.getElementById("pc-delivery-deadline").value = c.delivery_deadline || "";
     document.getElementById("pc-milestones").value =
       (c.milestones || []).map(m => `${m.label} | ${m.date}`).join("\n");
-    document.getElementById("pc-events").value = listToLines(c.key_events);
-    document.getElementById("pc-tasks").value = listToLines(c.key_tasks);
-    document.getElementById("pc-questions").value = listToLines(c.open_questions);
   } catch (e) {
     document.getElementById("pc-status").textContent = "Не удалось загрузить: " + e.message;
   }
@@ -5709,13 +5705,9 @@ document.getElementById("pc-save").addEventListener("click", async () => {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: document.getElementById("pc-title").value.trim(),
-        subtitle: document.getElementById("pc-subtitle").value.trim(),
         montage_deadline: document.getElementById("pc-montage-deadline").value || null,
         delivery_deadline: document.getElementById("pc-delivery-deadline").value || null,
         milestones,
-        key_events: linesToList(document.getElementById("pc-events").value),
-        key_tasks: linesToList(document.getElementById("pc-tasks").value),
-        open_questions: linesToList(document.getElementById("pc-questions").value),
       }),
     });
     projectCardBackdrop.classList.remove("open");
@@ -5724,6 +5716,106 @@ document.getElementById("pc-save").addEventListener("click", async () => {
     if (reportsBackdrop.classList.contains("open") && currentReport === "dynamics") loadReport();
   } catch (e) {
     document.getElementById("pc-status").textContent = "Не удалось сохранить: " + e.message;
+  }
+});
+
+
+// ---------- редакции текстовых блоков отчёта (на дату) ----------
+//
+// Блоки меняются по ходу стройки, и отчёт за прошлую дату должен
+// показывать то, что было актуально ТОГДА. Поэтому здесь не одно значение,
+// а список редакций: отчёт берёт последнюю с датой не позже отчётной.
+const reportNotesBackdrop = document.getElementById("report-notes-backdrop");
+let rnRevisions = [];
+let rnSelected = null;   // выбранная дата редакции; null — новая
+
+function rnRenderList() {
+  const box = document.getElementById("rn-list");
+  if (!rnRevisions.length) {
+    box.innerHTML = "<div class='hint-text' style='padding:8px 10px'>Редакций пока нет</div>";
+    return;
+  }
+  box.innerHTML = rnRevisions.map(r => {
+    const n = r.key_events.length + r.key_tasks.length + r.open_questions.length;
+    return `<div class="rn-item${r.effective_date === rnSelected ? " active" : ""}" data-date="${r.effective_date}">
+      ${formatDateRu(r.effective_date)}
+      <div class="rn-meta">пунктов: ${n}${r.updated_by ? " · " + escapeHtml(r.updated_by) : ""}</div></div>`;
+  }).join("");
+}
+
+function rnShow(date) {
+  rnSelected = date;
+  const r = rnRevisions.find(x => x.effective_date === date);
+  document.getElementById("rn-date").value = date || new Date().toISOString().slice(0, 10);
+  document.getElementById("rn-events").value = listToLines(r && r.key_events);
+  document.getElementById("rn-tasks").value = listToLines(r && r.key_tasks);
+  document.getElementById("rn-questions").value = listToLines(r && r.open_questions);
+  document.getElementById("rn-delete").style.display = r ? "" : "none";
+  document.getElementById("rn-status").textContent = "";
+  rnRenderList();
+}
+
+async function rnLoad(selectDate) {
+  const data = await api("/settings/report-notes");
+  rnRevisions = data.revisions;
+  // По умолчанию открываем самую свежую — с ней и работают чаще всего.
+  rnShow(selectDate !== undefined ? selectDate : (rnRevisions[0] ? rnRevisions[0].effective_date : null));
+}
+
+async function openReportNotes(prefillDate) {
+  reportNotesBackdrop.classList.add("open");
+  try {
+    await rnLoad();
+    // Если открыли из отчёта на дату, для которой редакции ещё нет —
+    // сразу предлагаем завести её на эту дату, а не искать вручную.
+    if (prefillDate && !rnRevisions.some(r => r.effective_date === prefillDate)) {
+      rnShow(null);
+      document.getElementById("rn-date").value = prefillDate;
+    }
+  } catch (e) {
+    document.getElementById("rn-status").textContent = "Не удалось загрузить: " + e.message;
+  }
+}
+
+document.getElementById("menu-report-notes").addEventListener("click", () => openReportNotes());
+document.getElementById("rn-close").addEventListener("click", () => reportNotesBackdrop.classList.remove("open"));
+document.getElementById("rn-add").addEventListener("click", () => rnShow(null));
+document.getElementById("rn-list").addEventListener("click", (e) => {
+  const item = e.target.closest(".rn-item");
+  if (item) rnShow(item.dataset.date);
+});
+
+document.getElementById("rn-save").addEventListener("click", async () => {
+  const date = document.getElementById("rn-date").value;
+  if (!date) { document.getElementById("rn-status").textContent = "Укажите дату, с которой действует редакция"; return; }
+  try {
+    const data = await api("/settings/report-notes", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        effective_date: date,
+        key_events: linesToList(document.getElementById("rn-events").value),
+        key_tasks: linesToList(document.getElementById("rn-tasks").value),
+        open_questions: linesToList(document.getElementById("rn-questions").value),
+      }),
+    });
+    rnRevisions = data.revisions;
+    rnShow(date);
+    document.getElementById("rn-status").textContent = "Сохранено";
+    if (reportsBackdrop.classList.contains("open") && currentReport === "dynamics") loadReport();
+  } catch (e) {
+    document.getElementById("rn-status").textContent = "Не удалось сохранить: " + e.message;
+  }
+});
+
+document.getElementById("rn-delete").addEventListener("click", async () => {
+  if (!rnSelected) return;
+  if (!confirm(`Удалить редакцию от ${formatDateRu(rnSelected)}?`)) return;
+  try {
+    await api(`/settings/report-notes/${rnSelected}`, { method: "DELETE" });
+    await rnLoad();
+    if (reportsBackdrop.classList.contains("open") && currentReport === "dynamics") loadReport();
+  } catch (e) {
+    document.getElementById("rn-status").textContent = "Не удалось удалить: " + e.message;
   }
 });
 
@@ -5913,8 +6005,11 @@ function dynBlockTable(caption, block, note) {
 function dynList(cls, title, items) {
   const body = (items && items.length)
     ? `<ul>${items.map(t => `<li>${escapeHtml(t)}</li>`).join("")}</ul>`
-    : `<div class="dyn-empty">не заполнено — «Действия → Справочники → Карточка объекта»</div>`;
-  return `<div class="dyn-box ${cls}"><h4>${escapeHtml(title)}</h4>${body}</div>`;
+    : `<div class="dyn-empty">не заполнено</div>`;
+  // Кнопка правки прямо в блоке: искать форму в другом разделе меню, глядя
+  // на пустой блок в отчёте, неудобно. Открывает редакцию на отчётную дату.
+  return `<div class="dyn-box ${cls}"><h4>${escapeHtml(title)}
+    <button type="button" class="dyn-edit" title="Изменить">✎</button></h4>${body}</div>`;
 }
 
 function renderDynamicsReport(data) {
@@ -5933,8 +6028,13 @@ function renderDynamicsReport(data) {
   return `
     <div class="dyn-head">
       <h3>Ежедневный отчёт за ${formatDateRu(data.report_date)}</h3>
-      <div class="dyn-sub">${escapeHtml(card.subtitle || "")}</div>
+      <div class="dyn-sub">${escapeHtml(data.subtitle)}</div>
       <div class="dyn-sub"><b>${escapeHtml(card.title || "— объект не заполнен —")}</b></div>
+    </div>
+    <div class="hint-text" style="text-align:center; margin-bottom:8px">
+      ${card.notes_effective_date
+        ? `События, задачи и вопросы — редакция от ${formatDateRu(card.notes_effective_date)}`
+        : "События, задачи и вопросы на эту дату не заполнены"}
     </div>
     ${warns.length ? `<div class="dyn-warn">Внимание: ${escapeHtml(warns.join("; "))}. Кривая плана неполная.</div>` : ""}
     <div class="dyn-boxes">
@@ -6002,6 +6102,10 @@ document.getElementById("report-tabs").addEventListener("click", (e) => {
 document.getElementById("report-date").addEventListener("change", loadReport);
 
 document.getElementById("report-body").addEventListener("click", (e) => {
+  if (e.target.classList.contains("dyn-edit")) {
+    openReportNotes(document.getElementById("report-date").value || null);
+    return;
+  }
   const path = e.target.dataset.path;
   if (path === undefined) return;
   if (reportCollapsed.has(path)) reportCollapsed.delete(path); else reportCollapsed.add(path);
