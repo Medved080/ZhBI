@@ -492,6 +492,10 @@
 
   /* Журнал действий — та же табличная раскладка, что у списка
      пользователей (не заводим третий стиль таблицы ради одной формы). */
+  #backups-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #backups-table td, #backups-table th { padding: 6px 8px; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+  #backups-table th { color: var(--color-text-muted); font-weight: 500; }
+  #backups-table tr.backup-auto { color: var(--color-text-muted); }
   #activity-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   #activity-table td, #activity-table th { padding: 6px 8px; border-bottom: 1px solid var(--color-border); text-align: left; white-space: nowrap; }
   #activity-table th { color: var(--color-text-muted); font-weight: 500; position: sticky; top: 0; background: var(--color-surface); }
@@ -702,6 +706,11 @@
     <div class="view-mode-switch" id="view-mode-switch" role="group" aria-label="Режим отображения">
       <button type="button" class="view-mode-btn active" id="btn-view-2d" data-mode="2d">2D</button>
       <button type="button" class="view-mode-btn" id="btn-view-3d" data-mode="3d">3D</button>
+      <!-- Третий режим, а не настройка: облегчённый 3D — это то, что
+           оператор выбирает по ситуации (свой ноутбук тормозит), а не
+           настраивает один раз в панели. -->
+      <button type="button" class="view-mode-btn" id="btn-view-3d-light" data-mode="3d-light"
+              title="Как 3D, но без рёбер элементов и с пониженной чёткостью — для слабых компьютеров">3D лёгкий</button>
     </div>
     <span class="spacer"></span>
     <div id="workdate-box">
@@ -745,6 +754,7 @@
         <button id="menu-status-restore" class="admin-only">Восстановить статусы из выгрузки</button>
         <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
         <button id="menu-schedule-import" class="admin-only">Импорт графика МС Project из XLS</button>
+        <button id="menu-backups" class="admin-only">Резервные копии…</button>
         <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
         <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
         <button id="menu-activity" class="admin-only">Журнал действий</button>
@@ -832,12 +842,6 @@
           <div id="label-toggles"></div>
         </div>
       </div>
-      <!-- Настройка КОМПЬЮТЕРА, а не проекта: хранится в localStorage
-           браузера, не в БД. У разных прорабов машины разные, и общая
-           на всех настройка была бы бессмысленной. -->
-      <h4 style="margin-top:14px">Быстродействие 3D</h4>
-      <label class="toggle"><input type="checkbox" id="low-spec-toggle"/> Режим слабого компьютера</label>
-      <div class="hint-text" id="low-spec-hint"></div>
     </div>
   </div>
 </div>
@@ -1053,6 +1057,40 @@
     <div class="actions">
       <button class="btn btn-secondary" id="status-restore-cancel">Отмена</button>
       <button class="btn btn-primary" id="status-restore-submit">Восстановить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="backups-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Резервные копии базы данных</h2>
+      <p class="hint-text">
+        Копия содержит <b>всю базу целиком</b>: элементы и историю их статусов, пользователей,
+        контрагентов, договоры, спецификации и контракты с позициями, зоны, все справочники,
+        настройки и журнал действий. Выборочного экспорта нет — теряться нечему.
+        Копии хранятся на диске сервера, в папке <code>data/backups/</code> рядом с самой базой.
+        Восстановление всегда начинается с автоматической служебной копии текущего состояния —
+        если выбрана не та точка, вернуться будет куда.
+      </p>
+      <div class="row" style="align-items:flex-end">
+        <div style="flex:1"><label class="field">Комментарий к копии (необязательно)</label>
+          <input type="text" id="backup-comment" placeholder="например: перед массовой сменой статусов"/></div>
+        <button class="btn btn-primary" id="backup-create">Создать копию</button>
+      </div>
+      <div class="hint-text" id="backups-status"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <table id="backups-table">
+        <thead><tr>
+          <th>Создана</th><th>Происхождение</th><th>Кем</th><th>Комментарий</th>
+          <th>Содержимое</th><th>Размер</th><th></th>
+        </tr></thead>
+        <tbody id="backups-tbody"></tbody>
+      </table>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions"><button class="btn btn-secondary" id="backups-close">Закрыть</button></div>
     </div>
   </div>
 </div>

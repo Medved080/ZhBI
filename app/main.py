@@ -19,6 +19,10 @@ from app.contracting_import import ContractingImportError, import_contracting, p
 from pydantic import BaseModel
 
 from app import activity
+from app.backups import (
+    KIND_BEFORE_REBUILD, KIND_MANUAL, BackupError,
+    adopt_legacy_backup, create_backup, delete_backup, list_backups, restore_backup,
+)
 from app.contracts import (
     apply_status_change,
     build_contract_name,
@@ -177,7 +181,7 @@ def _input_dir_filenames() -> set:
 
 # Сам импорт при старте — app.input_import.import_input_dxf() (общая
 # логика с scripts/rebuild_db.py и аварийным восстановлением ниже, см.
-# _attempt_migration_recovery), _input_dir_filenames выше используется
+# app/backups.py), _input_dir_filenames выше используется
 # только для /source-files (список имён, не сам импорт).
 
 
@@ -298,7 +302,7 @@ def _probe_schema_health() -> list:
 
     ВНИМАНИЕ, дорого купленное правило: эта функция ТОЛЬКО СООБЩАЕТ и
     НИКОГДА не бросает исключений. Вызывать её нужно ВНЕ try/except вокруг
-    _attempt_migration_recovery.
+    прежний механизм аварийной пересборки БД (удалён 2026-07-29).
 
     Первая версия делала наоборот — бросала OperationalError("no such
     table: ...") прямо внутри того try, и 2026-07-29 это стоило пользователю
@@ -347,57 +351,6 @@ def _probe_schema_health() -> list:
     return dangling
 
 
-def _attempt_migration_recovery(exc: Exception) -> bool:
-    if not DB_PATH.exists():
-        return False
-    if not isinstance(exc, sqlite3.OperationalError) or "no such table" not in str(exc):
-        return False
-    raw = sqlite3.connect(DB_PATH)
-    try:
-        users_rows = raw.execute("SELECT * FROM users").fetchall()
-        users_cols = [d[0] for d in raw.execute("SELECT * FROM users LIMIT 0").description]
-    finally:
-        raw.close()
-
-    print(
-        f"[startup] АВАРИЙНОЕ ВОССТАНОВЛЕНИЕ: init_db() упал ({exc!r}), похоже на "
-        f"застрявшую миграцию. Пересобираю БД заново, сохраняя {len(users_rows)} пользователей."
-    )
-
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = DB_PATH.with_name(f"{DB_PATH.name}.bak-{stamp}")
-    shutil.move(str(DB_PATH), str(backup_path))
-    print(f"[startup] Старая база сохранена как {backup_path.name}.")
-    for suffix in ("-journal", "-wal", "-shm"):
-        stray = DB_PATH.with_name(DB_PATH.name + suffix)
-        if stray.exists():
-            stray.unlink()
-
-    init_db()
-
-    conn = get_connection()
-    try:
-        # Дефолтный admin, которого только что посеяла свежая схема
-        # (schema.sql), иначе конфликтует по PRIMARY KEY с восстанавливаемой
-        # строкой того же пользователя.
-        conn.execute("DELETE FROM users")
-        columns_sql = ", ".join(users_cols)
-        placeholders = ", ".join("?" for _ in users_cols)
-        conn.executemany(
-            f"INSERT INTO users ({columns_sql}) VALUES ({placeholders})",
-            [tuple(row) for row in users_rows],
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    print(f"[startup] Пользователи восстановлены ({len(users_rows)}).")
-
-    import_input_dxf()
-    import_input_xlsx()
-    print("[startup] Аварийное восстановление завершено.")
-    return True
-
-
 @app.on_event("startup")
 def on_startup():
     # Обычный старт НЕ импортирует ничего из Input/ (живой запрос
@@ -415,32 +368,41 @@ def on_startup():
     #
     # Импорт из Input/ теперь только по явной команде:
     # POST /admin/import-input (пункт меню "Загрузить из папки Input"),
-    # плюс два пути полной пересборки, где без него получилась бы пустая
-    # база: scripts/rebuild_db.py и _attempt_migration_recovery ниже.
+    # плюс полная пересборка scripts/rebuild_db.py, где без него получилась
+    # бы пустая база.
     #
-    # ВАЖНО: битая FK-ссылка на удалённую по ходу миграции таблицу (см.
-    # _attempt_migration_recovery) на практике может НЕ проявиться внутри
-    # самого init_db() (миграции-то уже отметились как выполненные и молча
-    # возвращаются) — а вылезти позже, на первой же реальной операции с
-    # затронутой таблицей: живой прогон показал падение именно в
-    # import_input_dxf() → upsert_elements(), уже ПОСЛЕ успешного init_db().
-    # Раз импорта на старте больше нет, эта проверка потерялась бы — вместо
-    # неё делаем дешёвый контрольный запрос к elements: он читает ту же
-    # колонку с FK и вылавливает ровно ту же поломку, но ничего не пишет.
-    try:
-        init_db()
-        _warn_users_without_password()
-    except Exception as e:
-        if not _attempt_migration_recovery(e):
-            raise
-        _warn_users_without_password()
+    # АВАРИЙНОЕ САМОВОССТАНОВЛЕНИЕ УДАЛЕНО (2026-07-29, по требованию
+    # пользователя). Раньше здесь стоял try/except, ловивший ошибку старта и
+    # молча пересобиравший БД с нуля, сохраняя только users. Механизм вводился
+    # как разовый под конкретный июльский инцидент и с самого начала был
+    # помечен в CLAUDE.md как временный. За время жизни он дважды сработал
+    # разрушительно, второй раз — в тот же день, когда добавили безобидный
+    # детектор схемы (см. Docs/backlog.md, "ИНЦИДЕНТ"), и стёр 231
+    # смонтированный элемент.
+    #
+    # Правильное поведение при непроходимой миграции — УПАСТЬ с понятной
+    # ошибкой в логе. Упавший сервер чинит человек, у которого есть и копии
+    # (см. app/backups.py), и scripts/rebuild_db.py. Молча пересобранная
+    # база выглядит как работающий сервис, в котором просто исчезла работа
+    # за несколько недель, — это несравнимо хуже отказа стартовать.
+    init_db()
+    _warn_users_without_password()
 
-    # СТРОГО ВНЕ try/except выше. _probe_schema_health только сообщает и не
-    # бросает исключений (см. её docstring — правило куплено потерей всех
-    # статусов пользователя 2026-07-29), но даже так ей нечего делать рядом
-    # с веткой, которая пересобирает базу: любое исключение отсюда не должно
-    # иметь ни единого шанса привести к пересборке.
+    # Только СООБЩАЕТ о подозрительной схеме, никогда не бросает исключений
+    # и ничего не пересобирает (см. её docstring).
     _probe_schema_health()
+
+    # Файлы от прежнего механизма аварийной пересборки (data/zhbi.db.bak-*)
+    # — полноценные копии, просто лежат не в папке копий и без описания.
+    # Забираем их под общий учёт, чтобы они были видны в списке
+    # восстановления, а не потерялись рядом с базой.
+    for legacy in sorted(DB_PATH.parent.glob(f"{DB_PATH.name}.bak-*")):
+        adopted = adopt_legacy_backup(
+            legacy, KIND_BEFORE_REBUILD,
+            "копия от прежнего механизма аварийной пересборки БД (механизм удалён)",
+        )
+        if adopted:
+            print(f"[startup] Прежняя копия {legacy.name} перенесена в data/backups/ как {adopted['name']}.")
 
     # Фоновый писатель журнала — после init_db(), чтобы таблица activity_log
     # точно существовала к моменту первой записи.
@@ -661,6 +623,62 @@ def delete_history_entry(
         return data
     finally:
         conn.close()
+
+
+class BackupCreateIn(BaseModel):
+    comment: Optional[str] = None
+
+
+@app.get("/admin/backups")
+def admin_list_backups(admin: sqlite3.Row = Depends(require_admin)):
+    """Все резервные копии на диске, новые сверху — из этого списка
+    выбирается точка, на которую восстанавливаться."""
+    return {"backups": list_backups()}
+
+
+@app.post("/admin/backups")
+def admin_create_backup(body: BackupCreateIn, admin: sqlite3.Row = Depends(require_admin)):
+    """Копия по кнопке. Записывается, КЕМ создана — в отличие от служебных,
+    которые система снимает сама перед разрушительными операциями."""
+    meta = create_backup(
+        kind=KIND_MANUAL,
+        user_name=format_display_name(admin),
+        user_id=admin["id"],
+        comment=body.comment,
+    )
+    activity.log("backup_create", user=admin, new_value=meta["name"], details={"comment": body.comment})
+    return meta
+
+
+@app.post("/admin/backups/{name}/restore")
+def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_admin)):
+    """Восстановление на выбранный момент. ПЕРЕД восстановлением всегда
+    снимается служебная копия текущего состояния — если выбрали не ту точку,
+    вернуться будет куда.
+
+    После переноса данных прогоняется init_db(): копия может быть снята на
+    более старой схеме, и без миграций приложение бы на ней не поднялось.
+    """
+    try:
+        result = restore_backup(name, user_name=format_display_name(admin), user_id=admin["id"])
+    except BackupError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    init_db()
+    activity.log(
+        "backup_restore", user=admin, old_value=result["safety_backup"]["name"], new_value=name,
+        details={"комментарий": "перед восстановлением снята служебная копия"},
+    )
+    return result
+
+
+@app.delete("/admin/backups/{name}", status_code=204)
+def admin_delete_backup(name: str, admin: sqlite3.Row = Depends(require_admin)):
+    try:
+        delete_backup(name)
+    except BackupError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    activity.log("backup_delete", user=admin, old_value=name)
+    return Response(status_code=204)
 
 
 @app.get("/admin/input-files")

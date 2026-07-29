@@ -2,8 +2,9 @@
 Полная пересборка базы данных с нуля + повторная загрузка всех файлов из
 Input/ — на случай, когда разбираться в причине падения БД дольше и рискованнее,
 чем начать заново на тестовом контуре (см. Docs/backlog.md). Старую
-data/zhbi.db не удаляет молча — переименовывает в data/zhbi.db.bak-<время>,
-чтобы её можно было вернуть, если команда была вызвана по ошибке.
+data/zhbi.db не удаляет молча — сначала снимает полноценную резервную
+копию в data/backups/ (app/backups.py), поэтому её видно в форме
+«Действия → Обмен данными → Резервные копии» и можно вернуть оттуда же.
 
 После пересборки users пуст, кроме дефолтного admin БЕЗ пароля (см.
 schema.sql) — пароль обязательно задать сразу после (см.
@@ -26,27 +27,37 @@ scripts/reset_password.py), иначе войти будет некому.
 без него по умолчанию, т.к. действие затрагивает ВСЮ базу разом).
 """
 
-import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.backups import KIND_BEFORE_REBUILD, create_backup  # noqa: E402
 from app.db import DB_PATH, init_db  # noqa: E402
 from app.input_import import import_input_dxf, import_input_xlsx  # noqa: E402
 
 
 def _backup_existing_db() -> None:
+    """Копия ПЕРЕД пересборкой — обязательна, без исключений (требование
+    пользователя 2026-07-29: "не делай никаких операций с пересозданием БД
+    без предварительного бэкапирования").
+
+    Копия снимается штатным механизмом (app/backups.py), а не переименованием
+    файла: так она попадает в общий список копий и её видно в форме
+    восстановления вместе с остальными. Раньше здесь был shutil.move в
+    `zhbi.db.bak-<дата>` — такой файл лежал рядом с базой, ниоткуда не был
+    виден и легко терялся из внимания."""
     if not DB_PATH.exists():
         return
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = DB_PATH.with_name(f"{DB_PATH.name}.bak-{stamp}")
-    shutil.move(str(DB_PATH), str(backup_path))
-    print(f"Старая база сохранена как {backup_path.name} (не удалена).")
+    meta = create_backup(
+        kind=KIND_BEFORE_REBUILD,
+        comment="автоматически перед полной пересборкой БД (scripts/rebuild_db.py)",
+    )
+    print(f"Копия текущей базы сохранена: data/backups/{meta['name']}")
+    print(f"  внутри: {meta['stats']}")
+    DB_PATH.unlink()
     # journal/wal/shm-артефакты от прерванной транзакции — не переносим,
-    # свежая init_db() их не ждёт, а тащить за собой битый journal рядом с
-    # уже переименованной .db бессмысленно.
+    # свежая init_db() их не ждёт.
     for suffix in ("-journal", "-wal", "-shm"):
         stray = DB_PATH.with_name(DB_PATH.name + suffix)
         if stray.exists():
@@ -55,8 +66,9 @@ def _backup_existing_db() -> None:
 
 def main() -> int:
     if "--yes" not in sys.argv:
-        print("Это ПОЛНОСТЬЮ пересоберёт базу данных (текущая будет переименована в .bak, не потеряна,")
-        print("но ВСЕ данные — элементы, статусы, контракты, пользователи — станут недоступны приложению).")
+        print("Это ПОЛНОСТЬЮ пересоберёт базу данных. Текущая НЕ будет потеряна — перед пересборкой")
+        print("снимается резервная копия в data/backups/, восстановить можно из интерфейса.")
+        print("Но ВСЕ данные — элементы, статусы, контракты, пользователи — станут недоступны приложению.")
         answer = input("Продолжить? Введите 'да' для подтверждения: ")
         if answer.strip().lower() != "да":
             print("Отменено.")

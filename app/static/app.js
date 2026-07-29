@@ -2667,35 +2667,6 @@ document.getElementById("legend-toggle-btn").addEventListener("click", () => {
   setLegendCollapsed(!document.getElementById("legend").classList.contains("collapsed"));
 });
 
-// Переключатель режима слабого компьютера. Подписка одна на всё время
-// жизни страницы (элемент статический, в отличие от списков зон/подписей,
-// которые перерисовываются) — поэтому не внутри renderLabelToggles.
-(function initLowSpecToggle() {
-  const input = document.getElementById("low-spec-toggle");
-  const hint = document.getElementById("low-spec-hint");
-  if (!input) return; // старая разметка из кэша — см. loginPasswordToggle
-  const describe = () => {
-    hint.textContent = state.lowSpec
-      ? "Включён: рёбра элементов не рисуются, пиксельная плотность 1. Схема беднее, но заметно легче."
-      : "Выключен: рёбра элементов рисуются, пиксельная плотность до 1.5.";
-  };
-  input.checked = state.lowSpec;
-  describe();
-  input.addEventListener("change", () => {
-    state.lowSpec = input.checked;
-    localStorage.setItem(LOW_SPEC_KEY, state.lowSpec ? "1" : "0");
-    describe();
-    const v3 = state.view3d;
-    if (!v3.renderer) return; // 3D ещё ни разу не открывали — применится при первом открытии
-    v3.renderer.setPixelRatio(pixelRatioForCurrentMode());
-    on3DResize(); // setPixelRatio без пересчёта размера оставляет холст в прежнем разрешении
-    // Рёбра создаются/не создаются в момент ПОСТРОЕНИЯ меша, поэтому
-    // переключение требует пересборки сцены, а не просто смены видимости.
-    if (v3.active) build3DScene();
-    requestRender3D();
-  });
-})();
-
 function renderLabelToggles() {
   const box = document.getElementById("label-toggles");
   box.innerHTML = "";
@@ -5697,6 +5668,114 @@ function setStatusRestoreStatus(text, isError) {
   elm.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
+// ---------- Резервные копии БД (живой запрос 2026-07-29, после инцидента
+// с автоматической пересборкой базы — см. Docs/backlog.md) ----------
+const backupsBackdrop = document.getElementById("backups-backdrop");
+
+function formatBytes(n) {
+  if (!n) return "";
+  const mb = n / 1048576;
+  return mb >= 1 ? `${mb.toFixed(1)} МБ` : `${Math.round(n / 1024)} КБ`;
+}
+
+async function loadBackups() {
+  const tbody = document.getElementById("backups-tbody");
+  const status = document.getElementById("backups-status");
+  status.textContent = "Загрузка списка…";
+  try {
+    const data = await api("/admin/backups");
+    if (!data.backups.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="hint-text">Копий пока нет</td></tr>`;
+      status.textContent = "";
+      return;
+    }
+    tbody.innerHTML = data.backups.map(b => {
+      const s = b.stats || {};
+      const таблиц = Object.keys(s).length;
+      // Показываем ключевые числа + сколько всего таблиц в копии: копия это
+      // файл БД целиком, и полнота должна быть видна, а не подразумеваться.
+      const содержимое = !таблиц ? "—"
+        : `элементов ${s.elements ?? "—"}, история ${s.status_history ?? "—"}, `
+          + `контрактов ${s.contracts ?? "—"}, пользователей ${s.users ?? "—"}`
+          + `<br><span class="hint-text">всего таблиц: ${таблиц} (вся база целиком)</span>`;
+      // Служебные копии приглушены: их много и создаются они сами, взгляд
+      // должен цепляться за созданные человеком.
+      const cls = b.kind === "manual" ? "" : ' class="backup-auto"';
+      return `<tr${cls}>
+        <td>${escapeHtml(b.created_at)}</td>
+        <td>${escapeHtml(b.kind_label || b.kind)}</td>
+        <td>${escapeHtml(b.user_name || "—")}</td>
+        <td>${escapeHtml(b.comment || "")}</td>
+        <td>${содержимое}</td>
+        <td>${formatBytes(b.size_bytes)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-sm btn-secondary" data-restore="${escapeHtml(b.name)}">Восстановить</button>
+          <button class="btn btn-sm btn-secondary menu-item-danger" data-delete="${escapeHtml(b.name)}">Удалить</button>
+        </td></tr>`;
+    }).join("");
+    status.textContent = `Всего копий: ${data.backups.length}`;
+  } catch (e) {
+    status.textContent = "Ошибка: " + e.message;
+  }
+}
+
+document.getElementById("menu-backups").addEventListener("click", () => {
+  backupsBackdrop.classList.add("open");
+  loadBackups();
+});
+document.getElementById("backups-close").addEventListener("click", () => backupsBackdrop.classList.remove("open"));
+
+document.getElementById("backup-create").addEventListener("click", async () => {
+  const btn = document.getElementById("backup-create");
+  const commentEl = document.getElementById("backup-comment");
+  btn.disabled = true;
+  document.getElementById("backups-status").textContent = "Создание копии…";
+  try {
+    const meta = await api("/admin/backups", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment: commentEl.value.trim() || null }),
+    });
+    commentEl.value = "";
+    showToast(`Копия создана: ${meta.name}`, "info");
+    loadBackups();
+  } catch (e) {
+    document.getElementById("backups-status").textContent = "Не удалось создать копию: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("backups-tbody").addEventListener("click", async (e) => {
+  const restore = e.target.dataset.restore;
+  const del = e.target.dataset.delete;
+  if (restore) {
+    // Два подтверждения: восстановление заменяет ВСЮ базу целиком, это по
+    // последствиям сравнимо с очисткой истории (там тоже два confirm).
+    if (!confirm(`Восстановить базу из копии «${restore}»?\n\nТекущее состояние будет заменено полностью. Перед этим система автоматически снимет служебную копию.`)) return;
+    if (!confirm("Точно восстановить? Все изменения, сделанные после этой копии, будут заменены её содержимым.")) return;
+    document.getElementById("backups-status").textContent = "Восстановление…";
+    try {
+      const res = await api(`/admin/backups/${encodeURIComponent(restore)}/restore`, { method: "POST" });
+      showToast(`Восстановлено из «${res.restored_from}». Служебная копия: ${res.safety_backup.name}`, "info");
+      await loadSourceFiles();
+      await loadPlan();
+      loadBackups();
+    } catch (err) {
+      document.getElementById("backups-status").textContent = "Не удалось восстановить: " + err.message;
+    }
+    return;
+  }
+  if (del) {
+    if (!confirm(`Удалить резервную копию «${del}»? Действие необратимо.`)) return;
+    try {
+      await api(`/admin/backups/${encodeURIComponent(del)}`, { method: "DELETE" });
+      loadBackups();
+    } catch (err) {
+      showToast("Не удалось удалить: " + err.message, "warning");
+    }
+  }
+});
+
 // ---------- Журнал действий (живой запрос 2026-07-29) ----------
 const activityBackdrop = document.getElementById("activity-backdrop");
 
@@ -7613,14 +7692,31 @@ function on3DMouseMove(e) {
 
 const btnView2D = document.getElementById("btn-view-2d");
 const btnView3D = document.getElementById("btn-view-3d");
+const btnView3DLight = document.getElementById("btn-view-3d-light");
+
+// Три режима: "2d", "3d", "3d-light". Лёгкий — не настройка в панели, а
+// именно режим просмотра (живой запрос 2026-07-29): оператор переключается
+// на него по ситуации, когда его машина не тянет, ровно так же как между 2D
+// и 3D. Отличие лёгкого от обычного — state.lowSpec (см. LOW_SPEC_KEY):
+// рёбра элементов не строятся и пиксельная плотность 1.
+function updateViewModeButtons(mode) {
+  btnView2D.classList.toggle("active", mode === "2d");
+  btnView3D.classList.toggle("active", mode === "3d");
+  btnView3DLight.classList.toggle("active", mode === "3d-light");
+}
 
 async function setViewMode(mode) {
   const v3 = state.view3d;
   const stage2d = document.getElementById("stage");
   const stage3d = document.getElementById("stage-3d");
-  if ((mode === "3d") === v3.active) return; // уже в этом режиме
+  const wantLowSpec = mode === "3d-light";
+  const want3D = mode === "3d" || wantLowSpec;
 
-  if (mode === "2d") {
+  // Уже ровно в этом режиме — выходим. Проверять только v3.active теперь
+  // мало: "3d" и "3d-light" оба активны, но это РАЗНЫЕ режимы.
+  if (want3D === v3.active && (!want3D || wantLowSpec === state.lowSpec)) return;
+
+  if (!want3D) {
     v3.active = false;
     if (v3.animationFrameId !== null) {
       cancelAnimationFrame(v3.animationFrameId);
@@ -7629,19 +7725,26 @@ async function setViewMode(mode) {
     hide3DTooltip();
     stage3d.style.display = "none";
     stage2d.style.display = "";
-    btnView2D.classList.add("active");
-    btnView3D.classList.remove("active");
+    updateViewModeButtons("2d");
     return;
   }
 
   btnView3D.disabled = true;
+  btnView3DLight.disabled = true;
   try {
     await ensureThreeLoaded();
   } catch (e) {
     showToast("Не удалось загрузить 3D: " + e.message, "warning");
     btnView3D.disabled = false;
+    btnView3DLight.disabled = false;
     return;
   }
+
+  // Флаг ДО init3DScene/build3DScene: от него зависят и плотность пикселей
+  // рендерера, и то, строятся ли рёбра у мешей.
+  const lowSpecChanged = state.lowSpec !== wantLowSpec;
+  state.lowSpec = wantLowSpec;
+  localStorage.setItem(LOW_SPEC_KEY, wantLowSpec ? "1" : "0");
 
   stage2d.style.display = "none";
   stage3d.style.display = "block";
@@ -7649,17 +7752,23 @@ async function setViewMode(mode) {
   if (hint) hint.style.display = "none";
 
   init3DScene();
-  build3DScene();
+  if (v3.renderer && lowSpecChanged) v3.renderer.setPixelRatio(pixelRatioForCurrentMode());
+  // Пересобираем сцену, если сменился вид 3D: рёбра создаются в момент
+  // ПОСТРОЕНИЯ меша, простой сменой видимости их не убрать.
+  if (!v3.active || lowSpecChanged) build3DScene();
   v3.active = true;
-  btnView2D.classList.remove("active");
-  btnView3D.classList.add("active");
+  updateViewModeButtons(mode);
   btnView3D.disabled = false;
+  btnView3DLight.disabled = false;
   on3DResize();
   requestRender3D();
 }
 
 btnView2D.addEventListener("click", () => {
   setViewMode("2d").catch(e => showToast("Ошибка: " + e.message, "warning"));
+});
+btnView3DLight.addEventListener("click", () => {
+  setViewMode("3d-light").catch(e => showToast("Ошибка 3D: " + e.message, "warning"));
 });
 btnView3D.addEventListener("click", () => {
   setViewMode("3d").catch(e => showToast("Ошибка 3D: " + e.message, "warning"));
