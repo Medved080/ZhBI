@@ -151,9 +151,7 @@
 
   /* -------- сворачиваемый выбор чертежа/слоёв в тулбаре -------- */
   .toolbar-collapsible { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-  .toolbar-collapsible #btn-file-select { display: inline-flex; align-items: center; gap: 6px; }
   .toolbar-collapse-btn { padding: 6px 6px; font-size: 11px; }
-  .toolbar-collapsible.collapsed #file-select-label { display: none; }
 
   /* -------- рабочая область -------- */
   #body { flex: 1; display: flex; min-height: 0; }
@@ -521,13 +519,16 @@
   .default-contract-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
 
   /* -------- выбор файлов/слоёв (п.5, п.13 третьего раунда) -------- */
-  #file-select-menu { max-height: 60vh; overflow-y: auto; min-width: 320px; }
+  /* Список чертежей/слоёв внутри формы «Чертежи» (раньше был выпадашкой
+     тулбара с теми же ограничениями по высоте). */
+  #file-select-list { max-height: 40vh; overflow-y: auto; border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm); padding: 8px 10px; }
   .file-select-row { padding: 4px 0; border-bottom: 1px solid var(--color-border); }
   .file-select-row:last-child { border-bottom: none; }
   .file-select-row > label.checkbox { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; font-weight: 600; }
   .layer-list { padding-left: 22px; display: flex; flex-direction: column; }
   .layer-list label.checkbox { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; font-weight: 400; font-size: 12px; }
-  #file-select-summary { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
+  #file-select-summary-line { margin-top: 6px; }
 
   /* -------- контракты: контракт + строки по типам (п.8 третьего раунда) -------- */
   .contract-block { border: 1px solid var(--color-border); border-radius: var(--radius-sm); margin-bottom: 10px; padding: 10px 12px; }
@@ -587,9 +588,12 @@
      уведомление; красный цвет тревожил бы зря. */
   .toast-info { border-left-color: var(--color-primary); }
 
-  /* Кнопка "Обновить" — вращение на время запроса, чтобы нажатие давало
-     видимый отклик даже когда изменений не оказалось. */
-  #btn-refresh.spinning { animation: refresh-spin .8s linear infinite; }
+  /* Кнопка "Обновить" — вращается ЗНАЧОК, а не сама кнопка: у кнопки есть
+     рамка и фон, и её вращение выглядело бы поломкой вёрстки. Вращение на
+     время запроса нужно, чтобы нажатие давало видимый отклик даже когда
+     изменений не оказалось. */
+  #btn-refresh img { display: block; }
+  #btn-refresh.spinning img { animation: refresh-spin .8s linear infinite; }
   @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
   /* -------- экран логина -------- */
@@ -706,17 +710,6 @@
   <div id="toolbar-scroll">
     <img id="toolbar-logo" src="/static/logo.svg" style="height:24px; width:auto; flex-shrink:0;" alt="МСУ-1"/>
     <h1>ЖБИ</h1>
-    <div class="dropdown toolbar-collapsible" id="file-select-dropdown">
-      <button class="btn" id="btn-file-select" title="Выбор чертежа и слоёв">
-        <span id="file-select-icon" aria-hidden="true">📐</span><span id="file-select-label">Чертёж: <span id="file-select-summary">—</span></span><span aria-hidden="true"> ▾</span>
-      </button>
-      <button type="button" class="btn btn-sm btn-secondary toolbar-collapse-btn" id="file-select-collapse-btn" title="Свернуть выбор чертежа">‹</button>
-      <div class="dropdown-menu" id="file-select-menu">
-        <div id="file-select-list"></div>
-        <div class="dropdown-divider"></div>
-        <button id="file-select-done">Готово</button>
-      </div>
-    </div>
     <div class="dropdown" id="settings-dropdown">
       <button class="btn" id="btn-settings-menu">Действия ▾</button>
       <!-- Группы меню (2026-07-29, живой запрос): "Настройки" — оформление и
@@ -759,20 +752,17 @@
             <button id="menu-contracts">Контракты</button>
           </div>
         </div>
-        <!-- НЕ admin-only на всей группе: внутри "Загрузить чертёж", доступный
-             роли user. Остальные пункты помечены поштучно; если у роли не
-             осталось ни одного видимого пункта, applyRolePermissions скроет и
-             сам заголовок группы. -->
-        <div class="submenu">
+        <div class="submenu admin-only">
           <button type="button" class="submenu-trigger">Обмен данными</button>
           <div class="dropdown-menu submenu-panel">
             <!-- Загрузка чертежа переехала сюда из тулбара (живой запрос
                  2026-07-29): это разовая операция обмена данными, а не
                  повседневное действие, ради которого стоит держать кнопку
-                 на виду. Роль решает видимость: пункт доступен admin и user
-                 (см. applyRolePermissions), в отличие от остальных пунктов
-                 этой группы — они только админские. -->
-            <button id="btn-upload">Загрузить чертёж…</button>
+                 на виду. Как и вся группа — только для админа: "загрузка
+                 любых данных доступна только администраторам" (решение
+                 пользователя того же дня). На сервере это тоже закрыто,
+                 см. require_admin у /import-dxf. -->
+            <button id="btn-upload" class="admin-only">Загрузить чертёж…</button>
             <button id="btn-export" class="admin-only">Экспорт в XLS</button>
             <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
             <button id="menu-history-import" class="admin-only">Импорт истории из XLS</button>
@@ -803,7 +793,10 @@
     </div>
     <!-- Обновление данных стоит рядом с выбором режима просмотра: и то и
          другое — про то, ЧТО и КАК сейчас видно на схеме. -->
-    <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-refresh" title="Обновить данные с сервера">⟳</button>
+    <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-refresh"
+            title="Обновить данные с сервера" aria-label="Обновить данные с сервера">
+      <img src="/static/refresh.svg" alt="" width="16" height="16"/>
+    </button>
     <span class="spacer"></span>
     <div id="workdate-box">
       <label for="workdate-input">Рабочая дата</label>
@@ -901,11 +894,23 @@
 
 <div class="modal-backdrop" id="upload-backdrop">
   <div class="modal">
-    <h2>Загрузить чертёж</h2>
+    <h2>Чертежи</h2>
+    <!-- Выбор чертежа и слоёв переехал сюда из тулбара (живой запрос
+         2026-07-29): "мы работаем теперь с загруженными данными, а не
+         выбираем каждый раз нужные слои". В тулбаре этот контрол занимал
+         место постоянно, а нужен изредка — при первой загрузке или когда
+         чертежей несколько.
+         Схема при этом не остаётся пустой: loadSourceFiles() сам выбирает
+         первый доступный файл, если ничего не выбрано. -->
+    <label class="field">Отображать на схеме</label>
+    <div id="file-select-list"></div>
+    <div class="hint-text" id="file-select-summary-line"></div>
+
+    <label class="field" style="margin-top:16px">Загрузить новый чертёж (.dxf)</label>
     <input type="file" id="upload-file-input" accept=".dxf"/>
     <div id="upload-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
-      <button class="btn btn-secondary" id="upload-cancel">Отмена</button>
+      <button class="btn btn-secondary" id="upload-cancel">Закрыть</button>
       <button class="btn btn-primary" id="upload-submit">Обработать</button>
     </div>
   </div>

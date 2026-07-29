@@ -277,8 +277,10 @@ function showApp() {
 
 function applyRolePermissions() {
   const role = state.currentUser.role;
-  const canEdit = role === "admin" || role === "user";
-  document.getElementById("btn-upload").style.display = canEdit ? "" : "none";
+  // Загрузка чертежа больше НЕ управляется отдельно по canEdit: с
+  // 2026-07-29 «загрузка любых данных доступна только администраторам»,
+  // поэтому пункт помечен обычным admin-only в разметке и скрывается
+  // общим правилом ниже. На сервере то же — /import-dxf под require_admin.
   // Меню "Настройки" теперь видно всем ролям — в нём же живёт самообслуживание
   // смены пароля (п.10 третьего раунда). Admin-специфичные пункты скрываются
   // адресно по классу .admin-only, а не всё меню целиком.
@@ -500,65 +502,20 @@ async function loadSourceFiles() {
 }
 
 function updateFileSelectSummary() {
-  const summary = document.getElementById("file-select-summary");
+  const summary = document.getElementById("file-select-summary-line");
+  if (!summary) return;
   const n = state.selection.size;
   let text;
   if (n === 0) text = "не выбрано";
   else if (n === 1) text = Array.from(state.selection.keys())[0];
   else text = `${n} файла`;
-  summary.textContent = text;
-  // title — на всю кнопку, не только на span: полезно и в развёрнутом виде
-  // при длинном имени файла (обрезается ellipsis, см. CSS), и особенно в
-  // свёрнутом (остаётся только иконка — без title вообще не узнать, какой
-  // чертёж выбран, см. ниже toolbar-collapsible).
-  document.getElementById("btn-file-select").title = `Чертёж: ${text}`;
+  summary.textContent = `Сейчас на схеме: ${text}`;
 }
 
-// ---------- сворачиваемый выбор чертежа/слоёв (по горизонтали) ----------
-// Явный запрос: помимо остального тулбара, этот конкретный контрол должен
-// уметь схлопываться сам — до значка, без текста — чтобы экономить место,
-// а не просто участвовать в общей горизонтальной прокрутке #toolbar-scroll.
-const FILE_SELECT_COLLAPSE_KEY = "zhbi_file_select_collapsed";
-const fileSelectDropdown = document.getElementById("file-select-dropdown");
-const fileSelectCollapseBtn = document.getElementById("file-select-collapse-btn");
-function setFileSelectCollapsed(collapsed) {
-  fileSelectDropdown.classList.toggle("collapsed", collapsed);
-  fileSelectCollapseBtn.textContent = collapsed ? "›" : "‹";
-  fileSelectCollapseBtn.title = collapsed ? "Развернуть выбор чертежа" : "Свернуть выбор чертежа";
-  localStorage.setItem(FILE_SELECT_COLLAPSE_KEY, collapsed ? "1" : "0");
-}
-setFileSelectCollapsed(localStorage.getItem(FILE_SELECT_COLLAPSE_KEY) === "1");
-fileSelectCollapseBtn.addEventListener("click", (e) => {
-  e.stopPropagation();
-  setFileSelectCollapsed(!fileSelectDropdown.classList.contains("collapsed"));
-});
-
-const layersCache = new Map(); // source_file -> [{layer, count}], кэш на сеанс
-
-async function getLayersFor(sourceFile) {
-  if (!layersCache.has(sourceFile)) {
-    layersCache.set(sourceFile, await api(`/layers?source_file=${encodeURIComponent(sourceFile)}`));
-  }
-  return layersCache.get(sourceFile);
-}
-
-async function renderLayerCheckboxes(sourceFile, container) {
-  const layers = await getLayersFor(sourceFile);
-  const selectedSet = state.selection.get(sourceFile); // null = все
-  container.innerHTML = layers.map(l => {
-    const checked = selectedSet === null || selectedSet === undefined || selectedSet.has(l.layer);
-    return `<label class="checkbox"><input type="checkbox" data-layer="${escapeHtml(l.layer)}" ${checked ? "checked" : ""}/> ${escapeHtml(l.layer)} (${l.count})</label>`;
-  }).join("");
-  container.querySelectorAll('input[type=checkbox]').forEach(cb => {
-    cb.addEventListener("change", async () => {
-      const all = Array.from(container.querySelectorAll('input[type=checkbox]'));
-      const checkedLayers = all.filter(c => c.checked).map(c => c.dataset.layer);
-      if (checkedLayers.length === all.length) state.selection.set(sourceFile, null);
-      else state.selection.set(sourceFile, new Set(checkedLayers));
-      await loadPlan();
-    });
-  });
-}
+// Выбор чертежа/слоёв живёт в форме "Чертежи" (пункт меню "Загрузить
+// чертёж"), а не в тулбаре — см. комментарий в index.html. Прежний
+// сворачиваемый контрол тулбара и его состояние в localStorage удалены
+// вместе с самим контролом.
 
 async function renderFileSelectMenu() {
   const container = document.getElementById("file-select-list");
@@ -613,26 +570,6 @@ function switchTab(name) {
 }
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
-});
-
-document.getElementById("btn-file-select").addEventListener("click", async (e) => {
-  e.stopPropagation();
-  const menu = document.getElementById("file-select-menu");
-  const willOpen = !menu.classList.contains("open");
-  if (willOpen) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    menu.style.left = rect.left + "px";
-    menu.style.top = (rect.bottom + 6) + "px";
-    await renderFileSelectMenu();
-  }
-  menu.classList.toggle("open");
-});
-document.getElementById("file-select-done").addEventListener("click", () => {
-  document.getElementById("file-select-menu").classList.remove("open");
-});
-document.addEventListener("click", (e) => {
-  const menu = document.getElementById("file-select-menu");
-  if (!menu.contains(e.target) && e.target.id !== "btn-file-select") menu.classList.remove("open");
 });
 
 // ==================== РЕНДЕР СХЕМЫ ====================
@@ -6149,12 +6086,16 @@ function setUploadStatus(text, isError) {
   uploadStatus.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
-document.getElementById("btn-upload").addEventListener("click", () => {
+document.getElementById("btn-upload").addEventListener("click", async () => {
   uploadFileInput.value = "";
   setUploadStatus("", false);
   uploadSubmit.disabled = false;
   uploadFileInput.disabled = false;
   uploadBackdrop.classList.add("open");
+  // Список чертежей и слоёв теперь живёт в этой же форме (см. index.html):
+  // перечитываем при каждом открытии — состав файлов мог измениться после
+  // загрузки нового чертежа или импорта из папки Input.
+  await renderFileSelectMenu();
 });
 document.getElementById("upload-cancel").addEventListener("click", () => uploadBackdrop.classList.remove("open"));
 

@@ -1496,7 +1496,15 @@ def export_pdf(
 def import_dxf(
     file: UploadFile = File(...),
     source_file: Optional[str] = Form(None),
-    user: sqlite3.Row = Depends(require_editor),
+    # ТОЛЬКО админ (решение пользователя 2026-07-29: "загрузка любых данных
+    # доступна только администраторам"). Раньше здесь был require_editor,
+    # то есть чертёж мог загрузить и прораб (роль user).
+    #
+    # Проверка именно здесь, на сервере, а не только скрытием пункта меню:
+    # спрятанная кнопка — не защита, запрос к /import-dxf можно отправить
+    # и без неё. Загрузка чертежа перезаписывает геометрию всех элементов
+    # файла, то есть по последствиям это операция уровня админа.
+    user: sqlite3.Row = Depends(require_admin),
 ):
     try:
         return import_dxf_file(file, source_file, UPLOADS_DIR)
