@@ -717,25 +717,6 @@
         <button id="file-select-done">Готово</button>
       </div>
     </div>
-    <button class="btn" id="btn-upload">Загрузить чертёж</button>
-    <div class="view-mode-switch" id="view-mode-switch" role="group" aria-label="Режим отображения">
-      <button type="button" class="view-mode-btn active" id="btn-view-2d" data-mode="2d">2D</button>
-      <button type="button" class="view-mode-btn" id="btn-view-3d" data-mode="3d">3D</button>
-      <!-- Третий режим, а не настройка: облегчённый 3D — это то, что
-           оператор выбирает по ситуации (свой ноутбук тормозит), а не
-           настраивает один раз в панели. -->
-      <button type="button" class="view-mode-btn" id="btn-view-3d-light" data-mode="3d-light"
-              title="Как 3D, но без рёбер элементов и с пониженной чёткостью — для слабых компьютеров">3D лёгкий</button>
-    </div>
-    <span class="spacer"></span>
-    <div id="workdate-box">
-      <label for="workdate-input">Рабочая дата</label>
-      <input type="datetime-local" id="workdate-input"/>
-      <button class="btn btn-sm btn-secondary" id="workdate-reset" title="Заполнить текущими датой/временем">Сейчас</button>
-      <button class="btn btn-sm btn-secondary" id="workdate-clear" title="Очистить — система всегда будет использовать текущие дату/время">✕</button>
-    </div>
-  </div>
-  <div id="toolbar-pinned">
     <div class="dropdown" id="settings-dropdown">
       <button class="btn" id="btn-settings-menu">Действия ▾</button>
       <!-- Группы меню (2026-07-29, живой запрос): "Настройки" — оформление и
@@ -778,18 +759,29 @@
             <button id="menu-contracts">Контракты</button>
           </div>
         </div>
-        <div class="submenu admin-only">
+        <!-- НЕ admin-only на всей группе: внутри "Загрузить чертёж", доступный
+             роли user. Остальные пункты помечены поштучно; если у роли не
+             осталось ни одного видимого пункта, applyRolePermissions скроет и
+             сам заголовок группы. -->
+        <div class="submenu">
           <button type="button" class="submenu-trigger">Обмен данными</button>
           <div class="dropdown-menu submenu-panel">
-            <button id="btn-export">Экспорт в XLS</button>
-            <button id="btn-export-pdf">Экспорт в PDF</button>
-            <button id="menu-history-import">Импорт истории из XLS</button>
-            <button id="menu-status-restore">Восстановить статусы из выгрузки</button>
-            <button id="menu-contracting-import">Импорт контрактации из XLS</button>
-            <button id="menu-schedule-import">Импорт графика МС Project из XLS</button>
-            <button id="menu-import-input">Загрузить из папки Input…</button>
-            <button id="menu-backups">Резервные копии…</button>
-            <button id="menu-settings-io">Экспорт/импорт настроек</button>
+            <!-- Загрузка чертежа переехала сюда из тулбара (живой запрос
+                 2026-07-29): это разовая операция обмена данными, а не
+                 повседневное действие, ради которого стоит держать кнопку
+                 на виду. Роль решает видимость: пункт доступен admin и user
+                 (см. applyRolePermissions), в отличие от остальных пунктов
+                 этой группы — они только админские. -->
+            <button id="btn-upload">Загрузить чертёж…</button>
+            <button id="btn-export" class="admin-only">Экспорт в XLS</button>
+            <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
+            <button id="menu-history-import" class="admin-only">Импорт истории из XLS</button>
+            <button id="menu-status-restore" class="admin-only">Восстановить статусы из выгрузки</button>
+            <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
+            <button id="menu-schedule-import" class="admin-only">Импорт графика МС Project из XLS</button>
+            <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
+            <button id="menu-backups" class="admin-only">Резервные копии…</button>
+            <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
           </div>
         </div>
         <div class="submenu admin-only">
@@ -800,11 +792,31 @@
         </div>
       </div>
     </div>
+    <div class="view-mode-switch" id="view-mode-switch" role="group" aria-label="Режим отображения">
+      <button type="button" class="view-mode-btn active" id="btn-view-2d" data-mode="2d">2D</button>
+      <button type="button" class="view-mode-btn" id="btn-view-3d" data-mode="3d">3D</button>
+      <!-- Третий режим, а не настройка: облегчённый 3D — это то, что
+           оператор выбирает по ситуации (свой ноутбук тормозит), а не
+           настраивает один раз в панели. -->
+      <button type="button" class="view-mode-btn" id="btn-view-3d-light" data-mode="3d-light"
+              title="Как 3D, но без рёбер элементов и с пониженной чёткостью — для слабых компьютеров">3D лёгкий</button>
+    </div>
+    <!-- Обновление данных стоит рядом с выбором режима просмотра: и то и
+         другое — про то, ЧТО и КАК сейчас видно на схеме. -->
+    <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-refresh" title="Обновить данные с сервера">⟳</button>
+    <span class="spacer"></span>
+    <div id="workdate-box">
+      <label for="workdate-input">Рабочая дата</label>
+      <input type="datetime-local" id="workdate-input"/>
+      <button class="btn btn-sm btn-secondary" id="workdate-reset" title="Заполнить текущими датой/временем">Сейчас</button>
+      <button class="btn btn-sm btn-secondary" id="workdate-clear" title="Очистить — система всегда будет использовать текущие дату/время">✕</button>
+    </div>
+  </div>
+  <div id="toolbar-pinned">
     <div id="user-box">
       <span><b id="user-name"></b></span>
       <button class="btn btn-sm btn-secondary" id="btn-logout">Выйти</button>
     </div>
-    <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-refresh" title="Обновить данные с сервера">⟳</button>
     <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-changelog" title="Что нового">?</button>
   </div>
 </div>

@@ -285,6 +285,16 @@ function applyRolePermissions() {
   document.querySelectorAll("#settings-menu .admin-only").forEach(elm => {
     elm.style.display = role === "admin" ? "" : "none";
   });
+  // Группа без единого видимого пункта не должна оставаться заголовком,
+  // раскрывающим пустую панель. Считаем ПОСЛЕ применения ролей выше и по
+  // фактической видимости, а не по классам: у "Обмен данными" видимость
+  // смешанная (загрузка чертежа доступна прорабу, остальное — только
+  // админу), и жёстко прописать её классом на группе нельзя.
+  document.querySelectorAll("#settings-menu .submenu").forEach(group => {
+    const видимые = [...group.querySelectorAll(".submenu-panel button")]
+      .filter(b => b.style.display !== "none");
+    group.style.display = видимые.length ? "" : "none";
+  });
 }
 
 async function checkAuth() {

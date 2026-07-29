@@ -886,10 +886,21 @@ def get_changes(
         server_time = conn.execute("SELECT datetime('now') AS t").fetchone()["t"]
         if not since:
             return {"server_time": server_time, "elements": []}
+        # Сравнение НЕСТРОГОЕ (>=), и это не описка. `updated_at` и
+        # `server_time` — оба `datetime('now')`, то есть с точностью до
+        # СЕКУНДЫ. При строгом `>` правка, попавшая в ту же секунду, что и
+        # предыдущий опрос, не возвращалась НИКОГДА: её метка равна границе,
+        # а не больше её. Поймано живым прогоном 2026-07-29 — смена статуса
+        # прошла, журнал её записал, а вторая вкладка не увидела.
+        #
+        # Плата за `>=` — строки пограничной секунды приходят повторно один
+        # раз. Это безвредно: applyElementDelta на клиенте идемпотентна и при
+        # совпадении значений не считает элемент изменённым (и не показывает
+        # уведомление). Терять правки ради экономии одного повтора нельзя.
         rows = conn.execute(
             "SELECT id, current_status, contract_id, planned_delivery_date, "
             "actual_delivery_date, project_delivery_date, project_smr_start_date, updated_at "
-            "FROM elements WHERE source_file = ? AND updated_at > ? ORDER BY updated_at",
+            "FROM elements WHERE source_file = ? AND updated_at >= ? ORDER BY updated_at",
             (source_file, since),
         ).fetchall()
         return {
