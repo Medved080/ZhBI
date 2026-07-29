@@ -27,6 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app import activity
 from app.auth import get_current_user, require_admin
 from app.db import get_connection
 
@@ -472,7 +473,15 @@ def recompute_element_contract_cache(conn, element_id: int) -> Optional[int]:
         (element_id,),
     ).fetchone()
     contract_id = latest["contract_id"] if latest else None
-    conn.execute("UPDATE elements SET contract_id = ? WHERE id = ?", (contract_id, element_id))
+    # updated_at двигаем ОБЯЗАТЕЛЬНО: по нему опрос об изменениях
+    # (GET /changes, см. app/main.py) понимает, что элемент надо переслать
+    # другим открытым вкладкам. Раньше эта строка его не трогала — смена
+    # одного контракта на другой БЕЗ смены статуса не доезжала до коллег
+    # до перезагрузки страницы.
+    conn.execute(
+        "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
+        (contract_id, element_id),
+    )
     return contract_id
 
 
@@ -582,6 +591,28 @@ def apply_status_change(
     recompute_status_and_actual_date(conn, element_id)
     element_contract_id = recompute_element_contract_cache(conn, element_id)
     warning = contract_line_warning(conn, element_contract_id, row["element_type"], row["mark"])
+
+    # Журнал (app/activity.py) — здесь, а не в эндпоинтах: смену статуса
+    # выполняют два разных роута (одиночный и массовый), и запись в одном
+    # общем месте гарантирует, что ни один путь не окажется незалогированным.
+    # Постановка в очередь стоит ~4 мкс, на массовой операции это доли
+    # секунды на десяток тысяч элементов — на время ответа не влияет.
+    # Тип/подтип/марка пишутся СНИМКОМ: искать в журнале будут по ним, а сам
+    # элемент к тому времени мог измениться.
+    activity.log(
+        "status_change",
+        user_id=changed_by_user_id,
+        user_name=changed_by,
+        entity_type="element",
+        entity_id=element_id,
+        element_type=row["element_type"],
+        subtype=row["subtype"],
+        mark=row["mark"],
+        old_value=row["current_status"],
+        new_value=status,
+        at=changed_at or None,
+        details={"contract_id": element_contract_id} if element_contract_id else None,
+    )
 
     updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
     history_rows = conn.execute(

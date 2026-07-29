@@ -16,6 +16,9 @@ from app.auth import format_display_name, get_current_user, require_admin, requi
 from app.auth import router as auth_router
 from app.changelog import CHANGELOG
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
+from pydantic import BaseModel
+
+from app import activity
 from app.contracts import (
     apply_status_change,
     build_contract_name,
@@ -402,6 +405,9 @@ def on_startup():
         init_db()
         _warn_users_without_password()
         _probe_schema_health()
+        # Фоновый писатель журнала — после init_db(), чтобы таблица
+        # activity_log точно существовала к моменту первой записи.
+        activity.start_worker()
     except Exception as e:
         if not _attempt_migration_recovery(e):
             raise
@@ -653,6 +659,194 @@ def admin_import_input(user: sqlite3.Row = Depends(require_admin)):
     report = import_input_dxf()
     report += import_input_xlsx()
     return {"report": report}
+
+
+class ClientEventIn(BaseModel):
+    action: str
+    at: Optional[str] = None
+    duration_ms: Optional[float] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[int] = None
+    request_id: Optional[str] = None
+    details: Optional[dict] = None
+
+
+class ClientEventsIn(BaseModel):
+    events: list[ClientEventIn]
+
+
+@app.post("/activity")
+def post_activity(body: ClientEventsIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Пачка клиентских событий («нажал кнопку», «форма открылась»,
+    «запись выполнена») — сервер о них знать не может, их измеряет сам
+    браузер.
+
+    ПАЧКОЙ, а не по событию: отдельный запрос на каждое нажатие исказил бы
+    ровно то, что мы измеряем, — сетевой задержкой поверх времени отклика
+    интерфейса.
+
+    `duration_ms` клиент считает монотонным таймером (performance.now()), а
+    НЕ разницей часов: часы на разных машинах прорабов расходятся на
+    минуты, и сравнивать их абсолютные метки между компьютерами нельзя — а
+    сравнение быстродействия разных машин и есть цель журнала. Поэтому
+    метка `at` у клиентских событий — серверное время приёма, а истинная
+    длительность приходит отдельным полем.
+
+    Ограничение размера пачки — защита от того, чтобы одна вкладка не
+    залила журнал: лишнее отбрасывается, но об этом пишется явная запись.
+    """
+    MAX_EVENTS = 200
+    events = body.events[:MAX_EVENTS]
+    for e in events:
+        activity.log(
+            e.action,
+            source="client",
+            user=user,
+            entity_type=e.entity_type,
+            entity_id=e.entity_id,
+            duration_ms=e.duration_ms,
+            request_id=e.request_id,
+            details=e.details,
+        )
+    dropped = len(body.events) - len(events)
+    if dropped:
+        activity.log("client_batch_truncated", source="server", user=user, new_value=str(dropped))
+    return {"accepted": len(events), "dropped": dropped}
+
+
+@app.get("/activity")
+def search_activity(
+    date_from: Optional[str] = Query(None, description="'ГГГГ-ММ-ДД' включительно"),
+    date_to: Optional[str] = Query(None, description="'ГГГГ-ММ-ДД' включительно"),
+    user_id: Optional[int] = Query(None),
+    action: Optional[str] = Query(None),
+    entity_id: Optional[int] = Query(None),
+    text: Optional[str] = Query(None, description="подстрока в марке/типе/подтипе/значениях"),
+    limit: int = Query(200, le=2000),
+    offset: int = Query(0, ge=0),
+    admin: sqlite3.Row = Depends(require_admin),
+):
+    """Поиск по журналу. Только админу: журнал показывает, кто что делал, —
+    это не то, что должно быть доступно всем ролям.
+
+    Отдаёт и общее число совпадений (для постраничного просмотра), и саму
+    страницу. Поиск по подстроке идёт по снимкам марки/типа/подтипа и по
+    значениям — то есть по тем полям, которые в журнале и ищут.
+    """
+    clauses, params = [], []
+    if date_from:
+        clauses.append("at >= ?")
+        params.append(f"{date_from} 00:00:00.000")
+    if date_to:
+        clauses.append("at <= ?")
+        params.append(f"{date_to} 23:59:59.999")
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if action:
+        clauses.append("action = ?")
+        params.append(action)
+    if entity_id is not None:
+        clauses.append("entity_id = ?")
+        params.append(entity_id)
+    if text:
+        # Регистронезависимый поиск кириллицы — на стороне SQL LIKE его не
+        # получить (SQLite без ICU кириллицу не приводит, см. Docs/TZ.md),
+        # поэтому сравниваем как есть; для марок/типов этого достаточно —
+        # они и хранятся в том виде, в каком их ищут.
+        like = f"%{text}%"
+        clauses.append("(mark LIKE ? OR element_type LIKE ? OR subtype LIKE ? "
+                       "OR old_value LIKE ? OR new_value LIKE ? OR user_name LIKE ?)")
+        params.extend([like] * 6)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    conn = get_connection()
+    try:
+        total = conn.execute(f"SELECT COUNT(*) AS n FROM activity_log {where}", params).fetchone()["n"]
+        rows = conn.execute(
+            f"SELECT * FROM activity_log {where} ORDER BY at DESC, id DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+        actions = [r["action"] for r in conn.execute(
+            "SELECT DISTINCT action FROM activity_log ORDER BY action").fetchall()]
+        return {"total": total, "rows": [dict(r) for r in rows], "actions": actions}
+    finally:
+        conn.close()
+
+
+@app.post("/activity/cleanup")
+def cleanup_activity(
+    before: str = Query(..., description="Удалить записи СТРОГО РАНЬШЕ этой даты, 'ГГГГ-ММ-ДД'"),
+    admin: sqlite3.Row = Depends(require_admin),
+):
+    """Очистка журнала за период. Журнал растёт быстро (одна массовая смена
+    статуса на реальном файле — это 9422 записи), поэтому механизм очистки
+    нужен с самого начала, а не когда база распухнет.
+
+    Граница СТРОГАЯ: удаляется всё раньше указанной даты, сам день
+    остаётся. Так проще объяснить и труднее случайно снести сегодняшнее.
+    Сам факт очистки тоже попадает в журнал — иначе исчезновение записей
+    было бы неотличимо от того, что их и не было.
+    """
+    conn = get_connection()
+    try:
+        n = conn.execute("SELECT COUNT(*) AS n FROM activity_log WHERE at < ?", (f"{before} 00:00:00.000",)).fetchone()["n"]
+        conn.execute("DELETE FROM activity_log WHERE at < ?", (f"{before} 00:00:00.000",))
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("activity_cleanup", user=admin, old_value=str(n), new_value=before)
+    return {"deleted": n, "before": before}
+
+
+@app.get("/changes")
+def get_changes(
+    source_file: str = Query(...),
+    since: Optional[str] = Query(None, description="UTC 'ГГГГ-ММ-ДД ЧЧ:ММ:СС'; пусто — только метка времени"),
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Что изменилось у элементов чертежа после момента `since` — для
+    автоматического обновления схемы у остальных открытых вкладок
+    (совместная работа, живой запрос 2026-07-29: «если несколько
+    пользователей в системе и один что-то поменял, второй это не увидит до
+    принудительного обновления страницы»).
+
+    Опрос, а не постоянное соединение (SSE/WebSocket) — сознательно: в
+    app/main.py роуты синхронные (`def`, не `async def`), их обслуживает
+    пул потоков, и открытое соединение занимало бы поток НА КАЖДОГО
+    подключённого пользователя. Пул невелик (десятки), десяток открытых
+    вкладок исчерпал бы его и подвесил всё приложение целиком. Переписывать
+    45 синхронных роутов на async ради этого несоразмерно.
+
+    Отдаём только то, что реально меняется по ходу работы: статус, привязка
+    к контракту и даты. Геометрия и привязка к зонам меняются лишь при
+    переимпорте чертежа — их всё равно нельзя применить точечно, для этого
+    есть обычная перезагрузка.
+
+    `server_time` возвращается ВСЕГДА и служит меткой для следующего
+    запроса — брать её с часов клиента нельзя: они расходятся с серверными,
+    и при спешащих часах браузера часть изменений была бы пропущена
+    навсегда. Ответ при отсутствии изменений — несколько байт, поэтому
+    частый опрос дёшев (для сравнения: полная перезагрузка схемы на
+    реальном файле — 1,65 МБ одних контуров).
+    """
+    conn = get_connection()
+    try:
+        server_time = conn.execute("SELECT datetime('now') AS t").fetchone()["t"]
+        if not since:
+            return {"server_time": server_time, "elements": []}
+        rows = conn.execute(
+            "SELECT id, current_status, contract_id, planned_delivery_date, "
+            "actual_delivery_date, project_delivery_date, project_smr_start_date, updated_at "
+            "FROM elements WHERE source_file = ? AND updated_at > ? ORDER BY updated_at",
+            (source_file, since),
+        ).fetchall()
+        return {
+            "server_time": server_time,
+            "elements": [enrich_element_row(conn, dict(r)) for r in rows],
+        }
+    finally:
+        conn.close()
 
 
 @app.post("/admin/reset-status-history")

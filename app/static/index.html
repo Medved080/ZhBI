@@ -490,6 +490,11 @@
   .warning-text { color: #b8860b; font-size: 12px; margin-top: 6px; }
   .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
 
+  /* Журнал действий — та же табличная раскладка, что у списка
+     пользователей (не заводим третий стиль таблицы ради одной формы). */
+  #activity-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #activity-table td, #activity-table th { padding: 6px 8px; border-bottom: 1px solid var(--color-border); text-align: left; white-space: nowrap; }
+  #activity-table th { color: var(--color-text-muted); font-weight: 500; position: sticky; top: 0; background: var(--color-surface); }
   #users-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
   #users-table td, #users-table th { padding: 7px 8px; border-bottom: 1px solid var(--color-border); text-align: left; }
   #users-table th { color: var(--color-text-muted); font-weight: 500; }
@@ -558,6 +563,15 @@
     animation: toast-in .15s ease-out;
   }
   @keyframes toast-in { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  /* Красная полоса слева задана у .toast как общее правило — но сообщения
+     об обновлении данных другими пользователями это не ошибка, а обычное
+     уведомление; красный цвет тревожил бы зря. */
+  .toast-info { border-left-color: var(--color-primary); }
+
+  /* Кнопка "Обновить" — вращение на время запроса, чтобы нажатие давало
+     видимый отклик даже когда изменений не оказалось. */
+  #btn-refresh.spinning { animation: refresh-spin .8s linear infinite; }
+  @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
   /* -------- экран логина -------- */
   #login-screen {
@@ -733,6 +747,7 @@
         <button id="menu-schedule-import" class="admin-only">Импорт графика МС Project из XLS</button>
         <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
         <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
+        <button id="menu-activity" class="admin-only">Журнал действий</button>
         <div class="dropdown-divider admin-only">Тестирование</div>
         <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов…</button>
       </div>
@@ -741,6 +756,7 @@
       <span><b id="user-name"></b></span>
       <button class="btn btn-sm btn-secondary" id="btn-logout">Выйти</button>
     </div>
+    <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-refresh" title="Обновить данные с сервера">⟳</button>
     <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-changelog" title="Что нового">?</button>
   </div>
 </div>
@@ -816,6 +832,12 @@
           <div id="label-toggles"></div>
         </div>
       </div>
+      <!-- Настройка КОМПЬЮТЕРА, а не проекта: хранится в localStorage
+           браузера, не в БД. У разных прорабов машины разные, и общая
+           на всех настройка была бы бессмысленной. -->
+      <h4 style="margin-top:14px">Быстродействие 3D</h4>
+      <label class="toggle"><input type="checkbox" id="low-spec-toggle"/> Режим слабого компьютера</label>
+      <div class="hint-text" id="low-spec-hint"></div>
     </div>
   </div>
 </div>
@@ -1031,6 +1053,42 @@
     <div class="actions">
       <button class="btn btn-secondary" id="status-restore-cancel">Отмена</button>
       <button class="btn btn-primary" id="status-restore-submit">Восстановить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="activity-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Журнал действий</h2>
+      <div class="row">
+        <div><label class="field">С даты</label><input type="date" id="activity-from"/></div>
+        <div><label class="field">По дату</label><input type="date" id="activity-to"/></div>
+        <div><label class="field">Пользователь</label><select id="activity-user"></select></div>
+        <div><label class="field">Действие</label><select id="activity-action"></select></div>
+      </div>
+      <div class="row">
+        <div style="flex:1"><label class="field">Поиск (марка, тип, подтип, статус, ФИО)</label><input type="text" id="activity-text"/></div>
+        <div style="align-self:flex-end"><button class="btn btn-primary" id="activity-search">Найти</button></div>
+      </div>
+      <div class="hint-text" id="activity-summary"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <table id="activity-table">
+        <thead><tr>
+          <th>Время</th><th>Источник</th><th>Пользователь</th><th>Действие</th>
+          <th>Элемент</th><th>Было</th><th>Стало</th><th>Длительность, мс</th>
+        </tr></thead>
+        <tbody id="activity-tbody"></tbody>
+      </table>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="row" style="align-items:flex-end">
+        <div><label class="field">Очистить записи раньше</label><input type="date" id="activity-cleanup-date"/></div>
+        <button class="btn btn-secondary menu-item-danger" id="activity-cleanup">Очистить</button>
+        <span class="spacer"></span>
+        <button class="btn btn-secondary" id="activity-close">Закрыть</button>
+      </div>
     </div>
   </div>
 </div>

@@ -64,6 +64,13 @@ let state = {
   // видимость (см. stanceZoneVisible ниже, запрошено явно — иерархия
   // кран→стоянки, конкретная стоянка на всех её ярусах).
   zoneVisibility: { "Захватка": false, "Кран": false },
+  // Режим слабого компьютера (см. LOW_SPEC_KEY ниже по файлу). Читается из
+  // localStorage ЗДЕСЬ, а не в обработчике переключателя: init3DScene может
+  // сработать раньше, чем отрисуется сайдбар, и должен уже знать нужную
+  // плотность пикселей. Ключ здесь литералом, а не константой: state
+  // объявляется в начале файла, до её объявления (temporal dead zone). При
+  // смене ключа поправить ОБА места.
+  lowSpec: localStorage.getItem("zhbi_low_spec") === "1",
   // Видимость КОНКРЕТНОЙ стоянки (все её ярусы разом) — opt-in множество
   // логических ключей (см. stanceLogicalKey), а не excludedSet, как у
   // фильтров: по умолчанию ничего не видно (та же логика быстродействия,
@@ -2660,6 +2667,35 @@ document.getElementById("legend-toggle-btn").addEventListener("click", () => {
   setLegendCollapsed(!document.getElementById("legend").classList.contains("collapsed"));
 });
 
+// Переключатель режима слабого компьютера. Подписка одна на всё время
+// жизни страницы (элемент статический, в отличие от списков зон/подписей,
+// которые перерисовываются) — поэтому не внутри renderLabelToggles.
+(function initLowSpecToggle() {
+  const input = document.getElementById("low-spec-toggle");
+  const hint = document.getElementById("low-spec-hint");
+  if (!input) return; // старая разметка из кэша — см. loginPasswordToggle
+  const describe = () => {
+    hint.textContent = state.lowSpec
+      ? "Включён: рёбра элементов не рисуются, пиксельная плотность 1. Схема беднее, но заметно легче."
+      : "Выключен: рёбра элементов рисуются, пиксельная плотность до 1.5.";
+  };
+  input.checked = state.lowSpec;
+  describe();
+  input.addEventListener("change", () => {
+    state.lowSpec = input.checked;
+    localStorage.setItem(LOW_SPEC_KEY, state.lowSpec ? "1" : "0");
+    describe();
+    const v3 = state.view3d;
+    if (!v3.renderer) return; // 3D ещё ни разу не открывали — применится при первом открытии
+    v3.renderer.setPixelRatio(pixelRatioForCurrentMode());
+    on3DResize(); // setPixelRatio без пересчёта размера оставляет холст в прежнем разрешении
+    // Рёбра создаются/не создаются в момент ПОСТРОЕНИЯ меша, поэтому
+    // переключение требует пересборки сцены, а не просто смены видимости.
+    if (v3.active) build3DScene();
+    requestRender3D();
+  });
+})();
+
 function renderLabelToggles() {
   const box = document.getElementById("label-toggles");
   box.innerHTML = "";
@@ -3031,6 +3067,189 @@ function clearWorkspace() {
   if (state.view3d.active) build3DScene(); // очистит сцену (state.elements сейчас пуст)
 }
 
+// ==================== ЖУРНАЛ: клиентские тайминги ====================
+//
+// Живой запрос 2026-07-29: «По работе системы важно точное время. Нажал на
+// кнопку — время, открылась форма — время. Нажал Записать — время, запись
+// выполнена, форма закрыта — время. Потом мы сможем анализировать как
+// отличается быстродействие на разных компьютерах».
+//
+// Сервер о нажатиях не знает — эти события измеряет только браузер.
+// Копим их и отправляем ПАЧКОЙ раз в ACTIVITY_FLUSH_MS: отдельный запрос на
+// каждое нажатие добавил бы к измеряемому времени сетевую задержку, то есть
+// исказил бы ровно то, что мы меряем.
+//
+// Длительности считаются performance.now() — монотонным таймером, который не
+// зависит от системных часов. Абсолютные метки браузера сравнивать между
+// машинами нельзя: часы прорабских ноутбуков расходятся на минуты, а цель
+// журнала — именно сравнение машин между собой.
+const ACTIVITY_FLUSH_MS = 10000;
+let activityQueue = [];
+let activityRequestSeq = 0;
+
+function newRequestId() {
+  // Связывает несколько событий одной операции (нажал -> открылось ->
+  // записал -> закрылось), чтобы в журнале их можно было собрать вместе.
+  return `${Date.now().toString(36)}-${(++activityRequestSeq).toString(36)}`;
+}
+
+function logClientEvent(action, opts = {}) {
+  activityQueue.push({
+    action,
+    duration_ms: opts.durationMs,
+    entity_type: opts.entityType,
+    entity_id: opts.entityId,
+    request_id: opts.requestId,
+    details: opts.details,
+  });
+  // Пачка не должна расти без предела, если сеть недоступна: держим только
+  // последние — старые тайминги ценности уже не имеют.
+  if (activityQueue.length > 400) activityQueue = activityQueue.slice(-200);
+}
+
+// Замер отрезка операции: вернуть функцию, которая по вызову запишет
+// событие с уже посчитанной длительностью.
+function startTiming(action, opts = {}) {
+  const t0 = performance.now();
+  return (extra = {}) => logClientEvent(action, {
+    ...opts, ...extra, durationMs: Math.round((performance.now() - t0) * 10) / 10,
+  });
+}
+
+async function flushActivity() {
+  if (!activityQueue.length || !state.currentUser) return;
+  const events = activityQueue;
+  activityQueue = [];
+  try {
+    await api("/activity", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ events }),
+    });
+  } catch (e) {
+    // Не теряем безвозвратно — вернём в начало очереди и попробуем позже.
+    activityQueue = events.concat(activityQueue);
+  }
+}
+setInterval(flushActivity, ACTIVITY_FLUSH_MS);
+// Вкладку закрывают — успеть отправить накопленное.
+window.addEventListener("pagehide", () => {
+  if (!activityQueue.length) return;
+  const body = JSON.stringify({ events: activityQueue });
+  activityQueue = [];
+  // sendBeacon переживает закрытие вкладки, обычный fetch — нет.
+  if (navigator.sendBeacon) navigator.sendBeacon("/activity", new Blob([body], { type: "application/json" }));
+});
+
+// ==================== СОВМЕСТНАЯ РАБОТА: автообновление ====================
+//
+// Живой запрос 2026-07-29: «если несколько пользователей в системе и один
+// что-то поменял, то второй это не увидит до принудительного обновления
+// страницы».
+//
+// Опрос раз в POLL_INTERVAL_MS + кнопка «⟳» в тулбаре. Почему опрос, а не
+// постоянное соединение — см. комментарий у GET /changes (app/main.py):
+// роуты синхронные, открытое соединение занимало бы поток на каждого
+// пользователя. Ответ при отсутствии изменений — несколько байт.
+//
+// Метка времени берётся ИЗ ОТВЕТА СЕРВЕРА (server_time), никогда с часов
+// браузера: они расходятся между машинами, и при спешащих часах часть
+// чужих правок была бы пропущена навсегда.
+const POLL_INTERVAL_MS = 15000;
+let pollTimer = null;
+let lastServerTime = null;
+let pollInFlight = false;
+
+// Поля, которые приходят в дельте. Геометрия/зоны сюда не входят — они
+// меняются только переимпортом чертежа и точечно не применяются.
+const DELTA_FIELDS = [
+  "current_status", "contract_id", "counterparty_code",
+  "planned_delivery_date", "actual_delivery_date",
+  "project_delivery_date", "project_smr_start_date",
+];
+
+function applyElementDelta(fresh) {
+  const element = state.byId.get(fresh.id);
+  if (!element) return false; // элемента нет в текущей выборке слоёв — не наше дело
+  let changed = false;
+  for (const field of DELTA_FIELDS) {
+    if (field in fresh && element[field] !== fresh[field]) {
+      element[field] = fresh[field];
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+  // Точечное обновление вида: заливка/подсветка 2D и 3D + допстрока с
+  // датами. Полная перерисовка схемы (renderElements) здесь была бы
+  // расточительна — на реальном файле это тысячи узлов SVG.
+  styleShape(state.shapeById.get(element.id), element);
+  updateElementSubLabel(element);
+  return true;
+}
+
+async function pollChanges(manual = false) {
+  if (pollInFlight) return 0;
+  if (!state.sourceFile || !state.currentUser) return 0;
+  pollInFlight = true;
+  try {
+    const params = new URLSearchParams({ source_file: state.sourceFile });
+    if (lastServerTime) params.set("since", lastServerTime);
+    const data = await api(`/changes?${params.toString()}`);
+    const previousMark = lastServerTime;
+    lastServerTime = data.server_time;
+    // Самый первый запрос только запоминает метку: без неё сервер вернул
+    // бы всю историю изменений с начала времён, а показывать «изменилось
+    // 9422 элемента» сразу после открытия страницы бессмысленно.
+    if (!previousMark) return 0;
+
+    let applied = 0;
+    for (const fresh of data.elements) if (applyElementDelta(fresh)) applied++;
+    if (applied) {
+      renderLegend();          // счётчики по статусам в сайдбаре
+      applyPlacementFilters(); // элемент мог перестать проходить фильтр по статусу
+      if (state.selectedId && state.byId.has(state.selectedId)) {
+        showCard(state.byId.get(state.selectedId)); // открытая карточка тоже устарела
+      }
+      showToast(`Обновлено элементов: ${applied} — изменения других пользователей`, "info");
+    } else if (manual) {
+      showToast("Новых изменений нет", "info");
+    }
+    return applied;
+  } catch (e) {
+    // Молча: сеть моргнула — следующий тик попробует снова. Шуметь
+    // всплывашкой раз в 15 секунд недопустимо.
+    if (manual) showToast("Не удалось обновить: " + e.message, "warning");
+    return 0;
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    // Вкладка в фоне — не опрашиваем: пользователь всё равно не смотрит, а
+    // вернувшись, получит свежие данные обработчиком visibilitychange ниже.
+    if (document.hidden) return;
+    pollChanges();
+  }, POLL_INTERVAL_MS);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) pollChanges();
+});
+
+document.getElementById("btn-refresh").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-refresh");
+  btn.disabled = true;
+  btn.classList.add("spinning");
+  try {
+    await pollChanges(true);
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove("spinning");
+  }
+});
+
 async function loadPlan(preserveView = true) {
   if (!state.selection.size) { clearWorkspace(); return; }
   const selection = Array.from(state.selection.entries()).map(([source_file, layers]) => ({
@@ -3039,6 +3258,12 @@ async function loadPlan(preserveView = true) {
   const data = await api("/plan-data", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selection }),
   });
+  // Данные только что загружены целиком — предыдущая метка опроса больше не
+  // нужна и была бы вредна: сервер прислал бы как "изменения" всё, что
+  // произошло до этой загрузки, и пользователь увидел бы всплывашку
+  // "обновлено N элементов" сразу после открытия чертежа. Следующий тик
+  // опроса просто возьмёт новую метку у сервера (см. pollChanges).
+  lastServerTime = null;
   state.elements = data.elements;
   state.statusColors = data.status_colors;
   state.statusOrder = data.status_order;
@@ -3650,8 +3875,20 @@ const bulkStatusBackdrop = document.getElementById("bulk-status-backdrop");
 // запрос; ответ, устаревший к моменту прихода, молча отбрасывается.
 let bulkContractRequestId = 0;
 
+// Разметка таймингов операции «массовая смена статуса» — та же операция,
+// на которую пользователь жаловался («долго открывается»), поэтому именно
+// её и меряем целиком: нажатие -> форма открылась -> запись -> форма
+// закрылась. Все четыре события связаны одним request_id.
+let bulkStatusRequestId = null;
+
 function openBulkStatusModal() {
   if (state.multiSelectedIds.size === 0) return;
+  bulkStatusRequestId = newRequestId();
+  const opened = startTiming("bulk_status_form_open", {
+    requestId: bulkStatusRequestId,
+    details: { элементов: state.multiSelectedIds.size },
+  });
+  logClientEvent("bulk_status_button_click", { requestId: bulkStatusRequestId });
   document.getElementById("bulk-status-select").innerHTML =
     state.statusOrder.map(s => `<option value="${s}">${escapeHtml(state.statusLabels[s])}</option>`).join("");
   // Перечисление типов элементов контракта убрано из подписи (живой запрос
@@ -3665,6 +3902,7 @@ function openBulkStatusModal() {
   bulkContractLines = []; // от прошлого открытия — до прихода свежих остатков предупреждений не показываем
   renderBulkStatusTable();
   bulkStatusBackdrop.classList.add("open");
+  opened(); // форма на экране — засекаем, сколько заняло от нажатия
 
   const requestId = ++bulkContractRequestId;
   api("/contracts").then(contracts => {
@@ -3708,6 +3946,9 @@ document.getElementById("bulk-status-apply").addEventListener("click", async () 
     items.push({ element_id: Number(tr.dataset.elementId), contract_id: raw === "none" ? null : Number(raw) });
   });
   if (!items.length) return;
+  const saved = startTiming("bulk_status_save", {
+    requestId: bulkStatusRequestId, details: { элементов: items.length, статус: status },
+  });
   try {
     const body = { items, status };
     const changedAt = currentChangedAt();
@@ -3727,8 +3968,13 @@ document.getElementById("bulk-status-apply").addEventListener("click", async () 
     bulkStatusBackdrop.classList.remove("open");
     clearMultiSelection();
     showToast(`Статус изменён у ${result.updated.length} элементов`, "success");
+    // Замер закрывается ЗДЕСЬ, а не сразу после ответа сервера: пользователя
+    // интересует момент, когда форма ушла с экрана и можно работать дальше,
+    // а не когда пришёл ответ — между ними ещё перерисовка схемы и легенды.
+    saved({ details: { элементов: result.updated.length, статус: status, итог: "успех" } });
   } catch (e) {
     document.getElementById("bulk-status-error").textContent = "Не удалось изменить статус: " + e.message;
+    saved({ details: { итог: "ошибка", сообщение: String(e.message) } });
   }
 });
 
@@ -5451,6 +5697,87 @@ function setStatusRestoreStatus(text, isError) {
   elm.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
+// ---------- Журнал действий (живой запрос 2026-07-29) ----------
+const activityBackdrop = document.getElementById("activity-backdrop");
+
+function activityRowHtml(r) {
+  const element = [r.element_type, r.subtype, r.mark].filter(Boolean).join(" / ");
+  const label = v => (v && state.statusLabels[v]) || v || "";
+  return `<tr>
+    <td>${escapeHtml(r.at || "")}</td>
+    <td>${r.source === "client" ? "браузер" : "сервер"}</td>
+    <td>${escapeHtml(r.user_name || "")}</td>
+    <td>${escapeHtml(r.action)}</td>
+    <td>${escapeHtml(element)}${r.entity_id ? ` <span class="hint-text">#${r.entity_id}</span>` : ""}</td>
+    <td>${escapeHtml(label(r.old_value))}</td>
+    <td>${escapeHtml(label(r.new_value))}</td>
+    <td>${r.duration_ms === null || r.duration_ms === undefined ? "" : r.duration_ms}</td>
+  </tr>`;
+}
+
+async function loadActivity() {
+  const params = new URLSearchParams();
+  const from = document.getElementById("activity-from").value;
+  const to = document.getElementById("activity-to").value;
+  const userId = document.getElementById("activity-user").value;
+  const action = document.getElementById("activity-action").value;
+  const text = document.getElementById("activity-text").value.trim();
+  if (from) params.set("date_from", from);
+  if (to) params.set("date_to", to);
+  if (userId) params.set("user_id", userId);
+  if (action) params.set("action", action);
+  if (text) params.set("text", text);
+  const summary = document.getElementById("activity-summary");
+  summary.textContent = "Поиск…";
+  try {
+    const data = await api(`/activity?${params.toString()}`);
+    document.getElementById("activity-tbody").innerHTML = data.rows.map(activityRowHtml).join("");
+    summary.textContent = data.total > data.rows.length
+      ? `Найдено ${data.total}, показаны первые ${data.rows.length}`
+      : `Найдено ${data.total}`;
+    // Список действий заполняем ФАКТИЧЕСКИ встретившимися, а не хардкодом:
+    // набор действий будет расти, и забытый пункт в списке — это молча
+    // недоступный фильтр.
+    const sel = document.getElementById("activity-action");
+    if (sel.options.length <= 1) {
+      sel.innerHTML = ['<option value="">— любое —</option>']
+        .concat(data.actions.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`)).join("");
+    }
+  } catch (e) {
+    summary.textContent = "Ошибка: " + e.message;
+  }
+}
+
+document.getElementById("menu-activity").addEventListener("click", async () => {
+  activityBackdrop.classList.add("open");
+  const userSel = document.getElementById("activity-user");
+  if (userSel.options.length === 0) {
+    try {
+      const users = await api("/users");
+      userSel.innerHTML = ['<option value="">— все —</option>'].concat(
+        users.map(u => `<option value="${u.id}">${escapeHtml(u.display_name)}</option>`)).join("");
+    } catch (e) {
+      userSel.innerHTML = '<option value="">— все —</option>';
+    }
+  }
+  loadActivity();
+});
+document.getElementById("activity-close").addEventListener("click", () => activityBackdrop.classList.remove("open"));
+document.getElementById("activity-search").addEventListener("click", loadActivity);
+
+document.getElementById("activity-cleanup").addEventListener("click", async () => {
+  const before = document.getElementById("activity-cleanup-date").value;
+  if (!before) { showToast("Укажите дату, раньше которой очищать", "warning"); return; }
+  if (!confirm(`Удалить все записи журнала раньше ${formatDateRu(before)}? Действие необратимо.`)) return;
+  try {
+    const res = await api(`/activity/cleanup?before=${encodeURIComponent(before)}`, { method: "POST" });
+    showToast(`Удалено записей: ${res.deleted}`, "info");
+    loadActivity();
+  } catch (e) {
+    showToast("Не удалось очистить: " + e.message, "warning");
+  }
+});
+
 // ---------- Загрузка из папки Input (пункт меню, живой запрос 2026-07-29:
 // импорт при старте сервера убран, остаётся только явная команда) ----------
 const importInputBackdrop = document.getElementById("import-input-backdrop");
@@ -5892,6 +6219,33 @@ const EDGE_COLOR = 0x000000;
 // затемнённым статусным цветом, которого не хватало).
 const EDGE_LINE_WIDTH_PX = 2;
 
+// ---------- режим слабого компьютера (живой запрос 2026-07-29: "на слабых
+// компьютерах работа с 3Д очень медленная") ----------
+//
+// Узкое место 3D на реальном файле — НЕ объём геометрии (9422 элемента, в
+// среднем 3,6 вершины на контур — для видеокарты это пустяк), а ЧИСЛО
+// вызовов отрисовки: меш грани + отдельный объект рёбер на каждый элемент,
+// то есть ~18 800 вызовов на кадр. Их формирует процессор, и упирается
+// слабая машина именно в него.
+//
+// Режим бьёт по двум самым дорогим статьям сразу:
+//  - рёбра не создаются вовсе (см. build3DMeshForElement) — минус половина
+//    объектов сцены;
+//  - пиксельная плотность 1 вместо 1.5 — вдвое меньше пикселей на кадр
+//    (на Retina это самая заметная часть работы фрагментного шейдера).
+// Радикальное решение (слияние геометрии всех элементов одного статуса в
+// один буфер, ~14 вызовов вместо 18 800) требует переделки поэлементного
+// клика и скрытия по фильтрам — это отдельная крупная работа, см. Docs/TZ.md.
+//
+// Настройка КОМПЬЮТЕРА, а не проекта: живёт в localStorage браузера, не в
+// БД. У прорабов машины разные, общая на всех настройка была бы бессмысленной.
+const LOW_SPEC_KEY = "zhbi_low_spec";
+
+function pixelRatioForCurrentMode() {
+  const cap = state.lowSpec ? 1 : 1.5;
+  return Math.min(window.devicePixelRatio || 1, cap);
+}
+
 // Общий материал грани НА СТАТУС (не на элемент) — раньше был свой
 // экземпляр MeshStandardMaterial на КАЖДЫЙ элемент (~9400 на реальном
 // файле), той же природы проблема, что уже чинили для рёбер (см.
@@ -6005,6 +6359,14 @@ function build3DMeshForElement(element, levels, columnTopOverrides) {
   // элемент был не нужен уже тогда, когда цвет ребра стал фиксированным
   // (EDGE_COLOR), но тормозил рендер (см. init3DScene). Вендоринг
   // подтверждён пользователем явно (см. Docs/backlog.md, 2026-07-24).
+  //
+  // В режиме слабого компьютера рёбра НЕ создаются вовсе (см. state.lowSpec):
+  // это ровно половина всех объектов сцены и, соответственно, примерно
+  // половина вызовов отрисовки на кадр — на реальном файле 9422 ребра из
+  // ~18 800 объектов. Грань при этом остаётся полноценной, теряется только
+  // чёрная окантовка, то есть картинка беднее, но не искажена.
+  if (state.lowSpec) return mesh;
+
   const edgesGeometry = new THREE.EdgesGeometry(geometry);
   const lineGeometry = new LineSegmentsGeometry();
   lineGeometry.setPositions(edgesGeometry.attributes.position.array);
@@ -6945,7 +7307,7 @@ function init3DScene() {
   // элементов заметно сказывается на плавности вращения/зума (живой
   // репорт пользователя, см. Docs/backlog.md). 1.5 — компромисс: заметно
   // дешевле полного 2x, картинка всё ещё существенно чётче, чем при 1x.
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  renderer.setPixelRatio(pixelRatioForCurrentMode());
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
 
@@ -7323,6 +7685,7 @@ async function bootApp() {
   }
   await loadSourceFiles();
   await loadPlan(false); // первая загрузка — вписать схему целиком
+  startPolling();        // совместная работа: подхватывать чужие правки
 }
 
 bootApp();

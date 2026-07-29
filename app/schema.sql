@@ -320,3 +320,41 @@ INSERT OR IGNORE INTO allowed_subtypes (element_type, subtype) VALUES
     ('Панель', 'Цоколь'),
     ('Панель', 'ЛифтоваяШахта'),
     ('Панель', 'ШахтаПодъемника');
+
+-- Журнал действий пользователей и отработки команд системой (живой запрос
+-- 2026-07-29). Две разные вещи в одной таблице намеренно: серверные события
+-- ("статус изменён", "импорт выполнен") и клиентские тайминги ("нажал
+-- кнопку", "форма открылась") — чтобы одна операция читалась целиком одной
+-- выборкой по request_id, а не сшивалась из двух таблиц.
+--
+-- at — момент события. Для серверных событий это время СЕРВЕРА; для
+-- клиентских — тоже серверное время приёма пачки, а собственная длительность
+-- операции приходит отдельным полем duration_ms, измеренным монотонным
+-- таймером браузера. Часы на клиентских машинах расходятся между собой на
+-- минуты, и сравнивать их абсолютные метки между компьютерами нельзя —
+-- а именно сравнение быстродействия разных машин и есть цель журнала.
+CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,                 -- 'ГГГГ-ММ-ДД ЧЧ:ММ:СС.ммм' UTC, время сервера
+    source TEXT NOT NULL,             -- 'server' | 'client'
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    user_name TEXT,                   -- снимок ФИО на момент события (переживёт переименование)
+    action TEXT NOT NULL,             -- 'status_change', 'form_open', 'import_input', ...
+    entity_type TEXT,                 -- 'element' | 'contract' | ...
+    entity_id INTEGER,
+    element_type TEXT,                -- тип/подтип/марка — снимок на момент события:
+    subtype TEXT,                     -- по ним ищут в журнале, а элемент мог измениться
+    mark TEXT,
+    old_value TEXT,
+    new_value TEXT,
+    duration_ms REAL,                 -- сколько заняло; у клиентских — по performance.now()
+    request_id TEXT,                  -- связывает клиентские и серверные события одной операции
+    details TEXT                      -- произвольный JSON, если нужны подробности
+);
+
+-- Поиск в журнале почти всегда идёт "за период", часто с сужением по
+-- пользователю или действию; очистка за период — тем же условием по at.
+CREATE INDEX IF NOT EXISTS idx_activity_at ON activity_log (at);
+CREATE INDEX IF NOT EXISTS idx_activity_user_at ON activity_log (user_id, at);
+CREATE INDEX IF NOT EXISTS idx_activity_action_at ON activity_log (action, at);
+CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log (entity_type, entity_id);
