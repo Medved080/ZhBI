@@ -281,3 +281,154 @@ def build_status_report_pdf(report: dict, subtitle: str = "") -> bytes:
     story.append(table)
     doc.build(story)
     return buf.getvalue()
+
+
+# ==================== Отчёт «Динамика монтажа и поставки» ====================
+#
+# Повторяет ежедневный отчёт, который заказчик собирал вручную (см.
+# Docs/backlog.md): шапка с карточкой объекта, три накопительные кривые,
+# две таблицы «план / факт / отклонение» и текстовые блоки.
+#
+# Что откуда берётся:
+#   План СМР      — elements.project_smr_start_date (импорт графика MS Project)
+#   План поставки — elements.planned_delivery_date
+#   Факт монтажа  — status_history, переход в «Смонтирован»
+#   Факт поставки — status_history, переход в «Доставлен»
+#
+# Кривые строятся НАКОПИТЕЛЬНО по неделям: у заказчика на графике недельная
+# сетка (27 июл, 03 авг, 10 авг …), и дневная детализация на полугодовом
+# горизонте превратила бы линию в шум.
+
+DYNAMICS_TITLE = "Динамика монтажа и поставки ТМЦ"
+
+
+def _week_start(date_str: str) -> str:
+    """Понедельник недели, в которую попадает дата. Точка кривой — неделя,
+    а не день (см. комментарий выше)."""
+    from datetime import date, timedelta
+
+    d = date.fromisoformat(date_str[:10])
+    return (d - timedelta(days=d.weekday())).isoformat()
+
+
+def _cumulative(pairs: list, weeks: list) -> list:
+    """Накопительный итог по заранее заданной сетке недель. Сетка общая для
+    всех кривых — иначе линии на графике стояли бы на разных абсциссах и
+    сравнивать их было бы нельзя."""
+    by_week: dict = {}
+    for week, n in pairs:
+        by_week[week] = by_week.get(week, 0) + n
+    out, running = [], 0
+    for w in weeks:
+        running += by_week.get(w, 0)
+        out.append(running)
+    return out
+
+
+def build_dynamics_report(conn, source_file: Optional[str], report_date: Optional[str] = None,
+                          element_ids: Optional[list] = None) -> dict:
+    from datetime import date
+
+    from app.settings import get_project_card
+
+    today = report_date or date.today().isoformat()
+
+    clauses, params = [], []
+    if source_file:
+        clauses.append("e.source_file = ?")
+        params.append(source_file)
+    if element_ids is not None:
+        if not element_ids:
+            clauses.append("1=0")
+        else:
+            clauses.append(f"e.id IN ({','.join('?' * len(element_ids))})")
+            params.extend(element_ids)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    total = conn.execute(f"SELECT COUNT(*) AS n FROM elements e {where}", params).fetchone()["n"]
+
+    plan_smr = conn.execute(
+        f"SELECT project_smr_start_date AS d, COUNT(*) AS n FROM elements e {where} "
+        f"{'AND' if where else 'WHERE'} project_smr_start_date IS NOT NULL GROUP BY d", params).fetchall()
+    plan_delivery = conn.execute(
+        f"SELECT planned_delivery_date AS d, COUNT(*) AS n FROM elements e {where} "
+        f"{'AND' if where else 'WHERE'} planned_delivery_date IS NOT NULL GROUP BY d", params).fetchall()
+
+    # Факт — по ПЕРВОМУ переходу элемента в статус: повторные записи истории
+    # (откат и возврат) не должны считаться вторым смонтированным изделием.
+    def fact_rows(status: str):
+        return conn.execute(
+            f"""
+            SELECT d, COUNT(*) AS n FROM (
+                SELECT date(MIN(sh.changed_at)) AS d
+                FROM status_history sh JOIN elements e ON e.id = sh.element_id
+                {where} {'AND' if where else 'WHERE'} sh.status = ?
+                GROUP BY sh.element_id
+            ) GROUP BY d
+            """, params + [status]).fetchall()
+
+    fact_montage = fact_rows("installed")
+    fact_delivery = fact_rows("delivered")
+
+    series_raw = {
+        "plan_smr": [(_week_start(r["d"]), r["n"]) for r in plan_smr if r["d"]],
+        "plan_delivery": [(_week_start(r["d"]), r["n"]) for r in plan_delivery if r["d"]],
+        "fact_montage": [(_week_start(r["d"]), r["n"]) for r in fact_montage if r["d"]],
+        "fact_delivery": [(_week_start(r["d"]), r["n"]) for r in fact_delivery if r["d"]],
+    }
+
+    card = get_project_card(conn)
+    weeks = sorted({w for pairs in series_raw.values() for w, _ in pairs} | {_week_start(today)})
+    # Вехи и контрольные даты тоже задают правую границу графика — иначе
+    # веха «Завершение 3 Захватки» оказалась бы за краем.
+    for extra in [card.get("montage_deadline"), card.get("delivery_deadline")] + \
+                 [m.get("date") for m in card.get("milestones", [])]:
+        if extra:
+            weeks.append(_week_start(extra))
+    weeks = sorted(set(weeks))
+
+    series = {k: _cumulative(v, weeks) for k, v in series_raw.items()}
+
+    def upto(pairs, limit_date, only_day=None):
+        if only_day:
+            return sum(n for d, n in pairs if d == only_day)
+        return sum(n for d, n in pairs if d <= limit_date)
+
+    raw_days = {
+        "plan_smr": [(r["d"][:10], r["n"]) for r in plan_smr if r["d"]],
+        "plan_delivery": [(r["d"][:10], r["n"]) for r in plan_delivery if r["d"]],
+        "fact_montage": [(r["d"][:10], r["n"]) for r in fact_montage if r["d"]],
+        "fact_delivery": [(r["d"][:10], r["n"]) for r in fact_delivery if r["d"]],
+    }
+
+    def block(plan_key, fact_key):
+        cum_plan = upto(raw_days[plan_key], today)
+        cum_fact = upto(raw_days[fact_key], today)
+        day_plan = upto(raw_days[plan_key], today, only_day=today)
+        day_fact = upto(raw_days[fact_key], today, only_day=today)
+        return {
+            "total": total,
+            "cumulative": {"plan": cum_plan, "fact": cum_fact, "deviation": cum_fact - cum_plan},
+            "day": {"plan": day_plan, "fact": day_fact, "deviation": day_fact - day_plan},
+            "percent": round(cum_fact / total * 100) if total else 0,
+        }
+
+    return {
+        "title": DYNAMICS_TITLE,
+        "report_date": today,
+        "card": card,
+        "weeks": weeks,
+        "series": series,
+        "series_labels": {"plan_smr": "План СМР", "plan_delivery": "Поставка (план)",
+                          "fact_delivery": "Поставка", "fact_montage": "Монтаж"},
+        "montage": block("plan_smr", "fact_montage"),
+        "delivery": block("plan_delivery", "fact_delivery"),
+        # Честная пометка о неполноте плана: на тестовых данных проектные
+        # даты есть не у всех изделий, и молча рисовать такую кривую как
+        # полный план нельзя (см. разбор в Docs/backlog.md).
+        "plan_coverage": {
+            "smr": sum(n for _, n in raw_days["plan_smr"]),
+            "delivery": sum(n for _, n in raw_days["plan_delivery"]),
+            "total": total,
+        },
+    }
