@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="PDF">
+  <!-- Значок выгрузки в PDF — тот же лист, красная плашка с подписью PDF.
+       Своей отрисовки, по тем же соображениям, что и excel.svg. -->
+  <path d="M6 2h13l7 7v21a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" fill="#fff" stroke="#C0392B" stroke-width="1.6"/>
+  <path d="M19 2l7 7h-7z" fill="#C0392B"/>
+  <rect x="3" y="15" width="20" height="11" rx="1.5" fill="#C0392B"/>
+  <text x="13" y="23.4" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold"
+        fill="#fff" text-anchor="middle">PDF</text>
+</svg>

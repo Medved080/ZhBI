@@ -5662,6 +5662,135 @@ function setStatusRestoreStatus(text, isError) {
   elm.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
+// ==================== ОТЧЁТЫ (живой запрос 2026-07-29) ====================
+//
+// Одна форма на все отчёты: вид выбирается кнопками сверху, тело
+// перерисовывается. Следующий отчёт добавляется записью в REPORTS и
+// функцией отрисовки — без новой модалки и без дублирования кнопок
+// «Печать / Excel / PDF».
+//
+// Данные считает СЕРВЕР (app/reports.py), хотя элементы уже лежат в
+// браузере: тот же отчёт выгружается в XLSX и PDF, и если считать его в
+// двух местах, числа на экране и в файле однажды разойдутся.
+const reportsBackdrop = document.getElementById("reports-backdrop");
+
+const REPORTS = {
+  status: {
+    title: "Статус монтажа изделий",
+    endpoint: "/reports/status",
+    render: renderTreeReport,
+  },
+};
+let currentReport = "status";
+let reportData = null;
+// Какие узлы свёрнуты. По умолчанию свёрнуто всё, кроме первой захватки —
+// так же, как в исходной сводной таблице заказчика.
+let reportCollapsed = new Set();
+
+function reportRequestBody() {
+  const body = { source_file: state.sourceFile || null };
+  if (document.getElementById("report-use-filter").checked) {
+    body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
+  }
+  return body;
+}
+
+function reportRowHtml(node, path, columns) {
+  const свёрнут = reportCollapsed.has(path);
+  const есть_дети = node.children && node.children.length;
+  const cells = columns.map(c => {
+    const v = node.values[c.key];
+    return `<td class="num">${v ? v : ""}</td>`;
+  }).join("");
+  const toggle = `<button class="report-toggle${есть_дети ? "" : " empty"}" data-path="${escapeHtml(path)}">${свёрнут ? "▸" : "▾"}</button>`;
+  return `<tr class="lvl-${node.level}">
+    <td style="padding-left:${8 + node.level * 18}px">${toggle}${escapeHtml(node.label)}</td>${cells}</tr>`;
+}
+
+function renderTreeReport(data) {
+  const columns = data.columns;
+  const parts = [`<table id="report-table"><thead><tr><th>${escapeHtml(data.root_label)}</th>` +
+    columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join("") + "</tr></thead><tbody>"];
+
+  const walk = (node, path) => {
+    parts.push(reportRowHtml(node, path, columns));
+    if (reportCollapsed.has(path)) return; // потомки свёрнутого узла не рисуем вовсе
+    for (const child of node.children || []) walk(child, `${path}/${child.label}`);
+  };
+  for (const row of data.rows) walk(row, row.label);
+
+  const t = data.total;
+  parts.push(`<tr class="total"><td>${escapeHtml(t.label)}</td>` +
+    columns.map(c => `<td class="num">${t.values[c.key] || ""}</td>`).join("") + "</tr>");
+  parts.push("</tbody></table>");
+  return parts.join("");
+}
+
+async function loadReport() {
+  const def = REPORTS[currentReport];
+  document.getElementById("report-title").textContent = def.title;
+  const statusLine = document.getElementById("report-status-line");
+  statusLine.textContent = "Построение отчёта…";
+  try {
+    reportData = await api(def.endpoint, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reportRequestBody()),
+    });
+    // Свёрнуто всё, кроме первой захватки — повторяет вид исходной сводной.
+    reportCollapsed = new Set();
+    reportData.rows.forEach((row, i) => {
+      if (i > 0) reportCollapsed.add(row.label);
+      else row.children.forEach((f, j) => { if (j > 0) reportCollapsed.add(`${row.label}/${f.label}`); });
+    });
+    document.getElementById("report-body").innerHTML = def.render(reportData);
+    statusLine.textContent = `Всего изделий: ${reportData.total.values.total}`;
+  } catch (e) {
+    document.getElementById("report-body").innerHTML = "";
+    statusLine.textContent = "Не удалось построить отчёт: " + e.message;
+  }
+}
+
+document.getElementById("report-tabs").addEventListener("click", (e) => {
+  const key = e.target.dataset.report;
+  if (!key || key === currentReport) return;
+  currentReport = key;
+  [...document.querySelectorAll(".report-tab")].forEach(b => b.classList.toggle("active", b.dataset.report === key));
+  loadReport();
+});
+
+document.getElementById("report-body").addEventListener("click", (e) => {
+  const path = e.target.dataset.path;
+  if (path === undefined) return;
+  if (reportCollapsed.has(path)) reportCollapsed.delete(path); else reportCollapsed.add(path);
+  document.getElementById("report-body").innerHTML = REPORTS[currentReport].render(reportData);
+});
+
+document.getElementById("report-use-filter").addEventListener("change", loadReport);
+document.getElementById("menu-report-status").addEventListener("click", () => {
+  currentReport = "status";
+  reportsBackdrop.classList.add("open");
+  loadReport();
+});
+document.getElementById("reports-close").addEventListener("click", () => reportsBackdrop.classList.remove("open"));
+document.getElementById("report-print").addEventListener("click", () => window.print());
+
+async function downloadReport(suffix, filename) {
+  const res = await fetch(REPORTS[currentReport].endpoint + suffix, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(reportRequestBody()),
+  });
+  if (!res.ok) { showToast("Не удалось выгрузить отчёт", "warning"); return; }
+  // Скачивание через blob, а не переходом по ссылке: запрос POST (список id
+  // может быть большим), обычной навигацией его не сделать.
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+document.getElementById("report-xlsx").addEventListener("click", () => downloadReport(".xlsx", "Статусы.xlsx"));
+document.getElementById("report-pdf").addEventListener("click", () => downloadReport(".pdf", "Статусы.pdf"));
+
 // ---------- Резервные копии БД (живой запрос 2026-07-29, после инцидента
 // с автоматической пересборкой базы — см. Docs/backlog.md) ----------
 const backupsBackdrop = document.getElementById("backups-backdrop");

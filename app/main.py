@@ -16,6 +16,8 @@ from app.auth import format_display_name, get_current_user, require_admin, requi
 from app.auth import router as auth_router
 from app.changelog import CHANGELOG
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
+from urllib.parse import quote
+
 from pydantic import BaseModel
 
 from app import activity
@@ -39,6 +41,7 @@ from app.element_dates import set_planned_delivery_date, set_planned_delivery_da
 from app.export import build_history_xlsx, build_snapshot_xlsx
 from app.history_import import HistoryImportError, import_history, parse_history_xlsx
 from app.input_import import import_input_dxf, import_input_xlsx, list_input_files
+from app.reports import build_status_report, build_status_report_pdf, build_status_report_xlsx
 from app.models import (
     SHAPES,
     STATUS_LABELS_RU,
@@ -623,6 +626,57 @@ def delete_history_entry(
         return data
     finally:
         conn.close()
+
+
+class ReportRequestIn(BaseModel):
+    source_file: Optional[str] = None
+    # Список id — необязательное сужение отчёта текущим фильтром схемы. Тот
+    # же приём, что у XLS-экспорта: критерии фильтра живут на клиенте, и
+    # дублировать их на сервере значило бы держать две расходящиеся копии.
+    element_ids: Optional[list[int]] = None
+
+
+@app.post("/reports/status")
+def report_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «Статусы» — данные для экрана. POST, а не GET: список id может
+    быть в тысячи элементов и не помещается в строку запроса."""
+    conn = get_connection()
+    try:
+        return build_status_report(conn, body.source_file, body.element_ids)
+    finally:
+        conn.close()
+
+
+@app.post("/reports/status.xlsx")
+def report_status_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = build_status_report(conn, body.source_file, body.element_ids)
+    finally:
+        conn.close()
+    content = build_status_report_xlsx(report)
+    name = "Статусы.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"report.xlsx\"; filename*=UTF-8''{quote(name)}"},
+    )
+
+
+@app.post("/reports/status.pdf")
+def report_status_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = build_status_report(conn, body.source_file, body.element_ids)
+    finally:
+        conn.close()
+    subtitle = f"Чертёж: {body.source_file}" if body.source_file else ""
+    content = build_status_report_pdf(report, subtitle)
+    name = "Статусы.pdf"
+    return Response(
+        content=content, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=\"report.pdf\"; filename*=UTF-8''{quote(name)}"},
+    )
 
 
 class BackupCreateIn(BaseModel):
@@ -1456,7 +1510,6 @@ def export_xlsx(body: ExportRequestIn, user: sqlite3.Row = Depends(get_current_u
     finally:
         conn.close()
 
-    from urllib.parse import quote
 
     headers = {
         "Content-Disposition": f"attachment; filename=\"export.xlsx\"; filename*=UTF-8''{quote(name)}"
@@ -1483,7 +1536,6 @@ def export_pdf(
     finally:
         conn.close()
 
-    from urllib.parse import quote
 
     name = f"otchet_{source_file}{'_' + date if date else ''}.pdf".replace("/", "_")
     headers = {
@@ -1604,7 +1656,6 @@ def export_settings(admin: sqlite3.Row = Depends(require_admin)):
         "label_dates_visibility": label_dates_visibility,
     }
 
-    from urllib.parse import quote
     headers = {"Content-Disposition": "attachment; filename*=UTF-8''" + quote("zhbi_settings.json")}
     return Response(
         content=json.dumps(payload, ensure_ascii=False, indent=2),

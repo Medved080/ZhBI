@@ -505,6 +505,41 @@
 
   /* Журнал действий — та же табличная раскладка, что у списка
      пользователей (не заводим третий стиль таблицы ради одной формы). */
+  /* -------- отчёты -------- */
+  .report-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .report-tabs { display: inline-flex; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
+  .report-tab { border: none; background: var(--color-surface); padding: 6px 14px; font-size: 13px; cursor: pointer; color: var(--color-text); }
+  .report-tab + .report-tab { border-left: 1px solid var(--color-border); }
+  .report-tab.active { background: var(--color-primary); color: #fff; font-weight: 600; }
+  .report-actions { display: inline-flex; gap: 6px; align-items: center; }
+  .btn-icon-square { width: 30px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .btn-icon-square img { display: block; }
+
+  #report-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #report-table th, #report-table td { padding: 5px 8px; border: 1px solid var(--color-border); }
+  #report-table th { background: var(--color-surface-2); font-weight: 600; text-align: center; position: sticky; top: 0; }
+  #report-table th:first-child { text-align: left; }
+  #report-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Уровни вложенности отличаются насыщенностью, а не только отступом:
+     иначе в длинной таблице теряется, где кончилась одна захватка. */
+  #report-table tr.lvl-0 { font-weight: 700; background: var(--color-surface-2); }
+  #report-table tr.lvl-1 { font-weight: 600; }
+  #report-table tr.total td { font-weight: 700; background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
+  .report-toggle { border: none; background: none; cursor: pointer; width: 16px; padding: 0; margin-right: 4px; color: var(--color-text-muted); }
+  .report-toggle.empty { visibility: hidden; }
+
+  /* Печать: на бумагу уходит только таблица отчёта. Без этого печатались бы
+     схема, сайдбар и затемнение модального окна. */
+  @media print {
+    body * { visibility: hidden; }
+    #reports-backdrop, #reports-backdrop * { visibility: visible; }
+    #reports-backdrop { position: absolute; inset: 0; background: #fff; display: block; }
+    #reports-backdrop .modal { box-shadow: none; max-width: none; width: auto; }
+    .report-head, .modal-sticky-foot, #report-use-filter, label.toggle { display: none !important; }
+    .modal-sticky-scroll { overflow: visible !important; max-height: none !important; }
+    #report-table th { position: static; }
+  }
+
   #backups-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   #backups-table td, #backups-table th { padding: 6px 8px; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; }
   #backups-table th { color: var(--color-text-muted); font-weight: 500; }
@@ -772,6 +807,14 @@
             <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
             <button id="menu-backups" class="admin-only">Резервные копии…</button>
             <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
+          </div>
+        </div>
+        <!-- Отчёты доступны ВСЕМ ролям: прораб смотрит сводку по своему
+             участку так же, как и руководитель. Данные только читаются. -->
+        <div class="submenu">
+          <button type="button" class="submenu-trigger">Отчёты</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="menu-report-status">Статусы</button>
           </div>
         </div>
         <div class="submenu admin-only">
@@ -1112,6 +1155,38 @@
     <div class="actions">
       <button class="btn btn-secondary" id="status-restore-cancel">Отмена</button>
       <button class="btn btn-primary" id="status-restore-submit">Восстановить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Общая форма отчётов: вид отчёта выбирается кнопками сверху, поэтому
+     следующий отчёт добавляется одной кнопкой и одной функцией отрисовки,
+     без новой модалки. -->
+<div class="modal-backdrop" id="reports-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <div class="report-head">
+        <div class="report-tabs" id="report-tabs" role="group" aria-label="Вид отчёта">
+          <button type="button" class="report-tab active" data-report="status">Статусы</button>
+        </div>
+        <span class="spacer"></span>
+        <div class="report-actions">
+          <button class="btn btn-sm btn-secondary" id="report-print" title="Печать отчёта">Печать</button>
+          <button class="btn btn-sm btn-secondary btn-icon-square" id="report-xlsx" title="Выгрузить в Excel" aria-label="Выгрузить в Excel">
+            <img src="/static/excel.svg" alt="" width="20" height="20"/>
+          </button>
+          <button class="btn btn-sm btn-secondary btn-icon-square" id="report-pdf" title="Выгрузить в PDF" aria-label="Выгрузить в PDF">
+            <img src="/static/pdf.svg" alt="" width="20" height="20"/>
+          </button>
+        </div>
+      </div>
+      <h2 id="report-title">Отчёт</h2>
+      <label class="toggle"><input type="checkbox" id="report-use-filter"/> Учитывать текущий фильтр схемы</label>
+      <div class="hint-text" id="report-status-line"></div>
+    </div>
+    <div class="modal-sticky-scroll" id="report-body"></div>
+    <div class="modal-sticky-foot">
+      <div class="actions"><button class="btn btn-secondary" id="reports-close">Закрыть</button></div>
     </div>
   </div>
 </div>
