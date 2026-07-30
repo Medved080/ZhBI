@@ -108,6 +108,27 @@ _COLUMN_MIGRATIONS = [
     ("elements", "object_id", "INTEGER REFERENCES objects(id) ON DELETE SET NULL"),
     ("elements", "element_uid", "TEXT"),
     ("elements", "is_current", "INTEGER NOT NULL DEFAULT 1"),
+    # Справочники зон (2026-07-30, этап 2 — решения З5, З7, З9, З15). Зона
+    # перестаёт быть производной от чертежа и становится записью
+    # справочника уровня Объекта; геометрия ярусов переезжает в zone_levels.
+    #
+    # number — НОМЕР зоны, целое (решение З9). Первично разбирается из имени
+    # («Стоянка 01» -> 1, ведущие нули срезаются: формат имени менялся между
+    # версиями чертежа — в 260720 «Стоянка 1», в 260723 «Стоянка 01», и по
+    # строке имени одна и та же стоянка не сопоставилась бы). Уникален:
+    # кран и захватка — в рамках объекта, стоянка — в рамках своего крана.
+    #
+    # is_current — зона присутствует в актуальном чертеже объекта. 0 =
+    # помечена неактуальной (решение З4): не удаляется, но скрывается из
+    # схемы и фильтров.
+    ("zones", "object_id", "INTEGER REFERENCES objects(id) ON DELETE SET NULL"),
+    ("zones", "number", "INTEGER"),
+    ("zones", "is_current", "INTEGER NOT NULL DEFAULT 1"),
+    # Ярус стоянки, к которому привязан элемент (решение З10). До этого ярус
+    # был закодирован в самом zone_stance_id — каждая ярусная запись была
+    # отдельной зоной; после склейки ярусов в одну запись справочника эта
+    # информация потерялась бы.
+    ("elements", "zone_stance_level_id", "INTEGER REFERENCES zone_levels(id) ON DELETE SET NULL"),
 ]
 
 
@@ -430,6 +451,220 @@ def _bootstrap_default_object(conn: sqlite3.Connection, changes: list) -> None:
     assign_missing_element_uids(conn, object_id)
 
 
+def parse_zone_number(name) -> "int | None":
+    """Номер зоны из её имени: «Стоянка 01» -> 1, «Кран 2» -> 2 (решение З9).
+
+    Ведущие нули срезаются намеренно: формат имени менялся между версиями
+    чертежа (в 260720 «Стоянка 1», в 260723 «Стоянка 01»), и если бы номер
+    хранил «01» строкой, одна и та же стоянка при переимпорте не
+    сопоставилась бы сама с собой. Берётся ПОСЛЕДНЕЕ число в строке —
+    в реальных именах номер стоит в конце, а в начале может оказаться
+    отметка или ярус.
+    """
+    if not name:
+        return None
+    import re
+
+    matches = re.findall(r"\d+", str(name))
+    return int(matches[-1]) if matches else None
+
+
+def _migrate_zones_to_catalog(conn: sqlite3.Connection, changes: list) -> None:
+    """Сворачивает ярусные записи zones в записи СПРАВОЧНИКА + zone_levels
+    (решения З5/З7/З9) и переносит на них ссылки элементов.
+
+    Маркер выполненности — непустая zone_levels: миграция одноразовая.
+
+    Что переносится: зоны АКТУАЛЬНОГО чертежа объекта. Зоны устаревших
+    версий чертежа остаются строками старой формы (с собственным
+    outline_json, object_id IS NULL, is_current=0) — то же решение И5, что и
+    для элементов: старые версии не переносим, но и не удаляем, чтобы уже
+    загруженные чертежи продолжали рисоваться. Поэтому колонка
+    zones.outline_json НЕ удаляется — она остаётся носителем геометрии для
+    этих legacy-строк, а у записей справочника пустая.
+
+    Ссылки elements.zone_*_id перевешиваются с ярусной записи на запись
+    справочника, а для стоянки дополнительно заполняется
+    zone_stance_level_id — иначе потерялось бы, к какому именно ярусу
+    привязан элемент (решение З10).
+    """
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "zone_levels" not in tables:
+        return
+    if conn.execute("SELECT 1 FROM zone_levels LIMIT 1").fetchone():
+        return
+
+    current = conn.execute(
+        "SELECT object_id, source_file FROM object_drawings WHERE is_current = 1"
+    ).fetchall()
+    if not current:
+        return
+
+    for drawing in current:
+        object_id, source_file = drawing["object_id"], drawing["source_file"]
+        rows = conn.execute(
+            "SELECT * FROM zones WHERE source_file = ? ORDER BY id", (source_file,)
+        ).fetchall()
+        if not rows:
+            continue
+
+        # Группировка ярусных записей в записи справочника. Ключ — категория
+        # + номер + родительский кран: номер стоянки уникален только внутри
+        # своего крана («Стоянка 1» есть у каждого из трёх кранов).
+        # Родитель на этом шаге — ещё СТАРЫЙ zones.id крана; на новый
+        # пересчитывается вторым проходом, когда все записи справочника уже
+        # созданы.
+        groups = {}
+        for row in rows:
+            number = parse_zone_number(row["name"])
+            key = (row["category"], number, row["name"], row["parent_zone_id"])
+            groups.setdefault(key, []).append(row)
+
+        # Старым строкам временно меняем dxf_handle: на zones висит
+        # UNIQUE (source_file, dxf_handle), а запись справочника наследует
+        # handle своего первого яруса — вставка столкнулась бы с ещё живой
+        # ярусной строкой. Удалить старые строки ЗАРАНЕЕ нельзя: на
+        # elements.zone_*_id стоит ON DELETE SET NULL, и ссылки обнулились бы
+        # до того, как мы их перевесим.
+        conn.execute(
+            "UPDATE zones SET dxf_handle = dxf_handle || ':перенос' WHERE source_file = ?",
+            (source_file,),
+        )
+
+        old_to_new, old_to_level, new_by_old_parent = {}, {}, {}
+        for (category, number, name, old_parent), level_rows in groups.items():
+            first = level_rows[0]
+            conn.execute(
+                "INSERT INTO zones (object_id, source_file, dxf_handle, category, elevation_mm, "
+                "name, outline_json, match_status, parent_match_status, number, is_current) "
+                "VALUES (?, ?, ?, ?, NULL, ?, '', ?, ?, ?, 1)",
+                (object_id, source_file, first["dxf_handle"], category, name,
+                 first["match_status"], first["parent_match_status"], number),
+            )
+            new_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+            new_by_old_parent[new_id] = old_parent
+            for level in level_rows:
+                conn.execute(
+                    "INSERT INTO zone_levels (zone_id, elevation_mm, outline_json, source_file, dxf_handle) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (new_id, level["elevation_mm"], level["outline_json"],
+                     level["source_file"], level["dxf_handle"]),
+                )
+                old_to_new[level["id"]] = new_id
+                old_to_level[level["id"]] = conn.execute(
+                    "SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+        # Родитель стоянки — на новую запись крана.
+        for new_id, old_parent in new_by_old_parent.items():
+            if old_parent is not None and old_parent in old_to_new:
+                conn.execute(
+                    "UPDATE zones SET parent_zone_id = ? WHERE id = ?",
+                    (old_to_new[old_parent], new_id),
+                )
+
+        # Ссылки элементов: на запись справочника, плюс ярус у стоянки.
+        for column in ("zone_zakhvatka_id", "zone_crane_id", "zone_stance_id"):
+            for old_id, new_id in old_to_new.items():
+                if column == "zone_stance_id":
+                    # Ярус берём из соответствия, построенного при вставке:
+                    # каждая старая ярусная строка стала ровно одной строкой
+                    # zone_levels (искать по handle было бы лишним запросом
+                    # и лишним допущением).
+                    conn.execute(
+                        f"UPDATE elements SET zone_stance_id = ?, zone_stance_level_id = ? "
+                        f"WHERE {column} = ?",
+                        (new_id, old_to_level.get(old_id), old_id),
+                    )
+                else:
+                    conn.execute(
+                        f"UPDATE elements SET {column} = ? WHERE {column} = ?", (new_id, old_id)
+                    )
+
+        # Старые ярусные строки этого чертежа больше не нужны: их геометрия
+        # уже в zone_levels, ссылки переведены.
+        placeholders = ", ".join("?" for _ in old_to_new)
+        conn.execute(f"DELETE FROM zones WHERE id IN ({placeholders})", tuple(old_to_new))
+        changes.append(
+            f"зоны чертежа {source_file} переведены в справочник: "
+            f"записей {len(groups)}, ярусов {len(old_to_new)}"
+        )
+
+    # Зоны устаревших версий чертежа — вне справочника (решение И5).
+    conn.execute(
+        "UPDATE zones SET is_current = 0 WHERE object_id IS NULL AND is_current <> 0"
+    )
+
+
+# Типы, которые физически ВЕНЧАЮТ ярус снизу и потому относятся к ярусу
+# СТРОГО ниже своей отметки. Дубль scripts/zone_binding.TIER_CAPPING_TYPES —
+# осознанный: app/db.py не должен зависеть от scripts/ (миграция обязана
+# работать в любом окружении, включая CLI без sys.path на scripts). При
+# расхождении источник истины — zone_binding, там это правило и живёт.
+_TIER_CAPPING_TYPES = {"Плита перекрытия", "Ригель"}
+
+
+def _heal_zone_stance_levels(conn: sqlite3.Connection, changes: list) -> int:
+    """Дозаполняет elements.zone_stance_level_id там, где он пуст, а стоянка
+    у элемента известна.
+
+    Зачем отдельно от _migrate_zones_to_catalog: миграция одноразовая по
+    маркеру «zone_levels не пуста», и если она отработала ПРОМЕЖУТОЧНОЙ
+    версией кода (ровно это и случилось на машине разработчика — локальный
+    `uvicorn --reload` применил миграцию к боевой БД на первом же сохранении
+    файла, ещё до того, как перенос яруса был доведён), то повторно она уже
+    не запустится и поле осталось бы пустым навсегда. Тот же принцип, что у
+    _migrate_contracts_theme: чиниться от любого частичного состояния, а не
+    только от чистого «до»/«после».
+
+    Правило выбора яруса повторяет прямой снэп из scripts/zone_binding:
+    ближайший ярус стоянки НЕ ВЫШЕ отметки элемента, а для Ригеля и Плиты
+    перекрытия — строго НИЖЕ (они венчают ярус снизу, лежат на его колоннах).
+    После первого же переимпорта чертежа или пересчёта привязки поле
+    перезапишется настоящим расчётом — здесь важно не оставить его пустым.
+
+    Идемпотентна: трогает только строки с NULL.
+    """
+    if not conn.execute("SELECT 1 FROM zone_levels LIMIT 1").fetchone():
+        return 0
+    rows = conn.execute(
+        "SELECT id, element_type, elevation_mm, zone_stance_id FROM elements "
+        "WHERE zone_stance_id IS NOT NULL AND zone_stance_level_id IS NULL"
+    ).fetchall()
+    if not rows:
+        return 0
+
+    levels_by_zone = {}
+    for level in conn.execute("SELECT id, zone_id, elevation_mm FROM zone_levels ORDER BY elevation_mm"):
+        levels_by_zone.setdefault(level["zone_id"], []).append(level)
+
+    healed = 0
+    for row in rows:
+        levels = levels_by_zone.get(row["zone_stance_id"]) or []
+        if not levels:
+            continue
+        if len(levels) == 1:
+            chosen = levels[0]
+        elif row["elevation_mm"] is None:
+            chosen = levels[0]
+        else:
+            strict = row["element_type"] in _TIER_CAPPING_TYPES
+            below = [
+                lv for lv in levels
+                if lv["elevation_mm"] is not None
+                and (lv["elevation_mm"] < row["elevation_mm"] if strict
+                     else lv["elevation_mm"] <= row["elevation_mm"])
+            ]
+            chosen = below[-1] if below else levels[0]
+        conn.execute(
+            "UPDATE elements SET zone_stance_level_id = ? WHERE id = ?", (chosen["id"], row["id"])
+        )
+        healed += 1
+
+    if healed:
+        changes.append(f"дозаполнен ярус стоянки у элементов: {healed}")
+    return healed
+
+
 def visible_elements_clause(alias: str = "") -> str:
     """Условие «элемент показывается на схеме и в отчётах».
 
@@ -465,6 +700,17 @@ def assign_missing_element_uids(conn: sqlite3.Connection, object_id: int) -> int
             "UPDATE elements SET element_uid = ? WHERE id = ?", (uuid.uuid4().hex, row["id"])
         )
     return len(rows)
+
+
+def _ensure_zone_level_index(conn: sqlite3.Connection) -> None:
+    """Уникальность яруса внутри зоны. COALESCE, а не обычный UNIQUE:
+    elevation_mm допускает NULL (захватка и кран приходят без отметки), а
+    SQLite не считает NULL=NULL — два яруса без отметки продублировались бы
+    молча. Ровно та же ловушка, что уже была в contract_lines."""
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_zone_levels_unique "
+        "ON zone_levels (zone_id, COALESCE(elevation_mm, -1000000))"
+    )
 
 
 def _ensure_contract_lines_index(conn: sqlite3.Connection) -> None:
@@ -620,6 +866,13 @@ def init_db() -> list:
         _ensure_elements_contract_line_index(conn)
         _ensure_element_uid_index(conn)
         _bootstrap_default_object(conn, changes)
+        # Строго ПОСЛЕ бутстрапа объекта: миграция зон опирается на
+        # object_drawings, чтобы понять, какой чертёж актуален.
+        _migrate_zones_to_catalog(conn, changes)
+        _ensure_zone_level_index(conn)
+        # Не часть одноразовой миграции: чинит частичное состояние, если
+        # миграция зон отработала промежуточной версией кода (см. docstring).
+        _heal_zone_stance_levels(conn, changes)
         _normalize_element_type_vocabulary(conn)
         _seed_reference_data(conn)
         conn.commit()

@@ -292,6 +292,33 @@ CREATE TABLE IF NOT EXISTS zones (
 
 CREATE INDEX IF NOT EXISTS idx_zones_source_file ON zones (source_file);
 
+-- Ярусы зоны (этап 2, 2026-07-30): произвольный набор полигонов с отметками
+-- внутри ОДНОЙ записи справочника — решение З7. Раньше «Стоянка 01» на
+-- четырёх ярусах была четырьмя строками zones, из-за чего на фронтенде
+-- появился костыль stanceLogicalKey (склейка записей в один пункт фильтра
+-- по паре «кран + имя»).
+--
+-- elevation_mm NULL — захватка и кран: на всех реальных чертежах они
+-- приходят без отметки (проверено), объём считается от 0 до верха здания.
+-- Уникальность (zone_id, elevation_mm) — отдельным COALESCE-индексом, а не
+-- констрейнтом: обычный UNIQUE в SQLite не считает NULL=NULL, и два яруса
+-- без отметки продублировались бы молча (та же ловушка, что уже была в
+-- contract_lines).
+--
+-- source_file/dxf_handle — «откуда пришёл этот полигон в последний раз».
+-- Это сведения о происхождении, а не идентичность: идентичность зоны —
+-- категория + номер (+ родительский кран у стоянки), см. решение З2.
+CREATE TABLE IF NOT EXISTS zone_levels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone_id INTEGER NOT NULL REFERENCES zones (id) ON DELETE CASCADE,
+    elevation_mm INTEGER,
+    outline_json TEXT NOT NULL,
+    source_file TEXT,
+    dxf_handle TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_zone_levels_zone ON zone_levels (zone_id);
+
 -- Цвет зоны — персонально на каждый КРАН (не общий на категорию, как
 -- раньше — см. Docs/backlog.md, item 7), его стоянки наследуют цвет
 -- родительского крана (zones.parent_zone_id) без отдельной записи здесь.

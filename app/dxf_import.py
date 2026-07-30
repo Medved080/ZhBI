@@ -26,7 +26,7 @@ import new_standard_pipeline
 import parse_zhbi
 from layer_naming import LayerNameError
 
-from app import element_sync
+from app import element_sync, zone_sync
 from app.db import get_connection, init_db
 from app.models import DxfImportResult, ZoneImportSummary
 from app.upload_limits import copy_upload_limited
@@ -227,7 +227,16 @@ def apply_drawing(
         n_numeric, n_letter = import_elements.save_axis_grid(conn, parsed.grid, parsed.source_file)
 
         if parsed.zones or parsed.new_records:
-            zone_handle_to_id = import_elements.upsert_zones(conn, parsed.zones, parsed.source_file)
+            # Зоны — в справочник (app/zone_sync), а не полным DELETE+INSERT,
+            # как раньше: на записи справочника ссылаются элементы, снести и
+            # создать заново означало бы потерять эти ссылки (этап 2).
+            zone_handle_to_id = zone_sync.sync_zones(
+                conn, object_id, parsed.source_file, parsed.zones
+            )
+            # Цвета кранов раньше назначались внутри upsert_zones — вызываем
+            # ту же функцию явно, чтобы новая цветовая схема не пропала вместе
+            # с заменой записи зон (ключ у цветов свой: source_file+имя крана).
+            import_elements._ensure_zone_colors(conn, parsed.zones, parsed.source_file)
             import_elements.apply_zone_bindings(
                 conn, parsed.source_file, parsed.new_records, zone_handle_to_id
             )

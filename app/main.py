@@ -1501,11 +1501,32 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # Зоны не фильтруются набором выбранных слоёв (item.layers) —
             # захватка/кран/стоянка не являются "слоями элементов" в том же
             # смысле, показываются целиком для каждого выбранного файла.
+            #
+            # Геометрия зоны с этапа 2 живёт в zone_levels — по одной строке
+            # на ЯРУС внутри одной записи справочника (решение З7). Здесь
+            # отдаётся по одному элементу списка на ярус, и `id` во всех
+            # ярусах одной зоны ОДИНАКОВ — это id записи справочника, тот
+            # самый, на который ссылаются elements.zone_*_id. Так фронтенд
+            # (подписи, цвет крана, склейка стоянок в один пункт фильтра)
+            # продолжает работать без переделки, а идентичность зоны стала
+            # честной: раньше «Стоянка 01» на четырёх ярусах была четырьмя
+            # разными зонами с разными id.
+            #
+            # Второй запрос — зоны УСТАРЕВШИХ версий чертежа (object_id IS
+            # NULL): они остались строками старой формы со своей геометрией
+            # в zones.outline_json и в справочник не переносились (решение
+            # И5). Без них ранее загруженные чертежи рисовались бы без зон.
             file_zones = []
             for r in conn.execute(
-                "SELECT id, category, elevation_mm, name, outline_json, match_status, "
-                "parent_zone_id, parent_match_status FROM zones WHERE source_file = ?",
-                (item.source_file,),
+                "SELECT z.id, z.category, z.name, z.number, z.match_status, z.parent_zone_id, "
+                "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
+                "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
+                "WHERE l.source_file = ? AND z.is_current = 1 "
+                "UNION ALL "
+                "SELECT id, category, name, number, match_status, parent_zone_id, "
+                "parent_match_status, NULL AS level_id, elevation_mm, outline_json "
+                "FROM zones WHERE source_file = ? AND object_id IS NULL AND outline_json <> ''",
+                (item.source_file, item.source_file),
             ).fetchall():
                 z = dict(r)
                 z["outline"] = json.loads(z.pop("outline_json"))

@@ -318,7 +318,13 @@ def apply_zone_bindings(conn, source_file, element_records, zone_handle_to_id):
     в upsert_elements, с уже посчитанным record.zone_bindings (см.
     scripts/new_standard_pipeline.process). Элементы старого конвейера
     (zone_bindings=None) просто пропускаются — их zone_*-поля остаются
-    NULL, как и было до этой функции."""
+    NULL, как и было до этой функции.
+
+    zone_handle_to_id — {handle полигона: (id записи справочника, id яруса)},
+    см. app/zone_sync.sync_zones. Привязка считается по КОНКРЕТНОМУ полигону,
+    а записать нужно и запись справочника (elements.zone_*_id), и — для
+    стоянки — ярус внутри неё (zone_stance_level_id, решение З10): после
+    склейки ярусов в одну запись справочника ярус иначе потерялся бы."""
     for record in element_records:
         if not record.zone_bindings:
             continue
@@ -331,8 +337,12 @@ def apply_zone_bindings(conn, source_file, element_records, zone_handle_to_id):
         updates = {"element_id": element_row["id"]}
         for category, result in record.zone_bindings.items():
             id_col, status_col = _ZONE_CATEGORY_COLUMNS[category]
-            updates[id_col] = zone_handle_to_id.get(result.zone_handle) if result.zone_handle else None
+            resolved = zone_handle_to_id.get(result.zone_handle) if result.zone_handle else None
+            zone_id, level_id = resolved if resolved else (None, None)
+            updates[id_col] = zone_id
             updates[status_col] = result.status
+            if category == "Стоянка":
+                updates["zone_stance_level_id"] = level_id
         set_clause = ", ".join(f"{col}=:{col}" for col in updates if col != "element_id")
         conn.execute(f"UPDATE elements SET {set_clause} WHERE id=:element_id", updates)
     conn.commit()
