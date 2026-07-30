@@ -2343,11 +2343,16 @@ function updateElementSubLabel(element, force = false) {
     if (state.stickerById.has(element.id)) {
       const key = elementStickerKey(element);
       if (!force && stickerContentKey.get(element.id) === key) {
-        // Содержимое то же — трогать DOM незачем. Видимость наклейки
-        // выставляют другие места (фильтры, updateSizesForZoom), она от
-        // содержимого не зависит.
+        // Содержимое то же — пересобирать DOM незачем, но ВИДИМОСТЬ выставить
+        // обязательно в обе стороны. Регрессия, которую здесь уже поймали:
+        // сначала выставлялось только display:"none" для выключенного типа, а
+        // обратно — нет. Раньше «обратно» получалось само собой, потому что
+        // наклейка пересобиралась заново и новый узел был видимым; с кэшем
+        // пересборки нет, и подписи, один раз скрытые, больше не появлялись.
         const sticker = state.stickerById.get(element.id);
-        if (sticker && state.labelVisibility[element.element_type] === false) sticker.style.display = "none";
+        if (sticker) {
+          sticker.style.display = state.labelVisibility[element.element_type] === false ? "none" : "";
+        }
         return;
       }
       stickerContentKey.set(element.id, key);
