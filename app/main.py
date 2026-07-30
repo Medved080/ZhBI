@@ -40,6 +40,7 @@ from app.dxf_import import DxfProcessingError, UPLOADS_DIR, import_dxf_file, pro
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
 from app.history_import import HistoryImportError, import_history, parse_history_xlsx
+from app.import_templates import build_sample, template_list
 from app.input_import import import_input_dxf, import_input_xlsx, list_input_files
 from app.reports import (
     build_dynamics_report, build_dynamics_report_pdf, build_dynamics_report_xlsx,
@@ -1667,6 +1668,25 @@ def import_schedule_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depe
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         conn.close()
+
+
+@app.get("/import-templates")
+def get_import_templates(user: sqlite3.Row = Depends(get_current_user)):
+    """Описания форматов всех загружаемых файлов — одним запросом на все
+    формы загрузки (их шесть, ходить из каждой отдельно незачем). Под
+    обычным входом, не под require_admin: сами загрузки админские, но
+    прораб может готовить файл, не имея права его загрузить."""
+    return {"templates": template_list()}
+
+
+@app.get("/import-templates/{key}/sample")
+def get_import_template_sample(key: str, user: sqlite3.Row = Depends(get_current_user)):
+    try:
+        content, filename, media_type = build_sample(key)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Неизвестный шаблон")
+    headers = {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename)}
+    return Response(content=content, media_type=media_type, headers=headers)
 
 
 @app.get("/settings/export")

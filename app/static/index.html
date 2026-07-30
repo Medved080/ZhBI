@@ -503,6 +503,47 @@
   .warning-text { color: #b8860b; font-size: 12px; margin-top: 6px; }
   .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
 
+  /* Требования к загружаемому файлу + кнопка образца — один и тот же блок
+     во всех шести формах загрузки, разметку строит JS по /import-templates
+     (см. app/import_templates.py). Свёрнут по умолчанию: подробное описание
+     формата нужно один раз при настройке выгрузки на стороне проектировщика,
+     а не каждый раз при обычной загрузке. */
+  .import-template { margin: 12px 0 4px; }
+  /* Пока требования РАЗВЁРНУТЫ, форма шире: таблица колонок при 480px
+     ужимает столбец "Формат данных" до 5-6 строк переносов на ячейку.
+     Через :has(), а не постоянной шириной — обычная загрузка (блок свёрнут)
+     остаётся такой же компактной, как была. Браузер без :has() просто
+     оставит форму узкой, читаемость сохраняется. */
+  .modal:has(.import-template details[open]) { max-width: 720px; }
+  .import-template details {
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg);
+  }
+  .import-template summary {
+    cursor: pointer; padding: 8px 10px; font-size: 12px; font-weight: 600; list-style: none;
+  }
+  .import-template summary::-webkit-details-marker { display: none; }
+  .import-template summary::before { content: "▸ "; color: var(--color-text-muted); }
+  .import-template details[open] summary::before { content: "▾ "; }
+  .import-template details[open] summary { border-bottom: 1px solid var(--color-border); }
+  .import-template .tpl-body { padding: 10px; font-size: 12px; color: var(--color-text); }
+  .import-template .tpl-body p { margin: 0 0 8px; color: var(--color-text-muted); }
+  .import-template .tpl-body h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; }
+  .import-template .tpl-body ul { margin: 4px 0 8px; padding-left: 18px; color: var(--color-text-muted); }
+  .import-template .tpl-body li { margin-bottom: 3px; }
+  /* Таблица колонок может быть шире формы (4 столбца, длинные форматы) —
+     скроллится сама внутри своей обёртки, форму по горизонтали не растягивает. */
+  .import-template .tpl-scroll { overflow-x: auto; }
+  .import-template table { border-collapse: collapse; width: 100%; font-size: 11px; }
+  .import-template th, .import-template td {
+    border: 1px solid var(--color-border); padding: 4px 6px; text-align: left; vertical-align: top;
+  }
+  .import-template th { background: var(--color-surface); font-weight: 600; white-space: nowrap; }
+  .import-template td.tpl-name { white-space: nowrap; font-weight: 600; }
+  .import-template td.tpl-example { white-space: nowrap; font-family: var(--font-mono, monospace); }
+  .import-template .tpl-optional { color: var(--color-text-muted); font-weight: 400; }
+  .import-template .tpl-sample { margin-top: 8px; }
+  .import-template .tpl-warning { margin-top: 5px; font-size: 11px; color: var(--color-text-muted); }
+
   /* Журнал действий — та же табличная раскладка, что у списка
      пользователей (не заводим третий стиль таблицы ради одной формы). */
   /* -------- отчёты -------- */
@@ -990,6 +1031,7 @@
 
     <label class="field" style="margin-top:16px">Загрузить новый чертёж (.dxf)</label>
     <input type="file" id="upload-file-input" accept=".dxf"/>
+    <div class="import-template" data-template="dxf"></div>
     <div id="upload-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="upload-cancel">Закрыть</button>
@@ -1149,6 +1191,7 @@
     <button class="btn btn-secondary" id="settings-io-export">Скачать настройки (.json)</button>
     <label class="field" style="margin-top:16px;">Загрузить настройки из файла</label>
     <input type="file" id="settings-io-file" accept=".json"/>
+    <div class="import-template" data-template="settings"></div>
     <div id="settings-io-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="settings-io-close">Закрыть</button>
@@ -1164,6 +1207,7 @@
     <div class="hint-text" id="history-import-source"></div>
     <label class="field">Файл .xlsx (лист "История статусов")</label>
     <input type="file" id="history-import-file" accept=".xlsx"/>
+    <div class="import-template" data-template="history"></div>
     <label class="radio" style="margin-top:12px;"><input type="radio" name="history-import-mode" value="merge" checked/> Дополнить (пропускать дубли: тот же статус в ту же дату)</label>
     <label class="radio"><input type="radio" name="history-import-mode" value="replace"/> Заменить (удалить текущую историю сопоставленных элементов)</label>
     <div id="history-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
@@ -1190,6 +1234,7 @@
     <div class="hint-text" id="status-restore-source"></div>
     <label class="field">Файл .xlsx (выгрузка статусов)</label>
     <input type="file" id="status-restore-file" accept=".xlsx"/>
+    <div class="import-template" data-template="history"></div>
     <div id="status-restore-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="status-restore-cancel">Отмена</button>
@@ -1383,6 +1428,9 @@
     </p>
     <div id="import-input-files"></div>
     <p class="hint-text" id="import-input-warning"></p>
+    <!-- Папка Input принимает те же .dxf и .xlsx, что и формы загрузки по
+         одному файлу, поэтому здесь перечислены все четыре шаблона сразу. -->
+    <div class="import-template" data-template="dxf,contracting,schedule,history"></div>
     <div id="import-input-report"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="import-input-cancel">Отмена</button>
@@ -1411,6 +1459,7 @@
     <p class="hint-text">Создаёт/находит Контрагентов, Договоры, Спецификации и Контракты с позициями по файлу.</p>
     <label class="field">Файл .xlsx (лист "Контрактация")</label>
     <input type="file" id="contracting-import-file" accept=".xlsx"/>
+    <div class="import-template" data-template="contracting"></div>
     <div id="contracting-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="contracting-import-cancel">Отмена</button>
@@ -1425,6 +1474,7 @@
     <p class="hint-text">Заполняет дату завершения СМР и начало СМР элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип.</p>
     <label class="field">Файл .xlsx (лист графика)</label>
     <input type="file" id="schedule-import-file" accept=".xlsx"/>
+    <div class="import-template" data-template="schedule"></div>
     <div id="schedule-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="schedule-import-cancel">Отмена</button>

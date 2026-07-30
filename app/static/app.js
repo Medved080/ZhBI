@@ -8280,6 +8280,113 @@ document.addEventListener("pointermove", (e) => {
 });
 
 // ==================== СТАРТ ====================
+// ---------- Требования к загружаемым файлам + образцы ----------
+// Один и тот же свёрнутый блок во всех формах загрузки. Разметку строит
+// этот код по описаниям с сервера (/import-templates, см.
+// app/import_templates.py) — так описание формата лежит рядом с кодом,
+// который этот формат ПРОВЕРЯЕТ, и не разъезжается с ним (ровно на этом
+// расхождении все 671 строка графика МС Project ушли в "пропущено", см.
+// Docs/backlog.md, 2026-07-30).
+//
+// Место вставки — <div class="import-template" data-template="ключ">
+// (через запятую, если форма принимает несколько разных файлов — так
+// сделано у загрузки из папки Input).
+
+function renderTemplateColumns(columns) {
+  const rows = columns.map(c => `
+    <tr>
+      <td class="tpl-name">${escapeHtml(c.name)}${c.required ? "" : '<br><span class="tpl-optional">необязательна</span>'}</td>
+      <td>${escapeHtml(c.format)}</td>
+      <td class="tpl-example">${escapeHtml(c.example)}</td>
+    </tr>`).join("");
+  return `
+    <h4>Колонки (заголовки — в первой строке)</h4>
+    <div class="tpl-scroll">
+      <table>
+        <thead><tr><th>Колонка</th><th>Формат данных</th><th>Пример</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderTemplateSections(sections) {
+  return sections.map(s => `
+    <h4>${escapeHtml(s.title)}</h4>
+    <ul>${s.lines.map(l => `<li>${escapeHtml(l)}</li>`).join("")}</ul>`).join("");
+}
+
+function renderTemplateBlock(tpl) {
+  const parts = [];
+  parts.push(tpl.intro.map(p => `<p>${escapeHtml(p)}</p>`).join(""));
+  if (tpl.sheet) parts.push(`<p><b>Лист:</b> ${escapeHtml(tpl.sheet)}</p>`);
+  if (tpl.columns && tpl.columns.length) parts.push(renderTemplateColumns(tpl.columns));
+  if (tpl.sections && tpl.sections.length) parts.push(renderTemplateSections(tpl.sections));
+  if (tpl.notes && tpl.notes.length) {
+    parts.push(`<h4>Важно</h4><ul>${tpl.notes.map(n => `<li>${escapeHtml(n)}</li>`).join("")}</ul>`);
+  }
+  return `
+    <details>
+      <summary>Требования к файлу: ${escapeHtml(tpl.title)} (${escapeHtml(tpl.file_ext)})</summary>
+      <div class="tpl-body">${parts.join("")}</div>
+    </details>
+    <div class="tpl-sample">
+      <button class="btn btn-secondary" data-template-sample="${escapeHtml(tpl.key)}">
+        Скачать образец ${escapeHtml(tpl.file_ext)} (5 строк)
+      </button>
+      <div class="tpl-warning">
+        В образце — демонстрационные данные на реальных значениях справочников.
+        Он нужен как шаблон для заполнения; загружать сам образец в рабочую базу не следует.
+      </div>
+    </div>`;
+}
+
+async function downloadTemplateSample(key, button) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Готовится…";
+  try {
+    const res = await fetch(`/import-templates/${encodeURIComponent(key)}/sample`);
+    if (!res.ok) throw new Error(`Ошибка ${res.status}`);
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = match ? decodeURIComponent(match[1]) : `obrazec_${key}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    showToast("Не удалось скачать образец: " + e.message, "warning");
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+async function initImportTemplates() {
+  const holders = document.querySelectorAll(".import-template[data-template]");
+  if (!holders.length) return;
+  let byKey;
+  try {
+    const data = await api("/import-templates");
+    byKey = new Map(data.templates.map(t => [t.key, t]));
+  } catch (e) {
+    return; // блок просто останется пустым, формы загрузки работают как раньше
+  }
+  holders.forEach(holder => {
+    const keys = holder.dataset.template.split(",").map(s => s.trim()).filter(Boolean);
+    holder.innerHTML = keys.map(k => (byKey.has(k) ? renderTemplateBlock(byKey.get(k)) : "")).join("");
+  });
+  // Один делегированный обработчик на документ, а не по одному на кнопку:
+  // блоков шесть, кнопок в них девять, и все они перерисовываются целиком.
+  document.addEventListener("click", (e) => {
+    const button = e.target.closest("[data-template-sample]");
+    if (button) downloadTemplateSample(button.dataset.templateSample, button);
+  });
+}
+
 async function bootApp() {
   const ok = await checkAuth();
   if (!ok) return;
@@ -8291,6 +8398,7 @@ async function bootApp() {
     // умолчанию (0), пока настройка недоступна (напр. только что
     // развёрнутый сервер)
   }
+  initImportTemplates();  // без await — формы загрузки открываются не сразу
   await loadSourceFiles();
   await loadPlan(false); // первая загрузка — вписать схему целиком
   startPolling();        // совместная работа: подхватывать чужие правки
