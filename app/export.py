@@ -4,6 +4,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 from app.contracts import build_document_label
+from app.db import visible_elements_clause
 from app.models import STATUS_LABELS_RU
 
 ELEMENT_COLUMNS = [
@@ -159,7 +160,7 @@ def build_snapshot_xlsx(conn, source_file, date, element_ids=None):
     )
     ws.append(header)
 
-    clauses = []
+    clauses = [visible_elements_clause()]
     params = []
     if source_file:
         clauses.append("source_file = ?")
@@ -168,7 +169,7 @@ def build_snapshot_xlsx(conn, source_file, date, element_ids=None):
     if ids_clause:
         clauses.append(ids_clause)
         params.extend(ids_params)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    where = f"WHERE {' AND '.join(clauses)}"
     elements = conn.execute(f"SELECT * FROM elements {where} ORDER BY id", params).fetchall()
 
     for el in elements:
@@ -238,6 +239,12 @@ def build_history_xlsx(conn, source_file, date_from, date_to, element_ids=None):
     if ids_clause:
         clauses.append(ids_clause)
         params.extend(ids_params)
+    # ОСОЗНАННОЕ отличие от снимка "Статус на дату" выше: тут
+    # visible_elements_clause НЕ применяется. Выгрузка истории — архив
+    # произошедшего и средство переноса прогресса на другой сервер; элемент,
+    # исчезнувший из актуального чертежа (is_current=0), свою историю
+    # сохраняет, и молча выбросить её из архива хуже, чем показать строку по
+    # элементу, которого на схеме уже нет.
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
     rows = conn.execute(

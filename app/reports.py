@@ -16,6 +16,7 @@
 
 from typing import Optional
 
+from app.db import visible_elements_clause
 from app.models import STATUS_LABELS_RU, STATUS_ORDER, Status
 
 TITLE = "Статус монтажа изделий"
@@ -46,7 +47,7 @@ def build_status_report(conn, source_file: Optional[str], element_ids: Optional[
     """element_ids — необязательное сужение до конкретных элементов (тот же
     приём, что у XLS-экспорта: фильтры живут на клиенте, сервер получает
     готовый список id, а не пересчитывает их сам)."""
-    clauses, params = [], []
+    clauses, params = [visible_elements_clause("e")], []
     if source_file:
         clauses.append("e.source_file = ?")
         params.append(source_file)
@@ -56,7 +57,7 @@ def build_status_report(conn, source_file: Optional[str], element_ids: Optional[
         else:
             clauses.append(f"e.id IN ({','.join('?' * len(element_ids))})")
             params.extend(element_ids)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    where = f"WHERE {' AND '.join(clauses)}"
 
     rows = conn.execute(
         f"""
@@ -337,7 +338,7 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
 
     today = report_date or date.today().isoformat()
 
-    clauses, params = [], []
+    clauses, params = [visible_elements_clause("e")], []
     if source_file:
         clauses.append("e.source_file = ?")
         params.append(source_file)
@@ -347,7 +348,7 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
         else:
             clauses.append(f"e.id IN ({','.join('?' * len(element_ids))})")
             params.extend(element_ids)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    where = f"WHERE {' AND '.join(clauses)}"
 
     total = conn.execute(f"SELECT COUNT(*) AS n FROM elements e {where}", params).fetchone()["n"]
 

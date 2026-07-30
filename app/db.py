@@ -1,7 +1,16 @@
+import os
 import sqlite3
+import uuid
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "zhbi.db"
+# ZHBI_DB_PATH — путь к базе. По умолчанию data/zhbi.db рядом с кодом (так
+# было всегда, и на этом держится bind-mount в Docker: см.
+# docker-compose.yml, том на /app/data). Переменная нужна для запуска
+# сервиса на ИЗОЛИРОВАННОЙ копии данных: методология проекта — проверять
+# правки живым браузером на копии реальной БД, а не на боевой, и раньше для
+# этого приходилось копировать дерево кода целиком (Path(__file__).resolve()
+# идёт по симлинкам и всё равно приводил к настоящей базе).
+DB_PATH = Path(os.environ.get("ZHBI_DB_PATH") or Path(__file__).resolve().parent.parent / "data" / "zhbi.db")
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 
@@ -77,6 +86,28 @@ _COLUMN_MIGRATIONS = [
     # типу элемента. NOT NULL DEFAULT 1 — сохраняет прежнее поведение
     # (допстрока показывалась всегда) для уже накопленных БД.
     ("label_visibility", "dates_visible", "INTEGER NOT NULL DEFAULT 1"),
+    # Объект и сквозная идентичность элемента (2026-07-30, этап 1, решения
+    # О1/И1 — см. Docs/backlog.md, запись "Задача… объекты системы").
+    #
+    # object_id — к какому объекту относится элемент. NULL у элементов
+    # УСТАРЕВШИХ версий чертежа: по решению И5 старые версии в объект не
+    # переносятся, но и не удаляются (в БД накопились 260713…260722), они
+    # просто остаются вне новой модели.
+    #
+    # element_uid — стабильный ВНЕШНИЙ ключ элемента, живущий дольше любого
+    # чертежа. Внутри БД идентичность несёт elements.id (история, контракты
+    # и даты ссылаются на него, и переимпорт теперь ОБНОВЛЯЕТ строку, а не
+    # создаёт новую), а uid нужен наружу: в выгрузку XLS и обратный импорт,
+    # где сопоставление по (source_file, dxf_handle) ломается ровно тогда,
+    # когда заказчик перерисовал чертёж (замеры — в той же записи backlog:
+    # дважды из шести переходов handle обнулялись полностью).
+    #
+    # is_current — элемент присутствует в АКТУАЛЬНОМ чертеже объекта. 0 =
+    # исчез из чертежа (решение И2, п.3): строка, история и статусы
+    # сохраняются, но на схеме и в фильтрах элемента больше нет.
+    ("elements", "object_id", "INTEGER REFERENCES objects(id) ON DELETE SET NULL"),
+    ("elements", "element_uid", "TEXT"),
+    ("elements", "is_current", "INTEGER NOT NULL DEFAULT 1"),
 ]
 
 
@@ -295,6 +326,145 @@ def _migrate_contracts_theme(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE contracts ADD COLUMN theme TEXT")
 
 
+def _migrate_elements_drop_batch_id(conn: sqlite3.Connection) -> None:
+    """Снимает колонку elements.batch_id — остаток убранных "Партий"
+    ("Контрактация 2.0", 2026-07-28): таблицу batches тогда удалили, а
+    колонку с внешним ключом на неё оставили.
+
+    Это НЕ уборка мусора, а исправление поломки: с PRAGMA foreign_keys = ON
+    (его включает get_connection) SQLite разрешает цель внешнего ключа в
+    момент ЗАПИСИ, поэтому схема проходила init_db() молча, а любая вставка
+    в elements падала на "no such table: main.batches" — то есть загрузка
+    любого чертежа была невозможна (см. Docs/backlog.md, 2026-07-30).
+
+    ALTER TABLE ... DROP COLUMN, а НЕ приём rename->create->drop: проверено
+    эмпирически (см. запись backlog), DROP COLUMN убирает и колонку, и её
+    висячий FK, при этом НЕ переименовывает таблицу elements — значит
+    внешние ключи ДРУГИХ таблиц на elements (status_history.element_id и
+    др.) не могут быть молча переписаны на временное имя. Именно на таком
+    переименовании проект однажды потерял FK навсегда
+    (_migrate_contracts_hierarchy, "Второй раунд" в backlog), поэтому здесь
+    выбран путь, где этого класса ошибки просто нет. Требует SQLite 3.35+
+    (в образе python:3.12-slim — 3.40+, локально 3.51).
+
+    commit перед PRAGMA foreign_keys = OFF — обязателен: посреди уже
+    открытой транзакции PRAGMA молча не срабатывает (документированное
+    поведение SQLite), и ровно это когда-то испортило схему. Здесь колонка
+    не индексирована и данных в ней нет (проверено на боевой БД: 39545
+    строк, 0 непустых batch_id), так что перенос данных не нужен.
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(elements)")}
+    if "batch_id" not in cols:
+        return
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("ALTER TABLE elements DROP COLUMN batch_id")
+
+
+def _ensure_element_uid_index(conn: sqlite3.Connection) -> None:
+    """Уникальность element_uid — частичным индексом (WHERE ... NOT NULL):
+    uid есть только у элементов, привязанных к объекту, а обычный UNIQUE в
+    SQLite не считает NULL=NULL, так что NULL-строки индексу не помешали бы
+    и без условия — но с ним индекс ещё и не хранит их вовсе (элементов
+    устаревших версий чертежа в БД больше, чем актуальных).
+
+    Создаётся здесь, а не в schema.sql, по той же причине, что и соседние
+    индексы: колонка добавляется миграцией (_COLUMN_MIGRATIONS), а
+    executescript отрабатывает РАНЬШЕ миграций — на ещё не мигрированной
+    БД CREATE INDEX упал бы."""
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_elements_uid "
+        "ON elements (element_uid) WHERE element_uid IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_elements_object ON elements (object_id, is_current)"
+    )
+
+
+def _bootstrap_default_object(conn: sqlite3.Connection) -> None:
+    """Заводит первый Объект на уже накопленной БД и привязывает к нему
+    АКТУАЛЬНЫЙ чертёж. Идемпотентно: срабатывает только когда таблица
+    objects пуста, а элементы уже есть — то есть ровно один раз, при
+    обновлении существующей установки.
+
+    Актуальным считается чертёж с самым большим elements.id — то есть
+    загруженный последним. Не по имени файла: имена вида "260723_..."
+    сортируются по дате только пока заказчик не сменит схему именования, а
+    порядок загрузки известен точно.
+
+    Старые версии чертежа (в накопленной БД это 260713…260722) остаются с
+    object_id IS NULL и is_current=0 — решение И5 ("актуален только
+    последний"). Ничего не удаляется: строки, статусы и история на месте,
+    просто эти элементы вне новой модели. Удалять их — отдельное осознанное
+    действие пользователя, не побочный эффект обновления версии.
+    """
+    if conn.execute("SELECT 1 FROM objects LIMIT 1").fetchone():
+        return
+    latest = conn.execute(
+        "SELECT source_file, MAX(id) AS last_id FROM elements "
+        "GROUP BY source_file ORDER BY last_id DESC LIMIT 1"
+    ).fetchone()
+    if latest is None:
+        return  # пустая БД — объект появится при первом импорте
+
+    source_file = latest["source_file"]
+    conn.execute(
+        "INSERT INTO objects (name, description) VALUES (?, ?)",
+        ("Объект 1", "Заведён автоматически при переходе на модель объектов; переименуйте в «Действия → Объекты»."),
+    )
+    object_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+    conn.execute(
+        "INSERT INTO object_drawings (object_id, source_file, is_current) VALUES (?, ?, 1)",
+        (object_id, source_file),
+    )
+    conn.execute(
+        "UPDATE elements SET object_id = ?, is_current = 1 WHERE source_file = ?",
+        (object_id, source_file),
+    )
+    conn.execute(
+        "UPDATE elements SET is_current = 0 WHERE source_file <> ?", (source_file,)
+    )
+    assign_missing_element_uids(conn, object_id)
+
+
+def visible_elements_clause(alias: str = "") -> str:
+    """Условие «элемент показывается на схеме и в отчётах».
+
+    Элемент, исчезнувший из актуального чертежа объекта (is_current=0),
+    сохраняет строку, статус, историю, контракт и даты — но со схемы уходит
+    (решение И2, п.3). Без этого условия он остался бы виден: исчезнувшая
+    строка сохраняет source_file того чертежа, где её видели последний раз,
+    а это ровно тот файл, который сейчас открыт.
+
+    `object_id IS NULL` — элементы УСТАРЕВШИХ версий чертежа, не перенесённые
+    в объект (решение И5). Им is_current=0 выставлен бутстрапом, и без этой
+    половины условия старые чертежи в списке рисовались бы пустыми — то есть
+    выглядели бы как поломка, хотя данные на месте.
+
+    Одна функция вместо повторения условия строками: мест чтения элементов по
+    чертежу восемь, и разъехавшееся условие видимости — ровно тот класс
+    расхождений, который потом ловится только живым репортом."""
+    prefix = f"{alias}." if alias else ""
+    return f"({prefix}is_current = 1 OR {prefix}object_id IS NULL)"
+
+
+def assign_missing_element_uids(conn: sqlite3.Connection, object_id: int) -> int:
+    """Выдаёт element_uid всем элементам объекта, у которых его ещё нет.
+    Отдельная функция (не внутренность бутстрапа) — тем же вызовом
+    пользуется импорт: новые элементы получают uid при вставке, но
+    восстановление после ручных правок БД или частично выполненной миграции
+    должно уметь дозаполнить пропуски."""
+    rows = conn.execute(
+        "SELECT id FROM elements WHERE object_id = ? AND element_uid IS NULL", (object_id,)
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "UPDATE elements SET element_uid = ? WHERE id = ?", (uuid.uuid4().hex, row["id"])
+        )
+    return len(rows)
+
+
 def _ensure_contract_lines_index(conn: sqlite3.Connection) -> None:
     """Создаётся отдельно от schema.sql, а не CREATE INDEX IF NOT EXISTS
     прямо в скрипте — на существующей БД, ещё не прошедшей
@@ -432,8 +602,13 @@ def init_db() -> None:
         _migrate_contracts_structure(conn)
         _migrate_contracts_hierarchy(conn)
         _migrate_contracts_theme(conn)
+        # Строго ПОСЛЕ миграций контрактов: _migrate_contracts_hierarchy на
+        # старой БД ещё обнуляет batch_id, пока колонка существует.
+        _migrate_elements_drop_batch_id(conn)
         _ensure_contract_lines_index(conn)
         _ensure_elements_contract_line_index(conn)
+        _ensure_element_uid_index(conn)
+        _bootstrap_default_object(conn)
         _normalize_element_type_vocabulary(conn)
         _seed_reference_data(conn)
         conn.commit()

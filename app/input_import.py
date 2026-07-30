@@ -53,7 +53,20 @@ def import_input_dxf() -> list:
     for path in paths:
         try:
             result = process_upload(path, path.name)
-            say(f"Input/{path.name}: {result.total} элементов ({result.inserted} новых, {result.updated} обновлено)")
+            # Итоги СВЕРКИ здесь важны так же, как числа вставок: этот путь
+            # неинтерактивный (решение З3 — обновляем существующие записи без
+            # вопросов), поэтому единственное место, где пользователь увидит
+            # исчезнувшие элементы и смену марок, — этот отчёт.
+            extra = []
+            if result.retired:
+                extra.append(f"исчезло {result.retired}")
+            if result.matched_by_geometry:
+                extra.append(f"сопоставлено по геометрии {result.matched_by_geometry}")
+            tail = f", {', '.join(extra)}" if extra else ""
+            say(
+                f"Input/{path.name}: {result.total} элементов "
+                f"({result.inserted} новых, {result.updated} обновлено{tail})"
+            )
         except DxfProcessingError as e:
             # Один битый/не подходящий файл не должен блокировать импорт
             # остальных — см. Docs/backlog.md.

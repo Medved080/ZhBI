@@ -244,6 +244,34 @@ CREATE TABLE IF NOT EXISTS element_shapes (
     PRIMARY KEY (layer, element_type)
 );
 
+-- Объект (здание/стройплощадка) — уровень, к которому привязана идентичность
+-- элементов и (этап 2) справочники зон. Введён 2026-07-30, см.
+-- Docs/backlog.md, запись "Задача… объекты системы", решения О1/И1.
+--
+-- Зачем: до этого идентичностью элемента была пара (source_file,
+-- dxf_handle), то есть имя файла ВХОДИЛО в идентичность — новая версия
+-- чертежа давала полный набор новых строк со статусом "Запланирован", а
+-- старые оставались мёртвым слоем. Объект отвязывает "какой это физически
+-- элемент" от "из какого файла он пришёл в последний раз".
+CREATE TABLE IF NOT EXISTS objects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Какие чертежи относятся к объекту и какой из них актуален. is_current=1
+-- ровно у одного чертежа объекта (поддерживается кодом импорта, не
+-- констрейнтом: SQLite не умеет частичный UNIQUE в CREATE TABLE).
+CREATE TABLE IF NOT EXISTS object_drawings (
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    source_file TEXT NOT NULL,
+    is_current INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (object_id, source_file)
+);
+
 -- Зоны (захватки, зоны работы крана, стоянки крана) — см. Docs/backlog.md,
 -- "Разбор структурированных имён слоёв DWG/DXF...". Полигон — в мировых
 -- координатах чертежа, как и elements.outline_json. match_status —

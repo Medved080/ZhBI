@@ -12,7 +12,9 @@ CLI-скриптов) — открытый ezdxf-документ переисп
 
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
@@ -24,6 +26,7 @@ import new_standard_pipeline
 import parse_zhbi
 from layer_naming import LayerNameError
 
+from app import element_sync
 from app.db import get_connection, init_db
 from app.models import DxfImportResult, ZoneImportSummary
 from app.upload_limits import copy_upload_limited
@@ -66,7 +69,22 @@ def save_uploaded_file(upload_file, uploads_dir: Path = UPLOADS_DIR) -> Path:
     return dest
 
 
-def process_upload(dxf_path: Path, source_file: str) -> DxfImportResult:
+@dataclass
+class ParsedDrawing:
+    """Результат РАЗБОРА чертежа, ещё ничего не записано в БД. Отдельная
+    структура нужна двухфазному импорту (решение И3): первая фаза считает
+    сверку и отдаёт сводку, вторая — применяет; между ними разбор не
+    повторяется (на реальном файле это 9422 элемента и заметное время)."""
+    source_file: str
+    rows: list
+    new_records: list
+    zones: list
+    grid: object
+    by_mark_source: dict
+    by_axis_status: dict
+
+
+def parse_drawing(dxf_path: Path, source_file: str) -> ParsedDrawing:
     try:
         doc = ezdxf.readfile(str(dxf_path))
     except Exception:
@@ -121,43 +139,167 @@ def process_upload(dxf_path: Path, source_file: str) -> DxfImportResult:
             rows.append(import_elements.build_row(record, address))
             by_mark_source[record.source] = by_mark_source.get(record.source, 0) + 1
             by_axis_status[address["status"]] = by_axis_status.get(address["status"], 0) + 1
+    finally:
+        conn.close()
 
-        inserted, updated = import_elements.upsert_elements(conn, rows, source_file)
-        n_numeric, n_letter = import_elements.save_axis_grid(conn, grid, source_file)
+    return ParsedDrawing(
+        source_file=source_file,
+        rows=rows,
+        new_records=new_records,
+        zones=zones,
+        grid=grid,
+        by_mark_source=by_mark_source,
+        by_axis_status=by_axis_status,
+    )
 
-        zones_summary = None
-        if zones or new_records:
-            zone_handle_to_id = import_elements.upsert_zones(conn, zones, source_file)
-            import_elements.apply_zone_bindings(conn, source_file, new_records, zone_handle_to_id)
 
-            by_category = {}
-            for z in zones:
-                by_category[z.category] = by_category.get(z.category, 0) + 1
-            needs_review = sum(1 for z in zones if z.match_status != "matched")
-            bindings_needs_review = {"Захватка": 0, "Кран": 0, "Стоянка": 0}
-            for record in new_records:
-                for category, result in (record.zone_bindings or {}).items():
-                    if result.status == "needs_review":
-                        bindings_needs_review[category] += 1
-            zones_summary = ZoneImportSummary(
-                total=len(zones),
-                by_category=by_category,
-                needs_review=needs_review,
-                element_bindings_needs_review=bindings_needs_review,
+def _zones_summary(parsed: ParsedDrawing) -> Optional[ZoneImportSummary]:
+    if not parsed.zones and not parsed.new_records:
+        return None
+    by_category = {}
+    for zone in parsed.zones:
+        by_category[zone.category] = by_category.get(zone.category, 0) + 1
+    bindings_needs_review = {"Захватка": 0, "Кран": 0, "Стоянка": 0}
+    for record in parsed.new_records:
+        for category, result in (record.zone_bindings or {}).items():
+            if result.status == "needs_review":
+                bindings_needs_review[category] += 1
+    return ZoneImportSummary(
+        total=len(parsed.zones),
+        by_category=by_category,
+        needs_review=sum(1 for z in parsed.zones if z.match_status != "matched"),
+        element_bindings_needs_review=bindings_needs_review,
+    )
+
+
+def analyze_drawing(parsed: ParsedDrawing, object_id: Optional[int] = None) -> dict:
+    """Фаза 1: что изменится, если применить чертёж. Ничего не пишет.
+    Возвращает словарь для DxfAnalyzeResult + сам MatchResult (ключ
+    "match"), который фаза 2 берёт как есть."""
+    init_db()
+    conn = get_connection()
+    try:
+        resolved_object_id = element_sync.resolve_import_object(conn, object_id, parsed.source_file)
+        # resolve_import_object может СОЗДАТЬ объект на первой в жизни
+        # установке — это единственная запись фазы анализа, и без неё
+        # сверять было бы не с чем.
+        conn.commit()
+        analysis = element_sync.analyze_import(conn, resolved_object_id, parsed.rows)
+        object_row = conn.execute(
+            "SELECT name FROM objects WHERE id = ?", (resolved_object_id,)
+        ).fetchone()
+        previous = conn.execute(
+            "SELECT source_file FROM object_drawings WHERE object_id = ? AND is_current = 1",
+            (resolved_object_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    analysis["object_name"] = object_row["name"] if object_row else ""
+    analysis["previous_source_file"] = previous["source_file"] if previous else None
+    analysis["zones"] = _zones_summary(parsed)
+    analysis["axis_grid"] = {
+        "numeric": len(parsed.grid.numeric_axes), "letter": len(parsed.grid.letter_axes)
+    }
+    analysis["by_mark_source"] = parsed.by_mark_source
+    analysis["by_axis_status"] = parsed.by_axis_status
+    return analysis
+
+
+def apply_drawing(
+    parsed: ParsedDrawing,
+    analysis: dict,
+    accept_mark_changes: bool = True,
+    keep_mark_element_ids=None,
+) -> DxfImportResult:
+    """Фаза 2: применяет уже посчитанную сверку. Порядок операций тот же,
+    что был у одношагового импорта: элементы -> сетка осей -> зоны и
+    привязки (привязка опирается на только что записанные зоны)."""
+    object_id = analysis["object_id"]
+    init_db()
+    conn = get_connection()
+    try:
+        applied = element_sync.apply_import(
+            conn, object_id, parsed.source_file, parsed.rows, analysis["match"],
+            accept_mark_changes=accept_mark_changes,
+            keep_mark_element_ids=set(keep_mark_element_ids or ()),
+        )
+        n_numeric, n_letter = import_elements.save_axis_grid(conn, parsed.grid, parsed.source_file)
+
+        if parsed.zones or parsed.new_records:
+            zone_handle_to_id = import_elements.upsert_zones(conn, parsed.zones, parsed.source_file)
+            import_elements.apply_zone_bindings(
+                conn, parsed.source_file, parsed.new_records, zone_handle_to_id
             )
     finally:
         conn.close()
 
+    counts = analysis["counts"]
     return DxfImportResult(
-        source_file=source_file,
-        inserted=inserted,
-        updated=updated,
-        total=inserted + updated,
-        by_mark_source=by_mark_source,
-        by_axis_status=by_axis_status,
+        source_file=parsed.source_file,
+        inserted=applied["inserted"],
+        updated=applied["updated"],
+        total=applied["total_current"],
+        by_mark_source=parsed.by_mark_source,
+        by_axis_status=parsed.by_axis_status,
         axis_grid={"numeric": n_numeric, "letter": n_letter},
-        zones=zones_summary,
+        zones=_zones_summary(parsed),
+        object_id=object_id,
+        retired=applied["retired"],
+        matched_by_handle=counts.get("matched_by_handle", 0),
+        matched_by_geometry=counts.get("matched_by_geometry", 0),
+        marks_kept=applied["marks_kept"],
     )
+
+
+# Разобранные, но ещё не применённые чертежи — между фазами анализа и
+# применения (решение И3). Держим в памяти процесса, а не в БД: это
+# промежуточное состояние одного пользователя, живущее минуты, и записывать
+# его в боевую базу ради этого незачем. Повторный разбор на фазе применения
+# был бы честнее по отношению к перезапуску сервера, но стоит целого
+# прохода по файлу на 9422 элемента.
+#
+# Ограничение по числу записей, а не по времени: пользователь либо применяет
+# сводку сразу, либо уходит — таймер сложнее и ничего не добавляет. Если
+# сервер перезапустится между фазами, токен пропадёт и фаза применения
+# вернёт понятную ошибку (см. get_pending) вместо тихого сбоя.
+_PENDING_IMPORTS = {}
+_PENDING_LIMIT = 3
+
+
+def remember_pending(parsed: ParsedDrawing, analysis: dict) -> str:
+    import uuid
+
+    token = uuid.uuid4().hex
+    _PENDING_IMPORTS[token] = (parsed, analysis)
+    while len(_PENDING_IMPORTS) > _PENDING_LIMIT:
+        _PENDING_IMPORTS.pop(next(iter(_PENDING_IMPORTS)))
+    return token
+
+
+def get_pending(token: str):
+    pending = _PENDING_IMPORTS.get(token)
+    if pending is None:
+        raise DxfProcessingError(
+            410,
+            "Результат разбора чертежа уже недоступен (сервер перезапускался "
+            "или разбор устарел). Загрузите файл заново.",
+        )
+    return pending
+
+
+def forget_pending(token: str) -> None:
+    _PENDING_IMPORTS.pop(token, None)
+
+
+def process_upload(dxf_path: Path, source_file: str, object_id: Optional[int] = None) -> DxfImportResult:
+    """Одношаговый импорт с решениями по умолчанию — путь для НЕинтерактивных
+    вызовов (scripts/rebuild_db.py, загрузка из Input/, решение З3: смены
+    марок принимаются, но сводка печатается, а не проглатывается молча)."""
+    parsed = parse_drawing(dxf_path, source_file)
+    analysis = analyze_drawing(parsed, object_id)
+    print(f"[import] {source_file}: {element_sync.summary_for_log(analysis['counts'])}")
+    return apply_drawing(parsed, analysis)
 
 
 def import_dxf_file(upload_file, source_file_override, uploads_dir: Path = UPLOADS_DIR) -> DxfImportResult:

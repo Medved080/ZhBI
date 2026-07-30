@@ -4677,6 +4677,65 @@ async function renderSubtypesModal() {
   }
 }
 
+// ==================== СПРАВОЧНИК ОБЪЕКТОВ ====================
+// Объект — то, к чему привязана идентичность элементов (см. Docs/TZ.md).
+// Форма минимальная: показать, чем объект сейчас описан (актуальный чертёж,
+// сколько элементов актуальны и сколько исчезли из чертежа), и дать
+// переименовать — автоматически заведённый объект называется "Объект 1".
+const objectsBackdrop = document.getElementById("objects-backdrop");
+
+async function renderObjectsModal() {
+  const box = document.getElementById("objects-rows");
+  const statusBox = document.getElementById("objects-status");
+  statusBox.textContent = "";
+  const objects = await api("/objects");
+  if (!objects.length) {
+    box.innerHTML = `<p class="hint-text">Объектов пока нет — объект появится при первой загрузке чертежа.</p>`;
+    return;
+  }
+  box.innerHTML = objects.map(o => `
+    <div style="padding:10px 0; border-bottom:1px solid var(--color-border)">
+      <div class="subtype-add-row">
+        <input type="text" data-object-id="${o.id}" class="object-name" value="${escapeHtml(o.name)}"/>
+        ${(state.currentUser && state.currentUser.role === "admin") ? `<button class="btn btn-sm btn-secondary" data-save-object="${o.id}">Сохранить</button>` : ""}
+      </div>
+      <div class="hint-text" style="margin-top:6px">
+        Актуальный чертёж: ${escapeHtml(o.current_source_file || "—")}.
+        Элементов: ${o.elements_current}${o.elements_retired ? `, исчезли из чертежа: ${o.elements_retired}` : ""}.
+        ${o.drawings.length > 1 ? `Загружалось версий: ${o.drawings.length}.` : ""}
+      </div>
+    </div>`).join("");
+
+  box.querySelectorAll("[data-save-object]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-save-object");
+      const input = box.querySelector(`input.object-name[data-object-id="${id}"]`);
+      try {
+        await api(`/objects/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: input.value }),
+        });
+        // Перерисовка ПЕРЕД сообщением, а не после: renderObjectsModal
+        // первым делом очищает эту же строку состояния, и в обратном порядке
+        // подтверждение гасло бы сразу после появления.
+        await renderObjectsModal();
+        statusBox.style.color = "var(--color-text-muted)";
+        statusBox.textContent = "Сохранено.";
+      } catch (e) {
+        statusBox.style.color = "var(--color-danger)";
+        statusBox.textContent = e.message || "Не удалось сохранить";
+      }
+    });
+  });
+}
+
+document.getElementById("menu-objects").addEventListener("click", async () => {
+  objectsBackdrop.classList.add("open");
+  await renderObjectsModal();
+});
+document.getElementById("objects-close").addEventListener("click", () => objectsBackdrop.classList.remove("open"));
+
 document.getElementById("menu-subtypes").addEventListener("click", async () => {
   subtypesBackdrop.classList.add("open");
   await renderSubtypesModal();
@@ -6585,44 +6644,199 @@ uploadSubmit.addEventListener("click", async () => {
 
   uploadSubmit.disabled = true;
   uploadFileInput.disabled = true;
-  setUploadStatus("Обработка чертежа… это может занять до минуты для больших файлов.", false);
+  setUploadStatus("Разбор чертежа… это может занять до минуты для больших файлов.", false);
 
   const formData = new FormData();
   formData.append("file", file);
 
   try {
-    const res = await fetch("/import-dxf", { method: "POST", body: formData });
+    // Фаза 1 — только разбор и сверка, в БД ничего не пишется (решение И3).
+    // Применение — после того, как пользователь увидел, что изменится.
+    const res = await fetch("/import-dxf/analyze", { method: "POST", body: formData });
     const body = await res.json().catch(() => null);
 
     if (!res.ok) {
       const detail = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
       setUploadStatus(detail, true);
-      uploadSubmit.disabled = false;
-      uploadFileInput.disabled = false;
+      return;
+    }
+
+    setUploadStatus("Разбор готов — проверьте сводку изменений.", false);
+    openImportReview(body);
+  } catch (e) {
+    setUploadStatus("Не удалось связаться с сервером: " + e.message, true);
+  } finally {
+    uploadSubmit.disabled = false;
+    uploadFileInput.disabled = false;
+  }
+});
+
+// ==================== СВОДКА РАСХОЖДЕНИЙ ИМПОРТА (решение И3) ====================
+// Почему сводка, а не просто "готово, N элементов": переимпорт теперь
+// ОБНОВЛЯЕТ существующие элементы вместе с их статусами и историей, а не
+// создаёт новый набор строк. Значит у него появились последствия, которые
+// пользователь обязан увидеть заранее: смену марки (она привязана к позиции
+// контракта) и исчезновение элементов, по которым уже есть работа.
+
+const importReviewBackdrop = document.getElementById("import-review-backdrop");
+const importReviewBody = document.getElementById("import-review-body");
+const importReviewHead = document.getElementById("import-review-head");
+const importReviewStatus = document.getElementById("import-review-status");
+const importReviewApply = document.getElementById("import-review-apply");
+let pendingImport = null;
+
+function importCountLine(label, value, danger) {
+  if (!value) return "";
+  const color = danger ? "var(--color-danger)" : "inherit";
+  return `<div style="color:${color}"><b>${value}</b> — ${escapeHtml(label)}</div>`;
+}
+
+// Расхождения показываются человеческими названиями полей, а не именами
+// столбцов БД: сводку читает прораб, а не разработчик.
+const IMPORT_FIELD_LABELS = {
+  mark: "Марка", element_type: "Тип", subtype: "Подтип",
+  elevation_mm: "Отметка", floor: "Этаж",
+};
+
+// Статус в сводке — русской подписью, как везде в интерфейсе. Подписи
+// приходят с сервера вместе с планом (state.statusLabels), но сводка может
+// открыться до первой загрузки плана — тогда честнее показать код, чем
+// пустоту.
+function importStatusLabel(status) {
+  return (state.statusLabels && state.statusLabels[status]) || status;
+}
+
+function importChangesText(changes) {
+  return Object.entries(changes).map(([field, pair]) => {
+    const label = IMPORT_FIELD_LABELS[field] || field;
+    const was = pair[0] === null || pair[0] === undefined ? "—" : pair[0];
+    const now = pair[1] === null || pair[1] === undefined ? "—" : pair[1];
+    return `${escapeHtml(label)}: ${escapeHtml(String(was))} → ${escapeHtml(String(now))}`;
+  }).join("; ");
+}
+
+function importDetailSection(title, rows, total, limit, renderRow) {
+  if (!total) return "";
+  const shown = rows.length;
+  const cut = total > shown
+    ? `<div class="hint-text">Показаны первые ${shown} из ${total}.</div>` : "";
+  return `<details style="margin-top:10px">
+    <summary><b>${escapeHtml(title)}: ${total}</b></summary>
+    ${cut}
+    <div style="max-height:none; font-size:12px; margin-top:6px">
+      ${rows.map(renderRow).join("")}
+    </div>
+  </details>`;
+}
+
+function openImportReview(analysis) {
+  pendingImport = analysis;
+  const c = analysis.counts || {};
+  const prev = analysis.previous_source_file;
+  importReviewHead.innerHTML =
+    `Объект: <b>${escapeHtml(analysis.object_name || "—")}</b>. ` +
+    `Новый чертёж: <b>${escapeHtml(analysis.source_file)}</b>` +
+    (prev ? `, прежний: ${escapeHtml(prev)}` : ", прежнего чертежа не было") + ".";
+
+  const conflicts = c.mark_change_contract_conflicts || 0;
+  importReviewBody.innerHTML =
+    `<div style="margin-bottom:8px">
+       ${importCountLine("сопоставлено по handle (тот же элемент чертежа)", c.matched_by_handle)}
+       ${importCountLine("сопоставлено по геометрии (элемент перерисован)", c.matched_by_geometry)}
+       ${importCountLine("новых элементов", c.new)}
+       ${importCountLine("исчезло из чертежа (статусы и история сохранятся)", c.retired, c.retired_with_progress > 0)}
+       ${importCountLine("из них с начатой работой (не «Запланирован»)", c.retired_with_progress, true)}
+       ${importCountLine("сменилась марка", c.mark_changed, conflicts > 0)}
+       ${importCountLine("из них перестают соответствовать позиции своего контракта", conflicts, true)}
+       ${importCountLine("изменились другие реквизиты (отметка, подтип, этаж)", (c.attribute_changed || 0) - (c.mark_changed || 0))}
+     </div>` +
+    (c.mark_changed ? `<label style="display:flex; gap:8px; align-items:center; margin:10px 0">
+        <input type="checkbox" id="import-accept-marks" checked/>
+        <span>Принять смену марок из чертежа. Если снять — марки останутся прежними,
+        остальная геометрия обновится в любом случае.</span>
+      </label>` : "") +
+    importDetailSection("Смена марки", analysis.details.mark_changes, c.mark_changed, analysis.detail_limit,
+      r => `<div>${escapeHtml(r.element_type)} ${importChangesText(r.changes)}
+             ${r.contract_conflict ? '<span style="color:var(--color-danger)">— не соответствует позиции контракта</span>' : ""}
+             ${r.current_status !== "planned" ? `<span class="hint-text">(статус: ${escapeHtml(importStatusLabel(r.current_status))})</span>` : ""}</div>`) +
+    importDetailSection("Исчезли из чертежа", analysis.details.retired, c.retired, analysis.detail_limit,
+      r => `<div>${escapeHtml(r.element_type)} ${escapeHtml(r.mark || "без марки")}
+             <span class="hint-text">(handle ${escapeHtml(r.dxf_handle)}, статус ${escapeHtml(importStatusLabel(r.current_status))})</span></div>`) +
+    importDetailSection("Новые элементы", analysis.details.new, c.new, analysis.detail_limit,
+      r => `<div>${escapeHtml(r.element_type)} ${escapeHtml(r.mark || "без марки")}
+             <span class="hint-text">(отм. ${r.elevation_mm === null ? "—" : escapeHtml(String(r.elevation_mm))})</span></div>`) +
+    importDetailSection("Изменились реквизиты", analysis.details.attribute_changes,
+      (c.attribute_changed || 0) - (c.mark_changed || 0), analysis.detail_limit,
+      r => `<div>${escapeHtml(r.element_type)} ${importChangesText(r.changes)}</div>`);
+
+  importReviewStatus.textContent = "";
+  importReviewApply.disabled = false;
+  importReviewBackdrop.classList.add("open");
+}
+
+document.getElementById("import-review-cancel").addEventListener("click", () => {
+  // Токен на сервере просто перестанет использоваться и вытеснится
+  // следующими разборами — в БД по нему ничего не записано.
+  pendingImport = null;
+  importReviewBackdrop.classList.remove("open");
+  setUploadStatus("Импорт отменён — данные не изменены.", false);
+});
+
+importReviewApply.addEventListener("click", async () => {
+  if (!pendingImport) return;
+  const acceptBox = document.getElementById("import-accept-marks");
+  importReviewApply.disabled = true;
+  importReviewStatus.textContent = "Применение…";
+  try {
+    const res = await fetch("/import-dxf/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: pendingImport.token,
+        accept_mark_changes: acceptBox ? acceptBox.checked : true,
+        keep_mark_element_ids: [],
+      }),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      importReviewStatus.textContent = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
+      importReviewStatus.style.color = "var(--color-danger)";
+      importReviewApply.disabled = false;
       return;
     }
 
     const marks = Object.entries(body.by_mark_source).map(([k, v]) => `${k}: ${v}`).join(", ");
     const axes = Object.entries(body.by_axis_status).map(([k, v]) => `${k}: ${v}`).join(", ");
     setUploadStatus(
-      `Готово: ${body.total} элементов (новых: ${body.inserted}, обновлено: ${body.updated}). ` +
+      `Готово: ${body.total} элементов (новых: ${body.inserted}, обновлено: ${body.updated}` +
+      (body.retired ? `, исчезло: ${body.retired}` : "") +
+      (body.marks_kept ? `, оставлено прежних марок: ${body.marks_kept}` : "") + "). " +
       `Марки — ${marks}. Адресация — ${axes}. Оси: ${body.axis_grid.numeric} числовых, ${body.axis_grid.letter} буквенных.`,
       false
     );
 
-    layersCache.delete(body.source_file);
+    importReviewBackdrop.classList.remove("open");
+    pendingImport = null;
+
+    // Здесь раньше стоял layersCache.delete(body.source_file) — ссылка на
+    // кэш, которого в коде нет ВООБЩЕ (проверено по всей истории файла:
+    // единственное упоминание было это). После успешной загрузки чертежа
+    // обработчик падал на ReferenceError, и пользователь вместо обновлённой
+    // схемы получал "Не удалось связаться с сервером: layersCache is not
+    // defined" — то есть выглядело это как сбой сети на ровном месте. Баг
+    // достался по наследству и найден живым браузером при проверке этой
+    // правки; см. Docs/backlog.md 2026-07-30.
     await loadSourceFiles();
     state.selection = new Map([[body.source_file, null]]);
     state.sourceFile = body.source_file;
     updateFileSelectSummary();
-    await loadPlan(false); // новый/другой чертёж — координаты другие, старый масштаб бессмысленен
+    await loadPlan(false); // новый чертёж — координаты другие, старый масштаб бессмысленен
 
     setTimeout(() => uploadBackdrop.classList.remove("open"), 1200);
   } catch (e) {
-    setUploadStatus("Не удалось связаться с сервером: " + e.message, true);
-  } finally {
-    uploadSubmit.disabled = false;
-    uploadFileInput.disabled = false;
+    importReviewStatus.textContent = "Не удалось связаться с сервером: " + e.message;
+    importReviewStatus.style.color = "var(--color-danger)";
+    importReviewApply.disabled = false;
   }
 });
 

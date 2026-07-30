@@ -201,6 +201,21 @@ class ElementShapeIn(BaseModel):
 ZHBI_ELEMENT_TYPES = ("Колонна", "Ригель", "Плита", "Панель", "Плита перекрытия")
 
 
+class ObjectOut(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    current_source_file: Optional[str] = None
+    drawings: list[str] = []
+    elements_current: int = 0
+    elements_retired: int = 0
+
+
+class ObjectPatchIn(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
 class AllowedSubtypeIn(BaseModel):
     element_type: str
     subtype: str
@@ -228,3 +243,36 @@ class DxfImportResult(BaseModel):
     by_axis_status: dict[str, int]
     axis_grid: dict[str, int]
     zones: Optional[ZoneImportSummary] = None
+    # Итоги сверки с прежней версией чертежа (см. app/element_sync.py). None
+    # у путей импорта, которые сверку не делают — таких сейчас нет, но поле
+    # необязательное, чтобы старые клиенты не падали на его отсутствии.
+    object_id: Optional[int] = None
+    retired: int = 0
+    matched_by_handle: int = 0
+    matched_by_geometry: int = 0
+    marks_kept: int = 0
+
+
+class DxfAnalyzeResult(BaseModel):
+    """Первая фаза импорта (решение И3): что ИЗМЕНИТСЯ, если применить этот
+    чертёж. Ни одной записи в БД к моменту ответа не сделано."""
+    token: str
+    source_file: str
+    object_id: int
+    object_name: str
+    previous_source_file: Optional[str] = None
+    counts: dict[str, int]
+    details: dict[str, list[dict]]
+    detail_limit: int
+    zones: Optional[ZoneImportSummary] = None
+    axis_grid: dict[str, int]
+    by_mark_source: dict[str, int]
+    by_axis_status: dict[str, int]
+
+
+class DxfApplyIn(BaseModel):
+    token: str
+    # Решение по смене марки (И4): по умолчанию принимаем, но пользователь
+    # может оставить прежние марки — либо все разом, либо перечислением.
+    accept_mark_changes: bool = True
+    keep_mark_element_ids: list[int] = []

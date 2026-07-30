@@ -35,8 +35,13 @@ from app.contracts import (
 )
 from app.contracts import router as contracts_router
 from app.counterparties import router as counterparties_router
-from app.db import DB_PATH, get_connection, init_db
-from app.dxf_import import DxfProcessingError, UPLOADS_DIR, import_dxf_file, process_upload
+from app.db import DB_PATH, get_connection, init_db, visible_elements_clause
+from app.dxf_import import (
+    DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, forget_pending,
+    get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
+    save_uploaded_file,
+)
+from app.element_sync import summary_for_log
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
 from app.history_import import HistoryImportError, import_history, parse_history_xlsx
@@ -61,6 +66,8 @@ from app.models import (
     ElementShapeIn,
     ExportRequestIn,
     Status,
+    DxfAnalyzeResult,
+    DxfApplyIn,
     DxfImportResult,
     ElementDetailOut,
     ElementOut,
@@ -70,6 +77,8 @@ from app.models import (
     StatusUpdateIn,
     StatusUpdateResult,
     ZoneColorIn,
+    ObjectOut,
+    ObjectPatchIn,
 )
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
@@ -294,14 +303,17 @@ def _warn_users_without_password() -> None:
 # стоит УБРАТЬ, не оставлять постоянным механизмом: тихая пересборка БД
 # при любой будущей (в т.ч. никак не связанной) ошибке миграции — риск
 # потерять реальные данные без участия человека.
-# Внешние ключи, целевой таблицы которых нет, но которые ЗАВЕДОМО
-# безобидны — остатки удалённых возможностей. Колонка осталась в elements
-# (SQLite до 3.35 не умел DROP COLUMN, да и данных в ней нет), ссылка
-# указывает в пустоту, но ни одна операция её не использует.
 #
-# elements.batch_id -> batches: "Партии" убраны целиком в "Контрактации 2.0"
-# (2026-07-28), таблица batches удалена, колонка осталась.
-_KNOWN_HARMLESS_DANGLING_FKS = {("elements", "batch_id", "batches")}
+# Список ЗАВЕДОМО безобидных висячих внешних ключей. Сейчас пуст, и это
+# осознанно: единственная запись, которая тут была
+# (elements.batch_id -> batches, остаток убранных "Партий"), оказалась НЕ
+# безобидной — с PRAGMA foreign_keys = ON на ней падала любая вставка в
+# elements, то есть загрузка любого чертежа (см. Docs/backlog.md,
+# 2026-07-30). Колонка снята миграцией _migrate_elements_drop_batch_id
+# (app/db.py). Вывод на будущее: "ни одна операция её не использует" —
+# утверждение, которое надо проверять записью, а не рассуждением; висячий
+# FK безобиден только пока в таблицу никто не пишет.
+_KNOWN_HARMLESS_DANGLING_FKS = set()
 
 
 def _probe_schema_health() -> list:
@@ -441,7 +453,7 @@ def list_elements(
 ):
     conn = get_connection()
     try:
-        clauses, params = [], []
+        clauses, params = [visible_elements_clause()], []
         if status:
             clauses.append("current_status = ?")
             params.append(status)
@@ -455,7 +467,7 @@ def list_elements(
             clauses.append("mark LIKE ?")
             params.append(f"%{mark}%")
 
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        where = f"WHERE {' AND '.join(clauses)}"
         rows = conn.execute(
             f"SELECT * FROM elements {where} ORDER BY id LIMIT ? OFFSET ?",
             (*params, limit, offset),
@@ -1000,7 +1012,8 @@ def get_changes(
         rows = conn.execute(
             "SELECT id, current_status, contract_id, planned_delivery_date, "
             "actual_delivery_date, project_delivery_date, project_smr_start_date, updated_at "
-            "FROM elements WHERE source_file = ? AND updated_at >= ? ORDER BY updated_at",
+            f"FROM elements WHERE source_file = ? AND updated_at >= ? "
+            f"AND {visible_elements_clause()} ORDER BY updated_at",
             (source_file, since),
         ).fetchall()
         return {
@@ -1051,8 +1064,11 @@ def status_summary(
 ):
     conn = get_connection()
     try:
-        where = "WHERE source_file = ?" if source_file else ""
-        params = (source_file,) if source_file else ()
+        where = f"WHERE {visible_elements_clause()}"
+        params = ()
+        if source_file:
+            where += " AND source_file = ?"
+            params = (source_file,)
         rows = conn.execute(
             f"SELECT current_status, COUNT(*) as n FROM elements {where} GROUP BY current_status",
             params,
@@ -1068,15 +1084,29 @@ def status_summary(
 
 @app.get("/source-files")
 def list_source_files(user: sqlite3.Row = Depends(get_current_user)):
-    """Только файлы, реально присутствующие в Input/ прямо сейчас (см.
-    INPUT_DIR выше) — сканируется на каждый запрос (дёшево, файлов мало),
-    чтобы файл, убранный из Input/ без перезапуска сервера, тоже сразу
-    переставал предлагаться."""
+    """Файлы, реально присутствующие в Input/ прямо сейчас (см. INPUT_DIR
+    выше) — сканируется на каждый запрос (дёшево, файлов мало), чтобы файл,
+    убранный из Input/ без перезапуска сервера, тоже сразу переставал
+    предлагаться.
+
+    ПЛЮС актуальные чертежи объектов, где бы их файл ни лежал. Без этого
+    чертёж, загруженный через интерфейс, не попадал в список вообще: загрузка
+    кладёт файл в uploads/, а не в Input/, поэтому сразу после успешного
+    импорта схема оказывалась пустой. Раньше это не было видно — обработчик
+    загрузки падал раньше, чем доходил до обновления списка (см.
+    Docs/backlog.md 2026-07-30, найдено живой проверкой). Актуальный чертёж
+    объекта — то, что система считает единственно верным описанием объекта,
+    и скрывать его из-за расположения файла неправильно."""
     allowed = _input_dir_filenames()
     conn = get_connection()
+    allowed |= {
+        r["source_file"]
+        for r in conn.execute("SELECT source_file FROM object_drawings WHERE is_current = 1")
+    }
     try:
         rows = conn.execute(
-            "SELECT source_file, COUNT(*) as n FROM elements GROUP BY source_file ORDER BY source_file"
+            f"SELECT source_file, COUNT(*) as n FROM elements "
+            f"WHERE {visible_elements_clause()} GROUP BY source_file ORDER BY source_file"
         ).fetchall()
         return [{"source_file": r["source_file"], "count": r["n"]} for r in rows if r["source_file"] in allowed]
     finally:
@@ -1250,6 +1280,70 @@ def set_zone_colors(items: list[ZoneColorIn], user: sqlite3.Row = Depends(requir
     return {"status": "ok"}
 
 
+@app.get("/objects", response_model=list[ObjectOut])
+def list_objects(user: sqlite3.Row = Depends(get_current_user)):
+    """Объекты со счётчиками элементов. Доступно всем ролям (только чтение) —
+    как и остальные справочники-просмотры."""
+    conn = get_connection()
+    try:
+        result = []
+        for row in conn.execute("SELECT * FROM objects ORDER BY id"):
+            drawings = conn.execute(
+                "SELECT source_file, is_current FROM object_drawings "
+                "WHERE object_id = ? ORDER BY imported_at",
+                (row["id"],),
+            ).fetchall()
+            counts = conn.execute(
+                "SELECT SUM(is_current = 1) AS cur, SUM(is_current = 0) AS gone "
+                "FROM elements WHERE object_id = ?",
+                (row["id"],),
+            ).fetchone()
+            current = next((d["source_file"] for d in drawings if d["is_current"]), None)
+            result.append(ObjectOut(
+                id=row["id"], name=row["name"], description=row["description"],
+                current_source_file=current,
+                drawings=[d["source_file"] for d in drawings],
+                elements_current=counts["cur"] or 0,
+                elements_retired=counts["gone"] or 0,
+            ))
+        return result
+    finally:
+        conn.close()
+
+
+@app.patch("/objects/{object_id}", response_model=ObjectOut)
+def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depends(require_admin)):
+    """Переименование объекта. Создание и удаление намеренно НЕ поддержаны:
+    объект появляется сам при первом импорте чертежа, а удаление отвязало бы
+    все элементы с их историей — операция, которую пользователь отдельно
+    признал ненужной."""
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Наименование объекта не может быть пустым")
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
+        clash = conn.execute(
+            "SELECT 1 FROM objects WHERE name = ? AND id <> ?", (name, object_id)
+        ).fetchone()
+        if clash:
+            raise HTTPException(status_code=409, detail="Объект с таким наименованием уже есть")
+        old = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()["name"]
+        conn.execute(
+            "UPDATE objects SET name = ?, description = ?, updated_at = datetime('now') WHERE id = ?",
+            (name, body.description, object_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log(
+        "object_rename", user=admin, entity_type="object", entity_id=object_id,
+        old_value=old, new_value=name,
+    )
+    return next(o for o in list_objects(admin) if o.id == object_id)
+
+
 @app.get("/allowed-subtypes")
 def get_allowed_subtypes(user: sqlite3.Row = Depends(get_current_user)):
     """Справочник допустимых подтипов по новому стандарту имён слоёв (см.
@@ -1320,7 +1414,8 @@ def list_layers(source_file: str = Query(...), user: sqlite3.Row = Depends(get_c
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT layer, COUNT(*) as n FROM elements WHERE source_file = ? GROUP BY layer ORDER BY layer",
+            f"SELECT layer, COUNT(*) as n FROM elements WHERE source_file = ? "
+            f"AND {visible_elements_clause()} GROUP BY layer ORDER BY layer",
             (source_file,),
         ).fetchall()
         return [{"layer": r["layer"], "count": r["n"]} for r in rows]
@@ -1352,12 +1447,13 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # None, из-за чего "снять все галочки" молча показывало ВСЕ
             # элементы вместо ни одного (см. Docs/backlog.md).
             if item.layers is None:
-                q = "SELECT * FROM elements WHERE source_file = ? ORDER BY id"
+                q = f"SELECT * FROM elements WHERE source_file = ? AND {visible_elements_clause()} ORDER BY id"
                 params = (item.source_file,)
                 rows = conn.execute(q, params).fetchall()
             elif item.layers:
                 placeholders = ",".join("?" * len(item.layers))
-                q = f"SELECT * FROM elements WHERE source_file = ? AND layer IN ({placeholders}) ORDER BY id"
+                q = (f"SELECT * FROM elements WHERE source_file = ? AND layer IN ({placeholders}) "
+                     f"AND {visible_elements_clause()} ORDER BY id")
                 params = (item.source_file, *item.layers)
                 rows = conn.execute(q, params).fetchall()
             else:
@@ -1608,6 +1704,74 @@ def import_dxf(
         return import_dxf_file(file, source_file, UPLOADS_DIR)
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@app.post("/import-dxf/analyze", response_model=DxfAnalyzeResult)
+def analyze_dxf(
+    file: UploadFile = File(...),
+    source_file: Optional[str] = Form(None),
+    user: sqlite3.Row = Depends(require_admin),
+):
+    """Фаза 1 импорта (решение И3): что изменится, если применить чертёж.
+    В БД к моменту ответа ничего не записано, кроме заведения самого
+    Объекта на первой в жизни установке — сверять иначе было бы не с чем."""
+    try:
+        saved_path = save_uploaded_file(file, UPLOADS_DIR)
+        name = source_file or saved_path.name
+        parsed = parse_drawing(saved_path, name)
+        analysis = analyze_drawing(parsed)
+        token = remember_pending(parsed, analysis)
+    except DxfProcessingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return DxfAnalyzeResult(
+        token=token,
+        source_file=name,
+        object_id=analysis["object_id"],
+        object_name=analysis["object_name"],
+        previous_source_file=analysis["previous_source_file"],
+        counts=analysis["counts"],
+        details=analysis["details"],
+        detail_limit=analysis["detail_limit"],
+        zones=analysis["zones"],
+        axis_grid=analysis["axis_grid"],
+        by_mark_source=analysis["by_mark_source"],
+        by_axis_status=analysis["by_axis_status"],
+    )
+
+
+@app.post("/import-dxf/apply", response_model=DxfImportResult)
+def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(require_admin)):
+    """Фаза 2: применяет уже показанную пользователю сводку."""
+    try:
+        parsed, analysis = get_pending(body.token)
+        result = apply_drawing(
+            parsed, analysis,
+            accept_mark_changes=body.accept_mark_changes,
+            keep_mark_element_ids=body.keep_mark_element_ids,
+        )
+    except DxfProcessingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    forget_pending(body.token)
+
+    counts = analysis["counts"]
+    activity.log(
+        "import_dxf",
+        user=user,
+        entity_type="object",
+        entity_id=result.object_id,
+        old_value=analysis["previous_source_file"],
+        new_value=result.source_file,
+        details={
+            "summary": summary_for_log(counts),
+            "counts": counts,
+            "accept_mark_changes": body.accept_mark_changes,
+            "marks_kept": result.marks_kept,
+        },
+    )
+    return result
 
 
 @app.post("/import-history-xlsx")

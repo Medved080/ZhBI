@@ -858,6 +858,7 @@
           <div class="dropdown-menu submenu-panel">
             <!-- Слово "Справочник" из названий убрано: под заголовком
                  "Справочники" оно повторялось дважды в каждой строке. -->
+            <button id="menu-objects">Объекты</button>
             <button id="menu-subtypes">Подтипы</button>
             <button id="menu-mark-prefixes">Префиксы марок</button>
             <button id="menu-counterparties">Контрагенты</button>
@@ -1040,6 +1041,33 @@
   </div>
 </div>
 
+<!-- Сводка расхождений перед применением чертежа (решение И3, см.
+     Docs/backlog.md 2026-07-30). Отдельная форма поверх формы "Чертежи":
+     разбор уже сделан, но в БД ещё ничего не записано — пользователь видит,
+     ЧТО изменится, и только потом подтверждает. Разделы разворачиваются
+     построчно (<details>), потому что интересны обычно единицы строк из
+     тысяч: у сводки заголовок с числом, у разворота — сами строки.
+     modal-sticky — шапка и подвал не уезжают при прокрутке длинного
+     списка, тот же приём, что у формы массовой смены статуса. -->
+<div class="modal-backdrop" id="import-review-backdrop">
+  <div class="modal modal-sticky" style="max-width:820px">
+    <div class="modal-sticky-head">
+      <h2>Сверка с прежней версией чертежа</h2>
+      <div class="hint-text" id="import-review-head"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="import-review-body"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="import-review-status" style="font-size:12px; color:var(--color-text-muted);"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="import-review-cancel">Отменить импорт</button>
+        <button class="btn btn-primary" id="import-review-apply">Применить чертёж</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="settings-backdrop">
   <div class="modal">
     <h2>Цвет по статусу</h2>
@@ -1047,6 +1075,23 @@
     <div class="actions">
       <button class="btn btn-secondary" id="settings-cancel">Отмена</button>
       <button class="btn btn-primary" id="settings-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Объекты (здание/стройплощадка) — уровень, к которому привязана
+     идентичность элементов, см. Docs/TZ.md. Пока справочник только
+     показывает и позволяет переименовать: создание объектов вручную не
+     требуется (объект появляется при первом импорте чертежа), удаление —
+     тоже (решение З16/Э-аналог: необратимо и затрагивает все элементы). -->
+<div class="modal-backdrop" id="objects-backdrop">
+  <div class="modal">
+    <h2>Объекты</h2>
+    <p class="hint-text">Объект — здание или стройплощадка. Элементы принадлежат объекту, а не файлу чертежа: новая версия чертежа обновляет их, сохраняя статусы и историю.</p>
+    <div id="objects-rows"></div>
+    <div id="objects-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="objects-close">Закрыть</button>
     </div>
   </div>
 </div>
