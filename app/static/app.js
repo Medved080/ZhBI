@@ -17,6 +17,17 @@ const MAX_LABEL_FONT_PX = 24; // предел размера шрифта под
 // переведённый в мировые единицы под текущий pxPerUnit (см.
 // Docs/backlog.md, 2026-07-22).
 const MIN_LABEL_FONT_PX = 14;
+// Наклейка марки задана в МИРОВЫХ миллиметрах и масштабируется вместе с
+// элементом — в отличие от обычной подписи, у которой экранный кегль
+// удерживается в диапазоне. На общем виде чертежа кегль наклейки — доли
+// пикселя: читать нечего, а браузер честно раскладывает и рисует каждую из
+// тысяч. Ниже этого порога наклейки скрываются — это и скорость, и
+// читаемость (замер: включение подписей у 6056 плит занимало секунды, и
+// стоимость была именно в раскладке/отрисовке скрытых до того узлов).
+const MIN_STICKER_FONT_PX = 6;
+// Мировой кегль наклейки по элементу — считается при построении, чтобы на
+// каждом тике зума не пересчитывать раскладку заново.
+const stickerFontById = new Map();
 const MAX_AXIS_FONT_PX = 13; // предел размера шрифта подписи оси на экране (п.1 второго раунда)
 const MAX_ZONE_FONT_PX = 20; // предел размера шрифта названия зоны на экране — та же логика, что у MAX_LABEL_FONT_PX/MAX_AXIS_FONT_PX (см. Docs/backlog.md)
 const WORKDATE_KEY = "zhbi_workdate";
@@ -2187,7 +2198,11 @@ function buildOrRebuildSticker(labelGroup, element) {
   const old = state.stickerById.get(element.id);
   if (old) old.remove();
   const layout = computeStickerLayout(element);
-  if (!layout) { state.stickerById.delete(element.id); return null; }
+  if (!layout) {
+    state.stickerById.delete(element.id);
+    stickerFontById.delete(element.id);
+    return null;
+  }
 
   const group = el("g", {
     class: "mark-sticker",
@@ -2230,6 +2245,7 @@ function buildOrRebuildSticker(labelGroup, element) {
 
   labelGroup.appendChild(group);
   state.stickerById.set(element.id, group);
+  stickerFontById.set(element.id, layout.fontSize);
   return group;
 }
 
@@ -2337,6 +2353,21 @@ function elementStickerKey(element) {
   ].join("\u0001");
 }
 
+// Видимость наклейки — ОДНО место: выключенный тип или слишком мелкий на
+// экране кегль. Раньше display выставляли из нескольких мест по-разному, и
+// на этом уже была регрессия (подписи не возвращались после повторного
+// включения).
+function applyStickerVisibility(element, sticker) {
+  const node = sticker || state.stickerById.get(element.id);
+  if (!node) return;
+  const worldFont = stickerFontById.get(element.id);
+  const pxPerUnit = state.stickerPxPerUnit || 0;
+  const tooSmall = worldFont && pxPerUnit ? worldFont * pxPerUnit < MIN_STICKER_FONT_PX : false;
+  const hidden = state.labelVisibility[element.element_type] === false || tooSmall;
+  const value = hidden ? "none" : "";
+  if (node.style.display !== value) node.style.display = value;
+}
+
 function updateElementSubLabel(element, force = false) {
   const labelGroup = state.labelGroupById.get(element.id);
   if (labelGroup) {
@@ -2349,10 +2380,7 @@ function updateElementSubLabel(element, force = false) {
         // обратно — нет. Раньше «обратно» получалось само собой, потому что
         // наклейка пересобиралась заново и новый узел был видимым; с кэшем
         // пересборки нет, и подписи, один раз скрытые, больше не появлялись.
-        const sticker = state.stickerById.get(element.id);
-        if (sticker) {
-          sticker.style.display = state.labelVisibility[element.element_type] === false ? "none" : "";
-        }
+        applyStickerVisibility(element);
         return;
       }
       stickerContentKey.set(element.id, key);
@@ -2362,7 +2390,7 @@ function updateElementSubLabel(element, force = false) {
       // цвет допстроки все зависят от одного и того же пересчёта), проще
       // пересобрать целиком — узлов немного (rect + 1-2 text).
       const sticker = buildOrRebuildSticker(labelGroup, element);
-      if (sticker && state.labelVisibility[element.element_type] === false) sticker.style.display = "none";
+      if (sticker) applyStickerVisibility(element, sticker);
     } else {
       const label = state.labelById.get(element.id);
       if (label && state.view) {
@@ -2811,6 +2839,8 @@ function computeEffectiveMarkerSizing() {
 function updateSizesForZoom() {
   if (!state.view) return;
   const { pxPerUnit, effectiveR, effectiveFont } = computeEffectiveMarkerSizing();
+  // Масштаб нужен applyStickerVisibility — она вызывается и вне этого цикла.
+  state.stickerPxPerUnit = pxPerUnit;
 
   for (const element of state.elements) {
     const shape = state.shapeById.get(element.id);
@@ -2822,6 +2852,10 @@ function updateSizesForZoom() {
       // от условных маркеров с экранным пределом размера.
       if (shapeName !== "outline") updateShapeGeometry(shape, shapeName, element.x, element.y, effectiveR);
     }
+
+    // Наклейка масштабируется вместе с элементом, поэтому её читаемость
+    // зависит от зума — прореживаем на каждом тике (см. MIN_STICKER_FONT_PX).
+    if (state.stickerById.has(element.id)) applyStickerVisibility(element);
 
     const label = state.labelById.get(element.id);
     if (!label) continue;
