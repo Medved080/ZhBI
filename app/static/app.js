@@ -17,17 +17,16 @@ const MAX_LABEL_FONT_PX = 24; // предел размера шрифта под
 // переведённый в мировые единицы под текущий pxPerUnit (см.
 // Docs/backlog.md, 2026-07-22).
 const MIN_LABEL_FONT_PX = 14;
-// Наклейка марки задана в МИРОВЫХ миллиметрах и масштабируется вместе с
-// элементом — в отличие от обычной подписи, у которой экранный кегль
-// удерживается в диапазоне. На общем виде чертежа кегль наклейки — доли
-// пикселя: читать нечего, а браузер честно раскладывает и рисует каждую из
-// тысяч. Ниже этого порога наклейки скрываются — это и скорость, и
-// читаемость (замер: включение подписей у 6056 плит занимало секунды, и
-// стоимость была именно в раскладке/отрисовке скрытых до того узлов).
-const MIN_STICKER_FONT_PX = 6;
-// Мировой кегль наклейки по элементу — считается при построении, чтобы на
-// каждом тике зума не пересчитывать раскладку заново.
-const stickerFontById = new Map();
+// Прореживание наклеек по экранному кеглю (MIN_STICKER_FONT_PX) было
+// добавлено и УБРАНО 2026-07-30: живая проверка пользователя не показала
+// выигрыша, а сравнение экранного размера у каждого элемента на каждом
+// тике зума само стоило времени. Причина промаха записана в
+// Docs/backlog.md — правку писали до замера того, что реально занимает
+// кадр; узкое место оказалось в другом месте (число вызовов отрисовки
+// в 3D). Видимость наклейки осталась в ОДНОМ месте
+// (applyStickerVisibility) — это часть той правки, которую стоит
+// сохранить: раньше display выставляли из нескольких мест по-разному,
+// и на этом уже была регрессия с невозвращающимися подписями.
 const MAX_AXIS_FONT_PX = 13; // предел размера шрифта подписи оси на экране (п.1 второго раунда)
 const MAX_ZONE_FONT_PX = 20; // предел размера шрифта названия зоны на экране — та же логика, что у MAX_LABEL_FONT_PX/MAX_AXIS_FONT_PX (см. Docs/backlog.md)
 const WORKDATE_KEY = "zhbi_workdate";
@@ -125,14 +124,20 @@ let state = {
     active: false,
     scene: null, camera: null, renderer: null, controls: null,
     raycaster: null, mouse: null,
-    meshById: new Map(),
+    // Вся геометрия элементов — ОДИН меш граней + ОДИН объект рёбер на всю
+    // сцену (см. build3DMergedGeometry). Было — меш на элемент, ~18,8 тысяч
+    // вызовов отрисовки на кадр; замер и обоснование в Docs/backlog.md.
+    merged: null, // {mesh, edges, faceElementIds, segmentElementIds, rangeById}
+    highlightMesh: null, // отдельный меш ВЫБРАННОГО элемента поверх слитой геометрии
+    highlightElementId: null, // чей именно — подсветка одна на сцену (см. set3DHighlight)
     zoneMeshById: new Map(), // zone.id -> THREE.Mesh (захватка/кран/стоянка)
     zoneLabelSpriteById: new Map(), // zone.id -> THREE.Sprite (подпись Кран/Стоянка в основании объёма)
     siteBaseMesh: null, // едва заметная подложка границ всего проекта — см. build3DSiteBaseMesh
     labelSpriteById: new Map(), // element.id -> THREE.Sprite (постоянная подпись марки, запасной вариант)
     markDecalById: new Map(), // element.id -> THREE.Group (наклейка марки на грани — см. build3DMarkDecal)
+    labelGroupByType: new Map(), // тип элемента -> THREE.Group, куда сложены его подписи (см. label3DContainer)
     edgeMaterial: null, // общий LineMaterial на ВСЕ рёбра силуэта — см. init3DScene
-    materialByStatus: new Map(), // статус -> общий MeshStandardMaterial всех НЕвыбранных элементов этого статуса
+    faceMaterial: null, // единственный материал ВСЕХ граней; цвет статуса — в вершинах (см. getFaceMaterial)
     highlightMaterial: null, // единственный материал ВЫБРАННОГО элемента (пересвечивается под его цвет статуса)
     animationFrameId: null, // заказанный кадр рендера по требованию (см. requestRender3D)
   },
@@ -2040,13 +2045,23 @@ function styleShape(shape, element) {
 // ("3D-режим схемы", Docs/backlog.md). Не пересобирает геометрию, только
 // материал — дёшево, можно дёргать на каждую смену статуса/выбора.
 function update3DElementAppearance(element, selected) {
-  const mesh = state.view3d.meshById.get(element.id);
-  if (!mesh) return;
-  // Материал теперь общий на статус, не свой на элемент (см.
-  // getStatusMeshMaterial) — при смене статуса/выбора элемент ПЕРЕКЛЮЧАЕТСЯ
-  // на нужный общий материал, а не перекрашивает свой собственный (иначе
-  // перекрасило бы ВСЕ элементы, делящие тот же материал).
-  mesh.material = selected ? getHighlightMeshMaterial(element.current_status) : getStatusMeshMaterial(element.current_status);
+  const v3 = state.view3d;
+  if (!v3.merged) return;
+  // Своего меша (и своего материала) у элемента больше нет — вся геометрия
+  // слита в один буфер, см. build3DMergedGeometry. Цвет статуса живёт в
+  // вершинах, поэтому меняется переписыванием диапазона; подсветка выбора
+  // (emissive) вершинным цветом не выражается — выбранный рисуется отдельным
+  // мешем поверх.
+  if (!setElementVertexColor(element.id, element.current_status)) return;
+  if (selected) {
+    set3DHighlight(element.id, element.current_status);
+  } else if (v3.highlightElementId === element.id) {
+    // Снятие выбора приходит сюда же — гасим подсветку, только если она
+    // принадлежит ИМЕННО этому элементу. Подсветка одна на сцену, и снять её
+    // на перекраске чужого элемента (массовая смена статуса, перерисовка
+    // соседа) означало бы потерять выделение на ровном месте.
+    set3DHighlight(null);
+  }
   // Рёбра — фиксированный чёрный (EDGE_COLOR), не статусный цвет — не
   // пересчитываются при смене статуса.
   requestRender3D();
@@ -2200,7 +2215,6 @@ function buildOrRebuildSticker(labelGroup, element) {
   const layout = computeStickerLayout(element);
   if (!layout) {
     state.stickerById.delete(element.id);
-    stickerFontById.delete(element.id);
     return null;
   }
 
@@ -2245,7 +2259,6 @@ function buildOrRebuildSticker(labelGroup, element) {
 
   labelGroup.appendChild(group);
   state.stickerById.set(element.id, group);
-  stickerFontById.set(element.id, layout.fontSize);
   return group;
 }
 
@@ -2353,18 +2366,15 @@ function elementStickerKey(element) {
   ].join("\u0001");
 }
 
-// Видимость наклейки — ОДНО место: выключенный тип или слишком мелкий на
-// экране кегль. Раньше display выставляли из нескольких мест по-разному, и
-// на этом уже была регрессия (подписи не возвращались после повторного
-// включения).
+// Видимость наклейки — ОДНО место: выключенный тумблер типа, и только он.
+// Раньше display выставляли из нескольких мест по-разному, и на этом уже
+// была регрессия (подписи не возвращались после повторного включения).
+// Прореживание по экранному кеглю здесь было и убрано — см. комментарий
+// у MIN_LABEL_FONT_PX.
 function applyStickerVisibility(element, sticker) {
   const node = sticker || state.stickerById.get(element.id);
   if (!node) return;
-  const worldFont = stickerFontById.get(element.id);
-  const pxPerUnit = state.stickerPxPerUnit || 0;
-  const tooSmall = worldFont && pxPerUnit ? worldFont * pxPerUnit < MIN_STICKER_FONT_PX : false;
-  const hidden = state.labelVisibility[element.element_type] === false || tooSmall;
-  const value = hidden ? "none" : "";
+  const value = state.labelVisibility[element.element_type] === false ? "none" : "";
   if (node.style.display !== value) node.style.display = value;
 }
 
@@ -2839,8 +2849,6 @@ function computeEffectiveMarkerSizing() {
 function updateSizesForZoom() {
   if (!state.view) return;
   const { pxPerUnit, effectiveR, effectiveFont } = computeEffectiveMarkerSizing();
-  // Масштаб нужен applyStickerVisibility — она вызывается и вне этого цикла.
-  state.stickerPxPerUnit = pxPerUnit;
 
   for (const element of state.elements) {
     const shape = state.shapeById.get(element.id);
@@ -2853,10 +2861,8 @@ function updateSizesForZoom() {
       if (shapeName !== "outline") updateShapeGeometry(shape, shapeName, element.x, element.y, effectiveR);
     }
 
-    // Наклейка масштабируется вместе с элементом, поэтому её читаемость
-    // зависит от зума — прореживаем на каждом тике (см. MIN_STICKER_FONT_PX).
-    if (state.stickerById.has(element.id)) applyStickerVisibility(element);
-
+    // Наклейка от зума не зависит вовсе (мировые мм, масштабируется вместе
+    // с элементом через viewBox) — на каждом тике её трогать не нужно.
     const label = state.labelById.get(element.id);
     if (!label) continue;
     const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
@@ -4659,11 +4665,11 @@ document.getElementById("settings-save").addEventListener("click", async () => {
   state.statusColors = saved;
   for (const element of state.elements) styleShape(state.shapeById.get(element.id), element);
   renderLegend();
-  // 3D-материалы теперь общие на статус, кэшированные в state.view3d.
-  // materialByStatus (см. getStatusMeshMaterial) — сами по себе не
-  // подхватят новый цвет статуса, нужно перекрасить их в месте.
-  for (const [status, material] of state.view3d.materialByStatus) material.color.set(colorFor(status));
-  requestRender3D(); // перекраска материала сама по себе кадр не рисует
+  // В 3D цвет статуса живёт в ВЕРШИНАХ слитой геометрии (см.
+  // build3DMergedGeometry) — сам по себе новый цвет не подхватится, нужно
+  // переписать диапазон каждого элемента.
+  refresh3DStatusColors();
+  requestRender3D(); // перекраска сама по себе кадр не рисует
   settingsBackdrop.classList.remove("open");
 });
 
@@ -8639,20 +8645,18 @@ const EDGE_LINE_WIDTH_PX = 2;
 // ---------- режим слабого компьютера (живой запрос 2026-07-29: "на слабых
 // компьютерах работа с 3Д очень медленная") ----------
 //
-// Узкое место 3D на реальном файле — НЕ объём геометрии (9422 элемента, в
-// среднем 3,6 вершины на контур — для видеокарты это пустяк), а ЧИСЛО
-// вызовов отрисовки: меш грани + отдельный объект рёбер на каждый элемент,
-// то есть ~18 800 вызовов на кадр. Их формирует процессор, и упирается
-// слабая машина именно в него.
+// Изначально режим бил по главному узкому месту тех времён — числу вызовов
+// отрисовки (меш грани + объект рёбер на КАЖДЫЙ элемент, ~18 800 вызовов на
+// кадр). Этой причины больше нет: геометрия слита в один буфер граней и один
+// буфер рёбер (см. build3DMergedGeometry), вызовов 6 при любом наборе.
 //
-// Режим бьёт по двум самым дорогим статьям сразу:
-//  - рёбра не создаются вовсе (см. build3DMeshForElement) — минус половина
-//    объектов сцены;
+// Режим оставлен, потому что обе его меры продолжают экономить — но уже
+// другое, не вызовы:
+//  - рёбра не строятся вовсе (см. build3DMergedGeometry) — минус около 730
+//    тысяч треугольников из 860 тысяч, то есть основная работа видеокарты
+//    на кадр, плюс заметно меньше памяти и времени сборки сцены;
 //  - пиксельная плотность 1 вместо 1.5 — вдвое меньше пикселей на кадр
 //    (на Retina это самая заметная часть работы фрагментного шейдера).
-// Радикальное решение (слияние геометрии всех элементов одного статуса в
-// один буфер, ~14 вызовов вместо 18 800) требует переделки поэлементного
-// клика и скрытия по фильтрам — это отдельная крупная работа, см. Docs/TZ.md.
 //
 // Настройка КОМПЬЮТЕРА, а не проекта: живёт в localStorage браузера, не в
 // БД. У прорабов машины разные, общая на всех настройка была бы бессмысленной.
@@ -8663,28 +8667,25 @@ function pixelRatioForCurrentMode() {
   return Math.min(window.devicePixelRatio || 1, cap);
 }
 
-// Общий материал грани НА СТАТУС (не на элемент) — раньше был свой
-// экземпляр MeshStandardMaterial на КАЖДЫЙ элемент (~9400 на реальном
-// файле), той же природы проблема, что уже чинили для рёбер (см.
-// edgeMaterial выше): тысячи разных материалов ломают сортировку
-// рендера по материалу, WebGL вынужден переключать состояние на каждый
-// элемент отдельно при вращении/зуме — заметно тормозит на живых данных
-// (живой репорт пользователя, см. Docs/backlog.md). Статусов — фиксированный
-// небольшой набор (см. state.statusOrder), а не по одному на элемент.
-function getStatusMeshMaterial(status) {
+// ЕДИНСТВЕННЫЙ материал всех граней — цвет статуса живёт не в материале, а
+// в вершинах (атрибут color, vertexColors). Раньше материал был свой на
+// КАЖДЫЙ элемент (~9400), потом общий НА СТАТУС; теперь вся геометрия слита
+// в один меш (см. build3DMergedGeometry), и разные материалы означали бы
+// разные меши, то есть возврат к множеству вызовов отрисовки. Смена статуса
+// одного элемента — переписывание его диапазона в атрибуте color
+// (setElementVertexColor), пересборка сцены не нужна.
+function getFaceMaterial() {
   const v3 = state.view3d;
-  let material = v3.materialByStatus.get(status);
-  if (!material) {
-    material = new THREE.MeshStandardMaterial({
-      color: colorFor(status),
+  if (!v3.faceMaterial) {
+    v3.faceMaterial = new THREE.MeshStandardMaterial({
+      vertexColors: true,
       side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: 4,
       polygonOffsetUnits: 4,
     });
-    v3.materialByStatus.set(status, material);
   }
-  return material;
+  return v3.faceMaterial;
 }
 
 // Подсветка выбранного элемента (emissive) — материал статуса теперь
@@ -8708,7 +8709,11 @@ function getHighlightMeshMaterial(status) {
   return v3.highlightMaterial;
 }
 
-function build3DMeshForElement(element, levels, columnTopOverrides) {
+// Геометрия ОДНОГО элемента в МИРОВЫХ координатах (отметка запечена в
+// вершины, не вынесена в mesh.position — у слитой геометрии общая точка
+// отсчёта на всю сцену). Дальше эта геометрия не становится собственным
+// мешем, а вливается в общий буфер (см. build3DMergedGeometry).
+function build3DElementGeometry(element, levels, columnTopOverrides) {
   if (!element.outline || element.outline.length < 3) return null; // нечего экструдировать
   const height = elementExtrusionHeight(element, levels, columnTopOverrides);
   // Shape строится в локальной плоскости XY, shapeY = мировой Y как есть
@@ -8736,64 +8741,170 @@ function build3DMeshForElement(element, levels, columnTopOverrides) {
   const shape = new THREE.Shape(points);
   const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
   geometry.rotateX(-Math.PI / 2);
-  // DoubleSide — смена знака выше меняет и порядок обхода контура
-  // (winding), а с ним и направление нормалей граней; чтобы это не
-  // привело к отбраковке "невидимых" граней (backface culling у
-  // MeshStandardMaterial по умолчанию), рисуем обе стороны.
-  //
-  // polygonOffset — ребро (LineSegments2 ниже) лежит РОВНО на поверхности
-  // грани (та же геометрия, никакого зазора между ними больше нет — см.
-  // выше, "точно соответствовать геометрии из входных данных"), у обоих
-  // одинаковая глубина в буфере — без явного сдвига это чистый z-fighting,
-  // и грань (закрашивает МНОГО пикселей) выигрывает у линии (закрашивает
-  // мало) почти всегда, из-за чего ребро не видно вообще, живой репорт
-  // пользователя 2026-07-24. Стандартное решение — сдвинуть саму грань
-  // чуть "дальше от камеры" в буфере глубины (не физически, только в
-  // сравнении глубин), чтобы линия поверх нее гарантированно проходила
-  // тест глубины. factor/units=4 (не стандартные 1/1) — модель в мм на
-  // весь масштаб здания, обычной величины смещения на реальных данных не
-  // хватило (тот же живой репорт); см. также logarithmicDepthBuffer в
-  // init3DScene — тот же класс проблемы (точность буфера глубины на
-  // большом разбросе near/far), другая причина. Сам материал — общий на
-  // статус (getStatusMeshMaterial), не свой на каждый элемент — см. её
-  // комментарий.
-  const material = getStatusMeshMaterial(element.current_status);
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(0, element.elevation_mm || 0, 0);
-  mesh.userData.elementId = element.id;
+  // Отметка запекается прямо в вершины. Раньше это была mesh.position.y
+  // собственного меша элемента — у слитой геометрии собственного меша нет,
+  // сдвиг обязан быть в самих координатах.
+  geometry.translate(0, element.elevation_mm || 0, 0);
+  return geometry;
+}
 
-  // Рёбра силуэта — THREE.EdgesGeometry (не приём с раздутым дублирующим
-  // мешом, который использовался раньше и приводил к артефактам на
-  // стыках/вытянутых контурах, см. выше) даёт только настоящие рёбра
-  // силуэта (сама отбрасывает "швы" между компланарными треугольниками —
-  // например, диагонали триангуляции крышки контура), но её позиции
-  // скармливаются НЕ обычному THREE.LineSegments (тонкая 1px GL-линия,
-  // не работает в большинстве браузеров — см. историю в Docs/TZ.md §6.7),
-  // а LineSegments2/LineSegmentsGeometry — те же вершины, только
-  // рендерятся полосой треугольников заданной ширины В ПИКСЕЛЯХ экрана,
-  // реально видна в любом браузере. Материал — ОБЩИЙ на все элементы
-  // (`state.view3d.edgeMaterial`, см. init3DScene) — свой на каждый
-  // элемент был не нужен уже тогда, когда цвет ребра стал фиксированным
-  // (EDGE_COLOR), но тормозил рендер (см. init3DScene). Вендоринг
-  // подтверждён пользователем явно (см. Docs/backlog.md, 2026-07-24).
-  //
-  // В режиме слабого компьютера рёбра НЕ создаются вовсе (см. state.lowSpec):
-  // это ровно половина всех объектов сцены и, соответственно, примерно
-  // половина вызовов отрисовки на кадр — на реальном файле 9422 ребра из
-  // ~18 800 объектов. Грань при этом остаётся полноценной, теряется только
-  // чёрная окантовка, то есть картинка беднее, но не искажена.
-  if (state.lowSpec) return mesh;
+// ВСЯ геометрия элементов сцены — в ОДНОМ буфере граней и ОДНОМ буфере
+// рёбер. Раньше было по мешу на элемент (+ дочерний объект рёбер), то есть
+// ~18,8 тысяч вызовов отрисовки на КАЖДЫЙ кадр; треугольников при этом
+// мизер (855 тысяч), то есть упор был в процессор, а не в видеокарту.
+// Замер на реальном файле (9422 элемента): 13 438 вызовов и 61,3 мс на
+// кадр против 6 вызовов и 0,1 мс после слияния — см. Docs/backlog.md.
+//
+// Чем пришлось заплатить и как это закрыто:
+//  - цвет статуса больше не может жить в материале (материал один на весь
+//    буфер) — он в вершинах, атрибут color (см. getFaceMaterial);
+//  - поэлементный клик не может опираться на "один элемент — один объект"
+//    — есть таблицы "номер треугольника -> элемент" и "номер отрезка
+//    ребра -> элемент" (raycast отдаёт faceIndex и там, и там);
+//  - подсветка выбранного (emissive) не выражается вершинным цветом —
+//    выбранный элемент рисуется отдельным маленьким мешем поверх
+//    (см. set3DHighlight), это ровно один лишний вызов отрисовки;
+//  - скрытие по фильтрам — пересборкой сцены, как и было (отфильтрованный
+//    элемент просто не попадает в буфер, см. build3DScene).
+//
+// DoubleSide и polygonOffset материала граней — ровно те же и по тем же
+// причинам, что были у поэлементного меша: winding контура после
+// rotateX(-90°) не гарантирован, а ребро лежит РОВНО на поверхности грани
+// (заказчик запретил любые зазоры/офсеты в геометрии), и без сдвига в
+// буфере глубины грань всегда выигрывала бы у линии.
+function build3DMergedGeometry(elements, levels, columnTopOverrides) {
+  const v3 = state.view3d;
+  const positions = [], normals = [], colors = [];
+  const faceElementIds = [];
+  const edgeChunks = [], segmentElementIds = [];
+  const rangeById = new Map();
+  let vertexCount = 0, edgeFloatCount = 0;
+  const color = new THREE.Color();
 
-  const edgesGeometry = new THREE.EdgesGeometry(geometry);
-  const lineGeometry = new LineSegmentsGeometry();
-  lineGeometry.setPositions(edgesGeometry.attributes.position.array);
-  edgesGeometry.dispose(); // нужна была только чтобы получить позиции рёбер
-  const edges = new LineSegments2(lineGeometry, state.view3d.edgeMaterial);
-  edges.userData.elementId = element.id; // клик по ребру тоже должен выделять элемент
-  mesh.add(edges);
-  mesh.userData.edges = edges;
+  for (const element of elements) {
+    const geometry = build3DElementGeometry(element, levels, columnTopOverrides);
+    if (!geometry) continue;
+    const position = geometry.attributes.position.array;
+    const normal = geometry.attributes.normal.array;
+    const count = geometry.attributes.position.count;
 
-  return mesh;
+    color.set(colorFor(element.current_status));
+    const rgb = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) { rgb[i * 3] = color.r; rgb[i * 3 + 1] = color.g; rgb[i * 3 + 2] = color.b; }
+
+    positions.push(position); normals.push(normal); colors.push(rgb);
+    rangeById.set(element.id, { start: vertexCount, count });
+    for (let f = 0; f < count / 3; f++) faceElementIds.push(element.id);
+    vertexCount += count;
+
+    // Рёбра силуэта — та же EdgesGeometry, что и раньше (отбрасывает "швы"
+    // между компланарными треугольниками, оставляет настоящий силуэт), но
+    // её позиции идут не в свой LineSegments2 на элемент, а в общий буфер.
+    // В режиме слабого компьютера рёбер нет вовсе (state.lowSpec) — это уже
+    // не половина вызовов отрисовки, как раньше, а половина треугольников.
+    if (!state.lowSpec) {
+      const edgesGeometry = new THREE.EdgesGeometry(geometry);
+      const edgePositions = edgesGeometry.attributes.position.array;
+      edgeChunks.push(edgePositions);
+      edgeFloatCount += edgePositions.length;
+      for (let s = 0; s < edgePositions.length / 6; s++) segmentElementIds.push(element.id);
+      edgesGeometry.dispose(); // нужна была только чтобы получить позиции рёбер
+    }
+    geometry.dispose(); // всё нужное скопировано в общие буферы
+  }
+
+  if (!vertexCount) return null;
+
+  const positionArray = new Float32Array(vertexCount * 3);
+  const normalArray = new Float32Array(vertexCount * 3);
+  const colorArray = new Float32Array(vertexCount * 3);
+  let offset = 0;
+  for (let i = 0; i < positions.length; i++) {
+    positionArray.set(positions[i], offset);
+    normalArray.set(normals[i], offset);
+    colorArray.set(colors[i], offset);
+    offset += positions[i].length;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positionArray, 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(normalArray, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(colorArray, 3));
+  const mesh = new THREE.Mesh(geometry, getFaceMaterial());
+
+  let edges = null;
+  if (edgeFloatCount) {
+    const edgeArray = new Float32Array(edgeFloatCount);
+    let edgeOffset = 0;
+    for (const chunk of edgeChunks) { edgeArray.set(chunk, edgeOffset); edgeOffset += chunk.length; }
+    const lineGeometry = new LineSegmentsGeometry();
+    lineGeometry.setPositions(edgeArray);
+    edges = new LineSegments2(lineGeometry, v3.edgeMaterial);
+  }
+
+  return { mesh, edges, faceElementIds, segmentElementIds, rangeById };
+}
+
+// Цвет статуса одного элемента в общем буфере. Заливаются только вершины
+// этого элемента, и в видеокарту уходит только изменённый диапазон
+// (addUpdateRange) — иначе на каждую смену статуса пришлось бы гнать весь
+// буфер целиком (на реальном файле это ~1,5 МБ).
+function setElementVertexColor(elementId, status) {
+  const merged = state.view3d.merged;
+  if (!merged) return false;
+  const range = merged.rangeById.get(elementId);
+  if (!range) return false;
+  const attribute = merged.mesh.geometry.attributes.color;
+  const array = attribute.array;
+  const color = new THREE.Color(colorFor(status));
+  for (let i = 0; i < range.count; i++) {
+    const at = (range.start + i) * 3;
+    array[at] = color.r; array[at + 1] = color.g; array[at + 2] = color.b;
+  }
+  if (attribute.addUpdateRange) attribute.addUpdateRange(range.start * 3, range.count * 3);
+  attribute.needsUpdate = true;
+  return true;
+}
+
+// Перекраска ВСЕЙ сцены под новую цветовую схему статусов (Настройки).
+// Пересборка геометрии для этого не нужна — меняется только атрибут color.
+function refresh3DStatusColors() {
+  const v3 = state.view3d;
+  if (!v3.merged) return;
+  for (const id of v3.merged.rangeById.keys()) {
+    const element = state.byId.get(id);
+    if (element) setElementVertexColor(id, element.current_status);
+  }
+  if (v3.highlightElementId !== null) {
+    const selected = state.byId.get(v3.highlightElementId);
+    if (selected) getHighlightMeshMaterial(selected.current_status);
+  }
+}
+
+// Подсветка выбранного элемента — отдельный маленький меш поверх слитой
+// геометрии: emissive нельзя выразить вершинным цветом, а материал у всего
+// буфера один. Геометрия НЕ строится заново — вершины копируются из общего
+// буфера по диапазону элемента, поэтому подсветка гарантированно совпадает
+// с тем, что нарисовано (никакого второго пути вычисления высоты).
+// Выбранный элемент всегда один, значит это ровно один лишний вызов.
+function set3DHighlight(elementId, status) {
+  const v3 = state.view3d;
+  if (v3.highlightMesh) {
+    v3.scene.remove(v3.highlightMesh);
+    v3.highlightMesh.geometry.dispose();
+    v3.highlightMesh = null;
+  }
+  v3.highlightElementId = null;
+  if (elementId === null || elementId === undefined || !v3.merged) return;
+  const range = v3.merged.rangeById.get(elementId);
+  if (!range) return;
+  const source = v3.merged.mesh.geometry.attributes;
+  const from = range.start * 3, to = (range.start + range.count) * 3;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(source.position.array.slice(from, to), 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(source.normal.array.slice(from, to), 3));
+  v3.highlightMesh = new THREE.Mesh(geometry, getHighlightMeshMaterial(status));
+  v3.highlightElementId = elementId;
+  v3.scene.add(v3.highlightMesh);
 }
 
 // Мировая высота подписи в 3D — раньше фиксированная величина
@@ -8854,7 +8965,7 @@ const DECAL_SURFACE_OFFSET_MM = 5;
 // зданию (см. Docs/backlog.md, "31 экземпляр марки 2Рк2 на одной
 // отметке") — отдельная текстура на каждый экземпляр была бы тем же
 // классом проблемы с производительностью, что уже чинили для материалов
-// (см. getStatusMeshMaterial).
+// (см. getFaceMaterial).
 // Ключ кэша — марка + допстрока + её цвет (не только марка) — допстрока
 // (код контрагента + плановая дата) отличается у РАЗНЫХ физических
 // элементов с ОДНОЙ и той же маркой (разные контракты/плановые даты),
@@ -9179,7 +9290,7 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
   const texture = getDecalTexture(element.mark, subText, subColor);
   const aspect = texture.userData.aspect;
   const group = new THREE.Group();
-  // world.X=dxf.x, world.Z=-dxf.y (см. build3DMeshForElement) — та же
+  // world.X=dxf.x, world.Z=-dxf.y (см. build3DElementGeometry) — та же
   // поправка знака применяется здесь для всех мировых координат наклейки.
 
   if (element.element_type === "Колонна") {
@@ -9318,7 +9429,7 @@ function build3DLabelSprite(element, topY) {
   const worldPerPx = label3DWorldHeight(element) / referenceCanvasHeight;
   const worldHeight = canvas.height * worldPerPx;
   sprite.scale.set(canvas.width * worldPerPx, worldHeight, 1);
-  // world.X=dxf.x, world.Y=высота, world.Z=-dxf.y (см. build3DMeshForElement
+  // world.X=dxf.x, world.Y=высота, world.Z=-dxf.y (см. build3DElementGeometry
   // выше) — подпись чуть выше верхней грани элемента.
   sprite.position.set(element.x, topY + worldHeight * 0.6, -element.y);
   sprite.userData.elementId = element.id;
@@ -9382,7 +9493,7 @@ function zoneMeshVisible(zone) {
 function build3DZoneMesh(zone, heightRange, stanceTiers) {
   if (!zone.outline || zone.outline.length < 3) return null;
   // Без инверсии Y — та же поправка, что и у элементов (см.
-  // build3DMeshForElement, Docs/backlog.md "3D — зеркальность").
+  // build3DElementGeometry, Docs/backlog.md "3D — зеркальность").
   const points = zone.outline.map(([x, y]) => new THREE.Vector2(x, y));
   const shape = new THREE.Shape(points);
 
@@ -9455,7 +9566,7 @@ function build3DZoneLabelSprite(zone, baseY) {
   const worldPerPx = ZONE_LABEL_3D_WORLD_HEIGHT / canvas.height;
   sprite.scale.set(canvas.width * worldPerPx, ZONE_LABEL_3D_WORLD_HEIGHT, 1);
   // world.X=dxf.x, world.Z=-dxf.y — та же поправка, что и у элементов
-  // (см. build3DMeshForElement, Docs/backlog.md "3D — зеркальность").
+  // (см. build3DElementGeometry, Docs/backlog.md "3D — зеркальность").
   sprite.position.set(cx, baseY + ZONE_LABEL_3D_WORLD_HEIGHT * 0.6, -cy);
   sprite.userData.zoneId = zone.id;
   return sprite;
@@ -9481,16 +9592,55 @@ function apply3DZoneVisibility() {
 // же приёмом, что apply3DZoneVisibility выше для зон. Учитывает и
 // текущие фильтры (элемент, скрытый фильтром, не должен показывать
 // подпись), см. также applyPlacementFilters.
-function apply3DLabelVisibility() {
-  for (const [id, sprite] of state.view3d.labelSpriteById) {
-    const element = state.byId.get(id);
-    if (!element) continue;
-    sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+// Наклейки/таблички марок держатся не прямо в сцене, а в контейнере НА ТИП
+// ЭЛЕМЕНТА, и ВЫКЛЮЧЕННЫЙ контейнер из сцены ВЫНИМАЕТСЯ, а не просто
+// прячется. Причина — замер после слияния геометрии: сама отрисовка стала
+// стоить 0,1 мс на кадр, но кадр по-прежнему занимал 7,7 мс, и это были
+// 9420 ВЫКЛЮЧЕННЫХ наклеек (с их гранями — 35 тысяч объектов). Тратилась
+// на них не отрисовка (её visible=false отсекает), а обновление мировых
+// матриц перед кадром: `scene.updateMatrixWorld()` обходит детей независимо
+// от видимости — 7,0 мс из 7,5 мс кадра, замерено отдельным вызовом.
+//
+// `matrixWorldAutoUpdate=false` на контейнере — напрашивающийся, но НЕ
+// работающий здесь рычаг: проверено подсчётом вызовов (дети скрытого
+// контейнера с этим флагом всё равно обходятся, 50 из 50). Отсоединение
+// от сцены — то, что реально даёт 0,1 мс, и не зависит от внутренностей
+// библиотеки. Матрицы содержимого пересчитаются при обратном добавлении.
+function setLabelGroupVisible(group, visible) {
+  group.visible = visible;
+  if (visible) {
+    if (!group.parent) state.view3d.scene.add(group);
+  } else {
+    group.removeFromParent();
   }
-  for (const [id, decal] of state.view3d.markDecalById) {
+}
+
+function label3DContainer(elementType) {
+  const v3 = state.view3d;
+  let group = v3.labelGroupByType.get(elementType);
+  if (!group) {
+    group = new THREE.Group();
+    v3.labelGroupByType.set(elementType, group);
+    setLabelGroupVisible(group, state.labelVisibility[elementType] !== false);
+  }
+  return group;
+}
+
+function apply3DLabelVisibility() {
+  const v3 = state.view3d;
+  for (const [type, group] of v3.labelGroupByType) {
+    setLabelGroupVisible(group, state.labelVisibility[type] !== false);
+  }
+  // Видимость внутри контейнера — по элементу: фильтры сюда уже не влияют
+  // (отфильтрованный элемент в сцену не попадает вовсе), но подпись может
+  // отсутствовать и по своим причинам, поэтому флаг у объекта сохранён.
+  for (const [id, sprite] of v3.labelSpriteById) {
     const element = state.byId.get(id);
-    if (!element) continue;
-    decal.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+    if (element) sprite.visible = state.labelVisibility[element.element_type] !== false;
+  }
+  for (const [id, decal] of v3.markDecalById) {
+    const element = state.byId.get(id);
+    if (element) decal.visible = state.labelVisibility[element.element_type] !== false;
   }
   requestRender3D();
 }
@@ -9515,7 +9665,7 @@ function rebuild3DLabelSprite(element) {
   // только плавающая табличка.
   if (v3.markDecalById.has(element.id)) {
     const oldDecal = v3.markDecalById.get(element.id);
-    v3.scene.remove(oldDecal);
+    oldDecal.removeFromParent(); // контейнер по типу элемента, не сама сцена — см. label3DContainer
     for (const mesh of oldDecal.children) {
       mesh.geometry.dispose();
       // НЕ mesh.material.map.dispose() — текстура общая на (марка+допстрока+цвет), см. decalTextureCache
@@ -9524,22 +9674,22 @@ function rebuild3DLabelSprite(element) {
     v3.markDecalById.delete(element.id);
     const decal = build3DMarkDecal(element, levels, columnTopOverrides);
     if (decal) {
-      decal.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
-      v3.scene.add(decal);
+      decal.visible = state.labelVisibility[element.element_type] !== false;
+      label3DContainer(element.element_type).add(decal);
       v3.markDecalById.set(element.id, decal);
     }
   } else {
     const old = v3.labelSpriteById.get(element.id);
     if (old) {
-      v3.scene.remove(old);
+      old.removeFromParent();
       old.material.map.dispose();
       old.material.dispose();
       v3.labelSpriteById.delete(element.id);
     }
     const sprite = build3DLabelSprite(element, topY);
     if (sprite) {
-      sprite.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
-      v3.scene.add(sprite);
+      sprite.visible = state.labelVisibility[element.element_type] !== false;
+      label3DContainer(element.element_type).add(sprite);
       v3.labelSpriteById.set(element.id, sprite);
     }
   }
@@ -9573,7 +9723,7 @@ function build3DSiteBaseMesh() {
   });
   const mesh = new THREE.Mesh(geometry, material);
   // world.X=dxf.x, world.Z=-dxf.y — та же поправка, что и у элементов
-  // (см. build3DMeshForElement, Docs/backlog.md "3D — зеркальность").
+  // (см. build3DElementGeometry, Docs/backlog.md "3D — зеркальность").
   mesh.position.set((minX + maxX) / 2, -5, -(minY + maxY) / 2);
   return mesh;
 }
@@ -9591,24 +9741,20 @@ function build3DScene(preserveCamera = false) {
     v3.siteBaseMesh.material.dispose();
     v3.siteBaseMesh = null;
   }
-  for (const mesh of v3.meshById.values()) {
-    v3.scene.remove(mesh);
-    mesh.geometry.dispose();
-    // НЕ mesh.material.dispose() — материал теперь ОБЩИЙ на статус
-    // (state.view3d.materialByStatus/highlightMaterial, см.
-    // getStatusMeshMaterial), живёт всю сессию 3D-режима, не
-    // пересоздаётся на каждую перестройку сцены.
-    //
-    // Рёбра силуэта — дочерний LineSegments (см. build3DMeshForElement),
-    // своя geometry (родительский dispose() выше её не трогает) — но
-    // НЕ материал: он теперь ОБЩИЙ на все элементы (state.view3d.
-    // edgeMaterial), живёт всю сессию 3D-режима, не пересоздаётся на
-    // каждую перестройку сцены.
-    if (mesh.userData.edges) {
-      mesh.userData.edges.geometry.dispose();
+  // Вся геометрия элементов — два объекта (грани + рёбра), см.
+  // build3DMergedGeometry. НЕ material.dispose(): и материал граней
+  // (getFaceMaterial), и материал рёбер (edgeMaterial) — по одному на всю
+  // сессию 3D-режима, они не пересоздаются на каждую перестройку сцены.
+  set3DHighlight(null);
+  if (v3.merged) {
+    v3.scene.remove(v3.merged.mesh);
+    v3.merged.mesh.geometry.dispose();
+    if (v3.merged.edges) {
+      v3.scene.remove(v3.merged.edges);
+      v3.merged.edges.geometry.dispose();
     }
+    v3.merged = null;
   }
-  v3.meshById.clear();
   for (const mesh of v3.zoneMeshById.values()) {
     v3.scene.remove(mesh);
     mesh.geometry.dispose();
@@ -9622,13 +9768,13 @@ function build3DScene(preserveCamera = false) {
   }
   v3.zoneLabelSpriteById.clear();
   for (const sprite of v3.labelSpriteById.values()) {
-    v3.scene.remove(sprite);
+    sprite.removeFromParent(); // контейнер по типу элемента — см. label3DContainer
     sprite.material.map.dispose();
     sprite.material.dispose();
   }
   v3.labelSpriteById.clear();
   for (const decal of v3.markDecalById.values()) {
-    v3.scene.remove(decal);
+    decal.removeFromParent();
     for (const mesh of decal.children) {
       mesh.geometry.dispose();
       // НЕ mesh.material.map.dispose() — текстура ОБЩАЯ на марку
@@ -9642,29 +9788,28 @@ function build3DScene(preserveCamera = false) {
 
   const levels = computeColumnLevels();
   const columnTopOverrides = computeColumnEndExtensions(levels);
-  for (const element of state.elements) {
-    // Отфильтрованный элемент НЕ строится вовсе — ни меша, ни наклейки, ни
-    // текстуры (живой запрос 2026-07-29: "система не занимается обработкой
-    // элементов, не попавших в условия, а не просто скрывает их").
-    // Раньше строилось всё, а фильтр применялся уже к готовому мешу через
-    // visible=false: сцена оставалась полной, память тоже, и рендерер
-    // перебирал все ~19 тысяч объектов каждый кадр, пусть и пропуская
-    // скрытые. Теперь узкий фильтр делает сцену буквально маленькой.
-    //
-    // Плата: смена фильтра в 3D требует ПЕРЕСБОРКИ сцены, а не переключения
-    // видимости (см. applyPlacementFilters). Это осознанный размен — чем
-    // уже фильтр, тем дешевле и пересборка, и всё последующее вращение.
-    if (!passesPlacementFilters(element)) continue;
-    const mesh = build3DMeshForElement(element, levels, columnTopOverrides);
-    if (!mesh) continue;
-    // Материал теперь общий на статус (см. getStatusMeshMaterial) — менять
-    // его emissive прямо здесь подсветило бы ВСЕ элементы этого статуса
-    // разом; выбранный элемент получает отдельный, эксклюзивно свой
-    // highlight-материал (см. getHighlightMeshMaterial).
-    if (state.selectedId === element.id) mesh.material = getHighlightMeshMaterial(element.current_status);
-    v3.scene.add(mesh);
-    v3.meshById.set(element.id, mesh);
 
+  // Отфильтрованный элемент НЕ строится вовсе — ни геометрии, ни наклейки,
+  // ни текстуры (живой запрос 2026-07-29: "система не занимается обработкой
+  // элементов, не попавших в условия, а не просто скрывает их").
+  // Плата: смена фильтра в 3D требует ПЕРЕСБОРКИ сцены, а не переключения
+  // видимости (см. applyPlacementFilters). После слияния геометрии это
+  // единственный способ скрыть элемент — своего объекта у него больше нет;
+  // размен осознанный, пересборка редка, а вращение после неё дешёвое.
+  const shown = state.elements.filter(passesPlacementFilters);
+  v3.merged = build3DMergedGeometry(shown, levels, columnTopOverrides);
+  if (v3.merged) {
+    v3.scene.add(v3.merged.mesh);
+    if (v3.merged.edges) v3.scene.add(v3.merged.edges);
+    const selected = state.byId.get(state.selectedId);
+    if (selected) set3DHighlight(selected.id, selected.current_status);
+  }
+
+  for (const element of shown) {
+    // Элемент без контура в слитую геометрию не попал (нечего экструдировать)
+    // — подписи ему тоже не полагается, как и раньше, когда у него просто не
+    // получалось меша. rangeById — точный список того, что реально построено.
+    if (!v3.merged || !v3.merged.rangeById.has(element.id)) continue;
     const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
 
     // Наклейка на грани (см. build3DMarkDecal) — только для Плиты
@@ -9672,20 +9817,31 @@ function build3DScene(preserveCamera = false) {
     // иначе — прежняя плавающая табличка-спрайт (build3DLabelSprite).
     // Фильтр здесь уже пройден (иначе элемент пропущен выше), остаётся
     // только тумблер подписей по типу элемента.
+    // Подписи кладутся не в корень сцены, а в контейнер СВОЕГО типа
+    // элемента (label3DContainer) — выключенный тип отсекается рендерером
+    // одной проверкой, а не девятью тысячами.
     const labelVisible = state.labelVisibility[element.element_type] !== false;
+    const container = label3DContainer(element.element_type);
     const decal = build3DMarkDecal(element, levels, columnTopOverrides);
     if (decal) {
       decal.visible = labelVisible;
-      v3.scene.add(decal);
+      container.add(decal);
       v3.markDecalById.set(element.id, decal);
     } else {
       const sprite = build3DLabelSprite(element, topY);
       if (sprite) {
         sprite.visible = labelVisible;
-        v3.scene.add(sprite);
+        container.add(sprite);
         v3.labelSpriteById.set(element.id, sprite);
       }
     }
+  }
+
+  // Контейнеры подписей могли пережить прошлую сборку сцены (они хранятся в
+  // v3.labelGroupByType), а тумблеры за это время могли поменяться — сверяем
+  // их состояние с настройками одним проходом по типам, а не по элементам.
+  for (const [type, group] of v3.labelGroupByType) {
+    setLabelGroupVisible(group, state.labelVisibility[type] !== false);
   }
 
   const heightRange = computeBuildingHeightRange();
@@ -9734,7 +9890,7 @@ function init3DScene() {
   // на реальных файлах — 4-5 порядков) — обычный (линейный после
   // перспективного деления) буфер глубины на такой разброс имеет очень
   // грубую точность вдали от камеры, что усугубляет z-fighting ребра с
-  // гранью (см. polygonOffset в build3DMeshForElement) на среднем и
+  // гранью (см. polygonOffset в build3DElementGeometry) на среднем и
   // дальнем плане. Вендоренный LineMaterial уже поддерживает логарифмический
   // буфер "из коробки" (штатный чанк `logdepthbuf_*` в шейдере, тот же,
   // что использует весь остальной Three.js).
@@ -9827,7 +9983,7 @@ function fit3DCameraToData() {
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const minZ = Math.min(...zs), maxZ = Math.max(...zs);
-  // world.Z = -мировая Y элемента (см. build3DMeshForElement) — центр
+  // world.Z = -мировая Y элемента (см. build3DElementGeometry) — центр
   // по Z берём с тем же знаком, иначе камера целилась бы не в центр
   // модели, а в его зеркальное отражение.
   const cx = (minX + maxX) / 2, cz = -(minY + maxY) / 2, cy = (minZ + maxZ) / 2;
@@ -9945,10 +10101,24 @@ function pick3DElementAt(clientX, clientY) {
   v3.mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   v3.mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   v3.raycaster.setFromCamera(v3.mouse, v3.camera);
-  const visibleMeshes = Array.from(v3.meshById.values()).filter(m => m.visible);
-  const intersects = v3.raycaster.intersectObjects(visibleMeshes);
+  // Своего объекта у элемента больше нет — вся геометрия слита (см.
+  // build3DMergedGeometry), поэтому попадание опознаётся по НОМЕРУ
+  // ТРЕУГОЛЬНИКА (грани) или НОМЕРУ ОТРЕЗКА (ребра): raycast отдаёт
+  // faceIndex и у Mesh, и у LineSegments2. Рёбра остаются целью намеренно —
+  // у них своя ширина попадания, и клик по чёрному контуру на фоне неба
+  // раньше выделял элемент; без них силуэтный клик просто снимал бы выбор.
+  // recursive=false: подсветка выбранного (set3DHighlight) — отдельный меш
+  // без таблицы соответствия, попадать в него нельзя.
+  const merged = v3.merged;
+  if (!merged) return null;
+  const targets = merged.edges ? [merged.mesh, merged.edges] : [merged.mesh];
+  const intersects = v3.raycaster.intersectObjects(targets, false);
   if (!intersects.length) return null;
-  return state.byId.get(intersects[0].object.userData.elementId) || null;
+  const hit = intersects[0];
+  const table = hit.object === merged.edges ? merged.segmentElementIds : merged.faceElementIds;
+  const elementId = table[hit.faceIndex];
+  if (elementId === undefined) return null;
+  return state.byId.get(elementId) || null;
 }
 
 function on3DClick(e) {
