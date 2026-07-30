@@ -460,11 +460,11 @@ def _sample_settings() -> bytes:
             "Принят": "#0a6b45",
         },
         "label_visibility": {
-            "Колонна": True, "Ригель": True, "Плита": False,
+            "Колонна": True, "Ригель": True,
             "Панель": False, "Плита перекрытия": True,
         },
         "label_dates_visibility": {
-            "Колонна": True, "Ригель": False, "Плита": False,
+            "Колонна": True, "Ригель": False,
             "Панель": False, "Плита перекрытия": True,
         },
     }

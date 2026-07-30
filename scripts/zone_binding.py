@@ -437,7 +437,7 @@ def bind_element_to_zones(
     element_type, x, y, outline, elevation_mm, zones, stance_level_polys=None, tier_elevations=None
 ):
     """
-    element_type — "Колонна"/"Ригель"/"Плита"/"Панель" (определяет метод:
+    element_type — "Колонна"/"Ригель"/"Плита перекрытия"/"Панель" (определяет метод:
     точка для колонн, площадь пересечения для остальных).
     x, y — точка вставки элемента.
     outline — список вершин контура в мировых координатах, либо None.

@@ -792,10 +792,15 @@ def _seed_reference_data(conn: sqlite3.Connection) -> None:
 # исправления, всё ещё хранят старые значения (а Input/ переобрабатывает
 # на каждом старте только файлы, которые сейчас лежат в этой папке — для
 # остальных источников самоисправление не сработает).
-_ELEMENT_TYPE_RENAMES = {"column": "Колонна", "beam": "Ригель"}
+# "Плита" -> "Плита перекрытия" (2026-07-30): генерик-тип убран из словаря
+# (scripts/layer_naming.ZHBI_TYPES), два имени для одного типа расщепляли бы
+# элементы по двум веткам фильтров и контрактов. В боевой БД таких записей
+# нет, но на другой установке они могли накопиться — без переименования они
+# остались бы с типом, которого больше нет в словаре.
+_ELEMENT_TYPE_RENAMES = {"column": "Колонна", "beam": "Ригель", "Плита": "Плита перекрытия"}
 
 
-def _normalize_element_type_vocabulary(conn: sqlite3.Connection) -> None:
+def _normalize_element_type_vocabulary(conn: sqlite3.Connection, changes: list) -> None:
     """Идемпотентно — можно спокойно гонять на каждом старте (после первого
     успешного прогона английских значений нигде не остаётся, дальше это
     просто холостой обход пустых выборок).
@@ -807,7 +812,16 @@ def _normalize_element_type_vocabulary(conn: sqlite3.Connection) -> None:
     строкой под русским именем; в этом случае оставляем русскую (считаем
     её уже осмысленно настроенной), английскую просто удаляем."""
     for old, new in _ELEMENT_TYPE_RENAMES.items():
+        # Сколько строк реально переименовано — попадает в список изменений и
+        # дальше в журнал действий (событие schema_migration). Иначе смена
+        # словаря типов прошла бы на сервере совершенно молча, и понять, что
+        # именно случилось с элементами, было бы нечем.
+        affected = conn.execute(
+            "SELECT COUNT(*) AS n FROM elements WHERE element_type = ?", (old,)
+        ).fetchone()["n"]
         conn.execute("UPDATE elements SET element_type = ? WHERE element_type = ?", (new, old))
+        if affected:
+            changes.append(f"тип элемента «{old}» переименован в «{new}»: элементов {affected}")
 
         if conn.execute("SELECT 1 FROM label_visibility WHERE element_type = ?", (new,)).fetchone():
             conn.execute("DELETE FROM label_visibility WHERE element_type = ?", (old,))
@@ -829,6 +843,25 @@ def _normalize_element_type_vocabulary(conn: sqlite3.Connection) -> None:
                 conn.execute(
                     "UPDATE element_shapes SET element_type = ? WHERE layer = ? AND element_type = ?",
                     (new, layer, old),
+                )
+
+        # allowed_subtypes ключуется парой (тип, подтип) — та же коллизия, что
+        # и у остальных справочников ниже: при совпадении оставляем строку под
+        # новым именем, старую удаляем.
+        for row in conn.execute(
+            "SELECT subtype FROM allowed_subtypes WHERE element_type = ?", (old,)
+        ).fetchall():
+            subtype = row["subtype"]
+            if conn.execute(
+                "SELECT 1 FROM allowed_subtypes WHERE element_type = ? AND subtype = ?", (new, subtype)
+            ).fetchone():
+                conn.execute(
+                    "DELETE FROM allowed_subtypes WHERE element_type = ? AND subtype = ?", (old, subtype)
+                )
+            else:
+                conn.execute(
+                    "UPDATE allowed_subtypes SET element_type = ? WHERE element_type = ? AND subtype = ?",
+                    (new, old, subtype),
                 )
 
         for row in conn.execute(
@@ -879,7 +912,7 @@ def init_db() -> list:
         # Не часть одноразовой миграции: чинит частичное состояние, если
         # миграция зон отработала промежуточной версией кода (см. docstring).
         _heal_zone_stance_levels(conn, changes)
-        _normalize_element_type_vocabulary(conn)
+        _normalize_element_type_vocabulary(conn, changes)
         _seed_reference_data(conn)
         conn.commit()
     finally:
