@@ -2317,9 +2317,41 @@ function computeTooltipDateRows(element) {
 // (скрыт фильтром через display:none у родителя — сама подпись при этом
 // всё равно существует в DOM) или вовсе не отрисован (другой файл/слои),
 // state.labelById не найдёт узел — тихо выходим.
-function updateElementSubLabel(element) {
+// Что именно нарисовано в наклейке элемента — марка, допстрока, её класс
+// (цвет по опозданию) и статус. Пересборка наклейки стоит дорого (замер: 6056
+// плит перекрытия — 931 мс, это и были «4 секунды» на включении подписей у
+// пользователя), а переключение типа или подпункта «Даты» в большинстве
+// случаев НИЧЕГО в её содержимом не меняет: допстрока либо и так была, либо
+// её и так не было. Поэтому пересобираем, только когда содержимое реально
+// другое. Ключ считается из ДАННЫХ элемента, не из DOM, поэтому «свежая»
+// наклейка, только что построенная renderElements, ключу соответствует, и
+// пропуск пересборки для неё безопасен.
+const stickerContentKey = new Map();
+
+function elementStickerKey(element) {
+  return [
+    element.mark || "",
+    elementSubLabelText(element) || "",
+    subLabelClass(element) || "",
+    element.current_status || "",
+  ].join("\u0001");
+}
+
+function updateElementSubLabel(element, force = false) {
   const labelGroup = state.labelGroupById.get(element.id);
   if (labelGroup) {
+    if (state.stickerById.has(element.id)) {
+      const key = elementStickerKey(element);
+      if (!force && stickerContentKey.get(element.id) === key) {
+        // Содержимое то же — трогать DOM незачем. Видимость наклейки
+        // выставляют другие места (фильтры, updateSizesForZoom), она от
+        // содержимого не зависит.
+        const sticker = state.stickerById.get(element.id);
+        if (sticker && state.labelVisibility[element.element_type] === false) sticker.style.display = "none";
+        return;
+      }
+      stickerContentKey.set(element.id, key);
+    }
     if (state.stickerById.has(element.id)) {
       // Наклейка — цельная группа, точечно менять нечего (текст/размер/
       // цвет допстроки все зависят от одного и того же пересчёта), проще
