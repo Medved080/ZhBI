@@ -2201,6 +2201,12 @@ def import_history_xlsx(
             else ("старый формат — одна колонка «Контракт», реквизиты не импортированы"
                   if parsed["has_legacy_contract_column"] else "в файле нет колонок с реквизитами")
         )
+        # Строки с нераспознанной датой отсеиваются при разборе (см.
+        # normalize_changed_at) — показываем их отдельно от прочих пропусков:
+        # это опечатка в файле, которую пользователь может исправить, а не
+        # нормальная ситуация вроде «элемента нет в этом чертеже».
+        summary["invalid_dates"] = parsed["invalid_dates"]
+        summary["invalid_date_examples"] = parsed["invalid_date_examples"]
         return summary
     except HistoryImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)

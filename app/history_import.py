@@ -11,10 +11,38 @@ upsert элементов. Элементы, которых нет в целев
 попадают в сводку как unmatched — заказчик должен сначала загрузить тот же
 DXF на новом сервере.
 
-Режим "replace" — существующая история сопоставленных элементов удаляется
-перед импортом. Режим "merge" — история дополняется, но не создаёт дубли:
-если у элемента уже есть запись с тем же статусом в ту же дату, строка из
-файла пропускается (см. Docs/backlog.md п.3).
+Три режима:
+
+* "sync" (по умолчанию в интерфейсе, «Скорректировать даты») — строка файла
+  СОПОСТАВЛЯЕТСЯ с уже существующей записью истории и ОБНОВЛЯЕТ её дату,
+  а не добавляет вторую. Это и есть обычный обратный круг «выгрузили →
+  поправили даты в Excel → загрузили»: у "merge" изменённая дата не
+  совпадала с существующей и давала ВТОРУЮ запись того же статуса
+  (задвоение, живой репорт 2026-07-30).
+* "merge" — история дополняется, дубли пропускаются: если у элемента уже
+  есть запись с тем же статусом в ту же ДАТУ, строка из файла
+  пропускается (см. Docs/backlog.md п.3). Оставлен как есть.
+* "replace" — существующая история сопоставленных элементов удаляется
+  перед импортом.
+
+Идентичность записи истории в режиме "sync" — (элемент, статус) + номер
+повторения: у status_history нет своего идентификатора в выгрузке, поэтому
+строки файла и записи БД для одной пары (элемент, статус) сортируются по
+дате и сопоставляются попарно по порядку. Лишние строки файла
+добавляются, лишние записи БД остаются нетронутыми (удаление — это
+"replace", а не коррекция) и попадают в сводку.
+
+Порядок жизненного цикла: запись "Запланирован", созданная импортом
+чертежа, датирована МОМЕНТОМ ИМПОРТА, поэтому перенос реальной даты
+поставки/монтажа назад делает её ПОЗЖЕ фактического события — а текущим
+статусом элемента считается последняя по changed_at запись, то есть
+правка молча отменяла бы сама себя (в живом файле — 88 элементов из 90
+отредактированных). Поэтому после импорта САМАЯ РАННЯЯ запись
+"Запланирован" элемента сдвигается на минуту раньше самого раннего
+события другого статуса, если оказалась позже него
+(_shift_planned_before_first_event). Сдвигается только самая ранняя —
+запись "Запланирован" от РУЧНОГО откката статуса лежит позже неё и
+остаётся на месте.
 
 Принимает ДВА разных формата листа с одинаковой сутью строки "элемент
 получил такой-то статус в такой-то момент": "История статусов"
@@ -27,6 +55,8 @@ DXF на новом сервере.
 """
 
 import io
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 
 from openpyxl import load_workbook
 
@@ -41,9 +71,32 @@ from app.counterparties import (
     find_or_create_counterparty,
     find_or_create_specification,
 )
-from app.models import STATUS_LABELS_RU
+from app.models import STATUS_LABELS_RU, Status
 
 STATUS_LABEL_TO_VALUE = {label: status.value for status, label in STATUS_LABELS_RU.items()}
+PLANNED_STATUS = Status.PLANNED.value
+
+# Формат, в котором даты живут в status_history (его же пишет
+# apply_status_change и наша выгрузка) — единственный, в котором строковое
+# сравнение changed_at совпадает с хронологическим: на нём держатся и
+# ORDER BY changed_at (текущий статус элемента), и попарное сопоставление
+# в режиме "sync" ниже.
+MOMENT_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Что принимаем в колонке даты. Excel отдаёт отредактированную вручную
+# ячейку уже объектом datetime (в живом файле 2026-07-30 такими пришли
+# ровно 90 правок из 9589 строк), но пользователь может и набрать текст —
+# в т.ч. в привычном ДД.ММ.ГГГГ, как во всём остальном интерфейсе.
+_MOMENT_INPUT_FORMATS = (
+    MOMENT_FORMAT,
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%d",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+    "%d.%m.%Y %H:%M:%S",
+    "%d.%m.%Y %H:%M",
+    "%d.%m.%Y",
+)
 
 REQUIRED_HEADERS = ["DXF handle", "Статус"]
 CHANGED_AT_HEADER_CANDIDATES = ["Изменено", "Статус изменён"]
@@ -71,6 +124,44 @@ class HistoryImportError(Exception):
         self.status_code = status_code
         self.message = message
         super().__init__(message)
+
+
+def parse_moment(value: str):
+    """Строка из status_history → datetime, или None, если формат чужой.
+
+    Отдельно от normalize_changed_at: тут разбираются значения, УЖЕ лежащие
+    в БД (их пишем мы сами), и «не разобралось» — повод не трогать запись,
+    а не повод отвергнуть строку файла.
+    """
+    if not value:
+        return None
+    for fmt in _MOMENT_INPUT_FORMATS:
+        try:
+            return datetime.strptime(str(value).strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def normalize_changed_at(value):
+    """Ячейка даты/времени из xlsx → строка 'ГГГГ-ММ-ДД ЧЧ:ММ:СС' (None —
+    ячейка пустая или формат нераспознаваем).
+
+    Приводить к одному виду обязательно: даты в status_history сравниваются
+    и сортируются КАК ТЕКСТ (см. MOMENT_FORMAT), поэтому записанные как есть
+    'ГГГГ-ММ-ДД' (без времени) или '15.07.2026' встали бы в хронологию не на
+    своё место — и текущий статус элемента посчитался бы по неверной
+    последней записи.
+    """
+    if value is None:
+        return None
+    # datetime — подкласс date, порядок проверок важен
+    if isinstance(value, datetime):
+        return value.strftime(MOMENT_FORMAT)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day).strftime(MOMENT_FORMAT)
+    moment = parse_moment(str(value))
+    return moment.strftime(MOMENT_FORMAT) if moment else None
 
 
 def parse_history_xlsx(content: bytes):
@@ -124,20 +215,29 @@ def parse_history_xlsx(content: bytes):
         return value or None
 
     parsed = []
+    invalid_dates = []
     for row in rows:
         dxf_handle = get(row, "DXF handle")
         status_label = get(row, "Статус")
-        changed_at = get(row, changed_at_header)
-        if not dxf_handle or not status_label or not changed_at:
+        raw_changed_at = get(row, changed_at_header)
+        if not dxf_handle or not status_label or not raw_changed_at:
             continue
         status = STATUS_LABEL_TO_VALUE.get(str(status_label).strip())
         if status is None:
+            continue
+        changed_at = normalize_changed_at(raw_changed_at)
+        if changed_at is None:
+            # Строку с непонятной датой пропускаем НЕ молча: записать её как
+            # есть значило бы сломать хронологию элемента (см.
+            # normalize_changed_at), а промолчать — оставить пользователя
+            # думать, что правка применилась.
+            invalid_dates.append(f"{dxf_handle}: «{raw_changed_at}»")
             continue
         parsed.append(
             {
                 "dxf_handle": str(dxf_handle),
                 "status": status,
-                "changed_at": str(changed_at),
+                "changed_at": changed_at,
                 "changed_by": get(row, "Кто изменил") or None,
                 "comment": get(row, "Комментарий") or None,
                 "supplier_raw": text(row, contract_headers["supplier"]) if has_contract_columns else None,
@@ -150,6 +250,8 @@ def parse_history_xlsx(content: bytes):
         "rows": parsed,
         "has_contract_columns": has_contract_columns,
         "has_legacy_contract_column": bool(contract_headers["legacy"]),
+        "invalid_dates": len(invalid_dates),
+        "invalid_date_examples": invalid_dates[:20],
     }
 
 
@@ -207,9 +309,47 @@ def _resolve_contract_id(conn, row, cache, warnings, counterparty_by_lower):
     return contract_id
 
 
+def _shift_planned_before_first_event(conn, element_id: int) -> bool:
+    """Самую РАННЮЮ запись "Запланирован" элемента поставить на минуту раньше
+    самого раннего события другого статуса, если она оказалась позже него.
+    Возвращает True, если сдвиг понадобился.
+
+    Зачем — см. шапку модуля: запись "Запланирован" датирована моментом
+    импорта чертежа, а не реальным планированием, поэтому проставленная
+    задним числом дата поставки/монтажа оказывается РАНЬШЕ неё, и элемент
+    по правилу "текущий статус = последняя по changed_at запись" откатывается
+    в "Запланирован" — правка отменяет сама себя.
+
+    Сдвигается ровно одна запись — самая ранняя из "Запланирован". Более
+    поздние записи того же статуса — это РУЧНОЙ откат статуса
+    (apply_status_change), настоящее событие, его двигать нельзя.
+    """
+    history = conn.execute(
+        "SELECT id, status, changed_at FROM status_history WHERE element_id = ? "
+        "ORDER BY changed_at, id",
+        (element_id,),
+    ).fetchall()
+    planned = [r for r in history if r["status"] == PLANNED_STATUS]
+    others = [r for r in history if r["status"] != PLANNED_STATUS]
+    if not planned or not others:
+        return False
+    first_planned, earliest_other = planned[0], others[0]
+    if earliest_other["changed_at"] >= first_planned["changed_at"]:
+        return False
+    moment = parse_moment(earliest_other["changed_at"])
+    if moment is None:
+        return False
+    new_changed_at = (moment - timedelta(minutes=1)).strftime(MOMENT_FORMAT)
+    conn.execute(
+        "UPDATE status_history SET changed_at = ? WHERE id = ?",
+        (new_changed_at, first_planned["id"]),
+    )
+    return True
+
+
 def import_history(conn, source_file: str, rows: list, mode: str):
-    if mode not in ("replace", "merge"):
-        raise HistoryImportError(422, "mode должен быть 'replace' или 'merge'")
+    if mode not in ("replace", "merge", "sync"):
+        raise HistoryImportError(422, "mode должен быть 'replace', 'merge' или 'sync'")
 
     handles = sorted({r["dxf_handle"] for r in rows})
     element_ids = {}
@@ -231,7 +371,8 @@ def import_history(conn, source_file: str, rows: list, mode: str):
                 f"DELETE FROM status_history WHERE element_id IN ({placeholders})", matched_ids
             )
 
-    inserted = skipped_duplicate = skipped_unmatched = 0
+    inserted = updated = skipped_duplicate = skipped_unmatched = 0
+    unpaired_existing = 0
     touched_element_ids = set()
 
     # Реквизиты контракта из файла (см. _resolve_contract_id). Счётчик
@@ -247,35 +388,140 @@ def import_history(conn, source_file: str, rows: list, mode: str):
     }
     rows_with_contract = 0
 
-    for row in rows:
-        element_id = element_ids.get(row["dxf_handle"])
-        if element_id is None:
-            skipped_unmatched += 1
-            continue
-
-        date_part = row["changed_at"][:10]
-        dup = conn.execute(
-            "SELECT id FROM status_history WHERE element_id = ? AND status = ? "
-            "AND substr(changed_at, 1, 10) = ?",
-            (element_id, row["status"], date_part),
-        ).fetchone()
-        if dup:
-            skipped_duplicate += 1
-            continue
-
+    def row_contract_id(row):
+        nonlocal rows_with_contract
         contract_id = _resolve_contract_id(
             conn, row, contract_cache, contract_warnings, counterparty_by_lower
         )
         if contract_id is not None:
             rows_with_contract += 1
+        return contract_id
 
+    def insert_row(element_id, row):
+        nonlocal inserted
         conn.execute(
             "INSERT INTO status_history (element_id, status, changed_at, changed_by, comment, contract_id) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (element_id, row["status"], row["changed_at"], row["changed_by"], row["comment"], contract_id),
+            (element_id, row["status"], row["changed_at"], row["changed_by"], row["comment"],
+             row_contract_id(row)),
         )
         inserted += 1
         touched_element_ids.add(element_id)
+
+    def update_row(record, element_id, row):
+        """Существующая запись истории приводится к строке файла.
+
+        Пустая ячейка НЕ стирает уже записанное (кто изменил, комментарий,
+        реквизиты контракта): у старых выгрузок этих колонок вообще нет, а
+        наша пишет пустую строку вместо NULL — на обратном круге любое
+        "нет значения" неотличимо от "значение убрали", и стирать в такой
+        неоднозначности хуже, чем сохранить. Дата же приходит всегда (строки
+        без даты отсеиваются при разборе) и обновляется безусловно — она и
+        есть предмет коррекции.
+        """
+        nonlocal updated
+        contract_id = row_contract_id(row)
+        new_values = {
+            "changed_at": row["changed_at"],
+            "changed_by": row["changed_by"] if row["changed_by"] is not None else record["changed_by"],
+            "comment": row["comment"] if row["comment"] is not None else record["comment"],
+            "contract_id": contract_id if contract_id is not None else record["contract_id"],
+        }
+        if all(record[field] == value for field, value in new_values.items()):
+            return  # запись уже в точности такая — ни UPDATE, ни пересчёт не нужны
+        conn.execute(
+            "UPDATE status_history SET changed_at = ?, changed_by = ?, comment = ?, contract_id = ? "
+            "WHERE id = ?",
+            (new_values["changed_at"], new_values["changed_by"], new_values["comment"],
+             new_values["contract_id"], record["id"]),
+        )
+        updated += 1
+        touched_element_ids.add(element_id)
+
+    if mode == "sync":
+        # Строки файла и существующие записи — по парам (элемент, статус),
+        # внутри пары в хронологическом порядке (см. шапку модуля: своего
+        # идентификатора у записи истории в выгрузке нет).
+        existing_by_key: dict = defaultdict(list)
+        matched_ids = sorted(element_ids.values())
+        # Чанки — у SQLite есть предел числа параметров в запросе
+        # (SQLITE_MAX_VARIABLE_NUMBER, у старых сборок 999), а элементов тут
+        # тысячи.
+        for start in range(0, len(matched_ids), 500):
+            chunk = matched_ids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            for record in conn.execute(
+                "SELECT id, element_id, status, changed_at, changed_by, comment, contract_id "
+                f"FROM status_history WHERE element_id IN ({placeholders}) "
+                "ORDER BY changed_at, id",
+                chunk,
+            ).fetchall():
+                existing_by_key[(record["element_id"], record["status"])].append(record)
+
+        file_by_key: dict = defaultdict(list)
+        for row in rows:
+            element_id = element_ids.get(row["dxf_handle"])
+            if element_id is None:
+                skipped_unmatched += 1
+                continue
+            file_by_key[(element_id, row["status"])].append(row)
+
+        paired_counts: dict = {}
+        for key, file_rows in file_by_key.items():
+            element_id = key[0]
+            # Полностью совпадающие строки файла — это одна и та же запись,
+            # продублированная в файле; иначе вторая такая строка не нашла бы
+            # себе пары и добавилась бы новой записью, то есть режим коррекции
+            # сам создал бы дубль.
+            unique_rows, seen_moments = [], set()
+            for row in sorted(file_rows, key=lambda r: r["changed_at"]):
+                if row["changed_at"] in seen_moments:
+                    skipped_duplicate += 1
+                    continue
+                seen_moments.add(row["changed_at"])
+                unique_rows.append(row)
+            paired_counts[key] = len(unique_rows)
+
+            existing = existing_by_key.get(key, [])
+            for index, row in enumerate(unique_rows):
+                if index < len(existing):
+                    update_row(existing[index], element_id, row)
+                else:
+                    insert_row(element_id, row)
+
+        # Записи БД, которым в файле не нашлось строки. Не удаляем (это
+        # "replace", а не коррекция), но и не молчим — иначе пользователь не
+        # узнает, что в системе осталось событие, которого в файле нет.
+        for key, existing in existing_by_key.items():
+            unpaired_existing += max(0, len(existing) - paired_counts.get(key, 0))
+    else:
+        for row in rows:
+            element_id = element_ids.get(row["dxf_handle"])
+            if element_id is None:
+                skipped_unmatched += 1
+                continue
+
+            date_part = row["changed_at"][:10]
+            dup = conn.execute(
+                "SELECT id FROM status_history WHERE element_id = ? AND status = ? "
+                "AND substr(changed_at, 1, 10) = ?",
+                (element_id, row["status"], date_part),
+            ).fetchone()
+            if dup:
+                skipped_duplicate += 1
+                continue
+
+            insert_row(element_id, row)
+
+    # Порядок жизненного цикла — см. _shift_planned_before_first_event: без
+    # этого проставленная задним числом дата поставки/монтажа оказывается
+    # раньше записи "Запланирован" от импорта чертежа, и элемент
+    # откатывается в "Запланирован". Строго ДО пересчёта ниже — он и берёт
+    # последнюю по changed_at запись.
+    planned_shifted = 0
+    for element_id in touched_element_ids:
+        if _shift_planned_before_first_event(conn, element_id):
+            planned_shifted += 1
 
     # recompute_status_and_actual_date (app/contracts.py) — тот же
     # пересчёт, что после обычной смены статуса/отката: current_status
@@ -300,6 +546,9 @@ def import_history(conn, source_file: str, rows: list, mode: str):
         "unmatched_elements": len(unmatched_handles),
         "unmatched_handles": unmatched_handles[:20],
         "inserted": inserted,
+        "updated": updated,
+        "planned_shifted": planned_shifted,
+        "unpaired_existing": unpaired_existing,
         "skipped_duplicate": skipped_duplicate,
         "skipped_unmatched": skipped_unmatched,
         "rows_with_contract": rows_with_contract,

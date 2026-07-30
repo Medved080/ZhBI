@@ -1434,8 +1434,20 @@
     <label class="field">Файл .xlsx (лист "История статусов")</label>
     <input type="file" id="history-import-file" accept=".xlsx"/>
     <div class="import-template" data-template="history"></div>
-    <label class="radio" style="margin-top:12px;"><input type="radio" name="history-import-mode" value="merge" checked/> Дополнить (пропускать дубли: тот же статус в ту же дату)</label>
+    <label class="radio" style="margin-top:12px;"><input type="radio" name="history-import-mode" value="sync" checked/> Скорректировать даты (обновить дату существующей записи, новые события добавить)</label>
+    <label class="radio"><input type="radio" name="history-import-mode" value="merge"/> Дополнить (только добавлять; пропускать дубли: тот же статус в ту же дату)</label>
     <label class="radio"><input type="radio" name="history-import-mode" value="replace"/> Заменить (удалить текущую историю сопоставленных элементов)</label>
+    <!-- «Скорректировать даты» — по умолчанию: это обычный обратный круг
+         (выгрузили → поправили даты в Excel → загрузили), и на пустой
+         истории он ведёт себя как «Дополнить». У «Дополнить» изменённая
+         дата не совпадает с существующей записью и даёт вторую запись того
+         же статуса — то самое задвоение, см. app/history_import.py. -->
+    <div class="hint-text" style="margin-top:6px;">
+      Запись «Запланирован», созданную импортом чертежа, импорт сам сдвинет
+      раньше самого раннего события элемента — иначе проставленная задним
+      числом дата поставки/монтажа оказалась бы раньше неё и статус
+      откатился бы в «Запланирован».
+    </div>
     <div id="history-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="history-import-cancel">Отмена</button>

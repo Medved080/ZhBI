@@ -5084,8 +5084,14 @@ function rebuildZonePreview3d() {
     });
   }
   const group = new THREE.Group();
-  group.rotation.x = -Math.PI / 2;  // план чертежа лежит в XZ, как в основной сцене
-  group.scale.z = -1;               // world.Z = -dxf.y
+  // План строится в ЛОКАЛЬНЫХ XY (x = dxf.x, y = dxf.y), высота — по
+  // локальному Z. Поворот на -90° вокруг X переводит локальный +Z в мировой
+  // «вверх», а локальный +Y — в мировой -Z, то есть world.Z = -dxf.y ровно
+  // как в основной сцене. Дополнительного зеркалирования НЕ НУЖНО: раньше
+  // здесь стоял group.scale.z = -1 в расчёте на разворот плана, а он на
+  // самом деле инвертировал ВЫСОТУ — ярусы уходили вниз, и объём выглядел
+  // перевёрнутым (живой репорт со скриншотом).
+  group.rotation.x = -Math.PI / 2;
 
   const bbox = zoneEdit.context.bbox;
   if (bbox) {
@@ -5099,16 +5105,18 @@ function rebuildZonePreview3d() {
     group.add(plate);
   }
 
-  const flat = (outline, color, opacity, y) => {
-    const mesh = new THREE.Mesh(
-      new THREE.ShapeGeometry(zonePreviewShape(outline)),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }),
-    );
-    mesh.position.z = y;   // после rotation.x это вертикаль
-    return mesh;
-  };
+  // Соседние зоны — КОНТУРАМИ, а не заливками. Заливок здесь под 250, все
+  // прозрачные и лежат почти на одной высоте: сортировка прозрачных
+  // поверхностей на каждом кадре меняла порядок, и при вращении заливка
+  // мерцала полосами (живой репорт со скриншотом). Контуры этой проблемы не
+  // имеют вовсе, а как контекст читаются даже лучше — видно границы, а не
+  // мутное пятно.
   for (const sib of zoneEdit.context.siblings) {
-    group.add(flat(sib.outline, 0x888888, 0.06, (sib.elevation_mm || 0) + 5));
+    group.add(new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(
+        sib.outline.map(p => new THREE.Vector3(p[0], p[1], sib.elevation_mm || 0))),
+      new THREE.LineBasicMaterial({ color: 0x99a3ad, transparent: true, opacity: 0.5 }),
+    ));
   }
   for (const level of zoneEdit.context.parent) {
     const line = new THREE.LineLoop(
@@ -6214,8 +6222,18 @@ historyImportSubmit.addEventListener("click", async () => {
       setHistoryImportStatus((body && body.detail) ? body.detail : `Ошибка ${res.status}`, true);
       return;
     }
-    let msg = `Готово: сопоставлено элементов ${body.matched_elements}, добавлено записей ${body.inserted}, ` +
+    let msg = `Готово: сопоставлено элементов ${body.matched_elements}, ` +
+      `исправлено записей ${body.updated}, добавлено ${body.inserted}, ` +
       `пропущено дублей ${body.skipped_duplicate}, не найдено в этой БД ${body.unmatched_elements}.`;
+    if (body.planned_shifted) msg += ` Записей «Запланирован» сдвинуто в начало истории: ${body.planned_shifted}.`;
+    if (body.unpaired_existing) msg += ` В системе осталось событий, которых нет в файле: ${body.unpaired_existing} (не удалены).`;
+    // Нераспознанная дата — опечатка в файле, а не рядовой пропуск: строка
+    // молча не применилась, и об этом надо сказать с примерами.
+    if (body.invalid_dates) {
+      msg += ` Строк с нераспознанной датой (пропущены): ${body.invalid_dates}` +
+        (body.invalid_date_examples && body.invalid_date_examples.length
+          ? ` — ${body.invalid_date_examples.slice(0, 5).join("; ")}` : "") + ".";
+    }
     if (body.unmatched_handles.length) msg += ` Примеры handle без совпадения: ${body.unmatched_handles.join(", ")}.`;
     setHistoryImportStatus(msg, false);
     await loadPlan();
@@ -7261,6 +7279,11 @@ statusRestoreSubmit.addEventListener("click", async () => {
     }
     let msg = `Готово: сопоставлено элементов ${body.matched_elements}, восстановлено записей ${body.inserted}, ` +
       `не найдено в этой БД ${body.unmatched_elements}.`;
+    if (body.invalid_dates) {
+      msg += ` Строк с нераспознанной датой (пропущены): ${body.invalid_dates}` +
+        (body.invalid_date_examples && body.invalid_date_examples.length
+          ? ` — ${body.invalid_date_examples.slice(0, 5).join("; ")}` : "") + ".";
+    }
     if (body.unmatched_handles.length) msg += ` Примеры handle без совпадения: ${body.unmatched_handles.join(", ")}.`;
     setStatusRestoreStatus(msg, false);
     await loadPlan();
