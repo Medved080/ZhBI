@@ -1741,6 +1741,15 @@ _ELEMENT_FILTER_COLUMNS = ("element_type", "subtype", "mark", "elevation_mm", "f
 # означает «любое значение», а «пустое значение» надо уметь выбрать явно.
 PLACEMENT_NONE_SENTINEL = "__none__"
 
+# Колонки, отбираемые ПОДСТРОКОЙ, а не выпадашкой: у них значений почти
+# столько же, сколько строк (адрес по осям, даты). Живой запрос — «добавь
+# возможность фильтрации по всем колонкам»: выпадашка на 9000 разных значений
+# бесполезна, а поиск по части значения работает и для даты («2026-09»).
+_ELEMENT_TEXT_FILTER_COLUMNS = (
+    "address", "planned_delivery_date", "actual_delivery_date",
+    "project_delivery_date", "project_smr_start_date", "layer",
+)
+
 # Колонки, по которым разрешена сортировка. Белый список, а не подстановка
 # имени из запроса в SQL: имя колонки нельзя передать параметром, оно
 # склеивается в текст запроса — без списка это была бы SQL-инъекция.
@@ -1766,6 +1775,12 @@ def elements_catalog(
     elevation_mm: Optional[str] = Query(None),
     floor: Optional[str] = Query(None),
     current_status: Optional[str] = Query(None),
+    address: Optional[str] = Query(None),
+    planned_delivery_date: Optional[str] = Query(None),
+    actual_delivery_date: Optional[str] = Query(None),
+    project_delivery_date: Optional[str] = Query(None),
+    project_smr_start_date: Optional[str] = Query(None),
+    layer: Optional[str] = Query(None),
     user: sqlite3.Row = Depends(get_current_user),
 ):
     """Табличный справочник элементов с отбором по колонкам и сортировкой.
@@ -1788,6 +1803,14 @@ def elements_catalog(
     # Пустая строка от выпадашки означает «любое», а не «пустое значение»;
     # для «пустое» есть отдельный сентинел (клиент присылает __none__).
     active = {k: v for k, v in requested.items() if v not in (None, "")}
+    text_filters = {
+        k: v for k, v in {
+            "address": address, "planned_delivery_date": planned_delivery_date,
+            "actual_delivery_date": actual_delivery_date,
+            "project_delivery_date": project_delivery_date,
+            "project_smr_start_date": project_smr_start_date, "layer": layer,
+        }.items() if v not in (None, "")
+    }
 
     def clauses_for(skip: Optional[str] = None):
         # Справочник — про элементы ОБЪЕКТА, а не про всё, что когда-либо
@@ -1804,6 +1827,12 @@ def elements_catalog(
             else:
                 parts.append(f"{column} = ?")
                 params.append(value)
+        for column, value in text_filters.items():
+            # Имя колонки — из закрытого списка, не из запроса: подставляется
+            # в текст SQL, параметром его не передать.
+            if column in _ELEMENT_TEXT_FILTER_COLUMNS:
+                parts.append(f"{column} LIKE ?")
+                params.append(f"%{value}%")
         if search:
             parts.append("(mark LIKE ? OR address LIKE ?)")
             params.extend([f"%{search}%", f"%{search}%"])

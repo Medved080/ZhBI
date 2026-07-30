@@ -248,6 +248,19 @@
   /* Активная строка справочника элементов — под ней показывается история
      статусов этого элемента. */
   #ec-table tbody tr.ec-row-active { background: rgba(36,113,163,.12); }
+  /* Шапка таблицы справочника элементов — ДВЕ прилипающие строки: заголовки
+     колонок и строка выпадашек отбора. Обе внутри прокручиваемой области, и
+     без sticky они уезжали вверх (живой репорт). Второй строке нужен свой
+     top, равный высоте первой, иначе они наложатся друг на друга. */
+  #ec-table thead th,
+  #ec-table thead td {
+    position: sticky; background: var(--color-surface); z-index: 2;
+  }
+  #ec-table thead tr:first-child th { top: 0; }
+  /* top второй строки = фактическая высота первой (замерено в браузере:
+     16 px). При 22 px между строками оставался зазор, через который
+     проглядывали уезжающие строки таблицы. */
+  #ec-table thead tr:nth-child(2) td { top: 16px; z-index: 1; }
   .subtype-add-row input { flex: 1; }
   .element-shape { cursor: pointer; }
   .element-shape:hover { stroke-width: 3; }
@@ -1296,6 +1309,11 @@
     </div>
     <div class="modal-sticky-scroll">
       <label class="field">История статусов — правится прямо в таблице</label>
+      <!-- Подсказка значений для «Кто изменил» из справочника пользователей
+           (живой запрос). Именно datalist, а не select: в истории может
+           стоять человек, которого в списке пользователей уже/ещё нет —
+           свободный ввод должен остаться возможным. -->
+      <datalist id="ef-users"></datalist>
       <table id="ef-history" style="width:100%; font-size:12px"></table>
     </div>
     <div class="modal-sticky-foot">

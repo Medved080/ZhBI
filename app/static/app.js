@@ -4768,14 +4768,31 @@ const EC_COLUMNS = [
   { key: "mark", label: "Марка", filter: true },
   { key: "elevation_mm", label: "Отметка", filter: true },
   { key: "floor", label: "Этаж", filter: true },
-  { key: "address", label: "Адрес по осям", filter: false },
+  { key: "address", label: "Адрес по осям", text: true },
   { key: "current_status", label: "Статус", filter: true },
-  { key: "planned_delivery_date", label: "План. поставка", filter: false },
-  { key: "actual_delivery_date", label: "Факт. поставка", filter: false },
-  { key: "project_smr_start_date", label: "Начало СМР", filter: false },
+  { key: "planned_delivery_date", label: "План. поставка", text: true },
+  { key: "actual_delivery_date", label: "Факт. поставка", text: true },
+  { key: "project_smr_start_date", label: "Начало СМР", text: true },
 ];
 
 const ecState = { sort: "id", direction: "asc", offset: 0, filters: {}, search: "" };
+
+// Статус — с цветовой меткой из настроек («Действия → Настройки → Цвета
+// статусов»), как на схеме и в легенде: один и тот же статус не должен
+// выглядеть по-разному в разных местах (живой запрос).
+// Цвет приходит из БД, поэтому подставляется в style только после проверки
+// формата — иначе это дырка для внедрения css/скрипта через настройку.
+function statusColor(status) {
+  const value = (state.statusColors || {})[status];
+  return /^#[0-9a-fA-F]{3,8}$/.test(value || "") ? value : "#9aa0a6";
+}
+
+function statusBadgeHtml(status) {
+  return `<span style="display:inline-flex; align-items:center; gap:6px; white-space:nowrap">
+    <span style="width:9px; height:9px; border-radius:50%; flex:0 0 9px;
+      background:${statusColor(status)}"></span>
+    ${escapeHtml(state.statusLabels[status] || status)}</span>`;
+}
 
 function ecCellText(row, key) {
   const value = row[key];
@@ -4819,6 +4836,13 @@ async function renderElementCatalog() {
   }).join("");
 
   const filterRow = EC_COLUMNS.map(col => {
+    // Колонки с почти уникальными значениями (адрес, даты) отбираются
+    // ПОДСТРОКОЙ: выпадашка на тысячи значений бесполезна, а «2026-09»
+    // отбирает по месяцу.
+    if (col.text) {
+      return `<td><input type="text" data-textfilter="${col.key}" placeholder="часть значения"
+        value="${escapeHtml(ecState.filters[col.key] || "")}" style="width:100%; font-size:11px"/></td>`;
+    }
     if (!col.filter) return "<td></td>";
     const options = ['<option value="">— все —</option>'].concat(
       (data.values[col.key] || []).map(v =>
@@ -4831,7 +4855,9 @@ async function renderElementCatalog() {
   table.innerHTML = `<thead><tr>${head}</tr><tr>${filterRow}</tr></thead>
     <tbody>${data.rows.map(row => `<tr data-element-id="${row.id}" style="cursor:pointer"
       ${row.id === ecActiveElementId ? 'class="ec-row-active"' : ""}>
-      ${EC_COLUMNS.map(col => `<td>${escapeHtml(ecCellText(row, col.key))}</td>`).join("")}
+      ${EC_COLUMNS.map(col => `<td>${col.key === "current_status"
+        ? statusBadgeHtml(row[col.key])
+        : escapeHtml(ecCellText(row, col.key))}</td>`).join("")}
     </tr>`).join("")}</tbody>`;
 
   table.querySelectorAll("tbody tr[data-element-id]").forEach(tr => {
@@ -4862,6 +4888,24 @@ async function renderElementCatalog() {
     ecState.offset = 0;
     renderElementCatalog();
   }));
+  let textFilterTimer = null;
+  table.querySelectorAll("input[data-textfilter]").forEach(input => {
+    input.addEventListener("input", () => {
+      clearTimeout(textFilterTimer);
+      const key = input.getAttribute("data-textfilter");
+      const value = input.value.trim();
+      // С задержкой: перерисовка перестраивает шапку, и без неё поле теряло
+      // бы фокус на каждой букве.
+      textFilterTimer = setTimeout(() => {
+        ecState.filters[key] = value;
+        ecState.offset = 0;
+        renderElementCatalog().then(() => {
+          const again = document.querySelector(`#ec-table input[data-textfilter="${key}"]`);
+          if (again) { again.focus(); again.setSelectionRange(value.length, value.length); }
+        });
+      }, 400);
+    });
+  });
   table.querySelectorAll("select[data-filter]").forEach(sel => sel.addEventListener("change", () => {
     ecState.filters[sel.getAttribute("data-filter")] = sel.value;
     ecState.offset = 0;
@@ -4960,7 +5004,8 @@ function renderEfHistory() {
       <td><input type="datetime-local" data-hf="changed_at" style="width:100%"
         value="${escapeHtml((h.changed_at || "").replace(" ", "T").slice(0, 16))}"/></td>
       <td><select data-hf="status" style="width:100%">${statusOptions(h.status)}</select></td>
-      <td><input type="text" data-hf="changed_by" style="width:100%" value="${escapeHtml(h.changed_by || "")}"/></td>
+      <td><input type="text" data-hf="changed_by" list="ef-users" style="width:100%"
+        value="${escapeHtml(h.changed_by || "")}"/></td>
       <td><input type="text" data-hf="comment" style="width:100%" value="${escapeHtml(h.comment || "")}"/></td>
       <td style="white-space:nowrap">
         <button class="btn btn-sm btn-primary" data-h-save="${h.id}" title="Сохранить запись">✓</button>
@@ -5013,7 +5058,20 @@ async function afterElementChanged() {
   if (state.sourceFile) await loadPlan(true);
 }
 
+let efUsersLoaded = false;
+
 async function openElementForm(elementId, show = true) {
+  // Список пользователей для подсказки в «Кто изменил» — один раз за сеанс.
+  if (!efUsersLoaded) {
+    efUsersLoaded = true;
+    try {
+      const users = await api("/users");
+      document.getElementById("ef-users").innerHTML = users
+        .map(u => `<option value="${escapeHtml(u.display_name || u.domain_login)}"></option>`).join("");
+    } catch (e) {
+      // Не админ или список недоступен — свободный ввод и так работает.
+    }
+  }
   if (!efAllowedSubtypes) {
     try {
       efAllowedSubtypes = await api("/allowed-subtypes");
@@ -5113,7 +5171,7 @@ async function renderEcDetail() {
     <div class="subtype-add-row" style="align-items:flex-end; margin-bottom:8px">
       <div><b>${escapeHtml(element.element_type)} ${escapeHtml(element.mark || "без марки")}</b>
         <span class="hint-text">— ${escapeHtml(element.address || "адрес не определён")},
-        текущий статус: ${escapeHtml(state.statusLabels[element.current_status] || element.current_status)}</span></div>
+        текущий статус:</span> ${statusBadgeHtml(element.current_status)}</div>
       <span class="spacer"></span>
       ${admin ? `<select id="ec-status-select" style="font-size:12px">${statusOptions}</select>
         <button class="btn btn-sm btn-primary" id="ec-status-apply">Изменить статус…</button>
@@ -5127,7 +5185,7 @@ async function renderEcDetail() {
       </tr></thead>
       <tbody>${(element.history || []).map(h => `<tr>
         <td>${escapeHtml(h.changed_at || "")}</td>
-        <td>${escapeHtml(state.statusLabels[h.status] || h.status)}</td>
+        <td>${statusBadgeHtml(h.status)}</td>
         <td>${escapeHtml(h.changed_by || "—")}</td>
         <td>${escapeHtml(h.comment || "")}</td>
         ${admin ? `<td><button class="btn btn-sm btn-secondary" data-del-history="${h.id}"
