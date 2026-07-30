@@ -9206,6 +9206,7 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
       const right = new THREE.Vector3(0, 1, 0); // текст снизу вверх вдоль высоты
       const center = new THREE.Vector3(midX, (element.elevation_mm || 0) + height / 2, -midY);
       center.addScaledVector(normal, DECAL_SURFACE_OFFSET_MM);
+      group.userData.worldFont = Math.max(group.userData.worldFont || 0, fontSize);
       group.add(buildDecalPlane(texture, fontSize * aspect, fontSize, center, right, normal));
     }
     if (!any) return null;
@@ -9228,6 +9229,7 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
   const decalWorldWidth = fontSize * aspect;
 
   const topCenter = new THREE.Vector3(cx, (element.elevation_mm || 0) + height + DECAL_SURFACE_OFFSET_MM, cz);
+  group.userData.worldFont = Math.max(group.userData.worldFont || 0, fontSize);
   group.add(buildDecalPlane(texture, decalWorldWidth, fontSize, topCenter, right, new THREE.Vector3(0, 1, 0)));
 
   const bottomCenter = new THREE.Vector3(cx, (element.elevation_mm || 0) - DECAL_SURFACE_OFFSET_MM, cz);
@@ -9490,10 +9492,87 @@ function apply3DLabelVisibility() {
   for (const [id, decal] of state.view3d.markDecalById) {
     const element = state.byId.get(id);
     if (!element) continue;
-    decal.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+    // baseVisible — «разрешена ли подпись по смыслу» (фильтр + тип). Реальная
+    // видимость = это И читаемость на текущем удалении камеры (см.
+    // apply3DDecalSizeCulling): иначе прореживание по размеру воскрешало бы
+    // подписи, скрытые фильтром.
+    decal.userData.baseVisible =
+      passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
   }
+  apply3DDecalSizeCulling();
   requestRender3D();
 }
+
+// Прореживание 3D-наклеек по ЭКРАННОМУ размеру — та же мысль, что в 2D
+// (MIN_STICKER_FONT_PX), но порог зависит не от зума, а от расстояния до
+// камеры: высота объекта в пикселях = worldFont * H / (2 * distance *
+// tan(fov/2)). Наклейка лежит на грани в мировых единицах, поэтому издали
+// это доли пикселя — читать нечего, а видеокарта честно рисует каждую из
+// тысяч (на реальном файле их 9420).
+//
+// Работает одинаково в обычном 3D и в «3D лёгком»: режим влияет на рёбра и
+// pixelRatio, а наклейки в нём те же.
+function apply3DDecalSizeCulling() {
+  const v3 = state.view3d;
+  if (!v3 || !v3.camera || !v3.renderer || !v3.markDecalById) return;
+  const height = v3.renderer.domElement.clientHeight || v3.renderer.domElement.height || 1;
+  const k = height / (2 * Math.tan((v3.camera.fov * Math.PI / 180) / 2));
+  const camera = v3.camera.position;
+  if (!_decalToCamera) {
+    _decalToCamera = new THREE.Vector3();
+    _decalWorldPos = new THREE.Vector3();
+  }
+  for (const decal of v3.markDecalById.values()) {
+    const base = decal.userData.baseVisible !== false;
+    const worldFont = decal.userData.worldFont;
+    if (!base || !worldFont) {
+      decal.visible = base;
+      continue;
+    }
+    // Расстояние — до ЦЕНТРА самой наклейки, а не до decal.position: группа
+    // стоит в начале координат, вся геометрия лежит в дочерних плоскостях
+    // (поймано проверкой: до фикса прореживание меряло расстояние до нуля
+    // сцены и прятало наклейки на любом удалении камеры).
+    const firstPlane = decal.children[0];
+    const center = (firstPlane && firstPlane.userData.decalCenter) || decal.position;
+    const distance = camera.distanceTo(center) || 1;
+    if ((worldFont * k) / distance < MIN_STICKER_FONT_PX) {
+      decal.visible = false;
+      continue;
+    }
+    // Наклейка, СМОТРЯЩАЯ ОТ камеры, не видна в любом случае — её рисует
+    // видеокарта впустую. Дешёвая замена настоящему occlusion culling
+    // (перекрытие ближними элементами): нормаль грани известна на самих
+    // плоскостях наклейки (userData.decalNormal, её же использует
+    // updateDecalOrientation), скалярное произведение с направлением на
+    // камеру решает вопрос без единого чтения из буфера глубины.
+    //
+    // Именно приближение, а не полное решение: элемент, закрытый ДРУГИМ
+    // элементом, отсюда неотличим от видимого. Настоящее перекрытие в
+    // WebGL решается occlusion queries и стоит собственной сложности —
+    // см. запись в Docs/backlog.md.
+    let facesCamera = true;
+    for (const plane of decal.children) {
+      const normal = plane.userData && plane.userData.decalNormal;
+      if (!normal) continue;
+      _decalToCamera.subVectors(camera, plane.getWorldPosition(_decalWorldPos));
+      facesCamera = normal.dot(_decalToCamera) > 0;
+      if (facesCamera) break;
+    }
+    decal.visible = facesCamera;
+  }
+}
+
+// Переиспользуемые векторы: apply3DDecalSizeCulling вызывается на КАЖДОЕ
+// движение камеры и обходит тысячи наклеек — создавать здесь по объекту на
+// каждую значило бы кормить сборщик мусора ровно в тот момент, когда нужна
+// плавность.
+//
+// Создаются ЛЕНИВО, а не на верхнем уровне модуля: THREE подгружается
+// динамически (ensureThreeLoaded) и на момент разбора файла ещё null —
+// `new THREE.Vector3()` здесь уронил бы загрузку приложения целиком.
+let _decalToCamera = null;
+let _decalWorldPos = null;
 
 // Точечная пересборка ОДНОГО 3D-спрайта после смены статуса/партии —
 // холст-текстура запекается один раз при создании, точечно её не
@@ -9524,7 +9603,9 @@ function rebuild3DLabelSprite(element) {
     v3.markDecalById.delete(element.id);
     const decal = build3DMarkDecal(element, levels, columnTopOverrides);
     if (decal) {
-      decal.visible = passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+      decal.userData.baseVisible =
+        passesPlacementFilters(element) && state.labelVisibility[element.element_type] !== false;
+      decal.visible = decal.userData.baseVisible;
       v3.scene.add(decal);
       v3.markDecalById.set(element.id, decal);
     }
@@ -9675,6 +9756,7 @@ function build3DScene(preserveCamera = false) {
     const labelVisible = state.labelVisibility[element.element_type] !== false;
     const decal = build3DMarkDecal(element, levels, columnTopOverrides);
     if (decal) {
+      decal.userData.baseVisible = labelVisible;
       decal.visible = labelVisible;
       v3.scene.add(decal);
       v3.markDecalById.set(element.id, decal);
@@ -9713,6 +9795,7 @@ function build3DScene(preserveCamera = false) {
 
   if (!preserveCamera) fit3DCameraToData();
   updateAllDecalOrientations(); // начальный ракурс — тоже должен быть читаемым, не только после первого поворота
+  apply3DDecalSizeCulling();
   requestRender3D();
 }
 
@@ -9779,6 +9862,9 @@ function init3DScene() {
   // построении — дёшево, только смена кватерниона у уже существующих
   // мешей, без пересборки geometry/texture (см. updateDecalOrientation).
   controls.addEventListener("change", updateAllDecalOrientations);
+  // Читаемость наклейки зависит от расстояния до камеры, поэтому пересчёт
+  // прореживания идёт на то же событие, что и разворот наклеек.
+  controls.addEventListener("change", apply3DDecalSizeCulling);
   // Главный источник кадров при обычной работе: пока оператор вращает/
   // зумит/панорамирует, OrbitControls шлёт "change" на каждое движение —
   // ровно на них и рисуем. Отпустил мышь — события кончились, кадры
