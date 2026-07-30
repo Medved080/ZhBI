@@ -5073,6 +5073,42 @@ function zonePreviewShape(outline) {
   return new THREE.Shape(outline.map(p => new THREE.Vector2(p[0], p[1])));
 }
 
+// Зазор между соприкасающимися плоскостями предпросмотра, мм. У соседних
+// ярусов верх одного и низ другого — одна и та же плоскость, и без зазора
+// они борются в буфере глубины (мерцание полосами при вращении). 60 мм на
+// модели в десятки метров глазом не видны.
+const PREVIEW_PLANE_GAP_MM = 60;
+
+// Подпись-номер точки в 3D: спрайт с канвасом, как постоянные подписи марок
+// в основной сцене (build3DLabelSprite) — отдельной инфраструктуры для
+// текста в WebGL нет. Размер задаётся в мировых мм, чтобы номер не «плавал»
+// относительно зоны при зуме.
+function zonePreviewNumberSprite(text, active, screenSize) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = active ? "#d68910" : "#2471a3";
+  ctx.beginPath();
+  ctx.arc(32, 32, active ? 30 : 24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `700 ${active ? 34 : 28}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 32, 34);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas), transparent: true, depthTest: false,
+    // sizeAttenuation:false — размер в ЭКРАННЫХ единицах, не в мировых мм.
+    // Первая версия задавала размер от габарита зоны (стоянка ~37 м), но
+    // камера кадрирует весь объект (~227 м), и номера выходили нечитаемо
+    // мелкими. Постоянный экранный размер — то же решение, что у минимального
+    // кегля подписи марки в 2D (MIN_LABEL_FONT_PX).
+    sizeAttenuation: false,
+  }));
+  sprite.scale.set(screenSize, screenSize, 1);
+  return sprite;
+}
+
 function rebuildZonePreview3d() {
   if (!zonePreview3d.renderer || !zoneEdit) return;
   const { scene } = zonePreview3d;
@@ -5099,9 +5135,16 @@ function rebuildZonePreview3d() {
     // всего проекта (это и есть смысл предпросмотра).
     const plate = new THREE.Mesh(
       new THREE.PlaneGeometry(bbox[2] - bbox[0], bbox[3] - bbox[1]),
-      new THREE.MeshBasicMaterial({ color: 0x8899aa, transparent: true, opacity: 0.12, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({
+        color: 0x8899aa, transparent: true, opacity: 0.12, side: THREE.DoubleSide,
+        // Подложка уходит НИЖЕ нуля и дополнительно сдвинута в буфере
+        // глубины: иначе она совпадает плоскость-в-плоскость с основанием
+        // зоны на отметке 0, и при вращении основание мерцало полосами
+        // (второй живой репорт по этому предпросмотру).
+        polygonOffset: true, polygonOffsetFactor: 4, polygonOffsetUnits: 4,
+      }),
     );
-    plate.position.set((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, 0);
+    plate.position.set((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, -PREVIEW_PLANE_GAP_MM);
     group.add(plate);
   }
 
@@ -5114,7 +5157,9 @@ function rebuildZonePreview3d() {
   for (const sib of zoneEdit.context.siblings) {
     group.add(new THREE.LineLoop(
       new THREE.BufferGeometry().setFromPoints(
-        sib.outline.map(p => new THREE.Vector3(p[0], p[1], sib.elevation_mm || 0))),
+        // + зазор: на отметке 0 контур иначе лежит ровно в плоскости
+        // подложки габаритов и тоже мерцает.
+        sib.outline.map(p => new THREE.Vector3(p[0], p[1], (sib.elevation_mm || 0) + PREVIEW_PLANE_GAP_MM))),
       new THREE.LineBasicMaterial({ color: 0x99a3ad, transparent: true, opacity: 0.5 }),
     ));
   }
@@ -5141,7 +5186,10 @@ function rebuildZonePreview3d() {
     const height = Math.max((above === undefined ? base + fallbackHeight : above) - base, 200);
     const active = li === zoneEdit.active.level;
     const mesh = new THREE.Mesh(
-      new THREE.ExtrudeGeometry(zonePreviewShape(level.outline), { depth: height, bevelEnabled: false, steps: 1 }),
+      // Высота на зазор меньше: верх этого яруса иначе совпадает с низом
+      // следующего плоскость-в-плоскость, и стык мерцает при вращении.
+      new THREE.ExtrudeGeometry(zonePreviewShape(level.outline),
+        { depth: Math.max(height - PREVIEW_PLANE_GAP_MM, 100), bevelEnabled: false, steps: 1 }),
       new THREE.MeshStandardMaterial({
         color: active ? 0x2471a3 : 0x7fa8c9, transparent: true,
         opacity: active ? 0.45 : 0.18, side: THREE.DoubleSide, depthWrite: false,
@@ -5155,6 +5203,22 @@ function rebuildZonePreview3d() {
     );
     edges.position.z = base;
     group.add(edges);
+
+    // Номера точек — только у АКТИВНОГО яруса (на всех сразу это каша из
+    // сотен подписей), нумерация совпадает с таблицей слева, текущая
+    // правимая точка выделена цветом и размером, как в 2D.
+    if (active) {
+      // Доля высоты вьюпорта. Канвас предпросмотра всего 300 px высотой,
+      // поэтому 3,5% (первая версия) давали ~10 px — цифру не разобрать.
+      const screenSize = 0.062;
+      level.outline.forEach((p, pi) => {
+        const current = pi === zoneEdit.active.point;
+        const sprite = zonePreviewNumberSprite(
+          String(pi + 1), current, current ? screenSize * 1.45 : screenSize);
+        sprite.position.set(p[0], p[1], base + Math.max(height - PREVIEW_PLANE_GAP_MM, 100));
+        group.add(sprite);
+      });
+    }
   });
 
   scene.add(group);
