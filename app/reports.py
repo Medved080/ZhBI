@@ -400,6 +400,18 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
 
     series = {k: _cumulative(v, weeks) for k, v in series_raw.items()}
 
+    # Кривые ФАКТА обрываются на отчётной дате (живой запрос 2026-07-30):
+    # сетка недель тянется вправо до вех и контрольных дат, и накопительный
+    # итог держал за отчётной датой горизонтальную полку — она читалась как
+    # «факт известен и не растёт», хотя факта там ещё просто нет. Планы,
+    # наоборот, идут вперёд до конца сетки — это и есть план.
+    # None (а не обрезка списка) — длина всех рядов должна совпадать с
+    # длиной weeks: и график, и выгрузка в Excel индексируют их по неделям.
+    report_week = _week_start(today)
+    cut = weeks.index(report_week) if report_week in weeks else len(weeks) - 1
+    for key in ("fact_montage", "fact_delivery"):
+        series[key] = [v if i <= cut else None for i, v in enumerate(series[key])]
+
     def upto(pairs, limit_date, only_day=None):
         if only_day:
             return sum(n for d, n in pairs if d == only_day)
@@ -496,7 +508,8 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
             c = self.canv
             L, R, T, B = 34, 8, 26, 34
             series = report["series"]
-            top = max([1] + [v for k in DYN_SERIES_ORDER for v in series.get(k, [])])
+            # None — «за отчётной датой факта нет» (см. build_dynamics_report).
+            top = max([1] + [v for k in DYN_SERIES_ORDER for v in series.get(k, []) if v is not None])
             pow10 = 10 ** (len(str(int(top))) - 1)
             max_y = -(-top // (pow10 / 2)) * (pow10 / 2)
             n = max(len(weeks), 1)
@@ -527,14 +540,14 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
                 c.restoreState()
 
             for key in DYN_SERIES_ORDER:
-                vals = series.get(key, [])
-                if not any(vals):
+                points = [(i, v) for i, v in enumerate(series.get(key, [])) if v is not None]
+                if not any(v for _, v in points):
                     continue
                 c.setStrokeColor(colors.HexColor(DYN_SERIES_COLORS[key]))
                 c.setLineWidth(1.2)
                 path = c.beginPath()
-                for i, v in enumerate(vals):
-                    (path.moveTo if i == 0 else path.lineTo)(X(i), Y(v))
+                for n, (i, v) in enumerate(points):
+                    (path.moveTo if n == 0 else path.lineTo)(X(i), Y(v))
                 c.drawPath(path)
 
             marks = [{"label": "Отчётная дата", "date": report["report_date"]}] + \

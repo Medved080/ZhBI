@@ -358,10 +358,15 @@
   .side-table th, .side-table td { padding: 2px 4px; text-align: right; white-space: nowrap; }
   .side-table th {
     color: var(--color-text-muted); font-weight: 500; border-bottom: 1px solid var(--color-border);
-    /* Заголовки статусов переносятся («В производстве» в две строки): в одну
-       строку пять колонок статусов уводили таблицу на 453 px при 287 px
-       панели, с переносом влезает почти всё. */
-    white-space: normal; vertical-align: bottom; max-width: 52px;
+    white-space: normal; vertical-align: bottom;
+  }
+  /* Заголовки статусов — вертикально. В одну строку пять колонок уводили
+     таблицу на 453 px при 287 px панели, с переносом по словам длинные
+     однословные названия («Смонтирован») всё равно налезали на соседние.
+     Вертикально колонка занимает ~16 px, вся таблица влезает без скролла. */
+  .side-table.side-tree th:not(:first-child) {
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    white-space: nowrap; text-align: left; padding: 3px 1px; font-weight: 600;
   }
   .side-table td:first-child, .side-table th:first-child {
     text-align: left; position: sticky; left: 0; background: var(--color-surface); z-index: 1;
@@ -1250,8 +1255,14 @@
              умолчанию растянут на всю высоту, а растянутый sticky никуда не
              прилипает. -->
         <div style="flex:0 0 400px; position:sticky; top:0; align-self:flex-start">
-          <label class="field">Предпросмотр</label>
+          <div class="subtype-add-row" style="align-items:center">
+            <label class="field" style="margin:0">Предпросмотр</label>
+            <span class="spacer"></span>
+            <button type="button" class="btn btn-sm btn-primary" id="zone-preview-2d">2D</button>
+            <button type="button" class="btn btn-sm btn-secondary" id="zone-preview-3d">3D</button>
+          </div>
           <svg id="zone-edit-preview" viewBox="0 0 400 300" style="width:400px; height:300px; border:1px solid var(--color-border); background:var(--color-surface)"></svg>
+          <div id="zone-edit-preview3d" style="display:none; width:400px; height:300px; border:1px solid var(--color-border)"></div>
           <div class="hint-text" id="zone-edit-preview-hint"></div>
         </div>
       </div>

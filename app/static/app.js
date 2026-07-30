@@ -4865,6 +4865,10 @@ async function openZoneEditor(zoneId) {
   }
   document.getElementById("zone-edit-status").textContent = "";
   renderZoneLevels();
+  // Камера 3D-предпросмотра выставляется заново на каждое открытие формы —
+  // зона другая, прежний ракурс к ней отношения не имеет.
+  zonePreview3d.framed = false;
+  await setZonePreviewMode("2d");
   renderZonePreview();
   zoneEditBackdrop.classList.add("open");
 }
@@ -5017,7 +5021,167 @@ function renderZonePreview() {
     `Ярус ${zoneEdit.active.level + 1}` +
     (level && level.elevation_mm !== null && level.elevation_mm !== undefined ? ` (отм. +${level.elevation_mm})` : " (без отметки)") +
     `. Пунктиром — кран-владелец, бледным — соседние зоны той же категории. Координаты — в целых мм.`;
+  // 3D-предпросмотр живёт от тех же данных: если он сейчас открыт, правка
+  // точки должна двигать и объём, а не только плоский контур.
+  if (zonePreviewMode === "3d") rebuildZonePreview3d();
 }
+
+// ---------- 3D-предпросмотр зоны (решение З13: «предпросмотр в 2D/3D по
+// выбору пользователя») ----------
+// Своя маленькая сцена, а не переиспользование основной: та держит ~9400
+// мешей элементов, и показывать её в модалке ради одной зоны бессмысленно.
+// Кадр рисуется ТОЛЬКО по требованию (как и в основной сцене — см.
+// requestRender3D, Docs/backlog.md): бесконечный requestAnimationFrame жёг
+// батарею на полном простое.
+const zonePreview3d = {
+  renderer: null, scene: null, camera: null, controls: null, group: null, frame: null,
+};
+
+function zonePreviewRequestFrame() {
+  if (!zonePreview3d.renderer || zonePreview3d.frame !== null) return;
+  zonePreview3d.frame = requestAnimationFrame(() => {
+    zonePreview3d.frame = null;
+    zonePreview3d.renderer.render(zonePreview3d.scene, zonePreview3d.camera);
+  });
+}
+
+async function ensureZonePreview3d() {
+  await ensureThreeLoaded();
+  if (zonePreview3d.renderer) return;
+  const host = document.getElementById("zone-edit-preview3d");
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  renderer.setSize(400, 300);
+  renderer.setClearColor(0xf4f6f8, 1);
+  host.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 400 / 300, 100, 5_000_000);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = false; // иначе камера едет и после отпускания мыши, а кадр рисуется по требованию
+  controls.addEventListener("change", zonePreviewRequestFrame);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.5);
+  dir.position.set(1, 2, 1);
+  scene.add(dir);
+  Object.assign(zonePreview3d, { renderer, scene, camera, controls, group: null });
+}
+
+// Координаты: world.X = dxf.x, world.Z = -dxf.y — ТОТ ЖЕ порядок, что в
+// основной сцене (на знаке Z там однажды уже поймали зеркальность, см.
+// Docs/backlog.md). Высота — реальные отметки ярусов в мм.
+function zonePreviewShape(outline) {
+  return new THREE.Shape(outline.map(p => new THREE.Vector2(p[0], p[1])));
+}
+
+function rebuildZonePreview3d() {
+  if (!zonePreview3d.renderer || !zoneEdit) return;
+  const { scene } = zonePreview3d;
+  if (zonePreview3d.group) {
+    scene.remove(zonePreview3d.group);
+    zonePreview3d.group.traverse(obj => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) obj.material.dispose();
+    });
+  }
+  const group = new THREE.Group();
+  group.rotation.x = -Math.PI / 2;  // план чертежа лежит в XZ, как в основной сцене
+  group.scale.z = -1;               // world.Z = -dxf.y
+
+  const bbox = zoneEdit.context.bbox;
+  if (bbox) {
+    // Подложка габаритов объекта — чтобы было видно, где зона относительно
+    // всего проекта (это и есть смысл предпросмотра).
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(bbox[2] - bbox[0], bbox[3] - bbox[1]),
+      new THREE.MeshBasicMaterial({ color: 0x8899aa, transparent: true, opacity: 0.12, side: THREE.DoubleSide }),
+    );
+    plate.position.set((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, 0);
+    group.add(plate);
+  }
+
+  const flat = (outline, color, opacity, y) => {
+    const mesh = new THREE.Mesh(
+      new THREE.ShapeGeometry(zonePreviewShape(outline)),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    mesh.position.z = y;   // после rotation.x это вертикаль
+    return mesh;
+  };
+  for (const sib of zoneEdit.context.siblings) {
+    group.add(flat(sib.outline, 0x888888, 0.06, (sib.elevation_mm || 0) + 5));
+  }
+  for (const level of zoneEdit.context.parent) {
+    const line = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(
+        level.outline.map(p => new THREE.Vector3(p[0], p[1], (level.elevation_mm || 0) + 10))),
+      new THREE.LineBasicMaterial({ color: 0xc0392b }),
+    );
+    group.add(line);
+  }
+
+  // Правимая зона — объёмом: от отметки яруса до следующего по высоте, у
+  // верхнего — условная высота яруса. Так видно именно «объёмную область», о
+  // которой и шла речь в задаче, а не плоский контур.
+  const elevations = zoneEdit.levels
+    .map(l => (l.elevation_mm === null || l.elevation_mm === undefined ? 0 : l.elevation_mm))
+    .sort((a, b) => a - b);
+  const fallbackHeight = Math.max(
+    3000, elevations.length > 1 ? (elevations[elevations.length - 1] - elevations[0]) / elevations.length : 3000);
+  zoneEdit.levels.forEach((level, li) => {
+    const base = level.elevation_mm === null || level.elevation_mm === undefined ? 0 : level.elevation_mm;
+    const above = elevations.find(e => e > base);
+    const height = Math.max((above === undefined ? base + fallbackHeight : above) - base, 200);
+    const active = li === zoneEdit.active.level;
+    const mesh = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(zonePreviewShape(level.outline), { depth: height, bevelEnabled: false, steps: 1 }),
+      new THREE.MeshStandardMaterial({
+        color: active ? 0x2471a3 : 0x7fa8c9, transparent: true,
+        opacity: active ? 0.45 : 0.18, side: THREE.DoubleSide, depthWrite: false,
+      }),
+    );
+    mesh.position.z = base;
+    group.add(mesh);
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(mesh.geometry),
+      new THREE.LineBasicMaterial({ color: active ? 0x1b4f72 : 0x9fb8cd }),
+    );
+    edges.position.z = base;
+    group.add(edges);
+  });
+
+  scene.add(group);
+  zonePreview3d.group = group;
+
+  // Камера ставится один раз на открытие формы — дальше пользователь крутит
+  // сам, и переставлять её на каждую правку точки было бы дёрганьем.
+  if (!zonePreview3d.framed) {
+    const cx = bbox ? (bbox[0] + bbox[2]) / 2 : 0;
+    const cy = bbox ? (bbox[1] + bbox[3]) / 2 : 0;
+    const span = bbox ? Math.max(bbox[2] - bbox[0], bbox[3] - bbox[1]) : 100000;
+    zonePreview3d.controls.target.set(cx, 0, -cy);
+    zonePreview3d.camera.position.set(cx - span * 0.55, span * 0.55, -cy + span * 0.75);
+    zonePreview3d.controls.update();
+    zonePreview3d.framed = true;
+  }
+  zonePreviewRequestFrame();
+}
+
+async function setZonePreviewMode(mode) {
+  const is3d = mode === "3d";
+  document.getElementById("zone-edit-preview").style.display = is3d ? "none" : "";
+  document.getElementById("zone-edit-preview3d").style.display = is3d ? "" : "none";
+  document.getElementById("zone-preview-2d").className = `btn btn-sm ${is3d ? "btn-secondary" : "btn-primary"}`;
+  document.getElementById("zone-preview-3d").className = `btn btn-sm ${is3d ? "btn-primary" : "btn-secondary"}`;
+  zonePreviewMode = mode;
+  if (is3d) {
+    await ensureZonePreview3d();
+    rebuildZonePreview3d();
+  }
+}
+
+let zonePreviewMode = "2d";
+document.getElementById("zone-preview-2d").addEventListener("click", () => setZonePreviewMode("2d"));
+document.getElementById("zone-preview-3d").addEventListener("click", () => setZonePreviewMode("3d"));
 
 document.getElementById("zone-edit-cancel").addEventListener("click", () => {
   zoneEditBackdrop.classList.remove("open");
@@ -6367,7 +6531,11 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   if (!weeks.length) return "<div class='hint-text'>Нет данных для графика</div>";
   const L = compact ? 30 : 52, R = compact ? 6 : 18, T = compact ? 8 : 46, B = compact ? 30 : 64;
   const fsAxis = compact ? 8 : 11;
-  const maxY = niceMax(Math.max(1, ...DYN_SERIES.flatMap(k => data.series[k] || [])));
+  // null в ряду — «за отчётной датой факта нет» (см. build_dynamics_report):
+  // такие точки не рисуются, кривая факта на отчётной дате обрывается.
+  const seriesPoints = (key) => (data.series[key] || [])
+    .map((v, i) => ({ v, i })).filter(p => p.v !== null && p.v !== undefined);
+  const maxY = niceMax(Math.max(1, ...DYN_SERIES.flatMap(k => seriesPoints(k).map(p => p.v))));
   const x = i => L + (weeks.length === 1 ? 0 : i * (width - L - R) / (weeks.length - 1));
   const y = v => height - B - (v / maxY) * (height - T - B);
 
@@ -6394,9 +6562,9 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
 
   // Линии
   for (const key of DYN_SERIES) {
-    const vals = data.series[key] || [];
-    if (!vals.some(v => v > 0)) continue;
-    const d = vals.map((v, i) => `${i ? "L" : "M"} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
+    const points = seriesPoints(key);
+    if (!points.some(p => p.v > 0)) continue;
+    const d = points.map((p, n) => `${n ? "L" : "M"} ${x(p.i).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
     parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"/>`);
   }
 
@@ -6691,7 +6859,7 @@ function renderSideStatusReport() {
   // строке перестанет сходиться. Широкая часть уезжает в свой скролл, а
   // первая колонка липкая (тот же приём, что у легенды выше).
   body.innerHTML = `<div class="legend-table-wrap">${renderTreeReport(data, {
-    collapsed: sideStatusCollapsed, indent: 8, tableAttr: 'class="side-table"',
+    collapsed: sideStatusCollapsed, indent: 8, tableAttr: 'class="side-table side-tree"',
   })}</div>`;
   const wrap = body.firstElementChild;
   requestAnimationFrame(() => {
