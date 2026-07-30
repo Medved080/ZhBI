@@ -111,11 +111,12 @@ _COLUMN_MIGRATIONS = [
 ]
 
 
-def _apply_migrations(conn: sqlite3.Connection) -> None:
+def _apply_migrations(conn: sqlite3.Connection, changes: list) -> None:
     for table, column, coltype in _COLUMN_MIGRATIONS:
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+            changes.append(f"добавлена колонка {table}.{column}")
 
 
 def _migrate_contracts_structure(conn: sqlite3.Connection) -> None:
@@ -326,7 +327,7 @@ def _migrate_contracts_theme(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE contracts ADD COLUMN theme TEXT")
 
 
-def _migrate_elements_drop_batch_id(conn: sqlite3.Connection) -> None:
+def _migrate_elements_drop_batch_id(conn: sqlite3.Connection, changes: list) -> None:
     """Снимает колонку elements.batch_id — остаток убранных "Партий"
     ("Контрактация 2.0", 2026-07-28): таблицу batches тогда удалили, а
     колонку с внешним ключом на неё оставили.
@@ -360,6 +361,7 @@ def _migrate_elements_drop_batch_id(conn: sqlite3.Connection) -> None:
         conn.commit()
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("ALTER TABLE elements DROP COLUMN batch_id")
+    changes.append("снята колонка elements.batch_id (висячий внешний ключ на удалённую таблицу batches)")
 
 
 def _ensure_element_uid_index(conn: sqlite3.Connection) -> None:
@@ -382,7 +384,7 @@ def _ensure_element_uid_index(conn: sqlite3.Connection) -> None:
     )
 
 
-def _bootstrap_default_object(conn: sqlite3.Connection) -> None:
+def _bootstrap_default_object(conn: sqlite3.Connection, changes: list) -> None:
     """Заводит первый Объект на уже накопленной БД и привязывает к нему
     АКТУАЛЬНЫЙ чертёж. Идемпотентно: срабатывает только когда таблица
     objects пуста, а элементы уже есть — то есть ровно один раз, при
@@ -594,23 +596,33 @@ def _normalize_element_type_vocabulary(conn: sqlite3.Connection) -> None:
                 )
 
 
-def init_db() -> None:
+def init_db() -> list:
+    """Возвращает список СТРУКТУРНЫХ изменений, реально применённых к базе
+    (пустой список — схема уже была актуальной).
+
+    Зачем возвращать, а не журналировать здесь же: init_db вызывается и из
+    CLI-скриптов (scripts/rebuild_db.py), где фоновый писатель журнала не
+    запущен — записи молча пропали бы в очереди. Вызывающий сам решает, что
+    с этим списком делать: сервер пишет его в журнал действий после старта
+    писателя (app/main.on_startup), скрипты печатают."""
+    changes = []
     conn = get_connection()
     try:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        _apply_migrations(conn)
+        _apply_migrations(conn, changes)
         _migrate_contracts_structure(conn)
         _migrate_contracts_hierarchy(conn)
         _migrate_contracts_theme(conn)
         # Строго ПОСЛЕ миграций контрактов: _migrate_contracts_hierarchy на
         # старой БД ещё обнуляет batch_id, пока колонка существует.
-        _migrate_elements_drop_batch_id(conn)
+        _migrate_elements_drop_batch_id(conn, changes)
         _ensure_contract_lines_index(conn)
         _ensure_elements_contract_line_index(conn)
         _ensure_element_uid_index(conn)
-        _bootstrap_default_object(conn)
+        _bootstrap_default_object(conn, changes)
         _normalize_element_type_vocabulary(conn)
         _seed_reference_data(conn)
         conn.commit()
     finally:
         conn.close()
+    return changes

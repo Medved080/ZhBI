@@ -6312,12 +6312,55 @@ document.getElementById("backups-tbody").addEventListener("click", async (e) => 
 // ---------- Журнал действий (живой запрос 2026-07-29) ----------
 const activityBackdrop = document.getElementById("activity-backdrop");
 
+// Журнал хранит время в UTC (app/activity._now — datetime.utcnow), а
+// показывать его надо по местным часам пользователя. Живой репорт: после
+// переименования объекта пользователь решил, что действие "не попало в
+// логи" — событие было записано, но самая свежая строка стояла с временем
+// на 3 часа раньше его собственных часов (Москва = UTC+3) и выглядела как
+// давняя. Разбор строки — вручную, а не new Date(строка): формат
+// "ГГГГ-ММ-ДД ЧЧ:ММ:СС.мс" без Z браузеры трактуют по-разному (кто как
+// местное, кто как UTC).
+function activityTimeLocal(at) {
+  if (!at) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/.exec(at);
+  if (!m) return at;
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +(m[7] || 0));
+  const d = new Date(ms);
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ` +
+         `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}` +
+         (m[7] ? `.${m[7].padStart(3, "0")}` : "");
+}
+
+// Обратное преобразование для границ поиска: пользователь выбирает даты по
+// своему календарю, а сравнение идёт с UTC-строками в БД. Без этого поиск
+// "за сегодня" терял бы первые часы суток (для UTC+3 — события с 00:00 до
+// 03:00 местного времени).
+function activityBoundToUtc(dateStr, endOfDay) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || "");
+  if (!m) return dateStr;
+  const d = endOfDay
+    ? new Date(+m[1], +m[2] - 1, +m[3], 23, 59, 59, 999)
+    : new Date(+m[1], +m[2] - 1, +m[3], 0, 0, 0, 0);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+         `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.` +
+         String(d.getUTCMilliseconds()).padStart(3, "0");
+}
+
+// "system" — события, которые сделал не человек, а сам сервис: старт,
+// применённые миграции схемы. Раньше они не писались вовсе, и в журнале
+// были видны только действия пользователей (живой репорт 2026-07-30);
+// показывать их как "сервер" рядом с действиями админа было бы неверно —
+// у них нет автора.
+const ACTIVITY_SOURCE_LABELS = { client: "браузер", server: "сервер", system: "система" };
+
 function activityRowHtml(r) {
   const element = [r.element_type, r.subtype, r.mark].filter(Boolean).join(" / ");
   const label = v => (v && state.statusLabels[v]) || v || "";
   return `<tr>
-    <td>${escapeHtml(r.at || "")}</td>
-    <td>${r.source === "client" ? "браузер" : "сервер"}</td>
+    <td>${escapeHtml(activityTimeLocal(r.at))}</td>
+    <td>${ACTIVITY_SOURCE_LABELS[r.source] || r.source || ""}</td>
     <td>${escapeHtml(r.user_name || "")}</td>
     <td>${escapeHtml(r.action)}</td>
     <td>${escapeHtml(element)}${r.entity_id ? ` <span class="hint-text">#${r.entity_id}</span>` : ""}</td>
@@ -6334,8 +6377,8 @@ async function loadActivity() {
   const userId = document.getElementById("activity-user").value;
   const action = document.getElementById("activity-action").value;
   const text = document.getElementById("activity-text").value.trim();
-  if (from) params.set("date_from", from);
-  if (to) params.set("date_to", to);
+  if (from) params.set("date_from", activityBoundToUtc(from, false));
+  if (to) params.set("date_to", activityBoundToUtc(to, true));
   if (userId) params.set("user_id", userId);
   if (action) params.set("action", action);
   if (text) params.set("text", text);
@@ -6350,11 +6393,15 @@ async function loadActivity() {
     // Список действий заполняем ФАКТИЧЕСКИ встретившимися, а не хардкодом:
     // набор действий будет расти, и забытый пункт в списке — это молча
     // недоступный фильтр.
+    // Пересобираем список действий на КАЖДЫЙ поиск, сохраняя выбор: набор
+    // действий растёт по ходу работы, а прежнее условие (заполнять только
+    // если список пуст) означало, что новое действие не появится в фильтре
+    // до перезагрузки страницы — то есть выглядит как "оно не пишется".
     const sel = document.getElementById("activity-action");
-    if (sel.options.length <= 1) {
-      sel.innerHTML = ['<option value="">— любое —</option>']
-        .concat(data.actions.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`)).join("");
-    }
+    const keep = sel.value;
+    sel.innerHTML = ['<option value="">— любое —</option>']
+      .concat(data.actions.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`)).join("");
+    if (keep && data.actions.includes(keep)) sel.value = keep;
   } catch (e) {
     summary.textContent = "Ошибка: " + e.message;
   }

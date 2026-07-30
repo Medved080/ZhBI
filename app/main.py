@@ -404,7 +404,7 @@ def on_startup():
     # (см. app/backups.py), и scripts/rebuild_db.py. Молча пересобранная
     # база выглядит как работающий сервис, в котором просто исчезла работа
     # за несколько недель, — это несравнимо хуже отказа стартовать.
-    init_db()
+    schema_changes = init_db()
     _warn_users_without_password()
 
     # Только СООБЩАЕТ о подозрительной схеме, никогда не бросает исключений
@@ -426,6 +426,21 @@ def on_startup():
     # Фоновый писатель журнала — после init_db(), чтобы таблица activity_log
     # точно существовала к моменту первой записи.
     activity.start_worker()
+
+    # СИСТЕМНЫЕ события в журнал (живой репорт пользователя 2026-07-30: "не
+    # вижу в журнале никаких событий, которые выполнялись при обновлении,
+    # только интерактивные действия"). До этого журнал знал только про
+    # действия людей, а самое важное для разбора инцидента — что сделал с
+    # базой сам деплой — не попадало никуда, кроме stdout контейнера.
+    #
+    # source="system", user_name пустой: это не действие пользователя, и
+    # приписывать его тому, кто случайно оказался админом, неправильно.
+    version = CHANGELOG[0]["version"] if CHANGELOG else None
+    activity.log("server_start", source="system", new_value=version)
+    for change in schema_changes:
+        activity.log("schema_migration", source="system", new_value=change)
+    if schema_changes:
+        print(f"[startup] структурных изменений схемы применено: {len(schema_changes)}")
 
 
 @app.get("/health")
@@ -821,6 +836,15 @@ def admin_import_input(user: sqlite3.Row = Depends(require_admin)):
     подтверждения на фронтенде."""
     report = import_input_dxf()
     report += import_input_xlsx()
+    # В журнал: до 2026-07-30 массовая загрузка из Input/ нигде не
+    # фиксировалась, кроме stdout сервера, — а она перезаписывает геометрию
+    # всех элементов и создаёт контракты (живой репорт пользователя о
+    # незаписанных системных событиях).
+    activity.log(
+        "import_input", user=user,
+        new_value=f"файлов обработано: {len(report)}",
+        details={"report": report},
+    )
     return {"report": report}
 
 
@@ -896,13 +920,19 @@ def search_activity(
     страницу. Поиск по подстроке идёт по снимкам марки/типа/подтипа и по
     значениям — то есть по тем полям, которые в журнале и ищут.
     """
+    # activity_log.at хранится в UTC (app/activity._now), а пользователь
+    # выбирает границы по своему местному календарю — поэтому клиент
+    # присылает уже пересчитанные в UTC ГРАНИЦЫ С ВРЕМЕНЕМ (см.
+    # loadActivity, app.js). Строка без времени тоже принимается — тогда
+    # трактуем её как раньше, целыми сутками: так продолжают работать
+    # прямые вызовы эндпоинта (curl, внешние скрипты).
     clauses, params = [], []
     if date_from:
         clauses.append("at >= ?")
-        params.append(f"{date_from} 00:00:00.000")
+        params.append(date_from if " " in date_from else f"{date_from} 00:00:00.000")
     if date_to:
         clauses.append("at <= ?")
-        params.append(f"{date_to} 23:59:59.999")
+        params.append(date_to if " " in date_to else f"{date_to} 23:59:59.999")
     if user_id is not None:
         clauses.append("user_id = ?")
         params.append(user_id)
@@ -1701,9 +1731,24 @@ def import_dxf(
     user: sqlite3.Row = Depends(require_admin),
 ):
     try:
-        return import_dxf_file(file, source_file, UPLOADS_DIR)
+        result = import_dxf_file(file, source_file, UPLOADS_DIR)
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    # Одношаговый путь (без диалога сверки) тоже журналируется — иначе в
+    # журнале была бы видна только загрузка через новую двухфазную форму.
+    activity.log(
+        "import_dxf", user=user, entity_type="object", entity_id=result.object_id,
+        new_value=result.source_file,
+        details={
+            "summary": (
+                f"по handle {result.matched_by_handle}, по геометрии "
+                f"{result.matched_by_geometry}, новых {result.inserted}, "
+                f"исчезло {result.retired}"
+            ),
+            "one_shot": True,
+        },
+    )
+    return result
 
 
 @app.post("/import-dxf/analyze", response_model=DxfAnalyzeResult)
