@@ -63,6 +63,13 @@ class ElementOut(BaseModel):
     nearest_axis_letter: Optional[str]
     offset_x_mm: Optional[float]
     offset_y_mm: Optional[float]
+    # Поля нового стандарта имён слоёв. Объявлены здесь ЯВНО: без этого
+    # pydantic срезал их из ответа /elements/{id}, и форма правки показывала
+    # подтип, отметку и этаж пустыми, хотя в таблице справочника (свой
+    # эндпоинт, без модели) значения были — живой репорт со скриншотом.
+    subtype: Optional[str] = None
+    elevation_mm: Optional[int] = None
+    floor: Optional[int] = None
     current_status: Status
     contract_id: Optional[int] = None
     # Денормализованный скаляр для допстроки подписи на схеме (см.
