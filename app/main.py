@@ -79,6 +79,8 @@ from app.models import (
     ZoneColorIn,
     ObjectOut,
     ObjectPatchIn,
+    ZoneLevelOut,
+    ZoneOut,
 )
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
@@ -1308,6 +1310,76 @@ def set_zone_colors(items: list[ZoneColorIn], user: sqlite3.Row = Depends(requir
     finally:
         conn.close()
     return {"status": "ok"}
+
+
+_ZONE_ELEMENT_COLUMN = {
+    "Захватка": "zone_zakhvatka_id",
+    "Кран": "zone_crane_id",
+    "Стоянка": "zone_stance_id",
+}
+
+
+@app.get("/zones", response_model=list[ZoneOut])
+def list_zones(
+    category: str = Query(..., description="Захватка | Кран | Стоянка"),
+    include_retired: bool = Query(False, description="Показывать зоны, которых нет в актуальном чертеже"),
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Справочник зон одной категории (этап 2). Доступно всем ролям только
+    для чтения — как и остальные справочники-просмотры.
+
+    Зоны УСТАРЕВШИХ версий чертежа (object_id IS NULL) в справочник не
+    входят: они остались строками старой формы и в новой модели не
+    участвуют (решение И5)."""
+    if category not in _ZONE_ELEMENT_COLUMN:
+        raise HTTPException(status_code=400, detail="Неизвестная категория зоны")
+    column = _ZONE_ELEMENT_COLUMN[category]
+    conn = get_connection()
+    try:
+        where = "z.object_id IS NOT NULL AND z.category = ?"
+        params = [category]
+        if not include_retired:
+            where += " AND z.is_current = 1"
+        rows = conn.execute(
+            f"SELECT z.*, p.name AS parent_name FROM zones z "
+            f"LEFT JOIN zones p ON p.id = z.parent_zone_id "
+            f"WHERE {where} ORDER BY p.number, z.number, z.name",
+            params,
+        ).fetchall()
+
+        # Счётчики элементов — одним групповым запросом, а не по зоне:
+        # на этой же ошибке (N+1 на полных сканах) окно массовой смены
+        # статуса открывалось 2,7 с, см. Docs/backlog.md.
+        counts = {
+            r["zid"]: r["n"]
+            for r in conn.execute(
+                f"SELECT {column} AS zid, COUNT(*) AS n FROM elements "
+                f"WHERE {column} IS NOT NULL AND {visible_elements_clause()} GROUP BY {column}"
+            )
+        }
+        levels_by_zone = {}
+        for r in conn.execute(
+            "SELECT id, zone_id, elevation_mm, source_file, outline_json FROM zone_levels "
+            "ORDER BY elevation_mm"
+        ):
+            levels_by_zone.setdefault(r["zone_id"], []).append(ZoneLevelOut(
+                id=r["id"], elevation_mm=r["elevation_mm"],
+                points=len(json.loads(r["outline_json"])) if r["outline_json"] else 0,
+                source_file=r["source_file"],
+            ))
+
+        return [
+            ZoneOut(
+                id=r["id"], category=r["category"], number=r["number"], name=r["name"],
+                parent_zone_id=r["parent_zone_id"], parent_name=r["parent_name"],
+                is_current=bool(r["is_current"]), match_status=r["match_status"],
+                levels=levels_by_zone.get(r["id"], []),
+                elements=counts.get(r["id"], 0),
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
 
 
 @app.get("/objects", response_model=list[ObjectOut])

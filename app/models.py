@@ -201,6 +201,28 @@ class ElementShapeIn(BaseModel):
 ZHBI_ELEMENT_TYPES = ("Колонна", "Ригель", "Плита", "Панель", "Плита перекрытия")
 
 
+class ZoneLevelOut(BaseModel):
+    id: int
+    elevation_mm: Optional[int] = None
+    points: int  # число вершин контура — сам контур в списке не нужен
+    source_file: Optional[str] = None
+
+
+class ZoneOut(BaseModel):
+    """Запись справочника зон (этап 2). Одна зона — произвольный набор
+    ярусов-полигонов, см. Docs/TZ.md 3.0а."""
+    id: int
+    category: str
+    number: Optional[int] = None
+    name: Optional[str] = None
+    parent_zone_id: Optional[int] = None
+    parent_name: Optional[str] = None
+    is_current: bool = True
+    match_status: Optional[str] = None
+    levels: list[ZoneLevelOut] = []
+    elements: int = 0  # сколько элементов привязано к этой зоне
+
+
 class ObjectOut(BaseModel):
     id: int
     name: str

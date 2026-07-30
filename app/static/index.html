@@ -859,6 +859,12 @@
             <!-- Слово "Справочник" из названий убрано: под заголовком
                  "Справочники" оно повторялось дважды в каждой строке. -->
             <button id="menu-objects">Объекты</button>
+            <!-- Три справочника зон (этап 2, решение З15: физически одна
+                 таблица с полем категории, в интерфейсе — три справочника,
+                 как их и видит пользователь). -->
+            <button id="menu-zones-zakhvatka">Захватки</button>
+            <button id="menu-zones-crane">Зоны кранов</button>
+            <button id="menu-zones-stance">Стоянки кранов</button>
             <button id="menu-subtypes">Подтипы</button>
             <button id="menu-mark-prefixes">Префиксы марок</button>
             <button id="menu-counterparties">Контрагенты</button>
@@ -1092,6 +1098,29 @@
     <div id="objects-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="objects-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Справочник зон одной категории. Одна форма на три пункта меню:
+     содержимое отличается только категорией и наличием колонки «Кран». -->
+<div class="modal-backdrop" id="zones-backdrop">
+  <div class="modal modal-sticky" style="max-width:760px">
+    <div class="modal-sticky-head">
+      <h2 id="zones-title">Зоны</h2>
+      <p class="hint-text" id="zones-hint"></p>
+      <label style="display:flex; gap:8px; align-items:center; font-size:12px">
+        <input type="checkbox" id="zones-include-retired"/>
+        <span>Показывать зоны, которых нет в актуальном чертеже</span>
+      </label>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="zones-rows"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="zones-close">Закрыть</button>
+      </div>
     </div>
   </div>
 </div>

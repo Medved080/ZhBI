@@ -4736,6 +4736,83 @@ document.getElementById("menu-objects").addEventListener("click", async () => {
 });
 document.getElementById("objects-close").addEventListener("click", () => objectsBackdrop.classList.remove("open"));
 
+// ==================== СПРАВОЧНИКИ ЗОН (этап 2) ====================
+// Физически это одна таблица с полем категории (решение З15), но
+// пользователь видит три справочника — захватки, зоны кранов, стоянки
+// кранов, — поэтому и пунктов меню три, а форма одна.
+const zonesBackdrop = document.getElementById("zones-backdrop");
+const ZONE_CATEGORY_TITLES = {
+  "Захватка": ["Захватки", "Захватка — самостоятельное деление объекта; принадлежность элемента определяется вхождением в область."],
+  "Кран": ["Зоны кранов", "Зона работы крана. Стоянки крана подчинены зоне и ссылаются на неё."],
+  "Стоянка": ["Стоянки крана", "Рабочая зона крана в конкретной позиции. Номер уникален внутри своего крана, ярусы — набор полигонов по отметкам."],
+};
+let zonesCategory = "Захватка";
+
+// Склонение числительного: 1 точка, 2–4 точки, 5+ точек. Обычное правило
+// русского языка, вынесено отдельно — контуры на реальных чертежах бывают и
+// четырёхугольные, и многоугольные, и «4 точек» в интерфейсе читается как
+// недоделка.
+function pointsWord(n) {
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  if (mod100 >= 11 && mod100 <= 14) return "точек";
+  if (mod10 === 1) return "точка";
+  if (mod10 >= 2 && mod10 <= 4) return "точки";
+  return "точек";
+}
+
+function zoneLevelsText(levels) {
+  if (!levels.length) return "нет ярусов";
+  return levels.map(l =>
+    `${l.elevation_mm === null || l.elevation_mm === undefined ? "без отметки" : `+${l.elevation_mm}`}` +
+    ` (${l.points} ${pointsWord(l.points)})`).join(", ");
+}
+
+async function renderZonesModal() {
+  const [title, hint] = ZONE_CATEGORY_TITLES[zonesCategory];
+  document.getElementById("zones-title").textContent = title;
+  document.getElementById("zones-hint").textContent = hint;
+  const box = document.getElementById("zones-rows");
+  box.innerHTML = `<p class="hint-text">Загрузка…</p>`;
+  const retired = document.getElementById("zones-include-retired").checked;
+  try {
+    const zones = await api(`/zones?category=${encodeURIComponent(zonesCategory)}&include_retired=${retired}`);
+    if (!zones.length) {
+      box.innerHTML = `<p class="hint-text">Зон этой категории нет. Они появляются при загрузке чертежа.</p>`;
+      return;
+    }
+    box.innerHTML = `<table style="width:100%; font-size:12px">
+      <thead><tr>
+        <th style="text-align:left">№</th>
+        <th style="text-align:left">Наименование</th>
+        ${zonesCategory === "Стоянка" ? '<th style="text-align:left">Кран</th>' : ""}
+        <th style="text-align:left">Ярусы</th>
+        <th style="text-align:right">Элементов</th>
+      </tr></thead>
+      <tbody>${zones.map(z => `<tr${z.is_current ? "" : ' class="hint-text"'}>
+        <td>${z.number === null || z.number === undefined ? "—" : z.number}</td>
+        <td>${escapeHtml(z.name || "без наименования")}${z.is_current ? "" : " (нет в чертеже)"}</td>
+        ${zonesCategory === "Стоянка" ? `<td>${escapeHtml(z.parent_name || "не определён")}</td>` : ""}
+        <td>${escapeHtml(zoneLevelsText(z.levels))}</td>
+        <td style="text-align:right">${z.elements}</td>
+      </tr>`).join("")}</tbody></table>`;
+  } catch (e) {
+    box.innerHTML = `<p class="hint-text" style="color:var(--color-danger)">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function openZonesModal(category) {
+  zonesCategory = category;
+  zonesBackdrop.classList.add("open");
+  renderZonesModal();
+}
+
+document.getElementById("menu-zones-zakhvatka").addEventListener("click", () => openZonesModal("Захватка"));
+document.getElementById("menu-zones-crane").addEventListener("click", () => openZonesModal("Кран"));
+document.getElementById("menu-zones-stance").addEventListener("click", () => openZonesModal("Стоянка"));
+document.getElementById("zones-close").addEventListener("click", () => zonesBackdrop.classList.remove("open"));
+document.getElementById("zones-include-retired").addEventListener("change", renderZonesModal);
+
 document.getElementById("menu-subtypes").addEventListener("click", async () => {
   subtypesBackdrop.classList.add("open");
   await renderSubtypesModal();
