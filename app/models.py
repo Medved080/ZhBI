@@ -291,6 +291,8 @@ class DxfImportResult(BaseModel):
     matched_by_handle: int = 0
     matched_by_geometry: int = 0
     marks_kept: int = 0
+    # Сколько правленых руками полей сохранено (не перезаписано чертежом).
+    manual_kept: int = 0
 
 
 class DxfAnalyzeResult(BaseModel):
@@ -312,6 +314,11 @@ class DxfAnalyzeResult(BaseModel):
 
 class DxfApplyIn(BaseModel):
     token: str
+    # Решения по ПРАВЛЕННЫМ РУКАМИ полям (решение Э4): {id элемента: [поля,
+    # которые перезаполнить из чертежа]}. Ключи приходят строками — таков
+    # JSON. Чего здесь нет, то сохраняет ручное значение: поведение по
+    # умолчанию — не терять правку человека.
+    refill_manual_fields: dict[str, list[str]] = {}
     # Решение по смене марки (И4): по умолчанию принимаем, но пользователь
     # может оставить прежние марки — либо все разом, либо перечислением.
     accept_mark_changes: bool = True

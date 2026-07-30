@@ -8010,6 +8010,15 @@ function importDetailSection(title, rows, total, limit, renderRow) {
   </details>`;
 }
 
+function collectRefillDecisions() {
+  const decisions = {};
+  importReviewBody.querySelectorAll("input[data-refill]:checked").forEach(cb => {
+    const [elementId, field] = cb.getAttribute("data-refill").split(":");
+    (decisions[elementId] = decisions[elementId] || []).push(field);
+  });
+  return decisions;
+}
+
 function openImportReview(analysis) {
   pendingImport = analysis;
   const c = analysis.counts || {};
@@ -8036,6 +8045,30 @@ function openImportReview(analysis) {
         <span>Принять смену марок из чертежа. Если снять — марки останутся прежними,
         остальная геометрия обновится в любом случае.</span>
       </label>` : "") +
+    // Расхождения с правленными руками полями (решение Э4). По умолчанию
+    // галочки СНЯТЫ — ручное значение сохраняется: терять правку человека
+    // молча нельзя, а вернуть значение из чертежа он может одним щелчком.
+    (c.manual_conflicts ? `<details style="margin-top:10px" open>
+      <summary><b>Расходятся с ручной правкой: ${c.manual_conflicts}</b></summary>
+      <div class="hint-text">Эти поля правились вручную в справочнике элементов.
+        По умолчанию сохраняются ручные значения; отметьте, что перезаполнить из чертежа.</div>
+      <div style="font-size:12px; margin-top:6px">
+        ${analysis.details.manual_conflicts.map(row => `<div style="margin-bottom:4px">
+          <b>${escapeHtml(row.element_type || "")} ${escapeHtml(row.mark || "без марки")}</b>
+          ${Object.entries(row.changes).map(([field, pair]) => `
+            <label style="display:inline-flex; gap:4px; align-items:center; margin-left:10px">
+              <input type="checkbox" data-refill="${row.element_id}:${escapeHtml(field)}"/>
+              <span>${escapeHtml(IMPORT_FIELD_LABELS[field] || field)}:
+                ${escapeHtml(String(pair[0] === null || pair[0] === undefined ? "—" : pair[0]))} →
+                ${escapeHtml(String(pair[1] === null || pair[1] === undefined ? "—" : pair[1]))}</span>
+            </label>`).join("")}
+        </div>`).join("")}
+      </div>
+      <label style="display:inline-flex; gap:6px; align-items:center; margin-top:6px">
+        <input type="checkbox" id="import-refill-all"/>
+        <span>Перезаполнить из чертежа все правленные руками поля</span>
+      </label>
+    </details>` : "") +
     importDetailSection("Смена марки", analysis.details.mark_changes, c.mark_changed, analysis.detail_limit,
       r => `<div>${escapeHtml(r.element_type)} ${importChangesText(r.changes)}
              ${r.contract_conflict ? '<span style="color:var(--color-danger)">— не соответствует позиции контракта</span>' : ""}
@@ -8049,6 +8082,15 @@ function openImportReview(analysis) {
     importDetailSection("Изменились реквизиты", analysis.details.attribute_changes,
       (c.attribute_changed || 0) - (c.mark_changed || 0), analysis.detail_limit,
       r => `<div>${escapeHtml(r.element_type)} ${importChangesText(r.changes)}</div>`);
+
+  const refillAll = document.getElementById("import-refill-all");
+  if (refillAll) {
+    refillAll.addEventListener("change", () => {
+      importReviewBody.querySelectorAll("input[data-refill]").forEach(cb => {
+        cb.checked = refillAll.checked;
+      });
+    });
+  }
 
   importReviewStatus.textContent = "";
   importReviewApply.disabled = false;
@@ -8076,6 +8118,9 @@ importReviewApply.addEventListener("click", async () => {
         token: pendingImport.token,
         accept_mark_changes: acceptBox ? acceptBox.checked : true,
         keep_mark_element_ids: [],
+        // {id элемента: [поля, которые перезаполнить из чертежа]} — чего
+        // здесь нет, то сохраняет ручное значение (решение Э4).
+        refill_manual_fields: collectRefillDecisions(),
       }),
     });
     const body = await res.json().catch(() => null);
@@ -8091,7 +8136,8 @@ importReviewApply.addEventListener("click", async () => {
     setUploadStatus(
       `Готово: ${body.total} элементов (новых: ${body.inserted}, обновлено: ${body.updated}` +
       (body.retired ? `, исчезло: ${body.retired}` : "") +
-      (body.marks_kept ? `, оставлено прежних марок: ${body.marks_kept}` : "") + "). " +
+      (body.marks_kept ? `, оставлено прежних марок: ${body.marks_kept}` : "") +
+      (body.manual_kept ? `, сохранено ручных полей: ${body.manual_kept}` : "") + "). " +
       `Марки — ${marks}. Адресация — ${axes}. Оси: ${body.axis_grid.numeric} числовых, ${body.axis_grid.letter} буквенных.`,
       false
     );

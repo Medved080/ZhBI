@@ -42,7 +42,7 @@ _GEOMETRY_FIELDS = (
 )
 
 _EXISTING_FIELDS = (
-    "manual_fields",
+    "manual_fields", "address",
     "id", "dxf_handle", "element_type", "mark", "subtype", "elevation_mm",
     "floor", "outline_json", "contract_id", "current_status",
 )
@@ -161,7 +161,35 @@ def analyze_import(conn: sqlite3.Connection, object_id: int, rows: list) -> dict
             "elevation_mm": row.get("elevation_mm"),
         })
 
+    # Расхождения с ПРАВЛЕННЫМИ РУКАМИ полями (решение Э4): чертёж говорит
+    # одно, в справочнике админ поставил другое. Импорт по умолчанию
+    # сохраняет ручное значение, но пользователь должен видеть расхождение и
+    # уметь по каждому полю выбрать «перезаполнить из чертежа».
+    manual_conflicts = []
+    for item in match.matched:
+        was = existing_by_id[item.element_id]
+        manual = set(json.loads(was.get("manual_fields") or "[]"))
+        if not manual:
+            continue
+        incoming = rows[item.incoming_index]
+        diffs = {
+            field: [was.get(field), incoming.get(field)]
+            for field in sorted(manual)
+            # Только поля, которые импорт вообще пишет: плановую дату,
+            # например, чертёж не несёт, и «расхождением» это не является.
+            if field in _GEOMETRY_FIELDS and was.get(field) != incoming.get(field)
+        }
+        if diffs:
+            manual_conflicts.append({
+                "element_id": item.element_id,
+                "dxf_handle": incoming["dxf_handle"],
+                "element_type": was.get("element_type"),
+                "mark": was.get("mark"),
+                "changes": diffs,
+            })
+
     counts = match.counts()
+    counts["manual_conflicts"] = len(manual_conflicts)
     counts["mark_change_contract_conflicts"] = sum(1 for e in mark_changes if e["contract_conflict"])
     # Исчезающие элементы, по которым уже есть работа на площадке — то, что
     # в сводке надо видеть в первую очередь: их статус будет сохранён, но
@@ -176,6 +204,7 @@ def analyze_import(conn: sqlite3.Connection, object_id: int, rows: list) -> dict
             "attribute_changes": attribute_changes[:DETAIL_LIMIT],
             "retired": retired[:DETAIL_LIMIT],
             "new": new_items[:DETAIL_LIMIT],
+            "manual_conflicts": manual_conflicts[:DETAIL_LIMIT],
         },
         "detail_limit": DETAIL_LIMIT,
         "match": match,

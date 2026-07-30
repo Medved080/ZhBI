@@ -211,6 +211,7 @@ def apply_drawing(
     analysis: dict,
     accept_mark_changes: bool = True,
     keep_mark_element_ids=None,
+    refill_manual_fields=None,
 ) -> DxfImportResult:
     """Фаза 2: применяет уже посчитанную сверку. Порядок операций тот же,
     что был у одношагового импорта: элементы -> сетка осей -> зоны и
@@ -223,6 +224,10 @@ def apply_drawing(
             conn, object_id, parsed.source_file, parsed.rows, analysis["match"],
             accept_mark_changes=accept_mark_changes,
             keep_mark_element_ids=set(keep_mark_element_ids or ()),
+            refill_manual_fields={
+                int(element_id): set(fields)
+                for element_id, fields in (refill_manual_fields or {}).items()
+            },
         )
         n_numeric, n_letter = import_elements.save_axis_grid(conn, parsed.grid, parsed.source_file)
 
@@ -258,6 +263,7 @@ def apply_drawing(
         matched_by_handle=counts.get("matched_by_handle", 0),
         matched_by_geometry=counts.get("matched_by_geometry", 0),
         marks_kept=applied["marks_kept"],
+        manual_kept=applied["manual_kept"],
     )
 
 
