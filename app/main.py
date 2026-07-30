@@ -618,6 +618,86 @@ def update_element_planned_delivery_date_bulk(
         conn.close()
 
 
+@app.patch("/elements/{element_id}/history/{history_id}", response_model=StatusUpdateResult)
+def update_history_entry(
+    element_id: int, history_id: int, body: dict, admin: sqlite3.Row = Depends(require_admin)
+):
+    """Правка ЗАПИСИ истории статусов: статус, дата/время применения, автор,
+    комментарий (живой запрос: «у статуса нельзя исправить ни дату, ни
+    пользователя»).
+
+    Только админ: это правка аудита, а не обычная смена статуса.
+
+    После правки `current_status` и `actual_delivery_date` пересчитываются той
+    же `recompute_status_and_actual_date`, что и при обычной смене статуса и
+    при удалении записи — эффективный статус элемента определяется САМОЙ
+    ПОЗДНЕЙ по `changed_at` записью, поэтому правка даты может изменить его
+    даже у не последней записи. Своей логики пересчёта здесь нет намеренно.
+    """
+    allowed = {"status", "changed_at", "changed_by", "comment"}
+    unknown = set(body) - allowed
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Нельзя править: {', '.join(sorted(unknown))}")
+    if not body:
+        raise HTTPException(status_code=400, detail="Нечего сохранять")
+    if "status" in body and body["status"] not in {s.value for s in STATUS_ORDER}:
+        raise HTTPException(status_code=400, detail=f"Неизвестный статус «{body['status']}»")
+
+    conn = get_connection()
+    try:
+        entry = conn.execute(
+            "SELECT * FROM status_history WHERE id = ? AND element_id = ?", (history_id, element_id)
+        ).fetchone()
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Запись истории не найдена")
+
+        values = {}
+        for field in allowed:
+            if field not in body:
+                continue
+            raw = body[field]
+            if field == "changed_at":
+                if not raw:
+                    raise HTTPException(status_code=400, detail="Дата записи истории не может быть пустой")
+                # Приводим "ГГГГ-ММ-ДДTЧЧ:ММ" из <input type=datetime-local> к
+                # тому же виду, в котором даты уже лежат в status_history.
+                text = str(raw).replace("T", " ")
+                if len(text) == 16:
+                    text += ":00"
+                values[field] = text
+            else:
+                values[field] = (str(raw).strip() or None) if raw is not None else None
+
+        assignments = ", ".join(f"{f} = :{f}" for f in values)
+        conn.execute(
+            f"UPDATE status_history SET {assignments} WHERE id = :id",
+            {**values, "id": history_id},
+        )
+        status, actual = recompute_status_and_actual_date(conn, element_id)
+        recompute_element_contract_cache(conn, element_id)
+        conn.commit()
+
+        updated = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
+        history = conn.execute(
+            "SELECT id, status, changed_at, changed_by, comment, contract_id FROM status_history "
+            "WHERE element_id = ? ORDER BY changed_at DESC, id DESC",
+            (element_id,),
+        ).fetchall()
+        result = enrich_element_row(conn, dict(updated))
+        result["history"] = [dict(h) for h in history]
+    finally:
+        conn.close()
+
+    activity.log(
+        "history_edit", user=admin, entity_type="element", entity_id=element_id,
+        element_type=result.get("element_type"), mark=result.get("mark"),
+        old_value="; ".join(f"{f}: {entry[f]}" for f in values)[:500],
+        new_value="; ".join(f"{f}: {v}" for f, v in values.items())[:500],
+        details={"history_id": history_id, "effective_status": status, "actual_delivery_date": actual},
+    )
+    return result
+
+
 @app.delete("/elements/{element_id}/history/{history_id}", response_model=StatusUpdateResult)
 def delete_history_entry(
     element_id: int, history_id: int, user: sqlite3.Row = Depends(require_editor)

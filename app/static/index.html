@@ -1255,20 +1255,52 @@
     </div>
     <div class="modal-sticky-scroll">
       <table id="ec-table" style="width:100%; font-size:12px"></table>
-      <!-- Статусы АКТИВНОГО элемента из таблицы выше (живой запрос): щёлкнув
-           строку, видно её историю статусов, а админ может её править прямо
-           здесь, не закрывая справочник. -->
-      <div id="ec-detail" style="margin-top:14px; border-top:1px solid var(--color-border); padding-top:10px">
-        <p class="hint-text">Щёлкните строку выше, чтобы увидеть статусы элемента.</p>
-      </div>
     </div>
     <div class="modal-sticky-foot">
+      <!-- Статусы активной строки — в ЗАКРЕПЛЁННОМ подвале, а не в конце
+           прокрутки: раньше блок жил внутри скролла на 200 строк, из-за чего
+           его не было видно, пока не промотаешь вниз, а высота области
+           менялась на каждый выбор строки и форма «прыгала» (живой репорт). -->
+      <!-- height, а НЕ max-height: при max-height блок сжимался под число
+           записей истории, и подвал всё равно «дышал» при переходе по
+           строкам (замерено: 242 / 242 / 171 px). Фиксированная высота — та
+           же причина, по которой и сам блок переехал в подвал. -->
+      <div id="ec-detail" style="height:190px; overflow-y:auto; margin-bottom:8px;
+           border-bottom:1px solid var(--color-border); padding-bottom:8px">
+        <p class="hint-text">Щёлкните строку, чтобы увидеть статусы элемента.
+          Двойной щелчок по строке открывает форму элемента с правкой полей и истории.</p>
+      </div>
       <div class="actions">
         <button class="btn btn-sm btn-secondary" id="ec-prev">← Назад</button>
         <span class="hint-text" id="ec-page"></span>
         <button class="btn btn-sm btn-secondary" id="ec-next">Вперёд →</button>
         <span class="spacer"></span>
         <button class="btn btn-secondary" id="ec-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Форма элемента (живой запрос): правка полей отдельно от справочника —
+     открывается двойным щелчком по строке. Внизу — табличная часть истории
+     статусов со всеми реквизитами и правкой ПРЯМО В ТАБЛИЦЕ. -->
+<div class="modal-backdrop" id="element-form-backdrop">
+  <div class="modal modal-sticky" style="max-width:940px">
+    <div class="modal-sticky-head">
+      <h2 id="ef-title">Элемент</h2>
+      <div id="ef-fields" style="display:flex; flex-wrap:wrap; gap:8px"></div>
+      <div class="subtype-add-row" style="margin-top:8px; align-items:center">
+        <button class="btn btn-sm btn-primary" id="ef-save">Сохранить поля</button>
+        <span class="hint-text" id="ef-status"></span>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <label class="field">История статусов — правится прямо в таблице</label>
+      <table id="ef-history" style="width:100%; font-size:12px"></table>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="ef-close">Закрыть</button>
       </div>
     </div>
   </div>

@@ -4835,11 +4835,19 @@ async function renderElementCatalog() {
     </tr>`).join("")}</tbody>`;
 
   table.querySelectorAll("tbody tr[data-element-id]").forEach(tr => {
+    const id = Number(tr.getAttribute("data-element-id"));
     tr.addEventListener("click", () => {
-      ecActiveElementId = Number(tr.getAttribute("data-element-id"));
+      ecActiveElementId = id;
       table.querySelectorAll("tbody tr").forEach(x => x.classList.remove("ec-row-active"));
       tr.classList.add("ec-row-active");
       renderEcDetail();
+    });
+    // Двойной щелчок по строке — форма элемента с правкой полей и истории;
+    // по ячейке СТАТУСА — та же форма (история в ней и правится), как и
+    // просил пользователь.
+    tr.addEventListener("dblclick", () => {
+      if (!canEditZones()) return;   // правка — только админ
+      openElementForm(id);
     });
   });
 
@@ -4868,6 +4876,210 @@ async function renderElementCatalog() {
   document.getElementById("ec-next").disabled = to >= data.total;
 }
 
+// ---------- Форма элемента: поля + история статусов с правкой в таблице ----------
+// Отдельная форма, а не блок в справочнике (живой репорт): в подвале
+// справочника правка делала высоту скачущей, а половина полей была голым
+// текстом там, где нужен подчинённый справочник (подтип зависит от типа).
+const elementFormBackdrop = document.getElementById("element-form-backdrop");
+let efElement = null;
+let efAllowedSubtypes = null; // {тип: [подтипы]} — грузится один раз за сеанс
+
+const EF_FIELDS = [
+  { key: "element_type", label: "Тип", kind: "type" },
+  { key: "subtype", label: "Подтип", kind: "subtype" },
+  { key: "mark", label: "Марка" },
+  { key: "elevation_mm", label: "Отметка, мм", type: "number" },
+  { key: "floor", label: "Этаж", type: "number" },
+  { key: "address", label: "Адрес по осям" },
+  { key: "planned_delivery_date", label: "Плановая поставка", type: "date" },
+];
+
+function efSubtypeOptions(type, current) {
+  const list = (efAllowedSubtypes && efAllowedSubtypes[type]) || [];
+  return ['<option value="">— не задан —</option>'].concat(
+    list.map(v => `<option value="${escapeHtml(v)}"${v === current ? " selected" : ""}>${escapeHtml(v)}</option>`)
+  ).join("");
+}
+
+function renderEfFields() {
+  const manual = new Set(efElement.manual_fields || []);
+  document.getElementById("ef-fields").innerHTML = EF_FIELDS.map(f => {
+    const value = efElement[f.key];
+    const shown = value === null || value === undefined ? "" : String(value);
+    let control;
+    if (f.kind === "type") {
+      // Список типов берём из справочника подтипов (его ключи — типы) плюс
+      // собственный тип элемента: отдельного эндпоинта «типы элементов» нет,
+      // а зашивать список в клиент нельзя — он уже расширялся («Плита
+      // перекрытия» появилась позже остальных).
+      const types = Array.from(new Set([
+        ...Object.keys(efAllowedSubtypes || {}),
+        ...(efElement.element_type ? [efElement.element_type] : []),
+      ])).sort();
+      control = `<select data-ef="${f.key}" style="width:100%">` +
+        types.map(t =>
+          `<option value="${escapeHtml(t)}"${t === value ? " selected" : ""}>${escapeHtml(t)}</option>`
+        ).join("") + "</select>";
+    } else if (f.kind === "subtype") {
+      // Подтип — подчинённый справочник: список зависит от выбранного ТИПА и
+      // пересобирается при его смене (живой репорт: было текстовое поле).
+      control = `<select data-ef="${f.key}" id="ef-subtype" style="width:100%">` +
+        efSubtypeOptions(efElement.element_type, value) + "</select>";
+    } else {
+      control = `<input type="${f.type || "text"}" data-ef="${f.key}" style="width:100%"
+        value="${escapeHtml(shown)}"/>`;
+    }
+    return `<div style="min-width:150px; flex:1 1 150px">
+      <label class="field" style="margin:0">${escapeHtml(f.label)}${manual.has(f.key) ? " ✎" : ""}</label>
+      ${control}</div>`;
+  }).join("") +
+    (manual.size ? `<div class="hint-text" style="flex-basis:100%">✎ — поле правлено руками;
+      загрузка нового чертежа его не перезапишет, а покажет расхождение в сводке.</div>` : "");
+
+  const typeSelect = document.querySelector('#ef-fields select[data-ef="element_type"]');
+  if (typeSelect) {
+    typeSelect.addEventListener("change", () => {
+      const subtype = document.getElementById("ef-subtype");
+      if (subtype) subtype.innerHTML = efSubtypeOptions(typeSelect.value, subtype.value);
+    });
+  }
+}
+
+// История статусов — таблица с полями ввода в каждой строке: правка ПРЯМО В
+// ТАБЛИЦЕ, включая дату и автора (живой репорт: их нельзя было исправить).
+function renderEfHistory() {
+  const table = document.getElementById("ef-history");
+  const statusOptions = current => state.statusOrder.map(st =>
+    `<option value="${st}"${st === current ? " selected" : ""}>${escapeHtml(state.statusLabels[st] || st)}</option>`
+  ).join("");
+  table.innerHTML = `<thead><tr>
+      <th style="text-align:left">Дата и время</th><th style="text-align:left">Статус</th>
+      <th style="text-align:left">Кто изменил</th><th style="text-align:left">Комментарий</th><th></th>
+    </tr></thead>
+    <tbody>${(efElement.history || []).map(h => `<tr data-history="${h.id}">
+      <td><input type="datetime-local" data-hf="changed_at" style="width:100%"
+        value="${escapeHtml((h.changed_at || "").replace(" ", "T").slice(0, 16))}"/></td>
+      <td><select data-hf="status" style="width:100%">${statusOptions(h.status)}</select></td>
+      <td><input type="text" data-hf="changed_by" style="width:100%" value="${escapeHtml(h.changed_by || "")}"/></td>
+      <td><input type="text" data-hf="comment" style="width:100%" value="${escapeHtml(h.comment || "")}"/></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm btn-primary" data-h-save="${h.id}" title="Сохранить запись">✓</button>
+        <button class="btn btn-sm btn-secondary" data-h-del="${h.id}" title="Удалить запись">✕</button>
+      </td>
+    </tr>`).join("")}</tbody>`;
+
+  table.querySelectorAll("[data-h-save]").forEach(btn => btn.addEventListener("click", async () => {
+    const tr = btn.closest("tr");
+    const payload = {};
+    tr.querySelectorAll("[data-hf]").forEach(input => {
+      payload[input.getAttribute("data-hf")] = input.value;
+    });
+    await efSendHistory(btn.getAttribute("data-h-save"), payload);
+  }));
+  table.querySelectorAll("[data-h-del]").forEach(btn => btn.addEventListener("click", async () => {
+    if (!confirm("Удалить запись истории? Текущий статус пересчитается по остальным записям.")) return;
+    try {
+      await api(`/elements/${efElement.id}/history/${btn.getAttribute("data-h-del")}`, { method: "DELETE" });
+      await openElementForm(efElement.id, false);
+      await afterElementChanged();
+    } catch (e) {
+      showToast("Не удалось удалить: " + e.message, "warning");
+    }
+  }));
+}
+
+async function efSendHistory(historyId, payload) {
+  const statusBox = document.getElementById("ef-status");
+  statusBox.style.color = "var(--color-text-muted)";
+  statusBox.textContent = "Сохранение записи…";
+  try {
+    await api(`/elements/${efElement.id}/history/${historyId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    await openElementForm(efElement.id, false);
+    await afterElementChanged();
+    document.getElementById("ef-status").textContent = "Запись сохранена.";
+  } catch (e) {
+    statusBox.style.color = "var(--color-danger)";
+    statusBox.textContent = e.message;
+  }
+}
+
+// Обновление всего, на что влияет правка элемента: справочник, его подвал и
+// схема (статус/марка могли измениться).
+async function afterElementChanged() {
+  await renderElementCatalog();
+  await renderEcDetail();
+  if (state.sourceFile) await loadPlan(true);
+}
+
+async function openElementForm(elementId, show = true) {
+  if (!efAllowedSubtypes) {
+    try {
+      efAllowedSubtypes = await api("/allowed-subtypes");
+    } catch (e) {
+      efAllowedSubtypes = {};
+    }
+  }
+  efElement = await api(`/elements/${elementId}`);
+  document.getElementById("ef-title").textContent =
+    `${efElement.element_type} ${efElement.mark || "без марки"} — ${efElement.address || "адрес не определён"}`;
+  document.getElementById("ef-status").textContent = "";
+  renderEfFields();
+  renderEfHistory();
+  if (show) elementFormBackdrop.classList.add("open");
+}
+
+document.getElementById("ef-close").addEventListener("click", () => elementFormBackdrop.classList.remove("open"));
+
+document.getElementById("ef-save").addEventListener("click", async () => {
+  const statusBox = document.getElementById("ef-status");
+  const payload = {};
+  document.querySelectorAll("#ef-fields [data-ef]").forEach(input => {
+    const key = input.getAttribute("data-ef");
+    const raw = input.value.trim();
+    const was = efElement[key] === null || efElement[key] === undefined ? "" : String(efElement[key]);
+    if (raw !== was) payload[key] = raw === "" ? null : raw;
+  });
+  if (!Object.keys(payload).length) {
+    statusBox.style.color = "var(--color-text-muted)";
+    statusBox.textContent = "Изменений нет.";
+    return;
+  }
+  statusBox.style.color = "var(--color-text-muted)";
+  statusBox.textContent = "Сохранение…";
+  const send = confirmMismatch => api(
+    `/elements/${efElement.id}/fields${confirmMismatch ? "?confirm_contract_mismatch=true" : ""}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+  );
+  try {
+    await send(false);
+  } catch (e) {
+    const message = e.message || "";
+    // Расхождение с позицией контракта не запрещаем, а согласовываем (Э5).
+    if (message.startsWith("После правки элемент не соответствует")) {
+      if (!confirm(message + ". Сохранить всё равно?")) {
+        statusBox.textContent = "Отменено.";
+        return;
+      }
+      try {
+        await send(true);
+      } catch (err) {
+        statusBox.style.color = "var(--color-danger)";
+        statusBox.textContent = err.message;
+        return;
+      }
+    } else {
+      statusBox.style.color = "var(--color-danger)";
+      statusBox.textContent = message;
+      return;
+    }
+  }
+  await openElementForm(efElement.id, false);
+  await afterElementChanged();
+  document.getElementById("ef-status").textContent = "Поля сохранены.";
+});
+
 // ---------- Статусы активного элемента под таблицей (живой запрос) ----------
 // Правка статуса идёт ТЕМ ЖЕ диалогом, что и со схемы (openStatusDialog):
 // там уже живут выбор даты применения, выбор контракта при первом уходе с
@@ -4894,45 +5106,18 @@ async function renderEcDetail() {
     .map(st => `<option value="${st}"${st === element.current_status ? " selected" : ""}>` +
                `${escapeHtml(state.statusLabels[st] || st)}</option>`).join("");
 
-  // Поля, правленные руками, помечаются: чертёж их больше не перезаписывает,
-  // и пользователь должен видеть, что значение здесь «своё», а не из DXF.
-  const manual = new Set(element.manual_fields || []);
-  const editable = [
-    { key: "element_type", label: "Тип" },
-    { key: "subtype", label: "Подтип" },
-    { key: "mark", label: "Марка" },
-    { key: "elevation_mm", label: "Отметка, мм" },
-    { key: "floor", label: "Этаж" },
-    { key: "address", label: "Адрес по осям" },
-    { key: "planned_delivery_date", label: "Плановая поставка", type: "date" },
-  ];
-  const editorHtml = admin ? `
-    <div style="border:1px solid var(--color-border); border-radius:6px; padding:8px; margin-bottom:10px">
-      <div class="hint-text" style="margin-bottom:6px">Правка полей элемента. Статус и фактическая
-        дата здесь не правятся — у них своя история, меняются диалогом смены статуса.</div>
-      <div style="display:flex; flex-wrap:wrap; gap:8px">
-        ${editable.map(f => `<div style="min-width:150px">
-          <label class="field" style="margin:0">${escapeHtml(f.label)}${manual.has(f.key) ? " ✎" : ""}</label>
-          <input type="${f.type || "text"}" data-ef="${f.key}" style="width:100%"
-            value="${escapeHtml(element[f.key] === null || element[f.key] === undefined ? "" : String(element[f.key]))}"/>
-        </div>`).join("")}
-      </div>
-      <div class="subtype-add-row" style="margin-top:8px; align-items:center">
-        <button class="btn btn-sm btn-primary" id="ec-fields-save">Сохранить поля</button>
-        <span class="hint-text" id="ec-fields-status"></span>
-      </div>
-      ${manual.size ? `<div class="hint-text" style="margin-top:6px">✎ — поле правлено руками;
-        загрузка нового чертежа его не перезапишет, а покажет расхождение в сводке.</div>` : ""}
-    </div>` : "";
-
-  box.innerHTML = editorHtml + `
+  // Правка полей переехала в отдельную форму элемента (двойной щелчок по
+  // строке): в подвале справочника она делала высоту скачущей и всё равно
+  // была неудобной — половина полей текстом, подтип без справочника.
+  box.innerHTML = `
     <div class="subtype-add-row" style="align-items:flex-end; margin-bottom:8px">
       <div><b>${escapeHtml(element.element_type)} ${escapeHtml(element.mark || "без марки")}</b>
         <span class="hint-text">— ${escapeHtml(element.address || "адрес не определён")},
         текущий статус: ${escapeHtml(state.statusLabels[element.current_status] || element.current_status)}</span></div>
       <span class="spacer"></span>
       ${admin ? `<select id="ec-status-select" style="font-size:12px">${statusOptions}</select>
-        <button class="btn btn-sm btn-primary" id="ec-status-apply">Изменить статус…</button>` : ""}
+        <button class="btn btn-sm btn-primary" id="ec-status-apply">Изменить статус…</button>
+        <button class="btn btn-sm btn-secondary" id="ec-open-form">Открыть форму элемента…</button>` : ""}
     </div>
     <table style="width:100%; font-size:12px">
       <thead><tr>
@@ -4952,56 +5137,7 @@ async function renderEcDetail() {
 
   if (!admin) return;
 
-  document.getElementById("ec-fields-save").addEventListener("click", async () => {
-    const statusBox = document.getElementById("ec-fields-status");
-    const payload = {};
-    box.querySelectorAll("input[data-ef]").forEach(input => {
-      const key = input.getAttribute("data-ef");
-      const raw = input.value.trim();
-      const was = element[key] === null || element[key] === undefined ? "" : String(element[key]);
-      if (raw !== was) payload[key] = raw === "" ? null : raw;
-    });
-    if (!Object.keys(payload).length) {
-      statusBox.style.color = "var(--color-text-muted)";
-      statusBox.textContent = "Изменений нет.";
-      return;
-    }
-    statusBox.style.color = "var(--color-text-muted)";
-    statusBox.textContent = "Сохранение…";
-    const send = confirmMismatch => api(
-      `/elements/${element.id}/fields${confirmMismatch ? "?confirm_contract_mismatch=true" : ""}`,
-      { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
-    );
-    try {
-      await send(false);
-    } catch (e) {
-      // 409 — расхождение с позицией контракта. Решение Э5: не запрещаем, а
-      // согласовываем, поэтому спрашиваем и повторяем с подтверждением.
-      const message = e.message || "";
-      if (message.startsWith("После правки элемент не соответствует")) {
-        if (!confirm(message + ". Сохранить всё равно?")) {
-          statusBox.textContent = "Отменено.";
-          return;
-        }
-        try {
-          await send(true);
-        } catch (err) {
-          statusBox.style.color = "var(--color-danger)";
-          statusBox.textContent = err.message;
-          return;
-        }
-      } else {
-        statusBox.style.color = "var(--color-danger)";
-        statusBox.textContent = message;
-        return;
-      }
-    }
-    await renderEcDetail();
-    await renderElementCatalog();
-    if (state.sourceFile) await loadPlan(true);
-    showToast("Поля элемента сохранены.", "info");
-  });
-
+  document.getElementById("ec-open-form").addEventListener("click", () => openElementForm(element.id));
   document.getElementById("ec-status-apply").addEventListener("click", () => {
     const status = document.getElementById("ec-status-select").value;
     // Диалог сам применит смену и обновит схему; справочник перечитываем
