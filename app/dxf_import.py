@@ -185,6 +185,14 @@ def analyze_drawing(parsed: ParsedDrawing, object_id: Optional[int] = None) -> d
         # сверять было бы не с чем.
         conn.commit()
         analysis = element_sync.analyze_import(conn, resolved_object_id, parsed.rows)
+        # Расхождения по ЗОНАМ (решение З1): зона опознаётся по номеру, но её
+        # геометрия могла измениться — пользователь решает, правка это или уже
+        # другая зона.
+        zones_review = zone_sync.analyze_zones(conn, resolved_object_id, parsed.zones)
+        analysis["counts"]["zone_conflicts"] = len(zones_review["zone_conflicts"])
+        analysis["counts"]["zones_new"] = len(zones_review["new_zones"])
+        analysis["details"]["zone_conflicts"] = zones_review["zone_conflicts"][:element_sync.DETAIL_LIMIT]
+        analysis["details"]["zones_new"] = zones_review["new_zones"][:element_sync.DETAIL_LIMIT]
         object_row = conn.execute(
             "SELECT name FROM objects WHERE id = ?", (resolved_object_id,)
         ).fetchone()
@@ -212,6 +220,7 @@ def apply_drawing(
     accept_mark_changes: bool = True,
     keep_mark_element_ids=None,
     refill_manual_fields=None,
+    create_new_zone_ids=None,
 ) -> DxfImportResult:
     """Фаза 2: применяет уже посчитанную сверку. Порядок операций тот же,
     что был у одношагового импорта: элементы -> сетка осей -> зоны и
@@ -236,7 +245,8 @@ def apply_drawing(
             # как раньше: на записи справочника ссылаются элементы, снести и
             # создать заново означало бы потерять эти ссылки (этап 2).
             zone_handle_to_id = zone_sync.sync_zones(
-                conn, object_id, parsed.source_file, parsed.zones
+                conn, object_id, parsed.source_file, parsed.zones,
+                create_new_zone_ids=set(create_new_zone_ids or ()),
             )
             # Цвета кранов раньше назначались внутри upsert_zones — вызываем
             # ту же функцию явно, чтобы новая цветовая схема не пропала вместе

@@ -8239,6 +8239,35 @@ function openImportReview(analysis) {
         <span>Принять смену марок из чертежа. Если снять — марки останутся прежними,
         остальная геометрия обновится в любом случае.</span>
       </label>` : "") +
+    // Расхождения по ЗОНАМ (решение З1): зона опознана по номеру, но её
+    // геометрия в чертеже другая. По умолчанию — обновить существующую
+    // запись справочника; можно вместо этого создать новую (прежняя уйдёт в
+    // неактуальные, привязки элементов пересчитает импорт).
+    (c.zone_conflicts ? `<details style="margin-top:10px" open>
+      <summary><b>Изменилась геометрия зон: ${c.zone_conflicts}</b></summary>
+      <div class="hint-text">Зоны опознаны по номеру, но контуры в чертеже другие.
+        Обновить существующую запись справочника или создать новую?</div>
+      <div style="font-size:12px; margin-top:6px">
+        ${analysis.details.zone_conflicts.map(z => `<div style="margin-bottom:6px">
+          <label style="display:inline-flex; gap:6px; align-items:center">
+            <input type="checkbox" data-newzone="${z.zone_id}"/>
+            <span><b>${escapeHtml(z.category)} ${escapeHtml(z.name || "№" + (z.number ?? "—"))}</b>
+              — создать новую запись вместо правки</span>
+          </label>
+          <div class="hint-text" style="margin-left:22px">
+            ${z.levels.map(l => l.kind === "изменён"
+              ? `ярус ${l.elevation_mm === null ? "без отметки" : "+" + l.elevation_mm}: контур изменён` +
+                (l.centroid_shift_mm ? `, сдвиг центра ${l.centroid_shift_mm} мм` : "") +
+                (l.area_change_pct ? `, площадь на ${l.area_change_pct}%` : "") +
+                (l.points_before !== l.points_after ? `, точек ${l.points_before} → ${l.points_after}` : "")
+              : `ярус ${l.elevation_mm === null ? "без отметки" : "+" + l.elevation_mm}: ${escapeHtml(l.kind)}`
+            ).join("; ")}
+          </div>
+        </div>`).join("")}
+      </div>
+    </details>` : "") +
+    (c.zones_new ? `<div class="hint-text" style="margin-top:6px">Новых зон в чертеже:
+      ${c.zones_new} — будут добавлены в справочники.</div>` : "") +
     // Расхождения с правленными руками полями (решение Э4). По умолчанию
     // галочки СНЯТЫ — ручное значение сохраняется: терять правку человека
     // молча нельзя, а вернуть значение из чертежа он может одним щелчком.
@@ -8315,6 +8344,9 @@ importReviewApply.addEventListener("click", async () => {
         // {id элемента: [поля, которые перезаполнить из чертежа]} — чего
         // здесь нет, то сохраняет ручное значение (решение Э4).
         refill_manual_fields: collectRefillDecisions(),
+        // Зоны, для которых выбрано «создать новую запись» (решение З1).
+        create_new_zone_ids: [...importReviewBody.querySelectorAll("input[data-newzone]:checked")]
+          .map(cb => Number(cb.getAttribute("data-newzone"))),
       }),
     });
     const body = await res.json().catch(() => null);

@@ -2496,6 +2496,7 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(require_admin)):
             accept_mark_changes=body.accept_mark_changes,
             keep_mark_element_ids=body.keep_mark_element_ids,
             refill_manual_fields=body.refill_manual_fields,
+            create_new_zone_ids=body.create_new_zone_ids,
         )
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -2516,6 +2517,7 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(require_admin)):
             "marks_kept": result.marks_kept,
             "manual_kept": result.manual_kept,
             "refilled_manual": {k: v for k, v in body.refill_manual_fields.items() if v},
+            "new_zone_records": body.create_new_zone_ids,
         },
     )
     return result
