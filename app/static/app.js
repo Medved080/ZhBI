@@ -1213,12 +1213,38 @@ function topVisibleLabelIds() {
 // это сама следом (loadPlan строит сцену один раз в конце). Без этого
 // признака загрузка данных в 3D-режиме пересобирала сцену ДВАЖДЫ — один
 // раз отсюда, второй из loadPlan.
+// Элементы, у которых допстрока подписи устарела, но которые сейчас скрыты
+// фильтром. Перестраивать им разметку в момент переключения незачем —
+// пользователь их не видит, а стоит это дорого: замер на реальном файле —
+// 6056 плит перекрытия пересобираются 121 мс, из них видимых при обычном
+// отборе единицы (40 штук — 1 мс). Отложенные догоняются в
+// applyPlacementFilters, когда действительно становятся видимыми.
+const pendingSubLabelRefresh = new Set();
+
+function refreshSubLabelsForType(type) {
+  for (const element of state.elements) {
+    if (element.element_type !== type) continue;
+    if (passesPlacementFilters(element)) {
+      pendingSubLabelRefresh.delete(element.id);
+      updateElementSubLabel(element);
+    } else {
+      pendingSubLabelRefresh.add(element.id);
+    }
+  }
+}
+
 function applyPlacementFilters(rebuild3D = true) {
   const topVisible = topVisibleLabelIds(); // только 2D, см. комментарий там же
   for (const element of state.elements) {
     const passes = passesPlacementFilters(element);
     const shape = state.shapeById.get(element.id);
     if (shape) shape.style.display = passes ? "" : "none";
+    // Элемент стал видимым, а его допстрока устарела, пока он был скрыт —
+    // догоняем именно здесь (см. pendingSubLabelRefresh).
+    if (passes && pendingSubLabelRefresh.has(element.id)) {
+      pendingSubLabelRefresh.delete(element.id);
+      updateElementSubLabel(element);
+    }
     const labelGroup = state.labelGroupById.get(element.id);
     if (labelGroup) labelGroup.style.display = (passes && topVisible.has(element.id)) ? "" : "none";
     // Тот же фильтр — и на 3D-меш, если сцена уже построена (см. "3D-режим схемы").
@@ -2713,9 +2739,7 @@ function renderLabelToggles() {
         // простого display:"" недостаточно, пересобираем содержимое через
         // тот же updateElementSubLabel, что и обработчик "Даты" ниже (он
         // сам корректно проставит display по текущему state.labelVisibility).
-        for (const element of state.elements) {
-          if (element.element_type === type) updateElementSubLabel(element);
-        }
+        refreshSubLabelsForType(type);
       }
       apply3DLabelVisibility();
     });
@@ -2723,9 +2747,7 @@ function renderLabelToggles() {
 
     datesInput.addEventListener("change", (e) => {
       state.labelDatesVisibility[type] = e.target.checked;
-      for (const element of state.elements) {
-        if (element.element_type === type) updateElementSubLabel(element);
-      }
+      refreshSubLabelsForType(type);
     });
     row.appendChild(datesLabel);
 

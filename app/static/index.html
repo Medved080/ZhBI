@@ -462,9 +462,17 @@
   #history-table th { color: var(--color-text-muted); font-weight: 500; }
   #placeholder { color: var(--color-text-muted); }
   label.toggle { font-size: 12px; display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-  .label-toggle-row { display: flex; align-items: center; gap: 14px; }
-  .label-toggle-row .toggle { flex: 1; }
-  label.toggle.toggle-sub { color: var(--color-text-muted); margin-top: 6px; }
+  /* Подпункт «Даты» — на СВОЕЙ строке с общим отступом (живой запрос: у
+     «Плиты перекрытия» он уезжал за правый край). Раньше строка была
+     горизонтальной и flex:1 стоял на обоих переключателях, поэтому позиция
+     «Дат» зависела от длины названия типа. В одну строку они и не помещаются:
+     колонка переключателей в сайдбаре — 134 px (замерено), а «Плита
+     перекрытия» с чекбоксом занимает почти всю ширину. Единый отступ даёт то,
+     что и просили, — все «Даты» выровнены между собой по левому краю. */
+  .label-toggle-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+  .label-toggle-row > .toggle:first-child { max-width: 100%; }
+  .label-toggle-row .toggle.toggle-sub { margin-left: 20px; white-space: nowrap; }
+  label.toggle.toggle-sub { color: var(--color-text-muted); }
   label.toggle.toggle-sub:has(input:disabled) { opacity: .45; }
   label.toggle.toggle-sub input:disabled { cursor: not-allowed; }
   #card select { font-size: 12px; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
