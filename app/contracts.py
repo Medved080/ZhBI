@@ -21,6 +21,7 @@ elements.contract_id остаётся денормализованным кэш�
 """
 
 import re
+import json
 import sqlite3
 from typing import Optional
 
@@ -518,6 +519,15 @@ def enrich_element_row(conn, row_dict: dict) -> dict:
     используется везде, где элемент возвращается клиенту
     (apply_status_change, app/element_dates.py, GET /elements/{id}), не
     только в /plan-data."""
+    # manual_fields в БД — JSON-текст; наружу отдаём списком имён полей.
+    if "manual_fields" in row_dict:
+        raw = row_dict.get("manual_fields")
+        if isinstance(raw, str):
+            try:
+                row_dict["manual_fields"] = json.loads(raw)
+            except ValueError:
+                row_dict["manual_fields"] = None
+
     contract_id = row_dict.get("contract_id")
     row_dict["counterparty_code"] = None
     if contract_id is not None:

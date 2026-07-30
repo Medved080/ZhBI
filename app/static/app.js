@@ -569,7 +569,7 @@ function switchTab(name) {
   document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
   // Отчёты панели «Статус» пока она скрыта не считаются (запрос не дешёвый) —
   // догоняем при переходе на неё, см. scheduleSidebarReports.
-  if (name === "status" && sideReportsDirty) loadSidebarReports();
+  if (name === "status" && sideReportsDirty()) loadSidebarReports();
 }
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -2609,22 +2609,36 @@ function renderLegend() {
   });
 }
 
-// ---------- сворачиваемая легенда (см. Docs/backlog.md, разбор UX) ----------
-// Тумблер остался с тех времён, когда легенда и карточка элемента жили в
-// одной вкладке "Свойства" и легенда мешала добраться до карточки. С
-// переездом легенды на отдельную вкладку "Статус" (2026-07-30) вместе с
-// двумя отчётами тумблер стал нужен для другого: свернуть матрицу
-// статусов и оставить на панели сразу оба отчёта. Автосворачивание при
-// первом выборе элемента убрано — карточка больше не под легендой.
-const LEGEND_COLLAPSE_KEY = "zhbi_legend_collapsed";
-function setLegendCollapsed(collapsed) {
-  document.getElementById("legend").classList.toggle("collapsed", collapsed);
-  document.getElementById("legend-toggle-btn").textContent = collapsed ? "▸" : "▾";
-  localStorage.setItem(LEGEND_COLLAPSE_KEY, collapsed ? "1" : "0");
+// ---------- сворачиваемые области панели «Статус» ----------
+// Один механизм на все три области (сводка по элементам и два отчёта, живой
+// запрос 2026-07-30): три отчёта в одну колонку не помещаются, и нужный
+// держат раскрытым, остальные закрытыми. Кнопка объявляет id своего тела в
+// `data-collapse`, состояние помнится в localStorage (у сводки ключ старый —
+// `zhbi_legend_collapsed`, чтобы не сбросить уже сделанный выбор).
+// Автосворачивание сводки при первом выборе элемента убрано вместе с
+// переездом легенды на эту вкладку — карточка больше не под ней.
+const collapseKeyFor = (btn) => btn.dataset.collapseKey || `zhbi_collapsed_${btn.dataset.collapse}`;
+
+function setSectionCollapsed(btn, collapsed) {
+  document.getElementById(btn.dataset.collapse).classList.toggle("side-collapsed", collapsed);
+  btn.textContent = collapsed ? "▸" : "▾";
+  localStorage.setItem(collapseKeyFor(btn), collapsed ? "1" : "0");
 }
-setLegendCollapsed(localStorage.getItem(LEGEND_COLLAPSE_KEY) === "1");
-document.getElementById("legend-toggle-btn").addEventListener("click", () => {
-  setLegendCollapsed(!document.getElementById("legend").classList.contains("collapsed"));
+
+const sectionCollapsed = (bodyId) => {
+  const body = document.getElementById(bodyId);
+  return !!body && body.classList.contains("side-collapsed");
+};
+
+document.querySelectorAll("[data-collapse]").forEach(btn => {
+  setSectionCollapsed(btn, localStorage.getItem(collapseKeyFor(btn)) === "1");
+  btn.addEventListener("click", () => {
+    const collapsed = !sectionCollapsed(btn.dataset.collapse);
+    setSectionCollapsed(btn, collapsed);
+    // Свёрнутый отчёт не считается вовсе (см. loadSidebarReports) — при
+    // раскрытии догоняем, если он устарел, пока был закрыт.
+    if (!collapsed) loadSidebarReports();
+  });
 });
 
 function renderLabelToggles() {
@@ -4880,7 +4894,38 @@ async function renderEcDetail() {
     .map(st => `<option value="${st}"${st === element.current_status ? " selected" : ""}>` +
                `${escapeHtml(state.statusLabels[st] || st)}</option>`).join("");
 
-  box.innerHTML = `
+  // Поля, правленные руками, помечаются: чертёж их больше не перезаписывает,
+  // и пользователь должен видеть, что значение здесь «своё», а не из DXF.
+  const manual = new Set(element.manual_fields || []);
+  const editable = [
+    { key: "element_type", label: "Тип" },
+    { key: "subtype", label: "Подтип" },
+    { key: "mark", label: "Марка" },
+    { key: "elevation_mm", label: "Отметка, мм" },
+    { key: "floor", label: "Этаж" },
+    { key: "address", label: "Адрес по осям" },
+    { key: "planned_delivery_date", label: "Плановая поставка", type: "date" },
+  ];
+  const editorHtml = admin ? `
+    <div style="border:1px solid var(--color-border); border-radius:6px; padding:8px; margin-bottom:10px">
+      <div class="hint-text" style="margin-bottom:6px">Правка полей элемента. Статус и фактическая
+        дата здесь не правятся — у них своя история, меняются диалогом смены статуса.</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px">
+        ${editable.map(f => `<div style="min-width:150px">
+          <label class="field" style="margin:0">${escapeHtml(f.label)}${manual.has(f.key) ? " ✎" : ""}</label>
+          <input type="${f.type || "text"}" data-ef="${f.key}" style="width:100%"
+            value="${escapeHtml(element[f.key] === null || element[f.key] === undefined ? "" : String(element[f.key]))}"/>
+        </div>`).join("")}
+      </div>
+      <div class="subtype-add-row" style="margin-top:8px; align-items:center">
+        <button class="btn btn-sm btn-primary" id="ec-fields-save">Сохранить поля</button>
+        <span class="hint-text" id="ec-fields-status"></span>
+      </div>
+      ${manual.size ? `<div class="hint-text" style="margin-top:6px">✎ — поле правлено руками;
+        загрузка нового чертежа его не перезапишет, а покажет расхождение в сводке.</div>` : ""}
+    </div>` : "";
+
+  box.innerHTML = editorHtml + `
     <div class="subtype-add-row" style="align-items:flex-end; margin-bottom:8px">
       <div><b>${escapeHtml(element.element_type)} ${escapeHtml(element.mark || "без марки")}</b>
         <span class="hint-text">— ${escapeHtml(element.address || "адрес не определён")},
@@ -4906,6 +4951,57 @@ async function renderEcDetail() {
     </table>`;
 
   if (!admin) return;
+
+  document.getElementById("ec-fields-save").addEventListener("click", async () => {
+    const statusBox = document.getElementById("ec-fields-status");
+    const payload = {};
+    box.querySelectorAll("input[data-ef]").forEach(input => {
+      const key = input.getAttribute("data-ef");
+      const raw = input.value.trim();
+      const was = element[key] === null || element[key] === undefined ? "" : String(element[key]);
+      if (raw !== was) payload[key] = raw === "" ? null : raw;
+    });
+    if (!Object.keys(payload).length) {
+      statusBox.style.color = "var(--color-text-muted)";
+      statusBox.textContent = "Изменений нет.";
+      return;
+    }
+    statusBox.style.color = "var(--color-text-muted)";
+    statusBox.textContent = "Сохранение…";
+    const send = confirmMismatch => api(
+      `/elements/${element.id}/fields${confirmMismatch ? "?confirm_contract_mismatch=true" : ""}`,
+      { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    );
+    try {
+      await send(false);
+    } catch (e) {
+      // 409 — расхождение с позицией контракта. Решение Э5: не запрещаем, а
+      // согласовываем, поэтому спрашиваем и повторяем с подтверждением.
+      const message = e.message || "";
+      if (message.startsWith("После правки элемент не соответствует")) {
+        if (!confirm(message + ". Сохранить всё равно?")) {
+          statusBox.textContent = "Отменено.";
+          return;
+        }
+        try {
+          await send(true);
+        } catch (err) {
+          statusBox.style.color = "var(--color-danger)";
+          statusBox.textContent = err.message;
+          return;
+        }
+      } else {
+        statusBox.style.color = "var(--color-danger)";
+        statusBox.textContent = message;
+        return;
+      }
+    }
+    await renderEcDetail();
+    await renderElementCatalog();
+    if (state.sourceFile) await loadPlan(true);
+    showToast("Поля элемента сохранены.", "info");
+  });
+
   document.getElementById("ec-status-apply").addEventListener("click", () => {
     const status = document.getElementById("ec-status-select").value;
     // Диалог сам применит смену и обновит схему; справочник перечитываем
@@ -6893,7 +6989,11 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
     ? []
     : [{ label: "Отчётная дата", date: data.report_date }]
       .concat((data.card.milestones || []).filter(m => m && m.date));
-  if (compact) {
+  // Линию рисуем только если отчётная дата попала в показанный период
+  // (панель умеет сужать окно, см. sideDynWindow): иначе weekIndex сполз бы
+  // на край окна и метка встала бы на чужую неделю.
+  const reportWeek = mondayOf(data.report_date);
+  if (compact && reportWeek >= weeks[0] && reportWeek <= weeks[weeks.length - 1]) {
     const px = x(weekIndex(data.report_date));
     parts.push(`<line x1="${px}" y1="${T}" x2="${px}" y2="${height - B}" stroke="#C0392B" stroke-width="1" stroke-dasharray="3 3"/>`);
   }
@@ -7086,11 +7186,17 @@ const SIDE_REPORTS_DEBOUNCE_MS = 250;
 let sideStatusData = null;
 let sideDynData = null;
 let sideStatusCollapsed = new Set();
-let sideReportsDirty = true;
+// Устаревание считается ПО ОТЧЁТУ, а не одним флагом на оба: свёрнутый отчёт
+// не пересчитывается, и когда его раскроют, надо знать, что он отстал.
+let sideStale = { status: true, dynamics: true };
 let sideReportsTimer = null;
 let sideReportsRequestId = 0;
+const sideReportsDirty = () => sideStale.status || sideStale.dynamics;
 
 const statusTabActive = () => document.getElementById("tab-status").classList.contains("active");
+const SIDE_SECTION_ID = { status: "side-status-section", dynamics: "side-dyn-section" };
+// Что реально нужно считать сейчас: раскрытое и устаревшее.
+const sideReportWanted = (key) => sideStale[key] && !sectionCollapsed(SIDE_SECTION_ID[key]);
 
 function sideReportBody(withDate) {
   const body = {
@@ -7106,7 +7212,7 @@ function sideReportBody(withDate) {
 // пересчитаться одни и те же — отдельных хуков по всем местам смены статуса
 // заводить не нужно.
 function scheduleSidebarReports() {
-  sideReportsDirty = true;
+  sideStale = { status: true, dynamics: true };
   // Скрытую панель не считаем вовсе: запрос не дешёвый, а пользователь его
   // результата не видит. При переходе на вкладку пересчёт сделает switchTab.
   if (!statusTabActive()) return;
@@ -7126,25 +7232,32 @@ async function loadSidebarReports() {
     document.getElementById("side-status-line").textContent = "";
     return;
   }
-  sideReportsDirty = false;
+  const want = { status: sideReportWanted("status"), dynamics: sideReportWanted("dynamics") };
+  if (!want.status && !want.dynamics) return; // всё нужное уже посчитано или свёрнуто
   const my = ++sideReportsRequestId;
-  if (!sideStatusData) statusBody.innerHTML = '<div class="hint-text">Построение…</div>';
-  if (!sideDynData) dynBody.innerHTML = '<div class="hint-text">Построение…</div>';
+  if (want.status && !sideStatusData) statusBody.innerHTML = '<div class="hint-text">Построение…</div>';
+  if (want.dynamics && !sideDynData) dynBody.innerHTML = '<div class="hint-text">Построение…</div>';
   try {
     const post = (endpoint, withDate) => api(endpoint, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sideReportBody(withDate)),
     });
     const [status, dyn] = await Promise.all([
-      post("/reports/status", false),
-      post("/reports/dynamics", true),
+      want.status ? post("/reports/status", false) : null,
+      want.dynamics ? post("/reports/dynamics", true) : null,
     ]);
     if (my !== sideReportsRequestId) return; // ответ на уже устаревший фильтр
-    sideStatusData = status;
-    sideDynData = dyn;
-    sideStatusCollapsed = defaultCollapsedTree(status);
-    renderSideStatusReport();
-    renderSideDynamicsReport();
+    if (want.status) {
+      sideStatusData = status;
+      sideStatusCollapsed = defaultCollapsedTree(status);
+      sideStale.status = false;
+      renderSideStatusReport();
+    }
+    if (want.dynamics) {
+      sideDynData = dyn;
+      sideStale.dynamics = false;
+      renderSideDynamicsReport();
+    }
   } catch (e) {
     if (my !== sideReportsRequestId) return;
     // Данные прошлого расчёта здесь уже неактуальны (фильтр изменился) —
@@ -7215,18 +7328,67 @@ function sideNoteBox(title, items) {
   return `<details><summary>${escapeHtml(title)}${items && items.length ? ` (${items.length})` : ""}</summary>${body}</details>`;
 }
 
+// ---------- период графика на панели (живой запрос 2026-07-30) ----------
+// Период — масштаб оси X, а НЕ пересчёт: значения рядов накопительные с
+// начала проекта, поэтому окно — это обычная вырезка по индексам недель, и
+// кривая входит в окно на своём накопленном уровне. Считать здесь нечего,
+// поэтому окно живёт на клиенте: смена периода не дёргает сервер вовсе.
+// Отчётная дата и таблицы «план/факт/отклонение» от периода не зависят —
+// это «на дату», а не «за интервал».
+let sideDynRange = { from: null, to: null }; // null = «весь срок жизни проекта»
+
+// Понедельник недели даты — сетка графика построена по неделям (см.
+// _week_start на сервере), поэтому граница периода приводится к неделе:
+// иначе дата со среды выкинула бы из окна свою же неделю.
+function mondayOf(iso) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+function sideDynWindow(data) {
+  const from = sideDynRange.from ? mondayOf(sideDynRange.from) : null;
+  const to = sideDynRange.to ? mondayOf(sideDynRange.to) : null;
+  const keep = data.weeks
+    .map((w, i) => i)
+    .filter(i => (!from || data.weeks[i] >= from) && (!to || data.weeks[i] <= to));
+  if (keep.length === data.weeks.length) return data;
+  const pick = (arr) => keep.map(i => arr[i]);
+  return {
+    ...data,
+    weeks: pick(data.weeks),
+    series: Object.fromEntries(Object.entries(data.series).map(([k, v]) => [k, pick(v)])),
+  };
+}
+
 function renderSideDynamicsReport() {
   const data = sideDynData;
   const body = document.getElementById("side-dyn-body");
   if (!data) { body.innerHTML = ""; return; }
   // Дата — фактически применённая сервером (могла быть подставлена сегодняшняя).
   document.getElementById("side-dyn-date").value = data.report_date;
+  // Поля периода: пустой выбор пользователя показывается фактическими
+  // границами проекта — так видно, какой период сейчас на графике, и от чего
+  // отсчитывать при правке. min/max не дают уйти за пределы данных.
+  const first = data.weeks[0] || "";
+  const last = data.weeks[data.weeks.length - 1] || "";
+  const fromInput = document.getElementById("side-dyn-from");
+  const toInput = document.getElementById("side-dyn-to");
+  fromInput.value = sideDynRange.from || first;
+  toInput.value = sideDynRange.to || last;
+  for (const input of [fromInput, toInput]) { input.min = first; input.max = last; }
+  document.getElementById("side-dyn-range-reset").style.display =
+    (sideDynRange.from || sideDynRange.to) ? "" : "none";
+
+  const windowed = sideDynWindow(data);
   const cov = data.plan_coverage;
   const warns = [];
   if (cov.smr < cov.total) warns.push(`СМР — у ${cov.smr} из ${cov.total}`);
   if (cov.delivery < cov.total) warns.push(`поставка — у ${cov.delivery} из ${cov.total}`);
   body.innerHTML = `
-    <div class="side-chart">${buildDynamicsChartSvg(data, 280, 150, { compact: true })}</div>
+    <div class="side-chart">${windowed.weeks.length
+      ? buildDynamicsChartSvg(windowed, 280, 150, { compact: true })
+      : '<div class="hint-text">В выбранном периоде нет ни одной недели</div>'}</div>
     ${sideChartLegendHtml(data)}
     ${warns.length ? `<div class="side-dyn-warn">План задан не у всех изделий (${escapeHtml(warns.join("; "))}) — кривая плана неполная.</div>` : ""}
     ${sideDynBlock("Монтаж ЖБИ", data.montage, data.report_date)}
@@ -7238,7 +7400,22 @@ function renderSideDynamicsReport() {
     </div>`;
 }
 
-document.getElementById("side-dyn-date").addEventListener("change", loadSidebarReports);
+// Отчётная дата меняет сами числа — нужен новый расчёт на сервере; период
+// меняет только масштаб оси X — перерисовываем уже полученные данные.
+document.getElementById("side-dyn-date").addEventListener("change", () => {
+  sideStale.dynamics = true;
+  loadSidebarReports();
+});
+for (const id of ["side-dyn-from", "side-dyn-to"]) {
+  document.getElementById(id).addEventListener("change", (e) => {
+    sideDynRange[id === "side-dyn-from" ? "from" : "to"] = e.target.value || null;
+    renderSideDynamicsReport();
+  });
+}
+document.getElementById("side-dyn-range-reset").addEventListener("click", () => {
+  sideDynRange = { from: null, to: null };
+  renderSideDynamicsReport();
+});
 
 // «⤢» — тот же отчёт в полный размер. Галочку «учитывать фильтр» ставим:
 // иначе форма показала бы другие числа, чем панель, с которой её открыли.

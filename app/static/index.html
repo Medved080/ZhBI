@@ -313,9 +313,11 @@
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
 
   /* -------- легенда статусов: сворачиваемая шапка + прокрутка таблицы -------- */
-  .legend-header { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; }
-  .legend-header h3 { margin: 0; }
-  #legend.collapsed { display: none; }
+  /* Шапка сворачиваемой области панели «Статус»: заголовок тянется, кнопки
+     («⤢» полный отчёт и «▾» свернуть) прижаты вправо. */
+  .side-section-head { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; }
+  .side-section-head h3 { margin: 0; flex: 1; }
+  .side-collapsed { display: none; }
   /* Таблица растёт вширь с числом типов элементов — уже была замечена
      клиппингом на реальных данных (см. Docs/backlog.md). Обёртка со своим
      скроллом + sticky первая колонка (статус всегда виден) + едва заметный
@@ -345,18 +347,23 @@
      горизонтальный скролл (приём и стили взяты у .legend-table-wrap выше —
      sticky первая колонка + выцветающий край, когда реально не помещается). */
   .side-report { margin-top: 18px; border-top: 1px solid var(--color-border); padding-top: 10px; }
-  .side-report-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-  .side-report-head h3 { margin: 0 0 6px; }
   .side-report-open {
     background: none; border: none; cursor: pointer; padding: 0 2px; font-size: 13px;
     color: var(--color-text-muted); line-height: 1;
   }
   .side-report-open:hover { color: var(--color-primary); }
-  .side-report-date { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-muted); margin-bottom: 8px; }
-  .side-report-date input[type="date"] {
-    font-size: 11px; padding: 3px 5px; border-radius: var(--radius-sm);
+  /* Отчётная дата и период графика: две строки «подпись + поля», третья —
+     сброс периода. Поля дат в панели заметно мельче, чем в формах. */
+  .side-report-controls { margin-bottom: 8px; }
+  .side-report-controls label {
+    display: flex; align-items: center; gap: 4px; font-size: 11px;
+    color: var(--color-text-muted); margin-bottom: 4px;
+  }
+  .side-report-controls input[type="date"] {
+    font-size: 11px; padding: 3px 4px; border-radius: var(--radius-sm); min-width: 0; flex: 1;
     border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text);
   }
+  .side-report-controls .link-btn { font-size: 11px; }
   .side-table { border-collapse: collapse; font-size: 10.5px; width: 100%; }
   .side-table th, .side-table td { padding: 2px 4px; text-align: right; white-space: nowrap; }
   .side-table th {
@@ -1073,31 +1080,54 @@
          «Действия → Отчёты», свёрстанные под ширину панели. Все три блока
          считаются по элементам, прошедшим текущий фильтр — цифры на панели
          всегда про то, что сейчас выбрано на схеме. -->
+    <!-- Каждая область сворачивается своей кнопкой (живой запрос
+         2026-07-30): три отчёта в одной колонке не помещаются на экран
+         целиком, и нужный держат раскрытым, остальные — закрытыми.
+         Механизм общий — data-collapse указывает id сворачиваемого тела,
+         состояние помнится в localStorage (см. app.js, initCollapsibles).
+         У сводки по элементам ключ старый (`zhbi_legend_collapsed`), чтобы
+         уже сделанный пользователем выбор не сбросился. -->
     <div id="tab-status" class="tab-panel">
-      <div class="legend-header" id="legend-header">
+      <div class="side-section-head">
         <h3>Статус по элементам</h3>
-        <button type="button" class="filter-expand-btn" id="legend-toggle-btn" title="Свернуть/развернуть">▾</button>
+        <button type="button" class="filter-expand-btn" data-collapse="legend"
+                data-collapse-key="zhbi_legend_collapsed" title="Свернуть/развернуть">▾</button>
       </div>
       <div id="legend"></div>
 
       <div class="side-report">
-        <div class="side-report-head">
+        <div class="side-section-head">
           <h3>Статус монтажа изделий</h3>
           <button type="button" class="side-report-open" data-report="status"
                   title="Открыть полный отчёт">⤢</button>
+          <button type="button" class="filter-expand-btn" data-collapse="side-status-section"
+                  title="Свернуть/развернуть">▾</button>
         </div>
-        <div class="hint-text" id="side-status-line"></div>
-        <div id="side-status-body"></div>
+        <div id="side-status-section">
+          <div class="hint-text" id="side-status-line"></div>
+          <div id="side-status-body"></div>
+        </div>
       </div>
 
       <div class="side-report">
-        <div class="side-report-head">
+        <div class="side-section-head">
           <h3>Динамика монтажа и поставки</h3>
           <button type="button" class="side-report-open" data-report="dynamics"
                   title="Открыть полный отчёт">⤢</button>
+          <button type="button" class="filter-expand-btn" data-collapse="side-dyn-section"
+                  title="Свернуть/развернуть">▾</button>
         </div>
-        <label class="side-report-date">На дату <input type="date" id="side-dyn-date"/></label>
-        <div id="side-dyn-body"></div>
+        <div id="side-dyn-section">
+          <!-- «На дату» — отчётная дата (по ней считаются накопительные итоги
+               и таблицы), «Период» — только масштаб оси X графика; по
+               умолчанию весь срок жизни проекта (живой запрос 2026-07-30). -->
+          <div class="side-report-controls">
+            <label>На дату <input type="date" id="side-dyn-date"/></label>
+            <label>Период <input type="date" id="side-dyn-from"/><span>—</span><input type="date" id="side-dyn-to"/></label>
+            <button type="button" class="link-btn" id="side-dyn-range-reset">весь проект</button>
+          </div>
+          <div id="side-dyn-body"></div>
+        </div>
       </div>
     </div>
     <div id="tab-filters" class="tab-panel">

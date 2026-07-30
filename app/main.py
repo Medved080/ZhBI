@@ -1761,6 +1761,124 @@ def elements_catalog(
         conn.close()
 
 
+# Поля элемента, которые админ правит руками в справочнике (решение Э2).
+# Статуса и фактической даты здесь НЕТ намеренно (решение Э3): у статуса своя
+# история и рабочая дата, правка «поля статус» в таблице разъехалась бы с
+# status_history; для него — обычный диалог смены статуса.
+_ELEMENT_EDITABLE_FIELDS = (
+    "element_type", "subtype", "mark", "elevation_mm", "floor", "address",
+    "planned_delivery_date",
+)
+_ELEMENT_INT_FIELDS = {"elevation_mm", "floor"}
+
+
+@app.patch("/elements/{element_id}/fields")
+def update_element_fields(
+    element_id: int,
+    body: dict,
+    confirm_contract_mismatch: bool = Query(False),
+    admin: sqlite3.Row = Depends(require_admin),
+):
+    """Ручная правка полей элемента (решения Э2, Э4, Э5).
+
+    Каждое правленое поле запоминается в elements.manual_fields — переимпорт
+    чертежа его не перезаписывает, а показывает расхождение (иначе правка
+    жила бы до первой загрузки нового чертежа и молча исчезала).
+
+    Если после смены типа или марки элемент перестаёт соответствовать позиции
+    своего контракта, правка отклоняется 409 с описанием — и применяется
+    только при явном confirm_contract_mismatch (решение Э5: «предупреждать и
+    согласовывать»).
+    """
+    unknown = set(body) - set(_ELEMENT_EDITABLE_FIELDS)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Эти поля не правятся здесь: {', '.join(sorted(unknown))}. "
+                   f"Статус и фактическая дата меняются диалогом смены статуса.",
+        )
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Элемент не найден")
+
+        values = {}
+        for field, raw in body.items():
+            if raw in (None, ""):
+                values[field] = None
+                continue
+            if field in _ELEMENT_INT_FIELDS:
+                try:
+                    values[field] = int(raw)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail=f"«{field}» должно быть целым числом")
+            else:
+                values[field] = str(raw).strip()
+
+        new_type = values.get("element_type", row["element_type"])
+        new_subtype = values.get("subtype", row["subtype"])
+        if "element_type" in values or "subtype" in values:
+            if new_subtype is not None:
+                allowed = {
+                    r["subtype"] for r in conn.execute(
+                        "SELECT subtype FROM allowed_subtypes WHERE element_type = ?", (new_type,))
+                }
+                if new_subtype not in allowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(f"Подтип «{new_subtype}» не разрешён для типа «{new_type}». "
+                                f"Допустимые: {', '.join(sorted(allowed)) or 'нет'} "
+                                f"(правится в «Действия → Справочники → Подтипы»)"),
+                    )
+
+        # Расхождение с позицией контракта — только если контракт назначен.
+        new_mark = values.get("mark", row["mark"])
+        mismatch = None
+        if row["contract_id"] and ("mark" in values or "element_type" in values):
+            line = conn.execute(
+                "SELECT 1 FROM contract_lines WHERE contract_id = ? AND element_type = ? AND mark IS ?",
+                (row["contract_id"], new_type, new_mark),
+            ).fetchone()
+            if line is None:
+                mismatch = (f"После правки элемент не соответствует ни одной позиции своего "
+                            f"контракта (тип «{new_type}», марка «{new_mark or '—'}»)")
+                if not confirm_contract_mismatch:
+                    raise HTTPException(status_code=409, detail=mismatch)
+
+        if not values:
+            raise HTTPException(status_code=400, detail="Нечего сохранять")
+
+        manual = set(json.loads(row["manual_fields"] or "[]"))
+        changed = {f: (row[f], v) for f, v in values.items() if row[f] != v}
+        manual |= set(changed)
+        assignments = ", ".join(f"{f} = :{f}" for f in values)
+        conn.execute(
+            f"UPDATE elements SET {assignments}, manual_fields = :manual_fields, "
+            f"updated_at = datetime('now') WHERE id = :id",
+            {**values, "manual_fields": json.dumps(sorted(manual), ensure_ascii=False), "id": element_id},
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
+        result = enrich_element_row(conn, dict(updated))
+    finally:
+        conn.close()
+
+    if changed:
+        activity.log(
+            "element_edit", user=admin, entity_type="element", entity_id=element_id,
+            element_type=result.get("element_type"), subtype=result.get("subtype"),
+            mark=result.get("mark"),
+            old_value="; ".join(f"{f}: {was}" for f, (was, _) in changed.items())[:500],
+            new_value="; ".join(f"{f}: {now}" for f, (_, now) in changed.items())[:500],
+            details={"contract_mismatch": mismatch, "manual_fields": sorted(manual)},
+        )
+    result["manual_fields"] = sorted(manual)
+    result["contract_mismatch"] = mismatch
+    return result
+
+
 @app.get("/objects", response_model=list[ObjectOut])
 def list_objects(user: sqlite3.Row = Depends(get_current_user)):
     """Объекты со счётчиками элементов. Доступно всем ролям (только чтение) —

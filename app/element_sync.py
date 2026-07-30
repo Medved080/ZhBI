@@ -16,6 +16,7 @@ scripts/import_elements.upsert_elements, где сопоставление шл�
 БД, замеры и обоснование уровней сверки там же).
 """
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -41,6 +42,7 @@ _GEOMETRY_FIELDS = (
 )
 
 _EXISTING_FIELDS = (
+    "manual_fields",
     "id", "dxf_handle", "element_type", "mark", "subtype", "elevation_mm",
     "floor", "outline_json", "contract_id", "current_status",
 )
@@ -188,6 +190,7 @@ def apply_import(
     match: MatchResult,
     accept_mark_changes: bool = True,
     keep_mark_element_ids: Optional[set] = None,
+    refill_manual_fields: Optional[dict] = None,
 ) -> dict:
     """Применяет сверку. accept_mark_changes=False (или перечисление
     element_id в keep_mark_element_ids) оставляет ПРЕЖНЮЮ марку у
@@ -197,15 +200,29 @@ def apply_import(
     координатам элемент не должен.
     """
     keep_marks = set(keep_mark_element_ids or ())
+    refill_fields = refill_manual_fields or {}
     element_types = set()
-    updated = inserted = retired = marks_kept = 0
+    updated = inserted = retired = marks_kept = manual_kept = 0
+
+    manual_by_id = {
+        r["id"]: set(json.loads(r["manual_fields"] or "[]"))
+        for r in conn.execute(
+            "SELECT id, manual_fields FROM elements WHERE manual_fields IS NOT NULL")
+    }
 
     for item in match.matched:
         row = rows[item.incoming_index]
         element_types.add(row["element_type"])
         values = {field: row.get(field) for field in _GEOMETRY_FIELDS}
+        # Поля, правленные руками в справочнике, чертёж НЕ перезаписывает
+        # (решение Э4): расхождение показывается в сводке, а решение
+        # «оставить ручное / перезаполнить» принимает пользователь.
+        for field in manual_by_id.get(item.element_id, ()):
+            if field in values and field not in refill_fields.get(item.element_id, ()):
+                values.pop(field)
+                manual_kept += 1
         if "mark" in item.changes and (not accept_mark_changes or item.element_id in keep_marks):
-            values.pop("mark")
+            values.pop("mark", None)
             marks_kept += 1
         assignments = ", ".join(f"{field} = :{field}" for field in values)
         values.update({
@@ -269,6 +286,7 @@ def apply_import(
         "inserted": inserted,
         "retired": retired,
         "marks_kept": marks_kept,
+        "manual_kept": manual_kept,
         "total_current": updated + inserted,
     }
 
