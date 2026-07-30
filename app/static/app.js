@@ -4815,9 +4815,19 @@ async function renderElementCatalog() {
   }).join("");
 
   table.innerHTML = `<thead><tr>${head}</tr><tr>${filterRow}</tr></thead>
-    <tbody>${data.rows.map(row => `<tr data-element-id="${row.id}">
+    <tbody>${data.rows.map(row => `<tr data-element-id="${row.id}" style="cursor:pointer"
+      ${row.id === ecActiveElementId ? 'class="ec-row-active"' : ""}>
       ${EC_COLUMNS.map(col => `<td>${escapeHtml(ecCellText(row, col.key))}</td>`).join("")}
     </tr>`).join("")}</tbody>`;
+
+  table.querySelectorAll("tbody tr[data-element-id]").forEach(tr => {
+    tr.addEventListener("click", () => {
+      ecActiveElementId = Number(tr.getAttribute("data-element-id"));
+      table.querySelectorAll("tbody tr").forEach(x => x.classList.remove("ec-row-active"));
+      tr.classList.add("ec-row-active");
+      renderEcDetail();
+    });
+  });
 
   table.querySelectorAll(".ec-sort").forEach(btn => btn.addEventListener("click", () => {
     const key = btn.getAttribute("data-sort");
@@ -4842,6 +4852,87 @@ async function renderElementCatalog() {
   document.getElementById("ec-page").textContent = `${from}–${to} из ${data.total}`;
   document.getElementById("ec-prev").disabled = ecState.offset === 0;
   document.getElementById("ec-next").disabled = to >= data.total;
+}
+
+// ---------- Статусы активного элемента под таблицей (живой запрос) ----------
+// Правка статуса идёт ТЕМ ЖЕ диалогом, что и со схемы (openStatusDialog):
+// там уже живут выбор даты применения, выбор контракта при первом уходе с
+// «Запланирован» и предупреждение об овербукинге. Вторая точка входа в смену
+// статуса не должна означать вторую реализацию правил.
+let ecActiveElementId = null;
+
+async function renderEcDetail() {
+  const box = document.getElementById("ec-detail");
+  if (!ecActiveElementId) {
+    box.innerHTML = `<p class="hint-text">Щёлкните строку выше, чтобы увидеть статусы элемента.</p>`;
+    return;
+  }
+  box.innerHTML = `<p class="hint-text">Загрузка…</p>`;
+  let element;
+  try {
+    element = await api(`/elements/${ecActiveElementId}`);
+  } catch (e) {
+    box.innerHTML = `<p class="hint-text" style="color:var(--color-danger)">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  const admin = !!(state.currentUser && state.currentUser.role === "admin");
+  const statusOptions = state.statusOrder
+    .map(st => `<option value="${st}"${st === element.current_status ? " selected" : ""}>` +
+               `${escapeHtml(state.statusLabels[st] || st)}</option>`).join("");
+
+  box.innerHTML = `
+    <div class="subtype-add-row" style="align-items:flex-end; margin-bottom:8px">
+      <div><b>${escapeHtml(element.element_type)} ${escapeHtml(element.mark || "без марки")}</b>
+        <span class="hint-text">— ${escapeHtml(element.address || "адрес не определён")},
+        текущий статус: ${escapeHtml(state.statusLabels[element.current_status] || element.current_status)}</span></div>
+      <span class="spacer"></span>
+      ${admin ? `<select id="ec-status-select" style="font-size:12px">${statusOptions}</select>
+        <button class="btn btn-sm btn-primary" id="ec-status-apply">Изменить статус…</button>` : ""}
+    </div>
+    <table style="width:100%; font-size:12px">
+      <thead><tr>
+        <th style="text-align:left">Дата</th><th style="text-align:left">Статус</th>
+        <th style="text-align:left">Кто изменил</th><th style="text-align:left">Комментарий</th>
+        ${admin ? "<th></th>" : ""}
+      </tr></thead>
+      <tbody>${(element.history || []).map(h => `<tr>
+        <td>${escapeHtml(h.changed_at || "")}</td>
+        <td>${escapeHtml(state.statusLabels[h.status] || h.status)}</td>
+        <td>${escapeHtml(h.changed_by || "—")}</td>
+        <td>${escapeHtml(h.comment || "")}</td>
+        ${admin ? `<td><button class="btn btn-sm btn-secondary" data-del-history="${h.id}"
+          title="Удалить запись истории">✕</button></td>` : ""}
+      </tr>`).join("")}</tbody>
+    </table>`;
+
+  if (!admin) return;
+  document.getElementById("ec-status-apply").addEventListener("click", () => {
+    const status = document.getElementById("ec-status-select").value;
+    // Диалог сам применит смену и обновит схему; справочник перечитываем
+    // после закрытия — статус элемента и его история изменились.
+    openStatusDialog(element, status);
+    const backdrop = document.getElementById("status-contract-backdrop");
+    const observer = new MutationObserver(() => {
+      if (!backdrop.classList.contains("open")) {
+        observer.disconnect();
+        renderEcDetail();
+        renderElementCatalog();
+      }
+    });
+    observer.observe(backdrop, { attributes: true, attributeFilter: ["class"] });
+  });
+  box.querySelectorAll("[data-del-history]").forEach(btn => btn.addEventListener("click", async () => {
+    const historyId = btn.getAttribute("data-del-history");
+    if (!confirm("Удалить эту запись истории? Текущий статус элемента будет пересчитан по остальным записям.")) return;
+    try {
+      await api(`/elements/${ecActiveElementId}/history/${historyId}`, { method: "DELETE" });
+      await renderEcDetail();
+      await renderElementCatalog();
+      if (state.sourceFile) await loadPlan(true);
+    } catch (e) {
+      showToast("Не удалось удалить запись: " + e.message, "warning");
+    }
+  }));
 }
 
 document.getElementById("menu-element-catalog").addEventListener("click", () => {
