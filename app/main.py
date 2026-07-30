@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
 from app.auth import format_display_name, get_current_user, require_admin, require_editor
@@ -79,8 +79,10 @@ from app.models import (
     ZoneColorIn,
     ObjectOut,
     ObjectPatchIn,
+    ZoneLevelIn,
     ZoneLevelOut,
     ZoneOut,
+    ZonePatchIn,
 )
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
@@ -1380,6 +1382,224 @@ def list_zones(
         ]
     finally:
         conn.close()
+
+
+@app.get("/zones/{zone_id}/geometry")
+def zone_geometry(zone_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Геометрия зоны плюс КОНТЕКСТ для предпросмотра (решение З13): габариты
+    объекта, сетка осей, соседние зоны той же категории и полигоны
+    крана-владельца.
+
+    Отдаётся одним запросом и не опирается на то, что сейчас загружено в
+    браузере: справочник может быть открыт при любом выбранном чертеже.
+    Элементы (9422 меша) в контекст НЕ входят — предпросмотр должен
+    открываться мгновенно, а не рисовать всю схему заново."""
+    conn = get_connection()
+    try:
+        zone = conn.execute("SELECT * FROM zones WHERE id = ?", (zone_id,)).fetchone()
+        if zone is None or zone["object_id"] is None:
+            raise HTTPException(status_code=404, detail="Зона справочника не найдена")
+
+        def levels_of(zid):
+            return [
+                {"id": r["id"], "elevation_mm": r["elevation_mm"],
+                 "outline": json.loads(r["outline_json"])}
+                for r in conn.execute(
+                    "SELECT id, elevation_mm, outline_json FROM zone_levels WHERE zone_id = ? "
+                    "ORDER BY elevation_mm", (zid,))
+            ]
+
+        levels = levels_of(zone_id)
+        siblings = []
+        for row in conn.execute(
+            "SELECT z.id, z.name, l.elevation_mm, l.outline_json FROM zones z "
+            "JOIN zone_levels l ON l.zone_id = z.id "
+            "WHERE z.object_id = ? AND z.category = ? AND z.id <> ? AND z.is_current = 1",
+            (zone["object_id"], zone["category"], zone_id),
+        ):
+            siblings.append({
+                "id": row["id"], "name": row["name"], "elevation_mm": row["elevation_mm"],
+                "outline": json.loads(row["outline_json"]),
+            })
+        parent = levels_of(zone["parent_zone_id"]) if zone["parent_zone_id"] else []
+
+        axes = [
+            {"kind": r["kind"], "label": r["label"], "coord": r["coord"]}
+            for r in conn.execute(
+                "SELECT kind, label, coord FROM axis_lines WHERE source_file = ?",
+                (zone["source_file"],),
+            )
+        ]
+        # Габариты объекта — по всем полигонам зон и по сетке осей. Считать по
+        # контурам элементов было бы точнее, но это чтение 9422 контуров ради
+        # рамки предпросмотра.
+        xs, ys = [], []
+        for row in conn.execute(
+            "SELECT l.outline_json FROM zone_levels l JOIN zones z ON z.id = l.zone_id "
+            "WHERE z.object_id = ?", (zone["object_id"],),
+        ):
+            for point in json.loads(row["outline_json"]):
+                xs.append(point[0])
+                ys.append(point[1])
+        for axis in axes:
+            (xs if axis["kind"] == "numeric" else ys).append(axis["coord"])
+        bbox = [min(xs), min(ys), max(xs), max(ys)] if xs and ys else None
+
+        cranes = [
+            {"id": r["id"], "number": r["number"], "name": r["name"]}
+            for r in conn.execute(
+                "SELECT id, number, name FROM zones WHERE object_id = ? AND category = 'Кран' "
+                "AND is_current = 1 ORDER BY number", (zone["object_id"],))
+        ]
+        return {
+            "zone": {
+                "id": zone["id"], "category": zone["category"], "number": zone["number"],
+                "name": zone["name"], "parent_zone_id": zone["parent_zone_id"],
+            },
+            "levels": levels,
+            "context": {"bbox": bbox, "axes": axes, "siblings": siblings, "parent": parent},
+            "cranes": cranes,
+        }
+    finally:
+        conn.close()
+
+
+def _validate_zone_edit(conn, zone: sqlite3.Row, body: ZonePatchIn) -> None:
+    """Запрещающие проверки правки зоны (решение З14 — «ошибки запрещать»).
+
+    Про стоянку отдельно: НЕ требуем, чтобы она целиком лежала внутри
+    полигона своего крана. На реальном чертеже 260723 у 184 стоянок из 252
+    часть вершин вне крана — это норма, а не ошибка (замер в Docs/backlog.md).
+    Запрещаем только вырожденный случай «ни одной вершины внутри», которого
+    в реальных данных нет ни одного.
+    """
+    if not body.levels:
+        raise HTTPException(status_code=400, detail="У зоны должен быть хотя бы один ярус")
+
+    seen_elevations = set()
+    for index, level in enumerate(body.levels, 1):
+        if len(level.outline) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ярус {index}: полигон не может иметь меньше трёх точек",
+            )
+        polygon = Polygon([(p[0], p[1]) for p in level.outline])
+        if not polygon.is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ярус {index}: контур самопересекается — исправьте порядок точек",
+            )
+        if polygon.area <= 0:
+            raise HTTPException(status_code=400, detail=f"Ярус {index}: нулевая площадь контура")
+        if level.elevation_mm in seen_elevations:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Отметка {level.elevation_mm} встречается у двух ярусов одной зоны",
+            )
+        seen_elevations.add(level.elevation_mm)
+
+    if body.number is not None:
+        clash_params = [zone["object_id"], zone["category"], body.number, zone["id"]]
+        clash_sql = ("SELECT 1 FROM zones WHERE object_id = ? AND category = ? AND number = ? "
+                     "AND id <> ? AND is_current = 1")
+        if zone["category"] == "Стоянка":
+            # Номер стоянки уникален внутри своего крана, а не по объекту:
+            # «Стоянка 1» есть у каждого из кранов (проверено на данных).
+            clash_sql += " AND parent_zone_id IS ?"
+            clash_params.append(body.parent_zone_id)
+        if conn.execute(clash_sql, clash_params).fetchone():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Номер {body.number} уже занят другой зоной этой категории",
+            )
+
+    if zone["category"] == "Стоянка" and body.parent_zone_id:
+        crane_levels = conn.execute(
+            "SELECT outline_json FROM zone_levels WHERE zone_id = ?", (body.parent_zone_id,)
+        ).fetchall()
+        crane_polygons = [
+            Polygon([(p[0], p[1]) for p in json.loads(r["outline_json"])])
+            for r in crane_levels if r["outline_json"]
+        ]
+        if crane_polygons:
+            for index, level in enumerate(body.levels, 1):
+                points = [Point(p[0], p[1]) for p in level.outline]
+                if not any(poly.covers(pt) for poly in crane_polygons for pt in points):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(f"Ярус {index}: стоянка целиком вне зоны своего крана — "
+                                f"проверьте координаты или выбранный кран"),
+                    )
+
+
+@app.patch("/zones/{zone_id}", response_model=ZoneOut)
+def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(require_admin)):
+    """Правка зоны справочника: номер, наименование, кран-владелец и
+    ГЕОМЕТРИЯ ярусов (решения З9, З13, З14).
+
+    ВАЖНО: после правки геометрии привязка элементов к зонам становится
+    устаревшей — она считалась по прежним полигонам. Автоматический пересчёт
+    (решение З11) ещё не сделан, поэтому ответ содержит число элементов,
+    привязка которых могла измениться, а форма показывает предупреждение.
+    Молча делать вид, что всё согласовано, нельзя — это ровно тот класс
+    тихого расхождения, из-за которого пересчёт и был затребован.
+    """
+    conn = get_connection()
+    try:
+        zone = conn.execute("SELECT * FROM zones WHERE id = ?", (zone_id,)).fetchone()
+        if zone is None:
+            raise HTTPException(status_code=404, detail="Зона не найдена")
+        if zone["object_id"] is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Это зона устаревшей версии чертежа, она не входит в справочник",
+            )
+        _validate_zone_edit(conn, zone, body)
+
+        before = {
+            "number": zone["number"], "name": zone["name"],
+            "parent_zone_id": zone["parent_zone_id"],
+            "levels": [
+                {"elevation_mm": r["elevation_mm"], "outline": json.loads(r["outline_json"])}
+                for r in conn.execute(
+                    "SELECT elevation_mm, outline_json FROM zone_levels WHERE zone_id = ? "
+                    "ORDER BY elevation_mm", (zone_id,))
+            ],
+        }
+
+        conn.execute(
+            "UPDATE zones SET number = ?, name = ?, parent_zone_id = ? WHERE id = ?",
+            (body.number, body.name, body.parent_zone_id, zone_id),
+        )
+        # Ярусы переписываются целиком: их состав тоже правится (ярус можно
+        # добавить или убрать), а сопоставлять «тот же ярус» по id было бы
+        # ложной точностью — отметка и есть его идентичность внутри зоны.
+        conn.execute("DELETE FROM zone_levels WHERE zone_id = ?", (zone_id,))
+        for level in body.levels:
+            conn.execute(
+                "INSERT INTO zone_levels (zone_id, elevation_mm, outline_json, source_file, dxf_handle) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (zone_id, level.elevation_mm, json.dumps(level.outline),
+                 zone["source_file"], zone["dxf_handle"]),
+            )
+        conn.commit()
+
+        column = _ZONE_ELEMENT_COLUMN[zone["category"]]
+        affected = conn.execute(
+            f"SELECT COUNT(*) AS n FROM elements WHERE {column} = ?", (zone_id,)
+        ).fetchone()["n"]
+    finally:
+        conn.close()
+
+    activity.log(
+        "zone_edit", user=admin, entity_type="zone", entity_id=zone_id,
+        element_type=zone["category"], mark=body.name,
+        old_value=json.dumps(before, ensure_ascii=False)[:2000],
+        new_value=f"ярусов {len(body.levels)}, номер {body.number}",
+        details={"affected_elements": affected},
+    )
+    result = next(z for z in list_zones(zone["category"], True, admin) if z.id == zone_id)
+    return result
 
 
 @app.get("/objects", response_model=list[ObjectOut])

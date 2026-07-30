@@ -1125,6 +1125,44 @@
   </div>
 </div>
 
+<!-- Форма правки зоны: реквизиты + таблица точек по ярусам + предпросмотр
+     геометрии на фоне габаритов объекта (решение З13). Соседние области
+     рисуются заметно блёкло, чтобы было ясно видно, с какой работаем;
+     элементы схемы в предпросмотре не рисуются — иначе форма открывалась бы
+     секундами. -->
+<div class="modal-backdrop" id="zone-edit-backdrop">
+  <div class="modal modal-sticky" style="max-width:980px">
+    <div class="modal-sticky-head">
+      <h2 id="zone-edit-title">Зона</h2>
+      <div class="row">
+        <div><label class="field">Номер</label><input type="number" id="zone-edit-number" style="width:90px"/></div>
+        <div style="flex:1"><label class="field">Наименование</label><input type="text" id="zone-edit-name"/></div>
+        <div id="zone-edit-crane-box"><label class="field">Кран</label><select id="zone-edit-crane"></select></div>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div style="display:flex; gap:16px; align-items:flex-start">
+        <div style="flex:1 1 420px; min-width:0">
+          <div id="zone-edit-levels"></div>
+          <button class="btn btn-sm btn-secondary" id="zone-edit-add-level" style="margin-top:8px">+ Ярус</button>
+        </div>
+        <div style="flex:0 0 400px">
+          <label class="field">Предпросмотр</label>
+          <svg id="zone-edit-preview" viewBox="0 0 400 300" style="width:400px; height:300px; border:1px solid var(--color-border); background:var(--color-surface)"></svg>
+          <div class="hint-text" id="zone-edit-preview-hint"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="zone-edit-status" style="font-size:12px; color:var(--color-danger); min-height:16px"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="zone-edit-cancel">Отмена</button>
+        <button class="btn btn-primary" id="zone-edit-save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="subtypes-backdrop">
   <div class="modal">
     <h2>Справочник подтипов</h2>

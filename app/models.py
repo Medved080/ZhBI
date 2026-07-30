@@ -223,6 +223,19 @@ class ZoneOut(BaseModel):
     elements: int = 0  # сколько элементов привязано к этой зоне
 
 
+class ZoneLevelIn(BaseModel):
+    id: Optional[int] = None  # None — новый ярус
+    elevation_mm: Optional[int] = None
+    outline: list[list[float]]
+
+
+class ZonePatchIn(BaseModel):
+    number: Optional[int] = None
+    name: Optional[str] = None
+    parent_zone_id: Optional[int] = None
+    levels: list[ZoneLevelIn]
+
+
 class ObjectOut(BaseModel):
     id: int
     name: str

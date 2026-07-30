@@ -4771,7 +4771,8 @@ function zoneLevelsText(levels) {
 async function renderZonesModal() {
   const [title, hint] = ZONE_CATEGORY_TITLES[zonesCategory];
   document.getElementById("zones-title").textContent = title;
-  document.getElementById("zones-hint").textContent = hint;
+  document.getElementById("zones-hint").textContent =
+    hint + (canEditZones() ? " Щёлкните строку, чтобы поправить номер, кран и координаты точек." : "");
   const box = document.getElementById("zones-rows");
   box.innerHTML = `<p class="hint-text">Загрузка…</p>`;
   const retired = document.getElementById("zones-include-retired").checked;
@@ -4789,17 +4790,255 @@ async function renderZonesModal() {
         <th style="text-align:left">Ярусы</th>
         <th style="text-align:right">Элементов</th>
       </tr></thead>
-      <tbody>${zones.map(z => `<tr${z.is_current ? "" : ' class="hint-text"'}>
+      <tbody>${zones.map(z => `<tr data-zone-id="${z.id}"${z.is_current ? "" : ' class="hint-text"'}
+        ${canEditZones() ? 'style="cursor:pointer"' : ""}>
         <td>${z.number === null || z.number === undefined ? "—" : z.number}</td>
         <td>${escapeHtml(z.name || "без наименования")}${z.is_current ? "" : " (нет в чертеже)"}</td>
         ${zonesCategory === "Стоянка" ? `<td>${escapeHtml(z.parent_name || "не определён")}</td>` : ""}
         <td>${escapeHtml(zoneLevelsText(z.levels))}</td>
         <td style="text-align:right">${z.elements}</td>
       </tr>`).join("")}</tbody></table>`;
+    if (canEditZones()) {
+      box.querySelectorAll("tr[data-zone-id]").forEach(tr => {
+        tr.addEventListener("click", () => openZoneEditor(Number(tr.getAttribute("data-zone-id"))));
+      });
+    }
   } catch (e) {
     box.innerHTML = `<p class="hint-text" style="color:var(--color-danger)">${escapeHtml(e.message)}</p>`;
   }
 }
+
+// Правка зон — только админ (решение З16). Просмотр справочника доступен всем
+// ролям, поэтому строка кликабельна не у всех.
+function canEditZones() {
+  return !!(state.currentUser && state.currentUser.role === "admin");
+}
+
+// ---------- Форма правки зоны: точки + предпросмотр (решения З13, З14) ----------
+// Состояние правки держим в объекте, а не читаем каждый раз из DOM: точки
+// пересчитываются в предпросмотр на каждый ввод, и разбирать десятки полей
+// заново на каждое нажатие клавиши незачем.
+let zoneEdit = null; // {zone, levels: [{id, elevation_mm, outline}], context, cranes}
+
+const zoneEditBackdrop = document.getElementById("zone-edit-backdrop");
+
+async function openZoneEditor(zoneId) {
+  const data = await api(`/zones/${zoneId}/geometry`);
+  zoneEdit = {
+    zone: data.zone,
+    // Координаты — в ЦЕЛЫХ миллиметрах. Из DXF они приходят с дробным
+    // хвостом (6718.578588724135), и править такое в поле невозможно:
+    // пользователь не глазомерит доли миллиметра, а на стройплощадке они
+    // не значат ничего. Округление применяется при сохранении вместе с
+    // остальной правкой — это осознанная нормализация, а не потеря данных.
+    levels: data.levels.map(l => ({
+      id: l.id, elevation_mm: l.elevation_mm,
+      outline: l.outline.map(p => [Math.round(p[0]), Math.round(p[1])]),
+    })),
+    context: data.context,
+    cranes: data.cranes,
+    active: { level: 0, point: null },
+  };
+  document.getElementById("zone-edit-title").textContent =
+    `${data.zone.category} ${data.zone.name ? "— " + data.zone.name : ""}`;
+  document.getElementById("zone-edit-number").value = data.zone.number ?? "";
+  document.getElementById("zone-edit-name").value = data.zone.name ?? "";
+  const craneBox = document.getElementById("zone-edit-crane-box");
+  const craneSel = document.getElementById("zone-edit-crane");
+  if (data.zone.category === "Стоянка") {
+    craneBox.style.display = "";
+    craneSel.innerHTML = ['<option value="">не определён</option>'].concat(
+      data.cranes.map(c => `<option value="${c.id}">${escapeHtml(c.name || ("Кран " + c.number))}</option>`)
+    ).join("");
+    craneSel.value = data.zone.parent_zone_id ? String(data.zone.parent_zone_id) : "";
+  } else {
+    craneBox.style.display = "none";
+  }
+  document.getElementById("zone-edit-status").textContent = "";
+  renderZoneLevels();
+  renderZonePreview();
+  zoneEditBackdrop.classList.add("open");
+}
+
+function renderZoneLevels() {
+  const box = document.getElementById("zone-edit-levels");
+  box.innerHTML = zoneEdit.levels.map((level, li) => `
+    <div style="border:1px solid var(--color-border); border-radius:6px; padding:8px; margin-bottom:8px">
+      <div class="subtype-add-row" style="align-items:center">
+        <label class="field" style="margin:0">Отметка, мм</label>
+        <input type="number" data-elev="${li}" value="${level.elevation_mm ?? ""}" style="width:110px"/>
+        <span class="spacer"></span>
+        <button class="btn btn-sm btn-secondary" data-del-level="${li}"
+          ${zoneEdit.levels.length === 1 ? "disabled" : ""}>Удалить ярус</button>
+      </div>
+      <table style="width:100%; font-size:12px; margin-top:6px">
+        <thead><tr><th style="width:28px"></th><th style="text-align:left">X, мм</th><th style="text-align:left">Y, мм</th><th></th></tr></thead>
+        <tbody>${level.outline.map((p, pi) => `<tr>
+          <td class="hint-text">${pi + 1}</td>
+          <td><input type="number" step="1" data-pt="${li}:${pi}:0" value="${p[0]}" style="width:100%"/></td>
+          <td><input type="number" step="1" data-pt="${li}:${pi}:1" value="${p[1]}" style="width:100%"/></td>
+          <td><button class="btn btn-sm btn-secondary" data-del-pt="${li}:${pi}"
+                ${level.outline.length <= 3 ? "disabled" : ""}>✕</button></td>
+        </tr>`).join("")}</tbody>
+      </table>
+      <button class="btn btn-sm btn-secondary" data-add-pt="${li}" style="margin-top:6px">+ Точка</button>
+    </div>`).join("");
+
+  box.querySelectorAll("input[data-pt]").forEach(input => {
+    const [li, pi, axis] = input.getAttribute("data-pt").split(":").map(Number);
+    // input, а не change: предпросмотр должен двигаться вместе с вводом —
+    // ровно это пользователь и просил видеть.
+    input.addEventListener("input", () => {
+      const value = Number(input.value);
+      if (!Number.isFinite(value)) return;
+      zoneEdit.levels[li].outline[pi][axis] = value;
+      zoneEdit.active = { level: li, point: pi };
+      renderZonePreview();
+    });
+    input.addEventListener("focus", () => {
+      zoneEdit.active = { level: li, point: pi };
+      renderZonePreview();
+    });
+  });
+  box.querySelectorAll("input[data-elev]").forEach(input => {
+    input.addEventListener("input", () => {
+      const li = Number(input.getAttribute("data-elev"));
+      zoneEdit.levels[li].elevation_mm = input.value === "" ? null : Number(input.value);
+    });
+  });
+  box.querySelectorAll("[data-del-pt]").forEach(btn => btn.addEventListener("click", () => {
+    const [li, pi] = btn.getAttribute("data-del-pt").split(":").map(Number);
+    zoneEdit.levels[li].outline.splice(pi, 1);
+    renderZoneLevels(); renderZonePreview();
+  }));
+  box.querySelectorAll("[data-add-pt]").forEach(btn => btn.addEventListener("click", () => {
+    const li = Number(btn.getAttribute("data-add-pt"));
+    const outline = zoneEdit.levels[li].outline;
+    const last = outline[outline.length - 1], first = outline[0];
+    // Новая точка — в середине замыкающего ребра: любое другое место
+    // (например, копия последней) даёт нулевую площадь и самопересечение.
+    outline.push([(last[0] + first[0]) / 2, (last[1] + first[1]) / 2]);
+    renderZoneLevels(); renderZonePreview();
+  }));
+  box.querySelectorAll("[data-del-level]").forEach(btn => btn.addEventListener("click", () => {
+    zoneEdit.levels.splice(Number(btn.getAttribute("data-del-level")), 1);
+    renderZoneLevels(); renderZonePreview();
+  }));
+}
+
+document.getElementById("zone-edit-add-level").addEventListener("click", () => {
+  const source = zoneEdit.levels[zoneEdit.levels.length - 1];
+  zoneEdit.levels.push({
+    id: null,
+    elevation_mm: source ? (source.elevation_mm ?? 0) + 1000 : 0,
+    outline: source ? source.outline.map(p => [p[0], p[1]]) : [[0, 0], [1000, 0], [1000, 1000]],
+  });
+  renderZoneLevels(); renderZonePreview();
+});
+
+// Предпросмотр: габариты объекта, сетка осей, соседние зоны той же категории
+// (заметно блёкло), полигоны крана-владельца, правимые ярусы. Элементы схемы
+// не рисуются — предпросмотр должен открываться мгновенно.
+function renderZonePreview() {
+  const svg = document.getElementById("zone-edit-preview");
+  const bbox = zoneEdit.context.bbox;
+  if (!bbox) { svg.innerHTML = ""; return; }
+  // Габариты пересчитываем с учётом правимых точек: их можно увести за
+  // пределы исходной рамки, и зона не должна уезжать за край картинки.
+  let [minX, minY, maxX, maxY] = bbox;
+  for (const level of zoneEdit.levels) {
+    for (const p of level.outline) {
+      minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
+      minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]);
+    }
+  }
+  const pad = Math.max(maxX - minX, maxY - minY) * 0.03;
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+  const W = 400, H = 300;
+  const scale = Math.min(W / (maxX - minX), H / (maxY - minY));
+  const offX = (W - (maxX - minX) * scale) / 2;
+  const offY = (H - (maxY - minY) * scale) / 2;
+  // Y инвертируется: в чертеже ось вверх, в SVG вниз (тот же приём, что у
+  // основной схемы — см. группу #flip).
+  const sx = x => offX + (x - minX) * scale;
+  const sy = y => H - offY - (y - minY) * scale;
+  const poly = (outline, attrs) =>
+    `<polygon points="${outline.map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ")}" ${attrs}/>`;
+
+  const parts = [`<rect x="0" y="0" width="${W}" height="${H}" fill="none"/>`];
+  for (const axis of zoneEdit.context.axes) {
+    parts.push(axis.kind === "numeric"
+      ? `<line x1="${sx(axis.coord).toFixed(1)}" y1="0" x2="${sx(axis.coord).toFixed(1)}" y2="${H}" stroke="var(--color-border)" stroke-width="0.5" opacity="0.5"/>`
+      : `<line x1="0" y1="${sy(axis.coord).toFixed(1)}" x2="${W}" y2="${sy(axis.coord).toFixed(1)}" stroke="var(--color-border)" stroke-width="0.5" opacity="0.5"/>`);
+  }
+  for (const sib of zoneEdit.context.siblings) {
+    parts.push(poly(sib.outline, 'fill="#888" fill-opacity="0.05" stroke="#888" stroke-opacity="0.25" stroke-width="0.7"'));
+  }
+  for (const level of zoneEdit.context.parent) {
+    parts.push(poly(level.outline, 'fill="none" stroke="#c0392b" stroke-opacity="0.55" stroke-width="1.2" stroke-dasharray="4 3"'));
+  }
+  zoneEdit.levels.forEach((level, li) => {
+    const activeLevel = li === zoneEdit.active.level;
+    parts.push(poly(level.outline,
+      `fill="#2471a3" fill-opacity="${activeLevel ? 0.22 : 0.08}" stroke="#2471a3" ` +
+      `stroke-opacity="${activeLevel ? 1 : 0.4}" stroke-width="${activeLevel ? 1.6 : 1}"`));
+    if (activeLevel) {
+      level.outline.forEach((p, pi) => {
+        const current = pi === zoneEdit.active.point;
+        parts.push(`<circle cx="${sx(p[0]).toFixed(1)}" cy="${sy(p[1]).toFixed(1)}" r="${current ? 4 : 2.5}" ` +
+          `fill="${current ? "#d68910" : "#2471a3"}"/>`);
+      });
+    }
+  });
+  svg.innerHTML = parts.join("");
+  const level = zoneEdit.levels[zoneEdit.active.level];
+  document.getElementById("zone-edit-preview-hint").textContent =
+    `Ярус ${zoneEdit.active.level + 1}` +
+    (level && level.elevation_mm !== null && level.elevation_mm !== undefined ? ` (отм. +${level.elevation_mm})` : " (без отметки)") +
+    `. Пунктиром — кран-владелец, бледным — соседние зоны той же категории. Координаты — в целых мм.`;
+}
+
+document.getElementById("zone-edit-cancel").addEventListener("click", () => {
+  zoneEditBackdrop.classList.remove("open");
+  zoneEdit = null;
+});
+
+document.getElementById("zone-edit-save").addEventListener("click", async () => {
+  if (!zoneEdit) return;
+  const statusBox = document.getElementById("zone-edit-status");
+  statusBox.textContent = "Сохранение…";
+  statusBox.style.color = "var(--color-text-muted)";
+  const numberRaw = document.getElementById("zone-edit-number").value;
+  const craneRaw = document.getElementById("zone-edit-crane").value;
+  try {
+    const res = await api(`/zones/${zoneEdit.zone.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        number: numberRaw === "" ? null : Number(numberRaw),
+        name: document.getElementById("zone-edit-name").value || null,
+        parent_zone_id: zoneEdit.zone.category === "Стоянка" && craneRaw ? Number(craneRaw) : null,
+        levels: zoneEdit.levels.map(l => ({
+          id: l.id, elevation_mm: l.elevation_mm, outline: l.outline,
+        })),
+      }),
+    });
+    zoneEditBackdrop.classList.remove("open");
+    zoneEdit = null;
+    // Предупреждение, а не тихий успех: привязка элементов считалась по
+    // прежним полигонам, автоматический пересчёт ещё не сделан.
+    showToast(
+      `Зона сохранена. Привязка ${res.elements} элементов считалась по прежней геометрии — ` +
+      `пересчёт будет отдельной операцией.`,
+      "warning"
+    );
+    await renderZonesModal();
+    if (state.sourceFile) await loadPlan(true);
+  } catch (e) {
+    statusBox.style.color = "var(--color-danger)";
+    statusBox.textContent = e.message || "Не удалось сохранить";
+  }
+});
 
 function openZonesModal(category) {
   zonesCategory = category;
