@@ -319,6 +319,28 @@ CREATE TABLE IF NOT EXISTS zone_levels (
 
 CREATE INDEX IF NOT EXISTS idx_zone_levels_zone ON zone_levels (zone_id);
 
+-- Снимок «до» на одну правку зоны (решение З12): реквизиты с геометрией плюс
+-- ПРЕЖНИЕ привязки тех элементов, которые изменил пересчёт. Правка точки
+-- задевает цепочку последствий, и откатываться должна вся цепочка, а не
+-- только сам полигон.
+--
+-- Храним историю целиком, а не один последний снимок: объём мизерный
+-- (сотни полигонов), а «отменить» после нескольких правок подряд —
+-- нормальное ожидание. undone_at помечает уже применённый откат, чтобы
+-- повторное нажатие не откатывало ещё на шаг назад молча.
+CREATE TABLE IF NOT EXISTS zone_edit_undo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone_id INTEGER NOT NULL REFERENCES zones (id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    undone_at TEXT,
+    user_id INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    user_name TEXT,
+    zone_json TEXT NOT NULL,
+    bindings_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_zone_edit_undo_zone ON zone_edit_undo (zone_id, undone_at);
+
 -- Цвет зоны — персонально на каждый КРАН (не общий на категорию, как
 -- раньше — см. Docs/backlog.md, item 7), его стоянки наследуют цвет
 -- родительского крана (zones.parent_zone_id) без отдельной записи здесь.

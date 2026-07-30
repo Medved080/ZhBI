@@ -563,10 +563,13 @@ async function renderFileSelectMenu() {
   }
 }
 
-// ---------- вкладки сайдбара: Свойства / Фильтры ----------
+// ---------- вкладки сайдбара: Свойства / Статус / Фильтры / Вид ----------
 function switchTab(name) {
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
+  // Отчёты панели «Статус» пока она скрыта не считаются (запрос не дешёвый) —
+  // догоняем при переходе на неё, см. scheduleSidebarReports.
+  if (name === "status" && sideReportsDirty) loadSidebarReports();
 }
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -2508,6 +2511,9 @@ function renderElements(data) {
 // applyPlacementFilters — легенда всегда показывает полный набор
 // выбранных файлов/слоёв, а не то, что видно на экране прямо сейчас).
 function renderLegend() {
+  // У легенды и у отчётов вкладки «Статус» одни и те же исходные данные —
+  // один и тот же повод пересчитаться (см. scheduleSidebarReports).
+  scheduleSidebarReports();
   const legend = document.getElementById("legend");
   legend.innerHTML = "";
   // Легенда считается по элементам, прошедшим текущий фильтр по
@@ -2604,12 +2610,13 @@ function renderLegend() {
 }
 
 // ---------- сворачиваемая легенда (см. Docs/backlog.md, разбор UX) ----------
-// Легенда и карточка выбранного элемента жили в одной вкладке "Свойства" —
-// после клика по элементу приходилось всегда скроллить мимо легенды, чтобы
-// увидеть карточку. Ручной тумблер + автосворачивание один раз при первом
-// выборе элемента за сеанс (дальше — не мешаем ручному выбору пользователя).
+// Тумблер остался с тех времён, когда легенда и карточка элемента жили в
+// одной вкладке "Свойства" и легенда мешала добраться до карточки. С
+// переездом легенды на отдельную вкладку "Статус" (2026-07-30) вместе с
+// двумя отчётами тумблер стал нужен для другого: свернуть матрицу
+// статусов и оставить на панели сразу оба отчёта. Автосворачивание при
+// первом выборе элемента убрано — карточка больше не под легендой.
 const LEGEND_COLLAPSE_KEY = "zhbi_legend_collapsed";
-let legendAutoCollapseDone = false;
 function setLegendCollapsed(collapsed) {
   document.getElementById("legend").classList.toggle("collapsed", collapsed);
   document.getElementById("legend-toggle-btn").textContent = collapsed ? "▸" : "▾";
@@ -2617,7 +2624,6 @@ function setLegendCollapsed(collapsed) {
 }
 setLegendCollapsed(localStorage.getItem(LEGEND_COLLAPSE_KEY) === "1");
 document.getElementById("legend-toggle-btn").addEventListener("click", () => {
-  legendAutoCollapseDone = true; // ручное действие — больше не трогаем автоматикой
   setLegendCollapsed(!document.getElementById("legend").classList.contains("collapsed"));
 });
 
@@ -3469,10 +3475,6 @@ function selectElement(element) {
   styleShape(state.shapeById.get(element.id), element);
   showCard(element);
   switchTab("properties");
-  if (!legendAutoCollapseDone) {
-    legendAutoCollapseDone = true;
-    setLegendCollapsed(true);
-  }
 }
 
 function clearSelection() {
@@ -4774,6 +4776,8 @@ async function renderZonesModal() {
   document.getElementById("zones-hint").textContent =
     hint + (canEditZones() ? " Щёлкните строку, чтобы поправить номер, кран и координаты точек." : "");
   const box = document.getElementById("zones-rows");
+  document.getElementById("zones-undo").style.display =
+    (lastZoneEdit && canEditZones()) ? "" : "none";
   box.innerHTML = `<p class="hint-text">Загрузка…</p>`;
   const retired = document.getElementById("zones-include-retired").checked;
   try {
@@ -4819,6 +4823,11 @@ function canEditZones() {
 // пересчитываются в предпросмотр на каждый ввод, и разбирать десятки полей
 // заново на каждое нажатие клавиши незачем.
 let zoneEdit = null; // {zone, levels: [{id, elevation_mm, outline}], context, cranes}
+// Последняя правка зоны в этом сеансе — по ней работает кнопка «Отменить
+// последнюю правку» в справочнике. Снимки правок хранит сервер, поэтому откат
+// возможен и позже; кнопка просто не знает, что отменять, пока в этом сеансе
+// ничего не правили.
+let lastZoneEdit = null;
 
 const zoneEditBackdrop = document.getElementById("zone-edit-backdrop");
 
@@ -4983,10 +4992,22 @@ function renderZonePreview() {
       `fill="#2471a3" fill-opacity="${activeLevel ? 0.22 : 0.08}" stroke="#2471a3" ` +
       `stroke-opacity="${activeLevel ? 1 : 0.4}" stroke-width="${activeLevel ? 1.6 : 1}"`));
     if (activeLevel) {
+      // Центр фигуры — чтобы номера точек ушли НАРУЖУ от контура и не легли
+      // на саму границу.
+      const cxCentre = level.outline.reduce((a, q) => a + sx(q[0]), 0) / level.outline.length;
+      const cyCentre = level.outline.reduce((a, q) => a + sy(q[1]), 0) / level.outline.length;
       level.outline.forEach((p, pi) => {
         const current = pi === zoneEdit.active.point;
-        parts.push(`<circle cx="${sx(p[0]).toFixed(1)}" cy="${sy(p[1]).toFixed(1)}" r="${current ? 4 : 2.5}" ` +
+        const cx = sx(p[0]), cy = sy(p[1]);
+        parts.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${current ? 4 : 2.5}" ` +
           `fill="${current ? "#d68910" : "#2471a3"}"/>`);
+        // Номер точки — тот же, что в таблице слева (нумерация с 1): без него
+        // непонятно, какую строку таблицы двигать, чтобы поехала нужная вершина.
+        const dx = cx - cxCentre, dy = cy - cyCentre;
+        const len = Math.hypot(dx, dy) || 1;
+        parts.push(`<text x="${(cx + (dx / len) * 9).toFixed(1)}" y="${(cy + (dy / len) * 9 + 3).toFixed(1)}" ` +
+          `text-anchor="middle" font-size="9" fill="${current ? "#d68910" : "#2471a3"}" ` +
+          `font-weight="${current ? "700" : "400"}">${pi + 1}</text>`);
       });
     }
   });
@@ -5025,13 +5046,19 @@ document.getElementById("zone-edit-save").addEventListener("click", async () => 
     });
     zoneEditBackdrop.classList.remove("open");
     zoneEdit = null;
-    // Предупреждение, а не тихий успех: привязка элементов считалась по
-    // прежним полигонам, автоматический пересчёт ещё не сделан.
-    showToast(
-      `Зона сохранена. Привязка ${res.elements} элементов считалась по прежней геометрии — ` +
-      `пересчёт будет отдельной операцией.`,
-      "warning"
-    );
+    // Пересчёт привязки выполняется сразу при сохранении (решение З11).
+    // Сообщаем ЧИСЛО затронутых элементов: правка одной точки может увести
+    // сотни элементов в другую зону, и это надо видеть.
+    lastZoneEdit = { zoneId: res.id, recalculated: res.recalculated || 0 };
+    if (res.recalc_refused) {
+      showToast(`Зона сохранена, но привязка не пересчитана: ${res.recalc_refused}`, "warning");
+    } else {
+      showToast(
+        `Зона сохранена. Пересчитана привязка ${res.recalculated} ` +
+        `${res.recalculated === 1 ? "элемента" : "элементов"}. Правку можно отменить в справочнике.`,
+        "info"
+      );
+    }
     await renderZonesModal();
     if (state.sourceFile) await loadPlan(true);
   } catch (e) {
@@ -5050,6 +5077,23 @@ document.getElementById("menu-zones-zakhvatka").addEventListener("click", () => 
 document.getElementById("menu-zones-crane").addEventListener("click", () => openZonesModal("Кран"));
 document.getElementById("menu-zones-stance").addEventListener("click", () => openZonesModal("Стоянка"));
 document.getElementById("zones-close").addEventListener("click", () => zonesBackdrop.classList.remove("open"));
+
+// Откат последней правки зоны — целиком: реквизиты, ярусы И привязки
+// элементов, которые изменил пересчёт (решение З12: «все изменения, которые
+// задевает изменение точки, должны откатываться»).
+document.getElementById("zones-undo").addEventListener("click", async () => {
+  if (!lastZoneEdit) return;
+  if (!confirm("Отменить последнюю правку зоны? Вернутся и координаты точек, и привязка элементов.")) return;
+  try {
+    const res = await api(`/zones/${lastZoneEdit.zoneId}/undo`, { method: "POST" });
+    showToast(`Правка отменена: ярусов ${res.levels}, привязок восстановлено ${res.elements}.`, "info");
+    lastZoneEdit = null;
+    await renderZonesModal();
+    if (state.sourceFile) await loadPlan(true);
+  } catch (e) {
+    showToast("Не удалось отменить: " + e.message, "warning");
+  }
+});
 document.getElementById("zones-include-retired").addEventListener("change", renderZonesModal);
 
 document.getElementById("menu-subtypes").addEventListener("click", async () => {
@@ -6225,6 +6269,18 @@ let reportData = null;
 // так же, как в исходной сводной таблице заказчика.
 let reportCollapsed = new Set();
 
+// Свёрнуто всё, кроме первой захватки — повторяет вид исходной сводной
+// таблицы заказчика. Только у древовидных отчётов: у «Динамики» узлов нет.
+function defaultCollapsedTree(data) {
+  const collapsed = new Set();
+  if (!data || !data.rows) return collapsed;
+  data.rows.forEach((row, i) => {
+    if (i > 0) collapsed.add(row.label);
+    else (row.children || []).forEach((f, j) => { if (j > 0) collapsed.add(`${row.label}/${f.label}`); });
+  });
+  return collapsed;
+}
+
 function reportRequestBody() {
   const body = { source_file: state.sourceFile || null };
   if (document.getElementById("report-use-filter").checked) {
@@ -6236,8 +6292,11 @@ function reportRequestBody() {
   return body;
 }
 
-function reportRowHtml(node, path, columns) {
-  const свёрнут = reportCollapsed.has(path);
+// collapsed/indent/tableAttr — параметры, а не константы: тот же отчёт
+// рисуется и в форме, и на панели «Статус» (узкая колонка → меньший отступ
+// уровня, своё состояние свёрнутости, свой класс таблицы).
+function reportRowHtml(node, path, columns, collapsed, indent) {
+  const свёрнут = collapsed.has(path);
   const есть_дети = node.children && node.children.length;
   const cells = columns.map(c => {
     const v = node.values[c.key];
@@ -6245,17 +6304,20 @@ function reportRowHtml(node, path, columns) {
   }).join("");
   const toggle = `<button class="report-toggle${есть_дети ? "" : " empty"}" data-path="${escapeHtml(path)}">${свёрнут ? "▸" : "▾"}</button>`;
   return `<tr class="lvl-${node.level}">
-    <td style="padding-left:${8 + node.level * 18}px">${toggle}${escapeHtml(node.label)}</td>${cells}</tr>`;
+    <td style="padding-left:${indent + node.level * indent}px">${toggle}${escapeHtml(node.label)}</td>${cells}</tr>`;
 }
 
-function renderTreeReport(data) {
+function renderTreeReport(data, opts = {}) {
+  const collapsed = opts.collapsed || reportCollapsed;
+  const indent = opts.indent || 18;
+  const tableAttr = opts.tableAttr || 'id="report-table"';
   const columns = data.columns;
-  const parts = [`<table id="report-table"><thead><tr><th>${escapeHtml(data.root_label)}</th>` +
+  const parts = [`<table ${tableAttr}><thead><tr><th>${escapeHtml(data.root_label)}</th>` +
     columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join("") + "</tr></thead><tbody>"];
 
   const walk = (node, path) => {
-    parts.push(reportRowHtml(node, path, columns));
-    if (reportCollapsed.has(path)) return; // потомки свёрнутого узла не рисуем вовсе
+    parts.push(reportRowHtml(node, path, columns, collapsed, indent));
+    if (collapsed.has(path)) return; // потомки свёрнутого узла не рисуем вовсе
     for (const child of node.children || []) walk(child, `${path}/${child.label}`);
   };
   for (const row of data.rows) walk(row, row.label);
@@ -6295,10 +6357,16 @@ function shortDate(iso) {
   return `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]}`;
 }
 
-function buildDynamicsChartSvg(data, width = 1000, height = 330) {
+// compact — вариант для правой панели (~280 px): свои отбивки и размеры
+// шрифта в единицах viewBox (виewBox почти совпадает с реальной шириной,
+// иначе текст 11 px сжался бы до нечитаемых 3 px), без выносок вех и без
+// легенды внутри SVG — легенда рисуется рядом обычным HTML.
+function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
+  const compact = !!opts.compact;
   const weeks = data.weeks;
   if (!weeks.length) return "<div class='hint-text'>Нет данных для графика</div>";
-  const L = 52, R = 18, T = 46, B = 64;
+  const L = compact ? 30 : 52, R = compact ? 6 : 18, T = compact ? 8 : 46, B = compact ? 30 : 64;
+  const fsAxis = compact ? 8 : 11;
   const maxY = niceMax(Math.max(1, ...DYN_SERIES.flatMap(k => data.series[k] || [])));
   const x = i => L + (weeks.length === 1 ? 0 : i * (width - L - R) / (weeks.length - 1));
   const y = v => height - B - (v / maxY) * (height - T - B);
@@ -6306,17 +6374,22 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330) {
   const parts = [`<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">`];
 
   // Сетка и ось Y
-  for (let i = 0; i <= 5; i++) {
-    const v = maxY * i / 5, yy = y(v);
+  const gridLines = compact ? 4 : 5;
+  for (let i = 0; i <= gridLines; i++) {
+    const v = maxY * i / gridLines, yy = y(v);
     parts.push(`<line x1="${L}" y1="${yy}" x2="${width - R}" y2="${yy}" stroke="#E5E8EC" stroke-width="1"/>`);
-    parts.push(`<text x="${L - 8}" y="${yy + 4}" font-size="11" fill="#8A94A0" text-anchor="end">${Math.round(v)}</text>`);
+    parts.push(`<text x="${L - (compact ? 4 : 8)}" y="${yy + 3}" font-size="${fsAxis}" fill="#8A94A0" text-anchor="end">${Math.round(v)}</text>`);
   }
-  // Подписи недель: каждую вторую, если их много — иначе подписи налезают
-  const step = weeks.length > 18 ? 2 : 1;
+  // Подписи недель: с прореживанием — иначе они налезают друг на друга.
+  // На панели места хватает примерно на 5 подписей, в форме — на 18.
+  const step = compact
+    ? Math.max(1, Math.ceil(weeks.length / 5))
+    : (weeks.length > 18 ? 2 : 1);
+  const labelY = height - B + (compact ? 12 : 16);
   weeks.forEach((w, i) => {
     if (i % step) return;
-    parts.push(`<text x="${x(i)}" y="${height - B + 16}" font-size="10" fill="#8A94A0" text-anchor="end"
-      transform="rotate(-45 ${x(i)} ${height - B + 16})">${shortDate(w)}</text>`);
+    parts.push(`<text x="${x(i)}" y="${labelY}" font-size="${compact ? 8 : 10}" fill="#8A94A0" text-anchor="end"
+      transform="rotate(-45 ${x(i)} ${labelY})">${shortDate(w)}</text>`);
   });
 
   // Линии
@@ -6334,8 +6407,16 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330) {
     weeks.forEach((w, i) => { if (w <= target) best = i; });
     return best;
   };
-  const marks = [{ label: "Отчётная дата", date: data.report_date }]
-    .concat((data.card.milestones || []).filter(m => m && m.date));
+  // На панели выноски не рисуем вовсе — текст на 280 px превратился бы в
+  // мешанину; отчётная дата помечается одной тонкой вертикальной линией.
+  const marks = compact
+    ? []
+    : [{ label: "Отчётная дата", date: data.report_date }]
+      .concat((data.card.milestones || []).filter(m => m && m.date));
+  if (compact) {
+    const px = x(weekIndex(data.report_date));
+    parts.push(`<line x1="${px}" y1="${T}" x2="${px}" y2="${height - B}" stroke="#C0392B" stroke-width="1" stroke-dasharray="3 3"/>`);
+  }
   marks.forEach((m, n) => {
     const i = weekIndex(m.date);
     const px = x(i);
@@ -6352,9 +6433,9 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330) {
     parts.push(`<text x="${px}" y="${topY}" font-size="10.5" fill="#C0392B" text-anchor="${anchor}">${escapeHtml(text)}</text>`);
   });
 
-  // Легенда
+  // Легенда (в compact её рисует HTML рядом — см. sideChartLegendHtml)
   let lx = L;
-  for (const key of DYN_SERIES) {
+  for (const key of compact ? [] : DYN_SERIES) {
     parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"/>`);
     parts.push(`<text x="${lx + 28}" y="${height - 6}" font-size="11" fill="#4A5460">${escapeHtml(data.series_labels[key])}</text>`);
     lx += 34 + data.series_labels[key].length * 6.2;
@@ -6438,15 +6519,7 @@ async function loadReport() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(reportRequestBody()),
     });
-    // Свёрнуто всё, кроме первой захватки — повторяет вид исходной сводной.
-    // Только у древовидных отчётов: у «Динамики» строк-узлов нет вовсе.
-    reportCollapsed = new Set();
-    if (reportData.rows) {
-      reportData.rows.forEach((row, i) => {
-        if (i > 0) reportCollapsed.add(row.label);
-        else row.children.forEach((f, j) => { if (j > 0) reportCollapsed.add(`${row.label}/${f.label}`); });
-      });
-    }
+    reportCollapsed = defaultCollapsedTree(reportData);
     document.getElementById("report-body").innerHTML = def.render(reportData);
     statusLine.textContent = reportData.total
       ? `Всего изделий: ${reportData.total.values.total}`
@@ -6516,6 +6589,189 @@ async function downloadReport(suffix, filename) {
 const reportFileName = (ext) => `${REPORTS[currentReport].title}.${ext}`;
 document.getElementById("report-xlsx").addEventListener("click", () => downloadReport(".xlsx", reportFileName("xlsx")));
 document.getElementById("report-pdf").addEventListener("click", () => downloadReport(".pdf", reportFileName("pdf")));
+
+// ============ Те же отчёты на панели «Статус» (живой запрос 2026-07-30) ============
+//
+// Данные берутся у ТЕХ ЖЕ серверных эндпоинтов, что и форма «Действия →
+// Отчёты» — числа на панели, в форме и в выгрузках не могут разойтись.
+// Отличия только два: вёрстка под 320 px (см. .side-* в index.html) и то, что
+// текущий фильтр схемы учитывается ВСЕГДА — панель отвечает на вопрос «что со
+// тем, что я сейчас выбрал», а не «что по всему чертежу» (для второго есть
+// форма с галочкой).
+//
+// Пересчёт — по факту изменения, но с задержкой: один клик по родителю в
+// дереве фильтров меняет десятки значений, а тело запроса — список id (до
+// 9422 на реальном файле). Без склейки это была бы очередь тяжёлых запросов.
+const SIDE_REPORTS_DEBOUNCE_MS = 250;
+let sideStatusData = null;
+let sideDynData = null;
+let sideStatusCollapsed = new Set();
+let sideReportsDirty = true;
+let sideReportsTimer = null;
+let sideReportsRequestId = 0;
+
+const statusTabActive = () => document.getElementById("tab-status").classList.contains("active");
+
+function sideReportBody(withDate) {
+  const body = {
+    source_file: state.sourceFile || null,
+    element_ids: state.elements.filter(passesPlacementFilters).map(e => e.id),
+  };
+  if (withDate) body.report_date = document.getElementById("side-dyn-date").value || null;
+  return body;
+}
+
+// Вызывается из renderLegend: у легенды и у отчётов панели одни и те же
+// исходные данные (отфильтрованные элементы + их статусы), значит и поводы
+// пересчитаться одни и те же — отдельных хуков по всем местам смены статуса
+// заводить не нужно.
+function scheduleSidebarReports() {
+  sideReportsDirty = true;
+  // Скрытую панель не считаем вовсе: запрос не дешёвый, а пользователь его
+  // результата не видит. При переходе на вкладку пересчёт сделает switchTab.
+  if (!statusTabActive()) return;
+  clearTimeout(sideReportsTimer);
+  sideReportsTimer = setTimeout(loadSidebarReports, SIDE_REPORTS_DEBOUNCE_MS);
+}
+
+async function loadSidebarReports() {
+  clearTimeout(sideReportsTimer);
+  sideReportsTimer = null;
+  const statusBody = document.getElementById("side-status-body");
+  const dynBody = document.getElementById("side-dyn-body");
+  if (!state.elements.length) {
+    // Плана ещё нет (или все файлы выключены) — считать нечего.
+    sideStatusData = sideDynData = null;
+    statusBody.innerHTML = dynBody.innerHTML = '<div class="hint-text">нет данных</div>';
+    document.getElementById("side-status-line").textContent = "";
+    return;
+  }
+  sideReportsDirty = false;
+  const my = ++sideReportsRequestId;
+  if (!sideStatusData) statusBody.innerHTML = '<div class="hint-text">Построение…</div>';
+  if (!sideDynData) dynBody.innerHTML = '<div class="hint-text">Построение…</div>';
+  try {
+    const post = (endpoint, withDate) => api(endpoint, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sideReportBody(withDate)),
+    });
+    const [status, dyn] = await Promise.all([
+      post("/reports/status", false),
+      post("/reports/dynamics", true),
+    ]);
+    if (my !== sideReportsRequestId) return; // ответ на уже устаревший фильтр
+    sideStatusData = status;
+    sideDynData = dyn;
+    sideStatusCollapsed = defaultCollapsedTree(status);
+    renderSideStatusReport();
+    renderSideDynamicsReport();
+  } catch (e) {
+    if (my !== sideReportsRequestId) return;
+    // Данные прошлого расчёта здесь уже неактуальны (фильтр изменился) —
+    // сбрасываем и подпись «Всего изделий», иначе она осталась бы от
+    // прежнего фильтра и выглядела бы как настоящий результат.
+    sideStatusData = sideDynData = null;
+    statusBody.innerHTML = "";
+    document.getElementById("side-status-line").textContent = "";
+    dynBody.innerHTML = `<div class="error-text">Не удалось построить отчёты: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderSideStatusReport() {
+  const data = sideStatusData;
+  const body = document.getElementById("side-status-body");
+  document.getElementById("side-status-line").textContent =
+    data ? `Всего изделий: ${data.total.values.total}` : "";
+  if (!data || !data.rows.length) {
+    body.innerHTML = '<div class="hint-text">нет данных</div>';
+    return;
+  }
+  // Колонок столько же, сколько в форме (все встретившиеся статусы +
+  // «Остаток» + «В проекте») — сокращать состав нельзя, иначе сумма по
+  // строке перестанет сходиться. Широкая часть уезжает в свой скролл, а
+  // первая колонка липкая (тот же приём, что у легенды выше).
+  body.innerHTML = `<div class="legend-table-wrap">${renderTreeReport(data, {
+    collapsed: sideStatusCollapsed, indent: 8, tableAttr: 'class="side-table"',
+  })}</div>`;
+  const wrap = body.firstElementChild;
+  requestAnimationFrame(() => {
+    wrap.classList.toggle("scrollable", wrap.scrollWidth > wrap.clientWidth + 1);
+  });
+}
+
+document.getElementById("side-status-body").addEventListener("click", (e) => {
+  const path = e.target.dataset.path;
+  if (path === undefined) return;
+  if (sideStatusCollapsed.has(path)) sideStatusCollapsed.delete(path);
+  else sideStatusCollapsed.add(path);
+  renderSideStatusReport();
+});
+
+function sideChartLegendHtml(data) {
+  return `<div class="side-chart-legend">${DYN_SERIES.map(k =>
+    `<span><i style="background:${DYN_COLORS[k]}"></i>${escapeHtml(data.series_labels[k])}</span>`
+  ).join("")}</div>`;
+}
+
+// Компактная замена широкой таблице отчёта: там «Накопительно» и «На дату»
+// стоят рядом восемью колонками, здесь — двумя строками по три колонки,
+// иначе на 280 px читаются только «...».
+function sideDynBlock(title, block, dateIso) {
+  const dev = (v) => `<td class="${v < 0 ? "dyn-neg" : ""}">${v > 0 ? "+" + v : v}</td>`;
+  return `<div class="side-dyn-block">
+    <h4>${escapeHtml(title)}<b>${block.percent}% (${block.cumulative.fact} из ${block.total})</b></h4>
+    <table class="side-table side-dyn">
+      <tr><th></th><th>План</th><th>Факт</th><th>Откл.</th></tr>
+      <tr><td>Итого</td><td>${block.cumulative.plan}</td><td>${block.cumulative.fact}</td>${dev(block.cumulative.deviation)}</tr>
+      <tr><td>${formatDateRu(dateIso)}</td><td>${block.day.plan}</td><td>${block.day.fact}</td>${dev(block.day.deviation)}</tr>
+    </table>
+  </div>`;
+}
+
+function sideNoteBox(title, items) {
+  const body = (items && items.length)
+    ? `<ul>${items.map(t => `<li>${escapeHtml(t)}</li>`).join("")}</ul>`
+    : '<div class="dyn-empty">не заполнено</div>';
+  return `<details><summary>${escapeHtml(title)}${items && items.length ? ` (${items.length})` : ""}</summary>${body}</details>`;
+}
+
+function renderSideDynamicsReport() {
+  const data = sideDynData;
+  const body = document.getElementById("side-dyn-body");
+  if (!data) { body.innerHTML = ""; return; }
+  // Дата — фактически применённая сервером (могла быть подставлена сегодняшняя).
+  document.getElementById("side-dyn-date").value = data.report_date;
+  const cov = data.plan_coverage;
+  const warns = [];
+  if (cov.smr < cov.total) warns.push(`СМР — у ${cov.smr} из ${cov.total}`);
+  if (cov.delivery < cov.total) warns.push(`поставка — у ${cov.delivery} из ${cov.total}`);
+  body.innerHTML = `
+    <div class="side-chart">${buildDynamicsChartSvg(data, 280, 150, { compact: true })}</div>
+    ${sideChartLegendHtml(data)}
+    ${warns.length ? `<div class="side-dyn-warn">План задан не у всех изделий (${escapeHtml(warns.join("; "))}) — кривая плана неполная.</div>` : ""}
+    ${sideDynBlock("Монтаж ЖБИ", data.montage, data.report_date)}
+    ${sideDynBlock("Поставка ЖБИ", data.delivery, data.report_date)}
+    <div class="side-dyn-notes">
+      ${sideNoteBox("Ключевые события", data.card.key_events)}
+      ${sideNoteBox("Ключевые задачи", data.card.key_tasks)}
+      ${sideNoteBox("Открытые вопросы", data.card.open_questions)}
+    </div>`;
+}
+
+document.getElementById("side-dyn-date").addEventListener("change", loadSidebarReports);
+
+// «⤢» — тот же отчёт в полный размер. Галочку «учитывать фильтр» ставим:
+// иначе форма показала бы другие числа, чем панель, с которой её открыли.
+document.querySelectorAll(".side-report-open").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.getElementById("report-use-filter").checked = true;
+    if (btn.dataset.report === "dynamics") {
+      document.getElementById("report-date").value = document.getElementById("side-dyn-date").value;
+    }
+    reportsBackdrop.classList.add("open");
+    switchReport(btn.dataset.report);
+  });
+});
 
 // ---------- Резервные копии БД (живой запрос 2026-07-29, после инцидента
 // с автоматической пересборкой базы — см. Docs/backlog.md) ----------

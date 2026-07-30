@@ -336,6 +336,72 @@
   .legend-label { display: flex; align-items: center; }
   .legend-total-row td { border-top: 1px solid var(--color-border); font-weight: 600; }
 
+  /* -------- отчёты на панели «Статус» (живой запрос 2026-07-30) -------- */
+  /* Те же данные, что в форме «Действия → Отчёты», но свёрстанные под 320 px:
+     мелкий шрифт, узкие отбивки, широкая часть уезжает в собственный
+     горизонтальный скролл (приём и стили взяты у .legend-table-wrap выше —
+     sticky первая колонка + выцветающий край, когда реально не помещается). */
+  .side-report { margin-top: 18px; border-top: 1px solid var(--color-border); padding-top: 10px; }
+  .side-report-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .side-report-head h3 { margin: 0 0 6px; }
+  .side-report-open {
+    background: none; border: none; cursor: pointer; padding: 0 2px; font-size: 13px;
+    color: var(--color-text-muted); line-height: 1;
+  }
+  .side-report-open:hover { color: var(--color-primary); }
+  .side-report-date { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-muted); margin-bottom: 8px; }
+  .side-report-date input[type="date"] {
+    font-size: 11px; padding: 3px 5px; border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text);
+  }
+  .side-table { border-collapse: collapse; font-size: 10.5px; width: 100%; }
+  .side-table th, .side-table td { padding: 2px 4px; text-align: right; white-space: nowrap; }
+  .side-table th {
+    color: var(--color-text-muted); font-weight: 500; border-bottom: 1px solid var(--color-border);
+    /* Заголовки статусов переносятся («В производстве» в две строки): в одну
+       строку пять колонок статусов уводили таблицу на 453 px при 287 px
+       панели, с переносом влезает почти всё. */
+    white-space: normal; vertical-align: bottom; max-width: 52px;
+  }
+  .side-table td:first-child, .side-table th:first-child {
+    text-align: left; position: sticky; left: 0; background: var(--color-surface); z-index: 1;
+    /* Названия изделий длинные («Плита перекрытия на отм. +15.000») — без
+       переноса первая колонка занимала всю ширину панели и числа уезжали за
+       край целиком, скролл приходилось искать. Перенос по словам оставляет
+       числа на экране, горизонтальный скролл остаётся только для лишних
+       колонок статусов. */
+    white-space: normal; max-width: 128px; overflow-wrap: break-word;
+  }
+  /* Уровни вложенности — как в полном отчёте: насыщенность, а не только отступ. */
+  .side-table tr.lvl-0 td:first-child { font-weight: 700; }
+  .side-table tr.lvl-1 td:first-child { font-weight: 600; }
+  .side-table tr.lvl-0 td { background: var(--color-surface-2); }
+  .side-table tr.total td { font-weight: 700; border-top: 1px solid var(--color-border); background: var(--color-surface-2); }
+  .side-table .report-toggle { margin-right: 2px; width: 12px; font-size: 9px; }
+  /* Динамика: график во всю ширину панели + две компактные таблицы «план /
+     факт / отклонение» под ним. Легенда графика — обычным HTML, а не внутри
+     SVG: в SVG она считалась по 6.2 px на символ и на 280 px не влезала. */
+  .side-chart { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 4px; }
+  .side-chart svg { display: block; width: 100%; height: auto; }
+  .side-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 10.5px; margin-top: 6px; color: var(--color-text-muted); }
+  .side-chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .side-chart-legend i { display: inline-block; width: 12px; height: 2px; }
+  .side-dyn-block { margin-top: 10px; }
+  .side-dyn-block h4 {
+    font-size: 11px; font-weight: 600; margin: 0 0 4px; display: flex;
+    align-items: baseline; justify-content: space-between; gap: 6px;
+  }
+  .side-dyn-block h4 b { font-weight: 700; }
+  .side-table.side-dyn td, .side-table.side-dyn th { text-align: center; border: 1px solid var(--color-border); }
+  .side-table.side-dyn td:first-child, .side-table.side-dyn th:first-child { text-align: left; }
+  .side-dyn-warn { font-size: 10.5px; color: var(--color-danger); margin: 6px 0; }
+  .side-dyn-notes { margin-top: 10px; }
+  .side-dyn-notes details { border: 1px solid var(--color-border); border-radius: var(--radius-sm); margin-bottom: 5px; }
+  .side-dyn-notes summary { cursor: pointer; padding: 4px 7px; font-size: 11px; font-weight: 600; }
+  .side-dyn-notes ul { margin: 0; padding: 2px 7px 7px 22px; font-size: 11px; }
+  .side-dyn-notes li { margin: 2px 0; }
+  .side-dyn-notes .dyn-empty { padding: 2px 7px 7px; font-size: 11px; color: var(--color-text-muted); }
+
   /* -------- карточка элемента: основной блок + действия + сворачиваемые тех.данные -------- */
   .card-primary { margin-bottom: 12px; }
   .card-primary-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
@@ -985,17 +1051,45 @@
   <div id="sidebar">
     <div class="tabs">
       <button type="button" class="tab-btn active" data-tab="properties">Свойства</button>
+      <button type="button" class="tab-btn" data-tab="status">Статус</button>
       <button type="button" class="tab-btn" data-tab="filters">Фильтры</button>
       <button type="button" class="tab-btn" data-tab="view">Вид</button>
     </div>
     <div id="tab-properties" class="tab-panel active">
+      <h3>Карточка элемента</h3>
+      <div id="card"><div id="placeholder">Кликните по элементу на схеме</div></div>
+    </div>
+    <!-- Вкладка «Статус» (живой запрос 2026-07-30): сводка по статусам
+         (жила во «Свойствах» над карточкой элемента) и оба отчёта из
+         «Действия → Отчёты», свёрстанные под ширину панели. Все три блока
+         считаются по элементам, прошедшим текущий фильтр — цифры на панели
+         всегда про то, что сейчас выбрано на схеме. -->
+    <div id="tab-status" class="tab-panel">
       <div class="legend-header" id="legend-header">
-        <h3>Статусы</h3>
+        <h3>Статус по элементам</h3>
         <button type="button" class="filter-expand-btn" id="legend-toggle-btn" title="Свернуть/развернуть">▾</button>
       </div>
       <div id="legend"></div>
-      <h3>Карточка элемента</h3>
-      <div id="card"><div id="placeholder">Кликните по элементу на схеме</div></div>
+
+      <div class="side-report">
+        <div class="side-report-head">
+          <h3>Статус монтажа изделий</h3>
+          <button type="button" class="side-report-open" data-report="status"
+                  title="Открыть полный отчёт">⤢</button>
+        </div>
+        <div class="hint-text" id="side-status-line"></div>
+        <div id="side-status-body"></div>
+      </div>
+
+      <div class="side-report">
+        <div class="side-report-head">
+          <h3>Динамика монтажа и поставки</h3>
+          <button type="button" class="side-report-open" data-report="dynamics"
+                  title="Открыть полный отчёт">⤢</button>
+        </div>
+        <label class="side-report-date">На дату <input type="date" id="side-dyn-date"/></label>
+        <div id="side-dyn-body"></div>
+      </div>
     </div>
     <div id="tab-filters" class="tab-panel">
       <h3>Фильтры</h3>
@@ -1119,6 +1213,8 @@
     </div>
     <div class="modal-sticky-foot">
       <div class="actions">
+        <button class="btn btn-secondary" id="zones-undo" style="display:none">Отменить последнюю правку</button>
+        <span class="spacer"></span>
         <button class="btn btn-secondary" id="zones-close">Закрыть</button>
       </div>
     </div>
@@ -1146,7 +1242,14 @@
           <div id="zone-edit-levels"></div>
           <button class="btn btn-sm btn-secondary" id="zone-edit-add-level" style="margin-top:8px">+ Ярус</button>
         </div>
-        <div style="flex:0 0 400px">
+        <!-- position:sticky внутри .modal-sticky-scroll — предпросмотр
+             остаётся в поле зрения, пока прокручиваешь длинный список ярусов
+             и точек (живой репорт: у зоны крана с несколькими ярусами
+             картинка уезжала вверх, и править точки приходилось наугад).
+             align-self:flex-start обязателен: в flex-строке элемент по
+             умолчанию растянут на всю высоту, а растянутый sticky никуда не
+             прилипает. -->
+        <div style="flex:0 0 400px; position:sticky; top:0; align-self:flex-start">
           <label class="field">Предпросмотр</label>
           <svg id="zone-edit-preview" viewBox="0 0 400 300" style="width:400px; height:300px; border:1px solid var(--color-border); background:var(--color-surface)"></svg>
           <div class="hint-text" id="zone-edit-preview-hint"></div>

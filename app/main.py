@@ -35,6 +35,7 @@ from app.contracts import (
 )
 from app.contracts import router as contracts_router
 from app.counterparties import router as counterparties_router
+from app import zone_recalc
 from app.db import DB_PATH, get_connection, init_db, visible_elements_clause
 from app.dxf_import import (
     DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, forget_pending,
@@ -1532,7 +1533,7 @@ def _validate_zone_edit(conn, zone: sqlite3.Row, body: ZonePatchIn) -> None:
                     )
 
 
-@app.patch("/zones/{zone_id}", response_model=ZoneOut)
+@app.patch("/zones/{zone_id}")
 def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(require_admin)):
     """Правка зоны справочника: номер, наименование, кран-владелец и
     ГЕОМЕТРИЯ ярусов (решения З9, З13, З14).
@@ -1567,6 +1568,11 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(re
             ],
         }
 
+        # Привязки снимаем ДО правки геометрии: DELETE ярусов ниже обнуляет
+        # elements.zone_stance_level_id каскадом (ON DELETE SET NULL), и
+        # снимок, сделанный после, записал бы NULL вместо настоящего яруса.
+        bindings_pre_edit = zone_recalc.capture_bindings(conn, zone_id, zone["category"])
+
         conn.execute(
             "UPDATE zones SET number = ?, name = ?, parent_zone_id = ? WHERE id = ?",
             (body.number, body.name, body.parent_zone_id, zone_id),
@@ -1584,10 +1590,20 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(re
             )
         conn.commit()
 
-        column = _ZONE_ELEMENT_COLUMN[zone["category"]]
-        affected = conn.execute(
-            f"SELECT COUNT(*) AS n FROM elements WHERE {column} = ?", (zone_id,)
-        ).fetchone()["n"]
+        # Пересчёт привязки — автоматически и сразу (решение З11): правка
+        # геометрии делает прежнюю привязку неверной, а расхождение не видно
+        # на глаз, поэтому оставлять его «на потом» нельзя. Отказ возможен
+        # ровно в одном случае — чертёж с одним ярусом стоянок, где привязка
+        # считается «лесенкой» по сетке осей (см. can_recalculate).
+        refusal = zone_recalc.can_recalculate(conn, zone["object_id"])
+        if refusal:
+            recalc = {"changed": 0, "by_category": {}, "before": [], "refused": refusal}
+        else:
+            recalc = zone_recalc.recalculate(conn, zone["object_id"])
+        undo_id = zone_recalc.save_undo(
+            conn, zone_id, admin, before,
+            zone_recalc.merge_bindings(bindings_pre_edit, recalc["before"]),
+        )
     finally:
         conn.close()
 
@@ -1596,9 +1612,41 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(re
         element_type=zone["category"], mark=body.name,
         old_value=json.dumps(before, ensure_ascii=False)[:2000],
         new_value=f"ярусов {len(body.levels)}, номер {body.number}",
-        details={"affected_elements": affected},
+        details={
+            "recalculated_elements": recalc["changed"],
+            "by_category": recalc["by_category"],
+            "undo_id": undo_id,
+            "recalc_refused": recalc.get("refused"),
+        },
     )
     result = next(z for z in list_zones(zone["category"], True, admin) if z.id == zone_id)
+    # Числа пересчёта прикладываем к ответу: форма показывает их сразу, не
+    # отдельным запросом.
+    payload = result.model_dump()
+    payload["recalculated"] = recalc["changed"]
+    payload["recalc_refused"] = recalc.get("refused")
+    payload["can_undo"] = True
+    return payload
+
+
+@app.post("/zones/{zone_id}/undo")
+def undo_zone_edit(zone_id: int, admin: sqlite3.Row = Depends(require_admin)):
+    """Откат последней правки зоны ЦЕЛИКОМ (решение З12): реквизиты, ярусы и
+    привязки элементов, которые изменил пересчёт. Правка точки задевает
+    цепочку последствий, и отменяться должна вся цепочка."""
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM zones WHERE id = ?", (zone_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Зона не найдена")
+        result = zone_recalc.undo(conn, zone_id)
+    finally:
+        conn.close()
+    if not result["restored"]:
+        raise HTTPException(status_code=409, detail=result["reason"])
+    activity.log(
+        "zone_edit_undo", user=admin, entity_type="zone", entity_id=zone_id,
+        new_value=f"ярусов {result['levels']}, привязок восстановлено {result['elements']}",
+    )
     return result
 
 
