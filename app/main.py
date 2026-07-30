@@ -1650,6 +1650,117 @@ def undo_zone_edit(zone_id: int, admin: sqlite3.Row = Depends(require_admin)):
     return result
 
 
+# Справочник элементов (этап 3, решение Э1). Колонки, по которым можно
+# отбирать выпадающим списком: у них ограниченный набор значений. Даты и
+# координаты сюда не входят — у них значений почти столько же, сколько строк,
+# выпадашка была бы бесполезна (для них — сортировка и общий поиск).
+_ELEMENT_FILTER_COLUMNS = ("element_type", "subtype", "mark", "elevation_mm", "floor", "current_status")
+
+# Тот же сентинел «нет значения», что уже используют фильтры схемы на
+# фронтенде (PLACEMENT_NONE в app/static/app.js): пустая строка в запросе
+# означает «любое значение», а «пустое значение» надо уметь выбрать явно.
+PLACEMENT_NONE_SENTINEL = "__none__"
+
+# Колонки, по которым разрешена сортировка. Белый список, а не подстановка
+# имени из запроса в SQL: имя колонки нельзя передать параметром, оно
+# склеивается в текст запроса — без списка это была бы SQL-инъекция.
+_ELEMENT_SORT_COLUMNS = _ELEMENT_FILTER_COLUMNS + (
+    "id", "address", "planned_delivery_date", "actual_delivery_date",
+    "project_delivery_date", "project_smr_start_date", "layer",
+)
+
+
+# Путь БЕЗ префикса /elements/: маршрут /elements/{element_id} объявлен
+# раньше и перехватывал бы «catalog» как идентификатор элемента (422 на
+# разборе int) — поймано первым же запросом.
+@app.get("/element-catalog")
+def elements_catalog(
+    limit: int = Query(200, le=2000),
+    offset: int = Query(0, ge=0),
+    sort: str = Query("id"),
+    direction: str = Query("asc"),
+    search: Optional[str] = Query(None, description="подстрока в марке или адресе"),
+    element_type: Optional[str] = Query(None),
+    subtype: Optional[str] = Query(None),
+    mark: Optional[str] = Query(None),
+    elevation_mm: Optional[str] = Query(None),
+    floor: Optional[str] = Query(None),
+    current_status: Optional[str] = Query(None),
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Табличный справочник элементов с отбором по колонкам и сортировкой.
+
+    Отдаёт и страницу строк, и общее число совпадений, и наборы РАЗЛИЧНЫХ
+    значений для выпадашек отбора. Значения считаются по тому же отбору, что
+    и строки, но БЕЗ учёта фильтра самой этой колонки — иначе, выбрав
+    значение, пользователь терял бы возможность переключиться на другое
+    (та же логика «полный список значений всегда виден», что у фильтров
+    схемы, см. Docs/backlog.md).
+    """
+    if sort not in _ELEMENT_SORT_COLUMNS:
+        raise HTTPException(status_code=400, detail=f"Сортировка по «{sort}» не поддерживается")
+    order = "DESC" if str(direction).lower() == "desc" else "ASC"
+
+    requested = {
+        "element_type": element_type, "subtype": subtype, "mark": mark,
+        "elevation_mm": elevation_mm, "floor": floor, "current_status": current_status,
+    }
+    # Пустая строка от выпадашки означает «любое», а не «пустое значение»;
+    # для «пустое» есть отдельный сентинел (клиент присылает __none__).
+    active = {k: v for k, v in requested.items() if v not in (None, "")}
+
+    def clauses_for(skip: Optional[str] = None):
+        # Справочник — про элементы ОБЪЕКТА, а не про всё, что когда-либо
+        # загружалось: элементы устаревших версий чертежа (object_id IS NULL)
+        # в новую модель не переносились (решение И5), и на реальной базе их
+        # 30 из 39,5 тысяч — они бы просто утопили справочник. На схеме они
+        # по-прежнему видны (visible_elements_clause), это разные вопросы.
+        parts, params = ["object_id IS NOT NULL", "is_current = 1"], []
+        for column, value in active.items():
+            if column == skip:
+                continue
+            if value == PLACEMENT_NONE_SENTINEL:
+                parts.append(f"{column} IS NULL")
+            else:
+                parts.append(f"{column} = ?")
+                params.append(value)
+        if search:
+            parts.append("(mark LIKE ? OR address LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        return " AND ".join(parts), params
+
+    conn = get_connection()
+    try:
+        where, params = clauses_for()
+        total = conn.execute(
+            f"SELECT COUNT(*) AS n FROM elements WHERE {where}", params
+        ).fetchone()["n"]
+        rows = conn.execute(
+            f"SELECT * FROM elements WHERE {where} "
+            f"ORDER BY {sort} {order}, id {order} LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
+
+        values = {}
+        for column in _ELEMENT_FILTER_COLUMNS:
+            sub_where, sub_params = clauses_for(skip=column)
+            values[column] = [
+                (PLACEMENT_NONE_SENTINEL if r[column] is None else r[column])
+                for r in conn.execute(
+                    f"SELECT DISTINCT {column} FROM elements WHERE {sub_where} "
+                    f"ORDER BY {column} IS NULL, {column}",
+                    sub_params,
+                )
+            ]
+        return {
+            "total": total,
+            "rows": [enrich_element_row(conn, dict(r)) for r in rows],
+            "values": values,
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/objects", response_model=list[ObjectOut])
 def list_objects(user: sqlite3.Row = Depends(get_current_user)):
     """Объекты со счётчиками элементов. Доступно всем ролям (только чтение) —

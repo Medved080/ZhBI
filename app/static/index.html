@@ -930,6 +930,7 @@
             <!-- Слово "Справочник" из названий убрано: под заголовком
                  "Справочники" оно повторялось дважды в каждой строке. -->
             <button id="menu-objects">Объекты</button>
+            <button id="menu-element-catalog">Элементы</button>
             <!-- Три справочника зон (этап 2, решение З15: физически одна
                  таблица с полем категории, в интерфейсе — три справочника,
                  как их и видит пользователь). -->
@@ -1203,6 +1204,37 @@
 
 <!-- Справочник зон одной категории. Одна форма на три пункта меню:
      содержимое отличается только категорией и наличием колонки «Кран». -->
+<!-- Справочник элементов (этап 3, решение Э1): таблица со отбором по
+     колонкам и сортировкой. Отбор — выпадашками в шапке таблицы, как
+     автофильтр в XLS; наборы значений приходят с сервера и считаются по
+     текущему отбору, но БЕЗ учёта фильтра самой колонки (иначе, выбрав
+     значение, нельзя было бы переключиться на другое). -->
+<div class="modal-backdrop" id="element-catalog-backdrop">
+  <div class="modal modal-sticky wide" style="max-width:1180px">
+    <div class="modal-sticky-head">
+      <h2>Элементы</h2>
+      <div class="subtype-add-row" style="align-items:flex-end">
+        <div style="flex:1"><label class="field">Поиск по марке или адресу</label>
+          <input type="text" id="ec-search" placeholder="например, 8Кв1 или 12/Б"/></div>
+        <button class="btn btn-sm btn-secondary" id="ec-reset">Сбросить отбор</button>
+      </div>
+      <div class="hint-text" id="ec-summary"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <table id="ec-table" style="width:100%; font-size:12px"></table>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-sm btn-secondary" id="ec-prev">← Назад</button>
+        <span class="hint-text" id="ec-page"></span>
+        <button class="btn btn-sm btn-secondary" id="ec-next">Вперёд →</button>
+        <span class="spacer"></span>
+        <button class="btn btn-secondary" id="ec-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="zones-backdrop">
   <div class="modal modal-sticky" style="max-width:760px">
     <div class="modal-sticky-head">

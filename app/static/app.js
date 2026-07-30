@@ -4738,6 +4738,145 @@ document.getElementById("menu-objects").addEventListener("click", async () => {
 });
 document.getElementById("objects-close").addEventListener("click", () => objectsBackdrop.classList.remove("open"));
 
+// ==================== СПРАВОЧНИК ЭЛЕМЕНТОВ (этап 3, решение Э1) ====================
+// Таблица всех элементов объекта с отбором по колонкам и сортировкой.
+// Постранично: 9422 строки одним куском браузер отрисует, но прокрутка по
+// такой таблице станет вязкой, а смысла в ней нет — работают с отобранным
+// подмножеством.
+const elementCatalogBackdrop = document.getElementById("element-catalog-backdrop");
+const EC_PAGE_SIZE = 200;
+
+// Колонки: ключ, подпись, отбирается ли выпадашкой. Порядок — как читают:
+// сначала «что это», потом «где», потом даты.
+const EC_COLUMNS = [
+  { key: "element_type", label: "Тип", filter: true },
+  { key: "subtype", label: "Подтип", filter: true },
+  { key: "mark", label: "Марка", filter: true },
+  { key: "elevation_mm", label: "Отметка", filter: true },
+  { key: "floor", label: "Этаж", filter: true },
+  { key: "address", label: "Адрес по осям", filter: false },
+  { key: "current_status", label: "Статус", filter: true },
+  { key: "planned_delivery_date", label: "План. поставка", filter: false },
+  { key: "actual_delivery_date", label: "Факт. поставка", filter: false },
+  { key: "project_smr_start_date", label: "Начало СМР", filter: false },
+];
+
+const ecState = { sort: "id", direction: "asc", offset: 0, filters: {}, search: "" };
+
+function ecCellText(row, key) {
+  const value = row[key];
+  if (value === null || value === undefined || value === "") return "—";
+  if (key === "current_status") return state.statusLabels[value] || value;
+  if (key.endsWith("_date")) return formatDateRu(value) || "—";
+  return String(value);
+}
+
+function ecFilterLabel(column, value) {
+  if (value === PLACEMENT_NONE) return "— не задано —";
+  if (column === "current_status") return state.statusLabels[value] || value;
+  return String(value);
+}
+
+async function renderElementCatalog() {
+  const params = new URLSearchParams({
+    limit: EC_PAGE_SIZE, offset: ecState.offset,
+    sort: ecState.sort, direction: ecState.direction,
+  });
+  if (ecState.search) params.set("search", ecState.search);
+  for (const [k, v] of Object.entries(ecState.filters)) if (v) params.set(k, v);
+
+  const table = document.getElementById("ec-table");
+  const summary = document.getElementById("ec-summary");
+  summary.textContent = "Загрузка…";
+  let data;
+  try {
+    data = await api(`/element-catalog?${params.toString()}`);
+  } catch (e) {
+    summary.textContent = "Ошибка: " + e.message;
+    return;
+  }
+
+  const head = EC_COLUMNS.map(col => {
+    const arrow = ecState.sort === col.key ? (ecState.direction === "asc" ? " ▲" : " ▼") : "";
+    return `<th style="text-align:left; white-space:nowrap">
+      <button type="button" class="ec-sort" data-sort="${col.key}"
+        style="background:none; border:none; padding:0; font:inherit; font-weight:600; cursor:pointer">
+        ${escapeHtml(col.label)}${arrow}</button></th>`;
+  }).join("");
+
+  const filterRow = EC_COLUMNS.map(col => {
+    if (!col.filter) return "<td></td>";
+    const options = ['<option value="">— все —</option>'].concat(
+      (data.values[col.key] || []).map(v =>
+        `<option value="${escapeHtml(String(v))}"${String(v) === ecState.filters[col.key] ? " selected" : ""}>` +
+        `${escapeHtml(ecFilterLabel(col.key, v))}</option>`)
+    ).join("");
+    return `<td><select data-filter="${col.key}" style="width:100%; font-size:11px">${options}</select></td>`;
+  }).join("");
+
+  table.innerHTML = `<thead><tr>${head}</tr><tr>${filterRow}</tr></thead>
+    <tbody>${data.rows.map(row => `<tr data-element-id="${row.id}">
+      ${EC_COLUMNS.map(col => `<td>${escapeHtml(ecCellText(row, col.key))}</td>`).join("")}
+    </tr>`).join("")}</tbody>`;
+
+  table.querySelectorAll(".ec-sort").forEach(btn => btn.addEventListener("click", () => {
+    const key = btn.getAttribute("data-sort");
+    if (ecState.sort === key) {
+      ecState.direction = ecState.direction === "asc" ? "desc" : "asc";
+    } else {
+      ecState.sort = key;
+      ecState.direction = "asc";
+    }
+    ecState.offset = 0;
+    renderElementCatalog();
+  }));
+  table.querySelectorAll("select[data-filter]").forEach(sel => sel.addEventListener("change", () => {
+    ecState.filters[sel.getAttribute("data-filter")] = sel.value;
+    ecState.offset = 0;
+    renderElementCatalog();
+  }));
+
+  const from = data.total ? ecState.offset + 1 : 0;
+  const to = Math.min(ecState.offset + data.rows.length, data.total);
+  summary.textContent = `Найдено ${data.total}, показаны ${from}–${to}.`;
+  document.getElementById("ec-page").textContent = `${from}–${to} из ${data.total}`;
+  document.getElementById("ec-prev").disabled = ecState.offset === 0;
+  document.getElementById("ec-next").disabled = to >= data.total;
+}
+
+document.getElementById("menu-element-catalog").addEventListener("click", () => {
+  elementCatalogBackdrop.classList.add("open");
+  renderElementCatalog();
+});
+document.getElementById("ec-close").addEventListener("click", () => elementCatalogBackdrop.classList.remove("open"));
+document.getElementById("ec-prev").addEventListener("click", () => {
+  ecState.offset = Math.max(ecState.offset - EC_PAGE_SIZE, 0);
+  renderElementCatalog();
+});
+document.getElementById("ec-next").addEventListener("click", () => {
+  ecState.offset += EC_PAGE_SIZE;
+  renderElementCatalog();
+});
+document.getElementById("ec-reset").addEventListener("click", () => {
+  ecState.filters = {};
+  ecState.search = "";
+  ecState.offset = 0;
+  document.getElementById("ec-search").value = "";
+  renderElementCatalog();
+});
+// Поиск по вводу с задержкой: запрос на каждую букву при 9422 строках
+// означал бы десяток лишних полных отборов подряд.
+let ecSearchTimer = null;
+document.getElementById("ec-search").addEventListener("input", e => {
+  clearTimeout(ecSearchTimer);
+  const value = e.target.value.trim();
+  ecSearchTimer = setTimeout(() => {
+    ecState.search = value;
+    ecState.offset = 0;
+    renderElementCatalog();
+  }, 350);
+});
+
 // ==================== СПРАВОЧНИКИ ЗОН (этап 2) ====================
 // Физически это одна таблица с полем категории (решение З15), но
 // пользователь видит три справочника — захватки, зоны кранов, стоянки
