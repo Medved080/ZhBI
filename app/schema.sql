@@ -244,6 +244,27 @@ CREATE TABLE IF NOT EXISTS element_shapes (
     PRIMARY KEY (layer, element_type)
 );
 
+-- Проект — верхний уровень иерархии (2026-07-31): несколько объектов,
+-- как правило рядом географически (соседние здания одной стройплощадки).
+--
+-- У проекта НЕТ собственных данных, кроме реквизитов: все свойства,
+-- справочники и контракты живут внутри объекта (решение пользователя).
+-- Проект — это (1) группировка и (2) единица выдачи доступа: грант на
+-- проект автоматически распространяется на объекты, которые появятся в
+-- нём позже.
+--
+-- Сроки здесь тоже НЕ хранятся — они сводятся из сроков подчинённых
+-- объектов (раннее начало / позднее окончание) и потому не могут с ними
+-- разойтись. См. Docs/TZ.md, раздел про иерархию.
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    address TEXT,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Объект (здание/стройплощадка) — уровень, к которому привязана идентичность
 -- элементов и (этап 2) справочники зон. Введён 2026-07-30, см.
 -- Docs/backlog.md, запись "Задача… объекты системы", решения О1/И1.
@@ -271,6 +292,33 @@ CREATE TABLE IF NOT EXISTS object_drawings (
     imported_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (object_id, source_file)
 );
+
+-- Доступ пользователя к проекту/объекту вместе с РОЛЬЮ на нём (2026-07-31).
+-- Роль перестала быть свойством пользователя и стала свойством гранта:
+-- один и тот же человек — прораб на одном здании и наблюдатель на соседнем.
+-- Системная роль (ведение проектов, объектов, пользователей, резервных
+-- копий) осталась в users.role — это про сервис, а не про стройку.
+--
+-- object_id IS NULL = грант на ВЕСЬ проект, включая объекты, которые
+-- появятся в нём позже. Действующая роль на объекте ищется в порядке:
+-- персональный грант на объект -> грант на его проект -> доступа нет.
+--
+-- Уникальность (user_id, project_id, object_id) — отдельным индексом
+-- через COALESCE, а не UNIQUE в таблице: обычный UNIQUE в SQLite не
+-- считает NULL=NULL, и грант "на весь проект" можно было бы завести
+-- дважды (тот же приём уже применён к contract_lines, см. app/db.py).
+CREATE TABLE IF NOT EXISTS user_access (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+    object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'user', 'view')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_access_unique
+    ON user_access (user_id, project_id, COALESCE(object_id, -1));
+CREATE INDEX IF NOT EXISTS idx_user_access_user ON user_access (user_id);
 
 -- Зоны (захватки, зоны работы крана, стоянки крана) — см. Docs/backlog.md,
 -- "Разбор структурированных имён слоёв DWG/DXF...". Полигон — в мировых

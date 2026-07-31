@@ -1452,9 +1452,9 @@ def list_zones(
     """Справочник зон одной категории (этап 2). Доступно всем ролям только
     для чтения — как и остальные справочники-просмотры.
 
-    Зоны УСТАРЕВШИХ версий чертежа (object_id IS NULL) в справочник не
-    входят: они остались строками старой формы и в новой модели не
-    участвуют (решение И5)."""
+    Условие object_id IS NOT NULL оставлено страховкой: зоны устаревших
+    версий чертежа, ради которых оно вводилось, удалены чисткой
+    дообъектного наследия (2026-07-31, app/db._purge_legacy_elements)."""
     if category not in _ZONE_ELEMENT_COLUMN:
         raise HTTPException(status_code=400, detail="Неизвестная категория зоны")
     column = _ZONE_ELEMENT_COLUMN[category]
@@ -1854,11 +1854,11 @@ def elements_catalog(
     }
 
     def clauses_for(skip: Optional[str] = None):
-        # Справочник — про элементы ОБЪЕКТА, а не про всё, что когда-либо
-        # загружалось: элементы устаревших версий чертежа (object_id IS NULL)
-        # в новую модель не переносились (решение И5), и на реальной базе их
-        # 30 из 39,5 тысяч — они бы просто утопили справочник. На схеме они
-        # по-прежнему видны (visible_elements_clause), это разные вопросы.
+        # object_id IS NOT NULL оставлено как страховка, хотя элементов без
+        # объекта после чистки дообъектного наследия (2026-07-31,
+        # app/db._purge_legacy_elements) в базе нет и импорт создать их не
+        # может: справочник допускает ручную правку, и строка, оставшаяся
+        # без объекта из-за сбоя, не должна всплыть в чужом объекте.
         parts, params = ["object_id IS NOT NULL", "is_current = 1"], []
         for column, value in active.items():
             if column == skip:
@@ -2254,21 +2254,19 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # честной: раньше «Стоянка 01» на четырёх ярусах была четырьмя
             # разными зонами с разными id.
             #
-            # Второй запрос — зоны УСТАРЕВШИХ версий чертежа (object_id IS
-            # NULL): они остались строками старой формы со своей геометрией
-            # в zones.outline_json и в справочник не переносились (решение
-            # И5). Без них ранее загруженные чертежи рисовались бы без зон.
+            # Вторая половина запроса (зоны устаревших версий чертежа, что
+            # остались строками старой формы с геометрией в
+            # zones.outline_json) убрана 2026-07-31 вместе с самими такими
+            # зонами — их удалила чистка дообъектного наследия
+            # (app/db._purge_legacy_elements), и появиться заново они не
+            # могут: импорт всегда заводит зону записью справочника.
             file_zones = []
             for r in conn.execute(
                 "SELECT z.id, z.category, z.name, z.number, z.match_status, z.parent_zone_id, "
                 "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
                 "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
-                "WHERE l.source_file = ? AND z.is_current = 1 "
-                "UNION ALL "
-                "SELECT id, category, name, number, match_status, parent_zone_id, "
-                "parent_match_status, NULL AS level_id, elevation_mm, outline_json "
-                "FROM zones WHERE source_file = ? AND object_id IS NULL AND outline_json <> ''",
-                (item.source_file, item.source_file),
+                "WHERE l.source_file = ? AND z.is_current = 1",
+                (item.source_file,),
             ).fetchall():
                 z = dict(r)
                 z["outline"] = json.loads(z.pop("outline_json"))

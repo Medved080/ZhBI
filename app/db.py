@@ -135,6 +135,26 @@ _COLUMN_MIGRATIONS = [
     # значение или перезаполнить из чертежа. Без этого признака ручная правка
     # жила бы до первой загрузки нового чертежа и молча исчезала.
     ("elements", "manual_fields", "TEXT"),
+    # Иерархия Проект -> Объект (2026-07-31). project_id добавляется
+    # миграцией, а не стоит в schema.sql, по общей причине: CREATE TABLE IF
+    # NOT EXISTS не трогает уже существующую таблицу objects.
+    #
+    # NULL здесь допустим только технически (SQLite не умеет ADD COLUMN NOT
+    # NULL без значения по умолчанию) — фактическую обязательность держит
+    # _bootstrap_default_project ниже: любой объект без проекта
+    # подхватывается проектом по умолчанию на ближайшем старте.
+    ("objects", "project_id", "INTEGER REFERENCES projects(id) ON DELETE RESTRICT"),
+    ("objects", "address", "TEXT"),
+    # Договор заключается на конкретный объект (решение пользователя
+    # 2026-07-31): контрагент остаётся сквозным справочником юрлиц, а
+    # договор, спецификация и контракт — принадлежность объекта. Объект
+    # контракта выводится по цепочке contracts -> specifications ->
+    # agreements.object_id и отдельным полем НЕ дублируется — иначе
+    # появился бы второй источник правды, который однажды разъедется.
+    ("agreements", "object_id", "INTEGER REFERENCES objects(id) ON DELETE RESTRICT"),
+    # Последний выбранный объект — на ПОЛЬЗОВАТЕЛЯ, а не в localStorage:
+    # человек садится за другой компьютер и должен попасть туда же.
+    ("users", "last_object_id", "INTEGER REFERENCES objects(id) ON DELETE SET NULL"),
 ]
 
 
@@ -457,6 +477,134 @@ def _bootstrap_default_object(conn: sqlite3.Connection, changes: list) -> None:
     assign_missing_element_uids(conn, object_id)
 
 
+DEFAULT_PROJECT_NAME = "Проект по умолчанию"
+
+
+def _bootstrap_default_project(conn: sqlite3.Connection, changes: list) -> None:
+    """Подвешивает объекты без проекта под проект по умолчанию.
+
+    Идемпотентно и самовосстанавливающе: условие — не «таблица projects
+    пуста» (так сделан _bootstrap_default_object выше), а «есть объект с
+    project_id IS NULL». Разница важна — объект без проекта не должен
+    существовать в принципе, но если он как-то возникнет (сбойная миграция,
+    ручная правка БД), он окажется недостижим ни через один селектор и
+    исчезнет с глаз вместе со всеми своими элементами. Пусть лучше всплывёт
+    в проекте по умолчанию, чем потеряется молча.
+
+    Имя проекта не берётся из карточки объекта, хотя соблазн есть: карточка
+    описывает ЗДАНИЕ («Промышленный корпус на земельных участках…»), а не
+    группу зданий, и подставлять её значит выдавать за проектное имя то, чем
+    оно не является. Нейтральное имя с подсказкой переименовать — тот же
+    приём, что уже применён к «Объект 1».
+    """
+    orphans = conn.execute(
+        "SELECT id FROM objects WHERE project_id IS NULL ORDER BY id"
+    ).fetchall()
+    if not orphans:
+        return
+    row = conn.execute(
+        "SELECT id FROM projects WHERE name = ?", (DEFAULT_PROJECT_NAME,)
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO projects (name, description) VALUES (?, ?)",
+            (DEFAULT_PROJECT_NAME,
+             "Заведён автоматически при переходе на иерархию проектов; "
+             "переименуйте в «Действия → Проекты»."),
+        )
+        project_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        changes.append(f"заведён проект «{DEFAULT_PROJECT_NAME}»")
+    else:
+        project_id = row["id"]
+    conn.execute(
+        "UPDATE objects SET project_id = ?, updated_at = datetime('now') "
+        "WHERE project_id IS NULL",
+        (project_id,),
+    )
+    changes.append(f"объектов привязано к проекту по умолчанию: {len(orphans)}")
+
+
+LEGACY_PURGE_MARKER = "legacy_elements_purged"
+
+
+def _purge_legacy_elements(conn: sqlite3.Connection, changes: list) -> None:
+    """Одноразово удаляет ДООБЪЕКТНОЕ наследие: элементы, зоны, оси и цвета
+    зон тех версий чертежа, что накопились до введения Объекта (в боевой БД
+    — 30 123 элемента из 10 файлов, 260713…260722 плюс два безымянных и
+    sample.dxf). Решение пользователя от 2026-07-31.
+
+    Что при этом теряется, зафиксировано явно: из 30 123 элементов статус
+    отличен от «Запланирован» ровно у 24 (все — «Смонтирован»), и все их
+    марки присутствуют в актуальном чертеже, то есть уникальной информации
+    в слое нет. История удаляется каскадом (status_history.element_id ON
+    DELETE CASCADE), ярусы зон — тоже (zone_levels.zone_id).
+
+    НЕ трогает элементы с is_current=0 при ЖИВОМ object_id — это совсем
+    другая сущность: элемент, исчезнувший из новой версии чертежа, но
+    сохранивший статус и историю (решение И2 этапа 1). По нему видно, что
+    заказчик убрал колонну, по которой уже была поставка; удалить его
+    значило бы уничтожить результат сверки при переимпорте.
+
+    Маркер в app_settings, а не «удалять всё с object_id IS NULL на каждом
+    старте»: условие выглядит самоидемпотентным, но тогда любая будущая
+    строка, случайно оставшаяся без объекта, молча уничтожалась бы при
+    ближайшем перезапуске сервера — а перезапуск случается на каждом
+    деплое. Разовое действие и должно быть разовым.
+
+    Порядок удаления обязателен: сначала элементы, потом зоны. Обратный
+    порядок сработал бы через elements.zone_*_id ON DELETE SET NULL —
+    зоны бы обнулились у ещё не удалённых строк, и следы привязки
+    пропали бы раньше, чем сами строки. Проверено на боевой БД: актуальных
+    элементов, ссылающихся на легаси-зоны, ноль.
+    """
+    # Прямым SQL, а не через app.settings.get_setting: app/settings.py сам
+    # импортирует app.db — импорт отсюда был бы циклическим.
+    marker = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?", (LEGACY_PURGE_MARKER,)
+    ).fetchone()
+    if marker and marker["value"]:
+        return
+    # Пустая БД (свежая установка) — чистить нечего, но маркер ставим:
+    # наследие может появиться только из прошлого, а не из будущего.
+    kept_files = {
+        r["source_file"]
+        for r in conn.execute("SELECT source_file FROM object_drawings")
+    }
+    n_elements = conn.execute(
+        "SELECT COUNT(*) AS n FROM elements WHERE object_id IS NULL"
+    ).fetchone()["n"]
+    n_zones = conn.execute(
+        "SELECT COUNT(*) AS n FROM zones WHERE object_id IS NULL"
+    ).fetchone()["n"]
+    conn.execute("DELETE FROM elements WHERE object_id IS NULL")
+    conn.execute("DELETE FROM zones WHERE object_id IS NULL")
+    if kept_files:
+        marks = ",".join("?" * len(kept_files))
+        params = tuple(kept_files)
+        n_axes = conn.execute(
+            f"SELECT COUNT(*) AS n FROM axis_lines WHERE source_file NOT IN ({marks})",
+            params,
+        ).fetchone()["n"]
+        conn.execute(
+            f"DELETE FROM axis_lines WHERE source_file NOT IN ({marks})", params
+        )
+        conn.execute(
+            f"DELETE FROM zone_colors WHERE source_file NOT IN ({marks})", params
+        )
+    else:
+        n_axes = 0
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = '1'",
+        (LEGACY_PURGE_MARKER,),
+    )
+    if n_elements or n_zones or n_axes:
+        changes.append(
+            f"удалено дообъектное наследие: элементов {n_elements}, "
+            f"зон {n_zones}, линий осей {n_axes}"
+        )
+
+
 def parse_zone_number(name) -> "int | None":
     """Номер зоны из её имени: «Стоянка 01» -> 1, «Кран 2» -> 2 (решение З9).
 
@@ -680,16 +828,18 @@ def visible_elements_clause(alias: str = "") -> str:
     строка сохраняет source_file того чертежа, где её видели последний раз,
     а это ровно тот файл, который сейчас открыт.
 
-    `object_id IS NULL` — элементы УСТАРЕВШИХ версий чертежа, не перенесённые
-    в объект (решение И5). Им is_current=0 выставлен бутстрапом, и без этой
-    половины условия старые чертежи в списке рисовались бы пустыми — то есть
-    выглядели бы как поломка, хотя данные на месте.
+    Прежняя вторая половина условия (`OR object_id IS NULL` — элементы
+    устаревших версий чертежа, не перенесённые в объект) убрана 2026-07-31:
+    таких элементов больше нет в принципе, их чистит _purge_legacy_elements,
+    а новые появиться не могут (импорт всегда проставляет объект). Держать
+    ветку «элементы вне объектов» дальше означало бы тащить её через каждый
+    новый запрос с проверкой доступа.
 
     Одна функция вместо повторения условия строками: мест чтения элементов по
     чертежу восемь, и разъехавшееся условие видимости — ровно тот класс
     расхождений, который потом ловится только живым репортом."""
     prefix = f"{alias}." if alias else ""
-    return f"({prefix}is_current = 1 OR {prefix}object_id IS NULL)"
+    return f"({prefix}is_current = 1)"
 
 
 def assign_missing_element_uids(conn: sqlite3.Connection, object_id: int) -> int:
@@ -905,6 +1055,9 @@ def init_db() -> list:
         _ensure_elements_contract_line_index(conn)
         _ensure_element_uid_index(conn)
         _bootstrap_default_object(conn, changes)
+        # Строго ПОСЛЕ бутстрапа объекта: проекту нужны объекты, которые он
+        # подхватит, а бутстрап объекта заводит их на накопленной БД.
+        _bootstrap_default_project(conn, changes)
         # Строго ПОСЛЕ бутстрапа объекта: миграция зон опирается на
         # object_drawings, чтобы понять, какой чертёж актуален.
         _migrate_zones_to_catalog(conn, changes)
@@ -912,6 +1065,11 @@ def init_db() -> list:
         # Не часть одноразовой миграции: чинит частичное состояние, если
         # миграция зон отработала промежуточной версией кода (см. docstring).
         _heal_zone_stance_levels(conn, changes)
+        # Строго ПОСЛЕ миграции зон в справочник: она проставляет object_id
+        # зонам актуального чертежа, а чистка удаляет всё, у чего его нет.
+        # В обратном порядке зоны актуального чертежа были бы уничтожены
+        # ровно перед тем, как их собирались перенести.
+        _purge_legacy_elements(conn, changes)
         _normalize_element_type_vocabulary(conn, changes)
         _seed_reference_data(conn)
         conn.commit()
