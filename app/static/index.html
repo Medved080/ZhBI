@@ -31,6 +31,11 @@
     --color-text: #1a1d21;
     --color-text-muted: #6b7280;
     --color-danger: #c0392b;
+    /* Успешное завершение действия — только в строке состояния под схемой
+       (app.js showToast, kind="success"); до неё зелёного в палитре не
+       было, статусные цвета схемы приходят с сервера и к интерфейсу
+       отношения не имеют. */
+    --color-success: #1e7e34;
     --radius: 10px;
     --radius-sm: 7px;
     --shadow-sm: 0 1px 3px rgba(20,30,50,.08);
@@ -44,6 +49,7 @@
       --color-border: #33373e;
       --color-text: #e8eaed;
       --color-text-muted: #9aa0a6;
+      --color-success: #4ac26b;
       --shadow-sm: 0 1px 3px rgba(0,0,0,.3);
       --shadow-md: 0 12px 32px rgba(0,0,0,.45);
     }
@@ -155,9 +161,16 @@
 
   /* -------- рабочая область -------- */
   #body { flex: 1; display: flex; min-height: 0; }
-  #stage { flex: 1; position: relative; overflow: hidden; background: #ffffff; cursor: grab; }
+  /* Колонка «рабочая область + строка состояния под ней». Сайдбар в неё
+     не входит — строка состояния относится к схеме, а не ко всему окну
+     (живой запрос: «в нижней части рабочей области под рабочей
+     областью»). #stage/#stage-3d по-прежнему занимают всё оставшееся
+     место, min-height:0 обязателен: без него flex-элемент не сжимается
+     ниже своего содержимого и полоса уезжает за нижний край. */
+  #stage-area { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #stage { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #ffffff; cursor: grab; }
   #stage.dragging { cursor: grabbing; }
-  #stage-3d { flex: 1; position: relative; overflow: hidden; background: #f3f4f6; }
+  #stage-3d { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #f3f4f6; }
   #stage-3d canvas { display: block; }
   #stage-3d-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); }
   #tooltip-3d {
@@ -806,18 +819,28 @@
   }
   .zoom-indicator .zoom-value { min-width: 42px; text-align: right; color: var(--color-text); font-weight: 600; }
 
-  /* -------- тосты -------- */
-  #toast-container { position: fixed; top: 16px; right: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
-  .toast {
-    background: var(--color-surface); border: 1px solid var(--color-border); border-left: 4px solid var(--color-danger);
-    border-radius: var(--radius-sm); box-shadow: var(--shadow-md); padding: 12px 14px; font-size: 13px; max-width: 340px;
-    animation: toast-in .15s ease-out;
+  /* -------- строка состояния под рабочей областью -------- */
+  /* Живой запрос 2026-07-31: закреплённая полоса под схемой вместо
+     всплывающих карточек в углу (те исчезали, и вернуться к тексту было
+     нельзя). В покое — перечень применённых фильтров, поверх него на
+     несколько секунд служебные сообщения; рядом кнопка со всей лентой
+     сообщений сеанса. Полоса — часть колонки #stage-area, поэтому не
+     наезжает на сайдбар и не перекрывает схему. */
+  #statusbar {
+    flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 5px 10px;
+    border-top: 1px solid var(--color-border); background: var(--color-surface); font-size: 12px;
   }
-  @keyframes toast-in { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-  /* Красная полоса слева задана у .toast как общее правило — но сообщения
-     об обновлении данных другими пользователями это не ошибка, а обычное
-     уведомление; красный цвет тревожил бы зря. */
-  .toast-info { border-left-color: var(--color-primary); }
+  .statusbar-text {
+    flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .statusbar-default { color: var(--color-text-muted); }
+  .statusbar-info { color: var(--color-primary); font-weight: 600; }
+  .statusbar-success { color: var(--color-success); font-weight: 600; }
+  .statusbar-warning { color: var(--color-danger); font-weight: 600; }
+  /* Лента сообщений сеанса — новые сверху. */
+  .statuslog-row { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--color-border); font-size: 13px; }
+  .statuslog-row:last-child { border-bottom: none; }
+  .statuslog-time { flex: 0 0 auto; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 
   /* Кнопка "Обновить" — вращается ЗНАЧОК, а не сама кнопка: у кнопки есть
      рамка и фон, и её вращение выглядело бы поломкой вёрстки. Вращение на
@@ -1069,6 +1092,7 @@
 </div>
 
 <div id="body">
+ <div id="stage-area">
   <div id="stage">
     <svg id="svg-root" preserveAspectRatio="xMidYMid meet">
       <g id="flip" transform="scale(1,-1)">
@@ -1101,6 +1125,14 @@
       <button class="btn btn-sm btn-secondary" id="zoom-reset-3d" title="Сбросить на всю схему">⟲</button>
     </div>
   </div>
+  <!-- Закреплённая строка состояния под рабочей областью: в покое —
+       перечень применённых фильтров, поверх него на несколько секунд —
+       служебные сообщения (см. app.js, showToast). -->
+  <div id="statusbar">
+    <span id="statusbar-text" class="statusbar-text statusbar-default"></span>
+    <button type="button" class="btn btn-sm btn-secondary" id="statusbar-log-btn" title="Сообщения, выводившиеся за время сеанса">История</button>
+  </div>
+ </div>
   <div id="resize-handle" title="Перетащите, чтобы изменить ширину панели"></div>
   <div id="sidebar">
     <div class="tabs">
@@ -1191,7 +1223,6 @@
 </div>
 
 <div id="ctx-menu"></div>
-<div id="toast-container"></div>
 
 <div class="modal-backdrop" id="upload-backdrop">
   <div class="modal">
@@ -1819,6 +1850,20 @@
     <div class="actions">
       <button class="btn btn-secondary" id="import-input-cancel">Отмена</button>
       <button class="btn btn-primary" id="import-input-submit">Загрузить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="statuslog-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Сообщения за сеанс</h2>
+    </div>
+    <div class="modal-sticky-scroll" id="statuslog-list"></div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="statuslog-close">Закрыть</button>
+      </div>
     </div>
   </div>
 </div>

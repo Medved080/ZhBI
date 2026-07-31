@@ -198,14 +198,104 @@ async function api(path, opts) {
   return res.status === 204 ? null : res.json();
 }
 
-// ==================== ТОСТЫ ====================
+// ==================== СТРОКА СОСТОЯНИЯ ПОД СХЕМОЙ ====================
+//
+// Закреплённая полоса внизу рабочей области (живой запрос 2026-07-31).
+// В покое показывает, какие фильтры сейчас применены (см.
+// updateStatusBarDefault); поверх этого на несколько секунд всплывают
+// служебные сообщения — раньше они были всплывающими карточками в правом
+// верхнем углу, а теперь идут сюда все до одной: showToast сохранён как
+// имя (30 мест вызова), но теперь это запись в строку состояния.
+//
+// Каждое сообщение попадает в журнал сеанса — кнопка «История» рядом с
+// полосой. Журнал живёт только в браузере и только до перезагрузки
+// страницы: это не журнал действий (`app/activity.py`, серверный), а
+// именно лента того, что человек видел на экране.
+const STATUS_MESSAGE_MS = 7000;
+const STATUS_LOG_LIMIT = 500;
+const statusLog = []; // [{at: Date, message, kind}], новые в конец
+let statusMessageTimer = null;
+// До первой загрузки чертежа applyPlacementFilters ещё не вызывался —
+// полоса не должна быть пустой (пустая читается как «сломалось»).
+let statusDefaultText = "Чертёж не выбран";
+
 function showToast(message, kind = "warning") {
-  const container = document.getElementById("toast-container");
-  const toast = document.createElement("div");
-  toast.className = `toast toast-${kind}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => toast.remove(), 7000);
+  statusLog.push({ at: new Date(), message, kind });
+  if (statusLog.length > STATUS_LOG_LIMIT) statusLog.shift();
+  const bar = document.getElementById("statusbar-text");
+  if (!bar) return; // строки состояния нет только до первой отрисовки разметки
+  bar.textContent = message;
+  bar.title = message; // длинное сообщение обрезается многоточием — полный текст в подсказке
+  bar.className = `statusbar-text statusbar-${kind}`;
+  updateStatusLogButton();
+  if (statusMessageTimer) clearTimeout(statusMessageTimer);
+  statusMessageTimer = setTimeout(() => {
+    statusMessageTimer = null;
+    applyStatusBarDefault();
+  }, STATUS_MESSAGE_MS);
+}
+
+function applyStatusBarDefault() {
+  const bar = document.getElementById("statusbar-text");
+  if (!bar) return;
+  bar.textContent = statusDefaultText;
+  bar.title = statusDefaultText;
+  bar.className = "statusbar-text statusbar-default";
+}
+
+// Текст «в покое». Вызывается из applyPlacementFilters (единственное
+// место, где заново решается, что видно на схеме) — если прямо сейчас
+// показывается служебное сообщение, оно не перебивается: строка обновится
+// сама, когда сообщение отживёт свои секунды.
+function setStatusBarDefault(text) {
+  statusDefaultText = text;
+  if (!statusMessageTimer) applyStatusBarDefault();
+}
+
+function updateStatusLogButton() {
+  const btn = document.getElementById("statusbar-log-btn");
+  if (btn) btn.textContent = statusLog.length ? `История (${statusLog.length})` : "История";
+}
+
+// Перечисление применённых фильтров. Значения берутся ОТ ТЕХ ЖЕ функций,
+// что и форма фильтров (PLACEMENT_CATEGORY_INFO), поэтому подписи в
+// строке и в сайдбаре не могут разойтись. Категория попадает в строку,
+// только если реально что-то отсекает; при коротком отборе (до трёх
+// значений) перечисляем сами значения, иначе — «N из M», чтобы полоса не
+// превращалась в простыню.
+const STATUS_FILTER_LIST_LIMIT = 3;
+
+function describeActiveFilters() {
+  const parts = [];
+  for (const [key, title, labelFor] of PLACEMENT_CATEGORY_INFO) {
+    const excluded = state.placementFilters[key];
+    if (!excluded || !excluded.size) continue;
+    const all = allValuesFor(key);
+    const kept = Array.from(all).filter(v => !excluded.has(v));
+    if (kept.length && kept.length <= STATUS_FILTER_LIST_LIMIT) {
+      parts.push(`${title}: ${kept.map(v => labelFor(v)).join(", ")}`);
+    } else {
+      parts.push(`${title}: ${kept.length} из ${all.size}`);
+    }
+  }
+  for (const def of DATE_FILTER_DEFS) {
+    if (!dateFilterIsActive(def.key)) continue;
+    parts.push(`${def.title}: ${dateFilterSummary(state.dateFilters[def.key])}`);
+  }
+  return parts;
+}
+
+function updateStatusBarDefault(visibleCount) {
+  if (!state.elements.length) {
+    setStatusBarDefault("Чертёж не выбран");
+    return;
+  }
+  const total = state.elements.length;
+  const parts = describeActiveFilters();
+  const shown = visibleCount === total
+    ? `Показаны все элементы: ${total}`
+    : `Показано ${visibleCount} из ${total}`;
+  setStatusBarDefault(parts.length ? `${shown} · Фильтры — ${parts.join("; ")}` : `${shown} · Фильтры не заданы`);
 }
 
 function maybeWarnContract(result) {
@@ -1320,8 +1410,10 @@ function refreshSubLabelsForType(type) {
 
 function applyPlacementFilters(rebuild3D = true) {
   const topVisible = topVisibleLabelIds(); // только 2D, см. комментарий там же
+  let visibleCount = 0;
   for (const element of state.elements) {
     const passes = passesPlacementFilters(element);
+    if (passes) visibleCount++;
     const shape = state.shapeById.get(element.id);
     if (shape) shape.style.display = passes ? "" : "none";
     // Элемент стал видимым, а его допстрока устарела, пока он был скрыт —
@@ -1346,6 +1438,9 @@ function applyPlacementFilters(rebuild3D = true) {
   // сделал бы работу невозможной.
   if (rebuild3D && state.view3d.active) build3DScene(true);
   else requestRender3D();
+  // Строка состояния под схемой — здесь же и по тем же данным (сколько
+  // элементов реально осталось видно), а не отдельным обходом.
+  updateStatusBarDefault(visibleCount);
 }
 
 // Что происходит после ЛЮБОГО изменения в фильтре по размещению: заново
@@ -1894,6 +1989,54 @@ function craneIdForStanceId(stanceId) {
   return PLACEMENT_NONE;
 }
 
+// Подписи значений фильтра. Живут на уровне модуля, а не внутри
+// renderPlacementFilters (где были раньше): те же подписи нужны строке
+// состояния под схемой, которая перечисляет применённые фильтры (см.
+// describeActiveFilters) — вторая реализация разошлась бы с формой.
+const zoneLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("zone") : zoneNameById(v);
+// Стоянки — отдельная подпись: помимо реальных зон и PLACEMENT_NONE,
+// тут ещё бывает псевдо-значение "нет конкретной стоянки, но кран
+// известен" (см. stanceFilterValue) — показываем явным текстом, а не
+// пытаемся резолвить как обычную зону по id (там нечего резолвить).
+const stanceLabelFor = v => {
+  if (v === PLACEMENT_NONE) return placementNoneLabel("zone");
+  if (isNoStanceValue(v)) return "вне стоянок";
+  return stanceNameForLogicalKey(v);
+};
+const elevationLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("elevation") : `${v} мм`;
+const floorLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("floor") : `Этаж ${v}`;
+// v теперь ВСЕГДА составной ключ (см. subtypeFilterValue) — сравниваем
+// с PLACEMENT_NONE текстовую часть после разбора, не весь ключ целиком.
+const subtypeLabelFor = v => {
+  const text = subtypeTextForLogicalKey(v);
+  return text === PLACEMENT_NONE ? placementNoneLabel("subtype") : text;
+};
+const markLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("mark") : v;
+const statusLabelFor = v => state.statusLabels[v] || v;
+const supplierLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("supplier") : v;
+const contractLabelFor = v => {
+  if (v === PLACEMENT_NONE) return placementNoneLabel("contract");
+  const c = state.contracts.find(c => c.id === v);
+  return c ? c.name : `контракт #${v}`;
+};
+const elementTypeLabelFor = v => v;
+
+// Ключ категории → как её назвать в строке состояния и как подписать её
+// значения. Порядок — как в форме фильтров.
+const PLACEMENT_CATEGORY_INFO = [
+  ["zakhvatka", "Захватка", zoneLabelFor],
+  ["crane", "Кран", zoneLabelFor],
+  ["stance", "Стоянка", stanceLabelFor],
+  ["floor", "Этаж", floorLabelFor],
+  ["elevation", "Отметка", elevationLabelFor],
+  ["elementType", "Тип элемента", elementTypeLabelFor],
+  ["subtype", "Подтип", subtypeLabelFor],
+  ["mark", "Марка", markLabelFor],
+  ["status", "Статус", statusLabelFor],
+  ["supplier", "Контрагент", supplierLabelFor],
+  ["contract", "Контракт", contractLabelFor],
+];
+
 function renderPlacementFilters() {
   const container = document.getElementById("placement-filters");
   container.innerHTML = "";
@@ -1902,26 +2045,6 @@ function renderPlacementFilters() {
     return;
   }
 
-  const zoneLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("zone") : zoneNameById(v);
-  // Стоянки — отдельная подпись: помимо реальных зон и PLACEMENT_NONE,
-  // тут ещё бывает псевдо-значение "нет конкретной стоянки, но кран
-  // известен" (см. stanceFilterValue) — показываем явным текстом, а не
-  // пытаемся резолвить как обычную зону по id (там нечего резолвить).
-  const stanceLabelFor = v => {
-    if (v === PLACEMENT_NONE) return placementNoneLabel("zone");
-    if (isNoStanceValue(v)) return "вне стоянок";
-    return stanceNameForLogicalKey(v);
-  };
-  const elevationLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("elevation") : `${v} мм`;
-  const floorLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("floor") : `Этаж ${v}`;
-  // v теперь ВСЕГДА составной ключ (см. subtypeFilterValue) — сравниваем
-  // с PLACEMENT_NONE текстовую часть после разбора, не весь ключ целиком.
-  const subtypeLabelFor = v => {
-    const text = subtypeTextForLogicalKey(v);
-    return text === PLACEMENT_NONE ? placementNoneLabel("subtype") : text;
-  };
-  const markLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("mark") : v;
-  const statusLabelFor = v => state.statusLabels[v] || v;
   const enabledFor = key => v => isValueEnabled(key, v);
 
   const resetBtn = document.createElement("button");
@@ -2067,13 +2190,8 @@ function renderPlacementFilters() {
   // и Тип/Подтип (см. Docs/backlog.md, "Контрактация 2.0"), но источник
   // значений — не элементы/зоны, а сам справочник контрактов
   // (state.contracts) — контрагент и контракт без ни одного элемента
-  // всё равно должны быть в списке (см. allValuesFor).
-  const supplierLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("supplier") : v;
-  const contractLabelFor = v => {
-    if (v === PLACEMENT_NONE) return placementNoneLabel("contract");
-    const c = state.contracts.find(c => c.id === v);
-    return c ? c.name : `контракт #${v}`;
-  };
+  // всё равно должны быть в списке (см. allValuesFor). Подписи —
+  // supplierLabelFor/contractLabelFor на уровне модуля, см. выше.
   const supplierValues = allValuesFor("supplier");
   const contractValues = allValuesFor("contract");
   const contractsBySupplier = new Map();
@@ -3338,6 +3456,10 @@ function clearWorkspace() {
   showPlaceholderCard();
   updateScrollbars();
   updateZoomIndicator();
+  // applyPlacementFilters (единственное место, где строка состояния
+  // обновляется сама) на пустом чертеже не вызывается — иначе в полосе
+  // остался бы перечень фильтров уже закрытого чертежа.
+  updateStatusBarDefault(0);
   if (state.view3d.active) build3DScene(); // очистит сцену (state.elements сейчас пуст)
 }
 
@@ -8286,6 +8408,28 @@ statusRestoreSubmit.addEventListener("click", async () => {
   } finally {
     statusRestoreSubmit.disabled = false;
   }
+});
+
+// ---------- лента сообщений сеанса (кнопка у строки состояния) ----------
+// Показывает всё, что выводилось в строку состояния с момента загрузки
+// страницы (statusLog), новые сверху. Это НЕ журнал действий
+// (app/activity.py, серверный, с поиском по всем пользователям) — здесь
+// ровно то, что человек видел на своём экране и мог не успеть прочитать.
+applyStatusBarDefault(); // app.js подключён в конце <body>, разметка уже есть
+document.getElementById("statusbar-log-btn").addEventListener("click", () => {
+  const box = document.getElementById("statuslog-list");
+  box.innerHTML = statusLog.length
+    ? statusLog.slice().reverse().map(entry => `
+        <div class="statuslog-row">
+          <span class="statuslog-time">${entry.at.toLocaleTimeString("ru-RU")}</span>
+          <span class="statusbar-${escapeHtml(entry.kind)}">${escapeHtml(entry.message)}</span>
+        </div>
+      `).join("")
+    : '<div class="hint-text">За этот сеанс сообщений ещё не было.</div>';
+  document.getElementById("statuslog-backdrop").classList.add("open");
+});
+document.getElementById("statuslog-close").addEventListener("click", () => {
+  document.getElementById("statuslog-backdrop").classList.remove("open");
 });
 
 // ---------- журнал версий ("?" в тулбаре, живой запрос пользователя) ----------
