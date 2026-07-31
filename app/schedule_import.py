@@ -27,6 +27,7 @@ zone_crane_id/zone_stance_id (см. app/db.py) — зоны с одинаков�
 """
 
 import io
+import json
 import re
 from datetime import date, datetime
 from typing import Optional
@@ -70,6 +71,19 @@ _TRAILING_NUMBER_RE = re.compile(r"(\d+)\s*$")
 # _TRAILING_NUMBER_RE на таком значении не находил ничего и молча уводил
 # в skipped_rows ВСЕ строки файла (живой репорт, см. Docs/backlog.md).
 _ANY_NUMBER_RE = re.compile(r"(\d+)")
+
+
+def _manual_fields(raw) -> set:
+    """elements.manual_fields — JSON-список имён полей, правленных руками
+    (см. PATCH /elements/{id}/fields). Битое значение трактуем как «правок
+    нет»: импорт не должен падать из-за одной испорченной строки."""
+    if not raw:
+        return set()
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        return set()
+    return set(value) if isinstance(value, list) else set()
 
 
 class ScheduleImportError(Exception):
@@ -199,11 +213,19 @@ def import_schedule(conn, parsed: dict) -> dict:
     matched_elements_total = 0
     unmatched_blocks: list[str] = []
     touched_element_ids: set[int] = set()
+    # Обе даты СМР админ может поправить руками в форме элемента — ровно
+    # потому, что для части блоков строки в графике нет вовсе (живой разбор:
+    # 18 «Ригелей периметральных» остались без дат навсегда). Такое поле
+    # помечено в elements.manual_fields, и импорт его НЕ перезаписывает —
+    # иначе ручная правка исчезала бы молча при следующей загрузке графика.
+    # Считаем такие случаи и показываем в сводке: не применить значение
+    # молча — так же плохо, как молча затереть.
+    manual_kept: dict[str, int] = {}
 
     for row in rows:
         candidates = conn.execute(
             """
-            SELECT e.id, zc.name AS crane_name, zs.name AS stance_name
+            SELECT e.id, e.manual_fields, zc.name AS crane_name, zs.name AS stance_name
             FROM elements e
             LEFT JOIN zones zc ON zc.id = e.zone_crane_id AND e.zone_crane_status = 'matched'
             LEFT JOIN zones zs ON zs.id = e.zone_stance_id AND e.zone_stance_status = 'matched'
@@ -212,27 +234,39 @@ def import_schedule(conn, parsed: dict) -> dict:
             (row["floor"], row["element_type"], row["subtype"]),
         ).fetchall()
 
-        matched_ids = [
-            c["id"]
+        matched = [
+            c
             for c in candidates
             if _extract_number(c["crane_name"], _CRANE_NUMBER_RE) == row["crane_number"]
             and _extract_number(c["stance_name"], _TRAILING_NUMBER_RE) == row["stance_number"]
         ]
 
-        if not matched_ids:
+        if not matched:
             unmatched_blocks.append(
                 f"Кран {row['crane_number']}/Стоянка {row['stance_number']}/Этаж {row['floor']}/"
                 f"{row['type_subtype_raw']} — ни один элемент не найден"
             )
             continue
 
-        conn.executemany(
-            "UPDATE elements SET project_delivery_date = ?, project_smr_start_date = ?, "
-            "updated_at = datetime('now') WHERE id = ?",
-            [(row["project_delivery_date"], row["project_smr_start_date"], eid) for eid in matched_ids],
-        )
-        matched_elements_total += len(matched_ids)
-        touched_element_ids.update(matched_ids)
+        # Поля обновляются ПООТДЕЛЬНОСТИ: одну дату могли править руками, а
+        # вторую нет, и общий UPDATE обеими колонками затёр бы правку.
+        updates: dict[str, list[tuple]] = {"project_delivery_date": [], "project_smr_start_date": []}
+        for c in matched:
+            manual = _manual_fields(c["manual_fields"])
+            for field in updates:
+                if field in manual:
+                    manual_kept[field] = manual_kept.get(field, 0) + 1
+                    continue
+                updates[field].append((row[field], c["id"]))
+                touched_element_ids.add(c["id"])
+
+        for field, payload in updates.items():
+            if payload:
+                conn.executemany(
+                    f"UPDATE elements SET {field} = ?, updated_at = datetime('now') WHERE id = ?",
+                    payload,
+                )
+        matched_elements_total += len(matched)
 
     conn.commit()
 
@@ -242,4 +276,5 @@ def import_schedule(conn, parsed: dict) -> dict:
         "skipped_rows": parsed["skipped_rows"][:50],
         "elements_updated": len(touched_element_ids),
         "unmatched_blocks": unmatched_blocks,
+        "manual_kept": manual_kept,
     }

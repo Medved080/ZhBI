@@ -3708,6 +3708,16 @@ const FIELD_LABELS = {
   nearest_axis_number: "Ближайшая числовая ось", nearest_axis_letter: "Ближайшая буквенная ось",
   offset_x_mm: "Смещение X, мм", offset_y_mm: "Смещение Y, мм", x: "X, мм", y: "Y, мм",
   current_status: "Текущий статус", subtype: "Подтип", elevation_mm: "Отметка, мм", floor: "Этаж",
+  // Остальные колонки elements — показываются только в форме элемента
+  // (блок «Остальные поля», renderEfReadonly). В карточке на схеме их нет,
+  // поэтому на её вид эти подписи не влияют.
+  source_file: "Файл чертежа", z: "Z, мм", element_uid: "Сквозной UID",
+  object_id: "ID объекта", object_name: "Объект", is_current: "Есть в актуальном чертеже",
+  outline_points: "Точек в контуре", contract_id: "ID контракта",
+  counterparty_code: "Код контрагента",
+  planned_delivery_date: "Плановая дата", actual_delivery_date: "Фактическая дата",
+  project_smr_start_date: "Начало СМР", project_delivery_date: "Дата завершения СМР",
+  created_at: "Создан", updated_at: "Изменён",
 };
 
 // Разбор по важности для повседневной работы (см. Docs/backlog.md,
@@ -3732,7 +3742,14 @@ function fieldRowsHtml(element, fields) {
     // напр. 139158.6789437191) — выглядит как баг, а не как данные;
     // для отображения округляем до мм, полная точность остаётся в
     // API/экспорте, тут не нужна.
-    if ((k === "x" || k === "y") && typeof v === "number") v = Math.round(v);
+    if ((k === "x" || k === "y" || k === "z") && typeof v === "number") v = Math.round(v);
+    // Даты — единым ДД.ММ.ГГГГ, как везде в интерфейсе. Ни одно из полей
+    // на «_date» не входит в группы карточки на схеме
+    // (TECHNICAL_FIELD_GROUPS), так что правило работает только в форме
+    // элемента. created_at/updated_at намеренно НЕ трогаем — там ценно
+    // именно время, а не дата.
+    if (k.endsWith("_date")) v = formatDateRu(v) || v;
+    if (k === "is_current") v = v ? "да" : "нет";
     if (v === null || v === undefined || v === "") v = "—";
     return `<tr><td class="k">${escapeHtml(FIELD_LABELS[k] || k)}</td><td>${escapeHtml(v)}</td></tr>`;
   }).join("");
@@ -5379,6 +5396,14 @@ const elementFormBackdrop = document.getElementById("element-form-backdrop");
 let efElement = null;
 let efAllowedSubtypes = null; // {тип: [подтипы]} — грузится один раз за сеанс
 
+// Правимые поля. Порядок и подписи — как в карточке на схеме (сначала «что
+// это», потом «где», потом четыре шкалы дат): одно и то же поле не должно
+// называться по-разному в разных местах.
+// Обе даты СМР правятся руками наравне с плановой (живой запрос): их
+// проставляет импорт графика MS Project, но если для блока
+// «Кран+Стоянка+Этаж+Тип+Подтип» строки в графике нет, элемент остаётся без
+// дат — до этого поправить их было нечем. Правка помечается ✎ и переживает
+// следующий импорт (elements.manual_fields, см. app/main.py).
 const EF_FIELDS = [
   { key: "element_type", label: "Тип", kind: "type" },
   { key: "subtype", label: "Подтип", kind: "subtype" },
@@ -5386,8 +5411,69 @@ const EF_FIELDS = [
   { key: "elevation_mm", label: "Отметка, мм", type: "number" },
   { key: "floor", label: "Этаж", type: "number" },
   { key: "address", label: "Адрес по осям" },
-  { key: "planned_delivery_date", label: "Плановая поставка", type: "date" },
+  { key: "project_smr_start_date", label: "Начало СМР", type: "date" },
+  { key: "planned_delivery_date", label: "Плановая дата", type: "date" },
+  { key: "project_delivery_date", label: "Дата завершения СМР", type: "date" },
 ];
+
+// Остальные колонки elements — только для чтения, но показать их форма
+// обязана: до этого половина полей элемента не была видна нигде, кроме
+// карточки на схеме, а часть (файл чертежа, UID, объект, ярус стоянки) — и
+// вовсе нигде. Каждая группа объясняет, ЧЕМ значение меняется: поле не
+// «нельзя править», а правится не здесь.
+const EF_READONLY_GROUPS = [
+  {
+    title: "Статус и контрактация",
+    hint: "Статус и фактическая дата — таблицей истории ниже; контракт — диалогом смены статуса.",
+    fields: ["current_status", "actual_delivery_date", "contract_id", "counterparty_code"],
+  },
+  {
+    title: "Зоны",
+    hint: "Считаются по геометрии при импорте чертежа и при правке зоны («Действия → Справочники → Зоны»).",
+    kind: "zones",
+  },
+  {
+    title: "Геометрия и адресация",
+    hint: "Из чертежа DXF: правится перезагрузкой чертежа, не здесь.",
+    fields: ["x", "y", "z", "outline_points", "axis_status", "axis_number", "axis_letter",
+             "nearest_axis_number", "nearest_axis_letter", "offset_x_mm", "offset_y_mm"],
+  },
+  {
+    title: "Идентичность",
+    hint: "По этим полям элемент опознаётся при загрузке новой версии чертежа.",
+    fields: ["id", "element_uid", "object_name", "object_id", "source_file", "dxf_handle",
+             "layer", "mark_source", "is_current"],
+  },
+  { title: "Служебное", fields: ["created_at", "updated_at"] },
+];
+
+// Зоны — отдельным видом: у них не голое значение колонки, а название плюс
+// состояние привязки (и ярус у стоянки). Названия приходят с сервера
+// (GET /elements/{id}), а не берутся из state.zones: справочник элементов
+// открывается и без загруженной схемы.
+function efZoneRowsHtml() {
+  const zoneRow = (label, nameField, statusField, extra) => {
+    const status = efElement[statusField];
+    const value = status === "matched"
+      ? escapeHtml(efElement[nameField] || `#${efElement[statusField.replace("_status", "_id")]}`) + (extra || "")
+      : escapeHtml(ZONE_STATUS_LABELS_RU[status] || status || "—");
+    return `<tr><td class="k">${label}</td><td>${value}</td></tr>`;
+  };
+  const levelElevation = efElement.zone_stance_level_elevation_mm;
+  return zoneRow("Захватка", "zone_zakhvatka_name", "zone_zakhvatka_status")
+    + zoneRow("Кран", "zone_crane_name", "zone_crane_status")
+    + zoneRow("Стоянка", "zone_stance_name", "zone_stance_status",
+        levelElevation === null || levelElevation === undefined
+          ? "" : ` <span class="hint-text">· ярус ${levelElevation} мм</span>`);
+}
+
+function renderEfReadonly() {
+  document.getElementById("ef-readonly").innerHTML = EF_READONLY_GROUPS.map(g => `
+    <div class="card-block"><h4>${escapeHtml(g.title)}</h4>
+      ${g.hint ? `<div class="hint-text">${escapeHtml(g.hint)}</div>` : ""}
+      <table>${g.kind === "zones" ? efZoneRowsHtml() : fieldRowsHtml(efElement, g.fields)}</table>
+    </div>`).join("");
+}
 
 function efSubtypeOptions(type, current) {
   const list = (efAllowedSubtypes && efAllowedSubtypes[type]) || [];
@@ -5429,7 +5515,8 @@ function renderEfFields() {
       ${control}</div>`;
   }).join("") +
     (manual.size ? `<div class="hint-text" style="flex-basis:100%">✎ — поле правлено руками;
-      загрузка нового чертежа его не перезапишет, а покажет расхождение в сводке.</div>` : "");
+      повторный импорт его не перезапишет молча: загрузка нового чертежа покажет расхождение
+      в сводке, загрузка графика СМР оставит ручную дату и сообщит об этом.</div>` : "");
 
   const typeSelect = document.querySelector('#ef-fields select[data-ef="element_type"]');
   if (typeSelect) {
@@ -5535,6 +5622,7 @@ async function openElementForm(elementId, show = true) {
     `${efElement.element_type} ${efElement.mark || "без марки"} — ${efElement.address || "адрес не определён"}`;
   document.getElementById("ef-status").textContent = "";
   renderEfFields();
+  renderEfReadonly();
   renderEfHistory();
   if (show) elementFormBackdrop.classList.add("open");
 }
@@ -6752,6 +6840,11 @@ document.getElementById("schedule-import-submit").addEventListener("click", asyn
     }
     let msg = `Готово: строк обработано ${body.rows_processed}, пропущено ${body.rows_skipped}, элементов обновлено ${body.elements_updated}.`;
     if (body.unmatched_blocks.length) msg += ` Блоков без совпадений: ${body.unmatched_blocks.length}.`;
+    // Даты, правленные руками в форме элемента, импорт не перезаписывает —
+    // но и молчать об этом нельзя: иначе новое значение из графика «не
+    // применилось» без объяснения.
+    const kept = Object.values(body.manual_kept || {}).reduce((a, b) => a + b, 0);
+    if (kept) msg += ` Оставлено без изменений (даты правлены вручную): ${kept}.`;
     statusEl.textContent = msg;
     statusEl.style.color = "var(--color-text-muted)";
     await loadPlan();

@@ -87,6 +87,21 @@ class ElementOut(BaseModel):
     project_delivery_date: Optional[str] = None
     project_smr_start_date: Optional[str] = None
     actual_delivery_date: Optional[str] = None
+    # Привязка к зонам и к объекту. Объявлены здесь по той же причине, что
+    # subtype/elevation_mm/floor выше: pydantic срезает всё, чего нет в
+    # модели, и форма элемента показывала бы пустые поля там, где в БД
+    # значение есть. Форма правит их не напрямую (зоны считаются по
+    # геометрии, см. app/zone_recalc.py) — но показать обязана.
+    zone_zakhvatka_id: Optional[int] = None
+    zone_zakhvatka_status: Optional[str] = None
+    zone_crane_id: Optional[int] = None
+    zone_crane_status: Optional[str] = None
+    zone_stance_id: Optional[int] = None
+    zone_stance_status: Optional[str] = None
+    zone_stance_level_id: Optional[int] = None
+    object_id: Optional[int] = None
+    element_uid: Optional[str] = None
+    is_current: Optional[int] = None
     created_at: str
     updated_at: str
 
@@ -102,6 +117,21 @@ class StatusHistoryOut(BaseModel):
 
 class ElementDetailOut(ElementOut):
     history: list[StatusHistoryOut]
+    # Названия того, на что элемент ссылается по id, — чтобы форма элемента
+    # печатала «Кран 1», а не «#32345». Заполняются ТОЛЬКО в
+    # GET /elements/{id} (см. _element_reference_labels в app/main.py): в
+    # /plan-data те же названия у клиента уже есть в state.zones, и JOIN на
+    # 9422 строки там был бы лишним. У остальных наследников
+    # (StatusUpdateResult и др.) остаются None — это нормально, там их не
+    # показывают.
+    zone_zakhvatka_name: Optional[str] = None
+    zone_crane_name: Optional[str] = None
+    zone_stance_name: Optional[str] = None
+    zone_stance_level_elevation_mm: Optional[int] = None
+    object_name: Optional[str] = None
+    # Контур — сам JSON наружу не отдаём (в форме от него толку нет, он
+    # рисуется на схеме), но факт наличия геометрии и её объём показать надо.
+    outline_points: Optional[int] = None
 
 
 class ContractWarning(BaseModel):

@@ -497,6 +497,46 @@ def list_elements(
         conn.close()
 
 
+def _element_reference_labels(conn, data: dict) -> dict:
+    """Названия зон/объекта и объём контура для формы элемента.
+
+    Отдельная функция, а не расширение enrich_element_row: та зовётся на
+    КАЖДУЮ строку /plan-data (9422 элемента), и четыре лишних запроса на
+    строку там недопустимы. Здесь элемент один — стоимость неважна.
+    """
+    for id_field, name_field in (
+        ("zone_zakhvatka_id", "zone_zakhvatka_name"),
+        ("zone_crane_id", "zone_crane_name"),
+        ("zone_stance_id", "zone_stance_name"),
+    ):
+        data[name_field] = None
+        zone_id = data.get(id_field)
+        if zone_id is not None:
+            r = conn.execute("SELECT name FROM zones WHERE id = ?", (zone_id,)).fetchone()
+            data[name_field] = r["name"] if r else None
+
+    data["zone_stance_level_elevation_mm"] = None
+    if data.get("zone_stance_level_id") is not None:
+        r = conn.execute(
+            "SELECT elevation_mm FROM zone_levels WHERE id = ?", (data["zone_stance_level_id"],)
+        ).fetchone()
+        data["zone_stance_level_elevation_mm"] = r["elevation_mm"] if r else None
+
+    data["object_name"] = None
+    if data.get("object_id") is not None:
+        r = conn.execute("SELECT name FROM objects WHERE id = ?", (data["object_id"],)).fetchone()
+        data["object_name"] = r["name"] if r else None
+
+    data["outline_points"] = None
+    raw = data.get("outline_json")
+    if raw:
+        try:
+            data["outline_points"] = len(json.loads(raw))
+        except (ValueError, TypeError):
+            data["outline_points"] = None
+    return data
+
+
 @app.get("/elements/{element_id}", response_model=ElementDetailOut)
 def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
@@ -511,6 +551,7 @@ def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
         data = dict(row)
         data["history"] = [dict(h) for h in history_rows]
         enrich_element_row(conn, data)
+        _element_reference_labels(conn, data)
         return data
     finally:
         conn.close()
@@ -1874,11 +1915,24 @@ def elements_catalog(
 # Статуса и фактической даты здесь НЕТ намеренно (решение Э3): у статуса своя
 # история и рабочая дата, правка «поля статус» в таблице разъехалась бы с
 # status_history; для него — обычный диалог смены статуса.
+#
+# Проектные даты СМР (project_smr_start_date/project_delivery_date) правятся
+# здесь наравне с плановой (живой запрос): обычно их приносит импорт графика
+# MS Project, но у блока «Кран+Стоянка+Этаж+Тип+Подтип», которого в графике
+# нет, элемент остаётся без дат навсегда — руками это не поправить было ничем.
+# Как и остальные поля отсюда, правленая дата попадает в manual_fields, то
+# есть следующий импорт графика её НЕ перезапишет молча.
 _ELEMENT_EDITABLE_FIELDS = (
     "element_type", "subtype", "mark", "elevation_mm", "floor", "address",
-    "planned_delivery_date",
+    "planned_delivery_date", "project_smr_start_date", "project_delivery_date",
 )
 _ELEMENT_INT_FIELDS = {"elevation_mm", "floor"}
+# Даты хранятся текстом 'ГГГГ-ММ-ДД' и СРАВНИВАЮТСЯ КАК ТЕКСТ (отбор по
+# диапазону в фильтрах, критерий опоздания, отчёты) — формат проверяем на
+# входе, иначе одна строка «01.09.2026» тихо ломает сравнение.
+_ELEMENT_DATE_FIELDS = {
+    "planned_delivery_date", "project_smr_start_date", "project_delivery_date",
+}
 
 
 @app.patch("/elements/{element_id}/fields")
@@ -1923,6 +1977,16 @@ def update_element_fields(
                     values[field] = int(raw)
                 except (TypeError, ValueError):
                     raise HTTPException(status_code=400, detail=f"«{field}» должно быть целым числом")
+            elif field in _ELEMENT_DATE_FIELDS:
+                text = str(raw).strip()
+                try:
+                    datetime.strptime(text, "%Y-%m-%d")
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"«{field}»: ожидается дата в виде ГГГГ-ММ-ДД, получено «{text}»",
+                    )
+                values[field] = text
             else:
                 values[field] = str(raw).strip()
 

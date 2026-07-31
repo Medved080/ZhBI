@@ -10,6 +10,17 @@
       ],
       "port": 8000,
       "autoPort": true
+    },
+    {
+      "//": "Живая проверка правок на КОПИИ боевой БД (data/zhbi.check.db, делается вручную: cp data/zhbi.db data/zhbi.check.db). Ни миграции при старте, ни правки из интерфейса не трогают боевую data/zhbi.db.",
+      "name": "zhbi-server-testcopy",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-c",
+        "import os, uvicorn; os.environ.setdefault('ZHBI_DB_PATH', 'data/zhbi.check.db'); uvicorn.run('app.main:app', host='127.0.0.1', port=int(os.environ.get('PORT') or 8010))"
+      ],
+      "port": 8010,
+      "autoPort": true
     }
   ]
 }
