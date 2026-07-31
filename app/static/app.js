@@ -6691,7 +6691,7 @@ document.getElementById("info-plate-settings-save").addEventListener("click", as
   }
 });
 
-// ---------- импорт контрактации / графика МС Project (см.
+// ---------- импорт контрактации / графика MS Project (см.
 // Docs/backlog.md, "Контрактация 2.0", п.2/6) ----------
 const contractingImportBackdrop = document.getElementById("contracting-import-backdrop");
 document.getElementById("menu-contracting-import").addEventListener("click", () => {
@@ -10689,7 +10689,7 @@ document.addEventListener("pointermove", (e) => {
 // этот код по описаниям с сервера (/import-templates, см.
 // app/import_templates.py) — так описание формата лежит рядом с кодом,
 // который этот формат ПРОВЕРЯЕТ, и не разъезжается с ним (ровно на этом
-// расхождении все 671 строка графика МС Project ушли в "пропущено", см.
+// расхождении все 671 строка графика MS Project ушли в "пропущено", см.
 // Docs/backlog.md, 2026-07-30).
 //
 // Место вставки — <div class="import-template" data-template="ключ">
