@@ -114,6 +114,25 @@
     white-space: nowrap; flex-shrink: 0;
   }
   .btn:hover { border-color: var(--color-primary); }
+  /* Кнопку выбора файла браузер рисует своей — маленьким прямоугольником без
+     скруглений, не похожим ни на одну кнопку интерфейса (живой репорт
+     2026-08-01). Приводим к виду .btn.btn-secondary через
+     ::file-selector-button — так не нужно ни прятать поле за <label>, ни
+     писать свой обработчик, ни терять имя выбранного файла, которое
+     браузер печатает рядом сам.
+
+     Правило ОБЩЕЕ на все семь файловых полей приложения (загрузка чертежа,
+     импорты истории/контрактации/графика/настроек, восстановление статусов,
+     массовая правка), а не на одно: разнобой между формами читался бы хуже,
+     чем исходная некрасивость. */
+  input[type="file"] { font-size: 13px; color: var(--color-text-muted); }
+  input[type="file"]::file-selector-button {
+    font-size: 13px; padding: 6px 12px; border-radius: var(--radius-sm); cursor: pointer;
+    border: 1px solid var(--color-border); background: var(--color-surface-2);
+    color: var(--color-text); margin-right: 10px;
+    transition: background .12s, border-color .12s;
+  }
+  input[type="file"]::file-selector-button:hover { border-color: var(--color-primary); }
   .btn-primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
   .btn-primary:hover { background: var(--color-primary-hover); border-color: var(--color-primary-hover); }
   .btn-secondary { background: var(--color-surface-2); }
@@ -653,6 +672,10 @@
   .modal label.radio { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; }
   .modal label.checkbox { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; }
   .modal .btn { font-size: 13px; padding: 8px 16px; }
+  /* Внутри модалок кнопки крупнее (.modal .btn выше) — родная кнопка выбора
+     файла должна следовать за ними, иначе в одном ряду с «Сверить с базой»
+     она снова окажется мельче соседей. */
+  .modal input[type="file"]::file-selector-button { padding: 8px 16px; }
   .error-text { color: var(--color-danger); font-size: 12px; margin-top: 8px; }
   .warning-text { color: #b8860b; font-size: 12px; margin-top: 6px; }
   .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
