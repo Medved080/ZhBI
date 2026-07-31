@@ -43,6 +43,8 @@ from app.history_import import normalize_changed_at
 from app.models import STATUS_LABELS_RU, STATUS_ORDER
 
 SHEET_DATA = "Статусы"
+SHEET_STATUSES = "Справочник статусов"
+SHEET_OBJECTS = "Объекты"
 KEY_COLUMN = "element_uid"
 LOCKED_COLUMN = "locked_reason"
 
@@ -107,6 +109,11 @@ def _element_state(row, records: list) -> dict:
         # ПОСЛЕДНЯЯ запись статуса (список уже отсортирован по дате)
         by_status[rec["status"]] = rec
     values = {key: row[key] for key, _ in _HEAD_COLUMNS}
+    # Статус — ПОДПИСЬЮ, как в интерфейсе, а не кодом (живой запрос
+    # 2026-08-01): человек, открывший файл, читает «Смонтирован», а не
+    # «installed». Колонка справочная, обратно не разбирается, поэтому
+    # достаточно подписи.
+    values["current_status"] = STATUS_TITLES.get(row["current_status"], row["current_status"])
     for key in STATUS_KEYS:
         rec = by_status.get(key)
         values[key] = rec["changed_at"][:10] if rec else None
@@ -129,10 +136,34 @@ def build_status_workbook(conn) -> Workbook:
     for row in rows:
         values = _element_state(row, history.get(row["id"], []))
         ws.append([values[c["key"]] for c in cols])
+    _widen(ws)
+
+    # Справочные листы — как в режиме реквизитов (живой запрос 2026-08-01).
+    # Правимые ячейки здесь ДАТЫ, выбирать из списка нечего, поэтому полезен
+    # другой справочник: порядок жизненного цикла. Именно его проверяет
+    # загрузка («более поздний статус не может быть раньше предыдущего»), и
+    # без него правило приходится держать в голове.
+    ws_s = wb.create_sheet(SHEET_STATUSES)
+    ws_s.append(["№ в цикле", "Статус", "Колонка в листе «Статусы»"])
+    for n, key in enumerate(STATUS_KEYS, start=1):
+        ws_s.append([n, STATUS_TITLES[key], STATUS_TITLES[key]])
+    ws_s.append([])
+    ws_s.append(["Даты в листе «Статусы» не должны убывать сверху вниз по этому порядку."])
+    ws_s.append(["Пустая ячейка означает «не трогать», а не «удалить запись»."])
+    _widen(ws_s)
+
+    ws_o = wb.create_sheet(SHEET_OBJECTS)
+    ws_o.append(["Объект", "Описание"])
+    for r in conn.execute("SELECT name, COALESCE(description,'') AS description FROM objects ORDER BY name"):
+        ws_o.append([r["name"], r["description"]])
+    _widen(ws_o)
+    return wb
+
+
+def _widen(ws) -> None:
     for i, column in enumerate(ws.iter_cols(), start=1):
         width = max((len(str(c.value)) for c in column if c.value is not None), default=10)
-        ws.column_dimensions[get_column_letter(i)].width = min(max(width + 2, 12), 40)
-    return wb
+        ws.column_dimensions[get_column_letter(i)].width = min(max(width + 2, 12), 45)
 
 
 def _read_sheet(file_bytes: bytes) -> list:

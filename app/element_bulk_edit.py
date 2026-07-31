@@ -45,6 +45,7 @@ from app.contracts import (
 # «Запланирован» от импорта чертежа перекрыть событие, датированное задним
 # числом. Вторая реализация того же сдвига неминуемо разошлась бы с первой.
 from app.history_import import _shift_planned_before_first_event as shift_planned_before_first_event
+from app.models import STATUS_LABELS_RU, STATUS_ORDER
 from app.element_fields import (
     DATE_FIELDS,
     EDITABLE_FIELDS,
@@ -94,6 +95,9 @@ COLUMNS = [
 ]
 
 CONTRACT_COLUMN = "contract_name"
+
+# Код статуса -> подпись, как в интерфейсе.
+STATUS_LABELS_RU_BY_VALUE = {s.value: STATUS_LABELS_RU[s] for s in STATUS_ORDER}
 
 
 def _contract_catalog(conn) -> list:
@@ -170,6 +174,10 @@ def display_values(row, contract_by_id: dict) -> dict:
         "zone_crane": row["zone_crane"],
         "zone_stance": row["zone_stance"],
     }
+    # Статус — ПОДПИСЬЮ, как в интерфейсе, а не кодом (живой запрос
+    # 2026-08-01). Колонка справочная и обратно не разбирается.
+    derived["current_status"] = STATUS_LABELS_RU_BY_VALUE.get(
+        row["current_status"], row["current_status"])
     return {key: (derived[key] if key in derived else row[key]) for key, _, _ in COLUMNS}
 
 

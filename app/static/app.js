@@ -11166,11 +11166,8 @@ function setBulkEditMode(mode) {
   document.querySelectorAll("[data-mode-intro]").forEach((el) => {
     el.style.display = el.dataset.modeIntro === mode ? "" : "none";
   });
-  // Требования к файлу описаны пока только для режима реквизитов; в режиме
-  // статусов формат объяснён абзацем выше, и пустой раскрывающийся блок
-  // выглядел бы поломкой.
-  const tpl = document.querySelector("#bulk-edit-intro .import-template");
-  if (tpl) tpl.style.display = mode === "fields" ? "" : "none";
+  // Требования к файлу — свои у каждого режима; переключаются той же
+  // разметкой data-mode-intro, что и пояснения (см. выше).
   // Полный сброс: расхождения одного режима нельзя применять в другом —
   // у них разный смысл полей (реквизит против даты статуса).
   bulkEditChanges = [];
