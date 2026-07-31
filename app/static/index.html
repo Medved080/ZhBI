@@ -563,6 +563,7 @@
     padding: 9px 10px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; color: var(--color-text);
   }
   .dropdown-menu button:hover { background: var(--color-surface-2); }
+  .dropdown-menu button.menu-item-strong { font-weight: 700; }
   .dropdown-menu button.menu-item-danger { color: var(--color-danger); }
   .dropdown-menu button.menu-item-danger:hover { background: rgba(192,57,43,.12); }
   .dropdown-divider {
@@ -1078,6 +1079,10 @@
                  любых данных доступна только администраторам" (решение
                  пользователя того же дня). На сервере это тоже закрыто,
                  см. require_admin у /import-dxf. -->
+            <!-- Первым и выделенным (живой запрос 2026-08-01): основной
+                 повседневный способ править данные, остальное в группе —
+                 разовые операции обмена. -->
+            <button id="menu-bulk-edit" class="admin-only menu-item-strong">Массовая правка через Excel…</button>
             <button id="btn-upload" class="admin-only">Загрузить чертёж…</button>
             <button id="btn-export" class="admin-only">Экспорт в XLS</button>
             <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
@@ -1085,7 +1090,6 @@
             <button id="menu-status-restore" class="admin-only">Восстановить статусы из выгрузки</button>
             <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
             <button id="menu-schedule-import" class="admin-only">Импорт графика MS Project из XLS</button>
-            <button id="menu-bulk-edit" class="admin-only">Массовая правка через Excel…</button>
             <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
             <button id="menu-backups" class="admin-only">Резервные копии…</button>
             <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
