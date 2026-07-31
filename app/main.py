@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -42,6 +43,19 @@ from app.dxf_import import (
     DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, forget_pending,
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
     save_uploaded_file,
+)
+from app.element_fields import (
+    EDITABLE_FIELDS,
+    FieldError,
+    check_subtype,
+    coerce_field,
+    contract_mismatch,
+    write_fields,
+)
+from app.element_bulk_edit import (
+    analyze as analyze_bulk_edit,
+    apply_changes as apply_bulk_edit,
+    build_export_workbook,
 )
 from app.element_sync import summary_for_log
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
@@ -1927,17 +1941,11 @@ def elements_catalog(
 # нет, элемент остаётся без дат навсегда — руками это не поправить было ничем.
 # Как и остальные поля отсюда, правленая дата попадает в manual_fields, то
 # есть следующий импорт графика её НЕ перезапишет молча.
-_ELEMENT_EDITABLE_FIELDS = (
-    "element_type", "subtype", "mark", "elevation_mm", "floor", "address",
-    "planned_delivery_date", "project_smr_start_date", "project_delivery_date",
-)
-_ELEMENT_INT_FIELDS = {"elevation_mm", "floor"}
-# Даты хранятся текстом 'ГГГГ-ММ-ДД' и СРАВНИВАЮТСЯ КАК ТЕКСТ (отбор по
-# диапазону в фильтрах, критерий опоздания, отчёты) — формат проверяем на
-# входе, иначе одна строка «01.09.2026» тихо ломает сравнение.
-_ELEMENT_DATE_FIELDS = {
-    "planned_delivery_date", "project_smr_start_date", "project_delivery_date",
-}
+# Состав правимых полей и все проверки — в app/element_fields.py: с
+# 2026-08-01 у них два потребителя (эта форма и массовая правка через
+# Excel, app/element_bulk_edit.py), и разъехавшиеся правила дали бы
+# «в форме нельзя, а через файл прошло».
+_ELEMENT_EDITABLE_FIELDS = EDITABLE_FIELDS
 
 
 @app.patch("/elements/{element_id}/fields")
@@ -1974,69 +1982,30 @@ def update_element_fields(
 
         values = {}
         for field, raw in body.items():
-            if raw in (None, ""):
-                values[field] = None
-                continue
-            if field in _ELEMENT_INT_FIELDS:
-                try:
-                    values[field] = int(raw)
-                except (TypeError, ValueError):
-                    raise HTTPException(status_code=400, detail=f"«{field}» должно быть целым числом")
-            elif field in _ELEMENT_DATE_FIELDS:
-                text = str(raw).strip()
-                try:
-                    datetime.strptime(text, "%Y-%m-%d")
-                except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"«{field}»: ожидается дата в виде ГГГГ-ММ-ДД, получено «{text}»",
-                    )
-                values[field] = text
-            else:
-                values[field] = str(raw).strip()
+            try:
+                values[field] = coerce_field(field, raw)
+            except FieldError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
 
         new_type = values.get("element_type", row["element_type"])
         new_subtype = values.get("subtype", row["subtype"])
         if "element_type" in values or "subtype" in values:
-            if new_subtype is not None:
-                allowed = {
-                    r["subtype"] for r in conn.execute(
-                        "SELECT subtype FROM allowed_subtypes WHERE element_type = ?", (new_type,))
-                }
-                if new_subtype not in allowed:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(f"Подтип «{new_subtype}» не разрешён для типа «{new_type}». "
-                                f"Допустимые: {', '.join(sorted(allowed)) or 'нет'} "
-                                f"(правится в «Действия → Справочники → Подтипы»)"),
-                    )
+            err = check_subtype(conn, new_type, new_subtype)
+            if err:
+                raise HTTPException(status_code=400, detail=err)
 
         # Расхождение с позицией контракта — только если контракт назначен.
         new_mark = values.get("mark", row["mark"])
         mismatch = None
-        if row["contract_id"] and ("mark" in values or "element_type" in values):
-            line = conn.execute(
-                "SELECT 1 FROM contract_lines WHERE contract_id = ? AND element_type = ? AND mark IS ?",
-                (row["contract_id"], new_type, new_mark),
-            ).fetchone()
-            if line is None:
-                mismatch = (f"После правки элемент не соответствует ни одной позиции своего "
-                            f"контракта (тип «{new_type}», марка «{new_mark or '—'}»)")
-                if not confirm_contract_mismatch:
-                    raise HTTPException(status_code=409, detail=mismatch)
+        if "mark" in values or "element_type" in values:
+            mismatch = contract_mismatch(conn, row["contract_id"], new_type, new_mark)
+            if mismatch and not confirm_contract_mismatch:
+                raise HTTPException(status_code=409, detail=mismatch)
 
         if not values:
             raise HTTPException(status_code=400, detail="Нечего сохранять")
 
-        manual = set(json.loads(row["manual_fields"] or "[]"))
-        changed = {f: (row[f], v) for f, v in values.items() if row[f] != v}
-        manual |= set(changed)
-        assignments = ", ".join(f"{f} = :{f}" for f in values)
-        conn.execute(
-            f"UPDATE elements SET {assignments}, manual_fields = :manual_fields, "
-            f"updated_at = datetime('now') WHERE id = :id",
-            {**values, "manual_fields": json.dumps(sorted(manual), ensure_ascii=False), "id": element_id},
-        )
+        changed, manual = write_fields(conn, element_id, row, values)
         conn.commit()
         updated = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         result = enrich_element_row(conn, dict(updated))
@@ -2050,11 +2019,72 @@ def update_element_fields(
             mark=result.get("mark"),
             old_value="; ".join(f"{f}: {was}" for f, (was, _) in changed.items())[:500],
             new_value="; ".join(f"{f}: {now}" for f, (_, now) in changed.items())[:500],
-            details={"contract_mismatch": mismatch, "manual_fields": sorted(manual)},
+            details={"contract_mismatch": mismatch, "manual_fields": manual},
         )
-    result["manual_fields"] = sorted(manual)
+    result["manual_fields"] = manual
     result["contract_mismatch"] = mismatch
     return result
+
+
+@app.get("/elements/bulk-edit/export")
+def bulk_edit_export(admin: sqlite3.Row = Depends(require_admin)):
+    """Снимок реквизитов всех элементов всех объектов ОДНИМ файлом — для
+    правки в Excel и обратной загрузки (см. app/element_bulk_edit.py).
+
+    Только admin, как и вся группа «Обмен данными»: файл содержит выгрузку
+    всей базы элементов.
+    """
+    conn = get_connection()
+    try:
+        wb = build_export_workbook(conn)
+    finally:
+        conn.close()
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    activity.log("element_bulk_export", user=admin, entity_type="element")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="zhbi_elements_{stamp}.xlsx"'},
+    )
+
+
+@app.post("/elements/bulk-edit/analyze")
+def bulk_edit_analyze(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_admin)):
+    """Сверяет загруженный файл с базой и возвращает список расхождений.
+    НИЧЕГО НЕ ПИШЕТ — применение отдельным вызовом, после того как
+    пользователь отметил флажками, что применять."""
+    payload = read_upload_limited(file.file)
+    conn = get_connection()
+    try:
+        return analyze_bulk_edit(conn, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+
+class BulkEditApplyIn(BaseModel):
+    # Ровно те строки, что вернул analyze, отфильтрованные флажками. Файл
+    # заново НЕ читается: перечитывание между показом и применением
+    # означало бы, что применить могли не то, что показали пользователю.
+    changes: list[dict]
+
+
+@app.post("/elements/bulk-edit/apply")
+def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_admin)):
+    """Применяет отмеченные изменения."""
+    if not body.changes:
+        raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
+    conn = get_connection()
+    try:
+        return apply_bulk_edit(
+            conn, body.changes, format_display_name(admin), admin["id"]
+        )
+    finally:
+        conn.close()
 
 
 @app.get("/objects", response_model=list[ObjectOut])
