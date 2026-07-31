@@ -35,6 +35,11 @@ let state = {
   currentUser: null,
   sourceFile: null, // "основной" файл для одно-файловых операций (экспорт, импорт истории) — последний включённый в выборке
   knownFiles: [], // [{source_file, count}] — из /source-files
+  // Этап B (2026-08-01): единица показа — ОБЪЕКТ, а не файл. sourceFile
+  // остаётся, но выводится из данных объекта, а не выбирается человеком —
+  // им пользуются экспорт, импорт истории и опрос /changes.
+  objectId: null,
+  projects: [],   // дерево из /projects-tree
   selection: new Map(), // source_file -> Set(layer) | null (null = все слои файла); сеансовый выбор, не сохраняется (п.13)
   elements: [],
   byId: new Map(),
@@ -640,13 +645,123 @@ function currentChangedAt() {
 // сохраняется ни на сервере, ни в localStorage, сбрасывается на дефолт при каждой перезагрузке
 // страницы (согласовано явно — см. обсуждение бэклога).
 
-async function loadSourceFiles() {
-  state.knownFiles = await api("/source-files");
-  if (state.knownFiles.length && state.selection.size === 0) {
-    const first = state.knownFiles[0].source_file;
-    state.selection.set(first, null);
-    state.sourceFile = first;
+// ==================== ВЫБОР ПРОЕКТА И ОБЪЕКТА (этап B) ====================
+//
+// Единица показа — ОБЪЕКТ. Раньше человек выбирал файл чертежа (и мог
+// включить несколько сразу); теперь он выбирает объект, а какой файл ему
+// соответствует, решает сервер по актуальному чертежу.
+
+const objectSwitchMenu = document.getElementById("object-switch-menu");
+const objectSwitchLabel = document.getElementById("object-switch-label");
+
+async function loadProjectsTree() {
+  const data = await api("/projects-tree");
+  state.projects = data.projects || [];
+  const все = state.projects.flatMap((p) => p.objects);
+  if (!все.length) { state.objectId = null; renderObjectSwitch(); return; }
+  // Восстанавливаем последний выбор пользователя; если объект исчез (или
+  // выбора ещё не было) — берём первый непустой, а совсем пустой список
+  // объектов означает, что чертежей ещё не загружали.
+  const запомненный = все.find((o) => o.id === data.last_object_id);
+  state.objectId = (запомненный || все.find((o) => o.elements > 0) || все[0]).id;
+  renderObjectSwitch();
+}
+
+function currentObject() {
+  for (const p of state.projects) {
+    const o = p.objects.find((x) => x.id === state.objectId);
+    if (o) return { project: p, object: o };
   }
+  return null;
+}
+
+function renderObjectSwitch() {
+  const текущий = currentObject();
+  objectSwitchLabel.textContent = текущий
+    ? (state.projects.length > 1 || текущий.project.id === null
+        ? `${текущий.project.name} · ${текущий.object.name}`
+        : текущий.object.name)
+    : "Объект не выбран";
+  objectSwitchMenu.innerHTML = "";
+  for (const проект of state.projects) {
+    const head = document.createElement("div");
+    head.className = "object-switch-project";
+    head.textContent = проект.name;
+    if (проект.address) {
+      const addr = document.createElement("div");
+      addr.className = "object-switch-project-addr";
+      addr.textContent = проект.address;
+      head.appendChild(addr);
+    }
+    objectSwitchMenu.appendChild(head);
+    for (const объект of проект.objects) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "object-switch-item" + (объект.id === state.objectId ? " active" : "");
+      const имя = document.createElement("span");
+      имя.textContent = объект.name;
+      const счёт = document.createElement("span");
+      счёт.className = "object-switch-count";
+      // Счётчик виден в списке намеренно: пустой объект иначе неотличим от
+      // загруженного, и узнать это переключением — худший способ.
+      счёт.textContent = объект.elements ? `${объект.elements}` : "пусто";
+      b.append(имя, счёт);
+      b.addEventListener("click", () => {
+        document.getElementById("object-switch").classList.remove("open");
+        switchObject(объект.id);
+      });
+      objectSwitchMenu.appendChild(b);
+    }
+  }
+}
+
+async function switchObject(objectId) {
+  if (objectId === state.objectId) return;
+  state.objectId = objectId;
+  renderObjectSwitch();
+
+  // Смена объекта — это не «перезагрузить данные». Всё, что относилось к
+  // прежнему объекту, обязано быть сброшено, иначе получаются странности,
+  // которые ловятся только глазами:
+  //  - выделение указывает на элементы, которых больше нет на схеме;
+  //  - фильтр по марке чужого объекта даёт пустую схему без объяснения;
+  //  - метка опроса /changes старая, и первый же тик показал бы
+  //    «обновлено 9422 элемента» сразу после переключения;
+  //  - вид (viewBox) от чужой сетки осей — подписи осей пинятся к краям
+  //    ТЕКУЩЕГО охвата и визуально «плывут» (это уже было при смене
+  //    состава файлов, см. Docs/backlog.md).
+  state.selection.clear();
+  state.selectedId = null;
+  state.multiSelectedIds.clear();
+  lastServerTime = null;
+  // Оба набора фильтров: перечислимые категории и диапазоны дат СМР —
+  // структуры разной природы (см. комментарий у state.dateFilters), и
+  // сбрасывать надо обе, иначе диапазон дат от прежнего объекта останется.
+  Object.values(state.placementFilters).forEach((набор) => набор.clear());
+  state.dateFilters.smrStart = { from: "", to: "", empty: "show" };
+  state.dateFilters.smrEnd = { from: "", to: "", empty: "show" };
+
+  try {
+    await api("/me/last-object", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ object_id: objectId }),
+    });
+  } catch (e) {
+    // Не смогли запомнить — не повод не переключаться: это удобство, а не
+    // условие работы.
+    console.warn("Не удалось запомнить выбранный объект:", e.message);
+  }
+  await loadPlan(false);   // false — пересчитать вид: у объекта своя сетка осей
+  const текущий = currentObject();
+  showToast(`Объект: ${текущий ? текущий.object.name : objectId}`, "info");
+}
+
+async function loadSourceFiles() {
+  // Только СПИСОК файлов — для формы «Версии чертежа объекта» и загрузки
+  // чертежа. Раньше эта функция ещё и назначала, что показать (первый файл
+  // в списке); с этапа B показ определяет выбранный объект, и самовольное
+  // назначение здесь переключало бы схему на чужой чертёж.
+  state.knownFiles = await api("/source-files");
   updateFileSelectSummary();
 }
 
@@ -655,9 +770,13 @@ function updateFileSelectSummary() {
   if (!summary) return;
   const n = state.selection.size;
   let text;
-  if (n === 0) text = "не выбрано";
-  else if (n === 1) text = Array.from(state.selection.keys())[0];
-  else text = `${n} файла`;
+  if (n === 1) text = Array.from(state.selection.keys())[0] + " (выбрана версия вручную)";
+  else if (n > 1) text = `${n} файла (выбрано вручную)`;
+  else {
+    const текущий = currentObject();
+    text = текущий ? `${текущий.object.name} — ${текущий.object.source_file || "чертёж не загружен"}`
+                   : "объект не выбран";
+  }
   summary.textContent = `Сейчас на схеме: ${text}`;
 }
 
@@ -3667,10 +3786,21 @@ document.getElementById("btn-refresh").addEventListener("click", async () => {
 });
 
 async function loadPlan(preserveView = true) {
-  if (!state.selection.size) { clearWorkspace(); return; }
-  const selection = Array.from(state.selection.entries()).map(([source_file, layers]) => ({
-    source_file, layers: layers ? Array.from(layers) : null,
-  }));
+  // Этап B: показывается ОДИН объект. state.selection (файл -> слои)
+  // сохранён только для формы «Версии чертежа объекта», где можно открыть
+  // не актуальную версию; в обычной работе он пуст, и селекция строится по
+  // объекту.
+  let selection;
+  if (state.selection.size) {
+    selection = Array.from(state.selection.entries()).map(([source_file, layers]) => ({
+      source_file, layers: layers ? Array.from(layers) : null,
+    }));
+  } else if (state.objectId) {
+    selection = [{ object_id: state.objectId }];
+  } else {
+    clearWorkspace();
+    return;
+  }
   const data = await api("/plan-data", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selection }),
   });
@@ -3681,6 +3811,10 @@ async function loadPlan(preserveView = true) {
   // опроса просто возьмёт новую метку у сервера (см. pollChanges).
   lastServerTime = null;
   state.elements = data.elements;
+  // Файл выводится ИЗ ДАННЫХ, а не выбирается: экспорт, импорт истории и
+  // опрос /changes по-прежнему работают по чертежу, и им нужно имя того,
+  // что реально показано.
+  state.sourceFile = data.elements.length ? data.elements[0].source_file : state.sourceFile;
   state.statusColors = data.status_colors;
   state.statusOrder = data.status_order;
   state.statusLabels = data.status_labels;
@@ -4971,6 +5105,22 @@ document.addEventListener("keydown", (e) => {
   closeCtxMenu();
   document.getElementById("settings-menu").classList.remove("open");
 });
+
+// Открытие переключателя объектов — тем же приёмом, что и меню «Действия»:
+// position: fixed и координаты в JS, иначе поповер обрезается
+// overflow-y: hidden тулбара (уже было багом «меню открывается под схемой»).
+document.getElementById("btn-object-switch").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = objectSwitchMenu;
+  const willOpen = !menu.classList.contains("open");
+  if (willOpen) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    menu.style.left = Math.min(rect.left, window.innerWidth - 320) + "px";
+    menu.style.top = (rect.bottom + 6) + "px";
+  }
+  menu.classList.toggle("open");
+});
+document.addEventListener("click", () => objectSwitchMenu.classList.remove("open"));
 
 // ==================== МЕНЮ "НАСТРОЙКИ" ====================
 const settingsMenu = document.getElementById("settings-menu");
@@ -10952,6 +11102,11 @@ async function bootApp() {
     // развёрнутый сервер)
   }
   initImportTemplates();  // без await — формы загрузки открываются не сразу
+  // Этап B: сначала дерево проектов/объектов — оно определяет, ЧТО грузить.
+  // loadSourceFiles остаётся: список файлов нужен форме «Версии чертежа
+  // объекта» и загрузке чертежа, но выбором показа он больше не управляет —
+  // выбор делает объект.
+  await loadProjectsTree();
   await loadSourceFiles();
   await loadPlan(false); // первая загрузка — вписать схему целиком
   startPolling();        // совместная работа: подхватывать чужие правки
