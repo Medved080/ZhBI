@@ -584,6 +584,21 @@
      Docs/backlog.md) — модалка становится flex-колонкой на всю
      max-height, .modal сам больше не скроллится (overflow:hidden),
      скролл только у .modal-sticky-scroll между шапкой и подвалом. */
+  .bulk-edit-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .bulk-edit-status { font-size: 12px; color: var(--color-text-muted); margin-top: 6px; }
+  .bulk-edit-fields { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .bulk-edit-fields label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+    border: 1px solid var(--color-border); border-radius: 12px; padding: 2px 9px; cursor: pointer; }
+  #bulk-edit-backdrop .modal-sticky-scroll { min-height: 120px; }
+  .bulk-edit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .bulk-edit-table th { position: sticky; top: 0; background: var(--color-surface); text-align: left;
+    padding: 5px 6px; border-bottom: 1px solid var(--color-border); z-index: 1; }
+  .bulk-edit-table td { padding: 4px 6px; border-bottom: 1px solid var(--color-border-soft, rgba(128,128,128,.18)); }
+  .bulk-edit-table td.was { color: var(--color-text-muted); }
+  .bulk-edit-table td.now { font-weight: 600; }
+  .bulk-edit-warn { color: var(--color-warning, #b45309); font-size: 11px; }
+  .bulk-edit-rejected { margin-top: 12px; font-size: 12px; }
+  .bulk-edit-rejected div { color: var(--color-danger); padding: 2px 0; }
   .modal.modal-sticky { display: flex; flex-direction: column; overflow: hidden; padding: 22px 0; }
   .modal-sticky-head, .modal-sticky-foot { flex: 0 0 auto; padding: 0 24px; }
   .modal-sticky-head h2 { margin-bottom: 14px; }
@@ -1033,6 +1048,7 @@
             <button id="menu-status-restore" class="admin-only">Восстановить статусы из выгрузки</button>
             <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
             <button id="menu-schedule-import" class="admin-only">Импорт графика MS Project из XLS</button>
+            <button id="menu-bulk-edit" class="admin-only">Массовая правка через Excel…</button>
             <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
             <button id="menu-backups" class="admin-only">Резервные копии…</button>
             <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
@@ -1606,6 +1622,56 @@
     <div class="actions">
       <button class="btn btn-secondary" id="settings-io-close">Закрыть</button>
       <button class="btn btn-primary" id="settings-io-import">Загрузить настройки</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="bulk-edit-backdrop">
+  <div class="modal modal-sticky" style="max-width:1100px; width:94vw; max-height:88vh;">
+    <div class="modal-sticky-head">
+      <h2>Массовая правка реквизитов через Excel</h2>
+      <div class="bulk-edit-controls">
+        <button class="btn btn-secondary" id="bulk-edit-export">Выгрузить в Excel</button>
+        <input type="file" id="bulk-edit-file" accept=".xlsx"/>
+        <button class="btn btn-secondary" id="bulk-edit-analyze">Сверить с базой</button>
+      </div>
+      <div id="bulk-edit-status" class="bulk-edit-status"></div>
+      <!-- Переключатели по полю: правок в файле могут быть сотни, и снимать
+           флажки по одному было бы издевательством. Каждый чип показывает
+           число правок этого поля и включает/выключает их разом. -->
+      <div id="bulk-edit-fields" class="bulk-edit-fields"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <!-- Пояснение и требования к файлу читают один раз, поэтому они здесь,
+           а не в закреплённой шапке: на невысоком окне шапка съедала всю
+           высоту и таблица расхождений схлопывалась в ноль — форма выглядела
+           сломанной («расхождений 4» и пустота). -->
+      <div id="bulk-edit-intro">
+        <p class="hint-text" style="margin-top:0;">
+          Выгрузите снимок реквизитов всех элементов всех объектов, поправьте в Excel и
+          загрузите обратно. Система покажет расхождения — применится только то, что
+          вы отметите флажками. История статусов в файл не входит: статус и фактическая
+          дата меняются диалогом смены статуса, со своей датой и автором.
+        </p>
+        <div class="import-template" data-template="bulk_edit"></div>
+      </div>
+      <table class="bulk-edit-table" id="bulk-edit-table">
+        <thead>
+          <tr>
+            <th style="width:28px;"><input type="checkbox" id="bulk-edit-all" title="Отметить все"/></th>
+            <th>Элемент</th><th>Поле</th><th>Было</th><th>Станет</th>
+          </tr>
+        </thead>
+        <tbody id="bulk-edit-rows"></tbody>
+      </table>
+      <div id="bulk-edit-rejected" class="bulk-edit-rejected"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="bulk-edit-summary" class="bulk-edit-status"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="bulk-edit-cancel">Закрыть</button>
+        <button class="btn btn-primary" id="bulk-edit-apply" disabled>Применить отмеченное</button>
+      </div>
     </div>
   </div>
 </div>

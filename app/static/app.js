@@ -10902,3 +10902,208 @@ async function bootApp() {
 }
 
 bootApp();
+
+// ==================== МАССОВАЯ ПРАВКА РЕКВИЗИТОВ ЧЕРЕЗ EXCEL ====================
+// Круг: выгрузить снимок -> поправить в Excel -> загрузить -> отметить
+// флажками, что применять (см. app/element_bulk_edit.py).
+//
+// Список расхождений держим В ПАМЯТИ между сверкой и применением и
+// отправляем на сервер именно его, а не файл: перечитывание файла между
+// показом и применением означало бы, что применили не то, что показали.
+
+const bulkEditBackdrop = document.getElementById("bulk-edit-backdrop");
+const bulkEditFile = document.getElementById("bulk-edit-file");
+const bulkEditRows = document.getElementById("bulk-edit-rows");
+const bulkEditApplyBtn = document.getElementById("bulk-edit-apply");
+// Порог отрисовки. Не «тихое обрезание»: если правок больше, об этом
+// сказано в сводке прямым текстом, а применяются всё равно ВСЕ отмеченные —
+// ограничена только таблица на экране, не набор данных.
+const BULK_EDIT_RENDER_LIMIT = 800;
+
+let bulkEditChanges = [];   // то, что вернул analyze
+let bulkEditChecked = null; // Set индексов отмеченных
+
+function setBulkEditStatus(text, isError) {
+  const el = document.getElementById("bulk-edit-status");
+  el.textContent = text;
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+function bulkEditValueText(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  return String(v);
+}
+
+function renderBulkEditFieldChips() {
+  const box = document.getElementById("bulk-edit-fields");
+  box.innerHTML = "";
+  const counts = new Map();
+  bulkEditChanges.forEach((c) => counts.set(c.field_label, (counts.get(c.field_label) || 0) + 1));
+  if (!counts.size) return;
+  for (const [label, n] of counts) {
+    const wrap = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = bulkEditChanges.some((c, i) => c.field_label === label && bulkEditChecked.has(i));
+    cb.addEventListener("change", () => {
+      bulkEditChanges.forEach((c, i) => {
+        if (c.field_label !== label) return;
+        if (cb.checked) bulkEditChecked.add(i); else bulkEditChecked.delete(i);
+      });
+      renderBulkEditTable();
+    });
+    wrap.appendChild(cb);
+    wrap.appendChild(document.createTextNode(`${label} (${n})`));
+    box.appendChild(wrap);
+  }
+}
+
+function renderBulkEditTable() {
+  // Пояснение и требования к файлу нужны ДО первой сверки; когда результат
+  // получен, главное на экране — расхождения, а инструкция только отодвигает
+  // их вниз (на невысоком окне — за пределы видимой части).
+  const intro = document.getElementById("bulk-edit-intro");
+  if (intro) intro.style.display = bulkEditChanges.length ? "none" : "";
+  bulkEditRows.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  const shown = Math.min(bulkEditChanges.length, BULK_EDIT_RENDER_LIMIT);
+  for (let i = 0; i < shown; i++) {
+    const c = bulkEditChanges[i];
+    const tr = document.createElement("tr");
+    const who = `${escapeHtml(c.element_type || "")} ${escapeHtml(c.mark || "")}`.trim() || `#${c.element_id}`;
+    tr.innerHTML = `
+      <td><input type="checkbox" data-idx="${i}" ${bulkEditChecked.has(i) ? "checked" : ""}/></td>
+      <td>${who}<div class="bulk-edit-status">стр. ${c.line}</div></td>
+      <td>${escapeHtml(c.field_label)}${c.warning ? `<div class="bulk-edit-warn">⚠ ${escapeHtml(c.warning)}</div>` : ""}</td>
+      <td class="was">${escapeHtml(bulkEditValueText(c.was))}</td>
+      <td class="now">${escapeHtml(bulkEditValueText(c.now))}</td>`;
+    frag.appendChild(tr);
+  }
+  bulkEditRows.appendChild(frag);
+  bulkEditRows.querySelectorAll("input[data-idx]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const i = Number(cb.dataset.idx);
+      if (cb.checked) bulkEditChecked.add(i); else bulkEditChecked.delete(i);
+      updateBulkEditSummary();
+      renderBulkEditFieldChips();
+    });
+  });
+  updateBulkEditSummary(shown);
+  renderBulkEditFieldChips();
+}
+
+function updateBulkEditSummary(shown) {
+  const el = document.getElementById("bulk-edit-summary");
+  const total = bulkEditChanges.length;
+  const n = bulkEditChecked ? bulkEditChecked.size : 0;
+  let text = `Отмечено ${n} из ${total} расхождений`;
+  if (shown !== undefined && shown < total) {
+    text += `. В таблице показаны первые ${shown} — применятся все отмеченные, включая непоказанные`;
+  }
+  el.textContent = total ? text : "";
+  bulkEditApplyBtn.disabled = n === 0;
+}
+
+document.getElementById("menu-bulk-edit").addEventListener("click", () => {
+  bulkEditFile.value = "";
+  bulkEditChanges = [];
+  bulkEditChecked = new Set();
+  bulkEditRows.innerHTML = "";
+  document.getElementById("bulk-edit-rejected").innerHTML = "";
+  document.getElementById("bulk-edit-fields").innerHTML = "";
+  document.getElementById("bulk-edit-intro").style.display = "";
+  setBulkEditStatus("", false);
+  updateBulkEditSummary();
+  bulkEditBackdrop.classList.add("open");
+});
+
+document.getElementById("bulk-edit-cancel").addEventListener("click", () => {
+  bulkEditBackdrop.classList.remove("open");
+});
+
+document.getElementById("bulk-edit-export").addEventListener("click", async () => {
+  setBulkEditStatus("Готовим файл…", false);
+  try {
+    const res = await fetch("/elements/bulk-edit/export");
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Ошибка ${res.status}`);
+    // Скачивание через blob, как у экспорта XLS: имя файла приходит от
+    // сервера в Content-Disposition, но браузер отдаёт его только так.
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = /filename="([^"]+)"/.exec(cd);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : "zhbi_elements.xlsx";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    setBulkEditStatus("Файл выгружен. Поправьте его в Excel и загрузите обратно.", false);
+  } catch (e) {
+    setBulkEditStatus(`Не удалось выгрузить: ${e.message}`, true);
+  }
+});
+
+document.getElementById("bulk-edit-analyze").addEventListener("click", async () => {
+  const file = bulkEditFile.files[0];
+  if (!file) { setBulkEditStatus("Сначала выберите файл .xlsx", true); return; }
+  setBulkEditStatus("Сверяем файл с базой…", false);
+  bulkEditRows.innerHTML = "";
+  document.getElementById("bulk-edit-rejected").innerHTML = "";
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const res = await fetch("/elements/bulk-edit/analyze", { method: "POST", body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `Ошибка ${res.status}`);
+    bulkEditChanges = data.changes || [];
+    // По умолчанию отмечено ВСЁ: пользователь правил файл осознанно, и
+    // заставлять его заново отмечать каждую свою же правку — работа впустую.
+    bulkEditChecked = new Set(bulkEditChanges.map((_, i) => i));
+    setBulkEditStatus(
+      `Прочитано строк: ${data.rows_read}. Расхождений: ${bulkEditChanges.length} ` +
+      `у ${data.elements_touched} элементов.`, false);
+    const rej = document.getElementById("bulk-edit-rejected");
+    if ((data.rejected || []).length) {
+      rej.innerHTML = `<b>Не может быть применено (${data.rejected.length}):</b>`;
+      data.rejected.forEach((r) => {
+        const d = document.createElement("div");
+        d.textContent = `стр. ${r.line}: ${r.reason}`;
+        rej.appendChild(d);
+      });
+    }
+    renderBulkEditTable();
+  } catch (e) {
+    setBulkEditStatus(`Сверка не удалась: ${e.message}`, true);
+  }
+});
+
+bulkEditApplyBtn.addEventListener("click", async () => {
+  const selected = bulkEditChanges.filter((_, i) => bulkEditChecked.has(i));
+  if (!selected.length) return;
+  if (!confirm(`Применить ${selected.length} изменений? Действие затрагивает реквизиты элементов.`)) return;
+  bulkEditApplyBtn.disabled = true;
+  setBulkEditStatus("Применяем…", false);
+  try {
+    const data = await api("/elements/bulk-edit/apply", {
+      method: "POST", body: JSON.stringify({ changes: selected }),
+    });
+    let text = `Обновлено элементов: ${data.elements_updated}.`;
+    if ((data.skipped || []).length) text += ` Пропущено: ${data.skipped.length}.`;
+    setBulkEditStatus(text, false);
+    showToast(text, "info");
+    bulkEditChanges = [];
+    bulkEditChecked = new Set();
+    bulkEditRows.innerHTML = "";
+    document.getElementById("bulk-edit-fields").innerHTML = "";
+    updateBulkEditSummary();
+    if (state.sourceFile) await loadPlan(true);
+  } catch (e) {
+    setBulkEditStatus(`Не удалось применить: ${e.message}`, true);
+    bulkEditApplyBtn.disabled = false;
+  }
+});
+
+document.getElementById("bulk-edit-all").addEventListener("change", (e) => {
+  if (!bulkEditChanges.length) return;
+  bulkEditChecked = e.target.checked ? new Set(bulkEditChanges.map((_, i) => i)) : new Set();
+  renderBulkEditTable();
+});
