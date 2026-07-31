@@ -391,6 +391,47 @@ def _migrate_elements_drop_batch_id(conn: sqlite3.Connection, changes: list) -> 
     changes.append("снята колонка elements.batch_id (висячий внешний ключ на удалённую таблицу batches)")
 
 
+def _reconcile_contract_from_history(conn: sqlite3.Connection, changes: list) -> None:
+    """Переносит контракт из истории в элемент ТАМ, ГДЕ У ЭЛЕМЕНТА ЕГО НЕТ —
+    разовая сверка на переходе к новой модели контракта (2026-08-01).
+
+    Зачем. Пока elements.contract_id был кэшем, значение можно было
+    восстановить пересчётом из истории в любой момент. После перехода
+    пересчёта больше нет: что стоит в элементе, то и есть. Если на какой-то
+    базе кэш отстал (в элементе пусто, а в последней записи истории
+    контракт есть), старый код восстановил бы его при ближайшей смене
+    статуса, а новый — уже никогда. Эта функция закрывает разрыв ровно один
+    раз, в момент перехода.
+
+    ТОЛЬКО заполняет пустое, никогда не перезаписывает непустое. Обратное
+    (материализовать кэш для всех подряд) выглядит стройнее, но уничтожило
+    бы привязки, проставленные в обход истории — а такие в данных есть
+    (на боевой базе их оказалось две, см. Docs/backlog.md 2026-08-01).
+    Заполнение пустого не может отнять ничего.
+
+    Элементы в статусе «Запланирован» пропускаются: у них контракт обязан
+    быть пуст, этим занимается _enforce_planned_has_no_contract ниже.
+    """
+    rows = conn.execute(
+        "SELECT e.id, ("
+        "  SELECT h.contract_id FROM status_history h WHERE h.element_id = e.id "
+        "  ORDER BY h.changed_at DESC, h.id DESC LIMIT 1"
+        ") AS hist_contract_id "
+        "FROM elements e "
+        "WHERE e.contract_id IS NULL AND e.current_status <> 'planned'"
+    ).fetchall()
+    restored = [(r["hist_contract_id"], r["id"]) for r in rows if r["hist_contract_id"] is not None]
+    if not restored:
+        return
+    conn.executemany(
+        "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
+        restored,
+    )
+    changes.append(
+        f"контракт перенесён из истории в элемент (кэш отставал): {len(restored)}"
+    )
+
+
 def _enforce_planned_has_no_contract(conn: sqlite3.Connection, changes: list) -> None:
     """Снимает контракт с элементов в статусе «Запланирован» — инвариант
     новой модели контракта (2026-08-01, см. app/contracts.py).
@@ -945,6 +986,10 @@ def init_db() -> list:
         # Не часть одноразовой миграции: чинит частичное состояние, если
         # миграция зон отработала промежуточной версией кода (см. docstring).
         _heal_zone_stance_levels(conn, changes)
+        # Порядок обязателен: сначала подобрать отставший кэш, потом снять
+        # контракт с «Запланированных» — иначе сверка вернула бы им то, что
+        # инвариант обязан убрать.
+        _reconcile_contract_from_history(conn, changes)
         _enforce_planned_has_no_contract(conn, changes)
         _normalize_element_type_vocabulary(conn, changes)
         _seed_reference_data(conn)
