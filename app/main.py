@@ -57,6 +57,7 @@ from app.element_bulk_edit import (
     apply_changes as apply_bulk_edit,
     build_export_workbook,
 )
+from app import status_bulk_edit
 from app.element_sync import summary_for_log
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
@@ -2026,39 +2027,60 @@ def update_element_fields(
     return result
 
 
+# Режим формы массовой правки: реквизиты элемента или история статусов.
+# Один набор эндпоинтов на оба, а не два параллельных: структуры ответа
+# (columns/elements/changes/rejected) совпадают, и табличный экран
+# подтверждения переиспользуется целиком.
+_BULK_MODES = {"fields", "statuses"}
+
+
+def _check_bulk_mode(mode: str) -> str:
+    if mode not in _BULK_MODES:
+        raise HTTPException(status_code=400, detail=f"Неизвестный режим «{mode}»")
+    return mode
+
+
 @app.get("/elements/bulk-edit/export")
-def bulk_edit_export(admin: sqlite3.Row = Depends(require_admin)):
+def bulk_edit_export(mode: str = Query("fields"), admin: sqlite3.Row = Depends(require_admin)):
     """Снимок реквизитов всех элементов всех объектов ОДНИМ файлом — для
     правки в Excel и обратной загрузки (см. app/element_bulk_edit.py).
 
     Только admin, как и вся группа «Обмен данными»: файл содержит выгрузку
     всей базы элементов.
     """
+    _check_bulk_mode(mode)
     conn = get_connection()
     try:
-        wb = build_export_workbook(conn)
+        wb = (status_bulk_edit.build_status_workbook(conn) if mode == "statuses"
+              else build_export_workbook(conn))
     finally:
         conn.close()
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    activity.log("element_bulk_export", user=admin, entity_type="element")
+    activity.log("element_bulk_export", user=admin, entity_type="element",
+                 details={"mode": mode})
+    name = "zhbi_statuses" if mode == "statuses" else "zhbi_elements"
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="zhbi_elements_{stamp}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{name}_{stamp}.xlsx"'},
     )
 
 
 @app.post("/elements/bulk-edit/analyze")
-def bulk_edit_analyze(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_admin)):
+def bulk_edit_analyze(file: UploadFile = File(...), mode: str = Form("fields"),
+                      admin: sqlite3.Row = Depends(require_admin)):
     """Сверяет загруженный файл с базой и возвращает список расхождений.
     НИЧЕГО НЕ ПИШЕТ — применение отдельным вызовом, после того как
     пользователь отметил флажками, что применять."""
+    _check_bulk_mode(mode)
     payload = read_upload_limited(file.file)
     conn = get_connection()
     try:
+        if mode == "statuses":
+            return status_bulk_edit.analyze(conn, payload)
         return analyze_bulk_edit(conn, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2074,6 +2096,7 @@ class BulkEditApplyIn(BaseModel):
     # Дата статуса «Контрактация» для элементов, которым контракт назначают
     # из «Запланирован»: такая правка — событие, а не смена реквизита.
     contracting_date: Optional[str] = None
+    mode: str = "fields"
 
 
 @app.post("/elements/bulk-edit/apply")
@@ -2081,8 +2104,13 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
     """Применяет отмеченные изменения."""
     if not body.changes:
         raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
+    _check_bulk_mode(body.mode)
     conn = get_connection()
     try:
+        if body.mode == "statuses":
+            return status_bulk_edit.apply_changes(
+                conn, body.changes, format_display_name(admin), admin["id"]
+            )
         stamp = None
         if body.contracting_date:
             try:

@@ -619,6 +619,7 @@
   .bulk-edit-fields label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
     border: 1px solid var(--color-border); border-radius: 12px; padding: 2px 9px; cursor: pointer; }
   #bulk-edit-backdrop .modal-sticky-scroll { min-height: 120px; }
+  #bulk-edit-mode { margin-bottom: 10px; align-self: flex-start; }
   .bulk-edit-table-wrap { overflow-x: auto; }
   .bulk-edit-table td.col-new, .bulk-edit-table th.col-new { background: rgba(59,130,246,.08); }
   .bulk-edit-table td.changed { font-weight: 600; white-space: nowrap; }
@@ -1670,7 +1671,15 @@
 <div class="modal-backdrop" id="bulk-edit-backdrop">
   <div class="modal modal-sticky" style="max-width:1100px; width:94vw; max-height:88vh;">
     <div class="modal-sticky-head">
-      <h2>Массовая правка реквизитов через Excel</h2>
+      <h2>Массовая правка через Excel</h2>
+      <!-- Переключатель режима (живой запрос 2026-08-01). Тот же сегментный
+           контрол, что у 2D/3D в тулбаре, — приём в интерфейсе уже есть.
+           Шаги, экран расхождений и применение общие: различаются только
+           состав колонок и правила проверки, и то на сервере. -->
+      <div class="view-mode-switch" id="bulk-edit-mode" role="group" aria-label="Режим правки">
+        <button type="button" class="view-mode-btn active" data-bulk-mode="fields">Реквизиты</button>
+        <button type="button" class="view-mode-btn" data-bulk-mode="statuses">История статусов</button>
+      </div>
       <!-- Два раздельных блока (живой запрос 2026-08-01): выгрузка и загрузка
            это разные действия в разное время, и в одну строку они читались
            как один сценарий из трёх кнопок подряд. -->
@@ -1713,11 +1722,18 @@
            высоту и таблица расхождений схлопывалась в ноль — форма выглядела
            сломанной («расхождений 4» и пустота). -->
       <div id="bulk-edit-intro">
-        <p class="hint-text" style="margin-top:0;">
+        <p class="hint-text" style="margin-top:0;" data-mode-intro="fields">
           Выгрузите снимок реквизитов всех элементов всех объектов, поправьте в Excel и
           загрузите обратно. Система покажет расхождения — применится только то, что
-          вы отметите флажками. История статусов в файл не входит: статус и фактическая
-          дата меняются диалогом смены статуса, со своей датой и автором.
+          вы отметите флажками. История статусов в этот файл не входит — для неё
+          переключитесь в режим «История статусов».
+        </p>
+        <p class="hint-text" style="margin-top:0; display:none;" data-mode-intro="statuses">
+          Лист «Статусы» — строка на элемент, колонка на каждый статус, в ячейке дата.
+          Пустая ячейка означает «не трогать», а не «удалить запись». Порядок статусов
+          проверяется: если дата более позднего статуса раньше предыдущего, строка
+          отклоняется и не грузится. Другие статусы система сама не меняет — применяется
+          ровно то, что вы отметили.
         </p>
         <div class="import-template" data-template="bulk_edit"></div>
       </div>

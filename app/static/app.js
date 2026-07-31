@@ -10955,6 +10955,10 @@ const bulkEditApplyBtn = document.getElementById("bulk-edit-apply");
 // ограничена только таблица на экране, не набор данных.
 const BULK_EDIT_RENDER_LIMIT = 800;
 
+// Режим формы: реквизиты элемента или история статусов. Различаются только
+// состав колонок и правила проверки — и то, и другое на сервере; шаги,
+// экран расхождений и применение общие.
+let bulkEditMode = "fields";
 let bulkEditChanges = [];   // то, что вернул analyze
 let bulkEditColumns = [];   // описание колонок — то же, что в XLS
 let bulkEditElements = []; // строки затронутых элементов (значения как в XLS)
@@ -11137,7 +11141,7 @@ function updateBulkEditSummary(shown, totalRows) {
   bulkEditApplyBtn.disabled = n === 0;
 }
 
-document.getElementById("menu-bulk-edit").addEventListener("click", () => {
+function resetBulkEdit() {
   bulkEditFile.value = "";
   bulkEditChanges = [];
   bulkEditChecked = new Set();
@@ -11145,9 +11149,43 @@ document.getElementById("menu-bulk-edit").addEventListener("click", () => {
   document.getElementById("bulk-edit-rejected").innerHTML = "";
   document.getElementById("bulk-edit-fields").innerHTML = "";
   document.getElementById("bulk-edit-intro").style.display = "";
+  document.getElementById("bulk-edit-contracting-box").style.display = "none";
   setBulkEditStatus("", false);
   updateBulkEditSummary();
+}
+
+document.getElementById("menu-bulk-edit").addEventListener("click", () => {
+  setBulkEditMode("fields");
   bulkEditBackdrop.classList.add("open");
+});
+
+function setBulkEditMode(mode) {
+  bulkEditMode = mode;
+  document.querySelectorAll("#bulk-edit-mode [data-bulk-mode]").forEach((b) =>
+    b.classList.toggle("active", b.dataset.bulkMode === mode));
+  document.querySelectorAll("[data-mode-intro]").forEach((el) => {
+    el.style.display = el.dataset.modeIntro === mode ? "" : "none";
+  });
+  // Требования к файлу описаны пока только для режима реквизитов; в режиме
+  // статусов формат объяснён абзацем выше, и пустой раскрывающийся блок
+  // выглядел бы поломкой.
+  const tpl = document.querySelector("#bulk-edit-intro .import-template");
+  if (tpl) tpl.style.display = mode === "fields" ? "" : "none";
+  // Полный сброс: расхождения одного режима нельзя применять в другом —
+  // у них разный смысл полей (реквизит против даты статуса).
+  bulkEditChanges = [];
+  bulkEditColumns = [];
+  bulkEditElements = [];
+  bulkEditChecked = new Set();
+  document.getElementById("bulk-edit-table").innerHTML = "";
+  document.getElementById("bulk-edit-fields").innerHTML = "";
+  document.getElementById("bulk-edit-rejected").innerHTML = "";
+  document.getElementById("bulk-edit-intro").style.display = "";
+  resetBulkEdit();
+}
+
+document.querySelectorAll("#bulk-edit-mode [data-bulk-mode]").forEach((btn) => {
+  btn.addEventListener("click", () => setBulkEditMode(btn.dataset.bulkMode));
 });
 
 document.getElementById("bulk-edit-cancel").addEventListener("click", () => {
@@ -11157,7 +11195,7 @@ document.getElementById("bulk-edit-cancel").addEventListener("click", () => {
 document.getElementById("bulk-edit-export").addEventListener("click", async () => {
   setBulkEditStatus("Готовим файл…", false);
   try {
-    const res = await fetch("/elements/bulk-edit/export");
+    const res = await fetch(`/elements/bulk-edit/export?mode=${bulkEditMode}`);
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Ошибка ${res.status}`);
     // Скачивание через blob, как у экспорта XLS: имя файла приходит от
     // сервера в Content-Disposition, но браузер отдаёт его только так.
@@ -11183,6 +11221,7 @@ document.getElementById("bulk-edit-analyze").addEventListener("click", async () 
   document.getElementById("bulk-edit-rejected").innerHTML = "";
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("mode", bulkEditMode);
   try {
     const res = await fetch("/elements/bulk-edit/analyze", { method: "POST", body: formData });
     const data = await res.json();
@@ -11236,9 +11275,13 @@ bulkEditApplyBtn.addEventListener("click", async () => {
   try {
     const data = await api("/elements/bulk-edit/apply", {
       method: "POST",
-      body: JSON.stringify({ changes: selected, contracting_date: датаПоле.value || null }),
+      body: JSON.stringify({ changes: selected, contracting_date: датаПоле.value || null,
+                             mode: bulkEditMode }),
     });
     let text = `Обновлено элементов: ${data.elements_updated}.`;
+    if (data.records_inserted !== undefined) {
+      text += ` Записей истории добавлено: ${data.records_inserted}, дат исправлено: ${data.records_updated}.`;
+    }
     if ((data.skipped || []).length) text += ` Пропущено: ${data.skipped.length}.`;
     setBulkEditStatus(text, false);
     showToast(text, "info");
