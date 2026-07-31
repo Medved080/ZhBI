@@ -207,7 +207,13 @@ class StatusSummaryEntry(BaseModel):
 
 
 class PlanSelectionItem(BaseModel):
-    source_file: str
+    # source_file необязателен с этапа B (2026-08-01): единица показа —
+    # ОБЪЕКТ, клиент присылает object_id, а актуальный чертёж выводит сервер
+    # (app/db.object_source_file). Поле оставлено ради совместимости и ради
+    # одного оставшегося сценария — показать КОНКРЕТНУЮ версию чертежа
+    # объекта в форме «Версии чертежа».
+    source_file: Optional[str] = None
+    object_id: Optional[int] = None
     layers: Optional[list[str]] = None  # None — все слои файла
 
 

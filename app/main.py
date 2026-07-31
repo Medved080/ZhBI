@@ -38,7 +38,14 @@ from app.contracts import (
 from app.contracts import router as contracts_router
 from app.counterparties import router as counterparties_router
 from app import zone_recalc
-from app.db import DB_PATH, get_connection, init_db, visible_elements_clause
+from app.db import (
+    DB_PATH,
+    get_connection,
+    init_db,
+    object_source_file,
+    projects_tree,
+    visible_elements_clause,
+)
 from app.dxf_import import (
     DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, forget_pending,
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
@@ -2128,6 +2135,59 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
         conn.close()
 
 
+def _resolve_selection_item(conn, item):
+    """Подставляет актуальный чертёж объекта, если клиент прислал object_id.
+
+    Точка перевода одна на весь показ схемы (этап B). Если пришло и то и
+    другое — побеждает явный source_file: это форма «Версии чертежа
+    объекта», где смысл как раз в том, чтобы посмотреть не актуальную
+    версию."""
+    if item.source_file or item.object_id is None:
+        return item
+    try:
+        return item.model_copy(update={"source_file": object_source_file(conn, item.object_id)})
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/projects-tree")
+def get_projects_tree(user: sqlite3.Row = Depends(get_current_user)):
+    """Проекты со своими объектами — источник для переключателя в тулбаре
+    (этап B). Доступно всем ролям: это навигация, а не правка.
+
+    Разграничение доступа появится в этапе C и вырежет отсюда недоступные
+    пользователю объекты — здесь для этого одно место, а не 22 эндпоинта.
+    """
+    conn = get_connection()
+    try:
+        return {"projects": projects_tree(conn),
+                "last_object_id": user["last_object_id"] if "last_object_id" in user.keys() else None}
+    finally:
+        conn.close()
+
+
+class LastObjectIn(BaseModel):
+    object_id: Optional[int] = None
+
+
+@app.put("/me/last-object")
+def set_last_object(body: LastObjectIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Запоминает выбранный объект ЗА ПОЛЬЗОВАТЕЛЕМ, а не в localStorage:
+    человек садится за другой компьютер и должен попасть туда же, где
+    работал."""
+    conn = get_connection()
+    try:
+        if body.object_id is not None:
+            exists = conn.execute("SELECT 1 FROM objects WHERE id = ?", (body.object_id,)).fetchone()
+            if exists is None:
+                raise HTTPException(status_code=404, detail="Объект не найден")
+        conn.execute("UPDATE users SET last_object_id = ? WHERE id = ?", (body.object_id, user["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"last_object_id": body.object_id}
+
+
 @app.get("/objects", response_model=list[ObjectOut])
 def list_objects(user: sqlite3.Row = Depends(get_current_user)):
     """Объекты со счётчиками элементов. Доступно всем ролям (только чтение) —
@@ -2287,6 +2347,10 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         axis_rows_all = []
         zones = []
         for item in body.selection:
+            # Этап B: клиент выбирает ОБЪЕКТ, файл выводит сервер. Явно
+            # переданный source_file уважается — им пользуется форма
+            # «Версии чертежа объекта», чтобы показать НЕ актуальную версию.
+            item = _resolve_selection_item(conn, item)
             # item.layers может быть: None ("все слои файла"), непустым
             # списком (конкретные слои) или ПУСТЫМ списком (пользователь
             # снял все галочки — ни одного элемента, но оси/зоны файла

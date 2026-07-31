@@ -916,6 +916,73 @@ def visible_elements_clause(alias: str = "") -> str:
     return f"({prefix}is_current = 1)"
 
 
+def object_source_file(conn: sqlite3.Connection, object_id: int) -> str:
+    """Актуальный чертёж объекта. Точка перевода «объект -> файл» (этап B,
+    2026-08-01).
+
+    С этапа B единица показа — ОБЪЕКТ: клиент присылает object_id, а
+    source_file выводит сервер. Переписывать под object_id запросы всех 22
+    эндпоинтов не понадобилось и не нужно: source_file остался тем, чем и
+    был — именем файла в строке элемента. Изменилось только то, КТО его
+    выбирает. Перевод в одном месте, а не в каждом эндпоинте, — по той же
+    причине, что и visible_elements_clause: разъехавшееся правило выбора
+    чертежа ловится потом только живым репортом.
+    """
+    row = conn.execute(
+        "SELECT source_file FROM object_drawings WHERE object_id = ? AND is_current = 1",
+        (object_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"У объекта #{object_id} нет актуального чертежа")
+    return row["source_file"]
+
+
+def projects_tree(conn: sqlite3.Connection) -> list:
+    """Проекты со своими объектами — для переключателя в тулбаре.
+
+    Счётчик элементов здесь же: пустой объект в списке ничем не отличался бы
+    от загруженного, а переключиться на него и увидеть чистый лист — самый
+    неприятный способ это узнать.
+    """
+    counts = {
+        r["object_id"]: r["n"]
+        for r in conn.execute(
+            "SELECT object_id, COUNT(*) AS n FROM elements "
+            f"WHERE object_id IS NOT NULL AND {visible_elements_clause('')} GROUP BY object_id"
+        )
+    }
+    drawings = {
+        r["object_id"]: r["source_file"]
+        for r in conn.execute(
+            "SELECT object_id, source_file FROM object_drawings WHERE is_current = 1"
+        )
+    }
+    tree = []
+    for proj in conn.execute("SELECT id, name, address, description FROM projects ORDER BY name"):
+        objects = [
+            {"id": o["id"], "name": o["name"], "address": o["address"],
+             "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
+            for o in conn.execute(
+                "SELECT id, name, address FROM objects WHERE project_id = ? ORDER BY name",
+                (proj["id"],),
+            )
+        ]
+        tree.append({"id": proj["id"], "name": proj["name"], "address": proj["address"],
+                     "description": proj["description"], "objects": objects})
+    # Объекты без проекта не должны существовать (_bootstrap_default_project
+    # их подбирает), но если такой появится — он обязан быть ВИДЕН, иначе
+    # исчезнет вместе со всеми своими элементами.
+    orphans = [
+        {"id": o["id"], "name": o["name"], "address": o["address"],
+         "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
+        for o in conn.execute("SELECT id, name, address FROM objects WHERE project_id IS NULL ORDER BY name")
+    ]
+    if orphans:
+        tree.append({"id": None, "name": "Без проекта", "address": None,
+                     "description": "Объекты, не привязанные к проекту", "objects": orphans})
+    return tree
+
+
 def assign_missing_element_uids(conn: sqlite3.Connection, object_id: int) -> int:
     """Выдаёт element_uid всем элементам объекта, у которых его ещё нет.
     Отдельная функция (не внутренность бутстрапа) — тем же вызовом
