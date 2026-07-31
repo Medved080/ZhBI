@@ -584,13 +584,20 @@
      Docs/backlog.md) — модалка становится flex-колонкой на всю
      max-height, .modal сам больше не скроллится (overflow:hidden),
      скролл только у .modal-sticky-scroll между шапкой и подвалом. */
+  .bulk-edit-block { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .bulk-edit-block-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
   .bulk-edit-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .bulk-edit-status { font-size: 12px; color: var(--color-text-muted); margin-top: 6px; }
   .bulk-edit-fields { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .bulk-edit-fields label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
     border: 1px solid var(--color-border); border-radius: 12px; padding: 2px 9px; cursor: pointer; }
   #bulk-edit-backdrop .modal-sticky-scroll { min-height: 120px; }
-  .bulk-edit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .bulk-edit-table-wrap { overflow-x: auto; }
+  .bulk-edit-table td.col-new, .bulk-edit-table th.col-new { background: rgba(59,130,246,.08); }
+  .bulk-edit-table td.changed { font-weight: 600; white-space: nowrap; }
+  .bulk-edit-table td.was-changed { color: var(--color-text-muted); text-decoration: line-through; }
+  .bulk-edit-table th, .bulk-edit-table td { white-space: nowrap; }
+  .bulk-edit-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
   .bulk-edit-table th { position: sticky; top: 0; background: var(--color-surface); text-align: left;
     padding: 5px 6px; border-bottom: 1px solid var(--color-border); z-index: 1; }
   .bulk-edit-table td { padding: 4px 6px; border-bottom: 1px solid var(--color-border-soft, rgba(128,128,128,.18)); }
@@ -1630,12 +1637,33 @@
   <div class="modal modal-sticky" style="max-width:1100px; width:94vw; max-height:88vh;">
     <div class="modal-sticky-head">
       <h2>Массовая правка реквизитов через Excel</h2>
-      <div class="bulk-edit-controls">
-        <button class="btn btn-secondary" id="bulk-edit-export">Выгрузить в Excel</button>
-        <input type="file" id="bulk-edit-file" accept=".xlsx"/>
-        <button class="btn btn-secondary" id="bulk-edit-analyze">Сверить с базой</button>
+      <!-- Два раздельных блока (живой запрос 2026-08-01): выгрузка и загрузка
+           это разные действия в разное время, и в одну строку они читались
+           как один сценарий из трёх кнопок подряд. -->
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title">1. Выгрузить снимок</div>
+        <div class="bulk-edit-controls">
+          <button class="btn btn-secondary" id="bulk-edit-export">Выгрузить в Excel</button>
+          <span class="bulk-edit-status">Все элементы всех объектов одним файлом.</span>
+        </div>
       </div>
-      <div id="bulk-edit-status" class="bulk-edit-status"></div>
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title">2. Загрузить правленый файл</div>
+        <div class="bulk-edit-controls">
+          <input type="file" id="bulk-edit-file" accept=".xlsx"/>
+          <button class="btn btn-secondary" id="bulk-edit-analyze">Сверить с базой</button>
+        </div>
+        <div class="bulk-edit-controls" id="bulk-edit-contracting-box" style="display:none;">
+          <!-- Появляется только когда среди правок есть назначение контракта
+               запланированному элементу: это не правка реквизита, а событие
+               (статус «Контрактация»), и у события должна быть дата. -->
+          <label class="bulk-edit-status" for="bulk-edit-contracting-date">
+            Дата статуса «Контрактация» для запланированных элементов:
+          </label>
+          <input type="date" id="bulk-edit-contracting-date" style="flex:0 0 auto; width:auto;"/>
+        </div>
+        <div id="bulk-edit-status" class="bulk-edit-status"></div>
+      </div>
       <!-- Переключатели по полю: правок в файле могут быть сотни, и снимать
            флажки по одному было бы издевательством. Каждый чип показывает
            число правок этого поля и включает/выключает их разом. -->
@@ -1655,15 +1683,9 @@
         </p>
         <div class="import-template" data-template="bulk_edit"></div>
       </div>
-      <table class="bulk-edit-table" id="bulk-edit-table">
-        <thead>
-          <tr>
-            <th style="width:28px;"><input type="checkbox" id="bulk-edit-all" title="Отметить все"/></th>
-            <th>Элемент</th><th>Поле</th><th>Было</th><th>Станет</th>
-          </tr>
-        </thead>
-        <tbody id="bulk-edit-rows"></tbody>
-      </table>
+      <!-- Заголовок и строки строит JS: набор колонок зависит от того, какие
+           поля реально правились (у каждого такого появляется парная «станет»). -->
+      <div class="bulk-edit-table-wrap"><table class="bulk-edit-table" id="bulk-edit-table"></table></div>
       <div id="bulk-edit-rejected" class="bulk-edit-rejected"></div>
     </div>
     <div class="modal-sticky-foot">

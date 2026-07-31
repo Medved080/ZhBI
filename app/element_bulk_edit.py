@@ -35,7 +35,16 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from app import activity
-from app.contracts import build_contract_name, contract_line_warning
+from app.contracts import (
+    apply_status_change,
+    build_contract_name,
+    recompute_status_and_actual_date,
+    sync_element_contract,
+)
+# Приватное имя по месту объявления, но задача у него общая: не дать записи
+# «Запланирован» от импорта чертежа перекрыть событие, датированное задним
+# числом. Вторая реализация того же сдвига неминуемо разошлась бы с первой.
+from app.history_import import _shift_planned_before_first_event as shift_planned_before_first_event
 from app.element_fields import (
     DATE_FIELDS,
     EDITABLE_FIELDS,
@@ -141,6 +150,29 @@ def _element_rows(conn) -> list:
     ).fetchall()
 
 
+def display_values(row, contract_by_id: dict) -> dict:
+    """Значения одной строки по всем колонкам COLUMNS.
+
+    Одна функция на выгрузку в XLS и на экран подтверждения правок (живой
+    запрос 2026-08-01: «выводи элементы также как они выводятся при
+    сохранении во внешние XLS»). Своя сборка на экране разошлась бы с
+    файлом при первой же правке состава колонок — а именно их совпадение и
+    есть смысл требования.
+    """
+    contract = contract_by_id.get(row["contract_id"])
+    derived = {
+        "object_name": row["object_name"],
+        "contract_name": contract["name"] if contract else None,
+        "counterparty": contract["counterparty"] if contract else None,
+        "agreement": contract["agreement"] if contract else None,
+        "specification": contract["specification"] if contract else None,
+        "zone_zakhvatka": row["zone_zakhvatka"],
+        "zone_crane": row["zone_crane"],
+        "zone_stance": row["zone_stance"],
+    }
+    return {key: (derived[key] if key in derived else row[key]) for key, _, _ in COLUMNS}
+
+
 def build_export_workbook(conn) -> Workbook:
     """Снимок на текущий момент: лист данных + четыре листа справочников,
     с выпадающими списками в правимых колонках."""
@@ -162,21 +194,8 @@ def build_export_workbook(conn) -> Workbook:
 
     by_id = {c["id"]: c for c in contracts}
     for row in _element_rows(conn):
-        contract = by_id.get(row["contract_id"])
-        values = {
-            "object_name": row["object_name"],
-            "contract_name": contract["name"] if contract else None,
-            "counterparty": contract["counterparty"] if contract else None,
-            "agreement": contract["agreement"] if contract else None,
-            "specification": contract["specification"] if contract else None,
-            "zone_zakhvatka": row["zone_zakhvatka"],
-            "zone_crane": row["zone_crane"],
-            "zone_stance": row["zone_stance"],
-        }
-        ws.append([
-            values[key] if key in values else row[key]
-            for key, _, _ in COLUMNS
-        ])
+        values = display_values(row, by_id)
+        ws.append([values[key] for key, _, _ in COLUMNS])
 
     # ---- листы справочников ----
     ws_c = wb.create_sheet(SHEET_CONTRACTS)
@@ -300,11 +319,12 @@ def analyze(conn, file_bytes: bytes) -> dict:
     отдельные поля отдельных элементов, а не файл целиком.
     """
     parsed = _read_sheet(file_bytes)
-    contracts = {c["name"]: c for c in _contract_catalog(conn)}
-    elements = {
-        r["element_uid"]: r for r in conn.execute(
-            "SELECT * FROM elements WHERE is_current = 1 AND element_uid IS NOT NULL")
-    }
+    catalog = _contract_catalog(conn)
+    contracts = {c["name"]: c for c in catalog}
+    by_id = {c["id"]: c for c in catalog}
+    # Те же строки с теми же JOIN, что уходят в выгрузку: экран подтверждения
+    # обязан показывать элемент ровно так, как он выглядит в файле.
+    elements = {r["element_uid"]: r for r in _element_rows(conn) if r["element_uid"]}
 
     changes, rejected = [], []
     seen = set()
@@ -329,9 +349,20 @@ def analyze(conn, file_bytes: bytes) -> dict:
         changes.extend(item_changes)
         rejected.extend(item_rejected)
 
+    # Строки затронутых элементов — для табличного экрана подтверждения.
+    # Только затронутые: гнать все 9422 строки ради десятка правок значило бы
+    # переслать полтора мегабайта, чтобы показать десять ячеек.
+    touched = {c["element_id"] for c in changes}
+    rows_out = [
+        {"element_id": row["id"], "uid": row["element_uid"],
+         "values": display_values(row, by_id)}
+        for row in elements.values() if row["id"] in touched
+    ]
     return {
         "rows_read": len(parsed),
-        "elements_touched": len({c["element_id"] for c in changes}),
+        "elements_touched": len(touched),
+        "columns": [{"key": k, "label": l, "editable": e} for k, l, e in COLUMNS],
+        "elements": rows_out,
         "changes": changes,
         "rejected": rejected,
     }
@@ -345,6 +376,10 @@ def _diff_row(conn, row, values: dict, contracts: dict, line_no: int) -> tuple[l
             "element_id": row["id"], "uid": row["element_uid"], "line": line_no,
             "mark": row["mark"], "element_type": row["element_type"],
             "field": field, "field_label": FIELD_LABELS.get(field, field),
+            # Колонка ЭКРАНА, к которой относится правка: у контракта поле
+            # называется contract_id, а колонка — contract_name, и без этой
+            # пары табличный экран не знал бы, куда её приткнуть.
+            "column": CONTRACT_COLUMN if field == "contract_id" else field,
             "was": was, "now": now, **extra,
         }
 
@@ -424,19 +459,24 @@ def _diff_contract(row, raw, contracts: dict, line_no: int, describe):
             "reason": f"Контракт «{text}» не найден. Выбирайте значение из списка "
                       f"на листе «{SHEET_CONTRACTS}».",
         }, None
-    if row["current_status"] == "planned":
-        return {
-            "line": line_no, "uid": row["element_uid"],
-            "reason": "У элемента в статусе «Запланирован» контракт обязан быть пуст — "
-                      "он проставляется при переходе на следующий статус",
-        }, None
-    return None, describe("contract_id", current_name, text,
-                          contract_id=contracts[text]["id"], is_contract=True)
+    # У «Запланирован» контракт обязан быть пуст — но это не повод
+    # отказывать: назначение контракта И ЕСТЬ переход в «Контрактацию»
+    # (живой запрос 2026-08-01). Поэтому такая правка не отклоняется, а
+    # помечается needs_contracting: при применении элементу добавится
+    # запись истории «Контрактация» на дату, которую спросят у
+    # пользователя. Без даты применить нельзя — статус это событие, а у
+    # события должно быть когда.
+    return None, describe(
+        "contract_id", current_name, text,
+        contract_id=contracts[text]["id"], is_contract=True,
+        needs_contracting=(row["current_status"] == "planned"),
+    )
 
 
 # ---------------------------------------------------------------- запись
 
-def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]) -> dict:
+def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int],
+                  contracting_date: Optional[str] = None) -> dict:
     """Применяет ОТМЕЧЕННЫЕ пользователем изменения.
 
     На вход приходит то же, что вернул analyze, но отфильтрованное
@@ -481,15 +521,40 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
         if values:
             changed, manual = write_fields(conn, element_id, row, values)
 
-        if contract_id is not None and row["current_status"] != "planned":
-            conn.execute(
-                "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
-                (int(contract_id), element_id),
-            )
-            changed = {**changed, "contract_id": (row["contract_id"], int(contract_id))}
-        elif contract_id is not None:
-            skipped.append({"element_id": element_id,
-                            "reason": "Статус элемента стал «Запланирован» — контракт не применён"})
+        if contract_id is not None:
+            if row["current_status"] == "planned":
+                # Назначение контракта запланированному элементу — это
+                # переход в «Контрактацию». Идём ЧЕРЕЗ apply_status_change,
+                # а не UPDATE: только так появятся запись истории, снимок
+                # контракта, журнал действий и проверка остатка позиции
+                # контракта. Своя вставка в status_history разошлась бы с
+                # обычной сменой статуса при первой же правке правил.
+                if not contracting_date:
+                    skipped.append({"element_id": element_id,
+                                    "reason": "Не указана дата статуса «Контрактация»"})
+                    continue
+                apply_status_change(
+                    conn, element_id, "contracting", True, int(contract_id),
+                    contracting_date, "Массовая правка через Excel", user_name, user_id,
+                )
+                # Запись «Запланирован» датирована МОМЕНТОМ ИМПОРТА чертежа,
+                # а не реальным планированием. Дата контрактации задним
+                # числом оказывается раньше неё, и элемент по правилу
+                # «текущий статус = последняя по changed_at» откатился бы
+                # обратно в «Запланирован» — правка отменила бы сама себя.
+                # Тот же сдвиг, что делает импорт истории; вторая
+                # реализация разошлась бы с ней (см. Docs/backlog.md).
+                if shift_planned_before_first_event(conn, element_id):
+                    recompute_status_and_actual_date(conn, element_id)
+                    sync_element_contract(conn, element_id, "contracting", True, int(contract_id))
+                changed = {**changed, "contract_id": (row["contract_id"], int(contract_id)),
+                           "current_status": ("planned", "contracting")}
+            else:
+                conn.execute(
+                    "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
+                    (int(contract_id), element_id),
+                )
+                changed = {**changed, "contract_id": (row["contract_id"], int(contract_id))}
 
         if changed:
             applied += 1

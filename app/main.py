@@ -2071,6 +2071,9 @@ class BulkEditApplyIn(BaseModel):
     # заново НЕ читается: перечитывание между показом и применением
     # означало бы, что применить могли не то, что показали пользователю.
     changes: list[dict]
+    # Дата статуса «Контрактация» для элементов, которым контракт назначают
+    # из «Запланирован»: такая правка — событие, а не смена реквизита.
+    contracting_date: Optional[str] = None
 
 
 @app.post("/elements/bulk-edit/apply")
@@ -2080,8 +2083,18 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
         raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
     conn = get_connection()
     try:
+        stamp = None
+        if body.contracting_date:
+            try:
+                datetime.strptime(body.contracting_date, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Дата статуса — в виде ГГГГ-ММ-ДД")
+            # Полдень, а не полночь: запись «Запланирован» от импорта чертежа
+            # несёт реальное время суток, и событие в 00:00 того же дня
+            # оказалось бы РАНЬШЕ неё, то есть не подействовало бы.
+            stamp = f"{body.contracting_date} 12:00:00"
         return apply_bulk_edit(
-            conn, body.changes, format_display_name(admin), admin["id"]
+            conn, body.changes, format_display_name(admin), admin["id"], stamp
         )
     finally:
         conn.close()
