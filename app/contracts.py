@@ -7,12 +7,24 @@ source_file — контракт на поставку колонн действ
 проекта, не одного чертежа.
 
 "Факт" по строке контракта — количество элементов с этим contract_id, этим
-(element_type, mark) и статусом НЕ "planned". Привязка элемента к контракту
-хранится в каждой записи status_history (не напрямую у элемента) —
-elements.contract_id остаётся денормализованным кэшем "текущего" контракта
-(= contract_id самой последней по changed_at записи истории), пересчитывается
-бэкендом при каждом добавлении/удалении записи истории, никогда не
-устанавливается напрямую через отдельный API-эндпоинт.
+(element_type, mark) и статусом НЕ "planned".
+
+Привязка элемента к контракту — ОБЫЧНОЕ ЖИВОЕ ПОЛЕ elements.contract_id
+(с 2026-08-01). Раньше оно было денормализованным кэшем последней по
+changed_at записи status_history; отказались, потому что версионировать
+нечего: контракт проставляется один раз, при уходе с "Запланирован", и
+дальше не меняется — кроме случая инцидента, когда элемент откатывают на
+"Запланирован" (контракт снимается) и контрактуют заново. Прежний кэш к
+тому же успел разойтись со своим источником на боевой базе, и первый же
+пересчёт молча снял бы контракт с двух элементов из трёх (см.
+Docs/backlog.md, запись 2026-08-01).
+
+Инвариант: статус "Запланирован" ⇒ контракт пуст. Держится в одном месте —
+sync_element_contract. status_history.contract_id остаётся аудиторским
+СНИМКОМ "что выбрали в тот момент" (та же природа, что changed_by с ФИО), и
+источником правды не является — кроме двух мест, где история и есть то, что
+восстанавливают: импорт истории и ручная правка записи истории
+(adopt_contract_from_history).
 
 Партии (batches) убраны целиком (см. Docs/backlog.md) — плановая дата
 поставки теперь простое живое поле на самом элементе
@@ -445,40 +457,97 @@ def resolve_contract_for_new_row(
     conn, element_id: int, explicit: bool, value: Optional[int]
 ) -> Optional[int]:
     """
-    Контракт для НОВОЙ записи status_history. Если пользователь явно выбрал
-    значение в диалоге подтверждения (`explicit=True` — поле было в теле
-    запроса, даже если это null для "без контракта"), используется оно.
-    Иначе — наследуется от самой свежей ПРЕДЫДУЩЕЙ записи истории этого
-    элемента, где contract_id не пуст ("все следующие статусы после
-    контрактации берут контракт из предыдущего статуса").
+    Контракт для СНИМКА в новой записи status_history — «что выбрали в этот
+    момент». Если пользователь явно выбрал значение в диалоге подтверждения
+    (`explicit=True` — поле было в теле запроса, даже если это null для "без
+    контракта"), используется оно; иначе наследуется тот, что уже стоит у
+    элемента.
+
+    Источником правды с 2026-08-01 является elements.contract_id, а не
+    история (см. sync_element_contract ниже) — здесь остаётся только
+    аудиторский снимок, той же природы, что status_history.changed_by
+    (текстовое ФИО на момент изменения).
     """
     if explicit:
         return value
-    prev = conn.execute(
-        "SELECT contract_id FROM status_history WHERE element_id = ? AND contract_id IS NOT NULL "
-        "ORDER BY changed_at DESC, id DESC LIMIT 1",
-        (element_id,),
+    row = conn.execute(
+        "SELECT contract_id FROM elements WHERE id = ?", (element_id,)
     ).fetchone()
-    return prev["contract_id"] if prev else None
+    return row["contract_id"] if row else None
 
 
-def recompute_element_contract_cache(conn, element_id: int) -> Optional[int]:
+def sync_element_contract(
+    conn, element_id: int, effective_status: str,
+    explicit: bool = False, value: Optional[int] = None,
+) -> Optional[int]:
     """
-    elements.contract_id — денормализованный кэш "текущего" контракта,
-    всегда равный contract_id самой поздней по changed_at записи истории
-    (та же логика пересчёта, что уже используется для current_status —
-    важно для корректной работы после backdating и удаления записей).
+    Приводит elements.contract_id в соответствие с ЭФФЕКТИВНЫМ статусом.
+
+    Контракт — обычное живое поле элемента, а НЕ кэш последней записи
+    истории (как было до 2026-08-01). Причина не в удобстве: привязка
+    происходит один раз, при уходе с «Запланирован», и дальше не меняется —
+    кроме случая инцидента, когда элемент откатывают на «Запланирован»
+    (контракт снимается) и контрактуют заново. То есть версионировать
+    нечего. Хуже того, прежний кэш уже разошёлся со своим источником: на
+    боевой базе у двух элементов из трёх контракт стоял при единственной
+    записи истории «Запланирован» без контракта, и первый же пересчёт
+    молча снял бы его (см. Docs/backlog.md, запись 2026-08-01).
+
+    Решение принимается по ЭФФЕКТИВНОМУ статусу (тому, что вернул
+    recompute_status_and_actual_date), а не по статусу вставляемой записи.
+    Разница видна при backdating: запись «Запланирован» задним числом не
+    делает элемент запланированным, если поверх неё лежит более поздний
+    «Доставлен» — и контракт снимать в этом случае нельзя.
+
+    updated_at двигаем при любом изменении: по нему опрос об изменениях
+    (GET /changes) понимает, что элемент надо переслать другим открытым
+    вкладкам.
     """
-    latest = conn.execute(
-        "SELECT contract_id FROM status_history WHERE element_id = ? ORDER BY changed_at DESC, id DESC LIMIT 1",
-        (element_id,),
+    row = conn.execute(
+        "SELECT contract_id FROM elements WHERE id = ?", (element_id,)
     ).fetchone()
-    contract_id = latest["contract_id"] if latest else None
-    # updated_at двигаем ОБЯЗАТЕЛЬНО: по нему опрос об изменениях
-    # (GET /changes, см. app/main.py) понимает, что элемент надо переслать
-    # другим открытым вкладкам. Раньше эта строка его не трогала — смена
-    # одного контракта на другой БЕЗ смены статуса не доезжала до коллег
-    # до перезагрузки страницы.
+    current = row["contract_id"] if row else None
+    # Инвариант: «Запланирован» ⇒ контракт пуст. Безусловно, даже если
+    # contract_id передан явно — диалог выбора контракта для перехода НА
+    # «Запланирован» не показывается (Docs/TZ.md §5), явного намерения
+    # «оставить контракт» в этом направлении быть не может.
+    if effective_status == "planned":
+        new_id = None
+    elif explicit:
+        new_id = value
+    else:
+        new_id = current
+    if new_id != current:
+        conn.execute(
+            "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (new_id, element_id),
+        )
+    return new_id
+
+
+def adopt_contract_from_history(conn, element_id: int, effective_status: str) -> Optional[int]:
+    """
+    Принимает контракт элемента ИЗ снимка в истории — обратное направление
+    к sync_element_contract.
+
+    Нужно ровно в двух случаях, где история является источником, а не
+    следствием: восстановление из выгрузки (app/history_import.py — файл
+    и есть то, что восстанавливают) и ручная правка записи истории в
+    интерфейсе (там пользователь меняет контракт именно через запись —
+    это единственный путь "сменить контракт, не меняя статус").
+
+    Во всех остальных местах контракт берётся с элемента: снимок в истории
+    аудиторский и источником правды не является.
+    """
+    if effective_status == "planned":
+        contract_id = None
+    else:
+        latest = conn.execute(
+            "SELECT contract_id FROM status_history WHERE element_id = ? "
+            "ORDER BY changed_at DESC, id DESC LIMIT 1",
+            (element_id,),
+        ).fetchone()
+        contract_id = latest["contract_id"] if latest else None
     conn.execute(
         "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
         (contract_id, element_id),
@@ -490,7 +559,7 @@ def recompute_status_and_actual_date(conn, element_id: int) -> tuple[str, Option
     """
     elements.current_status и elements.actual_delivery_date — денормализованные
     кэши самой поздней по changed_at записи истории (тот же приём, что и у
-    recompute_element_contract_cache выше). actual_delivery_date = момент
+    sync_element_contract выше). actual_delivery_date = момент
     перехода в статус "Доставлено" (Status.DELIVERED, см. Docs/backlog.md,
     "Контрактация 2.0", п.8) — если текущий эффективный статус не
     "delivered" (в т.ч. после отката/удаления записи истории), дата
@@ -570,16 +639,13 @@ def apply_status_change(
     if row is None:
         raise LookupError(f"Элемент {element_id} не найден")
 
-    # Откат на "Запланирован" всегда снимает контракт — и тем самым
-    # поставщика: у элемента нет отдельного поля "поставщик", он везде
-    # резолвится ОТ контракта (см. counterpartyFilterValue на фронтенде),
-    # так что снятия contract_id достаточно. Действует БЕЗУСЛОВНО, даже
-    # если contract_id передан явно — для перехода именно НА
-    # "Запланирован" диалог выбора контракта на фронте не показывается
-    # (см. Docs/TZ.md §5: диалог — только при уходе СО статуса
-    # "Запланирован"), явного намерения "оставить контракт" в этом
-    # направлении быть не может (живой запрос пользователя, см.
-    # Docs/backlog.md).
+    # Снимок контракта для записи истории — «что выбрали в этот момент».
+    # Откат на "Запланирован" снимает контракт и тем самым поставщика: у
+    # элемента нет отдельного поля "поставщик", он везде резолвится ОТ
+    # контракта (см. counterpartyFilterValue на фронтенде). Само поле
+    # элемента приводится в соответствие ниже, ПОСЛЕ пересчёта статуса —
+    # по эффективному статусу, а не по вставляемому (см.
+    # sync_element_contract).
     if status == "planned":
         row_contract_id = None
     else:
@@ -598,8 +664,10 @@ def apply_status_change(
             (element_id, status, changed_by, changed_by_user_id, comment, row_contract_id),
         )
 
-    recompute_status_and_actual_date(conn, element_id)
-    element_contract_id = recompute_element_contract_cache(conn, element_id)
+    effective_status, _ = recompute_status_and_actual_date(conn, element_id)
+    element_contract_id = sync_element_contract(
+        conn, element_id, effective_status, contract_explicit, contract_value
+    )
     warning = contract_line_warning(conn, element_contract_id, row["element_type"], row["mark"])
 
     # Журнал (app/activity.py) — здесь, а не в эндпоинтах: смену статуса

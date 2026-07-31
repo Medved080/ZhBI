@@ -391,6 +391,39 @@ def _migrate_elements_drop_batch_id(conn: sqlite3.Connection, changes: list) -> 
     changes.append("снята колонка elements.batch_id (висячий внешний ключ на удалённую таблицу batches)")
 
 
+def _enforce_planned_has_no_contract(conn: sqlite3.Connection, changes: list) -> None:
+    """Снимает контракт с элементов в статусе «Запланирован» — инвариант
+    новой модели контракта (2026-08-01, см. app/contracts.py).
+
+    Не «уборка», а починка расхождения, которое уже было в данных. Пока
+    elements.contract_id был кэшем последней записи истории, такие строки
+    были невозможны «по построению» — и всё же на боевой базе их оказалось
+    две (`4П-13` и `3Р13`, контракты 4 и 5 при единственной записи истории
+    «Запланирован» без контракта). То есть кто-то писал контракт мимо
+    истории, а первый же пересчёт молча снял бы его. Теперь пересчёта нет,
+    и без этой миграции неверные строки жили бы вечно.
+
+    Не одноразовая и без маркера, в отличие от _purge_legacy_elements:
+    здесь нечего терять — условие описывает состояние, которого не должно
+    существовать, а не разовое событие. Пусть чинит и впредь, если какой-то
+    путь записи снова его нарушит.
+    """
+    n = conn.execute(
+        "SELECT COUNT(*) AS n FROM elements "
+        "WHERE current_status = 'planned' AND contract_id IS NOT NULL"
+    ).fetchone()["n"]
+    if not n:
+        return
+    conn.execute(
+        "UPDATE elements SET contract_id = NULL, updated_at = datetime('now') "
+        "WHERE current_status = 'planned' AND contract_id IS NOT NULL"
+    )
+    changes.append(
+        f"снят контракт с элементов в статусе «Запланирован»: {n} "
+        f"(инвариант «Запланирован ⇒ контракт пуст»)"
+    )
+
+
 def _ensure_element_uid_index(conn: sqlite3.Connection) -> None:
     """Уникальность element_uid — частичным индексом (WHERE ... NOT NULL):
     uid есть только у элементов, привязанных к объекту, а обычный UNIQUE в
@@ -912,6 +945,7 @@ def init_db() -> list:
         # Не часть одноразовой миграции: чинит частичное состояние, если
         # миграция зон отработала промежуточной версией кода (см. docstring).
         _heal_zone_stance_levels(conn, changes)
+        _enforce_planned_has_no_contract(conn, changes)
         _normalize_element_type_vocabulary(conn, changes)
         _seed_reference_data(conn)
         conn.commit()

@@ -30,7 +30,8 @@ from app.contracts import (
     build_contract_name,
     contract_line_warning,
     enrich_element_row,
-    recompute_element_contract_cache,
+    adopt_contract_from_history,
+    sync_element_contract,
     recompute_status_and_actual_date,
 )
 from app.contracts import router as contracts_router
@@ -715,7 +716,9 @@ def update_history_entry(
             {**values, "id": history_id},
         )
         status, actual = recompute_status_and_actual_date(conn, element_id)
-        recompute_element_contract_cache(conn, element_id)
+        # Контракт принимаем ИЗ записи: правка записи истории — единственный
+        # путь сменить контракт, не меняя статус (см. adopt_contract_from_history).
+        adopt_contract_from_history(conn, element_id, status)
         conn.commit()
 
         updated = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
@@ -766,8 +769,10 @@ def delete_history_entry(
 
         conn.execute("DELETE FROM status_history WHERE id = ?", (history_id,))
 
-        recompute_status_and_actual_date(conn, element_id)
-        element_contract_id = recompute_element_contract_cache(conn, element_id)
+        effective_status, _ = recompute_status_and_actual_date(conn, element_id)
+        # Удаление записи истории само по себе контракт не меняет — только
+        # если элемент вернулся в «Запланирован» (там контракт обязан быть пуст).
+        element_contract_id = sync_element_contract(conn, element_id, effective_status)
         contract_warning = contract_line_warning(conn, element_contract_id, row["element_type"], row["mark"])
         conn.commit()
 
