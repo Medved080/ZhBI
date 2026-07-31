@@ -603,8 +603,15 @@
      Docs/backlog.md) — модалка становится flex-колонкой на всю
      max-height, .modal сам больше не скроллится (overflow:hidden),
      скролл только у .modal-sticky-scroll между шапкой и подвалом. */
+  .bulk-edit-steps { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
+  .bulk-edit-steps .bulk-edit-block { flex: 1 1 210px; }
+  .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; margin-right: 6px; border-radius: 50%; flex-shrink: 0;
+    background: var(--color-primary); color: #fff; font-size: 11px; font-weight: 700;
+  }
   .bulk-edit-block { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
-  .bulk-edit-block-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+  .bulk-edit-block-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; }
   .bulk-edit-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .bulk-edit-status { font-size: 12px; color: var(--color-text-muted); margin-top: 6px; }
   .bulk-edit-fields { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
@@ -1663,30 +1670,34 @@
       <!-- Два раздельных блока (живой запрос 2026-08-01): выгрузка и загрузка
            это разные действия в разное время, и в одну строку они читались
            как один сценарий из трёх кнопок подряд. -->
-      <div class="bulk-edit-block">
-        <div class="bulk-edit-block-title">1. Выгрузить снимок</div>
-        <div class="bulk-edit-controls">
-          <button class="btn btn-secondary" id="bulk-edit-export">Выгрузить в Excel</button>
-          <span class="bulk-edit-status">Все элементы всех объектов одним файлом.</span>
+      <!-- Три шага подряд, каждый со своим номером (живой запрос 2026-08-01:
+           «чтобы было понятно что это два необходимых действия друг за
+           другом»). Выбор файла и сверка разнесены по РАЗНЫМ шагам намеренно:
+           в одной строке они читались как одно действие, и было неочевидно,
+           что после выбора файла нужно ещё нажать кнопку. -->
+      <div class="bulk-edit-steps">
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">1</span>Выгрузить снимок</div>
+          <div class="bulk-edit-controls">
+            <button class="btn btn-secondary" id="bulk-edit-export">Выгрузить в Excel</button>
+          </div>
+          <div class="bulk-edit-status">Все элементы всех объектов одним файлом.</div>
+        </div>
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">2</span>Выбрать правленый файл</div>
+          <div class="bulk-edit-controls">
+            <input type="file" id="bulk-edit-file" accept=".xlsx"/>
+          </div>
+        </div>
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">3</span>Сверить с базой</div>
+          <div class="bulk-edit-controls">
+            <button class="btn btn-secondary" id="bulk-edit-analyze">Сверить с базой</button>
+          </div>
+          <div class="bulk-edit-status">Ничего не изменит — только покажет расхождения.</div>
         </div>
       </div>
-      <div class="bulk-edit-block">
-        <div class="bulk-edit-block-title">2. Загрузить правленый файл</div>
-        <div class="bulk-edit-controls">
-          <input type="file" id="bulk-edit-file" accept=".xlsx"/>
-          <button class="btn btn-secondary" id="bulk-edit-analyze">Сверить с базой</button>
-        </div>
-        <div class="bulk-edit-controls" id="bulk-edit-contracting-box" style="display:none;">
-          <!-- Появляется только когда среди правок есть назначение контракта
-               запланированному элементу: это не правка реквизита, а событие
-               (статус «Контрактация»), и у события должна быть дата. -->
-          <label class="bulk-edit-status" for="bulk-edit-contracting-date">
-            Дата статуса «Контрактация» для запланированных элементов:
-          </label>
-          <input type="date" id="bulk-edit-contracting-date" style="flex:0 0 auto; width:auto;"/>
-        </div>
-        <div id="bulk-edit-status" class="bulk-edit-status"></div>
-      </div>
+      <div id="bulk-edit-status" class="bulk-edit-status"></div>
       <!-- Переключатели по полю: правок в файле могут быть сотни, и снимать
            флажки по одному было бы издевательством. Каждый чип показывает
            число правок этого поля и включает/выключает их разом. -->
@@ -1713,6 +1724,16 @@
     </div>
     <div class="modal-sticky-foot">
       <div id="bulk-edit-summary" class="bulk-edit-status"></div>
+      <!-- Дата статуса «Контрактация» — РЯДОМ С ПРИМЕНЕНИЕМ, а не в блоке
+           загрузки: она параметр применения, а не файла, и появляется только
+           после сверки, когда стало известно, что среди правок есть
+           назначение контракта запланированному элементу. -->
+      <div class="bulk-edit-controls" id="bulk-edit-contracting-box" style="display:none;">
+        <label class="bulk-edit-status" for="bulk-edit-contracting-date">
+          Дата статуса «Контрактация» для запланированных элементов:
+        </label>
+        <input type="date" id="bulk-edit-contracting-date" style="flex:0 0 auto; width:auto;"/>
+      </div>
       <div class="actions">
         <button class="btn btn-secondary" id="bulk-edit-cancel">Закрыть</button>
         <button class="btn btn-primary" id="bulk-edit-apply" disabled>Применить отмеченное</button>

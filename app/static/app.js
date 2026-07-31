@@ -11029,8 +11029,29 @@ function renderBulkEditTable() {
   htr.innerHTML = `<th style="width:26px;"><input type="checkbox" id="bulk-edit-all" title="Отметить все"/></th>`;
   columns.forEach((col) => {
     const th = document.createElement("th");
-    th.textContent = col.kind === "new" ? "→ станет" : col.label;
-    if (col.kind === "new") th.className = "col-new";
+    if (col.kind !== "new") { th.textContent = col.label; htr.appendChild(th); return; }
+    // Галочка на ВСЮ колонку (живой запрос 2026-08-01): отметить «применить
+    // это поле у всех элементов» одним движением. Стоит в заголовке самой
+    // колонки, а не отдельным списком сбоку, — там же, где смотрят на
+    // значения, и не требует сопоставлять название с колонкой глазами.
+    th.className = "col-new";
+    const inColumn = bulkEditChanges
+      .map((c, i) => (c.column === col.key ? i : -1))
+      .filter((i) => i >= 0);
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.title = `Отметить все правки колонки «${col.label}» (${inColumn.length})`;
+    cb.checked = inColumn.length > 0 && inColumn.every((i) => bulkEditChecked.has(i));
+    // Промежуточное состояние: отмечена часть колонки. Без него галочка
+    // выглядела бы снятой при половине выбранных правок и вводила в
+    // заблуждение — «щёлкну, чтобы включить» сняло бы остальные.
+    cb.indeterminate = !cb.checked && inColumn.some((i) => bulkEditChecked.has(i));
+    cb.addEventListener("change", () => {
+      inColumn.forEach((i) => { if (cb.checked) bulkEditChecked.add(i); else bulkEditChecked.delete(i); });
+      renderBulkEditTable();
+    });
+    th.appendChild(cb);
+    th.appendChild(document.createTextNode(` → станет (${inColumn.length})`));
     htr.appendChild(th);
   });
   thead.appendChild(htr);
