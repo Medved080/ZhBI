@@ -321,6 +321,17 @@
   .filter-expand-spacer { display: inline-block; width: 14px; margin-right: 4px; flex-shrink: 0; }
   .filter-children { display: none; }
   .filter-children.open { display: block; }
+  /* Отбор по датам СМР (app.js buildDateFilterGroup): строка «подпись +
+     поле даты». Поля в сайдбаре заметно мельче, чем в формах — тот же
+     размер, что у периода графика в панели «Статус»
+     (.side-report-controls). */
+  .filter-date-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; color: var(--color-text-muted); }
+  .filter-date-cap { flex: 0 0 auto; width: 16px; }
+  .filter-date-row input[type="date"] {
+    font-size: 11px; padding: 3px 4px; border-radius: var(--radius-sm); min-width: 0; flex: 1;
+    border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text);
+  }
+  .filter-group-header .link-btn:disabled { opacity: .4; cursor: default; text-decoration: none; }
   .card-block { margin-bottom: 14px; }
   .card-block h4 { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 4px; font-weight: 600; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
