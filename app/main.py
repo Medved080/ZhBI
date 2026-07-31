@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -30,7 +31,8 @@ from app.contracts import (
     build_contract_name,
     contract_line_warning,
     enrich_element_row,
-    recompute_element_contract_cache,
+    adopt_contract_from_history,
+    sync_element_contract,
     recompute_status_and_actual_date,
 )
 from app.contracts import router as contracts_router
@@ -42,6 +44,20 @@ from app.dxf_import import (
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
     save_uploaded_file,
 )
+from app.element_fields import (
+    EDITABLE_FIELDS,
+    FieldError,
+    check_subtype,
+    coerce_field,
+    contract_mismatch,
+    write_fields,
+)
+from app.element_bulk_edit import (
+    analyze as analyze_bulk_edit,
+    apply_changes as apply_bulk_edit,
+    build_export_workbook,
+)
+from app import status_bulk_edit
 from app.element_sync import summary_for_log
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
@@ -715,7 +731,9 @@ def update_history_entry(
             {**values, "id": history_id},
         )
         status, actual = recompute_status_and_actual_date(conn, element_id)
-        recompute_element_contract_cache(conn, element_id)
+        # Контракт принимаем ИЗ записи: правка записи истории — единственный
+        # путь сменить контракт, не меняя статус (см. adopt_contract_from_history).
+        adopt_contract_from_history(conn, element_id, status)
         conn.commit()
 
         updated = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
@@ -766,8 +784,10 @@ def delete_history_entry(
 
         conn.execute("DELETE FROM status_history WHERE id = ?", (history_id,))
 
-        recompute_status_and_actual_date(conn, element_id)
-        element_contract_id = recompute_element_contract_cache(conn, element_id)
+        effective_status, _ = recompute_status_and_actual_date(conn, element_id)
+        # Удаление записи истории само по себе контракт не меняет — только
+        # если элемент вернулся в «Запланирован» (там контракт обязан быть пуст).
+        element_contract_id = sync_element_contract(conn, element_id, effective_status)
         contract_warning = contract_line_warning(conn, element_contract_id, row["element_type"], row["mark"])
         conn.commit()
 
@@ -1922,17 +1942,11 @@ def elements_catalog(
 # нет, элемент остаётся без дат навсегда — руками это не поправить было ничем.
 # Как и остальные поля отсюда, правленая дата попадает в manual_fields, то
 # есть следующий импорт графика её НЕ перезапишет молча.
-_ELEMENT_EDITABLE_FIELDS = (
-    "element_type", "subtype", "mark", "elevation_mm", "floor", "address",
-    "planned_delivery_date", "project_smr_start_date", "project_delivery_date",
-)
-_ELEMENT_INT_FIELDS = {"elevation_mm", "floor"}
-# Даты хранятся текстом 'ГГГГ-ММ-ДД' и СРАВНИВАЮТСЯ КАК ТЕКСТ (отбор по
-# диапазону в фильтрах, критерий опоздания, отчёты) — формат проверяем на
-# входе, иначе одна строка «01.09.2026» тихо ломает сравнение.
-_ELEMENT_DATE_FIELDS = {
-    "planned_delivery_date", "project_smr_start_date", "project_delivery_date",
-}
+# Состав правимых полей и все проверки — в app/element_fields.py: с
+# 2026-08-01 у них два потребителя (эта форма и массовая правка через
+# Excel, app/element_bulk_edit.py), и разъехавшиеся правила дали бы
+# «в форме нельзя, а через файл прошло».
+_ELEMENT_EDITABLE_FIELDS = EDITABLE_FIELDS
 
 
 @app.patch("/elements/{element_id}/fields")
@@ -1969,69 +1983,30 @@ def update_element_fields(
 
         values = {}
         for field, raw in body.items():
-            if raw in (None, ""):
-                values[field] = None
-                continue
-            if field in _ELEMENT_INT_FIELDS:
-                try:
-                    values[field] = int(raw)
-                except (TypeError, ValueError):
-                    raise HTTPException(status_code=400, detail=f"«{field}» должно быть целым числом")
-            elif field in _ELEMENT_DATE_FIELDS:
-                text = str(raw).strip()
-                try:
-                    datetime.strptime(text, "%Y-%m-%d")
-                except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"«{field}»: ожидается дата в виде ГГГГ-ММ-ДД, получено «{text}»",
-                    )
-                values[field] = text
-            else:
-                values[field] = str(raw).strip()
+            try:
+                values[field] = coerce_field(field, raw)
+            except FieldError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
 
         new_type = values.get("element_type", row["element_type"])
         new_subtype = values.get("subtype", row["subtype"])
         if "element_type" in values or "subtype" in values:
-            if new_subtype is not None:
-                allowed = {
-                    r["subtype"] for r in conn.execute(
-                        "SELECT subtype FROM allowed_subtypes WHERE element_type = ?", (new_type,))
-                }
-                if new_subtype not in allowed:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(f"Подтип «{new_subtype}» не разрешён для типа «{new_type}». "
-                                f"Допустимые: {', '.join(sorted(allowed)) or 'нет'} "
-                                f"(правится в «Действия → Справочники → Подтипы»)"),
-                    )
+            err = check_subtype(conn, new_type, new_subtype)
+            if err:
+                raise HTTPException(status_code=400, detail=err)
 
         # Расхождение с позицией контракта — только если контракт назначен.
         new_mark = values.get("mark", row["mark"])
         mismatch = None
-        if row["contract_id"] and ("mark" in values or "element_type" in values):
-            line = conn.execute(
-                "SELECT 1 FROM contract_lines WHERE contract_id = ? AND element_type = ? AND mark IS ?",
-                (row["contract_id"], new_type, new_mark),
-            ).fetchone()
-            if line is None:
-                mismatch = (f"После правки элемент не соответствует ни одной позиции своего "
-                            f"контракта (тип «{new_type}», марка «{new_mark or '—'}»)")
-                if not confirm_contract_mismatch:
-                    raise HTTPException(status_code=409, detail=mismatch)
+        if "mark" in values or "element_type" in values:
+            mismatch = contract_mismatch(conn, row["contract_id"], new_type, new_mark)
+            if mismatch and not confirm_contract_mismatch:
+                raise HTTPException(status_code=409, detail=mismatch)
 
         if not values:
             raise HTTPException(status_code=400, detail="Нечего сохранять")
 
-        manual = set(json.loads(row["manual_fields"] or "[]"))
-        changed = {f: (row[f], v) for f, v in values.items() if row[f] != v}
-        manual |= set(changed)
-        assignments = ", ".join(f"{f} = :{f}" for f in values)
-        conn.execute(
-            f"UPDATE elements SET {assignments}, manual_fields = :manual_fields, "
-            f"updated_at = datetime('now') WHERE id = :id",
-            {**values, "manual_fields": json.dumps(sorted(manual), ensure_ascii=False), "id": element_id},
-        )
+        changed, manual = write_fields(conn, element_id, row, values)
         conn.commit()
         updated = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         result = enrich_element_row(conn, dict(updated))
@@ -2045,11 +2020,112 @@ def update_element_fields(
             mark=result.get("mark"),
             old_value="; ".join(f"{f}: {was}" for f, (was, _) in changed.items())[:500],
             new_value="; ".join(f"{f}: {now}" for f, (_, now) in changed.items())[:500],
-            details={"contract_mismatch": mismatch, "manual_fields": sorted(manual)},
+            details={"contract_mismatch": mismatch, "manual_fields": manual},
         )
-    result["manual_fields"] = sorted(manual)
+    result["manual_fields"] = manual
     result["contract_mismatch"] = mismatch
     return result
+
+
+# Режим формы массовой правки: реквизиты элемента или история статусов.
+# Один набор эндпоинтов на оба, а не два параллельных: структуры ответа
+# (columns/elements/changes/rejected) совпадают, и табличный экран
+# подтверждения переиспользуется целиком.
+_BULK_MODES = {"fields", "statuses"}
+
+
+def _check_bulk_mode(mode: str) -> str:
+    if mode not in _BULK_MODES:
+        raise HTTPException(status_code=400, detail=f"Неизвестный режим «{mode}»")
+    return mode
+
+
+@app.get("/elements/bulk-edit/export")
+def bulk_edit_export(mode: str = Query("fields"), admin: sqlite3.Row = Depends(require_admin)):
+    """Снимок реквизитов всех элементов всех объектов ОДНИМ файлом — для
+    правки в Excel и обратной загрузки (см. app/element_bulk_edit.py).
+
+    Только admin, как и вся группа «Обмен данными»: файл содержит выгрузку
+    всей базы элементов.
+    """
+    _check_bulk_mode(mode)
+    conn = get_connection()
+    try:
+        wb = (status_bulk_edit.build_status_workbook(conn) if mode == "statuses"
+              else build_export_workbook(conn))
+    finally:
+        conn.close()
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    activity.log("element_bulk_export", user=admin, entity_type="element",
+                 details={"mode": mode})
+    name = "zhbi_statuses" if mode == "statuses" else "zhbi_elements"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{name}_{stamp}.xlsx"'},
+    )
+
+
+@app.post("/elements/bulk-edit/analyze")
+def bulk_edit_analyze(file: UploadFile = File(...), mode: str = Form("fields"),
+                      admin: sqlite3.Row = Depends(require_admin)):
+    """Сверяет загруженный файл с базой и возвращает список расхождений.
+    НИЧЕГО НЕ ПИШЕТ — применение отдельным вызовом, после того как
+    пользователь отметил флажками, что применять."""
+    _check_bulk_mode(mode)
+    payload = read_upload_limited(file.file)
+    conn = get_connection()
+    try:
+        if mode == "statuses":
+            return status_bulk_edit.analyze(conn, payload)
+        return analyze_bulk_edit(conn, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+
+class BulkEditApplyIn(BaseModel):
+    # Ровно те строки, что вернул analyze, отфильтрованные флажками. Файл
+    # заново НЕ читается: перечитывание между показом и применением
+    # означало бы, что применить могли не то, что показали пользователю.
+    changes: list[dict]
+    # Дата статуса «Контрактация» для элементов, которым контракт назначают
+    # из «Запланирован»: такая правка — событие, а не смена реквизита.
+    contracting_date: Optional[str] = None
+    mode: str = "fields"
+
+
+@app.post("/elements/bulk-edit/apply")
+def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_admin)):
+    """Применяет отмеченные изменения."""
+    if not body.changes:
+        raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
+    _check_bulk_mode(body.mode)
+    conn = get_connection()
+    try:
+        if body.mode == "statuses":
+            return status_bulk_edit.apply_changes(
+                conn, body.changes, format_display_name(admin), admin["id"]
+            )
+        stamp = None
+        if body.contracting_date:
+            try:
+                datetime.strptime(body.contracting_date, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Дата статуса — в виде ГГГГ-ММ-ДД")
+            # Полдень, а не полночь: запись «Запланирован» от импорта чертежа
+            # несёт реальное время суток, и событие в 00:00 того же дня
+            # оказалось бы РАНЬШЕ неё, то есть не подействовало бы.
+            stamp = f"{body.contracting_date} 12:00:00"
+        return apply_bulk_edit(
+            conn, body.changes, format_display_name(admin), admin["id"], stamp
+        )
+    finally:
+        conn.close()
 
 
 @app.get("/objects", response_model=list[ObjectOut])

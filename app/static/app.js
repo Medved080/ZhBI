@@ -184,6 +184,27 @@ function el(tag, attrs = {}, ns = SVG_NS) {
 
 let onUnauthorized = null;
 
+// detail у FastAPI — не всегда строка: при ошибке РАЗБОРА ТЕЛА (422) это
+// список объектов {loc, msg, type}, и прежний `new Error(detail)` печатал
+// пользователю «[object Object]». Живой репорт: так проявился забытый
+// заголовок Content-Type в одном из вызовов — сообщение не подсказывало
+// ничего, и причину пришлось искать сравнением с соседними вызовами.
+function describeApiError(body, res) {
+  const detail = body && body.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail
+      .map((d) => {
+        const where = Array.isArray(d.loc) ? d.loc.filter((p) => p !== "body").join(".") : "";
+        return where ? `${where}: ${d.msg}` : d.msg;
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  if (detail) return JSON.stringify(detail);
+  return `${res.status} ${res.statusText}`;
+}
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (res.status === 401) {
@@ -192,8 +213,7 @@ async function api(path, opts) {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    const detail = (body && body.detail) ? body.detail : `${res.status} ${res.statusText}`;
-    throw new Error(detail);
+    throw new Error(describeApiError(body, res));
   }
   return res.status === 204 ? null : res.json();
 }
@@ -4994,6 +5014,29 @@ function openSubmenu(submenu) {
   if (rect.left < 4) panel.classList.add("submenu-panel-right");
 }
 
+// Задержка переключения группы меню при наведении. 260 мс — заметно больше
+// времени, за которое курсор проскакивает чужой заголовок по пути к цели, и
+// заметно меньше паузы, которую человек воспринимает как задержку.
+const SUBMENU_SWITCH_DELAY_MS = 260;
+let submenuSwitchTimer = null;
+
+function cancelSubmenuSwitch() {
+  if (submenuSwitchTimer !== null) {
+    clearTimeout(submenuSwitchTimer);
+    submenuSwitchTimer = null;
+  }
+}
+
+function scheduleSubmenuOpen(submenu) {
+  cancelSubmenuSwitch();
+  if (submenu.classList.contains("open")) return;
+  if (!settingsMenu.querySelector(".submenu.open")) { openSubmenu(submenu); return; }
+  submenuSwitchTimer = setTimeout(() => {
+    submenuSwitchTimer = null;
+    openSubmenu(submenu);
+  }, SUBMENU_SWITCH_DELAY_MS);
+}
+
 settingsMenu.querySelectorAll(".submenu").forEach(submenu => {
   const trigger = submenu.querySelector(".submenu-trigger");
   // Клик по заголовку группы НЕ должен закрывать всё меню (документный
@@ -5001,12 +5044,25 @@ settingsMenu.querySelectorAll(".submenu").forEach(submenu => {
   // он работает и на сенсорном экране, и при неточном наведении.
   trigger.addEventListener("click", (e) => {
     e.stopPropagation();
+    cancelSubmenuSwitch(); // клик — явное намерение, отложенный переход не нужен
     if (submenu.classList.contains("open")) submenu.classList.remove("open");
     else openSubmenu(submenu);
   });
   // Наведение — привычное поведение настольного меню: провёл мышью по
   // группам, увидел содержимое каждой, ничего не нажимая.
-  submenu.addEventListener("mouseenter", () => openSubmenu(submenu));
+  //
+  // Но переключать группу МГНОВЕННО нельзя (живой репорт 2026-08-01): панель
+  // раскрывается вбок, и путь курсора от заголовка группы к её пункту идёт
+  // по диагонали ЧЕРЕЗ соседние заголовки. Каждый такой заголовок успевал
+  // перехватить наведение, и набор пунктов менялся под курсором раньше, чем
+  // до них доходили. Поэтому переключение на ДРУГУЮ группу откладывается:
+  // если курсор просто прошёл мимо, mouseleave отменяет намерение.
+  //
+  // Задержка только на ПЕРЕКЛЮЧЕНИЕ. Когда не раскрыто ничего, группа
+  // открывается сразу — ожидание на первом наведении читалось бы как
+  // тормоза интерфейса.
+  submenu.addEventListener("mouseenter", () => scheduleSubmenuOpen(submenu));
+  submenu.addEventListener("mouseleave", cancelSubmenuSwitch);
 });
 
 // ---------- цвета статусов ----------
@@ -10902,3 +10958,359 @@ async function bootApp() {
 }
 
 bootApp();
+
+// ==================== МАССОВАЯ ПРАВКА РЕКВИЗИТОВ ЧЕРЕЗ EXCEL ====================
+// Круг: выгрузить снимок -> поправить в Excel -> загрузить -> отметить
+// флажками, что применять (см. app/element_bulk_edit.py).
+//
+// Список расхождений держим В ПАМЯТИ между сверкой и применением и
+// отправляем на сервер именно его, а не файл: перечитывание файла между
+// показом и применением означало бы, что применили не то, что показали.
+
+const bulkEditBackdrop = document.getElementById("bulk-edit-backdrop");
+const bulkEditFile = document.getElementById("bulk-edit-file");
+const bulkEditApplyBtn = document.getElementById("bulk-edit-apply");
+// Порог отрисовки. Не «тихое обрезание»: если правок больше, об этом
+// сказано в сводке прямым текстом, а применяются всё равно ВСЕ отмеченные —
+// ограничена только таблица на экране, не набор данных.
+const BULK_EDIT_RENDER_LIMIT = 800;
+
+// Режим формы: реквизиты элемента или история статусов. Различаются только
+// состав колонок и правила проверки — и то, и другое на сервере; шаги,
+// экран расхождений и применение общие.
+let bulkEditMode = "fields";
+let bulkEditChanges = [];   // то, что вернул analyze
+let bulkEditColumns = [];   // описание колонок — то же, что в XLS
+let bulkEditElements = []; // строки затронутых элементов (значения как в XLS)
+let bulkEditChecked = null; // Set индексов отмеченных
+
+function setBulkEditStatus(text, isError) {
+  const el = document.getElementById("bulk-edit-status");
+  el.textContent = text;
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+function bulkEditValueText(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  return String(v);
+}
+
+function renderBulkEditFieldChips() {
+  const box = document.getElementById("bulk-edit-fields");
+  box.innerHTML = "";
+  const counts = new Map();
+  bulkEditChanges.forEach((c) => counts.set(c.field_label, (counts.get(c.field_label) || 0) + 1));
+  if (!counts.size) return;
+  for (const [label, n] of counts) {
+    const wrap = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = bulkEditChanges.some((c, i) => c.field_label === label && bulkEditChecked.has(i));
+    cb.addEventListener("change", () => {
+      bulkEditChanges.forEach((c, i) => {
+        if (c.field_label !== label) return;
+        if (cb.checked) bulkEditChecked.add(i); else bulkEditChecked.delete(i);
+      });
+      renderBulkEditTable();
+    });
+    wrap.appendChild(cb);
+    wrap.appendChild(document.createTextNode(`${label} (${n})`));
+    box.appendChild(wrap);
+  }
+}
+
+// Экран подтверждения — та же таблица, что уходит в XLS (живой запрос
+// 2026-08-01), а не список правок. Колонки те же и в том же порядке; у
+// КАЖДОГО поля, где есть хоть одна правка, появляется парная колонка
+// «станет» сразу за исходной. Флажок живёт в ячейке «станет» — так выбор
+// «какое поле у какого элемента применить» делается прямо на пересечении,
+// без отдельного списка сбоку.
+function renderBulkEditTable() {
+  const intro = document.getElementById("bulk-edit-intro");
+  if (intro) intro.style.display = bulkEditChanges.length ? "none" : "";
+  const table = document.getElementById("bulk-edit-table");
+  table.innerHTML = "";
+  if (!bulkEditChanges.length) { updateBulkEditSummary(); return; }
+
+  // Индекс правок: элемент -> колонка -> номер в bulkEditChanges.
+  const byElement = new Map();
+  const changedColumns = new Set();
+  bulkEditChanges.forEach((c, i) => {
+    changedColumns.add(c.column);
+    if (!byElement.has(c.element_id)) byElement.set(c.element_id, new Map());
+    byElement.get(c.element_id).set(c.column, i);
+  });
+  // Парная колонка только там, где реально есть правки — иначе таблица
+  // удвоилась бы вхолостую на 22 колонках.
+  const columns = [];
+  bulkEditColumns.forEach((col) => {
+    columns.push({ ...col, kind: "value" });
+    if (changedColumns.has(col.key)) columns.push({ ...col, kind: "new" });
+  });
+
+  const thead = document.createElement("thead");
+  const htr = document.createElement("tr");
+  htr.innerHTML = `<th style="width:26px;"><input type="checkbox" id="bulk-edit-all" title="Отметить все"/></th>`;
+  columns.forEach((col) => {
+    const th = document.createElement("th");
+    if (col.kind !== "new") { th.textContent = col.label; htr.appendChild(th); return; }
+    // Галочка на ВСЮ колонку (живой запрос 2026-08-01): отметить «применить
+    // это поле у всех элементов» одним движением. Стоит в заголовке самой
+    // колонки, а не отдельным списком сбоку, — там же, где смотрят на
+    // значения, и не требует сопоставлять название с колонкой глазами.
+    th.className = "col-new";
+    const inColumn = bulkEditChanges
+      .map((c, i) => (c.column === col.key ? i : -1))
+      .filter((i) => i >= 0);
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.title = `Отметить все правки колонки «${col.label}» (${inColumn.length})`;
+    cb.checked = inColumn.length > 0 && inColumn.every((i) => bulkEditChecked.has(i));
+    // Промежуточное состояние: отмечена часть колонки. Без него галочка
+    // выглядела бы снятой при половине выбранных правок и вводила в
+    // заблуждение — «щёлкну, чтобы включить» сняло бы остальные.
+    cb.indeterminate = !cb.checked && inColumn.some((i) => bulkEditChecked.has(i));
+    cb.addEventListener("change", () => {
+      inColumn.forEach((i) => { if (cb.checked) bulkEditChecked.add(i); else bulkEditChecked.delete(i); });
+      renderBulkEditTable();
+    });
+    th.appendChild(cb);
+    th.appendChild(document.createTextNode(` → станет (${inColumn.length})`));
+    htr.appendChild(th);
+  });
+  thead.appendChild(htr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  const rows = bulkEditElements.filter((r) => byElement.has(r.element_id));
+  const shown = Math.min(rows.length, BULK_EDIT_RENDER_LIMIT);
+  for (let r = 0; r < shown; r++) {
+    const row = rows[r];
+    const marks = byElement.get(row.element_id);
+    const tr = document.createElement("tr");
+    const rowAll = document.createElement("td");
+    const rowCb = document.createElement("input");
+    rowCb.type = "checkbox";
+    rowCb.title = "Отметить все правки этого элемента";
+    rowCb.checked = [...marks.values()].every((i) => bulkEditChecked.has(i));
+    rowCb.addEventListener("change", () => {
+      marks.forEach((i) => { if (rowCb.checked) bulkEditChecked.add(i); else bulkEditChecked.delete(i); });
+      renderBulkEditTable();
+    });
+    rowAll.appendChild(rowCb);
+    tr.appendChild(rowAll);
+
+    columns.forEach((col) => {
+      const td = document.createElement("td");
+      const idx = marks.get(col.key);
+      if (col.kind === "new") {
+        if (idx === undefined) { td.className = "col-new"; tr.appendChild(td); return; }
+        const c = bulkEditChanges[idx];
+        td.className = "col-new changed";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = bulkEditChecked.has(idx);
+        cb.addEventListener("change", () => {
+          if (cb.checked) bulkEditChecked.add(idx); else bulkEditChecked.delete(idx);
+          updateBulkEditSummary();
+          renderBulkEditFieldChips();
+          rowCb.checked = [...marks.values()].every((i) => bulkEditChecked.has(i));
+        });
+        td.appendChild(cb);
+        td.appendChild(document.createTextNode(" " + bulkEditValueText(c.now)));
+        if (c.needs_contracting) {
+          const b = document.createElement("div");
+          b.className = "bulk-edit-warn";
+          b.textContent = "+ статус «Контрактация»";
+          td.appendChild(b);
+        }
+        if (c.warning) {
+          const w = document.createElement("div");
+          w.className = "bulk-edit-warn";
+          w.textContent = "⚠ " + c.warning;
+          td.appendChild(w);
+        }
+      } else {
+        td.textContent = bulkEditValueText(row.values[col.key]);
+        if (idx !== undefined) td.className = "was-changed";
+      }
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  document.getElementById("bulk-edit-all").addEventListener("change", (e) => {
+    bulkEditChecked = e.target.checked ? new Set(bulkEditChanges.map((_, i) => i)) : new Set();
+    renderBulkEditTable();
+  });
+  updateBulkEditSummary(shown, rows.length);
+  renderBulkEditFieldChips();
+}
+
+function updateBulkEditSummary(shown, totalRows) {
+  const el = document.getElementById("bulk-edit-summary");
+  const total = bulkEditChanges.length;
+  const n = bulkEditChecked ? bulkEditChecked.size : 0;
+  let text = `Отмечено ${n} из ${total} правок`;
+  if (shown !== undefined && totalRows !== undefined && shown < totalRows) {
+    text += `. В таблице показаны первые ${shown} элементов из ${totalRows} — `
+          + `применятся все отмеченные, включая непоказанные`;
+  }
+  el.textContent = total ? text : "";
+  bulkEditApplyBtn.disabled = n === 0;
+}
+
+function resetBulkEdit() {
+  bulkEditFile.value = "";
+  bulkEditChanges = [];
+  bulkEditChecked = new Set();
+  document.getElementById("bulk-edit-table").innerHTML = "";
+  document.getElementById("bulk-edit-rejected").innerHTML = "";
+  document.getElementById("bulk-edit-fields").innerHTML = "";
+  document.getElementById("bulk-edit-intro").style.display = "";
+  document.getElementById("bulk-edit-contracting-box").style.display = "none";
+  setBulkEditStatus("", false);
+  updateBulkEditSummary();
+}
+
+document.getElementById("menu-bulk-edit").addEventListener("click", () => {
+  setBulkEditMode("fields");
+  bulkEditBackdrop.classList.add("open");
+});
+
+function setBulkEditMode(mode) {
+  bulkEditMode = mode;
+  document.querySelectorAll("#bulk-edit-mode [data-bulk-mode]").forEach((b) =>
+    b.classList.toggle("active", b.dataset.bulkMode === mode));
+  document.querySelectorAll("[data-mode-intro]").forEach((el) => {
+    el.style.display = el.dataset.modeIntro === mode ? "" : "none";
+  });
+  // Требования к файлу — свои у каждого режима; переключаются той же
+  // разметкой data-mode-intro, что и пояснения (см. выше).
+  // Полный сброс: расхождения одного режима нельзя применять в другом —
+  // у них разный смысл полей (реквизит против даты статуса).
+  bulkEditChanges = [];
+  bulkEditColumns = [];
+  bulkEditElements = [];
+  bulkEditChecked = new Set();
+  document.getElementById("bulk-edit-table").innerHTML = "";
+  document.getElementById("bulk-edit-fields").innerHTML = "";
+  document.getElementById("bulk-edit-rejected").innerHTML = "";
+  document.getElementById("bulk-edit-intro").style.display = "";
+  resetBulkEdit();
+}
+
+document.querySelectorAll("#bulk-edit-mode [data-bulk-mode]").forEach((btn) => {
+  btn.addEventListener("click", () => setBulkEditMode(btn.dataset.bulkMode));
+});
+
+document.getElementById("bulk-edit-cancel").addEventListener("click", () => {
+  bulkEditBackdrop.classList.remove("open");
+});
+
+document.getElementById("bulk-edit-export").addEventListener("click", async () => {
+  setBulkEditStatus("Готовим файл…", false);
+  try {
+    const res = await fetch(`/elements/bulk-edit/export?mode=${bulkEditMode}`);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Ошибка ${res.status}`);
+    // Скачивание через blob, как у экспорта XLS: имя файла приходит от
+    // сервера в Content-Disposition, но браузер отдаёт его только так.
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = /filename="([^"]+)"/.exec(cd);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : "zhbi_elements.xlsx";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    setBulkEditStatus("Файл выгружен. Поправьте его в Excel и загрузите обратно.", false);
+  } catch (e) {
+    setBulkEditStatus(`Не удалось выгрузить: ${e.message}`, true);
+  }
+});
+
+document.getElementById("bulk-edit-analyze").addEventListener("click", async () => {
+  const file = bulkEditFile.files[0];
+  if (!file) { setBulkEditStatus("Сначала выберите файл .xlsx", true); return; }
+  setBulkEditStatus("Сверяем файл с базой…", false);
+  document.getElementById("bulk-edit-table").innerHTML = "";
+  document.getElementById("bulk-edit-rejected").innerHTML = "";
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("mode", bulkEditMode);
+  try {
+    const res = await fetch("/elements/bulk-edit/analyze", { method: "POST", body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `Ошибка ${res.status}`);
+    bulkEditChanges = data.changes || [];
+    bulkEditColumns = data.columns || [];
+    bulkEditElements = data.elements || [];
+    // Поле даты нужно только если среди правок есть назначение контракта
+    // запланированному элементу — тогда правка порождает СОБЫТИЕ (статус
+    // «Контрактация»), а у события должна быть дата.
+    const нуженСтатус = bulkEditChanges.some((c) => c.needs_contracting);
+    document.getElementById("bulk-edit-contracting-box").style.display = нуженСтатус ? "" : "none";
+    // По умолчанию отмечено ВСЁ: пользователь правил файл осознанно, и
+    // заставлять его заново отмечать каждую свою же правку — работа впустую.
+    bulkEditChecked = new Set(bulkEditChanges.map((_, i) => i));
+    setBulkEditStatus(
+      `Прочитано строк: ${data.rows_read}. Расхождений: ${bulkEditChanges.length} ` +
+      `у ${data.elements_touched} элементов.`, false);
+    const rej = document.getElementById("bulk-edit-rejected");
+    if ((data.rejected || []).length) {
+      rej.innerHTML = `<b>Не может быть применено (${data.rejected.length}):</b>`;
+      data.rejected.forEach((r) => {
+        const d = document.createElement("div");
+        d.textContent = `стр. ${r.line}: ${r.reason}`;
+        rej.appendChild(d);
+      });
+    }
+    renderBulkEditTable();
+  } catch (e) {
+    setBulkEditStatus(`Сверка не удалась: ${e.message}`, true);
+  }
+});
+
+bulkEditApplyBtn.addEventListener("click", async () => {
+  const selected = bulkEditChanges.filter((_, i) => bulkEditChecked.has(i));
+  if (!selected.length) return;
+  const датаПоле = document.getElementById("bulk-edit-contracting-date");
+  const нуженСтатус = selected.some((c) => c.needs_contracting);
+  if (нуженСтатус && !датаПоле.value) {
+    setBulkEditStatus("Укажите дату статуса «Контрактация» — часть отмеченных элементов "
+      + "сейчас «Запланирован», и назначение контракта добавит им статус.", true);
+    return;
+  }
+  const сколькоСтатусов = selected.filter((c) => c.needs_contracting).length;
+  const вопрос = `Применить ${selected.length} изменений?`
+    + (сколькоСтатусов ? ` Из них ${сколькоСтатусов} добавят элементу статус «Контрактация» `
+        + `на ${датаПоле.value}.` : "");
+  if (!confirm(вопрос)) return;
+  bulkEditApplyBtn.disabled = true;
+  setBulkEditStatus("Применяем…", false);
+  try {
+    const data = await api("/elements/bulk-edit/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes: selected, contracting_date: датаПоле.value || null,
+                             mode: bulkEditMode }),
+    });
+    let text = `Обновлено элементов: ${data.elements_updated}.`;
+    if (data.records_inserted !== undefined) {
+      text += ` Записей истории добавлено: ${data.records_inserted}, дат исправлено: ${data.records_updated}.`;
+    }
+    if ((data.skipped || []).length) text += ` Пропущено: ${data.skipped.length}.`;
+    setBulkEditStatus(text, false);
+    showToast(text, "info");
+    bulkEditChanges = [];
+    bulkEditChecked = new Set();
+    document.getElementById("bulk-edit-table").innerHTML = "";
+    document.getElementById("bulk-edit-fields").innerHTML = "";
+    updateBulkEditSummary();
+    if (state.sourceFile) await loadPlan(true);
+  } catch (e) {
+    setBulkEditStatus(`Не удалось применить: ${e.message}`, true);
+    bulkEditApplyBtn.disabled = false;
+  }
+});
+

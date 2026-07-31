@@ -63,7 +63,7 @@ from openpyxl import load_workbook
 from app.contracting_import import parse_number_and_date
 from app.contracts import (
     find_or_create_contract,
-    recompute_element_contract_cache,
+    adopt_contract_from_history,
     recompute_status_and_actual_date,
 )
 from app.counterparties import (
@@ -530,12 +530,13 @@ def import_history(conn, source_file: str, rows: list, mode: str):
     # актуальная дата поставки молча разошлась бы с восстановленным
     # статусом (см. Docs/backlog.md, 2026-07-28, восстановление статусов).
     for element_id in touched_element_ids:
-        recompute_status_and_actual_date(conn, element_id)
-        # elements.contract_id — такой же денормализованный кэш последней по
-        # changed_at записи истории, как current_status; без этого вызова
-        # привязка к контракту осталась бы только в status_history, а схема
-        # и карточка элемента показывали бы прежний контракт.
-        recompute_element_contract_cache(conn, element_id)
+        effective_status, _ = recompute_status_and_actual_date(conn, element_id)
+        # Контракт принимаем ИЗ импортированных записей: здесь файл и есть
+        # то, что восстанавливают, поэтому направление обратное обычному
+        # (см. adopt_contract_from_history, app/contracts.py). Без этого
+        # привязка осталась бы только в status_history, а схема и карточка
+        # элемента показывали бы прежний контракт.
+        adopt_contract_from_history(conn, element_id, effective_status)
 
     conn.commit()
 
