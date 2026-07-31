@@ -184,6 +184,27 @@ function el(tag, attrs = {}, ns = SVG_NS) {
 
 let onUnauthorized = null;
 
+// detail у FastAPI — не всегда строка: при ошибке РАЗБОРА ТЕЛА (422) это
+// список объектов {loc, msg, type}, и прежний `new Error(detail)` печатал
+// пользователю «[object Object]». Живой репорт: так проявился забытый
+// заголовок Content-Type в одном из вызовов — сообщение не подсказывало
+// ничего, и причину пришлось искать сравнением с соседними вызовами.
+function describeApiError(body, res) {
+  const detail = body && body.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail
+      .map((d) => {
+        const where = Array.isArray(d.loc) ? d.loc.filter((p) => p !== "body").join(".") : "";
+        return where ? `${where}: ${d.msg}` : d.msg;
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  if (detail) return JSON.stringify(detail);
+  return `${res.status} ${res.statusText}`;
+}
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (res.status === 401) {
@@ -192,8 +213,7 @@ async function api(path, opts) {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    const detail = (body && body.detail) ? body.detail : `${res.status} ${res.statusText}`;
-    throw new Error(detail);
+    throw new Error(describeApiError(body, res));
   }
   return res.status === 204 ? null : res.json();
 }
@@ -11271,7 +11291,7 @@ bulkEditApplyBtn.addEventListener("click", async () => {
   setBulkEditStatus("Применяем…", false);
   try {
     const data = await api("/elements/bulk-edit/apply", {
-      method: "POST",
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ changes: selected, contracting_date: датаПоле.value || null,
                              mode: bulkEditMode }),
     });
