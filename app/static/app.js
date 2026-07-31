@@ -105,12 +105,17 @@ let state = {
   // (elementPassesDateFilters), а не ещё одна запись в
   // PLACEMENT_FILTER_DEFS. from/to — границы включительно ("" = граница не
   // задана: только from = «позже», только to = «раньше», обе = диапазон);
-  // none — показывать ли элементы, у которых эта дата не заполнена вовсе
-  // (аналог пункта «— не определено —» в обычных группах, см.
-  // placementNoneLabel). См. DATE_FILTER_DEFS.
+  // empty — как поступать с элементами, у которых эта дата не заполнена
+  // вовсе: "show" (показывать наравне с остальными, по умолчанию),
+  // "hide" (только элементы с датой), "only" (ТОЛЬКО элементы с пустой
+  // датой — тогда границы диапазона не при чём и поля выключаются). Это
+  // развитие пункта «— не определено —» обычных групп: там достаточно
+  // галочки, потому что рядом есть галочки остальных значений, а здесь
+  // «остальные значения» — непрерывный диапазон, и «только пустые»
+  // выразить иначе нечем (живой запрос 2026-07-31). См. DATE_FILTER_DEFS.
   dateFilters: {
-    smrStart: { from: "", to: "", none: true },
-    smrEnd: { from: "", to: "", none: true },
+    smrStart: { from: "", to: "", empty: "show" },
+    smrEnd: { from: "", to: "", empty: "show" },
   },
   // Какие родители иерархических групп фильтра сейчас развёрнуты — чисто
   // UI-состояние навигации, но хранится в state (не в DOM), иначе
@@ -127,7 +132,7 @@ let state = {
   // и Кран/Стоянку, и Отметку).
   topFilterCollapsed: new Set([
     "zakhvatka", "craneStance", "craneStanceNone", "elevation", "floor", "elementType", "supplier", "noContract",
-    "smrStart", "smrEnd",
+    "smr",
   ]),
   baseMarkerRadius: 1,
   view: null,
@@ -1073,14 +1078,17 @@ const PLACEMENT_FILTER_DEFS = [
 // границ «с»/«по», отдельного переключателя режима не нужно.
 // field — имя поля элемента, оно же приходит в дельте автообновления
 // (DELTA_FIELDS), так что фильтр остаётся верным и после чужой правки.
+// title — заголовок подгруппы в форме, shortTitle — то же в краткой сводке
+// у свёрнутого заголовка группы «СМР» (там оба заголовка стоят рядом, и
+// слово «СМР» в каждом из них было бы лишним повтором).
 const DATE_FILTER_DEFS = [
-  { key: "smrStart", title: "Начало СМР", field: "project_smr_start_date" },
-  { key: "smrEnd", title: "Дата завершения СМР", field: "project_delivery_date" },
+  { key: "smrStart", title: "Дата начала СМР", shortTitle: "начало", field: "project_smr_start_date" },
+  { key: "smrEnd", title: "Дата окончания СМР", shortTitle: "окончание", field: "project_delivery_date" },
 ];
 
 function dateFilterIsActive(key) {
   const f = state.dateFilters[key];
-  return !!(f.from || f.to || !f.none);
+  return !!(f.from || f.to || f.empty !== "show");
 }
 
 function elementPassesDateFilters(element) {
@@ -1094,9 +1102,10 @@ function elementPassesDateFilters(element) {
     // выкинуло бы граничный день из диапазона.
     const value = raw ? String(raw).slice(0, 10) : null;
     if (!value) {
-      if (!f.none) return false;
-      continue;
+      if (f.empty === "hide") return false;
+      continue; // "show" и "only" — элемент без даты проходит
     }
+    if (f.empty === "only") return false;
     if (f.from && value < f.from) return false;
     if (f.to && value > f.to) return false;
   }
@@ -1499,9 +1508,18 @@ function buildFilterGroup(title, key, values, excludedSet, labelFor, isEnabledFn
   return wrap;
 }
 
-// Группа отбора по дате (Начало СМР / Дата завершения СМР) — две границы
-// «с»/«по» и галочка «показывать без даты». Список значений здесь не
-// строится: величина непрерывная (см. state.dateFilters).
+// Группа «СМР» — ОДНА верхнеуровневая сворачиваемая группа с двумя
+// подгруппами внутри (Дата начала СМР / Дата окончания СМР). Подгруппы
+// НЕ сворачиваются: их всего две, обе — про одно и то же, и лишний
+// уровень разворота только добавлял бы кликов (живой запрос 2026-07-31 —
+// до этого каждая дата была отдельной верхнеуровневой группой). Отсюда и
+// отличие от buildHierarchicalFilterGroup: там вложенность нужна ради
+// каскада родитель→потомок по списку значений, здесь вложенность — чисто
+// вёрстка.
+//
+// В каждой подгруппе — две границы «с»/«по» и выбор из трёх вариантов,
+// что делать с элементами без даты. Список значений здесь не строится:
+// величина непрерывная (см. state.dateFilters).
 //
 // renderPlacementFilters перерисовывает контейнер целиком на каждое
 // изменение фильтра, а поле даты — единственный элемент этой формы, из
@@ -1514,23 +1532,34 @@ function buildFilterGroup(title, key, values, excludedSet, labelFor, isEnabledFn
 // группам и вынести их некуда.
 let pendingDateFilterFocus = null;
 
-// Краткая сводка активного отбора — дописывается к заголовку группы,
-// потому что группы по умолчанию свёрнуты (state.topFilterCollapsed):
-// иначе заданный диапазон никак не виден, и «часть элементов пропала со
-// схемы» выглядело бы необъяснимо.
+// Что делать с элементами, у которых дата не заполнена. Порядок здесь =
+// порядок переключателей в форме.
+const DATE_EMPTY_MODES = [
+  ["show", "с датой и без даты"],
+  ["hide", "только с датой"],
+  ["only", "только без даты"],
+];
+
+// Краткая сводка активного отбора — дописывается к заголовку группы
+// «СМР», потому что группа по умолчанию свёрнута
+// (state.topFilterCollapsed): иначе заданный диапазон никак не виден, и
+// «часть элементов пропала со схемы» выглядело бы необъяснимо.
 function dateFilterSummary(f) {
+  if (f.empty === "only") return "только без даты"; // границы при этом не действуют
   const parts = [];
   if (f.from) parts.push(`с ${formatDateRu(f.from)}`);
   if (f.to) parts.push(`по ${formatDateRu(f.to)}`);
-  if (!f.none) parts.push("только с датой");
+  if (f.empty === "hide") parts.push("только с датой");
   return parts.join(", ");
 }
 
-function buildDateFilterGroup(def, onChange) {
-  const f = state.dateFilters[def.key];
-  const active = dateFilterIsActive(def.key);
-  const title = active ? `${def.title} · ${dateFilterSummary(f)}` : def.title;
-  const { wrap, header, body } = filterGroupShell(title, def.key, { actions: false });
+function buildSmrFilterGroup(onChange) {
+  const active = DATE_FILTER_DEFS.some(d => dateFilterIsActive(d.key));
+  const summary = DATE_FILTER_DEFS
+    .filter(d => dateFilterIsActive(d.key))
+    .map(d => `${d.shortTitle}: ${dateFilterSummary(state.dateFilters[d.key])}`)
+    .join(" · ");
+  const { wrap, header, body } = filterGroupShell(active ? `СМР · ${summary}` : "СМР", "smr", { actions: false });
 
   const resetBtn = document.createElement("button");
   resetBtn.type = "button";
@@ -1538,14 +1567,34 @@ function buildDateFilterGroup(def, onChange) {
   resetBtn.textContent = "сбросить";
   resetBtn.disabled = !active;
   resetBtn.addEventListener("click", () => {
-    resetDateFilter(def.key);
+    resetAllDateFilters();
     onChange();
   });
   header.appendChild(resetBtn);
 
+  for (const def of DATE_FILTER_DEFS) body.appendChild(buildDateFilterSubgroup(def, onChange));
+  return wrap;
+}
+
+function buildDateFilterSubgroup(def, onChange) {
+  const f = state.dateFilters[def.key];
+  const box = document.createElement("div");
+  box.className = "filter-subgroup";
+  box.dataset.dateFilterKey = def.key;
+
+  const title = document.createElement("div");
+  title.className = "filter-subgroup-title";
+  title.textContent = def.title;
+  box.appendChild(title);
+
+  // При "только без даты" границы диапазона ни на что не влияют — поля
+  // выключаются (не прячутся: то же правило "недоступные, а не скрытые",
+  // что и у чекбоксов значений, см. applyEnabledState).
+  const boundsDisabled = f.empty === "only";
   for (const [bound, caption] of [["from", "с"], ["to", "по"]]) {
     const row = document.createElement("label");
     row.className = "filter-date-row";
+    if (boundsDisabled) row.classList.add("filter-disabled");
     const cap = document.createElement("span");
     cap.className = "filter-date-cap";
     cap.textContent = caption;
@@ -1553,6 +1602,7 @@ function buildDateFilterGroup(def, onChange) {
     const input = document.createElement("input");
     input.type = "date";
     input.value = f[bound];
+    input.disabled = boundsDisabled;
     input.dataset.dateFilter = `${def.key}:${bound}`;
     // change, а не input: у <input type=date> событие input прилетает и на
     // промежуточных состояниях (введён только год), перерисовка фильтров на
@@ -1563,33 +1613,34 @@ function buildDateFilterGroup(def, onChange) {
       onChange();
     });
     row.appendChild(input);
-    body.appendChild(row);
+    box.appendChild(row);
   }
 
-  const noneLabel = document.createElement("label");
-  noneLabel.className = "toggle";
-  const noneInput = document.createElement("input");
-  noneInput.type = "checkbox";
-  noneInput.checked = f.none;
-  noneInput.addEventListener("change", () => {
-    f.none = noneInput.checked;
-    onChange();
-  });
-  noneLabel.appendChild(noneInput);
-  // Формулировка как у отдельной группы "Без контракта" (там пункт
-  // называется "элементы без контракта"), а не "— без даты —": здесь это
-  // не пункт списка значений рядом с другими такими же, а единственная
-  // галочка под двумя полями ввода — из короткой подписи было бы неясно,
-  // что она включает, а не исключает.
-  noneLabel.appendChild(document.createTextNode(" элементы без даты"));
-  body.appendChild(noneLabel);
+  // Радиокнопки, а не галочка "показывать без даты": вариантов стало три,
+  // и "только без даты" (живой запрос 2026-07-31) галочкой не выражается —
+  // это не включение/выключение одного значения, а взаимоисключающий выбор.
+  for (const [mode, label] of DATE_EMPTY_MODES) {
+    const row = document.createElement("label");
+    row.className = "toggle";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = `date-empty-${def.key}`;
+    input.checked = f.empty === mode;
+    input.addEventListener("change", () => {
+      f.empty = mode;
+      onChange();
+    });
+    row.appendChild(input);
+    row.appendChild(document.createTextNode(" " + label));
+    box.appendChild(row);
+  }
 
-  return wrap;
+  return box;
 }
 
 function resetDateFilter(key) {
   const f = state.dateFilters[key];
-  f.from = ""; f.to = ""; f.none = true;
+  f.from = ""; f.to = ""; f.empty = "show";
 }
 
 function resetAllDateFilters() {
@@ -2051,12 +2102,10 @@ function renderPlacementFilters() {
     ));
   }
 
-  // Даты СМР (из графика MS Project) — в самом конце списка, отдельно от
-  // групп-перечислений: отбор диапазоном, а не галочками (см.
-  // DATE_FILTER_DEFS/buildDateFilterGroup).
-  for (const def of DATE_FILTER_DEFS) {
-    container.appendChild(buildDateFilterGroup(def, onPlacementFilterChange));
-  }
+  // Даты СМР (из графика MS Project) — одной группой в самом конце
+  // списка, отдельно от групп-перечислений: отбор диапазоном, а не
+  // галочками (см. DATE_FILTER_DEFS/buildSmrFilterGroup).
+  container.appendChild(buildSmrFilterGroup(onPlacementFilterChange));
 
   applyMarkSearchFilter();
 

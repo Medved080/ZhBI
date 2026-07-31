@@ -321,11 +321,17 @@
   .filter-expand-spacer { display: inline-block; width: 14px; margin-right: 4px; flex-shrink: 0; }
   .filter-children { display: none; }
   .filter-children.open { display: block; }
-  /* Отбор по датам СМР (app.js buildDateFilterGroup): строка «подпись +
-     поле даты». Поля в сайдбаре заметно мельче, чем в формах — тот же
-     размер, что у периода графика в панели «Статус»
-     (.side-report-controls). */
+  /* Отбор по датам СМР (app.js buildSmrFilterGroup): внутри группы «СМР»
+     две НЕсворачиваемые подгруппы — «Дата начала СМР» и «Дата окончания
+     СМР», у каждой строка «подпись + поле даты». Поля в сайдбаре заметно
+     мельче, чем в формах — тот же размер, что у периода графика в панели
+     «Статус» (.side-report-controls). */
+  .filter-subgroup { margin-top: 8px; }
+  .filter-subgroup:first-child { margin-top: 2px; }
+  .filter-subgroup-title { font-size: 11px; font-weight: 600; margin-bottom: 2px; }
   .filter-date-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; color: var(--color-text-muted); }
+  .filter-date-row.filter-disabled { opacity: .4; }
+  .filter-date-row.filter-disabled input { cursor: not-allowed; }
   .filter-date-cap { flex: 0 0 auto; width: 16px; }
   .filter-date-row input[type="date"] {
     font-size: 11px; padding: 3px 4px; border-radius: var(--radius-sm); min-width: 0; flex: 1;
