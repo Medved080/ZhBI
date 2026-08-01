@@ -168,6 +168,9 @@ let state = {
     faceMaterial: null, // единственный материал ВСЕХ граней; цвет статуса — в вершинах (см. getFaceMaterial)
     highlightMaterial: null, // единственный материал ВЫБРАННОГО элемента (пересвечивается под его цвет статуса)
     animationFrameId: null, // заказанный кадр рендера по требованию (см. requestRender3D)
+    throttleTimerId: null, // отложенный кадр, когда сработал потолок частоты (лёгкий режим)
+    lastFrameAt: 0, // performance.now() последнего нарисованного кадра — база для потолка частоты
+    dragging: false, // идёт вращение/панорамирование мышью — см. set3DDragging
   },
 };
 
@@ -9700,13 +9703,70 @@ const EDGE_LINE_WIDTH_PX = 2;
 //  - пиксельная плотность 1 вместо 1.5 — вдвое меньше пикселей на кадр
 //    (на Retina это самая заметная часть работы фрагментного шейдера).
 //
+// С 2026-08-01 режим расширен до полноценного профиля отрисовки — по живому
+// репорту "через RDP вращение в 3D сильно тормозит". Отчёт chrome://gpu с той
+// станции снял главное подозрение (WebGL там АППАРАТНЫЙ, Software Rendering:
+// No), но показал три вещи, которых нет на машине разработчика: встроенная
+// Intel UHD 730 без дискретной видеокарты, виртуальный дисплей RDP с частотой
+// 32 Гц и флаг драйвера `msaa_is_slow` ("On Intel GPUs MSAA performance is not
+// acceptable for GPU rasterization"). Поверх отрисовки там лежит ещё и
+// кодирование картинки протоколом RDP: при вращении меняется каждый пиксель
+// области 3D, и лишние кадры не показываются быстрее, а копятся в очереди —
+// это и ощущается как "схема едет после того, как отпустил мышь".
+//
+// Поэтому в лёгком режиме к прежним двум мерам добавлены ещё четыре:
+//  - MSAA выключен (`antialias: false`) — тот самый флаг драйвера;
+//  - логарифмический буфер глубины выключен — он заставляет фрагментный шейдер
+//    писать глубину попиксельно и тем отключает раннее отсечение по Z, что на
+//    встроенной видеокарте дорого. Он вводился РАДИ рёбер (z-fighting ребра с
+//    гранью, см. init3DScene), а в лёгком режиме рёбер и нет;
+//  - частота кадров ограничена LOW_SPEC_FPS_CAP (см. requestRender3D);
+//  - на время вращения мышью разрешение рендера падает в
+//    LOW_SPEC_DRAG_PIXEL_SCALE раз, на отпускании сразу возвращается
+//    (см. set3DDragging).
+// Обычный режим 3D НЕ затронут ни одной из этих мер: на машине, которая тянет,
+// они только ухудшили бы картинку. Лёгкий режим — и есть режим "слабая машина
+// или удалённый рабочий стол".
+//
 // Настройка КОМПЬЮТЕРА, а не проекта: живёт в localStorage браузера, не в
 // БД. У прорабов машины разные, общая на всех настройка была бы бессмысленной.
 const LOW_SPEC_KEY = "zhbi_low_spec";
 
+// Потолок частоты кадров в лёгком режиме. Смысл не в экономии видеокарты (её
+// и так пасует requestAnimationFrame), а в том, чтобы не отдавать протоколу
+// удалённого стола больше кадров, чем он способен закодировать и передать.
+// Ни один кадр при этом не теряется: отложенный таймером кадр рисуется по
+// самому свежему состоянию камеры (см. requestRender3D).
+//
+// Число задаёт минимальный ПРОМЕЖУТОК (20 => не чаще одного кадра в 50 мс), а
+// не точную частоту: кадр после ожидания всё равно выравнивается по такту
+// экрана. Замер на модельных часах (3000 мс непрерывного потока событий
+// "change", 751 событие): обычный режим — 181 кадр (60,3/с, потолка нет),
+// лёгкий — 46 кадров (15,3/с, промежуток 66,7 мс = 50 мс ожидания + такт
+// экрана 60 Гц). На виртуальном дисплее RDP с его 32 Гц это будет ~16/с.
+const LOW_SPEC_FPS_CAP = 20;
+
+// Во сколько раз падает разрешение рендера, пока оператор вращает/панорамирует
+// мышью. Классический приём: в движении мелкую деталь всё равно не рассмотреть,
+// а работы фрагментному шейдеру втрое меньше. На отпускании кадр немедленно
+// перерисовывается в полном разрешении.
+const LOW_SPEC_DRAG_PIXEL_SCALE = 0.6;
+
 function pixelRatioForCurrentMode() {
   const cap = state.lowSpec ? 1 : 1.5;
-  return Math.min(window.devicePixelRatio || 1, cap);
+  const base = Math.min(window.devicePixelRatio || 1, cap);
+  // Понижение — только в лёгком режиме и только пока идёт вращение мышью.
+  if (state.lowSpec && state.view3d.dragging) return base * LOW_SPEC_DRAG_PIXEL_SCALE;
+  return base;
+}
+
+// antialias и logarithmicDepthBuffer — свойства САМОГО контекста WebGL:
+// задаются только в конструкторе WebGLRenderer и у живого рендерера не
+// меняются. Поэтому переключение профиля пересоздаёт рендерер целиком
+// (rebuild3DRenderer), а не правит флаги на месте.
+function rendererOptionsForCurrentMode() {
+  if (state.lowSpec) return { antialias: false, logarithmicDepthBuffer: false };
+  return { antialias: true, logarithmicDepthBuffer: true };
 }
 
 // ЕДИНСТВЕННЫЙ материал всех граней — цвет статуса живёт не в материале, а
@@ -10926,6 +10986,49 @@ function init3DScene() {
 
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / Math.max(container.clientHeight, 1), 10, 5_000_000);
 
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x505050, 1.3));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  dirLight.position.set(1, 2, 1);
+  scene.add(dirLight);
+
+  v3.scene = scene;
+  v3.camera = camera;
+  v3.raycaster = new THREE.Raycaster();
+  v3.mouse = new THREE.Vector2();
+
+  // Рендерер и управление камерой — отдельно от сцены: при смене профиля
+  // отрисовки (обычный/лёгкий) они пересоздаются, а сцена, камера и вся
+  // геометрия остаются теми же объектами (см. rebuild3DRenderer).
+  create3DRendererAndControls(container);
+
+  // Один общий материал на ВСЕ рёбра всех элементов — раньше был свой
+  // экземпляр LineMaterial на каждый элемент (нужен был свой цвет
+  // статуса), но с переходом на фиксированный чёрный цвет (см.
+  // EDGE_COLOR) все рёбра рисуются ОДНИМ и тем же материалом — тысячи
+  // отдельных материалов (на реальном файле ~9000+ элементов) заставляли
+  // WebGL постоянно переключать состояние рендера между гранью и каждым
+  // ребром — заметно тормозило вращение/зум на живых данных, см.
+  // Docs/backlog.md. Общий материал сортируется Three.js рядом при
+  // рендере — намного меньше переключений состояния.
+  const resolution = new THREE.Vector2();
+  v3.renderer.getSize(resolution);
+  v3.edgeMaterial = new LineMaterial({ color: EDGE_COLOR, linewidth: EDGE_LINE_WIDTH_PX, resolution });
+
+  window.addEventListener("resize", on3DResize);
+  // Отпустить кнопку мыши можно и за пределами холста (курсор увели за край
+  // окна) — поэтому конец вращения слушаем на окне, а не на канвасе, иначе
+  // сцена осталась бы в пониженном разрешении до следующего клика.
+  window.addEventListener("pointerup", () => set3DDragging(false));
+  window.addEventListener("pointercancel", () => set3DDragging(false));
+}
+
+// Рендерер + OrbitControls + слушатели на холсте. Вынесено из init3DScene,
+// потому что вызывается ДВАЖДЫ: при первом входе в 3D и при каждой смене
+// профиля отрисовки (antialias/логарифмический буфер глубины задаются только
+// в конструкторе WebGLRenderer, см. rendererOptionsForCurrentMode).
+function create3DRendererAndControls(container) {
+  const v3 = state.view3d;
+
   // logarithmicDepthBuffer — модель измеряется в мм (десятки-сотни тысяч
   // единиц), а камера должна видеть и деталь в упор, и всё здание целиком
   // (near/far в fit3DCameraToData считаются от габарита данных, разброс
@@ -10936,7 +11039,9 @@ function init3DScene() {
   // дальнем плане. Вендоренный LineMaterial уже поддерживает логарифмический
   // буфер "из коробки" (штатный чанк `logdepthbuf_*` в шейдере, тот же,
   // что использует весь остальной Three.js).
-  const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+  // В лёгком режиме логарифмический буфер и MSAA выключены — см.
+  // rendererOptionsForCurrentMode и разбор у LOW_SPEC_KEY.
+  const renderer = new THREE.WebGLRenderer(rendererOptionsForCurrentMode());
   // devicePixelRatio на Retina/HiDPI мониторах — обычно 2 — линейно
   // умножает объём работы фрагментного шейдера КАЖДЫЙ кадр (в 4 раза
   // больше пикселей физического буфера, чем на 1x). На сцене с ~9000+
@@ -10944,15 +11049,10 @@ function init3DScene() {
   // репорт пользователя, см. Docs/backlog.md). 1.5 — компромисс: заметно
   // дешевле полного 2x, картинка всё ещё существенно чётче, чем при 1x.
   renderer.setPixelRatio(pixelRatioForCurrentMode());
-  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setSize(container.clientWidth, Math.max(container.clientHeight, 1));
   container.appendChild(renderer.domElement);
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x505050, 1.3));
-  const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
-  dirLight.position.set(1, 2, 1);
-  scene.add(dirLight);
-
-  const controls = new OrbitControls(camera, renderer.domElement);
+  const controls = new OrbitControls(v3.camera, renderer.domElement);
   // enableDamping=false — камера должна чётко следовать за курсором и
   // останавливаться сразу, как только оператор отпустил кнопку/колесо, а
   // не "докручиваться" по инерции ещё какое-то время (живой репорт
@@ -10969,47 +11069,69 @@ function init3DScene() {
   // именно на такой крупной модели. Ускоряем множителем, не трогая саму
   // библиотеку.
   controls.zoomSpeed = 4;
-  controls.addEventListener("change", updateZoomIndicator3D);
-  // Наклейки марок (build3DMarkDecal) лежат плоско на грани, не билборд —
-  // при повороте камеры вокруг элемента текст может оказаться "вверх
-  // ногами" с текущего ракурса; пересчитываем на каждое движение камеры
-  // (заказчик попросил явно, 2026-07-25), не только один раз при
-  // построении — дёшево, только смена кватерниона у уже существующих
-  // мешей, без пересборки geometry/texture (см. updateDecalOrientation).
-  controls.addEventListener("change", updateAllDecalOrientations);
   // Главный источник кадров при обычной работе: пока оператор вращает/
   // зумит/панорамирует, OrbitControls шлёт "change" на каждое движение —
-  // ровно на них и рисуем. Отпустил мышь — события кончились, кадры
-  // тоже (см. requestRender3D). Подписка ПОСЛЕ updateAllDecalOrientations,
-  // чтобы кадр рисовался уже с пересчитанным разворотом наклеек.
+  // ровно на них и заказываем кадр. Отпустил мышь — события кончились,
+  // кадры тоже (см. requestRender3D).
+  //
+  // Раньше на это же событие висели ещё updateZoomIndicator3D и
+  // updateAllDecalOrientations. События "change" приходят на КАЖДОЕ движение
+  // мыши — то есть чаще, чем рисуется кадр (а в лёгком режиме частота кадров
+  // ещё и ограничена сверху), так что обе работы делались вхолостую по
+  // нескольку раз на один показанный кадр. Обе перенесены внутрь
+  // render3DFrame: и разворот наклеек, и индикатор зума — производные от
+  // положения камеры, их место ровно там, где камера превращается в картинку.
   controls.addEventListener("change", requestRender3D);
 
-  // Один общий материал на ВСЕ рёбра всех элементов — раньше был свой
-  // экземпляр LineMaterial на каждый элемент (нужен был свой цвет
-  // статуса), но с переходом на фиксированный чёрный цвет (см.
-  // EDGE_COLOR) все рёбра рисуются ОДНИМ и тем же материалом — тысячи
-  // отдельных материалов (на реальном файле ~9000+ элементов) заставляли
-  // WebGL постоянно переключать состояние рендера между гранью и каждым
-  // ребром — заметно тормозило вращение/зум на живых данных, см.
-  // Docs/backlog.md. Общий материал сортируется Three.js рядом при
-  // рендере — намного меньше переключений состояния.
-  const resolution = new THREE.Vector2();
-  renderer.getSize(resolution);
-  v3.edgeMaterial = new LineMaterial({ color: EDGE_COLOR, linewidth: EDGE_LINE_WIDTH_PX, resolution });
-
-  v3.scene = scene;
-  v3.camera = camera;
   v3.renderer = renderer;
   v3.controls = controls;
-  v3.raycaster = new THREE.Raycaster();
-  v3.mouse = new THREE.Vector2();
 
   renderer.domElement.addEventListener("click", on3DClick);
   renderer.domElement.addEventListener("dblclick", on3DContextMenu);
   renderer.domElement.addEventListener("contextmenu", on3DContextMenu);
   renderer.domElement.addEventListener("mousemove", on3DMouseMove);
   renderer.domElement.addEventListener("mouseleave", hide3DTooltip);
-  window.addEventListener("resize", on3DResize);
+}
+
+// Пересоздание контекста WebGL при смене профиля отрисовки. Сцена, камера,
+// геометрия и материалы остаются теми же объектами — Three.js сам зальёт их
+// в новый контекст при первом кадре; заново создаются только рендерер и
+// управление (OrbitControls привязан к конкретному холсту). Точка орбиты
+// переносится вручную: сам объект controls новый.
+function rebuild3DRenderer() {
+  const v3 = state.view3d;
+  if (!v3.renderer) return;
+  const container = document.getElementById("stage-3d");
+  const target = v3.controls ? v3.controls.target.clone() : null;
+  cancel3DFrame();
+  v3.dragging = false;
+  if (v3.controls) v3.controls.dispose();
+  // Явная потеря контекста, а не только dispose(): у браузера жёсткий лимит
+  // на число живых контекстов WebGL на вкладку (порядка полутора десятков),
+  // и переключение профиля туда-сюда без этого рано или поздно упёрлось бы в
+  // него — самый старый контекст браузер убил бы сам, вместе с картинкой.
+  if (typeof v3.renderer.forceContextLoss === "function") v3.renderer.forceContextLoss();
+  v3.renderer.dispose();
+  v3.renderer.domElement.remove();
+  create3DRendererAndControls(container);
+  if (target) v3.controls.target.copy(target);
+  v3.controls.update();
+  on3DResize(); // размер холста + resolution у материала рёбер — под новый рендерер
+}
+
+// Вращение/панорамирование мышью началось или закончилось. Влияет только на
+// лёгкий режим (см. LOW_SPEC_DRAG_PIXEL_SCALE): пока идёт движение, сцена
+// рисуется в пониженном разрешении, на отпускании — сразу же в полном.
+function set3DDragging(dragging) {
+  const v3 = state.view3d;
+  if (v3.dragging === dragging) return;
+  v3.dragging = dragging;
+  if (!state.lowSpec || !v3.active || !v3.renderer) return;
+  v3.renderer.setPixelRatio(pixelRatioForCurrentMode());
+  // Чёткий кадр после отпускания нужен НЕМЕДЛЕННО, без ожидания потолка
+  // частоты — иначе оператор до половины секунды смотрел бы на мыло.
+  if (!dragging) v3.lastFrameAt = 0;
+  requestRender3D();
 }
 
 // Вписывает камеру по охвату текущих данных — как "вся схема целиком" у
@@ -11106,15 +11228,53 @@ function render3DFrame() {
   const v3 = state.view3d;
   v3.animationFrameId = null;
   if (!v3.active || !v3.renderer) return;
+  v3.lastFrameAt = performance.now();
   v3.controls.update();
+  // Наклейки марок (build3DMarkDecal) лежат плоско на грани, не билборд —
+  // при повороте камеры вокруг элемента текст может оказаться "вверх
+  // ногами" с текущего ракурса; разворот пересчитывается на каждое движение
+  // камеры (заказчик попросил явно, 2026-07-25). Место пересчёта — здесь, а
+  // не на событии "change" у OrbitControls: событий на один показанный кадр
+  // приходит несколько (см. create3DRendererAndControls). При выключенных
+  // подписях наклеек нет вовсе, и проверка размера карты стоит ноль.
+  if (v3.markDecalById.size) updateAllDecalOrientations();
+  updateZoomIndicator3D();
   v3.renderer.render(v3.scene, v3.camera);
 }
 
+// Потолок частоты кадров в лёгком режиме — единственное место, где он
+// применяется. Отложенный кадр НЕ теряется и не устаревает: он рисуется по
+// состоянию камеры на момент срабатывания таймера, то есть по самому свежему.
+// В обычном режиме потолка нет — там кадры и так пасует requestAnimationFrame.
 function requestRender3D() {
   const v3 = state.view3d;
   if (!v3.active || !v3.renderer) return;
-  if (v3.animationFrameId !== null) return; // кадр уже заказан — хватит одного
+  if (v3.animationFrameId !== null || v3.throttleTimerId !== null) return; // кадр уже заказан — хватит одного
+  const minGap = state.lowSpec ? 1000 / LOW_SPEC_FPS_CAP : 0;
+  const wait = minGap ? minGap - (performance.now() - v3.lastFrameAt) : 0;
+  if (wait > 0) {
+    v3.throttleTimerId = setTimeout(() => {
+      v3.throttleTimerId = null;
+      v3.animationFrameId = requestAnimationFrame(render3DFrame);
+    }, wait);
+    return;
+  }
   v3.animationFrameId = requestAnimationFrame(render3DFrame);
+}
+
+// Снять уже заказанный кадр — и обычный, и отложенный потолком частоты.
+// Одной строкой `cancelAnimationFrame` теперь мало: заказ может лежать в
+// таймере, а не в очереди кадров браузера.
+function cancel3DFrame() {
+  const v3 = state.view3d;
+  if (v3.animationFrameId !== null) {
+    cancelAnimationFrame(v3.animationFrameId);
+    v3.animationFrameId = null;
+  }
+  if (v3.throttleTimerId !== null) {
+    clearTimeout(v3.throttleTimerId);
+    v3.throttleTimerId = null;
+  }
 }
 
 // Вкладку свернули/увели на задний план — снимаем уже заказанный кадр
@@ -11122,12 +11282,8 @@ function requestRender3D() {
 // кадр, чтобы холст точно был актуален после возможной потери
 // содержимого буфера.
 document.addEventListener("visibilitychange", () => {
-  const v3 = state.view3d;
   if (document.hidden) {
-    if (v3.animationFrameId !== null) {
-      cancelAnimationFrame(v3.animationFrameId);
-      v3.animationFrameId = null;
-    }
+    cancel3DFrame();
     return;
   }
   requestRender3D();
@@ -11289,10 +11445,7 @@ async function setViewMode(mode) {
 
   if (!want3D) {
     v3.active = false;
-    if (v3.animationFrameId !== null) {
-      cancelAnimationFrame(v3.animationFrameId);
-      v3.animationFrameId = null;
-    }
+    cancel3DFrame();
     hide3DTooltip();
     stage3d.style.display = "none";
     stage2d.style.display = "";
@@ -11322,8 +11475,14 @@ async function setViewMode(mode) {
   const hint = document.getElementById("stage-3d-hint");
   if (hint) hint.style.display = "none";
 
+  // Рендерер уже был — значит профиль меняется на живой сцене, и контекст
+  // WebGL надо пересоздать (antialias/логарифмический буфер глубины иначе не
+  // переключить, см. rendererOptionsForCurrentMode). Если сцены ещё не было,
+  // init3DScene только что создала рендерер уже с нужными флагами: state.lowSpec
+  // выставлен выше.
+  const hadRenderer = !!v3.renderer;
   init3DScene();
-  if (v3.renderer && lowSpecChanged) v3.renderer.setPixelRatio(pixelRatioForCurrentMode());
+  if (hadRenderer && lowSpecChanged) rebuild3DRenderer();
   // Пересобираем сцену, если сменился вид 3D: рёбра создаются в момент
   // ПОСТРОЕНИЯ меша, простой сменой видимости их не убрать.
   if (!v3.active || lowSpecChanged) build3DScene();
@@ -11348,7 +11507,14 @@ document.addEventListener("pointerdown", (e) => {
   if (e.target.closest("#stage-3d")) threeDragging = false;
 });
 document.addEventListener("pointermove", (e) => {
-  if (e.buttons && e.target.closest("#stage-3d")) threeDragging = true;
+  if (e.buttons && e.target.closest("#stage-3d")) {
+    threeDragging = true;
+    // Признак вращения для профиля отрисовки — именно ДВИЖЕНИЕ с зажатой
+    // кнопкой, а не сам pointerdown: от простого клика по элементу
+    // разрешение падать не должно (кадр всё равно один). Конец — на
+    // pointerup/pointercancel окна, см. init3DScene.
+    set3DDragging(true);
+  }
 });
 
 // ==================== СТАРТ ====================
