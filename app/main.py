@@ -65,6 +65,7 @@ from app.element_bulk_edit import (
     build_export_workbook,
 )
 from app import status_bulk_edit
+from app.access import accessible_object_ids, assert_object_access, require_system_admin
 from app.element_sync import summary_for_log
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
@@ -2301,7 +2302,7 @@ def get_projects_tree(user: sqlite3.Row = Depends(get_current_user)):
     """
     conn = get_connection()
     try:
-        return {"projects": projects_tree(conn),
+        return {"projects": projects_tree(conn, accessible_object_ids(conn, user)),
                 "last_object_id": user["last_object_id"] if "last_object_id" in user.keys() else None}
     finally:
         conn.close()

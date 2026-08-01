@@ -411,6 +411,50 @@ def _migrate_elements_drop_batch_id(conn: sqlite3.Connection, changes: list) -> 
     changes.append("снята колонка elements.batch_id (висячий внешний ключ на удалённую таблицу batches)")
 
 
+ACCESS_SEED_MARKER = "user_access_seeded"
+
+
+def _seed_user_access(conn: sqlite3.Connection, changes: list) -> None:
+    """Выдаёт существующим пользователям доступ ко всем проектам с их
+    нынешней ролью — одноразово, при переходе на разграничение (этап C).
+
+    Без этого первый же деплой запер бы всех, кроме системного
+    администратора: гранты пусты, а «нет гранта» означает «нет доступа».
+    Молча оставить прораба перед пустым экраном хуже, чем на день оставить
+    доступ шире нужного: сузить его администратор может за минуту, а
+    объяснять людям, куда делась работа, придётся долго.
+
+    Системным администраторам гранты не нужны — они видят всё в обход.
+
+    За маркером в app_settings, а не «выдавать всем на каждом старте»:
+    иначе снятый администратором доступ возвращался бы при ближайшем
+    перезапуске, то есть отобрать права было бы нельзя.
+    """
+    marker = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?", (ACCESS_SEED_MARKER,)
+    ).fetchone()
+    if marker and marker["value"]:
+        return
+    projects = [r["id"] for r in conn.execute("SELECT id FROM projects")]
+    users = conn.execute("SELECT id, role FROM users WHERE role <> 'admin'").fetchall()
+    granted = 0
+    for u in users:
+        for pid in projects:
+            conn.execute(
+                "INSERT OR IGNORE INTO user_access (user_id, project_id, object_id, role) "
+                "VALUES (?, ?, NULL, ?)",
+                (u["id"], pid, u["role"]),
+            )
+            granted += 1
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = '1'",
+        (ACCESS_SEED_MARKER,),
+    )
+    if granted:
+        changes.append(f"выдан доступ к проектам существующим пользователям: {granted} грант(ов)")
+
+
 def _reconcile_contract_from_history(conn: sqlite3.Connection, changes: list) -> None:
     """Переносит контракт из истории в элемент ТАМ, ГДЕ У ЭЛЕМЕНТА ЕГО НЕТ —
     разовая сверка на переходе к новой модели контракта (2026-08-01).
@@ -937,12 +981,19 @@ def object_source_file(conn: sqlite3.Connection, object_id: int) -> str:
     return row["source_file"]
 
 
-def projects_tree(conn: sqlite3.Connection) -> list:
+def projects_tree(conn: sqlite3.Connection, allowed_object_ids=None) -> list:
     """Проекты со своими объектами — для переключателя в тулбаре.
 
     Счётчик элементов здесь же: пустой объект в списке ничем не отличался бы
     от загруженного, а переключиться на него и увидеть чистый лист — самый
     неприятный способ это узнать.
+
+    allowed_object_ids — множество доступных пользователю объектов; None
+    означает «доступны все» (системный администратор). Отбор ЗДЕСЬ, в одном
+    месте: дерево — единственный источник для переключателя, и вырезать
+    недоступное надо ровно один раз, а не в каждом из 22 эндпоинтов.
+    Проект, у которого не осталось видимых объектов, не показывается вовсе —
+    иначе в списке висели бы пустые заголовки чужих площадок.
     """
     counts = {
         r["object_id"]: r["n"]
@@ -957,6 +1008,9 @@ def projects_tree(conn: sqlite3.Connection) -> list:
             "SELECT object_id, source_file FROM object_drawings WHERE is_current = 1"
         )
     }
+    def visible(object_id):
+        return allowed_object_ids is None or object_id in allowed_object_ids
+
     tree = []
     for proj in conn.execute("SELECT id, name, address, description FROM projects ORDER BY name"):
         objects = [
@@ -966,7 +1020,10 @@ def projects_tree(conn: sqlite3.Connection) -> list:
                 "SELECT id, name, address FROM objects WHERE project_id = ? ORDER BY name",
                 (proj["id"],),
             )
+            if visible(o["id"])
         ]
+        if not objects:
+            continue
         tree.append({"id": proj["id"], "name": proj["name"], "address": proj["address"],
                      "description": proj["description"], "objects": objects})
     # Объекты без проекта не должны существовать (_bootstrap_default_project
@@ -976,6 +1033,7 @@ def projects_tree(conn: sqlite3.Connection) -> list:
         {"id": o["id"], "name": o["name"], "address": o["address"],
          "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
         for o in conn.execute("SELECT id, name, address FROM objects WHERE project_id IS NULL ORDER BY name")
+        if visible(o["id"])
     ]
     if orphans:
         tree.append({"id": None, "name": "Без проекта", "address": None,
@@ -1215,6 +1273,7 @@ def init_db() -> list:
         # контракт с «Запланированных» — иначе сверка вернула бы им то, что
         # инвариант обязан убрать. Обе — ПОСЛЕ чистки наследия: незачем
         # сверять контракты у строк, которые сейчас будут удалены.
+        _seed_user_access(conn, changes)
         _reconcile_contract_from_history(conn, changes)
         _enforce_planned_has_no_contract(conn, changes)
         _normalize_element_type_vocabulary(conn, changes)
