@@ -677,11 +677,13 @@ function currentObject() {
 
 function renderObjectSwitch() {
   const текущий = currentObject();
+  // Проект показывается ВСЕГДА, даже когда он один (живой репорт
+  // 2026-08-01: «а где проекты? почему я вижу только объект?»). Прежняя
+  // экономия места скрывала уровень иерархии: человек не видел, в каком
+  // проекте работает, и слово «проект» из интерфейса просто исчезало.
   objectSwitchLabel.textContent = текущий
-    ? (state.projects.length > 1 || текущий.project.id === null
-        ? `${текущий.project.name} · ${текущий.object.name}`
-        : текущий.object.name)
-    : "Объект не выбран";
+    ? `${текущий.project.name} · ${текущий.object.name}`
+    : "Проект и объект не выбраны";
   objectSwitchMenu.innerHTML = "";
   for (const проект of state.projects) {
     const head = document.createElement("div");
