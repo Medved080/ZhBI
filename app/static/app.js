@@ -5420,16 +5420,25 @@ async function renderProjectsModal() {
   }
   box.innerHTML = projects.map((p) => `
     <div style="padding:10px 0; border-bottom:1px solid var(--color-border)">
-      <div class="subtype-add-row">
-        <input type="text" data-pid="${p.id}" class="project-name" value="${escapeHtml(p.name)}" placeholder="Наименование"/>
-        <input type="text" data-pid="${p.id}" class="project-address" value="${escapeHtml(p.address || "")}" placeholder="Адрес"/>
-        ${админ ? `<button class="btn btn-sm btn-secondary" data-save-project="${p.id}">Сохранить</button>` : ""}
-        ${админ && !p.objects_count ? `<button class="btn btn-sm btn-secondary" data-del-project="${p.id}">Удалить</button>` : ""}
+      <div class="object-fields">
+        <label class="object-field">
+          <span>Наименование проекта</span>
+          <input type="text" data-pid="${p.id}" class="project-name" value="${escapeHtml(p.name)}"/>
+        </label>
+        <label class="object-field">
+          <span>Адрес</span>
+          <input type="text" data-pid="${p.id}" class="project-address" value="${escapeHtml(p.address || "")}"/>
+        </label>
       </div>
-      <div class="hint-text" style="margin-top:6px">
+      <div class="object-card-foot">
+        <div class="hint-text">
         Объектов: ${p.objects_count}. Элементов: ${p.elements_count}.
         Сроки СМР (сводно): ${p.smr_start ? formatDateRu(p.smr_start) : "—"} — ${p.smr_end ? formatDateRu(p.smr_end) : "—"}.
-        ${p.objects_count ? "" : "Пустой проект можно удалить."}
+        </div>
+        <div style="display:flex; gap:6px;">
+          ${админ ? `<button class="btn btn-sm btn-secondary" data-save-project="${p.id}">Сохранить</button>` : ""}
+          ${админ && !p.objects_count ? `<button class="btn btn-sm btn-secondary" data-del-project="${p.id}">Удалить</button>` : ""}
+        </div>
       </div>
     </div>`).join("");
 
@@ -5502,23 +5511,36 @@ async function renderObjectsModal() {
   // перенос объекта в другой проект — обычная правка реквизита.
   const projects = await api("/projects");
   const админ = state.currentUser && state.currentUser.role === "admin";
+  // Каждое поле с ПОДПИСЬЮ и в своей ячейке сетки, а не в общей flex-строке
+  // (живой репорт со скриншотом 2026-08-01: «где тут указать проект и где
+  // наименование объекта?»). У .modal select ширина 100%, во flex-строке
+  // она становится flex-basis и вытесняет соседний input с flex:1 почти в
+  // ноль — тот же класс бага, что уже был с полем даты в форме договора.
   box.innerHTML = objects.map(o => `
-    <div style="padding:10px 0; border-bottom:1px solid var(--color-border)">
-      <div class="subtype-add-row">
-        <input type="text" data-object-id="${o.id}" class="object-name" value="${escapeHtml(o.name)}" placeholder="Наименование"/>
-        <select data-object-id="${o.id}" class="object-project" ${админ ? "" : "disabled"}>
-          ${projects.map(p => `<option value="${p.id}" ${p.id === o.project_id ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}
-        </select>
+    <div class="object-card">
+      <div class="object-fields">
+        <label class="object-field">
+          <span>Наименование объекта</span>
+          <input type="text" data-object-id="${o.id}" class="object-name" value="${escapeHtml(o.name)}"/>
+        </label>
+        <label class="object-field">
+          <span>Проект</span>
+          <select data-object-id="${o.id}" class="object-project" ${админ ? "" : "disabled"}>
+            ${projects.map(p => `<option value="${p.id}" ${p.id === o.project_id ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="object-field object-field-wide">
+          <span>Адрес объекта</span>
+          <input type="text" data-object-id="${o.id}" class="object-address" value="${escapeHtml(o.address || "")}"/>
+        </label>
+      </div>
+      <div class="object-card-foot">
+        <div class="hint-text">
+          Актуальный чертёж: ${escapeHtml(o.current_source_file || "—")}.
+          Элементов: ${o.elements_current}${o.elements_retired ? `, исчезли из чертежа: ${o.elements_retired}` : ""}.
+          ${o.drawings.length > 1 ? `Загружалось версий: ${o.drawings.length}.` : ""}
+        </div>
         ${админ ? `<button class="btn btn-sm btn-secondary" data-save-object="${o.id}">Сохранить</button>` : ""}
-      </div>
-      <div class="subtype-add-row" style="margin-top:6px">
-        <input type="text" data-object-id="${o.id}" class="object-address" value="${escapeHtml(o.address || "")}" placeholder="Адрес объекта"/>
-      </div>
-      <div class="hint-text" style="margin-top:6px">
-        Проект: ${escapeHtml(o.project_name || "—")}.
-        Актуальный чертёж: ${escapeHtml(o.current_source_file || "—")}.
-        Элементов: ${o.elements_current}${o.elements_retired ? `, исчезли из чертежа: ${o.elements_retired}` : ""}.
-        ${o.drawings.length > 1 ? `Загружалось версий: ${o.drawings.length}.` : ""}
       </div>
     </div>`).join("");
 

@@ -277,6 +277,19 @@
   .subtype-chip button { border: none; background: none; cursor: pointer; color: var(--color-text-muted); font-size: 13px; line-height: 1; padding: 2px; }
   .subtype-chip button:hover { color: var(--color-danger); }
   .subtype-add-row { display: flex; gap: 6px; }
+  /* Карточка объекта/проекта в справочнике: каждое поле со своей подписью и
+     в своей ячейке сетки. В общей flex-строке <select> (у него width:100%,
+     то есть flex-basis:100%) вытеснял соседний input почти в ноль — форма
+     выглядела как одно поле неизвестного назначения. */
+  .object-card { padding: 12px 0; border-bottom: 1px solid var(--color-border); }
+  .object-card:last-child { border-bottom: none; }
+  .object-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  .object-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .object-field > span { font-size: 11px; color: var(--color-text-muted); }
+  .object-field-wide { grid-column: 1 / -1; }
+  .object-card-foot { display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 12px; margin-top: 8px; }
+  .object-card-foot .hint-text { margin: 0; }
   /* Активная строка справочника элементов — под ней показывается история
      статусов этого элемента. */
   #ec-table tbody tr.ec-row-active { background: rgba(36,113,163,.12); }
@@ -1398,9 +1411,14 @@
     <div id="projects-rows"></div>
     <div class="admin-only" style="margin-top:14px">
       <label class="field">Новый проект</label>
-      <div class="subtype-add-row">
-        <input type="text" id="project-new-name" placeholder="Наименование"/>
-        <input type="text" id="project-new-address" placeholder="Адрес"/>
+      <div class="object-fields">
+        <label class="object-field"><span>Наименование проекта</span>
+          <input type="text" id="project-new-name"/></label>
+        <label class="object-field"><span>Адрес</span>
+          <input type="text" id="project-new-address"/></label>
+      </div>
+      <div class="object-card-foot">
+        <span></span>
         <button class="btn btn-sm btn-primary" id="project-add">Добавить</button>
       </div>
     </div>
