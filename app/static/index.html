@@ -1346,6 +1346,11 @@
     <div class="hint-text" id="file-select-summary-line"></div>
 
     <label class="field" style="margin-top:16px">Загрузить новый чертёж (.dxf)</label>
+    <!-- В какой объект грузим — спрашиваем ЯВНО (этап B): раньше сервер
+         выбирал объект сам по имени файла и истории загрузок, и при
+         нескольких объектах чертёж мог уехать не туда. -->
+    <label class="object-field" style="margin-bottom:8px"><span>Загрузить в объект</span>
+      <select id="upload-object"></select></label>
     <input type="file" id="upload-file-input" accept=".dxf"/>
     <div class="import-template" data-template="dxf"></div>
     <div id="upload-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
@@ -1434,6 +1439,23 @@
     <h2>Объекты</h2>
     <p class="hint-text">Объект — здание или стройплощадка. Элементы принадлежат объекту, а не файлу чертежа: новая версия чертежа обновляет их, сохраняя статусы и историю.</p>
     <div id="objects-rows"></div>
+    <div class="admin-only" style="margin-top:14px; border-top:1px solid var(--color-border); padding-top:12px">
+      <label class="field">Новый объект</label>
+      <div class="object-fields">
+        <label class="object-field"><span>Наименование объекта</span>
+          <input type="text" id="object-new-name"/></label>
+        <label class="object-field"><span>Проект</span>
+          <select id="object-new-project"></select></label>
+        <label class="object-field object-field-wide"><span>Адрес объекта</span>
+          <input type="text" id="object-new-address"/></label>
+      </div>
+      <div class="object-card-foot">
+        <!-- Чертёж грузится отдельно: объект без чертежа — законное
+             состояние, он просто показывается пустым. -->
+        <span class="hint-text">Чертёж загружается отдельно — «Обмен данными → Загрузить чертёж».</span>
+        <button class="btn btn-sm btn-primary" id="object-add">Добавить</button>
+      </div>
+    </div>
     <div id="objects-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="objects-close">Закрыть</button>

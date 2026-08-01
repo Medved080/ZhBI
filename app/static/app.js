@@ -753,9 +753,18 @@ async function switchObject(objectId) {
     // условие работы.
     console.warn("Не удалось запомнить выбранный объект:", e.message);
   }
-  await loadPlan(false);   // false — пересчитать вид: у объекта своя сетка осей
   const текущий = currentObject();
-  showToast(`Объект: ${текущий ? текущий.object.name : objectId}`, "info");
+  try {
+    await loadPlan(false);   // false — пересчитать вид: у объекта своя сетка осей
+  } catch (e) {
+    // Не смогли загрузить — схему чистим и говорим почему. Оставить на
+    // экране данные ПРЕЖНЕГО объекта под новой крошкой было бы худшим из
+    // возможных исходов: человек уверен, что смотрит одно, а видит другое.
+    clearWorkspace();
+    showToast(`Не удалось открыть объект «${текущий ? текущий.object.name : objectId}»: ${e.message}`, "error");
+    return;
+  }
+  if (текущий && текущий.object.source_file) showToast(`Объект: ${текущий.object.name}`, "info");
 }
 
 async function loadSourceFiles() {
@@ -3824,6 +3833,17 @@ async function loadPlan(preserveView = true) {
       source_file, layers: layers ? Array.from(layers) : null,
     }));
   } else if (state.objectId) {
+    // Объект без чертежа — законное состояние с тех пор, как объект можно
+    // завести заранее (справочник «Объекты»). Схема просто пуста; запрос
+    // не отправляем вовсе — сервер ответил бы 404 «нет актуального
+    // чертежа», и переключение падало бы с ошибкой вместо чистого листа
+    // (поймано живой проверкой).
+    const текущий = currentObject();
+    if (текущий && !текущий.object.source_file) {
+      clearWorkspace();
+      showToast(`У объекта «${текущий.object.name}» ещё нет чертежа — загрузите его в «Обмен данными → Загрузить чертёж»`, "info");
+      return;
+    }
     selection = [{ object_id: state.objectId }];
   } else {
     clearWorkspace();
@@ -5544,6 +5564,14 @@ async function renderObjectsModal() {
       </div>
     </div>`).join("");
 
+  const newProject = document.getElementById("object-new-project");
+  newProject.innerHTML = projects.map(p =>
+    `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  // Проект по умолчанию — тот, в котором сейчас работает пользователь:
+  // новое здание почти всегда добавляют на текущую площадку.
+  const текущий = currentObject();
+  if (текущий && текущий.project.id) newProject.value = String(текущий.project.id);
+
   box.querySelectorAll("[data-save-object]").forEach(btn => {
     btn.addEventListener("click", async () => {
       const id = btn.getAttribute("data-save-object");
@@ -5573,6 +5601,30 @@ async function renderObjectsModal() {
     });
   });
 }
+
+document.getElementById("object-add").addEventListener("click", async () => {
+  const statusBox = document.getElementById("objects-status");
+  const name = document.getElementById("object-new-name").value.trim();
+  const projectId = Number(document.getElementById("object-new-project").value);
+  if (!name) { statusBox.style.color = "var(--color-danger)"; statusBox.textContent = "Укажите наименование объекта"; return; }
+  if (!projectId) { statusBox.style.color = "var(--color-danger)"; statusBox.textContent = "Сначала заведите проект"; return; }
+  try {
+    await api("/objects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, project_id: projectId,
+                             address: document.getElementById("object-new-address").value || null }),
+    });
+    document.getElementById("object-new-name").value = "";
+    document.getElementById("object-new-address").value = "";
+    await renderObjectsModal();
+    await loadProjectsTree();   // объект должен сразу появиться в переключателе
+    statusBox.style.color = "var(--color-text-muted)";
+    statusBox.textContent = "Объект добавлен. Чертёж загружается отдельно.";
+  } catch (e) {
+    statusBox.style.color = "var(--color-danger)";
+    statusBox.textContent = e.message || "Не удалось добавить объект";
+  }
+});
 
 document.getElementById("menu-objects").addEventListener("click", async () => {
   objectsBackdrop.classList.add("open");
@@ -9036,6 +9088,10 @@ document.getElementById("btn-upload").addEventListener("click", async () => {
   // перечитываем при каждом открытии — состав файлов мог измениться после
   // загрузки нового чертежа или импорта из папки Input.
   await renderFileSelectMenu();
+  const sel = document.getElementById("upload-object");
+  sel.innerHTML = state.projects.flatMap(p => p.objects.map(o =>
+    `<option value="${o.id}">${escapeHtml(p.name)} · ${escapeHtml(o.name)}</option>`)).join("");
+  if (state.objectId) sel.value = String(state.objectId);
 });
 document.getElementById("upload-cancel").addEventListener("click", () => uploadBackdrop.classList.remove("open"));
 
@@ -9053,6 +9109,9 @@ uploadSubmit.addEventListener("click", async () => {
   try {
     // Фаза 1 — только разбор и сверка, в БД ничего не пишется (решение И3).
     // Применение — после того, как пользователь увидел, что изменится.
+    // В какой объект грузим — явно, а не «сервер догадается по имени файла»
+    const целевой = document.getElementById("upload-object").value;
+    if (целевой) formData.append("object_id", целевой);
     const res = await fetch("/import-dxf/analyze", { method: "POST", body: formData });
     const body = await res.json().catch(() => null);
 

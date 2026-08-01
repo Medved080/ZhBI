@@ -2364,6 +2364,48 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
         conn.close()
 
 
+class ObjectCreateIn(BaseModel):
+    name: str
+    project_id: int
+    address: Optional[str] = None
+    description: Optional[str] = None
+
+
+@app.post("/objects", response_model=ObjectOut)
+def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_admin)):
+    """Завести объект ЗАРАНЕЕ, до загрузки чертежа.
+
+    Раньше объект появлялся только сам, при первом импорте, и создание было
+    намеренно не поддержано. С появлением проектов это перестало работать:
+    новое здание надо сначала положить в нужный проект, а импорт выбирал
+    объект за пользователя. Объект без чертежа — законное состояние: он
+    показывается пустым, и чертёж в него загружают отдельно (форма
+    «Загрузить чертёж» спрашивает, в какой объект).
+
+    Проект обязателен: объект без проекта недостижим ни через один селектор
+    и исчезает с глаз вместе со всеми своими элементами.
+    """
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Наименование объекта не может быть пустым")
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM projects WHERE id = ?", (body.project_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        if conn.execute("SELECT 1 FROM objects WHERE name = ?", (name,)).fetchone():
+            raise HTTPException(status_code=409, detail="Объект с таким наименованием уже есть")
+        conn.execute(
+            "INSERT INTO objects (name, address, description, project_id) VALUES (?, ?, ?, ?)",
+            (name, body.address, body.description, body.project_id),
+        )
+        conn.commit()
+        new_id = conn.execute("SELECT id FROM objects WHERE name = ?", (name,)).fetchone()["id"]
+    finally:
+        conn.close()
+    activity.log("object_create", user=admin, entity_type="object", entity_id=new_id, new_value=name)
+    return next(o for o in list_objects(admin) if o.id == new_id)
+
+
 @app.patch("/objects/{object_id}", response_model=ObjectOut)
 def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depends(require_admin)):
     """Переименование объекта. Создание и удаление намеренно НЕ поддержаны:
@@ -2818,6 +2860,10 @@ def import_dxf(
 def analyze_dxf(
     file: UploadFile = File(...),
     source_file: Optional[str] = Form(None),
+    # В КАКОЙ объект грузим. Пусто — прежнее поведение (сервер выбирает сам
+    # по имени файла и истории загрузок): нужно, пока в системе один объект
+    # и спрашивать не о чем.
+    object_id: Optional[int] = Form(None),
     user: sqlite3.Row = Depends(require_admin),
 ):
     """Фаза 1 импорта (решение И3): что изменится, если применить чертёж.
@@ -2827,7 +2873,7 @@ def analyze_dxf(
         saved_path = save_uploaded_file(file, UPLOADS_DIR)
         name = source_file or saved_path.name
         parsed = parse_drawing(saved_path, name)
-        analysis = analyze_drawing(parsed)
+        analysis = analyze_drawing(parsed, object_id)
         token = remember_pending(parsed, analysis)
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
