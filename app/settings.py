@@ -14,6 +14,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+# До этапа D эти настройки хранятся ОДНОЙ записью на всю систему
+# (app_settings, report_notes), поэтому правит их администратор
+# СЕРВИСА. Отдать их «админу объекта» сейчас значило бы дать ему
+# менять настройки всех объектов сразу — это не разграничение, а
+# новая дыра. Переедут внутрь объекта вместе с таблицами.
+from app.access import require_system_admin
 from app.auth import get_current_user, require_admin
 from app.db import get_connection
 
@@ -92,7 +98,7 @@ def read_project_card(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @router.put("/project-card")
-def write_project_card(body: ProjectCardIn, admin: sqlite3.Row = Depends(require_admin)):
+def write_project_card(body: ProjectCardIn, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         set_setting(conn, PROJECT_CARD_KEY, json.dumps(body.model_dump(), ensure_ascii=False))
@@ -121,7 +127,7 @@ def get_info_plate_settings(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @router.put("/info-plate", response_model=InfoPlateSettingsOut)
-def set_info_plate_settings(body: InfoPlateSettingsIn, admin: sqlite3.Row = Depends(require_admin)):
+def set_info_plate_settings(body: InfoPlateSettingsIn, admin: sqlite3.Row = Depends(require_system_admin)):
     if body.late_threshold_days < 0:
         raise HTTPException(status_code=400, detail="Порог не может быть отрицательным")
     conn = get_connection()
@@ -194,7 +200,7 @@ def read_report_notes(on_date: Optional[str] = None, user: sqlite3.Row = Depends
 
 
 @router.put("/report-notes")
-def write_report_notes(body: ReportNotesIn, admin: sqlite3.Row = Depends(require_admin)):
+def write_report_notes(body: ReportNotesIn, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         conn.execute(
@@ -216,7 +222,7 @@ def write_report_notes(body: ReportNotesIn, admin: sqlite3.Row = Depends(require
 
 
 @router.delete("/report-notes/{effective_date}", status_code=204)
-def delete_report_notes(effective_date: str, admin: sqlite3.Row = Depends(require_admin)):
+def delete_report_notes(effective_date: str, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         conn.execute("DELETE FROM report_notes WHERE effective_date = ?", (effective_date[:10],))

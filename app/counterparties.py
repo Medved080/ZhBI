@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.access import require_system_admin
+from app.access import assert_object_access, require_system_admin
 from app.auth import get_current_user, require_admin
 from app.db import get_connection
 
@@ -241,8 +241,34 @@ def list_agreements(counterparty_id: int = Query(...), user: sqlite3.Row = Depen
         conn.close()
 
 
+def _guard_agreement(conn, user, agreement_id: int) -> None:
+    """Доступ к договору — по объекту, на который он заключён
+    (agreements.object_id, этап A).
+
+    Если объект ещё не проставлен (договоры, заведённые до иерархии),
+    правит только администратор сервиса: раздавать безобъектный договор
+    «админам объектов» нельзя — неизвестно, чей он.
+    """
+    row = conn.execute("SELECT object_id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Договор не найден")
+    if row["object_id"] is None:
+        if user["role"] != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Договор не привязан к объекту — правит администратор сервиса",
+            )
+        return
+    assert_object_access(conn, user, row["object_id"], "admin")
+
+
 @router.post("/agreements", response_model=AgreementOut)
-def create_agreement(body: AgreementIn, admin: sqlite3.Row = Depends(require_admin)):
+def create_agreement(body: AgreementIn, admin: sqlite3.Row = Depends(get_current_user)):
+    # Объект договора здесь не задаётся (переедет в этап D), поэтому
+    # заводить договоры может только администратор сервиса: иначе появился
+    # бы документ без владельца, доступный кому угодно.
+    if admin["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Заводить договоры может администратор сервиса")
     conn = get_connection()
     try:
         counterparty = conn.execute(
@@ -262,8 +288,9 @@ def create_agreement(body: AgreementIn, admin: sqlite3.Row = Depends(require_adm
 
 
 @router.patch("/agreements/{agreement_id}", response_model=AgreementOut)
-def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = Depends(require_admin)):
+def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    _guard_agreement(conn, admin, agreement_id)
     try:
         existing = conn.execute("SELECT id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
         if not existing:
@@ -295,8 +322,9 @@ def list_specifications(agreement_id: int = Query(...), user: sqlite3.Row = Depe
 
 
 @router.post("/specifications", response_model=SpecificationOut)
-def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(require_admin)):
+def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    _guard_agreement(conn, admin, body.agreement_id)
     try:
         agreement = conn.execute("SELECT id FROM agreements WHERE id = ?", (body.agreement_id,)).fetchone()
         if not agreement:
@@ -315,8 +343,9 @@ def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(req
 
 
 @router.patch("/specifications/{specification_id}", response_model=SpecificationOut)
-def update_specification(specification_id: int, body: SpecificationIn, admin: sqlite3.Row = Depends(require_admin)):
+def update_specification(specification_id: int, body: SpecificationIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    _guard_agreement(conn, admin, body.agreement_id)
     try:
         existing = conn.execute("SELECT id FROM specifications WHERE id = ?", (specification_id,)).fetchone()
         if not existing:

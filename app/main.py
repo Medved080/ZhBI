@@ -1351,7 +1351,7 @@ def get_label_visibility(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.put("/label-visibility")
-def set_label_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(require_admin)):
+def set_label_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         for element_type, visible in settings.items():
@@ -1382,7 +1382,7 @@ def get_label_dates_visibility(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.put("/label-dates-visibility")
-def set_label_dates_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(require_admin)):
+def set_label_dates_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         for element_type, visible in settings.items():
@@ -1461,9 +1461,14 @@ def list_zone_colors(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.put("/zone-colors")
-def set_zone_colors(items: list[ZoneColorIn], user: sqlite3.Row = Depends(require_admin)):
+def set_zone_colors(items: list[ZoneColorIn], user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        # Цвет крана привязан к ЧЕРТЕЖУ, значит и к объекту. Проверяем каждый
+        # присланный файл: в одном запросе их может быть несколько, и хватило
+        # бы одного чужого, чтобы перекрасить соседнюю стройку.
+        for item in {i.source_file for i in items}:
+            _guard_source_file(conn, user, item)
         for item in items:
             conn.execute(
                 "INSERT INTO zone_colors (source_file, category, name, color) VALUES (?, 'Кран', ?, ?) "
@@ -2063,6 +2068,11 @@ def update_element_fields(
 # Один набор эндпоинтов на оба, а не два параллельных: структуры ответа
 # (columns/elements/changes/rejected) совпадают, и табличный экран
 # подтверждения переиспользуется целиком.
+# Массовая правка идёт по ВСЕМ объектам одним файлом (так её и просили),
+# поэтому она пока за администратором сервиса. Отдать её «админу объекта»
+# без отбора строк по доступным объектам значило бы выдать ему выгрузку
+# всей базы и право править чужие элементы — отбор нужен в обоих модулях
+# выгрузки (реквизиты и статусы) и вынесен в отдельную задачу.
 _BULK_MODES = {"fields", "statuses"}
 
 
@@ -2073,7 +2083,7 @@ def _check_bulk_mode(mode: str) -> str:
 
 
 @app.get("/elements/bulk-edit/export")
-def bulk_edit_export(mode: str = Query("fields"), admin: sqlite3.Row = Depends(require_admin)):
+def bulk_edit_export(mode: str = Query("fields"), admin: sqlite3.Row = Depends(require_system_admin)):
     """Снимок реквизитов всех элементов всех объектов ОДНИМ файлом — для
     правки в Excel и обратной загрузки (см. app/element_bulk_edit.py).
 
@@ -2103,7 +2113,7 @@ def bulk_edit_export(mode: str = Query("fields"), admin: sqlite3.Row = Depends(r
 
 @app.post("/elements/bulk-edit/analyze")
 def bulk_edit_analyze(file: UploadFile = File(...), mode: str = Form("fields"),
-                      admin: sqlite3.Row = Depends(require_admin)):
+                      admin: sqlite3.Row = Depends(require_system_admin)):
     """Сверяет загруженный файл с базой и возвращает список расхождений.
     НИЧЕГО НЕ ПИШЕТ — применение отдельным вызовом, после того как
     пользователь отметил флажками, что применять."""
@@ -2132,7 +2142,7 @@ class BulkEditApplyIn(BaseModel):
 
 
 @app.post("/elements/bulk-edit/apply")
-def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_admin)):
+def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_system_admin)):
     """Применяет отмеченные изменения."""
     if not body.changes:
         raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
@@ -2158,6 +2168,33 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
         )
     finally:
         conn.close()
+
+
+def _object_for_source_file(conn, source_file: str):
+    """Объект, которому принадлежит чертёж. None — файл не привязан ни к
+    одному объекту (наследие или ещё не импортированный)."""
+    row = conn.execute(
+        "SELECT object_id FROM object_drawings WHERE source_file = ? LIMIT 1", (source_file,)
+    ).fetchone()
+    return row["object_id"] if row else None
+
+
+def _guard_source_file(conn, user, source_file: str, minimum: str = "admin") -> None:
+    """Доступ к операции над чертежом — по объекту этого чертежа.
+
+    Файл без объекта отдаётся только администратору сервиса: раздавать
+    безобъектные данные «админам объектов» нельзя — неизвестно, чьи они.
+    """
+    object_id = _object_for_source_file(conn, source_file)
+    if object_id is None:
+        if not is_system_admin(user):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Чертёж «{source_file}» не привязан к объекту — операция доступна "
+                       f"администратору сервиса",
+            )
+        return
+    assert_object_access(conn, user, object_id, minimum)
 
 
 def _resolve_selection_item(conn, item):
@@ -2856,7 +2893,7 @@ def import_dxf(
     # спрятанная кнопка — не защита, запрос к /import-dxf можно отправить
     # и без неё. Загрузка чертежа перезаписывает геометрию всех элементов
     # файла, то есть по последствиям это операция уровня админа.
-    user: sqlite3.Row = Depends(require_admin),
+    user: sqlite3.Row = Depends(require_system_admin),
 ):
     try:
         result = import_dxf_file(file, source_file, UPLOADS_DIR)
@@ -2936,10 +2973,18 @@ def analyze_dxf(
 
 
 @app.post("/import-dxf/apply", response_model=DxfImportResult)
-def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(require_admin)):
+def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
     """Фаза 2: применяет уже показанную пользователю сводку."""
     try:
         parsed, analysis = get_pending(body.token)
+        # Объект уже выбран на фазе анализа и лежит в токене — проверяем ЕГО,
+        # а не то, что мог бы прислать клиент: иначе подменой токена чужой
+        # чертёж применился бы в доступный объект.
+        conn = get_connection()
+        try:
+            assert_object_access(conn, user, analysis["object_id"], "admin")
+        finally:
+            conn.close()
         result = apply_drawing(
             parsed, analysis,
             accept_mark_changes=body.accept_mark_changes,
@@ -2977,10 +3022,14 @@ def import_history_xlsx(
     file: UploadFile = File(...),
     source_file: str = Form(...),
     mode: str = Form(...),
-    admin: sqlite3.Row = Depends(require_admin),
+    admin: sqlite3.Row = Depends(get_current_user),
 ):
     content = read_upload_limited(file.file)
     conn = get_connection()
+    try:
+        _guard_source_file(conn, admin, source_file)
+    finally:
+        conn.close()
     try:
         parsed = parse_history_xlsx(content)
         summary = import_history(conn, source_file, parsed["rows"], mode)
@@ -3007,7 +3056,7 @@ def import_history_xlsx(
 
 
 @app.post("/import-contracting-xlsx")
-def import_contracting_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_admin)):
+def import_contracting_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_system_admin)):
     """Файл "Контрактация" (см. app/contracting_import.py, Docs/backlog.md,
     "Контрактация 2.0") — создаёт/находит Контрагентов/Договоры/
     Спецификации/Контракты и их позиции по (тип, марка)."""
@@ -3023,7 +3072,7 @@ def import_contracting_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = D
 
 
 @app.post("/import-schedule-xlsx")
-def import_schedule_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_admin)):
+def import_schedule_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_system_admin)):
     """Файл графика MS Project (см. app/schedule_import.py, Docs/backlog.md,
     "Контрактация 2.0") — заполняет project_delivery_date/
     project_smr_start_date элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип."""

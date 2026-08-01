@@ -41,6 +41,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import activity
+from app.access import assert_object_access, require_system_admin
 from app.auth import get_current_user, require_admin
 from app.db import get_connection
 
@@ -338,9 +339,35 @@ def find_or_create_contract(conn, specification_id: int, theme: Optional[str] = 
     return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
 
+def _guard_specification(conn, user, specification_id: int) -> None:
+    """Доступ к контракту — по объекту его спецификации: контракт ->
+    спецификация -> договор -> object_id (цепочка этапа A).
+
+    Объект контракта именно ВЫВОДИТСЯ, а не хранится полем — поэтому и
+    проверять его надо по цепочке, иначе появился бы второй источник
+    правды о принадлежности контракта.
+    """
+    row = conn.execute(
+        "SELECT a.object_id FROM specifications s "
+        "JOIN agreements a ON a.id = s.agreement_id WHERE s.id = ?",
+        (specification_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Спецификация не найдена")
+    if row["object_id"] is None:
+        if user["role"] != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Договор спецификации не привязан к объекту — правит администратор сервиса",
+            )
+        return
+    assert_object_access(conn, user, row["object_id"], "admin")
+
+
 @router.post("", response_model=ContractOut)
-def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(require_admin)):
+def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    _guard_specification(conn, admin, body.specification_id)
     try:
         spec = conn.execute("SELECT id FROM specifications WHERE id = ?", (body.specification_id,)).fetchone()
         if not spec:
@@ -369,8 +396,9 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(require_admin
 
 
 @router.patch("/{contract_id}", response_model=ContractOut)
-def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Depends(require_admin)):
+def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    _guard_specification(conn, admin, body.specification_id)
     try:
         existing = conn.execute("SELECT id FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         if not existing:
@@ -437,7 +465,7 @@ def get_default_contracts(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @router.put("/default-map")
-def set_default_contracts(mapping: dict, admin: sqlite3.Row = Depends(require_admin)):
+def set_default_contracts(mapping: dict, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         for element_type, contract_id in mapping.items():
