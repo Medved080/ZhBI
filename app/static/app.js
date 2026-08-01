@@ -6876,6 +6876,93 @@ document.getElementById("menu-subtypes").addEventListener("click", async () => {
 document.getElementById("subtypes-close").addEventListener("click", () => subtypesBackdrop.classList.remove("open"));
 
 // ---------- пользователи ----------
+// ==================== ДОСТУП ПОЛЬЗОВАТЕЛЯ К ОБЪЕКТАМ (этап C) ====================
+const userAccessBackdrop = document.getElementById("user-access-backdrop");
+const OBJECT_ROLE_LABELS = {
+  view: "Просмотр", user: "Работа со статусами", admin: "Полные права на объекте",
+};
+let accessUserId = null;
+
+function setAccessStatus(text, isError) {
+  const el = document.getElementById("user-access-status");
+  el.textContent = text;
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+async function openUserAccess(user) {
+  accessUserId = user.id;
+  document.getElementById("user-access-who").textContent =
+    `${user.display_name} (${user.domain_login}), системная роль: ${ROLE_LABELS[user.role] || user.role}`;
+  setAccessStatus("", false);
+  userAccessBackdrop.classList.add("open");
+  // Списки проектов и объектов — из дерева, которое уже загружено: оно же
+  // источник для переключателя, и второй запрос дал бы второй порядок.
+  const projSel = document.getElementById("ua-project");
+  projSel.innerHTML = state.projects.filter(p => p.id)
+    .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  document.getElementById("ua-role").innerHTML = Object.entries(OBJECT_ROLE_LABELS)
+    .map(([v, l]) => `<option value="${v}">${escapeHtml(l)}</option>`).join("");
+  projSel.onchange = fillAccessObjects;
+  fillAccessObjects();
+  await renderUserAccess();
+}
+
+function fillAccessObjects() {
+  const pid = Number(document.getElementById("ua-project").value);
+  const проект = state.projects.find(p => p.id === pid);
+  // «Весь проект» первым: это самый частый случай, и он единственный
+  // распространяется на будущие объекты.
+  document.getElementById("ua-object").innerHTML =
+    `<option value="">— весь проект —</option>` +
+    (проект ? проект.objects.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("") : "");
+}
+
+async function renderUserAccess() {
+  const box = document.getElementById("user-access-rows");
+  const note = document.getElementById("user-access-note");
+  const data = await api(`/users/${accessUserId}/access`);
+  note.textContent = data.system_admin
+    ? "Это администратор сервиса — он видит и правит все объекты в обход грантов. Гранты ему не нужны."
+    : "";
+  if (!data.grants.length) {
+    box.innerHTML = `<p class="hint-text">${data.system_admin ? "" : "Доступа нет ни к одному объекту — пользователь увидит пустой экран."}</p>`;
+    return;
+  }
+  box.innerHTML = data.grants.map(g => `
+    <div class="object-card-foot" style="border-bottom:1px solid var(--color-border); padding-bottom:6px">
+      <div>${escapeHtml(g.project_name)} · <b>${escapeHtml(g.object_name || "весь проект")}</b>
+        <div class="hint-text">${escapeHtml(OBJECT_ROLE_LABELS[g.role] || g.role)}</div></div>
+      <button class="btn btn-sm btn-secondary" data-revoke="${g.id}">Убрать</button>
+    </div>`).join("");
+  box.querySelectorAll("[data-revoke]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/users/${accessUserId}/access/${btn.dataset.revoke}`, { method: "DELETE" });
+        await renderUserAccess();
+        setAccessStatus("Доступ снят.", false);
+      } catch (e) { setAccessStatus(e.message, true); }
+    });
+  });
+}
+
+document.getElementById("ua-add").addEventListener("click", async () => {
+  const objectValue = document.getElementById("ua-object").value;
+  try {
+    await api(`/users/${accessUserId}/access`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_id: Number(document.getElementById("ua-project").value),
+        object_id: objectValue ? Number(objectValue) : null,
+        role: document.getElementById("ua-role").value,
+      }),
+    });
+    await renderUserAccess();
+    setAccessStatus("Доступ выдан.", false);
+  } catch (e) { setAccessStatus(e.message, true); }
+});
+document.getElementById("user-access-close").addEventListener("click", () =>
+  userAccessBackdrop.classList.remove("open"));
+
 const usersBackdrop = document.getElementById("users-backdrop");
 const userEditBackdrop = document.getElementById("user-edit-backdrop");
 const userPasswordBackdrop = document.getElementById("user-password-backdrop");
@@ -6897,12 +6984,15 @@ async function renderUsersTable() {
       <td>
         <button class="btn btn-sm btn-secondary" data-edit="${u.id}">Изменить</button>
         <button class="btn btn-sm btn-secondary" data-pwd="${u.id}">Пароль</button>
+        <button class="btn btn-sm btn-secondary" data-access="${u.id}">Доступ</button>
       </td>
     </tr>
   `).join("");
   table.innerHTML = `<tr><th>ФИО</th><th>Должность</th><th>Подразделение</th><th>Логин</th><th>Роль</th><th>Пароль</th><th></th></tr>${rowsHtml}`;
   table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openUserEdit(users.find(u => u.id === Number(btn.dataset.edit)))));
   table.querySelectorAll("[data-pwd]").forEach(btn => btn.addEventListener("click", () => openUserPassword(Number(btn.dataset.pwd))));
+  table.querySelectorAll("[data-access]").forEach(btn => btn.addEventListener("click", () =>
+    openUserAccess(users.find(u => u.id === Number(btn.dataset.access)))));
 }
 
 document.getElementById("menu-users").addEventListener("click", async () => {

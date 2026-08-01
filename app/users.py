@@ -7,7 +7,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.access import require_system_admin
+from app import activity
+from app.access import OBJECT_ROLES, ROLE_LABELS as OBJECT_ROLE_LABELS, require_system_admin
 from app.auth import (
     SESSION_COOKIE, get_current_user, hash_password, require_admin,
     user_out, validate_password_strength, UserOut,
@@ -199,3 +200,97 @@ def set_label_color(
         return user_out(updated)
     finally:
         conn.close()
+
+# ==================== ДОСТУП К ОБЪЕКТАМ (этап C) ====================
+#
+# Роль на объекте — свойство ГРАНТА, а не пользователя (решение П2).
+# users.role осталась системной ролью: она про ведение сервиса.
+
+
+class AccessGrantIn(BaseModel):
+    project_id: int
+    # None — грант на ВЕСЬ проект, включая объекты, которые появятся в нём
+    # позже. Это не то же самое, что перечислить сегодняшние объекты.
+    object_id: Optional[int] = None
+    role: str
+
+
+@router.get("/{user_id}/access")
+def list_access(user_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
+    """Гранты пользователя с расшифровкой названий.
+
+    Системному администратору гранты не нужны — он видит всё в обход, и
+    список у него пуст не по ошибке. Об этом сообщает сам ответ, чтобы
+    пустая таблица не читалась как «доступа нет».
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        grants = [
+            dict(r) for r in conn.execute(
+                """
+                SELECT ua.id, ua.project_id, ua.object_id, ua.role,
+                       p.name AS project_name, o.name AS object_name
+                FROM user_access ua
+                JOIN projects p ON p.id = ua.project_id
+                LEFT JOIN objects o ON o.id = ua.object_id
+                WHERE ua.user_id = ?
+                ORDER BY p.name, o.name
+                """,
+                (user_id,),
+            )
+        ]
+        return {"system_admin": row["role"] == "admin", "grants": grants}
+    finally:
+        conn.close()
+
+
+@router.post("/{user_id}/access")
+def add_access(user_id: int, body: AccessGrantIn, admin: sqlite3.Row = Depends(require_system_admin)):
+    if body.role not in OBJECT_ROLES:
+        raise HTTPException(status_code=400, detail=f"Неизвестная роль «{body.role}»")
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        if conn.execute("SELECT 1 FROM projects WHERE id = ?", (body.project_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        if body.object_id is not None:
+            obj = conn.execute("SELECT project_id FROM objects WHERE id = ?", (body.object_id,)).fetchone()
+            if obj is None:
+                raise HTTPException(status_code=404, detail="Объект не найден")
+            # Иначе грант «объект A в проекте B» пережил бы перенос объекта и
+            # молча перестал действовать — искать такую причину пришлось бы долго.
+            if obj["project_id"] != body.project_id:
+                raise HTTPException(status_code=400, detail="Объект не принадлежит выбранному проекту")
+        # Повторная выдача — это ИЗМЕНЕНИЕ роли, а не ошибка: администратор
+        # думает «дать этому человеку такие права здесь», а не «создать
+        # запись». Уникальность держит COALESCE-индекс (см. schema.sql).
+        conn.execute(
+            "INSERT INTO user_access (user_id, project_id, object_id, role) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (user_id, project_id, COALESCE(object_id, -1)) DO UPDATE SET role = excluded.role",
+            (user_id, body.project_id, body.object_id, body.role),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("access_grant", user=admin, entity_type="user", entity_id=user_id,
+                 new_value=f"проект {body.project_id}, объект {body.object_id or 'все'}, роль {body.role}")
+    return list_access(user_id, admin)
+
+
+@router.delete("/{user_id}/access/{grant_id}")
+def delete_access(user_id: int, grant_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
+    conn = get_connection()
+    try:
+        cur = conn.execute("DELETE FROM user_access WHERE id = ? AND user_id = ?", (grant_id, user_id))
+        if not cur.rowcount:
+            raise HTTPException(status_code=404, detail="Грант не найден")
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("access_revoke", user=admin, entity_type="user", entity_id=user_id,
+                 old_value=str(grant_id))
+    return list_access(user_id, admin)

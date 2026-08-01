@@ -1738,6 +1738,34 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="user-access-backdrop">
+  <div class="modal">
+    <h2>Доступ к объектам</h2>
+    <p class="hint-text" id="user-access-who"></p>
+    <div id="user-access-note" class="hint-text"></div>
+    <div id="user-access-rows"></div>
+    <div style="margin-top:12px; border-top:1px solid var(--color-border); padding-top:12px">
+      <label class="field">Выдать доступ</label>
+      <div class="object-fields">
+        <label class="object-field"><span>Проект</span>
+          <select id="ua-project"></select></label>
+        <label class="object-field"><span>Объект</span>
+          <select id="ua-object"></select></label>
+        <label class="object-field"><span>Роль на объекте</span>
+          <select id="ua-role"></select></label>
+      </div>
+      <div class="object-card-foot">
+        <span class="hint-text">«Весь проект» распространяется и на объекты, которые появятся в нём позже.</span>
+        <button class="btn btn-sm btn-primary" id="ua-add">Выдать</button>
+      </div>
+    </div>
+    <div id="user-access-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="user-access-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="user-edit-backdrop">
   <div class="modal">
     <h2 id="user-edit-title">Пользователь</h2>
