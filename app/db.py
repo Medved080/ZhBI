@@ -447,12 +447,173 @@ def _seed_user_access(conn: sqlite3.Connection, changes: list) -> None:
             )
             granted += 1
     conn.execute(
-        "INSERT INTO app_settings (key, value) VALUES (?, '1') "
-        "ON CONFLICT(key) DO UPDATE SET value = '1'",
+        # Маркеры — СИСТЕМНЫЕ (object_id NULL). Конфликт указывается по тому
+        # же выражению, что и уникальный индекс после этапа D: голый
+        # ON CONFLICT(key) перестал соответствовать индексу, и вставка
+        # падала с «does not match any PRIMARY KEY or UNIQUE constraint».
+        "INSERT INTO app_settings (key, object_id, value) VALUES (?, NULL, '1') "
+        "ON CONFLICT (key, COALESCE(object_id, -1)) DO UPDATE SET value = '1'",
         (ACCESS_SEED_MARKER,),
     )
     if granted:
         changes.append(f"выдан доступ к проектам существующим пользователям: {granted} грант(ов)")
+
+
+# Настройки, которые с этапа D принадлежат ОБЪЕКТУ, а не системе. Остальные
+# ключи app_settings (маркеры одноразовых миграций) остаются системными —
+# у них object_id NULL, и смешивать их с объектными нельзя.
+OBJECT_SCOPED_SETTINGS = ("project_card", "info_plate_late_threshold_days")
+
+
+def _migrate_object_scoped_tables(conn: sqlite3.Connection, changes: list) -> None:
+    """Переносит справочники и настройки ВНУТРЬ объекта (этап D).
+
+    Пять таблиц получают object_id в составе ключа: label_visibility,
+    zone_colors, report_notes, default_contracts, app_settings.
+
+    **Почему пересборка здесь безопасна, в отличие от прошлых инцидентов.**
+    Дважды сервер ломался на `ALTER TABLE ... RENAME`: он молча переписывает
+    внешние ключи ДРУГИХ таблиц на новое имя, и после удаления временной
+    таблицы ссылки остаются битыми навсегда. Проверено запросом: на эти пять
+    таблиц не ссылается НИКТО (`PRAGMA foreign_key_list` по всем таблицам —
+    ни одного попадания), поэтому переименование новой таблицы в старое имя
+    ничьих ключей не задевает. Это не рассуждение по аналогии, а проверка
+    конкретного условия, из-за которого класс ошибки и возникал.
+
+    commit() перед `PRAGMA foreign_keys = OFF` обязателен: посреди открытой
+    транзакции PRAGMA — молчаливый no-op (документированное поведение
+    SQLite), и ровно это когда-то испортило схему.
+
+    Идемпотентность — по наличию колонки object_id, без маркера: состояние
+    само себя описывает, а лишний маркер пришлось бы согласовывать со
+    схемой при каждой правке.
+
+    Куда попадают накопленные строки: в объект по умолчанию (наименьший id),
+    а у zone_colors — в объект СВОЕГО чертежа, он там известен точно. На
+    боевой базе объект один, так что распределение однозначно в любом случае.
+    """
+    if conn.execute("SELECT COUNT(*) AS n FROM objects").fetchone()["n"] == 0:
+        return  # свежая установка: переносить нечего, таблицы создаст schema.sql
+    default_object = conn.execute("SELECT MIN(id) AS id FROM objects").fetchone()["id"]
+
+    def has_column(table, column):
+        return column in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+    todo = [t for t in ("label_visibility", "zone_colors", "report_notes",
+                        "default_contracts", "app_settings")
+            if not has_column(t, "object_id")]
+    if not todo:
+        return
+
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+
+    if "label_visibility" in todo:
+        conn.execute("""
+            CREATE TABLE label_visibility_new (
+                object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+                element_type TEXT NOT NULL,
+                visible INTEGER NOT NULL DEFAULT 1,
+                dates_visible INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (object_id, element_type)
+            )""")
+        conn.execute(
+            "INSERT INTO label_visibility_new (object_id, element_type, visible, dates_visible) "
+            "SELECT ?, element_type, visible, dates_visible FROM label_visibility",
+            (default_object,))
+        conn.execute("DROP TABLE label_visibility")
+        conn.execute("ALTER TABLE label_visibility_new RENAME TO label_visibility")
+
+    if "zone_colors" in todo:
+        conn.execute("""
+            CREATE TABLE zone_colors_new (
+                object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+                category TEXT NOT NULL,
+                name TEXT NOT NULL,
+                color TEXT NOT NULL,
+                PRIMARY KEY (object_id, category, name)
+            )""")
+        # Объект берётся из чертежа, которому цвет принадлежал. Несколько
+        # версий чертежа одного объекта дают один и тот же object_id и
+        # схлопываются по ключу — берём цвет последней (ON CONFLICT ... DO
+        # UPDATE), а не первой попавшейся.
+        conn.execute(
+            "INSERT INTO zone_colors_new (object_id, category, name, color) "
+            "SELECT COALESCE(od.object_id, ?), zc.category, zc.name, zc.color "
+            "FROM zone_colors zc LEFT JOIN object_drawings od ON od.source_file = zc.source_file "
+            "WHERE 1 ON CONFLICT (object_id, category, name) DO UPDATE SET color = excluded.color",
+            (default_object,))
+        conn.execute("DROP TABLE zone_colors")
+        conn.execute("ALTER TABLE zone_colors_new RENAME TO zone_colors")
+
+    if "report_notes" in todo:
+        conn.execute("""
+            CREATE TABLE report_notes_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+                effective_date TEXT NOT NULL,
+                key_events TEXT NOT NULL DEFAULT '[]',
+                key_tasks TEXT NOT NULL DEFAULT '[]',
+                open_questions TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_by TEXT,
+                UNIQUE (object_id, effective_date)
+            )""")
+        conn.execute(
+            "INSERT INTO report_notes_new (object_id, effective_date, key_events, key_tasks, "
+            "open_questions, updated_at, updated_by) "
+            "SELECT ?, effective_date, key_events, key_tasks, open_questions, updated_at, updated_by "
+            "FROM report_notes", (default_object,))
+        conn.execute("DROP TABLE report_notes")
+        conn.execute("ALTER TABLE report_notes_new RENAME TO report_notes")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_report_notes_date "
+                     "ON report_notes (object_id, effective_date)")
+
+    if "default_contracts" in todo:
+        conn.execute("""
+            CREATE TABLE default_contracts_new (
+                object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+                element_type TEXT NOT NULL,
+                contract_id INTEGER REFERENCES contracts (id) ON DELETE SET NULL,
+                PRIMARY KEY (object_id, element_type)
+            )""")
+        conn.execute(
+            "INSERT INTO default_contracts_new (object_id, element_type, contract_id) "
+            "SELECT ?, element_type, contract_id FROM default_contracts", (default_object,))
+        conn.execute("DROP TABLE default_contracts")
+        conn.execute("ALTER TABLE default_contracts_new RENAME TO default_contracts")
+
+    if "app_settings" in todo:
+        # object_id ЗДЕСЬ NULLABLE, в отличие от остальных четырёх: маркеры
+        # одноразовых миграций (legacy_elements_purged, user_access_seeded)
+        # — системные, у них объекта нет и быть не может. Уникальность —
+        # индексом через COALESCE: обычный UNIQUE в SQLite не считает
+        # NULL=NULL, и системный ключ можно было бы завести дважды.
+        conn.execute("""
+            CREATE TABLE app_settings_new (
+                key TEXT NOT NULL,
+                object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
+                value TEXT
+            )""")
+        marks = ",".join("?" * len(OBJECT_SCOPED_SETTINGS))
+        conn.execute(
+            f"INSERT INTO app_settings_new (key, object_id, value) "
+            f"SELECT key, CASE WHEN key IN ({marks}) THEN ? ELSE NULL END, value FROM app_settings",
+            (*OBJECT_SCOPED_SETTINGS, default_object))
+        conn.execute("DROP TABLE app_settings")
+        conn.execute("ALTER TABLE app_settings_new RENAME TO app_settings")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_settings_key "
+                     "ON app_settings (key, COALESCE(object_id, -1))")
+
+    conn.commit()
+    # ОБЯЗАТЕЛЬНО вернуть проверку ключей: дальше по init_db идёт чистка
+    # наследия, которая рассчитывает на каскад status_history -> elements.
+    # С выключенными ключами DELETE не каскадирует, и на копии это дало
+    # 30 155 осиротевших записей истории при «успешной» миграции —
+    # поймано PRAGMA foreign_key_check, а не глазами.
+    conn.execute("PRAGMA foreign_keys = ON")
+    changes.append("справочники и настройки перенесены внутрь объекта: " + ", ".join(todo))
 
 
 def _reconcile_contract_from_history(conn: sqlite3.Connection, changes: list) -> None:
@@ -706,14 +867,22 @@ def _purge_legacy_elements(conn: sqlite3.Connection, changes: list) -> None:
         conn.execute(
             f"DELETE FROM axis_lines WHERE source_file NOT IN ({marks})", params
         )
-        conn.execute(
-            f"DELETE FROM zone_colors WHERE source_file NOT IN ({marks})", params
-        )
+        # Цвета зон чистятся по чертежу только ДО этапа D. После переноса
+        # внутрь объекта у таблицы нет source_file: цвета легаси-файлов уже
+        # схлопнулись в объект по ключу, чистить там нечего.
+        if "source_file" in {r["name"] for r in conn.execute("PRAGMA table_info(zone_colors)")}:
+            conn.execute(
+                f"DELETE FROM zone_colors WHERE source_file NOT IN ({marks})", params
+            )
     else:
         n_axes = 0
     conn.execute(
-        "INSERT INTO app_settings (key, value) VALUES (?, '1') "
-        "ON CONFLICT(key) DO UPDATE SET value = '1'",
+        # Маркеры — СИСТЕМНЫЕ (object_id NULL). Конфликт указывается по тому
+        # же выражению, что и уникальный индекс после этапа D: голый
+        # ON CONFLICT(key) перестал соответствовать индексу, и вставка
+        # падала с «does not match any PRIMARY KEY or UNIQUE constraint».
+        "INSERT INTO app_settings (key, object_id, value) VALUES (?, NULL, '1') "
+        "ON CONFLICT (key, COALESCE(object_id, -1)) DO UPDATE SET value = '1'",
         (LEGACY_PURGE_MARKER,),
     )
     if n_elements or n_zones or n_axes:
@@ -1128,10 +1297,18 @@ def _seed_reference_data(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO mark_type_prefixes (prefix, element_type) VALUES (?, ?)",
         _MARK_TYPE_PREFIX_SEED,
     )
-    conn.executemany(
-        "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
-        _APP_SETTINGS_SEED,
-    )
+    # Значение по умолчанию заводится ДЛЯ КАЖДОГО ОБЪЕКТА (этап D): порог
+    # опоздания стал объектной настройкой. Прежний вариант — одна строка без
+    # объекта — после переноса создавал ВТОРУЮ запись того же ключа рядом с
+    # перенесённой (NULL и object_id различаются, OR IGNORE не срабатывал), и
+    # чтение брало произвольную из двух.
+    objects = [r["id"] for r in conn.execute("SELECT id FROM objects")]
+    for key, value in _APP_SETTINGS_SEED:
+        for object_id in objects:
+            conn.execute(
+                "INSERT OR IGNORE INTO app_settings (key, object_id, value) VALUES (?, ?, ?)",
+                (key, object_id, value),
+            )
 
 
 # Старый конвейер (LAYER_CONFIG в scripts/parse_zhbi.py) когда-то отдавал
@@ -1257,6 +1434,11 @@ def init_db() -> list:
         # Строго ПОСЛЕ бутстрапа объекта: проекту нужны объекты, которые он
         # подхватит, а бутстрап объекта заводит их на накопленной БД.
         _bootstrap_default_project(conn, changes)
+        # Строго ПОСЛЕ заведения объекта и проекта (нужен объект, куда
+        # переносить) и строго ДО всего, что пишет в app_settings: чистка
+        # наследия и выдача доступов ставят там маркеры, а до переноса у
+        # таблицы нет колонки object_id.
+        _migrate_object_scoped_tables(conn, changes)
         # Строго ПОСЛЕ бутстрапа объекта: миграция зон опирается на
         # object_drawings, чтобы понять, какой чертёж актуален.
         _migrate_zones_to_catalog(conn, changes)
