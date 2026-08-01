@@ -76,6 +76,8 @@ from app.reports import (
     build_status_report, build_status_report_pdf, build_status_report_xlsx,
 )
 from app.models import (
+    ProjectIn,
+    ProjectOut,
     SHAPES,
     STATUS_LABELS_RU,
     STATUS_ORDER,
@@ -2150,6 +2152,109 @@ def _resolve_selection_item(conn, item):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@app.get("/projects", response_model=list[ProjectOut])
+def list_projects(user: sqlite3.Row = Depends(get_current_user)):
+    """Справочник проектов. Сроки СВОДЯТСЯ из объектов (решение П5), а не
+    хранятся: раннее начало и позднее окончание СМР по элементам объектов
+    проекта. Так они не могут разойтись с тем, что показывают объекты."""
+    conn = get_connection()
+    try:
+        agg = {
+            r["project_id"]: r
+            for r in conn.execute(
+                "SELECT o.project_id, COUNT(DISTINCT o.id) AS objects_count, "
+                "       COUNT(e.id) AS elements_count, "
+                "       MIN(e.project_smr_start_date) AS smr_start, "
+                "       MAX(e.project_delivery_date) AS smr_end "
+                "FROM objects o LEFT JOIN elements e ON e.object_id = o.id AND e.is_current = 1 "
+                "GROUP BY o.project_id"
+            )
+        }
+        out = []
+        for row in conn.execute("SELECT * FROM projects ORDER BY name"):
+            a = agg.get(row["id"])
+            out.append(ProjectOut(
+                id=row["id"], name=row["name"], address=row["address"],
+                description=row["description"],
+                objects_count=a["objects_count"] if a else 0,
+                elements_count=a["elements_count"] if a else 0,
+                smr_start=a["smr_start"] if a else None,
+                smr_end=a["smr_end"] if a else None,
+            ))
+        return out
+    finally:
+        conn.close()
+
+
+@app.post("/projects", response_model=ProjectOut)
+def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_admin)):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Наименование проекта не может быть пустым")
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM projects WHERE name = ?", (name,)).fetchone():
+            raise HTTPException(status_code=409, detail="Проект с таким наименованием уже есть")
+        conn.execute("INSERT INTO projects (name, address, description) VALUES (?, ?, ?)",
+                     (name, body.address, body.description))
+        conn.commit()
+        new_id = conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()["id"]
+    finally:
+        conn.close()
+    activity.log("project_create", user=admin, entity_type="project", entity_id=new_id, new_value=name)
+    return next(p for p in list_projects(admin) if p.id == new_id)
+
+
+@app.patch("/projects/{project_id}", response_model=ProjectOut)
+def update_project(project_id: int, body: ProjectIn, admin: sqlite3.Row = Depends(require_admin)):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Наименование проекта не может быть пустым")
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT name FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        if conn.execute("SELECT 1 FROM projects WHERE name = ? AND id <> ?", (name, project_id)).fetchone():
+            raise HTTPException(status_code=409, detail="Проект с таким наименованием уже есть")
+        conn.execute(
+            "UPDATE projects SET name = ?, address = ?, description = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (name, body.address, body.description, project_id),
+        )
+        conn.commit()
+        old = row["name"]
+    finally:
+        conn.close()
+    activity.log("project_rename", user=admin, entity_type="project", entity_id=project_id,
+                 old_value=old, new_value=name)
+    return next(p for p in list_projects(admin) if p.id == project_id)
+
+
+@app.delete("/projects/{project_id}")
+def delete_project(project_id: int, admin: sqlite3.Row = Depends(require_admin)):
+    """Удалять можно только ПУСТОЙ проект. Проект с объектами удалить нельзя
+    и каскадом сносить его объекты тем более: за объектом стоят элементы со
+    статусами и историей, и «удалил проект — потерял стройку» это ровно тот
+    класс необратимых действий, которого в системе быть не должно."""
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        n = conn.execute("SELECT COUNT(*) AS n FROM objects WHERE project_id = ?", (project_id,)).fetchone()["n"]
+        if n:
+            raise HTTPException(
+                status_code=409,
+                detail=f"В проекте {n} объект(ов) — сначала перенесите их в другой проект",
+            )
+        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("project_delete", user=admin, entity_type="project", entity_id=project_id)
+    return {"deleted": project_id}
+
+
 @app.get("/objects/{object_id}/drawings")
 def list_object_drawings(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
     """Версии чертежа объекта, новые сверху (этап B).
@@ -2230,6 +2335,7 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
     как и остальные справочники-просмотры."""
     conn = get_connection()
     try:
+        projects = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM projects")}
         result = []
         for row in conn.execute("SELECT * FROM objects ORDER BY id"):
             drawings = conn.execute(
@@ -2245,6 +2351,9 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
             current = next((d["source_file"] for d in drawings if d["is_current"]), None)
             result.append(ObjectOut(
                 id=row["id"], name=row["name"], description=row["description"],
+                address=row["address"] if "address" in row.keys() else None,
+                project_id=row["project_id"] if "project_id" in row.keys() else None,
+                project_name=projects.get(row["project_id"] if "project_id" in row.keys() else None),
                 current_source_file=current,
                 drawings=[d["source_file"] for d in drawings],
                 elements_current=counts["cur"] or 0,
@@ -2274,9 +2383,14 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
         if clash:
             raise HTTPException(status_code=409, detail="Объект с таким наименованием уже есть")
         old = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()["name"]
+        if body.project_id is not None:
+            if conn.execute("SELECT 1 FROM projects WHERE id = ?", (body.project_id,)).fetchone() is None:
+                raise HTTPException(status_code=404, detail="Проект не найден")
+            conn.execute("UPDATE objects SET project_id = ? WHERE id = ?", (body.project_id, object_id))
         conn.execute(
-            "UPDATE objects SET name = ?, description = ?, updated_at = datetime('now') WHERE id = ?",
-            (name, body.description, object_id),
+            "UPDATE objects SET name = ?, address = ?, description = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (name, body.address, body.description, object_id),
         )
         conn.commit()
     finally:

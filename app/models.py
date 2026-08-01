@@ -284,9 +284,29 @@ class ZonePatchIn(BaseModel):
     levels: list[ZoneLevelIn]
 
 
+class ProjectIn(BaseModel):
+    name: str
+    address: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ProjectOut(ProjectIn):
+    id: int
+    objects_count: int = 0
+    elements_count: int = 0
+    # Сроки проекта НЕ хранятся, а сводятся из сроков подчинённых объектов
+    # (решение П5): раннее начало и позднее окончание СМР. Так они не могут
+    # разойтись с объектами.
+    smr_start: Optional[str] = None
+    smr_end: Optional[str] = None
+
+
 class ObjectOut(BaseModel):
     id: int
     name: str
+    address: Optional[str] = None
+    project_id: Optional[int] = None
+    project_name: Optional[str] = None
     description: Optional[str] = None
     current_source_file: Optional[str] = None
     drawings: list[str] = []
@@ -296,6 +316,10 @@ class ObjectOut(BaseModel):
 
 class ObjectPatchIn(BaseModel):
     name: str
+    address: Optional[str] = None
+    # Перенос объекта в другой проект. None означает «не менять» — иначе
+    # форма, не приславшая поле, молча выкинула бы объект из проекта.
+    project_id: Optional[int] = None
     description: Optional[str] = None
 
 

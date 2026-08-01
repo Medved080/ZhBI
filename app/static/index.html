@@ -1071,6 +1071,7 @@
           <div class="dropdown-menu submenu-panel">
             <!-- Слово "Справочник" из названий убрано: под заголовком
                  "Справочники" оно повторялось дважды в каждой строке. -->
+            <button id="menu-projects">Проекты</button>
             <button id="menu-objects">Объекты</button>
             <button id="menu-element-catalog">Элементы</button>
             <!-- Три справочника зон (этап 2, решение З15: физически одна
@@ -1385,6 +1386,31 @@
      показывает и позволяет переименовать: создание объектов вручную не
      требуется (объект появляется при первом импорте чертежа), удаление —
      тоже (решение З16/Э-аналог: необратимо и затрагивает все элементы). -->
+<div class="modal-backdrop" id="projects-backdrop">
+  <div class="modal">
+    <h2>Проекты</h2>
+    <p class="hint-text">
+      Проект — группа объектов, как правило соседних зданий одной площадки.
+      Собственных данных у проекта нет, кроме реквизитов: все свойства,
+      справочники и контракты живут внутри объекта. Сроки СМР не задаются, а
+      сводятся из сроков подчинённых объектов — поэтому не могут с ними разойтись.
+    </p>
+    <div id="projects-rows"></div>
+    <div class="admin-only" style="margin-top:14px">
+      <label class="field">Новый проект</label>
+      <div class="subtype-add-row">
+        <input type="text" id="project-new-name" placeholder="Наименование"/>
+        <input type="text" id="project-new-address" placeholder="Адрес"/>
+        <button class="btn btn-sm btn-primary" id="project-add">Добавить</button>
+      </div>
+    </div>
+    <div id="projects-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="projects-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="objects-backdrop">
   <div class="modal">
     <h2>Объекты</h2>

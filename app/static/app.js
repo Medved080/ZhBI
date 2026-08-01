@@ -5400,6 +5400,93 @@ async function renderSubtypesModal() {
 // Форма минимальная: показать, чем объект сейчас описан (актуальный чертёж,
 // сколько элементов актуальны и сколько исчезли из чертежа), и дать
 // переименовать — автоматически заведённый объект называется "Объект 1".
+// ==================== СПРАВОЧНИК ПРОЕКТОВ (этап B) ====================
+const projectsBackdrop = document.getElementById("projects-backdrop");
+
+function setProjectsStatus(text, isError) {
+  const el = document.getElementById("projects-status");
+  el.textContent = text;
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+async function renderProjectsModal() {
+  const box = document.getElementById("projects-rows");
+  setProjectsStatus("", false);
+  const projects = await api("/projects");
+  const админ = state.currentUser && state.currentUser.role === "admin";
+  if (!projects.length) {
+    box.innerHTML = `<p class="hint-text">Проектов пока нет.</p>`;
+    return;
+  }
+  box.innerHTML = projects.map((p) => `
+    <div style="padding:10px 0; border-bottom:1px solid var(--color-border)">
+      <div class="subtype-add-row">
+        <input type="text" data-pid="${p.id}" class="project-name" value="${escapeHtml(p.name)}" placeholder="Наименование"/>
+        <input type="text" data-pid="${p.id}" class="project-address" value="${escapeHtml(p.address || "")}" placeholder="Адрес"/>
+        ${админ ? `<button class="btn btn-sm btn-secondary" data-save-project="${p.id}">Сохранить</button>` : ""}
+        ${админ && !p.objects_count ? `<button class="btn btn-sm btn-secondary" data-del-project="${p.id}">Удалить</button>` : ""}
+      </div>
+      <div class="hint-text" style="margin-top:6px">
+        Объектов: ${p.objects_count}. Элементов: ${p.elements_count}.
+        Сроки СМР (сводно): ${p.smr_start ? formatDateRu(p.smr_start) : "—"} — ${p.smr_end ? formatDateRu(p.smr_end) : "—"}.
+        ${p.objects_count ? "" : "Пустой проект можно удалить."}
+      </div>
+    </div>`).join("");
+
+  box.querySelectorAll("[data-save-project]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-save-project");
+      try {
+        await api(`/projects/${id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: box.querySelector(`input.project-name[data-pid="${id}"]`).value,
+            address: box.querySelector(`input.project-address[data-pid="${id}"]`).value || null,
+          }),
+        });
+        await renderProjectsModal();
+        // Дерево в тулбаре построено на этих же именах — иначе крошка
+        // показывала бы старое название до перезагрузки страницы.
+        await loadProjectsTree();
+        setProjectsStatus("Сохранено.", false);
+      } catch (e) { setProjectsStatus(e.message || "Не удалось сохранить", true); }
+    });
+  });
+  box.querySelectorAll("[data-del-project]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-del-project");
+      if (!confirm("Удалить пустой проект?")) return;
+      try {
+        await api(`/projects/${id}`, { method: "DELETE" });
+        await renderProjectsModal();
+        await loadProjectsTree();
+        setProjectsStatus("Проект удалён.", false);
+      } catch (e) { setProjectsStatus(e.message || "Не удалось удалить", true); }
+    });
+  });
+}
+
+document.getElementById("menu-projects").addEventListener("click", async () => {
+  projectsBackdrop.classList.add("open");
+  await renderProjectsModal();
+});
+document.getElementById("projects-close").addEventListener("click", () => projectsBackdrop.classList.remove("open"));
+document.getElementById("project-add").addEventListener("click", async () => {
+  const name = document.getElementById("project-new-name").value.trim();
+  if (!name) { setProjectsStatus("Укажите наименование проекта", true); return; }
+  try {
+    await api("/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, address: document.getElementById("project-new-address").value || null }),
+    });
+    document.getElementById("project-new-name").value = "";
+    document.getElementById("project-new-address").value = "";
+    await renderProjectsModal();
+    await loadProjectsTree();
+    setProjectsStatus("Проект добавлен.", false);
+  } catch (e) { setProjectsStatus(e.message || "Не удалось добавить", true); }
+});
+
 const objectsBackdrop = document.getElementById("objects-backdrop");
 
 async function renderObjectsModal() {
@@ -5411,13 +5498,24 @@ async function renderObjectsModal() {
     box.innerHTML = `<p class="hint-text">Объектов пока нет — объект появится при первой загрузке чертежа.</p>`;
     return;
   }
+  // Список проектов нужен для выпадашки «Проект» у каждого объекта:
+  // перенос объекта в другой проект — обычная правка реквизита.
+  const projects = await api("/projects");
+  const админ = state.currentUser && state.currentUser.role === "admin";
   box.innerHTML = objects.map(o => `
     <div style="padding:10px 0; border-bottom:1px solid var(--color-border)">
       <div class="subtype-add-row">
-        <input type="text" data-object-id="${o.id}" class="object-name" value="${escapeHtml(o.name)}"/>
-        ${(state.currentUser && state.currentUser.role === "admin") ? `<button class="btn btn-sm btn-secondary" data-save-object="${o.id}">Сохранить</button>` : ""}
+        <input type="text" data-object-id="${o.id}" class="object-name" value="${escapeHtml(o.name)}" placeholder="Наименование"/>
+        <select data-object-id="${o.id}" class="object-project" ${админ ? "" : "disabled"}>
+          ${projects.map(p => `<option value="${p.id}" ${p.id === o.project_id ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}
+        </select>
+        ${админ ? `<button class="btn btn-sm btn-secondary" data-save-object="${o.id}">Сохранить</button>` : ""}
+      </div>
+      <div class="subtype-add-row" style="margin-top:6px">
+        <input type="text" data-object-id="${o.id}" class="object-address" value="${escapeHtml(o.address || "")}" placeholder="Адрес объекта"/>
       </div>
       <div class="hint-text" style="margin-top:6px">
+        Проект: ${escapeHtml(o.project_name || "—")}.
         Актуальный чертёж: ${escapeHtml(o.current_source_file || "—")}.
         Элементов: ${o.elements_current}${o.elements_retired ? `, исчезли из чертежа: ${o.elements_retired}` : ""}.
         ${o.drawings.length > 1 ? `Загружалось версий: ${o.drawings.length}.` : ""}
@@ -5432,12 +5530,18 @@ async function renderObjectsModal() {
         await api(`/objects/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: input.value }),
+          body: JSON.stringify({
+            name: input.value,
+            address: box.querySelector(`input.object-address[data-object-id="${id}"]`).value || null,
+            project_id: Number(box.querySelector(`select.object-project[data-object-id="${id}"]`).value) || null,
+          }),
         });
         // Перерисовка ПЕРЕД сообщением, а не после: renderObjectsModal
         // первым делом очищает эту же строку состояния, и в обратном порядке
         // подтверждение гасло бы сразу после появления.
         await renderObjectsModal();
+        // Крошка и поповер в тулбаре построены на этих же именах и связях
+        await loadProjectsTree();
         statusBox.style.color = "var(--color-text-muted)";
         statusBox.textContent = "Сохранено.";
       } catch (e) {
