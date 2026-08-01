@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.access import require_system_admin
 from app.auth import (
     SESSION_COOKIE, get_current_user, hash_password, require_admin,
     user_out, validate_password_strength, UserOut,
@@ -53,7 +54,7 @@ def _validate_role(role: str):
 
 
 @router.get("", response_model=list[UserOut])
-def list_users(admin: sqlite3.Row = Depends(require_admin)):
+def list_users(admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         rows = conn.execute("SELECT * FROM users ORDER BY last_name, first_name").fetchall()
@@ -63,7 +64,7 @@ def list_users(admin: sqlite3.Row = Depends(require_admin)):
 
 
 @router.post("", response_model=UserOut)
-def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_admin)):
+def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_system_admin)):
     _validate_role(body.role)
     conn = get_connection()
     try:
@@ -89,7 +90,7 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_admin))
 
 
 @router.patch("/{user_id}", response_model=UserOut)
-def update_user(user_id: int, body: UserUpdateIn, admin: sqlite3.Row = Depends(require_admin)):
+def update_user(user_id: int, body: UserUpdateIn, admin: sqlite3.Row = Depends(require_system_admin)):
     _validate_role(body.role)
     conn = get_connection()
     try:

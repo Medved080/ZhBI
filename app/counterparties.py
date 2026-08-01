@@ -16,6 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.access import require_system_admin
 from app.auth import get_current_user, require_admin
 from app.db import get_connection
 
@@ -182,7 +183,7 @@ def list_counterparties_full(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @router.post("/counterparties", response_model=CounterpartyOut)
-def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(require_admin)):
+def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         code = body.code or _generate_counterparty_code(conn, body.short_name)
@@ -204,7 +205,7 @@ def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(requi
 
 
 @router.patch("/counterparties/{counterparty_id}", response_model=CounterpartyOut)
-def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlite3.Row = Depends(require_admin)):
+def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         existing = conn.execute("SELECT id FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
@@ -345,7 +346,7 @@ def list_mark_type_prefixes(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @router.post("/mark-type-prefixes")
-def upsert_mark_type_prefix(body: MarkTypePrefixIn, admin: sqlite3.Row = Depends(require_admin)):
+def upsert_mark_type_prefix(body: MarkTypePrefixIn, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         conn.execute(
@@ -360,7 +361,7 @@ def upsert_mark_type_prefix(body: MarkTypePrefixIn, admin: sqlite3.Row = Depends
 
 
 @router.delete("/mark-type-prefixes/{prefix}")
-def delete_mark_type_prefix(prefix: str, admin: sqlite3.Row = Depends(require_admin)):
+def delete_mark_type_prefix(prefix: str, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         conn.execute("DELETE FROM mark_type_prefixes WHERE prefix = ?", (prefix,))

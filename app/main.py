@@ -65,7 +65,12 @@ from app.element_bulk_edit import (
     build_export_workbook,
 )
 from app import status_bulk_edit
-from app.access import accessible_object_ids, assert_object_access, require_system_admin
+from app.access import (
+    accessible_object_ids,
+    assert_object_access,
+    is_system_admin,
+    require_system_admin,
+)
 from app.element_sync import summary_for_log
 from app.element_dates import set_planned_delivery_date, set_planned_delivery_dates_bulk
 from app.export import build_history_xlsx, build_snapshot_xlsx
@@ -687,7 +692,7 @@ def update_element_planned_delivery_date_bulk(
 
 @app.patch("/elements/{element_id}/history/{history_id}", response_model=StatusUpdateResult)
 def update_history_entry(
-    element_id: int, history_id: int, body: dict, admin: sqlite3.Row = Depends(require_admin)
+    element_id: int, history_id: int, body: dict, admin: sqlite3.Row = Depends(get_current_user)
 ):
     """Правка ЗАПИСИ истории статусов: статус, дата/время применения, автор,
     комментарий (живой запрос: «у статуса нельзя исправить ни дату, ни
@@ -712,6 +717,11 @@ def update_history_entry(
 
     conn = get_connection()
     try:
+        # Объект — из элемента, которому принадлежит запись истории.
+        element = conn.execute("SELECT object_id FROM elements WHERE id = ?", (element_id,)).fetchone()
+        if element is None:
+            raise HTTPException(status_code=404, detail="Элемент не найден")
+        assert_object_access(conn, admin, element["object_id"], "admin")
         entry = conn.execute(
             "SELECT * FROM status_history WHERE id = ? AND element_id = ?", (history_id, element_id)
         ).fetchone()
@@ -913,14 +923,14 @@ class BackupCreateIn(BaseModel):
 
 
 @app.get("/admin/backups")
-def admin_list_backups(admin: sqlite3.Row = Depends(require_admin)):
+def admin_list_backups(admin: sqlite3.Row = Depends(require_system_admin)):
     """Все резервные копии на диске, новые сверху — из этого списка
     выбирается точка, на которую восстанавливаться."""
     return {"backups": list_backups()}
 
 
 @app.post("/admin/backups")
-def admin_create_backup(body: BackupCreateIn, admin: sqlite3.Row = Depends(require_admin)):
+def admin_create_backup(body: BackupCreateIn, admin: sqlite3.Row = Depends(require_system_admin)):
     """Копия по кнопке. Записывается, КЕМ создана — в отличие от служебных,
     которые система снимает сама перед разрушительными операциями."""
     meta = create_backup(
@@ -934,7 +944,7 @@ def admin_create_backup(body: BackupCreateIn, admin: sqlite3.Row = Depends(requi
 
 
 @app.post("/admin/backups/{name}/restore")
-def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_admin)):
+def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_system_admin)):
     """Восстановление на выбранный момент. ПЕРЕД восстановлением всегда
     снимается служебная копия текущего состояния — если выбрали не ту точку,
     вернуться будет куда.
@@ -955,7 +965,7 @@ def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_admin))
 
 
 @app.delete("/admin/backups/{name}", status_code=204)
-def admin_delete_backup(name: str, admin: sqlite3.Row = Depends(require_admin)):
+def admin_delete_backup(name: str, admin: sqlite3.Row = Depends(require_system_admin)):
     try:
         delete_backup(name)
     except BackupError as e:
@@ -965,7 +975,7 @@ def admin_delete_backup(name: str, admin: sqlite3.Row = Depends(require_admin)):
 
 
 @app.get("/admin/input-files")
-def admin_input_files(user: sqlite3.Row = Depends(require_admin)):
+def admin_input_files(user: sqlite3.Row = Depends(require_system_admin)):
     """Что сейчас лежит в Input/ — для диалога подтверждения перед импортом.
     Отдельным запросом, а не вместе с самим импортом: оператор должен
     увидеть список ДО того, как согласится перезаписать геометрию."""
@@ -973,7 +983,7 @@ def admin_input_files(user: sqlite3.Row = Depends(require_admin)):
 
 
 @app.post("/admin/import-input")
-def admin_import_input(user: sqlite3.Row = Depends(require_admin)):
+def admin_import_input(user: sqlite3.Row = Depends(require_system_admin)):
     """Импорт всех файлов из папки Input/ на сервере — по явной команде из
     меню. Раньше это происходило само при каждом старте сервера, то есть на
     каждый деплой и каждый перезапуск контейнера (см. on_startup, где
@@ -1067,7 +1077,7 @@ def search_activity(
     text: Optional[str] = Query(None, description="подстрока в марке/типе/подтипе/значениях"),
     limit: int = Query(200, le=2000),
     offset: int = Query(0, ge=0),
-    admin: sqlite3.Row = Depends(require_admin),
+    admin: sqlite3.Row = Depends(require_system_admin),
 ):
     """Поиск по журналу. Только админу: журнал показывает, кто что делал, —
     это не то, что должно быть доступно всем ролям.
@@ -1126,7 +1136,7 @@ def search_activity(
 @app.post("/activity/cleanup")
 def cleanup_activity(
     before: str = Query(..., description="Удалить записи СТРОГО РАНЬШЕ этой даты, 'ГГГГ-ММ-ДД'"),
-    admin: sqlite3.Row = Depends(require_admin),
+    admin: sqlite3.Row = Depends(require_system_admin),
 ):
     """Очистка журнала за период. Журнал растёт быстро (одна массовая смена
     статуса на реальном файле — это 9422 записи), поэтому механизм очистки
@@ -1211,7 +1221,7 @@ def get_changes(
 
 
 @app.post("/admin/reset-status-history")
-def reset_status_history(user: sqlite3.Row = Depends(require_admin)):
+def reset_status_history(user: sqlite3.Row = Depends(require_system_admin)):
     """Массовый сброс истории статусов ВСЕХ элементов — только для
     тестирования (живой запрос пользователя, см. Docs/backlog.md), НЕ
     ограничен одним чертежом/файлом. Каждый элемент возвращается в
@@ -1310,7 +1320,7 @@ def get_status_colors(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.put("/status-colors")
-def set_status_colors(colors: dict[str, str], user: sqlite3.Row = Depends(require_admin)):
+def set_status_colors(colors: dict[str, str], user: sqlite3.Row = Depends(require_system_admin)):
     valid = {s.value for s in Status}
     for status in colors:
         if status not in valid:
@@ -1415,7 +1425,7 @@ def list_layer_type_combinations(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.put("/element-shapes")
-def set_element_shapes(shapes: list[ElementShapeIn], user: sqlite3.Row = Depends(require_admin)):
+def set_element_shapes(shapes: list[ElementShapeIn], user: sqlite3.Row = Depends(require_system_admin)):
     for s in shapes:
         if s.shape not in SHAPES:
             raise HTTPException(status_code=422, detail=f"Неизвестная форма: {s.shape}")
@@ -1685,7 +1695,7 @@ def _validate_zone_edit(conn, zone: sqlite3.Row, body: ZonePatchIn) -> None:
 
 
 @app.patch("/zones/{zone_id}")
-def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(require_admin)):
+def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(get_current_user)):
     """Правка зоны справочника: номер, наименование, кран-владелец и
     ГЕОМЕТРИЯ ярусов (решения З9, З13, З14).
 
@@ -1706,6 +1716,12 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(re
                 status_code=400,
                 detail="Это зона устаревшей версии чертежа, она не входит в справочник",
             )
+        # Доступ проверяется ДО разбора тела: иначе на чужой зоне сначала
+        # выдавались бы подробности о её содержимом («нужен хотя бы один
+        # ярус»), и только потом отказ. Объект берётся из самой зоны —
+        # принимать его параметром значило бы позволить назвать любой
+        # доступный и править чужую зону.
+        assert_object_access(conn, admin, zone["object_id"], "admin")
         _validate_zone_edit(conn, zone, body)
 
         before = {
@@ -1781,14 +1797,16 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(re
 
 
 @app.post("/zones/{zone_id}/undo")
-def undo_zone_edit(zone_id: int, admin: sqlite3.Row = Depends(require_admin)):
+def undo_zone_edit(zone_id: int, admin: sqlite3.Row = Depends(get_current_user)):
     """Откат последней правки зоны ЦЕЛИКОМ (решение З12): реквизиты, ярусы и
     привязки элементов, которые изменил пересчёт. Правка точки задевает
     цепочку последствий, и отменяться должна вся цепочка."""
     conn = get_connection()
     try:
-        if conn.execute("SELECT 1 FROM zones WHERE id = ?", (zone_id,)).fetchone() is None:
+        zone = conn.execute("SELECT object_id FROM zones WHERE id = ?", (zone_id,)).fetchone()
+        if zone is None:
             raise HTTPException(status_code=404, detail="Зона не найдена")
+        assert_object_access(conn, admin, zone["object_id"], "admin")
         result = zone_recalc.undo(conn, zone_id)
     finally:
         conn.close()
@@ -1964,7 +1982,7 @@ def update_element_fields(
     element_id: int,
     body: dict,
     confirm_contract_mismatch: bool = Query(False),
-    admin: sqlite3.Row = Depends(require_admin),
+    admin: sqlite3.Row = Depends(get_current_user),
 ):
     """Ручная правка полей элемента (решения Э2, Э4, Э5).
 
@@ -1990,6 +2008,10 @@ def update_element_fields(
         row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
+        # Объект выводится из самого элемента: отдельным параметром его
+        # передавать нельзя — клиент назвал бы любой, к которому у него есть
+        # доступ, и правил бы чужой элемент.
+        assert_object_access(conn, admin, row["object_id"], "admin")
 
         values = {}
         for field, raw in body.items():
@@ -2188,7 +2210,7 @@ def list_projects(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.post("/projects", response_model=ProjectOut)
-def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_admin)):
+def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_system_admin)):
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Наименование проекта не может быть пустым")
@@ -2207,7 +2229,7 @@ def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_admin))
 
 
 @app.patch("/projects/{project_id}", response_model=ProjectOut)
-def update_project(project_id: int, body: ProjectIn, admin: sqlite3.Row = Depends(require_admin)):
+def update_project(project_id: int, body: ProjectIn, admin: sqlite3.Row = Depends(require_system_admin)):
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Наименование проекта не может быть пустым")
@@ -2233,7 +2255,7 @@ def update_project(project_id: int, body: ProjectIn, admin: sqlite3.Row = Depend
 
 
 @app.delete("/projects/{project_id}")
-def delete_project(project_id: int, admin: sqlite3.Row = Depends(require_admin)):
+def delete_project(project_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
     """Удалять можно только ПУСТОЙ проект. Проект с объектами удалить нельзя
     и каскадом сносить его объекты тем более: за объектом стоят элементы со
     статусами и историей, и «удалил проект — потерял стройку» это ровно тот
@@ -2373,7 +2395,7 @@ class ObjectCreateIn(BaseModel):
 
 
 @app.post("/objects", response_model=ObjectOut)
-def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_admin)):
+def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_system_admin)):
     """Завести объект ЗАРАНЕЕ, до загрузки чертежа.
 
     Раньше объект появлялся только сам, при первом импорте, и создание было
@@ -2408,7 +2430,7 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_adm
 
 
 @app.patch("/objects/{object_id}", response_model=ObjectOut)
-def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depends(require_admin)):
+def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depends(require_system_admin)):
     """Переименование объекта. Создание и удаление намеренно НЕ поддержаны:
     объект появляется сам при первом импорте чертежа, а удаление отвязало бы
     все элементы с их историей — операция, которую пользователь отдельно
@@ -2464,7 +2486,7 @@ def get_allowed_subtypes(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.post("/allowed-subtypes")
-def add_allowed_subtype(body: AllowedSubtypeIn, user: sqlite3.Row = Depends(require_admin)):
+def add_allowed_subtype(body: AllowedSubtypeIn, user: sqlite3.Row = Depends(require_system_admin)):
     if body.element_type not in ZHBI_ELEMENT_TYPES:
         raise HTTPException(status_code=422, detail=f"Неизвестный тип элемента: {body.element_type}")
     if not body.subtype.strip():
@@ -2482,7 +2504,7 @@ def add_allowed_subtype(body: AllowedSubtypeIn, user: sqlite3.Row = Depends(requ
 
 
 @app.delete("/allowed-subtypes/{element_type}/{subtype}")
-def delete_allowed_subtype(element_type: str, subtype: str, user: sqlite3.Row = Depends(require_admin)):
+def delete_allowed_subtype(element_type: str, subtype: str, user: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
         conn.execute(
@@ -2865,11 +2887,27 @@ def analyze_dxf(
     # по имени файла и истории загрузок): нужно, пока в системе один объект
     # и спрашивать не о чем.
     object_id: Optional[int] = Form(None),
-    user: sqlite3.Row = Depends(require_admin),
+    user: sqlite3.Row = Depends(get_current_user),
 ):
     """Фаза 1 импорта (решение И3): что изменится, если применить чертёж.
     В БД к моменту ответа ничего не записано, кроме заведения самого
     Объекта на первой в жизни установке — сверять иначе было бы не с чем."""
+    # Куда грузим — решает доступ. Если объект назван явно, нужна роль
+    # администратора НА НЁМ; если не назван, объект выберет (или заведёт)
+    # сервер, а заводить объекты может только администратор сервиса.
+    conn = get_connection()
+    try:
+        if object_id is None:
+            if not is_system_admin(user):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Выберите объект, в который загружается чертёж: заводить новые "
+                           "объекты может только администратор сервиса",
+                )
+        else:
+            assert_object_access(conn, user, object_id, "admin")
+    finally:
+        conn.close()
     try:
         saved_path = save_uploaded_file(file, UPLOADS_DIR)
         name = source_file or saved_path.name
@@ -3020,7 +3058,7 @@ def get_import_template_sample(key: str, user: sqlite3.Row = Depends(get_current
 
 
 @app.get("/settings/export")
-def export_settings(admin: sqlite3.Row = Depends(require_admin)):
+def export_settings(admin: sqlite3.Row = Depends(require_system_admin)):
     # Экспорт включает password_hash/password_salt — это осознанно (п.10 в
     # связке с п.3: перенос настроек на другой сервер без необходимости всем
     # заново задавать пароли). Файл предназначен только администратору,
@@ -3060,7 +3098,7 @@ def export_settings(admin: sqlite3.Row = Depends(require_admin)):
 
 
 @app.post("/settings/import")
-def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_admin)):
+def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_system_admin)):
     try:
         payload = json.loads(read_upload_limited(file.file))
     except json.JSONDecodeError:
