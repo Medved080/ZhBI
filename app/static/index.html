@@ -834,6 +834,13 @@
   .file-select-row { padding: 4px 0; border-bottom: 1px solid var(--color-border); }
   .file-select-row:last-child { border-bottom: none; }
   .file-select-row > label.checkbox { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; font-weight: 600; }
+  .drawing-row { display: flex; align-items: center; gap: 8px; padding: 7px 4px; cursor: pointer;
+    border-bottom: 1px solid var(--color-border); }
+  .drawing-row:last-child { border-bottom: none; }
+  .drawing-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .drawing-row .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px;
+    background: var(--color-primary); color: #fff; flex-shrink: 0; }
+  .drawing-row .meta { font-size: 11px; color: var(--color-text-muted); flex-shrink: 0; }
   .layer-list { padding-left: 22px; display: flex; flex-direction: column; }
   .layer-list label.checkbox { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; font-weight: 400; font-size: 12px; }
   #file-select-summary-line { margin-top: 6px; }
@@ -1313,7 +1320,14 @@
          чертежей несколько.
          Схема при этом не остаётся пустой: loadSourceFiles() сам выбирает
          первый доступный файл, если ничего не выбрано. -->
-    <label class="field">Отображать на схеме</label>
+    <!-- Этап B (2026-08-01): здесь больше не выбирают «какие файлы показать»
+         и не отбирают слои. На схеме всегда ОДИН объект (переключатель в
+         тулбаре), а выбрать можно только ВЕРСИЮ его чертежа — редкое
+         действие «посмотреть, как было», а не повседневная настройка.
+         Отбор слоями убран целиком: как инструмент показа он дублировал
+         панель фильтров «Тип/Подтип/Марка», которая работает по смыслу, а
+         не по имени слоя. -->
+    <label class="field">Версия чертежа объекта <span id="drawings-object-name"></span></label>
     <div id="file-select-list"></div>
     <div class="hint-text" id="file-select-summary-line"></div>
 

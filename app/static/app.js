@@ -785,50 +785,76 @@ function updateFileSelectSummary() {
 // сворачиваемый контрол тулбара и его состояние в localStorage удалены
 // вместе с самим контролом.
 
+// Форма «Чертежи»: выбор ВЕРСИИ чертежа текущего объекта (этап B).
+//
+// Прежний мультивыбор файлов и отбор слоёв убраны: на схеме всегда один
+// объект, а слои как инструмент показа дублировали панель фильтров
+// «Тип/Подтип/Марка» — та работает по смыслу, а не по имени слоя.
+//
+// Выбор версии — СЕАНСОВЫЙ и не запоминается: «посмотреть, как было» это
+// разовое действие, и молча оставить человека на прошлогоднем чертеже
+// после перезагрузки страницы было бы ловушкой.
 async function renderFileSelectMenu() {
   const container = document.getElementById("file-select-list");
   container.innerHTML = "";
-  for (const f of state.knownFiles) {
-    const included = state.selection.has(f.source_file);
-    const row = document.createElement("div");
-    row.className = "file-select-row";
-    row.innerHTML = `
-      <label class="checkbox">
-        <input type="checkbox" data-file="${escapeHtml(f.source_file)}" ${included ? "checked" : ""}/>
-        ${escapeHtml(f.source_file)} (${f.count})
-      </label>
-      <div class="layer-list" style="display:${included ? "block" : "none"};"></div>
-    `;
-    container.appendChild(row);
-    const layerList = row.querySelector(".layer-list");
-    const fileCheckbox = row.querySelector('input[data-file]');
-    fileCheckbox.addEventListener("change", async (e) => {
-      if (e.target.checked) {
-        state.selection.set(f.source_file, null);
-        state.sourceFile = f.source_file; // последний включённый файл — "основной" для экспорта/импорта истории
-        layerList.style.display = "block";
-        await renderLayerCheckboxes(f.source_file, layerList);
-      } else {
-        state.selection.delete(f.source_file);
-        layerList.style.display = "none";
-        if (state.sourceFile === f.source_file) {
-          const remaining = Array.from(state.selection.keys());
-          state.sourceFile = remaining.length ? remaining[remaining.length - 1] : null;
-        }
-      }
-      updateFileSelectSummary();
-      // false — не preserveView: смена СОСТАВА ФАЙЛОВ (в отличие от смены
-      // слоёв внутри уже выбранного файла, см. renderLayerCheckboxes) меняет
-      // сам охват схемы (у каждого файла своя сетка осей), и если оставить
-      // старый вид как есть, подписи осей — они пинятся к краям ТЕКУЩЕГО
-      // viewBox (updateAxisLabelSizing) — окажутся привязаны к границам
-      // уже неактуального охвата, визуально "плывя" к центру. Рефит и на
-      // включении, и на выключении файла — гарантия, что подписи всегда
-      // ровно по краю, независимо от порядка кликов (см. Docs/backlog.md).
-      await loadPlan(false);
-    });
-    if (included) await renderLayerCheckboxes(f.source_file, layerList);
+  const текущий = currentObject();
+  document.getElementById("drawings-object-name").textContent =
+    текущий ? `«${текущий.object.name}»` : "";
+  if (!текущий) {
+    container.innerHTML = '<div class="hint-text">Объект не выбран.</div>';
+    updateFileSelectSummary();
+    return;
   }
+  let версии;
+  try {
+    версии = await api(`/objects/${текущий.object.id}/drawings`);
+  } catch (e) {
+    container.innerHTML = `<div class="hint-text">Не удалось получить список версий: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!версии.length) {
+    container.innerHTML = '<div class="hint-text">У объекта пока нет загруженных чертежей.</div>';
+    updateFileSelectSummary();
+    return;
+  }
+  const выбранныйВручную = state.selection.size ? Array.from(state.selection.keys())[0] : null;
+  for (const в of версии) {
+    const row = document.createElement("label");
+    row.className = "drawing-row";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "object-drawing";
+    // Актуальная версия отмечена, когда версию не выбирали вручную: это и
+    // есть обычное состояние, в котором схема показывает объект.
+    radio.checked = выбранныйВручную ? (выбранныйВручную === в.source_file) : в.is_current;
+    radio.addEventListener("change", async () => {
+      state.selection.clear();
+      // Для актуальной версии НЕ фиксируем файл: пусть его и дальше
+      // выбирает сервер по объекту — иначе после загрузки нового чертежа
+      // схема осталась бы на прежнем файле, уже неактуальном.
+      if (!в.is_current) state.selection.set(в.source_file, null);
+      updateFileSelectSummary();
+      await loadPlan(false);
+      showToast(в.is_current ? "Показана актуальная версия чертежа"
+                             : `Показана версия ${в.source_file}`, "info");
+    });
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = в.source_file;
+    row.append(radio, name);
+    if (в.is_current) {
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      badge.textContent = "актуальная";
+      row.appendChild(badge);
+    }
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = `${в.elements} эл.` + (в.imported_at ? ` · ${в.imported_at.slice(0, 10)}` : "");
+    row.appendChild(meta);
+    container.appendChild(row);
+  }
+  updateFileSelectSummary();
 }
 
 // ---------- вкладки сайдбара: Свойства / Статус / Фильтры / Вид ----------

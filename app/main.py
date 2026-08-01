@@ -2150,6 +2150,42 @@ def _resolve_selection_item(conn, item):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@app.get("/objects/{object_id}/drawings")
+def list_object_drawings(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Версии чертежа объекта, новые сверху (этап B).
+
+    Заменяет прежний список «какие файлы показать»: с этапа B на схеме
+    всегда один объект, а выбирать можно только ВЕРСИЮ его чертежа — и это
+    редкое действие «посмотреть, как было», а не повседневная настройка.
+
+    Счётчик элементов на версию — по source_file, БЕЗ фильтра видимости:
+    у неактуальных версий все элементы is_current=0, и с фильтром список
+    показывал бы нули у всего, кроме текущей, что читается как «данные
+    потерялись».
+    """
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
+        counts = {
+            r["source_file"]: r["n"]
+            for r in conn.execute(
+                "SELECT source_file, COUNT(*) AS n FROM elements GROUP BY source_file"
+            )
+        }
+        return [
+            {"source_file": r["source_file"], "is_current": bool(r["is_current"]),
+             "imported_at": r["imported_at"], "elements": counts.get(r["source_file"], 0)}
+            for r in conn.execute(
+                "SELECT source_file, is_current, imported_at FROM object_drawings "
+                "WHERE object_id = ? ORDER BY is_current DESC, imported_at DESC",
+                (object_id,),
+            )
+        ]
+    finally:
+        conn.close()
+
+
 @app.get("/projects-tree")
 def get_projects_tree(user: sqlite3.Row = Depends(get_current_user)):
     """Проекты со своими объектами — источник для переключателя в тулбаре
@@ -2346,11 +2382,23 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         elements = []
         axis_rows_all = []
         zones = []
+        _current_files = {
+            r["source_file"]
+            for r in conn.execute("SELECT source_file FROM object_drawings WHERE is_current = 1")
+        }
         for item in body.selection:
             # Этап B: клиент выбирает ОБЪЕКТ, файл выводит сервер. Явно
             # переданный source_file уважается — им пользуется форма
             # «Версии чертежа объекта», чтобы показать НЕ актуальную версию.
             item = _resolve_selection_item(conn, item)
+            # Условие видимости (is_current = 1) прячет элементы, ИСЧЕЗНУВШИЕ
+            # из актуального чертежа. При просмотре ПРОШЛОЙ версии оно
+            # обессмысливает саму функцию: у элементов старой версии
+            # is_current=0 поголовно, и схема выходила пустой (поймано живой
+            # проверкой). Для явно запрошенной неактуальной версии фильтр
+            # снимается — это режим «посмотреть, как было», только чтение.
+            видимость = ("1 = 1" if item.source_file and item.source_file not in _current_files
+                         else visible_elements_clause())
             # item.layers может быть: None ("все слои файла"), непустым
             # списком (конкретные слои) или ПУСТЫМ списком (пользователь
             # снял все галочки — ни одного элемента, но оси/зоны файла
@@ -2359,13 +2407,13 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # None, из-за чего "снять все галочки" молча показывало ВСЕ
             # элементы вместо ни одного (см. Docs/backlog.md).
             if item.layers is None:
-                q = f"SELECT * FROM elements WHERE source_file = ? AND {visible_elements_clause()} ORDER BY id"
+                q = f"SELECT * FROM elements WHERE source_file = ? AND {видимость} ORDER BY id"
                 params = (item.source_file,)
                 rows = conn.execute(q, params).fetchall()
             elif item.layers:
                 placeholders = ",".join("?" * len(item.layers))
                 q = (f"SELECT * FROM elements WHERE source_file = ? AND layer IN ({placeholders}) "
-                     f"AND {visible_elements_clause()} ORDER BY id")
+                     f"AND {видимость} ORDER BY id")
                 params = (item.source_file, *item.layers)
                 rows = conn.execute(q, params).fetchall()
             else:
