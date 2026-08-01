@@ -5420,6 +5420,20 @@ async function renderSubtypesModal() {
 // Форма минимальная: показать, чем объект сейчас описан (актуальный чертёж,
 // сколько элементов актуальны и сколько исчезли из чертежа), и дать
 // переименовать — автоматически заведённый объект называется "Объект 1".
+// Форма добавления раскрывается по кнопке и прячется обратно после
+// успеха или отмены (живой запрос 2026-08-01): в справочнике пустые поля
+// ввода внизу — постоянный шум, а добавляют редко.
+function toggleAddForm(formId, show) {
+  const form = document.getElementById(formId);
+  form.hidden = !show;
+  // Кнопка раскрытия прячется вместе с раскрытой формой: две кнопки
+  // «Добавить» рядом читались бы как выбор между ними.
+  const btn = document.getElementById(formId.replace("-form", "-show"));
+  if (btn) btn.hidden = show;
+  if (show) form.querySelector("input")?.focus();
+  else form.querySelectorAll("input").forEach((i) => { i.value = ""; });
+}
+
 // ==================== СПРАВОЧНИК ПРОЕКТОВ (этап B) ====================
 const projectsBackdrop = document.getElementById("projects-backdrop");
 
@@ -5497,9 +5511,15 @@ async function renderProjectsModal() {
 
 document.getElementById("menu-projects").addEventListener("click", async () => {
   projectsBackdrop.classList.add("open");
+  toggleAddForm("project-add-form", false);
   await renderProjectsModal();
 });
 document.getElementById("projects-close").addEventListener("click", () => projectsBackdrop.classList.remove("open"));
+document.getElementById("project-add-show").addEventListener("click", () => toggleAddForm("project-add-form", true));
+document.getElementById("project-add-cancel").addEventListener("click", () => {
+  toggleAddForm("project-add-form", false);
+  setProjectsStatus("", false);
+});
 document.getElementById("project-add").addEventListener("click", async () => {
   const name = document.getElementById("project-new-name").value.trim();
   if (!name) { setProjectsStatus("Укажите наименование проекта", true); return; }
@@ -5508,8 +5528,7 @@ document.getElementById("project-add").addEventListener("click", async () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, address: document.getElementById("project-new-address").value || null }),
     });
-    document.getElementById("project-new-name").value = "";
-    document.getElementById("project-new-address").value = "";
+    toggleAddForm("project-add-form", false);
     await renderProjectsModal();
     await loadProjectsTree();
     setProjectsStatus("Проект добавлен.", false);
@@ -5614,8 +5633,7 @@ document.getElementById("object-add").addEventListener("click", async () => {
       body: JSON.stringify({ name, project_id: projectId,
                              address: document.getElementById("object-new-address").value || null }),
     });
-    document.getElementById("object-new-name").value = "";
-    document.getElementById("object-new-address").value = "";
+    toggleAddForm("object-add-form", false);
     await renderObjectsModal();
     await loadProjectsTree();   // объект должен сразу появиться в переключателе
     statusBox.style.color = "var(--color-text-muted)";
@@ -5628,9 +5646,15 @@ document.getElementById("object-add").addEventListener("click", async () => {
 
 document.getElementById("menu-objects").addEventListener("click", async () => {
   objectsBackdrop.classList.add("open");
+  toggleAddForm("object-add-form", false);
   await renderObjectsModal();
 });
 document.getElementById("objects-close").addEventListener("click", () => objectsBackdrop.classList.remove("open"));
+document.getElementById("object-add-show").addEventListener("click", () => toggleAddForm("object-add-form", true));
+document.getElementById("object-add-cancel").addEventListener("click", () => {
+  toggleAddForm("object-add-form", false);
+  document.getElementById("objects-status").textContent = "";
+});
 
 // ==================== СПРАВОЧНИК ЭЛЕМЕНТОВ (этап 3, решение Э1) ====================
 // Таблица всех элементов объекта с отбором по колонкам и сортировкой.

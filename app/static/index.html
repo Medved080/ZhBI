@@ -281,6 +281,7 @@
      в своей ячейке сетки. В общей flex-строке <select> (у него width:100%,
      то есть flex-basis:100%) вытеснял соседний input почти в ноль — форма
      выглядела как одно поле неизвестного назначения. */
+  .add-form { margin-top: 10px; border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; }
   .object-card { padding: 12px 0; border-bottom: 1px solid var(--color-border); }
   .object-card:last-child { border-bottom: none; }
   .object-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
@@ -1414,17 +1415,25 @@
       сводятся из сроков подчинённых объектов — поэтому не могут с ними разойтись.
     </p>
     <div id="projects-rows"></div>
+    <!-- Поля нового проекта скрыты, пока их не запросили (живой запрос
+         2026-08-01): в справочнике из десятка проектов пустая форма ввода
+         внизу — постоянный шум, а добавляют редко. -->
     <div class="admin-only" style="margin-top:14px">
-      <label class="field">Новый проект</label>
-      <div class="object-fields">
-        <label class="object-field"><span>Наименование проекта</span>
-          <input type="text" id="project-new-name"/></label>
-        <label class="object-field"><span>Адрес</span>
-          <input type="text" id="project-new-address"/></label>
-      </div>
-      <div class="object-card-foot">
-        <span></span>
-        <button class="btn btn-sm btn-primary" id="project-add">Добавить</button>
+      <button class="btn btn-sm btn-secondary" id="project-add-show">+ Добавить проект</button>
+      <div id="project-add-form" class="add-form" hidden>
+        <div class="object-fields">
+          <label class="object-field"><span>Наименование проекта</span>
+            <input type="text" id="project-new-name"/></label>
+          <label class="object-field"><span>Адрес</span>
+            <input type="text" id="project-new-address"/></label>
+        </div>
+        <div class="object-card-foot">
+          <span></span>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-sm btn-secondary" id="project-add-cancel">Отмена</button>
+            <button class="btn btn-sm btn-primary" id="project-add">Добавить</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="projects-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
@@ -1440,20 +1449,25 @@
     <p class="hint-text">Объект — здание или стройплощадка. Элементы принадлежат объекту, а не файлу чертежа: новая версия чертежа обновляет их, сохраняя статусы и историю.</p>
     <div id="objects-rows"></div>
     <div class="admin-only" style="margin-top:14px; border-top:1px solid var(--color-border); padding-top:12px">
-      <label class="field">Новый объект</label>
-      <div class="object-fields">
-        <label class="object-field"><span>Наименование объекта</span>
-          <input type="text" id="object-new-name"/></label>
-        <label class="object-field"><span>Проект</span>
-          <select id="object-new-project"></select></label>
-        <label class="object-field object-field-wide"><span>Адрес объекта</span>
-          <input type="text" id="object-new-address"/></label>
-      </div>
-      <div class="object-card-foot">
-        <!-- Чертёж грузится отдельно: объект без чертежа — законное
-             состояние, он просто показывается пустым. -->
-        <span class="hint-text">Чертёж загружается отдельно — «Обмен данными → Загрузить чертёж».</span>
-        <button class="btn btn-sm btn-primary" id="object-add">Добавить</button>
+      <button class="btn btn-sm btn-secondary" id="object-add-show">+ Добавить объект</button>
+      <div id="object-add-form" class="add-form" hidden>
+        <div class="object-fields">
+          <label class="object-field"><span>Наименование объекта</span>
+            <input type="text" id="object-new-name"/></label>
+          <label class="object-field"><span>Проект</span>
+            <select id="object-new-project"></select></label>
+          <label class="object-field object-field-wide"><span>Адрес объекта</span>
+            <input type="text" id="object-new-address"/></label>
+        </div>
+        <div class="object-card-foot">
+          <!-- Чертёж грузится отдельно: объект без чертежа — законное
+               состояние, он просто показывается пустым. -->
+          <span class="hint-text">Чертёж загружается отдельно — «Обмен данными → Загрузить чертёж».</span>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-sm btn-secondary" id="object-add-cancel">Отмена</button>
+            <button class="btn btn-sm btn-primary" id="object-add">Добавить</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="objects-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
