@@ -5434,6 +5434,26 @@ function toggleAddForm(formId, show) {
   else form.querySelectorAll("input").forEach((i) => { i.value = ""; });
 }
 
+let objectsFilterProjectId = null;
+
+function renderObjectsFilterChip(всеОбъекты) {
+  const box = document.getElementById("objects-filter");
+  if (!objectsFilterProjectId) { box.innerHTML = ""; return; }
+  const обр = всеОбъекты.find((o) => o.project_id === objectsFilterProjectId);
+  const имя = обр ? обр.project_name : "проект";
+  box.innerHTML = "";
+  const chip = document.createElement("div");
+  chip.className = "objects-filter-chip";
+  chip.append(`Показаны объекты проекта «${имя}»`);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "link-like";
+  btn.textContent = "показать все";
+  btn.addEventListener("click", () => renderObjectsModal(null));
+  chip.appendChild(btn);
+  box.appendChild(chip);
+}
+
 // ==================== СПРАВОЧНИК ПРОЕКТОВ (этап B) ====================
 const projectsBackdrop = document.getElementById("projects-backdrop");
 
@@ -5453,7 +5473,7 @@ async function renderProjectsModal() {
     return;
   }
   box.innerHTML = projects.map((p) => `
-    <div style="padding:10px 0; border-bottom:1px solid var(--color-border)">
+    <div class="object-card">
       <div class="object-fields">
         <label class="object-field">
           <span>Наименование проекта</span>
@@ -5466,7 +5486,9 @@ async function renderProjectsModal() {
       </div>
       <div class="object-card-foot">
         <div class="hint-text">
-        Объектов: ${p.objects_count}. Элементов: ${p.elements_count}.
+        <button type="button" class="link-like" data-open-objects="${p.id}"
+                title="Открыть объекты этого проекта">Объектов: ${p.objects_count}</button>.
+        Элементов: ${p.elements_count}.
         Сроки СМР (сводно): ${p.smr_start ? formatDateRu(p.smr_start) : "—"} — ${p.smr_end ? formatDateRu(p.smr_end) : "—"}.
         </div>
         <div style="display:flex; gap:6px;">
@@ -5475,6 +5497,18 @@ async function renderProjectsModal() {
         </div>
       </div>
     </div>`).join("");
+
+  // Переход из проекта к его объектам (живой запрос 2026-08-01): справочники
+  // связаны, и искать нужный объект в общем списке руками — лишняя работа.
+  box.querySelectorAll("[data-open-objects]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const pid = Number(btn.getAttribute("data-open-objects"));
+      projectsBackdrop.classList.remove("open");
+      objectsBackdrop.classList.add("open");
+      toggleAddForm("object-add-form", false);
+      await renderObjectsModal(pid);
+    });
+  });
 
   box.querySelectorAll("[data-save-project]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -5537,13 +5571,21 @@ document.getElementById("project-add").addEventListener("click", async () => {
 
 const objectsBackdrop = document.getElementById("objects-backdrop");
 
-async function renderObjectsModal() {
+// projectId — необязательный отбор: справочник открыт «из проекта».
+// Отбор сеансовый и виден плашкой сверху, чтобы человек не решил, что
+// половина объектов пропала.
+async function renderObjectsModal(projectId = null) {
   const box = document.getElementById("objects-rows");
   const statusBox = document.getElementById("objects-status");
   statusBox.textContent = "";
-  const objects = await api("/objects");
+  objectsFilterProjectId = projectId;
+  const все = await api("/objects");
+  const objects = projectId ? все.filter((o) => o.project_id === projectId) : все;
+  renderObjectsFilterChip(все);
   if (!objects.length) {
-    box.innerHTML = `<p class="hint-text">Объектов пока нет — объект появится при первой загрузке чертежа.</p>`;
+    box.innerHTML = projectId
+      ? `<p class="hint-text">В этом проекте пока нет объектов.</p>`
+      : `<p class="hint-text">Объектов пока нет — добавьте объект кнопкой ниже.</p>`;
     return;
   }
   // Список проектов нужен для выпадашки «Проект» у каждого объекта:
