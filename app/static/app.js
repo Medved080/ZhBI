@@ -488,11 +488,27 @@ function applyRolePermissions() {
   // тут же возвращало её, потому что кнопки внутри оставались видимыми.
   // Проверено живьём: пользователь с системной ролью view видел
   // «Справочники» целиком, все 7 пунктов (2026-08-02).
-  document.querySelectorAll("#settings-menu .submenu").forEach(group => {
-    const видимые = [...group.querySelectorAll(".submenu-panel button")]
-      .filter(b => b.style.display !== "none");
-    group.style.display = видимые.length ? "" : "none";
-  });
+  // Считаем СНИЗУ ВВЕРХ, от самых вложенных групп к внешним: у подгруппы
+  // «Справочников» свой набор пунктов, и пока не известно, видна ли она
+  // сама, нельзя решить, пуста ли внешняя группа. Заголовок подгруппы —
+  // тоже <button>, поэтому наивный подсчёт всех кнопок внутри объявлял бы
+  // «Справочники» непустыми всегда, даже когда внутри всё скрыто.
+  const глубина = (el) => {
+    let d = 0;
+    for (let p = el.parentElement; p && p !== settingsMenu; p = p.parentElement) {
+      if (p.classList.contains("submenu")) d++;
+    }
+    return d;
+  };
+  [...document.querySelectorAll("#settings-menu .submenu")]
+    .sort((a, b) => глубина(b) - глубина(a))
+    .forEach(group => {
+      const panel = group.querySelector(":scope > .submenu-panel");
+      const пункты = panel ? [...panel.querySelectorAll(":scope > button")] : [];
+      const подгруппы = panel ? [...panel.querySelectorAll(":scope > .submenu")] : [];
+      const видимые = [...пункты, ...подгруппы].filter(el => el.style.display !== "none");
+      group.style.display = видимые.length ? "" : "none";
+    });
 }
 
 async function checkAuth() {
@@ -5397,8 +5413,97 @@ document.addEventListener("click", () => objectSwitchMenu.classList.remove("open
 
 // ==================== МЕНЮ "НАСТРОЙКИ" ====================
 const settingsMenu = document.getElementById("settings-menu");
+
+// ---------- Два вида одного меню (2026-08-02, живой запрос) ----------
+//
+// Выпадающее меню удобно, когда знаешь, куда идёшь: три движения мышью — и
+// ты в нужном пункте. Панель удобна, когда не знаешь: весь список действий
+// перед глазами разом, без наведений и без угадывания, в какой группе
+// лежит нужное.
+//
+// Содержимое панели СОБИРАЕТСЯ ИЗ РАЗМЕТКИ выпадающего меню, а не
+// описывается вторым списком: два независимых перечня одних и тех же сорока
+// пунктов разъехались бы на первой же правке, и разъезд заметили бы только
+// по жалобе. Отсюда же бесплатно берётся разграничение доступа — панель
+// показывает ровно то, что applyRolePermissions оставила видимым, — и все
+// обработчики: кнопка панели просто нажимает исходную кнопку меню.
+const MENU_VIEW_KEY = "zhbi_menu_view";
+const actionsPanelBackdrop = document.getElementById("actions-panel-backdrop");
+
+function menuViewMode() {
+  return localStorage.getItem(MENU_VIEW_KEY) === "panel" ? "panel" : "dropdown";
+}
+
+function видимыеПунктыПанели(панель) {
+  return [...панель.querySelectorAll(":scope > button, :scope > .submenu")]
+    .filter(el => el.style.display !== "none");
+}
+
+// Кнопка-двойник: нажатие переадресуется ОРИГИНАЛУ, поэтому у панели нет ни
+// одного собственного обработчика действий.
+function кнопкаПанели(оригинал) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = оригинал.textContent.trim();
+  if (оригинал.classList.contains("menu-item-danger")) b.className = "menu-item-danger";
+  b.addEventListener("click", () => {
+    actionsPanelBackdrop.classList.remove("open");
+    оригинал.click();
+  });
+  return b;
+}
+
+function renderActionsPanel() {
+  const box = document.getElementById("actions-panel-body");
+  box.innerHTML = "";
+  for (const группа of document.querySelectorAll("#settings-menu > .submenu")) {
+    if (группа.style.display === "none") continue;
+    const блок = document.createElement("div");
+    блок.className = "actions-panel-group";
+    const заголовок = document.createElement("h4");
+    заголовок.textContent = группа.querySelector(":scope > .submenu-trigger").textContent.trim();
+    блок.appendChild(заголовок);
+    for (const пункт of видимыеПунктыПанели(группа.querySelector(":scope > .submenu-panel"))) {
+      if (!пункт.classList.contains("submenu")) { блок.appendChild(кнопкаПанели(пункт)); continue; }
+      const под = document.createElement("div");
+      под.className = "actions-panel-sub";
+      const h5 = document.createElement("h5");
+      h5.textContent = пункт.querySelector(":scope > .submenu-trigger").textContent.trim();
+      под.appendChild(h5);
+      видимыеПунктыПанели(пункт.querySelector(":scope > .submenu-panel"))
+        .forEach(п => под.appendChild(кнопкаПанели(п)));
+      блок.appendChild(под);
+    }
+    box.appendChild(блок);
+  }
+}
+
+document.getElementById("actions-panel-close").addEventListener("click", () =>
+  actionsPanelBackdrop.classList.remove("open"));
+
+// ---------- выбор вида ----------
+document.getElementById("menu-view-mode").addEventListener("click", () => {
+  const текущий = menuViewMode();
+  document.querySelectorAll('input[name="menu-view"]').forEach(r => { r.checked = r.value === текущий; });
+  document.getElementById("menu-view-backdrop").classList.add("open");
+});
+document.getElementById("menu-view-close").addEventListener("click", () =>
+  document.getElementById("menu-view-backdrop").classList.remove("open"));
+document.querySelectorAll('input[name="menu-view"]').forEach(r => r.addEventListener("change", () => {
+  if (r.checked) localStorage.setItem(MENU_VIEW_KEY, r.value);
+}));
+
 document.getElementById("btn-settings-menu").addEventListener("click", (e) => {
   e.stopPropagation();
+  if (menuViewMode() === "panel") {
+    // Панель и выпадающее меню не могут быть открыты одновременно: у них
+    // один источник содержимого, и нажатие в одном закрывает другое.
+    settingsMenu.classList.remove("open");
+    closeAllSubmenus();
+    renderActionsPanel();
+    actionsPanelBackdrop.classList.add("open");
+    return;
+  }
   const willOpen = !settingsMenu.classList.contains("open");
   if (willOpen) {
     // position: fixed + координаты в JS (не CSS-якорь top/right родителя) — иначе
@@ -5422,9 +5527,29 @@ function closeAllSubmenus() {
   settingsMenu.querySelectorAll(".submenu.open").forEach(el => el.classList.remove("open"));
 }
 
+// Уровень группы: у чего лежит панель-родитель. Нужен, чтобы закрывать
+// СОСЕДЕЙ, а не всё подряд: с появлением подгрупп «Справочников»
+// (2026-08-02) прежнее closeAllSubmenus при открытии ребёнка закрывало и
+// его родителя — панель пропадала из-под курсора вместе с ребёнком.
+function submenuParentPanel(submenu) {
+  return submenu.parentElement.closest(".submenu-panel") || settingsMenu;
+}
+
 function openSubmenu(submenu) {
   if (submenu.classList.contains("open")) return;
-  closeAllSubmenus(); // одновременно раскрыта всегда одна группа
+  // Закрываем соседей по своему уровню (вместе с их потомками — они внутри
+  // и уйдут вместе с панелью) и собственных потомков, если остались от
+  // прошлого раза. Предки остаются открытыми: путь до текущего пункта
+  // должен быть виден целиком.
+  submenuParentPanel(submenu).querySelectorAll(":scope > .submenu.open").forEach(el => {
+    el.classList.remove("open");
+    // И потомков закрываемого соседа: класс на них не виден, пока скрыта
+    // панель родителя, но при повторном открытии группы подгруппа
+    // раскрылась бы сама — состояние от прошлого раза, которого человек не
+    // просил (поймано проверкой).
+    el.querySelectorAll(".submenu.open").forEach(x => x.classList.remove("open"));
+  });
+  submenu.querySelectorAll(".submenu.open").forEach(el => el.classList.remove("open"));
   submenu.classList.add("open");
   // Панель по умолчанию уходит влево (кнопка "Действия" у правого края).
   // Если слева места не хватает — например, окно узкое или меню оказалось
@@ -5453,7 +5578,13 @@ function cancelSubmenuSwitch() {
 function scheduleSubmenuOpen(submenu) {
   cancelSubmenuSwitch();
   if (submenu.classList.contains("open")) return;
-  if (!settingsMenu.querySelector(".submenu.open")) { openSubmenu(submenu); return; }
+  // «Открыта ли уже группа» проверяем НА СВОЁМ уровне: подгруппа
+  // открывается сразу, даже когда её родитель раскрыт — задержка нужна
+  // только против перехвата соседями по пути курсора, а родитель на этом
+  // пути и стоит.
+  if (!submenuParentPanel(submenu).querySelector(":scope > .submenu.open")) {
+    openSubmenu(submenu); return;
+  }
   submenuSwitchTimer = setTimeout(() => {
     submenuSwitchTimer = null;
     openSubmenu(submenu);

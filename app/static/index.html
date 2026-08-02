@@ -319,6 +319,29 @@
     padding-top: 12px; }
   /* Вложения (2026-08-02). Одна разметка на все три места — карточку
      элемента в правой панели, форму элемента и формы проектов/объектов. */
+  /* Панель действий: группы плиткой, подгруппы — вложенным блоком внутри
+     своей группы. auto-fill, а не фиксированное число колонок: групп пять,
+     но набор зависит от роли, и жёсткая сетка оставляла бы дыры. */
+  /* Ширина ЗАДАЁТСЯ, а не выводится из содержимого: у .modal нет width, и
+     сетка «сколько влезет по 210 px» без явной ширины схлопывалась в одну
+     колонку — весь смысл панели (всё разом перед глазами) при этом
+     пропадал. 92vw — чтобы на узком экране окно не упиралось в края. */
+  #actions-panel-modal { width: 1000px; max-width: 92vw; }
+  .actions-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 14px; align-items: start; }
+  .actions-panel-group { border: 1px solid var(--color-border); border-radius: var(--radius);
+    padding: 10px 12px; }
+  .actions-panel-group > h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .03em; color: var(--color-text-muted); }
+  .actions-panel-sub { margin: 8px 0 0; padding-left: 8px;
+    border-left: 2px solid var(--color-border); }
+  .actions-panel-sub > h5 { margin: 0 0 4px; font-size: 11px; font-weight: 600;
+    color: var(--color-text-muted); }
+  .actions-panel button { display: block; width: 100%; text-align: left; background: none;
+    border: none; padding: 5px 6px; border-radius: var(--radius-sm); cursor: pointer;
+    font: inherit; font-size: 12px; color: var(--color-text); }
+  .actions-panel button:hover { background: var(--color-surface-2); }
+  .actions-panel button.menu-item-danger { color: var(--color-danger); }
   .attach-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
     align-items: baseline; padding: 4px 0; border-bottom: 1px dashed var(--color-border); }
   .attach-name { background: none; border: none; padding: 0; cursor: pointer; text-align: left;
@@ -1130,36 +1153,69 @@
           <div class="dropdown-menu submenu-panel">
             <button id="menu-change-password">Сменить пароль</button>
             <button id="menu-label-color">Цвет подписей марок</button>
+            <!-- Вид меню — личная настройка КОМПЬЮТЕРА (localStorage), как
+                 «3D лёгкий»: она про то, как человеку удобнее на этом
+                 экране, а не про проект. Поэтому доступна всем ролям. -->
+            <button id="menu-view-mode">Вид меню «Действия»…</button>
             <button id="menu-colors" class="admin-only">Цвета статусов</button>
             <button id="menu-shapes" class="admin-only">Форма маркеров</button>
             <button id="menu-zone-colors" class="object-admin-only">Цвета зон</button>
             <button id="menu-info-plate-settings" class="object-admin-only">Порог опоздания поставки</button>
           </div>
         </div>
-        <!-- Класс — на КАЖДОМ пункте, а не на группе: часть справочников
-             системная (проекты, объекты, сквозные словари), часть —
-             объектная (зоны, контракты, карточка объекта). Пустая группа
-             прячется сама, см. applyRolePermissions. -->
+        <!-- Класс гашения — на КАЖДОМ пункте, а не на группе: часть
+             справочников системная (проекты, объекты, сквозные словари),
+             часть — объектная (зоны, контракты, карточка объекта). Пустая
+             группа прячется сама, см. applyRolePermissions.
+
+             Внутри — ПОДГРУППЫ (2026-08-02, живой запрос): двенадцать
+             пунктов подряд читались сплошным списком, в котором не видно,
+             что к чему относится. Третий уровень меню CSS поддерживал и
+             раньше (панель абсолютна относительно своего .submenu),
+             понадобилось лишь перестать закрывать родителя при открытии
+             ребёнка.
+
+             «Элементы» оставлены ОТДЕЛЬНЫМ пунктом, а не подгруппой из
+             одного пункта: группа, в которой всегда ровно одна строка с
+             тем же названием, — это лишний наведённый клик и ничего больше. -->
         <div class="submenu">
           <button type="button" class="submenu-trigger">Справочники</button>
           <div class="dropdown-menu submenu-panel">
-            <!-- Слово "Справочник" из названий убрано: под заголовком
-                 "Справочники" оно повторялось дважды в каждой строке. -->
-            <button id="menu-projects" class="admin-only">Проекты</button>
-            <button id="menu-objects" class="admin-only">Объекты</button>
             <button id="menu-element-catalog" class="object-admin-only">Элементы</button>
+            <div class="submenu">
+              <button type="button" class="submenu-trigger">Проект и объект</button>
+              <div class="dropdown-menu submenu-panel">
+                <button id="menu-projects" class="admin-only">Проекты</button>
+                <button id="menu-objects" class="admin-only">Объекты</button>
+                <button id="menu-project-card" class="object-admin-only">Карточка объекта</button>
+                <button id="menu-report-notes" class="object-admin-only">События, задачи, вопросы</button>
+              </div>
+            </div>
             <!-- Три справочника зон (этап 2, решение З15: физически одна
                  таблица с полем категории, в интерфейсе — три справочника,
                  как их и видит пользователь). -->
-            <button id="menu-zones-zakhvatka" class="object-admin-only">Захватки</button>
-            <button id="menu-zones-crane" class="object-admin-only">Зоны кранов</button>
-            <button id="menu-zones-stance" class="object-admin-only">Стоянки кранов</button>
-            <button id="menu-subtypes" class="admin-only">Подтипы</button>
-            <button id="menu-mark-prefixes" class="admin-only">Префиксы марок</button>
-            <button id="menu-counterparties" class="admin-only">Контрагенты</button>
-            <button id="menu-contracts" class="object-admin-only">Контракты</button>
-            <button id="menu-project-card" class="object-admin-only">Карточка объекта</button>
-            <button id="menu-report-notes" class="object-admin-only">События, задачи, вопросы</button>
+            <div class="submenu">
+              <button type="button" class="submenu-trigger">Зоны</button>
+              <div class="dropdown-menu submenu-panel">
+                <button id="menu-zones-zakhvatka" class="object-admin-only">Захватки</button>
+                <button id="menu-zones-crane" class="object-admin-only">Зоны кранов</button>
+                <button id="menu-zones-stance" class="object-admin-only">Стоянки кранов</button>
+              </div>
+            </div>
+            <div class="submenu">
+              <button type="button" class="submenu-trigger">Классификация</button>
+              <div class="dropdown-menu submenu-panel">
+                <button id="menu-subtypes" class="admin-only">Типы и подтипы элементов</button>
+                <button id="menu-mark-prefixes" class="admin-only">Префиксы марок</button>
+              </div>
+            </div>
+            <div class="submenu">
+              <button type="button" class="submenu-trigger">Контрактация</button>
+              <div class="dropdown-menu submenu-panel">
+                <button id="menu-counterparties" class="admin-only">Контрагенты</button>
+                <button id="menu-contracts" class="object-admin-only">Контракты</button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="submenu">
@@ -1595,6 +1651,38 @@
 <!-- Форма элемента (живой запрос): правка полей отдельно от справочника —
      открывается двойным щелчком по строке. Внизу — табличная часть истории
      статусов со всеми реквизитами и правкой ПРЯМО В ТАБЛИЦЕ. -->
+<!-- Второй вид меню «Действия» (2026-08-02, живой запрос): всё то же самое
+     панелью, а не выпадающим списком. Содержимое НЕ дублируется в разметке —
+     оно собирается из #settings-menu при открытии (см. renderActionsPanel):
+     два независимых списка одних и тех же пунктов разъехались бы на первой
+     же правке, и разъезд заметили бы только по жалобе. -->
+<div class="modal-backdrop" id="menu-view-backdrop">
+  <div class="modal">
+    <h2>Вид меню «Действия»</h2>
+    <label class="toggle"><input type="radio" name="menu-view" value="dropdown"/>
+      Выпадающее меню — группы раскрываются вбок при наведении</label>
+    <label class="toggle"><input type="radio" name="menu-view" value="panel"/>
+      Панель — все действия сразу, окном на весь список</label>
+    <p class="hint-text">Настройка этого компьютера: хранится в браузере и не
+      меняется у других пользователей.</p>
+    <div class="actions">
+      <button class="btn btn-secondary" id="menu-view-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="actions-panel-backdrop">
+  <div class="modal modal-sticky" id="actions-panel-modal">
+    <div class="modal-sticky-head"><h2>Действия</h2></div>
+    <div class="modal-sticky-scroll"><div id="actions-panel-body" class="actions-panel"></div></div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="actions-panel-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="element-form-backdrop">
   <div class="modal modal-sticky" style="max-width:940px">
     <div class="modal-sticky-head">
