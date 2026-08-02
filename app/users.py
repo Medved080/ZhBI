@@ -208,7 +208,7 @@ class SetUiThemeIn(BaseModel):
     ui_theme: Optional[str] = None
 
 
-UI_THEMES = ("gos", "msu", "graphite", "emerald", "indigo", "sand")
+UI_THEMES = ("gos", "msu", "graphite", "indigo", "neon", "emerald", "sand")
 
 
 @router.patch("/{user_id}/ui-theme", response_model=UserOut)

@@ -5458,6 +5458,7 @@ const SKINS = [
   { id: "msu",      name: "МСУ-1",     swatch: ["#FBF7F7", "#F6E6E6", "#A31212"] },
   { id: "graphite", name: "Графит",    swatch: ["#14161A", "#23272E", "#7AA2F7"] },
   { id: "indigo",   name: "Индиго",    swatch: ["#10121F", "#202441", "#8B9DFF"] },
+  { id: "neon",     name: "Неон",      swatch: ["#0B0A12", "#2A2247", "#FCEE0A"] },
   { id: "emerald",  name: "Изумруд",   swatch: ["#F6FBF8", "#E1F1E9", "#0E8A5F"] },
   { id: "sand",     name: "Песок",     swatch: ["#FAF7F2", "#F6E9D6", "#B4690E"] },
 ];
@@ -5570,7 +5571,12 @@ function кнопкаПанели(оригинал) {
   const b = document.createElement("button");
   b.type = "button";
   b.textContent = оригинал.textContent.trim();
-  if (оригинал.classList.contains("menu-item-danger")) b.className = "menu-item-danger";
+  // Переносим ОБА смысловых класса: «опасный» (красным) и «главный»
+  // (жирным). Раньше копировался только первый, и выделенные пункты в
+  // панели выглядели рядовыми — при том, что в выпадающем меню они жирные.
+  for (const класс of ["menu-item-danger", "menu-item-strong"]) {
+    if (оригинал.classList.contains(класс)) b.classList.add(класс);
+  }
   b.addEventListener("click", () => {
     actionsPanelBackdrop.classList.remove("open");
     оригинал.click();
