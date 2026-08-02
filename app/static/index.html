@@ -126,6 +126,9 @@
     --radius: 10px; --radius-sm: 7px;
   }
   /* Графит — тёмная нейтральная. */
+  /* Рабочая область в ТЁМНЫХ гаммах: белый лист посреди тёмного интерфейса
+     слепит и рвёт картинку пополам (живой репорт). Фон схемы, сетка осей,
+     обводка фигур и рёбра 3D переезжают в светлое-на-тёмном. */
   :root[data-skin="graphite"] {
     --color-primary: #7AA2F7;
     --color-primary-hover: #9ab8fa;
@@ -139,6 +142,9 @@
     --color-danger: #F07178;
     --color-success: #62C77A;
     --radius: 12px; --radius-sm: 8px;
+    --stage-bg: #10131A; --stage-3d-bg: #0E1117;
+    --axis-line: #39414F; --axis-label: #7C879A;
+    --shape-stroke: #C7D0DC; --edge-3d: #C7D0DC;
   }
   /* Индиго — тёмная синяя, контрастнее графита. */
   :root[data-skin="indigo"] {
@@ -154,6 +160,9 @@
     --color-danger: #FF7A8A;
     --color-success: #5FD08A;
     --radius: 14px; --radius-sm: 9px;
+    --stage-bg: #0D0F1B; --stage-3d-bg: #0B0D18;
+    --axis-line: #333A63; --axis-label: #7E86B4;
+    --shape-stroke: #CDD2EC; --edge-3d: #CDD2EC;
   }
   /* Изумруд — светлая, спокойный зелёный акцент. */
   :root[data-skin="emerald"] {
@@ -435,9 +444,11 @@
      место, min-height:0 обязателен: без него flex-элемент не сжимается
      ниже своего содержимого и полоса уезжает за нижний край. */
   #stage-area { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  #stage { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #ffffff; cursor: grab; }
+  #stage { flex: 1; min-height: 0; position: relative; overflow: hidden;
+    background: var(--stage-bg, #ffffff); cursor: grab; }
   #stage.dragging { cursor: grabbing; }
-  #stage-3d { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #f3f4f6; }
+  #stage-3d { flex: 1; min-height: 0; position: relative; overflow: hidden;
+    background: var(--stage-3d-bg, #f3f4f6); }
   #stage-3d canvas { display: block; }
   #stage-3d-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); }
   #tooltip-3d {
@@ -498,6 +509,9 @@
   #tooltip-2d .t2d-row.late { color: #f2a79c; }
   #tooltip-2d .t2d-row.neutral { color: #cfd2d8; }
   #axis-layer text { pointer-events: none; }
+  /* Сетка осей — цветом из переменной, а не жёстко из JS: на тёмном фоне
+     светло-серые линии не видны вовсе. Классы вешает renderAxisGrid. */
+  .axis-grid { stroke: var(--axis-line, #c4c4c4); fill: var(--axis-label, #9a9a9a); }
   /* -------- зоны (захватка/кран/стоянка) — см. Docs/backlog.md,
      "Разбор структурированных имён слоёв DWG/DXF..." -------- */
   /* Подложка: полупрозрачная заливка + полупрозрачная (не сплошная) обводка
@@ -594,7 +608,10 @@
      по смыслу, и растягивать её на треть окна незачем. */
   .actions-panel { display: grid; grid-template-columns: 1fr 260px; gap: 16px;
     align-items: start; }
-  .actions-panel-main { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  /* auto-FIT, а не auto-fill: fill резервирует дорожки под несуществующие
+     группы, и справа от «Обмена данными» зияла пустая колонка (живой
+     репорт со скриншотом). fit схлопывает пустые дорожки. */
+  .actions-panel-main { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
     gap: 14px; align-items: start; }
   .actions-panel-side { display: flex; flex-direction: column; gap: 14px; }
   @media (max-width: 780px) {

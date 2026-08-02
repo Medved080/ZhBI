@@ -2568,7 +2568,9 @@ function renderAxisGrid(data) {
   const labelOffset = margin * 1.8;
   const fontSize = data.marker_radius * 2.2;
 
-  const g = el("g", { stroke: "#c4c4c4", fill: "#9a9a9a" });
+  // Цвета — классом, а не атрибутами: на тёмных гаммах светло-серая сетка
+  // не видна, а SVG прекрасно красится обычным CSS (см. .axis-grid).
+  const g = el("g", { class: "axis-grid" });
 
   const numEntries = Object.entries(numeric).sort((a, b) => a[1] - b[1]);
   for (const [label, x] of numEntries) {
@@ -2651,7 +2653,9 @@ function styleShape(shape, element) {
   shape.classList.toggle("selected", selected);
   shape.classList.toggle("multi-selected", state.multiSelectedIds.has(element.id));
   if (!selected) {
-    shape.setAttribute("stroke", IN_PROJECT_STROKE);
+    // Обводка фигуры — из переменной темы: на тёмном фоне почти чёрный
+    // контур сливается с ним, и элементы теряют границы.
+    shape.setAttribute("stroke", themeValue("--shape-stroke", IN_PROJECT_STROKE));
     if (element.axis_status === "outside_axis_grid" || element.axis_status === "no_axis_grid") {
       shape.setAttribute("stroke-dasharray", NO_AXIS_DASH);
     } else {
@@ -5468,6 +5472,33 @@ function currentSkin() {
   return SKINS.some(s => s.id === сохранённая) ? сохранённая : "base";
 }
 
+// Цвет из переменной темы в число для Three.js. Сцена собирается один раз,
+// а гамма может смениться в любой момент — читать переменную в момент
+// сборки мало, поэтому есть ещё applyThemeTo3D ниже.
+// То же, но строкой — для SVG-атрибутов, куда var() не подставить.
+function themeValue(имя, запасной) {
+  const значение = getComputedStyle(document.documentElement).getPropertyValue(имя).trim();
+  return значение || запасной;
+}
+
+function themeColor(имя, запасной) {
+  const значение = getComputedStyle(document.documentElement).getPropertyValue(имя).trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(значение)) return запасной;
+  return parseInt(значение.slice(1), 16);
+}
+
+// Перекрасить уже собранную сцену: фон и рёбра. Материал ребра ОДИН на всю
+// сцену (см. state.view3d.edgeMaterial), поэтому цвет меняется в одном
+// месте, а не у тысяч объектов.
+function applyThemeTo3D() {
+  const v = state.view3d;
+  if (!v || !v.scene) return;
+  const фон = themeColor("--stage-3d-bg", 0xeceff3);
+  v.scene.background = new THREE.Color(фон);
+  if (v.renderer) v.renderer.setClearColor(фон, 1);
+  if (v.edgeMaterial) v.edgeMaterial.color.setHex(themeColor("--edge-3d", EDGE_COLOR));
+}
+
 function applySkin(id) {
   const тема = id || currentSkin();
   if (тема && тема !== "base") document.documentElement.setAttribute("data-skin", тема);
@@ -5478,9 +5509,16 @@ applySkin();
 async function saveSkin(id) {
   localStorage.setItem(SKIN_KEY, id);
   applySkin(id);
-  // 3D-сцена читает цвета из CSS-переменных при сборке — смены атрибута ей
-  // мало, нужен перерисованный кадр.
+  // 3D-сцена читает цвета из CSS-переменных при СБОРКЕ — смены атрибута ей
+  // мало: нужно перекрасить уже собранное и заказать кадр.
+  applyThemeTo3D();
   if (typeof requestRender3D === "function") requestRender3D();
+  // 2D: обводка проставлена АТРИБУТОМ на каждой фигуре при отрисовке, а не
+  // стилем, поэтому смены переменной ей мало — перекрашиваем существующие.
+  const обводка = themeValue("--shape-stroke", IN_PROJECT_STROKE);
+  document.querySelectorAll("#elements-layer .element-shape").forEach(el => {
+    if (el.getAttribute("stroke")) el.setAttribute("stroke", обводка);
+  });
   if (!state.currentUser) return;
   try {
     await api(`/users/${state.currentUser.id}/ui-theme`, {
@@ -5513,8 +5551,12 @@ function renderSkinChoices() {
 const MENU_VIEW_KEY = "zhbi_menu_view";
 const actionsPanelBackdrop = document.getElementById("actions-panel-backdrop");
 
+// ПАНЕЛЬ по умолчанию (живой запрос 2026-08-02): человек, открывший меню
+// впервые, должен увидеть весь список действий, а не угадывать, в какой
+// группе лежит нужное. Выпадающее остаётся выбором для тех, кто уже знает,
+// куда идёт.
 function menuViewMode() {
-  return localStorage.getItem(MENU_VIEW_KEY) === "panel" ? "panel" : "dropdown";
+  return localStorage.getItem(MENU_VIEW_KEY) === "dropdown" ? "dropdown" : "panel";
 }
 
 function видимыеПунктыПанели(панель) {
@@ -7139,7 +7181,7 @@ async function ensureZonePreview3d() {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.setSize(400, 300);
-  renderer.setClearColor(0xf4f6f8, 1);
+  renderer.setClearColor(themeColor("--stage-3d-bg", 0xf4f6f8), 1);
   host.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, 400 / 300, 100, 5_000_000);
@@ -11564,7 +11606,7 @@ function init3DScene() {
   const container = document.getElementById("stage-3d");
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xeceff3);
+  scene.background = new THREE.Color(themeColor("--stage-3d-bg", 0xeceff3));
 
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / Math.max(container.clientHeight, 1), 10, 5_000_000);
 
@@ -11594,7 +11636,10 @@ function init3DScene() {
   // рендере — намного меньше переключений состояния.
   const resolution = new THREE.Vector2();
   v3.renderer.getSize(resolution);
-  v3.edgeMaterial = new LineMaterial({ color: EDGE_COLOR, linewidth: EDGE_LINE_WIDTH_PX, resolution });
+  // Цвет ребра берётся из темы: на тёмных гаммах чёрный контур сливается
+  // с фоном. Запасной — прежний чёрный (EDGE_COLOR).
+  v3.edgeMaterial = new LineMaterial({ color: themeColor("--edge-3d", EDGE_COLOR),
+                                       linewidth: EDGE_LINE_WIDTH_PX, resolution });
 
   window.addEventListener("resize", on3DResize);
   // Отпустить кнопку мыши можно и за пределами холста (курсор увели за край
