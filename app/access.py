@@ -7,10 +7,17 @@
 ведение сервиса (пользователи, проекты, объекты, резервные копии), а не
 про стройку.
 
-Грант живёт в `user_access(user_id, project_id, object_id, role)`.
-`object_id IS NULL` — грант на ВЕСЬ проект, включая объекты, которые
-появятся в нём позже. Действующая роль на объекте ищется в порядке:
-персональный грант на объект -> грант на его проект -> доступа нет.
+Грант живёт в `user_access(user_id, project_id, object_id, role)` и ложится
+на один из ТРЁХ уровней (третий добавлен 2026-08-02):
+
+  оба поля NULL          — все проекты, включая те, что появятся позже;
+  задан только project_id — весь проект, включая будущие объекты в нём;
+  задан object_id         — конкретный объект.
+
+Действующая роль ищется от САМОГО ЧАСТНОГО к общему: объект -> проект ->
+все проекты -> доступа нет. Частный перекрывает общий, иначе выдача
+«просмотр на все стройки» отняла бы у человека полные права там, где они
+у него есть.
 
 **Системный администратор видит и правит всё** в обход грантов. Иначе
 первый же неверный грант запирал бы систему: выдать доступ было бы некому.
@@ -44,26 +51,46 @@ def is_system_admin(user: sqlite3.Row) -> bool:
     return user["role"] == "admin"
 
 
+# Грант ложится на один из трёх уровней; чем ЧАСТНЕЕ, тем он главнее.
+# Значение — «точность», по ней и сортируем: 0 перекрывает 1, 1 — 2.
+_УРОВЕНЬ_ГРАНТА = """
+    CASE WHEN ua.object_id IS NOT NULL THEN 0    -- конкретный объект
+         WHEN ua.project_id IS NOT NULL THEN 1   -- весь проект
+         ELSE 2 END                              -- все проекты
+"""
+
+# Какие гранты вообще относятся к объекту o. Три уровня перечислены явно, а
+# не сведены к «object_id IS NULL» — иначе общий грант нельзя было бы
+# отличить от проектного, и «все проекты» действовал бы как грант на тот
+# проект, чей id случайно оказался в строке.
+_ГРАНТ_ПОДХОДИТ = """
+    ua.object_id = o.id
+    OR (ua.object_id IS NULL AND ua.project_id = o.project_id)
+    OR (ua.object_id IS NULL AND ua.project_id IS NULL)
+"""
+
+
 def object_role(conn: sqlite3.Connection, user: sqlite3.Row, object_id: int) -> Optional[str]:
     """Действующая роль пользователя на объекте или None, если доступа нет.
 
-    Персональный грант на объект ПЕРЕКРЫВАЕТ грант на проект — иначе
-    невозможно было бы понизить или повысить права на одном здании, не
-    трогая остальные.
+    Три уровня, от частного к общему: грант на объект -> грант на проект ->
+    грант на все проекты. Частный ПЕРЕКРЫВАЕТ общий — иначе невозможно было
+    бы понизить или повысить права на одном здании, не трогая остальные, и
+    выдача «просмотр всем стройкам» отняла бы у человека полные права там,
+    где они у него есть.
     """
     if is_system_admin(user):
         return "admin"
     row = conn.execute(
-        """
-        SELECT ua.role, ua.object_id
+        f"""
+        SELECT ua.role, {_УРОВЕНЬ_ГРАНТА} AS точность
         FROM user_access ua
         JOIN objects o ON o.id = ?
-        WHERE ua.user_id = ?
-          AND (ua.object_id = ? OR (ua.object_id IS NULL AND ua.project_id = o.project_id))
-        ORDER BY ua.object_id IS NULL   -- личный грант первым
+        WHERE ua.user_id = ? AND ({_ГРАНТ_ПОДХОДИТ})
+        ORDER BY точность
         LIMIT 1
         """,
-        (object_id, user["id"], object_id),
+        (object_id, user["id"]),
     ).fetchone()
     return row["role"] if row else None
 
@@ -75,12 +102,10 @@ def accessible_object_ids(conn: sqlite3.Connection, user: sqlite3.Row) -> Option
     if is_system_admin(user):
         return None
     rows = conn.execute(
-        """
+        f"""
         SELECT o.id
         FROM objects o
-        JOIN user_access ua
-          ON ua.user_id = ?
-         AND (ua.object_id = o.id OR (ua.object_id IS NULL AND ua.project_id = o.project_id))
+        JOIN user_access ua ON ua.user_id = ? AND ({_ГРАНТ_ПОДХОДИТ})
         """,
         (user["id"],),
     ).fetchall()
@@ -90,8 +115,8 @@ def accessible_object_ids(conn: sqlite3.Connection, user: sqlite3.Row) -> Option
 def object_roles(conn: sqlite3.Connection, user: sqlite3.Row) -> dict:
     """Действующая роль на КАЖДОМ доступном объекте: {object_id: role}.
 
-    То же правило, что и в object_role (личный грант перекрывает
-    проектный), но одним запросом на все объекты сразу — иначе
+    То же правило, что и в object_role (частный грант перекрывает общий),
+    но одним запросом на все объекты сразу — иначе
     переключатель объектов делал бы запрос на каждый пункт списка.
 
     Нужно интерфейсу: пункты меню гасятся по роли НА ПОКАЗЫВАЕМОМ
@@ -103,13 +128,11 @@ def object_roles(conn: sqlite3.Connection, user: sqlite3.Row) -> dict:
         return {r["id"]: "admin" for r in conn.execute("SELECT id FROM objects")}
     роли = {}
     for r in conn.execute(
-        """
-        SELECT o.id AS object_id, ua.role AS role, ua.object_id IS NULL AS проектный
+        f"""
+        SELECT o.id AS object_id, ua.role AS role, {_УРОВЕНЬ_ГРАНТА} AS точность
         FROM objects o
-        JOIN user_access ua
-          ON ua.user_id = ?
-         AND (ua.object_id = o.id OR (ua.object_id IS NULL AND ua.project_id = o.project_id))
-        ORDER BY проектный          -- личный грант первым, он перекрывает проектный
+        JOIN user_access ua ON ua.user_id = ? AND ({_ГРАНТ_ПОДХОДИТ})
+        ORDER BY точность          -- частный грант первым, он перекрывает общий
         """,
         (user["id"],),
     ):

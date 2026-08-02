@@ -614,6 +614,63 @@ def _migrate_object_scoped_tables(conn: sqlite3.Connection, changes: list) -> No
     changes.append("справочники и настройки перенесены внутрь объекта: " + ", ".join(todo))
 
 
+def _migrate_user_access_global(conn: sqlite3.Connection, changes: list) -> None:
+    """Разрешает грант на ВСЕ проекты сразу: project_id становится
+    NULLABLE (2026-08-02, живой запрос).
+
+    Уровней доступа стало три, от общего к частному:
+      project_id IS NULL, object_id IS NULL — все проекты, включая будущие;
+      project_id задан, object_id IS NULL   — весь проект, включая будущие
+                                              объекты внутри него;
+      object_id задан                       — конкретный объект.
+    Действующая роль ищется от САМОГО ЧАСТНОГО к общему, см. access.object_role.
+
+    Пересборка таблицы безопасна по тому же проверенному условию, что и на
+    этапе D: на user_access не ссылается НИКТО (`PRAGMA foreign_key_list`
+    по всем таблицам — ни одного попадания), поэтому переименование новой
+    таблицы в старое имя ничьих ключей не переписывает. Это проверка
+    конкретного условия, из-за которого класс ошибки возникал, а не
+    рассуждение по аналогии.
+
+    Идемпотентность — по признаку NOT NULL у колонки, без маркера:
+    состояние само себя описывает.
+    """
+    колонки = {r["name"]: r for r in conn.execute("PRAGMA table_info(user_access)")}
+    if "project_id" not in колонки or not колонки["project_id"]["notnull"]:
+        return
+
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("""
+        CREATE TABLE user_access_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+            project_id INTEGER REFERENCES projects (id) ON DELETE CASCADE,
+            object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK (role IN ('admin', 'user', 'view')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )""")
+    conn.execute(
+        "INSERT INTO user_access_new (id, user_id, project_id, object_id, role, created_at) "
+        "SELECT id, user_id, project_id, object_id, role, created_at FROM user_access")
+    conn.execute("DROP TABLE user_access")
+    conn.execute("ALTER TABLE user_access_new RENAME TO user_access")
+    # Индекс пересоздаётся под новую форму: в ключе теперь ОБА уровня через
+    # COALESCE — обычный UNIQUE не считает NULL = NULL, и грант «на все
+    # проекты» можно было бы завести дважды.
+    conn.execute("DROP INDEX IF EXISTS idx_user_access_unique")
+    conn.execute("CREATE UNIQUE INDEX idx_user_access_unique ON user_access "
+                 "(user_id, COALESCE(project_id, -1), COALESCE(object_id, -1))")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_access_user ON user_access (user_id)")
+    conn.commit()
+    # ОБЯЗАТЕЛЬНО вернуть проверку ключей: с выключенными дальнейшие DELETE
+    # по ходу старта не каскадируют, и это уже давало 30 155 осиротевших
+    # записей истории при внешне успешной миграции (этап D).
+    conn.execute("PRAGMA foreign_keys = ON")
+    changes.append("доступ: разрешён грант на все проекты сразу (project_id стал необязательным)")
+
+
 def _ensure_object_scoped_indexes(conn: sqlite3.Connection) -> None:
     """Индексы объектных таблиц — ЗДЕСЬ, а не в schema.sql.
 
@@ -1471,6 +1528,7 @@ def init_db() -> list:
         # наследия и выдача доступов ставят там маркеры, а до переноса у
         # таблицы нет колонки object_id.
         _migrate_object_scoped_tables(conn, changes)
+        _migrate_user_access_global(conn, changes)
         _ensure_object_scoped_indexes(conn)
         # Строго ПОСЛЕ бутстрапа объекта: миграция зон опирается на
         # object_drawings, чтобы понять, какой чертёж актуален.

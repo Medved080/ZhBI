@@ -6959,92 +6959,114 @@ document.getElementById("menu-subtypes").addEventListener("click", async () => {
 document.getElementById("subtypes-close").addEventListener("click", () => subtypesBackdrop.classList.remove("open"));
 
 // ---------- пользователи ----------
-// ==================== ДОСТУП ПОЛЬЗОВАТЕЛЯ К ОБЪЕКТАМ (этап C) ====================
-const userAccessBackdrop = document.getElementById("user-access-backdrop");
+// ============ ДОСТУП: ДЕРЕВО ПРОЕКТОВ И ОБЪЕКТОВ (2026-08-02) ============
+//
+// Права задаются ПРЯМО В ФОРМЕ пользователя — и при создании, и при правке
+// (живой запрос). Раньше доступ жил в отдельной форме за кнопкой «Доступ»,
+// поэтому новому человеку его нельзя было выдать сразу: сначала создай
+// учётную запись, потом вспомни зайти во вторую форму.
+//
+// Дерево показывает ВСЕ уровни разом: «Все проекты» -> проект -> объект.
+// На каждом можно либо задать роль, либо оставить «не задано» — тогда
+// действует роль сверху, и она тут же подписана, чтобы результат был виден
+// без вычислений в уме.
 const OBJECT_ROLE_LABELS = {
   view: "Просмотр", user: "Работа со статусами", admin: "Полные права на объекте",
 };
-let accessUserId = null;
 
-function setAccessStatus(text, isError) {
-  const el = document.getElementById("user-access-status");
-  el.textContent = text;
-  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+// Ключ уровня. Строкой, а не объектом: Map по объектам сравнивала бы их по
+// ссылке, и повторный рендер терял бы выбранное.
+const ACCESS_ALL = "all";
+const accessProjectKey = (pid) => `p:${pid}`;
+const accessObjectKey = (pid, oid) => `o:${pid}:${oid}`;
+
+// Состояние открытой формы: ключ уровня -> роль. Живёт до сохранения, на
+// сервер уходит целиком (PUT /users/{id}/access) — форма задаёт СОСТОЯНИЕ
+// прав, а не разницу, и считать разницу на клиенте незачем.
+let ueAccess = new Map();
+
+function accessEffectiveRole(pid, oid) {
+  if (oid != null && ueAccess.has(accessObjectKey(pid, oid))) return null; // задано явно
+  if (oid != null && ueAccess.has(accessProjectKey(pid))) return ueAccess.get(accessProjectKey(pid));
+  if (oid == null && pid != null && ueAccess.has(accessProjectKey(pid))) return null;
+  return ueAccess.get(ACCESS_ALL) || null;
 }
 
-async function openUserAccess(user) {
-  accessUserId = user.id;
-  document.getElementById("user-access-who").textContent =
-    `${user.display_name} (${user.domain_login}), системная роль: ${ROLE_LABELS[user.role] || user.role}`;
-  setAccessStatus("", false);
-  userAccessBackdrop.classList.add("open");
-  // Списки проектов и объектов — из дерева, которое уже загружено: оно же
-  // источник для переключателя, и второй запрос дал бы второй порядок.
-  const projSel = document.getElementById("ua-project");
-  projSel.innerHTML = state.projects.filter(p => p.id)
-    .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
-  document.getElementById("ua-role").innerHTML = Object.entries(OBJECT_ROLE_LABELS)
-    .map(([v, l]) => `<option value="${v}">${escapeHtml(l)}</option>`).join("");
-  projSel.onchange = fillAccessObjects;
-  fillAccessObjects();
-  await renderUserAccess();
+function accessRoleSelect(key, value) {
+  const опции = ['<option value="">— не задано —</option>'].concat(
+    Object.entries(OBJECT_ROLE_LABELS).map(([v, l]) =>
+      `<option value="${v}"${v === value ? " selected" : ""}>${escapeHtml(l)}</option>`)
+  );
+  return `<select data-access-key="${escapeHtml(key)}">${опции.join("")}</select>`;
 }
 
-function fillAccessObjects() {
-  const pid = Number(document.getElementById("ua-project").value);
-  const проект = state.projects.find(p => p.id === pid);
-  // «Весь проект» первым: это самый частый случай, и он единственный
-  // распространяется на будущие объекты.
-  document.getElementById("ua-object").innerHTML =
-    `<option value="">— весь проект —</option>` +
-    (проект ? проект.objects.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("") : "");
-}
-
-async function renderUserAccess() {
-  const box = document.getElementById("user-access-rows");
-  const note = document.getElementById("user-access-note");
-  const data = await api(`/users/${accessUserId}/access`);
-  note.textContent = data.system_admin
-    ? "Это администратор сервиса — он видит и правит все объекты в обход грантов. Гранты ему не нужны."
+function renderAccessTree() {
+  const box = document.getElementById("ue-access-tree");
+  const заметка = document.getElementById("ue-access-note");
+  const системныйАдмин = document.getElementById("ue-role").value === "admin";
+  заметка.textContent = системныйАдмин
+    ? "Администратор сервиса видит и правит все объекты в обход грантов — дерево ниже ему не нужно."
     : "";
-  if (!data.grants.length) {
-    box.innerHTML = `<p class="hint-text">${data.system_admin ? "" : "Доступа нет ни к одному объекту — пользователь увидит пустой экран."}</p>`;
-    return;
+  box.style.opacity = системныйАдмин ? "0.5" : "";
+
+  const строка = (класс, имя, key, унаследовано) => {
+    const подпись = унаследовано
+      ? `<span class="access-inherited"> — ${escapeHtml(OBJECT_ROLE_LABELS[унаследовано])}</span>`
+      : "";
+    return `<div class="access-row ${класс}">
+      <span class="access-row-name">${escapeHtml(имя)}${подпись}</span>
+      ${accessRoleSelect(key, ueAccess.get(key) || "")}
+    </div>`;
+  };
+
+  let html = строка("access-row-all", "Все проекты", ACCESS_ALL, null);
+  for (const проект of state.projects.filter(p => p.id)) {
+    html += строка("access-row-project", проект.name, accessProjectKey(проект.id),
+                   accessEffectiveRole(проект.id, null));
+    for (const объект of проект.objects) {
+      html += строка("access-row-object", объект.name, accessObjectKey(проект.id, объект.id),
+                     accessEffectiveRole(проект.id, объект.id));
+    }
   }
-  box.innerHTML = data.grants.map(g => `
-    <div class="object-card-foot" style="border-bottom:1px solid var(--color-border); padding-bottom:6px">
-      <div>${escapeHtml(g.project_name)} · <b>${escapeHtml(g.object_name || "весь проект")}</b>
-        <div class="hint-text">${escapeHtml(OBJECT_ROLE_LABELS[g.role] || g.role)}</div></div>
-      <button class="btn btn-sm btn-secondary" data-revoke="${g.id}">Убрать</button>
-    </div>`).join("");
-  box.querySelectorAll("[data-revoke]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      try {
-        await api(`/users/${accessUserId}/access/${btn.dataset.revoke}`, { method: "DELETE" });
-        await renderUserAccess();
-        setAccessStatus("Доступ снят.", false);
-      } catch (e) { setAccessStatus(e.message, true); }
+  box.innerHTML = html;
+  box.querySelectorAll("select[data-access-key]").forEach(sel => {
+    sel.disabled = системныйАдмин;
+    sel.addEventListener("change", () => {
+      const key = sel.dataset.accessKey;
+      if (sel.value) ueAccess.set(key, sel.value); else ueAccess.delete(key);
+      // Пересобираем целиком: снятие роли у проекта меняет подписи
+      // «унаследовано» у всех его объектов, и точечной правкой это не
+      // выразить.
+      renderAccessTree();
     });
   });
 }
 
-document.getElementById("ua-add").addEventListener("click", async () => {
-  const objectValue = document.getElementById("ua-object").value;
-  try {
-    await api(`/users/${accessUserId}/access`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        project_id: Number(document.getElementById("ua-project").value),
-        object_id: objectValue ? Number(objectValue) : null,
-        role: document.getElementById("ua-role").value,
-      }),
-    });
-    await renderUserAccess();
-    setAccessStatus("Доступ выдан.", false);
-  } catch (e) { setAccessStatus(e.message, true); }
-});
-document.getElementById("user-access-close").addEventListener("click", () =>
-  userAccessBackdrop.classList.remove("open"));
+// Гранты из дерева в том виде, в каком их ждёт сервер. Уровень «все
+// проекты» — оба поля пустые; проект — только project_id; объект — оба.
+function collectAccessGrants() {
+  const гранты = [];
+  for (const [key, роль] of ueAccess) {
+    if (key === ACCESS_ALL) гранты.push({ project_id: null, object_id: null, role: роль });
+    else if (key.startsWith("p:")) гранты.push({ project_id: Number(key.slice(2)), object_id: null, role: роль });
+    else {
+      const [, pid, oid] = key.split(":");
+      гранты.push({ project_id: Number(pid), object_id: Number(oid), role: роль });
+    }
+  }
+  return гранты;
+}
+
+async function loadAccessInto(userId) {
+  ueAccess = new Map();
+  if (!userId) return;                     // новый пользователь — пустое дерево
+  const data = await api(`/users/${userId}/access`);
+  for (const g of data.grants) {
+    if (g.project_id == null) ueAccess.set(ACCESS_ALL, g.role);
+    else if (g.object_id == null) ueAccess.set(accessProjectKey(g.project_id), g.role);
+    else ueAccess.set(accessObjectKey(g.project_id, g.object_id), g.role);
+  }
+}
 
 const usersBackdrop = document.getElementById("users-backdrop");
 const userEditBackdrop = document.getElementById("user-edit-backdrop");
@@ -7067,15 +7089,12 @@ async function renderUsersTable() {
       <td>
         <button class="btn btn-sm btn-secondary" data-edit="${u.id}">Изменить</button>
         <button class="btn btn-sm btn-secondary" data-pwd="${u.id}">Пароль</button>
-        <button class="btn btn-sm btn-secondary" data-access="${u.id}">Доступ</button>
       </td>
     </tr>
   `).join("");
   table.innerHTML = `<tr><th>ФИО</th><th>Должность</th><th>Подразделение</th><th>Логин</th><th>Роль</th><th>Пароль</th><th></th></tr>${rowsHtml}`;
   table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openUserEdit(users.find(u => u.id === Number(btn.dataset.edit)))));
   table.querySelectorAll("[data-pwd]").forEach(btn => btn.addEventListener("click", () => openUserPassword(Number(btn.dataset.pwd))));
-  table.querySelectorAll("[data-access]").forEach(btn => btn.addEventListener("click", () =>
-    openUserAccess(users.find(u => u.id === Number(btn.dataset.access)))));
 }
 
 document.getElementById("menu-users").addEventListener("click", async () => {
@@ -7084,7 +7103,7 @@ document.getElementById("menu-users").addEventListener("click", async () => {
 });
 document.getElementById("users-close").addEventListener("click", () => usersBackdrop.classList.remove("open"));
 
-function openUserEdit(user) {
+async function openUserEdit(user) {
   editingUserId = user ? user.id : null;
   document.getElementById("user-edit-title").textContent = user ? "Изменить пользователя" : "Новый пользователь";
   document.getElementById("ue-last-name").value = user ? user.last_name : "";
@@ -7096,8 +7115,11 @@ function openUserEdit(user) {
   document.getElementById("ue-role").value = user ? user.role : "user";
   document.getElementById("user-edit-error").textContent = "";
   userEditBackdrop.classList.add("open");
+  await loadAccessInto(editingUserId);
+  renderAccessTree();
 }
 document.getElementById("users-add").addEventListener("click", () => openUserEdit(null));
+document.getElementById("ue-role").addEventListener("change", renderAccessTree);
 document.getElementById("user-edit-cancel").addEventListener("click", () => userEditBackdrop.classList.remove("open"));
 document.getElementById("user-edit-save").addEventListener("click", async () => {
   const body = {
@@ -7110,11 +7132,20 @@ document.getElementById("user-edit-save").addEventListener("click", async () => 
     role: document.getElementById("ue-role").value,
   };
   try {
+    let userId = editingUserId;
     if (editingUserId) {
       await api(`/users/${editingUserId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     } else {
-      await api("/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const создан = await api("/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      userId = создан.id;
     }
+    // Права — вторым запросом, ПОСЛЕ создания: у нового пользователя ещё нет
+    // id, и выдать грант раньше физически нечему. Отправляем СОСТОЯНИЕ
+    // дерева целиком, сервер заменяет им весь набор грантов.
+    await api(`/users/${userId}/access`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grants: collectAccessGrants() }),
+    });
     userEditBackdrop.classList.remove("open");
     await renderUsersTable();
   } catch (e) {

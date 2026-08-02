@@ -328,17 +328,27 @@ CREATE TABLE IF NOT EXISTS object_drawings (
 -- через COALESCE, а не UNIQUE в таблице: обычный UNIQUE в SQLite не
 -- считает NULL=NULL, и грант "на весь проект" можно было бы завести
 -- дважды (тот же приём уже применён к contract_lines, см. app/db.py).
+-- Три уровня гранта, от общего к частному (project_id стал необязательным
+-- 2026-08-02):
+--   project_id IS NULL, object_id IS NULL — ВСЕ проекты, включая будущие;
+--   project_id задан, object_id IS NULL   — весь проект, включая будущие
+--                                           объекты внутри него;
+--   object_id задан                       — конкретный объект.
+-- Действующая роль ищется от самого частного к общему (access.object_role):
+-- личный грант на объект перекрывает проектный, проектный — общий.
 CREATE TABLE IF NOT EXISTS user_access (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    project_id INTEGER NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+    project_id INTEGER REFERENCES projects (id) ON DELETE CASCADE,
     object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('admin', 'user', 'view')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- COALESCE по ОБОИМ уровням: обычный UNIQUE в SQLite не считает NULL = NULL,
+-- и грант «на все проекты» можно было бы завести дважды.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_access_unique
-    ON user_access (user_id, project_id, COALESCE(object_id, -1));
+    ON user_access (user_id, COALESCE(project_id, -1), COALESCE(object_id, -1));
 CREATE INDEX IF NOT EXISTS idx_user_access_user ON user_access (user_id);
 
 -- Зоны (захватки, зоны работы крана, стоянки крана) — см. Docs/backlog.md,
