@@ -1106,8 +1106,6 @@
             <button id="menu-shapes" class="admin-only">Форма маркеров</button>
             <button id="menu-zone-colors" class="object-admin-only">Цвета зон</button>
             <button id="menu-info-plate-settings" class="object-admin-only">Порог опоздания поставки</button>
-            <button id="menu-users" class="admin-only">Пользователи</button>
-            <button id="menu-activity" class="admin-only">Журнал действий</button>
           </div>
         </div>
         <!-- Класс — на КАЖДОМ пункте, а не на группе: часть справочников
@@ -1158,7 +1156,6 @@
             <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
             <button id="menu-schedule-import" class="admin-only">Импорт графика MS Project из XLS</button>
             <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
-            <button id="menu-backups" class="admin-only">Резервные копии…</button>
             <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
           </div>
         </div>
@@ -1171,9 +1168,18 @@
             <button id="menu-report-dynamics">Динамика монтажа и поставки</button>
           </div>
         </div>
+        <!-- «Администрирование» (2026-08-02, живой запрос): ведение самого
+             сервиса собрано в одну группу — пользователи, копии, журнал и
+             необратимая очистка истории. Раньше эти пункты были размазаны по
+             «Настройкам» и «Обмену данными», а группа называлась
+             «Тестирование» и содержала один пункт. -->
         <div class="submenu">
-          <button type="button" class="submenu-trigger">Тестирование</button>
+          <button type="button" class="submenu-trigger">Администрирование</button>
           <div class="dropdown-menu submenu-panel">
+            <button id="menu-users" class="admin-only">Пользователи</button>
+            <button id="menu-backups" class="admin-only">Резервные копии…</button>
+            <button id="menu-activity" class="admin-only">Журнал действий</button>
+            <!-- Последним и красным: необратимо и затрагивает ВСЕ чертежи разом. -->
             <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов…</button>
           </div>
         </div>
