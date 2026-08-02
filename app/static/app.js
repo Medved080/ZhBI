@@ -518,7 +518,9 @@ async function checkAuth() {
     // Гамма пользователя ПЕРЕБИВАЕТ локальную копию: копия нужна лишь для
     // применения до ответа /me, источник правды — сервер. Иначе, сев за
     // чужой компьютер, человек получил бы чужое оформление.
-    const серверная = user.ui_theme || "base";
+    // NULL у пользователя (ещё не выбирал) — это гамма по умолчанию, а не
+    // «без оформления»: базовой схемы больше нет.
+    const серверная = user.ui_theme || DEFAULT_SKIN;
     if (серверная !== currentSkin()) { localStorage.setItem(SKIN_KEY, серверная); applySkin(серверная); }
     document.getElementById("user-name").textContent = user.display_name;
     applyRolePermissions();
@@ -5452,9 +5454,17 @@ const SKIN_KEY = "zhbi_skin";
 
 // Гаммы. Образцы (три цвета) рисуются в диалоге выбора: название без цвета
 // ничего не говорит — «Изумруд» понятен только рядом с остальными.
+// Базовой схемы в списке НЕТ (убрана по живому запросу 2026-08-02): она
+// была «то, что было до редизайна», и держать её рядом с оформленными
+// гаммами значило предлагать людям выбрать полуфабрикат. Первая в списке —
+// она же значение по умолчанию для тех, кто ещё не выбирал.
 const SKINS = [
-  { id: "base",     name: "Базовое",   swatch: ["#f2f4f7", "#ffffff", "#1353d6"] },
-  { id: "gos",      name: "Госуслуги", swatch: ["#FAFCFF", "#EDF2FE", "#0D4CD3"] },
+  // Имя показываемое, а не идентификатор: id остаётся "gos", потому что он
+  // уже сохранён у пользователей в базе — переименование ключа обнулило бы
+  // их выбор. Схема стала называться «Базовый» (живой запрос 2026-08-02):
+  // она первая в списке и применяется по умолчанию, то есть для человека
+  // это и есть базовое оформление, а не «одно из».
+  { id: "gos",      name: "Базовый",   swatch: ["#FAFCFF", "#EDF2FE", "#0D4CD3"] },
   { id: "msu",      name: "МСУ-1",     swatch: ["#FBF7F7", "#F6E6E6", "#A31212"] },
   { id: "graphite", name: "Графит",    swatch: ["#14161A", "#23272E", "#7AA2F7"] },
   { id: "indigo",   name: "Индиго",    swatch: ["#10121F", "#202441", "#8B9DFF"] },
@@ -5468,9 +5478,11 @@ const SKINS = [
 // одной машиной работают посменно. В localStorage держим копию, но только
 // чтобы применить гамму ДО ответа /me: иначе на каждой загрузке моргало бы
 // базовое оформление.
+const DEFAULT_SKIN = SKINS[0].id;
+
 function currentSkin() {
   const сохранённая = localStorage.getItem(SKIN_KEY);
-  return SKINS.some(s => s.id === сохранённая) ? сохранённая : "base";
+  return SKINS.some(s => s.id === сохранённая) ? сохранённая : DEFAULT_SKIN;
 }
 
 // Цвет из переменной темы в число для Three.js. Сцена собирается один раз,
@@ -5500,10 +5512,10 @@ function applyThemeTo3D() {
   if (v.edgeMaterial) v.edgeMaterial.color.setHex(themeColor("--edge-3d", EDGE_COLOR));
 }
 
+// Атрибут стоит ВСЕГДА: гаммы без оформления больше нет, и «снять атрибут»
+// означало бы вернуть тот самый полуфабрикат, который убрали.
 function applySkin(id) {
-  const тема = id || currentSkin();
-  if (тема && тема !== "base") document.documentElement.setAttribute("data-skin", тема);
-  else document.documentElement.removeAttribute("data-skin");
+  document.documentElement.setAttribute("data-skin", id || currentSkin());
 }
 applySkin();
 
@@ -5524,9 +5536,9 @@ async function saveSkin(id) {
   try {
     await api(`/users/${state.currentUser.id}/ui-theme`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ui_theme: id === "base" ? null : id }),
+      body: JSON.stringify({ ui_theme: id }),
     });
-    state.currentUser.ui_theme = id === "base" ? null : id;
+    state.currentUser.ui_theme = id;
   } catch (e) {
     // Не смогли запомнить на сервере — гамма всё равно применена здесь и
     // сейчас; это удобство, а не условие работы.

@@ -185,10 +185,12 @@
     --axis-line: #3A2E63; --axis-label: #9C93C7;
     --shape-stroke: #05D9E8; --edge-3d: #05D9E8;
   }
-  /* У «Неона» кнопка первичного действия — жёлтая с ТЁМНЫМ текстом: белый
-     по жёлтому нечитаем. Единственное место, где гамма трогает не только
-     переменные, — потому что это следствие самого цвета, а не оформления. */
-  :root[data-skin="neon"] .btn-primary { color: #0B0A12; font-weight: 700; }
+  /* У «Неона» акцент жёлтый, и белый текст по нему нечитаем. Цвет текста НА
+     акценте — такая же переменная гаммы, как сам акцент: иначе каждое
+     место с основной кнопкой (их три — .btn-primary, кнопка входа, ссылки
+     на акценте) пришлось бы чинить отдельным правилом. */
+  :root[data-skin="neon"] { --color-on-primary: #0B0A12; }
+  :root[data-skin="neon"] .btn-primary, :root[data-skin="neon"] #login-box button { font-weight: 700; }
 
   /* Изумруд — светлая, спокойный зелёный акцент. */
   :root[data-skin="emerald"] {
@@ -282,7 +284,7 @@
     background: var(--color-accent-soft); color: var(--color-primary);
   }
   :root[data-skin] .btn-secondary:hover { background: #DCE6FB; }
-  :root[data-skin] .btn-primary { background: var(--color-primary); color: #fff; }
+  :root[data-skin] .btn-primary { background: var(--color-primary); color: var(--color-on-primary, #fff); }
   :root[data-skin] .btn-icon-round { border-radius: 50%; padding: 6px; min-height: 32px; }
   /* В ШАПКЕ кнопки компактнее общего правила: рост 40 и отступы 16 хороши в
      формах, а здесь их десяток в один ряд плюс широкий знак — при общих
@@ -1353,19 +1355,31 @@
     position: fixed; inset: 0; background: var(--color-bg); display: flex; align-items: center; justify-content: center; z-index: 200;
   }
   #login-screen.hidden { display: none; }
+  /* Карточка входа следует гамме: у тёмных схем белый прямоугольник
+     посреди тёмного экрана выглядел чужеродно. Цвета — переменными, с
+     прежними значениями как запасными (базовой гаммы больше нет, но
+     переменные могут не успеть примениться до первой отрисовки). */
   #login-box {
-    background: #fff; color: #1a1a1a; border-radius: 14px; padding: 32px 36px; width: 340px; box-shadow: var(--shadow-md);
+    background: var(--color-surface, #fff); color: var(--color-text, #1a1a1a);
+    border-radius: 14px; padding: 32px 36px; width: 340px; box-shadow: var(--shadow-md);
   }
-  #login-logo { display: block; margin: 0 auto 18px; }
+  /* Отступ снизу больше прежнего: заголовок «ЖБИ — вход» убран, и логотип
+     теперь отделяет от полей только этот отступ. Подложка та же, что в
+     шапке — знак тёмный, а экран входа может оказаться на тёмной гамме. */
+  #login-logo { display: block; margin: 0 auto 26px; background: #ffffff;
+    border-radius: 10px; padding: 8px 14px; }
   #login-box h1 { font-size: 17px; margin: 0 0 20px; text-align: center; font-weight: 600; }
-  #login-box label.field { display: block; font-size: 12px; color: #666; margin: 12px 0 4px; }
+  #login-box label.field { display: block; font-size: 12px; color: var(--color-text-muted, #666); margin: 12px 0 4px; }
   #login-box input, #login-box select {
-    width: 100%; font-size: 14px; padding: 9px 11px; border-radius: 8px; border: 1px solid #d5d8dc; color: #1a1a1a; background: #fff;
+    width: 100%; font-size: 14px; padding: 9px 11px; border-radius: 8px;
+    border: 1px solid var(--color-border, #d5d8dc); color: var(--color-text, #1a1a1a);
+    background: var(--color-surface, #fff);
   }
   #login-box input:focus, #login-box select:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(19,83,214,.15); }
   #login-box button {
     width: 100%; margin-top: 18px; padding: 10px; border-radius: 8px; border: none;
-    background: var(--color-primary); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .12s;
+    background: var(--color-primary); color: var(--color-on-primary, #fff);
+    font-size: 14px; font-weight: 600; cursor: pointer; transition: background .12s;
   }
   #login-box button:hover { background: var(--color-primary-hover); }
   /* Поле пароля с кнопкой "показать". Правила #login-box input/button выше
@@ -1424,8 +1438,11 @@
 
 <div id="login-screen">
   <div id="login-box">
+    <!-- Логотип-локап несёт и название, и принадлежность, поэтому заголовка
+         «ЖБИ — вход» под ним больше нет (живой запрос 2026-08-02): он
+         повторял то, что уже сказано знаком, и добавлял лишнюю строку на
+         единственный экран, где важен только ввод логина и пароля. -->
     <img id="login-logo" src="/static/logo-digital.png" style="width:260px; height:auto" alt="МСУ-1 · Цифровая стройка"/>
-    <h1>ЖБИ — вход</h1>
     <label class="field">Логин</label>
     <!-- ОДНО поле, а не поле + отдельный выпадающий список: список
          пользователей подключён как <datalist>, то есть встроенная
