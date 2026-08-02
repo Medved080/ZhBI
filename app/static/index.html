@@ -185,9 +185,32 @@
     --color-success: #3F7D3F;
     --radius: 12px; --radius-sm: 8px;
   }
-  /* Шрифт: Lato — то, чем набраны сами Госуслуги. В комплект НЕ вложен
-     (вендоринг стороннего файла требует отдельного согласия, см. CLAUDE.md),
-     поэтому берётся системный, если установлен, иначе ближайший гротеск. */
+  /* Шрифт Lato — то, чем набраны сами Госуслуги. ВЛОЖЕН локально
+     (app/static/vendor/lato/, согласие пользователя получено 2026-08-02),
+     не подключается с внешнего CDN: строгий CSP разрешает font-src только
+     'self', да и внутренний контур наружу не ходит.
+     Лицензия SIL OFL, текст рядом с файлами — OFL.txt.
+
+     Файлы — ПОДМНОЖЕСТВО: русский алфавит, латиница, цифры и вся реально
+     встречающаяся пунктуация. Стандартные файлы Google для Lato содержат
+     только латиницу, и вложить их значило бы получить кириллицу запасным
+     шрифтом — то есть весь интерфейс мимо задуманного вида. 17 КБ на
+     начертание вместо примерно 60 у полного набора. */
+  @font-face {
+    font-family: "Lato"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/static/vendor/lato/lato-400.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Lato"; font-style: normal; font-weight: 700; font-display: swap;
+    src: url("/static/vendor/lato/lato-700.woff2") format("woff2");
+  }
+  /* 600 отдельного файла не имеет: у Lato между 400 и 700 промежуточного
+     начертания нет, и браузер синтезировал бы «полужирный» из обычного —
+     грязно. Явно отправляем 600 на 700. */
+  @font-face {
+    font-family: "Lato"; font-style: normal; font-weight: 600; font-display: swap;
+    src: url("/static/vendor/lato/lato-700.woff2") format("woff2");
+  }
   :root[data-skin] body,
   :root[data-skin] button,
   :root[data-skin] input,
@@ -207,7 +230,11 @@
     gap: 10px;
   }
   :root[data-skin] #toolbar h1 { display: none; }   /* название несёт логотип */
-  :root[data-skin] #toolbar-logo { height: 30px; }
+  /* Знак широкий (соотношение примерно 5.8:1), поэтому высота задаётся, а
+     ширина считается сама — иначе локап сжимается в нечитаемую полоску.
+     22px, а не больше: при 28 шапка переполнялась и обрезала кнопку
+     «Сейчас» — знак занимает почти 170 px по ширине. */
+  :root[data-skin] #toolbar-logo { height: 22px; }
 
   /* Кнопки: рост 40, скругление 12, вторичная — мягкая синяя подложка без
      рамки. Именно так выглядит «Войти» в шапке гайда. */
@@ -222,6 +249,14 @@
   :root[data-skin] .btn-secondary:hover { background: #DCE6FB; }
   :root[data-skin] .btn-primary { background: var(--color-primary); color: #fff; }
   :root[data-skin] .btn-icon-round { border-radius: 50%; padding: 6px; min-height: 32px; }
+  /* В ШАПКЕ кнопки компактнее общего правила: рост 40 и отступы 16 хороши в
+     формах, а здесь их десяток в один ряд плюс широкий знак — при общих
+     размерах панель переполнялась и обрезала «Сейчас» (поймано снимком
+     экрана). Поле рабочей даты дополнительно разрешено сжимать. */
+  :root[data-skin] #toolbar .btn { min-height: 32px; padding: 5px 12px; font-size: 13px; }
+  :root[data-skin] #toolbar .btn-sm { min-height: 28px; padding: 4px 10px; font-size: 12px; }
+  :root[data-skin] #toolbar input[type="datetime-local"] { min-width: 0; padding: 4px 8px; }
+  :root[data-skin] #toolbar .view-mode-btn { min-height: 30px; padding: 5px 12px; font-size: 13px; }
 
   /* Поля ввода — крупнее и мягче, как в формах портала. */
   :root[data-skin] input[type="text"], :root[data-skin] input[type="password"],
@@ -1328,7 +1363,7 @@
 
 <div id="login-screen">
   <div id="login-box">
-    <img id="login-logo" src="/static/logo.svg" width="169" height="37" alt="МСУ-1"/>
+    <img id="login-logo" src="/static/logo-digital.png" style="width:260px; height:auto" alt="МСУ-1 · Цифровая стройка"/>
     <h1>ЖБИ — вход</h1>
     <label class="field">Логин</label>
     <!-- ОДНО поле, а не поле + отдельный выпадающий список: список
@@ -1364,7 +1399,9 @@
 
 <div id="toolbar">
   <div id="toolbar-scroll">
-    <img id="toolbar-logo" src="/static/logo.svg" style="height:24px; width:auto; flex-shrink:0;" alt="МСУ-1"/>
+    <img id="toolbar-logo" src="/static/logo-digital.png" style="height:22px; width:auto; flex-shrink:0;" alt="МСУ-1 · Цифровая стройка"/>
+    <!-- Название сервиса рядом со знаком: в логотипе его нет, а «ЖБИ»
+         отличает этот сервис от остальных систем МСУ-1. -->
     <h1>ЖБИ</h1>
     <div class="dropdown" id="settings-dropdown">
       <button class="btn" id="btn-settings-menu">Действия ▾</button>
