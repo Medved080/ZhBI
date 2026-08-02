@@ -87,6 +87,36 @@ def accessible_object_ids(conn: sqlite3.Connection, user: sqlite3.Row) -> Option
     return {r["id"] for r in rows}
 
 
+def object_roles(conn: sqlite3.Connection, user: sqlite3.Row) -> dict:
+    """Действующая роль на КАЖДОМ доступном объекте: {object_id: role}.
+
+    То же правило, что и в object_role (личный грант перекрывает
+    проектный), но одним запросом на все объекты сразу — иначе
+    переключатель объектов делал бы запрос на каждый пункт списка.
+
+    Нужно интерфейсу: пункты меню гасятся по роли НА ПОКАЗЫВАЕМОМ
+    объекте, а не по системной роли. Без этого сервер разрешает
+    администратору объекта править свои зоны и настройки, а меню ему их
+    не показывает — разрешение есть, дотянуться нельзя.
+    """
+    if is_system_admin(user):
+        return {r["id"]: "admin" for r in conn.execute("SELECT id FROM objects")}
+    роли = {}
+    for r in conn.execute(
+        """
+        SELECT o.id AS object_id, ua.role AS role, ua.object_id IS NULL AS проектный
+        FROM objects o
+        JOIN user_access ua
+          ON ua.user_id = ?
+         AND (ua.object_id = o.id OR (ua.object_id IS NULL AND ua.project_id = o.project_id))
+        ORDER BY проектный          -- личный грант первым, он перекрывает проектный
+        """,
+        (user["id"],),
+    ):
+        роли.setdefault(r["object_id"], r["role"])
+    return роли
+
+
 def has_object_access(conn: sqlite3.Connection, user: sqlite3.Row, object_id: int,
                       minimum: str = "view") -> bool:
     role = object_role(conn, user, object_id)

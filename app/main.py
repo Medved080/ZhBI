@@ -69,6 +69,7 @@ from app.access import (
     accessible_object_ids,
     assert_object_access,
     is_system_admin,
+    object_roles,
     require_object_access,
     require_object_admin,
     require_system_admin,
@@ -2394,12 +2395,25 @@ def get_projects_tree(user: sqlite3.Row = Depends(get_current_user)):
     """Проекты со своими объектами — источник для переключателя в тулбаре
     (этап B). Доступно всем ролям: это навигация, а не правка.
 
-    Разграничение доступа появится в этапе C и вырежет отсюда недоступные
-    пользователю объекты — здесь для этого одно место, а не 22 эндпоинта.
+    Отбор недоступных объектов — ЗДЕСЬ, в одном месте, а не в каждом из 22
+    эндпоинтов (этап C).
+
+    У каждого объекта отдаётся ещё и `role` — действующая роль
+    пользователя ИМЕННО НА НЁМ. Интерфейс гасит по ней пункты меню:
+    роль — свойство гранта, а не пользователя (решение П2), поэтому
+    системная роль для этого не годится. Отдаётся тем же запросом, что и
+    само дерево: это ровно тот момент, когда клиент узнаёт про объекты, и
+    заводить ради роли отдельный эндпоинт значило бы разослать два запроса
+    туда, где хватает одного.
     """
     conn = get_connection()
     try:
-        return {"projects": projects_tree(conn, accessible_object_ids(conn, user)),
+        роли = object_roles(conn, user)
+        дерево = projects_tree(conn, accessible_object_ids(conn, user))
+        for проект in дерево:
+            for объект in проект["objects"]:
+                объект["role"] = роли.get(объект["id"])
+        return {"projects": дерево,
                 "last_object_id": user["last_object_id"] if "last_object_id" in user.keys() else None}
     finally:
         conn.close()

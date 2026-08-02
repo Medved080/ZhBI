@@ -1080,35 +1080,39 @@
             <button id="menu-label-color">Цвет подписей марок</button>
             <button id="menu-colors" class="admin-only">Цвета статусов</button>
             <button id="menu-shapes" class="admin-only">Форма маркеров</button>
-            <button id="menu-zone-colors" class="admin-only">Цвета зон</button>
-            <button id="menu-info-plate-settings" class="admin-only">Порог опоздания поставки</button>
+            <button id="menu-zone-colors" class="object-admin-only">Цвета зон</button>
+            <button id="menu-info-plate-settings" class="object-admin-only">Порог опоздания поставки</button>
             <button id="menu-users" class="admin-only">Пользователи</button>
             <button id="menu-activity" class="admin-only">Журнал действий</button>
           </div>
         </div>
-        <div class="submenu admin-only">
+        <!-- Класс — на КАЖДОМ пункте, а не на группе: часть справочников
+             системная (проекты, объекты, сквозные словари), часть —
+             объектная (зоны, контракты, карточка объекта). Пустая группа
+             прячется сама, см. applyRolePermissions. -->
+        <div class="submenu">
           <button type="button" class="submenu-trigger">Справочники</button>
           <div class="dropdown-menu submenu-panel">
             <!-- Слово "Справочник" из названий убрано: под заголовком
                  "Справочники" оно повторялось дважды в каждой строке. -->
-            <button id="menu-projects">Проекты</button>
-            <button id="menu-objects">Объекты</button>
-            <button id="menu-element-catalog">Элементы</button>
+            <button id="menu-projects" class="admin-only">Проекты</button>
+            <button id="menu-objects" class="admin-only">Объекты</button>
+            <button id="menu-element-catalog" class="object-admin-only">Элементы</button>
             <!-- Три справочника зон (этап 2, решение З15: физически одна
                  таблица с полем категории, в интерфейсе — три справочника,
                  как их и видит пользователь). -->
-            <button id="menu-zones-zakhvatka">Захватки</button>
-            <button id="menu-zones-crane">Зоны кранов</button>
-            <button id="menu-zones-stance">Стоянки кранов</button>
-            <button id="menu-subtypes">Подтипы</button>
-            <button id="menu-mark-prefixes">Префиксы марок</button>
-            <button id="menu-counterparties">Контрагенты</button>
-            <button id="menu-contracts">Контракты</button>
-            <button id="menu-project-card">Карточка объекта</button>
-            <button id="menu-report-notes">События, задачи, вопросы</button>
+            <button id="menu-zones-zakhvatka" class="object-admin-only">Захватки</button>
+            <button id="menu-zones-crane" class="object-admin-only">Зоны кранов</button>
+            <button id="menu-zones-stance" class="object-admin-only">Стоянки кранов</button>
+            <button id="menu-subtypes" class="admin-only">Подтипы</button>
+            <button id="menu-mark-prefixes" class="admin-only">Префиксы марок</button>
+            <button id="menu-counterparties" class="admin-only">Контрагенты</button>
+            <button id="menu-contracts" class="object-admin-only">Контракты</button>
+            <button id="menu-project-card" class="object-admin-only">Карточка объекта</button>
+            <button id="menu-report-notes" class="object-admin-only">События, задачи, вопросы</button>
           </div>
         </div>
-        <div class="submenu admin-only">
+        <div class="submenu">
           <button type="button" class="submenu-trigger">Обмен данными</button>
           <div class="dropdown-menu submenu-panel">
             <!-- Загрузка чертежа переехала сюда из тулбара (живой запрос
@@ -1122,11 +1126,11 @@
                  повседневный способ править данные, остальное в группе —
                  разовые операции обмена. -->
             <button id="menu-bulk-edit" class="admin-only menu-item-strong">Массовая правка через Excel…</button>
-            <button id="btn-upload" class="admin-only">Загрузить чертёж…</button>
-            <button id="btn-export" class="admin-only">Экспорт в XLS</button>
-            <button id="btn-export-pdf" class="admin-only">Экспорт в PDF</button>
-            <button id="menu-history-import" class="admin-only">Импорт истории из XLS</button>
-            <button id="menu-status-restore" class="admin-only">Восстановить статусы из выгрузки</button>
+            <button id="btn-upload" class="object-admin-only">Загрузить чертёж…</button>
+            <button id="btn-export" class="object-admin-only">Экспорт в XLS</button>
+            <button id="btn-export-pdf" class="object-admin-only">Экспорт в PDF</button>
+            <button id="menu-history-import" class="object-admin-only">Импорт истории из XLS</button>
+            <button id="menu-status-restore" class="object-admin-only">Восстановить статусы из выгрузки</button>
             <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
             <button id="menu-schedule-import" class="admin-only">Импорт графика MS Project из XLS</button>
             <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
@@ -1143,10 +1147,10 @@
             <button id="menu-report-dynamics">Динамика монтажа и поставки</button>
           </div>
         </div>
-        <div class="submenu admin-only">
+        <div class="submenu">
           <button type="button" class="submenu-trigger">Тестирование</button>
           <div class="dropdown-menu submenu-panel">
-            <button id="menu-reset-history" class="menu-item-danger">Очистить историю статусов…</button>
+            <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов…</button>
           </div>
         </div>
       </div>
