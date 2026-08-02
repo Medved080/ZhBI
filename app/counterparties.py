@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.access import assert_object_access, require_system_admin
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user
 from app.db import get_connection
 
 router = APIRouter(tags=["counterparties"])

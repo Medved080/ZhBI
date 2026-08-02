@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
-from app.auth import format_display_name, get_current_user, require_admin, require_editor
+from app.auth import format_display_name, get_current_user
 from app.auth import router as auth_router
 from app.changelog import CHANGELOG
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
@@ -593,10 +593,11 @@ def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
 
 @app.patch("/elements/{element_id}/status", response_model=StatusUpdateResult)
 def update_status(
-    element_id: int, body: StatusUpdateIn, user: sqlite3.Row = Depends(require_editor)
+    element_id: int, body: StatusUpdateIn, user: sqlite3.Row = Depends(get_current_user)
 ):
     conn = get_connection()
     try:
+        _guard_elements(conn, user, [element_id])
         # contract_id для новой записи — явно выбранный в диалоге (даже null —
         # "без контракта" осознанно) или унаследованный от предыдущей записи
         # (см. Docs/backlog.md, третий раунд, п.2 и app/contracts.py).
@@ -615,7 +616,7 @@ def update_status(
 
 
 @app.patch("/elements/bulk-status", response_model=BulkStatusUpdateResult)
-def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(require_editor)):
+def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get_current_user)):
     """Массовая смена статуса (выделение рамкой в 2D, см. Docs/backlog.md).
     Контракт для КАЖДОГО элемента — всегда явно выбран на фронте (в т.ч.
     "без контракта" — осознанный выбор, не пропуск поля), поэтому здесь
@@ -634,6 +635,7 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(req
         missing = [i for i in ids if i not in existing_ids]
         if missing:
             raise HTTPException(status_code=404, detail=f"Элементы не найдены: {missing}")
+        _guard_elements(conn, user, ids)
 
         updated = []
         for item in body.items:
@@ -650,7 +652,7 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(req
 
 @app.patch("/elements/{element_id}/planned-delivery-date", response_model=ElementPlannedDateUpdateResult)
 def update_element_planned_delivery_date(
-    element_id: int, body: ElementPlannedDateIn, user: sqlite3.Row = Depends(require_editor)
+    element_id: int, body: ElementPlannedDateIn, user: sqlite3.Row = Depends(get_current_user)
 ):
     """Плановая дата поставки — независимое действие, НЕ привязанное к
     смене статуса (партии убраны, см. Docs/backlog.md, "Контрактация
@@ -658,6 +660,7 @@ def update_element_planned_delivery_date(
     которую зовёт и развёрнутая таблица контракта на фронте)."""
     conn = get_connection()
     try:
+        _guard_elements(conn, user, [element_id])
         data = set_planned_delivery_date(conn, element_id, body.planned_delivery_date)
         if data is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
@@ -669,7 +672,7 @@ def update_element_planned_delivery_date(
 
 @app.patch("/elements/bulk-planned-delivery-date", response_model=BulkPlannedDateUpdateResult)
 def update_element_planned_delivery_date_bulk(
-    body: BulkPlannedDateUpdateIn, user: sqlite3.Row = Depends(require_editor)
+    body: BulkPlannedDateUpdateIn, user: sqlite3.Row = Depends(get_current_user)
 ):
     if not body.items:
         raise HTTPException(status_code=400, detail="Пустой список элементов")
@@ -683,6 +686,7 @@ def update_element_planned_delivery_date_bulk(
         missing = [i for i in ids if i not in existing_ids]
         if missing:
             raise HTTPException(status_code=404, detail=f"Элементы не найдены: {missing}")
+        _guard_elements(conn, user, ids)
 
         updated = set_planned_delivery_dates_bulk(
             conn, [(item.element_id, item.planned_delivery_date) for item in body.items]
@@ -782,7 +786,7 @@ def update_history_entry(
 
 @app.delete("/elements/{element_id}/history/{history_id}", response_model=StatusUpdateResult)
 def delete_history_entry(
-    element_id: int, history_id: int, user: sqlite3.Row = Depends(require_editor)
+    element_id: int, history_id: int, user: sqlite3.Row = Depends(get_current_user)
 ):
     """См. Docs/backlog.md, третий раунд, п.3. current_status и кэш
     contract_id пересчитываются после удаления той же логикой, что и при
@@ -793,6 +797,7 @@ def delete_history_entry(
         row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
+        _guard_elements(conn, user, [element_id])
         entry = conn.execute(
             "SELECT id FROM status_history WHERE id = ? AND element_id = ?", (history_id, element_id)
         ).fetchone()
@@ -2234,6 +2239,46 @@ def _guard_source_file(conn, user, source_file: str, minimum: str = "admin") -> 
             )
         return
     assert_object_access(conn, user, object_id, minimum)
+
+
+def _guard_elements(conn, user, element_ids, minimum: str = "user") -> None:
+    """Доступ к правке элементов — по ОБЪЕКТАМ, которым они принадлежат.
+
+    До 2026-08-02 эти операции (смена статуса, плановая дата, удаление
+    записи истории) закрывала `require_editor`, то есть СИСТЕМНАЯ роль, и
+    объект не проверялся вовсе. Замерено на живом сервере: пользователь с
+    системной ролью `user` и БЕЗ единого гранта менял статус элемента
+    чужого объекта (200), а прораб с грантом `user` НА объекте получал
+    403 — то есть проверка была одновременно и дырой, и помехой. Пока
+    объект в системе один, это не проявляется; проявится на втором.
+
+    Проверяются ВСЕ объекты пачки, и запрос отклоняется ЦЕЛИКОМ, если хоть
+    один чужой: иначе чужие элементы проехали бы под прикрытием своих (тот
+    же принцип, что у смешанного запроса цветов зон в этапе C).
+
+    Несуществующие id молча пропускаются — их обработчик отличает сам и
+    отвечает 404. Смешивать «нет такого» с «не твоё» нельзя: 403 на
+    опечатку в id заставляет искать несуществующую проблему с правами.
+
+    Элемент без объекта (наследие) — только администратору сервиса: раздавать
+    данные без владельца «админам объектов» нельзя, неизвестно, чьи они.
+    """
+    ids = list(element_ids)
+    if not ids:
+        return
+    marks = ",".join("?" * len(ids))
+    for row in conn.execute(
+        f"SELECT DISTINCT object_id FROM elements WHERE id IN ({marks})", tuple(ids)
+    ).fetchall():
+        if row["object_id"] is None:
+            if not is_system_admin(user):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Элемент не привязан к объекту — операция доступна "
+                           "администратору сервиса",
+                )
+        else:
+            assert_object_access(conn, user, row["object_id"], minimum)
 
 
 def _resolve_selection_item(conn, item):

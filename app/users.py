@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from app import activity
 from app.access import OBJECT_ROLES, ROLE_LABELS as OBJECT_ROLE_LABELS, require_system_admin
 from app.auth import (
-    SESSION_COOKIE, get_current_user, hash_password, require_admin,
+    SESSION_COOKIE, get_current_user, hash_password,
     user_out, validate_password_strength, UserOut,
 )
 from app.db import get_connection

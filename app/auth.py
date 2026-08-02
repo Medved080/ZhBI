@@ -170,17 +170,22 @@ def get_current_user(request: Request) -> sqlite3.Row:
     return user
 
 
-def require_roles(*roles: str):
-    def dependency(user: sqlite3.Row = Depends(get_current_user)) -> sqlite3.Row:
-        if user["role"] not in roles:
-            raise HTTPException(status_code=403, detail="Недостаточно прав")
-        return user
-
-    return dependency
-
-
-require_admin = require_roles("admin")
-require_editor = require_roles("admin", "user")  # может менять статусы/грузить чертежи
+# require_roles/require_admin/require_editor УДАЛЕНЫ 2026-08-02.
+#
+# Они проверяли СИСТЕМНУЮ роль (users.role) там, где решение принадлежит
+# объекту, и объект не проверяли вовсе. На живом сервере это замерено:
+# пользователь с системной ролью `user` и без единого гранта менял статус
+# элемента ЧУЖОГО объекта, а прораб с грантом `user` НА объекте получал
+# 403 — одна и та же проверка была и дырой, и помехой.
+#
+# Замена — зависимости из app/access.py: require_system_admin (ведение
+# сервиса), require_object_access/require_object_editor/require_object_admin
+# (объект приходит параметром) и _guard_elements/_guard_source_file в
+# app/main.py там, где объект ВЫВОДИТСЯ из сущности.
+#
+# Удалены, а не оставлены «на всякий случай», намеренно: пока функция
+# существует, ею кто-нибудь закроет следующий эндпоинт — и дыра вернётся
+# в новом месте, где её никто не ищет.
 
 
 class LoginRequest(BaseModel):

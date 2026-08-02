@@ -442,6 +442,20 @@ function currentObjectRole() {
   return текущий ? текущий.object.role : null;
 }
 
+// Право ПРАВИТЬ на показываемом объекте. Ровно то же, что проверяет
+// сервер: смена статуса и плановой даты — роль не ниже `user` на объекте
+// элемента (_guard_elements в app/main.py), правка реквизитов, истории и
+// зон — `admin`. Держать это на СИСТЕМНОЙ роли, как было до 2026-08-02,
+// нельзя: она про ведение сервиса, а не про стройку.
+function canEditOnObject() {
+  const роль = currentObjectRole();
+  return роль === "admin" || роль === "user";
+}
+
+function isObjectAdmin() {
+  return currentObjectRole() === "admin";
+}
+
 function applyRolePermissions() {
   const системнаяРоль = state.currentUser.role;
   // ДВА РАЗНЫХ ПРАВИЛА, и путать их нельзя:
@@ -4110,7 +4124,7 @@ function zoneBindingHtml(element, idField, statusField, category) {
 
 async function showCard(element) {
   const card = document.getElementById("card");
-  const canEdit = state.currentUser.role === "admin" || state.currentUser.role === "user";
+  const canEdit = canEditOnObject();
   const technicalHtml = TECHNICAL_FIELD_GROUPS.map(g => `
     <div class="card-block"><h4>${g.title}</h4><table>${fieldRowsHtml(element, g.fields)}</table></div>
   `).join("");
@@ -4239,7 +4253,7 @@ function clearSelection() {
 const ctxMenu = document.getElementById("ctx-menu");
 
 function openCtxMenu(element, clientX, clientY) {
-  if (state.currentUser.role === "view") return;
+  if (!canEditOnObject()) return;   // смена статуса — роль на объекте, не системная
   ctxMenu.innerHTML = "";
   const title = document.createElement("div");
   title.className = "ctx-title";
@@ -6243,7 +6257,7 @@ async function renderEcDetail() {
     box.innerHTML = `<p class="hint-text" style="color:var(--color-danger)">${escapeHtml(e.message)}</p>`;
     return;
   }
-  const admin = !!(state.currentUser && state.currentUser.role === "admin");
+  const admin = isObjectAdmin();   // правка реквизитов и истории — админ ОБЪЕКТА
   const statusOptions = state.statusOrder
     .map(st => `<option value="${st}"${st === element.current_status ? " selected" : ""}>` +
                `${escapeHtml(state.statusLabels[st] || st)}</option>`).join("");
@@ -6416,10 +6430,12 @@ async function renderZonesModal() {
   }
 }
 
-// Правка зон — только админ (решение З16). Просмотр справочника доступен всем
-// ролям, поэтому строка кликабельна не у всех.
+// Правка зон — только админ ОБЪЕКТА (решение З16; с 2026-08-02 роль на
+// объекте, а не системная — сервер проверяет так же, assert_object_access
+// с минимумом "admin"). Просмотр справочника доступен всем ролям, поэтому
+// строка кликабельна не у всех.
 function canEditZones() {
-  return !!(state.currentUser && state.currentUser.role === "admin");
+  return isObjectAdmin();
 }
 
 // ---------- Форма правки зоны: точки + предпросмотр (решения З13, З14) ----------
