@@ -351,6 +351,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_access_unique
     ON user_access (user_id, COALESCE(project_id, -1), COALESCE(object_id, -1));
 CREATE INDEX IF NOT EXISTS idx_user_access_user ON user_access (user_id);
 
+-- Вложения к сущностям справочников (2026-08-02, живой запрос): произвольные
+-- файлы у Проекта, Объекта и Элемента — фото дефекта, акт, письмо
+-- согласования, скан накладной.
+--
+-- ОДНА таблица на все три вида, а не три похожие: набор полей у файла
+-- одинаков, различается только владелец, и три таблицы означали бы три
+-- копии загрузки, скачивания, удаления и проверки прав.
+--
+-- entity_type/entity_id — БЕЗ внешнего ключа, его физически нельзя выразить
+-- на три разные таблицы. Целостность держит удаление вложений вместе с
+-- владельцем (app/attachments.py) и отбор при выдаче списка.
+--
+-- stored_name — имя файла НА ДИСКЕ, генерируется сервером (uuid + расширение).
+-- Исходное имя хранится отдельно и наружу отдаётся только в заголовке
+-- скачивания: класть имя из браузера в путь — прямой путь к «../../» и к
+-- затиранию чужого файла совпавшим именем.
+CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('project', 'object', 'element')),
+    entity_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,           -- как файл назывался у пользователя
+    stored_name TEXT NOT NULL,        -- как он лежит в uploads/attachments/
+    size INTEGER NOT NULL,
+    content_type TEXT,
+    description TEXT,
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    uploaded_by TEXT,
+    uploaded_by_user_id INTEGER REFERENCES users (id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_entity
+    ON attachments (entity_type, entity_id);
+
 -- Зоны (захватки, зоны работы крана, стоянки крана) — см. Docs/backlog.md,
 -- "Разбор структурированных имён слоёв DWG/DXF...". Полигон — в мировых
 -- координатах чертежа, как и elements.outline_json. match_status —

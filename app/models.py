@@ -102,6 +102,11 @@ class ElementOut(BaseModel):
     object_id: Optional[int] = None
     element_uid: Optional[str] = None
     is_current: Optional[int] = None
+    # Произвольный комментарий (2026-08-02). Объявлен ЯВНО по той же
+    # причине, что subtype/elevation_mm выше: pydantic срезает всё, чего
+    # нет в модели, и карточка показывала бы пустое поле там, где в базе
+    # текст есть.
+    comment: Optional[str] = None
     created_at: str
     updated_at: str
 

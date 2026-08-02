@@ -317,6 +317,34 @@
   .access-inherited { font-size: 11px; color: var(--color-text-muted); }
   .access-tree-block { margin-top: 14px; border-top: 1px solid var(--color-border);
     padding-top: 12px; }
+  /* Вложения (2026-08-02). Одна разметка на все три места — карточку
+     элемента в правой панели, форму элемента и формы проектов/объектов. */
+  .attach-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+    align-items: baseline; padding: 4px 0; border-bottom: 1px dashed var(--color-border); }
+  .attach-name { background: none; border: none; padding: 0; cursor: pointer; text-align: left;
+    color: var(--color-primary); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .attach-name:hover { text-decoration: underline; }
+  .attach-meta { grid-column: 1 / 2; font-size: 11px; color: var(--color-text-muted); }
+  .attach-del { grid-row: 1 / 3; background: none; border: none; cursor: pointer;
+    color: var(--color-text-muted); font-size: 13px; align-self: center; }
+  .attach-del:hover { color: var(--color-danger); }
+  .attach-upload { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .attach-upload input[type=file] { font-size: 11px; max-width: 100%; }
+  .attach-upload input[type=text] { flex: 1 1 120px; min-width: 0; }
+  .attach-status { margin: 4px 0 0; min-height: 14px; }
+  /* Комментарий в карточке: поле во всю ширину панели, кнопка под ним
+     справа — панель узкая (320 px), в строку они не помещаются. */
+  .card-comment { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 12px;
+    resize: vertical; }
+  .card-comment-foot { display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; margin-top: 4px; }
+  .card-comment-foot .hint-text { margin: 0; }
+  .card-comment-ro { font-size: 12px; white-space: pre-wrap; }
+  /* Скрепка в таблице справочника элементов — по центру своей колонки. */
+  #ec-table td.ec-attach, #ec-table th.ec-attach { text-align: center; width: 26px; }
+  #ec-table td.ec-comment { max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
   /* Активная строка справочника элементов — под ней показывается история
      статусов этого элемента. */
   #ec-table tbody tr.ec-row-active { background: rgba(36,113,163,.12); }
@@ -1578,6 +1606,18 @@
       </div>
     </div>
     <div class="modal-sticky-scroll">
+      <!-- Комментарий и вложения — ПЕРЕД остальными полями: это то, ради чего
+           форму открывают чаще всего после статуса, и прятать их под
+           «остальными полями» значило бы прятать самое живое. -->
+      <label class="field">Комментарий</label>
+      <div class="subtype-add-row" style="align-items:flex-start">
+        <textarea id="ef-comment" rows="2" style="flex:1; font-family:inherit; font-size:12px;
+          resize:vertical"></textarea>
+        <button class="btn btn-sm btn-secondary" id="ef-comment-save">Сохранить</button>
+      </div>
+      <span class="hint-text" id="ef-comment-status"></span>
+      <label class="field">Вложения</label>
+      <div id="ef-attachments"></div>
       <!-- Остальные поля элемента — только для чтения, свёрнуты по умолчанию
            (тот же приём и тот же стиль, что у «Технических данных» в карточке
            на схеме): в форме они нужны для сверки, а не каждый день. -->

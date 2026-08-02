@@ -15,6 +15,9 @@ from shapely.strtree import STRtree
 
 from app.auth import format_display_name, get_current_user
 from app.auth import router as auth_router
+from app.attachments import counts_for as attachment_counts
+from app.attachments import delete_for_entity as delete_attachments_for
+from app.attachments import router as attachments_router
 from app.changelog import CHANGELOG
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
 from urllib.parse import quote
@@ -214,6 +217,7 @@ app.include_router(users_router)
 app.include_router(contracts_router)
 app.include_router(counterparties_router)
 app.include_router(settings_router)
+app.include_router(attachments_router)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -648,6 +652,45 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get
         return {"updated": updated}
     finally:
         conn.close()
+
+
+class ElementCommentIn(BaseModel):
+    comment: Optional[str] = None
+
+
+@app.patch("/elements/{element_id}/comment")
+def update_element_comment(
+    element_id: int, body: ElementCommentIn, user: sqlite3.Row = Depends(get_current_user)
+):
+    """Произвольный комментарий к элементу (2026-08-02, живой запрос).
+
+    ОТДЕЛЬНЫЙ эндпоинт, а не поле в PATCH /elements/{id}/fields: правка
+    реквизитов требует роль `admin` на объекте (это правка того, что пришло
+    из чертежа), а комментарий — заметка на полях, её оставляет тот же
+    прораб, что меняет статус. Требование `admin` для строчки «отбит угол
+    при разгрузке» означало бы, что её не напишет никто.
+
+    В manual_fields комментарий не попадает: импорт чертежа его не трогает
+    (в списке обновляемых колонок element_sync его нет), перезаписывать
+    нечему — а лишняя пометка «правлено вручную» заставила бы согласовывать
+    её при каждом переимпорте.
+    """
+    текст = (body.comment or "").strip() or None
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM elements WHERE id = ?", (element_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Элемент не найден")
+        _guard_elements(conn, user, [element_id])
+        conn.execute(
+            "UPDATE elements SET comment = ?, updated_at = datetime('now') WHERE id = ?",
+            (текст, element_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("element_comment", user=user, entity_type="element", entity_id=element_id,
+                 new_value=(текст or "")[:200])
+    return {"id": element_id, "comment": текст}
 
 
 @app.patch("/elements/{element_id}/planned-delivery-date", response_model=ElementPlannedDateUpdateResult)
@@ -1886,6 +1929,7 @@ PLACEMENT_NONE_SENTINEL = "__none__"
 _ELEMENT_TEXT_FILTER_COLUMNS = (
     "address", "planned_delivery_date", "actual_delivery_date",
     "project_delivery_date", "project_smr_start_date", "layer",
+    "comment",
 )
 
 # Колонки, по которым разрешена сортировка. Белый список, а не подстановка
@@ -1893,7 +1937,7 @@ _ELEMENT_TEXT_FILTER_COLUMNS = (
 # склеивается в текст запроса — без списка это была бы SQL-инъекция.
 _ELEMENT_SORT_COLUMNS = _ELEMENT_FILTER_COLUMNS + (
     "id", "address", "planned_delivery_date", "actual_delivery_date",
-    "project_delivery_date", "project_smr_start_date", "layer",
+    "project_delivery_date", "project_smr_start_date", "layer", "comment",
 )
 
 
@@ -1919,6 +1963,7 @@ def elements_catalog(
     project_delivery_date: Optional[str] = Query(None),
     project_smr_start_date: Optional[str] = Query(None),
     layer: Optional[str] = Query(None),
+    comment: Optional[str] = Query(None),
     user: sqlite3.Row = Depends(get_current_user),
 ):
     """Табличный справочник элементов с отбором по колонкам и сортировкой.
@@ -1947,6 +1992,7 @@ def elements_catalog(
             "actual_delivery_date": actual_delivery_date,
             "project_delivery_date": project_delivery_date,
             "project_smr_start_date": project_smr_start_date, "layer": layer,
+            "comment": comment,
         }.items() if v not in (None, "")
     }
 
@@ -1999,11 +2045,15 @@ def elements_catalog(
                     sub_params,
                 )
             ]
-        return {
-            "total": total,
-            "rows": [enrich_element_row(conn, dict(r)) for r in rows],
-            "values": values,
-        }
+        # Скрепка в строке — по одному запросу на СТРАНИЦУ, не на строку:
+        # при 200 строках это была бы двухсотка запросов на каждую прокрутку.
+        вложений = attachment_counts(conn, "element", [r["id"] for r in rows])
+        строки = []
+        for r in rows:
+            d = enrich_element_row(conn, dict(r))
+            d["attachments"] = вложений.get(r["id"], 0)
+            строки.append(d)
+        return {"total": total, "rows": строки, "values": values}
     finally:
         conn.close()
 
@@ -2391,6 +2441,10 @@ def delete_project(project_id: int, admin: sqlite3.Row = Depends(require_system_
                 status_code=409,
                 detail=f"В проекте {n} объект(ов) — сначала перенесите их в другой проект",
             )
+        # Вложения — руками: внешнего ключа на три разные таблицы-владельца
+        # не выразить (см. app/attachments.py), поэтому каскад держится тем,
+        # что каждое место удаления владельца зовёт эту функцию.
+        delete_attachments_for(conn, "project", project_id)
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
     finally:

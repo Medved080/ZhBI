@@ -4122,6 +4122,105 @@ function zoneBindingHtml(element, idField, statusField, category) {
   return `<span class="swatch" style="background:${color}"></span><span style="color:${color}; font-weight:600;">${escapeHtml(name)}</span>`;
 }
 
+// ==================== ВЛОЖЕНИЯ (2026-08-02) ====================
+//
+// Один блок на три вида владельца — Проект, Объект, Элемент. Отдельная
+// реализация под каждый означала бы три копии загрузки, скачивания,
+// удаления и разбора ошибок; различается только пара (entity_type,
+// entity_id), и она приходит параметром.
+//
+// Скачивание — через blob, а не ссылкой на /attachments/{id}/download:
+// прямая навигация не несёт cookie в новой вкладке одинаково во всех
+// браузерах, а имя файла приходит в заголовке ответа и его всё равно надо
+// вынимать.
+const ATTACHMENT_ICON = "📎";
+
+function formatFileSize(байт) {
+  if (байт < 1024) return `${байт} Б`;
+  if (байт < 1024 * 1024) return `${Math.round(байт / 1024)} КБ`;
+  return `${(байт / 1048576).toFixed(1)} МБ`;
+}
+
+async function downloadAttachment(id, имя) {
+  const res = await fetch(`/attachments/${id}/download`);
+  if (!res.ok) { alert("Не удалось скачать файл"); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = имя;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// canDelete отдельно от canUpload: приложить фото дефекта — работа прораба
+// (роль user), а снять чужое доказательство — уже admin на объекте. Так же
+// проверяет и сервер, здесь только зеркало, чтобы не показывать кнопку,
+// которая заведомо ответит 403.
+function renderAttachments(container, entityType, entityId, { canUpload = false, canDelete = false } = {}) {
+  container.innerHTML = '<div class="hint-text">Загрузка…</div>';
+
+  const перерисовать = (список) => {
+    const строки = список.length ? список.map(a => `
+      <div class="attach-row">
+        <button type="button" class="attach-name" data-download="${a.id}"
+                data-name="${escapeHtml(a.filename)}" title="Скачать">${ATTACHMENT_ICON} ${escapeHtml(a.filename)}</button>
+        <span class="attach-meta">${formatFileSize(a.size)}${a.description ? " · " + escapeHtml(a.description) : ""}
+          · ${escapeHtml(a.uploaded_by || "—")}, ${escapeHtml((a.uploaded_at || "").slice(0, 16))}</span>
+        ${canDelete ? `<button type="button" class="attach-del" data-del="${a.id}" title="Удалить">✕</button>` : "<span></span>"}
+      </div>`).join("") : '<div class="hint-text">файлов нет</div>';
+    container.innerHTML = строки + (canUpload ? `
+      <div class="attach-upload">
+        <input type="file" class="attach-file" multiple/>
+        <input type="text" class="attach-desc" placeholder="описание (необязательно)"/>
+        <button type="button" class="btn btn-sm btn-secondary attach-add">Приложить</button>
+      </div>
+      <div class="attach-status hint-text"></div>` : "");
+
+    container.querySelectorAll("[data-download]").forEach(b => b.addEventListener("click", () =>
+      downloadAttachment(b.dataset.download, b.dataset.name)));
+    container.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => {
+      if (!confirm("Удалить вложение? Восстановить его будет нечем.")) return;
+      try {
+        const d = await api(`/attachments/${b.dataset.del}`, { method: "DELETE" });
+        перерисовать(d.attachments);
+      } catch (e) { alert("Не удалось удалить: " + e.message); }
+    }));
+    const кнопка = container.querySelector(".attach-add");
+    if (кнопка) кнопка.addEventListener("click", async () => {
+      const поле = container.querySelector(".attach-file");
+      const статус = container.querySelector(".attach-status");
+      if (!поле.files.length) { статус.textContent = "Выберите файл."; return; }
+      кнопка.disabled = true;
+      let последний = список;
+      try {
+        // Файлы по одному: сервер принимает по одному вложению за запрос, и
+        // это к лучшему — при отказе на пятом первые четыре уже сохранены,
+        // а не потеряны вместе со всей пачкой.
+        for (const файл of поле.files) {
+          статус.textContent = `Загрузка: ${файл.name}…`;
+          const fd = new FormData();
+          fd.append("entity_type", entityType);
+          fd.append("entity_id", String(entityId));
+          fd.append("description", container.querySelector(".attach-desc").value.trim());
+          fd.append("file", файл);
+          const res = await fetch("/attachments", { method: "POST", body: fd });
+          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+          последний = (await res.json()).attachments;
+        }
+        перерисовать(последний);
+      } catch (e) {
+        кнопка.disabled = false;
+        const st = container.querySelector(".attach-status");
+        if (st) { st.textContent = "Не удалось: " + e.message; st.style.color = "var(--color-danger)"; }
+      }
+    });
+  };
+
+  api(`/attachments?entity_type=${encodeURIComponent(entityType)}&entity_id=${entityId}`)
+    .then(d => перерисовать(d.attachments))
+    .catch(e => { container.innerHTML = `<div class="hint-text">не удалось загрузить список: ${escapeHtml(e.message)}</div>`; });
+}
+
 async function showCard(element) {
   const card = document.getElementById("card");
   const canEdit = canEditOnObject();
@@ -4175,12 +4274,59 @@ async function showCard(element) {
       ${deliveryDatesHtml(element)}
     </div>
     ${zonesBlockHtml}
+    <div class="card-block"><h4>Комментарий</h4>
+      ${canEdit
+        ? `<textarea id="card-comment" class="card-comment" rows="2"
+             placeholder="произвольная заметка: «отбит угол при разгрузке», «ждём согласование замены»">${escapeHtml(element.comment || "")}</textarea>
+           <div class="card-comment-foot">
+             <span class="hint-text" id="card-comment-status"></span>
+             <button type="button" class="btn btn-sm btn-secondary" id="card-comment-save">Сохранить</button>
+           </div>`
+        : `<div class="card-comment-ro">${element.comment ? escapeHtml(element.comment) : '<span class="hint-text">нет</span>'}</div>`}
+    </div>
+    <div class="card-block"><h4>Вложения</h4>
+      <div id="card-attachments"></div>
+    </div>
     <details class="card-technical">
       <summary>Технические данные</summary>
       ${technicalHtml}
     </details>
     <h3 style="margin-bottom:4px;">История статусов</h3><div id="history-box">Загрузка…</div>
   `;
+
+  // Вложения — своим запросом, ПОСЛЕ отрисовки карточки: список файлов не
+  // должен задерживать показ марки и статуса, ради которых карточку и
+  // открывают.
+  renderAttachments(document.getElementById("card-attachments"), "element", element.id,
+                    { canUpload: canEdit, canDelete: isObjectAdmin() });
+
+  if (canEdit) {
+    const кнопка = document.getElementById("card-comment-save");
+    const поле = document.getElementById("card-comment");
+    const статус = document.getElementById("card-comment-status");
+    кнопка.addEventListener("click", async () => {
+      кнопка.disabled = true;
+      статус.textContent = "Сохранение…";
+      try {
+        const d = await api(`/elements/${element.id}/comment`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ comment: поле.value }),
+        });
+        // Обновляем и объект в памяти, и строку в state.byId: карточку
+        // открывают повторно из уже загруженного набора, и без этого
+        // сохранённый текст пропал бы при следующем клике по элементу.
+        element.comment = d.comment;
+        const вПамяти = state.byId.get(element.id);
+        if (вПамяти) вПамяти.comment = d.comment;
+        поле.value = d.comment || "";
+        статус.textContent = "Сохранено.";
+      } catch (e) {
+        статус.textContent = "Не удалось: " + e.message;
+      } finally {
+        кнопка.disabled = false;
+      }
+    });
+  }
 
   if (canEdit) {
     document.getElementById("card-change-status-btn").addEventListener("click", (e) => {
@@ -5577,7 +5723,21 @@ async function renderProjectsModal() {
           ${админ && !p.objects_count ? `<button class="btn btn-sm btn-secondary" data-del-project="${p.id}">Удалить</button>` : ""}
         </div>
       </div>
+      <details class="card-technical"><summary>Вложения</summary>
+        <div data-attach-project="${p.id}"></div>
+      </details>
     </div>`).join("");
+
+  // Вложения — под свёрткой и своим запросом на карточку: проектов в списке
+  // может быть много, и грузить файлы всех сразу ради одного, который
+  // откроют, незачем. Список запрашивается при первом раскрытии.
+  box.querySelectorAll("details").forEach(d => d.addEventListener("toggle", () => {
+    const место = d.querySelector("[data-attach-project]");
+    if (!d.open || !место || место.dataset.loaded) return;
+    место.dataset.loaded = "1";
+    renderAttachments(место, "project", Number(место.dataset.attachProject),
+                      { canUpload: админ, canDelete: админ });
+  }));
 
   // Переход из проекта к его объектам (живой запрос 2026-08-01): справочники
   // связаны, и искать нужный объект в общем списке руками — лишняя работа.
@@ -5704,7 +5864,26 @@ async function renderObjectsModal(projectId = null) {
         </div>
         ${админ ? `<button class="btn btn-sm btn-secondary" data-save-object="${o.id}">Сохранить</button>` : ""}
       </div>
+      <details class="card-technical"><summary>Вложения</summary>
+        <div data-attach-object="${o.id}"></div>
+      </details>
     </div>`).join("");
+
+  // Права на вложения объекта — по роли НА НЁМ, а не по системной: у
+  // объекта они могут быть у прораба, которого системная роль ничем не
+  // наделяет. Прикладывать — роль не ниже user, удалять — admin; сервер
+  // проверяет так же, здесь только зеркало.
+  box.querySelectorAll("details").forEach(d => d.addEventListener("toggle", () => {
+    const место = d.querySelector("[data-attach-object]");
+    if (!d.open || !место || место.dataset.loaded) return;
+    место.dataset.loaded = "1";
+    const oid = Number(место.dataset.attachObject);
+    const роль = (state.projects.flatMap(p => p.objects).find(x => x.id === oid) || {}).role;
+    renderAttachments(место, "object", oid, {
+      canUpload: роль === "admin" || роль === "user",
+      canDelete: роль === "admin",
+    });
+  }));
 
   const newProject = document.getElementById("object-new-project");
   newProject.innerHTML = projects.map(p =>
@@ -5800,6 +5979,13 @@ const EC_COLUMNS = [
   { key: "planned_delivery_date", label: "План. поставка", text: true },
   { key: "actual_delivery_date", label: "Факт. поставка", text: true },
   { key: "project_smr_start_date", label: "Начало СМР", text: true },
+  // Комментарий отбирается ПОДСТРОКОЙ, как адрес: значения почти
+  // уникальны, выпадашка на тысячи строк бесполезна.
+  { key: "comment", label: "Комментарий", text: true },
+  // Скрепка — не поле элемента, а признак «есть приложенные файлы»,
+  // поэтому без отбора и без сортировки: сортировать по «есть/нет» нечего,
+  // а отбирать — отдельная задача, если понадобится.
+  { key: "attachments", label: ATTACHMENT_ICON, icon: true },
 ];
 
 const ecState = { sort: "id", direction: "asc", offset: 0, filters: {}, search: "" };
@@ -5855,6 +6041,7 @@ async function renderElementCatalog() {
   }
 
   const head = EC_COLUMNS.map(col => {
+    if (col.icon) return `<th class="ec-attach" title="Вложения">${col.label}</th>`;
     const arrow = ecState.sort === col.key ? (ecState.direction === "asc" ? " ▲" : " ▼") : "";
     return `<th style="text-align:left; white-space:nowrap">
       <button type="button" class="ec-sort" data-sort="${col.key}"
@@ -5863,6 +6050,7 @@ async function renderElementCatalog() {
   }).join("");
 
   const filterRow = EC_COLUMNS.map(col => {
+    if (col.icon) return '<td class="ec-attach"></td>';
     // Колонки с почти уникальными значениями (адрес, даты) отбираются
     // ПОДСТРОКОЙ: выпадашка на тысячи значений бесполезна, а «2026-09»
     // отбирает по месяцу.
@@ -5882,9 +6070,14 @@ async function renderElementCatalog() {
   table.innerHTML = `<thead><tr>${head}</tr><tr>${filterRow}</tr></thead>
     <tbody>${data.rows.map(row => `<tr data-element-id="${row.id}" style="cursor:pointer"
       ${row.id === ecActiveElementId ? 'class="ec-row-active"' : ""}>
-      ${EC_COLUMNS.map(col => `<td>${col.key === "current_status"
-        ? statusBadgeHtml(row[col.key])
-        : escapeHtml(ecCellText(row, col.key))}</td>`).join("")}
+      ${EC_COLUMNS.map(col => {
+        if (col.icon) return `<td class="ec-attach" title="${row.attachments ? `вложений: ${row.attachments}` : ""}">` +
+                             `${row.attachments ? ATTACHMENT_ICON : ""}</td>`;
+        if (col.key === "current_status") return `<td>${statusBadgeHtml(row[col.key])}</td>`;
+        const класс = col.key === "comment" ? ' class="ec-comment"' : "";
+        const подсказка = col.key === "comment" && row.comment ? ` title="${escapeHtml(row.comment)}"` : "";
+        return `<td${класс}${подсказка}>${escapeHtml(ecCellText(row, col.key))}</td>`;
+      }).join("")}
     </tr>`).join("")}</tbody>`;
 
   table.querySelectorAll("tbody tr[data-element-id]").forEach(tr => {
@@ -6183,8 +6376,39 @@ async function openElementForm(elementId, show = true) {
   renderEfFields();
   renderEfReadonly();
   renderEfHistory();
+  document.getElementById("ef-comment").value = efElement.comment || "";
+  document.getElementById("ef-comment-status").textContent = "";
+  // Комментарий может править прораб (роль user), реквизиты рядом — только
+  // админ объекта: поле и кнопка живут по своим правам, а не по правам формы.
+  const можноКомментировать = canEditOnObject();
+  document.getElementById("ef-comment").disabled = !можноКомментировать;
+  document.getElementById("ef-comment-save").style.display = можноКомментировать ? "" : "none";
+  renderAttachments(document.getElementById("ef-attachments"), "element", efElement.id,
+                    { canUpload: можноКомментировать, canDelete: isObjectAdmin() });
   if (show) elementFormBackdrop.classList.add("open");
 }
+
+document.getElementById("ef-comment-save").addEventListener("click", async () => {
+  const статус = document.getElementById("ef-comment-status");
+  статус.style.color = "var(--color-text-muted)";
+  статус.textContent = "Сохранение…";
+  try {
+    const d = await api(`/elements/${efElement.id}/comment`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment: document.getElementById("ef-comment").value }),
+    });
+    efElement.comment = d.comment;
+    const вПамяти = state.byId.get(efElement.id);
+    if (вПамяти) вПамяти.comment = d.comment;
+    статус.textContent = "Комментарий сохранён.";
+    // Таблица справочника показывает комментарий колонкой — она обязана
+    // обновиться, иначе сохранённый текст виден только в форме.
+    await renderElementCatalog();
+  } catch (e) {
+    статус.style.color = "var(--color-danger)";
+    статус.textContent = e.message;
+  }
+});
 
 document.getElementById("ef-close").addEventListener("click", () => elementFormBackdrop.classList.remove("open"));
 
