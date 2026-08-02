@@ -9160,13 +9160,18 @@ document.getElementById("ds-step").addEventListener("change", () => {
 // и названия шкал заданы в одном месте (app/report_delivery.SCALES).
 const DS_SCALE_CLASS = ["ds-need", "ds-plan", "ds-f"];
 
-function deliveryCellHtml(trio, cls, extraAttr = "") {
+function deliveryCellHtml(trio, cls, extraAttr = "", gap = 0) {
+  // Непокрытая потребность (ни план, ни факт не попадают в срок) — заливкой
+  // ячейки, а не четвёртым числом: три числа это шкалы, а подсветка —
+  // ответ на вопрос «где сорвётся», ради которого в отчёт и смотрят.
+  const full = gap ? `${cls} ds-gap` : cls;
+  const title = gap ? ` title="Не перекрыто ${gap} шт: ни плановая поставка, ни факт не попадают в срок"` : "";
   // Пустая ячейка вместо «0/0/0»: на календаре из сотен колонок нули —
   // шум, из-за которого не видно самих поставок.
-  if (!trio || !trio.some(v => v)) return `<td class="${cls}"${extraAttr}></td>`;
+  if (!trio || !trio.some(v => v)) return `<td class="${full}"${extraAttr}${title}></td>`;
   const html = trio.map((v, i) => `<span class="${DS_SCALE_CLASS[i]}">${v || 0}</span>`)
     .join('<span class="ds-sep">/</span>');
-  return `<td class="${cls}"${extraAttr}>${html}</td>`;
+  return `<td class="${full}"${extraAttr}${title}>${html}</td>`;
 }
 
 const deliveryColClass = (col) =>
@@ -9195,8 +9200,8 @@ function renderDeliveryReport(data) {
     const rowIndex = deliveryRowPaths.push(gpath) - 1;
     parts.push(`<tr class="lvl-${node.level}" data-row="${rowIndex}">
       <td class="ds-name" style="padding-left:${4 + node.level * 14}px" title="${escapeHtml(node.label)}" data-label="${escapeHtml(node.label)}">${toggle}${escapeHtml(node.label)}</td>
-      ${columns.map(c => deliveryCellHtml(node.values[c.key], deliveryColClass(c), ` data-col="${escapeHtml(c.key)}"`)).join("")}
-      ${deliveryCellHtml(node.total, "ds-sum")}</tr>`);
+      ${columns.map(c => deliveryCellHtml(node.values[c.key], deliveryColClass(c), ` data-col="${escapeHtml(c.key)}"`, (node.gaps || {})[c.key] || 0)).join("")}
+      ${deliveryCellHtml(node.total, "ds-sum", "", node.gap_total || 0)}</tr>`);
     if (collapsed) return;
     for (const child of node.children || []) walk(child, `${path}/${child.label}`, gpath.concat([child.gkey]));
   };
@@ -9205,8 +9210,8 @@ function renderDeliveryReport(data) {
   const t = data.total;
   parts.push(`<tr class="ds-total">
     <td class="ds-name">${escapeHtml(t.label)}</td>
-    ${columns.map(c => deliveryCellHtml(t.values[c.key], deliveryColClass(c))).join("")}
-    ${deliveryCellHtml(t.total, "ds-sum")}</tr>`);
+    ${columns.map(c => deliveryCellHtml(t.values[c.key], deliveryColClass(c), "", (t.gaps || {})[c.key] || 0)).join("")}
+    ${deliveryCellHtml(t.total, "ds-sum", "", t.gap_total || 0)}</tr>`);
 
   const legend = data.scales
     .map((s, i) => `<span class="${DS_SCALE_CLASS[i]}">${escapeHtml(s.label.toLowerCase())}</span> — ${escapeHtml(s.hint)}`)
@@ -9214,7 +9219,7 @@ function renderDeliveryReport(data) {
   // Подпись и предупреждение приходят с сервера готовым текстом — тем же,
   // что попадёт в Excel и PDF (см. app/report_delivery.py).
   return `<div class="hint-text" style="margin-bottom:2px">${escapeHtml(data.subtitle)}</div>
-    <div class="hint-text" style="margin-bottom:6px">${legend}. Наведите на ячейку — разбор по маркам.</div>
+    <div class="hint-text" style="margin-bottom:6px">${legend}. <span class="ds-gap-legend">Розовым</span> — потребность не перекрыта: ни плановая поставка, ни факт не попадают в срок (всего ${data.total.gap_total || 0} изд.). Наведите на ячейку — разбор по маркам.</div>
     ${data.warning ? `<div class="dyn-warn">${escapeHtml(data.warning)}</div>` : ""}
     <div class="ds-wrap"><table id="ds-table">${head}<tbody>${parts.join("")}</tbody></table></div>`;
 }
@@ -9277,7 +9282,7 @@ function deliveryTipHtml(detail, rowLabel) {
     parts.push(`<div class="dst-mark"><span class="dst-name">${escapeHtml(m.mark)}</span>: ` +
       `потребность ${m.need}, план ${m.plan}, факт ${m.fact}</div>`);
     if (!m.deficit) continue;
-    parts.push(`<div class="dst-lack">не хватает ${m.deficit} шт` +
+    parts.push(`<div class="dst-lack">не перекрыто ${m.deficit} шт (ни план, ни факт не попадают в срок)` +
       (m.total_need > m.need ? `; всего требуется на эту дату по объекту: ${m.total_need}` : "") + `</div>`);
     if (!m.sources.length) {
       parts.push(`<div class="dst-src">переставить неоткуда: свободных изделий этой марки на площадке нет</div>`);

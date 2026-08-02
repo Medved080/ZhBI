@@ -112,6 +112,40 @@ BEFORE_KEY, AFTER_KEY, NONE_KEY = "before", "after", "none"
 AVAILABLE_STATUS = "delivered"
 
 
+# ---------- перекрыта ли потребность (живой запрос 2026-08-02) ----------
+#
+# Потребность изделия перекрыта, если оно окажется (или уже оказалось) на
+# площадке НЕ ПОЗЖЕ своей даты начала СМР. Считается по САМОМУ изделию, а
+# не сравнением чисел в ячейке: поставка неделей раньше срока перекрывает
+# потребность точно так же, как поставка день в день, а сравнение
+# «потребность против плана В ТОЙ ЖЕ КОЛОНКЕ» объявило бы её непокрытой.
+#
+# Факт ВАЖНЕЕ плана: если изделие уже приехало, судим по тому, когда оно
+# приехало на самом деле. План в срок при опоздавшем факте потребность НЕ
+# перекрывает — изделия к сроку на площадке не было, и красить такую
+# ячейку белым значило бы прятать настоящий срыв.
+def _covered(need_d: Optional[date], plan_d: Optional[date], fact_d: Optional[date]) -> bool:
+    if need_d is None:
+        return True     # сравнивать не с чем — это колонка «Без даты»
+    if fact_d is not None:
+        return fact_d <= need_d
+    if plan_d is not None:
+        return plan_d <= need_d
+    return False        # ни плана, ни факта — потребность ничем не закрыта
+
+
+# Та же формула в SQL — для разбора ячейки по маркам. substr(...,1,10):
+# даты текстовые, у части записей исторически со временем.
+_COVERED_SQL = """
+    (CASE WHEN e.project_smr_start_date IS NULL THEN 1
+          WHEN e.actual_delivery_date IS NOT NULL
+               THEN substr(e.actual_delivery_date,1,10) <= substr(e.project_smr_start_date,1,10)
+          WHEN e.planned_delivery_date IS NOT NULL
+               THEN substr(e.planned_delivery_date,1,10) <= substr(e.project_smr_start_date,1,10)
+          ELSE 0 END)
+"""
+
+
 # ---------- календарная сетка ----------
 
 def _parse(value: Optional[str]) -> Optional[date]:
@@ -357,8 +391,13 @@ def build_delivery_schedule_report(
     # Разрежённо (нулевые ячейки не хранятся) — при 180 колонках и сотнях
     # строк плотная матрица была бы в основном нулями.
     def new_node(label, level, gkey=None):
+        # gaps — сколько изделий этой ячейки НЕ перекрыты (см. _covered).
+        # Отдельной картой, а не четвёртым числом в values: три числа
+        # ячейки — это шкалы, а непокрытая потребность их подсветка, и в
+        # Excel/PDF она тоже оформление, а не ещё одна колонка.
         return {"label": label, "level": level, "gkey": gkey,
-                "values": {}, "total": [0, 0, 0], "children": {}}
+                "values": {}, "total": [0, 0, 0],
+                "gaps": {}, "gap_total": 0, "children": {}}
 
     root = new_node(TOTAL_LABEL, -1)
 
@@ -372,6 +411,10 @@ def build_delivery_schedule_report(
         cell = node["values"].setdefault(col, [0, 0, 0])
         cell[idx] += n
         node["total"][idx] += n
+
+    def add_gap(node, col, n):
+        node["gaps"][col] = node["gaps"].get(col, 0) + n
+        node["gap_total"] += n
 
     def label_and_key(key, r):
         """Подпись уровня и его СЫРОЕ значение. Сырое нужно для разбора
@@ -414,19 +457,30 @@ def build_delivery_schedule_report(
         # Факт без даты не значит «поставлено неизвестно когда» — значит «не
         # поставлено»; такой элемент в факт не попадает вовсе.
 
+        # Непокрытая потребность считается по САМОМУ изделию и ложится в
+        # колонку его ПОТРЕБНОСТИ: подсвечивается тот срок, к которому
+        # изделия не будет, а не тот, когда его привезут.
+        gap = 0 if _covered(_parse(r["need_date"]), _parse(r["plan_date"]),
+                            _parse(r["fact_date"])) else n
+
         node = root
         for idx, col in enumerate(cols_by_scale):
             add(node, col, idx, n)
+        if gap:
+            add_gap(node, cols_by_scale[NEED], gap)
         for level, key in enumerate(groups):
             label, gkey = label_and_key(key, r)
             node = node["children"].setdefault(label, new_node(label, level, gkey))
             for idx, col in enumerate(cols_by_scale):
                 add(node, col, idx, n)
+            if gap:
+                add_gap(node, cols_by_scale[NEED], gap)
 
     def finish(node) -> dict:
         children = [finish(node["children"][k]) for k in sorted(node["children"], key=_sort_key)]
         return {"label": node["label"], "level": node["level"], "gkey": node["gkey"],
-                "values": node["values"], "total": node["total"], "children": children}
+                "values": node["values"], "total": node["total"],
+                "gaps": node["gaps"], "gap_total": node["gap_total"], "children": children}
 
     tree = finish(root)
 
@@ -443,7 +497,8 @@ def build_delivery_schedule_report(
         "group_labels": [GROUP_LABELS[k] for k in groups],
         "columns": columns,
         "rows": tree["children"],
-        "total": {"label": TOTAL_LABEL, "values": tree["values"], "total": tree["total"]},
+        "total": {"label": TOTAL_LABEL, "values": tree["values"], "total": tree["total"],
+                  "gaps": tree["gaps"], "gap_total": tree["gap_total"]},
         # Та же честная пометка, что в «Динамике»: проектная дата задана не
         # у всех изделий, и график по части объёма внешне неотличим от
         # полного.
@@ -555,8 +610,9 @@ def build_delivery_cell_detail(
     """Что стоит за одной ячейкой: разбивка по маркам и, если чего-то не
     хватает, откуда это можно взять.
 
-    «Не хватает» = изделия, которые требуются к дате колонки в ЭТОЙ
-    группировке и ещё не поставлены. «Можно взять» = изделия той же марки
+    «Не перекрыто» = изделия, которые требуются к дате колонки в ЭТОЙ
+    группировке и к своему сроку на площадке не окажутся (см. `_covered`) —
+    та же величина, которой подсвечена сама ячейка. «Можно взять» = изделия той же марки
     со статусом «Доставлен» (лежат на площадке и ещё не смонтированы),
     находящиеся ВНЕ этой ячейки — их адрес даётся физически, «Кран ·
     Стоянка · Этаж» (решение пользователя), а не подписью строки отчёта:
@@ -596,12 +652,14 @@ def build_delivery_cell_detail(
                SUM(CASE WHEN {plan_sql} THEN 1 ELSE 0 END) AS plan,
                SUM(CASE WHEN {fact_sql} THEN 1 ELSE 0 END) AS fact,
                SUM(CASE WHEN {need_sql} AND e.actual_delivery_date IS NOT NULL
-                        THEN 1 ELSE 0 END) AS need_delivered
+                        THEN 1 ELSE 0 END) AS need_delivered,
+               SUM(CASE WHEN {need_sql} AND NOT {_COVERED_SQL}
+                        THEN 1 ELSE 0 END) AS uncovered
         {_JOINS}
         WHERE {where_cell}
         GROUP BY e.mark
         """,
-        need_params + plan_params + fact_params + need_params
+        need_params + plan_params + fact_params + need_params + need_params
         + base_params + group_params + in_cell_params,
     ).fetchall()
 
@@ -615,8 +673,9 @@ def build_delivery_cell_detail(
             base_params + need_params).fetchall()
     }
 
-    deficits = {r["mark"]: (r["need"] - r["need_delivered"]) for r in marks
-                if r["need"] - r["need_delivered"] > 0}
+    # Источники ищем ровно для того, что не перекрыто: именно эти изделия и
+    # надо чем-то закрыть к сроку.
+    deficits = {r["mark"]: r["uncovered"] for r in marks if r["uncovered"] > 0}
     sources: dict = {}
     if deficits:
         keys = list(deficits)
@@ -652,7 +711,7 @@ def build_delivery_cell_detail(
     # высоте экрана, и в неё должно попасть самое важное, а не то, чья
     # марка раньше по алфавиту.
     def mark_order(r):
-        return (-(r["need"] - r["need_delivered"]), -r["need"], natural_key(r["mark"] or NO_MARK))
+        return (-r["uncovered"], -r["need"], natural_key(r["mark"] or NO_MARK))
 
     out_marks = []
     for r in sorted(marks, key=mark_order):
@@ -661,7 +720,7 @@ def build_delivery_cell_detail(
             "mark": mark or NO_MARK,
             "need": r["need"], "plan": r["plan"], "fact": r["fact"],
             "delivered": r["need_delivered"],
-            "deficit": max(r["need"] - r["need_delivered"], 0),
+            "deficit": r["uncovered"],
             "total_need": total_need.get(mark, r["need"]),
             "sources": sources.get(mark, []),
         })
@@ -698,6 +757,9 @@ def build_delivery_schedule_xlsx(report: dict) -> bytes:
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     head_fill = PatternFill("solid", fgColor="EEF2F7")
     edge_fill = PatternFill("solid", fgColor="F5F0E6")
+    # Непокрытая потребность — заливкой, а не отдельной колонкой: это
+    # подсветка тех же трёх чисел, а не четвёртая шкала.
+    gap_fill = PatternFill("solid", fgColor="FBE3E0")
 
     ws.append([report["title"]])
     ws["A1"].font = Font(bold=True, size=13)
@@ -742,26 +804,34 @@ def build_delivery_schedule_xlsx(report: dict) -> bytes:
         if col["kind"] == "edge":
             edge_cols |= {2 + i * width + k for k in range(width)}
 
-    def write_row(label, values, total, indent):
+    def write_row(label, values, total, indent, gaps=None, gap_total=0):
         ws.append([label])
         r = ws.max_row
         # Отступ вложенности — свойством ячейки, а не пробелами в тексте:
         # текст остаётся пригодным для фильтров и формул (как в «Статусах»).
         ws.cell(row=r, column=1).alignment = Alignment(indent=indent)
+        gap_cols = set()
         for i, col in enumerate(columns):
             trio = values.get(col["key"]) or [0] * width
             for k in range(width):
                 ws.cell(row=r, column=2 + i * width + k, value=trio[k] or None)
+            if (gaps or {}).get(col["key"]):
+                gap_cols |= {2 + i * width + k for k in range(width)}
         for k in range(width):
             ws.cell(row=r, column=total_col + k, value=total[k] or None)
+        if gap_total:
+            gap_cols |= {total_col + k for k in range(width)}
         for i in range(1, last_col + 1):
             ws.cell(row=r, column=i).border = border
-            if i in edge_cols:
+            if i in gap_cols:
+                ws.cell(row=r, column=i).fill = gap_fill
+            elif i in edge_cols:
                 ws.cell(row=r, column=i).fill = edge_fill
         return r
 
     for node in flatten(report):
-        r = write_row(node["label"], node["values"], node["total"], node["level"] * 2)
+        r = write_row(node["label"], node["values"], node["total"], node["level"] * 2,
+                      node.get("gaps"), node.get("gap_total", 0))
         # Группировка строк «+/−» — тем же приёмом, что в отчёте «Статусы».
         if node["level"] > 0:
             ws.row_dimensions[r].outlineLevel = min(node["level"], 7)
@@ -770,7 +840,8 @@ def build_delivery_schedule_xlsx(report: dict) -> bytes:
                 ws.cell(row=r, column=i).font = Font(bold=True)
 
     total = report["total"]
-    r = write_row(total["label"], total["values"], total["total"], 0)
+    r = write_row(total["label"], total["values"], total["total"], 0,
+                  total.get("gaps"), total.get("gap_total", 0))
     for i in range(1, last_col + 1):
         ws.cell(row=r, column=i).font = Font(bold=True)
         ws.cell(row=r, column=i).fill = head_fill
@@ -825,7 +896,9 @@ def build_delivery_schedule_pdf(report: dict) -> bytes:
 
     nodes = flatten(report) + [{"label": report["total"]["label"], "level": -1,
                                 "values": report["total"]["values"],
-                                "total": report["total"]["total"]}]
+                                "total": report["total"]["total"],
+                                "gaps": report["total"].get("gaps", {}),
+                                "gap_total": report["total"].get("gap_total", 0)}]
     columns = report["columns"]
 
     def cell(trio):
@@ -851,6 +924,16 @@ def build_delivery_schedule_pdf(report: dict) -> bytes:
             data.append([indent + node["label"]]
                         + [cell(node["values"].get(c["key"])) for c in block]
                         + [cell(node["total"])])
+            # Непокрытая потребность — та же подсветка, что на экране и в
+            # Excel: без неё PDF показывал бы ровно те же числа без главного.
+            gaps = node.get("gaps") or {}
+            for j, c in enumerate(block):
+                if gaps.get(c["key"]):
+                    styles.append(("BACKGROUND", (j + 1, len(data) - 1), (j + 1, len(data) - 1),
+                                   colors.HexColor("#FBE3E0")))
+            if node.get("gap_total"):
+                styles.append(("BACKGROUND", (len(block) + 1, len(data) - 1),
+                               (len(block) + 1, len(data) - 1), colors.HexColor("#FBE3E0")))
             if node["level"] < 2:
                 styles.append(("FONTNAME", (0, len(data) - 1), (-1, len(data) - 1), FONT_BOLD))
             if node["level"] < 0:

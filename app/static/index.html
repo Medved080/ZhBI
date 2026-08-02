@@ -1282,6 +1282,22 @@
   /* Служебные колонки «Ранее / Позже / Без даты» — тёплой подложкой: это
      не дни календаря, и путать их с ними нельзя. */
   #ds-table th.ds-edge, #ds-table td.ds-edge { background: rgba(200, 150, 60, 0.10); }
+  /* Непокрытая потребность: ни плановая поставка, ни факт не попадают в
+     срок. Цвет полупрозрачный — ложится и на светлые, и на тёмные схемы.
+     Красится background-IMAGE, а не background: у липких колонок («Итого»
+     справа, группировка слева) собственный НЕПРОЗРАЧНЫЙ фон, и подмена его
+     полупрозрачным делала бы их прозрачными — сквозь «Итого» просвечивал
+     бы уезжающий под ним календарь (поймано живой проверкой). Слой поверх
+     сохраняет и непрозрачность, и подложки выходных/служебных колонок. */
+  #ds-table td.ds-gap {
+    background-image: linear-gradient(rgba(192, 57, 43, .16), rgba(192, 57, 43, .16));
+  }
+  #ds-table tr.ds-total > td.ds-gap, #ds-table tr.lvl-0 > td.ds-gap {
+    background-image: linear-gradient(rgba(192, 57, 43, .26), rgba(192, 57, 43, .26));
+  }
+  .ds-gap-legend {
+    background: rgba(192, 57, 43, .16); padding: 0 4px; border-radius: 3px;
+  }
   #ds-table tr.lvl-0 > td { font-weight: 700; }
   #ds-table tr.lvl-0 .ds-name { background: var(--color-surface-2); }
   #ds-table tr.lvl-1 > td { font-weight: 600; }
