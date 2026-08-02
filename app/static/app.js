@@ -8784,6 +8784,12 @@ const REPORTS = {
     render: renderDynamicsReport,
     needsDate: true,
   },
+  delivery: {
+    title: "График поставки ЖБИ",
+    endpoint: "/reports/delivery-schedule",
+    render: renderDeliveryReport,
+    needsPeriod: true,
+  },
 };
 let currentReport = "status";
 let reportData = null;
@@ -8810,6 +8816,14 @@ function reportRequestBody() {
   }
   if (REPORTS[currentReport].needsDate) {
     body.report_date = document.getElementById("report-date").value || null;
+  }
+  if (REPORTS[currentReport].needsPeriod) {
+    body.date_from = document.getElementById("ds-from").value || null;
+    body.date_to = document.getElementById("ds-to").value || null;
+    // Шаг не отправляем, пока пользователь его не выбрал: на первом
+    // открытии его подбирает сервер по ширине периода и возвращает обратно.
+    body.step = deliveryStepChosen ? document.getElementById("ds-step").value : null;
+    body.group_by = deliveryGroups.filter(g => g.on).map(g => g.key);
   }
   return body;
 }
@@ -9039,6 +9053,302 @@ function renderDynamicsReport(data) {
     </div>`;
 }
 
+// ---------- отчёт «График поставки» (живой запрос 2026-08-02) ----------
+//
+// Календарь потребности в поставке: по горизонтали дни/недели/месяцы, по
+// вертикали иерархия, порядок уровней которой задаёт ПОЛЬЗОВАТЕЛЬ. Всё
+// считает сервер (app/report_delivery.py) — здесь только вёрстка таблицы
+// и управление параметрами запроса.
+//
+// Порядок уровней хранится в localStorage: это настройка «как я привык
+// смотреть», а не свойство проекта, и на сервере ей делать нечего.
+const DS_GROUPS_KEY = "zhbi_delivery_groups";
+const DS_ALL_GROUPS = [
+  { key: "counterparty", label: "Контрагент" },
+  { key: "contract", label: "Контракт" },
+  { key: "zakhvatka", label: "Захватка" },
+  { key: "stance", label: "Стоянка" },
+  { key: "floor", label: "Этаж" },
+  { key: "type", label: "Тип/подтип элемента" },
+  { key: "mark", label: "Марка" },
+];
+const DS_DEFAULT_ON = ["counterparty", "contract", "type"];
+
+// Один список всех шести уровней в ТЕКУЩЕМ порядке, у каждого флаг «участвует».
+// Отдельные «список включённых» + «список доступных» пришлось бы держать
+// согласованными при каждом переносе — здесь переносится один элемент.
+let deliveryGroups = loadDeliveryGroups();
+// Шаг оси на первом открытии подбирает сервер по ширине периода; как только
+// пользователь выбрал его сам, отправляем выбранное и больше не подменяем.
+let deliveryStepChosen = false;
+
+function loadDeliveryGroups() {
+  const fallback = () => DS_ALL_GROUPS.map(g => ({ ...g, on: DS_DEFAULT_ON.includes(g.key) }));
+  try {
+    const saved = JSON.parse(localStorage.getItem(DS_GROUPS_KEY) || "null");
+    if (!Array.isArray(saved)) return fallback();
+    // Из сохранённого берём только порядок и флаги; сам состав уровней —
+    // из кода, иначе новый уровень никогда не появился бы у тех, у кого
+    // настройка уже сохранена, а удалённый жил бы вечно.
+    const byKey = new Map(saved.map((s, i) => [s.key, { i, on: !!s.on }]));
+    const out = DS_ALL_GROUPS.map(g => ({ ...g, on: byKey.has(g.key) ? byKey.get(g.key).on : false }));
+    out.sort((a, b) => (byKey.get(a.key)?.i ?? 99) - (byKey.get(b.key)?.i ?? 99));
+    return out.some(g => g.on) ? out : fallback();
+  } catch (e) {
+    return fallback();
+  }
+}
+
+function saveDeliveryGroups() {
+  localStorage.setItem(DS_GROUPS_KEY,
+    JSON.stringify(deliveryGroups.map(g => ({ key: g.key, on: g.on }))));
+}
+
+function renderDeliveryGroupChips() {
+  document.getElementById("ds-groups").innerHTML = deliveryGroups.map((g, i) => `
+    <span class="ds-chip ${g.on ? "on" : "off"}">
+      <label><input type="checkbox" data-ds-toggle="${g.key}" ${g.on ? "checked" : ""}/>${escapeHtml(g.label)}</label>
+      <button type="button" class="ds-move" data-ds-move="${g.key}" data-dir="-1"
+        title="Левее (выше в иерархии)" ${i === 0 ? "disabled" : ""}>◀</button>
+      <button type="button" class="ds-move" data-ds-move="${g.key}" data-dir="1"
+        title="Правее (ниже в иерархии)" ${i === deliveryGroups.length - 1 ? "disabled" : ""}>▶</button>
+    </span>`).join("");
+}
+
+document.getElementById("ds-groups").addEventListener("click", (e) => {
+  const move = e.target.dataset.dsMove;
+  if (!move) return;
+  const dir = Number(e.target.dataset.dir);
+  const i = deliveryGroups.findIndex(g => g.key === move);
+  const j = i + dir;
+  if (j < 0 || j >= deliveryGroups.length) return;
+  [deliveryGroups[i], deliveryGroups[j]] = [deliveryGroups[j], deliveryGroups[i]];
+  saveDeliveryGroups();
+  renderDeliveryGroupChips();
+  loadReport();
+});
+
+document.getElementById("ds-groups").addEventListener("change", (e) => {
+  const key = e.target.dataset.dsToggle;
+  if (!key) return;
+  const group = deliveryGroups.find(g => g.key === key);
+  if (!group) return;
+  if (group.on && deliveryGroups.filter(g => g.on).length === 1) {
+    // Ноль уровней — это одна строка «Итого»; сервер в таком случае молча
+    // подставит группировку по умолчанию, и снятая галочка вернулась бы
+    // сама. Честнее не дать снять последнюю.
+    e.target.checked = true;
+    showToast("Хотя бы один уровень группировки должен остаться", "warning");
+    return;
+  }
+  group.on = e.target.checked;
+  saveDeliveryGroups();
+  renderDeliveryGroupChips();
+  loadReport();
+});
+
+for (const id of ["ds-from", "ds-to"]) {
+  document.getElementById(id).addEventListener("change", loadReport);
+}
+document.getElementById("ds-step").addEventListener("change", () => {
+  deliveryStepChosen = true;
+  loadReport();
+});
+
+// Три числа ячейки — потребность (по дате начала СМР), план поставки, факт.
+// Классы и подписи берутся из data.scales, приходящего с сервера: порядок
+// и названия шкал заданы в одном месте (app/report_delivery.SCALES).
+const DS_SCALE_CLASS = ["ds-need", "ds-plan", "ds-f"];
+
+function deliveryCellHtml(trio, cls, extraAttr = "") {
+  // Пустая ячейка вместо «0/0/0»: на календаре из сотен колонок нули —
+  // шум, из-за которого не видно самих поставок.
+  if (!trio || !trio.some(v => v)) return `<td class="${cls}"${extraAttr}></td>`;
+  const html = trio.map((v, i) => `<span class="${DS_SCALE_CLASS[i]}">${v || 0}</span>`)
+    .join('<span class="ds-sep">/</span>');
+  return `<td class="${cls}"${extraAttr}>${html}</td>`;
+}
+
+const deliveryColClass = (col) =>
+  col.kind === "edge" ? "ds-edge" : (col.weekend ? "ds-weekend" : "");
+
+// Путь строки в сырых значениях уровней (gkey) — им адресуется ячейка при
+// наведении. Держим отдельным массивом, а не в data-атрибуте: значения
+// бывают составными (пара «тип, подтип»), и в атрибуте это был бы JSON в
+// разметке на каждой строке.
+let deliveryRowPaths = [];
+
+function renderDeliveryReport(data) {
+  const columns = data.columns;
+  deliveryRowPaths = [];
+  const head = `<thead><tr>
+    <th class="ds-name">${escapeHtml(data.root_label)}</th>
+    ${columns.map(c => `<th class="${deliveryColClass(c)}"${c.title ? ` title="${escapeHtml(c.title)}"` : ""}>${escapeHtml(c.label)}</th>`).join("")}
+    <th class="ds-sum">${escapeHtml(data.total_label)}</th>
+  </tr></thead>`;
+
+  const parts = [];
+  const walk = (node, path, gpath) => {
+    const collapsed = reportCollapsed.has(path);
+    const kids = node.children && node.children.length;
+    const toggle = `<button class="report-toggle${kids ? "" : " empty"}" data-path="${escapeHtml(path)}">${collapsed ? "▸" : "▾"}</button>`;
+    const rowIndex = deliveryRowPaths.push(gpath) - 1;
+    parts.push(`<tr class="lvl-${node.level}" data-row="${rowIndex}">
+      <td class="ds-name" style="padding-left:${4 + node.level * 14}px" title="${escapeHtml(node.label)}" data-label="${escapeHtml(node.label)}">${toggle}${escapeHtml(node.label)}</td>
+      ${columns.map(c => deliveryCellHtml(node.values[c.key], deliveryColClass(c), ` data-col="${escapeHtml(c.key)}"`)).join("")}
+      ${deliveryCellHtml(node.total, "ds-sum")}</tr>`);
+    if (collapsed) return;
+    for (const child of node.children || []) walk(child, `${path}/${child.label}`, gpath.concat([child.gkey]));
+  };
+  for (const row of data.rows) walk(row, row.label, [row.gkey]);
+
+  const t = data.total;
+  parts.push(`<tr class="ds-total">
+    <td class="ds-name">${escapeHtml(t.label)}</td>
+    ${columns.map(c => deliveryCellHtml(t.values[c.key], deliveryColClass(c))).join("")}
+    ${deliveryCellHtml(t.total, "ds-sum")}</tr>`);
+
+  const legend = data.scales
+    .map((s, i) => `<span class="${DS_SCALE_CLASS[i]}">${escapeHtml(s.label.toLowerCase())}</span> — ${escapeHtml(s.hint)}`)
+    .join(" · ");
+  // Подпись и предупреждение приходят с сервера готовым текстом — тем же,
+  // что попадёт в Excel и PDF (см. app/report_delivery.py).
+  return `<div class="hint-text" style="margin-bottom:2px">${escapeHtml(data.subtitle)}</div>
+    <div class="hint-text" style="margin-bottom:6px">${legend}. Наведите на ячейку — разбор по маркам.</div>
+    ${data.warning ? `<div class="dyn-warn">${escapeHtml(data.warning)}</div>` : ""}
+    <div class="ds-wrap"><table id="ds-table">${head}<tbody>${parts.join("")}</tbody></table></div>`;
+}
+
+// ---------- подсказка по ячейке: чего не хватает и откуда переставить ----------
+//
+// Разбор считает сервер отдельным запросом (см. app/report_delivery.
+// build_delivery_cell_detail): на реальном файле это тысячи троек «строка ×
+// колонка × марка», и в тело отчёта они не помещаются. Отсюда — задержка
+// перед запросом (курсор проезжает по десяткам ячеек) и кэш на время
+// показа отчёта: один и тот же разбор дважды не запрашивается.
+const DS_TIP_DELAY_MS = 350;
+// Подсказка обрезается по высоте экрана, поэтому показывается лишь
+// верхушка разбора; сервер отдаёт марки, отсортированные по дефициту.
+const DS_TIP_MAX_MARKS = 4;
+const DS_TIP_MAX_SOURCES = 3;
+const dsTooltip = document.getElementById("ds-tooltip");
+let dsTipTimer = null;
+let dsTipCache = new Map();
+let dsTipRequestId = 0;
+let dsTipCell = null;
+
+function hideDeliveryTip() {
+  clearTimeout(dsTipTimer);
+  dsTipTimer = null;
+  dsTipCell = null;
+  dsTipRequestId++;   // ответ на уже покинутую ячейку показывать нельзя
+  dsTooltip.style.display = "none";
+}
+
+// Последнее положение курсора: подсказка показывается через задержку и
+// после ответа сервера, к этому моменту координаты из события наведения
+// уже устарели бы.
+let dsTipPos = { clientX: 0, clientY: 0 };
+
+function placeDeliveryTip() {
+  dsTooltip.style.display = "block";
+  // Размеры берём в следующем кадре, а не сразу после присвоения
+  // innerHTML: замер «по горячим следам» один раз уже вернул высоту
+  // ПРЕДЫДУЩЕГО содержимого, и подсказка на пол-экрана уехала за нижний
+  // край. Итоговое прижатие к границам окна — страховка на тот же случай.
+  requestAnimationFrame(() => {
+    const h = dsTooltip.offsetHeight, w = dsTooltip.offsetWidth;
+    const maxY = Math.max(8, window.innerHeight - h - 8);
+    const maxX = Math.max(8, window.innerWidth - w - 8);
+    const below = dsTipPos.clientY + 18;
+    const y = below + h > window.innerHeight ? dsTipPos.clientY - h - 12 : below;
+    dsTooltip.style.left = `${Math.min(Math.max(8, dsTipPos.clientX + 14), maxX)}px`;
+    dsTooltip.style.top = `${Math.min(Math.max(8, y), maxY)}px`;
+  });
+}
+
+function deliveryTipHtml(detail, rowLabel) {
+  if (!detail.marks.length) {
+    return `<div class="dst-head">${escapeHtml(rowLabel)} · ${escapeHtml(detail.column_label)}</div>
+      <div class="dst-more">нет изделий</div>`;
+  }
+  const parts = [`<div class="dst-head">${escapeHtml(rowLabel)} · ${escapeHtml(detail.column_label)}</div>`];
+  for (const m of detail.marks.slice(0, DS_TIP_MAX_MARKS)) {
+    parts.push(`<div class="dst-mark"><span class="dst-name">${escapeHtml(m.mark)}</span>: ` +
+      `потребность ${m.need}, план ${m.plan}, факт ${m.fact}</div>`);
+    if (!m.deficit) continue;
+    parts.push(`<div class="dst-lack">не хватает ${m.deficit} шт` +
+      (m.total_need > m.need ? `; всего требуется на эту дату по объекту: ${m.total_need}` : "") + `</div>`);
+    if (!m.sources.length) {
+      parts.push(`<div class="dst-src">переставить неоткуда: свободных изделий этой марки на площадке нет</div>`);
+      continue;
+    }
+    parts.push(`<div class="dst-src">можно переставить (${escapeHtml(detail.available_status_label)}):</div>`);
+    for (const s of m.sources.slice(0, DS_TIP_MAX_SOURCES)) {
+      parts.push(`<div class="dst-src${s.urgent ? " urgent" : ""}">• ${escapeHtml(s.where)} — ${s.count} шт` +
+        (s.earliest_need ? `, свой срок ${formatDateRu(s.earliest_need)}${s.urgent ? " (не позже этой даты!)" : ""}` : "") +
+        `</div>`);
+    }
+    if (m.sources.length > DS_TIP_MAX_SOURCES) {
+      parts.push(`<div class="dst-more">…ещё мест: ${m.sources.length - DS_TIP_MAX_SOURCES}</div>`);
+    }
+  }
+  if (detail.marks.length > DS_TIP_MAX_MARKS) {
+    parts.push(`<div class="dst-more">…ещё марок: ${detail.marks.length - DS_TIP_MAX_MARKS} (показаны с наибольшей нехваткой)</div>`);
+  }
+  return parts.join("");
+}
+
+async function showDeliveryTip(cell) {
+  const tr = cell.closest("tr");
+  const col = cell.dataset.col;
+  const rowIndex = Number(tr.dataset.row);
+  const path = deliveryRowPaths[rowIndex];
+  if (!path || col === undefined) return;
+  // Подпись берём из data-label, а не из текста ячейки: в тексте первым
+  // идёт значок «▾» кнопки сворачивания.
+  const rowLabel = tr.querySelector(".ds-name").dataset.label || "";
+  const key = `${rowIndex}|${col}`;
+  const my = ++dsTipRequestId;
+
+  let detail = dsTipCache.get(key);
+  if (!detail) {
+    dsTooltip.innerHTML = `<div class="dst-more">Считаем разбор по маркам…</div>`;
+    placeDeliveryTip();
+    try {
+      detail = await api("/reports/delivery-schedule/cell", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...reportRequestBody(), path, column: col }),
+      });
+    } catch (e) {
+      if (my !== dsTipRequestId) return;
+      dsTooltip.innerHTML = `<div class="dst-lack">${escapeHtml(e.message)}</div>`;
+      placeDeliveryTip();
+      return;
+    }
+    dsTipCache.set(key, detail);
+  }
+  if (my !== dsTipRequestId) return;   // курсор уже ушёл на другую ячейку
+  dsTooltip.innerHTML = deliveryTipHtml(detail, rowLabel);
+  placeDeliveryTip();
+}
+
+document.getElementById("report-body").addEventListener("mouseover", (e) => {
+  const cell = e.target.closest("#ds-table td[data-col]");
+  if (!cell) { if (dsTipCell) hideDeliveryTip(); return; }
+  if (cell === dsTipCell) return;
+  hideDeliveryTip();
+  dsTipCell = cell;
+  dsTipTimer = setTimeout(() => showDeliveryTip(cell), DS_TIP_DELAY_MS);
+});
+document.getElementById("report-body").addEventListener("mousemove", (e) => {
+  dsTipPos = { clientX: e.clientX, clientY: e.clientY };
+});
+document.getElementById("report-body").addEventListener("mouseleave", hideDeliveryTip);
+// Прокрутка таблицы курсором не отслеживается — подсказка осталась бы
+// висеть над чужой ячейкой.
+document.getElementById("report-body").addEventListener("scroll", hideDeliveryTip, true);
+
 async function loadReport() {
   const def = REPORTS[currentReport];
   document.getElementById("report-title").textContent = def.title;
@@ -9051,9 +9361,24 @@ async function loadReport() {
     });
     reportCollapsed = defaultCollapsedTree(reportData);
     document.getElementById("report-body").innerHTML = def.render(reportData);
-    statusLine.textContent = reportData.total
-      ? `Всего изделий: ${reportData.total.values.total}`
-      : `Отчётная дата: ${formatDateRu(reportData.report_date)}`;
+    if (def.needsPeriod) {
+      // Разборы ячеек считались для ПРЕЖНИХ параметров — держать их
+      // дальше значило бы показывать чужие числа под новой таблицей.
+      dsTipCache = new Map();
+      hideDeliveryTip();
+      const [need, plan, fact] = reportData.total.total;
+      statusLine.textContent =
+        `Потребность: ${need}, план поставки: ${plan}, поставлено: ${fact}`;
+      // Период и шаг подставляем фактически применёнными: на первом
+      // открытии их выбирает сервер (весь срок проекта, шаг по ширине).
+      document.getElementById("ds-from").value = reportData.date_from;
+      document.getElementById("ds-to").value = reportData.date_to;
+      document.getElementById("ds-step").value = reportData.step;
+    } else {
+      statusLine.textContent = reportData.total
+        ? `Всего изделий: ${reportData.total.values.total}`
+        : `Отчётная дата: ${formatDateRu(reportData.report_date)}`;
+    }
     // Поле даты подставляем фактически применённой датой: сервер мог
     // подставить сегодняшнюю, если поле было пустым.
     if (def.needsDate && reportData.report_date) {
@@ -9069,6 +9394,9 @@ function switchReport(key) {
   currentReport = key;
   [...document.querySelectorAll(".report-tab")].forEach(b => b.classList.toggle("active", b.dataset.report === key));
   document.getElementById("report-date-box").style.display = REPORTS[key].needsDate ? "" : "none";
+  document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
+  reportsBackdrop.querySelector(".modal").classList.toggle("report-full", !!REPORTS[key].needsPeriod);
+  if (REPORTS[key].needsPeriod) renderDeliveryGroupChips();
   loadReport();
 }
 
@@ -9098,6 +9426,10 @@ document.getElementById("menu-report-status").addEventListener("click", () => {
 document.getElementById("menu-report-dynamics").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
   switchReport("dynamics");
+});
+document.getElementById("menu-report-delivery").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  switchReport("delivery");
 });
 document.getElementById("reports-close").addEventListener("click", () => reportsBackdrop.classList.remove("open"));
 document.getElementById("report-print").addEventListener("click", () => window.print());

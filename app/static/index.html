@@ -1230,6 +1230,91 @@
   .report-toggle { border: none; background: none; cursor: pointer; width: 16px; padding: 0; margin-right: 4px; color: var(--color-text-muted); }
   .report-toggle.empty { visibility: hidden; }
 
+  /* ---- «График поставки»: шапка с периодом, шагом и порядком группировки ---- */
+  /* Календарь на десятки колонок в 780 px не читается вовсе, поэтому у
+     этого отчёта форма расширяется почти на весь экран. Класс вешается на
+     время показа отчёта (switchReport), а не навсегда: «Статусам» и
+     «Динамике» лишняя ширина ни к чему — их вёрстка рассчитана на 780. */
+  #reports-backdrop .modal.report-full { max-width: 96vw; width: 96vw; }
+  .ds-controls { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 6px 0 8px; }
+  .ds-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  /* Фишка уровня: флажок «участвует» + стрелки переноса. Порядок фишек
+     слева направо и есть порядок вложенности строк отчёта. */
+  .ds-chip {
+    display: inline-flex; align-items: center; gap: 3px; font-size: 12px;
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    padding: 1px 4px 1px 6px; background: var(--color-surface); white-space: nowrap;
+  }
+  .ds-chip.on { border-color: var(--color-primary); background: var(--color-surface-2); }
+  .ds-chip.off { opacity: 0.5; }
+  .ds-chip label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  .ds-chip .ds-move {
+    border: none; background: none; cursor: pointer; padding: 0 1px;
+    color: var(--color-text-muted); font-size: 11px; line-height: 1;
+  }
+  .ds-chip .ds-move:disabled { visibility: hidden; }
+
+  /* Таблица календаря: своя горизонтальная прокрутка (колонок могут быть
+     сотни), закреплены шапка, колонка группировки слева и итог справа —
+     иначе, уехав к декабрю, не поймёшь, чью строку смотришь.
+     border-collapse: separate обязателен: со collapse липкие ячейки в
+     Safari/Chrome теряют собственные границы. */
+  .ds-wrap { overflow: auto; max-width: 100%; }
+  #ds-table { border-collapse: separate; border-spacing: 0; font-size: 11px; }
+  #ds-table th, #ds-table td {
+    border-right: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border);
+    padding: 2px 5px; text-align: center; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  #ds-table thead th {
+    position: sticky; top: 0; z-index: 3; background: var(--color-surface-2);
+    font-weight: 600; border-top: 1px solid var(--color-border);
+  }
+  #ds-table .ds-name {
+    position: sticky; left: 0; z-index: 2; text-align: left;
+    background: var(--color-surface); min-width: 240px; max-width: 420px;
+    border-left: 1px solid var(--color-border);
+  }
+  #ds-table thead .ds-name { z-index: 4; background: var(--color-surface-2); }
+  #ds-table .ds-sum { position: sticky; right: 0; z-index: 2; background: var(--color-surface-2); font-weight: 600; }
+  #ds-table thead .ds-sum { z-index: 4; }
+  #ds-table th.ds-weekend, #ds-table td.ds-weekend { background: var(--color-surface-2); }
+  /* Служебные колонки «Ранее / Позже / Без даты» — тёплой подложкой: это
+     не дни календаря, и путать их с ними нельзя. */
+  #ds-table th.ds-edge, #ds-table td.ds-edge { background: rgba(200, 150, 60, 0.10); }
+  #ds-table tr.lvl-0 > td { font-weight: 700; }
+  #ds-table tr.lvl-0 .ds-name { background: var(--color-surface-2); }
+  #ds-table tr.lvl-1 > td { font-weight: 600; }
+  #ds-table tr.ds-total > td { font-weight: 700; background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
+  #ds-table tr.ds-total .ds-name { background: var(--color-surface-2); }
+  /* Три числа ячейки различаются ЦВЕТОМ, а не только порядком: подряд
+     идущие «4/4/0» иначе читаются как одно число. Потребность — основной
+     цвет (это норматив), план — синий, факт — зелёный. */
+  .ds-need { font-weight: 600; }
+  .ds-plan { color: var(--color-primary); }
+  .ds-f { color: var(--color-success); font-weight: 600; }
+  .ds-sep { color: var(--color-text-muted); margin: 0 1px; }
+  #ds-table td[data-col] { cursor: help; }
+
+  /* Подсказка по ячейке: чего не хватает и откуда переставить. position:
+     fixed — она всплывает поверх модальной формы, а не внутри её скролла,
+     иначе уезжала бы вместе с таблицей. */
+  #ds-tooltip {
+    position: fixed; z-index: 400; pointer-events: none; display: none;
+    max-width: 460px; max-height: 70vh; overflow: hidden;
+    background: rgba(30,32,38,.96); color: #fff;
+    font-size: 11.5px; line-height: 1.5; padding: 8px 11px;
+    border-radius: var(--radius-sm); box-shadow: 0 4px 14px rgba(0,0,0,.35);
+  }
+  #ds-tooltip .dst-head { font-weight: 700; margin-bottom: 4px; }
+  #ds-tooltip .dst-mark { margin-top: 5px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,.16); }
+  #ds-tooltip .dst-mark:first-of-type { border-top: none; padding-top: 0; }
+  #ds-tooltip .dst-name { font-weight: 600; }
+  #ds-tooltip .dst-lack { color: #f2a79c; }
+  #ds-tooltip .dst-src { color: #cfd2d8; padding-left: 10px; }
+  #ds-tooltip .dst-src.urgent { color: #f0c674; }
+  #ds-tooltip .dst-more { color: #9aa0aa; font-style: italic; }
+
   /* Печать: на бумагу уходит только таблица отчёта. Без этого печатались бы
      схема, сайдбар и затемнение модального окна. */
   @media print {
@@ -1240,6 +1325,12 @@
     .report-head, .modal-sticky-foot, #report-use-filter, label.toggle { display: none !important; }
     .modal-sticky-scroll { overflow: visible !important; max-height: none !important; }
     #report-table th { position: static; }
+    /* «График поставки»: на бумаге липкие ячейки и своя прокрутка только
+       мешают — таблица печатается целиком, шапка формы не печатается
+       (её содержание повторено строкой подписи над таблицей). */
+    .ds-controls { display: none !important; }
+    .ds-wrap { overflow: visible !important; }
+    #ds-table thead th, #ds-table .ds-name, #ds-table .ds-sum { position: static; }
   }
 
   #backups-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -1602,6 +1693,7 @@
           <div class="dropdown-menu submenu-panel">
             <button id="menu-report-status">Статусы</button>
             <button id="menu-report-dynamics">Динамика монтажа и поставки</button>
+            <button id="menu-report-delivery">График поставки</button>
           </div>
         </div>
         <!-- «Администрирование» (2026-08-02, живой запрос): ведение самого
@@ -2516,6 +2608,7 @@
         <div class="report-tabs" id="report-tabs" role="group" aria-label="Вид отчёта">
           <button type="button" class="report-tab active" data-report="status">Статусы</button>
           <button type="button" class="report-tab" data-report="dynamics">Динамика</button>
+          <button type="button" class="report-tab" data-report="delivery">График поставки</button>
         </div>
         <!-- Отчётная дата нужна только «Динамике» (ежедневный отчёт «на
              дату»); для «Статусов» она бессмысленна и скрывается. -->
@@ -2534,6 +2627,25 @@
         </div>
       </div>
       <h2 id="report-title">Отчёт</h2>
+      <!-- Период, шаг оси и порядок группировки — только у «Графика
+           поставки». Порядок уровней задаёт пользователь (фишки ниже):
+           одному нужен разрез по поставщикам, другому — по захваткам и
+           этажам, и фиксированной иерархии тут быть не может. -->
+      <div class="ds-controls" id="report-delivery-box" style="display:none">
+        <label class="field">Период с <input type="date" id="ds-from" style="width:auto"/></label>
+        <label class="field">по <input type="date" id="ds-to" style="width:auto"/></label>
+        <label class="field">Шаг
+          <select id="ds-step" style="width:auto">
+            <option value="day">День</option>
+            <option value="week">Неделя</option>
+            <option value="month">Месяц</option>
+          </select>
+        </label>
+        <div class="ds-chips">
+          <span class="hint-text">Группировка:</span>
+          <span id="ds-groups"></span>
+        </div>
+      </div>
       <label class="toggle"><input type="checkbox" id="report-use-filter"/> Учитывать текущий фильтр схемы</label>
       <div class="hint-text" id="report-status-line"></div>
     </div>
@@ -2543,6 +2655,9 @@
     </div>
   </div>
 </div>
+<!-- Подсказка по ячейке «Графика поставки». Вне формы: position:fixed
+     внутри прокручиваемого блока прижимался бы к его границам. -->
+<div id="ds-tooltip"></div>
 
 <!-- Редакции текстовых блоков отчёта. Слева — список дат, справа — сама
      редакция. Отчёт на дату берёт последнюю редакцию с датой не позже

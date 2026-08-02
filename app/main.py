@@ -87,6 +87,10 @@ from app.reports import (
     build_dynamics_report, build_dynamics_report_pdf, build_dynamics_report_xlsx,
     build_status_report, build_status_report_pdf, build_status_report_xlsx,
 )
+from app.report_delivery import (
+    build_delivery_cell_detail, build_delivery_schedule_pdf, build_delivery_schedule_report,
+    build_delivery_schedule_xlsx,
+)
 from app.models import (
     ProjectIn,
     ProjectOut,
@@ -890,6 +894,13 @@ class ReportRequestIn(BaseModel):
     # же приём, что у XLS-экспорта: критерии фильтра живут на клиенте, и
     # дублировать их на сервере значило бы держать две расходящиеся копии.
     element_ids: Optional[list[int]] = None
+    # Только для «Графика поставки»: период календаря, шаг оси и ПОРЯДОК
+    # уровней группировки (его задаёт пользователь, см. app/report_delivery.py).
+    # Пусто = сервер подставит свои значения и вернёт применённые.
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    step: Optional[str] = None
+    group_by: Optional[list[str]] = None
 
 
 def _report_object_id(conn, body: "ReportRequestIn"):
@@ -984,6 +995,77 @@ def report_status_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_cur
         content=content, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=\"report.pdf\"; filename*=UTF-8''{quote(name)}"},
     )
+
+
+def _delivery_schedule(conn, body: "ReportRequestIn") -> dict:
+    """Общая точка для экрана, XLSX и PDF «Графика поставки». ValueError
+    (слишком много календарных колонок) — это ошибка ЗАПРОСА, а не сбой:
+    отдаём 400 с текстом, который уже объясняет, что сделать."""
+    try:
+        return build_delivery_schedule_report(
+            conn, body.source_file, body.element_ids,
+            body.date_from, body.date_to, body.step, body.group_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/reports/delivery-schedule")
+def report_delivery_schedule(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «График поставки» — календарь потребности в поставке по дате
+    начала СМР против фактической поставки."""
+    conn = get_connection()
+    try:
+        return _delivery_schedule(conn, body)
+    finally:
+        conn.close()
+
+
+class DeliveryCellIn(ReportRequestIn):
+    """Адрес ячейки «Графика поставки» для подсказки при наведении.
+    path — СЫРЫЕ значения уровней группировки (`gkey` узлов отчёта), по
+    одному на каждый уровень group_by; column — ключ колонки календаря."""
+    path: list = []
+    column: Optional[str] = None
+
+
+@app.post("/reports/delivery-schedule/cell")
+def report_delivery_schedule_cell(body: DeliveryCellIn,
+                                  user: sqlite3.Row = Depends(get_current_user)):
+    """Разбор одной ячейки по маркам: чего не хватает и откуда это можно
+    переставить. Отдельным запросом при наведении, а не в теле отчёта — на
+    реальном файле это тысячи троек «строка × колонка × марка»."""
+    conn = get_connection()
+    try:
+        return build_delivery_cell_detail(
+            conn, body.source_file, body.element_ids, body.date_from, body.date_to,
+            body.step, body.group_by, body.path, body.column)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+
+@app.post("/reports/delivery-schedule.xlsx")
+def report_delivery_schedule_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _delivery_schedule(conn, body)
+    finally:
+        conn.close()
+    return _report_file_response(
+        build_delivery_schedule_xlsx(report), "График поставки.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.post("/reports/delivery-schedule.pdf")
+def report_delivery_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _delivery_schedule(conn, body)
+    finally:
+        conn.close()
+    return _report_file_response(build_delivery_schedule_pdf(report),
+                                 "График поставки.pdf", "application/pdf")
 
 
 class BackupCreateIn(BaseModel):

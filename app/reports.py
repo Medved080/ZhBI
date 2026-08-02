@@ -32,6 +32,14 @@ NO_ZAKHVATKA = "Захватка не определена"
 NO_FLOOR = "Этаж не определён"
 
 
+def natural_key(text: str):
+    """«По-человечески»: Захватка 2 раньше Захватки 10. Общая для всех
+    отчётов (используется и «Графиком поставки», app/report_delivery.py) —
+    вторая копия однажды разошлась бы с этой."""
+    import re
+    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", text)]
+
+
 def _floor_label(floor: Optional[int]) -> str:
     return f"{floor} этаж" if floor is not None else NO_FLOOR
 
@@ -102,11 +110,8 @@ def build_status_report(conn, source_file: Optional[str], element_ids: Optional[
         return values | {"remainder": values["total"] - used}
 
     # Сортировка: захватки и этажи — «по-человечески» (Захватка 2 раньше
-    # Захватки 10), изделия — по алфавиту, как в исходной сводной.
-    def natural_key(text: str):
-        import re
-        return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", text)]
-
+    # Захватки 10, см. natural_key выше), изделия — по алфавиту, как в
+    # исходной сводной.
     out_rows = []
     for zak in sorted(tree, key=natural_key):
         znode = tree[zak]
