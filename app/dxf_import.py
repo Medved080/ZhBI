@@ -250,8 +250,10 @@ def apply_drawing(
             )
             # Цвета кранов раньше назначались внутри upsert_zones — вызываем
             # ту же функцию явно, чтобы новая цветовая схема не пропала вместе
-            # с заменой записи зон (ключ у цветов свой: source_file+имя крана).
-            import_elements._ensure_zone_colors(conn, parsed.zones, parsed.source_file)
+            # с заменой записи зон (ключ у цветов свой: объект + имя крана,
+            # с этапа D — раньше был файл, и настроенный цвет терялся на
+            # каждой новой версии чертежа).
+            import_elements._ensure_zone_colors(conn, parsed.zones, object_id)
             import_elements.apply_zone_bindings(
                 conn, parsed.source_file, parsed.new_records, zone_handle_to_id
             )

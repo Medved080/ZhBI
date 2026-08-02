@@ -431,7 +431,9 @@ def _seed_user_access(conn: sqlite3.Connection, changes: list) -> None:
     перезапуске, то есть отобрать права было бы нельзя.
     """
     marker = conn.execute(
-        "SELECT value FROM app_settings WHERE key = ?", (ACCESS_SEED_MARKER,)
+        # object_id IS NULL — маркер системный; без этого условия он мог бы
+        # прочитаться из объектной строки с тем же ключом.
+        "SELECT value FROM app_settings WHERE key = ? AND object_id IS NULL", (ACCESS_SEED_MARKER,)
     ).fetchone()
     if marker and marker["value"]:
         return
@@ -567,8 +569,6 @@ def _migrate_object_scoped_tables(conn: sqlite3.Connection, changes: list) -> No
             "FROM report_notes", (default_object,))
         conn.execute("DROP TABLE report_notes")
         conn.execute("ALTER TABLE report_notes_new RENAME TO report_notes")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_report_notes_date "
-                     "ON report_notes (object_id, effective_date)")
 
     if "default_contracts" in todo:
         conn.execute("""
@@ -603,8 +603,6 @@ def _migrate_object_scoped_tables(conn: sqlite3.Connection, changes: list) -> No
             (*OBJECT_SCOPED_SETTINGS, default_object))
         conn.execute("DROP TABLE app_settings")
         conn.execute("ALTER TABLE app_settings_new RENAME TO app_settings")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_settings_key "
-                     "ON app_settings (key, COALESCE(object_id, -1))")
 
     conn.commit()
     # ОБЯЗАТЕЛЬНО вернуть проверку ключей: дальше по init_db идёт чистка
@@ -614,6 +612,34 @@ def _migrate_object_scoped_tables(conn: sqlite3.Connection, changes: list) -> No
     # поймано PRAGMA foreign_key_check, а не глазами.
     conn.execute("PRAGMA foreign_keys = ON")
     changes.append("справочники и настройки перенесены внутрь объекта: " + ", ".join(todo))
+
+
+def _ensure_object_scoped_indexes(conn: sqlite3.Connection) -> None:
+    """Индексы объектных таблиц — ЗДЕСЬ, а не в schema.sql.
+
+    schema.sql выполняется ПЕРВЫМ, до всех миграций. На базе, где перенос
+    ещё не отработал, `CREATE INDEX ... (object_id, ...)` падает на
+    несуществующей колонке и роняет старт целиком — этот класс ошибки уже
+    один раз оставлял сервер лежать (см. Docs/backlog.md, «Контрактация
+    2.0»). Поэтому индексы создаются после переноса и только тогда, когда
+    колонка действительно есть: на свежей установке её создаёт schema.sql,
+    на накопленной — миграция выше.
+
+    idx_app_settings_key — не просто ускорение, а уникальность ключа:
+    обычный UNIQUE в SQLite не считает NULL = NULL, и системный ключ
+    (object_id IS NULL) можно было бы завести дважды. На него же ссылается
+    ON CONFLICT в set_setting.
+    """
+    def has_object_id(table):
+        return "object_id" in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+    if has_object_id("app_settings"):
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_settings_key "
+                     "ON app_settings (key, COALESCE(object_id, -1))")
+    if has_object_id("report_notes"):
+        conn.execute("DROP INDEX IF EXISTS idx_report_notes_date")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_report_notes_date "
+                     "ON report_notes (object_id, effective_date)")
 
 
 def _reconcile_contract_from_history(conn: sqlite3.Connection, changes: list) -> None:
@@ -839,7 +865,7 @@ def _purge_legacy_elements(conn: sqlite3.Connection, changes: list) -> None:
     # Прямым SQL, а не через app.settings.get_setting: app/settings.py сам
     # импортирует app.db — импорт отсюда был бы циклическим.
     marker = conn.execute(
-        "SELECT value FROM app_settings WHERE key = ?", (LEGACY_PURGE_MARKER,)
+        "SELECT value FROM app_settings WHERE key = ? AND object_id IS NULL", (LEGACY_PURGE_MARKER,)
     ).fetchone()
     if marker and marker["value"]:
         return
@@ -1349,15 +1375,21 @@ def _normalize_element_type_vocabulary(conn: sqlite3.Connection, changes: list) 
         if affected:
             changes.append(f"тип элемента «{old}» переименован в «{new}»: элементов {affected}")
 
-        if conn.execute("SELECT 1 FROM label_visibility WHERE element_type = ?", (new,)).fetchone():
-            conn.execute("DELETE FROM label_visibility WHERE element_type = ?", (old,))
-        else:
-            conn.execute("UPDATE label_visibility SET element_type = ? WHERE element_type = ?", (new, old))
-
-        if conn.execute("SELECT 1 FROM default_contracts WHERE element_type = ?", (new,)).fetchone():
-            conn.execute("DELETE FROM default_contracts WHERE element_type = ?", (old,))
-        else:
-            conn.execute("UPDATE default_contracts SET element_type = ? WHERE element_type = ?", (new, old))
+        # С этапа D обе таблицы объектные, и столкновение «русская строка
+        # уже есть» решается ОТДЕЛЬНО ПО КАЖДОМУ ОБЪЕКТУ: проверка «есть ли
+        # где-нибудь строка с новым именем» здесь была бы неверной в обе
+        # стороны — либо удалила бы английскую строку объекта, где русской
+        # нет (настройка пропала), либо попыталась переименовать её там,
+        # где русская уже есть (нарушение уникального ключа).
+        for table in ("label_visibility", "default_contracts"):
+            conn.execute(
+                f"DELETE FROM {table} WHERE element_type = ? AND object_id IN "
+                f"(SELECT object_id FROM {table} WHERE element_type = ?)",
+                (old, new),
+            )
+            conn.execute(
+                f"UPDATE {table} SET element_type = ? WHERE element_type = ?", (new, old)
+            )
 
         for row in conn.execute("SELECT layer FROM element_shapes WHERE element_type = ?", (old,)).fetchall():
             layer = row["layer"]
@@ -1439,6 +1471,7 @@ def init_db() -> list:
         # наследия и выдача доступов ставят там маркеры, а до переноса у
         # таблицы нет колонки object_id.
         _migrate_object_scoped_tables(conn, changes)
+        _ensure_object_scoped_indexes(conn)
         # Строго ПОСЛЕ бутстрапа объекта: миграция зон опирается на
         # object_drawings, чтобы понять, какой чертёж актуален.
         _migrate_zones_to_catalog(conn, changes)

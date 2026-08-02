@@ -307,7 +307,7 @@ def apply_import(
     assign_missing_element_uids(conn, object_id)
     _register_drawing(conn, object_id, source_file)
 
-    ensure_label_visibility(conn, element_types)
+    ensure_label_visibility(conn, element_types, object_id)
     conn.commit()
 
     return {

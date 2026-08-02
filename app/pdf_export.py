@@ -12,6 +12,7 @@
 
 import io
 from pathlib import Path
+from typing import Optional
 
 from reportlab.lib.colors import HexColor, black, grey
 from reportlab.lib.pagesizes import A3, landscape
@@ -81,7 +82,8 @@ def _estimate_marker_radius(points):
     return nearest[len(nearest) // 2] * 0.25
 
 
-def build_schema_pdf(conn, source_file: str, date, generated_by: str) -> bytes:
+def build_schema_pdf(conn, source_file: str, date, generated_by: str,
+                     object_id: Optional[int] = None) -> bytes:
     elements = [dict(r) for r in conn.execute(
         "SELECT * FROM elements WHERE source_file = ? ORDER BY id", (source_file,)
     ).fetchall()]
@@ -101,9 +103,15 @@ def build_schema_pdf(conn, source_file: str, date, generated_by: str) -> bytes:
     colors = {
         r["status"]: r["color"] for r in conn.execute("SELECT status, color FROM status_colors").fetchall()
     }
+    # Видимость подписей — настройка ОБЪЕКТА (этап D). Без объекта берётся
+    # пустой словарь: `.get(type, True)` ниже трактует это как «показывать
+    # все марки» — прежнее поведение файла без настроек.
     label_visibility = {
         r["element_type"]: bool(r["visible"])
-        for r in conn.execute("SELECT element_type, visible FROM label_visibility").fetchall()
+        for r in conn.execute(
+            "SELECT element_type, visible FROM label_visibility WHERE object_id = ?",
+            (object_id,),
+        ).fetchall()
     }
 
     # ---- bbox (авто-fit): элементы + сетка осей с запасом под подписи осей ----

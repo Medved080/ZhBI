@@ -331,10 +331,13 @@ def _cumulative(pairs: list, weeks: list) -> list:
 
 
 def build_dynamics_report(conn, source_file: Optional[str], report_date: Optional[str] = None,
-                          element_ids: Optional[list] = None) -> dict:
+                          element_ids: Optional[list] = None,
+                          object_id: Optional[int] = None) -> dict:
     from datetime import date
 
-    from app.settings import NOTE_FIELDS, get_notes_for_date, get_project_card
+    from app.settings import (
+        NOTE_FIELDS, PROJECT_CARD_DEFAULT, get_notes_for_date, get_project_card,
+    )
 
     today = report_date or date.today().isoformat()
 
@@ -382,11 +385,17 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
         "fact_delivery": [(_week_start(r["d"]), r["n"]) for r in fact_delivery if r["d"]],
     }
 
-    card = get_project_card(conn)
+    # Карточка и текстовые блоки принадлежат ОБЪЕКТУ (этап D). Без объекта
+    # (отчёт по всей системе, source_file не задан и не сопоставлен ни с
+    # одним чертежом) берутся пустые: показать здесь карточку «какого-
+    # нибудь» объекта хуже, чем не показать никакой — числа в отчёте были
+    # бы по одной стройке, а вехи и контрольные даты по другой.
+    card = get_project_card(conn, object_id) if object_id else dict(PROJECT_CARD_DEFAULT)
     # Текстовые блоки — НЕ из карточки, а из редакции, действующей на
     # отчётную дату (живой запрос 2026-07-29). Отчёт за прошлую дату должен
     # показывать то, что было актуально тогда, а не сегодняшний текст.
-    notes = get_notes_for_date(conn, today)
+    notes = (get_notes_for_date(conn, object_id, today) if object_id
+             else {f: [] for f in NOTE_FIELDS} | {"effective_date": None})
     card = dict(card) | {f: notes[f] for f in NOTE_FIELDS}
     card["notes_effective_date"] = notes["effective_date"]
     weeks = sorted({w for pairs in series_raw.values() for w, _ in pairs} | {_week_start(today)})

@@ -1,26 +1,27 @@
 """
-Общие настройки приложения (ключ-значение, таблица app_settings) — сейчас
-единственная настройка — порог "красной" инфо-плашки в днях (см.
-Docs/backlog.md, "Контрактация 2.0"). Серверная, не персональная —
+Общие настройки приложения (ключ-значение, таблица app_settings) —
+порог "красной" подсветки опоздания в днях и карточка объекта (см.
+Docs/backlog.md, "Контрактация 2.0"). Серверные, не персональные —
 значение одно на всех менеджеров, в отличие от клиентских Вид-переключателей
-(state.zoneVisibility/labelVisibility/infoPlateVisible), которые остаются
-только в браузере.
+(state.zoneVisibility/labelVisibility), которые остаются только в браузере.
+
+С этапа D (2026-08-02) настройка принадлежит ОБЪЕКТУ: у каждой стройки свой
+порог опоздания, своя карточка и свои текстовые блоки отчёта. object_id —
+ОБЯЗАТЕЛЬНЫЙ позиционный аргумент get_setting/set_setting, а не аргумент со
+значением по умолчанию: забытый объект тогда молча читал бы чужую строку
+или заводил вторую запись того же ключа. Системные ключи (маркеры
+одноразовых миграций, object_id IS NULL) сюда не ходят — их пишет прямым
+SQL сама app/db.py.
 """
 
 import json
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-# До этапа D эти настройки хранятся ОДНОЙ записью на всю систему
-# (app_settings, report_notes), поэтому правит их администратор
-# СЕРВИСА. Отдать их «админу объекта» сейчас значило бы дать ему
-# менять настройки всех объектов сразу — это не разграничение, а
-# новая дыра. Переедут внутрь объекта вместе с таблицами.
-from app.access import require_system_admin
-from app.auth import get_current_user, require_admin
+from app.access import require_object_access, require_object_admin
 from app.db import get_connection
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -28,16 +29,21 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 INFO_PLATE_THRESHOLD_KEY = "info_plate_late_threshold_days"
 
 
-def get_setting(conn, key: str, default: str = None):
-    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+def get_setting(conn, key: str, object_id: int, default: str = None):
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ? AND object_id IS ?", (key, object_id)
+    ).fetchone()
     return row["value"] if row else default
 
 
-def set_setting(conn, key: str, value: str) -> None:
+def set_setting(conn, key: str, object_id: int, value: str) -> None:
+    # ON CONFLICT указывается тем же выражением, что и уникальный индекс
+    # (COALESCE): key перестал быть первичным ключом на этапе D, и вставка
+    # с ON CONFLICT(key) падает — уже ловили это прогоном миграции.
     conn.execute(
-        "INSERT INTO app_settings (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
+        "INSERT INTO app_settings (key, object_id, value) VALUES (?, ?, ?) "
+        "ON CONFLICT(key, COALESCE(object_id, -1)) DO UPDATE SET value = excluded.value",
+        (key, object_id, value),
     )
 
 
@@ -46,9 +52,9 @@ def set_setting(conn, key: str, value: str) -> None:
 # Всё, чего нет и не может быть в данных чертежа: описание объекта,
 # контрольные даты и три списка, которые ведёт ответственный руками
 # (ключевые события, задачи, открытые вопросы). Хранится одним JSON в
-# app_settings, а не отдельными таблицами: это единственная запись на всю
-# систему, у неё нет ни связей, ни истории, ни поиска — таблица со строго
-# одной строкой была бы церемонией без пользы.
+# app_settings, а не отдельными таблицами: это единственная запись НА
+# ОБЪЕКТ, у неё нет ни связей, ни истории, ни поиска — таблица со строго
+# одной строкой на объект была бы церемонией без пользы.
 PROJECT_CARD_KEY = "project_card"
 
 PROJECT_CARD_DEFAULT = {
@@ -62,8 +68,8 @@ PROJECT_CARD_DEFAULT = {
 }
 
 
-def get_project_card(conn) -> dict:
-    raw = get_setting(conn, PROJECT_CARD_KEY)
+def get_project_card(conn, object_id: int) -> dict:
+    raw = get_setting(conn, PROJECT_CARD_KEY, object_id)
     if not raw:
         return dict(PROJECT_CARD_DEFAULT)
     try:
@@ -89,21 +95,24 @@ class ProjectCardIn(BaseModel):
 
 
 @router.get("/project-card")
-def read_project_card(user: sqlite3.Row = Depends(get_current_user)):
+def read_project_card(object_id: int = Query(...),
+                      user: sqlite3.Row = Depends(require_object_access)):
     conn = get_connection()
     try:
-        return get_project_card(conn)
+        return get_project_card(conn, object_id)
     finally:
         conn.close()
 
 
 @router.put("/project-card")
-def write_project_card(body: ProjectCardIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def write_project_card(body: ProjectCardIn, object_id: int = Query(...),
+                       admin: sqlite3.Row = Depends(require_object_admin)):
     conn = get_connection()
     try:
-        set_setting(conn, PROJECT_CARD_KEY, json.dumps(body.model_dump(), ensure_ascii=False))
+        set_setting(conn, PROJECT_CARD_KEY, object_id,
+                    json.dumps(body.model_dump(), ensure_ascii=False))
         conn.commit()
-        return get_project_card(conn)
+        return get_project_card(conn, object_id)
     finally:
         conn.close()
 
@@ -117,22 +126,24 @@ class InfoPlateSettingsIn(BaseModel):
 
 
 @router.get("/info-plate", response_model=InfoPlateSettingsOut)
-def get_info_plate_settings(user: sqlite3.Row = Depends(get_current_user)):
+def get_info_plate_settings(object_id: int = Query(...),
+                            user: sqlite3.Row = Depends(require_object_access)):
     conn = get_connection()
     try:
-        value = get_setting(conn, INFO_PLATE_THRESHOLD_KEY, "0")
+        value = get_setting(conn, INFO_PLATE_THRESHOLD_KEY, object_id, "0")
         return {"late_threshold_days": int(value)}
     finally:
         conn.close()
 
 
 @router.put("/info-plate", response_model=InfoPlateSettingsOut)
-def set_info_plate_settings(body: InfoPlateSettingsIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def set_info_plate_settings(body: InfoPlateSettingsIn, object_id: int = Query(...),
+                            admin: sqlite3.Row = Depends(require_object_admin)):
     if body.late_threshold_days < 0:
         raise HTTPException(status_code=400, detail="Порог не может быть отрицательным")
     conn = get_connection()
     try:
-        set_setting(conn, INFO_PLATE_THRESHOLD_KEY, str(body.late_threshold_days))
+        set_setting(conn, INFO_PLATE_THRESHOLD_KEY, object_id, str(body.late_threshold_days))
         conn.commit()
         return {"late_threshold_days": body.late_threshold_days}
     finally:
@@ -160,23 +171,25 @@ def _row_to_notes(row) -> dict:
     return out
 
 
-def get_notes_for_date(conn, on_date: str) -> dict:
+def get_notes_for_date(conn, object_id: int, on_date: str) -> dict:
     """Редакция, действующая НА дату: самая поздняя с effective_date <= date.
     Не «за этот день», а «последняя действовавшая» — блоки обновляют не
     каждый день, и отчёт за среду должен показывать текст, введённый в
     понедельник."""
     row = conn.execute(
-        "SELECT * FROM report_notes WHERE effective_date <= ? ORDER BY effective_date DESC LIMIT 1",
-        (on_date[:10],),
+        "SELECT * FROM report_notes WHERE object_id = ? AND effective_date <= ? "
+        "ORDER BY effective_date DESC LIMIT 1",
+        (object_id, on_date[:10]),
     ).fetchone()
     if row is None:
         return {f: [] for f in NOTE_FIELDS} | {"effective_date": None, "updated_at": None, "updated_by": None}
     return _row_to_notes(row)
 
 
-def list_notes(conn) -> list:
+def list_notes(conn, object_id: int) -> list:
     return [_row_to_notes(r) for r in conn.execute(
-        "SELECT * FROM report_notes ORDER BY effective_date DESC").fetchall()]
+        "SELECT * FROM report_notes WHERE object_id = ? ORDER BY effective_date DESC",
+        (object_id,)).fetchall()]
 
 
 class ReportNotesIn(BaseModel):
@@ -187,45 +200,49 @@ class ReportNotesIn(BaseModel):
 
 
 @router.get("/report-notes")
-def read_report_notes(on_date: Optional[str] = None, user: sqlite3.Row = Depends(get_current_user)):
+def read_report_notes(object_id: int = Query(...), on_date: Optional[str] = None,
+                      user: sqlite3.Row = Depends(require_object_access)):
     """Без on_date — весь список редакций (для формы ведения). С on_date —
     одна редакция, действующая на эту дату (для отчёта)."""
     conn = get_connection()
     try:
         if on_date:
-            return get_notes_for_date(conn, on_date)
-        return {"revisions": list_notes(conn)}
+            return get_notes_for_date(conn, object_id, on_date)
+        return {"revisions": list_notes(conn, object_id)}
     finally:
         conn.close()
 
 
 @router.put("/report-notes")
-def write_report_notes(body: ReportNotesIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def write_report_notes(body: ReportNotesIn, object_id: int = Query(...),
+                       admin: sqlite3.Row = Depends(require_object_admin)):
     conn = get_connection()
     try:
         conn.execute(
-            "INSERT INTO report_notes (effective_date, key_events, key_tasks, open_questions, updated_by) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(effective_date) DO UPDATE SET key_events=excluded.key_events, "
+            "INSERT INTO report_notes (object_id, effective_date, key_events, key_tasks, "
+            "open_questions, updated_by) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(object_id, effective_date) DO UPDATE SET key_events=excluded.key_events, "
             "key_tasks=excluded.key_tasks, open_questions=excluded.open_questions, "
             "updated_at=datetime('now'), updated_by=excluded.updated_by",
-            (body.effective_date[:10],
+            (object_id, body.effective_date[:10],
              json.dumps(body.key_events, ensure_ascii=False),
              json.dumps(body.key_tasks, ensure_ascii=False),
              json.dumps(body.open_questions, ensure_ascii=False),
              f"{admin['last_name']} {admin['first_name']}".strip() or admin["domain_login"]),
         )
         conn.commit()
-        return {"revisions": list_notes(conn)}
+        return {"revisions": list_notes(conn, object_id)}
     finally:
         conn.close()
 
 
 @router.delete("/report-notes/{effective_date}", status_code=204)
-def delete_report_notes(effective_date: str, admin: sqlite3.Row = Depends(require_system_admin)):
+def delete_report_notes(effective_date: str, object_id: int = Query(...),
+                        admin: sqlite3.Row = Depends(require_object_admin)):
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM report_notes WHERE effective_date = ?", (effective_date[:10],))
+        conn.execute("DELETE FROM report_notes WHERE object_id = ? AND effective_date = ?",
+                     (object_id, effective_date[:10]))
         conn.commit()
     finally:
         conn.close()

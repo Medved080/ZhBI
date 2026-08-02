@@ -108,10 +108,16 @@ INSERT OR IGNORE INTO status_colors (status, color) VALUES
 -- элемента), независимо от visible (видимость самой марки). По умолчанию
 -- включён — сохраняет прежнее поведение (допстрока показывалась всегда,
 -- без возможности отключить по типу).
+-- object_id в ключе с этапа D (2026-08-02): подписи настраиваются на
+-- КАЖДОМ объекте свои — типы элементов на соседних стройках разные, и
+-- одна общая запись означала бы, что включённые «Колонны» на одном
+-- здании включают их и на всех остальных.
 CREATE TABLE IF NOT EXISTS label_visibility (
-    element_type TEXT PRIMARY KEY,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    element_type TEXT NOT NULL,
     visible INTEGER NOT NULL DEFAULT 1,
-    dates_visible INTEGER NOT NULL DEFAULT 1
+    dates_visible INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (object_id, element_type)
 );
 
 -- Контрагенты/Договоры/Спецификации (см. Docs/backlog.md, "Контрактация 2.0") —
@@ -165,10 +171,21 @@ CREATE TABLE IF NOT EXISTS mark_type_prefixes (
 
 -- Общие настройки приложения (ключ-значение) — напр. порог "красной"
 -- инфо-плашки в днях (см. Docs/backlog.md, "Контрактация 2.0").
+-- object_id с этапа D (2026-08-02) — NULLABLE, в отличие от остальных
+-- четырёх объектных таблиц: маркеры одноразовых миграций
+-- (legacy_elements_purged, user_access_seeded) системные, объекта у них нет
+-- и быть не может. Уникальность — индексом через COALESCE: обычный UNIQUE
+-- в SQLite не считает NULL = NULL, и системный ключ можно было бы завести
+-- дважды.
 CREATE TABLE IF NOT EXISTS app_settings (
-    key TEXT PRIMARY KEY,
+    key TEXT NOT NULL,
+    object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
     value TEXT
 );
+-- Уникальный индекс НЕ здесь, а в app/db._ensure_object_scoped_indexes:
+-- этот файл выполняется ДО миграций, и на ещё не перенесённой базе
+-- CREATE INDEX по несуществующей колонке object_id уронил бы старт —
+-- ровно так уже ломался сервер (см. Docs/backlog.md, "Контрактация 2.0").
 
 -- Контракты (см. Docs/backlog.md, второй раунд п.9, третий раунд п.8,
 -- "Контрактация 2.0"). Контракт привязан к одной Спецификации (а через неё —
@@ -228,9 +245,13 @@ CREATE TABLE IF NOT EXISTS contract_incidents (
 -- Контракт по умолчанию для каждого типа элемента — подставляется
 -- элементу автоматически при первом переводе из "Запланирован" в любой
 -- другой статус, если у элемента ещё нет своего контракта.
+-- object_id в ключе с этапа D (2026-08-02): контракт по умолчанию — это
+-- «чем обычно возят на ЭТУ стройку», у соседнего объекта поставщик свой.
 CREATE TABLE IF NOT EXISTS default_contracts (
-    element_type TEXT PRIMARY KEY,
-    contract_id INTEGER REFERENCES contracts (id) ON DELETE SET NULL
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    element_type TEXT NOT NULL,
+    contract_id INTEGER REFERENCES contracts (id) ON DELETE SET NULL,
+    PRIMARY KEY (object_id, element_type)
 );
 
 -- Форма маркера на схеме по комбинации (слой, тип элемента) — см.
@@ -392,18 +413,20 @@ CREATE INDEX IF NOT EXISTS idx_zone_edit_undo_zone ON zone_edit_undo (zone_id, u
 -- Цвет зоны — персонально на каждый КРАН (не общий на категорию, как
 -- раньше — см. Docs/backlog.md, item 7), его стоянки наследуют цвет
 -- родительского крана (zones.parent_zone_id) без отдельной записи здесь.
--- Ключ — (source_file, category, name), а НЕ zones.id: id не стабилен
--- между переимпортами файла (upsert_zones делает DELETE+INSERT заново
--- при каждой обработке), имя зоны — единственное, что переживает
--- переимпорт. Автоназначается из фиксированной палитры при первой
--- встрече крана (см. scripts/import_elements.upsert_zones), правится
--- вручную в «Настройки → Цвета зон».
+-- Ключ — (object_id, category, name), а НЕ zones.id: id не стабилен между
+-- переимпортами чертежа, имя зоны — единственное, что переимпорт
+-- переживает. До этапа D (2026-08-02) в ключе стоял source_file, и цвет
+-- крана терялся при выдаче НОВОЙ ВЕРСИИ чертежа того же объекта: файл
+-- другой — значит и запись другая. Объект переживает смену версии, файл
+-- нет. Автоназначается из фиксированной палитры при первой встрече крана
+-- (см. scripts/import_elements._ensure_zone_colors), правится вручную в
+-- «Действия → Цвета зон».
 CREATE TABLE IF NOT EXISTS zone_colors (
-    source_file TEXT NOT NULL,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
     category TEXT NOT NULL,
     name TEXT NOT NULL,
     color TEXT NOT NULL,
-    PRIMARY KEY (source_file, category, name)
+    PRIMARY KEY (object_id, category, name)
 );
 
 -- Справочник допустимых подтипов элементов ЖБИ по новому стандарту имён
@@ -490,8 +513,8 @@ CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log (entity_type, ent
 --
 -- Отдельная таблица, а не поля в карточке объекта: это список с историей,
 -- он растёт, выбирается по дате и правится построчно. Карточка (название
--- объекта, контрольные даты, вехи) осталась одной записью в app_settings —
--- она меняется редко и версии ей не нужны.
+-- объекта, контрольные даты, вехи) осталась одной записью в app_settings
+-- на объект — она меняется редко и версии ей не нужны.
 --
 -- Одна редакция на дату (UNIQUE): повторное сохранение той же даты
 -- заменяет её, а не плодит дубли. Отчёт на дату D берёт САМУЮ ПОЗДНЮЮ
@@ -499,12 +522,14 @@ CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log (entity_type, ent
 -- если в этот день её не обновляли.
 CREATE TABLE IF NOT EXISTS report_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    effective_date TEXT NOT NULL UNIQUE,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    effective_date TEXT NOT NULL,
     key_events TEXT NOT NULL DEFAULT '[]',      -- JSON-массив строк
     key_tasks TEXT NOT NULL DEFAULT '[]',
     open_questions TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_by TEXT
+    updated_by TEXT,
+    UNIQUE (object_id, effective_date)          -- одна редакция на дату У ОБЪЕКТА (этап D)
 );
 
-CREATE INDEX IF NOT EXISTS idx_report_notes_date ON report_notes (effective_date);
+-- Индекс — тоже в app/db._ensure_object_scoped_indexes, по той же причине.

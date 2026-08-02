@@ -329,7 +329,10 @@ class AllowedSubtypeIn(BaseModel):
 
 
 class ZoneColorIn(BaseModel):
-    source_file: str
+    # source_file убран на этапе D (2026-08-02): цвет крана принадлежит
+    # ОБЪЕКТУ, объект приходит одним query-параметром на весь запрос.
+    # Пока файл был в ключе, один и тот же кран красился заново на каждую
+    # новую версию чертежа.
     name: str
     color: str
 

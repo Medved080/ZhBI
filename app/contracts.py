@@ -37,11 +37,16 @@ import json
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app import activity
-from app.access import assert_object_access, require_system_admin
+from app.access import (
+    assert_object_access,
+    require_object_access,
+    require_object_admin,
+    require_system_admin,
+)
 from app.auth import get_current_user, require_admin
 from app.db import get_connection
 
@@ -454,28 +459,39 @@ def list_contract_elements(contract_id: int, user: sqlite3.Row = Depends(get_cur
         conn.close()
 
 
+# Контракт по умолчанию — настройка ОБЪЕКТА (этап D): «чем обычно возят на
+# ЭТУ стройку». Общая запись означала бы, что поставщик, выбранный на одном
+# здании, подставляется и на соседнем.
 @router.get("/default-map")
-def get_default_contracts(user: sqlite3.Row = Depends(get_current_user)):
+def get_default_contracts(object_id: int = Query(...),
+                          user: sqlite3.Row = Depends(require_object_access)):
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT element_type, contract_id FROM default_contracts").fetchall()
+        rows = conn.execute(
+            "SELECT element_type, contract_id FROM default_contracts WHERE object_id = ?",
+            (object_id,),
+        ).fetchall()
         return {r["element_type"]: r["contract_id"] for r in rows}
     finally:
         conn.close()
 
 
 @router.put("/default-map")
-def set_default_contracts(mapping: dict, admin: sqlite3.Row = Depends(require_system_admin)):
+def set_default_contracts(mapping: dict, object_id: int = Query(...),
+                          admin: sqlite3.Row = Depends(require_object_admin)):
     conn = get_connection()
     try:
         for element_type, contract_id in mapping.items():
             conn.execute(
-                "INSERT INTO default_contracts (element_type, contract_id) VALUES (?, ?) "
-                "ON CONFLICT(element_type) DO UPDATE SET contract_id = excluded.contract_id",
-                (element_type, contract_id),
+                "INSERT INTO default_contracts (object_id, element_type, contract_id) VALUES (?, ?, ?) "
+                "ON CONFLICT(object_id, element_type) DO UPDATE SET contract_id = excluded.contract_id",
+                (object_id, element_type, contract_id),
             )
         conn.commit()
-        rows = conn.execute("SELECT element_type, contract_id FROM default_contracts").fetchall()
+        rows = conn.execute(
+            "SELECT element_type, contract_id FROM default_contracts WHERE object_id = ?",
+            (object_id,),
+        ).fetchall()
         return {r["element_type"]: r["contract_id"] for r in rows}
     finally:
         conn.close()

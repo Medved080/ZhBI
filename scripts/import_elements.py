@@ -114,17 +114,20 @@ def read_rows(csv_path):
             yield build_row(record, address)
 
 
-def ensure_label_visibility(conn, element_types):
+def ensure_label_visibility(conn, element_types, object_id):
     """Заводит запись в label_visibility (ВЫКЛЮЧЕНА по умолчанию — заказчик
-    сам включает нужные из "Настройки", см. Docs/backlog.md, быстродействие
+    сам включает нужные из "Действия", см. Docs/backlog.md, быстродействие
     на больших файлах) для каждого нового element_type — типы элементов не
     жёстко зашиты (сейчас "Колонна"/"Ригель", остальные появятся позже),
     поэтому настройка самообслуживается по мере импорта, а не заполняется
-    заранее."""
+    заранее.
+
+    object_id обязателен с этапа D: настройка принадлежит объекту, и типы
+    элементов у соседних строек разные."""
     for element_type in element_types:
         conn.execute(
-            "INSERT OR IGNORE INTO label_visibility (element_type, visible) VALUES (?, 0)",
-            (element_type,),
+            "INSERT OR IGNORE INTO label_visibility (object_id, element_type, visible) VALUES (?, ?, 0)",
+            (object_id, element_type),
         )
 
 
@@ -200,7 +203,11 @@ def upsert_elements(conn, rows, source_file):
             )
             inserted += 1
 
-    ensure_label_visibility(conn, element_types)
+    # Видимость подписей здесь БОЛЬШЕ НЕ ЗАВОДИТСЯ: с этапа D она
+    # принадлежит объекту, а элементы этого унаследованного пути объекта не
+    # имеют (см. docstring выше). Выдумывать им объект значило бы дописать
+    # настройку чужой стройке. Живой путь (app/element_sync.apply_import)
+    # зовёт ensure_label_visibility сам, со своим object_id.
     conn.commit()
     return inserted, updated
 
@@ -239,18 +246,21 @@ ZONE_COLOR_PALETTE = [
 ]
 
 
-def _ensure_zone_colors(conn, zones, source_file):
-    """Автоназначает цвет каждому крану этого файла, у которого его ещё
+def _ensure_zone_colors(conn, zones, object_id):
+    """Автоназначает цвет каждому крану этого ОБЪЕКТА, у которого его ещё
     нет — не трогает уже настроенные админом цвета (`INSERT OR IGNORE`,
-    старый цвет крана при переимпорте того же файла не сбрасывается).
-    Стоянки отдельного цвета не получают — наследуют цвет своего крана на
-    отображении (см. app/main.py plan_data, scripts/zone_parser.
-    _link_stances_to_cranes)."""
+    старый цвет крана при переимпорте не сбрасывается). Стоянки отдельного
+    цвета не получают — наследуют цвет своего крана на отображении (см.
+    app/main.py plan_data, scripts/zone_parser._link_stances_to_cranes).
+
+    Ключ — объект, а не файл (этап D): новая версия чертежа приходит под
+    новым именем, и при ключе по файлу настроенная раскраска пропадала бы
+    вместе с каждой выдачей чертежа."""
     crane_names = sorted({z.name for z in zones if z.category == "Кран" and z.name})
     if not crane_names:
         return
     existing_rows = conn.execute(
-        "SELECT name, color FROM zone_colors WHERE source_file = ? AND category = 'Кран'", (source_file,)
+        "SELECT name, color FROM zone_colors WHERE object_id = ? AND category = 'Кран'", (object_id,)
     ).fetchall()
     existing_names = {r["name"] for r in existing_rows}
     used_colors = {r["color"] for r in existing_rows}
@@ -263,8 +273,8 @@ def _ensure_zone_colors(conn, zones, source_file):
             color = ZONE_COLOR_PALETTE[len(used_colors) % len(ZONE_COLOR_PALETTE)]
         used_colors.add(color)
         conn.execute(
-            "INSERT OR IGNORE INTO zone_colors (source_file, category, name, color) VALUES (?, 'Кран', ?, ?)",
-            (source_file, name, color),
+            "INSERT OR IGNORE INTO zone_colors (object_id, category, name, color) VALUES (?, 'Кран', ?, ?)",
+            (object_id, name, color),
         )
     conn.commit()
 
@@ -279,7 +289,13 @@ def upsert_zones(conn, zones, source_file):
     проходом отдельными UPDATE, после того как все зоны уже вставлены и
     получили db id — иначе пришлось бы гарантировать, что зона крана
     вставляется раньше своих стоянок, а порядок в списке zones это не
-    гарантирует."""
+    гарантирует.
+
+    УНАСЛЕДОВАННЫЙ путь, как и upsert_elements выше: живая загрузка чертежа
+    с этапа 2 идёт через app/zone_sync.sync_zones (зона — запись справочника
+    объекта, а не строка на файл), и цвета кранов ей назначает
+    app/dxf_import.apply_drawing своим вызовом _ensure_zone_colors с
+    object_id. Здесь цвета не заводятся: объекта у этого пути нет."""
     conn.execute("DELETE FROM zones WHERE source_file = ?", (source_file,))
     handle_to_id = {}
     for z in zones:
@@ -301,7 +317,6 @@ def upsert_zones(conn, zones, source_file):
                 (handle_to_id[parent_handle], handle_to_id[z.handle]),
             )
 
-    _ensure_zone_colors(conn, zones, source_file)
     conn.commit()
     return handle_to_id
 

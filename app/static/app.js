@@ -720,6 +720,33 @@ function renderObjectSwitch() {
   }
 }
 
+// Объектные настройки (этап D, 2026-08-02): подписи, цвета зон, контракт по
+// умолчанию, карточка объекта, порог опоздания и текстовые блоки отчёта
+// принадлежат ОБЪЕКТУ, и все их эндпоинты требуют object_id. Одна точка
+// сборки адреса, а не строка в каждом из десятка вызовов: забытый параметр
+// даёт не ошибку, а 422 в тот момент, когда пользователь открыл форму.
+function objectUrl(path, extra) {
+  const params = new URLSearchParams({ object_id: String(state.objectId ?? "") });
+  for (const [k, v] of Object.entries(extra || {})) {
+    if (v !== undefined && v !== null && v !== "") params.set(k, String(v));
+  }
+  return `${path}?${params.toString()}`;
+}
+
+// Порог опоздания — настройка ОБЪЕКТА (этап D), поэтому читается не один
+// раз при старте, а на каждый показанный объект: у соседней стройки он
+// свой. Молчаливый отказ намеренный — без настройки берётся 0, схема
+// работает.
+async function loadLateThreshold() {
+  if (!state.objectId) return;
+  try {
+    const settings = await api(objectUrl("/settings/info-plate"));
+    state.lateThresholdDays = settings.late_threshold_days;
+  } catch (e) {
+    console.warn("Не удалось прочитать порог опоздания:", e.message);
+  }
+}
+
 async function switchObject(objectId) {
   if (objectId === state.objectId) return;
   state.objectId = objectId;
@@ -757,6 +784,7 @@ async function switchObject(objectId) {
     console.warn("Не удалось запомнить выбранный объект:", e.message);
   }
   const текущий = currentObject();
+  await loadLateThreshold();  // порог опоздания — настройка ОБЪЕКТА (этап D)
   try {
     await loadPlan(false);   // false — пересчитать вид: у объекта своя сетка осей
   } catch (e) {
@@ -5338,7 +5366,7 @@ document.getElementById("shapes-save").addEventListener("click", async () => {
 // текста на чертеже (MULTILEADER), не доверенная строка. ----------
 const zoneColorsBackdrop = document.getElementById("zone-colors-backdrop");
 document.getElementById("menu-zone-colors").addEventListener("click", async () => {
-  const items = await api("/zone-colors");
+  const items = await api(objectUrl("/zone-colors"));
   const rows = document.getElementById("zone-colors-rows");
   rows.innerHTML = "";
   if (!items.length) {
@@ -5348,11 +5376,13 @@ document.getElementById("menu-zone-colors").addEventListener("click", async () =
       const row = document.createElement("div");
       row.className = "row";
       const span = document.createElement("span");
-      span.textContent = `${item.name} (${item.source_file})`;
+      // Раньше в подписи стояло имя файла — цвет ключевался чертежом, и
+      // один кран показывался столько раз, сколько версий накопилось. С
+      // этапа D цвет принадлежит объекту, файл в списке не участвует.
+      span.textContent = item.name;
       const input = document.createElement("input");
       input.type = "color";
       input.value = item.color;
-      input.dataset.sourceFile = item.source_file;
       input.dataset.name = item.name;
       row.appendChild(span);
       row.appendChild(input);
@@ -5365,9 +5395,9 @@ document.getElementById("zone-colors-cancel").addEventListener("click", () => zo
 document.getElementById("zone-colors-save").addEventListener("click", async () => {
   const inputs = document.querySelectorAll("#zone-colors-rows input[type=color]");
   const payload = Array.from(inputs).map(inp => ({
-    source_file: inp.dataset.sourceFile, name: inp.dataset.name, color: inp.value,
+    name: inp.dataset.name, color: inp.value,
   }));
-  await api("/zone-colors", {
+  await api(objectUrl("/zone-colors"), {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   });
   zoneColorsBackdrop.classList.remove("open");
@@ -7328,7 +7358,7 @@ const infoPlateSettingsBackdrop = document.getElementById("info-plate-settings-b
 document.getElementById("menu-info-plate-settings").addEventListener("click", async () => {
   document.getElementById("info-plate-settings-error").textContent = "";
   try {
-    const settings = await api("/settings/info-plate");
+    const settings = await api(objectUrl("/settings/info-plate"));
     document.getElementById("ips-threshold").value = settings.late_threshold_days;
     infoPlateSettingsBackdrop.classList.add("open");
   } catch (e) {
@@ -7339,7 +7369,7 @@ document.getElementById("info-plate-settings-cancel").addEventListener("click", 
 document.getElementById("info-plate-settings-save").addEventListener("click", async () => {
   const value = Number(document.getElementById("ips-threshold").value);
   try {
-    const settings = await api("/settings/info-plate", {
+    const settings = await api(objectUrl("/settings/info-plate"), {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ late_threshold_days: value }),
     });
     state.lateThresholdDays = settings.late_threshold_days;
@@ -7498,7 +7528,7 @@ async function renderContractsList() {
 
 async function renderDefaultContracts(contracts) {
   const box = document.getElementById("default-contracts-rows");
-  const defaultMap = await api("/contracts/default-map");
+  const defaultMap = await api(objectUrl("/contracts/default-map"));
   const types = Object.keys(state.labelVisibility);
   box.innerHTML = "";
   if (!types.length) { box.innerHTML = '<div class="hint-text">нет типов элементов</div>'; return; }
@@ -7512,7 +7542,7 @@ async function renderDefaultContracts(contracts) {
     row.innerHTML = `<span>${escapeHtml(type)}</span><select data-type="${escapeHtml(type)}">${options.join("")}</select>`;
     row.querySelector("select").addEventListener("change", async (e) => {
       const value = e.target.value ? Number(e.target.value) : null;
-      await api("/contracts/default-map", {
+      await api(objectUrl("/contracts/default-map"), {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [type]: value }),
       });
@@ -7848,7 +7878,10 @@ document.getElementById("settings-io-import").addEventListener("click", async ()
       statusEl.style.color = "var(--color-danger)";
       return;
     }
-    statusEl.textContent = `Готово: пользователей ${body.users_upserted}, цветов ${body.status_colors}, настроек подписей ${body.label_visibility}, настроек дат ${body.label_dates_visibility}.`;
+    const пропущено = (body.skipped_objects || []).length
+      ? ` Пропущены объекты, которых нет на этом сервере: ${body.skipped_objects.join(", ")}.`
+      : "";
+    statusEl.textContent = `Готово: пользователей ${body.users_upserted}, цветов ${body.status_colors}, настроек подписей ${body.label_visibility}, настроек дат ${body.label_dates_visibility}.${пропущено}`;
     statusEl.style.color = "var(--color-text-muted)";
     await loadPlan();
   } catch (e) {
@@ -7975,7 +8008,7 @@ document.getElementById("menu-project-card").addEventListener("click", async () 
   projectCardBackdrop.classList.add("open");
   document.getElementById("pc-status").textContent = "";
   try {
-    const c = await api("/settings/project-card");
+    const c = await api(objectUrl("/settings/project-card"));
     document.getElementById("pc-title").value = c.title || "";
     document.getElementById("pc-montage-deadline").value = c.montage_deadline || "";
     document.getElementById("pc-delivery-deadline").value = c.delivery_deadline || "";
@@ -8001,7 +8034,7 @@ document.getElementById("pc-save").addEventListener("click", async () => {
     milestones.push({ label, date });
   }
   try {
-    await api("/settings/project-card", {
+    await api(objectUrl("/settings/project-card"), {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: document.getElementById("pc-title").value.trim(),
@@ -8056,7 +8089,7 @@ function rnShow(date) {
 }
 
 async function rnLoad(selectDate) {
-  const data = await api("/settings/report-notes");
+  const data = await api(objectUrl("/settings/report-notes"));
   rnRevisions = data.revisions;
   // По умолчанию открываем самую свежую — с ней и работают чаще всего.
   rnShow(selectDate !== undefined ? selectDate : (rnRevisions[0] ? rnRevisions[0].effective_date : null));
@@ -8089,7 +8122,7 @@ document.getElementById("rn-save").addEventListener("click", async () => {
   const date = document.getElementById("rn-date").value;
   if (!date) { document.getElementById("rn-status").textContent = "Укажите дату, с которой действует редакция"; return; }
   try {
-    const data = await api("/settings/report-notes", {
+    const data = await api(objectUrl("/settings/report-notes"), {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         effective_date: date,
@@ -8111,7 +8144,7 @@ document.getElementById("rn-delete").addEventListener("click", async () => {
   if (!rnSelected) return;
   if (!confirm(`Удалить редакцию от ${formatDateRu(rnSelected)}?`)) return;
   try {
-    await api(`/settings/report-notes/${rnSelected}`, { method: "DELETE" });
+    await api(objectUrl(`/settings/report-notes/${rnSelected}`), { method: "DELETE" });
     await rnLoad();
     if (reportsBackdrop.classList.contains("open") && currentReport === "dynamics") loadReport();
   } catch (e) {
@@ -8163,7 +8196,7 @@ function defaultCollapsedTree(data) {
 }
 
 function reportRequestBody() {
-  const body = { source_file: state.sourceFile || null };
+  const body = { source_file: state.sourceFile || null, object_id: state.objectId };
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
   }
@@ -8510,6 +8543,7 @@ const sideReportWanted = (key) => sideStale[key] && !sectionCollapsed(SIDE_SECTI
 function sideReportBody(withDate) {
   const body = {
     source_file: state.sourceFile || null,
+    object_id: state.objectId,   // карточка объекта и блоки «на дату» — его (этап D)
     element_ids: state.elements.filter(passesPlacementFilters).map(e => e.id),
   };
   if (withDate) body.report_date = document.getElementById("side-dyn-date").value || null;
@@ -11628,20 +11662,17 @@ async function initImportTemplates() {
 async function bootApp() {
   const ok = await checkAuth();
   if (!ok) return;
-  try {
-    const settings = await api("/settings/info-plate");
-    state.lateThresholdDays = settings.late_threshold_days;
-  } catch (e) {
-    // тихо — допстрока/подсказка просто будут использовать порог по
-    // умолчанию (0), пока настройка недоступна (напр. только что
-    // развёрнутый сервер)
-  }
   initImportTemplates();  // без await — формы загрузки открываются не сразу
   // Этап B: сначала дерево проектов/объектов — оно определяет, ЧТО грузить.
   // loadSourceFiles остаётся: список файлов нужен форме «Версии чертежа
   // объекта» и загрузке чертежа, но выбором показа он больше не управляет —
   // выбор делает объект.
   await loadProjectsTree();
+  // Строго ПОСЛЕ дерева: порог опоздания читается по объекту, а какой
+  // объект показан, известно только после loadProjectsTree. Раньше запрос
+  // стоял в самом начале bootApp — с объектным эндпоинтом он там всегда
+  // возвращал бы 422, и порог молча оставался нулевым.
+  await loadLateThreshold();
   await loadSourceFiles();
   await loadPlan(false); // первая загрузка — вписать схему целиком
   startPolling();        // совместная работа: подхватывать чужие правки

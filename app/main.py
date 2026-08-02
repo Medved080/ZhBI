@@ -69,6 +69,8 @@ from app.access import (
     accessible_object_ids,
     assert_object_access,
     is_system_admin,
+    require_object_access,
+    require_object_admin,
     require_system_admin,
 )
 from app.element_sync import summary_for_log
@@ -827,6 +829,11 @@ def delete_history_entry(
 
 class ReportRequestIn(BaseModel):
     source_file: Optional[str] = None
+    # Объект отчёта (этап D) — им выбираются карточка объекта и текстовые
+    # блоки «на дату». Клиент присылает его явно; если не прислал, объект
+    # выводится из чертежа (_report_object_id) — так же, как это делает
+    # показ схемы.
+    object_id: Optional[int] = None
     # Отчётная дата — только для «Динамики» (ежедневный отчёт «на дату»).
     # Пусто = сегодня; сервер возвращает фактически применённую дату.
     report_date: Optional[str] = None
@@ -834,6 +841,15 @@ class ReportRequestIn(BaseModel):
     # же приём, что у XLS-экспорта: критерии фильтра живут на клиенте, и
     # дублировать их на сервере значило бы держать две расходящиеся копии.
     element_ids: Optional[list[int]] = None
+
+
+def _report_object_id(conn, body: "ReportRequestIn"):
+    """Объект отчёта: явно присланный клиентом либо выведенный из чертежа.
+    None — отчёт не относится ни к одному объекту (файл не задан или не
+    привязан); карточка объекта тогда пустая, см. build_dynamics_report."""
+    if body.object_id is not None:
+        return body.object_id
+    return _object_for_source_file(conn, body.source_file) if body.source_file else None
 
 
 @app.post("/reports/status")
@@ -852,7 +868,8 @@ def report_dynamics(body: ReportRequestIn, user: sqlite3.Row = Depends(get_curre
     """Ежедневный отчёт «Динамика монтажа и поставки ТМЦ»."""
     conn = get_connection()
     try:
-        return build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids)
+        return build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
+                                     _report_object_id(conn, body))
     finally:
         conn.close()
 
@@ -868,7 +885,8 @@ def _report_file_response(content: bytes, name: str, media_type: str) -> Respons
 def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids)
+        report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
+                                       _report_object_id(conn, body))
     finally:
         conn.close()
     return _report_file_response(
@@ -880,7 +898,8 @@ def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_
 def report_dynamics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids)
+        report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
+                                       _report_object_id(conn, body))
     finally:
         conn.close()
     return _report_file_response(build_dynamics_report_pdf(report), "Динамика.pdf", "application/pdf")
@@ -1340,28 +1359,40 @@ def set_status_colors(colors: dict[str, str], user: sqlite3.Row = Depends(requir
         conn.close()
 
 
+# Видимость подписей — настройка ОБЪЕКТА (этап D): типы элементов на
+# соседних стройках разные, и общая запись включала бы «Колонны» сразу
+# везде. object_id обязателен, доступ — по объекту (чтение всем, у кого
+# есть доступ; правка — админу объекта, не сервиса).
 @app.get("/label-visibility")
-def get_label_visibility(user: sqlite3.Row = Depends(get_current_user)):
+def get_label_visibility(object_id: int = Query(...),
+                         user: sqlite3.Row = Depends(require_object_access)):
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT element_type, visible FROM label_visibility").fetchall()
+        rows = conn.execute(
+            "SELECT element_type, visible FROM label_visibility WHERE object_id = ?",
+            (object_id,),
+        ).fetchall()
         return {r["element_type"]: bool(r["visible"]) for r in rows}
     finally:
         conn.close()
 
 
 @app.put("/label-visibility")
-def set_label_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(require_system_admin)):
+def set_label_visibility(settings: dict[str, bool], object_id: int = Query(...),
+                         user: sqlite3.Row = Depends(require_object_admin)):
     conn = get_connection()
     try:
         for element_type, visible in settings.items():
             conn.execute(
-                "INSERT INTO label_visibility (element_type, visible) VALUES (?, ?) "
-                "ON CONFLICT(element_type) DO UPDATE SET visible = excluded.visible",
-                (element_type, int(visible)),
+                "INSERT INTO label_visibility (object_id, element_type, visible) VALUES (?, ?, ?) "
+                "ON CONFLICT(object_id, element_type) DO UPDATE SET visible = excluded.visible",
+                (object_id, element_type, int(visible)),
             )
         conn.commit()
-        rows = conn.execute("SELECT element_type, visible FROM label_visibility").fetchall()
+        rows = conn.execute(
+            "SELECT element_type, visible FROM label_visibility WHERE object_id = ?",
+            (object_id,),
+        ).fetchall()
         return {r["element_type"]: bool(r["visible"]) for r in rows}
     finally:
         conn.close()
@@ -1372,27 +1403,35 @@ def set_label_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(
 # ТОЛЬКО допстрокой наклейки (код контрагента + плановая дата поставки),
 # не самой видимостью марки.
 @app.get("/label-dates-visibility")
-def get_label_dates_visibility(user: sqlite3.Row = Depends(get_current_user)):
+def get_label_dates_visibility(object_id: int = Query(...),
+                               user: sqlite3.Row = Depends(require_object_access)):
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT element_type, dates_visible FROM label_visibility").fetchall()
+        rows = conn.execute(
+            "SELECT element_type, dates_visible FROM label_visibility WHERE object_id = ?",
+            (object_id,),
+        ).fetchall()
         return {r["element_type"]: bool(r["dates_visible"]) for r in rows}
     finally:
         conn.close()
 
 
 @app.put("/label-dates-visibility")
-def set_label_dates_visibility(settings: dict[str, bool], user: sqlite3.Row = Depends(require_system_admin)):
+def set_label_dates_visibility(settings: dict[str, bool], object_id: int = Query(...),
+                               user: sqlite3.Row = Depends(require_object_admin)):
     conn = get_connection()
     try:
         for element_type, visible in settings.items():
             conn.execute(
-                "INSERT INTO label_visibility (element_type, dates_visible) VALUES (?, ?) "
-                "ON CONFLICT(element_type) DO UPDATE SET dates_visible = excluded.dates_visible",
-                (element_type, int(visible)),
+                "INSERT INTO label_visibility (object_id, element_type, dates_visible) VALUES (?, ?, ?) "
+                "ON CONFLICT(object_id, element_type) DO UPDATE SET dates_visible = excluded.dates_visible",
+                (object_id, element_type, int(visible)),
             )
         conn.commit()
-        rows = conn.execute("SELECT element_type, dates_visible FROM label_visibility").fetchall()
+        rows = conn.execute(
+            "SELECT element_type, dates_visible FROM label_visibility WHERE object_id = ?",
+            (object_id,),
+        ).fetchall()
         return {r["element_type"]: bool(r["dates_visible"]) for r in rows}
     finally:
         conn.close()
@@ -1444,16 +1483,19 @@ def set_element_shapes(shapes: list[ElementShapeIn], user: sqlite3.Row = Depends
 
 
 @app.get("/zone-colors")
-def list_zone_colors(user: sqlite3.Row = Depends(get_current_user)):
-    """Для экрана настроек «Цвета зон» — цвет каждого крана по всем
-    файлам, где он встречался (см. Docs/backlog.md, item 7). Стоянки
-    отдельного цвета не имеют — наследуют цвет крана на отображении
-    (см. plan_data), в этом списке не показываются."""
+def list_zone_colors(object_id: int = Query(...),
+                     user: sqlite3.Row = Depends(require_object_access)):
+    """Для экрана настроек «Цвета зон» — цвет каждого крана ОБЪЕКТА (см.
+    Docs/backlog.md, item 7). До этапа D ключом был файл, и список
+    показывал один и тот же кран столько раз, сколько версий чертежа
+    накопилось. Стоянки отдельного цвета не имеют — наследуют цвет крана
+    на отображении (см. plan_data), в этом списке не показываются."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT source_file, category, name, color FROM zone_colors "
-            "WHERE category = 'Кран' ORDER BY source_file, name"
+            "SELECT category, name, color FROM zone_colors "
+            "WHERE object_id = ? AND category = 'Кран' ORDER BY name",
+            (object_id,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -1461,19 +1503,15 @@ def list_zone_colors(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.put("/zone-colors")
-def set_zone_colors(items: list[ZoneColorIn], user: sqlite3.Row = Depends(get_current_user)):
+def set_zone_colors(items: list[ZoneColorIn], object_id: int = Query(...),
+                    user: sqlite3.Row = Depends(require_object_admin)):
     conn = get_connection()
     try:
-        # Цвет крана привязан к ЧЕРТЕЖУ, значит и к объекту. Проверяем каждый
-        # присланный файл: в одном запросе их может быть несколько, и хватило
-        # бы одного чужого, чтобы перекрасить соседнюю стройку.
-        for item in {i.source_file for i in items}:
-            _guard_source_file(conn, user, item)
         for item in items:
             conn.execute(
-                "INSERT INTO zone_colors (source_file, category, name, color) VALUES (?, 'Кран', ?, ?) "
-                "ON CONFLICT(source_file, category, name) DO UPDATE SET color = excluded.color",
-                (item.source_file, item.name, item.color),
+                "INSERT INTO zone_colors (object_id, category, name, color) VALUES (?, 'Кран', ?, ?) "
+                "ON CONFLICT(object_id, category, name) DO UPDATE SET color = excluded.color",
+                (object_id, item.name, item.color),
             )
         conn.commit()
     finally:
@@ -2598,6 +2636,12 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         elements = []
         axis_rows_all = []
         zones = []
+        # Объект показа (этап D): по нему читаются подписи, цвета зон и
+        # контракты по умолчанию. Схема показывает ОДИН объект (этап B),
+        # поэтому берётся объект ПЕРВОГО элемента выборки — второго быть не
+        # должно. Файл может быть и не привязан к объекту (наследие) —
+        # тогда объектных настроек нет и читать нечего.
+        plan_object_id = None
         _current_files = {
             r["source_file"]
             for r in conn.execute("SELECT source_file FROM object_drawings WHERE is_current = 1")
@@ -2607,6 +2651,9 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # переданный source_file уважается — им пользуется форма
             # «Версии чертежа объекта», чтобы показать НЕ актуальную версию.
             item = _resolve_selection_item(conn, item)
+            item_object_id = item.object_id or _object_for_source_file(conn, item.source_file)
+            if plan_object_id is None:
+                plan_object_id = item_object_id
             # Условие видимости (is_current = 1) прячет элементы, ИСЧЕЗНУВШИЕ
             # из актуального чертежа. При просмотре ПРОШЛОЙ версии оно
             # обессмысливает саму функцию: у элементов старой версии
@@ -2681,11 +2728,14 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # зона-к-зоне, см. scripts/zone_parser._link_stances_to_cranes).
             # Захватка не резолвится здесь вовсе (null) — фронтенд для неё
             # оставляет прежнюю единую CSS-раскраску по категории.
+            # Цвет крана ключуется ОБЪЕКТОМ (этап D), не файлом: при выдаче
+            # новой версии чертежа настроенная раскраска раньше пропадала —
+            # запись оставалась за старым именем файла.
             crane_colors_by_name = {
                 r["name"]: r["color"]
                 for r in conn.execute(
-                    "SELECT name, color FROM zone_colors WHERE source_file = ? AND category = 'Кран'",
-                    (item.source_file,),
+                    "SELECT name, color FROM zone_colors WHERE object_id = ? AND category = 'Кран'",
+                    (item_object_id,),
                 ).fetchall()
             }
             crane_name_by_id = {z["id"]: z["name"] for z in file_zones if z["category"] == "Кран"}
@@ -2726,14 +2776,12 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             r["status"]: r["color"]
             for r in conn.execute("SELECT status, color FROM status_colors").fetchall()
         }
-        label_visibility = {
-            r["element_type"]: bool(r["visible"])
-            for r in conn.execute("SELECT element_type, visible FROM label_visibility").fetchall()
-        }
-        label_dates_visibility = {
-            r["element_type"]: bool(r["dates_visible"])
-            for r in conn.execute("SELECT element_type, dates_visible FROM label_visibility").fetchall()
-        }
+        label_rows = conn.execute(
+            "SELECT element_type, visible, dates_visible FROM label_visibility WHERE object_id = ?",
+            (plan_object_id,),
+        ).fetchall()
+        label_visibility = {r["element_type"]: bool(r["visible"]) for r in label_rows}
+        label_dates_visibility = {r["element_type"]: bool(r["dates_visible"]) for r in label_rows}
         contract_rows = conn.execute(
             """
             SELECT co.id AS id, co.theme AS theme,
@@ -2771,7 +2819,10 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         ]
         default_contracts = {
             r["element_type"]: r["contract_id"]
-            for r in conn.execute("SELECT element_type, contract_id FROM default_contracts").fetchall()
+            for r in conn.execute(
+                "SELECT element_type, contract_id FROM default_contracts WHERE object_id = ?",
+                (plan_object_id,),
+            ).fetchall()
         }
         shape_rows = conn.execute("SELECT layer, element_type, shape FROM element_shapes").fetchall()
         element_shapes = {f"{r['layer']} {r['element_type']}": r["shape"] for r in shape_rows}
@@ -2867,7 +2918,8 @@ def export_pdf(
     conn = get_connection()
     try:
         try:
-            content = build_schema_pdf(conn, source_file, date, format_display_name(user))
+            content = build_schema_pdf(conn, source_file, date, format_display_name(user),
+                                       _object_for_source_file(conn, source_file))
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
     finally:
@@ -3122,14 +3174,20 @@ def export_settings(admin: sqlite3.Row = Depends(require_system_admin)):
         colors = {
             r["status"]: r["color"] for r in conn.execute("SELECT status, color FROM status_colors").fetchall()
         }
-        label_visibility = {
-            r["element_type"]: bool(r["visible"])
-            for r in conn.execute("SELECT element_type, visible FROM label_visibility").fetchall()
-        }
-        label_dates_visibility = {
-            r["element_type"]: bool(r["dates_visible"])
-            for r in conn.execute("SELECT element_type, dates_visible FROM label_visibility").fetchall()
-        }
+        # Видимость подписей — настройка ОБЪЕКТА (этап D), поэтому в файле
+        # она разложена ПО ОБЪЕКТАМ. Ключ — ИМЯ объекта, а не id: файл
+        # переносят на другой сервер, где id тот же ничего не значит, а имя
+        # объекта — единственное, что человек может сопоставить глазами.
+        label_visibility = {}
+        label_dates_visibility = {}
+        for r in conn.execute(
+            "SELECT o.name AS object_name, lv.element_type, lv.visible, lv.dates_visible "
+            "FROM label_visibility lv JOIN objects o ON o.id = lv.object_id "
+            "ORDER BY o.name, lv.element_type"
+        ).fetchall():
+            label_visibility.setdefault(r["object_name"], {})[r["element_type"]] = bool(r["visible"])
+            label_dates_visibility.setdefault(r["object_name"], {})[r["element_type"]] = \
+                bool(r["dates_visible"])
     finally:
         conn.close()
 
@@ -3201,19 +3259,42 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
                 (status, color),
             )
 
-        for element_type, visible in payload.get("label_visibility", {}).items():
-            conn.execute(
-                "INSERT INTO label_visibility (element_type, visible) VALUES (?, ?) "
-                "ON CONFLICT(element_type) DO UPDATE SET visible = excluded.visible",
-                (element_type, int(visible)),
-            )
+        # Видимость подписей — по объектам, ключ файла это ИМЯ объекта (см.
+        # export_settings). Объект, которого на этом сервере нет, ПРОПУСКАЕТСЯ
+        # и попадает в счётчик пропущенных: завести объект по одному имени из
+        # файла настроек нельзя — у объекта есть проект, адрес и чертежи,
+        # ничего этого в файле нет, а молча приписать настройки чужому объекту
+        # хуже, чем не применить их вовсе.
+        object_ids_by_name = {
+            r["name"]: r["id"] for r in conn.execute("SELECT id, name FROM objects")
+        }
+        applied = {"label_visibility": 0, "label_dates_visibility": 0}
+        skipped_objects = set()
 
-        for element_type, visible in payload.get("label_dates_visibility", {}).items():
-            conn.execute(
-                "INSERT INTO label_visibility (element_type, dates_visible) VALUES (?, ?) "
-                "ON CONFLICT(element_type) DO UPDATE SET dates_visible = excluded.dates_visible",
-                (element_type, int(visible)),
-            )
+        for key, column in (("label_visibility", "visible"),
+                            ("label_dates_visibility", "dates_visible")):
+            for object_name, types in (payload.get(key) or {}).items():
+                # Старый формат файла — {тип: bool} без объекта. Применить
+                # его можно, только если объект на сервере ровно один:
+                # иначе неизвестно, к какой стройке эти настройки относились.
+                if isinstance(types, bool):
+                    if len(object_ids_by_name) != 1:
+                        skipped_objects.add("(файл старого формата, без объекта)")
+                        continue
+                    object_id, types = next(iter(object_ids_by_name.values())), {object_name: types}
+                elif object_name in object_ids_by_name:
+                    object_id = object_ids_by_name[object_name]
+                else:
+                    skipped_objects.add(object_name)
+                    continue
+                for element_type, visible in types.items():
+                    conn.execute(
+                        f"INSERT INTO label_visibility (object_id, element_type, {column}) "
+                        f"VALUES (?, ?, ?) ON CONFLICT(object_id, element_type) "
+                        f"DO UPDATE SET {column} = excluded.{column}",
+                        (object_id, element_type, int(visible)),
+                    )
+                    applied[key] += 1
 
         conn.commit()
     finally:
@@ -3222,8 +3303,9 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
     return {
         "users_upserted": users_upserted,
         "status_colors": len(payload.get("status_colors", {})),
-        "label_visibility": len(payload.get("label_visibility", {})),
-        "label_dates_visibility": len(payload.get("label_dates_visibility", {})),
+        "label_visibility": applied["label_visibility"],
+        "label_dates_visibility": applied["label_dates_visibility"],
+        "skipped_objects": sorted(skipped_objects),
     }
 
 
