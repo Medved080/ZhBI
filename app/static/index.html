@@ -70,7 +70,7 @@
      Тема переопределяет ТОЛЬКО переменные и несколько компонентов —
      базовое оформление остаётся нетронутым, чтобы откат был отменой
      одного атрибута, а не разбором правок по всему файлу. */
-  :root[data-skin="gos"] {
+  :root[data-skin] {
     --color-primary: #0D4CD3;
     --color-primary-hover: #0a3ba8;
     --color-bg: #FAFCFF;
@@ -90,7 +90,7 @@
   /* Тёмная схема у пробы своя: базовая построена на серых, а здесь фон
      синеватый, и «просто затемнить» её значило бы получить грязный цвет. */
   @media (prefers-color-scheme: dark) {
-    :root[data-skin="gos"] {
+    :root[data-skin] {
       --color-bg: #0E1621;
       --color-surface: #16202D;
       --color-surface-2: #1D2837;
@@ -100,85 +100,170 @@
       --color-text-muted: #93A1B1;
     }
   }
+
+  /* ---- ЦВЕТОВЫЕ ГАММЫ (2026-08-02, живой запрос) ----
+     Все они переопределяют ТОЛЬКО переменные — форма компонентов (радиусы,
+     кнопки-пилюли, шапка, вкладки) берётся из блока [data-skin] выше, общего
+     для всех гамм. Иначе шесть тем означали бы шесть копий вёрстки.
+
+     Тёмные гаммы ЯВНЫЕ, а не «светлая под prefers-color-scheme»: человек
+     выбирает тёмное оформление сам, независимо от настройки системы —
+     иначе выбор «Графит» на светлой машине не давал бы ничего. */
+
+  /* МСУ-1 — фирменный красный из логотипа (#880000). */
+  :root[data-skin="msu"] {
+    --color-primary: #A31212;
+    --color-primary-hover: #7d0d0d;
+    --color-bg: #FBF7F7;
+    --color-surface: #FFFFFF;
+    --color-surface-2: #F7F1F1;
+    --color-accent-soft: #F6E6E6;
+    --color-border: #EBDCDC;
+    --color-text: #241717;
+    --color-text-muted: #7A6A6A;
+    --color-danger: #C0392B;
+    --color-success: #1E7E34;
+    --radius: 10px; --radius-sm: 7px;
+  }
+  /* Графит — тёмная нейтральная. */
+  :root[data-skin="graphite"] {
+    --color-primary: #7AA2F7;
+    --color-primary-hover: #9ab8fa;
+    --color-bg: #14161A;
+    --color-surface: #1C1F25;
+    --color-surface-2: #23272E;
+    --color-accent-soft: #262C38;
+    --color-border: #2E333B;
+    --color-text: #E6E8EB;
+    --color-text-muted: #98A0AB;
+    --color-danger: #F07178;
+    --color-success: #62C77A;
+    --radius: 12px; --radius-sm: 8px;
+  }
+  /* Индиго — тёмная синяя, контрастнее графита. */
+  :root[data-skin="indigo"] {
+    --color-primary: #8B9DFF;
+    --color-primary-hover: #A6B4FF;
+    --color-bg: #10121F;
+    --color-surface: #191C2E;
+    --color-surface-2: #202441;
+    --color-accent-soft: #262B4D;
+    --color-border: #2C3157;
+    --color-text: #E8EAF6;
+    --color-text-muted: #9AA0C4;
+    --color-danger: #FF7A8A;
+    --color-success: #5FD08A;
+    --radius: 14px; --radius-sm: 9px;
+  }
+  /* Изумруд — светлая, спокойный зелёный акцент. */
+  :root[data-skin="emerald"] {
+    --color-primary: #0E8A5F;
+    --color-primary-hover: #0a6b4a;
+    --color-bg: #F6FBF8;
+    --color-surface: #FFFFFF;
+    --color-surface-2: #EFF6F2;
+    --color-accent-soft: #E1F1E9;
+    --color-border: #DCE9E2;
+    --color-text: #10231C;
+    --color-text-muted: #5F7A70;
+    --color-danger: #C0392B;
+    --color-success: #0E8A5F;
+    --radius: 12px; --radius-sm: 8px;
+  }
+  /* Песок — светлая тёплая, низкий контраст, мягче для долгой работы. */
+  :root[data-skin="sand"] {
+    --color-primary: #B4690E;
+    --color-primary-hover: #8f530a;
+    --color-bg: #FAF7F2;
+    --color-surface: #FFFDFA;
+    --color-surface-2: #F3EDE3;
+    --color-accent-soft: #F6E9D6;
+    --color-border: #E7DECF;
+    --color-text: #2A2118;
+    --color-text-muted: #7C6F5F;
+    --color-danger: #B3261E;
+    --color-success: #3F7D3F;
+    --radius: 12px; --radius-sm: 8px;
+  }
   /* Шрифт: Lato — то, чем набраны сами Госуслуги. В комплект НЕ вложен
      (вендоринг стороннего файла требует отдельного согласия, см. CLAUDE.md),
      поэтому берётся системный, если установлен, иначе ближайший гротеск. */
-  :root[data-skin="gos"] body,
-  :root[data-skin="gos"] button,
-  :root[data-skin="gos"] input,
-  :root[data-skin="gos"] select,
-  :root[data-skin="gos"] textarea {
+  :root[data-skin] body,
+  :root[data-skin] button,
+  :root[data-skin] input,
+  :root[data-skin] select,
+  :root[data-skin] textarea {
     font-family: "Lato", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   }
-  :root[data-skin="gos"] h1, :root[data-skin="gos"] h2,
-  :root[data-skin="gos"] h3, :root[data-skin="gos"] h4 { font-weight: 700; }
-  :root[data-skin="gos"] .modal h2 { font-size: 24px; line-height: 32px; letter-spacing: -.01em; }
+  :root[data-skin] h1, :root[data-skin] h2,
+  :root[data-skin] h3, :root[data-skin] h4 { font-weight: 700; }
+  :root[data-skin] .modal h2 { font-size: 24px; line-height: 32px; letter-spacing: -.01em; }
 
   /* Верхняя панель: белая, с мягкой линией снизу — как шапка портала. */
-  :root[data-skin="gos"] #toolbar {
+  :root[data-skin] #toolbar {
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-border);
     box-shadow: none;
     gap: 10px;
   }
-  :root[data-skin="gos"] #toolbar h1 { display: none; }   /* название несёт логотип */
-  :root[data-skin="gos"] #toolbar-logo { height: 30px; }
+  :root[data-skin] #toolbar h1 { display: none; }   /* название несёт логотип */
+  :root[data-skin] #toolbar-logo { height: 30px; }
 
   /* Кнопки: рост 40, скругление 12, вторичная — мягкая синяя подложка без
      рамки. Именно так выглядит «Войти» в шапке гайда. */
-  :root[data-skin="gos"] .btn {
+  :root[data-skin] .btn {
     border-radius: var(--radius); min-height: 40px; padding: 8px 16px;
     font-size: 15px; font-weight: 600; border: none;
   }
-  :root[data-skin="gos"] .btn-sm { min-height: 32px; padding: 6px 12px; font-size: 13px; }
-  :root[data-skin="gos"] .btn-secondary {
+  :root[data-skin] .btn-sm { min-height: 32px; padding: 6px 12px; font-size: 13px; }
+  :root[data-skin] .btn-secondary {
     background: var(--color-accent-soft); color: var(--color-primary);
   }
-  :root[data-skin="gos"] .btn-secondary:hover { background: #DCE6FB; }
-  :root[data-skin="gos"] .btn-primary { background: var(--color-primary); color: #fff; }
-  :root[data-skin="gos"] .btn-icon-round { border-radius: 50%; padding: 6px; min-height: 32px; }
+  :root[data-skin] .btn-secondary:hover { background: #DCE6FB; }
+  :root[data-skin] .btn-primary { background: var(--color-primary); color: #fff; }
+  :root[data-skin] .btn-icon-round { border-radius: 50%; padding: 6px; min-height: 32px; }
 
   /* Поля ввода — крупнее и мягче, как в формах портала. */
-  :root[data-skin="gos"] input[type="text"], :root[data-skin="gos"] input[type="password"],
-  :root[data-skin="gos"] input[type="date"], :root[data-skin="gos"] input[type="datetime-local"],
-  :root[data-skin="gos"] input[type="number"], :root[data-skin="gos"] select,
-  :root[data-skin="gos"] textarea {
+  :root[data-skin] input[type="text"], :root[data-skin] input[type="password"],
+  :root[data-skin] input[type="date"], :root[data-skin] input[type="datetime-local"],
+  :root[data-skin] input[type="number"], :root[data-skin] select,
+  :root[data-skin] textarea {
     border-radius: var(--radius-sm); border: 1px solid var(--color-border);
     background: var(--color-surface); padding: 8px 12px;
   }
-  :root[data-skin="gos"] input:focus, :root[data-skin="gos"] select:focus,
-  :root[data-skin="gos"] textarea:focus {
+  :root[data-skin] input:focus, :root[data-skin] select:focus,
+  :root[data-skin] textarea:focus {
     outline: 2px solid var(--color-primary); outline-offset: -1px; border-color: transparent;
   }
 
   /* Меню и панель действий: пункты — «пилюли», активная группа с мягкой
      синей подложкой вместо серой. */
-  :root[data-skin="gos"] .dropdown-menu { border-radius: var(--radius); padding: 8px; }
-  :root[data-skin="gos"] .dropdown-menu button { border-radius: var(--radius-sm); padding: 9px 12px; }
-  :root[data-skin="gos"] .dropdown-menu button:hover,
-  :root[data-skin="gos"] .submenu.open > .submenu-trigger { background: var(--color-accent-soft); }
-  :root[data-skin="gos"] .actions-panel-group {
+  :root[data-skin] .dropdown-menu { border-radius: var(--radius); padding: 8px; }
+  :root[data-skin] .dropdown-menu button { border-radius: var(--radius-sm); padding: 9px 12px; }
+  :root[data-skin] .dropdown-menu button:hover,
+  :root[data-skin] .submenu.open > .submenu-trigger { background: var(--color-accent-soft); }
+  :root[data-skin] .actions-panel-group {
     border: none; background: var(--color-surface-2); border-radius: var(--radius); padding: 14px 16px;
   }
-  :root[data-skin="gos"] .actions-panel-group > h4 { color: var(--color-primary); }
-  :root[data-skin="gos"] .actions-panel button { border-radius: var(--radius-sm); padding: 7px 10px; }
-  :root[data-skin="gos"] .actions-panel button:hover { background: var(--color-accent-soft); }
-  :root[data-skin="gos"] .actions-panel-sub { border-left-color: var(--color-primary); }
+  :root[data-skin] .actions-panel-group > h4 { color: var(--color-primary); }
+  :root[data-skin] .actions-panel button { border-radius: var(--radius-sm); padding: 7px 10px; }
+  :root[data-skin] .actions-panel button:hover { background: var(--color-accent-soft); }
+  :root[data-skin] .actions-panel-sub { border-left-color: var(--color-primary); }
 
   /* Сайдбар: вкладки-пилюли вместо подчёркивания. */
-  :root[data-skin="gos"] #sidebar { background: var(--color-surface); border-left: 1px solid var(--color-border); }
-  :root[data-skin="gos"] .tab {
+  :root[data-skin] #sidebar { background: var(--color-surface); border-left: 1px solid var(--color-border); }
+  :root[data-skin] .tab {
     border: none; border-radius: 999px; padding: 7px 14px; font-weight: 600;
   }
-  :root[data-skin="gos"] .tab.active { background: var(--color-accent-soft); color: var(--color-primary); }
+  :root[data-skin] .tab.active { background: var(--color-accent-soft); color: var(--color-primary); }
 
   /* Карточки, модалки, таблицы. */
-  :root[data-skin="gos"] .modal { border-radius: 16px; }
-  :root[data-skin="gos"] .card-block {
+  :root[data-skin] .modal { border-radius: 16px; }
+  :root[data-skin] .card-block {
     background: var(--color-surface-2); border-radius: var(--radius); padding: 12px 14px; border: none;
   }
-  :root[data-skin="gos"] table th { color: var(--color-text-muted); font-weight: 600; }
-  :root[data-skin="gos"] .status-bar {
+  :root[data-skin] table th { color: var(--color-text-muted); font-weight: 600; }
+  :root[data-skin] .status-bar {
     background: var(--color-surface); border-top: 1px solid var(--color-border);
   }
 
@@ -447,6 +532,20 @@
     padding-top: 12px; }
   /* Вложения (2026-08-02). Одна разметка на все три места — карточку
      элемента в правой панели, форму элемента и формы проектов/объектов. */
+  /* Выбор гаммы: плитка образцов, у каждого три полосы — фон, поверхность,
+     акцент. Показывать названия без цвета бессмысленно: «Изумруд» ничего не
+     говорит, пока не увидишь его рядом с остальными. */
+  .skin-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 8px; margin-bottom: 4px; }
+  .skin-choice { border: 2px solid var(--color-border); border-radius: var(--radius);
+    padding: 7px 8px; cursor: pointer; background: none; text-align: left; font: inherit;
+    color: var(--color-text); }
+  .skin-choice.active { border-color: var(--color-primary); }
+  .skin-choice-name { font-size: 12px; font-weight: 600; }
+  .skin-choice-swatch { display: flex; gap: 3px; margin-top: 5px; }
+  .skin-choice-swatch span { height: 14px; flex: 1; border-radius: 3px;
+    border: 1px solid rgba(127,127,127,.25); }
+
   /* Панель действий: группы плиткой, подгруппы — вложенным блоком внутри
      своей группы. auto-fill, а не фиксированное число колонок: групп пять,
      но набор зависит от роли, и жёсткая сетка оставляла бы дыры. */
@@ -455,8 +554,17 @@
      колонку — весь смысл панели (всё разом перед глазами) при этом
      пропадал. 92vw — чтобы на узком экране окно не упиралось в края. */
   #actions-panel-modal { width: 1000px; max-width: 92vw; }
-  .actions-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  /* Две зоны: слева ежедневная работа (плиткой), справа — отчёты и
+     настройка (столбиком). Правая колонка фиксированной ширины: она узкая
+     по смыслу, и растягивать её на треть окна незачем. */
+  .actions-panel { display: grid; grid-template-columns: 1fr 260px; gap: 16px;
+    align-items: start; }
+  .actions-panel-main { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
     gap: 14px; align-items: start; }
+  .actions-panel-side { display: flex; flex-direction: column; gap: 14px; }
+  @media (max-width: 780px) {
+    .actions-panel { grid-template-columns: 1fr; }
+  }
   .actions-panel-group { border: 1px solid var(--color-border); border-radius: var(--radius);
     padding: 10px 12px; }
   .actions-panel-group > h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase;
@@ -1787,13 +1895,10 @@
 <div class="modal-backdrop" id="menu-view-backdrop">
   <div class="modal">
     <h2>Внешний вид</h2>
-    <label class="field">Оформление</label>
-    <label class="toggle"><input type="radio" name="skin" value="base"/>
-      Базовое — то, что было до пробы</label>
-    <label class="toggle"><input type="radio" name="skin" value="gos"/>
-      «Госуслуги» — проба редизайна по guides.gosuslugi.ru</label>
-    <p class="hint-text">Проба. Переключается мгновенно и ничего не меняет в данных —
-      если не понравится, вернитесь к базовому.</p>
+    <label class="field">Цветовая гамма</label>
+    <div id="skin-choices" class="skin-choices"></div>
+    <p class="hint-text">Настройка личная: сохраняется за вами и переезжает вместе с вами
+      на другой компьютер. На данные и на других пользователей не влияет.</p>
     <label class="field" style="margin-top:12px">Меню «Действия»</label>
     <label class="toggle"><input type="radio" name="menu-view" value="dropdown"/>
       Выпадающее меню — группы раскрываются вбок при наведении</label>

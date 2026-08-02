@@ -201,6 +201,41 @@ def set_label_color(
     finally:
         conn.close()
 
+class SetUiThemeIn(BaseModel):
+    # None — вернуть базовое оформление. Список допустимых имён закрыт: тема
+    # подставляется в атрибут data-skin, и принимать оттуда произвольную
+    # строку от клиента незачем.
+    ui_theme: Optional[str] = None
+
+
+UI_THEMES = ("gos", "msu", "graphite", "emerald", "indigo", "sand")
+
+
+@router.patch("/{user_id}/ui-theme", response_model=UserOut)
+def set_ui_theme(
+    user_id: int, body: SetUiThemeIn, current: sqlite3.Row = Depends(get_current_user)
+):
+    """Персональная цветовая гамма — тот же guard самообслуживания, что у
+    set_label_color и set_password: менять можно только себе, если ты не
+    администратор сервиса."""
+    if current["role"] != "admin" and current["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Можно менять только своё оформление")
+    if body.ui_theme is not None and body.ui_theme not in UI_THEMES:
+        raise HTTPException(status_code=400, detail=f"Неизвестное оформление «{body.ui_theme}»")
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        conn.execute(
+            "UPDATE users SET ui_theme = ?, updated_at = datetime('now') WHERE id = ?",
+            (body.ui_theme, user_id),
+        )
+        conn.commit()
+        return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+    finally:
+        conn.close()
+
+
 # ==================== ДОСТУП К ОБЪЕКТАМ (этап C) ====================
 #
 # Роль на объекте — свойство ГРАНТА, а не пользователя (решение П2).

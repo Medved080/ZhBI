@@ -230,6 +230,10 @@ class UserOut(BaseModel):
     display_name: str
     has_password: bool
     label_color: Optional[str] = None  # персональный цвет подписей марок (2D/3D), NULL = дефолт
+    # Персональная цветовая гамма интерфейса (2026-08-02). NULL = базовое
+    # оформление. Хранится на сервере, а не в браузере: настройка следует за
+    # человеком — на площадке за одной машиной работают посменно.
+    ui_theme: Optional[str] = None
 
 
 def user_out(user: sqlite3.Row) -> UserOut:
@@ -245,6 +249,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
         display_name=format_display_name(user),
         has_password=user["password_hash"] is not None,
         label_color=user["label_color"],
+        ui_theme=user["ui_theme"] if "ui_theme" in user.keys() else None,
     )
 
 

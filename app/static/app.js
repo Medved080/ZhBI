@@ -515,6 +515,11 @@ async function checkAuth() {
   try {
     const user = await api("/me");
     state.currentUser = user;
+    // Гамма пользователя ПЕРЕБИВАЕТ локальную копию: копия нужна лишь для
+    // применения до ответа /me, источник правды — сервер. Иначе, сев за
+    // чужой компьютер, человек получил бы чужое оформление.
+    const серверная = user.ui_theme || "base";
+    if (серверная !== currentSkin()) { localStorage.setItem(SKIN_KEY, серверная); applySkin(серверная); }
     document.getElementById("user-name").textContent = user.display_name;
     applyRolePermissions();
     applyLabelColor();
@@ -5441,12 +5446,69 @@ const settingsMenu = document.getElementById("settings-menu");
 // первой отрисовке.
 const SKIN_KEY = "zhbi_skin";
 
-function applySkin() {
-  const тема = localStorage.getItem(SKIN_KEY);
-  if (тема === "gos") document.documentElement.setAttribute("data-skin", "gos");
+// Гаммы. Образцы (три цвета) рисуются в диалоге выбора: название без цвета
+// ничего не говорит — «Изумруд» понятен только рядом с остальными.
+const SKINS = [
+  { id: "base",     name: "Базовое",   swatch: ["#f2f4f7", "#ffffff", "#1353d6"] },
+  { id: "gos",      name: "Госуслуги", swatch: ["#FAFCFF", "#EDF2FE", "#0D4CD3"] },
+  { id: "msu",      name: "МСУ-1",     swatch: ["#FBF7F7", "#F6E6E6", "#A31212"] },
+  { id: "graphite", name: "Графит",    swatch: ["#14161A", "#23272E", "#7AA2F7"] },
+  { id: "indigo",   name: "Индиго",    swatch: ["#10121F", "#202441", "#8B9DFF"] },
+  { id: "emerald",  name: "Изумруд",   swatch: ["#F6FBF8", "#E1F1E9", "#0E8A5F"] },
+  { id: "sand",     name: "Песок",     swatch: ["#FAF7F2", "#F6E9D6", "#B4690E"] },
+];
+
+// Где хранится выбор. На СЕРВЕРЕ, за пользователем (users.ui_theme):
+// настройка следует за человеком, а не за компьютером — на площадке за
+// одной машиной работают посменно. В localStorage держим копию, но только
+// чтобы применить гамму ДО ответа /me: иначе на каждой загрузке моргало бы
+// базовое оформление.
+function currentSkin() {
+  const сохранённая = localStorage.getItem(SKIN_KEY);
+  return SKINS.some(s => s.id === сохранённая) ? сохранённая : "base";
+}
+
+function applySkin(id) {
+  const тема = id || currentSkin();
+  if (тема && тема !== "base") document.documentElement.setAttribute("data-skin", тема);
   else document.documentElement.removeAttribute("data-skin");
 }
 applySkin();
+
+async function saveSkin(id) {
+  localStorage.setItem(SKIN_KEY, id);
+  applySkin(id);
+  // 3D-сцена читает цвета из CSS-переменных при сборке — смены атрибута ей
+  // мало, нужен перерисованный кадр.
+  if (typeof requestRender3D === "function") requestRender3D();
+  if (!state.currentUser) return;
+  try {
+    await api(`/users/${state.currentUser.id}/ui-theme`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ui_theme: id === "base" ? null : id }),
+    });
+    state.currentUser.ui_theme = id === "base" ? null : id;
+  } catch (e) {
+    // Не смогли запомнить на сервере — гамма всё равно применена здесь и
+    // сейчас; это удобство, а не условие работы.
+    console.warn("Не удалось сохранить оформление:", e.message);
+  }
+}
+
+function renderSkinChoices() {
+  const box = document.getElementById("skin-choices");
+  const выбрана = currentSkin();
+  box.innerHTML = SKINS.map(s => `
+    <button type="button" class="skin-choice${s.id === выбрана ? " active" : ""}" data-skin-id="${s.id}">
+      <span class="skin-choice-name">${escapeHtml(s.name)}</span>
+      <span class="skin-choice-swatch">${s.swatch.map(c =>
+        `<span style="background:${c}"></span>`).join("")}</span>
+    </button>`).join("");
+  box.querySelectorAll("[data-skin-id]").forEach(b => b.addEventListener("click", async () => {
+    await saveSkin(b.dataset.skinId);
+    renderSkinChoices();
+  }));
+}
 
 const MENU_VIEW_KEY = "zhbi_menu_view";
 const actionsPanelBackdrop = document.getElementById("actions-panel-backdrop");
@@ -5474,11 +5536,29 @@ function кнопкаПанели(оригинал) {
   return b;
 }
 
+// Какие группы уходят в правую колонку (живой запрос 2026-08-02):
+// «Отчёты» — то, что смотрят, «Настройки» и «Администрирование» — то, что
+// настраивают. Слева остаётся ежедневная работа: справочники и обмен
+// данными. Раньше все пять групп текли одной сеткой, и «Настройки»
+// оказывались первыми — на самом видном месте лежало самое редкое.
+// Порядок в списке — это и порядок В КОЛОНКЕ, а не только признак «сюда»:
+// иначе группы встают по разметке меню, и «Настройки» оказываются над
+// «Отчётами», хотя просили под ними.
+const ACTIONS_PANEL_SIDE = ["Отчёты", "Настройки", "Администрирование"];
+
 function renderActionsPanel() {
   const box = document.getElementById("actions-panel-body");
   box.innerHTML = "";
+  const main = document.createElement("div");
+  main.className = "actions-panel-main";
+  const side = document.createElement("div");
+  side.className = "actions-panel-side";
+  box.appendChild(main);
+  box.appendChild(side);
   for (const группа of document.querySelectorAll("#settings-menu > .submenu")) {
     if (группа.style.display === "none") continue;
+    const имяГруппы = группа.querySelector(":scope > .submenu-trigger").textContent.trim();
+    const куда = ACTIONS_PANEL_SIDE.includes(имяГруппы) ? side : main;
     const блок = document.createElement("div");
     блок.className = "actions-panel-group";
     const заголовок = document.createElement("h4");
@@ -5495,8 +5575,18 @@ function renderActionsPanel() {
         .forEach(п => под.appendChild(кнопкаПанели(п)));
       блок.appendChild(под);
     }
-    box.appendChild(блок);
+    куда.appendChild(блок);
   }
+  // Правая колонка выстраивается по ACTIONS_PANEL_SIDE, а не по порядку
+  // групп в меню.
+  [...side.children]
+    .sort((a, b) => ACTIONS_PANEL_SIDE.indexOf(a.querySelector("h4").textContent.trim())
+                  - ACTIONS_PANEL_SIDE.indexOf(b.querySelector("h4").textContent.trim()))
+    .forEach(el => side.appendChild(el));
+  // Колонка без единой группы не должна занимать место (у прораба
+  // «Настройки» есть всегда, но «Отчёты» и «Администрирование» могут быть
+  // скрыты ролью).
+  side.style.display = side.children.length ? "" : "none";
 }
 
 document.getElementById("actions-panel-close").addEventListener("click", () =>
@@ -5506,18 +5596,9 @@ document.getElementById("actions-panel-close").addEventListener("click", () =>
 document.getElementById("menu-view-mode").addEventListener("click", () => {
   const текущий = menuViewMode();
   document.querySelectorAll('input[name="menu-view"]').forEach(r => { r.checked = r.value === текущий; });
-  const тема = localStorage.getItem(SKIN_KEY) === "gos" ? "gos" : "base";
-  document.querySelectorAll('input[name="skin"]').forEach(r => { r.checked = r.value === тема; });
+  renderSkinChoices();
   document.getElementById("menu-view-backdrop").classList.add("open");
 });
-document.querySelectorAll('input[name="skin"]').forEach(r => r.addEventListener("change", () => {
-  if (!r.checked) return;
-  localStorage.setItem(SKIN_KEY, r.value);
-  applySkin();
-  // 3D-сцена читает цвета из CSS-переменных при сборке (фон, цвет рёбер) —
-  // просто сменить атрибут ей мало, нужен перерисованный кадр.
-  if (typeof requestRender3D === "function") requestRender3D();
-}));
 document.getElementById("menu-view-close").addEventListener("click", () =>
   document.getElementById("menu-view-backdrop").classList.remove("open"));
 document.querySelectorAll('input[name="menu-view"]').forEach(r => r.addEventListener("change", () => {
