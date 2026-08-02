@@ -54,6 +54,291 @@
       --shadow-md: 0 12px 32px rgba(0,0,0,.45);
     }
   }
+  /* ==================== ОФОРМЛЕНИЕ «ГОСУСЛУГИ» (проба, 2026-08-02) ====================
+     Живой запрос: «меню скучное и слишком минималистичное, переделай по
+     guides.gosuslugi.ru». Проба живёт В ОТДЕЛЬНОЙ ВЕТКЕ и вдобавок
+     включается/выключается на лету — оба способа отката, потому что
+     «попробовать» и «остаться» это разные решения, и второе ещё не принято.
+
+     Значения сняты С САМОГО ГАЙДА (computed styles на guides.gosuslugi.ru),
+     а не подобраны на глаз:
+       текст #0B1F33, приглушённый #66727F, акцент #0D4CD3;
+       фон страницы #FAFCFF, поверхности #FFFFFF / #F5F7FA / #EDF2FE;
+       радиус 12px (мелкий 4px), кнопка высотой 40px с отступами 8/16;
+       шрифт Lato, начертания заголовков 700.
+
+     Тема переопределяет ТОЛЬКО переменные и несколько компонентов —
+     базовое оформление остаётся нетронутым, чтобы откат был отменой
+     одного атрибута, а не разбором правок по всему файлу. */
+  :root[data-skin] {
+    --color-primary: #0D4CD3;
+    --color-primary-hover: #0a3ba8;
+    --color-bg: #FAFCFF;
+    --color-surface: #FFFFFF;
+    --color-surface-2: #F5F7FA;
+    --color-accent-soft: #EDF2FE;     /* подложка активных пунктов и мягких кнопок */
+    --color-border: #E4ECFD;
+    --color-text: #0B1F33;
+    --color-text-muted: #66727F;
+    --color-danger: #EE3F58;
+    --color-success: #21A038;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow-sm: 0 1px 2px rgba(11,31,51,.06);
+    --shadow-md: 0 8px 28px rgba(11,31,51,.12);
+  }
+  /* Тёмная схема у пробы своя: базовая построена на серых, а здесь фон
+     синеватый, и «просто затемнить» её значило бы получить грязный цвет. */
+  @media (prefers-color-scheme: dark) {
+    :root[data-skin] {
+      --color-bg: #0E1621;
+      --color-surface: #16202D;
+      --color-surface-2: #1D2837;
+      --color-accent-soft: #1B2C4E;
+      --color-border: #26344a;
+      --color-text: #E7EDF5;
+      --color-text-muted: #93A1B1;
+    }
+  }
+
+  /* ---- ЦВЕТОВЫЕ ГАММЫ (2026-08-02, живой запрос) ----
+     Все они переопределяют ТОЛЬКО переменные — форма компонентов (радиусы,
+     кнопки-пилюли, шапка, вкладки) берётся из блока [data-skin] выше, общего
+     для всех гамм. Иначе шесть тем означали бы шесть копий вёрстки.
+
+     Тёмные гаммы ЯВНЫЕ, а не «светлая под prefers-color-scheme»: человек
+     выбирает тёмное оформление сам, независимо от настройки системы —
+     иначе выбор «Графит» на светлой машине не давал бы ничего. */
+
+  /* МСУ-1 — фирменный красный из логотипа (#880000). */
+  :root[data-skin="msu"] {
+    --color-primary: #A31212;
+    --color-primary-hover: #7d0d0d;
+    --color-bg: #FBF7F7;
+    --color-surface: #FFFFFF;
+    --color-surface-2: #F7F1F1;
+    --color-accent-soft: #F6E6E6;
+    --color-border: #EBDCDC;
+    --color-text: #241717;
+    --color-text-muted: #7A6A6A;
+    --color-danger: #C0392B;
+    --color-success: #1E7E34;
+    --radius: 10px; --radius-sm: 7px;
+  }
+  /* Графит — тёмная нейтральная. */
+  /* Рабочая область в ТЁМНЫХ гаммах: белый лист посреди тёмного интерфейса
+     слепит и рвёт картинку пополам (живой репорт). Фон схемы, сетка осей,
+     обводка фигур и рёбра 3D переезжают в светлое-на-тёмном. */
+  :root[data-skin="graphite"] {
+    --color-primary: #7AA2F7;
+    --color-primary-hover: #9ab8fa;
+    --color-bg: #14161A;
+    --color-surface: #1C1F25;
+    --color-surface-2: #23272E;
+    --color-accent-soft: #262C38;
+    --color-border: #2E333B;
+    --color-text: #E6E8EB;
+    --color-text-muted: #98A0AB;
+    --color-danger: #F07178;
+    --color-success: #62C77A;
+    --radius: 12px; --radius-sm: 8px;
+    --stage-bg: #10131A; --stage-3d-bg: #0E1117;
+    --axis-line: #39414F; --axis-label: #7C879A;
+    --shape-stroke: #C7D0DC; --edge-3d: #C7D0DC;
+  }
+  /* Индиго — тёмная синяя, контрастнее графита. */
+  :root[data-skin="indigo"] {
+    --color-primary: #8B9DFF;
+    --color-primary-hover: #A6B4FF;
+    --color-bg: #10121F;
+    --color-surface: #191C2E;
+    --color-surface-2: #202441;
+    --color-accent-soft: #262B4D;
+    --color-border: #2C3157;
+    --color-text: #E8EAF6;
+    --color-text-muted: #9AA0C4;
+    --color-danger: #FF7A8A;
+    --color-success: #5FD08A;
+    --radius: 14px; --radius-sm: 9px;
+    --stage-bg: #0D0F1B; --stage-3d-bg: #0B0D18;
+    --axis-line: #333A63; --axis-label: #7E86B4;
+    --shape-stroke: #CDD2EC; --edge-3d: #CDD2EC;
+  }
+  /* Неон — тёмная с ядовитыми акцентами в духе Cyberpunk 2077 (живой
+     запрос). Жёлтый как основной акцент, бирюза и малиновый — на успехе и
+     ошибке. Фон почти чёрный с фиолетовым подтоном, чтобы жёлтый на нём
+     звенел; границы заметные — на таком фоне тонкая серая линия исчезает. */
+  :root[data-skin="neon"] {
+    --color-primary: #FCEE0A;
+    --color-primary-hover: #FFF95C;
+    --color-bg: #0B0A12;
+    --color-surface: #14121F;
+    --color-surface-2: #1C1930;
+    --color-accent-soft: #2A2247;
+    --color-border: #3A2E63;
+    --color-text: #F2F0FF;
+    --color-text-muted: #9C93C7;
+    --color-danger: #FF2A6D;
+    --color-success: #05D9E8;
+    --radius: 6px; --radius-sm: 4px;
+    --stage-bg: #0A0912; --stage-3d-bg: #08070F;
+    --axis-line: #3A2E63; --axis-label: #9C93C7;
+    --shape-stroke: #05D9E8; --edge-3d: #05D9E8;
+  }
+  /* У «Неона» акцент жёлтый, и белый текст по нему нечитаем. Цвет текста НА
+     акценте — такая же переменная гаммы, как сам акцент: иначе каждое
+     место с основной кнопкой (их три — .btn-primary, кнопка входа, ссылки
+     на акценте) пришлось бы чинить отдельным правилом. */
+  :root[data-skin="neon"] { --color-on-primary: #0B0A12; }
+  :root[data-skin="neon"] .btn-primary, :root[data-skin="neon"] #login-box button { font-weight: 700; }
+
+  /* Изумруд — светлая, спокойный зелёный акцент. */
+  :root[data-skin="emerald"] {
+    --color-primary: #0E8A5F;
+    --color-primary-hover: #0a6b4a;
+    --color-bg: #F6FBF8;
+    --color-surface: #FFFFFF;
+    --color-surface-2: #EFF6F2;
+    --color-accent-soft: #E1F1E9;
+    --color-border: #DCE9E2;
+    --color-text: #10231C;
+    --color-text-muted: #5F7A70;
+    --color-danger: #C0392B;
+    --color-success: #0E8A5F;
+    --radius: 12px; --radius-sm: 8px;
+  }
+  /* Песок — светлая тёплая, низкий контраст, мягче для долгой работы. */
+  :root[data-skin="sand"] {
+    --color-primary: #B4690E;
+    --color-primary-hover: #8f530a;
+    --color-bg: #FAF7F2;
+    --color-surface: #FFFDFA;
+    --color-surface-2: #F3EDE3;
+    --color-accent-soft: #F6E9D6;
+    --color-border: #E7DECF;
+    --color-text: #2A2118;
+    --color-text-muted: #7C6F5F;
+    --color-danger: #B3261E;
+    --color-success: #3F7D3F;
+    --radius: 12px; --radius-sm: 8px;
+  }
+  /* Шрифт Lato — то, чем набраны сами Госуслуги. ВЛОЖЕН локально
+     (app/static/vendor/lato/, согласие пользователя получено 2026-08-02),
+     не подключается с внешнего CDN: строгий CSP разрешает font-src только
+     'self', да и внутренний контур наружу не ходит.
+     Лицензия SIL OFL, текст рядом с файлами — OFL.txt.
+
+     Файлы — ПОДМНОЖЕСТВО: русский алфавит, латиница, цифры и вся реально
+     встречающаяся пунктуация. Стандартные файлы Google для Lato содержат
+     только латиницу, и вложить их значило бы получить кириллицу запасным
+     шрифтом — то есть весь интерфейс мимо задуманного вида. 17 КБ на
+     начертание вместо примерно 60 у полного набора. */
+  @font-face {
+    font-family: "Lato"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/static/vendor/lato/lato-400.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Lato"; font-style: normal; font-weight: 700; font-display: swap;
+    src: url("/static/vendor/lato/lato-700.woff2") format("woff2");
+  }
+  /* 600 отдельного файла не имеет: у Lato между 400 и 700 промежуточного
+     начертания нет, и браузер синтезировал бы «полужирный» из обычного —
+     грязно. Явно отправляем 600 на 700. */
+  @font-face {
+    font-family: "Lato"; font-style: normal; font-weight: 600; font-display: swap;
+    src: url("/static/vendor/lato/lato-700.woff2") format("woff2");
+  }
+  :root[data-skin] body,
+  :root[data-skin] button,
+  :root[data-skin] input,
+  :root[data-skin] select,
+  :root[data-skin] textarea {
+    font-family: "Lato", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  :root[data-skin] h1, :root[data-skin] h2,
+  :root[data-skin] h3, :root[data-skin] h4 { font-weight: 700; }
+  :root[data-skin] .modal h2 { font-size: 24px; line-height: 32px; letter-spacing: -.01em; }
+
+  /* Верхняя панель: белая, с мягкой линией снизу — как шапка портала. */
+  :root[data-skin] #toolbar {
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    box-shadow: none;
+    gap: 10px;
+  }
+  :root[data-skin] #toolbar h1 { display: none; }   /* название несёт логотип */
+  /* Знак широкий (соотношение примерно 5.8:1), поэтому высота задаётся, а
+     ширина считается сама — иначе локап сжимается в нечитаемую полоску.
+     22px, а не больше: при 28 шапка переполнялась и обрезала кнопку
+     «Сейчас» — знак занимает почти 170 px по ширине. */
+  :root[data-skin] #toolbar-logo { height: 22px; }
+
+  /* Кнопки: рост 40, скругление 12, вторичная — мягкая синяя подложка без
+     рамки. Именно так выглядит «Войти» в шапке гайда. */
+  :root[data-skin] .btn {
+    border-radius: var(--radius); min-height: 40px; padding: 8px 16px;
+    font-size: 15px; font-weight: 600; border: none;
+  }
+  :root[data-skin] .btn-sm { min-height: 32px; padding: 6px 12px; font-size: 13px; }
+  :root[data-skin] .btn-secondary {
+    background: var(--color-accent-soft); color: var(--color-primary);
+  }
+  :root[data-skin] .btn-secondary:hover { background: #DCE6FB; }
+  :root[data-skin] .btn-primary { background: var(--color-primary); color: var(--color-on-primary, #fff); }
+  :root[data-skin] .btn-icon-round { border-radius: 50%; padding: 6px; min-height: 32px; }
+  /* В ШАПКЕ кнопки компактнее общего правила: рост 40 и отступы 16 хороши в
+     формах, а здесь их десяток в один ряд плюс широкий знак — при общих
+     размерах панель переполнялась и обрезала «Сейчас» (поймано снимком
+     экрана). Поле рабочей даты дополнительно разрешено сжимать. */
+  :root[data-skin] #toolbar .btn { min-height: 32px; padding: 5px 12px; font-size: 13px; }
+  :root[data-skin] #toolbar .btn-sm { min-height: 28px; padding: 4px 10px; font-size: 12px; }
+  :root[data-skin] #toolbar input[type="datetime-local"] { min-width: 0; padding: 4px 8px; }
+  :root[data-skin] #toolbar .view-mode-btn { min-height: 30px; padding: 5px 12px; font-size: 13px; }
+
+  /* Поля ввода — крупнее и мягче, как в формах портала. */
+  :root[data-skin] input[type="text"], :root[data-skin] input[type="password"],
+  :root[data-skin] input[type="date"], :root[data-skin] input[type="datetime-local"],
+  :root[data-skin] input[type="number"], :root[data-skin] select,
+  :root[data-skin] textarea {
+    border-radius: var(--radius-sm); border: 1px solid var(--color-border);
+    background: var(--color-surface); padding: 8px 12px;
+  }
+  :root[data-skin] input:focus, :root[data-skin] select:focus,
+  :root[data-skin] textarea:focus {
+    outline: 2px solid var(--color-primary); outline-offset: -1px; border-color: transparent;
+  }
+
+  /* Меню и панель действий: пункты — «пилюли», активная группа с мягкой
+     синей подложкой вместо серой. */
+  :root[data-skin] .dropdown-menu { border-radius: var(--radius); padding: 8px; }
+  :root[data-skin] .dropdown-menu button { border-radius: var(--radius-sm); padding: 9px 12px; }
+  :root[data-skin] .dropdown-menu button:hover,
+  :root[data-skin] .submenu.open > .submenu-trigger { background: var(--color-accent-soft); }
+  :root[data-skin] .actions-panel-group {
+    border: none; background: var(--color-surface-2); border-radius: var(--radius); padding: 14px 16px;
+  }
+  :root[data-skin] .actions-panel-group > h4 { color: var(--color-primary); }
+  :root[data-skin] .actions-panel button { border-radius: var(--radius-sm); padding: 7px 10px; }
+  :root[data-skin] .actions-panel button:hover { background: var(--color-accent-soft); }
+  :root[data-skin] .actions-panel-sub { border-left-color: var(--color-primary); }
+
+  /* Сайдбар: вкладки-пилюли вместо подчёркивания. */
+  :root[data-skin] #sidebar { background: var(--color-surface); border-left: 1px solid var(--color-border); }
+  :root[data-skin] .tab {
+    border: none; border-radius: 999px; padding: 7px 14px; font-weight: 600;
+  }
+  :root[data-skin] .tab.active { background: var(--color-accent-soft); color: var(--color-primary); }
+
+  /* Карточки, модалки, таблицы. */
+  :root[data-skin] .modal { border-radius: 16px; }
+  :root[data-skin] .card-block {
+    background: var(--color-surface-2); border-radius: var(--radius); padding: 12px 14px; border: none;
+  }
+  :root[data-skin] table th { color: var(--color-text-muted); font-weight: 600; }
+  :root[data-skin] .status-bar {
+    background: var(--color-surface); border-top: 1px solid var(--color-border);
+  }
+
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -187,9 +472,21 @@
      место, min-height:0 обязателен: без него flex-элемент не сжимается
      ниже своего содержимого и полоса уезжает за нижний край. */
   #stage-area { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  #stage { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #ffffff; cursor: grab; }
+  /* Подложка под знаком — во ВСЕХ гаммах, включая базовую и светлые:
+     логотип красно-тёмный, на тёмном фоне он пропадает, а держать для него
+     отдельный светлый вариант значило бы иметь два файла и следить, чтобы
+     они не разошлись. Белый прямоугольник со скруглением решает это одним
+     правилом и на светлых гаммах выглядит как обычная плашка. */
+  #toolbar-logo {
+    background: #ffffff; border-radius: 8px; padding: 3px 8px;
+    box-shadow: 0 1px 2px rgba(11,31,51,.10);
+  }
+
+  #stage { flex: 1; min-height: 0; position: relative; overflow: hidden;
+    background: var(--stage-bg, #ffffff); cursor: grab; }
   #stage.dragging { cursor: grabbing; }
-  #stage-3d { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #f3f4f6; }
+  #stage-3d { flex: 1; min-height: 0; position: relative; overflow: hidden;
+    background: var(--stage-3d-bg, #f3f4f6); }
   #stage-3d canvas { display: block; }
   #stage-3d-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); }
   #tooltip-3d {
@@ -250,6 +547,9 @@
   #tooltip-2d .t2d-row.late { color: #f2a79c; }
   #tooltip-2d .t2d-row.neutral { color: #cfd2d8; }
   #axis-layer text { pointer-events: none; }
+  /* Сетка осей — цветом из переменной, а не жёстко из JS: на тёмном фоне
+     светло-серые линии не видны вовсе. Классы вешает renderAxisGrid. */
+  .axis-grid { stroke: var(--axis-line, #c4c4c4); fill: var(--axis-label, #9a9a9a); }
   /* -------- зоны (захватка/кран/стоянка) — см. Docs/backlog.md,
      "Разбор структурированных имён слоёв DWG/DXF..." -------- */
   /* Подложка: полупрозрачная заливка + полупрозрачная (не сплошная) обводка
@@ -319,6 +619,20 @@
     padding-top: 12px; }
   /* Вложения (2026-08-02). Одна разметка на все три места — карточку
      элемента в правой панели, форму элемента и формы проектов/объектов. */
+  /* Выбор гаммы: плитка образцов, у каждого три полосы — фон, поверхность,
+     акцент. Показывать названия без цвета бессмысленно: «Изумруд» ничего не
+     говорит, пока не увидишь его рядом с остальными. */
+  .skin-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 8px; margin-bottom: 4px; }
+  .skin-choice { border: 2px solid var(--color-border); border-radius: var(--radius);
+    padding: 7px 8px; cursor: pointer; background: none; text-align: left; font: inherit;
+    color: var(--color-text); }
+  .skin-choice.active { border-color: var(--color-primary); }
+  .skin-choice-name { font-size: 12px; font-weight: 600; }
+  .skin-choice-swatch { display: flex; gap: 3px; margin-top: 5px; }
+  .skin-choice-swatch span { height: 14px; flex: 1; border-radius: 3px;
+    border: 1px solid rgba(127,127,127,.25); }
+
   /* Панель действий: группы плиткой, подгруппы — вложенным блоком внутри
      своей группы. auto-fill, а не фиксированное число колонок: групп пять,
      но набор зависит от роли, и жёсткая сетка оставляла бы дыры. */
@@ -327,14 +641,31 @@
      колонку — весь смысл панели (всё разом перед глазами) при этом
      пропадал. 92vw — чтобы на узком экране окно не упиралось в края. */
   #actions-panel-modal { width: 1000px; max-width: 92vw; }
-  .actions-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  /* Две зоны: слева ежедневная работа (плиткой), справа — отчёты и
+     настройка (столбиком). Правая колонка фиксированной ширины: она узкая
+     по смыслу, и растягивать её на треть окна незачем. */
+  .actions-panel { display: grid; grid-template-columns: 1fr 260px; gap: 16px;
+    align-items: start; }
+  /* auto-FIT, а не auto-fill: fill резервирует дорожки под несуществующие
+     группы, и справа от «Обмена данными» зияла пустая колонка (живой
+     репорт со скриншотом). fit схлопывает пустые дорожки. */
+  .actions-panel-main { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
     gap: 14px; align-items: start; }
+  .actions-panel-side { display: flex; flex-direction: column; gap: 14px; }
+  @media (max-width: 780px) {
+    .actions-panel { grid-template-columns: 1fr; }
+  }
   .actions-panel-group { border: 1px solid var(--color-border); border-radius: var(--radius);
     padding: 10px 12px; }
   .actions-panel-group > h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase;
     letter-spacing: .03em; color: var(--color-text-muted); }
-  .actions-panel-sub { margin: 8px 0 0; padding-left: 8px;
+  /* Промежуток ПЕРЕД подгруппой, а не после: разделять должно последний
+     пункт предыдущей от заголовка следующей (живой запрос). Первой
+     подгруппе лишний отступ сверху не нужен — она идёт сразу за пунктами
+     самой группы, и там уже есть свой. */
+  .actions-panel-sub { margin: 18px 0 0; padding-left: 8px;
     border-left: 2px solid var(--color-border); }
+  .actions-panel-sub + .actions-panel-sub { margin-top: 18px; }
   .actions-panel-sub > h5 { margin: 0 0 4px; font-size: 11px; font-weight: 600;
     color: var(--color-text-muted); }
   .actions-panel button { display: block; width: 100%; text-align: left; background: none;
@@ -654,7 +985,10 @@
     padding: 9px 10px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; color: var(--color-text);
   }
   .dropdown-menu button:hover { background: var(--color-surface-2); }
-  .dropdown-menu button.menu-item-strong { font-weight: 700; }
+  /* Селектор без привязки к .dropdown-menu: те же пункты рисуются ещё и в
+     панели действий, а там родителя .dropdown-menu нет — жирность
+     терялась, и выделенные пункты выглядели рядовыми. */
+  button.menu-item-strong { font-weight: 700; }
   .dropdown-menu button.menu-item-danger { color: var(--color-danger); }
   .dropdown-menu button.menu-item-danger:hover { background: rgba(192,57,43,.12); }
   .dropdown-divider {
@@ -1021,19 +1355,31 @@
     position: fixed; inset: 0; background: var(--color-bg); display: flex; align-items: center; justify-content: center; z-index: 200;
   }
   #login-screen.hidden { display: none; }
+  /* Карточка входа следует гамме: у тёмных схем белый прямоугольник
+     посреди тёмного экрана выглядел чужеродно. Цвета — переменными, с
+     прежними значениями как запасными (базовой гаммы больше нет, но
+     переменные могут не успеть примениться до первой отрисовки). */
   #login-box {
-    background: #fff; color: #1a1a1a; border-radius: 14px; padding: 32px 36px; width: 340px; box-shadow: var(--shadow-md);
+    background: var(--color-surface, #fff); color: var(--color-text, #1a1a1a);
+    border-radius: 14px; padding: 32px 36px; width: 340px; box-shadow: var(--shadow-md);
   }
-  #login-logo { display: block; margin: 0 auto 18px; }
+  /* Отступ снизу больше прежнего: заголовок «ЖБИ — вход» убран, и логотип
+     теперь отделяет от полей только этот отступ. Подложка та же, что в
+     шапке — знак тёмный, а экран входа может оказаться на тёмной гамме. */
+  #login-logo { display: block; margin: 0 auto 26px; background: #ffffff;
+    border-radius: 10px; padding: 8px 14px; }
   #login-box h1 { font-size: 17px; margin: 0 0 20px; text-align: center; font-weight: 600; }
-  #login-box label.field { display: block; font-size: 12px; color: #666; margin: 12px 0 4px; }
+  #login-box label.field { display: block; font-size: 12px; color: var(--color-text-muted, #666); margin: 12px 0 4px; }
   #login-box input, #login-box select {
-    width: 100%; font-size: 14px; padding: 9px 11px; border-radius: 8px; border: 1px solid #d5d8dc; color: #1a1a1a; background: #fff;
+    width: 100%; font-size: 14px; padding: 9px 11px; border-radius: 8px;
+    border: 1px solid var(--color-border, #d5d8dc); color: var(--color-text, #1a1a1a);
+    background: var(--color-surface, #fff);
   }
   #login-box input:focus, #login-box select:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(19,83,214,.15); }
   #login-box button {
     width: 100%; margin-top: 18px; padding: 10px; border-radius: 8px; border: none;
-    background: var(--color-primary); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .12s;
+    background: var(--color-primary); color: var(--color-on-primary, #fff);
+    font-size: 14px; font-weight: 600; cursor: pointer; transition: background .12s;
   }
   #login-box button:hover { background: var(--color-primary-hover); }
   /* Поле пароля с кнопкой "показать". Правила #login-box input/button выше
@@ -1092,8 +1438,11 @@
 
 <div id="login-screen">
   <div id="login-box">
-    <img id="login-logo" src="/static/logo.svg" width="169" height="37" alt="МСУ-1"/>
-    <h1>ЖБИ — вход</h1>
+    <!-- Логотип-локап несёт и название, и принадлежность, поэтому заголовка
+         «ЖБИ — вход» под ним больше нет (живой запрос 2026-08-02): он
+         повторял то, что уже сказано знаком, и добавлял лишнюю строку на
+         единственный экран, где важен только ввод логина и пароля. -->
+    <img id="login-logo" src="/static/logo-digital.png" style="width:260px; height:auto" alt="МСУ-1 · Цифровая стройка"/>
     <label class="field">Логин</label>
     <!-- ОДНО поле, а не поле + отдельный выпадающий список: список
          пользователей подключён как <datalist>, то есть встроенная
@@ -1128,7 +1477,9 @@
 
 <div id="toolbar">
   <div id="toolbar-scroll">
-    <img id="toolbar-logo" src="/static/logo.svg" style="height:24px; width:auto; flex-shrink:0;" alt="МСУ-1"/>
+    <img id="toolbar-logo" src="/static/logo-digital.png" style="height:22px; width:auto; flex-shrink:0;" alt="МСУ-1 · Цифровая стройка"/>
+    <!-- Название сервиса рядом со знаком: в логотипе его нет, а «ЖБИ»
+         отличает этот сервис от остальных систем МСУ-1. -->
     <h1>ЖБИ</h1>
     <div class="dropdown" id="settings-dropdown">
       <button class="btn" id="btn-settings-menu">Действия ▾</button>
@@ -1151,12 +1502,13 @@
         <div class="submenu">
           <button type="button" class="submenu-trigger">Настройки</button>
           <div class="dropdown-menu submenu-panel">
+            <!-- Первым и жирным (живой запрос 2026-08-02): оформление
+                 меняют чаще, чем пароль, и ищут глазами в начале списка.
+                 Настройка личная: гамма хранится за пользователем, вид меню
+                 — за компьютером. Доступна всем ролям. -->
+            <button id="menu-view-mode" class="menu-item-strong">Цветовая схема</button>
             <button id="menu-change-password">Сменить пароль</button>
             <button id="menu-label-color">Цвет подписей марок</button>
-            <!-- Вид меню — личная настройка КОМПЬЮТЕРА (localStorage), как
-                 «3D лёгкий»: она про то, как человеку удобнее на этом
-                 экране, а не про проект. Поэтому доступна всем ролям. -->
-            <button id="menu-view-mode">Вид меню «Действия»…</button>
             <button id="menu-colors" class="admin-only">Цвета статусов</button>
             <button id="menu-shapes" class="admin-only">Форма маркеров</button>
             <button id="menu-zone-colors" class="object-admin-only">Цвета зон</button>
@@ -1181,7 +1533,7 @@
         <div class="submenu">
           <button type="button" class="submenu-trigger">Справочники</button>
           <div class="dropdown-menu submenu-panel">
-            <button id="menu-element-catalog" class="object-admin-only">Элементы</button>
+            <button id="menu-element-catalog" class="object-admin-only menu-item-strong">Элементы</button>
             <div class="submenu">
               <button type="button" class="submenu-trigger">Проект и объект</button>
               <div class="dropdown-menu submenu-panel">
@@ -1231,15 +1583,15 @@
             <!-- Первым и выделенным (живой запрос 2026-08-01): основной
                  повседневный способ править данные, остальное в группе —
                  разовые операции обмена. -->
-            <button id="menu-bulk-edit" class="admin-only menu-item-strong">Массовая правка через Excel…</button>
-            <button id="btn-upload" class="object-admin-only">Загрузить чертёж…</button>
+            <button id="menu-bulk-edit" class="admin-only menu-item-strong">Массовая правка через Excel</button>
+            <button id="btn-upload" class="object-admin-only">Загрузить чертёж</button>
             <button id="btn-export" class="object-admin-only">Экспорт в XLS</button>
             <button id="btn-export-pdf" class="object-admin-only">Экспорт в PDF</button>
             <button id="menu-history-import" class="object-admin-only">Импорт истории из XLS</button>
             <button id="menu-status-restore" class="object-admin-only">Восстановить статусы из выгрузки</button>
             <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
             <button id="menu-schedule-import" class="admin-only">Импорт графика MS Project из XLS</button>
-            <button id="menu-import-input" class="admin-only">Загрузить из папки Input…</button>
+            <button id="menu-import-input" class="admin-only">Загрузить из папки Input</button>
             <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
           </div>
         </div>
@@ -1261,10 +1613,10 @@
           <button type="button" class="submenu-trigger">Администрирование</button>
           <div class="dropdown-menu submenu-panel">
             <button id="menu-users" class="admin-only">Пользователи</button>
-            <button id="menu-backups" class="admin-only">Резервные копии…</button>
+            <button id="menu-backups" class="admin-only">Резервные копии</button>
             <button id="menu-activity" class="admin-only">Журнал действий</button>
             <!-- Последним и красным: необратимо и затрагивает ВСЕ чертежи разом. -->
-            <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов…</button>
+            <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов</button>
           </div>
         </div>
       </div>
@@ -1337,8 +1689,8 @@
     <div id="tooltip-2d"></div>
     <div id="multi-select-panel">
       <span id="multi-select-count">Выделено: 0</span>
-      <button class="btn btn-sm btn-primary" id="multi-select-status-btn">Изменить статус…</button>
-      <button class="btn btn-sm btn-secondary" id="multi-select-planned-date-btn">Плановая дата поставки…</button>
+      <button class="btn btn-sm btn-primary" id="multi-select-status-btn">Изменить статус</button>
+      <button class="btn btn-sm btn-secondary" id="multi-select-planned-date-btn">Плановая дата поставки</button>
       <button class="btn btn-sm btn-secondary" id="multi-select-clear">✕</button>
     </div>
   </div>
@@ -1658,7 +2010,12 @@
      же правке, и разъезд заметили бы только по жалобе. -->
 <div class="modal-backdrop" id="menu-view-backdrop">
   <div class="modal">
-    <h2>Вид меню «Действия»</h2>
+    <h2>Внешний вид</h2>
+    <label class="field">Цветовая гамма</label>
+    <div id="skin-choices" class="skin-choices"></div>
+    <p class="hint-text">Настройка личная: сохраняется за вами и переезжает вместе с вами
+      на другой компьютер. На данные и на других пользователей не влияет.</p>
+    <label class="field" style="margin-top:12px">Меню «Действия»</label>
     <label class="toggle"><input type="radio" name="menu-view" value="dropdown"/>
       Выпадающее меню — группы раскрываются вбок при наведении</label>
     <label class="toggle"><input type="radio" name="menu-view" value="panel"/>
