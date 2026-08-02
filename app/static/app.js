@@ -5427,6 +5427,27 @@ const settingsMenu = document.getElementById("settings-menu");
 // по жалобе. Отсюда же бесплатно берётся разграничение доступа — панель
 // показывает ровно то, что applyRolePermissions оставила видимым, — и все
 // обработчики: кнопка панели просто нажимает исходную кнопку меню.
+// ---------- Оформление: базовое и проба «Госуслуги» (2026-08-02) ----------
+//
+// Тема — ОДИН атрибут на <html>, всё остальное делают CSS-переменные и
+// несколько правил компонентов (index.html, блок [data-skin="gos"]).
+// Поэтому откат — это снятие атрибута, а не разбор правок по файлу; сама
+// проба вдобавок живёт в отдельной ветке.
+//
+// Атрибут ставится тут, а не инлайновым скриптом в <head>: строгий CSP
+// (script-src 'self' + единственный хэш для import map) инлайн запрещает, а
+// заводить второй хэш ради пробы — менять правило безопасности под
+// временный эксперимент. Цена — мгновенная вспышка базового оформления на
+// первой отрисовке.
+const SKIN_KEY = "zhbi_skin";
+
+function applySkin() {
+  const тема = localStorage.getItem(SKIN_KEY);
+  if (тема === "gos") document.documentElement.setAttribute("data-skin", "gos");
+  else document.documentElement.removeAttribute("data-skin");
+}
+applySkin();
+
 const MENU_VIEW_KEY = "zhbi_menu_view";
 const actionsPanelBackdrop = document.getElementById("actions-panel-backdrop");
 
@@ -5485,8 +5506,18 @@ document.getElementById("actions-panel-close").addEventListener("click", () =>
 document.getElementById("menu-view-mode").addEventListener("click", () => {
   const текущий = menuViewMode();
   document.querySelectorAll('input[name="menu-view"]').forEach(r => { r.checked = r.value === текущий; });
+  const тема = localStorage.getItem(SKIN_KEY) === "gos" ? "gos" : "base";
+  document.querySelectorAll('input[name="skin"]').forEach(r => { r.checked = r.value === тема; });
   document.getElementById("menu-view-backdrop").classList.add("open");
 });
+document.querySelectorAll('input[name="skin"]').forEach(r => r.addEventListener("change", () => {
+  if (!r.checked) return;
+  localStorage.setItem(SKIN_KEY, r.value);
+  applySkin();
+  // 3D-сцена читает цвета из CSS-переменных при сборке (фон, цвет рёбер) —
+  // просто сменить атрибут ей мало, нужен перерисованный кадр.
+  if (typeof requestRender3D === "function") requestRender3D();
+}));
 document.getElementById("menu-view-close").addEventListener("click", () =>
   document.getElementById("menu-view-backdrop").classList.remove("open"));
 document.querySelectorAll('input[name="menu-view"]').forEach(r => r.addEventListener("change", () => {

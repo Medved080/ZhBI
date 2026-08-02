@@ -54,6 +54,134 @@
       --shadow-md: 0 12px 32px rgba(0,0,0,.45);
     }
   }
+  /* ==================== ОФОРМЛЕНИЕ «ГОСУСЛУГИ» (проба, 2026-08-02) ====================
+     Живой запрос: «меню скучное и слишком минималистичное, переделай по
+     guides.gosuslugi.ru». Проба живёт В ОТДЕЛЬНОЙ ВЕТКЕ и вдобавок
+     включается/выключается на лету — оба способа отката, потому что
+     «попробовать» и «остаться» это разные решения, и второе ещё не принято.
+
+     Значения сняты С САМОГО ГАЙДА (computed styles на guides.gosuslugi.ru),
+     а не подобраны на глаз:
+       текст #0B1F33, приглушённый #66727F, акцент #0D4CD3;
+       фон страницы #FAFCFF, поверхности #FFFFFF / #F5F7FA / #EDF2FE;
+       радиус 12px (мелкий 4px), кнопка высотой 40px с отступами 8/16;
+       шрифт Lato, начертания заголовков 700.
+
+     Тема переопределяет ТОЛЬКО переменные и несколько компонентов —
+     базовое оформление остаётся нетронутым, чтобы откат был отменой
+     одного атрибута, а не разбором правок по всему файлу. */
+  :root[data-skin="gos"] {
+    --color-primary: #0D4CD3;
+    --color-primary-hover: #0a3ba8;
+    --color-bg: #FAFCFF;
+    --color-surface: #FFFFFF;
+    --color-surface-2: #F5F7FA;
+    --color-accent-soft: #EDF2FE;     /* подложка активных пунктов и мягких кнопок */
+    --color-border: #E4ECFD;
+    --color-text: #0B1F33;
+    --color-text-muted: #66727F;
+    --color-danger: #EE3F58;
+    --color-success: #21A038;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow-sm: 0 1px 2px rgba(11,31,51,.06);
+    --shadow-md: 0 8px 28px rgba(11,31,51,.12);
+  }
+  /* Тёмная схема у пробы своя: базовая построена на серых, а здесь фон
+     синеватый, и «просто затемнить» её значило бы получить грязный цвет. */
+  @media (prefers-color-scheme: dark) {
+    :root[data-skin="gos"] {
+      --color-bg: #0E1621;
+      --color-surface: #16202D;
+      --color-surface-2: #1D2837;
+      --color-accent-soft: #1B2C4E;
+      --color-border: #26344a;
+      --color-text: #E7EDF5;
+      --color-text-muted: #93A1B1;
+    }
+  }
+  /* Шрифт: Lato — то, чем набраны сами Госуслуги. В комплект НЕ вложен
+     (вендоринг стороннего файла требует отдельного согласия, см. CLAUDE.md),
+     поэтому берётся системный, если установлен, иначе ближайший гротеск. */
+  :root[data-skin="gos"] body,
+  :root[data-skin="gos"] button,
+  :root[data-skin="gos"] input,
+  :root[data-skin="gos"] select,
+  :root[data-skin="gos"] textarea {
+    font-family: "Lato", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  :root[data-skin="gos"] h1, :root[data-skin="gos"] h2,
+  :root[data-skin="gos"] h3, :root[data-skin="gos"] h4 { font-weight: 700; }
+  :root[data-skin="gos"] .modal h2 { font-size: 24px; line-height: 32px; letter-spacing: -.01em; }
+
+  /* Верхняя панель: белая, с мягкой линией снизу — как шапка портала. */
+  :root[data-skin="gos"] #toolbar {
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    box-shadow: none;
+    gap: 10px;
+  }
+  :root[data-skin="gos"] #toolbar h1 { display: none; }   /* название несёт логотип */
+  :root[data-skin="gos"] #toolbar-logo { height: 30px; }
+
+  /* Кнопки: рост 40, скругление 12, вторичная — мягкая синяя подложка без
+     рамки. Именно так выглядит «Войти» в шапке гайда. */
+  :root[data-skin="gos"] .btn {
+    border-radius: var(--radius); min-height: 40px; padding: 8px 16px;
+    font-size: 15px; font-weight: 600; border: none;
+  }
+  :root[data-skin="gos"] .btn-sm { min-height: 32px; padding: 6px 12px; font-size: 13px; }
+  :root[data-skin="gos"] .btn-secondary {
+    background: var(--color-accent-soft); color: var(--color-primary);
+  }
+  :root[data-skin="gos"] .btn-secondary:hover { background: #DCE6FB; }
+  :root[data-skin="gos"] .btn-primary { background: var(--color-primary); color: #fff; }
+  :root[data-skin="gos"] .btn-icon-round { border-radius: 50%; padding: 6px; min-height: 32px; }
+
+  /* Поля ввода — крупнее и мягче, как в формах портала. */
+  :root[data-skin="gos"] input[type="text"], :root[data-skin="gos"] input[type="password"],
+  :root[data-skin="gos"] input[type="date"], :root[data-skin="gos"] input[type="datetime-local"],
+  :root[data-skin="gos"] input[type="number"], :root[data-skin="gos"] select,
+  :root[data-skin="gos"] textarea {
+    border-radius: var(--radius-sm); border: 1px solid var(--color-border);
+    background: var(--color-surface); padding: 8px 12px;
+  }
+  :root[data-skin="gos"] input:focus, :root[data-skin="gos"] select:focus,
+  :root[data-skin="gos"] textarea:focus {
+    outline: 2px solid var(--color-primary); outline-offset: -1px; border-color: transparent;
+  }
+
+  /* Меню и панель действий: пункты — «пилюли», активная группа с мягкой
+     синей подложкой вместо серой. */
+  :root[data-skin="gos"] .dropdown-menu { border-radius: var(--radius); padding: 8px; }
+  :root[data-skin="gos"] .dropdown-menu button { border-radius: var(--radius-sm); padding: 9px 12px; }
+  :root[data-skin="gos"] .dropdown-menu button:hover,
+  :root[data-skin="gos"] .submenu.open > .submenu-trigger { background: var(--color-accent-soft); }
+  :root[data-skin="gos"] .actions-panel-group {
+    border: none; background: var(--color-surface-2); border-radius: var(--radius); padding: 14px 16px;
+  }
+  :root[data-skin="gos"] .actions-panel-group > h4 { color: var(--color-primary); }
+  :root[data-skin="gos"] .actions-panel button { border-radius: var(--radius-sm); padding: 7px 10px; }
+  :root[data-skin="gos"] .actions-panel button:hover { background: var(--color-accent-soft); }
+  :root[data-skin="gos"] .actions-panel-sub { border-left-color: var(--color-primary); }
+
+  /* Сайдбар: вкладки-пилюли вместо подчёркивания. */
+  :root[data-skin="gos"] #sidebar { background: var(--color-surface); border-left: 1px solid var(--color-border); }
+  :root[data-skin="gos"] .tab {
+    border: none; border-radius: 999px; padding: 7px 14px; font-weight: 600;
+  }
+  :root[data-skin="gos"] .tab.active { background: var(--color-accent-soft); color: var(--color-primary); }
+
+  /* Карточки, модалки, таблицы. */
+  :root[data-skin="gos"] .modal { border-radius: 16px; }
+  :root[data-skin="gos"] .card-block {
+    background: var(--color-surface-2); border-radius: var(--radius); padding: 12px 14px; border: none;
+  }
+  :root[data-skin="gos"] table th { color: var(--color-text-muted); font-weight: 600; }
+  :root[data-skin="gos"] .status-bar {
+    background: var(--color-surface); border-top: 1px solid var(--color-border);
+  }
+
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -1658,7 +1786,15 @@
      же правке, и разъезд заметили бы только по жалобе. -->
 <div class="modal-backdrop" id="menu-view-backdrop">
   <div class="modal">
-    <h2>Вид меню «Действия»</h2>
+    <h2>Внешний вид</h2>
+    <label class="field">Оформление</label>
+    <label class="toggle"><input type="radio" name="skin" value="base"/>
+      Базовое — то, что было до пробы</label>
+    <label class="toggle"><input type="radio" name="skin" value="gos"/>
+      «Госуслуги» — проба редизайна по guides.gosuslugi.ru</label>
+    <p class="hint-text">Проба. Переключается мгновенно и ничего не меняет в данных —
+      если не понравится, вернитесь к базовому.</p>
+    <label class="field" style="margin-top:12px">Меню «Действия»</label>
     <label class="toggle"><input type="radio" name="menu-view" value="dropdown"/>
       Выпадающее меню — группы раскрываются вбок при наведении</label>
     <label class="toggle"><input type="radio" name="menu-view" value="panel"/>
