@@ -310,14 +310,21 @@ def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
         # ORDER BY name невозможен — name больше не столбец, а генерируется
         # в _to_contract_out; сортируем по тому же порядку компонентов, что
         # и само наименование (Контрагент/Договор/Спецификация).
+        # Отбор по доступным объектам: список отдавал ВСЕ контракты всех
+        # строек с полной цепочкой контрагент→договор→спецификация,
+        # позициями, фактом и остатками — коммерческая информация всему
+        # предприятию (аудит безопасности 2026-08-03).
+        доступ, доступ_params = _accessible_contracts_clause(conn, user)
         rows = conn.execute(
-            """
+            f"""
             SELECT co.* FROM contracts co
             JOIN specifications s ON s.id = co.specification_id
             JOIN agreements a ON a.id = s.agreement_id
             JOIN counterparties c ON c.id = a.counterparty_id
+            WHERE {доступ}
             ORDER BY c.short_name, a.number, s.number
-            """
+            """,
+            доступ_params,
         ).fetchall()
         # Агрегаты — ОДИН раз на все контракты сразу (см. _load_contract_bundle),
         # иначе на каждую строку каждого контракта уходило по два запроса.
@@ -344,13 +351,16 @@ def find_or_create_contract(conn, specification_id: int, theme: Optional[str] = 
     return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
 
-def _guard_specification(conn, user, specification_id: int) -> None:
+def _guard_specification(conn, user, specification_id: int, minimum: str = "admin") -> None:
     """Доступ к контракту — по объекту его спецификации: контракт ->
     спецификация -> договор -> object_id (цепочка этапа A).
 
     Объект контракта именно ВЫВОДИТСЯ, а не хранится полем — поэтому и
     проверять его надо по цепочке, иначе появился бы второй источник
     правды о принадлежности контракта.
+
+    `minimum` — роль на объекте: "admin" для правки (как было), "view" для
+    чтения (аудит безопасности 2026-08-03: читать контракты мог кто угодно).
     """
     row = conn.execute(
         "SELECT a.object_id FROM specifications s "
@@ -366,7 +376,50 @@ def _guard_specification(conn, user, specification_id: int) -> None:
                 detail="Договор спецификации не привязан к объекту — правит администратор сервиса",
             )
         return
-    assert_object_access(conn, user, row["object_id"], "admin")
+    assert_object_access(conn, user, row["object_id"], minimum)
+
+
+def _guard_contract(conn, user, contract_id: int, minimum: str = "admin") -> None:
+    """Доступ по ТЕКУЩЕМУ владельцу контракта.
+
+    Отдельно от _guard_specification, и это не дублирование: та проверяет
+    спецификацию, которую ПРИСЛАЛИ в теле запроса. При правке контракта
+    этого мало — без проверки того, чей контракт правится, администратор
+    объекта А брал чужой contract_id и переписывал его specification_id на
+    свою спецификацию, уводя контракт объекта Б к себе вместе со всеми
+    привязанными элементами (аудит безопасности 2026-08-03). Нужны ОБЕ
+    проверки: откуда берём и куда переносим.
+    """
+    row = conn.execute(
+        "SELECT a.object_id FROM contracts co "
+        "JOIN specifications s ON s.id = co.specification_id "
+        "JOIN agreements a ON a.id = s.agreement_id WHERE co.id = ?",
+        (contract_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Контракт не найден")
+    if row["object_id"] is None:
+        if user["role"] != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Контракт не привязан к объекту — доступен администратору сервиса",
+            )
+        return
+    assert_object_access(conn, user, row["object_id"], minimum)
+
+
+def _accessible_contracts_clause(conn, user) -> tuple:
+    """Условие «контракт относится к доступному объекту» для списков.
+    Возвращает (фрагмент SQL, параметры) для WHERE по цепочке
+    contracts -> specifications -> agreements.object_id."""
+    from app.access import accessible_object_ids
+    ids = accessible_object_ids(conn, user)
+    if ids is None:
+        return "1 = 1", []
+    if not ids:
+        return "1 = 0", []
+    marks = ",".join("?" * len(ids))
+    return f"a.object_id IN ({marks})", list(ids)
 
 
 @router.post("", response_model=ContractOut)
@@ -403,6 +456,9 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_u
 @router.patch("/{contract_id}", response_model=ContractOut)
 def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    # ОБЕ проверки: чей контракт правим и куда его переносим. Одной второй
+    # было мало — см. _guard_contract.
+    _guard_contract(conn, admin, contract_id)
     _guard_specification(conn, admin, body.specification_id)
     try:
         existing = conn.execute("SELECT id FROM contracts WHERE id = ?", (contract_id,)).fetchone()
@@ -445,6 +501,7 @@ def list_contract_elements(contract_id: int, user: sqlite3.Row = Depends(get_cur
     5000 там) — реалистичный контракт заведомо укладывается в память."""
     conn = get_connection()
     try:
+        _guard_contract(conn, user, contract_id, "view")
         existing = conn.execute("SELECT id FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Контракт не найден")

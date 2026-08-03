@@ -37,7 +37,8 @@ def main() -> int:
     conn = get_connection()
     try:
         user = conn.execute(
-            "SELECT id, last_name, first_name, role FROM users WHERE domain_login = ?", (domain_login,)
+            "SELECT id, last_name, first_name, role, auth_method FROM users WHERE domain_login = ?",
+            (domain_login,),
         ).fetchone()
         if user is None:
             known = [r["domain_login"] for r in conn.execute("SELECT domain_login FROM users ORDER BY domain_login")]
@@ -46,6 +47,16 @@ def main() -> int:
             return 1
 
         print(f"Пользователь: {user['last_name']} {user['first_name']} ({domain_login}), роль: {user['role']}")
+        if user["auth_method"] == "domain":
+            # Это и есть аварийный выход из «домен сломался/перенастроен, а
+            # доменные учётные записи — единственные администраторы»: скрипт
+            # ВОЗВРАЩАЕТ учётную запись на пароль сервиса. Оставить её на
+            # домене и просто записать хэш было бы бесполезно — вход такой
+            # пароль не спрашивает (см. app/auth.py login).
+            print("Сейчас у пользователя ДОМЕННАЯ авторизация. Установка пароля переведёт "
+                  "его обратно на пароль сервиса — доменный пароль перестанет подходить.")
+            if input("Продолжить? [y/N]: ").strip().lower() not in ("y", "yes", "д", "да"):
+                return 1
         password = getpass.getpass("Новый пароль: ")
         confirm = getpass.getpass("Повторите пароль: ")
         if password != confirm:
@@ -60,7 +71,8 @@ def main() -> int:
 
         password_hash, password_salt = hash_password(password)
         conn.execute(
-            "UPDATE users SET password_hash = ?, password_salt = ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE users SET password_hash = ?, password_salt = ?, auth_method = 'local', "
+            "updated_at = datetime('now') WHERE id = ?",
             (password_hash, password_salt, user["id"]),
         )
         # Так же, как при смене пароля через UI (app/users.py set_password) —

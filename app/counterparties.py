@@ -233,15 +233,53 @@ def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlit
 def list_agreements(counterparty_id: int = Query(...), user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        # Договор — сущность ОБЪЕКТНАЯ, и для правки это учитывалось
+        # (_guard_agreement), а для чтения — нет: перебором counterparty_id
+        # восстанавливалась вся договорная база предприятия (аудит
+        # безопасности 2026-08-03).
+        доступ, доступ_params = _accessible_agreements_clause(conn, user)
         rows = conn.execute(
-            "SELECT * FROM agreements WHERE counterparty_id = ? ORDER BY number", (counterparty_id,)
+            f"SELECT * FROM agreements WHERE counterparty_id = ? AND {доступ} ORDER BY number",
+            (counterparty_id, *доступ_params),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def _guard_agreement(conn, user, agreement_id: int) -> None:
+def _guard_specification_owner(conn, user, specification_id: int, minimum: str = "admin") -> None:
+    """Доступ по ТЕКУЩЕМУ договору спецификации (а не по присланному)."""
+    row = conn.execute(
+        "SELECT a.object_id FROM specifications s "
+        "JOIN agreements a ON a.id = s.agreement_id WHERE s.id = ?",
+        (specification_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Спецификация не найдена")
+    if row["object_id"] is None:
+        if user["role"] != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Договор спецификации не привязан к объекту — правит администратор сервиса",
+            )
+        return
+    assert_object_access(conn, user, row["object_id"], minimum)
+
+
+def _accessible_agreements_clause(conn, user, column: str = "object_id") -> tuple:
+    """Условие «договор относится к доступному объекту» для списков.
+    Безобъектные договоры видит только администратор сервиса."""
+    from app.access import accessible_object_ids
+    ids = accessible_object_ids(conn, user)
+    if ids is None:
+        return "1 = 1", []
+    if not ids:
+        return "1 = 0", []
+    marks = ",".join("?" * len(ids))
+    return f"{column} IN ({marks})", list(ids)
+
+
+def _guard_agreement(conn, user, agreement_id: int, minimum: str = "admin") -> None:
     """Доступ к договору — по объекту, на который он заключён
     (agreements.object_id, этап A).
 
@@ -259,7 +297,7 @@ def _guard_agreement(conn, user, agreement_id: int) -> None:
                 detail="Договор не привязан к объекту — правит администратор сервиса",
             )
         return
-    assert_object_access(conn, user, row["object_id"], "admin")
+    assert_object_access(conn, user, row["object_id"], minimum)
 
 
 @router.post("/agreements", response_model=AgreementOut)
@@ -313,6 +351,10 @@ def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = 
 def list_specifications(agreement_id: int = Query(...), user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        # Спецификации принадлежат объекту через свой договор — проверяем
+        # доступ к нему, а не отдаём по любому присланному agreement_id
+        # (аудит безопасности 2026-08-03).
+        _guard_agreement(conn, user, agreement_id, "view")
         rows = conn.execute(
             "SELECT * FROM specifications WHERE agreement_id = ? ORDER BY number", (agreement_id,)
         ).fetchall()
@@ -345,6 +387,11 @@ def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(get
 @router.patch("/specifications/{specification_id}", response_model=SpecificationOut)
 def update_specification(specification_id: int, body: SpecificationIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    # Сначала — чья спецификация правится, потом — куда её переносят. Без
+    # первой проверки админ объекта А перевешивал чужую спецификацию на свой
+    # договор (аудит безопасности 2026-08-03), тот же дефект, что был у
+    # правки контракта.
+    _guard_specification_owner(conn, admin, specification_id)
     _guard_agreement(conn, admin, body.agreement_id)
     try:
         existing = conn.execute("SELECT id FROM specifications WHERE id = ?", (specification_id,)).fetchone()

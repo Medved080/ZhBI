@@ -74,6 +74,14 @@ _COLUMN_MIGRATIONS = [
     # за компьютером — на площадке за одной машиной работают посменно.
     # NULL = базовое оформление.
     ("users", "ui_theme", "TEXT"),
+    # Чем проверяется вход: 'local' — пароль сервиса (PBKDF2 в
+    # password_hash), 'domain' — доменная учётная запись через LDAP-bind к
+    # контроллеру домена (см. app/ldap_auth.py, 2026-08-03). NOT NULL
+    # DEFAULT 'local' — все уже накопленные учётные записи остаются на
+    # прежнем способе, доменный включается каждому явно.
+    # CHECK сюда добавить нельзя (ALTER TABLE ADD COLUMN его не принимает),
+    # поэтому набор значений проверяет Python — app/users.py AUTH_METHODS.
+    ("users", "auth_method", "TEXT NOT NULL DEFAULT 'local'"),
     # Этаж — из суффикса "_этаж N" в конце имени слоя нового стандарта
     # (см. scripts/layer_naming.py, Docs/backlog.md, "Свойство 'этаж'").
     # NULL у элементов, чьи слои этот суффикс ещё не проставляют.

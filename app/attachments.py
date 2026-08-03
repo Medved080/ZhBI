@@ -22,7 +22,7 @@
 доказательство не должен тот, кто его не заводил.
 """
 
-import mimetypes
+import re
 import sqlite3
 import uuid
 from pathlib import Path
@@ -85,6 +85,37 @@ def _row_out(row: sqlite3.Row) -> dict:
     d = dict(row)
     d.pop("stored_name", None)   # путь на диске наружу не отдаём
     return d
+
+
+# Тип содержимого, с которым вложение ОТДАЁТСЯ. Всегда один и тот же, и это
+# не перестраховка (аудит безопасности 2026-08-03).
+#
+# Раньше в ответ шёл `content_type`, присланный самим загружающим. Заголовок
+# `Content-Disposition: attachment` защищает только от перехода по ссылке —
+# он НЕ мешает подключить тот же адрес подресурсом: `<script
+# src="/attachments/17/download">`. `X-Content-Type-Options: nosniff` тут
+# тоже не помощник: он требует, чтобы MIME был скриптовым, а MIME задавал
+# сам атакующий. То есть любой, кому можно приложить файл (роль `user` хотя
+# бы на одном объекте), клал на наш же origin произвольный JS — и
+# `script-src 'self'` в CSP переставал что-либо значить.
+#
+# `application/octet-stream` + nosniff — браузер отказывается исполнять файл
+# как скрипт. Для пользователя не меняется ничего: файл и так скачивается, а
+# чем его открыть, ОС решает по расширению имени из `Content-Disposition`.
+DOWNLOAD_CONTENT_TYPE = "application/octet-stream"
+
+# Что кладём в БД. Значение информационное (показывается в списке вложений),
+# но приходит от клиента, поэтому принимаем только опрятный MIME-токен —
+# иначе в интерфейс попадёт произвольная строка.
+_MIME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,62}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,62}$")
+
+
+def sanitize_content_type(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    # Параметры (`; charset=utf-8`) отбрасываем — храним только сам тип.
+    основной = value.split(";")[0].strip().lower()
+    return основной if _MIME_RE.match(основной) else None
 
 
 def list_for(conn, entity_type: str, entity_id: int) -> list:
@@ -188,7 +219,7 @@ def upload_attachment(
             "content_type, description, uploaded_by, uploaded_by_user_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (entity_type, entity_id, исходное[:255], stored, len(содержимое),
-             file.content_type, (description or "").strip() or None,
+             sanitize_content_type(file.content_type), (description or "").strip() or None,
              format_display_name(user), user["id"]),
         )
         conn.commit()
@@ -216,10 +247,9 @@ def download_attachment(attachment_id: int, user: sqlite3.Row = Depends(get_curr
         raise HTTPException(status_code=410, detail="Файл вложения отсутствует на диске")
     from urllib.parse import quote
     имя = row["filename"]
-    media = row["content_type"] or mimetypes.guess_type(имя)[0] or "application/octet-stream"
     return Response(
         content=путь.read_bytes(),
-        media_type=media,
+        media_type=DOWNLOAD_CONTENT_TYPE,  # см. комментарий у константы
         headers={"Content-Disposition":
                  f"attachment; filename=\"file\"; filename*=UTF-8''{quote(имя)}"},
     )

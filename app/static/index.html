@@ -644,16 +644,19 @@
   /* Две зоны: слева ежедневная работа (плиткой), справа — отчёты и
      настройка (столбиком). Правая колонка фиксированной ширины: она узкая
      по смыслу, и растягивать её на треть окна незачем. */
-  .actions-panel { display: grid; grid-template-columns: 1fr 260px; gap: 16px;
-    align-items: start; }
-  /* auto-FIT, а не auto-fill: fill резервирует дорожки под несуществующие
-     группы, и справа от «Обмена данными» зияла пустая колонка (живой
-     репорт со скриншотом). fit схлопывает пустые дорожки. */
-  .actions-panel-main { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: 14px; align-items: start; }
-  .actions-panel-side { display: flex; flex-direction: column; gap: 14px; }
+  /* Колонки заданы ЯВНО (см. ACTIONS_PANEL_COLUMNS в app.js) — раньше
+     слева была сетка auto-fit, и что окажется под чем, решала ширина окна,
+     а не замысел. flex, а не grid: скрытая ролью колонка выпадает из
+     раскладки целиком, тогда как у grid с жёстким набором дорожек на её
+     месте зияла бы пустота (этим уже обжигались на auto-fill). */
+  .actions-panel { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .actions-panel-col { flex: 1 1 210px; min-width: 0; display: flex;
+    flex-direction: column; gap: 14px; }
+  /* Последняя колонка — настройки и администрирование: она узкая по смыслу,
+     растягивать её на треть окна незачем. */
+  .actions-panel-col:last-child { flex: 0 1 260px; }
   @media (max-width: 780px) {
-    .actions-panel { grid-template-columns: 1fr; }
+    .actions-panel-col, .actions-panel-col:last-child { flex: 1 1 100%; }
   }
   .actions-panel-group { border: 1px solid var(--color-border); border-radius: var(--radius);
     padding: 10px 12px; }
@@ -1172,7 +1175,14 @@
   /* Журнал действий — та же табличная раскладка, что у списка
      пользователей (не заводим третий стиль таблицы ради одной формы). */
   /* -------- отчёты -------- */
-  .report-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  /* wrap обязателен: с появлением периода «Динамики» (2026-08-03) шапка
+     перестала помещаться в одну строку и сжимала вкладки — «График
+     поставки» уезжал под поля дат. */
+  .report-head { display: flex; align-items: center; gap: 10px 14px; margin-bottom: 10px; flex-wrap: wrap; }
+  .report-tabs, .report-actions { flex-shrink: 0; }
+  /* Период — одной строкой; label.field в модалках блочный (см. выше), и
+     поля дат вставали бы друг под друга. */
+  #report-period-box { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
   .report-tabs { display: inline-flex; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
   .report-tab { border: none; background: var(--color-surface); padding: 6px 14px; font-size: 13px; cursor: pointer; color: var(--color-text); }
   .report-tab + .report-tab { border-left: 1px solid var(--color-border); }
@@ -1721,6 +1731,9 @@
           <button type="button" class="submenu-trigger">Администрирование</button>
           <div class="dropdown-menu submenu-panel">
             <button id="menu-users" class="admin-only">Пользователи</button>
+            <!-- Рядом с «Пользователями» (2026-08-03): это настройка того,
+                 ЧЕМ пользователь входит, и ходят сюда из той же формы. -->
+            <button id="menu-ldap" class="admin-only">Доменная авторизация</button>
             <button id="menu-backups" class="admin-only">Резервные копии</button>
             <button id="menu-activity" class="admin-only">Журнал действий</button>
             <!-- Последним и красным: необратимо и затрагивает ВСЕ чертежи разом. -->
@@ -2379,6 +2392,15 @@
     <label class="field">Должность</label><input type="text" id="ue-position"/>
     <label class="field">Подразделение</label><input type="text" id="ue-department"/>
     <label class="field">Доменное имя</label><input type="text" id="ue-domain-login"/>
+    <!-- Способ входа — свойство учётной записи, а не режим всего сервиса
+         (2026-08-03): подрядчики и временные учётки доменной записи не
+         имеют и остаются на пароле сервиса. -->
+    <label class="field">Способ входа</label>
+    <select id="ue-auth-method">
+      <option value="local">Пароль сервиса</option>
+      <option value="domain">Доменная учётная запись</option>
+    </select>
+    <p class="hint-text" id="ue-auth-method-hint"></p>
     <label class="field">Системная роль</label>
     <select id="ue-role">
       <option value="admin">Администратор сервиса</option>
@@ -2416,6 +2438,65 @@
     <div class="actions">
       <button class="btn btn-secondary" id="user-password-cancel">Отмена</button>
       <button class="btn btn-primary" id="user-password-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Доменная (корпоративная) авторизация — 2026-08-03, см. app/ldap_auth.py.
+     Форма СИСТЕМНАЯ (контроллер домена один на сервис, не на стройку),
+     поэтому живёт в «Администрировании» и закрыта системной ролью. -->
+<div class="modal-backdrop" id="ldap-backdrop">
+  <div class="modal modal-sticky">
+    <div class="modal-sticky-head"><h2>Доменная авторизация</h2></div>
+    <div class="modal-sticky-scroll">
+      <p class="hint-text">Пользователь вводит на обычной форме входа свой доменный логин и
+        <b>доменный</b> пароль, сервис проверяет пару у контроллера домена (LDAP-bind).
+        Служебная учётная запись не нужна — сервис не хранит доменных паролей.
+        Кому именно входить по домену, задаётся в карточке каждого пользователя
+        («Администрирование → Пользователи → Способ входа»); из домена никто
+        автоматически не заводится.</p>
+
+      <label class="toggle"><input type="checkbox" id="ldap-enabled"/> Разрешить вход по доменным учётным записям</label>
+
+      <label class="field">Контроллер домена (имя или адрес)</label>
+      <input type="text" id="ldap-host" placeholder="dc01.corp.local"/>
+      <label class="field">Порт</label>
+      <input type="number" id="ldap-port" min="1" max="65535"/>
+      <label class="toggle"><input type="checkbox" id="ldap-use-ssl"/> LDAPS (шифрование сразу, обычно порт 636)</label>
+      <label class="toggle"><input type="checkbox" id="ldap-start-tls"/> STARTTLS (шифрование поверх обычного порта 389)</label>
+      <label class="toggle"><input type="checkbox" id="ldap-verify-cert"/> Проверять сертификат контроллера домена</label>
+
+      <label class="field">Шаблон входа</label>
+      <input type="text" id="ldap-login-template" placeholder="{login}@corp.local"/>
+      <p class="hint-text">На место <code>{login}</code> подставляется доменное имя пользователя из его
+        карточки. Обычные варианты: <code>{login}@corp.local</code> либо <code>CORP\{login}</code> —
+        какой принят в вашем домене, знает его администратор.</p>
+
+      <label class="field">Таймаут соединения, секунд</label>
+      <input type="number" id="ldap-timeout" min="1" max="60"/>
+
+      <!-- Проверка ДО сохранения: иначе единственным способом узнать,
+           верно ли заполнены поля, было бы записать непроверенное в рабочую
+           настройку и выгнать доменных пользователей на время проверки. -->
+      <div class="access-tree-block" style="margin-top:16px;">
+        <label class="field">Проверка подключения</label>
+        <p class="hint-text">Пробная привязка с полями, введёнными выше (сохранять для этого не нужно).
+          Проверяйте своей доменной учётной записью — ни логин, ни пароль не сохраняются.</p>
+        <label class="field">Доменный логин</label>
+        <input type="text" id="ldap-test-login"/>
+        <label class="field">Доменный пароль</label>
+        <input type="password" id="ldap-test-password"/>
+        <button class="btn btn-secondary" id="ldap-test-run" style="margin-top:8px;">Проверить</button>
+        <div id="ldap-test-result" style="margin-top:8px; font-size:12px;"></div>
+      </div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="error-text" id="ldap-error"></div>
+      <div class="hint-text" id="ldap-status"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="ldap-cancel">Закрыть</button>
+        <button class="btn btn-primary" id="ldap-save">Сохранить</button>
+      </div>
     </div>
   </div>
 </div>
@@ -2631,6 +2712,16 @@
         <label class="field" id="report-date-box" style="display:none; margin:0">
           На дату <input type="date" id="report-date" style="width:auto"/>
         </label>
+        <!-- Период графика «Динамики» — тот же, что на панели «Статус»:
+             масштаб оси X, а не пересчёт (отчётная дата и таблицы
+             «план/факт/отклонение» от него не зависят). -->
+        <span id="report-period-box" style="display:none">
+          Период <input type="date" id="dyn-from" style="width:auto"/>
+          <span>—</span>
+          <input type="date" id="dyn-to" style="width:auto"/>
+          <button type="button" class="link-btn" id="dyn-range-reset"
+                  title="Весь срок проекта" style="display:none">весь срок</button>
+        </span>
         <span class="spacer"></span>
         <div class="report-actions">
           <button class="btn btn-sm btn-secondary" id="report-print" title="Печать отчёта">Печать</button>

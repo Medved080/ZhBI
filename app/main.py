@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
@@ -119,6 +119,7 @@ from app.models import (
     StatusUpdateIn,
     StatusUpdateResult,
     ZoneColorIn,
+    validate_color,
     ObjectOut,
     ObjectPatchIn,
     ZoneLevelIn,
@@ -128,8 +129,14 @@ from app.models import (
 )
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
+from app.ldap_auth import router as ldap_router
 from app.settings import router as settings_router
-from app.upload_limits import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB, read_upload_limited
+from app.upload_limits import (
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_MB,
+    MaxBodySizeMiddleware,
+    read_upload_limited,
+)
 from app.users import router as users_router
 
 # Интерактивная документация (/docs, /redoc) и схема (/openapi.json)
@@ -196,28 +203,16 @@ async def security_headers(request, call_next):
     return response
 
 
-@app.middleware("http")
-async def limit_upload_size(request, call_next):
-    """Быстрый отказ ДО чтения тела запроса, если клиент честно объявил
-    Content-Length больше лимита (у браузерных multipart-форм так и
-    есть всегда — см. app/upload_limits.py). Второй, более медленный
-    барьер — copy_upload_limited/read_upload_limited на самих точках
-    чтения файла, на случай запроса без Content-Length."""
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            too_big = int(content_length) > MAX_UPLOAD_BYTES
-        except ValueError:
-            too_big = False
-        if too_big:
-            return JSONResponse(
-                {"detail": f"Файл слишком большой (максимум {MAX_UPLOAD_MB} МБ)"}, status_code=413
-            )
-    return await call_next(request)
-
+# Лимит тела запроса — САМЫМ ВНЕШНИМ слоем (add_middleware ставит
+# последний добавленный снаружи всех предыдущих), чтобы отсечь приём
+# раньше, чем тело дойдёт до разбора multipart и до зависимостей
+# авторизации. Реализация — в app/upload_limits.py, там же объяснено,
+# почему это чистый ASGI-класс, а не @app.middleware.
+app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(ldap_router)
 app.include_router(contracts_router)
 app.include_router(counterparties_router)
 app.include_router(settings_router)
@@ -300,11 +295,17 @@ def _warn_users_without_password() -> None:
     app/auth.py verify_password) — это не "тихая" деградация, а рабочая
     учётка, которой прямо сейчас никто не может воспользоваться (в
     частности — свежесозданная БД с дефолтным admin, см. schema.sql).
-    Громкий лог при каждом старте — чтобы это не потерялось молча."""
+    Громкий лог при каждом старте — чтобы это не потерялось молча.
+
+    Доменные пользователи (auth_method='domain') сюда НЕ попадают: у них
+    пароль сервиса пуст закономерно, вход им даёт контроллер домена (см.
+    app/ldap_auth.py). Иначе предупреждение при каждом старте перечисляло бы
+    исправно работающие учётные записи и быстро перестало бы читаться."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT domain_login FROM users WHERE password_hash IS NULL ORDER BY domain_login"
+            "SELECT domain_login FROM users WHERE password_hash IS NULL "
+            "AND auth_method != 'domain' ORDER BY domain_login"
         ).fetchall()
     finally:
         conn.close()
@@ -516,6 +517,9 @@ def list_elements(
     conn = get_connection()
     try:
         clauses, params = [visible_elements_clause()], []
+        доступ, доступ_params = _accessible_objects_clause(conn, user)
+        clauses.append(доступ)
+        params.extend(доступ_params)
         if status:
             clauses.append("current_status = ?")
             params.append(status)
@@ -586,6 +590,10 @@ def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
         row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
+        # Карточка отдаёт элемент вместе со ВСЕЙ историей статусов (кто и
+        # когда менял, с ФИО) и названием объекта — до аудита 2026-08-03
+        # любому вошедшему по любому id (аудит безопасности).
+        _guard_elements(conn, user, [element_id], "view")
         history_rows = conn.execute(
             "SELECT * FROM status_history WHERE element_id = ? ORDER BY changed_at",
             (element_id,),
@@ -890,6 +898,10 @@ class ReportRequestIn(BaseModel):
     # Отчётная дата — только для «Динамики» (ежедневный отчёт «на дату»).
     # Пусто = сегодня; сервер возвращает фактически применённую дату.
     report_date: Optional[str] = None
+    # Период графика «Динамики» — масштаб оси X, а не пересчёт (см.
+    # build_dynamics_report). Пусто = весь срок проекта.
+    week_from: Optional[str] = None
+    week_to: Optional[str] = None
     # Список id — необязательное сужение отчёта текущим фильтром схемы. Тот
     # же приём, что у XLS-экспорта: критерии фильтра живут на клиенте, и
     # дублировать их на сервере значило бы держать две расходящиеся копии.
@@ -912,12 +924,69 @@ def _report_object_id(conn, body: "ReportRequestIn"):
     return _object_for_source_file(conn, body.source_file) if body.source_file else None
 
 
+def _guard_report(conn, user, body: "ReportRequestIn") -> "ReportRequestIn":
+    """Доступ к отчёту и ОБЛАСТЬ его данных (аудит безопасности 2026-08-03).
+
+    До этой правки все десять отчётов закрывались одним `get_current_user`,
+    то есть любой вошедший строил отчёт по любому объекту, назвав чужой
+    `object_id`. Хуже того, `build_status_report` при пустых `source_file` и
+    `element_ids` не ставит НИКАКОГО ограничения — тело `{}` давало сводку
+    по всей базе разом, вместе с выгрузкой в XLSX и PDF.
+
+    Проверяется КАЖДЫЙ признак, который сузит выборку, а не первый
+    попавшийся: `object_id`, `source_file` и `element_ids` приходят
+    независимо, и назвать свой объект, а элементы попросить чужие — ровно то,
+    что проверка «по первому непустому» пропустила бы.
+
+    Отдельно важно: `object_id` сам по себе данные НЕ сужает — он выбирает
+    только карточку объекта и текстовые блоки, а выборка идёт по
+    `source_file`/`element_ids`. Поэтому при отсутствии `source_file` он
+    здесь же переводится в актуальный чертёж объекта — иначе проверка прав
+    прошла бы по своему объекту, а числа приехали бы по всем.
+
+    Возвращается тело с проставленным `source_file` — вызывающий работает
+    уже с суженным.
+    """
+    проверено = False
+    if body.object_id is not None:
+        assert_object_access(conn, user, body.object_id, "view")
+        проверено = True
+    if body.source_file:
+        _guard_source_file(conn, user, body.source_file, "view")
+        проверено = True
+    if body.element_ids:
+        _guard_elements(conn, user, body.element_ids, "view")
+        проверено = True
+
+    if not проверено:
+        # Ни объекта, ни чертежа, ни списка элементов. Для администратора
+        # сервиса это законная сводка по всей системе — ему и так доступно
+        # всё. Для остальных «по умолчанию всё» недопустимо: просить нужно
+        # явно то, на что есть права.
+        if not is_system_admin(user):
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите объект отчёта: без него отчёт охватил бы все объекты сразу",
+            )
+        return body
+
+    if not body.source_file and body.object_id is not None:
+        try:
+            return body.model_copy(update={"source_file": object_source_file(conn, body.object_id)})
+        except LookupError:
+            # У объекта нет актуального чертежа — отчёт строить не по чему.
+            # Молча отдать «всю базу» здесь было бы худшим из вариантов.
+            raise HTTPException(status_code=404, detail="У объекта нет актуального чертежа")
+    return body
+
+
 @app.post("/reports/status")
 def report_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     """Отчёт «Статусы» — данные для экрана. POST, а не GET: список id может
     быть в тысячи элементов и не помещается в строку запроса."""
     conn = get_connection()
     try:
+        body = _guard_report(conn, user, body)
         return build_status_report(conn, body.source_file, body.element_ids)
     finally:
         conn.close()
@@ -928,8 +997,9 @@ def report_dynamics(body: ReportRequestIn, user: sqlite3.Row = Depends(get_curre
     """Ежедневный отчёт «Динамика монтажа и поставки ТМЦ»."""
     conn = get_connection()
     try:
+        body = _guard_report(conn, user, body)
         return build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
-                                     _report_object_id(conn, body))
+                                     _report_object_id(conn, body), body.week_from, body.week_to)
     finally:
         conn.close()
 
@@ -945,8 +1015,9 @@ def _report_file_response(content: bytes, name: str, media_type: str) -> Respons
 def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        body = _guard_report(conn, user, body)
         report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
-                                       _report_object_id(conn, body))
+                                       _report_object_id(conn, body), body.week_from, body.week_to)
     finally:
         conn.close()
     return _report_file_response(
@@ -958,8 +1029,9 @@ def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_
 def report_dynamics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        body = _guard_report(conn, user, body)
         report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
-                                       _report_object_id(conn, body))
+                                       _report_object_id(conn, body), body.week_from, body.week_to)
     finally:
         conn.close()
     return _report_file_response(build_dynamics_report_pdf(report), "Динамика.pdf", "application/pdf")
@@ -969,6 +1041,7 @@ def report_dynamics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_c
 def report_status_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        body = _guard_report(conn, user, body)
         report = build_status_report(conn, body.source_file, body.element_ids)
     finally:
         conn.close()
@@ -985,6 +1058,7 @@ def report_status_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_cu
 def report_status_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        body = _guard_report(conn, user, body)
         report = build_status_report(conn, body.source_file, body.element_ids)
     finally:
         conn.close()
@@ -997,10 +1071,15 @@ def report_status_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_cur
     )
 
 
-def _delivery_schedule(conn, body: "ReportRequestIn") -> dict:
+def _delivery_schedule(conn, user, body: "ReportRequestIn") -> dict:
     """Общая точка для экрана, XLSX и PDF «Графика поставки». ValueError
     (слишком много календарных колонок) — это ошибка ЗАПРОСА, а не сбой:
-    отдаём 400 с текстом, который уже объясняет, что сделать."""
+    отдаём 400 с текстом, который уже объясняет, что сделать.
+
+    Проверка доступа тоже ЗДЕСЬ, а не в каждом из трёх роутов: три копии
+    одной проверки — это ровно та схема, при которой забытая четвёртая
+    открывает отчёт целиком (аудит безопасности 2026-08-03)."""
+    body = _guard_report(conn, user, body)
     try:
         return build_delivery_schedule_report(
             conn, body.source_file, body.element_ids,
@@ -1015,7 +1094,7 @@ def report_delivery_schedule(body: ReportRequestIn, user: sqlite3.Row = Depends(
     начала СМР против фактической поставки."""
     conn = get_connection()
     try:
-        return _delivery_schedule(conn, body)
+        return _delivery_schedule(conn, user, body)
     finally:
         conn.close()
 
@@ -1036,6 +1115,7 @@ def report_delivery_schedule_cell(body: DeliveryCellIn,
     реальном файле это тысячи троек «строка × колонка × марка»."""
     conn = get_connection()
     try:
+        body = _guard_report(conn, user, body)
         return build_delivery_cell_detail(
             conn, body.source_file, body.element_ids, body.date_from, body.date_to,
             body.step, body.group_by, body.path, body.column)
@@ -1049,7 +1129,7 @@ def report_delivery_schedule_cell(body: DeliveryCellIn,
 def report_delivery_schedule_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        report = _delivery_schedule(conn, body)
+        report = _delivery_schedule(conn, user, body)
     finally:
         conn.close()
     return _report_file_response(
@@ -1061,7 +1141,7 @@ def report_delivery_schedule_xlsx(body: ReportRequestIn, user: sqlite3.Row = Dep
 def report_delivery_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        report = _delivery_schedule(conn, body)
+        report = _delivery_schedule(conn, user, body)
     finally:
         conn.close()
     return _report_file_response(build_delivery_schedule_pdf(report),
@@ -1341,6 +1421,10 @@ def get_changes(
     """
     conn = get_connection()
     try:
+        # Без проверки это давало непрерывное НАБЛЮДЕНИЕ за чужой стройкой:
+        # опрос раз в 15 секунд отдаёт поток смен статусов, контрактов и дат
+        # в реальном времени (аудит безопасности 2026-08-03).
+        _guard_source_file(conn, user, source_file, "view")
         server_time = conn.execute("SELECT datetime('now') AS t").fetchone()["t"]
         if not since:
             return {"server_time": server_time, "elements": []}
@@ -1450,9 +1534,15 @@ def list_source_files(user: sqlite3.Row = Depends(get_current_user)):
         for r in conn.execute("SELECT source_file FROM object_drawings WHERE is_current = 1")
     }
     try:
+        # Список чертежей — тоже карта системы: по нему подбирается
+        # source_file для перебора в остальных эндпоинтах. Отдаём только
+        # чертежи доступных объектов (аудит безопасности 2026-08-03).
+        доступ, доступ_params = _accessible_objects_clause(conn, user)
         rows = conn.execute(
             f"SELECT source_file, COUNT(*) as n FROM elements "
-            f"WHERE {visible_elements_clause()} GROUP BY source_file ORDER BY source_file"
+            f"WHERE {visible_elements_clause()} AND {доступ} "
+            f"GROUP BY source_file ORDER BY source_file",
+            доступ_params,
         ).fetchall()
         return [{"source_file": r["source_file"], "count": r["n"]} for r in rows if r["source_file"] in allowed]
     finally:
@@ -1475,6 +1565,12 @@ def set_status_colors(colors: dict[str, str], user: sqlite3.Row = Depends(requir
     for status in colors:
         if status not in valid:
             raise HTTPException(status_code=422, detail=f"Неизвестный статус: {status}")
+    # Тело здесь — обычный dict, а не модель, поэтому валидатор поля из
+    # models.py сам не отработает; зовём его явно (см. validate_color).
+    try:
+        colors = {s: validate_color(c, "Цвет статуса") for s, c in colors.items()}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     conn = get_connection()
     try:
         for status, color in colors.items():
@@ -1674,8 +1770,13 @@ def list_zones(
     column = _ZONE_ELEMENT_COLUMN[category]
     conn = get_connection()
     try:
-        where = "z.object_id IS NOT NULL AND z.category = ?"
-        params = [category]
+        # Справочник зон отдавал зоны ВСЕХ объектов сразу — отбор был только
+        # «объект вообще задан» (аудит безопасности 2026-08-03). Показательно,
+        # что операции ЗАПИСИ по тем же зонам объект проверяли: проверку
+        # писали, но только для правки.
+        доступ, доступ_params = _accessible_objects_clause(conn, user, "z.object_id")
+        where = f"z.object_id IS NOT NULL AND {доступ} AND z.category = ?"
+        params = [*доступ_params, category]
         if not include_retired:
             where += " AND z.is_current = 1"
         rows = conn.execute(
@@ -2084,7 +2185,13 @@ def elements_catalog(
         # app/db._purge_legacy_elements) в базе нет и импорт создать их не
         # может: справочник допускает ручную правку, и строка, оставшаяся
         # без объекта из-за сбоя, не должна всплыть в чужом объекте.
-        parts, params = ["object_id IS NOT NULL", "is_current = 1"], []
+        # _доступ вычисляется ниже, сразу после открытия соединения, и
+        # попадает сюда замыканием: справочник не принимает объект
+        # параметром, поэтому единственный способ не отдать чужие строки —
+        # сузить выборку по доступным объектам (аудит безопасности
+        # 2026-08-03; до него отбор был только по «объект вообще задан»,
+        # то есть любой вошедший листал элементы всех строек разом).
+        parts, params = ["object_id IS NOT NULL", "is_current = 1", _доступ], list(_доступ_params)
         for column, value in active.items():
             if column == skip:
                 continue
@@ -2106,6 +2213,7 @@ def elements_catalog(
 
     conn = get_connection()
     try:
+        _доступ, _доступ_params = _accessible_objects_clause(conn, user)
         where, params = clauses_for()
         total = conn.execute(
             f"SELECT COUNT(*) AS n FROM elements WHERE {where}", params
@@ -2339,9 +2447,14 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
             # несёт реальное время суток, и событие в 00:00 того же дня
             # оказалось бы РАНЬШЕ неё, то есть не подействовало бы.
             stamp = f"{body.contracting_date} 12:00:00"
-        return apply_bulk_edit(
-            conn, body.changes, format_display_name(admin), admin["id"], stamp
-        )
+        try:
+            return apply_bulk_edit(
+                conn, body.changes, format_display_name(admin), admin["id"], stamp
+            )
+        except ValueError as exc:
+            # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
+            # а не сбой сервера: см. белый список в app/element_bulk_edit.py.
+            raise HTTPException(status_code=400, detail=str(exc))
     finally:
         conn.close()
 
@@ -2413,19 +2526,69 @@ def _guard_elements(conn, user, element_ids, minimum: str = "user") -> None:
             assert_object_access(conn, user, row["object_id"], minimum)
 
 
-def _resolve_selection_item(conn, item):
-    """Подставляет актуальный чертёж объекта, если клиент прислал object_id.
+def _accessible_objects_clause(conn, user, column: str = "object_id") -> tuple:
+    """Условие «объект строки доступен этому пользователю» для СПИСОЧНЫХ
+    выборок: (фрагмент SQL, параметры). Дополняет WHERE, а не заменяет.
+
+    Нужно там, где эндпоинт не принимает объект параметром и раньше просто
+    отдавал всё подряд (справочник элементов, список элементов). Для
+    единичной сущности правильнее assert_object_access/_guard_elements —
+    они дают внятный 403, а не молча пустой ответ.
+
+    Системный администратор получает `1 = 1`: у него доступ ко всему, и
+    подставлять ему список из сотен id незачем. Пустой набор превращается
+    в `1 = 0`, а НЕ в отсутствие условия — разница между «доступно всё» и
+    «не доступно ничего» здесь ровно та же ловушка, о которой предупреждает
+    accessible_object_ids (аудит безопасности 2026-08-03).
+
+    Элементы без объекта (наследие) не видит никто, кроме системного
+    администратора: неизвестно, чьи они.
+
+    `column` — чем в этой таблице выражен объект: `object_id` у элементов и
+    зон, `id` у самой таблицы objects.
+    """
+    ids = accessible_object_ids(conn, user)
+    if ids is None:
+        return "1 = 1", []
+    if not ids:
+        return "1 = 0", []
+    marks = ",".join("?" * len(ids))
+    return f"{column} IN ({marks})", list(ids)
+
+
+def _resolve_selection_item(conn, user, item):
+    """Подставляет актуальный чертёж объекта, если клиент прислал object_id,
+    и проверяет доступ к тому, что в итоге показывается.
 
     Точка перевода одна на весь показ схемы (этап B). Если пришло и то и
     другое — побеждает явный source_file: это форма «Версии чертежа
     объекта», где смысл как раз в том, чтобы посмотреть не актуальную
-    версию."""
-    if item.source_file or item.object_id is None:
-        return item
-    try:
-        return item.model_copy(update={"source_file": object_source_file(conn, item.object_id)})
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    версию.
+
+    Проверка доступа тоже здесь и по той же причине, по которой здесь
+    перевод: это единственное место, через которое проходит ЛЮБОЙ показ
+    схемы. До аудита безопасности 2026-08-03 её не было вовсе — `/plan-data`
+    закрывался одним `get_current_user`, и любой вошедший получал полный
+    слепок чужой стройки (все элементы с геометрией, марками, статусами,
+    контрактами и датами), просто назвав чужой `object_id`.
+
+    Порядок: сначала ПРАВА на присланный object_id, только потом перевод в
+    чертёж. Обратный порядок отвечал бы «у объекта #2 нет актуального
+    чертежа» тому, кому этот объект вообще не положено видеть, — то есть
+    подтверждал бы и существование объекта, и его состояние (поймано на
+    живой проверке этой же правки)."""
+    if item.object_id is not None:
+        assert_object_access(conn, user, item.object_id, "view")
+    if not item.source_file and item.object_id is not None:
+        try:
+            item = item.model_copy(update={"source_file": object_source_file(conn, item.object_id)})
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+    if item.source_file:
+        # Явно присланный файл проверяется отдельно: он мог прийти и без
+        # object_id (форма «Версии чертежа объекта»), и вместе с чужим.
+        _guard_source_file(conn, user, item.source_file, "view")
+    return item
 
 
 @app.get("/projects", response_model=list[ProjectOut])
@@ -2435,6 +2598,11 @@ def list_projects(user: sqlite3.Row = Depends(get_current_user)):
     проекта. Так они не могут разойтись с тем, что показывают объекты."""
     conn = get_connection()
     try:
+        # Сроки и счётчики сводятся ТОЛЬКО по доступным объектам, а сам
+        # проект показывается, лишь если доступен хоть один его объект: иначе
+        # справочник раскрывал бы наименования, адреса и сроки всех строек
+        # предприятия любому вошедшему (аудит безопасности 2026-08-03).
+        доступ, доступ_params = _accessible_objects_clause(conn, user, "o.id")
         agg = {
             r["project_id"]: r
             for r in conn.execute(
@@ -2443,12 +2611,18 @@ def list_projects(user: sqlite3.Row = Depends(get_current_user)):
                 "       MIN(e.project_smr_start_date) AS smr_start, "
                 "       MAX(e.project_delivery_date) AS smr_end "
                 "FROM objects o LEFT JOIN elements e ON e.object_id = o.id AND e.is_current = 1 "
-                "GROUP BY o.project_id"
+                f"WHERE {доступ} "
+                "GROUP BY o.project_id",
+                доступ_params,
             )
         }
+        видны_все = accessible_object_ids(conn, user) is None
         out = []
         for row in conn.execute("SELECT * FROM projects ORDER BY name"):
             a = agg.get(row["id"])
+            if not видны_все and a is None:
+                continue
+
             out.append(ProjectOut(
                 id=row["id"], name=row["name"], address=row["address"],
                 description=row["description"],
@@ -2550,8 +2724,11 @@ def list_object_drawings(object_id: int, user: sqlite3.Row = Depends(get_current
     """
     conn = get_connection()
     try:
-        if conn.execute("SELECT 1 FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
-            raise HTTPException(status_code=404, detail="Объект не найден")
+        # Объект здесь приходит путём, а не query, поэтому зависимость
+        # require_object_access не подходит (она читает query) — проверка
+        # той же функцией внутри. Она же различает 404 и 403 (аудит
+        # безопасности 2026-08-03: раньше проверялось только существование).
+        assert_object_access(conn, user, object_id, "view")
         counts = {
             r["source_file"]: r["n"]
             for r in conn.execute(
@@ -2612,6 +2789,11 @@ def set_last_object(body: LastObjectIn, user: sqlite3.Row = Depends(get_current_
     conn = get_connection()
     try:
         if body.object_id is not None:
+            # Проверяется ДОСТУП, а не только существование: запоминать за
+            # пользователем чужой объект незачем, а ответ «такого объекта
+            # нет» против «есть, но не твой» — уже подсказка (аудит
+            # безопасности 2026-08-03).
+            assert_object_access(conn, user, body.object_id, "view")
             exists = conn.execute("SELECT 1 FROM objects WHERE id = ?", (body.object_id,)).fetchone()
             if exists is None:
                 raise HTTPException(status_code=404, detail="Объект не найден")
@@ -2629,8 +2811,15 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         projects = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM projects")}
+        # Раньше отдавались ВСЕ объекты всем вошедшим — это и был готовый
+        # «каталог целей» для перебора id в /plan-data и отчётах: имена,
+        # адреса, счётчики и имена файлов чертежей (аудит безопасности
+        # 2026-08-03). Отбор тот же, что у /projects-tree.
+        доступ, доступ_params = _accessible_objects_clause(conn, user, "id")
         result = []
-        for row in conn.execute("SELECT * FROM objects ORDER BY id"):
+        for row in conn.execute(
+            f"SELECT * FROM objects WHERE {доступ} ORDER BY id", доступ_params
+        ):
             drawings = conn.execute(
                 "SELECT source_file, is_current FROM object_drawings "
                 "WHERE object_id = ? ORDER BY imported_at",
@@ -2790,6 +2979,7 @@ def delete_allowed_subtype(element_type: str, subtype: str, user: sqlite3.Row = 
 def axis_grid(source_file: str = Query(...), user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        _guard_source_file(conn, user, source_file, "view")
         rows = conn.execute(
             "SELECT kind, label, coord FROM axis_lines WHERE source_file = ?",
             (source_file,),
@@ -2806,6 +2996,7 @@ def list_layers(source_file: str = Query(...), user: sqlite3.Row = Depends(get_c
     """Слои файла для выбора произвольного набора под источником (п.5 третьего раунда)."""
     conn = get_connection()
     try:
+        _guard_source_file(conn, user, source_file, "view")
         rows = conn.execute(
             f"SELECT layer, COUNT(*) as n FROM elements WHERE source_file = ? "
             f"AND {visible_elements_clause()} GROUP BY layer ORDER BY layer",
@@ -2845,7 +3036,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # Этап B: клиент выбирает ОБЪЕКТ, файл выводит сервер. Явно
             # переданный source_file уважается — им пользуется форма
             # «Версии чертежа объекта», чтобы показать НЕ актуальную версию.
-            item = _resolve_selection_item(conn, item)
+            item = _resolve_selection_item(conn, user, item)
             item_object_id = item.object_id or _object_for_source_file(conn, item.source_file)
             if plan_object_id is None:
                 plan_object_id = item_object_id
@@ -3084,6 +3275,18 @@ def export_xlsx(body: ExportRequestIn, user: sqlite3.Row = Depends(get_current_u
         raise HTTPException(status_code=422, detail="mode должен быть 'snapshot' или 'history'")
     conn = get_connection()
     try:
+        # Выгрузка чужого объекта одним файлом — то же по последствиям, что
+        # и чтение через отчёт, а в режиме history сюда попадает вся
+        # `status_history` с ФИО исполнителей (аудит безопасности 2026-08-03).
+        if body.source_file:
+            _guard_source_file(conn, user, body.source_file, "view")
+        elif body.element_ids:
+            _guard_elements(conn, user, body.element_ids, "view")
+        elif not is_system_admin(user):
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите чертёж или набор элементов: иначе выгрузка охватила бы все объекты",
+            )
         if body.mode == "snapshot":
             content = build_snapshot_xlsx(conn, body.source_file, body.date, body.element_ids)
             name = f"elements_snapshot{'_' + body.date if body.date else ''}.xlsx"
@@ -3112,6 +3315,7 @@ def export_pdf(
 ):
     conn = get_connection()
     try:
+        _guard_source_file(conn, user, source_file, "view")
         try:
             content = build_schema_pdf(conn, source_file, date, format_display_name(user),
                                        _object_for_source_file(conn, source_file))
@@ -3423,6 +3627,12 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
                 "role": u.get("role", "view"),
                 "password_hash": u.get("password_hash"),
                 "password_salt": u.get("password_salt"),
+                # Способ входа переносится вместе с пользователем: файл
+                # настроек нужен для переезда на другой сервер, а учётная
+                # запись, приехавшая туда с 'local' вместо 'domain', ждала
+                # бы пароля, которого у неё нет. Старый файл (до 2026-08-03)
+                # этого поля не содержит — там 'local', как и было.
+                "auth_method": "domain" if u.get("auth_method") == "domain" else "local",
             }
             if existing:
                 conn.execute(
@@ -3430,7 +3640,7 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
                     UPDATE users SET last_name=:last_name, first_name=:first_name,
                         patronymic=:patronymic, position=:position, department=:department,
                         role=:role, password_hash=:password_hash, password_salt=:password_salt,
-                        updated_at=datetime('now')
+                        auth_method=:auth_method, updated_at=datetime('now')
                     WHERE domain_login=:domain_login
                     """,
                     fields,
@@ -3439,15 +3649,21 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
                 conn.execute(
                     """
                     INSERT INTO users (last_name, first_name, patronymic, position, department,
-                        domain_login, role, password_hash, password_salt)
+                        domain_login, role, password_hash, password_salt, auth_method)
                     VALUES (:last_name, :first_name, :patronymic, :position, :department,
-                        :domain_login, :role, :password_hash, :password_salt)
+                        :domain_login, :role, :password_hash, :password_salt, :auth_method)
                     """,
                     fields,
                 )
             users_upserted += 1
 
+        # Файл настроек — такой же непроверенный ввод, как и форма: его
+        # приносят с другого сервера, и по дороге он редактируется руками.
         for status, color in payload.get("status_colors", {}).items():
+            try:
+                color = validate_color(color, "Цвет статуса")
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
             conn.execute(
                 "INSERT INTO status_colors (status, color) VALUES (?, ?) "
                 "ON CONFLICT(status) DO UPDATE SET color = excluded.color",

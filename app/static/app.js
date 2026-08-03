@@ -458,6 +458,11 @@ function isObjectAdmin() {
 
 function applyRolePermissions() {
   const системнаяРоль = state.currentUser.role;
+  // Смена пароля — самообслуживание, но у доменного пользователя пароля
+  // сервиса нет: форма приняла бы пароль, а сервер отклонил бы его 409
+  // (app/users.py set_password). Пароль домена меняется в самом домене.
+  document.getElementById("menu-change-password").style.display =
+    state.currentUser.auth_method === "domain" ? "none" : "";
   // ДВА РАЗНЫХ ПРАВИЛА, и путать их нельзя:
   //  .admin-only        — ведение СЕРВИСА (пользователи, проекты, объекты,
   //                       сквозные справочники, резервные копии, журнал).
@@ -5596,29 +5601,37 @@ function кнопкаПанели(оригинал) {
   return b;
 }
 
-// Какие группы уходят в правую колонку (живой запрос 2026-08-02):
-// «Отчёты» — то, что смотрят, «Настройки» и «Администрирование» — то, что
-// настраивают. Слева остаётся ежедневная работа: справочники и обмен
-// данными. Раньше все пять групп текли одной сеткой, и «Настройки»
-// оказывались первыми — на самом видном месте лежало самое редкое.
-// Порядок в списке — это и порядок В КОЛОНКЕ, а не только признак «сюда»:
-// иначе группы встают по разметке меню, и «Настройки» оказываются над
-// «Отчётами», хотя просили под ними.
-const ACTIONS_PANEL_SIDE = ["Отчёты", "Настройки", "Администрирование"];
+// Раскладка панели ПО КОЛОНКАМ (живой запрос 2026-08-03: «Отчёты» под
+// «Обменом данными», а не в правой колонке). Каждый вложенный список —
+// одна колонка сверху вниз; порядок в списке это и порядок на экране, а
+// не только признак «сюда» — иначе группы встают по разметке меню.
+//
+// Явные колонки вместо прежней пары «сетка слева + столбик справа»: та
+// сетка сама решала, что с чем окажется рядом (auto-fit по ширине), и
+// поставить одну конкретную группу ПОД другой в ней было нечем.
+// Группа, не названная здесь, попадает в первую колонку: новый пункт меню
+// должен появиться в панели сам, а не потеряться молча.
+const ACTIONS_PANEL_COLUMNS = [
+  ["Справочники"],
+  ["Обмен данными", "Отчёты"],
+  ["Настройки", "Администрирование"],
+];
 
 function renderActionsPanel() {
   const box = document.getElementById("actions-panel-body");
   box.innerHTML = "";
-  const main = document.createElement("div");
-  main.className = "actions-panel-main";
-  const side = document.createElement("div");
-  side.className = "actions-panel-side";
-  box.appendChild(main);
-  box.appendChild(side);
+  const колонки = ACTIONS_PANEL_COLUMNS.map(() => {
+    const el = document.createElement("div");
+    el.className = "actions-panel-col";
+    box.appendChild(el);
+    return el;
+  });
+  // Блоки собираются по имени группы, раскладываются — ниже: порядок в
+  // колонке задаётся ACTIONS_PANEL_COLUMNS, а не порядком в меню.
+  const блоки = new Map();
   for (const группа of document.querySelectorAll("#settings-menu > .submenu")) {
     if (группа.style.display === "none") continue;
     const имяГруппы = группа.querySelector(":scope > .submenu-trigger").textContent.trim();
-    const куда = ACTIONS_PANEL_SIDE.includes(имяГруппы) ? side : main;
     const блок = document.createElement("div");
     блок.className = "actions-panel-group";
     const заголовок = document.createElement("h4");
@@ -5635,18 +5648,18 @@ function renderActionsPanel() {
         .forEach(п => под.appendChild(кнопкаПанели(п)));
       блок.appendChild(под);
     }
-    куда.appendChild(блок);
+    блоки.set(имяГруппы, блок);
   }
-  // Правая колонка выстраивается по ACTIONS_PANEL_SIDE, а не по порядку
-  // групп в меню.
-  [...side.children]
-    .sort((a, b) => ACTIONS_PANEL_SIDE.indexOf(a.querySelector("h4").textContent.trim())
-                  - ACTIONS_PANEL_SIDE.indexOf(b.querySelector("h4").textContent.trim()))
-    .forEach(el => side.appendChild(el));
+  ACTIONS_PANEL_COLUMNS.forEach((имена, i) => имена.forEach(имя => {
+    const блок = блоки.get(имя);
+    if (блок) { колонки[i].appendChild(блок); блоки.delete(имя); }
+  }));
+  for (const блок of блоки.values()) колонки[0].appendChild(блок);
   // Колонка без единой группы не должна занимать место (у прораба
-  // «Настройки» есть всегда, но «Отчёты» и «Администрирование» могут быть
-  // скрыты ролью).
-  side.style.display = side.children.length ? "" : "none";
+  // «Настройки» есть всегда, но «Администрирование» скрыто ролью).
+  // display:none выкидывает её из flex-раскладки целиком — пустой дорожки,
+  // как было бы у grid с жёстким набором колонок, не остаётся.
+  колонки.forEach(k => { k.style.display = k.children.length ? "" : "none"; });
 }
 
 document.getElementById("actions-panel-close").addEventListener("click", () =>
@@ -5838,8 +5851,8 @@ document.getElementById("menu-shapes").addEventListener("click", async () => {
   rows.innerHTML = combos.length
     ? combos.map(c => `
         <div class="row">
-          <span>${c.layer} / ${c.element_type}</span>
-          <select data-layer="${c.layer}" data-type="${c.element_type}">
+          <span>${escapeHtml(c.layer)} / ${escapeHtml(c.element_type)}</span>
+          <select data-layer="${escapeHtml(c.layer)}" data-type="${escapeHtml(c.element_type)}">
             ${SHAPE_OPTIONS.map(s => `<option value="${s}" ${s === c.shape ? "selected" : ""}>${SHAPE_LABELS_RU[s]}</option>`).join("")}
           </select>
         </div>
@@ -7602,6 +7615,15 @@ const ROLE_LABELS = { admin: "Администратор", user: "Пользов
 let editingUserId = null;
 let passwordTargetUserId = null;
 
+// Одна колонка вместо прежней «Пароль: задан/пустой» (2026-08-03): у
+// доменного пользователя пустой пароль сервиса — норма, а не проблема, и
+// показывать это словом «пустой» рядом с исправно работающей учётной
+// записью значило бы звать администратора чинить то, что не сломано.
+function authMethodLabel(u) {
+  if (u.auth_method === "domain") return "Доменная учётная запись";
+  return u.has_password ? "Пароль сервиса" : "Пароль не задан — вход закрыт";
+}
+
 async function renderUsersTable() {
   const users = await api("/users");
   const table = document.getElementById("users-table");
@@ -7612,14 +7634,18 @@ async function renderUsersTable() {
       <td>${escapeHtml(u.department || "—")}</td>
       <td>${escapeHtml(u.domain_login)}</td>
       <td>${ROLE_LABELS[u.role] || u.role}</td>
-      <td>${u.has_password ? "задан" : "пустой"}</td>
+      <td>${authMethodLabel(u)}</td>
       <td>
         <button class="btn btn-sm btn-secondary" data-edit="${u.id}">Изменить</button>
-        <button class="btn btn-sm btn-secondary" data-pwd="${u.id}">Пароль</button>
+        <!-- У доменного пользователя пароля сервиса нет и быть не должно —
+             сервер такой запрос отклоняет (409), кнопка гасится здесь же,
+             чтобы это не выяснялось после ввода пароля. -->
+        <button class="btn btn-sm btn-secondary" data-pwd="${u.id}"
+                ${u.auth_method === "domain" ? "disabled title=\"Вход по доменной учётной записи — пароль сервиса не используется\"" : ""}>Пароль</button>
       </td>
     </tr>
   `).join("");
-  table.innerHTML = `<tr><th>ФИО</th><th>Должность</th><th>Подразделение</th><th>Логин</th><th>Роль</th><th>Пароль</th><th></th></tr>${rowsHtml}`;
+  table.innerHTML = `<tr><th>ФИО</th><th>Должность</th><th>Подразделение</th><th>Логин</th><th>Роль</th><th>Вход</th><th></th></tr>${rowsHtml}`;
   table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openUserEdit(users.find(u => u.id === Number(btn.dataset.edit)))));
   table.querySelectorAll("[data-pwd]").forEach(btn => btn.addEventListener("click", () => openUserPassword(Number(btn.dataset.pwd))));
 }
@@ -7640,12 +7666,27 @@ async function openUserEdit(user) {
   document.getElementById("ue-department").value = user && user.department ? user.department : "";
   document.getElementById("ue-domain-login").value = user ? user.domain_login : "";
   document.getElementById("ue-role").value = user ? user.role : "user";
+  document.getElementById("ue-auth-method").value = user ? (user.auth_method || "local") : "local";
+  updateAuthMethodHint();
   document.getElementById("user-edit-error").textContent = "";
   userEditBackdrop.classList.add("open");
   await loadAccessInto(editingUserId);
   renderAccessTree();
 }
+// Предупреждение о снятии пароля показывается ДО сохранения: перевод на
+// домен необратимо стирает пароль сервиса (app/users.py update_user), и
+// узнавать об этом по факту — плохой момент.
+function updateAuthMethodHint() {
+  const доменный = document.getElementById("ue-auth-method").value === "domain";
+  document.getElementById("ue-auth-method-hint").textContent = доменный
+    ? "Вход проверяется у контроллера домена по доменному имени выше. Пароль сервиса у этой "
+      + "учётной записи будет снят и перестанет подходить. Настройка подключения — "
+      + "«Администрирование → Доменная авторизация»."
+    : "Вход по паролю, который задаётся здесь же кнопкой «Пароль» в списке пользователей.";
+}
+
 document.getElementById("users-add").addEventListener("click", () => openUserEdit(null));
+document.getElementById("ue-auth-method").addEventListener("change", updateAuthMethodHint);
 document.getElementById("ue-role").addEventListener("change", renderAccessTree);
 document.getElementById("user-edit-cancel").addEventListener("click", () => userEditBackdrop.classList.remove("open"));
 document.getElementById("user-edit-save").addEventListener("click", async () => {
@@ -7657,6 +7698,7 @@ document.getElementById("user-edit-save").addEventListener("click", async () => 
     department: document.getElementById("ue-department").value.trim() || null,
     domain_login: document.getElementById("ue-domain-login").value.trim(),
     role: document.getElementById("ue-role").value,
+    auth_method: document.getElementById("ue-auth-method").value,
   };
   try {
     let userId = editingUserId;
@@ -7697,6 +7739,105 @@ document.getElementById("user-password-save").addEventListener("click", async ()
     await renderUsersTable();
   } catch (e) {
     document.getElementById("user-password-error").textContent = e.message;
+  }
+});
+
+// ---------- Доменная (корпоративная) авторизация — 2026-08-03, см.
+// app/ldap_auth.py. Настройка СИСТЕМНАЯ: контроллер домена один на сервис,
+// а не свой на каждую стройку, поэтому и форма под системной ролью. ----------
+const ldapBackdrop = document.getElementById("ldap-backdrop");
+
+function ldapFormValue() {
+  return {
+    enabled: document.getElementById("ldap-enabled").checked,
+    host: document.getElementById("ldap-host").value.trim(),
+    port: Number(document.getElementById("ldap-port").value) || 389,
+    use_ssl: document.getElementById("ldap-use-ssl").checked,
+    start_tls: document.getElementById("ldap-start-tls").checked,
+    verify_certificate: document.getElementById("ldap-verify-cert").checked,
+    login_template: document.getElementById("ldap-login-template").value.trim(),
+    timeout_seconds: Number(document.getElementById("ldap-timeout").value) || 5,
+  };
+}
+
+function fillLdapForm(cfg) {
+  document.getElementById("ldap-enabled").checked = !!cfg.enabled;
+  document.getElementById("ldap-host").value = cfg.host || "";
+  document.getElementById("ldap-port").value = cfg.port || 389;
+  document.getElementById("ldap-use-ssl").checked = !!cfg.use_ssl;
+  document.getElementById("ldap-start-tls").checked = !!cfg.start_tls;
+  document.getElementById("ldap-verify-cert").checked = cfg.verify_certificate !== false;
+  document.getElementById("ldap-login-template").value = cfg.login_template || "";
+  document.getElementById("ldap-timeout").value = cfg.timeout_seconds || 5;
+}
+
+document.getElementById("menu-ldap").addEventListener("click", async () => {
+  document.getElementById("settings-menu").classList.remove("open");
+  document.getElementById("ldap-error").textContent = "";
+  document.getElementById("ldap-test-result").textContent = "";
+  document.getElementById("ldap-test-password").value = "";
+  ldapBackdrop.classList.add("open");
+  try {
+    const data = await api("/ldap-settings");
+    fillLdapForm(data.config);
+    // Отсутствие библиотеки на сервере — единственный отказ, который нельзя
+    // исправить в этой форме (нужен новый образ приложения), поэтому он
+    // сообщается сразу, а не после первой неудачной проверки.
+    const части = [`Пользователей с доменным входом: ${data.domain_users}`];
+    if (!data.library_available) части.push(`⚠ на сервере нет библиотеки ldap3 (${data.library_error || "—"}) — обновите образ приложения`);
+    document.getElementById("ldap-status").textContent = части.join(" · ");
+  } catch (e) {
+    document.getElementById("ldap-error").textContent = e.message;
+  }
+});
+document.getElementById("ldap-cancel").addEventListener("click", () => ldapBackdrop.classList.remove("open"));
+
+document.getElementById("ldap-save").addEventListener("click", async () => {
+  const errorEl = document.getElementById("ldap-error");
+  errorEl.textContent = "";
+  try {
+    const res = await api("/ldap-settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ldapFormValue()),
+    });
+    // Выключение при живых доменных пользователях — законное действие, но
+    // молчать о его последствиях нельзя: они останутся без входа.
+    showToast(res.warning ? `Сохранено. ${res.warning}` : "Настройки доменной авторизации сохранены");
+    ldapBackdrop.classList.remove("open");
+  } catch (e) {
+    errorEl.textContent = e.message;
+  }
+});
+
+document.getElementById("ldap-test-run").addEventListener("click", async () => {
+  const resultEl = document.getElementById("ldap-test-result");
+  const login = document.getElementById("ldap-test-login").value.trim();
+  const password = document.getElementById("ldap-test-password").value;
+  if (!login || !password) {
+    resultEl.style.color = "var(--color-danger, #b00)";
+    resultEl.textContent = "Введите доменный логин и пароль для пробной привязки";
+    return;
+  }
+  resultEl.style.color = "var(--color-text-muted)";
+  resultEl.textContent = "Проверяю…";
+  try {
+    // Настройка уходит вместе с проверкой — сохранять её ради проверки не надо.
+    const res = await api("/ldap-settings/test", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ login, password, config: ldapFormValue() }),
+    });
+    resultEl.style.color = res.ok ? "var(--color-success, #187a3d)" : "var(--color-danger, #b00)";
+    // Имя, отправленное домену, показывается только при ОТКАЗЕ: там оно и
+    // нужно — почти всякая ошибка настройки это неверно собранный шаблон
+    // входа, и увидеть получившуюся строку быстрее, чем гадать. При успехе
+    // то же имя уже видно в самом тексте ответа.
+    resultEl.textContent = (res.ok ? "✓ " : "✕ ") + res.detail
+      + (res.ok || !res.bind_name ? "" : ` (домену отправлялось: ${res.bind_name})`);
+  } catch (e) {
+    resultEl.style.color = "var(--color-danger, #b00)";
+    resultEl.textContent = e.message;
+  } finally {
+    document.getElementById("ldap-test-password").value = "";
   }
 });
 
@@ -8792,6 +8933,13 @@ const REPORTS = {
   },
 };
 let currentReport = "status";
+// Период графика «Динамики» в ФОРМЕ (живой запрос 2026-08-03) — тот же, что
+// на панели «Статус». В отличие от панели окно режет СЕРВЕР
+// (build_dynamics_report): у формы есть выгрузка в XLSX и PDF, и они обязаны
+// показывать ровно то, что на экране, а обрезка в трёх местах гарантированно
+// разъехалась бы. Цена — один запрос на смену границы; на панели её платить
+// не хотели, там окно чисто экранное.
+let dynRange = { from: null, to: null };   // null = весь срок проекта
 let reportData = null;
 // Какие узлы свёрнуты. По умолчанию свёрнуто всё, кроме первой захватки —
 // так же, как в исходной сводной таблице заказчика.
@@ -8816,6 +8964,8 @@ function reportRequestBody() {
   }
   if (REPORTS[currentReport].needsDate) {
     body.report_date = document.getElementById("report-date").value || null;
+    body.week_from = dynRange.from;
+    body.week_to = dynRange.to;
   }
   if (REPORTS[currentReport].needsPeriod) {
     body.date_from = document.getElementById("ds-from").value || null;
@@ -8949,10 +9099,19 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   };
   // На панели выноски не рисуем вовсе — текст на 280 px превратился бы в
   // мешанину; отчётная дата помечается одной тонкой вертикальной линией.
+  // Вехи за пределами показанного окна не рисуем вовсе: weekIndex поджал бы
+  // их к краю, и веха встала бы на чужую неделю. Раньше окно умела сужать
+  // только панель (там ветка compact выносок не рисует), с появлением
+  // периода в форме (2026-08-03) это стало нужно и здесь.
+  const inWindow = (iso) => {
+    const w = mondayOf(iso);
+    return w >= weeks[0] && w <= weeks[weeks.length - 1];
+  };
   const marks = compact
     ? []
     : [{ label: "Отчётная дата", date: data.report_date }]
-      .concat((data.card.milestones || []).filter(m => m && m.date));
+      .concat((data.card.milestones || []).filter(m => m && m.date))
+      .filter(m => inWindow(m.date));
   // Линию рисуем только если отчётная дата попала в показанный период
   // (панель умеет сужать окно, см. sideDynWindow): иначе weekIndex сполз бы
   // на край окна и метка встала бы на чужую неделю.
@@ -9388,6 +9547,17 @@ async function loadReport() {
     // подставить сегодняшнюю, если поле было пустым.
     if (def.needsDate && reportData.report_date) {
       document.getElementById("report-date").value = reportData.report_date;
+      // Поля периода: пустой выбор показывается фактическими границами
+      // проекта — так видно, какой период сейчас на графике, и от чего
+      // отсчитывать при правке. min/max не дают уйти за пределы данных.
+      const [first, last] = reportData.weeks_full_range || [null, null];
+      const fromInput = document.getElementById("dyn-from");
+      const toInput = document.getElementById("dyn-to");
+      fromInput.value = dynRange.from || first || "";
+      toInput.value = dynRange.to || last || "";
+      for (const input of [fromInput, toInput]) { input.min = first || ""; input.max = last || ""; }
+      document.getElementById("dyn-range-reset").style.display =
+        (dynRange.from || dynRange.to) ? "" : "none";
     }
   } catch (e) {
     document.getElementById("report-body").innerHTML = "";
@@ -9399,6 +9569,7 @@ function switchReport(key) {
   currentReport = key;
   [...document.querySelectorAll(".report-tab")].forEach(b => b.classList.toggle("active", b.dataset.report === key));
   document.getElementById("report-date-box").style.display = REPORTS[key].needsDate ? "" : "none";
+  document.getElementById("report-period-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
   reportsBackdrop.querySelector(".modal").classList.toggle("report-full", !!REPORTS[key].needsPeriod);
   if (REPORTS[key].needsPeriod) renderDeliveryGroupChips();
@@ -9411,6 +9582,16 @@ document.getElementById("report-tabs").addEventListener("click", (e) => {
   switchReport(key);
 });
 document.getElementById("report-date").addEventListener("change", loadReport);
+for (const id of ["dyn-from", "dyn-to"]) {
+  document.getElementById(id).addEventListener("change", (e) => {
+    dynRange[id === "dyn-from" ? "from" : "to"] = e.target.value || null;
+    loadReport();
+  });
+}
+document.getElementById("dyn-range-reset").addEventListener("click", () => {
+  dynRange = { from: null, to: null };
+  loadReport();
+});
 
 document.getElementById("report-body").addEventListener("click", (e) => {
   if (e.target.classList.contains("dyn-edit")) {
@@ -9631,7 +9812,14 @@ let sideDynRange = { from: null, to: null }; // null = «весь срок жи�
 function mondayOf(iso) {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-  return d.toISOString().slice(0, 10);
+  // Строку собираем из ЛОКАЛЬНЫХ полей, а НЕ через toISOString: дата создана
+  // как локальная полночь, и toISOString переводит её в UTC — при
+  // положительном смещении (Москва, UTC+3) это сутки назад, то есть
+  // «понедельник» возвращался воскресеньем. Баг жил с ввода периода на
+  // панели (2026-07-30) и вылез на вехах, когда период появился и в форме:
+  // веха 13.09 при периоде с 07.09 пропадала с графика.
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function sideDynWindow(data) {

@@ -492,6 +492,25 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
     то, что видел на экране: перечитывание файла между показом и
     применением означало бы, что применить могли не то, что показали.
     """
+    # Имя поля приходит из клиентского словаря и попадает в `SET {поле} = ...`
+    # (app/element_fields.apply_field_changes). Инъекции тут не было —
+    # несуществующая колонка роняла запрос на sqlite3.Row до commit, — но
+    # записать можно было ЛЮБУЮ реально существующую колонку `elements`:
+    # `object_id` (увести элемент на чужой объект), `current_status` и
+    # `contract_id` в обход истории, `is_current`, `element_uid`,
+    # `manual_fields`. То есть обходились инварианты «статус меняется только
+    # событием» и «объект выводится из элемента, а не принимается
+    # параметром» (аудит безопасности 2026-08-03).
+    #
+    # Проверка та же и по тому же списку, что у одиночной правки
+    # (app/main.py, _ELEMENT_EDITABLE_FIELDS) — иначе «в форме нельзя, а
+    # через файл прошло», ровно та асимметрия, ради устранения которой
+    # проверки полей и выносили в app/element_fields.py.
+    разрешено = set(EDITABLE_FIELDS) | {"contract_id"}
+    неизвестные = {str(sel.get("field")) for sel in selections} - разрешено
+    if неизвестные:
+        raise ValueError("Недопустимые поля для правки: " + ", ".join(sorted(неизвестные)))
+
     by_element: dict = {}
     for sel in selections:
         by_element.setdefault(int(sel["element_id"]), []).append(sel)

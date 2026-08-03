@@ -26,8 +26,15 @@ CREATE TABLE IF NOT EXISTS elements (
 );
 
 -- Пользователи и роли (admin/user/view). password_hash/password_salt = NULL
--- означает пустой пароль (вход без пароля разрешён) — до тех пор, пока
--- пользователь (или админ за него) не задаст пароль через UI.
+-- означает, что вход по паролю сервиса ЗАПРЕЩЁН (аудит безопасности
+-- 2026-07-23, см. app/auth.py verify_password), а не разрешён с пустым
+-- паролем, как было в первых версиях.
+--
+-- auth_method — чем проверяется вход: 'local' (пароль сервиса) или
+-- 'domain' (доменная учётная запись, LDAP-bind, см. app/ldap_auth.py).
+-- У доменного пользователя password_hash пуст ЗАКОНОМЕРНО: пароль сервиса
+-- ему не нужен и намеренно снимается, чтобы у одной учётной записи не было
+-- двух живых способов входа.
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     last_name TEXT NOT NULL,
@@ -39,6 +46,7 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL CHECK (role IN ('admin', 'user', 'view')),
     password_hash TEXT,
     password_salt TEXT,
+    auth_method TEXT NOT NULL DEFAULT 'local' CHECK (auth_method IN ('local', 'domain')),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

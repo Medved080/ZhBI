@@ -46,7 +46,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from app.db import visible_elements_clause
-from app.reports import NO_FLOOR, NO_ZAKHVATKA, _floor_label, _item_label, natural_key
+from app.reports import NO_FLOOR, NO_ZAKHVATKA, _floor_label, _item_label, natural_key, pdf_text
 
 TITLE = "График поставки ЖБИ"
 ROOT_LABEL = "Группировка"
@@ -887,11 +887,11 @@ def build_delivery_schedule_pdf(report: dict) -> bytes:
                                textColor=colors.HexColor("#666666"))
     warn_style = ParagraphStyle("w", parent=sub_style, textColor=colors.HexColor("#C0392B"))
 
-    story = [Paragraph(report["title"], title_style),
-             Paragraph(report["subtitle"], sub_style)]
+    story = [Paragraph(pdf_text(report["title"]), title_style),
+             Paragraph(pdf_text(report["subtitle"]), sub_style)]
     warn = report["warning"]
     if warn:
-        story.append(Paragraph(warn, warn_style))
+        story.append(Paragraph(pdf_text(warn), warn_style))
     story.append(Spacer(1, 4 * mm))
 
     nodes = flatten(report) + [{"label": report["total"]["label"], "level": -1,

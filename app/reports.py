@@ -32,6 +32,25 @@ NO_ZAKHVATKA = "Захватка не определена"
 NO_FLOOR = "Этаж не определён"
 
 
+def pdf_text(value) -> str:
+    """Пользовательский текст, уходящий в reportlab.Paragraph.
+
+    `Paragraph` разбирает мини-разметку (`<b>`, `<font>`, `<br/>`), поэтому
+    принимает её и из данных: примечания карточки объекта, заголовок,
+    открытые вопросы — свободный текст, который правят через интерфейс.
+    Одного символа `<` или `&` достаточно, чтобы разбор упал и отчёт
+    выдал 500 вместо PDF (аудит безопасности 2026-08-03); намеренная
+    разметка искажает вёрстку документа.
+
+    Экранируем на ВХОДЕ в Paragraph, а не при сохранении: в базе должен
+    лежать текст, который человек ввёл, — его же показывают экран и Excel,
+    где никакой разметки нет. Подписи, рисуемые прямо на холсте
+    (`drawCentredString` у вех графика), разметку не разбирают вовсе и
+    экранирования не требуют."""
+    from xml.sax.saxutils import escape
+    return escape("" if value is None else str(value))
+
+
 def natural_key(text: str):
     """«По-человечески»: Захватка 2 раньше Захватки 10. Общая для всех
     отчётов (используется и «Графиком поставки», app/report_delivery.py) —
@@ -252,9 +271,9 @@ def build_status_report_pdf(report: dict, subtitle: str = "") -> bytes:
     sub_style = ParagraphStyle("s", fontName=FONT_REGULAR, fontSize=9, leading=12,
                                textColor=colors.HexColor("#666666"))
 
-    story = [Paragraph(report["title"], title_style)]
+    story = [Paragraph(pdf_text(report["title"]), title_style)]
     if subtitle:
-        story.append(Paragraph(subtitle, sub_style))
+        story.append(Paragraph(pdf_text(subtitle), sub_style))
     story.append(Spacer(1, 6 * mm))
 
     data = [[report["root_label"]] + [c["label"] for c in report["columns"]]]
@@ -337,7 +356,9 @@ def _cumulative(pairs: list, weeks: list) -> list:
 
 def build_dynamics_report(conn, source_file: Optional[str], report_date: Optional[str] = None,
                           element_ids: Optional[list] = None,
-                          object_id: Optional[int] = None) -> dict:
+                          object_id: Optional[int] = None,
+                          week_from: Optional[str] = None,
+                          week_to: Optional[str] = None) -> dict:
     from datetime import date
 
     from app.settings import (
@@ -426,6 +447,26 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     for key in ("fact_montage", "fact_delivery"):
         series[key] = [v if i <= cut else None for i, v in enumerate(series[key])]
 
+    # Период графика (живой запрос 2026-08-03: «в отчёт динамики добавь
+    # интервал дат аналогичный тому что сделан … в правой панели») — это
+    # МАСШТАБ ОСИ X, а не пересчёт: ряды накопительные с начала проекта, и
+    # окно просто вырезает часть недель, кривая входит в него на своём
+    # накопленном уровне. Отчётная дата и таблицы «план/факт/отклонение» от
+    # периода не зависят — они «на дату», а не «за интервал».
+    #
+    # Считается ЗДЕСЬ, на сервере, хотя панель «Статус» то же самое делает
+    # в браузере: у формы есть выгрузка в XLSX и PDF, и они обязаны
+    # показывать ровно то, что на экране. Обрезать в трёх местах —
+    # гарантированно разъехаться.
+    weeks_full = [weeks[0], weeks[-1]] if weeks else [None, None]
+    lo = _week_start(week_from) if week_from else None
+    hi = _week_start(week_to) if week_to else None
+    if lo or hi:
+        keep = [i for i, w in enumerate(weeks)
+                if (lo is None or w >= lo) and (hi is None or w <= hi)]
+        weeks = [weeks[i] for i in keep]
+        series = {k: [v[i] for i in keep] for k, v in series.items()}
+
     def upto(pairs, limit_date, only_day=None):
         if only_day:
             return sum(n for d, n in pairs if d == only_day)
@@ -456,6 +497,11 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
         "report_date": today,
         "card": card,
         "weeks": weeks,
+        # Границы ВСЕГО срока проекта — ими форма подписывает поля периода и
+        # ограничивает выбор: уйти за пределы имеющихся данных нельзя.
+        "weeks_full_range": weeks_full,
+        "week_from": week_from or None,
+        "week_to": week_to or None,
         "series": series,
         "series_labels": {"plan_smr": "План СМР", "plan_delivery": "Поставка (план)",
                           "fact_delivery": "Поставка", "fact_montage": "Монтаж"},
@@ -564,8 +610,17 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
                     (path.moveTo if n == 0 else path.lineTo)(X(i), Y(v))
                 c.drawPath(path)
 
-            marks = [{"label": "Отчётная дата", "date": report["report_date"]}] + \
-                    [m for m in card.get("milestones", []) if m.get("date")]
+            # Вехи за пределами показанного периода не рисуем: индекс недели
+            # поджался бы к краю и веха встала бы на чужую неделю. То же
+            # правило, что на экране (buildDynamicsChartSvg) — с появлением
+            # периода в форме (2026-08-03) окно бывает уже полного срока.
+            def in_window(iso):
+                return bool(weeks) and weeks[0] <= _week_start(iso) <= weeks[-1]
+
+            marks = [m for m in
+                     [{"label": "Отчётная дата", "date": report["report_date"]}]
+                     + [m for m in card.get("milestones", []) if m.get("date")]
+                     if in_window(m["date"])]
             c.setFont(FONT_REGULAR, 6)
             for idx, m in enumerate(marks):
                 target = m["date"][:10]
@@ -604,15 +659,15 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
 
     story = [
         Paragraph(f"Ежедневный отчёт за {_ru_date_short(report['report_date'])}", center),
-        Paragraph(report["subtitle"], sub),
-        Paragraph(card.get("title") or "", subb),
+        Paragraph(pdf_text(report["subtitle"]), sub),
+        Paragraph(pdf_text(card.get("title")), subb),
         Spacer(1, 4 * mm),
     ]
 
     def bullet_box(title, items, head_bg):
-        inner = [[Paragraph(f"<b>{title}</b>", small)]]
+        inner = [[Paragraph(f"<b>{pdf_text(title)}</b>", small)]]
         for it in (items or []):
-            inner.append([Paragraph(f"•&nbsp;{it}", small)])
+            inner.append([Paragraph(f"•&nbsp;{pdf_text(it)}", small)])
         if not items:
             inner.append([Paragraph("не заполнено", note)])
         t = Table(inner, colWidths=[128 * mm])

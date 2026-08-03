@@ -1,7 +1,28 @@
+import re
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+# Цвет, приходящий от клиента. Проверяется на СЕРВЕРЕ, потому что попадает
+# он в инлайновый `style="..."` на схеме и в карточке элемента, а `style-src`
+# в CSP вынужденно держит 'unsafe-inline' (динамических цветов статусов и
+# зон слишком много, чтобы выносить их в классы) — то есть CSP тут не
+# подстрахует (аудит безопасности 2026-08-03).
+#
+# Цвет зоны пишет админ ОБЪЕКТА, а видят его все, включая администратора
+# сервиса, — без этой проверки значение вида `#fff" onmouseover="...`
+# выходило из атрибута и давало повышение привилегий «админ объекта →
+# админ сервиса». На клиенте такая проверка уже была (`statusColor()` в
+# app/static/app.js), но применялась не во всех местах вывода; правильное
+# место для неё — вход, а не каждый из выводов.
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+
+
+def validate_color(value: str, field: str = "Цвет") -> str:
+    if not isinstance(value, str) or not _COLOR_RE.match(value.strip()):
+        raise ValueError(f"{field} должен быть в формате #RGB/#RRGGBB (получено: {value!r})")
+    return value.strip()
 
 
 class Status(str, Enum):
@@ -340,6 +361,11 @@ class ZoneColorIn(BaseModel):
     # новую версию чертежа.
     name: str
     color: str
+
+    @field_validator("color")
+    @classmethod
+    def _color_ok(cls, v: str) -> str:
+        return validate_color(v, "Цвет зоны")
 
 
 class ZoneImportSummary(BaseModel):

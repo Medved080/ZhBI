@@ -5,15 +5,16 @@ import sqlite3
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from app import activity
+from app import activity, ldap_auth
 from app.access import OBJECT_ROLES, ROLE_LABELS as OBJECT_ROLE_LABELS, require_system_admin
 from app.auth import (
-    SESSION_COOKIE, get_current_user, hash_password,
+    SESSION_COOKIE, auth_method_of, get_current_user, hash_password,
     user_out, validate_password_strength, UserOut,
 )
 from app.db import get_connection
+from app.models import validate_color
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -26,6 +27,7 @@ class UserCreateIn(BaseModel):
     department: Optional[str] = None
     domain_login: str
     role: str
+    auth_method: str = "local"
 
 
 class UserUpdateIn(BaseModel):
@@ -36,6 +38,7 @@ class UserUpdateIn(BaseModel):
     department: Optional[str] = None
     domain_login: str
     role: str
+    auth_method: str = "local"
 
 
 class SetPasswordIn(BaseModel):
@@ -45,13 +48,44 @@ class SetPasswordIn(BaseModel):
 class SetLabelColorIn(BaseModel):
     label_color: Optional[str] = None  # null — сброс на дефолт
 
+    @field_validator("label_color")
+    @classmethod
+    def _color_ok(cls, v: Optional[str]) -> Optional[str]:
+        # Значение уходит в CSS-переменную --mark-label-color и в fillStyle
+        # холста. Настройка личная (менять можно только себе), поэтому на
+        # чужой сеанс не влияет — но формат проверяем тем же одним
+        # валидатором, что и остальные цвета, чтобы не заводить второе
+        # правило (см. app/models.validate_color).
+        return None if v is None else validate_color(v, "Цвет подписей")
+
 
 VALID_ROLES = {"admin", "user", "view"}
+
+# Чем проверяется вход. CHECK на колонке есть только у свежих БД (ALTER
+# TABLE ADD COLUMN его не принимает, см. app/db.py) — поэтому набор
+# значений держится здесь.
+AUTH_METHODS = {"local", "domain"}
 
 
 def _validate_role(role: str):
     if role not in VALID_ROLES:
         raise HTTPException(status_code=422, detail=f"Неизвестная роль: {role}")
+
+
+def _validate_auth_method(conn, auth_method: str):
+    """Доменный способ входа разрешаем заводить только при НАСТРОЕННОЙ
+    доменной авторизации. Иначе администратор молча создал бы учётную
+    запись, которой физически нечем войти: локальный пароль ей уже не
+    подойдёт, а домен ещё не подключён — и разбираться в этом пришлось бы
+    по 401 на экране входа."""
+    if auth_method not in AUTH_METHODS:
+        raise HTTPException(status_code=422, detail=f"Неизвестный способ входа: {auth_method}")
+    if auth_method == "domain" and not ldap_auth.is_enabled(conn):
+        raise HTTPException(
+            status_code=422,
+            detail="Доменная авторизация выключена — включите её в «Администрирование → "
+                   "Доменная авторизация», иначе этот пользователь не сможет войти",
+        )
 
 
 @router.get("", response_model=list[UserOut])
@@ -74,10 +108,13 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_system_
         ).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail="Такое доменное имя уже занято")
+        _validate_auth_method(conn, body.auth_method)
         conn.execute(
             """
-            INSERT INTO users (last_name, first_name, patronymic, position, department, domain_login, role)
-            VALUES (:last_name, :first_name, :patronymic, :position, :department, :domain_login, :role)
+            INSERT INTO users (last_name, first_name, patronymic, position, department,
+                domain_login, role, auth_method)
+            VALUES (:last_name, :first_name, :patronymic, :position, :department,
+                :domain_login, :role, :auth_method)
             """,
             body.model_dump(),
         )
@@ -103,16 +140,27 @@ def update_user(user_id: int, body: UserUpdateIn, admin: sqlite3.Row = Depends(r
         ).fetchone()
         if conflict:
             raise HTTPException(status_code=409, detail="Такое доменное имя уже занято")
+        _validate_auth_method(conn, body.auth_method)
         conn.execute(
             """
             UPDATE users SET
                 last_name=:last_name, first_name=:first_name, patronymic=:patronymic,
                 position=:position, department=:department, domain_login=:domain_login,
-                role=:role, updated_at=datetime('now')
+                role=:role, auth_method=:auth_method, updated_at=datetime('now')
             WHERE id=:id
             """,
             {**body.model_dump(), "id": user_id},
         )
+        if body.auth_method == "domain":
+            # Пароль сервиса снимается ВМЕСТЕ с переводом на домен. Два живых
+            # способа входа в одну учётную запись — это не «альтернатива», а
+            # вторая, никем не наблюдаемая дверь: оставленный локальный пароль
+            # продолжал бы подходить, если учётку когда-нибудь вернут на
+            # 'local', и пережил бы увольнение владельца доменной записи.
+            conn.execute(
+                "UPDATE users SET password_hash = NULL, password_salt = NULL WHERE id = ?",
+                (user_id,),
+            )
         conn.commit()
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return user_out(updated)
@@ -142,9 +190,18 @@ def set_password(
 
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
+        if auth_method_of(row) == "domain":
+            # Молча принять пароль здесь было бы худшим вариантом: он лёг бы
+            # в базу, вход бы его не спрашивал, и админ был бы уверен, что
+            # выдал рабочие учётные данные.
+            raise HTTPException(
+                status_code=409,
+                detail="У пользователя доменная авторизация — пароль сервиса не используется. "
+                       "Чтобы задать пароль, сначала переключите способ входа на «Пароль сервиса».",
+            )
 
         if body.password == "":
             password_hash, password_salt = None, None
