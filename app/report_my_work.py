@@ -439,10 +439,17 @@ def build_my_work_xlsx(report: dict, tz_offset_minutes: int = 0) -> bytes:
         c.font = Font(bold=True)
         c.fill = head_fill
         c.border = border
+    # Номер строки ведём САМИ. `ws.max_row` в openpyxl — не счётчик, а
+    # максимум по всем ячейкам листа, O(n) на каждое обращение: в цикле по
+    # строкам это квадратичный рост. На выгрузке реквизитов такой же цикл
+    # стоил 88 секунд вместо 1,7 (см. Docs/backlog.md 2026-08-03), а сюда
+    # уходит до 20 000 событий по шесть колонок.
+    строка = строка_свода
     for item in report["by_action"]:
         ws.append([item["title"], item["count"]])
+        строка += 1
         for i in (1, 2):
-            ws.cell(row=ws.max_row, column=i).border = border
+            ws.cell(row=строка, column=i).border = border
     ws.append([])
 
     ws.append(_COLUMNS)
@@ -454,10 +461,12 @@ def build_my_work_xlsx(report: dict, tz_offset_minutes: int = 0) -> bytes:
         cell.border = border
         cell.alignment = Alignment(horizontal="left", wrap_text=True)
 
+    строка = header_row
     for значения in _file_rows(report, tz_offset_minutes):
         ws.append(значения)
+        строка += 1
         for i in range(1, len(_COLUMNS) + 1):
-            cell = ws.cell(row=ws.max_row, column=i)
+            cell = ws.cell(row=строка, column=i)
             cell.border = border
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 

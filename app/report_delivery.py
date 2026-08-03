@@ -804,9 +804,18 @@ def build_delivery_schedule_xlsx(report: dict) -> bytes:
         if col["kind"] == "edge":
             edge_cols |= {2 + i * width + k for k in range(width)}
 
+    # Номер строки ведём САМИ. `ws.max_row` в openpyxl — не счётчик, а
+    # максимум по всем ячейкам листа, O(n) на каждое обращение: в цикле по
+    # строкам это квадратичный рост. На выгрузке реквизитов такой же цикл
+    # стоил 88 секунд вместо 1,7 (см. Docs/backlog.md 2026-08-03), а здесь
+    # состав иерархии задаёт ПОЛЬЗОВАТЕЛЬ, и до уровня марок строк тысячи.
+    следующая_строка = head_row + 2   # сразу после двух строк шапки
+
     def write_row(label, values, total, indent, gaps=None, gap_total=0):
-        ws.append([label])
-        r = ws.max_row
+        nonlocal следующая_строка
+        r = следующая_строка
+        следующая_строка += 1
+        ws.cell(row=r, column=1, value=label)
         # Отступ вложенности — свойством ячейки, а не пробелами в тексте:
         # текст остаётся пригодным для фильтров и формул (как в «Статусах»).
         ws.cell(row=r, column=1).alignment = Alignment(indent=indent)

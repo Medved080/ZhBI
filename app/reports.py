@@ -212,12 +212,18 @@ def build_status_report_xlsx(report: dict) -> bytes:
         cell.border = border
         cell.alignment = Alignment(horizontal="center" if i > 1 else "left", wrap_text=True)
 
+    # Номер строки ведём САМИ. `ws.max_row` в openpyxl — не счётчик, а
+    # максимум по всем ячейкам листа, O(n) на каждое обращение: в цикле по
+    # строкам это квадратичный рост. На выгрузке реквизитов такой же цикл
+    # стоил 88 секунд вместо 1,7 (см. Docs/backlog.md 2026-08-03); здесь
+    # строк пока сотни, но иерархия отчёта задаётся данными и растёт.
+    row = header_row
     for node in flatten(report):
         # Отступ вложенности — через indent у ячейки, а не пробелами в
         # тексте: Excel умеет отступ сам, и текст остаётся пригодным для
         # фильтров и формул.
         ws.append([node["label"]] + [node["values"].get(c["key"], 0) or None for c in report["columns"]])
-        row = ws.max_row
+        row += 1
         ws.cell(row=row, column=1).alignment = Alignment(indent=node["level"] * 2)
         if node["level"] < 2:
             for i in range(1, len(header) + 1):
@@ -231,8 +237,9 @@ def build_status_report_xlsx(report: dict) -> bytes:
 
     total = report["total"]
     ws.append([total["label"]] + [total["values"].get(c["key"], 0) or None for c in report["columns"]])
+    row += 1
     for i in range(1, len(header) + 1):
-        cell = ws.cell(row=ws.max_row, column=i)
+        cell = ws.cell(row=row, column=i)
         cell.font = Font(bold=True)
         cell.fill = head_fill
         cell.border = border
