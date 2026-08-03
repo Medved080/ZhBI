@@ -10823,6 +10823,15 @@ function markLocated(elementId) {
     void фигура.getBoundingClientRect();
     фигура.classList.add("located");
   }
+  // 3D-подсветка строится в selectElement, который вызывается РАНЬШЕ этой
+  // функции, — то есть на момент её построения изделие ещё не было
+  // «найденным». Пересобираем её здесь, иначе в 3D жёлтого не будет вовсе.
+  const v3 = state.view3d;
+  if (v3.active && v3.merged) {
+    const цель = elementId !== null ? elementId : v3.highlightElementId;
+    const элемент = цель !== null && цель !== undefined ? state.byId.get(цель) : null;
+    if (элемент) set3DHighlight(элемент.id, элемент.current_status);
+  }
 }
 
 // Кнопка «Вернуться к отчёту»: отчёт не пересобирается, а просто снова
@@ -12362,19 +12371,44 @@ function getFaceMaterial() {
 // элемент — всегда только один, поэтому один переиспользуемый материал
 // (не на статус — эксклюзивно на "текущий выбранный"), перекрашиваемый
 // под цвет статуса конкретного элемента при каждом выборе.
-function getHighlightMeshMaterial(status) {
+// Цвет выделения в 3D (живой репорт 2026-08-03: «в 2D работает, а в 3D
+// элемент не выделяется цветом»). Причина была в том, что подсвеченный меш
+// красился в ТОТ ЖЕ цвет статуса, что и сам элемент, и отличался только
+// еле заметным свечением (emissive 0x333333) — у «Запланирован» (серый,
+// самый частый статус) выделение было неотличимо от невыделенного.
+//
+// Теперь у 3D свои цвета выделения, соответствующие 2D: синий у обычного
+// выбора (в 2D это синий контур) и ярко-жёлтый у изделия, к которому
+// перешли из отчёта. Цвет статуса при этом теряется — и это осознанно:
+// статус выбранного изделия человек читает в карточке справа, а на схеме
+// ему нужно найти САМО изделие.
+const HIGHLIGHT_3D_COLOR = "#1f4fd8";
+const LOCATED_3D_COLOR = "#ffd000";
+
+function getHighlightMeshMaterial(status, located) {
   const v3 = state.view3d;
-  if (!v3.highlightMaterial) {
-    v3.highlightMaterial = new THREE.MeshStandardMaterial({
+  const ключ = located ? "locatedMaterial" : "highlightMaterial";
+  if (!v3[ключ]) {
+    v3[ключ] = new THREE.MeshStandardMaterial({
       side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: 4,
       polygonOffsetUnits: 4,
-      emissive: 0x333333,
+      // Свечение — того же цвета, что и заливка: на затенённой грани
+      // (свет падает не со всех сторон) один только цвет уходит в темноту
+      // и снова становится неотличим от соседей.
+      emissive: new THREE.Color(located ? LOCATED_3D_COLOR : HIGHLIGHT_3D_COLOR),
+      emissiveIntensity: 0.55,
+      // Изделие, к которому ПЕРЕШЛИ из отчёта, видно и сквозь соседей:
+      // в плотной застройке колонна почти всегда за плитой перекрытия, а
+      // смысл перехода — показать, ГДЕ она (см. focus3DOnElement, там же
+      // ради этого пологий угол камеры). Обычный выбор кликом сквозь
+      // геометрию не светит — там человек и так знает, куда нажал.
+      depthTest: !located,
     });
   }
-  v3.highlightMaterial.color.set(colorFor(status));
-  return v3.highlightMaterial;
+  v3[ключ].color.set(located ? LOCATED_3D_COLOR : HIGHLIGHT_3D_COLOR);
+  return v3[ключ];
 }
 
 // Геометрия ОДНОГО элемента в МИРОВЫХ координатах (отметка запечена в
@@ -12570,9 +12604,14 @@ function set3DHighlight(elementId, status) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(source.position.array.slice(from, to), 3));
   geometry.setAttribute("normal", new THREE.BufferAttribute(source.normal.array.slice(from, to), 3));
-  v3.highlightMesh = new THREE.Mesh(geometry, getHighlightMeshMaterial(status));
+  const перешли = elementId === locatedElementId;
+  v3.highlightMesh = new THREE.Mesh(geometry, getHighlightMeshMaterial(status, перешли));
+  // Рисуется последним — иначе меш без проверки глубины перекрывался бы
+  // тем, что нарисовано после него.
+  if (перешли) v3.highlightMesh.renderOrder = 999;
   v3.highlightElementId = elementId;
   v3.scene.add(v3.highlightMesh);
+  requestRender3D();
 }
 
 // Мировая высота подписи в 3D — раньше фиксированная величина
