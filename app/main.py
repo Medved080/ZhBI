@@ -72,6 +72,7 @@ from app.access import (
     accessible_object_ids,
     assert_object_access,
     is_system_admin,
+    object_role,
     object_roles,
     require_object_access,
     require_object_admin,
@@ -90,6 +91,10 @@ from app.reports import (
 from app.report_delivery import (
     build_delivery_cell_detail, build_delivery_schedule_pdf, build_delivery_schedule_report,
     build_delivery_schedule_xlsx,
+)
+from app.report_my_work import (
+    FILE_LIMIT, SCREEN_LIMIT, build_my_work_pdf, build_my_work_report, build_my_work_xlsx,
+    changed_element_ids,
 )
 from app.models import (
     ProjectIn,
@@ -718,7 +723,7 @@ def update_element_planned_delivery_date(
     conn = get_connection()
     try:
         _guard_elements(conn, user, [element_id])
-        data = set_planned_delivery_date(conn, element_id, body.planned_delivery_date)
+        data = set_planned_delivery_date(conn, element_id, body.planned_delivery_date, user)
         if data is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
         conn.commit()
@@ -746,7 +751,7 @@ def update_element_planned_delivery_date_bulk(
         _guard_elements(conn, user, ids)
 
         updated = set_planned_delivery_dates_bulk(
-            conn, [(item.element_id, item.planned_delivery_date) for item in body.items]
+            conn, [(item.element_id, item.planned_delivery_date) for item in body.items], user
         )
         conn.commit()
         return {"updated": updated}
@@ -856,7 +861,8 @@ def delete_history_entry(
             raise HTTPException(status_code=404, detail="Элемент не найден")
         _guard_elements(conn, user, [element_id])
         entry = conn.execute(
-            "SELECT id FROM status_history WHERE id = ? AND element_id = ?", (history_id, element_id)
+            "SELECT id, status, changed_at FROM status_history WHERE id = ? AND element_id = ?",
+            (history_id, element_id),
         ).fetchone()
         if entry is None:
             raise HTTPException(status_code=404, detail="Запись истории не найдена")
@@ -885,9 +891,22 @@ def delete_history_entry(
         data["history"] = [dict(h) for h in history_rows]
         data["contract_warning"] = contract_warning
         enrich_element_row(conn, data)
-        return data
     finally:
         conn.close()
+
+    # Журнал: удаление записи истории — такое же изменение истории статусов,
+    # как её правка (history_edit рядом), и без этой записи оно оставалось
+    # единственным способом изменить историю бесследно.
+    activity.log(
+        "history_delete", user=user, entity_type="element", entity_id=element_id,
+        element_type=row["element_type"], subtype=row["subtype"], mark=row["mark"],
+        # Статус — русской подписью: в журнале и в отчёте «Моя работа» эту
+        # строку читает человек, а `delivered` ему ни о чём не говорит.
+        old_value=f"{STATUS_LABELS_RU.get(entry['status'], entry['status'])} от {entry['changed_at']}",
+        new_value=effective_status,
+        details={"history_id": history_id},
+    )
+    return data
 
 
 class ReportRequestIn(BaseModel):
@@ -915,6 +934,20 @@ class ReportRequestIn(BaseModel):
     date_to: Optional[str] = None
     step: Optional[str] = None
     group_by: Optional[list[str]] = None
+    # Только для «Моей работы» (app/report_my_work.py). date_from/date_to выше
+    # там означают МЕСТНЫЕ даты периода (они же идут в подпись отчёта), а
+    # отбор ведётся по at_from/at_to — тем же границам, уже пересчитанным
+    # клиентом в UTC: журнал хранит время в UTC, а календарь пользователь
+    # выбирает по своим часам (тот же приём, что у `GET /activity`).
+    at_from: Optional[str] = None
+    at_to: Optional[str] = None
+    # Чью работу показывать. Пусто = свою. Чужую видит администратор — см.
+    # _my_work_scope: правило одно на отчёт и на фильтр «Изменения».
+    user_ids: Optional[list[int]] = None
+    # Смещение часов пользователя в минутах (`Date.getTimezoneOffset()`) —
+    # нужно только выгрузкам: их собирает сервер, а время события в них
+    # обязано читаться так же, как на экране.
+    tz_offset_minutes: int = 0
 
 
 def _report_object_id(conn, body: "ReportRequestIn"):
@@ -1148,6 +1181,199 @@ def report_delivery_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depe
         conn.close()
     return _report_file_response(build_delivery_schedule_pdf(report),
                                  "График поставки.pdf", "application/pdf")
+
+
+# ==================== «Моя работа»: что человек изменил за период ====================
+#
+# Отдельная ветка доступа, не `_guard_report`. Тот отвечает на вопрос «чьи
+# ИЗДЕЛИЯ показывать», а здесь вопрос другой — «чьи ДЕЙСТВИЯ показывать», и
+# ответ на него не выводится ни из объекта, ни из списка элементов.
+
+def _users_brief(conn, ids: list) -> list:
+    if not ids:
+        return []
+    rows = conn.execute(
+        f"SELECT id, last_name, first_name, patronymic FROM users "
+        f"WHERE id IN ({','.join('?' * len(ids))})", ids
+    ).fetchall()
+    return [{"id": r["id"], "display_name": format_display_name(r)} for r in rows]
+
+
+def _admin_object_ids(conn, user) -> set:
+    """Объекты, на которых пользователь — администратор. Именно этот уровень
+    даёт право смотреть чужие действия: роль `user` на объекте — это право
+    работать, а не право наблюдать за коллегами."""
+    return {oid for oid, role in object_roles(conn, user).items() if role == "admin"}
+
+
+def _my_work_scope(conn, viewer, user_ids: Optional[list]) -> tuple:
+    """Кого показываем и в каких границах: (список id пользователей, объекты).
+
+    Объекты = None означает «без ограничения», а не «ни одного» (та же
+    развилка, что у `accessible_object_ids`).
+
+    Правило одно на отчёт и на фильтр рабочей области:
+      * свои действия человек видит целиком, по всем объектам — он их и
+        совершил, скрывать от него нечего;
+      * чужие действия видит администратор: системный — любые, администратор
+        объекта — только те, что касаются изделий ЕГО объектов. Без этого
+        ограничения «выбор пользователя» стал бы дырой: назвал чужой id и
+        читаешь работу по стройке, к которой доступа нет.
+    """
+    свои = [viewer["id"]]
+    if not user_ids or set(user_ids) == set(свои):
+        return свои, None
+    if is_system_admin(viewer):
+        return list(dict.fromkeys(user_ids)), None
+    объекты = _admin_object_ids(conn, viewer)
+    if not объекты:
+        raise HTTPException(
+            status_code=403,
+            detail="Чужие действия доступны администратору объекта — у вас нет объектов с такой ролью",
+        )
+    return list(dict.fromkeys(user_ids)), объекты
+
+
+def _my_work(conn, user, body: ReportRequestIn, limit: int) -> dict:
+    ids, объекты = _my_work_scope(conn, user, body.user_ids)
+    return build_my_work_report(
+        conn, at_from=body.at_from, at_to=body.at_to,
+        date_from=body.date_from, date_to=body.date_to,
+        user_ids=ids, object_ids=объекты, users=_users_brief(conn, ids), limit=limit,
+    )
+
+
+@app.post("/reports/my-work")
+def report_my_work(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «Моя работа» — что текущий пользователь изменил за период.
+    Доступен ВСЕМ ролям: это отчёт человека о собственной работе, а не
+    журнал наблюдения (тот остаётся за администратором сервиса)."""
+    conn = get_connection()
+    try:
+        return _my_work(conn, user, body, SCREEN_LIMIT)
+    finally:
+        conn.close()
+
+
+@app.post("/reports/my-work.xlsx")
+def report_my_work_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _my_work(conn, user, body, FILE_LIMIT)
+    finally:
+        conn.close()
+    return _report_file_response(
+        build_my_work_xlsx(report, body.tz_offset_minutes), "Моя работа.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.post("/reports/my-work.pdf")
+def report_my_work_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _my_work(conn, user, body, FILE_LIMIT)
+    finally:
+        conn.close()
+    return _report_file_response(build_my_work_pdf(report, body.tz_offset_minutes),
+                                 "Моя работа.pdf", "application/pdf")
+
+
+class ChangedElementsIn(BaseModel):
+    """Запрос фильтра «Изменения» рабочей области. Границы периода — те же
+    UTC-метки, что у отчёта (клиент считает их из местного календаря)."""
+    object_id: int
+    at_from: Optional[str] = None
+    at_to: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    # None = «все пользователи» (только администратору объекта), список =
+    # конкретные. Своего id в списке достаточно, чтобы остаться в своём праве.
+    user_ids: Optional[list[int]] = None
+
+
+@app.post("/elements/changed")
+def elements_changed(body: ChangedElementsIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Элементы объекта, чьи реквизиты или история статуса менялись за период.
+
+    Возвращает ТОЛЬКО id: фильтр применяется на клиенте (там живут остальные
+    критерии отбора, см. passesPlacementFilters), а тащить сюда весь элемент
+    значило бы переслать вторую копию плана.
+
+    «Все пользователи» и выбор чужих — по тому же правилу, что и в отчёте
+    (_my_work_scope), но область здесь всегда одна: показываемый объект.
+    """
+    conn = get_connection()
+    try:
+        assert_object_access(conn, user, body.object_id, "view")
+        свои = [user["id"]]
+        нужны_чужие = body.user_ids is None or set(body.user_ids) != set(свои)
+        if нужны_чужие and not (is_system_admin(user)
+                                or object_role(conn, user, body.object_id) == "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Изменения других пользователей видит администратор объекта",
+            )
+        ids = changed_element_ids(
+            conn,
+            at_from=body.at_from or (f"{body.date_from} 00:00:00.000" if body.date_from else None),
+            at_to=body.at_to or (f"{body.date_to} 23:59:59.999" if body.date_to else None),
+            # None здесь означает «любой пользователь» — законно только после
+            # проверки выше; свой список подставляем сами, чтобы «только мои»
+            # не зависело от того, что прислал клиент.
+            user_ids=body.user_ids if нужны_чужие else свои,
+            object_id=body.object_id,
+        )
+        return {"element_ids": ids, "count": len(ids)}
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/activity-users")
+def object_activity_users(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Кого можно выбрать в «Моей работе» и в фильтре «Изменения».
+
+    Список — не `GET /users` (тот за системным администратором и отдаёт всех
+    в системе): администратору объекта нужны те, кто на ЭТОМ объекте
+    работает. Берём две группы и объединяем: у кого есть действующий грант на
+    объект и кто уже наследил в журнале по его изделиям — второе важно,
+    потому что грант могли и снять, а сделанная работа никуда не делась.
+    """
+    conn = get_connection()
+    try:
+        assert_object_access(conn, user, object_id, "view")
+        админ = is_system_admin(user) or object_role(conn, user, object_id) == "admin"
+        if not админ:
+            # Обычный пользователь выбирать не может — отдаём только его
+            # самого, чтобы форме не приходилось знать про права отдельно.
+            return {"users": _users_brief(conn, [user["id"]]), "can_choose": False}
+        rows = conn.execute(
+            """
+            SELECT DISTINCT u.id AS id, u.last_name AS last_name, u.first_name AS first_name,
+                   u.patronymic AS patronymic
+            FROM users u
+            WHERE u.id IN (
+                    SELECT ua.user_id FROM user_access ua
+                    JOIN objects o ON o.id = ?
+                    WHERE ua.object_id = o.id
+                       OR (ua.object_id IS NULL AND ua.project_id = o.project_id)
+                       OR (ua.object_id IS NULL AND ua.project_id IS NULL)
+                  )
+               OR u.role = 'admin'
+               OR u.id IN (
+                    SELECT a.user_id FROM activity_log a
+                    JOIN elements e ON e.id = a.entity_id AND a.entity_type = 'element'
+                    WHERE e.object_id = ?
+                  )
+            ORDER BY u.last_name, u.first_name
+            """,
+            (object_id, object_id),
+        ).fetchall()
+        return {
+            "users": [{"id": r["id"], "display_name": format_display_name(r)} for r in rows],
+            "can_choose": True,
+        }
+    finally:
+        conn.close()
 
 
 class BackupCreateIn(BaseModel):

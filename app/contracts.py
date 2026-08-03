@@ -778,6 +778,21 @@ def apply_status_change(
     # секунды на десяток тысяч элементов — на время ответа не влияет.
     # Тип/подтип/марка пишутся СНИМКОМ: искать в журнале будут по ним, а сам
     # элемент к тому времени мог измениться.
+    #
+    # `at` НЕ подменяется рабочей датой (исправлено 2026-08-03). Раньше
+    # backdating подставлялся сюда как время события, и это было неверно
+    # дважды: журнал обещает МОМЕНТ ДЕЙСТВИЯ («at — время сервера», см.
+    # schema.sql), а рабочая дата приходит из <input type=datetime-local>,
+    # то есть по МЕСТНЫМ часам браузера — в колонке UTC она означала совсем
+    # не то, что в ней прочтут. Отсюда же ломался отчёт «Моя работа»:
+    # сделанная сегодня правка задним числом не попадала в «за сегодня».
+    # Сама рабочая дата не теряется — она уходит в подробности события и
+    # остаётся в status_history, где и является истиной.
+    подробности = {}
+    if element_contract_id:
+        подробности["contract_id"] = element_contract_id
+    if changed_at:
+        подробности["рабочая дата"] = changed_at
     activity.log(
         "status_change",
         user_id=changed_by_user_id,
@@ -789,8 +804,7 @@ def apply_status_change(
         mark=row["mark"],
         old_value=row["current_status"],
         new_value=status,
-        at=changed_at or None,
-        details={"contract_id": element_contract_id} if element_contract_id else None,
+        details=подробности or None,
     )
 
     updated_row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()

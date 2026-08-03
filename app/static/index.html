@@ -1261,6 +1261,28 @@
   .report-toggle { border: none; background: none; cursor: pointer; width: 16px; padding: 0; margin-right: 4px; color: var(--color-text-muted); }
   .report-toggle.empty { visibility: hidden; }
 
+  /* ---- отчёт «Моя работа» ---- */
+  /* Сводка по действиям — «фишками» над таблицей: в отчёте на тысячу строк
+     она и есть ответ на вопрос «сколько сделано», а таблица отвечает на
+     «что именно». */
+  .mw-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .mw-chip {
+    background: var(--color-surface-2); border: 1px solid var(--color-border);
+    border-radius: 999px; padding: 3px 10px; font-size: 12px;
+  }
+  .mw-chip b { font-variant-numeric: tabular-nums; }
+  #mw-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #mw-table th, #mw-table td { padding: 4px 8px; border: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+  #mw-table th { background: var(--color-surface-2); font-weight: 600; position: sticky; top: 0; }
+  #mw-table td.mw-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* Строка про конкретное изделие — кликабельна: показывает его на схеме
+     (2D или 3D, что сейчас открыто). Признак — рамка вокруг марки, а не
+     подчёркивание всей строки: подчёркнутыми оказались бы и «было/стало». */
+  #mw-table tr.mw-locatable { cursor: pointer; }
+  #mw-table tr.mw-locatable:hover { background: var(--color-surface-2); }
+  #mw-table tr.mw-locatable .mw-item { color: var(--color-primary); text-decoration: underline dotted; }
+  .mw-empty { color: var(--color-text-muted); padding: 12px 0; }
+
   /* ---- «График поставки»: шапка с периодом, шагом и порядком группировки ---- */
   /* Календарь на десятки колонок в 780 px не читается вовсе, поэтому у
      этого отчёта форма расширяется почти на весь экран. Класс вешается на
@@ -1741,6 +1763,11 @@
             <button id="menu-report-status">Статусы</button>
             <button id="menu-report-dynamics">Динамика монтажа и поставки</button>
             <button id="menu-report-delivery">График поставки</button>
+            <!-- «Моя работа» — тоже всем ролям и по той же причине: это
+                 отчёт человека о СВОЕЙ работе, а не наблюдение за чужой
+                 (выбор пользователя открывается только администратору
+                 объекта, см. _my_work_scope в app/main.py). -->
+            <button id="menu-report-mywork">Моя работа</button>
           </div>
         </div>
         <!-- «Администрирование» (2026-08-02, живой запрос): ведение самого
@@ -2762,7 +2789,20 @@
           <button type="button" class="report-tab active" data-report="status">Статусы</button>
           <button type="button" class="report-tab" data-report="dynamics">Динамика</button>
           <button type="button" class="report-tab" data-report="delivery">График поставки</button>
+          <button type="button" class="report-tab" data-report="mywork">Моя работа</button>
         </div>
+        <!-- «Моя работа»: период (по умолчанию текущий день) и выбор
+             пользователя. Список пользователей приходит с сервера вместе с
+             признаком can_choose — право смотреть чужую работу есть только у
+             администратора ОБЪЕКТА, и решает это сервер, а не разметка. -->
+        <span id="report-work-box" style="display:none">
+          Период <input type="date" id="mw-from" style="width:auto"/>
+          <span>—</span>
+          <input type="date" id="mw-to" style="width:auto"/>
+          <label class="field" id="mw-user-box" style="display:none; margin:0">
+            Пользователь <select id="mw-user" style="width:auto"></select>
+          </label>
+        </span>
         <!-- Отчётная дата нужна только «Динамике» (ежедневный отчёт «на
              дату»); для «Статусов» она бессмысленна и скрывается. -->
         <label class="field" id="report-date-box" style="display:none; margin:0">
@@ -2809,7 +2849,11 @@
           <span id="ds-groups"></span>
         </div>
       </div>
-      <label class="toggle"><input type="checkbox" id="report-use-filter"/> Учитывать текущий фильтр схемы</label>
+      <!-- Сужение фильтром схемы к «Моей работе» неприменимо: там строки —
+           события журнала, а не изделия, и часть из них к изделиям вообще
+           не относится. Поэтому галочка для этого отчёта прячется целиком
+           (id на обёртке — гасим подпись вместе с полем). -->
+      <label class="toggle" id="report-use-filter-box"><input type="checkbox" id="report-use-filter"/> Учитывать текущий фильтр схемы</label>
       <div class="hint-text" id="report-status-line"></div>
     </div>
     <div class="modal-sticky-scroll" id="report-body"></div>

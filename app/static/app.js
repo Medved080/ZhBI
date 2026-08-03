@@ -122,6 +122,26 @@ let state = {
     smrStart: { from: "", to: "", empty: "show" },
     smrEnd: { from: "", to: "", empty: "show" },
   },
+  // Отбор по ИЗМЕНЕНИЯМ (сайдбар → Фильтры → «Изменения», живой запрос
+  // 2026-08-03): какие изделия рабочей области кто-то правил за период —
+  // реквизиты или историю статуса.
+  //
+  // Третья природа фильтра, отличная и от перечислений, и от диапазонов
+  // дат выше: критерий здесь не свойство элемента, а СОБЫТИЕ, которого в
+  // браузере нет вовсе — оно живёт в журнале на сервере. Поэтому у фильтра
+  // есть загружаемый набор id (`ids`) и всё, что нужно для запроса:
+  //   on     — включён ли отбор;
+  //   from/to — местные даты периода (по умолчанию текущий день);
+  //   scope  — «mine» (свои), «all» (все пользователи), «some» (выбранные);
+  //            «all»/«some» сервер разрешает только администратору объекта;
+  //   userIds — выбранные при scope=«some»;
+  //   ids    — что ответил сервер (Set), null — ещё не спрашивали.
+  // ids НЕ обнуляется на время запроса: иначе на каждое изменение периода
+  // схема успевала бы моргнуть полным составом.
+  changeFilter: {
+    on: false, from: "", to: "", scope: "mine", userIds: new Set(),
+    ids: null, count: 0, loading: false, error: "",
+  },
   // Какие родители иерархических групп фильтра сейчас развёрнуты — чисто
   // UI-состояние навигации, но хранится в state (не в DOM), иначе
   // разворот сбрасывался бы при каждой полной перерисовке фильтров
@@ -137,7 +157,7 @@ let state = {
   // и Кран/Стоянку, и Отметку).
   topFilterCollapsed: new Set([
     "zakhvatka", "craneStance", "craneStanceNone", "elevation", "floor", "elementType", "supplier", "noContract",
-    "smr",
+    "smr", "changes",
   ]),
   baseMarkerRadius: 1,
   view: null,
@@ -310,6 +330,7 @@ function describeActiveFilters() {
     if (!dateFilterIsActive(def.key)) continue;
     parts.push(`${def.title}: ${dateFilterSummary(state.dateFilters[def.key])}`);
   }
+  if (state.changeFilter.on) parts.push(`Изменения: ${changeFilterSummary()}`);
   return parts;
 }
 
@@ -843,6 +864,10 @@ async function switchObject(objectId) {
   Object.values(state.placementFilters).forEach((набор) => набор.clear());
   state.dateFilters.smrStart = { from: "", to: "", empty: "show" };
   state.dateFilters.smrEnd = { from: "", to: "", empty: "show" };
+  // Третья структура фильтров — отбор по изменениям: в нём лежат id
+  // элементов ПРЕЖНЕГО объекта, и без сброса новая схема оказалась бы
+  // пустой без единого объяснения.
+  resetChangeFilter();
 
   try {
     await api("/me/last-object", {
@@ -1485,11 +1510,21 @@ function elementPassesDateFilters(element) {
   return true;
 }
 
+// Отбор по изменениям — набор id, полученный от сервера (см.
+// state.changeFilter). Пока набора нет (первый запрос ещё не вернулся),
+// фильтр никого не прячет: показать пустую схему раньше ответа хуже, чем
+// показать полную на долю секунды.
+function elementPassesChangeFilter(element) {
+  const f = state.changeFilter;
+  if (!f.on || !f.ids) return true;
+  return f.ids.has(element.id);
+}
+
 function passesPlacementFilters(element) {
   for (const def of PLACEMENT_FILTER_DEFS) {
     if (state.placementFilters[def.key].has(def.valueFn(element))) return false;
   }
-  return elementPassesDateFilters(element);
+  return elementPassesDateFilters(element) && elementPassesChangeFilter(element);
 }
 
 // Пары категорий, связанные UI-каскадом родитель→потомок (клик по крану
@@ -1517,7 +1552,7 @@ function elementPassesExceptKeys(element, exceptKeys) {
     if (exceptKeys.includes(def.key)) continue;
     if (state.placementFilters[def.key].has(def.valueFn(element))) return false;
   }
-  return elementPassesDateFilters(element);
+  return elementPassesDateFilters(element) && elementPassesChangeFilter(element);
 }
 
 // ПОЛНЫЙ список значений категории — НЕ зависит ни от одного текущего
@@ -2016,6 +2051,254 @@ function buildDateFilterSubgroup(def, onChange) {
   return box;
 }
 
+// ---------- фильтр «Изменения» (живой запрос 2026-08-03) ----------
+//
+// Отбирает изделия, чьи реквизиты или история статуса менялись за период.
+// Критерий приходит С СЕРВЕРА (POST /elements/changed): событий правки в
+// браузере нет, они живут в журнале действий. Отсюда три отличия от всех
+// остальных групп фильтра:
+//   * у группы есть состояние загрузки и текст ошибки — запрос сетевой;
+//   * любое изменение параметров ведёт к новому запросу, а не к пересчёту
+//     на месте;
+//   * состав пользователей для выбора спрашивается у сервера — право
+//     смотреть чужие изменения есть только у администратора ОБЪЕКТА, и
+//     решает это сервер (тот же список, что у отчёта «Моя работа»).
+//
+// Период по умолчанию — текущий день: спрашивают почти всегда «что
+// поменялось сегодня», а не «когда-нибудь».
+let changeFilterRequestId = 0;
+
+// Список пользователей объекта — общий у фильтра и у отчёта «Моя работа»
+// (один и тот же эндпоинт, одно и то же право выбирать). Кэш на ОБЪЕКТ, а
+// не на сеанс: у соседней стройки другой состав людей.
+let myWorkUsers = { objectId: undefined, canChoose: false, list: [] };
+
+function todayIsoLocal() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+async function ensureMyWorkUsers() {
+  if (myWorkUsers.objectId === state.objectId) return;
+  myWorkUsers = { objectId: state.objectId, canChoose: false, list: [] };
+  if (state.objectId == null) return;
+  try {
+    const data = await api(`/objects/${state.objectId}/activity-users`);
+    myWorkUsers.canChoose = !!data.can_choose;
+    myWorkUsers.list = data.users || [];
+  } catch (e) {
+    // Не смогли получить список — и отчёт, и фильтр всё равно работают,
+    // просто про свою работу. Ронять их из-за необязательной выпадашки
+    // нельзя.
+    console.warn("Не удалось получить список пользователей объекта:", e.message);
+  }
+  // Выпадашка отчёта заполняется здесь же: список один, и второе место его
+  // заполнения означало бы второй запрос за тем же самым.
+  const box = document.getElementById("mw-user-box");
+  const sel = document.getElementById("mw-user");
+  const прежний = sel.value;
+  sel.innerHTML = ['<option value="">Мои изменения</option>'].concat(
+    myWorkUsers.list
+      .filter(u => !state.currentUser || u.id !== state.currentUser.id)
+      .map(u => `<option value="${u.id}">${escapeHtml(u.display_name)}</option>`)).join("");
+  if (прежний && sel.querySelector(`option[value="${прежний}"]`)) sel.value = прежний;
+  box.style.display = myWorkUsers.canChoose ? "" : "none";
+}
+
+function resetChangeFilter() {
+  state.changeFilter = {
+    on: false, from: "", to: "", scope: "mine", userIds: new Set(),
+    ids: null, count: 0, loading: false, error: "",
+  };
+  changeFilterRequestId++;   // ответ уже отправленного запроса не должен вернуться в сброшенный фильтр
+}
+
+function changeFilterUserIdsForRequest() {
+  const f = state.changeFilter;
+  if (f.scope === "all") return null;                  // null = «любой пользователь» (проверит сервер)
+  if (f.scope === "some") return [...f.userIds];
+  return state.currentUser ? [state.currentUser.id] : [];
+}
+
+async function refreshChangedElementIds() {
+  const f = state.changeFilter;
+  const запрос = ++changeFilterRequestId;
+  if (!f.on || state.objectId == null) {
+    f.ids = null; f.count = 0; f.error = "";
+    return;
+  }
+  f.loading = true;
+  f.error = "";
+  try {
+    const data = await api("/elements/changed", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        object_id: state.objectId,
+        date_from: f.from || null,
+        date_to: f.to || null,
+        // Границы в UTC считает та же функция, что и журнал действий, —
+        // журнал хранит время в UTC, календарь пользователь выбирает по
+        // своим часам (см. activityBoundToUtc).
+        at_from: f.from ? activityBoundToUtc(f.from, false) : null,
+        at_to: f.to ? activityBoundToUtc(f.to, true) : null,
+        user_ids: changeFilterUserIdsForRequest(),
+      }),
+    });
+    if (запрос !== changeFilterRequestId) return;   // пришёл ответ на устаревший запрос
+    f.ids = new Set(data.element_ids);
+    f.count = data.count;
+  } catch (e) {
+    if (запрос !== changeFilterRequestId) return;
+    // Пустой набор, а не «показать всё»: молча снятый отбор выглядел бы как
+    // «изменений очень много», то есть врал бы в противоположную сторону.
+    f.ids = new Set();
+    f.count = 0;
+    f.error = e.message;
+  } finally {
+    f.loading = false;
+  }
+  onPlacementFilterChange();
+}
+
+function changeFilterSummary() {
+  const f = state.changeFilter;
+  if (!f.on) return "";
+  const период = f.from && f.to && f.from === f.to
+    ? formatDateRu(f.from)
+    : [f.from ? `с ${formatDateRu(f.from)}` : "", f.to ? `по ${formatDateRu(f.to)}` : ""].filter(Boolean).join(" ");
+  const кто = f.scope === "all" ? "все пользователи"
+    : f.scope === "some" ? `выбрано пользователей: ${f.userIds.size}`
+    : "мои";
+  return [период || "весь срок", кто].join(" · ");
+}
+
+function buildChangeFilterGroup(onChange) {
+  const f = state.changeFilter;
+  const { wrap, header, body } = filterGroupShell(
+    f.on ? `Изменения · ${changeFilterSummary()}` : "Изменения", "changes", { actions: false });
+
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "link-btn";
+  resetBtn.textContent = "сбросить";
+  resetBtn.disabled = !f.on;
+  resetBtn.addEventListener("click", () => {
+    resetChangeFilter();
+    onChange();
+  });
+  header.appendChild(resetBtn);
+
+  const включатель = document.createElement("label");
+  включатель.className = "toggle";
+  const чек = document.createElement("input");
+  чек.type = "checkbox";
+  чек.checked = f.on;
+  чек.addEventListener("change", () => {
+    f.on = чек.checked;
+    // Период заполняется текущим днём при ВКЛЮЧЕНИИ, а не в состоянии по
+    // умолчанию: иначе заголовок группы обещал бы отбор, которого нет.
+    if (f.on && !f.from && !f.to) { f.from = todayIsoLocal(); f.to = todayIsoLocal(); }
+    if (f.on) ensureMyWorkUsers().then(onChange);
+    onChange();
+    refreshChangedElementIds();
+  });
+  включатель.appendChild(чек);
+  включатель.appendChild(document.createTextNode(" отбирать изменённые за период"));
+  body.appendChild(включатель);
+
+  const box = document.createElement("div");
+  box.className = "filter-subgroup";
+  if (!f.on) box.classList.add("filter-disabled");
+
+  for (const [bound, caption] of [["from", "с"], ["to", "по"]]) {
+    const row = document.createElement("label");
+    row.className = "filter-date-row";
+    const cap = document.createElement("span");
+    cap.className = "filter-date-cap";
+    cap.textContent = caption;
+    row.appendChild(cap);
+    const input = document.createElement("input");
+    input.type = "date";
+    input.value = f[bound];
+    input.disabled = !f.on;
+    // Та же метка, что у дат СМР — фокус после полной перерисовки
+    // контейнера восстанавливает общий механизм (pendingDateFilterFocus).
+    input.dataset.dateFilter = `changes:${bound}`;
+    input.addEventListener("change", () => {
+      f[bound] = input.value;
+      pendingDateFilterFocus = input.dataset.dateFilter;
+      onChange();
+      refreshChangedElementIds();
+    });
+    row.appendChild(input);
+    box.appendChild(row);
+  }
+
+  // Чьи изменения. «Только мои» есть у всех; «все» и «выбранные» показываем,
+  // только если сервер разрешил выбирать (администратор объекта) — прятать
+  // по системной роли нельзя, роль на объекте с ней не совпадает.
+  const режимы = [["mine", "только мои"]];
+  if (myWorkUsers.canChoose) режимы.push(["all", "все пользователи"], ["some", "выбранные пользователи"]);
+  for (const [mode, label] of режимы) {
+    const row = document.createElement("label");
+    row.className = "toggle";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "change-filter-scope";
+    input.checked = f.scope === mode;
+    input.disabled = !f.on;
+    input.addEventListener("change", () => {
+      f.scope = mode;
+      onChange();
+      refreshChangedElementIds();
+    });
+    row.appendChild(input);
+    row.appendChild(document.createTextNode(" " + label));
+    box.appendChild(row);
+  }
+
+  if (f.on && f.scope === "some" && myWorkUsers.canChoose) {
+    const список = document.createElement("div");
+    список.className = "filter-subgroup";
+    for (const u of myWorkUsers.list) {
+      const row = document.createElement("label");
+      row.className = "toggle";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = f.userIds.has(u.id);
+      input.addEventListener("change", () => {
+        if (input.checked) f.userIds.add(u.id); else f.userIds.delete(u.id);
+        onChange();
+        refreshChangedElementIds();
+      });
+      row.appendChild(input);
+      row.appendChild(document.createTextNode(" " + u.display_name));
+      список.appendChild(row);
+    }
+    if (!myWorkUsers.list.length) {
+      const пусто = document.createElement("div");
+      пусто.className = "hint-text";
+      пусто.textContent = "Список пользователей объекта пуст";
+      список.appendChild(пусто);
+    }
+    box.appendChild(список);
+  }
+
+  const строка = document.createElement("div");
+  строка.className = f.error ? "error-text" : "hint-text";
+  строка.textContent = f.error
+    ? `Не удалось получить изменения: ${f.error}`
+    : (!f.on ? ""
+      : f.loading ? "Запрашиваю изменения…"
+      : f.ids ? `Изменённых изделий: ${f.count}`
+      : "");
+  box.appendChild(строка);
+
+  body.appendChild(box);
+  return wrap;
+}
+
 function resetDateFilter(key) {
   const f = state.dateFilters[key];
   f.from = ""; f.to = ""; f.empty = "show";
@@ -2338,6 +2621,7 @@ function renderPlacementFilters() {
   resetBtn.addEventListener("click", () => {
     for (const key of Object.keys(state.placementFilters)) state.placementFilters[key].clear();
     resetAllDateFilters();
+    resetChangeFilter();   // «все фильтры» — значит и отбор по изменениям тоже
     onPlacementFilterChange();
   });
   container.appendChild(resetBtn);
@@ -2507,6 +2791,10 @@ function renderPlacementFilters() {
   // списка, отдельно от групп-перечислений: отбор диапазоном, а не
   // галочками (см. DATE_FILTER_DEFS/buildSmrFilterGroup).
   container.appendChild(buildSmrFilterGroup(onPlacementFilterChange));
+
+  // «Изменения» — самой последней: отбор не по свойству изделия, а по тому,
+  // что с ним делали (данные приходят с сервера, см. buildChangeFilterGroup).
+  container.appendChild(buildChangeFilterGroup(onPlacementFilterChange));
 
   applyMarkSearchFilter();
 
@@ -3733,6 +4021,7 @@ function clearWorkspace() {
   state.initialView = null;
   for (const key of Object.keys(state.placementFilters)) state.placementFilters[key].clear();
   resetAllDateFilters();
+  resetChangeFilter();   // в нём лежат id элементов, которых на схеме больше нет
   for (const key of Object.keys(state.placementGroupsExpanded)) state.placementGroupsExpanded[key].clear();
   state.stanceZoneVisible.clear();
   renderLegend();
@@ -9204,6 +9493,16 @@ const REPORTS = {
     render: renderDeliveryReport,
     needsPeriod: true,
   },
+  // «Моя работа» (живой запрос 2026-08-03) — что человек изменил за период.
+  // needsWorkPeriod: свой период (по умолчанию сегодня) и выбор пользователя;
+  // «Учитывать текущий фильтр схемы» для него прячется — строки здесь события
+  // журнала, а не изделия (см. reportRequestBody/switchReport).
+  mywork: {
+    title: "Моя работа",
+    endpoint: "/reports/my-work",
+    render: renderMyWorkReport,
+    needsWorkPeriod: true,
+  },
 };
 let currentReport = "status";
 // Период графика «Динамики» в ФОРМЕ (живой запрос 2026-08-03) — тот же, что
@@ -9232,6 +9531,23 @@ function defaultCollapsedTree(data) {
 
 function reportRequestBody() {
   const body = { source_file: state.sourceFile || null, object_id: state.objectId };
+  if (REPORTS[currentReport].needsWorkPeriod) {
+    // Период — местными датами (они же идут в подпись отчёта, в том числе в
+    // Excel и PDF, которые собирает сервер) И границами в UTC: журнал хранит
+    // время в UTC, а календарь пользователь выбирает по своим часам. Обе
+    // границы считает та же функция, что и форма журнала действий
+    // (activityBoundToUtc) — вторая реализация того же пересчёта разошлась бы
+    // с первой ровно на часовом поясе, то есть незаметно.
+    const от = document.getElementById("mw-from").value;
+    const до = document.getElementById("mw-to").value;
+    body.date_from = от || null;
+    body.date_to = до || null;
+    body.at_from = от ? activityBoundToUtc(от, false) : null;
+    body.at_to = до ? activityBoundToUtc(до, true) : null;
+    body.user_ids = myWorkSelectedUserIds();
+    body.tz_offset_minutes = new Date().getTimezoneOffset();
+    return body;   // element_ids/фильтр схемы к событиям журнала неприменимы
+  }
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
   }
@@ -9786,6 +10102,158 @@ document.getElementById("report-body").addEventListener("mouseleave", hideDelive
 // висеть над чужой ячейкой.
 document.getElementById("report-body").addEventListener("scroll", hideDeliveryTip, true);
 
+// ============ отчёт «Моя работа» (живой запрос 2026-08-03) ============
+//
+// Что человек изменил за период (по умолчанию — за сегодня). Данные —
+// журнал действий (app/report_my_work.py); здесь только показ и переход к
+// изделию на схеме.
+//
+// Права решает СЕРВЕР: список пользователей приходит вместе с признаком
+// can_choose, и выпадашка просто не показывается тому, кому выбирать нечего.
+// Прятать её по системной роли было бы неверно дважды: роль на объекте и
+// системная роль — разные вещи (см. app/access.py), а прораб на одной
+// стройке бывает администратором на соседней.
+
+// myWorkUsers/ensureMyWorkUsers объявлены выше, рядом с фильтром
+// «Изменения»: список пользователей нужен обоим, и спрашивается он один раз
+// на объект (см. buildChangeFilterGroup).
+
+// null = «мои изменения» (сервер сам подставит текущего пользователя — так
+// «только свои» не зависит от того, что прислал браузер).
+function myWorkSelectedUserIds() {
+  const v = document.getElementById("mw-user").value;
+  return v ? [Number(v)] : null;
+}
+
+// Время события местными часами, но БЕЗ миллисекунд: в журнале действий они
+// нужны (там сравнивают быстродействие машин, «нажал» и «открылось»
+// различаются десятками миллисекунд), а в отчёте о работе — визуальный шум.
+function myWorkTimeText(at) {
+  return activityTimeLocal(at).replace(/\.\d{1,3}$/, "");
+}
+
+function renderMyWorkReport(data) {
+  const свод = data.by_action.map(i =>
+    `<span class="mw-chip">${escapeHtml(i.title)} <b>${i.count}</b></span>`).join("");
+  if (!data.rows.length) {
+    return `<div class="mw-empty">За выбранный период изменений нет.</div>`;
+  }
+  const строки = data.rows.map(r => {
+    // Кликабельна строка, которая ведёт к ЖИВОМУ изделию: у события про
+    // контракт или проект показывать на схеме нечего, а у изделия,
+    // исчезнувшего из чертежа при переимпорте (is_current = 0), — некуда.
+    const адресуема = !!(r.element && r.element.is_current);
+    const адрес = r.element
+      ? [r.element.address, r.element.floor != null ? `${r.element.floor} этаж` : null]
+        .filter(Boolean).join(" · ")
+      : "";
+    const чужой_объект = r.element && r.element.object_id !== state.objectId
+      ? ` <span class="hint-text">(${escapeHtml(r.element.object_name || "другой объект")})</span>` : "";
+    const предмет = r.item
+      ? `<span class="mw-item">${escapeHtml(r.item)}</span>`
+      : (r.entity_type ? `<span class="hint-text">${escapeHtml(r.entity_type)} #${r.entity_id ?? ""}</span>` : "");
+    return `<tr${адресуема ? ` class="mw-locatable" data-element-id="${r.element.id}"`
+                            + ` data-object-id="${r.element.object_id ?? ""}"`
+                            + ` title="Показать на схеме"` : ""}>
+      <td class="mw-time">${escapeHtml(myWorkTimeText(r.at))}</td>
+      <td>${escapeHtml(r.user_name || "")}</td>
+      <td>${escapeHtml(r.action_title)}</td>
+      <td>${предмет}${чужой_объект}${адрес ? `<br><span class="hint-text">${escapeHtml(адрес)}</span>` : ""}</td>
+      <td>${escapeHtml(r.old_text)}</td>
+      <td>${escapeHtml(r.new_text)}</td>
+    </tr>`;
+  }).join("");
+  const хвост = data.truncated
+    ? `<div class="hint-text" style="margin-top:8px">Показаны первые ${data.shown} событий из ${data.total} — сузьте период, чтобы увидеть остальные.</div>`
+    : "";
+  return `<div class="mw-summary">${свод}</div>
+    <table id="mw-table"><thead><tr>
+      <th>Время</th><th>Пользователь</th><th>Действие</th>
+      <th>Изделие / объект</th><th>Было</th><th>Стало</th>
+    </tr></thead><tbody>${строки}</tbody></table>${хвост}`;
+}
+
+// Показать изделие на схеме — в том виде, который сейчас открыт (2D или 3D).
+// Ракурс 3D НЕ сбрасывается: камера переезжает к изделию, сохраняя
+// направление взгляда, иначе «показать» означало бы ещё и «развернуть всё,
+// как было при открытии».
+// Сколько миллиметров плана держим в кадре вокруг изделия. 6 м подобраны
+// живой проверкой: при 12 м колонна 400×400 превращалась в точку и «показать
+// местоположение» приходилось доразглядывать, при 2 м пропадал контекст —
+// не видно, к каким осям изделие относится.
+const FOCUS_SPAN_MM = 6000;
+// Угол подъёма камеры в 3D при переходе к изделию, радианы (~12°).
+const FOCUS_3D_PITCH = 0.21;
+
+function focus2DOnElement(element) {
+  if (!state.view) return;
+  const [cx, cy] = rubberBandTestPoint(element);   // центр РЕАЛЬНОГО контура, не выноски марки
+  const dims = element.outline && element.outline.length >= 3 ? footprintDimensions(element.outline) : null;
+  const span = Math.max(dims ? Math.max(dims.width, dims.length) * 8 : 0, FOCUS_SPAN_MM);
+  // Дальше «всей схемы» не отдаляемся — окно вокруг мелкого изделия не
+  // должно оказаться шире самого чертежа.
+  const w = state.initialView ? Math.min(span, state.initialView.w) : span;
+  const h = w * (state.view.h / state.view.w);   // пропорции окна сохраняем, иначе схема сплющится
+  setView({ x: cx - w / 2, y: -cy - h / 2, w, h });
+}
+
+function focus3DOnElement(element) {
+  const v3 = state.view3d;
+  if (!v3.camera || !v3.controls || !THREE) return;
+  const [cx, cy] = rubberBandTestPoint(element);
+  // world.X = dxf.x, world.Z = -dxf.y, world.Y = отметка (см. build3DScene).
+  const цель = new THREE.Vector3(cx, element.elevation_mm || 0, -cy);
+  const dims = element.outline && element.outline.length >= 3 ? footprintDimensions(element.outline) : null;
+  const span = Math.max(dims ? Math.max(dims.width, dims.length) * 8 : 0, FOCUS_SPAN_MM);
+  // Отходим дальше, чем в 2D (span × 2): камера перспективная и стоит внутри
+  // застройки — на дистанции «размер окна плана» изделие оказывается за
+  // ближайшей плитой. С запасом видно и его, и соседей, среди которых искать.
+  //
+  // Сторона обзора (азимут) — прежняя, пользовательская, а вот УГОЛ подъёма
+  // принудительно делается пологим: сверху-под-углом (обычный вид всей
+  // модели) колонну и ригель всегда закрывает плита перекрытия своего яруса
+  // — поймано живой проверкой, в центре кадра оказывалась поверхность плиты,
+  // а не изделие. Пологий взгляд смотрит в промежуток между ярусами.
+  const направление = v3.camera.position.clone().sub(v3.controls.target);
+  направление.y = 0;
+  if (направление.lengthSq() === 0) направление.set(1, 0, 1);   // камера строго сверху — азимута нет
+  направление.normalize().multiplyScalar(Math.cos(FOCUS_3D_PITCH));
+  направление.y = Math.sin(FOCUS_3D_PITCH);
+  v3.camera.position.copy(цель).add(направление.multiplyScalar(span * 2));
+  v3.controls.target.copy(цель);
+  v3.controls.update();
+  updateZoomIndicator3D();
+  requestRender3D();
+}
+
+async function locateElementOnPlan(elementId, objectId) {
+  // Изделие соседнего объекта: сначала переключаем стройку (схема
+  // показывает ОДИН объект, см. этап B) — иначе «показать на схеме» ткнуло
+  // бы в пустоту. Доступ уже подтверждён тем, что событие вообще попало в
+  // отчёт, но объекта может не быть в дереве — тогда честно говорим об этом.
+  if (objectId != null && objectId !== state.objectId) {
+    const есть = state.projects.some(p => p.objects.some(o => o.id === objectId));
+    if (!есть) {
+      showToast("Изделие относится к другому объекту, недоступному вам", "warning");
+      return;
+    }
+    await switchObject(objectId);
+  }
+  const element = state.byId.get(elementId);
+  if (!element) {
+    showToast("Изделие не найдено на текущей схеме — возможно, оно исчезло из чертежа", "warning");
+    return;
+  }
+  reportsBackdrop.classList.remove("open");
+  selectElement(element);
+  if (state.view3d.active) focus3DOnElement(element); else focus2DOnElement(element);
+  // Скрытое фильтром изделие выделено и в центре кадра, но не нарисовано —
+  // без предупреждения это выглядит как «ничего не произошло».
+  if (!passesPlacementFilters(element)) {
+    showToast("Изделие скрыто текущим фильтром рабочей области", "warning");
+  }
+}
+
 async function loadReport() {
   const def = REPORTS[currentReport];
   document.getElementById("report-title").textContent = def.title;
@@ -9796,9 +10264,18 @@ async function loadReport() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(reportRequestBody()),
     });
-    reportCollapsed = defaultCollapsedTree(reportData);
+    // Свёрнутость — только у древовидных отчётов; у «Моей работы» строки
+    // плоские, и defaultCollapsedTree набрал бы туда undefined.
+    reportCollapsed = def.needsWorkPeriod ? new Set() : defaultCollapsedTree(reportData);
     document.getElementById("report-body").innerHTML = def.render(reportData);
-    if (def.needsPeriod) {
+    if (def.needsWorkPeriod) {
+      const кто = reportData.users.map(u => u.display_name).join(", ") || "—";
+      statusLine.textContent = `${кто} · событий за период: ${reportData.total}`;
+      // Границы периода подставляем фактически применёнными: при первом
+      // открытии их выбирает не пользователь, а форма (текущий день).
+      document.getElementById("mw-from").value = reportData.date_from || "";
+      document.getElementById("mw-to").value = reportData.date_to || "";
+    } else if (def.needsPeriod) {
       // Разборы ячеек считались для ПРЕЖНИХ параметров — держать их
       // дальше значило бы показывать чужие числа под новой таблицей.
       dsTipCache = new Map();
@@ -9838,14 +10315,29 @@ async function loadReport() {
   }
 }
 
-function switchReport(key) {
+async function switchReport(key) {
   currentReport = key;
   [...document.querySelectorAll(".report-tab")].forEach(b => b.classList.toggle("active", b.dataset.report === key));
   document.getElementById("report-date-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-period-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
-  reportsBackdrop.querySelector(".modal").classList.toggle("report-full", !!REPORTS[key].needsPeriod);
+  document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
+  document.getElementById("report-use-filter-box").style.display = REPORTS[key].needsWorkPeriod ? "none" : "";
+  // «Моей работе» ширина нужна не меньше, чем «Графику поставки»: шесть
+  // колонок, две из которых — свободный текст «было/стало».
+  reportsBackdrop.querySelector(".modal").classList.toggle(
+    "report-full", !!(REPORTS[key].needsPeriod || REPORTS[key].needsWorkPeriod));
   if (REPORTS[key].needsPeriod) renderDeliveryGroupChips();
+  if (REPORTS[key].needsWorkPeriod) {
+    // Период по умолчанию — текущий день (живой запрос). Заполняется один
+    // раз: вернувшись на вкладку, человек ожидает увидеть свой выбор, а не
+    // сброс к сегодняшнему дню.
+    const от = document.getElementById("mw-from");
+    const до = document.getElementById("mw-to");
+    if (!от.value) от.value = todayIsoLocal();
+    if (!до.value) до.value = todayIsoLocal();
+    await ensureMyWorkUsers();
+  }
   loadReport();
 }
 
@@ -9865,10 +10357,20 @@ document.getElementById("dyn-range-reset").addEventListener("click", () => {
   dynRange = { from: null, to: null };
   loadReport();
 });
+for (const id of ["mw-from", "mw-to", "mw-user"]) {
+  document.getElementById(id).addEventListener("change", loadReport);
+}
 
 document.getElementById("report-body").addEventListener("click", (e) => {
   if (e.target.classList.contains("dyn-edit")) {
     openReportNotes(document.getElementById("report-date").value || null);
+    return;
+  }
+  // Строка «Моей работы» про конкретное изделие — переход к нему на схеме.
+  const строка = e.target.closest("tr.mw-locatable");
+  if (строка) {
+    locateElementOnPlan(Number(строка.dataset.elementId),
+                        строка.dataset.objectId ? Number(строка.dataset.objectId) : null);
     return;
   }
   const path = e.target.dataset.path;
@@ -9889,6 +10391,10 @@ document.getElementById("menu-report-dynamics").addEventListener("click", () => 
 document.getElementById("menu-report-delivery").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
   switchReport("delivery");
+});
+document.getElementById("menu-report-mywork").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  switchReport("mywork");
 });
 document.getElementById("reports-close").addEventListener("click", () => reportsBackdrop.classList.remove("open"));
 document.getElementById("report-print").addEventListener("click", () => window.print());
