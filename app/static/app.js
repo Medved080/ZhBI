@@ -7624,8 +7624,14 @@ function authMethodLabel(u) {
   return u.has_password ? "Пароль сервиса" : "Пароль не задан — вход закрыт";
 }
 
+// Последний загруженный список — нужен предупреждению о запирании сервиса
+// (см. запиретСервисОтАдминистраторов): проверка смотрит на ВСЕХ
+// пользователей, а не только на правимого.
+let usersCache = [];
+
 async function renderUsersTable() {
   const users = await api("/users");
+  usersCache = users;
   const table = document.getElementById("users-table");
   const rowsHtml = users.map(u => `
     <tr>
@@ -7689,6 +7695,28 @@ document.getElementById("users-add").addEventListener("click", () => openUserEdi
 document.getElementById("ue-auth-method").addEventListener("change", updateAuthMethodHint);
 document.getElementById("ue-role").addEventListener("change", renderAccessTree);
 document.getElementById("user-edit-cancel").addEventListener("click", () => userEditBackdrop.classList.remove("open"));
+// Предупреждение о запирании сервиса: после этой правки не осталось бы ни
+// одного администратора сервиса, способного войти БЕЗ домена. Само по себе
+// это законно (домен может быть исправен), поэтому спрашиваем, а не
+// запрещаем — но молчать нельзя: неполадка домена в такой конфигурации
+// означает, что администрировать сервис некому, и восстанавливаться придётся
+// через SSH на сервер (scripts/reset_password.py). Считается на клиенте по
+// уже загруженному списку — второй эндпоинт ради подсказки не нужен.
+// Возвращает true, если сохранение отменено.
+function запретСервисОтАдминистраторов(body) {
+  if (!editingUserId || body.auth_method !== "domain") return false;
+  const после = usersCache.map(u => u.id === editingUserId
+    ? { ...u, role: body.role, auth_method: body.auth_method, has_password: false }
+    : u);
+  const свои = после.filter(u => u.role === "admin" && u.auth_method !== "domain" && u.has_password);
+  if (свои.length) return false;
+  return !confirm(
+    "После этой правки ни один администратор сервиса не сможет войти без домена.\n\n"
+    + "Если домен окажется недоступен или настроен неверно, зайти и починить будет "
+    + "некому — учётную запись придётся восстанавливать на самом сервере "
+    + "(scripts/reset_password.py).\n\nВсё равно сохранить?");
+}
+
 document.getElementById("user-edit-save").addEventListener("click", async () => {
   const body = {
     last_name: document.getElementById("ue-last-name").value.trim(),
@@ -7700,6 +7728,7 @@ document.getElementById("user-edit-save").addEventListener("click", async () => 
     role: document.getElementById("ue-role").value,
     auth_method: document.getElementById("ue-auth-method").value,
   };
+  if (запретСервисОтАдминистраторов(body)) return;
   try {
     let userId = editingUserId;
     if (editingUserId) {

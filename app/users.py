@@ -128,13 +128,15 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_system_
 
 
 @router.patch("/{user_id}", response_model=UserOut)
-def update_user(user_id: int, body: UserUpdateIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def update_user(user_id: int, body: UserUpdateIn, request: Request,
+                admin: sqlite3.Row = Depends(require_system_admin)):
     _validate_role(body.role)
     conn = get_connection()
     try:
-        row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
+        было = auth_method_of(row)
         conflict = conn.execute(
             "SELECT id FROM users WHERE domain_login = ? AND id != ?", (body.domain_login, user_id)
         ).fetchone()
@@ -161,6 +163,28 @@ def update_user(user_id: int, body: UserUpdateIn, admin: sqlite3.Row = Depends(r
                 "UPDATE users SET password_hash = NULL, password_salt = NULL WHERE id = ?",
                 (user_id,),
             )
+        if было != body.auth_method:
+            # Сессии этого пользователя обесцениваются вместе со сменой
+            # способа входа — по той же причине, по которой их сбрасывает
+            # смена пароля (см. set_password ниже): способ входа меняют в
+            # том числе потому, что заподозрили компрометацию, и оставленная
+            # в чужом браузере cookie пережила бы «пароль сервиса больше не
+            # действует» на все 30 дней жизни сессии.
+            #
+            # Сессия, которой ПРЯМО СЕЙЧАС пользуется вызывающий, исключается
+            # — тот же приём и та же причина, что у set_password: администратор
+            # вправе поменять способ входа и себе, и выкидывать его из системы
+            # посреди настройки нельзя (тем более что доменная авторизация в
+            # этот момент может быть настроена неверно, и войти заново было бы
+            # нечем).
+            текущий_токен = request.cookies.get(SESSION_COOKIE)
+            if текущий_токен:
+                conn.execute("DELETE FROM sessions WHERE user_id = ? AND token != ?",
+                             (user_id, текущий_токен))
+            else:
+                conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            activity.log("user_auth_method", user=admin, entity_type="user",
+                         entity_id=user_id, old_value=было, new_value=body.auth_method)
         conn.commit()
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return user_out(updated)
