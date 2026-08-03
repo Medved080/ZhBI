@@ -2542,11 +2542,23 @@
   </div>
 </div>
 
+<!-- Смена СВОЕГО пароля (2026-08-03: добавлены текущий пароль и
+     подтверждение). Одна форма на два случая: человек меняет пароль сам и
+     человек ОБЯЗАН его сменить (пароль задан администратором). Во втором
+     случае «Отмена» скрывается — закрыть окно нечем, и это намеренно:
+     сервер до смены пароля всё равно отвечает 403 на любое действие. -->
 <div class="modal-backdrop" id="change-password-backdrop">
   <div class="modal">
-    <h2>Сменить пароль</h2>
+    <h2 id="change-password-title">Сменить пароль</h2>
+    <p class="hint-text" id="change-password-forced" style="display:none;">
+      Ваш пароль задан администратором — значит, его знает не только вы.
+      Задайте свой, чтобы продолжить работу.</p>
+    <label class="field">Текущий пароль</label>
+    <input type="password" id="change-password-current" autocomplete="current-password"/>
     <label class="field">Новый пароль (не короче 8 символов, буквы и цифры)</label>
-    <input type="password" id="change-password-value"/>
+    <input type="password" id="change-password-value" autocomplete="new-password"/>
+    <label class="field">Новый пароль ещё раз</label>
+    <input type="password" id="change-password-repeat" autocomplete="new-password"/>
     <div class="error-text" id="change-password-error"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="change-password-cancel">Отмена</button>
@@ -2596,6 +2608,12 @@
       <option value="domain">Доменная учётная запись</option>
     </select>
     <p class="hint-text" id="ue-auth-method-hint"></p>
+    <!-- По умолчанию включено для НОВОГО пользователя: пароль ему задаёт
+         администратор, то есть пароль знают двое. Для доменного входа поле
+         скрывается — тот пароль меняется в домене. -->
+    <label class="toggle" id="ue-must-change-row">
+      <input type="checkbox" id="ue-must-change"/> Требовать смену пароля при следующем входе
+    </label>
     <label class="field">Системная роль</label>
     <select id="ue-role">
       <option value="admin">Администратор сервиса</option>
@@ -2629,6 +2647,9 @@
     <h2>Задать пароль</h2>
     <label class="field">Новый пароль (не короче 8 символов, буквы и цифры; пусто — снять пароль и заблокировать вход)</label>
     <input type="password" id="up-password-value"/>
+    <label class="toggle">
+      <input type="checkbox" id="up-must-change" checked/> Требовать смену пароля при следующем входе
+    </label>
     <div class="error-text" id="user-password-error"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="user-password-cancel">Отмена</button>

@@ -82,6 +82,11 @@ _COLUMN_MIGRATIONS = [
     # CHECK сюда добавить нельзя (ALTER TABLE ADD COLUMN его не принимает),
     # поэтому набор значений проверяет Python — app/users.py AUTH_METHODS.
     ("users", "auth_method", "TEXT NOT NULL DEFAULT 'local'"),
+    # «Пароль задан администратором, человек обязан заменить его при первом
+    # же входе» (2026-08-03). Только для auth_method='local': доменный
+    # пароль меняют в домене, а не здесь. DEFAULT 0 — накопленные учётные
+    # записи ничего не заметят, требование ставится явно.
+    ("users", "must_change_password", "INTEGER NOT NULL DEFAULT 0"),
     # Этаж — из суффикса "_этаж N" в конце имени слоя нового стандарта
     # (см. scripts/layer_naming.py, Docs/backlog.md, "Свойство 'этаж'").
     # NULL у элементов, чьи слои этот суффикс ещё не проставляют.

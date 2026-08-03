@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT,
     password_salt TEXT,
     auth_method TEXT NOT NULL DEFAULT 'local' CHECK (auth_method IN ('local', 'domain')),
+    -- 1 = пароль задан администратором и должен быть заменён при первом
+    -- входе. Осмысленно только при auth_method='local'.
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

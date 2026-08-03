@@ -28,6 +28,10 @@ class UserCreateIn(BaseModel):
     domain_login: str
     role: str
     auth_method: str = "local"
+    # По умолчанию ВКЛЮЧЕНО при заведении: пароль новому человеку задаёт
+    # администратор, то есть пароль знают двое, и до первой смены он не
+    # является личным (2026-08-03).
+    must_change_password: bool = True
 
 
 class UserUpdateIn(BaseModel):
@@ -39,10 +43,16 @@ class UserUpdateIn(BaseModel):
     domain_login: str
     role: str
     auth_method: str = "local"
+    # В ПРАВКЕ по умолчанию выключено: снимать требование, забыв поставить
+    # галочку, опаснее, чем не поставить её на существующем пользователе.
+    must_change_password: bool = False
 
 
 class SetPasswordIn(BaseModel):
     password: str = ""  # пустая строка — сбросить в "пароль не задан"
+    # Администратор задал пароль другому человеку — тот же случай, что и при
+    # заведении: пароль знают двое. По умолчанию требуем смену.
+    must_change_password: bool = True
 
 
 class SetLabelColorIn(BaseModel):
@@ -112,11 +122,15 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_system_
         conn.execute(
             """
             INSERT INTO users (last_name, first_name, patronymic, position, department,
-                domain_login, role, auth_method)
+                domain_login, role, auth_method, must_change_password)
             VALUES (:last_name, :first_name, :patronymic, :position, :department,
-                :domain_login, :role, :auth_method)
+                :domain_login, :role, :auth_method, :must_change_password)
             """,
-            body.model_dump(),
+            {**body.model_dump(),
+             # Доменной учётной записи требование смены бессмысленно: её
+             # пароль живёт в домене (см. auth.must_change_password_of).
+             "must_change_password": int(body.must_change_password
+                                         and body.auth_method == "local")},
         )
         conn.commit()
         row = conn.execute(
@@ -150,10 +164,13 @@ def update_user(user_id: int, body: UserUpdateIn, request: Request,
             UPDATE users SET
                 last_name=:last_name, first_name=:first_name, patronymic=:patronymic,
                 position=:position, department=:department, domain_login=:domain_login,
-                role=:role, auth_method=:auth_method, updated_at=datetime('now')
+                role=:role, auth_method=:auth_method,
+                must_change_password=:must_change_password, updated_at=datetime('now')
             WHERE id=:id
             """,
-            {**body.model_dump(), "id": user_id},
+            {**body.model_dump(), "id": user_id,
+             "must_change_password": int(body.must_change_password
+                                         and body.auth_method == "local")},
         )
         if body.auth_method == "domain":
             # Пароль сервиса снимается ВМЕСТЕ с переводом на домен. Два живых
@@ -237,9 +254,14 @@ def set_password(
         else:
             password_hash, password_salt = hash_password(body.password)
 
+        # Требование сменить пароль ставится только вместе с НЕПУСТЫМ
+        # паролем: у заблокированной учётной записи (пароль снят) менять
+        # нечего, и поднятый признак просто мешал бы её потом оживить.
+        требовать = int(bool(body.must_change_password) and body.password != "")
         conn.execute(
-            "UPDATE users SET password_hash = ?, password_salt = ?, updated_at = datetime('now') WHERE id = ?",
-            (password_hash, password_salt, user_id),
+            "UPDATE users SET password_hash = ?, password_salt = ?, "
+            "must_change_password = ?, updated_at = datetime('now') WHERE id = ?",
+            (password_hash, password_salt, требовать, user_id),
         )
         # Смена пароля обесценивает уже выданные cookie этого пользователя —
         # иначе украденная или оставленная в общем браузере сессия

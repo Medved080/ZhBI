@@ -263,6 +263,15 @@ def auth_method_of(user: sqlite3.Row) -> str:
     return "domain" if user["auth_method"] == "domain" else "local"
 
 
+def must_change_password_of(user: sqlite3.Row) -> bool:
+    """Требуется ли смена пароля. Для доменной учётной записи — НИКОГДА:
+    её пароль живёт в домене, менять его нашей формой нечем, а поднятый
+    признак запер бы человека в окне, которое ему нечем закрыть."""
+    if "must_change_password" not in user.keys():
+        return False
+    return bool(user["must_change_password"]) and auth_method_of(user) == "local"
+
+
 def format_display_name(user: sqlite3.Row) -> str:
     parts = [user["last_name"], user["first_name"], user["patronymic"]]
     return " ".join(p for p in parts if p)
@@ -321,7 +330,38 @@ def get_current_user(request: Request) -> sqlite3.Row:
         conn.close()
     if user is None:
         raise HTTPException(status_code=401, detail="Сессия истекла или недействительна")
+    _guard_must_change_password(request, user)
     return user
+
+
+# Что доступно, пока пароль не заменён. Всё остальное — 403.
+#
+# Проверка ЗДЕСЬ, а не только в интерфейсе: смысл требования в том, что
+# заданный администратором пароль перестаёт работать как рабочий. Если бы
+# окно смены можно было закрыть (или обойти прямым запросом к API), пароль,
+# который знает ещё один человек, продолжал бы открывать доступ ко всему —
+# то есть требование было бы украшением.
+#
+# get_current_user — единственное место, через которое проходят ВСЕ
+# защищённые эндпоинты, поэтому список исключений один и короткий, и
+# забыть закрыть новый эндпоинт невозможно.
+_ALLOWED_WHILE_PASSWORD_EXPIRED = frozenset({
+    "/me",                  # клиенту надо узнать, что от него хотят
+    "/me/change-password",  # собственно смена
+    "/logout",              # уйти всегда можно
+})
+
+
+def _guard_must_change_password(request: Request, user: sqlite3.Row) -> None:
+    if not must_change_password_of(user):
+        return
+    if request.url.path in _ALLOWED_WHILE_PASSWORD_EXPIRED:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Пароль задан администратором и должен быть заменён — смените пароль, "
+               "чтобы продолжить работу",
+    )
 
 
 # require_roles/require_admin/require_editor УДАЛЕНЫ 2026-08-02.
@@ -387,6 +427,10 @@ class UserOut(BaseModel):
     # Чем проверяется вход: 'local' — пароль сервиса, 'domain' — доменная
     # учётная запись (LDAP-bind, см. app/ldap_auth.py).
     auth_method: str = "local"
+    # Пароль задан администратором и должен быть заменён при первом входе
+    # (2026-08-03). Клиент по этому признаку показывает форму смены пароля,
+    # сервер — не пускает никуда, кроме неё (см. get_current_user).
+    must_change_password: bool = False
     # Персональная цветовая гамма интерфейса (2026-08-02). NULL = базовое
     # оформление. Хранится на сервере, а не в браузере: настройка следует за
     # человеком — на площадке за одной машиной работают посменно.
@@ -407,6 +451,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
         has_password=user["password_hash"] is not None,
         label_color=user["label_color"],
         auth_method=auth_method_of(user),
+        must_change_password=must_change_password_of(user),
         ui_theme=user["ui_theme"] if "ui_theme" in user.keys() else None,
     )
 
@@ -490,6 +535,74 @@ def logout(request: Request, response: Response):
             conn.close()
     response.delete_cookie(SESSION_COOKIE)
     return {"status": "ok"}
+
+
+class ChangeOwnPasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/me/change-password", response_model=UserOut)
+def change_own_password(body: ChangeOwnPasswordIn, request: Request,
+                        user: sqlite3.Row = Depends(get_current_user)):
+    """Смена СВОЕГО пароля с подтверждением ТЕКУЩЕГО.
+
+    Отдельно от `POST /users/{id}/set-password`: та существует для
+    администратора, задающего пароль другому человеку, и текущего пароля не
+    спрашивает — у администратора его и нет. Здесь наоборот: человек меняет
+    свой, и без проверки старого любая оставленная без присмотра вкладка
+    позволяла бы посадить в учётную запись новый пароль и запереть в ней
+    владельца.
+
+    Работает и когда смена ТРЕБУЕТСЯ (must_change_password), и когда человек
+    меняет пароль по своей воле — это одна и та же операция, и разводить её
+    на две значило бы держать две проверки сложности и два места, где
+    сбрасываются чужие сессии.
+    """
+    if auth_method_of(user) == "domain":
+        raise HTTPException(
+            status_code=409,
+            detail="У вас доменная авторизация — пароль меняется в домене, а не здесь",
+        )
+    if not verify_password(body.current_password, user["password_hash"], user["password_salt"]):
+        # Считаем как неудачную попытку входа: подбор старого пароля через
+        # эту форму — такой же перебор, только из-под живой сессии.
+        client_ip = _client_ip(request)
+        _record_login_failure(client_ip, user["domain_login"])
+        _log_login("password_change_failed", client_ip, user=user, detail="неверный текущий пароль")
+        raise HTTPException(status_code=403, detail="Текущий пароль указан неверно")
+    if body.new_password == body.current_password:
+        raise HTTPException(status_code=422, detail="Новый пароль должен отличаться от текущего")
+    try:
+        validate_password_strength(body.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    password_hash, password_salt = hash_password(body.new_password)
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 0, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (password_hash, password_salt, user["id"]),
+        )
+        # Прочие сессии этого человека обесцениваются — как и при смене
+        # пароля администратором: пароль меняют в том числе потому, что его
+        # кто-то знает. Своя сессия остаётся: иначе человек, которого
+        # ЗАСТАВИЛИ сменить пароль, тут же оказывался бы на экране входа.
+        текущий = request.cookies.get(SESSION_COOKIE)
+        if текущий:
+            conn.execute("DELETE FROM sessions WHERE user_id = ? AND token != ?",
+                         (user["id"], текущий))
+        else:
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
+        conn.commit()
+        обновлён = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+    finally:
+        conn.close()
+    activity.log("password_changed", user=user, entity_type="user", entity_id=user["id"],
+                 new_value="смена собственного пароля")
+    return user_out(обновлён)
 
 
 @router.get("/me", response_model=UserOut)

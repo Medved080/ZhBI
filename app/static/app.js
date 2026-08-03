@@ -604,23 +604,60 @@ document.getElementById("btn-logout").addEventListener("click", async () => {
 });
 
 // ---------- смена собственного пароля ----------
+// Одна форма на два случая: человек меняет пароль по своей воле и человек
+// ОБЯЗАН его сменить (пароль задан администратором, must_change_password).
+// Во втором случае «Отмена» убирается: сервер до смены всё равно отвечает
+// 403 на любое действие, и кнопка, которая ничего не открывает, только
+// вводила бы в заблуждение.
 const changePasswordBackdrop = document.getElementById("change-password-backdrop");
+let changePasswordForced = false;
+
+function openChangePassword(forced) {
+  changePasswordForced = !!forced;
+  for (const id of ["change-password-current", "change-password-value", "change-password-repeat"]) {
+    document.getElementById(id).value = "";
+  }
+  document.getElementById("change-password-error").textContent = "";
+  document.getElementById("change-password-title").textContent =
+    forced ? "Требуется сменить пароль" : "Сменить пароль";
+  document.getElementById("change-password-forced").style.display = forced ? "" : "none";
+  document.getElementById("change-password-cancel").style.display = forced ? "none" : "";
+  changePasswordBackdrop.classList.add("open");
+  document.getElementById("change-password-current").focus();
+}
+
 document.getElementById("menu-change-password").addEventListener("click", () => {
   document.getElementById("settings-menu").classList.remove("open");
-  document.getElementById("change-password-value").value = "";
-  document.getElementById("change-password-error").textContent = "";
-  changePasswordBackdrop.classList.add("open");
+  openChangePassword(false);
 });
-document.getElementById("change-password-cancel").addEventListener("click", () => changePasswordBackdrop.classList.remove("open"));
+document.getElementById("change-password-cancel").addEventListener("click", () => {
+  if (!changePasswordForced) changePasswordBackdrop.classList.remove("open");
+});
 document.getElementById("change-password-save").addEventListener("click", async () => {
-  const password = document.getElementById("change-password-value").value;
+  const errorEl = document.getElementById("change-password-error");
+  const current = document.getElementById("change-password-current").value;
+  const пароль = document.getElementById("change-password-value").value;
+  const повтор = document.getElementById("change-password-repeat").value;
+  errorEl.textContent = "";
+  // Совпадение с подтверждением проверяем ЗДЕСЬ: серверу второй экземпляр
+  // того же пароля не нужен, это защита от опечатки, а не правило доступа.
+  if (пароль !== повтор) { errorEl.textContent = "Новый пароль и подтверждение не совпадают"; return; }
   try {
-    await api(`/users/${state.currentUser.id}/set-password`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }),
+    const обновлён = await api("/me/change-password", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: current, new_password: пароль }),
     });
+    state.currentUser = обновлён;
+    changePasswordForced = false;
     changePasswordBackdrop.classList.remove("open");
+    showToast("Пароль изменён");
+    // После вынужденной смены сервер снова пускает во всё — перечитываем
+    // то, что не загрузилось, пока он отвечал 403.
+    if (!document.getElementById("app-root").classList.contains("hidden") && !state.objectId) {
+      await bootApp();
+    }
   } catch (e) {
-    document.getElementById("change-password-error").textContent = e.message;
+    errorEl.textContent = e.message;
   }
 });
 
@@ -8066,6 +8103,10 @@ async function openUserEdit(user) {
   document.getElementById("ue-domain-login").value = user ? user.domain_login : "";
   document.getElementById("ue-role").value = user ? user.role : "user";
   document.getElementById("ue-auth-method").value = user ? (user.auth_method || "local") : "local";
+  // У НОВОГО — включено по умолчанию (пароль задаст администратор), у
+  // существующего — как есть: снять требование, забыв про галочку, хуже,
+  // чем не поставить его лишний раз.
+  document.getElementById("ue-must-change").checked = user ? !!user.must_change_password : true;
   updateAuthMethodHint();
   updateFindInDomainButton();
   document.getElementById("user-edit-error").textContent = "";
@@ -8078,6 +8119,9 @@ async function openUserEdit(user) {
 // узнавать об этом по факту — плохой момент.
 function updateAuthMethodHint() {
   const доменный = document.getElementById("ue-auth-method").value === "domain";
+  // Доменный пароль меняется в домене — требовать его смену нашей формой
+  // нечем, и сервер такой признак всё равно не сохранит.
+  document.getElementById("ue-must-change-row").style.display = доменный ? "none" : "";
   document.getElementById("ue-auth-method-hint").textContent = доменный
     ? "Вход проверяется у контроллера домена по доменному имени выше. Пароль сервиса у этой "
       + "учётной записи будет снят и перестанет подходить. Настройка подключения — "
@@ -8121,6 +8165,7 @@ document.getElementById("user-edit-save").addEventListener("click", async () => 
     domain_login: document.getElementById("ue-domain-login").value.trim(),
     role: document.getElementById("ue-role").value,
     auth_method: document.getElementById("ue-auth-method").value,
+    must_change_password: document.getElementById("ue-must-change").checked,
   };
   if (запретСервисОтАдминистраторов(body)) return;
   try {
@@ -8148,6 +8193,7 @@ document.getElementById("user-edit-save").addEventListener("click", async () => 
 function openUserPassword(userId) {
   passwordTargetUserId = userId;
   document.getElementById("up-password-value").value = "";
+  document.getElementById("up-must-change").checked = true;
   document.getElementById("user-password-error").textContent = "";
   userPasswordBackdrop.classList.add("open");
 }
@@ -8156,7 +8202,10 @@ document.getElementById("user-password-save").addEventListener("click", async ()
   try {
     await api(`/users/${passwordTargetUserId}/set-password`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: document.getElementById("up-password-value").value }),
+      body: JSON.stringify({
+        password: document.getElementById("up-password-value").value,
+        must_change_password: document.getElementById("up-must-change").checked,
+      }),
     });
     userPasswordBackdrop.classList.remove("open");
     await renderUsersTable();
@@ -14020,6 +14069,14 @@ async function initImportTemplates() {
 async function bootApp() {
   const ok = await checkAuth();
   if (!ok) return;
+  // Пароль задан администратором и не заменён — грузить нечего: сервер до
+  // смены отвечает 403 на всё, кроме самой смены. Показываем оболочку и
+  // форму поверх неё; загрузка данных пойдёт после смены (см. обработчик
+  // «Сохранить» — он сам зовёт bootApp заново).
+  if (state.currentUser && state.currentUser.must_change_password) {
+    openChangePassword(true);
+    return;
+  }
   initImportTemplates();  // без await — формы загрузки открываются не сразу
   // Этап B: сначала дерево проектов/объектов — оно определяет, ЧТО грузить.
   // loadSourceFiles остаётся: список файлов нужен форме «Версии чертежа
