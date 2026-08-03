@@ -868,6 +868,8 @@ async function switchObject(objectId) {
   // элементов ПРЕЖНЕГО объекта, и без сброса новая схема оказалась бы
   // пустой без единого объяснения.
   resetChangeFilter();
+  markLocated(null);
+  showBackToReport(false);   // отчёт в форме — по прежнему объекту
 
   try {
     await api("/me/last-object", {
@@ -2098,7 +2100,11 @@ async function ensureMyWorkUsers() {
   const box = document.getElementById("mw-user-box");
   const sel = document.getElementById("mw-user");
   const прежний = sel.value;
-  sel.innerHTML = ['<option value="">Мои изменения</option>'].concat(
+  // «Все пользователи» — вторым пунктом, сразу после «мои» (живой запрос
+  // 2026-08-03): у администратора объекта это самый частый вопрос («что
+  // сделала бригада за смену»), и искать его в конце списка людей неудобно.
+  sel.innerHTML = ['<option value="">Мои изменения</option>',
+                   '<option value="all">Все пользователи</option>'].concat(
     myWorkUsers.list
       .filter(u => !state.currentUser || u.id !== state.currentUser.id)
       .map(u => `<option value="${u.id}">${escapeHtml(u.display_name)}</option>`)).join("");
@@ -3024,6 +3030,17 @@ function formatDateRu(dateStr) {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : dateStr;
 }
 
+// Момент (дата + время) по-русски: «2026-07-29 17:18:50» → «29.07.2026
+// 17:18:50». Живой запрос 2026-08-03: даты в интерфейсе и выгрузках должны
+// быть в формате ДД.ММ.ГГГГ везде, а истории (статусов и изменений) до сих
+// пор показывали момент ровно так, как он лежит в БД.
+function formatMomentRu(value) {
+  if (!value) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/.exec(String(value));
+  if (m) return `${m[3]}.${m[2]}.${m[1]} ${m[4]}`;
+  return formatDateRu(value) || String(value);
+}
+
 // Допстрока (код контрагента + плановая дата) — только если для ТИПА
 // элемента включён подпункт "Даты" (Настройки → Вид → Подписи,
 // state.labelDatesVisibility, дефолт true — см. Docs/backlog.md). Единая
@@ -3527,6 +3544,10 @@ function renderElements(data) {
 
   updateSizesForZoom();
   applyPlacementFilters(false); // 3D пересоберёт loadPlan следом — не делать этого дважды
+  // Фигуры пересозданы заново — жёлтая метка «сюда перешли из отчёта»
+  // висела на прежнем узле и пропала бы после любой перерисовки (смена
+  // фильтра, обновление данных с сервера).
+  if (locatedElementId !== null) markLocated(locatedElementId);
 }
 
 // Статусы x типы элементов — сколько элементов каждого типа сейчас в
@@ -4377,9 +4398,11 @@ function fieldRowsHtml(element, fields) {
     // Даты — единым ДД.ММ.ГГГГ, как везде в интерфейсе. Ни одно из полей
     // на «_date» не входит в группы карточки на схеме
     // (TECHNICAL_FIELD_GROUPS), так что правило работает только в форме
-    // элемента. created_at/updated_at намеренно НЕ трогаем — там ценно
-    // именно время, а не дата.
+    // элемента. У created_at/updated_at время сохраняется (оно там и
+    // ценно), меняется только вид даты — живой запрос 2026-08-03: формат
+    // ДД.ММ.ГГГГ должен быть ВЕЗДЕ, а не только у чистых дат.
     if (k.endsWith("_date")) v = formatDateRu(v) || v;
+    if (k === "created_at" || k === "updated_at") v = formatMomentRu(v) || v;
     if (k === "is_current") v = v ? "да" : "нет";
     if (v === null || v === undefined || v === "") v = "—";
     return `<tr><td class="k">${escapeHtml(FIELD_LABELS[k] || k)}</td><td>${escapeHtml(v)}</td></tr>`;
@@ -4642,13 +4665,14 @@ async function showCard(element) {
       ${technicalHtml}
     </details>
     <h3 style="margin-bottom:4px;">История статусов</h3><div id="history-box">Загрузка…</div>
-    <!-- История ИЗМЕНЕНИЙ (журнал действий) — по кнопке, а не сразу
-         (живой запрос 2026-08-03). Карточка открывается на каждый клик по
-         схеме, а этот список нужен не всегда; лишний запрос на каждый клик
-         платился бы всеми и всегда. -->
+    <!-- История ИЗМЕНЕНИЙ (журнал действий). Грузится СРАЗУ вместе с
+         карточкой (живой запрос 2026-08-03: «точно вывод занимает ощутимое
+         время?»). Замер на журнале в 377 тыс. записей: 0,4 мс — столько же,
+         сколько сама карточка (0,3 мс), которая грузится всегда. Кнопка
+         «Показать» была лишним кликом на каждое изделие. -->
     <h3 style="margin-bottom:4px;">История изменений</h3>
     <div id="element-activity-box">
-      <button type="button" class="btn btn-sm btn-secondary" id="element-activity-load">Показать</button>
+      <div class="loading-inline"><span class="spinner"></span>Читаю журнал…</div>
     </div>
   `;
 
@@ -4686,8 +4710,9 @@ async function showCard(element) {
     });
   }
 
-  document.getElementById("element-activity-load")
-          .addEventListener("click", () => loadElementActivity(element.id));
+  // Вместе с вложениями и историей статусов — тремя параллельными
+  // запросами, ни один из которых не задерживает показ марки и статуса.
+  loadElementActivity(element.id);
 
   if (canEdit) {
     document.getElementById("card-change-status-btn").addEventListener("click", (e) => {
@@ -4706,7 +4731,7 @@ async function showCard(element) {
     if (!detail.history.length) { historyBox.textContent = "нет записей"; return; }
     const rowsHtml = detail.history.slice().reverse().map(h => `
       <tr>
-        <td>${escapeHtml(h.changed_at)}</td><td>${escapeHtml(state.statusLabels[h.status] || h.status)}</td><td>${escapeHtml(h.changed_by || "—")}</td>
+        <td>${escapeHtml(formatMomentRu(h.changed_at))}</td><td>${escapeHtml(state.statusLabels[h.status] || h.status)}</td><td>${escapeHtml(h.changed_by || "—")}</td>
         <td>${canEdit ? `<button class="hist-del" data-hist-id="${h.id}" title="Удалить запись">✕</button>` : ""}</td>
       </tr>
     `).join("");
@@ -4735,14 +4760,13 @@ async function showCard(element) {
 }
 
 // История изменений изделия — события журнала о нём (живой запрос
-// 2026-08-03). Грузится по кнопке: карточка открывается на каждый клик по
-// схеме, а этот список нужен не всегда. Пока идёт запрос — крутящийся
-// индикатор (общий .spinner, он же у рабочей области), иначе на медленной
-// базе кнопка выглядит нажатой впустую.
+// 2026-08-03). Грузится сразу вместе с карточкой: замер на журнале в
+// 377 тыс. записей дал 0,4 мс на изделие — дешевле, чем лишний клик
+// «Показать». Пока идёт запрос, на месте таблицы крутится индикатор
+// (общий .spinner, он же у рабочей области).
 async function loadElementActivity(elementId) {
   const box = document.getElementById("element-activity-box");
   if (!box) return;
-  box.innerHTML = `<div class="loading-inline"><span class="spinner"></span>Читаю журнал…</div>`;
   try {
     const data = await api(`/elements/${elementId}/activity`);
     // Карточку могли переоткрыть на другом изделии, пока шёл запрос.
@@ -4771,6 +4795,9 @@ async function loadElementActivity(elementId) {
 }
 
 function selectElement(element) {
+  // Жёлтая метка «сюда перешли из отчёта» относится к ОДНОМУ изделию:
+  // выбрали другое — метка снимается, иначе на схеме светятся два.
+  if (locatedElementId !== null && locatedElementId !== element.id) markLocated(null);
   const prevId = state.selectedId;
   state.selectedId = element.id;
   if (prevId !== null && prevId !== element.id) {
@@ -4784,6 +4811,7 @@ function selectElement(element) {
 }
 
 function clearSelection() {
+  markLocated(null);
   if (state.selectedId === null) return;
   const prevEl = state.byId.get(state.selectedId);
   const prevShape = state.shapeById.get(state.selectedId);
@@ -7187,7 +7215,7 @@ async function renderEcDetail() {
         ${admin ? "<th></th>" : ""}
       </tr></thead>
       <tbody>${(element.history || []).map(h => `<tr>
-        <td>${escapeHtml(h.changed_at || "")}</td>
+        <td>${escapeHtml(formatMomentRu(h.changed_at))}</td>
         <td>${statusBadgeHtml(h.status)}</td>
         <td>${escapeHtml(h.changed_by || "—")}</td>
         <td>${escapeHtml(h.comment || "")}</td>
@@ -8242,6 +8270,187 @@ document.getElementById("admin-guide-copy-all").addEventListener("click", async 
   } catch (e) {
     showToast(`Не удалось скопировать: ${e.message}`);
   }
+});
+
+// ---------- Состояние БД (2026-08-03, см. app/db_status.py) ----------
+// Структура здесь та же, что в Docs/db-schema.drawio: и схема, и этот экран
+// читают ОДНО описание (app/db_schema_doc.py). Сверх схемы — числа, которых
+// в статичном рисунке быть не может: записей и занимаемый объём.
+const dbStatusBackdrop = document.getElementById("db-status-backdrop");
+const dbTableBackdrop = document.getElementById("db-table-backdrop");
+
+// Не переиспользует formatBytes из «Резервных копий» (ниже по файлу) и не
+// называется так же НАМЕРЕННО: у той другая семантика нуля — пустая строка,
+// потому что копия нулевого размера это отсутствующая копия. Здесь ноль
+// осмыслен (пустая таблица занимает 0 байт и это надо показать), а «неизвестно»
+// — отдельный случай (сборка SQLite без dbstat), и он показывается прочерком.
+// Одноимённая функция тут уже стоила бага: объявление ниже по файлу молча
+// перекрывало это, и размеры считались чужими правилами.
+function formatDbSize(n) {
+  if (n === null || n === undefined) return "—";
+  if (n >= 1048576) return `${(n / 1048576).toFixed(2)} МБ`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} КБ`;
+  return `${n} Б`;
+}
+
+function renderDbStatus(data) {
+  const св = document.getElementById("db-status-summary");
+  const б = data.database;
+  св.innerHTML = `<dl class="dbs-facts">
+    <dt>Файл базы</dt><dd>${escapeHtml(б.path)}</dd>
+    <dt>Размер файла</dt><dd>${formatDbSize(б.file_bytes)}</dd>
+    <dt>Страниц</dt><dd>${б.page_count} × ${б.page_size} Б, свободно ${formatDbSize(б.free_bytes)}</dd>
+    <dt>Всего записей</dt><dd>${data.tables.reduce((s, t) => s + t.rows, 0).toLocaleString("ru-RU")}</dd>
+    <dt>Таблиц</dt><dd>${data.tables.length}, связей ${data.relations.length}</dd>
+    <dt>SQLite</dt><dd>${escapeHtml(б.sqlite_version)}</dd>
+  </dl>`;
+
+  // Расхождение описания с реальной схемой — это не украшение: именно так
+  // видно, что после миграции поле забыли описать. Молчать об этом нельзя,
+  // иначе экран показывал бы устаревшую структуру как действительную.
+  const пл = document.getElementById("db-status-drift");
+  const предупреждения = data.drift.slice();
+  if (!б.sizes_available) {
+    предупреждения.push("Эта сборка SQLite без dbstat — объём по таблицам не показан " +
+      "(оценивать по длине значений не стали: она не учитывает индексы и служебные " +
+      "страницы и разошлась бы с размером файла в разы).");
+  }
+  пл.innerHTML = предупреждения.length
+    ? `<div class="dbs-drift"><b>Описание структуры отстало от базы:</b><ul>${
+        предупреждения.map(p => `<li>${escapeHtml(p)}</li>`).join("")}</ul>
+       <div class="hint-text" style="margin-top:6px;">Дописать поле вместе с его
+       назначением — <code>app/db_schema_doc.py</code>, затем пересобрать схему
+       <code>python3 scripts/gen_db_schema_drawio.py</code>.</div></div>`
+    : "";
+
+  // Порядок групп — как в легенде схемы; внутри группы таблицы по объёму:
+  // вопрос «почему база такая большая» решается первой же строкой.
+  const максимум = Math.max(...data.tables.map(t => (t.bytes || 0) + (t.index_bytes || 0)), 1);
+  const группы = (data.domains || []).map(title => ({ title, tables: [] }));
+  data.tables.forEach(t => {
+    let г = группы.find(g => g.title === t.domain);
+    if (!г) группы.push(г = { title: t.domain, tables: [] });   // домен вне легенды
+    г.tables.push(t);
+  });
+  const связиТаблицы = имя => data.relations
+    .filter(r => r.child === имя)
+    .map(r => `${r.child_field} → ${r.parent}.${r.parent_field} (${r.note})`);
+
+  document.getElementById("db-status-body").innerHTML = группы.filter(г => г.tables.length).map(г => `
+    <div class="dbs-group">
+      <h3>${escapeHtml(г.title)}</h3>
+      ${г.tables.sort((a, b) => ((b.bytes || 0) + (b.index_bytes || 0)) -
+                                ((a.bytes || 0) + (a.index_bytes || 0))).map(t => {
+        const объём = (t.bytes || 0) + (t.index_bytes || 0);
+        const исх = связиТаблицы(t.name);
+        return `
+        <div class="dbs-table" style="border-left-color:${escapeHtml(t.stroke)}" data-table="${escapeHtml(t.name)}">
+          <div class="dbs-head" data-role="toggle">
+            <div><span class="dbs-name">${escapeHtml(t.name)}</span>
+              <span class="dbs-caption">${escapeHtml((t.caption || "").replace(t.name + " — ", ""))}</span></div>
+            <div class="dbs-num">${t.rows.toLocaleString("ru-RU")} зап.</div>
+            <div class="dbs-num">${formatDbSize(t.bytes)}${
+              t.index_bytes ? ` + ${formatDbSize(t.index_bytes)} индексы` : ""}</div>
+            <div class="dbs-bar"><span style="width:${Math.round(100 * объём / максимум)}%"></span></div>
+            <button class="btn btn-sm btn-secondary" data-role="open">Содержимое…</button>
+          </div>
+          <div class="dbs-fields">
+            ${t.fields.map(f => `
+              <div class="dbs-field">
+                <div>${f.key ? `<span class="dbs-key">${escapeHtml(f.key.replace(",", "+"))}</span> ` : ""}<code>${escapeHtml(f.name)}</code></div>
+                <div class="dbs-type">${escapeHtml(f.type)}</div>
+                <div${f.undocumented ? ' class="dbs-undoc"' : ""}>${
+                  f.undocumented ? "есть в базе, назначение не описано"
+                                 : escapeHtml(f.purpose)}${
+                  f.in_db ? "" : ' <span class="dbs-undoc">— описано, но в базе такого поля нет</span>'}</div>
+              </div>`).join("")}
+            ${исх.length ? `<div class="dbs-rel">Ссылается на: ${escapeHtml(исх.join("; "))}</div>` : ""}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>`).join("");
+}
+
+// Состояние просмотра содержимого держим здесь, а не в разметке: страницу
+// перелистывают кнопками, и восстанавливать её из DOM пришлось бы разбором
+// текста.
+const dbTableState = { name: null, offset: 0, limit: 50, total: 0 };
+
+async function loadDbTable() {
+  const тело = document.getElementById("db-table-body");
+  тело.textContent = "Загрузка…";
+  try {
+    const d = await api(`/admin/db-status/tables/${encodeURIComponent(dbTableState.name)}`
+      + `?limit=${dbTableState.limit}&offset=${dbTableState.offset}`);
+    dbTableState.total = d.total;
+    const маскируются = d.columns.filter(c => c.masked).map(c => c.name);
+    document.getElementById("db-table-note").textContent = маскируются.length
+      ? `Значения скрыты: ${маскируются.join(", ")} — это материал для входа под чужой учётной записью.`
+      : "Только просмотр: изменить данные отсюда нельзя.";
+    тело.innerHTML = `<div class="dbt-wrap"><table class="dbt">
+      <thead><tr>${d.columns.map(c =>
+        `<th>${escapeHtml(c.name)}${c.pk ? " 🔑" : ""}${
+          c.purpose ? `<small>${escapeHtml(c.purpose)}</small>` : ""}</th>`).join("")}</tr></thead>
+      <tbody>${d.rows.map(строка => `<tr>${строка.map(я =>
+        я.v === null ? '<td class="null">NULL</td>'
+                     : `<td>${escapeHtml(я.v)}${я.full_len
+                         ? `<span class="null"> … всего ${я.full_len} симв.</span>` : ""}</td>`
+        ).join("")}</tr>`).join("")}</tbody></table></div>`;
+    if (!d.rows.length) тело.innerHTML = '<p class="hint-text">Таблица пуста.</p>';
+    const от = d.total ? dbTableState.offset + 1 : 0;
+    document.getElementById("db-table-range").textContent =
+      `${от}–${dbTableState.offset + d.rows.length} из ${d.total.toLocaleString("ru-RU")}`;
+    document.getElementById("db-table-prev").disabled = dbTableState.offset === 0;
+    document.getElementById("db-table-next").disabled =
+      dbTableState.offset + dbTableState.limit >= d.total;
+  } catch (e) {
+    тело.textContent = e.message;
+  }
+}
+
+function openDbTable(имя) {
+  dbTableState.name = имя;
+  dbTableState.offset = 0;
+  document.getElementById("db-table-title").textContent = `Таблица ${имя}`;
+  dbTableBackdrop.classList.add("open");
+  loadDbTable();
+}
+
+document.getElementById("menu-db-status").addEventListener("click", async () => {
+  dbStatusBackdrop.classList.add("open");
+  document.getElementById("db-status-body").textContent = "Загрузка…";
+  try {
+    renderDbStatus(await api("/admin/db-status"));
+  } catch (e) {
+    document.getElementById("db-status-body").textContent = e.message;
+  }
+});
+
+// Один обработчик на весь список вместо обработчика на каждую из 29 плиток:
+// разметка перерисовывается целиком на каждое открытие.
+document.getElementById("db-status-body").addEventListener("click", (e) => {
+  const плитка = e.target.closest(".dbs-table");
+  if (!плитка) return;
+  if (e.target.closest('[data-role="open"]')) openDbTable(плитка.dataset.table);
+  else плитка.classList.toggle("open");   // клик по заголовку — развернуть поля
+});
+
+document.getElementById("db-status-close").addEventListener("click", () =>
+  dbStatusBackdrop.classList.remove("open"));
+document.getElementById("db-table-close").addEventListener("click", () =>
+  dbTableBackdrop.classList.remove("open"));
+document.getElementById("db-table-prev").addEventListener("click", () => {
+  dbTableState.offset = Math.max(0, dbTableState.offset - dbTableState.limit);
+  loadDbTable();
+});
+document.getElementById("db-table-next").addEventListener("click", () => {
+  dbTableState.offset += dbTableState.limit;
+  loadDbTable();
+});
+document.getElementById("db-table-limit").addEventListener("change", (e) => {
+  dbTableState.limit = Number(e.target.value);
+  dbTableState.offset = 0;
+  loadDbTable();
 });
 
 // ---------- Доменная (корпоративная) авторизация — 2026-08-03, см.
@@ -9620,7 +9829,7 @@ function reportRequestBody() {
     body.date_to = до || null;
     body.at_from = от ? activityBoundToUtc(от, false) : null;
     body.at_to = до ? activityBoundToUtc(до, true) : null;
-    body.user_ids = myWorkSelectedUserIds();
+    Object.assign(body, myWorkUserSelection());
     body.tz_offset_minutes = new Date().getTimezoneOffset();
     return body;   // element_ids/фильтр схемы к событиям журнала неприменимы
   }
@@ -10196,9 +10405,14 @@ document.getElementById("report-body").addEventListener("scroll", hideDeliveryTi
 
 // null = «мои изменения» (сервер сам подставит текущего пользователя — так
 // «только свои» не зависит от того, что прислал браузер).
-function myWorkSelectedUserIds() {
+// Три значения выпадашки: «» — свои, «all» — все пользователи, id — один
+// конкретный. «Все» уходит на сервер ОТДЕЛЬНЫМ флагом, а не пустым списком:
+// пустой уже означает «свои», и разница между «я» и «все» не должна быть
+// опечаткой на одну скобку (см. ReportRequestIn.all_users).
+function myWorkUserSelection() {
   const v = document.getElementById("mw-user").value;
-  return v ? [Number(v)] : null;
+  if (v === "all") return { all_users: true, user_ids: null };
+  return { all_users: false, user_ids: v ? [Number(v)] : null };
 }
 
 // Время события местными часами, но БЕЗ миллисекунд: в журнале действий они
@@ -10302,6 +10516,44 @@ function focus3DOnElement(element) {
   requestRender3D();
 }
 
+// Изделие, к которому перешли из отчёта. Ярко-жёлтая обводка держится, пока
+// человек не выберет что-то другое: обычное синее выделение выбранного
+// элемента на схеме из 9422 фигур глазом ещё надо найти, а сюда пришли
+// именно за «где это». Хранится id, а не узел: фигуру пересоздаёт любая
+// перерисовка схемы (смена фильтра, обновление данных).
+let locatedElementId = null;
+
+function markLocated(elementId) {
+  if (locatedElementId !== null) {
+    const прежняя = state.shapeById.get(locatedElementId);
+    if (прежняя) прежняя.classList.remove("located");
+  }
+  locatedElementId = elementId;
+  const фигура = elementId === null ? null : state.shapeById.get(elementId);
+  if (фигура) {
+    // Класс снимается и ставится заново — иначе повторный переход к ТОМУ ЖЕ
+    // изделию не перезапустил бы анимацию пульсации.
+    фигура.classList.remove("located");
+    void фигура.getBoundingClientRect();
+    фигура.classList.add("located");
+  }
+}
+
+// Кнопка «Вернуться к отчёту»: отчёт не пересобирается, а просто снова
+// показывается — содержимое формы остаётся в DOM после закрытия (класс
+// «open» его только прячет). Живой запрос: «сейчас он закрывается и
+// приходится его заново строить».
+const backToReportBtn = document.getElementById("back-to-report");
+
+function showBackToReport(показать) {
+  backToReportBtn.classList.toggle("visible", показать);
+}
+
+backToReportBtn.addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  showBackToReport(false);
+});
+
 async function locateElementOnPlan(elementId, objectId) {
   // Изделие соседнего объекта: сначала переключаем стройку (схема
   // показывает ОДИН объект, см. этап B) — иначе «показать на схеме» ткнуло
@@ -10321,7 +10573,9 @@ async function locateElementOnPlan(elementId, objectId) {
     return;
   }
   reportsBackdrop.classList.remove("open");
-  selectElement(element);
+  showBackToReport(true);   // отчёт остаётся в DOM, к нему можно вернуться без пересборки
+  selectElement(element);   // карточка изделия в правой панели — вкладка «Свойства»
+  markLocated(element.id);  // ярко-жёлтая обводка поверх обычного выделения
   if (state.view3d.active) focus3DOnElement(element); else focus2DOnElement(element);
   // Скрытое фильтром изделие выделено и в центре кадра, но не нарисовано —
   // без предупреждения это выглядит как «ничего не произошло».
@@ -10345,7 +10599,7 @@ async function loadReport() {
     reportCollapsed = def.needsWorkPeriod ? new Set() : defaultCollapsedTree(reportData);
     document.getElementById("report-body").innerHTML = def.render(reportData);
     if (def.needsWorkPeriod) {
-      const кто = reportData.users.map(u => u.display_name).join(", ") || "—";
+      const кто = reportData.users.map(u => u.display_name).join(", ") || "Все пользователи";
       statusLine.textContent = `${кто} · событий за период: ${reportData.total}`;
       // Границы периода подставляем фактически применёнными: при первом
       // открытии их выбирает не пользователь, а форма (текущий день).
@@ -10458,18 +10712,22 @@ document.getElementById("report-body").addEventListener("click", (e) => {
 document.getElementById("report-use-filter").addEventListener("change", loadReport);
 document.getElementById("menu-report-status").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  showBackToReport(false);
   switchReport("status");
 });
 document.getElementById("menu-report-dynamics").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  showBackToReport(false);
   switchReport("dynamics");
 });
 document.getElementById("menu-report-delivery").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  showBackToReport(false);
   switchReport("delivery");
 });
 document.getElementById("menu-report-mywork").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  showBackToReport(false);
   switchReport("mywork");
 });
 document.getElementById("reports-close").addEventListener("click", () => reportsBackdrop.classList.remove("open"));

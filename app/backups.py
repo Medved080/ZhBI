@@ -27,7 +27,7 @@
 import json
 import shutil
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +46,22 @@ KIND_LABELS = {
     KIND_BEFORE_RESTORE: "служебная — перед восстановлением",
     KIND_BEFORE_REBUILD: "служебная — перед пересборкой БД",
 }
+
+
+# Отметки времени по всему сервису пишутся в UTC (`datetime('now')` в SQL,
+# `app/activity.py`, `app/auth.py`), а в местное их переводит КЛИЕНТ при
+# показе (`activityTimeLocal`, app.js). Здесь стояло `datetime.now()` —
+# местное время процесса, то есть нарушение конвенции сразу в двух местах:
+# в контейнере (`python:3.12-slim`, TZ не задан) местное время И ЕСТЬ UTC,
+# так что копия получала отметку на пояс раньше, а список копий печатал её
+# как есть, без перевода в местное — отсюда «время бэкапа неверное».
+# `now(timezone.utc)`, а не `utcnow()`: в 3.12 второй объявлен устаревшим.
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_from_timestamp(ts: float) -> datetime:
+    return datetime.fromtimestamp(ts, timezone.utc)
 
 
 class BackupError(Exception):
@@ -113,10 +129,12 @@ def create_backup(
     """Снять копию текущей БД. Возвращает описание созданной копии.
 
     Имя: `zhbi_ГГГГММДД_ЧЧММСС_<вид>.db` — дата и вид читаются глазами прямо
-    в списке файлов, без интерфейса и без чтения .json.
+    в списке файлов, без интерфейса и без чтения .json. Время в имени тоже
+    UTC: разойдясь с `created_at` внутри .json, оно путало бы сильнее, чем
+    смещение на пояс.
     """
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = _utc_now().strftime("%Y%m%d_%H%M%S")
     path = BACKUP_DIR / f"zhbi_{stamp}_{kind}.db"
     # Крайне маловероятно, но две копии в одну секунду затёрли бы друг друга.
     suffix = 1
@@ -136,7 +154,7 @@ def create_backup(
 
     meta = {
         "name": path.name,
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "created_at": _utc_now().strftime("%Y-%m-%d %H:%M:%S"),
         "kind": kind,
         "kind_label": KIND_LABELS.get(kind, kind),
         "user_name": user_name,
@@ -167,7 +185,7 @@ def list_backups() -> list:
             meta = {}
         stat = path.stat()
         meta.setdefault("name", path.name)
-        meta.setdefault("created_at", datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"))
+        meta.setdefault("created_at", _utc_from_timestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"))
         meta.setdefault("kind", "unknown")
         meta.setdefault("kind_label", "происхождение неизвестно (файл без описания)")
         meta.setdefault("user_name", None)
@@ -237,7 +255,7 @@ def adopt_legacy_backup(path: Path, kind: str, comment: str) -> Optional[dict]:
     shutil.move(str(path), str(target))
     meta = {
         "name": target.name,
-        "created_at": datetime.fromtimestamp(target.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+        "created_at": _utc_from_timestamp(target.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
         "kind": kind,
         "kind_label": KIND_LABELS.get(kind, kind),
         "user_name": None,

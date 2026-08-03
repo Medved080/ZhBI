@@ -17,6 +17,7 @@
 """
 
 import json
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -50,6 +51,63 @@ FIELD_LABELS = {
     "project_delivery_date": "Дата завершения СМР",
     "contract_id": "Контракт",
 }
+
+
+# ---------- как дата выглядит для человека (живой запрос 2026-08-03) ----------
+#
+# В БД даты лежат как 'ГГГГ-ММ-ДД' (и моменты как 'ГГГГ-ММ-ДД ЧЧ:ММ:СС') —
+# так их СРАВНИВАЮТ как текст, менять хранение нельзя. Но наружу — на экран,
+# в PDF и в Excel — дата обязана выглядеть по-русски.
+#
+# Для Excel это НЕ текст: в ячейку кладётся настоящая дата с числовым
+# форматом. Иначе ломается обратный круг «выгрузил → поправил → загрузил»:
+# импортёры принимают либо `date`/`datetime` от openpyxl, либо ISO-строку
+# (coerce_field, normalize_activity_dates), а текст «01.10.2026» им не
+# годится. Заодно в самом Excel такой столбец остаётся сортируемым и
+# фильтруемым как дата, а не как строка.
+EXCEL_DATE_FORMAT = "DD.MM.YYYY"
+EXCEL_DATETIME_FORMAT = "DD.MM.YYYY HH:MM:SS"
+
+
+def ru_date_text(value) -> str:
+    """'2026-10-01' → '01.10.2026', '2026-10-01 14:30:00' → '01.10.2026 14:30:00'.
+    Непохожее на дату возвращается как есть — функция зовётся и на свободном
+    тексте (значения «было/стало» в журнале)."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}:\d{2}(?::\d{2})?))?", text)
+    if not m:
+        return text
+    г, мес, д, время = m.groups()
+    хвост = text[m.end():]
+    return f"{д}.{мес}.{г}" + (f" {время}" if время else "") + хвост
+
+
+def ru_dates_in_text(text) -> str:
+    """То же, но внутри произвольной строки: «Плановая дата: 2026-10-01;
+    Этаж: 2» → «Плановая дата: 01.10.2026; Этаж: 2». Нужна значениям
+    «было/стало» журнала — там дата лежит вперемешку с другими полями."""
+    if text is None:
+        return ""
+    return re.sub(r"\b(\d{4})-(\d{2})-(\d{2})\b",
+                  lambda m: f"{m.group(3)}.{m.group(2)}.{m.group(1)}", str(text))
+
+
+def to_excel_date(value):
+    """Строка даты/момента → `date`/`datetime` для ячейки Excel. Всё
+    остальное возвращается без изменений (в колонке может лежать пусто или
+    неожиданный текст — ронять из-за этого выгрузку нельзя)."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    text = value.strip()
+    for формат, обрезка in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%d", 10)):
+        try:
+            момент = datetime.strptime(text[:обрезка], формат)
+        except ValueError:
+            continue
+        return момент if обрезка == 19 else момент.date()
+    return value
 
 
 class FieldError(ValueError):

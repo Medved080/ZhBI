@@ -135,6 +135,7 @@ from app.models import (
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
 from app.admin_guide import router as admin_guide_router
+from app.db_status import router as db_status_router
 from app.ldap_auth import router as ldap_router
 from app.settings import router as settings_router
 from app.upload_limits import (
@@ -220,6 +221,7 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(ldap_router)
 app.include_router(admin_guide_router)
+app.include_router(db_status_router)
 app.include_router(contracts_router)
 app.include_router(counterparties_router)
 app.include_router(settings_router)
@@ -985,6 +987,11 @@ class ReportRequestIn(BaseModel):
     # Чью работу показывать. Пусто = свою. Чужую видит администратор — см.
     # _my_work_scope: правило одно на отчёт и на фильтр «Изменения».
     user_ids: Optional[list[int]] = None
+    # «Все пользователи» (живой запрос 2026-08-03) — отдельный флаг, а не
+    # `user_ids = []` и не «пусто»: пустой список уже означает «свои», и
+    # перегружать его третьим смыслом значило бы сделать разницу между
+    # «я» и «все» опечаткой на одну скобку.
+    all_users: bool = False
     # Смещение часов пользователя в минутах (`Date.getTimezoneOffset()`) —
     # нужно только выгрузкам: их собирает сервер, а время события в них
     # обязано читаться так же, как на экране.
@@ -1247,7 +1254,7 @@ def _admin_object_ids(conn, user) -> set:
     return {oid for oid, role in object_roles(conn, user).items() if role == "admin"}
 
 
-def _my_work_scope(conn, viewer, user_ids: Optional[list]) -> tuple:
+def _my_work_scope(conn, viewer, user_ids: Optional[list], all_users: bool = False) -> tuple:
     """Кого показываем и в каких границах: (список id пользователей, объекты).
 
     Объекты = None означает «без ограничения», а не «ни одного» (та же
@@ -1262,25 +1269,30 @@ def _my_work_scope(conn, viewer, user_ids: Optional[list]) -> tuple:
         читаешь работу по стройке, к которой доступа нет.
     """
     свои = [viewer["id"]]
-    if not user_ids or set(user_ids) == set(свои):
+    if not all_users and (not user_ids or set(user_ids) == set(свои)):
         return свои, None
+    # «Все пользователи» — это None в отборе (любой автор), а НЕ пустой
+    # список: пустой означал бы «ни одного» (см. _where).
+    кого = None if all_users else list(dict.fromkeys(user_ids))
     if is_system_admin(viewer):
-        return list(dict.fromkeys(user_ids)), None
+        return кого, None
     объекты = _admin_object_ids(conn, viewer)
     if not объекты:
         raise HTTPException(
             status_code=403,
             detail="Чужие действия доступны администратору объекта — у вас нет объектов с такой ролью",
         )
-    return list(dict.fromkeys(user_ids)), объекты
+    return кого, объекты
 
 
 def _my_work(conn, user, body: ReportRequestIn, limit: int) -> dict:
-    ids, объекты = _my_work_scope(conn, user, body.user_ids)
+    ids, объекты = _my_work_scope(conn, user, body.user_ids, body.all_users)
     return build_my_work_report(
         conn, at_from=body.at_from, at_to=body.at_to,
         date_from=body.date_from, date_to=body.date_to,
-        user_ids=ids, object_ids=объекты, users=_users_brief(conn, ids), limit=limit,
+        # ids=None («все пользователи») — список имён в шапке пуст, и
+        # period_subtitle подписывает период «все пользователи».
+        user_ids=ids, object_ids=объекты, users=_users_brief(conn, ids or []), limit=limit,
     )
 
 

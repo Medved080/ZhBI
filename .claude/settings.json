@@ -1,0 +1,24 @@
+{
+  "//": "Проектная политика доступа ассистента к данным заказчика. Отладка и живая браузерная проверка ведутся на ОБЕЗЛИЧЕННОЙ копии (data/zhbi.anon.db, собирается scripts/anonymize_db.py). Боевые данные остаются нетронутыми и доступны пользователю как раньше — запреты ниже действуют ТОЛЬКО на инструменты ассистента, не на человека за терминалом.",
+  "permissions": {
+    "deny": [
+      "Read(./data/zhbi.db)",
+      "Read(./data/zhbi.db-shm)",
+      "Read(./data/zhbi.db-wal)",
+      "Read(./data/zhbi.check.db)",
+      "Read(./data/backups/**)",
+      "Read(./data/zhbi.anon.map.json)",
+      "Read(./Input/**)",
+      "Read(./uploads/**)",
+      "Read(./test_data/**)",
+      "Read(./Модели/**)",
+      "Read(./.env)",
+      "Bash(sqlite3 data/zhbi.db:*)",
+      "Bash(sqlite3 ./data/zhbi.db:*)",
+      "Bash(sqlite3 -header data/zhbi.db:*)",
+      "Bash(sqlite3 -header -column data/zhbi.db:*)",
+      "Bash(sqlite3 data/zhbi.check.db:*)",
+      "Bash(cat data/zhbi.anon.map.json:*)"
+    ]
+  }
+}

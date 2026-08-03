@@ -43,7 +43,6 @@ import shutil
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -77,10 +76,19 @@ class Mapping:
             self.groups.setdefault(group, {})[original] = replacement
         return replacement
 
-    def originals(self) -> set[str]:
-        out: set[str] = set()
-        for pairs in self.groups.values():
-            out.update(pairs)
+    def needles(self) -> list[tuple[str, str]]:
+        """Пары «откуда значение → само значение» для проверки на утечки.
+
+        Совпадения оригинала с псевдонимом отбрасываются: логин
+        единственного администратора так и остаётся `admin`, и искать
+        «admin» по всей базе — гарантированное ложное срабатывание на
+        колонке ролей.
+        """
+        out: list[tuple[str, str]] = []
+        for group, pairs in self.groups.items():
+            for original, replacement in pairs.items():
+                if original != replacement and len(original.strip()) >= 3:
+                    out.append((group, original))
         return out
 
     def to_json(self) -> str:
@@ -176,14 +184,15 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
     def scrub_person(table: str, column: str, id_column: str | None) -> int:
         """Снимок ФИО: по user_id — псевдоним владельца, иначе заглушка."""
         n = 0
-        sql = f"SELECT rowid, {column}" + (f", {id_column}" if id_column else "")
+        # `rowid` обязателен с явным псевдонимом: если у таблицы есть
+        # INTEGER PRIMARY KEY, SQLite возвращает колонку под ЕГО именем
+        # (`id`), и обращение по «rowid» падает.
+        sql = f"SELECT rowid AS rid, {column}" + (f", {id_column}" if id_column else "")
         for row in conn.execute(f"{sql} FROM {table} WHERE {column} IS NOT NULL").fetchall():
             uid = row[id_column] if id_column else None
             replacement = user_names.get(uid, "Пользователь")
             mapping.put(f"{table}.{column}", row[column], replacement)
-            conn.execute(
-                f"UPDATE {table} SET {column}=? WHERE rowid=?", (replacement, row["rowid"])
-            )
+            conn.execute(f"UPDATE {table} SET {column}=? WHERE rowid=?", (replacement, row["rid"]))
             n += 1
         return n
 
@@ -332,7 +341,7 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
     # Карточка проекта содержит название стройки и кадастровые номера;
     # настройки доменного входа — адрес контроллера домена и base DN,
     # то есть топологию внутренней сети. Оба — по ключу, не по значению.
-    rows = conn.execute("SELECT rowid, key, value FROM app_settings").fetchall()
+    rows = conn.execute("SELECT rowid AS rid, key, value FROM app_settings").fetchall()
     scrubbed = 0
     for row in rows:
         key = (row["key"] or "").lower()
@@ -340,7 +349,7 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
             mapping.put(f"app_settings.{row['key']}", row["value"], "скрыто")
             conn.execute(
                 "UPDATE app_settings SET value=? WHERE rowid=?",
-                (_blank_json_strings(row["value"]), row["rowid"]),
+                (_blank_json_strings(row["value"]), row["rid"]),
             )
             scrubbed += 1
     count("app_settings (скрыто значений)", scrubbed)
@@ -348,15 +357,22 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
     return stats
 
 
-def find_leaks(conn: sqlite3.Connection, originals: set[str]) -> list[tuple[str, str, str]]:
+def find_leaks(conn: sqlite3.Connection, needles: list[tuple[str, str]]) -> list[tuple[str, str, str]]:
     """Сплошной поиск исходных значений во ВСЕХ текстовых колонках копии.
 
-    Проверка, а не надежда: если хоть одно место записи пропущено (а их
-    два десятка), значение всплывёт здесь. Дополнительно ловим
-    кадастровые номера по формату — они могли оказаться в поле, которого
-    нет в списке подстановок.
+    Проверка, а не надежда: мест записи два десятка, и пропущенное
+    всплывёт здесь. Дополнительно ловим кадастровые номера по формату —
+    они не значение справочника, по списку подстановок их не найти.
+
+    Совпадение ищется по границам слова: без этого номер договора
+    «1/16.02-ПОСТ» ловился бы обрывком «16.02» внутри координат контура.
+    Возвращает тройки (таблица, колонка, ОТКУДА значение) — сами
+    значения наружу не отдаются, вывод скрипта тоже попадает в контекст.
     """
-    needles = sorted({v for v in originals if len(v.strip()) >= 3}, key=len, reverse=True)
+    compiled = [
+        (group, re.compile(r"\b" + re.escape(value) + r"\b"))
+        for group, value in sorted(needles, key=lambda p: len(p[1]), reverse=True)
+    ]
     leaks: list[tuple[str, str, str]] = []
     tables = [
         r["name"]
@@ -372,9 +388,9 @@ def find_leaks(conn: sqlite3.Connection, originals: set[str]) -> list[tuple[str,
                 value = row[column]
                 if not isinstance(value, str) or not value:
                     continue
-                for needle in needles:
-                    if needle in value:
-                        leaks.append((table, column, needle))
+                for group, pattern in compiled:
+                    if pattern.search(value):
+                        leaks.append((table, column, group))
                         break
                 else:
                     if CADASTRE_RE.search(value):
@@ -417,11 +433,11 @@ def main() -> int:
             print(f"  {name}: {n}")
 
         if not args.no_verify:
-            leaks = find_leaks(conn, mapping.originals())
+            leaks = find_leaks(conn, mapping.needles())
             if leaks:
                 print("\nПРОВЕРКА НЕ ПРОЙДЕНА — исходные значения остались:", file=sys.stderr)
-                for table, column, _ in sorted(set((t, c, n) for t, c, n in leaks)):
-                    print(f"  {table}.{column}", file=sys.stderr)
+                for table, column, group in sorted(set(leaks)):
+                    print(f"  {table}.{column} ← значение из «{group}»", file=sys.stderr)
                 print(
                     "Копия НЕ пригодна к использованию — не открывать её в сессии ассистента.",
                     file=sys.stderr,

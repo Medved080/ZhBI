@@ -34,7 +34,7 @@
 
 from typing import Optional
 
-from app.element_fields import FIELD_LABELS
+from app.element_fields import FIELD_LABELS, ru_dates_in_text
 from app.models import STATUS_LABELS_RU
 
 TITLE = "Моя работа"
@@ -171,7 +171,10 @@ def value_text(raw: Optional[str]) -> str:
     """
     if raw is None or raw == "":
         return ""
-    text = str(raw)
+    # Даты внутри значения — в русском виде (живой запрос 2026-08-03): в
+    # журнале они лежат как 'ГГГГ-ММ-ДД' (так их сравнивают), а читает эту
+    # строку человек — и в карточке изделия, и в Excel, и в PDF.
+    text = ru_dates_in_text(raw)
     if text in STATUS_LABELS_RU:
         return STATUS_LABELS_RU[text]
     if ": " not in text:

@@ -47,6 +47,8 @@ from app.contracts import (
 from app.history_import import _shift_planned_before_first_event as shift_planned_before_first_event
 from app.models import STATUS_LABELS_RU, STATUS_ORDER
 from app.element_fields import (
+    EXCEL_DATE_FORMAT,
+    to_excel_date,
     DATE_FIELDS,
     EDITABLE_FIELDS,
     FIELD_LABELS,
@@ -154,6 +156,13 @@ def _element_rows(conn) -> list:
     ).fetchall()
 
 
+# Колонки, которые в Excel должны быть НАСТОЯЩИМИ датами с русским
+# форматом (живой запрос 2026-08-03): три правимые даты плюс справочная
+# фактическая. `actual_delivery_date` тоже дата, хотя и не правится.
+_DATE_COLUMNS = {"planned_delivery_date", "project_smr_start_date",
+                 "project_delivery_date", "actual_delivery_date"}
+
+
 def display_values(row, contract_by_id: dict) -> dict:
     """Значения одной строки по всем колонкам COLUMNS.
 
@@ -201,9 +210,17 @@ def build_export_workbook(conn) -> Workbook:
     ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}1"
 
     by_id = {c["id"]: c for c in contracts}
+    # Даты — настоящими датами Excel с русским форматом (живой запрос
+    # 2026-08-03), а не текстом «2026-10-01». Текст «01.10.2026» тут
+    # недопустим отдельно: этот же файл загружается обратно, и coerce_field
+    # принимает либо дату от openpyxl, либо ISO-строку.
+    столбцы_дат = [i + 1 for i, (key, _, _) in enumerate(COLUMNS) if key in _DATE_COLUMNS]
     for row in _element_rows(conn):
         values = display_values(row, by_id)
-        ws.append([values[key] for key, _, _ in COLUMNS])
+        ws.append([to_excel_date(values[key]) if key in _DATE_COLUMNS else values[key]
+                   for key, _, _ in COLUMNS])
+        for i in столбцы_дат:
+            ws.cell(row=ws.max_row, column=i).number_format = EXCEL_DATE_FORMAT
 
     # ---- листы справочников ----
     ws_c = wb.create_sheet(SHEET_CONTRACTS)

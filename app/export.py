@@ -1,9 +1,11 @@
+from datetime import date, datetime
 from io import BytesIO
 
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 from app.contracts import build_document_label
+from app.element_fields import EXCEL_DATE_FORMAT, EXCEL_DATETIME_FORMAT, to_excel_date
 from app.db import visible_elements_clause
 from app.models import STATUS_LABELS_RU
 
@@ -50,6 +52,18 @@ ZONE_COLUMNS = [
 ZONE_STATUS_LABELS_RU = {
     "unmatched": "не определено", "needs_review": "требует проверки", "not_applicable": "неприменимо",
 }
+
+
+def _format_dates(ws, row: int) -> None:
+    """Русский вид дат в только что добавленной строке (живой запрос
+    2026-08-03). Формат ставится на ЯЧЕЙКУ, а в ячейке лежит настоящая дата
+    (см. to_excel_date): текст «01.10.2026» сломал бы обратную загрузку
+    этого же файла и лишил бы колонку сортировки по дате."""
+    for cell in ws[row]:
+        if isinstance(cell.value, datetime):
+            cell.number_format = EXCEL_DATETIME_FORMAT
+        elif isinstance(cell.value, date):
+            cell.number_format = EXCEL_DATE_FORMAT
 
 
 def _zone_names(conn) -> dict:
@@ -189,13 +203,14 @@ def build_snapshot_xlsx(conn, source_file, date, element_ids=None):
         changed_at = row["changed_at"] if row else None
         changed_by = row["changed_by"] if row else None
 
-        values = [el[key] for key, _ in ELEMENT_COLUMNS]
+        values = [to_excel_date(el[key]) for key, _ in ELEMENT_COLUMNS]
         values.extend(_zone_cell(el, id_field, status_field, zone_names) for id_field, status_field, _ in ZONE_COLUMNS)
         values.extend(_contract_cells(el["contract_id"], contract_labels))
         values.append(STATUS_LABELS_RU.get(status, status) if status else "(нет данных на эту дату)")
-        values.append(changed_at or "")
+        values.append(to_excel_date(changed_at or ""))
         values.append(changed_by or "")
         ws.append(values)
+        _format_dates(ws, ws.max_row)
 
     _autosize(ws)
     buf = BytesIO()
@@ -260,10 +275,10 @@ def build_history_xlsx(conn, source_file, date_from, date_to, element_ids=None):
     ).fetchall()
 
     for r in rows:
-        values = [r[key] for key, _ in ELEMENT_COLUMNS]
+        values = [to_excel_date(r[key]) for key, _ in ELEMENT_COLUMNS]
         values.extend(_zone_cell(r, id_field, status_field, zone_names) for id_field, status_field, _ in ZONE_COLUMNS)
         values.append(STATUS_LABELS_RU.get(r["event_status"], r["event_status"]))
-        values.append(r["changed_at"])
+        values.append(to_excel_date(r["changed_at"]))
         values.append(r["changed_by"] or "")
         values.append(r["comment"] or "")
         # Контракт НА МОМЕНТ этого события (sh.contract_id), а не текущий
@@ -271,6 +286,7 @@ def build_history_xlsx(conn, source_file, date_from, date_to, element_ids=None):
         # а не что сейчас (см. Docs/backlog.md).
         values.extend(_contract_cells(r["event_contract_id"], contract_labels))
         ws.append(values)
+        _format_dates(ws, ws.max_row)
 
     _autosize(ws)
     buf = BytesIO()

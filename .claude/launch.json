@@ -2,6 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "//": "БОЕВЫЕ ДАННЫЕ (data/zhbi.db). Для просмотра работы системы на живых данных ПОЛЬЗОВАТЕЛЕМ — после разработки, как и раньше. Ассистент эту конфигурацию не запускает и скриншотов с неё не делает: снимок экрана с реальными марками, контрагентами и датами уходит на сторонние серверы целиком, регуляркой картинку не обезличить.",
       "name": "zhbi-server",
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": [
@@ -12,7 +13,18 @@
       "autoPort": true
     },
     {
-      "//": "Живая проверка правок на КОПИИ боевой БД (data/zhbi.check.db, делается вручную: cp data/zhbi.db data/zhbi.check.db). Ни миграции при старте, ни правки из интерфейса не трогают боевую data/zhbi.db.",
+      "//": "ОБЕЗЛИЧЕННАЯ копия (data/zhbi.anon.db, собирается `.venv/bin/python scripts/anonymize_db.py`). Рабочая конфигурация для отладки и живой браузерной проверки ассистентом: нагрузка полностью боевая (9422 элемента, вся геометрия, статусы, история), реквизитов заказчика нет. Данные самоочевидно фиктивные («Контрагент-01», «Объект-1», «Чертёж-1.dxf») — по скриншоту сразу видно, что сервер не боевой.",
+      "name": "zhbi-server-anon",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-c",
+        "import os, uvicorn; os.environ.setdefault('ZHBI_DB_PATH', 'data/zhbi.anon.db'); uvicorn.run('app.main:app', host='127.0.0.1', port=int(os.environ.get('PORT') or 8020))"
+      ],
+      "port": 8020,
+      "autoPort": true
+    },
+    {
+      "//": "Живая проверка правок на КОПИИ боевой БД (data/zhbi.check.db, делается вручную: cp data/zhbi.db data/zhbi.check.db). Ни миграции при старте, ни правки из интерфейса не трогают боевую data/zhbi.db. Данные в ней РЕАЛЬНЫЕ — конфигурация для пользователя, ассистент работает на zhbi-server-anon.",
       "name": "zhbi-server-testcopy",
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": [
