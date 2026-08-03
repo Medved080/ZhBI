@@ -3,12 +3,19 @@
 «Статус комплектации.xlsx»).
 
 Смысл: ПЛОСКИЙ перечень «что, где и по какому контракту» — строка на
-уникальное сочетание «кран · стоянка · тип · подтип · марка · контракт ·
-три даты», в строке количество таких изделий. Это не сводка по статусам
-(для неё есть «Статусы») и не календарь (для него «График поставки»), а
-рабочий список комплектации, который заказчик до сих пор собирал руками:
-по нему видно, чем закрыта конкретная стоянка конкретного крана и на
-какие даты по ней есть план, факт и потребность.
+КАЖДОЕ ИЗДЕЛИЕ, а не на группу одинаковых (живой запрос 2026-08-03:
+«не группируй, этот отчёт по индивидуальным позициям элементов»). Это не
+сводка по статусам (для неё есть «Статусы») и не календарь (для него
+«График поставки»), а рабочий список комплектации, который заказчик до сих
+пор собирал руками: по нему видно, чем закрыта конкретная стоянка
+конкретного крана и на какие даты по ней есть план, факт и потребность.
+
+Раз строка — отдельная позиция, у каждой есть **GUID** (`element_uid`) —
+тот же ключ, которым изделие адресуется в массовой правке через Excel
+(`app/element_bulk_edit.py`). Он и делает отчёт пригодным для сверки с
+внешними перечнями: марка у изделий повторяется десятками, а GUID нет.
+Колонка «Кол-во» осталась (она есть в образце заказчика) и всегда равна
+единице — сумма по ней даёт число позиций.
 
 Дерева здесь нет НАМЕРЕННО: образец — плоская таблица, которую в Excel
 крутят сводными и фильтрами, а любая наша группировка этому мешала бы
@@ -59,6 +66,10 @@ COLUMNS = [
     {"key": "plan_date", "label": "Плановая дата поставки", "kind": "date"},
     {"key": "fact_date", "label": "Фактическая дата поставки", "kind": "date"},
     {"key": "need_date", "label": "Требуемая дата поставки", "kind": "date"},
+    # GUID — последней колонкой: читают отчёт по левым колонкам («кран,
+    # стоянка, марка»), а GUID нужен при сверке с внешним перечнем и
+    # копировании, и в начале строки он только отодвигал бы смысл вправо.
+    {"key": "guid", "label": "GUID", "kind": "text"},
 ]
 
 TOTAL_LABEL = "Итого"
@@ -68,7 +79,11 @@ TOTAL_LABEL = "Итого"
 # разбирать её в объект ради сравнения незачем.
 SORT_KEYS = ["crane", "stance", "element_type", "subtype", "mark",
              "counterparty", "agreement", "specification",
-             "plan_date", "fact_date", "need_date"]
+             "plan_date", "fact_date", "need_date",
+             # Последним — GUID: одинаковых по всем реквизитам позиций теперь
+             # много (группировки нет), и без него их взаимный порядок
+             # зависел бы от того, как база вернула строки.
+             "guid"]
 
 
 def _sort_key(value):
@@ -112,7 +127,7 @@ def build_completion_report(conn, source_file: Optional[str],
                e.planned_delivery_date AS plan_date,
                e.actual_delivery_date AS fact_date,
                e.project_smr_start_date AS need_date,
-               COUNT(*) AS n
+               e.element_uid AS guid
         FROM elements e
         LEFT JOIN zones zc ON zc.id = e.zone_crane_id
         LEFT JOIN zones zs ON zs.id = e.zone_stance_id
@@ -121,9 +136,6 @@ def build_completion_report(conn, source_file: Optional[str],
         LEFT JOIN agreements ag ON ag.id = sp.agreement_id
         LEFT JOIN counterparties cp ON cp.id = ag.counterparty_id
         {where}
-        GROUP BY e.zone_crane_id, e.zone_stance_id, e.element_type, e.subtype, e.mark,
-                 e.contract_id, e.planned_delivery_date, e.actual_delivery_date,
-                 e.project_smr_start_date
         """,
         params,
     ).fetchall()
@@ -144,13 +156,17 @@ def build_completion_report(conn, source_file: Optional[str],
         "element_type": r["element_type"],
         "subtype": r["subtype"] or None,
         "mark": r["mark"] or None,
-        "count": r["n"],
+        # Всегда 1: строка отчёта — одно изделие. Колонка оставлена, потому
+        # что она есть в образце заказчика, и сумма по ней в итоге даёт
+        # число позиций.
+        "count": 1,
         "counterparty": r["cp_name"] or None,
         "agreement": document(r["ag_number"], r["ag_date"]),
         "specification": document(r["sp_number"], r["sp_date"]),
         "plan_date": r["plan_date"] or None,
         "fact_date": r["fact_date"] or None,
         "need_date": r["need_date"] or None,
+        "guid": r["guid"] or None,
     } for r in rows]
     out.sort(key=lambda row: tuple(_sort_key(row[k]) for k in SORT_KEYS))
 
@@ -158,12 +174,9 @@ def build_completion_report(conn, source_file: Optional[str],
         "title": TITLE,
         "columns": COLUMNS,
         "rows": out,
-        # Итог — и число изделий, и число строк: строка здесь не изделие, а
-        # их группа, и «Всего: 9422» рядом с тремя тысячами строк без второго
-        # числа читалось бы как ошибка.
-        "total": {"label": TOTAL_LABEL,
-                  "count": sum(row["count"] for row in out),
-                  "rows": len(out)},
+        # Строка = изделие, поэтому число одно (2026-08-03, после отказа от
+        # группировки): «строк» и «изделий» теперь означали бы одно и то же.
+        "total": {"label": TOTAL_LABEL, "count": len(out)},
     }
 
 
@@ -231,7 +244,8 @@ def build_completion_report_xlsx(report: dict) -> bytes:
 
     widths = {"crane": 8, "stance": 10, "element_type": 18, "subtype": 26,
               "mark": 20, "count": 9, "counterparty": 22, "agreement": 22,
-              "specification": 22, "plan_date": 16, "fact_date": 18, "need_date": 16}
+              "specification": 22, "plan_date": 16, "fact_date": 18, "need_date": 16,
+              "guid": 34}
     for i, c in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(i)].width = widths.get(c["key"], 16)
     ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
@@ -278,19 +292,24 @@ def build_completion_report_pdf(report: dict, subtitle: str = "") -> bytes:
     # текста (см. app/reports.py).
     cell_style = ParagraphStyle("c", fontName=FONT_REGULAR, fontSize=6.5, leading=8)
     head_style = ParagraphStyle("h", fontName=FONT_BOLD, fontSize=6.5, leading=8, alignment=1)
+    # GUID — 32 символа подряд без пробелов: обычным кеглем он либо не влез
+    # бы в колонку, либо потребовал переноса ПО СИМВОЛАМ, а тот удвоил бы
+    # высоту каждой строки таблицы (то есть и число страниц). Меньший кегль
+    # оставляет его одной строкой.
+    guid_style = ParagraphStyle("g", fontName=FONT_REGULAR, fontSize=5, leading=7)
 
-    def cell(value, kind):
+    def cell(value, kind, key=None):
         if value is None or value == "":
             return ""
         if kind == "date":
             return ru_date_text(value)
         if kind == "num":
             return str(value)
-        return Paragraph(pdf_text(value), cell_style)
+        return Paragraph(pdf_text(value), guid_style if key == "guid" else cell_style)
 
     data = [[Paragraph(pdf_text(c["label"]), head_style) for c in columns]]
     for row in report["rows"]:
-        data.append([cell(row[c["key"]], c["kind"]) for c in columns])
+        data.append([cell(row[c["key"]], c["kind"], c["key"]) for c in columns])
 
     total = report["total"]
     data.append([total["label"] if c["key"] == "crane"
@@ -299,24 +318,33 @@ def build_completion_report_pdf(report: dict, subtitle: str = "") -> bytes:
 
     # Доли ширины полосы набора: под текстовые колонки её нужно больше, чем
     # под номер крана и количество.
-    shares = {"crane": 0.5, "stance": 0.6, "element_type": 1.2, "subtype": 1.7,
-              "mark": 1.3, "count": 0.6, "counterparty": 1.3, "agreement": 1.3,
-              "specification": 1.3, "plan_date": 1.0, "fact_date": 1.0, "need_date": 1.0}
+    # Доли подобраны не на глаз: каждая колонка шире самого длинного
+    # НЕРАЗРЫВНОГО слова, которое в неё попадает (заголовок или значение) —
+    # иначе reportlab молча вывел бы его за границу ячейки.
+    shares = {"crane": 0.5, "stance": 0.75, "element_type": 1.15, "subtype": 1.45,
+              "mark": 1.15, "count": 0.65, "counterparty": 1.15, "agreement": 1.15,
+              "specification": 1.2, "plan_date": 0.95, "fact_date": 1.05, "need_date": 0.95,
+              # GUID — 32 символа без единого пробела: перенести его негде,
+              # поэтому колонка широкая, а кегль в ней меньше (см. guid_style).
+              "guid": 2.1}
     band = 277 * mm
     total_share = sum(shares.get(c["key"], 1.0) for c in columns)
     widths = [band * shares.get(c["key"], 1.0) / total_share for c in columns]
 
     last = len(data) - 1
     table = Table(data, colWidths=widths, repeatRows=1)
+    # Выравнивание — по КЛЮЧУ колонки, а не по её номеру: номера сдвинулись
+    # уже один раз (добавился GUID), и жёсткие индексы центрировали бы
+    # чужую колонку молча.
+    centered = [i for i, c in enumerate(columns)
+                if c["kind"] in ("num", "date") or c["key"] == "guid"]
     table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, -1), FONT_REGULAR),
         ("FONTSIZE", (0, 0), (-1, -1), 6.5),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEF2F7")),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D5D8DC")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (0, 1), (1, -1), "CENTER"),
-        ("ALIGN", (5, 1), (5, -1), "CENTER"),
-        ("ALIGN", (9, 1), (-1, -1), "CENTER"),
+        *[("ALIGN", (i, 1), (i, -1), "CENTER") for i in centered],
         ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ("FONTNAME", (0, last), (-1, last), FONT_BOLD),

@@ -1423,6 +1423,12 @@
   #cmp-table td.cmp-num, #cmp-table td.cmp-date {
     text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums;
   }
+  /* GUID: 32 знака в каждой строке — моноширинным и приглушённым, иначе он
+     перетягивает на себя внимание со смысловых колонок. */
+  #cmp-table td.cmp-guid {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 10px; color: var(--color-text-muted); white-space: nowrap;
+  }
   #cmp-table tr.cmp-total td { font-weight: 700; background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
   .cmp-empty { color: var(--color-text-muted); padding: 12px 0; }
 
@@ -2433,6 +2439,25 @@
     <div id="skin-choices" class="skin-choices"></div>
     <p class="hint-text">Настройка личная: сохраняется за вами и переезжает вместе с вами
       на другой компьютер. На данные и на других пользователей не влияет.</p>
+    <!-- Начальный ракурс 3D (2026-08-03, живой запрос). Здесь же, где гамма:
+         это личная настройка вида, и отдельная форма ради двух чисел была бы
+         ещё одним пунктом меню, который надо найти. -->
+    <label class="field" style="margin-top:12px">Начальный ракурс 3D</label>
+    <div class="row" style="align-items:flex-end; gap:12px">
+      <div style="flex:1"><label class="field" style="margin-top:0">Подъём камеры, °</label>
+        <input type="number" id="view3d-pitch" min="1" max="89" step="1"/></div>
+      <div style="flex:1"><label class="field" style="margin-top:0">Поворот, °</label>
+        <input type="number" id="view3d-yaw" min="-180" max="180" step="1"/></div>
+      <button class="btn btn-secondary" id="view3d-apply">Применить</button>
+      <span class="hint-text" id="view3d-status"></span>
+    </div>
+    <p class="hint-text">
+      Подъём — угол над горизонтом: 90° — взгляд строго сверху, вид плана; меньше — вид сбоку.
+      Поворот отсчитывается от вида, где числовые оси стоят вертикально, а буквенные
+      горизонтально; положительный угол поворачивает камеру по часовой стрелке, отрицательный —
+      против. По умолчанию 30° и −30°. Настройка личная; применяется при переходе в 3D и по
+      кнопке сброса вида.
+    </p>
     <label class="field" style="margin-top:12px">Меню «Действия»</label>
     <label class="toggle"><input type="radio" name="menu-view" value="dropdown"/>
       Выпадающее меню — группы раскрываются вбок при наведении</label>
@@ -3405,7 +3430,13 @@
     <div class="modal-sticky-scroll" id="changelog-list"></div>
     <div class="modal-sticky-foot">
       <div class="actions">
+        <!-- «Ознакомился» фиксируется ЗА ПОЛЬЗОВАТЕЛЕМ (2026-08-03, живой
+             запрос): пока кнопка не нажата, форма открывается при каждом
+             входе, даже если её просто закрыли. Появится новая запись в
+             журнале — признак поднимется снова. Кнопка видна только когда
+             есть непрочитанное (см. openChangelog). -->
         <button class="btn btn-secondary" id="changelog-close">Закрыть</button>
+        <button class="btn btn-primary" id="changelog-ack">Ознакомился</button>
       </div>
     </div>
   </div>

@@ -272,6 +272,41 @@ def must_change_password_of(user: sqlite3.Row) -> bool:
     return bool(user["must_change_password"]) and auth_method_of(user) == "local"
 
 
+def changelog_unseen_of(user: sqlite3.Row) -> bool:
+    """Есть ли в журнале «Что нового» запись, которую человек ещё не
+    подтвердил кнопкой «Ознакомился» (2026-08-03, живой запрос).
+
+    Сравнение делает СЕРВЕР, а клиенту отдаётся готовое «да/нет»: иначе при
+    каждом входе пришлось бы тянуть весь журнал версий только чтобы узнать,
+    показывать его или нет. Импорт локальный — app.changelog не должен
+    затягиваться в модуль аутентификации на уровне файла."""
+    from app.changelog import CHANGELOG
+
+    if not CHANGELOG:
+        return False
+    if "changelog_ack_version" not in user.keys():
+        return True
+    return user["changelog_ack_version"] != CHANGELOG[0]["version"]
+
+
+# Значения по умолчанию заданы пользователем (2026-08-03): подъём 30° над
+# горизонтом, поворот −30° (против часовой стрелки). Держатся ЗДЕСЬ и
+# дублируются в DEFAULT миграции — второе место нужно самой БД, но правда
+# одна: при расхождении верен этот модуль, он же отвечает на /me.
+DEFAULT_VIEW3D_PITCH = 30.0
+DEFAULT_VIEW3D_YAW = -30.0
+
+
+def view3d_angles_of(user: sqlite3.Row) -> tuple:
+    """Персональный начальный ракурс 3D: (подъём, поворот) в градусах.
+    Через .keys(), как auth_method и ui_theme рядом, — строка пользователя
+    приходит и из выборок, сделанных до миграции."""
+    pitch = user["view3d_pitch_deg"] if "view3d_pitch_deg" in user.keys() else None
+    yaw = user["view3d_yaw_deg"] if "view3d_yaw_deg" in user.keys() else None
+    return (DEFAULT_VIEW3D_PITCH if pitch is None else float(pitch),
+            DEFAULT_VIEW3D_YAW if yaw is None else float(yaw))
+
+
 def format_display_name(user: sqlite3.Row) -> str:
     parts = [user["last_name"], user["first_name"], user["patronymic"]]
     return " ".join(p for p in parts if p)
@@ -497,9 +532,17 @@ class UserOut(BaseModel):
     # оформление. Хранится на сервере, а не в браузере: настройка следует за
     # человеком — на площадке за одной машиной работают посменно.
     ui_theme: Optional[str] = None
+    # Есть ли в «Что нового» непрочитанная запись (2026-08-03). Считает
+    # сервер (changelog_unseen_of): иначе клиент тянул бы весь журнал версий
+    # при каждом входе только чтобы решить, показывать его или нет.
+    changelog_unseen: bool = False
+    # Персональный начальный ракурс 3D в градусах (2026-08-03).
+    view3d_pitch_deg: float = DEFAULT_VIEW3D_PITCH
+    view3d_yaw_deg: float = DEFAULT_VIEW3D_YAW
 
 
 def user_out(user: sqlite3.Row) -> UserOut:
+    pitch, yaw = view3d_angles_of(user)
     return UserOut(
         id=user["id"],
         last_name=user["last_name"],
@@ -515,6 +558,9 @@ def user_out(user: sqlite3.Row) -> UserOut:
         auth_method=auth_method_of(user),
         must_change_password=must_change_password_of(user),
         ui_theme=user["ui_theme"] if "ui_theme" in user.keys() else None,
+        changelog_unseen=changelog_unseen_of(user),
+        view3d_pitch_deg=pitch,
+        view3d_yaw_deg=yaw,
     )
 
 

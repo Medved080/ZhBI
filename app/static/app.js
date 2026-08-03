@@ -6267,10 +6267,43 @@ document.getElementById("menu-view-mode").addEventListener("click", () => {
   const текущий = menuViewMode();
   document.querySelectorAll('input[name="menu-view"]').forEach(r => { r.checked = r.value === текущий; });
   renderSkinChoices();
+  const { pitch, yaw } = initial3DAngles();
+  document.getElementById("view3d-pitch").value = pitch;
+  document.getElementById("view3d-yaw").value = yaw;
   document.getElementById("menu-view-backdrop").classList.add("open");
 });
 document.getElementById("menu-view-close").addEventListener("click", () =>
   document.getElementById("menu-view-backdrop").classList.remove("open"));
+
+// Начальный ракурс 3D. Сохраняется на СЕРВЕРЕ, за пользователем (те же
+// соображения, что у цветовой гаммы: за одной машиной работают посменно).
+// Применяется сразу, если 3D сейчас открыт, — иначе настройку пришлось бы
+// проверять «вслепую», выходя и заходя в режим.
+document.getElementById("view3d-apply").addEventListener("click", async () => {
+  const статус = document.getElementById("view3d-status");
+  const pitch = Number(document.getElementById("view3d-pitch").value);
+  const yaw = Number(document.getElementById("view3d-yaw").value);
+  if (!Number.isFinite(pitch) || !Number.isFinite(yaw)) {
+    статус.textContent = "Углы задаются числами";
+    return;
+  }
+  try {
+    const обновлён = await api(`/users/${state.currentUser.id}/view3d`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ view3d_pitch_deg: pitch, view3d_yaw_deg: yaw }),
+    });
+    // Углы берём ИЗ ОТВЕТА: сервер приводит поворот к (−180; 180], и поле
+    // должно показать то, что реально сохранено, а не то, что ввели.
+    state.currentUser.view3d_pitch_deg = обновлён.view3d_pitch_deg;
+    state.currentUser.view3d_yaw_deg = обновлён.view3d_yaw_deg;
+    document.getElementById("view3d-pitch").value = обновлён.view3d_pitch_deg;
+    document.getElementById("view3d-yaw").value = обновлён.view3d_yaw_deg;
+    статус.textContent = "Ракурс сохранён";
+    if (state.view3d.active) fit3DCameraToData();
+  } catch (e) {
+    статус.textContent = "Не удалось сохранить: " + e.message;
+  }
+});
 document.querySelectorAll('input[name="menu-view"]').forEach(r => r.addEventListener("change", () => {
   if (r.checked) localStorage.setItem(MENU_VIEW_KEY, r.value);
 }));
@@ -10951,7 +10984,10 @@ function renderCompletionReport(data) {
     const v = r[c.key];
     const текст = v === null || v === undefined ? ""
       : (c.kind === "date" ? formatDateRu(v) : String(v));
-    return `<td class="${классы[c.kind] || ""}">${escapeHtml(текст)}</td>`;
+    // GUID — своим классом: моноширинный и приглушённый, иначе 32 знака
+    // шестнадцатеричного кода перетягивают на себя всю строку.
+    const класс = c.key === "guid" ? "cmp-guid" : (классы[c.kind] || "");
+    return `<td class="${класс}">${escapeHtml(текст)}</td>`;
   }).join("") + "</tr>").join("");
   // Итог — только под «Кол-во»: складывать номера стоянок или даты нечего,
   // и пустые ячейки это показывают лучше любой подписи.
@@ -11207,10 +11243,8 @@ async function loadReport() {
       document.getElementById("ds-to").value = reportData.date_to;
       document.getElementById("ds-step").value = reportData.step;
     } else if (def.flatList) {
-      // Строка здесь — ГРУППА изделий, а не изделие: без второго числа
-      // «изделий: 9422» рядом с тремя тысячами строк читалось бы как ошибка.
-      statusLine.textContent =
-        `Строк: ${reportData.total.rows} · изделий: ${reportData.total.count}`;
+      // Строка = отдельное изделие (группировки нет), поэтому число одно.
+      statusLine.textContent = `Позиций: ${reportData.total.count}`;
     } else {
       statusLine.textContent = reportData.total
         ? `Всего изделий: ${reportData.total.values.total}`
@@ -11992,9 +12026,16 @@ document.getElementById("statuslog-close").addEventListener("click", () => {
 // пересортировывая. Кэшируется на время сеанса (state.changelog) — список
 // не меняется, пока сервис не перезапустят с новой версией, повторный
 // запрос при каждом открытии модалки не нужен.
-document.getElementById("btn-changelog").addEventListener("click", async () => {
+// Показать «Что нового». Вынесено из обработчика кнопки «?»: форма
+// открывается ещё и САМА при входе, пока человек не нажал «Ознакомился»
+// (2026-08-03, живой запрос).
+async function openChangelog() {
   const box = document.getElementById("changelog-list");
   const backdrop = document.getElementById("changelog-backdrop");
+  // Кнопку «Ознакомился» показываем только когда есть что подтверждать:
+  // нажатая, она превратилась бы в бессмысленный повтор.
+  document.getElementById("changelog-ack").style.display =
+    (state.currentUser && state.currentUser.changelog_unseen) ? "" : "none";
   if (!state.changelog) {
     box.innerHTML = '<div class="hint-text">Загрузка…</div>';
     backdrop.classList.add("open");
@@ -12017,9 +12058,26 @@ document.getElementById("btn-changelog").addEventListener("click", async () => {
       <ul>${entry.items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
     </div>
   `).join("");
-});
+}
+
+document.getElementById("btn-changelog").addEventListener("click", openChangelog);
+// «Закрыть» ничего не подтверждает НАМЕРЕННО: пока не нажата «Ознакомился»,
+// форма открывается при каждом входе — в этом и смысл требования.
 document.getElementById("changelog-close").addEventListener("click", () => {
   document.getElementById("changelog-backdrop").classList.remove("open");
+});
+document.getElementById("changelog-ack").addEventListener("click", async () => {
+  try {
+    await api("/changelog/ack", { method: "POST" });
+    // Версию, которую записал сервер, клиенту знать не нужно: ему важно
+    // только «непрочитанного больше нет». Появится новая запись — сервер
+    // снова поднимет признак в /me, потому что сравнивает версии.
+    if (state.currentUser) state.currentUser.changelog_unseen = false;
+    document.getElementById("changelog-ack").style.display = "none";
+    document.getElementById("changelog-backdrop").classList.remove("open");
+  } catch (e) {
+    showToast("Не удалось отметить ознакомление: " + e.message, "warning");
+  }
 });
 
 // ---------- экспорт XLS ----------
@@ -14059,6 +14117,19 @@ function set3DDragging(dragging) {
 // 2D (state.initialView), но для 3D: центр по X/Y плана и по среднему
 // уровню высот, камера отведена по диагонали на расстояние, пропорциональное
 // охвату плана.
+// Начальный ракурс 3D — настройка пользователя (users.view3d_*, приходит в
+// /me). Значения по умолчанию продублированы здесь на случай, если карточка
+// пользователя ещё не загружена: сцену собирают и до её прихода.
+const DEG = Math.PI / 180;
+const DEFAULT_VIEW3D = { pitch: 30, yaw: -30 };
+
+function initial3DAngles() {
+  const u = state.currentUser || {};
+  const pitch = Number.isFinite(u.view3d_pitch_deg) ? u.view3d_pitch_deg : DEFAULT_VIEW3D.pitch;
+  const yaw = Number.isFinite(u.view3d_yaw_deg) ? u.view3d_yaw_deg : DEFAULT_VIEW3D.yaw;
+  return { pitch, yaw };
+}
+
 function fit3DCameraToData() {
   const v3 = state.view3d;
   if (!v3.camera || !state.elements.length) return;
@@ -14074,8 +14145,25 @@ function fit3DCameraToData() {
   const cx = (minX + maxX) / 2, cz = -(minY + maxY) / 2, cy = (minZ + maxZ) / 2;
   const size = Math.max(maxX - minX, maxY - minY, 2000);
 
+  // Ракурс — ПЕРСОНАЛЬНЫЙ (2026-08-03, живой запрос): подъём камеры над
+  // горизонтом и поворот вокруг объекта задаются в «Действия → Настройки →
+  // Цветовая схема». Раньше здесь стояла жёсткая диагональ
+  // (size*0.6 по всем трём осям); дистанцию сохраняем ровно ту же, чтобы
+  // «100%» индикатора зума означало прежний охват.
+  const { pitch, yaw } = initial3DAngles();
+  const distance = size * 0.6 * Math.sqrt(3);
+  const horizontal = distance * Math.cos(pitch * DEG);
+  // Ноль поворота — вид, при котором числовые оси стоят вертикально, а
+  // буквенные горизонтально (то есть привычный вид плана): камера отведена
+  // в сторону убывания Y чертежа, а world.Z = -dxf.y, значит по +Z мира.
+  // Положительный угол уводит камеру ПО ЧАСОВОЙ стрелке, если смотреть на
+  // план сверху, отрицательный — против (значение по умолчанию −30°).
   v3.controls.target.set(cx, cy, cz);
-  v3.camera.position.set(cx + size * 0.6, cy + size * 0.6, cz + size * 0.6);
+  v3.camera.position.set(
+    cx - horizontal * Math.sin(yaw * DEG),
+    cy + distance * Math.sin(pitch * DEG),
+    cz + horizontal * Math.cos(yaw * DEG),
+  );
   v3.camera.near = Math.max(size / 1000, 1);
   v3.camera.far = size * 20;
   v3.camera.updateProjectionMatrix();
@@ -14571,6 +14659,12 @@ async function bootApp() {
   await loadSourceFiles();
   await loadPlan(false); // первая загрузка — вписать схему целиком
   startPolling();        // совместная работа: подхватывать чужие правки
+  // «Что нового» — САМО, пока человек не нажал «Ознакомился» (2026-08-03,
+  // живой запрос). В самом конце bootApp, а не в checkAuth: форма поверх
+  // пустой рабочей области выглядела бы как ошибка загрузки, да и человеку
+  // после неё есть куда вернуться. Признак считает сервер (changelog_unseen
+  // в /me) — клиенту не нужно тянуть весь журнал, чтобы это выяснить.
+  if (state.currentUser && state.currentUser.changelog_unseen) openChangelog();
 }
 
 bootApp();

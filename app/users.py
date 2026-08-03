@@ -472,6 +472,58 @@ def set_ui_theme(
         conn.close()
 
 
+class SetView3dIn(BaseModel):
+    """Начальный ракурс 3D (2026-08-03, живой запрос).
+
+    pitch — подъём камеры над горизонтом: 90° это взгляд строго сверху (вид
+    плана), 0° — с уровня земли. yaw — поворот вокруг объекта, ноль отсчитан
+    от вида, где числовые оси стоят вертикально, а буквенные горизонтально
+    (то есть от привычного вида плана); положительный угол — по часовой
+    стрелке, если смотреть на план сверху, отрицательный — против."""
+    view3d_pitch_deg: float
+    view3d_yaw_deg: float
+
+
+# Границы подъёма. Верхняя — 89, а не 90: строго сверху азимут вырождается
+# (камера ровно над целью), и поворот молча перестал бы что-либо значить.
+# Нижняя — 1: с нуля камера оказывается внутри перекрытий первого яруса.
+VIEW3D_PITCH_MIN, VIEW3D_PITCH_MAX = 1.0, 89.0
+
+
+@router.patch("/{user_id}/view3d", response_model=UserOut)
+def set_view3d(
+    user_id: int, body: SetView3dIn, current: sqlite3.Row = Depends(get_current_user)
+):
+    """Тот же guard самообслуживания, что у set_ui_theme и set_label_color:
+    менять можно только себе, если ты не администратор сервиса."""
+    if current["role"] != "admin" and current["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Можно менять только свой ракурс")
+    if not VIEW3D_PITCH_MIN <= body.view3d_pitch_deg <= VIEW3D_PITCH_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Подъём камеры — от {VIEW3D_PITCH_MIN:g}° до {VIEW3D_PITCH_MAX:g}°",
+        )
+    # Поворот замыкается по кругу, поэтому не отвергается, а приводится к
+    # (−180; 180]: «330°» и «−30°» — один и тот же ракурс, и отказывать в
+    # первом было бы придиркой.
+    yaw = (body.view3d_yaw_deg + 180) % 360 - 180
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        conn.execute(
+            "UPDATE users SET view3d_pitch_deg = ?, view3d_yaw_deg = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (body.view3d_pitch_deg, yaw, user_id),
+        )
+        conn.commit()
+        activity.log("user_view3d", user=current, entity_type="user", entity_id=user_id,
+                     new_value=f"подъём {body.view3d_pitch_deg:g}°, поворот {yaw:g}°")
+        return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+    finally:
+        conn.close()
+
+
 # ==================== ДОСТУП К ОБЪЕКТАМ (этап C) ====================
 #
 # Роль на объекте — свойство ГРАНТА, а не пользователя (решение П2).

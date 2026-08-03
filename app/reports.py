@@ -347,6 +347,21 @@ def _week_start(date_str: str) -> str:
     return (d - timedelta(days=d.weekday())).isoformat()
 
 
+def _week_start_or_none(value) -> Optional[str]:
+    """То же, но для дат, пришедших из КАРТОЧКИ ОБЪЕКТА, — контрольных
+    сроков и вех. Там лежит свободно правимый JSON настроек, и одно
+    непохожее на дату значение роняло весь отчёт пятисоткой
+    (`date.fromisoformat('скрыто')`, поймано на обезличенной копии
+    2026-08-03). Веха с испорченной датой просто не участвует в сетке
+    недель: отчёт про поставку и монтаж, а не про целостность карточки."""
+    if not value:
+        return None
+    try:
+        return _week_start(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
 def _cumulative(pairs: list, weeks: list) -> list:
     """Накопительный итог по заранее заданной сетке недель. Сетка общая для
     всех кривых — иначе линии на графике стояли бы на разных абсциссах и
@@ -436,8 +451,9 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     # веха «Завершение 3 Захватки» оказалась бы за краем.
     for extra in [card.get("montage_deadline"), card.get("delivery_deadline")] + \
                  [m.get("date") for m in card.get("milestones", [])]:
-        if extra:
-            weeks.append(_week_start(extra))
+        неделя = _week_start_or_none(extra)
+        if неделя:
+            weeks.append(неделя)
     weeks = sorted(set(weeks))
 
     series = {k: _cumulative(v, weeks) for k, v in series_raw.items()}
@@ -533,10 +549,17 @@ def _dyn_short_date(iso: str) -> str:
 
 
 def _ru_date_short(iso: Optional[str]) -> str:
+    """Дата по-русски; непригодное для разбора — пустая строка, а не
+    исключение. Сюда приходят и контрольные сроки из КАРТОЧКИ ОБЪЕКТА
+    (свободно правимый JSON настроек), и на одном таком значении падала вся
+    выгрузка целиком — тот же случай, что у _week_start_or_none выше."""
     if not iso:
         return ""
     from datetime import date
-    d = date.fromisoformat(iso[:10])
+    try:
+        d = date.fromisoformat(str(iso)[:10])
+    except (ValueError, TypeError):
+        return ""
     return f"{d.day:02d}.{d.month:02d}.{d.year}"
 
 
@@ -622,7 +645,11 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
             # правило, что на экране (buildDynamicsChartSvg) — с появлением
             # периода в форме (2026-08-03) окно бывает уже полного срока.
             def in_window(iso):
-                return bool(weeks) and weeks[0] <= _week_start(iso) <= weeks[-1]
+                # Дата вехи приходит из карточки объекта и может оказаться
+                # непригодной для разбора — тогда вехи просто нет, а не 500
+                # на всю выгрузку (см. _week_start_or_none).
+                неделя = _week_start_or_none(iso)
+                return bool(weeks) and неделя is not None and weeks[0] <= неделя <= weeks[-1]
 
             marks = [m for m in
                      [{"label": "Отчётная дата", "date": report["report_date"]}]
@@ -719,13 +746,15 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
         # падает с LayoutError «too large on page».
         return [t, Paragraph(footnote, note)] if footnote else [t]
 
+    # Сноску даём, только если срок РАЗОБРАЛСЯ: «окончание монтажа изделий »
+    # с пустотой на конце — не подпись, а след ошибки в данных.
+    монтаж_до = _ru_date_short(card.get("montage_deadline"))
+    поставка_до = _ru_date_short(card.get("delivery_deadline"))
     left = (status_table("Статус монтажа ЖБИ", report["montage"],
-                         f"* окончание монтажа изделий {_ru_date_short(card.get('montage_deadline'))}"
-                         if card.get("montage_deadline") else "")
+                         f"* окончание монтажа изделий {монтаж_до}" if монтаж_до else "")
             + [Spacer(1, 3 * mm)]
             + status_table("Статус поставки ЖБИ", report["delivery"],
-                           f"** окончание поставки изделий {_ru_date_short(card.get('delivery_deadline'))}"
-                           if card.get("delivery_deadline") else ""))
+                           f"** окончание поставки изделий {поставка_до}" if поставка_до else ""))
 
     story.append(Table([[left, bullet_box("Открытые вопросы", card.get("open_questions"), "#EEF2F7")]],
                        colWidths=[140 * mm, 126 * mm],

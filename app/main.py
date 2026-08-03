@@ -519,6 +519,32 @@ def get_changelog(user: sqlite3.Row = Depends(get_current_user)):
     return CHANGELOG
 
 
+@app.post("/changelog/ack")
+def ack_changelog(user: sqlite3.Row = Depends(get_current_user)):
+    """«Ознакомился» (2026-08-03, живой запрос). Записывает за пользователем
+    номер САМОЙ СВЕЖЕЙ версии журнала, а не флажок «видел»: следующая запись
+    обязана снова потребовать внимания, и хранение версии делает это само —
+    сбрасывать признак всем разом вручную не нужно.
+
+    Версию подставляет сервер, а не присылает клиент: иначе «ознакомился»
+    можно было бы проставить для будущей версии и больше не увидеть журнал
+    никогда. Отдельно от `/users/{id}/…` — действие всегда над СОБОЙ, чужое
+    ознакомление никто не отмечает."""
+    version = CHANGELOG[0]["version"] if CHANGELOG else None
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET changelog_ack_version = ?, updated_at = datetime('now') WHERE id = ?",
+            (version, user["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("user_changelog_ack", user=user, entity_type="user", entity_id=user["id"],
+                 new_value=f"v{version}" if version else "")
+    return {"acknowledged_version": version}
+
+
 @app.get("/elements", response_model=list[ElementOut])
 def list_elements(
     status: Optional[str] = Query(None, description="Фильтр по current_status"),

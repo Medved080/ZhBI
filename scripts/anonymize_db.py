@@ -95,6 +95,11 @@ class Mapping:
         return json.dumps(self.groups, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+# Дата в JSON-настройках (контрольные сроки карточки объекта, даты вех).
+# Такие листья НЕ затираются — см. _blank_json_strings.
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}([ T].*)?$")
+
+
 def _blank_json_strings(raw: str | None, placeholder: str = "скрыто") -> str | None:
     """Заменяет все строковые ЛИСТЬЯ в JSON, сохраняя структуру.
 
@@ -102,6 +107,15 @@ def _blank_json_strings(raw: str | None, placeholder: str = "скрыто") -> s
     `report_notes.key_events`): выбрасывать значение целиком нельзя —
     форма перестанет открываться, а структура ключей сама по себе не
     секрет.
+
+    ДАТЫ при этом остаются как есть (2026-08-03). Раньше затирались и они:
+    в карточке объекта `montage_deadline`, `delivery_deadline` и даты вех
+    превращались в «скрыто», и отчёт «Динамика» на обезличенной копии падал
+    с 500 — `date.fromisoformat('скрыто')`. Причём падал ЛЮБОЙ его вызов,
+    то есть отладить отчёт на копии было нельзя вовсе. Секрета в контрольном
+    сроке нет: даты поставок и монтажа в копии и так настоящие (см. CLAUDE.md
+    — геометрия, отметки, марки и даты оставлены реальными намеренно),
+    секретно название стройки, а не то, когда её сдают.
     """
     if raw is None:
         return None
@@ -112,7 +126,9 @@ def _blank_json_strings(raw: str | None, placeholder: str = "скрыто") -> s
 
     def walk(node):
         if isinstance(node, str):
-            return placeholder if node.strip() else node
+            if not node.strip() or _ISO_DATE.match(node.strip()):
+                return node
+            return placeholder
         if isinstance(node, list):
             return [walk(x) for x in node]
         if isinstance(node, dict):
