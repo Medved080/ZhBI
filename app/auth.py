@@ -70,13 +70,47 @@ PUBLIC_LOGIN_LIST = os.environ.get("ZHBI_PUBLIC_LOGIN_LIST", "1") == "1"
 
 router = APIRouter()
 
-# Блокировка подбора пароля — по IP клиента, не по логину: блокировка по
-# логину позволила бы атакующему намеренно запереть чужого пользователя,
-# зная только его логин (а логин угадать/перебрать несравнимо проще, чем
-# пароль). In-memory (один процесс uvicorn, без внешнего кэша).
+# Блокировка подбора пароля. In-memory (один процесс uvicorn, без внешнего
+# кэша), окно — скользящее.
+#
+# ПОЧЕМУ НЕ ПРОСТО «ПО IP», как было до 2026-08-03. Счётчик по одному лишь
+# адресу писался, когда пользователей было трое и каждый сидел за своим
+# компьютером. При массовом использовании клиенты выходят через
+# корпоративный NAT, и сервер видит ОДИН адрес на весь офис: пятеро
+# опечатались — вход закрыт всем, включая тех, кто вводит правильно. То
+# есть защита от подбора превращалась в отказ в обслуживании по расписанию
+# рабочего дня.
+#
+# ПОЧЕМУ НЕ «ПО ЛОГИНУ» — довод исходного комментария остаётся верным:
+# блокировка учётной записи позволяет запереть чужого человека, зная только
+# его логин, а логин перебрать несравнимо проще пароля.
+#
+# Поэтому счётчиков ДВА, с разным смыслом:
+#   * (логин, адрес) — «человек ошибается»: 5 попыток за 5 минут. Точный
+#     счётчик, соседей по офису не задевает вовсе;
+#   * адрес — «одна машина молотит по многим учётным записям»: порог
+#     заметно выше (50), чтобы на него не наткнулся живой офис, но перебор
+#     словаря логинов упёрся в него быстро.
+# Учётная запись как таковая НЕ блокируется никогда — подозрительная
+# активность по ней только пишется в журнал (см. _note_login_bruteforce):
+# запись в журнале атакующему бесполезна, а блокировка была бы подарком.
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = 300
-LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 5
-_login_attempts: dict[str, list[float]] = {}
+LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.environ.get("ZHBI_LOGIN_ATTEMPTS", "5"))
+LOGIN_RATE_LIMIT_MAX_PER_IP = int(os.environ.get("ZHBI_LOGIN_ATTEMPTS_PER_IP", "50"))
+# Сколько неудач по ОДНОЙ учётной записи (с любых адресов) считать поводом
+# для записи в журнал. Не блокировка — сигнал службе безопасности.
+LOGIN_SUSPICIOUS_PER_ACCOUNT = int(os.environ.get("ZHBI_LOGIN_SUSPICIOUS", "20"))
+
+# Ключ → отметки времени неудач. Ключи трёх видов: ("pair", логин, адрес),
+# ("ip", адрес), ("login", логин).
+_login_attempts: dict[tuple, list[float]] = {}
+# Пары «логин+адрес» разнообразны (перебор логинов плодит новый ключ на
+# каждую попытку), и без уборки словарь растёт до конца жизни процесса.
+# Убираем не на каждый запрос, а раз в минуту — на входе в систему это
+# незаметно, а обход словаря на каждую попытку при массовом использовании
+# сам стал бы нагрузкой.
+_login_attempts_pruned_at = 0.0
+LOGIN_PRUNE_INTERVAL_SECONDS = 60
 
 
 def _client_ip(request: Request) -> str:
@@ -118,20 +152,70 @@ def _log_login(action: str, client_ip: str, user: Optional[sqlite3.Row] = None,
     )
 
 
-def _check_login_rate_limit(client_ip: str) -> None:
+def _recent(key: tuple, now: float) -> list:
+    """Отметки неудач по ключу внутри окна. Побочно подчищает сам ключ."""
+    отметки = [t for t in _login_attempts.get(key, []) if now - t < LOGIN_RATE_LIMIT_WINDOW_SECONDS]
+    if отметки:
+        _login_attempts[key] = отметки
+    else:
+        _login_attempts.pop(key, None)
+    return отметки
+
+
+def _prune_login_attempts(now: float) -> None:
+    global _login_attempts_pruned_at
+    if now - _login_attempts_pruned_at < LOGIN_PRUNE_INTERVAL_SECONDS:
+        return
+    _login_attempts_pruned_at = now
+    протухшие = [k for k, v in _login_attempts.items()
+                 if not v or now - max(v) >= LOGIN_RATE_LIMIT_WINDOW_SECONDS]
+    for k in протухшие:
+        _login_attempts.pop(k, None)
+
+
+def _check_login_rate_limit(client_ip: str, login: str) -> None:
     now = time.time()
-    attempts = [t for t in _login_attempts.get(client_ip, []) if now - t < LOGIN_RATE_LIMIT_WINDOW_SECONDS]
-    _login_attempts[client_ip] = attempts
-    if len(attempts) >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
-        # Срабатывание блокировки — это уже не «человек ошибся паролем», а
-        # признак подбора; в журнале оно нужно отдельным событием.
-        _log_login("login_blocked", client_ip,
-                   detail=f"{len(attempts)} неудачных попыток за {LOGIN_RATE_LIMIT_WINDOW_SECONDS} с")
+    _prune_login_attempts(now)
+
+    пара = _recent(("pair", login, client_ip), now)
+    if len(пара) >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS:
+        _log_login("login_blocked", client_ip, login=login,
+                   detail=f"{len(пара)} неудачных попыток по этой учётной записи "
+                          f"с этого адреса за {LOGIN_RATE_LIMIT_WINDOW_SECONDS} с")
+        raise HTTPException(status_code=429, detail="Слишком много попыток входа, попробуйте позже")
+
+    адрес = _recent(("ip", client_ip), now)
+    if len(адрес) >= LOGIN_RATE_LIMIT_MAX_PER_IP:
+        # Порог широкой сети выбран так, чтобы живой офис за одним NAT его не
+        # достал: 50 неудач за 5 минут — это уже не «все опечатались», а
+        # перебор с одной машины.
+        _log_login("login_blocked_ip", client_ip, login=login,
+                   detail=f"{len(адрес)} неудачных попыток с адреса за "
+                          f"{LOGIN_RATE_LIMIT_WINDOW_SECONDS} с (порог {LOGIN_RATE_LIMIT_MAX_PER_IP})")
         raise HTTPException(status_code=429, detail="Слишком много попыток входа, попробуйте позже")
 
 
-def _record_login_failure(client_ip: str) -> None:
-    _login_attempts.setdefault(client_ip, []).append(time.time())
+def _record_login_failure(client_ip: str, login: str) -> None:
+    now = time.time()
+    for ключ in (("pair", login, client_ip), ("ip", client_ip), ("login", login)):
+        _login_attempts.setdefault(ключ, []).append(now)
+    # Много неудач по ОДНОЙ учётной записи с РАЗНЫХ адресов — признак того,
+    # что подбирают именно её. Учётную запись не блокируем (это и был бы
+    # способ запереть человека), но событие пишем: журнал — то место, где
+    # такое замечают, и стоит оно ничего.
+    попытки = _recent(("login", login), now)
+    if len(попытки) == LOGIN_SUSPICIOUS_PER_ACCOUNT:
+        _log_login("login_bruteforce_suspected", client_ip, login=login,
+                   detail=f"{len(попытки)} неудачных попыток по учётной записи за "
+                          f"{LOGIN_RATE_LIMIT_WINDOW_SECONDS} с; запись НЕ заблокирована")
+
+
+def _reset_login_attempts(client_ip: str, login: str) -> None:
+    """Успешный вход обнуляет счётчики САМОГО ВОШЕДШЕГО, но не широкую сеть
+    по адресу: иначе атакующий, у которого есть одна своя учётная запись,
+    сбрасывал бы себе ограничение каждым удачным входом."""
+    _login_attempts.pop(("pair", login, client_ip), None)
+    _login_attempts.pop(("login", login), None)
 
 
 def hash_password(password: str, salt: Optional[str] = None) -> tuple[str, str]:
@@ -182,6 +266,30 @@ def auth_method_of(user: sqlite3.Row) -> str:
 def format_display_name(user: sqlite3.Row) -> str:
     parts = [user["last_name"], user["first_name"], user["patronymic"]]
     return " ".join(p for p in parts if p)
+
+
+# Уборка истёкших сессий. Не про безопасность (get_user_by_session и так не
+# отдаёт просроченную строку), а про то, что таблица иначе растёт вечно:
+# срок сессии 30 дней, и при массовом использовании это тысячи мёртвых строк
+# на каждый месяц работы, которые никто никогда не удалял.
+#
+# По времени, а не на каждый вход: чистить на каждый вход значит платить
+# DELETE-ом за каждое нажатие «Войти» ради строк, которые никому не мешают.
+_sessions_pruned_at = 0.0
+SESSION_PRUNE_INTERVAL_SECONDS = 3600
+
+
+def prune_expired_sessions(conn: sqlite3.Connection, force: bool = False) -> int:
+    """Удаляет просроченные сессии. Возвращает, сколько удалено."""
+    global _sessions_pruned_at
+    now = time.time()
+    if not force and now - _sessions_pruned_at < SESSION_PRUNE_INTERVAL_SECONDS:
+        return 0
+    _sessions_pruned_at = now
+    удалено = conn.execute("DELETE FROM sessions WHERE expires_at <= datetime('now')").rowcount
+    if удалено:
+        conn.commit()
+    return удалено
 
 
 def create_session(conn: sqlite3.Connection, user_id: int) -> str:
@@ -306,7 +414,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
 @router.post("/login", response_model=UserOut)
 def login(body: LoginRequest, request: Request, response: Response):
     client_ip = _client_ip(request)
-    _check_login_rate_limit(client_ip)
+    _check_login_rate_limit(client_ip, body.domain_login)
 
     # Импорт здесь, а не наверху файла: app/ldap_auth.py сам импортирует
     # app.auth (PUBLIC_LOGIN_LIST — один флаг на обе подробности о входе),
@@ -322,7 +430,7 @@ def login(body: LoginRequest, request: Request, response: Response):
             # Несуществующий логин отвечает ровно так же, как неверный
             # пароль, и НЕ уходит в домен: иначе перебор логинов на нашей
             # форме превратился бы в перебор по чужому каталогу.
-            _record_login_failure(client_ip)
+            _record_login_failure(client_ip, body.domain_login)
             _log_login("login_failed", client_ip, login=body.domain_login,
                        detail="учётной записи с таким логином нет")
             raise HTTPException(status_code=401, detail="Неверный логин или пароль")
@@ -334,7 +442,7 @@ def login(body: LoginRequest, request: Request, response: Response):
             try:
                 ldap_auth.authenticate(conn, body.domain_login, body.password)
             except ldap_auth.DomainAuthError as e:
-                _record_login_failure(client_ip)
+                _record_login_failure(client_ip, body.domain_login)
                 # Причина отказа домена уходит в журнал действий целиком, а
                 # человеку показывается ровно столько, сколько разрешает
                 # PUBLIC_LOGIN_LIST (см. DomainAuthError.login_message).
@@ -342,15 +450,21 @@ def login(body: LoginRequest, request: Request, response: Response):
                            detail=f"{e.code}: {e.detail}")
                 raise HTTPException(status_code=401, detail=e.login_message)
         elif not verify_password(body.password, user["password_hash"], user["password_salt"]):
-            _record_login_failure(client_ip)
+            _record_login_failure(client_ip, body.domain_login)
             _log_login("login_failed", client_ip, user=user,
                        detail="неверный пароль сервиса"
                                if user["password_hash"] is not None else "пароль не задан, вход запрещён")
             raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
         token = create_session(conn, user["id"])
-        _login_attempts.pop(client_ip, None)
+        _reset_login_attempts(client_ip, body.domain_login)
         _log_login("login", client_ip, user=user, detail=auth_method_of(user))
+        # Уборка привязана к входу, а не к отдельному расписанию: вход —
+        # единственное частое событие, которое и так пишет в эту таблицу, а
+        # сама уборка ограничена по времени изнутри (раз в час).
+        убрано = prune_expired_sessions(conn)
+        if убрано:
+            activity.log("sessions_pruned", user=user, new_value=f"удалено истёкших сессий: {убрано}")
     finally:
         conn.close()
 

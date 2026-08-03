@@ -2579,7 +2579,14 @@
     <label class="field">Отчество</label><input type="text" id="ue-patronymic"/>
     <label class="field">Должность</label><input type="text" id="ue-position"/>
     <label class="field">Подразделение</label><input type="text" id="ue-department"/>
-    <label class="field">Доменное имя</label><input type="text" id="ue-domain-login"/>
+    <label class="field">Доменное имя</label>
+    <!-- Поиск по каталогу (2026-08-03): опечатка в доменном имени выясняется
+         только тогда, когда человек не может войти. Кнопка гасится, если
+         доменная авторизация выключена — искать негде. -->
+    <div class="row" style="gap:6px;">
+      <input type="text" id="ue-domain-login" style="flex:1; min-width:0;"/>
+      <button class="btn btn-sm btn-secondary" type="button" id="ue-find-in-domain">Найти в домене…</button>
+    </div>
     <!-- Способ входа — свойство учётной записи, а не режим всего сервиса
          (2026-08-03): подрядчики и временные учётки доменной записи не
          имеют и остаются на пароле сервиса. -->
@@ -2626,6 +2633,32 @@
     <div class="actions">
       <button class="btn btn-secondary" id="user-password-cancel">Отмена</button>
       <button class="btn btn-primary" id="user-password-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Поиск человека в каталоге домена (2026-08-03). Пароль администратора
+     вводится здесь и уходит одним запросом — сервис его не сохраняет:
+     служебной учётной записи домена у него нет намеренно. -->
+<div class="modal-backdrop" id="ldap-search-backdrop">
+  <div class="modal">
+    <h2>Найти пользователя в домене</h2>
+    <p class="hint-text">Поиск идёт под ВАШЕЙ доменной учётной записью — сервис не хранит
+      служебных доменных паролей. Введённый здесь пароль уходит одним запросом и нигде
+      не сохраняется.</p>
+    <label class="field">Ваш доменный логин</label>
+    <input type="text" id="lds-login"/>
+    <label class="field">Ваш доменный пароль</label>
+    <input type="password" id="lds-password"/>
+    <label class="field">Кого ищем — фамилия, логин или почта</label>
+    <div class="row" style="gap:6px;">
+      <input type="text" id="lds-query" style="flex:1; min-width:0;" placeholder="не короче двух символов"/>
+      <button class="btn btn-sm btn-primary" type="button" id="lds-run">Искать</button>
+    </div>
+    <div class="error-text" id="lds-error"></div>
+    <div id="lds-results" style="margin-top:10px; max-height:320px; overflow:auto;"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="lds-close">Закрыть</button>
     </div>
   </div>
 </div>
@@ -2745,6 +2778,11 @@
 
       <label class="field">Таймаут соединения, секунд</label>
       <input type="number" id="ldap-timeout" min="1" max="60"/>
+
+      <label class="field">Корень каталога (Base DN) — только для поиска людей</label>
+      <input type="text" id="ldap-base-dn" placeholder="пусто — спросить у контроллера домена"/>
+      <p class="hint-text">Нужен только поиску по каталогу в карточке пользователя; на вход не влияет.
+        Пусто — сервис спросит корень у самого контроллера домена, это обычно и есть верный ответ.</p>
 
       <!-- Проверка ДО сохранения: иначе единственным способом узнать,
            верно ли заполнены поля, было бы записать непроверенное в рабочую

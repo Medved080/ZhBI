@@ -8067,6 +8067,7 @@ async function openUserEdit(user) {
   document.getElementById("ue-role").value = user ? user.role : "user";
   document.getElementById("ue-auth-method").value = user ? (user.auth_method || "local") : "local";
   updateAuthMethodHint();
+  updateFindInDomainButton();
   document.getElementById("user-edit-error").textContent = "";
   userEditBackdrop.classList.add("open");
   await loadAccessInto(editingUserId);
@@ -8468,6 +8469,7 @@ function ldapFormValue() {
     verify_certificate: document.getElementById("ldap-verify-cert").checked,
     login_template: document.getElementById("ldap-login-template").value.trim(),
     timeout_seconds: Number(document.getElementById("ldap-timeout").value) || 5,
+    base_dn: document.getElementById("ldap-base-dn").value.trim(),
   };
 }
 
@@ -8480,7 +8482,114 @@ function fillLdapForm(cfg) {
   document.getElementById("ldap-verify-cert").checked = cfg.verify_certificate !== false;
   document.getElementById("ldap-login-template").value = cfg.login_template || "";
   document.getElementById("ldap-timeout").value = cfg.timeout_seconds || 5;
+  document.getElementById("ldap-base-dn").value = cfg.base_dn || "";
 }
+
+// ---------- поиск человека в каталоге домена (2026-08-03) ----------
+// Пароль администратора живёт только в поле формы и в теле запроса: своей
+// служебной учётной записи домена у сервиса нет намеренно (см. app/ldap_auth.py).
+const ldapSearchBackdrop = document.getElementById("ldap-search-backdrop");
+
+function renderDomainSearchResults(users, limit) {
+  const box = document.getElementById("lds-results");
+  if (!users.length) {
+    box.innerHTML = '<div class="hint-text">Никого не нашлось. Попробуйте фамилию или логин целиком.</div>';
+    return;
+  }
+  box.innerHTML = users.map((u, i) => `
+    <div class="ag-item" style="margin-bottom:8px;">
+      <div class="ag-item-head">
+        <b>${escapeHtml(u.display_name || u.domain_login)}</b>
+        <span class="ag-where">${escapeHtml(u.domain_login)}</span>
+      </div>
+      <div class="ag-note">${escapeHtml([u.position, u.department, u.mail].filter(Boolean).join(" · ") || "—")}</div>
+      <button class="btn btn-sm btn-secondary lds-pick" data-i="${i}" type="button">Взять в карточку</button>
+    </div>`).join("")
+    + (users.length >= limit
+        ? `<div class="hint-text">Показаны первые ${limit} — уточните запрос.</div>` : "");
+  box.querySelectorAll(".lds-pick").forEach(btn => btn.addEventListener("click", () => {
+    const u = users[Number(btn.dataset.i)];
+    document.getElementById("ue-domain-login").value = u.domain_login;
+    // Пустые поля карточки заполняем, заполненные НЕ трогаем: человека мог
+    // завести администратор с уточнениями, которых в каталоге нет.
+    const подставить = (id, значение) => {
+      const поле = document.getElementById(id);
+      if (значение && !поле.value.trim()) поле.value = значение;
+    };
+    подставить("ue-last-name", u.last_name);
+    подставить("ue-first-name", u.first_name);
+    подставить("ue-patronymic", u.patronymic);
+    подставить("ue-position", u.position);
+    подставить("ue-department", u.department);
+    ldapSearchBackdrop.classList.remove("open");
+    showToast(`Взято из домена: ${u.display_name || u.domain_login}`);
+  }));
+}
+
+// Включена ли доменная авторизация — чтобы не предлагать поиск там, где
+// искать негде. Спрашивается один раз за сеанс: настройку меняют редко, а
+// форма пользователя открывается часто.
+let ldapEnabledCache = null;
+
+async function updateFindInDomainButton() {
+  const btn = document.getElementById("ue-find-in-domain");
+  if (ldapEnabledCache === null) {
+    try {
+      ldapEnabledCache = !!(await api("/ldap-settings")).config.enabled;
+    } catch (e) {
+      ldapEnabledCache = false;   // нет прав или сервер молчит — кнопка не нужна
+    }
+  }
+  btn.disabled = !ldapEnabledCache;
+  btn.title = ldapEnabledCache
+    ? "Найти человека в каталоге домена и подставить его данные"
+    : "Доменная авторизация выключена — включите её в «Администрирование → Доменная авторизация»";
+}
+
+document.getElementById("ue-find-in-domain").addEventListener("click", () => {
+  document.getElementById("lds-error").textContent = "";
+  document.getElementById("lds-results").innerHTML = "";
+  document.getElementById("lds-password").value = "";
+  // Логин администратора подставляем свой: чаще всего ищет тот, кто сам в
+  // домене, и набирать его заново незачем.
+  const поле = document.getElementById("lds-login");
+  if (!поле.value && state.currentUser) поле.value = state.currentUser.domain_login;
+  document.getElementById("lds-query").value =
+    document.getElementById("ue-domain-login").value.trim();
+  ldapSearchBackdrop.classList.add("open");
+});
+document.getElementById("lds-close").addEventListener("click", () =>
+  ldapSearchBackdrop.classList.remove("open"));
+
+async function runDomainSearch() {
+  const errorEl = document.getElementById("lds-error");
+  errorEl.textContent = "";
+  const login = document.getElementById("lds-login").value.trim();
+  const password = document.getElementById("lds-password").value;
+  const query = document.getElementById("lds-query").value.trim();
+  if (!login || !password) { errorEl.textContent = "Введите свои доменные логин и пароль"; return; }
+  if (query.length < 2) { errorEl.textContent = "Введите хотя бы два символа"; return; }
+  document.getElementById("lds-results").innerHTML = '<div class="hint-text">Ищу…</div>';
+  try {
+    const res = await api("/ldap-search", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ login, password, query }),
+    });
+    if (!res.ok) {
+      errorEl.textContent = res.detail;
+      document.getElementById("lds-results").innerHTML = "";
+      return;
+    }
+    renderDomainSearchResults(res.users, res.limit);
+  } catch (e) {
+    errorEl.textContent = e.message;
+    document.getElementById("lds-results").innerHTML = "";
+  }
+}
+document.getElementById("lds-run").addEventListener("click", runDomainSearch);
+document.getElementById("lds-query").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runDomainSearch();
+});
 
 document.getElementById("menu-ldap").addEventListener("click", async () => {
   document.getElementById("settings-menu").classList.remove("open");

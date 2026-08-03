@@ -80,6 +80,9 @@ DEFAULT_CONFIG = {
     # в конкретном домене — знает только его администратор.
     "login_template": "{login}@example.local",
     "timeout_seconds": 5,
+    # Корень каталога для ПОИСКА людей (вход его не требует). Пусто —
+    # спросить у самого контроллера (rootDSE), см. resolve_base_dn.
+    "base_dn": "",
 }
 
 # Подкоды Active Directory из текста ошибки bind: «... data 52e, v4563».
@@ -192,8 +195,14 @@ def _subcode_error(message: str) -> DomainAuthError:
     return DomainAuthError("invalid_credentials", "Неверный доменный логин или пароль")
 
 
-def _bind(config: dict, login: str, password: str) -> None:
-    """Одна попытка привязки. Возврат = успех, отказ = DomainAuthError."""
+def _open_connection(config: dict, login: str, password: str, need_info: bool = False):
+    """Привязка к контроллеру домена. Возвращает ПРИВЯЗАННОЕ соединение —
+    закрыть его обязан вызывающий (`unbind`).
+
+    need_info=True запрашивает у сервера rootDSE — оттуда берётся корень
+    каталога для поиска (`defaultNamingContext`). При обычном входе это
+    лишний обмен с контроллером на каждую проверку пароля, поэтому по
+    умолчанию выключено."""
     if ldap3 is None:
         raise DomainAuthError(
             "no_library",
@@ -220,7 +229,7 @@ def _bind(config: dict, login: str, password: str) -> None:
     try:
         server = ldap3.Server(
             config["host"], port=int(config["port"]), use_ssl=bool(config.get("use_ssl")),
-            tls=tls, get_info=ldap3.NONE, connect_timeout=timeout,
+            tls=tls, get_info=ldap3.DSA if need_info else ldap3.NONE, connect_timeout=timeout,
         )
         connection = ldap3.Connection(
             server, user=bind_name(config, login), password=password,
@@ -246,11 +255,129 @@ def _bind(config: dict, login: str, password: str) -> None:
     if not ok:
         result = connection.result or {}
         raise _subcode_error(f"{result.get('message', '')} {result.get('description', '')}")
+    return connection
 
+
+def _close(connection) -> None:
     try:
         connection.unbind()
-    except LDAPException:
-        pass  # соединение уже своё дело сделало, ошибка закрытия ни на что не влияет
+    except Exception:
+        pass  # соединение своё дело сделало, ошибка закрытия ни на что не влияет
+
+
+def _bind(config: dict, login: str, password: str) -> None:
+    """Одна попытка привязки: проверить пару и сразу закрыть соединение.
+    Возврат = успех, отказ = DomainAuthError."""
+    _close(_open_connection(config, login, password))
+
+
+# ------------------------------------------------ поиск людей в каталоге
+#
+# Зачем: заводя пользователя, администратор должен ввести его доменное имя
+# ТОЧНО — опечатка выясняется только когда человек не сможет войти. Поиск по
+# каталогу убирает этот класс ошибок и заодно приносит ФИО, должность и
+# подразделение, которые иначе набирают руками.
+#
+# ЧЬИМИ ПРАВАМИ ищем. Служебной учётной записи домена у сервиса нет и
+# заводить её не стали: она означала бы чужой ПОСТОЯННЫЙ пароль, лежащий в
+# нашей базе, — ровно то, чего доменная авторизация избегает по построению
+# (при входе пароль живёт внутри одного запроса). Поэтому поиск идёт под
+# доменной учётной записью САМОГО АДМИНИСТРАТОРА: он вводит свой пароль в
+# форме поиска, пароль уходит одним запросом и нигде не сохраняется. Плата —
+# ввод пароля при каждом открытии формы поиска; при нынешнем темпе заведения
+# людей это дешевле хранимого секрета.
+
+SEARCH_ATTRIBUTES = ("sAMAccountName", "displayName", "cn", "givenName", "sn",
+                     "middleName", "title", "department", "mail")
+SEARCH_LIMIT = 50
+
+
+def resolve_base_dn(config: dict, connection) -> str:
+    """Корень каталога для поиска: из настройки, иначе — из rootDSE.
+
+    Спрашиваем у самого контроллера (`defaultNamingContext`), а не заставляем
+    администратора вписывать `DC=corp,DC=local` руками: он это значение почти
+    наверняка не знает, а ошибка в нём выглядит как «поиск ничего не находит»
+    — худший вид ошибки, потому что не отличается от «такого человека нет»."""
+    из_настройки = (config.get("base_dn") or "").strip()
+    if из_настройки:
+        return из_настройки
+    info = getattr(connection.server, "info", None)
+    контексты = getattr(info, "naming_contexts", None) or []
+    if контексты:
+        return str(контексты[0])
+    other = getattr(info, "other", None) or {}
+    for ключ in ("defaultNamingContext", "rootDomainNamingContext"):
+        значение = other.get(ключ)
+        if значение:
+            return str(значение[0] if isinstance(значение, list) else значение)
+    raise DomainAuthError(
+        "no_base_dn",
+        "Контроллер домена не сообщил корень каталога. Укажите его вручную "
+        "в поле «Корень каталога (Base DN)», например DC=corp,DC=local.",
+    )
+
+
+def build_search_filter(query: str) -> str:
+    """LDAP-фильтр по подстроке. Спецсимволы экранируются: `*`, `(`, `)` и
+    `\\` в запросе иначе меняют СМЫСЛ фильтра — это инъекция того же рода,
+    что и SQL, только в каталоге."""
+    из_ввода = ldap3.utils.conv.escape_filter_chars(query.strip())
+    поля = ("sAMAccountName", "displayName", "cn", "sn", "givenName", "mail")
+    подстроки = "".join(f"({поле}=*{из_ввода}*)" for поле in поля)
+    return f"(&(objectClass=person)(|{подстроки}))"
+
+
+def _human(entry: dict) -> dict:
+    """Запись каталога → поля карточки пользователя."""
+    def одно(имя):
+        значение = entry.get(имя)
+        if isinstance(значение, (list, tuple)):
+            значение = значение[0] if значение else None
+        return str(значение).strip() if значение else ""
+
+    фамилия, имя_, отчество = одно("sn"), одно("givenName"), одно("middleName")
+    показать = одно("displayName") or одно("cn")
+    if not фамилия and показать:
+        # У части записей заполнено только displayName («Петров Иван
+        # Сергеевич») — разбираем его, иначе карточка приедет пустой.
+        части = показать.split()
+        фамилия = части[0] if части else ""
+        имя_ = имя_ or (части[1] if len(части) > 1 else "")
+        отчество = отчество or (части[2] if len(части) > 2 else "")
+    return {
+        "domain_login": одно("sAMAccountName"),
+        "display_name": показать,
+        "last_name": фамилия,
+        "first_name": имя_,
+        "patronymic": отчество,
+        "position": одно("title"),
+        "department": одно("department"),
+        "mail": одно("mail"),
+    }
+
+
+def search_users(connection, base_dn: str, query: str, limit: int = SEARCH_LIMIT) -> list[dict]:
+    """Люди каталога по подстроке. Отдельно от соединения — чтобы это можно
+    было прогнать на имитации каталога (ldap3 MOCK_SYNC), не поднимая
+    настоящий контроллер домена."""
+    if len(query.strip()) < 2:
+        raise DomainAuthError("query_too_short", "Введите хотя бы два символа для поиска")
+    connection.search(
+        search_base=base_dn,
+        search_filter=build_search_filter(query),
+        attributes=list(SEARCH_ATTRIBUTES),
+        size_limit=limit,
+    )
+    люди = []
+    for запись in connection.response or []:
+        if запись.get("type") != "searchResEntry":
+            continue
+        человек = _human(запись.get("attributes") or {})
+        if человек["domain_login"]:      # без логина запись бесполезна: входить нечем
+            люди.append(человек)
+    люди.sort(key=lambda ч: (ч["display_name"] or ч["domain_login"]).lower())
+    return люди[:limit]
 
 
 def authenticate(conn: sqlite3.Connection, login: str, password: str) -> None:
@@ -277,6 +404,7 @@ class LdapConfigIn(BaseModel):
     verify_certificate: bool = True
     login_template: str = DEFAULT_CONFIG["login_template"]
     timeout_seconds: int = 5
+    base_dn: str = ""
 
 
 class LdapTestIn(BaseModel):
@@ -336,6 +464,44 @@ def write_ldap_settings(body: LdapConfigIn, admin: sqlite3.Row = Depends(require
         warning = (f"Доменная авторизация выключена, а доменных пользователей {users} — "
                    "они не смогут войти, пока им не задан пароль сервиса")
     return {"config": config, "domain_users": users, "warning": warning}
+
+
+class LdapSearchIn(BaseModel):
+    """Поиск людей в каталоге под учётной записью самого администратора.
+    Ни логин, ни пароль не сохраняются — см. комментарий у search_users."""
+    login: str
+    password: str
+    query: str
+
+
+@router.post("/ldap-search")
+def search_domain_users(body: LdapSearchIn, admin: sqlite3.Row = Depends(require_system_admin)):
+    """Отвечает 200 и при неудаче: это подсказка в форме, а не операция —
+    администратору нужна причина, а не код ошибки HTTP."""
+    conn = get_connection()
+    try:
+        config = load_config(conn)
+    finally:
+        conn.close()
+    if not config.get("enabled"):
+        return {"ok": False, "detail": "Доменная авторизация выключена — включите её выше по форме"}
+    connection = None
+    try:
+        connection = _open_connection(config, body.login, body.password, need_info=True)
+        base_dn = resolve_base_dn(config, connection)
+        люди = search_users(connection, base_dn, body.query)
+    except DomainAuthError as e:
+        return {"ok": False, "code": e.code, "detail": e.detail}
+    except LDAPException as e:
+        # Отказ ПОИСКА (нет прав на чтение каталога, неверный base DN) —
+        # отдельная причина от отказа привязки: пароль верный, а данные не
+        # отдали, и говорить про пароль здесь значило бы врать.
+        return {"ok": False, "code": "search_failed",
+                "detail": f"Каталог не отдал результат поиска: {e}"}
+    finally:
+        if connection is not None:
+            _close(connection)
+    return {"ok": True, "users": люди, "base_dn": base_dn, "limit": SEARCH_LIMIT}
 
 
 @router.post("/ldap-settings/test")
