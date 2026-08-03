@@ -3112,7 +3112,12 @@
         <label class="field">Наименование</label>
         <div class="hint-text" id="ce-name-preview" style="margin-bottom:10px;"></div>
         <label class="field">Контрагент</label><select id="ce-counterparty"></select>
+        <!-- В списке только договоры ПОКАЗЫВАЕМОГО объекта (2026-08-03):
+             объект контракта выводится по цепочке контракт → спецификация →
+             договор, поэтому выбор договора здесь — это и есть выбор
+             стройки. Подсказка ниже объясняет пустой список. -->
         <label class="field">Договор</label><select id="ce-agreement"></select>
+        <div class="hint-text" id="ce-agreement-hint"></div>
         <label class="field">Спецификация</label><select id="ce-specification"></select>
         <label class="field">Тема контракта</label><input type="text" id="ce-theme" placeholder="необязательно"/>
         <label class="field" style="margin-bottom:2px;">Строки: тип элемента + марка + количество</label>

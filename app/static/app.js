@@ -8557,19 +8557,56 @@ document.getElementById("ce-add-incident").addEventListener("click", () => addCo
 // открытой формы, тот же приём, что buildTypeSubtypeMarkMaps использовал
 // для partии (state сканируется один раз при открытии, не на каждое
 // изменение селекта).
+// Договоры, из которых можно выбирать в форме контракта: только
+// ПОКАЗЫВАЕМОГО объекта (2026-08-03, живой запрос). `/counterparties/full`
+// сужает список по ДОСТУПНЫМ объектам, а этого мало: объект контракта не
+// хранится, а выводится по цепочке контракт → спецификация → договор,
+// то есть выбор договора здесь — это и есть выбор стройки, и договор
+// соседней ломал бы инвариант «объект контракта = объект элемента» молча,
+// до первой попытки законтрактовать изделие.
+//
+// ОДНА функция на все пять мест, где раньше писалось `cp.agreements`
+// (список договоров, список спецификаций, обработчик смены договора,
+// превью наименования, открытие формы): пять копий одного отбора разъехались
+// бы на первой же правке — ровно так уже разъезжались проверки полей.
+//
+// keepId — договор УЖЕ СОХРАНЁННОГО контракта: он остаётся в списке, даже
+// если относится к другому объекту (накопленные контракты, договоры без
+// объекта). Иначе открытие такого контракта молча переставило бы его на
+// первый попавшийся договор — правка реквизитов не должна менять стройку.
+function agreementsForContractForm(cp, keepId) {
+  const все = cp ? (cp.agreements || []) : [];
+  return все.filter(a => a.object_id === state.objectId
+                      || (keepId != null && String(a.id) === String(keepId)));
+}
+
+function currentContractCounterparty() {
+  return counterpartiesFullCache.find(
+    c => String(c.id) === document.getElementById("ce-counterparty").value);
+}
+
 function refreshAgreementSelect(selectedAgreementId) {
-  const cp = counterpartiesFullCache.find(c => String(c.id) === document.getElementById("ce-counterparty").value);
-  const agreements = cp ? cp.agreements : [];
+  const контрагент = currentContractCounterparty();
+  const agreements = agreementsForContractForm(контрагент, selectedAgreementId);
   const agrSelect = document.getElementById("ce-agreement");
-  // Объект договора — прямо в подписи варианта (2026-08-03): список сужен
-  // по ДОСТУПНЫМ объектам, а не по показываемому, и у человека с двумя
-  // стройками договоры обеих лежат вперемешку. Объект контракта не
-  // хранится, а выводится по цепочке контракт → спецификация → договор,
-  // поэтому выбор договора здесь — это и есть выбор стройки, и он должен
-  // быть виден глазами.
+  // Объект по-прежнему подписан в варианте: в списке он теперь один и тот
+  // же, но это и есть ответ на вопрос «а на какую стройку я заключаю» —
+  // и он же делает заметным договор чужого объекта, оставленный тут ради
+  // keepId.
   agrSelect.innerHTML = agreements.map(a =>
     `<option value="${a.id}" ${String(a.id) === String(selectedAgreementId) ? "selected" : ""}>${escapeHtml(a.number)}${a.agreement_date ? " от " + formatDateRu(a.agreement_date) : ""} — ${escapeHtml(objectLabelById(a.object_id))}</option>`
   ).join("");
+  // Подсказка — только когда контрагент ВЫБРАН, а договоров у него на этот
+  // объект нет. Когда выбирать не из кого вовсе, про это уже сказано общей
+  // ошибкой формы, и две фразы об одном («у этого контрагента…» при пустом
+  // списке контрагентов) сбивали бы с толку.
+  const подсказка = document.getElementById("ce-agreement-hint");
+  if (подсказка) {
+    подсказка.textContent = (!контрагент || agreements.length)
+      ? ""
+      : "У этого контрагента нет договоров на показываемый объект. Заведите договор "
+        + "в «Действия → Справочники → Контрагенты» или переключите объект в тулбаре.";
+  }
   refreshSpecificationSelect(agreements, undefined);
 }
 function refreshSpecificationSelect(agreements, selectedSpecificationId) {
@@ -8583,8 +8620,9 @@ function refreshSpecificationSelect(agreements, selectedSpecificationId) {
 }
 document.getElementById("ce-counterparty").addEventListener("change", () => { refreshAgreementSelect(); updateContractNamePreview(); });
 document.getElementById("ce-agreement").addEventListener("change", () => {
-  const cp = counterpartiesFullCache.find(c => String(c.id) === document.getElementById("ce-counterparty").value);
-  refreshSpecificationSelect(cp ? cp.agreements : []);
+  const выбран = document.getElementById("ce-agreement").value;
+  refreshSpecificationSelect(
+    agreementsForContractForm(currentContractCounterparty(), выбран), undefined);
   updateContractNamePreview();
 });
 document.getElementById("ce-specification").addEventListener("change", updateContractNamePreview);
@@ -8597,9 +8635,10 @@ document.getElementById("ce-theme").addEventListener("input", updateContractName
 // сохранения (state.contracts из /plan-data) — та же формула, продублирована
 // намеренно (простой однострочный шаблон, не бизнес-логика).
 function buildContractNamePreviewText() {
-  const cp = counterpartiesFullCache.find(c => String(c.id) === document.getElementById("ce-counterparty").value);
+  const cp = currentContractCounterparty();
   if (!cp) return "";
-  const agr = (cp.agreements || []).find(a => String(a.id) === document.getElementById("ce-agreement").value);
+  const выбран = document.getElementById("ce-agreement").value;
+  const agr = agreementsForContractForm(cp, выбран).find(a => String(a.id) === выбран);
   if (!agr) return "";
   const spec = (agr.specifications || []).find(s => String(s.id) === document.getElementById("ce-specification").value);
   if (!spec) return "";
@@ -8623,19 +8662,35 @@ async function openContractEdit(contract) {
 
   counterpartiesFullCache = await api("/counterparties/full");
   const cpSelect = document.getElementById("ce-counterparty");
+  // Контрагенты — только те, с кем есть договор на ПОКАЗЫВАЕМЫЙ объект:
+  // иначе человек выбирал бы контрагента и получал пустой список договоров,
+  // не понимая, почему. Контрагент уже сохранённого контракта остаётся в
+  // списке при любом раскладе (тот же keepId, что у договоров).
+  const доступные = counterpartiesFullCache.filter(cp =>
+    agreementsForContractForm(cp, contract ? contract.agreement_id : null).length);
+  const ошибка = document.getElementById("contract-edit-error");
+  ошибка.textContent = "";   // иначе сообщение от прошлого открытия формы остаётся висеть
   if (!counterpartiesFullCache.length) {
-    document.getElementById("contract-edit-error").textContent = "Сначала добавьте хотя бы одного контрагента (Действия → Справочники → Контрагенты)";
+    ошибка.textContent = "Сначала добавьте хотя бы одного контрагента (Действия → Справочники → Контрагенты)";
+  } else if (!доступные.length) {
+    ошибка.textContent = "Ни у одного контрагента нет договора на показываемый объект. "
+      + "Договор заводится в «Действия → Справочники → Контрагенты», объект указывается там же.";
   }
-  cpSelect.innerHTML = counterpartiesFullCache.map(cp => `<option value="${cp.id}">${escapeHtml(cp.short_name)}</option>`).join("");
+  cpSelect.innerHTML = доступные.map(cp => `<option value="${cp.id}">${escapeHtml(cp.short_name)}</option>`).join("");
   if (contract) {
     cpSelect.value = String(contract.counterparty_id);
     refreshAgreementSelect(contract.agreement_id);
     document.getElementById("ce-agreement").value = String(contract.agreement_id);
-    const cp = counterpartiesFullCache.find(c => String(c.id) === cpSelect.value);
-    refreshSpecificationSelect(cp ? cp.agreements : [], contract.specification_id);
+    refreshSpecificationSelect(
+      agreementsForContractForm(currentContractCounterparty(), contract.agreement_id),
+      contract.specification_id);
     document.getElementById("ce-specification").value = String(contract.specification_id);
-  } else if (counterpartiesFullCache.length) {
-    cpSelect.value = String(counterpartiesFullCache[0].id);
+  } else {
+    // refreshAgreementSelect зовётся и когда контрагентов не осталось —
+    // иначе в списке договоров висело бы содержимое ПРОШЛОГО открытия
+    // формы (поймано живой проверкой: на объекте без договоров форма
+    // показывала договор чужого контракта, открытого минуту назад).
+    if (доступные.length) cpSelect.value = String(доступные[0].id);
     refreshAgreementSelect();
   }
   updateContractNamePreview();
@@ -8664,7 +8719,11 @@ async function openContractEdit(contract) {
       addContractIncidentRow(inc.element_type, inc.quantity, inc.incident_date, inc.description);
     }
   }
-  document.getElementById("contract-edit-error").textContent = "";
+  // Очистка ошибки — В НАЧАЛЕ функции, а не здесь: этот вызов затирал
+  // сообщения, выставленные выше по ходу открытия формы. Из-за него не
+  // показывалось и давнее «Сначала добавьте хотя бы одного контрагента» —
+  // текст присваивался и тут же стирался (поймано живой проверкой нового
+  // сообщения про объект, но сломано было задолго до него).
   contractEditBackdrop.classList.add("open");
 }
 document.getElementById("contracts-add").addEventListener("click", () => openContractEdit(null));
