@@ -164,6 +164,7 @@ let state = {
   initialView: null, // вид "вся схема целиком" — для сброса зума (п.12) и индикатора 100%
   axisNumeric: [], // [{label, x, elTop, elBottom}] отсортировано по x
   axisLetter: [],  // [{label, y, el}] отсортировано по y
+  axisGrid: null,  // сырая сетка {numeric: {метка: x}, letter: {метка: y}} — общая для 2D и 3D
   // 3D-режим схемы (см. Docs/backlog.md) — Three.js, подключается лениво
   // при первом включении кнопкой "3D". scene/camera/renderer/controls
   // создаются один раз (init3DScene), дальше только пересобираются меши
@@ -181,6 +182,8 @@ let state = {
     zoneMeshById: new Map(), // zone.id -> THREE.Mesh (захватка/кран/стоянка)
     zoneLabelSpriteById: new Map(), // zone.id -> THREE.Sprite (подпись Кран/Стоянка в основании объёма)
     siteBaseMesh: null, // едва заметная подложка границ всего проекта — см. build3DSiteBaseMesh
+    axisLines: null, // ОДИН LineSegments на все оси сетки — см. build3DAxisGrid
+    axisLabelSprites: [], // номера и буквы на концах осей (спрайты, всегда лицом к камере)
     labelSpriteById: new Map(), // element.id -> THREE.Sprite (постоянная подпись марки, запасной вариант)
     markDecalById: new Map(), // element.id -> THREE.Group (наклейка марки на грани — см. build3DMarkDecal)
     labelGroupByType: new Map(), // тип элемента -> THREE.Group, куда сложены его подписи (см. label3DContainer)
@@ -3018,6 +3021,10 @@ function renderAxisGrid(data) {
   layer.innerHTML = "";
   state.axisNumeric = [];
   state.axisLetter = [];
+  // Сырая сетка — не только SVG-элементы: её же строит 3D (build3DAxisGrid),
+  // а разбирать оттуда готовые узлы разметки значило бы связать два режима
+  // через DOM.
+  state.axisGrid = data.axis_grid;
   const { numeric, letter } = data.axis_grid;
   const numKeys = Object.keys(numeric), letKeys = Object.keys(letter);
   if (!numKeys.length || !letKeys.length) return;
@@ -6112,6 +6119,13 @@ function applyThemeTo3D() {
   v.scene.background = new THREE.Color(фон);
   if (v.renderer) v.renderer.setClearColor(фон, 1);
   if (v.edgeMaterial) v.edgeMaterial.color.setHex(themeColor("--edge-3d", EDGE_COLOR));
+  // Линии осей красятся на месте, а вот номера на их концах — картинки на
+  // холсте, и цвет текста в них уже впечатан: их приходится пересобирать.
+  // Дёшево — осей десятки, а не тысячи (см. build3DAxisGrid).
+  if (v.axisLines) {
+    clear3DAxisGrid();
+    build3DAxisGrid(Math.min(SITE_BASE_3D_Y, computeBuildingHeightRange().bottom));
+  }
 }
 
 // Атрибут стоит ВСЕГДА: гаммы без оформления больше нет, и «снять атрибут»
@@ -13276,40 +13290,38 @@ function orientDecalMesh(mesh, center, right, normal) {
 function buildDecalPlane(texture, worldWidth, worldHeight, center, right, normal) {
   const geometry = new THREE.PlaneGeometry(worldWidth, worldHeight);
   const material = new THREE.MeshBasicMaterial({
-    map: texture, side: THREE.DoubleSide,
+    map: texture,
+    // FrontSide, а не DoubleSide: наклейка ВСЕГДА повёрнута лицом вдоль
+    // своей нормали (orientDecalMesh ставит локальный +Z на normal, а
+    // разворот "вверх ногами" — поворот на 180° ВОКРУГ нормали, который
+    // +Z не меняет), а с изнанки её и так закрывает само тело элемента,
+    // см. updateDecalForCamera. Обратная сторона перестаёт растрироваться
+    // вовсе — и заодно снимается целый класс артефакта из лёгкого режима,
+    // где наклейка с ДАЛЬНЕЙ грани, вынесенная вперёд polygonOffset'ом,
+    // при грубом (нелогарифмическом) буфере глубины пробивала геометрию
+    // перед собой.
+    side: THREE.FrontSide,
     polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
   });
   const mesh = new THREE.Mesh(geometry, material);
   orientDecalMesh(mesh, center, right, normal);
   // Сохраняем "базовую" (немодифицированную) ориентацию — см.
-  // updateDecalOrientation ниже: при вращении камеры вокруг элемента
+  // updateDecalForCamera ниже: при вращении камеры вокруг элемента
   // текст на плоской наклейке (не билборд — лежит на грани) со
   // временем оказывается развёрнут "верх ногами" относительно текущего
   // ракурса (заказчик явно попросил это исправить, 2026-07-25) —
   // единственный выход из двух читаемых вариантов (право/лево = базовое
   // направление или развёрнутое на 180° вокруг нормали) выбирается
   // заново при каждом повороте камеры, без пересборки геометрии/текстуры.
-  mesh.userData.decalCenter = center.clone();
-  mesh.userData.decalNormal = normal.clone();
-  mesh.userData.decalBaseRight = right.clone();
-  return mesh;
-}
-
-// Разворачивает наклейку на 180° вокруг нормали, если её "верх" сейчас
-// смотрит НА камеру — то есть зритель стоит с "дальней" стороны текста
-// (там, куда указывает верх букв), а не с "ближней" (где строка
-// начинается) — тот же принцип, что у листа на столе: читают его СО
-// СТОРОНЫ, противоположной верху страницы (верх "уходит" от читателя), не
-// с той, куда верх направлен. Раньше знак был перепутан на обратный —
-// разворачивало ИМЕННО тогда, когда не нужно, и наоборот, поэтому вверх
-// ногами оказывались вообще все наклейки на любом ракурсе, а не только
-// часть (живой репорт пользователя 2026-07-25, см. Docs/backlog.md).
-// Дёшево: только пересчёт кватерниона (см. orientDecalMesh), без
-// пересборки geometry/texture.
-function updateDecalOrientation(mesh, camera) {
-  const { decalCenter, decalNormal, decalBaseRight } = mesh.userData;
-  if (!decalCenter) return;
-  const up = new THREE.Vector3().crossVectors(decalNormal, decalBaseRight).normalize();
+  const ud = mesh.userData;
+  ud.decalCenter = center.clone();
+  ud.decalNormal = normal.clone();
+  ud.decalBaseRight = right.clone();
+  // Всё, что раньше считалось заново на КАЖДОМ кадре для КАЖДОЙ из ~25 600
+  // наклеек, посчитано здесь один раз: "верх" текста, готовое зеркальное
+  // "право" и признак, бывает ли у этой наклейки разворот вообще.
+  ud.decalUp = new THREE.Vector3().crossVectors(normal, right).normalize();
+  ud.decalFlippedRight = right.clone().negate();
   // Динамический разворот имеет смысл ТОЛЬКО когда "верх" текста
   // ГОРИЗОНТАЛЬНЫЙ (верх/низ плиты/ригеля — там при обходе камеры вокруг
   // здания по азимуту верх текста то смотрит на зрителя, то от него,
@@ -13319,27 +13331,66 @@ function updateDecalOrientation(mesh, camera) {
   // элемента: раньше это давало переворот "через раз" в зависимости от
   // высоты камеры относительно КАЖДОГО элемента по отдельности (живой
   // репорт пользователя 2026-07-25, см. Docs/backlog.md) — для них
-  // используем ту базовую ориентацию, что задана при постройке, всегда.
-  if (Math.abs(up.y) > 0.5) {
-    orientDecalMesh(mesh, decalCenter, decalBaseRight, decalNormal);
-    return;
-  }
-  const toCamera = new THREE.Vector3().subVectors(camera.position, decalCenter).normalize();
-  const flip = up.dot(toCamera) > 0;
-  const right = flip ? decalBaseRight.clone().negate() : decalBaseRight;
-  orientDecalMesh(mesh, decalCenter, right, decalNormal);
+  // навсегда остаётся базовая ориентация, заданная здесь.
+  ud.decalFlippable = Math.abs(ud.decalUp.y) <= 0.5;
+  ud.decalFlipped = false;
+  return mesh;
 }
 
-function updateAllDecalOrientations() {
+// Одна наклейка на кадр: (1) видно ли её грань с текущего ракурса вообще
+// и (2) не нужно ли развернуть текст на 180° вокруг нормали.
+//
+// (1) — ОТСЕЧЕНИЕ НЕВИДИМЫХ ГРАНЕЙ (живой запрос пользователя
+// 2026-08-04: "у любого элемента схемы видны в моменте или 1, или 2
+// грани — можем не обрабатывать наклейки на невидимых?"). Проверка
+// точная, а не эвристика: наклейка лежит НА поверхности непрозрачного
+// тела, поэтому если грань отвёрнута от камеры, наклейку гарантированно
+// закрывает сам элемент — рисовать её незачем ни при каком ракурсе.
+// Отсекается сразу больше половины: у плиты из двух наклеек (верх/низ)
+// видна ровно одна, у ригеля из четырёх — не больше двух, у колонны из
+// четырёх боковых — тоже не больше двух.
+//
+// (2) — разворот на 180° вокруг нормали, если "верх" текста сейчас
+// смотрит НА камеру, то есть зритель стоит с "дальней" стороны текста
+// (там, куда указывает верх букв), а не с "ближней" (где строка
+// начинается) — тот же принцип, что у листа на столе: читают его СО
+// СТОРОНЫ, противоположной верху страницы (верх "уходит" от читателя), не
+// с той, куда верх направлен. Раньше знак был перепутан на обратный —
+// разворачивало ИМЕННО тогда, когда не нужно, и наоборот, поэтому вверх
+// ногами оказывались вообще все наклейки на любом ракурсе, а не только
+// часть (живой репорт пользователя 2026-07-25, см. Docs/backlog.md).
+//
+// В установившемся состоянии функция не делает НИЧЕГО, кроме одного
+// скалярного произведения: и признак развёрнутости, и "верх", и зеркальное
+// "право" сосчитаны один раз в buildDecalPlane, а кватернион трогается
+// только в тот кадр, когда разворот реально сменился. Раньше на каждый
+// кадр на каждую наклейку безусловно создавались Vector3/Matrix4 и
+// переписывался кватернион — на ~25 600 наклейках это больше сотни тысяч
+// временных объектов и столько же пересчётов мировой матрицы в кадр.
+const decalToCamera = new THREE.Vector3(); // общий на все наклейки, не аллоцировать в цикле
+function updateDecalForCamera(mesh, camera) {
+  const ud = mesh.userData;
+  if (!ud.decalCenter) return;
+  decalToCamera.subVectors(camera.position, ud.decalCenter);
+  const facing = decalToCamera.dot(ud.decalNormal) > 0;
+  if (mesh.visible !== facing) mesh.visible = facing;
+  if (!facing || !ud.decalFlippable) return;
+  const flip = ud.decalUp.dot(decalToCamera) > 0;
+  if (flip === ud.decalFlipped) return;
+  ud.decalFlipped = flip;
+  orientDecalMesh(mesh, ud.decalCenter, flip ? ud.decalFlippedRight : ud.decalBaseRight, ud.decalNormal);
+}
+
+function updateDecalsForCamera() {
   const v3 = state.view3d;
   if (!v3.camera || !v3.markDecalById.size) return;
   for (const group of v3.markDecalById.values()) {
-    // Скрытую наклейку разворачивать незачем: её не видно, а функция
-    // вызывается на КАЖДОЕ движение камеры. Без этой проверки вращение
+    // Скрытую наклейку обрабатывать незачем: её не видно, а функция
+    // вызывается на КАЖДЫЙ кадр. Без этой проверки вращение
     // сцены с узким фильтром стоило столько же, сколько без фильтра
     // (живой запрос 2026-07-29: не обрабатывать то, что отфильтровано).
     if (!group.visible) continue;
-    for (const mesh of group.children) updateDecalOrientation(mesh, v3.camera);
+    for (const mesh of group.children) updateDecalForCamera(mesh, v3.camera);
   }
 }
 
@@ -13781,6 +13832,219 @@ function rebuild3DLabelSprite(element) {
 // или настройками отображения скрыто вообще всё остальное (элементы,
 // зоны). Плоская, чуть НИЖЕ нулевой отметки (не совпадает по глубине с
 // гранью элементов на elevation_mm=0 — иначе z-fighting).
+// ---------- сетка осей в 3D (живой запрос 2026-08-03) ----------
+//
+// Повторяет то, что в 2D делает renderAxisGrid: линии осей выходят ЗА
+// габарит модели, а на их концах стоят номера (числовые оси) и буквы
+// (буквенные). Без них в 3D нельзя было сказать, где какая ось, — адрес
+// изделия читался только в карточке.
+//
+// Отличия от 2D, вызванные тем, что камера вращается:
+//   * подписи стоят на ОБОИХ концах каждой оси (в 2D у буквенных она одна,
+//     слева) — при повороте дальний конец уходит за модель, и одна подпись
+//     половину времени была бы не видна;
+//   * подпись — спрайт, то есть всегда развёрнута к камере (тот же приём,
+//     что у подписей зон и марок).
+//
+// Границы берутся по ОБЪЕДИНЕНИЮ сетки осей и габарита модели: сетка бывает
+// уже застройки (крайние оси не всегда по краю здания), и линия, кончающаяся
+// внутри основания, читалась бы как обрыв.
+// Уровень подложки основания: чуть ниже нуля, чтобы не спорить за глубину с
+// нижними гранями изделий. На нём же лежит и сетка осей.
+const SITE_BASE_3D_Y = -5;
+const AXIS_3D_MARGIN_RATIO = 0.03;      // вынос за габарит — как в 2D (renderAxisGrid)
+const AXIS_3D_LABEL_OFFSET_RATIO = 1.8; // отступ подписи от конца линии, в долях выноса
+// Кегль подписи — ПОСТОЯННЫЙ ЭКРАННЫЙ, тот же MAX_AXIS_FONT_PX, что и в 2D
+// (updateAxisLabelSizing). Живой запрос 2026-08-03: «подписи не делай
+// большими, сделай аккуратными как на 2Д». Мировой размер здесь не годится
+// в принципе: в 2D шрифт оси — 13 px НА ЭКРАНЕ при любом зуме (в мировых
+// единицах это 55 мм на обзоре всей схемы и метры на приближении), а спрайт
+// с sizeAttenuation постоянен в миллиметрах — он либо огромен на общем
+// плане, либо невидим. Тот же приём уже применён к номерам точек в
+// предпросмотре зоны (zonePreviewNumberSprite).
+// Запасные цвета — ТЕ ЖЕ, что у 2D-сетки (см. .axis-grid в index.html):
+// в светлых гаммах переменные --axis-line/--axis-label не заданы вовсе, и
+// расходиться двум режимам не с чего.
+const AXIS_3D_LINE_FALLBACK = 0xc4c4c4;
+const AXIS_3D_LABEL_FALLBACK = "#9a9a9a";
+
+function axisGridBounds3D() {
+  const grid = state.axisGrid;
+  if (!grid) return null;
+  const numVals = Object.values(grid.numeric || {});
+  const letVals = Object.values(grid.letter || {});
+  if (!numVals.length || !letVals.length) return null;
+
+  let minX = Math.min(...numVals), maxX = Math.max(...numVals);
+  let minY = Math.min(...letVals), maxY = Math.max(...letVals);
+  // Габарит модели — по тем же точкам, что у подложки основания
+  // (build3DSiteBaseMesh), иначе оси и подложка разъехались бы.
+  for (const e of state.elements) {
+    const pts = e.outline && e.outline.length ? e.outline : [[e.x, e.y]];
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+  const margin = Math.max(maxX - minX, maxY - minY) * AXIS_3D_MARGIN_RATIO;
+  return { minX, maxX, minY, maxY, margin };
+}
+
+function build3DAxisLabelSprite(text, x, y, worldY, color) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const fontPx = 48;   // размер ТЕКСТУРЫ, экранный кегль задаёт scale (см. update3DAxisLabelScale)
+  const padding = 6;
+  ctx.font = `${fontPx}px sans-serif`;
+  canvas.width = Math.ceil(ctx.measureText(text).width) + padding * 2;
+  canvas.height = fontPx + padding * 2;
+  ctx.fillStyle = color;
+  ctx.textBaseline = "middle";
+  ctx.font = `${fontPx}px sans-serif`;
+  ctx.fillText(text, padding, canvas.height / 2);
+
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas), depthTest: true,
+    // Размер в ЭКРАННЫХ долях, а не в мировых мм — см. комментарий у
+    // MAX_AXIS_FONT_PX выше.
+    sizeAttenuation: false,
+  }));
+  // Во сколько раз полная высота картинки больше самого кегля: подпись
+  // должна дать на экране ровно MAX_AXIS_FONT_PX по БУКВАМ, а не по холсту.
+  sprite.userData.axisLabel = { boxToFont: canvas.height / fontPx, aspect: canvas.width / canvas.height };
+  // world.X=dxf.x, world.Z=-dxf.y — та же поправка, что у элементов.
+  sprite.position.set(x, worldY, -y);
+  return sprite;
+}
+
+// Экранный размер подписей осей. Пересчитывается при сборке сцены и при
+// изменении размера вьюпорта: scale у спрайта без sizeAttenuation — это
+// ДОЛЯ высоты вьюпорта, то есть при другом размере холста тот же scale дал
+// бы другой кегль в пикселях.
+function update3DAxisLabelScale() {
+  const v3 = state.view3d;
+  const h = document.getElementById("stage-3d").clientHeight;
+  if (!h || !v3.axisLabelSprites.length) return;
+  for (const sprite of v3.axisLabelSprites) {
+    const { boxToFont, aspect } = sprite.userData.axisLabel;
+    const доля = (MAX_AXIS_FONT_PX * boxToFont) / h;
+    sprite.scale.set(доля * aspect, доля, 1);
+  }
+}
+
+// Линии всех осей — ОДИН объект LineSegments: их десятки, и отдельный объект
+// на каждую был бы тем же, от чего ушла геометрия элементов (см.
+// build3DMergedGeometry).
+function build3DAxisGrid(baseY) {
+  const v3 = state.view3d;
+  const grid = state.axisGrid;
+  const bounds = axisGridBounds3D();
+  if (!bounds) return;
+  const { minX, maxX, minY, maxY, margin } = bounds;
+  const labelOffset = margin * AXIS_3D_LABEL_OFFSET_RATIO;
+  const lineColor = themeColor("--axis-line", AXIS_3D_LINE_FALLBACK);
+  const labelColor = themeValue("--axis-label", AXIS_3D_LABEL_FALLBACK);
+
+  const points = [];
+  // Ряд (сторона, вдоль которой стоят подписи) и порядок в нём нужны
+  // прореживанию: скрывать надо каждую N-ю ПОДРЯД ИДУЩУЮ, а ряда здесь
+  // четыре — по два конца у числовых и у буквенных осей.
+  const addLabel = (text, x, y, row, order) => {
+    const sprite = build3DAxisLabelSprite(text, x, y, baseY, labelColor);
+    sprite.userData.axisLabel.row = row;
+    sprite.userData.axisLabel.order = order;
+    v3.scene.add(sprite);
+    v3.axisLabelSprites.push(sprite);
+  };
+
+  // Порядок вдоль оси — по координате, а не по порядку ключей в объекте:
+  // прореживание идёт по соседям, и «соседний» должен значить соседний на
+  // чертеже (то же, что делает сортировка в renderAxisGrid).
+  const numEntries = Object.entries(grid.numeric || {}).sort((a, b) => a[1] - b[1]);
+  const letEntries = Object.entries(grid.letter || {}).sort((a, b) => a[1] - b[1]);
+
+  numEntries.forEach(([label, x], i) => {
+    const y0 = minY - margin, y1 = maxY + margin;
+    points.push(x, baseY, -y0, x, baseY, -y1);
+    addLabel(label, x, y0 - labelOffset, "num0", i);
+    addLabel(label, x, y1 + labelOffset, "num1", i);
+  });
+  letEntries.forEach(([label, y], i) => {
+    const x0 = minX - margin, x1 = maxX + margin;
+    points.push(x0, baseY, -y, x1, baseY, -y);
+    addLabel(label, x0 - labelOffset, y, "let0", i);
+    addLabel(label, x1 + labelOffset, y, "let1", i);
+  });
+  if (!points.length) return;
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+  v3.axisLines = new THREE.LineSegments(
+    geometry, new THREE.LineBasicMaterial({ color: lineColor, transparent: true, opacity: 0.75 }));
+  v3.scene.add(v3.axisLines);
+  update3DAxisLabelScale();
+  update3DAxisLabelVisibility();
+}
+
+// Прореживание подписей осей — тот же приём, что в 2D
+// (updateAxisLabelSizing/thin): когда соседние оси сходятся на экране ближе
+// ширины подписи, показывается каждая N-я. В 2D шаг считается по мировому
+// расстоянию и зуму, здесь — по ЭКРАННОМУ: в перспективе дальний край ряда
+// сжат сильнее ближнего, и единого мирового шага не существует.
+//
+// Пересчитывается на каждое движение камеры (78 проекций точки — это ничто
+// на фоне кадра из 9422 изделий), но только если оси построены.
+const AXIS_3D_LABEL_MIN_GAP_PX = MAX_AXIS_FONT_PX * 2.2;   // как neededPx в 2D
+
+function update3DAxisLabelVisibility() {
+  const v3 = state.view3d;
+  if (!v3.axisLabelSprites.length || !v3.camera) return;
+  const container = document.getElementById("stage-3d");
+  const halfW = container.clientWidth / 2, halfH = container.clientHeight / 2;
+
+  const rows = new Map();
+  for (const sprite of v3.axisLabelSprites) {
+    const { row } = sprite.userData.axisLabel;
+    if (!rows.has(row)) rows.set(row, []);
+    rows.get(row).push(sprite);
+  }
+
+  const точка = new THREE.Vector3();
+  for (const ряд of rows.values()) {
+    ряд.sort((a, b) => a.userData.axisLabel.order - b.userData.axisLabel.order);
+    let последняя = null;
+    for (const sprite of ряд) {
+      точка.copy(sprite.position).project(v3.camera);
+      // z вне [-1; 1] — точка за камерой или за дальней плоскостью: она не
+      // на экране, и её координаты X/Y там уже ничего не значат.
+      const наЭкране = точка.z >= -1 && точка.z <= 1;
+      const x = точка.x * halfW, y = точка.y * halfH;
+      const далеко = !последняя || Math.hypot(x - последняя.x, y - последняя.y) >= AXIS_3D_LABEL_MIN_GAP_PX;
+      sprite.visible = наЭкране && далеко;
+      if (sprite.visible) последняя = { x, y };
+    }
+  }
+}
+
+function clear3DAxisGrid() {
+  const v3 = state.view3d;
+  if (v3.axisLines) {
+    v3.scene.remove(v3.axisLines);
+    v3.axisLines.geometry.dispose();
+    v3.axisLines.material.dispose();
+    v3.axisLines = null;
+  }
+  for (const sprite of v3.axisLabelSprites) {
+    v3.scene.remove(sprite);
+    sprite.material.map.dispose();
+    sprite.material.dispose();
+  }
+  v3.axisLabelSprites = [];
+}
+
 function build3DSiteBaseMesh() {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const e of state.elements) {
@@ -13802,7 +14066,7 @@ function build3DSiteBaseMesh() {
   const mesh = new THREE.Mesh(geometry, material);
   // world.X=dxf.x, world.Z=-dxf.y — та же поправка, что и у элементов
   // (см. build3DElementGeometry, Docs/backlog.md "3D — зеркальность").
-  mesh.position.set((minX + maxX) / 2, -5, -(minY + maxY) / 2);
+  mesh.position.set((minX + maxX) / 2, SITE_BASE_3D_Y, -(minY + maxY) / 2);
   return mesh;
 }
 
@@ -13819,6 +14083,7 @@ function build3DScene(preserveCamera = false) {
     v3.siteBaseMesh.material.dispose();
     v3.siteBaseMesh = null;
   }
+  clear3DAxisGrid();
   // Вся геометрия элементов — два объекта (грани + рёбра), см.
   // build3DMergedGeometry. НЕ material.dispose(): и материал граней
   // (getFaceMaterial), и материал рёбер (edgeMaterial) — по одному на всю
@@ -13945,8 +14210,13 @@ function build3DScene(preserveCamera = false) {
   v3.siteBaseMesh = build3DSiteBaseMesh();
   if (v3.siteBaseMesh) v3.scene.add(v3.siteBaseMesh);
 
+  // Сетка осей — на уровне подложки основания и НЕ зависит от фильтров:
+  // это система координат стройки, а не данные. Строится последней, чтобы
+  // взять уже посчитанный низ застройки.
+  build3DAxisGrid(Math.min(SITE_BASE_3D_Y, computeBuildingHeightRange().bottom));
+
   if (!preserveCamera) fit3DCameraToData();
-  updateAllDecalOrientations(); // начальный ракурс — тоже должен быть читаемым, не только после первого поворота
+  updateDecalsForCamera(); // начальный ракурс — тоже должен быть читаемым, не только после первого поворота
   requestRender3D();
 }
 
@@ -14054,7 +14324,7 @@ function create3DRendererAndControls(container) {
   // кадры тоже (см. requestRender3D).
   //
   // Раньше на это же событие висели ещё updateZoomIndicator3D и
-  // updateAllDecalOrientations. События "change" приходят на КАЖДОЕ движение
+  // updateDecalsForCamera. События "change" приходят на КАЖДОЕ движение
   // мыши — то есть чаще, чем рисуется кадр (а в лёгком режиме частота кадров
   // ещё и ограничена сверху), так что обе работы делались вхолостую по
   // нескольку раз на один показанный кадр. Обе перенесены внутрь
@@ -14205,6 +14475,9 @@ function on3DResize() {
   // пересчитать; материал теперь ОДИН общий на все элементы (см.
   // init3DScene), поэтому одна строка вместо обхода всех мешей.
   if (v3.edgeMaterial) v3.edgeMaterial.resolution.set(w, h);
+  // Кегль подписей осей задан долей высоты вьюпорта — при её изменении
+  // доля означает уже другое число пикселей (см. update3DAxisLabelScale).
+  update3DAxisLabelScale();
   requestRender3D(); // размер холста изменился — перерисовать под новый вьюпорт
 }
 
@@ -14240,13 +14513,17 @@ function render3DFrame() {
   v3.lastFrameAt = performance.now();
   v3.controls.update();
   // Наклейки марок (build3DMarkDecal) лежат плоско на грани, не билборд —
-  // при повороте камеры вокруг элемента текст может оказаться "вверх
-  // ногами" с текущего ракурса; разворот пересчитывается на каждое движение
-  // камеры (заказчик попросил явно, 2026-07-25). Место пересчёта — здесь, а
+  // значит зависят от ракурса дважды: грань может быть отвёрнута от камеры
+  // (тогда наклейку не рисуем вовсе), а текст на видимой грани может
+  // оказаться "вверх ногами" (тогда разворачиваем) — см.
+  // updateDecalForCamera. Место пересчёта — здесь, а
   // не на событии "change" у OrbitControls: событий на один показанный кадр
   // приходит несколько (см. create3DRendererAndControls). При выключенных
   // подписях наклеек нет вовсе, и проверка размера карты стоит ноль.
-  if (v3.markDecalById.size) updateAllDecalOrientations();
+  if (v3.markDecalById.size) updateDecalsForCamera();
+  // Прореживание подписей осей — здесь же и по той же причине: зависит от
+  // ракурса и должно быть посчитано ровно один раз на показанный кадр.
+  update3DAxisLabelVisibility();
   updateZoomIndicator3D();
   v3.renderer.render(v3.scene, v3.camera);
 }
