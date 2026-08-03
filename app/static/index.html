@@ -101,6 +101,7 @@
       --color-surface: #16202D;
       --color-surface-2: #1D2837;
       --color-accent-soft: #1B2C4E;
+      --color-accent-soft-hover: #24406F;
       --color-border: #26344a;
       --color-text: #E7EDF5;
       --color-text-muted: #93A1B1;
@@ -124,6 +125,7 @@
     --color-surface: #FFFFFF;
     --color-surface-2: #F7F1F1;
     --color-accent-soft: #F6E6E6;
+    --color-accent-soft-hover: #EDD2D2;
     --color-border: #EBDCDC;
     --color-text: #241717;
     --color-text-muted: #7A6A6A;
@@ -142,6 +144,7 @@
     --color-surface: #1C1F25;
     --color-surface-2: #23272E;
     --color-accent-soft: #262C38;
+    --color-accent-soft-hover: #323A49;
     --color-border: #2E333B;
     --color-text: #E6E8EB;
     --color-text-muted: #98A0AB;
@@ -160,6 +163,7 @@
     --color-surface: #191C2E;
     --color-surface-2: #202441;
     --color-accent-soft: #262B4D;
+    --color-accent-soft-hover: #333A66;
     --color-border: #2C3157;
     --color-text: #E8EAF6;
     --color-text-muted: #9AA0C4;
@@ -181,6 +185,7 @@
     --color-surface: #14121F;
     --color-surface-2: #1C1930;
     --color-accent-soft: #2A2247;
+    --color-accent-soft-hover: #3A2F60;
     --color-border: #3A2E63;
     --color-text: #F2F0FF;
     --color-text-muted: #9C93C7;
@@ -206,6 +211,7 @@
     --color-surface: #FFFFFF;
     --color-surface-2: #EFF6F2;
     --color-accent-soft: #E1F1E9;
+    --color-accent-soft-hover: #CEE7DA;
     --color-border: #DCE9E2;
     --color-text: #10231C;
     --color-text-muted: #5F7A70;
@@ -221,6 +227,7 @@
     --color-surface: #FFFDFA;
     --color-surface-2: #F3EDE3;
     --color-accent-soft: #F6E9D6;
+    --color-accent-soft-hover: #EEDBBE;
     --color-border: #E7DECF;
     --color-text: #2A2118;
     --color-text-muted: #7C6F5F;
@@ -289,8 +296,23 @@
   :root[data-skin] .btn-secondary {
     background: var(--color-accent-soft); color: var(--color-primary);
   }
-  :root[data-skin] .btn-secondary:hover { background: #DCE6FB; }
+  :root[data-skin] .btn-secondary:hover { background: var(--color-accent-soft-hover); }
   :root[data-skin] .btn-primary { background: var(--color-primary); color: var(--color-on-primary, #fff); }
+  /* Родная кнопка выбора файла повторяет .btn.btn-secondary и В ГАММАХ
+     (живой репорт 2026-08-03: в форме «Массовая правка через Excel» она
+     осталась прямоугольной серой рамкой между кнопками-пилюлями). Базовое
+     правило ниже приводит её к виду обычной темы, но форму кнопок в гаммах
+     задаёт блок [data-skin] — и до него ::file-selector-button не доставал.
+     Правило общее на все файловые поля, цвета — переменными гаммы, поэтому
+     работает и в светлых схемах, и в тёмных. */
+  :root[data-skin] input[type="file"]::file-selector-button {
+    border-radius: var(--radius); min-height: 40px; padding: 8px 16px;
+    font-size: 15px; font-weight: 600; border: none;
+    background: var(--color-accent-soft); color: var(--color-primary);
+  }
+  :root[data-skin] input[type="file"]::file-selector-button:hover {
+    background: var(--color-accent-soft-hover); border-color: transparent;
+  }
   :root[data-skin] .btn-icon-round { border-radius: 50%; padding: 6px; min-height: 32px; }
   /* В ШАПКЕ кнопки компактнее общего правила: рост 40 и отступы 16 хороши в
      формах, а здесь их десяток в один ряд плюс широкий знак — при общих
@@ -416,7 +438,12 @@
      импорты истории/контрактации/графика/настроек, восстановление статусов,
      массовая правка), а не на одно: разнобой между формами читался бы хуже,
      чем исходная некрасивость. */
-  input[type="file"] { font-size: 13px; color: var(--color-text-muted); }
+  /* width: 100% — не косметика: собственная ширина поля у браузера
+     фиксированная (около 250 px) и от контейнера не зависит, а имя файла он
+     печатает в остатке после кнопки и обрезает посреди слова
+     («Файл н…ыбран»). Во всех семи формах поле лежит в своём контейнере
+     одно, поэтому правило общее. */
+  input[type="file"] { font-size: 13px; color: var(--color-text-muted); width: 100%; }
   input[type="file"]::file-selector-button {
     font-size: 13px; padding: 6px 12px; border-radius: var(--radius-sm); cursor: pointer;
     border: 1px solid var(--color-border); background: var(--color-surface-2);
@@ -1174,6 +1201,12 @@
   #btn-object-switch { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
   .bulk-edit-steps { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
   .bulk-edit-steps .bulk-edit-block { flex: 1 1 210px; }
+  /* Шаг с выбором файла — шире соседних: рядом со своей кнопкой браузер
+     печатает имя выбранного файла СВОИМ текстом, и на равной с соседями
+     ширине он обрезается посреди слова («Файл н…ыбран»). Класс в разметке,
+     а не селектор :has(): тот появился в браузерах только в 2022-м, а
+     клиенты здесь — что стоит на рабочих машинах площадки. */
+  .bulk-edit-steps .bulk-edit-block-file { flex: 1.5 1 300px; }
   .step-num {
     display: inline-flex; align-items: center; justify-content: center;
     width: 18px; height: 18px; margin-right: 6px; border-radius: 50%; flex-shrink: 0;
@@ -1525,7 +1558,7 @@
     #reports-backdrop .modal { box-shadow: none; max-width: none; width: auto; }
     .report-head, .modal-sticky-foot, #report-use-filter, label.toggle { display: none !important; }
     .modal-sticky-scroll { overflow: visible !important; max-height: none !important; }
-    #report-table th { position: static; }
+    #report-table th, #cmp-table th { position: static; }
     /* «График поставки»: на бумаге липкие ячейки и своя прокрутка только
        мешают — таблица печатается целиком, шапка формы не печатается
        (её содержание повторено строкой подписи над таблицей). */
@@ -2973,7 +3006,7 @@
           </div>
           <div class="bulk-edit-status">Все элементы всех объектов одним файлом.</div>
         </div>
-        <div class="bulk-edit-block">
+        <div class="bulk-edit-block bulk-edit-block-file">
           <div class="bulk-edit-block-title"><span class="step-num">2</span>Выбрать правленый файл</div>
           <div class="bulk-edit-controls">
             <input type="file" id="bulk-edit-file" accept=".xlsx"/>

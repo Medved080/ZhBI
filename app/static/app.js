@@ -10303,6 +10303,22 @@ const REPORTS = {
     render: renderDeliveryReport,
     needsPeriod: true,
   },
+  // «Статус комплектации» (живой запрос 2026-08-03, по образцу заказчика) —
+  // плоский перечень «кран · стоянка · изделие · контракт · три даты» с
+  // количеством (см. app/report_completion.py).
+  // useFilterByDefault: галочка «Учитывать текущий фильтр схемы» у него
+  // стоит СРАЗУ — перечень комплектации читают по конкретной стоянке или
+  // захватке, и отчёт по всей стройке разом здесь не рабочий случай, а
+  // случайность на три тысячи строк.
+  // wide: двенадцать колонок в 780 px не помещаются.
+  completion: {
+    title: "Статус комплектации",
+    endpoint: "/reports/completion",
+    render: renderCompletionReport,
+    useFilterByDefault: true,
+    flatList: true,
+    wide: true,
+  },
   // «Моя работа» (живой запрос 2026-08-03) — что человек изменил за период.
   // needsWorkPeriod: свой период (по умолчанию сегодня) и выбор пользователя;
   // «Учитывать текущий фильтр схемы» для него прячется — строки здесь события
@@ -10323,6 +10339,12 @@ let currentReport = "status";
 // не хотели, там окно чисто экранное.
 let dynRange = { from: null, to: null };   // null = весь срок проекта
 let reportData = null;
+// Состояние галочки «Учитывать текущий фильтр схемы» — СВОЁ у каждого
+// отчёта. Иначе «Статус комплектации», у которого она включена по
+// умолчанию, менял бы её и «Статусам» с «Динамикой» — молча, одним
+// переходом по вкладке. Ключ есть в объекте = человек уже выбирал сам;
+// пока не выбирал, берётся значение по умолчанию из REPORTS.
+let reportUseFilter = {};
 // Какие узлы свёрнуты. По умолчанию свёрнуто всё, кроме первой захватки —
 // так же, как в исходной сводной таблице заказчика.
 let reportCollapsed = new Set();
@@ -10912,6 +10934,36 @@ document.getElementById("report-body").addEventListener("mouseleave", hideDelive
 // висеть над чужой ячейкой.
 document.getElementById("report-body").addEventListener("scroll", hideDeliveryTip, true);
 
+// ======== отчёт «Статус комплектации» (живой запрос 2026-08-03) ========
+//
+// Плоская таблица по образцу заказчика — ни дерева, ни свёрнутых узлов.
+// Состав колонок, порядок строк и всё содержимое ячеек считает СЕРВЕР
+// (app/report_completion.py): тот же отчёт выгружается в XLSX и PDF, и
+// вторая укладка тех же данных здесь однажды разошлась бы с файлом.
+// Клиенту остаются вид даты (ДД.ММ.ГГГГ) и выравнивание по типу колонки.
+function renderCompletionReport(data) {
+  if (!data.rows.length) {
+    return `<div class="cmp-empty">Под текущий отбор не попало ни одного изделия.</div>`;
+  }
+  const классы = { num: "cmp-num", date: "cmp-date", text: "" };
+  const шапка = data.columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join("");
+  const строки = data.rows.map(r => "<tr>" + data.columns.map(c => {
+    const v = r[c.key];
+    const текст = v === null || v === undefined ? ""
+      : (c.kind === "date" ? formatDateRu(v) : String(v));
+    return `<td class="${классы[c.kind] || ""}">${escapeHtml(текст)}</td>`;
+  }).join("") + "</tr>").join("");
+  // Итог — только под «Кол-во»: складывать номера стоянок или даты нечего,
+  // и пустые ячейки это показывают лучше любой подписи.
+  const итог = "<tr class=\"cmp-total\">" + data.columns.map((c, i) => {
+    if (i === 0) return `<td>${escapeHtml(data.total.label)}</td>`;
+    if (c.key === "count") return `<td class="cmp-num">${data.total.count}</td>`;
+    return "<td></td>";
+  }).join("") + "</tr>";
+  return `<table id="cmp-table"><thead><tr>${шапка}</tr></thead>
+    <tbody>${строки}${итог}</tbody></table>`;
+}
+
 // ============ отчёт «Моя работа» (живой запрос 2026-08-03) ============
 //
 // Что человек изменил за период (по умолчанию — за сегодня). Данные —
@@ -11128,9 +11180,11 @@ async function loadReport() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(reportRequestBody()),
     });
-    // Свёрнутость — только у древовидных отчётов; у «Моей работы» строки
-    // плоские, и defaultCollapsedTree набрал бы туда undefined.
-    reportCollapsed = def.needsWorkPeriod ? new Set() : defaultCollapsedTree(reportData);
+    // Свёрнутость — только у древовидных отчётов; у «Моей работы» и
+    // «Статуса комплектации» строки плоские, и defaultCollapsedTree набрал
+    // бы туда undefined.
+    reportCollapsed = (def.needsWorkPeriod || def.flatList)
+      ? new Set() : defaultCollapsedTree(reportData);
     document.getElementById("report-body").innerHTML = def.render(reportData);
     if (def.needsWorkPeriod) {
       const кто = reportData.users.map(u => u.display_name).join(", ") || "Все пользователи";
@@ -11152,6 +11206,11 @@ async function loadReport() {
       document.getElementById("ds-from").value = reportData.date_from;
       document.getElementById("ds-to").value = reportData.date_to;
       document.getElementById("ds-step").value = reportData.step;
+    } else if (def.flatList) {
+      // Строка здесь — ГРУППА изделий, а не изделие: без второго числа
+      // «изделий: 9422» рядом с тремя тысячами строк читалось бы как ошибка.
+      statusLine.textContent =
+        `Строк: ${reportData.total.rows} · изделий: ${reportData.total.count}`;
     } else {
       statusLine.textContent = reportData.total
         ? `Всего изделий: ${reportData.total.values.total}`
@@ -11187,10 +11246,15 @@ async function switchReport(key) {
   document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
   document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
   document.getElementById("report-use-filter-box").style.display = REPORTS[key].needsWorkPeriod ? "none" : "";
+  // Галочка «учитывать фильтр» — со СВОИМ состоянием у каждого отчёта (см.
+  // reportUseFilter): у «Статуса комплектации» она включена по умолчанию, и
+  // без этого переход по вкладке молча менял бы отбор соседних отчётов.
+  document.getElementById("report-use-filter").checked = key in reportUseFilter
+    ? reportUseFilter[key] : !!REPORTS[key].useFilterByDefault;
   // «Моей работе» ширина нужна не меньше, чем «Графику поставки»: шесть
   // колонок, две из которых — свободный текст «было/стало».
   reportsBackdrop.querySelector(".modal").classList.toggle(
-    "report-full", !!(REPORTS[key].needsPeriod || REPORTS[key].needsWorkPeriod));
+    "report-full", !!(REPORTS[key].needsPeriod || REPORTS[key].needsWorkPeriod || REPORTS[key].wide));
   if (REPORTS[key].needsPeriod) renderDeliveryGroupChips();
   if (REPORTS[key].needsWorkPeriod) {
     // Период по умолчанию — текущий день (живой запрос). Заполняется один
@@ -11243,7 +11307,10 @@ document.getElementById("report-body").addEventListener("click", (e) => {
   document.getElementById("report-body").innerHTML = REPORTS[currentReport].render(reportData);
 });
 
-document.getElementById("report-use-filter").addEventListener("change", loadReport);
+document.getElementById("report-use-filter").addEventListener("change", (e) => {
+  reportUseFilter[currentReport] = e.target.checked;   // выбор человека помнится по отчёту
+  loadReport();
+});
 document.getElementById("menu-report-status").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
   showBackToReport(false);
@@ -11258,6 +11325,11 @@ document.getElementById("menu-report-delivery").addEventListener("click", () => 
   reportsBackdrop.classList.add("open");
   showBackToReport(false);
   switchReport("delivery");
+});
+document.getElementById("menu-report-completion").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  showBackToReport(false);
+  switchReport("completion");
 });
 document.getElementById("menu-report-mywork").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
@@ -11544,7 +11616,9 @@ document.getElementById("side-dyn-range-reset").addEventListener("click", () => 
 // иначе форма показала бы другие числа, чем панель, с которой её открыли.
 document.querySelectorAll(".side-report-open").forEach(btn => {
   btn.addEventListener("click", () => {
-    document.getElementById("report-use-filter").checked = true;
+    // Именно в память отчёта, а не в саму галочку: switchReport ниже
+    // выставляет её из reportUseFilter и прямую правку поля затёр бы.
+    reportUseFilter[btn.dataset.report] = true;
     if (btn.dataset.report === "dynamics") {
       document.getElementById("report-date").value = document.getElementById("side-dyn-date").value;
     }
