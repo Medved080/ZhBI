@@ -10,7 +10,8 @@ from pydantic import BaseModel, field_validator
 from app import activity, ldap_auth
 from app.access import OBJECT_ROLES, ROLE_LABELS as OBJECT_ROLE_LABELS, require_system_admin
 from app.auth import (
-    SESSION_COOKIE, auth_method_of, get_current_user, hash_password, list_sessions,
+    SESSION_COOKIE, SESSION_IDLE_HOURS, SESSION_TTL_DAYS, auth_method_of, forget_session,
+    format_display_name, get_current_user, hash_password, list_sessions, session_public_id,
     user_out, validate_password_strength, UserOut,
 )
 from app.db import get_connection
@@ -289,6 +290,90 @@ def set_password(
         return user_out(updated)
     finally:
         conn.close()
+
+
+# Сеансы ВСЕХ пользователей — отдельным пунктом «Администрирование →
+# Сеансы» (2026-08-03, живой запрос). Свой роутер без префикса `/users`:
+# это не операция над конкретным пользователем, а взгляд на систему целиком
+# («кто сейчас в сервисе»), и прятать его под /users/... значило бы
+# спорить с адресом ради экономии одного объекта.
+sessions_router = APIRouter(tags=["sessions"])
+
+
+@sessions_router.get("/sessions")
+def all_sessions(request: Request, admin: sqlite3.Row = Depends(require_system_admin)):
+    """Кто сейчас в системе. Текущий сеанс администратора помечен — чтобы
+    он не оборвал сам себя, не поняв этого."""
+    текущий = request.cookies.get(SESSION_COOKIE)
+    conn = get_connection()
+    try:
+        строки = conn.execute(
+            "SELECT s.token, s.created_at, s.expires_at, s.created_ip, s.user_agent, "
+            "s.last_seen_at, u.id AS user_id, u.last_name, u.first_name, u.patronymic, "
+            "u.domain_login FROM sessions s JOIN users u ON u.id = s.user_id "
+            "WHERE s.expires_at > datetime('now') "
+            "ORDER BY COALESCE(s.last_seen_at, s.created_at) DESC"
+        ).fetchall()
+        return {"sessions": [{
+            "id": session_public_id(r["token"]),
+            "current": текущий is not None and r["token"] == текущий,
+            "user_id": r["user_id"],
+            "user": format_display_name(r) or r["domain_login"],
+            "domain_login": r["domain_login"],
+            "created_at": r["created_at"],
+            "last_seen_at": r["last_seen_at"],
+            "expires_at": r["expires_at"],
+            "ip": r["created_ip"],
+            "user_agent": r["user_agent"],
+        } for r in строки], "idle_hours": SESSION_IDLE_HOURS, "ttl_days": SESSION_TTL_DAYS}
+    finally:
+        conn.close()
+
+
+@sessions_router.delete("/sessions/{public_id}")
+def drop_any_session(public_id: str, admin: sqlite3.Row = Depends(require_system_admin)):
+    """Оборвать ОДИН любой сеанс по отпечатку.
+
+    Раньше администратору был доступен только обрыв всех сеансов человека —
+    рассудили, что выбирать между чужими вкладками не по чему. Живой запрос
+    показал обратное: в списке видно устройство, адрес и время, и «вот этот
+    вход с незнакомого адреса» — ровно то, что хочется закрыть, не выгоняя
+    человека из его рабочего сеанса.
+    """
+    conn = get_connection()
+    try:
+        for r in conn.execute("SELECT token, user_id FROM sessions"):
+            if session_public_id(r["token"]) == public_id:
+                conn.execute("DELETE FROM sessions WHERE token = ?", (r["token"],))
+                conn.commit()
+                forget_session(r["token"])
+                activity.log("session_revoked", user=admin, entity_type="user",
+                             entity_id=r["user_id"], new_value="администратор оборвал сеанс")
+                return {"status": "ok"}
+    finally:
+        conn.close()
+    raise HTTPException(status_code=404, detail="Сеанс не найден — возможно, он уже завершён")
+
+
+@sessions_router.post("/sessions/close-others")
+def close_all_other_sessions(request: Request,
+                             admin: sqlite3.Row = Depends(require_system_admin)):
+    """Оборвать ВСЕ сеансы всех пользователей, кроме своего текущего. То, что
+    делают при подозрении на компрометацию: одним действием все входят
+    заново."""
+    текущий = request.cookies.get(SESSION_COOKIE)
+    conn = get_connection()
+    try:
+        if текущий:
+            удалено = conn.execute("DELETE FROM sessions WHERE token != ?", (текущий,)).rowcount
+        else:
+            удалено = conn.execute("DELETE FROM sessions").rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("session_revoked", user=admin,
+                 new_value=f"администратор завершил все сеансы, кроме своего: {удалено}")
+    return {"closed": удалено}
 
 
 @router.get("/{user_id}/sessions")

@@ -1903,6 +1903,10 @@
                  машину (в аварии сервис как раз может не работать). -->
             <button id="menu-admin-guide" class="admin-only menu-item-strong">Памятка администратора</button>
             <button id="menu-users" class="admin-only">Пользователи</button>
+            <!-- Отдельным пунктом (живой запрос 2026-08-03): «кто сейчас в
+                 системе» — вопрос обо всём сервисе, а не о конкретном
+                 человеке, и искать его в карточке пользователя незачем. -->
+            <button id="menu-sessions" class="admin-only">Сеансы пользователей</button>
             <!-- Рядом с «Пользователями» (2026-08-03): это настройка того,
                  ЧЕМ пользователь входит, и ходят сюда из той же формы. -->
             <button id="menu-ldap" class="admin-only">Доменная авторизация</button>
@@ -2568,23 +2572,6 @@
   </div>
 </div>
 
-<!-- Активные сеансы (2026-08-03). Одна форма на два случая: свои сеансы
-     (доступно всем) и чужие — администратору сервиса, когда человек уволился
-     или потерял ноутбук. Токенов в списке нет: показывается необратимый
-     отпечаток, им же сеанс и обрывается. -->
-<div class="modal-backdrop" id="sessions-backdrop">
-  <div class="modal wide">
-    <h2 id="sessions-title">Мои сеансы</h2>
-    <p class="hint-text" id="sessions-hint"></p>
-    <table id="sessions-table"></table>
-    <div class="error-text" id="sessions-error"></div>
-    <div class="actions">
-      <button class="btn btn-secondary" id="sessions-close-others">Завершить все, кроме текущего</button>
-      <button class="btn btn-secondary" id="sessions-close">Закрыть</button>
-    </div>
-  </div>
-</div>
-
 <div class="modal-backdrop" id="users-backdrop">
   <div class="modal wide">
     <h2>Пользователи</h2>
@@ -2845,6 +2832,28 @@
         <button class="btn btn-secondary" id="ldap-cancel">Закрыть</button>
         <button class="btn btn-primary" id="ldap-save">Сохранить</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Активные сеансы (2026-08-03). Разметка стоит ПОСЛЕ форм пользователя
+     намеренно: у всех модалок один z-index, и кто сверху — решает порядок в
+     DOM. Пока этот блок стоял выше, окно сеансов, открытое из списка
+     пользователей, пряталось под ним и было недоступно (живой репорт).
+     На тот же порядок опирается закрытие по Esc — «последняя открытая в
+     DOM и есть верхняя». Одна форма на два случая: свои сеансы
+     (доступно всем) и чужие — администратору сервиса, когда человек уволился
+     или потерял ноутбук. Токенов в списке нет: показывается необратимый
+     отпечаток, им же сеанс и обрывается. -->
+<div class="modal-backdrop" id="sessions-backdrop">
+  <div class="modal wide">
+    <h2 id="sessions-title">Мои сеансы</h2>
+    <p class="hint-text" id="sessions-hint"></p>
+    <table id="sessions-table"></table>
+    <div class="error-text" id="sessions-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="sessions-close-others">Завершить все, кроме текущего</button>
+      <button class="btn btn-secondary" id="sessions-close">Закрыть</button>
     </div>
   </div>
 </div>

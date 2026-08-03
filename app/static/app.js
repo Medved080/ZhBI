@@ -666,7 +666,11 @@ document.getElementById("change-password-save").addEventListener("click", async 
 // сервиса из списка пользователей). Различие — только в источнике данных и
 // в том, что «завершить все, кроме текущего» имеет смысл лишь для своих.
 const sessionsBackdrop = document.getElementById("sessions-backdrop");
-let sessionsTargetUserId = null;   // null — свои
+// Три режима одной формы: "me" — свои сеансы (всем ролям), "all" — все
+// сеансы сервиса (администратору, пункт меню), "user" — сеансы одного
+// человека (администратору из списка пользователей).
+let sessionsMode = "me";
+let sessionsTargetUserId = null;
 
 function описаниеУстройства(ua) {
   if (!ua) return "—";
@@ -692,35 +696,45 @@ async function renderSessions() {
   const errorEl = document.getElementById("sessions-error");
   errorEl.textContent = "";
   table.innerHTML = "<tr><td>Загрузка…</td></tr>";
+  const адрес = sessionsMode === "me" ? "/me/sessions"
+    : sessionsMode === "all" ? "/sessions"
+    : `/users/${sessionsTargetUserId}/sessions`;
   try {
-    const свои = sessionsTargetUserId === null;
-    const данные = await api(свои ? "/me/sessions" : `/users/${sessionsTargetUserId}/sessions`);
+    const данные = await api(адрес);
+    const сВладельцем = sessionsMode === "all";
     const строки = данные.sessions.map(s => `
       <tr>
         <td>${s.current ? "<b>текущий</b>" : ""}</td>
+        ${сВладельцем ? `<td>${escapeHtml(s.user || "")}<br><span class="hint-text">${escapeHtml(s.domain_login || "")}</span></td>` : ""}
         <td title="${escapeHtml(s.user_agent || "")}">${escapeHtml(описаниеУстройства(s.user_agent))}</td>
         <td>${escapeHtml(s.ip || "—")}</td>
         <td>${escapeHtml(когда(s.created_at))}</td>
         <td>${escapeHtml(когда(s.last_seen_at))}</td>
-        <td><button class="btn btn-sm btn-secondary" data-drop="${escapeHtml(s.id)}">${s.current ? "Выйти" : "Завершить"}</button></td>
+        <td><button class="btn btn-sm btn-secondary" data-drop="${escapeHtml(s.id)}" data-current="${s.current ? 1 : 0}">${s.current ? "Выйти" : "Завершить"}</button></td>
       </tr>`).join("");
-    table.innerHTML = `<tr><th></th><th>Устройство</th><th>Адрес</th><th>Начат</th><th>Последняя активность</th><th></th></tr>`
-      + (строки || '<tr><td colspan="6">Активных сеансов нет</td></tr>');
+    table.innerHTML = `<tr><th></th>${сВладельцем ? "<th>Пользователь</th>" : ""}`
+      + `<th>Устройство</th><th>Адрес</th><th>Начат</th><th>Последняя активность</th><th></th></tr>`
+      + (строки || `<tr><td colspan="${сВладельцем ? 7 : 6}">Активных сеансов нет</td></tr>`);
     if (данные.idle_hours) {
       document.getElementById("sessions-hint").textContent =
         `Сеанс завершается сам после ${данные.idle_hours} ч без действий и в любом случае через ${данные.ttl_days} дней.`;
     }
     table.querySelectorAll("[data-drop]").forEach(btn => btn.addEventListener("click", async () => {
+      const текущий = btn.dataset.current === "1";
       try {
-        if (свои) {
-          await api(`/me/sessions/${btn.dataset.drop}`, { method: "DELETE" });
-          // Оборвали текущий — это обычный выход, и оставаться в интерфейсе
-          // нельзя: следующий же запрос вернёт 401.
-          const текущий = btn.textContent === "Выйти";
-          if (текущий) { sessionsBackdrop.classList.remove("open"); state.currentUser = null; showLoginScreen(); return; }
-        } else {
-          errorEl.textContent = "Отдельный чужой сеанс не обрывается — завершите все кнопкой ниже";
-          return;   // адресный обрыв чужого сеанса не понадобился: увольнение закрывает все
+        // Свой сеанс обрывается своим же эндпоинтом, чужой — административным:
+        // право «оборвать что угодно» не должно оказаться у обычного
+        // пользователя только потому, что форма одна.
+        await api(sessionsMode === "me" ? `/me/sessions/${btn.dataset.drop}`
+                                        : `/sessions/${btn.dataset.drop}`,
+                  { method: "DELETE" });
+        if (текущий) {
+          // Оборвали свой текущий — это обычный выход, оставаться в
+          // интерфейсе нельзя: следующий же запрос вернёт 401.
+          sessionsBackdrop.classList.remove("open");
+          state.currentUser = null;
+          showLoginScreen();
+          return;
         }
         await renderSessions();
       } catch (e) { errorEl.textContent = e.message; }
@@ -731,30 +745,37 @@ async function renderSessions() {
   }
 }
 
-function openSessions(userId, заголовок) {
+function openSessions(mode, userId, заголовок) {
+  sessionsMode = mode;
   sessionsTargetUserId = userId;
   document.getElementById("sessions-title").textContent = заголовок;
   document.getElementById("sessions-hint").textContent = "";
-  // Кнопка подвала контекстная, а не скрываемая: администратору нужна
-  // ровно эта операция («человек уволился — оборвать всё»), и прятать её,
-  // оставляя список только для чтения, значило бы показать проблему без
-  // способа её решить.
+  // Кнопка подвала контекстная, а не скрываемая: во всех трёх режимах она
+  // нужна, но означает разное — и показать список без способа что-то
+  // сделать значило бы показать проблему без решения.
   document.getElementById("sessions-close-others").textContent =
-    userId === null ? "Завершить все, кроме текущего" : "Завершить все сеансы пользователя";
+    mode === "user" ? "Завершить все сеансы пользователя" : "Завершить все, кроме текущего";
   sessionsBackdrop.classList.add("open");
   renderSessions();
 }
 
 document.getElementById("menu-my-sessions").addEventListener("click", () => {
   document.getElementById("settings-menu").classList.remove("open");
-  openSessions(null, "Мои сеансы");
+  openSessions("me", null, "Мои сеансы");
 });
 document.getElementById("sessions-close").addEventListener("click", () =>
   sessionsBackdrop.classList.remove("open"));
+document.getElementById("menu-sessions").addEventListener("click", () => {
+  document.getElementById("settings-menu").classList.remove("open");
+  openSessions("all", null, "Сеансы пользователей");
+});
 document.getElementById("sessions-close-others").addEventListener("click", async () => {
   try {
-    const res = sessionsTargetUserId === null
-      ? await api("/me/sessions/close-others", { method: "POST" })
+    if (sessionsMode === "all" &&
+        !confirm("Все, кто сейчас работает в сервисе, будут выброшены и должны будут войти "
+                 + "заново. Ваш текущий сеанс останется.\n\nПродолжить?")) return;
+    const res = sessionsMode === "me" ? await api("/me/sessions/close-others", { method: "POST" })
+      : sessionsMode === "all" ? await api("/sessions/close-others", { method: "POST" })
       : await api(`/users/${sessionsTargetUserId}/sessions`, { method: "DELETE" });
     showToast(res.closed ? `Завершено сеансов: ${res.closed}` : "Активных сеансов не было");
     await renderSessions();
@@ -8189,7 +8210,7 @@ async function renderUsersTable() {
   table.querySelectorAll("[data-pwd]").forEach(btn => btn.addEventListener("click", () => openUserPassword(Number(btn.dataset.pwd))));
   table.querySelectorAll("[data-sessions]").forEach(btn => btn.addEventListener("click", () => {
     const u = users.find(x => x.id === Number(btn.dataset.sessions));
-    openSessions(u.id, `Сеансы: ${u.display_name}`);
+    openSessions("user", u.id, `Сеансы: ${u.display_name}`);
   }));
 }
 

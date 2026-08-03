@@ -314,6 +314,12 @@ SESSION_TOUCH_INTERVAL_SECONDS = 60
 _session_touched: dict[str, float] = {}
 
 
+def forget_session(token: str) -> None:
+    """Забыть троттлинг отметки активности для оборванного сеанса: иначе
+    словарь помнил бы токены, которых больше нет."""
+    _session_touched.pop(token, None)
+
+
 def session_public_id(token: str) -> str:
     """Короткий отпечаток сеанса для списка и обрыва.
 

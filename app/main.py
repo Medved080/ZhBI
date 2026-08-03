@@ -144,7 +144,7 @@ from app.upload_limits import (
     MaxBodySizeMiddleware,
     read_upload_limited,
 )
-from app.users import router as users_router
+from app.users import router as users_router, sessions_router
 
 # Интерактивная документация (/docs, /redoc) и схема (/openapi.json)
 # анонимному пользователю сети не нужны и раскрывают всю карту API —
@@ -219,6 +219,7 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(sessions_router)
 app.include_router(ldap_router)
 app.include_router(admin_guide_router)
 app.include_router(db_status_router)
