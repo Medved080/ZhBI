@@ -215,12 +215,19 @@ def build_export_workbook(conn) -> Workbook:
     # недопустим отдельно: этот же файл загружается обратно, и coerce_field
     # принимает либо дату от openpyxl, либо ISO-строку.
     столбцы_дат = [i + 1 for i, (key, _, _) in enumerate(COLUMNS) if key in _DATE_COLUMNS]
-    for row in _element_rows(conn):
+    # Номер строки считаем САМИ, а не через ws.max_row (живой репорт
+    # 2026-08-03: «не формирует файл»). `max_row` в openpyxl — не счётчик, а
+    # max() по всем ячейкам листа, то есть O(n) на каждое обращение; четыре
+    # обращения на строку при 9422 строках давали 88 СЕКУНД на сборку файла,
+    # и выгрузка выглядела как зависшая. Тот же файл со счётчиком строится
+    # за 0,7 с.
+    элементы = _element_rows(conn)
+    for номер, row in enumerate(элементы, start=2):   # 1-я строка — заголовки
         values = display_values(row, by_id)
         ws.append([to_excel_date(values[key]) if key in _DATE_COLUMNS else values[key]
                    for key, _, _ in COLUMNS])
         for i in столбцы_дат:
-            ws.cell(row=ws.max_row, column=i).number_format = EXCEL_DATE_FORMAT
+            ws.cell(row=номер, column=i).number_format = EXCEL_DATE_FORMAT
 
     # ---- листы справочников ----
     ws_c = wb.create_sheet(SHEET_CONTRACTS)
@@ -244,7 +251,9 @@ def build_export_workbook(conn) -> Workbook:
     for r in objects:
         ws_o.append([r["name"], r["description"]])
 
-    _add_dropdowns(ws, len(_element_rows(conn)), contract_names, types, subtypes)
+    # len(элементы), а не повторный _element_rows(conn): тот же запрос на
+    # 9422 строки второй раз — ради одного числа.
+    _add_dropdowns(ws, len(элементы), contract_names, types, subtypes)
     _widen(ws)
     for sheet in (ws_c, ws_t, ws_s, ws_o):
         _widen(sheet)

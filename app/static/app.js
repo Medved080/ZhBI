@@ -5053,11 +5053,9 @@ function openStatusDialog(element, status) {
   document.getElementById("sc-contract-section").style.display = showContract ? "" : "none";
   if (showContract) {
     const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
-    const matching = state.contracts.filter(c => c.element_types.includes(element.element_type));
-    const options = ['<option value="">— без контракта —</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
-    );
-    document.getElementById("sc-contract-select").innerHTML = options.join("");
+    document.getElementById("sc-contract-select").innerHTML = contractOptionsHtml(
+      bulkContractOptionsForType(element.element_type), preselect,
+      ['<option value="">— без контракта —</option>']);
   }
   statusContractBackdrop.classList.add("open");
 }
@@ -5158,6 +5156,56 @@ function bulkContractOptionsForType(elementType) {
   return state.contracts.filter(c => c.element_types.includes(elementType));
 }
 
+// ---------- контракты в выпадающем списке: группами по контрагенту и договору
+// (живой запрос 2026-08-03) ----------
+//
+// Наименование контракта — это склейка «Контрагент/Договор № от ДАТА/
+// Спецификация № от ДАТА (Тема)» (build_contract_name, app/contracts.py). В
+// плоском списке у одного контрагента такие строки различаются только
+// серединой, и выбрать нужную из десятков одинаковых на вид — работа глазами.
+// Поэтому общая часть уходит в заголовок <optgroup>, а в самом пункте
+// остаётся то, что различает: спецификация и тема. Полное наименование
+// сохранено в title пункта — оно же показано во всех остальных местах
+// интерфейса, и связь одного с другим не должна теряться.
+//
+// ОДНА функция на все три списка выбора контракта (строка массовой смены
+// статуса, «заполнить пустые» в её шапке, диалог смены статуса одного
+// элемента): три копии группировки разъехались бы на первой правке формата.
+function contractOptionLabel(c) {
+  const spec = c.specification_date
+    ? `${c.specification_number} от ${formatDateRu(c.specification_date)}`
+    : c.specification_number;
+  return `Спецификация ${spec}` + (c.theme ? ` (${c.theme})` : "");
+}
+
+function contractGroupLabel(c) {
+  const agr = c.agreement_date
+    ? `${c.agreement_number} от ${formatDateRu(c.agreement_date)}`
+    : c.agreement_number;
+  return `${c.counterparty_short_name} · договор ${agr}`;
+}
+
+function contractOptionsHtml(contracts, selectedId, leading) {
+  const groups = new Map();
+  contracts.forEach((c) => {
+    const key = `${c.counterparty_id}:${c.agreement_id}`;
+    if (!groups.has(key)) groups.set(key, { label: contractGroupLabel(c), items: [] });
+    groups.get(key).items.push(c);
+  });
+  const html = Array.from(groups.values())
+    .sort((a, b) => a.label.localeCompare(b.label, "ru"))
+    .map((g) => {
+      const options = g.items
+        .slice()
+        .sort((a, b) => contractOptionLabel(a).localeCompare(contractOptionLabel(b), "ru"))
+        .map(c => `<option value="${c.id}" ${String(c.id) === String(selectedId) ? "selected" : ""}`
+                + ` title="${escapeHtml(c.name)}">${escapeHtml(contractOptionLabel(c))}</option>`)
+        .join("");
+      return `<optgroup label="${escapeHtml(g.label)}">${options}</optgroup>`;
+    });
+  return (leading || []).concat(html).join("");
+}
+
 function updateBulkStatusTitle() {
   document.getElementById("bulk-status-title").textContent = `Массовая смена статуса (${state.multiSelectedIds.size} элементов)`;
 }
@@ -5247,11 +5295,9 @@ function renderBulkStatusTable() {
     const select = document.createElement("select");
     select.className = "bulk-row-contract";
     const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
-    const matching = bulkContractOptionsForType(element.element_type);
-    const options = ['<option value="">— выберите —</option>', '<option value="none">без контракта</option>'].concat(
-      matching.map(c => `<option value="${c.id}" ${String(c.id) === String(preselect) ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
-    );
-    select.innerHTML = options.join("");
+    select.innerHTML = contractOptionsHtml(
+      bulkContractOptionsForType(element.element_type), preselect,
+      ['<option value="">— выберите —</option>', '<option value="none">без контракта</option>']);
     select.addEventListener("change", updateBulkStatusValidation);
     contractTd.appendChild(select);
 
@@ -5313,12 +5359,10 @@ function openBulkStatusModal() {
   document.getElementById("bulk-status-select").innerHTML =
     state.statusOrder.map(s => `<option value="${s}">${escapeHtml(state.statusLabels[s])}</option>`).join("");
   // Перечисление типов элементов контракта убрано из подписи (живой запрос
-  // пользователя) — остаётся только само наименование
-  // "Контрагент/Договор № от ДАТА/Спецификация № от ДАТА (Тема)",
-  // как оно выглядит во всех остальных местах интерфейса.
-  document.getElementById("bulk-fill-contract-select").innerHTML = ['<option value="">— выберите контракт —</option>'].concat(
-    state.contracts.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
-  ).join("");
+  // пользователя) — остаётся наименование, разложенное по группам
+  // «Контрагент · договор» (см. contractOptionsHtml).
+  document.getElementById("bulk-fill-contract-select").innerHTML = contractOptionsHtml(
+    state.contracts, "", ['<option value="">— выберите контракт —</option>']);
 
   bulkContractLines = []; // от прошлого открытия — до прихода свежих остатков предупреждений не показываем
   renderBulkStatusTable();
@@ -9704,9 +9748,24 @@ document.getElementById("ce-add-incident").addEventListener("click", () => addCo
 // если относится к другому объекту (накопленные контракты, договоры без
 // объекта). Иначе открытие такого контракта молча переставило бы его на
 // первый попавшийся договор — правка реквизитов не должна менять стройку.
+// Договор БЕЗ объекта (`object_id IS NULL`) — накопленное наследие: объект у
+// договора появился только 2026-08-03, и все заведённые до этого остались
+// ничьими. Такой договор виден администратору СЕРВИСА — ровно то же правило,
+// что уже стоит на сервере (_guard_specification/_guard_agreement: «не
+// привязан к объекту — правит администратор сервиса»). Без этого форма
+// нового контракта на боевой базе не давала выбрать вообще ничего: список
+// контрагентов оказывался пуст, потому что каждый их договор отфильтровывался
+// (живой репорт 2026-08-03). Прятать то, что сервер разрешает, значит не
+// «строже», а «сломано»: завести контракт становилось нечем, а починить
+// договор — некогда, пока о нём не знаешь.
+function legacyAgreementsVisible() {
+  return !!(state.currentUser && state.currentUser.role === "admin");
+}
+
 function agreementsForContractForm(cp, keepId) {
   const все = cp ? (cp.agreements || []) : [];
   return все.filter(a => a.object_id === state.objectId
+                      || (a.object_id == null && legacyAgreementsVisible())
                       || (keepId != null && String(a.id) === String(keepId)));
 }
 
@@ -9726,18 +9785,35 @@ function refreshAgreementSelect(selectedAgreementId) {
   agrSelect.innerHTML = agreements.map(a =>
     `<option value="${a.id}" ${String(a.id) === String(selectedAgreementId) ? "selected" : ""}>${escapeHtml(a.number)}${a.agreement_date ? " от " + formatDateRu(a.agreement_date) : ""} — ${escapeHtml(objectLabelById(a.object_id))}</option>`
   ).join("");
-  // Подсказка — только когда контрагент ВЫБРАН, а договоров у него на этот
-  // объект нет. Когда выбирать не из кого вовсе, про это уже сказано общей
-  // ошибкой формы, и две фразы об одном («у этого контрагента…» при пустом
-  // списке контрагентов) сбивали бы с толку.
-  const подсказка = document.getElementById("ce-agreement-hint");
-  if (подсказка) {
-    подсказка.textContent = (!контрагент || agreements.length)
-      ? ""
-      : "У этого контрагента нет договоров на показываемый объект. Заведите договор "
-        + "в «Действия → Справочники → Контрагенты» или переключите объект в тулбаре.";
-  }
+  updateAgreementHint(agreements);
   refreshSpecificationSelect(agreements, undefined);
+}
+
+// Подсказка под списком договоров. Два разных повода, и путать их нельзя:
+// договоров на этот объект нет вовсе — или выбран договор БЕЗ объекта
+// (наследие, см. legacyAgreementsVisible). Второе не ошибка и не мешает
+// сохранить контракт, но объект такого контракта не выводится ни по какой
+// цепочке, то есть на стройке его не увидит никто, кроме администратора
+// сервиса — об этом надо сказать там же, где выбирают.
+function updateAgreementHint(agreements) {
+  const подсказка = document.getElementById("ce-agreement-hint");
+  if (!подсказка) return;
+  const контрагент = currentContractCounterparty();
+  // Когда выбирать не из кого вовсе, про это уже сказано общей ошибкой формы,
+  // и две фразы об одном сбивали бы с толку.
+  if (!контрагент) { подсказка.textContent = ""; return; }
+  if (!agreements.length) {
+    подсказка.textContent =
+      "У этого контрагента нет договоров на показываемый объект. Заведите договор "
+      + "в «Действия → Справочники → Контрагенты» или переключите объект в тулбаре.";
+    return;
+  }
+  const выбран = agreements.find(
+    a => String(a.id) === document.getElementById("ce-agreement").value);
+  подсказка.textContent = (выбран && выбран.object_id == null)
+    ? "У выбранного договора не указан объект — контракт по нему будет виден только "
+      + "администратору сервиса. Укажите объект в «Действия → Справочники → Контрагенты»."
+    : "";
 }
 function refreshSpecificationSelect(agreements, selectedSpecificationId) {
   const agrSelect = document.getElementById("ce-agreement");
@@ -9751,8 +9827,9 @@ function refreshSpecificationSelect(agreements, selectedSpecificationId) {
 document.getElementById("ce-counterparty").addEventListener("change", () => { refreshAgreementSelect(); updateContractNamePreview(); });
 document.getElementById("ce-agreement").addEventListener("change", () => {
   const выбран = document.getElementById("ce-agreement").value;
-  refreshSpecificationSelect(
-    agreementsForContractForm(currentContractCounterparty(), выбран), undefined);
+  const договоры = agreementsForContractForm(currentContractCounterparty(), выбран);
+  refreshSpecificationSelect(договоры, undefined);
+  updateAgreementHint(договоры);
   updateContractNamePreview();
 });
 document.getElementById("ce-specification").addEventListener("change", updateContractNamePreview);
@@ -14455,9 +14532,23 @@ function setBulkEditStatus(text, isError) {
   el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
+// Ключ строки экрана подтверждения. В режиме реквизитов строка это элемент,
+// в режиме истории статусов — ЗАПИСЬ истории (их у элемента бывает семь).
+// Сервер присылает row_id в обоих режимах-потребителях; запасной вариант по
+// element_id оставлен, чтобы старый ответ не ломал экран.
+function bulkEditRowKey(item) {
+  return item.row_id !== undefined && item.row_id !== null ? item.row_id : `e${item.element_id}`;
+}
+
 function bulkEditValueText(v) {
   if (v === null || v === undefined || v === "") return "—";
-  return String(v);
+  // Даты и моменты — ДД.ММ.ГГГГ, как везде в интерфейсе. Сервер отдаёт их
+  // так, как они лежат в БД («2026-07-30 12:00:00»), и до этой правки экран
+  // подтверждения был единственным местом, где пользователь видел
+  // хранимый вид. Свободный текст функция не трогает — она проверяет
+  // именно форму ISO-даты.
+  const текст = String(v);
+  return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2})?/.test(текст) ? formatMomentRu(текст) : текст;
 }
 
 function renderBulkEditFieldChips() {
@@ -14497,13 +14588,18 @@ function renderBulkEditTable() {
   table.innerHTML = "";
   if (!bulkEditChanges.length) { updateBulkEditSummary(); return; }
 
-  // Индекс правок: элемент -> колонка -> номер в bulkEditChanges.
-  const byElement = new Map();
+  // Индекс правок: СТРОКА -> колонка -> номер в bulkEditChanges.
+  // Строка — не всегда элемент: в режиме «История статусов» это ЗАПИСЬ
+  // истории, а их у одного элемента бывает семь (формат переделан
+  // 2026-08-03). Поэтому ключ строки приходит с сервера отдельным полем;
+  // в режиме реквизитов он равен element_id, и поведение прежнее.
+  const byRow = new Map();
   const changedColumns = new Set();
   bulkEditChanges.forEach((c, i) => {
     changedColumns.add(c.column);
-    if (!byElement.has(c.element_id)) byElement.set(c.element_id, new Map());
-    byElement.get(c.element_id).set(c.column, i);
+    const key = bulkEditRowKey(c);
+    if (!byRow.has(key)) byRow.set(key, new Map());
+    byRow.get(key).set(c.column, i);
   });
   // Парная колонка только там, где реально есть правки — иначе таблица
   // удвоилась бы вхолостую на 22 колонках.
@@ -14547,16 +14643,16 @@ function renderBulkEditTable() {
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
-  const rows = bulkEditElements.filter((r) => byElement.has(r.element_id));
+  const rows = bulkEditElements.filter((r) => byRow.has(bulkEditRowKey(r)));
   const shown = Math.min(rows.length, BULK_EDIT_RENDER_LIMIT);
   for (let r = 0; r < shown; r++) {
     const row = rows[r];
-    const marks = byElement.get(row.element_id);
+    const marks = byRow.get(bulkEditRowKey(row));
     const tr = document.createElement("tr");
     const rowAll = document.createElement("td");
     const rowCb = document.createElement("input");
     rowCb.type = "checkbox";
-    rowCb.title = "Отметить все правки этого элемента";
+    rowCb.title = "Отметить все правки этой строки";
     rowCb.checked = [...marks.values()].every((i) => bulkEditChecked.has(i));
     rowCb.addEventListener("change", () => {
       marks.forEach((i) => { if (rowCb.checked) bulkEditChecked.add(i); else bulkEditChecked.delete(i); });
@@ -14619,7 +14715,7 @@ function updateBulkEditSummary(shown, totalRows) {
   const n = bulkEditChecked ? bulkEditChecked.size : 0;
   let text = `Отмечено ${n} из ${total} правок`;
   if (shown !== undefined && totalRows !== undefined && shown < totalRows) {
-    text += `. В таблице показаны первые ${shown} элементов из ${totalRows} — `
+    text += `. В таблице показаны первые ${shown} строк из ${totalRows} — `
           + `применятся все отмеченные, включая непоказанные`;
   }
   el.textContent = total ? text : "";
@@ -14762,7 +14858,7 @@ bulkEditApplyBtn.addEventListener("click", async () => {
     });
     let text = `Обновлено элементов: ${data.elements_updated}.`;
     if (data.records_inserted !== undefined) {
-      text += ` Записей истории добавлено: ${data.records_inserted}, дат исправлено: ${data.records_updated}.`;
+      text += ` Записей истории добавлено: ${data.records_inserted}, изменено: ${data.records_updated}.`;
     }
     if ((data.skipped || []).length) text += ` Пропущено: ${data.skipped.length}.`;
     setBulkEditStatus(text, false);

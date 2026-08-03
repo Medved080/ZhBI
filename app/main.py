@@ -2795,9 +2795,14 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
     conn = get_connection()
     try:
         if body.mode == "statuses":
-            return status_bulk_edit.apply_changes(
-                conn, body.changes, format_display_name(admin), admin["id"]
-            )
+            try:
+                return status_bulk_edit.apply_changes(
+                    conn, body.changes, format_display_name(admin), admin["id"]
+                )
+            except ValueError as exc:
+                # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
+                # а не сбой сервера (тот же белый список, что у реквизитов).
+                raise HTTPException(status_code=400, detail=str(exc))
         stamp = None
         if body.contracting_date:
             try:
