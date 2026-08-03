@@ -165,8 +165,22 @@ def list_counterparties_full(user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         counterparties = [dict(r) for r in conn.execute("SELECT * FROM counterparties ORDER BY short_name")]
-        agreements = [dict(r) for r in conn.execute("SELECT * FROM agreements ORDER BY number")]
-        specifications = [dict(r) for r in conn.execute("SELECT * FROM specifications ORDER BY number")]
+        # Тот же отбор по доступным объектам, что и у /agreements рядом
+        # (аудит безопасности 2026-08-03 закрыл его там, но не здесь): это
+        # дерево отдаёт РОВНО ТЕ ЖЕ договоры и спецификации, только все
+        # сразу и без параметра — то есть было более коротким путём к тому,
+        # что уже признали закрытым. Спецификации сужаются вслед за
+        # договорами: своего объекта у них нет, он выводится по цепочке.
+        доступ, доступ_params = _accessible_agreements_clause(conn, user)
+        agreements = [dict(r) for r in conn.execute(
+            f"SELECT * FROM agreements WHERE {доступ} ORDER BY number", доступ_params)]
+        if agreements:
+            marks = ",".join("?" * len(agreements))
+            specifications = [dict(r) for r in conn.execute(
+                f"SELECT * FROM specifications WHERE agreement_id IN ({marks}) ORDER BY number",
+                [a["id"] for a in agreements])]
+        else:
+            specifications = []
 
         specs_by_agreement: dict[int, list] = {}
         for s in specifications:

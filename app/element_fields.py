@@ -150,6 +150,20 @@ def write_fields(conn, element_id: int, row, values: dict) -> tuple[dict, list]:
     первой же загрузки — переимпорт чертежа после этого не обновил бы
     ничего.
     """
+    # Имена полей попадают прямо в `SET {поле} = :поле`. Оба нынешних
+    # вызывающих (одиночная правка в app/main.py и массовая в
+    # app/element_bulk_edit.py) отбирают их по EDITABLE_FIELDS, но проверка
+    # у КАЖДОГО своя — а именно на такой схеме аудит 2026-08-03 и нашёл
+    # дыру: массовая правка сверку потеряла и позволяла записать любую
+    # существующую колонку elements (object_id, current_status, is_current).
+    # Поэтому здесь стоит последний барьер: он ничего не стоит и не даёт
+    # третьему вызывающему открыть то же самое заново.
+    # Ровно EDITABLE_FIELDS, без послаблений: `contract_id` массовая правка
+    # отбирает ДО этого вызова и проводит через apply_status_change — прямая
+    # запись контракта здесь обошла бы историю, снимок и проверку остатка.
+    посторонние = set(values) - set(EDITABLE_FIELDS)
+    if посторонние:
+        raise ValueError("Недопустимые поля для правки: " + ", ".join(sorted(посторонние)))
     changed = {f: (row[f], v) for f, v in values.items() if row[f] != v}
     if not changed:
         return {}, sorted(set(json.loads(row["manual_fields"] or "[]")))

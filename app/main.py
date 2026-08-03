@@ -1665,11 +1665,19 @@ def set_label_dates_visibility(settings: dict[str, bool], object_id: int = Query
 
 
 @app.get("/layer-type-combinations")
-def list_layer_type_combinations(user: sqlite3.Row = Depends(get_current_user)):
+def list_layer_type_combinations(admin: sqlite3.Row = Depends(require_system_admin)):
     """Для экрана настроек формы маркера (п.11 третьего раунда) — все
     встреченные пары (слой, тип элемента) с их текущей формой (по
     умолчанию 'outline' — "как в оригинале", если явно не назначено иное в
-    element_shapes; см. Docs/backlog.md)."""
+    element_shapes; см. Docs/backlog.md).
+
+    Системному администратору, а не всякому вошедшему (аудит безопасности
+    2026-08-03, второй проход). Отбирать пары по доступным объектам смысла
+    нет: сама настройка `element_shapes` СИСТЕМНАЯ (ключ — слой и тип, без
+    объекта), то есть экран целиком принадлежит ведению сервиса и в меню
+    закрыт `admin-only`. А отдавал эндпоинт имена слоёв ВСЕХ чертежей — а в
+    новом стандарте имя слоя несёт зону, отметку, этаж и роль, то есть
+    состав чужой стройки."""
     conn = get_connection()
     try:
         combo_rows = conn.execute(
@@ -1836,6 +1844,15 @@ def zone_geometry(zone_id: int, user: sqlite3.Row = Depends(get_current_user)):
         zone = conn.execute("SELECT * FROM zones WHERE id = ?", (zone_id,)).fetchone()
         if zone is None or zone["object_id"] is None:
             raise HTTPException(status_code=404, detail="Зона справочника не найдена")
+        # Объект берётся ИЗ САМОЙ ЗОНЫ, как у правки зоны (update_zone) —
+        # принимать его параметром значило бы позволить назвать любой
+        # доступный и прочитать чужую. До этой проверки перебор zone_id
+        # отдавал геометрию зон любого объекта вместе с сеткой осей,
+        # габаритами стройки, соседними зонами и полигонами крана-владельца:
+        # правка зоны объект проверяла, а чтение геометрии — нет (аудит
+        # безопасности 2026-08-03, второй проход; ровно та же асимметрия
+        # «писать нельзя, читать можно», что нашлась у справочника зон).
+        assert_object_access(conn, user, zone["object_id"], "view")
 
         def levels_of(zid):
             return [
