@@ -21,6 +21,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app import activity
 from app.access import require_object_access, require_object_admin
 from app.db import get_connection
 
@@ -112,6 +113,8 @@ def write_project_card(body: ProjectCardIn, object_id: int = Query(...),
         set_setting(conn, PROJECT_CARD_KEY, object_id,
                     json.dumps(body.model_dump(), ensure_ascii=False))
         conn.commit()
+        activity.log("project_card", user=admin, entity_type="object", entity_id=object_id,
+                     new_value=body.title or "", details=body.model_dump())
         return get_project_card(conn, object_id)
     finally:
         conn.close()
@@ -143,8 +146,11 @@ def set_info_plate_settings(body: InfoPlateSettingsIn, object_id: int = Query(..
         raise HTTPException(status_code=400, detail="Порог не может быть отрицательным")
     conn = get_connection()
     try:
+        было = get_setting(conn, INFO_PLATE_THRESHOLD_KEY, object_id, "0")
         set_setting(conn, INFO_PLATE_THRESHOLD_KEY, object_id, str(body.late_threshold_days))
         conn.commit()
+        activity.log("late_threshold", user=admin, entity_type="object", entity_id=object_id,
+                     old_value=было, new_value=str(body.late_threshold_days))
         return {"late_threshold_days": body.late_threshold_days}
     finally:
         conn.close()
@@ -231,6 +237,8 @@ def write_report_notes(body: ReportNotesIn, object_id: int = Query(...),
              f"{admin['last_name']} {admin['first_name']}".strip() or admin["domain_login"]),
         )
         conn.commit()
+        activity.log("report_notes", user=admin, entity_type="object", entity_id=object_id,
+                     new_value=f"редакция на {body.effective_date[:10]}")
         return {"revisions": list_notes(conn, object_id)}
     finally:
         conn.close()
@@ -244,5 +252,7 @@ def delete_report_notes(effective_date: str, object_id: int = Query(...),
         conn.execute("DELETE FROM report_notes WHERE object_id = ? AND effective_date = ?",
                      (object_id, effective_date[:10]))
         conn.commit()
+        activity.log("report_notes_delete", user=admin, entity_type="object", entity_id=object_id,
+                     old_value=f"редакция на {effective_date[:10]}")
     finally:
         conn.close()

@@ -221,6 +221,8 @@ def apply_drawing(
     keep_mark_element_ids=None,
     refill_manual_fields=None,
     create_new_zone_ids=None,
+    user=None,
+    request_id=None,
 ) -> DxfImportResult:
     """Фаза 2: применяет уже посчитанную сверку. Порядок операций тот же,
     что был у одношагового импорта: элементы -> сетка осей -> зоны и
@@ -237,6 +239,7 @@ def apply_drawing(
                 int(element_id): set(fields)
                 for element_id, fields in (refill_manual_fields or {}).items()
             },
+            user=user, request_id=request_id,
         )
         n_numeric, n_letter = import_elements.save_axis_grid(conn, parsed.grid, parsed.source_file)
 

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.access import assert_object_access, require_system_admin
 from app.auth import get_current_user
+from app import activity
 from app.db import get_connection
 
 router = APIRouter(tags=["counterparties"])
@@ -218,6 +219,8 @@ def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(requi
         counterparty_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         conn.commit()
         row = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
+        activity.log("counterparty_create", user=admin, entity_type="counterparty",
+                     entity_id=counterparty_id, new_value=f"{body.short_name} ({code})")
         return dict(row)
     finally:
         conn.close()
@@ -227,7 +230,7 @@ def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(requi
 def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlite3.Row = Depends(require_system_admin)):
     conn = get_connection()
     try:
-        existing = conn.execute("SELECT id FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
+        existing = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Контрагент не найден")
         conn.execute(
@@ -240,6 +243,10 @@ def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlit
         )
         conn.commit()
         row = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
+        activity.log("counterparty_update", user=admin, entity_type="counterparty",
+                     entity_id=counterparty_id,
+                     old_value=f"{existing['short_name']} ({existing['code']})",
+                     new_value=f"{body.short_name} ({body.code})")
         return dict(row)
     finally:
         conn.close()
@@ -370,6 +377,9 @@ def create_agreement(body: AgreementIn, user: sqlite3.Row = Depends(get_current_
         agreement_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         conn.commit()
         row = conn.execute("SELECT * FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+        activity.log("agreement_create", user=user, entity_type="agreement", entity_id=agreement_id,
+                     new_value=body.number, details={"object_id": body.object_id,
+                                                     "counterparty_id": body.counterparty_id})
         return dict(row)
     finally:
         conn.close()
@@ -381,7 +391,7 @@ def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = 
     _guard_agreement(conn, admin, agreement_id)
     try:
         existing = conn.execute(
-            "SELECT id, object_id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+            "SELECT id, number, object_id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Договор не найден")
         if body.object_id is None:
@@ -424,6 +434,10 @@ def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = 
         )
         conn.commit()
         row = conn.execute("SELECT * FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+        activity.log("agreement_update", user=admin, entity_type="agreement", entity_id=agreement_id,
+                     old_value=existing["number"], new_value=body.number,
+                     details={"object_id": body.object_id,
+                              "прежний объект": existing["object_id"]})
         return dict(row)
     finally:
         conn.close()
@@ -464,6 +478,9 @@ def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(get
             raise HTTPException(status_code=400, detail="У этого договора уже есть спецификация с таким номером")
         conn.commit()
         row = conn.execute("SELECT * FROM specifications WHERE id = ?", (specification_id,)).fetchone()
+        activity.log("specification_create", user=admin, entity_type="specification",
+                     entity_id=specification_id, new_value=body.number,
+                     details={"agreement_id": body.agreement_id})
         return dict(row)
     finally:
         conn.close()
@@ -479,7 +496,9 @@ def update_specification(specification_id: int, body: SpecificationIn, admin: sq
     _guard_specification_owner(conn, admin, specification_id)
     _guard_agreement(conn, admin, body.agreement_id)
     try:
-        existing = conn.execute("SELECT id FROM specifications WHERE id = ?", (specification_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT id, number, agreement_id FROM specifications WHERE id = ?",
+            (specification_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
         conn.execute(
@@ -488,6 +507,10 @@ def update_specification(specification_id: int, body: SpecificationIn, admin: sq
         )
         conn.commit()
         row = conn.execute("SELECT * FROM specifications WHERE id = ?", (specification_id,)).fetchone()
+        activity.log("specification_update", user=admin, entity_type="specification",
+                     entity_id=specification_id, old_value=existing["number"], new_value=body.number,
+                     details={"agreement_id": body.agreement_id,
+                              "прежний договор": existing["agreement_id"]})
         return dict(row)
     finally:
         conn.close()
@@ -516,6 +539,8 @@ def upsert_mark_type_prefix(body: MarkTypePrefixIn, admin: sqlite3.Row = Depends
             (body.prefix, body.element_type),
         )
         conn.commit()
+        activity.log("mark_prefix_set", user=admin, entity_type="mark_prefix",
+                     old_value=body.prefix, new_value=body.element_type)
         return {"prefix": body.prefix, "element_type": body.element_type}
     finally:
         conn.close()
@@ -527,6 +552,7 @@ def delete_mark_type_prefix(prefix: str, admin: sqlite3.Row = Depends(require_sy
     try:
         conn.execute("DELETE FROM mark_type_prefixes WHERE prefix = ?", (prefix,))
         conn.commit()
+        activity.log("mark_prefix_delete", user=admin, entity_type="mark_prefix", old_value=prefix)
         return {"status": "ok"}
     finally:
         conn.close()

@@ -122,6 +122,8 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_system_
         row = conn.execute(
             "SELECT * FROM users WHERE domain_login = ?", (body.domain_login,)
         ).fetchone()
+        activity.log("user_create", user=admin, entity_type="user", entity_id=row["id"],
+                     new_value=f"{body.domain_login} ({body.role}, {body.auth_method})")
         return user_out(row)
     finally:
         conn.close()
@@ -187,6 +189,9 @@ def update_user(user_id: int, body: UserUpdateIn, request: Request,
                          entity_id=user_id, old_value=было, new_value=body.auth_method)
         conn.commit()
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        activity.log("user_update", user=admin, entity_type="user", entity_id=user_id,
+                     old_value=f"{row['last_name']} {row['first_name']} ({row['role']}, {row['domain_login']})",
+                     new_value=f"{body.last_name} {body.first_name} ({body.role}, {body.domain_login})")
         return user_out(updated)
     finally:
         conn.close()
@@ -253,6 +258,12 @@ def set_password(
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         conn.commit()
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        # Сам пароль в журнал, разумеется, не попадает — только факт смены,
+        # кто менял и кому. Именно это спрашивает служба ИБ, разбирая
+        # инцидент; до 2026-08-03 не писалось ничего.
+        activity.log("user_password", user=current, entity_type="user", entity_id=user_id,
+                     new_value=("снят (вход по паролю запрещён)" if not body.password else "изменён"),
+                     details={"себе": current["id"] == user_id})
         return user_out(updated)
     finally:
         conn.close()
@@ -278,6 +289,8 @@ def set_label_color(
         )
         conn.commit()
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        activity.log("user_label_color", user=current, entity_type="user", entity_id=user_id,
+                     new_value=body.label_color or "по умолчанию")
         return user_out(updated)
     finally:
         conn.close()
@@ -312,6 +325,8 @@ def set_ui_theme(
             (body.ui_theme, user_id),
         )
         conn.commit()
+        activity.log("user_ui_theme", user=current, entity_type="user", entity_id=user_id,
+                     new_value=body.ui_theme or "по умолчанию")
         return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
     finally:
         conn.close()

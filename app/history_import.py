@@ -60,6 +60,7 @@ from datetime import date, datetime, timedelta
 
 from openpyxl import load_workbook
 
+from app import activity
 from app.contracting_import import parse_number_and_date
 from app.contracts import (
     find_or_create_contract,
@@ -347,7 +348,8 @@ def _shift_planned_before_first_event(conn, element_id: int) -> bool:
     return True
 
 
-def import_history(conn, source_file: str, rows: list, mode: str):
+def import_history(conn, source_file: str, rows: list, mode: str,
+                   user=None, request_id: str = None):
     if mode not in ("replace", "merge", "sync"):
         raise HistoryImportError(422, "mode должен быть 'replace', 'merge' или 'sync'")
 
@@ -531,6 +533,20 @@ def import_history(conn, source_file: str, rows: list, mode: str):
     # статусом (см. Docs/backlog.md, 2026-07-28, восстановление статусов).
     for element_id in touched_element_ids:
         effective_status, _ = recompute_status_and_actual_date(conn, element_id)
+        # Событие НА КАЖДОЕ затронутое изделие, а не только сводка по
+        # импорту (2026-08-03): иначе восстановленная история не видна ни в
+        # отчёте «Моя работа», ни в фильтре «Изменения», ни в истории
+        # изменений самого изделия — а именно это и меняет импорт. Общий
+        # request_id связывает их со сводным событием операции.
+        снимок = conn.execute(
+            "SELECT element_type, subtype, mark FROM elements WHERE id = ?", (element_id,)
+        ).fetchone()
+        activity.log(
+            "history_import", user=user, entity_type="element", entity_id=element_id,
+            element_type=снимок["element_type"], subtype=снимок["subtype"], mark=снимок["mark"],
+            new_value=effective_status, request_id=request_id,
+            details={"режим": mode, "файл": source_file},
+        )
         # Контракт принимаем ИЗ импортированных записей: здесь файл и есть
         # то, что восстанавливают, поэтому направление обратное обычному
         # (см. adopt_contract_from_history, app/contracts.py). Без этого

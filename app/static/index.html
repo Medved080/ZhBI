@@ -485,6 +485,24 @@
   #stage { flex: 1; min-height: 0; position: relative; overflow: hidden;
     background: var(--stage-bg, #ffffff); cursor: grab; }
   #stage.dragging { cursor: grabbing; }
+  /* Индикатор ожидания — CSS-анимация, а не GIF-файл: картинку пришлось бы
+     вендорить в статику и держать под тем же CSP, а поведение то же.
+     Один класс на все места ожидания (рабочая область, история изменений
+     изделия) — второй крутящийся кружок с другим видом только сбивал бы. */
+  .spinner {
+    display: inline-block; width: 14px; height: 14px; vertical-align: -2px;
+    border: 2px solid var(--color-border); border-top-color: var(--color-primary);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  .spinner-lg { width: 34px; height: 34px; border-width: 3px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+  .loading-inline { display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 12px; }
+  .stage-loading {
+    position: absolute; inset: 0; z-index: 15;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    background: var(--stage-bg, #ffffff); color: var(--color-text-muted); font-size: 13px;
+  }
   #stage-3d { flex: 1; min-height: 0; position: relative; overflow: hidden;
     background: var(--stage-3d-bg, #f3f4f6); }
   #stage-3d canvas { display: block; }
@@ -955,6 +973,29 @@
   #history-table { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 12px; }
   #history-table td, #history-table th { padding: 4px 4px; border-bottom: 1px solid var(--color-border); text-align: left; }
   #history-table th { color: var(--color-text-muted); font-weight: 500; }
+  /* История изменений изделия (журнал действий) — та же вёрстка, что у
+     истории статусов рядом: два разных вида таблиц в одной карточке
+     читались бы как два разных по важности блока. */
+  /* table-layout: fixed — панель узкая (320 px), и без него длинное
+     «было → стало» растягивало таблицу за её край: правая колонка уезжала
+     под границу сайдбара (поймано живой проверкой). */
+  #element-activity-table {
+    width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 4px; font-size: 12px;
+  }
+  #element-activity-table col.c-when { width: 27%; }
+  #element-activity-table col.c-who { width: 22%; }
+  #element-activity-table td, #element-activity-table th {
+    padding: 4px 4px; border-bottom: 1px solid var(--color-border); text-align: left;
+    vertical-align: top;
+  }
+  /* Время — одной строкой: без этого «03.08.2026» разрывалось посреди года
+     (панель узкая, точки переносом не считаются), а перенос разрешён только
+     последней колонке, где лежит свободный текст «было → стало». */
+  /* Дата и время — двумя строками (так же выглядит «История статусов»
+     выше), поэтому переносить внутри строки нечего; свободный текст
+     «было → стало» переносится по словам и по длинным значениям. */
+  #element-activity-table td:last-child { word-break: break-word; }
+  #element-activity-table th { color: var(--color-text-muted); font-weight: 500; }
   #placeholder { color: var(--color-text-muted); }
   label.toggle { font-size: 12px; display: flex; align-items: center; gap: 6px; margin-top: 6px; }
   /* Подпункт «Даты» — на СВОЕЙ строке с общим отступом (живой запрос: у
@@ -1861,6 +1902,17 @@
     </div>
     <div id="rubber-band"></div>
     <div id="tooltip-2d"></div>
+    <!-- Индикатор загрузки рабочей области (живой запрос 2026-08-03):
+         пока схема не отрисована — после входа, при обновлении страницы и
+         при переключении объекта — пустое поле выглядит как «данных нет»
+         или как зависание. Лежит внутри #stage, поверх пустого SVG. -->
+    <!-- Виден СРАЗУ, из разметки: между открытием страницы и первым
+         запросом схемы проходит проверка сессии и загрузка дерева объектов,
+         и всё это время поле пустое. Гасится в loadPlan (setStageLoading). -->
+    <div id="stage-loading" class="stage-loading">
+      <span class="spinner spinner-lg"></span>
+      <div id="stage-loading-text">Загрузка схемы…</div>
+    </div>
     <div id="multi-select-panel">
       <span id="multi-select-count">Выделено: 0</span>
       <button class="btn btn-sm btn-primary" id="multi-select-status-btn">Изменить статус</button>

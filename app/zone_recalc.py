@@ -18,6 +18,8 @@
 
 import json
 import sqlite3
+
+from app import activity
 import sys
 from pathlib import Path
 from typing import Optional
@@ -117,7 +119,8 @@ def _zone_records(conn: sqlite3.Connection, object_id: int) -> list:
     return records
 
 
-def recalculate(conn: sqlite3.Connection, object_id: int) -> dict:
+def recalculate(conn: sqlite3.Connection, object_id: int, user=None,
+                request_id: Optional[str] = None) -> dict:
     """Пересчитывает привязку всех актуальных элементов объекта.
 
     Возвращает {"changed": N, "by_category": {...}, "before": [...]} — before
@@ -126,7 +129,10 @@ def recalculate(conn: sqlite3.Connection, object_id: int) -> dict:
     """
     zones = _zone_records(conn, object_id)
     elements = conn.execute(
-        "SELECT id, element_type, x, y, outline_json, elevation_mm, "
+        # mark/subtype — не для пересчёта, а для СНИМКА в журнале: событие
+        # изделия ищут по марке, и без неё строка «пересчёт привязки» в
+        # истории изменений не читается.
+        "SELECT id, element_type, subtype, mark, x, y, outline_json, elevation_mm, "
         + ", ".join(_BINDING_FIELDS) +
         " FROM elements WHERE object_id = ? AND is_current = 1",
         (object_id,),
@@ -156,6 +162,19 @@ def recalculate(conn: sqlite3.Connection, object_id: int) -> dict:
         conn.execute(
             f"UPDATE elements SET {assignments}, updated_at = datetime('now') WHERE id = :id",
             updates | {"id": element["id"]},
+        )
+        # Событие изделию, у которого привязка ДЕЙСТВИТЕЛЬНО изменилась
+        # (2026-08-03): правка зоны меняет данные сотен изделий, и в истории
+        # каждого из них это должно быть видно — иначе «почему изделие
+        # переехало на другую стоянку» не восстановить. Сводка правки зоны
+        # (zone_edit) остаётся и связана общим request_id.
+        activity.log(
+            "zone_rebind", user=user, entity_type="element", entity_id=element["id"],
+            element_type=element["element_type"], subtype=element["subtype"],
+            mark=element["mark"],
+            old_value="; ".join(f"{k}: {element[k]}" for k in updates)[:500],
+            new_value="; ".join(f"{k}: {v}" for k, v in updates.items())[:500],
+            request_id=request_id,
         )
 
     conn.commit()

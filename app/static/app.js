@@ -4222,7 +4222,36 @@ document.getElementById("btn-refresh").addEventListener("click", async () => {
   }
 });
 
+// Индикатор ожидания в рабочей области (живой запрос 2026-08-03). Пустое
+// поле после входа, при обновлении страницы и при переключении объекта
+// неотличимо от «данных нет» и от зависшей вкладки — на реальном файле
+// схема появляется через заметную паузу (9422 элемента: запрос, разбор,
+// отрисовка SVG).
+//
+// Показывается ТОЛЬКО пока схема пуста: над уже нарисованной схемой белый
+// экран поверх неё был бы шагом назад — при обновлении данных на месте
+// (опрос /changes, сохранение настроек) человек продолжает смотреть на
+// свои элементы.
+function setStageLoading(on, text) {
+  const box = document.getElementById("stage-loading");
+  if (!box) return;
+  if (on && state.elements.length) return;   // схема уже на экране — не закрывать её
+  if (text) document.getElementById("stage-loading-text").textContent = text;
+  box.style.display = on ? "" : "none";
+}
+
 async function loadPlan(preserveView = true) {
+  setStageLoading(true);
+  try {
+    return await loadPlanInner(preserveView);
+  } finally {
+    // Снимаем в любом случае, в том числе при ошибке: над сообщением об
+    // ошибке вечный «крутящийся кружок» — худший из возможных исходов.
+    setStageLoading(false);
+  }
+}
+
+async function loadPlanInner(preserveView = true) {
   // Этап B: показывается ОДИН объект. state.selection (файл -> слои)
   // сохранён только для формы «Версии чертежа объекта», где можно открыть
   // не актуальную версию; в обычной работе он пуст, и селекция строится по
@@ -4613,6 +4642,14 @@ async function showCard(element) {
       ${technicalHtml}
     </details>
     <h3 style="margin-bottom:4px;">История статусов</h3><div id="history-box">Загрузка…</div>
+    <!-- История ИЗМЕНЕНИЙ (журнал действий) — по кнопке, а не сразу
+         (живой запрос 2026-08-03). Карточка открывается на каждый клик по
+         схеме, а этот список нужен не всегда; лишний запрос на каждый клик
+         платился бы всеми и всегда. -->
+    <h3 style="margin-bottom:4px;">История изменений</h3>
+    <div id="element-activity-box">
+      <button type="button" class="btn btn-sm btn-secondary" id="element-activity-load">Показать</button>
+    </div>
   `;
 
   // Вложения — своим запросом, ПОСЛЕ отрисовки карточки: список файлов не
@@ -4648,6 +4685,9 @@ async function showCard(element) {
       }
     });
   }
+
+  document.getElementById("element-activity-load")
+          .addEventListener("click", () => loadElementActivity(element.id));
 
   if (canEdit) {
     document.getElementById("card-change-status-btn").addEventListener("click", (e) => {
@@ -4691,6 +4731,42 @@ async function showCard(element) {
   } catch (e) {
     const historyBox = document.getElementById("history-box");
     if (historyBox) historyBox.textContent = "не удалось загрузить историю";
+  }
+}
+
+// История изменений изделия — события журнала о нём (живой запрос
+// 2026-08-03). Грузится по кнопке: карточка открывается на каждый клик по
+// схеме, а этот список нужен не всегда. Пока идёт запрос — крутящийся
+// индикатор (общий .spinner, он же у рабочей области), иначе на медленной
+// базе кнопка выглядит нажатой впустую.
+async function loadElementActivity(elementId) {
+  const box = document.getElementById("element-activity-box");
+  if (!box) return;
+  box.innerHTML = `<div class="loading-inline"><span class="spinner"></span>Читаю журнал…</div>`;
+  try {
+    const data = await api(`/elements/${elementId}/activity`);
+    // Карточку могли переоткрыть на другом изделии, пока шёл запрос.
+    if (state.selectedId !== elementId) return;
+    const актуальный = document.getElementById("element-activity-box");
+    if (!актуальный) return;
+    if (!data.rows.length) {
+      актуальный.innerHTML = `<div class="hint-text">изменений не зафиксировано</div>`;
+      return;
+    }
+    const строки = data.rows.map(r => `<tr>
+      <td>${myWorkTimeText(r.at).split(" ").map(escapeHtml).join("<br>")}</td>
+      <td>${escapeHtml(r.action_title)}</td>
+      <td>${escapeHtml(r.user_name || "—")}</td>
+      <td>${escapeHtml(r.old_text)}${r.old_text && r.new_text ? " → " : ""}${escapeHtml(r.new_text)}</td>
+    </tr>`).join("");
+    актуальный.innerHTML =
+      `<table id="element-activity-table">
+         <colgroup><col class="c-when"><col><col class="c-who"><col></colgroup>
+         <tr><th>Когда</th><th>Что</th><th>Кто</th><th>Изменение</th></tr>${строки}</table>`
+      + (data.truncated ? `<div class="hint-text">показаны последние ${data.rows.length}</div>` : "");
+  } catch (e) {
+    const актуальный = document.getElementById("element-activity-box");
+    if (актуальный) актуальный.innerHTML = `<div class="hint-text">не удалось загрузить: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -10719,7 +10795,7 @@ async function loadBackups() {
       // должен цепляться за созданные человеком.
       const cls = b.kind === "manual" ? "" : ' class="backup-auto"';
       return `<tr${cls}>
-        <td>${escapeHtml(b.created_at)}</td>
+        <td>${escapeHtml(activityTimeLocal(b.created_at))}</td>
         <td>${escapeHtml(b.kind_label || b.kind)}</td>
         <td>${escapeHtml(b.user_name || "—")}</td>
         <td>${escapeHtml(b.comment || "")}</td>

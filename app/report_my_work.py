@@ -60,10 +60,49 @@ ACTION_TITLES = {
     "element_bulk_edit": "Массовая правка реквизитов (Excel)",
     "element_comment": "Комментарий к элементу",
     "planned_date": "Плановая дата поставки",
+    # Поэлементные события массовых операций (2026-08-03). Сводка операции
+    # пишется отдельной записью с тем же request_id — см. new_request_id.
+    "import_dxf_element": "Обновлено чертежом",
+    "history_import": "История статусов из файла",
+    "schedule_import": "Даты СМР из графика",
+    "zone_rebind": "Пересчёт привязки к зонам",
     "import_dxf": "Загрузка чертежа",
     "import_input": "Загрузка из папки Input",
+    "import_history": "Импорт истории статусов",
+    "import_schedule": "Импорт графика MS Project",
+    "import_contracting": "Импорт контрактации",
+    "settings_import": "Импорт настроек",
+    "status_history_reset": "Сброс всей истории статусов",
     "zone_edit": "Правка зоны",
     "zone_edit_undo": "Откат правки зоны",
+    "counterparty_create": "Контрагент создан",
+    "counterparty_update": "Контрагент изменён",
+    "agreement_create": "Договор создан",
+    "agreement_update": "Договор изменён",
+    "specification_create": "Спецификация создана",
+    "specification_update": "Спецификация изменена",
+    "contract_create": "Контракт создан",
+    "contract_update": "Контракт изменён",
+    "default_contracts": "Контракты по умолчанию",
+    "mark_prefix_set": "Префикс марки задан",
+    "mark_prefix_delete": "Префикс марки удалён",
+    "subtype_add": "Подтип добавлен",
+    "subtype_delete": "Подтип удалён",
+    "status_colors": "Цвета статусов",
+    "zone_colors": "Цвета зон",
+    "element_shapes": "Формы маркеров",
+    "label_visibility": "Видимость подписей",
+    "label_dates_visibility": "Видимость дат в подписях",
+    "project_card": "Карточка объекта",
+    "late_threshold": "Порог опоздания поставки",
+    "report_notes": "События, задачи, вопросы",
+    "report_notes_delete": "Удалена редакция событий/задач",
+    "user_create": "Пользователь создан",
+    "user_update": "Пользователь изменён",
+    "user_password": "Пароль изменён",
+    "user_label_color": "Цвет подписей марок",
+    "user_ui_theme": "Оформление интерфейса",
+    "last_object": "Выбран объект",
     "attachment_add": "Вложение добавлено",
     "attachment_delete": "Вложение удалено",
     "project_create": "Проект создан",
@@ -95,6 +134,14 @@ ELEMENT_CHANGE_ACTIONS = (
     "element_bulk_edit",
     "element_comment",
     "planned_date",
+    # Массовые операции — поэлементными событиями (2026-08-03). Без них
+    # переимпорт чертежа, восстановление истории из файла, импорт графика и
+    # пересчёт привязки к зонам меняли данные тысяч изделий, а фильтр
+    # «Изменения» их не показывал: событие было ОДНО, на всю операцию.
+    "import_dxf_element",
+    "history_import",
+    "schedule_import",
+    "zone_rebind",
 )
 
 # Что в «Моей работе» НЕ показывается. Правило — денилист, а не вайтлист:
@@ -112,7 +159,7 @@ def action_title(action: str) -> str:
     return ACTION_TITLES.get(action, action)
 
 
-def _status_or_field_text(raw: Optional[str]) -> str:
+def value_text(raw: Optional[str]) -> str:
     """Значение «было»/«стало» в человеческом виде.
 
     Три формата уживаются в одной колонке журнала, и различать их приходится
@@ -287,8 +334,8 @@ def build_my_work_report(conn, *, at_from: Optional[str], at_to: Optional[str],
             "entity_type": r["entity_type"],
             "entity_id": r["entity_id"],
             "item": " / ".join(p for p in (тип, подтип, марка) if p),
-            "old_text": _status_or_field_text(r["old_value"]),
-            "new_text": _status_or_field_text(r["new_value"]),
+            "old_text": value_text(r["old_value"]),
+            "new_text": value_text(r["new_value"]),
             "element": элемент,
         })
 

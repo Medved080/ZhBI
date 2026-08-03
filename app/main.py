@@ -93,8 +93,8 @@ from app.report_delivery import (
     build_delivery_schedule_xlsx,
 )
 from app.report_my_work import (
-    FILE_LIMIT, SCREEN_LIMIT, build_my_work_pdf, build_my_work_report, build_my_work_xlsx,
-    changed_element_ids,
+    FILE_LIMIT, NON_CHANGE_ACTIONS, SCREEN_LIMIT, action_title, build_my_work_pdf,
+    build_my_work_report, build_my_work_xlsx, changed_element_ids, value_text,
 )
 from app.models import (
     ProjectIn,
@@ -610,6 +610,47 @@ def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
         enrich_element_row(conn, data)
         _element_reference_labels(conn, data)
         return data
+    finally:
+        conn.close()
+
+
+@app.get("/elements/{element_id}/activity")
+def element_activity(element_id: int, limit: int = Query(200, le=1000),
+                     user: sqlite3.Row = Depends(get_current_user)):
+    """История изменений ОДНОГО изделия — все события журнала о нём (живой
+    запрос 2026-08-03, блок в свойствах элемента).
+
+    Доступ — по объекту изделия, а не по системной роли: журнал целиком
+    (`GET /activity`) остаётся за администратором сервиса, но «что делали
+    именно с этим изделием» нужно всякому, кому изделие вообще видно, —
+    иначе прораб не может проверить собственную работу.
+
+    Отдельным запросом, а не частью карточки: карточка открывается на каждый
+    клик по схеме, а эти события нужны не всегда (см. кнопку «Показать» в
+    интерфейсе).
+    """
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM elements WHERE id = ?", (element_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Элемент не найден")
+        _guard_elements(conn, user, [element_id], "view")
+        rows = conn.execute(
+            "SELECT id, at, user_name, action, old_value, new_value, request_id, details "
+            "FROM activity_log WHERE entity_type = 'element' AND entity_id = ? "
+            "AND source = 'server' AND action NOT IN ({}) "
+            "ORDER BY at DESC, id DESC LIMIT ?".format(
+                ",".join("?" * len(NON_CHANGE_ACTIONS))),
+            [element_id] + sorted(NON_CHANGE_ACTIONS) + [limit],
+        ).fetchall()
+        return {
+            "rows": [{
+                "id": r["id"], "at": r["at"], "user_name": r["user_name"],
+                "action": r["action"], "action_title": action_title(r["action"]),
+                "old_text": value_text(r["old_value"]), "new_text": value_text(r["new_value"]),
+            } for r in rows],
+            "total": len(rows),
+            "truncated": len(rows) >= limit,
+        }
     finally:
         conn.close()
 
@@ -1711,22 +1752,67 @@ def reset_status_history(user: sqlite3.Row = Depends(require_system_admin)):
             (format_display_name(user), user["id"]),
         )
         conn.commit()
-        return {"reset_count": n}
     finally:
         conn.close()
+    # Сводкой, БЕЗ события на каждое изделие — сознательно. Правило
+    # поэлементной записи (импорты, пересчёт зон) существует, потому что там
+    # затронуто ПОДМНОЖЕСТВО, которое иначе не восстановить. Здесь затронуты
+    # ВСЕ изделия разом, и «изменено всё» исчерпывающе; девять тысяч
+    # одинаковых строк в отчёте не добавили бы ничего, кроме объёма.
+    activity.log("status_history_reset", user=user, new_value=str(n),
+                 details={"сообщение": "удалена вся история статусов, все изделия возвращены "
+                                       "в «Запланирован»"})
+    return {"reset_count": n}
 
 
 @app.get("/status-summary", response_model=list[StatusSummaryEntry])
 def status_summary(
-    source_file: Optional[str] = Query(None), user: sqlite3.Row = Depends(get_current_user)
+    object_id: Optional[int] = Query(None),
+    source_file: Optional[str] = Query(None),
+    user: sqlite3.Row = Depends(get_current_user),
 ):
+    """Разбивка по статусам. Всегда в пределах доступного пользователю.
+
+    До 2026-08-03 сводка считалась по ВСЕМ объектам сразу, а чертёж
+    выбирался параметром `source_file` без всякой проверки: любой вошедший
+    (в том числе без единого гранта) получал раскладку по всей системе, а
+    подставив чужой `source_file` — по конкретной чужой стройке. Тот же
+    класс, что закрывал аудит: выборка, которая объект не спрашивает,
+    отдавала все стройки, и объект принимался параметром там, где его
+    надо выводить (найдено `scripts/audit_endpoints.py`).
+
+    Три случая, и во всех объект проверяется, а не принимается на веру:
+    объект назван явно — `assert_object_access`; назван чертёж — объект
+    выводится ИЗ НЕГО (`_guard_source_file`); не назван никто — сводка по
+    всем ДОСТУПНЫМ объектам. `accessible_object_ids` возвращает None =
+    «все» (системный админ), и это не то же самое, что пустое множество =
+    «ничего»: перепутав их, сводка показала бы админу нули.
+    """
     conn = get_connection()
     try:
         where = f"WHERE {visible_elements_clause()}"
-        params = ()
-        if source_file:
+        params: list = []
+        if object_id is not None:
+            assert_object_access(conn, user, object_id, "view")
+            where += " AND object_id = ?"
+            params.append(object_id)
+        elif source_file:
+            _guard_source_file(conn, user, source_file, "view")
             where += " AND source_file = ?"
-            params = (source_file,)
+            params.append(source_file)
+        else:
+            доступные = accessible_object_ids(conn, user)
+            if доступные is not None:
+                if not доступные:
+                    return [
+                        StatusSummaryEntry(status=s, label=STATUS_LABELS_RU[s], count=0)
+                        for s in STATUS_ORDER
+                    ]
+                # Строки без объекта сюда не попадают намеренно: чьи они,
+                # неизвестно, и видеть их может только системный админ —
+                # у него `доступные is None`, и фильтр не добавляется вовсе.
+                where += f" AND object_id IN ({','.join('?' * len(доступные))})"
+                params.extend(sorted(доступные))
         rows = conn.execute(
             f"SELECT current_status, COUNT(*) as n FROM elements {where} GROUP BY current_status",
             params,
@@ -1801,6 +1887,8 @@ def set_status_colors(colors: dict[str, str], user: sqlite3.Row = Depends(requir
         raise HTTPException(status_code=422, detail=str(e))
     conn = get_connection()
     try:
+        activity.log("status_colors", user=user,
+                     new_value="; ".join(f"{k}: {v}" for k, v in colors.items())[:500])
         for status, color in colors.items():
             conn.execute(
                 "INSERT INTO status_colors (status, color) VALUES (?, ?) "
@@ -1844,6 +1932,9 @@ def set_label_visibility(settings: dict[str, bool], object_id: int = Query(...),
                 (object_id, element_type, int(visible)),
             )
         conn.commit()
+        activity.log("label_visibility", user=user, entity_type="object", entity_id=object_id,
+                     new_value="; ".join(f"{k}: {'вкл' if v else 'выкл'}"
+                                         for k, v in settings.items())[:500])
         rows = conn.execute(
             "SELECT element_type, visible FROM label_visibility WHERE object_id = ?",
             (object_id,),
@@ -1883,6 +1974,9 @@ def set_label_dates_visibility(settings: dict[str, bool], object_id: int = Query
                 (object_id, element_type, int(visible)),
             )
         conn.commit()
+        activity.log("label_dates_visibility", user=user, entity_type="object", entity_id=object_id,
+                     new_value="; ".join(f"{k}: {'вкл' if v else 'выкл'}"
+                                         for k, v in settings.items())[:500])
         rows = conn.execute(
             "SELECT element_type, dates_visible FROM label_visibility WHERE object_id = ?",
             (object_id,),
@@ -1940,6 +2034,8 @@ def set_element_shapes(shapes: list[ElementShapeIn], user: sqlite3.Row = Depends
                 (s.layer, s.element_type, s.shape),
             )
         conn.commit()
+        activity.log("element_shapes", user=user,
+                     new_value="; ".join(f"{x.element_type}: {x.shape}" for x in shapes)[:500])
     finally:
         conn.close()
     return {"status": "ok"}
@@ -1979,6 +2075,8 @@ def set_zone_colors(items: list[ZoneColorIn], object_id: int = Query(...),
         conn.commit()
     finally:
         conn.close()
+    activity.log("zone_colors", user=user, entity_type="object", entity_id=object_id,
+                 new_value="; ".join(f"{i.name}: {i.color}" for i in items)[:500])
     return {"status": "ok"}
 
 
@@ -2283,10 +2381,13 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(ge
         # ровно в одном случае — чертёж с одним ярусом стоянок, где привязка
         # считается «лесенкой» по сетке осей (см. can_recalculate).
         refusal = zone_recalc.can_recalculate(conn, zone["object_id"])
+        # Метка операции — общая у события правки зоны и у поэлементных
+        # событий пересчёта привязки.
+        операция = activity.new_request_id()
         if refusal:
             recalc = {"changed": 0, "by_category": {}, "before": [], "refused": refusal}
         else:
-            recalc = zone_recalc.recalculate(conn, zone["object_id"])
+            recalc = zone_recalc.recalculate(conn, zone["object_id"], admin, операция)
         undo_id = zone_recalc.save_undo(
             conn, zone_id, admin, before,
             zone_recalc.merge_bindings(bindings_pre_edit, recalc["before"]),
@@ -2295,7 +2396,7 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(ge
         conn.close()
 
     activity.log(
-        "zone_edit", user=admin, entity_type="zone", entity_id=zone_id,
+        "zone_edit", user=admin, entity_type="zone", entity_id=zone_id, request_id=операция,
         element_type=zone["category"], mark=body.name,
         old_value=json.dumps(before, ensure_ascii=False)[:2000],
         new_value=f"ярусов {len(body.levels)}, номер {body.number}",
@@ -3044,6 +3145,8 @@ def set_last_object(body: LastObjectIn, user: sqlite3.Row = Depends(get_current_
                 raise HTTPException(status_code=404, detail="Объект не найден")
         conn.execute("UPDATE users SET last_object_id = ? WHERE id = ?", (body.object_id, user["id"]))
         conn.commit()
+        activity.log("last_object", user=user, entity_type="object", entity_id=body.object_id,
+                     new_value=str(body.object_id))
     finally:
         conn.close()
     return {"last_object_id": body.object_id}
@@ -3204,6 +3307,8 @@ def add_allowed_subtype(body: AllowedSubtypeIn, user: sqlite3.Row = Depends(requ
         conn.commit()
     finally:
         conn.close()
+    activity.log("subtype_add", user=user, element_type=body.element_type,
+                 new_value=body.subtype.strip())
     return {"status": "ok"}
 
 
@@ -3217,6 +3322,7 @@ def delete_allowed_subtype(element_type: str, subtype: str, user: sqlite3.Row = 
         conn.commit()
     finally:
         conn.close()
+    activity.log("subtype_delete", user=user, element_type=element_type, old_value=subtype)
     return {"status": "ok"}
 
 
@@ -3681,12 +3787,16 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
             assert_object_access(conn, user, analysis["object_id"], "admin")
         finally:
             conn.close()
+        # Метка операции — общая у сводного события ниже и у поэлементных
+        # событий внутри apply_import (изменившиеся изделия).
+        операция = activity.new_request_id()
         result = apply_drawing(
             parsed, analysis,
             accept_mark_changes=body.accept_mark_changes,
             keep_mark_element_ids=body.keep_mark_element_ids,
             refill_manual_fields=body.refill_manual_fields,
             create_new_zone_ids=body.create_new_zone_ids,
+            user=user, request_id=операция,
         )
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -3696,6 +3806,7 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
     activity.log(
         "import_dxf",
         user=user,
+        request_id=операция,
         entity_type="object",
         entity_id=result.object_id,
         old_value=analysis["previous_source_file"],
@@ -3728,7 +3839,15 @@ def import_history_xlsx(
         conn.close()
     try:
         parsed = parse_history_xlsx(content)
-        summary = import_history(conn, source_file, parsed["rows"], mode)
+        # Общая метка операции: сводное событие ниже и поэлементные события
+        # внутри import_history связываются через неё (activity.new_request_id).
+        операция = activity.new_request_id()
+        summary = import_history(conn, source_file, parsed["rows"], mode, admin, операция)
+        activity.log("import_history", user=admin, request_id=операция,
+                     new_value=f"{file.filename or 'файл'}: записей {summary['inserted']}, "
+                               f"исправлено {summary['updated']}, элементов "
+                               f"{summary['matched_elements']}",
+                     details={"режим": mode, "чертёж": source_file})
         # Что именно файл дал по реквизитам контракта — важно показать явно:
         # старая выгрузка (до 2026-07-29) несла одну склеенную колонку
         # "Контракт", разобрать её обратно нельзя, и импорт молча прошёл бы
@@ -3760,7 +3879,13 @@ def import_contracting_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = D
     conn = get_connection()
     try:
         parsed = parse_contracting_xlsx(content)
-        return import_contracting(conn, parsed)
+        итог = import_contracting(conn, parsed)
+        activity.log("import_contracting", user=admin,
+                     new_value=f"{file.filename or 'файл'}: "
+                               + "; ".join(f"{k}: {v}" for k, v in итог.items()
+                                           if isinstance(v, int))[:400],
+                     details={k: v for k, v in итог.items() if isinstance(v, (int, str))})
+        return итог
     except ContractingImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
@@ -3776,7 +3901,12 @@ def import_schedule_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depe
     conn = get_connection()
     try:
         parsed = parse_schedule_xlsx(content)
-        return import_schedule(conn, parsed)
+        операция = activity.new_request_id()
+        итог = import_schedule(conn, parsed, admin, операция)
+        activity.log("import_schedule", user=admin, request_id=операция,
+                     new_value=f"{file.filename or 'файл'}: строк {итог['rows_processed']}, "
+                               f"изделий обновлено {итог['elements_updated']}")
+        return итог
     except ScheduleImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
@@ -3956,13 +4086,19 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
     finally:
         conn.close()
 
-    return {
+    итог = {
         "users_upserted": users_upserted,
         "status_colors": len(payload.get("status_colors", {})),
         "label_visibility": applied["label_visibility"],
         "label_dates_visibility": applied["label_dates_visibility"],
         "skipped_objects": sorted(skipped_objects),
     }
+    activity.log("settings_import", user=admin,
+                 new_value=f"{file.filename or 'файл'}: пользователей {users_upserted}, "
+                           f"цветов статусов {итог['status_colors']}, "
+                           f"видимость подписей {applied['label_visibility']}",
+                 details=итог)
+    return итог
 
 
 @app.get("/")

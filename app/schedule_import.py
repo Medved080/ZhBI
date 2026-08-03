@@ -28,6 +28,8 @@ zone_crane_id/zone_stance_id (см. app/db.py) — зоны с одинаков�
 
 import io
 import json
+
+from app import activity
 import re
 from datetime import date, datetime
 from typing import Optional
@@ -208,7 +210,7 @@ def parse_schedule_xlsx(content: bytes) -> dict:
     return {"rows": parsed, "skipped_rows": skipped_rows}
 
 
-def import_schedule(conn, parsed: dict) -> dict:
+def import_schedule(conn, parsed: dict, user=None, request_id: str = None) -> dict:
     rows = parsed["rows"]
     matched_elements_total = 0
     unmatched_blocks: list[str] = []
@@ -267,6 +269,25 @@ def import_schedule(conn, parsed: dict) -> dict:
                     payload,
                 )
         matched_elements_total += len(matched)
+
+    # Событие на каждое изделие, которому реально проставили даты
+    # (2026-08-03): импорт графика — единственный способ, которым эти даты
+    # появляются массово, и без поэлементной записи их изменение не видно
+    # ни в истории изменений изделия, ни в фильтре «Изменения». Сводка
+    # операции пишется вызывающим и связана общим request_id.
+    if touched_element_ids:
+        for снимок in conn.execute(
+            f"SELECT id, element_type, subtype, mark, project_smr_start_date, project_delivery_date "
+            f"FROM elements WHERE id IN ({','.join('?' * len(touched_element_ids))})",
+            tuple(touched_element_ids),
+        ).fetchall():
+            activity.log(
+                "schedule_import", user=user, entity_type="element", entity_id=снимок["id"],
+                element_type=снимок["element_type"], subtype=снимок["subtype"], mark=снимок["mark"],
+                new_value=f"Дата начала СМР: {снимок['project_smr_start_date'] or '—'}; "
+                          f"Дата завершения СМР: {снимок['project_delivery_date'] or '—'}",
+                request_id=request_id,
+            )
 
     conn.commit()
 

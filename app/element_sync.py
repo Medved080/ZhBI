@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from import_elements import ensure_label_visibility
 
+from app import activity
 from app.db import assign_missing_element_uids
 from app.element_identity import MatchResult, match_elements
 
@@ -79,7 +80,13 @@ def resolve_import_object(conn: sqlite3.Connection, object_id: Optional[int], so
         raise ValueError("В базе несколько объектов — укажите, в какой импортировать")
 
     conn.execute("INSERT INTO objects (name) VALUES (?)", (source_file,))
-    return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+    новый = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+    # Объект, заведённый САМИМ импортом (первая в жизни установка), — тоже
+    # событие: иначе единственный путь, которым объект появляется без
+    # участия справочника «Объекты», не оставлял бы следа.
+    activity.log("object_create", source="system", entity_type="object", entity_id=новый,
+                 new_value=source_file, details={"причина": "заведён при загрузке чертежа"})
+    return новый
 
 
 def load_object_elements(conn: sqlite3.Connection, object_id: int) -> list:
@@ -220,6 +227,8 @@ def apply_import(
     accept_mark_changes: bool = True,
     keep_mark_element_ids: Optional[set] = None,
     refill_manual_fields: Optional[dict] = None,
+    user=None,
+    request_id: Optional[str] = None,
 ) -> dict:
     """Применяет сверку. accept_mark_changes=False (или перечисление
     element_id в keep_mark_element_ids) оставляет ПРЕЖНЮЮ марку у
@@ -266,6 +275,22 @@ def apply_import(
             values,
         )
         updated += 1
+        # Событие пишется ТОЛЬКО тем изделиям, у которых чертёж реально
+        # что-то изменил (item.changes), а не всем сопоставленным
+        # (2026-08-03): переимпорт трогает все 9422 строки, но меняет
+        # заметно меньше, и «обновлено» у нетронутого изделия было бы
+        # ложью в его истории изменений. Сводка операции — у вызывающего,
+        # связь через общий request_id.
+        реально = {f: v for f, v in item.changes.items() if f in values or f == "mark"}
+        if реально:
+            activity.log(
+                "import_dxf_element", user=user, entity_type="element",
+                entity_id=item.element_id, element_type=row.get("element_type"),
+                subtype=row.get("subtype"), mark=row.get("mark"),
+                old_value="; ".join(f"{f}: {было}" for f, (было, _) in реально.items())[:500],
+                new_value="; ".join(f"{f}: {стало}" for f, (_, стало) in реально.items())[:500],
+                request_id=request_id, details={"чертёж": source_file},
+            )
 
     for index in match.new_indexes:
         row = rows[index]

@@ -31,6 +31,7 @@ import json
 import queue
 import sqlite3
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -117,6 +118,23 @@ def log(
             _dropped += 1
 
 
+def new_request_id() -> str:
+    """Метка одной ОПЕРАЦИИ — связывает её сводное событие с поэлементными
+    (2026-08-03).
+
+    Массовая операция (импорт истории, графика, чертежа, пересчёт зон)
+    пишет и то, и другое: сводку «что это было» и по событию на каждое
+    реально изменившееся изделие. Иначе выбор плохой в обе стороны — либо
+    в отчёте одна строка «загружен чертёж» и по изделию не видно ничего,
+    либо тысячи строк без ответа на вопрос, какой операцией это сделано.
+    Колонка `request_id` для этого и заведена: «одна операция читается
+    целиком одной выборкой».
+    """
+    import uuid
+
+    return uuid.uuid4().hex[:12]
+
+
 def _drain_dropped() -> int:
     global _dropped
     with _dropped_lock:
@@ -135,6 +153,13 @@ def _write_batch(conn: sqlite3.Connection, events: list) -> None:
 
 def _run() -> None:
     conn = sqlite3.connect(_db.DB_PATH, check_same_thread=False)
+    # Ждать освобождения базы, а не падать сразу (2026-08-03). БД без WAL,
+    # и на время длинной операции (импорт чертежа, восстановление истории)
+    # она заперта пишущей транзакцией — а именно тогда журнал и получает
+    # тысячи поэлементных событий. Без ожидания пачка отбрасывалась с
+    # «database is locked», то есть терялась ровно та работа, ради записи
+    # которой поэлементные события и заводились (поймано проверкой).
+    conn.execute("PRAGMA busy_timeout = 10000")
     try:
         while True:
             batch = []
@@ -161,11 +186,20 @@ def _run() -> None:
                 })
             if not batch:
                 continue
-            try:
-                _write_batch(conn, batch)
-            except Exception as e:  # noqa: BLE001
-                # Журнал не должен ронять сервис ни при каких обстоятельствах.
-                print(f"[activity] не удалось записать {len(batch)} событий: {e!r}")
+            # Одна повторная попытка сверх busy_timeout: транзакция импорта
+            # может держать базу дольше десяти секунд, а терять события
+            # молча — худший исход для журнала, по которому потом строят
+            # отчёт о работе.
+            for попытка in (1, 2):
+                try:
+                    _write_batch(conn, batch)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    # Журнал не должен ронять сервис ни при каких обстоятельствах.
+                    if попытка == 2:
+                        print(f"[activity] не удалось записать {len(batch)} событий: {e!r}")
+                    else:
+                        time.sleep(1.0)
     finally:
         conn.close()
 

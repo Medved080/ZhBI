@@ -448,7 +448,11 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_u
             )
         conn.commit()
         row = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
-        return _to_contract_out(conn, row)
+        результат = _to_contract_out(conn, row)
+        activity.log("contract_create", user=admin, entity_type="contract", entity_id=contract_id,
+                     new_value=результат.name,
+                     details={"позиций": len(body.lines), "инцидентов": len(body.incidents)})
+        return результат
     finally:
         conn.close()
 
@@ -461,9 +465,10 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
     _guard_contract(conn, admin, contract_id)
     _guard_specification(conn, admin, body.specification_id)
     try:
-        existing = conn.execute("SELECT id FROM contracts WHERE id = ?", (contract_id,)).fetchone()
+        existing = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Контракт не найден")
+        прежнее_имя = _to_contract_out(conn, existing).name
         spec = conn.execute("SELECT id FROM specifications WHERE id = ?", (body.specification_id,)).fetchone()
         if not spec:
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
@@ -488,7 +493,11 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
             )
         conn.commit()
         row = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
-        return _to_contract_out(conn, row)
+        результат = _to_contract_out(conn, row)
+        activity.log("contract_update", user=admin, entity_type="contract", entity_id=contract_id,
+                     old_value=прежнее_имя, new_value=результат.name,
+                     details={"позиций": len(body.lines), "инцидентов": len(body.incidents)})
+        return результат
     finally:
         conn.close()
 
@@ -549,6 +558,8 @@ def set_default_contracts(mapping: dict, object_id: int = Query(...),
             "SELECT element_type, contract_id FROM default_contracts WHERE object_id = ?",
             (object_id,),
         ).fetchall()
+        activity.log("default_contracts", user=admin, entity_type="object", entity_id=object_id,
+                     new_value="; ".join(f"{t}: {c}" for t, c in mapping.items())[:500])
         return {r["element_type"]: r["contract_id"] for r in rows}
     finally:
         conn.close()
