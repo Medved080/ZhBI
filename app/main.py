@@ -88,6 +88,9 @@ from app.reports import (
     build_dynamics_report, build_dynamics_report_pdf, build_dynamics_report_xlsx,
     build_status_report, build_status_report_pdf, build_status_report_xlsx,
 )
+from app.report_completion import (
+    build_completion_report, build_completion_report_pdf, build_completion_report_xlsx,
+)
 from app.report_delivery import (
     build_delivery_cell_detail, build_delivery_schedule_pdf, build_delivery_schedule_report,
     build_delivery_schedule_xlsx,
@@ -1155,6 +1158,50 @@ def report_status_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_cur
         content=content, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=\"report.pdf\"; filename*=UTF-8''{quote(name)}"},
     )
+
+
+def _completion(conn, user, body: "ReportRequestIn") -> dict:
+    """Общая точка для экрана, XLSX и PDF «Статуса комплектации». Проверка
+    доступа ЗДЕСЬ, а не в каждом из трёх роутов: три копии одной проверки —
+    ровно та схема, при которой забытая четвёртая открывает отчёт целиком
+    (аудит безопасности 2026-08-03)."""
+    body = _guard_report(conn, user, body)
+    return build_completion_report(conn, body.source_file, body.element_ids)
+
+
+@app.post("/reports/completion")
+def report_completion(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «Статус комплектации» — плоский перечень «кран · стоянка ·
+    изделие · контракт · три даты» с количеством."""
+    conn = get_connection()
+    try:
+        return _completion(conn, user, body)
+    finally:
+        conn.close()
+
+
+@app.post("/reports/completion.xlsx")
+def report_completion_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _completion(conn, user, body)
+    finally:
+        conn.close()
+    return _report_file_response(
+        build_completion_report_xlsx(report), "Статус комплектации.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.post("/reports/completion.pdf")
+def report_completion_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _completion(conn, user, body)
+    finally:
+        conn.close()
+    subtitle = f"Чертёж: {body.source_file}" if body.source_file else ""
+    return _report_file_response(build_completion_report_pdf(report, subtitle),
+                                 "Статус комплектации.pdf", "application/pdf")
 
 
 def _delivery_schedule(conn, user, body: "ReportRequestIn") -> dict:

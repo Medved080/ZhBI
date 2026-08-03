@@ -77,6 +77,12 @@
     --color-surface: #FFFFFF;
     --color-surface-2: #F5F7FA;
     --color-accent-soft: #EDF2FE;     /* подложка активных пунктов и мягких кнопок */
+    /* Наведение на мягкую кнопку — тот же цвет ступенью глубже. ОТДЕЛЬНАЯ
+       переменная, а не жёсткий цвет в правиле: гамм шесть, и один синий
+       #DCE6FB на все давал в «Графите», «Индиго» и «Неоне» голубую вспышку
+       посреди тёмного интерфейса (найдено 2026-08-03 при разборе кнопки
+       выбора файла — она обязана вести себя как соседние кнопки). */
+    --color-accent-soft-hover: #DCE6FB;
     --color-border: #E4ECFD;
     --color-text: #0B1F33;
     --color-text-muted: #66727F;
@@ -1370,6 +1376,23 @@
   .report-toggle { border: none; background: none; cursor: pointer; width: 16px; padding: 0; margin-right: 4px; color: var(--color-text-muted); }
   .report-toggle.empty { visibility: hidden; }
 
+  /* ---- отчёт «Статус комплектации» ---- */
+  /* Плоская таблица по образцу заказчика: строк тысячи, поэтому шапка
+     закреплена, а колонки-числа и даты не переносятся. Отдельная таблица,
+     а не #report-table: у той есть уровни вложенности и раскрывашки,
+     которых здесь нет и быть не должно (см. app/report_completion.py). */
+  #cmp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #cmp-table th, #cmp-table td { padding: 4px 8px; border: 1px solid var(--color-border); text-align: left; }
+  #cmp-table th {
+    background: var(--color-surface-2); font-weight: 600; text-align: center;
+    position: sticky; top: 0; z-index: 1;
+  }
+  #cmp-table td.cmp-num, #cmp-table td.cmp-date {
+    text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  #cmp-table tr.cmp-total td { font-weight: 700; background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
+  .cmp-empty { color: var(--color-text-muted); padding: 12px 0; }
+
   /* ---- отчёт «Моя работа» ---- */
   /* Сводка по действиям — «фишками» над таблицей: в отчёте на тысячу строк
      она и есть ответ на вопрос «сколько сделано», а таблица отвечает на
@@ -1895,6 +1918,7 @@
             <button id="menu-report-status">Статусы</button>
             <button id="menu-report-dynamics">Динамика монтажа и поставки</button>
             <button id="menu-report-delivery">График поставки</button>
+            <button id="menu-report-completion">Статус комплектации</button>
             <!-- «Моя работа» — тоже всем ролям и по той же причине: это
                  отчёт человека о СВОЕЙ работе, а не наблюдение за чужой
                  (выбор пользователя открывается только администратору
@@ -3113,6 +3137,7 @@
           <button type="button" class="report-tab active" data-report="status">Статусы</button>
           <button type="button" class="report-tab" data-report="dynamics">Динамика</button>
           <button type="button" class="report-tab" data-report="delivery">График поставки</button>
+          <button type="button" class="report-tab" data-report="completion">Статус комплектации</button>
           <button type="button" class="report-tab" data-report="mywork">Моя работа</button>
         </div>
         <!-- «Моя работа»: период (по умолчанию текущий день) и выбор
