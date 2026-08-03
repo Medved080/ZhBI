@@ -6827,6 +6827,168 @@ document.getElementById("object-add-cancel").addEventListener("click", () => {
   document.getElementById("objects-status").textContent = "";
 });
 
+// ============ ВРЕМЕННАЯ ОБРАБОТКА: пустые «Объект» и «Проект» ============
+// Что и зачем заполняет, а главное — что заполнять НЕЛЬЗЯ (системные записи
+// app_settings, уровень гранта в user_access) — в модульной строке
+// документации app/fill_scope.py. Здесь только форма.
+//
+// Перечень справочников приходит С СЕРВЕРА, а не описан здесь вторым списком:
+// цели обработки, их подписи и пояснения живут рядом с кодом, который эти
+// поля заполняет. Разъехавшись, форма обещала бы не то, что делает.
+
+const fillScopeBackdrop = document.getElementById("fill-scope-backdrop");
+let fillScopeTargets = [];   // последний ответ /admin/fill-empty-scope
+
+// Списки проектов и объектов те же, что у справочника «Объекты». Объекты
+// отбираются по выбранному проекту: сервер всё равно откажет, если объект
+// окажется из другого проекта (заполнить договоры объектом одной стройки, а
+// объекты — проектом другой человек может только по ошибке), и лучше не дать
+// собрать такую пару вовсе, чем показать отказ после нажатия.
+async function renderFillScopeScope() {
+  const projSel = document.getElementById("fill-scope-project");
+  const objSel = document.getElementById("fill-scope-object");
+  const projects = await api("/projects");
+  const objects = await api("/objects");
+  const текущий = currentObject();
+  projSel.innerHTML = projects.map(p =>
+    `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  if (текущий && текущий.project.id) projSel.value = String(текущий.project.id);
+
+  const заполнитьОбъекты = () => {
+    const pid = Number(projSel.value);
+    const свои = objects.filter(o => o.project_id === pid);
+    objSel.innerHTML = свои.length
+      ? свои.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("")
+      : `<option value="">— в проекте нет объектов —</option>`;
+    if (текущий && свои.some(o => o.id === текущий.object.id)) {
+      objSel.value = String(текущий.object.id);
+    }
+  };
+  заполнитьОбъекты();
+  projSel.onchange = заполнитьОбъекты;
+}
+
+function renderFillScopeBody(data) {
+  fillScopeTargets = data.targets;
+  const box = document.getElementById("fill-scope-body");
+  const естьЧто = data.targets.some(t => t.empty);
+  if (!естьЧто) {
+    box.innerHTML = `<p class="hint-text">Пустых полей «Объект» и «Проект» не найдено —
+      заполнять нечего. Это и есть то состояние, в котором обработку можно убрать.</p>`;
+    document.getElementById("fill-scope-apply").disabled = true;
+    return;
+  }
+  document.getElementById("fill-scope-apply").disabled = false;
+  box.innerHTML = data.targets.map(t => {
+    // Справочник без пустых полей не убирается из списка, а показывается
+    // серым и выключенным — тот же принцип, что у фильтров схемы: «нечего
+    // заполнять» и «такого справочника обработка не знает» это разные ответы,
+    // и исчезнувшая строка выдаёт первый за второй.
+    const off = !t.empty;
+    return `
+    <div class="object-card" style="${off ? "opacity:.55" : ""}">
+      <label style="display:flex; gap:8px; align-items:flex-start; cursor:${off ? "default" : "pointer"}">
+        <input type="checkbox" data-fill-key="${t.key}" style="margin-top:3px"
+               ${off ? "disabled" : (t.default_on ? "checked" : "")}/>
+        <span>
+          <b>${escapeHtml(t.title)}</b> —
+          поле «${t.field === "project" ? "Проект" : "Объект"}»
+          (<code>${escapeHtml(t.table)}.${escapeHtml(t.column)}</code>):
+          ${off ? "пустых записей нет" : `<b>${t.empty}</b> ${plural(t.empty, "запись", "записи", "записей")} без значения`}
+          <div class="hint-text" style="margin-top:4px">${escapeHtml(t.note)}</div>
+          ${t.samples.length ? `<div class="hint-text" style="margin-top:4px">
+            Например: ${t.samples.map(s => escapeHtml(s.label)).join("; ")}${
+              t.empty > data.sample_limit ? ` … и ещё ${t.empty - data.sample_limit}` : ""}.
+          </div>` : ""}
+        </span>
+      </label>
+    </div>`;
+  }).join("");
+}
+
+// Своя мелкая функция склонения: в проекте её ещё не было, а «1 записей»
+// в форме, которую открывают раз в жизни, читается как недоделка.
+function plural(n, one, few, many) {
+  const с = Math.abs(n) % 100, е = с % 10;
+  if (с > 10 && с < 20) return many;
+  if (е > 1 && е < 5) return few;
+  return е === 1 ? one : many;
+}
+
+async function loadFillScope() {
+  const box = document.getElementById("fill-scope-body");
+  box.textContent = "Загрузка…";
+  try {
+    renderFillScopeBody(await api("/admin/fill-empty-scope"));
+  } catch (e) {
+    box.textContent = e.message || "Не удалось получить сводку";
+  }
+}
+
+document.getElementById("menu-fill-scope").addEventListener("click", async () => {
+  fillScopeBackdrop.classList.add("open");
+  document.getElementById("fill-scope-status").textContent = "";
+  await renderFillScopeScope();
+  await loadFillScope();
+});
+document.getElementById("fill-scope-close").addEventListener("click", () =>
+  fillScopeBackdrop.classList.remove("open"));
+
+document.getElementById("fill-scope-apply").addEventListener("click", async () => {
+  const statusBox = document.getElementById("fill-scope-status");
+  const keys = Array.from(document.querySelectorAll("#fill-scope-body [data-fill-key]"))
+    .filter(cb => cb.checked && !cb.disabled).map(cb => cb.dataset.fillKey);
+  if (!keys.length) {
+    statusBox.style.color = "var(--color-danger)";
+    statusBox.textContent = "Отметьте хотя бы один справочник";
+    return;
+  }
+  const projSel = document.getElementById("fill-scope-project");
+  const objSel = document.getElementById("fill-scope-object");
+  const выбранные = fillScopeTargets.filter(t => keys.includes(t.key));
+  const итого = выбранные.reduce((s, t) => s + t.empty, 0);
+  // Переспрашиваем с ЧИСЛОМ и НАЗВАНИЕМ объекта: обратной кнопки «снять
+  // объект» у этих записей нет, и цена ошибки — разбор вручную по одной.
+  if (!confirm(
+    `Заполнить у ${итого} ${plural(итого, "записи", "записей", "записей")} `
+    + `(${выбранные.map(t => t.title).join(", ")}) `
+    + `объект «${objSel.options[objSel.selectedIndex] ? objSel.options[objSel.selectedIndex].text : "—"}» `
+    + `и проект «${projSel.options[projSel.selectedIndex].text}»?\n\n`
+    + `Действие необратимо через интерфейс.`)) return;
+  statusBox.style.color = "var(--color-text-muted)";
+  statusBox.textContent = "Заполняем…";
+  try {
+    const r = await api("/admin/fill-empty-scope/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_id: Number(projSel.value) || null,
+        object_id: Number(objSel.value) || null,
+        keys,
+      }),
+    });
+    // Пересканирование ПЕРЕД отчётом: renderFillScopeBody переписывает тело
+    // формы, и человек должен увидеть новое состояние («пустых нет») рядом с
+    // тем, что именно произошло.
+    await loadFillScope();
+    const строки = r.results.map(res => {
+      const хвост = (res.extra || []).length ? ` (${res.extra.join("; ")})` : "";
+      const пропуск = res.skipped
+        ? `<div class="hint-text" style="color:var(--color-danger)">Пропущено ${res.skipped}: `
+          + res.reasons.map(escapeHtml).join(" ") + `</div>`
+        : "";
+      return `<div>${escapeHtml(res.title)}: заполнено ${res.filled}${escapeHtml(хвост)}.${пропуск}</div>`;
+    }).join("");
+    statusBox.innerHTML = `<b>Готово. Всего заполнено: ${r.total_filled}.</b>${строки}`;
+    // Договоры и объекты меняют то, из чего построены крошка и каскад формы
+    // контракта, — дерево перечитывается, иначе изменения увидит только
+    // перезагрузка страницы.
+    await loadProjectsTree();
+  } catch (e) {
+    statusBox.style.color = "var(--color-danger)";
+    statusBox.textContent = e.message || "Не удалось заполнить";
+  }
+});
+
 // ==================== СПРАВОЧНИК ЭЛЕМЕНТОВ (этап 3, решение Э1) ====================
 // Таблица всех элементов объекта с отбором по колонкам и сортировкой.
 // Постранично: 9422 строки одним куском браузер отрисует, но прокрутка по

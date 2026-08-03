@@ -136,6 +136,7 @@ from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
 from app.admin_guide import router as admin_guide_router
 from app.db_status import router as db_status_router
+from app.fill_scope import router as fill_scope_router
 from app.ldap_auth import router as ldap_router
 from app.settings import router as settings_router
 from app.upload_limits import (
@@ -223,6 +224,7 @@ app.include_router(sessions_router)
 app.include_router(ldap_router)
 app.include_router(admin_guide_router)
 app.include_router(db_status_router)
+app.include_router(fill_scope_router)
 app.include_router(contracts_router)
 app.include_router(counterparties_router)
 app.include_router(settings_router)

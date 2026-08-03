@@ -435,6 +435,12 @@
   .view-mode-btn:hover { background: var(--color-surface-2); }
   .view-mode-btn.active { background: var(--color-primary); color: #fff; }
   .view-mode-btn:disabled { opacity: .6; cursor: default; }
+  /* Кнопка «Заполнить» временной обработки гаснет, когда заполнять нечего.
+     Правило точечное, а не общее `.btn:disabled`: у .btn своего вида для
+     выключенного состояния нет во всём проекте, и вводить его сразу всем
+     кнопкам — отдельная правка с отдельной проверкой. Без правила кнопка
+     выглядит нажимаемой и молча ничего не делает. */
+  #fill-scope-apply:disabled { opacity: .45; cursor: default; }
   #toolbar .spacer { flex: 1 1 12px; }
   #workdate-box { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--color-text-muted); flex-shrink: 0; }
   #workdate-input { font-size: 12px; padding: 5px 6px; width: 192px; }
@@ -1820,6 +1826,13 @@
                 <button id="menu-objects" class="admin-only">Объекты</button>
                 <button id="menu-project-card" class="object-admin-only">Карточка объекта</button>
                 <button id="menu-report-notes" class="object-admin-only">События, задачи, вопросы</button>
+                <!-- ВРЕМЕННАЯ обработка (2026-08-03): дообъектное наследие —
+                     записи, заведённые до того, как у них появилось поле
+                     «Объект»/«Проект». Помечена временной и в названии пункта,
+                     и в самой форме: она нужна, пока такие записи есть, и
+                     подлежит удалению вместе с ними. Только администратору
+                     сервиса — трогает данные всех объектов разом. -->
+                <button id="menu-fill-scope" class="admin-only">Заполнить пустые «Объект» и «Проект» (временная)</button>
               </div>
             </div>
             <!-- Три справочника зон (этап 2, решение З15: физически одна
@@ -2264,6 +2277,40 @@
     <div id="objects-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="objects-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- ВРЕМЕННАЯ обработка: заполнение пустых полей «Объект» и «Проект».
+     Подробности, перечень целей и что НЕ считается пустым полем — в
+     модульной строке документации app/fill_scope.py.
+
+     Форма двухшаговая по построению, а не по кнопкам: сначала показывается
+     что найдено (сервер только читает), и лишь потом человек нажимает
+     «Заполнить». Заполнение необратимо через интерфейс — обратной кнопки
+     «снять объект» нет ни у одной из этих записей, — поэтому предпросмотр
+     обязателен, а не удобство. -->
+<div class="modal-backdrop" id="fill-scope-backdrop">
+  <div class="modal" style="max-width:820px">
+    <h2>Заполнить пустые «Объект» и «Проект»</h2>
+    <p class="hint-text" style="color:var(--color-danger)">
+      Временная обработка. Иерархия «Проект → Объект» вводилась поэтапно, и часть
+      записей заведена до появления у них этого поля. Запись без объекта не видна
+      ни в одном справочнике объекта и доступна только администратору сервиса.
+      Когда таких записей не останется, обработку следует убрать: новые записи
+      без объекта система заводить не даёт.
+    </p>
+    <div class="object-fields" style="margin-bottom:12px">
+      <label class="object-field"><span>Проект</span>
+        <select id="fill-scope-project"></select></label>
+      <label class="object-field"><span>Объект</span>
+        <select id="fill-scope-object"></select></label>
+    </div>
+    <div id="fill-scope-body">Загрузка…</div>
+    <div id="fill-scope-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="fill-scope-close">Закрыть</button>
+      <button class="btn btn-primary" id="fill-scope-apply">Заполнить</button>
     </div>
   </div>
 </div>
