@@ -129,6 +129,7 @@ from app.models import (
 )
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
+from app.admin_guide import router as admin_guide_router
 from app.ldap_auth import router as ldap_router
 from app.settings import router as settings_router
 from app.upload_limits import (
@@ -213,6 +214,7 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(ldap_router)
+app.include_router(admin_guide_router)
 app.include_router(contracts_router)
 app.include_router(counterparties_router)
 app.include_router(settings_router)

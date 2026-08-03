@@ -7771,6 +7771,114 @@ document.getElementById("user-password-save").addEventListener("click", async ()
   }
 });
 
+// ---------- Памятка администратора (2026-08-03, живой запрос) ----------
+// Содержимое приходит с сервера (app/admin_guide.py) уже подставленным под
+// этот сервер: путь к базе, имя контейнера, порт. Здесь только показ.
+
+// Копирование в буфер. navigator.clipboard есть ТОЛЬКО в защищённом
+// контексте (HTTPS или localhost), а сервис работает по обычному HTTP в
+// локальной сети — то есть на боевом развёртывании его нет, и кнопка молча
+// не работала бы ровно там, где нужна. Отсюда запасной путь через скрытое
+// поле и execCommand: он устарел, но работает без HTTPS.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* падаем в запасной путь ниже */ }
+  const поле = document.createElement("textarea");
+  поле.value = text;
+  поле.setAttribute("readonly", "");
+  поле.style.position = "fixed";
+  поле.style.top = "-1000px";
+  document.body.appendChild(поле);
+  поле.select();
+  let ок = false;
+  try { ок = document.execCommand("copy"); } catch (e) { ок = false; }
+  document.body.removeChild(поле);
+  return ок;
+}
+
+const adminGuideBackdrop = document.getElementById("admin-guide-backdrop");
+let adminGuideCache = null;
+
+function renderAdminGuide(data) {
+  const box = document.getElementById("admin-guide-body");
+  const факты = `<dl class="ag-facts">${data.facts.map(f =>
+    `<dt>${escapeHtml(f.name)}</dt><dd>${escapeHtml(f.value)}</dd>`).join("")}</dl>`;
+  const разделы = data.sections.map(р => `
+    <div class="ag-section">
+      <h3>${escapeHtml(р.title)}</h3>
+      <p class="hint-text">${escapeHtml(р.intro)}</p>
+      ${р.items.map(п => `
+        <div class="ag-item">
+          <div class="ag-item-head"><b>${escapeHtml(п.title)}</b><span class="ag-where">${escapeHtml(п.where)}</span></div>
+          <div class="ag-note">${escapeHtml(п.note)}</div>
+          ${п.command ? `<div class="ag-cmd-row">
+            <pre class="ag-cmd">${escapeHtml(п.command)}</pre>
+            <button class="btn btn-sm btn-secondary ag-copy" type="button">Копировать</button>
+          </div>` : ""}
+        </div>`).join("")}
+    </div>`).join("");
+  box.innerHTML = `<h3>Этот сервер</h3>${факты}${разделы}`;
+  // Текст берётся из СОСЕДНЕГО <pre>, а не из данных: так кнопка копирует
+  // ровно то, что человек видит на экране, и не может разойтись с ним.
+  box.querySelectorAll(".ag-copy").forEach(btn => btn.addEventListener("click", async () => {
+    const ок = await copyText(btn.parentElement.querySelector(".ag-cmd").textContent);
+    const было = btn.textContent;
+    btn.textContent = ок ? "Скопировано" : "Не вышло — выделите вручную";
+    setTimeout(() => { btn.textContent = было; }, 2000);
+  }));
+}
+
+document.getElementById("menu-admin-guide").addEventListener("click", async () => {
+  document.getElementById("settings-menu").classList.remove("open");
+  adminGuideBackdrop.classList.add("open");
+  document.getElementById("admin-guide-body").textContent = "Загрузка…";
+  try {
+    adminGuideCache = await api("/admin-guide");
+    renderAdminGuide(adminGuideCache);
+  } catch (e) {
+    document.getElementById("admin-guide-body").textContent = e.message;
+  }
+});
+document.getElementById("admin-guide-close").addEventListener("click", () =>
+  adminGuideBackdrop.classList.remove("open"));
+
+document.getElementById("admin-guide-download").addEventListener("click", async () => {
+  // Через blob, а не прямой ссылкой: файл отдаётся под сессией, а <a href>
+  // в новой вкладке на 401 показал бы пустую страницу вместо объяснения.
+  try {
+    const res = await fetch("/admin-guide.md");
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "Памятка администратора ЖБИ.md";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast("Памятка сохранена в загрузки");
+  } catch (e) {
+    showToast(`Не удалось скачать памятку: ${e.message}`);
+  }
+});
+
+document.getElementById("admin-guide-copy-all").addEventListener("click", async () => {
+  try {
+    const res = await fetch("/admin-guide.md");
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const ок = await copyText(await res.text());
+    showToast(ок ? "Памятка скопирована в буфер обмена"
+                 : "Буфер обмена недоступен — воспользуйтесь «Скачать памятку»");
+  } catch (e) {
+    showToast(`Не удалось скопировать: ${e.message}`);
+  }
+});
+
 // ---------- Доменная (корпоративная) авторизация — 2026-08-03, см.
 // app/ldap_auth.py. Настройка СИСТЕМНАЯ: контроллер домена один на сервис,
 // а не свой на каждую стройку, поэтому и форма под системной ролью. ----------

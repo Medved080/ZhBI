@@ -669,6 +669,27 @@
   .actions-panel-sub { margin: 18px 0 0; padding-left: 8px;
     border-left: 2px solid var(--color-border); }
   .actions-panel-sub + .actions-panel-sub { margin-top: 18px; }
+  /* Памятка администратора. Команда — моноширинным блоком с СОБСТВЕННОЙ
+     горизонтальной прокруткой: длинные строки (tar, docker run) не должны
+     растягивать модалку и ломать её ширину. */
+  .ag-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+    font-size: 12px; margin: 0 0 18px; }
+  .ag-facts dt { color: var(--color-text-muted); }
+  .ag-facts dd { margin: 0; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .ag-section { margin-bottom: 22px; }
+  .ag-section > h3 { margin: 0 0 4px; font-size: 15px; }
+  .ag-section > .hint-text { margin: 0 0 12px; }
+  .ag-item { border-left: 2px solid var(--color-border); padding: 0 0 0 12px; margin: 0 0 14px; }
+  .ag-item-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .ag-item-head b { font-size: 13px; }
+  .ag-where { font-size: 11px; color: var(--color-text-muted); border: 1px solid var(--color-border);
+    border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
+  .ag-note { font-size: 12px; color: var(--color-text-muted); margin: 4px 0 6px; }
+  .ag-cmd-row { display: flex; gap: 6px; align-items: flex-start; }
+  .ag-cmd { flex: 1; min-width: 0; overflow-x: auto; margin: 0;
+    background: var(--color-surface-alt, #f4f6f9); border: 1px solid var(--color-border);
+    border-radius: var(--radius); padding: 8px 10px; font-size: 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace; white-space: pre; }
   .actions-panel-sub > h5 { margin: 0 0 4px; font-size: 11px; font-weight: 600;
     color: var(--color-text-muted); }
   .actions-panel button { display: block; width: 100%; text-align: left; background: none;
@@ -1730,6 +1751,11 @@
         <div class="submenu">
           <button type="button" class="submenu-trigger">Администрирование</button>
           <div class="dropdown-menu submenu-panel">
+            <!-- Первым и выделенным (2026-08-03): с этого пункта начинает
+                 новый администратор — он объясняет, что где лежит и какими
+                 командами обслуживается, и выгружается файлом на свою
+                 машину (в аварии сервис как раз может не работать). -->
+            <button id="menu-admin-guide" class="admin-only menu-item-strong">Памятка администратора</button>
             <button id="menu-users" class="admin-only">Пользователи</button>
             <!-- Рядом с «Пользователями» (2026-08-03): это настройка того,
                  ЧЕМ пользователь входит, и ходят сюда из той же формы. -->
@@ -2438,6 +2464,36 @@
     <div class="actions">
       <button class="btn btn-secondary" id="user-password-cancel">Отмена</button>
       <button class="btn btn-primary" id="user-password-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Памятка администратора (2026-08-03, живой запрос). Содержимое приходит
+     с сервера (app/admin_guide.py) уже с реальными путями и именем
+     контейнера — подставлять руками ничего не надо. Кнопка «Скачать .md»
+     нужна не для удобства: в аварии сервис может не отвечать, а инструкция
+     нужна именно тогда. -->
+<div class="modal-backdrop" id="admin-guide-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Памятка администратора</h2>
+      <p class="hint-text">Что где лежит и какими командами это обслуживается. Команды уже
+        подставлены под этот сервер — жмите «Копировать» и выполняйте.
+        Подробности установки и разбор сбоев — <code>Docs/DEPLOYMENT_LINUX.md</code> в репозитории.</p>
+      <!-- justify-content задан явно: .modal .row по умолчанию
+           space-between, и две кнопки разъезжались бы по краям шапки. -->
+      <div class="row" style="gap:6px; margin-top:8px; justify-content:flex-start;">
+        <button class="btn btn-sm btn-primary" id="admin-guide-download">Скачать памятку (.md)</button>
+        <button class="btn btn-sm btn-secondary" id="admin-guide-copy-all">Скопировать всё</button>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="admin-guide-body"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="admin-guide-close">Закрыть</button>
+      </div>
     </div>
   </div>
 </div>
