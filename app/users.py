@@ -10,7 +10,7 @@ from pydantic import BaseModel, field_validator
 from app import activity, ldap_auth
 from app.access import OBJECT_ROLES, ROLE_LABELS as OBJECT_ROLE_LABELS, require_system_admin
 from app.auth import (
-    SESSION_COOKIE, auth_method_of, get_current_user, hash_password,
+    SESSION_COOKIE, auth_method_of, get_current_user, hash_password, list_sessions,
     user_out, validate_password_strength, UserOut,
 )
 from app.db import get_connection
@@ -289,6 +289,39 @@ def set_password(
         return user_out(updated)
     finally:
         conn.close()
+
+
+@router.get("/{user_id}/sessions")
+def user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
+    """Активные сеансы ЛЮБОГО пользователя — для администратора сервиса.
+    Свои сеансы человек смотрит сам через `GET /me/sessions`."""
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        # current_token=None: администратор смотрит ЧУЖИЕ сеансы, среди них
+        # его текущего быть не может, и помечать нечего.
+        return {"sessions": list_sessions(conn, user_id, None)}
+    finally:
+        conn.close()
+
+
+@router.delete("/{user_id}/sessions")
+def close_user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
+    """Оборвать ВСЕ сеансы пользователя — то, что делают, когда человек
+    уволился или потерял ноутбук. Пароль при этом не трогается: учётную
+    запись может понадобиться сохранить рабочей."""
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        удалено = conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,)).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("session_revoked", user=admin, entity_type="user", entity_id=user_id,
+                 new_value=f"администратор завершил сеансов: {удалено}")
+    return {"closed": удалено}
 
 
 @router.patch("/{user_id}/label-color", response_model=UserOut)

@@ -62,7 +62,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    expires_at TEXT NOT NULL
+    expires_at TEXT NOT NULL,
+    -- Откуда вошли и когда сеансом пользовались в последний раз: нужны
+    -- списку активных сеансов и таймауту бездействия (см. app/auth.py).
+    created_ip TEXT,
+    user_agent TEXT,
+    last_seen_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);

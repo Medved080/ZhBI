@@ -301,22 +301,78 @@ def prune_expired_sessions(conn: sqlite3.Connection, force: bool = False) -> int
     return удалено
 
 
-def create_session(conn: sqlite3.Connection, user_id: int) -> str:
+# Таймаут бездействия (2026-08-03). Абсолютный срок сеанса — 30 дней, и на
+# площадке этого мало: оставленная в общем браузере вкладка живёт месяц.
+# Считается по last_seen_at, который обновляется не чаще раза в минуту (см.
+# touch_session) — иначе каждый запрос стоил бы записи в базу.
+#
+# 12 часов по умолчанию: смену это переживает (человек не выпадает из
+# системы посреди рабочего дня), а вкладка, оставленная на ночь, умирает.
+# Уменьшать — переменной окружения, если политика потребует строже.
+SESSION_IDLE_HOURS = int(os.environ.get("ZHBI_SESSION_IDLE_HOURS", "12"))
+SESSION_TOUCH_INTERVAL_SECONDS = 60
+_session_touched: dict[str, float] = {}
+
+
+def session_public_id(token: str) -> str:
+    """Короткий отпечаток сеанса для списка и обрыва.
+
+    Сам токен клиенту не отдаётся НИКОГДА: показать список сеансов с их
+    токенами значило бы раздать ключи от всех этих сеансов тому, кто просто
+    открыл список. Отпечаток необратим, но постоянен — им можно указать,
+    какой именно сеанс оборвать."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def create_session(conn: sqlite3.Connection, user_id: int, client_ip: Optional[str] = None,
+                   user_agent: Optional[str] = None) -> str:
     token = secrets.token_urlsafe(32)
     expires_at = (datetime.utcnow() + timedelta(days=SESSION_TTL_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute(
-        "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)", (token, user_id, expires_at)
+        "INSERT INTO sessions (token, user_id, expires_at, created_ip, user_agent, last_seen_at) "
+        "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+        (token, user_id, expires_at, client_ip, (user_agent or "")[:300] or None),
     )
     conn.commit()
     return token
 
 
+def touch_session(conn: sqlite3.Connection, token: str) -> None:
+    """Отметить, что сеансом только что пользовались. Не чаще раза в минуту
+    на сеанс: на это время опирается таймаут бездействия, и минутная
+    точность для него избыточна, а запись в базу на КАЖДЫЙ запрос — нет."""
+    now = time.time()
+    if now - _session_touched.get(token, 0) < SESSION_TOUCH_INTERVAL_SECONDS:
+        return
+    _session_touched[token] = now
+    conn.execute("UPDATE sessions SET last_seen_at = datetime('now') WHERE token = ?", (token,))
+    conn.commit()
+
+
 def get_user_by_session(conn: sqlite3.Connection, token: str) -> Optional[sqlite3.Row]:
-    return conn.execute(
-        "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id "
+    строка = conn.execute(
+        "SELECT s.last_seen_at, s.created_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id "
         "WHERE s.token = ? AND s.expires_at > datetime('now')",
         (token,),
     ).fetchone()
+    if строка is None:
+        return None
+    if SESSION_IDLE_HOURS > 0:
+        # Сессии, выданные до появления столбца, считаются от created_at:
+        # иначе NULL пришлось бы трактовать как «бездействует вечно»
+        # (выкинуть всех при обновлении) или «активна всегда» (не применить
+        # таймаут вовсе). Дата создания — единственное, что о них известно.
+        отметка = строка["last_seen_at"] or строка["created_at"]
+        просрочен = conn.execute(
+            "SELECT ? <= datetime('now', ?) AS истёк", (отметка, f"-{SESSION_IDLE_HOURS} hours")
+        ).fetchone()["истёк"]
+        if просрочен:
+            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            conn.commit()
+            _session_touched.pop(token, None)
+            return None
+    touch_session(conn, token)
+    return строка
 
 
 def get_current_user(request: Request) -> sqlite3.Row:
@@ -501,7 +557,8 @@ def login(body: LoginRequest, request: Request, response: Response):
                                if user["password_hash"] is not None else "пароль не задан, вход запрещён")
             raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-        token = create_session(conn, user["id"])
+        token = create_session(conn, user["id"], client_ip,
+                               request.headers.get("user-agent"))
         _reset_login_attempts(client_ip, body.domain_login)
         _log_login("login", client_ip, user=user, detail=auth_method_of(user))
         # Уборка привязана к входу, а не к отдельному расписанию: вход —
@@ -603,6 +660,88 @@ def change_own_password(body: ChangeOwnPasswordIn, request: Request,
     activity.log("password_changed", user=user, entity_type="user", entity_id=user["id"],
                  new_value="смена собственного пароля")
     return user_out(обновлён)
+
+
+# ------------------------------------------------------ активные сеансы
+#
+# Зачем: до этого оборвать чужой сеанс можно было только косвенно — сменив
+# пароль или способ входа. Человек уволился, ноутбук потерян, вкладка
+# осталась в общем браузере на площадке — а cookie живёт до 30 дней.
+
+
+def list_sessions(conn: sqlite3.Connection, user_id: int, current_token: Optional[str]) -> list[dict]:
+    строки = conn.execute(
+        "SELECT token, created_at, expires_at, created_ip, user_agent, last_seen_at "
+        "FROM sessions WHERE user_id = ? AND expires_at > datetime('now') "
+        "ORDER BY COALESCE(last_seen_at, created_at) DESC",
+        (user_id,),
+    ).fetchall()
+    return [{
+        "id": session_public_id(r["token"]),
+        "current": current_token is not None and r["token"] == current_token,
+        "created_at": r["created_at"],
+        "last_seen_at": r["last_seen_at"],
+        "expires_at": r["expires_at"],
+        "ip": r["created_ip"],
+        "user_agent": r["user_agent"],
+    } for r in строки]
+
+
+def _drop_session_by_public_id(conn: sqlite3.Connection, user_id: int, public_id: str) -> bool:
+    """Обрыв по отпечатку. Перебор строк, а не WHERE по значению — отпечаток
+    не хранится, он считается от токена; сеансов у человека единицы."""
+    for r in conn.execute("SELECT token FROM sessions WHERE user_id = ?", (user_id,)):
+        if session_public_id(r["token"]) == public_id:
+            conn.execute("DELETE FROM sessions WHERE token = ?", (r["token"],))
+            conn.commit()
+            _session_touched.pop(r["token"], None)
+            return True
+    return False
+
+
+@router.get("/me/sessions")
+def my_sessions(request: Request, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        return {"sessions": list_sessions(conn, user["id"], request.cookies.get(SESSION_COOKIE)),
+                "idle_hours": SESSION_IDLE_HOURS, "ttl_days": SESSION_TTL_DAYS}
+    finally:
+        conn.close()
+
+
+@router.delete("/me/sessions/{public_id}")
+def drop_my_session(public_id: str, request: Request,
+                    user: sqlite3.Row = Depends(get_current_user)):
+    """Оборвать свой сеанс, в том числе ТЕКУЩИЙ (это просто выход)."""
+    conn = get_connection()
+    try:
+        if not _drop_session_by_public_id(conn, user["id"], public_id):
+            raise HTTPException(status_code=404, detail="Сеанс не найден — возможно, он уже завершён")
+    finally:
+        conn.close()
+    activity.log("session_revoked", user=user, entity_type="user", entity_id=user["id"],
+                 new_value="свой сеанс")
+    return {"status": "ok"}
+
+
+@router.post("/me/sessions/close-others")
+def close_other_sessions(request: Request, user: sqlite3.Row = Depends(get_current_user)):
+    """«Завершить все, кроме текущего» — одно нажатие вместо перебора
+    списка: именно это делают, заподозрив, что где-то остался чужой вход."""
+    текущий = request.cookies.get(SESSION_COOKIE)
+    conn = get_connection()
+    try:
+        if текущий:
+            удалено = conn.execute("DELETE FROM sessions WHERE user_id = ? AND token != ?",
+                                   (user["id"], текущий)).rowcount
+        else:
+            удалено = conn.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],)).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("session_revoked", user=user, entity_type="user", entity_id=user["id"],
+                 new_value=f"завершено чужих сеансов: {удалено}")
+    return {"closed": удалено}
 
 
 @router.get("/me", response_model=UserOut)

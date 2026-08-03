@@ -1786,6 +1786,7 @@
                  — за компьютером. Доступна всем ролям. -->
             <button id="menu-view-mode" class="menu-item-strong">Цветовая схема</button>
             <button id="menu-change-password">Сменить пароль</button>
+            <button id="menu-my-sessions">Мои сеансы</button>
             <button id="menu-label-color">Цвет подписей марок</button>
             <button id="menu-colors" class="admin-only">Цвета статусов</button>
             <button id="menu-shapes" class="admin-only">Форма маркеров</button>
@@ -2563,6 +2564,23 @@
     <div class="actions">
       <button class="btn btn-secondary" id="change-password-cancel">Отмена</button>
       <button class="btn btn-primary" id="change-password-save">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Активные сеансы (2026-08-03). Одна форма на два случая: свои сеансы
+     (доступно всем) и чужие — администратору сервиса, когда человек уволился
+     или потерял ноутбук. Токенов в списке нет: показывается необратимый
+     отпечаток, им же сеанс и обрывается. -->
+<div class="modal-backdrop" id="sessions-backdrop">
+  <div class="modal wide">
+    <h2 id="sessions-title">Мои сеансы</h2>
+    <p class="hint-text" id="sessions-hint"></p>
+    <table id="sessions-table"></table>
+    <div class="error-text" id="sessions-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="sessions-close-others">Завершить все, кроме текущего</button>
+      <button class="btn btn-secondary" id="sessions-close">Закрыть</button>
     </div>
   </div>
 </div>

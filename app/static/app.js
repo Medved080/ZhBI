@@ -661,6 +661,108 @@ document.getElementById("change-password-save").addEventListener("click", async 
   }
 });
 
+// ---------- активные сеансы (2026-08-03) ----------
+// Одна форма на два случая: свои сеансы (всем) и чужие (администратору
+// сервиса из списка пользователей). Различие — только в источнике данных и
+// в том, что «завершить все, кроме текущего» имеет смысл лишь для своих.
+const sessionsBackdrop = document.getElementById("sessions-backdrop");
+let sessionsTargetUserId = null;   // null — свои
+
+function описаниеУстройства(ua) {
+  if (!ua) return "—";
+  // Не разбор User-Agent по-настоящему (он ненадёжен и меняется), а
+  // короткая подсказка «то ли это устройство»: полная строка — в title.
+  const браузер = /YaBrowser/.test(ua) ? "Яндекс" : /Edg\//.test(ua) ? "Edge"
+    : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox"
+    : /Safari\//.test(ua) ? "Safari" : "браузер";
+  const система = /Windows/.test(ua) ? "Windows" : /Mac OS/.test(ua) ? "macOS"
+    : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS"
+    : /Linux/.test(ua) ? "Linux" : "";
+  return система ? `${браузер} · ${система}` : браузер;
+}
+
+function когда(текст) {
+  if (!текст) return "—";
+  const d = new Date(текст.replace(" ", "T") + "Z");
+  return isNaN(d) ? текст : d.toLocaleString("ru-RU");
+}
+
+async function renderSessions() {
+  const table = document.getElementById("sessions-table");
+  const errorEl = document.getElementById("sessions-error");
+  errorEl.textContent = "";
+  table.innerHTML = "<tr><td>Загрузка…</td></tr>";
+  try {
+    const свои = sessionsTargetUserId === null;
+    const данные = await api(свои ? "/me/sessions" : `/users/${sessionsTargetUserId}/sessions`);
+    const строки = данные.sessions.map(s => `
+      <tr>
+        <td>${s.current ? "<b>текущий</b>" : ""}</td>
+        <td title="${escapeHtml(s.user_agent || "")}">${escapeHtml(описаниеУстройства(s.user_agent))}</td>
+        <td>${escapeHtml(s.ip || "—")}</td>
+        <td>${escapeHtml(когда(s.created_at))}</td>
+        <td>${escapeHtml(когда(s.last_seen_at))}</td>
+        <td><button class="btn btn-sm btn-secondary" data-drop="${escapeHtml(s.id)}">${s.current ? "Выйти" : "Завершить"}</button></td>
+      </tr>`).join("");
+    table.innerHTML = `<tr><th></th><th>Устройство</th><th>Адрес</th><th>Начат</th><th>Последняя активность</th><th></th></tr>`
+      + (строки || '<tr><td colspan="6">Активных сеансов нет</td></tr>');
+    if (данные.idle_hours) {
+      document.getElementById("sessions-hint").textContent =
+        `Сеанс завершается сам после ${данные.idle_hours} ч без действий и в любом случае через ${данные.ttl_days} дней.`;
+    }
+    table.querySelectorAll("[data-drop]").forEach(btn => btn.addEventListener("click", async () => {
+      try {
+        if (свои) {
+          await api(`/me/sessions/${btn.dataset.drop}`, { method: "DELETE" });
+          // Оборвали текущий — это обычный выход, и оставаться в интерфейсе
+          // нельзя: следующий же запрос вернёт 401.
+          const текущий = btn.textContent === "Выйти";
+          if (текущий) { sessionsBackdrop.classList.remove("open"); state.currentUser = null; showLoginScreen(); return; }
+        } else {
+          errorEl.textContent = "Отдельный чужой сеанс не обрывается — завершите все кнопкой ниже";
+          return;   // адресный обрыв чужого сеанса не понадобился: увольнение закрывает все
+        }
+        await renderSessions();
+      } catch (e) { errorEl.textContent = e.message; }
+    }));
+  } catch (e) {
+    table.innerHTML = "";
+    errorEl.textContent = e.message;
+  }
+}
+
+function openSessions(userId, заголовок) {
+  sessionsTargetUserId = userId;
+  document.getElementById("sessions-title").textContent = заголовок;
+  document.getElementById("sessions-hint").textContent = "";
+  // Кнопка подвала контекстная, а не скрываемая: администратору нужна
+  // ровно эта операция («человек уволился — оборвать всё»), и прятать её,
+  // оставляя список только для чтения, значило бы показать проблему без
+  // способа её решить.
+  document.getElementById("sessions-close-others").textContent =
+    userId === null ? "Завершить все, кроме текущего" : "Завершить все сеансы пользователя";
+  sessionsBackdrop.classList.add("open");
+  renderSessions();
+}
+
+document.getElementById("menu-my-sessions").addEventListener("click", () => {
+  document.getElementById("settings-menu").classList.remove("open");
+  openSessions(null, "Мои сеансы");
+});
+document.getElementById("sessions-close").addEventListener("click", () =>
+  sessionsBackdrop.classList.remove("open"));
+document.getElementById("sessions-close-others").addEventListener("click", async () => {
+  try {
+    const res = sessionsTargetUserId === null
+      ? await api("/me/sessions/close-others", { method: "POST" })
+      : await api(`/users/${sessionsTargetUserId}/sessions`, { method: "DELETE" });
+    showToast(res.closed ? `Завершено сеансов: ${res.closed}` : "Активных сеансов не было");
+    await renderSessions();
+  } catch (e) {
+    document.getElementById("sessions-error").textContent = e.message;
+  }
+});
+
 // ---------- цвет подписей марок — персональная настройка (см.
 // Docs/backlog.md, "Партия — учёт по маркам"), тот же паттерн
 // самообслуживания, что у смены пароля выше ----------
@@ -8076,6 +8178,7 @@ async function renderUsersTable() {
         <!-- У доменного пользователя пароля сервиса нет и быть не должно —
              сервер такой запрос отклоняет (409), кнопка гасится здесь же,
              чтобы это не выяснялось после ввода пароля. -->
+        <button class="btn btn-sm btn-secondary" data-sessions="${u.id}">Сеансы</button>
         <button class="btn btn-sm btn-secondary" data-pwd="${u.id}"
                 ${u.auth_method === "domain" ? "disabled title=\"Вход по доменной учётной записи — пароль сервиса не используется\"" : ""}>Пароль</button>
       </td>
@@ -8084,6 +8187,10 @@ async function renderUsersTable() {
   table.innerHTML = `<tr><th>ФИО</th><th>Должность</th><th>Подразделение</th><th>Логин</th><th>Роль</th><th>Вход</th><th></th></tr>${rowsHtml}`;
   table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openUserEdit(users.find(u => u.id === Number(btn.dataset.edit)))));
   table.querySelectorAll("[data-pwd]").forEach(btn => btn.addEventListener("click", () => openUserPassword(Number(btn.dataset.pwd))));
+  table.querySelectorAll("[data-sessions]").forEach(btn => btn.addEventListener("click", () => {
+    const u = users.find(x => x.id === Number(btn.dataset.sessions));
+    openSessions(u.id, `Сеансы: ${u.display_name}`);
+  }));
 }
 
 document.getElementById("menu-users").addEventListener("click", async () => {
