@@ -43,6 +43,11 @@ class AgreementIn(BaseModel):
     counterparty_id: int
     number: str
     agreement_date: Optional[str] = None
+    # Объект, на который заключён договор (этап A). Необязателен в модели, но
+    # ОБЯЗАТЕЛЕН при заведении нового (см. create_agreement): у накопленных
+    # договоров он NULL, и правка такого договора без указания объекта не
+    # должна падать валидацией — иначе проставить объект было бы нечем.
+    object_id: Optional[int] = None
 
 
 class AgreementOut(AgreementIn):
@@ -315,23 +320,54 @@ def _guard_agreement(conn, user, agreement_id: int, minimum: str = "admin") -> N
 
 
 @router.post("/agreements", response_model=AgreementOut)
-def create_agreement(body: AgreementIn, admin: sqlite3.Row = Depends(get_current_user)):
-    # Объект договора здесь не задаётся (переедет в этап D), поэтому
-    # заводить договоры может только администратор сервиса: иначе появился
-    # бы документ без владельца, доступный кому угодно.
-    if admin["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Заводить договоры может администратор сервиса")
+def create_agreement(body: AgreementIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Новый договор — ОБЯЗАТЕЛЬНО на объект (2026-08-03).
+
+    Раньше объект не задавался вовсе («переедет в этап D»), и заводить
+    договоры мог только администратор сервиса — иначе появился бы документ
+    без владельца, доступный кому угодно. Плата за это выяснилась при
+    аудите: у ВСЕХ накопленных договоров `object_id IS NULL`, а безобъектный
+    договор по правилам доступа виден только администратору сервиса — то
+    есть у администратора объекта каскад в форме контракта был пуст, и
+    завести себе договор он не мог.
+
+    Теперь объект указывается явно, а право заводить договор даёт роль
+    `admin` НА ЭТОМ объекте. Объект приходит параметром именно здесь и
+    только здесь — это единственное место, где он ещё не выведен из
+    сущности, потому что сущности пока нет; проверка `assert_object_access`
+    не даёт назвать чужой.
+    """
+    if body.object_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Укажите объект, на который заключён договор — без него договор "
+                   "не виден ни в одном контракте объекта",
+        )
     conn = get_connection()
     try:
+        assert_object_access(conn, user, body.object_id, "admin")
         counterparty = conn.execute(
             "SELECT id FROM counterparties WHERE id = ?", (body.counterparty_id,)
         ).fetchone()
         if not counterparty:
             raise HTTPException(status_code=404, detail="Контрагент не найден")
-        try:
-            agreement_id = find_or_create_agreement(conn, body.counterparty_id, body.number, body.agreement_date)
-        except sqlite3.IntegrityError:
-            raise HTTPException(status_code=400, detail="У этого контрагента уже есть договор с таким номером")
+        существующий = conn.execute(
+            "SELECT id, object_id FROM agreements WHERE counterparty_id = ? AND number = ?",
+            (body.counterparty_id, body.number),
+        ).fetchone()
+        if существующий:
+            # find_or_create_agreement (её зовут импортёры) молча вернула бы
+            # ЧУЖОЙ договор с тем же номером — а здесь человек нажал
+            # «+ Договор» и вправе узнать, что номер занят, вместо того чтобы
+            # получить в ответ документ другого объекта.
+            raise HTTPException(
+                status_code=400, detail="У этого контрагента уже есть договор с таким номером")
+        conn.execute(
+            "INSERT INTO agreements (counterparty_id, number, agreement_date, object_id) "
+            "VALUES (?, ?, ?, ?)",
+            (body.counterparty_id, body.number, body.agreement_date, body.object_id),
+        )
+        agreement_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         conn.commit()
         row = conn.execute("SELECT * FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
         return dict(row)
@@ -344,12 +380,47 @@ def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = 
     conn = get_connection()
     _guard_agreement(conn, admin, agreement_id)
     try:
-        existing = conn.execute("SELECT id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT id, object_id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Договор не найден")
+        if body.object_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите объект, на который заключён договор — без него договор "
+                       "не виден ни в одном контракте объекта",
+            )
+        if body.object_id != existing["object_id"]:
+            # Доступ проверяется и к НОВОМУ объекту: _guard_agreement выше
+            # разрешил правку по СТАРОМУ, и без этой проверки администратор
+            # своего объекта перевесил бы договор на чужой.
+            assert_object_access(conn, admin, body.object_id, "admin")
+            # «Объект контракта = объект элемента» — инвариант схемы: объект
+            # контракта не хранится, а выводится по цепочке
+            # контракт → спецификация → договор. Значит, перевод договора на
+            # другой объект молча уводит туда же все контракты, а вместе с
+            # ними — законтрактованные изделия ЧУЖОЙ стройки. Пока такие
+            # изделия есть, объект не меняем.
+            занято = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM elements e
+                JOIN contracts co ON co.id = e.contract_id
+                JOIN specifications s ON s.id = co.specification_id
+                WHERE s.agreement_id = ? AND e.object_id IS NOT ?
+                """,
+                (agreement_id, body.object_id),
+            ).fetchone()["n"]
+            if занято:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"По контрактам этого договора уже законтрактовано изделий другого "
+                           f"объекта: {занято}. Сменить объект договора нельзя — сначала снимите "
+                           f"контракт с этих изделий.",
+                )
         conn.execute(
-            "UPDATE agreements SET counterparty_id=?, number=?, agreement_date=?, updated_at=datetime('now') WHERE id=?",
-            (body.counterparty_id, body.number, body.agreement_date, agreement_id),
+            "UPDATE agreements SET counterparty_id=?, number=?, agreement_date=?, object_id=?, "
+            "updated_at=datetime('now') WHERE id=?",
+            (body.counterparty_id, body.number, body.agreement_date, body.object_id, agreement_id),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM agreements WHERE id = ?", (agreement_id,)).fetchone()

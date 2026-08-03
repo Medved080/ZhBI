@@ -2985,11 +2985,17 @@
     <div id="counterparty-agreements-section" style="display:none; margin-top:18px; border-top:1px solid var(--color-border); padding-top:12px;">
       <h3>Договоры</h3>
       <div id="cpe-agreements-list"></div>
+      <!-- Объект обязателен (2026-08-03): договор без объекта не виден ни в
+           одном контракте объекта — по правилам доступа его показывают
+           только администратору сервиса. Поле стоит первым в строке: это
+           не реквизит документа, а то, к какой стройке он относится. -->
       <div class="row" style="gap:6px; margin-top:8px;">
+        <select id="cpe-new-agreement-object" style="flex:1; min-width:0;"></select>
         <input type="text" id="cpe-new-agreement-number" placeholder="номер договора" style="flex:1;"/>
         <input type="date" id="cpe-new-agreement-date"/>
         <button class="btn btn-sm btn-secondary" id="cpe-add-agreement">+ Договор</button>
       </div>
+      <div class="error-text" id="cpe-agreement-error"></div>
     </div>
   </div>
 </div>

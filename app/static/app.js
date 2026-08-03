@@ -7903,6 +7903,43 @@ document.getElementById("menu-counterparties").addEventListener("click", async (
 document.getElementById("counterparties-close").addEventListener("click", () => counterpartiesBackdrop.classList.remove("open"));
 document.getElementById("counterparties-add").addEventListener("click", () => openCounterpartyEdit(null));
 
+// ---------- объект договора (2026-08-03) ----------
+// Список берётся из уже загруженного дерева проектов, а не отдельным
+// запросом: там уже есть и названия, и действующая роль на каждом объекте.
+// Оставляем только те, где роль admin — заводить и перевешивать договор
+// сервер разрешает ровно там (assert_object_access ..., "admin"), и
+// показывать в списке то, что он отвергнет, незачем.
+function objectsForAgreement() {
+  const список = [];
+  for (const p of state.projects) {
+    for (const o of p.objects) {
+      if (o.role === "admin") список.push({ id: o.id, label: `${p.name} · ${o.name}` });
+    }
+  }
+  return список;
+}
+
+function objectOptionsHtml(selectedId) {
+  const варианты = objectsForAgreement();
+  // Объект договора, к которому у человека нет прав администратора (или
+  // ещё не проставленный у накопленных договоров), всё равно должен быть
+  // виден в списке выбранным — иначе форма молча предложила бы сменить его
+  // на первый попавшийся.
+  const известен = варианты.some(v => v.id === selectedId);
+  const пусто = selectedId == null
+    ? '<option value="" selected>— выберите объект —</option>'
+    : (известен ? "" : `<option value="${selectedId}" selected>объект №${selectedId} (нет прав)</option>`);
+  return пусто + варианты.map(v =>
+    `<option value="${v.id}"${v.id === selectedId ? " selected" : ""}>${escapeHtml(v.label)}</option>`
+  ).join("");
+}
+
+function objectLabelById(id) {
+  const найден = objectsForAgreement().find(v => v.id === id);
+  if (найден) return найден.label;
+  return id == null ? "объект не указан" : `объект №${id}`;
+}
+
 async function renderCounterpartyAgreements() {
   const box = document.getElementById("cpe-agreements-list");
   box.innerHTML = "Загрузка…";
@@ -7915,6 +7952,7 @@ async function renderCounterpartyAgreements() {
     row.innerHTML = `
       <div class="contract-block-header">
         <button type="button" class="hyperlink cpe-edit-agreement"><b>${escapeHtml(a.number)}</b><span class="hint-text">${a.agreement_date ? " от " + formatDateRu(a.agreement_date) : ""}</span></button>
+        <span class="hint-text">${escapeHtml(objectLabelById(a.object_id))}</span>
       </div>
       <div class="cpe-specs-list"></div>
       <div class="row" style="gap:6px; margin-top:6px;">
@@ -7942,19 +7980,36 @@ async function renderCounterpartyAgreements() {
           <input type="date" class="cpe-edit-agreement-date" value="${a.agreement_date || ""}"/>
         </div>
         <div class="row" style="gap:6px; margin-top:6px;">
+          <select class="cpe-edit-agreement-object" style="flex:1; min-width:0;">${objectOptionsHtml(a.object_id)}</select>
+        </div>
+        <div class="error-text cpe-edit-agreement-error"></div>
+        <div class="row" style="gap:6px; margin-top:6px;">
           <button class="btn btn-sm btn-primary cpe-save-agreement" type="button">Сохранить</button>
           <button class="btn btn-sm btn-secondary cpe-cancel-agreement" type="button">Отмена</button>
         </div>
       `;
       header.querySelector(".cpe-cancel-agreement").addEventListener("click", renderCounterpartyAgreements);
       header.querySelector(".cpe-save-agreement").addEventListener("click", async () => {
+        const errorEl = header.querySelector(".cpe-edit-agreement-error");
+        errorEl.textContent = "";
         const number = header.querySelector(".cpe-edit-agreement-number").value.trim();
         if (!number) return;
         const date = header.querySelector(".cpe-edit-agreement-date").value || null;
-        await api(`/agreements/${a.id}`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ counterparty_id: editingCounterpartyId, number, agreement_date: date }),
-        });
+        const objectId = Number(header.querySelector(".cpe-edit-agreement-object").value) || null;
+        try {
+          await api(`/agreements/${a.id}`, {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ counterparty_id: editingCounterpartyId, number,
+                                   agreement_date: date, object_id: objectId }),
+          });
+        } catch (e) {
+          // Отказ показываем В САМОЙ строке договора, а не общей ошибкой
+          // формы: причин две («объект не выбран» и «по договору уже
+          // законтрактованы изделия другого объекта»), и обе относятся к
+          // конкретному договору, а не к контрагенту.
+          errorEl.textContent = e.message;
+          return;
+        }
         await renderCounterpartyAgreements();
       });
     });
@@ -8018,13 +8073,23 @@ async function renderCounterpartyAgreements() {
 
 document.getElementById("cpe-add-agreement").addEventListener("click", async () => {
   if (!editingCounterpartyId) return; // только у уже сохранённого контрагента
+  const errorEl = document.getElementById("cpe-agreement-error");
+  errorEl.textContent = "";
   const number = document.getElementById("cpe-new-agreement-number").value.trim();
-  if (!number) return;
+  if (!number) { errorEl.textContent = "Укажите номер договора"; return; }
+  const objectId = Number(document.getElementById("cpe-new-agreement-object").value) || null;
+  if (!objectId) { errorEl.textContent = "Выберите объект, на который заключён договор"; return; }
   const date = document.getElementById("cpe-new-agreement-date").value || null;
-  await api("/agreements", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ counterparty_id: editingCounterpartyId, number, agreement_date: date }),
-  });
+  try {
+    await api("/agreements", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ counterparty_id: editingCounterpartyId, number,
+                             agreement_date: date, object_id: objectId }),
+    });
+  } catch (e) {
+    errorEl.textContent = e.message;
+    return;
+  }
   document.getElementById("cpe-new-agreement-number").value = "";
   document.getElementById("cpe-new-agreement-date").value = "";
   await renderCounterpartyAgreements();
@@ -8046,6 +8111,12 @@ async function openCounterpartyEdit(cp) {
   // Договоры/спецификации — только у уже существующего контрагента
   // (у нового ещё нет id, договор ссылается на counterparty_id).
   document.getElementById("counterparty-agreements-section").style.display = cp ? "" : "none";
+  document.getElementById("cpe-agreement-error").textContent = "";
+  // По умолчанию — объект, который сейчас показан на схеме: договор почти
+  // всегда заводят для той стройки, с которой работают. Если прав
+  // администратора на нём нет, objectOptionsHtml оставит выбор пустым.
+  const подставить = objectsForAgreement().some(v => v.id === state.objectId) ? state.objectId : null;
+  document.getElementById("cpe-new-agreement-object").innerHTML = objectOptionsHtml(подставить);
   if (cp) await renderCounterpartyAgreements();
   counterpartyEditBackdrop.classList.add("open");
 }
@@ -8490,8 +8561,14 @@ function refreshAgreementSelect(selectedAgreementId) {
   const cp = counterpartiesFullCache.find(c => String(c.id) === document.getElementById("ce-counterparty").value);
   const agreements = cp ? cp.agreements : [];
   const agrSelect = document.getElementById("ce-agreement");
+  // Объект договора — прямо в подписи варианта (2026-08-03): список сужен
+  // по ДОСТУПНЫМ объектам, а не по показываемому, и у человека с двумя
+  // стройками договоры обеих лежат вперемешку. Объект контракта не
+  // хранится, а выводится по цепочке контракт → спецификация → договор,
+  // поэтому выбор договора здесь — это и есть выбор стройки, и он должен
+  // быть виден глазами.
   agrSelect.innerHTML = agreements.map(a =>
-    `<option value="${a.id}" ${String(a.id) === String(selectedAgreementId) ? "selected" : ""}>${escapeHtml(a.number)}${a.agreement_date ? " от " + formatDateRu(a.agreement_date) : ""}</option>`
+    `<option value="${a.id}" ${String(a.id) === String(selectedAgreementId) ? "selected" : ""}>${escapeHtml(a.number)}${a.agreement_date ? " от " + formatDateRu(a.agreement_date) : ""} — ${escapeHtml(objectLabelById(a.object_id))}</option>`
   ).join("");
   refreshSpecificationSelect(agreements, undefined);
 }
