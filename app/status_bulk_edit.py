@@ -105,10 +105,17 @@ def columns_spec() -> list:
     return [{"key": k, "label": l, "editable": e} for k, l, e in COLUMNS]
 
 
-def _load(conn) -> tuple[dict, list]:
+def _load(conn, element_ids: Optional[set] = None) -> tuple[dict, list]:
     """Элементы и все записи истории — двумя запросами, а не запросом истории
     на каждый элемент: на 9422 строках это тот же N+1, что уже стоил проекту
-    2,7 секунды на другой форме."""
+    2,7 секунды на другой форме.
+
+    `element_ids` — отбор схемы при ВЫГРУЗКЕ («Учитывать фильтр»); сверка
+    загруженного файла его не передаёт никогда, иначе строка про элемент вне
+    текущего фильтра была бы отвергнута как «нет такого UID». Отсев в Python,
+    а не `id IN (...)`: тысячи значений не помещаются в лимит переменных
+    SQLite.
+    """
     elements = {
         r["id"]: r for r in conn.execute(
             """
@@ -118,6 +125,7 @@ def _load(conn) -> tuple[dict, list]:
             WHERE e.is_current = 1 AND e.element_uid IS NOT NULL
             """
         )
+        if element_ids is None or r["id"] in element_ids
     }
     records = conn.execute(
         """
@@ -163,8 +171,8 @@ def _sort_key(values: dict) -> tuple:
             str(values["changed_at"] or ""), values[KEY_COLUMN] or 0)
 
 
-def build_status_workbook(conn) -> Workbook:
-    elements, records = _load(conn)
+def build_status_workbook(conn, element_ids: Optional[set] = None) -> Workbook:
+    elements, records = _load(conn, element_ids)
     contract_names = {c["id"]: c["name"] for c in _contract_catalog(conn)}
     rows = sorted(
         (_record_values(r, elements[r["element_id"]], contract_names) for r in records),

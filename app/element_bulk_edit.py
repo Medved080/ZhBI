@@ -136,12 +136,19 @@ def _contract_catalog(conn) -> list:
     return out
 
 
-def _element_rows(conn) -> list:
+def _element_rows(conn, element_ids: Optional[set] = None) -> list:
     """Все актуальные элементы всех объектов — одним запросом с JOIN на
     зоны и объект. Именно одним: на 9422 строках отдельный запрос за
     названием зоны на каждую строку — это тот самый N+1, который уже стоил
-    проекту 2,7 секунды на открытии окна массовой смены статуса."""
-    return conn.execute(
+    проекту 2,7 секунды на открытии окна массовой смены статуса.
+
+    `element_ids` — отбор схемы («Учитывать фильтр» при выгрузке). Отсев
+    делается В PYTHON, а не через `id IN (...)`: список приходит с клиента
+    и на этом проекте бывает в тысячи значений, то есть упирается в лимит
+    переменных SQLite (999 у сборок без SQLITE_MAX_VARIABLE_NUMBER). Полная
+    выборка тут и так строится за доли секунды.
+    """
+    rows = conn.execute(
         """
         SELECT e.*, o.name AS object_name,
                zz.name AS zone_zakhvatka, zc.name AS zone_crane, zs.name AS zone_stance
@@ -154,6 +161,9 @@ def _element_rows(conn) -> list:
         ORDER BY o.name, e.element_type, e.mark, e.id
         """
     ).fetchall()
+    if element_ids is None:
+        return rows
+    return [r for r in rows if r["id"] in element_ids]
 
 
 # Колонки, которые в Excel должны быть НАСТОЯЩИМИ датами с русским
@@ -190,9 +200,14 @@ def display_values(row, contract_by_id: dict) -> dict:
     return {key: (derived[key] if key in derived else row[key]) for key, _, _ in COLUMNS}
 
 
-def build_export_workbook(conn) -> Workbook:
+def build_export_workbook(conn, element_ids: Optional[set] = None) -> Workbook:
     """Снимок на текущий момент: лист данных + четыре листа справочников,
-    с выпадающими списками в правимых колонках."""
+    с выпадающими списками в правимых колонках.
+
+    `element_ids` (живой запрос 2026-08-04) — выгрузить только то, что
+    прошло фильтр схемы. Списки справочников при этом НЕ сужаются: в файле
+    правят значения, и обрезанный до отобранных строк список контрактов
+    лишил бы пользователя ровно того, ради чего он файл открыл."""
     contracts = _contract_catalog(conn)
     contract_names = [c["name"] for c in contracts]
     types = [r["element_type"] for r in conn.execute(
@@ -221,7 +236,7 @@ def build_export_workbook(conn) -> Workbook:
     # обращения на строку при 9422 строках давали 88 СЕКУНД на сборку файла,
     # и выгрузка выглядела как зависшая. Тот же файл со счётчиком строится
     # за 0,7 с.
-    элементы = _element_rows(conn)
+    элементы = _element_rows(conn, element_ids)
     for номер, row in enumerate(элементы, start=2):   # 1-я строка — заголовки
         values = display_values(row, by_id)
         ws.append([to_excel_date(values[key]) if key in _DATE_COLUMNS else values[key]

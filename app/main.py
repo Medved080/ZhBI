@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from shapely.geometry import Point, Polygon
@@ -66,6 +66,10 @@ from app.element_bulk_edit import (
     analyze as analyze_bulk_edit,
     apply_changes as apply_bulk_edit,
     build_export_workbook,
+    # Наименования контрактов для выпадашки справочника элементов: та же
+    # цепочка Контрагент/Договор/Спецификация и та же build_contract_name,
+    # что в выгрузке и в формах. Своя склейка здесь разошлась бы с ними.
+    _contract_catalog as contract_catalog,
 )
 from app import status_bulk_edit
 from app.access import (
@@ -2528,34 +2532,113 @@ def undo_zone_edit(zone_id: int, admin: sqlite3.Row = Depends(get_current_user))
     return result
 
 
-# Справочник элементов (этап 3, решение Э1). Колонки, по которым можно
-# отбирать выпадающим списком: у них ограниченный набор значений. Даты и
-# координаты сюда не входят — у них значений почти столько же, сколько строк,
-# выпадашка была бы бесполезна (для них — сортировка и общий поиск).
-_ELEMENT_FILTER_COLUMNS = ("element_type", "subtype", "mark", "elevation_mm", "floor", "current_status")
+# ---------- Справочник элементов (этап 3, решение Э1) ----------
+#
+# С 2026-08-04 (живой запрос «добавь все поля») в таблице ВСЕ реквизиты
+# элемента, включая приходящие из JOIN'ов — объект, зоны, контрагент, ярус
+# стоянки. Поэтому колонки описаны ОДНИМ реестром «ключ -> выражение SQL»:
+# по этому же выражению колонка и отбирается, и сортируется, и собирает
+# значения для выпадашки. Выражение, а не голое имя колонки: половина
+# ключей — из присоединённых таблиц, а имя в SQL параметром не передать,
+# оно склеивается в текст запроса. Реестр здесь заодно и белый список —
+# без него отбор по произвольному ключу был бы SQL-инъекцией.
+#
+# Чего в реестре НЕТ намеренно: outline_json (геометрия, в таблицу не
+# помещается и не читается человеком), is_current (в справочнике он всегда
+# 1 — колонка-константа), manual_fields (список правленых полей, показан
+# галочкой ✎ в форме элемента), *_id зон и контракта (вместо них — имена).
+_EC_FROM = """
+    FROM elements e
+    LEFT JOIN objects o ON o.id = e.object_id
+    LEFT JOIN zones zz ON zz.id = e.zone_zakhvatka_id
+    LEFT JOIN zones zc ON zc.id = e.zone_crane_id
+    LEFT JOIN zones zs ON zs.id = e.zone_stance_id
+    LEFT JOIN zone_levels zl ON zl.id = e.zone_stance_level_id
+    LEFT JOIN contracts co ON co.id = e.contract_id
+    LEFT JOIN specifications sp ON sp.id = co.specification_id
+    LEFT JOIN agreements ag ON ag.id = sp.agreement_id
+    LEFT JOIN counterparties cp ON cp.id = ag.counterparty_id
+"""
+
+_EC_SQL = {
+    "id": "e.id",
+    "object_name": "o.name",
+    "element_type": "e.element_type",
+    "subtype": "e.subtype",
+    "mark": "e.mark",
+    "mark_source": "e.mark_source",
+    "elevation_mm": "e.elevation_mm",
+    "floor": "e.floor",
+    "address": "e.address",
+    "current_status": "e.current_status",
+    "planned_delivery_date": "e.planned_delivery_date",
+    "actual_delivery_date": "e.actual_delivery_date",
+    "project_smr_start_date": "e.project_smr_start_date",
+    "project_delivery_date": "e.project_delivery_date",
+    "contract_id": "e.contract_id",
+    "counterparty": "cp.short_name",
+    "comment": "e.comment",
+    "zone_zakhvatka": "zz.name",
+    "zone_zakhvatka_status": "e.zone_zakhvatka_status",
+    "zone_crane": "zc.name",
+    "zone_crane_status": "e.zone_crane_status",
+    "zone_stance": "zs.name",
+    "zone_stance_status": "e.zone_stance_status",
+    "zone_stance_level_elevation_mm": "zl.elevation_mm",
+    "axis_status": "e.axis_status",
+    "axis_number": "e.axis_number",
+    "axis_letter": "e.axis_letter",
+    "nearest_axis_number": "e.nearest_axis_number",
+    "nearest_axis_letter": "e.nearest_axis_letter",
+    "offset_x_mm": "e.offset_x_mm",
+    "offset_y_mm": "e.offset_y_mm",
+    "x": "e.x",
+    "y": "e.y",
+    "z": "e.z",
+    "layer": "e.layer",
+    "source_file": "e.source_file",
+    "dxf_handle": "e.dxf_handle",
+    "element_uid": "e.element_uid",
+    "created_at": "e.created_at",
+    "updated_at": "e.updated_at",
+}
+
+# Колонки, отбираемые ВЫПАДАШКОЙ: у них ограниченный набор значений.
+# Остальные ключи реестра отбираются подстрокой — у дат, координат, адреса
+# и UID значений почти столько же, сколько строк, и список из 9000 пунктов
+# бесполезен, а «2026-09» отбирает по месяцу.
+_EC_DROPDOWN_COLUMNS = (
+    "object_name", "element_type", "subtype", "mark", "mark_source",
+    "elevation_mm", "floor", "current_status", "contract_id", "counterparty",
+    "zone_zakhvatka", "zone_zakhvatka_status", "zone_crane", "zone_crane_status",
+    "zone_stance", "zone_stance_status", "zone_stance_level_elevation_mm",
+    "axis_status", "axis_number", "axis_letter",
+    "nearest_axis_number", "nearest_axis_letter", "layer", "source_file",
+)
 
 # Тот же сентинел «нет значения», что уже используют фильтры схемы на
 # фронтенде (PLACEMENT_NONE в app/static/app.js): пустая строка в запросе
-# означает «любое значение», а «пустое значение» надо уметь выбрать явно.
+# означает «любое значение», а «не заполнено» надо уметь выбрать явно.
+# Пара к нему — «заполнено» (живой запрос 2026-08-04): вопрос «где ещё не
+# проставлена плановая дата» задаётся к ЛЮБОЙ колонке, поэтому оба сентинела
+# принимаются вместо значения у всех ключей реестра, и у выпадашек, и у
+# подстрочных. Пустая строка считается незаполненной наравне с NULL: в базе
+# есть и то и другое, а для человека это одно и то же.
 PLACEMENT_NONE_SENTINEL = "__none__"
+FILLED_SENTINEL = "__filled__"
 
-# Колонки, отбираемые ПОДСТРОКОЙ, а не выпадашкой: у них значений почти
-# столько же, сколько строк (адрес по осям, даты). Живой запрос — «добавь
-# возможность фильтрации по всем колонкам»: выпадашка на 9000 разных значений
-# бесполезна, а поиск по части значения работает и для даты («2026-09»).
-_ELEMENT_TEXT_FILTER_COLUMNS = (
-    "address", "planned_delivery_date", "actual_delivery_date",
-    "project_delivery_date", "project_smr_start_date", "layer",
-    "comment",
-)
+# Параметры запроса, которые НЕ являются отбором по колонке.
+_EC_RESERVED = ("limit", "offset", "sort", "direction", "search")
 
-# Колонки, по которым разрешена сортировка. Белый список, а не подстановка
-# имени из запроса в SQL: имя колонки нельзя передать параметром, оно
-# склеивается в текст запроса — без списка это была бы SQL-инъекция.
-_ELEMENT_SORT_COLUMNS = _ELEMENT_FILTER_COLUMNS + (
-    "id", "address", "planned_delivery_date", "actual_delivery_date",
-    "project_delivery_date", "project_smr_start_date", "layer", "comment",
-)
+
+def _ec_value_sort_key(value):
+    """Порядок значений в выпадашке. Числа отдельной группой и по величине,
+    остальное — как текст: в одной колонке (отметка, этаж) значения
+    однородны, но общий ключ на все колонки не имеет права падать на
+    смешанном наборе."""
+    if isinstance(value, (int, float)):
+        return (0, float(value), "")
+    return (1, 0.0, str(value))
 
 
 # Путь БЕЗ префикса /elements/: маршрут /elements/{element_id} объявлен
@@ -2563,27 +2646,22 @@ _ELEMENT_SORT_COLUMNS = _ELEMENT_FILTER_COLUMNS + (
 # разборе int) — поймано первым же запросом.
 @app.get("/element-catalog")
 def elements_catalog(
+    request: Request,
     limit: int = Query(200, le=2000),
     offset: int = Query(0, ge=0),
     sort: str = Query("id"),
     direction: str = Query("asc"),
     search: Optional[str] = Query(None, description="подстрока в марке или адресе"),
-    element_type: Optional[str] = Query(None),
-    subtype: Optional[str] = Query(None),
-    mark: Optional[str] = Query(None),
-    elevation_mm: Optional[str] = Query(None),
-    floor: Optional[str] = Query(None),
-    current_status: Optional[str] = Query(None),
-    address: Optional[str] = Query(None),
-    planned_delivery_date: Optional[str] = Query(None),
-    actual_delivery_date: Optional[str] = Query(None),
-    project_delivery_date: Optional[str] = Query(None),
-    project_smr_start_date: Optional[str] = Query(None),
-    layer: Optional[str] = Query(None),
-    comment: Optional[str] = Query(None),
     user: sqlite3.Row = Depends(get_current_user),
 ):
     """Табличный справочник элементов с отбором по колонкам и сортировкой.
+
+    Отбор принимается ПРОИЗВОЛЬНЫМИ параметрами запроса «ключ=значение»
+    (ключи — из реестра _EC_SQL), а не сорока именованными аргументами:
+    после того как в таблицу вошли все поля элемента, перечислять их в
+    сигнатуре значило бы держать третий список тех же колонок рядом с
+    реестром и клиентом. Неизвестный ключ — 400, а не молчаливый пропуск:
+    опечатка в имени поля иначе выглядела бы как «фильтр не работает».
 
     Отдаёт и страницу строк, и общее число совпадений, и наборы РАЗЛИЧНЫХ
     значений для выпадашек отбора. Значения считаются по тому же отбору, что
@@ -2592,26 +2670,20 @@ def elements_catalog(
     (та же логика «полный список значений всегда виден», что у фильтров
     схемы, см. Docs/backlog.md).
     """
-    if sort not in _ELEMENT_SORT_COLUMNS:
+    if sort not in _EC_SQL:
         raise HTTPException(status_code=400, detail=f"Сортировка по «{sort}» не поддерживается")
     order = "DESC" if str(direction).lower() == "desc" else "ASC"
 
-    requested = {
-        "element_type": element_type, "subtype": subtype, "mark": mark,
-        "elevation_mm": elevation_mm, "floor": floor, "current_status": current_status,
-    }
-    # Пустая строка от выпадашки означает «любое», а не «пустое значение»;
-    # для «пустое» есть отдельный сентинел (клиент присылает __none__).
-    active = {k: v for k, v in requested.items() if v not in (None, "")}
-    text_filters = {
-        k: v for k, v in {
-            "address": address, "planned_delivery_date": planned_delivery_date,
-            "actual_delivery_date": actual_delivery_date,
-            "project_delivery_date": project_delivery_date,
-            "project_smr_start_date": project_smr_start_date, "layer": layer,
-            "comment": comment,
-        }.items() if v not in (None, "")
-    }
+    filters = {}
+    for key, value in request.query_params.items():
+        if key in _EC_RESERVED:
+            continue
+        if key not in _EC_SQL:
+            raise HTTPException(status_code=400, detail=f"Отбор по «{key}» не поддерживается")
+        # Пустая строка означает «любое», а не «пустое значение»: для
+        # «не заполнено» есть отдельный сентинел.
+        if value != "":
+            filters[key] = value
 
     def clauses_for(skip: Optional[str] = None):
         # object_id IS NOT NULL оставлено как страховка, хотя элементов без
@@ -2625,59 +2697,94 @@ def elements_catalog(
         # сузить выборку по доступным объектам (аудит безопасности
         # 2026-08-03; до него отбор был только по «объект вообще задан»,
         # то есть любой вошедший листал элементы всех строек разом).
-        parts, params = ["object_id IS NOT NULL", "is_current = 1", _доступ], list(_доступ_params)
-        for column, value in active.items():
+        parts = ["e.object_id IS NOT NULL", "e.is_current = 1", _доступ]
+        params = list(_доступ_params)
+        for column, value in filters.items():
             if column == skip:
                 continue
+            expr = _EC_SQL[column]
             if value == PLACEMENT_NONE_SENTINEL:
-                parts.append(f"{column} IS NULL")
-            else:
-                parts.append(f"{column} = ?")
+                parts.append(f"({expr} IS NULL OR {expr} = '')")
+            elif value == FILLED_SENTINEL:
+                parts.append(f"({expr} IS NOT NULL AND {expr} <> '')")
+            elif column in _EC_DROPDOWN_COLUMNS:
+                parts.append(f"{expr} = ?")
                 params.append(value)
-        for column, value in text_filters.items():
-            # Имя колонки — из закрытого списка, не из запроса: подставляется
-            # в текст SQL, параметром его не передать.
-            if column in _ELEMENT_TEXT_FILTER_COLUMNS:
-                parts.append(f"{column} LIKE ?")
+            else:
+                parts.append(f"{expr} LIKE ?")
                 params.append(f"%{value}%")
         if search:
-            parts.append("(mark LIKE ? OR address LIKE ?)")
+            parts.append("(e.mark LIKE ? OR e.address LIKE ?)")
             params.extend([f"%{search}%", f"%{search}%"])
         return " AND ".join(parts), params
 
     conn = get_connection()
     try:
-        _доступ, _доступ_params = _accessible_objects_clause(conn, user)
+        _доступ, _доступ_params = _accessible_objects_clause(conn, user, "e.object_id")
         where, params = clauses_for()
         total = conn.execute(
-            f"SELECT COUNT(*) AS n FROM elements WHERE {where}", params
+            f"SELECT COUNT(*) AS n {_EC_FROM} WHERE {where}", params
         ).fetchone()["n"]
         rows = conn.execute(
-            f"SELECT * FROM elements WHERE {where} "
-            f"ORDER BY {sort} {order}, id {order} LIMIT ? OFFSET ?",
+            f"""
+            SELECT e.*, o.name AS object_name,
+                   zz.name AS zone_zakhvatka, zc.name AS zone_crane, zs.name AS zone_stance,
+                   zl.elevation_mm AS zone_stance_level_elevation_mm,
+                   cp.short_name AS counterparty
+            {_EC_FROM} WHERE {where}
+            ORDER BY {_EC_SQL[sort]} {order}, e.id {order} LIMIT ? OFFSET ?
+            """,
             (*params, limit, offset),
         ).fetchall()
 
-        values = {}
-        for column in _ELEMENT_FILTER_COLUMNS:
+        # Наборы значений для выпадашек. Колонок с выпадашкой два десятка, и
+        # отдельный DISTINCT-запрос на каждую — это два десятка проходов по
+        # девяти с половиной тысячам строк с девятью JOIN'ами на КАЖДУЮ
+        # перерисовку таблицы. Вместо этого один проход по уже отобранным
+        # строкам и раскладка значений по множествам в Python; свой запрос
+        # нужен только колонкам, по которым отбор ВКЛЮЧЁН — им набор
+        # считается без их собственного условия.
+        наборы = {c: set() for c in _EC_DROPDOWN_COLUMNS}
+        сводка = ", ".join(f"{_EC_SQL[c]} AS v{i}" for i, c in enumerate(_EC_DROPDOWN_COLUMNS))
+        for r in conn.execute(f"SELECT {сводка} {_EC_FROM} WHERE {where}", params):
+            for i, column in enumerate(_EC_DROPDOWN_COLUMNS):
+                v = r[i]
+                if v is not None and v != "":
+                    наборы[column].add(v)
+        for column in filters:
+            if column not in наборы:
+                continue
             sub_where, sub_params = clauses_for(skip=column)
-            values[column] = [
-                (PLACEMENT_NONE_SENTINEL if r[column] is None else r[column])
-                for r in conn.execute(
-                    f"SELECT DISTINCT {column} FROM elements WHERE {sub_where} "
-                    f"ORDER BY {column} IS NULL, {column}",
-                    sub_params,
-                )
-            ]
+            expr = _EC_SQL[column]
+            наборы[column] = {
+                r[0] for r in conn.execute(
+                    f"SELECT DISTINCT {expr} {_EC_FROM} WHERE {sub_where}", sub_params)
+                if r[0] is not None and r[0] != ""
+            }
+        values = {c: sorted(v, key=_ec_value_sort_key) for c, v in наборы.items()}
+
+        # Наименования контрактов — только для тех, что реально встретились в
+        # доступных строках: справочник контрактов целиком отдавать нельзя,
+        # он объектный (аудит безопасности 2026-08-03, «проверять чтение так
+        # же, как запись»).
+        нужны = set(values["contract_id"]) | {
+            r["contract_id"] for r in rows if r["contract_id"] is not None}
+        contract_names = {c["id"]: c["name"] for c in contract_catalog(conn) if c["id"] in нужны}
+
         # Скрепка в строке — по одному запросу на СТРАНИЦУ, не на строку:
         # при 200 строках это была бы двухсотка запросов на каждую прокрутку.
         вложений = attachment_counts(conn, "element", [r["id"] for r in rows])
         строки = []
         for r in rows:
             d = enrich_element_row(conn, dict(r))
+            # Геометрия контура в таблицу не выводится, а весит больше всей
+            # остальной строки — 200 таких на страницу гоняли бы по сети
+            # мегабайты ради колонки, которой нет.
+            d.pop("outline_json", None)
             d["attachments"] = вложений.get(r["id"], 0)
             строки.append(d)
-        return {"total": total, "rows": строки, "values": values}
+        return {"total": total, "rows": строки, "values": values,
+                "contract_names": contract_names}
     finally:
         conn.close()
 
@@ -2800,19 +2907,33 @@ def _check_bulk_mode(mode: str) -> str:
     return mode
 
 
-@app.get("/elements/bulk-edit/export")
-def bulk_edit_export(mode: str = Query("fields"), admin: sqlite3.Row = Depends(require_system_admin)):
-    """Снимок реквизитов всех элементов всех объектов ОДНИМ файлом — для
-    правки в Excel и обратной загрузки (см. app/element_bulk_edit.py).
+class BulkEditExportIn(BaseModel):
+    mode: str = "fields"
+    # «Учитывать фильтр» — готовый список id, посчитанный КЛИЕНТОМ, ровно как
+    # у /export.xlsx: фильтры схемы (passesPlacementFilters) целиком живут на
+    # фронтенде, и второй их реализации на сервере быть не должно. Список на
+    # тысячи значений не помещается в query string, поэтому выгрузка — POST.
+    element_ids: Optional[list[int]] = None
+
+
+@app.post("/elements/bulk-edit/export")
+def bulk_edit_export(body: BulkEditExportIn, admin: sqlite3.Row = Depends(require_system_admin)):
+    """Снимок реквизитов элементов ОДНИМ файлом — для правки в Excel и
+    обратной загрузки (см. app/element_bulk_edit.py). Без element_ids — все
+    элементы всех объектов, с ними — только отобранные фильтром схемы.
 
     Только admin, как и вся группа «Обмен данными»: файл содержит выгрузку
     всей базы элементов.
     """
-    _check_bulk_mode(mode)
+    _check_bulk_mode(body.mode)
+    ids = set(body.element_ids) if body.element_ids is not None else None
+    if ids is not None and not ids:
+        raise HTTPException(status_code=400,
+                            detail="Фильтр схемы не пропускает ни одного элемента — выгружать нечего")
     conn = get_connection()
     try:
-        wb = (status_bulk_edit.build_status_workbook(conn) if mode == "statuses"
-              else build_export_workbook(conn))
+        wb = (status_bulk_edit.build_status_workbook(conn, ids) if body.mode == "statuses"
+              else build_export_workbook(conn, ids))
     finally:
         conn.close()
     buf = io.BytesIO()
@@ -2820,8 +2941,9 @@ def bulk_edit_export(mode: str = Query("fields"), admin: sqlite3.Row = Depends(r
     buf.seek(0)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     activity.log("element_bulk_export", user=admin, entity_type="element",
-                 details={"mode": mode})
-    name = "zhbi_statuses" if mode == "statuses" else "zhbi_elements"
+                 details={"mode": body.mode,
+                          "filtered": None if ids is None else len(ids)})
+    name = "zhbi_statuses" if body.mode == "statuses" else "zhbi_elements"
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

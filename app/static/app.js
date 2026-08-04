@@ -4876,7 +4876,11 @@ function deliveryDatesHtml(element) {
 
 // ---------- привязка к зонам (захватка/кран/стоянка) — только для элементов
 // нового стандарта имён слоёв, у старых zone_*_status всегда null ----------
-const ZONE_STATUS_LABELS_RU = { unmatched: "не определено", needs_review: "требует проверки", not_applicable: "неприменимо" };
+// `matched` в двух старых местах не встречался: там сначала проверяют
+// «привязан ли», и подпись нужна была только остальным трём состояниям. В
+// справочнике элементов привязка — отдельная колонка со своим отбором, и
+// значение приходится называть словом.
+const ZONE_STATUS_LABELS_RU = { matched: "привязан", unmatched: "не определено", needs_review: "требует проверки", not_applicable: "неприменимо" };
 // Дефолты — ровно те же значения, что в CSS для #zones-layer polygon/text
 // (см. index.html) — используются, только когда у зоны нет ИНДИВИДУАЛЬНОГО
 // цвета (zone.color null, всегда так у Захватки — общая раскраска по
@@ -5285,9 +5289,23 @@ async function applyStatus(element, status) {
   openStatusDialog(element, status);
 }
 
+// Наименование контракта элемента одной строкой — из state.contracts, той
+// же цепочки, что показывает карточка: отдельного запроса не нужно.
+function contractNameFor(element) {
+  if (!element.contract_id) return null;
+  const c = state.contracts.find((x) => x.id === element.contract_id);
+  return c ? c.name : `#${element.contract_id}`;
+}
+
 function openStatusDialog(element, status) {
   pendingStatusChange = { element, status };
   document.getElementById("sc-status-label").textContent = state.statusLabels[status] || status;
+  // Состояние ДО перевода: марка, текущий статус (той же цветовой меткой,
+  // что на схеме и в справочнике) и назначенный контракт, если он есть.
+  const контракт = contractNameFor(element);
+  document.getElementById("sc-current").innerHTML =
+    `${escapeHtml(element.mark || `#${element.id}`)} · сейчас ${statusBadgeHtml(element.current_status)}`
+    + `<br/>Контракт: ${контракт ? escapeHtml(контракт) : "не назначен"}`;
 
   // Дата/время — по умолчанию рабочая дата, если она сейчас активна в
   // тулбаре, иначе текущий момент; в любом случае можно поменять прямо
@@ -7349,9 +7367,19 @@ document.getElementById("fill-scope-apply").addEventListener("click", async () =
 const elementCatalogBackdrop = document.getElementById("element-catalog-backdrop");
 const EC_PAGE_SIZE = 200;
 
-// Колонки: ключ, подпись, отбирается ли выпадашкой. Порядок — как читают:
-// сначала «что это», потом «где», потом даты.
+// Колонки: ключ, подпись, отбирается ли выпадашкой (filter) или подстрокой
+// (text). Порядок — как читают: сначала «что это», потом «где», потом даты,
+// потом контрактация и зоны. Состав ключей обязан совпадать с реестром
+// _EC_SQL в app/main.py — там же и отбор, и сортировка; ключа, которого нет
+// в реестре, сервер не примет (400, а не молчаливый пропуск).
+//
+// `extra: true` — служебные поля (оси, координаты, идентичность, отметки
+// времени). Они в таблице ЕСТЬ, но по умолчанию свёрнуты галочкой над
+// таблицей: полей у элемента больше сорока, и открывать справочник сразу
+// стеной из сорока колонок значило бы прятать за прокруткой те десять, ради
+// которых его и открывают (живой запрос 2026-08-04 — «добавь все поля»).
 const EC_COLUMNS = [
+  { key: "object_name", label: "Объект", filter: true },
   { key: "element_type", label: "Тип", filter: true },
   { key: "subtype", label: "Подтип", filter: true },
   { key: "mark", label: "Марка", filter: true },
@@ -7362,6 +7390,12 @@ const EC_COLUMNS = [
   { key: "planned_delivery_date", label: "План. поставка", text: true },
   { key: "actual_delivery_date", label: "Факт. поставка", text: true },
   { key: "project_smr_start_date", label: "Начало СМР", text: true },
+  { key: "project_delivery_date", label: "Завершение СМР", text: true },
+  { key: "contract_id", label: "Контракт", filter: true },
+  { key: "counterparty", label: "Контрагент", filter: true },
+  { key: "zone_zakhvatka", label: "Захватка", filter: true },
+  { key: "zone_crane", label: "Кран", filter: true },
+  { key: "zone_stance", label: "Стоянка", filter: true },
   // Комментарий отбирается ПОДСТРОКОЙ, как адрес: значения почти
   // уникальны, выпадашка на тысячи строк бесполезна.
   { key: "comment", label: "Комментарий", text: true },
@@ -7369,9 +7403,40 @@ const EC_COLUMNS = [
   // поэтому без отбора и без сортировки: сортировать по «есть/нет» нечего,
   // а отбирать — отдельная задача, если понадобится.
   { key: "attachments", label: ATTACHMENT_ICON, icon: true },
+
+  { key: "zone_zakhvatka_status", label: "Привязка к захватке", filter: true, extra: true },
+  { key: "zone_crane_status", label: "Привязка к крану", filter: true, extra: true },
+  { key: "zone_stance_status", label: "Привязка к стоянке", filter: true, extra: true },
+  { key: "zone_stance_level_elevation_mm", label: "Ярус стоянки, мм", filter: true, extra: true },
+  { key: "axis_status", label: "Адресация", filter: true, extra: true },
+  { key: "axis_number", label: "Ось цифровая", filter: true, extra: true },
+  { key: "axis_letter", label: "Ось буквенная", filter: true, extra: true },
+  { key: "nearest_axis_number", label: "Ближайшая цифровая", filter: true, extra: true },
+  { key: "nearest_axis_letter", label: "Ближайшая буквенная", filter: true, extra: true },
+  { key: "offset_x_mm", label: "Смещение X, мм", text: true, extra: true },
+  { key: "offset_y_mm", label: "Смещение Y, мм", text: true, extra: true },
+  { key: "x", label: "X", text: true, extra: true },
+  { key: "y", label: "Y", text: true, extra: true },
+  { key: "z", label: "Z", text: true, extra: true },
+  { key: "mark_source", label: "Источник марки", filter: true, extra: true },
+  { key: "layer", label: "Слой DXF", filter: true, extra: true },
+  { key: "source_file", label: "Чертёж", filter: true, extra: true },
+  { key: "dxf_handle", label: "Handle в DXF", text: true, extra: true },
+  { key: "element_uid", label: "UID", text: true, extra: true },
+  { key: "id", label: "№ в базе", text: true, extra: true },
+  { key: "created_at", label: "Заведён", text: true, extra: true },
+  { key: "updated_at", label: "Изменён", text: true, extra: true },
 ];
 
-const ecState = { sort: "id", direction: "asc", offset: 0, filters: {}, search: "" };
+// Сентинелы отбора «есть значение / нет значения» — те же строки, что
+// принимает сервер (PLACEMENT_NONE_SENTINEL / FILLED_SENTINEL в
+// app/main.py). Годятся ЛЮБОЙ колонке, и выпадашке, и подстрочной: вопрос
+// «где ещё не проставлена дата» задаётся ко всем полям одинаково.
+const EC_FILLED = "__filled__";
+
+const ecState = {
+  sort: "id", direction: "asc", offset: 0, filters: {}, search: "", extra: false,
+};
 
 // Статус — с цветовой меткой из настроек («Действия → Настройки → Цвета
 // статусов»), как на схеме и в легенде: один и тот же статус не должен
@@ -7390,18 +7455,49 @@ function statusBadgeHtml(status) {
     ${escapeHtml(state.statusLabels[status] || status)}</span>`;
 }
 
-function ecCellText(row, key) {
-  const value = row[key];
+// Подпись значения — ОДНА функция на ячейку таблицы и на пункт выпадашки:
+// разойдясь, они показали бы один и тот же статус привязки по-разному в
+// строке и в отборе над ней. Наименования контрактов приходят с сервера
+// (data.contract_names), а не берутся из state.contracts: справочник
+// открывается и без загруженной схемы.
+let ecContractNames = {};
+
+function ecValueLabel(key, value) {
   if (value === null || value === undefined || value === "") return "—";
   if (key === "current_status") return state.statusLabels[value] || value;
+  if (key === "contract_id") return ecContractNames[value] || `контракт #${value}`;
+  if (key.endsWith("_status")) return ZONE_STATUS_LABELS_RU[value] || value;
+  if (key === "created_at" || key === "updated_at") return activityTimeLocal(value) || String(value);
   if (key.endsWith("_date")) return formatDateRu(value) || "—";
+  // Координаты из DXF приходят с машинной точностью («16158.678943717208»)
+  // и в таком виде занимают полколонки, ничего не добавляя: десятой доли
+  // миллиметра для сверки достаточно.
+  if (typeof value === "number" && !Number.isInteger(value)) return String(Math.round(value * 10) / 10);
   return String(value);
 }
 
+function ecCellText(row, key) {
+  return ecValueLabel(key, row[key]);
+}
+
 function ecFilterLabel(column, value) {
-  if (value === PLACEMENT_NONE) return "— не задано —";
-  if (column === "current_status") return state.statusLabels[value] || value;
-  return String(value);
+  return ecValueLabel(column, value);
+}
+
+// Три пункта, общие для отбора по ЛЮБОЙ колонке: «все», «заполнено», «не
+// заполнено» (живой запрос 2026-08-04). Отсюда же они попадают и к
+// подстрочным колонкам — там выпадашка стоит НАД полем ввода, и выбор
+// «заполнено/не заполнено» отменяет подстроку: это разные вопросы к одной
+// колонке, а не уточнение друг друга.
+function ecFillOptions(selected) {
+  return [
+    ["", "— все —"], [EC_FILLED, "Заполнено"], [PLACEMENT_NONE, "Не заполнено"],
+  ].map(([v, label]) =>
+    `<option value="${v}"${v === selected ? " selected" : ""}>${label}</option>`).join("");
+}
+
+function ecVisibleColumns() {
+  return EC_COLUMNS.filter(col => ecState.extra || !col.extra);
 }
 
 async function renderElementCatalog() {
@@ -7423,7 +7519,10 @@ async function renderElementCatalog() {
     return;
   }
 
-  const head = EC_COLUMNS.map(col => {
+  ecContractNames = data.contract_names || {};
+  const columns = ecVisibleColumns();
+
+  const head = columns.map(col => {
     if (col.icon) return `<th class="ec-attach" title="Вложения">${col.label}</th>`;
     const arrow = ecState.sort === col.key ? (ecState.direction === "asc" ? " ▲" : " ▼") : "";
     return `<th style="text-align:left; white-space:nowrap">
@@ -7432,28 +7531,32 @@ async function renderElementCatalog() {
         ${escapeHtml(col.label)}${arrow}</button></th>`;
   }).join("");
 
-  const filterRow = EC_COLUMNS.map(col => {
+  const filterRow = columns.map(col => {
     if (col.icon) return '<td class="ec-attach"></td>';
-    // Колонки с почти уникальными значениями (адрес, даты) отбираются
-    // ПОДСТРОКОЙ: выпадашка на тысячи значений бесполезна, а «2026-09»
-    // отбирает по месяцу.
+    const текущий = ecState.filters[col.key] || "";
+    const сентинел = текущий === EC_FILLED || текущий === PLACEMENT_NONE ? текущий : "";
+    // Колонки с почти уникальными значениями (адрес, даты, координаты)
+    // отбираются ПОДСТРОКОЙ: выпадашка на тысячи значений бесполезна, а
+    // «2026-09» отбирает по месяцу. Выпадашка «заполнено/не заполнено» есть
+    // и у них — вторым, отдельным вопросом к той же колонке.
     if (col.text) {
-      return `<td><input type="text" data-textfilter="${col.key}" placeholder="часть значения"
-        value="${escapeHtml(ecState.filters[col.key] || "")}" style="width:100%; font-size:11px"/></td>`;
+      return `<td><select data-fill="${col.key}" style="font-size:11px">
+          ${ecFillOptions(сентинел)}</select>
+        <input type="text" data-textfilter="${col.key}" placeholder="часть значения"
+          ${сентинел ? "disabled" : ""} value="${escapeHtml(сентинел ? "" : текущий)}"
+          style="font-size:11px; margin-top:2px"/></td>`;
     }
     if (!col.filter) return "<td></td>";
-    const options = ['<option value="">— все —</option>'].concat(
-      (data.values[col.key] || []).map(v =>
-        `<option value="${escapeHtml(String(v))}"${String(v) === ecState.filters[col.key] ? " selected" : ""}>` +
-        `${escapeHtml(ecFilterLabel(col.key, v))}</option>`)
-    ).join("");
-    return `<td><select data-filter="${col.key}" style="width:100%; font-size:11px">${options}</select></td>`;
+    const options = ecFillOptions(сентинел) + (data.values[col.key] || []).map(v =>
+      `<option value="${escapeHtml(String(v))}"${String(v) === текущий ? " selected" : ""}>` +
+      `${escapeHtml(ecFilterLabel(col.key, v))}</option>`).join("");
+    return `<td><select data-filter="${col.key}" style="font-size:11px">${options}</select></td>`;
   }).join("");
 
   table.innerHTML = `<thead><tr>${head}</tr><tr>${filterRow}</tr></thead>
     <tbody>${data.rows.map(row => `<tr data-element-id="${row.id}" style="cursor:pointer"
       ${row.id === ecActiveElementId ? 'class="ec-row-active"' : ""}>
-      ${EC_COLUMNS.map(col => {
+      ${columns.map(col => {
         if (col.icon) return `<td class="ec-attach" title="${row.attachments ? `вложений: ${row.attachments}` : ""}">` +
                              `${row.attachments ? ATTACHMENT_ICON : ""}</td>`;
         if (col.key === "current_status") return `<td>${statusBadgeHtml(row[col.key])}</td>`;
@@ -7511,6 +7614,14 @@ async function renderElementCatalog() {
   });
   table.querySelectorAll("select[data-filter]").forEach(sel => sel.addEventListener("change", () => {
     ecState.filters[sel.getAttribute("data-filter")] = sel.value;
+    ecState.offset = 0;
+    renderElementCatalog();
+  }));
+  // «Заполнено / не заполнено» у подстрочной колонки ЗАМЕНЯЕТ подстроку:
+  // держать оба условия сразу незачем — «не заполнено И содержит текст»
+  // не даёт ни одной строки никогда.
+  table.querySelectorAll("select[data-fill]").forEach(sel => sel.addEventListener("change", () => {
+    ecState.filters[sel.getAttribute("data-fill")] = sel.value;
     ecState.offset = 0;
     renderElementCatalog();
   }));
@@ -7948,6 +8059,21 @@ document.getElementById("ec-reset").addEventListener("click", () => {
   ecState.search = "";
   ecState.offset = 0;
   document.getElementById("ec-search").value = "";
+  renderElementCatalog();
+});
+// Служебные колонки. Снимая галочку, СБРАСЫВАЕМ их отбор и сортировку:
+// иначе таблица осталась бы отобранной по колонке, которой на экране нет,
+// и это выглядело бы как «справочник потерял строки».
+document.getElementById("ec-extra").addEventListener("change", (e) => {
+  ecState.extra = e.target.checked;
+  if (!ecState.extra) {
+    EC_COLUMNS.filter(c => c.extra).forEach(c => { delete ecState.filters[c.key]; });
+    if (EC_COLUMNS.some(c => c.extra && c.key === ecState.sort)) {
+      ecState.sort = "id";
+      ecState.direction = "asc";
+    }
+  }
+  ecState.offset = 0;
   renderElementCatalog();
 });
 // Поиск по вводу с задержкой: запрос на каждую букву при 9422 строках
@@ -11249,11 +11375,24 @@ document.getElementById("report-body").addEventListener("scroll", hideDeliveryTi
 // (app/report_completion.py): тот же отчёт выгружается в XLSX и PDF, и
 // вторая укладка тех же данных здесь однажды разошлась бы с файлом.
 // Клиенту остаются вид даты (ДД.ММ.ГГГГ) и выравнивание по типу колонки.
+// Светлая ли заливка — по воспринимаемой яркости, а не по среднему: зелёный
+// кажется куда светлее синего той же величины. По ней выбирается чёрный или
+// белый текст поверх цвета статуса. Тот же расчёт и с тем же порогом делает
+// сервер для Excel и PDF (_is_light в app/report_completion.py) — цвет
+// текста в трёх представлениях обязан совпадать.
+function isLightColor(color) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(color || "").trim());
+  if (!m) return true;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150;
+}
+
 function renderCompletionReport(data) {
   if (!data.rows.length) {
     return `<div class="cmp-empty">Под текущий отбор не попало ни одного изделия.</div>`;
   }
-  const классы = { num: "cmp-num", date: "cmp-date", text: "" };
+  const классы = { num: "cmp-num", date: "cmp-date", status: "cmp-status", text: "" };
   const шапка = data.columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join("");
   const строки = data.rows.map(r => "<tr>" + data.columns.map(c => {
     const v = r[c.key];
@@ -11262,7 +11401,14 @@ function renderCompletionReport(data) {
     // GUID — своим классом: моноширинный и приглушённый, иначе 32 знака
     // шестнадцатеричного кода перетягивают на себя всю строку.
     const класс = c.key === "guid" ? "cmp-guid" : (классы[c.kind] || "");
-    return `<td class="${класс}">${escapeHtml(текст)}</td>`;
+    // Статус красится цветом ИЗ НАСТРОЕК (тем же, что на схеме и в легенде)
+    // — цвет приходит вместе со строкой, клиент его не подбирает. Цвет
+    // текста поверх заливки — по её яркости, иначе жёлтая «Контрактация»
+    // белыми буквами не читается.
+    const стиль = c.kind === "status" && r.status_color
+      ? ` style="background:${escapeHtml(r.status_color)}; color:${isLightColor(r.status_color) ? "#1b1b1b" : "#ffffff"}"`
+      : "";
+    return `<td class="${класс}"${стиль}>${escapeHtml(текст)}</td>`;
   }).join("") + "</tr>").join("");
   // Итог — только под «Кол-во»: складывать номера стоянок или даты нечего,
   // и пустые ячейки это показывают лучше любой подписи.
@@ -13820,6 +13966,7 @@ function buildMergedDecals(elements, levels, columnTopOverrides) {
   const groups = new Map(); // "типстраница" -> буферы
   const elementIds = new Set();
   const up = new THREE.Vector3();
+  const upForFlip = new THREE.Vector3();
   const corner = new THREE.Vector3();
 
   for (const element of elements) {
@@ -13839,6 +13986,23 @@ function buildMergedDecals(elements, levels, columnTopOverrides) {
 
     for (const quad of quads) {
       up.crossVectors(quad.normal, quad.right).normalize();
+      // «Верх» строки для РЕШЕНИЯ О РАЗВОРОТЕ — со знаком нормали по
+      // вертикали, а не тот же, что для построения углов квадрата.
+      //
+      // Правило разворота («лист на столе читают со стороны,
+      // противоположной верху страницы») опирается на то, куда смотрит
+      // экранный «верх» в плоскости грани. А его горизонтальная проекция
+      // МЕНЯЕТ НАПРАВЛЕНИЕ в зависимости от того, смотрят на грань сверху
+      // или снизу: глядя вниз на пол, дальний его край видишь вверху
+      // кадра; глядя вверх на потолок — наоборот, дальний край уходит к
+      // горизонту, то есть ВНИЗ кадра, а вверху кадра оказывается то, что
+      // прямо над тобой. Поэтому для грани, смотрящей вниз (низ плиты и
+      // ригеля), правило обязано быть обратным. Раньше оно было общим, и
+      // снизу все наклейки читались вверх ногами (живой репорт
+      // 2026-08-04). У боковых граней «верх» вертикален, разворота у них
+      // нет вовсе — их это не касается.
+      upForFlip.copy(up);
+      if (quad.normal.y < 0) upForFlip.negate();
       const halfW = quad.width / 2, halfH = quad.height / 2;
       // Порядок углов задаёт обход против часовой стрелки, если смотреть
       // СО СТОРОНЫ НОРМАЛИ — тогда лицевая сторона треугольника совпадает
@@ -13856,7 +14020,7 @@ function buildMergedDecals(elements, levels, columnTopOverrides) {
         group.position.push(corner.x, corner.y, corner.z);
         group.uv.push(uvs[i][0], uvs[i][1]);
         group.center.push(quad.center.x, quad.center.y, quad.center.z);
-        group.upDir.push(up.x, up.y, up.z);
+        group.upDir.push(upForFlip.x, upForFlip.y, upForFlip.z);
         group.uvRect.push(rect.u0, rect.v0, rect.u1, rect.v1);
         group.worldHeight.push(quad.height);
         // Разворот текста имеет смысл ТОЛЬКО когда «верх» строки
@@ -15590,8 +15754,25 @@ function resetBulkEdit() {
 
 document.getElementById("menu-bulk-edit").addEventListener("click", () => {
   setBulkEditMode("fields");
+  updateBulkEditFilterCount();
   bulkEditBackdrop.classList.add("open");
 });
+
+// Сколько строк уедет в файл при отмеченной галочке «Учитывать фильтр» —
+// то же число и та же функция отбора, что у выгрузки в XLS со схемы
+// (passesPlacementFilters): фильтры считаются на клиенте, и второго их
+// счёта быть не должно.
+function updateBulkEditFilterCount() {
+  const box = document.getElementById("bulk-edit-filter-count");
+  if (!document.getElementById("bulk-edit-use-filter").checked) {
+    box.textContent = "Все элементы всех объектов одним файлом.";
+    return;
+  }
+  const прошли = state.elements.filter(passesPlacementFilters).length;
+  box.textContent = `Только текущий объект: проходит фильтр ${прошли} из ${state.elements.length}.`;
+}
+document.getElementById("bulk-edit-use-filter")
+  .addEventListener("change", updateBulkEditFilterCount);
 
 function setBulkEditMode(mode) {
   bulkEditMode = mode;
@@ -15626,7 +15807,16 @@ document.getElementById("bulk-edit-cancel").addEventListener("click", () => {
 document.getElementById("bulk-edit-export").addEventListener("click", async () => {
   setBulkEditStatus("Готовим файл…", false);
   try {
-    const res = await fetch(`/elements/bulk-edit/export?mode=${bulkEditMode}`);
+    // POST, а не GET: при отмеченном фильтре в теле уезжает список id на
+    // тысячи значений — в query string он не помещается (тот же приём и та
+    // же причина, что у /export.xlsx).
+    const тело = { mode: bulkEditMode };
+    if (document.getElementById("bulk-edit-use-filter").checked) {
+      тело.element_ids = state.elements.filter(passesPlacementFilters).map((e) => e.id);
+    }
+    const res = await fetch("/elements/bulk-edit/export", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(тело),
+    });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Ошибка ${res.status}`);
     // Скачивание через blob, как у экспорта XLS: имя файла приходит от
     // сервера в Content-Disposition, но браузер отдаёт его только так.

@@ -840,6 +840,22 @@
   .card-comment-ro { font-size: 12px; white-space: pre-wrap; }
   /* Скрепка в таблице справочника элементов — по центру своей колонки. */
   #ec-table td.ec-attach, #ec-table th.ec-attach { text-align: center; width: 26px; }
+  /* С включёнными служебными полями колонок больше сорока — таблица шире
+     окна и прокручивается вбок ВНУТРИ своей области, а не растягивает форму
+     (overflow-y здесь уже auto, но x по умолчанию visible — при разных
+     значениях браузер и так подменил бы его на auto, и лучше это написать
+     явно, чем полагаться на подмену). */
+  #element-catalog-backdrop .modal-sticky-scroll { overflow-x: auto; }
+  /* Ширина полей отбора — ФИКСИРОВАННАЯ, а не «100 % ячейки». Таблица здесь
+     width:max-content, и колонку раздувает самый широкий элемент внутри:
+     выпадашка контрактов тянула свою колонку до 337 px, а поле ввода с
+     width:100% — до 197 px (браузер считает его собственную ширину по
+     умолчанию в 20 знаков, атрибут size при процентной ширине игнорируется;
+     всё замерено). display:block — у подстрочных колонок в ячейке ДВА поля
+     («заполнено/не заполнено» и подстрока), и строчными они встают в один
+     ряд, удваивая колонку до 224 px вместо 112. */
+  #ec-table thead tr:nth-child(2) select,
+  #ec-table thead tr:nth-child(2) input { display: block; width: 110px; }
   #ec-table td.ec-comment { max-width: 220px; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
   /* Активная строка справочника элементов — под ней показывается история
@@ -1429,6 +1445,10 @@
   #cmp-table td.cmp-num, #cmp-table td.cmp-date {
     text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums;
   }
+  /* Статус: заливка ячейки цветом из настроек системы (тем же, что на схеме)
+     — сам цвет приходит со строкой отчёта и ставится инлайновым стилем,
+     здесь только форма. */
+  #cmp-table td.cmp-status { text-align: center; white-space: nowrap; font-weight: 600; }
   /* GUID: 32 знака в каждой строке — моноширинным и приглушённым, иначе он
      перетягивает на себя внимание со смысловых колонок. */
   #cmp-table td.cmp-guid {
@@ -2392,7 +2412,7 @@
      текущему отбору, но БЕЗ учёта фильтра самой колонки (иначе, выбрав
      значение, нельзя было бы переключиться на другое). -->
 <div class="modal-backdrop" id="element-catalog-backdrop">
-  <div class="modal modal-sticky wide" style="max-width:1180px">
+  <div class="modal modal-sticky wide" style="max-width:min(1720px, 96vw)">
     <div class="modal-sticky-head">
       <h2>Элементы</h2>
       <div class="subtype-add-row" style="align-items:flex-end">
@@ -2400,10 +2420,16 @@
           <input type="text" id="ec-search" placeholder="например, 8Кв1 или 12/Б"/></div>
         <button class="btn btn-sm btn-secondary" id="ec-reset">Сбросить отбор</button>
       </div>
+      <!-- Служебные поля (оси, координаты, идентичность, отметки времени) —
+           за галочкой: их два десятка, и открывать справочник сразу стеной
+           из сорока колонок значило бы прятать за прокруткой те десять,
+           ради которых его открывают. -->
+      <label class="toggle" style="margin:6px 0 0"><input type="checkbox" id="ec-extra"/>
+        Показывать служебные поля: оси, координаты, слой и файл чертежа, UID, даты записи</label>
       <div class="hint-text" id="ec-summary"></div>
     </div>
     <div class="modal-sticky-scroll">
-      <table id="ec-table" style="width:100%; font-size:12px"></table>
+      <table id="ec-table" style="width:max-content; min-width:100%; font-size:12px"></table>
     </div>
     <div class="modal-sticky-foot">
       <!-- Статусы активной строки — в ЗАКРЕПЛЁННОМ подвале, а не в конце
@@ -3035,7 +3061,14 @@
           <div class="bulk-edit-controls">
             <button class="btn btn-secondary" id="bulk-edit-export">Выгрузить в Excel</button>
           </div>
-          <div class="bulk-edit-status">Все элементы всех объектов одним файлом.</div>
+          <!-- «Учитывать фильтр» — та же галочка и тот же смысл, что в
+               «Выгрузить в Excel» на схеме: выгрузить не всю базу, а то, что
+               пользователь уже отобрал. Фильтр относится к ТЕКУЩЕМУ объекту,
+               поэтому с галочкой файл сужается и до одного объекта тоже. -->
+          <label class="toggle" style="margin:0 0 4px">
+            <input type="checkbox" id="bulk-edit-use-filter"/> Учитывать фильтр схемы</label>
+          <div class="bulk-edit-status" id="bulk-edit-filter-count">Все элементы всех объектов
+            одним файлом.</div>
         </div>
         <div class="bulk-edit-block bulk-edit-block-file">
           <div class="bulk-edit-block-title"><span class="step-num">2</span>Выбрать правленый файл</div>
@@ -3571,6 +3604,12 @@
 <div class="modal-backdrop" id="status-contract-backdrop">
   <div class="modal">
     <h2>Смена статуса</h2>
+    <!-- Что с изделием СЕЙЧАС — марка, текущий статус и уже назначенный
+         контракт (живой запрос 2026-08-04). Без этого диалог сообщал только
+         куда переводим, и решение приходилось принимать, вспоминая, откуда:
+         а «Контрактация» поверх уже проставленного контракта и «Доставлено»
+         у изделия без контракта — разные ситуации. -->
+    <p class="hint-text" id="sc-current"></p>
     <p class="hint-text">Новый статус: «<span id="sc-status-label"></span>».</p>
     <label class="field">Дата и время</label>
     <div class="row" style="gap:6px; align-items:center;">

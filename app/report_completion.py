@@ -46,6 +46,7 @@ from typing import Optional
 
 from app.contracts import build_document_label
 from app.db import visible_elements_clause
+from app.models import STATUS_LABELS_RU, STATUS_ORDER, Status
 from app.reports import natural_key, pdf_text
 
 TITLE = "Статус комплектации"
@@ -60,6 +61,12 @@ COLUMNS = [
     {"key": "subtype", "label": "Подтип", "kind": "text"},
     {"key": "mark", "label": "Маркировка изделий", "kind": "text"},
     {"key": "count", "label": "Кол-во", "kind": "num"},
+    # Текущий статус — сразу за изделием, а не в конце строки: дальше идут
+    # реквизиты контракта и даты, и «в каком состоянии изделие» между ними
+    # потерялось бы. Ячейка красится цветом статуса ИЗ НАСТРОЕК системы
+    # (таблица status_colors), а не своей палитрой — на схеме, в легенде и в
+    # этом отчёте один и тот же статус обязан быть одного цвета.
+    {"key": "status", "label": "Статус", "kind": "status"},
     {"key": "counterparty", "label": "Завод", "kind": "text"},
     {"key": "agreement", "label": "Договор", "kind": "text"},
     {"key": "specification", "label": "Спецификация", "kind": "text"},
@@ -78,12 +85,42 @@ TOTAL_LABEL = "Итого"
 # что в истории статусов (см. CLAUDE.md): формат хранения одинаковый, и
 # разбирать её в объект ради сравнения незачем.
 SORT_KEYS = ["crane", "stance", "element_type", "subtype", "mark",
-             "counterparty", "agreement", "specification",
+             # Не подпись статуса, а его номер в технологическом порядке
+             # (STATUS_ORDER): по алфавиту «В производстве» встало бы раньше
+             # «Запланирован», и одинаковые изделия шли бы вперемешку.
+             "status_order", "counterparty", "agreement", "specification",
              "plan_date", "fact_date", "need_date",
              # Последним — GUID: одинаковых по всем реквизитам позиций теперь
              # много (группировки нет), и без него их взаимный порядок
              # зависел бы от того, как база вернула строки.
              "guid"]
+
+
+# Цвет на случай статуса, которого нет в настройках (в таблицу его не
+# записали, а в данных он есть) — серый, как «неизвестно», а не пустая
+# ячейка: пустая читалась бы как «статуса нет вовсе».
+DEFAULT_STATUS_COLOR = "#9aa0a6"
+
+
+def status_label(code: Optional[str]) -> Optional[str]:
+    """Русская подпись статуса — та же, что на схеме и в остальных отчётах
+    (STATUS_LABELS_RU). Неизвестный код показывается как есть: молча
+    подменять его пустотой значило бы прятать расхождение в данных."""
+    if not code:
+        return None
+    try:
+        return STATUS_LABELS_RU[Status(code)]
+    except ValueError:
+        return code
+
+
+def status_index(code: Optional[str]) -> Optional[int]:
+    """Номер статуса в технологическом порядке (STATUS_ORDER) — ключ
+    сортировки. Неизвестный статус уходит в конец."""
+    for i, status in enumerate(STATUS_ORDER):
+        if status.value == code:
+            return i
+    return len(STATUS_ORDER)
 
 
 def _sort_key(value):
@@ -127,7 +164,8 @@ def build_completion_report(conn, source_file: Optional[str],
                e.planned_delivery_date AS plan_date,
                e.actual_delivery_date AS fact_date,
                e.project_smr_start_date AS need_date,
-               e.element_uid AS guid
+               e.element_uid AS guid,
+               e.current_status AS status
         FROM elements e
         LEFT JOIN zones zc ON zc.id = e.zone_crane_id
         LEFT JOIN zones zs ON zs.id = e.zone_stance_id
@@ -139,6 +177,14 @@ def build_completion_report(conn, source_file: Optional[str],
         """,
         params,
     ).fetchall()
+
+    # Цвета берутся ИЗ НАСТРОЕК (таблица status_colors), а не из своей
+    # палитры: один и тот же статус на схеме, в легенде и в отчёте обязан
+    # быть одного цвета, иначе отчёт спорит с экраном.
+    status_colors = {
+        row["status"]: row["color"]
+        for row in conn.execute("SELECT status, color FROM status_colors").fetchall()
+    }
 
     def zone_value(number, name):
         # Номер — то, что в образце; имя — запасной вариант для зоны без
@@ -160,6 +206,12 @@ def build_completion_report(conn, source_file: Optional[str],
         # что она есть в образце заказчика, и сумма по ней в итоге даёт
         # число позиций.
         "count": 1,
+        # Три поля на одну колонку: подпись (её видит человек), цвет из
+        # настроек системы (им красится ячейка на экране, в Excel и в PDF) и
+        # номер в технологическом порядке — по нему строки сортируются.
+        "status": status_label(r["status"]),
+        "status_color": status_colors.get(r["status"]) or DEFAULT_STATUS_COLOR,
+        "status_order": status_index(r["status"]),
         "counterparty": r["cp_name"] or None,
         "agreement": document(r["ag_number"], r["ag_date"]),
         "specification": document(r["sp_number"], r["sp_date"]),
@@ -184,6 +236,37 @@ def build_completion_report(conn, source_file: Optional[str],
 #
 # Обе функции получают УЖЕ ПОСТРОЕННЫЙ отчёт, а не строят его заново —
 # иначе числа на экране, в Excel и в PDF со временем разошлись бы.
+
+def _rgb(color: Optional[str]):
+    """'#22c55e' → (34, 197, 94). Цвет приходит из настроек, где его правит
+    человек, — непохожее на #RRGGBB не разбирается, а игнорируется: отчёт
+    из-за цвета падать не должен."""
+    if not isinstance(color, str):
+        return None
+    text = color.strip().lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def _is_light(color: Optional[str]) -> bool:
+    """Светлая ли подложка — по воспринимаемой яркости, а не по среднему:
+    зелёный кажется куда светлее синего той же величины. По ней выбирается
+    чёрный или белый текст поверх заливки."""
+    rgb = _rgb(color)
+    if not rgb:
+        return True
+    r, g, b = rgb
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 150
+
+
+def _xlsx_color(color: Optional[str]) -> Optional[str]:
+    rgb = _rgb(color)
+    return "%02X%02X%02X" % rgb if rgb else None
+
 
 def build_completion_report_xlsx(report: dict) -> bytes:
     from io import BytesIO
@@ -229,6 +312,15 @@ def build_completion_report_xlsx(report: dict) -> bytes:
             cell.border = border
             if c["kind"] == "date":
                 cell.number_format = EXCEL_DATE_FORMAT
+            elif c["kind"] == "status":
+                # Заливка — тем же цветом, что на схеме (настройки системы).
+                # Цвет текста подбирается под яркость подложки: жёлтый
+                # «Контрактация» с белым текстом не читается вовсе.
+                заливка = _xlsx_color(data.get("status_color"))
+                if заливка:
+                    cell.fill = PatternFill("solid", fgColor=заливка)
+                    cell.font = Font(color="000000" if _is_light(data["status_color"]) else "FFFFFF")
+                cell.alignment = Alignment(horizontal="center")
 
     total = report["total"]
     # Итог — только в колонке «Кол-во»: складывать номера стоянок или даты
@@ -245,7 +337,7 @@ def build_completion_report_xlsx(report: dict) -> bytes:
     widths = {"crane": 8, "stance": 10, "element_type": 18, "subtype": 26,
               "mark": 20, "count": 9, "counterparty": 22, "agreement": 22,
               "specification": 22, "plan_date": 16, "fact_date": 18, "need_date": 16,
-              "guid": 34}
+              "status": 16, "guid": 34}
     for i, c in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(i)].width = widths.get(c["key"], 16)
     ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
@@ -308,8 +400,40 @@ def build_completion_report_pdf(report: dict, subtitle: str = "") -> bytes:
         return Paragraph(pdf_text(value), guid_style if key == "guid" else cell_style)
 
     data = [[Paragraph(pdf_text(c["label"]), head_style) for c in columns]]
+    # Заливка ячейки статуса задаётся стилем таблицы по КООРДИНАТАМ, а не
+    # свойством ячейки: у reportlab фон — это свойство таблицы, а не текста.
+    status_col = next((i for i, c in enumerate(columns) if c["kind"] == "status"), None)
+    status_fills = []
+    # Подряд идущие строки одного статуса красятся ОДНОЙ командой на весь
+    # диапазон, а не построчно. Отчёт отсортирован в том числе по статусу,
+    # поэтому таких пробегов немного; построчная заливка добавляла к сборке
+    # PDF пять секунд на девяти тысячах строк (замер на обезличенной копии).
+    пробег = None   # {"цвет": str, "с": int, "по": int}
+
+    def закрыть_пробег():
+        if not пробег or status_col is None:
+            return
+        rgb = _rgb(пробег["цвет"])
+        if not rgb:
+            return
+        r, g, b = rgb
+        начало, конец = (status_col, пробег["с"]), (status_col, пробег["по"])
+        status_fills.append(("BACKGROUND", начало, конец, colors.Color(r / 255, g / 255, b / 255)))
+        # Тёмная подложка — белый текст: иначе тёмно-синий «Отгружен»
+        # чёрными буквами не читается (та же поправка, что в Excel).
+        if not _is_light(пробег["цвет"]):
+            status_fills.append(("TEXTCOLOR", начало, конец, colors.white))
+
     for row in report["rows"]:
         data.append([cell(row[c["key"]], c["kind"], c["key"]) for c in columns])
+        цвет = row.get("status_color")
+        строка = len(data) - 1
+        if пробег and пробег["цвет"] == цвет:
+            пробег["по"] = строка
+        else:
+            закрыть_пробег()
+            пробег = {"цвет": цвет, "с": строка, "по": строка} if цвет else None
+    закрыть_пробег()
 
     total = report["total"]
     data.append([total["label"] if c["key"] == "crane"
@@ -321,13 +445,14 @@ def build_completion_report_pdf(report: dict, subtitle: str = "") -> bytes:
     # Доли подобраны не на глаз: каждая колонка шире самого длинного
     # НЕРАЗРЫВНОГО слова, которое в неё попадает (заголовок или значение) —
     # иначе reportlab молча вывел бы его за границу ячейки.
-    shares = {"crane": 0.5, "stance": 0.75, "element_type": 1.15, "subtype": 1.45,
-              "mark": 1.15, "count": 0.65, "counterparty": 1.15, "agreement": 1.15,
-              "specification": 1.2, "plan_date": 0.95, "fact_date": 1.05, "need_date": 0.95,
+    shares = {"crane": 0.5, "stance": 0.75, "element_type": 1.1, "subtype": 1.35,
+              "mark": 1.1, "count": 0.6, "counterparty": 1.15, "agreement": 1.1,
+              "specification": 1.15, "plan_date": 0.95, "fact_date": 1.05, "need_date": 0.95,
+              "status": 1.2,
               # GUID — 32 символа без единого пробела: перенести его негде,
               # поэтому колонка широкая, а кегль в ней меньше (см. guid_style).
-              "guid": 2.1}
-    band = 277 * mm
+              "guid": 2.25}
+    band = 278 * mm
     total_share = sum(shares.get(c["key"], 1.0) for c in columns)
     widths = [band * shares.get(c["key"], 1.0) / total_share for c in columns]
 
@@ -337,7 +462,7 @@ def build_completion_report_pdf(report: dict, subtitle: str = "") -> bytes:
     # уже один раз (добавился GUID), и жёсткие индексы центрировали бы
     # чужую колонку молча.
     centered = [i for i, c in enumerate(columns)
-                if c["kind"] in ("num", "date") or c["key"] == "guid"]
+                if c["kind"] in ("num", "date", "status") or c["key"] == "guid"]
     table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, -1), FONT_REGULAR),
         ("FONTSIZE", (0, 0), (-1, -1), 6.5),
@@ -345,6 +470,7 @@ def build_completion_report_pdf(report: dict, subtitle: str = "") -> bytes:
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D5D8DC")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         *[("ALIGN", (i, 1), (i, -1), "CENTER") for i in centered],
+        *status_fills,
         ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ("FONTNAME", (0, last), (-1, last), FONT_BOLD),
