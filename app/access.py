@@ -39,10 +39,18 @@ from app.db import get_connection
 
 # Роли НА ОБЪЕКТЕ, по возрастанию прав. Порядок — основание для сравнения
 # «не ниже требуемой», поэтому список один и здесь.
-OBJECT_ROLES = ["view", "user", "admin"]
+#
+# `contract` (2026-08-04) вставлен МЕЖДУ `user` и `admin`, а не сбоку:
+# контрактовщик — это «Работа со статусами» плюс ведение контрактных
+# справочников, и лестница обязана оставаться лестницей. Место в списке —
+# единственное, что даёт ему статусы даром (проверки «не ниже user»
+# проходят) и не даёт лишнего (зоны, чертёж, реквизиты требуют `admin` и
+# по-прежнему отказывают).
+OBJECT_ROLES = ["view", "user", "contract", "admin"]
 ROLE_LABELS = {
     "view": "Просмотр",
     "user": "Работа со статусами",
+    "contract": "Контрактовщик",
     "admin": "Полные права на объекте",
 }
 
@@ -168,6 +176,41 @@ def assert_object_access(conn: sqlite3.Connection, user: sqlite3.Row, object_id:
     return role
 
 
+def has_contracting_rights(conn: sqlite3.Connection, user: sqlite3.Row) -> bool:
+    """Может ли человек вести КОНТРАКТНЫЕ справочники хоть где-нибудь.
+
+    Нужно ровно одному справочнику — «Контрагенты»: он общесервисный, к
+    объекту не привязан, и объектной проверке зацепиться не за что. Без
+    этого права контрактовщик упирался бы в администратора сервиса на
+    первом же новом поставщике: договор заводится НА контрагента, а завести
+    контрагента было бы некому.
+
+    Основание — ДЕЙСТВУЮЩИЕ роли (object_roles), а не сырые гранты: грант
+    «контрактовщик на все проекты», перекрытый на конкретном объекте
+    просмотром, всё равно оставляет человека контрактовщиком в других
+    местах, а перекрытый везде — уже нет.
+    """
+    if is_system_admin(user):
+        return True
+    порог = OBJECT_ROLES.index("contract")
+    return any(OBJECT_ROLES.index(role) >= порог for role in object_roles(conn, user).values())
+
+
+def require_contracting(user: sqlite3.Row = Depends(get_current_user)) -> sqlite3.Row:
+    """Ведение общесервисного справочника контрагентов."""
+    conn = get_connection()
+    try:
+        if not has_contracting_rights(conn, user):
+            raise HTTPException(
+                status_code=403,
+                detail="Правка справочника контрагентов требует роли "
+                       f"«{ROLE_LABELS['contract']}» хотя бы на одном объекте",
+            )
+    finally:
+        conn.close()
+    return user
+
+
 def require_system_admin(user: sqlite3.Row = Depends(get_current_user)) -> sqlite3.Row:
     """Ведение сервиса: пользователи, проекты, объекты, резервные копии,
     сквозные справочники, журнал действий."""
@@ -197,4 +240,5 @@ def _object_dependency(minimum: str):
 
 require_object_access = _object_dependency("view")
 require_object_editor = _object_dependency("user")
+require_object_contractor = _object_dependency("contract")
 require_object_admin = _object_dependency("admin")

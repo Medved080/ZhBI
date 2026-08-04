@@ -44,7 +44,7 @@ from app import activity
 from app.access import (
     assert_object_access,
     require_object_access,
-    require_object_admin,
+    require_object_contractor,
     require_system_admin,
 )
 from app.auth import get_current_user
@@ -351,7 +351,7 @@ def find_or_create_contract(conn, specification_id: int, theme: Optional[str] = 
     return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
 
-def _guard_specification(conn, user, specification_id: int, minimum: str = "admin") -> None:
+def _guard_specification(conn, user, specification_id: int, minimum: str = "contract") -> None:
     """Доступ к контракту — по объекту его спецификации: контракт ->
     спецификация -> договор -> object_id (цепочка этапа A).
 
@@ -359,7 +359,8 @@ def _guard_specification(conn, user, specification_id: int, minimum: str = "admi
     проверять его надо по цепочке, иначе появился бы второй источник
     правды о принадлежности контракта.
 
-    `minimum` — роль на объекте: "admin" для правки (как было), "view" для
+    `minimum` — роль на объекте: "contract" для правки (2026-08-04, до того
+    "admin" — контракты стали справочником контрактовщика), "view" для
     чтения (аудит безопасности 2026-08-03: читать контракты мог кто угодно).
     """
     row = conn.execute(
@@ -379,7 +380,7 @@ def _guard_specification(conn, user, specification_id: int, minimum: str = "admi
     assert_object_access(conn, user, row["object_id"], minimum)
 
 
-def _guard_contract(conn, user, contract_id: int, minimum: str = "admin") -> None:
+def _guard_contract(conn, user, contract_id: int, minimum: str = "contract") -> None:
     """Доступ по ТЕКУЩЕМУ владельцу контракта.
 
     Отдельно от _guard_specification, и это не дублирование: та проверяет
@@ -528,6 +529,10 @@ def list_contract_elements(contract_id: int, user: sqlite3.Row = Depends(get_cur
 # Контракт по умолчанию — настройка ОБЪЕКТА (этап D): «чем обычно возят на
 # ЭТУ стройку». Общая запись означала бы, что поставщик, выбранный на одном
 # здании, подставляется и на соседнем.
+#
+# Порог — `contract`, а не `admin` (2026-08-04): выбор живёт ВНУТРИ формы
+# «Контракты», которую контрактовщик и открывает; оставь здесь `admin` — и
+# он видел бы список, а каждая смена значения молча получала бы 403.
 @router.get("/default-map")
 def get_default_contracts(object_id: int = Query(...),
                           user: sqlite3.Row = Depends(require_object_access)):
@@ -544,7 +549,7 @@ def get_default_contracts(object_id: int = Query(...),
 
 @router.put("/default-map")
 def set_default_contracts(mapping: dict, object_id: int = Query(...),
-                          admin: sqlite3.Row = Depends(require_object_admin)):
+                          admin: sqlite3.Row = Depends(require_object_contractor)):
     conn = get_connection()
     try:
         for element_type, contract_id in mapping.items():

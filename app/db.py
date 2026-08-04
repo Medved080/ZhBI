@@ -662,6 +662,56 @@ def _migrate_object_scoped_tables(conn: sqlite3.Connection, changes: list) -> No
     changes.append("справочники и настройки перенесены внутрь объекта: " + ", ".join(todo))
 
 
+def _migrate_user_access_contract_role(conn: sqlite3.Connection, changes: list) -> None:
+    """Разрешает роль «Контрактовщик» в грантах (2026-08-04).
+
+    Значение упирается в CHECK (role IN ('admin', 'user', 'view')), а CHECK
+    в SQLite не меняется ALTER'ом — таблица пересобирается. Данные не
+    трогаются: новая роль ДОБАВЛЯЕТСЯ к прежним трём, ни один накопленный
+    грант не переписывается.
+
+    Пересборка безопасна по тому же проверенному условию, что и у
+    _migrate_user_access_global: на user_access не ссылается никто, поэтому
+    RENAME не переписывает чужие внешние ключи.
+
+    Идемпотентность — по тексту самого ограничения в sqlite_master, без
+    маркера: состояние описывает себя само. Смотрим именно на CHECK, а не
+    на наличие строк с ролью 'contract' — гранты могут быть ещё не выданы, а
+    ограничение уже расширено.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'user_access'"
+    ).fetchone()
+    if row is None or "'contract'" in (row["sql"] or ""):
+        return
+
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("""
+        CREATE TABLE user_access_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+            project_id INTEGER REFERENCES projects (id) ON DELETE CASCADE,
+            object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK (role IN ('admin', 'contract', 'user', 'view')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )""")
+    conn.execute(
+        "INSERT INTO user_access_new (id, user_id, project_id, object_id, role, created_at) "
+        "SELECT id, user_id, project_id, object_id, role, created_at FROM user_access")
+    conn.execute("DROP TABLE user_access")
+    conn.execute("ALTER TABLE user_access_new RENAME TO user_access")
+    conn.execute("DROP INDEX IF EXISTS idx_user_access_unique")
+    conn.execute("CREATE UNIQUE INDEX idx_user_access_unique ON user_access "
+                 "(user_id, COALESCE(project_id, -1), COALESCE(object_id, -1))")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_access_user ON user_access (user_id)")
+    conn.commit()
+    # ОБЯЗАТЕЛЬНО вернуть проверку ключей — см. _migrate_user_access_global.
+    conn.execute("PRAGMA foreign_keys = ON")
+    changes.append("доступ: добавлена роль «Контрактовщик»")
+
+
 def _migrate_user_access_global(conn: sqlite3.Connection, changes: list) -> None:
     """Разрешает грант на ВСЕ проекты сразу: project_id становится
     NULLABLE (2026-08-02, живой запрос).
@@ -1577,6 +1627,10 @@ def init_db() -> list:
         # таблицы нет колонки object_id.
         _migrate_object_scoped_tables(conn, changes)
         _migrate_user_access_global(conn, changes)
+        # Строго ПОСЛЕ: та пересобирает таблицу с прежним CHECK на три роли,
+        # эта расширяет ограничение до четырёх. В обратном порядке новая
+        # роль тут же терялась бы.
+        _migrate_user_access_contract_role(conn, changes)
         _ensure_object_scoped_indexes(conn)
         # Строго ПОСЛЕ бутстрапа объекта: миграция зон опирается на
         # object_drawings, чтобы понять, какой чертёж актуален.

@@ -104,7 +104,7 @@ TABLES = [
     ("user_id", "INTEGER", "FK", "кому выдан → users.id (CASCADE)"),
     ("project_id", "INTEGER", "FK", "проект → projects.id (CASCADE)"),
     ("object_id", "INTEGER", "FK", "объект → objects.id; NULL = весь проект"),
-    ("role", "TEXT", "", "роль на этом объекте/проекте: admin/user/view"),
+    ("role", "TEXT", "", "роль на этом объекте/проекте: admin/contract/user/view"),
     ("created_at", "TEXT", "", "выдан"),
 ]),
 ("elements", "elements — Элементы ЖБИ (ядро)", C_ELEM, S_ELEM, [

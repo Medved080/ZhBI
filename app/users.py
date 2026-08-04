@@ -411,13 +411,16 @@ def close_user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_syste
 
 @router.patch("/{user_id}/label-color", response_model=UserOut)
 def set_label_color(
-    user_id: int, body: SetLabelColorIn, current: sqlite3.Row = Depends(get_current_user)
+    user_id: int, body: SetLabelColorIn, current: sqlite3.Row = Depends(require_system_admin)
 ):
-    """Персональная настройка (см. Docs/backlog.md) — тот же guard, что у
-    set_password: менять можно только себе, если ты не admin."""
-    if current["role"] != "admin" and current["id"] != user_id:
-        raise HTTPException(status_code=403, detail="Можно менять только свой цвет подписей")
+    """Цвет подписей марок — настройка АДМИНИСТРАТОРА СЕРВИСА (2026-08-04,
+    решение пользователя), как и цвета статусов.
 
+    Хранится по-прежнему за пользователем (`users.label_color`): цвет
+    применяется в его собственном виде схемы, и общей записи для него нет.
+    Изменилось только то, КТО его задаёт — до этого настройка была
+    самообслуживанием и менялась каждым себе.
+    """
     conn = get_connection()
     try:
         row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()

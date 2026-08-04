@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.access import assert_object_access, require_system_admin
+from app.access import assert_object_access, require_contracting, require_system_admin
 from app.auth import get_current_user
 from app import activity
 from app.db import get_connection
@@ -202,8 +202,14 @@ def list_counterparties_full(user: sqlite3.Row = Depends(get_current_user)):
         conn.close()
 
 
+# Контрагенты — справочник ОБЩЕСЕРВИСНЫЙ (одна и та же организация возит
+# на несколько строек), поэтому объектной проверке зацепиться не за что:
+# право ведёт роль «Контрактовщик» хотя бы на одном объекте
+# (require_contracting, 2026-08-04). До этого справочник вёл только
+# администратор сервиса, и контрактовщик упирался бы в него на первом же
+# новом поставщике.
 @router.post("/counterparties", response_model=CounterpartyOut)
-def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(require_contracting)):
     conn = get_connection()
     try:
         code = body.code or _generate_counterparty_code(conn, body.short_name)
@@ -227,7 +233,7 @@ def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(requi
 
 
 @router.patch("/counterparties/{counterparty_id}", response_model=CounterpartyOut)
-def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlite3.Row = Depends(require_contracting)):
     conn = get_connection()
     try:
         existing = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
@@ -273,8 +279,13 @@ def list_agreements(counterparty_id: int = Query(...), user: sqlite3.Row = Depen
         conn.close()
 
 
-def _guard_specification_owner(conn, user, specification_id: int, minimum: str = "admin") -> None:
-    """Доступ по ТЕКУЩЕМУ договору спецификации (а не по присланному)."""
+def _guard_specification_owner(conn, user, specification_id: int, minimum: str = "contract") -> None:
+    """Доступ по ТЕКУЩЕМУ договору спецификации (а не по присланному).
+
+    Порог правки — `contract`, а не `admin` (2026-08-04): спецификация это
+    контрактный справочник, и ведёт его контрактовщик. Администратор
+    объекта проходит тем же порогом — он в лестнице выше.
+    """
     row = conn.execute(
         "SELECT a.object_id FROM specifications s "
         "JOIN agreements a ON a.id = s.agreement_id WHERE s.id = ?",
@@ -305,13 +316,17 @@ def _accessible_agreements_clause(conn, user, column: str = "object_id") -> tupl
     return f"{column} IN ({marks})", list(ids)
 
 
-def _guard_agreement(conn, user, agreement_id: int, minimum: str = "admin") -> None:
+def _guard_agreement(conn, user, agreement_id: int, minimum: str = "contract") -> None:
     """Доступ к договору — по объекту, на который он заключён
     (agreements.object_id, этап A).
 
     Если объект ещё не проставлен (договоры, заведённые до иерархии),
     правит только администратор сервиса: раздавать безобъектный договор
     «админам объектов» нельзя — неизвестно, чей он.
+
+    Порог правки — `contract` (2026-08-04): договор это контрактный
+    справочник, ведёт его контрактовщик, администратор объекта проходит
+    тем же порогом.
     """
     row = conn.execute("SELECT object_id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
     if row is None:
@@ -339,7 +354,7 @@ def create_agreement(body: AgreementIn, user: sqlite3.Row = Depends(get_current_
     завести себе договор он не мог.
 
     Теперь объект указывается явно, а право заводить договор даёт роль
-    `admin` НА ЭТОМ объекте. Объект приходит параметром именно здесь и
+    не ниже `contract` НА ЭТОМ объекте. Объект приходит параметром здесь и
     только здесь — это единственное место, где он ещё не выведен из
     сущности, потому что сущности пока нет; проверка `assert_object_access`
     не даёт назвать чужой.
@@ -352,7 +367,7 @@ def create_agreement(body: AgreementIn, user: sqlite3.Row = Depends(get_current_
         )
     conn = get_connection()
     try:
-        assert_object_access(conn, user, body.object_id, "admin")
+        assert_object_access(conn, user, body.object_id, "contract")
         counterparty = conn.execute(
             "SELECT id FROM counterparties WHERE id = ?", (body.counterparty_id,)
         ).fetchone()
@@ -402,9 +417,9 @@ def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = 
             )
         if body.object_id != existing["object_id"]:
             # Доступ проверяется и к НОВОМУ объекту: _guard_agreement выше
-            # разрешил правку по СТАРОМУ, и без этой проверки администратор
+            # разрешил правку по СТАРОМУ, и без этой проверки контрактовщик
             # своего объекта перевесил бы договор на чужой.
-            assert_object_access(conn, admin, body.object_id, "admin")
+            assert_object_access(conn, admin, body.object_id, "contract")
             # «Объект контракта = объект элемента» — инвариант схемы: объект
             # контракта не хранится, а выводится по цепочке
             # контракт → спецификация → договор. Значит, перевод договора на

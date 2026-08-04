@@ -357,7 +357,11 @@ CREATE TABLE IF NOT EXISTS user_access (
     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     project_id INTEGER REFERENCES projects (id) ON DELETE CASCADE,
     object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK (role IN ('admin', 'user', 'view')),
+    -- 'contract' — Контрактовщик (2026-08-04): между 'user' и 'admin' в
+    -- лестнице app/access.OBJECT_ROLES. На накопленных базах значение
+    -- добавляет _migrate_user_access_contract_role: CHECK в SQLite не
+    -- меняется ALTER'ом, таблица пересобирается.
+    role TEXT NOT NULL CHECK (role IN ('admin', 'contract', 'user', 'view')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
