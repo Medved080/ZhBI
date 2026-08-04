@@ -145,6 +145,7 @@ from app.admin_guide import router as admin_guide_router
 from app.db_status import router as db_status_router
 from app.fill_scope import router as fill_scope_router
 from app.ldap_auth import router as ldap_router
+from app.rights_matrix import router as rights_matrix_router
 from app.settings import router as settings_router
 from app.upload_limits import (
     MAX_UPLOAD_BYTES,
@@ -226,6 +227,9 @@ async def security_headers(request, call_next):
 app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 
 app.include_router(auth_router)
+# ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
+# не должен иметь ни единого шанса уехать в {user_id}.
+app.include_router(rights_matrix_router)
 app.include_router(users_router)
 app.include_router(sessions_router)
 app.include_router(ldap_router)

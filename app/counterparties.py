@@ -204,9 +204,9 @@ def list_counterparties_full(user: sqlite3.Row = Depends(get_current_user)):
 
 # Контрагенты — справочник ОБЩЕСЕРВИСНЫЙ (одна и та же организация возит
 # на несколько строек), поэтому объектной проверке зацепиться не за что:
-# право ведёт роль «Контрактовщик» хотя бы на одном объекте
+# право ведёт роль «Комплектовщик» хотя бы на одном объекте
 # (require_contracting, 2026-08-04). До этого справочник вёл только
-# администратор сервиса, и контрактовщик упирался бы в него на первом же
+# администратор сервиса, и комплектовщик упирался бы в него на первом же
 # новом поставщике.
 @router.post("/counterparties", response_model=CounterpartyOut)
 def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(require_contracting)):
@@ -283,7 +283,7 @@ def _guard_specification_owner(conn, user, specification_id: int, minimum: str =
     """Доступ по ТЕКУЩЕМУ договору спецификации (а не по присланному).
 
     Порог правки — `contract`, а не `admin` (2026-08-04): спецификация это
-    контрактный справочник, и ведёт его контрактовщик. Администратор
+    контрактный справочник, и ведёт его комплектовщик. Администратор
     объекта проходит тем же порогом — он в лестнице выше.
     """
     row = conn.execute(
@@ -325,7 +325,7 @@ def _guard_agreement(conn, user, agreement_id: int, minimum: str = "contract") -
     «админам объектов» нельзя — неизвестно, чей он.
 
     Порог правки — `contract` (2026-08-04): договор это контрактный
-    справочник, ведёт его контрактовщик, администратор объекта проходит
+    справочник, ведёт его комплектовщик, администратор объекта проходит
     тем же порогом.
     """
     row = conn.execute("SELECT object_id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
@@ -417,7 +417,7 @@ def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = 
             )
         if body.object_id != existing["object_id"]:
             # Доступ проверяется и к НОВОМУ объекту: _guard_agreement выше
-            # разрешил правку по СТАРОМУ, и без этой проверки контрактовщик
+            # разрешил правку по СТАРОМУ, и без этой проверки комплектовщик
             # своего объекта перевесил бы договор на чужой.
             assert_object_access(conn, admin, body.object_id, "contract")
             # «Объект контракта = объект элемента» — инвариант схемы: объект

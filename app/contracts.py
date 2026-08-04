@@ -73,6 +73,22 @@ class ContractLineOut(ContractLineIn):
     exceeded: bool
 
 
+class ContractPositionOut(BaseModel):
+    """Остатки по ОДНОЙ позиции контракта. Отдельная от ContractLineOut
+    модель: выбору контракта не нужны ни id строки, ни тип (он его сам и
+    спросил), а нужен contract_id, по которому он находит контракт в
+    state.contracts, и марка — чтобы разложить ответ по позициям.
+    См. contract_positions ниже."""
+
+    contract_id: int
+    mark: Optional[str] = None
+    quantity: int
+    fact: int
+    damaged: int
+    remaining: int
+    exceeded: bool
+
+
 # Инцидент повреждения элементов на стройке — только количество (тип +
 # число), без привязки к конкретным elements.id, без марки и без
 # отдельного статуса подтверждения (см. Docs/backlog.md, "Учёт
@@ -334,6 +350,99 @@ def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
         conn.close()
 
 
+@router.get("/positions", response_model=list[ContractPositionOut])
+def contract_positions(
+    element_type: str = Query(...),
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Позиции контрактов по ТИПУ изделия — все марки сразу, с планом,
+    фактом и остатком по каждой. Нужен выбору контракта при смене статуса:
+    раньше он предлагал контракты по одному только типу, то есть изделие
+    можно было разнести на контракт, в котором его марки нет вовсе, а
+    сколько по позиции уже разнесено и сколько осталось — было не видно до
+    открытия справочника контрактов (живой запрос 2026-08-04).
+
+    Почему по типу, а не по (тип, марка): тот же список нужен МАССОВОЙ
+    смене статуса, где в выборке рамкой десятки разных марок одного типа.
+    Запрос на каждую марку означал бы десятки запросов на открытие формы —
+    той самой, которая уже была «долго открывается». Позиций на тип не
+    больше нескольких сотен (на реальных данных 406 на всю базу), клиент
+    раскладывает их по маркам сам и держит в кэше.
+
+    Ключ сопоставления — `element_type = ?` плюс марка на стороне клиента —
+    ТОТ ЖЕ, что у contract_line_warning (`element_type = ? AND mark IS ?`):
+    список и предупреждение о превышении обязаны говорить про одну и ту же
+    строку контракта. Отсюда же следствие: позиции с element_type IS NULL
+    (импорт контрактации не смог определить тип по марке, см.
+    app/contracting_import.py) сюда не попадают — их сначала донастраивают
+    в справочнике.
+
+    Возвращаются ТОЛЬКО контракты с позициями этого типа; остальные клиент
+    показывает сам из state.contracts (отдельной группой, серым) — здесь их
+    не перечисляем, чтобы ответ не разошёлся с /plan-data.
+    """
+    conn = get_connection()
+    try:
+        доступ, доступ_params = _accessible_contracts_clause(conn, user)
+        line_rows = conn.execute(
+            f"""
+            SELECT cl.contract_id AS contract_id, cl.mark AS mark, cl.quantity AS quantity
+            FROM contract_lines cl
+            JOIN contracts co ON co.id = cl.contract_id
+            JOIN specifications s ON s.id = co.specification_id
+            JOIN agreements a ON a.id = s.agreement_id
+            WHERE cl.element_type = ? AND {доступ}
+            """,
+            [element_type, *доступ_params],
+        ).fetchall()
+        if not line_rows:
+            return []
+        ids = sorted({r["contract_id"] for r in line_rows})
+        плейсхолдеры = ",".join("?" * len(ids))
+        # Факт — те же элементы, что считает _line_fact, но одним запросом
+        # на все найденные контракты сразу и по индексу
+        # idx_elements_contract_line (contract_id ведущий, поэтому IN, а не
+        # скан всей таблицы elements). NULL-марка попадает в собственную
+        # группу — та же NULL-безопасная семантика, что у `mark IS ?`.
+        facts = {
+            (r["contract_id"], r["mark"]): r["n"]
+            for r in conn.execute(
+                f"SELECT contract_id, mark, COUNT(*) AS n FROM elements "
+                f"WHERE contract_id IN ({плейсхолдеры}) AND element_type = ? "
+                f"AND current_status != 'planned' GROUP BY contract_id, mark",
+                [*ids, element_type],
+            ).fetchall()
+        }
+        # Повреждения учитываются по (контракт, ТИП) — марки у инцидента нет
+        # (см. ContractIncidentIn выше). Значит одно и то же число вычитается
+        # из остатка каждой позиции этого типа — ровно так же, как в карточке
+        # контракта (_to_contract_out) и в предупреждении о превышении;
+        # расходиться этим трём местам нельзя.
+        damaged = {
+            r["contract_id"]: r["n"]
+            for r in conn.execute(
+                f"SELECT contract_id, COALESCE(SUM(quantity), 0) AS n FROM contract_incidents "
+                f"WHERE contract_id IN ({плейсхолдеры}) AND element_type = ? GROUP BY contract_id",
+                [*ids, element_type],
+            ).fetchall()
+        }
+        result = []
+        for r in line_rows:
+            cid = r["contract_id"]
+            fact = facts.get((cid, r["mark"]), 0)
+            dmg = damaged.get(cid, 0)
+            result.append(
+                ContractPositionOut(
+                    contract_id=cid, mark=r["mark"], quantity=r["quantity"], fact=fact, damaged=dmg,
+                    remaining=r["quantity"] - fact - dmg,
+                    exceeded=(fact + dmg) > r["quantity"],
+                )
+            )
+        return result
+    finally:
+        conn.close()
+
+
 def find_or_create_contract(conn, specification_id: int, theme: Optional[str] = None) -> int:
     """Один Контракт на Спецификацию — используется импортом файла
     контрактации (app/contracting_import.py), где строка файла уже
@@ -360,7 +469,7 @@ def _guard_specification(conn, user, specification_id: int, minimum: str = "cont
     правды о принадлежности контракта.
 
     `minimum` — роль на объекте: "contract" для правки (2026-08-04, до того
-    "admin" — контракты стали справочником контрактовщика), "view" для
+    "admin" — контракты стали справочником комплектовщика), "view" для
     чтения (аудит безопасности 2026-08-03: читать контракты мог кто угодно).
     """
     row = conn.execute(
@@ -531,7 +640,7 @@ def list_contract_elements(contract_id: int, user: sqlite3.Row = Depends(get_cur
 # здании, подставляется и на соседнем.
 #
 # Порог — `contract`, а не `admin` (2026-08-04): выбор живёт ВНУТРИ формы
-# «Контракты», которую контрактовщик и открывает; оставь здесь `admin` — и
+# «Контракты», которую комплектовщик и открывает; оставь здесь `admin` — и
 # он видел бы список, а каждая смена значения молча получала бы 403.
 @router.get("/default-map")
 def get_default_contracts(object_id: int = Query(...),

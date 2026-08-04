@@ -688,6 +688,75 @@
   .access-inherited { font-size: 11px; color: var(--color-text-muted); }
   .access-tree-block { margin-top: 14px; border-top: 1px solid var(--color-border);
     padding-top: 12px; }
+  /* Выбор контракта в диалоге смены статуса (2026-08-04) — список, а не
+     <select>: у каждого контракта три числа по позиции (всего / разнесено /
+     остаток) РАЗНЫМИ цветами, а раскрасить части текста <option> браузер не
+     даёт — цвет там либо на всю строку, либо никак. */
+  .contract-picker { border: 1px solid var(--color-border); border-radius: 6px;
+    max-height: 240px; overflow-y: auto; padding: 4px; }
+  .cp-group { font-size: 11px; color: var(--color-text-muted); padding: 6px 6px 2px; }
+  .cp-row { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+    font: inherit; color: var(--color-text); background: none; border: 1px solid transparent;
+    border-radius: 4px; padding: 4px 6px; cursor: pointer; }
+  .cp-row:hover { background: var(--color-bg); }
+  .cp-row.active { border-color: var(--color-primary); background: var(--color-accent-soft, var(--color-bg)); }
+  .cp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Числа — моноширинные, чтобы столбиком: строки контрактов разной длины,
+     и «прыгающие» разряды читаются хуже, чем ровная колонка справа. */
+  .cp-nums { flex: none; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 600;
+    white-space: nowrap; }
+  .cp-nums span + span { margin-left: 7px; }
+  .cp-total { color: var(--color-primary); }
+  /* «Зарезервировано в этой форме» — своим цветом, отличным и от плана
+     (синий), и от разнесённого (цвет статуса «Контрактация»), и от
+     доступного (зелёный): это четвёртое, ещё не сохранённое состояние. */
+  .cp-reserved { color: #a05a00; }
+  @media (prefers-color-scheme: dark) { .cp-reserved { color: #e0a54a; } }
+  .cp-left { color: var(--color-success); }
+  .cp-left.cp-over { color: var(--color-danger); }
+  /* Контракты без позиции под эту марку выбрать всё-таки можно (контрактация
+     бывает неполной), но видно, что позиции в них нет. */
+  .cp-row-muted .cp-name { color: var(--color-text-muted); }
+  .cp-note { flex: none; font-size: 11px; color: var(--color-text-muted); }
+  /* Групповая настройка прав (2026-08-04): пользователи по вертикали,
+     уровни доступа по горизонтали. Колонок столько же, сколько объектов в
+     системе, поэтому таблица прокручивается вбок, а колонка с фамилией
+     закреплена — иначе через два экрана прокрутки уже не видно, чью строку
+     правишь (тот же приём, что у #ds-table в «Динамике»). */
+  /* Ширина — по экрану, а не по .modal.wide (780 px): колонок здесь столько
+     же, сколько объектов в системе, и на 780 px даже один объект не влезал
+     вместе с кнопкой «Матрица прав» в конце строки. */
+  #access-matrix-modal { max-width: 96vw; width: 96vw; }
+  .am-scroll { overflow-x: auto; }
+  #access-matrix-table { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+  #access-matrix-table th, #access-matrix-table td {
+    padding: 4px 8px; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  #access-matrix-table thead th { position: sticky; top: 0; z-index: 3;
+    background: var(--color-surface); text-align: left; font-weight: 600; }
+  #access-matrix-table .am-user { position: sticky; left: 0; z-index: 2;
+    background: var(--color-surface); text-align: left; min-width: 200px; }
+  #access-matrix-table thead .am-user { z-index: 4; }
+  #access-matrix-table .am-group { font-weight: 600; }
+  #access-matrix-table .am-sub { font-weight: 400; color: var(--color-text-muted); font-size: 11px; }
+  #access-matrix-table select { font-size: 12px; padding: 1px 4px; min-width: 150px; max-width: 190px; }
+  #access-matrix-table tr.am-dirty .am-user { font-weight: 600; }
+  #access-matrix-table .am-inherited { display: block; font-size: 10px; color: var(--color-text-muted); }
+  #access-matrix-table .am-sysadmin td { color: var(--color-text-muted); }
+  /* Матрица прав одного пользователя: разделы против объёма прав. */
+  #rights-matrix-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #rights-matrix-table th, #rights-matrix-table td {
+    padding: 5px 10px; border-bottom: 1px solid var(--color-border); }
+  #rights-matrix-table thead th { position: sticky; top: 0; background: var(--color-surface);
+    text-align: center; z-index: 1; }
+  #rights-matrix-table thead th:first-child, #rights-matrix-table td:first-child { text-align: left; }
+  #rights-matrix-table td.rm-mark { text-align: center; font-size: 15px; width: 130px; }
+  #rights-matrix-table .rm-yes { color: var(--color-success); }
+  /* Прочерк, а не красный крестик: строк много, и колонка крестиков читалась
+     как список проблем, хотя это норма — прав у роли просто нет. */
+  #rights-matrix-table .rm-no { color: var(--color-text-muted); }
+  #rights-matrix-table tr.rm-section td { background: var(--color-bg); font-weight: 600; }
+  #rights-matrix-table .rm-note { display: block; font-size: 11px; color: var(--color-text-muted);
+    white-space: normal; max-width: 520px; }
   /* Вложения (2026-08-02). Одна разметка на все три места — карточку
      элемента в правой панели, форму элемента и формы проектов/объектов. */
   /* Выбор гаммы: плитка образцов, у каждого три полосы — фон, поверхность,
@@ -1642,6 +1711,35 @@
   .bulk-status-table td, .bulk-status-table th { padding: 4px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
   .bulk-status-table select { max-width: 220px; }
   .bulk-status-status-cell { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+  /* Ячейка контракта в массовой смене статуса — кнопка, открывающая тот же
+     список, что и диалог одного изделия (2026-08-04). Числа по позиции
+     видны прямо в ячейке, поэтому у неё те же классы cp-*. */
+  .bulk-row-contract { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+    font: inherit; color: var(--color-text); background: var(--color-surface);
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    padding: 3px 8px; cursor: pointer; }
+  .bulk-row-contract:hover { border-color: var(--color-primary); }
+  .bulk-row-contract.is-empty { color: var(--color-text-muted); border-style: dashed; }
+  /* Контракты по маркам в шапке массовой формы (2026-08-04). Сетка, а не
+     flex-строка: подпись, выбор, кнопка и счётчик обязаны стоять столбиками
+     — иначе при разной длине наименований контрактов кнопки «Распределить»
+     разъезжаются по горизонтали и их приходится искать глазами.
+     Прокрутка: марок в выборке бывают десятки, а шапка формы не скроллится. */
+  .bulk-fill-marks { display: grid; grid-template-columns: auto minmax(240px, 1fr) auto auto;
+    gap: 4px 10px; align-items: center; max-height: 26vh; overflow-y: auto; padding-right: 4px; }
+  .bulk-fill-marks:empty { display: none; }
+  .bfm-row { display: contents; }
+  .bfm-label { font-size: 12px; color: var(--color-text-muted); white-space: nowrap; }
+  .bfm-left { font-size: 12px; color: var(--color-danger); white-space: nowrap; }
+  .bfm-left-done { color: var(--color-success); }
+  /* Выбор контракта открывается ПОВЕРХ массовой формы — единственное место,
+     где два модальных окна показаны одновременно, поэтому z-index задан
+     явно: порядок в разметке для этого ненадёжен (окно живёт рядом с
+     остальными, а не последним). */
+  #contract-pick-backdrop { z-index: 110; }
+  /* Матрица прав открывается ПОВЕРХ групповой настройки прав — тот же
+     случай двух окон разом, что и у выбора контракта выше. */
+  #rights-matrix-backdrop { z-index: 110; }
   .bulk-row-remove { background: none; border: none; color: var(--color-text-muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; }
   .bulk-row-remove:hover { color: var(--color-danger); }
   .ce-line-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
@@ -2005,6 +2103,11 @@
                  машину (в аварии сервис как раз может не работать). -->
             <button id="menu-admin-guide" class="admin-only menu-item-strong">Памятка администратора</button>
             <button id="menu-users" class="admin-only">Пользователи</button>
+            <!-- Права всех пользователей одной таблицей (2026-08-04, живой
+                 запрос). Отдельным пунктом от «Пользователей»: там правят
+                 ОДНОГО человека целиком, здесь сравнивают между собой всех
+                 и раздают роли по стройкам. -->
+            <button id="menu-access-matrix" class="admin-only">Права пользователей</button>
             <!-- Отдельным пунктом (живой запрос 2026-08-03): «кто сейчас в
                  системе» — вопрос обо всём сервисе, а не о конкретном
                  человеке, и искать его в карточке пользователя незачем. -->
@@ -2490,6 +2593,23 @@
       против. По умолчанию 30° и −30°. Настройка личная; применяется при переходе в 3D и по
       кнопке сброса вида.
     </p>
+    <!-- Порог показа подписей (2026-08-04, живой запрос). Здесь же, где гамма
+         и ракурс: настройка личная и про то, КАК человек работает — экран,
+         масштаб интерфейса, RDP, мощность машины. -->
+    <label class="field" style="margin-top:12px">Порог показа подписей</label>
+    <div class="row" style="align-items:flex-end; gap:12px">
+      <div style="flex:1"><label class="field" style="margin-top:0">Высота текста, px</label>
+        <input type="number" id="min-label-px" min="4" max="40" step="1"/></div>
+      <button class="btn btn-secondary" id="min-label-px-apply">Применить</button>
+      <span class="hint-text" id="min-label-px-status"></span>
+    </div>
+    <p class="hint-text">
+      Подпись, которая на текущем масштабе получается мельче этого числа пикселей, не
+      рисуется вовсе — и на схеме, и в 3D: прочитать её всё равно нельзя, а тысячи таких
+      подложек закрывают чертёж и стоят кадра. Меньше значение — подписи появляются раньше
+      и работа идёт медленнее; больше — схема быстрее, подписи видны только вблизи.
+      По умолчанию 12. Настройка личная.
+    </p>
     <label class="field" style="margin-top:12px">Меню «Действия»</label>
     <label class="toggle"><input type="radio" name="menu-view" value="dropdown"/>
       Выпадающее меню — группы раскрываются вбок при наведении</label>
@@ -2740,6 +2860,57 @@
     <button class="btn btn-secondary" id="users-add">Добавить пользователя</button>
     <div class="actions">
       <button class="btn btn-secondary" id="users-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Групповая настройка прав (2026-08-04, живой запрос). По вертикали —
+     пользователи, по горизонтали — «Система» (системная роль) и дальше
+     уровни доступа в иерархии: «Все проекты», проект, его объекты.
+     На пересечении — выданная роль. Первая колонка закреплена: колонок
+     столько же, сколько объектов в системе, и таблица заведомо шире экрана. -->
+<div class="modal-backdrop" id="access-matrix-backdrop">
+  <div class="modal wide modal-sticky" id="access-matrix-modal">
+    <div class="modal-sticky-head">
+      <h2>Права пользователей</h2>
+      <p class="hint-text">Роль выдаётся на уровень: «Все проекты» действует на всё, роль
+        проекта перекрывает её внутри проекта, роль объекта — внутри объекта. Пустая ячейка
+        значит «не задано»: действует роль сверху, она подписана серым. Администратор сервиса
+        видит и правит всё в обход выданных прав — его строка показана, но не редактируется.</p>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div class="am-scroll"><table id="access-matrix-table"></table></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="error-text" id="access-matrix-error"></div>
+      <div class="actions">
+        <span class="hint-text" id="access-matrix-status"></span>
+        <button class="btn btn-secondary" id="access-matrix-close">Закрыть</button>
+        <button class="btn btn-primary" id="access-matrix-save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Матрица прав ОДНОГО пользователя: по вертикали разделы и инструменты
+     системы, по горизонтали объём прав, на пересечении галочка или крестик.
+     Считается для выбранного объекта — роль это свойство гранта, и на
+     разных стройках она у одного человека разная. -->
+<div class="modal-backdrop" id="rights-matrix-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2 id="rights-matrix-title">Матрица прав</h2>
+      <div class="row">
+        <label class="field" style="margin:0;">Объект</label>
+        <select id="rights-matrix-object"></select>
+        <span class="hint-text" id="rights-matrix-role"></span>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll"><table id="rights-matrix-table"></table></div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="rights-matrix-close">Закрыть</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3619,11 +3790,31 @@
     <div id="sc-contract-section">
       <p class="hint-text">Элемент переходит со статуса «Запланирован» — укажите, по какому контракту он поставляется.</p>
       <label class="field">Контракт</label>
-      <select id="sc-contract-select"></select>
+      <div id="sc-contract-list" class="contract-picker"></div>
+      <p class="hint-text" id="sc-contract-legend"></p>
     </div>
     <div class="actions">
       <button class="btn btn-secondary" id="sc-cancel">Отмена</button>
       <button class="btn btn-primary" id="sc-confirm">Подтвердить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Выбор контракта для ОДНОЙ строки массовой смены статуса (2026-08-04,
+     живой запрос «сделай такой же интерфейс при групповой обработке»).
+     Отдельным окном поверх таблицы, а не списком внутри ячейки: строк в
+     выборке бывают сотни, и разворачивать в каждой список на все контракты
+     значит получить таблицу высотой в несколько экранов на строку.
+     Содержимое рисует тот же mountContractPicker, что и диалог одного
+     изделия. -->
+<div class="modal-backdrop" id="contract-pick-backdrop">
+  <div class="modal">
+    <h2>Контракт изделия</h2>
+    <p class="hint-text" id="cp-element"></p>
+    <div id="cp-list" class="contract-picker"></div>
+    <p class="hint-text" id="cp-legend"></p>
+    <div class="actions">
+      <button class="btn btn-secondary" id="cp-cancel">Отмена</button>
     </div>
   </div>
 </div>
@@ -3636,11 +3827,17 @@
         <label class="field" style="margin:0;">Новый статус</label>
         <select id="bulk-status-select"></select>
       </div>
-      <div class="row">
-        <label class="field" style="margin:0;">Контракт для незаполненных строк</label>
-        <select id="bulk-fill-contract-select"></select>
-        <button class="btn btn-sm btn-secondary" id="bulk-fill-contract-apply">Заполнить пустые</button>
-      </div>
+      <!-- Контракты по МАРКАМ выборки (2026-08-04, живой запрос): строка на
+           каждую позицию («тип + марка» — именно так задана позиция
+           контракта), в ней тот же выбор с остатками, что и у одного изделия,
+           кнопка «Распределить» и счётчик ещё не назначенных. Прежний общий
+           «Контракт для незаполненных строк» убран: он делал то же самое, но
+           вслепую — не глядя на остаток. -->
+      <div id="bulk-fill-marks" class="bulk-fill-marks"></div>
+      <p class="hint-text" style="margin:0;">«Распределить» проставляет контракт изделиям этой
+        марки, у которых он ещё не выбран, и не больше, чем доступно по контракту (остаток за
+        вычетом уже зарезервированного в этой форме). Не хватило — выберите для оставшихся
+        другой контракт и повторите.</p>
     </div>
     <div class="modal-sticky-scroll">
       <table class="bulk-status-table">

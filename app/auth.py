@@ -297,6 +297,22 @@ DEFAULT_VIEW3D_PITCH = 30.0
 DEFAULT_VIEW3D_YAW = -30.0
 
 
+# Порог читаемости подписей в пикселях. 12 — значение, которое до
+# 2026-08-04 было константой MIN_LABEL_READABLE_PX в app.js (сначала
+# поставили 8, живой ответ пользователя: «появляются на нечитаемом
+# расстоянии, порог раза в 1,5 больше»). Теперь это персональная настройка,
+# а число здесь — её значение по умолчанию: экран, масштаб интерфейса, RDP
+# и мощность машины у всех разные.
+DEFAULT_MIN_LABEL_PX = 12.0
+
+
+def min_label_px_of(user: sqlite3.Row) -> float:
+    """Через .keys(), как view3d_angles_of рядом, — строка пользователя
+    приходит и из выборок, сделанных до миграции."""
+    value = user["min_label_px"] if "min_label_px" in user.keys() else None
+    return DEFAULT_MIN_LABEL_PX if value is None else float(value)
+
+
 def view3d_angles_of(user: sqlite3.Row) -> tuple:
     """Персональный начальный ракурс 3D: (подъём, поворот) в градусах.
     Через .keys(), как auth_method и ui_theme рядом, — строка пользователя
@@ -539,6 +555,8 @@ class UserOut(BaseModel):
     # Персональный начальный ракурс 3D в градусах (2026-08-03).
     view3d_pitch_deg: float = DEFAULT_VIEW3D_PITCH
     view3d_yaw_deg: float = DEFAULT_VIEW3D_YAW
+    # Персональный порог читаемости подписей в пикселях (2026-08-04).
+    min_label_px: float = DEFAULT_MIN_LABEL_PX
 
 
 def user_out(user: sqlite3.Row) -> UserOut:
@@ -561,6 +579,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
         changelog_unseen=changelog_unseen_of(user),
         view3d_pitch_deg=pitch,
         view3d_yaw_deg=yaw,
+        min_label_px=min_label_px_of(user),
     )
 
 

@@ -497,7 +497,7 @@ function isObjectAdmin() {
 }
 
 // Ведение контрактных справочников: контрагенты, договоры, спецификации,
-// контракты. Отдельно от isObjectAdmin — контрактовщик ими занимается, а
+// контракты. Отдельно от isObjectAdmin — комплектовщик ими занимается, а
 // зонами, чертежом и реквизитами изделий нет.
 function canEditContracting() {
   return objectRoleAtLeast("contract");
@@ -519,7 +519,7 @@ function applyRolePermissions() {
   //                          Гасится ролью на ПОКАЗЫВАЕМОМ объекте.
   //  .object-contract-only — контрактные справочники (контрагенты,
   //                          договоры, спецификации, контракты). Роль на
-  //                          показываемом объекте не ниже «Контрактовщик»
+  //                          показываемом объекте не ниже «Комплектовщик»
   //                          (2026-08-04).
   // До 2026-08-02 всё меню гасилось системной ролью, и администратор
   // объекта не видел ничего из того, что сервер ему уже разрешал: этапы C
@@ -537,9 +537,9 @@ function applyRolePermissions() {
   // пускает его в обход грантов, и на пустой системе (объектов ещё нет,
   // роли на объекте тоже) пункт иначе пропал бы у того единственного, кто
   // и должен завести первого контрагента.
-  const контрактовщик = системнаяРоль === "admin" || canEditContracting();
+  const комплектовщик = системнаяРоль === "admin" || canEditContracting();
   document.querySelectorAll("#settings-menu .object-contract-only").forEach(elm => {
-    elm.style.display = контрактовщик ? "" : "none";
+    elm.style.display = комплектовщик ? "" : "none";
   });
   // Группа без единого видимого пункта не должна оставаться заголовком,
   // раскрывающим пустую панель. Считаем ПОСЛЕ применения ролей выше и по
@@ -3384,7 +3384,7 @@ function buildOrRebuildSticker(labelGroup, element) {
   const old = state.stickerById.get(element.id);
   if (old) old.remove();
   const layout = computeStickerLayout(element);
-  noteStickerWorldFont(element.id, layout ? layout.fontSize : null); // порог читаемости, см. MIN_LABEL_READABLE_PX
+  noteStickerWorldFont(element.id, layout ? layout.fontSize : null); // порог читаемости, см. minLabelPx()
   if (!layout) {
     state.stickerById.delete(element.id);
     return null;
@@ -4200,7 +4200,19 @@ const LABEL_CULL_MARGIN_SCALE = 0.05; // запас от края экрана, 
 // Величина. Сначала поставили 8 px — живой ответ пользователя: «появляются
 // на нечитаемом расстоянии, порог поставить раза в 1,5 больше» (2026-08-04).
 // При приближении подписи возвращаются сами.
-const MIN_LABEL_READABLE_PX = 12;
+//
+// С 2026-08-04 это ПЕРСОНАЛЬНАЯ настройка (users.min_label_px, приходит в
+// /me): экран, масштаб интерфейса, работа через RDP и мощность машины у
+// всех разные, а порог — ровно про то, при каком размере подпись ещё стоит
+// рисовать. Значение ниже осталось значением ПО УМОЛЧАНИЮ; читать его
+// напрямую нельзя — только minLabelPx(), иначе настройка окажется учтённой
+// в одном режиме и не учтённой в другом.
+const DEFAULT_MIN_LABEL_PX = 12;
+
+function minLabelPx() {
+  const value = state.currentUser && state.currentUser.min_label_px;
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_MIN_LABEL_PX;
+}
 
 function noteStickerWorldFont(elementId, fontSize) {
   stickerWorldFontById.set(elementId, fontSize);
@@ -4239,12 +4251,12 @@ function updateViewportCulling(pxPerUnit) {
   if (!list.length || !state.view) return;
   const v = state.view;
   const labelsLayer = document.getElementById("labels-layer");
-  // Порог читаемости (см. MIN_LABEL_READABLE_PX) — тот же, что у 3D-наклеек.
+  // Порог читаемости (см. minLabelPx()) — тот же, что у 3D-наклеек.
   // Мировая высота строки известна для НАКЛЕЙКИ (её кегль задан в мм и от
   // зума не зависит); у запасного варианта подписи кегль экранный, то есть
   // читаемость обеспечена по построению — там порог не применяется
   // (fontSize === null).
-  const minWorldFont = MIN_LABEL_READABLE_PX / (pxPerUnit || 1);
+  const minWorldFont = minLabelPx() / (pxPerUnit || 1);
   // Мировая видимая область: viewBox.y = -max_y, поэтому мировой Y
   // восстанавливается обратным знаком (та же выкладка, что в
   // updateAxisLabelSizing).
@@ -5344,13 +5356,273 @@ function openStatusDialog(element, status) {
 
   const showContract = element.current_status === "planned" && status !== "planned";
   document.getElementById("sc-contract-section").style.display = showContract ? "" : "none";
-  if (showContract) {
-    const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
-    document.getElementById("sc-contract-select").innerHTML = contractOptionsHtml(
-      bulkContractOptionsForType(element.element_type), preselect,
-      ['<option value="">— без контракта —</option>']);
-  }
+  if (showContract) openScContractPicker(element);
   statusContractBackdrop.classList.add("open");
+}
+
+// ==================== ВЫБОР КОНТРАКТА С ОСТАТКАМИ ПО ПОЗИЦИИ ====================
+// (живой запрос 2026-08-04; в массовой смене статуса — 2026-08-04, второй
+// заход «сделай такой же интерфейс при групповой обработке»)
+//
+// Не <select>, а список: у каждого контракта три числа по ПОЗИЦИИ этого
+// изделия (тип + марка) — всего по контракту, уже разнесено, остаток, —
+// каждое своим цветом. Раскрасить части текста <option> браузер не даёт
+// (цвет там либо на всю строку, либо никак), поэтому и список.
+//
+// Отбор: сверху контракты, в которых позиция под эту МАРКУ есть; остальные
+// доступные — ниже, серым и по-прежнему выбираемыми: контрактация бывает
+// неполной, и запрет выбора означал бы «статус поставить нельзя», а не
+// «позиция не заведена» (решение пользователя 2026-08-04). Раньше отбор шёл
+// по одному ТИПУ, то есть колонну можно было разнести на контракт, где такой
+// марки нет вовсе.
+//
+// Количества приходят отдельным запросом (GET /contracts/positions): в
+// state.contracts из /plan-data их нет вовсе, а тянуть ради них весь
+// GET /contracts (16 контрактов × 406 позиций) — ровно то, из-за чего уже
+// «долго открывалось» окно массовой смены статуса. Форма показывается
+// СРАЗУ, числа доезжают следом.
+//
+// ОДНА реализация на оба места (диалог одного изделия и строка массовой
+// смены статуса) — тот же довод, что у contractOptionsHtml рядом: это один
+// и тот же выбор, и делать его в двух местах по-разному не за что.
+
+// Позиции контрактов по ТИПУ изделия, разложенные по маркам:
+// Map(марка -> Map(contract_id -> позиция)). Кэш по ТИПУ — ради массовой
+// формы: в выборке рамкой десятки марок одного типа, и запрос на каждую
+// означал бы десятки запросов на открытие формы (той самой, которая уже
+// была «долго открывается»). Сбрасывается после КАЖДОЙ записи статуса:
+// «разнесено» тогда меняется, а показать устаревшее число хуже, чем
+// сходить на сервер ещё раз.
+const contractPositionsCache = new Map();  // тип -> Promise<Map(марка -> Map(contract_id -> позиция))>
+// То же самое, но уже РАЗРЕШЁННОЕ: ячейка таблицы читает числа синхронно,
+// на сотнях строк ждать промис в каждой нельзя.
+const contractPositionsReady = new Map();
+
+function clearContractPositionsCache() {
+  contractPositionsCache.clear();
+  contractPositionsReady.clear();
+}
+
+function contractPositions(elementType) {
+  if (!contractPositionsCache.has(elementType)) {
+    const params = new URLSearchParams({ element_type: elementType });
+    contractPositionsCache.set(elementType, api(`/contracts/positions?${params}`)
+      .then((list) => {
+        const byMark = new Map();
+        for (const p of list) {
+          const key = p.mark == null ? "" : p.mark;
+          if (!byMark.has(key)) byMark.set(key, new Map());
+          byMark.get(key).set(p.contract_id, p);
+        }
+        contractPositionsReady.set(elementType, byMark);
+        return byMark;
+      })
+      .catch((e) => { contractPositionsCache.delete(elementType); throw e; }));
+  }
+  return contractPositionsCache.get(elementType);
+}
+
+// ОБЛАСТЬ выбора — что именно выбираем контрактом: одно изделие или целую
+// однотипную выборку. Марок в ней может быть несколько, и тогда числа
+// складываются по всем позициям выборки (см. aggregateContractPositions).
+function contractScopeForElement(element) {
+  return {
+    elementType: element.element_type,
+    marks: [element.mark == null ? "" : element.mark],
+    label: `${element.element_type} «${element.mark || "без марки"}»`,
+  };
+}
+
+function contractScopeForGroup(elementType, marks) {
+  const список = Array.from(new Set(marks.map(m => (m == null ? "" : m))));
+  return {
+    elementType,
+    marks: список,
+    label: список.length === 1
+      ? `${elementType} «${список[0] || "без марки"}»`
+      : `${elementType}, марок в выборке: ${список.length}`,
+  };
+}
+
+// Позиции по области: Map(contract_id -> сумма по позициям области).
+// Повреждённые считаются по (контракт, ТИП), одни и те же для всех марок,
+// поэтому берутся ОДИН раз, а не складываются — иначе остаток уехал бы вниз
+// кратно числу марок. covered — сколько марок области покрывает контракт:
+// при нескольких марках это и есть главный вопрос («он вообще про всю
+// выборку или про две позиции из двенадцати»).
+function aggregateContractPositions(byMark, marks) {
+  const итог = new Map();
+  for (const mark of marks) {
+    for (const [cid, p] of (byMark.get(mark) || new Map())) {
+      const acc = итог.get(cid)
+        || { contract_id: cid, quantity: 0, fact: 0, damaged: p.damaged, covered: 0 };
+      acc.quantity += p.quantity;
+      acc.fact += p.fact;
+      acc.covered += 1;
+      итог.set(cid, acc);
+    }
+  }
+  for (const acc of итог.values()) {
+    acc.remaining = acc.quantity - acc.fact - acc.damaged;
+    acc.exceeded = (acc.fact + acc.damaged) > acc.quantity;
+  }
+  return итог;
+}
+
+function contractPositionsForScope(scope) {
+  return contractPositions(scope.elementType)
+    .then(byMark => aggregateContractPositions(byMark, scope.marks));
+}
+
+// Три числа в конце строки контракта. Цвета: «всего» — фирменный синий,
+// «разнесено» — цвет статуса «Контрактация» (тот же, что на схеме: одно и то
+// же событие не может быть разного цвета в разных местах), «остаток» —
+// зелёный, а при превышении красный.
+// reserved — сколько изделий этой позиции уже расписано на этот контракт в
+// ТЕКУЩЕЙ, ещё не сохранённой форме массовой смены статуса (2026-08-04,
+// живой запрос). Сервер о них не знает, в «разнесено» они не попали, но
+// доступного они уже съели — поэтому число показывается отдельно, а
+// «доступно» считается за его вычетом. null — резервировать негде (диалог
+// одного изделия), тогда чисел три, как раньше.
+function contractNumsHtml(pos, reserved) {
+  const contracted = colorFor("contracting");
+  const damagedNote = pos.damaged ? `, в т.ч. списано повреждёнными ${pos.damaged}` : "";
+  const доступно = reserved == null ? pos.remaining : pos.remaining - reserved;
+  const превышено = reserved == null ? pos.exceeded : доступно < 0;
+  return `<span class="cp-nums">`
+    + `<span class="cp-total" title="Всего по этой позиции контракта">${pos.quantity}</span>`
+    + `<span style="color:${escapeHtml(contracted)}" title="Уже разнесено на изделия${damagedNote}">${pos.fact}</span>`
+    + (reserved == null ? ""
+      : `<span class="cp-reserved" title="Зарезервировано в этой форме — расписано на этот контракт, но ещё не сохранено">${reserved}</span>`)
+    + `<span class="cp-left${превышено ? " cp-over" : ""}" title="Доступно${damagedNote}">${доступно}</span>`
+    + `</span>`;
+}
+
+function contractPickerRowHtml(c, pos, selectedId, scope, reservedFor) {
+  const active = String(c.id) === String(selectedId) ? " active" : "";
+  const muted = pos ? "" : " cp-row-muted";
+  const частично = pos && scope.marks.length > 1 && pos.covered < scope.marks.length
+    ? `<span class="cp-note">${pos.covered} из ${scope.marks.length} марок</span>` : "";
+  const reserved = reservedFor ? reservedFor(c.id) : null;
+  const tail = pos ? частично + contractNumsHtml(pos, reserved) : `<span class="cp-note">нет позиции</span>`;
+  return `<button type="button" class="cp-row${active}${muted}" data-contract-id="${c.id}"`
+    + ` title="${escapeHtml(c.name)}"><span class="cp-name">${escapeHtml(contractOptionLabel(c))}</span>${tail}</button>`;
+}
+
+// Группировка «Контрагент · договор» — та же, что в выпадающих списках
+// (contractOptionsHtml): в плоском перечне строки одного контрагента
+// различаются только серединой.
+function contractPickerGroupsHtml(contracts, positions, selectedId, scope, reservedFor) {
+  const groups = new Map();
+  for (const c of contracts) {
+    const key = `${c.counterparty_id}:${c.agreement_id}`;
+    if (!groups.has(key)) groups.set(key, { label: contractGroupLabel(c), items: [] });
+    groups.get(key).items.push(c);
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => a.label.localeCompare(b.label, "ru"))
+    .map(g => `<div class="cp-group">${escapeHtml(g.label)}</div>`
+      + g.items.slice()
+        .sort((a, b) => contractOptionLabel(a).localeCompare(contractOptionLabel(b), "ru"))
+        .map(c => contractPickerRowHtml(c, positions && positions.get(c.id), selectedId, scope, reservedFor)).join(""))
+    .join("");
+}
+
+// opts: { scope, selectedId, positions|null, leading: [{value,label}] }
+// leading — пункты перед списком контрактов: у одиночного диалога это
+// «— без контракта —», у строки массовой формы к нему добавляется
+// «оставить незаполненным» (там пустое значение — отдельное состояние,
+// блокирующее «Применить»).
+function renderContractPicker(listEl, legendEl, opts) {
+  const { scope, selectedId, positions, leading, reservedFor } = opts;
+  const head = (leading || []).map(item =>
+    `<button type="button" class="cp-row${String(item.value) === String(selectedId) ? " active" : ""}"`
+    + ` data-contract-id="${escapeHtml(item.value)}"><span class="cp-name">${escapeHtml(item.label)}</span></button>`
+  ).join("");
+  if (!positions) {
+    // Числа ещё не приехали: показываем прежний отбор по типу — иначе
+    // список на мгновение оказался бы пустым, а выбор уже можно делать.
+    listEl.innerHTML = head + contractPickerGroupsHtml(
+      bulkContractOptionsForType(scope.elementType), null, selectedId, scope, reservedFor);
+    if (legendEl) legendEl.textContent = "Остатки по позициям загружаются…";
+    return;
+  }
+  const matched = state.contracts.filter(c => positions.has(c.id));
+  // «Остальные» — по-прежнему отобранные по ТИПУ (как было до этой правки),
+  // иначе серая группа разрослась бы до контрактов всех строек сразу.
+  // Единственное исключение — когда по типу нет вообще ничего: тогда лучше
+  // показать все, чем оставить форму без единого варианта.
+  const typed = bulkContractOptionsForType(scope.elementType).filter(c => !positions.has(c.id));
+  const rest = (matched.length || typed.length) ? typed : state.contracts.slice();
+  let html = head;
+  if (matched.length) html += contractPickerGroupsHtml(matched, positions, selectedId, scope, reservedFor);
+  if (rest.length) {
+    const heading = typed.length
+      ? `Нет позиции под ${scope.label}`
+      : `Ни в одном контракте нет позиций типа «${scope.elementType}»`;
+    html += `<div class="cp-group">${escapeHtml(heading)}</div>`
+      + contractPickerGroupsHtml(rest, positions, selectedId, scope, reservedFor);
+  }
+  listEl.innerHTML = html;
+  // Уже назначенный (или подставленный по умолчанию) контракт может оказаться
+  // в самом низу списка — подкручиваем к нему, иначе выбор выглядит как
+  // «без контракта».
+  const active = listEl.querySelector(".cp-row.active");
+  if (active) active.scrollIntoView({ block: "nearest" });
+  if (!legendEl) return;
+  const по = scope.marks.length > 1
+    ? `Числа по позициям выборки (${escapeHtml(scope.label)})`
+    : `Числа по позиции ${escapeHtml(scope.label)}`;
+  legendEl.innerHTML = matched.length
+    ? `${по}: <span class="cp-total">всего</span> · `
+      + `<span style="color:${escapeHtml(colorFor("contracting"))}">разнесено</span> · `
+      + (reservedFor ? `<span class="cp-reserved">зарезервировано в этой форме</span> · ` : "")
+      + `<span class="cp-left">доступно</span>.`
+    : `Ни в одном доступном контракте нет позиции под ${escapeHtml(scope.label)} — `
+      + `выбрать контракт всё равно можно.`;
+}
+
+// Заполняет список и подтягивает числа. onPick зовётся на КАЖДЫЙ выбор;
+// счётчик seq нужен, чтобы ответ по уже закрытому (или переоткрытому с
+// другой областью) окну молча отбрасывался.
+function mountContractPicker(listEl, legendEl, opts) {
+  const state_ = { selectedId: opts.selectedId, positions: null };
+  const draw = () => renderContractPicker(listEl, legendEl, {
+    scope: opts.scope, selectedId: state_.selectedId,
+    positions: state_.positions, leading: opts.leading, reservedFor: opts.reservedFor,
+  });
+  draw();
+  const seq = ++mountContractPicker.seq;
+  contractPositionsForScope(opts.scope).then((positions) => {
+    if (seq !== mountContractPicker.seq) return;
+    state_.positions = positions;
+    draw();
+  }).catch(() => {
+    if (seq !== mountContractPicker.seq || !legendEl) return;
+    legendEl.textContent = "Остатки по позициям загрузить не удалось — показаны все контракты по типу изделия.";
+  });
+  listEl.onclick = (e) => {
+    const row = e.target.closest(".cp-row");
+    if (!row) return;
+    state_.selectedId = row.dataset.contractId;
+    listEl.querySelectorAll(".cp-row").forEach(r => r.classList.toggle("active", r === row));
+    if (opts.onPick) opts.onPick(state_.selectedId, state_.positions);
+  };
+  return state_;
+}
+mountContractPicker.seq = 0;
+
+// ---------- выбор контракта в диалоге смены статуса одного изделия ----------
+const scContractList = document.getElementById("sc-contract-list");
+let scContractId = "";     // "" — «без контракта»
+
+function openScContractPicker(element) {
+  scContractId = String(element.contract_id || state.defaultContracts[element.element_type] || "");
+  mountContractPicker(scContractList, document.getElementById("sc-contract-legend"), {
+    scope: contractScopeForElement(element), selectedId: scContractId,
+    leading: [{ value: "", label: "— без контракта —" }],
+    onPick: (value) => { scContractId = value; },
+  });
 }
 document.getElementById("sc-cancel").addEventListener("click", () => {
   pendingStatusChange = null;
@@ -5363,9 +5635,7 @@ document.getElementById("sc-datetime-clear").addEventListener("click", () => {
 document.getElementById("sc-confirm").addEventListener("click", async () => {
   if (!pendingStatusChange) return;
   const showContract = document.getElementById("sc-contract-section").style.display !== "none";
-  const contractId = showContract
-    ? (document.getElementById("sc-contract-select").value ? Number(document.getElementById("sc-contract-select").value) : null)
-    : undefined;
+  const contractId = showContract ? (scContractId ? Number(scContractId) : null) : undefined;
   const explicitChangedAt = datetimeLocalToServer(document.getElementById("sc-datetime").value);
   const { element, status } = pendingStatusChange;
   pendingStatusChange = null;
@@ -5391,6 +5661,7 @@ async function doApplyStatus(element, status, explicitContractId, explicitChange
     });
     Object.assign(element, updated);
     state.byId.set(element.id, element);
+    clearContractPositionsCache(); // «разнесено» по позиции только что изменилось
     styleShape(state.shapeById.get(element.id), element);
     updateElementSubLabel(element); // статус мог войти/выйти из диапазона, где допстрока видна
     renderLegend();
@@ -5507,9 +5778,16 @@ function updateBulkStatusTitle() {
 // выбран ("— выберите —", value="") — "без контракта" (value="none") это
 // ОСМЫСЛЕННЫЙ выбор и валидацию проходит, см. Docs/backlog.md.
 function updateBulkStatusValidation() {
-  const selects = document.querySelectorAll("#bulk-status-tbody .bulk-row-contract");
-  const emptyCount = Array.from(selects).filter(s => s.value === "").length;
-  document.getElementById("bulk-status-apply").disabled = emptyCount > 0 || selects.length === 0;
+  // Резервы и шапка по маркам пересчитываются ЗДЕСЬ — это единственное
+  // место, куда сходятся все изменения формы (выбор в строке,
+  // распределение по марке, удаление строки).
+  rebuildBulkReservations();
+  renderBulkFillMarks();
+  // .bulk-row-contract с 2026-08-04 — кнопка, а не <select>; значение
+  // по-прежнему читается через .value (у <button> это свойство есть).
+  const cells = document.querySelectorAll("#bulk-status-tbody .bulk-row-contract");
+  const emptyCount = Array.from(cells).filter(s => s.value === "").length;
+  document.getElementById("bulk-status-apply").disabled = emptyCount > 0 || cells.length === 0;
   document.getElementById("bulk-status-error").textContent = emptyCount > 0 ? `Не указан контракт у ${emptyCount} элемент(ов)` : "";
   updateBulkContractWarning();
 }
@@ -5561,6 +5839,76 @@ function updateBulkContractWarning() {
   warnEl.textContent = problems.length ? `Превышение остатка контракта — ${problems.join("; ")}` : "";
 }
 
+// Подпись ячейки контракта: наименование (короткое, как в списке) плюс те
+// же три числа по позиции этого изделия, если остатки уже загружены. Числа
+// берутся ИЗ КЭША синхронно (contractPositionsCache) — ячейка не может
+// ждать сеть на каждую из сотен строк; пока кэш пуст, показывается одно
+// наименование, а числа появляются, когда пользователь откроет выбор.
+function updateBulkRowContractButton(button, element) {
+  const value = button.value;
+  button.classList.toggle("is-empty", value === "");
+  if (value === "") {
+    button.innerHTML = `<span class="cp-name">— выберите контракт —</span>`;
+    button.title = "Контракт не выбран";
+    return;
+  }
+  if (value === "none") {
+    button.innerHTML = `<span class="cp-name">без контракта</span>`;
+    button.title = "Изделие переводится без привязки к контракту";
+    return;
+  }
+  const contract = state.contracts.find(c => String(c.id) === value);
+  button.title = contract ? contract.name : `#${value}`;
+  const pos = bulkRowPositionFor(element, Number(value));
+  button.innerHTML = `<span class="cp-name">${escapeHtml(contract ? contractOptionLabel(contract) : `#${value}`)}</span>`
+    + (pos ? contractNumsHtml(pos) : "");
+}
+
+// Позиция под изделие из уже загруженного кэша — без сети и без промисов.
+function bulkRowPositionFor(element, contractId) {
+  const byMark = contractPositionsReady.get(element.element_type);
+  const byContract = byMark && byMark.get(element.mark == null ? "" : element.mark);
+  return byContract ? byContract.get(contractId) || null : null;
+}
+
+// Выбор контракта для одной строки массовой формы — тем же списком, что и
+// у одного изделия. Выбор мгновенно применяется и закрывает окно: это
+// именно выбор из списка, отдельная кнопка «ОК» была бы вторым нажатием
+// ни за чем (отменить можно, ничего не выбрав).
+const contractPickBackdrop = document.getElementById("contract-pick-backdrop");
+let contractPickTarget = null;
+
+function openRowContractPicker(element, button) {
+  contractPickTarget = { element, button };
+  document.getElementById("cp-element").textContent =
+    `${element.mark || `#${element.id}`} · ${element.element_type}`;
+  mountContractPicker(document.getElementById("cp-list"), document.getElementById("cp-legend"), {
+    scope: contractScopeForElement(element), selectedId: button.value,
+    // «Зарезервировано» — что уже расписано на этот контракт ДРУГИМИ строками
+    // формы (своя не в счёт, см. bulkReservedFor).
+    reservedFor: (contractId) => bulkReservedFor(element.element_type, element.mark, contractId, element),
+    // «Оставить незаполненным» — отдельный пункт: пустое значение в строке
+    // блокирует «Применить», и вернуться к нему из окна должно быть можно.
+    leading: [
+      { value: "none", label: "— без контракта —" },
+      { value: "", label: "— не выбрано (строка останется незаполненной) —" },
+    ],
+    onPick: (value) => {
+      button.value = value;
+      updateBulkRowContractButton(button, element);
+      updateBulkStatusValidation();
+      contractPickBackdrop.classList.remove("open");
+      contractPickTarget = null;
+    },
+  });
+  contractPickBackdrop.classList.add("open");
+}
+
+document.getElementById("cp-cancel").addEventListener("click", () => {
+  contractPickTarget = null;
+  contractPickBackdrop.classList.remove("open");
+});
+
 function renderBulkStatusTable() {
   const tbody = document.getElementById("bulk-status-tbody");
   tbody.innerHTML = "";
@@ -5585,14 +5933,17 @@ function renderBulkStatusTable() {
     statusTd.appendChild(badge);
 
     const contractTd = document.createElement("td");
-    const select = document.createElement("select");
-    select.className = "bulk-row-contract";
-    const preselect = element.contract_id || state.defaultContracts[element.element_type] || "";
-    select.innerHTML = contractOptionsHtml(
-      bulkContractOptionsForType(element.element_type), preselect,
-      ['<option value="">— выберите —</option>', '<option value="none">без контракта</option>']);
-    select.addEventListener("change", updateBulkStatusValidation);
-    contractTd.appendChild(select);
+    // Кнопка, а не <select> (2026-08-04): выбор идёт тем же списком с
+    // остатками по позиции, что и у одного изделия (openRowContractPicker).
+    // Значение по-прежнему лежит в .value — как у select'а, которым эта
+    // ячейка была: "" — не выбрано, "none" — без контракта, иначе id.
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "bulk-row-contract";
+    button.value = String(element.contract_id || state.defaultContracts[element.element_type] || "");
+    button.addEventListener("click", () => openRowContractPicker(element, button));
+    updateBulkRowContractButton(button, element);
+    contractTd.appendChild(button);
 
     const removeTd = document.createElement("td");
     const removeBtn = document.createElement("button");
@@ -5651,16 +6002,32 @@ function openBulkStatusModal() {
   logClientEvent("bulk_status_button_click", { requestId: bulkStatusRequestId });
   document.getElementById("bulk-status-select").innerHTML =
     state.statusOrder.map(s => `<option value="${s}">${escapeHtml(state.statusLabels[s])}</option>`).join("");
-  // Перечисление типов элементов контракта убрано из подписи (живой запрос
-  // пользователя) — остаётся наименование, разложенное по группам
-  // «Контрагент · договор» (см. contractOptionsHtml).
-  document.getElementById("bulk-fill-contract-select").innerHTML = contractOptionsHtml(
-    state.contracts, "", ['<option value="">— выберите контракт —</option>']);
-
+  bulkFillValues = new Map();   // выбор контракта по маркам — от прошлого открытия не наследуется
   bulkContractLines = []; // от прошлого открытия — до прихода свежих остатков предупреждений не показываем
+  clearContractPositionsCache(); // «разнесено» могло измениться с прошлого открытия
   renderBulkStatusTable();
   bulkStatusBackdrop.classList.add("open");
   opened(); // форма на экране — засекаем, сколько заняло от нажатия
+
+  // Позиции — по одному запросу на КАЖДЫЙ тип в выборке (обычно один-три),
+  // а не на строку: числа нужны сразу во всех ячейках, а типов в выборке
+  // единицы. Форма при этом уже на экране — ждать их она не должна.
+  const типы = new Set();
+  document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
+    const element = state.byId.get(Number(tr.dataset.elementId));
+    if (element) типы.add(element.element_type);
+  });
+  for (const тип of типы) {
+    contractPositions(тип).then(() => {
+      document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
+        const element = state.byId.get(Number(tr.dataset.elementId));
+        if (element && element.element_type === тип) {
+          updateBulkRowContractButton(tr.querySelector(".bulk-row-contract"), element);
+        }
+      });
+      renderBulkFillMarks();   // числа приехали — шапка показывает их в тех же строках
+    }).catch(() => { /* числа не показываем, выбор при этом работает */ });
+  }
 
   const requestId = ++bulkContractRequestId;
   api("/contracts").then(contracts => {
@@ -5677,23 +6044,207 @@ function openBulkStatusModal() {
 
 document.getElementById("bulk-status-cancel").addEventListener("click", () => bulkStatusBackdrop.classList.remove("open"));
 
-// Заполняет контрактом из шапки только строки, у которых контракт ещё не
-// выбран ("— выберите —"), и только если этот контракт подходит типу
-// элемента строки — иначе строка пропускается (не перезаписываем то, что
-// уже выбрано/подходит другому типу), см. Docs/backlog.md.
-document.getElementById("bulk-fill-contract-apply").addEventListener("click", () => {
-  const value = document.getElementById("bulk-fill-contract-select").value;
-  if (!value) return;
-  let filled = 0, skipped = 0;
+// ---------- контракты по МАРКАМ выборки (2026-08-04, живой запрос) ----------
+//
+// В шапке формы — строка на каждую позицию выборки («тип + марка», ведь
+// именно так задана позиция контракта): подпись «Контракт для МАРКИ», тот же
+// список с остатками, что и у одного изделия, кнопка «Распределить» и
+// счётчик изделий этой марки, которым контракт ещё не назначен.
+//
+// «Распределить» проставляет выбранный контракт строкам этой марки, у
+// которых контракт ещё НЕ выбран (выбранное вручную не перезаписывается —
+// решение пользователя), и НЕ БОЛЬШЕ, чем доступно по позиции: доступно =
+// остаток контракта минус уже зарезервированное в этой же форме. Не хватило
+// — остаток строк остаётся пустым, и операция повторяется с другим
+// контрактом; счётчик рядом показывает, сколько ещё осталось.
+//
+// Прежний общий «Контракт для незаполненных строк» + «Заполнить пустые»
+// убран: он делал то же самое, но вслепую — не глядя на остаток, и два
+// механизма заполнения рядом спорили бы друг с другом.
+let bulkFillValues = new Map();     // ключ позиции -> выбранный контракт ("", "none" или id)
+let bulkReservations = new Map();   // ключ (позиция + контракт) -> сколько расписано в этой форме
+
+const bulkPositionKey = (elementType, mark) => JSON.stringify([elementType, mark == null ? "" : mark]);
+const bulkReservationKey = (elementType, mark, contractId) =>
+  JSON.stringify([elementType, mark == null ? "" : mark, contractId]);
+
+// Позиции выборки в порядке появления строк: [{key, elementType, mark, label}].
+function bulkPositions() {
+  const позиции = new Map();
+  const типы = new Set();
   document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
-    const select = tr.querySelector(".bulk-row-contract");
-    if (select.value !== "") return;
-    const optionExists = Array.from(select.options).some(o => o.value === value);
-    if (optionExists) { select.value = value; filled++; } else { skipped++; }
+    const element = state.byId.get(Number(tr.dataset.elementId));
+    if (!element) return;
+    типы.add(element.element_type);
+    const key = bulkPositionKey(element.element_type, element.mark);
+    if (!позиции.has(key)) {
+      позиции.set(key, { key, elementType: element.element_type, mark: element.mark });
+    }
   });
+  // Тип в подписи — только когда типов в выборке несколько: у одного типа он
+  // повторялся бы в каждой строке шапки, ничего не различая.
+  for (const п of позиции.values()) {
+    п.label = (типы.size > 1 ? `${п.elementType} ` : "") + `«${п.mark || "без марки"}»`;
+  }
+  return Array.from(позиции.values());
+}
+
+// Сколько изделий каждой позиции расписано на каждый контракт ПРЯМО СЕЙЧАС в
+// форме. Строка, у которой этот контракт УЖЕ стоит в базе, не считается: она
+// давно учтена сервером в «разнесено», и посчитать её ещё раз значило бы
+// вычесть одно и то же дважды (тот же приём, что в updateBulkContractWarning).
+function rebuildBulkReservations() {
+  bulkReservations = new Map();
+  document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
+    const element = state.byId.get(Number(tr.dataset.elementId));
+    const value = tr.querySelector(".bulk-row-contract").value;
+    if (!element || !value || value === "none") return;
+    const contractId = Number(value);
+    if (element.contract_id === contractId) return;
+    const key = bulkReservationKey(element.element_type, element.mark, contractId);
+    bulkReservations.set(key, (bulkReservations.get(key) || 0) + 1);
+  });
+}
+
+function bulkReservedFor(elementType, mark, contractId, exceptElement) {
+  let n = bulkReservations.get(bulkReservationKey(elementType, mark, contractId)) || 0;
+  // Своя же строка не должна показываться себе как чужой резерв: открывая
+  // выбор у изделия, человек смотрит, что доступно ЕМУ.
+  if (exceptElement) {
+    const свой = document.querySelector(`#bulk-status-tbody tr[data-element-id="${exceptElement.id}"] .bulk-row-contract`);
+    if (свой && свой.value === String(contractId) && exceptElement.contract_id !== contractId) n -= 1;
+  }
+  return Math.max(0, n);
+}
+
+// Позиция под (тип, марку) из уже загруженного кэша — без сети и промисов.
+function positionForMark(elementType, mark, contractId) {
+  const byMark = contractPositionsReady.get(elementType);
+  const byContract = byMark && byMark.get(mark == null ? "" : mark);
+  return byContract ? byContract.get(contractId) || null : null;
+}
+
+// Сколько ещё можно расписать на контракт по этой позиции. null — позиции у
+// контракта нет (или числа ещё не приехали): ограничивать нечем, ведём себя
+// как раньше и пропускаем сколько просят.
+function bulkAvailableFor(elementType, mark, contractId) {
+  const pos = positionForMark(elementType, mark, contractId);
+  if (!pos) return null;
+  return pos.remaining - bulkReservedFor(elementType, mark, contractId);
+}
+
+function renderBulkFillMarks() {
+  const box = document.getElementById("bulk-fill-marks");
+  box.innerHTML = "";
+  for (const позиция of bulkPositions()) {
+    const value = bulkFillValues.get(позиция.key) || "";
+    const пустых = Array.from(document.querySelectorAll("#bulk-status-tbody tr")).filter(tr => {
+      const element = state.byId.get(Number(tr.dataset.elementId));
+      return element && bulkPositionKey(element.element_type, element.mark) === позиция.key
+        && tr.querySelector(".bulk-row-contract").value === "";
+    }).length;
+
+    const row = document.createElement("div");
+    row.className = "bfm-row";
+    row.dataset.key = позиция.key;
+
+    const label = document.createElement("span");
+    label.className = "bfm-label";
+    label.textContent = `Контракт для ${позиция.label}`;
+
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "bulk-row-contract bfm-pick";
+    pick.value = value;
+    updateBulkFillButton(pick, позиция);
+
+    const apply = document.createElement("button");
+    apply.className = "btn btn-sm btn-secondary";
+    apply.textContent = "Распределить";
+    apply.disabled = !value || пустых === 0;
+    apply.addEventListener("click", () => distributeBulkMark(позиция));
+
+    const left = document.createElement("span");
+    left.className = "bfm-left" + (пустых ? "" : " bfm-left-done");
+    left.textContent = пустых ? `без контракта: ${пустых}` : "все назначены";
+
+    pick.addEventListener("click", () => openBulkMarkPicker(позиция));
+    row.append(label, pick, apply, left);
+    box.appendChild(row);
+  }
+}
+
+function updateBulkFillButton(pick, позиция) {
+  const value = pick.value;
+  pick.classList.toggle("is-empty", value === "");
+  if (!value) {
+    pick.innerHTML = `<span class="cp-name">— выберите контракт —</span>`;
+    pick.title = "Контракт для распределения по этой марке";
+    return;
+  }
+  if (value === "none") {
+    pick.innerHTML = `<span class="cp-name">без контракта</span>`;
+    pick.title = "Изделия этой марки переводятся без привязки к контракту";
+    return;
+  }
+  const contract = state.contracts.find(c => String(c.id) === value);
+  pick.title = contract ? contract.name : `#${value}`;
+  const pos = positionForMark(позиция.elementType, позиция.mark, Number(value));
+  const reserved = bulkReservedFor(позиция.elementType, позиция.mark, Number(value));
+  pick.innerHTML = `<span class="cp-name">${escapeHtml(contract ? contractOptionLabel(contract) : `#${value}`)}</span>`
+    + (pos ? contractNumsHtml(pos, reserved) : "");
+}
+
+function openBulkMarkPicker(позиция) {
+  const scope = contractScopeForGroup(позиция.elementType, [позиция.mark]);
+  document.getElementById("cp-element").textContent =
+    `Распределение по марке: ${позиция.label}`;
+  mountContractPicker(document.getElementById("cp-list"), document.getElementById("cp-legend"), {
+    scope, selectedId: bulkFillValues.get(позиция.key) || "",
+    leading: [
+      { value: "", label: "— не выбрано —" },
+      { value: "none", label: "— без контракта —" },
+    ],
+    reservedFor: (contractId) => bulkReservedFor(позиция.elementType, позиция.mark, contractId),
+    onPick: (value) => {
+      bulkFillValues.set(позиция.key, value);
+      renderBulkFillMarks();
+      contractPickBackdrop.classList.remove("open");
+    },
+  });
+  contractPickBackdrop.classList.add("open");
+}
+
+function distributeBulkMark(позиция) {
+  const value = bulkFillValues.get(позиция.key) || "";
+  if (!value) return;
+  const свободные = Array.from(document.querySelectorAll("#bulk-status-tbody tr")).filter(tr => {
+    const element = state.byId.get(Number(tr.dataset.elementId));
+    return element && bulkPositionKey(element.element_type, element.mark) === позиция.key
+      && tr.querySelector(".bulk-row-contract").value === "";
+  });
+  // «Без контракта» ничего не расходует — ограничения нет.
+  const доступно = value === "none" ? null
+    : bulkAvailableFor(позиция.elementType, позиция.mark, Number(value));
+  const лимит = доступно == null ? свободные.length : Math.max(0, доступно);
+  const назначить = свободные.slice(0, лимит);
+  for (const tr of назначить) {
+    const element = state.byId.get(Number(tr.dataset.elementId));
+    const button = tr.querySelector(".bulk-row-contract");
+    button.value = value;
+    updateBulkRowContractButton(button, element);
+  }
   updateBulkStatusValidation();
-  showToast(`Заполнено ${filled}${skipped ? `, пропущено ${skipped} (тип не подходит)` : ""}`, "info");
-});
+  const осталось = свободные.length - назначить.length;
+  if (!назначить.length) {
+    showToast(`По позиции ${позиция.label} в контракте не осталось доступного — выберите другой контракт`, "warning");
+  } else if (осталось) {
+    showToast(`Назначено ${назначить.length}, осталось без контракта ${осталось} — в контракте больше нет доступного, `
+      + `выберите для них другой контракт`, "warning");
+  } else {
+    showToast(`Назначено ${назначить.length}`, "info");
+  }
+}
 
 document.getElementById("bulk-status-apply").addEventListener("click", async () => {
   const status = document.getElementById("bulk-status-select").value;
@@ -5722,6 +6273,7 @@ document.getElementById("bulk-status-apply").addEventListener("click", async () 
         updateElementSubLabel(existing);
       }
     }
+    clearContractPositionsCache(); // «разнесено» по позициям только что изменилось
     renderLegend();
     bulkStatusBackdrop.classList.remove("open");
     clearMultiSelection();
@@ -5791,9 +6343,10 @@ function renderBulkPlannedDateTable() {
 
 document.getElementById("bulk-planned-date-cancel").addEventListener("click", () => bulkPlannedDateBackdrop.classList.remove("open"));
 
-// "Заполнить одной датой" — тот же приём удобства, что уже был у
-// "bulk-fill-contract" в массовой смене статуса: заполняет ТОЛЬКО пустые
-// поля, не перезаписывает уже введённые построчно значения.
+// "Заполнить одной датой" — тот же приём удобства, что и «Распределить» по
+// марке в массовой смене статуса: заполняет ТОЛЬКО пустые поля, не
+// перезаписывает уже введённые построчно значения. Предела здесь нет —
+// плановая дата ничего не расходует, в отличие от позиции контракта.
 document.getElementById("bulk-fill-planned-date-apply").addEventListener("click", () => {
   const value = document.getElementById("bulk-fill-planned-date").value;
   if (!value) return;
@@ -6590,6 +7143,8 @@ document.getElementById("menu-view-mode").addEventListener("click", () => {
   const текущий = menuViewMode();
   document.querySelectorAll('input[name="menu-view"]').forEach(r => { r.checked = r.value === текущий; });
   renderSkinChoices();
+  document.getElementById("min-label-px").value = minLabelPx();
+  document.getElementById("min-label-px-status").textContent = "";
   const { pitch, yaw } = initial3DAngles();
   document.getElementById("view3d-pitch").value = pitch;
   document.getElementById("view3d-yaw").value = yaw;
@@ -6627,6 +7182,36 @@ document.getElementById("view3d-apply").addEventListener("click", async () => {
     статус.textContent = "Не удалось сохранить: " + e.message;
   }
 });
+// Порог показа подписей. Тоже на СЕРВЕРЕ и за пользователем — настройка
+// про его экран и его машину, а не про эту вкладку браузера (за одной
+// машиной на площадке работают посменно). Применяется сразу в том режиме,
+// который сейчас открыт: 2D пересчитывает отсечение через
+// updateSizesForZoom, 3D — константу шейдера внутри кадра.
+document.getElementById("min-label-px-apply").addEventListener("click", async () => {
+  const статус = document.getElementById("min-label-px-status");
+  const value = Number(document.getElementById("min-label-px").value);
+  if (!Number.isFinite(value)) {
+    статус.textContent = "Порог задаётся числом";
+    return;
+  }
+  try {
+    const обновлён = await api(`/users/${state.currentUser.id}/min-label-px`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_label_px: value }),
+    });
+    state.currentUser.min_label_px = обновлён.min_label_px;
+    document.getElementById("min-label-px").value = обновлён.min_label_px;
+    статус.textContent = "Сохранено";
+    // Константу шейдера обновляем ЯВНО, а не только заказом кадра: кадр
+    // рисуется через requestAnimationFrame, а он в фоновой вкладке не
+    // срабатывает вовсе — настройка бы «не применилась» до возврата.
+    if (state.view3d.active) { updateDecalReadabilityUniform(); requestRender3D(); }
+    else updateSizesForZoom();
+  } catch (e) {
+    статус.textContent = "Не удалось сохранить: " + e.message;
+  }
+});
+
 document.querySelectorAll('input[name="menu-view"]').forEach(r => r.addEventListener("change", () => {
   if (r.checked) localStorage.setItem(MENU_VIEW_KEY, r.value);
 }));
@@ -8734,7 +9319,7 @@ document.getElementById("subtypes-close").addEventListener("click", () => subtyp
 // действует роль сверху, и она тут же подписана, чтобы результат был виден
 // без вычислений в уме.
 const OBJECT_ROLE_LABELS = {
-  view: "Просмотр", user: "Работа со статусами", contract: "Контрактовщик",
+  view: "Просмотр", user: "Работа со статусами", contract: "Комплектовщик",
   admin: "Полные права на объекте",
 };
 
@@ -9012,6 +9597,286 @@ document.getElementById("user-password-save").addEventListener("click", async ()
     document.getElementById("user-password-error").textContent = e.message;
   }
 });
+
+// ============ ГРУППОВАЯ НАСТРОЙКА ПРАВ (2026-08-04, живой запрос) ============
+//
+// Та же модель прав, что и в дереве карточки пользователя (см. выше,
+// ueAccess/collectAccessGrants), но развёрнутая на ВСЕХ сразу: по вертикали
+// люди, по горизонтали уровни — «Система» (системная роль), «Все проекты»,
+// каждый проект и его объекты. Отдельный экран нужен потому, что вопрос
+// здесь другой: не «что может этот человек», а «кто и что может на этой
+// стройке» — сравнение по столбцу, а в карточке его не сделать.
+//
+// Правки НЕ отправляются по ячейке: набор грантов задаётся СОСТОЯНИЕМ
+// целиком (PUT /users/{id}/access), и слать его на каждое движение мыши
+// значит превратить одну форму в десятки запросов. Копим и сохраняем разом.
+const accessMatrixBackdrop = document.getElementById("access-matrix-backdrop");
+let amUsers = [];                 // полные записи из GET /users (нужны для PATCH роли)
+let amAccess = new Map();         // userId -> Map(ключ уровня -> роль)
+let amSystemRole = new Map();     // userId -> системная роль
+let amOriginal = "";              // снимок для определения «что изменилось»
+
+function amSnapshot() {
+  return JSON.stringify(amUsers.map(u => [
+    u.id, amSystemRole.get(u.id),
+    Array.from(amAccess.get(u.id) || new Map()).sort(),
+  ]));
+}
+
+// Уровни-колонки в том же порядке, что и дерево в карточке: общий, потом
+// проект и сразу его объекты.
+function amColumns() {
+  const columns = [{ key: ACCESS_ALL, label: "Все проекты", kind: "all" }];
+  for (const проект of state.projects.filter(p => p.id)) {
+    columns.push({ key: accessProjectKey(проект.id), label: проект.name, kind: "project",
+                   projectId: проект.id, objects: проект.objects.length });
+    for (const объект of проект.objects) {
+      columns.push({ key: accessObjectKey(проект.id, объект.id), label: объект.name,
+                     kind: "object", projectId: проект.id });
+    }
+  }
+  return columns;
+}
+
+// Роль, которая действует на уровне, если он сам «не задан», — то же
+// правило «частный перекрывает общий», что и в дереве карточки
+// (accessEffectiveRole), только для конкретного пользователя.
+function amInherited(userId, column) {
+  const роли = amAccess.get(userId) || new Map();
+  if (column.kind === "all") return null;
+  if (column.kind === "project") return роли.get(ACCESS_ALL) || null;
+  const проект = роли.get(accessProjectKey(column.projectId));
+  return проект || роли.get(ACCESS_ALL) || null;
+}
+
+function amRoleSelectHtml(userId, column, disabled) {
+  const value = (amAccess.get(userId) || new Map()).get(column.key) || "";
+  const опции = ['<option value="">— не задано —</option>'].concat(
+    Object.entries(OBJECT_ROLE_LABELS).map(([v, l]) =>
+      `<option value="${v}"${v === value ? " selected" : ""}>${escapeHtml(l)}</option>`));
+  const унаследовано = value ? null : amInherited(userId, column);
+  return `<select data-am-user="${userId}" data-am-key="${escapeHtml(column.key)}"`
+    + `${disabled ? " disabled" : ""}>${опции.join("")}</select>`
+    + (унаследовано
+      ? `<span class="am-inherited">действует: ${escapeHtml(OBJECT_ROLE_LABELS[унаследовано])}</span>`
+      : "");
+}
+
+function renderAccessMatrix() {
+  const columns = amColumns();
+  const проекты = state.projects.filter(p => p.id);
+  // Две строки заголовка: проект и его объекты должны читаться как одна
+  // группа, иначе в длинном ряду одинаковых названий («Объект-1»,
+  // «Объект-1») не видно, чьи они.
+  let head = `<tr><th class="am-user" rowspan="2">Пользователь</th>`
+    + `<th rowspan="2">Система</th><th rowspan="2">Все проекты</th>`;
+  for (const проект of проекты) {
+    head += `<th class="am-group" colspan="${1 + проект.objects.length}">${escapeHtml(проект.name)}</th>`;
+  }
+  head += `<th rowspan="2"></th></tr><tr>`;
+  for (const проект of проекты) {
+    head += `<th class="am-sub">весь проект</th>`;
+    for (const объект of проект.objects) head += `<th class="am-sub">${escapeHtml(объект.name)}</th>`;
+  }
+  head += `</tr>`;
+
+  const rows = amUsers.map((u) => {
+    const системный = amSystemRole.get(u.id) === "admin";
+    const системныйSelect = `<select data-am-user="${u.id}" data-am-system="1">`
+      + Object.entries(ROLE_LABELS).map(([v, l]) =>
+        `<option value="${v}"${amSystemRole.get(u.id) === v ? " selected" : ""}>${escapeHtml(l)}</option>`).join("")
+      + `</select>`;
+    const ячейки = columns.map(c => `<td>${amRoleSelectHtml(u.id, c, системный)}</td>`).join("");
+    // Кнопка — В КОНЦЕ строки (как просили): слева читают, кто это и что
+    // ему выдано, а «показать подробно» — уже итог этого чтения.
+    return `<tr data-am-row="${u.id}"${системный ? ' class="am-sysadmin"' : ""}>`
+      + `<td class="am-user">${escapeHtml(u.display_name)}</td>`
+      + `<td>${системныйSelect}</td>${ячейки}`
+      + `<td><button class="btn btn-sm btn-secondary" data-am-rights="${u.id}"`
+      + ` title="Что именно доступно этому человеку">Матрица прав</button></td></tr>`;
+  }).join("");
+
+  document.getElementById("access-matrix-table").innerHTML =
+    `<thead>${head}</thead><tbody>${rows}</tbody>`;
+  amUpdateStatus();
+}
+
+function amUpdateStatus() {
+  const изменено = amSnapshot() !== amOriginal;
+  document.getElementById("access-matrix-save").disabled = !изменено;
+  document.getElementById("access-matrix-status").textContent = изменено ? "Есть несохранённые изменения" : "";
+}
+
+document.getElementById("access-matrix-table").addEventListener("change", (e) => {
+  const sel = e.target.closest("select");
+  if (!sel) return;
+  const userId = Number(sel.dataset.amUser);
+  if (sel.dataset.amSystem) {
+    amSystemRole.set(userId, sel.value);
+    // Администратор сервиса проходит всё в обход грантов — его строка
+    // становится нередактируемой, и это видно сразу, а не после сохранения.
+    renderAccessMatrix();
+    return;
+  }
+  const роли = amAccess.get(userId) || new Map();
+  if (sel.value) роли.set(sel.dataset.amKey, sel.value); else роли.delete(sel.dataset.amKey);
+  amAccess.set(userId, роли);
+  // Целиком: снятие роли у проекта меняет подписи «действует» у всех его
+  // объектов, точечной правкой это не выразить (тот же довод, что в дереве).
+  renderAccessMatrix();
+});
+
+document.getElementById("access-matrix-table").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-am-rights]");
+  if (btn) openRightsMatrix(Number(btn.dataset.amRights));
+});
+
+async function openAccessMatrix() {
+  document.getElementById("access-matrix-error").textContent = "";
+  const [users, matrix] = await Promise.all([api("/users"), api("/users/access-matrix")]);
+  amUsers = users;
+  amAccess = new Map();
+  amSystemRole = new Map();
+  for (const u of users) {
+    amSystemRole.set(u.id, u.role);
+    const роли = new Map();
+    for (const g of (matrix.grants[String(u.id)] || [])) {
+      if (g.project_id == null) роли.set(ACCESS_ALL, g.role);
+      else if (g.object_id == null) роли.set(accessProjectKey(g.project_id), g.role);
+      else роли.set(accessObjectKey(g.project_id, g.object_id), g.role);
+    }
+    amAccess.set(u.id, роли);
+  }
+  amOriginal = amSnapshot();
+  renderAccessMatrix();
+  accessMatrixBackdrop.classList.add("open");
+}
+
+document.getElementById("menu-access-matrix").addEventListener("click", async () => {
+  try {
+    await openAccessMatrix();
+  } catch (e) {
+    showToast("Не удалось открыть права: " + e.message, "warning");
+  }
+});
+document.getElementById("access-matrix-close").addEventListener("click", () =>
+  accessMatrixBackdrop.classList.remove("open"));
+
+document.getElementById("access-matrix-save").addEventListener("click", async () => {
+  const ошибка = document.getElementById("access-matrix-error");
+  ошибка.textContent = "";
+  // Последний администратор сервиса: если снять роль у всех, чинить права
+  // станет некому — восстанавливать придётся на самом сервере.
+  if (!amUsers.some(u => amSystemRole.get(u.id) === "admin")
+      && !confirm("После сохранения в системе не останется ни одного администратора сервиса.\n\n"
+                  + "Выдать права будет некому — учётную запись придётся восстанавливать на "
+                  + "сервере (scripts/reset_password.py).\n\nВсё равно сохранить?")) return;
+  const кнопка = document.getElementById("access-matrix-save");
+  кнопка.disabled = true;
+  try {
+    for (const u of amUsers) {
+      const гранты = Array.from(amAccess.get(u.id) || new Map()).map(([key, роль]) => {
+        if (key === ACCESS_ALL) return { project_id: null, object_id: null, role: роль };
+        if (key.startsWith("p:")) return { project_id: Number(key.slice(2)), object_id: null, role: роль };
+        const [, pid, oid] = key.split(":");
+        return { project_id: Number(pid), object_id: Number(oid), role: роль };
+      });
+      if (amSystemRole.get(u.id) !== u.role) {
+        // Системная роль правится ПОЛНЫМ телом (UserUpdateIn) — берём его из
+        // той же записи, что показана в таблице, чтобы правка роли не
+        // затёрла остальные поля значениями по умолчанию.
+        await api(`/users/${u.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            last_name: u.last_name, first_name: u.first_name, patronymic: u.patronymic,
+            position: u.position, department: u.department, domain_login: u.domain_login,
+            role: amSystemRole.get(u.id), auth_method: u.auth_method,
+            must_change_password: u.must_change_password,
+          }),
+        });
+      }
+      await api(`/users/${u.id}/access`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ grants: гранты }),
+      });
+    }
+    await openAccessMatrix();       // перечитываем с сервера — он и есть источник правды
+    showToast("Права сохранены", "success");
+  } catch (e) {
+    ошибка.textContent = "Не удалось сохранить: " + e.message;
+    amUpdateStatus();
+  }
+});
+
+// ---------- матрица прав ОДНОГО пользователя ----------
+// Что именно человеку доступно и в каком объёме. Считает СЕРВЕР
+// (app/rights_matrix.py): требования по разделам живут рядом с проверками,
+// а не вторым списком на клиенте — разъехавшись, такой список врал бы про
+// права, и заметили бы это по жалобе.
+const rightsMatrixBackdrop = document.getElementById("rights-matrix-backdrop");
+let rmUserId = null;
+
+function rmObjectOptions() {
+  const опции = ['<option value="">— объект не выбран —</option>'];
+  for (const проект of state.projects.filter(p => p.id)) {
+    const items = проект.objects.map(o =>
+      `<option value="${o.id}"${o.id === state.objectId ? " selected" : ""}>${escapeHtml(o.name)}</option>`).join("");
+    опции.push(`<optgroup label="${escapeHtml(проект.name)}">${items}</optgroup>`);
+  }
+  return опции.join("");
+}
+
+async function renderRightsMatrix() {
+  const objectId = document.getElementById("rights-matrix-object").value;
+  const params = new URLSearchParams();
+  if (objectId) params.set("object_id", objectId);
+  const data = await api(`/users/${rmUserId}/rights-matrix?${params}`);
+  document.getElementById("rights-matrix-role").textContent = data.system_admin
+    ? "Администратор сервиса — доступ ко всему в обход выданных прав"
+    : (data.object_role_label
+      ? `Роль на объекте: ${data.object_role_label}`
+      : "На этом объекте прав нет");
+
+  // Колонки только «Просмотр» и «Изменение»: отдельная колонка
+  // «Отсутствуют» ничего не добавляла — отсутствие прав и так видно по
+  // двум прочеркам в строке (живой запрос 2026-08-04).
+  //
+  // «Изменение» включает просмотр — роли выстроены лестницей (см.
+  // app/access.py), поэтому у строки с уровнем write галочки стоят в ОБЕИХ
+  // колонках: иначе «может править, но не может смотреть» читалось бы как
+  // ошибка в правах.
+  const отметка = (есть) => есть
+    ? `<span class="rm-yes">✓</span>` : `<span class="rm-no">—</span>`;
+  let html = `<thead><tr><th>Раздел системы</th>`
+    + `<th>Просмотр</th><th>Изменение</th></tr></thead><tbody>`;
+  let раздел = null;
+  for (const f of data.features) {
+    if (f.section !== раздел) {
+      раздел = f.section;
+      html += `<tr class="rm-section"><td colspan="3">${escapeHtml(раздел)}</td></tr>`;
+    }
+    html += `<tr><td>${escapeHtml(f.title)}`
+      + (f.note ? `<span class="rm-note">${escapeHtml(f.note)}</span>` : "")
+      + `</td>`
+      + `<td class="rm-mark">${отметка(f.level === "read" || f.level === "write")}</td>`
+      + `<td class="rm-mark">${отметка(f.level === "write")}</td></tr>`;
+  }
+  document.getElementById("rights-matrix-table").innerHTML = html + `</tbody>`;
+}
+
+async function openRightsMatrix(userId) {
+  rmUserId = userId;
+  const пользователь = amUsers.find(u => u.id === userId) || usersCache.find(u => u.id === userId);
+  document.getElementById("rights-matrix-title").textContent =
+    `Матрица прав — ${пользователь ? пользователь.display_name : `#${userId}`}`;
+  document.getElementById("rights-matrix-object").innerHTML = rmObjectOptions();
+  rightsMatrixBackdrop.classList.add("open");
+  await renderRightsMatrix();
+}
+
+document.getElementById("rights-matrix-object").addEventListener("change", renderRightsMatrix);
+document.getElementById("rights-matrix-close").addEventListener("click", () =>
+  rightsMatrixBackdrop.classList.remove("open"));
 
 // ---------- Памятка администратора (2026-08-03, живой запрос) ----------
 // Содержимое приходит с сервера (app/admin_guide.py) уже подставленным под
@@ -9545,7 +10410,7 @@ document.getElementById("counterparties-add").addEventListener("click", () => op
 // ---------- объект договора (2026-08-03) ----------
 // Список берётся из уже загруженного дерева проектов, а не отдельным
 // запросом: там уже есть и названия, и действующая роль на каждом объекте.
-// Оставляем только те, где роль не ниже «Контрактовщик» — заводить и
+// Оставляем только те, где роль не ниже «Комплектовщик» — заводить и
 // перевешивать договор сервер разрешает ровно там
 // (assert_object_access ..., "contract"), и показывать в списке то, что
 // он отвергнет, незачем.
@@ -13782,7 +14647,7 @@ function computeColumnEndExtensions(levels) {
 //    непрозрачного тела, значит с изнанки её всё равно закрывает сам
 //    элемент. Порядок вершин задан так, что лицевая сторона смотрит вдоль
 //    нормали, а материал — FrontSide: отсекает сама видеокарта.
-//  - ПОРОГ ЧИТАЕМОСТИ (MIN_LABEL_READABLE_PX). Наклейка мельче порога
+//  - ПОРОГ ЧИТАЕМОСТИ (minLabelPx(), персональная настройка). Наклейка мельче порога
 //    схлопывается в точку — вырожденный треугольник не растрируется.
 //    Расстояние до камеры считается в шейдере от центра наклейки.
 //  - РАЗВОРОТ ТЕКСТА на 180° вокруг нормали, когда «верх» строки смотрит на
@@ -13862,7 +14727,7 @@ function updateDecalReadabilityUniform() {
   const canvas = v3.renderer.domElement;
   const heightPx = (canvas.height || 1) / (v3.renderer.getPixelRatio() || 1);
   const pxPerWorldAtUnitDist = heightPx / (2 * Math.tan((v3.camera.fov * Math.PI / 180) / 2));
-  const value = MIN_LABEL_READABLE_PX / pxPerWorldAtUnitDist;
+  const value = minLabelPx() / pxPerWorldAtUnitDist;
   for (const mesh of v3.decalMeshes) mesh.material.uniforms.uWorldPerPxAtUnitDist.value = value;
 }
 

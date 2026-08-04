@@ -527,6 +527,51 @@ def set_view3d(
         conn.close()
 
 
+class SetMinLabelPxIn(BaseModel):
+    """Порог читаемости подписей в пикселях (2026-08-04, живой запрос).
+    Подпись мельче порога не рисуется вовсе — ни на схеме, ни в 3D."""
+    min_label_px: float
+
+
+# Границы порога. Нижняя — 4: ниже подпись перестаёт быть подписью, а
+# нулевой порог возвращает ровно то состояние, из-за которого его и вводили
+# (тысячи нечитаемых наклеек кадром и поверх чертежа). Верхняя — 40: выше
+# подписи исчезают уже и на рабочем масштабе, и настройка читается как
+# «подписи сломались».
+MIN_LABEL_PX_MIN, MIN_LABEL_PX_MAX = 4.0, 40.0
+
+
+@router.patch("/{user_id}/min-label-px", response_model=UserOut)
+def set_min_label_px(
+    user_id: int, body: SetMinLabelPxIn, current: sqlite3.Row = Depends(get_current_user)
+):
+    """Тот же guard самообслуживания, что у set_ui_theme и set_view3d:
+    менять можно только себе, если ты не администратор сервиса. Настройка
+    именно личная — она про экран и мощность машины конкретного человека, а
+    не про данные объекта."""
+    if current["role"] != "admin" and current["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Можно менять только свою настройку")
+    if not MIN_LABEL_PX_MIN <= body.min_label_px <= MIN_LABEL_PX_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Порог показа подписей — от {MIN_LABEL_PX_MIN:g} до {MIN_LABEL_PX_MAX:g} пикселей",
+        )
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        conn.execute(
+            "UPDATE users SET min_label_px = ?, updated_at = datetime('now') WHERE id = ?",
+            (body.min_label_px, user_id),
+        )
+        conn.commit()
+        activity.log("user_min_label_px", user=current, entity_type="user", entity_id=user_id,
+                     new_value=f"{body.min_label_px:g} px")
+        return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+    finally:
+        conn.close()
+
+
 # ==================== ДОСТУП К ОБЪЕКТАМ (этап C) ====================
 #
 # Роль на объекте — свойство ГРАНТА, а не пользователя (решение П2).

@@ -103,6 +103,15 @@ _COLUMN_MIGRATIONS = [
     # трёх местах клиента.
     ("users", "view3d_pitch_deg", "REAL NOT NULL DEFAULT 30"),
     ("users", "view3d_yaw_deg", "REAL NOT NULL DEFAULT -30"),
+    # Порог читаемости подписей в пикселях — ПЕРСОНАЛЬНЫЙ (2026-08-04, живой
+    # запрос). Подпись мельче порога не рисуется вовсе: на общем плане это
+    # тысячи нечитаемых наклеек, которые и стоят кадр, и закрывают чертёж.
+    # Величина зависит от того, КАК человек работает: экран, масштаб
+    # интерфейса, RDP и мощность машины у всех разные, а до этой правки
+    # порог был константой в коде (12 px — значение, выбранное пользователем
+    # 2026-08-04 после пробы 8 px). NOT NULL DEFAULT 12 — накопленные
+    # учётные записи получают ровно прежнее поведение.
+    ("users", "min_label_px", "REAL NOT NULL DEFAULT 12"),
     # Сеанс: откуда и когда им пользовались (2026-08-03). Нужны сразу двум
     # вещам — списку активных сеансов с возможностью оборвать чужой и
     # таймауту бездействия. NULL у сессий, выданных до этой правки: адрес и
@@ -663,7 +672,7 @@ def _migrate_object_scoped_tables(conn: sqlite3.Connection, changes: list) -> No
 
 
 def _migrate_user_access_contract_role(conn: sqlite3.Connection, changes: list) -> None:
-    """Разрешает роль «Контрактовщик» в грантах (2026-08-04).
+    """Разрешает роль «Комплектовщик» в грантах (2026-08-04).
 
     Значение упирается в CHECK (role IN ('admin', 'user', 'view')), а CHECK
     в SQLite не меняется ALTER'ом — таблица пересобирается. Данные не
@@ -709,7 +718,7 @@ def _migrate_user_access_contract_role(conn: sqlite3.Connection, changes: list) 
     conn.commit()
     # ОБЯЗАТЕЛЬНО вернуть проверку ключей — см. _migrate_user_access_global.
     conn.execute("PRAGMA foreign_keys = ON")
-    changes.append("доступ: добавлена роль «Контрактовщик»")
+    changes.append("доступ: добавлена роль «Комплектовщик»")
 
 
 def _migrate_user_access_global(conn: sqlite3.Connection, changes: list) -> None:
