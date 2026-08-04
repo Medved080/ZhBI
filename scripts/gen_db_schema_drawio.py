@@ -70,7 +70,7 @@ COLUMNS = [
     ["users", "sessions", "user_access", "attachments", "activity_log", "status_colors",
      "element_shapes", "allowed_subtypes"],
     ["projects", "objects", "object_drawings", "label_visibility", "zone_colors",
-     "app_settings", "report_notes"],
+     "app_settings", "report_notes", "release_tasks"],
     ["elements", "status_history", "axis_lines"],
     ["zones", "zone_levels", "zone_edit_undo", "default_contracts", "mark_type_prefixes"],
     ["counterparties", "agreements", "specifications", "contracts", "contract_lines",

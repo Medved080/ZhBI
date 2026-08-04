@@ -13376,6 +13376,78 @@ async function openChangelog() {
       <ul>${entry.items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
     </div>
   `).join("");
+  renderReleaseStatus();   // состояние обновления запрашивается КАЖДЫЙ раз: оно меняется
+}
+
+// ---------- состояние обновления (2026-08-04, живой запрос) ----------
+//
+// «Что нового» отвечает на два вопроса сразу: что нового в СЕРВИСЕ (список
+// версий ниже) и доведена ли до этой версии БАЗА. Второе — про то, выполнены
+// ли обработки данных, которые приехали вместе с кодом (app/release_tasks.py).
+//
+// Всем — одна строка «версия · обновление завершено/не завершено»,
+// администратору сервиса — ещё и перечень обработок с результатом и кнопками
+// (решение пользователя 2026-08-04): обычному пользователю перечень ничего не
+// говорит, а вот «база отстала от кода» касается всех — в такой момент часть
+// данных ещё в старом виде.
+async function renderReleaseStatus() {
+  const box = document.getElementById("release-status");
+  box.innerHTML = "";
+  let данные;
+  try {
+    данные = await api("/release-status");
+  } catch (e) {
+    box.innerHTML = `<div class="release-line">Состояние обновления недоступно: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const версии = `Версия сервиса <b>${escapeHtml(данные.code_version || "—")}</b>`
+    + ` · данные обновлены до <b>${escapeHtml(данные.db_version || "—")}</b>`;
+  const итог = данные.complete
+    ? `<div class="release-line release-ok">${версии} · обновление завершено</div>`
+    : `<div class="release-line release-bad">${версии} · обновление НЕ завершено`
+      + (данные.failed ? ` · обработок с ошибкой: ${данные.failed}` : "")
+      + (данные.pending ? ` · ожидают выполнения: ${данные.pending}` : "")
+      + `</div>`;
+  box.innerHTML = итог + releaseTasksHtml(данные.tasks);
+  box.querySelectorAll("button[data-release-run]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Выполняется…";
+      try {
+        await api(`/release-tasks/${encodeURIComponent(btn.dataset.releaseRun)}/run`, { method: "POST" });
+      } catch (e) {
+        showToast("Не удалось выполнить: " + e.message, "warning");
+      }
+      renderReleaseStatus();
+    });
+  });
+}
+
+// tasks приходят ТОЛЬКО администратору сервиса (сервер их не отдаёт
+// остальным, см. release_status) — отдельной проверки роли на клиенте нет:
+// прятать то, чего не прислали, незачем.
+function releaseTasksHtml(tasks) {
+  if (!tasks || !tasks.length) return "";
+  const статусы = { ok: ["release-badge-ok", "выполнена"], error: ["release-badge-error", "ошибка"],
+                    pending: ["", "ожидает"] };
+  return `<div class="release-tasks">` + tasks.map(t => {
+    const [класс, подпись] = статусы[t.status] || ["", t.status];
+    // Кнопка — у упавшей обработки (повторить) и у уборки (запустить). Уборка
+    // при старте не выполняется никогда: она удаляет отжившие структуры и
+    // ждёт решения человека, см. app/release_tasks.py.
+    const кнопка = (t.status === "error" || (t.kind === "cleanup" && t.status !== "ok"))
+      ? `<button class="btn btn-sm btn-secondary" data-release-run="${escapeHtml(t.name)}">`
+        + `${t.kind === "cleanup" ? "Выполнить уборку" : "Повторить"}</button>`
+      : "";
+    return `<div class="release-task">
+      <span>${escapeHtml(t.title)}${t.kind === "cleanup" ? " · уборка" : ""}</span>
+      <span class="release-badge ${класс}">${escapeHtml(подпись)}</span>
+      <span>${кнопка}</span>
+      ${t.why ? `<span class="release-task-why">${escapeHtml(t.why)}</span>` : ""}
+      ${t.note ? `<span class="release-task-note">${escapeHtml(t.note)}`
+        + (t.applied_at ? ` · ${escapeHtml(activityTimeLocal(t.applied_at))}` : "") + `</span>` : ""}
+    </div>`;
+  }).join("") + `</div>`;
 }
 
 document.getElementById("btn-changelog").addEventListener("click", openChangelog);

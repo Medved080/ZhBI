@@ -1725,6 +1725,26 @@
      — иначе при разной длине наименований контрактов кнопки «Распределить»
      разъезжаются по горизонтали и их приходится искать глазами.
      Прокрутка: марок в выборке бывают десятки, а шапка формы не скроллится. */
+  /* Состояние обновления в «Что нового» (2026-08-04). Зелёная плашка —
+     обновление завершено, красная — есть незавершённые обработки: строка
+     должна читаться с одного взгляда, поэтому цвет, а не текст мелким. */
+  .release-status { font-size: 12px; margin-top: 6px; }
+  .release-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 10px; }
+  .release-ok { border-color: var(--color-success); color: var(--color-success); }
+  .release-bad { border-color: var(--color-danger); color: var(--color-danger); }
+  .release-line b { font-weight: 600; }
+  .release-tasks { margin-top: 8px; border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm); max-height: 210px; overflow-y: auto; }
+  .release-task { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 10px;
+    align-items: baseline; padding: 6px 10px; border-bottom: 1px solid var(--color-border); }
+  .release-task:last-child { border-bottom: none; }
+  .release-task-why { grid-column: 1 / -1; color: var(--color-text-muted); font-size: 11px; }
+  .release-task-note { grid-column: 1 / -1; font-size: 11px; }
+  .release-badge { font-size: 11px; border-radius: 10px; padding: 1px 8px; white-space: nowrap;
+    border: 1px solid var(--color-border); color: var(--color-text-muted); }
+  .release-badge-ok { border-color: var(--color-success); color: var(--color-success); }
+  .release-badge-error { border-color: var(--color-danger); color: var(--color-danger); }
   .bulk-fill-marks { display: grid; grid-template-columns: auto minmax(240px, 1fr) auto auto;
     gap: 4px 10px; align-items: center; max-height: 26vh; overflow-y: auto; padding-right: 4px; }
   .bulk-fill-marks:empty { display: none; }
@@ -3636,6 +3656,11 @@
   <div class="modal wide modal-sticky">
     <div class="modal-sticky-head">
       <h2>Что нового</h2>
+      <!-- Состояние обновления (2026-08-04): версия сервиса, до какой версии
+           доведена база и завершены ли обработки данных. Всем — одной
+           строкой, администратору — со списком обработок и кнопками
+           (см. renderReleaseStatus). -->
+      <div id="release-status" class="release-status"></div>
     </div>
     <div class="modal-sticky-scroll" id="changelog-list"></div>
     <div class="modal-sticky-foot">

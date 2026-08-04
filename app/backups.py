@@ -40,11 +40,21 @@ BACKUP_DIR = Path(__file__).resolve().parent.parent / "data" / "backups"
 KIND_MANUAL = "manual"
 KIND_BEFORE_RESTORE = "auto_before_restore"
 KIND_BEFORE_REBUILD = "auto_before_rebuild"
+# Копия перед ПЕРВЫМ стартом новой версии — до миграций схемы и до обработок
+# релиза (2026-08-04, см. app/release_tasks.py). Раньше её полагалось снимать
+# руками перед деплоем; теперь сервис снимает сам, и это ещё одна причина не
+# подключаться к серверу.
+KIND_BEFORE_UPDATE = "auto_before_update"
+# Копия перед УБОРКОЙ отживших структур: уборка удаляет то, что больше не
+# используется, и вернуться к нему иначе будет неоткуда.
+KIND_BEFORE_CLEANUP = "auto_before_cleanup"
 
 KIND_LABELS = {
     KIND_MANUAL: "создана пользователем",
     KIND_BEFORE_RESTORE: "служебная — перед восстановлением",
     KIND_BEFORE_REBUILD: "служебная — перед пересборкой БД",
+    KIND_BEFORE_UPDATE: "служебная — перед обновлением версии",
+    KIND_BEFORE_CLEANUP: "служебная — перед уборкой отживших структур",
 }
 
 

@@ -145,6 +145,7 @@ from app.admin_guide import router as admin_guide_router
 from app.db_status import router as db_status_router
 from app.fill_scope import router as fill_scope_router
 from app.ldap_auth import router as ldap_router
+from app.release_tasks import router as release_tasks_router
 from app.rights_matrix import router as rights_matrix_router
 from app.settings import router as settings_router
 from app.upload_limits import (
@@ -230,6 +231,7 @@ app.include_router(auth_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
 # не должен иметь ни единого шанса уехать в {user_id}.
 app.include_router(rights_matrix_router)
+app.include_router(release_tasks_router)
 app.include_router(users_router)
 app.include_router(sessions_router)
 app.include_router(ldap_router)
@@ -475,6 +477,16 @@ def on_startup():
     # (см. app/backups.py), и scripts/rebuild_db.py. Молча пересобранная
     # база выглядит как работающий сервис, в котором просто исчезла работа
     # за несколько недель, — это несравнимо хуже отказа стартовать.
+    # Копия базы ПЕРЕД первым стартом новой версии — до миграций схемы и до
+    # обработок релиза (app/release_tasks.py). И то и другое применяется
+    # автоматически, без человека, и единственная возможность вернуться —
+    # копия, снятая ДО них. Ничего не делает, если версия та же (рестарт при
+    # падении и `docker compose up` не должны забивать диск копиями).
+    from app import release_tasks
+    копия = release_tasks.backup_before_update()
+    if копия:
+        print(f"[startup] перед обновлением снята копия базы: {копия['name']}")
+
     schema_changes = init_db()
     _warn_users_without_password()
 
@@ -512,6 +524,17 @@ def on_startup():
         activity.log("schema_migration", source="system", new_value=change)
     if schema_changes:
         print(f"[startup] структурных изменений схемы применено: {len(schema_changes)}")
+    if копия:
+        activity.log("backup_before_update", source="system", new_value=копия["name"])
+
+    # Обработки релиза — то, что новая версия делает с уже накопленными
+    # данными. Здесь, а не раньше: им нужны и мигрированная схема, и живой
+    # писатель журнала. Упавшая обработка НЕ роняет старт (решение
+    # пользователя 2026-08-04): сервис работает и предупреждает в «Что
+    # нового», администратор повторяет её кнопкой, без подключения к серверу.
+    выполнено = release_tasks.run_pending()
+    if выполнено:
+        print(f"[startup] обработок релиза выполнено: {len(выполнено)}")
 
 
 @app.get("/health")
