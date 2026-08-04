@@ -13350,6 +13350,13 @@ document.getElementById("statuslog-close").addEventListener("click", () => {
 async function openChangelog() {
   const box = document.getElementById("changelog-list");
   const backdrop = document.getElementById("changelog-backdrop");
+  // Открывается всегда на журнале версий, даже если в прошлый раз ушли на
+  // «Обновление»: форма показывается сама при входе, и человек приходит
+  // читать новости. Незавершённое обновление зовёт значком у ярлыка.
+  backdrop.querySelectorAll("[data-cl-tab]").forEach(b =>
+    b.classList.toggle("active", b.dataset.clTab === "news"));
+  backdrop.querySelectorAll("[data-cl-panel]").forEach(p =>
+    p.classList.toggle("active", p.dataset.clPanel === "news"));
   // Кнопку «Ознакомился» показываем только когда есть что подтверждать:
   // нажатая, она превратилась бы в бессмысленный повтор.
   document.getElementById("changelog-ack").style.display =
@@ -13398,6 +13405,7 @@ async function renderReleaseStatus() {
     данные = await api("/release-status");
   } catch (e) {
     box.innerHTML = `<div class="release-line">Состояние обновления недоступно: ${escapeHtml(e.message)}</div>`;
+    document.getElementById("changelog-release-badge").classList.remove("on");
     return;
   }
   const версии = `Версия сервиса <b>${escapeHtml(данные.code_version || "—")}</b>`
@@ -13409,6 +13417,10 @@ async function renderReleaseStatus() {
       + (данные.pending ? ` · ожидают выполнения: ${данные.pending}` : "")
       + `</div>`;
   box.innerHTML = итог + releaseTasksHtml(данные.tasks);
+  // Значок у ярлыка закладки: обновление не завершено — это видно, не
+  // открывая её. Закладку саму не переключаем (человек мог прийти читать
+  // журнал), но и не даём пропустить незавершённое обновление.
+  document.getElementById("changelog-release-badge").classList.toggle("on", !данные.complete);
   box.querySelectorAll("button[data-release-run]").forEach(btn => {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
@@ -13449,6 +13461,19 @@ function releaseTasksHtml(tasks) {
     </div>`;
   }).join("") + `</div>`;
 }
+
+// Переключение закладок «Журнал версий» / «Обновление». Обе панели уже в
+// разметке и уже наполнены — переключается только видимость: перерисовывать
+// журнал версий при каждом щелчке незачем, он не меняется.
+document.querySelectorAll("#changelog-backdrop [data-cl-tab]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const имя = btn.dataset.clTab;
+    document.querySelectorAll("#changelog-backdrop [data-cl-tab]").forEach(b =>
+      b.classList.toggle("active", b === btn));
+    document.querySelectorAll("#changelog-backdrop [data-cl-panel]").forEach(p =>
+      p.classList.toggle("active", p.dataset.clPanel === имя));
+  });
+});
 
 document.getElementById("btn-changelog").addEventListener("click", openChangelog);
 // «Закрыть» ничего не подтверждает НАМЕРЕННО: пока не нажата «Ознакомился»,

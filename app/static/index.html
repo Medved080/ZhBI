@@ -1728,6 +1728,15 @@
   /* Состояние обновления в «Что нового» (2026-08-04). Зелёная плашка —
      обновление завершено, красная — есть незавершённые обработки: строка
      должна читаться с одного взгляда, поэтому цвет, а не текст мелким. */
+  /* Закладки «Что нового». .tabs рассчитан на сайдбар (отрицательные поля
+     под его padding), в модалке они дают разъезд — поэтому свои отступы. */
+  .cl-tabs { margin: 10px 0 0; padding: 0; }
+  .cl-tabs .tab-btn { flex: none; padding: 8px 14px; }
+  /* Значок у ярлыка закладки — точка, а не число: обработок с ошибкой бывает
+     одна-две, и точка одинаково хорошо читается и в светлой, и в тёмной гамме. */
+  .cl-tab-badge { display: none; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--color-danger); margin-left: 6px; vertical-align: middle; }
+  .cl-tab-badge.on { display: inline-block; }
   .release-status { font-size: 12px; margin-top: 6px; }
   .release-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 10px; }
@@ -3656,13 +3665,26 @@
   <div class="modal wide modal-sticky">
     <div class="modal-sticky-head">
       <h2>Что нового</h2>
-      <!-- Состояние обновления (2026-08-04): версия сервиса, до какой версии
-           доведена база и завершены ли обработки данных. Всем — одной
-           строкой, администратору — со списком обработок и кнопками
-           (см. renderReleaseStatus). -->
-      <div id="release-status" class="release-status"></div>
+      <!-- Две закладки (2026-08-04, живой запрос). Раньше состояние
+           обновления висело прямо в шапке над журналом версий и отодвигало
+           его вниз при каждом открытии, хотя смотрят туда редко — только
+           когда обновление не завершилось. Теперь это отдельная закладка, а
+           в её ярлыке появляется значок, если есть что чинить: не завершено —
+           видно, не мешая читать журнал. -->
+      <div class="tabs cl-tabs">
+        <button type="button" class="tab-btn active" data-cl-tab="news">Журнал версий</button>
+        <button type="button" class="tab-btn" data-cl-tab="release">
+          Обновление<span id="changelog-release-badge" class="cl-tab-badge"></span>
+        </button>
+      </div>
     </div>
-    <div class="modal-sticky-scroll" id="changelog-list"></div>
+    <div class="modal-sticky-scroll">
+      <div id="changelog-list" class="tab-panel active" data-cl-panel="news"></div>
+      <!-- Состояние обновления: версия сервиса, до какой версии доведена база
+           и завершены ли обработки данных. Всем — версии и итог, администратору
+           сервиса — ещё и список обработок с кнопками (renderReleaseStatus). -->
+      <div id="release-status" class="release-status tab-panel" data-cl-panel="release"></div>
+    </div>
     <div class="modal-sticky-foot">
       <div class="actions">
         <!-- «Ознакомился» фиксируется ЗА ПОЛЬЗОВАТЕЛЕМ (2026-08-03, живой

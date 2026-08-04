@@ -250,6 +250,23 @@ def _run_one(task) -> dict:
     return {"name": task["name"], "status": status, "note": note, "duration_ms": duration}
 
 
+def run_by_name(name: str) -> Optional[dict]:
+    """Выполнить обработку по имени независимо от того, выполнялась ли она.
+
+    Нужна двум местам: кнопке администратора (повтор упавшей, запуск уборки)
+    и холостому прогону перед деплоем (scripts/dry_run_migration.py), который
+    прогоняет обработки ВТОРОЙ раз, чтобы проверить их идемпотентность на
+    реальных данных сервера. None — обработки с таким именем нет.
+    """
+    task = next((t for t in RELEASE_TASKS if t["name"] == name), None)
+    return None if task is None else _run_one(task)
+
+
+def data_task_names() -> list:
+    """Имена обработок, которые выполняются сами при старте (без уборки)."""
+    return [t["name"] for t in RELEASE_TASKS if t.get("kind", KIND_DATA) == KIND_DATA]
+
+
 def run_pending() -> list:
     """Выполняет обработки, у которых ещё нет успешной записи. Зовётся при
     старте (после init_db и после запуска писателя журнала).
