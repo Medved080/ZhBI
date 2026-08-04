@@ -48,6 +48,9 @@ let state = {
   subLabelById: new Map(), // id -> <text> допстроки (плановая дата + код контрагента), только у элементов, где она сейчас видна — см. elementSubLabelText
   stickerById: new Map(), // id -> <g class="mark-sticker"> — марка(+допстрока) как "наклейка" на контуре элемента, см. computeStickerLayout/buildStickerGroup. Элементы БЕЗ пригодного контура остаются на labelById/subLabelById (запасной вариант).
   labelGroupById: new Map(), // id -> <g> в labels-layer, обёртка над label+subLabel ИЛИ sticker ОДНОГО элемента — см. renderElements/applyPlacementFilters
+  viewportCullList: [], // [{group, shape, cx, cy, r, fontSize, shapeOut, labelOut}] — плоский список отсечения по видимой области, см. updateViewportCulling
+  viewportCullById: new Map(), // id -> та же запись, что в viewportCullList — чтобы пересборка наклейки могла обновить её кегль
+  zoomScaledShapes: [], // [{element, shape, shapeName}] — ТОЛЬКО условные маркеры с экранным пределом размера; реальные контуры ("outline") масштабируются сами через viewBox, см. updateSizesForZoom
   labelOffsetById: new Map(), // id -> {dx, dy, anchor} в единицах базового радиуса — направление подписи, выбранное один раз при разводке коллизий
   // Порог опоздания поставки (дней) — серверная настройка (app/settings.py),
   // загружается один раз при старте; используется для красного/зелёного
@@ -185,7 +188,9 @@ let state = {
     axisLines: null, // ОДИН LineSegments на все оси сетки — см. build3DAxisGrid
     axisLabelSprites: [], // номера и буквы на концах осей (спрайты, всегда лицом к камере)
     labelSpriteById: new Map(), // element.id -> THREE.Sprite (постоянная подпись марки, запасной вариант)
-    markDecalById: new Map(), // element.id -> THREE.Group (наклейка марки на грани — см. build3DMarkDecal)
+    decalMeshes: [], // меши наклеек: по одному на пару (тип элемента, страница атласа) — см. buildMergedDecals
+    decalTextures: [], // страницы атласа надписей, живут ровно столько же, сколько меши
+    decalElementIds: new Set(), // у кого наклейка на грани (у остальных — плавающая табличка-спрайт)
     labelGroupByType: new Map(), // тип элемента -> THREE.Group, куда сложены его подписи (см. label3DContainer)
     edgeMaterial: null, // общий LineMaterial на ВСЕ рёбра силуэта — см. init3DScene
     faceMaterial: null, // единственный материал ВСЕХ граней; цвет статуса — в вершинах (см. getFaceMaterial)
@@ -3251,7 +3256,7 @@ function deliveryColorHex(element) {
 // ---------- подпись марки как "наклейка" на контуре элемента (живой
 // запрос пользователя: "размер подписей не должен уменьшаться при
 // масштабировании, должна быть как наклейка на элементе во всю его
-// ширину") — та же идея, что уже реализована для 3D (build3DMarkDecal):
+// ширину") — та же идея, что уже реализована для 3D (collectMarkDecalQuads):
 // размер ШРИФТА в МИРОВЫХ единицах, привязанный к реальной ширине
 // контура элемента, а не к экранным пикселям (см. computeEffectiveMarkerSizing
 // — тот, старый подход, оставлен только как ЗАПАСНОЙ вариант для
@@ -3265,6 +3270,15 @@ function deliveryColorHex(element) {
 // отличие от старого запасного варианта) — дополнительный выигрыш в
 // быстродействии на больших файлах. ----------
 const STICKER_CHAR_WIDTH_RATIO = 0.62; // та же оценка, что и везде (LABEL_BG_CHAR_WIDTH_RATIO/DECAL_CHAR_WIDTH_RATIO)
+
+// Мировой кегль наклейки нужен в двух разных местах и в разное время: список
+// отсечения собирается в renderElements, а сама наклейка пересобирается и
+// позже (смена статуса/плановой даты меняет длину текста, а с ней и кегль —
+// см. buildOrRebuildSticker). Держим отдельной картой, а не читаем обратно из
+// DOM. Объявление стоит ЗДЕСЬ, до первого использования по тексту файла:
+// `const` не всплывает, в отличие от объявлений функций (на этом уже
+// обожглись — см. decalToCamera и Docs/backlog.md 2026-08-04).
+const stickerWorldFontById = new Map(); // element.id -> кегль наклейки в мм | null (наклейки нет)
 const STICKER_FIT_MARGIN = 0.92; // небольшой запас от самого края контура
 
 // Считает геометрию наклейки (центр/угол/размер шрифта) из РЕАЛЬНОГО
@@ -3281,6 +3295,27 @@ const STICKER_FIT_MARGIN = 0.92; // небольшой запас от само�
 // (footprintDimensions/footprintLongAxisAngle/footprintCentroid уже
 // написаны для 3D, ниже по файлу, но не содержат ничего 3D-специфичного
 // — чистая геометрия по outline, переиспользуется как есть).
+// Направление длинной стороны контура (footprintLongAxisAngle) берётся из
+// ПОРЯДКА точек, а он в DXF произволен: одна и та же физическая сторона
+// приходит то как θ, то как θ+180 — и наклейка оказывается вверх ногами
+// (живой репорт 2026-08-04: «у некоторых элементов в 2D подпись вверх
+// ногами», рядом стоящие колонны 15КС1 подписаны в разные стороны).
+// Поворот на 180° даёт ТУ ЖЕ линию, но перевёрнутый текст, поэтому из двух
+// равноправных вариантов берём тот, при котором текст читается: угол
+// приводится к (−90°, 90°]. Оба вертикальных случая (±90°) сводятся к
+// одному, так что соседние одинаковые элементы больше не могут оказаться
+// подписаны в разные стороны.
+// В 3D той же правки не нужно: там сторону выбирает шейдер по положению
+// камеры на каждом кадре (см. DECAL_VERTEX_SHADER).
+function readableStickerAngleDeg(deg) {
+  let angle = deg % 360;
+  if (angle > 180) angle -= 360;
+  if (angle <= -180) angle += 360;
+  if (angle > 90) angle -= 180;
+  if (angle <= -90) angle += 180;
+  return angle;
+}
+
 function computeStickerLayout(element) {
   if (!element.outline || element.outline.length < 3 || !element.mark) return null;
   const dims = footprintDimensions(element.outline);
@@ -3303,7 +3338,7 @@ function computeStickerLayout(element) {
   // Знак — НЕ минус: см. живую проверку в Docs/backlog.md, вывод из
   // композиции transform (translate·rotate·scale(1,-1)) на группе против
   // одиночного scale(1,-1) у контура элемента — тот же угол, без инверсии.
-  const angleDeg = footprintLongAxisAngle(element.outline) * 180 / Math.PI;
+  const angleDeg = readableStickerAngleDeg(footprintLongAxisAngle(element.outline) * 180 / Math.PI);
   return { cx, cy, angleDeg, fontSize, subText, combinedLen };
 }
 
@@ -3319,6 +3354,7 @@ function buildOrRebuildSticker(labelGroup, element) {
   const old = state.stickerById.get(element.id);
   if (old) old.remove();
   const layout = computeStickerLayout(element);
+  noteStickerWorldFont(element.id, layout ? layout.fontSize : null); // порог читаемости, см. MIN_LABEL_READABLE_PX
   if (!layout) {
     state.stickerById.delete(element.id);
     return null;
@@ -3640,6 +3676,10 @@ function renderElements(data) {
   state.subLabelById.clear();
   state.stickerById.clear();
   state.labelGroupById.clear();
+  state.viewportCullList = [];
+  state.viewportCullById.clear();
+  stickerWorldFontById.clear();
+  state.zoomScaledShapes = [];
 
   const r = data.marker_radius;
   state.labelOffsetById = computeLabelOffsets(data.elements, r);
@@ -3707,6 +3747,20 @@ function renderElements(data) {
         state.subLabelById.set(element.id, subLabel);
       }
     }
+
+    // fontSize подставила buildOrRebuildSticker через ту же запись в
+    // viewportCullById (см. registerViewportCullEntry): у наклейки кегль в
+    // мировых мм — по нему считается порог читаемости; у запасного варианта
+    // подписи кегль экранный, и порог к нему не применяется (остаётся null).
+    state.viewportCullList.push(registerViewportCullEntry(element.id, {
+      group: labelGroup, shape, cx: element.x, cy: element.y,
+      r: viewportCullRadius(element, r), fontSize: null,
+      shapeOut: false, labelOut: false,
+    }));
+    // Реальный контур масштабируется вместе со всем слоем через viewBox —
+    // на зуме его трогать не нужно; в список зумозависимых попадают только
+    // условные маркеры (см. updateSizesForZoom).
+    if (shapeName !== "outline") state.zoomScaledShapes.push({ element, shape, shapeName });
   }
 
   updateSizesForZoom();
@@ -3902,13 +3956,20 @@ function renderLabelToggles() {
         // так что снятие галочки нужно применить явно и немедленно.
         // Содержимое наклеек пересобирать не нужно — они просто скрыты,
         // а не удалены, и заново соберутся при следующем включении типа.
-        document.querySelectorAll(
-          `.mark-label[data-type="${type}"], .mark-sublabel[data-type="${type}"], `
-          + `.mark-label-bg[data-type="${type}"], .mark-sublabel-bg[data-type="${type}"], `
-          + `.mark-sticker[data-type="${type}"]`
-        ).forEach(t => {
-          t.style.display = "none";
-        });
+        // Обход — по СОБСТВЕННЫМ картам, а не querySelectorAll по документу:
+        // подписи вне видимой области физически отсоединены от DOM
+        // (см. updateViewportCulling), и поиск по документу их не нашёл бы —
+        // при возврате в кадр они всплыли бы вопреки снятой галочке.
+        for (const [id, sticker] of state.stickerById) {
+          const element = state.byId.get(id);
+          if (element && element.element_type === type) sticker.style.display = "none";
+        }
+        for (const map of [state.labelById, state.subLabelById]) {
+          for (const [id, node] of map) {
+            const element = state.byId.get(id);
+            if (element && element.element_type === type) setLabelDisplay(node, "none");
+          }
+        }
       } else {
         // Показать — НЕ форсировать display:"" напрямую на ЗАПАСНЫЕ (не
         // "наклейка") подписи этого типа разом: это включало ВСЕ марки без
@@ -3943,10 +4004,43 @@ function renderLabelToggles() {
 // Вынесено из updateSizesForZoom — переиспользуется точечным
 // updateElementSubLabel (не гонять полный цикл по всем элементам ради
 // одной допстроки после смены статуса/партии одного элемента).
-function computeEffectiveMarkerSizing() {
+// ---------- размеры рабочей области: КЭШ, а не чтение из DOM на каждый тик зума ----------
+// Главная находка раунда быстродействия 2026-08-04 (живой замер в браузере).
+// Сам по себе новый viewBox стоит НИЧЕГО (0,01 мс), но любое чтение размера
+// элемента сразу после его записи заставляет браузер синхронно пересчитать
+// раскладку ВСЕГО документа — а в схеме 56 648 узлов SVG. Замер на реальном
+// файле (9422 элемента, подписи включены):
+//   записать viewBox                                  — 0,01 мс
+//   записать viewBox и прочитать stage.clientWidth    — 65,3 мс
+// Читателей на каждый тик было трое (здесь, updateZoomIndicator и
+// updateScrollbars), и каждый оплачивал этот пересчёт заново. Отсюда же
+// ответ, почему "без подписей всё ок": подписи не считаются медленнее, они
+// просто утраивают число узлов, которые браузер обходит при пересчёте.
+//
+// Размер рабочей области меняется РЕДКО (окно, ширина сайдбара, переключение
+// 2D/3D) и никогда — от зума. Поэтому читаем его не по требованию, а по
+// событию: ResizeObserver ловит изменение любой природы, в том числе те,
+// на которые отдельного обработчика нет (перетаскивание границы сайдбара,
+// смена масштаба страницы, показ/скрытие полос).
+const stageMetrics = { w: 1, h: 1, vTrackH: 1, hTrackW: 1, valid: false };
+
+function readStageMetrics() {
+  if (stageMetrics.valid) return stageMetrics;
   const stage = document.getElementById("stage");
-  const pxPerUnitX = stage.clientWidth / state.view.w;
-  const pxPerUnitY = stage.clientHeight / state.view.h;
+  stageMetrics.w = stage.clientWidth || 1;
+  stageMetrics.h = stage.clientHeight || 1;
+  const vTrack = document.getElementById("vscroll");
+  const hTrack = document.getElementById("hscroll");
+  stageMetrics.vTrackH = (vTrack && vTrack.clientHeight) || 1;
+  stageMetrics.hTrackW = (hTrack && hTrack.clientWidth) || 1;
+  stageMetrics.valid = true;
+  return stageMetrics;
+}
+
+function computeEffectiveMarkerSizing() {
+  const { w, h } = readStageMetrics();
+  const pxPerUnitX = w / state.view.w;
+  const pxPerUnitY = h / state.view.h;
   const pxPerUnit = Math.min(pxPerUnitX, pxPerUnitY) || 1;
   const baseR = state.baseMarkerRadius;
   const effectiveR = Math.min(baseR, MAX_MARKER_PX / pxPerUnit);
@@ -3960,21 +4054,23 @@ function updateSizesForZoom() {
   if (!state.view) return;
   const { pxPerUnit, effectiveR, effectiveFont } = computeEffectiveMarkerSizing();
 
-  for (const element of state.elements) {
-    const shape = state.shapeById.get(element.id);
-    if (shape) {
-      const shapeName = shape.dataset.shape || "circle";
-      // "outline" — реальный контур в мировых координатах, уже корректно
-      // масштабируется вместе со всем слоем через viewBox SVG (как сетка
-      // осей) — пересчитывать геометрию на каждый zoom не нужно, в отличие
-      // от условных маркеров с экранным пределом размера.
-      if (shapeName !== "outline") updateShapeGeometry(shape, shapeName, element.x, element.y, effectiveR);
-    }
+  // "outline" — реальный контур в мировых координатах, уже корректно
+  // масштабируется вместе со всем слоем через viewBox SVG (как сетка осей).
+  // Пересчёта на каждый тик зума требуют только условные маркеры с экранным
+  // пределом размера — их список собран один раз при отрисовке
+  // (state.zoomScaledShapes), а не выбирается заново обходом всех девяти
+  // тысяч элементов с чтением data-атрибута из DOM.
+  for (const { element, shape, shapeName } of state.zoomScaledShapes) {
+    updateShapeGeometry(shape, shapeName, element.x, element.y, effectiveR);
+  }
 
-    // Наклейка от зума не зависит вовсе (мировые мм, масштабируется вместе
-    // с элементом через viewBox) — на каждом тике её трогать не нужно.
-    const label = state.labelById.get(element.id);
-    if (!label) continue;
+  // Наклейка от зума не зависит вовсе (мировые мм, масштабируется вместе
+  // с элементом через viewBox) — на каждом тике её трогать не нужно; здесь
+  // обрабатывается ТОЛЬКО запасной вариант подписи (экранный кегль), и
+  // обходится он по своей карте, а не по всем элементам.
+  for (const [id, label] of state.labelById) {
+    const element = state.byId.get(id);
+    if (!element) continue;
     const cand = state.labelOffsetById.get(element.id) || LABEL_CANDIDATES[0];
     const x = element.x + cand.dx * effectiveR;
     const y = element.y + cand.dy * effectiveR;
@@ -4003,9 +4099,145 @@ function updateSizesForZoom() {
   updateZoneLabelCollisionVisibility(effectiveZoneFont);
 
   updateAxisLabelSizing(pxPerUnit);
+  updateViewportCulling(pxPerUnit);
   updateLabelCollisionVisibility(effectiveR, effectiveFont);
   updateScrollbars();
   updateZoomIndicator(pxPerUnit);
+}
+
+// ---------- отсечение по видимой области: и подписи, и сами фигуры ----------
+// Живой репорт 2026-08-04: "тормоза даже при большом зуме, когда в поле
+// видимости всего несколько подписанных элементов — видимо, продолжают
+// перерисовываться все", и следом, после первого круга правок: "2D работает
+// медленнее 3D, даже в масштабе 2000% перемещение идёт пару кадров в
+// секунду". Так и есть: в дереве на ЛЮБОМ масштабе оставались все 9422
+// контура и все подписи (наклейка — это <g><rect><text><tspan>, ещё ~35
+// тысяч узлов), а каждая смена viewBox заставляет браузер обойти их все.
+// Работа шла не по видимой области, а по всему чертежу — сколько ни
+// приближайся, дешевле не становилось. При этом сам JS от включения подписей
+// не дорожает почти совсем (обходы по state.elements идут одинаково в обе
+// стороны): решает именно число узлов в дереве.
+//
+// **Подпись убирается ИЗ DOM, а не прячется `display: none`.** Это не
+// микрооптимизация, а суть: замер на реальном файле при зуме 2000 %
+// (стоимость одной смены viewBox, метрика не зависит от способа съёмки
+// экрана) —
+//   все 9422 подписи в дереве, СКРЫТЫ они или нет   — 65,75 мс
+//   слой подписей пуст (узлы вне DOM)               —  0,13 мс
+//   9422 фигуры в дереве, все видимы                —  1,49 мс
+// То есть браузер обходит SVG-поддерево целиком, и скрытый узел стоит
+// столько же, сколько показанный: первая версия отсечения прятала подписи
+// классом и не дала ровно ничего. Фигуры дёшевы (свой узел на элемент
+// против пяти у наклейки) — их отсечение оставлено классом, ради
+// растеризации, а не раскладки.
+//
+// Для пользователя отсечение невидимо: убирается только то, что и так за
+// краем экрана. У ФИГУР (state.shapeById) используется КЛАСС, а не
+// style.display: inline-стиль на них уже занят фильтром размещения
+// (applyPlacementFilters), и два хозяина одного свойства неминуемо
+// подрались бы (эта регрессия у подписей уже случалась, см.
+// applyStickerVisibility). Скрыто, если сказал хоть один из двух.
+//
+// Ловушка отсоединения: искать подписи `document.querySelectorAll` больше
+// нельзя — отсоединённые не найдутся. Все обходы идут по картам
+// state.stickerById/labelById/subLabelById (см. тумблер типа подписи).
+//
+// Выделение рамкой и переход из отчёта от этого не страдают: рамка считает по
+// state.elements, а не по DOM (см. finishRubberBand), а переход к изделию
+// сначала центрирует на нём вид (см. markLocated).
+//
+// Габарит берётся от габарита ЭЛЕМЕНТА и годится обоим: наклейка по
+// построению не выходит за свой контур (STICKER_FIT_MARGIN < 1, см.
+// computeStickerLayout). Считается один раз при отрисовке — не нужно
+// пересчитывать его на каждый тик зума.
+const LABEL_CULL_MARGIN_SCALE = 0.05; // запас от края экрана, доля видимой области
+
+// ---------- порог читаемости подписи ----------
+// Высота строки подписи на ЭКРАНЕ, ниже которой подпись не показывается
+// вовсе — общая на 2D-наклейку и 3D-наклейку на грани (одна величина на оба
+// режима: подпись либо читается, либо нет, и от режима это не зависит).
+//
+// Зачем. Размер наклейки задан в мировых мм и привязан к габариту самого
+// элемента, поэтому на общем плане текст ужимается в доли пикселя, а
+// НЕПРОЗРАЧНАЯ подложка под ним остаётся: тысячи белых плашек застилают
+// схему сплошь. В 3D это читалось прямо как «непрорисованные части» (живая
+// жалоба на «3D лёгкий», где нет чёрных рёбер и эффект заметнее), в 2D —
+// как чёрная нечитаемая масса на месте плана. Это же и главный расход:
+// снимок на реальном файле (9422 элемента) — кадр 3D без наклеек стоит
+// 6,9 мс и 27 вызовов отрисовки, с наклейками на общем плане 46,8 мс и
+// 12 779.
+//
+// Величина. Сначала поставили 8 px — живой ответ пользователя: «появляются
+// на нечитаемом расстоянии, порог поставить раза в 1,5 больше» (2026-08-04).
+// При приближении подписи возвращаются сами.
+const MIN_LABEL_READABLE_PX = 12;
+
+function noteStickerWorldFont(elementId, fontSize) {
+  stickerWorldFontById.set(elementId, fontSize);
+  const entry = state.viewportCullById.get(elementId);
+  if (entry) entry.fontSize = fontSize;
+}
+
+function registerViewportCullEntry(elementId, entry) {
+  entry.fontSize = stickerWorldFontById.has(elementId) ? stickerWorldFontById.get(elementId) : null;
+  state.viewportCullById.set(elementId, entry);
+  return entry;
+}
+
+function viewportCullRadius(element, baseRadius) {
+  const outline = element.outline;
+  if (outline && outline.length >= 3) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [px, py] of outline) {
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+    return Math.hypot(maxX - minX, maxY - minY) / 2;
+  }
+  // Запасной вариант подписи (экранный кегль, офсет от центра маркера) —
+  // её мировой размер ограничен сверху базовым кеглем (baseRadius*1.3, см.
+  // computeEffectiveMarkerSizing), длинная марка с офсетом укладывается в
+  // десяток базовых радиусов. Такие элементы — меньшинство (нет пригодного
+  // контура), запас берём с избытком, лишь бы не отсечь видимое.
+  return baseRadius * 10;
+}
+
+function updateViewportCulling(pxPerUnit) {
+  const list = state.viewportCullList;
+  if (!list.length || !state.view) return;
+  const v = state.view;
+  const labelsLayer = document.getElementById("labels-layer");
+  // Порог читаемости (см. MIN_LABEL_READABLE_PX) — тот же, что у 3D-наклеек.
+  // Мировая высота строки известна для НАКЛЕЙКИ (её кегль задан в мм и от
+  // зума не зависит); у запасного варианта подписи кегль экранный, то есть
+  // читаемость обеспечена по построению — там порог не применяется
+  // (fontSize === null).
+  const minWorldFont = MIN_LABEL_READABLE_PX / (pxPerUnit || 1);
+  // Мировая видимая область: viewBox.y = -max_y, поэтому мировой Y
+  // восстанавливается обратным знаком (та же выкладка, что в
+  // updateAxisLabelSizing).
+  const padX = v.w * LABEL_CULL_MARGIN_SCALE, padY = v.h * LABEL_CULL_MARGIN_SCALE;
+  const minX = v.x - padX, maxX = v.x + v.w + padX;
+  const minY = -(v.y + v.h) - padY, maxY = -v.y + padY;
+  for (const entry of list) {
+    const r = entry.r;
+    const offscreen = entry.cx + r < minX || entry.cx - r > maxX
+      || entry.cy + r < minY || entry.cy - r > maxY;
+    // DOM трогаем ТОЛЬКО на смене состояния: при зуме/панорамировании границу
+    // пересекает десяток-другой элементов, а не все девять тысяч.
+    if (offscreen !== entry.shapeOut) {
+      entry.shapeOut = offscreen;
+      if (entry.shape) entry.shape.classList.toggle("shape-culled", offscreen);
+    }
+    const labelOut = offscreen || (entry.fontSize !== null && entry.fontSize < minWorldFont);
+    if (labelOut === entry.labelOut) continue;
+    entry.labelOut = labelOut;
+    // Именно отсоединение/возврат, а не display — см. разбор выше.
+    if (labelOut) entry.group.remove();
+    else labelsLayer.appendChild(entry.group);
+  }
 }
 
 // ---------- скрыть подписи марок, которые пересекаются при текущем масштабе, показать
@@ -4016,6 +4248,12 @@ function updateSizesForZoom() {
 const LABEL_COLLISION_BUCKET_MIN = 1e-6;
 
 function updateLabelCollisionVisibility(effectiveR, effectiveFont) {
+  // Коллизии считаются ТОЛЬКО для запасного варианта подписи (экранный
+  // кегль): у наклейки размер в мировых мм и она не выходит за свой контур,
+  // пересекаться ей не с чем. На чертежах нового стандарта контур есть у
+  // всех элементов, карта пуста — и весь обход по девяти тысячам элементов
+  // на каждый тик зума был чистым холостым ходом.
+  if (!state.labelById.size) return;
   const charW = effectiveFont * 0.62;
   const bucketSize = Math.max(effectiveFont * 6, effectiveR * 10, LABEL_COLLISION_BUCKET_MIN);
   const buckets = new Map();
@@ -5595,6 +5833,29 @@ document.addEventListener("click", (e) => {
 // ==================== PAN/ZOOM ====================
 const stageEl = document.getElementById("stage");
 
+// Единственное место, где размер рабочей области реально читается из DOM
+// (см. readStageMetrics — почему не по требованию). ResizeObserver вызывается
+// ПОСЛЕ раскладки, поэтому чтение внутри него ничего не пересчитывает заново,
+// и ловит изменение любой природы: окно, перетаскивание границы сайдбара,
+// переключение 2D/3D (скрытая область даёт 0×0), масштаб страницы. Отдельных
+// обработчиков на каждый из этих случаев не было вовсе — размер просто
+// перечитывался на каждый тик зума, что и стоило 65 мс на пересчёт раскладки.
+if (typeof ResizeObserver === "function") {
+  let inStageResize = false;
+  const stageResizeObserver = new ResizeObserver(() => {
+    if (inStageResize) return; // защита от повторного входа: updateSizesForZoom правит ползунки внутри дорожек
+    inStageResize = true;
+    stageMetrics.valid = false;
+    if (state.view) updateSizesForZoom();
+    inStageResize = false;
+  });
+  stageResizeObserver.observe(stageEl);
+  for (const id of ["vscroll", "hscroll"]) {
+    const track = document.getElementById(id);
+    if (track) stageResizeObserver.observe(track);
+  }
+}
+
 stageEl.addEventListener("wheel", (e) => {
   e.preventDefault();
   if (!state.view) return;
@@ -5878,8 +6139,9 @@ document.getElementById("multi-select-status-btn").addEventListener("click", ope
 function updateZoomIndicator(pxPerUnit) {
   const valueEl = document.getElementById("zoom-value");
   if (!state.initialView || !state.view) { valueEl.textContent = "—"; return; }
-  const initPxPerUnitX = stageEl.clientWidth / state.initialView.w;
-  const initPxPerUnitY = stageEl.clientHeight / state.initialView.h;
+  const { w, h } = readStageMetrics(); // размер — из кэша, см. readStageMetrics
+  const initPxPerUnitX = w / state.initialView.w;
+  const initPxPerUnitY = h / state.initialView.h;
   const initPxPerUnit = Math.min(initPxPerUnitX, initPxPerUnitY) || 1;
   valueEl.textContent = `${Math.round((pxPerUnit / initPxPerUnit) * 100)}%`;
 }
@@ -5897,12 +6159,11 @@ document.getElementById("zoom-reset-3d").addEventListener("click", () => {
 function updateScrollbars() {
   const vThumb = document.getElementById("vscroll-thumb");
   const hThumb = document.getElementById("hscroll-thumb");
-  const vTrack = document.getElementById("vscroll");
-  const hTrack = document.getElementById("hscroll");
   if (!state.view || !state.initialView) { vThumb.style.display = "none"; hThumb.style.display = "none"; return; }
   const full = state.initialView, v = state.view;
+  const metrics = readStageMetrics(); // размеры дорожек — из кэша, см. readStageMetrics
 
-  const trackH = vTrack.clientHeight;
+  const trackH = metrics.vTrackH;
   const hFrac = Math.min(1, v.h / full.h);
   let topFrac = full.h > 0 ? (v.y - full.y) / full.h : 0;
   topFrac = Math.max(0, Math.min(1 - hFrac, topFrac));
@@ -5910,7 +6171,7 @@ function updateScrollbars() {
   vThumb.style.top = (topFrac * trackH) + "px";
   vThumb.style.height = Math.max(20, hFrac * trackH) + "px";
 
-  const trackW = hTrack.clientWidth;
+  const trackW = metrics.hTrackW;
   const wFrac = Math.min(1, v.w / full.w);
   let leftFrac = full.w > 0 ? (v.x - full.x) / full.w : 0;
   leftFrac = Math.max(0, Math.min(1 - wFrac, leftFrac));
@@ -13036,7 +13297,7 @@ const DECAL_CHAR_WIDTH_RATIO = 0.62;
 // Текст не должен занимать больше этой доли длины — небольшой запас,
 // чтобы не "впритык" по самому краю.
 const DECAL_FIT_MARGIN = 0.92;
-// Горизонтальный отступ текстуры (getDecalTexture: paddingX=fontPx*0.3
+// Горизонтальный отступ текстуры (buildDecalAtlas: padX=fontPx*0.3
 // с каждой стороны) в тех же "долях символа", что и DECAL_CHAR_WIDTH_RATIO
 // — canvas.height=fontPx*1.3, значит суммарный отступ (0.3*2=0.6 в долях
 // fontPx) в мировых единицах составляет 0.6/1.3 доли world-высоты
@@ -13052,59 +13313,109 @@ const DECAL_PAD_WIDTH_RATIO = 0.6 / 1.3;
 // (там заказчик потребовал точное соответствие входным данным).
 const DECAL_SURFACE_OFFSET_MM = 5;
 
-// Текстура наклейки — ОБЩАЯ на все элементы с ОДНОЙ и той же маркой, не
-// своя на каждый элемент — марки часто повторяются десятки раз по всему
-// зданию (см. Docs/backlog.md, "31 экземпляр марки 2Рк2 на одной
-// отметке") — отдельная текстура на каждый экземпляр была бы тем же
-// классом проблемы с производительностью, что уже чинили для материалов
-// (см. getFaceMaterial).
-// Ключ кэша — марка + допстрока + её цвет (не только марка) — допстрока
-// (код контрагента + плановая дата) отличается у РАЗНЫХ физических
-// элементов с ОДНОЙ и той же маркой (разные контракты/плановые даты),
-// текстуру по одной марке больше нельзя было бы безусловно шарить между
-// ними (живой запрос пользователя: "в 3Д информации о дате и контрагенте
-// не появилось вообще" — раньше наклейка вообще не показывала допстроку,
-// только марку). Элементы БЕЗ допстроки (нет плановой даты/кода) по-прежнему
-// делят одну текстуру на марку — самый частый случай, кэш не деградирует.
-const decalTextureCache = new Map(); // "марка::допстрока::цвет" -> THREE.CanvasTexture
+// ---------- АТЛАС ТЕКСТУР НАКЛЕЕК ----------
+// Все надписи наклеек лежат на нескольких больших холстах, а не по текстуре
+// на надпись. Смысл — не экономия памяти, а возможность слить наклейки в
+// ОДИН буфер: разные текстуры означали бы разные меши, то есть возврат к
+// тысячам вызовов отрисовки (ровно то, от чего ушла геометрия элементов,
+// см. build3DMergedGeometry). Надпись на реальном файле уникальна в 674
+// вариантах на 25 568 наклеек — на страницу 2048×2048 их влезает несколько
+// сотен, то есть страниц единицы.
+//
+// Надпись — марка И допстрока ОДНОЙ строкой (живой запрос пользователя: "в
+// одну строку марка и дата"; в две строки наклейка выходила выше, чаще не
+// проходила проверку "помещается по высоте стороны" и элемент падал на
+// плавающую табличку, которая визуально отрывается от поверхности).
+// Ключ — марка + допстрока + её цвет: допстрока (код контрагента +
+// плановая дата) различается у РАЗНЫХ элементов с одной маркой.
+const DECAL_ATLAS_FONT_PX = 64;   // разрешение надписи, не мировой размер
+const DECAL_ATLAS_LINE_PX = Math.ceil(DECAL_ATLAS_FONT_PX * 1.3);
+// Поля вокруг ячейки — под мип-уровни: без них при удалении соседняя
+// надпись затекает в текущую. Заливаются тем же фоном, что и сама ячейка
+// (фон однороден, так что это честное продолжение краевого пикселя).
+const DECAL_ATLAS_CELL_PAD_PX = 4;
+const DECAL_ATLAS_PAGE_PX = 2048;
+const DECAL_ATLAS_BG = "#ffffff";
 
-// Марка и допстрока — ОДНА строка, не две (живой запрос пользователя:
-// "в одну строку марка и дата" — раньше 2 строки делали наклейку выше,
-// из-за чего она реже проходила проверку "помещается по высоте
-// стороны" в build3DMarkDecal и элемент чаще падал на плавающую
-// табличку, которая визуально "отрывается" от поверхности).
-function getDecalTexture(mark, subText, subColor) {
-  const key = `${mark}::${subText || ""}::${subColor || ""}`;
-  let texture = decalTextureCache.get(key);
-  if (texture) return texture;
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  const fontPx = 64; // разрешение текстуры — не мировой размер, наклейка растягивается под реальные мм на плоскости
-  ctx.font = `bold ${fontPx}px sans-serif`;
-  const markWidthPx = ctx.measureText(mark + (subText ? " " : "")).width;
-  let subWidthPx = 0;
-  if (subText) { ctx.font = `${fontPx}px sans-serif`; subWidthPx = ctx.measureText(subText).width; }
-  const paddingX = fontPx * 0.3;
-  canvas.width = Math.max(1, Math.ceil(markWidthPx + subWidthPx) + paddingX * 2);
-  canvas.height = Math.ceil(fontPx * 1.3);
-  // Та же подложка/цвет, что уже подтверждена для плавающей 3D-таблички
-  // (build3DLabelSprite) — визуальная согласованность между "наклейкой"
-  // и запасным вариантом для коротких элементов.
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = currentLabelColor();
-  ctx.font = `bold ${fontPx}px sans-serif`;
-  ctx.fillText(mark, paddingX, canvas.height / 2);
-  if (subText) {
-    ctx.font = `${fontPx}px sans-serif`;
-    ctx.fillStyle = subColor || "#555";
-    ctx.fillText(subText, paddingX + markWidthPx, canvas.height / 2);
+function decalLabelKey(mark, subText, subColor) {
+  return `${mark}::${subText || ""}::${subColor || ""}`;
+}
+
+// Раскладывает надписи по страницам полками (все ячейки одной высоты —
+// строка текста одна, высота у всех одинакова) и возвращает для каждой
+// прямоугольник в координатах текстуры плюс соотношение сторон: мировая
+// ширина наклейки = высота × aspect, ровно как было у отдельной текстуры.
+function buildDecalAtlas(labels) {
+  const measure = document.createElement("canvas").getContext("2d");
+  const cellH = DECAL_ATLAS_LINE_PX + DECAL_ATLAS_CELL_PAD_PX * 2;
+  const pages = [];
+  const rects = new Map();
+  let ctx = null, penX = 0, penY = 0, rowH = cellH;
+
+  const newPage = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = DECAL_ATLAS_PAGE_PX;
+    canvas.height = DECAL_ATLAS_PAGE_PX;
+    ctx = canvas.getContext("2d");
+    ctx.fillStyle = DECAL_ATLAS_BG;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    pages.push(canvas);
+    penX = 0; penY = 0;
+  };
+
+  for (const [key, label] of labels) {
+    const { mark, subText, subColor } = label;
+    measure.font = `bold ${DECAL_ATLAS_FONT_PX}px sans-serif`;
+    const markW = measure.measureText(mark + (subText ? " " : "")).width;
+    let subW = 0;
+    if (subText) { measure.font = `${DECAL_ATLAS_FONT_PX}px sans-serif`; subW = measure.measureText(subText).width; }
+    const padX = DECAL_ATLAS_FONT_PX * 0.3;
+    const textW = Math.max(1, Math.ceil(markW + subW) + padX * 2);
+    // Надпись шире страницы физически не разместить — ужимаем шрифт по
+    // ширине (случай теоретический: 2048 px это ~40 символов марки).
+    const cellW = Math.min(textW, DECAL_ATLAS_PAGE_PX - DECAL_ATLAS_CELL_PAD_PX * 2) + DECAL_ATLAS_CELL_PAD_PX * 2;
+
+    if (!ctx) newPage();
+    if (penX + cellW > DECAL_ATLAS_PAGE_PX) { penX = 0; penY += rowH; }
+    if (penY + cellH > DECAL_ATLAS_PAGE_PX) newPage();
+
+    const x = penX + DECAL_ATLAS_CELL_PAD_PX, y = penY + DECAL_ATLAS_CELL_PAD_PX;
+    const w = cellW - DECAL_ATLAS_CELL_PAD_PX * 2, h = DECAL_ATLAS_LINE_PX;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = currentLabelColor();
+    ctx.font = `bold ${DECAL_ATLAS_FONT_PX}px sans-serif`;
+    ctx.fillText(mark, x + padX, y + h / 2);
+    if (subText) {
+      ctx.font = `${DECAL_ATLAS_FONT_PX}px sans-serif`;
+      ctx.fillStyle = subColor || "#555";
+      ctx.fillText(subText, x + padX + markW, y + h / 2);
+    }
+    ctx.restore();
+
+    // flipY у текстуры выключен (см. ниже), поэтому V растёт сверху вниз,
+    // как пиксельная координата холста, — без лишней инверсии в уме.
+    rects.set(key, {
+      page: pages.length - 1,
+      u0: x / DECAL_ATLAS_PAGE_PX, u1: (x + w) / DECAL_ATLAS_PAGE_PX,
+      v0: y / DECAL_ATLAS_PAGE_PX, v1: (y + h) / DECAL_ATLAS_PAGE_PX,
+      aspect: w / h,
+    });
+    penX += cellW;
   }
-  texture = new THREE.CanvasTexture(canvas);
-  texture.userData.aspect = canvas.width / canvas.height;
-  decalTextureCache.set(key, texture);
-  return texture;
+
+  const textures = pages.map(canvas => {
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.flipY = false;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4; // надписи смотрят под очень косыми углами — без этого на удалении каша
+    texture.needsUpdate = true;
+    return texture;
+  });
+  return { textures, rects };
 }
 
 // Направление самой длинной стороны контура — устойчиво к лишним
@@ -13273,169 +13584,148 @@ function computeColumnEndExtensions(levels) {
   return overrides;
 }
 
-// Ориентирует плоскую наклейку через явный базис (право/верх/нормаль) —
-// надёжнее, чем подбирать углы поворота вручную (тот же класс ошибок,
-// что уже ловили на зеркальности всей 3D-сцены, см. Docs/backlog.md,
-// "3D — зеркальность"): right/normal/up — ортонормированная тройка,
-// right×up=normal (правая система), PlaneGeometry по умолчанию лежит в
-// локальной XY с нормалью +Z — базис ставит локальный X на right,
-// Y на up, Z на normal.
-function orientDecalMesh(mesh, center, right, normal) {
-  const up = new THREE.Vector3().crossVectors(normal, right).normalize();
-  const basis = new THREE.Matrix4().makeBasis(right, up, normal);
-  mesh.quaternion.setFromRotationMatrix(basis);
-  mesh.position.copy(center);
+// ---------- НАКЛЕЙКИ СЛИТЫ В ОБЩИЙ БУФЕР ----------
+// Раньше наклейка была отдельным THREE.Mesh со своей PlaneGeometry и своим
+// материалом: на реальном файле 25 568 объектов сцены и столько же вызовов
+// отрисовки (плита 2 наклейки, ригель 4, колонна 4). Это тот же класс
+// проблемы, который уже решён для геометрии элементов слиянием в один буфер
+// (см. build3DMergedGeometry): треугольники ничего не стоят, стоят вызовы и
+// обход графа сцены. Замер до слияния: 25 531 вызов и 105 мс на кадр; обход
+// графа (updateMatrixWorld по 35 590 объектам) — ещё 6,8 мс, и он платился
+// даже когда все наклейки скрыты.
+//
+// Теперь на КАЖДЫЙ ТИП элемента строится по одному мешу на страницу атласа
+// (см. buildDecalAtlas). Тип остаётся отдельным мешем намеренно: тумблер
+// «Подписи» по типу — это одна проверка видимости, а не пересборка буфера.
+//
+// Всё, что раньше делалось на каждый кадр перебором наклеек, ушло в
+// вершинный шейдер и не стоит ничего:
+//  - ОТСЕЧЕНИЕ ОТВЁРНУТЫХ ГРАНЕЙ. Наклейка лежит на поверхности
+//    непрозрачного тела, значит с изнанки её всё равно закрывает сам
+//    элемент. Порядок вершин задан так, что лицевая сторона смотрит вдоль
+//    нормали, а материал — FrontSide: отсекает сама видеокарта.
+//  - ПОРОГ ЧИТАЕМОСТИ (MIN_LABEL_READABLE_PX). Наклейка мельче порога
+//    схлопывается в точку — вырожденный треугольник не растрируется.
+//    Расстояние до камеры считается в шейдере от центра наклейки.
+//  - РАЗВОРОТ ТЕКСТА на 180° вокруг нормали, когда «верх» строки смотрит на
+//    зрителя (лист на столе читают со стороны, противоположной верху
+//    страницы). Поворот квадрата на 180° вокруг нормали — это в точности
+//    перестановка его углов, то есть UV: u→uMin+uMax−u, v→vMin+vMax−v.
+//    Считается по вершине, геометрию трогать не нужно.
+// logdepthbuf_* — ОБЯЗАТЕЛЬНЫ, а не «на всякий случай»: в обычном (не
+// лёгком) режиме рендерер собран с логарифмическим буфером глубины, и
+// материал, который пишет глубину по-обычному, оказывается в другой шкале
+// — наклейки просто уходят под геометрию. Поймано живой проверкой: в
+// «3D лёгком» (буфер выключен) всё рисовалось, в обычном подписи исчезали
+// начисто. Сам `#define USE_LOGDEPTHBUF` подставляет рендерер, от материала
+// нужны только чанки.
+const DECAL_VERTEX_SHADER = `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+attribute vec3 aCenter;      // центр наклейки в мире — расстояние до камеры и точка схлопывания
+attribute vec3 aUp;          // "верх" строки — по нему решается разворот
+attribute vec4 aUvRect;      // (uMin, vMin, uMax, vMax) ячейки в атласе
+attribute float aWorldHeight; // высота строки в мм — по ней порог читаемости
+attribute float aFlippable;   // 1 — наклейка на горизонтальной грани, её разворачиваем
+uniform float uWorldPerPxAtUnitDist; // мировых единиц на пиксель на расстоянии 1
+varying vec2 vAtlasUv;
+void main() {
+  vec3 toCamera = cameraPosition - aCenter;
+  vAtlasUv = uv;
+  if (aFlippable > 0.5 && dot(aUp, toCamera) > 0.0) {
+    vAtlasUv = aUvRect.xy + aUvRect.zw - uv;
+  }
+  // Нечитаемо мелкая наклейка схлопывается в свой центр: все четыре угла
+  // совпадают, треугольники вырождаются, растеризатор их пропускает.
+  vec3 pos = (aWorldHeight < length(toCamera) * uWorldPerPxAtUnitDist) ? aCenter : position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  #include <logdepthbuf_vertex>
 }
+`;
 
-function buildDecalPlane(texture, worldWidth, worldHeight, center, right, normal) {
-  const geometry = new THREE.PlaneGeometry(worldWidth, worldHeight);
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    // FrontSide, а не DoubleSide: наклейка ВСЕГДА повёрнута лицом вдоль
-    // своей нормали (orientDecalMesh ставит локальный +Z на normal, а
-    // разворот "вверх ногами" — поворот на 180° ВОКРУГ нормали, который
-    // +Z не меняет), а с изнанки её и так закрывает само тело элемента,
-    // см. updateDecalForCamera. Обратная сторона перестаёт растрироваться
-    // вовсе — и заодно снимается целый класс артефакта из лёгкого режима,
-    // где наклейка с ДАЛЬНЕЙ грани, вынесенная вперёд polygonOffset'ом,
-    // при грубом (нелогарифмическом) буфере глубины пробивала геометрию
-    // перед собой.
+const DECAL_FRAGMENT_SHADER = `
+#include <common>
+#include <logdepthbuf_pars_fragment>
+uniform sampler2D uAtlas;
+varying vec2 vAtlasUv;
+void main() {
+  #include <logdepthbuf_fragment>
+  gl_FragColor = texture2D(uAtlas, vAtlasUv);
+  #include <colorspace_fragment>
+}
+`;
+
+function makeDecalMaterial(atlasTexture) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uAtlas: { value: atlasTexture },
+      // Пересчитывается на каждый кадр (см. updateDecalReadabilityUniform):
+      // зависит от высоты холста и угла обзора, а не от наклейки.
+      uWorldPerPxAtUnitDist: { value: 0 },
+    },
+    vertexShader: DECAL_VERTEX_SHADER,
+    fragmentShader: DECAL_FRAGMENT_SHADER,
     side: THREE.FrontSide,
+    // Тот же приём, что и раньше: наклейка лежит РОВНО на грани, без
+    // выноса её съедает z-fighting (мировой отступ DECAL_SURFACE_OFFSET_MM
+    // сам по себе на дальнем плане не спасает).
     polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
   });
-  const mesh = new THREE.Mesh(geometry, material);
-  orientDecalMesh(mesh, center, right, normal);
-  // Сохраняем "базовую" (немодифицированную) ориентацию — см.
-  // updateDecalForCamera ниже: при вращении камеры вокруг элемента
-  // текст на плоской наклейке (не билборд — лежит на грани) со
-  // временем оказывается развёрнут "верх ногами" относительно текущего
-  // ракурса (заказчик явно попросил это исправить, 2026-07-25) —
-  // единственный выход из двух читаемых вариантов (право/лево = базовое
-  // направление или развёрнутое на 180° вокруг нормали) выбирается
-  // заново при каждом повороте камеры, без пересборки геометрии/текстуры.
-  const ud = mesh.userData;
-  ud.decalCenter = center.clone();
-  ud.decalNormal = normal.clone();
-  ud.decalBaseRight = right.clone();
-  // Всё, что раньше считалось заново на КАЖДОМ кадре для КАЖДОЙ из ~25 600
-  // наклеек, посчитано здесь один раз: "верх" текста, готовое зеркальное
-  // "право" и признак, бывает ли у этой наклейки разворот вообще.
-  ud.decalUp = new THREE.Vector3().crossVectors(normal, right).normalize();
-  ud.decalFlippedRight = right.clone().negate();
-  // Динамический разворот имеет смысл ТОЛЬКО когда "верх" текста
-  // ГОРИЗОНТАЛЬНЫЙ (верх/низ плиты/ригеля — там при обходе камеры вокруг
-  // здания по азимуту верх текста то смотрит на зрителя, то от него,
-  // ровно то, что чинили). На боковых (вертикальных) гранях (колонна,
-  // боковые грани ригеля) "верх" текста ВЕРТИКАЛЬНЫЙ — буквы стоят прямо
-  // и не должны переворачиваться от того, выше или ниже камера конкретного
-  // элемента: раньше это давало переворот "через раз" в зависимости от
-  // высоты камеры относительно КАЖДОГО элемента по отдельности (живой
-  // репорт пользователя 2026-07-25, см. Docs/backlog.md) — для них
-  // навсегда остаётся базовая ориентация, заданная здесь.
-  ud.decalFlippable = Math.abs(ud.decalUp.y) <= 0.5;
-  ud.decalFlipped = false;
-  return mesh;
 }
 
-// Одна наклейка на кадр: (1) видно ли её грань с текущего ракурса вообще
-// и (2) не нужно ли развернуть текст на 180° вокруг нормали.
-//
-// (1) — ОТСЕЧЕНИЕ НЕВИДИМЫХ ГРАНЕЙ (живой запрос пользователя
-// 2026-08-04: "у любого элемента схемы видны в моменте или 1, или 2
-// грани — можем не обрабатывать наклейки на невидимых?"). Проверка
-// точная, а не эвристика: наклейка лежит НА поверхности непрозрачного
-// тела, поэтому если грань отвёрнута от камеры, наклейку гарантированно
-// закрывает сам элемент — рисовать её незачем ни при каком ракурсе.
-// Отсекается сразу больше половины: у плиты из двух наклеек (верх/низ)
-// видна ровно одна, у ригеля из четырёх — не больше двух, у колонны из
-// четырёх боковых — тоже не больше двух.
-//
-// (2) — разворот на 180° вокруг нормали, если "верх" текста сейчас
-// смотрит НА камеру, то есть зритель стоит с "дальней" стороны текста
-// (там, куда указывает верх букв), а не с "ближней" (где строка
-// начинается) — тот же принцип, что у листа на столе: читают его СО
-// СТОРОНЫ, противоположной верху страницы (верх "уходит" от читателя), не
-// с той, куда верх направлен. Раньше знак был перепутан на обратный —
-// разворачивало ИМЕННО тогда, когда не нужно, и наоборот, поэтому вверх
-// ногами оказывались вообще все наклейки на любом ракурсе, а не только
-// часть (живой репорт пользователя 2026-07-25, см. Docs/backlog.md).
-//
-// В установившемся состоянии функция не делает НИЧЕГО, кроме одного
-// скалярного произведения: и признак развёрнутости, и "верх", и зеркальное
-// "право" сосчитаны один раз в buildDecalPlane, а кватернион трогается
-// только в тот кадр, когда разворот реально сменился. Раньше на каждый
-// кадр на каждую наклейку безусловно создавались Vector3/Matrix4 и
-// переписывался кватернион — на ~25 600 наклейках это больше сотни тысяч
-// временных объектов и столько же пересчётов мировой матрицы в кадр.
-const decalToCamera = new THREE.Vector3(); // общий на все наклейки, не аллоцировать в цикле
-function updateDecalForCamera(mesh, camera) {
-  const ud = mesh.userData;
-  if (!ud.decalCenter) return;
-  decalToCamera.subVectors(camera.position, ud.decalCenter);
-  const facing = decalToCamera.dot(ud.decalNormal) > 0;
-  if (mesh.visible !== facing) mesh.visible = facing;
-  if (!facing || !ud.decalFlippable) return;
-  const flip = ud.decalUp.dot(decalToCamera) > 0;
-  if (flip === ud.decalFlipped) return;
-  ud.decalFlipped = flip;
-  orientDecalMesh(mesh, ud.decalCenter, flip ? ud.decalFlippedRight : ud.decalBaseRight, ud.decalNormal);
-}
-
-function updateDecalsForCamera() {
+// Порог читаемости в мировых единицах на единицу расстояния: наклейка
+// высотой h мм на расстоянии d видна как h/(d·uWorldPerPxAtUnitDist)
+// пикселей. Высота холста берётся из АТРИБУТА (буфер отрисовки), а не из
+// clientHeight: чтение раскладки в кадре обошлось бы дороже всей работы
+// (ровно на этом стояли тормоза 2D, см. readStageMetrics).
+function updateDecalReadabilityUniform() {
   const v3 = state.view3d;
-  if (!v3.camera || !v3.markDecalById.size) return;
-  for (const group of v3.markDecalById.values()) {
-    // Скрытую наклейку обрабатывать незачем: её не видно, а функция
-    // вызывается на КАЖДЫЙ кадр. Без этой проверки вращение
-    // сцены с узким фильтром стоило столько же, сколько без фильтра
-    // (живой запрос 2026-07-29: не обрабатывать то, что отфильтровано).
-    if (!group.visible) continue;
-    for (const mesh of group.children) updateDecalForCamera(mesh, v3.camera);
-  }
+  if (!v3.decalMeshes || !v3.decalMeshes.length) return;
+  const canvas = v3.renderer.domElement;
+  const heightPx = (canvas.height || 1) / (v3.renderer.getPixelRatio() || 1);
+  const pxPerWorldAtUnitDist = heightPx / (2 * Math.tan((v3.camera.fov * Math.PI / 180) / 2));
+  const value = MIN_LABEL_READABLE_PX / pxPerWorldAtUnitDist;
+  for (const mesh of v3.decalMeshes) mesh.material.uniforms.uWorldPerPxAtUnitDist.value = value;
 }
 
-// Строит "наклейку" на грани(ях) элемента — только для DECAL_TYPES с
-// пригодным контуром; шрифт уменьшается, если марка+допстрока не
-// помещаются по длине стороны (живой запрос пользователя — наклейка
-// должна ВСЕГДА лежать на поверхности, не падать на плавающую табличку
-// build3DLabelSprite из-за длинного текста). null — только если контура
-// совсем нет/не того типа/марки нет вовсе (см. rebuild3DLabelSprite/
-// build3DScene — тогда используется build3DLabelSprite).
-function build3DMarkDecal(element, levels, columnTopOverrides) {
+// Надпись наклейки для элемента — null, если наклейка ему не полагается
+// (не тот тип, нет контура/марки; тогда используется плавающая табличка
+// build3DLabelSprite). Считается ДО сборки атласа: из этих ключей он и
+// собирается.
+function decalLabelFor(element) {
   if (!DECAL_TYPES.has(element.element_type)) return null;
   if (!element.mark || !element.outline || element.outline.length < 3) return null;
-
   // Допстрока (код контрагента + плановая дата) — та же информация, что
-  // у плавающей 3D-подписи (build3DLabelSprite) и у 2D-наклейки, теперь
-  // и на самой наклейке на грани (раньше наклейка несла только марку —
-  // живой запрос пользователя, см. Docs/backlog.md). Цвет — тот же
-  // критерий опоздания, что у допстроки везде (computeDeliveryLateStatus).
+  // у плавающей 3D-подписи (build3DLabelSprite) и у 2D-наклейки. Цвет —
+  // тот же критерий опоздания, что у допстроки везде
+  // (computeDeliveryLateStatus).
   const subText = elementSubLabelText(element);
   const subColor = deliveryColorHex(element);
-  // Марка+допстрока — ОДНА строка (см. getDecalTexture) — длина для
-  // фит-чека суммарная, не максимум из двух отдельных строк.
-  const maxTextLen = element.mark.length + (subText ? subText.length + 1 : 0);
+  return { mark: element.mark, subText, subColor, key: decalLabelKey(element.mark, subText, subColor) };
+}
 
-  const texture = getDecalTexture(element.mark, subText, subColor);
-  const aspect = texture.userData.aspect;
-  const group = new THREE.Group();
-  // world.X=dxf.x, world.Z=-dxf.y (см. build3DElementGeometry) — та же
-  // поправка знака применяется здесь для всех мировых координат наклейки.
+// Плоскости наклеек одного элемента: центр, «право», нормаль и размеры в
+// мировых мм. Меши здесь больше не создаются — всё уходит в общий буфер
+// (см. buildMergedDecals). Шрифт уменьшается, если марка+допстрока не
+// помещаются по длине стороны, а наклейка НЕ отменяется целиком (живой
+// запрос пользователя: «точно как наклейка в пределах элемента» — всегда
+// на поверхности, а не иногда падать на плавающую табличку).
+// world.X=dxf.x, world.Z=-dxf.y (см. build3DElementGeometry) — та же
+// поправка знака применяется здесь ко всем мировым координатам наклейки.
+function collectMarkDecalQuads(element, label, aspect, levels, columnTopOverrides) {
+  // Марка+допстрока — ОДНА строка (см. buildDecalAtlas): длина для
+  // фит-чека суммарная, не максимум из двух отдельных строк.
+  const maxTextLen = element.mark.length + (label.subText ? label.subText.length + 1 : 0);
+  const quads = [];
 
   if (element.element_type === "Колонна") {
     const height = elementExtrusionHeight(element, levels, columnTopOverrides);
     const sides = polygonSides(element.outline);
     const centroid = footprintCentroid(element.outline);
-    let any = false;
     for (const side of sides) {
       const width = Math.hypot(side.b[0] - side.a[0], side.b[1] - side.a[1]);
-      // Шрифт УМЕНЬШАЕТСЯ, если марка+допстрока не помещаются по высоте
-      // этой стороны, а не отменяет наклейку целиком (живой запрос
-      // пользователя: "точно как наклейка в пределах элемента" — всегда
-      // на поверхности, а не иногда падать на плавающую табличку).
       const maxFontByLength = (height * DECAL_FIT_MARGIN) / (maxTextLen * DECAL_CHAR_WIDTH_RATIO + DECAL_PAD_WIDTH_RATIO);
       const fontSize = Math.min(width, maxFontByLength);
-      any = true;
       const midX = (side.a[0] + side.b[0]) / 2, midY = (side.a[1] + side.b[1]) / 2;
       // "Наружу" — от центроида контура к середине стороны (устойчивее,
       // чем гадать знак перпендикуляра ребра отдельно).
@@ -13446,17 +13736,14 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
       const right = new THREE.Vector3(0, 1, 0); // текст снизу вверх вдоль высоты
       const center = new THREE.Vector3(midX, (element.elevation_mm || 0) + height / 2, -midY);
       center.addScaledVector(normal, DECAL_SURFACE_OFFSET_MM);
-      group.add(buildDecalPlane(texture, fontSize * aspect, fontSize, center, right, normal));
+      quads.push({ center, right, normal, width: fontSize * aspect, height: fontSize });
     }
-    if (!any) return null;
-    return group;
+    return quads.length ? quads : null;
   }
 
   // Плита перекрытия / Ригель — верх и низ, вдоль длинной стороны контура.
   const dims = footprintDimensions(element.outline);
   if (!dims) return null;
-  // Шрифт уменьшается, если марка+допстрока не помещаются по длине —
-  // не отменяет наклейку целиком (см. комментарий у Колонны выше).
   const maxFontByLength = (dims.length * DECAL_FIT_MARGIN) / (maxTextLen * DECAL_CHAR_WIDTH_RATIO + DECAL_PAD_WIDTH_RATIO);
   const fontSize = Math.min(dims.width, maxFontByLength);
 
@@ -13467,11 +13754,14 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
   const cx = cx0, cz = -cy0;
   const decalWorldWidth = fontSize * aspect;
 
-  const topCenter = new THREE.Vector3(cx, (element.elevation_mm || 0) + height + DECAL_SURFACE_OFFSET_MM, cz);
-  group.add(buildDecalPlane(texture, decalWorldWidth, fontSize, topCenter, right, new THREE.Vector3(0, 1, 0)));
-
-  const bottomCenter = new THREE.Vector3(cx, (element.elevation_mm || 0) - DECAL_SURFACE_OFFSET_MM, cz);
-  group.add(buildDecalPlane(texture, decalWorldWidth, fontSize, bottomCenter, right, new THREE.Vector3(0, -1, 0)));
+  quads.push({
+    center: new THREE.Vector3(cx, (element.elevation_mm || 0) + height + DECAL_SURFACE_OFFSET_MM, cz),
+    right, normal: new THREE.Vector3(0, 1, 0), width: decalWorldWidth, height: fontSize,
+  });
+  quads.push({
+    center: new THREE.Vector3(cx, (element.elevation_mm || 0) - DECAL_SURFACE_OFFSET_MM, cz),
+    right, normal: new THREE.Vector3(0, -1, 0), width: decalWorldWidth, height: fontSize,
+  });
 
   // Ригель — ЕЩЁ 2 наклейки, на боковых (вертикальных) гранях вдоль
   // длины (не только верх/низ) — заказчик явно попросил "с четырёх
@@ -13499,12 +13789,109 @@ function build3DMarkDecal(element, levels, columnTopOverrides) {
       // пользователь (боковая грань к зрителю — вверх ногами, живой
       // репорт 2026-07-25, см. Docs/backlog.md). Домножение на -sign
       // даёт up.y=+1 (стабильно "вверх") на ОБЕИХ сторонах.
-      const sideRight = right.clone().multiplyScalar(-sign);
-      group.add(buildDecalPlane(texture, decalWorldWidth, fontSize, center, sideRight, normal));
+      quads.push({
+        center, right: right.clone().multiplyScalar(-sign), normal,
+        width: decalWorldWidth, height: fontSize,
+      });
     }
   }
 
-  return group;
+  return quads;
+}
+
+// Собирает наклейки ВСЕХ показанных элементов в общие буферы: по одному
+// мешу на пару (тип элемента, страница атласа). Тип остаётся отдельным
+// мешем намеренно — тумблер «Подписи» по типу должен быть переключением
+// видимости, а не пересборкой буфера.
+function buildMergedDecals(elements, levels, columnTopOverrides) {
+  const labelByElementId = new Map();
+  const labels = new Map(); // ключ надписи -> {mark, subText, subColor}
+  for (const element of elements) {
+    const label = decalLabelFor(element);
+    if (!label) continue;
+    labelByElementId.set(element.id, label);
+    if (!labels.has(label.key)) labels.set(label.key, label);
+  }
+  if (!labels.size) return { meshes: [], textures: [], elementIds: new Set() };
+
+  const atlas = buildDecalAtlas(labels);
+  // Ключ группировки — тип элемента + страница атласа: разные страницы это
+  // разные текстуры, то есть неизбежно разные меши.
+  const groups = new Map(); // "типстраница" -> буферы
+  const elementIds = new Set();
+  const up = new THREE.Vector3();
+  const corner = new THREE.Vector3();
+
+  for (const element of elements) {
+    const label = labelByElementId.get(element.id);
+    if (!label) continue;
+    const rect = atlas.rects.get(label.key);
+    const quads = collectMarkDecalQuads(element, label, rect.aspect, levels, columnTopOverrides);
+    if (!quads || !quads.length) continue;
+    elementIds.add(element.id);
+
+    const groupKey = `${element.element_type}${rect.page}`;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { type: element.element_type, page: rect.page, position: [], uv: [], center: [], upDir: [], uvRect: [], worldHeight: [], flippable: [], index: [], vertexCount: 0 };
+      groups.set(groupKey, group);
+    }
+
+    for (const quad of quads) {
+      up.crossVectors(quad.normal, quad.right).normalize();
+      const halfW = quad.width / 2, halfH = quad.height / 2;
+      // Порядок углов задаёт обход против часовой стрелки, если смотреть
+      // СО СТОРОНЫ НОРМАЛИ — тогда лицевая сторона треугольника совпадает
+      // с нормалью, и отвёрнутую грань отсекает сама видеокарта
+      // (material.side = FrontSide).
+      const signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+      // V в атласе растёт СВЕРХУ ВНИЗ (flipY выключен), поэтому нижнему
+      // углу наклейки соответствует НИЖНЯЯ строка ячейки — v1.
+      const uvs = [[rect.u0, rect.v1], [rect.u1, rect.v1], [rect.u1, rect.v0], [rect.u0, rect.v0]];
+      const base = group.vertexCount;
+      for (let i = 0; i < 4; i++) {
+        corner.copy(quad.center)
+          .addScaledVector(quad.right, signs[i][0] * halfW)
+          .addScaledVector(up, signs[i][1] * halfH);
+        group.position.push(corner.x, corner.y, corner.z);
+        group.uv.push(uvs[i][0], uvs[i][1]);
+        group.center.push(quad.center.x, quad.center.y, quad.center.z);
+        group.upDir.push(up.x, up.y, up.z);
+        group.uvRect.push(rect.u0, rect.v0, rect.u1, rect.v1);
+        group.worldHeight.push(quad.height);
+        // Разворот текста имеет смысл ТОЛЬКО когда «верх» строки
+        // горизонтален (верх/низ плиты и ригеля — там при обходе камеры
+        // вокруг здания верх текста то смотрит на зрителя, то от него). На
+        // боковых (вертикальных) гранях «верх» вертикален, буквы стоят
+        // прямо и переворачиваться не должны от того, выше камера или ниже
+        // конкретного элемента: раньше это давало переворот «через раз»
+        // (живой репорт 2026-07-25, см. Docs/backlog.md).
+        group.flippable.push(Math.abs(up.y) <= 0.5 ? 1 : 0);
+      }
+      group.index.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      group.vertexCount += 4;
+    }
+  }
+
+  const meshes = [];
+  for (const group of groups.values()) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(group.position, 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(group.uv, 2));
+    geometry.setAttribute("aCenter", new THREE.Float32BufferAttribute(group.center, 3));
+    geometry.setAttribute("aUp", new THREE.Float32BufferAttribute(group.upDir, 3));
+    geometry.setAttribute("aUvRect", new THREE.Float32BufferAttribute(group.uvRect, 4));
+    geometry.setAttribute("aWorldHeight", new THREE.Float32BufferAttribute(group.worldHeight, 1));
+    geometry.setAttribute("aFlippable", new THREE.Float32BufferAttribute(group.flippable, 1));
+    geometry.setIndex(group.index);
+    const mesh = new THREE.Mesh(geometry, makeDecalMaterial(atlas.textures[group.page]));
+    // Наклейки схлопываются в шейдере, а не двигаются: охват буфера не
+    // меняется, и отсечение по пирамиде видимости остаётся корректным.
+    mesh.frustumCulled = true;
+    mesh.userData.elementType = group.type;
+    meshes.push(mesh);
+  }
+  return { meshes, textures: atlas.textures, elementIds };
 }
 
 // Постоянная подпись марки в 3D (см. Docs/backlog.md, "Раунд из 3
@@ -13525,7 +13912,7 @@ function build3DLabelSprite(element, topY) {
 
   // Марка и допстрока — ОДНА строка (живой запрос пользователя: "должна
   // быть ... в одну строку марка и дата"), не две — та же причина и то
-  // же решение, что и у наклейки на грани, см. getDecalTexture.
+  // же решение, что и у наклейки на грани, см. buildDecalAtlas.
   ctx.font = `${fontPx}px sans-serif`;
   const markWidth = ctx.measureText(element.mark + (subText ? " " : "")).width;
   const subWidth = subText ? ctx.measureText(subText).width : 0;
@@ -13767,10 +14154,58 @@ function apply3DLabelVisibility() {
     const element = state.byId.get(id);
     if (element) sprite.visible = state.labelVisibility[element.element_type] !== false;
   }
-  for (const [id, decal] of v3.markDecalById) {
-    const element = state.byId.get(id);
-    if (element) decal.visible = state.labelVisibility[element.element_type] !== false;
+  // Наклейки на гранях отдельной проверки не требуют: они слиты в общий
+  // буфер СВОЕГО типа (buildMergedDecals) и целиком лежат в контейнере
+  // этого типа, который уже переключён выше.
+  requestRender3D();
+}
+
+// Освободить буферы наклеек и страницы атласа. Текстуры тут диспозятся (в
+// отличие от прежней схемы с общим кэшем на марку): атлас собирается под
+// КОНКРЕТНЫЙ набор надписей текущей сцены и переживать её незачем.
+function disposeMergedDecals() {
+  const v3 = state.view3d;
+  for (const mesh of v3.decalMeshes) {
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+    mesh.material.dispose();
   }
+  for (const texture of v3.decalTextures) texture.dispose();
+  v3.decalMeshes = [];
+  v3.decalTextures = [];
+  v3.decalElementIds = new Set();
+}
+
+// Пересборка ТОЛЬКО наклеек, без остальной сцены — нужна, когда изменился
+// текст надписи (статус/плановая дата/контрагент), а геометрия та же.
+// Отложена на макрозадачу: массовая правка зовёт updateElementSubLabel на
+// КАЖДОЕ изделие, а пересобрать буфер достаточно один раз на всю пачку.
+let mergedDecalRebuildTimer = null;
+
+function scheduleMergedDecalRebuild() {
+  if (mergedDecalRebuildTimer !== null) return;
+  mergedDecalRebuildTimer = setTimeout(() => {
+    mergedDecalRebuildTimer = null;
+    rebuildMergedDecals();
+  }, 0);
+}
+
+function rebuildMergedDecals() {
+  const v3 = state.view3d;
+  if (!v3.scene || !v3.merged) return;
+  disposeMergedDecals();
+  const levels = computeColumnLevels();
+  const columnTopOverrides = computeColumnEndExtensions(levels);
+  // Ровно тот набор, что реально построен в слитой геометрии — он же
+  // отражает текущий фильтр размещения (отфильтрованное в сцену не
+  // попадает вовсе, см. build3DScene).
+  const shown = state.elements.filter(e => v3.merged.rangeById.has(e.id));
+  const decals = buildMergedDecals(shown, levels, columnTopOverrides);
+  v3.decalMeshes = decals.meshes;
+  v3.decalTextures = decals.textures;
+  v3.decalElementIds = decals.elementIds;
+  for (const mesh of decals.meshes) label3DContainer(mesh.userData.elementType).add(mesh);
+  updateDecalReadabilityUniform();
   requestRender3D();
 }
 
@@ -13787,27 +14222,18 @@ function rebuild3DLabelSprite(element) {
   const columnTopOverrides = computeColumnEndExtensions(levels);
   const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
 
-  // Элемент на "наклейке" (см. build3DMarkDecal) — теперь ТОЖЕ несёт
-  // допстроку (код контрагента + плановая дата, живой запрос
-  // пользователя — раньше наклейка показывала только марку), значит
-  // тоже нуждается в пересборке при смене статуса/плановой даты, не
-  // только плавающая табличка.
-  if (v3.markDecalById.has(element.id)) {
-    const oldDecal = v3.markDecalById.get(element.id);
-    oldDecal.removeFromParent(); // контейнер по типу элемента, не сама сцена — см. label3DContainer
-    for (const mesh of oldDecal.children) {
-      mesh.geometry.dispose();
-      // НЕ mesh.material.map.dispose() — текстура общая на (марка+допстрока+цвет), см. decalTextureCache
-      mesh.material.dispose();
-    }
-    v3.markDecalById.delete(element.id);
-    const decal = build3DMarkDecal(element, levels, columnTopOverrides);
-    if (decal) {
-      decal.visible = state.labelVisibility[element.element_type] !== false;
-      label3DContainer(element.element_type).add(decal);
-      v3.markDecalById.set(element.id, decal);
-    }
-  } else {
+  // Наклейка на грани ТОЖЕ несёт допстроку (код контрагента + плановая
+  // дата, живой запрос пользователя — раньше показывала только марку),
+  // значит тоже нуждается в пересборке при смене статуса/плановой даты.
+  // Точечно её больше не пересобрать: наклейки слиты в общий буфер, своего
+  // объекта у элемента нет — пересобирается буфер целиком, но ОТЛОЖЕННО,
+  // одним разом на всю пачку изменений (массовая смена статуса зовёт эту
+  // функцию на каждое изделие).
+  if (v3.decalElementIds.has(element.id)) {
+    scheduleMergedDecalRebuild();
+    return;
+  }
+  {
     const old = v3.labelSpriteById.get(element.id);
     if (old) {
       old.removeFromParent();
@@ -14116,18 +14542,7 @@ function build3DScene(preserveCamera = false) {
     sprite.material.dispose();
   }
   v3.labelSpriteById.clear();
-  for (const decal of v3.markDecalById.values()) {
-    decal.removeFromParent();
-    for (const mesh of decal.children) {
-      mesh.geometry.dispose();
-      // НЕ mesh.material.map.dispose() — текстура ОБЩАЯ на марку
-      // (decalTextureCache, см. getDecalTexture), живёт всю сессию, не
-      // пересоздаётся на каждую перестройку сцены; сам материал (не
-      // общий, свой на каждую грань-наклейку) — диспозится как обычно.
-      mesh.material.dispose();
-    }
-  }
-  v3.markDecalById.clear();
+  disposeMergedDecals();
 
   const levels = computeColumnLevels();
   const columnTopOverrides = computeColumnEndExtensions(levels);
@@ -14148,35 +14563,33 @@ function build3DScene(preserveCamera = false) {
     if (selected) set3DHighlight(selected.id, selected.current_status);
   }
 
-  for (const element of shown) {
-    // Элемент без контура в слитую геометрию не попал (нечего экструдировать)
-    // — подписи ему тоже не полагается, как и раньше, когда у него просто не
-    // получалось меша. rangeById — точный список того, что реально построено.
-    if (!v3.merged || !v3.merged.rangeById.has(element.id)) continue;
-    const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
+  // Элемент без контура в слитую геометрию не попал (нечего экструдировать)
+  // — подписи ему тоже не полагается, как и раньше, когда у него просто не
+  // получалось меша. rangeById — точный список того, что реально построено.
+  const withGeometry = v3.merged ? shown.filter(e => v3.merged.rangeById.has(e.id)) : [];
 
-    // Наклейка на грани (см. build3DMarkDecal) — только для Плиты
-    // перекрытия/Ригеля/Колонны и только если марка помещается по длине;
-    // иначе — прежняя плавающая табличка-спрайт (build3DLabelSprite).
-    // Фильтр здесь уже пройден (иначе элемент пропущен выше), остаётся
-    // только тумблер подписей по типу элемента.
+  // Наклейки на гранях — ОДИН буфер на пару (тип элемента, страница
+  // атласа), см. buildMergedDecals. Элементы, которым наклейка не
+  // полагается (не тот тип, короткая марка не помещается), получают прежнюю
+  // плавающую табличку-спрайт.
+  const decals = buildMergedDecals(withGeometry, levels, columnTopOverrides);
+  v3.decalMeshes = decals.meshes;
+  v3.decalTextures = decals.textures;
+  v3.decalElementIds = decals.elementIds;
+  for (const mesh of decals.meshes) label3DContainer(mesh.userData.elementType).add(mesh);
+  updateDecalReadabilityUniform();
+
+  for (const element of withGeometry) {
+    if (decals.elementIds.has(element.id)) continue;
+    const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
     // Подписи кладутся не в корень сцены, а в контейнер СВОЕГО типа
     // элемента (label3DContainer) — выключенный тип отсекается рендерером
     // одной проверкой, а не девятью тысячами.
-    const labelVisible = state.labelVisibility[element.element_type] !== false;
-    const container = label3DContainer(element.element_type);
-    const decal = build3DMarkDecal(element, levels, columnTopOverrides);
-    if (decal) {
-      decal.visible = labelVisible;
-      container.add(decal);
-      v3.markDecalById.set(element.id, decal);
-    } else {
-      const sprite = build3DLabelSprite(element, topY);
-      if (sprite) {
-        sprite.visible = labelVisible;
-        container.add(sprite);
-        v3.labelSpriteById.set(element.id, sprite);
-      }
+    const sprite = build3DLabelSprite(element, topY);
+    if (sprite) {
+      sprite.visible = state.labelVisibility[element.element_type] !== false;
+      label3DContainer(element.element_type).add(sprite);
+      v3.labelSpriteById.set(element.id, sprite);
     }
   }
 
@@ -14216,7 +14629,6 @@ function build3DScene(preserveCamera = false) {
   build3DAxisGrid(Math.min(SITE_BASE_3D_Y, computeBuildingHeightRange().bottom));
 
   if (!preserveCamera) fit3DCameraToData();
-  updateDecalsForCamera(); // начальный ракурс — тоже должен быть читаемым, не только после первого поворота
   requestRender3D();
 }
 
@@ -14324,7 +14736,7 @@ function create3DRendererAndControls(container) {
   // кадры тоже (см. requestRender3D).
   //
   // Раньше на это же событие висели ещё updateZoomIndicator3D и
-  // updateDecalsForCamera. События "change" приходят на КАЖДОЕ движение
+  // разворот наклеек. События "change" приходят на КАЖДОЕ движение
   // мыши — то есть чаще, чем рисуется кадр (а в лёгком режиме частота кадров
   // ещё и ограничена сверху), так что обе работы делались вхолостую по
   // нескольку раз на один показанный кадр. Обе перенесены внутрь
@@ -14512,15 +14924,11 @@ function render3DFrame() {
   if (!v3.active || !v3.renderer) return;
   v3.lastFrameAt = performance.now();
   v3.controls.update();
-  // Наклейки марок (build3DMarkDecal) лежат плоско на грани, не билборд —
-  // значит зависят от ракурса дважды: грань может быть отвёрнута от камеры
-  // (тогда наклейку не рисуем вовсе), а текст на видимой грани может
-  // оказаться "вверх ногами" (тогда разворачиваем) — см.
-  // updateDecalForCamera. Место пересчёта — здесь, а
-  // не на событии "change" у OrbitControls: событий на один показанный кадр
-  // приходит несколько (см. create3DRendererAndControls). При выключенных
-  // подписях наклеек нет вовсе, и проверка размера карты стоит ноль.
-  if (v3.markDecalById.size) updateDecalsForCamera();
+  // Наклейки марок зависят от ракурса трижды — отвёрнутая грань, порог
+  // читаемости, разворот текста «вверх ногами», — но всё это считает
+  // вершинный шейдер (см. DECAL_VERTEX_SHADER), и на кадр остаётся одна
+  // константа на меш. Раньше здесь перебирались все 25 568 наклеек.
+  updateDecalReadabilityUniform();
   // Прореживание подписей осей — здесь же и по той же причине: зависит от
   // ракурса и должно быть посчитано ровно один раз на показанный кадр.
   update3DAxisLabelVisibility();

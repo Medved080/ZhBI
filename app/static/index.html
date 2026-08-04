@@ -596,6 +596,12 @@
      на всей группе — иначе наклейка перекрывает клик/наведение по фигуре
      под ней (тот же класс бага, что уже чинили для инфо-плашки). */
   .mark-sticker { pointer-events: none; }
+  /* Фигура целиком за краем видимой области — см. updateViewportCulling.
+     Отдельный класс, а не style.display: inline-стиль на фигуре занят
+     фильтром размещения (applyPlacementFilters), скрыто по любому из двух.
+     Подписи отсекаются иначе — отсоединением от DOM: скрытый узел стоит
+     браузеру столько же, сколько показанный (разбор там же). */
+  .shape-culled { display: none; }
   .mark-sticker-bg { fill: rgba(255,255,255,0.72); }
   .mark-sticker-mark { fill: var(--mark-label-color, #222222); font-weight: 600; }
   .mark-sticker-sub { fill: #555; }
