@@ -8523,6 +8523,11 @@ const EC_COLUMNS = [
   { key: "element_type", label: "Тип", filter: true },
   { key: "subtype", label: "Подтип", filter: true },
   { key: "mark", label: "Марка", filter: true },
+  // Марка СПРАВОЧНИКОМ рядом с текстовой (2026-08-05, запрос пользователя):
+  // пока оба поля живут вместе, разложение по справочнику сверяют глазами
+  // именно здесь — там, где видно тысячи строк сразу. Разошлись — видно в
+  // соседних колонках; совпало везде — можно снимать текстовое поле.
+  { key: "mark_ref", label: "Марка (справочник)", filter: true },
   { key: "elevation_mm", label: "Отметка", filter: true },
   { key: "floor", label: "Этаж", filter: true },
   { key: "address", label: "Адрес по осям", text: true },
@@ -9127,6 +9132,11 @@ document.getElementById("ef-comment-save").addEventListener("click", async () =>
 });
 
 document.getElementById("ef-close").addEventListener("click", () => elementFormBackdrop.classList.remove("open"));
+
+document.getElementById("ef-locate").addEventListener("click", async () => {
+  if (!efElement) return;
+  await locateElementOnPlan(efElement.id, efElement.object_id, "form");
+});
 
 document.getElementById("ef-save").addEventListener("click", async () => {
   const statusBox = document.getElementById("ef-status");
@@ -11282,7 +11292,10 @@ async function renderCounterpartyAgreements() {
             const всего = (c.lines || []).reduce((n, l) => n + (l.quantity || 0), 0);
             const cRow = document.createElement("div");
             cRow.className = "row dict-row-clickable";
-            cRow.style.cssText = "gap:6px; align-items:center; margin-top:2px;";
+            // Выравнивание НЕ задаём инлайном: строке нужен baseline (подпись
+            // «Контракт» 10 px против наименования 13 px, см. CSS), а
+            // инлайновый стиль перебил бы правило таблицы стилей.
+            cRow.style.cssText = "gap:6px; margin-top:2px;";
             cRow.innerHTML = `
               <span class="dict-kind-tag">Контракт</span>
               <span class="hyperlink dict-row-rest" style="text-align:left;">
@@ -13298,7 +13311,10 @@ backToReportBtn.addEventListener("click", () => {
   showBackToReport(false);
 });
 
-async function locateElementOnPlan(elementId, objectId) {
+// `откуда` — форма, из которой пришли (2026-08-05). Отчёт остаётся в DOM и
+// к нему можно вернуться кнопкой; форма элемента и справочник просто
+// закрываются: возвращаться там некуда, изделие уже перед глазами.
+async function locateElementOnPlan(elementId, objectId, откуда = "report") {
   // Изделие соседнего объекта: сначала переключаем стройку (схема
   // показывает ОДИН объект, см. этап B) — иначе «показать на схеме» ткнуло
   // бы в пустоту. Доступ уже подтверждён тем, что событие вообще попало в
@@ -13316,8 +13332,13 @@ async function locateElementOnPlan(elementId, objectId) {
     showToast("Изделие не найдено на текущей схеме — возможно, оно исчезло из чертежа", "warning");
     return;
   }
-  reportsBackdrop.classList.remove("open");
-  showBackToReport(true);   // отчёт остаётся в DOM, к нему можно вернуться без пересборки
+  if (откуда === "report") {
+    reportsBackdrop.classList.remove("open");
+    showBackToReport(true); // отчёт остаётся в DOM, к нему можно вернуться без пересборки
+  } else {
+    document.getElementById("element-form-backdrop").classList.remove("open");
+    document.getElementById("element-catalog-backdrop").classList.remove("open");
+  }
   selectElement(element);   // карточка изделия в правой панели — вкладка «Свойства»
   markLocated(element.id);  // ярко-жёлтая обводка поверх обычного выделения
   if (state.view3d.active) focus3DOnElement(element); else focus2DOnElement(element);
@@ -14413,11 +14434,19 @@ function setUploadStatus(text, isError) {
   uploadStatus.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
+// Какой шаг сейчас идёт (2026-08-05). Пока чертёж не разобран, третий шаг
+// приглушён: он объясняет, что будет дальше, но нажимать в нём нечего —
+// применение живёт в форме сводки расхождений.
+function setUploadStep(шаг) {
+  document.getElementById("upload-step-apply").classList.toggle("step-pending", шаг < 3);
+}
+
 document.getElementById("btn-upload").addEventListener("click", async () => {
   uploadFileInput.value = "";
   setUploadStatus("", false);
   uploadSubmit.disabled = false;
   uploadFileInput.disabled = false;
+  setUploadStep(1);
   uploadBackdrop.classList.add("open");
   // Список чертежей и слоёв теперь живёт в этой же форме (см. index.html):
   // перечитываем при каждом открытии — состав файлов мог измениться после
@@ -14535,6 +14564,7 @@ function collectRefillDecisions() {
 
 function openImportReview(analysis) {
   pendingImport = analysis;
+  setUploadStep(3);   // разбор прошёл — форма загрузки под сводкой это показывает
   const c = analysis.counts || {};
   const prev = analysis.previous_source_file;
   importReviewHead.innerHTML =

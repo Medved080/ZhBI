@@ -778,6 +778,21 @@
      как метка, а не как часть номера. */
   .dict-kind-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
     color: var(--color-text-muted); font-weight: 600; }
+  /* Подпись типа (10 px) и само наименование (13 px) выравниваются ПО
+     БАЗОВОЙ ЛИНИИ, а не по центру блоков (2026-08-05, живой репорт про
+     ссылку контракта). При center коробки стоят ровно — их центры совпадают
+     до пикселя, — но у шрифтов разного кегля центр коробки и базовая линия
+     не совпадают, и текст «плывёт» относительно подписи. Кнопки в той же
+     строке базовой линии не имеют, поэтому центрируются отдельно.
+
+     Селекторы намеренно ДЛИННЫЕ: у `.modal .row` и
+     `.cpe-agreement > summary > .cpe-summary-row` специфичность выше, и
+     короткое правило они молча перебивали (поймано живой проверкой —
+     вычисленный align-items оставался center). */
+  .modal .cpe-contracts-list > .row,
+  .cpe-agreement > summary > .cpe-summary-row { align-items: baseline; }
+  .modal .cpe-contracts-list > .row > .dict-row-actions,
+  .cpe-agreement > summary > .cpe-summary-row > .dict-row-actions { align-self: center; }
   /* Узел дерева — такая же карточка, как записи в справочниках (2026-08-05):
      диалог удаления не должен быть единственным местом со своим языком.
      Вложенность держится отступом, а не рамкой слева: у карточек уже есть
@@ -1467,8 +1482,13 @@
   .step-num {
     display: inline-flex; align-items: center; justify-content: center;
     width: 18px; height: 18px; margin-right: 6px; border-radius: 50%; flex-shrink: 0;
-    background: var(--color-primary); color: #fff; font-size: 11px; font-weight: 700;
+    background: var(--color-primary); color: var(--color-on-primary, #fff);
+    font-size: 11px; font-weight: 700;
   }
+  /* Шаг, до которого ещё не дошли, приглушён: он объясняет, что будет
+     дальше, но действия в нём сейчас нет (2026-08-05). Снимается классом,
+     когда шаг становится текущим. */
+  .step-pending { opacity: .55; }
   .bulk-edit-block { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
   .bulk-edit-block-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; }
   .bulk-edit-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
@@ -2865,7 +2885,10 @@
 <div id="ctx-menu"></div>
 
 <div class="modal-backdrop" id="upload-backdrop">
-  <div class="modal">
+  <!-- Шире обычной модалки (2026-08-05): три шага загрузки должны стоять В
+       РЯД — так видно, что это последовательность, а не три отдельных
+       блока друг под другом. -->
+  <div class="modal wide">
     <h2>Чертежи</h2>
     <!-- Выбор чертежа и слоёв переехал сюда из тулбара (живой запрос
          2026-07-29): "мы работаем теперь с загруженными данными, а не
@@ -2885,18 +2908,47 @@
     <div id="file-select-list"></div>
     <div class="hint-text" id="file-select-summary-line"></div>
 
+    <!-- Загрузка разложена на ПРОНУМЕРОВАННЫЕ шаги (2026-08-05, запрос
+         пользователя «как в массовой правке через Excel»). Классы те же
+         (`bulk-edit-steps`/`step-num`), а не свои похожие: два места с
+         одинаковым смыслом должны выглядеть одинаково, и вид у них обязан
+         меняться разом.
+
+         Почему шаги вообще нужны. Загрузка чертежа — не одно действие, а
+         три, причём второе и третье разнесены по разным формам: «Обработать»
+         только РАЗБИРАЕТ файл и показывает, что изменится, а записывает в
+         базу уже кнопка в сводке расхождений. Без нумерации это читалось как
+         «нажал — и всё загрузилось», и сводка выглядела неожиданной
+         помехой, а не обязательным шагом. -->
     <label class="field" style="margin-top:16px">Загрузить новый чертёж (.dxf)</label>
-    <!-- В какой объект грузим — спрашиваем ЯВНО (этап B): раньше сервер
-         выбирал объект сам по имени файла и истории загрузок, и при
-         нескольких объектах чертёж мог уехать не туда. -->
-    <label class="object-field" style="margin-bottom:8px"><span>Загрузить в объект</span>
-      <select id="upload-object"></select></label>
-    <input type="file" id="upload-file-input" accept=".dxf"/>
+    <div class="bulk-edit-steps">
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title"><span class="step-num">1</span>Выбрать объект и файл</div>
+        <!-- В какой объект грузим — спрашиваем ЯВНО (этап B): раньше сервер
+             выбирал объект сам по имени файла и истории загрузок, и при
+             нескольких объектах чертёж мог уехать не туда. -->
+        <label class="object-field" style="margin-bottom:8px"><span>Загрузить в объект</span>
+          <select id="upload-object"></select></label>
+        <input type="file" id="upload-file-input" accept=".dxf"/>
+      </div>
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title"><span class="step-num">2</span>Проанализировать чертёж</div>
+        <div class="bulk-edit-controls">
+          <button class="btn btn-primary" id="upload-submit">Обработать</button>
+        </div>
+        <div class="bulk-edit-status">Файл разбирается и сверяется с тем, что уже в базе.
+          Ничего не записывается.</div>
+      </div>
+      <div class="bulk-edit-block" id="upload-step-apply">
+        <div class="bulk-edit-block-title"><span class="step-num">3</span>Применить изменения</div>
+        <div class="bulk-edit-status">Откроется сводка расхождений: что появится, что изменится,
+          что исчезло из чертежа. Записывается только после подтверждения.</div>
+      </div>
+    </div>
     <div class="import-template" data-template="dxf"></div>
     <div id="upload-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="upload-cancel">Закрыть</button>
-      <button class="btn btn-primary" id="upload-submit">Обработать</button>
     </div>
   </div>
 </div>
@@ -2912,7 +2964,11 @@
 <div class="modal-backdrop" id="import-review-backdrop">
   <div class="modal modal-sticky" style="max-width:820px">
     <div class="modal-sticky-head">
-      <h2>Сверка с прежней версией чертежа</h2>
+      <!-- Номер шага в заголовке (2026-08-05): форма открывается поверх
+           «Чертежей» и без него читается как отдельное окно, которое можно
+           закрыть, — а это третий, обязательный шаг загрузки, без которого в
+           базу не попадёт ничего. -->
+      <h2><span class="step-num">3</span>Применение чертежа: сверка с прежней версией</h2>
       <div class="hint-text" id="import-review-head"></div>
     </div>
     <div class="modal-sticky-scroll">
@@ -3186,6 +3242,12 @@
       <div id="ef-fields" style="display:flex; flex-wrap:wrap; gap:8px"></div>
       <div class="subtype-add-row" style="margin-top:8px; align-items:center">
         <button class="btn btn-sm btn-primary" id="ef-save">Сохранить поля</button>
+        <!-- Переход к схеме с жёлтой обводкой — тот же механизм, что у
+             перехода из отчёта (locateElementOnPlan): изделие выделяется,
+             кадр наводится на него, обводка держится, пока не выберут
+             другое. Форма при этом закрывается — возвращаться в неё
+             незачем, изделие уже перед глазами. -->
+        <button class="btn btn-sm btn-secondary" id="ef-locate">Показать на большой схеме</button>
         <span class="hint-text" id="ef-status"></span>
       </div>
     </div>
@@ -4322,6 +4384,10 @@
          адреса, контакты: их правят раз в жизни. -->
     <label class="field">Краткое наименование</label><input type="text" id="cpe-short-name"/>
     <label class="field">Полное наименование</label><input type="text" id="cpe-full-name"/>
+    <!-- Код — тоже НАРУЖУ (2026-08-05): в отличие от ИНН и адресов, он виден
+         пользователям каждый день — это допстрока подписи изделия на схеме,
+         и подбирают его глазами, сверяя с тем, что получится на чертеже. -->
+    <label class="field">Код (для компактной подписи на схеме)</label><input type="text" id="cpe-code"/>
     <!-- Содержимое ОБЁРНУТО в один div, а не лежит прямо в <details>.
          Свежий Chrome прячет содержимое через `::details-content`, и ему всё
          равно, что на детях написано; движки постарше делают это правилом
@@ -4341,7 +4407,6 @@
         <label class="field">Юридический адрес</label><input type="text" id="cpe-legal-address"/>
         <label class="field">Контактное лицо</label><input type="text" id="cpe-contact-person"/>
         <label class="field">Контактный телефон</label><input type="text" id="cpe-contact-phone"/>
-        <label class="field">Код (для компактной подписи на схеме)</label><input type="text" id="cpe-code"/>
       </div>
     </details>
     <div class="error-text" id="counterparty-edit-error"></div>

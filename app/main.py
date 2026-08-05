@@ -2621,6 +2621,7 @@ _EC_FROM = """
     LEFT JOIN specifications sp ON sp.id = co.specification_id
     LEFT JOIN agreements ag ON ag.id = sp.agreement_id
     LEFT JOIN counterparties cp ON cp.id = ag.counterparty_id
+    LEFT JOIN marks mk ON mk.id = e.mark_id
 """
 
 _EC_SQL = {
@@ -2629,6 +2630,10 @@ _EC_SQL = {
     "element_type": "e.element_type",
     "subtype": "e.subtype",
     "mark": "e.mark",
+    # Марка СПРАВОЧНИКОМ рядом с текстовой (2026-08-05): пока оба поля живут
+    # вместе, справочник и его наполнение сверяют глазами именно здесь —
+    # в списке, где видно сразу тысячи строк.
+    "mark_ref": "mk.name",
     "mark_source": "e.mark_source",
     "elevation_mm": "e.elevation_mm",
     "floor": "e.floor",
@@ -2671,7 +2676,7 @@ _EC_SQL = {
 # и UID значений почти столько же, сколько строк, и список из 9000 пунктов
 # бесполезен, а «2026-09» отбирает по месяцу.
 _EC_DROPDOWN_COLUMNS = (
-    "object_name", "element_type", "subtype", "mark", "mark_source",
+    "object_name", "element_type", "subtype", "mark", "mark_ref", "mark_source",
     "elevation_mm", "floor", "current_status", "contract_id", "counterparty",
     "zone_zakhvatka", "zone_zakhvatka_status", "zone_crane", "zone_crane_status",
     "zone_stance", "zone_stance_status", "zone_stance_level_elevation_mm",
@@ -2793,7 +2798,7 @@ def elements_catalog(
             SELECT e.*, o.name AS object_name,
                    zz.name AS zone_zakhvatka, zc.name AS zone_crane, zs.name AS zone_stance,
                    zl.elevation_mm AS zone_stance_level_elevation_mm,
-                   cp.short_name AS counterparty
+                   cp.short_name AS counterparty, mk.name AS mark_ref
             {_EC_FROM} WHERE {where}
             ORDER BY {_EC_SQL[sort]} {order}, e.id {order} LIMIT ? OFFSET ?
             """,
