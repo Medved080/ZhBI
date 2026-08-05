@@ -564,6 +564,15 @@ function isObjectAdmin() {
   return currentObjectRole() === "admin";
 }
 
+// Администратор СЕРВИСА (users.role), а не объекта. Заведено 2026-08-05
+// вместе с удалением записей справочников: право на него системное, и
+// проверка `state.currentUser.role === "admin"`, до этого рассыпанная по
+// местам, обязана быть одной — иначе кнопка появится там, где сервер
+// откажет, или наоборот.
+function systemAdmin() {
+  return !!(state.currentUser && state.currentUser.role === "admin");
+}
+
 // Ведение контрактных справочников: контрагенты, договоры, спецификации,
 // контракты. Отдельно от isObjectAdmin — комплектовщик ими занимается, а
 // зонами, чертежом и реквизитами изделий нет.
@@ -7574,18 +7583,252 @@ document.getElementById("zone-colors-save").addEventListener("click", async () =
   await loadPlan();
 });
 
-// ---------- справочник подтипов (новый стандарт имён слоёв) ----------
+// ==================== УДАЛЕНИЕ ЗАПИСИ СПРАВОЧНИКА (2026-08-05) ====================
+//
+// ОДИН диалог на все справочники. Порядок жёсткий и одинаковый везде:
+// проверка ссылок -> выбор замены -> замена -> удаление (app/dict_delete.py).
+//
+// Замену подчинённой записи выбирает СЕРВЕР — вернее, сервер отдаёт список
+// допустимых, и список этот зависит от того, что выбрано ВЛАДЕЛЬЦУ: договор
+// ищется среди договоров контрагента-замены, спецификация — среди
+// спецификаций договора-замены. Поэтому список подчинённого запрашивается
+// заново при каждой смене выбора у владельца, а не берётся из плана: в плане
+// его на момент построения ещё не существует.
+const dictDeleteBackdrop = document.getElementById("dict-delete-backdrop");
+let ddState = null;
+
+// Кнопка удаления записи справочника — ОДНА разметка на все девять списков
+// (2026-08-05). Инлайновый SVG, а не файл: иконок в проекте две с половиной,
+// и отдельный запрос за 300 байтами не окупается. `data-*` навешивает
+// вызывающий, здесь только внешний вид и подпись для тех, кому картинки мало.
+function trashButtonHtml(attrs = "", title = "Удалить") {
+  return `<button type="button" class="btn btn-sm btn-secondary btn-icon" ${attrs}
+    title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2.5 4h11M6.5 4V2.6h3V4M4 4l.6 9a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9L12 4"/>
+      <path d="M6.6 6.6v5M9.4 6.6v5"/>
+    </svg></button>`;
+}
+
+function ddSummary(items) {
+  return items.map(i => `${escapeHtml(i.label)} — ${i.count}`).join(", ");
+}
+
+async function ddBuildNode(node, parentTarget, container) {
+  const el = document.createElement("div");
+  el.className = "dd-node";
+  el.innerHTML = `
+    <div class="dd-node-head">
+      <span class="dd-kind">${escapeHtml(node.kind_title)}</span>
+      <b>${escapeHtml(node.label)}</b>
+      ${node.refs.length ? `<span class="dd-refs">на неё ссылаются: ${ddSummary(node.refs)}</span>` : ""}
+      ${node.cascade.length ? `<span class="dd-cascade">удалится вместе: ${ddSummary(node.cascade)}</span>` : ""}
+    </div>`;
+  container.appendChild(el);
+
+  // Полная сверка ссылок — под свёрткой (2026-08-05, вопрос пользователя
+  // «или мы рассчитываем, что все нисходящие ссылки точно выведены?»).
+  // Строка выше показывает то, что система УМЕЕТ перевести; здесь — что
+  // насчитала сама база по своим внешним ключам, включая места, о которых
+  // модуль удаления не знает. Свёрнуто: в обычном случае смотреть не на что,
+  // а когда есть на что — в свёртке стоит предупреждение.
+  if (node.checked && node.checked.length) {
+    const неучтённые = node.checked.filter(c => c.handled === "НЕ УЧТЕНО" && c.count);
+    const свёртка = document.createElement("details");
+    свёртка.className = "dd-checked";
+    свёртка.open = неучтённые.length > 0;
+    свёртка.innerHTML = `<summary>${неучтённые.length
+      ? `⚠ проверка ссылок: неучтённых мест — ${неучтённые.length}`
+      : `проверка ссылок по схеме БД: мест — ${node.checked.length}, все учтены`}</summary>
+      <table>${node.checked.map(c => `<tr class="${c.handled === "НЕ УЧТЕНО" && c.count ? "dd-unhandled" : ""}">
+        <td>${escapeHtml(c.label)}</td>
+        <td class="num">${c.count}</td>
+        <td>${escapeHtml(c.handled)}</td></tr>`).join("")}</table>`;
+    el.appendChild(свёртка);
+  }
+
+  let select = null;
+  if (node.needs_replacement) {
+    const rep = document.createElement("div");
+    rep.className = "dd-replace";
+    rep.innerHTML = `<span class="hint-text">заменить на</span><select></select>`;
+    el.appendChild(rep);
+    select = rep.querySelector("select");
+    const url = `/dictionaries/${node.kind}/candidates?key=${encodeURIComponent(node.key)}`
+      + (parentTarget ? `&parent=${encodeURIComponent(parentTarget)}` : "");
+    const варианты = await api(url);
+    if (!варианты.length) {
+      // Тупик показываем прямо в строке, а не общей ошибкой формы: заменить
+      // нечем МОЖЕТ БЫТЬ у одной записи из двадцати, и человеку нужно
+      // видеть, у какой именно.
+      rep.innerHTML = `<span class="dd-refs">заменить нечем: у выбранного владельца нет другой такой записи — заведите её и повторите удаление</span>`;
+      ddState.blocked = true;
+      select = null;
+    } else {
+      select.innerHTML = варианты.map(
+        v => `<option value="${escapeHtml(v.key)}">${escapeHtml(v.label)}</option>`).join("");
+      ddState.replacements[`${node.kind}:${node.key}`] = варианты[0].key;
+    }
+  }
+
+  const kids = document.createElement("div");
+  kids.className = "dd-children";
+  el.appendChild(kids);
+
+  const перестроить = async () => {
+    kids.innerHTML = "";
+    for (const ребёнок of node.children) {
+      await ddBuildNode(ребёнок, select ? select.value : parentTarget, kids);
+    }
+  };
+  if (select) {
+    select.addEventListener("change", async () => {
+      ddState.replacements[`${node.kind}:${node.key}`] = select.value;
+      // Смена владельца обнуляет выбор у всех подчинённых: их прежние
+      // замены принадлежали ДРУГОМУ владельцу, и оставить их значило бы
+      // собрать контракт из чужих реквизитов.
+      await перестроить();
+    });
+  }
+  await перестроить();
+}
+
+async function openDictDelete(kind, key, options = {}) {
+  const box = document.getElementById("dict-delete-body");
+  const error = document.getElementById("dict-delete-error");
+  const кнопка = document.getElementById("dict-delete-confirm");
+  error.textContent = "";
+  box.innerHTML = "Загрузка…";
+  ddКнопка(кнопка, true);
+  dictDeleteBackdrop.classList.add("open");
+  let ответ;
+  try {
+    ответ = await api(`/dictionaries/${kind}/${encodeURIComponent(key)}/delete-plan`);
+  } catch (e) {
+    box.innerHTML = "";
+    error.textContent = e.message;
+    return;
+  }
+  ddState = { kind, key, plan: ответ.plan, replacements: {}, blocked: false,
+              onDone: options.onDone };
+  document.getElementById("dict-delete-title").textContent =
+    `Удаление: ${ответ.plan.kind_title.toLowerCase()} «${ответ.plan.label}»`;
+  box.innerHTML = "";
+
+  if (ответ.blockers.length) {
+    // Объект и проект замене не подлежат (см. app/dict_delete.py): удалить
+    // можно только тот, за которым уже ничего не стоит. Показываем, что
+    // именно держит запись, — иначе отказ выглядит как каприз.
+    box.innerHTML = `<p>Удалить нельзя: за записью ещё стоят данные.</p><ul>`
+      + ответ.blockers.map(b => `<li>${escapeHtml(b.owner)}: ${escapeHtml(b.label)} — ${b.count}</li>`).join("")
+      + `</ul><p class="hint-text">Сначала перенесите или удалите это, потом возвращайтесь.</p>`;
+    return;
+  }
+
+  const дерево = document.createElement("div");
+  box.appendChild(дерево);
+  await ddBuildNode(ответ.plan, null, дерево);
+
+  const всего = ddСчитатьУзлы(ответ.plan);
+  const подпись = document.createElement("p");
+  подпись.className = "hint-text";
+  подпись.style.marginTop = "10px";
+  подпись.textContent = всего > 1
+    ? `Будет удалено записей: ${всего} (сама запись и всё подчинённое ей). Действие необратимо.`
+    : "Действие необратимо.";
+  box.appendChild(подпись);
+  ddКнопка(кнопка, ddState.blocked);
+}
+
+function ddКнопка(btn, выключить) {
+  btn.disabled = !!выключить;
+  btn.style.opacity = выключить ? "0.5" : "";
+}
+
+function ddСчитатьУзлы(узел) {
+  return 1 + узел.children.reduce((s, у) => s + ddСчитатьУзлы(у), 0);
+}
+
+document.getElementById("dict-delete-cancel").addEventListener("click", () => {
+  dictDeleteBackdrop.classList.remove("open");
+  ddState = null;
+});
+
+document.getElementById("dict-delete-confirm").addEventListener("click", async () => {
+  if (!ddState) return;
+  const error = document.getElementById("dict-delete-error");
+  const кнопка = document.getElementById("dict-delete-confirm");
+  error.textContent = "";
+  ddКнопка(кнопка, true);
+  let результат;
+  try {
+    результат = await api(
+      `/dictionaries/${ddState.kind}/${encodeURIComponent(ddState.key)}/delete`,
+      { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ replacements: ddState.replacements }) });
+  } catch (e) {
+    error.textContent = e.message;
+    ddКнопка(кнопка, false);
+    return;
+  }
+  const перенос = результат.moved
+    .map(m => `${m.from} → ${m.to} (${ddSummary(m.moved)})`).join("; ");
+  showToast(
+    `Удалено записей: ${результат.deleted.length}.` + (перенос ? ` Перенос: ${перенос}` : ""),
+    "info");
+  dictDeleteBackdrop.classList.remove("open");
+  const готово = ddState.onDone;
+  ddState = null;
+  if (готово) await готово();
+});
+
+// ---------- справочники типа элемента: подтипы и марки ----------
 const subtypesBackdrop = document.getElementById("subtypes-backdrop");
 
+// Объект, чьи марки показаны. Отдельная переменная, а не state.objectId:
+// администратор разбирает справочник сразу по нескольким зданиям, и
+// переключение объекта ЗДЕСЬ не должно уводить схему под формой.
+let subtypesObjectId = null;
+
+function allObjectsFlat() {
+  const список = [];
+  for (const p of state.projects) {
+    for (const o of p.objects) список.push({ id: o.id, label: `${p.name} · ${o.name}` });
+  }
+  return список;
+}
+
+function renderSubtypesObjectSelect() {
+  const sel = document.getElementById("subtypes-object");
+  const объекты = allObjectsFlat();
+  if (subtypesObjectId == null) {
+    subtypesObjectId = объекты.some(o => o.id === state.objectId)
+      ? state.objectId : (объекты[0] ? объекты[0].id : null);
+  }
+  sel.innerHTML = объекты.map(
+    o => `<option value="${o.id}"${o.id === subtypesObjectId ? " selected" : ""}>${escapeHtml(o.label)}</option>`
+  ).join("") || '<option value="">нет объектов</option>';
+}
+
 async function renderSubtypesModal() {
-  const data = await api("/allowed-subtypes"); // {element_type: [subtype, ...]}
+  renderSubtypesObjectSelect();
+  const подтипы = await api("/allowed-subtypes"); // {element_type: [subtype, ...]}
+  const марки = subtypesObjectId
+    ? await api(`/marks?object_id=${subtypesObjectId}`) : [];
+  const маркиПоТипу = new Map();
+  for (const m of марки) {
+    if (!маркиПоТипу.has(m.element_type)) маркиПоТипу.set(m.element_type, []);
+    маркиПоТипу.get(m.element_type).push(m);
+  }
+
   const box = document.getElementById("subtypes-rows");
   box.innerHTML = "";
-  for (const [elementType, subtypes] of Object.entries(data)) {
+  for (const [elementType, subtypes] of Object.entries(подтипы)) {
     const row = document.createElement("div");
     row.className = "subtype-row";
     const chipsHtml = subtypes.length
-      ? subtypes.map(s => `<span class="subtype-chip">${escapeHtml(s)}<button type="button" data-remove="${escapeHtml(s)}">✕</button></span>`).join("")
+      ? subtypes.map(s => `<span class="subtype-chip">${escapeHtml(s)}<button type="button" data-remove="${escapeHtml(s)}" title="Удалить подтип">✕</button></span>`).join("")
       : '<span class="hint-text">нет подтипов</span>';
     row.innerHTML = `
       <h4>${escapeHtml(elementType)}</h4>
@@ -7594,13 +7837,26 @@ async function renderSubtypesModal() {
         <input type="text" placeholder="новый подтип" data-add-input/>
         <button class="btn btn-sm btn-secondary" data-add-btn>Добавить</button>
       </div>
+      <div class="marks-part">
+        <h5>Марки — ${(маркиПоТипу.get(elementType) || []).length}</h5>
+        <div class="marks-scroll" data-marks></div>
+        <div class="subtype-add-row" style="margin-top:6px;">
+          <input type="text" placeholder="новая марка" data-add-mark/>
+          <button class="btn btn-sm btn-secondary" data-add-mark-btn>Добавить</button>
+        </div>
+      </div>
     `;
+    box.appendChild(row);
+
+    // Удаление подтипа идёт через общий диалог, а не прямым DELETE, как
+    // было раньше: у подтипа бывают изделия, и прежняя кнопка сносила
+    // запись справочника, оставляя их с подтипом, которого больше нет ни в
+    // одном списке — то есть невыбираемым и невосстановимым.
     row.querySelectorAll("[data-remove]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        await api(`/allowed-subtypes/${encodeURIComponent(elementType)}/${encodeURIComponent(btn.dataset.remove)}`, { method: "DELETE" });
-        await renderSubtypesModal();
-      });
+      btn.addEventListener("click", () => openDictDelete(
+        "subtype", `${elementType}|${btn.dataset.remove}`, { onDone: renderSubtypesModal }));
     });
+
     const input = row.querySelector("[data-add-input]");
     const addBtn = row.querySelector("[data-add-btn]");
     const submitAdd = async () => {
@@ -7614,9 +7870,87 @@ async function renderSubtypesModal() {
     };
     addBtn.addEventListener("click", submitAdd);
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAdd(); });
-    box.appendChild(row);
+
+    renderMarksPart(row.querySelector("[data-marks]"), elementType,
+                    маркиПоТипу.get(elementType) || []);
+
+    const markInput = row.querySelector("[data-add-mark]");
+    const добавитьМарку = async () => {
+      const name = markInput.value.trim();
+      if (!name || subtypesObjectId == null) return;
+      try {
+        await api("/marks", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ object_id: subtypesObjectId, element_type: elementType, name }),
+        });
+      } catch (e) {
+        showToast(e.message, "warning");
+        return;
+      }
+      markInput.value = "";
+      await renderSubtypesModal();
+    };
+    row.querySelector("[data-add-mark-btn]").addEventListener("click", добавитьМарку);
+    markInput.addEventListener("keydown", (e) => { if (e.key === "Enter") добавитьМарку(); });
   }
 }
+
+// Счётчики ссылок — не украшение: по ним видно, что стоит за записью.
+// Марка с нулями — это опечатка импорта, её можно снести не глядя; марка с
+// тремя тысячами изделий требует замены, и диалог удаления её потребует.
+function renderMarksPart(box, elementType, marks) {
+  if (!marks.length) {
+    box.innerHTML = '<div class="hint-text">марок нет</div>';
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "marks-table";
+  table.innerHTML = `
+    <thead><tr><th>Марка</th><th class="num">Изделий</th><th class="num">Позиций</th><th></th></tr></thead>
+    <tbody></tbody>`;
+  const tbody = table.querySelector("tbody");
+  for (const m of marks) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="text" value="${escapeHtml(m.name)}"/></td>
+      <td class="num">${m.elements_count}</td>
+      <td class="num">${m.contract_lines_count}</td>
+      <td>${trashButtonHtml(`data-del-mark="${m.id}"`, "Удалить марку")}</td>`;
+    tbody.appendChild(tr);
+
+    // Переименование по уходу из поля: сервер тем же запросом двигает текст
+    // марки у изделий и в позициях контрактов, поэтому переименовать —
+    // безопасное действие, подтверждения не требует.
+    const поле = tr.querySelector("input");
+    const переименовать = async () => {
+      const name = поле.value.trim();
+      if (!name || name === m.name) { поле.value = m.name; return; }
+      try {
+        await api(`/marks/${m.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ object_id: m.object_id, element_type: m.element_type, name }),
+        });
+      } catch (e) {
+        showToast(e.message, "warning");
+        поле.value = m.name;
+        return;
+      }
+      await renderSubtypesModal();
+    };
+    поле.addEventListener("blur", переименовать);
+    поле.addEventListener("keydown", (e) => { if (e.key === "Enter") поле.blur(); });
+
+    tr.querySelector("[data-del-mark]").addEventListener("click", () => openDictDelete(
+      "mark", String(m.id), { onDone: renderSubtypesModal }));
+  }
+  box.innerHTML = "";
+  box.appendChild(table);
+}
+
+document.getElementById("subtypes-object").addEventListener("change", async (e) => {
+  subtypesObjectId = Number(e.target.value) || null;
+  await renderSubtypesModal();
+});
 
 // ==================== СПРАВОЧНИК ОБЪЕКТОВ ====================
 // Объект — то, к чему привязана идентичность элементов (см. Docs/TZ.md).
@@ -7696,7 +8030,7 @@ async function renderProjectsModal() {
         </div>
         <div style="display:flex; gap:6px;">
           ${админ ? `<button class="btn btn-sm btn-secondary" data-save-project="${p.id}">Сохранить</button>` : ""}
-          ${админ && !p.objects_count ? `<button class="btn btn-sm btn-secondary" data-del-project="${p.id}">Удалить</button>` : ""}
+          ${админ ? trashButtonHtml(`data-del-project="${p.id}"`, "Удалить проект") : ""}
         </div>
       </div>
       <details class="card-technical"><summary>Вложения</summary>
@@ -7746,17 +8080,17 @@ async function renderProjectsModal() {
       } catch (e) { setProjectsStatus(e.message || "Не удалось сохранить", true); }
     });
   });
+  // Кнопка стоит у ЛЮБОГО проекта, а не только у пустого, как было раньше:
+  // спрятанная кнопка не объясняет, почему проект не удаляется, а диалог
+  // показывает — «в проекте столько-то объектов». Отказ остаётся тем же,
+  // но становится понятным (2026-08-05).
   box.querySelectorAll("[data-del-project]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.getAttribute("data-del-project");
-      if (!confirm("Удалить пустой проект?")) return;
-      try {
-        await api(`/projects/${id}`, { method: "DELETE" });
+    btn.addEventListener("click", () => openDictDelete(
+      "project", btn.getAttribute("data-del-project"), { onDone: async () => {
         await renderProjectsModal();
         await loadProjectsTree();
         setProjectsStatus("Проект удалён.", false);
-      } catch (e) { setProjectsStatus(e.message || "Не удалось удалить", true); }
-    });
+      } }));
   });
 }
 
@@ -7838,7 +8172,10 @@ async function renderObjectsModal(projectId = null) {
           Элементов: ${o.elements_current}${o.elements_retired ? `, исчезли из чертежа: ${o.elements_retired}` : ""}.
           ${o.drawings.length > 1 ? `Загружалось версий: ${o.drawings.length}.` : ""}
         </div>
-        ${админ ? `<button class="btn btn-sm btn-secondary" data-save-object="${o.id}">Сохранить</button>` : ""}
+        <div style="display:flex; gap:6px;">
+          ${админ ? `<button class="btn btn-sm btn-secondary" data-save-object="${o.id}">Сохранить</button>` : ""}
+          ${админ ? trashButtonHtml(`data-del-object="${o.id}"`, "Удалить объект") : ""}
+        </div>
       </div>
       <details class="card-technical"><summary>Вложения</summary>
         <div data-attach-object="${o.id}"></div>
@@ -7868,6 +8205,18 @@ async function renderObjectsModal(projectId = null) {
   // новое здание почти всегда добавляют на текущую площадку.
   const текущий = currentObject();
   if (текущий && текущий.project.id) newProject.value = String(текущий.project.id);
+
+  // Объект удаляется только пустым — замена для него не предлагается (см.
+  // app/dict_delete.py: «замена объекта» была бы слиянием двух зданий с
+  // разными чертежами и координатами). Диалог показывает, что именно за
+  // объектом стоит, и этого хватает, чтобы убрать пустышку.
+  box.querySelectorAll("[data-del-object]").forEach(btn => {
+    btn.addEventListener("click", () => openDictDelete(
+      "object", btn.getAttribute("data-del-object"), { onDone: async () => {
+        await renderObjectsModal(objectsFilterProjectId);
+        await loadProjectsTree();
+      } }));
+  });
 
   box.querySelectorAll("[data-save-object]").forEach(btn => {
     btn.addEventListener("click", async () => {
@@ -8378,6 +8727,7 @@ async function renderElementCatalog() {
 const elementFormBackdrop = document.getElementById("element-form-backdrop");
 let efElement = null;
 let efAllowedSubtypes = null; // {тип: [подтипы]} — грузится один раз за сеанс
+let efMarks = [];             // справочник марок ОБЪЕКТА этого элемента
 
 // Правимые поля. Порядок и подписи — как в карточке на схеме (сначала «что
 // это», потом «где», потом четыре шкалы дат): одно и то же поле не должно
@@ -8390,7 +8740,12 @@ let efAllowedSubtypes = null; // {тип: [подтипы]} — грузится
 const EF_FIELDS = [
   { key: "element_type", label: "Тип", kind: "type" },
   { key: "subtype", label: "Подтип", kind: "subtype" },
-  { key: "mark", label: "Марка" },
+  { key: "mark", label: "Марка (справочник)", kind: "mark" },
+  // Поле-близнец: тот же реквизит, но в прежнем текстовом виде. Ключ
+  // намеренно НЕ "mark" — иначе сборщик значений формы (data-ef) отправил бы
+  // марку дважды. Из-за отсутствия data-ef оно в отправку не попадает вовсе,
+  // что для поля «только для чтения» и требуется.
+  { key: "mark_text", label: "Марка (текст, для сверки)", kind: "mark_text" },
   { key: "elevation_mm", label: "Отметка, мм", type: "number" },
   { key: "floor", label: "Этаж", type: "number" },
   { key: "address", label: "Адрес по осям" },
@@ -8465,6 +8820,38 @@ function efSubtypeOptions(type, current) {
   ).join("");
 }
 
+// Марка — подчинённый справочник ТИПА, ровно как подтип рядом: список
+// зависит от выбранного типа и пересобирается при его смене.
+//
+// Значение опции — ТЕКСТ марки, а не id записи. Не оплошность: текстовое
+// `elements.mark` пока остаётся источником правды (см.
+// app/element_fields.resolve_mark_id), а ссылка `mark_id` считается по нему
+// на сервере в одном месте — через которое проходит и эта форма, и массовая
+// правка через Excel, и переимпорт чертежа. Форма отдаёт текст, сервер
+// проставляет ссылку; разойтись они не могут.
+function efMarkOptions(type, current) {
+  const список = efMarks.filter(m => m.element_type === type).map(m => m.name);
+  // Собственная марка элемента показывается даже если её нет в справочнике
+  // этого типа: так бывает после смены типа (марка осталась от прежнего) и
+  // у данных, заведённых до справочника. Молча подменить её на первую из
+  // списка форма не вправе.
+  if (current && !список.includes(current)) список.unshift(current);
+  return ['<option value="">— не задана —</option>'].concat(
+    список.map(v => `<option value="${escapeHtml(v)}"${v === current ? " selected" : ""}>${escapeHtml(v)}</option>`)
+  ).join("");
+}
+
+// Что сейчас стоит в ссылке — видно прямо под полем. Пока текст марки и
+// ссылка живут рядом (до сверки разложения), это единственное место, где
+// можно заметить, что они разошлись.
+function efMarkLinkHint(type, mark) {
+  if (!mark) return "ссылка на справочник не задана";
+  const запись = efMarks.find(m => m.element_type === type && m.name === mark);
+  if (!запись) return "в справочнике этого типа такой марки нет — она заведётся при сохранении";
+  const текущая = запись.id === efElement.mark_id ? "" : " (сохраните, чтобы ссылка обновилась)";
+  return `справочник: запись №${запись.id}, изделий с этой маркой: ${запись.elements_count}${текущая}`;
+}
+
 function renderEfFields() {
   const manual = new Set(efElement.manual_fields || []);
   document.getElementById("ef-fields").innerHTML = EF_FIELDS.map(f => {
@@ -8489,6 +8876,23 @@ function renderEfFields() {
       // пересобирается при его смене (живой репорт: было текстовое поле).
       control = `<select data-ef="${f.key}" id="ef-subtype" style="width:100%">` +
         efSubtypeOptions(efElement.element_type, value) + "</select>";
+    } else if (f.kind === "mark") {
+      control = `<select data-ef="${f.key}" id="ef-mark" style="width:100%">` +
+        efMarkOptions(efElement.element_type, value) + "</select>" +
+        `<div class="hint-text" id="ef-mark-link">${escapeHtml(efMarkLinkHint(efElement.element_type, value))}</div>`;
+    } else if (f.kind === "mark_text") {
+      // Прежнее ТЕКСТОВОЕ поле марки — только для чтения и только для
+      // сверки (2026-08-05, запрос пользователя «покажи и текстовую, и
+      // новую ссылочную»). Пока оба поля живут рядом, глазами проверяется
+      // ровно одно: совпало ли разложение по справочнику с тем, что пришло
+      // из чертежа. Править его здесь нечем намеренно — правка идёт
+      // ссылкой слева, иначе появился бы второй способ задать марку, и
+      // расхождение, которое это поле должно ловить, создавалось бы прямо
+      // в этой форме.
+      const текст = efElement.mark === null || efElement.mark === undefined ? "" : String(efElement.mark);
+      control = `<input type="text" id="ef-mark-text" style="width:100%" readonly
+        value="${escapeHtml(текст)}"/>`
+        + `<div class="hint-text">как записано у изделия; меняется вместе со ссылкой</div>`;
     } else {
       control = `<input type="${f.type || "text"}" data-ef="${f.key}" style="width:100%"
         value="${escapeHtml(shown)}"/>`;
@@ -8502,12 +8906,27 @@ function renderEfFields() {
       в сводке, загрузка графика СМР оставит ручную дату и сообщит об этом.</div>` : "");
 
   const typeSelect = document.querySelector('#ef-fields select[data-ef="element_type"]');
+  const markSelect = document.getElementById("ef-mark");
+  const обновитьПодсказку = () => {
+    const место = document.getElementById("ef-mark-link");
+    if (место && markSelect) {
+      место.textContent = efMarkLinkHint(
+        typeSelect ? typeSelect.value : efElement.element_type, markSelect.value);
+    }
+  };
   if (typeSelect) {
     typeSelect.addEventListener("change", () => {
       const subtype = document.getElementById("ef-subtype");
       if (subtype) subtype.innerHTML = efSubtypeOptions(typeSelect.value, subtype.value);
+      // Марка тоже подчинена типу: после смены типа список обязан стать
+      // списком марок НОВОГО типа, иначе форма предлагает выбрать чужую.
+      if (markSelect) markSelect.innerHTML = efMarkOptions(typeSelect.value, markSelect.value);
+      обновитьПодсказку();
     });
   }
+  if (markSelect) markSelect.addEventListener("change", обновитьПодсказку);
+  // Пока правку не сохранили, текстовое поле показывает СТАРОЕ значение —
+  // это и есть сверка: видно, что было и что станет.
 }
 
 // История статусов — таблица с полями ввода в каждой строке: правка ПРЯМО В
@@ -8601,6 +9020,18 @@ async function openElementForm(elementId, show = true) {
     }
   }
   efElement = await api(`/elements/${elementId}`);
+  // Марки — справочник ОБЪЕКТА (2026-08-05), поэтому список перечитывается
+  // на каждое открытие формы, а не кэшируется на сеанс, как подтипы: форма
+  // открывается по элементам разных объектов, и чужой список означал бы
+  // выпадающий список, в котором нет собственной марки элемента.
+  efMarks = [];
+  if (efElement.object_id != null) {
+    try {
+      efMarks = await api(`/marks?object_id=${efElement.object_id}`);
+    } catch (e) {
+      efMarks = [];
+    }
+  }
   document.getElementById("ef-title").textContent =
     `${efElement.element_type} ${efElement.mark || "без марки"} — ${efElement.address || "адрес не определён"}`;
   document.getElementById("ef-status").textContent = "";
@@ -8881,6 +9312,7 @@ async function renderZonesModal() {
         ${zonesCategory === "Стоянка" ? '<th style="text-align:left">Кран</th>' : ""}
         <th style="text-align:left">Ярусы</th>
         <th style="text-align:right">Элементов</th>
+        ${systemAdmin() ? "<th></th>" : ""}
       </tr></thead>
       <tbody>${zones.map(z => `<tr data-zone-id="${z.id}"${z.is_current ? "" : ' class="hint-text"'}
         ${canEditZones() ? 'style="cursor:pointer"' : ""}>
@@ -8889,12 +9321,28 @@ async function renderZonesModal() {
         ${zonesCategory === "Стоянка" ? `<td>${escapeHtml(z.parent_name || "не определён")}</td>` : ""}
         <td>${escapeHtml(zoneLevelsText(z.levels))}</td>
         <td style="text-align:right">${z.elements}</td>
+        ${systemAdmin() ? `<td>${trashButtonHtml(`data-del-zone="${z.id}"`, "Удалить зону")}</td>` : ""}
       </tr>`).join("")}</tbody></table>`;
     if (canEditZones()) {
       box.querySelectorAll("tr[data-zone-id]").forEach(tr => {
-        tr.addEventListener("click", () => openZoneEditor(Number(tr.getAttribute("data-zone-id"))));
+        tr.addEventListener("click", (e) => {
+          // Кнопка «Удалить» живёт ВНУТРИ кликабельной строки — без этой
+          // проверки нажатие на неё открывало бы заодно и правку зоны.
+          if (e.target.closest("[data-del-zone]")) return;
+          openZoneEditor(Number(tr.getAttribute("data-zone-id")));
+        });
       });
     }
+    // Удаление — у администратора сервиса, а не у админа объекта, который
+    // правит зоны: удаление крана уносит его стоянки и перевешивает тысячи
+    // изделий, и это решение уровня сервиса (2026-08-05).
+    box.querySelectorAll("[data-del-zone]").forEach(btn => {
+      btn.addEventListener("click", () => openDictDelete(
+        "zone", btn.dataset.delZone, { onDone: async () => {
+          await renderZonesModal();
+          if (state.sourceFile) await loadPlan(true);
+        } }));
+    });
   } catch (e) {
     box.innerHTML = `<p class="hint-text" style="color:var(--color-danger)">${escapeHtml(e.message)}</p>`;
   }
@@ -10544,15 +10992,28 @@ async function renderCounterpartiesList() {
   for (const cp of list) {
     const block = document.createElement("div");
     block.className = "contract-block";
+    // Кнопки «Изменить» больше нет: форма открывается кликом по самой строке
+    // (2026-08-05, запрос пользователя) — так же, как это давно работает в
+    // справочниках зон и элементов, и на одну кнопку в каждой строке меньше.
     block.innerHTML = `
-      <div class="contract-block-header">
+      <div class="contract-block-header dict-row-clickable">
         <b>${escapeHtml(cp.short_name)}</b>
-        <span class="hint-text">${escapeHtml(cp.full_name)}${cp.inn ? " · ИНН " + escapeHtml(cp.inn) : ""}${cp.code ? " · код " + escapeHtml(cp.code) : ""}</span>
-        <button class="btn btn-sm btn-secondary" data-edit-counterparty="${cp.id}">Изменить</button>
+        <span class="hint-text dict-row-rest">${escapeHtml(cp.full_name)}${cp.inn ? " · ИНН " + escapeHtml(cp.inn) : ""}${cp.code ? " · код " + escapeHtml(cp.code) : ""}</span>
+        <span class="dict-row-actions">
+          ${systemAdmin() ? trashButtonHtml(`data-del-counterparty="${cp.id}"`, "Удалить контрагента") : ""}
+        </span>
       </div>
     `;
     box.appendChild(block);
-    block.querySelector("[data-edit-counterparty]").addEventListener("click", () => openCounterpartyEdit(cp));
+    block.querySelector(".contract-block-header").addEventListener("click", (e) => {
+      if (e.target.closest(".dict-row-actions")) return;
+      openCounterpartyEdit(cp);
+    });
+    // Удаление контрагента уносит его договоры, спецификации и контракты —
+    // поэтому не прямой DELETE, а общий диалог: он покажет всё поддерево и
+    // потребует замену там, где на контракт ссылаются изделия.
+    block.querySelector("[data-del-counterparty]")?.addEventListener("click", () => openDictDelete(
+      "counterparty", String(cp.id), { onDone: renderCounterpartiesList }));
   }
 }
 
@@ -10603,126 +11064,200 @@ function objectLabelById(id) {
 
 async function renderCounterpartyAgreements() {
   const box = document.getElementById("cpe-agreements-list");
+  // Что было раскрыто — снимаем ДО «Загрузка…»: та затирает содержимое, и
+  // читать состояние после неё было бы нечем (поймано живой проверкой —
+  // раскрытый договор захлопывался после каждого сохранения).
+  const былиРаскрыты = new Set(
+    Array.from(box.querySelectorAll("details[data-node][open]")).map(d => d.dataset.node));
+  const первыйПоказ = box.dataset.rendered !== "1";
+  box.dataset.rendered = "1";
   box.innerHTML = "Загрузка…";
   const agreements = await api(`/agreements?counterparty_id=${editingCounterpartyId}`);
-  box.innerHTML = "";
-  if (!agreements.length) box.innerHTML = '<div class="hint-text">нет договоров</div>';
-  for (const a of agreements) {
-    const row = document.createElement("div");
-    row.className = "contract-block";
-    row.innerHTML = `
-      <div class="contract-block-header">
-        <button type="button" class="hyperlink cpe-edit-agreement"><b>${escapeHtml(a.number)}</b><span class="hint-text">${a.agreement_date ? " от " + formatDateRu(a.agreement_date) : ""}</span></button>
-        <span class="hint-text">${escapeHtml(objectLabelById(a.object_id))}</span>
-      </div>
-      <div class="cpe-specs-list"></div>
-      <div class="row" style="gap:6px; margin-top:6px;">
-        <input type="text" class="cpe-new-spec-number" placeholder="номер спецификации" style="flex:1;"/>
-        <input type="date" class="cpe-new-spec-date"/>
-        <button class="btn btn-sm btn-secondary cpe-add-spec" type="button">+ Спецификация</button>
-      </div>
-    `;
-    box.appendChild(row);
+  // Контракты — третий уровень иерархии (2026-08-05, запрос пользователя):
+  // до этого форма контрагента обрывалась на спецификации, и увидеть, что за
+  // ней стоит, можно было только в отдельном справочнике «Контракты», где
+  // цепочка показана плоской таблицей. Один запрос на всю форму и
+  // группировка по спецификации: контрактов у контрагента десятки, запрос на
+  // каждую спецификацию превратил бы открытие формы в полсотни обращений.
+  let contractsBySpec = new Map();
+  try {
+    for (const c of await api("/contracts")) {
+      if (!contractsBySpec.has(c.specification_id)) contractsBySpec.set(c.specification_id, []);
+      contractsBySpec.get(c.specification_id).push(c);
+    }
+  } catch (e) {
+    contractsBySpec = new Map();   // нет прав на контракты — форма работает без них
+  }
 
-    // Редактирование договора — тот же приём, что и у формы контрагента:
-    // заменяем статичную шапку на инпуты, "Отмена" — просто перерисовка
-    // всего списка (без ручного отслеживания "исходного" состояния).
-    row.querySelector(".cpe-edit-agreement").addEventListener("click", () => {
-      const header = row.querySelector(".contract-block-header");
-      // .contract-block-header — flex-строка с justify-content:space-between
-      // (нормально для статичного вида "текст + кнопка"), но с 4 полями
-      // редактирования сжимала бы текстовый инпут почти до нуля — форма
-      // редактирования получает свой собственный блочный контейнер, не
-      // наследует flex-row родителя.
-      header.style.display = "block";
-      header.innerHTML = `
-        <div class="row" style="gap:6px;">
-          <input type="text" class="cpe-edit-agreement-number" value="${escapeHtml(a.number)}" style="flex:1; min-width:0;"/>
+  box.innerHTML = "";
+  if (!agreements.length) {
+    box.innerHTML = '<div class="hint-text">нет договоров</div>';
+    return;
+  }
+
+  for (const a of agreements) {
+    // Каждый договор — свой сворачиваемый блок (2026-08-05, запрос
+    // пользователя). Свёрнут по умолчанию: у контрагента их бывает десяток,
+    // и раскрытыми они дают несколько экранов, в которых не найти нужный.
+    const ключ = `agreement:${a.id}`;
+    const блок = document.createElement("details");
+    блок.className = "cpe-agreement";
+    блок.dataset.node = ключ;
+    блок.open = первыйПоказ ? false : былиРаскрыты.has(ключ);
+    блок.innerHTML = `
+      <summary><span class="cpe-summary-row">
+        <span class="dict-kind-tag">Договор</span>
+        <b>${escapeHtml(a.number)}</b>
+        <span class="hint-text">${a.agreement_date ? "от " + formatDateRu(a.agreement_date) : "без даты"}</span>
+        <span class="hint-text dict-row-rest">${escapeHtml(objectLabelById(a.object_id))}</span>
+        <span class="dict-row-actions">
+          ${systemAdmin() ? trashButtonHtml(`data-del-agreement="${a.id}"`, "Удалить договор") : ""}
+        </span>
+      </span></summary>
+      <div class="cpe-agreement-body">
+        <div class="row" style="gap:6px; margin:6px 0;">
+          <input type="text" class="cpe-edit-agreement-number" value="${escapeHtml(a.number)}"
+                 style="flex:1; min-width:0;" placeholder="номер договора"/>
           <input type="date" class="cpe-edit-agreement-date" value="${a.agreement_date || ""}"/>
-        </div>
-        <div class="row" style="gap:6px; margin-top:6px;">
           <select class="cpe-edit-agreement-object" style="flex:1; min-width:0;">${objectOptionsHtml(a.object_id)}</select>
+          <button class="btn btn-sm btn-primary cpe-save-agreement" type="button">Сохранить</button>
         </div>
         <div class="error-text cpe-edit-agreement-error"></div>
+        <div class="cpe-specs-list"></div>
         <div class="row" style="gap:6px; margin-top:6px;">
-          <button class="btn btn-sm btn-primary cpe-save-agreement" type="button">Сохранить</button>
-          <button class="btn btn-sm btn-secondary cpe-cancel-agreement" type="button">Отмена</button>
+          <input type="text" class="cpe-new-spec-number" placeholder="номер спецификации" style="flex:1;"/>
+          <input type="date" class="cpe-new-spec-date"/>
+          <button class="btn btn-sm btn-secondary cpe-add-spec" type="button">+ Спецификация</button>
         </div>
-      `;
-      header.querySelector(".cpe-cancel-agreement").addEventListener("click", renderCounterpartyAgreements);
-      header.querySelector(".cpe-save-agreement").addEventListener("click", async () => {
-        const errorEl = header.querySelector(".cpe-edit-agreement-error");
-        errorEl.textContent = "";
-        const number = header.querySelector(".cpe-edit-agreement-number").value.trim();
-        if (!number) return;
-        const date = header.querySelector(".cpe-edit-agreement-date").value || null;
-        const objectId = Number(header.querySelector(".cpe-edit-agreement-object").value) || null;
-        try {
-          await api(`/agreements/${a.id}`, {
-            method: "PATCH", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ counterparty_id: editingCounterpartyId, number,
-                                   agreement_date: date, object_id: objectId }),
-          });
-        } catch (e) {
-          // Отказ показываем В САМОЙ строке договора, а не общей ошибкой
-          // формы: причин две («объект не выбран» и «по договору уже
-          // законтрактованы изделия другого объекта»), и обе относятся к
-          // конкретному договору, а не к контрагенту.
-          errorEl.textContent = e.message;
-          return;
-        }
-        await renderCounterpartyAgreements();
-      });
+      </div>`;
+    box.appendChild(блок);
+
+    // Кнопка живёт ВНУТРИ summary, а щелчок по summary разворачивает блок —
+    // без этого удаление заодно схлопывало бы договор под диалогом.
+    блок.querySelector("[data-del-agreement]")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openDictDelete("agreement", String(a.id), { onDone: renderCounterpartyAgreements });
     });
 
-    const specsBox = row.querySelector(".cpe-specs-list");
+    // Поля правки договора показаны сразу, а не за отдельной кнопкой
+    // «Изменить»: раскрыть блок И ЕСТЬ «открыть запись» (2026-08-05).
+    блок.querySelector(".cpe-save-agreement").addEventListener("click", async () => {
+      const errorEl = блок.querySelector(".cpe-edit-agreement-error");
+      errorEl.textContent = "";
+      const number = блок.querySelector(".cpe-edit-agreement-number").value.trim();
+      if (!number) { errorEl.textContent = "Укажите номер договора"; return; }
+      const date = блок.querySelector(".cpe-edit-agreement-date").value || null;
+      const objectId = Number(блок.querySelector(".cpe-edit-agreement-object").value) || null;
+      try {
+        await api(`/agreements/${a.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ counterparty_id: editingCounterpartyId, number,
+                                 agreement_date: date, object_id: objectId }),
+        });
+      } catch (e) {
+        // Отказ показываем В САМОМ блоке договора, а не общей ошибкой формы:
+        // причин две («объект не выбран» и «по договору уже законтрактованы
+        // изделия другого объекта»), и обе относятся к конкретному договору.
+        errorEl.textContent = e.message;
+        return;
+      }
+      await renderCounterpartyAgreements();
+    });
+
+    const specsBox = блок.querySelector(".cpe-specs-list");
     const specs = await api(`/specifications?agreement_id=${a.id}`);
     if (!specs.length) {
       specsBox.innerHTML = '<div class="hint-text">нет спецификаций</div>';
     } else {
       specsBox.innerHTML = "";
       for (const s of specs) {
-        const specRow = document.createElement("div");
-        specRow.className = "row";
-        specRow.style.cssText = "gap:6px; align-items:center; margin-top:2px;";
-        specRow.innerHTML = `
-          <button type="button" class="hyperlink cpe-edit-spec" style="flex:1;">— ${escapeHtml(s.number)}${s.specification_date ? " от " + formatDateRu(s.specification_date) : ""}</button>
-        `;
-        specsBox.appendChild(specRow);
-        specRow.querySelector(".cpe-edit-spec").addEventListener("click", () => {
-          // .row — flex со space-between (см. CSS), с 4 полями сжало бы
-          // текстовый инпут почти до нуля (тот же фикс, что у договора выше)
-          // — переключаем сам specRow на block-раскладку для режима правки.
-          specRow.style.display = "block";
-          specRow.innerHTML = `
-            <div class="row" style="gap:6px;">
-              <input type="text" class="cpe-edit-spec-number" value="${escapeHtml(s.number)}" style="flex:1; min-width:0;"/>
+        const sКлюч = `specification:${s.id}`;
+        const sБлок = document.createElement("details");
+        sБлок.className = "cpe-agreement";
+        sБлок.dataset.node = sКлюч;
+        sБлок.open = первыйПоказ ? false : былиРаскрыты.has(sКлюч);
+        sБлок.innerHTML = `
+          <summary><span class="cpe-summary-row">
+            <span class="dict-kind-tag">Спецификация</span>
+            <b>${escapeHtml(s.number)}</b>
+            <span class="hint-text dict-row-rest">${s.specification_date ? "от " + formatDateRu(s.specification_date) : "без даты"}</span>
+            <span class="dict-row-actions">
+              ${systemAdmin() ? trashButtonHtml(`data-del-spec="${s.id}"`, "Удалить спецификацию") : ""}
+            </span>
+          </span></summary>
+          <div>
+            <div class="row" style="gap:6px; margin:6px 0;">
+              <input type="text" class="cpe-edit-spec-number" value="${escapeHtml(s.number)}"
+                     style="flex:1; min-width:0;" placeholder="номер спецификации"/>
               <input type="date" class="cpe-edit-spec-date" value="${s.specification_date || ""}"/>
-            </div>
-            <div class="row" style="gap:6px; margin-top:6px;">
               <button class="btn btn-sm btn-primary cpe-save-spec" type="button">Сохранить</button>
-              <button class="btn btn-sm btn-secondary cpe-cancel-spec" type="button">Отмена</button>
             </div>
-          `;
-          specRow.querySelector(".cpe-cancel-spec").addEventListener("click", renderCounterpartyAgreements);
-          specRow.querySelector(".cpe-save-spec").addEventListener("click", async () => {
-            const number = specRow.querySelector(".cpe-edit-spec-number").value.trim();
-            if (!number) return;
-            const date = specRow.querySelector(".cpe-edit-spec-date").value || null;
-            await api(`/specifications/${s.id}`, {
-              method: "PATCH", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ agreement_id: a.id, number, specification_date: date }),
-            });
-            await renderCounterpartyAgreements();
-          });
+            <div class="cpe-contracts-list"></div>
+          </div>`;
+        specsBox.appendChild(sБлок);
+
+        sБлок.querySelector("[data-del-spec]")?.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openDictDelete("specification", String(s.id), { onDone: renderCounterpartyAgreements });
         });
+        sБлок.querySelector(".cpe-save-spec").addEventListener("click", async () => {
+          const number = sБлок.querySelector(".cpe-edit-spec-number").value.trim();
+          if (!number) return;
+          const date = sБлок.querySelector(".cpe-edit-spec-date").value || null;
+          await api(`/specifications/${s.id}`, {
+            method: "PATCH", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ agreement_id: a.id, number, specification_date: date }),
+          });
+          await renderCounterpartyAgreements();
+        });
+
+        // Контракты спецификации — четвёртый уровень. Наименование не
+        // выводим целиком: оно генерируется из всей цепочки
+        // (Контрагент/Договор/Спецификация), и здесь это была бы третья
+        // копия того, что и так написано двумя строками выше. Показываем
+        // тему и объём — то, чем контракты одной спецификации различаются.
+        const contractsBox = sБлок.querySelector(".cpe-contracts-list");
+        const список = contractsBySpec.get(s.id) || [];
+        if (!список.length) {
+          contractsBox.innerHTML = '<div class="hint-text">контрактов нет</div>';
+        } else {
+          for (const c of список) {
+            const позиций = (c.lines || []).length;
+            const всего = (c.lines || []).reduce((n, l) => n + (l.quantity || 0), 0);
+            const cRow = document.createElement("div");
+            cRow.className = "row dict-row-clickable";
+            cRow.style.cssText = "gap:6px; align-items:center; margin-top:2px;";
+            cRow.innerHTML = `
+              <span class="dict-kind-tag">Контракт</span>
+              <span class="hyperlink dict-row-rest" style="text-align:left;">
+                ${c.theme ? "«" + escapeHtml(c.theme) + "»" : "без темы"}
+                <span class="hint-text">${позиций ? `позиций: ${позиций}, всего изделий: ${всего}` : "без позиций"}</span>
+              </span>
+              <span class="dict-row-actions">
+                ${systemAdmin() ? trashButtonHtml(`data-del-contract-here="${c.id}"`, "Удалить контракт") : ""}
+              </span>`;
+            contractsBox.appendChild(cRow);
+            // Отдельным окном поверх формы контрагента (запрос пользователя):
+            // у контракта своя форма с позициями и инцидентами, встроить её
+            // сюда значило бы получить третью вложенность в модальном окне.
+            cRow.addEventListener("click", (e) => {
+              if (e.target.closest(".dict-row-actions")) return;
+              openContractEdit(c);
+            });
+            cRow.querySelector("[data-del-contract-here]")?.addEventListener(
+              "click", () => openDictDelete("contract", String(c.id),
+                                            { onDone: renderCounterpartyAgreements }));
+          }
+        }
       }
     }
 
-    row.querySelector(".cpe-add-spec").addEventListener("click", async () => {
-      const number = row.querySelector(".cpe-new-spec-number").value.trim();
+    блок.querySelector(".cpe-add-spec").addEventListener("click", async () => {
+      const number = блок.querySelector(".cpe-new-spec-number").value.trim();
       if (!number) return;
-      const date = row.querySelector(".cpe-new-spec-date").value || null;
+      const date = блок.querySelector(".cpe-new-spec-date").value || null;
       await api("/specifications", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agreement_id: a.id, number, specification_date: date }),
@@ -10731,6 +11266,16 @@ async function renderCounterpartyAgreements() {
     });
   }
 }
+
+// «Свернуть все» / «Развернуть все» — по всем уровням сразу (договоры и их
+// спецификации): у контрагента с десятком договоров разворачивать по одному
+// ради обзора — та же работа, от которой сворачивание и избавляет.
+function cpeToggleAll(open) {
+  document.querySelectorAll("#cpe-agreements-list details[data-node]")
+    .forEach(d => { d.open = open; });
+}
+document.getElementById("cpe-collapse-all").addEventListener("click", () => cpeToggleAll(false));
+document.getElementById("cpe-expand-all").addEventListener("click", () => cpeToggleAll(true));
 
 document.getElementById("cpe-add-agreement").addEventListener("click", async () => {
   if (!editingCounterpartyId) return; // только у уже сохранённого контрагента
@@ -10758,7 +11303,16 @@ document.getElementById("cpe-add-agreement").addEventListener("click", async () 
 
 async function openCounterpartyEdit(cp) {
   editingCounterpartyId = cp ? cp.id : null;
-  document.getElementById("counterparty-edit-title").textContent = cp ? "Изменить контрагента" : "Новый контрагент";
+  // Заголовок называет КОНТРАГЕНТА, а не операцию (2026-08-05): форма
+  // прокручивается на несколько экранов договоров, и «Изменить контрагента»
+  // в шапке не отвечало на единственный вопрос, который там возникает, —
+  // чьи это договоры. Обновляется по ходу правки краткого наименования.
+  const заголовок = document.getElementById("counterparty-edit-title");
+  const назвать = () => {
+    const имя = document.getElementById("cpe-short-name").value.trim();
+    заголовок.textContent = cp ? (имя || "Контрагент без наименования") : "Новый контрагент";
+  };
+  document.getElementById("cpe-short-name").oninput = назвать;
   document.getElementById("cpe-full-name").value = cp ? cp.full_name : "";
   document.getElementById("cpe-short-name").value = cp ? cp.short_name : "";
   document.getElementById("cpe-inn").value = (cp && cp.inn) || "";
@@ -10768,6 +11322,7 @@ async function openCounterpartyEdit(cp) {
   document.getElementById("cpe-contact-person").value = (cp && cp.contact_person) || "";
   document.getElementById("cpe-contact-phone").value = (cp && cp.contact_phone) || "";
   document.getElementById("cpe-code").value = (cp && cp.code) || "";
+  назвать();   // после подстановки значения, иначе заголовок останется пустым
   document.getElementById("counterparty-edit-error").textContent = "";
   // Договоры/спецификации — только у уже существующего контрагента
   // (у нового ещё нет id, договор ссылается на counterparty_id).
@@ -10778,6 +11333,15 @@ async function openCounterpartyEdit(cp) {
   // администратора на нём нет, objectOptionsHtml оставит выбор пустым.
   const подставить = objectsForAgreement().some(v => v.id === state.objectId) ? state.objectId : null;
   document.getElementById("cpe-new-agreement-object").innerHTML = objectOptionsHtml(подставить);
+  // Реквизиты юрлица правят раз в жизни, а форму открывают ради
+  // контрактации — у существующего контрагента шапка свёрнута (2026-08-05).
+  // У НОВОГО раскрыта: иначе заполнять нечего, форма выглядела бы пустой.
+  document.getElementById("cpe-details-requisites").open = !cp;
+  document.getElementById("cpe-details-contracting").open = true;
+  // Договоры при каждом открытии формы начинаются свёрнутыми: восстановление
+  // раскрытого состояния (см. renderCounterpartyAgreements) работает внутри
+  // одного сеанса работы с формой, а не между разными контрагентами.
+  document.getElementById("cpe-agreements-list").dataset.rendered = "";
   if (cp) await renderCounterpartyAgreements();
   counterpartyEditBackdrop.classList.add("open");
 }
@@ -10834,10 +11398,11 @@ async function renderMarkTypePrefixesList() {
       <button class="btn btn-sm btn-secondary" data-remove-prefix="${escapeHtml(item.prefix)}">✕</button>
     `;
     box.appendChild(row);
-    row.querySelector("[data-remove-prefix]").addEventListener("click", async () => {
-      await api(`/mark-type-prefixes/${encodeURIComponent(item.prefix)}`, { method: "DELETE" });
-      await renderMarkTypePrefixesList();
-    });
+    // Через общий диалог, хотя ссылок на префикс не бывает (это эвристика
+    // импорта): одно «Удалить» на все справочники — одно поведение, а не
+    // два похожих, из которых одно однажды забудет спросить.
+    row.querySelector("[data-remove-prefix]").addEventListener("click", () => openDictDelete(
+      "mark_prefix", item.prefix, { onDone: renderMarkTypePrefixesList }));
   }
 }
 document.getElementById("menu-mark-prefixes").addEventListener("click", async () => {
@@ -10999,11 +11564,21 @@ async function renderContractsList() {
       <td>${specText}</td>
       <td>${c.theme ? escapeHtml(c.theme) : "—"}</td>
       <td style="white-space:nowrap;">
-        <button class="btn btn-sm btn-secondary" data-edit-contract="${c.id}">Изменить</button>
-        <button class="btn btn-sm btn-secondary" data-toggle-lines="${c.id}">Позиции…</button>
+        <span class="dict-row-actions" style="justify-content:flex-end;">
+          <button class="btn btn-sm btn-secondary" data-toggle-lines="${c.id}">Позиции…</button>
+          ${systemAdmin() ? trashButtonHtml(`data-del-contract="${c.id}"`, "Удалить контракт") : ""}
+        </span>
       </td>
     `;
-    tr.querySelector("[data-edit-contract]").addEventListener("click", () => openContractEdit(c));
+    // Форма контракта открывается кликом по строке (2026-08-05): «Позиции…»
+    // разворачивает подтаблицу прямо здесь и потому кнопкой осталась.
+    tr.classList.add("dict-row-clickable");
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      openContractEdit(c);
+    });
+    tr.querySelector("[data-del-contract]")?.addEventListener("click", () => openDictDelete(
+      "contract", String(c.id), { onDone: async () => { await renderContractsList(); } }));
     table.appendChild(tr);
 
     const linesRow = document.createElement("tr");
@@ -11454,6 +12029,12 @@ document.getElementById("contract-edit-save").addEventListener("click", async ()
     contractEditBackdrop.classList.remove("open");
     const contracts = await renderContractsList();
     await renderDefaultContracts(contracts);
+    // Форма контракта открывается и ИЗ формы контрагента (2026-08-05) —
+    // тогда обновить надо и её список, иначе только что изменённый контракт
+    // остался бы под ней с прежней темой и числом позиций.
+    if (counterpartyEditBackdrop.classList.contains("open") && editingCounterpartyId) {
+      await renderCounterpartyAgreements();
+    }
     await loadPlan(); // обновить список контрактов в state для карточки элемента
   } catch (e) {
     document.getElementById("contract-edit-error").textContent = e.message;

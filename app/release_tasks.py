@@ -122,6 +122,78 @@ def _clear_contract_on_planned(conn) -> str:
             if cur.rowcount else "расхождений с инвариантом нет")
 
 
+def _fill_marks_catalog(conn) -> str:
+    """Разложить марки по справочнику `marks` и проставить `elements.mark_id`.
+
+    Что делает. Заводит запись справочника на каждую пару (объект, тип,
+    марка), встречающуюся (1) у изделий и (2) в позициях контрактов, чей тип
+    определён. Объект позиции контракта берётся по цепочке
+    contract_lines → contracts → specifications → agreements.object_id —
+    отдельного поля объекта у контракта нет и быть не должно (см. schema.sql).
+
+    Чего НЕ делает — и это главное. Регистр здесь НЕ сворачивается: «К-1» и
+    «к-1» становятся ДВУМЯ записями справочника, ровно как они лежат в
+    данных. Свёртка задвоенных записей — отдельный шаг (пользователь сначала
+    чистит справочник руками, потом приезжает автоматическая обработка):
+    свернуть тихо, не показав человеку, что и с чем слиплось, значит принять
+    за него решение о том, какое написание марки правильное.
+
+    Текстовое `elements.mark` не трогается вовсе — правило релиза «только
+    добавлять». Оба поля живут рядом, пока пользователь не сверит разложение.
+
+    Идемпотентность: записи справочника заводятся через INSERT OR IGNORE по
+    уникальному ключу, mark_id проставляется только там, где он ещё пуст.
+    """
+    из_изделий = conn.execute(
+        """
+        INSERT OR IGNORE INTO marks (object_id, element_type, name)
+        SELECT DISTINCT object_id, element_type, mark FROM elements
+        WHERE object_id IS NOT NULL AND element_type IS NOT NULL
+          AND mark IS NOT NULL AND trim(mark) <> ''
+        """
+    ).rowcount
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO marks (object_id, element_type, name)
+        SELECT DISTINCT a.object_id, cl.element_type, cl.mark
+        FROM contract_lines cl
+        JOIN contracts co ON co.id = cl.contract_id
+        JOIN specifications s ON s.id = co.specification_id
+        JOIN agreements a ON a.id = s.agreement_id
+        WHERE a.object_id IS NOT NULL AND cl.element_type IS NOT NULL
+          AND cl.mark IS NOT NULL AND trim(cl.mark) <> ''
+        """
+    )
+    всего_записей = conn.execute("SELECT COUNT(*) AS n FROM marks").fetchone()["n"]
+
+    # Сопоставление ТОЧНОЕ, с учётом регистра: подставить изделию запись,
+    # отличающуюся написанием, значит молча решить за пользователя ту самую
+    # задвоенность, ради разбора которой справочник и заводится.
+    cur = conn.execute(
+        """
+        UPDATE elements SET mark_id = (
+            SELECT m.id FROM marks m
+            WHERE m.object_id = elements.object_id
+              AND m.element_type = elements.element_type
+              AND m.name = elements.mark
+        )
+        WHERE mark_id IS NULL AND object_id IS NOT NULL
+          AND mark IS NOT NULL AND trim(mark) <> ''
+        """
+    )
+    if не_разложено := conn.execute(
+        "SELECT COUNT(*) AS n FROM elements "
+        "WHERE mark_id IS NULL AND mark IS NOT NULL AND trim(mark) <> ''"
+    ).fetchone()["n"]:
+        хвост = (f"; без записи справочника осталось изделий: {не_разложено} "
+                 f"(нет объекта либо типа)")
+    else:
+        хвост = ""
+    return (f"записей справочника марок: {всего_записей} "
+            f"(заведено этим проходом из изделий: {из_изделий}); "
+            f"проставлено изделиям: {cur.rowcount}{хвост}")
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -140,6 +212,16 @@ RELEASE_TASKS = [
                "иначе остатки при выборе контракта показывают меньше, чем есть",
         "kind": KIND_DATA,
         "run": _clear_contract_on_planned,
+    },
+    {
+        "name": "2026-08-05-marks-catalog",
+        "version": "0.37",
+        "title": "Разложить марки по справочнику",
+        "why": "марка была свободным текстом, и одно и то же изделие, набранное в разном "
+               "регистре, расщеплялось по двум веткам фильтров и остатков контракта; "
+               "справочник даёт марке одну запись, которую можно переименовать и свернуть",
+        "kind": KIND_DATA,
+        "run": _fill_marks_catalog,
     },
 ]
 

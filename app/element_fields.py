@@ -193,6 +193,43 @@ def contract_mismatch(conn, contract_id, element_type, mark) -> Optional[str]:
             f"контракта (тип «{element_type}», марка «{mark or '—'}»)")
 
 
+def resolve_mark_id(conn, object_id, element_type, mark, create: bool = True):
+    """Запись справочника марок для пары (тип, марка) внутри объекта.
+
+    Ссылка `elements.mark_id` ПРОИЗВОДНА от текста марки, а не наоборот
+    (2026-08-05). Так решено, потому что текстовое `elements.mark` пока
+    остаётся источником правды для фильтров, отчётов, экспорта и всех
+    импортов: пока разложение по справочнику не сверено, снимать его нельзя.
+    Значит, единственный способ не дать двум полям разойтись — выводить
+    ссылку из текста в ОДНОМ месте, через которое проходит любая запись
+    марки (`write_fields` ниже — и одиночная правка, и массовая через Excel;
+    `element_sync` — переимпорт чертежа).
+
+    `create=True`: марки, которой ещё нет, заводится запись. Справочник — это
+    ровно множество марок, которые в данных есть; если новую марку не
+    завести, у изделия останется пустая ссылка, и разойдётся ровно то, что
+    эта функция и держит вместе. Опечатка при этом попадёт в справочник —
+    и это правильно: её там видно (счётчик «Изделий: 1») и её можно свернуть
+    удалением с заменой, а раньше она молча жила в тексте.
+    """
+    mark = (mark or "").strip()
+    if not mark or object_id is None or not element_type:
+        return None
+    row = conn.execute(
+        "SELECT id FROM marks WHERE object_id = ? AND element_type = ? AND name = ?",
+        (object_id, element_type, mark),
+    ).fetchone()
+    if row:
+        return row["id"]
+    if not create:
+        return None
+    conn.execute(
+        "INSERT INTO marks (object_id, element_type, name) VALUES (?, ?, ?)",
+        (object_id, element_type, mark),
+    )
+    return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+
 def write_fields(conn, element_id: int, row, values: dict) -> tuple[dict, list]:
     """Записывает поля и ведёт manual_fields. Возвращает (что изменилось,
     итоговый manual_fields).
@@ -225,7 +262,19 @@ def write_fields(conn, element_id: int, row, values: dict) -> tuple[dict, list]:
     changed = {f: (row[f], v) for f, v in values.items() if row[f] != v}
     if not changed:
         return {}, sorted(set(json.loads(row["manual_fields"] or "[]")))
+    # В manual_fields попадает то, что правил ЧЕЛОВЕК, — а mark_id считается
+    # по марке и типу и в этот список не входит: пометив его «правлено
+    # руками», мы запретили бы переимпорту чертежа обновлять ссылку, которую
+    # он же и обязан пересчитывать.
     manual = set(json.loads(row["manual_fields"] or "[]")) | set(changed)
+    if "mark" in changed or "element_type" in changed:
+        новая_ссылка = resolve_mark_id(
+            conn, row["object_id"],
+            changed["element_type"][1] if "element_type" in changed else row["element_type"],
+            changed["mark"][1] if "mark" in changed else row["mark"],
+        )
+        if новая_ссылка != row["mark_id"]:
+            changed["mark_id"] = (row["mark_id"], новая_ссылка)
     assignments = ", ".join(f"{f} = :{f}" for f in changed)
     conn.execute(
         f"UPDATE elements SET {assignments}, manual_fields = :manual_fields, "

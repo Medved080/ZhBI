@@ -35,7 +35,7 @@ COUNTED = [
     "elements", "status_history", "zones", "zone_levels", "axis_lines",
     "objects", "projects", "object_drawings", "users", "user_access",
     "contracts", "contract_lines", "counterparties", "agreements",
-    "specifications", "label_visibility", "zone_colors", "report_notes",
+    "specifications", "marks", "label_visibility", "zone_colors", "report_notes",
     "default_contracts", "app_settings", "activity_log",
 ]
 

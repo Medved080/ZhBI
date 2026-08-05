@@ -40,9 +40,29 @@
     --radius-sm: 7px;
     --shadow-sm: 0 1px 3px rgba(20,30,50,.08);
     --shadow-md: 0 12px 32px rgba(20,30,50,.16);
+    /* Карточка записи справочника (2026-08-05, живой запрос по образцу
+       госуслуг): раньше блоки контрагентов и договоров различались только
+       волосяной рамкой, и вложенные уровни сливались в сплошное полотно.
+       Тень отделяет запись от фона надёжнее линии — и, в отличие от неё,
+       не спорит с вложенностью.
+       ДВА значения на палитру, а не одно: на тёмном фоне тень почти не
+       видна физически (тени темнее чёрного не бывает), там работу делает
+       светлая рамка-кант — `--dict-card-border`. Поэтому у каждой гаммы
+       свой набор, и «сделать во всех схемах» это не одна переменная. */
+    --shadow-card: 0 1px 2px rgba(20,30,50,.06), 0 6px 16px rgba(20,30,50,.10);
+    --shadow-card-hover: 0 2px 6px rgba(20,30,50,.10), 0 14px 30px rgba(20,30,50,.16);
+    --dict-card-border: transparent;
   }
   @media (prefers-color-scheme: dark) {
     :root {
+      /* На тёмном фоне тень ИНВЕРТИРОВАНА (2026-08-05, живой запрос):
+         не затемнение под блоком, а свет, выходящий из-под него. Обычная
+         тень там не работает физически — темнее чёрного не бывает, и
+         карточка на тёмной подложке остаётся плоской. Смещение вниз и
+         больший радиус у нижнего слоя дают направление «свет снизу». */
+      --shadow-card: 0 2px 6px rgba(255,255,255,.05), 0 8px 22px rgba(255,255,255,.07);
+      --shadow-card-hover: 0 3px 10px rgba(255,255,255,.09), 0 14px 34px rgba(255,255,255,.13);
+      --dict-card-border: rgba(255,255,255,.08);
       --color-bg: #14161a;
       --color-surface: #1e2126;
       --color-surface-2: #262a30;
@@ -92,11 +112,22 @@
     --radius-sm: 8px;
     --shadow-sm: 0 1px 2px rgba(11,31,51,.06);
     --shadow-md: 0 8px 28px rgba(11,31,51,.12);
+    --shadow-card: 0 1px 2px rgba(11,31,51,.05), 0 6px 16px rgba(11,31,51,.10);
+    --shadow-card-hover: 0 2px 6px rgba(11,31,51,.10), 0 14px 30px rgba(11,31,51,.16);
+    --dict-card-border: transparent;
   }
   /* Тёмная схема у пробы своя: базовая построена на серых, а здесь фон
      синеватый, и «просто затемнить» её значило бы получить грязный цвет. */
   @media (prefers-color-scheme: dark) {
     :root[data-skin] {
+      /* На тёмном фоне тень ИНВЕРТИРОВАНА (2026-08-05, живой запрос):
+         не затемнение под блоком, а свет, выходящий из-под него. Обычная
+         тень там не работает физически — темнее чёрного не бывает, и
+         карточка на тёмной подложке остаётся плоской. Смещение вниз и
+         больший радиус у нижнего слоя дают направление «свет снизу». */
+      --shadow-card: 0 2px 6px rgba(255,255,255,.05), 0 8px 22px rgba(255,255,255,.07);
+      --shadow-card-hover: 0 3px 10px rgba(255,255,255,.09), 0 14px 34px rgba(255,255,255,.13);
+      --dict-card-border: rgba(255,255,255,.08);
       --color-bg: #0E1621;
       --color-surface: #16202D;
       --color-surface-2: #1D2837;
@@ -154,6 +185,11 @@
     --stage-bg: #10131A; --stage-3d-bg: #0E1117;
     --axis-line: #39414F; --axis-label: #7C879A;
     --shape-stroke: #C7D0DC; --edge-3d: #C7D0DC;
+      /* Тень ИНВЕРТИРОВАНА: свет из-под блока, а не затемнение под ним —
+       см. пояснение у тёмной медиа-схемы выше. */
+    --shadow-card: 0 2px 6px rgba(255,255,255,.05), 0 8px 22px rgba(255,255,255,.07);
+    --shadow-card-hover: 0 3px 10px rgba(255,255,255,.09), 0 14px 34px rgba(255,255,255,.13);
+    --dict-card-border: rgba(255,255,255,.08);
   }
   /* Индиго — тёмная синяя, контрастнее графита. */
   :root[data-skin="indigo"] {
@@ -173,6 +209,11 @@
     --stage-bg: #0D0F1B; --stage-3d-bg: #0B0D18;
     --axis-line: #333A63; --axis-label: #7E86B4;
     --shape-stroke: #CDD2EC; --edge-3d: #CDD2EC;
+      /* Тень ИНВЕРТИРОВАНА: свет из-под блока, а не затемнение под ним —
+       см. пояснение у тёмной медиа-схемы выше. */
+    --shadow-card: 0 2px 6px rgba(255,255,255,.05), 0 8px 22px rgba(255,255,255,.07);
+    --shadow-card-hover: 0 3px 10px rgba(255,255,255,.09), 0 14px 34px rgba(255,255,255,.13);
+    --dict-card-border: rgba(255,255,255,.08);
   }
   /* Неон — тёмная с ядовитыми акцентами в духе Cyberpunk 2077 (живой
      запрос). Жёлтый как основной акцент, бирюза и малиновый — на успехе и
@@ -195,6 +236,11 @@
     --stage-bg: #0A0912; --stage-3d-bg: #08070F;
     --axis-line: #3A2E63; --axis-label: #9C93C7;
     --shape-stroke: #05D9E8; --edge-3d: #05D9E8;
+      /* Тень ИНВЕРТИРОВАНА: свет из-под блока, а не затемнение под ним —
+       см. пояснение у тёмной медиа-схемы выше. */
+    --shadow-card: 0 2px 6px rgba(255,255,255,.05), 0 8px 22px rgba(255,255,255,.07);
+    --shadow-card-hover: 0 3px 10px rgba(255,255,255,.09), 0 14px 34px rgba(255,255,255,.13);
+    --dict-card-border: rgba(255,255,255,.08);
   }
   /* У «Неона» акцент жёлтый, и белый текст по нему нечитаем. Цвет текста НА
      акценте — такая же переменная гаммы, как сам акцент: иначе каждое
@@ -342,8 +388,13 @@
   :root[data-skin] .dropdown-menu button { border-radius: var(--radius-sm); padding: 9px 12px; }
   :root[data-skin] .dropdown-menu button:hover,
   :root[data-skin] .submenu.open > .submenu-trigger { background: var(--color-accent-soft); }
+  /* Группа панели действий — КАРТОЧКА на утопленной подложке (2026-08-05),
+     а не подложка сама по себе: иначе группа и фон панели одного цвета и
+     границы группы не видно. Тень и кант — общие переменные, поэтому в
+     тёмных гаммах здесь тоже свет из-под блока. */
   :root[data-skin] .actions-panel-group {
-    border: none; background: var(--color-surface-2); border-radius: var(--radius); padding: 14px 16px;
+    border: 1px solid var(--dict-card-border); background: var(--color-surface);
+    border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow-card);
   }
   :root[data-skin] .actions-panel-group > h4 { color: var(--color-primary); }
   :root[data-skin] .actions-panel button { border-radius: var(--radius-sm); padding: 7px 10px; }
@@ -351,7 +402,9 @@
   :root[data-skin] .actions-panel-sub { border-left-color: var(--color-primary); }
 
   /* Сайдбар: вкладки-пилюли вместо подчёркивания. */
-  :root[data-skin] #sidebar { background: var(--color-surface); border-left: 1px solid var(--color-border); }
+  /* Фон панели УТОПЛЕН (2026-08-05): на нём лежат карточки блоков, и общий
+     цвет с ними сделал бы их невидимыми. */
+  :root[data-skin] #sidebar { background: var(--color-surface-2); border-left: 1px solid var(--color-border); }
   :root[data-skin] .tab {
     border: none; border-radius: 999px; padding: 7px 14px; font-weight: 600;
   }
@@ -359,8 +412,11 @@
 
   /* Карточки, модалки, таблицы. */
   :root[data-skin] .modal { border-radius: 16px; }
+  /* Блок сайдбара — карточка (2026-08-05). Была подложка того же цвета, что
+     и фон панели в этой гамме, — блоки сливались в одно полотно. */
   :root[data-skin] .card-block {
-    background: var(--color-surface-2); border-radius: var(--radius); padding: 12px 14px; border: none;
+    background: var(--color-surface); border-radius: var(--radius); padding: 12px 14px;
+    border: 1px solid var(--dict-card-border); box-shadow: var(--shadow-card);
   }
   :root[data-skin] table th { color: var(--color-text-muted); font-weight: 600; }
   :root[data-skin] .status-bar {
@@ -456,6 +512,21 @@
   .btn-secondary { background: var(--color-surface-2); }
   .btn-danger { background: var(--color-danger); color: #fff; border-color: var(--color-danger); }
   .btn-sm { font-size: 11px; padding: 4px 8px; }
+  /* Квадратная кнопка с иконкой — «Удалить» во всех справочниках
+     (2026-08-05, запрос пользователя). Одна на все места: удаление стоит в
+     девяти списках, и подписью «Удалить» они занимали больше ширины, чем
+     сами реквизиты. Иконка — урна, aria-label и title несут смысл для тех,
+     кому картинки мало. */
+  .btn-icon {
+    width: 26px; height: 26px; min-height: 26px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  }
+  .btn-icon svg { width: 14px; height: 14px; display: block; }
+  .btn-icon:hover { color: var(--color-danger); border-color: var(--color-danger); }
+  :root[data-skin] .btn-icon { width: 28px; height: 28px; min-height: 28px; padding: 0; }
+  /* Строка справочника кликабельна целиком — открывает форму записи.
+     Курсор об этом сообщает, кнопки внутри строки клик не наследуют. */
+  .dict-row-clickable { cursor: pointer; }
   .view-mode-switch {
     display: flex; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
     overflow: hidden; flex-shrink: 0;
@@ -648,6 +719,79 @@
   .subtype-chip button { border: none; background: none; cursor: pointer; color: var(--color-text-muted); font-size: 13px; line-height: 1; padding: 2px; }
   .subtype-chip button:hover { color: var(--color-danger); }
   .subtype-add-row { display: flex; gap: 6px; }
+
+  /* -------- табличная часть «Марки» внутри типа -------- */
+  /* Таблица, а не чипы как у подтипов: у марки есть счётчики ссылок, и
+     именно по ним администратор отличает живую запись от опечатки, которую
+     можно удалить. В чип три числа не помещаются. */
+  .marks-part { margin-top: 8px; border-top: 1px dashed var(--color-border); padding-top: 8px; }
+  .marks-part h5 { font-size: 11px; margin: 0 0 6px; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .marks-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .marks-table th { text-align: left; font-weight: 600; color: var(--color-text-muted); padding: 2px 6px 4px 0; }
+  .marks-table td { padding: 2px 6px 2px 0; vertical-align: middle; }
+  .marks-table td.num { text-align: right; width: 72px; color: var(--color-text-muted); }
+  .marks-table input[type="text"] { width: 100%; }
+  /* Список марок объекта измеряется сотнями — таблица прокручивается внутри
+     своего типа, иначе форма растягивается на несколько экранов и подтипы
+     соседнего типа уезжают из виду. */
+  .marks-scroll { max-height: 240px; overflow-y: auto; }
+
+  /* -------- диалог удаления записи справочника -------- */
+  /* ВЫШЕ остальных модальных окон (z-index у них 100): удаление всегда
+     вызывается ИЗ формы справочника, и на общем уровне он оказывался под
+     ней — диалог был не виден вовсе (живой репорт 2026-08-05). */
+  #dict-delete-backdrop { z-index: 120; }
+  /* Форма контракта открывается ПОВЕРХ формы контрагента (2026-08-05):
+     контракты показаны в её иерархии, и клик по контракту обязан открыть
+     отдельное окно, а не спрятать его под уже открытым. Ниже диалога
+     удаления — тот вызывается в том числе из самой формы контракта. */
+  #contract-edit-backdrop { z-index: 110; }
+
+  /* -------- сворачиваемые области формы контрагента -------- */
+  .cpe-section { margin-bottom: 8px; }
+  .cpe-section > summary {
+    cursor: pointer; font-weight: 600; font-size: 12px; padding: 4px 0;
+    color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .04em;
+    list-style: none;
+  }
+  .cpe-section > summary::-webkit-details-marker { display: none; }
+  /* Треугольник рисуем сами: браузерный маркер выравнивается по базовой
+     линии текста и в верхнем регистре съезжает. */
+  .cpe-section > summary::before { content: "▸ "; display: inline-block; width: 1em; }
+  .cpe-section[open] > summary::before { content: "▾ "; }
+  /* Блок одного договора внутри контрактации: рамка нужна, чтобы в свёрнутом
+     виде было видно, где кончается один договор и начинается следующий. */
+  /* Вид карточки (фон, тень, скругление) задан ниже одним правилом вместе
+     с .contract-block — здесь только внутреннее устройство свёртки. */
+  .cpe-agreement > summary { cursor: pointer; list-style: none; padding: 2px 0; }
+  .cpe-agreement > summary::-webkit-details-marker { display: none; }
+  .cpe-agreement > summary::before { content: "▸"; display: inline-block; width: 1em;
+    color: var(--color-text-muted); }
+  .cpe-agreement[open] > summary::before { content: "▾"; }
+  /* Содержимое summary — flex-строка: заголовок тянется, кнопка стоит
+     справа на месте (тот же приём, что у .contract-block-header). */
+  .cpe-agreement > summary > .cpe-summary-row {
+    display: inline-flex; align-items: center; gap: 8px;
+    width: calc(100% - 1.2em); vertical-align: middle;
+  }
+  /* Подпись типа записи — «Договор», «Спецификация», «Контракт». Читается
+     как метка, а не как часть номера. */
+  .dict-kind-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--color-text-muted); font-weight: 600; }
+  .dd-node { border-left: 2px solid var(--color-border); padding: 6px 0 6px 10px; margin-left: 2px; }
+  .dd-node-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+  .dd-kind { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .dd-refs { font-size: 12px; color: var(--color-danger); }
+  .dd-cascade { font-size: 12px; color: var(--color-text-muted); }
+  .dd-replace { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .dd-replace select { flex: 1; min-width: 0; }
+  .dd-children { margin-left: 8px; }
+  .dd-checked { margin-top: 4px; font-size: 11px; color: var(--color-text-muted); }
+  .dd-checked summary { cursor: pointer; }
+  .dd-checked table { border-collapse: collapse; margin-top: 4px; }
+  .dd-checked td { padding: 1px 10px 1px 0; }
+  .dd-checked td.num { text-align: right; }
+  .dd-checked tr.dd-unhandled { color: var(--color-danger); font-weight: 600; }
   /* Карточка объекта/проекта в справочнике: каждое поле со своей подписью и
      в своей ячейке сетки. В общей flex-строке <select> (у него width:100%,
      то есть flex-basis:100%) вытеснял соседний input почти в ноль — форма
@@ -1733,12 +1877,319 @@
   #file-select-summary-line { margin-top: 6px; }
 
   /* -------- контракты: контракт + строки по типам (п.8 третьего раунда) -------- */
-  .contract-block { border: 1px solid var(--color-border); border-radius: var(--radius-sm); margin-bottom: 10px; padding: 10px 12px; }
-  .contract-block-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  /* Запись справочника контрактации — КАРТОЧКА (2026-08-05, живой запрос по
+     образцу госуслуг): фон поверхности, скругление, тень. Волосяной рамки
+     больше нет — она различала уровни хуже всего именно там, где уровней
+     четыре (контрагент → договор → спецификация → контракт) и все рамки
+     одинаковы. Кант остаётся только в тёмных гаммах, где тень физически не
+     работает (см. --dict-card-border). */
+  .contract-block, .cpe-agreement {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    transition: box-shadow .12s ease;
+  }
+  /* Кликабельная карточка приподнимается под курсором — тем же способом, что
+     и различает уровни, а не отдельным цветом наведения. */
+  .contract-block:has(.dict-row-clickable):hover,
+  .cpe-agreement:hover { box-shadow: var(--shadow-card-hover); }
+  /* Подложка под списком: белые карточки на белом фоне модалки держались бы
+     на одной тени. Слегка утопленный фон — то, что делает их карточками
+     (ровно приём с образца: серое полотно, белые карточки). */
+  #counterparties-list, #cpe-agreements-list {
+    background: var(--color-surface-2);
+    border-radius: var(--radius);
+    padding: 10px;
+  }
+  #counterparties-list:empty, #cpe-agreements-list:empty { padding: 0; background: none; }
+  /* Вложенные уровни: спецификация внутри договора и контракт внутри
+     спецификации. Своей подложки не получают — иначе на четырёх уровнях
+     набегает четыре оттенка серого; отделяет их тень и отступ. */
+  .cpe-agreement .cpe-agreement { background: var(--color-surface); margin: 8px 0; }
+  .cpe-agreement .cpe-specs-list, .cpe-agreement .cpe-contracts-list { margin-top: 6px; }
+  /* Контракт — последний уровень, отдельной карточкой: он кликабельный и
+     открывается собственным окном, то есть это такая же запись, как те, что
+     над ним, а не строка списка. */
+  .cpe-contracts-list > .row {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card);
+    padding: 6px 8px;
+    margin-top: 6px !important;
+    transition: box-shadow .12s ease;
+  }
+  .cpe-contracts-list > .row:hover { box-shadow: var(--shadow-card-hover); }
+  /* Строка записи справочника: содержимое тянется, столбец действий стоит
+     на месте. Было `justify-content: space-between` — кнопки прыгали по
+     горизонтали вслед за длиной названия и реквизитов, и в списке из
+     десятка контрагентов ни одна не оказывалась под другой (живой репорт
+     2026-08-05). Фиксированный последний столбец выравнивает их по
+     вертикали во всех справочниках сразу. */
+  .contract-block-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .contract-block-header > :first-child { flex: 0 0 auto; }
+  .contract-block-header .dict-row-rest { flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dict-row-actions { flex: 0 0 auto; display: flex; gap: 4px; align-items: center;
+    margin-left: auto; }
   .contract-block-header b { font-size: 13px; }
   .contract-lines-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .contract-lines-table td, .contract-lines-table th { padding: 4px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
   .contract-lines-table tr.exceeded td { color: var(--color-danger); font-weight: 600; }
+  /* Справочник «Контракты» — та же карточка, что и в форме контрагента, но
+     на таблице (2026-08-05). Тень нельзя повесить на <tr> при
+     border-collapse: collapse — рамки схлопнуты, и тень рисовать не на чем.
+     Поэтому строки разводятся border-spacing, а тень вешается на ячейки;
+     скругление — крайним ячейкам, иначе карточка выйдет прямоугольной. */
+  #contracts-list .contract-lines-table {
+    border-collapse: separate; border-spacing: 0 8px;
+  }
+  #contracts-list .contract-lines-table td {
+    border-bottom: none; background: var(--color-surface);
+    box-shadow: 0 1px 0 var(--dict-card-border), var(--shadow-card);
+    padding: 8px 10px;
+  }
+  #contracts-list .contract-lines-table tr > td:first-child {
+    border-top-left-radius: var(--radius); border-bottom-left-radius: var(--radius);
+  }
+  #contracts-list .contract-lines-table tr > td:last-child {
+    border-top-right-radius: var(--radius); border-bottom-right-radius: var(--radius);
+  }
+  #contracts-list .contract-lines-table tr:hover > td { box-shadow: var(--shadow-card-hover); }
+  /* Заголовок таблицы карточкой не является — он подпись к столбцам. */
+  #contracts-list .contract-lines-table th {
+    border-bottom: none; background: none; box-shadow: none;
+    color: var(--color-text-muted); font-weight: 600;
+  }
+  #contracts-list { background: var(--color-surface-2); border-radius: var(--radius); padding: 4px 10px 10px; }
+
+  /* ==================== КАРТОЧКИ ЗАПИСЕЙ В ОСТАЛЬНЫХ ФОРМАХ ====================
+     (2026-08-05, живой запрос «сделай аналогично во всех остальных формах»)
+
+     Один набор свойств на все списки записей, а не копия в каждом месте:
+     иначе следующая правка вида пройдёт по половине форм и разъедется.
+     Переменные те же, что у контрактации, — значит инверсия тени в тёмных
+     гаммах («свет из-под блока») работает здесь сама собой.
+
+     Сюда НАМЕРЕННО не входят плотные таблицы — отчёты, матрица прав,
+     состояние БД, позиции контракта, сравнение выгрузок. Там строка не
+     самостоятельная запись, а ячейка сетки, которую читают по столбцам:
+     карточки разорвали бы столбцы и сделали чтение хуже, а не лучше. */
+  .object-card,        /* проекты и объекты */
+  .subtype-row,        /* тип элемента с подтипами и марками */
+  .rn-item,            /* события, задачи, вопросы */
+  .release-task,       /* обработки в «Что нового» */
+  .bulk-edit-block,    /* блоки массовой правки через Excel */
+  .import-template details {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    transition: box-shadow .12s ease;
+  }
+  .rn-item:hover, .object-card:hover, .import-template details:hover {
+    box-shadow: var(--shadow-card-hover);
+  }
+  /* Разделители, которые карточка заменила: две линии на одной границе
+     читаются как двойная рамка. */
+  .object-card { border-bottom: none; }
+  .object-card:last-child { border-bottom: none; }
+  .rn-item, .release-task { border-bottom: none; }
+  .rn-item:last-child, .release-task:last-child { border-bottom: none; }
+  /* Подложка списка: белые карточки на белом фоне модалки держались бы на
+     одной тени (в тёмных гаммах — на одном свечении). */
+  #projects-rows, #objects-rows, #subtypes-rows, #rn-list, .release-tasks {
+    background: var(--color-surface-2);
+    border: none;
+    border-radius: var(--radius);
+    padding: 10px;
+  }
+  #projects-rows:empty, #objects-rows:empty, #subtypes-rows:empty {
+    padding: 0; background: none;
+  }
+  /* Справочник зон — таблица; карточка собирается тем же приёмом, что и в
+     справочнике «Контракты» (тень на ячейках, border-spacing вместо
+     схлопнутых рамок). */
+  #zones-rows table { border-collapse: separate; border-spacing: 0 8px; }
+  #zones-rows tbody td {
+    background: var(--color-surface);
+    box-shadow: 0 1px 0 var(--dict-card-border), var(--shadow-card);
+    padding: 8px 10px;
+  }
+  #zones-rows tbody tr > td:first-child {
+    border-top-left-radius: var(--radius); border-bottom-left-radius: var(--radius);
+  }
+  #zones-rows tbody tr > td:last-child {
+    border-top-right-radius: var(--radius); border-bottom-right-radius: var(--radius);
+  }
+  #zones-rows tbody tr:hover > td { box-shadow: var(--shadow-card-hover); }
+  #zones-rows thead th { color: var(--color-text-muted); font-weight: 600; }
+  #zones-rows { background: var(--color-surface-2); border-radius: var(--radius); padding: 4px 10px 10px; }
+
+  /* Форма НЕ из записей (карточка объекта, настройки): выделять построчно
+     нечего, поэтому карточкой становится смысловая группа полей. Вид тот же,
+     что у записей справочников, — язык интерфейса один. */
+  .form-card {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+  .form-card > h4 {
+    margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--color-text-muted);
+  }
+  .form-card > label.field:first-of-type { margin-top: 0; }
+  /* Справочник элементов — плотная таблица с двумя прилипающими строками
+     заголовка и отбором в них. Строки-карточки её сломали бы: прилипание
+     держится на схлопнутых рамках, а сорок колонок читают по столбцам, и
+     разведённые тенями строки разорвали бы столбцы. Поэтому карточкой
+     становится сама таблица целиком, а прокрутка — подложкой под ней. */
+  #element-catalog-backdrop .modal-sticky-scroll {
+    background: var(--color-surface-2);
+    border-radius: var(--radius);
+    padding: 8px;
+  }
+  #ec-table {
+    background: var(--color-surface);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* ==================== ЕДИНЫЙ ЯЗЫК ФОРМ (2026-08-05) ====================
+     Запрос пользователя: «проработай в одном стиле все формы во всех
+     стилях». Форм 56, и править каждую по отдельности значило бы получить
+     56 слегка разных решений. Поэтому три ОБРАЗЦА по типу содержимого, и
+     каждая форма попадает в один из них:
+
+       1. Список записей   — карточка на строку, список на утопленной
+                             подложке (справочники: контрагенты, проекты,
+                             объекты, зоны, марки, события, обработки).
+       2. Группа полей     — .form-card: карточка на смысловую группу
+                             (карточка объекта, настройки).
+       3. Плотная таблица  — карточка на ВСЮ таблицу, строки остаются
+                             строками (элементы, пользователи, журнал,
+                             матрицы, резервные копии). Строки-карточки
+                             здесь ломают и прилипающую шапку, и чтение по
+                             столбцам.
+
+     Все три пользуются одними переменными (--shadow-card,
+     --shadow-card-hover, --dict-card-border), поэтому инверсия тени в
+     тёмных гаммах — свет из-под блока — работает везде сама собой, и
+     «во всех стилях» не требует ни одного отдельного правила. */
+
+  /* --- образец 3: плотные таблицы --- */
+  #users-table, #sessions-table, #backups-table, #activity-table,
+  #access-matrix-table, #rights-matrix-table, #bulk-edit-table,
+  #statuslog-list table, #db-table-backdrop .dbt, #report-body table,
+  #ef-history {
+    background: var(--color-surface);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card);
+  }
+  #users-backdrop .modal-sticky-scroll, #sessions-backdrop .modal-sticky-scroll,
+  #backups-backdrop .modal-sticky-scroll, #activity-backdrop .modal-sticky-scroll,
+  #access-matrix-backdrop .modal-sticky-scroll, #rights-matrix-backdrop .modal-sticky-scroll,
+  #bulk-edit-backdrop .modal-sticky-scroll, #statuslog-backdrop .modal-sticky-scroll,
+  #db-table-backdrop .modal-sticky-scroll, #reports-backdrop .modal-sticky-scroll {
+    background: var(--color-surface-2);
+    border-radius: var(--radius);
+    padding: 8px;
+  }
+
+  /* --- образец 1: списки записей, где строка — запись --- */
+  #settings-rows > .row, #shapes-rows > .row, #zone-colors-rows > .row,
+  #default-contracts-rows > .default-contract-row,
+  #mark-type-prefixes-list > .row, #file-select-list > .row,
+  #sc-contract-list > .row, #cp-list > .row,
+  #changelog-list > .changelog-entry {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card);
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    transition: box-shadow .12s ease;
+  }
+  #settings-rows, #shapes-rows, #zone-colors-rows, #default-contracts-rows,
+  #mark-type-prefixes-list, #file-select-list, #sc-contract-list, #cp-list,
+  #changelog-list {
+    background: var(--color-surface-2);
+    border: none;
+    border-radius: var(--radius);
+    padding: 10px;
+  }
+  #settings-rows:empty, #shapes-rows:empty, #zone-colors-rows:empty,
+  #default-contracts-rows:empty, #mark-type-prefixes-list:empty,
+  #file-select-list:empty, #sc-contract-list:empty, #cp-list:empty {
+    padding: 0; background: none;
+  }
+  /* Мелкие таблицы ВНУТРИ карточек своей тени не получают — иначе карточка
+     в карточке, и обе перестают читаться как одна запись. */
+  .form-card table, .card-block table, .cpe-agreement table,
+  .object-card table, .subtype-row table {
+    box-shadow: none; background: none;
+  }
+
+  /* --- ПРАВАЯ ПАНЕЛЬ и ПАНЕЛЬ ДЕЙСТВИЙ (2026-08-05) ---
+     Тот же язык, что и в формах: блок — карточка, полотно под ним утоплено.
+     До этого сайдбар был сплошной поверхностью, на которой блоки
+     («Карточка элемента», группы фильтров, сводки отчётов) различались
+     только отступом, а в гамме «Госуслуги» — подложкой того же цвета, что и
+     фон панели, то есть не различались вовсе. */
+  #sidebar { background: var(--color-surface-2); }
+  .card-block {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 10px 12px;
+  }
+  /* Вкладки сайдбара остаются на фоне панели: они не запись, а переключатель
+     того, что в панели показано. */
+  #sidebar .tabs { background: var(--color-surface-2); }
+  /* Содержимое вкладок — те же карточки. Перечислены КОНТЕЙНЕРЫ, а не
+     `.tab-panel > div`: во вкладках лежат и заголовки, и поле поиска, и
+     кнопки, и карточкой из них должен стать только блок содержимого.
+     `#card` в список НЕ входит: внутри него свои группы `.card-block`, и
+     карточка вокруг карточек читается как двойная рамка. */
+  #legend, #sidebar .side-report, #placement-filters,
+  #tab-view .display-settings-row, #tab-view .side-view-group {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+  #legend:empty, #placement-filters:empty { padding: 0; background: none; box-shadow: none; border: none; }
+  .side-chart, .side-dyn-notes details {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card);
+  }
+  /* Панель действий: полотно утоплено, группы — карточки (базовая гамма;
+     у пробы «Госуслуги» своё правило выше, с теми же переменными). */
+  #actions-panel-body { background: var(--color-surface-2); border-radius: var(--radius); padding: 10px; }
+  .actions-panel-group {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 10px 12px;
+  }
+  /* Выпадающее меню «Действия» уже приподнято над схемой (--shadow-md) —
+     вторая тень сделала бы его тяжелее соседних окон, а не понятнее.
+     Приводим только скругление к общему. */
+  .dropdown-menu, .submenu-panel { border-radius: var(--radius); }
   .bulk-status-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
   .bulk-status-table td, .bulk-status-table th { padding: 4px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
   .bulk-status-table select { max-width: 220px; }
@@ -2826,13 +3277,41 @@
   </div>
 </div>
 
+<!-- Тип элемента — владелец сразу двух подчинённых справочников: подтипов и
+     марок (2026-08-05, решение пользователя «делаем марки справочником,
+     справочник подчинённый типам элементов»). Поэтому одна форма, а не две:
+     у обоих справочников один и тот же владелец, и держать их в разных
+     местах значило бы искать марку не там, где стоит её тип.
+
+     Подтипы — сквозные (тип + подтип), марки — ВНУТРИ ОБЪЕКТА: марки
+     нумерует проектировщик в пределах здания. Отсюда выбор объекта в шапке;
+     на подтипы он не влияет. -->
 <div class="modal-backdrop" id="subtypes-backdrop">
-  <div class="modal">
-    <h2>Справочник подтипов</h2>
-    <p class="hint-text">Допустимые подтипы по типу элемента для нового стандарта имён слоёв — не зашиты в код разбора, полный список ярусов и т.п. уточняется по мере поступления данных.</p>
+  <div class="modal wide">
+    <h2>Типы элементов: подтипы и марки</h2>
+    <p class="hint-text">Допустимые подтипы по типу элемента для нового стандарта имён слоёв — не зашиты в код разбора, полный список ярусов и т.п. уточняется по мере поступления данных. Марки ведутся отдельно по каждому объекту.</p>
+    <label class="field">Объект (для списка марок)</label>
+    <select id="subtypes-object"></select>
     <div id="subtypes-rows"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="subtypes-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Удаление записи справочника: проверка → замена → удаление (2026-08-05).
+     ОДИН диалог на все справочники, а не кнопка с confirm() в каждом: правило
+     у них общее (не удалять то, на что ссылаются, без замены), и десять
+     реализаций этого правила разъехались бы, а половина забыла бы про
+     подчинённые записи. Серверная часть — app/dict_delete.py. -->
+<div class="modal-backdrop" id="dict-delete-backdrop">
+  <div class="modal wide">
+    <h2 id="dict-delete-title">Удаление записи справочника</h2>
+    <div id="dict-delete-body"></div>
+    <div class="error-text" id="dict-delete-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="dict-delete-cancel">Отмена</button>
+      <button class="btn btn-danger" id="dict-delete-confirm">Удалить</button>
     </div>
   </div>
 </div>
@@ -3448,17 +3927,29 @@
     <div class="modal-sticky-head"><h2>Карточка объекта</h2>
       <p class="hint-text">Используется в отчёте «Динамика монтажа и поставки».</p></div>
     <div class="modal-sticky-scroll">
-      <label class="field">Наименование объекта</label>
-      <textarea id="pc-title" rows="2" style="width:100%"></textarea>
-      <div class="row">
-        <div><label class="field">Окончание монтажа изделий</label><input type="date" id="pc-montage-deadline"/></div>
-        <div><label class="field">Окончание поставки изделий</label><input type="date" id="pc-delivery-deadline"/></div>
+      <!-- Здесь не список записей, а набор полей — карточке нечего выделять
+           построчно. Аналогом (2026-08-05, живой запрос «сделай аналогично
+           во всех остальных формах») стала группировка ПО СМЫСЛУ: три блока
+           того же вида, что карточки записей в справочниках. -->
+      <div class="form-card">
+        <h4>Наименование</h4>
+        <textarea id="pc-title" rows="2" style="width:100%"></textarea>
       </div>
-      <label class="field">Вехи на графике (по одной в строке: «Название | ГГГГ-ММ-ДД»)</label>
-      <textarea id="pc-milestones" rows="3" style="width:100%" placeholder="Завершение 1 Захватки | 2026-09-13"></textarea>
-      <p class="hint-text">Ключевые события, задачи и открытые вопросы ведутся отдельно —
-        они меняются по ходу стройки и хранятся редакциями на дату:
-        «Действия → Справочники → События, задачи, вопросы».</p>
+      <div class="form-card">
+        <h4>Сроки</h4>
+        <div class="row">
+          <div><label class="field">Окончание монтажа изделий</label><input type="date" id="pc-montage-deadline"/></div>
+          <div><label class="field">Окончание поставки изделий</label><input type="date" id="pc-delivery-deadline"/></div>
+        </div>
+      </div>
+      <div class="form-card">
+        <h4>Вехи на графике</h4>
+        <label class="field">По одной в строке: «Название | ГГГГ-ММ-ДД»</label>
+        <textarea id="pc-milestones" rows="3" style="width:100%" placeholder="Завершение 1 Захватки | 2026-09-13"></textarea>
+        <p class="hint-text">Ключевые события, задачи и открытые вопросы ведутся отдельно —
+          они меняются по ходу стройки и хранятся редакциями на дату:
+          «Действия → Справочники → События, задачи, вопросы».</p>
+      </div>
       <div class="hint-text" id="pc-status"></div>
     </div>
     <div class="modal-sticky-foot"><div class="actions">
@@ -3794,34 +4285,75 @@
 <div class="modal-backdrop" id="counterparty-edit-backdrop">
   <div class="modal wide">
     <h2 id="counterparty-edit-title">Контрагент</h2>
-    <label class="field">Полное наименование</label><input type="text" id="cpe-full-name"/>
+    <!-- Две сворачиваемые области (2026-08-05, запрос пользователя): у
+         контрагента с десятком договоров форма уезжала на несколько экранов,
+         и реквизиты юрлица — девять полей, которые правят раз в жизни, —
+         занимали первый экран целиком, отодвигая контрактацию, ради которой
+         форму и открывают. Теперь каждая часть сворачивается, а каждый
+         договор — ещё и отдельным блоком внутри.
+         `<details>`, а не самодельный аккордеон: состояние держит браузер,
+         работает клавиатурой и не требует ни строчки на синхронизацию. -->
+    <!-- Наименования — ВНЕ сворачиваемой области (2026-08-05, запрос
+         пользователя): это то, ЧЬЮ карточку человек открыл, и прятать его в
+         свёрнутую группу значит показывать форму без ответа на вопрос «чей
+         это договор». Внутрь убраны только реквизиты юрлица — ИНН, КПП,
+         адреса, контакты: их правят раз в жизни. -->
     <label class="field">Краткое наименование</label><input type="text" id="cpe-short-name"/>
-    <label class="field">ИНН</label><input type="text" id="cpe-inn"/>
-    <label class="field">КПП</label><input type="text" id="cpe-kpp"/>
-    <label class="field">ОГРН</label><input type="text" id="cpe-ogrn"/>
-    <label class="field">Юридический адрес</label><input type="text" id="cpe-legal-address"/>
-    <label class="field">Контактное лицо</label><input type="text" id="cpe-contact-person"/>
-    <label class="field">Контактный телефон</label><input type="text" id="cpe-contact-phone"/>
-    <label class="field">Код (для компактной подписи на схеме)</label><input type="text" id="cpe-code"/>
+    <label class="field">Полное наименование</label><input type="text" id="cpe-full-name"/>
+    <!-- Содержимое ОБЁРНУТО в один div, а не лежит прямо в <details>.
+         Свежий Chrome прячет содержимое через `::details-content`, и ему всё
+         равно, что на детях написано; движки постарше делают это правилом
+         `details:not([open]) > *:not(summary) { display: none }`, которое
+         перебивается любым более специфичным авторским — а у нас рядом стоят
+         `.modal label.field { display: block }` и `.row { display: flex }`.
+         На таком движке свёрнутая группа продолжала бы показывать все поля.
+         У обёртки display никто не задаёт, поэтому прячется везде.
+         Проверено на Chrome (свёрнутая форма — 349 px вместо нескольких
+         экранов); на старых движках — рассуждением, не запуском. -->
+    <details class="cpe-section" id="cpe-details-requisites" open>
+      <summary>Прочие реквизиты</summary>
+      <div>
+        <label class="field">ИНН</label><input type="text" id="cpe-inn"/>
+        <label class="field">КПП</label><input type="text" id="cpe-kpp"/>
+        <label class="field">ОГРН</label><input type="text" id="cpe-ogrn"/>
+        <label class="field">Юридический адрес</label><input type="text" id="cpe-legal-address"/>
+        <label class="field">Контактное лицо</label><input type="text" id="cpe-contact-person"/>
+        <label class="field">Контактный телефон</label><input type="text" id="cpe-contact-phone"/>
+        <label class="field">Код (для компактной подписи на схеме)</label><input type="text" id="cpe-code"/>
+      </div>
+    </details>
     <div class="error-text" id="counterparty-edit-error"></div>
+    <!-- Кнопки ВНЕ сворачиваемой области: со свёрнутыми реквизитами
+         «Отмена» должна оставаться доступной, иначе закрыть форму нечем. -->
     <div class="actions">
       <button class="btn btn-secondary" id="counterparty-edit-cancel">Отмена</button>
       <button class="btn btn-primary" id="counterparty-edit-save">Сохранить</button>
     </div>
     <div id="counterparty-agreements-section" style="display:none; margin-top:18px; border-top:1px solid var(--color-border); padding-top:12px;">
-      <h3>Договоры</h3>
-      <div id="cpe-agreements-list"></div>
-      <!-- Объект обязателен (2026-08-03): договор без объекта не виден ни в
-           одном контракте объекта — по правилам доступа его показывают
-           только администратору сервиса. Поле стоит первым в строке: это
-           не реквизит документа, а то, к какой стройке он относится. -->
-      <div class="row" style="gap:6px; margin-top:8px;">
-        <select id="cpe-new-agreement-object" style="flex:1; min-width:0;"></select>
-        <input type="text" id="cpe-new-agreement-number" placeholder="номер договора" style="flex:1;"/>
-        <input type="date" id="cpe-new-agreement-date"/>
-        <button class="btn btn-sm btn-secondary" id="cpe-add-agreement">+ Договор</button>
-      </div>
-      <div class="error-text" id="cpe-agreement-error"></div>
+      <details class="cpe-section" id="cpe-details-contracting" open>
+        <summary>Контрактация: договоры, спецификации, контракты</summary>
+        <div>
+        <!-- justify-content у .row — space-between, из-за чего эти две
+             кнопки расходились по краям формы и читались как два разных
+             действия в разных местах. Своя раскладка. -->
+        <div style="display:flex; gap:6px; margin-bottom:6px;">
+          <button class="btn btn-sm btn-secondary" id="cpe-collapse-all" type="button">Свернуть все</button>
+          <button class="btn btn-sm btn-secondary" id="cpe-expand-all" type="button">Развернуть все</button>
+        </div>
+        <div id="cpe-agreements-list"></div>
+        <!-- Объект обязателен (2026-08-03): договор без объекта не виден ни в
+             одном контракте объекта — по правилам доступа его показывают
+             только администратору сервиса. Поле стоит первым в строке: это
+             не реквизит документа, а то, к какой стройке он относится. -->
+        <div class="row" style="gap:6px; margin-top:8px;">
+          <select id="cpe-new-agreement-object" style="flex:1; min-width:0;"></select>
+          <input type="text" id="cpe-new-agreement-number" placeholder="номер договора" style="flex:1;"/>
+          <input type="date" id="cpe-new-agreement-date"/>
+          <button class="btn btn-sm btn-secondary" id="cpe-add-agreement">+ Договор</button>
+        </div>
+        <div class="error-text" id="cpe-agreement-error"></div>
+        </div>
+      </details>
     </div>
   </div>
 </div>

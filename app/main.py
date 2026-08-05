@@ -40,6 +40,8 @@ from app.contracts import (
 )
 from app.contracts import router as contracts_router
 from app.counterparties import router as counterparties_router
+from app.dict_delete import router as dict_delete_router
+from app.marks import router as marks_router
 from app import zone_recalc
 from app.db import (
     DB_PATH,
@@ -259,6 +261,8 @@ app.include_router(db_status_router)
 app.include_router(fill_scope_router)
 app.include_router(contracts_router)
 app.include_router(counterparties_router)
+app.include_router(marks_router)
+app.include_router(dict_delete_router)
 app.include_router(settings_router)
 app.include_router(attachments_router)
 

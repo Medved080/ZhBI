@@ -330,6 +330,7 @@ def apply_import(
         retired = len(match.retired_ids)
 
     assign_missing_element_uids(conn, object_id)
+    _sync_mark_links(conn, object_id)
     _register_drawing(conn, object_id, source_file)
 
     ensure_label_visibility(conn, element_types, object_id)
@@ -343,6 +344,47 @@ def apply_import(
         "manual_kept": manual_kept,
         "total_current": updated + inserted,
     }
+
+
+def _sync_mark_links(conn: sqlite3.Connection, object_id: int) -> None:
+    """Привести `elements.mark_id` в соответствие тексту марки после импорта.
+
+    Импорт пишет марку ТЕКСТОМ (так устроен весь конвейер разбора DXF), а
+    ссылка на справочник производна от текста — см.
+    `app/element_fields.resolve_mark_id`. Без этого прохода новая версия
+    чертежа принесла бы марки, которых нет в справочнике, и ссылка у таких
+    изделий осталась бы пустой: справочник начал бы отставать от данных
+    ровно там, где данные и меняются.
+
+    Одним проходом по объекту, а не по строке на изделие: переимпорт трогает
+    все девять с лишним тысяч строк, и запрос на каждую стоил бы дороже
+    самого импорта.
+    """
+    пары = conn.execute(
+        """
+        SELECT DISTINCT e.element_type, e.mark FROM elements e
+        WHERE e.object_id = ? AND e.element_type IS NOT NULL
+          AND e.mark IS NOT NULL AND trim(e.mark) <> ''
+        """,
+        (object_id,),
+    ).fetchall()
+    for пара in пары:
+        conn.execute(
+            "INSERT OR IGNORE INTO marks (object_id, element_type, name) VALUES (?, ?, ?)",
+            (object_id, пара["element_type"], пара["mark"]),
+        )
+    conn.execute(
+        """
+        UPDATE elements SET mark_id = (
+            SELECT m.id FROM marks m
+            WHERE m.object_id = elements.object_id
+              AND m.element_type = elements.element_type
+              AND m.name = elements.mark
+        )
+        WHERE object_id = ?
+        """,
+        (object_id,),
+    )
 
 
 def _register_drawing(conn: sqlite3.Connection, object_id: int, source_file: str) -> None:

@@ -159,9 +159,17 @@ FEATURES = [
      "Видно те проекты и объекты, к которым есть доступ; заводить и править их может "
      "администратор сервиса.",
      ["GET /projects-tree", "POST/PATCH /projects, /objects (require_system_admin)"]),
-    ("dictionaries", "Ведение сервиса", "Справочники: подтипы, префиксы марок, цвета статусов",
+    ("dictionaries", "Ведение сервиса", "Справочники: подтипы, марки, префиксы марок, цвета статусов",
      "view", SYSTEM, None,
-     ["PUT /status-colors", "POST/DELETE /subtypes, /mark-type-prefixes (require_system_admin)"]),
+     ["PUT /status-colors", "POST/DELETE /subtypes, /mark-type-prefixes (require_system_admin)",
+      "GET /marks (по доступу к объекту)", "POST/PATCH /marks (require_system_admin)"]),
+    ("dict_delete", "Ведение сервиса", "Удаление записей справочников с заменой ссылок",
+     SYSTEM, SYSTEM,
+     "Действие необратимое и сквозное: удаление контрагента уносит его договоры, "
+     "спецификации и контракты, а изделия и история переезжают на выбранную замену. "
+     "Поэтому только администратор сервиса, независимо от роли на объекте.",
+     ["GET /dictionaries/{вид}/{ключ}/delete-plan", "GET /dictionaries/{вид}/candidates",
+      "POST /dictionaries/{вид}/{ключ}/delete (require_system_admin)"]),
     ("backups", "Ведение сервиса", "Резервные копии и состояние БД",
      SYSTEM, SYSTEM, None,
      ["GET/POST /backups*", "GET /db-status*"]),

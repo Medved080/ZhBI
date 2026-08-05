@@ -185,6 +185,34 @@ CREATE TABLE IF NOT EXISTS mark_type_prefixes (
     element_type TEXT NOT NULL
 );
 
+-- Справочник МАРОК (2026-08-05). До этого марка была свободным текстом в
+-- elements.mark и contract_lines.mark, и одна и та же марка, набранная в
+-- разном регистре ("К-1" и "к-1"), расщепляла изделия по двум веткам
+-- фильтров, подписей и остатков контракта — ровно то задвоение, ради
+-- которого справочник и заводится.
+--
+-- Владелец марки — ТИП элемента (решение пользователя): марка "К-1"
+-- Колонны и марка "К-1" Панели это разные записи. Типов своей таблицы нет
+-- (ZHBI_ELEMENT_TYPES, app/models.py — четыре зашитых значения), поэтому
+-- владелец хранится текстом, как и в соседнем allowed_subtypes.
+--
+-- Область — ОБЪЕКТ, а не весь сервис: марки нумеруются проектировщиком в
+-- пределах здания, и одноимённые марки соседних зданий это разные изделия.
+-- Отсюда ключ (object_id, element_type, name).
+--
+-- elements.mark (текст) НЕ удаляется вместе с появлением mark_id — оба поля
+-- живут рядом, пока пользователь не сверит, что справочник разложился
+-- верно (правило релиза: только добавлять, см. app/release_tasks.py).
+CREATE TABLE IF NOT EXISTS marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    element_type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, element_type, name)
+);
+
 -- Общие настройки приложения (ключ-значение) — напр. порог "красной"
 -- инфо-плашки в днях (см. Docs/backlog.md, "Контрактация 2.0").
 -- object_id с этапа D (2026-08-02) — NULLABLE, в отличие от остальных

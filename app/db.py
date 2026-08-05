@@ -227,6 +227,13 @@ _COLUMN_MIGRATIONS = [
     # Последний выбранный объект — на ПОЛЬЗОВАТЕЛЯ, а не в localStorage:
     # человек садится за другой компьютер и должен попасть туда же.
     ("users", "last_object_id", "INTEGER REFERENCES objects(id) ON DELETE SET NULL"),
+    # Марка СПРАВОЧНИКОМ (2026-08-05, см. schema.sql, таблица marks).
+    # Текстовое elements.mark остаётся рядом и остаётся источником правды до
+    # тех пор, пока пользователь не сверит разложение — правило релиза
+    # «только добавлять» (app/release_tasks.py). Заполняется обработкой
+    # 2026-08-05-marks-catalog, а не миграцией: миграция меняет структуру,
+    # данные раскладывает обработка.
+    ("elements", "mark_id", "INTEGER REFERENCES marks(id) ON DELETE SET NULL"),
 ]
 
 

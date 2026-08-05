@@ -72,7 +72,8 @@ COLUMNS = [
     ["projects", "objects", "object_drawings", "label_visibility", "zone_colors",
      "app_settings", "report_notes", "release_tasks"],
     ["elements", "status_history", "axis_lines"],
-    ["zones", "zone_levels", "zone_edit_undo", "default_contracts", "mark_type_prefixes"],
+    ["zones", "zone_levels", "zone_edit_undo", "default_contracts", "mark_type_prefixes",
+     "marks"],
     ["counterparties", "agreements", "specifications", "contracts", "contract_lines",
      "contract_incidents"],
 ]
