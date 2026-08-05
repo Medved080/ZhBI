@@ -119,6 +119,21 @@ _COLUMN_MIGRATIONS = [
     ("sessions", "created_ip", "TEXT"),
     ("sessions", "user_agent", "TEXT"),
     ("sessions", "last_seen_at", "TEXT"),
+    # Отладочный сеанс «от имени» (2026-08-05): кто из администраторов его
+    # открыл. NULL — обычный сеанс, и это НЕ формальность: по cookie
+    # подходят только сеансы с NULL (см. app/auth.get_user_by_session), так
+    # что заполненная колонка запирает отладочный токен в заголовок и не
+    # даёт войти под чужой учётной записью мимо журнала.
+    ("sessions", "impersonator_user_id",
+     "INTEGER REFERENCES users(id) ON DELETE CASCADE"),
+    # Кто ФАКТИЧЕСКИ выполнил действие, если оно сделано в режиме «от
+    # имени»: user_id остаётся тем, ОТ ЧЬЕГО имени работали (там же, где
+    # видны последствия действия), а здесь — администратор. NULL у
+    # подавляющего большинства записей: обычная работа. Имя снимком, как и
+    # user_name, — журнал переживает переименование и удаление учётки.
+    ("activity_log", "impersonator_user_id",
+     "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
+    ("activity_log", "impersonator_name", "TEXT"),
     # Этаж — из суффикса "_этаж N" в конце имени слоя нового стандарта
     # (см. scripts/layer_naming.py, Docs/backlog.md, "Свойство 'этаж'").
     # NULL у элементов, чьи слои этот суффикс ещё не проставляют.

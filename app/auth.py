@@ -22,7 +22,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from app import activity
+from app import activity, impersonation
 from app.db import get_connection
 
 SESSION_COOKIE = "zhbi_session"
@@ -328,6 +328,22 @@ def format_display_name(user: sqlite3.Row) -> str:
     return " ".join(p for p in parts if p)
 
 
+def audit_display_name(user: sqlite3.Row) -> str:
+    """ФИО для аудиторского СНИМКА (`status_history.changed_by` и всё, что
+    хранится «кто это сделал»).
+
+    Отличается от format_display_name ровно в режиме «Зайти под
+    пользователем»: там возвращает «Админ (от имени: Пользователь)».
+    Отдельная функция, а не флаг внутри format_display_name, потому что то
+    же имя выводят СПИСКИ пользователей — и подопечный, попав в такой
+    список, оказался бы там с чужой припиской.
+
+    Ставится ТОЛЬКО там, где записывается автор действия. Найти эти места
+    можно по вызовам этой функции; обычное отображение имени остаётся за
+    format_display_name."""
+    return impersonation.audit_name(format_display_name(user))
+
+
 # Уборка истёкших сессий. Не про безопасность (get_user_by_session и так не
 # отдаёт просроченную строку), а про то, что таблица иначе растёт вечно:
 # срок сессии 30 дней, и при массовом использовании это тысячи мёртвых строк
@@ -382,13 +398,21 @@ def session_public_id(token: str) -> str:
 
 
 def create_session(conn: sqlite3.Connection, user_id: int, client_ip: Optional[str] = None,
-                   user_agent: Optional[str] = None) -> str:
+                   user_agent: Optional[str] = None,
+                   impersonator_user_id: Optional[int] = None) -> str:
+    """impersonator_user_id — отладочный сеанс «от имени» (app/impersonation.py).
+    У него свой, КОРОТКИЙ срок: обычные 30 дней означали бы вкладку под чужой
+    учётной записью, живущую месяц."""
     token = secrets.token_urlsafe(32)
-    expires_at = (datetime.utcnow() + timedelta(days=SESSION_TTL_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    срок = (timedelta(hours=impersonation.IMPERSONATION_TTL_HOURS)
+            if impersonator_user_id else timedelta(days=SESSION_TTL_DAYS))
+    expires_at = (datetime.utcnow() + срок).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute(
-        "INSERT INTO sessions (token, user_id, expires_at, created_ip, user_agent, last_seen_at) "
-        "VALUES (?, ?, ?, ?, ?, datetime('now'))",
-        (token, user_id, expires_at, client_ip, (user_agent or "")[:300] or None),
+        "INSERT INTO sessions (token, user_id, expires_at, created_ip, user_agent, "
+        "last_seen_at, impersonator_user_id) "
+        "VALUES (?, ?, ?, ?, ?, datetime('now'), ?)",
+        (token, user_id, expires_at, client_ip, (user_agent or "")[:300] or None,
+         impersonator_user_id),
     )
     conn.commit()
     return token
@@ -407,9 +431,12 @@ def touch_session(conn: sqlite3.Connection, token: str) -> None:
 
 
 def get_user_by_session(conn: sqlite3.Connection, token: str) -> Optional[sqlite3.Row]:
+    # impersonator_user_id IS NULL — отладочные сеансы «от имени» по cookie НЕ
+    # подходят принципиально (app/impersonation.py): иначе токен, переложенный
+    # в cookie, дал бы вход под чужой учётной записью без отметки в журнале.
     строка = conn.execute(
         "SELECT s.last_seen_at, s.created_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id "
-        "WHERE s.token = ? AND s.expires_at > datetime('now')",
+        "WHERE s.token = ? AND s.expires_at > datetime('now') AND s.impersonator_user_id IS NULL",
         (token,),
     ).fetchone()
     if строка is None:
@@ -433,6 +460,19 @@ def get_user_by_session(conn: sqlite3.Connection, token: str) -> Optional[sqlite
 
 
 def get_current_user(request: Request) -> sqlite3.Row:
+    # Режим «Зайти под пользователем»: заголовок уже разобран посредником
+    # (app/impersonation.py), и здесь остаётся только отдать ту учётную
+    # запись, от чьего имени идёт работа. Дальше вся система — доступы,
+    # меню, проверки прав — работает как для неё, ничего не зная о режиме.
+    подмена = impersonation.user_row()
+    if подмена is not None:
+        # must_change_password НЕ проверяем: администратор пришёл посмотреть
+        # чужой интерфейс, а не работать этой учётной записью, и упереться в
+        # экран смены чужого пароля тут бессмысленно (заводимый заново
+        # пользователь — как раз самый частый повод открыть режим). Сам
+        # экран смены пароля в режиме закрыт, см. _guard_impersonation.
+        _guard_impersonation(request)
+        return подмена
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         raise HTTPException(status_code=401, detail="Не авторизован")
@@ -463,6 +503,34 @@ _ALLOWED_WHILE_PASSWORD_EXPIRED = frozenset({
     "/me/change-password",  # собственно смена
     "/logout",              # уйти всегда можно
 })
+
+
+# Что режиму «от имени» запрещено безусловно. Список короткий и закрывает
+# ровно то, чего администратор в чужой учётной записи делать не должен:
+#
+#   пароль        — сменить чужой пароль «на посмотреть» значит запереть
+#                   человека снаружи; свой пароль в этой вкладке не свой;
+#   сеансы        — оборвать чужие сеансы (в т.ч. тот, из которого режим и
+#                   открыт) можно случайным нажатием;
+#   вложенность   — режим из режима: цепочка «А от имени Б от имени В» в
+#                   журнале не выражается, а значит и не должна возникать.
+_FORBIDDEN_WHILE_IMPERSONATING = frozenset({
+    "/me/change-password",
+    "/me/sessions/close-others",
+})
+
+
+def _guard_impersonation(request: Request) -> None:
+    path = request.url.path
+    запрещено = (path in _FORBIDDEN_WHILE_IMPERSONATING
+                 or path.endswith("/impersonate")
+                 or (path.startswith("/me/sessions/") and request.method == "DELETE"))
+    if запрещено:
+        raise HTTPException(
+            status_code=403,
+            detail="Недоступно в режиме «от имени пользователя»: это действие изменило бы "
+                   "чужую учётную запись, а не показало бы её работу",
+        )
 
 
 def _guard_must_change_password(request: Request, user: sqlite3.Row) -> None:
@@ -557,10 +625,21 @@ class UserOut(BaseModel):
     view3d_yaw_deg: float = DEFAULT_VIEW3D_YAW
     # Персональный порог читаемости подписей в пикселях (2026-08-04).
     min_label_px: float = DEFAULT_MIN_LABEL_PX
+    # Режим «Зайти под пользователем» (2026-08-05): ФИО администратора,
+    # который сейчас смотрит систему этими глазами. None — обычная работа.
+    # Клиент по этому полю рисует красную полосу поверх интерфейса: вкладка
+    # выглядит как чужая, и не отличить её от своей нельзя.
+    impersonated_by: Optional[str] = None
 
 
 def user_out(user: sqlite3.Row) -> UserOut:
     pitch, yaw = view3d_angles_of(user)
+    # Только про ТУ учётную запись, от чьего имени идёт работа: user_out
+    # обслуживает и список пользователей, и там пометка на посторонних
+    # строках была бы неправдой.
+    подмена = impersonation.current()
+    от_имени = (подмена["admin_name"]
+                if подмена is not None and подмена["user_id"] == user["id"] else None)
     return UserOut(
         id=user["id"],
         last_name=user["last_name"],
@@ -580,6 +659,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
         view3d_pitch_deg=pitch,
         view3d_yaw_deg=yaw,
         min_label_px=min_label_px_of(user),
+        impersonated_by=от_имени,
     )
 
 
@@ -650,6 +730,21 @@ def login(body: LoginRequest, request: Request, response: Response):
 
 @router.post("/logout")
 def logout(request: Request, response: Response):
+    # «Выход» из вкладки «от имени» закрывает ТОЛЬКО отладочный сеанс. Обычная
+    # ветка снесла бы сеанс по cookie — то есть выкинула бы администратора из
+    # всех его собственных вкладок за нажатие «Выйти» в чужой.
+    подмена = impersonation.current()
+    if подмена is not None:
+        conn = get_connection()
+        try:
+            conn.execute("DELETE FROM sessions WHERE token = ? AND impersonator_user_id IS NOT NULL",
+                         (подмена["token"],))
+            conn.commit()
+        finally:
+            conn.close()
+        activity.log("impersonate_end", user=подмена["user_row"],
+                     entity_type="user", entity_id=подмена["user_id"])
+        return {"status": "ok", "impersonation_ended": True}
     token = request.cookies.get(SESSION_COOKIE)
     if token:
         conn = get_connection()
@@ -741,10 +836,15 @@ def change_own_password(body: ChangeOwnPasswordIn, request: Request,
 
 
 def list_sessions(conn: sqlite3.Connection, user_id: int, current_token: Optional[str]) -> list[dict]:
+    # Отладочные сеансы «от имени» показываются В ТОМ ЖЕ списке и с именем
+    # администратора: человек, открывший «Мои сеансы», обязан видеть, что
+    # его учётной записью сейчас смотрят, — скрытый сеанс был бы слежкой.
     строки = conn.execute(
-        "SELECT token, created_at, expires_at, created_ip, user_agent, last_seen_at "
-        "FROM sessions WHERE user_id = ? AND expires_at > datetime('now') "
-        "ORDER BY COALESCE(last_seen_at, created_at) DESC",
+        "SELECT s.token, s.created_at, s.expires_at, s.created_ip, s.user_agent, "
+        "s.last_seen_at, s.impersonator_user_id, a.last_name, a.first_name, a.patronymic "
+        "FROM sessions s LEFT JOIN users a ON a.id = s.impersonator_user_id "
+        "WHERE s.user_id = ? AND s.expires_at > datetime('now') "
+        "ORDER BY COALESCE(s.last_seen_at, s.created_at) DESC",
         (user_id,),
     ).fetchall()
     return [{
@@ -755,6 +855,7 @@ def list_sessions(conn: sqlite3.Connection, user_id: int, current_token: Optiona
         "expires_at": r["expires_at"],
         "ip": r["created_ip"],
         "user_agent": r["user_agent"],
+        "impersonated_by": format_display_name(r) if r["impersonator_user_id"] else None,
     } for r in строки]
 
 

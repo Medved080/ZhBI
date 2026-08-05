@@ -46,9 +46,19 @@ from datetime import date, timedelta
 from typing import Optional
 
 from app.db import visible_elements_clause
-from app.reports import NO_FLOOR, NO_ZAKHVATKA, _floor_label, _item_label, natural_key, pdf_text
+from app.reports import (
+    IN_DEVELOPMENT_COLOR, IN_DEVELOPMENT_NOTE, NO_FLOOR, NO_ZAKHVATKA, _floor_label,
+    _item_label, in_development_title, natural_key, pdf_text,
+)
 
 TITLE = "График поставки ЖБИ"
+
+# Отчёт ещё не доведён (2026-08-05, решение пользователя): числа считаются и
+# показываются, но верить им нельзя. Снимается ТОЛЬКО правкой этой строки —
+# настройки в интерфейсе у признака нет и быть не должно (см. app/reports.py,
+# «признак отчёт в разработке»). Пока стоит True, пометка идёт в название,
+# на форму отчёта и внутрь выгруженных XLSX и PDF.
+IN_DEVELOPMENT = True
 ROOT_LABEL = "Группировка"
 TOTAL_LABEL = "Итого"
 
@@ -485,7 +495,8 @@ def build_delivery_schedule_report(
     tree = finish(root)
 
     report = {
-        "title": TITLE,
+        "title": in_development_title(TITLE, IN_DEVELOPMENT),
+        "in_development_note": IN_DEVELOPMENT_NOTE if IN_DEVELOPMENT else None,
         "root_label": ROOT_LABEL,
         "total_label": TOTAL_LABEL,
         "scales": SCALES,
@@ -751,7 +762,9 @@ def build_delivery_schedule_xlsx(report: dict) -> bytes:
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "График поставки"
+    # Имя листа Excel — не длиннее 31 символа, иначе openpyxl обрежет его сам
+    # и молча (пометка «(в разработке)» как раз укладывается).
+    ws.title = in_development_title("График поставки", IN_DEVELOPMENT)[:31]
 
     thin = Side(style="thin", color="D5D8DC")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -763,6 +776,12 @@ def build_delivery_schedule_xlsx(report: dict) -> bytes:
 
     ws.append([report["title"]])
     ws["A1"].font = Font(bold=True, size=13)
+    # Пометка «в разработке» — ВТОРОЙ строкой, до подзаголовка и до
+    # предупреждения о неполноте плана: файл уходит из системы, и человек,
+    # открывший его через месяц, должен увидеть оговорку раньше цифр.
+    if report.get("in_development_note"):
+        ws.append([report["in_development_note"]])
+        ws.cell(row=ws.max_row, column=1).font = Font(bold=True, color=IN_DEVELOPMENT_COLOR)
     ws.append([report["subtitle"]])
     warn = report["warning"]
     if warn:
@@ -895,9 +914,13 @@ def build_delivery_schedule_pdf(report: dict) -> bytes:
     sub_style = ParagraphStyle("s", fontName=FONT_REGULAR, fontSize=8, leading=11,
                                textColor=colors.HexColor("#666666"))
     warn_style = ParagraphStyle("w", parent=sub_style, textColor=colors.HexColor("#C0392B"))
+    dev_style = ParagraphStyle("d", fontName=FONT_BOLD, fontSize=9, leading=12,
+                               textColor=colors.HexColor(f"#{IN_DEVELOPMENT_COLOR}"))
 
-    story = [Paragraph(pdf_text(report["title"]), title_style),
-             Paragraph(pdf_text(report["subtitle"]), sub_style)]
+    story = [Paragraph(pdf_text(report["title"]), title_style)]
+    if report.get("in_development_note"):
+        story.append(Paragraph(pdf_text(report["in_development_note"]), dev_style))
+    story.append(Paragraph(pdf_text(report["subtitle"]), sub_style))
     warn = report["warning"]
     if warn:
         story.append(Paragraph(pdf_text(warn), warn_style))

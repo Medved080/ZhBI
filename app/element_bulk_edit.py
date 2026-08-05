@@ -34,7 +34,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from app import activity
+from app import activity, impersonation
 from app.contracts import (
     apply_status_change,
     build_contract_name,
@@ -627,7 +627,7 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
         if changed:
             applied += 1
             activity.log(
-                "element_bulk_edit", user_name=user_name, user_id=user_id,
+                "element_bulk_edit", user_name=impersonation.plain_name(user_name), user_id=user_id,
                 entity_type="element", entity_id=element_id,
                 element_type=row["element_type"], subtype=row["subtype"], mark=row["mark"],
                 old_value="; ".join(f"{f}: {was}" for f, (was, _) in changed.items())[:500],

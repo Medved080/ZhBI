@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
-from app.auth import format_display_name, get_current_user
+from app.auth import audit_display_name, format_display_name, get_current_user
 from app.auth import router as auth_router
 from app.attachments import counts_for as attachment_counts
 from app.attachments import delete_for_entity as delete_attachments_for
@@ -91,13 +91,14 @@ from app.input_import import import_input_dxf, import_input_xlsx, list_input_fil
 from app.reports import (
     build_dynamics_report, build_dynamics_report_pdf, build_dynamics_report_xlsx,
     build_status_report, build_status_report_pdf, build_status_report_xlsx,
+    in_development_title,
 )
 from app.report_completion import (
     build_completion_report, build_completion_report_pdf, build_completion_report_xlsx,
 )
 from app.report_delivery import (
-    build_delivery_cell_detail, build_delivery_schedule_pdf, build_delivery_schedule_report,
-    build_delivery_schedule_xlsx,
+    IN_DEVELOPMENT as DELIVERY_IN_DEVELOPMENT, build_delivery_cell_detail,
+    build_delivery_schedule_pdf, build_delivery_schedule_report, build_delivery_schedule_xlsx,
 )
 from app.report_my_work import (
     FILE_LIMIT, NON_CHANGE_ACTIONS, SCREEN_LIMIT, action_title, build_my_work_pdf,
@@ -148,6 +149,7 @@ from app.ldap_auth import router as ldap_router
 from app.release_tasks import router as release_tasks_router
 from app.rights_matrix import router as rights_matrix_router
 from app.settings import router as settings_router
+from app.impersonation import ImpersonationMiddleware
 from app.upload_limits import (
     MAX_UPLOAD_BYTES,
     MAX_UPLOAD_MB,
@@ -226,6 +228,14 @@ async def security_headers(request, call_next):
 # авторизации. Реализация — в app/upload_limits.py, там же объяснено,
 # почему это чистый ASGI-класс, а не @app.middleware.
 app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
+
+# Режим «Зайти под пользователем» (2026-08-05) — разбор заголовка и установка
+# контекста запроса. ЧИСТЫЙ ASGI-класс, а не @app.middleware: тот работает
+# через BaseHTTPMiddleware, где обработчик уходит в отдельную задачу, и
+# полагаться на распространение contextvars вниз нельзя, а именно на нём
+# держатся отметки в журнале и в истории статусов. Подробности — в
+# app/impersonation.py. Запрос без заголовка не платит ничего.
+app.add_middleware(ImpersonationMiddleware)
 
 app.include_router(auth_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
@@ -700,7 +710,8 @@ def element_activity(element_id: int, limit: int = Query(200, le=1000),
             raise HTTPException(status_code=404, detail="Элемент не найден")
         _guard_elements(conn, user, [element_id], "view")
         rows = conn.execute(
-            "SELECT id, at, user_name, action, old_value, new_value, request_id, details "
+            "SELECT id, at, user_name, impersonator_name, action, old_value, new_value, "
+            "request_id, details "
             "FROM activity_log WHERE entity_type = 'element' AND entity_id = ? "
             "AND source = 'server' AND action NOT IN ({}) "
             "ORDER BY at DESC, id DESC LIMIT ?".format(
@@ -710,6 +721,10 @@ def element_activity(element_id: int, limit: int = Query(200, le=1000),
         return {
             "rows": [{
                 "id": r["id"], "at": r["at"], "user_name": r["user_name"],
+                # Режим «Зайти под пользователем»: в карточке изделия обязано
+                # быть видно, что запись сделал администратор, а не сам
+                # человек, — иначе спрос за неё пойдёт не с того.
+                "impersonator_name": r["impersonator_name"],
                 "action": r["action"], "action_title": action_title(r["action"]),
                 "old_text": value_text(r["old_value"]), "new_text": value_text(r["new_value"]),
             } for r in rows],
@@ -734,7 +749,7 @@ def update_status(
         try:
             data = apply_status_change(
                 conn, element_id, body.status.value, contract_explicit, body.contract_id,
-                body.changed_at, body.comment, format_display_name(user), user["id"],
+                body.changed_at, body.comment, audit_display_name(user), user["id"],
             )
         except LookupError:
             raise HTTPException(status_code=404, detail="Элемент не найден")
@@ -770,7 +785,7 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get
         for item in body.items:
             data = apply_status_change(
                 conn, item.element_id, body.status.value, True, item.contract_id,
-                body.changed_at, None, format_display_name(user), user["id"],
+                body.changed_at, None, audit_display_name(user), user["id"],
             )
             updated.append(data)
         conn.commit()
@@ -1128,7 +1143,7 @@ def _guard_report(conn, user, body: "ReportRequestIn") -> "ReportRequestIn":
 
 @app.post("/reports/status")
 def report_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
-    """Отчёт «Статусы» — данные для экрана. POST, а не GET: список id может
+    """Отчёт «Статус монтажа» — данные для экрана. POST, а не GET: список id может
     быть в тысячи элементов и не помещается в строку запроса."""
     conn = get_connection()
     try:
@@ -1140,7 +1155,7 @@ def report_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current
 
 @app.post("/reports/dynamics")
 def report_dynamics(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
-    """Ежедневный отчёт «Динамика монтажа и поставки ТМЦ»."""
+    """Ежедневный «Отчёт о динамике поставки и монтажа»."""
     conn = get_connection()
     try:
         body = _guard_report(conn, user, body)
@@ -1167,7 +1182,7 @@ def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_
     finally:
         conn.close()
     return _report_file_response(
-        build_dynamics_report_xlsx(report), "Динамика.xlsx",
+        build_dynamics_report_xlsx(report), "Отчёт о динамике поставки и монтажа.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
@@ -1180,7 +1195,8 @@ def report_dynamics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_c
                                        _report_object_id(conn, body), body.week_from, body.week_to)
     finally:
         conn.close()
-    return _report_file_response(build_dynamics_report_pdf(report), "Динамика.pdf", "application/pdf")
+    return _report_file_response(build_dynamics_report_pdf(report), "Отчёт о динамике поставки и монтажа.pdf",
+                                 "application/pdf")
 
 
 @app.post("/reports/status.xlsx")
@@ -1192,7 +1208,7 @@ def report_status_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_cu
     finally:
         conn.close()
     content = build_status_report_xlsx(report)
-    name = "Статусы.xlsx"
+    name = "Статус монтажа.xlsx"
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1210,7 +1226,7 @@ def report_status_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_cur
         conn.close()
     subtitle = f"Чертёж: {body.source_file}" if body.source_file else ""
     content = build_status_report_pdf(report, subtitle)
-    name = "Статусы.pdf"
+    name = "Статус монтажа.pdf"
     return Response(
         content=content, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=\"report.pdf\"; filename*=UTF-8''{quote(name)}"},
@@ -1315,6 +1331,13 @@ def report_delivery_schedule_cell(body: DeliveryCellIn,
         conn.close()
 
 
+def _delivery_file_base() -> str:
+    """Имя выгружаемого файла «Графика поставки» — с пометкой «(в разработке)»,
+    пока признак стоит. Файл живёт дольше экрана и уходит из системы: пометка
+    обязана быть видна и в имени, а не только внутри."""
+    return in_development_title("График поставки", DELIVERY_IN_DEVELOPMENT)
+
+
 @app.post("/reports/delivery-schedule.xlsx")
 def report_delivery_schedule_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
@@ -1323,7 +1346,7 @@ def report_delivery_schedule_xlsx(body: ReportRequestIn, user: sqlite3.Row = Dep
     finally:
         conn.close()
     return _report_file_response(
-        build_delivery_schedule_xlsx(report), "График поставки.xlsx",
+        build_delivery_schedule_xlsx(report), f"{_delivery_file_base()}.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
@@ -1335,7 +1358,7 @@ def report_delivery_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depe
     finally:
         conn.close()
     return _report_file_response(build_delivery_schedule_pdf(report),
-                                 "График поставки.pdf", "application/pdf")
+                                 f"{_delivery_file_base()}.pdf", "application/pdf")
 
 
 # ==================== «Моя работа»: что человек изменил за период ====================
@@ -1553,7 +1576,7 @@ def admin_create_backup(body: BackupCreateIn, admin: sqlite3.Row = Depends(requi
     которые система снимает сама перед разрушительными операциями."""
     meta = create_backup(
         kind=KIND_MANUAL,
-        user_name=format_display_name(admin),
+        user_name=audit_display_name(admin),
         user_id=admin["id"],
         comment=body.comment,
     )
@@ -1571,7 +1594,7 @@ def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_system_
     более старой схеме, и без миграций приложение бы на ней не поднялось.
     """
     try:
-        result = restore_backup(name, user_name=format_display_name(admin), user_id=admin["id"])
+        result = restore_backup(name, user_name=audit_display_name(admin), user_id=admin["id"])
     except BackupError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     init_db()
@@ -1868,7 +1891,7 @@ def reset_status_history(user: sqlite3.Row = Depends(require_system_admin)):
         conn.execute(
             "INSERT INTO status_history (element_id, status, changed_by, changed_by_user_id, comment) "
             "SELECT id, 'planned', ?, ?, 'массовый сброс истории (тестирование)' FROM elements",
-            (format_display_name(user), user["id"]),
+            (audit_display_name(user), user["id"]),
         )
         conn.commit()
     finally:
@@ -3019,7 +3042,7 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
         if body.mode == "statuses":
             try:
                 return status_bulk_edit.apply_changes(
-                    conn, body.changes, format_display_name(admin), admin["id"]
+                    conn, body.changes, audit_display_name(admin), admin["id"]
                 )
             except ValueError as exc:
                 # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
@@ -3037,7 +3060,7 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
             stamp = f"{body.contracting_date} 12:00:00"
         try:
             return apply_bulk_edit(
-                conn, body.changes, format_display_name(admin), admin["id"], stamp
+                conn, body.changes, audit_display_name(admin), admin["id"], stamp
             )
         except ValueError as exc:
             # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),

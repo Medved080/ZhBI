@@ -7,12 +7,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
-from app import activity, ldap_auth
+from app import activity, impersonation, ldap_auth
 from app.access import OBJECT_ROLES, ROLE_LABELS as OBJECT_ROLE_LABELS, require_system_admin
 from app.auth import (
-    SESSION_COOKIE, SESSION_IDLE_HOURS, SESSION_TTL_DAYS, auth_method_of, forget_session,
-    format_display_name, get_current_user, hash_password, list_sessions, session_public_id,
-    user_out, validate_password_strength, UserOut,
+    SESSION_COOKIE, SESSION_IDLE_HOURS, SESSION_TTL_DAYS, auth_method_of, create_session,
+    forget_session, format_display_name, get_current_user, hash_password, list_sessions,
+    session_public_id, user_out, validate_password_strength, UserOut,
 )
 from app.db import get_connection
 from app.models import validate_color
@@ -310,7 +310,10 @@ def all_sessions(request: Request, admin: sqlite3.Row = Depends(require_system_a
         строки = conn.execute(
             "SELECT s.token, s.created_at, s.expires_at, s.created_ip, s.user_agent, "
             "s.last_seen_at, u.id AS user_id, u.last_name, u.first_name, u.patronymic, "
-            "u.domain_login FROM sessions s JOIN users u ON u.id = s.user_id "
+            "u.domain_login, s.impersonator_user_id, "
+            "a.last_name AS a_last, a.first_name AS a_first, a.patronymic AS a_patr "
+            "FROM sessions s JOIN users u ON u.id = s.user_id "
+            "LEFT JOIN users a ON a.id = s.impersonator_user_id "
             "WHERE s.expires_at > datetime('now') "
             "ORDER BY COALESCE(s.last_seen_at, s.created_at) DESC"
         ).fetchall()
@@ -319,6 +322,11 @@ def all_sessions(request: Request, admin: sqlite3.Row = Depends(require_system_a
             "current": текущий is not None and r["token"] == текущий,
             "user_id": r["user_id"],
             "user": format_display_name(r) or r["domain_login"],
+            # Отладочный сеанс «от имени» виден в общем списке и обрывается
+            # той же кнопкой: администратор, забывший закрыть вкладку, —
+            # обычный повод оборвать сеанс.
+            "impersonated_by": (" ".join(p for p in (r["a_last"], r["a_first"], r["a_patr"]) if p)
+                                if r["impersonator_user_id"] else None),
             "domain_login": r["domain_login"],
             "created_at": r["created_at"],
             "last_seen_at": r["last_seen_at"],
@@ -407,6 +415,50 @@ def close_user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_syste
     activity.log("session_revoked", user=admin, entity_type="user", entity_id=user_id,
                  new_value=f"администратор завершил сеансов: {удалено}")
     return {"closed": удалено}
+
+
+# ==================== «Зайти под пользователем» (2026-08-05) ====================
+#
+# Отладка чужих прав по жалобе «у меня не видно пункт X»: администратор
+# открывает вкладку, в которой система ведёт себя ровно так, как у этого
+# человека. Устройство режима и почему он не через cookie — в
+# app/impersonation.py.
+#
+# Токен отдаётся ОДИН РАЗ в ответе и больше нигде не показывается (в отличие
+# от списка сеансов, который сознательно отдаёт только отпечатки). Живёт он
+# в sessionStorage вкладки — своём у каждой вкладки, — и уходит заголовком.
+
+@router.post("/{user_id}/impersonate")
+def start_impersonation(user_id: int, request: Request,
+                        admin: sqlite3.Row = Depends(require_system_admin)):
+    if impersonation.current() is not None:
+        # Вложенность запрещена и здесь, и в app/auth._guard_impersonation:
+        # цепочка «А от имени Б от имени В» в журнале не выражается.
+        raise HTTPException(status_code=403,
+                            detail="Уже открыт режим «от имени» — вложенный вход невозможен")
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Это ваша собственная учётная запись")
+    conn = get_connection()
+    try:
+        цель = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if цель is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        token = create_session(conn, user_id, request.client.host if request.client else None,
+                               request.headers.get("user-agent"),
+                               impersonator_user_id=admin["id"])
+    finally:
+        conn.close()
+    # Событие пишется от АДМИНИСТРАТОРА: сам вход в режим — его действие, а
+    # не действие подопечного. Всё, что он сделает дальше, пойдёт уже с
+    # отметкой impersonator_* (см. app/activity.py).
+    activity.log("impersonate_start", user=admin, entity_type="user", entity_id=user_id,
+                 new_value=format_display_name(цель) or цель["domain_login"])
+    return {
+        "token": token,
+        "user_id": user_id,
+        "display_name": format_display_name(цель) or цель["domain_login"],
+        "ttl_hours": impersonation.IMPERSONATION_TTL_HOURS,
+    }
 
 
 @router.patch("/{user_id}/label-color", response_model=UserOut)

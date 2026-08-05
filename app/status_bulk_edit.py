@@ -43,7 +43,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from app import activity
+from app import activity, impersonation
 from app.contracts import recompute_status_and_actual_date, sync_element_contract
 from app.element_bulk_edit import _contract_catalog
 from app.element_fields import EXCEL_DATETIME_FORMAT, ru_date_text, to_excel_date
@@ -670,7 +670,7 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
             "SELECT element_type, subtype, mark FROM elements WHERE id = ?", (element_id,)
         ).fetchone()
         activity.log(
-            "status_bulk_edit", user_name=user_name, user_id=user_id,
+            "status_bulk_edit", user_name=impersonation.plain_name(user_name), user_id=user_id,
             entity_type="element", entity_id=element_id,
             element_type=row["element_type"], subtype=row["subtype"], mark=row["mark"],
             new_value="; ".join(подробности.get(element_id, []))[:500],

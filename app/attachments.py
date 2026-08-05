@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 
 from app import activity
 from app.access import assert_object_access, is_system_admin, require_system_admin
-from app.auth import format_display_name, get_current_user
+from app.auth import audit_display_name, get_current_user
 from app.db import get_connection
 from app.upload_limits import read_upload_limited
 
@@ -220,7 +220,7 @@ def upload_attachment(
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (entity_type, entity_id, исходное[:255], stored, len(содержимое),
              sanitize_content_type(file.content_type), (description or "").strip() or None,
-             format_display_name(user), user["id"]),
+             audit_display_name(user), user["id"]),
         )
         conn.commit()
         итог = list_for(conn, entity_type, entity_id)

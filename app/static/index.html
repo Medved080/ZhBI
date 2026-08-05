@@ -1432,6 +1432,38 @@
   /* wrap обязателен: с появлением периода «Динамики» (2026-08-03) шапка
      перестала помещаться в одну строку и сжимала вкладки — «График
      поставки» уезжал под поля дат. */
+  /* Полоса режима «Зайти под пользователем» (2026-08-05). Цвет НЕ из гаммы,
+     а жёстко красно-оранжевый: это не элемент оформления, а предупреждение,
+     и на всех шести гаммах оно обязано выглядеть одинаково тревожно. */
+  #impersonation-bar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: #8a1c1c; color: #fff; padding: 6px 14px; font-size: 13px; font-weight: 600;
+  }
+  #impersonation-bar .btn {
+    background: rgba(255,255,255,0.15); color: #fff; border: 1px solid rgba(255,255,255,0.5);
+  }
+  #impersonation-bar .btn:hover { background: rgba(255,255,255,0.28); }
+  /* Строка журнала, сделанная в режиме «от имени», — тем же красным, что и
+     полоса: она отличается от соседних не значением, а происхождением. */
+  .act-impersonated { color: #8a1c1c; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { .act-impersonated { color: #ff8f8f; } }
+
+  /* Признак «отчёт в разработке» (2026-08-05). Два вида пометки, и оба
+     нужны: .in-dev-mark — короткое «(в разработке)» ПРЯМО В НАЗВАНИИ (пункт
+     меню, вкладка), .in-dev-note — приписка под заголовком формы. Тот же
+     текст уходит внутрь XLSX и PDF (IN_DEVELOPMENT_NOTE, app/reports.py):
+     выгруженный файл живёт своей жизнью, и предупреждение только на экране
+     до читателя файла не доходит.
+     Цвет — --color-danger гаммы, а не жёсткий #C00000 из выгрузок: гамм
+     шесть, среди них тёмные, и константа на «Графите» читалась бы плохо.
+     В файле переменных нет, там #C00000 (IN_DEVELOPMENT_COLOR). */
+  .in-dev-mark { color: var(--color-danger); font-weight: 600; white-space: nowrap; }
+  /* На активной вкладке фон уже синий — красным по нему не прочесть. */
+  .report-tab.active .in-dev-mark { color: #ffd6d6; }
+  .in-dev-note {
+    color: var(--color-danger); font-weight: 700; font-size: 12px; margin: -4px 0 8px;
+    text-transform: uppercase; letter-spacing: 0.02em;
+  }
   .report-head { display: flex; align-items: center; gap: 10px 14px; margin-bottom: 10px; flex-wrap: wrap; }
   .report-tabs, .report-actions { flex-shrink: 0; }
   /* Период — одной строкой; label.field в модалках блочный (см. выше), и
@@ -1974,6 +2006,16 @@
 
 <div id="app-root" class="hidden">
 
+<!-- Полоса режима «Зайти под пользователем» (2026-08-05). Первым элементом
+     и на всю ширину: вкладка выглядит как чужая, и спутать её со своей
+     нельзя — иначе администратор однажды примет чужие права за свои и
+     «починит» то, что не сломано. Показывается только когда /me вернул
+     impersonated_by. -->
+<div id="impersonation-bar" style="display:none">
+  <span id="impersonation-text"></span>
+  <button type="button" class="btn btn-sm" id="impersonation-exit">Закрыть режим</button>
+</div>
+
 <div id="toolbar">
   <div id="toolbar-scroll">
     <img id="toolbar-logo" src="/static/logo-digital.png" style="height:22px; width:auto; flex-shrink:0;" alt="МСУ-1 · Цифровая стройка"/>
@@ -2107,9 +2149,9 @@
         <div class="submenu">
           <button type="button" class="submenu-trigger">Отчёты</button>
           <div class="dropdown-menu submenu-panel">
-            <button id="menu-report-status">Статусы</button>
-            <button id="menu-report-dynamics">Динамика монтажа и поставки</button>
-            <button id="menu-report-delivery">График поставки</button>
+            <button id="menu-report-status">Статус монтажа</button>
+            <button id="menu-report-dynamics">Отчёт о динамике поставки и монтажа</button>
+            <button id="menu-report-delivery">График поставки <span class="in-dev-mark">(в разработке)</span></button>
             <button id="menu-report-completion">Статус комплектации</button>
             <!-- «Моя работа» — тоже всем ролям и по той же причине: это
                  отчёт человека о СВОЕЙ работе, а не наблюдение за чужой
@@ -2292,7 +2334,7 @@
 
       <div class="side-report">
         <div class="side-section-head">
-          <h3>Статус монтажа изделий</h3>
+          <h3>Статус монтажа</h3>
           <button type="button" class="side-report-open" data-report="status"
                   title="Открыть полный отчёт">⤢</button>
           <button type="button" class="filter-expand-btn" data-collapse="side-status-section"
@@ -2306,7 +2348,7 @@
 
       <div class="side-report">
         <div class="side-section-head">
-          <h3>Динамика монтажа и поставки</h3>
+          <h3>Отчёт о динамике поставки и монтажа</h3>
           <button type="button" class="side-report-open" data-report="dynamics"
                   title="Открыть полный отчёт">⤢</button>
           <button type="button" class="filter-expand-btn" data-collapse="side-dyn-section"
@@ -3431,9 +3473,9 @@
     <div class="modal-sticky-head">
       <div class="report-head">
         <div class="report-tabs" id="report-tabs" role="group" aria-label="Вид отчёта">
-          <button type="button" class="report-tab active" data-report="status">Статусы</button>
-          <button type="button" class="report-tab" data-report="dynamics">Динамика</button>
-          <button type="button" class="report-tab" data-report="delivery">График поставки</button>
+          <button type="button" class="report-tab active" data-report="status">Статус монтажа</button>
+          <button type="button" class="report-tab" data-report="dynamics">Отчёт о динамике поставки и монтажа</button>
+          <button type="button" class="report-tab" data-report="delivery">График поставки <span class="in-dev-mark">(в разработке)</span></button>
           <button type="button" class="report-tab" data-report="completion">Статус комплектации</button>
           <button type="button" class="report-tab" data-report="mywork">Моя работа</button>
         </div>
@@ -3481,6 +3523,10 @@
         </div>
       </div>
       <h2 id="report-title">Отчёт</h2>
+      <!-- Приписка «в разработке» (2026-08-05): ярко-красная строка под
+           заголовком формы. Та же фраза уходит внутрь XLSX и PDF — см.
+           IN_DEVELOPMENT_NOTE в app/reports.py, откуда её и берёт клиент. -->
+      <div id="report-in-development" class="in-dev-note" style="display:none"></div>
       <!-- Период, шаг оси и порядок группировки — только у «Графика
            поставки». Порядок уровней задаёт пользователь (фишки ниже):
            одному нужен разрез по поставщикам, другому — по захваткам и
@@ -3609,7 +3655,12 @@
     <div class="modal-sticky-scroll">
       <table id="activity-table">
         <thead><tr>
-          <th>Время</th><th>Источник</th><th>Пользователь</th><th>Действие</th>
+          <!-- «Выполнил администратор» — режим «Зайти под пользователем»
+               (2026-08-05): «Пользователь» остаётся тем, ОТ ЧЬЕГО имени шла
+               работа (там же, где видны последствия), а здесь виден тот, кто
+               её на самом деле выполнил. Пусто у обычных действий. -->
+          <th>Время</th><th>Источник</th><th>Пользователь</th><th>Выполнил администратор</th>
+          <th>Действие</th>
           <th>Элемент</th><th>Было</th><th>Стало</th><th>Длительность, мс</th>
         </tr></thead>
         <tbody id="activity-tbody"></tbody>

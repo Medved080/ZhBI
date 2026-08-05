@@ -1,3 +1,43 @@
+// ============ РЕЖИМ «ЗАЙТИ ПОД ПОЛЬЗОВАТЕЛЕМ» (2026-08-05) ============
+//
+// Администратор открывает ДОПОЛНИТЕЛЬНУЮ вкладку, в которой система ведёт
+// себя как у выбранного человека (устройство и причины — app/impersonation.py).
+//
+// Почему sessionStorage, а не cookie: cookie одна на браузер, и подмена
+// превратила бы в «пользователя X» ВСЕ вкладки администратора, включая ту,
+// из которой он режим включил. sessionStorage — единственное хранилище,
+// своё у каждой вкладки.
+//
+// Почему токен приезжает в #хэше, а не в ?параметре: хэш браузер на сервер
+// не отправляет и в Referer не кладёт. Сразу после чтения он стирается из
+// адресной строки через replaceState — история вкладки его не сохраняет.
+//
+// Почему обёртка над window.fetch, а не правка вызовов: обращений к серверу
+// в файле два десятка, и каждый новый пришлось бы не забыть — а забытый
+// молча ушёл бы от имени самого администратора, то есть показал бы права,
+// которых у подопечного нет. Это ровно та ошибка, ради поиска которой режим
+// и заводился.
+const IMPERSONATION_HEADER = "X-Impersonate-Token";
+const IMPERSONATION_KEY = "zhbi_impersonate";
+const impersonationToken = (() => {
+  const m = /(?:^|[#&])impersonate=([^&]+)/.exec(location.hash || "");
+  if (m) {
+    try { sessionStorage.setItem(IMPERSONATION_KEY, decodeURIComponent(m[1])); } catch (e) { /* приватный режим */ }
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  try { return sessionStorage.getItem(IMPERSONATION_KEY); } catch (e) { return null; }
+})();
+if (impersonationToken) {
+  const исходный = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const опции = init ? { ...init } : {};
+    const заголовки = new Headers(опции.headers || undefined);
+    заголовки.set(IMPERSONATION_HEADER, impersonationToken);
+    опции.headers = заголовки;
+    return исходный(input, опции);
+  };
+}
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 const IN_PROJECT_STROKE = "#1a1a1a";
 // Единый дефолт цвета подписей марок (2D fill / 3D canvas text) — заменяет
@@ -239,6 +279,34 @@ function describeApiError(body, res) {
   }
   if (detail) return JSON.stringify(detail);
   return `${res.status} ${res.statusText}`;
+}
+
+// Скачивание GET-файла БЕЗ перехода по адресу. Навигация (location.href) шла
+// бы мимо обёртки над fetch, то есть в режиме «от имени» выполнялась бы от
+// самого администратора — выгрузка «работала бы», хотя у подопечного прав на
+// неё нет. Имя файла берётся из Content-Disposition сервера.
+async function downloadFromServer(url) {
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    showToast("Не удалось скачать файл: " + e.message, "warning");
+    return;
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    showToast("Не удалось скачать файл: " + describeApiError(body, res), "warning");
+    return;
+  }
+  const cd = res.headers.get("Content-Disposition") || "";
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+  const plain = /filename="([^"]+)"/i.exec(cd);
+  const name = utf8 ? decodeURIComponent(utf8[1]) : (plain ? plain[1] : "download");
+  const objectUrl = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = objectUrl; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 async function api(path, opts) {
@@ -575,6 +643,45 @@ function applyRolePermissions() {
     });
 }
 
+// Полоса «вы работаете от имени…». Признак приходит С СЕРВЕРА (/me), а не
+// берётся из наличия токена в sessionStorage: токен мог протухнуть (режим
+// живёт часы), и тогда вкладка работает от самого администратора — полоса,
+// нарисованная по локальному признаку, врала бы ровно в том случае, где
+// цена вранья максимальна.
+function applyImpersonationBar(user) {
+  const bar = document.getElementById("impersonation-bar");
+  if (!bar) return;
+  const включён = !!user.impersonated_by;
+  bar.style.display = включён ? "" : "none";
+  if (!включён) {
+    document.title = "ЖБИ";
+    // Токен в вкладке есть, а режима нет — он истёк (или его оборвали), и
+    // вкладка молча стала обычной вкладкой АДМИНИСТРАТОРА. Молчать здесь
+    // нельзя: дальше он смотрел бы на свои права, считая их чужими.
+    if (impersonationToken) {
+      try { sessionStorage.removeItem(IMPERSONATION_KEY); } catch (e) { /* приватный режим */ }
+      showToast("Режим «от имени» истёк — вкладка снова работает от вашего имени", "warning");
+    }
+    return;
+  }
+  document.getElementById("impersonation-text").textContent =
+    `Режим отладки: вы (${user.impersonated_by}) работаете от имени пользователя `
+    + `«${user.display_name}». Все изменения записываются в журнал на ваше имя.`;
+  // Заголовок вкладки — чтобы вкладка отличалась от своей и в списке вкладок,
+  // а не только когда она открыта.
+  document.title = `ЖБИ · от имени ${user.display_name}`;
+}
+
+document.getElementById("impersonation-exit").addEventListener("click", async () => {
+  // Сначала выход на сервере (он гасит именно отладочный сеанс, а не сеанс
+  // администратора по cookie), потом чистка вкладки. Порядок важен: без
+  // токена в заголовке сервер не понял бы, какой сеанс закрывать.
+  try { await api("/logout", { method: "POST" }); } catch (e) { /* сеанс мог уже истечь */ }
+  try { sessionStorage.removeItem(IMPERSONATION_KEY); } catch (e) { /* приватный режим */ }
+  window.close();          // вкладку открыл скрипт — закрыть её он вправе
+  location.replace("/");   // если браузер закрыть не дал, вкладка станет обычной
+});
+
 async function checkAuth() {
   try {
     const user = await api("/me");
@@ -587,6 +694,7 @@ async function checkAuth() {
     const серверная = user.ui_theme || DEFAULT_SKIN;
     if (серверная !== currentSkin()) { localStorage.setItem(SKIN_KEY, серверная); applySkin(серверная); }
     document.getElementById("user-name").textContent = user.display_name;
+    applyImpersonationBar(user);
     applyRolePermissions();
     applyLabelColor();
     showApp();
@@ -636,6 +744,14 @@ document.getElementById("login-password").addEventListener("keydown", (e) => {
 });
 
 document.getElementById("btn-logout").addEventListener("click", async () => {
+  // В режиме «от имени» «Выйти» означает «закрыть режим», а не «выйти из
+  // сервиса»: сеанс администратора живёт в cookie и к этой вкладке не
+  // относится, а экран входа здесь показал бы форму, в которую администратор
+  // ввёл бы СВОЙ пароль, оставшись при этом с чужим токеном в вкладке.
+  if (state.currentUser && state.currentUser.impersonated_by) {
+    document.getElementById("impersonation-exit").click();
+    return;
+  }
   await api("/logout", { method: "POST" });
   state.currentUser = null;
   showLoginScreen();
@@ -744,7 +860,12 @@ async function renderSessions() {
       <tr>
         <td>${s.current ? "<b>текущий</b>" : ""}</td>
         ${сВладельцем ? `<td>${escapeHtml(s.user || "")}<br><span class="hint-text">${escapeHtml(s.domain_login || "")}</span></td>` : ""}
-        <td title="${escapeHtml(s.user_agent || "")}">${escapeHtml(описаниеУстройства(s.user_agent))}</td>
+        <!-- Отладочный сеанс «от имени» показывается ЗДЕСЬ ЖЕ и с именем
+             администратора: человек, открывший «Мои сеансы», обязан видеть,
+             что его учётной записью сейчас смотрят. Скрытый сеанс был бы
+             слежкой, а не отладкой. -->
+        <td title="${escapeHtml(s.user_agent || "")}">${escapeHtml(описаниеУстройства(s.user_agent))}${
+          s.impersonated_by ? `<br><span class="act-impersonated">режим «от имени», открыл ${escapeHtml(s.impersonated_by)}</span>` : ""}</td>
         <td>${escapeHtml(s.ip || "—")}</td>
         <td>${escapeHtml(когда(s.created_at))}</td>
         <td>${escapeHtml(когда(s.last_seen_at))}</td>
@@ -5231,7 +5352,8 @@ async function loadElementActivity(elementId) {
     const строки = data.rows.map(r => `<tr>
       <td>${myWorkTimeText(r.at).split(" ").map(escapeHtml).join("<br>")}</td>
       <td>${escapeHtml(r.action_title)}</td>
-      <td>${escapeHtml(r.user_name || "—")}</td>
+      <td>${escapeHtml(r.user_name || "—")}${r.impersonator_name
+        ? `<br><span class="act-impersonated">выполнил ${escapeHtml(r.impersonator_name)}</span>` : ""}</td>
       <td>${escapeHtml(r.old_text)}${r.old_text && r.new_text ? " → " : ""}${escapeHtml(r.new_text)}</td>
     </tr>`).join("");
     актуальный.innerHTML =
@@ -9458,6 +9580,12 @@ async function renderUsersTable() {
         <button class="btn btn-sm btn-secondary" data-sessions="${u.id}">Сеансы</button>
         <button class="btn btn-sm btn-secondary" data-pwd="${u.id}"
                 ${u.auth_method === "domain" ? "disabled title=\"Вход по доменной учётной записи — пароль сервиса не используется\"" : ""}>Пароль</button>
+        <!-- «Зайти под пользователем» (2026-08-05) — отладка чужих прав по
+             жалобе «у меня не видно пункт X». Открывает ОТДЕЛЬНУЮ вкладку:
+             своя вкладка администратора остаётся его собственной. Под самим
+             собой заходить незачем — кнопка гасится. -->
+        <button class="btn btn-sm btn-secondary" data-impersonate="${u.id}"
+                ${u.id === state.currentUser.id ? "disabled title=\"Это вы\"" : ""}>Зайти</button>
       </td>
     </tr>
   `).join("");
@@ -9468,6 +9596,34 @@ async function renderUsersTable() {
     const u = users.find(x => x.id === Number(btn.dataset.sessions));
     openSessions("user", u.id, `Сеансы: ${u.display_name}`);
   }));
+  table.querySelectorAll("[data-impersonate]").forEach(btn => btn.addEventListener("click", () => {
+    startImpersonation(users.find(x => x.id === Number(btn.dataset.impersonate)));
+  }));
+}
+
+// Вкладка открывается ДО запроса и заведомо синхронно, прямо из обработчика
+// клика: window.open после await браузер считает не действием человека и
+// блокирует как всплывающее окно.
+async function startImpersonation(u) {
+  if (!confirm(
+    `Открыть новую вкладку и работать в ней от имени «${u.display_name}»?\n\n`
+    + "Вы увидите систему ровно так, как её видит этот человек. Всё, что будет "
+    + "изменено в этой вкладке, попадёт в журнал с отметкой, что это сделали вы "
+    + "от его имени, — и в историю статусов изделий тоже.")) return;
+  const вкладка = window.open("", "_blank");
+  try {
+    const res = await api(`/users/${u.id}/impersonate`, { method: "POST" });
+    if (!вкладка) {
+      showToast("Браузер заблокировал новую вкладку — разрешите всплывающие окна для этого сайта", "warning");
+      return;
+    }
+    вкладка.location.href = `/#impersonate=${encodeURIComponent(res.token)}`;
+    showToast(`Открыта вкладка от имени «${res.display_name}» (режим закроется сам через `
+              + `${res.ttl_hours} ч)`, "info");
+  } catch (e) {
+    if (вкладка) вкладка.close();
+    showToast("Не удалось открыть режим: " + e.message, "warning");
+  }
 }
 
 document.getElementById("menu-users").addEventListener("click", async () => {
@@ -11313,7 +11469,7 @@ document.getElementById("menu-settings-io").addEventListener("click", () => {
 });
 document.getElementById("settings-io-close").addEventListener("click", () => settingsIoBackdrop.classList.remove("open"));
 document.getElementById("settings-io-export").addEventListener("click", () => {
-  window.location.href = "/settings/export";
+  downloadFromServer("/settings/export");
 });
 document.getElementById("settings-io-import").addEventListener("click", async () => {
   const file = document.getElementById("settings-io-file").files[0];
@@ -11616,14 +11772,26 @@ document.getElementById("rn-delete").addEventListener("click", async () => {
 // двух местах, числа на экране и в файле однажды разойдутся.
 const reportsBackdrop = document.getElementById("reports-backdrop");
 
+// Признак «отчёт в разработке» (2026-08-05) — inDevelopment: true. Доступ он
+// НЕ ограничивает: отчёт виден всем, кому был виден, просто с пометкой
+// «(в разработке)» в названии и красной припиской под заголовком формы. Та же
+// приписка уходит внутрь XLSX и PDF (IN_DEVELOPMENT_NOTE, app/reports.py) —
+// файл живёт дольше экрана. Снимается правкой ЗДЕСЬ и в модуле отчёта на
+// сервере: два места, потому что название отчёта существует и там, и там (имя
+// выгружаемого файла клиент не строит).
+const IN_DEVELOPMENT_SUFFIX = "(в разработке)";
+const IN_DEVELOPMENT_NOTE =
+  "ОТЧЁТ В РАЗРАБОТКЕ: данные могут быть неполными или неверными, "
+  + "использовать для принятия решений нельзя";
+
 const REPORTS = {
   status: {
-    title: "Статус монтажа изделий",
+    title: "Статус монтажа",
     endpoint: "/reports/status",
     render: renderTreeReport,
   },
   dynamics: {
-    title: "Динамика монтажа и поставки ТМЦ",
+    title: "Отчёт о динамике поставки и монтажа",
     endpoint: "/reports/dynamics",
     render: renderDynamicsReport,
     needsDate: true,
@@ -11633,6 +11801,7 @@ const REPORTS = {
     endpoint: "/reports/delivery-schedule",
     render: renderDeliveryReport,
     needsPeriod: true,
+    inDevelopment: true,
   },
   // «Статус комплектации» (живой запрос 2026-08-03, по образцу заказчика) —
   // плоский перечень «кран · стоянка · изделие · контракт · три даты» с
@@ -12526,7 +12695,11 @@ async function locateElementOnPlan(elementId, objectId) {
 
 async function loadReport() {
   const def = REPORTS[currentReport];
-  document.getElementById("report-title").textContent = def.title;
+  document.getElementById("report-title").textContent =
+    def.inDevelopment ? `${def.title} ${IN_DEVELOPMENT_SUFFIX}` : def.title;
+  const devNote = document.getElementById("report-in-development");
+  devNote.textContent = def.inDevelopment ? IN_DEVELOPMENT_NOTE : "";
+  devNote.style.display = def.inDevelopment ? "" : "none";
   const statusLine = document.getElementById("report-status-line");
   statusLine.textContent = "Построение отчёта…";
   try {
@@ -12705,7 +12878,13 @@ async function downloadReport(suffix, filename) {
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
-const reportFileName = (ext) => `${REPORTS[currentReport].title}.${ext}`;
+// Имя файла задаёт КЛИЕНТ (a.download перебивает Content-Disposition сервера),
+// поэтому пометка «(в разработке)» нужна и здесь — иначе она была бы внутри
+// файла, но не на нём.
+const reportFileName = (ext) => {
+  const def = REPORTS[currentReport];
+  return `${def.inDevelopment ? `${def.title} ${IN_DEVELOPMENT_SUFFIX}` : def.title}.${ext}`;
+};
 document.getElementById("report-xlsx").addEventListener("click", () => downloadReport(".xlsx", reportFileName("xlsx")));
 document.getElementById("report-pdf").addEventListener("click", () => downloadReport(".pdf", reportFileName("pdf")));
 
@@ -13140,6 +13319,7 @@ function activityRowHtml(r) {
     <td>${escapeHtml(activityTimeLocal(r.at))}</td>
     <td>${ACTIVITY_SOURCE_LABELS[r.source] || r.source || ""}</td>
     <td>${escapeHtml(r.user_name || "")}</td>
+    <td class="act-impersonated">${escapeHtml(r.impersonator_name || "")}</td>
     <td>${escapeHtml(r.action)}</td>
     <td>${escapeHtml(element)}${r.entity_id ? ` <span class="hint-text">#${r.entity_id}</span>` : ""}</td>
     <td>${escapeHtml(label(r.old_value))}</td>
@@ -13583,7 +13763,7 @@ document.getElementById("export-pdf-download").addEventListener("click", () => {
   const params = new URLSearchParams({ source_file: state.sourceFile });
   const date = document.getElementById("export-pdf-date").value;
   if (date) params.set("date", date);
-  window.location.href = `/export.pdf?${params.toString()}`;
+  downloadFromServer(`/export.pdf?${params.toString()}`);
   exportPdfBackdrop.classList.remove("open");
 });
 

@@ -40,7 +40,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app import activity
+from app import activity, impersonation
 from app.access import (
     assert_object_access,
     require_object_access,
@@ -921,7 +921,10 @@ def apply_status_change(
     activity.log(
         "status_change",
         user_id=changed_by_user_id,
-        user_name=changed_by,
+        # В журнале имя БЕЗ приписки «(от имени: …)»: она уместна в
+        # status_history.changed_by, где второй колонки нет, а здесь
+        # дублировала бы impersonator_name и разошлась бы с user_id.
+        user_name=impersonation.plain_name(changed_by),
         entity_type="element",
         entity_id=element_id,
         element_type=row["element_type"],

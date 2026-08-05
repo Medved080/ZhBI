@@ -55,8 +55,20 @@ _dropped_lock = threading.Lock()
 _COLUMNS = (
     "at", "source", "user_id", "user_name", "action", "entity_type", "entity_id",
     "element_type", "subtype", "mark", "old_value", "new_value", "duration_ms",
-    "request_id", "details",
+    "request_id", "details", "impersonator_user_id", "impersonator_name",
 )
+
+
+def _impersonation_columns() -> dict:
+    """Отметка «сделано администратором от имени пользователя» для текущего
+    запроса. Импорт внутри функции: app/impersonation.py тянет app/auth.py,
+    который импортирует этот модуль, — на уровне файла это был бы цикл."""
+    from app import impersonation
+
+    info = impersonation.current()
+    if info is None:
+        return {"impersonator_user_id": None, "impersonator_name": None}
+    return {"impersonator_user_id": info["admin_id"], "impersonator_name": info["admin_name"]}
 
 
 def _now() -> str:
@@ -110,6 +122,13 @@ def log(
         "duration_ms": duration_ms,
         "request_id": request_id,
         "details": json.dumps(details, ensure_ascii=False) if details else None,
+        # Режим «Зайти под пользователем» (2026-08-05). Берётся из контекста
+        # запроса, а не из параметров: событие пишут десятки мест, и
+        # проставлять отметку руками в каждом значило бы гарантированно
+        # пропустить те, где она нужнее всего. user_id/user_name при этом
+        # остаются ТЕМ, от чьего имени работали, — там же, где видны
+        # последствия действия; здесь только «а нажимал это администратор».
+        **_impersonation_columns(),
     }
     try:
         _queue.put_nowait(event)

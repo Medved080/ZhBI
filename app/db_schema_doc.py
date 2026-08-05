@@ -99,6 +99,7 @@ TABLES = [
     ("created_ip", "TEXT", "", "адрес, с которого вошли; NULL у сеансов, выданных до появления колонки"),
     ("user_agent", "TEXT", "", "устройство и браузер входа (для списка активных сеансов)"),
     ("last_seen_at", "TEXT", "", "когда сеансом пользовались (пишется не чаще раза в минуту; по нему считается таймаут бездействия)"),
+    ("impersonator_user_id", "INTEGER", "FK", "отладочный сеанс «от имени»: кто из администраторов открыл → users.id (CASCADE); NULL = обычный сеанс, только такие подходят по cookie"),
 ]),
 ("user_access", "user_access — Доступ и роль на объекте", C_USER, S_USER, [
     ("id", "INTEGER", "PK", "идентификатор гранта"),
@@ -333,6 +334,8 @@ TABLES = [
     ("source", "TEXT", "", "server — событие сервиса, client — тайминг браузера"),
     ("user_id", "INTEGER", "FK", "пользователь → users.id (SET NULL)"),
     ("user_name", "TEXT", "", "ФИО снимком"),
+    ("impersonator_user_id", "INTEGER", "FK", "администратор, выполнивший действие «от имени» пользователя из user_id → users.id (SET NULL); NULL = обычная работа"),
+    ("impersonator_name", "TEXT", "", "ФИО этого администратора снимком (режим «Зайти под пользователем»)"),
     ("action", "TEXT", "", "действие: status_change, form_open, import_input, …"),
     ("entity_type", "TEXT", "", "над чем: element / contract / …"),
     ("entity_id", "INTEGER", "", "идентификатор сущности (без FK — журнал переживает удаление)"),
@@ -354,6 +357,7 @@ FKS = [
     ("object_drawings", "object_id", "objects", "id", "CASCADE"),
     ("users", "last_object_id", "objects", "id", "SET NULL"),
     ("sessions", "user_id", "users", "id", "CASCADE"),
+    ("sessions", "impersonator_user_id", "users", "id", "режим «от имени»"),
     ("attachments", "uploaded_by_user_id", "users", "id", "SET NULL"),
     ("user_access", "user_id", "users", "id", "CASCADE"),
     ("user_access", "project_id", "projects", "id", "CASCADE"),
@@ -385,6 +389,7 @@ FKS = [
     ("app_settings", "object_id", "objects", "id", "CASCADE"),
     ("report_notes", "object_id", "objects", "id", "CASCADE"),
     ("activity_log", "user_id", "users", "id", "SET NULL"),
+    ("activity_log", "impersonator_user_id", "users", "id", "режим «от имени»"),
 ]
 
 # логические связи без внешнего ключа (пунктиром)
