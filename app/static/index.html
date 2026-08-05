@@ -2243,6 +2243,26 @@
   /* Панель действий: полотно утоплено, группы — карточки (базовая гамма;
      у пробы «Госуслуги» своё правило выше, с теми же переменными). */
   #actions-panel-body { background: var(--color-surface-2); border-radius: var(--radius); padding: 10px; }
+  /* -------- режим настройки меню (2026-08-05) -------- */
+  /* Избранное — жирным, и в панели, и в выпадающем меню: класс вешается на
+     ИСХОДНУЮ кнопку меню, а панель копирует смысловые классы к себе. */
+  .menu-item-favorite { font-weight: 700; }
+  .actions-panel.customizing button { cursor: grab; }
+  .actions-panel.customizing button:active { cursor: grabbing; }
+  /* Перетаскиваемый пункт и место, куда он встанет. Подсветка рамкой снизу,
+     а не вставкой пустого блока: вставка меняла бы высоту списка на каждое
+     движение мыши, и пункты прыгали бы под курсором. */
+  .actions-panel button.dragging { opacity: .4; }
+  .actions-panel button.drop-before { box-shadow: inset 0 2px 0 var(--color-primary); }
+  .actions-panel button.drop-after { box-shadow: inset 0 -2px 0 var(--color-primary); }
+  /* Звёздочка отметки избранного — только в режиме настройки. */
+  .fav-toggle {
+    border: none; background: none; cursor: pointer; padding: 0 4px;
+    color: var(--color-text-muted); font-size: 13px; line-height: 1;
+  }
+  .fav-toggle.on { color: var(--color-primary); }
+  .actions-panel-item { display: flex; align-items: center; gap: 2px; }
+  .actions-panel-item > button:first-child { flex: 1 1 auto; text-align: left; }
   .actions-panel-group {
     background: var(--color-surface);
     border: 1px solid var(--dict-card-border);
@@ -3247,7 +3267,18 @@
 
 <div class="modal-backdrop" id="actions-panel-backdrop">
   <div class="modal modal-sticky" id="actions-panel-modal">
-    <div class="modal-sticky-head"><h2>Действия</h2></div>
+    <div class="modal-sticky-head">
+      <h2>Действия</h2>
+      <!-- Режим настройки — ОТДЕЛЬНОЙ кнопкой (2026-08-05, запрос
+           пользователя): в обычном режиме щелчок по пункту выполняет
+           действие, и если бы перетаскивание работало всегда, случайное
+           движение мышью с зажатой кнопкой то переставляло бы меню, то
+           запускало импорт. -->
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:8px;">
+        <button class="btn btn-sm btn-secondary" id="actions-panel-customize">Настроить меню</button>
+        <span class="hint-text" id="actions-panel-customize-hint"></span>
+      </div>
+    </div>
     <div class="modal-sticky-scroll"><div id="actions-panel-body" class="actions-panel"></div></div>
     <div class="modal-sticky-foot">
       <div class="actions">

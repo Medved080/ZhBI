@@ -1,6 +1,7 @@
 """Управление пользователями — доступно только администратору, кроме смены
 собственного пароля (её может сделать любой залогиненный пользователь себе)."""
 
+import json
 import sqlite3
 from typing import Optional
 
@@ -522,6 +523,52 @@ def set_ui_theme(
         conn.commit()
         activity.log("user_ui_theme", user=current, entity_type="user", entity_id=user_id,
                      new_value=body.ui_theme or "по умолчанию")
+        return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+class SetMenuPrefsIn(BaseModel):
+    # {"order": {"<группа>": ["<id пункта>", ...]}, "favorites": ["<id>", ...]}
+    # Содержимое НЕ проверяется по списку существующих пунктов: меню живёт в
+    # разметке клиента, сервер о его составе не знает и знать не должен.
+    # Неизвестный id безвреден — применение настройки его просто не найдёт
+    # (см. applyMenuPrefs в app.js).
+    order: dict[str, list[str]] = {}
+    favorites: list[str] = []
+
+
+# Потолок на размер: поле личное и пишется без подтверждения, а хранить в
+# нём чужой мусор ни к чему. Пунктов меню сорок с небольшим — тысяча
+# идентификаторов это запас в двадцать раз.
+_MENU_PREFS_LIMIT = 1000
+
+
+@router.patch("/{user_id}/menu-prefs", response_model=UserOut)
+def set_menu_prefs(
+    user_id: int, body: SetMenuPrefsIn, current: sqlite3.Row = Depends(get_current_user)
+):
+    """Личная настройка меню «Действия»: порядок пунктов внутри блоков и
+    избранное. Тот же guard самообслуживания, что у оформления рядом —
+    менять можно только себе, если ты не администратор сервиса."""
+    if current["role"] != "admin" and current["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Можно менять только своё меню")
+    всего = sum(len(v) for v in body.order.values()) + len(body.favorites)
+    if всего > _MENU_PREFS_LIMIT:
+        raise HTTPException(status_code=400, detail="Слишком большая настройка меню")
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        conn.execute(
+            "UPDATE users SET menu_prefs = ?, updated_at = datetime('now') WHERE id = ?",
+            (json.dumps({"order": body.order, "favorites": body.favorites},
+                        ensure_ascii=False), user_id),
+        )
+        conn.commit()
+        activity.log("user_menu_prefs", user=current, entity_type="user", entity_id=user_id,
+                     new_value=f"избранных: {len(body.favorites)}, "
+                               f"переставлено блоков: {len(body.order)}")
         return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
     finally:
         conn.close()

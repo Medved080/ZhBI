@@ -12,6 +12,7 @@ scripts/reset_password.py напрямую в БД.
 """
 
 import hashlib
+import json
 import os
 import secrets
 import sqlite3
@@ -616,6 +617,11 @@ class UserOut(BaseModel):
     # оформление. Хранится на сервере, а не в браузере: настройка следует за
     # человеком — на площадке за одной машиной работают посменно.
     ui_theme: Optional[str] = None
+    # Личная настройка меню «Действия» (2026-08-05): порядок пунктов внутри
+    # блоков и избранное. Отдаётся РАЗОБРАННЫМ объектом, а не строкой:
+    # разбирать JSON на клиенте пришлось бы в двух местах (вход и повторное
+    # чтение), и одно из них однажды забыло бы про пустое значение.
+    menu_prefs: Optional[dict] = None
     # Есть ли в «Что нового» непрочитанная запись (2026-08-03). Считает
     # сервер (changelog_unseen_of): иначе клиент тянул бы весь журнал версий
     # при каждом входе только чтобы решить, показывать его или нет.
@@ -630,6 +636,18 @@ class UserOut(BaseModel):
     # Клиент по этому полю рисует красную полосу поверх интерфейса: вкладка
     # выглядит как чужая, и не отличить её от своей нельзя.
     impersonated_by: Optional[str] = None
+
+
+def menu_prefs_of(user: sqlite3.Row) -> Optional[dict]:
+    """Настройка меню разобранной. Испорченный JSON — не повод ронять вход:
+    личное оформление важно ровно настолько, насколько оно читается."""
+    if "menu_prefs" not in user.keys() or not user["menu_prefs"]:
+        return None
+    try:
+        значение = json.loads(user["menu_prefs"])
+    except (ValueError, TypeError):
+        return None
+    return значение if isinstance(значение, dict) else None
 
 
 def user_out(user: sqlite3.Row) -> UserOut:
@@ -655,6 +673,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
         auth_method=auth_method_of(user),
         must_change_password=must_change_password_of(user),
         ui_theme=user["ui_theme"] if "ui_theme" in user.keys() else None,
+        menu_prefs=menu_prefs_of(user),
         changelog_unseen=changelog_unseen_of(user),
         view3d_pitch_deg=pitch,
         view3d_yaw_deg=yaw,

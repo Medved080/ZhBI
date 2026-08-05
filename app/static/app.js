@@ -705,6 +705,10 @@ async function checkAuth() {
     document.getElementById("user-name").textContent = user.display_name;
     applyImpersonationBar(user);
     applyRolePermissions();
+    // Личная настройка меню — ПОСЛЕ применения прав: applyRolePermissions
+    // прячет недоступные пункты, а порядок и избранное расставляются по
+    // тем, что остались видимыми.
+    await loadMenuPrefs(user);
     applyLabelColor();
     showApp();
     return true;
@@ -6997,11 +7001,70 @@ window.addEventListener("mousemove", (e) => {
 // contracts-backdrop/contract-edit-backdrop,
 // counterparties-backdrop/counterparty-edit-backdrop) — последняя среди
 // открытых в DOM-порядке и есть верхняя по стеку, закрывать её одну.
+// ---------- Несохранённые изменения (2026-08-05, запрос пользователя) ----------
+//
+// Esc закрывает форму мгновенно, и до этой правки правка, набранная в полях,
+// исчезала без следа — в формах на десяток полей (контрагент, пользователь,
+// карточка объекта) это потеря минут работы за одно случайное нажатие.
+//
+// Признак «трогали поля» ставится по событиям ввода, а не сравнением со
+// снимком значений при открытии. Причина: содержимое половины форм
+// дорисовывается асинхронно уже ПОСЛЕ открытия (списки договоров, таблицы,
+// вложения), и снимок, снятый в момент открытия, не знал бы про эти поля —
+// то есть молча пропускал бы ровно те правки, ради которых всё и делается.
+//
+// Спрашиваем только там, где есть ЧТО сохранять: в форме должна быть
+// основная кнопка (`.btn-primary` — «Сохранить», «Применить»). Формы,
+// которые пишут сразу по щелчку (справочник подтипов, цвета статусов), под
+// это правило не попадают, и Esc в них по-прежнему просто закрывает.
+function модальнаяФормаСохраняется(backdrop) {
+  return !!backdrop.querySelector(".btn-primary");
+}
+
+document.addEventListener("input", (e) => {
+  const backdrop = e.target.closest(".modal-backdrop.open");
+  if (backdrop && модальнаяФормаСохраняется(backdrop)) backdrop.dataset.dirty = "1";
+}, true);
+document.addEventListener("change", (e) => {
+  const backdrop = e.target.closest(".modal-backdrop.open");
+  if (backdrop && модальнаяФормаСохраняется(backdrop)) backdrop.dataset.dirty = "1";
+}, true);
+
+// Нажали основную кнопку — правка ушла на сервер (или хотя бы отправлена),
+// и держать признак дальше значило бы спрашивать про уже сохранённое.
+document.addEventListener("click", (e) => {
+  const кнопка = e.target.closest(".modal-backdrop.open .btn-primary");
+  if (кнопка) delete кнопка.closest(".modal-backdrop").dataset.dirty;
+}, true);
+
+// Открытие и закрытие формы сбрасывают признак. Через наблюдателя, а не
+// правкой полусотни мест, где вызывается classList.add("open").
+//
+// Наблюдаем КАЖДУЮ форму по отдельности, а не поддерево документа: на схеме
+// девять с половиной тысяч фигур, и у них классы меняются на каждом
+// выделении, фильтре и переходе — подписка на весь subtree дёргала бы
+// обработчик тысячами вызовов в секунду. Формы объявлены в разметке
+// статически, поэтому одной подписки при старте достаточно.
+{
+  const наблюдатель = new MutationObserver((записи) => {
+    for (const з of записи) delete з.target.dataset.dirty;
+  });
+  document.querySelectorAll(".modal-backdrop").forEach(b =>
+    наблюдатель.observe(b, { attributes: true, attributeFilter: ["class"] }));
+}
+
+function можноЗакрытьФорму(backdrop) {
+  if (backdrop.dataset.dirty !== "1") return true;
+  return confirm("В форме есть несохранённые изменения. Закрыть без сохранения?");
+}
+
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const openModals = document.querySelectorAll(".modal-backdrop.open");
   if (openModals.length) {
-    openModals[openModals.length - 1].classList.remove("open");
+    const верхняя = openModals[openModals.length - 1];
+    if (!можноЗакрытьФорму(верхняя)) return;
+    верхняя.classList.remove("open");
     return;
   }
   closeCtxMenu();
@@ -7186,6 +7249,78 @@ function видимыеПунктыПанели(панель) {
     .filter(el => el.style.display !== "none");
 }
 
+// ==================== ЛИЧНАЯ НАСТРОЙКА МЕНЮ (2026-08-05) ====================
+//
+// Что настраивается: порядок пунктов ВНУТРИ блока и отметка «избранное»
+// (показывается жирным). Между блоками пункт не переносится — блок это не
+// папка, а раздел системы: «Экспорт в PDF» в «Справочниках» был бы не
+// личным удобством, а ложью о том, где действие живёт.
+//
+// Применяется к ИСХОДНОЙ разметке выпадающего меню, а не к панели: панель
+// собирается из этой разметки (см. renderActionsPanel), поэтому одно
+// применение обслуживает оба вида меню — и порядок, и жирный шрифт.
+//
+// Хранится за пользователем на сервере (users.menu_prefs), как цвет подписей
+// и гамма рядом: на площадке за одной машиной работают посменно, и
+// настройка должна ехать за человеком, а не за компьютером.
+let menuPrefs = { order: {}, favorites: [] };
+
+function имяГруппыМеню(группа) {
+  return группа.querySelector(":scope > .submenu-trigger").textContent.trim();
+}
+
+// Все пункты блока, включая вложенные подгруппы: порядок задаётся в пределах
+// СВОЕГО списка, поэтому обходим каждый список отдельно.
+function спискиПунктовМеню(группа) {
+  const панель = группа.querySelector(":scope > .submenu-panel");
+  const списки = [панель];
+  панель.querySelectorAll(":scope > .submenu > .submenu-panel").forEach(p => списки.push(p));
+  return списки;
+}
+
+function applyMenuPrefs() {
+  const порядок = menuPrefs.order || {};
+  const избранные = new Set(menuPrefs.favorites || []);
+  for (const группа of document.querySelectorAll("#settings-menu > .submenu")) {
+    const имя = имяГруппыМеню(группа);
+    const желаемый = порядок[имя];
+    if (желаемый && желаемый.length) {
+      for (const список of спискиПунктовМеню(группа)) {
+        // Пункты, которых в настройке нет (появились в новой версии),
+        // остаются на своих местах: настройка ЗАДАЁТ порядок известных ей,
+        // а не перечисляет все существующие. Иначе каждый новый пункт
+        // пропадал бы у всех, кто хоть раз трогал настройку.
+        const свои = желаемый
+          .map(id => список.querySelector(`:scope > [id="${CSS.escape(id)}"]`))
+          .filter(Boolean);
+        свои.forEach(el => список.appendChild(el));
+      }
+    }
+  }
+  document.querySelectorAll("#settings-menu button[id]").forEach(b => {
+    b.classList.toggle("menu-item-favorite", избранные.has(b.id));
+  });
+}
+
+async function loadMenuPrefs(user) {
+  menuPrefs = (user && user.menu_prefs) || { order: {}, favorites: [] };
+  menuPrefs.order = menuPrefs.order || {};
+  menuPrefs.favorites = menuPrefs.favorites || [];
+  applyMenuPrefs();
+}
+
+async function saveMenuPrefs() {
+  if (!state.currentUser) return;
+  try {
+    await api(`/users/${state.currentUser.id}/menu-prefs`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order: menuPrefs.order, favorites: menuPrefs.favorites }),
+    });
+  } catch (e) {
+    showToast("Не удалось сохранить настройку меню: " + e.message, "warning");
+  }
+}
+
 // Кнопка-двойник: нажатие переадресуется ОРИГИНАЛУ, поэтому у панели нет ни
 // одного собственного обработчика действий.
 function кнопкаПанели(оригинал) {
@@ -7199,10 +7334,51 @@ function кнопкаПанели(оригинал) {
     if (оригинал.classList.contains(класс)) b.classList.add(класс);
   }
   b.addEventListener("click", () => {
+    // В режиме настройки щелчок НЕ выполняет действие: человек здесь
+    // раскладывает меню, а не работает им. Иначе промах при перетаскивании
+    // запускал бы импорт или экспорт.
+    if (menuCustomizing) return;
     actionsPanelBackdrop.classList.remove("open");
     оригинал.click();
   });
-  return b;
+  if (оригинал.id) b.dataset.menuId = оригинал.id;
+  if (оригинал.classList.contains("menu-item-favorite")) b.classList.add("menu-item-favorite");
+  if (!menuCustomizing) return b;
+
+  // В режиме настройки пункт заворачивается в строку со звёздочкой: сама
+  // кнопка остаётся кнопкой (её же и перетаскивают), звёздочка — отдельный
+  // переключатель избранного.
+  const строка = document.createElement("div");
+  строка.className = "actions-panel-item";
+  if (оригинал.id) {
+    строка.dataset.menuId = оригинал.id;
+    // Снимаем признак с самой кнопки: он переехал на обёртку, а два узла с
+    // одним и тем же data-menu-id дали бы в собранном порядке дубли
+    // (поймано живой проверкой: ["menu-element-catalog",
+    // "menu-element-catalog", "menu-objects"]).
+    delete b.dataset.menuId;
+  }
+  строка.appendChild(b);
+  const звезда = document.createElement("button");
+  звезда.type = "button";
+  звезда.className = "fav-toggle";
+  const избранное = new Set(menuPrefs.favorites || []);
+  const отмечено = оригинал.id && избранное.has(оригинал.id);
+  звезда.textContent = отмечено ? "★" : "☆";
+  звезда.classList.toggle("on", !!отмечено);
+  звезда.title = отмечено ? "Убрать из избранного" : "В избранное";
+  звезда.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!оригинал.id) return;
+    const набор = new Set(menuPrefs.favorites || []);
+    if (набор.has(оригинал.id)) набор.delete(оригинал.id); else набор.add(оригинал.id);
+    menuPrefs.favorites = [...набор];
+    applyMenuPrefs();
+    renderActionsPanel();
+  });
+  строка.appendChild(звезда);
+  включитьПеретаскивание(строка);
+  return строка;
 }
 
 // Раскладка панели ПО КОЛОНКАМ (живой запрос 2026-08-03: «Отчёты» под
@@ -7266,8 +7442,98 @@ function renderActionsPanel() {
   колонки.forEach(k => { k.style.display = k.children.length ? "" : "none"; });
 }
 
-document.getElementById("actions-panel-close").addEventListener("click", () =>
-  actionsPanelBackdrop.classList.remove("open"));
+// ---------- режим настройки меню в панели ----------
+let menuCustomizing = false;
+
+function обновитьКнопкуНастройки() {
+  const кнопка = document.getElementById("actions-panel-customize");
+  const подсказка = document.getElementById("actions-panel-customize-hint");
+  кнопка.textContent = menuCustomizing ? "Готово" : "Настроить меню";
+  кнопка.classList.toggle("btn-primary", menuCustomizing);
+  кнопка.classList.toggle("btn-secondary", !menuCustomizing);
+  подсказка.textContent = menuCustomizing
+    ? "Перетаскивайте пункты внутри блока, звёздочкой отмечайте избранные. Между блоками пункт не переносится."
+    : "";
+  document.getElementById("actions-panel-body").classList.toggle("customizing", menuCustomizing);
+}
+
+document.getElementById("actions-panel-customize").addEventListener("click", async () => {
+  menuCustomizing = !menuCustomizing;
+  if (!menuCustomizing) await saveMenuPrefs();
+  renderActionsPanel();
+  обновитьКнопкуНастройки();
+});
+
+// Порядок собирается ИЗ ПАНЕЛИ после каждого перетаскивания: панель — то,
+// что человек видит и двигает, и восстанавливать порядок из неё честнее,
+// чем вести отдельный список и надеяться, что он не разъедется.
+function собратьПорядокИзПанели() {
+  const порядок = {};
+  document.querySelectorAll("#actions-panel-body .actions-panel-group").forEach(блок => {
+    const имя = блок.querySelector("h4").textContent.trim();
+    const ids = [...блок.querySelectorAll("[data-menu-id]")].map(el => el.dataset.menuId);
+    if (ids.length) порядок[имя] = ids;
+  });
+  return порядок;
+}
+
+// Перетаскивание — родное HTML5 drag&drop, без библиотеки: список короткий,
+// вложенности нет, а вендорить ради этого чужой код в проект, где каждое
+// вендорение согласуется отдельно, незачем.
+let перетаскиваемый = null;
+
+function включитьПеретаскивание(обёртка) {
+  обёртка.draggable = true;
+  обёртка.addEventListener("dragstart", (e) => {
+    перетаскиваемый = обёртка;
+    обёртка.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox не начинает перетаскивание без данных в буфере.
+    e.dataTransfer.setData("text/plain", обёртка.dataset.menuId || "");
+  });
+  обёртка.addEventListener("dragend", () => {
+    обёртка.classList.remove("dragging");
+    очиститьПодсветкуМест();
+    перетаскиваемый = null;
+  });
+  обёртка.addEventListener("dragover", (e) => {
+    if (!перетаскиваемый || перетаскиваемый === обёртка) return;
+    // ТОЛЬКО внутри своего списка: у пункта из другого блока (или из другой
+    // подгруппы) переставлять нечего — блок это раздел системы, а не папка.
+    if (перетаскиваемый.parentElement !== обёртка.parentElement) return;
+    e.preventDefault();
+    const r = обёртка.getBoundingClientRect();
+    const выше = (e.clientY - r.top) < r.height / 2;
+    очиститьПодсветкуМест();
+    обёртка.classList.add(выше ? "drop-before" : "drop-after");
+  });
+  обёртка.addEventListener("drop", async (e) => {
+    if (!перетаскиваемый || перетаскиваемый.parentElement !== обёртка.parentElement) return;
+    e.preventDefault();
+    const r = обёртка.getBoundingClientRect();
+    const выше = (e.clientY - r.top) < r.height / 2;
+    обёртка.parentElement.insertBefore(перетаскиваемый, выше ? обёртка : обёртка.nextSibling);
+    очиститьПодсветкуМест();
+    menuPrefs.order = собратьПорядокИзПанели();
+    applyMenuPrefs();
+  });
+}
+
+function очиститьПодсветкуМест() {
+  document.querySelectorAll("#actions-panel-body .drop-before, #actions-panel-body .drop-after")
+    .forEach(el => el.classList.remove("drop-before", "drop-after"));
+}
+
+document.getElementById("actions-panel-close").addEventListener("click", async () => {
+  // Закрыли панель, не выйдя из режима настройки, — правку всё равно
+  // сохраняем: терять её из-за того, что человек нажал не ту кнопку, незачем.
+  if (menuCustomizing) {
+    menuCustomizing = false;
+    await saveMenuPrefs();
+    обновитьКнопкуНастройки();
+  }
+  actionsPanelBackdrop.classList.remove("open");
+});
 
 // ---------- выбор вида ----------
 document.getElementById("menu-view-mode").addEventListener("click", () => {
@@ -7354,6 +7620,11 @@ document.getElementById("btn-settings-menu").addEventListener("click", (e) => {
     // один источник содержимого, и нажатие в одном закрывает другое.
     settingsMenu.classList.remove("open");
     closeAllSubmenus();
+    // Панель всегда открывается в РАБОЧЕМ режиме: настройка — разовое
+    // действие, и остаться в ней после прошлого раза значило бы, что
+    // следующий щелчок по пункту молча ничего не сделает.
+    menuCustomizing = false;
+    обновитьКнопкуНастройки();
     renderActionsPanel();
     actionsPanelBackdrop.classList.add("open");
     return;
