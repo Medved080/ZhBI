@@ -9364,6 +9364,13 @@ async function openElementForm(elementId, show = true) {
   }
   document.getElementById("ef-title").textContent =
     `${efElement.element_type} ${efElement.mark || "без марки"} — ${efElement.address || "адрес не определён"}`;
+  // Мини-карта прошлого изделия к новому отношения не имеет. Свёртка
+  // закрывается: если она была раскрыта, следующее раскрытие перезагрузит
+  // контекст — а рисовать чужую картинку до загрузки нельзя.
+  efMap = null;
+  const свёрткаКарты = document.getElementById("ef-map-details");
+  свёрткаКарты.open = false;
+  document.getElementById("ef-map-hint").textContent = "";
   document.getElementById("ef-status").textContent = "";
   renderEfFields();
   renderEfReadonly();
@@ -9403,6 +9410,199 @@ document.getElementById("ef-comment-save").addEventListener("click", async () =>
 });
 
 document.getElementById("ef-close").addEventListener("click", () => elementFormBackdrop.classList.remove("open"));
+
+// ==================== МИНИ-КАРТА ИЗДЕЛИЯ (2026-08-05) ====================
+//
+// Отвечает на один вопрос: где на стройке стоит это изделие. Поэтому в
+// кадре только разметка, по которой ориентируются на площадке, — оси и
+// контуры зон, — и само изделие. Остальных девяти тысяч изделий нет: они на
+// этот вопрос не отвечают, а рисовать их пришлось бы на каждое открытие
+// формы.
+//
+// Устройство повторяет предпросмотр в справочнике зон (renderZonePreview и
+// rebuildZonePreview3d): та же проекция, тот же порядок координат в 3D
+// (world.X = dxf.x, world.Z = -dxf.y), тот же приём с ленивой инициализацией
+// сцены. Второй набор приёмов для той же задачи развёл бы две картинки,
+// которые обязаны выглядеть одинаково.
+let efMap = null;        // {element, bbox, axes, zones} — ответ /elements/{id}/context
+let efMap3d = { renderer: null, scene: null, camera: null, controls: null, group: null, frame: null };
+
+function efMapRequestFrame() {
+  if (!efMap3d.renderer || efMap3d.frame) return;
+  efMap3d.frame = requestAnimationFrame(() => {
+    efMap3d.frame = null;
+    efMap3d.renderer.render(efMap3d.scene, efMap3d.camera);
+  });
+}
+
+const EF_MAP_W = 400, EF_MAP_H = 300;
+
+function renderElementMap2d() {
+  const svg = document.getElementById("ef-map-svg");
+  if (!efMap || !efMap.bbox) {
+    svg.innerHTML = `<text x="200" y="150" text-anchor="middle" font-size="12"
+      fill="var(--color-text-muted)">Нет геометрии для показа</text>`;
+    return;
+  }
+  let [minX, minY, maxX, maxY] = efMap.bbox;
+  const pad = Math.max(maxX - minX, maxY - minY) * 0.03 || 1;
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+  const scale = Math.min(EF_MAP_W / (maxX - minX), EF_MAP_H / (maxY - minY));
+  const offX = (EF_MAP_W - (maxX - minX) * scale) / 2;
+  const offY = (EF_MAP_H - (maxY - minY) * scale) / 2;
+  // Y инвертируется: в чертеже ось вверх, в SVG вниз — тот же приём, что у
+  // основной схемы (группа #flip) и у предпросмотра зоны.
+  const sx = x => offX + (x - minX) * scale;
+  const sy = y => EF_MAP_H - offY - (y - minY) * scale;
+
+  const части = [];
+  for (const axis of efMap.axes) {
+    части.push(axis.kind === "numeric"
+      ? `<line x1="${sx(axis.coord).toFixed(1)}" y1="0" x2="${sx(axis.coord).toFixed(1)}" y2="${EF_MAP_H}"
+           stroke="var(--color-border)" stroke-width="0.5" opacity="0.6"/>`
+      : `<line x1="0" y1="${sy(axis.coord).toFixed(1)}" x2="${EF_MAP_W}" y2="${sy(axis.coord).toFixed(1)}"
+           stroke="var(--color-border)" stroke-width="0.5" opacity="0.6"/>`);
+  }
+  // Свои зоны — поверх чужих и ярче: это ответ на «в какой захватке стоит»,
+  // а не фон.
+  const порядок = [...efMap.zones].sort((a, b) => (a.own ? 1 : 0) - (b.own ? 1 : 0));
+  for (const зона of порядок) {
+    const точки = зона.outline.map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ");
+    части.push(зона.own
+      ? `<polygon points="${точки}" fill="#2471a3" fill-opacity="0.14"
+           stroke="#2471a3" stroke-opacity="0.9" stroke-width="1.4"/>`
+      : `<polygon points="${точки}" fill="#888" fill-opacity="0.04"
+           stroke="#888" stroke-opacity="0.25" stroke-width="0.7"/>`);
+  }
+  // Само изделие: настоящий контур, если он есть, иначе точка. Контур мелкий
+  // (колонна на фоне стройки в двести метров — несколько пикселей), поэтому
+  // рядом всегда рисуется заметный маркер: без него изделие приходилось бы
+  // искать глазами по картинке, ради которой всё и затевалось.
+  const э = efMap.element;
+  if (э.outline && э.outline.length > 2) {
+    части.push(`<polygon points="${э.outline.map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ")}"
+      fill="#d68910" fill-opacity="0.9" stroke="#7d5109" stroke-width="0.8"/>`);
+  }
+  const cx = sx(э.x), cy = sy(э.y);
+  части.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="9" fill="none"
+    stroke="#d68910" stroke-width="1.6" opacity="0.9"/>`);
+  части.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.5" fill="#d68910"/>`);
+  svg.innerHTML = части.join("");
+
+  // По записи справочника, а не по ярусу: зона приходит строкой НА КАЖДЫЙ
+  // ярус (у стоянки их четыре), и без свёртки подпись повторяла бы
+  // «Стоянка 01» четыре раза подряд.
+  const свои = new Map();
+  for (const z of efMap.zones) {
+    if (z.own) свои.set(z.id, `${z.category} «${z.name || "—"}»`);
+  }
+  document.getElementById("ef-map-hint").textContent =
+    свои.size ? [...свои.values()].join(", ") : "зоны не определены";
+}
+
+async function ensureElementMap3d() {
+  await ensureThreeLoaded();
+  if (efMap3d.renderer) return;
+  const host = document.getElementById("ef-map-3d-host");
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  renderer.setSize(EF_MAP_W, EF_MAP_H);
+  renderer.setClearColor(themeColor("--stage-3d-bg", 0xf4f6f8), 1);
+  host.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, EF_MAP_W / EF_MAP_H, 100, 5_000_000);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  // Как у предпросмотра зоны: кадр рисуется по требованию, поэтому инерция
+  // камеры выключена — иначе она едет уже после отпускания мыши, а кадра нет.
+  controls.enableDamping = false;
+  controls.addEventListener("change", efMapRequestFrame);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.5);
+  dir.position.set(1, 2, 1);
+  scene.add(dir);
+  Object.assign(efMap3d, { renderer, scene, camera, controls, group: null });
+}
+
+function rebuildElementMap3d() {
+  if (!efMap3d.renderer || !efMap || !efMap.bbox) return;
+  const { scene } = efMap3d;
+  if (efMap3d.group) {
+    scene.remove(efMap3d.group);
+    efMap3d.group.traverse(obj => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) obj.material.dispose();
+    });
+  }
+  const group = new THREE.Group();
+  const линия = (outline, y, цвет, прозрачность) => {
+    const точки = outline.map(p => new THREE.Vector3(p[0], y, -p[1]));
+    точки.push(точки[0].clone());
+    const geom = new THREE.BufferGeometry().setFromPoints(точки);
+    return new THREE.Line(geom, new THREE.LineBasicMaterial({
+      color: цвет, transparent: true, opacity: прозрачность }));
+  };
+  for (const зона of efMap.zones) {
+    const y = зона.elevation_mm || 0;
+    group.add(линия(зона.outline, y, зона.own ? 0x2471a3 : 0x888888, зона.own ? 0.95 : 0.25));
+  }
+  // Изделие — параллелепипед на своей отметке. Размер от габаритов кадра, а
+  // не фиксированный: на стройке в двести метров куб в полметра — невидимая
+  // точка, а на маленьком объекте фиксированный крупный куб закрыл бы всё.
+  const [minX, minY, maxX, maxY] = efMap.bbox;
+  const размер = Math.max(maxX - minX, maxY - minY) * 0.012;
+  const э = efMap.element;
+  const куб = new THREE.Mesh(
+    new THREE.BoxGeometry(размер, размер * 2, размер),
+    new THREE.MeshLambertMaterial({ color: 0xd68910 }));
+  куб.position.set(э.x, (э.elevation_mm || э.z || 0) + размер, -э.y);
+  group.add(куб);
+  scene.add(group);
+  efMap3d.group = group;
+
+  // Камера кадрирует ВЕСЬ объект, а не изделие: карта отвечает на «где оно
+  // относительно стройки», и кадр вокруг одной колонны этого не показывает.
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const радиус = Math.max(maxX - minX, maxY - minY) || 1000;
+  efMap3d.camera.position.set(cx + радиус * 0.7, радиус * 0.8, -cy + радиус * 0.7);
+  efMap3d.controls.target.set(cx, 0, -cy);
+  efMap3d.controls.update();
+  efMapRequestFrame();
+}
+
+async function setElementMapView(режим) {
+  const трёхмерный = режим === "3d";
+  document.getElementById("ef-map-svg").style.display = трёхмерный ? "none" : "";
+  document.getElementById("ef-map-3d-host").style.display = трёхмерный ? "" : "none";
+  document.getElementById("ef-map-2d").className =
+    "btn btn-sm " + (трёхмерный ? "btn-secondary" : "btn-primary");
+  document.getElementById("ef-map-3d").className =
+    "btn btn-sm " + (трёхмерный ? "btn-primary" : "btn-secondary");
+  if (трёхмерный) {
+    await ensureElementMap3d();
+    rebuildElementMap3d();
+  }
+}
+
+document.getElementById("ef-map-2d").addEventListener("click", () => setElementMapView("2d"));
+document.getElementById("ef-map-3d").addEventListener("click", () => setElementMapView("3d"));
+
+// Карта грузится при ПЕРВОМ раскрытии свёртки, а не при открытии формы:
+// форму открывают ради полей и истории, и лишний запрос с геометрией всех
+// зон на каждое открытие ничем не оправдан.
+document.getElementById("ef-map-details").addEventListener("toggle", async (e) => {
+  if (!e.target.open || !efElement) return;
+  if (efMap && efMap.element && efMap.element.id === efElement.id) return;
+  document.getElementById("ef-map-hint").textContent = "Загрузка…";
+  try {
+    efMap = await api(`/elements/${efElement.id}/context`);
+  } catch (err) {
+    efMap = null;
+    document.getElementById("ef-map-hint").textContent = err.message;
+    return;
+  }
+  renderElementMap2d();
+  if (document.getElementById("ef-map-3d-host").style.display !== "none") rebuildElementMap3d();
+});
 
 document.getElementById("ef-locate").addEventListener("click", async () => {
   if (!efElement) return;

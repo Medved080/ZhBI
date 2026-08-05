@@ -3305,6 +3305,28 @@
       </div>
     </div>
     <div class="modal-sticky-scroll">
+      <!-- Мини-карта: где изделие стоит (2026-08-05, запрос пользователя).
+           Оси, контуры зон и сам элемент — в 2D и 3D, по образцу
+           предпросмотра в справочнике зон. Остальных изделий тут нет
+           намеренно: вопрос «в каком месте стройки эта колонна», и соседние
+           колонны на него не отвечают, а рисовать девять тысяч фигур ради
+           картинки 400×300 — секунды ожидания на каждое открытие формы.
+           Свёрнута по умолчанию: форму открывают ради полей и истории, а
+           3D-сцена стоит и памяти, и кадра. -->
+      <details class="card-technical" id="ef-map-details" style="margin-top:0">
+        <summary>Где стоит изделие</summary>
+        <div class="subtype-add-row" style="align-items:center">
+          <span class="hint-text" id="ef-map-hint"></span>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-sm btn-primary" id="ef-map-2d">2D</button>
+          <button type="button" class="btn btn-sm btn-secondary" id="ef-map-3d">3D</button>
+        </div>
+        <svg id="ef-map-svg" viewBox="0 0 400 300"
+             style="width:400px; height:300px; border:1px solid var(--color-border);
+                    background:var(--color-surface); border-radius:var(--radius-sm)"></svg>
+        <div id="ef-map-3d-host" style="display:none; width:400px; height:300px;
+             border:1px solid var(--color-border); border-radius:var(--radius-sm)"></div>
+      </details>
       <!-- Комментарий и вложения — ПЕРЕД остальными полями: это то, ради чего
            форму открывают чаще всего после статуса, и прятать их под
            «остальными полями» значило бы прятать самое живое. -->

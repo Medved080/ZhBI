@@ -702,6 +702,84 @@ def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
         conn.close()
 
 
+@app.get("/elements/{element_id}/context")
+def element_context(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Мини-карта изделия (2026-08-05, запрос пользователя): где оно стоит —
+    оси, основание объекта, зоны и сам контур.
+
+    Устроено по образцу /zones/{id}/geometry: контекст отдаётся ОДНИМ
+    запросом и не опирается на то, что сейчас загружено в браузере — форма
+    изделия открывается и из справочника, при любом выбранном чертеже, а то
+    и вовсе без открытой схемы.
+
+    Чего здесь НЕТ и почему: остальных 9421 изделий. Мини-карта должна
+    открываться мгновенно, а не перерисовывать всю схему — вопрос, на
+    который она отвечает, звучит «в каком месте стройки эта колонна», и
+    соседние колонны на него не отвечают. Роль «где именно» играют оси и
+    контуры зон: они же и есть та разметка, которой на площадке меряют.
+
+    Основание объекта — контуры ЗАХВАТОК: они покрывают пятно застройки и
+    уже лежат в базе полигонами. Считать пятно по контурам изделий значило
+    бы прочитать девять тысяч контуров ради рамки картинки.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Элемент не найден")
+        _guard_elements(conn, user, [element_id], "view")
+
+        axes = [
+            {"kind": r["kind"], "label": r["label"], "coord": r["coord"]}
+            for r in conn.execute(
+                "SELECT kind, label, coord FROM axis_lines WHERE source_file = ?",
+                (row["source_file"],),
+            )
+        ]
+        зоны = []
+        for r in conn.execute(
+            """
+            SELECT z.id, z.category, z.name, l.elevation_mm, l.outline_json
+            FROM zones z JOIN zone_levels l ON l.zone_id = z.id
+            WHERE z.object_id = ? AND z.is_current = 1
+            """,
+            (row["object_id"],),
+        ):
+            зоны.append({
+                "id": r["id"], "category": r["category"], "name": r["name"],
+                "elevation_mm": r["elevation_mm"], "outline": json.loads(r["outline_json"]),
+                # Своя зона рисуется ярче прочих — это ответ на «в какой
+                # захватке стоит изделие», а не просто фон.
+                "own": r["id"] in (row["zone_zakhvatka_id"], row["zone_crane_id"],
+                                   row["zone_stance_id"]),
+            })
+
+        xs, ys = [], []
+        for z in зоны:
+            for point in z["outline"]:
+                xs.append(point[0])
+                ys.append(point[1])
+        for axis in axes:
+            (xs if axis["kind"] == "numeric" else ys).append(axis["coord"])
+        xs.append(row["x"])
+        ys.append(row["y"])
+        bbox = [min(xs), min(ys), max(xs), max(ys)] if xs and ys else None
+
+        return {
+            "element": {
+                "id": row["id"], "x": row["x"], "y": row["y"], "z": row["z"],
+                "elevation_mm": row["elevation_mm"],
+                "element_type": row["element_type"], "mark": row["mark"],
+                "outline": json.loads(row["outline_json"]) if row["outline_json"] else None,
+            },
+            "bbox": bbox,
+            "axes": axes,
+            "zones": зоны,
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/elements/{element_id}/activity")
 def element_activity(element_id: int, limit: int = Query(200, le=1000),
                      user: sqlite3.Row = Depends(get_current_user)):
