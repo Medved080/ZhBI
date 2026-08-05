@@ -7454,8 +7454,21 @@ function обновитьКнопкуНастройки() {
   подсказка.textContent = menuCustomizing
     ? "Перетаскивайте пункты внутри блока, звёздочкой отмечайте избранные. Между блоками пункт не переносится."
     : "";
+  document.getElementById("actions-panel-reset").style.display = menuCustomizing ? "" : "none";
   document.getElementById("actions-panel-body").classList.toggle("customizing", menuCustomizing);
 }
+
+// Возврат к исходному виду. Порядок восстанавливается ПЕРЕЗАГРУЗКОЙ
+// страницы, а не обратной перестановкой узлов: исходный порядок живёт
+// только в разметке, и после того как applyMenuPrefs его переставила,
+// восстановить его в памяти уже нечем — сохранённой копии «как было» нет и
+// заводить её ради одной кнопки незачем.
+document.getElementById("actions-panel-reset").addEventListener("click", async () => {
+  if (!confirm("Вернуть меню к исходному виду? Ваш порядок пунктов и отметки избранного будут сняты.")) return;
+  menuPrefs = { order: {}, favorites: [] };
+  await saveMenuPrefs();
+  location.reload();
+});
 
 document.getElementById("actions-panel-customize").addEventListener("click", async () => {
   menuCustomizing = !menuCustomizing;
@@ -14199,6 +14212,11 @@ document.getElementById("menu-report-mywork").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
   showBackToReport(false);
   switchReport("mywork");
+});
+document.getElementById("menu-report-contracting").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  showBackToReport(false);
+  switchReport("contracting");
 });
 document.getElementById("reports-close").addEventListener("click", () => reportsBackdrop.classList.remove("open"));
 document.getElementById("report-print").addEventListener("click", () => window.print());
