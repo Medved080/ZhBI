@@ -522,6 +522,13 @@
     display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
   }
   .btn-icon svg { width: 14px; height: 14px; display: block; }
+  /* Иконка в заголовке свёртки. Размер задаётся ЗДЕСЬ, а не атрибутами
+     width/height у самого svg: ниже стоит общее `svg { width: 100%; height:
+     100% }` для схемы, и оно перебивает атрибуты — метка геопозиции
+     разворачивалась во всю форму (поймано живой проверкой). */
+  /* display тоже задаём здесь: то же общее правило делает svg блочным, и
+     иконка уходила на свою строку над заголовком. */
+  summary > svg { width: 13px; height: 13px; display: inline-block; vertical-align: -2px; }
   .btn-icon:hover { color: var(--color-danger); border-color: var(--color-danger); }
   :root[data-skin] .btn-icon { width: 28px; height: 28px; min-height: 28px; padding: 0; }
   /* Строка справочника кликабельна целиком — открывает форму записи.
@@ -3295,12 +3302,10 @@
       <div id="ef-fields" style="display:flex; flex-wrap:wrap; gap:8px"></div>
       <div class="subtype-add-row" style="margin-top:8px; align-items:center">
         <button class="btn btn-sm btn-primary" id="ef-save">Сохранить поля</button>
-        <!-- Переход к схеме с жёлтой обводкой — тот же механизм, что у
-             перехода из отчёта (locateElementOnPlan): изделие выделяется,
-             кадр наводится на него, обводка держится, пока не выберут
-             другое. Форма при этом закрывается — возвращаться в неё
-             незачем, изделие уже перед глазами. -->
-        <button class="btn btn-sm btn-secondary" id="ef-locate">Показать на большой схеме</button>
+        <!-- «Показать на большой схеме» переехала отсюда в блок мини-карты
+             (2026-08-06, запрос пользователя): она про место изделия, и
+             стоять должна рядом с картинкой этого места, а не среди правки
+             реквизитов. -->
         <span class="hint-text" id="ef-status"></span>
       </div>
     </div>
@@ -3314,18 +3319,43 @@
            Свёрнута по умолчанию: форму открывают ради полей и истории, а
            3D-сцена стоит и памяти, и кадра. -->
       <details class="card-technical" id="ef-map-details" style="margin-top:0">
-        <summary>Где стоит изделие</summary>
-        <div class="subtype-add-row" style="align-items:center">
-          <span class="hint-text" id="ef-map-hint"></span>
-          <span class="spacer"></span>
-          <button type="button" class="btn btn-sm btn-primary" id="ef-map-2d">2D</button>
-          <button type="button" class="btn btn-sm btn-secondary" id="ef-map-3d">3D</button>
+        <summary>
+          <!-- Иконка геопозиции (2026-08-06, запрос пользователя): раздел
+               про место на стройке, и метка на карте называет его быстрее
+               слов. Инлайновый SVG — как у кнопки-урны: иконок в проекте
+               считаные, отдельный запрос за 300 байтами не окупается. -->
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+               stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+               style="vertical-align:-2px; margin-right:4px" aria-hidden="true">
+            <path d="M8 14.5s5-4.6 5-8.2A5 5 0 0 0 3 6.3c0 3.6 5 8.2 5 8.2Z"/>
+            <circle cx="8" cy="6.2" r="1.9"/>
+          </svg><span>Где стоит изделие</span></summary>
+        <!-- Карта слева, подписи и переход — справа от неё (2026-08-06,
+             запрос пользователя). Раньше строка с зонами стояла НАД картой и
+             тянулась во всю ширину формы ради трёх слов, а кнопка перехода к
+             схеме жила в шапке формы, далеко от картинки, к которой она по
+             смыслу и относится. -->
+        <div style="display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap">
+          <div style="flex:0 0 auto">
+            <svg id="ef-map-svg" viewBox="0 0 400 300"
+                 style="width:400px; height:300px; border:1px solid var(--color-border);
+                        background:var(--color-surface); border-radius:var(--radius-sm)"></svg>
+            <div id="ef-map-3d-host" style="display:none; width:400px; height:300px;
+                 border:1px solid var(--color-border); border-radius:var(--radius-sm)"></div>
+          </div>
+          <div style="flex:1 1 200px; min-width:180px; display:flex; flex-direction:column; gap:8px">
+            <div style="display:flex; gap:6px">
+              <button type="button" class="btn btn-sm btn-primary" id="ef-map-2d">2D</button>
+              <button type="button" class="btn btn-sm btn-secondary" id="ef-map-3d">3D</button>
+            </div>
+            <div class="hint-text" id="ef-map-address"></div>
+            <div class="hint-text" id="ef-map-hint"></div>
+            <!-- Переход к схеме с жёлтой обводкой — тот же механизм, что у
+                 перехода из отчёта (locateElementOnPlan). Форма при этом
+                 закрывается: изделие уже перед глазами. -->
+            <button class="btn btn-sm btn-secondary" id="ef-locate">Показать на большой схеме</button>
+          </div>
         </div>
-        <svg id="ef-map-svg" viewBox="0 0 400 300"
-             style="width:400px; height:300px; border:1px solid var(--color-border);
-                    background:var(--color-surface); border-radius:var(--radius-sm)"></svg>
-        <div id="ef-map-3d-host" style="display:none; width:400px; height:300px;
-             border:1px solid var(--color-border); border-radius:var(--radius-sm)"></div>
       </details>
       <!-- Комментарий и вложения — ПЕРЕД остальными полями: это то, ради чего
            форму открывают чаще всего после статуса, и прятать их под

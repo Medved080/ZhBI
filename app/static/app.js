@@ -9371,6 +9371,7 @@ async function openElementForm(elementId, show = true) {
   const свёрткаКарты = document.getElementById("ef-map-details");
   свёрткаКарты.open = false;
   document.getElementById("ef-map-hint").textContent = "";
+  document.getElementById("ef-map-address").textContent = "";
   document.getElementById("ef-status").textContent = "";
   renderEfFields();
   renderEfReadonly();
@@ -9498,6 +9499,11 @@ function renderElementMap2d() {
   }
   document.getElementById("ef-map-hint").textContent =
     свои.size ? [...свои.values()].join(", ") : "зоны не определены";
+  // Адрес по осям — справа от карты (2026-08-06): он отвечает на тот же
+  // вопрос «где», что и картинка, и читается вместе с ней, а не отдельной
+  // строкой над ней.
+  document.getElementById("ef-map-address").textContent =
+    efElement && efElement.address ? `Адрес по осям: ${efElement.address}` : "адрес по осям не определён";
 }
 
 async function ensureElementMap3d() {
