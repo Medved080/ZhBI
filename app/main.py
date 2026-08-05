@@ -217,7 +217,16 @@ async def security_headers(request, call_next):
     # (условный GET по ETag/Last-Modified, которые StaticFiles уже
     # проставляет сама) — не полный передекачивание при каждой загрузке,
     # но и не молчаливая раздача устаревшей копии из кэша.
-    if request.url.path.startswith("/static/"):
+    #
+    # Сама СТРАНИЦА («/», app/static/index.html) сюда не попадала до
+    # 2026-08-05, и это ловушка, а не мелочь: index.html отдаётся не
+    # StaticFiles, а отдельным маршрутом serve_index, и под условие
+    # «/static/» не подходил. Разметка меню, вкладок и форм живёт именно в
+    # нём — то есть переименование пунктов меню могло сколько угодно долго
+    # не доезжать до браузера при полностью обновлённом сервере (поймано
+    # живьём в этот же день: сервер отдавал новые названия отчётов, а
+    # вкладка показывала старые).
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
