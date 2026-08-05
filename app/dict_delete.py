@@ -68,6 +68,18 @@ class DeleteIn(BaseModel):
     # вложенная структура: клиент собирает её по мере выбора, и разбирать
     # вложенность на сервере пришлось бы вторым обходом дерева.
     replacements: dict[str, str] = {}
+    # Что делать с подчинёнными записями (2026-08-05, живой репорт).
+    #
+    # "replace" — каждая подчинённая запись заменяется на ДРУГУЮ такую же у
+    #   выбранного владельца. Годится, когда запись удаляют как ошибочную:
+    #   «этот договор лишний, его изделия возить будет вон тот».
+    #
+    # "merge" — подчинённые ПЕРЕЕЗЖАЮТ к замене вместе со всем своим
+    #   содержимым, и удаляется только опустевшая запись. Это и есть свёртка
+    #   задвоенного: у дубля контрагента свои договоры, и «заменить» их на
+    #   чужие означало бы увести изделия на чужой контракт — то есть соврать
+    #   про то, кто и по какому документу возил.
+    mode: str = "replace"
 
 
 # ==================== СПРАВОЧНИК МАРОК ====================
@@ -570,6 +582,90 @@ def _project_delete(conn, row):
     conn.execute("DELETE FROM projects WHERE id = ?", (row["id"],))
 
 
+# ==================== ПЕРЕЕЗД ПОДЧИНЁННЫХ (свёртка дубля) ====================
+#
+# Задача, ради которой это написано: у контрагента, заведённого дважды в
+# разном регистре, свои договоры со своими спецификациями и контрактами.
+# «Заменить» их на договоры второй записи нельзя — это разные документы, и
+# изделия уехали бы на чужой контракт. Правильный ход — перенести подчинённые
+# к верной записи и удалить опустевшую.
+#
+# Ловушка переезда — УНИКАЛЬНОСТЬ. У договора уникален номер в пределах
+# контрагента, у спецификации — в пределах договора. Если задвоен не только
+# контрагент, но и его договор (а при задвоении так обычно и есть), простой
+# UPDATE упадёт на индексе. Поэтому переезд РЕКУРСИВНЫЙ: совпал номер —
+# сливаем содержимое в уже существующую запись и удаляем исходную; не совпал
+# — просто перевешиваем.
+
+
+def _merge_agreements(conn, src_id: int, dst_id: int, отчёт: list) -> None:
+    """Договоры контрагента src → контрагенту dst."""
+    for a in conn.execute("SELECT * FROM agreements WHERE counterparty_id = ?", (src_id,)).fetchall():
+        двойник = conn.execute(
+            "SELECT * FROM agreements WHERE counterparty_id = ? AND number = ?",
+            (dst_id, a["number"]),
+        ).fetchone()
+        if двойник:
+            _merge_specifications(conn, a["id"], двойник["id"], отчёт)
+            conn.execute("DELETE FROM agreements WHERE id = ?", (a["id"],))
+            отчёт.append(f"договор {a['number']} слит с одноимённым")
+        else:
+            conn.execute(
+                "UPDATE agreements SET counterparty_id = ?, updated_at = datetime('now') WHERE id = ?",
+                (dst_id, a["id"]))
+            отчёт.append(f"договор {a['number']} перенесён")
+
+
+def _merge_specifications(conn, src_id: int, dst_id: int, отчёт: list) -> None:
+    """Спецификации договора src → договору dst."""
+    for s in conn.execute("SELECT * FROM specifications WHERE agreement_id = ?", (src_id,)).fetchall():
+        двойник = conn.execute(
+            "SELECT * FROM specifications WHERE agreement_id = ? AND number = ?",
+            (dst_id, s["number"]),
+        ).fetchone()
+        if двойник:
+            _merge_contracts(conn, s["id"], двойник["id"], отчёт)
+            conn.execute("DELETE FROM specifications WHERE id = ?", (s["id"],))
+            отчёт.append(f"спецификация {s['number']} слита с одноимённой")
+        else:
+            conn.execute(
+                "UPDATE specifications SET agreement_id = ?, updated_at = datetime('now') WHERE id = ?",
+                (dst_id, s["id"]))
+            отчёт.append(f"спецификация {s['number']} перенесена")
+
+
+def _merge_contracts(conn, src_id: int, dst_id: int, отчёт: list) -> None:
+    """Контракты спецификации src → спецификации dst. Слияния по имени тут
+    нет и быть не может: у контракта нет номера, его наименование целиком
+    выводится из цепочки, и двух «одинаковых» контрактов не существует —
+    в одной спецификации их может быть сколько угодно."""
+    n = conn.execute(
+        "UPDATE contracts SET specification_id = ?, updated_at = datetime('now') "
+        "WHERE specification_id = ?", (dst_id, src_id)).rowcount
+    if n:
+        отчёт.append(f"контрактов перенесено: {n}")
+
+
+def _merge_stances(conn, src_id: int, dst_id: int, отчёт: list) -> None:
+    """Стоянки крана src → крану dst. Совпал номер — изделия исходной
+    стоянки переезжают на одноимённую (вместе с подбором яруса по отметке,
+    см. _zone_repoint), сама она удаляется."""
+    for z in conn.execute(
+        "SELECT * FROM zones WHERE parent_zone_id = ? AND category = 'Стоянка'", (src_id,)
+    ).fetchall():
+        двойник = conn.execute(
+            "SELECT * FROM zones WHERE parent_zone_id = ? AND category = 'Стоянка' AND number IS ?",
+            (dst_id, z["number"]),
+        ).fetchone()
+        if двойник:
+            _zone_repoint(conn, z, двойник)
+            _zone_delete(conn, z)
+            отчёт.append(f"стоянка {z['number']} слита с одноимённой")
+        else:
+            conn.execute("UPDATE zones SET parent_zone_id = ? WHERE id = ?", (dst_id, z["id"]))
+            отчёт.append(f"стоянка {z['number']} перенесена")
+
+
 # ==================== РЕЕСТР ====================
 #
 # Один список на все справочники — та же причина, по которой в проекте одна
@@ -604,6 +700,7 @@ KINDS = {
         "fk_handled": {"agreements.counterparty_id": "подчинённые записи, уходят вместе"},
         "load": _counterparty_load, "label": lambda conn, row: row["short_name"],
         "children": _counterparty_children, "candidates": _counterparty_candidates,
+        "adopt": _merge_agreements, "adopt_title": "договоры со всем содержимым",
         "delete": _counterparty_delete,
     },
     "agreement": {
@@ -612,6 +709,7 @@ KINDS = {
         "fk_handled": {"specifications.agreement_id": "подчинённые записи, уходят вместе"},
         "load": _agreement_load, "label": _agreement_label,
         "children": _agreement_children, "candidates": _agreement_candidates,
+        "adopt": _merge_specifications, "adopt_title": "спецификации со всем содержимым",
         "delete": _agreement_delete,
     },
     "specification": {
@@ -620,6 +718,7 @@ KINDS = {
         "fk_handled": {"contracts.specification_id": "подчинённые записи, уходят вместе"},
         "load": _specification_load, "label": _specification_label,
         "children": _specification_children, "candidates": _specification_candidates,
+        "adopt": _merge_contracts, "adopt_title": "контракты",
         "delete": _specification_delete,
     },
     "contract": {
@@ -650,6 +749,7 @@ KINDS = {
         "load": _zone_load, "label": _zone_label,
         "children": _zone_children, "refs": _zone_refs, "cascade": _zone_cascade,
         "candidates": _zone_candidates, "repoint": _zone_repoint, "delete": _zone_delete,
+        "adopt": _merge_stances, "adopt_title": "стоянки крана",
     },
     "object": {
         "title": "Объект", "plural": "Объекты", "table": "objects",
@@ -794,6 +894,11 @@ def build_plan(conn, kind: str, key: str) -> dict:
         "children": дети,
         "needs_replacement": нужна_замена and можно_заменить,
         "replaceable": можно_заменить,
+        # Можно ли вместо замены ПЕРЕНЕСТИ подчинённых к другой записи —
+        # то есть свернуть задвоенное. Предлагается только там, где
+        # подчинённые есть: переносить у марки или подтипа нечего.
+        "mergeable": можно_заменить and "adopt" in вид and bool(дети),
+        "adopt_title": вид.get("adopt_title"),
     }
 
 
@@ -920,20 +1025,47 @@ def delete_entry(kind: str, key: str, body: DeleteIn,
                 status_code=409,
                 detail=f"Удалить нельзя, за записью ещё стоят данные: {перечень}")
 
-        действия = []
-        _проверить_и_собрать(conn, план, body.replacements, None, действия)
-
         сводка = []
-        for узел, замена in действия:
-            вид = _вид(узел["kind"])
-            row = _строка(conn, узел["kind"], узел["key"])
-            перенесено = вид["repoint"](conn, row, замена)
+        if body.mode == "merge":
+            вид = _вид(kind)
+            if "adopt" not in вид:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"У записи «{вид['title']}» нет подчинённых, которые можно перенести")
+            цель_ключ = body.replacements.get(f"{kind}:{план['key']}")
+            row = _строка(conn, kind, план["key"])
+            допустимые = {c["key"] for c in вид["candidates"](conn, row, None)}
+            if not цель_ключ or цель_ключ not in допустимые:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Выберите запись, к которой перенести подчинённые")
+            замена = _строка(conn, kind, цель_ключ)
+            отчёт = []
+            вид["adopt"](conn, row["id"], замена["id"], отчёт)
+            # Ссылки на САМУ запись (у крана это изделия) переводятся так же,
+            # как при обычной замене: перенос подчинённых их не касается.
+            перенесено = вид["repoint"](conn, row, замена) if "repoint" in вид else []
             сводка.append({
-                "kind": узел["kind"], "from": узел["label"],
-                "to": вид["label"](conn, замена),
-                "moved": перенесено,
+                "kind": kind, "from": план["label"], "to": вид["label"](conn, замена),
+                "moved": перенесено, "adopted": отчёт,
             })
-        _удалить_снизу_вверх(conn, план)
+            # Удаляется ТОЛЬКО сама запись: подчинённые уже уехали, и заново
+            # обходить дерево нельзя — построенный план описывает состояние ДО
+            # переезда, а половины его записей на прежнем месте больше нет.
+            вид["delete"](conn, _строка(conn, kind, план["key"]))
+        else:
+            действия = []
+            _проверить_и_собрать(conn, план, body.replacements, None, действия)
+            for узел, замена in действия:
+                вид = _вид(узел["kind"])
+                row = _строка(conn, узел["kind"], узел["key"])
+                перенесено = вид["repoint"](conn, row, замена)
+                сводка.append({
+                    "kind": узел["kind"], "from": узел["label"],
+                    "to": вид["label"](conn, замена),
+                    "moved": перенесено,
+                })
+            _удалить_снизу_вверх(conn, план)
         conn.commit()
     except HTTPException:
         conn.rollback()
@@ -944,9 +1076,13 @@ def delete_entry(kind: str, key: str, body: DeleteIn,
     finally:
         conn.close()
 
-    удалено = [{"kind": у["kind"], "label": у["label"]} for у in _все_узлы(план)]
+    # В режиме переноса удалена ОДНА запись — подчинённые уехали, а не
+    # исчезли. Считать их удалёнными по плану значило бы врать в журнале.
+    удалено = ([{"kind": план["kind"], "label": план["label"]}] if body.mode == "merge"
+               else [{"kind": у["kind"], "label": у["label"]} for у in _все_узлы(план)])
     activity.log(
-        "dictionary_delete", user=admin, entity_type=kind,
+        "dictionary_merge" if body.mode == "merge" else "dictionary_delete",
+        user=admin, entity_type=kind,
         old_value=план["label"],
         new_value="; ".join(f"{s['from']} → {s['to']}" for s in сводка) or None,
         details={"удалено записей": len(удалено),

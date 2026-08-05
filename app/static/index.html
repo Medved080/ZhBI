@@ -778,14 +778,36 @@
      как метка, а не как часть номера. */
   .dict-kind-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
     color: var(--color-text-muted); font-weight: 600; }
-  .dd-node { border-left: 2px solid var(--color-border); padding: 6px 0 6px 10px; margin-left: 2px; }
-  .dd-node-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
-  .dd-kind { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  /* Узел дерева — такая же карточка, как записи в справочниках (2026-08-05):
+     диалог удаления не должен быть единственным местом со своим языком.
+     Вложенность держится отступом, а не рамкой слева: у карточек уже есть
+     собственный край, и вторая линия рядом читалась бы как двойная. */
+  .dd-tree { background: var(--color-surface-2); border-radius: var(--radius); padding: 10px; }
+  .dd-node {
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .dd-node-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
   .dd-refs { font-size: 12px; color: var(--color-danger); }
   .dd-cascade { font-size: 12px; color: var(--color-text-muted); }
-  .dd-replace { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .dd-replace { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
   .dd-replace select { flex: 1; min-width: 0; }
-  .dd-children { margin-left: 8px; }
+  .dd-children { margin-left: 14px; margin-top: 8px; }
+  .dd-summary { margin-top: 10px; }
+  .dd-blockers { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .dd-blockers td { padding: 2px 8px 2px 0; }
+  .dd-blockers td.num { text-align: right; color: var(--color-danger); font-weight: 600; }
+  /* Переключатель режима: подписи-пояснения переносятся под сам вариант, а
+     не тянутся в одну строку — иначе выбор читается как два одинаковых. */
+  /* `.modal label.radio` — flex-строка, поэтому `display:block` у пояснения
+     ничего не даёт: оно остаётся таким же flex-элементом в той же строке.
+     Переносит его на свою строку flex-basis, а не display. */
+  #dict-delete-body .radio { align-items: flex-start; flex-wrap: wrap; }
+  #dict-delete-body .radio .hint-text { flex-basis: 100%; margin: 2px 0 0 26px; }
   .dd-checked { margin-top: 4px; font-size: 11px; color: var(--color-text-muted); }
   .dd-checked summary { cursor: pointer; }
   .dd-checked table { border-collapse: collapse; margin-top: 4px; }

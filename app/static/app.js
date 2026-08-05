@@ -7615,12 +7615,15 @@ function ddSummary(items) {
   return items.map(i => `${escapeHtml(i.label)} — ${i.count}`).join(", ");
 }
 
-async function ddBuildNode(node, parentTarget, container) {
+async function ddBuildNode(node, parentTarget, container, слияние = false) {
+  // Узел — такая же карточка, как записи в справочниках (2026-08-05): язык
+  // интерфейса один, и диалог удаления не должен быть единственным местом
+  // со своим оформлением.
   const el = document.createElement("div");
   el.className = "dd-node";
   el.innerHTML = `
     <div class="dd-node-head">
-      <span class="dd-kind">${escapeHtml(node.kind_title)}</span>
+      <span class="dict-kind-tag">${escapeHtml(node.kind_title)}</span>
       <b>${escapeHtml(node.label)}</b>
       ${node.refs.length ? `<span class="dd-refs">на неё ссылаются: ${ddSummary(node.refs)}</span>` : ""}
       ${node.cascade.length ? `<span class="dd-cascade">удалится вместе: ${ddSummary(node.cascade)}</span>` : ""}
@@ -7649,10 +7652,12 @@ async function ddBuildNode(node, parentTarget, container) {
   }
 
   let select = null;
-  if (node.needs_replacement) {
+  // В режиме переноса замена нужна только КОРНЮ — к нему переезжают
+  // подчинённые. Сами подчинённые в дереве не показываются вовсе.
+  if (node.needs_replacement || слияние) {
     const rep = document.createElement("div");
     rep.className = "dd-replace";
-    rep.innerHTML = `<span class="hint-text">заменить на</span><select></select>`;
+    rep.innerHTML = `<span class="hint-text">${слияние ? "перенести к" : "заменить на"}</span><select></select>`;
     el.appendChild(rep);
     select = rep.querySelector("select");
     const url = `/dictionaries/${node.kind}/candidates?key=${encodeURIComponent(node.key)}`
@@ -7678,6 +7683,7 @@ async function ddBuildNode(node, parentTarget, container) {
 
   const перестроить = async () => {
     kids.innerHTML = "";
+    if (слияние) return;   // подчинённые переезжают целиком, выбирать нечего
     for (const ребёнок of node.children) {
       await ddBuildNode(ребёнок, select ? select.value : parentTarget, kids);
     }
@@ -7710,33 +7716,75 @@ async function openDictDelete(kind, key, options = {}) {
     error.textContent = e.message;
     return;
   }
+  // Режим по умолчанию — ПЕРЕНОС, когда он возможен (2026-08-05, живой
+  // репорт «не показывает дубль с другим регистром»). Это и есть свёртка
+  // задвоенного, ради которой удаление чаще всего и открывают, и она
+  // сохраняет данные, а замена — подменяет их чужими. Из двух режимов по
+  // умолчанию должен стоять тот, который ничего не теряет.
   ddState = { kind, key, plan: ответ.plan, replacements: {}, blocked: false,
-              onDone: options.onDone };
+              mode: ответ.plan.mergeable ? "merge" : "replace", onDone: options.onDone };
   document.getElementById("dict-delete-title").textContent =
-    `Удаление: ${ответ.plan.kind_title.toLowerCase()} «${ответ.plan.label}»`;
+    `${ответ.plan.kind_title}: ${ответ.plan.label}`;
   box.innerHTML = "";
 
   if (ответ.blockers.length) {
     // Объект и проект замене не подлежат (см. app/dict_delete.py): удалить
     // можно только тот, за которым уже ничего не стоит. Показываем, что
     // именно держит запись, — иначе отказ выглядит как каприз.
-    box.innerHTML = `<p>Удалить нельзя: за записью ещё стоят данные.</p><ul>`
-      + ответ.blockers.map(b => `<li>${escapeHtml(b.owner)}: ${escapeHtml(b.label)} — ${b.count}</li>`).join("")
-      + `</ul><p class="hint-text">Сначала перенесите или удалите это, потом возвращайтесь.</p>`;
+    box.innerHTML = `<div class="form-card"><h4>Удалить нельзя</h4>
+      <p>За записью ещё стоят данные:</p>
+      <table class="dd-blockers">${ответ.blockers.map(b =>
+        `<tr><td>${escapeHtml(b.owner)}</td><td>${escapeHtml(b.label)}</td>
+             <td class="num">${b.count}</td></tr>`).join("")}</table>
+      <p class="hint-text">Сначала перенесите или удалите это, потом возвращайтесь.</p></div>`;
     return;
   }
 
-  const дерево = document.createElement("div");
-  box.appendChild(дерево);
-  await ddBuildNode(ответ.plan, null, дерево);
+  if (ответ.plan.mergeable) {
+    const выбор = document.createElement("div");
+    выбор.className = "form-card";
+    выбор.innerHTML = `<h4>Что сделать с подчинёнными записями</h4>
+      <label class="radio"><input type="radio" name="dd-mode" value="merge" checked/>
+        Перенести ${escapeHtml(ответ.plan.adopt_title || "подчинённые записи")} к другой записи
+        <span class="hint-text">— свернуть задвоенное: содержимое переедет целиком, совпавшие по номеру сольются</span></label>
+      <label class="radio"><input type="radio" name="dd-mode" value="replace"/>
+        Заменить каждую запись по отдельности
+        <span class="hint-text">— годится, когда запись ошибочна и её содержимое не нужно</span></label>`;
+    box.appendChild(выбор);
+    выбор.querySelectorAll('input[name="dd-mode"]').forEach(r =>
+      r.addEventListener("change", async () => {
+        ddState.mode = r.value;
+        await ddПостроитьДерево(ответ.plan, box);
+      }));
+  }
 
-  const всего = ddСчитатьУзлы(ответ.plan);
+  await ddПостроитьДерево(ответ.plan, box);
+}
+
+// Дерево перестраивается при смене режима, поэтому вынесено отдельно.
+// В режиме переноса показывается ТОЛЬКО корень: подчинённые никуда не
+// исчезают, выбирать им нечего, и дерево из двадцати узлов с пустыми
+// списками замен вводило бы в заблуждение.
+async function ddПостроитьДерево(план, box) {
+  box.querySelector(".dd-tree")?.remove();
+  box.querySelector(".dd-summary")?.remove();
+  const кнопка = document.getElementById("dict-delete-confirm");
+  ddState.blocked = false;
+  ddState.replacements = {};
+
+  const дерево = document.createElement("div");
+  дерево.className = "dd-tree";
+  box.appendChild(дерево);
+  await ddBuildNode(план, null, дерево, ddState.mode === "merge");
+
   const подпись = document.createElement("p");
-  подпись.className = "hint-text";
-  подпись.style.marginTop = "10px";
-  подпись.textContent = всего > 1
-    ? `Будет удалено записей: ${всего} (сама запись и всё подчинённое ей). Действие необратимо.`
-    : "Действие необратимо.";
+  подпись.className = "hint-text dd-summary";
+  const всего = ddСчитатьУзлы(план);
+  подпись.textContent = ddState.mode === "merge"
+    ? `Будет удалена одна запись — подчинённые (${всего - 1}) переедут. Действие необратимо.`
+    : (всего > 1
+        ? `Будет удалено записей: ${всего} (сама запись и всё подчинённое ей). Действие необратимо.`
+        : "Действие необратимо.");
   box.appendChild(подпись);
   ddКнопка(кнопка, ddState.blocked);
 }
@@ -7766,16 +7814,22 @@ document.getElementById("dict-delete-confirm").addEventListener("click", async (
     результат = await api(
       `/dictionaries/${ddState.kind}/${encodeURIComponent(ddState.key)}/delete`,
       { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ replacements: ddState.replacements }) });
+        body: JSON.stringify({ replacements: ddState.replacements, mode: ddState.mode }) });
   } catch (e) {
     error.textContent = e.message;
     ddКнопка(кнопка, false);
     return;
   }
-  const перенос = результат.moved
-    .map(m => `${m.from} → ${m.to} (${ddSummary(m.moved)})`).join("; ");
+  // В режиме переноса отчитываемся тем, что РЕАЛЬНО произошло с
+  // подчинёнными (что переехало, что слилось): «удалена одна запись» без
+  // этого выглядело бы так, будто содержимое дубля пропало.
+  const перенос = результат.moved.map(m => {
+    const части = [ddSummary(m.moved)].filter(Boolean);
+    if (m.adopted && m.adopted.length) части.push(m.adopted.join(", "));
+    return `${m.from} → ${m.to}` + (части.length ? ` (${части.join("; ")})` : "");
+  }).join("; ");
   showToast(
-    `Удалено записей: ${результат.deleted.length}.` + (перенос ? ` Перенос: ${перенос}` : ""),
+    `Удалено записей: ${результат.deleted.length}.` + (перенос ? ` ${перенос}` : ""),
     "info");
   dictDeleteBackdrop.classList.remove("open");
   const готово = ddState.onDone;
