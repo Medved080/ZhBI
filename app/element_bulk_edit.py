@@ -440,7 +440,9 @@ def _diff_row(conn, row, values: dict, contracts: dict, line_no: int) -> tuple[l
         try:
             new = coerce_field(field, values[field])
         except FieldError as exc:
-            rejected.append({"line": line_no, "uid": row["element_uid"], "reason": str(exc)})
+            rejected.append({"line": line_no, "uid": row["element_uid"], "reason": str(exc),
+                             "element_id": row["id"], "mark": row["mark"],
+                             "element_type": row["element_type"]})
             continue
         if new != row[field]:
             proposed[field] = new
@@ -454,7 +456,9 @@ def _diff_row(conn, row, values: dict, contracts: dict, line_no: int) -> tuple[l
         final_subtype = proposed.get("subtype", row["subtype"])
         err = check_subtype(conn, final_type, final_subtype)
         if err and ("element_type" in proposed or "subtype" in proposed):
-            rejected.append({"line": line_no, "uid": row["element_uid"], "reason": err})
+            rejected.append({"line": line_no, "uid": row["element_uid"], "reason": err,
+                             "element_id": row["id"], "mark": row["mark"],
+                             "element_type": row["element_type"]})
             proposed.pop("element_type", None)
             proposed.pop("subtype", None)
 

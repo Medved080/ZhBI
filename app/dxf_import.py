@@ -172,6 +172,85 @@ def _zones_summary(parsed: ParsedDrawing) -> Optional[ZoneImportSummary]:
     )
 
 
+_ZONE_FIELDS = {
+    "Захватка": ("zone_zakhvatka_id", "Захватка"),
+    "Кран": ("zone_crane_id", "Кран"),
+    "Стоянка": ("zone_stance_id", "Стоянка"),
+}
+
+
+def _zone_change_review(conn, object_id: int, parsed: ParsedDrawing, match) -> list:
+    """У каких изделий сменится привязка к зоне, если применить чертёж
+    (2026-08-05, запрос пользователя).
+
+    Зачем. Зоны считаются ГЕОМЕТРИЧЕСКИ: изделие относится к той захватке,
+    крану и стоянке, в чей полигон оно попало. Заказчик перерисовал границу
+    захватки на пару метров — и десятки изделий молча переехали в соседнюю,
+    а вместе с ними переехали отчёты по захваткам и планы работ. До этой
+    сводки такое было видно только постфактум и только если приглядеться.
+
+    Как считается. Привязка НОВОГО чертежа уже посчитана разбором
+    (`record.zone_bindings`, см. scripts/zone_binding) — но не в виде id
+    записей справочника: их ещё нет, зоны синхронизируются на фазе
+    применения. Поэтому сравниваем по ИМЕНИ зоны: у входящей — имя полигона
+    из чертежа, у текущей — имя записи справочника. Это же и правильный
+    ключ по смыслу: «Захватка 3» остаётся третьей захваткой, даже если
+    запись справочника пересоздали.
+
+    Сопоставление изделий берётся готовым из `match` — второй раз считать
+    его нельзя, оно дорогое и должно совпасть с тем, что применится.
+    """
+    имя_по_handle = {z.handle: (z.category, z.name) for z in parsed.zones}
+    привязки_по_handle = {
+        r.id: r.zone_bindings for r in parsed.new_records if r.zone_bindings
+    }
+    if not привязки_по_handle:
+        return []
+
+    текущие = {
+        r["id"]: r for r in conn.execute(
+            """
+            SELECT e.id, e.dxf_handle, e.element_type, e.mark, e.current_status,
+                   zz.name AS Захватка, zc.name AS Кран, zs.name AS Стоянка
+            FROM elements e
+            LEFT JOIN zones zz ON zz.id = e.zone_zakhvatka_id
+            LEFT JOIN zones zc ON zc.id = e.zone_crane_id
+            LEFT JOIN zones zs ON zs.id = e.zone_stance_id
+            WHERE e.object_id = ? AND e.is_current = 1
+            """,
+            (object_id,),
+        )
+    }
+
+    изменения = []
+    for item in match.matched:
+        было = текущие.get(item.element_id)
+        if было is None:
+            continue
+        входящая = parsed.rows[item.incoming_index]
+        привязки = привязки_по_handle.get(входящая["dxf_handle"])
+        if not привязки:
+            continue
+        расхождения = {}
+        for категория, результат in привязки.items():
+            стало = None
+            if результат.zone_handle:
+                пара = имя_по_handle.get(результат.zone_handle)
+                стало = пара[1] if пара else None
+            if (было[категория] or None) != (стало or None):
+                расхождения[категория] = [было[категория], стало]
+        if расхождения:
+            изменения.append({
+                "element_id": item.element_id,
+                "dxf_handle": было["dxf_handle"],
+                "element_type": было["element_type"],
+                "mark": было["mark"],
+                "current_status": было["current_status"],
+                "changes": расхождения,
+            })
+    return изменения
+
+
 def analyze_drawing(parsed: ParsedDrawing, object_id: Optional[int] = None) -> dict:
     """Фаза 1: что изменится, если применить чертёж. Ничего не пишет.
     Возвращает словарь для DxfAnalyzeResult + сам MatchResult (ключ
@@ -193,6 +272,14 @@ def analyze_drawing(parsed: ParsedDrawing, object_id: Optional[int] = None) -> d
         analysis["counts"]["zones_new"] = len(zones_review["new_zones"])
         analysis["details"]["zone_conflicts"] = zones_review["zone_conflicts"][:element_sync.DETAIL_LIMIT]
         analysis["details"]["zones_new"] = zones_review["new_zones"][:element_sync.DETAIL_LIMIT]
+        # Смена привязки изделий к зонам — см. _zone_change_review выше.
+        # Считается ПОСЛЕ analyze_import: сопоставление изделий берётся
+        # оттуда готовым, второй раз оно не считается.
+        смена_зон = _zone_change_review(conn, resolved_object_id, parsed, analysis["match"])
+        analysis["counts"]["zone_binding_changes"] = len(смена_зон)
+        analysis["counts"]["zone_binding_changes_with_progress"] = sum(
+            1 for e in смена_зон if e["current_status"] != "planned")
+        analysis["details"]["zone_binding_changes"] = смена_зон[:element_sync.DETAIL_LIMIT]
         object_row = conn.execute(
             "SELECT name FROM objects WHERE id = ?", (resolved_object_id,)
         ).fetchone()

@@ -10084,7 +10084,11 @@ async function renderUsersTable() {
       <td>${escapeHtml(u.domain_login)}</td>
       <td>${ROLE_LABELS[u.role] || u.role}</td>
       <td>${authMethodLabel(u)}</td>
-      <td>
+      <td class="user-actions">
+        <!-- Сеткой 2×2 (2026-08-05): четыре кнопки в колонку растягивали
+             строку пользователя на четыре, а по ширине ячейка их всё равно
+             не вмещала. -->
+        <div class="user-actions-grid">
         <button class="btn btn-sm btn-secondary" data-edit="${u.id}">Изменить</button>
         <!-- У доменного пользователя пароля сервиса нет и быть не должно —
              сервер такой запрос отклоняет (409), кнопка гасится здесь же,
@@ -10098,6 +10102,7 @@ async function renderUsersTable() {
              собой заходить незачем — кнопка гасится. -->
         <button class="btn btn-sm btn-secondary" data-impersonate="${u.id}"
                 ${u.id === state.currentUser.id ? "disabled title=\"Это вы\"" : ""}>Зайти</button>
+        </div>
       </td>
     </tr>
   `).join("");
@@ -14539,6 +14544,28 @@ function importChangesText(changes) {
   }).join("; ");
 }
 
+// Изделие, упомянутое в любом предупреждении или сводке, — ССЫЛКА на его
+// форму (2026-08-05, запрос пользователя). Одна функция на все места и один
+// делегированный обработчик ниже: сводок с изделиями с полдюжины (импорт
+// чертежа, массовая правка, импорт истории, контрактация), и подключать
+// обработчик в каждой значило бы забыть его в следующей.
+//
+// Без element_id ссылки нет — у новых элементов чертежа его ещё не
+// существует, и открывать нечего.
+function elementLink(elementId, text) {
+  const подпись = escapeHtml(text);
+  if (elementId === null || elementId === undefined) return подпись;
+  return `<button type="button" class="hyperlink" data-open-element="${elementId}"
+    title="Открыть форму изделия">${подпись}</button>`;
+}
+
+document.addEventListener("click", (e) => {
+  const кнопка = e.target.closest("[data-open-element]");
+  if (!кнопка) return;
+  e.preventDefault();
+  openElementForm(Number(кнопка.getAttribute("data-open-element")));
+});
+
 function importDetailSection(title, rows, total, limit, renderRow) {
   if (!total) return "";
   const shown = rows.length;
@@ -14583,6 +14610,9 @@ function openImportReview(analysis) {
        ${importCountLine("сменилась марка", c.mark_changed, conflicts > 0)}
        ${importCountLine("из них перестают соответствовать позиции своего контракта", conflicts, true)}
        ${importCountLine("изменились другие реквизиты (отметка, подтип, этаж)", (c.attribute_changed || 0) - (c.mark_changed || 0))}
+       ${importCountLine("сменится привязка к зонам (захватка, кран, стоянка)", c.zone_binding_changes,
+                         c.zone_binding_changes_with_progress > 0)}
+       ${importCountLine("из них с начатой работой", c.zone_binding_changes_with_progress, true)}
      </div>` +
     (c.mark_changed ? `<label style="display:flex; gap:8px; align-items:center; margin:10px 0">
         <input type="checkbox" id="import-accept-marks" checked/>
@@ -14627,7 +14657,7 @@ function openImportReview(analysis) {
         По умолчанию сохраняются ручные значения; отметьте, что перезаполнить из чертежа.</div>
       <div style="font-size:12px; margin-top:6px">
         ${analysis.details.manual_conflicts.map(row => `<div style="margin-bottom:4px">
-          <b>${escapeHtml(row.element_type || "")} ${escapeHtml(row.mark || "без марки")}</b>
+          <b>${elementLink(row.element_id, `${row.element_type || ""} ${row.mark || "без марки"}`)}</b>
           ${Object.entries(row.changes).map(([field, pair]) => `
             <label style="display:inline-flex; gap:4px; align-items:center; margin-left:10px">
               <input type="checkbox" data-refill="${row.element_id}:${escapeHtml(field)}"/>
@@ -14643,18 +14673,32 @@ function openImportReview(analysis) {
       </label>
     </details>` : "") +
     importDetailSection("Смена марки", analysis.details.mark_changes, c.mark_changed, analysis.detail_limit,
-      r => `<div>${escapeHtml(r.element_type)} ${importChangesText(r.changes)}
+      r => `<div>${elementLink(r.element_id, r.element_type)} ${importChangesText(r.changes)}
              ${r.contract_conflict ? '<span style="color:var(--color-danger)">— не соответствует позиции контракта</span>' : ""}
              ${r.current_status !== "planned" ? `<span class="hint-text">(статус: ${escapeHtml(importStatusLabel(r.current_status))})</span>` : ""}</div>`) +
     importDetailSection("Исчезли из чертежа", analysis.details.retired, c.retired, analysis.detail_limit,
-      r => `<div>${escapeHtml(r.element_type)} ${escapeHtml(r.mark || "без марки")}
+      r => `<div>${elementLink(r.element_id, `${r.element_type} ${r.mark || "без марки"}`)}
              <span class="hint-text">(handle ${escapeHtml(r.dxf_handle)}, статус ${escapeHtml(importStatusLabel(r.current_status))})</span></div>`) +
     importDetailSection("Новые элементы", analysis.details.new, c.new, analysis.detail_limit,
       r => `<div>${escapeHtml(r.element_type)} ${escapeHtml(r.mark || "без марки")}
              <span class="hint-text">(отм. ${r.elevation_mm === null ? "—" : escapeHtml(String(r.elevation_mm))})</span></div>`) +
     importDetailSection("Изменились реквизиты", analysis.details.attribute_changes,
       (c.attribute_changed || 0) - (c.mark_changed || 0), analysis.detail_limit,
-      r => `<div>${escapeHtml(r.element_type)} ${importChangesText(r.changes)}</div>`);
+      r => `<div>${elementLink(r.element_id, r.element_type)} ${importChangesText(r.changes)}</div>`) +
+    // Смена привязки к зонам (2026-08-05, запрос пользователя). Раздел
+    // ОТКРЫТ по умолчанию, когда среди переезжающих есть изделия с начатой
+    // работой: «захватка 3 → захватка 4» у смонтированного изделия means,
+    // что отчёты по захваткам за прошлые недели перестанут сходиться, и
+    // узнать об этом надо ДО применения, а не из отчёта через месяц.
+    importDetailSection("Сменится привязка к зонам", analysis.details.zone_binding_changes,
+      c.zone_binding_changes, analysis.detail_limit,
+      r => `<div>${elementLink(r.element_id, `${r.element_type} ${r.mark || "без марки"}`)}
+             ${Object.entries(r.changes).map(([категория, пара]) =>
+               `<span class="hint-text">${escapeHtml(категория)}:</span>
+                ${escapeHtml(пара[0] || "нет")} → <b>${escapeHtml(пара[1] || "нет")}</b>`).join("; ")}
+             ${r.current_status !== "planned"
+               ? `<span style="color:var(--color-danger)">(работа начата: ${escapeHtml(importStatusLabel(r.current_status))})</span>`
+               : ""}</div>`);
 
   const refillAll = document.getElementById("import-refill-all");
   if (refillAll) {
@@ -17705,7 +17749,13 @@ document.getElementById("bulk-edit-analyze").addEventListener("click", async () 
       rej.innerHTML = `<b>Не может быть применено (${data.rejected.length}):</b>`;
       data.rejected.forEach((r) => {
         const d = document.createElement("div");
-        d.textContent = `стр. ${r.line}: ${r.reason}`;
+        // Изделие в отказе — ссылкой на его форму (2026-08-05): у части
+        // отказов элемент опознан (правка не прошла проверку), и «стр. 412:
+        // подтип не из справочника» без возможности открыть изделие
+        // заставляет искать его руками по UID.
+        d.innerHTML = `стр. ${r.line}: ${escapeHtml(r.reason)}`
+          + (r.element_id ? ` — ${elementLink(r.element_id,
+               `${r.element_type || ""} ${r.mark || "без марки"}`.trim())}` : "");
         rej.appendChild(d);
       });
     }
