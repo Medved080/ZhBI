@@ -12914,6 +12914,156 @@ const IN_DEVELOPMENT_NOTE =
   "ОТЧЁТ В РАЗРАБОТКЕ: данные могут быть неполными или неверными, "
   + "использовать для принятия решений нельзя";
 
+// ==================== «График контрактации и поставки» (2026-08-06) ====================
+//
+// Слева ЗАКРЕПЛЁННЫЕ итоги марки (потребность, законтрактовано, дефицит),
+// справа календарь накопительным итогом. Закреплены именно эти колонки:
+// прокрутив календарь на полгода вправо, без них не понять, чью строку
+// читаешь и хватает ли по ней вообще.
+//
+// Накопление считает КЛИЕНТ по разреженным приращениям сервера (см.
+// app/report_contracting.py): марок под тысячу, периодов при масштабе «по
+// дням» сотни, и плотная матрица на четыре шкалы — это миллионы чисел на
+// каждое открытие. Накапливаем только то, что рисуем.
+const CS_SERIES = [
+  { key: "need", label: "Потребность", css: "cs-need" },
+  { key: "contracted", label: "Законтрактовано", css: "cs-contracted" },
+  { key: "planned", label: "План поставки", css: "cs-planned" },
+  { key: "fact", label: "Факт", css: "cs-fact" },
+];
+
+// Развёрнутые марки — по ключу «тип|марка». Живёт вне reportData: перестройка
+// отчёта (смена масштаба) не должна схлопывать то, что человек раскрыл.
+let csExpanded = new Set();
+
+// Сколько строк рисуем за раз. Ограничение НЕ косметическое: при масштабе
+// «по дням» периодов выходит за триста, марок на объекте под тысячу, и
+// таблица целиком — это больше миллиона ячеек. Первая версия без предела
+// вешала вкладку намертво (замерено: отрисовка не завершалась за 30 с).
+//
+// Предел по ЯЧЕЙКАМ, а не по строкам: при «по кварталам» колонок пять, и
+// резать там до сотни марок незачем — читается всё сразу.
+const CS_CELL_BUDGET = 40000;
+let csShownRows = 0;   // сколько строк показано сейчас; 0 = пересчитать от бюджета
+
+function csCumulative(deltas, длина) {
+  const ряд = new Array(длина).fill(0);
+  let сумма = 0;
+  for (let i = 0; i < длина; i++) {
+    сумма += deltas[i] || 0;
+    ряд[i] = сумма;
+  }
+  return ряд;
+}
+
+function csRowKey(r) {
+  return `${r.element_type || ""}|${r.mark}`;
+}
+
+// Ячейка календаря: четыре числа в одной клетке периода. Ноль не печатаем —
+// на сотне колонок нули превращают таблицу в шум, а смысл несут переходы.
+function csCellHtml(ряды, i) {
+  const части = CS_SERIES.map(с => {
+    const v = ряды[с.key][i];
+    return v ? `<span class="${с.css}">${v}</span>` : `<span class="cs-zero">·</span>`;
+  });
+  return `<td class="cs-cell">${части.join(" ")}</td>`;
+}
+
+function csSeries(источник, длина) {
+  const ряды = {};
+  for (const с of CS_SERIES) ряды[с.key] = csCumulative(источник.deltas[с.key] || {}, длина);
+  return ряды;
+}
+
+function renderContractingReport(data) {
+  if (!data || !data.rows.length) {
+    return `<p class="hint-text">Нет изделий с маркой — отчёту нечего показывать.</p>`;
+  }
+  const периодов = data.periods.length;
+  const толькоДефицит = document.getElementById("cs-only-deficit").checked;
+  const всеСтроки = толькоДефицит ? data.rows.filter(r => r.deficit > 0) : data.rows;
+  const порция = Math.max(20, Math.floor(CS_CELL_BUDGET / Math.max(периодов, 1)));
+  if (!csShownRows) csShownRows = порция;
+  const строки = всеСтроки.slice(0, csShownRows);
+  const остаток = всеСтроки.length - строки.length;
+
+  const шапка = `<thead>
+    <tr>
+      <th class="cs-sticky cs-c1">Тип</th>
+      <th class="cs-sticky cs-c2">Марка</th>
+      <th class="cs-sticky cs-c3 num">Потребность</th>
+      <th class="cs-sticky cs-c4 num">Законтрактовано</th>
+      <th class="cs-sticky cs-c5 num">Дефицит</th>
+      ${data.periods.map(p => `<th class="cs-period">${escapeHtml(p.label)}</th>`).join("")}
+    </tr>
+  </thead>`;
+
+  const итог = csSeries(data.totals, периодов);
+  const телоИтога = `<tr class="cs-total">
+      <td class="cs-sticky cs-c1" colspan="2">Итого по объекту</td>
+      <td class="cs-sticky cs-c3 num">${data.totals.need}</td>
+      <td class="cs-sticky cs-c4 num">${data.totals.contracted}</td>
+      <td class="cs-sticky cs-c5 num ${data.totals.deficit > 0 ? "cs-deficit" : ""}">${data.totals.deficit}</td>
+      ${data.periods.map((_, i) => csCellHtml(итог, i)).join("")}
+    </tr>`;
+
+  const части = [];
+  for (const r of строки) {
+    const ключ = csRowKey(r);
+    const развёрнута = csExpanded.has(ключ);
+    const ряды = csSeries(r, периодов);
+    части.push(`<tr class="cs-mark" data-cs-key="${escapeHtml(ключ)}">
+      <td class="cs-sticky cs-c1">${escapeHtml(r.element_type || "—")}</td>
+      <td class="cs-sticky cs-c2">
+        <button type="button" class="link-like cs-toggle">${развёрнута ? "▾" : "▸"} ${escapeHtml(r.mark)}</button>
+        ${r.children.length ? `<span class="hint-text">(${r.children.length})</span>` : ""}
+      </td>
+      <td class="cs-sticky cs-c3 num">${r.need}</td>
+      <td class="cs-sticky cs-c4 num">${r.contracted}</td>
+      <td class="cs-sticky cs-c5 num ${r.deficit > 0 ? "cs-deficit" : ""}">${r.deficit}</td>
+      ${data.periods.map((_, i) => csCellHtml(ряды, i)).join("")}
+    </tr>`);
+    if (!развёрнута) continue;
+    if (!r.children.length) {
+      части.push(`<tr class="cs-child"><td class="cs-sticky cs-c1"></td>
+        <td class="cs-sticky cs-c2" colspan="4"><span class="hint-text">контрактов по этой марке нет</span></td>
+        ${data.periods.map(() => "<td></td>").join("")}</tr>`);
+      continue;
+    }
+    for (const c of r.children) {
+      const дет = csSeries(c, периодов);
+      части.push(`<tr class="cs-child">
+        <td class="cs-sticky cs-c1"></td>
+        <td class="cs-sticky cs-c2">${escapeHtml(c.counterparty || "—")}</td>
+        <td class="cs-sticky cs-c3" title="${escapeHtml(документНадпись(c.agreement, c.agreement_date))}">${escapeHtml(документНадпись(c.agreement, c.agreement_date))}</td>
+        <td class="cs-sticky cs-c4" title="${escapeHtml(документНадпись(c.specification, c.specification_date))}">${escapeHtml(документНадпись(c.specification, c.specification_date))}</td>
+        <td class="cs-sticky cs-c5 num">${c.contracted}</td>
+        ${data.periods.map((_, i) => csCellHtml(дет, i)).join("")}
+      </tr>`);
+    }
+  }
+
+  const легенда = CS_SERIES.map(с => `<span class="${с.css}">■</span> ${с.label}`).join(" · ");
+  return `<div class="hint-text cs-legend">В клетке накопительным итогом: ${легенда}.
+      Масштаб — ${escapeHtml(data.scale_label)}; периодов ${периодов}.
+      ${толькоДефицит ? "Показаны только марки с дефицитом." : ""}</div>
+    <div class="cs-scroll"><table class="cs-table">${шапка}
+      <tbody>${телоИтога}${части.join("")}</tbody></table></div>
+    ${остаток > 0 ? `<div class="hint-text cs-more">
+      Показано ${строки.length} марок из ${всеСтроки.length} — самые дефицитные сверху.
+      <button type="button" class="link-like" id="cs-more">Показать ещё ${Math.min(остаток, порция)}</button>
+      </div>` : ""}`;
+}
+
+// Реквизиты документа — тем же форматом, что в интерфейсе и в выгрузках
+// (build_document_label на сервере): «НОМЕР от ДД.ММ.ГГГГ», без даты просто
+// номер.
+function документНадпись(номер, дата) {
+  if (!номер) return "—";
+  return дата ? `${номер} от ${formatDateRu(дата)}` : номер;
+}
+
 const REPORTS = {
   status: {
     title: "Статус монтажа",
@@ -12958,6 +13108,17 @@ const REPORTS = {
     endpoint: "/reports/my-work",
     render: renderMyWorkReport,
     needsWorkPeriod: true,
+  },
+  // «График контрактации и поставки» (живой запрос 2026-08-06) — насколько
+  // потребность стройки закрыта контрактами, по маркам и во времени
+  // (см. app/report_contracting.py). Широкий: слева итоги, справа календарь
+  // на десятки колонок.
+  contracting: {
+    title: "График контрактации и поставки",
+    endpoint: "/reports/contracting-schedule",
+    render: renderContractingReport,
+    needsScale: true,
+    wide: true,
   },
 };
 let currentReport = "status";
@@ -13012,6 +13173,9 @@ function reportRequestBody() {
   }
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
+  }
+  if (REPORTS[currentReport].needsScale) {
+    body.scale = document.getElementById("cs-scale").value;
   }
   if (REPORTS[currentReport].needsDate) {
     body.report_date = document.getElementById("report-date").value || null;
@@ -13874,6 +14038,15 @@ async function loadReport() {
     } else if (def.flatList) {
       // Строка = отдельное изделие (группировки нет), поэтому число одно.
       statusLine.textContent = `Позиций: ${reportData.total.count}`;
+    } else if (def.needsScale) {
+      // «График контрактации»: главное число — не «сколько изделий», а
+      // разрыв между потребностью и контрактами. Его и выносим в строку
+      // состояния, чтобы ответ был виден до прокрутки таблицы.
+      const т = reportData.totals;
+      statusLine.textContent =
+        `Марок: ${reportData.rows.length}. Потребность: ${т.need}, законтрактовано: ${т.contracted}` +
+        (т.deficit > 0 ? `, не хватает: ${т.deficit}` : ", потребность закрыта полностью") +
+        `. План поставки: ${т.planned}, факт: ${т.fact}`;
     } else {
       statusLine.textContent = reportData.total
         ? `Всего изделий: ${reportData.total.values.total}`
@@ -13907,6 +14080,7 @@ async function switchReport(key) {
   document.getElementById("report-date-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-period-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
+  document.getElementById("report-contracting-box").style.display = REPORTS[key].needsScale ? "" : "none";
   document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
   document.getElementById("report-use-filter-box").style.display = REPORTS[key].needsWorkPeriod ? "none" : "";
   // Галочка «учитывать фильтр» — со СВОИМ состоянием у каждого отчёта (см.
@@ -13952,7 +14126,34 @@ for (const id of ["mw-from", "mw-to", "mw-user"]) {
   document.getElementById(id).addEventListener("change", loadReport);
 }
 
+// Масштаб оси — перезапрос: периоды считает сервер. Фильтр «только дефицит»
+// — перерисовка без запроса: данные те же, меняется набор показанных строк.
+document.getElementById("cs-scale").addEventListener("change", () => {
+  csShownRows = 0;   // при другом масштабе в бюджет ячеек влезает другое число строк
+  loadReport();
+});
+document.getElementById("cs-only-deficit").addEventListener("change", () => {
+  csShownRows = 0;
+  if (currentReport === "contracting" && reportData) {
+    document.getElementById("report-body").innerHTML = renderContractingReport(reportData);
+  }
+});
+
 document.getElementById("report-body").addEventListener("click", (e) => {
+  // Разворот марки в расшифровку по контрактации.
+  if (e.target.id === "cs-more") {
+    const периодов = reportData.periods.length;
+    csShownRows += Math.max(20, Math.floor(CS_CELL_BUDGET / Math.max(периодов, 1)));
+    document.getElementById("report-body").innerHTML = renderContractingReport(reportData);
+    return;
+  }
+  const переключатель = e.target.closest(".cs-toggle");
+  if (переключатель) {
+    const ключ = переключатель.closest("[data-cs-key]").dataset.csKey;
+    if (csExpanded.has(ключ)) csExpanded.delete(ключ); else csExpanded.add(ключ);
+    document.getElementById("report-body").innerHTML = renderContractingReport(reportData);
+    return;
+  }
   if (e.target.classList.contains("dyn-edit")) {
     openReportNotes(document.getElementById("report-date").value || null);
     return;

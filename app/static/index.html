@@ -2037,6 +2037,53 @@
   }
   #contracts-list { background: var(--color-surface-2); border-radius: var(--radius); padding: 4px 10px 10px; }
 
+  /* -------- «График контрактации и поставки» (2026-08-06) -------- */
+  /* Прокрутка ТОЛЬКО у таблицы, а не у формы: закреплённые слева колонки
+     держатся на position:sticky, а он считается от ближайшего предка со
+     скроллом — вынеси прокрутку выше, и колонки поедут вместе с календарём. */
+  .cs-scroll { overflow: auto; max-height: 64vh; }
+  .cs-table { border-collapse: separate; border-spacing: 0; font-size: 11px; white-space: nowrap; }
+  .cs-table th, .cs-table td {
+    padding: 3px 6px; border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface); text-align: left;
+  }
+  .cs-table thead th { position: sticky; top: 0; z-index: 3; font-weight: 600;
+    color: var(--color-text-muted); }
+  /* Пять закреплённых колонок слева. Смещения заданы числами: считать их
+     из ширин в JS значило бы пересчитывать на каждый ререндер и всё равно
+     промахиваться на дробных пикселях. Ширины ниже фиксированные — из них
+     смещения и складываются. */
+  .cs-sticky { position: sticky; z-index: 2; }
+  .cs-table thead .cs-sticky { z-index: 4; }
+  .cs-c1 { left: 0;     min-width: 96px;  max-width: 96px; }
+  .cs-c2 { left: 96px;  min-width: 132px; max-width: 132px; }
+  .cs-c3 { left: 228px; min-width: 96px;  max-width: 96px; }
+  .cs-c4 { left: 324px; min-width: 118px; max-width: 118px; }
+  .cs-c5 { left: 442px; min-width: 78px;  max-width: 78px;
+    box-shadow: 1px 0 0 var(--color-border); }
+  /* Закреплённые колонки фиксированной ширины, и длинный текст (реквизиты
+     договора в расшифровке) обрезается многоточием, а не режется на
+     полсимвола. Полное значение — в подсказке при наведении. */
+  .cs-sticky { overflow: hidden; text-overflow: ellipsis; }
+  .cs-table td.num, .cs-table th.num { text-align: right; }
+  .cs-period { min-width: 92px; text-align: center !important; }
+  .cs-cell { text-align: center; }
+  /* Четыре шкалы различаются ЦВЕТОМ, а не подписью: подписать каждое число
+     в клетке значит не поместить в неё ничего. Легенда — над таблицей. */
+  .cs-need { color: var(--color-text); font-weight: 600; }
+  .cs-contracted { color: #b4690e; }
+  .cs-planned { color: #1353d6; }
+  .cs-fact { color: var(--color-success); }
+  .cs-zero { color: var(--color-border); }
+  .cs-deficit { color: var(--color-danger); font-weight: 700; }
+  .cs-total td { font-weight: 600; background: var(--color-surface-2); }
+  .cs-child td { background: var(--color-surface-2); }
+  .cs-child .cs-c2 { padding-left: 14px; }
+  .cs-legend { margin-bottom: 6px; }
+  .cs-legend .cs-need, .cs-legend .cs-contracted,
+  .cs-legend .cs-planned, .cs-legend .cs-fact { font-size: 13px; }
+  .cs-toggle { font: inherit; }
+
   /* ==================== КАРТОЧКИ ЗАПИСЕЙ В ОСТАЛЬНЫХ ФОРМАХ ====================
      (2026-08-05, живой запрос «сделай аналогично во всех остальных формах»)
 
@@ -4158,6 +4205,7 @@
           <button type="button" class="report-tab" data-report="delivery">График поставки <span class="in-dev-mark">(в разработке)</span></button>
           <button type="button" class="report-tab" data-report="completion">Статус комплектации</button>
           <button type="button" class="report-tab" data-report="mywork">Моя работа</button>
+          <button type="button" class="report-tab" data-report="contracting">График контрактации и поставки</button>
         </div>
         <!-- «Моя работа»: период (по умолчанию текущий день) и выбор
              пользователя. Список пользователей приходит с сервера вместе с
@@ -4225,6 +4273,21 @@
           <span class="hint-text">Группировка:</span>
           <span id="ds-groups"></span>
         </div>
+      </div>
+      <!-- Масштаб оси времени «Графика контрактации и поставки». Это
+           ГРУППИРОВКА колонок, а не пересчёт: числа те же, меняется только
+           ширина шага. -->
+      <div class="ds-controls" id="report-contracting-box" style="display:none">
+        <label class="field">Масштаб
+          <select id="cs-scale" style="width:auto">
+            <option value="day">По дням</option>
+            <option value="week">По неделям</option>
+            <option value="month" selected>По месяцам</option>
+            <option value="quarter">По кварталам</option>
+          </select>
+        </label>
+        <label class="toggle"><input type="checkbox" id="cs-only-deficit"/>
+          Только марки с дефицитом</label>
       </div>
       <!-- Сужение фильтром схемы к «Моей работе» неприменимо: там строки —
            события журнала, а не изделия, и часть из них к изделиям вообще

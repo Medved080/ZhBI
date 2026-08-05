@@ -95,6 +95,7 @@ from app.reports import (
     build_status_report, build_status_report_pdf, build_status_report_xlsx,
     in_development_title,
 )
+from app.report_contracting import build_contracting_schedule
 from app.report_completion import (
     build_completion_report, build_completion_report_pdf, build_completion_report_xlsx,
 )
@@ -1128,6 +1129,9 @@ class ReportRequestIn(BaseModel):
     # выводится из чертежа (_report_object_id) — так же, как это делает
     # показ схемы.
     object_id: Optional[int] = None
+    # Масштаб оси времени — только для «Графика контрактации и поставки»:
+    # день/неделя/месяц/квартал. Это группировка колонок, а не пересчёт.
+    scale: Optional[str] = None
     # Отчётная дата — только для «Динамики» (ежедневный отчёт «на дату»).
     # Пусто = сегодня; сервер возвращает фактически применённую дату.
     report_date: Optional[str] = None
@@ -1331,6 +1335,30 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
     (аудит безопасности 2026-08-03)."""
     body = _guard_report(conn, user, body)
     return build_completion_report(conn, body.source_file, body.element_ids)
+
+
+@app.post("/reports/contracting-schedule")
+def report_contracting_schedule(body: ReportRequestIn,
+                                user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «График контрактации и поставки» (2026-08-06): насколько
+    потребность стройки закрыта контрактами — по маркам и во времени.
+
+    Масштаб оси времени приходит в `scale` (день/неделя/месяц/квартал) — это
+    только группировка колонок, сами данные от него не зависят.
+    """
+    conn = get_connection()
+    try:
+        body = _guard_report(conn, user, body)
+        object_id = _report_object_id(conn, body)
+        if object_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Отчёт строится по объекту — выберите объект в тулбаре")
+        # Доступ проверен _guard_report по source_file; объект берётся из
+        # него же, поэтому чужой сюда не пройдёт.
+        return build_contracting_schedule(conn, object_id, body.scale or "month")
+    finally:
+        conn.close()
 
 
 @app.post("/reports/completion")
