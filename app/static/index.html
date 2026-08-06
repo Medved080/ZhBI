@@ -1686,7 +1686,14 @@
      отправляет пункт в хвост, не трогая ни разметку, ни настройки.
      Сама пометка «(в разработке)» бледной НЕ становится — она и должна
      оставаться заметной; гасится только название. */
-  .menu-item-in-dev, .report-tab.in-dev { order: 1; opacity: .62; }
+  /* `order` — только у ПРЯМЫХ детей списка. На кнопке внутри строки режима
+     настройки он переставлял её за звёздочку: название уезжало вправо,
+     звёздочка вставала слева (живой репорт «что за каша»). */
+  .submenu-panel > .menu-item-in-dev,
+  .actions-panel-group > .menu-item-in-dev,
+  .actions-panel-sub > .menu-item-in-dev,
+  .report-tab.in-dev { order: 1; }
+  .menu-item-in-dev, .report-tab.in-dev { opacity: .62; }
   /* Блок панели действий и его подгруппы — тоже flex-колонки: `order` без
      этого не работает, и в панели пункт «в разработке» остался бы на своём
      месте, хотя в выпадающем меню уехал в конец (поймано живой проверкой). */
@@ -2334,14 +2341,22 @@
   /* Избранное жирным — правило выше, рядом с menu-item-strong: голого класса
      не хватало по специфичности (см. пояснение там). Класс вешается на
      ИСХОДНУЮ кнопку меню, а панель копирует смысловые классы к себе. */
-  .actions-panel.customizing button { cursor: grab; }
-  .actions-panel.customizing button:active { cursor: grabbing; }
-  /* Перетаскиваемый пункт и место, куда он встанет. Подсветка рамкой снизу,
-     а не вставкой пустого блока: вставка меняла бы высоту списка на каждое
-     движение мыши, и пункты прыгали бы под курсором. */
-  .actions-panel button.dragging { opacity: .4; }
-  .actions-panel button.drop-before { box-shadow: inset 0 2px 0 var(--color-primary); }
-  .actions-panel button.drop-after { box-shadow: inset 0 -2px 0 var(--color-primary); }
+  /* Ручка перетаскивания слева от названия (2026-08-06). Тащить можно
+     только за неё: раньше перетаскивалась вся кнопка, и человек, целясь в
+     пункт, вместо выбора начинал его двигать. */
+  .drag-handle {
+    cursor: grab; color: var(--color-text-muted); font-size: 13px; line-height: 1;
+    padding: 0 4px; user-select: none; flex: 0 0 auto;
+  }
+  .drag-handle:active { cursor: grabbing; }
+  /* Перетаскиваемый пункт убирается из потока целиком, а его место
+     показывает распорка — соседние пункты раздвигаются, и видно, куда
+     пункт встанет. */
+  .actions-panel .actions-panel-item.dragging { display: none; }
+  .drop-slot {
+    border: 1px dashed var(--color-primary); border-radius: var(--radius-sm);
+    background: var(--color-accent-soft); margin: 2px 0;
+  }
   /* Звёздочка отметки избранного — только в режиме настройки. */
   .fav-toggle {
     border: none; background: none; cursor: pointer; padding: 0 4px;

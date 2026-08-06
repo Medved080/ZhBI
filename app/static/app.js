@@ -7349,11 +7349,23 @@ function кнопкаПанели(оригинал) {
   if (оригинал.classList.contains("menu-item-favorite")) b.classList.add("menu-item-favorite");
   if (!menuCustomizing) return b;
 
-  // В режиме настройки пункт заворачивается в строку со звёздочкой: сама
-  // кнопка остаётся кнопкой (её же и перетаскивают), звёздочка — отдельный
-  // переключатель избранного.
+  // В режиме настройки пункт заворачивается в строку: слева — «ручка» для
+  // перетаскивания, дальше сама кнопка, справа звёздочка избранного.
+  //
+  // Ручка (2026-08-06, живой репорт): тащить можно ТОЛЬКО за неё. Раньше
+  // перетаскивалась вся кнопка, и человек, целясь в пункт, вместо выбора
+  // начинал его двигать — а в режиме настройки это единственное, что с
+  // пунктом вообще происходит, и промахнуться было нечем.
   const строка = document.createElement("div");
   строка.className = "actions-panel-item";
+  // Смысловые классы — НА ОБЁРТКУ, а не на кнопку внутри. У «в разработке»
+  // есть `order: 1`, и на кнопке внутри строки он переставлял её за
+  // звёздочку: название уезжало вправо, звёздочка вставала слева (живой
+  // репорт «что за каша»). Порядок относится к пункту в списке, а не к
+  // кнопке внутри пункта.
+  for (const класс of ["menu-item-in-dev"]) {
+    if (b.classList.contains(класс)) { b.classList.remove(класс); строка.classList.add(класс); }
+  }
   if (оригинал.id) {
     строка.dataset.menuId = оригинал.id;
     // Снимаем признак с самой кнопки: он переехал на обёртку, а два узла с
@@ -7362,6 +7374,12 @@ function кнопкаПанели(оригинал) {
     // "menu-element-catalog", "menu-objects"]).
     delete b.dataset.menuId;
   }
+  const ручка = document.createElement("span");
+  ручка.className = "drag-handle";
+  ручка.title = "Перетащите, чтобы переставить пункт";
+  ручка.setAttribute("aria-hidden", "true");
+  ручка.textContent = "⠿";
+  строка.appendChild(ручка);
   строка.appendChild(b);
   const звезда = document.createElement("button");
   звезда.type = "button";
@@ -7418,6 +7436,7 @@ function renderActionsPanel() {
     const имяГруппы = группа.querySelector(":scope > .submenu-trigger").textContent.trim();
     const блок = document.createElement("div");
     блок.className = "actions-panel-group";
+    if (menuCustomizing) включитьПриёмБроска(блок);
     const заголовок = document.createElement("h4");
     заголовок.textContent = группа.querySelector(":scope > .submenu-trigger").textContent.trim();
     блок.appendChild(заголовок);
@@ -7425,6 +7444,7 @@ function renderActionsPanel() {
       if (!пункт.classList.contains("submenu")) { блок.appendChild(кнопкаПанели(пункт)); continue; }
       const под = document.createElement("div");
       под.className = "actions-panel-sub";
+      if (menuCustomizing) включитьПриёмБроска(под);
       const h5 = document.createElement("h5");
       h5.textContent = пункт.querySelector(":scope > .submenu-trigger").textContent.trim();
       под.appendChild(h5);
@@ -7497,20 +7517,54 @@ function собратьПорядокИзПанели() {
 // Перетаскивание — родное HTML5 drag&drop, без библиотеки: список короткий,
 // вложенности нет, а вендорить ради этого чужой код в проект, где каждое
 // вендорение согласуется отдельно, незачем.
+//
+// Целевое место показывается ПУСТЫМ МЕСТОМ (2026-08-06, живой запрос):
+// на время перетаскивания сам пункт из потока убирается, а вместо него
+// ездит распорка той же высоты — соседние пункты раздвигаются, и видно,
+// куда именно пункт встанет. Прежняя подсветка рамкой отвечала на тот же
+// вопрос хуже: линия сверху или снизу читается одинаково и не показывает,
+// что список при этом сдвинется.
 let перетаскиваемый = null;
+let местоВставки = null;   // распорка, показывающая целевую позицию
+
+function создатьМесто(высота) {
+  const место = document.createElement("div");
+  место.className = "drop-slot";
+  место.style.height = высота + "px";
+  return место;
+}
+
+function убратьМесто() {
+  if (местоВставки) местоВставки.remove();
+  местоВставки = null;
+}
 
 function включитьПеретаскивание(обёртка) {
-  обёртка.draggable = true;
+  const ручка = обёртка.querySelector(".drag-handle");
+  // draggable включается только на время нажатия НА РУЧКЕ: иначе браузер
+  // начинает перетаскивание с любого места строки, в том числе с кнопки и
+  // со звёздочки.
+  if (ручка) {
+    ручка.addEventListener("mousedown", () => { обёртка.draggable = true; });
+    ручка.addEventListener("mouseup", () => { обёртка.draggable = false; });
+  }
   обёртка.addEventListener("dragstart", (e) => {
     перетаскиваемый = обёртка;
-    обёртка.classList.add("dragging");
     e.dataTransfer.effectAllowed = "move";
     // Firefox не начинает перетаскивание без данных в буфере.
     e.dataTransfer.setData("text/plain", обёртка.dataset.menuId || "");
+    const высота = обёртка.getBoundingClientRect().height;
+    местоВставки = создатьМесто(высота);
+    обёртка.parentElement.insertBefore(местоВставки, обёртка);
+    // Убираем пункт из потока СЛЕДУЮЩИМ кадром: спрячь его сразу — и
+    // браузер не успеет снять с него картинку перетаскивания, курсор
+    // потащит пустоту.
+    requestAnimationFrame(() => обёртка.classList.add("dragging"));
   });
   обёртка.addEventListener("dragend", () => {
     обёртка.classList.remove("dragging");
-    очиститьПодсветкуМест();
+    обёртка.draggable = false;
+    убратьМесто();
     перетаскиваемый = null;
   });
   обёртка.addEventListener("dragover", (e) => {
@@ -7519,26 +7573,30 @@ function включитьПеретаскивание(обёртка) {
     // подгруппы) переставлять нечего — блок это раздел системы, а не папка.
     if (перетаскиваемый.parentElement !== обёртка.parentElement) return;
     e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
     const r = обёртка.getBoundingClientRect();
     const выше = (e.clientY - r.top) < r.height / 2;
-    очиститьПодсветкуМест();
-    обёртка.classList.add(выше ? "drop-before" : "drop-after");
-  });
-  обёртка.addEventListener("drop", async (e) => {
-    if (!перетаскиваемый || перетаскиваемый.parentElement !== обёртка.parentElement) return;
-    e.preventDefault();
-    const r = обёртка.getBoundingClientRect();
-    const выше = (e.clientY - r.top) < r.height / 2;
-    обёртка.parentElement.insertBefore(перетаскиваемый, выше ? обёртка : обёртка.nextSibling);
-    очиститьПодсветкуМест();
-    menuPrefs.order = собратьПорядокИзПанели();
-    applyMenuPrefs();
+    if (!местоВставки) return;
+    обёртка.parentElement.insertBefore(местоВставки, выше ? обёртка : обёртка.nextSibling);
   });
 }
 
-function очиститьПодсветкуМест() {
-  document.querySelectorAll("#actions-panel-body .drop-before, #actions-panel-body .drop-after")
-    .forEach(el => el.classList.remove("drop-before", "drop-after"));
+// Бросок ловится на СПИСКЕ, а не на соседнем пункте: пункт под курсором в
+// этот момент уже сдвинут распоркой, и попасть точно в него не обязано.
+// Список знает, где стоит распорка, — этого достаточно.
+function включитьПриёмБроска(список) {
+  список.addEventListener("dragover", (e) => {
+    if (перетаскиваемый && перетаскиваемый.parentElement === список) e.preventDefault();
+  });
+  список.addEventListener("drop", (e) => {
+    if (!перетаскиваемый || !местоВставки || перетаскиваемый.parentElement !== список) return;
+    e.preventDefault();
+    список.insertBefore(перетаскиваемый, местоВставки);
+    перетаскиваемый.classList.remove("dragging");
+    убратьМесто();
+    menuPrefs.order = собратьПорядокИзПанели();
+    applyMenuPrefs();
+  });
 }
 
 document.getElementById("actions-panel-close").addEventListener("click", async () => {
