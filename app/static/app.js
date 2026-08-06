@@ -5002,7 +5002,17 @@ function showPlaceholderCard() {
 // уже несёт всю цепочку — резолвить контракт целиком нужно только для
 // подписи, отдельного запроса на элемент не требуется.
 function contractDetailsHtml(element) {
-  if (!element.contract_id) return `<div class="hint-text">Контракт не назначен</div>`;
+  if (!element.contract_id) {
+    // Изделие УЖЕ в работе, а контракта нет: в остатки оно не попадает, и
+    // до 2026-08-06 вернуть его туда можно было только откатом статуса и
+    // повторным переводом — то есть враньём в истории ради реквизита.
+    // Теперь по щелчку открывается тот же подбор контракта, что и при
+    // уходе с «Запланирован», но статус не трогается.
+    const можно = element.current_status !== "planned" && canEditOnObject();
+    if (!можно) return `<div class="hint-text">Контракт не назначен</div>`;
+    return `<button type="button" class="card-pick-contract" data-pick-contract="${element.id}">
+      Контракт не назначен <span class="hint-text">— выбрать</span></button>`;
+  }
   const c = state.contracts.find(c => c.id === element.contract_id);
   if (!c) return `<div class="hint-text">#${element.contract_id}</div>`;
   const counterpartyText = c.counterparty_code
@@ -6043,6 +6053,55 @@ document.getElementById("cp-cancel").addEventListener("click", () => {
   contractPickTarget = null;
   contractPickBackdrop.classList.remove("open");
 });
+
+// Клик по «Контракт не назначен» в карточке — делегированно на #card:
+// карточка перерисовывается целиком на каждый выбор изделия, и обработчик,
+// повешенный на саму кнопку, пришлось бы вешать заново при каждой отрисовке.
+document.getElementById("card").addEventListener("click", (e) => {
+  const кнопка = e.target.closest("[data-pick-contract]");
+  if (!кнопка) return;
+  const элемент = state.byId.get(Number(кнопка.dataset.pickContract));
+  if (элемент) openCardContractPicker(элемент);
+});
+
+// ---------- назначение контракта БЕЗ смены статуса (2026-08-06) ----------
+//
+// Тот же список с остатками по позициям, что и при уходе с «Запланирован»
+// (mountContractPicker), — второй способ выбирать контракт развёл бы два
+// набора правил, а правило тут одно: показывать контракты, где есть позиция
+// под марку этого изделия, и сколько по ней осталось.
+async function openCardContractPicker(element) {
+  document.getElementById("cp-element").textContent =
+    `${element.mark || `#${element.id}`} · ${element.element_type}`;
+  mountContractPicker(document.getElementById("cp-list"), document.getElementById("cp-legend"), {
+    scope: contractScopeForElement(element), selectedId: "",
+    // «Без контракта» здесь не предлагается: контракта у изделия и так нет,
+    // а «не выбрано» — это просто закрыть окно.
+    leading: [],
+    onPick: async (value) => {
+      contractPickBackdrop.classList.remove("open");
+      if (!value || value === "none") return;
+      try {
+        const обновлён = await api(`/elements/${element.id}/contract`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contract_id: Number(value) }),
+        });
+        // Обновляем ровно то, на что влияет контракт: сам элемент,
+        // допстрока подписи (в ней код контрагента) и карточка. Статус не
+        // менялся, поэтому цвет фигуры и легенда не трогаются.
+        Object.assign(element, обновлён);
+        state.byId.set(element.id, element);
+        clearContractPositionsCache();   // «разнесено» по позиции изменилось
+        updateElementSubLabel(element);
+        showCard(element);
+        showToast("Контракт назначен. Статус не изменён.", "success");
+      } catch (e) {
+        showToast("Не удалось назначить контракт: " + e.message, "error");
+      }
+    },
+  });
+  contractPickBackdrop.classList.add("open");
+}
 
 function renderBulkStatusTable() {
   const tbody = document.getElementById("bulk-status-tbody");

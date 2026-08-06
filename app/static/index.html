@@ -1221,6 +1221,14 @@
   .filter-group-header .link-btn:disabled { opacity: .4; cursor: default; text-decoration: none; }
   .card-block { margin-bottom: 14px; }
   .card-block h4 { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 4px; font-weight: 600; }
+  /* «Контракт не назначен» в карточке — кликабельно, когда изделие уже в
+     работе (2026-08-06). Выглядит как ссылка, а не как кнопка: это не
+     действие над схемой, а переход к выбору. */
+  .card-pick-contract {
+    border: none; background: none; padding: 0; font: inherit; cursor: pointer;
+    color: var(--color-primary); text-align: left;
+  }
+  .card-pick-contract:hover { text-decoration: underline; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
 
   /* -------- легенда статусов: сворачиваемая шапка + прокрутка таблицы -------- */

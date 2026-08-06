@@ -184,11 +184,18 @@ def _resolve_element_type(mark: str, mark_lookup: dict[str, str], prefix_map: di
     # перед сравнением с префиксом — иначе "Р" не совпадёт с началом
     # строки "3Р19.6" (см. Docs/backlog.md, тот же приём уже
     # использовался при анализе образца файла на этапе планирования).
-    mark_for_prefix = _LEADING_DIGITS_RE.sub("", mark)
+    mark_for_prefix = _LEADING_DIGITS_RE.sub("", mark).lower()
     best_prefix, best_type = None, None
     for prefix, element_type in prefix_map.items():
-        if mark_for_prefix.startswith(prefix) and (best_prefix is None or len(prefix) > len(best_prefix)):
-            best_prefix, best_type = prefix, element_type
+        # Сравнение БЕЗ УЧЁТА РЕГИСТРА (2026-08-06): марка «15кс1.1» и марка
+        # «15КС1.1» — одно и то же изделие, и префикс «Кс» обязан узнавать
+        # обе. До этой правки сравнение было точным, и справочник префиксов
+        # приходилось держать с регистровыми двойниками («КН» и «Кн», «Кс» и
+        # «кс» — они и сейчас есть в сидинге, см. _MARK_TYPE_PREFIX_SEED).
+        # Двойники стали безвредны, но больше не нужны.
+        ключ = prefix.lower()
+        if mark_for_prefix.startswith(ключ) and (best_prefix is None or len(ключ) > len(best_prefix)):
+            best_prefix, best_type = ключ, element_type
     return best_type
 
 

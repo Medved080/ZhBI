@@ -890,6 +890,85 @@ class ElementCommentIn(BaseModel):
     comment: Optional[str] = None
 
 
+class ElementContractIn(BaseModel):
+    # None — снять контракт. Отдельного «не менять» здесь нет: запрос
+    # существует ровно ради того, чтобы контракт поставить или снять.
+    contract_id: Optional[int] = None
+
+
+@app.patch("/elements/{element_id}/contract")
+def set_element_contract(element_id: int, body: ElementContractIn,
+                         user: sqlite3.Row = Depends(get_current_user)):
+    """Назначить изделию контракт, НЕ трогая статус (2026-08-06, живой
+    запрос).
+
+    Зачем понадобилось. Контракт проставляется при уходе с «Запланирован» —
+    и это единственный момент, когда система о нём спрашивала. Изделия,
+    прошедшие этот переход до появления контрактов (или восстановленные
+    импортом истории), остались с пустым контрактом и статусом дальше
+    «Запланирован»: в остатки они не попадают, а вернуть их туда можно было
+    только откатом статуса и повторным переводом — то есть враньём в
+    истории ради заполнения реквизита.
+
+    Инвариант «Запланирован ⇒ контракт пуст» держится здесь же, а не
+    доверяется клиенту: запрос на запланированное изделие отклоняется.
+    Порог прав — `user`, тот же, что у смены статуса: назначение контракта
+    и есть часть той операции, просто выполненная отдельно.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, current_status, element_type, mark, contract_id FROM elements WHERE id = ?",
+            (element_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Элемент не найден")
+        _guard_elements(conn, user, [element_id], "user")
+        if row["current_status"] == "planned":
+            raise HTTPException(
+                status_code=409,
+                detail="У изделия в статусе «Запланирован» контракта быть не может — "
+                       "он проставляется при переводе в следующий статус")
+        if body.contract_id is not None:
+            контракт = conn.execute(
+                "SELECT id FROM contracts WHERE id = ?", (body.contract_id,)).fetchone()
+            if контракт is None:
+                raise HTTPException(status_code=404, detail="Контракт не найден")
+            # Контракт обязан относиться к ТОМУ ЖЕ объекту, что и изделие.
+            # Объект контракта не хранится, а выводится по цепочке
+            # контракт → спецификация → договор (schema.sql) — проверяем по
+            # ней. Без этой проверки перебором contract_id изделию своего
+            # объекта можно было бы назначить контракт чужой стройки.
+            объект_контракта = conn.execute(
+                """
+                SELECT a.object_id FROM contracts co
+                JOIN specifications s ON s.id = co.specification_id
+                JOIN agreements a ON a.id = s.agreement_id
+                WHERE co.id = ?
+                """,
+                (body.contract_id,),
+            ).fetchone()
+            свой = conn.execute(
+                "SELECT object_id FROM elements WHERE id = ?", (element_id,)).fetchone()
+            if объект_контракта is None or объект_контракта["object_id"] != свой["object_id"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Контракт относится к другому объекту — назначить его этому "
+                           "изделию нельзя")
+        sync_element_contract(conn, element_id, row["current_status"],
+                              explicit=True, value=body.contract_id)
+        conn.commit()
+        обновлён = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
+        результат = enrich_element_row(conn, dict(обновлён))
+    finally:
+        conn.close()
+    activity.log("element_contract_set", user=user, entity_type="element", entity_id=element_id,
+                 element_type=row["element_type"], mark=row["mark"],
+                 old_value=str(row["contract_id"] or "нет"),
+                 new_value=str(body.contract_id or "нет"))
+    return результат
+
+
 @app.patch("/elements/{element_id}/comment")
 def update_element_comment(
     element_id: int, body: ElementCommentIn, user: sqlite3.Row = Depends(get_current_user)
