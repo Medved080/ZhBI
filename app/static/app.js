@@ -4994,11 +4994,12 @@ function showPlaceholderCard() {
   document.getElementById("card").innerHTML = '<div id="placeholder">Кликните по элементу на схеме</div>';
 }
 
-// Контрагент/Договор/Спецификация — только для чтения (см. Docs/backlog.md,
-// "Контрактация 2.0"): показывается по текущему кэшу elements.contract_id,
-// который всегда зеркалит contract_id самой последней записи истории.
-// Меняется только через диалог подтверждения при смене статуса
-// (openStatusContractDialog), не напрямую. state.contracts (из /plan-data)
+// Контрагент/Договор/Спецификация — вычисляются из elements.contract_id
+// (см. Docs/backlog.md, "Контрактация 2.0"); по отдельности не редактируются,
+// меняются только сменой самого контракта: диалог при смене статуса
+// (openStatusContractDialog), кнопка «выбрать» ниже (контракта нет) или
+// карандаш в заголовке блока (контракт есть) — последние две ведут в
+// openCardContractPicker. state.contracts (из /plan-data)
 // уже несёт всю цепочку — резолвить контракт целиком нужно только для
 // подписи, отдельного запроса на элемент не требуется.
 function contractDetailsHtml(element) {
@@ -5235,7 +5236,14 @@ async function showCard(element) {
         </div>
       ` : ""}
     </div>
-    <div class="card-block"><h4>Контрактация</h4>
+    <div class="card-block"><h4>Контрактация${
+      // Карандаш — только когда контракт уже есть: без него в блоке и так
+      // кнопка «Контракт не назначен — выбрать». Условие то же, что у неё:
+      // на «Запланирован» контракта не бывает (инвариант сервера).
+      element.contract_id && element.current_status !== "planned" && canEdit
+        ? `<button type="button" class="card-block-edit" data-pick-contract="${element.id}"
+             title="Изменить контракт…">✎</button>` : ""
+    }</h4>
       ${contractDetailsHtml(element)}
     </div>
     <div class="card-block"><h4>Даты поставки</h4>
@@ -6064,27 +6072,34 @@ document.getElementById("card").addEventListener("click", (e) => {
   if (элемент) openCardContractPicker(элемент);
 });
 
-// ---------- назначение контракта БЕЗ смены статуса (2026-08-06) ----------
+// ---------- назначение и смена контракта БЕЗ смены статуса (2026-08-06) ----------
 //
 // Тот же список с остатками по позициям, что и при уходе с «Запланирован»
 // (mountContractPicker), — второй способ выбирать контракт развёл бы два
 // набора правил, а правило тут одно: показывать контракты, где есть позиция
-// под марку этого изделия, и сколько по ней осталось.
+// под марку этого изделия, и сколько по ней осталось. Открывается двумя
+// кнопками карточки: «Контракт не назначен — выбрать» (контракта нет) и
+// карандашом в заголовке блока «Контрактация» (контракт есть — перевыбор
+// меняет разом Контрагента/Договор/Спецификацию, они выводятся из контракта).
 async function openCardContractPicker(element) {
   document.getElementById("cp-element").textContent =
     `${element.mark || `#${element.id}`} · ${element.element_type}`;
+  const текущий = element.contract_id || null;
   mountContractPicker(document.getElementById("cp-list"), document.getElementById("cp-legend"), {
-    scope: contractScopeForElement(element), selectedId: "",
-    // «Без контракта» здесь не предлагается: контракта у изделия и так нет,
-    // а «не выбрано» — это просто закрыть окно.
-    leading: [],
+    scope: contractScopeForElement(element), selectedId: String(текущий || ""),
+    // «Снять контракт» — только когда он есть (изделие вернётся в остатки
+    // по позиции). Когда контракта нет, «без контракта» не предлагается:
+    // «не выбрано» — это просто закрыть окно.
+    leading: текущий ? [{ value: "none", label: "— снять контракт —" }] : [],
     onPick: async (value) => {
       contractPickBackdrop.classList.remove("open");
-      if (!value || value === "none") return;
+      if (!value) return;
+      const новый = value === "none" ? null : Number(value);
+      if (новый === текущий) return;    // выбран тот же самый — менять нечего
       try {
         const обновлён = await api(`/elements/${element.id}/contract`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contract_id: Number(value) }),
+          body: JSON.stringify({ contract_id: новый }),
         });
         // Обновляем ровно то, на что влияет контракт: сам элемент,
         // допстрока подписи (в ней код контрагента) и карточка. Статус не
@@ -6094,9 +6109,10 @@ async function openCardContractPicker(element) {
         clearContractPositionsCache();   // «разнесено» по позиции изменилось
         updateElementSubLabel(element);
         showCard(element);
-        showToast("Контракт назначен. Статус не изменён.", "success");
+        showToast(новый ? "Контракт назначен. Статус не изменён."
+                        : "Контракт снят. Статус не изменён.", "success");
       } catch (e) {
-        showToast("Не удалось назначить контракт: " + e.message, "error");
+        showToast("Не удалось изменить контракт: " + e.message, "error");
       }
     },
   });

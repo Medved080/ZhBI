@@ -1229,6 +1229,13 @@
     color: var(--color-primary); text-align: left;
   }
   .card-pick-contract:hover { text-decoration: underline; }
+  /* Карандаш в заголовке блока карточки («Контрактация», 2026-08-06) —
+     тот же вид, что .dyn-edit в отчёте динамики; прижат к правому краю. */
+  .card-block-edit {
+    border: none; background: none; cursor: pointer; font-size: 13px;
+    color: inherit; opacity: .6; padding: 0 2px; float: right; line-height: 1;
+  }
+  .card-block-edit:hover { opacity: 1; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
 
   /* -------- легенда статусов: сворачиваемая шапка + прокрутка таблицы -------- */

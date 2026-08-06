@@ -363,6 +363,38 @@ def _fold_case_duplicates(conn) -> str:
     return ("свёрнуто задвоенных — " + ", ".join(отчёт)) if отчёт else "задвоенных записей не найдено"
 
 
+def _backfill_actual_delivery_dates(conn) -> str:
+    """Довести `actual_delivery_date` до правила 2026-08-06: дата поставки —
+    момент ПОСЛЕДНЕГО перехода в «Доставлен», живёт и после монтажа,
+    очищается только полным откатом в «Запланирован» (Docs/DECISIONS.md,
+    «Фактическая дата поставки переживает монтаж»).
+
+    До этого решения дата держалась, только пока текущий статус ровно
+    «Доставлен»: перевод в «Смонтирован» стирал её, и изделие выпадало из
+    шкалы «факт» отчётов. Пересчёт на живых сменах статуса уже работает по
+    новому правилу (`recompute_status_and_actual_date`, app/contracts.py —
+    ТО ЖЕ выражение, менять только парой); здесь до него доводятся
+    накопленные данные — в обе стороны: заполнить стёртое монтажом,
+    очистить осиротевшее у запланированных.
+
+    Идемпотентно: UPDATE трогает только строки, где значение отличается от
+    канонического (`IS NOT` в SQLite сравнивает и NULL), второй проход — 0.
+    """
+    каноническое = """
+        CASE WHEN elements.current_status = 'planned' THEN NULL ELSE (
+            SELECT sh.changed_at FROM status_history sh
+            WHERE sh.element_id = elements.id AND sh.status = 'delivered'
+            ORDER BY sh.changed_at DESC, sh.id DESC LIMIT 1
+        ) END
+    """
+    cur = conn.execute(
+        f"UPDATE elements SET actual_delivery_date = ({каноническое}) "
+        f"WHERE actual_delivery_date IS NOT ({каноническое})"
+    )
+    return (f"фактическая дата поправлена у изделий: {cur.rowcount}"
+            if cur.rowcount else "все фактические даты уже по правилу")
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -400,6 +432,16 @@ RELEASE_TASKS = [
                "изделия расщеплялись по двум веткам фильтров, подписей и остатков контракта",
         "kind": KIND_DATA,
         "run": _fold_case_duplicates,
+    },
+    {
+        "name": "2026-08-06-actual-delivery-date-backfill",
+        "version": "0.41",
+        "title": "Вернуть фактическую дату поставки смонтированным изделиям",
+        "why": "дата поставки теперь живёт и после монтажа (решение 2026-08-06): раньше "
+               "перевод в «Смонтирован» стирал её, и изделие выпадало из шкалы «факт» "
+               "отчётов, будто его не поставляли",
+        "kind": KIND_DATA,
+        "run": _backfill_actual_delivery_dates,
     },
 ]
 

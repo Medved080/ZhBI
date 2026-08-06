@@ -784,23 +784,40 @@ def adopt_contract_from_history(conn, element_id: int, effective_status: str) ->
 def recompute_status_and_actual_date(conn, element_id: int) -> tuple[str, Optional[str]]:
     """
     elements.current_status и elements.actual_delivery_date — денормализованные
-    кэши самой поздней по changed_at записи истории (тот же приём, что и у
-    sync_element_contract выше). actual_delivery_date = момент
-    перехода в статус "Доставлено" (Status.DELIVERED, см. Docs/backlog.md,
-    "Контрактация 2.0", п.8) — если текущий эффективный статус не
-    "delivered" (в т.ч. после отката/удаления записи истории), дата
-    сбрасывается в NULL, а не остаётся висеть от прошлого визита в
-    "Доставлено". Общая точка для apply_status_change ниже,
+    кэши истории (тот же приём, что и у sync_element_contract выше): статус —
+    по самой поздней записи, дата — по самому позднему переходу в "Доставлено".
+
+    actual_delivery_date = момент ПОСЛЕДНЕГО перехода в статус "Доставлено" —
+    и дальше живёт при любом движении вперёд: смонтированное изделие остаётся
+    поставленным (решение пользователя 2026-08-06; до того дата держалась,
+    только пока текущий статус ровно "delivered", и "Смонтирован" поверх её
+    стирал — изделие выпадало из шкалы «факт» отчётов, см. Docs/backlog.md
+    2026-07-30 и инвариант «нет фактической даты = не поставлено»,
+    Docs/DECISIONS.md). Дата очищается в двух случаях: полный откат в
+    "Запланирован" (изделие снова не в работе — как и контракт рядом) и
+    удаление/отсутствие самой записи "Доставлено" в истории (момент поставки
+    системе больше не известен). Общая точка для apply_status_change ниже,
     delete_history_entry (app/main.py) и import_history
     (app/history_import.py) — раньше каждый пересчитывал только
     current_status по отдельности, actual_delivery_date могла бы протухнуть.
+    Накопленные данные доводит до этого же правила обработка
+    2026-08-06-actual-delivery-date-backfill (app/release_tasks.py) — тем же
+    выражением, менять их только парой.
     """
     latest = conn.execute(
         "SELECT status, changed_at FROM status_history WHERE element_id = ? ORDER BY changed_at DESC, id DESC LIMIT 1",
         (element_id,),
     ).fetchone()
     effective_status = latest["status"]
-    actual_delivery_date = latest["changed_at"] if effective_status == "delivered" else None
+    if effective_status == "planned":
+        actual_delivery_date = None
+    else:
+        delivered = conn.execute(
+            "SELECT changed_at FROM status_history WHERE element_id = ? AND status = 'delivered' "
+            "ORDER BY changed_at DESC, id DESC LIMIT 1",
+            (element_id,),
+        ).fetchone()
+        actual_delivery_date = delivered["changed_at"] if delivered else None
     conn.execute(
         "UPDATE elements SET current_status = ?, actual_delivery_date = ?, updated_at = datetime('now') WHERE id = ?",
         (effective_status, actual_delivery_date, element_id),

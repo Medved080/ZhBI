@@ -527,10 +527,11 @@ def import_history(conn, source_file: str, rows: list, mode: str,
 
     # recompute_status_and_actual_date (app/contracts.py) — тот же
     # пересчёт, что после обычной смены статуса/отката: current_status
-    # ПЛЮС actual_delivery_date (сбрасывается/выставляется по фактическому
-    # статусу "Доставлено"), не только current_status в одиночку — иначе
-    # актуальная дата поставки молча разошлась бы с восстановленным
-    # статусом (см. Docs/backlog.md, 2026-07-28, восстановление статусов).
+    # ПЛЮС actual_delivery_date (момент последнего перехода в "Доставлено";
+    # пусто у "Запланирован" и без такого перехода), не только
+    # current_status в одиночку — иначе актуальная дата поставки молча
+    # разошлась бы с восстановленной историей (см. Docs/backlog.md,
+    # 2026-07-28, восстановление статусов).
     for element_id in touched_element_ids:
         effective_status, _ = recompute_status_and_actual_date(conn, element_id)
         # Событие НА КАЖДОЕ затронутое изделие, а не только сводка по
