@@ -241,7 +241,7 @@ def _fold_case_duplicates(conn) -> str:
 
     отчёт = []
 
-    def свернуть(имя, запрос, ключ, вес, слить):
+    def свернуть(имя, запрос, ключ, вес, слить, подпись):
         группы = {}
         for r in conn.execute(запрос).fetchall():
             группы.setdefault(ключ(r), []).append(r)
@@ -251,6 +251,21 @@ def _fold_case_duplicates(conn) -> str:
                 continue
             основная, лишние = _выбрать_основную(записи, вес)
             for лишняя in лишние:
+                # ЗАПИСЬ В ЖУРНАЛ НА КАЖДУЮ ПАРУ (2026-08-06, живой вопрос
+                # «как понять, какие элементы свернулись и какие удалились»).
+                # Счётчика «марки: 94» для ответа не хватает: свёртка
+                # необратима в том смысле, что удалённой записи больше нет, и
+                # единственный способ узнать, что именно исчезло, — журнал.
+                # Пишем ДО слияния: после него лишней записи уже не
+                # существует, и подпись брать будет неоткуда.
+                activity.log(
+                    "dictionary_fold", source="system", entity_type=имя,
+                    old_value=подпись(лишняя), new_value=подпись(основная),
+                    details={"справочник": имя, "свёрнуто": подпись(лишняя),
+                             "осталось": подпись(основная),
+                             "ссылок у свёрнутой": вес(лишняя),
+                             "ссылок у оставшейся": вес(основная)},
+                )
                 слить(лишняя, основная)
                 свёрнуто += 1
         if свёрнуто:
@@ -268,6 +283,7 @@ def _fold_case_duplicates(conn) -> str:
         lambda r: conn.execute("SELECT COUNT(*) AS n FROM agreements WHERE counterparty_id = ?",
                                (r["id"],)).fetchone()["n"],
         слить_контрагентов,
+        lambda r: f"«{r['short_name']}»",
     )
 
     # --- договоры одного контрагента ---
@@ -282,6 +298,7 @@ def _fold_case_duplicates(conn) -> str:
         lambda r: conn.execute("SELECT COUNT(*) AS n FROM specifications WHERE agreement_id = ?",
                                (r["id"],)).fetchone()["n"],
         слить_договоры,
+        lambda r: f"договор «{r['number']}»",
     )
 
     # --- спецификации одного договора ---
@@ -296,6 +313,7 @@ def _fold_case_duplicates(conn) -> str:
         lambda r: conn.execute("SELECT COUNT(*) AS n FROM contracts WHERE specification_id = ?",
                                (r["id"],)).fetchone()["n"],
         слить_спецификации,
+        lambda r: f"спецификация «{r['number']}»",
     )
 
     # --- марки (в пределах объекта и типа) ---
@@ -312,6 +330,7 @@ def _fold_case_duplicates(conn) -> str:
         lambda r: conn.execute("SELECT COUNT(*) AS n FROM elements WHERE mark_id = ?",
                                (r["id"],)).fetchone()["n"],
         слить_марки,
+        lambda r: f"{r['element_type']} «{r['name']}»",
     )
 
     # --- подтипы одного типа ---
@@ -327,6 +346,7 @@ def _fold_case_duplicates(conn) -> str:
             "SELECT COUNT(*) AS n FROM elements WHERE element_type = ? AND subtype = ?",
             (r["element_type"], r["subtype"])).fetchone()["n"],
         слить_подтипы,
+        lambda r: f"{r['element_type']} / «{r['subtype']}»",
     )
 
     # --- префиксы марок НЕ сворачиваются ---
