@@ -53,6 +53,12 @@ import sqlite3
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+# Признак «в разработке» (2026-08-06, решение пользователя: доработка отчёта
+# приостановлена). Доступ он не ограничивает — отчёт виден всем, кому был
+# виден, просто с честной пометкой; см. app/reports.py, там же и текст
+# приписки, уходящей в XLSX и PDF.
+IN_DEVELOPMENT = True
+
 SCALES = ("day", "week", "month", "quarter")
 
 SCALE_LABELS = {
@@ -303,6 +309,7 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
     порядок = sorted(строки.values(),
                      key=lambda r: (-max(r["deficit"], 0), r["element_type"] or "", r["mark"]))
     return {
+        "in_development": IN_DEVELOPMENT,
         "object_id": object_id,
         "scale": scale,
         "scale_label": SCALE_LABELS[scale],
