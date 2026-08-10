@@ -73,7 +73,7 @@ from app.element_bulk_edit import (
     # что в выгрузке и в формах. Своя склейка здесь разошлась бы с ними.
     _contract_catalog as contract_catalog,
 )
-from app import status_bulk_edit
+from app import contracting_bulk_edit, status_bulk_edit
 from app.access import (
     accessible_object_ids,
     assert_object_access,
@@ -3142,16 +3142,17 @@ def update_element_fields(
     return result
 
 
-# Режим формы массовой правки: реквизиты элемента или история статусов.
-# Один набор эндпоинтов на оба, а не два параллельных: структуры ответа
-# (columns/elements/changes/rejected) совпадают, и табличный экран
-# подтверждения переиспользуется целиком.
+# Режим формы массовой правки: реквизиты элемента, история статусов или
+# контрактация (позиции контрактов вместе с реквизитами их спецификаций,
+# договоров и контрагентов, 2026-08-10). Один набор эндпоинтов на все, а не
+# три параллельных: структуры ответа (columns/elements/changes/rejected)
+# совпадают, и табличный экран подтверждения переиспользуется целиком.
 # Массовая правка идёт по ВСЕМ объектам одним файлом (так её и просили),
 # поэтому она пока за администратором сервиса. Отдать её «админу объекта»
 # без отбора строк по доступным объектам значило бы выдать ему выгрузку
 # всей базы и право править чужие элементы — отбор нужен в обоих модулях
 # выгрузки (реквизиты и статусы) и вынесен в отдельную задачу.
-_BULK_MODES = {"fields", "statuses"}
+_BULK_MODES = {"fields", "statuses", "contracting"}
 
 
 def _check_bulk_mode(mode: str) -> str:
@@ -3185,8 +3186,16 @@ def bulk_edit_export(body: BulkEditExportIn, admin: sqlite3.Row = Depends(requir
                             detail="Фильтр схемы не пропускает ни одного элемента — выгружать нечего")
     conn = get_connection()
     try:
-        wb = (status_bulk_edit.build_status_workbook(conn, ids) if body.mode == "statuses"
-              else build_export_workbook(conn, ids))
+        if body.mode == "contracting":
+            # Отбора по фильтру схемы у контрактации нет: строка файла — не
+            # элемент, а позиция контракта (форма в этом режиме галочку и не
+            # показывает). Пришедший список id молча игнорировать нельзя —
+            # это выглядело бы как «выгрузили отобранное».
+            wb = contracting_bulk_edit.build_contracting_workbook(conn)
+        elif body.mode == "statuses":
+            wb = status_bulk_edit.build_status_workbook(conn, ids)
+        else:
+            wb = build_export_workbook(conn, ids)
     finally:
         conn.close()
     buf = io.BytesIO()
@@ -3196,7 +3205,8 @@ def bulk_edit_export(body: BulkEditExportIn, admin: sqlite3.Row = Depends(requir
     activity.log("element_bulk_export", user=admin, entity_type="element",
                  details={"mode": body.mode,
                           "filtered": None if ids is None else len(ids)})
-    name = "zhbi_statuses" if body.mode == "statuses" else "zhbi_elements"
+    name = {"statuses": "zhbi_statuses", "contracting": "zhbi_contracting"}.get(
+        body.mode, "zhbi_elements")
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3214,6 +3224,8 @@ def bulk_edit_analyze(file: UploadFile = File(...), mode: str = Form("fields"),
     payload = read_upload_limited(file.file)
     conn = get_connection()
     try:
+        if mode == "contracting":
+            return contracting_bulk_edit.analyze(conn, payload)
         if mode == "statuses":
             return status_bulk_edit.analyze(conn, payload)
         return analyze_bulk_edit(conn, payload)
@@ -3242,6 +3254,13 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
     _check_bulk_mode(body.mode)
     conn = get_connection()
     try:
+        if body.mode == "contracting":
+            try:
+                return contracting_bulk_edit.apply_changes(
+                    conn, body.changes, audit_display_name(admin), admin["id"]
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
         if body.mode == "statuses":
             try:
                 return status_bulk_edit.apply_changes(
@@ -4029,6 +4048,30 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 (plan_object_id,),
             ).fetchall()
         }
+        # «Законтрактовано» для АРМ комплектовщика (2026-08-10): сумма
+        # количеств в позициях контрактов ОБЪЕКТА, свёрнутая по паре
+        # (тип элемента, марка) — единственный разрез, в котором это число
+        # вообще существует (contract_lines другого измерения не имеет: ни
+        # крана, ни этажа, ни подтипа у позиции контракта нет). Отдаётся
+        # свёрнутым, а не построчно: дашборд суммирует по выбранным типам и
+        # маркам, отдельные позиции ему не нужны, а свёртка на сервере
+        # экономит и трафик, и обход на клиенте.
+        contract_line_totals = [
+            {"element_type": r["element_type"], "mark": r["mark"], "quantity": r["quantity"]}
+            for r in conn.execute(
+                """
+                SELECT cl.element_type AS element_type, cl.mark AS mark,
+                       SUM(cl.quantity) AS quantity
+                FROM contract_lines cl
+                JOIN contracts co ON co.id = cl.contract_id
+                JOIN specifications s ON s.id = co.specification_id
+                JOIN agreements a ON a.id = s.agreement_id
+                WHERE a.object_id IS ?
+                GROUP BY cl.element_type, cl.mark
+                """,
+                (plan_object_id,),
+            ).fetchall()
+        ]
         shape_rows = conn.execute("SELECT layer, element_type, shape FROM element_shapes").fetchall()
         element_shapes = {f"{r['layer']} {r['element_type']}": r["shape"] for r in shape_rows}
     finally:
@@ -4083,6 +4126,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         "label_dates_visibility": label_dates_visibility,
         "contracts": contracts,
         "default_contracts": default_contracts,
+        "contract_line_totals": contract_line_totals,
         "element_shapes": element_shapes,
         "zones": zones,
     }

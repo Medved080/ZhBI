@@ -1146,6 +1146,51 @@
   .element-shape { cursor: pointer; }
   .element-shape:hover { stroke-width: 3; }
 
+  /* -------- АРМ комплектовщика (2026-08-10) --------
+     Дашборд: полоса количественных показателей над схемой и колонка
+     блоков-срезов слева от неё. Блоки взаимозависимы — каждый показывает
+     количество элементов, проходящих ОСТАЛЬНЫЕ выбранные срезы (см. app.js,
+     renderPicker): выбор крана сразу пересчитывает марки, и наоборот. */
+  #picker-panel {
+    width: 320px; flex-shrink: 0; background: var(--color-surface-2);
+    border-right: 1px solid var(--color-border); padding: 12px; overflow-y: auto; font-size: 12px;
+  }
+  #picker-metrics {
+    display: flex; gap: 8px; padding: 10px 12px; flex-wrap: wrap;
+    background: var(--color-surface-2); border-bottom: 1px solid var(--color-border); flex-shrink: 0;
+  }
+  .picker-metric {
+    flex: 1 1 120px; min-width: 110px; padding: 8px 10px; border: 1px solid var(--color-border);
+    border-radius: 6px; background: var(--color-surface); text-align: left; cursor: default;
+    font: inherit; color: var(--color-text);
+  }
+  .picker-metric.clickable { cursor: pointer; }
+  .picker-metric.clickable:hover { border-color: var(--color-primary); }
+  .picker-metric.active { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary); }
+  .picker-metric-title { font-size: 11px; color: var(--color-text-muted); line-height: 1.25; }
+  .picker-metric-value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .picker-metric-value.muted { color: var(--color-text-muted); font-weight: 400; font-size: 15px; }
+  .picker-metric-share { font-size: 11px; color: var(--color-text-muted); }
+
+  .picker-block { margin-bottom: 12px; }
+  .picker-block-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .picker-block-head span.picker-block-title { font-size: 12px; font-weight: 600; flex: 1; }
+  .picker-list {
+    max-height: 190px; overflow-y: auto; border: 1px solid var(--color-border);
+    border-radius: 4px; background: var(--color-surface);
+  }
+  .picker-row {
+    display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: pointer;
+    border-bottom: 1px solid transparent;
+  }
+  .picker-row:hover { background: var(--color-surface-2); }
+  .picker-row.selected { background: var(--color-primary); color: #fff; }
+  .picker-row.empty { opacity: .45; }
+  .picker-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .picker-row-count { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .8; }
+  .picker-search { width: 100%; margin-bottom: 4px; font-size: 12px; padding: 4px 6px; }
+  .picker-hint { font-size: 11px; color: var(--color-text-muted); margin: 0 0 10px; line-height: 1.35; }
+
   #resize-handle { width: 6px; flex-shrink: 0; cursor: col-resize; background: transparent; position: relative; }
   #resize-handle:hover, #resize-handle.dragging { background: var(--color-primary); opacity: .3; }
   /* Постоянный (не только при наведении) визуальный признак — иначе
@@ -1190,7 +1235,6 @@
   .filter-group .toggle { margin-top: 4px; }
   .filter-group .toggle.filter-parent { font-weight: 600; margin-top: 0; flex: 1; }
   .filter-group .toggle.filter-child { margin-left: 20px; font-weight: 400; flex: 1; }
-  .filter-group .toggle.filter-grandchild { margin-left: 40px; font-weight: 400; }
   .filter-group .toggle.filter-disabled { opacity: .4; }
   .filter-group .toggle.filter-disabled input[type="checkbox"] { cursor: not-allowed; }
   .filter-parent-row { display: flex; align-items: center; margin-top: 8px; }
@@ -2867,6 +2911,19 @@
       </button>
       <div class="dropdown-menu" id="object-switch-menu"></div>
     </div>
+    <!-- Рабочее место (2026-08-10). «Модель» — привычная схема с панелью
+         фильтров; «АРМ комплектовщика» — дашборд: взаимозависимые блоки
+         свойств и количественных показателей плюс та же схема 2D/3D,
+         показывающая выбранный срез. Отдельный переключатель, а не пункт
+         меню: это то, чем человек переключает СВОЙ род работы, и он должен
+         быть виден постоянно. Стоит ПЕРЕД 2D/3D: 2D/3D — это как показана
+         схема внутри выбранного рабочего места, то есть уровнем ниже. -->
+    <div class="view-mode-switch" id="workspace-switch" role="group" aria-label="Рабочее место">
+      <button type="button" class="view-mode-btn active" id="btn-ws-model" data-ws="model"
+              title="Схема и панель фильтров">Модель</button>
+      <button type="button" class="view-mode-btn" id="btn-ws-picker" data-ws="picker"
+              title="Дашборд комплектации: свойства, количественные показатели и схема выбранного среза">АРМ комплектовщика</button>
+    </div>
     <div class="view-mode-switch" id="view-mode-switch" role="group" aria-label="Режим отображения">
       <button type="button" class="view-mode-btn active" id="btn-view-2d" data-mode="2d">2D</button>
       <button type="button" class="view-mode-btn" id="btn-view-3d" data-mode="3d">3D</button>
@@ -2904,7 +2961,15 @@
 </div>
 
 <div id="body">
+ <!-- АРМ комплектовщика (2026-08-10): блоки свойств-срезов. Живёт СЛЕВА от
+      рабочей области, сайдбар остаётся справа — карточка изделия и сводка по
+      статусам нужны комплектовщику ровно так же, как и в «Модели». Скрыт,
+      пока не выбрано это рабочее место (см. app.js, setWorkspace). -->
+ <div id="picker-panel" style="display:none"></div>
  <div id="stage-area">
+  <!-- Полоса количественных показателей — над схемой и на всю её ширину:
+       это итоги ВЫБРАННОГО СРЕЗА, а срез виден на схеме под ними. -->
+  <div id="picker-metrics" style="display:none"></div>
   <button type="button" class="btn btn-sm btn-primary" id="back-to-report">← Вернуться к отчёту</button>
   <div id="stage">
     <svg id="svg-root" preserveAspectRatio="xMidYMid meet">
@@ -4078,6 +4143,7 @@
       <div class="view-mode-switch" id="bulk-edit-mode" role="group" aria-label="Режим правки">
         <button type="button" class="view-mode-btn active" data-bulk-mode="fields">Реквизиты</button>
         <button type="button" class="view-mode-btn" data-bulk-mode="statuses">История статусов</button>
+        <button type="button" class="view-mode-btn" data-bulk-mode="contracting">Контрактация</button>
       </div>
       <!-- Два раздельных блока (живой запрос 2026-08-01): выгрузка и загрузка
            это разные действия в разное время, и в одну строку они читались
@@ -4144,8 +4210,22 @@
           предыдущего, строка отклоняется и не грузится. Другие записи система сама
           не меняет — применяется ровно то, что вы отметили.
         </p>
+        <p class="hint-text" style="margin-top:0; display:none;" data-mode-intro="contracting">
+          Лист «Контрактация» — реестр: строка на каждую позицию контракта, а рядом в
+          той же строке реквизиты её владельцев — контракта, спецификации, договора и
+          контрагента. Правится всё, кроме наименования контракта: оно генерируется из
+          самой этой цепочки. Строка с пустым «№ позиции» и заполненным «№ контракта»
+          — новая позиция этого контракта (так же, как в отдельном инструменте
+          «Импорт контрактации из XLS»); новые контракты, спецификации, договоры и
+          контрагенты этим файлом не заводятся — для них есть тот самый импорт.
+          Удалить позицию файлом нельзя (это делается в форме контракта), пустая
+          ячейка означает «не трогать». Один документ повторяется в файле десятки раз:
+          если строки задают одной спецификации, договору или контрагенту РАЗНЫЕ
+          значения, применить нельзя ни одно — такие строки отклоняются.
+        </p>
         <div class="import-template" data-template="bulk_edit" data-mode-intro="fields"></div>
         <div class="import-template" data-template="bulk_edit_statuses" data-mode-intro="statuses" style="display:none;"></div>
+        <div class="import-template" data-template="bulk_edit_contracting" data-mode-intro="contracting" style="display:none;"></div>
       </div>
       <!-- Заголовок и строки строит JS: набор колонок зависит от того, какие
            поля реально правились (у каждого такого появляется парная «станет»). -->

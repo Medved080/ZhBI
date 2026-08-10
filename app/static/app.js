@@ -112,6 +112,12 @@ let state = {
   labelDatesVisibility: {},
   changelog: null, // кэш GET /changelog на время сеанса, см. btn-changelog
   contracts: [],
+  // Свёрнутые по (тип, марка) количества из позиций контрактов объекта —
+  // «Законтрактовано» в АРМ комплектовщика (см. renderPicker). Приходит
+  // с /plan-data вместе со всем остальным: отдельный запрос ради шести
+  // плиток дашборда был бы лишним кругом, а данные меняются вместе с
+  // контрактами, то есть ровно тогда же, когда перезагружается схема.
+  contractLineTotals: [],
   defaultContracts: {},
   elementShapes: {}, // "layer element_type" -> имя формы
   zones: [], // [{id, category, elevation_mm, name, outline, match_status}]
@@ -185,13 +191,35 @@ let state = {
     on: false, from: "", to: "", scope: "mine", userIds: new Set(),
     ids: null, count: 0, loading: false, error: "",
   },
+  // АРМ комплектовщика (2026-08-10) — второе рабочее место, дашборд.
+  // Отбор здесь ОТДЕЛЬНЫЙ от placementFilters (решение пользователя):
+  // переключение рабочего места ничего не сбрасывает и не переносит, у
+  // каждого режима свой срез. Природа отбора тоже другая — не «множество
+  // исключённых» (все включены, лишнее снимается), а ВЫБРАННОЕ: пустое
+  // множество = «все», клик по строке добавляет/убирает значение. Так
+  // ведут себя срезы в дашбордах, и так же читается вопрос комплектовщика
+  // («покажи стоянку 3»), а не «сними галочки со всех остальных».
+  //   metric — плитка количественного показателя, выбранная как фильтр
+  //   (кросс-фильтр: клик по «Доставлено» оставляет только доставленные и
+  //   в блоках свойств, и на схеме); null — плитка не выбрана.
+  //   search — введённый текст поиска по блоку (сейчас только «Марка»).
+  picker: {
+    active: false,
+    sel: {
+      elementType: new Set(), subtype: new Set(), mark: new Set(),
+      crane: new Set(), stance: new Set(), floor: new Set(),
+    },
+    metric: null,
+    search: {},
+  },
   // Какие родители иерархических групп фильтра сейчас развёрнуты — чисто
   // UI-состояние навигации, но хранится в state (не в DOM), иначе
   // разворот сбрасывался бы при каждой полной перерисовке фильтров
   // (onPlacementFilterChange пересобирает DOM заново на любой клик).
-  // subtype — состояние разворота 3-го уровня (Марка) под каждым подтипом
-  // в группе "Тип элемента / Подтип / Марка", ключ — значение подтипа.
-  placementGroupsExpanded: { crane: new Set(), elementType: new Set(), subtype: new Set(), supplier: new Set(), stanceZone: new Set() },
+  // Ключ subtype здесь был, пока марка была третьим уровнем дерева «Тип →
+  // Подтип → Марка» (развёрнутость подтипа); с 2026-08-10 марка — свой
+  // блок фильтра, разворачивать внутри подтипа больше нечего.
+  placementGroupsExpanded: { crane: new Set(), elementType: new Set(), supplier: new Set(), stanceZone: new Set() },
   // Какие ВЕРХНЕУРОВНЕВЫЕ группы фильтра сейчас свёрнуты — та же природа,
   // что placementGroupsExpanded выше (сеансовое UI-состояние, не сброс на
   // каждой перерисовке). По умолчанию свёрнуто всё, кроме "Статус" — самого
@@ -199,8 +227,8 @@ let state = {
   // разросся настолько, что до "Статус" нужно было проскроллить и Захватку,
   // и Кран/Стоянку, и Отметку).
   topFilterCollapsed: new Set([
-    "zakhvatka", "craneStance", "craneStanceNone", "elevation", "floor", "elementType", "supplier", "noContract",
-    "smr", "changes",
+    "zakhvatka", "craneStance", "craneStanceNone", "elevation", "floor", "elementType", "mark", "supplier",
+    "noContract", "smr", "changes",
   ]),
   baseMarkerRadius: 1,
   view: null,
@@ -395,6 +423,11 @@ function updateStatusLogButton() {
 const STATUS_FILTER_LIST_LIMIT = 3;
 
 function describeActiveFilters() {
+  // В АРМ комплектовщика отбор свой (см. state.picker) — перечислять
+  // фильтры «Модели», которые сейчас ни на что не влияют, было бы прямой
+  // дезинформацией: строка состояния объясняет, ПОЧЕМУ на схеме видно
+  // именно это.
+  if (state.picker.active) return describePickerSelection();
   const parts = [];
   for (const [key, title, labelFor] of PLACEMENT_CATEGORY_INFO) {
     const excluded = state.placementFilters[key];
@@ -425,7 +458,13 @@ function updateStatusBarDefault(visibleCount) {
   const shown = visibleCount === total
     ? `Показаны все элементы: ${total}`
     : `Показано ${visibleCount} из ${total}`;
-  setStatusBarDefault(parts.length ? `${shown} · Фильтры — ${parts.join("; ")}` : `${shown} · Фильтры не заданы`);
+  // В АРМ комплектовщика отбор называется срезом, а не фильтром — так же,
+  // как он назван в самом дашборде («Сбросить срез»): полоса под схемой
+  // должна объяснять то, что человек видит на экране, его же словами.
+  const слово = state.picker.active ? "Срез" : "Фильтры";
+  setStatusBarDefault(parts.length
+    ? `${shown} · ${слово} — ${parts.join("; ")}`
+    : `${shown} · ${слово === "Срез" ? "Срез не задан" : "Фильтры не заданы"}`);
 }
 
 function maybeWarnContract(result) {
@@ -655,6 +694,23 @@ function applyRolePermissions() {
       const видимые = [...пункты, ...подгруппы].filter(el => el.style.display !== "none");
       group.style.display = видимые.length ? "" : "none";
     });
+
+  // Переключатель рабочего места (АРМ комплектовщика) — ПОКА только
+  // администратору сервиса (решение пользователя 2026-08-10): рабочее место
+  // новое и обкатывается, показывать его прорабу рано. Гасится весь
+  // переключатель целиком, а не одна кнопка: «Модель» без пары —
+  // переключатель из одного положения, то есть лишний элемент на экране.
+  // Гашение здесь ЧИСТО ИНТЕРФЕЙСНОЕ и правами не является: дашборд считает
+  // по тем же данным /plan-data, что уже пришли на схему, ничего сверх
+  // доступного роли он не показывает.
+  const switchEl = document.getElementById("workspace-switch");
+  if (switchEl) {
+    const можно = системнаяРоль === "admin";
+    switchEl.style.display = можно ? "" : "none";
+    // Роль могла смениться на живой вкладке (режим «от имени», повторный
+    // /me) — человек, оказавшийся без права, не должен остаться в АРМ.
+    if (!можно && state.picker.active) setWorkspace("model");
+  }
 }
 
 // Полоса «вы работаете от имени…». Признак приходит С СЕРВЕРА (/me), а не
@@ -1860,6 +1916,12 @@ function elementPassesChangeFilter(element) {
 }
 
 function passesPlacementFilters(element) {
+  // АРМ комплектовщика — свой, отдельный срез (см. state.picker): в этом
+  // рабочем месте фильтры «Модели» не действуют вовсе, и наоборот. Ветка
+  // стоит именно здесь, в единственной точке, через которую проходят все
+  // потребители видимости — схема 2D, сцена 3D, подписи, сводка по
+  // статусам, строка состояния.
+  if (state.picker.active) return pickerElementPasses(element);
   for (const def of PLACEMENT_FILTER_DEFS) {
     if (state.placementFilters[def.key].has(def.valueFn(element))) return false;
   }
@@ -1875,7 +1937,12 @@ function passesPlacementFilters(element) {
 // фильтрам, включая только что исключённые её же подтипы — "Колонна"
 // навсегда остаётся недоступной для повторного включения. См.
 // Docs/backlog.md.
-const PLACEMENT_CASCADE_GROUPS = [["elementType", "subtype", "mark"], ["crane", "stance"], ["supplier", "contract"]];
+// Марка вышла из этой тройки 2026-08-10 вместе с выносом в отдельный блок
+// (см. renderPlacementFilters): каскада «тип → марка» больше нет, значит и
+// поблажки в подсчёте доступности ей не полагается — наоборот, исключение
+// всех марок типа ДОЛЖНО гасить сам тип, как любой другой независимый
+// фильтр.
+const PLACEMENT_CASCADE_GROUPS = [["elementType", "subtype"], ["crane", "stance"], ["supplier", "contract"]];
 
 function cascadeGroupFor(key) {
   return PLACEMENT_CASCADE_GROUPS.find(g => g.includes(key)) || [key];
@@ -2663,21 +2730,17 @@ function resetAllDateFilters() {
 // Родительский чекбокс работает как раньше (каскад на всех потомков)
 // независимо от того, развёрнута группа сейчас или нет.
 //
-// grandchildConfig (опционально) — 3-й уровень (сейчас единственный
-// случай: Марка под Подтипом, см. "Раунд из 3 пунктов", 2026-07-17):
-// { childrenForChild(cv), excludedSet, labelFor(gv), isEnabledFn(gv), expandedSet }.
-// Остальные 2 вызова (Кран/Стоянка, Поставщик/Контракт) НЕ передают этот
-// параметр и работают ровно как раньше — весь код ниже под
-// `if (grandchildConfig)` для них не выполняется.
+// Уровней РОВНО два. Третий (Марка под Подтипом, "Раунд из 3 пунктов",
+// 2026-07-17) убран 2026-08-10 вместе с выносом марки в собственный блок
+// фильтра — все три вызова (Тип/Подтип, Кран/Стоянка, Поставщик/Контракт)
+// двухуровневые.
 function buildHierarchicalFilterGroup(
   title, key, parents, parentExcludedSet, parentLabelFor, parentIsEnabledFn,
-  childrenForParent, childExcludedSet, childLabelFor, childIsEnabledFn, onChange, expandedSet,
-  grandchildConfig
+  childrenForParent, childExcludedSet, childLabelFor, childIsEnabledFn, onChange, expandedSet
 ) {
   const { wrap, body, btnAll, btnNone } = filterGroupShell(title, key);
   const parentCheckboxes = [];
   const allChildCheckboxes = [];
-  const allGrandchildCheckboxes = [];
 
   for (const pv of parents) {
     const children = childrenForParent(pv);
@@ -2724,39 +2787,8 @@ function buildHierarchicalFilterGroup(
 
     const childEntries = [];
     for (const cv of children) {
-      // Передаём и родителя (pv) — childrenForChild не может надёжно
-      // восстановить его из cv одним лишь разбором строки: составной
-      // ключ подтипа несёт тип-владельца, но "нет подтипа"/"нет марки"
-      // — это один и тот же сентинел PLACEMENT_NONE у ЛЮБОГО типа, из
-      // него тип не восстановить (был баг — см. Docs/backlog.md).
-      const grandchildren = grandchildConfig ? (grandchildConfig.childrenForChild(cv, pv) || []) : [];
-
       const cRow = document.createElement("div");
       cRow.className = "filter-parent-row";
-
-      const grandchildBox = document.createElement("div");
-      grandchildBox.className = "filter-children";
-      const gOpen = grandchildren.length && grandchildConfig.expandedSet.has(cv);
-      if (gOpen) grandchildBox.classList.add("open");
-
-      if (grandchildren.length) {
-        const gExpandBtn = document.createElement("button");
-        gExpandBtn.type = "button";
-        gExpandBtn.className = "filter-expand-btn";
-        gExpandBtn.textContent = gOpen ? "▾" : "▸";
-        gExpandBtn.title = gOpen ? "Свернуть" : "Развернуть";
-        gExpandBtn.addEventListener("click", () => {
-          const open = grandchildBox.classList.toggle("open");
-          gExpandBtn.textContent = open ? "▾" : "▸";
-          gExpandBtn.title = open ? "Свернуть" : "Развернуть";
-          if (open) grandchildConfig.expandedSet.add(cv); else grandchildConfig.expandedSet.delete(cv);
-        });
-        cRow.appendChild(gExpandBtn);
-      } else if (grandchildConfig) {
-        const spacer = document.createElement("span");
-        spacer.className = "filter-expand-spacer";
-        cRow.appendChild(spacer);
-      }
 
       const cLabel = document.createElement("label");
       cLabel.className = "toggle filter-child";
@@ -2765,7 +2797,6 @@ function buildHierarchicalFilterGroup(
       cInput.checked = !childExcludedSet.has(cv);
       applyEnabledState(cInput, cLabel, childIsEnabledFn(cv));
 
-      const grandchildEntries = [];
       cInput.addEventListener("change", () => {
         if (cInput.checked) {
           childExcludedSet.delete(cv);
@@ -2779,14 +2810,6 @@ function buildHierarchicalFilterGroup(
         } else {
           childExcludedSet.add(cv);
         }
-        // Каскад вниз, на марки этого подтипа — симметрично тому, как
-        // клик по типу (см. pInput ниже) каскадом трогает все подтипы.
-        if (grandchildConfig) {
-          grandchildren.forEach(gv => {
-            if (cInput.checked) grandchildConfig.excludedSet.delete(gv); else grandchildConfig.excludedSet.add(gv);
-          });
-          grandchildEntries.forEach(({ input }) => { input.checked = cInput.checked; });
-        }
         onChange();
       });
       cLabel.appendChild(cInput);
@@ -2795,37 +2818,6 @@ function buildHierarchicalFilterGroup(
       childrenBox.appendChild(cRow);
       childEntries.push({ input: cInput, value: cv });
       allChildCheckboxes.push({ input: cInput, value: cv });
-
-      if (grandchildConfig) {
-        for (const gv of grandchildren) {
-          const gLabel = document.createElement("label");
-          gLabel.className = "toggle filter-grandchild";
-          const gInput = document.createElement("input");
-          gInput.type = "checkbox";
-          gInput.checked = !grandchildConfig.excludedSet.has(gv);
-          applyEnabledState(gInput, gLabel, grandchildConfig.isEnabledFn(gv));
-          gInput.addEventListener("change", () => {
-            if (gInput.checked) {
-              grandchildConfig.excludedSet.delete(gv);
-              // Марке нужно снятие исключения сразу на ОБА уровня вверх
-              // (подтип И тип) — иначе элемент всё равно не пройдёт
-              // фильтр: passesPlacementFilters — это AND по всем
-              // категориям одновременно, а не только по своей.
-              childExcludedSet.delete(cv);
-              parentExcludedSet.delete(pv);
-            } else {
-              grandchildConfig.excludedSet.add(gv);
-            }
-            onChange();
-          });
-          gLabel.appendChild(gInput);
-          gLabel.appendChild(document.createTextNode(" " + grandchildConfig.labelFor(gv)));
-          grandchildBox.appendChild(gLabel);
-          grandchildEntries.push({ input: gInput, value: gv });
-          allGrandchildCheckboxes.push({ input: gInput, value: gv });
-        }
-        childrenBox.appendChild(grandchildBox);
-      }
     }
     body.appendChild(childrenBox);
 
@@ -2834,15 +2826,6 @@ function buildHierarchicalFilterGroup(
       childEntries.forEach(({ value }) => {
         if (pInput.checked) childExcludedSet.delete(value); else childExcludedSet.add(value);
       });
-      // Каскад на все марки всех подтипов этого типа — тем же приёмом.
-      if (grandchildConfig) {
-        for (const cv2 of children) {
-          const gvs = grandchildConfig.childrenForChild(cv2) || [];
-          gvs.forEach(gv => {
-            if (pInput.checked) grandchildConfig.excludedSet.delete(gv); else grandchildConfig.excludedSet.add(gv);
-          });
-        }
-      }
       onChange();
     });
   }
@@ -2850,19 +2833,15 @@ function buildHierarchicalFilterGroup(
   btnAll.addEventListener("click", () => {
     parentExcludedSet.clear();
     childExcludedSet.clear();
-    if (grandchildConfig) grandchildConfig.excludedSet.clear();
     parentCheckboxes.forEach(cb => { cb.checked = true; });
     allChildCheckboxes.forEach(({ input }) => { input.checked = true; });
-    allGrandchildCheckboxes.forEach(({ input }) => { input.checked = true; });
     onChange();
   });
   btnNone.addEventListener("click", () => {
     parents.forEach(pv => parentExcludedSet.add(pv));
     allChildCheckboxes.forEach(({ value }) => childExcludedSet.add(value));
-    if (grandchildConfig) allGrandchildCheckboxes.forEach(({ value }) => grandchildConfig.excludedSet.add(value));
     parentCheckboxes.forEach(cb => { cb.checked = false; });
     allChildCheckboxes.forEach(({ input }) => { input.checked = false; });
-    allGrandchildCheckboxes.forEach(({ input }) => { input.checked = false; });
     onChange();
   });
 
@@ -3028,10 +3007,12 @@ function renderPlacementFilters() {
     "Отметка (высота)", "elevation", allValuesFor("elevation"), state.placementFilters.elevation, elevationLabelFor, enabledFor("elevation"), onPlacementFilterChange, { compareRaw: true }
   ));
 
-  // Тип элемента / Подтип / Марка — иерархически, 3 уровня (item 8 +
-  // "Раунд из 3 пунктов", 2026-07-17, п.1). Марка — прямой список без
-  // поиска (заказчик выбрал этот вариант — некоторые подтипы содержат
-  // 300+ уникальных марок, длинные плоские списки ожидаемы и приняты).
+  // Тип элемента / Подтип — иерархически, ДВА уровня. Марка была третьим
+  // уровнем этого же дерева (Тип → Подтип → Марка), но живой запрос
+  // пользователя 2026-08-10 вынес её в самостоятельный блок ниже: отобрать
+  // марку, не помня её тип и подтип, в дереве было нельзя — до неё нужно
+  // было раскрыть две ветки, а поиск по марке (markSearchInput) раскрывал
+  // цепочку родителей у каждого совпадения и разворачивал пол-дерева.
   const typeValues = allValuesFor("elementType");
   // Строим по ЭЛЕМЕНТАМ (тот же приём, что marksBySubtype ниже), не по
   // уже обезличенному множеству значений подтипа: составной ключ подтипа
@@ -3056,39 +3037,23 @@ function renderPlacementFilters() {
     subtypesByType.set(h, arr);
   }
 
-  // Марки группируются по составному ключу подтипа (тип уже зашит в него,
-  // см. subtypeLogicalKey выше) — коллизия одинакового текста подтипа у
-  // разных типов больше не путает и марки (раньше это было отдельно
-  // отмечено как принятый компромисс — теперь снято тем же fix'ом).
-  const marksBySubtype = new Map();
-  for (const e of state.elements) {
-    const sv = subtypeFilterValue(e);
-    const mv = markFilterValue(e);
-    if (!marksBySubtype.has(sv)) marksBySubtype.set(sv, new Set());
-    marksBySubtype.get(sv).add(mv);
-  }
-  for (const [sv, set] of marksBySubtype) {
-    marksBySubtype.set(sv, Array.from(set).sort(placementComparator(markLabelFor)));
-  }
-
   container.appendChild(buildHierarchicalFilterGroup(
-    "Тип элемента / Подтип / Марка", "elementType", typeHeadings, state.placementFilters.elementType, v => v, enabledFor("elementType"),
+    "Тип элемента / Подтип", "elementType", typeHeadings, state.placementFilters.elementType, v => v, enabledFor("elementType"),
     t => subtypesByType.get(t) || [], state.placementFilters.subtype, subtypeLabelFor, enabledFor("subtype"),
-    onPlacementFilterChange, state.placementGroupsExpanded.elementType,
-    {
-      // FLAT_MARK_TYPES (Плита перекрытия/Ригель) — "подтип" в дереве уже
-      // и есть марка (см. subtypeFilterValue), дальше вглубь идти некуда —
-      // без этой проверки марка задваивалась бы сама под собой третьим
-      // уровнем. Проверяем РЕАЛЬНОГО родителя (pv, передан из
-      // buildHierarchicalFilterGroup), а не пытаемся угадать тип по sv —
-      // для "нет подтипа"/"нет марки" (голый PLACEMENT_NONE) это
-      // невозможно сделать надёжно, см. комментарий у subtypesByType.
-      childrenForChild: (sv, pv) => (FLAT_MARK_TYPES.has(pv) ? [] : (marksBySubtype.get(sv) || [])),
-      excludedSet: state.placementFilters.mark,
-      labelFor: markLabelFor,
-      isEnabledFn: enabledFor("mark"),
-      expandedSet: state.placementGroupsExpanded.subtype,
-    }
+    onPlacementFilterChange, state.placementGroupsExpanded.elementType
+  ));
+
+  // Марка — САМОСТОЯТЕЛЬНЫЙ блок, плоским списком по всем маркам модели
+  // (живой запрос пользователя 2026-08-10, см. выше). Отбор по марке ни на
+  // что не каскадирует и ни от чего каскадом не зависит: марка уникальна в
+  // пределах объекта (свой справочник, app/marks.py — владелец марки тип,
+  // область объект), поэтому вешать её под тип, как раньше, не требуется.
+  // Список длинный (сотни марок) — над формой для него уже есть поле
+  // поиска, теперь оно фильтрует именно этот блок (см.
+  // applyMarkSearchFilter). Группа по умолчанию свёрнута, как и остальные
+  // длинные (state.topFilterCollapsed).
+  container.appendChild(buildFilterGroup(
+    "Марка", "mark", allValuesFor("mark"), state.placementFilters.mark, markLabelFor, enabledFor("mark"), onPlacementFilterChange
   ));
 
   container.appendChild(buildFilterGroup(
@@ -3155,40 +3120,447 @@ function renderPlacementFilters() {
 // Живёт СНАРУЖИ #placement-filters (см. index.html) — renderPlacementFilters
 // перестраивает контейнер целиком на каждое изменение фильтра, инпут вне
 // него переживает перерисовку без потери введённого текста/фокуса.
-// Фильтрует только уровень "Марка" в группе "Тип элемента / Подтип / Марка"
-// (там и был затык — у некоторых подтипов 300+ марок плоским списком,
-// заказчик в своё время сознательно отказался от поиска, но список
-// разросся ещё сильнее с тех пор, см. Docs/backlog.md) — совпавшие строки
-// раскрывают цепочку родителей (тип → подтип → сама верхнеуровневая группа),
-// чтобы результат сразу был виден, а не спрятан за свёрнутыми уровнями.
+// Фильтрует блок "Марка" (марок сотни, плоским списком — заказчик в своё
+// время сознательно отказался от поиска, но список разросся, см.
+// Docs/backlog.md). До 2026-08-10 марка была третьим уровнем дерева
+// "Тип / Подтип / Марка", и поиску приходилось раскрывать цепочку
+// родителей у каждого совпадения; теперь блок свой, раскрывать нужно
+// только саму группу — если она свёрнута, набранный текст иначе не дал бы
+// на экране ничего.
 const markSearchInput = document.getElementById("mark-search-input");
 function applyMarkSearchFilter() {
   const q = markSearchInput.value.trim().toLowerCase();
-  const group = document.querySelector('#placement-filters .filter-group[data-filter-key="elementType"]');
+  const group = document.querySelector('#placement-filters .filter-group[data-filter-key="mark"]');
   if (!group) return;
   const body = group.querySelector(".filter-group-body");
-  group.querySelectorAll(".toggle.filter-grandchild").forEach(label => {
+  let matched = false;
+  group.querySelectorAll(".filter-group-body > .toggle").forEach(label => {
     const match = !q || label.textContent.toLowerCase().includes(q);
     label.style.display = match ? "" : "none";
-    if (!q || !match) return;
-    // Раскрыть цепочку родителей — grandchildBox (марки) → childrenBox
-    // (подтипы) → сама группа целиком, иначе совпадение спрятано за
-    // свёрнутым уровнем (см. CSS .filter-children/.filter-group-body).
-    let node = label.closest(".filter-children");
-    while (node) {
-      node.classList.add("open");
-      const prevBtn = node.previousElementSibling && node.previousElementSibling.querySelector
-        ? node.previousElementSibling.querySelector(".filter-expand-btn") : null;
-      if (prevBtn) { prevBtn.textContent = "▾"; prevBtn.title = "Свернуть"; }
-      node = node.parentElement ? node.parentElement.closest(".filter-children") : null;
-    }
-    if (body && !body.classList.contains("open")) {
-      body.classList.add("open");
-      if (body._toggleBtn) { body._toggleBtn.textContent = "▾"; body._toggleBtn.title = "Свернуть"; }
-    }
+    if (q && match) matched = true;
   });
+  if (matched && body && !body.classList.contains("open")) {
+    body.classList.add("open");
+    if (body._toggleBtn) { body._toggleBtn.textContent = "▾"; body._toggleBtn.title = "Свернуть"; }
+  }
 }
 markSearchInput.addEventListener("input", applyMarkSearchFilter);
+
+// ==================== АРМ КОМПЛЕКТОВЩИКА ====================
+// Второе рабочее место (живой запрос 2026-08-10). Дашборд: блоки свойств
+// («срезы») слева, полоса количественных показателей над схемой, сама схема
+// (2D/3D — тот же переключатель, что и в «Модели») показывает выбранный
+// срез. Блоки взаимозависимы, как в BI-отчёте: число у каждого значения
+// считается по элементам, прошедшим ОСТАЛЬНЫЕ срезы и выбранную плитку, —
+// поэтому после выбора крана марки сразу показывают «сколько их у этого
+// крана», а не «сколько всего в модели».
+//
+// Почему отдельный отбор, а не те же state.placementFilters (решение
+// пользователя): режимы независимы, переключение туда-обратно ничего не
+// портит. Цена — passesPlacementFilters обязан знать, какое рабочее место
+// сейчас активно (см. там же); фильтры «Модели» (статус, контракт, даты
+// СМР, изменения) в АРМ намеренно НЕ действуют — иначе срез дашборда
+// оказывался бы урезан невидимым отсюда отбором.
+
+const PICKER_SLICERS = [
+  { key: "elementType", title: "Тип элемента", valueFn: e => e.element_type, labelFor: elementTypeLabelFor },
+  // Подпись подтипа здесь — С ТИПОМ-ВЛАДЕЛЬЦЕМ, в отличие от «Модели».
+  // Там подтипы вложены в свой тип, и одного текста хватает; здесь блок
+  // плоский, а текст подтипа у разных типов совпадает буквально («на отм.
+  // +15.000» есть и у Ригеля, и у Плиты перекрытия — см. subtypeLogicalKey),
+  // и без типа список выглядит как список задвоенных строк.
+  {
+    key: "subtype", title: "Подтип", valueFn: subtypeFilterValue,
+    labelFor: v => {
+      const текст = subtypeLabelFor(v);
+      const тип = String(v).split(SUBTYPE_KEY_SEP)[0];
+      return тип && тип !== String(v) ? `${тип} · ${текст}` : текст;
+    },
+  },
+  { key: "mark", title: "Марка", valueFn: markFilterValue, labelFor: markLabelFor, search: true },
+  { key: "crane", title: "Кран", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status"), labelFor: zoneLabelFor },
+  // Стоянка — тоже с владельцем в подписи, и по той же причине, что и
+  // подтип выше: имя стоянки уникально только внутри своего крана
+  // («Стоянка 01» есть у каждого из трёх), а список здесь плоский.
+  {
+    key: "stance", title: "Стоянка крана", valueFn: stanceFilterValue,
+    labelFor: v => {
+      const текст = stanceLabelFor(v);
+      const craneId = craneIdForStanceId(v);
+      return craneId === PLACEMENT_NONE ? текст : `${zoneLabelFor(craneId)} · ${текст}`;
+    },
+  },
+  { key: "floor", title: "Этаж", valueFn: floorFilterValue, labelFor: floorLabelFor, compareRaw: true },
+];
+
+// Количественные показатели. test — предикат по ЭЛЕМЕНТУ; такие плитки
+// кликабельны и работают кросс-фильтром. Две плитки предиката не имеют:
+// «В модели» (это и есть сам срез — фильтровать по ней нечего) и
+// «Законтрактовано» (считается не по элементам, а по позициям контрактов,
+// см. pickerContracted).
+//
+// «Доставлено»/«Смонтировано» — СТРОГО по текущему статусу элемента
+// (решение пользователя 2026-08-10): смонтированный в «Доставлено» не
+// попадает, принятый — не попадает ни туда, ни в «Смонтировано». Это не
+// воронка, а раскладка по текущему положению дел; статус назван в подписи
+// плитки прямо, чтобы число нельзя было прочитать как накопительное.
+const PICKER_METRICS = [
+  {
+    key: "model", title: "В модели",
+    hint: "Элементов в срезе, выбранном блоками свойств. Выбранная плитка-показатель на числа плиток не влияет — плитки не фильтруют сами себя, иначе сравнивать их между собой было бы не с чем",
+  },
+  {
+    key: "contracted", title: "Законтрактовано",
+    hint: "Сумма количеств в позициях контрактов объекта по выбранным типам и маркам",
+  },
+  {
+    key: "linked", title: "Привязано к контракту", test: e => !!e.contract_id,
+    hint: "У элемента модели указан контракт",
+  },
+  {
+    key: "planned", title: "Известна плановая дата поставки", test: e => !!e.planned_delivery_date,
+    hint: "У элемента заполнена плановая дата поставки",
+  },
+  {
+    key: "delivered", title: "Доставлено", test: e => e.current_status === "delivered",
+    hint: "Текущий статус — «Доставлен» (смонтированные и принятые сюда не входят)",
+  },
+  {
+    key: "installed", title: "Смонтировано", test: e => e.current_status === "installed",
+    hint: "Текущий статус — «Смонтирован» (принятые сюда не входят)",
+  },
+];
+
+function pickerMetricDef(key) {
+  return PICKER_METRICS.find(m => m.key === key) || null;
+}
+
+// Разряды в числах дашборда: «9 422», а не «9422» — плитки читают взглядом
+// издалека, и сравнивать четырёхзначные числа без разделителя тяжело.
+function pickerNumber(n) {
+  return Number(n).toLocaleString("ru-RU");
+}
+
+// Проходит ли элемент выбранный срез. exceptKey — блок, чей собственный
+// выбор игнорируется: так считается число у КАЖДОГО значения этого блока
+// (иначе выбранное значение показывало бы своё число, а все остальные —
+// нули, и сравнить их между собой было бы нельзя). "__metric__" —
+// игнорировать выбранную плитку: сами плитки себя не фильтруют.
+function pickerElementPasses(element, exceptKey = null) {
+  for (const def of PICKER_SLICERS) {
+    if (def.key === exceptKey) continue;
+    const sel = state.picker.sel[def.key];
+    if (sel.size && !sel.has(def.valueFn(element))) return false;
+  }
+  if (exceptKey !== "__metric__" && state.picker.metric) {
+    const metric = pickerMetricDef(state.picker.metric);
+    if (metric && metric.test && !metric.test(element)) return false;
+  }
+  return true;
+}
+
+function pickerSelectionActive() {
+  return !!state.picker.metric || PICKER_SLICERS.some(d => state.picker.sel[d.key].size);
+}
+
+// «Законтрактовано» — сумма contract_lines.quantity (см.
+// contract_line_totals в /plan-data). У позиции контракта есть только тип
+// элемента и марка: ни крана, ни стоянки, ни этажа, ни подтипа у неё нет и
+// быть не может. Поэтому как только срез сужен по одному из этих свойств
+// (или по плитке-показателю — она тоже свойство ЭЛЕМЕНТА), честного числа
+// не существует, и плитка показывает прочерк с пояснением, а не
+// правдоподобную выдумку (решение пользователя 2026-08-10).
+// Возвращает { value } либо { value: null, reason }.
+const PICKER_CONTRACT_BLOCKERS = [
+  ["subtype", "подтипу"], ["crane", "крану"], ["stance", "стоянке"], ["floor", "этажу"],
+];
+
+function pickerContracted() {
+  const blocked = PICKER_CONTRACT_BLOCKERS.filter(([key]) => state.picker.sel[key].size).map(([, word]) => word);
+  if (state.picker.metric) blocked.push("показателю");
+  if (blocked.length) {
+    return { value: null, reason: `Позиция контракта не делится по ${blocked.join(", ")} — числа в этом разрезе не существует` };
+  }
+  const types = state.picker.sel.elementType;
+  const marks = state.picker.sel.mark;
+  let sum = 0;
+  let skippedNoMark = 0;
+  for (const line of state.contractLineTotals) {
+    if (types.size && !types.has(line.element_type)) continue;
+    if (marks.size) {
+      // Позиция без марки (импорт контрактации не всегда её определяет,
+      // см. app/contracting_import.py) при выборе конкретных марок не
+      // относится ни к одной из них — не суммируем, но и не молчим.
+      if (!line.mark) { skippedNoMark += line.quantity || 0; continue; }
+      if (!marks.has(line.mark)) continue;
+    }
+    sum += line.quantity || 0;
+  }
+  return { value: sum, skippedNoMark };
+}
+
+// Одна плитка показателя.
+function buildPickerMetricTile(metric, base) {
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "picker-metric";
+  const title = document.createElement("div");
+  title.className = "picker-metric-title";
+  title.textContent = metric.title;
+  const value = document.createElement("div");
+  value.className = "picker-metric-value";
+  tile.appendChild(title);
+  tile.appendChild(value);
+  tile.title = metric.hint;
+
+  if (metric.key === "contracted") {
+    const contracted = pickerContracted();
+    if (contracted.value === null) {
+      value.textContent = "—";
+      value.classList.add("muted");
+      tile.title = contracted.reason;
+    } else {
+      value.textContent = pickerNumber(contracted.value);
+      const share = document.createElement("div");
+      share.className = "picker-metric-share";
+      // Сравнение именно с потребностью модели: «выкуплено бумагой»
+      // против «нужно построить» — тот же смысл, что в отчёте
+      // «График контрактации и поставки» (app/report_contracting.py).
+      share.textContent = base.length
+        ? `модель: ${pickerNumber(base.length)} · ${contracted.value >= base.length ? "покрыто" : "дефицит " + pickerNumber(base.length - contracted.value)}`
+        : "";
+      if (contracted.skippedNoMark) {
+        tile.title = `${metric.hint}. Не учтено позиций без марки: ${contracted.skippedNoMark}`;
+      }
+      tile.appendChild(share);
+    }
+    return tile;
+  }
+
+  const count = metric.test ? base.filter(metric.test).length : base.length;
+  value.textContent = pickerNumber(count);
+  if (metric.test) {
+    const share = document.createElement("div");
+    share.className = "picker-metric-share";
+    share.textContent = base.length ? `${Math.round((count / base.length) * 100)}% среза` : "";
+    tile.appendChild(share);
+    tile.classList.add("clickable");
+    if (state.picker.metric === metric.key) tile.classList.add("active");
+    tile.addEventListener("click", () => {
+      state.picker.metric = state.picker.metric === metric.key ? null : metric.key;
+      onPickerChange();
+    });
+  }
+  return tile;
+}
+
+// Один блок-срез.
+function buildPickerSlicer(def) {
+  const block = document.createElement("div");
+  block.className = "picker-block";
+
+  const head = document.createElement("div");
+  head.className = "picker-block-head";
+  const title = document.createElement("span");
+  title.className = "picker-block-title";
+  const sel = state.picker.sel[def.key];
+  title.textContent = sel.size ? `${def.title} (${sel.size})` : def.title;
+  head.appendChild(title);
+  if (sel.size) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "link-btn";
+    clear.textContent = "сбросить";
+    clear.addEventListener("click", () => { sel.clear(); onPickerChange(); });
+    head.appendChild(clear);
+  }
+  block.appendChild(head);
+
+  if (def.search) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "picker-search";
+    input.placeholder = `Поиск: ${def.title.toLowerCase()}…`;
+    input.value = state.picker.search[def.key] || "";
+    // Поиск НЕ перерисовывает блок (иначе на каждом введённом символе
+    // терялся бы фокус) — просто прячет непопавшие строки.
+    input.addEventListener("input", () => {
+      state.picker.search[def.key] = input.value;
+      const q = input.value.trim().toLowerCase();
+      block.querySelectorAll(".picker-row").forEach(row => {
+        row.style.display = !q || row.dataset.label.toLowerCase().includes(q) ? "" : "none";
+      });
+    });
+    block.appendChild(input);
+  }
+
+  // Счётчики — по элементам, прошедшим ОСТАЛЬНЫЕ срезы (см.
+  // pickerElementPasses): значения своего блока сравнимы между собой.
+  const counts = new Map();
+  for (const e of state.elements) {
+    const v = def.valueFn(e);
+    if (!counts.has(v)) counts.set(v, 0);
+    if (pickerElementPasses(e, def.key)) counts.set(v, counts.get(v) + 1);
+  }
+  // Значения — все, что есть в модели, плюс уже выбранные (выбор не
+  // должен исчезнуть, даже если его не осталось ни у одного элемента: тот
+  // же принцип, что и в панели фильтров «Модели», см. allValuesFor).
+  const values = Array.from(new Set([...counts.keys(), ...sel]));
+  values.sort(placementComparator(def.labelFor, { compareRaw: !!def.compareRaw }));
+
+  const list = document.createElement("div");
+  list.className = "picker-list";
+  list.dataset.pickerList = def.key;
+  const q = (state.picker.search[def.key] || "").trim().toLowerCase();
+  for (const v of values) {
+    const label = def.labelFor(v);
+    const row = document.createElement("div");
+    row.className = "picker-row";
+    row.dataset.label = label;
+    const count = counts.get(v) || 0;
+    if (sel.has(v)) row.classList.add("selected");
+    if (!count) row.classList.add("empty");
+    if (q && !label.toLowerCase().includes(q)) row.style.display = "none";
+    const labelEl = document.createElement("span");
+    labelEl.className = "picker-row-label";
+    labelEl.textContent = label;
+    labelEl.title = label;
+    const countEl = document.createElement("span");
+    countEl.className = "picker-row-count";
+    countEl.textContent = pickerNumber(count);
+    row.appendChild(labelEl);
+    row.appendChild(countEl);
+    row.addEventListener("click", () => {
+      if (sel.has(v)) sel.delete(v); else sel.add(v);
+      onPickerChange();
+    });
+    list.appendChild(row);
+  }
+  block.appendChild(list);
+  return block;
+}
+
+// Полная перерисовка дашборда. Состояние выбора живёт в state.picker, а не
+// в DOM, поэтому перестроить всё целиком дешевле и надёжнее, чем точечно
+// обновлять числа (тот же приём, что renderPlacementFilters). Позиции
+// прокрутки списков сохраняем — без этого выбор марки в конце длинного
+// списка отбрасывал бы список в начало на каждый клик.
+function renderPicker() {
+  const panel = document.getElementById("picker-panel");
+  const metrics = document.getElementById("picker-metrics");
+  if (!panel || !metrics) return;
+
+  const scroll = new Map();
+  panel.querySelectorAll("[data-picker-list]").forEach(l => scroll.set(l.dataset.pickerList, l.scrollTop));
+  const panelScroll = panel.scrollTop;
+
+  metrics.innerHTML = "";
+  panel.innerHTML = "";
+
+  if (!state.elements.length) {
+    panel.innerHTML = '<div class="picker-hint">Чертёж не выбран — показывать нечего.</div>';
+    return;
+  }
+
+  const base = state.elements.filter(e => pickerElementPasses(e, "__metric__"));
+  for (const metric of PICKER_METRICS) metrics.appendChild(buildPickerMetricTile(metric, base));
+
+  const hint = document.createElement("div");
+  hint.className = "picker-hint";
+  hint.textContent = "Клик по значению добавляет его в срез, повторный — убирает. "
+    + "Числа у значений и на плитках пересчитываются по остальным выбранным срезам.";
+  panel.appendChild(hint);
+
+  if (pickerSelectionActive()) {
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "btn btn-sm btn-secondary";
+    reset.style.cssText = "margin-bottom:12px; width:100%;";
+    reset.textContent = "Сбросить срез";
+    reset.addEventListener("click", () => {
+      for (const def of PICKER_SLICERS) state.picker.sel[def.key].clear();
+      state.picker.metric = null;
+      onPickerChange();
+    });
+    panel.appendChild(reset);
+  }
+
+  for (const def of PICKER_SLICERS) panel.appendChild(buildPickerSlicer(def));
+
+  panel.querySelectorAll("[data-picker-list]").forEach(l => {
+    const saved = scroll.get(l.dataset.pickerList);
+    if (saved) l.scrollTop = saved;
+  });
+  panel.scrollTop = panelScroll;
+}
+
+// То же, что onPlacementFilterChange для «Модели»: показать/скрыть элементы
+// на схеме (в 3D — пересобрать сцену), пересчитать сводку по статусам и
+// перерисовать сам дашборд.
+function onPickerChange() {
+  applyPlacementFilters();
+  renderLegend();
+  renderPicker();
+}
+
+// Перечисление выбранного среза для строки состояния под схемой — тем же
+// приёмом и с теми же подписями, что describeActiveFilters у «Модели».
+function describePickerSelection() {
+  const parts = [];
+  for (const def of PICKER_SLICERS) {
+    const sel = state.picker.sel[def.key];
+    if (!sel.size) continue;
+    const values = Array.from(sel);
+    parts.push(values.length <= STATUS_FILTER_LIST_LIMIT
+      ? `${def.title}: ${values.map(v => def.labelFor(v)).join(", ")}`
+      : `${def.title}: выбрано ${values.length}`);
+  }
+  const metric = state.picker.metric ? pickerMetricDef(state.picker.metric) : null;
+  if (metric) parts.push(`Показатель: ${metric.title}`);
+  return parts;
+}
+
+// ---------- переключатель рабочего места (тулбар) ----------
+
+const btnWsModel = document.getElementById("btn-ws-model");
+const btnWsPicker = document.getElementById("btn-ws-picker");
+
+function setWorkspace(ws) {
+  const picker = ws === "picker";
+  if (picker === state.picker.active) return;
+  state.picker.active = picker;
+  btnWsModel.classList.toggle("active", !picker);
+  btnWsPicker.classList.toggle("active", picker);
+  document.getElementById("picker-panel").style.display = picker ? "" : "none";
+  document.getElementById("picker-metrics").style.display = picker ? "" : "none";
+  // Вкладка «Фильтры» в сайдбаре относится к отбору «Модели», в АРМ он не
+  // действует (отборы раздельные) — прячем саму вкладку, чтобы её нельзя
+  // было принять за причину того, что видно на схеме. Остальные вкладки
+  // (карточка изделия, статусы, вид) в АРМ нужны так же, как и в «Модели».
+  const filtersTab = document.querySelector('.tab-btn[data-tab="filters"]');
+  if (filtersTab) {
+    filtersTab.style.display = picker ? "none" : "";
+    if (picker && filtersTab.classList.contains("active")) {
+      document.querySelector('.tab-btn[data-tab="properties"]').click();
+    }
+  }
+  if (picker) renderPicker();
+  // Рабочая область стала уже/шире на ширину панели АРМ. 2D пересчитывает
+  // себя сам (ResizeObserver на #stage), а 3D слушает только resize ОКНА —
+  // без этого вызова сцена осталась бы отрисованной в прежних габаритах и
+  // съехала бы в угол холста (поймано живой проверкой).
+  on3DResize();
+  // Схема обязана перестроиться при ЛЮБОМ переключении: набор действующих
+  // фильтров сменился целиком (см. passesPlacementFilters).
+  if (state.elements.length) {
+    applyPlacementFilters();
+    renderLegend();
+    if (!picker) renderPlacementFilters();
+  }
+}
+
+btnWsModel.addEventListener("click", () => setWorkspace("model"));
+btnWsPicker.addEventListener("click", () => setWorkspace("picker"));
 
 function renderAxisGrid(data) {
   const layer = document.getElementById("axis-layer");
@@ -4627,6 +4999,12 @@ function clearWorkspace() {
   state.view = null;
   state.initialView = null;
   for (const key of Object.keys(state.placementFilters)) state.placementFilters[key].clear();
+  // Срез АРМ — тоже про элементы закрытого чертежа (марки, стоянки, этажи
+  // другого объекта), переносить его на следующий чертёж нельзя.
+  for (const key of Object.keys(state.picker.sel)) state.picker.sel[key].clear();
+  state.picker.metric = null;
+  state.picker.search = {};
+  state.contractLineTotals = [];
   resetAllDateFilters();
   resetChangeFilter();   // в нём лежат id элементов, которых на схеме больше нет
   for (const key of Object.keys(state.placementGroupsExpanded)) state.placementGroupsExpanded[key].clear();
@@ -4905,6 +5283,7 @@ async function loadPlanInner(preserveView = true) {
   state.labelVisibility = data.label_visibility;
   state.labelDatesVisibility = data.label_dates_visibility || {};
   state.contracts = data.contracts || [];
+  state.contractLineTotals = data.contract_line_totals || [];
   state.defaultContracts = data.default_contracts || {};
   state.elementShapes = data.element_shapes || {};
   state.zones = data.zones || [];
@@ -4919,6 +5298,7 @@ async function loadPlanInner(preserveView = true) {
   renderZoneToggles();
   renderStanceZoneToggles();
   renderPlacementFilters();
+  renderPicker();               // дашборд АРМ считается по тем же данным
   applyPlacementFilters(false); // 3D-сцена собирается ниже, одним разом
   showPlaceholderCard();
 
@@ -18524,6 +18904,14 @@ document.getElementById("menu-bulk-edit").addEventListener("click", () => {
 // счёта быть не должно.
 function updateBulkEditFilterCount() {
   const box = document.getElementById("bulk-edit-filter-count");
+  // В режиме контрактации фильтр схемы не при чём: строка файла — не
+  // элемент, а позиция контракта, и «прошедшие фильтр элементы» к ней
+  // отношения не имеют. Галочка прячется целиком (см. setBulkEditMode) —
+  // отключённая, но видимая, она заставляла бы гадать, почему не работает.
+  if (bulkEditMode === "contracting") {
+    box.textContent = "Все позиции всех контрактов одним файлом.";
+    return;
+  }
   if (!document.getElementById("bulk-edit-use-filter").checked) {
     box.textContent = "Все элементы всех объектов одним файлом.";
     return;
@@ -18541,6 +18929,9 @@ function setBulkEditMode(mode) {
   document.querySelectorAll("[data-mode-intro]").forEach((el) => {
     el.style.display = el.dataset.modeIntro === mode ? "" : "none";
   });
+  const фильтр = document.getElementById("bulk-edit-use-filter");
+  фильтр.closest("label").style.display = mode === "contracting" ? "none" : "";
+  updateBulkEditFilterCount();
   // Требования к файлу — свои у каждого режима; переключаются той же
   // разметкой data-mode-intro, что и пояснения (см. выше).
   // Полный сброс: расхождения одного режима нельзя применять в другом —
@@ -18571,7 +18962,11 @@ document.getElementById("bulk-edit-export").addEventListener("click", async () =
     // тысячи значений — в query string он не помещается (тот же приём и та
     // же причина, что у /export.xlsx).
     const тело = { mode: bulkEditMode };
-    if (document.getElementById("bulk-edit-use-filter").checked) {
+    // Отбор по фильтру схемы — только для режимов, где строка это элемент
+    // (см. updateBulkEditFilterCount): галочка могла остаться отмеченной с
+    // прошлого режима, а сервер такой список для контрактации отвергает.
+    if (bulkEditMode !== "contracting"
+        && document.getElementById("bulk-edit-use-filter").checked) {
       тело.element_ids = state.elements.filter(passesPlacementFilters).map((e) => e.id);
     }
     const res = await fetch("/elements/bulk-edit/export", {
@@ -18618,9 +19013,15 @@ document.getElementById("bulk-edit-analyze").addEventListener("click", async () 
     // По умолчанию отмечено ВСЁ: пользователь правил файл осознанно, и
     // заставлять его заново отмечать каждую свою же правку — работа впустую.
     bulkEditChecked = new Set(bulkEditChanges.map((_, i) => i));
+    // «У N элементов» верно только там, где строка — элемент или его запись
+    // истории. В контрактации строка это позиция контракта, и элементов в
+    // файле нет вовсе.
+    const чего = bulkEditMode === "contracting" ? "строках файла" : "элементов";
     setBulkEditStatus(
       `Прочитано строк: ${data.rows_read}. Расхождений: ${bulkEditChanges.length} ` +
-      `у ${data.elements_touched} элементов.`, false);
+      (bulkEditMode === "contracting"
+        ? `в ${data.elements_touched} ${чего}.`
+        : `у ${data.elements_touched} ${чего}.`), false);
     const rej = document.getElementById("bulk-edit-rejected");
     if ((data.rejected || []).length) {
       rej.innerHTML = `<b>Не может быть применено (${data.rejected.length}):</b>`;
@@ -18665,9 +19066,19 @@ bulkEditApplyBtn.addEventListener("click", async () => {
       body: JSON.stringify({ changes: selected, contracting_date: датаПоле.value || null,
                              mode: bulkEditMode }),
     });
-    let text = `Обновлено элементов: ${data.elements_updated}.`;
-    if (data.records_inserted !== undefined) {
-      text += ` Записей истории добавлено: ${data.records_inserted}, изменено: ${data.records_updated}.`;
+    // Сводка — по сущностям ТОГО режима, в котором применяли: у реквизитов
+    // это элементы, у истории — записи, у контрактации — позиции и записи
+    // справочников (одна спецификация приходит в десятках строк файла, но
+    // правится один раз).
+    let text;
+    if (data.lines_inserted !== undefined) {
+      text = `Позиций добавлено: ${data.lines_inserted}, изменено: ${data.lines_updated}. `
+           + `Записей контрактации обновлено: ${data.entities_updated}.`;
+    } else {
+      text = `Обновлено элементов: ${data.elements_updated}.`;
+      if (data.records_inserted !== undefined) {
+        text += ` Записей истории добавлено: ${data.records_inserted}, изменено: ${data.records_updated}.`;
+      }
     }
     if ((data.skipped || []).length) text += ` Пропущено: ${data.skipped.length}.`;
     setBulkEditStatus(text, false);
