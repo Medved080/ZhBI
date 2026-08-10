@@ -214,7 +214,20 @@ let state = {
     },
     metric: null,
     search: {},
+    // Какие контракты развёрнуты по маркам в правой области (2026-08-10).
+    expandedContracts: new Set(),
+    // «Подсветить несвязанные» — отдельная функция, включается кнопкой в
+    // области контрактов (2026-08-10). Изначально подсветка была мерцающей
+    // и включалась сама; от мерцания отказались — оно заметно тормозило
+    // (перерисовка тысяч фигур по таймеру), а самовключение делало
+    // поведение схемы непредсказуемым. Теперь это явный тумблер и статичная
+    // подсветка, по умолчанию выключенная.
+    highlightUnlinked: false,
   },
+  // id изделий без контракта, подсвеченных на схеме: показываются СВЕРХ
+  // текущего среза. Пересчитывается в applyPlacementFilters —
+  // единственной точке, через которую проходит и 2D, и 3D.
+  pendingLinkIds: new Set(),
   // Какие родители иерархических групп фильтра сейчас развёрнуты — чисто
   // UI-состояние навигации, но хранится в state (не в DOM), иначе
   // разворот сбрасывался бы при каждой полной перерисовке фильтров
@@ -256,6 +269,10 @@ let state = {
     // вызовов отрисовки на кадр; замер и обоснование в Docs/backlog.md.
     merged: null, // {mesh, edges, faceElementIds, segmentElementIds, rangeById}
     highlightMesh: null, // отдельный меш ВЫБРАННОГО элемента поверх слитой геометрии
+    // Накладной меш подсвеченных «несвязанных» (АРМ) — тем же приёмом,
+    // что и подсветка выбранного: из слитой геометрии не выкусить один
+    // элемент, поэтому поверх кладётся отдельный объект (update3DPendingMesh).
+    pendingMesh: null,
     highlightElementId: null, // чей именно — подсветка одна на сцену (см. set3DHighlight)
     // Ключ — ЯРУС (level_id), а не запись справочника: у одной зоны ярусов
     // несколько (решение З7, /plan-data отдаёт по строке на ярус с ОДНИМ и
@@ -455,7 +472,7 @@ function describeActiveFilters() {
   return parts;
 }
 
-function updateStatusBarDefault(visibleCount) {
+function updateStatusBarDefault(visibleCount, pendingCount = 0) {
   if (!state.elements.length) {
     setStatusBarDefault("Чертёж не выбран");
     return;
@@ -469,9 +486,12 @@ function updateStatusBarDefault(visibleCount) {
   // как он назван в самом дашборде («Сбросить срез»): полоса под схемой
   // должна объяснять то, что человек видит на экране, его же словами.
   const слово = state.picker.active ? "Срез" : "Фильтры";
-  setStatusBarDefault(parts.length
+  // Мерцающие изделия показаны СВЕРХ среза — иначе «Показано N» противоречит
+  // самому себе: часть видимого отбор не проходит и пройти не может.
+  const подсветка = pendingCount ? ` · подсвечено ${pendingCount} без контракта` : "";
+  setStatusBarDefault((parts.length
     ? `${shown} · ${слово} — ${parts.join("; ")}`
-    : `${shown} · ${слово === "Срез" ? "Срез не задан" : "Фильтры не заданы"}`);
+    : `${shown} · ${слово === "Срез" ? "Срез не задан" : "Фильтры не заданы"}`) + подсветка);
 }
 
 function maybeWarnContract(result) {
@@ -2150,13 +2170,21 @@ function refreshSubLabelsForType(type) {
 }
 
 function applyPlacementFilters(rebuild3D = true) {
+  // «Предстоит связать» — СНАЧАЛА: от этого набора зависит и видимость
+  // изделий (они показываются сверх среза), и пересборка 3D ниже.
+  state.pendingLinkIds = pickerPendingLinkIds();
+  const pending = state.pendingLinkIds;
   const topVisible = topVisibleLabelIds(); // только 2D, см. комментарий там же
   let visibleCount = 0;
   for (const element of state.elements) {
-    const passes = passesPlacementFilters(element);
+    const подсвечен = pending.has(element.id);
+    const passes = passesPlacementFilters(element) || подсвечен;
     if (passes) visibleCount++;
     const shape = state.shapeById.get(element.id);
-    if (shape) shape.style.display = passes ? "" : "none";
+    if (shape) {
+      shape.style.display = passes ? "" : "none";
+      shape.classList.toggle("pending-link", подсвечен);
+    }
     // Элемент стал видимым, а его допстрока устарела, пока он был скрыт —
     // догоняем именно здесь (см. pendingSubLabelRefresh).
     if (passes && pendingSubLabelRefresh.has(element.id)) {
@@ -2181,7 +2209,7 @@ function applyPlacementFilters(rebuild3D = true) {
   else requestRender3D();
   // Строка состояния под схемой — здесь же и по тем же данным (сколько
   // элементов реально осталось видно), а не отдельным обходом.
-  updateStatusBarDefault(visibleCount);
+  updateStatusBarDefault(visibleCount, pending.size);
 }
 
 // Что происходит после ЛЮБОГО изменения в фильтре по размещению: заново
@@ -3554,7 +3582,10 @@ function pickerContracted() {
       // см. app/contracting_import.py) при выборе конкретных марок не
       // относится ни к одной из них — не суммируем, но и не молчим.
       if (!line.mark) { skippedNoMark += line.quantity || 0; continue; }
-      if (!marks.has(line.mark)) continue;
+      // Сравнение марок — нечувствительное к регистру и пробелам (markKey):
+      // марка позиции пришла из файла контрактации, марка среза — из
+      // чертежа, и точное совпадение строк тут не гарантировано.
+      if (!нормМарки(marks).has(markKey(line.mark))) continue;
     }
     sum += line.quantity || 0;
   }
@@ -3585,9 +3616,10 @@ function pickerContractedFor(key, value) {
       if (line.element_type !== value) continue;
       // Позиция без марки при выбранных марках не относится ни к одной из
       // них (та же логика, что в pickerContracted).
-      if (marks.size && !(line.mark && marks.has(line.mark))) continue;
+      if (marks.size && !(line.mark && нормМарки(marks).has(markKey(line.mark)))) continue;
     } else {
-      if ((line.mark || PLACEMENT_NONE) !== value) continue;
+      const ключСтроки = markKey(line.mark);
+      if (value === PLACEMENT_NONE ? ключСтроки !== null : ключСтроки !== markKey(value)) continue;
       if (types.size && !types.has(line.element_type)) continue;
     }
     sum += line.quantity || 0;
@@ -3843,6 +3875,109 @@ function buildPickerSlicer(def) {
 // сужен свойством изделия, остаток отвечает на вопрос «сколько ещё не
 // расписано ВНУТРИ этого среза» — об этом пишется строкой под заголовком,
 // иначе два числа в одной строке жили бы в разных системах отсчёта молча.
+// «Подсветить несвязанные» (живой запрос 2026-08-10, переработан в тот же
+// день). Показывает на схеме изделия, ещё не привязанные ни к какому
+// контракту: если контракт выбран в срезе или развёрнут по маркам — только
+// те, чью марку этот контракт ещё не добрал («что предстоит связать именно
+// им»); если контракт не выбран — все несвязанные изделия среза.
+//
+// Функция включается ЯВНО, кнопкой в области контрактов, и подсветка
+// СТАТИЧНАЯ. Первая версия мерцала раз в секунду и включалась сама, стоило
+// тронуть контракт: мерцание заметно тормозило (перерисовка тысяч фигур по
+// таймеру), а самовключение делало поведение схемы непредсказуемым —
+// решение пользователя отказаться от обоих.
+//
+// Изделия-кандидаты показываются СВЕРХ среза (они по определению не проходят
+// отбор по контракту — контракта у них нет), но остальные срезы соблюдают:
+// выбран этаж — подсвечено то, что предстоит связать на этом этаже.
+function pickerPendingLinkIds() {
+  const пусто = new Set();
+  if (!state.picker.active || !state.picker.highlightUnlinked) return пусто;
+  const интересные = new Set([...state.picker.sel.contract, ...state.picker.expandedContracts]);
+  интересные.delete(PLACEMENT_NONE);   // «без контракта» — не контракт
+  // Контракт не выбран — подсвечиваем ВСЁ несвязанное в срезе: вопрос
+  // «что ещё не расписано» осмыслен и без выбранного документа.
+  if (!интересные.size) {
+    const все = new Set();
+    for (const e of state.elements) {
+      if (e.contract_id) continue;
+      if (!pickerElementPasses(e, "contract")) continue;
+      все.add(e.id);
+    }
+    return все;
+  }
+
+  // Остаток по каждой позиции этих контрактов: закуплено минус уже
+  // привязано. Ключ позиции — марка, а если марки у позиции НЕТ, то тип
+  // элемента (живой репорт 2026-08-10: «выбрал контракт с остатками, ничего
+  // не мерцает»). Позиция без марки — не редкость и не порча данных: импорт
+  // контрактации определяет марку эвристикой по префиксу и часто не может
+  // (см. app/contracting_import.py, Docs/TZ.md §5.4), такие позиции живут с
+  // одним типом. Пропускать их, как делала первая версия, значило молчать
+  // ровно там, где связывать предстоит больше всего.
+  const остаток = new Map();
+  for (const line of state.contractLineTotals) {
+    if (!интересные.has(line.contract_id)) continue;
+    const ключ = pickerLineKey(line);
+    if (!ключ) continue;
+    остаток.set(ключ, (остаток.get(ключ) || 0) + (line.quantity || 0));
+  }
+  if (!остаток.size) return пусто;
+  for (const e of state.elements) {
+    if (!e.contract_id || !интересные.has(e.contract_id)) continue;
+    // Сначала пробуем позицию по марке, потом «типовую» — привязанное
+    // изделие закрывает ту позицию, которая его описывает точнее.
+    const поМарке = markKey(e.mark), поТипу = typeKey(e.element_type);
+    const ключ = остаток.has(поМарке) ? поМарке : (остаток.has(поТипу) ? поТипу : null);
+    if (ключ) остаток.set(ключ, остаток.get(ключ) - 1);
+  }
+  const недобрано = new Set([...остаток].filter(([, v]) => v > 0).map(([k]) => k));
+  if (!недобрано.size) return пусто;
+
+  const ids = new Set();
+  for (const e of state.elements) {
+    if (e.contract_id) continue;                       // уже к чему-то привязан
+    if (!недобрано.has(markKey(e.mark)) && !недобрано.has(typeKey(e.element_type))) continue;
+    if (!pickerElementPasses(e, "contract")) continue; // остальные срезы соблюдаем
+    ids.add(e.id);
+  }
+  return ids;
+}
+
+// Сопоставление позиции контракта с изделием модели идёт по марке, а марка
+// приходит из внешних файлов (контрактация из XLS) и из чертежа —
+// РАЗНЫМИ путями. Точное сравнение строк на этом спотыкается о регистр и
+// лишние пробелы; регистронезависимое сопоставление марок и так значится
+// открытым пунктом по всей системе (см. CLAUDE.md, свёртка задвоенных
+// записей справочников). Здесь оно применяется локально — дашборд только
+// СЧИТАЕТ, ничего не записывает, поэтому лишнего риска нет.
+function markKey(mark) {
+  const текст = String(mark ?? "").trim().toLowerCase();
+  return текст ? `m:${текст}` : null;
+}
+function typeKey(elementType) {
+  const текст = String(elementType ?? "").trim().toLowerCase();
+  return текст ? `t:${текст}` : null;
+}
+function pickerLineKey(line) {
+  return markKey(line.mark) || typeKey(line.element_type);
+}
+// Множество выбранных марок в нормализованном виде. Считается на каждый
+// вызов, но множество это — выбор человека (единицы значений), а не
+// девять тысяч изделий.
+function нормМарки(selection) {
+  const out = new Set();
+  for (const m of selection) { const k = markKey(m); if (k) out.add(k); }
+  return out;
+}
+
+// Видно ли изделие на схеме ПРЯМО СЕЙЧАС: прошло отбор или подсвечено как
+// несвязанное. Единая точка для 2D и 3D — иначе подсвеченные изделия
+// появлялись бы только в одном из режимов.
+function elementVisibleNow(element) {
+  return passesPlacementFilters(element) || state.pendingLinkIds.has(element.id);
+}
+
 function pickerContractTotals() {
   const byContract = new Map();
   for (const line of state.contractLineTotals) {
@@ -3896,6 +4031,39 @@ function renderPickerContracts() {
     note.className = "picker-block-note";
     note.textContent = "«привязано» и «остаток» — внутри выбранного среза";
     note.title = "«Всего» — число из позиций контракта, оно от среза не зависит. «Привязано» считается по изделиям, прошедшим остальные срезы, поэтому и остаток относится к срезу, а не ко всему объекту";
+    box.appendChild(note);
+  }
+
+  // «Подсветить несвязанные» — тумблер (2026-08-10). Функция явная и по
+  // умолчанию выключенная: подсветка меняет то, что видно на схеме, сверх
+  // среза, и включаться сама не должна.
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "btn btn-sm " + (state.picker.highlightUnlinked ? "btn-primary" : "btn-secondary");
+  toggle.style.cssText = "width:100%; margin-bottom:6px;";
+  toggle.textContent = state.picker.highlightUnlinked
+    ? "Подсветка несвязанных включена" : "Подсветить несвязанные";
+  toggle.title = "Показать на схеме изделия без контракта: при выбранном (или развёрнутом) контракте — только те, чью марку он ещё не добрал; иначе — все несвязанные изделия среза";
+  toggle.addEventListener("click", () => {
+    state.picker.highlightUnlinked = !state.picker.highlightUnlinked;
+    onPickerChange();
+  });
+  box.appendChild(toggle);
+
+  // Что сейчас с подсветкой. Молчать нельзя: человек включил её у контракта
+  // с остатком, схема не изменилась — и без строки-ответа это выглядит как
+  // поломка, хотя причина в данных (изделий такой марки в модели нет либо
+  // все уже привязаны). Живой репорт 2026-08-10.
+  if (state.picker.highlightUnlinked) {
+    const подсвечено = state.pendingLinkIds.size;
+    const note = document.createElement("div");
+    note.className = "picker-block-note";
+    if (подсвечено) {
+      note.textContent = `подсвечено ${pickerNumber(подсвечено)} изделий без контракта`;
+    } else {
+      note.textContent = "подсвечивать нечего: несвязанных изделий в этом срезе нет";
+      note.title = "Либо все изделия среза уже привязаны к контрактам, либо у выбранного контракта не осталось непокрытых позиций, либо марка его позиций не встречается в чертеже";
+    }
     box.appendChild(note);
   }
 
@@ -4000,7 +4168,25 @@ function renderPickerContracts() {
         if (sel.has(c.id)) sel.delete(c.id); else sel.add(c.id);
         onPickerChange();
       });
+      // Кнопка разворота — ПЕРЕД подписью и со своим обработчиком:
+      // развернуть контракт и выбрать его в срез — разные намерения, и
+      // клик по треугольнику не должен делать второе (см. stopPropagation).
+      const развёрнут = state.picker.expandedContracts.has(c.id);
+      const expand = document.createElement("button");
+      expand.type = "button";
+      expand.className = "filter-expand-btn";
+      expand.textContent = развёрнут ? "▾" : "▸";
+      expand.title = развёрнут ? "Свернуть позиции контракта" : "Показать позиции по маркам";
+      expand.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (развёрнут) state.picker.expandedContracts.delete(c.id);
+        else state.picker.expandedContracts.add(c.id);
+        onPickerChange();
+      });
+      row.insertBefore(expand, row.firstChild);
       цель.appendChild(row);
+
+      if (развёрнут) цель.appendChild(buildContractMarkRows(c, linked));
     }
   }
 
@@ -4035,6 +4221,90 @@ function renderPickerContracts() {
 
   box.appendChild(list);
   box.scrollTop = scroll;
+}
+
+// Позиции одного контракта — по маркам (живой запрос 2026-08-10). Те же три
+// числа, что у контракта: закуплено по позиции, привязано изделий этой марки
+// к ЭТОМУ контракту, остаток. Порядок — сначала строки с ненулевым остатком:
+// это и есть то, что предстоит связать, и ровно они подсвечиваются на схеме.
+// Разделителя «нет в текущем срезе» здесь нет намеренно: позиций у контракта
+// единицы, черта в каждом развороте превратила бы список в лестницу.
+function buildContractMarkRows(contract, linked) {
+  const frag = document.createDocumentFragment();
+  const lines = state.contractLineTotals.filter(l => l.contract_id === contract.id);
+  if (!lines.length) {
+    const empty = document.createElement("div");
+    empty.className = "picker-block-note";
+    empty.style.paddingLeft = "22px";
+    empty.textContent = "позиций нет";
+    frag.appendChild(empty);
+    return frag;
+  }
+
+  // Привязано по позиции ИМЕННО этого контракта — с учётом остальных
+  // срезов, как и все счётчики дашборда (см. оговорку в шапке области).
+  // Ключ позиции — марка, а у позиции без марки — тип элемента, и
+  // сравнение нечувствительно к регистру и пробелам (см. markKey): марки
+  // приходят из чертежа и из файла контрактации разными путями.
+  const ключиПозиций = new Set(lines.map(pickerLineKey).filter(Boolean));
+  const привязаноПоПозиции = new Map();
+  for (const e of state.elements) {
+    if (e.contract_id !== contract.id) continue;
+    if (!pickerElementPasses(e, "contract")) continue;
+    const поМарке = markKey(e.mark), поТипу = typeKey(e.element_type);
+    const ключ = ключиПозиций.has(поМарке) ? поМарке : (ключиПозиций.has(поТипу) ? поТипу : поМарке);
+    if (!ключ) continue;
+    привязаноПоПозиции.set(ключ, (привязаноПоПозиции.get(ключ) || 0) + 1);
+  }
+
+  const строки = lines.map(l => {
+    const ключ = pickerLineKey(l) || PLACEMENT_NONE;
+    const всего = l.quantity || 0;
+    const привязано = привязаноПоПозиции.get(ключ) || 0;
+    return { line: l, ключ, всего, привязано, остаток: всего - привязано };
+  });
+  // Сначала строки с остатком (их и предстоит связать), внутри — по
+  // подписи, а не по служебному ключу: ключ нормализован для сравнения и
+  // порядок по нему для глаза случаен.
+  const подписьСтроки = s => s.line.mark || s.line.element_type || "";
+  строки.sort((a, b) => (b.остаток > 0) - (a.остаток > 0)
+    || подписьСтроки(a).localeCompare(подписьСтроки(b), "ru", { numeric: true }));
+
+  for (const s of строки) {
+    const row = document.createElement("div");
+    row.className = "picker-row picker-row-mark";
+    // Позиция без марки (импорт не всегда её определяет) подписывается своим
+    // типом — иначе строка выглядит безымянной.
+    const подпись = s.line.mark || `${s.line.element_type || "тип не определён"} · без марки`;
+    row.dataset.label = подпись;
+    const выбрана = s.line.mark
+      ? state.picker.sel.mark.has(s.line.mark)
+      : state.picker.sel.elementType.has(s.line.element_type);
+    if (выбрана) row.classList.add("selected");
+    const labelEl = pickerLabelSpan(подпись);
+    labelEl.title = s.остаток > 0
+      ? `Нераспределённых позиций: ${s.остаток} — непривязанные изделия этой марки подсвечиваются на схеме (кнопка «Подсветить несвязанные»)`
+      : подпись;
+    row.appendChild(labelEl);
+    row.appendChild(pickerCountSpan(s.всего, "contracting"));
+    row.appendChild(pickerCountSpan(s.привязано));
+    row.appendChild(pickerRemainderSpan(s.остаток));
+    // Клик по марке — тот же срез «Марка», что и в левой панели: строка
+    // контракта и строка блока слева обязаны означать одно и то же.
+    row.addEventListener("click", () => {
+      if (s.line.mark) {
+        const sel = state.picker.sel.mark;
+        if (sel.has(s.line.mark)) sel.delete(s.line.mark); else sel.add(s.line.mark);
+      } else if (s.line.element_type) {
+        const sel = state.picker.sel.elementType;
+        if (sel.has(s.line.element_type)) sel.delete(s.line.element_type);
+        else sel.add(s.line.element_type);
+      }
+      onPickerChange();
+    });
+    frag.appendChild(row);
+  }
+  return frag;
 }
 
 function pickerLabelSpan(text) {
@@ -4218,6 +4488,8 @@ function setWorkspace(ws) {
   document.getElementById("picker-panel").style.display = picker ? "" : "none";
   document.getElementById("picker-metrics").style.display = picker ? "" : "none";
   document.getElementById("picker-contracts").style.display = picker ? "" : "none";
+  document.getElementById("picker-panel-resize").style.display = picker ? "" : "none";
+  document.getElementById("picker-contracts-resize").style.display = picker ? "" : "none";
   // Правая панель: в АРМ — свёрнута до ярлычка и раскрывается поверх схемы,
   // в «Модели» — закреплена и тянется за ручку, как была.
   const sidebar = document.getElementById("sidebar");
@@ -5702,6 +5974,8 @@ function clearWorkspace() {
   for (const key of Object.keys(state.picker.sel)) state.picker.sel[key].clear();
   state.picker.metric = null;
   state.picker.search = {};
+  state.picker.expandedContracts.clear();
+  state.pendingLinkIds = new Set();
   state.contractLineTotals = [];
   resetAllDateFilters();
   resetChangeFilter();   // в нём лежат id элементов, которых на схеме больше нет
@@ -8191,6 +8465,56 @@ window.addEventListener("mousemove", (e) => {
   sidebarEl.style.width = width + "px";
   localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
 });
+
+// ---------- ширина панелей АРМ (2026-08-10, живой запрос) ----------
+// Тот же механизм, что у сайдбара выше, но панелей две и они по разные
+// стороны рабочей области: у левой ширина растёт вправо от левого края
+// окна, у правой — влево от правого. Ширина запоминается за компьютером
+// (localStorage), как и у сайдбара: это настройка рабочего места человека,
+// а не свойство данных.
+//
+// Ручка — элемент разметки рядом с панелью, а не CSS resize: resize у
+// flex-элемента даёт хват только в углу и не умеет ни границ, ни
+// сохранения.
+function makePanelResizer(handle, panel, { fromRight, key, min = 220, max = 640 }) {
+  if (!handle || !panel) return;
+  const saved = localStorage.getItem(key);
+  if (saved) panel.style.width = saved + "px";
+  let dragging = false;
+  handle.addEventListener("mousedown", (e) => {
+    dragging = true;
+    handle.classList.add("dragging");
+    e.preventDefault();
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("dragging");
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    // Считаем от ПРОТИВОПОЛОЖНОГО края самой панели, а не от края окна:
+    // справа от области контрактов стоит ещё ярлычок свёрнутой правой
+    // панели, и отсчёт от окна давал бы смещение на его ширину.
+    const rect = panel.getBoundingClientRect();
+    const raw = fromRight ? rect.right - e.clientX : e.clientX - rect.left;
+    const width = Math.min(max, Math.max(min, raw));
+    panel.style.width = width + "px";
+    localStorage.setItem(key, String(width));
+    // Схема съезжает вместе с границей панели: 2D пересчитает себя сам
+    // (ResizeObserver на #stage), 3D слушает только resize окна.
+    on3DResize();
+  });
+}
+
+makePanelResizer(
+  document.getElementById("picker-panel-resize"), document.getElementById("picker-panel"),
+  { fromRight: false, key: "zhbi_picker_panel_width" },
+);
+makePanelResizer(
+  document.getElementById("picker-contracts-resize"), document.getElementById("picker-contracts"),
+  { fromRight: true, key: "zhbi_picker_contracts_width", min: 240 },
+);
 
 // ==================== Esc ЗАКРЫВАЕТ ВЕРХНЮЮ ОТКРЫТУЮ ФОРМУ ====================
 // Раньше Esc закрывал ВСЕ открытые модалки разом — если из списка
@@ -13552,16 +13876,52 @@ async function renderContractExpandedView() {
 
 // ---------- редактирование контракта: динамический список строк тип+марка+количество
 // (см. Docs/backlog.md, "Контрактация 2.0" — марка добавлена к типу) ----------
+// Марки, встречающиеся у изделий ЭТОГО типа (живой запрос 2026-08-10:
+// «свяжи поле выбора марки с типом изделия, сейчас показывает полный
+// список»). Пустой или незнакомый тип — все марки объекта, как было: пока
+// тип не выбран, сужать нечем, а подставлять пустой список значило бы
+// оставить человека вообще без подсказки.
+// Сравнение типа — нечувствительное к регистру и пробелам (typeKey), той же
+// причины ради, что и в дашборде: тип в позиции контракта мог прийти из
+// файла контрактации, а не из чертежа.
+function marksForElementType(elementType) {
+  const ключ = typeKey(elementType);
+  const marks = new Set();
+  for (const e of state.elements) {
+    if (!e.mark) continue;
+    if (ключ && typeKey(e.element_type) !== ключ) continue;
+    marks.add(e.mark);
+  }
+  return Array.from(marks).sort((a, b) => a.localeCompare(b, "ru", { numeric: true }));
+}
+
+let ceLineDatalistSeq = 0;
+
 function addContractLineRow(elementType, mark, quantity) {
   const container = document.getElementById("ce-lines");
   const row = document.createElement("div");
   row.className = "ce-line-row";
+  // У каждой строки СВОЙ список марок: он зависит от типа, выбранного
+  // в этой же строке, а строк в форме сколько угодно.
+  const listId = `ce-line-marks-${++ceLineDatalistSeq}`;
   row.innerHTML = `
     <input type="text" class="ce-line-type" list="ce-known-types" placeholder="тип элемента" value="${escapeHtml(elementType || "")}"/>
-    <input type="text" class="ce-line-mark" list="ce-known-marks" placeholder="марка (необязательно)" value="${escapeHtml(mark || "")}"/>
+    <input type="text" class="ce-line-mark" list="${listId}" placeholder="марка (необязательно)" value="${escapeHtml(mark || "")}"/>
+    <datalist id="${listId}"></datalist>
     <input type="number" class="ce-line-qty" min="0" placeholder="кол-во" value="${quantity != null ? quantity : ""}"/>
     <button class="btn btn-sm btn-secondary ce-line-remove" type="button">✕</button>
   `;
+  const typeInput = row.querySelector(".ce-line-type");
+  const datalist = row.querySelector(`#${listId}`);
+  const refreshMarks = () => {
+    datalist.innerHTML = marksForElementType(typeInput.value)
+      .map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
+  };
+  refreshMarks();
+  // input, а не только change: тип вводится и выбором из подсказки, и
+  // руками, а список марок должен успевать за ним по ходу набора.
+  typeInput.addEventListener("input", refreshMarks);
+  typeInput.addEventListener("change", refreshMarks);
   row.querySelector(".ce-line-remove").addEventListener("click", () => row.remove());
   container.appendChild(row);
 }
@@ -13796,6 +14156,9 @@ async function openContractEdit(contract) {
   // Docs/backlog.md.
   document.getElementById("ce-known-types").innerHTML =
     Object.keys(state.labelVisibility).map(t => `<option value="${escapeHtml(t)}"></option>`).join("");
+  // Общий список марок остался ради тех полей формы, где типа рядом нет.
+  // У СТРОК ПОЗИЦИЙ с 2026-08-10 свой список на строку — только марки
+  // выбранного в ней типа (см. addContractLineRow/marksForElementType).
   const knownMarks = new Set(state.elements.map(e => e.mark).filter(Boolean));
   document.getElementById("ce-known-marks").innerHTML =
     Array.from(knownMarks).sort().map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
@@ -16255,8 +16618,15 @@ function releaseTasksHtml(tasks) {
       ? `<button class="btn btn-sm btn-secondary" data-release-run="${escapeHtml(t.name)}">`
         + `${t.kind === "cleanup" ? "Выполнить уборку" : "Повторить"}</button>`
       : "";
+    // Версия и дата — у КАЖДОЙ обработки (запрос пользователя 2026-08-10):
+    // список идёт от свежих к ранним (порядок задаёт сервер, см. status), и
+    // без них не понять, что приехало последним обновлением, а что лежит с
+    // прошлых. Дата — ДД.ММ.ГГГГ, как везде в интерфейсе.
+    const метка = [t.version ? `v${escapeHtml(t.version)}` : "", t.date ? formatDateRu(t.date) : ""]
+      .filter(Boolean).join(" · ");
     return `<div class="release-task">
-      <span>${escapeHtml(t.title)}${t.kind === "cleanup" ? " · уборка" : ""}</span>
+      <span>${метка ? `<span class="release-task-when">${метка}</span> ` : ""}`
+      + `${escapeHtml(t.title)}${t.kind === "cleanup" ? " · уборка" : ""}</span>
       <span class="release-badge ${класс}">${escapeHtml(подпись)}</span>
       <span>${кнопка}</span>
       ${t.why ? `<span class="release-task-why">${escapeHtml(t.why)}</span>` : ""}
@@ -17250,6 +17620,50 @@ function set3DHighlight(elementId, status) {
   v3.highlightElementId = elementId;
   v3.scene.add(v3.highlightMesh);
   requestRender3D();
+}
+
+// Накладной меш «предстоит связать» для 3D (2026-08-10). Геометрия сцены
+// слитая — своего объекта у изделия нет, поэтому мерцать переключением
+// видимости мешей нельзя. Тем же приёмом, что и подсветка выбранного
+// (set3DHighlight), собираем ОДИН меш из диапазонов вершин всех мерцающих
+// изделий. Цвет — статуса «Контрактация»: подсветка говорит именно о
+// контракте. Меш статичный: от мерцания отказались, оно тормозило.
+function update3DPendingMesh() {
+  const v3 = state.view3d;
+  if (v3.pendingMesh) {
+    v3.scene.remove(v3.pendingMesh);
+    v3.pendingMesh.geometry.dispose();
+    v3.pendingMesh.material.dispose();
+    v3.pendingMesh = null;
+  }
+  if (!v3.merged || !state.pendingLinkIds.size) return;
+  const source = v3.merged.mesh.geometry.attributes;
+  const positions = [], normals = [];
+  for (const id of state.pendingLinkIds) {
+    const range = v3.merged.rangeById.get(id);
+    if (!range) continue;
+    const from = range.start * 3, to = (range.start + range.count) * 3;
+    positions.push(source.position.array.slice(from, to));
+    normals.push(source.normal.array.slice(from, to));
+  }
+  if (!positions.length) return;
+  const склеить = (chunks) => {
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    const out = new Float32Array(total);
+    let offset = 0;
+    for (const c of chunks) { out.set(c, offset); offset += c.length; }
+    return out;
+  };
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(склеить(positions), 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(склеить(normals), 3));
+  const material = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(state.statusColors.contracting || "#eab308"),
+    transparent: true, opacity: 0.9, depthWrite: false,
+  });
+  v3.pendingMesh = new THREE.Mesh(geometry, material);
+  v3.pendingMesh.renderOrder = 998;
+  v3.scene.add(v3.pendingMesh);
 }
 
 // Мировая высота подписи в 3D — раньше фиксированная величина
@@ -18592,7 +19006,10 @@ function build3DScene(preserveCamera = false) {
   // видимости (см. applyPlacementFilters). После слияния геометрии это
   // единственный способ скрыть элемент — своего объекта у него больше нет;
   // размен осознанный, пересборка редка, а вращение после неё дешёвое.
-  const shown = state.elements.filter(passesPlacementFilters);
+  // elementVisibleNow, а не passesPlacementFilters: изделия «предстоит
+  // связать» (АРМ) показываются сверх среза и обязаны быть построены, иначе
+  // мерцать в 3D было бы нечему.
+  const shown = state.elements.filter(elementVisibleNow);
   v3.merged = build3DMergedGeometry(shown, levels, columnTopOverrides);
   if (v3.merged) {
     v3.scene.add(v3.merged.mesh);
@@ -18600,6 +19017,7 @@ function build3DScene(preserveCamera = false) {
     const selected = state.byId.get(state.selectedId);
     if (selected) set3DHighlight(selected.id, selected.current_status);
   }
+  update3DPendingMesh();
 
   // Элемент без контура в слитую геометрию не попал (нечего экструдировать)
   // — подписи ему тоже не полагается, как и раньше, когда у него просто не
