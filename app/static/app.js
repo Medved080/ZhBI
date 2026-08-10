@@ -222,8 +222,13 @@ let state = {
     merged: null, // {mesh, edges, faceElementIds, segmentElementIds, rangeById}
     highlightMesh: null, // отдельный меш ВЫБРАННОГО элемента поверх слитой геометрии
     highlightElementId: null, // чей именно — подсветка одна на сцену (см. set3DHighlight)
-    zoneMeshById: new Map(), // zone.id -> THREE.Mesh (захватка/кран/стоянка)
-    zoneLabelSpriteById: new Map(), // zone.id -> THREE.Sprite (подпись Кран/Стоянка в основании объёма)
+    // Ключ — ЯРУС (level_id), а не запись справочника: у одной зоны ярусов
+    // несколько (решение З7, /plan-data отдаёт по строке на ярус с ОДНИМ и
+    // тем же zone.id), и на каждый строится свой параллелепипед. Ключом по
+    // zone.id в карте оставался только последний ярус — башня стоянки
+    // вырождалась в одну плиту, а остальные ярусы утекали в сцене.
+    zoneMeshByLevel: new Map(), // level_id -> THREE.Mesh (захватка/кран/стоянка)
+    zoneLabelSpriteByLevel: new Map(), // level_id -> THREE.Sprite (подпись Кран/Стоянка в основании яруса)
     siteBaseMesh: null, // едва заметная подложка границ всего проекта — см. build3DSiteBaseMesh
     axisLines: null, // ОДИН LineSegments на все оси сетки — см. build3DAxisGrid
     axisLabelSprites: [], // номера и буквы на концах осей (спрайты, всегда лицом к камере)
@@ -16849,6 +16854,29 @@ function computeBuildingHeightRange() {
   return { bottom, top };
 }
 
+// Самая верхняя точка МОДЕЛИ — максимум по элементам (отметка + высота
+// выдавливания, ровно та же, с какой элемент попадает в сцену). Потолок
+// верхнего яруса колонн (computeTopColumnCeiling) для верха здания не
+// годится: ригели и плиты последнего яруса лежат НАД ним, и объём зоны,
+// обрезанный по нему, кончался под ними. У верхнего яруса стоянки это
+// вырождалось в плоскую плиту: её собственная отметка совпадала с этим
+// потолком (живой репорт 2026-08-10) — пользователь попросил тянуть до
+// высоты самых верхних элементов, и той же величиной задаётся полная
+// высота Захватки и Крана ("до самой верхней точки здания", см.
+// build3DZoneMesh).
+//
+// Считается по ВСЕМ элементам модели, а не по показанным фильтрами: иначе
+// объёмы зон прыгали бы по высоте от каждого фильтра.
+function computeModelTopY(levels, columnTopOverrides) {
+  let top = null;
+  for (const element of state.elements) {
+    if (!element.outline || element.outline.length < 3) continue;
+    const y = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
+    if (top === null || y > top) top = y;
+  }
+  return top;
+}
+
 // Цвет по категории — запасной вариант, если у зоны нет своего color
 // (Захватка своих цветов не имеет вовсе, см. 6.6 ТЗ; те же оттенки, что
 // и у 2D-подложки, см. CSS .zone-Захватка/.zone-Кран/.zone-Стоянка).
@@ -16924,6 +16952,7 @@ function build3DZoneMesh(zone, heightRange, stanceTiers) {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(0, positionY, 0);
   mesh.visible = zoneMeshVisible(zone);
+  mesh.userData.zoneId = zone.id; // ярусов у записи справочника несколько — см. apply3DZoneVisibility
   return mesh;
 }
 
@@ -16973,14 +17002,18 @@ function build3DZoneLabelSprite(zone, baseY) {
 
 // Видимость 3D-зон по тумблерам "Отображение зон" — без пересборки
 // геометрии (см. renderZoneToggles/renderStanceZoneToggles). Подпись
-// (zoneLabelSpriteById) следует той же видимости, что и объём зоны.
+// (zoneLabelSpriteByLevel) следует той же видимости, что и объём зоны.
 function apply3DZoneVisibility() {
-  for (const [zoneId, mesh] of state.view3d.zoneMeshById) {
-    const zone = state.zones.find(z => z.id === zoneId);
+  // Видимость решается по ЗАПИСИ справочника (zoneMeshVisible смотрит на
+  // категорию и тумблеры), а объектов сцены на запись приходится по одному
+  // на ярус — отсюда поиск зоны по zoneId из userData, а не по ключу карты.
+  const zoneById = new Map(state.zones.map(z => [z.id, z]));
+  for (const mesh of state.view3d.zoneMeshByLevel.values()) {
+    const zone = zoneById.get(mesh.userData.zoneId);
     if (zone) mesh.visible = zoneMeshVisible(zone);
   }
-  for (const [zoneId, sprite] of state.view3d.zoneLabelSpriteById) {
-    const zone = state.zones.find(z => z.id === zoneId);
+  for (const sprite of state.view3d.zoneLabelSpriteByLevel.values()) {
+    const zone = zoneById.get(sprite.userData.zoneId);
     if (zone) sprite.visible = zoneMeshVisible(zone);
   }
   requestRender3D();
@@ -17407,18 +17440,18 @@ function build3DScene(preserveCamera = false) {
     }
     v3.merged = null;
   }
-  for (const mesh of v3.zoneMeshById.values()) {
+  for (const mesh of v3.zoneMeshByLevel.values()) {
     v3.scene.remove(mesh);
     mesh.geometry.dispose();
     mesh.material.dispose();
   }
-  v3.zoneMeshById.clear();
-  for (const sprite of v3.zoneLabelSpriteById.values()) {
+  v3.zoneMeshByLevel.clear();
+  for (const sprite of v3.zoneLabelSpriteByLevel.values()) {
     v3.scene.remove(sprite);
     sprite.material.map.dispose();
     sprite.material.dispose();
   }
-  v3.zoneLabelSpriteById.clear();
+  v3.zoneLabelSpriteByLevel.clear();
   for (const sprite of v3.labelSpriteById.values()) {
     sprite.removeFromParent(); // контейнер по типу элемента — см. label3DContainer
     sprite.material.map.dispose();
@@ -17483,13 +17516,21 @@ function build3DScene(preserveCamera = false) {
     setLabelGroupVisible(group, state.labelVisibility[type] !== false);
   }
 
+  // Верх зон — по самой верхней точке модели (см. computeModelTopY), а не
+  // по потолку верхнего яруса колонн: ригели и плиты сверху лежат над ним.
   const heightRange = computeBuildingHeightRange();
+  const modelTop = computeModelTopY(levels, columnTopOverrides);
+  if (modelTop !== null && modelTop > heightRange.top) heightRange.top = modelTop;
   const stanceTiers = stanceTierElevations();
+  // По записи на ЯРУС (см. zoneMeshByLevel): у стоянки ярусов несколько, и
+  // башню образуют именно они. level_id уникален, zone.id — общий для всех
+  // ярусов одной записи справочника.
   for (const zone of state.zones) {
     const mesh = build3DZoneMesh(zone, heightRange, stanceTiers);
     if (!mesh) continue;
+    const levelKey = zone.level_id ?? `zone-${zone.id}`;
     v3.scene.add(mesh);
-    v3.zoneMeshById.set(zone.id, mesh);
+    v3.zoneMeshByLevel.set(levelKey, mesh);
 
     if (zone.category === "Кран" || zone.category === "Стоянка") {
       const baseY = zone.category === "Кран" ? heightRange.bottom : (zone.elevation_mm ?? heightRange.bottom);
@@ -17497,7 +17538,7 @@ function build3DScene(preserveCamera = false) {
       if (labelSprite) {
         labelSprite.visible = mesh.visible;
         v3.scene.add(labelSprite);
-        v3.zoneLabelSpriteById.set(zone.id, labelSprite);
+        v3.zoneLabelSpriteByLevel.set(levelKey, labelSprite);
       }
     }
   }
