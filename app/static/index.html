@@ -576,6 +576,19 @@
     #workdate-banner { background: #4a3c00; color: #ffe08a; border-bottom-color: #6b5700; }
   }
 
+  /* «Вышло обновление» — та же полоса, что и у рабочей даты, но синяя:
+     это не предупреждение об опасном режиме, а сообщение о состоянии
+     сервиса. Стоит выше полосы рабочей даты — обе могут быть видны разом. */
+  #update-banner {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    padding: 6px 16px; font-size: 12px; background: #e7f0ff; color: #1a3f7a;
+    border-bottom: 1px solid #9dbdf0; flex-shrink: 0;
+  }
+  #update-banner.hidden { display: none; }
+  @media (prefers-color-scheme: dark) {
+    #update-banner { background: #16305c; color: #cfe0ff; border-bottom-color: #2b4d85; }
+  }
+
   /* -------- сворачиваемый выбор чертежа/слоёв в тулбаре -------- */
   .toolbar-collapsible { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
   .toolbar-collapse-btn { padding: 6px 6px; font-size: 11px; }
@@ -1187,7 +1200,30 @@
   .picker-row.selected { background: var(--color-primary); color: #fff; }
   .picker-row.empty { opacity: .45; }
   .picker-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .picker-row-count { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .8; }
+  .picker-row-count {
+    font-variant-numeric: tabular-nums; font-size: 11px; opacity: .85;
+    min-width: 44px; text-align: right; flex-shrink: 0;
+  }
+  /* Шапка колонок «модель / контракт / Δ» — те же ширины, что у строк,
+     иначе числа под подписями не выстроятся. */
+  .picker-cols {
+    display: flex; align-items: center; gap: 6px; padding: 2px 8px 3px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .02em;
+    color: var(--color-text-muted);
+  }
+  .picker-cols .picker-row-count { opacity: 1; font-size: 10px; }
+  .picker-block-note { font-size: 10px; color: var(--color-text-muted); padding: 0 0 3px 2px; }
+  /* Разница «законтрактовано минус модель»: плюс — запас, минус — дефицит.
+     Цвета не из палитры статусов: это не статус, а знак числа. */
+  .picker-row-diff.pos { color: #16a34a; }
+  .picker-row-diff.neg { color: #dc2626; }
+  @media (prefers-color-scheme: dark) {
+    .picker-row-diff.pos { color: #4ade80; }
+    .picker-row-diff.neg { color: #f87171; }
+  }
+  /* На выбранной строке (синяя заливка) собственные цвета чисел нечитаемы —
+     возвращаем белый, как у остального текста строки. */
+  .picker-row.selected .picker-row-count { color: #fff !important; }
   .picker-search { width: 100%; margin-bottom: 4px; font-size: 12px; padding: 4px 6px; }
   .picker-hint { font-size: 11px; color: var(--color-text-muted); margin: 0 0 10px; line-height: 1.35; }
 
@@ -2954,6 +2990,15 @@
     </div>
     <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-changelog" title="Что нового">?</button>
   </div>
+</div>
+<!-- «Вышло обновление» (2026-08-10). Полоса, а не модалка: перезагрузка —
+     решение пользователя, а не требование системы; он может сначала дописать
+     то, что начал. Стоит над рабочей областью и не исчезает сама — увидеть
+     её, отвернувшись на минуту, важнее, чем не мешать. -->
+<div id="update-banner" class="hidden">
+  <span>🔄 Вышло обновление сервиса <b id="update-banner-version"></b> — эта вкладка работает
+    предыдущей версией. Обновите страницу, чтобы перейти на новую.</span>
+  <button class="btn btn-sm btn-primary" id="update-banner-reload">Обновить страницу</button>
 </div>
 <div id="workdate-banner" class="hidden">
   <span>⏱ Рабочая дата активна: <b id="workdate-banner-value"></b> — новые статусы будут датированы этим моментом, а не текущим.</span>

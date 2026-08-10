@@ -3209,12 +3209,17 @@ const PICKER_METRICS = [
     key: "model", title: "В модели",
     hint: "Элементов в срезе, выбранном блоками свойств. Выбранная плитка-показатель на числа плиток не влияет — плитки не фильтруют сами себя, иначе сравнивать их между собой было бы не с чем",
   },
+  // status — цвет плитки и её числа (см. applyStatusInk). Ставится там, где
+  // показателю ОТВЕЧАЕТ статус жизненного цикла: «законтрактовано» и
+  // «привязано к контракту» — это «Контрактация», остальные два названы
+  // своими статусами прямо. «В модели» и «Известна плановая дата» цвета не
+  // получают: своего статуса у них нет, и красить их пришлось бы наугад.
   {
-    key: "contracted", title: "Законтрактовано",
+    key: "contracted", title: "Законтрактовано", status: "contracting",
     hint: "Сумма количеств в позициях контрактов объекта по выбранным типам и маркам",
   },
   {
-    key: "linked", title: "Привязано к контракту", test: e => !!e.contract_id,
+    key: "linked", title: "Привязано к контракту", test: e => !!e.contract_id, status: "contracting",
     hint: "У элемента модели указан контракт",
   },
   {
@@ -3223,10 +3228,12 @@ const PICKER_METRICS = [
   },
   {
     key: "delivered", title: "Доставлено", test: e => e.current_status === "delivered",
+    status: "delivered",
     hint: "Текущий статус — «Доставлен» (смонтированные и принятые сюда не входят)",
   },
   {
     key: "installed", title: "Смонтировано", test: e => e.current_status === "installed",
+    status: "installed",
     hint: "Текущий статус — «Смонтирован» (принятые сюда не входят)",
   },
 ];
@@ -3239,6 +3246,25 @@ function pickerMetricDef(key) {
 // издалека, и сравнивать четырёхзначные числа без разделителя тяжело.
 function pickerNumber(n) {
   return Number(n).toLocaleString("ru-RU");
+}
+
+// Число цветом СТАТУСА (живой запрос 2026-08-10): «законтрактовано» —
+// цветом «Контрактации», «доставлено» — цветом «Доставлен» и так далее.
+// Цвета берутся из настроек сервиса (state.statusColors), а не задаются
+// здесь заново: администратор их меняет, и дашборд обязан меняться вместе
+// со схемой.
+//
+// Чистый цвет статуса как цвет ТЕКСТА местами нечитаем — «Контрактация» по
+// умолчанию #eab308, жёлтый на белом. Поэтому цвет подмешивается к цвету
+// текста (color-mix): оттенок узнаётся, контраст остаётся. Присваивание
+// идёт ДВУМЯ шагами намеренно: браузер без поддержки color-mix (до Chrome
+// 111) просто проигнорирует второе, и останется чистый цвет статуса —
+// хуже по контрасту, но не сломано.
+function applyStatusInk(el, status) {
+  const color = state.statusColors[status];
+  if (!color) return;
+  el.style.color = color;
+  el.style.color = `color-mix(in srgb, ${color} 78%, var(--color-text))`;
 }
 
 // Проходит ли элемент выбранный срез. exceptKey — блок, чей собственный
@@ -3299,6 +3325,38 @@ function pickerContracted() {
   return { value: sum, skippedNoMark };
 }
 
+// «Законтрактовано» ДЛЯ ОДНОГО ЗНАЧЕНИЯ блока-среза (живой запрос
+// 2026-08-10: в областях отбора рядом с количеством нужны законтрактованное
+// количество и разница). Действует то же ограничение, что и у плитки: у
+// позиции контракта есть только тип элемента и марка, поэтому число
+// существует лишь в блоках «Тип элемента» и «Марка», и лишь пока срез не
+// сужен свойством, которого у контракта нет. Возвращает число либо null —
+// «в этом разрезе не существует».
+//
+// Выбор СВОЕГО блока игнорируется, как и у счётчиков элементов (см.
+// pickerElementPasses): строки блока должны быть сравнимы между собой.
+function pickerContractedFor(key, value) {
+  if (key !== "elementType" && key !== "mark") return null;
+  if (state.picker.metric) return null;
+  if (PICKER_CONTRACT_BLOCKERS.some(([k]) => state.picker.sel[k].size)) return null;
+  const types = state.picker.sel.elementType;
+  const marks = state.picker.sel.mark;
+  let sum = 0;
+  for (const line of state.contractLineTotals) {
+    if (key === "elementType") {
+      if (line.element_type !== value) continue;
+      // Позиция без марки при выбранных марках не относится ни к одной из
+      // них (та же логика, что в pickerContracted).
+      if (marks.size && !(line.mark && marks.has(line.mark))) continue;
+    } else {
+      if ((line.mark || PLACEMENT_NONE) !== value) continue;
+      if (types.size && !types.has(line.element_type)) continue;
+    }
+    sum += line.quantity || 0;
+  }
+  return sum;
+}
+
 // Одна плитка показателя.
 function buildPickerMetricTile(metric, base) {
   const tile = document.createElement("button");
@@ -3312,6 +3370,17 @@ function buildPickerMetricTile(metric, base) {
   tile.appendChild(title);
   tile.appendChild(value);
   tile.title = metric.hint;
+
+  // Цвет статуса — на всю плитку: слабая заливка фона и насыщенная полоса
+  // слева (само число красится ниже, applyStatusInk). Заливка слабая
+  // намеренно: цвета статусов подобраны для маркеров на схеме, в полную
+  // силу они превратили бы полосу показателей в светофор, на котором не
+  // видно чисел.
+  const statusColor = metric.status ? state.statusColors[metric.status] : null;
+  if (statusColor) {
+    tile.style.background = hexToRgba(statusColor, 0.12);
+    tile.style.borderLeft = `3px solid ${statusColor}`;
+  }
 
   if (metric.key === "contracted") {
     const contracted = pickerContracted();
@@ -3332,6 +3401,7 @@ function buildPickerMetricTile(metric, base) {
       if (contracted.skippedNoMark) {
         tile.title = `${metric.hint}. Не учтено позиций без марки: ${contracted.skippedNoMark}`;
       }
+      applyStatusInk(value, metric.status);
       tile.appendChild(share);
     }
     return tile;
@@ -3339,6 +3409,7 @@ function buildPickerMetricTile(metric, base) {
 
   const count = metric.test ? base.filter(metric.test).length : base.length;
   value.textContent = pickerNumber(count);
+  applyStatusInk(value, metric.status);
   if (metric.test) {
     const share = document.createElement("div");
     share.className = "picker-metric-share";
@@ -3408,6 +3479,45 @@ function buildPickerSlicer(def) {
   const values = Array.from(new Set([...counts.keys(), ...sel]));
   values.sort(placementComparator(def.labelFor, { compareRaw: !!def.compareRaw }));
 
+  // Показывать ли рядом с количеством законтрактованное и разницу (живой
+  // запрос 2026-08-10). Проверяем ОДИН РАЗ на блок, а не на строку:
+  // ограничение общее для всего блока (у позиции контракта нет ни крана, ни
+  // этажа, ни подтипа — см. pickerContractedFor), и заголовки колонок
+  // должны совпадать с тем, что реально в строках.
+  // null здесь означает ровно «в этом разрезе числа нет»: для значения,
+  // которого не существует, функция вернула бы 0, а не null.
+  const contractedShown = pickerContractedFor(def.key, null) !== null;
+
+  if (contractedShown) {
+    // Три числа в строке без подписи читаются как загадка — короткая шапка
+    // колонок. «Δ» вместо слова: колонка узкая, а знак разницы всё равно
+    // несёт цвет.
+    const cols = document.createElement("div");
+    cols.className = "picker-cols";
+    const contractedHead = document.createElement("span");
+    contractedHead.className = "picker-row-count";
+    contractedHead.textContent = "контракт";
+    applyStatusInk(contractedHead, "contracting");
+    cols.innerHTML = '<span class="picker-row-label">&nbsp;</span><span class="picker-row-count">модель</span>';
+    cols.appendChild(contractedHead);
+    const diffHead = document.createElement("span");
+    diffHead.className = "picker-row-count";
+    diffHead.textContent = "Δ";
+    cols.appendChild(diffHead);
+    cols.title = "Модель — сколько изделий в срезе; контракт — сколько закуплено по позициям контрактов; Δ — разница (плюс: контрактов хватает, минус: дефицит)";
+    block.appendChild(cols);
+  } else if (def.key === "elementType" || def.key === "mark") {
+    // Блок, где законтрактованное БЫВАЕТ, но сейчас его нет: объясняем
+    // почему, а не молчим — иначе колонки просто исчезают без причины.
+    const note = document.createElement("div");
+    note.className = "picker-block-note";
+    note.textContent = state.picker.metric
+      ? "законтрактовано — не в этом разрезе (выбран показатель)"
+      : "законтрактовано — не в этом разрезе";
+    note.title = "У позиции контракта есть только тип элемента и марка: по подтипу, крану, стоянке, этажу и показателю она не делится";
+    block.appendChild(note);
+  }
+
   const list = document.createElement("div");
   list.className = "picker-list";
   list.dataset.pickerList = def.key;
@@ -3430,6 +3540,25 @@ function buildPickerSlicer(def) {
     countEl.textContent = pickerNumber(count);
     row.appendChild(labelEl);
     row.appendChild(countEl);
+    if (contractedShown) {
+      const contracted = pickerContractedFor(def.key, v) || 0;
+      const contractedEl = document.createElement("span");
+      contractedEl.className = "picker-row-count";
+      contractedEl.textContent = pickerNumber(contracted);
+      applyStatusInk(contractedEl, "contracting");
+      row.appendChild(contractedEl);
+
+      // Разница «законтрактовано минус модель»: плюс — контрактов хватает
+      // с запасом, минус — дефицит. Знак показывается явно (со знаком «+»
+      // у положительной), цвет — зелёный/красный; ноль остаётся серым,
+      // это ровно закрытая потребность, а не «хорошо» и не «плохо».
+      const diff = contracted - count;
+      const diffEl = document.createElement("span");
+      diffEl.className = "picker-row-count picker-row-diff"
+        + (diff > 0 ? " pos" : diff < 0 ? " neg" : "");
+      diffEl.textContent = diff > 0 ? `+${pickerNumber(diff)}` : pickerNumber(diff);
+      row.appendChild(diffEl);
+    }
     row.addEventListener("click", () => {
       if (sel.has(v)) sel.delete(v); else sel.add(v);
       onPickerChange();
@@ -5181,18 +5310,62 @@ async function pollChanges(manual = false) {
   }
 }
 
+// ---------- «вышло обновление, обновите страницу» (2026-08-10) ----------
+// После деплоя открытая вкладка продолжает работать СКАЧАННЫМ РАНЬШЕ
+// фронтендом и об этом не знает: index.html и app.js в ней те, что пришли
+// при входе. Сервер отдаёт отпечаток текущей сборки (GET /app-build, см.
+// app/main.py) — вкладка запоминает его при старте и сверяет тем же
+// таймером, что и опрос изменений.
+//
+// Отдельный запрос, а не поле в ответе /changes: /changes опрашивается,
+// только когда открыт чертёж (нужен source_file), а устареть вкладка может
+// и на форме отчёта, и на пустом экране выбора объекта.
+let knownAppBuild = null;      // отпечаток, с которым эта вкладка загрузилась
+let appBuildStale = false;     // полоса уже показана — больше не спрашиваем
+
+async function checkAppBuild() {
+  if (appBuildStale || !state.currentUser) return;
+  let data;
+  try {
+    data = await api("/app-build");
+  } catch (e) {
+    return; // молча: сеть моргнула или сеанс истёк — следующий тик попробует снова
+  }
+  if (!data || !data.build) return;
+  if (knownAppBuild === null) { knownAppBuild = data.build; return; }
+  if (data.build === knownAppBuild) return;
+
+  appBuildStale = true;
+  const banner = document.getElementById("update-banner");
+  const versionEl = document.getElementById("update-banner-version");
+  if (versionEl) versionEl.textContent = data.version ? `v${data.version}` : "";
+  if (banner) banner.classList.remove("hidden");
+  // Полоса не исчезает сама, но в потоке сообщений след тоже нужен — иначе
+  // человек, отвернувшийся от экрана, не поймёт, когда это случилось.
+  showToast("Вышло обновление сервиса — обновите страницу", "info");
+}
+
+document.getElementById("update-banner-reload").addEventListener("click", () => {
+  location.reload();
+});
+
 function startPolling() {
+  // Первый вызов — сразу: он ЗАПОМИНАЕТ отпечаток текущей сборки, с
+  // которым эта вкладка живёт. Ждать первого тика незачем, а пока
+  // отпечатка нет, сравнивать не с чем.
+  checkAppBuild();
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => {
     // Вкладка в фоне — не опрашиваем: пользователь всё равно не смотрит, а
     // вернувшись, получит свежие данные обработчиком visibilitychange ниже.
     if (document.hidden) return;
     pollChanges();
+    checkAppBuild();
   }, POLL_INTERVAL_MS);
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) pollChanges();
+  if (!document.hidden) { pollChanges(); checkAppBuild(); }
 });
 
 document.getElementById("btn-refresh").addEventListener("click", async () => {
