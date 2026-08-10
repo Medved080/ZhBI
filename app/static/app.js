@@ -1839,7 +1839,15 @@ function subtypeFilterValue(element) {
 }
 
 function markFilterValue(element) {
-  return element.mark || PLACEMENT_NONE;
+  // Сама марка уникальна в пределах объекта (справочник марок,
+  // app/marks.py), поэтому обычное значение — её текст, без типа. А вот
+  // «НЕТ марки» обязано быть своим у каждого типа — тем же составным
+  // ключом, что у подтипа: голый сентинел один на все типы, и в дереве
+  // «Тип → (Подтипы | Марки)» он попал бы в ветку каждого типа, а клик по
+  // одному типу скрывал бы безмарочные изделия ВСЕХ остальных (найдено
+  // живой проверкой 2026-08-10: снятие «Колонна» убирало 1329 изделий при
+  // 1328 колоннах — лишним был безмарочный ригель).
+  return element.mark || subtypeLogicalKey(element.element_type, PLACEMENT_NONE);
 }
 
 // Контрагент/Контракт — та же иерархическая пара, что Кран/Стоянка и
@@ -3099,7 +3107,13 @@ const subtypeLabelFor = v => {
   const text = subtypeTextForLogicalKey(v);
   return text === PLACEMENT_NONE ? placementNoneLabel("subtype") : text;
 };
-const markLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("mark") : v;
+// «Нет марки» приходит составным ключом «<тип>::__none__» (см.
+// markFilterValue) — в своей ветке дерева тип и так виден из заголовка,
+// поэтому на экране это просто «— без марки —». Голый PLACEMENT_NONE
+// оставлен: он приходит из АРМ и из сохранённых отборов прежнего вида.
+const markLabelFor = v =>
+  (v === PLACEMENT_NONE || (typeof v === "string" && v.endsWith(SUBTYPE_KEY_SEP + PLACEMENT_NONE)))
+    ? placementNoneLabel("mark") : v;
 const statusLabelFor = v => state.statusLabels[v] || v;
 const supplierLabelFor = v => v === PLACEMENT_NONE ? placementNoneLabel("supplier") : v;
 const contractLabelFor = v => {
@@ -3373,7 +3387,20 @@ const PICKER_SLICERS = [
       return тип && тип !== String(v) ? `${тип} · ${текст}` : текст;
     },
   },
-  { key: "mark", title: "Марка", valueFn: markFilterValue, labelFor: markLabelFor, search: true },
+  // Марка — тем же приёмом, что подтип выше, но только для «нет марки»:
+  // сама марка уникальна и в типе-владельце не нуждается, а вот «нет
+  // марки» с 2026-08-10 своё у каждого типа (см. markFilterValue), и в
+  // плоском блоке АРМ два таких пункта подряд выглядели бы задвоенной
+  // строкой. В дереве «Модели» уточнение не нужно — там тип виден из
+  // заголовка ветки.
+  {
+    key: "mark", title: "Марка", valueFn: markFilterValue, search: true,
+    labelFor: v => {
+      const текст = markLabelFor(v);
+      const тип = String(v).split(SUBTYPE_KEY_SEP)[0];
+      return тип && тип !== String(v) ? `${текст} (${тип})` : текст;
+    },
+  },
   { key: "crane", title: "Кран", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status"), labelFor: zoneLabelFor },
   // Стоянка — тоже с владельцем в подписи, и по той же причине, что и
   // подтип выше: имя стоянки уникально только внутри своего крана
