@@ -2217,6 +2217,16 @@
   .contract-lines-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .contract-lines-table td, .contract-lines-table th { padding: 4px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
   .contract-lines-table tr.exceeded td { color: var(--color-danger); font-weight: 600; }
+  /* Архивный контракт (2026-08-10): в справочнике он стоит в конце списка и
+     написан зачёркнутым — сразу видно, что документ отработан и системой
+     больше не предлагается. Из справочника его не убираем: вернуть в оборот
+     можно только отсюда. */
+  .contract-lines-table tr.contract-archived td { text-decoration: line-through; color: var(--color-text-muted); }
+  .archived-mark {
+    text-decoration: none; font-size: 10px; text-transform: uppercase; letter-spacing: .03em;
+    color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 3px;
+    padding: 0 4px; vertical-align: middle;
+  }
   /* Справочник «Контракты» — та же карточка, что и в форме контрагента, но
      на таблице (2026-08-05). Тень нельзя повесить на <tr> при
      border-collapse: collapse — рамки схлопнуты, и тень рисовать не на чем.
@@ -5057,6 +5067,16 @@
         <div class="hint-text" id="ce-agreement-hint"></div>
         <label class="field">Спецификация</label><select id="ce-specification"></select>
         <label class="field">Тема контракта</label><input type="text" id="ce-theme" placeholder="необязательно"/>
+        <!-- Архивный контракт (2026-08-10): отработанный документ. Система
+             перестаёт предлагать его при смене статуса и не считает в
+             отчётах и дашбордах, но в справочнике и в истории статусов он
+             остаётся. Перевести в архив можно только контракт, за которым
+             не осталось изделий схемы — сервер это проверяет, а форма
+             объясняет запрет заранее (см. app.js, updateArchiveHint). -->
+        <label class="toggle" style="margin-top:10px">
+          <input type="checkbox" id="ce-archived"/> Архивный
+        </label>
+        <div class="hint-text" id="ce-archived-hint"></div>
         <label class="field" style="margin-bottom:2px;">Строки: тип элемента + марка + количество</label>
         <div id="ce-lines"></div>
         <datalist id="ce-known-types"></datalist>

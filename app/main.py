@@ -4047,9 +4047,14 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         ).fetchall()
         label_visibility = {r["element_type"]: bool(r["visible"]) for r in label_rows}
         label_dates_visibility = {r["element_type"]: bool(r["dates_visible"]) for r in label_rows}
+        # is_archived отдаётся, а сами архивные контракты НЕ отсеиваются
+        # здесь (2026-08-10): подпись контракта резолвится по этому же
+        # списку, и выброшенный архивный превратил бы историческую привязку
+        # изделия в «контракт #17». Прячет их клиент — в дашборде АРМ, в
+        # фильтрах и в списках выбора (см. app.js).
         contract_rows = conn.execute(
             """
-            SELECT co.id AS id, co.theme AS theme,
+            SELECT co.id AS id, co.theme AS theme, co.is_archived AS is_archived,
                    c.id AS counterparty_id, c.short_name AS counterparty_short_name, c.code AS counterparty_code,
                    a.id AS agreement_id, a.number AS agreement_number, a.agreement_date AS agreement_date,
                    s.id AS specification_id, s.number AS specification_number, s.specification_date AS specification_date
@@ -4078,6 +4083,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 "agreement_date": r["agreement_date"],
                 "specification_id": r["specification_id"], "specification_number": r["specification_number"],
                 "specification_date": r["specification_date"],
+                "is_archived": bool(r["is_archived"]),
                 "element_types": types_by_contract.get(r["id"], []),
             }
             for r in contract_rows
@@ -4112,7 +4118,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 JOIN contracts co ON co.id = cl.contract_id
                 JOIN specifications s ON s.id = co.specification_id
                 JOIN agreements a ON a.id = s.agreement_id
-                WHERE a.object_id IS ?
+                WHERE a.object_id IS ? AND co.is_archived = 0
                 GROUP BY cl.contract_id, cl.element_type, cl.mark
                 """,
                 (plan_object_id,),

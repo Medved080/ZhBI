@@ -114,6 +114,13 @@ class ContractIn(BaseModel):
     # контракта избыточна, есть дата спецификации (specification_date).
     specification_id: int
     theme: Optional[str] = None
+    # Архивный контракт (2026-08-10): отработанный документ. Не предлагается
+    # для выбора и не участвует в отчётах и дашбордах, но остаётся в
+    # справочнике и в истории статусов. Ставить можно только у контракта, к
+    # которому не привязано ни одного изделия схемы (см. _guard_archivable);
+    # упоминание в ИСТОРИИ статусов архивации не мешает — история как раз и
+    # хранит то, чем закрывали изделия раньше.
+    is_archived: bool = False
     lines: list[ContractLineIn]
     incidents: list[ContractIncidentIn] = []
 
@@ -131,6 +138,11 @@ class ContractOut(BaseModel):
     counterparty_id: int
     counterparty_short_name: str
     counterparty_code: Optional[str] = None
+    is_archived: bool = False
+    # Сколько изделий схемы привязано к контракту сейчас. Отдаётся вместе с
+    # контрактом, потому что от него зависит, можно ли его архивировать, и
+    # форма должна объяснить запрет, а не просто не дать нажать.
+    linked_elements: int = 0
     lines: list[ContractLineOut]
     incidents: list[ContractIncidentOut]
 
@@ -251,7 +263,21 @@ def _load_contract_bundle(conn, contract_id: Optional[int] = None) -> dict:
     ).fetchall():
         incidents.setdefault(r["contract_id"], []).append(r)
 
-    return {"facts": facts, "damaged": damaged, "lines": lines, "incidents": incidents}
+    # Привязанные изделия СХЕМЫ — по ним решается, можно ли архивировать
+    # контракт (2026-08-10). Считаются все элементы с этим contract_id,
+    # независимо от статуса, в отличие от facts выше (там «Запланирован»
+    # исключён, потому что факт — это отгруженное). Здесь вопрос другой:
+    # «висит ли на контракте хоть одно изделие».
+    linked = {
+        r["contract_id"]: r["n"]
+        for r in conn.execute(
+            "SELECT contract_id, COUNT(*) AS n FROM elements "
+            f"WHERE contract_id IS NOT NULL{scope} GROUP BY contract_id",
+            args,
+        ).fetchall()
+    }
+
+    return {"facts": facts, "damaged": damaged, "lines": lines, "incidents": incidents, "linked": linked}
 
 
 def _specification_chain(conn, specification_id: int):
@@ -315,6 +341,8 @@ def _to_contract_out(conn, contract_row, bundle: Optional[dict] = None) -> Contr
         agreement_date=chain["agreement_date"],
         counterparty_id=chain["counterparty_id"], counterparty_short_name=chain["counterparty_short_name"],
         counterparty_code=chain["counterparty_code"],
+        is_archived=bool(contract_row["is_archived"]) if "is_archived" in contract_row.keys() else False,
+        linked_elements=bundle["linked"].get(cid, 0),
         lines=lines, incidents=incidents,
     )
 
@@ -391,7 +419,7 @@ def contract_positions(
             JOIN contracts co ON co.id = cl.contract_id
             JOIN specifications s ON s.id = co.specification_id
             JOIN agreements a ON a.id = s.agreement_id
-            WHERE cl.element_type = ? AND {доступ}
+            WHERE cl.element_type = ? AND co.is_archived = 0 AND {доступ}
             """,
             [element_type, *доступ_params],
         ).fetchall()
@@ -532,6 +560,28 @@ def _accessible_contracts_clause(conn, user) -> tuple:
     return f"a.object_id IN ({marks})", list(ids)
 
 
+def _guard_archivable(conn, contract_id: int) -> None:
+    """Архивировать можно только контракт, к которому НЕ ПРИВЯЗАНО ни одного
+    изделия схемы (правило пользователя 2026-08-10). Упоминание в ИСТОРИИ
+    статусов помехой не является и проверяться не должно: история как раз и
+    хранит, чем изделия закрывали раньше, — если бы она мешала, архивировать
+    было бы нельзя ровно те контракты, которые отработаны.
+
+    Проверка на сервере, а не только в интерфейсе: признак прилетает обычным
+    PATCH, и запрет, живущий в одной кнопке, обходится любым клиентом.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM elements WHERE contract_id = ?", (contract_id,)
+    ).fetchone()
+    if row["n"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"К контракту привязано изделий: {row['n']}. "
+                    "В архив можно перевести только контракт, за которым не осталось изделий "
+                    "схемы — сначала переназначьте их на другой контракт или снимите привязку."),
+        )
+
+
 @router.post("", response_model=ContractOut)
 def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
@@ -541,8 +591,8 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_u
         if not spec:
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
         conn.execute(
-            "INSERT INTO contracts (specification_id, theme) VALUES (?, ?)",
-            (body.specification_id, body.theme),
+            "INSERT INTO contracts (specification_id, theme, is_archived) VALUES (?, ?, ?)",
+            (body.specification_id, body.theme, 1 if body.is_archived else 0),
         )
         contract_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         for line in body.lines:
@@ -582,9 +632,14 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         spec = conn.execute("SELECT id FROM specifications WHERE id = ?", (body.specification_id,)).fetchone()
         if not spec:
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
+        # Признак архивности проверяем ТОЛЬКО когда его включают: снять его
+        # можно всегда (вернуть отработанный контракт в оборот — обычное
+        # действие, ничему не противоречит).
+        if body.is_archived and not existing["is_archived"]:
+            _guard_archivable(conn, contract_id)
         conn.execute(
-            "UPDATE contracts SET specification_id=?, theme=?, updated_at=datetime('now') WHERE id=?",
-            (body.specification_id, body.theme, contract_id),
+            "UPDATE contracts SET specification_id=?, theme=?, is_archived=?, updated_at=datetime('now') WHERE id=?",
+            (body.specification_id, body.theme, 1 if body.is_archived else 0, contract_id),
         )
         # Полная замена строк/инцидентов — список редактируется в UI
         # целиком, проще и предсказуемее частичного патча по id строки.
@@ -604,9 +659,12 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         conn.commit()
         row = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         результат = _to_contract_out(conn, row)
+        подробности = {"позиций": len(body.lines), "инцидентов": len(body.incidents)}
+        if bool(existing["is_archived"]) != body.is_archived:
+            подробности["архивный"] = "да" if body.is_archived else "нет"
         activity.log("contract_update", user=admin, entity_type="contract", entity_id=contract_id,
                      old_value=прежнее_имя, new_value=результат.name,
-                     details={"позиций": len(body.lines), "инцидентов": len(body.incidents)})
+                     details=подробности)
         return результат
     finally:
         conn.close()

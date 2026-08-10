@@ -243,10 +243,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- разойтись с реальными реквизитами. contract_date тоже не хранится —
 -- избыточна, есть дата спецификации (specifications.specification_date).
 -- theme — единственное свободное поле, относящееся к названию.
+-- is_archived — отработанный контракт (2026-08-10): остаётся в справочнике и
+-- в истории статусов, но не предлагается для выбора и не участвует в отчётах
+-- и дашбордах. Ставится только у контракта, к которому не привязано ни одного
+-- изделия схемы (проверка на сервере, app/contracts.py); упоминание в истории
+-- статусов архивации НЕ мешает — она и хранит то, чем закрывали раньше.
 CREATE TABLE IF NOT EXISTS contracts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     specification_id INTEGER NOT NULL REFERENCES specifications (id) ON DELETE RESTRICT,
     theme TEXT,
+    is_archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

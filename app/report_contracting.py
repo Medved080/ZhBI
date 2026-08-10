@@ -19,7 +19,7 @@
       «Статусе комплектации»: `project_delivery_date` означает ЗАВЕРШЕНИЕ
       СМР и к поставке отношения не имеет).
 
-  **Законтрактовано** — сумма количеств в позициях контрактов
+  **Законтрактовано** — сумма количеств в позициях НЕархивных контрактов
       (`contract_lines.quantity`) по этой марке. То есть «выкуплено
       бумагой», независимо от того, каким изделиям контракт уже назначен.
       Во времени — по `specifications.specification_date`: своей даты у
@@ -192,7 +192,8 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
         JOIN specifications s ON s.id = co.specification_id
         JOIN agreements a ON a.id = s.agreement_id
         JOIN counterparties cp ON cp.id = a.counterparty_id
-        WHERE a.object_id = ? AND cl.mark IS NOT NULL AND trim(cl.mark) <> ''
+        WHERE a.object_id = ? AND co.is_archived = 0
+              AND cl.mark IS NOT NULL AND trim(cl.mark) <> ''
         """,
         (object_id,),
     ).fetchall()

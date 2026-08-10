@@ -2030,8 +2030,11 @@ function allValuesFor(key) {
   // что и у зон выше (см. комментарий): всё равно должен быть в списке
   // фильтра, а не появляться только после того, как элементы к нему
   // привязали.
-  if (key === "contract") { for (const c of state.contracts) set.add(c.id); }
-  if (key === "supplier") { for (const c of state.contracts) set.add(c.counterparty_short_name); }
+  // Архивные в список фильтра не добавляем (см. activeContracts); если у
+  // изделия такой контракт всё же стоит, значение придёт из обхода
+  // элементов ниже — фильтр не должен терять того, что на схеме есть.
+  if (key === "contract") { for (const c of activeContracts()) set.add(c.id); }
+  if (key === "supplier") { for (const c of activeContracts()) set.add(c.counterparty_short_name); }
   // Статус — список ЗАКРЫТЫЙ и известен заранее (STATUS_ORDER на сервере,
   // приходит в state.statusOrder), поэтому берём его целиком, а не только
   // те статусы, что уже встретились у элементов. Тот же приём, что для
@@ -3877,9 +3880,9 @@ function buildPickerSlicer(def) {
 // иначе два числа в одной строке жили бы в разных системах отсчёта молча.
 // «Подсветить несвязанные» (живой запрос 2026-08-10, переработан в тот же
 // день). Показывает на схеме изделия, ещё не привязанные ни к какому
-// контракту: если контракт выбран в срезе или развёрнут по маркам — только
-// те, чью марку этот контракт ещё не добрал («что предстоит связать именно
-// им»); если контракт не выбран — все несвязанные изделия среза.
+// контракту, ТОЙ ЖЕ МАРКИ, о которой сейчас идёт речь: выбрана марка (в том
+// числе кликом по позиции контракта) — её; выбран контракт — марки его
+// позиций; не выбрано ничего — все несвязанные изделия среза.
 //
 // Функция включается ЯВНО, кнопкой в области контрактов, и подсветка
 // СТАТИЧНАЯ. Первая версия мерцала раз в секунду и включалась сама, стоило
@@ -3893,52 +3896,40 @@ function buildPickerSlicer(def) {
 function pickerPendingLinkIds() {
   const пусто = new Set();
   if (!state.picker.active || !state.picker.highlightUnlinked) return пусто;
-  const интересные = new Set([...state.picker.sel.contract, ...state.picker.expandedContracts]);
-  интересные.delete(PLACEMENT_NONE);   // «без контракта» — не контракт
-  // Контракт не выбран — подсвечиваем ВСЁ несвязанное в срезе: вопрос
-  // «что ещё не расписано» осмыслен и без выбранного документа.
-  if (!интересные.size) {
-    const все = new Set();
-    for (const e of state.elements) {
-      if (e.contract_id) continue;
-      if (!pickerElementPasses(e, "contract")) continue;
-      все.add(e.id);
-    }
-    return все;
-  }
 
-  // Остаток по каждой позиции этих контрактов: закуплено минус уже
-  // привязано. Ключ позиции — марка, а если марки у позиции НЕТ, то тип
-  // элемента (живой репорт 2026-08-10: «выбрал контракт с остатками, ничего
-  // не мерцает»). Позиция без марки — не редкость и не порча данных: импорт
-  // контрактации определяет марку эвристикой по префиксу и часто не может
-  // (см. app/contracting_import.py, Docs/TZ.md §5.4), такие позиции живут с
-  // одним типом. Пропускать их, как делала первая версия, значило молчать
-  // ровно там, где связывать предстоит больше всего.
-  const остаток = new Map();
-  for (const line of state.contractLineTotals) {
-    if (!интересные.has(line.contract_id)) continue;
-    const ключ = pickerLineKey(line);
-    if (!ключ) continue;
-    остаток.set(ключ, (остаток.get(ключ) || 0) + (line.quantity || 0));
+  // О КАКИХ марках идёт речь — три случая, по убыванию точности намерения:
+  //   выбраны марки (в том числе кликом по позиции контракта) — они;
+  //   выбраны/развёрнуты контракты — марки их позиций (у позиции без марки
+  //     берётся тип элемента, см. pickerLineKey);
+  //   ничего не выбрано — марки не ограничиваем, подсвечиваем всё
+  //     несвязанное в срезе.
+  //
+  // ОСТАТОК по позициям здесь СОЗНАТЕЛЬНО не учитывается (уточнение
+  // пользователя 2026-08-10). Прежняя версия подсвечивала только марки,
+  // которые контракт «не добрал», и на боевых данных, где привязано почти
+  // всё закупленное, не подсвечивала ничего — выглядело как поломка.
+  // Вопрос, на который отвечает подсветка, звучит иначе: «где ещё лежат
+  // изделия этой марки, ни к чему не привязанные».
+  const марки = new Set();
+  if (state.picker.sel.mark.size) {
+    for (const m of state.picker.sel.mark) { const k = markKey(m); if (k) марки.add(k); }
+  } else {
+    const интересные = new Set([...state.picker.sel.contract, ...state.picker.expandedContracts]);
+    интересные.delete(PLACEMENT_NONE);   // «без контракта» — не контракт
+    for (const line of state.contractLineTotals) {
+      if (!интересные.has(line.contract_id)) continue;
+      const ключ = pickerLineKey(line);
+      if (ключ) марки.add(ключ);
+    }
   }
-  if (!остаток.size) return пусто;
-  for (const e of state.elements) {
-    if (!e.contract_id || !интересные.has(e.contract_id)) continue;
-    // Сначала пробуем позицию по марке, потом «типовую» — привязанное
-    // изделие закрывает ту позицию, которая его описывает точнее.
-    const поМарке = markKey(e.mark), поТипу = typeKey(e.element_type);
-    const ключ = остаток.has(поМарке) ? поМарке : (остаток.has(поТипу) ? поТипу : null);
-    if (ключ) остаток.set(ключ, остаток.get(ключ) - 1);
-  }
-  const недобрано = new Set([...остаток].filter(([, v]) => v > 0).map(([k]) => k));
-  if (!недобрано.size) return пусто;
 
   const ids = new Set();
   for (const e of state.elements) {
     if (e.contract_id) continue;                       // уже к чему-то привязан
-    if (!недобрано.has(markKey(e.mark)) && !недобрано.has(typeKey(e.element_type))) continue;
-    if (!pickerElementPasses(e, "contract")) continue; // остальные срезы соблюдаем
+    if (марки.size && !марки.has(markKey(e.mark)) && !марки.has(typeKey(e.element_type))) continue;
+    // Остальные срезы соблюдаем; отбор по контракту — нет, эти изделия его
+    // не проходят по определению (контракта у них и нет).
+    if (!pickerElementPasses(e, "contract")) continue;
     ids.add(e.id);
   }
   return ids;
@@ -3997,13 +3988,41 @@ function renderPickerContracts() {
   const totals = pickerContractTotals();
 
   // Привязано — по элементам, прошедшим ОСТАЛЬНЫЕ срезы (свой игнорируем,
-  // иначе строки нельзя сравнивать между собой).
+  // иначе строки нельзя сравнивать между собой). Тем же проходом собираем
+  // ключи марок и типов изделий среза: по ним определяется, ОТНОСИТСЯ ЛИ
+  // контракт к тому, что сейчас отобрано (см. контрактВСрезе ниже).
   const linked = new Map();
+  const ключиСреза = new Set();
   for (const e of state.elements) {
-    if (!e.contract_id) continue;
     if (!pickerElementPasses(e, "contract")) continue;
+    const mk = markKey(e.mark), tk = typeKey(e.element_type);
+    if (mk) ключиСреза.add(mk);
+    if (tk) ключиСреза.add(tk);
+    if (!e.contract_id) continue;
     linked.set(e.contract_id, (linked.get(e.contract_id) || 0) + 1);
   }
+
+  // Относится ли контракт к текущему срезу (живой запрос 2026-08-10: «при
+  // фильтрации по свойствам элементов отбирать справа только те контракты,
+  // в которых есть такие элементы»). Два основания, и второе важнее
+  // первого: контракт может ещё не иметь НИ ОДНОГО привязанного изделия и
+  // при этом закрывать ровно ту марку, которую отобрали, — именно он и
+  // нужен комплектовщику. Отбирать только по привязанным значило бы
+  // прятать контракты, к которым ещё предстоит привязывать.
+  const позицииКонтракта = new Map();
+  for (const line of state.contractLineTotals) {
+    if (!позицииКонтракта.has(line.contract_id)) позицииКонтракта.set(line.contract_id, new Set());
+    const ключ = pickerLineKey(line);
+    if (ключ) позицииКонтракта.get(line.contract_id).add(ключ);
+  }
+  const контрактВСрезе = (id) => {
+    if (sel.has(id)) return true;                     // выбранное не прячем никогда
+    if ((linked.get(id) || 0) > 0) return true;       // есть привязанные изделия среза
+    const ключи = позицииКонтракта.get(id);
+    if (!ключи || !ключи.size) return false;          // позиций нет — судить не по чему
+    for (const k of ключи) if (ключиСреза.has(k)) return true;
+    return false;
+  };
 
   const head = document.createElement("div");
   head.className = "picker-block-head";
@@ -4011,13 +4030,34 @@ function renderPickerContracts() {
   title.className = "picker-block-title";
   title.textContent = sel.size ? `Контракты (${sel.size})` : "Контракты";
   head.appendChild(title);
+  // Два РАЗНЫХ сброса, обе — ссылками в шапке (2026-08-10, живой запрос:
+  // большая кнопка рядом со ссылкой читалась как её дубль). Разные они по
+  // существу: «контракты» снимает отбор по документам, «позиции» — выбор
+  // марок и типов, наведённый кликами по строкам позиций (он живёт в срезах
+  // левой панели). Появляются вместе часто, потому что клик по позиции
+  // добавляет в срез и марку, и её контракт.
+  const позиционныйОтбор = state.picker.sel.mark.size + state.picker.sel.elementType.size;
+  const ссылкаСброса = (текст, подсказка, действие) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "link-btn";
+    btn.textContent = текст;
+    btn.title = подсказка;
+    btn.addEventListener("click", действие);
+    head.appendChild(btn);
+  };
   if (sel.size) {
-    const clear = document.createElement("button");
-    clear.type = "button";
-    clear.className = "link-btn";
-    clear.textContent = "сбросить";
-    clear.addEventListener("click", () => { sel.clear(); onPickerChange(); });
-    head.appendChild(clear);
+    ссылкаСброса("сбросить контракты", "Снять отбор по контрактам", () => {
+      sel.clear();
+      onPickerChange();
+    });
+  }
+  if (позиционныйОтбор) {
+    ссылкаСброса("сбросить позиции", "Снять выбор марок и типов, сделанный кликами по позициям контрактов; отбор по самим контрактам останется", () => {
+      state.picker.sel.mark.clear();
+      state.picker.sel.elementType.clear();
+      onPickerChange();
+    });
   }
   box.appendChild(head);
 
@@ -4089,7 +4129,10 @@ function renderPickerContracts() {
   // справочника (state.contracts), а не из позиций: контракт без единой
   // позиции и без единого изделия — это тоже факт, который надо видеть.
   const byCounterparty = new Map();
-  for (const c of state.contracts) {
+  // Архивные контракты в дашборд не попадают вовсе (2026-08-10): система их
+  // «не показывает в отчётах и дашбордах». Увидеть и вернуть в оборот их
+  // можно в справочнике контрактов.
+  for (const c of activeContracts()) {
     const key = c.counterparty_short_name || placementNoneLabel("supplier");
     if (!byCounterparty.has(key)) byCounterparty.set(key, []);
     byCounterparty.get(key).push(c);
@@ -4100,13 +4143,9 @@ function renderPickerContracts() {
   list.style.maxHeight = "none";   // область и так прокручивается целиком
 
   // Порядок тот же, что в блоках слева: сначала контрагенты, у которых в
-  // текущем срезе что-то есть, затем разделитель и остальные. Доступным
-  // считается контрагент, у которого хоть один контракт даёт привязанные
-  // изделия или выбран сейчас.
-  const привязаноУ = cp => byCounterparty.get(cp)
-    .reduce((s, c) => s + (linked.get(c.id) || 0), 0);
-  const выбранУ = cp => byCounterparty.get(cp).some(c => sel.has(c.id));
-  const доступен = cp => привязаноУ(cp) > 0 || выбранУ(cp);
+  // текущем срезе что-то есть, затем разделитель и остальные. Доступен
+  // контрагент, у которого хоть один контракт относится к срезу.
+  const доступен = cp => byCounterparty.get(cp).some(c => контрактВСрезе(c.id));
   const поИмени = (a, b) => a.localeCompare(b, "ru", { numeric: true });
   const counterparties = Array.from(byCounterparty.keys()).sort(поИмени);
   // Два фрагмента, а не вставка разделителя по ходу цикла: строка «без
@@ -4116,14 +4155,13 @@ function renderPickerContracts() {
   const недоступныеУзлы = document.createDocumentFragment();
   for (const cp of counterparties) {
     const цель = доступен(cp) ? доступныеУзлы : недоступныеУзлы;
-    // Внутри контрагента — тем же правилом, но без второго разделителя:
-    // группы короткие, лишняя черта в каждой превратила бы список в лестницу.
+    // Внутри контрагента — тем же правилом и с такой же чертой (живой
+    // запрос 2026-08-10): контракты, в которых изделий текущего среза нет,
+    // уходят вниз группы под разделитель. Сортировка стабильна, поэтому
+    // алфавит внутри каждой половины сохраняется.
     const contracts = byCounterparty.get(cp)
       .sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }))
-      .sort((a, b) => {
-        const доступ = c => ((linked.get(c.id) || 0) > 0 || sel.has(c.id)) ? 0 : 1;
-        return доступ(a) - доступ(b);
-      });
+      .sort((a, b) => (контрактВСрезе(a.id) ? 0 : 1) - (контрактВСрезе(b.id) ? 0 : 1));
     const ids = contracts.map(c => c.id);
     const всего = ids.reduce((s, id) => s + (totals.get(id) || 0), 0);
     const привязано = ids.reduce((s, id) => s + (linked.get(id) || 0), 0);
@@ -4144,11 +4182,24 @@ function renderPickerContracts() {
     });
     цель.appendChild(groupRow);
 
+    let чертаВГруппе = false;
     for (const c of contracts) {
+      // Черта перед первым контрактом, которого в срезе нет. Ставится
+      // только при смешанной группе: если в срезе нет НИ ОДНОГО контракта
+      // контрагента, вся группа и так уехала под общую черту ниже, и
+      // вторая внутри неё — лишняя.
+      if (!чертаВГруппе && !контрактВСрезе(c.id) && доступен(cp)) {
+        чертаВГруппе = true;
+        const sep = document.createElement("div");
+        sep.className = "picker-divider";
+        sep.textContent = "нет в текущем срезе";
+        цель.appendChild(sep);
+      }
       const всегоК = totals.get(c.id) || 0;
       const привязаноК = linked.get(c.id) || 0;
       const row = document.createElement("div");
       row.className = "picker-row picker-row-nested";
+      if (!контрактВСрезе(c.id)) row.classList.add("empty");
       // Подпись без имени контрагента: оно уже в заголовке группы над ним.
       // И без слов «Дог.»/«Спец.»: колонка узкая, три числа справа съедают
       // половину ширины, а сами номера договора и спецификации узнаваемы и
@@ -4157,7 +4208,6 @@ function renderPickerContracts() {
         .filter(Boolean).join(" · ") || c.name;
       row.dataset.label = подпись;
       if (sel.has(c.id)) row.classList.add("selected");
-      if (!всегоК && !привязаноК) row.classList.add("empty");
       const labelEl = pickerLabelSpan(подпись);
       labelEl.title = c.name;
       row.appendChild(labelEl);
@@ -4190,25 +4240,46 @@ function renderPickerContracts() {
     }
   }
 
-  // Изделия без контракта — отдельной строкой в конце: у них нет ни
-  // документа, ни закупленного количества, но именно они и есть главный
-  // вопрос комплектовщика «что ещё не расписано».
+  // Изделия без контракта — СВОЕЙ группой «— Без контрагента —», а не
+  // строкой в хвосте списка (живой репорт со скриншотом 2026-08-10): раньше
+  // она шла последней строкой и читалась как позиция последнего в списке
+  // контрагента — то есть приписывала ему две с половиной тысячи чужих
+  // изделий. У этих изделий контрагента нет вовсе, и в чужую группу они
+  // попадать не должны.
   const безКонтракта = state.elements.filter(
     e => !e.contract_id && pickerElementPasses(e, "contract")).length;
+  const выбранаПустая = sel.has(PLACEMENT_NONE);
+  const переключить = () => {
+    if (sel.has(PLACEMENT_NONE)) sel.delete(PLACEMENT_NONE); else sel.add(PLACEMENT_NONE);
+    onPickerChange();
+  };
+
+  const noneGroup = document.createElement("div");
+  noneGroup.className = "picker-group-head";
+  if (выбранаПустая) noneGroup.classList.add("selected");
+  noneGroup.appendChild(pickerLabelSpan("— Без контрагента —"));
+  // «Всего» и «остаток» здесь прочерк, и это не пропуск: закупать нечего —
+  // документа нет. Осмысленно только «привязано», то есть сколько изделий
+  // среза до сих пор ни к какому контракту не отнесено.
+  noneGroup.appendChild(pickerCountSpan("—"));
+  noneGroup.appendChild(pickerCountSpan(безКонтракта));
+  noneGroup.appendChild(pickerCountSpan("—"));
+  noneGroup.addEventListener("click", переключить);
+
   const noneRow = document.createElement("div");
-  noneRow.className = "picker-row";
+  noneRow.className = "picker-row picker-row-nested";
   noneRow.dataset.label = placementNoneLabel("contract");
-  if (sel.has(PLACEMENT_NONE)) noneRow.classList.add("selected");
+  if (выбранаПустая) noneRow.classList.add("selected");
   if (!безКонтракта) noneRow.classList.add("empty");
   noneRow.appendChild(pickerLabelSpan("— без контракта —"));
   noneRow.appendChild(pickerCountSpan("—"));
   noneRow.appendChild(pickerCountSpan(безКонтракта));
   noneRow.appendChild(pickerCountSpan("—"));
-  noneRow.addEventListener("click", () => {
-    if (sel.has(PLACEMENT_NONE)) sel.delete(PLACEMENT_NONE); else sel.add(PLACEMENT_NONE);
-    onPickerChange();
-  });
-  (безКонтракта || sel.has(PLACEMENT_NONE) ? доступныеУзлы : недоступныеУзлы).appendChild(noneRow);
+  noneRow.addEventListener("click", переключить);
+
+  const цельПустой = (безКонтракта || выбранаПустая) ? доступныеУзлы : недоступныеУзлы;
+  цельПустой.appendChild(noneGroup);
+  цельПустой.appendChild(noneRow);
 
   list.appendChild(доступныеУзлы);
   if (недоступныеУзлы.childElementCount) {
@@ -4263,12 +4334,16 @@ function buildContractMarkRows(contract, linked) {
     const привязано = привязаноПоПозиции.get(ключ) || 0;
     return { line: l, ключ, всего, привязано, остаток: всего - привязано };
   });
-  // Сначала строки с остатком (их и предстоит связать), внутри — по
-  // подписи, а не по служебному ключу: ключ нормализован для сравнения и
-  // порядок по нему для глаза случаен.
+  // ВСЕГДА по алфавиту (живой запрос 2026-08-10). Раньше строки с ненулевым
+  // остатком поднимались наверх — и список перестраивался под руками: клик
+  // по марке сужает срез, от среза зависит «привязано», от «привязано» —
+  // остаток, и соседние строки перескакивали через выбранную. Порядок,
+  // который меняется от собственного выбора, работать мешает: глаз теряет
+  // строку ровно в тот момент, когда с ней работают.
+  // Сортируем по подписи, а не по служебному ключу: ключ нормализован для
+  // сравнения, и порядок по нему для глаза случаен.
   const подписьСтроки = s => s.line.mark || s.line.element_type || "";
-  строки.sort((a, b) => (b.остаток > 0) - (a.остаток > 0)
-    || подписьСтроки(a).localeCompare(подписьСтроки(b), "ru", { numeric: true }));
+  строки.sort((a, b) => подписьСтроки(a).localeCompare(подписьСтроки(b), "ru", { numeric: true }));
 
   for (const s of строки) {
     const row = document.createElement("div");
@@ -4289,16 +4364,31 @@ function buildContractMarkRows(contract, linked) {
     row.appendChild(pickerCountSpan(s.всего, "contracting"));
     row.appendChild(pickerCountSpan(s.привязано));
     row.appendChild(pickerRemainderSpan(s.остаток));
-    // Клик по марке — тот же срез «Марка», что и в левой панели: строка
-    // контракта и строка блока слева обязаны означать одно и то же.
+    // Клик по позиции = «покажи изделия ЭТОЙ марки В ЭТОМ контракте»
+    // (уточнение пользователя 2026-08-10): к марке добавляется и сам
+    // контракт. Раньше добавлялась только марка, и на схеме оказывались
+    // изделия этой марки из ВСЕХ контрактов сразу — не то, о чём спрашивают,
+    // кликая по строке внутри конкретного документа.
+    // Марка при этом ложится в тот же срез «Марка», что и в левой панели:
+    // строка контракта и строка блока слева обязаны означать одно и то же.
     row.addEventListener("click", () => {
+      const selContract = state.picker.sel.contract;
       if (s.line.mark) {
         const sel = state.picker.sel.mark;
-        if (sel.has(s.line.mark)) sel.delete(s.line.mark); else sel.add(s.line.mark);
+        if (sel.has(s.line.mark)) {
+          sel.delete(s.line.mark);
+        } else {
+          sel.add(s.line.mark);
+          selContract.add(contract.id);
+        }
       } else if (s.line.element_type) {
         const sel = state.picker.sel.elementType;
-        if (sel.has(s.line.element_type)) sel.delete(s.line.element_type);
-        else sel.add(s.line.element_type);
+        if (sel.has(s.line.element_type)) {
+          sel.delete(s.line.element_type);
+        } else {
+          sel.add(s.line.element_type);
+          selContract.add(contract.id);
+        }
       }
       onPickerChange();
     });
@@ -7101,13 +7191,13 @@ function renderContractPicker(listEl, legendEl, opts) {
     if (legendEl) legendEl.textContent = "Остатки по позициям загружаются…";
     return;
   }
-  const matched = state.contracts.filter(c => positions.has(c.id));
+  const matched = activeContracts().filter(c => positions.has(c.id));
   // «Остальные» — по-прежнему отобранные по ТИПУ (как было до этой правки),
   // иначе серая группа разрослась бы до контрактов всех строек сразу.
   // Единственное исключение — когда по типу нет вообще ничего: тогда лучше
   // показать все, чем оставить форму без единого варианта.
   const typed = bulkContractOptionsForType(scope.elementType).filter(c => !positions.has(c.id));
-  const rest = (matched.length || typed.length) ? typed : state.contracts.slice();
+  const rest = (matched.length || typed.length) ? typed : activeContracts();
   let html = head;
   if (matched.length) html += contractPickerGroupsHtml(matched, positions, selectedId, scope, reservedFor);
   if (rest.length) {
@@ -7270,8 +7360,16 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+// Архивный контракт (2026-08-10) — отработанный документ: система его не
+// предлагает и не считает. Прячется он ТОЛЬКО там, где идёт выбор или счёт;
+// подпись контракта по-прежнему резолвится по полному state.contracts,
+// иначе историческая привязка изделия превратилась бы в «контракт #17».
+function activeContracts() {
+  return state.contracts.filter(c => !c.is_archived);
+}
+
 function bulkContractOptionsForType(elementType) {
-  return state.contracts.filter(c => c.element_types.includes(elementType));
+  return activeContracts().filter(c => c.element_types.includes(elementType));
 }
 
 // ---------- контракты в выпадающем списке: группами по контрагенту и договору
@@ -13704,12 +13802,19 @@ async function renderContractsList() {
   table.innerHTML = `
     <tr><th>Контрагент</th><th>Договор</th><th>Спецификация</th><th>Тема</th><th></th></tr>
   `;
-  for (const c of contracts) {
+  // Архивные — В КОНЕЦ списка и зачёркнутым шрифтом (живой запрос
+  // 2026-08-10). Не прячем совсем: справочник — единственное место, где
+  // архивный контракт вообще виден, и вернуть его в оборот можно только
+  // отсюда. Сортировка стабильна, поэтому порядок внутри каждой половины
+  // (контрагент → договор → спецификация с сервера) сохраняется.
+  const порядок = [...contracts.filter(c => !c.is_archived), ...contracts.filter(c => c.is_archived)];
+  for (const c of порядок) {
     const agreementText = c.agreement_date ? `${escapeHtml(c.agreement_number)} от ${formatDateRu(c.agreement_date)}` : escapeHtml(c.agreement_number);
     const specText = c.specification_date ? `${escapeHtml(c.specification_number)} от ${formatDateRu(c.specification_date)}` : escapeHtml(c.specification_number);
     const tr = document.createElement("tr");
+    if (c.is_archived) tr.classList.add("contract-archived");
     tr.innerHTML = `
-      <td>${escapeHtml(c.counterparty_short_name)}</td>
+      <td>${escapeHtml(c.counterparty_short_name)}${c.is_archived ? ' <span class="archived-mark">архивный</span>' : ""}</td>
       <td>${agreementText}</td>
       <td>${specText}</td>
       <td>${c.theme ? escapeHtml(c.theme) : "—"}</td>
@@ -13770,7 +13875,12 @@ async function renderDefaultContracts(contracts) {
   for (const type of types) {
     const row = document.createElement("div");
     row.className = "default-contract-row";
-    const matching = contracts.filter(c => c.lines.some(l => l.element_type === type));
+    // Архивный контракт по умолчанию не предлагаем — он и подставлялся бы
+    // сам при первой же смене статуса, ровно то, чего архивация избегает.
+    // Уже назначенный архивный из списка не выбрасываем: иначе select
+    // показал бы «— не задан —» вместо того, что реально стоит в базе.
+    const matching = contracts.filter(c =>
+      (!c.is_archived || defaultMap[type] === c.id) && c.lines.some(l => l.element_type === type));
     const options = ['<option value="">— не задан —</option>'].concat(
       matching.map(c => `<option value="${c.id}" ${defaultMap[type] === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
     );
@@ -14104,6 +14214,26 @@ function buildContractNamePreviewText() {
   if (theme) name += ` (${theme})`;
   return name;
 }
+// Подсказка у галочки «Архивный». Правило простое, но неочевидное, и
+// объяснить его надо ДО нажатия: архивировать можно контракт, за которым не
+// осталось изделий схемы; упоминание в истории статусов не мешает — она и
+// хранит, чем изделия закрывали раньше. Число привязанных изделий приходит
+// с контрактом (linked_elements), отдельного запроса не нужно.
+function updateArchiveHint(contract) {
+  const box = document.getElementById("ce-archived");
+  const hint = document.getElementById("ce-archived-hint");
+  if (!contract) { hint.textContent = ""; return; }
+  const привязано = contract.linked_elements || 0;
+  const мешает = привязано > 0 && !contract.is_archived;
+  box.disabled = мешает;
+  hint.textContent = мешает
+    ? `Перевести в архив нельзя: к контракту привязано изделий — ${привязано}. `
+      + "Сначала переназначьте их на другой контракт или снимите привязку. "
+      + "Упоминание контракта в истории статусов архивации не мешает."
+    : "Архивный контракт не предлагается при смене статуса и не участвует в отчётах и дашбордах; "
+      + "в справочнике и в истории статусов он остаётся.";
+}
+
 function updateContractNamePreview() {
   document.getElementById("ce-name-preview").textContent = buildContractNamePreviewText() || "—";
 }
@@ -14114,6 +14244,12 @@ async function openContractEdit(contract) {
   setCeView("main");
   document.getElementById("contract-edit-title").textContent = contract ? "Изменить контракт" : "Новый контракт";
   document.getElementById("ce-theme").value = contract && contract.theme ? contract.theme : "";
+  // Архивность — только у уже существующего контракта: заводить новый сразу
+  // архивным бессмысленно.
+  const archivedBox = document.getElementById("ce-archived");
+  archivedBox.checked = !!(contract && contract.is_archived);
+  archivedBox.closest("label").style.display = contract ? "" : "none";
+  updateArchiveHint(contract);
 
   counterpartiesFullCache = await api("/counterparties/full");
   const cpSelect = document.getElementById("ce-counterparty");
@@ -14206,6 +14342,7 @@ document.getElementById("contract-edit-save").addEventListener("click", async ()
   const body = {
     specification_id: Number(specificationId),
     theme: document.getElementById("ce-theme").value.trim() || null,
+    is_archived: document.getElementById("ce-archived").checked,
     lines,
     incidents,
   };
