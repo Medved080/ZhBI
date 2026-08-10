@@ -594,7 +594,9 @@
   .toolbar-collapse-btn { padding: 6px 6px; font-size: 11px; }
 
   /* -------- рабочая область -------- */
-  #body { flex: 1; display: flex; min-height: 0; }
+  /* position: relative — точка отсчёта для правой панели, раскрывающейся
+     поверх схемы в АРМ (см. #sidebar.floating). */
+  #body { flex: 1; display: flex; min-height: 0; position: relative; }
   /* Колонка «рабочая область + строка состояния под ней». Сайдбар в неё
      не входит — строка состояния относится к схеме, а не ко всему окну
      (живой запрос: «в нижней части рабочей области под рабочей
@@ -1213,6 +1215,16 @@
   }
   .picker-cols .picker-row-count { opacity: 1; font-size: 10px; }
   .picker-block-note { font-size: 10px; color: var(--color-text-muted); padding: 0 0 3px 2px; }
+  /* Черта между тем, из чего сейчас можно выбирать, и тем, чего в текущем
+     срезе не осталось (2026-08-10). Недоступное не прячется — просто
+     съезжает вниз, за подписанную черту. */
+  .picker-divider {
+    display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; padding: 0 8px;
+    font-size: 10px; color: var(--color-text-muted); white-space: nowrap;
+  }
+  .picker-divider::after {
+    content: ""; flex: 1; height: 1px; background: var(--color-border);
+  }
   /* Разница «законтрактовано минус модель»: плюс — запас, минус — дефицит.
      Цвета не из палитры статусов: это не статус, а знак числа. */
   .picker-row-diff.pos { color: #16a34a; }
@@ -1226,6 +1238,41 @@
   .picker-row.selected .picker-row-count { color: #fff !important; }
   .picker-search { width: 100%; margin-bottom: 4px; font-size: 12px; padding: 4px 6px; }
   .picker-hint { font-size: 11px; color: var(--color-text-muted); margin: 0 0 10px; line-height: 1.35; }
+
+  /* Область «Контракты» — справа от схемы, устроена как блоки-срезы слева
+     (те же .picker-row/.picker-list), но с группировкой по контрагенту. */
+  #picker-contracts {
+    width: 300px; flex-shrink: 0; background: var(--color-surface-2);
+    border-left: 1px solid var(--color-border); padding: 12px; overflow-y: auto; font-size: 12px;
+  }
+  .picker-group-head {
+    display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer;
+    font-weight: 600; background: var(--color-surface-2); border-radius: 4px; margin-top: 6px;
+  }
+  .picker-group-head:hover { background: var(--color-border); }
+  .picker-group-head.selected { background: var(--color-primary); color: #fff; }
+  .picker-group-head .picker-row-label { font-weight: 600; }
+  .picker-row.picker-row-nested .picker-row-label { padding-left: 10px; }
+
+  /* Свёрнутая правая панель в АРМ: от неё виден только ярлычок с
+     закладками, сама панель раскрывается ПОВЕРХ схемы (position: absolute
+     внутри #body) — иначе её раскрытие каждый раз перекраивало бы ширину
+     рабочей области и сбивало вид схемы. */
+  #sidebar-rail {
+    width: 32px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center;
+    gap: 8px; padding: 12px 0; background: var(--color-surface-2);
+    border-left: 1px solid var(--color-border);
+  }
+  .sidebar-rail-btn {
+    writing-mode: vertical-rl; background: none; border: none; cursor: pointer; padding: 8px 3px;
+    font-size: 11px; font-weight: 600; color: var(--color-text-muted); border-radius: 4px;
+  }
+  .sidebar-rail-btn:hover { color: var(--color-text); background: var(--color-border); }
+  .sidebar-rail-btn.active { color: #fff; background: var(--color-primary); }
+  #sidebar.floating {
+    position: absolute; top: 0; right: 32px; height: 100%; z-index: 30;
+    box-shadow: -6px 0 18px rgba(0, 0, 0, .18);
+  }
 
   #resize-handle { width: 6px; flex-shrink: 0; cursor: col-resize; background: transparent; position: relative; }
   #resize-handle:hover, #resize-handle.dragging { background: var(--color-primary); opacity: .3; }
@@ -1271,6 +1318,11 @@
   .filter-group .toggle { margin-top: 4px; }
   .filter-group .toggle.filter-parent { font-weight: 600; margin-top: 0; flex: 1; }
   .filter-group .toggle.filter-child { margin-left: 20px; font-weight: 400; flex: 1; }
+  /* Ветки «Подтипы» и «Марки» под типом (см. buildTypeTreeFilterGroup):
+     заголовок ветки — полужирный, но мельче типа, сами значения — ещё на
+     уровень правее, чтобы две параллельные ветки читались как разные. */
+  .filter-group .toggle.filter-child.filter-section { font-weight: 600; color: var(--color-text-muted); }
+  .filter-group .toggle.filter-grandchild { margin-left: 40px; font-weight: 400; }
   .filter-group .toggle.filter-disabled { opacity: .4; }
   .filter-group .toggle.filter-disabled input[type="checkbox"] { cursor: not-allowed; }
   .filter-parent-row { display: flex; align-items: center; margin-top: 8px; }
@@ -3067,6 +3119,19 @@
     <button type="button" class="btn btn-sm btn-secondary" id="statusbar-log-btn" title="Сообщения, выводившиеся за время сеанса">История</button>
   </div>
  </div>
+  <!-- Контракты объекта (АРМ, 2026-08-10) — справа от схемы, отдельной
+       областью: это взгляд «со стороны бумаги», а блоки слева — со стороны
+       модели. Такой же срез, как остальные: клик по контракту (или по
+       контрагенту целиком) отбирает элементы, привязанные к нему. -->
+  <div id="picker-contracts" style="display:none"></div>
+  <!-- Рейка свёрнутого сайдбара (АРМ): в свёрнутом виде от правой панели
+       виден только ярлычок с закладками. Клик по закладке раскрывает панель
+       поверх схемы на этой закладке, клик мимо неё или Esc — сворачивает. -->
+  <div id="sidebar-rail" style="display:none">
+    <button type="button" class="sidebar-rail-btn" data-tab="properties">Свойства</button>
+    <button type="button" class="sidebar-rail-btn" data-tab="status">Статус</button>
+    <button type="button" class="sidebar-rail-btn" data-tab="view">Вид</button>
+  </div>
   <div id="resize-handle" title="Перетащите, чтобы изменить ширину панели"></div>
   <div id="sidebar">
     <div class="tabs">

@@ -208,6 +208,9 @@ let state = {
     sel: {
       elementType: new Set(), subtype: new Set(), mark: new Set(),
       crane: new Set(), stance: new Set(), floor: new Set(),
+      // Контракт — такой же срез, как остальные, но живёт не в левой
+      // панели, а в своей области справа от схемы (см. renderPickerContracts).
+      contract: new Set(),
     },
     metric: null,
     search: {},
@@ -216,10 +219,14 @@ let state = {
   // UI-состояние навигации, но хранится в state (не в DOM), иначе
   // разворот сбрасывался бы при каждой полной перерисовке фильтров
   // (onPlacementFilterChange пересобирает DOM заново на любой клик).
-  // Ключ subtype здесь был, пока марка была третьим уровнем дерева «Тип →
-  // Подтип → Марка» (развёрнутость подтипа); с 2026-08-10 марка — свой
-  // блок фильтра, разворачивать внутри подтипа больше нечего.
-  placementGroupsExpanded: { crane: new Set(), elementType: new Set(), supplier: new Set(), stanceZone: new Set() },
+  // typeSubtypes/typeMarks — развёрнутость ДВУХ параллельных веток под
+  // типом элемента (см. buildTypeTreeFilterGroup), ключ в обеих — сам тип.
+  // Сворачиваются они порознь: у типа бывает 13 подтипов и 339 марок, и
+  // общий разворот хоронил бы подтипы под марками.
+  placementGroupsExpanded: {
+    crane: new Set(), elementType: new Set(), typeSubtypes: new Set(), typeMarks: new Set(),
+    supplier: new Set(), stanceZone: new Set(),
+  },
   // Какие ВЕРХНЕУРОВНЕВЫЕ группы фильтра сейчас свёрнуты — та же природа,
   // что placementGroupsExpanded выше (сеансовое UI-состояние, не сброс на
   // каждой перерисовке). По умолчанию свёрнуто всё, кроме "Статус" — самого
@@ -227,7 +234,7 @@ let state = {
   // разросся настолько, что до "Статус" нужно было проскроллить и Захватку,
   // и Кран/Стоянку, и Отметку).
   topFilterCollapsed: new Set([
-    "zakhvatka", "craneStance", "craneStanceNone", "elevation", "floor", "elementType", "mark", "supplier",
+    "zakhvatka", "craneStance", "craneStanceNone", "elevation", "floor", "elementType", "supplier",
     "noContract", "smr", "changes",
   ]),
   baseMarkerRadius: 1,
@@ -695,9 +702,12 @@ function applyRolePermissions() {
       group.style.display = видимые.length ? "" : "none";
     });
 
-  // Переключатель рабочего места (АРМ комплектовщика) — ПОКА только
-  // администратору сервиса (решение пользователя 2026-08-10): рабочее место
-  // новое и обкатывается, показывать его прорабу рано. Гасится весь
+  // Переключатель рабочего места (АРМ комплектовщика) — администратору
+  // сервиса и КОМПЛЕКТОВЩИКУ (решение пользователя 2026-08-10): рабочее
+  // место названо его именем и сделано под его работу, а прорабу пока не
+  // показывается. Признак тот же, что у контрактных справочников
+  // (`комплектовщик` выше): роль на ПОКАЗЫВАЕМОМ объекте не ниже
+  // «Комплектовщика», плюс администратор сервиса всегда. Гасится весь
   // переключатель целиком, а не одна кнопка: «Модель» без пары —
   // переключатель из одного положения, то есть лишний элемент на экране.
   // Гашение здесь ЧИСТО ИНТЕРФЕЙСНОЕ и правами не является: дашборд считает
@@ -705,7 +715,7 @@ function applyRolePermissions() {
   // доступного роли он не показывает.
   const switchEl = document.getElementById("workspace-switch");
   if (switchEl) {
-    const можно = системнаяРоль === "admin";
+    const можно = комплектовщик;
     switchEl.style.display = можно ? "" : "none";
     // Роль могла смениться на живой вкладке (режим «от имени», повторный
     // /me) — человек, оказавшийся без права, не должен остаться в АРМ.
@@ -1937,12 +1947,11 @@ function passesPlacementFilters(element) {
 // фильтрам, включая только что исключённые её же подтипы — "Колонна"
 // навсегда остаётся недоступной для повторного включения. См.
 // Docs/backlog.md.
-// Марка вышла из этой тройки 2026-08-10 вместе с выносом в отдельный блок
-// (см. renderPlacementFilters): каскада «тип → марка» больше нет, значит и
-// поблажки в подсчёте доступности ей не полагается — наоборот, исключение
-// всех марок типа ДОЛЖНО гасить сам тип, как любой другой независимый
-// фильтр.
-const PLACEMENT_CASCADE_GROUPS = [["elementType", "subtype"], ["crane", "stance"], ["supplier", "contract"]];
+// Марка вернулась в эту тройку 2026-08-10 вместе с деревом «Тип → (Подтипы
+// | Марки)»: клик по типу снова каскадом снимает и его марки, а значит,
+// считая доступность типа, нужно игнорировать и фильтр марок — иначе тот же
+// порочный круг, что описан выше, только через марку.
+const PLACEMENT_CASCADE_GROUPS = [["elementType", "subtype", "mark"], ["crane", "stance"], ["supplier", "contract"]];
 
 function cascadeGroupFor(key) {
   return PLACEMENT_CASCADE_GROUPS.find(g => g.includes(key)) || [key];
@@ -2848,6 +2857,197 @@ function buildHierarchicalFilterGroup(
   return wrap;
 }
 
+// Дерево «Тип элемента → (Подтипы | Марки)» — ОТДЕЛЬНЫЙ конструктор, а не
+// buildHierarchicalFilterGroup: там у родителя ОДИН список детей, а здесь у
+// типа две РАВНОПРАВНЫЕ ветки-раздела, каждая со своим разворотом и своей
+// галочкой «весь раздел» (живой запрос 2026-08-10: «Тип на главном уровне и
+// 2 параллельных подуровня — подтип и марка»).
+//
+// Почему не подтип→марка, как было до 2026-08-10: марка НЕ принадлежит
+// подтипу. Она принадлежит типу (справочник марок, app/marks.py — владелец
+// марки тип, область объект), и вложенность в подтип заставляла помнить,
+// под каким подтипом искать марку. Почему не два независимых блока (как
+// было в промежуточном варианте того же дня): марка без своего типа — это
+// плоский список в сотни строк, из которого не видно, к чему марка
+// относится.
+//
+// Каждый раздел сворачивается сам: у типа бывает 13 подтипов и 339 марок,
+// и разворачивать их вместе значит хоронить подтипы под марками.
+function buildTypeTreeFilterGroup(types, subtypesByType, marksByType, onChange) {
+  const { wrap, body, btnAll, btnNone } = filterGroupShell("Тип элемента / Подтип · Марка", "elementType");
+  const typeExcluded = state.placementFilters.elementType;
+  const все = [];   // {input, value, excludedSet} — для кнопок «все»/«ничего» группы
+
+  // Раздел внутри типа: заголовок с разворотом и галочкой на весь раздел,
+  // плюс список значений. Возвращает элементы раздела и свои чекбоксы —
+  // клик по типу каскадом ставит/снимает их все (см. ниже).
+  function буildРаздел(тип, title, values, excludedSet, labelFor, isEnabledFn, expandedSet, itemClass) {
+    const expandKey = тип;
+    const isOpen = expandedSet.has(expandKey);
+    const row = document.createElement("div");
+    row.className = "filter-parent-row";
+    const box = document.createElement("div");
+    box.className = "filter-children filter-section-body";
+    if (isOpen) box.classList.add("open");
+
+    const expandBtn = document.createElement("button");
+    expandBtn.type = "button";
+    expandBtn.className = "filter-expand-btn";
+    expandBtn.textContent = isOpen ? "▾" : "▸";
+    expandBtn.title = isOpen ? "Свернуть" : "Развернуть";
+    expandBtn.addEventListener("click", () => {
+      const open = box.classList.toggle("open");
+      expandBtn.textContent = open ? "▾" : "▸";
+      expandBtn.title = open ? "Свернуть" : "Развернуть";
+      if (open) expandedSet.add(expandKey); else expandedSet.delete(expandKey);
+    });
+    row.appendChild(expandBtn);
+
+    const label = document.createElement("label");
+    label.className = "toggle filter-child filter-section";
+    const секция = document.createElement("input");
+    секция.type = "checkbox";
+    секция.title = `Отметить весь раздел «${title}»`;
+    label.appendChild(секция);
+    label.appendChild(document.createTextNode(` ${title} (${values.length})`));
+    row.appendChild(label);
+
+    const чекбоксы = [];
+    for (const v of values) {
+      const itemLabel = document.createElement("label");
+      itemLabel.className = `toggle filter-grandchild ${itemClass}`;
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = !excludedSet.has(v);
+      applyEnabledState(input, itemLabel, isEnabledFn(v));
+      input.addEventListener("change", () => {
+        if (input.checked) {
+          excludedSet.delete(v);
+          // Включили значение при выключенном типе — включаем и тип: иначе
+          // элемент всё равно не пройдёт фильтр (passesPlacementFilters —
+          // это И по всем категориям). Остальных значений не трогаем.
+          typeExcluded.delete(тип);
+        } else {
+          excludedSet.add(v);
+        }
+        onChange();
+      });
+      itemLabel.appendChild(input);
+      itemLabel.appendChild(document.createTextNode(" " + labelFor(v)));
+      box.appendChild(itemLabel);
+      чекбоксы.push({ input, value: v });
+      все.push({ input, value: v, excludedSet });
+    }
+
+    const обновить = () => {
+      const отмечено = чекбоксы.filter(({ value }) => !excludedSet.has(value)).length;
+      секция.checked = чекбоксы.length > 0 && отмечено === чекбоксы.length;
+      // Промежуточное состояние: часть раздела отмечена. Без него галочка
+      // выглядела бы снятой при половине выбранных и вводила в заблуждение.
+      секция.indeterminate = отмечено > 0 && отмечено < чекбоксы.length;
+    };
+    обновить();
+    секция.addEventListener("change", () => {
+      чекбоксы.forEach(({ input, value }) => {
+        input.checked = секция.checked;
+        if (секция.checked) excludedSet.delete(value); else excludedSet.add(value);
+      });
+      onChange();
+    });
+    return { row, box, чекбоксы, excludedSet };
+  }
+
+  const typeCheckboxes = [];
+  for (const тип of types) {
+    const подтипы = subtypesByType.get(тип) || [];
+    const марки = marksByType.get(тип) || [];
+
+    const tRow = document.createElement("div");
+    tRow.className = "filter-parent-row";
+    const tBox = document.createElement("div");
+    tBox.className = "filter-children";
+    const открыт = state.placementGroupsExpanded.elementType.has(тип);
+    if (открыт) tBox.classList.add("open");
+
+    if (подтипы.length || марки.length) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "filter-expand-btn";
+      btn.textContent = открыт ? "▾" : "▸";
+      btn.title = открыт ? "Свернуть" : "Развернуть";
+      btn.addEventListener("click", () => {
+        const open = tBox.classList.toggle("open");
+        btn.textContent = open ? "▾" : "▸";
+        btn.title = open ? "Свернуть" : "Развернуть";
+        if (open) state.placementGroupsExpanded.elementType.add(тип);
+        else state.placementGroupsExpanded.elementType.delete(тип);
+      });
+      tRow.appendChild(btn);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "filter-expand-spacer";
+      tRow.appendChild(spacer);
+    }
+
+    const tLabel = document.createElement("label");
+    tLabel.className = "toggle filter-parent";
+    const tInput = document.createElement("input");
+    tInput.type = "checkbox";
+    tInput.checked = !typeExcluded.has(тип);
+    applyEnabledState(tInput, tLabel, isValueEnabled("elementType", тип));
+    tLabel.appendChild(tInput);
+    tLabel.appendChild(document.createTextNode(" " + тип));
+    tRow.appendChild(tLabel);
+    body.appendChild(tRow);
+    typeCheckboxes.push(tInput);
+
+    const разделы = [];
+    if (подтипы.length) {
+      разделы.push(буildРаздел(
+        тип, "Подтипы", подтипы, state.placementFilters.subtype, subtypeLabelFor,
+        v => isValueEnabled("subtype", v), state.placementGroupsExpanded.typeSubtypes, "filter-subtype-item",
+      ));
+    }
+    if (марки.length) {
+      разделы.push(буildРаздел(
+        тип, "Марки", марки, state.placementFilters.mark, markLabelFor,
+        v => isValueEnabled("mark", v), state.placementGroupsExpanded.typeMarks, "filter-mark-item",
+      ));
+    }
+    разделы.forEach(({ row, box }) => { tBox.appendChild(row); tBox.appendChild(box); });
+    body.appendChild(tBox);
+
+    tInput.addEventListener("change", () => {
+      // Клик по типу каскадом ставит/снимает ОБЕ ветки разом — и подтипы, и
+      // марки: тип выключают, чтобы убрать со схемы его изделия целиком.
+      if (tInput.checked) typeExcluded.delete(тип); else typeExcluded.add(тип);
+      разделы.forEach(({ чекбоксы, excludedSet }) => чекбоксы.forEach(({ input, value }) => {
+        input.checked = tInput.checked;
+        if (tInput.checked) excludedSet.delete(value); else excludedSet.add(value);
+      }));
+      onChange();
+    });
+  }
+
+  btnAll.addEventListener("click", () => {
+    typeExcluded.clear();
+    state.placementFilters.subtype.clear();
+    state.placementFilters.mark.clear();
+    typeCheckboxes.forEach(cb => { cb.checked = true; });
+    все.forEach(({ input }) => { input.checked = true; });
+    onChange();
+  });
+  btnNone.addEventListener("click", () => {
+    types.forEach(t => typeExcluded.add(t));
+    все.forEach(({ value, excludedSet }) => excludedSet.add(value));
+    typeCheckboxes.forEach(cb => { cb.checked = false; });
+    все.forEach(({ input }) => { input.checked = false; });
+    onChange();
+  });
+
+  return wrap;
+}
+
 // К id какого крана относится значение категории "stance" — три случая:
 // (1) псевдо-значение "нет конкретной стоянки, но кран известен"
 // (noStanceValueForCrane) — id крана уже зашит в самом значении, брать
@@ -3007,53 +3207,42 @@ function renderPlacementFilters() {
     "Отметка (высота)", "elevation", allValuesFor("elevation"), state.placementFilters.elevation, elevationLabelFor, enabledFor("elevation"), onPlacementFilterChange, { compareRaw: true }
   ));
 
-  // Тип элемента / Подтип — иерархически, ДВА уровня. Марка была третьим
-  // уровнем этого же дерева (Тип → Подтип → Марка), но живой запрос
-  // пользователя 2026-08-10 вынес её в самостоятельный блок ниже: отобрать
-  // марку, не помня её тип и подтип, в дереве было нельзя — до неё нужно
-  // было раскрыть две ветки, а поиск по марке (markSearchInput) раскрывал
-  // цепочку родителей у каждого совпадения и разворачивал пол-дерева.
+  // Тип элемента / Подтип · Марка — дерево с ДВУМЯ параллельными ветками
+  // под каждым типом (живой запрос 2026-08-10, третья редакция за день:
+  // сначала было Тип → Подтип → Марка, потом Марка отдельным блоком, теперь
+  // — две равноправные ветки под типом). Почему именно так — см.
+  // buildTypeTreeFilterGroup.
   const typeValues = allValuesFor("elementType");
-  // Строим по ЭЛЕМЕНТАМ (тот же приём, что marksBySubtype ниже), не по
-  // уже обезличенному множеству значений подтипа: составной ключ подтипа
-  // несёт тип-владельца только когда подтип РЕАЛЬНО есть (см.
-  // subtypeLogicalKey) — а "нет подтипа"/"нет марки" для ЛЮБОГО типа
-  // схлопывается в один и тот же голый сентинел PLACEMENT_NONE
-  // (subtypeFilterValue), из которого тип обратно не восстановить.
-  // Раньше (парсинг строки значения через subtypeElementTypeForLogicalKey)
-  // это давало отдельный фантомный заголовок "__none__" в дереве —
-  // подтипы/марки без значения у ЛЮБОГО типа складывались в один общий
-  // узел вместо своего настоящего типа, да ещё и с "сырым" именем
-  // сентинела на экране (живой репорт пользователя, см. Docs/backlog.md).
+  // Подтипы и марки строим по ЭЛЕМЕНТАМ, а не по уже обезличенному
+  // множеству значений: составной ключ подтипа несёт тип-владельца только
+  // когда подтип РЕАЛЬНО есть (см. subtypeLogicalKey) — а "нет подтипа"/
+  // "нет марки" у ЛЮБОГО типа схлопывается в один и тот же голый сентинел
+  // PLACEMENT_NONE, из которого тип обратно не восстановить. Раньше это
+  // давало в дереве фантомный заголовок "__none__", куда сваливались
+  // подтипы и марки без значения от всех типов сразу (живой репорт, см.
+  // Docs/backlog.md).
   const subtypesByType = new Map();
+  const marksByType = new Map();
   for (const e of state.elements) {
     if (!subtypesByType.has(e.element_type)) subtypesByType.set(e.element_type, new Set());
     subtypesByType.get(e.element_type).add(subtypeFilterValue(e));
+    if (!marksByType.has(e.element_type)) marksByType.set(e.element_type, new Set());
+    marksByType.get(e.element_type).add(markFilterValue(e));
   }
-  const typeHeadings = Array.from(new Set([...typeValues, ...subtypesByType.keys()])).sort(placementComparator(v => v));
+  const typeHeadings = Array.from(
+    new Set([...typeValues, ...subtypesByType.keys(), ...marksByType.keys()])
+  ).sort(placementComparator(v => v));
   for (const h of typeHeadings) {
-    const arr = Array.from(subtypesByType.get(h) || []);
-    arr.sort(placementComparator(subtypeLabelFor));
-    subtypesByType.set(h, arr);
+    const подтипы = Array.from(subtypesByType.get(h) || []);
+    подтипы.sort(placementComparator(subtypeLabelFor));
+    subtypesByType.set(h, подтипы);
+    const марки = Array.from(marksByType.get(h) || []);
+    марки.sort(placementComparator(markLabelFor));
+    marksByType.set(h, марки);
   }
 
-  container.appendChild(buildHierarchicalFilterGroup(
-    "Тип элемента / Подтип", "elementType", typeHeadings, state.placementFilters.elementType, v => v, enabledFor("elementType"),
-    t => subtypesByType.get(t) || [], state.placementFilters.subtype, subtypeLabelFor, enabledFor("subtype"),
-    onPlacementFilterChange, state.placementGroupsExpanded.elementType
-  ));
-
-  // Марка — САМОСТОЯТЕЛЬНЫЙ блок, плоским списком по всем маркам модели
-  // (живой запрос пользователя 2026-08-10, см. выше). Отбор по марке ни на
-  // что не каскадирует и ни от чего каскадом не зависит: марка уникальна в
-  // пределах объекта (свой справочник, app/marks.py — владелец марки тип,
-  // область объект), поэтому вешать её под тип, как раньше, не требуется.
-  // Список длинный (сотни марок) — над формой для него уже есть поле
-  // поиска, теперь оно фильтрует именно этот блок (см.
-  // applyMarkSearchFilter). Группа по умолчанию свёрнута, как и остальные
-  // длинные (state.topFilterCollapsed).
-  container.appendChild(buildFilterGroup(
-    "Марка", "mark", allValuesFor("mark"), state.placementFilters.mark, markLabelFor, enabledFor("mark"), onPlacementFilterChange
+  container.appendChild(buildTypeTreeFilterGroup(
+    typeHeadings, subtypesByType, marksByType, onPlacementFilterChange
   ));
 
   container.appendChild(buildFilterGroup(
@@ -3120,29 +3309,36 @@ function renderPlacementFilters() {
 // Живёт СНАРУЖИ #placement-filters (см. index.html) — renderPlacementFilters
 // перестраивает контейнер целиком на каждое изменение фильтра, инпут вне
 // него переживает перерисовку без потери введённого текста/фокуса.
-// Фильтрует блок "Марка" (марок сотни, плоским списком — заказчик в своё
-// время сознательно отказался от поиска, но список разросся, см.
-// Docs/backlog.md). До 2026-08-10 марка была третьим уровнем дерева
-// "Тип / Подтип / Марка", и поиску приходилось раскрывать цепочку
-// родителей у каждого совпадения; теперь блок свой, раскрывать нужно
-// только саму группу — если она свёрнута, набранный текст иначе не дал бы
-// на экране ничего.
+//
+// Ищет по ВЕТКЕ МАРОК дерева типов (.filter-mark-item) — марок сотни, и
+// пролистывать их по типам руками бессмысленно, когда марка известна.
+// Подтипы поиск не трогает: они лежат в соседней ветке того же уровня и к
+// набранной марке отношения не имеют. Совпадения раскрывают цепочку
+// родителей (ветка «Марки» → сам тип → группа целиком) — иначе результат
+// остался бы за свёрнутым уровнем и выглядел бы как «ничего не нашлось».
 const markSearchInput = document.getElementById("mark-search-input");
 function applyMarkSearchFilter() {
   const q = markSearchInput.value.trim().toLowerCase();
-  const group = document.querySelector('#placement-filters .filter-group[data-filter-key="mark"]');
+  const group = document.querySelector('#placement-filters .filter-group[data-filter-key="elementType"]');
   if (!group) return;
   const body = group.querySelector(".filter-group-body");
-  let matched = false;
-  group.querySelectorAll(".filter-group-body > .toggle").forEach(label => {
+  group.querySelectorAll(".toggle.filter-mark-item").forEach(label => {
     const match = !q || label.textContent.toLowerCase().includes(q);
     label.style.display = match ? "" : "none";
-    if (q && match) matched = true;
+    if (!q || !match) return;
+    let node = label.closest(".filter-children");
+    while (node) {
+      node.classList.add("open");
+      const prevBtn = node.previousElementSibling && node.previousElementSibling.querySelector
+        ? node.previousElementSibling.querySelector(".filter-expand-btn") : null;
+      if (prevBtn) { prevBtn.textContent = "▾"; prevBtn.title = "Свернуть"; }
+      node = node.parentElement ? node.parentElement.closest(".filter-children") : null;
+    }
+    if (body && !body.classList.contains("open")) {
+      body.classList.add("open");
+      if (body._toggleBtn) { body._toggleBtn.textContent = "▾"; body._toggleBtn.title = "Свернуть"; }
+    }
   });
-  if (matched && body && !body.classList.contains("open")) {
-    body.classList.add("open");
-    if (body._toggleBtn) { body._toggleBtn.textContent = "▾"; body._toggleBtn.title = "Свернуть"; }
-  }
 }
 markSearchInput.addEventListener("input", applyMarkSearchFilter);
 
@@ -3191,6 +3387,14 @@ const PICKER_SLICERS = [
     },
   },
   { key: "floor", title: "Этаж", valueFn: floorFilterValue, labelFor: floorLabelFor, compareRaw: true },
+  // pane: "contracts" — срез участвует в отборе наравне с остальными, но
+  // рисуется не в левой панели, а в своей области справа от схемы
+  // (renderPickerContracts): у контракта своя группировка по контрагенту и
+  // свои три числа, плоским списком, как остальные, он не выглядит.
+  {
+    key: "contract", title: "Контракт", valueFn: contractIdFilterValue,
+    labelFor: contractLabelFor, pane: "contracts",
+  },
 ];
 
 // Количественные показатели. test — предикат по ЭЛЕМЕНТУ; такие плитки
@@ -3309,9 +3513,14 @@ function pickerContracted() {
   }
   const types = state.picker.sel.elementType;
   const marks = state.picker.sel.mark;
+  const contracts = state.picker.sel.contract;
   let sum = 0;
   let skippedNoMark = 0;
   for (const line of state.contractLineTotals) {
+    // Выбранные контракты сужают и это число — позиция принадлежит
+    // конкретному контракту, в отличие от крана или этажа. Элементы «без
+    // контракта» (PLACEMENT_NONE) позициями не представлены вовсе.
+    if (contracts.size && !contracts.has(line.contract_id)) continue;
     if (types.size && !types.has(line.element_type)) continue;
     if (marks.size) {
       // Позиция без марки (импорт контрактации не всегда её определяет,
@@ -3341,8 +3550,10 @@ function pickerContractedFor(key, value) {
   if (PICKER_CONTRACT_BLOCKERS.some(([k]) => state.picker.sel[k].size)) return null;
   const types = state.picker.sel.elementType;
   const marks = state.picker.sel.mark;
+  const contracts = state.picker.sel.contract;
   let sum = 0;
   for (const line of state.contractLineTotals) {
+    if (contracts.size && !contracts.has(line.contract_id)) continue;
     if (key === "elementType") {
       if (line.element_type !== value) continue;
       // Позиция без марки при выбранных марках не относится ни к одной из
@@ -3522,12 +3733,30 @@ function buildPickerSlicer(def) {
   list.className = "picker-list";
   list.dataset.pickerList = def.key;
   const q = (state.picker.search[def.key] || "").trim().toLowerCase();
-  for (const v of values) {
+  // Недоступные значения (в текущем срезе таких изделий не осталось) — ПОД
+  // разделителем, в конце списка (живой запрос 2026-08-10). Раньше они
+  // стояли вперемешку с доступными, просто приглушённые: список из сотни
+  // марок приходилось глазами процеживать, чтобы понять, из чего вообще
+  // можно выбирать. Из списка они по-прежнему не исчезают и остаются
+  // кликабельными — тот же принцип, что в фильтрах «Модели».
+  // Уже выбранное значение считается доступным всегда: иначе собственный
+  // выбор уезжал бы вниз ровно в тот момент, когда его сделали.
+  const доступно = v => (counts.get(v) || 0) > 0 || sel.has(v);
+  const порядок = [...values.filter(доступно), ...values.filter(v => !доступно(v))];
+  let разделительВставлен = false;
+  for (const v of порядок) {
     const label = def.labelFor(v);
+    const count = counts.get(v) || 0;
+    if (!доступно(v) && !разделительВставлен) {
+      разделительВставлен = true;
+      const sep = document.createElement("div");
+      sep.className = "picker-divider";
+      sep.textContent = "нет в текущем срезе";
+      list.appendChild(sep);
+    }
     const row = document.createElement("div");
     row.className = "picker-row";
     row.dataset.label = label;
-    const count = counts.get(v) || 0;
     if (sel.has(v)) row.classList.add("selected");
     if (!count) row.classList.add("empty");
     if (q && !label.toLowerCase().includes(q)) row.style.display = "none";
@@ -3567,6 +3796,242 @@ function buildPickerSlicer(def) {
   }
   block.appendChild(list);
   return block;
+}
+
+// ---------- область «Контракты» (справа от схемы) ----------
+// Взгляд со стороны бумаги: что закуплено, сколько из закупленного уже
+// расписано по изделиям модели и сколько осталось нераспределённым. Блоки
+// слева отвечают на тот же вопрос со стороны модели, поэтому область
+// устроена так же и так же интерактивна — клик по контракту (или по
+// контрагенту целиком) отбирает изделия, привязанные к нему.
+//
+// Три числа в строке:
+//   всего     — сумма количеств в позициях контракта (contract_line_totals);
+//   привязано — изделий модели с этим contract_id, прошедших ОСТАЛЬНЫЕ
+//               срезы (как и все счётчики дашборда);
+//   остаток   — всего минус привязано.
+//
+// Важная оговорка, которую область показывает прямо: «всего» — число
+// документальное и от среза не зависит, а «привязано» зависит. Пока срез
+// сужен свойством изделия, остаток отвечает на вопрос «сколько ещё не
+// расписано ВНУТРИ этого среза» — об этом пишется строкой под заголовком,
+// иначе два числа в одной строке жили бы в разных системах отсчёта молча.
+function pickerContractTotals() {
+  const byContract = new Map();
+  for (const line of state.contractLineTotals) {
+    byContract.set(line.contract_id, (byContract.get(line.contract_id) || 0) + (line.quantity || 0));
+  }
+  return byContract;
+}
+
+function renderPickerContracts() {
+  const box = document.getElementById("picker-contracts");
+  if (!box) return;
+  const scroll = box.scrollTop;
+  box.innerHTML = "";
+  if (!state.elements.length) return;
+
+  const sel = state.picker.sel.contract;
+  const totals = pickerContractTotals();
+
+  // Привязано — по элементам, прошедшим ОСТАЛЬНЫЕ срезы (свой игнорируем,
+  // иначе строки нельзя сравнивать между собой).
+  const linked = new Map();
+  for (const e of state.elements) {
+    if (!e.contract_id) continue;
+    if (!pickerElementPasses(e, "contract")) continue;
+    linked.set(e.contract_id, (linked.get(e.contract_id) || 0) + 1);
+  }
+
+  const head = document.createElement("div");
+  head.className = "picker-block-head";
+  const title = document.createElement("span");
+  title.className = "picker-block-title";
+  title.textContent = sel.size ? `Контракты (${sel.size})` : "Контракты";
+  head.appendChild(title);
+  if (sel.size) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "link-btn";
+    clear.textContent = "сбросить";
+    clear.addEventListener("click", () => { sel.clear(); onPickerChange(); });
+    head.appendChild(clear);
+  }
+  box.appendChild(head);
+
+  // Срез сужен свойством изделия — «привязано» и «остаток» считаются
+  // внутри среза, а «всего» остаётся документальным. Молчать об этом
+  // нельзя (см. комментарий выше).
+  const срезСужен = PICKER_SLICERS.some(d => d.key !== "contract" && state.picker.sel[d.key].size)
+    || !!state.picker.metric;
+  if (срезСужен) {
+    const note = document.createElement("div");
+    note.className = "picker-block-note";
+    note.textContent = "«привязано» и «остаток» — внутри выбранного среза";
+    note.title = "«Всего» — число из позиций контракта, оно от среза не зависит. «Привязано» считается по изделиям, прошедшим остальные срезы, поэтому и остаток относится к срезу, а не ко всему объекту";
+    box.appendChild(note);
+  }
+
+  const cols = document.createElement("div");
+  cols.className = "picker-cols";
+  cols.innerHTML = '<span class="picker-row-label">&nbsp;</span>';
+  const всегоHead = document.createElement("span");
+  всегоHead.className = "picker-row-count";
+  всегоHead.textContent = "всего";
+  applyStatusInk(всегоHead, "contracting");
+  cols.appendChild(всегоHead);
+  for (const текст of ["привяз.", "остаток"]) {
+    const h = document.createElement("span");
+    h.className = "picker-row-count";
+    h.textContent = текст;
+    cols.appendChild(h);
+  }
+  cols.title = "Всего — сумма количеств в позициях контракта; привязано — изделий модели с этим контрактом; остаток — всего минус привязано";
+  box.appendChild(cols);
+
+  // Группировка по контрагенту — как её видит комплектовщик: сначала «с
+  // кем работаем», потом «по какому документу». Контракты берутся из
+  // справочника (state.contracts), а не из позиций: контракт без единой
+  // позиции и без единого изделия — это тоже факт, который надо видеть.
+  const byCounterparty = new Map();
+  for (const c of state.contracts) {
+    const key = c.counterparty_short_name || placementNoneLabel("supplier");
+    if (!byCounterparty.has(key)) byCounterparty.set(key, []);
+    byCounterparty.get(key).push(c);
+  }
+  const list = document.createElement("div");
+  list.className = "picker-list";
+  list.dataset.pickerList = "contracts";
+  list.style.maxHeight = "none";   // область и так прокручивается целиком
+
+  // Порядок тот же, что в блоках слева: сначала контрагенты, у которых в
+  // текущем срезе что-то есть, затем разделитель и остальные. Доступным
+  // считается контрагент, у которого хоть один контракт даёт привязанные
+  // изделия или выбран сейчас.
+  const привязаноУ = cp => byCounterparty.get(cp)
+    .reduce((s, c) => s + (linked.get(c.id) || 0), 0);
+  const выбранУ = cp => byCounterparty.get(cp).some(c => sel.has(c.id));
+  const доступен = cp => привязаноУ(cp) > 0 || выбранУ(cp);
+  const поИмени = (a, b) => a.localeCompare(b, "ru", { numeric: true });
+  const counterparties = Array.from(byCounterparty.keys()).sort(поИмени);
+  // Два фрагмента, а не вставка разделителя по ходу цикла: строка «без
+  // контракта» ниже тоже участвует в разделении, и собрать обе половины
+  // отдельно проще, чем угадывать момент вставки черты.
+  const доступныеУзлы = document.createDocumentFragment();
+  const недоступныеУзлы = document.createDocumentFragment();
+  for (const cp of counterparties) {
+    const цель = доступен(cp) ? доступныеУзлы : недоступныеУзлы;
+    // Внутри контрагента — тем же правилом, но без второго разделителя:
+    // группы короткие, лишняя черта в каждой превратила бы список в лестницу.
+    const contracts = byCounterparty.get(cp)
+      .sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }))
+      .sort((a, b) => {
+        const доступ = c => ((linked.get(c.id) || 0) > 0 || sel.has(c.id)) ? 0 : 1;
+        return доступ(a) - доступ(b);
+      });
+    const ids = contracts.map(c => c.id);
+    const всего = ids.reduce((s, id) => s + (totals.get(id) || 0), 0);
+    const привязано = ids.reduce((s, id) => s + (linked.get(id) || 0), 0);
+
+    const groupRow = document.createElement("div");
+    groupRow.className = "picker-group-head";
+    if (ids.length && ids.every(id => sel.has(id))) groupRow.classList.add("selected");
+    groupRow.appendChild(pickerLabelSpan(cp));
+    groupRow.appendChild(pickerCountSpan(всего, "contracting"));
+    groupRow.appendChild(pickerCountSpan(привязано));
+    groupRow.appendChild(pickerRemainderSpan(всего - привязано));
+    // Клик по контрагенту — вся его группа разом: обычный способ спросить
+    // «что у нас с этим поставщиком».
+    groupRow.addEventListener("click", () => {
+      const всеВыбраны = ids.length && ids.every(id => sel.has(id));
+      ids.forEach(id => { if (всеВыбраны) sel.delete(id); else sel.add(id); });
+      onPickerChange();
+    });
+    цель.appendChild(groupRow);
+
+    for (const c of contracts) {
+      const всегоК = totals.get(c.id) || 0;
+      const привязаноК = linked.get(c.id) || 0;
+      const row = document.createElement("div");
+      row.className = "picker-row picker-row-nested";
+      // Подпись без имени контрагента: оно уже в заголовке группы над ним.
+      // И без слов «Дог.»/«Спец.»: колонка узкая, три числа справа съедают
+      // половину ширины, а сами номера договора и спецификации узнаваемы и
+      // без подписи (полное имя контракта — в подсказке строки).
+      const подпись = [c.agreement_number, c.specification_number, c.theme]
+        .filter(Boolean).join(" · ") || c.name;
+      row.dataset.label = подпись;
+      if (sel.has(c.id)) row.classList.add("selected");
+      if (!всегоК && !привязаноК) row.classList.add("empty");
+      const labelEl = pickerLabelSpan(подпись);
+      labelEl.title = c.name;
+      row.appendChild(labelEl);
+      row.appendChild(pickerCountSpan(всегоК, "contracting"));
+      row.appendChild(pickerCountSpan(привязаноК));
+      row.appendChild(pickerRemainderSpan(всегоК - привязаноК));
+      row.addEventListener("click", () => {
+        if (sel.has(c.id)) sel.delete(c.id); else sel.add(c.id);
+        onPickerChange();
+      });
+      цель.appendChild(row);
+    }
+  }
+
+  // Изделия без контракта — отдельной строкой в конце: у них нет ни
+  // документа, ни закупленного количества, но именно они и есть главный
+  // вопрос комплектовщика «что ещё не расписано».
+  const безКонтракта = state.elements.filter(
+    e => !e.contract_id && pickerElementPasses(e, "contract")).length;
+  const noneRow = document.createElement("div");
+  noneRow.className = "picker-row";
+  noneRow.dataset.label = placementNoneLabel("contract");
+  if (sel.has(PLACEMENT_NONE)) noneRow.classList.add("selected");
+  if (!безКонтракта) noneRow.classList.add("empty");
+  noneRow.appendChild(pickerLabelSpan("— без контракта —"));
+  noneRow.appendChild(pickerCountSpan("—"));
+  noneRow.appendChild(pickerCountSpan(безКонтракта));
+  noneRow.appendChild(pickerCountSpan("—"));
+  noneRow.addEventListener("click", () => {
+    if (sel.has(PLACEMENT_NONE)) sel.delete(PLACEMENT_NONE); else sel.add(PLACEMENT_NONE);
+    onPickerChange();
+  });
+  (безКонтракта || sel.has(PLACEMENT_NONE) ? доступныеУзлы : недоступныеУзлы).appendChild(noneRow);
+
+  list.appendChild(доступныеУзлы);
+  if (недоступныеУзлы.childElementCount) {
+    const sep = document.createElement("div");
+    sep.className = "picker-divider";
+    sep.textContent = "нет в текущем срезе";
+    list.appendChild(sep);
+    list.appendChild(недоступныеУзлы);
+  }
+
+  box.appendChild(list);
+  box.scrollTop = scroll;
+}
+
+function pickerLabelSpan(text) {
+  const el = document.createElement("span");
+  el.className = "picker-row-label";
+  el.textContent = text;
+  return el;
+}
+
+function pickerCountSpan(value, status) {
+  const el = document.createElement("span");
+  el.className = "picker-row-count";
+  el.textContent = typeof value === "number" ? pickerNumber(value) : String(value);
+  if (status) applyStatusInk(el, status);
+  return el;
+}
+
+// Остаток: ноль и плюс — обычное дело (ещё не расписано), минус —
+// привязано БОЛЬШЕ, чем закуплено, и это красный флаг, а не оттенок.
+function pickerRemainderSpan(value) {
+  const el = pickerCountSpan(value);
+  el.classList.add("picker-row-diff");
+  if (value < 0) el.classList.add("neg");
+  return el;
 }
 
 // Полная перерисовка дашборда. Состояние выбора живёт в state.picker, а не
@@ -3614,7 +4079,9 @@ function renderPicker() {
     panel.appendChild(reset);
   }
 
-  for (const def of PICKER_SLICERS) panel.appendChild(buildPickerSlicer(def));
+  // Срезы со своей областью (контракты) в левой панели не рисуются.
+  for (const def of PICKER_SLICERS) if (!def.pane) panel.appendChild(buildPickerSlicer(def));
+  renderPickerContracts();
 
   panel.querySelectorAll("[data-picker-list]").forEach(l => {
     const saved = scroll.get(l.dataset.pickerList);
@@ -3649,6 +4116,67 @@ function describePickerSelection() {
   return parts;
 }
 
+// ---------- свёрнутая правая панель в АРМ (2026-08-10) ----------
+// В АРМ ширина на счету: слева блоки-срезы, справа контракты, между ними
+// схема. Поэтому правая панель здесь свёрнута до ярлычка с закладками
+// («Свойства», «Статус», «Вид»), а по клику раскрывается ПОВЕРХ схемы — не
+// раздвигая её: иначе каждое обращение к карточке изделия перекраивало бы
+// вид схемы, к которому человек только что подобрался. Закрывается кликом
+// мимо панели или Esc — как поповер, потому что и ведёт себя как поповер.
+//
+// В «Модели» ничего этого нет: там панель закреплена и меняется размером за
+// ручку, как и была.
+function pickerSidebarOpen() {
+  return document.getElementById("sidebar").classList.contains("floating")
+    && !document.getElementById("sidebar").classList.contains("collapsed");
+}
+
+function openPickerSidebar(tab) {
+  const sidebar = document.getElementById("sidebar");
+  sidebar.classList.remove("collapsed");
+  sidebar.style.display = "";
+  switchTab(tab);
+  document.querySelectorAll(".sidebar-rail-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === tab);
+  });
+}
+
+function closePickerSidebar() {
+  const sidebar = document.getElementById("sidebar");
+  if (!sidebar.classList.contains("floating")) return;
+  sidebar.classList.add("collapsed");
+  sidebar.style.display = "none";
+  document.querySelectorAll(".sidebar-rail-btn").forEach(b => b.classList.remove("active"));
+}
+
+document.querySelectorAll(".sidebar-rail-btn").forEach(btn => {
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();   // иначе тот же клик тут же закроет панель (см. ниже)
+    // Повторный клик по своей закладке — сворачивает: закладка работает как
+    // переключатель, а не только как «открыть».
+    if (btn.classList.contains("active")) closePickerSidebar();
+    else openPickerSidebar(btn.dataset.tab);
+  });
+});
+
+// Клик мимо панели — сворачиваем. Не трогаем клики по самой панели, по
+// рейке и по формам поверх неё (модалка открывается из карточки изделия, и
+// закрывать под ней панель незачем).
+document.addEventListener("click", (e) => {
+  if (!pickerSidebarOpen()) return;
+  if (e.target.closest("#sidebar") || e.target.closest("#sidebar-rail")) return;
+  if (e.target.closest(".modal-backdrop") || e.target.closest("#ctx-menu")) return;
+  closePickerSidebar();
+});
+
+// Esc — там же, где Esc для меню и форм, чтобы порядок закрытия был один:
+// сначала верхняя открытая форма, и лишь когда форм нет — панель.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (document.querySelectorAll(".modal-backdrop.open").length) return;
+  if (pickerSidebarOpen()) closePickerSidebar();
+});
+
 // ---------- переключатель рабочего места (тулбар) ----------
 
 const btnWsModel = document.getElementById("btn-ws-model");
@@ -3662,6 +4190,20 @@ function setWorkspace(ws) {
   btnWsPicker.classList.toggle("active", picker);
   document.getElementById("picker-panel").style.display = picker ? "" : "none";
   document.getElementById("picker-metrics").style.display = picker ? "" : "none";
+  document.getElementById("picker-contracts").style.display = picker ? "" : "none";
+  // Правая панель: в АРМ — свёрнута до ярлычка и раскрывается поверх схемы,
+  // в «Модели» — закреплена и тянется за ручку, как была.
+  const sidebar = document.getElementById("sidebar");
+  const rail = document.getElementById("sidebar-rail");
+  rail.style.display = picker ? "" : "none";
+  document.getElementById("resize-handle").style.display = picker ? "none" : "";
+  sidebar.classList.toggle("floating", picker);
+  if (picker) {
+    closePickerSidebar();
+  } else {
+    sidebar.classList.remove("collapsed");
+    sidebar.style.display = "";
+  }
   // Вкладка «Фильтры» в сайдбаре относится к отбору «Модели», в АРМ он не
   // действует (отборы раздельные) — прячем саму вкладку, чтобы её нельзя
   // было принять за причину того, что видно на схеме. Остальные вкладки

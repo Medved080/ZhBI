@@ -4089,26 +4089,31 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 (plan_object_id,),
             ).fetchall()
         }
-        # «Законтрактовано» для АРМ комплектовщика (2026-08-10): сумма
-        # количеств в позициях контрактов ОБЪЕКТА, свёрнутая по паре
-        # (тип элемента, марка) — единственный разрез, в котором это число
-        # вообще существует (contract_lines другого измерения не имеет: ни
-        # крана, ни этажа, ни подтипа у позиции контракта нет). Отдаётся
-        # свёрнутым, а не построчно: дашборд суммирует по выбранным типам и
-        # маркам, отдельные позиции ему не нужны, а свёртка на сервере
-        # экономит и трафик, и обход на клиенте.
+        # «Законтрактовано» для АРМ комплектовщика (2026-08-10): позиции
+        # контрактов ОБЪЕКТА, свёрнутые по тройке (контракт, тип элемента,
+        # марка). Тип и марка — единственные свойства изделия, какие у
+        # позиции контракта есть (ни крана, ни этажа, ни подтипа у неё нет);
+        # контракт добавлен в ключ 2026-08-10 вместе с областью «Контракты»:
+        # из этих же строк дашборд считает и «всего по контракту», и
+        # «законтрактовано по марке» — второй выборки для этого не нужно.
+        # Строк здесь столько же, сколько позиций у контрактов объекта
+        # (сотни), — свёртка сделана ради устойчивого формата, а не
+        # экономии.
         contract_line_totals = [
-            {"element_type": r["element_type"], "mark": r["mark"], "quantity": r["quantity"]}
+            {
+                "contract_id": r["contract_id"], "element_type": r["element_type"],
+                "mark": r["mark"], "quantity": r["quantity"],
+            }
             for r in conn.execute(
                 """
-                SELECT cl.element_type AS element_type, cl.mark AS mark,
-                       SUM(cl.quantity) AS quantity
+                SELECT cl.contract_id AS contract_id, cl.element_type AS element_type,
+                       cl.mark AS mark, SUM(cl.quantity) AS quantity
                 FROM contract_lines cl
                 JOIN contracts co ON co.id = cl.contract_id
                 JOIN specifications s ON s.id = co.specification_id
                 JOIN agreements a ON a.id = s.agreement_id
                 WHERE a.object_id IS ?
-                GROUP BY cl.element_type, cl.mark
+                GROUP BY cl.contract_id, cl.element_type, cl.mark
                 """,
                 (plan_object_id,),
             ).fetchall()
