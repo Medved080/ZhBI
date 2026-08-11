@@ -681,15 +681,26 @@ CREATE TABLE IF NOT EXISTS release_tasks (
     attempts INTEGER NOT NULL DEFAULT 1
 );
 
--- Документ «Смена поставщика» (2026-08-11, запрос пользователя): перевод
--- НЕПОСТАВЛЕННОГО остатка одного контракта на другой, когда поставщик не
--- устраивает по срокам или качеству. Логика и правила — app/supplier_change.py.
+-- Документ контрактации (2026-08-11, запрос пользователя). ДВА вида
+-- операции в одной таблице (`kind`), потому что жизненный цикл, шапка и
+-- права у них общие, а различаются только правила проведения:
 --
--- Почему документ, а не разовая операция: перевод — основание, на которое
--- ссылаются потом. Шапка отвечает «когда, почему и между какими
--- контрактами», табличная часть — «что именно переехало». Правки и отмены
--- записанного документа нет намеренно: движения уже разошлись по изделиям и
--- их истории статусов, ошибка исправляется обратным документом.
+--   'supplier_change' — «Замена поставщика»: НЕПОСТАВЛЕННЫЙ остаток одного
+--       контракта переводится на другой (поставщик не устраивает по срокам
+--       или качеству);
+--   'link_swap'       — «Обмен привязками»: изделия ОДНОЙ марки, стоящие на
+--       двух контрактах, меняются привязкой попарно — контракт, плановая
+--       дата и вся история статусов переезжают друг к другу. Нужен, когда
+--       привязку перепутали: физически изделия стоят там, где стоят, а в
+--       учёте числятся наоборот.
+--
+-- Документ ПРОВОДИТСЯ (`status`: draft → posted, `app/supplier_change.py`).
+-- Черновик данных не трогает; «Провести» применяет всё разом, «Отменить
+-- проведение» возвращает исходное состояние — для этого в табличной части
+-- хранится «что было» (`prev_*`), а переезды записей истории — в
+-- `supplier_change_history_moves`. До 2026-08-11 документ применялся сразу
+-- при записи и отмены не имел; существующие записи миграция объявляет
+-- проведёнными (DEFAULT 'posted') — они и правда уже применены.
 --
 -- object_id хранится ПОЛЕМ, в отличие от контракта (у того объект выводится
 -- по цепочке спецификация → договор): документ создаётся на конкретной
@@ -698,15 +709,25 @@ CREATE TABLE IF NOT EXISTS release_tasks (
 CREATE TABLE IF NOT EXISTS supplier_change_docs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'supplier_change',   -- supplier_change | link_swap
+    status TEXT NOT NULL DEFAULT 'draft',           -- draft | posted
     number TEXT NOT NULL,
     doc_date TEXT NOT NULL,
+    -- У «Замены поставщика» это «текущий» и «новый», у «Обмена привязками» —
+    -- сторона 1 и сторона 2. Поля те же: направление задаётся видом операции,
+    -- а вторая пара колонок под то же самое означала бы, что половина таблицы
+    -- всегда пуста.
     from_contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE RESTRICT,
     to_contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE RESTRICT,
+    mark TEXT,                                      -- общая марка обмена; у замены поставщика NULL
     reason TEXT,
     comment TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     created_by TEXT,
     created_by_user_id INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    posted_at TEXT,
+    posted_by TEXT,
+    posted_by_user_id INTEGER REFERENCES users (id) ON DELETE SET NULL,
     UNIQUE (object_id, number)
 );
 
@@ -715,17 +736,44 @@ CREATE TABLE IF NOT EXISTS supplier_change_docs (
 -- решает человек по адресу и ярусу, и свернуть это в число значило бы
 -- потерять ответ на вопрос «а эта чья».
 --
--- element_type/mark/status_at_move — СНИМОК на момент переноса, той же
+-- side/pair_no — для обмена: сторона 1 или 2 и номер пары. Пара это ДВЕ
+-- строки с одним pair_no, а не одна строка с двумя изделиями: у каждой
+-- стороны своё «что было», и хранить его парой полей-близнецов в одной
+-- строке значило бы дублировать половину таблицы. У замены поставщика
+-- side всегда 1, pair_no NULL.
+--
+-- element_type/mark/status_at_move — СНИМОК на момент проведения, той же
 -- природы, что status_history.changed_by: изделие потом переименуют или
 -- смонтируют, а документ обязан остаться тем, чем он был подписан.
+-- prev_* — состояние ДО проведения, единственное основание для отмены.
 CREATE TABLE IF NOT EXISTS supplier_change_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     doc_id INTEGER NOT NULL REFERENCES supplier_change_docs (id) ON DELETE CASCADE,
     element_id INTEGER NOT NULL REFERENCES elements (id) ON DELETE CASCADE,
+    side INTEGER NOT NULL DEFAULT 1,
+    pair_no INTEGER,
     element_type TEXT,
     mark TEXT,
-    status_at_move TEXT
+    status_at_move TEXT,
+    prev_contract_id INTEGER REFERENCES contracts (id) ON DELETE SET NULL,
+    prev_planned_delivery_date TEXT
+);
+
+-- Переезды записей истории статусов, сделанные проведением документа —
+-- единственное, чем отмена может вернуть историю на место.
+--
+-- prev_element_id IS NULL означает «запись СОЗДАНА документом» (отметка о
+-- самом переносе): отмена такую удаляет, а не возвращает. Заводить вместо
+-- этого колонку doc_id в самой status_history не стали: та таблица растёт
+-- на каждую смену статуса каждого изделия, и колонка ради пары документов
+-- в год досталась бы всем её сотням тысяч строк.
+CREATE TABLE IF NOT EXISTS supplier_change_history_moves (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id INTEGER NOT NULL REFERENCES supplier_change_docs (id) ON DELETE CASCADE,
+    history_id INTEGER NOT NULL REFERENCES status_history (id) ON DELETE CASCADE,
+    prev_element_id INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_supplier_change_items_doc ON supplier_change_items (doc_id);
 CREATE INDEX IF NOT EXISTS idx_supplier_change_docs_object ON supplier_change_docs (object_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_change_moves_doc ON supplier_change_history_moves (doc_id);

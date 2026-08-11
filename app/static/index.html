@@ -2340,7 +2340,15 @@
   .scd-contract-box h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase;
     letter-spacing: .03em; color: var(--color-text-muted); }
   .scd-contract-box select { width: 100%; }
-  .scd-arrow { flex: 0 0 auto; font-size: 20px; color: var(--color-text-muted); }
+  .scd-arrow { flex: 0 0 auto; font-size: 20px; color: var(--color-text-muted); text-align: center; }
+  /* Средняя колонка: стрелка направления и под ней марка обмена. Ширина
+     фиксирована — марка это одно короткое поле, и растягивать его на треть
+     формы незачем. */
+  .scd-middle { flex: 0 0 190px; display: flex; flex-direction: column; gap: 4px; }
+  .scd-middle select { width: 100%; }
+  /* Сторона, выбирать которую ещё рано (не заполнены контракт и марка первой),
+     гасится целиком: пустой список без объяснения читался бы как поломка. */
+  .scd-contract-box.locked { opacity: .5; }
   .scd-pos-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .scd-pos-table th, .scd-pos-table td { padding: 4px 6px; text-align: left;
     border-bottom: 1px solid var(--color-border); }
@@ -2360,6 +2368,61 @@
   .scd-doc-card:hover { background: var(--color-surface-2); }
   .scd-doc-card .scd-doc-title { font-weight: 600; font-size: 13px; }
   .scd-doc-card .hint-text { margin: 2px 0 0; }
+  /* Вид операции и статус — метками в строке документа и в шапке формы:
+     на них человек смотрит первым делом («это черновик или уже применено?»). */
+  .scd-kind, .scd-status {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .03em;
+    border: 1px solid var(--color-border); border-radius: 3px; padding: 1px 5px;
+    color: var(--color-text-muted); white-space: nowrap;
+  }
+  .scd-status.posted { color: var(--color-success); border-color: var(--color-success); font-weight: 700; }
+  .scd-status.draft { color: var(--color-text-muted); }
+  .scd-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  /* Обмен: две стороны рядом, строки друг напротив друга — пара читается
+     по горизонтали, поэтому строки одинаковой высоты и без переносов. */
+  .scd-swap-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .scd-swap-side { border: 1px solid var(--color-border); border-radius: var(--radius); padding: 8px 10px; }
+  .scd-swap-head { display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 6px; }
+  .scd-swap-row { display: flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 3px 4px; border-bottom: 1px solid var(--color-border); }
+  .scd-swap-row .scd-swap-no { color: var(--color-text-muted); min-width: 18px; }
+  .scd-swap-row .scd-swap-text { flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .scd-swap-row button { background: none; border: none; cursor: pointer; padding: 0 3px;
+    color: var(--color-text-muted); font-size: 12px; }
+  .scd-swap-row button:hover { color: var(--color-text); }
+  /* Строка без пары на другой стороне: провести нельзя, и это должно быть
+     видно в самом списке, а не только в сообщении под ним. */
+  .scd-swap-row.unpaired { background: rgba(192,57,43,.10); }
+  /* Схема подбора. Своя рамка выделения — тот же приём, что у рабочей
+     области (абсолютный div поверх SVG), но без Shift: здесь перетаскивание
+     значит только выделение, панорамировать нечего. */
+  /* Высота — ПО ОСТАТКУ модалки, а не в vh: при фиксированной высоте схема
+     не помещалась между шапкой и подвалом, нижний край уезжал под прокрутку
+     вместе с подписями числовых осей (поймано живой проверкой дважды — на
+     58vh и на 46vh). Контейнер прокрутки здесь ничего не прокручивает, он
+     просто отдаёт схеме всё оставшееся место. */
+  #scd-picker-modal .modal-sticky-scroll { display: flex; overflow: hidden; }
+  #scd-picker-stage { position: relative; width: 100%; flex: 1 1 auto; min-height: 220px;
+    border: 1px solid var(--color-border); border-radius: var(--radius);
+    background: var(--color-surface); overflow: hidden; }
+  #scd-picker-svg { width: 100%; height: 100%; display: block; cursor: crosshair; }
+  #scd-picker-band { position: absolute; display: none; border: 1px dashed var(--color-primary);
+    background: rgba(59,130,246,.12); pointer-events: none; }
+  #scd-picker-zoom { right: 10px; bottom: 10px; }
+  .scd-pick-shape { cursor: pointer; }
+  /* Отмеченное изделие — жирная синяя обводка. non-scaling-stroke: при
+     масштабировании толщина обводки должна оставаться экранной, иначе на
+     приближении она закрывает саму фигуру. */
+  .scd-pick-shape.chosen { stroke: var(--color-primary) !important; stroke-width: 2.5px;
+    vector-effect: non-scaling-stroke; }
+  #scd-picker-axes line { stroke: var(--color-border); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+  /* Кегль подписей осей задаётся атрибутом в мировых единицах (см.
+     scdRenderAxisLabels): в CSS его прописать нельзя — он зависит от
+     текущего масштаба схемы. */
+  #scd-picker-labels text { fill: var(--color-text-muted); }
+  #scd-picker-context circle { fill: var(--color-border); }
   .contract-lines-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .contract-lines-table td, .contract-lines-table th { padding: 4px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
   .contract-lines-table tr.exceeded td { color: var(--color-danger); font-weight: 600; }
@@ -5286,23 +5349,27 @@
   </div>
 </div>
 
-<!-- ==================== ДОКУМЕНТ «СМЕНА ПОСТАВЩИКА» (2026-08-11) ==========
-     Журнал документов и форма нового. Логика и правила — на сервере
-     (app/supplier_change.py); здесь только показ: что можно перенести,
-     сколько влезает в новый контракт и что уже поставлено и потому
-     недоступно. Записанный документ не правится и не отменяется — ошибка
-     исправляется обратным документом. ==================================== -->
+<!-- ============ ДОКУМЕНТЫ КОНТРАКТАЦИИ (2026-08-11) =====================
+     Журнал документов, форма документа и подбор изделий рамкой на схеме.
+     Два вида операции — «Замена поставщика» и «Обмен привязками»; логика,
+     правила и проведение — на сервере (app/supplier_change.py), здесь показ
+     и выбор. Документ живёт черновиком, пока его не провели; проведённый
+     правится только через отмену проведения. ========================== -->
 <div class="modal-backdrop" id="supplier-change-backdrop">
   <div class="modal wide modal-sticky">
     <div class="modal-sticky-head">
-      <h2>Смена поставщика</h2>
+      <h2>Документы контрактации</h2>
       <p class="hint-text" style="margin:0 0 10px;">
-        Перевод НЕПОСТАВЛЕННОГО остатка контракта на другой контракт: сроки, качество или иная
-        причина. Изделия со статусом «Отгружен» и выше не переносятся — они уже изготовлены и
-        уехали. Записанный документ не правится и не отменяется; ошибка исправляется обратным
-        документом.
+        <b>Замена поставщика</b> — перевод НЕПОСТАВЛЕННОГО остатка контракта на другой контракт;
+        изделия со статусом «Отгружен» и выше не переносятся.
+        <b>Обмен привязками</b> — изделия одной марки на двух контрактах меняются попарно
+        контрактом, плановой датой и историей статусов, когда привязку перепутали.
+        Документ применяется кнопкой «Провести» и возвращается кнопкой «Отменить проведение».
       </p>
-      <button class="btn btn-primary btn-sm" id="scd-new">Создать документ</button>
+      <div style="display:flex; gap:6px; flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" id="scd-new">Замена поставщика</button>
+        <button class="btn btn-primary btn-sm" id="scd-new-swap">Обмен привязками</button>
+      </div>
     </div>
     <div class="modal-sticky-scroll"><div id="scd-list"></div></div>
     <div class="modal-sticky-foot">
@@ -5316,7 +5383,11 @@
 <div class="modal-backdrop" id="supplier-change-form-backdrop">
   <div class="modal wide modal-sticky">
     <div class="modal-sticky-head">
-      <h2>Смена поставщика — новый документ</h2>
+      <h2 id="scd-form-title">Документ</h2>
+      <div class="scd-status-row">
+        <span class="scd-status" id="scd-status-badge">Черновик</span>
+        <span class="hint-text" id="scd-status-note"></span>
+      </div>
       <div class="scd-head-grid">
         <div><label class="field" style="margin-top:0">Дата документа</label>
           <input type="date" id="scd-date"/></div>
@@ -5327,6 +5398,7 @@
             <option value="Срыв сроков поставки">Срыв сроков поставки</option>
             <option value="Качество продукции">Качество продукции</option>
             <option value="Расторжение договора">Расторжение договора</option>
+            <option value="Ошибка в привязке">Ошибка в привязке</option>
             <option value="">Иная (укажите в комментарии)</option>
           </select></div>
         <div style="grid-column:1 / -1"><label class="field" style="margin-top:0">Комментарий</label>
@@ -5334,46 +5406,120 @@
       </div>
       <div class="scd-contracts">
         <div class="scd-contract-box">
-          <h4>Текущий поставщик</h4>
+          <h4 id="scd-from-title">Текущий поставщик</h4>
           <label class="field" style="margin-top:0">Контрагент / договор</label>
           <select id="scd-from-counterparty"></select>
           <label class="field">Контракт</label>
           <select id="scd-from-contract"></select>
         </div>
-        <div class="scd-arrow" aria-hidden="true">→</div>
-        <div class="scd-contract-box">
-          <h4>Новый поставщик</h4>
+        <!-- Марка стоит МЕЖДУ сторонами, а не под ними (2026-08-11, запрос
+             пользователя): порядок заполнения — сторона 1, потом марка из
+             состава её контракта, и только потом сторона 2, где предлагаются
+             лишь контракты с этой маркой. Стрелка над ней — направление
+             операции. -->
+        <div class="scd-middle">
+          <div class="scd-arrow" id="scd-arrow" aria-hidden="true">→</div>
+          <div id="scd-mark-row" style="display:none">
+            <label class="field" style="margin-top:0">Марка обмена</label>
+            <select id="scd-mark"></select>
+            <div class="hint-text" id="scd-mark-note"></div>
+          </div>
+        </div>
+        <div class="scd-contract-box" id="scd-to-box">
+          <h4 id="scd-to-title">Новый поставщик</h4>
           <label class="field" style="margin-top:0">Контрагент / договор</label>
           <select id="scd-to-counterparty"></select>
           <label class="field">Контракт</label>
           <select id="scd-to-contract"></select>
+          <div class="hint-text" id="scd-to-note"></div>
         </div>
       </div>
     </div>
     <div class="modal-sticky-scroll">
       <div id="scd-positions"></div>
+      <div id="scd-swap" style="display:none">
+        <div class="scd-swap-grid">
+          <div class="scd-swap-side">
+            <div class="scd-swap-head">
+              <b id="scd-side-a-title">Сторона 1</b>
+              <button class="btn btn-sm btn-secondary" id="scd-pick-a">Подбор…</button>
+            </div>
+            <div id="scd-side-a"></div>
+          </div>
+          <div class="scd-swap-side">
+            <div class="scd-swap-head">
+              <b id="scd-side-b-title">Сторона 2</b>
+              <button class="btn btn-sm btn-secondary" id="scd-pick-b">Подбор…</button>
+            </div>
+            <div id="scd-side-b"></div>
+          </div>
+        </div>
+        <p class="hint-text">Пары составляются по порядку: первая строка слева обменивается с
+          первой строкой справа. Стрелками «↑» и «↓» строку можно передвинуть, «✕» — убрать.
+          Провести документ можно, только когда в списках поровну изделий.</p>
+      </div>
     </div>
     <div class="modal-sticky-foot">
       <div class="hint-text" id="scd-summary"></div>
-      <div class="error-text" id="scd-error"></div>
+      <div class="error-text" id="scd-error" style="white-space:pre-line"></div>
       <div class="actions">
-        <button class="btn btn-secondary" id="scd-form-cancel">Отмена</button>
-        <button class="btn btn-primary" id="scd-save">Записать документ</button>
+        <button class="btn btn-secondary" id="scd-form-cancel">Закрыть</button>
+        <button class="btn btn-secondary menu-item-danger" id="scd-delete" style="display:none">Удалить черновик</button>
+        <button class="btn btn-secondary" id="scd-save">Сохранить черновик</button>
+        <!-- «ОК» — сохранить и закрыть, без проведения (2026-08-11, запрос
+             пользователя): обычный выход из формы, когда документ ещё
+             набирают и применять его рано. -->
+        <button class="btn btn-secondary" id="scd-ok">ОК</button>
+        <button class="btn btn-primary" id="scd-post">Провести</button>
+        <button class="btn btn-secondary" id="scd-unpost" style="display:none">Отменить проведение</button>
       </div>
     </div>
   </div>
 </div>
 
-<div class="modal-backdrop" id="supplier-change-view-backdrop">
-  <div class="modal wide modal-sticky">
+<!-- Подбор изделий рамкой на схеме (2026-08-11, запрос пользователя).
+     Своя маленькая схема, а не рабочая область: подбор идёт по контракту,
+     марке и этажу, тогда как рабочая область может показывать другой отбор
+     или вовсе 3D. Изделий одной марки на этаже десятки — рисовать дёшево. -->
+<div class="modal-backdrop" id="scd-picker-backdrop">
+  <div class="modal wide modal-sticky" id="scd-picker-modal">
     <div class="modal-sticky-head">
-      <h2 id="scd-view-title">Документ</h2>
-      <div class="hint-text" id="scd-view-head"></div>
+      <h2 id="scd-picker-title">Подбор изделий</h2>
+      <div class="row" style="gap:12px; align-items:flex-end; flex-wrap:wrap">
+        <div><label class="field" style="margin-top:0">Этаж</label>
+          <select id="scd-picker-floor"></select></div>
+        <span class="hint-text" id="scd-picker-hint">Перетащите рамку по схеме, чтобы выделить
+          изделия; щелчок по изделию добавляет или убирает его. Колесо мыши —
+          масштаб, перетаскивание с Shift — сдвиг.</span>
+      </div>
     </div>
-    <div class="modal-sticky-scroll"><div id="scd-view-items"></div></div>
+    <div class="modal-sticky-scroll">
+      <div id="scd-picker-stage">
+        <svg id="scd-picker-svg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+          <g id="scd-picker-flip" transform="scale(1,-1)">
+            <g id="scd-picker-axes"></g>
+            <g id="scd-picker-context"></g>
+            <g id="scd-picker-shapes"></g>
+          </g>
+          <!-- Подписи осей — ВНЕ перевёрнутой группы: текст внутри неё вышел
+               бы зеркальным. Координаты пересчитываются в экранные при каждой
+               перерисовке (см. scdRenderAxisLabels в app.js). -->
+          <g id="scd-picker-labels"></g>
+        </svg>
+        <div id="scd-picker-band"></div>
+        <div id="scd-picker-zoom" class="zoom-indicator">
+          <span id="scd-picker-zoom-value" class="zoom-value">100%</span>
+          <button class="btn btn-sm btn-secondary" id="scd-picker-zoom-reset"
+                  title="Сбросить масштаб — показать всё">⟲</button>
+        </div>
+      </div>
+    </div>
     <div class="modal-sticky-foot">
+      <div class="hint-text" id="scd-picker-summary"></div>
       <div class="actions">
-        <button class="btn btn-secondary" id="scd-view-close">Закрыть</button>
+        <button class="btn btn-secondary" id="scd-picker-clear">Снять выделение</button>
+        <button class="btn btn-secondary" id="scd-picker-cancel">Отмена</button>
+        <button class="btn btn-primary" id="scd-picker-apply">Перенести в документ</button>
       </div>
     </div>
   </div>

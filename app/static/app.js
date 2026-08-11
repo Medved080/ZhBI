@@ -14076,26 +14076,37 @@ document.getElementById("menu-contracts").addEventListener("click", async () => 
   await renderDefaultContracts(contracts);
 });
 document.getElementById("contracts-close").addEventListener("click", () => contractsBackdrop.classList.remove("open"));
-
-// ==================== ДОКУМЕНТ «СМЕНА ПОСТАВЩИКА» (2026-08-11) ====================
+// ==================== ДОКУМЕНТЫ КОНТРАКТАЦИИ (2026-08-11) ====================
 //
-// Перевод НЕПОСТАВЛЕННОГО остатка одного контракта на другой. Все правила
-// живут на сервере (app/supplier_change.py), здесь — только показ и выбор:
-// какие изделия отдать новому заводу и сколько их влезает в его контракт.
+// Два вида операции в одной форме — «Замена поставщика» и «Обмен привязками»
+// (app/supplier_change.py). Все правила и само применение живут на сервере;
+// здесь показ, выбор и проведение кнопкой.
 //
-// Изделия перечисляются ПОИМЁННО, а не одним числом: человек решает, какие
-// именно колонны отдать, — по марке, адресу и ярусу. Поле «сколько» рядом
-// оставлено для случая «всё равно какие»: оно отмечает первые N по порядку,
-// то есть остаётся тем же выбором, просто сделанным быстро.
+// Документ ПРОВОДИТСЯ: пока он черновик, данные не тронуты и состав правится;
+// «Провести» применяет всё разом, «Отменить проведение» возвращает исходное
+// состояние. Поэтому форма одна на создание, правку и просмотр — вид зависит
+// от статуса, а не от того, откуда её открыли: два разных окна под один и тот
+// же документ разъехались бы на первой правке.
 const scdBackdrop = document.getElementById("supplier-change-backdrop");
 const scdFormBackdrop = document.getElementById("supplier-change-form-backdrop");
-const scdViewBackdrop = document.getElementById("supplier-change-view-backdrop");
+const scdPickerBackdrop = document.getElementById("scd-picker-backdrop");
 
-let scdContracts = [];       // контракты ОБЪЕКТА (свой запрос, не state.contracts — тот на все стройки)
-let scdCandidates = null;    // ответ /candidates
-const scdChosen = new Map(); // ключ позиции -> Set(id изделий)
+const SCD_KIND_SUPPLIER = "supplier_change";
+const SCD_KIND_SWAP = "link_swap";
+const SCD_KIND_TITLES = { [SCD_KIND_SUPPLIER]: "Замена поставщика", [SCD_KIND_SWAP]: "Обмен привязками" };
 
-function scdKey(type, mark) { return `${type || ""} ${mark || ""}`; }
+let scdContracts = [];        // контракты ОБЪЕКТА (свой запрос, не state.contracts — тот на все стройки)
+let scdDoc = null;            // открытый документ (null — ещё не сохранённый черновик)
+let scdKind = SCD_KIND_SUPPLIER;
+let scdCandidates = null;     // ответ /candidates (замена поставщика)
+const scdChosen = new Map();  // ключ позиции -> Set(id изделий), замена поставщика
+let scdSideA = [], scdSideB = [];   // строки сторон обмена, порядок = пары
+let scdSwapMarks = [];
+let scdSideBCounts = new Map();  // contract_id -> {count, element_type} по выбранной марке
+let scdSnapshot = "";            // слепок формы на момент открытия/сохранения — для контроля изменений
+
+function scdKey(type, mark) { return `${type || ""} ${mark || ""}`; }
+function scdPosted() { return !!scdDoc && scdDoc.status === "posted"; }
 
 function scdContractLabel(c) {
   const дог = c.agreement_date
@@ -14107,7 +14118,7 @@ function scdContractLabel(c) {
 
 // Архивные не предлагаются НИ СЛЕВА, НИ СПРАВА: справа их запрещает сервер
 // (архив — отработанный документ), а слева за архивным контрактом по правилу
-// архивации не числится ни одного изделия, то есть переносить оттуда нечего.
+// архивации не числится ни одного изделия, то есть брать оттуда нечего.
 function scdSelectable() { return scdContracts.filter(c => !c.is_archived); }
 
 function scdFillCounterparties(select, выбранный) {
@@ -14119,10 +14130,11 @@ function scdFillCounterparties(select, выбранный) {
   ).join("");
 }
 
-function scdFillContracts(select, counterpartyId) {
+function scdFillContracts(select, counterpartyId, выбранный) {
   const свои = scdSelectable().filter(c => String(c.counterparty_id) === String(counterpartyId));
   select.innerHTML = ['<option value="">— выберите —</option>'].concat(
-    свои.map(c => `<option value="${c.id}">${escapeHtml(scdContractLabel(c))}</option>`)
+    свои.map(c => `<option value="${c.id}"${String(c.id) === String(выбранный) ? " selected" : ""}>`
+      + `${escapeHtml(scdContractLabel(c))}</option>`)
   ).join("");
   select.disabled = !counterpartyId;
 }
@@ -14133,6 +14145,57 @@ function scdCurrentIds() {
     to: document.getElementById("scd-to-contract").value,
   };
 }
+
+function scdContractById(id) {
+  return scdContracts.find(c => String(c.id) === String(id)) || null;
+}
+
+// ---------- вид формы: заголовки, видимость блоков, состояние кнопок ----------
+
+function scdApplyMode() {
+  const обмен = scdKind === SCD_KIND_SWAP;
+  const проведён = scdPosted();
+  document.getElementById("scd-form-title").textContent =
+    (scdDoc ? `${SCD_KIND_TITLES[scdKind]} № ${scdDoc.number} от ${formatDateRu(scdDoc.doc_date)}`
+            : `${SCD_KIND_TITLES[scdKind]} — новый документ`);
+  document.getElementById("scd-from-title").textContent = обмен ? "Сторона 1" : "Текущий поставщик";
+  document.getElementById("scd-to-title").textContent = обмен ? "Сторона 2" : "Новый поставщик";
+  document.getElementById("scd-arrow").textContent = обмен ? "⇄" : "→";
+  document.getElementById("scd-mark-row").style.display = обмен ? "" : "none";
+  document.getElementById("scd-positions").style.display = обмен ? "none" : "";
+  document.getElementById("scd-swap").style.display = обмен ? "" : "none";
+  document.getElementById("scd-side-a-title").textContent = "Сторона 1";
+  document.getElementById("scd-side-b-title").textContent = "Сторона 2";
+
+  const метка = document.getElementById("scd-status-badge");
+  метка.textContent = scdDoc ? scdDoc.status_title : "Черновик (не сохранён)";
+  метка.className = "scd-status " + (проведён ? "posted" : "draft");
+  document.getElementById("scd-status-note").textContent = проведён
+    ? `Проведён: ${scdDoc.posted_by || "—"}${scdDoc.posted_at ? " · " + formatMomentRu(scdDoc.posted_at) : ""}. `
+      + "Пока документ проведён, его состав не правится."
+    : "Черновик данные не меняет — изменения вносит кнопка «Провести».";
+
+  // Проведённый документ читается, но не правится: подмена состава под уже
+  // разошедшимися движениями была бы отменой, сделанной втихую.
+  for (const id of ["scd-date", "scd-number", "scd-reason", "scd-comment", "scd-mark",
+                    "scd-from-counterparty", "scd-from-contract",
+                    "scd-to-counterparty", "scd-to-contract"]) {
+    document.getElementById(id).disabled = проведён;
+  }
+  // У замены поставщика вторая сторона доступна всегда: её списки — обычный
+  // каскад по всем контрактам объекта. Замок и счётчики — только у обмена,
+  // где сторона 2 собирается из выбранной марки (см. scdReloadSideB).
+  if (!обмен) document.getElementById("scd-to-box").classList.remove("locked");
+  document.getElementById("scd-pick-a").disabled = проведён;
+  document.getElementById("scd-pick-b").disabled = проведён;
+  document.getElementById("scd-save").style.display = проведён ? "none" : "";
+  document.getElementById("scd-ok").style.display = проведён ? "none" : "";
+  document.getElementById("scd-post").style.display = проведён ? "none" : "";
+  document.getElementById("scd-unpost").style.display = проведён ? "" : "none";
+  document.getElementById("scd-delete").style.display = (scdDoc && !проведён) ? "" : "none";
+}
+
+// ---------- замена поставщика: позиции и остатки ----------
 
 async function scdReloadCandidates() {
   const box = document.getElementById("scd-positions");
@@ -14284,14 +14347,586 @@ function scdChosenIds() {
   return ids;
 }
 
+// ---------- обмен привязками: марки и стороны ----------
+
+// Марки берутся из состава контракта СТОРОНЫ 1 (2026-08-11, запрос
+// пользователя), а не из пересечения двух контрактов: человек идёт от того,
+// что у него на руках — «вот этот контракт, вот эта марка», — а встречную
+// сторону подбирает уже под марку. Прежний порядок требовал знать обе
+// стороны заранее, то есть отвечать на вопрос до того, как он задан.
+async function scdReloadMarks(сохранитьВыбор) {
+  const { from } = scdCurrentIds();
+  const select = document.getElementById("scd-mark");
+  const заметка = document.getElementById("scd-mark-note");
+  const выбрана = сохранитьВыбор ? (select.value || (scdDoc && scdDoc.mark) || "") : "";
+  scdSwapMarks = [];
+  if (!from) {
+    select.innerHTML = '<option value="">— сначала выберите контракт стороны 1 —</option>';
+    заметка.textContent = "";
+    scdRenderSwap();
+    return;
+  }
+  select.innerHTML = '<option value="">— загрузка… —</option>';
+  try {
+    const ответ = await api(objectUrl("/supplier-changes/contract-marks", { contract_id: from }));
+    scdSwapMarks = ответ.marks;
+  } catch (e) {
+    document.getElementById("scd-error").textContent = e.message;
+    scdSwapMarks = [];
+  }
+  if (!scdSwapMarks.length) {
+    select.innerHTML = '<option value="">— на контракте нет изделий —</option>';
+    заметка.textContent = "К контракту стороны 1 не привязано ни одного изделия — обменивать нечего.";
+  } else {
+    select.innerHTML = ['<option value="">— выберите марку —</option>'].concat(
+      scdSwapMarks.map(m => `<option value="${escapeHtml(m.mark)}"${m.mark === выбрана ? " selected" : ""}>`
+        + `${escapeHtml(m.mark)} · ${escapeHtml(m.element_type || "—")} · ${m.count} шт.</option>`)
+    ).join("");
+    заметка.textContent = "";
+  }
+  await scdReloadSideB(сохранитьВыбор);
+  scdRenderSwap();
+}
+
+// Сторона 2 собирается ИЗ МАРКИ: предлагаются только контрагенты и контракты,
+// на которых эта марка реально стоит, и рядом — сколько там таких изделий
+// (2026-08-11, запрос пользователя). Предлагать контракт, где марки нет,
+// значило бы вести человека в тупик: обменивать было бы не с чем.
+async function scdReloadSideB(сохранитьВыбор) {
+  const cpSelect = document.getElementById("scd-to-counterparty");
+  const кSelect = document.getElementById("scd-to-contract");
+  const заметка = document.getElementById("scd-to-note");
+  const { from } = scdCurrentIds();
+  const марка = document.getElementById("scd-mark").value;
+  const выбранныйКонтракт = сохранитьВыбор ? (кSelect.value || (scdDoc && String(scdDoc.to_contract_id)) || "") : "";
+  scdSideBCounts = new Map();
+  // Пока не заполнены контракт и марка стороны 1, вторая сторона недоступна
+  // (требование пользователя): выбирать её не из чего, и пустой список без
+  // объяснения читался бы как поломка.
+  const доступна = !!from && !!марка;
+  document.getElementById("scd-to-box").classList.toggle("locked", !доступна);
+  cpSelect.disabled = кSelect.disabled = !доступна || scdPosted();
+  if (!доступна) {
+    cpSelect.innerHTML = '<option value="">— сначала контракт и марка стороны 1 —</option>';
+    кSelect.innerHTML = '<option value="">—</option>';
+    заметка.textContent = "";
+    return;
+  }
+  try {
+    const ответ = await api(objectUrl("/supplier-changes/mark-contracts",
+      { mark: марка, exclude_contract_id: from }));
+    for (const c of ответ.contracts) scdSideBCounts.set(c.contract_id, c);
+  } catch (e) {
+    document.getElementById("scd-error").textContent = e.message;
+  }
+  if (!scdSideBCounts.size) {
+    cpSelect.innerHTML = '<option value="">— других контрактов с этой маркой нет —</option>';
+    кSelect.innerHTML = '<option value="">—</option>';
+    заметка.textContent = `Марка «${марка}» больше нигде на объекте к контрактам не привязана.`;
+    return;
+  }
+  заметка.textContent = "";
+  const свои = scdContracts.filter(c => scdSideBCounts.has(c.id));
+  const контрагенты = new Map();
+  for (const c of свои) {
+    контрагенты.set(c.counterparty_id,
+      (контрагенты.get(c.counterparty_id) || 0) + scdSideBCounts.get(c.id).count);
+  }
+  const выбранный = свои.find(c => String(c.id) === String(выбранныйКонтракт));
+  cpSelect.innerHTML = ['<option value="">— выберите —</option>'].concat(
+    [...контрагенты.entries()].map(([id, n]) => {
+      const имя = (свои.find(c => c.counterparty_id === id) || {}).counterparty_short_name || "";
+      const отмечен = выбранный && выбранный.counterparty_id === id ? " selected" : "";
+      return `<option value="${id}"${отмечен}>${escapeHtml(имя)} · ${n} шт.</option>`;
+    })
+  ).join("");
+  scdFillSideBContracts(cpSelect.value, выбранныйКонтракт);
+}
+
+function scdFillSideBContracts(counterpartyId, выбранный) {
+  const select = document.getElementById("scd-to-contract");
+  const свои = scdContracts.filter(c =>
+    scdSideBCounts.has(c.id) && String(c.counterparty_id) === String(counterpartyId));
+  select.innerHTML = ['<option value="">— выберите —</option>'].concat(
+    свои.map(c => `<option value="${c.id}"${String(c.id) === String(выбранный) ? " selected" : ""}>`
+      + `${escapeHtml(scdContractLabel(c))} · ${scdSideBCounts.get(c.id).count} шт.</option>`)
+  ).join("");
+  select.disabled = !counterpartyId;
+}
+
+function scdSwapRowText(el) {
+  return [el.mark || "—", el.address || `№${el.id}`,
+          el.floor !== null && el.floor !== undefined ? `этаж ${el.floor}` : null,
+          state.statusLabels[el.current_status] || el.current_status].filter(Boolean).join(" · ");
+}
+
+function scdRenderSwap() {
+  const пары = Math.min(scdSideA.length, scdSideB.length);
+  for (const [id, список, другая] of [["scd-side-a", scdSideA, scdSideB], ["scd-side-b", scdSideB, scdSideA]]) {
+    const box = document.getElementById(id);
+    box.innerHTML = "";
+    if (!список.length) {
+      box.innerHTML = '<div class="hint-text">пусто — нажмите «Подбор…»</div>';
+      continue;
+    }
+    список.forEach((el, i) => {
+      const строка = document.createElement("div");
+      строка.className = "scd-swap-row" + (i >= другая.length ? " unpaired" : "");
+      строка.innerHTML = `<span class="scd-swap-no">${i + 1}</span>`
+        + `<span class="scd-swap-text" title="${escapeHtml(scdSwapRowText(el))}">${escapeHtml(scdSwapRowText(el))}</span>`;
+      if (!scdPosted()) {
+        const вверх = document.createElement("button");
+        вверх.type = "button"; вверх.textContent = "↑"; вверх.title = "Выше — поменять пару";
+        вверх.addEventListener("click", () => {
+          if (i === 0) return;
+          [список[i - 1], список[i]] = [список[i], список[i - 1]];
+          scdRenderSwap(); scdUpdateSummary();
+        });
+        const вниз = document.createElement("button");
+        вниз.type = "button"; вниз.textContent = "↓"; вниз.title = "Ниже — поменять пару";
+        вниз.addEventListener("click", () => {
+          if (i >= список.length - 1) return;
+          [список[i + 1], список[i]] = [список[i], список[i + 1]];
+          scdRenderSwap(); scdUpdateSummary();
+        });
+        const убрать = document.createElement("button");
+        убрать.type = "button"; убрать.textContent = "✕"; убрать.title = "Убрать из документа";
+        убрать.addEventListener("click", () => {
+          список.splice(i, 1);
+          scdRenderSwap(); scdUpdateSummary();
+        });
+        строка.append(вверх, вниз, убрать);
+      }
+      box.appendChild(строка);
+    });
+  }
+  return пары;
+}
+
 function scdUpdateSummary() {
+  const строка = document.getElementById("scd-summary");
+  const провести = document.getElementById("scd-post");
+  if (scdKind === SCD_KIND_SWAP) {
+    const пары = Math.min(scdSideA.length, scdSideB.length);
+    const ровно = scdSideA.length === scdSideB.length && scdSideA.length > 0;
+    строка.textContent = ровно
+      ? `Пар к обмену: ${пары}`
+      : `Сторона 1: ${scdSideA.length} шт., сторона 2: ${scdSideB.length} шт.`
+        + (scdSideA.length || scdSideB.length ? " — количества не совпадают, провести нельзя" : "");
+    провести.disabled = !ровно || scdPosted();
+    return;
+  }
   const ids = scdChosenIds();
   const позиций = [...scdChosen.values()].filter(s => s.size).length;
-  document.getElementById("scd-summary").textContent = ids.length
+  строка.textContent = ids.length
     ? `К переносу: ${ids.length} шт. по ${позиций} позициям`
     : "Ничего не выбрано";
-  document.getElementById("scd-save").disabled = !ids.length;
+  провести.disabled = !ids.length || scdPosted();
 }
+// ---------- подбор изделий рамкой на схеме ----------
+//
+// Своя маленькая схема: подбор идёт по контракту, марке и этажу, а рабочая
+// область может показывать другой отбор или вовсе 3D. Геометрия приходит с
+// сервера (/swap-elements) — брать её из уже загруженного плана нельзя,
+// изделие нужного контракта могло быть отфильтровано и в state.elements его
+// просто нет.
+//
+// Форма и цвет маркера — ОБЩИЕ с большой схемой (2026-08-11, запрос
+// пользователя): те же `effectiveShapeNameFor` и `colorFor`, что и там.
+// Своя вторая манера рисовать изделия означала бы, что одна и та же колонна
+// в подборе выглядит не так, как на схеме, и человек ищет её по памяти.
+let scdPickSide = null;        // "a" | "b"
+let scdPickAll = [];           // все изделия контракта с этой маркой
+let scdPickContext = [];       // остальные изделия того же типа — фон плана
+let scdPickShown = [];         // показанные (текущий этаж)
+const scdPickChosen = new Set();
+let scdPickBase = null;        // границы «всё видно» — к ним возвращает сброс масштаба
+let scdPickView = null;        // текущая область показа {x, y, w, h} в мировых координатах
+
+const SCD_PICK_MIN_MARKER_PX = 7;   // экранный минимум маркера — во что можно попасть курсором
+
+function scdPickBBoxOf(elements, context) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const учесть = (x, y) => {
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  };
+  for (const e of context) учесть(e.x, e.y);
+  for (const e of elements) {
+    const точки = (e.outline && e.outline.length >= 3) ? e.outline : [[e.x, e.y]];
+    for (const [x, y] of точки) учесть(x, y);
+  }
+  if (!Number.isFinite(minX)) return null;
+  const pad = Math.max((maxX - minX), (maxY - minY)) * 0.05 || 1000;
+  return { x: minX - pad, y: minY - pad, w: (maxX - minX) + pad * 2, h: (maxY - minY) + pad * 2 };
+}
+
+function scdPickTestPoint(e) {
+  if (e.outline && e.outline.length >= 3) return footprintCentroid(e.outline);
+  return [e.x, e.y];
+}
+
+// Сколько мировых единиц приходится на экранный пиксель. Считается по
+// РЕАЛЬНОМУ преобразованию SVG (getScreenCTM), а не делением ширины viewBox
+// на ширину контейнера: viewBox вписывается с полями (preserveAspectRatio),
+// и деление врёт ровно на долю этих полей — на большой схеме на этом уже
+// обжигались (см. screenToWorld).
+function scdPickWorldPerPx() {
+  const ctm = document.getElementById("scd-picker-flip").getScreenCTM();
+  if (!ctm || !ctm.a) return scdPickView ? scdPickView.w / 600 : 1;
+  return 1 / Math.abs(ctm.a);
+}
+
+function scdApplyView() {
+  if (!scdPickView) return;
+  const svg = document.getElementById("scd-picker-svg");
+  // viewBox по Y отрицательный: содержимое лежит в группе scale(1,-1) — тот
+  // же приём, что у рабочей области (там за это отвечает #flip).
+  svg.setAttribute("viewBox",
+    `${scdPickView.x} ${-(scdPickView.y + scdPickView.h)} ${scdPickView.w} ${scdPickView.h}`);
+  const процент = scdPickBase ? Math.round(scdPickBase.w / scdPickView.w * 100) : 100;
+  document.getElementById("scd-picker-zoom-value").textContent = `${процент}%`;
+  scdRenderAxisLabels();
+}
+
+// Подписи осей — цифры снизу, буквы слева, как на большой схеме. Слой лежит
+// ВНЕ перевёрнутой группы (иначе текст был бы зеркальным), но внутри того же
+// svg, то есть в координатах viewBox: y там равен минус мировому. Отсюда
+// минусы в формулах — это не описка, а та самая система координат.
+//
+// Прижимаются к краю ВИДИМОЙ области, а не к началу координат: при
+// приближении подпись оси должна оставаться на экране. Размер шрифта задаётся
+// в мировых единицах и пересчитывается по масштабу — иначе на приближении
+// подписи вырастали бы во весь экран.
+function scdRenderAxisLabels() {
+  const слой = document.getElementById("scd-picker-labels");
+  слой.innerHTML = "";
+  if (!scdPickView) return;
+  const view = scdPickView;
+  const пиксель = scdPickWorldPerPx();
+  const кегль = 11 * пиксель;
+  if (!Number.isFinite(кегль) || кегль <= 0) return;
+  const сетка = state.axisGrid || {};
+  for (const [подпись, x] of Object.entries(сетка.numeric || {})) {
+    if (x < view.x || x > view.x + view.w) continue;
+    слой.insertAdjacentHTML("beforeend",
+      `<text x="${x.toFixed(1)}" y="${(-view.y - 4 * пиксель).toFixed(1)}" `
+      + `font-size="${кегль.toFixed(1)}" text-anchor="middle">${escapeHtml(подпись)}</text>`);
+  }
+  for (const [подпись, y] of Object.entries(сетка.letter || {})) {
+    if (y < view.y || y > view.y + view.h) continue;
+    слой.insertAdjacentHTML("beforeend",
+      `<text x="${(view.x + 4 * пиксель).toFixed(1)}" y="${(-y + 4 * пиксель).toFixed(1)}" `
+      + `font-size="${кегль.toFixed(1)}">${escapeHtml(подпись)}</text>`);
+  }
+}
+
+function scdRenderPicker(сохранитьВид) {
+  const формы = document.getElementById("scd-picker-shapes");
+  const фонСлой = document.getElementById("scd-picker-context");
+  const оси = document.getElementById("scd-picker-axes");
+  формы.innerHTML = ""; фонСлой.innerHTML = ""; оси.innerHTML = "";
+  const этаж = document.getElementById("scd-picker-floor").value;
+  scdPickShown = scdPickAll.filter(e => этаж === "" || String(e.floor ?? "") === этаж);
+  const фон = scdPickContext.filter(e => этаж === "" || String(e.floor ?? "") === этаж);
+  const box = scdPickBBoxOf(scdPickShown, фон);
+  if (!box) {
+    document.getElementById("scd-picker-summary").textContent =
+      "На этом этаже изделий выбранной марки нет";
+    return;
+  }
+  scdPickBase = box;
+  if (!сохранитьВид || !scdPickView) scdPickView = { ...box };
+  scdApplyView();
+
+  // Сетка осей — для ориентира: без неё десяток одинаковых прямоугольников
+  // ничего не говорит о том, где на здании находишься.
+  const сетка = (state.axisGrid || {});
+  for (const x of Object.values(сетка.numeric || {})) {
+    if (x < box.x || x > box.x + box.w) continue;
+    оси.insertAdjacentHTML("beforeend",
+      `<line x1="${x}" y1="${box.y}" x2="${x}" y2="${box.y + box.h}"/>`);
+  }
+  for (const y of Object.values(сетка.letter || {})) {
+    if (y < box.y || y > box.y + box.h) continue;
+    оси.insertAdjacentHTML("beforeend",
+      `<line x1="${box.x}" y1="${y}" x2="${box.x + box.w}" y2="${y}"/>`);
+  }
+
+  // Фон: остальные изделия того же типа — мелкими серыми точками, без
+  // обработчиков. Он отвечает на вопрос «где на здании эти изделия стоят», и
+  // ничего больше: кликать по нему нечего.
+  //
+  // Радиус — В ЭКРАННЫХ пикселях, а не в долях габарита схемы: при
+  // фиксированном мировом радиусе точки не уменьшались с приближением и на
+  // 1541 % слипались в сплошную серую гусеницу поперёк плана (живой репорт
+  // пользователя). Полтора пикселя — точка остаётся точкой на любом масштабе.
+  const радиусФона = 1.5 * scdPickWorldPerPx();
+  for (const e of фон) {
+    фонСлой.insertAdjacentHTML("beforeend",
+      `<circle cx="${e.x}" cy="${e.y}" r="${радиусФона}"/>`);
+  }
+
+  // Маркер — ТОЙ ЖЕ формы и того же цвета, что на большой схеме. Радиус
+  // условных форм не может быть меньше SCD_PICK_MIN_MARKER_PX на экране:
+  // колонна 400×400 мм на плане в 70 метров это полпикселя, и попасть в неё
+  // курсором нельзя. «Как в оригинале» (outline) рисуется реальным контуром —
+  // он и есть настройка, подменять его кружком было бы враньём; попасть в
+  // мелкий контур помогает выбор по БЛИЖАЙШЕМУ (см. обработчик щелчка ниже).
+  const пиксель = scdPickWorldPerPx();
+  const минимум = SCD_PICK_MIN_MARKER_PX * пиксель;
+  for (const e of scdPickShown) {
+    let форма = effectiveShapeNameFor(e);
+    const [cx, cy] = scdPickTestPoint(e);
+    const r = Math.max(минимум, Math.max(box.w, box.h) / 220);
+    // «Как в оригинале» на плане целого здания — доли пикселя: колонна
+    // 400×400 мм при 450 мм на пиксель это меньше точки. Пока изделие мельче
+    // порога, вместо контура рисуется кружок; приблизил — вернулся контур.
+    // Иначе настройка «как в оригинале» означала бы схему, на которой ничего
+    // не видно (поймано живой проверкой).
+    if (форма === "outline") {
+      const xs = e.outline.map(p => p[0]), ys = e.outline.map(p => p[1]);
+      const размер = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      if (размер / пиксель < SCD_PICK_MIN_MARKER_PX) форма = "circle";
+    }
+    const узел = document.createElementNS("http://www.w3.org/2000/svg", SHAPE_TAGS[форма] || "circle");
+    const attrs = shapeGeometryAttrs(форма, cx, cy, r, e.outline || []);
+    for (const [k, v] of Object.entries(attrs)) узел.setAttribute(k, v);
+    узел.setAttribute("fill", colorFor(e.current_status));
+    узел.setAttribute("stroke", themeValue("--shape-stroke", "#333"));
+    узел.setAttribute("stroke-width", "1");
+    узел.setAttribute("vector-effect", "non-scaling-stroke");
+    узел.classList.add("scd-pick-shape");
+    if (scdPickChosen.has(e.id)) узел.classList.add("chosen");
+    узел.dataset.elementId = String(e.id);
+    const заголовок = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    заголовок.textContent = scdSwapRowText(e);
+    узел.appendChild(заголовок);
+    формы.appendChild(узел);
+  }
+  scdPickSummary();
+}
+
+function scdPickRefreshMarks() {
+  document.querySelectorAll("#scd-picker-shapes .scd-pick-shape").forEach(узел => {
+    узел.classList.toggle("chosen", scdPickChosen.has(Number(узел.dataset.elementId)));
+  });
+  scdPickSummary();
+}
+
+function scdPickSummary() {
+  const видно = scdPickShown.length;
+  const выбрано = scdPickShown.filter(e => scdPickChosen.has(e.id)).length;
+  document.getElementById("scd-picker-summary").textContent =
+    `На этаже: ${видно} шт. · выделено ${выбрано} · всего отмечено ${scdPickChosen.size}`;
+  document.getElementById("scd-picker-apply").disabled = scdPickChosen.size === 0;
+}
+
+// Рамка выделения — тот же приём, что в рабочей области (див поверх SVG,
+// пересчёт через getScreenCTM группы с flip). Раскладка жестов ЗЕРКАЛЬНА
+// большой схеме: там основное действие — смотреть, поэтому перетаскивание
+// панорамирует, а рамка требует Shift; здесь основное действие — выбирать,
+// поэтому перетаскивание выделяет, а Shift сдвигает.
+let scdBandOn = false, scdPanOn = false;
+let scdBandX0 = 0, scdBandY0 = 0, scdBandX1 = 0, scdBandY1 = 0;
+let scdPanX = 0, scdPanY = 0;
+
+function scdBandRect() {
+  const stage = document.getElementById("scd-picker-stage").getBoundingClientRect();
+  const band = document.getElementById("scd-picker-band");
+  band.style.display = "block";
+  band.style.left = (Math.min(scdBandX0, scdBandX1) - stage.left) + "px";
+  band.style.top = (Math.min(scdBandY0, scdBandY1) - stage.top) + "px";
+  band.style.width = Math.abs(scdBandX1 - scdBandX0) + "px";
+  band.style.height = Math.abs(scdBandY1 - scdBandY0) + "px";
+}
+
+function scdScreenToWorld(sx, sy) {
+  const ctm = document.getElementById("scd-picker-flip").getScreenCTM();
+  if (!ctm) return null;
+  const p = new DOMPoint(sx, sy).matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
+document.getElementById("scd-picker-svg").addEventListener("mousedown", (e) => {
+  if (e.shiftKey) {
+    scdPanOn = true; scdPanX = e.clientX; scdPanY = e.clientY;
+  } else {
+    scdBandOn = true;
+    scdBandX0 = scdBandX1 = e.clientX; scdBandY0 = scdBandY1 = e.clientY;
+  }
+  e.preventDefault();
+});
+window.addEventListener("mousemove", (e) => {
+  if (scdPanOn && scdPickView) {
+    const масштаб = scdPickWorldPerPx();
+    scdPickView.x -= (e.clientX - scdPanX) * масштаб;
+    // По Y знак обратный: экран растёт вниз, мировые координаты — вверх.
+    scdPickView.y += (e.clientY - scdPanY) * масштаб;
+    scdPanX = e.clientX; scdPanY = e.clientY;
+    scdApplyView();
+    return;
+  }
+  if (!scdBandOn) return;
+  scdBandX1 = e.clientX; scdBandY1 = e.clientY;
+  scdBandRect();
+});
+window.addEventListener("mouseup", () => {
+  if (scdPanOn) { scdPanOn = false; return; }
+  if (!scdBandOn) return;
+  scdBandOn = false;
+  document.getElementById("scd-picker-band").style.display = "none";
+  const путь = Math.hypot(scdBandX1 - scdBandX0, scdBandY1 - scdBandY0);
+  if (путь < 4) { scdPickAt(scdBandX0, scdBandY0); return; }
+  const a = scdScreenToWorld(scdBandX0, scdBandY0);
+  const b = scdScreenToWorld(scdBandX1, scdBandY1);
+  if (!a || !b) return;
+  const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+  const minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+  // Рамка ДОБАВЛЯЕТ к уже отмеченному — как в рабочей области: собрать
+  // выборку из нескольких участков иначе было бы нечем. Снять всё — кнопкой.
+  for (const el of scdPickShown) {
+    const [px, py] = scdPickTestPoint(el);
+    if (px >= minX && px <= maxX && py >= minY && py <= maxY) scdPickChosen.add(el.id);
+  }
+  scdPickRefreshMarks();
+});
+
+// Щелчок выбирает БЛИЖАЙШЕЕ изделие в пределах десятка экранных пикселей, а
+// не то, по чьей фигуре попали. Причина: форма берётся из настроек сервиса, и
+// при «как в оригинале» фигура колонны на плане здания — доли пикселя;
+// требовать попадания в неё значило бы сделать выбор щелчком неработающим.
+function scdPickAt(sx, sy) {
+  const точка = scdScreenToWorld(sx, sy);
+  if (!точка) return;
+  const порог = 14 * scdPickWorldPerPx();
+  let ближайший = null, лучшее = Infinity;
+  for (const e of scdPickShown) {
+    const [px, py] = scdPickTestPoint(e);
+    const d = Math.hypot(px - точка.x, py - точка.y);
+    if (d < лучшее) { лучшее = d; ближайший = e; }
+  }
+  if (!ближайший || лучшее > порог) return;
+  if (scdPickChosen.has(ближайший.id)) scdPickChosen.delete(ближайший.id);
+  else scdPickChosen.add(ближайший.id);
+  scdPickRefreshMarks();
+}
+
+// Масштаб колесом — к точке под курсором (иначе приближение уводит от того,
+// на что смотришь). Границы: от «всё видно» до 60-кратного приближения —
+// дальше поле зрения уже меньше самого изделия.
+document.getElementById("scd-picker-svg").addEventListener("wheel", (e) => {
+  if (!scdPickView || !scdPickBase) return;
+  e.preventDefault();
+  const точка = scdScreenToWorld(e.clientX, e.clientY);
+  if (!точка) return;
+  const шаг = e.deltaY < 0 ? 1 / 1.2 : 1.2;
+  const новыйW = Math.min(scdPickBase.w, Math.max(scdPickBase.w / 60, scdPickView.w * шаг));
+  const k = новыйW / scdPickView.w;
+  scdPickView = {
+    x: точка.x - (точка.x - scdPickView.x) * k,
+    y: точка.y - (точка.y - scdPickView.y) * k,
+    w: новыйW, h: scdPickView.h * k,
+  };
+  // Перерисовываем ФИГУРЫ, а не только viewBox: от масштаба зависят и
+  // экранный размер маркера, и подмена мелкого контура кружком — приблизил,
+  // и «как в оригинале» должно вернуться настоящим контуром. Изделий на
+  // этаже десятки, перерисовка на шаг колеса дешёвая.
+  scdRenderPicker(true);
+}, { passive: false });
+
+document.getElementById("scd-picker-zoom-reset").addEventListener("click", () => {
+  if (!scdPickBase) return;
+  scdPickView = { ...scdPickBase };
+  scdApplyView();
+});
+
+// Пересчёт при изменении размеров окна схемы. Нужен не ради удобства: кегль
+// подписей и экранный минимум маркера считаются от РЕАЛЬНОГО масштаба
+// (мировых единиц на пиксель), а модалка доводит свои размеры уже после
+// показа — первая отрисовка успевала посчитать их по вдвое меньшей ширине, и
+// подписи осей выходили вдвое крупнее нужного (замерено: кегль 9112 против
+// 4920). Перерисовываем ПОЛНОСТЬЮ, а не только подписи: от того же масштаба
+// зависит и подмена мелкого контура кружком.
+if (window.ResizeObserver) {
+  new ResizeObserver(() => {
+    if (!scdPickerBackdrop.classList.contains("open") || !scdPickView) return;
+    scdRenderPicker(true);
+  }).observe(document.getElementById("scd-picker-stage"));
+}
+
+async function scdOpenPicker(side) {
+  const { from, to } = scdCurrentIds();
+  const contractId = side === "a" ? from : to;
+  const марка = document.getElementById("scd-mark").value;
+  const ошибка = document.getElementById("scd-error");
+  ошибка.textContent = "";
+  if (!contractId) { ошибка.textContent = "Сначала выберите контракт этой стороны"; return; }
+  if (!марка) { ошибка.textContent = "Сначала выберите марку обмена"; return; }
+  scdPickSide = side;
+  scdPickChosen.clear();
+  scdPickView = null;
+  // Уже попавшие в документ отмечаем сразу: подбор открывают и чтобы
+  // добавить, и чтобы посмотреть, что уже набрано.
+  const уже = (side === "a" ? scdSideA : scdSideB).map(e => e.id);
+  уже.forEach(id => scdPickChosen.add(id));
+  const контракт = scdContractById(contractId);
+  document.getElementById("scd-picker-title").textContent =
+    `Подбор: ${марка} · ${контракт ? контракт.counterparty_short_name + " · " + scdContractLabel(контракт) : ""}`;
+  try {
+    const ответ = await api(objectUrl("/supplier-changes/swap-elements",
+      { contract_id: contractId, mark: марка }));
+    scdPickAll = ответ.elements;
+    scdPickContext = ответ.context || [];
+    const этажи = document.getElementById("scd-picker-floor");
+    // «Этаж» — обязательный шаг подбора (требование пользователя): выбирать
+    // рамкой по всему зданию сразу значило бы ловить в неё изделия разных
+    // ярусов, стоящие на плане друг под другом.
+    этажи.innerHTML = ответ.floors.map(f => `<option value="${f}">Этаж ${f}</option>`).join("")
+      + (ответ.has_no_floor ? '<option value="">— без этажа —</option>' : "");
+    if (!этажи.options.length) этажи.innerHTML = '<option value="">— нет изделий —</option>';
+    scdPickerBackdrop.classList.add("open");
+    // Рисуем ПОСЛЕ показа окна: у скрытого контейнера нулевой размер, и
+    // getScreenCTM вернул бы вырожденное преобразование — маркеры получили бы
+    // бессмысленный экранный минимум, а подписи осей не встали бы вовсе.
+    //
+    // setTimeout, а не requestAnimationFrame: в неактивной вкладке кадры не
+    // рисуются вовсе, и схема оставалась пустой до переключения на неё
+    // (поймано живой проверкой — та же ловушка, что с порогом подписей).
+    setTimeout(() => scdRenderPicker(false), 0);
+  } catch (e) {
+    ошибка.textContent = e.message;
+  }
+}
+
+document.getElementById("scd-picker-floor").addEventListener("change", () => scdRenderPicker(false));
+document.getElementById("scd-picker-clear").addEventListener("click", () => {
+  scdPickChosen.clear();
+  scdPickRefreshMarks();
+});
+document.getElementById("scd-picker-cancel").addEventListener("click", () =>
+  scdPickerBackdrop.classList.remove("open"));
+document.getElementById("scd-picker-apply").addEventListener("click", () => {
+  const список = scdPickSide === "a" ? scdSideA : scdSideB;
+  // Порядок: сначала то, что уже было (пары не должны разъезжаться от
+  // добавления новых), потом новое — в порядке показа на схеме.
+  const были = new Set(список.map(e => e.id));
+  for (const e of scdPickAll) {
+    if (scdPickChosen.has(e.id) && !были.has(e.id)) список.push(e);
+  }
+  // Снятое в подборе убираем из документа: подбор — единственное место, где
+  // состав стороны виден целиком на схеме.
+  for (let i = список.length - 1; i >= 0; i--) {
+    if (!scdPickChosen.has(список[i].id) && scdPickAll.some(e => e.id === список[i].id)) список.splice(i, 1);
+  }
+  scdPickerBackdrop.classList.remove("open");
+  scdRenderSwap();
+  scdUpdateSummary();
+});
+document.getElementById("scd-pick-a").addEventListener("click", () => scdOpenPicker("a"));
+document.getElementById("scd-pick-b").addEventListener("click", () => scdOpenPicker("b"));
+
+// ---------- список документов ----------
 
 async function scdRenderList() {
   const box = document.getElementById("scd-list");
@@ -14305,27 +14940,150 @@ async function scdRenderList() {
   for (const d of docs) {
     const карточка = document.createElement("div");
     карточка.className = "scd-doc-card";
+    const стрелка = d.kind === SCD_KIND_SWAP ? "⇄" : "→";
     карточка.innerHTML = `
-      <div class="scd-doc-title">№ ${escapeHtml(d.number)} от ${formatDateRu(d.doc_date)} · ${d.items} шт.</div>
-      <div class="hint-text">${escapeHtml(d.from_contract_name)} → ${escapeHtml(d.to_contract_name)}</div>
+      <div class="scd-doc-title">№ ${escapeHtml(d.number)} от ${formatDateRu(d.doc_date)} · ${d.items} шт.
+        <span class="scd-kind">${escapeHtml(d.kind_title)}</span>
+        <span class="scd-status ${d.status}">${escapeHtml(d.status_title)}</span></div>
+      <div class="hint-text">${escapeHtml(d.from_contract_name)} ${стрелка} ${escapeHtml(d.to_contract_name)}
+        ${d.mark ? "· марка " + escapeHtml(d.mark) : ""}</div>
       <div class="hint-text">${d.reason ? escapeHtml(d.reason) + " · " : ""}${escapeHtml(d.created_by || "")}</div>`;
-    карточка.addEventListener("click", () => openSupplierChangeDoc(d.id));
+    карточка.addEventListener("click", () => scdOpenDoc(d.id));
     box.appendChild(карточка);
   }
 }
 
-async function openSupplierChangeDoc(docId) {
-  const doc = await api(`/supplier-changes/${docId}`);
-  document.getElementById("scd-view-title").textContent =
-    `Смена поставщика № ${doc.number} от ${formatDateRu(doc.doc_date)}`;
-  document.getElementById("scd-view-head").innerHTML =
-    `${escapeHtml(doc.from_contract_name)} → ${escapeHtml(doc.to_contract_name)}<br/>`
-    + `${doc.reason ? "Причина: " + escapeHtml(doc.reason) + "<br/>" : ""}`
-    + `${doc.comment ? escapeHtml(doc.comment) + "<br/>" : ""}`
-    + `Записал: ${escapeHtml(doc.created_by || "—")}`;
-  const box = document.getElementById("scd-view-items");
-  // Показываем и статус НА МОМЕНТ переноса, и текущий: документ отвечает за
-  // первое, а второе объясняет, что с изделием стало дальше.
+// ---------- открытие формы ----------
+
+async function scdEnsureContracts() {
+  const refs = await api(objectUrl("/supplier-changes/refs"));
+  scdContracts = refs.contracts;
+}
+
+function scdResetForm(kind) {
+  scdKind = kind;
+  scdDoc = null;
+  scdCandidates = null;
+  scdChosen.clear();
+  scdSideA = []; scdSideB = [];
+  scdSwapMarks = [];
+  document.getElementById("scd-date").value = todayIsoLocal();
+  document.getElementById("scd-number").value = "";
+  document.getElementById("scd-comment").value = "";
+  document.getElementById("scd-reason").value = kind === SCD_KIND_SWAP ? "Ошибка в привязке" : "Срыв сроков поставки";
+  document.getElementById("scd-error").textContent = "";
+  document.getElementById("scd-positions").innerHTML = "";
+  document.getElementById("scd-mark").innerHTML = "";
+  scdSideBCounts = new Map();
+  scdFillCounterparties(document.getElementById("scd-from-counterparty"), "");
+  scdFillContracts(document.getElementById("scd-from-contract"), "", "");
+  if (kind === SCD_KIND_SWAP) {
+    // Вторая сторона у обмена собирается из марки и до её выбора закрыта —
+    // заполнять её сейчас нечем (см. scdReloadSideB).
+    document.getElementById("scd-to-counterparty").innerHTML =
+      '<option value="">— сначала контракт и марка стороны 1 —</option>';
+    document.getElementById("scd-to-contract").innerHTML = '<option value="">—</option>';
+    document.getElementById("scd-to-box").classList.add("locked");
+    document.getElementById("scd-mark").innerHTML =
+      '<option value="">— сначала выберите контракт стороны 1 —</option>';
+  } else {
+    scdFillCounterparties(document.getElementById("scd-to-counterparty"), "");
+    scdFillContracts(document.getElementById("scd-to-contract"), "", "");
+  }
+  document.getElementById("scd-to-note").textContent = "";
+  scdRenderSwap();
+  scdApplyMode();
+  scdUpdateSummary();
+  scdMarkClean();
+}
+
+async function scdNewDocument(kind) {
+  try {
+    await scdEnsureContracts();
+  } catch (e) {
+    showToast("Не удалось прочитать контракты объекта: " + e.message, "error");
+    return;
+  }
+  if (scdSelectable().length < 2) {
+    showToast("Нужны минимум два действующих контракта объекта", "warning");
+    return;
+  }
+  scdResetForm(kind);
+  scdFormBackdrop.classList.add("open");
+}
+
+// Открытие существующего документа: и черновика (правка), и проведённого
+// (чтение + отмена проведения) — одной формой.
+async function scdOpenDoc(docId) {
+  try {
+    await scdEnsureContracts();
+    const doc = await api(`/supplier-changes/${docId}`);
+    scdResetForm(doc.kind);
+    scdDoc = doc;
+    document.getElementById("scd-date").value = (doc.doc_date || "").slice(0, 10);
+    document.getElementById("scd-number").value = doc.number;
+    document.getElementById("scd-comment").value = doc.comment || "";
+    const причина = document.getElementById("scd-reason");
+    if (doc.reason && ![...причина.options].some(o => o.value === doc.reason)) {
+      причина.insertAdjacentHTML("afterbegin",
+        `<option value="${escapeHtml(doc.reason)}">${escapeHtml(doc.reason)}</option>`);
+    }
+    причина.value = doc.reason || "";
+    for (const [сторона, contractId] of [["from", doc.from_contract_id], ["to", doc.to_contract_id]]) {
+      const контракт = scdContractById(contractId);
+      const cp = document.getElementById(`scd-${сторона}-counterparty`);
+      scdFillCounterparties(cp, контракт ? контракт.counterparty_id : "");
+      scdFillContracts(document.getElementById(`scd-${сторона}-contract`),
+        контракт ? контракт.counterparty_id : "", contractId);
+    }
+    if (doc.kind === SCD_KIND_SWAP) {
+      // Марка ставится ДО пересборки списков стороны 2: она их и определяет.
+      // Записанная в документе марка добавляется в список, даже если её
+      // изделий на контракте стороны 1 больше нет: документ должен
+      // открываться тем, чем он записан, а не тем, что подходит сегодня.
+      const выбор = document.getElementById("scd-mark");
+      await scdReloadMarks(true);
+      if (doc.mark && ![...выбор.options].some(o => o.value === doc.mark)) {
+        выбор.insertAdjacentHTML("beforeend",
+          `<option value="${escapeHtml(doc.mark)}">${escapeHtml(doc.mark)}</option>`);
+      }
+      выбор.value = doc.mark || "";
+      await scdReloadSideB(true);
+      scdSideA = doc.items.filter(i => i.side === 1).map(scdItemToRow);
+      scdSideB = doc.items.filter(i => i.side === 2).map(scdItemToRow);
+      scdRenderSwap();
+    } else if (doc.status === "posted") {
+      // Проведённая замена поставщика показывается СОСТАВОМ, а не таблицей
+      // остатков: остатки уже изменились этим самым документом, и показывать
+      // их как «доступно к переносу» означало бы предлагать перенести
+      // перенесённое.
+      scdRenderPostedItems(doc);
+    } else {
+      await scdReloadCandidates();
+      // Черновик замены поставщика помнит состав: отмечаем его в позициях.
+      const выбранные = new Set(doc.items.map(i => i.element_id));
+      document.querySelectorAll("#scd-positions input[type=checkbox]").forEach(ф => {
+        if (выбранные.has(Number(ф.dataset.elementId))) { ф.checked = true; ф.dispatchEvent(new Event("change")); }
+      });
+    }
+    scdApplyMode();
+    scdUpdateSummary();
+    scdMarkClean();
+    scdFormBackdrop.classList.add("open");
+  } catch (e) {
+    showToast("Не удалось открыть документ: " + e.message, "error");
+  }
+}
+
+function scdItemToRow(i) {
+  return {
+    id: i.element_id, mark: i.mark, address: i.address, floor: i.floor,
+    current_status: i.current_status, element_type: i.element_type,
+  };
+}
+
+function scdRenderPostedItems(doc) {
+  const box = document.getElementById("scd-positions");
   box.innerHTML = `<table class="scd-pos-table"><thead><tr>
       <th>Тип</th><th>Марка</th><th>Адрес</th><th>Статус при переносе</th><th>Статус сейчас</th>
     </tr></thead><tbody>`
@@ -14337,8 +15095,159 @@ async function openSupplierChangeDoc(docId) {
         <td>${escapeHtml(state.statusLabels[i.current_status] || i.current_status || "изделие удалено")}</td>
       </tr>`).join("")
     + "</tbody></table>";
-  scdViewBackdrop.classList.add("open");
 }
+
+// ---------- сохранение, проведение, отмена ----------
+
+function scdPayload() {
+  const { from, to } = scdCurrentIds();
+  return {
+    object_id: state.objectId,
+    kind: scdKind,
+    number: document.getElementById("scd-number").value.trim() || null,
+    doc_date: document.getElementById("scd-date").value,
+    from_contract_id: Number(from), to_contract_id: Number(to),
+    mark: scdKind === SCD_KIND_SWAP ? (document.getElementById("scd-mark").value || null) : null,
+    reason: document.getElementById("scd-reason").value || null,
+    comment: document.getElementById("scd-comment").value.trim() || null,
+    element_ids: scdKind === SCD_KIND_SWAP ? [] : scdChosenIds(),
+    side_a: scdKind === SCD_KIND_SWAP ? scdSideA.map(e => e.id) : [],
+    side_b: scdKind === SCD_KIND_SWAP ? scdSideB.map(e => e.id) : [],
+  };
+}
+
+// ---------- контроль изменённости (2026-08-11, запрос пользователя) ----------
+//
+// Слепок формы — тот же payload, что уходит на сервер: он и есть всё
+// содержимое документа. Отдельного списка «полей, за которыми следим» нет
+// намеренно — он разошёлся бы с формой на первом же новом поле, и правка
+// молча терялась бы при закрытии.
+function scdSnapshotNow() {
+  try { return JSON.stringify(scdPayload()); } catch (e) { return ""; }
+}
+function scdMarkClean() { scdSnapshot = scdSnapshotNow(); }
+function scdIsDirty() { return !scdPosted() && scdSnapshot !== scdSnapshotNow(); }
+
+async function scdSaveDraft() {
+  const { from, to } = scdCurrentIds();
+  const ошибка = document.getElementById("scd-error");
+  ошибка.textContent = "";
+  if (!from || !to) { ошибка.textContent = "Выберите оба контракта"; return null; }
+  const тело = scdPayload();
+  if (scdDoc) {
+    scdDoc = await api(`/supplier-changes/${scdDoc.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(тело),
+    });
+  } else {
+    scdDoc = await api("/supplier-changes", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(тело),
+    });
+  }
+  scdApplyMode();
+  scdMarkClean();
+  return scdDoc;
+}
+
+// Закрытие с проверкой изменений. Два вопроса подряд, а не один: у выхода
+// три исхода — сохранить, выйти без сохранения и вернуться к правке, — а
+// confirm умеет только два ответа. Первый спрашивает про сохранение, второй
+// подтверждает потерю; «Отмена» во втором возвращает в форму.
+async function scdCloseForm() {
+  if (scdIsDirty()) {
+    if (confirm("В документе есть несохранённые изменения. Сохранить их?")) {
+      try {
+        const doc = await scdSaveDraft();
+        if (!doc) return;            // не сохранилось — остаёмся в форме, ошибка уже показана
+        await scdRenderList();
+      } catch (e) {
+        document.getElementById("scd-error").textContent = e.message;
+        return;
+      }
+    } else if (!confirm("Закрыть без сохранения? Изменения будут потеряны.")) {
+      return;
+    }
+  }
+  scdFormBackdrop.classList.remove("open");
+}
+
+document.getElementById("scd-save").addEventListener("click", async () => {
+  const кнопка = document.getElementById("scd-save");
+  кнопка.disabled = true;
+  try {
+    const doc = await scdSaveDraft();
+    if (doc) {
+      showToast(`Черновик № ${doc.number} сохранён`, "success");
+      await scdRenderList();
+    }
+  } catch (e) {
+    document.getElementById("scd-error").textContent = e.message;
+  } finally {
+    кнопка.disabled = false;
+  }
+});
+
+document.getElementById("scd-post").addEventListener("click", async () => {
+  const кнопка = document.getElementById("scd-post");
+  const ошибка = document.getElementById("scd-error");
+  кнопка.disabled = true;
+  try {
+    // Проводим ВСЕГДА по сохранённому составу: сохранить и провести одним
+    // нажатием — чтобы человеку не приходилось помнить, что «Провести»
+    // применяет не то, что на экране, а то, что успели записать.
+    const doc = await scdSaveDraft();
+    if (!doc) return;
+    const итог = await api(`/supplier-changes/${doc.id}/post`, { method: "POST" });
+    ошибка.textContent = "";
+    showToast(`Документ № ${итог.number} проведён`, "success");
+    // Перечитываем документ ЦЕЛИКОМ, а не показываем то, что было на экране:
+    // проведение изменило статусы и контракты изделий, и список, собранный
+    // подбором до проведения, показывал бы вчерашние статусы (поймано живой
+    // проверкой — строки стояли с «Запланирован» после обмена).
+    await scdOpenDoc(итог.id);
+    await scdRenderList();
+    // Схема показывает поставщика в допстроке подписи, фильтрует по нему и
+    // раскрашивает по статусу — после проведения её надо перечитать.
+    await loadPlan();
+  } catch (e) {
+    ошибка.textContent = e.message;
+  } finally {
+    кнопка.disabled = false;
+    scdUpdateSummary();
+  }
+});
+
+document.getElementById("scd-unpost").addEventListener("click", async () => {
+  if (!scdDoc) return;
+  if (!confirm("Отменить проведение? Контракты, плановые даты и история статусов изделий "
+             + "вернутся в состояние до документа.")) return;
+  const кнопка = document.getElementById("scd-unpost");
+  кнопка.disabled = true;
+  try {
+    scdDoc = await api(`/supplier-changes/${scdDoc.id}/unpost`, { method: "POST" });
+    showToast(`Проведение документа № ${scdDoc.number} отменено`, "success");
+    scdApplyMode();
+    await scdOpenDoc(scdDoc.id);
+    await scdRenderList();
+    await loadPlan();
+  } catch (e) {
+    document.getElementById("scd-error").textContent = e.message;
+  } finally {
+    кнопка.disabled = false;
+  }
+});
+
+document.getElementById("scd-delete").addEventListener("click", async () => {
+  if (!scdDoc) return;
+  if (!confirm(`Удалить черновик № ${scdDoc.number}?`)) return;
+  try {
+    await api(`/supplier-changes/${scdDoc.id}`, { method: "DELETE" });
+    scdFormBackdrop.classList.remove("open");
+    showToast("Черновик удалён", "success");
+    await scdRenderList();
+  } catch (e) {
+    document.getElementById("scd-error").textContent = e.message;
+  }
+});
 
 document.getElementById("menu-supplier-change").addEventListener("click", async () => {
   scdBackdrop.classList.add("open");
@@ -14350,85 +15259,76 @@ document.getElementById("menu-supplier-change").addEventListener("click", async 
   }
 });
 document.getElementById("scd-close").addEventListener("click", () => scdBackdrop.classList.remove("open"));
-document.getElementById("scd-view-close").addEventListener("click", () => scdViewBackdrop.classList.remove("open"));
-document.getElementById("scd-form-cancel").addEventListener("click", () => scdFormBackdrop.classList.remove("open"));
-
-document.getElementById("scd-new").addEventListener("click", async () => {
-  document.getElementById("scd-date").value = todayIsoLocal();
-  document.getElementById("scd-number").value = "";
-  document.getElementById("scd-comment").value = "";
-  document.getElementById("scd-error").textContent = "";
-  document.getElementById("scd-positions").innerHTML = "";
-  scdChosen.clear();
-  scdUpdateSummary();
-  try {
-    const refs = await api(objectUrl("/supplier-changes/refs"));
-    scdContracts = refs.contracts;
-  } catch (e) {
-    showToast("Не удалось прочитать контракты объекта: " + e.message, "error");
-    return;
-  }
-  if (scdSelectable().length < 2) {
-    showToast("Для смены поставщика нужны минимум два действующих контракта объекта", "warning");
-    return;
-  }
-  for (const сторона of ["from", "to"]) {
-    scdFillCounterparties(document.getElementById(`scd-${сторона}-counterparty`), "");
-    scdFillContracts(document.getElementById(`scd-${сторона}-contract`), "");
-  }
-  scdReloadCandidates();
-  scdFormBackdrop.classList.add("open");
-});
-
-for (const сторона of ["from", "to"]) {
-  document.getElementById(`scd-${сторона}-counterparty`).addEventListener("change", (e) => {
-    scdFillContracts(document.getElementById(`scd-${сторона}-contract`), e.target.value);
-    scdReloadCandidates();
-  });
-  document.getElementById(`scd-${сторона}-contract`).addEventListener("change", scdReloadCandidates);
-}
-
-document.getElementById("scd-save").addEventListener("click", async () => {
-  const кнопка = document.getElementById("scd-save");
-  const ошибка = document.getElementById("scd-error");
-  ошибка.textContent = "";
-  const { from, to } = scdCurrentIds();
-  const ids = scdChosenIds();
-  if (!from || !to || !ids.length) { ошибка.textContent = "Выберите контракты и позиции"; return; }
+document.getElementById("scd-form-cancel").addEventListener("click", scdCloseForm);
+// «ОК» — сохранить и закрыть, без проведения: обычный выход, когда документ
+// ещё набирают. Отдельно от «Сохранить черновик», который оставляет форму
+// открытой (набрал сторону — сохранил — продолжил).
+document.getElementById("scd-ok").addEventListener("click", async () => {
+  const кнопка = document.getElementById("scd-ok");
   кнопка.disabled = true;
   try {
-    const result = await api("/supplier-changes", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        object_id: state.objectId,
-        number: document.getElementById("scd-number").value.trim() || null,
-        doc_date: document.getElementById("scd-date").value,
-        from_contract_id: Number(from), to_contract_id: Number(to),
-        reason: document.getElementById("scd-reason").value || null,
-        comment: document.getElementById("scd-comment").value.trim() || null,
-        element_ids: ids,
-      }),
-    });
-    scdFormBackdrop.classList.remove("open");
-    // Пропущенное показываем ЯВНО: изделие могло уехать в «Отгружен» или
-    // занять чужое место между открытием формы и записью, и «перенесено 12
-    // из 15» без объяснения было бы хуже отказа.
-    if (result.skipped.length) {
-      showToast(`Документ № ${result.number}: перенесено ${result.moved}, пропущено ${result.skipped.length}. `
-        + result.skipped.slice(0, 3).map(s => `${s.label}: ${s.reason}`).join("; "), "warning");
-    } else {
-      showToast(`Документ № ${result.number} записан: перенесено ${result.moved} шт.`, "success");
+    const doc = await scdSaveDraft();
+    if (doc) {
+      await scdRenderList();
+      scdFormBackdrop.classList.remove("open");
+      showToast(`Черновик № ${doc.number} сохранён`, "success");
     }
-    await scdRenderList();
-    // Схема показывает поставщика в допстроке подписи и фильтрует по нему —
-    // после переноса её надо перечитать, иначе изделия остались бы за старым
-    // контрактом до следующего опроса.
-    await loadPlan();
   } catch (e) {
-    ошибка.textContent = e.message;
+    document.getElementById("scd-error").textContent = e.message;
   } finally {
     кнопка.disabled = false;
   }
+});
+document.getElementById("scd-new").addEventListener("click", () => scdNewDocument(SCD_KIND_SUPPLIER));
+document.getElementById("scd-new-swap").addEventListener("click", () => scdNewDocument(SCD_KIND_SWAP));
+
+document.getElementById("scd-from-counterparty").addEventListener("change", (e) => {
+  scdFillContracts(document.getElementById("scd-from-contract"), e.target.value, "");
+  scdOnSideAChange();
+});
+document.getElementById("scd-from-contract").addEventListener("change", scdOnSideAChange);
+
+// Вторая сторона: у обмена её списки собраны из марки (со счётчиками), у
+// замены поставщика — обычный каскад «контрагент → контракт» по всем
+// контрактам объекта. Одна пара обработчиков на оба случая: развилка по виду
+// операции здесь, а не два набора обработчиков на одни и те же поля.
+document.getElementById("scd-to-counterparty").addEventListener("change", (e) => {
+  if (scdKind === SCD_KIND_SWAP) scdFillSideBContracts(e.target.value, "");
+  else scdFillContracts(document.getElementById("scd-to-contract"), e.target.value, "");
+  scdOnSideBChange();
+});
+document.getElementById("scd-to-contract").addEventListener("change", scdOnSideBChange);
+
+function scdOnSideBChange() {
+  if (scdKind === SCD_KIND_SWAP) {
+    scdSideB = [];
+    scdRenderSwap();
+    scdUpdateSummary();
+  } else {
+    scdReloadCandidates();
+  }
+}
+
+// Смена СТОРОНЫ 1 сбрасывает вторую сторону целиком (2026-08-11, требование
+// пользователя): марки берутся из состава её контракта, а контракты стороны 2
+// — из марки, поэтому прежний выбор после смены означал бы уже не то, что
+// показано. Набранные списки изделий сбрасываются по той же причине: они
+// принадлежали прежним контрактам.
+async function scdOnSideAChange() {
+  if (scdKind !== SCD_KIND_SWAP) { scdReloadCandidates(); return; }
+  scdSideA = []; scdSideB = [];
+  document.getElementById("scd-to-counterparty").value = "";
+  document.getElementById("scd-to-contract").innerHTML = '<option value="">—</option>';
+  await scdReloadMarks(false);
+  scdUpdateSummary();
+}
+
+document.getElementById("scd-mark").addEventListener("change", async () => {
+  scdSideA = []; scdSideB = [];
+  document.getElementById("scd-to-counterparty").value = "";
+  await scdReloadSideB(false);
+  scdRenderSwap();
+  scdUpdateSummary();
 });
 
 // ---------- "Развёрнуто" — вкладка ВНУТРИ формы контракта (живой запрос

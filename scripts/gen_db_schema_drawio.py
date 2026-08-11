@@ -76,7 +76,7 @@ COLUMNS = [
      "marks"],
     ["counterparties", "counterparty_capacity", "agreements", "specifications", "contracts",
      "contract_lines", "contract_capacity", "contract_incidents",
-     "supplier_change_docs", "supplier_change_items"],
+     "supplier_change_docs", "supplier_change_items", "supplier_change_history_moves"],
 ]
 
 

@@ -256,6 +256,30 @@ _COLUMN_MIGRATIONS = [
     # привязано ни одного изделия схемы (проверку делает сервер, см.
     # app/contracts.py).
     ("contracts", "is_archived", "INTEGER NOT NULL DEFAULT 0"),
+    # Второй вид документа контрактации и его проведение (2026-08-11, запрос
+    # пользователя; см. schema.sql, supplier_change_docs). Колонки добавляются
+    # миграцией, потому что таблица завелась в тот же день утром и на боевом
+    # сервере уже существует — CREATE TABLE IF NOT EXISTS её не тронет.
+    #
+    # DEFAULT 'posted' у status — не описка и не то же самое, что 'draft' в
+    # schema.sql: у НОВОЙ базы документов нет вовсе, а у существующей все
+    # имеющиеся уже применены к данным (проведения тогда не было, документ
+    # менял изделия сразу при записи). Значение при вставке код передаёт
+    # всегда явно, поэтому расхождение умолчаний ни на что больше не влияет.
+    ("supplier_change_docs", "kind", "TEXT NOT NULL DEFAULT 'supplier_change'"),
+    ("supplier_change_docs", "status", "TEXT NOT NULL DEFAULT 'posted'"),
+    ("supplier_change_docs", "mark", "TEXT"),
+    ("supplier_change_docs", "posted_at", "TEXT"),
+    ("supplier_change_docs", "posted_by", "TEXT"),
+    ("supplier_change_docs", "posted_by_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
+    ("supplier_change_items", "side", "INTEGER NOT NULL DEFAULT 1"),
+    ("supplier_change_items", "pair_no", "INTEGER"),
+    # «Что было» до проведения — единственное основание для отмены. У
+    # документов, записанных до появления проведения, поле пустое: там
+    # прежний контракт берётся из шапки (from_contract_id), см.
+    # app/supplier_change.py.
+    ("supplier_change_items", "prev_contract_id", "INTEGER REFERENCES contracts(id) ON DELETE SET NULL"),
+    ("supplier_change_items", "prev_planned_delivery_date", "TEXT"),
 ]
 
 
