@@ -48,6 +48,7 @@ from app.access import (
     require_system_admin,
 )
 from app.auth import get_current_user
+from app.capacity import CapacityIn, load_contract_capacity, save_contract_capacity
 from app.db import get_connection
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
@@ -123,6 +124,11 @@ class ContractIn(BaseModel):
     is_archived: bool = False
     lines: list[ContractLineIn]
     incidents: list[ContractIncidentIn] = []
+    # Переопределение производительности завода для ЭТОГО контракта
+    # (2026-08-11, см. app/capacity.py). None = форма ничего про неё не
+    # присылала — сохранённое переопределение остаётся; [] = «переопределений
+    # нет, считать по контрагенту».
+    capacity: Optional[list[CapacityIn]] = None
 
 
 class ContractOut(BaseModel):
@@ -145,6 +151,10 @@ class ContractOut(BaseModel):
     linked_elements: int = 0
     lines: list[ContractLineOut]
     incidents: list[ContractIncidentOut]
+    # Только СВОИ переопределения. Базовые цифры завода форма берёт из
+    # справочника контрагентов, который у неё и так загружен, — дублировать
+    # их здесь значило бы завести второй источник правды на одно значение.
+    capacity: list[CapacityIn] = []
 
 
 def _ru_date(date_str: Optional[str]) -> Optional[str]:
@@ -277,7 +287,16 @@ def _load_contract_bundle(conn, contract_id: Optional[int] = None) -> dict:
         ).fetchall()
     }
 
-    return {"facts": facts, "damaged": damaged, "lines": lines, "incidents": incidents, "linked": linked}
+    capacity: dict = {}
+    for r in conn.execute(
+        f"SELECT contract_id, element_type, per_day FROM contract_capacity WHERE 1=1{scope} "
+        "ORDER BY contract_id, element_type", args
+    ).fetchall():
+        capacity.setdefault(r["contract_id"], []).append(
+            {"element_type": r["element_type"], "per_day": r["per_day"]})
+
+    return {"facts": facts, "damaged": damaged, "lines": lines, "incidents": incidents,
+            "linked": linked, "capacity": capacity}
 
 
 def _specification_chain(conn, specification_id: int):
@@ -344,6 +363,7 @@ def _to_contract_out(conn, contract_row, bundle: Optional[dict] = None) -> Contr
         is_archived=bool(contract_row["is_archived"]) if "is_archived" in contract_row.keys() else False,
         linked_elements=bundle["linked"].get(cid, 0),
         lines=lines, incidents=incidents,
+        capacity=[CapacityIn(**c) for c in bundle["capacity"].get(cid, [])],
     )
 
 
@@ -606,6 +626,7 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_u
                 "VALUES (?, ?, ?, ?, ?)",
                 (contract_id, inc.element_type, inc.quantity, inc.incident_date, inc.description),
             )
+        save_contract_capacity(conn, contract_id, body.capacity)
         conn.commit()
         row = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         результат = _to_contract_out(conn, row)
@@ -656,6 +677,7 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
                 "VALUES (?, ?, ?, ?, ?)",
                 (contract_id, inc.element_type, inc.quantity, inc.incident_date, inc.description),
             )
+        save_contract_capacity(conn, contract_id, body.capacity)
         conn.commit()
         row = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         результат = _to_contract_out(conn, row)

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from app.access import assert_object_access, require_contracting, require_system_admin
 from app.auth import get_current_user
 from app import activity
+from app.capacity import CapacityIn, load_counterparty_capacity, save_counterparty_capacity
 from app.db import get_connection
 
 router = APIRouter(tags=["counterparties"])
@@ -34,6 +35,12 @@ class CounterpartyIn(BaseModel):
     contact_person: Optional[str] = None
     contact_phone: Optional[str] = None
     code: Optional[str] = None
+    # Производительность завода по типам изделий (2026-08-11, см.
+    # app/capacity.py) — закладка «Производительность» в карточке.
+    # None означает «форма про неё ничего не прислала» и отличается от []
+    # («все строки удалены»): по None сохранённые нормативы остаются на
+    # месте, иначе любой старый клиент стирал бы их молча.
+    capacity: Optional[list[CapacityIn]] = None
 
 
 class CounterpartyOut(CounterpartyIn):
@@ -154,12 +161,27 @@ def find_or_create_specification(conn, agreement_id: int, number: str, specifica
 # --- Контрагенты ---
 
 
+def _with_capacity(conn, rows) -> list:
+    """Нормативы производительности — ОДНИМ запросом на весь список, а не по
+    запросу на контрагента: справочник открывается целиком, и заводов в нём
+    десятки (тот же довод, что у _load_contract_bundle в app/contracts.py)."""
+    нормативы: dict = {}
+    for r in conn.execute(
+        "SELECT counterparty_id, element_type, per_day, comment FROM counterparty_capacity "
+        "ORDER BY element_type"
+    ):
+        нормативы.setdefault(r["counterparty_id"], []).append(
+            {"element_type": r["element_type"], "per_day": r["per_day"], "comment": r["comment"]}
+        )
+    return [dict(row, capacity=нормативы.get(row["id"], [])) for row in rows]
+
+
 @router.get("/counterparties", response_model=list[CounterpartyOut])
 def list_counterparties(user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         rows = conn.execute("SELECT * FROM counterparties ORDER BY short_name").fetchall()
-        return [dict(r) for r in rows]
+        return _with_capacity(conn, rows)
     finally:
         conn.close()
 
@@ -170,7 +192,8 @@ def list_counterparties_full(user: sqlite3.Row = Depends(get_current_user)):
     запросом — для каскадных селектов в форме контракта."""
     conn = get_connection()
     try:
-        counterparties = [dict(r) for r in conn.execute("SELECT * FROM counterparties ORDER BY short_name")]
+        counterparties = _with_capacity(
+            conn, conn.execute("SELECT * FROM counterparties ORDER BY short_name").fetchall())
         # Тот же отбор по доступным объектам, что и у /agreements рядом
         # (аудит безопасности 2026-08-03 закрыл его там, но не здесь): это
         # дерево отдаёт РОВНО ТЕ ЖЕ договоры и спецификации, только все
@@ -223,11 +246,13 @@ def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(requi
             ),
         )
         counterparty_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        save_counterparty_capacity(conn, counterparty_id, body.capacity)
         conn.commit()
-        row = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
+        row = dict(conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone())
+        row["capacity"] = load_counterparty_capacity(conn, counterparty_id)
         activity.log("counterparty_create", user=admin, entity_type="counterparty",
                      entity_id=counterparty_id, new_value=f"{body.short_name} ({code})")
-        return dict(row)
+        return row
     finally:
         conn.close()
 
@@ -247,8 +272,10 @@ def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlit
                 body.legal_address, body.contact_person, body.contact_phone, body.code, counterparty_id,
             ),
         )
+        save_counterparty_capacity(conn, counterparty_id, body.capacity)
         conn.commit()
-        row = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
+        row = dict(conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone())
+        row["capacity"] = load_counterparty_capacity(conn, counterparty_id)
         activity.log("counterparty_update", user=admin, entity_type="counterparty",
                      entity_id=counterparty_id,
                      old_value=f"{existing['short_name']} ({existing['code']})",

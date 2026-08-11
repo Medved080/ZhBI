@@ -42,6 +42,7 @@ from app.contracts import (
     recompute_status_and_actual_date,
 )
 from app.contracts import router as contracts_router
+from app.supplier_change import router as supplier_change_router
 from app.counterparties import router as counterparties_router
 from app.dict_delete import router as dict_delete_router
 from app.marks import router as marks_router
@@ -97,6 +98,10 @@ from app.reports import (
     build_dynamics_report, build_dynamics_report_pdf, build_dynamics_report_xlsx,
     build_status_report, build_status_report_pdf, build_status_report_xlsx,
     in_development_title,
+)
+from app.report_analytics import (
+    TITLE as ANALYTICS_TITLE,
+    build_analytics_report, build_analytics_report_pdf, build_analytics_report_xlsx,
 )
 from app.report_contracting import build_contracting_schedule
 from app.report_completion import (
@@ -264,6 +269,7 @@ app.include_router(admin_guide_router)
 app.include_router(db_status_router)
 app.include_router(fill_scope_router)
 app.include_router(contracts_router)
+app.include_router(supplier_change_router)
 app.include_router(counterparties_router)
 app.include_router(marks_router)
 app.include_router(dict_delete_router)
@@ -1254,9 +1260,14 @@ class ReportRequestIn(BaseModel):
     # Масштаб оси времени — только для «Графика контрактации и поставки»:
     # день/неделя/месяц/квартал. Это группировка колонок, а не пересчёт.
     scale: Optional[str] = None
-    # Отчётная дата — только для «Динамики» (ежедневный отчёт «на дату»).
-    # Пусто = сегодня; сервер возвращает фактически применённую дату.
+    # Отчётная дата — для «Динамики» (ежедневный отчёт «на дату») и для
+    # «Аналитической справки». Пусто = сегодня; сервер возвращает
+    # фактически применённую дату.
     report_date: Optional[str] = None
+    # Горизонт «ближайшего времени» в днях — только для «Аналитической
+    # справки»: сколько вперёд считать этапы, под которые нужна
+    # контрактация. Пусто = месяц (app/report_analytics.DEFAULT_HORIZON_DAYS).
+    horizon_days: Optional[int] = None
     # Период графика «Динамики» — масштаб оси X, а не пересчёт (см.
     # build_dynamics_report). Пусто = весь срок проекта.
     week_from: Optional[str] = None
@@ -1481,6 +1492,57 @@ def report_contracting_schedule(body: ReportRequestIn,
         return build_contracting_schedule(conn, object_id, body.scale or "month")
     finally:
         conn.close()
+
+
+def _analytics(conn, user, body: ReportRequestIn) -> dict:
+    """Общая часть трёх эндпоинтов справки: проверка доступа, объект и
+    расчёт. Экран, XLSX и PDF обязаны строиться из ОДНОГО результата.
+
+    Фильтр схемы (`element_ids`) справка не учитывает намеренно (решение
+    пользователя 2026-08-11): она отвечает на вопрос «что со стройкой», а не
+    «что с тем, что я сейчас выделил». Проверку прав это не ослабляет —
+    объект берётся из `_guard_report`, то есть из уже проверенного чертежа.
+    """
+    body = _guard_report(conn, user, body)
+    object_id = _report_object_id(conn, body)
+    if object_id is None:
+        raise HTTPException(status_code=400,
+                            detail="Отчёт строится по объекту — выберите объект в тулбаре")
+    return build_analytics_report(conn, object_id, body.report_date, body.horizon_days)
+
+
+@app.post("/reports/analytics")
+def report_analytics(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «Аналитическая справка» (2026-08-11): контрактация под ближайшие
+    этапы СМР и критический путь поставки."""
+    conn = get_connection()
+    try:
+        return _analytics(conn, user, body)
+    finally:
+        conn.close()
+
+
+@app.post("/reports/analytics.xlsx")
+def report_analytics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _analytics(conn, user, body)
+    finally:
+        conn.close()
+    return _report_file_response(
+        build_analytics_report_xlsx(report), f"{ANALYTICS_TITLE}.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.post("/reports/analytics.pdf")
+def report_analytics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _analytics(conn, user, body)
+    finally:
+        conn.close()
+    return _report_file_response(build_analytics_report_pdf(report), f"{ANALYTICS_TITLE}.pdf",
+                                 "application/pdf")
 
 
 @app.post("/reports/completion")

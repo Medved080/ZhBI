@@ -74,8 +74,9 @@ COLUMNS = [
     ["elements", "status_history", "axis_lines"],
     ["zones", "zone_levels", "zone_edit_undo", "default_contracts", "mark_type_prefixes",
      "marks"],
-    ["counterparties", "agreements", "specifications", "contracts", "contract_lines",
-     "contract_incidents"],
+    ["counterparties", "counterparty_capacity", "agreements", "specifications", "contracts",
+     "contract_lines", "contract_capacity", "contract_incidents",
+     "supplier_change_docs", "supplier_change_items"],
 ]
 
 
@@ -101,6 +102,7 @@ PARENT_COLOR = {
     "default_contracts": "#946200",
     "contract_lines":    "#a16207",
     "mark_type_prefixes": "#78716c",
+    "supplier_change_docs": "#b45309",
 }
 
 EDGE_BASE = ("edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=12;html=1;fontSize=10;"

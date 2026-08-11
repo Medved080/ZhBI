@@ -1003,15 +1003,63 @@
      а не замысел. flex, а не grid: скрытая ролью колонка выпадает из
      раскладки целиком, тогда как у grid с жёстким набором дорожек на её
      месте зияла бы пустота (этим уже обжигались на auto-fill). */
-  .actions-panel { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
-  .actions-panel-col { flex: 1 1 210px; min-width: 0; display: flex;
-    flex-direction: column; gap: 14px; }
+  /* Прокрутка — У КАЖДОЙ КОЛОНКИ СВОЯ (2026-08-11, запрос пользователя).
+     Раньше скроллилось всё поле разом (.modal-sticky-scroll), и длинные
+     «Справочники» уводили вниз соседние колонки целиком: чтобы добраться до
+     нижнего пункта одной, приходилось прятать из виду все остальные — ровно
+     то, ради чего панель и заводилась («всё разом перед глазами»).
+     align-items: stretch — колонки должны быть одной высоты, иначе короткой
+     нечего прокручивать и её max-height ничего не ограничивает. */
+  /* flex-wrap: nowrap — обязателен для прокрутки колонок (2026-08-11). При
+     wrap высота «строки» флекс-контейнера считается по САМОЙ ВЫСОКОЙ
+     колонке и контейнером не ограничивается: колонки вырастали по
+     содержимому и вылезали за окно вместо того, чтобы прокручиваться
+     (замерено: 681 px в контейнере на 382). На узком экране wrap
+     возвращается — там колонки идут друг под другом, см. медиазапрос ниже. */
+  .actions-panel { display: flex; flex-wrap: nowrap; gap: 16px; align-items: stretch;
+    /* Растягивается флексом РОДИТЕЛЯ, а не height:100%: у контейнера
+       прокрутки высота выведена флексом модалки и для процентов остаётся
+       неопределённой — height:100% там молча превращается в auto, и колонки
+       вырастали по содержимому вместо того, чтобы прокручиваться (замерено:
+       701 px против доступных 382). */
+    flex: 1 1 auto; min-height: 0; }
+  .actions-panel-col { flex: 1 1 210px; min-width: 0; min-height: 0; display: flex;
+    flex-direction: column; gap: 14px; overflow-y: auto; padding-right: 4px; }
+  /* Прокрутка ВНУТРИ колонок, а не у поля целиком: у самого поля её здесь
+     нет, иначе панель ездила бы дважды — сначала колонка до низа, потом всё
+     окно ещё на сотню пикселей (замерено: 466 против 382). Высота колонок
+     задаётся этим контейнером, а не подобранным vh: при vh число всегда
+     оказывается либо больше окна, либо меньше доступного места. */
+  #actions-panel-modal .modal-sticky-scroll { overflow-y: hidden; display: flex; }
   /* Последняя колонка — настройки и администрирование: она узкая по смыслу,
      растягивать её на треть окна незачем. */
   .actions-panel-col:last-child { flex: 0 1 260px; }
   @media (max-width: 780px) {
+    /* На узком экране колонки идут друг под другом, и своя прокрутка у
+       каждой превратилась бы в три коротких окошка внутри одного. Возвращаем
+       общую прокрутку модалки. */
+    .actions-panel { flex-wrap: wrap; }
     .actions-panel-col, .actions-panel-col:last-child { flex: 1 1 100%; }
+    .actions-panel-col { overflow-y: visible; }
+    #actions-panel-modal .modal-sticky-scroll { overflow-y: auto; display: block; }
   }
+  /* -------- сворачивание блоков панели (2026-08-11) --------
+     Заголовок блока становится кнопкой со стрелкой; состояние хранится за
+     пользователем (users.menu_prefs.collapsed) и переживает закрытие панели.
+     Свёрнутый блок оставляет ровно заголовок — иначе «сложил» и «спрятал»
+     были бы одним и тем же, и найти его снова было бы нечем. */
+  .actions-panel-group > h4.actions-panel-toggle {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    user-select: none; margin: 0;
+  }
+  .actions-panel-group > h4.actions-panel-toggle:hover { color: var(--color-text); }
+  .actions-panel-toggle .caret { font-size: 9px; line-height: 1; transition: transform .12s ease;
+    color: var(--color-text-muted); }
+  .actions-panel-group.collapsed > h4.actions-panel-toggle .caret { transform: rotate(-90deg); }
+  .actions-panel-group.collapsed > *:not(h4) { display: none; }
+  .actions-panel-group:not(.collapsed) > h4.actions-panel-toggle { margin-bottom: 6px; }
+  .actions-panel-toggle .count { margin-left: auto; font-weight: 400; opacity: .7; }
+  .actions-panel-group:not(.collapsed) > h4.actions-panel-toggle .count { display: none; }
   .actions-panel-group { border: 1px solid var(--color-border); border-radius: var(--radius);
     padding: 10px 12px; }
   .actions-panel-group > h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase;
@@ -1214,6 +1262,12 @@
     color: var(--color-text-muted);
   }
   .picker-cols .picker-row-count { opacity: 1; font-size: 10px; }
+  /* Заголовки колонок кликабельны — сортируют блок (2026-08-10). Активная
+     колонка выделена и показывает направление стрелкой. */
+  .picker-col-head { cursor: pointer; user-select: none; }
+  .picker-col-head:hover { color: var(--color-text); text-decoration: underline; }
+  .picker-col-head.active { color: var(--color-primary); font-weight: 600; }
+  .picker-cols .picker-row-label { flex: 1; }
   .picker-block-note { font-size: 10px; color: var(--color-text-muted); padding: 0 0 3px 2px; }
   /* Черта между тем, из чего сейчас можно выбирать, и тем, чего в текущем
      срезе не осталось (2026-08-10). Недоступное не прячется — просто
@@ -2274,6 +2328,38 @@
   .dict-row-actions { flex: 0 0 auto; display: flex; gap: 4px; align-items: center;
     margin-left: auto; }
   .contract-block-header b { font-size: 13px; }
+  /* -------- документ «Смена поставщика» (2026-08-11) -------- */
+  .scd-head-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 12px; margin-bottom: 12px; }
+  .scd-head-grid input, .scd-head-grid select { width: 100%; }
+  /* Два контракта РЯДОМ со стрелкой между ними: документ отвечает на вопрос
+     «откуда → куда», и списком друг под другом это направление не читается. */
+  .scd-contracts { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .scd-contract-box { flex: 1 1 260px; min-width: 0; border: 1px solid var(--color-border);
+    border-radius: var(--radius); padding: 8px 10px; }
+  .scd-contract-box h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .03em; color: var(--color-text-muted); }
+  .scd-contract-box select { width: 100%; }
+  .scd-arrow { flex: 0 0 auto; font-size: 20px; color: var(--color-text-muted); }
+  .scd-pos-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .scd-pos-table th, .scd-pos-table td { padding: 4px 6px; text-align: left;
+    border-bottom: 1px solid var(--color-border); }
+  .scd-pos-table th { font-weight: 600; color: var(--color-text-muted); }
+  .scd-pos-table input[type=number] { width: 70px; }
+  /* Позиция, которой в новом контракте нет вовсе или не осталось места:
+     переносить некуда, и строка гасится, а не прячется — «этой марки в новом
+     контракте нет» это ответ, а пустая таблица им не является. */
+  .scd-pos-table tr.no-room td { color: var(--color-text-muted); }
+  .scd-pos-table tr.no-room .scd-avail { color: var(--color-danger); font-weight: 600; }
+  .scd-elements { margin: 4px 0 8px; padding-left: 10px;
+    border-left: 2px solid var(--color-border); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .scd-elements label { font-size: 12px; display: flex; gap: 5px; align-items: center; }
+  .scd-blocked { margin-top: 14px; }
+  .scd-doc-card { border: 1px solid var(--color-border); border-radius: var(--radius);
+    padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
+  .scd-doc-card:hover { background: var(--color-surface-2); }
+  .scd-doc-card .scd-doc-title { font-weight: 600; font-size: 13px; }
+  .scd-doc-card .hint-text { margin: 2px 0 0; }
   .contract-lines-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .contract-lines-table td, .contract-lines-table th { padding: 4px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
   .contract-lines-table tr.exceeded td { color: var(--color-danger); font-weight: 600; }
@@ -2360,6 +2446,52 @@
   .cs-legend .cs-need, .cs-legend .cs-contracted,
   .cs-legend .cs-planned, .cs-legend .cs-fact { font-size: 13px; }
   .cs-toggle { font: inherit; }
+
+  /* ==================== «Аналитическая справка» (2026-08-11) ====================
+     Отчёт из шести разделов, а не одна таблица: плитки-показатели, выводы,
+     четыре таблицы и график. Свои классы, а не общие с отчётами выше:
+     вёрстка тут не «таблица во всю форму», а страница документа. */
+  .an-section { margin: 18px 0 6px; font-size: 14px; font-weight: 600;
+                border-bottom: 2px solid var(--color-primary); padding-bottom: 4px; }
+  .an-note { color: var(--color-text-muted); font-size: 12px; margin: 4px 0 8px; }
+  .an-tiles { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .an-tile { flex: 1 1 150px; border: 1px solid var(--color-border); border-radius: 8px;
+             padding: 8px 12px; background: var(--color-surface); }
+  .an-tile .an-v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .an-tile .an-k { color: var(--color-text-muted); font-size: 11.5px; }
+  .an-tile.bad .an-v { color: var(--color-danger); }
+  .an-tile.ok .an-v { color: var(--color-success); }
+  .an-concl { list-style: none; margin: 0 0 10px; padding: 0; }
+  .an-concl li { margin: 4px 0; padding-left: 18px; position: relative; }
+  .an-concl li::before { content: "■"; position: absolute; left: 0; }
+  .an-concl li.critical::before { color: var(--color-danger); }
+  .an-concl li.warning::before { color: #d68910; }
+  .an-concl li.ok::before { color: var(--color-success); }
+  .an-concl li.data::before { color: var(--color-text-muted); }
+  .an-notes { border: 1px solid var(--color-border); border-radius: 8px; padding: 8px 12px;
+              margin-bottom: 10px; background: var(--color-surface-2); }
+  .an-notes h5 { margin: 6px 0 2px; font-size: 12px; }
+  .an-notes ul { margin: 0 0 4px 18px; padding: 0; }
+  #report-body table.an-table { width: 100%; border-collapse: collapse; font-size: 11.5px;
+                                white-space: nowrap; }
+  .an-table th, .an-table td { border: 1px solid var(--color-border); padding: 3px 6px;
+                               text-align: right; }
+  .an-table th { background: var(--color-surface-2); text-align: center; font-size: 11px;
+                 position: sticky; top: 0; z-index: 2; }
+  .an-table td.txt, .an-table th.txt { text-align: left; }
+  .an-table tr.an-total td { font-weight: 700; background: var(--color-surface-2); }
+  .an-table td.an-bad { color: var(--color-danger); font-weight: 700; }
+  .an-scroll { overflow: auto; max-height: 420px; }
+  .an-pill { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 11px;
+             font-weight: 600; color: #fff; background: var(--color-text-muted); }
+  .an-pill.started, .an-pill.late, .an-pill.no_contract { background: var(--color-danger); }
+  .an-pill.in_time, .an-pill.waiting_delivery { background: #d68910; color: #241a00; }
+  .an-pill.closed, .an-pill.on_site { background: var(--color-success); }
+  .an-pill.waiting { background: #6b46c1; }
+  /* «поставлено, не закрыто контрактом» — расхождение учёта, а не срыв
+     стройки: серый, чтобы не спорить с настоящими тревогами. */
+  .an-pill.paper { background: #9aa0a6; }
+  .an-chart { border: 1px solid var(--color-border); border-radius: 8px; padding: 8px; }
 
   /* ==================== КАРТОЧКИ ЗАПИСЕЙ В ОСТАЛЬНЫХ ФОРМАХ ====================
      (2026-08-05, живой запрос «сделай аналогично во всех остальных формах»)
@@ -2934,6 +3066,20 @@
             <button id="menu-info-plate-settings" class="object-admin-only">Порог опоздания поставки</button>
           </div>
         </div>
+        <!-- ДОКУМЕНТЫ (2026-08-11, запрос пользователя) — перед
+             «Справочниками»: справочник описывает, как устроено дело
+             (кто поставщик, что законтрактовано), а документ регистрирует
+             событие («остаток переведён на другой контракт») и меняет
+             данные. Это разные вещи, и складывать документы в справочники
+             значило бы прятать действие среди описаний.
+             Роль — «Комплектовщик» на объекте, как и у контрактных
+             справочников: документ переносит позиции между контрактами. -->
+        <div class="submenu">
+          <button type="button" class="submenu-trigger">Документы</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="menu-supplier-change" class="object-contract-only">Смена поставщика</button>
+          </div>
+        </div>
         <!-- Класс гашения — на КАЖДОМ пункте, а не на группе: часть
              справочников системная (проекты, объекты, сквозные словари),
              часть — объектная (зоны, контракты, карточка объекта). Пустая
@@ -3040,6 +3186,11 @@
                  времени. Всем ролям, как и остальные отчёты, — он только
                  читает данные. -->
             <button id="menu-report-contracting" class="menu-item-in-dev">График контрактации и поставки <span class="in-dev-mark">(в разработке)</span></button>
+            <!-- «Аналитическая справка» (2026-08-11): что мешает стройке
+                 прямо сейчас — контрактация под ближайшие этапы СМР и
+                 критический путь поставки. Всем ролям, как и остальные
+                 отчёты. -->
+            <button id="menu-report-analytics">Аналитическая справка</button>
           </div>
         </div>
         <!-- «Администрирование» (2026-08-02, живой запрос): ведение самого
@@ -4655,6 +4806,7 @@
           <button type="button" class="report-tab" data-report="completion">Статус комплектации</button>
           <button type="button" class="report-tab" data-report="mywork">Моя работа</button>
           <button type="button" class="report-tab in-dev" data-report="contracting">График контрактации и поставки <span class="in-dev-mark">(в разработке)</span></button>
+          <button type="button" class="report-tab" data-report="analytics">Аналитическая справка</button>
         </div>
         <!-- «Моя работа»: период (по умолчанию текущий день) и выбор
              пользователя. Список пользователей приходит с сервера вместе с
@@ -4737,6 +4889,18 @@
         </label>
         <label class="toggle"><input type="checkbox" id="cs-only-deficit"/>
           Только марки с дефицитом</label>
+      </div>
+      <!-- «Аналитическая справка»: дата, на которую строится, и горизонт —
+           сколько вперёд считать этапы под контрактацию. Галочки «учитывать
+           фильтр схемы» у неё нет: справка всегда по объекту целиком
+           (решение пользователя 2026-08-11), см. switchReport. -->
+      <div class="ds-controls" id="report-analytics-box" style="display:none">
+        <label class="field">На дату <input type="date" id="an-date" style="width:auto"/></label>
+        <label class="field">Горизонт
+          <select id="an-horizon" style="width:auto"></select>
+        </label>
+        <label class="toggle"><input type="checkbox" id="an-only-deficit" checked/>
+          Только позиции с дефицитом</label>
       </div>
       <!-- Сужение фильтром схемы к «Моей работе» неприменимо: там строки —
            события журнала, а не изделия, и часть из них к изделиям вообще
@@ -5026,6 +5190,22 @@
         <label class="field">Контактный телефон</label><input type="text" id="cpe-contact-phone"/>
       </div>
     </details>
+    <!-- Производительность завода (2026-08-11): сколько изделий каждого типа
+         контрагент выпускает в КАЛЕНДАРНЫЙ день. По ней «Аналитическая
+         справка» считает, к какому сроку завод закроет дефицит; норматива
+         «срок изготовления в днях» у заказчика нет — он зависит от темпа
+         конкретного завода. Пустое поле = норматива нет, справка честно
+         пишет «сроки неизвестны» (см. app/capacity.py). -->
+    <details class="cpe-section" id="cpe-details-capacity">
+      <summary>Производительность</summary>
+      <div>
+        <p class="hint-text">Сколько изделий завод выпускает в календарный день.
+          Пустое поле — норматива нет: «Аналитическая справка» тогда не берётся
+          судить, успевает поставка или нет. В конкретном контракте значение можно
+          переопределить.</p>
+        <table id="cpe-capacity"></table>
+      </div>
+    </details>
     <div class="error-text" id="counterparty-edit-error"></div>
     <!-- Кнопки ВНЕ сворачиваемой области: со свёрнутыми реквизитами
          «Отмена» должна оставаться доступной, иначе закрыть форму нечем. -->
@@ -5102,6 +5282,99 @@
     <div id="default-contracts-rows"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="contracts-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ДОКУМЕНТ «СМЕНА ПОСТАВЩИКА» (2026-08-11) ==========
+     Журнал документов и форма нового. Логика и правила — на сервере
+     (app/supplier_change.py); здесь только показ: что можно перенести,
+     сколько влезает в новый контракт и что уже поставлено и потому
+     недоступно. Записанный документ не правится и не отменяется — ошибка
+     исправляется обратным документом. ==================================== -->
+<div class="modal-backdrop" id="supplier-change-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Смена поставщика</h2>
+      <p class="hint-text" style="margin:0 0 10px;">
+        Перевод НЕПОСТАВЛЕННОГО остатка контракта на другой контракт: сроки, качество или иная
+        причина. Изделия со статусом «Отгружен» и выше не переносятся — они уже изготовлены и
+        уехали. Записанный документ не правится и не отменяется; ошибка исправляется обратным
+        документом.
+      </p>
+      <button class="btn btn-primary btn-sm" id="scd-new">Создать документ</button>
+    </div>
+    <div class="modal-sticky-scroll"><div id="scd-list"></div></div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="scd-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="supplier-change-form-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Смена поставщика — новый документ</h2>
+      <div class="scd-head-grid">
+        <div><label class="field" style="margin-top:0">Дата документа</label>
+          <input type="date" id="scd-date"/></div>
+        <div><label class="field" style="margin-top:0">Номер</label>
+          <input type="text" id="scd-number" placeholder="присвоится сам"/></div>
+        <div><label class="field" style="margin-top:0">Причина</label>
+          <select id="scd-reason">
+            <option value="Срыв сроков поставки">Срыв сроков поставки</option>
+            <option value="Качество продукции">Качество продукции</option>
+            <option value="Расторжение договора">Расторжение договора</option>
+            <option value="">Иная (укажите в комментарии)</option>
+          </select></div>
+        <div style="grid-column:1 / -1"><label class="field" style="margin-top:0">Комментарий</label>
+          <input type="text" id="scd-comment" placeholder="основание, номер письма, пояснение"/></div>
+      </div>
+      <div class="scd-contracts">
+        <div class="scd-contract-box">
+          <h4>Текущий поставщик</h4>
+          <label class="field" style="margin-top:0">Контрагент / договор</label>
+          <select id="scd-from-counterparty"></select>
+          <label class="field">Контракт</label>
+          <select id="scd-from-contract"></select>
+        </div>
+        <div class="scd-arrow" aria-hidden="true">→</div>
+        <div class="scd-contract-box">
+          <h4>Новый поставщик</h4>
+          <label class="field" style="margin-top:0">Контрагент / договор</label>
+          <select id="scd-to-counterparty"></select>
+          <label class="field">Контракт</label>
+          <select id="scd-to-contract"></select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="scd-positions"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="hint-text" id="scd-summary"></div>
+      <div class="error-text" id="scd-error"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="scd-form-cancel">Отмена</button>
+        <button class="btn btn-primary" id="scd-save">Записать документ</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="supplier-change-view-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2 id="scd-view-title">Документ</h2>
+      <div class="hint-text" id="scd-view-head"></div>
+    </div>
+    <div class="modal-sticky-scroll"><div id="scd-view-items"></div></div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="scd-view-close">Закрыть</button>
+      </div>
     </div>
   </div>
 </div>
@@ -5199,6 +5472,10 @@
       <div class="view-mode-switch" id="ce-view-toggle" role="group" aria-label="Вид">
         <button type="button" class="view-mode-btn active" data-ce-view="main">Основное</button>
         <button type="button" class="view-mode-btn" data-ce-view="expanded">Развёрнуто</button>
+        <!-- Производительность (2026-08-11): переопределение темпа завода на
+             ЭТОТ документ. Базовые цифры — в карточке контрагента, здесь
+             только исключение; пустое поле = считать по контрагенту. -->
+        <button type="button" class="view-mode-btn" data-ce-view="capacity">Производительность</button>
       </div>
     </div>
     <div class="modal-sticky-scroll">
@@ -5241,6 +5518,12 @@
           </thead>
           <tbody id="contract-elements-tbody"></tbody>
         </table>
+      </div>
+      <div id="ce-view-capacity" style="display:none;">
+        <p class="hint-text">Сколько изделий в календарный день завод выпускает ПО ЭТОМУ контракту.
+          Пусто — берётся значение из карточки контрагента (показано справа). По этим цифрам
+          «Аналитическая справка» считает, к какому сроку закроется дефицит.</p>
+        <table id="ce-capacity"></table>
       </div>
     </div>
     <div class="modal-sticky-foot">

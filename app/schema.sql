@@ -292,6 +292,33 @@ CREATE TABLE IF NOT EXISTS contract_incidents (
     description TEXT
 );
 
+-- Производительность завода: сколько изделий каждого типа контрагент
+-- выпускает в КАЛЕНДАРНЫЙ день (решение пользователя 2026-08-11). Нужна
+-- «Аналитической справке» (app/report_analytics.py): по ней считается, к
+-- какому сроку завод физически успеет закрыть дефицит — норматива «срок
+-- изготовления в днях» у заказчика нет, он зависит от темпа конкретного
+-- завода.
+--
+-- Уровней два, и это НЕ дублирование: базовые цифры принадлежат заводу
+-- (одни и те же на все его контракты), а contract_capacity — исключение на
+-- конкретный документ. Пустая строка = норматива нет: справка тогда пишет
+-- «сроки неизвестны» и не делает вывода «успевает / не успевает», а не
+-- подставляет ноль (ноль означал бы «завод не выпускает вовсе»).
+CREATE TABLE IF NOT EXISTS counterparty_capacity (
+    counterparty_id INTEGER NOT NULL REFERENCES counterparties (id) ON DELETE CASCADE,
+    element_type TEXT NOT NULL,
+    per_day REAL NOT NULL,
+    comment TEXT,
+    PRIMARY KEY (counterparty_id, element_type)
+);
+
+CREATE TABLE IF NOT EXISTS contract_capacity (
+    contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE CASCADE,
+    element_type TEXT NOT NULL,
+    per_day REAL NOT NULL,
+    PRIMARY KEY (contract_id, element_type)
+);
+
 -- Контракт по умолчанию для каждого типа элемента — подставляется
 -- элементу автоматически при первом переводе из "Запланирован" в любой
 -- другой статус, если у элемента ещё нет своего контракта.
@@ -653,3 +680,52 @@ CREATE TABLE IF NOT EXISTS release_tasks (
     duration_ms INTEGER,
     attempts INTEGER NOT NULL DEFAULT 1
 );
+
+-- Документ «Смена поставщика» (2026-08-11, запрос пользователя): перевод
+-- НЕПОСТАВЛЕННОГО остатка одного контракта на другой, когда поставщик не
+-- устраивает по срокам или качеству. Логика и правила — app/supplier_change.py.
+--
+-- Почему документ, а не разовая операция: перевод — основание, на которое
+-- ссылаются потом. Шапка отвечает «когда, почему и между какими
+-- контрактами», табличная часть — «что именно переехало». Правки и отмены
+-- записанного документа нет намеренно: движения уже разошлись по изделиям и
+-- их истории статусов, ошибка исправляется обратным документом.
+--
+-- object_id хранится ПОЛЕМ, в отличие от контракта (у того объект выводится
+-- по цепочке спецификация → договор): документ создаётся на конкретной
+-- стройке, оба его контракта обязаны быть её же, и выводить объект из них
+-- значило бы получить два ответа на один вопрос.
+CREATE TABLE IF NOT EXISTS supplier_change_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    number TEXT NOT NULL,
+    doc_date TEXT NOT NULL,
+    from_contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE RESTRICT,
+    to_contract_id INTEGER NOT NULL REFERENCES contracts (id) ON DELETE RESTRICT,
+    reason TEXT,
+    comment TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by TEXT,
+    created_by_user_id INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    UNIQUE (object_id, number)
+);
+
+-- Табличная часть: строка на ИЗДЕЛИЕ, а не на позицию (тип, марка).
+-- Количество здесь производное — какие именно колонны отданы новому заводу,
+-- решает человек по адресу и ярусу, и свернуть это в число значило бы
+-- потерять ответ на вопрос «а эта чья».
+--
+-- element_type/mark/status_at_move — СНИМОК на момент переноса, той же
+-- природы, что status_history.changed_by: изделие потом переименуют или
+-- смонтируют, а документ обязан остаться тем, чем он был подписан.
+CREATE TABLE IF NOT EXISTS supplier_change_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id INTEGER NOT NULL REFERENCES supplier_change_docs (id) ON DELETE CASCADE,
+    element_id INTEGER NOT NULL REFERENCES elements (id) ON DELETE CASCADE,
+    element_type TEXT,
+    mark TEXT,
+    status_at_move TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_change_items_doc ON supplier_change_items (doc_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_change_docs_object ON supplier_change_docs (object_id);

@@ -216,6 +216,11 @@ let state = {
     search: {},
     // Какие контракты развёрнуты по маркам в правой области (2026-08-10).
     expandedContracts: new Set(),
+    // Сортировка блока-среза по колонке (2026-08-10, живой запрос):
+    // ключ блока → {col: "label"|"count"|"contracted"|"diff", dir: 1|-1}.
+    // Пусто = порядок по умолчанию (по подписи, тот же placementComparator,
+    // что и в фильтрах «Модели»).
+    sort: {},
     // «Подсветить несвязанные» — отдельная функция, включается кнопкой в
     // области контрактов (2026-08-10). Изначально подсветка была мерцающей
     // и включалась сама; от мерцания отказались — оно заметно тормозило
@@ -3630,6 +3635,55 @@ function pickerContractedFor(key, value) {
   return sum;
 }
 
+// Порядок строк блока-среза. По умолчанию — по подписи (тот же
+// placementComparator, что и в фильтрах «Модели»: числовые значения вроде
+// этажа сравниваются как числа, служебные «— не определено —» уходят в
+// конец). Выбранная колонка сортирует по своему числу; равные числа
+// упорядочиваются подписью, иначе строки прыгали бы между перерисовками.
+//
+// Вызывается ОТДЕЛЬНО для доступных и недоступных строк — черта «нет в
+// текущем срезе» разделяет два разных вопроса, и смешивать их сортировка
+// не должна.
+function pickerSortRows(rows, def) {
+  const s = state.picker.sort[def.key];
+  if (!s || s.col === "label") {
+    const cmp = placementComparator(def.labelFor, { compareRaw: !!def.compareRaw });
+    const порядок = rows.slice().sort((a, b) => cmp(a.v, b.v));
+    return s && s.dir === -1 ? порядок.reverse() : порядок;
+  }
+  const число = r => {
+    const v = r[s.col];
+    return typeof v === "number" ? v : 0;
+  };
+  return rows.slice().sort((a, b) =>
+    (число(a) - число(b)) * s.dir
+    || a.label.localeCompare(b.label, "ru", { numeric: true }));
+}
+
+// Заголовок колонки — он же переключатель сортировки. Первый клик по
+// колонке чисел сортирует по УБЫВАНИЮ: спрашивают «где больше всего», а не
+// «где меньше»; по подписи — наоборот, по возрастанию (алфавит).
+function pickerColumnHead(def, col, текст, status) {
+  const el = document.createElement("span");
+  el.className = col === "label" ? "picker-row-label picker-col-head" : "picker-row-count picker-col-head";
+  const s = state.picker.sort[def.key];
+  const активна = (s ? s.col : "label") === col;
+  el.textContent = текст + (активна ? (s && s.dir === -1 ? " ↓" : " ↑") : "");
+  if (status && !активна) applyStatusInk(el, status);
+  if (активна) el.classList.add("active");
+  el.title = `Сортировать по колонке «${текст}»`;
+  el.addEventListener("click", () => {
+    const текущая = state.picker.sort[def.key];
+    if (текущая && текущая.col === col) {
+      текущая.dir = -текущая.dir;
+    } else {
+      state.picker.sort[def.key] = { col, dir: col === "label" ? 1 : -1 };
+    }
+    onPickerChange();
+  });
+  return el;
+}
+
 // Одна плитка показателя.
 function buildPickerMetricTile(metric, base) {
   const tile = document.createElement("button");
@@ -3761,25 +3815,25 @@ function buildPickerSlicer(def) {
   // которого не существует, функция вернула бы 0, а не null.
   const contractedShown = pickerContractedFor(def.key, null) !== null;
 
+  // Шапка колонок — она же переключатель сортировки (2026-08-10, живой
+  // запрос: «добавь возможность фильтровать по любой из колонок»). Есть у
+  // ЛЮБОГО блока, а не только у тех, где показано «законтрактовано»: по
+  // количеству сортировать хочется и в кранах, и в этажах, а два разных
+  // устройства шапки у соседних блоков читались бы как разные механизмы.
+  const cols = document.createElement("div");
+  cols.className = "picker-cols";
+  cols.appendChild(pickerColumnHead(def, "label", "значение"));
+  cols.appendChild(pickerColumnHead(def, "count", "модель"));
   if (contractedShown) {
-    // Три числа в строке без подписи читаются как загадка — короткая шапка
-    // колонок. «Δ» вместо слова: колонка узкая, а знак разницы всё равно
-    // несёт цвет.
-    const cols = document.createElement("div");
-    cols.className = "picker-cols";
-    const contractedHead = document.createElement("span");
-    contractedHead.className = "picker-row-count";
-    contractedHead.textContent = "контракт";
-    applyStatusInk(contractedHead, "contracting");
-    cols.innerHTML = '<span class="picker-row-label">&nbsp;</span><span class="picker-row-count">модель</span>';
-    cols.appendChild(contractedHead);
-    const diffHead = document.createElement("span");
-    diffHead.className = "picker-row-count";
-    diffHead.textContent = "Δ";
-    cols.appendChild(diffHead);
-    cols.title = "Модель — сколько изделий в срезе; контракт — сколько закуплено по позициям контрактов; Δ — разница (плюс: контрактов хватает, минус: дефицит)";
-    block.appendChild(cols);
-  } else if (def.key === "elementType" || def.key === "mark") {
+    cols.appendChild(pickerColumnHead(def, "contracted", "контракт", "contracting"));
+    cols.appendChild(pickerColumnHead(def, "diff", "Δ"));
+    cols.title = "Модель — сколько изделий в срезе; контракт — сколько закуплено по позициям контрактов; Δ — разница (плюс: контрактов хватает, минус: дефицит). Клик по заголовку сортирует";
+  } else {
+    cols.title = "Модель — сколько изделий в срезе. Клик по заголовку сортирует";
+  }
+  block.appendChild(cols);
+
+  if (!contractedShown && (def.key === "elementType" || def.key === "mark")) {
     // Блок, где законтрактованное БЫВАЕТ, но сейчас его нет: объясняем
     // почему, а не молчим — иначе колонки просто исчезают без причины.
     const note = document.createElement("div");
@@ -3790,6 +3844,19 @@ function buildPickerSlicer(def) {
     note.title = "У позиции контракта есть только тип элемента и марка: по подтипу, крану, стоянке, этажу и показателю она не делится";
     block.appendChild(note);
   }
+
+  // Строки блока как ДАННЫЕ — до всякой отрисовки: по ним же считается
+  // сортировка по колонкам (см. pickerSortRows), иначе сортировать
+  // пришлось бы уже готовые узлы разметки.
+  const строки = values.map(v => {
+    const count = counts.get(v) || 0;
+    const contracted = contractedShown ? (pickerContractedFor(def.key, v) || 0) : null;
+    return {
+      v, label: def.labelFor(v), count, contracted,
+      diff: contractedShown ? contracted - count : null,
+      доступна: count > 0 || sel.has(v),
+    };
+  });
 
   const list = document.createElement("div");
   list.className = "picker-list";
@@ -3803,14 +3870,15 @@ function buildPickerSlicer(def) {
   // кликабельными — тот же принцип, что в фильтрах «Модели».
   // Уже выбранное значение считается доступным всегда: иначе собственный
   // выбор уезжал бы вниз ровно в тот момент, когда его сделали.
-  const доступно = v => (counts.get(v) || 0) > 0 || sel.has(v);
-  const порядок = [...values.filter(доступно), ...values.filter(v => !доступно(v))];
-  let разделительВставлен = false;
-  for (const v of порядок) {
-    const label = def.labelFor(v);
-    const count = counts.get(v) || 0;
-    if (!доступно(v) && !разделительВставлен) {
-      разделительВставлен = true;
+  //
+  // Сортировка применяется К КАЖДОЙ ПОЛОВИНЕ ОТДЕЛЬНО (живой запрос
+  // 2026-08-10): черта разделяет «из чего выбирать» и «чего в срезе нет»,
+  // и сортировка не должна их перемешивать.
+  const доступные = pickerSortRows(строки.filter(r => r.доступна), def);
+  const недоступные = pickerSortRows(строки.filter(r => !r.доступна), def);
+
+  for (const [i, r] of [...доступные, ...недоступные].entries()) {
+    if (i === доступные.length && недоступные.length) {
       const sep = document.createElement("div");
       sep.className = "picker-divider";
       sep.textContent = "нет в текущем срезе";
@@ -3818,24 +3886,23 @@ function buildPickerSlicer(def) {
     }
     const row = document.createElement("div");
     row.className = "picker-row";
-    row.dataset.label = label;
-    if (sel.has(v)) row.classList.add("selected");
-    if (!count) row.classList.add("empty");
-    if (q && !label.toLowerCase().includes(q)) row.style.display = "none";
+    row.dataset.label = r.label;
+    if (sel.has(r.v)) row.classList.add("selected");
+    if (!r.count) row.classList.add("empty");
+    if (q && !r.label.toLowerCase().includes(q)) row.style.display = "none";
     const labelEl = document.createElement("span");
     labelEl.className = "picker-row-label";
-    labelEl.textContent = label;
-    labelEl.title = label;
+    labelEl.textContent = r.label;
+    labelEl.title = r.label;
     const countEl = document.createElement("span");
     countEl.className = "picker-row-count";
-    countEl.textContent = pickerNumber(count);
+    countEl.textContent = pickerNumber(r.count);
     row.appendChild(labelEl);
     row.appendChild(countEl);
     if (contractedShown) {
-      const contracted = pickerContractedFor(def.key, v) || 0;
       const contractedEl = document.createElement("span");
       contractedEl.className = "picker-row-count";
-      contractedEl.textContent = pickerNumber(contracted);
+      contractedEl.textContent = pickerNumber(r.contracted);
       applyStatusInk(contractedEl, "contracting");
       row.appendChild(contractedEl);
 
@@ -3843,15 +3910,14 @@ function buildPickerSlicer(def) {
       // с запасом, минус — дефицит. Знак показывается явно (со знаком «+»
       // у положительной), цвет — зелёный/красный; ноль остаётся серым,
       // это ровно закрытая потребность, а не «хорошо» и не «плохо».
-      const diff = contracted - count;
       const diffEl = document.createElement("span");
       diffEl.className = "picker-row-count picker-row-diff"
-        + (diff > 0 ? " pos" : diff < 0 ? " neg" : "");
-      diffEl.textContent = diff > 0 ? `+${pickerNumber(diff)}` : pickerNumber(diff);
+        + (r.diff > 0 ? " pos" : r.diff < 0 ? " neg" : "");
+      diffEl.textContent = r.diff > 0 ? `+${pickerNumber(r.diff)}` : pickerNumber(r.diff);
       row.appendChild(diffEl);
     }
     row.addEventListener("click", () => {
-      if (sel.has(v)) sel.delete(v); else sel.add(v);
+      if (sel.has(r.v)) sel.delete(r.v); else sel.add(r.v);
       onPickerChange();
     });
     list.appendChild(row);
@@ -6064,6 +6130,7 @@ function clearWorkspace() {
   for (const key of Object.keys(state.picker.sel)) state.picker.sel[key].clear();
   state.picker.metric = null;
   state.picker.search = {};
+  state.picker.sort = {};
   state.picker.expandedContracts.clear();
   state.pendingLinkIds = new Set();
   state.contractLineTotals = [];
@@ -8887,7 +8954,11 @@ function видимыеПунктыПанели(панель) {
 // Хранится за пользователем на сервере (users.menu_prefs), как цвет подписей
 // и гамма рядом: на площадке за одной машиной работают посменно, и
 // настройка должна ехать за человеком, а не за компьютером.
-let menuPrefs = { order: {}, favorites: [] };
+// collapsed — свёрнутые блоки панели (2026-08-11, запрос пользователя),
+// названиями групп: собственного идентификатора у блока нет, он и собирается
+// по названию (см. renderActionsPanel). Хранится там же, где порядок и
+// избранное, и по той же причине — за ЧЕЛОВЕКОМ, а не за компьютером.
+let menuPrefs = { order: {}, favorites: [], collapsed: [] };
 
 function имяГруппыМеню(группа) {
   return группа.querySelector(":scope > .submenu-trigger").textContent.trim();
@@ -8927,9 +8998,10 @@ function applyMenuPrefs() {
 }
 
 async function loadMenuPrefs(user) {
-  menuPrefs = (user && user.menu_prefs) || { order: {}, favorites: [] };
+  menuPrefs = (user && user.menu_prefs) || { order: {}, favorites: [], collapsed: [] };
   menuPrefs.order = menuPrefs.order || {};
   menuPrefs.favorites = menuPrefs.favorites || [];
+  menuPrefs.collapsed = menuPrefs.collapsed || [];
   applyMenuPrefs();
 }
 
@@ -8938,7 +9010,8 @@ async function saveMenuPrefs() {
   try {
     await api(`/users/${state.currentUser.id}/menu-prefs`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ order: menuPrefs.order, favorites: menuPrefs.favorites }),
+      body: JSON.stringify({ order: menuPrefs.order, favorites: menuPrefs.favorites,
+                             collapsed: menuPrefs.collapsed || [] }),
     });
   } catch (e) {
     showToast("Не удалось сохранить настройку меню: " + e.message, "warning");
@@ -9038,7 +9111,10 @@ function кнопкаПанели(оригинал) {
 // Группа, не названная здесь, попадает в первую колонку: новый пункт меню
 // должен появиться в панели сам, а не потеряться молча.
 const ACTIONS_PANEL_COLUMNS = [
-  ["Справочники"],
+  // «Документы» — НАД «Справочниками» и в той же колонке (2026-08-11):
+  // документ меняет данные по контрактам, справочник описывает, чем их
+  // менять, и стоять они должны рядом.
+  ["Документы", "Справочники"],
   ["Обмен данными", "Отчёты"],
   ["Настройки", "Администрирование"],
 ];
@@ -9061,8 +9137,38 @@ function renderActionsPanel() {
     const блок = document.createElement("div");
     блок.className = "actions-panel-group";
     if (menuCustomizing) включитьПриёмБроска(блок);
+    // Заголовок — кнопка сворачивания (2026-08-11, запрос пользователя).
+    // Само название остаётся первым текстом в h4: собратьПорядокИзПанели и
+    // сохранение свёрнутости ищут блок по нему, и стрелка со счётчиком
+    // вынесены в отдельные <span>, чтобы textContent заголовка их не
+    // захватывал.
     const заголовок = document.createElement("h4");
-    заголовок.textContent = группа.querySelector(":scope > .submenu-trigger").textContent.trim();
+    заголовок.className = "actions-panel-toggle";
+    заголовок.title = "Свернуть или развернуть блок";
+    const стрелка = document.createElement("span");
+    стрелка.className = "caret";
+    стрелка.textContent = "▼";
+    const название = document.createElement("span");
+    название.className = "group-name";
+    название.textContent = имяГруппы;
+    const счётчик = document.createElement("span");
+    счётчик.className = "count";
+    заголовок.append(стрелка, название, счётчик);
+    заголовок.addEventListener("click", async () => {
+      // В режиме настройки блок не сворачивается: пункты в нём сейчас
+      // перетаскивают, и сложить его значило бы уронить перетаскиваемое в
+      // невидимое место.
+      if (menuCustomizing) return;
+      const свёрнут = блок.classList.toggle("collapsed");
+      const набор = new Set(menuPrefs.collapsed || []);
+      if (свёрнут) набор.add(имяГруппы); else набор.delete(имяГруппы);
+      menuPrefs.collapsed = [...набор];
+      // Пишем сразу, а не при закрытии панели: свернуть блок — законченное
+      // действие, и потерять его из-за того, что вкладку закрыли крестиком,
+      // незачем. Настройка личная и мелкая, отдельного подтверждения не
+      // требует (тот же приём, что у звёздочки избранного рядом).
+      await saveMenuPrefs();
+    });
     блок.appendChild(заголовок);
     for (const пункт of видимыеПунктыПанели(группа.querySelector(":scope > .submenu-panel"))) {
       if (!пункт.classList.contains("submenu")) { блок.appendChild(кнопкаПанели(пункт)); continue; }
@@ -9075,6 +9181,14 @@ function renderActionsPanel() {
       видимыеПунктыПанели(пункт.querySelector(":scope > .submenu-panel"))
         .forEach(п => под.appendChild(кнопкаПанели(п)));
       блок.appendChild(под);
+    }
+    // Свёрнутость — ПОСЛЕ наполнения: счётчик считает то, что реально
+    // попало в блок с учётом ролей, а не то, что есть в разметке.
+    счётчик.textContent = блок.querySelectorAll("button[data-menu-id], .actions-panel-item").length + " шт.";
+    // В режиме настройки блоки принудительно развёрнуты: переставлять пункты
+    // в свёрнутом нечем, а бросок в него улетал бы в никуда.
+    if (!menuCustomizing && (menuPrefs.collapsed || []).includes(имяГруппы)) {
+      блок.classList.add("collapsed");
     }
     блоки.set(имяГруппы, блок);
   }
@@ -9112,8 +9226,8 @@ function обновитьКнопкуНастройки() {
 // восстановить его в памяти уже нечем — сохранённой копии «как было» нет и
 // заводить её ради одной кнопки незачем.
 document.getElementById("actions-panel-reset").addEventListener("click", async () => {
-  if (!confirm("Вернуть меню к исходному виду? Ваш порядок пунктов и отметки избранного будут сняты.")) return;
-  menuPrefs = { order: {}, favorites: [] };
+  if (!confirm("Вернуть меню к исходному виду? Ваш порядок пунктов, отметки избранного и свёрнутые блоки будут сняты.")) return;
+  menuPrefs = { order: {}, favorites: [], collapsed: [] };
   await saveMenuPrefs();
   location.reload();
 });
@@ -9131,7 +9245,11 @@ document.getElementById("actions-panel-customize").addEventListener("click", asy
 function собратьПорядокИзПанели() {
   const порядок = {};
   document.querySelectorAll("#actions-panel-body .actions-panel-group").forEach(блок => {
-    const имя = блок.querySelector("h4").textContent.trim();
+    // Название — из отдельного <span>, а не из всего заголовка: в h4 рядом
+    // живут стрелка сворачивания и счётчик пунктов (2026-08-11), и
+    // textContent целиком дал бы ключ вида «▼Справочники12 шт.» — порядок
+    // сохранился бы под именем, которого applyMenuPrefs не найдёт.
+    const имя = блок.querySelector("h4 .group-name").textContent.trim();
     const ids = [...блок.querySelectorAll("[data-menu-id]")].map(el => el.dataset.menuId);
     if (ids.length) порядок[имя] = ids;
   });
@@ -13549,6 +13667,59 @@ document.getElementById("cpe-add-agreement").addEventListener("click", async () 
   await renderCounterpartyAgreements();
 });
 
+// ---------- производительность завода (2026-08-11, см. app/capacity.py) ----------
+//
+// Одна пара функций на ДВЕ формы — карточку контрагента и контракт: таблица
+// в них одна и та же, отличается только колонками (комментарий у завода,
+// «от контрагента» в контракте). Вторая копия разошлась бы с первой на
+// первой же правке.
+//
+// Строки — по типам изделий, известным системе (state.labelVisibility, тот
+// же источник, что у подсказок в позициях контракта), плюс типы, которые
+// уже есть в сохранённых нормативах: тип мог исчезнуть из чертежа, а
+// заведённая по нему цифра — остаться, и молча потерять её нельзя.
+function capacityTypes(saved) {
+  const типы = new Set(Object.keys(state.labelVisibility || {}));
+  for (const c of saved || []) типы.add(c.element_type);
+  return Array.from(типы).sort((a, b) => a.localeCompare(b, "ru"));
+}
+
+function renderCapacityTable(tableId, saved, opts = {}) {
+  const по_типу = new Map((saved || []).map(c => [c.element_type, c]));
+  const базовые = new Map((opts.base || []).map(c => [c.element_type, c.per_day]));
+  const шапка = ["Тип элемента", "шт./день"]
+    .concat(opts.withComment ? ["Комментарий"] : [])
+    .concat(opts.base ? ["от контрагента"] : []);
+  const строки = capacityTypes((saved || []).concat(opts.base || [])).map(тип => {
+    const c = по_типу.get(тип) || {};
+    const база = базовые.get(тип);
+    return `<tr data-type="${escapeHtml(тип)}">
+      <td>${escapeHtml(тип)}</td>
+      <td><input type="number" min="0" step="0.1" class="cap-per-day" style="width:90px"
+                 value="${c.per_day !== undefined && c.per_day !== null ? c.per_day : ""}"
+                 placeholder="${база !== undefined ? база : ""}"/></td>
+      ${opts.withComment ? `<td><input type="text" class="cap-comment" style="width:100%"
+                 value="${escapeHtml(c.comment || "")}"/></td>` : ""}
+      ${opts.base ? `<td class="hint-text">${база !== undefined ? база : "не задана"}</td>` : ""}
+    </tr>`;
+  }).join("");
+  document.getElementById(tableId).innerHTML = строки
+    ? `<thead><tr>${шапка.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${строки}</tbody>`
+    : `<tbody><tr><td class="hint-text">Типы изделий появятся после загрузки чертежа</td></tr></tbody>`;
+}
+
+// Пустое поле — это «норматива нет», а не ноль: строка просто не уходит на
+// сервер (он такие и не принимает, см. _clean в app/capacity.py).
+function readCapacityTable(tableId) {
+  return [...document.getElementById(tableId).querySelectorAll("tr[data-type]")]
+    .map(tr => ({
+      element_type: tr.dataset.type,
+      per_day: parseFloat((tr.querySelector(".cap-per-day") || {}).value),
+      comment: (tr.querySelector(".cap-comment") || {}).value || null,
+    }))
+    .filter(c => Number.isFinite(c.per_day) && c.per_day > 0);
+}
+
 async function openCounterpartyEdit(cp) {
   editingCounterpartyId = cp ? cp.id : null;
   // Заголовок называет КОНТРАГЕНТА, а не операцию (2026-08-05): форма
@@ -13584,7 +13755,9 @@ async function openCounterpartyEdit(cp) {
   // Реквизиты юрлица правят раз в жизни, а форму открывают ради
   // контрактации — у существующего контрагента шапка свёрнута (2026-08-05).
   // У НОВОГО раскрыта: иначе заполнять нечего, форма выглядела бы пустой.
+  renderCapacityTable("cpe-capacity", (cp && cp.capacity) || [], { withComment: true });
   document.getElementById("cpe-details-requisites").open = !cp;
+  document.getElementById("cpe-details-capacity").open = false;
   document.getElementById("cpe-details-contracting").open = true;
   // Договоры при каждом открытии формы начинаются свёрнутыми: восстановление
   // раскрытого состояния (см. renderCounterpartyAgreements) работает внутри
@@ -13605,6 +13778,7 @@ document.getElementById("counterparty-edit-save").addEventListener("click", asyn
     contact_person: document.getElementById("cpe-contact-person").value.trim() || null,
     contact_phone: document.getElementById("cpe-contact-phone").value.trim() || null,
     code: document.getElementById("cpe-code").value.trim() || null,
+    capacity: readCapacityTable("cpe-capacity"),
   };
   if (!body.full_name || !body.short_name) {
     document.getElementById("counterparty-edit-error").textContent = "Укажите полное и краткое наименование";
@@ -13903,6 +14077,360 @@ document.getElementById("menu-contracts").addEventListener("click", async () => 
 });
 document.getElementById("contracts-close").addEventListener("click", () => contractsBackdrop.classList.remove("open"));
 
+// ==================== ДОКУМЕНТ «СМЕНА ПОСТАВЩИКА» (2026-08-11) ====================
+//
+// Перевод НЕПОСТАВЛЕННОГО остатка одного контракта на другой. Все правила
+// живут на сервере (app/supplier_change.py), здесь — только показ и выбор:
+// какие изделия отдать новому заводу и сколько их влезает в его контракт.
+//
+// Изделия перечисляются ПОИМЁННО, а не одним числом: человек решает, какие
+// именно колонны отдать, — по марке, адресу и ярусу. Поле «сколько» рядом
+// оставлено для случая «всё равно какие»: оно отмечает первые N по порядку,
+// то есть остаётся тем же выбором, просто сделанным быстро.
+const scdBackdrop = document.getElementById("supplier-change-backdrop");
+const scdFormBackdrop = document.getElementById("supplier-change-form-backdrop");
+const scdViewBackdrop = document.getElementById("supplier-change-view-backdrop");
+
+let scdContracts = [];       // контракты ОБЪЕКТА (свой запрос, не state.contracts — тот на все стройки)
+let scdCandidates = null;    // ответ /candidates
+const scdChosen = new Map(); // ключ позиции -> Set(id изделий)
+
+function scdKey(type, mark) { return `${type || ""} ${mark || ""}`; }
+
+function scdContractLabel(c) {
+  const дог = c.agreement_date
+    ? `${c.agreement_number} от ${formatDateRu(c.agreement_date)}` : c.agreement_number;
+  const спец = c.specification_date
+    ? `${c.specification_number} от ${formatDateRu(c.specification_date)}` : c.specification_number;
+  return `${дог} / ${спец}`;
+}
+
+// Архивные не предлагаются НИ СЛЕВА, НИ СПРАВА: справа их запрещает сервер
+// (архив — отработанный документ), а слева за архивным контрактом по правилу
+// архивации не числится ни одного изделия, то есть переносить оттуда нечего.
+function scdSelectable() { return scdContracts.filter(c => !c.is_archived); }
+
+function scdFillCounterparties(select, выбранный) {
+  const виденные = new Map();
+  for (const c of scdSelectable()) виденные.set(c.counterparty_id, c.counterparty_short_name);
+  select.innerHTML = ['<option value="">— выберите —</option>'].concat(
+    [...виденные.entries()].map(([id, name]) =>
+      `<option value="${id}"${String(id) === String(выбранный) ? " selected" : ""}>${escapeHtml(name)}</option>`)
+  ).join("");
+}
+
+function scdFillContracts(select, counterpartyId) {
+  const свои = scdSelectable().filter(c => String(c.counterparty_id) === String(counterpartyId));
+  select.innerHTML = ['<option value="">— выберите —</option>'].concat(
+    свои.map(c => `<option value="${c.id}">${escapeHtml(scdContractLabel(c))}</option>`)
+  ).join("");
+  select.disabled = !counterpartyId;
+}
+
+function scdCurrentIds() {
+  return {
+    from: document.getElementById("scd-from-contract").value,
+    to: document.getElementById("scd-to-contract").value,
+  };
+}
+
+async function scdReloadCandidates() {
+  const box = document.getElementById("scd-positions");
+  const { from, to } = scdCurrentIds();
+  scdChosen.clear();
+  scdCandidates = null;
+  document.getElementById("scd-error").textContent = "";
+  if (!from || !to) {
+    box.innerHTML = '<div class="hint-text">Выберите текущий и новый контракты — ниже появится, что можно перенести.</div>';
+    scdUpdateSummary();
+    return;
+  }
+  if (from === to) {
+    box.innerHTML = '<div class="hint-text">Текущий и новый контракты совпадают.</div>';
+    scdUpdateSummary();
+    return;
+  }
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    scdCandidates = await api(objectUrl("/supplier-changes/candidates",
+      { from_contract_id: from, to_contract_id: to }));
+    scdRenderPositions();
+  } catch (e) {
+    box.innerHTML = "";
+    document.getElementById("scd-error").textContent = e.message;
+  }
+  scdUpdateSummary();
+}
+
+function scdRenderPositions() {
+  const box = document.getElementById("scd-positions");
+  box.innerHTML = "";
+  if (!scdCandidates) return;
+  if (!scdCandidates.positions.length) {
+    box.innerHTML = '<div class="hint-text">На текущем контракте нет изделий, доступных к переносу: '
+      + 'либо к нему ничего не привязано, либо всё уже поставлено на площадку.</div>';
+  } else {
+    const table = document.createElement("table");
+    table.className = "scd-pos-table";
+    table.innerHTML = `<thead><tr>
+        <th>Тип</th><th>Марка</th><th>Не поставлено</th>
+        <th>Свободно в новом контракте</th><th>Перенести</th><th></th>
+      </tr></thead>`;
+    const tbody = document.createElement("tbody");
+    for (const p of scdCandidates.positions) {
+      const ключ = scdKey(p.element_type, p.mark);
+      const потолок = Math.min(p.elements.length, p.available_in_new);
+      const tr = document.createElement("tr");
+      if (!потолок) tr.className = "no-room";
+      tr.innerHTML = `
+        <td>${escapeHtml(p.element_type || "—")}</td>
+        <td>${escapeHtml(p.mark || "—")}</td>
+        <td>${p.elements.length}</td>
+        <td class="scd-avail">${p.available_in_new}</td>
+        <td><input type="number" min="0" max="${потолок}" value="0" ${потолок ? "" : "disabled"}/></td>
+        <td><button type="button" class="btn btn-sm btn-secondary">Изделия…</button></td>`;
+      tbody.appendChild(tr);
+
+      const строкаИзделий = document.createElement("tr");
+      строкаИзделий.style.display = "none";
+      const ячейка = document.createElement("td");
+      ячейка.colSpan = 6;
+      const список = document.createElement("div");
+      список.className = "scd-elements";
+      for (const el of p.elements) {
+        const подпись = document.createElement("label");
+        const флажок = document.createElement("input");
+        флажок.type = "checkbox";
+        флажок.dataset.elementId = String(el.id);
+        флажок.disabled = !потолок;
+        флажок.addEventListener("change", () => {
+          const набор = scdChosen.get(ключ) || new Set();
+          if (флажок.checked) {
+            if (набор.size >= потолок) {
+              // Молча снять отметку было бы хуже отказа: человек решил бы,
+              // что промахнулся мимо флажка.
+              флажок.checked = false;
+              document.getElementById("scd-error").textContent =
+                `Позиция «${p.element_type || "—"} / ${p.mark || "—"}»: в новом контракте свободно ${p.available_in_new} шт.`;
+              return;
+            }
+            набор.add(el.id);
+          } else {
+            набор.delete(el.id);
+          }
+          scdChosen.set(ключ, набор);
+          tr.querySelector("input[type=number]").value = набор.size;
+          scdUpdateSummary();
+        });
+        const текст = [el.mark || "—", el.address || `№${el.id}`,
+                       state.statusLabels[el.current_status] || el.current_status]
+          .filter(Boolean).join(" · ");
+        подпись.append(флажок, document.createTextNode(текст));
+        список.appendChild(подпись);
+      }
+      ячейка.appendChild(список);
+      строкаИзделий.appendChild(ячейка);
+      tbody.appendChild(строкаИзделий);
+
+      const кнопка = tr.querySelector("button");
+      кнопка.addEventListener("click", () => {
+        const открыт = строкаИзделий.style.display !== "none";
+        строкаИзделий.style.display = открыт ? "none" : "table-row";
+        кнопка.textContent = открыт ? "Изделия…" : "Скрыть";
+      });
+      // «Сколько» — быстрый способ сказать «всё равно какие»: отмечает первые
+      // N изделий позиции по тому же порядку, в каком они показаны. Флажки
+      // при этом остаются главными — они и есть то, что уходит на сервер.
+      tr.querySelector("input[type=number]").addEventListener("change", (e) => {
+        const сколько = Math.max(0, Math.min(потолок, Number(e.target.value) || 0));
+        e.target.value = сколько;
+        const набор = new Set(p.elements.slice(0, сколько).map(el => el.id));
+        scdChosen.set(ключ, набор);
+        список.querySelectorAll("input[type=checkbox]").forEach(ф => {
+          ф.checked = набор.has(Number(ф.dataset.elementId));
+        });
+        scdUpdateSummary();
+      });
+    }
+    table.appendChild(tbody);
+    box.appendChild(table);
+  }
+
+  // Заблокированное показываем ВСЕГДА, когда оно есть: «этих изделий в
+  // списке нет, потому что они уже на площадке» — ответ, а их отсутствие
+  // без объяснения читалось бы как потеря данных.
+  if (scdCandidates.blocked.length) {
+    const блок = document.createElement("div");
+    блок.className = "scd-blocked";
+    const всего = scdCandidates.blocked.reduce((s, b) => s + b.count, 0);
+    блок.innerHTML = `<p class="hint-text"><b>Не переносится: ${всего} шт.</b> — статус
+      «${escapeHtml(scdCandidates.blocked_from_label)}» и выше, изделия уже изготовлены и
+      поставлены на площадку.</p>`;
+    const t = document.createElement("table");
+    t.className = "scd-pos-table";
+    t.innerHTML = "<thead><tr><th>Тип</th><th>Марка</th><th>Количество</th></tr></thead><tbody>"
+      + scdCandidates.blocked.map(b =>
+        `<tr class="no-room"><td>${escapeHtml(b.element_type || "—")}</td>`
+        + `<td>${escapeHtml(b.mark || "—")}</td><td>${b.count}</td></tr>`).join("")
+      + "</tbody>";
+    блок.appendChild(t);
+    box.appendChild(блок);
+  }
+}
+
+function scdChosenIds() {
+  const ids = [];
+  for (const набор of scdChosen.values()) ids.push(...набор);
+  return ids;
+}
+
+function scdUpdateSummary() {
+  const ids = scdChosenIds();
+  const позиций = [...scdChosen.values()].filter(s => s.size).length;
+  document.getElementById("scd-summary").textContent = ids.length
+    ? `К переносу: ${ids.length} шт. по ${позиций} позициям`
+    : "Ничего не выбрано";
+  document.getElementById("scd-save").disabled = !ids.length;
+}
+
+async function scdRenderList() {
+  const box = document.getElementById("scd-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  const docs = await api(objectUrl("/supplier-changes"));
+  box.innerHTML = "";
+  if (!docs.length) {
+    box.innerHTML = '<div class="hint-text">Документов пока нет.</div>';
+    return;
+  }
+  for (const d of docs) {
+    const карточка = document.createElement("div");
+    карточка.className = "scd-doc-card";
+    карточка.innerHTML = `
+      <div class="scd-doc-title">№ ${escapeHtml(d.number)} от ${formatDateRu(d.doc_date)} · ${d.items} шт.</div>
+      <div class="hint-text">${escapeHtml(d.from_contract_name)} → ${escapeHtml(d.to_contract_name)}</div>
+      <div class="hint-text">${d.reason ? escapeHtml(d.reason) + " · " : ""}${escapeHtml(d.created_by || "")}</div>`;
+    карточка.addEventListener("click", () => openSupplierChangeDoc(d.id));
+    box.appendChild(карточка);
+  }
+}
+
+async function openSupplierChangeDoc(docId) {
+  const doc = await api(`/supplier-changes/${docId}`);
+  document.getElementById("scd-view-title").textContent =
+    `Смена поставщика № ${doc.number} от ${formatDateRu(doc.doc_date)}`;
+  document.getElementById("scd-view-head").innerHTML =
+    `${escapeHtml(doc.from_contract_name)} → ${escapeHtml(doc.to_contract_name)}<br/>`
+    + `${doc.reason ? "Причина: " + escapeHtml(doc.reason) + "<br/>" : ""}`
+    + `${doc.comment ? escapeHtml(doc.comment) + "<br/>" : ""}`
+    + `Записал: ${escapeHtml(doc.created_by || "—")}`;
+  const box = document.getElementById("scd-view-items");
+  // Показываем и статус НА МОМЕНТ переноса, и текущий: документ отвечает за
+  // первое, а второе объясняет, что с изделием стало дальше.
+  box.innerHTML = `<table class="scd-pos-table"><thead><tr>
+      <th>Тип</th><th>Марка</th><th>Адрес</th><th>Статус при переносе</th><th>Статус сейчас</th>
+    </tr></thead><tbody>`
+    + doc.items.map(i => `<tr>
+        <td>${escapeHtml(i.element_type || "—")}</td>
+        <td>${escapeHtml(i.mark || "—")}</td>
+        <td>${escapeHtml(i.address || "—")}</td>
+        <td>${escapeHtml(state.statusLabels[i.status_at_move] || i.status_at_move || "—")}</td>
+        <td>${escapeHtml(state.statusLabels[i.current_status] || i.current_status || "изделие удалено")}</td>
+      </tr>`).join("")
+    + "</tbody></table>";
+  scdViewBackdrop.classList.add("open");
+}
+
+document.getElementById("menu-supplier-change").addEventListener("click", async () => {
+  scdBackdrop.classList.add("open");
+  try {
+    await scdRenderList();
+  } catch (e) {
+    document.getElementById("scd-list").innerHTML =
+      `<div class="error-text">${escapeHtml(e.message)}</div>`;
+  }
+});
+document.getElementById("scd-close").addEventListener("click", () => scdBackdrop.classList.remove("open"));
+document.getElementById("scd-view-close").addEventListener("click", () => scdViewBackdrop.classList.remove("open"));
+document.getElementById("scd-form-cancel").addEventListener("click", () => scdFormBackdrop.classList.remove("open"));
+
+document.getElementById("scd-new").addEventListener("click", async () => {
+  document.getElementById("scd-date").value = todayIsoLocal();
+  document.getElementById("scd-number").value = "";
+  document.getElementById("scd-comment").value = "";
+  document.getElementById("scd-error").textContent = "";
+  document.getElementById("scd-positions").innerHTML = "";
+  scdChosen.clear();
+  scdUpdateSummary();
+  try {
+    const refs = await api(objectUrl("/supplier-changes/refs"));
+    scdContracts = refs.contracts;
+  } catch (e) {
+    showToast("Не удалось прочитать контракты объекта: " + e.message, "error");
+    return;
+  }
+  if (scdSelectable().length < 2) {
+    showToast("Для смены поставщика нужны минимум два действующих контракта объекта", "warning");
+    return;
+  }
+  for (const сторона of ["from", "to"]) {
+    scdFillCounterparties(document.getElementById(`scd-${сторона}-counterparty`), "");
+    scdFillContracts(document.getElementById(`scd-${сторона}-contract`), "");
+  }
+  scdReloadCandidates();
+  scdFormBackdrop.classList.add("open");
+});
+
+for (const сторона of ["from", "to"]) {
+  document.getElementById(`scd-${сторона}-counterparty`).addEventListener("change", (e) => {
+    scdFillContracts(document.getElementById(`scd-${сторона}-contract`), e.target.value);
+    scdReloadCandidates();
+  });
+  document.getElementById(`scd-${сторона}-contract`).addEventListener("change", scdReloadCandidates);
+}
+
+document.getElementById("scd-save").addEventListener("click", async () => {
+  const кнопка = document.getElementById("scd-save");
+  const ошибка = document.getElementById("scd-error");
+  ошибка.textContent = "";
+  const { from, to } = scdCurrentIds();
+  const ids = scdChosenIds();
+  if (!from || !to || !ids.length) { ошибка.textContent = "Выберите контракты и позиции"; return; }
+  кнопка.disabled = true;
+  try {
+    const result = await api("/supplier-changes", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        object_id: state.objectId,
+        number: document.getElementById("scd-number").value.trim() || null,
+        doc_date: document.getElementById("scd-date").value,
+        from_contract_id: Number(from), to_contract_id: Number(to),
+        reason: document.getElementById("scd-reason").value || null,
+        comment: document.getElementById("scd-comment").value.trim() || null,
+        element_ids: ids,
+      }),
+    });
+    scdFormBackdrop.classList.remove("open");
+    // Пропущенное показываем ЯВНО: изделие могло уехать в «Отгружен» или
+    // занять чужое место между открытием формы и записью, и «перенесено 12
+    // из 15» без объяснения было бы хуже отказа.
+    if (result.skipped.length) {
+      showToast(`Документ № ${result.number}: перенесено ${result.moved}, пропущено ${result.skipped.length}. `
+        + result.skipped.slice(0, 3).map(s => `${s.label}: ${s.reason}`).join("; "), "warning");
+    } else {
+      showToast(`Документ № ${result.number} записан: перенесено ${result.moved} шт.`, "success");
+    }
+    await scdRenderList();
+    // Схема показывает поставщика в допстроке подписи и фильтрует по нему —
+    // после переноса её надо перечитать, иначе изделия остались бы за старым
+    // контрактом до следующего опроса.
+    await loadPlan();
+  } catch (e) {
+    ошибка.textContent = e.message;
+  } finally {
+    кнопка.disabled = false;
+  }
+});
+
 // ---------- "Развёрнуто" — вкладка ВНУТРИ формы контракта (живой запрос
 // пользователя, была отдельной модалкой по кнопке "Развернуть…", см.
 // Docs/backlog.md), не отдельная модалка. Сначала — физические элементы
@@ -13915,11 +14443,30 @@ function setCeView(view) {
   document.querySelectorAll("#ce-view-toggle .view-mode-btn").forEach(b => b.classList.toggle("active", b.dataset.ceView === view));
   document.getElementById("ce-view-main").style.display = view === "main" ? "" : "none";
   document.getElementById("ce-view-expanded").style.display = view === "expanded" ? "" : "none";
+  document.getElementById("ce-view-capacity").style.display = view === "capacity" ? "" : "none";
   if (view === "expanded") renderContractExpandedView();
+  // Таблица производительности перерисовывается при КАЖДОМ показе: базовые
+  // цифры берутся у выбранного сейчас контрагента, а его в форме меняют.
+  if (view === "capacity") renderContractCapacityView();
 }
 document.querySelectorAll("#ce-view-toggle .view-mode-btn").forEach(btn => {
   btn.addEventListener("click", () => setCeView(btn.dataset.ceView));
 });
+
+// Свои переопределения контракта живут в форме до сохранения (человек мог
+// уже что-то ввести и переключиться на другую закладку), поэтому таблица
+// перечитывается из неё же, а не из загруженного контракта.
+let ceCapacityDraft = [];
+
+function renderContractCapacityView() {
+  // Уже введённое в этой закладке не теряется при переключении вкладок:
+  // снимаем его до перерисовки (сохранение идёт только по кнопке формы).
+  if (document.getElementById("ce-capacity").querySelector("tr[data-type]")) {
+    ceCapacityDraft = readCapacityTable("ce-capacity");
+  }
+  const контрагент = currentContractCounterparty();
+  renderCapacityTable("ce-capacity", ceCapacityDraft, { base: (контрагент && контрагент.capacity) || [] });
+}
 
 async function renderContractExpandedView() {
   const tbody = document.getElementById("contract-elements-tbody");
@@ -14299,6 +14846,12 @@ async function openContractEdit(contract) {
   document.getElementById("ce-known-marks").innerHTML =
     Array.from(knownMarks).sort().map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
 
+  // Переопределения производительности этого контракта (2026-08-11).
+  // Держатся черновиком в форме: закладку могли не открывать вовсе, а
+  // сохранение отправляет их в любом случае — иначе одно нажатие
+  // «Сохранить» со вкладки «Основное» стирало бы заведённые цифры.
+  ceCapacityDraft = (contract && contract.capacity) ? contract.capacity.slice() : [];
+  document.getElementById("ce-capacity").innerHTML = "";   // черновик прошлого открытия
   document.getElementById("ce-lines").innerHTML = "";
   if (contract && contract.lines.length) {
     for (const l of contract.lines) addContractLineRow(l.element_type, l.mark, l.quantity);
@@ -14345,6 +14898,10 @@ document.getElementById("contract-edit-save").addEventListener("click", async ()
     is_archived: document.getElementById("ce-archived").checked,
     lines,
     incidents,
+    // Закладку производительности могли и не открывать — тогда уходит то,
+    // что было загружено с контрактом (ceCapacityDraft), а не пустой список.
+    capacity: document.getElementById("ce-view-capacity").style.display === "none"
+      ? ceCapacityDraft : readCapacityTable("ce-capacity"),
   };
   try {
     if (editingContractId) {
@@ -14841,6 +15398,156 @@ function документНадпись(номер, дата) {
   return дата ? `${номер} от ${formatDateRu(дата)}` : номер;
 }
 
+// ================== «Аналитическая справка» (2026-08-11) ==================
+//
+// Отчёт-страница, а не одна таблица: показатели, выводы, четыре таблицы и
+// график. Всё, что в нём написано, считает СЕРВЕР (app/report_analytics.py) —
+// здесь только вёрстка, ни одного вычисления: числа на экране, в XLSX и в PDF
+// обязаны быть одними и теми же.
+
+// Как показать значение колонки. Разбор ведётся по kind из описания колонки
+// (то же описание уходит в Excel и PDF) — второй список ключей на клиенте
+// разошёлся бы с серверным на первой правке.
+function anCellHtml(row, column) {
+  const значение = row[column.key];
+  if (column.kind === "verdict") {
+    const в = значение || {};
+    return `<td><span class="an-pill ${escapeHtml(в.code || "")}">${escapeHtml(в.label || "")}</span></td>`;
+  }
+  if (column.kind === "date") {
+    return `<td>${значение ? formatDateRu(значение) : "—"}</td>`;
+  }
+  if (column.key === "days_left") {
+    // У начатых этапов число отрицательное («минус 41 день до старта»
+    // читается как ребус). В Excel остаётся числом — там по нему сортируют.
+    return `<td>${значение === null || значение === undefined ? ""
+      : (значение <= 0 ? `идёт ${-значение} дн.` : значение)}</td>`;
+  }
+  if (column.kind === "num") {
+    // Дефицит и «нет контракта» — красным: ради них отчёт и открывают.
+    const тревожно = (column.key === "deficit" || column.key === "no_contract"
+                      || column.key === "missing") && значение > 0;
+    return `<td class="${тревожно ? "an-bad" : ""}">${значение === null || значение === undefined ? "" : значение}</td>`;
+  }
+  return `<td class="txt">${значение === null || значение === undefined ? "—" : escapeHtml(String(значение))}</td>`;
+}
+
+function anTableHtml(block, rows, totalLabel) {
+  if (!rows.length) return `<div class="an-note">Нет данных</div>`;
+  const шапка = block.columns.map(c =>
+    `<th class="${c.kind === "text" || c.kind === "verdict" ? "txt" : ""}">${escapeHtml(c.label)}</th>`).join("");
+  const тело = rows.map(r => `<tr>${block.columns.map(c => anCellHtml(r, c)).join("")}</tr>`).join("");
+  let итог = "";
+  if (block.total && totalLabel) {
+    итог = `<tr class="an-total"><td class="txt">${escapeHtml(totalLabel)}</td>` +
+      block.columns.slice(1).map(c => `<td>${c.key in block.total ? block.total[c.key] : ""}</td>`).join("") +
+      "</tr>";
+  }
+  return `<div class="an-scroll"><table class="an-table">
+    <thead><tr>${шапка}</tr></thead><tbody>${тело}${итог}</tbody></table></div>`;
+}
+
+// График динамики — свой SVG, а не общий с «Динамикой»: там недельные
+// столбики план/факт по двум шкалам, здесь четыре накопительные кривые.
+function anChartHtml(dyn) {
+  if (!dyn || !dyn.weeks.length) return `<div class="an-note">Нет данных для графика</div>`;
+  const W = 900, H = 200, L = 46, R = 20, T = 14, B = 26;
+  const ряды = [
+    { key: "need", label: "Потребность", color: "#9aa0a6", dash: "5 4" },
+    { key: "contracted", label: "Законтрактовано", color: "#3b82f6" },
+    { key: "delivered", label: "Поставлено", color: "#8b5cf6" },
+    { key: "installed", label: "Смонтировано", color: "#1e7e34" },
+  ];
+  const максимум = Math.max(1, ...ряды.flatMap(р => dyn.series[р.key] || []));
+  const X = i => L + (W - L - R) * (dyn.weeks.length > 1 ? i / (dyn.weeks.length - 1) : 0);
+  const Y = v => H - B - (H - T - B) * (v / максимум);
+  const линии = ряды.map(р => {
+    const точки = (dyn.series[р.key] || []).map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+    return `<polyline fill="none" stroke="${р.color}" stroke-width="2"
+      ${р.dash ? `stroke-dasharray="${р.dash}"` : ""} points="${точки}"/>`;
+  }).join("");
+  const сегодня = dyn.today_index === null ? "" :
+    `<line x1="${X(dyn.today_index).toFixed(1)}" y1="${T}" x2="${X(dyn.today_index).toFixed(1)}" y2="${H - B}"
+       stroke="#c0392b" stroke-width="1.5" stroke-dasharray="4 3"/>
+     <text x="${(X(dyn.today_index) + 4).toFixed(1)}" y="${T + 10}" font-size="11" fill="#c0392b">дата справки</text>`;
+  // Подписей по оси — не больше восьми: на пятидесяти неделях они иначе
+  // сливаются в чёрную полосу.
+  const шаг = Math.max(1, Math.ceil(dyn.weeks.length / 8));
+  const подписи = dyn.weeks.map((w, i) => i % шаг ? "" :
+    `<text x="${X(i).toFixed(1)}" y="${H - 8}" font-size="10" fill="#6b7280" text-anchor="middle">${formatDateRu(w).slice(0, 5)}</text>`).join("");
+  const легенда = ряды.map(р =>
+    `<span style="color:${р.color}"><b>—</b> ${р.label}</span>`).join(" · ");
+  // height:auto — иначе фиксированная высота при width:100% растягивает
+  // соотношение сторон, и SVG вписывается в кадр с пустыми полями по бокам
+  // (поймано живой проверкой: график занимал половину ширины формы).
+  return `<div class="an-chart"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+      <line x1="${L}" y1="${T}" x2="${L}" y2="${H - B}" stroke="#e6e9ee"/>
+      <line x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}" stroke="#e6e9ee"/>
+      <text x="4" y="${T + 8}" font-size="10" fill="#6b7280">${максимум}</text>
+      <text x="4" y="${H - B}" font-size="10" fill="#6b7280">0</text>
+      ${линии}${сегодня}${подписи}
+    </svg><div class="an-note">${легенда}. Накопительным итогом по неделям.</div></div>`;
+}
+
+function renderAnalyticsReport(data) {
+  const плитки = data.tiles.map(t => `<div class="an-tile ${t.tone || ""}">
+      <div class="an-v">${escapeHtml(String(t.value))}</div>
+      <div class="an-k">${escapeHtml(t.label)}${t.hint ? `<br>${escapeHtml(t.hint)}` : ""}</div>
+    </div>`).join("");
+
+  const выводы = data.conclusions.length
+    ? `<ul class="an-concl">${data.conclusions.map(в =>
+        `<li class="${escapeHtml(в.severity)}">${escapeHtml(в.text)}</li>`).join("")}</ul>`
+    : `<div class="an-note">Замечаний нет</div>`;
+
+  // Блоки «События, задачи, вопросы» — те же, что в ежедневном отчёте, и
+  // ведутся там же: своего хранилища у справки нет (см. app/settings.py).
+  const блоки = [["key_events", "Ключевые события"], ["key_tasks", "Ключевые задачи"],
+                 ["open_questions", "Открытые вопросы"]]
+    .filter(([k]) => (data.notes && data.notes[k] || []).length)
+    .map(([k, подпись]) => `<h5>${подпись}</h5><ul>${data.notes[k]
+      .map(п => `<li>${escapeHtml(п)}</li>`).join("")}</ul>`).join("");
+  const заметки = блоки
+    ? `<div class="an-notes">${блоки}<div class="an-note">Ведутся в «Действия → Справочники →
+         События, задачи, вопросы»${data.notes.effective_date
+           ? `; редакция от ${formatDateRu(data.notes.effective_date)}` : ""}.</div></div>`
+    : "";
+
+  const толькоДефицит = document.getElementById("an-only-deficit").checked;
+  const этапы = толькоДефицит ? data.stages.rows.filter(r => r.deficit > 0) : data.stages.rows;
+  const скрыто = data.stages.rows.length - этапы.length;
+
+  return `${плитки ? `<div class="an-tiles">${плитки}</div>` : ""}
+    <div class="an-section">0. Резюме</div>
+    ${выводы}${заметки}
+    <div class="an-section">1.1. Обеспечение ближайших этапов СМР</div>
+    <div class="an-note">Этапы «кран + стоянка + этаж», где СМР уже идёт или начнётся до
+      ${formatDateRu(data.horizon_end)}. Зачёт контрактов — по маркам; колонка «по типу» справочная.
+      ${скрыто ? `Закрытых позиций скрыто: ${скрыто}.` : ""}</div>
+    ${anTableHtml(data.stages, этапы, "Итого по горизонту")}
+    <div class="an-section">1.2. Общий прогресс контрактации</div>
+    <div class="an-note">«Не в зачёт» — выкуплено по маркам, которых потребность не просит;
+      «привязано к изделиям» — по скольким изделиям контракт реально назначен.</div>
+    ${anTableHtml(data.progress, data.progress.rows, "Итого")}
+    <div class="an-section">2.1. Фронт работ по стоянкам</div>
+    <div class="an-note">Ярус не начинают, пока не смонтирован предыдущий, поэтому показаны
+      текущий незакрытый ярус каждой стоянки и следующий за ним. «На площадке» — заполнена
+      фактическая дата поставки.</div>
+    ${anTableHtml(data.front, data.front.rows)}
+    <div class="an-section">2.2. Чего не хватает на критическом пути</div>
+    ${data.critical.truncated ? `<div class="an-note">Показано ${data.critical.rows.length} строк,
+      ещё ${data.critical.truncated} не показаны — полный перечень в выгрузке XLSX.</div>` : ""}
+    ${anTableHtml(data.critical, data.critical.rows)}
+    <div class="an-section">2.3. Динамика обеспечения</div>
+    ${anChartHtml(data.dynamics)}
+    <div class="an-note">${escapeHtml(data.disclaimer)}</div>
+    ${data.capacity_gaps.length ? `<div class="an-note">Производительность не задана:
+      ${data.capacity_gaps.slice(0, 6).map(g =>
+        `${escapeHtml(g.counterparty || "дефицит без контракта")} — ${escapeHtml(g.element_type || "тип не определён")}
+         (${g.elements} шт.)`).join("; ")}. Заполняется в карточке контрагента,
+      закладка «Производительность».</div>` : ""}`;
+}
+
 const REPORTS = {
   status: {
     title: "Статус монтажа",
@@ -14900,6 +15607,18 @@ const REPORTS = {
     // доступен, но с пометкой (см. app/reports.py: признак не про доступ).
     inDevelopment: true,
   },
+  // «Аналитическая справка» (2026-08-11) — что мешает стройке сейчас:
+  // контрактация под ближайшие этапы СМР и критический путь поставки
+  // (см. app/report_analytics.py). Галочки «учитывать фильтр схемы» у неё
+  // нет: справка всегда по объекту целиком (решение пользователя).
+  analytics: {
+    title: "Аналитическая справка",
+    endpoint: "/reports/analytics",
+    render: renderAnalyticsReport,
+    needsAnalytics: true,
+    noFilter: true,
+    wide: true,
+  },
 };
 let currentReport = "status";
 // Период графика «Динамики» в ФОРМЕ (живой запрос 2026-08-03) — тот же, что
@@ -14950,6 +15669,11 @@ function reportRequestBody() {
     Object.assign(body, myWorkUserSelection());
     body.tz_offset_minutes = new Date().getTimezoneOffset();
     return body;   // element_ids/фильтр схемы к событиям журнала неприменимы
+  }
+  if (REPORTS[currentReport].needsAnalytics) {
+    body.report_date = document.getElementById("an-date").value || null;
+    body.horizon_days = Number(document.getElementById("an-horizon").value) || null;
+    return body;   // фильтр схемы справка не учитывает — она про объект целиком
   }
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
@@ -15815,6 +16539,19 @@ async function loadReport() {
       document.getElementById("ds-from").value = reportData.date_from;
       document.getElementById("ds-to").value = reportData.date_to;
       document.getElementById("ds-step").value = reportData.step;
+    } else if (def.needsAnalytics) {
+      // Горизонты и дату подставляем фактически применёнными: и то, и другое
+      // мог подставить сервер (пустое поле = сегодня, умолчание месяц).
+      const горизонт = document.getElementById("an-horizon");
+      горизонт.innerHTML = reportData.horizons
+        .map(h => `<option value="${h.days}">${escapeHtml(h.label)}</option>`).join("");
+      горизонт.value = reportData.horizon_days;
+      document.getElementById("an-date").value = reportData.report_date;
+      const т = reportData.stages.total;
+      statusLine.textContent =
+        `Горизонт до ${formatDateRu(reportData.horizon_end)}: потребность ${т.need}, ` +
+        (т.deficit > 0 ? `не законтрактовано ${т.deficit}` : "контрактация закрыта") +
+        `. Всего по объекту: ${reportData.progress.total.percent} % контрактации.`;
     } else if (def.flatList) {
       // Строка = отдельное изделие (группировки нет), поэтому число одно.
       statusLine.textContent = `Позиций: ${reportData.total.count}`;
@@ -15862,7 +16599,9 @@ async function switchReport(key) {
   document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
   document.getElementById("report-contracting-box").style.display = REPORTS[key].needsScale ? "" : "none";
   document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
-  document.getElementById("report-use-filter-box").style.display = REPORTS[key].needsWorkPeriod ? "none" : "";
+  document.getElementById("report-analytics-box").style.display = REPORTS[key].needsAnalytics ? "" : "none";
+  document.getElementById("report-use-filter-box").style.display =
+    (REPORTS[key].needsWorkPeriod || REPORTS[key].noFilter) ? "none" : "";
   // Галочка «учитывать фильтр» — со СВОИМ состоянием у каждого отчёта (см.
   // reportUseFilter): у «Статуса комплектации» она включена по умолчанию, и
   // без этого переход по вкладке молча менял бы отбор соседних отчётов.
@@ -15872,6 +16611,18 @@ async function switchReport(key) {
   // колонок, две из которых — свободный текст «было/стало».
   reportsBackdrop.querySelector(".modal").classList.toggle(
     "report-full", !!(REPORTS[key].needsPeriod || REPORTS[key].needsWorkPeriod || REPORTS[key].wide));
+  if (REPORTS[key].needsAnalytics) {
+    // Дата и горизонт заполняются один раз: вернувшись на вкладку, человек
+    // ожидает свой выбор, а не сброс к сегодняшнему дню (тот же приём, что
+    // у периода «Моей работы»).
+    const дата = document.getElementById("an-date");
+    if (!дата.value) дата.value = todayIsoLocal();
+    // Список горизонтов приходит с сервера (app/report_analytics.HORIZONS) —
+    // он же их и проверяет; второй список здесь однажды разошёлся бы с ним.
+    // До первого ответа в поле стоит умолчание, иначе запрос ушёл бы пустым.
+    const горизонт = document.getElementById("an-horizon");
+    if (!горизонт.options.length) горизонт.innerHTML = `<option value="30">1 месяц</option>`;
+  }
   if (REPORTS[key].needsPeriod) renderDeliveryGroupChips();
   if (REPORTS[key].needsWorkPeriod) {
     // Период по умолчанию — текущий день (живой запрос). Заполняется один
@@ -15984,6 +16735,19 @@ document.getElementById("menu-report-contracting").addEventListener("click", () 
   reportsBackdrop.classList.add("open");
   showBackToReport(false);
   switchReport("contracting");
+});
+document.getElementById("menu-report-analytics").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  showBackToReport(false);
+  switchReport("analytics");
+});
+// Дата и горизонт меняют РАСЧЁТ (объём очереди, состав этапов) — только
+// сервер. «Только позиции с дефицитом» — вид уже посчитанного, перерисовка
+// без запроса.
+document.getElementById("an-date").addEventListener("change", loadReport);
+document.getElementById("an-horizon").addEventListener("change", loadReport);
+document.getElementById("an-only-deficit").addEventListener("change", () => {
+  if (reportData) document.getElementById("report-body").innerHTML = renderAnalyticsReport(reportData);
 });
 document.getElementById("reports-close").addEventListener("click", () => reportsBackdrop.classList.remove("open"));
 document.getElementById("report-print").addEventListener("click", () => window.print());

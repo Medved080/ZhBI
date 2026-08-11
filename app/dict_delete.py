@@ -697,7 +697,14 @@ KINDS = {
     },
     "counterparty": {
         "title": "Контрагент", "plural": "Контрагенты", "table": "counterparties",
-        "fk_handled": {"agreements.counterparty_id": "подчинённые записи, уходят вместе"},
+        "fk_handled": {
+            "agreements.counterparty_id": "подчинённые записи, уходят вместе",
+            # Производительность завода (08-11) — его собственная
+            # характеристика, переносить её на замену бессмысленно: у другого
+            # завода свой темп, и подставить чужой значило бы соврать в
+            # расчёте «Аналитической справки».
+            "counterparty_capacity.counterparty_id": "удаляется вместе",
+        },
         "load": _counterparty_load, "label": lambda conn, row: row["short_name"],
         "children": _counterparty_children, "candidates": _counterparty_candidates,
         "adopt": _merge_agreements, "adopt_title": "договоры со всем содержимым",
@@ -730,6 +737,9 @@ KINDS = {
             "default_contracts.contract_id": "перевод на замену",
             "contract_lines.contract_id": "удаляется вместе",
             "contract_incidents.contract_id": "удаляется вместе",
+            # Переопределение производительности (08-11) относится к ЭТОМУ
+            # документу; у контракта-замены свои условия.
+            "contract_capacity.contract_id": "удаляется вместе",
         },
         "load": _contract_load, "label": _contract_label,
         "refs": _contract_refs, "cascade": _contract_cascade,

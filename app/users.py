@@ -536,6 +536,14 @@ class SetMenuPrefsIn(BaseModel):
     # (см. applyMenuPrefs в app.js).
     order: dict[str, list[str]] = {}
     favorites: list[str] = []
+    # Свёрнутые блоки панели «Действия» (2026-08-11, запрос пользователя):
+    # названия групп, которые человек сложил. Хранится ЗДЕСЬ, а не в
+    # localStorage, по той же причине, что порядок и избранное рядом: на
+    # площадке за одной машиной работают посменно, и настройка должна ехать
+    # за человеком. Ключом — НАЗВАНИЕ группы, а не id: у блока панели
+    # собственного идентификатора нет, он и собирается по названию
+    # (см. renderActionsPanel в app.js).
+    collapsed: list[str] = []
 
 
 # Потолок на размер: поле личное и пишется без подтверждения, а хранить в
@@ -553,7 +561,7 @@ def set_menu_prefs(
     менять можно только себе, если ты не администратор сервиса."""
     if current["role"] != "admin" and current["id"] != user_id:
         raise HTTPException(status_code=403, detail="Можно менять только своё меню")
-    всего = sum(len(v) for v in body.order.values()) + len(body.favorites)
+    всего = sum(len(v) for v in body.order.values()) + len(body.favorites) + len(body.collapsed)
     if всего > _MENU_PREFS_LIMIT:
         raise HTTPException(status_code=400, detail="Слишком большая настройка меню")
     conn = get_connection()
@@ -562,8 +570,8 @@ def set_menu_prefs(
             raise HTTPException(status_code=404, detail="Пользователь не найден")
         conn.execute(
             "UPDATE users SET menu_prefs = ?, updated_at = datetime('now') WHERE id = ?",
-            (json.dumps({"order": body.order, "favorites": body.favorites},
-                        ensure_ascii=False), user_id),
+            (json.dumps({"order": body.order, "favorites": body.favorites,
+                         "collapsed": body.collapsed}, ensure_ascii=False), user_id),
         )
         conn.commit()
         activity.log("user_menu_prefs", user=current, entity_type="user", entity_id=user_id,
