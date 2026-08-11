@@ -153,6 +153,10 @@ ACTION_TITLES = {
     "release_version": "Версия базы обновлена",
     "backup_before_update": "Копия перед обновлением",
     "element_bulk_export": "Выгрузка для массовой правки",
+    # Перенос базы целиком между серверами (2026-08-11, app/db_transfer.py).
+    "db_transfer_export": "Выгружен снимок базы для переноса",
+    "db_transfer_stage": "Снимок базы загружен на сверку",
+    "db_transfer_apply": "База ЗАМЕНЕНА снимком другого сервера",
     "client_batch_truncated": "Часть клиентских замеров отброшена",
 }
 
@@ -187,6 +191,10 @@ ELEMENT_CHANGE_ACTIONS = (
 NON_CHANGE_ACTIONS = {
     "login", "login_failed", "login_blocked", "login_domain_failed", "logout",
     "element_bulk_export",
+    # Выгрузка снимка и его сверка изменением не являются; САМА ЗАМЕНА
+    # (`db_transfer_apply`) в список не входит намеренно — это самое
+    # крупное изменение, какое в сервисе бывает, и в отчёте оно нужно.
+    "db_transfer_export", "db_transfer_stage",
     "server_start", "schema_migration", "client_batch_truncated", "log_overflow",
 }
 

@@ -1712,6 +1712,66 @@
   .bulk-edit-table td.now { font-weight: 600; }
   .bulk-edit-warn { color: var(--color-warning, #b45309); font-size: 11px; }
   .bulk-edit-rejected { margin-top: 12px; font-size: 12px; }
+  /* ===== Перенос базы целиком (2026-08-11) =====
+     Раздел стирает базу приёмника, поэтому выглядит он НАМЕРЕННО иначе,
+     чем соседние: цвета сервиса здесь не годятся — спокойная синяя кнопка
+     рядом с «Выгрузить в Excel» ровно так и читалась бы, как ещё одна
+     выгрузка. Косая штриховка «опасная зона» и знак — общепонятные, их не
+     надо объяснять текстом, и они видны боковым зрением.
+     Цвета заданы литералами, а не переменными темы: смысл в том, чтобы
+     блок НЕ подстраивался под окружение и одинаково кричал в светлой и
+     тёмной теме. */
+  .danger-banner {
+    display: flex; gap: 14px; align-items: center;
+    border: 2px solid #d7263d; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px;
+    background: repeating-linear-gradient(135deg,
+      rgba(215,38,61,.13) 0 16px, rgba(255,193,7,.16) 16px 32px);
+  }
+  .danger-logo { width: 62px; height: 62px; flex: 0 0 62px;
+    animation: danger-pulse 1.8s ease-in-out infinite; }
+  @keyframes danger-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.07); } }
+  /* Мигающая картинка — частая причина, по которой люди отключают анимацию
+     в системе; уважаем настройку, знак остаётся на месте. */
+  @media (prefers-reduced-motion: reduce) { .danger-logo { animation: none; } }
+  /* На тёмной теме жёлтая полоса поверх тёмного фона уходит в грязный
+     оливковый, а тёмно-красный текст на ней читается плохо: полосы гасим,
+     красный осветляем. Смысл (штриховка «опасная зона» + красный) остаётся
+     тот же — меняется только то, что зависит от фона. */
+  @media (prefers-color-scheme: dark) {
+    .danger-banner { background: repeating-linear-gradient(135deg,
+      rgba(215,38,61,.22) 0 16px, rgba(255,193,7,.09) 16px 32px); }
+    .danger-banner-title, .danger-banner-text b { color: #ff6b7d; }
+  }
+  .danger-banner-title { font-size: 15px; font-weight: 800; color: #d7263d;
+    text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  .danger-banner-text { font-size: 12.5px; line-height: 1.45; }
+  .danger-banner-text b { color: #d7263d; }
+  .transfer-confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .transfer-confirm input[type="text"] { width: 150px; font-weight: 700; letter-spacing: .18em;
+    text-align: center; }
+  .transfer-compare { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+  .transfer-compare th, .transfer-compare td { padding: 4px 8px; text-align: left;
+    border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  .transfer-compare th { position: sticky; top: 0; background: var(--color-surface); }
+  .transfer-compare td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Строка, где числа расходятся: именно она и есть предмет решения —
+     что человек потеряет и что получит взамен. */
+  .transfer-compare tr.diff td { font-weight: 600; }
+  .transfer-compare tr.diff td.after { color: #0a7d33; }
+  .transfer-compare tr.diff td.before { color: var(--color-text-muted); }
+  .transfer-warn { border-left: 3px solid #e8a100; padding: 6px 10px; margin: 8px 0;
+    font-size: 12px; background: rgba(232,161,0,.10); }
+  /* Кнопка режима «Перенос базы» в переключателе — красная и в активном, и
+     в спокойном состоянии: попасть в неё случайно можно, а понять по виду,
+     куда попал, надо сразу. */
+  #bulk-edit-mode .view-mode-btn.mode-danger { color: #d7263d; font-weight: 700; }
+  #bulk-edit-mode .view-mode-btn.mode-danger.active { background: #d7263d; color: #fff; }
+  /* Пока сверка не пройдена, кнопка замены и поле кодового слова обязаны
+     ВЫГЛЯДЕТЬ выключенными: у .btn общего вида для выключенного состояния
+     в проекте нет (см. #fill-scope-apply), а красная кнопка в полную силу
+     читается как «жми сюда» — здесь это худшее, что она может сказать. */
+  #transfer-apply:disabled { opacity: .38; cursor: default; }
+  #transfer-confirm-word:disabled { opacity: .5; cursor: default; }
   .bulk-edit-rejected div { color: var(--color-danger); padding: 2px 0; }
   .modal.modal-sticky { display: flex; flex-direction: column; overflow: hidden; padding: 22px 0; }
   .modal-sticky-head, .modal-sticky-foot { flex: 0 0 auto; padding: 0 24px; }
@@ -4291,6 +4351,12 @@
         <button type="button" class="view-mode-btn active" data-bulk-mode="fields">Реквизиты</button>
         <button type="button" class="view-mode-btn" data-bulk-mode="statuses">История статусов</button>
         <button type="button" class="view-mode-btn" data-bulk-mode="contracting">Контрактация</button>
+        <!-- Четвёртый режим стоит особняком и по смыслу, и по виду
+             (2026-08-11): три первых ПРАВЯТ данные построчно, этот
+             ЗАМЕНЯЕТ базу целиком. Разделитель и красный цвет — чтобы
+             промах пальцем был виден до того, как что-то произойдёт. -->
+        <button type="button" class="view-mode-btn mode-danger" data-bulk-mode="transfer"
+                title="Полная замена базы снимком другого сервера">⚠ Перенос базы</button>
       </div>
       <!-- Два раздельных блока (живой запрос 2026-08-01): выгрузка и загрузка
            это разные действия в разное время, и в одну строку они читались
@@ -4300,7 +4366,7 @@
            другом»). Выбор файла и сверка разнесены по РАЗНЫМ шагам намеренно:
            в одной строке они читались как одно действие, и было неочевидно,
            что после выбора файла нужно ещё нажать кнопку. -->
-      <div class="bulk-edit-steps">
+      <div class="bulk-edit-steps" id="bulk-edit-steps">
         <div class="bulk-edit-block">
           <div class="bulk-edit-block-title"><span class="step-num">1</span>Выгрузить снимок</div>
           <div class="bulk-edit-controls">
@@ -4340,6 +4406,86 @@
            а не в закреплённой шапке: на невысоком окне шапка съедала всю
            высоту и таблица расхождений схлопывалась в ноль — форма выглядела
            сломанной («расхождений 4» и пустота). -->
+      <!-- ===== Раздел «Перенос базы» (2026-08-11, живой запрос) =====
+           Свои шаги, а не общие: у трёх первых режимов шаг 3 — «сверить и
+           отметить галочками, что применить», а здесь отмечать нечего,
+           применяется ВСЁ или ничего. Общий экран расхождений тут был бы
+           обманом: он обещает выбор, которого нет.
+           Подробности механики — app/db_transfer.py. -->
+      <div id="bulk-transfer" style="display:none;">
+        <div class="danger-banner">
+          <!-- Знак рисуется здесь, а не берётся картинкой: одна иконка не
+               стоит запроса к серверу, а инлайновый SVG красится темой и
+               не мылится на мониторах площадки. Смысл знака читается без
+               подписи: база (цилиндр) перечёркнута, вокруг — «опасно». -->
+          <svg class="danger-logo" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M32 3 61 58H3L32 3z" fill="#ffd21f" stroke="#d7263d" stroke-width="4"
+                  stroke-linejoin="round"/>
+            <ellipse cx="32" cy="26" rx="13" ry="4.6" fill="#fff" stroke="#1b1b1b" stroke-width="2.4"/>
+            <path d="M19 26v13c0 2.5 5.8 4.6 13 4.6s13-2.1 13-4.6V26"
+                  fill="#fff" stroke="#1b1b1b" stroke-width="2.4" stroke-linecap="round"/>
+            <path d="M19 33c0 2.5 5.8 4.6 13 4.6s13-2.1 13-4.6"
+                  fill="none" stroke="#1b1b1b" stroke-width="2"/>
+            <path d="M16 45 48 20" stroke="#d7263d" stroke-width="6" stroke-linecap="round"/>
+          </svg>
+          <div>
+            <div class="danger-banner-title">Критическая операция: замена всей базы</div>
+            <div class="danger-banner-text">
+              Загрузка снимка <b>стирает</b> базу этого сервера целиком и ставит на её
+              место содержимое другого сервера: все изделия, вся история статусов, все
+              контракты, <b>все пользователи и пароли</b>, настройки и вложения.
+              Не дополняет — <b>замещает</b>. Текущие данные этого сервера после
+              замены останутся только в служебной резервной копии.
+              Раздел существует ровно для одного: привезти боевые данные на
+              тестовый или девелоперский сервер, чтобы работать на реальном объёме.
+              <b>На боевом сервере загружать снимок нельзя.</b>
+            </div>
+          </div>
+        </div>
+
+        <div class="bulk-edit-steps">
+          <div class="bulk-edit-block">
+            <div class="bulk-edit-block-title"><span class="step-num">1</span>Выгрузить снимок
+              (на сервере-источнике)</div>
+            <div class="bulk-edit-controls">
+              <button class="btn btn-secondary" id="transfer-export">Выгрузить снимок базы</button>
+            </div>
+            <div class="bulk-edit-status">Архив .zip: файл базы целиком и папка вложений.
+              Ничего не меняет — это выгрузка.</div>
+          </div>
+          <div class="bulk-edit-block bulk-edit-block-file">
+            <div class="bulk-edit-block-title"><span class="step-num">2</span>Сверить снимок
+              (на сервере-приёмнике)</div>
+            <div class="bulk-edit-controls">
+              <input type="file" id="transfer-file" accept=".zip"/>
+              <button class="btn btn-secondary" id="transfer-stage">Сверить с базой</button>
+            </div>
+            <div class="bulk-edit-status">Покажет, что приедет и что будет потеряно.
+              Ничего ещё не меняет.</div>
+          </div>
+          <div class="bulk-edit-block">
+            <div class="bulk-edit-block-title"><span class="step-num">3</span>Заменить базу</div>
+            <div class="bulk-edit-controls transfer-confirm">
+              <label class="bulk-edit-status" for="transfer-confirm-word"
+                     style="margin:0;">Кодовое слово:</label>
+              <input type="text" id="transfer-confirm-word" autocomplete="off"
+                     inputmode="numeric" placeholder="•••" disabled/>
+              <button class="btn btn-danger" id="transfer-apply" disabled>Заменить базу целиком</button>
+            </div>
+            <div class="bulk-edit-status">Доступно после сверки. Перед заменой сервис сам
+              снимет резервную копию текущей базы.</div>
+          </div>
+        </div>
+        <div id="transfer-status" class="bulk-edit-status"></div>
+        <div id="transfer-warnings"></div>
+        <!-- Без обёртки с overflow-x, в отличие от таблицы расхождений
+             выше: колонок здесь всего три, и они помещаются, зато обёртка
+             сделала бы себя контейнером прокрутки — и «липкая» шапка
+             («сейчас» / «приедет») уехала бы вверх вместе со строками.
+             В таблице на три десятка таблиц без шапки числа безымянны. -->
+        <table class="transfer-compare" id="transfer-compare"></table>
+      </div>
+
       <div id="bulk-edit-intro">
         <p class="hint-text" style="margin-top:0;" data-mode-intro="fields">
           Выгрузите снимок реквизитов всех элементов всех объектов, поправьте в Excel и
@@ -4376,7 +4522,8 @@
       </div>
       <!-- Заголовок и строки строит JS: набор колонок зависит от того, какие
            поля реально правились (у каждого такого появляется парная «станет»). -->
-      <div class="bulk-edit-table-wrap"><table class="bulk-edit-table" id="bulk-edit-table"></table></div>
+      <div class="bulk-edit-table-wrap" id="bulk-edit-table-wrap">
+        <table class="bulk-edit-table" id="bulk-edit-table"></table></div>
       <div id="bulk-edit-rejected" class="bulk-edit-rejected"></div>
     </div>
     <div class="modal-sticky-foot">

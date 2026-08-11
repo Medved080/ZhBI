@@ -20241,7 +20241,24 @@ function setBulkEditMode(mode) {
   document.getElementById("bulk-edit-fields").innerHTML = "";
   document.getElementById("bulk-edit-rejected").innerHTML = "";
   document.getElementById("bulk-edit-intro").style.display = "";
+  // Сброс переноса и при ВХОДЕ в режим, и при выходе из него: загруженный
+  // снимок лежит на сервере копией всей базы, и уходить из режима, оставив
+  // его на диске, нельзя.
+  resetTransfer();
   resetBulkEdit();
+  // «Перенос базы» — не правка, а замена (2026-08-11): у него свои шаги,
+  // своя сверка и нет отметки галочками, применять «часть снимка» нечего.
+  // Поэтому общие блоки формы в этом режиме прячутся целиком, а не
+  // приспосабливаются — приспособленные, они обещали бы выбор, которого нет.
+  // СТРОГО ПОСЛЕ resetBulkEdit(): тот возвращает пояснение к файлу на
+  // место, и в обратном порядке оно осталось бы видимым в переносе.
+  const перенос = mode === "transfer";
+  document.getElementById("bulk-edit-steps").style.display = перенос ? "none" : "";
+  document.getElementById("bulk-edit-intro").style.display = перенос ? "none" : "";
+  document.getElementById("bulk-edit-table-wrap").style.display = перенос ? "none" : "";
+  document.getElementById("bulk-edit-rejected").style.display = перенос ? "none" : "";
+  bulkEditApplyBtn.style.display = перенос ? "none" : "";
+  document.getElementById("bulk-transfer").style.display = перенос ? "" : "none";
 }
 
 document.querySelectorAll("#bulk-edit-mode [data-bulk-mode]").forEach((btn) => {
@@ -20250,6 +20267,9 @@ document.querySelectorAll("#bulk-edit-mode [data-bulk-mode]").forEach((btn) => {
 
 document.getElementById("bulk-edit-cancel").addEventListener("click", () => {
   bulkEditBackdrop.classList.remove("open");
+  // Закрыли форму, не применив снимок, — архив с сервера убираем: это
+  // копия всей базы, и лежать «на всякий случай» она не должна.
+  if (bulkEditMode === "transfer") resetTransfer();
 });
 
 document.getElementById("bulk-edit-export").addEventListener("click", async () => {
@@ -20389,6 +20409,182 @@ bulkEditApplyBtn.addEventListener("click", async () => {
   } catch (e) {
     setBulkEditStatus(`Не удалось применить: ${e.message}`, true);
     bulkEditApplyBtn.disabled = false;
+  }
+});
+
+// ---------- Перенос базы целиком (2026-08-11, живой запрос) ----------
+// Четвёртый раздел массовой правки. Три первых ПРАВЯТ построчно и дают
+// отметить, что применять; этот ЗАМЕНЯЕТ базу снимком другого сервера
+// целиком — выбирать нечего, поэтому и экран у него свой (см. index.html
+// и app/db_transfer.py). Здесь: выгрузка снимка, сверка «сейчас/приедет» и
+// замена с кодовым словом.
+
+let transferToken = null;      // архив, положенный на сервере в очередь
+const TRANSFER_CONFIRM_HINT = "кодовое слово";
+
+function setTransferStatus(text, isError) {
+  const el = document.getElementById("transfer-status");
+  el.textContent = text || "";
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+function resetTransfer() {
+  // Токен на сервере не бросаем: это копия ВСЕЙ базы на диске. Уходя из
+  // режима, просим сервер её убрать.
+  if (transferToken) {
+    const был = transferToken;
+    fetch("/admin/db-transfer/forget", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: был }),
+    }).catch(() => {});
+  }
+  transferToken = null;
+  const файл = document.getElementById("transfer-file");
+  if (файл) файл.value = "";
+  const слово = document.getElementById("transfer-confirm-word");
+  слово.value = "";
+  слово.disabled = true;
+  document.getElementById("transfer-apply").disabled = true;
+  document.getElementById("transfer-compare").innerHTML = "";
+  document.getElementById("transfer-warnings").innerHTML = "";
+  setTransferStatus("", false);
+}
+
+function transferNum(n) {
+  return n === null || n === undefined ? "—" : Number(n).toLocaleString("ru-RU");
+}
+
+// Сверка «сейчас в базе / приедет из снимка». Показываются ВСЕ таблицы, а
+// не избранные: смысл экрана в том, чтобы человек увидел объём потери
+// целиком, а не поверил на слово (тот же принцип, что у списка резервных
+// копий — app/backups.py).
+function renderTransferCompare(data) {
+  const было = data.current || {};
+  const станет = data.snapshot || {};
+  const t = document.getElementById("transfer-compare");
+  const строки = [];
+  const шапка = (label, a, b) =>
+    `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(a)}</td><td>${escapeHtml(b)}</td></tr>`;
+  строки.push(шапка("Сервер", было.host || "—", станет.host || "—"));
+  строки.push(шапка("Версия сервиса", было.code_version || "—", станет.code_version || "—"));
+  строки.push(шапка("Версия базы", было.db_version || "—", станет.db_version || "—"));
+  строки.push(шапка("Снимок снят", "—",
+    (станет.created_at || "—") + (станет.created_by ? `, ${станет.created_by}` : "")));
+  строки.push(шапка("Размер базы", formatBytes(было.db_bytes) || "—",
+    formatBytes(станет.db_bytes) || "—"));
+  строки.push(шапка("Файлов вложений",
+    transferNum((было.uploads || {}).files), transferNum((станет.uploads || {}).files)));
+
+  const таблицы = [...new Set([...Object.keys(было.tables || {}),
+                               ...Object.keys(станет.tables || {})])].sort();
+  таблицы.forEach((имя) => {
+    const a = (было.tables || {})[имя];
+    const b = (станет.tables || {})[имя];
+    const расходятся = a !== b;
+    строки.push(
+      `<tr class="${расходятся ? "diff" : ""}"><td>${escapeHtml(имя)}</td>`
+      + `<td class="num before">${transferNum(a)}</td>`
+      + `<td class="num after">${transferNum(b)}</td></tr>`);
+  });
+  t.innerHTML = `<thead><tr><th>Что</th><th>Сейчас в базе (будет стёрто)</th>`
+    + `<th>Приедет из снимка</th></tr></thead><tbody>${строки.join("")}</tbody>`;
+
+  const warn = document.getElementById("transfer-warnings");
+  warn.innerHTML = (data.warnings || [])
+    .map((w) => `<div class="transfer-warn">${escapeHtml(w)}</div>`).join("");
+}
+
+document.getElementById("transfer-export").addEventListener("click", async () => {
+  const btn = document.getElementById("transfer-export");
+  btn.disabled = true;
+  // Сборка архива идёт секунды и десятки секунд (база плюс вложения), и
+  // без этой строки кнопка выглядит нажатой впустую.
+  setTransferStatus("Собираем снимок: копия базы и папка вложений. Это может занять "
+    + "до нескольких минут — не закрывайте окно…", false);
+  try {
+    const res = await fetch("/admin/db-transfer/export", { method: "POST" });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Ошибка ${res.status}`);
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = /filename="?([^"]+)"?/.exec(cd);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : "zhbi_snapshot.zip";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    setTransferStatus(`Снимок выгружен (${formatBytes(blob.size)}). Перенесите файл на `
+      + `сервер-приёмник и загрузите его там в этом же разделе.`, false);
+  } catch (e) {
+    setTransferStatus(`Не удалось выгрузить снимок: ${e.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("transfer-stage").addEventListener("click", async () => {
+  const file = document.getElementById("transfer-file").files[0];
+  if (!file) { setTransferStatus("Сначала выберите файл снимка (.zip)", true); return; }
+  setTransferStatus(`Проверяем снимок (${formatBytes(file.size)}) и сверяем с текущей базой…`, false);
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const res = await fetch("/admin/db-transfer/stage", { method: "POST", body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `Ошибка ${res.status}`);
+    transferToken = data.token;
+    renderTransferCompare(data);
+    const слово = document.getElementById("transfer-confirm-word");
+    слово.disabled = false;
+    слово.value = "";
+    document.getElementById("transfer-apply").disabled = true;
+    setTransferStatus("Снимок проверен и готов к применению. Сверьте числа и, если это "
+      + `действительно тот снимок, введите ${TRANSFER_CONFIRM_HINT} в шаге 3. `
+      + "Ничего ещё не изменено.", false);
+  } catch (e) {
+    transferToken = null;
+    setTransferStatus(`Снимок не принят: ${e.message}`, true);
+  }
+});
+
+// Кнопка замены оживает только когда кодовое слово набрано. Правильность
+// слова проверяет СЕРВЕР (app/db_transfer.CONFIRM_WORD): держать его в
+// коде страницы значило бы подсказать его тому, кто открыл исходник.
+document.getElementById("transfer-confirm-word").addEventListener("input", (e) => {
+  document.getElementById("transfer-apply").disabled =
+    !transferToken || !e.target.value.trim();
+});
+
+document.getElementById("transfer-apply").addEventListener("click", async () => {
+  if (!transferToken) return;
+  const слово = document.getElementById("transfer-confirm-word").value.trim();
+  if (!confirm("Заменить базу этого сервера снимком ЦЕЛИКОМ?\n\n"
+      + "Все изделия, история, контракты, пользователи, настройки и вложения "
+      + "будут стёрты и заменены содержимым снимка. Вернуться можно будет только "
+      + "из служебной резервной копии, которую сервис снимет прямо сейчас.")) return;
+  const btn = document.getElementById("transfer-apply");
+  btn.disabled = true;
+  setTransferStatus("Снимаем резервную копию и заменяем базу. Не закрывайте окно…", false);
+  try {
+    const data = await api("/admin/db-transfer/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: transferToken, confirm: слово }),
+    });
+    transferToken = null;
+    const итог = data.current || {};
+    setTransferStatus(
+      `База заменена. Копия прежнего состояния: ${data.safety_backup.name}. `
+      + `Миграций схемы: ${(data.schema_changes || []).length}, `
+      + `обработок обновления: ${(data.release_tasks || []).length}. `
+      + `Сейчас в базе изделий: ${transferNum((итог.tables || {}).elements)}. `
+      + `Страница перезагрузится — входить нужно будет учётной записью С ТОГО сервера.`,
+      false);
+    // Перезагрузка обязательна: сеансы жили в старой базе и уехали вместе
+    // с ней, а вся страница набита данными, которых больше не существует.
+    // Пауза — чтобы человек успел прочитать имя резервной копии.
+    setTimeout(() => window.location.reload(), 6000);
+  } catch (e) {
+    setTransferStatus(`Замена не выполнена: ${e.message}`, true);
+    btn.disabled = false;
   }
 });
 

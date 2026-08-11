@@ -4,12 +4,14 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
@@ -74,7 +76,7 @@ from app.element_bulk_edit import (
     # что в выгрузке и в формах. Своя склейка здесь разошлась бы с ними.
     _contract_catalog as contract_catalog,
 )
-from app import contracting_bulk_edit, status_bulk_edit
+from app import contracting_bulk_edit, db_transfer, status_bulk_edit
 from app.access import (
     accessible_object_ids,
     assert_object_access,
@@ -3331,6 +3333,140 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
             raise HTTPException(status_code=400, detail=str(exc))
     finally:
         conn.close()
+
+
+# ==================== ПЕРЕНОС БАЗЫ ЦЕЛИКОМ ====================
+# Четвёртый раздел «Массовой правки через Excel» (2026-08-11, живой запрос).
+# Три первых раздела переносят СРЕЗ и ДОПОЛНЯЮТ им базу приёмника — для
+# «потестировать на реальных данных» это негодный инструмент: чужие данные
+# ложатся поверх своих, ссылки рвутся. Здесь — полная ЗАМЕНА снимком.
+# Почему снимок файлом, а не выгрузка по таблицам, и как решается
+# расхождение схем — в шапке app/db_transfer.py.
+#
+# Эндпоинты живут рядом с bulk-edit намеренно: это один экран для человека,
+# и разносить их по файлу означало бы искать половину логики в другом месте.
+
+
+@app.post("/admin/db-transfer/export")
+def db_transfer_export(admin: sqlite3.Row = Depends(require_system_admin)):
+    """Снимок ВСЕЙ базы и вложений одним архивом — то, что увозят с боевого
+    сервера. Только администратор сервиса: в файле вся база целиком,
+    включая пользователей и журнал."""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Собираем во временный файл, а не в память: база с вложениями — это
+    # сотни мегабайт, и держать их в оперативной памяти процесса незачем.
+    tmp = Path(tempfile.mkdtemp(prefix="zhbi_transfer_"))
+    archive = tmp / f"zhbi_snapshot_{stamp}.zip"
+    try:
+        manifest = db_transfer.build_archive(archive, user_name=audit_display_name(admin))
+    except OSError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Не удалось собрать снимок: {exc}")
+    activity.log(
+        "db_transfer_export", user=admin, new_value=archive.name,
+        details={"версия кода": manifest.get("code_version"),
+                 "таблиц": len(manifest.get("tables") or {}),
+                 "файлов вложений": (manifest.get("uploads") or {}).get("files"),
+                 "размер архива": manifest.get("archive_bytes")},
+    )
+    # Временная папка убирается ПОСЛЕ отдачи файла: BackgroundTask
+    # выполняется, когда ответ уже ушёл клиенту.
+    return FileResponse(
+        archive, media_type="application/zip", filename=archive.name,
+        background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True),
+    )
+
+
+@app.get("/admin/db-transfer/current")
+def db_transfer_current(admin: sqlite3.Row = Depends(require_system_admin)):
+    """Что сейчас в базе приёмника — левая колонка сверки «было/приедет».
+    Отдельным запросом, до всякой загрузки: человек должен видеть, что
+    именно он собирается потерять."""
+    return db_transfer.describe_current()
+
+
+@app.post("/admin/db-transfer/stage")
+def db_transfer_stage(file: UploadFile = File(...),
+                      admin: sqlite3.Row = Depends(require_system_admin)):
+    """Принять снимок и СВЕРИТЬ его с текущей базой. Ничего не меняет:
+    замена — отдельным вызовом, с кодовым словом."""
+    payload = read_upload_limited(file.file)
+    try:
+        result = db_transfer.stage_archive(payload, user_name=audit_display_name(admin))
+    except db_transfer.TransferError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    activity.log(
+        "db_transfer_stage", user=admin, new_value=file.filename,
+        details={"снимок снят": (result["snapshot"] or {}).get("created_at"),
+                 "сервер-источник": (result["snapshot"] or {}).get("host"),
+                 "предупреждений": len(result["warnings"])},
+    )
+    return result
+
+
+class DbTransferApplyIn(BaseModel):
+    token: str
+    # Кодовое слово набирается руками (решение пользователя 2026-08-11).
+    # Проверяется на СЕРВЕРЕ, а не только в форме: кнопка в браузере — это
+    # удобство, а не защита.
+    confirm: str
+
+
+@app.post("/admin/db-transfer/apply")
+def db_transfer_apply(body: DbTransferApplyIn,
+                      admin: sqlite3.Row = Depends(require_system_admin)):
+    """ПОЛНАЯ ЗАМЕНА базы и вложений содержимым снимка.
+
+    Перед заменой всегда снимается служебная резервная копия (вид
+    `auto_before_transfer`) — единственная нить назад к тому, что было на
+    приёмнике.
+
+    После переноса данных прогоняются миграции схемы и обработки релиза —
+    ровно как при восстановлении из резервной копии: снимок приезжает с
+    более старой версии, и без миграций приложение на нём не поднимется.
+
+    Журнал действий пишется ДО замены (внутри записи о сверке) и после неё
+    заново — сама запись «заменили» ложится уже в НОВУЮ базу, из старой она
+    уехала вместе со всем остальным. Это не потеря: старая база целиком
+    лежит в служебной копии.
+    """
+    from app import release_tasks
+
+    try:
+        result = db_transfer.apply_archive(
+            body.token, body.confirm,
+            user_name=audit_display_name(admin), user_id=admin["id"],
+        )
+    except db_transfer.TransferError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    schema_changes = init_db()
+    выполнено = release_tasks.run_pending()
+    result["schema_changes"] = schema_changes
+    result["release_tasks"] = выполнено
+    # Пользователь этой сессии в новой базе может не существовать вовсе,
+    # поэтому пишем в журнал по имени, а не по ссылке на запись users.
+    activity.log(
+        "db_transfer_apply", user_name=audit_display_name(admin),
+        new_value="база заменена снимком другого сервера",
+        details={"служебная копия": result["safety_backup"]["name"],
+                 "прежние вложения": result["uploads_moved_to"],
+                 "миграций схемы": len(schema_changes),
+                 "обработок релиза": len(выполнено)},
+    )
+    return result
+
+
+class DbTransferForgetIn(BaseModel):
+    token: str
+
+
+@app.post("/admin/db-transfer/forget")
+def db_transfer_forget(body: DbTransferForgetIn,
+                       admin: sqlite3.Row = Depends(require_system_admin)):
+    """Убрать загруженный снимок из очереди, не применяя. Архив — копия
+    всей базы, и оставлять его на диске «на всякий случай» не надо."""
+    db_transfer.forget_staged(body.token)
+    return {"ok": True}
 
 
 def _object_for_source_file(conn, source_file: str):
