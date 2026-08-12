@@ -13883,18 +13883,26 @@ const contractingImportBackdrop = document.getElementById("contracting-import-ba
 document.getElementById("menu-contracting-import").addEventListener("click", () => {
   document.getElementById("contracting-import-file").value = "";
   document.getElementById("contracting-import-status").textContent = "";
+  // Тот же список объектов, что у формы договора (objectOptionsHtml), и та
+  // же подстановка текущего объекта: контрактацию почти всегда грузят на ту
+  // стройку, с которой работают, — но выбор остаётся за человеком.
+  const подставить = objectsForAgreement().some(v => v.id === state.objectId) ? state.objectId : null;
+  document.getElementById("contracting-import-object").innerHTML = objectOptionsHtml(подставить);
   contractingImportBackdrop.classList.add("open");
 });
 document.getElementById("contracting-import-cancel").addEventListener("click", () => contractingImportBackdrop.classList.remove("open"));
 document.getElementById("contracting-import-submit").addEventListener("click", async () => {
   const file = document.getElementById("contracting-import-file").files[0];
   const statusEl = document.getElementById("contracting-import-status");
+  const objectId = document.getElementById("contracting-import-object").value;
+  if (!objectId) { statusEl.textContent = "Сначала выберите объект"; statusEl.style.color = "var(--color-danger)"; return; }
   if (!file) { statusEl.textContent = "Сначала выберите файл .xlsx"; statusEl.style.color = "var(--color-danger)"; return; }
   statusEl.textContent = "Импорт…"; statusEl.style.color = "var(--color-text-muted)";
   const formData = new FormData();
   formData.append("file", file);
   try {
-    const res = await fetch("/import-contracting-xlsx", { method: "POST", body: formData });
+    const res = await fetch(`/import-contracting-xlsx?object_id=${encodeURIComponent(objectId)}`,
+      { method: "POST", body: formData });
     const body = await res.json().catch(() => null);
     if (!res.ok) {
       statusEl.textContent = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
@@ -13903,6 +13911,16 @@ document.getElementById("contracting-import-submit").addEventListener("click", a
     }
     let msg = `Готово: строк обработано ${body.rows_processed}, контрактов затронуто ${body.contracts_touched}, ` +
       `позиций создано ${body.lines_inserted}, обновлено ${body.lines_updated}.`;
+    if (body.marks_created) msg += ` Марок заведено в справочник: ${body.marks_created}.`;
+    if (body.agreements_object_filled) msg += ` Договоров привязано к объекту: ${body.agreements_object_filled}.`;
+    // Договор чужого объекта — не «неполная строка», а расхождение файла с
+    // базой: показываем поимённо, иначе человек не поймёт, почему часть
+    // позиций не приехала (номер договора нельзя переиспользовать на
+    // другом объекте, ключ общий на весь сервис).
+    if (body.foreign_agreement_rows) {
+      msg += ` Пропущено строк ${body.foreign_agreement_rows} — договор принадлежит другому объекту: ` +
+        `${body.foreign_agreements.slice(0, 5).join("; ")}${body.foreign_agreements.length > 5 ? "…" : ""}.`;
+    }
     if (body.unresolved_type_marks.length) msg += ` Тип не определён для марок: ${body.unresolved_type_marks.slice(0, 10).join(", ")}${body.unresolved_type_marks.length > 10 ? "…" : ""}.`;
     if (body.date_warnings.length) msg += ` Предупреждения по датам: ${body.date_warnings.length}.`;
     statusEl.textContent = msg;
@@ -15937,6 +15955,13 @@ historyImportSubmit.addEventListener("click", async () => {
       msg += ` Строк с нераспознанной датой (пропущены): ${body.invalid_dates}` +
         (body.invalid_date_examples && body.invalid_date_examples.length
           ? ` — ${body.invalid_date_examples.slice(0, 5).join("; ")}` : "") + ".";
+    }
+    // Реквизиты контракта из файла заводятся на объект чертежа: договор,
+    // уже заведённый на ДРУГОЙ объект, не переиспользуется — такие строки
+    // остаются без контракта, и молчать об этом нельзя (2026-08-12).
+    if (body.contract_object_warnings && body.contract_object_warnings.length) {
+      msg += ` Контракты: ${body.contract_object_warnings.slice(0, 3).join("; ")}` +
+        (body.contract_object_warnings.length > 3 ? "…" : "") + ".";
     }
     if (body.unmatched_handles.length) msg += ` Примеры handle без совпадения: ${body.unmatched_handles.join(", ")}.`;
     setHistoryImportStatus(msg, false);
@@ -18271,6 +18296,13 @@ statusRestoreSubmit.addEventListener("click", async () => {
       msg += ` Строк с нераспознанной датой (пропущены): ${body.invalid_dates}` +
         (body.invalid_date_examples && body.invalid_date_examples.length
           ? ` — ${body.invalid_date_examples.slice(0, 5).join("; ")}` : "") + ".";
+    }
+    // Реквизиты контракта из файла заводятся на объект чертежа: договор,
+    // уже заведённый на ДРУГОЙ объект, не переиспользуется — такие строки
+    // остаются без контракта, и молчать об этом нельзя (2026-08-12).
+    if (body.contract_object_warnings && body.contract_object_warnings.length) {
+      msg += ` Контракты: ${body.contract_object_warnings.slice(0, 3).join("; ")}` +
+        (body.contract_object_warnings.length > 3 ? "…" : "") + ".";
     }
     if (body.unmatched_handles.length) msg += ` Примеры handle без совпадения: ${body.unmatched_handles.join(", ")}.`;
     setStatusRestoreStatus(msg, false);

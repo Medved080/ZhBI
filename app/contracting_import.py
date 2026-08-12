@@ -12,6 +12,20 @@
 Контракт на эту Спецификацию (find_or_create_contract, app/contracts.py) —
 после чего строка становится позицией контракта (тип+марка -> количество).
 
+ОБЪЕКТ импорта задаётся снаружи и обязателен (2026-08-12). До этого импорт
+звал find_or_create_agreement без объекта, и загруженный договор оставался с
+`agreements.object_id IS NULL` — а объект контракта именно ВЫВОДИТСЯ по
+цепочке контракт -> спецификация -> договор (см. schema.sql). Договор без
+объекта не принадлежит никому: правила доступа отсеивают его у всех, кроме
+администратора сервиса, и загруженная контрактация не видна ни в АРМ, ни в
+отчётах, ни в документах контрактации. Дообъектное наследие лечила временная
+обработка `app/fill_scope.py` — здесь закрывается сам источник.
+
+Из объекта следует ещё три вещи, каждая — про то, что справочники объектные:
+тип по уже загруженным изделиям ищется среди изделий ЭТОГО объекта; марка
+позиции заносится в справочник марок объекта (`marks`); и если такая марка
+там уже есть в другом написании — берётся СУЩЕСТВУЮЩЕЕ (см. _canonical_mark).
+
 Тип элемента для марки, которой ещё нет ни у одного загруженного элемента:
 эвристика по префиксу марки (mark_type_prefixes, app/counterparties.py),
 донастраиваемая администратором. Не найдено — позиция создаётся с
@@ -27,7 +41,7 @@ from typing import Optional
 from openpyxl import load_workbook
 
 from app.contracts import find_or_create_contract
-from app.counterparties import find_or_create_agreement, find_or_create_counterparty, find_or_create_specification
+from app.counterparties import find_or_create_counterparty, find_or_create_specification
 
 REQUIRED_HEADERS = ["Поставщик", "Договор поставки", "Спецификация", "Наименование товара", "Кол-во"]
 
@@ -159,17 +173,60 @@ def parse_contracting_xlsx(content: bytes) -> list[dict]:
     return {"rows": parsed, "incomplete_rows": incomplete_rows}
 
 
-def _build_mark_lookup(conn) -> dict[str, str]:
-    """{марка.lower(): element_type} по всем загруженным элементам —
+def _build_mark_lookup(conn, object_id: int) -> dict[str, str]:
+    """{марка.lower(): element_type} по загруженным элементам ЭТОГО объекта —
     строится ОДИН раз на весь импорт, не на каждую строку. SQLite не
     приводит кириллицу к одному регистру ни через COLLATE NOCASE, ни
     через lower() (нет ICU-расширения) — регистронезависимое сравнение
     обязано быть на стороне Python, а не в SQL (см. живую проверку:
-    lower('15КС1.1') в SQLite остаётся '15КС1.1' как есть)."""
+    lower('15КС1.1') в SQLite остаётся '15КС1.1' как есть).
+
+    Отбор по объекту (2026-08-12): марки нумерует проектировщик в пределах
+    здания, одноимённые марки соседних зданий — разные изделия (тот же
+    довод, что у ключа справочника `marks`). Без отбора марка соседнего
+    объекта молча назначала позиции чужой тип."""
     lookup: dict[str, str] = {}
-    for row in conn.execute("SELECT DISTINCT mark, element_type FROM elements WHERE mark IS NOT NULL"):
+    for row in conn.execute(
+        "SELECT DISTINCT mark, element_type FROM elements WHERE mark IS NOT NULL AND object_id = ?",
+        (object_id,),
+    ):
         lookup[row["mark"].lower()] = row["element_type"]
     return lookup
+
+
+def _build_mark_names(conn, object_id: int) -> dict[tuple[Optional[str], str], str]:
+    """Написания марок справочника этого объекта: {(тип, марка.lower()):
+    марка как в справочнике}. Ключ с типом — потому что владелец марки тип
+    (marks: object_id, element_type, name); плюс ключ (None, lower) на
+    случай позиции с неопределённым типом — он заполняется, только если во
+    всём объекте это написание ОДНО (иначе выбирать за пользователя между
+    «К-1» Колонны и «к-1» Панели нечем, и марка остаётся как в файле)."""
+    названия: dict[tuple[Optional[str], str], str] = {}
+    без_типа: dict[str, set[str]] = {}
+    for row in conn.execute(
+        "SELECT element_type, name FROM marks WHERE object_id = ?", (object_id,)
+    ):
+        названия[(row["element_type"], row["name"].lower())] = row["name"]
+        без_типа.setdefault(row["name"].lower(), set()).add(row["name"])
+    for ключ, варианты in без_типа.items():
+        if len(варианты) == 1:
+            названия[(None, ключ)] = next(iter(варианты))
+    return названия
+
+
+def _canonical_mark(mark: str, element_type: Optional[str],
+                    mark_names: dict[tuple[Optional[str], str], str]) -> str:
+    """Написание марки, под которым она уже живёт в справочнике объекта.
+
+    Зачем. Марка позиции контракта — по-прежнему ТЕКСТ (contract_lines.mark),
+    и «15кс1.1» из файла рядом с «15КС1.1» из чертежа расщепляет изделие на
+    две ветки в остатках контракта, фильтрах и АРМ — ровно та задвоенность,
+    ради разбора которой заводился справочник марок. Существующее написание
+    здесь ПРИОРИТЕТНЕЕ файла: справочник — то, что пользователь уже сверил.
+
+    Новая марка (в справочнике её нет) пишется как в файле — угадывать
+    «правильный» регистр не из чего."""
+    return mark_names.get((element_type, mark.lower()), mark_names.get((None, mark.lower()), mark))
 
 
 _LEADING_DIGITS_RE = re.compile(r"^[0-9]+")
@@ -199,17 +256,70 @@ def _resolve_element_type(mark: str, mark_lookup: dict[str, str], prefix_map: di
     return best_type
 
 
-def import_contracting(conn, parsed: dict) -> dict:
+def resolve_agreement(conn, counterparty_id: int, number: str,
+                       agreement_date: Optional[str], object_id: int
+                       ) -> tuple[Optional[int], Optional[int], bool]:
+    """Договор этого контрагента с этим номером НА ЭТОМ объекте.
+
+    Возвращает (agreement_id, чужой_объект, дозаполнен_объект). Три случая:
+      * договора нет            -> заводится с object_id;
+      * есть, объект тот же или
+        не проставлен вовсе     -> используется, пустой объект дозаполняется
+                                   (дообъектное наследие, см. app/fill_scope.py);
+      * есть, но объект ЧУЖОЙ   -> (None, id чужого объекта): строка
+                                   отклоняется и попадает в сводку.
+
+    Почему не «завести второй договор»: ключ UNIQUE(counterparty_id, number)
+    общий на весь сервис, номер договора нельзя переиспользовать на другом
+    объекте. Молча вернуть чужой договор (как делала прежняя
+    find_or_create_agreement) — хуже всего: позиции файла уехали бы в
+    контракт другой стройки. Ручная форма «+ Договор» на тот же случай
+    отвечает 400 (см. app/counterparties.py:create_agreement)."""
+    row = conn.execute(
+        "SELECT id, object_id FROM agreements WHERE counterparty_id = ? AND number = ?",
+        (counterparty_id, number),
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO agreements (counterparty_id, number, agreement_date, object_id) "
+            "VALUES (?, ?, ?, ?)",
+            (counterparty_id, number, agreement_date, object_id),
+        )
+        return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"], None, False
+    if row["object_id"] is None:
+        conn.execute(
+            "UPDATE agreements SET object_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (object_id, row["id"]),
+        )
+        return row["id"], None, True
+    if row["object_id"] != object_id:
+        return None, row["object_id"], False
+    return row["id"], None, False
+
+
+def import_contracting(conn, parsed: dict, object_id: int) -> dict:
     rows = parsed["rows"]
     prefix_map = {
         r["prefix"]: r["element_type"]
         for r in conn.execute("SELECT prefix, element_type FROM mark_type_prefixes").fetchall()
     }
-    mark_lookup = _build_mark_lookup(conn)
+    mark_lookup = _build_mark_lookup(conn, object_id)
+    mark_names = _build_mark_names(conn, object_id)
+    counterparty_by_lower = {
+        r["short_name"].lower(): r["id"]
+        for r in conn.execute("SELECT id, short_name FROM counterparties")
+    }
 
     date_warnings: list[str] = []
     unresolved_type_marks: list[str] = []
     contracts_touched: set[int] = set()
+    # Строки, чей договор принадлежит другому объекту: считаем и показываем
+    # поимённо — это не «неполная строка», а расхождение файла с базой,
+    # которое человек должен увидеть и разобрать (см. resolve_agreement).
+    foreign_agreements: dict[str, int] = {}
+    foreign_rows = 0
+    agreements_object_filled = 0
+    marks_created = 0
     # (contract_id, element_type, mark) -> summed quantity ЗА ЭТОТ ЗАПУСК —
     # намеренно не "+=" прямо в БД: повторный запуск того же файла должен
     # выставлять итоговое количество заново, а не бесконечно накапливать
@@ -225,10 +335,27 @@ def import_contracting(conn, parsed: dict) -> dict:
         if spec_warning:
             date_warnings.append(f"Строка {row['row']}, спецификация «{row['specification_raw']}»: {spec_warning}")
 
-        counterparty_id = find_or_create_counterparty(
-            conn, full_name=row["supplier"], short_name=row["supplier"]
+        # Регистронезависимо, как и марки: find_or_create_counterparty
+        # сравнивает short_name точным SQL-равенством, и «К-ЖБИ» рядом с
+        # «к-жби» завели бы ДВУХ контрагентов (SQLite без ICU не сворачивает
+        # кириллицу — см. _build_mark_lookup). Ровно тот же обход уже стоит
+        # в импорте истории (_resolve_contract_id, app/history_import.py), и
+        # ровно это обещает описание формата (app/import_templates.py).
+        counterparty_id = counterparty_by_lower.get(row["supplier"].lower())
+        if counterparty_id is None:
+            counterparty_id = find_or_create_counterparty(
+                conn, full_name=row["supplier"], short_name=row["supplier"]
+            )
+            counterparty_by_lower[row["supplier"].lower()] = counterparty_id
+        agreement_id, чужой, дозаполнен = resolve_agreement(
+            conn, counterparty_id, agreement_number, agreement_date, object_id
         )
-        agreement_id = find_or_create_agreement(conn, counterparty_id, agreement_number, agreement_date)
+        if agreement_id is None:
+            foreign_rows += 1
+            foreign_agreements[f"{row['supplier']}, договор «{agreement_number}»"] = чужой
+            continue
+        if дозаполнен:
+            agreements_object_filled += 1
         specification_id = find_or_create_specification(
             conn, agreement_id, specification_number, specification_date
         )
@@ -238,8 +365,25 @@ def import_contracting(conn, parsed: dict) -> dict:
         element_type = _resolve_element_type(row["mark"], mark_lookup, prefix_map)
         if element_type is None:
             unresolved_type_marks.append(row["mark"])
+        mark = _canonical_mark(row["mark"], element_type, mark_names)
+        # Марка попадает в справочник объекта сразу, а не одноразовой
+        # релиз-обработкой (_fill_marks_catalog, app/release_tasks.py):
+        # позиция контракта — такой же источник марок, как чертёж, и без
+        # записи справочника её марки не видно ни в АРМ, ни в фильтрах.
+        # Тип обязателен ключом справочника — позицию с неопределённым типом
+        # заводить нечем, она ждёт, пока тип донастроят вручную.
+        if element_type is not None and (element_type, mark.lower()) not in mark_names:
+            marks_created += conn.execute(
+                "INSERT OR IGNORE INTO marks (object_id, element_type, name) VALUES (?, ?, ?)",
+                (object_id, element_type, mark),
+            ).rowcount
+            # Тот же файл дальше по строкам обязан узнавать только что
+            # заведённое написание — иначе «15кс1.1» после «15КС1.1» в том
+            # же файле снова разъедется на две позиции.
+            mark_names[(element_type, mark.lower())] = mark
+            mark_names.setdefault((None, mark.lower()), mark)
 
-        key = (contract_id, element_type, row["mark"])
+        key = (contract_id, element_type, mark)
         line_quantities[key] = line_quantities.get(key, 0) + row["quantity"]
 
     inserted_lines = updated_lines = 0
@@ -266,6 +410,10 @@ def import_contracting(conn, parsed: dict) -> dict:
         "contracts_touched": len(contracts_touched),
         "lines_inserted": inserted_lines,
         "lines_updated": updated_lines,
+        "marks_created": marks_created,
+        "agreements_object_filled": agreements_object_filled,
+        "foreign_agreement_rows": foreign_rows,
+        "foreign_agreements": sorted(foreign_agreements),
         "unresolved_type_marks": sorted(set(unresolved_type_marks)),
         "date_warnings": date_warnings[:50],
     }

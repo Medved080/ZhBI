@@ -61,7 +61,7 @@ from datetime import date, datetime, timedelta
 from openpyxl import load_workbook
 
 from app import activity
-from app.contracting_import import parse_number_and_date
+from app.contracting_import import parse_number_and_date, resolve_agreement
 from app.contracts import (
     find_or_create_contract,
     adopt_contract_from_history,
@@ -256,7 +256,21 @@ def parse_history_xlsx(content: bytes):
     }
 
 
-def _resolve_contract_id(conn, row, cache, warnings, counterparty_by_lower):
+def _object_for_source_file(conn, source_file: str):
+    """Объект чертежа, из которого идёт импорт. None — чертёж ни к одному
+    объекту не привязан (дообъектное наследие).
+
+    Спрашивать объект у человека здесь не нужно, в отличие от импорта
+    контрактации: файл истории привязан к КОНКРЕТНОМУ чертежу (сопоставление
+    идёт по (source_file, dxf_handle)), а у чертежа объект уже известен."""
+    row = conn.execute(
+        "SELECT object_id FROM object_drawings WHERE source_file = ? LIMIT 1", (source_file,)
+    ).fetchone()
+    return row["object_id"] if row else None
+
+
+def _resolve_contract_id(conn, row, cache, warnings, counterparty_by_lower,
+                         object_id=None, object_warnings=None):
     """Реквизиты строки → contract_id, с созданием недостающих звеньев
     цепочки Контрагент→Договор→Спецификация→Контракт (согласовано с
     пользователем: создавать на лету, а не отвергать строку).
@@ -301,7 +315,28 @@ def _resolve_contract_id(conn, row, cache, warnings, counterparty_by_lower):
         counterparty_id = find_or_create_counterparty(conn, full_name=supplier, short_name=supplier)
         counterparty_by_lower[supplier.lower()] = counterparty_id
 
-    agreement_id = find_or_create_agreement(conn, counterparty_id, agreement_number, agreement_date)
+    # Договор заводится НА ОБЪЕКТ чертежа (2026-08-12). До этого здесь
+    # звалась find_or_create_agreement без объекта — та же дыра, что
+    # чинилась в импорте контрактации: договор с `object_id IS NULL` не
+    # принадлежит ни одной стройке, и восстановленная история ссылалась на
+    # контракт, невидимый всем, кроме администратора сервиса. Обе проверки —
+    # одной функцией (resolve_agreement, app/contracting_import.py): вторая
+    # реализация того же правила разошлась бы с первой молча.
+    if object_id is None:
+        # Чертёж без объекта — дообъектное наследие: заводим как раньше,
+        # без объекта, и говорим об этом в сводке, а не молчим.
+        agreement_id = find_or_create_agreement(conn, counterparty_id, agreement_number, agreement_date)
+    else:
+        agreement_id, чужой_объект, _ = resolve_agreement(
+            conn, counterparty_id, agreement_number, agreement_date, object_id
+        )
+        if agreement_id is None:
+            (object_warnings if object_warnings is not None else warnings).append(
+                f"Договор «{agreement_raw}» ({supplier}) заведён на другой объект "
+                f"(№{чужой_объект}) — строки по нему остались без контракта"
+            )
+            cache[key] = None
+            return None
     specification_id = find_or_create_specification(
         conn, agreement_id, specification_number, specification_date
     )
@@ -382,6 +417,16 @@ def import_history(conn, source_file: str, rows: list, mode: str,
     # создано новых, а не сколько всего упомянуто.
     contract_cache: dict = {}
     contract_warnings: list = []
+    # Объект чертежа — на него заводятся договоры из реквизитов файла
+    # (2026-08-12, см. _resolve_contract_id). None бывает только у
+    # дообъектного наследия; тогда поведение прежнее, но с оговоркой в сводке.
+    object_id = _object_for_source_file(conn, source_file)
+    object_warnings: list = []
+    if object_id is None:
+        object_warnings.append(
+            f"Чертёж «{source_file}» не привязан к объекту — договоры из файла заведены "
+            f"без объекта (дообъектное наследие)"
+        )
     contracts_before = conn.execute("SELECT COUNT(*) AS n FROM contracts").fetchone()["n"]
     counterparty_by_lower = {
         r["short_name"].lower(): r["id"]
@@ -393,7 +438,8 @@ def import_history(conn, source_file: str, rows: list, mode: str,
     def row_contract_id(row):
         nonlocal rows_with_contract
         contract_id = _resolve_contract_id(
-            conn, row, contract_cache, contract_warnings, counterparty_by_lower
+            conn, row, contract_cache, contract_warnings, counterparty_by_lower,
+            object_id, object_warnings,
         )
         if contract_id is not None:
             rows_with_contract += 1
@@ -572,4 +618,9 @@ def import_history(conn, source_file: str, rows: list, mode: str,
         "rows_with_contract": rows_with_contract,
         "contracts_created": contracts_after - contracts_before,
         "contract_date_warnings": contract_warnings[:20],
+        # Отдельно от предупреждений по датам (2026-08-12): «договор чужого
+        # объекта» и «чертёж без объекта» — не опечатка в файле, а
+        # расхождение с базой, и разбирается оно по-другому.
+        "contract_object_warnings": object_warnings[:20],
+        "object_id": object_id,
     }

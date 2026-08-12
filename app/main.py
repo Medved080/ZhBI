@@ -1934,8 +1934,9 @@ def admin_import_input(user: sqlite3.Row = Depends(require_system_admin)):
     объяснено, почему так делать не следует).
 
     Порядок вызовов важен и совпадает с scripts/rebuild_db.py: сначала DXF
-    (контрактации нужны уже загруженные марки, графику — уже привязанные к
-    зонам элементы), затем xlsx.
+    (графику нужны уже привязанные к зонам элементы), затем xlsx. Файл
+    контрактации из папки НЕ грузится (2026-08-12) — его импорту нужен явный
+    выбор объекта, см. app/input_import.import_input_xlsx.
 
     Возвращает построчный отчёт обоих импортов — то же самое, что уходит в
     лог сервера, но оператор лог не читает.
@@ -4595,11 +4596,14 @@ def import_history_xlsx(
 ):
     content = read_upload_limited(file.file)
     conn = get_connection()
+    # Соединение живёт до конца запроса и закрывается ОДИН раз, в finally
+    # ниже. До 2026-08-12 здесь стоял отдельный `finally: conn.close()`
+    # вокруг проверки доступа — и весь импорт истории падал 500
+    # («Cannot operate on a closed database») на первом же обращении к БД:
+    # закрытое соединение переиспользовалось следующей строкой. Поймано
+    # живой проверкой формы.
     try:
         _guard_source_file(conn, admin, source_file)
-    finally:
-        conn.close()
-    try:
         parsed = parse_history_xlsx(content)
         # Общая метка операции: сводное событие ниже и поэлементные события
         # внутри import_history связываются через неё (activity.new_request_id).
@@ -4633,16 +4637,25 @@ def import_history_xlsx(
 
 
 @app.post("/import-contracting-xlsx")
-def import_contracting_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_system_admin)):
+def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query(...),
+                            admin: sqlite3.Row = Depends(require_system_admin)):
     """Файл "Контрактация" (см. app/contracting_import.py, Docs/backlog.md,
     "Контрактация 2.0") — создаёт/находит Контрагентов/Договоры/
-    Спецификации/Контракты и их позиции по (тип, марка)."""
+    Спецификации/Контракты и их позиции по (тип, марка).
+
+    object_id ОБЯЗАТЕЛЕН и выбирается человеком в форме (2026-08-12): объект
+    контракта выводится по цепочке контракт → спецификация → договор, и без
+    него загруженное не принадлежит ни одной стройке. Именно выбирается, а
+    не берётся из текущего вида схемы: файл контрактации приходит от
+    снабжения и вполне может относиться к соседнему зданию."""
     content = read_upload_limited(file.file)
     conn = get_connection()
     try:
+        if conn.execute("SELECT id FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
         parsed = parse_contracting_xlsx(content)
-        итог = import_contracting(conn, parsed)
-        activity.log("import_contracting", user=admin,
+        итог = import_contracting(conn, parsed, object_id)
+        activity.log("import_contracting", user=admin, entity_type="object", entity_id=object_id,
                      new_value=f"{file.filename or 'файл'}: "
                                + "; ".join(f"{k}: {v}" for k, v in итог.items()
                                            if isinstance(v, int))[:400],

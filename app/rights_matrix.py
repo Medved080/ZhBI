@@ -144,8 +144,9 @@ FEATURES = [
      ["POST /elements/bulk-edit/export|analyze|apply (require_system_admin)"]),
     ("import_contracting", "Загрузка данных файлом", "Импорт файла контрактации",
      SYSTEM, SYSTEM,
-     "Заводит контрагентов, договоры и спецификации сразу по всему файлу — операция ведения сервиса.",
-     ["POST /import-contracting-xlsx (require_system_admin)"]),
+     "Заводит контрагентов, договоры и спецификации сразу по всему файлу — операция ведения сервиса. "
+     "Объект выбирается в форме и обязателен (2026-08-12): договор заключается на объект.",
+     ["POST /import-contracting-xlsx?object_id=… (require_system_admin)"]),
     ("import_schedule", "Загрузка данных файлом", "Импорт графика MS Project",
      SYSTEM, SYSTEM, None,
      ["POST /import-schedule-xlsx (require_system_admin)"]),

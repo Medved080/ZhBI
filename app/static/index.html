@@ -5107,8 +5107,11 @@
     <div id="import-input-files"></div>
     <p class="hint-text" id="import-input-warning"></p>
     <!-- Папка Input принимает те же .dxf и .xlsx, что и формы загрузки по
-         одному файлу, поэтому здесь перечислены все четыре шаблона сразу. -->
-    <div class="import-template" data-template="dxf,contracting,schedule,history"></div>
+         одному файлу, поэтому здесь перечислены их шаблоны сразу. Кроме
+         контрактации (2026-08-12): её импорту нужен явный выбор объекта, а
+         у пакетной загрузки спросить некого — файл остаётся в папке и
+         попадает в отчёт с указанием нужной формы. -->
+    <div class="import-template" data-template="dxf,schedule,history"></div>
     <div id="import-input-report"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="import-input-cancel">Отмена</button>
@@ -5173,6 +5176,13 @@
   <div class="modal">
     <h2>Импорт контрактации из XLS</h2>
     <p class="hint-text">Создаёт/находит Контрагентов, Договоры, Спецификации и Контракты с позициями по файлу.</p>
+    <!-- Объект выбирается ЯВНО (2026-08-12): договор заключается на
+         конкретный объект, а объект контракта выводится по цепочке
+         контракт → спецификация → договор. Файл приходит от снабжения и
+         может относиться не к тому зданию, что открыто на схеме, поэтому
+         подстановка текущего объекта — только значение по умолчанию. -->
+    <label class="field">Объект</label>
+    <select id="contracting-import-object"></select>
     <label class="field">Файл .xlsx (лист "Контрактация")</label>
     <input type="file" id="contracting-import-file" accept=".xlsx"/>
     <div class="import-template" data-template="contracting"></div>

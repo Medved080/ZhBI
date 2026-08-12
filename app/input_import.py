@@ -11,7 +11,6 @@ from pathlib import Path
 
 from app.db import get_connection
 from app.dxf_import import DxfProcessingError, process_upload
-from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
 
 INPUT_DIR = Path(__file__).resolve().parent.parent / "Input"
@@ -75,12 +74,19 @@ def import_input_dxf() -> list:
 
 
 def import_input_xlsx() -> list:
-    """Маршрутизация по имени файла ('контрактац' → app/contracting_import.py,
-    'прогноз'/'смр' → app/schedule_import.py) — угадывать формат по
-    содержимому не пытаемся, риск не той таблицы у той же ошибки, что уже
-    чинили в парсерах (см. Docs/backlog.md). Вызывать ПОСЛЕ import_input_dxf()
-    — контрактации нужны уже загруженные марки, графику — уже привязанные
-    к зонам/этажу элементы. Возвращает построчный отчёт, см. import_input_dxf."""
+    """Маршрутизация по имени файла ('прогноз'/'смр' →
+    app/schedule_import.py) — угадывать формат по содержимому не пытаемся,
+    риск не той таблицы у той же ошибки, что уже чинили в парсерах (см.
+    Docs/backlog.md). Вызывать ПОСЛЕ import_input_dxf() — графику нужны уже
+    привязанные к зонам/этажу элементы. Возвращает построчный отчёт, см.
+    import_input_dxf.
+
+    Контрактация из папки НЕ грузится (2026-08-12, решение пользователя):
+    её импорт требует явного выбора ОБЪЕКТА, а у пакетной загрузки спросить
+    некого — договоры уезжали в базу без объекта и не принадлежали никакой
+    стройке (см. шапку app/contracting_import.py). Файл с таким именем
+    остаётся в папке и попадает в отчёт с указанием, через какую форму его
+    грузить."""
     report = []
 
     def say(line):
@@ -93,15 +99,11 @@ def import_input_xlsx() -> list:
     unrouted = [p for p in xlsx_files if p not in contracting and p not in schedule]
 
     for path in contracting:
-        conn = get_connection()
-        try:
-            parsed = parse_contracting_xlsx(path.read_bytes())
-            summary = import_contracting(conn, parsed)
-            say(f"Input/{path.name}: контрактация — {summary}")
-        except ContractingImportError as e:
-            say(f"Input/{path.name}: ОШИБКА импорта контрактации — {e.message}")
-        finally:
-            conn.close()
+        say(
+            f"Input/{path.name}: контрактация из папки не загружается — нужен явный выбор "
+            f"объекта. Загрузите файл формой «Действия → Обмен данными → Импорт "
+            f"контрактации из XLS»."
+        )
 
     for path in schedule:
         conn = get_connection()
