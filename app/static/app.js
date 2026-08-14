@@ -23656,6 +23656,7 @@ document.getElementById("menu-schedule").addEventListener("click", async () => {
   switchScheduleTab("versions");
   document.getElementById("schedule-calc-status").textContent = "";
   document.getElementById("schedule-inputs-status").textContent = "";
+  scheduleCalcDateLabel();
   await Promise.all([loadScheduleVersions(), loadScheduleInputs()]);
 });
 document.getElementById("schedule-close").addEventListener("click",
@@ -23795,6 +23796,21 @@ document.getElementById("schedule-flow-autofill").addEventListener("click", () =
 // по крану, стоянке и этажу. Чего в модели нет, добавляется отдельной
 // строкой с пометкой «нет в модели»: молча выбросить строку из файла —
 // значит потерять данные, о которых человек не узнает.
+// Подпись у даты расчёта — по режиму (см. комментарий в разметке).
+function scheduleCalcDateLabel() {
+  const отФакта = document.getElementById("schedule-calc-skip-installed").checked;
+  document.getElementById("schedule-calc-start-label").textContent =
+    отФакта ? "Считать остаток с даты" : "Дата начала работ";
+  document.getElementById("schedule-calc-start-hint").textContent = отФакта
+    ? "Смонтированные изделия из объёма исключаются, а всё оставшееся "
+      + "раскладывается вперёд с этого дня — обычно это сегодня или начало ближайшей смены."
+    : "Весь объём считается заново, с нуля: каждый кран начинает свою очередь фронтов "
+      + "с этого дня. Краны стартуют одновременно.";
+}
+
+document.getElementById("schedule-calc-skip-installed")
+  .addEventListener("change", scheduleCalcDateLabel);
+
 document.getElementById("schedule-inputs-load").addEventListener("click", async () => {
   const status = document.getElementById("schedule-inputs-status");
   const file = document.getElementById("schedule-inputs-file").files[0];
