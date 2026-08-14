@@ -45,13 +45,14 @@ from app.access import (
     role_level,
 )
 from app.db import get_connection
-from app.features import FEATURES, READ
+from app.features import FEATURES, FEATURES_BY_KEY, READ, WRITE
 from app.training_content import (
     CONTENT_VERSION,
     blocks_for,
     missing_features,
     question as найти_вопрос,
     questions_for,
+    section_of,
 )
 
 router = APIRouter(prefix="/training", tags=["training"])
@@ -65,6 +66,51 @@ QUESTIONS_PER_ATTEMPT = 20
 # Момент с долями секунды: обычный datetime('now') округляет до секунды, а
 # «сколько думал» на быстрых вопросах тогда сплющивается в ноль.
 _NOW = "strftime('%Y-%m-%d %H:%M:%f', 'now')"
+
+
+# Что таблицам обучения полагается иметь. Список нужен проверке ниже; сами
+# колонки заводятся schema.sql (новая база) и миграциями (накопленная).
+_НУЖНЫЕ_ПОЛЯ = {
+    "training_attempts": ("user_id", "role_key", "feature_key", "object_id",
+                          "content_version", "questions", "answered", "correct",
+                          "started_at", "finished_at", "current_question",
+                          "current_options", "asked_at"),
+    "training_answers": ("attempt_id", "ord", "question_key", "feature_key",
+                         "question_text", "chosen_text", "correct_text",
+                         "is_correct", "spent_ms", "answered_at"),
+}
+
+
+def _проверить_схему(conn: sqlite3.Connection) -> None:
+    """Понятный отказ вместо 500, если структура базы отстала от кода.
+
+    Так бывает на машине разработчика: процесс сервера поднялся раньше, чем
+    в схеме появились таблицы обучения, и с тех пор не перезапускался
+    (миграции применяются ТОЛЬКО при старте — см. app/db.init_db). Инструкция
+    в этом состоянии открывается, потому что в базу не ходит, а тест падает
+    на первом же запросе — и падает голым 500, по которому причину не
+    угадать. Проверка дешёвая (одна строка из sqlite_master) и стоит только
+    в точках, которые читают историю попыток.
+    """
+    нет = []
+    for таблица, колонки in _НУЖНЫЕ_ПОЛЯ.items():
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (таблица,)).fetchone() is None:
+            нет.append(таблица)
+            continue
+        # Колонки проверяются отдельно от таблицы: они приезжают не со
+        # схемой, а миграцией (app/db._COLUMN_MIGRATIONS), и состояние
+        # «таблица старая, колонки нет» — то же самое отставание. Проверять
+        # ВЕСЬ набор, а не последнюю добавленную: именно частичная проверка
+        # пропустила отсутствие current_options и дала 500 (2026-08-14).
+        есть = {r[1] for r in conn.execute(f"PRAGMA table_info({таблица})")}
+        нет.extend(f"{таблица}.{к}" for к in колонки if к not in есть)
+    if нет:
+        raise HTTPException(
+            status_code=503,
+            detail="Раздел «Обучение» ещё не готов: структура базы отстала от кода "
+                   f"(нет: {', '.join(нет)}). Она обновляется при СТАРТЕ сервиса — "
+                   "перезапустите его.")
 
 
 def _уровни(conn: sqlite3.Connection, user: sqlite3.Row, object_id: Optional[int]) -> dict:
@@ -84,14 +130,24 @@ def _может_смотреть_чужое(conn: sqlite3.Connection, user: sqli
 
 
 def _собрать_инструкцию(levels: dict) -> list:
+    """Блоки инструкции с секцией и числом вопросов у каждого.
+
+    Число вопросов отдаётся вместе с блоком, чтобы у него была кнопка
+    «проверить себя по этому разделу»: без него клиенту пришлось бы либо
+    показывать кнопку, которая иногда отвечает «вопросов нет», либо
+    спрашивать сервер отдельно на каждый из шести десятков блоков.
+    """
     разделы = []
     for блок, абзацы, уровень in blocks_for(levels):
+        вопросов = sum(1 for в in блок.questions if в.level == READ or уровень == WRITE)
         разделы.append({
             "key": блок.key,
             "feature": блок.feature,
+            "section": section_of(блок),
             "title": блок.title,
             "level": уровень,
             "paragraphs": [p.text for p in абзацы],
+            "questions": вопросов,
         })
     return разделы
 
@@ -162,7 +218,8 @@ def _вопрос_наружу(conn: sqlite3.Connection, попытка: sqlite3
     }
 
 
-def _задать_вопрос(conn: sqlite3.Connection, попытка_id: int, levels: dict) -> None:
+def _задать_вопрос(conn: sqlite3.Connection, попытка_id: int, levels: dict,
+                   feature: Optional[str] = None) -> None:
     """Выбрать очередной вопрос и записать его в попытку.
 
     Список вопросов заранее не составляется: он всё равно проверялся бы на
@@ -171,7 +228,7 @@ def _задать_вопрос(conn: sqlite3.Connection, попытка_id: int,
     """
     заданные = {r["question_key"] for r in conn.execute(
         "SELECT question_key FROM training_answers WHERE attempt_id = ?", (попытка_id,))}
-    доступные = [в for _б, в in questions_for(levels) if в.key not in заданные]
+    доступные = [в for _б, в in questions_for(levels, feature) if в.key not in заданные]
     if not доступные:
         _завершить(conn, попытка_id)
         return
@@ -191,6 +248,52 @@ def _завершить(conn: sqlite3.Connection, попытка_id: int) -> Non
         (попытка_id,))
 
 
+def _набор_попытки(conn: sqlite3.Connection, user: sqlite3.Row, попытка: sqlite3.Row) -> dict:
+    """Права, по которым собран набор вопросов этой попытки.
+
+    Одной функцией на старт и на выдачу следующего вопроса: разойдись они,
+    попытка посреди теста начала бы спрашивать не то, с чего начиналась.
+    """
+    if попытка["role_key"]:
+        return _уровни_роли(conn, попытка["role_key"])
+    return _уровни(conn, user, попытка["object_id"])
+
+
+def _раздел_попытки(попытка: sqlite3.Row) -> Optional[str]:
+    """Раздел попытки или None. Колонка появилась миграцией, и у попыток,
+    начатых предыдущей версией, её в выборке может не быть."""
+    return попытка["feature_key"] if "feature_key" in попытка.keys() else None
+
+
+def _обеспечить_вопрос(conn: sqlite3.Connection, user: sqlite3.Row,
+                       попытка: sqlite3.Row) -> sqlite3.Row:
+    """Вернуть попытку, у которой ТОЧНО есть текущий вопрос.
+
+    Незавершённая попытка может остаться без него: вопрос, который был
+    задан, исчез из материала новой версии, или попытка началась в момент,
+    когда её первый вопрос ещё не записался. Без этой починки экран теста
+    оказывался в тупике — «продолжить» нечего, а начать новую попытку
+    нельзя, пока висит эта.
+    """
+    if попытка["finished_at"] or _вопрос_наружу(conn, попытка) is not None:
+        return попытка
+    _задать_вопрос(conn, попытка["id"], _набор_попытки(conn, user, попытка),
+                   _раздел_попытки(попытка))
+    conn.commit()
+    return _попытка(conn, попытка["id"])
+
+
+def _подпись_набора(conn: sqlite3.Connection, попытка: sqlite3.Row) -> str:
+    """Чем ограничена попытка, человеческими словами: по этому люди
+    отличают «тест по контрактации» от общего в списке своих попыток."""
+    раздел = _раздел_попытки(попытка)
+    if раздел and раздел in FEATURES_BY_KEY:
+        return FEATURES_BY_KEY[раздел].title
+    if попытка["role_key"]:
+        return f"роль «{role_labels(conn).get(попытка['role_key'], попытка['role_key'])}»"
+    return "все доступные разделы"
+
+
 def _попытка(conn: sqlite3.Connection, attempt_id: int) -> sqlite3.Row:
     строка = conn.execute(
         "SELECT * FROM training_attempts WHERE id = ?", (attempt_id,)).fetchone()
@@ -202,6 +305,9 @@ def _попытка(conn: sqlite3.Connection, attempt_id: int) -> sqlite3.Row:
 class StartIn(BaseModel):
     object_id: Optional[int] = None
     role_key: Optional[str] = None
+    # Тест по ОДНОМУ разделу — «проверить себя по тому, что сейчас прочитал».
+    # None — по всем доступным разделам сразу.
+    feature_key: Optional[str] = None
 
 
 class AnswerIn(BaseModel):
@@ -216,12 +322,17 @@ def read_state(object_id: Optional[int] = Query(None),
     если она есть, и собственный итог."""
     conn = get_connection()
     try:
+        _проверить_схему(conn)
         текущая = conn.execute(
             "SELECT * FROM training_attempts WHERE user_id = ? AND finished_at IS NULL "
             "ORDER BY id DESC LIMIT 1", (user["id"],)).fetchone()
+        if текущая:
+            текущая = _обеспечить_вопрос(conn, user, текущая)
         return {
             "attempt": ({"id": текущая["id"], "answered": текущая["answered"],
                          "correct": текущая["correct"], "questions": текущая["questions"],
+                         "feature": _раздел_попытки(текущая),
+                         "scope": _подпись_набора(conn, текущая),
                          "question": _вопрос_наружу(conn, текущая)} if текущая else None),
             "rating": rating_for(conn, [user["id"]]).get(user["id"]),
             "questions_per_attempt": QUESTIONS_PER_ATTEMPT,
@@ -241,13 +352,22 @@ def start_attempt(body: StartIn,
     """
     conn = get_connection()
     try:
+        _проверить_схему(conn)
         текущая = conn.execute(
             "SELECT * FROM training_attempts WHERE user_id = ? AND finished_at IS NULL "
             "ORDER BY id DESC LIMIT 1", (user["id"],)).fetchone()
         if текущая:
+            текущая = _обеспечить_вопрос(conn, user, текущая)
+            # Незавершённая попытка возвращается КАК ЕСТЬ, даже если человек
+            # только что попросил тест по другому разделу: две живые попытки
+            # у одного человека означали бы, что «начать заново» — способ
+            # выбросить неудачный результат. Клиент по полям ниже говорит,
+            # что именно продолжается.
             return {"id": текущая["id"], "resumed": True,
                     "answered": текущая["answered"], "correct": текущая["correct"],
                     "questions": текущая["questions"],
+                    "feature": _раздел_попытки(текущая),
+                    "scope": _подпись_набора(conn, текущая),
                     "question": _вопрос_наружу(conn, текущая)}
 
         if body.role_key:
@@ -262,22 +382,33 @@ def start_attempt(body: StartIn,
         else:
             levels = _уровни(conn, user, body.object_id)
 
-        доступно = len(questions_for(levels))
+        раздел = body.feature_key or None
+        if раздел is not None and раздел not in FEATURES_BY_KEY:
+            raise HTTPException(status_code=400, detail=f"Неизвестный раздел «{раздел}»")
+
+        доступно = len(questions_for(levels, раздел))
         if not доступно:
             raise HTTPException(
                 status_code=400,
-                detail="По доступным разделам вопросов пока нет — материал ещё пишется")
+                detail=("По этому разделу вопросов пока нет — материал ещё пишется"
+                        if раздел else
+                        "По доступным разделам вопросов пока нет — материал ещё пишется"))
+        # Тест по одному разделу короче двадцати вопросов не потому, что он
+        # проще, а потому, что столько их там и есть: набирать до двадцати
+        # повторами значило бы спрашивать одно и то же дважды.
         всего = min(QUESTIONS_PER_ATTEMPT, доступно)
         cur = conn.execute(
-            "INSERT INTO training_attempts (user_id, role_key, object_id, content_version, "
-            "questions) VALUES (?, ?, ?, ?, ?)",
-            (user["id"], body.role_key, body.object_id, CONTENT_VERSION, всего))
+            "INSERT INTO training_attempts (user_id, role_key, feature_key, object_id, "
+            "content_version, questions) VALUES (?, ?, ?, ?, ?, ?)",
+            (user["id"], body.role_key, раздел, body.object_id, CONTENT_VERSION, всего))
         попытка_id = cur.lastrowid
-        _задать_вопрос(conn, попытка_id, levels)
+        _задать_вопрос(conn, попытка_id, levels, раздел)
         conn.commit()
         строка = _попытка(conn, попытка_id)
         return {"id": попытка_id, "resumed": False, "answered": 0, "correct": 0,
-                "questions": всего, "question": _вопрос_наружу(conn, строка)}
+                "questions": всего, "feature": раздел,
+                "scope": _подпись_набора(conn, строка),
+                "question": _вопрос_наружу(conn, строка)}
     finally:
         conn.close()
 
@@ -309,9 +440,8 @@ def answer(attempt_id: int, body: AnswerIn,
             # Материал обновился прямо посреди попытки. Вопрос пропускаем,
             # выдавая следующий: засчитать ответ на исчезнувший вопрос
             # нельзя, а рушить попытку из-за выхода версии — тем более.
-            levels = (_уровни_роли(conn, попытка["role_key"]) if попытка["role_key"]
-                      else _уровни(conn, user, попытка["object_id"]))
-            _задать_вопрос(conn, attempt_id, levels)
+            _задать_вопрос(conn, attempt_id, _набор_попытки(conn, user, попытка),
+                           _раздел_попытки(попытка))
             conn.commit()
             строка = _попытка(conn, attempt_id)
             return {"skipped": True, "question": _вопрос_наружу(conn, строка),
@@ -341,9 +471,8 @@ def answer(attempt_id: int, body: AnswerIn,
         if завершена:
             _завершить(conn, attempt_id)
         else:
-            levels = (_уровни_роли(conn, попытка["role_key"]) if попытка["role_key"]
-                      else _уровни(conn, user, попытка["object_id"]))
-            _задать_вопрос(conn, attempt_id, levels)
+            _задать_вопрос(conn, attempt_id, _набор_попытки(conn, user, попытка),
+                           _раздел_попытки(попытка))
         conn.commit()
 
         строка = _попытка(conn, attempt_id)
@@ -380,14 +509,30 @@ def rating_for(conn: sqlite3.Connection, user_ids: list) -> dict:
         return {}
     метки = ",".join("?" for _ in user_ids)
     итог = {}
+    # Только попытки ПО ВСЕМ доступным разделам: тест по одному разделу — это
+    # тренировка на две-три минуты, и «2 из 2» по одному разделу не значит
+    # того же, что «18 из 20» по всем. В историю он попадает и там виден, а в
+    # рейтинге сравнивать надо сравнимое.
+    #
+    # Лучшая попытка выбирается по ДОЛЕ правильных, а числа берутся из НЕЁ
+    # ЖЕ: MAX(correct) и MAX(questions) по отдельности собрали бы «лучшее из
+    # разных попыток» — число, которого никто не показывал.
     for r in conn.execute(
-        f"SELECT user_id, COUNT(*) AS attempts, MAX(correct) AS best, "
-        f"MAX(questions) AS total FROM training_attempts "
-        f"WHERE finished_at IS NOT NULL AND user_id IN ({метки}) GROUP BY user_id",
+        f"SELECT user_id, COUNT(*) AS attempts, "
+        f"       MAX(CAST(correct AS REAL) / questions) AS ratio "
+        f"FROM training_attempts "
+        f"WHERE finished_at IS NOT NULL AND questions > 0 AND feature_key IS NULL "
+        f"      AND user_id IN ({метки}) GROUP BY user_id",
         user_ids,
     ):
-        итог[r["user_id"]] = {"attempts": r["attempts"], "best": r["best"],
-                              "total": r["total"]}
+        лучшая = conn.execute(
+            "SELECT correct, questions FROM training_attempts "
+            "WHERE user_id = ? AND finished_at IS NOT NULL AND questions > 0 "
+            "      AND feature_key IS NULL "
+            "ORDER BY CAST(correct AS REAL) / questions DESC, questions DESC LIMIT 1",
+            (r["user_id"],)).fetchone()
+        итог[r["user_id"]] = {"attempts": r["attempts"], "best": лучшая["correct"],
+                              "total": лучшая["questions"]}
     return итог
 
 
@@ -401,6 +546,7 @@ def read_ratings(user: sqlite3.Row = Depends(require_service_feature("training_a
     """
     conn = get_connection()
     try:
+        _проверить_схему(conn)
         # ФИО отдаются здесь же, а не берутся из списка пользователей:
         # раздел «Пользователи» и раздел «История прохождения тестов» —
         # разные права, и требовать первый ради подписи строки значило бы
@@ -427,6 +573,7 @@ def list_attempts(user_id: Optional[int] = Query(None),
     прохождения тестов другими людьми»."""
     conn = get_connection()
     try:
+        _проверить_схему(conn)
         кого = user_id if user_id is not None else user["id"]
         if кого != user["id"] and not _может_смотреть_чужое(conn, user):
             raise HTTPException(
@@ -443,6 +590,7 @@ def list_attempts(user_id: Optional[int] = Query(None),
                 "id": r["id"],
                 "role_key": r["role_key"],
                 "role_name": подписи.get(r["role_key"]) if r["role_key"] else "все свои роли",
+                "scope": _подпись_набора(conn, r),
                 "content_version": r["content_version"],
                 "questions": r["questions"], "answered": r["answered"],
                 "correct": r["correct"],

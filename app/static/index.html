@@ -2282,6 +2282,33 @@
      время показа отчёта (switchReport), а не навсегда: «Статусам» и
      «Динамике» лишняя ширина ни к чему — их вёрстка рассчитана на 780. */
   #reports-backdrop .modal.report-full { max-width: 96vw; width: 96vw; }
+
+  /* Размер формы отчётов — руками (живой запрос 2026-08-14: «добавь
+     возможность менять размер области с отчётами и открывать их на весь
+     экран»). Раньше ширина была свойством ОТЧЁТА: «Графику поставки» её
+     раздавали классом report-full, остальным доставалось 780 px. Но что
+     широко, а что нет, зависит от экрана и от того, что человек сейчас
+     разглядывает: «Динамику» на большом мониторе хочется во всю ширину, а
+     кривые в 780 px сливаются (тот же запрос).
+
+     Тянется за правый нижний угол штатным resize — своя ручка тут не нужна:
+     форма и так прямоугольная область с прокруткой внутри. Ограничения по
+     min/max держат её в пределах экрана. Выбранный размер помнится за
+     компьютером (localStorage, см. app.js). */
+  #reports-backdrop .modal {
+    resize: both;
+    min-width: 420px; min-height: 320px;
+    max-width: 98vw; max-height: 92vh;
+  }
+  /* На весь экран — отдельным состоянием, а не «растяните сами до краёв»:
+     это одно нажатие вместо возни с углом, и его же ждут от кнопки ⛶.
+     Пока режим включён, ручной размер не действует (resize: none), иначе
+     угол тянул бы форму внутри уже развёрнутой на весь экран. */
+  #reports-backdrop .modal.report-maximized {
+    width: 98vw !important; height: 94vh !important;
+    max-width: 98vw; max-height: 94vh; resize: none;
+  }
+  #report-size-toggle { font-size: 15px; line-height: 1; }
   .ds-controls { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 6px 0 8px; }
   .ds-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
   /* Фишка уровня: флажок «участвует» + стрелки переноса. Порядок фишек
@@ -5253,6 +5280,12 @@
           <button class="btn btn-sm btn-secondary btn-icon-square" id="report-pdf" title="Выгрузить в PDF" aria-label="Выгрузить в PDF">
             <img src="/static/pdf.svg" alt="" width="20" height="20"/>
           </button>
+          <!-- Во весь экран и обратно (2026-08-14). Стоит последним в ряду
+               действий: это про то, КАК смотреть отчёт, а не про то, что с
+               ним сделать. Размер и так тянется за правый нижний угол формы,
+               кнопка — быстрый способ развернуть без возни с углом. -->
+          <button class="btn btn-sm btn-secondary btn-icon-square" id="report-size-toggle"
+                  title="Развернуть на весь экран" aria-label="Развернуть на весь экран">⛶</button>
         </div>
       </div>
       <h2 id="report-title">Отчёт</h2>

@@ -939,6 +939,9 @@ CREATE TABLE IF NOT EXISTS training_attempts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     role_key TEXT,
+    -- Раздел, если тест запущен по ОДНОМУ разделу («проверить себя по тому,
+    -- что сейчас прочитал»). NULL — по всем доступным разделам сразу.
+    feature_key TEXT,
     object_id INTEGER REFERENCES objects (id) ON DELETE SET NULL,
     content_version TEXT NOT NULL,
     questions INTEGER NOT NULL,

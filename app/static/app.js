@@ -13545,7 +13545,8 @@ document.getElementById("admin-guide-copy-all").addEventListener("click", async 
 // правильного варианта, а разбор — только вместе с ответом сервера. Иначе
 // тест проходился бы инструментами разработчика за минуту.
 const trainingBackdrop = document.getElementById("training-backdrop");
-const trainingState = { tab: "guide", attempt: null, roleKey: "" };
+const trainingState = { tab: "guide", attempt: null, roleKey: "", guide: null,
+                        blockKey: null, search: "" };
 
 function trainingSetTab(tab) {
   // Вкладка чужих результатов гасится здесь, а не общим правилом
@@ -13594,33 +13595,249 @@ async function trainingLoadGuide() {
     выбор.dataset.filled = "1";
   }
 
-  const части = [];
+  trainingState.guide = data;
+  // Выбранный раздел живёт между открытиями формы: человек возвращается к
+  // тому, что читал, а не к началу списка. Если раздела в новом наборе нет
+  // (сменили роль в «глазами роли»), берётся первый доступный.
+  if (!data.blocks.some((б) => б.key === trainingState.blockKey)) {
+    trainingState.blockKey = data.blocks.length ? data.blocks[0].key : null;
+  }
+  trainingRenderGuide();
+}
+
+// Пролистал оглавление, но ничего не выбрал — через NAV_RETURN_MS список
+// сам возвращается к разделу, который открыт (требование пользователя
+// 2026-08-14). Смысл: оглавление на 67 строк легко «уехать» мышью, и
+// человек теряет место, на котором читает, не сделав ни одного выбора.
+const TRAINING_NAV_RETURN_MS = 5000;
+// Возврат — СВОЯ анимация, а не `scrollIntoView({behavior:"smooth"})`.
+// Причина не косметическая: возврат прокручивает список, то есть порождает
+// те же события scroll, на которые заведён таймер, и штатная плавная
+// прокрутка тянулась дольше, чем жил защитный флаг, — её собственные
+// события заводили таймер заново, список дёргался и до места не доезжал
+// (проверено живьём). Здесь флаг снимается ровно в кадре, где анимация
+// закончилась, поэтому цикл невозможен, а движение остаётся плавным.
+const TRAINING_NAV_ANIM_MIN_MS = 280;
+const TRAINING_NAV_ANIM_MAX_MS = 900;
+// Отступ от края списка: доехать «впритык» — значит оставить строку
+// приклеенной к границе, по которой не понять, есть ли что-то дальше.
+const TRAINING_NAV_MARGIN_PX = 12;
+let trainingNavTimer = null;
+let trainingNavReturning = false;
+let trainingNavFrame = null;
+
+function trainingNavCancel() {
+  if (trainingNavTimer) clearTimeout(trainingNavTimer);
+  trainingNavTimer = null;
+  if (trainingNavFrame) cancelAnimationFrame(trainingNavFrame);
+  trainingNavFrame = null;
+  trainingNavReturning = false;
+}
+
+// Куда доехать, чтобы активная строка оказалась видна. null — она и так на
+// месте: возврат нужен ушедшему взгляду, а не каждому касанию колеса.
+function trainingNavTarget(nav, активная) {
+  // Положение строки ВНУТРИ списка считается через прямоугольники, а не по
+  // offsetTop: тот меряется от ближайшего позиционированного предка, а между
+  // строкой и списком лежат обёртки секций — цель уезжала на сотни пикселей,
+  // и строка оказывалась за верхним краем (проверено живьём).
+  const свой = активная.getBoundingClientRect();
+  const списка = nav.getBoundingClientRect();
+  const позиция = nav.scrollTop + (свой.top - списка.top);
+  const верх = позиция - TRAINING_NAV_MARGIN_PX;
+  const низ = позиция + свой.height - nav.clientHeight + TRAINING_NAV_MARGIN_PX;
+  if (nav.scrollTop > верх) return Math.max(0, верх);
+  if (nav.scrollTop < низ) return Math.min(nav.scrollHeight - nav.clientHeight, низ);
+  return null;
+}
+
+// Инерционное торможение: трогается быстро, у цели замедляется (ease-out
+// cubic). Длительность — от расстояния: короткий возврат не должен длиться
+// столько же, сколько проезд через весь список.
+function trainingNavGlide(nav, куда) {
+  const откуда = nav.scrollTop;
+  const путь = куда - откуда;
+  if (!путь) return;
+  const время = Math.min(TRAINING_NAV_ANIM_MAX_MS,
+                         Math.max(TRAINING_NAV_ANIM_MIN_MS, Math.abs(путь) * 0.55));
+  const начало = performance.now();
+  trainingNavReturning = true;
+  const шаг = (сейчас) => {
+    const t = Math.min(1, (сейчас - начало) / время);
+    nav.scrollTop = откуда + путь * (1 - Math.pow(1 - t, 3));
+    if (t < 1) {
+      trainingNavFrame = requestAnimationFrame(шаг);
+    } else {
+      trainingNavFrame = null;
+      trainingNavReturning = false;
+    }
+  };
+  trainingNavFrame = requestAnimationFrame(шаг);
+}
+
+function trainingNavWatch() {
+  trainingNavCancel();
+  const nav = document.getElementById("training-nav");
+  if (!nav) return;
+  // После перерисовки список начинается сверху, а выбранный раздел может
+  // быть в самом низу — тогда человек нажал на строку и потерял её из виду.
+  // Здесь прыжок МГНОВЕННЫЙ: анимировать то, что человек только что сам
+  // выбрал, значит показывать ему поездку по списку вместо ответа.
+  const активная = nav.querySelector("[data-block].btn-primary");
+  if (активная) {
+    const куда = trainingNavTarget(nav, активная);
+    if (куда !== null) nav.scrollTop = куда;
+  }
+  nav.addEventListener("scroll", () => {
+    if (trainingNavReturning) return;
+    if (trainingNavTimer) clearTimeout(trainingNavTimer);
+    trainingNavTimer = setTimeout(() => {
+      trainingNavTimer = null;
+      const текущая = nav.querySelector("[data-block].btn-primary");
+      if (!текущая) return;
+      const куда = trainingNavTarget(nav, текущая);
+      if (куда !== null) trainingNavGlide(nav, куда);
+    }, TRAINING_NAV_RETURN_MS);
+  });
+}
+
+// Абзац инструкции: экранируется целиком, и только ПОСЛЕ этого **выделение**
+// превращается в <strong>. Порядок обязателен — разбирать разметку до
+// экранирования значит впустить в страницу чужую разметку из текста. Ничего,
+// кроме жирного, здесь не разбирается: материал пишется прозой, а половина
+// Markdown в модальном окне живёт хуже, чем его отсутствие.
+function trainingText(текст) {
+  return escapeHtml(текст).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+}
+
+// Инструкция — двумя колонками: слева оглавление по тем же секциям, что и
+// разделы прав («Схема объекта», «Контрактация», «Ведение сервиса»), справа
+// выбранный раздел. Сплошным текстом шестьдесят с лишним блоков читать
+// нельзя: до «Ведения сервиса» пришлось бы прокрутить всё остальное.
+function trainingRenderGuide() {
+  const data = trainingState.guide;
+  const box = document.getElementById("training-guide");
+  if (!data) return;
+  const поиск = (trainingState.search || "").trim().toLowerCase();
+  const подходит = (б) => !поиск || б.title.toLowerCase().includes(поиск)
+    || б.paragraphs.some((п) => п.toLowerCase().includes(поиск));
+  const видимые = data.blocks.filter(подходит);
+
+  // Секции в порядке блоков, а не по алфавиту: порядок разделов сложился по
+  // смыслу — от схемы к ведению сервиса, — и сортировка перемешала бы его.
+  const секции = [];
+  for (const блок of видимые) {
+    let секция = секции.find((с) => с.name === блок.section);
+    if (!секция) секции.push((секция = { name: блок.section, blocks: [] }));
+    секция.blocks.push(блок);
+  }
+
+  const выбран = видимые.find((б) => б.key === trainingState.blockKey)
+    || (видимые.length ? видимые[0] : null);
+  trainingState.blockKey = выбран ? выбран.key : null;
+
+  const шапка = [];
   if (data.role_name) {
-    части.push(`<p class="hint-text">Показано то, что видит роль
+    шапка.push(`<p class="hint-text" style="margin:0 0 8px;">Показано то, что видит роль
       «${escapeHtml(data.role_name)}». Ваши собственные права от этого не меняются.</p>`);
   }
   // Плашка «материал ещё пишется» — намеренно на экране, а не только в
   // страже: раздел без учебного блока иначе выглядел бы как раздел, которого
   // в системе нет.
   if (data.missing.length) {
-    части.push(`<p class="hint-text" style="color: var(--color-warning, #b26a00);">
+    шапка.push(`<p class="hint-text" style="margin:0 0 8px; color: var(--color-warning, #b26a00);">
       Материал пишется по частям: разделов без описания — ${data.missing.length}.</p>`);
   }
-  for (const блок of data.blocks) {
-    части.push(`<h3 style="margin: 18px 0 6px;">${escapeHtml(блок.title)}</h3>`);
-    for (const абзац of блок.paragraphs) {
-      части.push(`<p style="margin: 0 0 8px; line-height: 1.5;">${escapeHtml(абзац)}</p>`);
-    }
+
+  const оглавление = секции.map((с) => `
+    <div style="margin-bottom:10px;">
+      <div class="hint-text" style="text-transform:uppercase; font-size:11px; letter-spacing:.04em;
+           margin-bottom:2px;">${escapeHtml(с.name)}</div>
+      ${с.blocks.map((б) => `
+        <button class="btn btn-sm ${б.key === trainingState.blockKey ? "btn-primary" : "btn-secondary"}"
+                data-block="${escapeHtml(б.key)}"
+                style="display:block; width:100%; text-align:left; margin-bottom:3px;
+                       white-space:normal;">${escapeHtml(б.title)}</button>`).join("")}
+    </div>`).join("") || `<p class="hint-text">Ничего не нашлось.</p>`;
+
+  const содержимое = выбран ? `
+    <h3 style="margin:0 0 4px;">${escapeHtml(выбран.title)}</h3>
+    <p class="hint-text" style="margin:0 0 12px;">${escapeHtml(выбран.section)}${
+      // Уровень подписывается только у блоков РАЗДЕЛА: общие блоки (вход,
+      // выбор объекта) правами не управляются, и «вам доступно изменение»
+      // у них означало бы несуществующее разрешение.
+      !выбран.feature ? ""
+        : выбран.level === "write" ? " · вам доступно изменение" : " · только просмотр"}</p>
+    ${выбран.paragraphs.map((п) =>
+      `<p style="margin:0 0 10px; line-height:1.55;">${trainingText(п)}</p>`).join("")}
+    ${выбран.questions && выбран.feature ? `
+      <button class="btn btn-primary" id="training-test-block" style="margin-top:10px;">
+        Проверить себя по этому разделу (${выбран.questions})</button>` : ""}`
+    : `<p class="hint-text">Выберите раздел слева.</p>`;
+
+  // Колонки прокручиваются ОТДЕЛЬНО: длинный раздел не должен угонять
+  // оглавление, а листание оглавления — уводить текст, который человек
+  // читает. Поле поиска остаётся на месте — прокручивается только список.
+  box.innerHTML = шапка.join("") + `
+    <div style="display:flex; gap:16px; align-items:flex-start;">
+      <div style="flex:0 0 240px; max-width:240px; display:flex; flex-direction:column;
+                  max-height:60vh;">
+        <input class="input input-sm" id="training-search" placeholder="Поиск по инструкции"
+               value="${escapeHtml(trainingState.search || "")}"
+               style="width:100%; margin-bottom:8px; flex:0 0 auto;">
+        <div id="training-nav" style="overflow-y:auto; flex:1 1 auto; padding-right:4px;">
+          ${оглавление}
+        </div>
+      </div>
+      <div id="training-body" style="flex:1 1 auto; min-width:0; overflow-y:auto;
+           max-height:60vh; padding-right:4px;">${содержимое}</div>
+    </div>
+    <p class="hint-text" style="margin-top:18px;">Редакция материала:
+      ${escapeHtml(data.content_version)}. Разделов у вас: ${data.blocks.length};
+      вопросов: ${data.questions_total}; в одной попытке — ${data.questions_per_attempt}.</p>`;
+
+  for (const кнопка of box.querySelectorAll("[data-block]")) {
+    кнопка.addEventListener("click", () => {
+      trainingNavCancel();
+      trainingState.blockKey = кнопка.dataset.block;
+      trainingRenderGuide();
+    });
   }
-  части.push(`<p class="hint-text" style="margin-top:18px;">Редакция материала:
-    ${escapeHtml(data.content_version)}. Вопросов по вашим разделам:
-    ${data.questions_total}; в одной попытке — ${data.questions_per_attempt}.</p>`);
-  box.innerHTML = части.join("");
+  trainingNavWatch();
+  const поле = document.getElementById("training-search");
+  поле.addEventListener("input", () => {
+    trainingState.search = поле.value;
+    trainingRenderGuide();
+    // Перерисовка убивает поле вместе с фокусом — возвращаем его на место,
+    // иначе набрать слово целиком невозможно: каждая буква выбрасывала бы
+    // курсор.
+    const новое = document.getElementById("training-search");
+    новое.focus();
+    новое.setSelectionRange(новое.value.length, новое.value.length);
+  });
+  const тест = document.getElementById("training-test-block");
+  if (тест) {
+    тест.addEventListener("click", () => {
+      trainingSetTab("test");
+      trainingStartAttempt(выбран.feature);
+    });
+  }
 }
 
 function trainingScoreText(итог) {
   if (!итог || !итог.attempts) return "—";
   return `${итог.best} из ${итог.total}, попыток ${итог.attempts}`;
+}
+
+// Ошибка показывается ВНУТРИ вкладки, а не showToast'ом: тот пишет в строку
+// состояния под схемой, а она закрыта модальным окном — отказ выглядел бы как
+// «кнопка моргнула и ничего не произошло».
+function trainingError(box, message, повтор) {
+  box.innerHTML = `
+    <p style="color: var(--color-danger, #c62828); font-weight:600; margin:0 0 8px;">
+      ${escapeHtml(message)}</p>
+    <button class="btn btn-secondary" id="training-retry">Попробовать снова</button>`;
+  document.getElementById("training-retry").addEventListener("click", повтор);
 }
 
 async function trainingRenderTest() {
@@ -13630,7 +13847,7 @@ async function trainingRenderTest() {
   try {
     state_ = await api("/training/state");
   } catch (e) {
-    box.textContent = e.message;
+    trainingError(box, e.message, trainingRenderTest);
     return;
   }
   if (state_.attempt && state_.attempt.question) {
@@ -13642,37 +13859,60 @@ async function trainingRenderTest() {
   box.innerHTML = `
     <p>В попытке ${state_.questions_per_attempt} вопросов по доступным вам разделам.
       Ответ фиксируется сразу и не меняется — сразу после него показывается разбор.</p>
+    <p class="hint-text">Тест по ОДНОМУ разделу запускается кнопкой под текстом этого
+      раздела на вкладке «Инструкция».</p>
     <p class="hint-text">Ваш результат: ${trainingScoreText(state_.rating)}</p>
     <button class="btn btn-primary" id="training-start">Начать тест</button>`;
-  document.getElementById("training-start").addEventListener("click", async () => {
-    try {
-      const попытка = await api("/training/attempts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ object_id: state.objectId || null }),
-      });
-      trainingState.attempt = попытка;
-      trainingRenderQuestion(попытка.question, null);
-    } catch (e) {
-      showToast(e.message, "error");
-    }
-  });
+  document.getElementById("training-start").addEventListener("click", () => trainingStartAttempt(null));
+}
+
+// feature — тест по одному разделу («проверить себя по тому, что прочитал»);
+// null — по всем доступным разделам.
+async function trainingStartAttempt(feature) {
+  const box = document.getElementById("training-test");
+  box.textContent = "Загрузка…";
+  let попытка;
+  try {
+    попытка = await api("/training/attempts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ object_id: state.objectId || null, feature_key: feature || null }),
+    });
+  } catch (e) {
+    trainingError(box, e.message, () => trainingStartAttempt(feature));
+    return;
+  }
+  trainingState.attempt = попытка;
+  // Незавершённая попытка возвращается как есть, даже если просили другой
+  // раздел (сервер не заводит вторую). Молчать об этом нельзя: человек
+  // ждал вопросов про контрактацию, а получил бы продолжение старого теста.
+  const заметка = (попытка.resumed && feature && попытка.feature !== feature)
+    ? `<p class="hint-text">У вас осталась незавершённая попытка
+       (${escapeHtml(попытка.scope || "")}) — сначала она. Тест по выбранному разделу
+       можно начать сразу после неё.</p>`
+    : null;
+  trainingRenderQuestion(попытка.question, заметка);
 }
 
 function trainingRenderQuestion(вопрос, разбор) {
   const box = document.getElementById("training-test");
   if (!вопрос) {
-    box.innerHTML = `<p>Тест пройден.</p>`;
+    box.innerHTML = (разбор || "") + `
+      <p>Вопросов больше нет.</p>
+      <button class="btn btn-primary" id="training-again">К началу теста</button>`;
+    document.getElementById("training-again").addEventListener("click", trainingRenderTest);
     return;
   }
   const части = [];
   if (разбор) части.push(разбор);
   части.push(`<p class="hint-text">Вопрос ${вопрос.number} из ${вопрос.total} ·
     ${escapeHtml(вопрос.block_title)}</p>`);
-  части.push(`<p style="font-weight:600; margin:6px 0 12px;">${escapeHtml(вопрос.text)}</p>`);
+  части.push(`<p style="font-weight:600; font-size:18px; line-height:1.4;
+    margin:8px 0 14px;">${escapeHtml(вопрос.text)}</p>`);
   части.push(`<div id="training-options">` + вопрос.options.map((текст, i) =>
     `<button class="btn btn-secondary" data-option="${i}"
-      style="display:block; width:100%; text-align:left; margin-bottom:6px; white-space:normal;">
+      style="display:block; width:100%; text-align:left; margin-bottom:6px; white-space:normal;
+             font-size:15px; font-weight:400; line-height:1.4;">
       ${escapeHtml(текст)}</button>`).join("") + `</div>`);
   box.innerHTML = части.join("");
   for (const кнопка of box.querySelectorAll("[data-option]")) {
@@ -13695,8 +13935,7 @@ async function trainingAnswer(questionKey, option) {
       body: JSON.stringify({ question_key: questionKey, option }),
     });
   } catch (e) {
-    showToast(e.message, "error");
-    trainingRenderTest();
+    trainingError(document.getElementById("training-test"), e.message, trainingRenderTest);
     return;
   }
   if (ответ.skipped) {
@@ -13706,16 +13945,18 @@ async function trainingAnswer(questionKey, option) {
   }
   const цвет = ответ.correct ? "var(--color-success, #2e7d32)" : "var(--color-danger, #c62828)";
   const разбор = `
-    <div style="border-left: 3px solid ${цвет}; padding: 6px 10px; margin-bottom: 14px;">
-      <p style="font-weight:600; color:${цвет}; margin:0 0 4px;">
+    <div style="border-left: 3px solid ${цвет}; padding: 6px 12px; margin-bottom: 16px;
+                font-size:16px; line-height:1.5;">
+      <p style="font-weight:600; color:${цвет}; margin:0 0 6px;">
         ${ответ.correct ? "Верно" : "Неверно"}</p>
-      ${ответ.correct ? "" : `<p style="margin:0 0 4px;">Правильный ответ:
-        ${escapeHtml(ответ.correct_text)}</p>`}
+      ${ответ.correct ? "" : `<p style="margin:0 0 6px;">Правильный ответ:
+        <strong>${escapeHtml(ответ.correct_text)}</strong></p>`}
       <p style="margin:0;">${escapeHtml(ответ.explain)}</p>
     </div>`;
   if (ответ.finished) {
     document.getElementById("training-test").innerHTML = разбор + `
-      <p style="font-weight:600;">Тест пройден: ${ответ.score.correct} из ${ответ.score.answered}.</p>
+      <p style="font-weight:600; font-size:18px;">Тест пройден:
+        ${ответ.score.correct} из ${ответ.score.answered}.</p>
       <button class="btn btn-primary" id="training-again">Пройти ещё раз</button>`;
     document.getElementById("training-again").addEventListener("click", trainingRenderTest);
     return;
@@ -13742,11 +13983,11 @@ async function trainingRenderAttempts(box, userId) {
     return;
   }
   box.innerHTML = `<table class="table"><thead><tr>
-      <th>Начата</th><th>Роль</th><th>Результат</th><th>Редакция</th><th></th>
+      <th>Начата</th><th>Набор вопросов</th><th>Результат</th><th>Редакция</th><th></th>
     </tr></thead><tbody>` + data.attempts.map((п) => `
       <tr>
         <td>${когда(п.started_at)}</td>
-        <td>${escapeHtml(п.role_name || "")}</td>
+        <td>${escapeHtml(п.scope || п.role_name || "")}</td>
         <td>${п.finished_at ? `${п.correct} из ${п.questions}`
               : `не завершена (${п.answered} из ${п.questions})`}</td>
         <td>${escapeHtml(п.content_version)}</td>
@@ -17648,7 +17889,12 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   // такие точки не рисуются, кривая факта на отчётной дате обрывается.
   const seriesPoints = (key) => (data.series[key] || [])
     .map((v, i) => ({ v, i })).filter(p => p.v !== null && p.v !== undefined);
-  const ряды = dynSeriesFor(data);
+  // Рисуем и перечисляем в легенде ОДИН И ТОТ ЖЕ набор (живой репорт
+  // 2026-08-14: «в легенде 3 показателя, на графике 2»). Пустой ряд линией
+  // не становится — например, прогноза нет, пока не загружена ни одна
+  // актуализация графика, — и в легенде ему тоже делать нечего: подпись без
+  // линии заставляет искать на графике то, чего там нет.
+  const ряды = dynSeriesFor(data).filter(k => seriesPoints(k).some(p => p.v > 0));
   const maxY = niceMax(Math.max(1, ...ряды.flatMap(k => seriesPoints(k).map(p => p.v))));
   const x = i => L + (weeks.length === 1 ? 0 : i * (width - L - R) / (weeks.length - 1));
   const y = v => height - B - (v / maxY) * (height - T - B);
@@ -17792,6 +18038,10 @@ function renderDynamicsReport(data) {
         : "События, задачи и вопросы на эту дату не заполнены"}
     </div>
     ${warns.length ? `<div class="dyn-warn">Внимание: ${escapeHtml(warns.join("; "))}. Кривая плана неполная.</div>` : ""}
+    ${data.forecast_version_id ? "" : `<div class="hint-text" style="text-align:center; margin-bottom:6px">
+      Кривой прогноза нет: по объекту не загружен ни один актуализированный график.
+      Загрузить — «Обмен данными → Импорт графика MS Project», вид «Актуализированный»;
+      посчитать самой системой — «Документы → График СМР → Расчёт».</div>`}
     <div class="dyn-boxes">
       ${dynList("events", "Ключевые события", card.key_events)}
       ${dynList("tasks", "Ключевые задачи", card.key_tasks)}
@@ -18335,6 +18585,7 @@ function showBackToReport(показать) {
 
 backToReportBtn.addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  applyReportSize();
   showBackToReport(false);
 });
 
@@ -18534,6 +18785,72 @@ document.getElementById("dyn-range-reset").addEventListener("click", () => {
 // Перезапрос, а не перерисовка имеющегося отчёта: сам отчёт несёт в себе
 // выбранный режим (series_order), и его же берут выгрузки XLSX/PDF.
 document.getElementById("dyn-mode").addEventListener("change", loadReport);
+
+// ---------- размер формы отчётов (2026-08-14, живой запрос) ----------
+// Ширина отчёта была свойством самого отчёта: «Графику поставки» её
+// раздавали классом report-full, остальным доставалось 780 px. Но что
+// широко, зависит от экрана и от того, что человек разглядывает: кривые
+// «Динамики» в 780 px сливаются. Теперь размер тянется за угол (CSS
+// resize у #reports-backdrop .modal) и разворачивается кнопкой ⛶.
+//
+// Помнится за компьютером, а не за пользователем: это свойство ЭКРАНА, с
+// которого смотрят, — на ноутбуке и на большом мониторе выбор разный, а
+// учётная запись одна и та же.
+const REPORT_SIZE_KEY = "zhbi_report_size";
+const reportsModal = () => reportsBackdrop.querySelector(".modal");
+
+function applyReportSize() {
+  const modal = reportsModal();
+  if (!modal) return;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(REPORT_SIZE_KEY) || "null"); } catch (e) { /* приватный режим */ }
+  const развёрнут = !!(saved && saved.maximized);
+  modal.classList.toggle("report-maximized", развёрнут);
+  // Ручной размер применяем только в обычном режиме: в развёрнутом за
+  // размеры отвечает класс, и inline-ширина спорила бы с ним.
+  if (!развёрнут && saved && saved.width && saved.height) {
+    modal.style.width = saved.width + "px";
+    modal.style.height = saved.height + "px";
+  } else if (развёрнут) {
+    modal.style.width = modal.style.height = "";
+  }
+  const btn = document.getElementById("report-size-toggle");
+  if (btn) {
+    btn.textContent = развёрнут ? "🗗" : "⛶";
+    btn.title = развёрнут ? "Свернуть к обычному размеру" : "Развернуть на весь экран";
+    btn.setAttribute("aria-label", btn.title);
+  }
+}
+
+function saveReportSize(patch) {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(REPORT_SIZE_KEY) || "{}") || {}; } catch (e) { /* приватный режим */ }
+  try {
+    localStorage.setItem(REPORT_SIZE_KEY, JSON.stringify({ ...saved, ...patch }));
+  } catch (e) { /* приватный режим — размер просто не запомнится */ }
+}
+
+document.getElementById("report-size-toggle").addEventListener("click", () => {
+  const modal = reportsModal();
+  const станет = !modal.classList.contains("report-maximized");
+  saveReportSize({ maximized: станет });
+  applyReportSize();
+});
+
+// Размер, оставленный ручкой, запоминаем по окончании перетаскивания.
+// ResizeObserver, а не событие мыши: у CSS-resize своего события нет, а
+// наблюдатель ловит и клавиатурное изменение размера окна браузером.
+if (window.ResizeObserver) {
+  const наблюдатель = new ResizeObserver((записи) => {
+    const modal = reportsModal();
+    if (!modal || !reportsBackdrop.classList.contains("open")) return;
+    if (modal.classList.contains("report-maximized")) return;
+    const { width, height } = записи[0].contentRect;
+    saveReportSize({ width: Math.round(width), height: Math.round(height) });
+  });
+  const m = reportsModal();
+  if (m) наблюдатель.observe(m);
+}
 for (const id of ["mw-from", "mw-to", "mw-user"]) {
   document.getElementById(id).addEventListener("change", loadReport);
 }
@@ -18589,36 +18906,43 @@ document.getElementById("report-use-filter").addEventListener("change", (e) => {
 });
 document.getElementById("menu-report-status").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  applyReportSize();
   showBackToReport(false);
   switchReport("status");
 });
 document.getElementById("menu-report-dynamics").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  applyReportSize();
   showBackToReport(false);
   switchReport("dynamics");
 });
 document.getElementById("menu-report-delivery").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  applyReportSize();
   showBackToReport(false);
   switchReport("delivery");
 });
 document.getElementById("menu-report-completion").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  applyReportSize();
   showBackToReport(false);
   switchReport("completion");
 });
 document.getElementById("menu-report-mywork").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  applyReportSize();
   showBackToReport(false);
   switchReport("mywork");
 });
 document.getElementById("menu-report-contracting").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  applyReportSize();
   showBackToReport(false);
   switchReport("contracting");
 });
 document.getElementById("menu-report-analytics").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
+  applyReportSize();
   showBackToReport(false);
   switchReport("analytics");
 });
@@ -18850,7 +19174,9 @@ document.getElementById("side-status-body").addEventListener("click", (e) => {
 });
 
 function sideChartLegendHtml(data) {
-  return `<div class="side-chart-legend">${dynSeriesFor(data).map(k =>
+  // То же правило, что в самом графике: подпись только у нарисованных.
+  const есть = (k) => (data.series[k] || []).some(v => v !== null && v > 0);
+  return `<div class="side-chart-legend">${dynSeriesFor(data).filter(есть).map(k =>
     `<span><i style="background:${DYN_COLORS[k]}; color:${DYN_COLORS[k]}"${DYN_DASHED.has(k)
       ? ' class="dashed"' : DYN_DASHDOT.has(k) ? ' class="dashdot"' : ""}></i>${escapeHtml(data.series_labels[k])}</span>`
   ).join("")}</div>`;
@@ -18991,6 +19317,7 @@ document.querySelectorAll(".side-report-open").forEach(btn => {
       document.getElementById("report-date").value = document.getElementById("side-dyn-date").value;
     }
     reportsBackdrop.classList.add("open");
+  applyReportSize();
     switchReport(btn.dataset.report);
   });
 });

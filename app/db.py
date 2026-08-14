@@ -349,6 +349,21 @@ _COLUMN_MIGRATIONS = [
     # app/supplier_change.py.
     ("supplier_change_items", "prev_contract_id", "INTEGER REFERENCES contracts(id) ON DELETE SET NULL"),
     ("supplier_change_items", "prev_planned_delivery_date", "TEXT"),
+    # Попытка теста (2026-08-14). Таблица завелась и дополнялась в один день,
+    # и у того, кто поднял сервис на промежуточной версии, она осталась в
+    # том виде, в каком была: CREATE TABLE IF NOT EXISTS существующую таблицу
+    # НЕ меняет. Это уже стоило 500 на живом сервере («no such column:
+    # current_options»), поэтому здесь перечислены ВСЕ необязательные
+    # колонки, а не только последняя добавленная. Повторный ADD COLUMN
+    # безвреден: _apply_migrations сначала смотрит PRAGMA table_info.
+    ("training_attempts", "role_key", "TEXT"),
+    ("training_attempts", "feature_key", "TEXT"),
+    ("training_attempts", "object_id", "INTEGER REFERENCES objects(id) ON DELETE SET NULL"),
+    ("training_attempts", "current_question", "TEXT"),
+    ("training_attempts", "current_options", "TEXT"),
+    ("training_attempts", "asked_at", "TEXT"),
+    ("training_answers", "feature_key", "TEXT"),
+    ("training_answers", "spent_ms", "INTEGER"),
 ]
 
 

@@ -457,6 +457,7 @@ TABLES = [
     ("id", "INTEGER", "PK", "идентификатор попытки"),
     ("user_id", "INTEGER", "FK", "кто проходил → users.id (CASCADE)"),
     ("role_key", "TEXT", "", "под какую роль проходили → object_roles.key; NULL — по всем своим ролям сразу"),
+    ("feature_key", "TEXT", "", "раздел, если тест запущен по одному разделу → app/features.py; NULL — по всем доступным сразу"),
     ("object_id", "INTEGER", "FK", "объект, по правам на котором собран набор вопросов → objects.id (SET NULL)"),
     ("content_version", "TEXT", "", "редакция учебного материала (CONTENT_VERSION в app/training_content.py)"),
     ("questions", "INTEGER", "", "сколько вопросов в попытке (размер выборки)"),
