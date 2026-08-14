@@ -17014,17 +17014,24 @@ function renderTreeReport(data, opts = {}) {
 const DYN_COLORS = {
   plan_smr: "#4A86C8",
   fact_montage: "#8C99A6",
+  forecast_montage: "#8C99A6",
   plan_delivery: "#C2571A",
   fact_delivery: "#E8703A",
+  forecast_delivery: "#E8703A",
 };
 const DYN_DASHED = new Set(["plan_smr", "plan_delivery"]);
+// Прогноз — штрихпунктиром и цветом ФАКТА своей пары: он читается как
+// продолжение фактической кривой, а не как третий план (формулировка
+// заказчика: «от серой линии факта идёт штрихпунктир прогноза»).
+const DYN_DASHDOT = new Set(["forecast_montage", "forecast_delivery"]);
 // Режимы графика (2026-08-14): поставка и монтаж смотрятся и порознь, и
 // вместе. Ряды сервер считает ВСЕ и всегда — режим только выбирает
 // показываемое, поэтому переключение не требует повторного запроса…
 const DYN_MODE_SERIES = {
-  montage: ["plan_smr", "fact_montage"],
-  delivery: ["plan_delivery", "fact_delivery"],
-  both: ["plan_smr", "fact_montage", "plan_delivery", "fact_delivery"],
+  montage: ["plan_smr", "fact_montage", "forecast_montage"],
+  delivery: ["plan_delivery", "fact_delivery", "forecast_delivery"],
+  both: ["plan_smr", "fact_montage", "forecast_montage",
+         "plan_delivery", "fact_delivery", "forecast_delivery"],
 };
 const DYN_MODE_LABELS = { montage: "Монтаж", delivery: "Поставка", both: "Обе" };
 // …но в отчёт он всё же уходит: выгрузки XLSX и PDF собираются на сервере и
@@ -17092,7 +17099,8 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
     const points = seriesPoints(key);
     if (!points.some(p => p.v > 0)) continue;
     const d = points.map((p, n) => `${n ? "L" : "M"} ${x(p.i).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
-    const штрих = DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    const штрих = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"'
+      : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
     parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"${штрих}/>`);
   }
 
@@ -17145,7 +17153,8 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   // Легенда (в compact её рисует HTML рядом — см. sideChartLegendHtml)
   let lx = L;
   for (const key of compact ? [] : ряды) {
-    const штрих = DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    const штрих = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"'
+      : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
     parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"${штрих}/>`);
     parts.push(`<text x="${lx + 28}" y="${height - 6}" font-size="11" fill="#4A5460">${escapeHtml(data.series_labels[key])}</text>`);
     lx += 34 + data.series_labels[key].length * 6.2;
@@ -18083,16 +18092,19 @@ document.getElementById("report-pdf").addEventListener("click", () => downloadRe
 const SIDE_REPORTS_DEBOUNCE_MS = 250;
 let sideStatusData = null;
 let sideDynData = null;
+let sideDevData = null;   // сводка отклонения от базового графика (2026-08-14)
 let sideStatusCollapsed = new Set();
 // Устаревание считается ПО ОТЧЁТУ, а не одним флагом на оба: свёрнутый отчёт
 // не пересчитывается, и когда его раскроют, надо знать, что он отстал.
-let sideStale = { status: true, dynamics: true };
+let sideStale = { status: true, dynamics: true, deviation: true };
 let sideReportsTimer = null;
 let sideReportsRequestId = 0;
-const sideReportsDirty = () => sideStale.status || sideStale.dynamics;
+const sideReportsDirty = () => sideStale.status || sideStale.dynamics || sideStale.deviation;
 
 const statusTabActive = () => document.getElementById("tab-status").classList.contains("active");
-const SIDE_SECTION_ID = { status: "side-status-section", dynamics: "side-dyn-section" };
+const SIDE_SECTION_ID = {
+  status: "side-status-section", dynamics: "side-dyn-section", deviation: "side-dev-section",
+};
 // Что реально нужно считать сейчас: раскрытое и устаревшее.
 const sideReportWanted = (key) => sideStale[key] && !sectionCollapsed(SIDE_SECTION_ID[key]);
 
@@ -18111,7 +18123,7 @@ function sideReportBody(withDate) {
 // пересчитаться одни и те же — отдельных хуков по всем местам смены статуса
 // заводить не нужно.
 function scheduleSidebarReports() {
-  sideStale = { status: true, dynamics: true };
+  sideStale = { status: true, dynamics: true, deviation: true };
   // Скрытую панель не считаем вовсе: запрос не дешёвый, а пользователь его
   // результата не видит. При переходе на вкладку пересчёт сделает switchTab.
   if (!statusTabActive()) return;
@@ -18131,21 +18143,34 @@ async function loadSidebarReports() {
     document.getElementById("side-status-line").textContent = "";
     return;
   }
-  const want = { status: sideReportWanted("status"), dynamics: sideReportWanted("dynamics") };
-  if (!want.status && !want.dynamics) return; // всё нужное уже посчитано или свёрнуто
+  const want = {
+    status: sideReportWanted("status"), dynamics: sideReportWanted("dynamics"),
+    deviation: sideReportWanted("deviation"),
+  };
+  if (!want.status && !want.dynamics && !want.deviation) return; // всё уже посчитано или свёрнуто
   const my = ++sideReportsRequestId;
+  const devBody = document.getElementById("side-dev-body");
   if (want.status && !sideStatusData) statusBody.innerHTML = '<div class="hint-text">Построение…</div>';
   if (want.dynamics && !sideDynData) dynBody.innerHTML = '<div class="hint-text">Построение…</div>';
+  if (want.deviation && !sideDevData) devBody.innerHTML = '<div class="hint-text">Построение…</div>';
   try {
     const post = (endpoint, withDate) => api(endpoint, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sideReportBody(withDate)),
     });
-    const [status, dyn] = await Promise.all([
+    const [status, dyn, dev] = await Promise.all([
       want.status ? post("/reports/status", false) : null,
       want.dynamics ? post("/reports/dynamics", true) : null,
+      // Отклонение — свой эндпоинт: это не отчёт, а сравнение двух версий
+      // графика, и общего с ними у него только список изделий среза.
+      want.deviation ? post("/schedule-versions/deviation", false) : null,
     ]);
     if (my !== sideReportsRequestId) return; // ответ на уже устаревший фильтр
+    if (want.deviation) {
+      sideDevData = dev;
+      sideStale.deviation = false;
+      renderSideDeviation();
+    }
     if (want.status) {
       sideStatusData = status;
       sideStatusCollapsed = defaultCollapsedTree(status);
@@ -18162,11 +18187,56 @@ async function loadSidebarReports() {
     // Данные прошлого расчёта здесь уже неактуальны (фильтр изменился) —
     // сбрасываем и подпись «Всего изделий», иначе она осталась бы от
     // прежнего фильтра и выглядела бы как настоящий результат.
-    sideStatusData = sideDynData = null;
+    sideStatusData = sideDynData = sideDevData = null;
     statusBody.innerHTML = "";
+    document.getElementById("side-dev-body").innerHTML = "";
     document.getElementById("side-status-line").textContent = "";
     dynBody.innerHTML = `<div class="error-text">Не удалось построить отчёты: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Отклонение от базового графика (2026-08-14). Показывается по ОБЕИМ датам
+// (решение пользователя): по началу СМР — когда изделие обязано быть на
+// площадке, по завершению — сам монтаж. Знак «плюс» = позже директивной
+// даты, то есть отставание.
+function renderSideDeviation() {
+  const body = document.getElementById("side-dev-body");
+  const d = sideDevData;
+  if (!d) { body.innerHTML = ""; return; }
+  if (!d.version_id) {
+    body.innerHTML = '<div class="hint-text">Актуализированный график ещё не загружен — '
+      + 'сравнивать не с чем.</div>';
+    return;
+  }
+  if (!d.elements) {
+    body.innerHTML = '<div class="hint-text">В текущем отборе нет изделий из этой версии графика.</div>';
+    return;
+  }
+  const строка = (title, block) => {
+    if (!block) return `<tr><td>${escapeHtml(title)}</td><td colspan="3" class="hint-text">нет дат</td></tr>`;
+    const цвет = (v) => v > 0 ? "dev-late" : v < 0 ? "dev-early" : "dev-ok";
+    const знак = (v) => v > 0 ? `+${v}` : String(v);
+    return `<tr>
+      <td>${escapeHtml(title)}</td>
+      <td class="${цвет(block.avg)}">${знак(block.avg)}</td>
+      <td class="${цвет(block.max)}">${знак(block.max)}</td>
+      <td>${block.late}</td>
+    </tr>`;
+  };
+  body.innerHTML = `
+    <div class="hint-text">${escapeHtml(d.version_title || "последняя актуализация")} ·
+      изделий в сравнении: ${d.elements}</div>
+    <table class="side-table side-dyn">
+      <tr><th></th><th title="Среднее отклонение, дней">сред.</th>
+          <th title="Наибольшее отклонение, дней">макс.</th>
+          <th title="Сколько изделий отстаёт">отстаёт</th></tr>
+      ${строка("Начало СМР", d.start)}
+      ${строка("Завершение", d.end)}
+    </table>
+    ${d.by_zakhvatka.length > 1 ? `<table class="side-table side-dyn" style="margin-top:6px">
+      <tr><th>Захватка</th><th>сред.</th><th>макс.</th><th>отстаёт</th></tr>
+      ${d.by_zakhvatka.map(z => строка(z.label, z.end)).join("")}
+    </table>` : ""}`;
 }
 
 function renderSideStatusReport() {
@@ -18202,7 +18272,7 @@ document.getElementById("side-status-body").addEventListener("click", (e) => {
 function sideChartLegendHtml(data) {
   return `<div class="side-chart-legend">${dynSeriesFor(data).map(k =>
     `<span><i style="background:${DYN_COLORS[k]}; color:${DYN_COLORS[k]}"${DYN_DASHED.has(k)
-      ? ' class="dashed"' : ""}></i>${escapeHtml(data.series_labels[k])}</span>`
+      ? ' class="dashed"' : DYN_DASHDOT.has(k) ? ' class="dashdot"' : ""}></i>${escapeHtml(data.series_labels[k])}</span>`
   ).join("")}</div>`;
 }
 

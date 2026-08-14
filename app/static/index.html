@@ -1597,6 +1597,13 @@
     height: 0; border-top: 2px dashed currentColor; background: none !important;
     color: inherit;
   }
+  /* Прогноз — штрихпунктир; в легенде на 12 px честного штрихпунктира не
+     нарисовать, поэтому точечный: главное — отличить от сплошного факта и
+     от пунктирного плана. */
+  .side-chart-legend i.dashdot {
+    height: 0; border-top: 2px dotted currentColor; background: none !important;
+    color: inherit;
+  }
   .side-dyn-block { margin-top: 10px; }
   .side-dyn-block h4 {
     font-size: 11px; font-weight: 600; margin: 0 0 4px; display: flex;
@@ -3577,6 +3584,20 @@
         <div id="side-status-section">
           <div class="hint-text" id="side-status-line"></div>
           <div id="side-status-body"></div>
+        </div>
+      </div>
+
+      <!-- Отклонение от базового графика (2026-08-14). Считается по тем же
+           изделиям, что прошли текущий фильтр, — как и остальные блоки этой
+           вкладки: цифры на панели всегда про то, что сейчас выбрано. -->
+      <div class="side-report">
+        <div class="side-section-head">
+          <h3>Отклонение от базового графика</h3>
+          <button type="button" class="filter-expand-btn" data-collapse="side-dev-section"
+                  title="Свернуть/развернуть">▾</button>
+        </div>
+        <div id="side-dev-section">
+          <div id="side-dev-body"></div>
         </div>
       </div>
 

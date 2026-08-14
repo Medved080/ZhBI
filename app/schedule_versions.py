@@ -31,6 +31,7 @@ import sqlite3
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app import activity
 from app.access import assert_object_access, is_system_admin
@@ -264,6 +265,27 @@ def get_deviation(object_id: int, version_id: Optional[int] = None,
     try:
         assert_object_access(conn, user, object_id, "view")
         return deviation_summary(conn, object_id, version_id=version_id)
+    finally:
+        conn.close()
+
+
+class DeviationIn(BaseModel):
+    object_id: int
+    version_id: Optional[int] = None
+    # Сужение текущим отбором схемы — тот же приём, что у отчётов: критерии
+    # фильтра живут на клиенте, сервер получает готовый список id. POST, а
+    # не GET, ровно поэтому: список бывает в тысячи элементов и в строку
+    # запроса не помещается.
+    element_ids: Optional[list] = None
+
+
+@router.post("/deviation")
+def post_deviation(body: DeviationIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_access(conn, user, body.object_id, "view")
+        return deviation_summary(conn, body.object_id, element_ids=body.element_ids,
+                                 version_id=body.version_id)
     finally:
         conn.close()
 
