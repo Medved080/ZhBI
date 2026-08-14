@@ -207,7 +207,7 @@ let state = {
     active: false,
     sel: {
       elementType: new Set(), subtype: new Set(), mark: new Set(),
-      crane: new Set(), stance: new Set(), floor: new Set(),
+      zakhvatka: new Set(), crane: new Set(), stance: new Set(), floor: new Set(),
       // Контракт — такой же срез, как остальные, но живёт не в левой
       // панели, а в своей области справа от схемы (см. renderPickerContracts).
       contract: new Set(),
@@ -3437,6 +3437,13 @@ const PICKER_SLICERS = [
       return тип && тип !== String(v) ? `${текст} (${тип})` : текст;
     },
   },
+  // Захватка (живой запрос 2026-08-14): в АРМ её не было вовсе, и захватку
+  // приходилось набирать кранами и стоянками — а это разные разрезы, кран
+  // работает в нескольких захватках, и захватка обслуживается несколькими
+  // кранами (проверено на графике СМР: стоянки 4, 5, 10, 11, 16, 17 у
+  // каждого из трёх кранов относятся к двум захваткам сразу). Порядок в
+  // панели тот же, что в фильтрах «Модели»: захватка → кран → стоянка.
+  { key: "zakhvatka", title: "Захватка", valueFn: e => zoneFilterValue(e, "zone_zakhvatka_id", "zone_zakhvatka_status"), labelFor: zoneLabelFor },
   { key: "crane", title: "Кран", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status"), labelFor: zoneLabelFor },
   // Стоянка — тоже с владельцем в подписи, и по той же причине, что и
   // подтип выше: имя стоянки уникально только внутри своего крана
@@ -3578,7 +3585,8 @@ function pickerSelectionActive() {
 // правдоподобную выдумку (решение пользователя 2026-08-10).
 // Возвращает { value } либо { value: null, reason }.
 const PICKER_CONTRACT_BLOCKERS = [
-  ["subtype", "подтипу"], ["crane", "крану"], ["stance", "стоянке"], ["floor", "этажу"],
+  ["subtype", "подтипу"], ["zakhvatka", "захватке"], ["crane", "крану"],
+  ["stance", "стоянке"], ["floor", "этажу"],
 ];
 
 function pickerContracted() {
@@ -4763,10 +4771,57 @@ function describePickerSelection() {
 //
 // В «Модели» ничего этого нет: там панель закреплена и меняется размером за
 // ручку, как и была.
+// Закреплённая правая панель (живой запрос 2026-08-14). Закрепление — не
+// свойство рабочего места, а привычка человека: «мне удобно, чтобы свойства
+// не убегали». Поэтому хранится в localStorage, а не в state рабочего места
+// и не на сервере. В «Модели» панель закреплена всегда, и флаг там ни на
+// что не влияет — он читается только в АРМ.
+const SIDEBAR_PIN_KEY = "zhbi_sidebar_pinned";
+let sidebarPinned = localStorage.getItem(SIDEBAR_PIN_KEY) === "1";
+
+function sidebarIsFloating() {
+  return document.getElementById("sidebar").classList.contains("floating");
+}
+
 function pickerSidebarOpen() {
-  return document.getElementById("sidebar").classList.contains("floating")
+  return sidebarIsFloating()
     && !document.getElementById("sidebar").classList.contains("collapsed");
 }
+
+// Применить режим панели к разметке. Закреплённая панель в АРМ ведёт себя
+// ровно как в «Модели»: ручка ширины на месте, рейка закладок не нужна —
+// закладки видны в самой панели.
+function applySidebarPin() {
+  const sidebar = document.getElementById("sidebar");
+  const pin = document.getElementById("sidebar-pin");
+  const плавающая = state.picker.active && !sidebarPinned;
+  sidebar.classList.toggle("floating", плавающая);
+  document.getElementById("sidebar-rail").style.display = плавающая ? "" : "none";
+  document.getElementById("resize-handle").style.display = плавающая ? "none" : "";
+  if (плавающая) {
+    closePickerSidebar();
+  } else {
+    sidebar.classList.remove("collapsed");
+    sidebar.style.display = "";
+    document.querySelectorAll(".sidebar-rail-btn").forEach(b => b.classList.remove("active"));
+  }
+  // Кнопка есть только там, где закрепление что-то меняет, — в АРМ.
+  pin.style.display = state.picker.active ? "" : "none";
+  pin.classList.toggle("active", sidebarPinned);
+  pin.title = sidebarPinned
+    ? "Открепить панель (сворачивать по клику мимо неё)"
+    : "Закрепить панель рядом со схемой";
+}
+
+document.getElementById("sidebar-pin").addEventListener("click", (e) => {
+  e.stopPropagation();
+  sidebarPinned = !sidebarPinned;
+  localStorage.setItem(SIDEBAR_PIN_KEY, sidebarPinned ? "1" : "0");
+  applySidebarPin();
+  // Схема стала уже/шире на ширину панели — то же, что при переключении
+  // рабочего места (см. setWorkspace): 2D пересчитает себя сам, 3D нет.
+  on3DResize();
+});
 
 function openPickerSidebar(tab) {
   const sidebar = document.getElementById("sidebar");
@@ -4831,18 +4886,10 @@ function setWorkspace(ws) {
   document.getElementById("picker-panel-resize").style.display = picker ? "" : "none";
   document.getElementById("picker-contracts-resize").style.display = picker ? "" : "none";
   // Правая панель: в АРМ — свёрнута до ярлычка и раскрывается поверх схемы,
-  // в «Модели» — закреплена и тянется за ручку, как была.
-  const sidebar = document.getElementById("sidebar");
-  const rail = document.getElementById("sidebar-rail");
-  rail.style.display = picker ? "" : "none";
-  document.getElementById("resize-handle").style.display = picker ? "none" : "";
-  sidebar.classList.toggle("floating", picker);
-  if (picker) {
-    closePickerSidebar();
-  } else {
-    sidebar.classList.remove("collapsed");
-    sidebar.style.display = "";
-  }
+  // в «Модели» — закреплена и тянется за ручку, как была. Исключение —
+  // закреплённая пользователем панель (2026-08-14): она и в АРМ стоит
+  // рядом со схемой. Вся развилка живёт в applySidebarPin.
+  applySidebarPin();
   // Вкладка «Фильтры» в сайдбаре относится к отбору «Модели», в АРМ он не
   // действует (отборы раздельные) — прячем саму вкладку, чтобы её нельзя
   // было принять за причину того, что видно на схеме. Остальные вкладки

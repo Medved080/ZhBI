@@ -1388,12 +1388,34 @@
   }
   #sidebar h3 { font-size: 12px; margin: 18px 0 8px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .03em; font-weight: 600; }
   #sidebar h3:first-child { margin-top: 0; }
-  .tabs { display: flex; gap: 4px; margin: -16px -16px 16px; padding: 0 8px; border-bottom: 1px solid var(--color-border); }
+  /* Строка вкладок ЗАКРЕПЛЕНА при прокрутке панели (живой запрос
+     2026-08-14): в «Статусе» и «Фильтрах» содержимое давно длиннее экрана,
+     и переключатель уезжал за верхний край — чтобы вернуться к «Свойствам»,
+     приходилось сначала прокрутить панель обратно наверх. Требование
+     общее, не про одно рабочее место, поэтому липкость живёт здесь, а не в
+     правилах АРМ.
+     top: -16px — ровно на padding-top самой панели (#sidebar), иначе
+     вкладки прилипали бы на 16px ниже верхнего края и над ними в щели
+     проезжало бы содержимое. Фон обязателен: панель прокручивается ПОД
+     строкой, а без подложки текст проступал бы сквозь неё. */
+  .tabs {
+    display: flex; gap: 4px; margin: -16px -16px 16px; padding: 0 8px;
+    border-bottom: 1px solid var(--color-border);
+    position: sticky; top: -16px; z-index: 5; background: var(--color-surface);
+  }
   .tab-btn {
     flex: 1; background: none; border: none; padding: 10px 4px; font-size: 12px; font-weight: 600;
     color: var(--color-text-muted); cursor: pointer; border-bottom: 2px solid transparent;
   }
   .tab-btn:hover { color: var(--color-text); }
+  /* Кнопка «закрепить панель» — не вкладка: не растягивается (flex:none) и
+     не подчёркивается снизу, иначе читалась бы как пятая закладка. */
+  .tab-pin {
+    flex: none; background: none; border: none; cursor: pointer; padding: 8px 6px;
+    font-size: 13px; line-height: 1; opacity: .45; filter: grayscale(1);
+  }
+  .tab-pin:hover { opacity: .9; filter: none; }
+  .tab-pin.active { opacity: 1; filter: none; }
   .tab-btn.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
@@ -3472,6 +3494,16 @@
       <button type="button" class="tab-btn" data-tab="status">Статус</button>
       <button type="button" class="tab-btn" data-tab="filters">Фильтры</button>
       <button type="button" class="tab-btn" data-tab="view">Вид</button>
+      <!-- Закрепить панель (живой запрос 2026-08-14). В АРМ правая панель
+           раскрывается поверх схемы и сворачивается от клика мимо неё —
+           удобно, пока смотришь одно изделие, и мучительно, когда работаешь
+           со свойствами подряд у отобранного десятка: панель убегает на
+           каждый клик по схеме. Кнопка переводит панель в закреплённый вид —
+           тот же, что в «Модели»: панель стоит рядом со схемой, тянется за
+           ручку и никуда не девается. Выбор помнится (localStorage).
+           В «Модели» панель закреплена всегда, и кнопка там не показывается. -->
+      <button type="button" id="sidebar-pin" class="tab-pin" style="display:none"
+              title="Закрепить панель рядом со схемой">📌</button>
     </div>
     <div id="tab-properties" class="tab-panel active">
       <h3>Карточка элемента</h3>
