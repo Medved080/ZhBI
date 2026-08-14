@@ -3540,17 +3540,30 @@ function applyStatusInk(el, status) {
 // нули, и сравнить их между собой было бы нельзя). "__metric__" —
 // игнорировать выбранную плитку: сами плитки себя не фильтруют.
 function pickerElementPasses(element, exceptKey = null) {
+  // exceptKey — один ключ или НЕСКОЛЬКО (массив): разворот контракта по
+  // маркам считается без учёта выбранных марок и типов, иначе выбор одной
+  // марки обнулял бы и прятал все остальные строки разворота — и добавить
+  // к отбору вторую марку было бы уже неоткуда (живой репорт 2026-08-10).
+  const except = Array.isArray(exceptKey) ? exceptKey : [exceptKey];
   for (const def of PICKER_SLICERS) {
-    if (def.key === exceptKey) continue;
+    if (except.includes(def.key)) continue;
     const sel = state.picker.sel[def.key];
     if (sel.size && !sel.has(def.valueFn(element))) return false;
   }
-  if (exceptKey !== "__metric__" && state.picker.metric) {
+  if (!except.includes("__metric__") && state.picker.metric) {
     const metric = pickerMetricDef(state.picker.metric);
     if (metric && metric.test && !metric.test(element)) return false;
   }
   return true;
 }
+
+// Что игнорирует РАЗВОРОТ по маркам (контракта или «без контракта»): свой
+// отбор по контракту — изделия без контракта его не проходят по
+// определению; и отбор по марке с типом — сам разворот и есть список марок,
+// он обязан оставаться полным, чтобы к отбору можно было добавить вторую и
+// третью марку. Тот же принцип, что у счётчиков блоков-срезов: блок не
+// фильтрует сам себя.
+const РАЗВОРОТ_БЕЗ = ["contract", "mark", "elementType"];
 
 function pickerSelectionActive() {
   return !!state.picker.metric || PICKER_SLICERS.some(d => state.picker.sel[d.key].size);
@@ -4035,6 +4048,60 @@ function elementVisibleNow(element) {
   return passesPlacementFilters(element) || state.pendingLinkIds.has(element.id);
 }
 
+// Марки, привязанные к контракту МИМО его спецификации (2026-08-14, живой
+// запрос). Возвращает Map(ключ -> {mark, element_type, count}).
+//
+// Считается по ВСЕМ изделиям контракта, без учёта среза: это не показатель,
+// а нарушение — оно не должно исчезать оттого, что человек выбрал этаж.
+// Сравнение марок нечувствительно к регистру и пробелам (markKey) — ровно
+// как на сервере (app/contract_guard.py): иначе «15кс1.1» при позиции
+// «15КС1.1» показывалось бы красным при живой и законной привязке.
+//
+// Появиться такие изделия могли ДО 2026-08-14: до этой даты система
+// разрешала привязку к контракту без позиции, а спецификацию — правила без
+// оглядки на привязанное (см. Docs/backlog.md за эту дату). Теперь оба пути
+// закрыты, и список чужих марок может только уменьшаться.
+function contractOrphanMarks(contractId) {
+  const ключиПозиций = new Set();
+  for (const line of state.contractLineTotals) {
+    if (line.contract_id !== contractId) continue;
+    const ключ = pickerLineKey(line);
+    if (ключ) ключиПозиций.add(ключ);
+  }
+  const чужие = new Map();
+  for (const e of state.elements) {
+    if (e.contract_id !== contractId) continue;
+    const ключ = markKey(e.mark) || typeKey(e.element_type);
+    if (!ключ || ключиПозиций.has(ключ)) continue;
+    const было = чужие.get(ключ);
+    if (было) было.count += 1;
+    else чужие.set(ключ, { mark: e.mark, element_type: e.element_type, count: 1 });
+  }
+  return чужие;
+}
+
+// Есть ли у контракта хоть одно нарушение — чужая марка или превышение по
+// позиции. Нужно строке самого контракта и строке контрагента: в свёрнутом
+// виде развороты не видны, и без пометки нарушение пришлось бы искать
+// разворотом каждого документа подряд.
+function contractHasOverflow(contractId) {
+  if (contractOrphanMarks(contractId).size) return true;
+  const привязано = new Map();
+  for (const e of state.elements) {
+    if (e.contract_id !== contractId) continue;
+    const ключ = markKey(e.mark) || typeKey(e.element_type);
+    if (ключ) привязано.set(ключ, (привязано.get(ключ) || 0) + 1);
+  }
+  const закуплено = new Map();
+  for (const line of state.contractLineTotals) {
+    if (line.contract_id !== contractId) continue;
+    const ключ = pickerLineKey(line);
+    if (ключ) закуплено.set(ключ, (закуплено.get(ключ) || 0) + (line.quantity || 0));
+  }
+  for (const [ключ, n] of привязано) if (n > (закуплено.get(ключ) || 0)) return true;
+  return false;
+}
+
 function pickerContractTotals() {
   const byContract = new Map();
   for (const line of state.contractLineTotals) {
@@ -4235,6 +4302,15 @@ function renderPickerContracts() {
     const groupRow = document.createElement("div");
     groupRow.className = "picker-group-head";
     if (ids.length && ids.every(id => sel.has(id))) groupRow.classList.add("selected");
+    // Нарушение видно и в свёрнутом виде — на контрагенте и на контракте
+    // (2026-08-14). Иначе красную строку нашёл бы только тот, кто разворачивал
+    // документы подряд.
+    const битыеКонтракты = ids.filter(contractHasOverflow);
+    if (битыеКонтракты.length) {
+      groupRow.classList.add("over");
+      groupRow.title = `У контрактов этого контрагента есть привязки мимо спецификации `
+        + `или сверх количества (документов: ${битыеКонтракты.length})`;
+    }
     groupRow.appendChild(pickerLabelSpan(cp));
     groupRow.appendChild(pickerCountSpan(всего, "contracting"));
     groupRow.appendChild(pickerCountSpan(привязано));
@@ -4266,6 +4342,8 @@ function renderPickerContracts() {
       const row = document.createElement("div");
       row.className = "picker-row picker-row-nested";
       if (!контрактВСрезе(c.id)) row.classList.add("empty");
+      const битый = contractHasOverflow(c.id);
+      if (битый) row.classList.add("over");
       // Подпись без имени контрагента: оно уже в заголовке группы над ним.
       // И без слов «Дог.»/«Спец.»: колонка узкая, три числа справа съедают
       // половину ширины, а сами номера договора и спецификации узнаваемы и
@@ -4275,7 +4353,9 @@ function renderPickerContracts() {
       row.dataset.label = подпись;
       if (sel.has(c.id)) row.classList.add("selected");
       const labelEl = pickerLabelSpan(подпись);
-      labelEl.title = c.name;
+      labelEl.title = битый
+        ? `${c.name}\nЕсть привязки мимо спецификации или сверх количества — разверните позиции, красные строки`
+        : c.name;
       row.appendChild(labelEl);
       row.appendChild(pickerCountSpan(всегоК, "contracting"));
       row.appendChild(pickerCountSpan(привязаноК));
@@ -4343,9 +4423,29 @@ function renderPickerContracts() {
   noneRow.appendChild(pickerCountSpan("—"));
   noneRow.addEventListener("click", переключить);
 
+  // «Без контракта» разворачивается по маркам так же, как контракт (живой
+  // запрос 2026-08-10). Вопрос тут даже насущнее, чем у контракта: «чего
+  // именно не расписано» — это список марок, а не одно число. Признак
+  // разворота хранится в том же множестве, что и у контрактов, под ключом
+  // PLACEMENT_NONE — второе множество ради одной строки было бы лишним.
+  const развёрнутаПустая = state.picker.expandedContracts.has(PLACEMENT_NONE);
+  const expandNone = document.createElement("button");
+  expandNone.type = "button";
+  expandNone.className = "filter-expand-btn";
+  expandNone.textContent = развёрнутаПустая ? "▾" : "▸";
+  expandNone.title = развёрнутаПустая ? "Свернуть марки" : "Показать марки изделий без контракта";
+  expandNone.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (развёрнутаПустая) state.picker.expandedContracts.delete(PLACEMENT_NONE);
+    else state.picker.expandedContracts.add(PLACEMENT_NONE);
+    onPickerChange();
+  });
+  noneRow.insertBefore(expandNone, noneRow.firstChild);
+
   const цельПустой = (безКонтракта || выбранаПустая) ? доступныеУзлы : недоступныеУзлы;
   цельПустой.appendChild(noneGroup);
   цельПустой.appendChild(noneRow);
+  if (развёрнутаПустая) цельПустой.appendChild(buildNoContractMarkRows());
 
   list.appendChild(доступныеУзлы);
   if (недоступныеУзлы.childElementCount) {
@@ -4369,7 +4469,8 @@ function renderPickerContracts() {
 function buildContractMarkRows(contract, linked) {
   const frag = document.createDocumentFragment();
   const lines = state.contractLineTotals.filter(l => l.contract_id === contract.id);
-  if (!lines.length) {
+  const чужие = contractOrphanMarks(contract.id);
+  if (!lines.length && !чужие.size) {
     const empty = document.createElement("div");
     empty.className = "picker-block-note";
     empty.style.paddingLeft = "22px";
@@ -4387,7 +4488,7 @@ function buildContractMarkRows(contract, linked) {
   const привязаноПоПозиции = new Map();
   for (const e of state.elements) {
     if (e.contract_id !== contract.id) continue;
-    if (!pickerElementPasses(e, "contract")) continue;
+    if (!pickerElementPasses(e, РАЗВОРОТ_БЕЗ)) continue;
     const поМарке = markKey(e.mark), поТипу = typeKey(e.element_type);
     const ключ = ключиПозиций.has(поМарке) ? поМарке : (ключиПозиций.has(поТипу) ? поТипу : поМарке);
     if (!ключ) continue;
@@ -4400,6 +4501,19 @@ function buildContractMarkRows(contract, linked) {
     const привязано = привязаноПоПозиции.get(ключ) || 0;
     return { line: l, ключ, всего, привязано, остаток: всего - привязано };
   });
+  // Марки, привязанные к контракту МИМО спецификации (2026-08-14, живой
+  // запрос). Строка такой же формы, как у позиции, но «всего» — прочерк:
+  // закупленного количества у неё нет вовсе, вычитать не из чего. Эти
+  // строки считаются по ВСЕМ изделиям контракта, а не по срезу
+  // (contractOrphanMarks): нарушение не должно прятаться от того, что
+  // человек выбрал этаж или кран, — иначе его увидит только тот, кто и так
+  // знает, где искать.
+  for (const [ключ, сведения] of чужие) {
+    строки.push({
+      line: { contract_id: contract.id, element_type: сведения.element_type, mark: сведения.mark },
+      ключ, всего: null, привязано: сведения.count, остаток: null, чужая: true,
+    });
+  }
   // ВСЕГДА по алфавиту (живой запрос 2026-08-10). Раньше строки с ненулевым
   // остатком поднимались наверх — и список перестраивался под руками: клик
   // по марке сужает срез, от среза зависит «привязано», от «привязано» —
@@ -4422,14 +4536,27 @@ function buildContractMarkRows(contract, linked) {
       ? state.picker.sel.mark.has(s.line.mark)
       : state.picker.sel.elementType.has(s.line.element_type);
     if (выбрана) row.classList.add("selected");
+    // Красным — то, за что контракт не отвечает: марка без позиции вовсе и
+    // позиция, по которой привязано больше закупленного (2026-08-14).
+    // Оба случая означают одно и то же — количество в спецификации
+    // перестало что-либо ограничивать, — и разделять их цветом незачем;
+    // различает их подсказка.
+    if (s.чужая || s.остаток < 0) row.classList.add("over");
     const labelEl = pickerLabelSpan(подпись);
-    labelEl.title = s.остаток > 0
-      ? `Нераспределённых позиций: ${s.остаток} — непривязанные изделия этой марки подсвечиваются на схеме (кнопка «Подсветить несвязанные»)`
-      : подпись;
+    labelEl.title = s.чужая
+      ? `Марки «${подпись}» нет в спецификации контракта, а изделий на него привязано: ${s.привязано}. Заведите позицию в справочнике контрактов либо переназначьте изделия`
+      : s.остаток < 0
+        ? `Привязано больше, чем закуплено: по спецификации ${s.всего}, привязано ${s.привязано}`
+        : s.остаток > 0
+          ? `Нераспределённых позиций: ${s.остаток} — непривязанные изделия этой марки подсвечиваются на схеме (кнопка «Подсветить несвязанные»)`
+          : подпись;
     row.appendChild(labelEl);
-    row.appendChild(pickerCountSpan(s.всего, "contracting"));
+    // «Всего» и «остаток» у чужой марки — прочерк, а не ноль: закупленного
+    // количества у неё НЕТ, а ноль читался бы как «закупили ноль штук»,
+    // то есть как осмысленное число.
+    row.appendChild(s.чужая ? pickerCountSpan("—") : pickerCountSpan(s.всего, "contracting"));
     row.appendChild(pickerCountSpan(s.привязано));
-    row.appendChild(pickerRemainderSpan(s.остаток));
+    row.appendChild(s.чужая ? pickerCountSpan("—") : pickerRemainderSpan(s.остаток));
     // Клик по позиции = «покажи изделия ЭТОЙ марки В ЭТОМ контракте»
     // (уточнение пользователя 2026-08-10): к марке добавляется и сам
     // контракт. Раньше добавлялась только марка, и на схеме оказывались
@@ -4455,6 +4582,63 @@ function buildContractMarkRows(contract, linked) {
           sel.add(s.line.element_type);
           selContract.add(contract.id);
         }
+      }
+      onPickerChange();
+    });
+    frag.appendChild(row);
+  }
+  return frag;
+}
+
+// Марки изделий БЕЗ КОНТРАКТА — разворот строки «— без контракта —».
+// Считается по изделиям среза (кроме отбора по контракту: у этих изделий
+// его нет по определению). Колонки те же, что у контрактов, но «всего» и
+// «остаток» — прочерк: закупать нечего, документа нет; осмысленно только
+// количество изделий.
+//
+// Клик по марке = «покажи изделия ЭТОЙ марки без контракта»: в срез
+// добавляются и марка, и сам признак «без контракта» — ровно тот же приём,
+// что у позиции контракта (там добавляется марка и её контракт).
+function buildNoContractMarkRows() {
+  const frag = document.createDocumentFragment();
+  const счёт = new Map();
+  for (const e of state.elements) {
+    if (e.contract_id) continue;
+    if (!pickerElementPasses(e, РАЗВОРОТ_БЕЗ)) continue;
+    const подпись = e.mark || `${e.element_type || "тип не определён"} · без марки`;
+    if (!счёт.has(подпись)) счёт.set(подпись, { подпись, mark: e.mark || null, type: e.element_type, n: 0 });
+    счёт.get(подпись).n += 1;
+  }
+  if (!счёт.size) {
+    const empty = document.createElement("div");
+    empty.className = "picker-block-note";
+    empty.style.paddingLeft = "22px";
+    empty.textContent = "в срезе нет изделий без контракта";
+    frag.appendChild(empty);
+    return frag;
+  }
+  const строки = Array.from(счёт.values())
+    .sort((a, b) => a.подпись.localeCompare(b.подпись, "ru", { numeric: true }));
+  for (const s of строки) {
+    const row = document.createElement("div");
+    row.className = "picker-row picker-row-mark";
+    row.dataset.label = s.подпись;
+    const выбрана = s.mark
+      ? state.picker.sel.mark.has(s.mark)
+      : state.picker.sel.elementType.has(s.type);
+    if (выбрана) row.classList.add("selected");
+    row.appendChild(pickerLabelSpan(s.подпись));
+    row.appendChild(pickerCountSpan("—"));
+    row.appendChild(pickerCountSpan(s.n));
+    row.appendChild(pickerCountSpan("—"));
+    row.addEventListener("click", () => {
+      const selContract = state.picker.sel.contract;
+      if (s.mark) {
+        const sel = state.picker.sel.mark;
+        if (sel.has(s.mark)) { sel.delete(s.mark); } else { sel.add(s.mark); selContract.add(PLACEMENT_NONE); }
+      } else if (s.type) {
+        const sel = state.picker.sel.elementType;
+        if (sel.has(s.type)) { sel.delete(s.type); } else { sel.add(s.type); selContract.add(PLACEMENT_NONE); }
       }
       onPickerChange();
     });
@@ -7210,14 +7394,28 @@ function contractNumsHtml(pos, reserved) {
 }
 
 function contractPickerRowHtml(c, pos, selectedId, scope, reservedFor) {
-  const active = String(c.id) === String(selectedId) ? " active" : "";
+  const свой = String(c.id) === String(selectedId);
+  const active = свой ? " active" : "";
   const muted = pos ? "" : " cp-row-muted";
   const частично = pos && scope.marks.length > 1 && pos.covered < scope.marks.length
     ? `<span class="cp-note">${pos.covered} из ${scope.marks.length} марок</span>` : "";
   const reserved = reservedFor ? reservedFor(c.id) : null;
   const tail = pos ? частично + contractNumsHtml(pos, reserved) : `<span class="cp-note">нет позиции</span>`;
-  return `<button type="button" class="cp-row${active}${muted}" data-contract-id="${c.id}"`
-    + ` title="${escapeHtml(c.name)}"><span class="cp-name">${escapeHtml(contractOptionLabel(c))}</span>${tail}</button>`;
+  // Выбрать нельзя контракт без позиции под марку и контракт, где по
+  // позиции не осталось свободного количества (2026-08-14; прежнее правило
+  // «показывать серым, но пускать» отменено пользователем — сервер теперь
+  // такую привязку и не примет, см. app/contract_guard.py). Уже назначенный
+  // контракт остаётся выбираемым всегда: иначе диалог смены статуса нельзя
+  // было бы закрыть, не сняв привязку, которую никто не трогал.
+  const доступно = pos ? pos.remaining - (reserved || 0) : 0;
+  const нельзя = !свой && (!pos || доступно <= 0);
+  const почему = !pos
+    ? "В спецификации этого контракта нет позиции под " + scope.label
+    : `Свободного количества по позиции нет (доступно ${доступно})`;
+  return `<button type="button" class="cp-row${active}${muted}${нельзя ? " cp-row-blocked" : ""}"`
+    + ` data-contract-id="${c.id}"${нельзя ? " disabled" : ""}`
+    + ` title="${escapeHtml(нельзя ? c.name + " — " + почему : c.name)}">`
+    + `<span class="cp-name">${escapeHtml(contractOptionLabel(c))}</span>${tail}</button>`;
 }
 
 // Группировка «Контрагент · договор» — та же, что в выпадающих списках
@@ -7268,9 +7466,12 @@ function renderContractPicker(listEl, legendEl, opts) {
   let html = head;
   if (matched.length) html += contractPickerGroupsHtml(matched, positions, selectedId, scope, reservedFor);
   if (rest.length) {
+    // Заголовок серой группы говорит и о том, что она НЕВЫБИРАЕМА
+    // (2026-08-14): без этого строки выглядят как обычные, просто бледнее,
+    // и клик по ним читается как поломка, а не как запрет.
     const heading = typed.length
-      ? `Нет позиции под ${scope.label}`
-      : `Ни в одном контракте нет позиций типа «${scope.elementType}»`;
+      ? `Нет позиции под ${scope.label} — выбрать нельзя`
+      : `Ни в одном контракте нет позиций типа «${scope.elementType}» — выбрать нельзя`;
     html += `<div class="cp-group">${escapeHtml(heading)}</div>`
       + contractPickerGroupsHtml(rest, positions, selectedId, scope, reservedFor);
   }
@@ -7290,7 +7491,7 @@ function renderContractPicker(listEl, legendEl, opts) {
       + (reservedFor ? `<span class="cp-reserved">зарезервировано в этой форме</span> · ` : "")
       + `<span class="cp-left">доступно</span>.`
     : `Ни в одном доступном контракте нет позиции под ${escapeHtml(scope.label)} — `
-      + `выбрать контракт всё равно можно.`;
+      + `выбрать контракт нельзя, пока такая позиция не заведена в справочнике контрактов.`;
 }
 
 // Заполняет список и подтягивает числа. onPick зовётся на КАЖДЫЙ выбор;
@@ -7506,56 +7707,67 @@ function updateBulkStatusValidation() {
   // по-прежнему читается через .value (у <button> это свойство есть).
   const cells = document.querySelectorAll("#bulk-status-tbody .bulk-row-contract");
   const emptyCount = Array.from(cells).filter(s => s.value === "").length;
-  document.getElementById("bulk-status-apply").disabled = emptyCount > 0 || cells.length === 0;
+  // Превышение остатка теперь ЗАПРЕТ, а не предупреждение (2026-08-14):
+  // сервер такую пачку не примет целиком (app/contract_guard.py, один
+  // коммит на всю массовую смену), и дать нажать «Применить» значило бы
+  // обещать то, чего не будет.
+  const беды = updateBulkContractWarning();
+  document.getElementById("bulk-status-apply").disabled =
+    emptyCount > 0 || cells.length === 0 || беды > 0;
   document.getElementById("bulk-status-error").textContent = emptyCount > 0 ? `Не указан контракт у ${emptyCount} элемент(ов)` : "";
-  updateBulkContractWarning();
 }
 
-// Снимок остатков строк контрактов (quantity-fact), берётся один раз при
-// открытии модалки (GET /contracts, включает quantity/fact/remaining —
-// в отличие от state.contracts из /plan-data, где этих полей нет). Не
-// блокирует применение — только предупреждает, см. Docs/backlog.md,
-// "Проверка остатка контракта при групповой установке".
-let bulkContractLines = [];
-
 // Пересчитывается при КАЖДОМ изменении (выбор контракта в строке или
-// "Заполнить пустые") — по каждой связке (контракт, тип элемента) в
-// текущей пачке считает, сколько элементов НОВО получат этот контракт
-// (те, у кого он уже был — не в счёт, они уже учтены в fact), сравнивает
-// с остатком строки контракта. Приближённо (не учитывает переход
-// планового статуса туда-обратно) — предупреждение неблокирующее.
+// "Заполнить пустые"): по каждой связке (контракт, тип, МАРКА) считает,
+// сколько изделий НОВО получат этот контракт (те, у кого он уже был, не в
+// счёт — они давно учтены сервером в «разнесено»), и сравнивает с остатком
+// позиции. Возвращает число бед — по нему updateBulkStatusValidation гасит
+// «Применить» (2026-08-14).
+//
+// По МАРКЕ, а не по типу, как было до 2026-08-14: сервер держит остаток по
+// позиции (тип + марка), и проверка по типу пропускала перебор внутри одной
+// марки при запасе по другой — то есть обещала то, что сервер отвергнет.
+// Числа берутся из того же кэша позиций, что и выбор контракта
+// (contractPositionsReady): второй источник разошёлся бы с первым.
+// Позиции у контракта нет вовсе — тоже беда: такую привязку сервер не
+// примет (см. app/contract_guard.py).
 function updateBulkContractWarning() {
   const warnEl = document.getElementById("bulk-status-contract-warning");
-  if (!bulkContractLines.length) { warnEl.textContent = ""; return; }
-
-  const requested = new Map(); // contractId -> Map(elementType -> count)
-  const already = new Map();
-  const bump = (map, contractId, type) => {
-    if (!map.has(contractId)) map.set(contractId, new Map());
-    const inner = map.get(contractId);
-    inner.set(type, (inner.get(type) || 0) + 1);
-  };
+  const requested = new Map();   // "contractId|тип|марка" -> {count, contractId, elementType, mark}
   document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
     const raw = tr.querySelector(".bulk-row-contract").value;
     if (!raw || raw === "none") return;
     const contractId = Number(raw);
     const element = state.byId.get(Number(tr.dataset.elementId));
     if (!element) return;
-    bump(requested, contractId, element.element_type);
-    if (element.contract_id === contractId) bump(already, contractId, element.element_type);
+    if (element.contract_id === contractId) return;   // место уже занято этим же изделием
+    const key = bulkReservationKey(element.element_type, element.mark, contractId);
+    const ячейка = requested.get(key)
+      || { count: 0, contractId, elementType: element.element_type, mark: element.mark };
+    ячейка.count += 1;
+    requested.set(key, ячейка);
   });
 
   const problems = [];
-  for (const [contractId, types] of requested) {
-    for (const [elementType, count] of types) {
-      const newlyRequested = count - (already.get(contractId)?.get(elementType) || 0);
-      if (newlyRequested <= 0) continue;
-      const line = bulkContractLines.find(l => l.contract_id === contractId && l.element_type === elementType);
-      if (!line || newlyRequested <= line.remaining) continue;
-      problems.push(`«${line.contract_name}» / ${elementType}: запрошено ${newlyRequested}, доступно ${line.remaining}`);
+  for (const з of requested.values()) {
+    const pos = positionForMark(з.elementType, з.mark, з.contractId);
+    const имя = (state.contracts.find(c => c.id === з.contractId) || {}).name || `контракт №${з.contractId}`;
+    const марка = з.mark || "без марки";
+    if (!pos) {
+      // Числа могли ещё не приехать (кэш по типу пуст) — тогда молчим:
+      // «нет позиции» и «не загрузилось» здесь неразличимы, а гасить
+      // кнопку из-за незагрузившегося кэша нельзя.
+      if (!contractPositionsReady.has(з.elementType)) continue;
+      problems.push(`«${имя}»: нет позиции под ${з.elementType} «${марка}»`);
+      continue;
+    }
+    if (з.count > pos.remaining) {
+      problems.push(`«${имя}» / ${з.elementType} «${марка}»: расписано ${з.count}, доступно ${pos.remaining}`);
     }
   }
-  warnEl.textContent = problems.length ? `Превышение остатка контракта — ${problems.join("; ")}` : "";
+  warnEl.textContent = problems.length
+    ? `Привязать нельзя — ${problems.join("; ")}` : "";
+  return problems.length;
 }
 
 // Подпись ячейки контракта: наименование (короткое, как в списке) плюс те
@@ -7747,20 +7959,20 @@ function renderBulkStatusTable() {
 
 const bulkStatusBackdrop = document.getElementById("bulk-status-backdrop");
 
-// Окно НЕ ждёт /contracts (живой репорт "долго открывается"): остатки по
-// строкам контрактов нужны только для НЕблокирующего предупреждения об
-// овербукинге, а сам диалог полностью работоспособен без них. Раньше здесь
+// Окно НЕ ждёт остатков (живой репорт «долго открывается»): раньше здесь
 // стоял `await api("/contracts")` ПЕРЕД показом модалки — на реальных
 // данных это 2,7 секунды пустого ожидания (см. Docs/backlog.md; сам
 // эндпоинт с тех пор ускорен до единиц миллисекунд, но ждать его показ
 // окна всё равно не должен — при росте числа контрактов всё вернулось бы).
-// Открываем сразу, остатки подтягиваем следом и пересчитываем
-// предупреждение, когда придут.
+// Открываем сразу, остатки подтягиваем следом (GET /contracts/positions на
+// каждый тип выборки) и пересчитываем проверку, когда придут.
 //
-// bulkContractRequestId — защита от гонки: пользователь успевает закрыть
-// окно и открыть его с ДРУГОЙ выборкой раньше, чем вернётся предыдущий
-// запрос; ответ, устаревший к моменту прихода, молча отбрасывается.
-let bulkContractRequestId = 0;
+// Второй источник остатков — общий GET /contracts — убран 2026-08-14
+// вместе с прежним предупреждением по ТИПУ: проверка стала блокирующей и
+// считается по маркам из того же кэша позиций, что и выбор контракта
+// (см. updateBulkContractWarning). Два запроса ради одних и тех же чисел
+// означали бы два расходящихся ответа на один вопрос.
+//
 
 // Разметка таймингов операции «массовая смена статуса» — та же операция,
 // на которую пользователь жаловался («долго открывается»), поэтому именно
@@ -7779,7 +7991,6 @@ function openBulkStatusModal() {
   document.getElementById("bulk-status-select").innerHTML =
     state.statusOrder.map(s => `<option value="${s}">${escapeHtml(state.statusLabels[s])}</option>`).join("");
   bulkFillValues = new Map();   // выбор контракта по маркам — от прошлого открытия не наследуется
-  bulkContractLines = []; // от прошлого открытия — до прихода свежих остатков предупреждений не показываем
   clearContractPositionsCache(); // «разнесено» могло измениться с прошлого открытия
   renderBulkStatusTable();
   bulkStatusBackdrop.classList.add("open");
@@ -7802,20 +8013,11 @@ function openBulkStatusModal() {
         }
       });
       renderBulkFillMarks();   // числа приехали — шапка показывает их в тех же строках
+      // Проверка остатка считается по ЭТИМ же числам (2026-08-14) — пока
+      // они не приехали, она молчит, поэтому пересчёт обязателен здесь.
+      updateBulkStatusValidation();
     }).catch(() => { /* числа не показываем, выбор при этом работает */ });
   }
-
-  const requestId = ++bulkContractRequestId;
-  api("/contracts").then(contracts => {
-    if (requestId !== bulkContractRequestId) return; // окно успели переоткрыть — ответ устарел
-    bulkContractLines = contracts.flatMap(c => c.lines.map(l => ({
-      contract_id: c.id, contract_name: c.name, element_type: l.element_type, remaining: l.remaining,
-    })));
-    updateBulkContractWarning(); // остатки пришли — пересчитать предупреждение по уже заполненной таблице
-  }).catch(() => {
-    // Проверка остатка просто не покажет предупреждений — она неблокирующая
-    // и никогда не была условием работы диалога.
-  });
 }
 
 document.getElementById("bulk-status-cancel").addEventListener("click", () => bulkStatusBackdrop.classList.remove("open"));
@@ -11448,32 +11650,21 @@ document.getElementById("ef-save").addEventListener("click", async () => {
   }
   statusBox.style.color = "var(--color-text-muted)";
   statusBox.textContent = "Сохранение…";
-  const send = confirmMismatch => api(
-    `/elements/${efElement.id}/fields${confirmMismatch ? "?confirm_contract_mismatch=true" : ""}`,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
-  );
+  // Расхождение с позицией контракта раньше согласовывалось окошком
+  // confirm (решение Э5), с 2026-08-14 это ЗАПРЕТ: правка марки уводила
+  // изделие из-под позиции ровно так же, как привязка к контракту без
+  // позиции. Отдельной ветки обработки больше нет — отказ показывается как
+  // любая другая ошибка сервера, текстом, который сервер и прислал (там же
+  // сказано, что делать: снять привязку или завести позицию).
   try {
-    await send(false);
+    await api(`/elements/${efElement.id}/fields`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   } catch (e) {
-    const message = e.message || "";
-    // Расхождение с позицией контракта не запрещаем, а согласовываем (Э5).
-    if (message.startsWith("После правки элемент не соответствует")) {
-      if (!confirm(message + ". Сохранить всё равно?")) {
-        statusBox.textContent = "Отменено.";
-        return;
-      }
-      try {
-        await send(true);
-      } catch (err) {
-        statusBox.style.color = "var(--color-danger)";
-        statusBox.textContent = err.message;
-        return;
-      }
-    } else {
-      statusBox.style.color = "var(--color-danger)";
-      statusBox.textContent = message;
-      return;
-    }
+    statusBox.style.color = "var(--color-danger)";
+    statusBox.textContent = e.message || "";
+    return;
   }
   await openElementForm(efElement.id, false);
   await afterElementChanged();

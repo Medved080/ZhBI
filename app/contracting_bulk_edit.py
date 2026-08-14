@@ -56,7 +56,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from app import activity, impersonation
+from app import activity, contract_guard, impersonation
 from app.contracts import build_contract_name
 from app.element_fields import EXCEL_DATE_FORMAT, to_excel_date
 
@@ -722,11 +722,38 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
         # у позиции своих отметок времени нет, её время живёт у контракта.
         if table != "contract_lines":
             присвоения += ", updated_at = datetime('now')"
+        # Правка ПОЗИЦИИ может выдернуть основание из-под уже привязанных
+        # изделий — уменьшением количества, сменой марки или типа (2026-08-14,
+        # см. app/contract_guard.py). Снимаем покрытие контракта до правки,
+        # чтобы сверить после: предсказывать результат по отдельным полям
+        # значило бы завести вторую формулу остатка рядом с настоящей.
+        покрытие_до = None
+        contract_id_позиции = None
+        if table == "contract_lines":
+            contract_id_позиции = int(items[0]["contract_id"])
+            покрытие_до = contract_guard.coverage_state(conn, contract_id_позиции)
         try:
             conn.execute(f"UPDATE {table} SET {присвоения} WHERE id = :id", {**поля, "id": owner_id})
         except sqlite3.IntegrityError as exc:
             skipped.append({"reason": f"«{OWNER_LABELS[table]}» № {owner_id}: {exc}"})
             continue
+        if покрытие_до is not None:
+            беда = contract_guard.regressions(
+                покрытие_до, contract_guard.coverage_state(conn, contract_id_позиции))
+            if беда:
+                # Возврат прежних значений, а не откат всей транзакции:
+                # остальные строки файла ни при чём, и обрывать их из-за
+                # одной позиции незачем. Прежние значения — в `существует`,
+                # прочитанном до правки.
+                conn.execute(
+                    f"UPDATE {table} SET {', '.join(f'{c} = :{c}' for c in поля)} WHERE id = :id",
+                    {**{c: существует[c] for c in поля}, "id": owner_id},
+                )
+                skipped.append({"reason": f"Позиция контракта № {contract_id_позиции}: "
+                                          + "; ".join(беда)
+                                          + ". Сначала переназначьте изделия на другой "
+                                            "контракт или снимите с них привязку."})
+                continue
         if table == "contract_lines":
             lines_updated += 1
         activity.log(

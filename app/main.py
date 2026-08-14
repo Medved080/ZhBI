@@ -77,7 +77,7 @@ from app.element_bulk_edit import (
     # что в выгрузке и в формах. Своя склейка здесь разошлась бы с ними.
     _contract_catalog as contract_catalog,
 )
-from app import contracting_bulk_edit, db_transfer, status_bulk_edit
+from app import contract_guard, contracting_bulk_edit, db_transfer, status_bulk_edit
 from app.access import (
     accessible_object_ids,
     assert_object_access,
@@ -1004,6 +1004,16 @@ def set_element_contract(element_id: int, body: ElementContractIn,
                     status_code=400,
                     detail="Контракт относится к другому объекту — назначить его этому "
                            "изделию нельзя")
+            # Позиция под марку изделия и свободное количество по ней —
+            # обязательны (2026-08-14, см. app/contract_guard.py). Этот путь
+            # не проходит через apply_status_change, поэтому страж зовётся
+            # здесь отдельно; без него карандаш в карточке оставался
+            # единственной дверью, через которую привязку можно было
+            # поставить мимо спецификации.
+            contract_guard.assert_link_allowed(
+                conn, body.contract_id, row["element_type"], row["mark"],
+                element_id=element_id, current_contract_id=row["contract_id"],
+                current_status=row["current_status"])
         sync_element_contract(conn, element_id, row["current_status"],
                               explicit=True, value=body.contract_id)
         conn.commit()
@@ -3217,12 +3227,22 @@ def update_element_fields(
                 raise HTTPException(status_code=400, detail=err)
 
         # Расхождение с позицией контракта — только если контракт назначен.
+        # С 2026-08-14 это ЗАПРЕТ, а не согласовываемое предупреждение
+        # (прежнее решение Э5 отменено пользователем): правка марки уводила
+        # изделие из-под позиции контракта ровно так же, как привязка к
+        # контракту без позиции, — с той разницей, что «согласовано» никто
+        # потом не отличал от «не заметили». confirm_contract_mismatch
+        # больше ничего не открывает; параметр оставлен, чтобы старый клиент
+        # получал внятный отказ, а не 422 на неизвестный параметр.
         new_mark = values.get("mark", row["mark"])
         mismatch = None
         if "mark" in values or "element_type" in values:
             mismatch = contract_mismatch(conn, row["contract_id"], new_type, new_mark)
-            if mismatch and not confirm_contract_mismatch:
-                raise HTTPException(status_code=409, detail=mismatch)
+            if mismatch:
+                raise HTTPException(
+                    status_code=409,
+                    detail=mismatch + ". Сначала снимите привязку к контракту "
+                                      "или заведите в нём позицию под новую марку.")
 
         if not values:
             raise HTTPException(status_code=400, detail="Нечего сохранять")

@@ -917,9 +917,15 @@
   @media (prefers-color-scheme: dark) { .cp-reserved { color: #e0a54a; } }
   .cp-left { color: var(--color-success); }
   .cp-left.cp-over { color: var(--color-danger); }
-  /* Контракты без позиции под эту марку выбрать всё-таки можно (контрактация
-     бывает неполной), но видно, что позиции в них нет. */
+  /* Контракты без позиции под эту марку показываются, но НЕ выбираются
+     (2026-08-14): изделие держится за позицию спецификации, и привязка мимо
+     неё запрещена — сервер её не примет (app/contract_guard.py). Показывать
+     их всё равно надо: «в этом контракте позиции под вашу марку нет» —
+     ответ, а пустой список — загадка. Тем же серым и тем же запретом
+     помечается позиция, у которой не осталось свободного количества. */
   .cp-row-muted .cp-name { color: var(--color-text-muted); }
+  .cp-row-blocked { cursor: not-allowed; opacity: .6; }
+  .cp-row-blocked:hover { background: none; }
   .cp-note { flex: none; font-size: 11px; color: var(--color-text-muted); }
   /* Групповая настройка прав (2026-08-04): пользователи по вертикали,
      уровни доступа по горизонтали. Колонок столько же, сколько объектов в
@@ -1310,6 +1316,22 @@
   /* На выбранной строке (синяя заливка) собственные цвета чисел нечитаемы —
      возвращаем белый, как у остального текста строки. */
   .picker-row.selected .picker-row-count { color: #fff !important; }
+  /* Нарушение привязки: марка, которой нет в спецификации, либо позиция,
+     по которой привязано больше закупленного (2026-08-14). Красным —
+     подпись и фон-подложка, не одни числа: строка целиком означает «этого
+     контракт не покрывает». На выбранной строке заливка синяя и красный
+     текст на ней нечитаем — там остаётся только красная полоса слева. */
+  .picker-row.over, .picker-group-head.over {
+    background: rgba(220, 38, 38, .10); box-shadow: inset 2px 0 0 #dc2626;
+  }
+  .picker-row.over .picker-row-label, .picker-group-head.over .picker-row-label { color: #b91c1c; }
+  .picker-row.over.selected, .picker-group-head.over.selected { background: var(--color-primary); }
+  .picker-row.over.selected .picker-row-label,
+  .picker-group-head.over.selected .picker-row-label { color: #fff; }
+  @media (prefers-color-scheme: dark) {
+    .picker-row.over, .picker-group-head.over { background: rgba(248, 113, 113, .14); }
+    .picker-row.over .picker-row-label, .picker-group-head.over .picker-row-label { color: #fca5a5; }
+  }
   .picker-search { width: 100%; margin-bottom: 4px; font-size: 12px; padding: 4px 6px; }
   .picker-hint { font-size: 11px; color: var(--color-text-muted); margin: 0 0 10px; line-height: 1.35; }
 

@@ -40,6 +40,7 @@ from typing import Optional
 
 from openpyxl import load_workbook
 
+from app import contract_guard
 from app.contracts import find_or_create_contract
 from app.counterparties import find_or_create_counterparty, find_or_create_specification
 
@@ -386,6 +387,12 @@ def import_contracting(conn, parsed: dict, object_id: int) -> dict:
         key = (contract_id, element_type, mark)
         line_quantities[key] = line_quantities.get(key, 0) + row["quantity"]
 
+    # Покрытие ДО записи позиций — по каждому контракту, которого файл
+    # касается. Повторная загрузка выставляет количество ЗАНОВО (см.
+    # line_quantities выше), то есть умеет его уменьшить — а уменьшение
+    # ниже уже привязанного запрещено (2026-08-14, см. app/contract_guard.py).
+    покрытие_до = {cid: contract_guard.coverage_state(conn, cid) for cid in contracts_touched}
+
     inserted_lines = updated_lines = 0
     for (contract_id, element_type, mark), quantity in line_quantities.items():
         existing = conn.execute(
@@ -401,6 +408,24 @@ def import_contracting(conn, parsed: dict, object_id: int) -> dict:
                 (contract_id, element_type, mark, quantity),
             )
             inserted_lines += 1
+
+    # Файл не применяется ЧАСТИЧНО: либо контрактация встаёт целиком, либо
+    # не встаёт вовсе. Пропустить конфликтные строки значило бы записать
+    # спецификацию, которой в файле нет, — а человек читал бы сводку как
+    # «загружено». Исключение до commit откатывает всю транзакцию.
+    беды = []
+    for cid in sorted(contracts_touched):
+        беды.extend(contract_guard.regressions(
+            покрытие_до.get(cid, {}), contract_guard.coverage_state(conn, cid)))
+    if беды:
+        raise ContractingImportError(
+            409,
+            "Файл уменьшает количество ниже уже привязанного к контракту: "
+            + "; ".join(беды[:10])
+            + (f" (и ещё {len(беды) - 10})" if len(беды) > 10 else "")
+            + ". Файл не загружен. Исправьте количества либо снимите привязку "
+              "с лишних изделий.",
+        )
 
     conn.commit()
 

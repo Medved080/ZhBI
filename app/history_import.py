@@ -60,7 +60,7 @@ from datetime import date, datetime, timedelta
 
 from openpyxl import load_workbook
 
-from app import activity
+from app import activity, contract_guard
 from app.contracting_import import parse_number_and_date, resolve_agreement
 from app.contracts import (
     find_or_create_contract,
@@ -428,6 +428,14 @@ def import_history(conn, source_file: str, rows: list, mode: str,
             f"без объекта (дообъектное наследие)"
         )
     contracts_before = conn.execute("SELECT COUNT(*) AS n FROM contracts").fetchone()["n"]
+    # Покрытие ВСЕХ контрактов до импорта (2026-08-14, см.
+    # app/contract_guard.py). Именно всех, а не затронутых: какие контракты
+    # файл заденет, известно только после разбора строк — он их и создаёт
+    # по ходу, — а контрактов в базе десятки, снимок дёшев.
+    покрытие_до = {
+        r["id"]: contract_guard.coverage_state(conn, r["id"])
+        for r in conn.execute("SELECT id FROM contracts")
+    }
     counterparty_by_lower = {
         r["short_name"].lower(): r["id"]
         for r in conn.execute("SELECT id, short_name FROM counterparties").fetchall()
@@ -600,6 +608,27 @@ def import_history(conn, source_file: str, rows: list, mode: str,
         # привязка осталась бы только в status_history, а схема и карточка
         # элемента показывали бы прежний контракт.
         adopt_contract_from_history(conn, element_id, effective_status)
+
+    # Восстановленная привязка подчиняется тому же правилу, что и живая:
+    # изделие держится за ПОЗИЦИЮ спецификации, и если её нет или на всех
+    # не хватает — файл не применяется вовсе (2026-08-14, решение
+    # пользователя; до этого импорт был единственным путём, где привязка
+    # заводилась вообще без оглядки на контрактацию). Проверка после
+    # adopt_contract_from_history: до неё контракт стоит только в записях
+    # истории, а считается он по изделиям.
+    беды = []
+    for r in conn.execute("SELECT id FROM contracts"):
+        беды.extend(contract_guard.regressions(
+            покрытие_до.get(r["id"], {}), contract_guard.coverage_state(conn, r["id"])))
+    if беды:
+        raise HistoryImportError(
+            409,
+            "Файл восстанавливает привязки, которых не покрывает контрактация: "
+            + "; ".join(беды[:10])
+            + (f" (и ещё {len(беды) - 10})" if len(беды) > 10 else "")
+            + ". Файл не загружен. Сначала загрузите контрактацию по этим позициям "
+              "(или поправьте количества в справочнике контрактов).",
+        )
 
     conn.commit()
 

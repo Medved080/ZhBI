@@ -71,7 +71,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app import activity, impersonation
+from app import activity, contract_guard, impersonation
 from app.access import assert_object_access, require_object_access, require_object_contractor
 from app.auth import audit_display_name, get_current_user
 from app.contracts import _specification_chain, build_contract_name, recompute_status_and_actual_date
@@ -956,11 +956,22 @@ def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_us
         if not items:
             raise HTTPException(status_code=409, detail="В документе нет ни одной позиции")
         автор = audit_display_name(user)
+        # Оба контракта документа под общим стражем (2026-08-14, см.
+        # app/contract_guard.py). У замены поставщика своя проверка
+        # свободного количества (_post_supplier_change) — она осталась,
+        # потому что объясняет отказ по позициям документа; эта же ловит
+        # то, чего та не видит: обмен привязками переставляет изделия
+        # РАЗНЫХ марок, если марка в документе не задана.
+        участники = [c for c in (doc["from_contract_id"], doc["to_contract_id"]) if c]
+        покрытие_до = {c: contract_guard.coverage_state(conn, c) for c in участники}
         try:
             if doc["kind"] == KIND_SWAP:
                 итог = _post_link_swap(conn, doc, [dict(i) for i in items], автор, user["id"])
             else:
                 итог = _post_supplier_change(conn, doc, [dict(i) for i in items], автор, user["id"])
+            contract_guard.assert_no_regression(
+                conn, участники, покрытие_до,
+                "Проведение оставило бы изделия без позиции в контракте:")
         except HTTPException:
             # Проведение — всё или ничего: частично изменённые изделия при
             # документе, который так и остался черновиком, были бы хуже отказа.

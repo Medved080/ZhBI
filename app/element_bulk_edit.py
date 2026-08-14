@@ -34,7 +34,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from app import activity, impersonation
+from app import activity, contract_guard, impersonation
 from app.contracts import (
     apply_status_change,
     build_contract_name,
@@ -462,20 +462,30 @@ def _diff_row(conn, row, values: dict, contracts: dict, line_no: int) -> tuple[l
             proposed.pop("element_type", None)
             proposed.pop("subtype", None)
 
-        warn = None
+        # Уход изделия из-под позиции своего контракта — с 2026-08-14
+        # ОТКАЗ, а не пометка «предупреждение» в таблице сверки (см.
+        # app/contract_guard.py и PATCH реквизитов в app/main.py — правило
+        # обязано быть одним и тем же в форме и в файле). Отклоняются
+        # только марка и тип: остальные поля строки применяются как обычно.
         if "mark" in proposed or "element_type" in proposed:
-            warn = contract_mismatch(
+            отказ = contract_mismatch(
                 conn, row["contract_id"],
                 proposed.get("element_type", row["element_type"]),
                 proposed.get("mark", row["mark"]),
+                element_id=row["id"],
             )
+            if отказ:
+                rejected.append({"line": line_no, "uid": row["element_uid"], "reason": отказ,
+                                 "element_id": row["id"], "mark": row["mark"],
+                                 "element_type": row["element_type"]})
+                proposed.pop("mark", None)
+                proposed.pop("element_type", None)
         for field, new in proposed.items():
-            changes.append(describe(field, row[field], new,
-                                    warning=warn if field in ("mark", "element_type") else None))
+            changes.append(describe(field, row[field], new))
 
     # --- контракт: свои правила
     if CONTRACT_COLUMN in values:
-        rej, change = _diff_contract(row, values[CONTRACT_COLUMN], contracts, line_no, describe)
+        rej, change = _diff_contract(conn, row, values[CONTRACT_COLUMN], contracts, line_no, describe)
         if rej:
             rejected.append(rej)
         if change:
@@ -483,7 +493,7 @@ def _diff_row(conn, row, values: dict, contracts: dict, line_no: int) -> tuple[l
     return changes, rejected
 
 
-def _diff_contract(row, raw, contracts: dict, line_no: int, describe):
+def _diff_contract(conn, row, raw, contracts: dict, line_no: int, describe):
     """Правила правки контракта файлом (см. Docs/TZ.md, раздел 5):
     проставить или исправить можно, очистить — нельзя, у «Запланировано» —
     нельзя вовсе.
@@ -512,6 +522,20 @@ def _diff_contract(row, raw, contracts: dict, line_no: int, describe):
             "reason": f"Контракт «{text}» не найден. Выбирайте значение из списка "
                       f"на листе «{SHEET_CONTRACTS}».",
         }, None
+    # Позиция под марку изделия и свободное количество по ней — обязательны
+    # (2026-08-14, см. app/contract_guard.py). Отказ виден уже на сверке, а
+    # не только при применении: таблица подтверждения для того и
+    # показывается, чтобы человек увидел, что пройдёт, а что нет. Счёт
+    # свободных мест идёт по БД, то есть НЕ учитывает другие строки этого
+    # же файла — на применении та же проверка повторится по-настоящему, и
+    # лишние строки уйдут в «пропущено».
+    отказ = contract_guard.link_problem(
+        conn, contracts[text]["id"], row["element_type"], row["mark"],
+        element_id=row["id"], current_contract_id=row["contract_id"],
+        current_status=row["current_status"],
+    )
+    if отказ:
+        return {"line": line_no, "uid": row["element_uid"], "reason": отказ}, None
     # У «Запланирован» контракт обязан быть пуст — но это не повод
     # отказывать: назначение контракта И ЕСТЬ переход в «Контрактацию»
     # (живой запрос 2026-08-01). Поэтому такая правка не отклоняется, а
@@ -593,6 +617,21 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
         if values:
             changed, manual = write_fields(conn, element_id, row, values)
 
+        if contract_id is not None:
+            # Та же проверка, что на сверке, но теперь по-настоящему: между
+            # показом таблицы и применением места в контракте могли занять
+            # соседние строки этого же файла или другой пользователь.
+            # Отказ уводит В ПРОПУЩЕННОЕ, а не роняет весь файл: остальные
+            # правки строки уже записаны, и обрывать импорт из-за одной
+            # привязки нечестно по отношению к ним.
+            отказ = contract_guard.link_problem(
+                conn, int(contract_id), row["element_type"], row["mark"],
+                element_id=element_id, current_contract_id=row["contract_id"],
+                current_status=row["current_status"],
+            )
+            if отказ:
+                skipped.append({"element_id": element_id, "reason": отказ})
+                contract_id = None
         if contract_id is not None:
             if row["current_status"] == "planned":
                 # Назначение контракта запланированному элементу — это

@@ -40,7 +40,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app import activity, impersonation
+from app import activity, contract_guard, impersonation
 from app.access import (
     assert_object_access,
     require_object_access,
@@ -664,6 +664,14 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         )
         # Полная замена строк/инцидентов — список редактируется в UI
         # целиком, проще и предсказуемее частичного патча по id строки.
+        # Отсюда же следует, что уменьшение количества, удаление позиции и
+        # смена её марки/типа приходят сюда ОДИНАКОВО — как другой набор
+        # строк. Поэтому и запрет один на все три случая: снимаем покрытие
+        # ДО правки, пишем, сверяем ПОСЛЕ и откатываемся, если под
+        # привязанными изделиями пропало основание (2026-08-14, см.
+        # app/contract_guard.py). Инциденты в сверке участвуют наравне со
+        # строками: списанное повреждённым съедает тот же остаток.
+        покрытие_до = contract_guard.coverage_state(conn, contract_id)
         conn.execute("DELETE FROM contract_lines WHERE contract_id = ?", (contract_id,))
         for line in body.lines:
             conn.execute(
@@ -678,6 +686,9 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
                 (contract_id, inc.element_type, inc.quantity, inc.incident_date, inc.description),
             )
         save_contract_capacity(conn, contract_id, body.capacity)
+        contract_guard.assert_no_regression(
+            conn, [contract_id], {contract_id: покрытие_до},
+            "Правка спецификации оставила бы изделия без основания:")
         conn.commit()
         row = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         результат = _to_contract_out(conn, row)
@@ -961,6 +972,22 @@ def apply_status_change(
     row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
     if row is None:
         raise LookupError(f"Элемент {element_id} не найден")
+
+    # Привязка к контракту допустима ТОЛЬКО через позицию его спецификации
+    # (2026-08-14, см. app/contract_guard.py). Проверка здесь, ДО записи, а
+    # не по факту: одиночная и массовая смена статуса ходят через эту
+    # функцию обе, и правило, стоящее в роутах, разошлось бы между ними.
+    # Массовая пачка идёт в ОДНОЙ транзакции, поэтому места, занятые
+    # предыдущими изделиями пачки, страж уже видит.
+    целевой_контракт = contract_value if contract_explicit else row["contract_id"]
+    if status != "planned":
+        contract_guard.assert_link_allowed(
+            conn, целевой_контракт, row["element_type"], row["mark"],
+            element_id=element_id, current_contract_id=row["contract_id"],
+            current_status=row["current_status"],
+            # Приставка не нужна: в тексте отказа уже названы тип и марка —
+            # то есть ровно то, чем изделие отличается от соседей по пачке.
+        )
 
     # Снимок контракта для записи истории — «что выбрали в этот момент».
     # Откат на "Запланирован" снимает контракт и тем самым поставщика: у

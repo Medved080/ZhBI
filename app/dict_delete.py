@@ -48,7 +48,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app import activity
+from app import activity, contract_guard
 from app.access import require_system_admin
 from app.contracts import build_contract_name, build_document_label
 from app.db import get_connection
@@ -1027,6 +1027,16 @@ def delete_entry(kind: str, key: str, body: DeleteIn,
     """
     conn = get_connection()
     try:
+        # Покрытие контрактов ДО удаления: перевод ссылок на замену — это
+        # тоже привязка изделий к контракту, и она подчиняется общему
+        # правилу «изделие держится за позицию спецификации» (2026-08-14,
+        # см. app/contract_guard.py). Снимается по всем контрактам сразу:
+        # какие заденет удаление контрагента с деревом договоров, заранее
+        # не известно, а контрактов в базе десятки.
+        покрытие_до = {
+            r["id"]: contract_guard.coverage_state(conn, r["id"])
+            for r in conn.execute("SELECT id FROM contracts")
+        }
         план = build_plan(conn, kind, key)
         мешает = _блокировки(план)
         if мешает:
@@ -1076,6 +1086,10 @@ def delete_entry(kind: str, key: str, body: DeleteIn,
                     "moved": перенесено,
                 })
             _удалить_снизу_вверх(conn, план)
+        contract_guard.assert_no_regression(
+            conn, [r["id"] for r in conn.execute("SELECT id FROM contracts")],
+            покрытие_до,
+            "Перевод изделий на замену оставил бы их без позиции в контракте:")
         conn.commit()
     except HTTPException:
         conn.rollback()

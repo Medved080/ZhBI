@@ -21,6 +21,8 @@ import re
 from datetime import datetime
 from typing import Optional
 
+from app import contract_guard
+
 EDITABLE_FIELDS = (
     "element_type", "subtype", "mark", "elevation_mm", "floor", "address",
     "planned_delivery_date", "project_smr_start_date", "project_delivery_date",
@@ -173,24 +175,37 @@ def check_subtype(conn, element_type: Optional[str], subtype: Optional[str]) -> 
             f"(правится в «Действия → Справочники → Подтипы»)")
 
 
-def contract_mismatch(conn, contract_id, element_type, mark) -> Optional[str]:
+def contract_mismatch(conn, contract_id, element_type, mark, element_id=None) -> Optional[str]:
     """Перестал ли элемент соответствовать позиции своего контракта после
-    правки типа или марки. Возвращает текст предупреждения или None.
+    правки типа или марки. Возвращает текст отказа или None.
 
-    Это НЕ запрет: позиция контракта может быть заведена позже или с другой
-    маркой, и решение оставляет за собой человек (решение Э5 —
-    «предупреждать и согласовывать»).
+    С 2026-08-14 это ЗАПРЕТ, а не согласовываемое предупреждение (решение
+    Э5 отменено пользователем) — сам текст возвращается по-прежнему, а
+    решение «пускать или нет» принимают вызывающие: PATCH реквизитов
+    изделия (app/main.py) и массовая правка через Excel
+    (app/element_bulk_edit.py, там строка уходит в «пропущено»).
+
+    Проверка отдана стражу (app/contract_guard.py) целиком: он же считает и
+    свободное количество — смена марки на другую позицию того же контракта
+    может упереться не в отсутствие позиции, а в её исчерпанность. И он же
+    сравнивает марки без учёта регистра, иначе «15кс1.1» вместо «15КС1.1»
+    читалось бы как «позиции нет» на ровном месте.
     """
     if not contract_id:
         return None
-    line = conn.execute(
-        "SELECT 1 FROM contract_lines WHERE contract_id = ? AND element_type = ? AND mark IS ?",
-        (contract_id, element_type, mark),
-    ).fetchone()
-    if line is not None:
+    проблема = contract_guard.link_problem(
+        conn, contract_id, element_type, mark, element_id=element_id,
+        # Текущая привязка НЕ передаётся намеренно: изделие уже привязано к
+        # этому контракту, и «уже занимает место» освободило бы его от
+        # проверки — а меняется как раз то, ПОД КАКУЮ позицию оно занимает
+        # место.
+    )
+    if проблема is None:
         return None
-    return (f"После правки элемент не соответствует ни одной позиции своего "
-            f"контракта (тип «{element_type}», марка «{mark or '—'}»)")
+    # Тип и марку не повторяем: страж называет их сам, и «после правки
+    # (тип …, марка …) — в спецификации нет позиции под тип … марку …»
+    # читалось бы как заикание.
+    return f"Правка уводит изделие из-под позиции его контракта. {проблема}"
 
 
 def resolve_mark_id(conn, object_id, element_type, mark, create: bool = True):
