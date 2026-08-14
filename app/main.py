@@ -1282,6 +1282,11 @@ class ReportRequestIn(BaseModel):
     # build_dynamics_report). Пусто = весь срок проекта.
     week_from: Optional[str] = None
     week_to: Optional[str] = None
+    # Что показывает график «Динамики» (2026-08-14): "delivery" — только
+    # поставку (две кривые), "montage" — только монтаж (две кривые),
+    # "both" — все четыре. Пусто = "both". Присылается и в выгрузки XLSX/PDF:
+    # они обязаны показывать ровно то, что на экране.
+    dyn_mode: Optional[str] = None
     # Список id — необязательное сужение отчёта текущим фильтром схемы. Тот
     # же приём, что у XLS-экспорта: критерии фильтра живут на клиенте, и
     # дублировать их на сервере значило бы держать две расходящиеся копии.
@@ -1398,7 +1403,8 @@ def report_dynamics(body: ReportRequestIn, user: sqlite3.Row = Depends(get_curre
     try:
         body = _guard_report(conn, user, body)
         return build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
-                                     _report_object_id(conn, body), body.week_from, body.week_to)
+                                     _report_object_id(conn, body), body.week_from, body.week_to,
+                                     body.dyn_mode)
     finally:
         conn.close()
 
@@ -1416,7 +1422,8 @@ def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_
     try:
         body = _guard_report(conn, user, body)
         report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
-                                       _report_object_id(conn, body), body.week_from, body.week_to)
+                                       _report_object_id(conn, body), body.week_from, body.week_to,
+                                       body.dyn_mode)
     finally:
         conn.close()
     return _report_file_response(
@@ -1430,7 +1437,8 @@ def report_dynamics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_c
     try:
         body = _guard_report(conn, user, body)
         report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
-                                       _report_object_id(conn, body), body.week_from, body.week_to)
+                                       _report_object_id(conn, body), body.week_from, body.week_to,
+                                       body.dyn_mode)
     finally:
         conn.close()
     return _report_file_response(build_dynamics_report_pdf(report), "Отчёт о динамике поставки и монтажа.pdf",

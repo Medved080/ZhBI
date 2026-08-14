@@ -738,13 +738,19 @@ function applyRolePermissions() {
   // Гашение здесь ЧИСТО ИНТЕРФЕЙСНОЕ и правами не является: дашборд считает
   // по тем же данным /plan-data, что уже пришли на схему, ничего сверх
   // доступного роли он не показывает.
-  const switchEl = document.getElementById("workspace-switch");
-  if (switchEl) {
-    const можно = комплектовщик;
-    switchEl.style.display = можно ? "" : "none";
+  //
+  // С появлением АРМ прораба (2026-08-14) гасится уже НЕ весь переключатель,
+  // а одна кнопка: «АРМ прораба» — та же схема с тем же отбором, только
+  // разложенная иначе, и прятать его от прораба не от чего. Переключатель
+  // из двух положений («Модель» и «АРМ прораба») осмыслен и без третьего.
+  // Порог доступа к рабочим местам переедет в настройку ролей (соседняя
+  // работа, app/features.py) — тогда отсюда уйдёт и этот признак.
+  const btnPicker = document.getElementById("btn-ws-picker");
+  if (btnPicker) {
+    btnPicker.style.display = комплектовщик ? "" : "none";
     // Роль могла смениться на живой вкладке (режим «от имени», повторный
     // /me) — человек, оказавшийся без права, не должен остаться в АРМ.
-    if (!можно && state.picker.active) setWorkspace("model");
+    if (!комплектовщик && state.picker.active) setWorkspace("model");
   }
 }
 
@@ -4873,31 +4879,54 @@ document.addEventListener("keydown", (e) => {
 
 const btnWsModel = document.getElementById("btn-ws-model");
 const btnWsPicker = document.getElementById("btn-ws-picker");
+const btnWsForeman = document.getElementById("btn-ws-foreman");
+
+// Текущее рабочее место: "model" | "picker" | "foreman" (2026-08-14).
+// Раньше их было два, и хватало булева state.picker.active; он остался и
+// означает ровно одно — «действует отбор АРМ комплектовщика», от чего
+// зависит passesPlacementFilters. АРМ прораба работает на отборе «Модели»,
+// поэтому там picker.active = false, и ни одну проверку отбора трогать не
+// пришлось.
+let workspace = "model";
 
 function setWorkspace(ws) {
+  if (ws === workspace) return;
+  workspace = ws;
   const picker = ws === "picker";
-  if (picker === state.picker.active) return;
+  const foreman = ws === "foreman";
   state.picker.active = picker;
-  btnWsModel.classList.toggle("active", !picker);
+  btnWsModel.classList.toggle("active", ws === "model");
   btnWsPicker.classList.toggle("active", picker);
+  btnWsForeman.classList.toggle("active", foreman);
   document.getElementById("picker-panel").style.display = picker ? "" : "none";
   document.getElementById("picker-metrics").style.display = picker ? "" : "none";
   document.getElementById("picker-contracts").style.display = picker ? "" : "none";
   document.getElementById("picker-panel-resize").style.display = picker ? "" : "none";
   document.getElementById("picker-contracts-resize").style.display = picker ? "" : "none";
+  document.getElementById("foreman-panel").style.display = foreman ? "" : "none";
+  document.getElementById("foreman-panel-resize").style.display = foreman ? "" : "none";
+  // Блок фильтров переезжает между вкладкой правой панели и левой панелью
+  // АРМ прораба — одним и тем же узлом, со всеми обработчиками (см.
+  // комментарий в разметке у #foreman-panel).
+  const filtersBox = document.getElementById("filters-box");
+  const домой = foreman
+    ? document.getElementById("foreman-panel")
+    : document.getElementById("tab-filters");
+  if (filtersBox && filtersBox.parentElement !== домой) домой.appendChild(filtersBox);
   // Правая панель: в АРМ — свёрнута до ярлычка и раскрывается поверх схемы,
   // в «Модели» — закреплена и тянется за ручку, как была. Исключение —
   // закреплённая пользователем панель (2026-08-14): она и в АРМ стоит
   // рядом со схемой. Вся развилка живёт в applySidebarPin.
   applySidebarPin();
-  // Вкладка «Фильтры» в сайдбаре относится к отбору «Модели», в АРМ он не
-  // действует (отборы раздельные) — прячем саму вкладку, чтобы её нельзя
-  // было принять за причину того, что видно на схеме. Остальные вкладки
-  // (карточка изделия, статусы, вид) в АРМ нужны так же, как и в «Модели».
+  // Вкладка «Фильтры» в сайдбаре прячется в обоих АРМ, но по разным
+  // причинам: у комплектовщика отбор свой и фильтры «Модели» не действуют
+  // вовсе (их нельзя принять за причину того, что видно на схеме), у
+  // прораба они действуют, но переехали в левую панель — пустая вкладка
+  // осталась бы обманкой. Остальные вкладки нужны и там, и там.
   const filtersTab = document.querySelector('.tab-btn[data-tab="filters"]');
   if (filtersTab) {
-    filtersTab.style.display = picker ? "none" : "";
-    if (picker && filtersTab.classList.contains("active")) {
+    filtersTab.style.display = picker || foreman ? "none" : "";
+    if ((picker || foreman) && filtersTab.classList.contains("active")) {
       document.querySelector('.tab-btn[data-tab="properties"]').click();
     }
   }
@@ -4918,6 +4947,7 @@ function setWorkspace(ws) {
 
 btnWsModel.addEventListener("click", () => setWorkspace("model"));
 btnWsPicker.addEventListener("click", () => setWorkspace("picker"));
+btnWsForeman.addEventListener("click", () => setWorkspace("foreman"));
 
 function renderAxisGrid(data) {
   const layer = document.getElementById("axis-layer");
@@ -8924,6 +8954,14 @@ function makePanelResizer(handle, panel, { fromRight, key, min = 220, max = 640 
 makePanelResizer(
   document.getElementById("picker-panel-resize"), document.getElementById("picker-panel"),
   { fromRight: false, key: "zhbi_picker_panel_width" },
+);
+makePanelResizer(
+  document.getElementById("foreman-panel-resize"), document.getElementById("foreman-panel"),
+  { fromRight: false, key: "zhbi_foreman_panel_width" },
+);
+makePanelResizer(
+  document.getElementById("foreman-panel-resize"), document.getElementById("foreman-panel"),
+  { fromRight: false, key: "zhbi_foreman_panel_width" },
 );
 makePanelResizer(
   document.getElementById("picker-contracts-resize"), document.getElementById("picker-contracts"),
@@ -16848,6 +16886,10 @@ function reportRequestBody() {
     body.report_date = document.getElementById("report-date").value || null;
     body.week_from = dynRange.from;
     body.week_to = dynRange.to;
+    // Режим кривых — в запрос, хотя экран мог бы переключить их и сам:
+    // тот же запрос собирают выгрузки XLSX/PDF (см. downloadReport), и
+    // файл обязан показывать выбранное на экране.
+    body.dyn_mode = document.getElementById("dyn-mode").value;
   }
   if (REPORTS[currentReport].needsPeriod) {
     body.date_from = document.getElementById("ds-from").value || null;
@@ -16903,13 +16945,31 @@ function renderTreeReport(data, opts = {}) {
 // библиотекой: те же координаты потом повторяет reportlab в PDF, и никакой
 // новый вендоринг не нужен.
 
+// Пары «план — факт» одного цвета, различаются штрихом (план — пунктир):
+// на графике из четырёх кривых видно, что синие — про монтаж, а оранжевые —
+// про поставку, и глазу не нужно сверяться с легендой на каждую линию.
+// Те же цвета и штрихи в PDF (app/reports.py, DYN_SERIES_COLORS).
 const DYN_COLORS = {
   plan_smr: "#4A86C8",
-  fact_delivery: "#E8703A",
   fact_montage: "#8C99A6",
+  plan_delivery: "#C2571A",
+  fact_delivery: "#E8703A",
 };
-// Порядок задаёт и порядок в легенде, и порядок отрисовки: факт поверх плана.
-const DYN_SERIES = ["plan_smr", "fact_delivery", "fact_montage"];
+const DYN_DASHED = new Set(["plan_smr", "plan_delivery"]);
+// Режимы графика (2026-08-14): поставка и монтаж смотрятся и порознь, и
+// вместе. Ряды сервер считает ВСЕ и всегда — режим только выбирает
+// показываемое, поэтому переключение не требует повторного запроса…
+const DYN_MODE_SERIES = {
+  montage: ["plan_smr", "fact_montage"],
+  delivery: ["plan_delivery", "fact_delivery"],
+  both: ["plan_smr", "fact_montage", "plan_delivery", "fact_delivery"],
+};
+const DYN_MODE_LABELS = { montage: "Монтаж", delivery: "Поставка", both: "Обе" };
+// …но в отчёт он всё же уходит: выгрузки XLSX и PDF собираются на сервере и
+// обязаны показывать ровно то, что на экране (см. build_dynamics_report).
+// Порядок внутри режима задаёт и порядок в легенде, и порядок отрисовки.
+const dynSeriesFor = (data) => data.series_order || DYN_MODE_SERIES.both;
+const DYN_SERIES = DYN_MODE_SERIES.both;
 
 function niceMax(value) {
   // Верх шкалы — «круглое» число над максимумом, иначе подписи оси
@@ -16939,7 +16999,8 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   // такие точки не рисуются, кривая факта на отчётной дате обрывается.
   const seriesPoints = (key) => (data.series[key] || [])
     .map((v, i) => ({ v, i })).filter(p => p.v !== null && p.v !== undefined);
-  const maxY = niceMax(Math.max(1, ...DYN_SERIES.flatMap(k => seriesPoints(k).map(p => p.v))));
+  const ряды = dynSeriesFor(data);
+  const maxY = niceMax(Math.max(1, ...ряды.flatMap(k => seriesPoints(k).map(p => p.v))));
   const x = i => L + (weeks.length === 1 ? 0 : i * (width - L - R) / (weeks.length - 1));
   const y = v => height - B - (v / maxY) * (height - T - B);
 
@@ -16965,11 +17026,12 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   });
 
   // Линии
-  for (const key of DYN_SERIES) {
+  for (const key of ряды) {
     const points = seriesPoints(key);
     if (!points.some(p => p.v > 0)) continue;
     const d = points.map((p, n) => `${n ? "L" : "M"} ${x(p.i).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
-    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"/>`);
+    const штрих = DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"${штрих}/>`);
   }
 
   // Вехи: красная стрелка вниз к линии плана + выноска с датой
@@ -17020,8 +17082,9 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
 
   // Легенда (в compact её рисует HTML рядом — см. sideChartLegendHtml)
   let lx = L;
-  for (const key of compact ? [] : DYN_SERIES) {
-    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"/>`);
+  for (const key of compact ? [] : ряды) {
+    const штрих = DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"${штрих}/>`);
     parts.push(`<text x="${lx + 28}" y="${height - 6}" font-size="11" fill="#4A5460">${escapeHtml(data.series_labels[key])}</text>`);
     lx += 34 + data.series_labels[key].length * 6.2;
   }
@@ -17759,6 +17822,7 @@ async function switchReport(key) {
   [...document.querySelectorAll(".report-tab")].forEach(b => b.classList.toggle("active", b.dataset.report === key));
   document.getElementById("report-date-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-period-box").style.display = REPORTS[key].needsDate ? "" : "none";
+  document.getElementById("report-dyn-mode-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
   document.getElementById("report-contracting-box").style.display = REPORTS[key].needsScale ? "" : "none";
   document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
@@ -17816,6 +17880,9 @@ document.getElementById("dyn-range-reset").addEventListener("click", () => {
   dynRange = { from: null, to: null };
   loadReport();
 });
+// Перезапрос, а не перерисовка имеющегося отчёта: сам отчёт несёт в себе
+// выбранный режим (series_order), и его же берут выгрузки XLSX/PDF.
+document.getElementById("dyn-mode").addEventListener("change", loadReport);
 for (const id of ["mw-from", "mw-to", "mw-user"]) {
   document.getElementById(id).addEventListener("change", loadReport);
 }
@@ -18071,8 +18138,9 @@ document.getElementById("side-status-body").addEventListener("click", (e) => {
 });
 
 function sideChartLegendHtml(data) {
-  return `<div class="side-chart-legend">${DYN_SERIES.map(k =>
-    `<span><i style="background:${DYN_COLORS[k]}"></i>${escapeHtml(data.series_labels[k])}</span>`
+  return `<div class="side-chart-legend">${dynSeriesFor(data).map(k =>
+    `<span><i style="background:${DYN_COLORS[k]}; color:${DYN_COLORS[k]}"${DYN_DASHED.has(k)
+      ? ' class="dashed"' : ""}></i>${escapeHtml(data.series_labels[k])}</span>`
   ).join("")}</div>`;
 }
 
@@ -18158,6 +18226,10 @@ function renderSideDynamicsReport() {
     (sideDynRange.from || sideDynRange.to) ? "" : "none";
 
   const windowed = sideDynWindow(data);
+  // Режим панели — свой, экранный: сервер прислал все четыре ряда, и выбор
+  // здесь только сужает показываемое (см. dynSeriesFor).
+  const режим = document.getElementById("side-dyn-mode").value;
+  windowed.series_order = DYN_MODE_SERIES[режим] || DYN_MODE_SERIES.both;
   const cov = data.plan_coverage;
   const warns = [];
   if (cov.smr < cov.total) warns.push(`СМР — у ${cov.smr} из ${cov.total}`);
@@ -18166,7 +18238,7 @@ function renderSideDynamicsReport() {
     <div class="side-chart">${windowed.weeks.length
       ? buildDynamicsChartSvg(windowed, 280, 150, { compact: true })
       : '<div class="hint-text">В выбранном периоде нет ни одной недели</div>'}</div>
-    ${sideChartLegendHtml(data)}
+    ${sideChartLegendHtml(windowed)}
     ${warns.length ? `<div class="side-dyn-warn">План задан не у всех изделий (${escapeHtml(warns.join("; "))}) — кривая плана неполная.</div>` : ""}
     ${sideDynBlock("Монтаж ЖБИ", data.montage, data.report_date)}
     ${sideDynBlock("Поставка ЖБИ", data.delivery, data.report_date)}
@@ -18193,6 +18265,8 @@ document.getElementById("side-dyn-range-reset").addEventListener("click", () => 
   sideDynRange = { from: null, to: null };
   renderSideDynamicsReport();
 });
+// Перерисовка без запроса: ряды уже все здесь (см. renderSideDynamicsReport).
+document.getElementById("side-dyn-mode").addEventListener("change", renderSideDynamicsReport);
 
 // «⤢» — тот же отчёт в полный размер. Галочку «учитывать фильтр» ставим:
 // иначе форма показала бы другие числа, чем панель, с которой её открыли.

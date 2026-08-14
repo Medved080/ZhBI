@@ -1224,6 +1224,15 @@
     width: 320px; flex-shrink: 0; background: var(--color-surface-2);
     border-right: 1px solid var(--color-border); padding: 12px; overflow-y: auto; font-size: 12px;
   }
+  /* Левая панель АРМ прораба — та же колонка, что у комплектовщика (те же
+     ширина, фон и ручка), но с содержимым правой панели: размер шрифта
+     берётся сайдбарный, иначе фильтры, приехавшие из #sidebar, выглядели бы
+     мельче, чем были. */
+  #foreman-panel {
+    width: 320px; flex-shrink: 0; background: var(--color-surface-2);
+    border-right: 1px solid var(--color-border); padding: 12px; overflow-y: auto; font-size: 13px;
+  }
+  #foreman-panel #filters-box > h3 { margin-top: 0; }
   #picker-metrics {
     display: flex; gap: 8px; padding: 10px 12px; flex-wrap: wrap;
     background: var(--color-surface-2); border-bottom: 1px solid var(--color-border); flex-shrink: 0;
@@ -1577,6 +1586,12 @@
   .side-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 10.5px; margin-top: 6px; color: var(--color-text-muted); }
   .side-chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
   .side-chart-legend i { display: inline-block; width: 12px; height: 2px; }
+  /* Кривые плана на графике пунктирные — в легенде тот же штрих, иначе две
+     линии одного цвета (план и факт одной пары) в ней неразличимы. */
+  .side-chart-legend i.dashed {
+    height: 0; border-top: 2px dashed currentColor; background: none !important;
+    color: inherit;
+  }
   .side-dyn-block { margin-top: 10px; }
   .side-dyn-block h4 {
     font-size: 11px; font-weight: 600; margin: 0 0 4px; display: flex;
@@ -3362,6 +3377,15 @@
               title="Схема и панель фильтров">Модель</button>
       <button type="button" class="view-mode-btn" id="btn-ws-picker" data-ws="picker"
               title="Дашборд комплектации: свойства, количественные показатели и схема выбранного среза">АРМ комплектовщика</button>
+      <!-- АРМ прораба (2026-08-14). Не третий набор данных, а третья
+           РАСКЛАДКА тех же: фильтры «Модели» переезжают из вкладки правой
+           панели в постоянную панель слева, и прораб держит их под рукой,
+           не отнимая места у карточки изделия справа. Отбор — тот же самый
+           (state.placementFilters), поэтому переключение между «Моделью» и
+           этим АРМ ничего не сбрасывает; в АРМ комплектовщика отбор свой,
+           и там всё по-прежнему раздельно. -->
+      <button type="button" class="view-mode-btn" id="btn-ws-foreman" data-ws="foreman"
+              title="Фильтры «Модели» постоянной панелью слева, свойства и статус — справа">АРМ прораба</button>
     </div>
     <div class="view-mode-switch" id="view-mode-switch" role="group" aria-label="Режим отображения">
       <button type="button" class="view-mode-btn active" id="btn-view-2d" data-mode="2d">2D</button>
@@ -3415,6 +3439,14 @@
       пока не выбрано это рабочее место (см. app.js, setWorkspace). -->
  <div id="picker-panel" style="display:none"></div>
  <div id="picker-panel-resize" class="panel-resize-handle" style="display:none"
+      title="Перетащите, чтобы изменить ширину панели"></div>
+ <!-- АРМ прораба (2026-08-14): та же левая колонка, но в неё ПЕРЕЕЗЖАЕТ
+      готовый блок фильтров из вкладки правой панели (#filters-box). Именно
+      переезжает, а не рисуется второй раз: два экземпляра одних и тех же
+      чекбоксов пришлось бы держать согласованными, и первая же правка
+      фильтров в одном месте разошлась бы с другим. -->
+ <div id="foreman-panel" style="display:none"></div>
+ <div id="foreman-panel-resize" class="panel-resize-handle" style="display:none"
       title="Перетащите, чтобы изменить ширину панели"></div>
  <div id="stage-area">
   <!-- Полоса количественных показателей — над схемой и на всю её ширину:
@@ -3556,6 +3588,17 @@
                и таблицы), «Период» — только масштаб оси X графика; по
                умолчанию весь срок жизни проекта (живой запрос 2026-07-30). -->
           <div class="side-report-controls">
+            <!-- Те же три режима, что в полной форме (2026-08-14). Здесь это
+                 чисто экранный выбор: ряды уже пришли все, перезапрос не
+                 нужен — в отличие от формы, где режим уходит на сервер ради
+                 выгрузок XLSX/PDF. -->
+            <label>Показывать
+              <select id="side-dyn-mode">
+                <option value="both">поставку и монтаж</option>
+                <option value="delivery">только поставку</option>
+                <option value="montage">только монтаж</option>
+              </select>
+            </label>
             <label>На дату <input type="date" id="side-dyn-date"/></label>
             <label>Период <input type="date" id="side-dyn-from"/><span>—</span><input type="date" id="side-dyn-to"/></label>
             <button type="button" class="link-btn" id="side-dyn-range-reset">весь проект</button>
@@ -3565,9 +3608,13 @@
       </div>
     </div>
     <div id="tab-filters" class="tab-panel">
-      <h3>Фильтры</h3>
-      <input type="text" id="mark-search-input" placeholder="Поиск марки…"/>
-      <div id="placement-filters"></div>
+      <!-- Обёртка нужна, чтобы блок фильтров переезжал в левую панель АРМ
+           прораба ЦЕЛИКОМ, одним узлом (см. app.js, setWorkspace). -->
+      <div id="filters-box">
+        <h3>Фильтры</h3>
+        <input type="text" id="mark-search-input" placeholder="Поиск марки…"/>
+        <div id="placement-filters"></div>
+      </div>
     </div>
     <div id="tab-view" class="tab-panel">
       <h3>Настройка отображения</h3>
@@ -4950,6 +4997,17 @@
         <!-- Период графика «Динамики» — тот же, что на панели «Статус»:
              масштаб оси X, а не пересчёт (отчётная дата и таблицы
              «план/факт/отклонение» от него не зависят). -->
+        <!-- Что показывает график (2026-08-14): поставку, монтаж или обе
+             пары кривых. Ряды сервер считает всегда все — это выбор
+             показываемого, а не пересчёт. -->
+        <label class="field" id="report-dyn-mode-box" style="display:none; margin:0">
+          Показывать
+          <select id="dyn-mode" style="width:auto">
+            <option value="both">Поставку и монтаж</option>
+            <option value="delivery">Только поставку</option>
+            <option value="montage">Только монтаж</option>
+          </select>
+        </label>
         <span id="report-period-box" style="display:none">
           Период <input type="date" id="dyn-from" style="width:auto"/>
           <span>—</span>

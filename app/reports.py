@@ -406,11 +406,26 @@ def _cumulative(pairs: list, weeks: list) -> list:
     return out
 
 
+# Режимы графика «Динамики» (2026-08-14, живой запрос: «поставку и монтаж
+# надо разделять между собой, отдельно смотреть поставку, отдельно монтаж»).
+# Ряд plan_delivery считался и раньше, но на графике не рисовался вовсе —
+# кривая плана поставки была единственной недостающей из четырёх.
+# Порядок внутри режима — порядок отрисовки и легенды: сначала план, за ним
+# факт той же пары.
+DYN_MODE_SERIES = {
+    "montage": ["plan_smr", "fact_montage"],
+    "delivery": ["plan_delivery", "fact_delivery"],
+    "both": ["plan_smr", "fact_montage", "plan_delivery", "fact_delivery"],
+}
+DYN_MODE_LABELS = {"montage": "Монтаж", "delivery": "Поставка", "both": "Поставка и монтаж"}
+
+
 def build_dynamics_report(conn, source_file: Optional[str], report_date: Optional[str] = None,
                           element_ids: Optional[list] = None,
                           object_id: Optional[int] = None,
                           week_from: Optional[str] = None,
-                          week_to: Optional[str] = None) -> dict:
+                          week_to: Optional[str] = None,
+                          mode: Optional[str] = None) -> dict:
     from datetime import date
 
     from app.settings import (
@@ -430,6 +445,8 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
             clauses.append(f"e.id IN ({','.join('?' * len(element_ids))})")
             params.extend(element_ids)
     where = f"WHERE {' AND '.join(clauses)}"
+
+    режим = mode if mode in DYN_MODE_SERIES else "both"
 
     total = conn.execute(f"SELECT COUNT(*) AS n FROM elements e {where}", params).fetchone()["n"]
 
@@ -556,8 +573,14 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
         "week_from": week_from or None,
         "week_to": week_to or None,
         "series": series,
-        "series_labels": {"plan_smr": "План СМР", "plan_delivery": "Поставка (план)",
-                          "fact_delivery": "Поставка", "fact_montage": "Монтаж"},
+        "series_labels": {"plan_smr": "Монтаж (план)", "plan_delivery": "Поставка (план)",
+                          "fact_delivery": "Поставка (факт)", "fact_montage": "Монтаж (факт)"},
+        # Какие кривые рисовать (2026-08-14). Ряды считаются ВСЕ и всегда —
+        # режим лишь выбирает показываемое, поэтому переключение на экране
+        # не требует пересчёта, а выгрузки XLSX/PDF получают тот же список и
+        # не расходятся с экраном.
+        "mode": режим,
+        "series_order": DYN_MODE_SERIES[режим],
         "montage": block("plan_smr", "fact_montage"),
         "delivery": block("plan_delivery", "fact_delivery"),
         # Честная пометка о неполноте плана: на тестовых данных проектные
@@ -593,8 +616,19 @@ def _ru_date_short(iso: Optional[str]) -> str:
     return f"{d.day:02d}.{d.month:02d}.{d.year}"
 
 
-DYN_SERIES_ORDER = ["plan_smr", "fact_delivery", "fact_montage"]
-DYN_SERIES_COLORS = {"plan_smr": "#4A86C8", "fact_delivery": "#E8703A", "fact_montage": "#8C99A6"}
+# Порядок по умолчанию — на случай отчёта, собранного до появления режимов
+# (в него ключ "series_order" не попадал). Живые отчёты берут порядок из
+# самого отчёта: report["series_order"], см. DYN_MODE_SERIES.
+DYN_SERIES_ORDER = DYN_MODE_SERIES["both"]
+# Пары «план — факт» держатся одного цвета и различаются штрихом (планы
+# пунктиром, факты сплошной): так на графике из четырёх кривых видно, что
+# синие — это про монтаж, а оранжевые — про поставку, и глазу не нужно
+# сверяться с легендой на каждую линию.
+DYN_SERIES_COLORS = {
+    "plan_smr": "#4A86C8", "fact_montage": "#8C99A6",
+    "plan_delivery": "#C2571A", "fact_delivery": "#E8703A",
+}
+DYN_SERIES_DASHED = {"plan_smr", "plan_delivery"}
 
 
 def build_dynamics_report_pdf(report: dict) -> bytes:
@@ -629,7 +663,8 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
             L, R, T, B = 34, 8, 26, 34
             series = report["series"]
             # None — «за отчётной датой факта нет» (см. build_dynamics_report).
-            top = max([1] + [v for k in DYN_SERIES_ORDER for v in series.get(k, []) if v is not None])
+            порядок = report.get("series_order") or DYN_SERIES_ORDER
+            top = max([1] + [v for k in порядок for v in series.get(k, []) if v is not None])
             pow10 = 10 ** (len(str(int(top))) - 1)
             max_y = -(-top // (pow10 / 2)) * (pow10 / 2)
             n = max(len(weeks), 1)
@@ -659,16 +694,19 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
                 c.drawRightString(0, 0, _dyn_short_date(w))
                 c.restoreState()
 
-            for key in DYN_SERIES_ORDER:
+            for key in порядок:
                 points = [(i, v) for i, v in enumerate(series.get(key, [])) if v is not None]
                 if not any(v for _, v in points):
                     continue
                 c.setStrokeColor(colors.HexColor(DYN_SERIES_COLORS[key]))
                 c.setLineWidth(1.2)
+                # Планы пунктиром, факты сплошной — см. DYN_SERIES_DASHED.
+                c.setDash([3, 2] if key in DYN_SERIES_DASHED else [])
                 path = c.beginPath()
                 for n, (i, v) in enumerate(points):
                     (path.moveTo if n == 0 else path.lineTo)(X(i), Y(v))
                 c.drawPath(path)
+            c.setDash([])
 
             # Вехи за пределами показанного периода не рисуем: индекс недели
             # поджался бы к краю и веха встала бы на чужую неделю. То же
@@ -702,10 +740,11 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
                 (c.drawRightString if x > self.width * 0.75 else c.drawCentredString)(x, top_y, text)
 
             lx = L
-            for key in DYN_SERIES_ORDER:
+            for key in порядок:
                 label = report["series_labels"][key]
                 c.setStrokeColor(colors.HexColor(DYN_SERIES_COLORS[key]))
                 c.setLineWidth(1.4)
+                c.setDash([3, 2] if key in DYN_SERIES_DASHED else [])
                 c.line(lx, 6, lx + 12, 6)
                 c.setFillColor(colors.HexColor("#4A5460"))
                 c.drawString(lx + 15, 4, label)
@@ -841,13 +880,17 @@ def build_dynamics_report_xlsx(report: dict) -> bytes:
             ws.append([f"окончание {_ru_date_short(deadline)}"])
         ws.append([])
 
+    # Ряды — те же, что на графике (report["series_order"], см.
+    # DYN_MODE_SERIES): выгрузка обязана показывать выбранный режим, а не
+    # всё подряд, иначе файл и экран расходятся.
+    порядок = report.get("series_order") or DYN_SERIES_ORDER
     ws.append(["Ряды графика (накопительно по неделям)"])
     ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
-    ws.append(["Неделя"] + [report["series_labels"][k] for k in DYN_SERIES_ORDER])
-    for i in range(1, 5):
+    ws.append(["Неделя"] + [report["series_labels"][k] for k in порядок])
+    for i in range(1, len(порядок) + 2):
         ws.cell(row=ws.max_row, column=i).font = Font(bold=True)
     for i, w in enumerate(report["weeks"]):
-        ws.append([w] + [report["series"].get(k, [0] * len(report["weeks"]))[i] for k in DYN_SERIES_ORDER])
+        ws.append([w] + [report["series"].get(k, [0] * len(report["weeks"]))[i] for k in порядок])
 
     ws.append([])
     for title, items in (("Ключевые события", card.get("key_events")),
