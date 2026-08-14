@@ -921,3 +921,68 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_work_kinds_key
     ON schedule_work_kinds (object_id, element_type, IFNULL(subtype, ''));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_flow_key
     ON schedule_flow (object_id, crane_name, stance_name, floor);
+
+-- ==================== ОБУЧЕНИЕ: ПОПЫТКИ И ОТВЕТЫ (2026-08-14) =========
+--
+-- Раздел «Обучение»: инструкция собирается по разделам прав, тест берёт
+-- вопросы из тех же разделов (app/training_content.py). Здесь хранится
+-- только ПРОХОЖДЕНИЕ — сам материал живёт в коде и приезжает с версией.
+--
+-- `role_key` — под какую роль проходили: у человека их несколько, и
+-- «сдал за прораба» и «сдал за комплектовщика» — разные результаты. NULL
+-- означает «по всем своим ролям сразу» (умолчание на экране).
+-- `content_version` — редакция материала (CONTENT_VERSION): по ней видно,
+-- на какие вопросы человек отвечал, когда формулировки уже поправили.
+-- Незавершённая попытка (finished_at IS NULL) продолжается и в рейтинг не
+-- идёт.
+CREATE TABLE IF NOT EXISTS training_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    role_key TEXT,
+    object_id INTEGER REFERENCES objects (id) ON DELETE SET NULL,
+    content_version TEXT NOT NULL,
+    questions INTEGER NOT NULL,
+    answered INTEGER NOT NULL DEFAULT 0,
+    correct INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    -- Заданный сейчас вопрос и момент его выдачи. Держатся здесь, а не в
+    -- памяти сервера: попытку прерывают и продолжают завтра, а до тех пор
+    -- сервис успевает перезапуститься. Заранее составленного списка
+    -- вопросов у попытки нет — очередной выбирается из ещё не заданных,
+    -- пока не набрано `questions`.
+    current_question TEXT,
+    -- Порядок вариантов, в котором вопрос показан СЕЙЧАС (JSON: исходные
+    -- индексы). Варианты тасуются на каждую выдачу — иначе правильный
+    -- всегда стоял бы там, где его записал автор, — а вернуть выбор к
+    -- исходному варианту без этой раскладки невозможно.
+    current_options TEXT,
+    asked_at TEXT
+);
+
+-- Ответ. Текст вопроса, выбранного и правильного вариантов лежит СНИМКОМ,
+-- а не ссылкой на ключ: правка формулировки в новой версии иначе задним
+-- числом переписала бы то, на что человек отвечал, — та же причина, по
+-- которой история статусов хранит текстовый снимок ФИО автора.
+--
+-- `spent_ms` считает СЕРВЕР (asked_at → момент ответа): время, присланное
+-- клиентом, подделывается тривиально, а «сколько думал» — как раз то, ради
+-- чего история и ведётся.
+CREATE TABLE IF NOT EXISTS training_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id INTEGER NOT NULL REFERENCES training_attempts (id) ON DELETE CASCADE,
+    ord INTEGER NOT NULL,
+    question_key TEXT NOT NULL,
+    feature_key TEXT,
+    question_text TEXT NOT NULL,
+    chosen_text TEXT NOT NULL,
+    correct_text TEXT NOT NULL,
+    is_correct INTEGER NOT NULL,
+    spent_ms INTEGER,
+    answered_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_training_attempts_user
+    ON training_attempts (user_id, finished_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_training_answers_attempt_ord
+    ON training_answers (attempt_id, ord);

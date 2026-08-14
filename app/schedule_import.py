@@ -36,6 +36,7 @@ import io
 import json
 
 from app import activity
+from app.db import touch_elements
 import re
 from datetime import date, datetime
 from typing import Optional
@@ -355,6 +356,11 @@ def import_schedule(conn, parsed: dict, user=None, request_id: str = None,
                           f"Дата завершения СМР: {снимок['project_delivery_date'] or '—'}",
                 request_id=request_id,
             )
+
+    # Штамп времени затронутым изделиям — последним действием перед
+    # фиксацией, иначе чужие вкладки не увидят импорт до перезагрузки
+    # страницы (см. app.db.touch_elements).
+    touch_elements(conn, touched_element_ids)
 
     version_id = None
     if object_id is not None and version_dates:

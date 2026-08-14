@@ -405,6 +405,27 @@ def _backfill_actual_delivery_dates(conn) -> str:
             if cur.rowcount else "все фактические даты уже по правилу")
 
 
+def _grant_feature_to_all_roles(conn: sqlite3.Connection, feature_key: str) -> str:
+    """Выдать раздел на ЧТЕНИЕ всем ролям, у которых по нему ещё ничего нет.
+
+    Идемпотентность здесь тоньше обычной: условие — «где строки ещё нет», а
+    состояние «Нет» строкой как раз и не хранится. Значит повтор кнопкой
+    вернёт раздел тем ролям, у кого администратор его сознательно снял.
+    Цена названа прямо, а не скрыта: раздел учебный, доступа к операциям он
+    не даёт, и худшее последствие повтора — вернувшийся пункт меню.
+    """
+    роли = [r["key"] for r in conn.execute("SELECT key FROM object_roles")]
+    новые = [(к, feature_key, "read") for к in роли if conn.execute(
+        "SELECT 1 FROM role_features WHERE role_key = ? AND feature_key = ?",
+        (к, feature_key)).fetchone() is None]
+    if not новые:
+        return "все роли уже настроены, изменений нет"
+    conn.executemany(
+        "INSERT OR IGNORE INTO role_features (role_key, feature_key, level) VALUES (?, ?, ?)",
+        новые)
+    return f"раздел «{feature_key}» открыт ролям: {len(новые)}"
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -457,6 +478,22 @@ RELEASE_TASKS = [
                "отчётов, будто его не поставляли",
         "kind": KIND_DATA,
         "run": _backfill_actual_delivery_dates,
+    },
+    {
+        "name": "2026-08-14-grant-training-read",
+        # Версия — та, с которой раздел «Обучение» выйдет; запись журнала
+        # версий под неё ещё не согласована с пользователем (стоячая
+        # инструкция). Выполнение от версии не зависит — решение принимается
+        # по ИМЕНИ обработки, версия нужна показу в «Что нового».
+        "version": "0.54",
+        "date": "2026-08-14",
+        "title": "Открыть раздел «Обучение» существующим ролям",
+        "why": "новый раздел прав по умолчанию не выдан никому (app/db._seed_object_roles: "
+               "нет строки — значит «Нет»), а инструкция по тому, что роли и так доступно, "
+               "закрытой быть не должна — иначе раздел появился бы у одного администратора "
+               "сервиса",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_to_all_roles(conn, "training"),
     },
 ]
 

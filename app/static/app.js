@@ -13538,6 +13538,311 @@ document.getElementById("admin-guide-copy-all").addEventListener("click", async 
   }
 });
 
+// ==================== ОБУЧЕНИЕ (2026-08-14) ====================
+//
+// Клиент здесь ничего не решает и ничего не считает: инструкция приходит
+// уже собранной под роли того, кто её открыл, вопрос приходит без признака
+// правильного варианта, а разбор — только вместе с ответом сервера. Иначе
+// тест проходился бы инструментами разработчика за минуту.
+const trainingBackdrop = document.getElementById("training-backdrop");
+const trainingState = { tab: "guide", attempt: null, roleKey: "" };
+
+function trainingSetTab(tab) {
+  // Вкладка чужих результатов гасится здесь, а не общим правилом
+  // applyRolePermissions: то ходит по пунктам меню (`#settings-menu`), а это
+  // кнопка внутри формы. Гашение интерфейсное — сервер всё равно проверяет
+  // раздел на каждом запросе.
+  const чужие = can("training_admin", "read");
+  document.getElementById("training-tab-people").style.display = чужие ? "" : "none";
+  if (tab === "people" && !чужие) tab = "guide";
+  trainingState.tab = tab;
+  for (const кнопка of trainingBackdrop.querySelectorAll("[data-tab]")) {
+    const активна = кнопка.dataset.tab === tab;
+    кнопка.classList.toggle("btn-primary", активна);
+    кнопка.classList.toggle("btn-secondary", !активна);
+  }
+  for (const имя of ["guide", "test", "my", "people"]) {
+    document.getElementById(`training-${имя}`).style.display = имя === tab ? "" : "none";
+  }
+  // Выбор роли относится только к инструкции: в тесте он задаётся при
+  // старте попытки и посреди неё смениться не может.
+  document.getElementById("training-role-box").style.display =
+    tab === "guide" && can("roles", "read") ? "" : "none";
+  if (tab === "test") trainingRenderTest();
+  if (tab === "my") trainingRenderMyAttempts();
+  if (tab === "people") trainingRenderPeople();
+}
+
+async function trainingLoadGuide() {
+  const box = document.getElementById("training-guide");
+  box.textContent = "Загрузка…";
+  const параметры = new URLSearchParams();
+  if (state.objectId) параметры.set("object_id", state.objectId);
+  if (trainingState.roleKey) параметры.set("role_key", trainingState.roleKey);
+  let data;
+  try {
+    data = await api(`/training/guide?${параметры}`);
+  } catch (e) {
+    box.textContent = e.message;
+    return;
+  }
+
+  const выбор = document.getElementById("training-role");
+  if (!выбор.dataset.filled && data.roles.length) {
+    выбор.innerHTML = `<option value="">мои роли</option>` + data.roles.map(
+      (р) => `<option value="${escapeHtml(р.key)}">${escapeHtml(р.name)}</option>`).join("");
+    выбор.dataset.filled = "1";
+  }
+
+  const части = [];
+  if (data.role_name) {
+    части.push(`<p class="hint-text">Показано то, что видит роль
+      «${escapeHtml(data.role_name)}». Ваши собственные права от этого не меняются.</p>`);
+  }
+  // Плашка «материал ещё пишется» — намеренно на экране, а не только в
+  // страже: раздел без учебного блока иначе выглядел бы как раздел, которого
+  // в системе нет.
+  if (data.missing.length) {
+    части.push(`<p class="hint-text" style="color: var(--color-warning, #b26a00);">
+      Материал пишется по частям: разделов без описания — ${data.missing.length}.</p>`);
+  }
+  for (const блок of data.blocks) {
+    части.push(`<h3 style="margin: 18px 0 6px;">${escapeHtml(блок.title)}</h3>`);
+    for (const абзац of блок.paragraphs) {
+      части.push(`<p style="margin: 0 0 8px; line-height: 1.5;">${escapeHtml(абзац)}</p>`);
+    }
+  }
+  части.push(`<p class="hint-text" style="margin-top:18px;">Редакция материала:
+    ${escapeHtml(data.content_version)}. Вопросов по вашим разделам:
+    ${data.questions_total}; в одной попытке — ${data.questions_per_attempt}.</p>`);
+  box.innerHTML = части.join("");
+}
+
+function trainingScoreText(итог) {
+  if (!итог || !итог.attempts) return "—";
+  return `${итог.best} из ${итог.total}, попыток ${итог.attempts}`;
+}
+
+async function trainingRenderTest() {
+  const box = document.getElementById("training-test");
+  box.textContent = "Загрузка…";
+  let state_;
+  try {
+    state_ = await api("/training/state");
+  } catch (e) {
+    box.textContent = e.message;
+    return;
+  }
+  if (state_.attempt && state_.attempt.question) {
+    trainingState.attempt = state_.attempt;
+    trainingRenderQuestion(state_.attempt.question, null);
+    return;
+  }
+  trainingState.attempt = null;
+  box.innerHTML = `
+    <p>В попытке ${state_.questions_per_attempt} вопросов по доступным вам разделам.
+      Ответ фиксируется сразу и не меняется — сразу после него показывается разбор.</p>
+    <p class="hint-text">Ваш результат: ${trainingScoreText(state_.rating)}</p>
+    <button class="btn btn-primary" id="training-start">Начать тест</button>`;
+  document.getElementById("training-start").addEventListener("click", async () => {
+    try {
+      const попытка = await api("/training/attempts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ object_id: state.objectId || null }),
+      });
+      trainingState.attempt = попытка;
+      trainingRenderQuestion(попытка.question, null);
+    } catch (e) {
+      showToast(e.message, "error");
+    }
+  });
+}
+
+function trainingRenderQuestion(вопрос, разбор) {
+  const box = document.getElementById("training-test");
+  if (!вопрос) {
+    box.innerHTML = `<p>Тест пройден.</p>`;
+    return;
+  }
+  const части = [];
+  if (разбор) части.push(разбор);
+  части.push(`<p class="hint-text">Вопрос ${вопрос.number} из ${вопрос.total} ·
+    ${escapeHtml(вопрос.block_title)}</p>`);
+  части.push(`<p style="font-weight:600; margin:6px 0 12px;">${escapeHtml(вопрос.text)}</p>`);
+  части.push(`<div id="training-options">` + вопрос.options.map((текст, i) =>
+    `<button class="btn btn-secondary" data-option="${i}"
+      style="display:block; width:100%; text-align:left; margin-bottom:6px; white-space:normal;">
+      ${escapeHtml(текст)}</button>`).join("") + `</div>`);
+  box.innerHTML = части.join("");
+  for (const кнопка of box.querySelectorAll("[data-option]")) {
+    кнопка.addEventListener("click", () => trainingAnswer(вопрос.key, Number(кнопка.dataset.option)));
+  }
+}
+
+async function trainingAnswer(questionKey, option) {
+  // Кнопки гасятся до ответа сервера: ответ неизменяем, и второй клик по
+  // соседнему варианту всё равно получил бы 409 — но человек успел бы
+  // подумать, что засчитан именно он.
+  for (const кнопка of document.querySelectorAll("#training-options [data-option]")) {
+    кнопка.disabled = true;
+  }
+  let ответ;
+  try {
+    ответ = await api(`/training/attempts/${trainingState.attempt.id}/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question_key: questionKey, option }),
+    });
+  } catch (e) {
+    showToast(e.message, "error");
+    trainingRenderTest();
+    return;
+  }
+  if (ответ.skipped) {
+    trainingRenderQuestion(ответ.question, `<p class="hint-text">Вопрос пропущен: материал
+      обновился, пока шла попытка.</p>`);
+    return;
+  }
+  const цвет = ответ.correct ? "var(--color-success, #2e7d32)" : "var(--color-danger, #c62828)";
+  const разбор = `
+    <div style="border-left: 3px solid ${цвет}; padding: 6px 10px; margin-bottom: 14px;">
+      <p style="font-weight:600; color:${цвет}; margin:0 0 4px;">
+        ${ответ.correct ? "Верно" : "Неверно"}</p>
+      ${ответ.correct ? "" : `<p style="margin:0 0 4px;">Правильный ответ:
+        ${escapeHtml(ответ.correct_text)}</p>`}
+      <p style="margin:0;">${escapeHtml(ответ.explain)}</p>
+    </div>`;
+  if (ответ.finished) {
+    document.getElementById("training-test").innerHTML = разбор + `
+      <p style="font-weight:600;">Тест пройден: ${ответ.score.correct} из ${ответ.score.answered}.</p>
+      <button class="btn btn-primary" id="training-again">Пройти ещё раз</button>`;
+    document.getElementById("training-again").addEventListener("click", trainingRenderTest);
+    return;
+  }
+  trainingRenderQuestion(ответ.question, разбор);
+}
+
+function trainingSpent(ms) {
+  if (ms === null || ms === undefined) return "—";
+  return ms >= 60000 ? `${Math.round(ms / 60000)} мин` : `${(ms / 1000).toFixed(1)} с`;
+}
+
+async function trainingRenderAttempts(box, userId) {
+  box.textContent = "Загрузка…";
+  let data;
+  try {
+    data = await api(`/training/attempts${userId ? `?user_id=${userId}` : ""}`);
+  } catch (e) {
+    box.textContent = e.message;
+    return;
+  }
+  if (!data.attempts.length) {
+    box.innerHTML = `<p class="hint-text">Попыток пока не было.</p>`;
+    return;
+  }
+  box.innerHTML = `<table class="table"><thead><tr>
+      <th>Начата</th><th>Роль</th><th>Результат</th><th>Редакция</th><th></th>
+    </tr></thead><tbody>` + data.attempts.map((п) => `
+      <tr>
+        <td>${когда(п.started_at)}</td>
+        <td>${escapeHtml(п.role_name || "")}</td>
+        <td>${п.finished_at ? `${п.correct} из ${п.questions}`
+              : `не завершена (${п.answered} из ${п.questions})`}</td>
+        <td>${escapeHtml(п.content_version)}</td>
+        <td><button class="btn btn-sm btn-secondary" data-attempt="${п.id}">Ответы</button></td>
+      </tr>
+      <tr><td colspan="5" id="training-answers-${п.id}" style="display:none;"></td></tr>`).join("")
+    + `</tbody></table>`;
+  for (const кнопка of box.querySelectorAll("[data-attempt]")) {
+    кнопка.addEventListener("click", () => trainingToggleAnswers(Number(кнопка.dataset.attempt)));
+  }
+}
+
+async function trainingToggleAnswers(attemptId) {
+  const ячейка = document.getElementById(`training-answers-${attemptId}`);
+  if (ячейка.style.display !== "none") {
+    ячейка.style.display = "none";
+    return;
+  }
+  ячейка.style.display = "";
+  ячейка.textContent = "Загрузка…";
+  let data;
+  try {
+    data = await api(`/training/attempts/${attemptId}`);
+  } catch (e) {
+    ячейка.textContent = e.message;
+    return;
+  }
+  ячейка.innerHTML = data.answers.map((о) => `
+    <div style="margin: 8px 0; padding-left: 10px; border-left: 3px solid ${
+      о.is_correct ? "var(--color-success, #2e7d32)" : "var(--color-danger, #c62828)"};">
+      <div>${о.ord}. ${escapeHtml(о.question)}</div>
+      <div class="hint-text">Ответ: ${escapeHtml(о.chosen)}${
+        о.is_correct ? "" : ` · правильно: ${escapeHtml(о.correct_text)}`} ·
+        думал ${trainingSpent(о.spent_ms)}</div>
+    </div>`).join("") || `<span class="hint-text">Ответов нет.</span>`;
+}
+
+function trainingRenderMyAttempts() {
+  trainingRenderAttempts(document.getElementById("training-my"), null);
+}
+
+async function trainingRenderPeople() {
+  const box = document.getElementById("training-people");
+  box.textContent = "Загрузка…";
+  let data;
+  try {
+    data = await api("/training/ratings");
+  } catch (e) {
+    box.textContent = e.message;
+    return;
+  }
+  box.innerHTML = `<table class="table"><thead><tr>
+      <th>Сотрудник</th><th>Должность</th><th>Обучение</th><th></th>
+    </tr></thead><tbody>` + data.users.map((ч) => `
+      <tr>
+        <td>${escapeHtml(ч.name)}</td>
+        <td>${escapeHtml(ч.position || "")}</td>
+        <td>${trainingScoreText(ч.rating)}</td>
+        <td><button class="btn btn-sm btn-secondary" data-user="${ч.id}">История</button></td>
+      </tr>
+      <tr><td colspan="4" id="training-user-${ч.id}" style="display:none;"></td></tr>`).join("")
+    + `</tbody></table>`;
+  for (const кнопка of box.querySelectorAll("[data-user]")) {
+    кнопка.addEventListener("click", () => {
+      const ячейка = document.getElementById(`training-user-${кнопка.dataset.user}`);
+      if (ячейка.style.display !== "none") {
+        ячейка.style.display = "none";
+        return;
+      }
+      ячейка.style.display = "";
+      trainingRenderAttempts(ячейка, Number(кнопка.dataset.user));
+    });
+  }
+}
+
+function openTraining(tab = "guide") {
+  trainingBackdrop.classList.add("open");
+  trainingSetTab(tab);
+  if (tab === "guide") trainingLoadGuide();
+}
+
+document.getElementById("menu-training").addEventListener("click", () => openTraining("guide"));
+document.getElementById("menu-training-history").addEventListener("click", () => openTraining("people"));
+document.getElementById("training-close").addEventListener("click", () =>
+  trainingBackdrop.classList.remove("open"));
+for (const кнопка of trainingBackdrop.querySelectorAll("[data-tab]")) {
+  кнопка.addEventListener("click", () => {
+    trainingSetTab(кнопка.dataset.tab);
+    if (кнопка.dataset.tab === "guide") trainingLoadGuide();
+  });
+}
+document.getElementById("training-role").addEventListener("change", (e) => {
+  trainingState.roleKey = e.target.value;
+  trainingLoadGuide();
+});
+
 // ---------- Состояние БД (2026-08-03, см. app/db_status.py) ----------
 // Структура здесь та же, что в Docs/db-schema.drawio: и схема, и этот экран
 // читают ОДНО описание (app/db_schema_doc.py). Сверх схемы — числа, которых

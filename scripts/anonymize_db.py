@@ -433,7 +433,21 @@ def main() -> int:
         return 1
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, out)
+    # Штатный снимок SQLite, а не копирование файла: с 2026-08-14 база в
+    # режиме WAL, и последние транзакции лежат в отдельном файле `-wal` —
+    # обычная копия взяла бы базу без них (тот же довод, что в
+    # scripts/dry_run_migration.py и app/backups.py).
+    if out.exists():
+        out.unlink()
+    _src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        _dst = sqlite3.connect(out)
+        try:
+            _src.backup(_dst)
+        finally:
+            _dst.close()
+    finally:
+        _src.close()
 
     mapping = Mapping()
     conn = sqlite3.connect(out)

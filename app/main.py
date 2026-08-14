@@ -158,6 +158,7 @@ from app.schedule_calc import router as schedule_calc_router
 from app.schedule_versions import element_deviation
 from app.schedule_versions import router as schedule_versions_router
 from app.admin_guide import router as admin_guide_router
+from app.training import router as training_router
 from app.db_status import router as db_status_router
 from app.fill_scope import router as fill_scope_router
 from app.ldap_auth import router as ldap_router
@@ -272,6 +273,7 @@ app.include_router(users_router)
 app.include_router(sessions_router)
 app.include_router(ldap_router)
 app.include_router(admin_guide_router)
+app.include_router(training_router)
 app.include_router(db_status_router)
 app.include_router(fill_scope_router)
 app.include_router(contracts_router)

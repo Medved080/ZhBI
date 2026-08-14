@@ -35,6 +35,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from app import activity, contract_guard, impersonation
+from app.db import touch_elements
 from app.contracts import (
     apply_status_change,
     build_contract_name,
@@ -585,6 +586,10 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
         by_element.setdefault(int(sel["element_id"]), []).append(sel)
 
     applied, skipped = 0, []
+    # Затронутые изделия — чтобы переставить им updated_at перед фиксацией
+    # (см. app.db.touch_elements): иначе чужие вкладки не увидят массовую
+    # правку до перезагрузки страницы.
+    затронутые = set()
     for element_id, items in by_element.items():
         row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         if row is None:
@@ -669,6 +674,7 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
 
         if changed:
             applied += 1
+            затронутые.add(element_id)
             activity.log(
                 "element_bulk_edit", user_name=impersonation.plain_name(user_name), user_id=user_id,
                 entity_type="element", entity_id=element_id,
@@ -678,5 +684,6 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
                 details={"manual_fields": manual, "source": "xlsx"},
             )
 
+    touch_elements(conn, затронутые)
     conn.commit()
     return {"elements_updated": applied, "skipped": skipped}

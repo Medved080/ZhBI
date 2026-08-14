@@ -3431,6 +3431,20 @@
             <button id="menu-report-analytics">Аналитическая справка</button>
           </div>
         </div>
+        <!-- «Обучение» (2026-08-14). Инструкция собирается под роли самого
+             человека, тест берёт вопросы из тех же разделов. Своей группой,
+             а не пунктом в «Администрировании»: сюда ходит рядовой прораб,
+             а не тот, кто ведёт сервис. -->
+        <div class="submenu">
+          <button type="button" class="submenu-trigger">Обучение</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="menu-training" class="menu-item-strong" data-feature="training" data-feature-kind="read">Инструкция и тест</button>
+            <!-- Чужие результаты — отдельный раздел прав: учиться и
+                 наблюдать за коллегами разные вещи (тот же довод, что у
+                 «действий других людей»). -->
+            <button id="menu-training-history" data-feature="training_admin" data-feature-kind="read">Как учатся сотрудники</button>
+          </div>
+        </div>
         <!-- «Администрирование» (2026-08-02, живой запрос): ведение самого
              сервиса собрано в одну группу — пользователи, копии, журнал и
              необратимая очистка истории. Раньше эти пункты были размазаны по
@@ -4668,6 +4682,47 @@
     <div class="modal-sticky-foot">
       <div class="actions">
         <button class="btn btn-secondary" id="admin-guide-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Обучение (2026-08-14, см. app/training.py). Инструкция приходит с
+     сервера уже собранной под роли того, кто её открыл: клиент ничего не
+     решает о правах — по тому же принципу, что и остальной интерфейс с
+     2026-08-14 (см. applyRolePermissions в app.js). Тест ведёт сервер, и
+     правильный вариант приходит только вместе с разбором, то есть уже
+     после того, как ответ записан. -->
+<div class="modal-backdrop" id="training-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Обучение</h2>
+      <p class="hint-text" id="training-subtitle">Инструкция собрана под ваши роли: в ней
+        только те разделы, которые вам доступны.</p>
+      <div class="row" style="gap:6px; margin-top:8px; justify-content:flex-start; flex-wrap:wrap;">
+        <button class="btn btn-sm btn-primary" id="training-tab-guide" data-tab="guide">Инструкция</button>
+        <button class="btn btn-sm btn-secondary" id="training-tab-test" data-tab="test">Тест</button>
+        <button class="btn btn-sm btn-secondary" id="training-tab-my" data-tab="my">Мои попытки</button>
+        <button class="btn btn-sm btn-secondary" id="training-tab-people" data-tab="people"
+                data-feature="training_admin" data-feature-kind="read">Как учатся сотрудники</button>
+        <!-- «Глазами роли»: нужно тому, кто раздаёт роли, — посмотреть, что
+             увидит человек, ДО того как роль выдана. Гасится тем же
+             признаком, что и сама настройка ролей. -->
+        <label class="hint-text" id="training-role-box" style="margin-left:auto; display:none;">
+          Вид инструкции:
+          <select id="training-role" class="input input-sm"></select>
+        </label>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="training-guide"></div>
+      <div id="training-test" style="display:none;"></div>
+      <div id="training-my" style="display:none;"></div>
+      <div id="training-people" style="display:none;"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="training-close">Закрыть</button>
       </div>
     </div>
   </div>

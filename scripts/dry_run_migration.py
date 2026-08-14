@@ -43,6 +43,30 @@ OBJECT_SCOPED = ["label_visibility", "zone_colors", "report_notes",
                  "default_contracts", "app_settings"]
 
 
+def copy_db(src, dst):
+    """Снять копию базы штатным механизмом SQLite, а не `shutil.copyfile`.
+
+    С 2026-08-14 база работает в режиме WAL, и свежие страницы живут в
+    отдельном файле `-wal` до контрольной точки. Обычное копирование одного
+    файла взяло бы данные БЕЗ последних транзакций — на живом сервере это
+    ровно те правки, ради проверки которых прогон и запускается. Метод
+    `Connection.backup()` копирует согласованный снимок целиком, включая
+    незачекпойнченное, и не мешает работающему серверу (так же копируют
+    резервные копии, app/backups.py).
+    """
+    src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    try:
+        if os.path.exists(dst):
+            os.remove(dst)
+        dst_conn = sqlite3.connect(dst)
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+    finally:
+        src_conn.close()
+
+
 def connect(path):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -189,7 +213,7 @@ def главное(src):
     # на сервере может не быть прав на запись, а место под снимок заведомо
     # есть, раз он там лежит.
     work = os.path.join(os.path.dirname(os.path.abspath(src)), "dry_run_work.db")
-    shutil.copyfile(src, work)
+    copy_db(src, work)
     print(f"Снимок сервера : {src}")
     print(f"Рабочая копия  : {work}  (исходный файл не изменяется)\n")
 
