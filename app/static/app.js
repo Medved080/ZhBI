@@ -6876,8 +6876,40 @@ function deliveryDatesHtml(element) {
       <tr class="${plannedLate ? "date-row-late" : ""}"><td class="k">Плановая дата</td><td>${plannedText}</td></tr>
       <tr class="${actualLate ? "date-row-late" : ""}"><td class="k">Фактическая дата</td><td>${element.actual_delivery_date ? formatDateRu(element.actual_delivery_date) : "—"}</td></tr>
       <tr><td class="k">Дата завершения СМР</td><td>${element.project_delivery_date ? formatDateRu(element.project_delivery_date) : "—"}</td></tr>
+      <!-- Прогноз приходит отдельным запросом карточки (GET /elements/{id}),
+           как и история статусов: в /plan-data его нет — это лишний запрос
+           на каждое из девяти тысяч изделий ради строки, которую смотрят у
+           одного. Пока ответ не пришёл, места он не занимает. -->
+      <tbody id="card-forecast"></tbody>
     </table>
   `;
+}
+
+// Прогноз по последней актуализации графика и отклонение от директивных дат
+// (2026-08-14). Показывается ТУТ ЖЕ, под базовыми датами, а не отдельным
+// блоком: вопрос «насколько отстаём» читается только рядом с ответом на
+// вопрос «когда надо», порознь эти две пары дат бессмысленны.
+//
+// Знак: плюс — позже директивной даты, то есть отставание (красным); минус —
+// опережение (зелёным). Ноль — «идём по графику».
+function forecastRowsHtml(f) {
+  if (!f) return "";
+  const дни = (n) => {
+    if (n === null || n === undefined) return "—";
+    const слово = plural(Math.abs(n), "день", "дня", "дней");
+    if (n === 0) return '<span class="dev-ok">в срок</span>';
+    return n > 0
+      ? `<span class="dev-late">+${n} ${слово}</span>`
+      : `<span class="dev-early">${n} ${слово}</span>`;
+  };
+  const заголовок = f.version_title || "последняя актуализация";
+  return `
+      <tr><td class="k" colspan="2" style="padding-top:8px">
+        <span class="hint-text">Прогноз · ${escapeHtml(заголовок)}</span></td></tr>
+      <tr><td class="k">Начало СМР (прогноз)</td><td>${f.forecast_start
+        ? formatDateRu(f.forecast_start) : "—"} ${дни(f.deviation_start)}</td></tr>
+      <tr><td class="k">Завершение (прогноз)</td><td>${f.forecast_end
+        ? formatDateRu(f.forecast_end) : "—"} ${дни(f.deviation_end)}</td></tr>`;
 }
 
 // ---------- привязка к зонам (захватка/кран/стоянка) — только для элементов
@@ -7148,6 +7180,8 @@ async function showCard(element) {
 
   try {
     const detail = await api(`/elements/${element.id}`);
+    const forecastBox = document.getElementById("card-forecast");
+    if (forecastBox) forecastBox.innerHTML = forecastRowsHtml(detail.schedule_forecast);
     const historyBox = document.getElementById("history-box");
     if (!historyBox) return;
     if (!detail.history.length) { historyBox.textContent = "нет записей"; return; }
@@ -14209,19 +14243,43 @@ document.getElementById("contracting-import-submit").addEventListener("click", a
 });
 
 const scheduleImportBackdrop = document.getElementById("schedule-import-backdrop");
+// Подсказка меняется вместе с выбором вида графика: разница между базовым и
+// актуализированным не косметическая (один правит даты изделий, другой нет),
+// и узнавать о ней постфактум по результату импорта — поздно.
+function scheduleImportKindHint() {
+  const kind = document.getElementById("schedule-import-kind").value;
+  document.getElementById("schedule-import-kind-hint").textContent = kind === "baseline"
+    ? "Директивные сроки: проставятся в сами изделия (начало и завершение СМР) и заменят "
+      + "прежний базовый график объекта. Даты, правленные вручную, останутся как есть."
+    : "Прогноз: сохранится отдельной версией и попадёт в отклонение от базового графика. "
+      + "Даты изделий не меняются, предыдущие версии остаются.";
+}
+
 document.getElementById("menu-schedule-import").addEventListener("click", () => {
   document.getElementById("schedule-import-file").value = "";
   document.getElementById("schedule-import-status").textContent = "";
+  // Тот же список объектов и та же подстановка текущего, что у импорта
+  // контрактации: график почти всегда грузят на открытую стройку, но выбор
+  // остаётся за человеком.
+  const подставить = objectsForAgreement().some(v => v.id === state.objectId) ? state.objectId : null;
+  document.getElementById("schedule-import-object").innerHTML = objectOptionsHtml(подставить);
+  scheduleImportKindHint();
   scheduleImportBackdrop.classList.add("open");
 });
+document.getElementById("schedule-import-kind").addEventListener("change", scheduleImportKindHint);
 document.getElementById("schedule-import-cancel").addEventListener("click", () => scheduleImportBackdrop.classList.remove("open"));
 document.getElementById("schedule-import-submit").addEventListener("click", async () => {
   const file = document.getElementById("schedule-import-file").files[0];
   const statusEl = document.getElementById("schedule-import-status");
+  const objectId = document.getElementById("schedule-import-object").value;
+  const kind = document.getElementById("schedule-import-kind").value;
   if (!file) { statusEl.textContent = "Сначала выберите файл .xlsx"; statusEl.style.color = "var(--color-danger)"; return; }
+  if (!objectId) { statusEl.textContent = "Выберите объект"; statusEl.style.color = "var(--color-danger)"; return; }
   statusEl.textContent = "Импорт…"; statusEl.style.color = "var(--color-text-muted)";
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("object_id", objectId);
+  formData.append("kind", kind);
   try {
     const res = await fetch("/import-schedule-xlsx", { method: "POST", body: formData });
     const body = await res.json().catch(() => null);
@@ -14230,7 +14288,11 @@ document.getElementById("schedule-import-submit").addEventListener("click", asyn
       statusEl.style.color = "var(--color-danger)";
       return;
     }
-    let msg = `Готово: строк обработано ${body.rows_processed}, пропущено ${body.rows_skipped}, элементов обновлено ${body.elements_updated}.`;
+    let msg = body.kind === "baseline"
+      ? `Готово: строк обработано ${body.rows_processed}, пропущено ${body.rows_skipped}, `
+        + `изделий обновлено ${body.elements_updated}.`
+      : `Готово: строк обработано ${body.rows_processed}, пропущено ${body.rows_skipped}, `
+        + `изделий в новой версии прогноза ${body.elements_in_version}.`;
     if (body.unmatched_blocks.length) msg += ` Блоков без совпадений: ${body.unmatched_blocks.length}.`;
     // Даты, правленные руками в форме элемента, импорт не перезаписывает —
     // но и молчать об этом нельзя: иначе новое значение из графика «не

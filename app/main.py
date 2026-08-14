@@ -153,6 +153,8 @@ from app.models import (
 )
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
+from app.schedule_versions import element_deviation
+from app.schedule_versions import router as schedule_versions_router
 from app.admin_guide import router as admin_guide_router
 from app.db_status import router as db_status_router
 from app.fill_scope import router as fill_scope_router
@@ -270,6 +272,7 @@ app.include_router(db_status_router)
 app.include_router(fill_scope_router)
 app.include_router(contracts_router)
 app.include_router(supplier_change_router)
+app.include_router(schedule_versions_router)
 app.include_router(counterparties_router)
 app.include_router(marks_router)
 app.include_router(dict_delete_router)
@@ -747,6 +750,10 @@ def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
         data["history"] = [dict(h) for h in history_rows]
         enrich_element_row(conn, data)
         _element_reference_labels(conn, data)
+        # Прогноз и отклонение — только в карточке (как и названия зон выше):
+        # в /plan-data это лишний запрос на каждое из 9422 изделий, а нужен
+        # он ровно там, где смотрят одно.
+        data["schedule_forecast"] = element_deviation(conn, element_id)
         return data
     finally:
         conn.close()
@@ -4696,19 +4703,31 @@ def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query
 
 
 @app.post("/import-schedule-xlsx")
-def import_schedule_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_system_admin)):
-    """Файл графика MS Project (см. app/schedule_import.py, Docs/backlog.md,
-    "Контрактация 2.0") — заполняет project_delivery_date/
-    project_smr_start_date элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип."""
+def import_schedule_xlsx(file: UploadFile = File(...),
+                         object_id: Optional[int] = Form(None),
+                         kind: str = Form("baseline"),
+                         admin: sqlite3.Row = Depends(require_system_admin)):
+    """Файл графика MS Project (см. app/schedule_import.py) — сопоставляется
+    с изделиями по блоку Захватка/Кран/Стоянка/Этаж/Вид работ.
+
+    object_id и kind — с 2026-08-14 (совещание, блок E1). Объект выбирается
+    в форме явно: без него сопоставление шло по всей базе и со вторым
+    зданием развезло бы даты по чужому дому. kind — «базовый» (директивные
+    даты, проставляются в изделия) или «актуализированный» (прогноз, живёт
+    отдельной версией и полей изделия не трогает)."""
     content = read_upload_limited(file.file)
     conn = get_connection()
     try:
         parsed = parse_schedule_xlsx(content)
         операция = activity.new_request_id()
-        итог = import_schedule(conn, parsed, admin, операция)
+        итог = import_schedule(conn, parsed, admin, операция, object_id=object_id,
+                               kind=kind, source_file=file.filename)
+        вид = "базовый" if итог["kind"] == "baseline" else "актуализированный"
         activity.log("import_schedule", user=admin, request_id=операция,
-                     new_value=f"{file.filename or 'файл'}: строк {итог['rows_processed']}, "
-                               f"изделий обновлено {итог['elements_updated']}")
+                     entity_type="object", entity_id=object_id,
+                     new_value=f"{file.filename or 'файл'} ({вид}): строк {итог['rows_processed']}, "
+                               f"изделий в версии {итог['elements_in_version']}, "
+                               f"обновлено {итог['elements_updated']}")
         return итог
     except ScheduleImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)

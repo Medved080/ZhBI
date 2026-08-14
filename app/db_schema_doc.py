@@ -407,11 +407,50 @@ TABLES = [
     ("request_id", "TEXT", "", "связывает клиентские и серверные события одной операции"),
     ("details", "TEXT", "", "произвольный JSON с подробностями"),
 ]),
+("schedule_versions", "schedule_versions — Версии графика СМР", C_ELEM, S_ELEM, [
+    ("id", "INTEGER", "PK", "идентификатор версии графика"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE); график всегда про одно здание"),
+    ("kind", "TEXT", "", "'baseline' — базовый (директивный, один на объект), 'current' — актуализированный"),
+    ("title", "TEXT", "", "название версии для человека"),
+    ("source_file", "TEXT", "", "имя загруженного файла графика"),
+    ("origin", "TEXT", "", "'import' — загружен файлом MS Project, 'calc' — посчитан системой"),
+    ("loaded_at", "TEXT", "", "когда загружена/посчитана"),
+    ("loaded_by", "INTEGER", "FK", "кто загрузил → users.id (SET NULL)"),
+    ("note", "TEXT", "", "примечание"),
+]),
+("schedule_version_dates", "schedule_version_dates — Даты изделий в версии", C_ELEM, S_ELEM, [
+    ("version_id", "INTEGER", "PK,FK", "версия графика → schedule_versions.id (CASCADE)"),
+    ("element_id", "INTEGER", "PK,FK", "изделие → elements.id (CASCADE)"),
+    ("smr_start_date", "TEXT", "", "начало СМР по этой версии"),
+    ("smr_end_date", "TEXT", "", "завершение СМР по этой версии"),
+]),
+("schedule_work_kinds", "schedule_work_kinds — Темп и порядок монтажа", C_ELEM, S_ELEM, [
+    ("id", "INTEGER", "PK", "идентификатор строки"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("element_type", "TEXT", "", "тип изделия (вместе с подтипом — вид работ)"),
+    ("subtype", "TEXT", "", "подтип изделия; NULL — вид работ без подтипа"),
+    ("rate_per_day", "REAL", "", "темп монтажа: изделий в сутки на один кран"),
+    ("order_no", "INTEGER", "", "очередь вида работ внутри одного этажа стоянки"),
+]),
+("schedule_flow", "schedule_flow — Поток (очередь фронтов крана)", C_ELEM, S_ELEM, [
+    ("id", "INTEGER", "PK", "идентификатор строки"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("crane_name", "TEXT", "", "имя крана (именем, а не id: переимпорт чертежа меняет id зон)"),
+    ("stance_name", "TEXT", "", "имя стоянки крана"),
+    ("floor", "INTEGER", "", "этаж"),
+    ("order_no", "INTEGER", "", "порядковый номер фронта в потоке крана"),
+]),
 ]
 
 # ------------------------------------------------------------------- связи
 # (таблица-потомок, поле, таблица-предок, поле, подпись)
 FKS = [
+    ("schedule_versions", "object_id", "objects", "id", "CASCADE"),
+    ("schedule_versions", "loaded_by", "users", "id", "SET NULL"),
+    ("schedule_version_dates", "version_id", "schedule_versions", "id", "CASCADE"),
+    ("schedule_version_dates", "element_id", "elements", "id", "CASCADE"),
+    ("schedule_work_kinds", "object_id", "objects", "id", "CASCADE"),
+    ("schedule_flow", "object_id", "objects", "id", "CASCADE"),
     ("objects", "project_id", "projects", "id", "RESTRICT"),
     ("object_drawings", "object_id", "objects", "id", "CASCADE"),
     ("users", "last_object_id", "objects", "id", "SET NULL"),
