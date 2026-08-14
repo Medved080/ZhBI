@@ -62,6 +62,7 @@ from openpyxl import load_workbook
 
 from app import activity, contract_guard
 from app.contracting_import import parse_number_and_date, resolve_agreement
+from app.db import touch_elements
 from app.contracts import (
     find_or_create_contract,
     adopt_contract_from_history,
@@ -630,6 +631,9 @@ def import_history(conn, source_file: str, rows: list, mode: str,
               "(или поправьте количества в справочнике контрактов).",
         )
 
+    # Штамп перед фиксацией — иначе чужие вкладки не увидят импорт до
+    # перезагрузки страницы (см. app.db.touch_elements).
+    touch_elements(conn, touched_element_ids)
     conn.commit()
 
     contracts_after = conn.execute("SELECT COUNT(*) AS n FROM contracts").fetchone()["n"]

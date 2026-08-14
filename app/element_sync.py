@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from import_elements import ensure_label_visibility
 
 from app import activity
-from app.db import assign_missing_element_uids
+from app.db import touch_elements, assign_missing_element_uids
 from app.element_identity import MatchResult, match_elements
 
 # Поля строки чертежа, которые переносятся в существующую строку БД при
@@ -241,6 +241,7 @@ def apply_import(
     refill_fields = refill_manual_fields or {}
     element_types = set()
     updated = inserted = retired = marks_kept = manual_kept = 0
+    изменённые = set()   # чьи поля чертёж реально поправил (см. touch_elements ниже)
 
     manual_by_id = {
         r["id"]: set(json.loads(r["manual_fields"] or "[]"))
@@ -283,6 +284,11 @@ def apply_import(
         # связь через общий request_id.
         реально = {f: v for f, v in item.changes.items() if f in values or f == "mark"}
         if реально:
+            # Тот же набор, что получает событие в журнале: изделия, у
+            # которых чертёж РЕАЛЬНО что-то изменил. Им переставляется
+            # updated_at перед фиксацией — иначе чужие вкладки не увидят
+            # переимпорт до перезагрузки (см. app.db.touch_elements).
+            изменённые.add(item.element_id)
             activity.log(
                 "import_dxf_element", user=user, entity_type="element",
                 entity_id=item.element_id, element_type=row.get("element_type"),
@@ -334,6 +340,10 @@ def apply_import(
     _register_drawing(conn, object_id, source_file)
 
     ensure_label_visibility(conn, element_types, object_id)
+    # Штамп ПОСЛЕДНИМ действием перед фиксацией: переимпорт чертежа —
+    # самая длинная запись в системе, и опрос чужих вкладок за это время
+    # успевает уйти вперёд по метке времени (см. app.db.touch_elements).
+    touch_elements(conn, изменённые)
     conn.commit()
 
     return {

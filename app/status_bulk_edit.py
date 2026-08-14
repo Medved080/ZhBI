@@ -45,6 +45,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from app import activity, impersonation
 from app.contracts import recompute_status_and_actual_date, sync_element_contract
+from app.db import touch_elements
 from app.element_bulk_edit import _contract_catalog
 from app.element_fields import EXCEL_DATETIME_FORMAT, ru_date_text, to_excel_date
 from app.history_import import (
@@ -677,6 +678,9 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
             details={"source": "xlsx", "effective_status": effective},
         )
 
+    # Штамп перед фиксацией — чтобы правку увидели чужие вкладки
+    # (см. app.db.touch_elements).
+    touch_elements(conn, applied_elements)
     conn.commit()
     return {"elements_updated": len(applied_elements), "records_inserted": inserted,
             "records_updated": updated, "skipped": skipped}

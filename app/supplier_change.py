@@ -79,7 +79,7 @@ from app.access import (
 )
 from app.auth import audit_display_name, get_current_user
 from app.contracts import _specification_chain, build_contract_name, recompute_status_and_actual_date
-from app.db import get_connection
+from app.db import get_connection, touch_elements
 from app.models import STATUS_LABELS_RU, STATUS_ORDER
 
 router = APIRouter(prefix="/supplier-changes", tags=["supplier-change"])
@@ -1001,6 +1001,11 @@ def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_us
             "posted_by = ?, posted_by_user_id = ? WHERE id = ?",
             (POSTED, автор, user["id"], doc_id),
         )
+        # Изделия документа — из его же позиций: так один вызов покрывает оба
+        # вида документа, и набор не нужно тащить наружу из обработчиков
+        # проведения (см. app.db.touch_elements).
+        touch_elements(conn, [r["element_id"] for r in conn.execute(
+            "SELECT element_id FROM supplier_change_items WHERE doc_id = ?", (doc_id,))])
         conn.commit()
         activity.log("supplier_change_post", user_id=user["id"],
                      user_name=impersonation.plain_name(автор),
@@ -1079,6 +1084,7 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
             "UPDATE supplier_change_docs SET status = ?, posted_at = NULL, posted_by = NULL, "
             "posted_by_user_id = NULL WHERE id = ?", (DRAFT, doc_id),
         )
+        touch_elements(conn, затронутые)   # см. app.db.touch_elements
         conn.commit()
         автор = audit_display_name(user)
         activity.log("supplier_change_unpost", user_id=user["id"],
