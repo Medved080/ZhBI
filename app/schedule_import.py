@@ -10,9 +10,15 @@
 площадке, см. критерий опоздания в app/static/app.js,
 computeDeliveryLateStatus).
 
-"Захватка" читается, но не участвует в сопоставлении (стоянка уже
-однозначно определяет захватку в текущих данных — живое решение
-пользователя).
+"Захватка" УЧАСТВУЕТ в сопоставлении с 2026-08-14. До этой даты она
+читалась и отбрасывалась — считалось, что стоянка однозначно определяет
+захватку. На реальном графике это неверно: в файле
+«grafik_ms_project (москвич 14.08.2026).xlsx» стоянки 4, 5, 10, 11, 16 и 17
+у КАЖДОГО из трёх кранов относятся к двум разным захваткам. Беды это ещё не
+принесло (ключ со стоянкой и этажом всё равно оставался уникальным), но
+следующий график развёз бы даты по соседней захватке молча. Строка без
+разбираемого номера захватки не отбрасывается — сопоставление тогда идёт
+без неё, как раньше: старые файлы должны грузиться.
 
 "Тип и Подтип" — свободный текст ("Колонна нижняя", "Панелей лифтовой
 шахты до отм. +15.000" — родительный падеж от "Панель"), не совпадает
@@ -36,7 +42,14 @@ from typing import Optional
 
 from openpyxl import load_workbook
 
-REQUIRED_HEADERS = ["Тип и Подтип", "Начало", "Окончание", "Кран", "Захватка", "Стоянка", "Этаж"]
+# Колонка с видом работ называется по-разному в разных выгрузках MS Project:
+# «Тип и Подтип» в образце «Прогноз СМР.xlsx» и «Название задачи» в выгрузке
+# 6-го уровня структуры (реальный файл актуализированного графика,
+# 2026-08-14). Содержимое одно и то же, поэтому принимаются оба имени — а не
+# «любая первая колонка»: перепутанный файл должен отвергаться, а не
+# разбираться наугад.
+WORK_KIND_HEADERS = ["Тип и Подтип", "Название задачи"]
+REQUIRED_HEADERS = ["Начало", "Окончание", "Кран", "Захватка", "Стоянка", "Этаж"]
 
 # Полный список из образца "Прогноз СМР.xlsx" (18 уникальных строк) —
 # элевационный суффикс "до отм. +X" у Панели намеренно ОТБРОШЕН при
@@ -149,6 +162,9 @@ def parse_schedule_xlsx(content: bytes) -> dict:
 
     header = [str(h).strip() if h is not None else "" for h in header]
     missing = [h for h in REQUIRED_HEADERS if h not in header]
+    вид_работ = next((h for h in WORK_KIND_HEADERS if h in header), None)
+    if вид_работ is None:
+        missing = [" или ".join(f"«{h}»" for h in WORK_KIND_HEADERS)] + missing
     if missing:
         raise ScheduleImportError(422, f"В файле нет обязательных колонок: {', '.join(missing)}")
     col = {name: idx for idx, name in enumerate(header)}
@@ -164,7 +180,7 @@ def parse_schedule_xlsx(content: bytes) -> dict:
     row_num = 1
     for row in rows_iter:
         row_num += 1
-        type_subtype_raw = get(row, "Тип и Подтип")
+        type_subtype_raw = get(row, вид_работ)
         if type_subtype_raw is None or not str(type_subtype_raw).strip():
             continue  # пустая строка — пропуск, не ошибка (не конец таблицы, просто разделитель)
 
@@ -176,6 +192,7 @@ def parse_schedule_xlsx(content: bytes) -> dict:
         crane_number = _extract_number(get(row, "Кран"), _CRANE_NUMBER_RE)
         stance_number = _extract_number(get(row, "Стоянка"), _TRAILING_NUMBER_RE)
         floor_number = _extract_number(get(row, "Этаж"), _ANY_NUMBER_RE)
+        zakhvatka_number = _extract_number(get(row, "Захватка"), _TRAILING_NUMBER_RE)
 
         problems = []
         if element_type is None:
@@ -204,17 +221,47 @@ def parse_schedule_xlsx(content: bytes) -> dict:
                 "crane_number": crane_number,
                 "stance_number": stance_number,
                 "floor": floor_number,
+                "zakhvatka_number": zakhvatka_number,
             }
         )
 
     return {"rows": parsed, "skipped_rows": skipped_rows}
 
 
-def import_schedule(conn, parsed: dict, user=None, request_id: str = None) -> dict:
+def import_schedule(conn, parsed: dict, user=None, request_id: str = None,
+                    object_id: Optional[int] = None, kind: str = "baseline",
+                    source_file: Optional[str] = None, note: Optional[str] = None) -> dict:
+    """Загрузка графика.
+
+    object_id — объект, к которому относится файл (2026-08-14). До этой даты
+    сопоставление шло по ВСЕЙ базе: пока здание одно — работает, со вторым
+    даты уехали бы в чужой дом молча. Без объекта (None) поведение прежнее,
+    и это оставлено только ради вызовов из старых скриптов.
+
+    kind — 'baseline' (базовый, директивный) или 'current' (актуализированный
+    прогноз). Оба сохраняются ВЕРСИЕЙ (schedule_versions), которая копится, —
+    по ним видно, как менялся прогноз. Разница одна и важная: базовый, кроме
+    того, проставляет даты в сами изделия (project_smr_start_date /
+    project_delivery_date), потому что на этих полях держится вся остальная
+    система — фильтры, подписи, отчёты, аналитическая справка. Актуализация
+    полей изделия НЕ трогает: она отвечает на вопрос «насколько отстаём», а
+    не «когда надо».
+    """
+    if kind not in ("baseline", "current"):
+        raise ScheduleImportError(422, "Неизвестный вид графика")
+    if kind == "current" and object_id is None:
+        # Версия обязана принадлежать объекту (внешний ключ), и «график
+        # неизвестно чего» — не то, что стоит уметь заводить.
+        raise ScheduleImportError(422, "Для актуализированного графика нужно выбрать объект")
+
     rows = parsed["rows"]
     matched_elements_total = 0
     unmatched_blocks: list[str] = []
     touched_element_ids: set[int] = set()
+    # Даты версии: element_id -> (начало, окончание). Пишутся ВСЕГДА, и для
+    # базового тоже — иначе базовую версию не с чем было бы сравнивать после
+    # ручной правки полей изделия.
+    version_dates: dict[int, tuple] = {}
     # Обе даты СМР админ может поправить руками в форме элемента — ровно
     # потому, что для части блоков строки в графике нет вовсе (живой разбор:
     # 18 «Ригелей периметральных» остались без дат навсегда). Такое поле
@@ -224,50 +271,70 @@ def import_schedule(conn, parsed: dict, user=None, request_id: str = None) -> di
     # молча — так же плохо, как молча затереть.
     manual_kept: dict[str, int] = {}
 
+    объектное = "AND e.object_id = ?" if object_id is not None else ""
     for row in rows:
         candidates = conn.execute(
-            """
-            SELECT e.id, e.manual_fields, zc.name AS crane_name, zs.name AS stance_name
+            f"""
+            SELECT e.id, e.manual_fields, zc.name AS crane_name, zs.name AS stance_name,
+                   zz.name AS zakhvatka_name
             FROM elements e
             LEFT JOIN zones zc ON zc.id = e.zone_crane_id AND e.zone_crane_status = 'matched'
             LEFT JOIN zones zs ON zs.id = e.zone_stance_id AND e.zone_stance_status = 'matched'
-            WHERE e.floor = ? AND e.element_type = ? AND e.subtype IS ?
+            LEFT JOIN zones zz ON zz.id = e.zone_zakhvatka_id AND e.zone_zakhvatka_status = 'matched'
+            WHERE e.floor = ? AND e.element_type = ? AND e.subtype IS ? {объектное}
             """,
-            (row["floor"], row["element_type"], row["subtype"]),
+            (row["floor"], row["element_type"], row["subtype"])
+            + ((object_id,) if object_id is not None else ()),
         ).fetchall()
 
-        matched = [
-            c
-            for c in candidates
-            if _extract_number(c["crane_name"], _CRANE_NUMBER_RE) == row["crane_number"]
-            and _extract_number(c["stance_name"], _TRAILING_NUMBER_RE) == row["stance_number"]
-        ]
+        def подходит(c):
+            if _extract_number(c["crane_name"], _CRANE_NUMBER_RE) != row["crane_number"]:
+                return False
+            if _extract_number(c["stance_name"], _TRAILING_NUMBER_RE) != row["stance_number"]:
+                return False
+            # Захватка сверяется, только если она разобрана в строке файла:
+            # старые выгрузки без внятной колонки должны грузиться, как
+            # грузились (см. заголовок модуля).
+            if row.get("zakhvatka_number") is not None:
+                if _extract_number(c["zakhvatka_name"], _TRAILING_NUMBER_RE) != row["zakhvatka_number"]:
+                    return False
+            return True
+
+        matched = [c for c in candidates if подходит(c)]
 
         if not matched:
             unmatched_blocks.append(
-                f"Кран {row['crane_number']}/Стоянка {row['stance_number']}/Этаж {row['floor']}/"
+                f"Захватка {row.get('zakhvatka_number') or '—'}/Кран {row['crane_number']}/"
+                f"Стоянка {row['stance_number']}/Этаж {row['floor']}/"
                 f"{row['type_subtype_raw']} — ни один элемент не найден"
             )
             continue
 
-        # Поля обновляются ПООТДЕЛЬНОСТИ: одну дату могли править руками, а
-        # вторую нет, и общий UPDATE обеими колонками затёр бы правку.
-        updates: dict[str, list[tuple]] = {"project_delivery_date": [], "project_smr_start_date": []}
         for c in matched:
-            manual = _manual_fields(c["manual_fields"])
-            for field in updates:
-                if field in manual:
-                    manual_kept[field] = manual_kept.get(field, 0) + 1
-                    continue
-                updates[field].append((row[field], c["id"]))
-                touched_element_ids.add(c["id"])
+            version_dates[c["id"]] = (row["project_smr_start_date"], row["project_delivery_date"])
 
-        for field, payload in updates.items():
-            if payload:
-                conn.executemany(
-                    f"UPDATE elements SET {field} = ?, updated_at = datetime('now') WHERE id = ?",
-                    payload,
-                )
+        # Даты в САМИ изделия проставляет только базовый график: поля
+        # изделия — это директивные сроки, «когда надо». Актуализированный
+        # живёт версией и полей не касается (см. docstring функции).
+        if kind == "baseline":
+            # Поля обновляются ПООТДЕЛЬНОСТИ: одну дату могли править руками, а
+            # вторую нет, и общий UPDATE обеими колонками затёр бы правку.
+            updates: dict[str, list[tuple]] = {"project_delivery_date": [], "project_smr_start_date": []}
+            for c in matched:
+                manual = _manual_fields(c["manual_fields"])
+                for field in updates:
+                    if field in manual:
+                        manual_kept[field] = manual_kept.get(field, 0) + 1
+                        continue
+                    updates[field].append((row[field], c["id"]))
+                    touched_element_ids.add(c["id"])
+
+            for field, payload in updates.items():
+                if payload:
+                    conn.executemany(
+                        f"UPDATE elements SET {field} = ?, updated_at = datetime('now') WHERE id = ?",
+                        payload,
+                    )
         matched_elements_total += len(matched)
 
     # Событие на каждое изделие, которому реально проставили даты
@@ -289,6 +356,13 @@ def import_schedule(conn, parsed: dict, user=None, request_id: str = None) -> di
                 request_id=request_id,
             )
 
+    version_id = None
+    if object_id is not None and version_dates:
+        version_id = save_version(
+            conn, object_id, kind, version_dates,
+            source_file=source_file, user=user, note=note,
+        )
+
     conn.commit()
 
     return {
@@ -296,6 +370,44 @@ def import_schedule(conn, parsed: dict, user=None, request_id: str = None) -> di
         "rows_skipped": len(parsed["skipped_rows"]),
         "skipped_rows": parsed["skipped_rows"][:50],
         "elements_updated": len(touched_element_ids),
+        "elements_in_version": len(version_dates),
         "unmatched_blocks": unmatched_blocks,
         "manual_kept": manual_kept,
+        "kind": kind,
+        "version_id": version_id,
     }
+
+
+def save_version(conn, object_id: int, kind: str, dates: dict,
+                 source_file: Optional[str] = None, user=None,
+                 note: Optional[str] = None, origin: str = "import") -> int:
+    """Сохранить набор дат версией графика. Возвращает id версии.
+
+    Базовая версия у объекта ОДНА (уникальный индекс в схеме): повторная
+    загрузка базового графика заменяет её целиком, а не копит вторую. Это
+    решение пользователя: базовый график — то, с чем сравнивают, и двух
+    оснований для сравнения быть не может. Актуализированные, наоборот,
+    копятся — по ним и видно, как менялся прогноз.
+    """
+    title = ("Базовый график" if kind == "baseline"
+             else f"Актуализация от {_today_ru()}")
+    if kind == "baseline":
+        conn.execute("DELETE FROM schedule_versions WHERE object_id = ? AND kind = 'baseline'",
+                     (object_id,))
+    cur = conn.execute(
+        "INSERT INTO schedule_versions (object_id, kind, title, source_file, origin, loaded_by, note) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (object_id, kind, title, source_file, origin,
+         user["id"] if user is not None else None, note),
+    )
+    version_id = cur.lastrowid
+    conn.executemany(
+        "INSERT INTO schedule_version_dates (version_id, element_id, smr_start_date, smr_end_date) "
+        "VALUES (?, ?, ?, ?)",
+        [(version_id, eid, начало, окончание) for eid, (начало, окончание) in dates.items()],
+    )
+    return version_id
+
+
+def _today_ru() -> str:
+    return date.today().strftime("%d.%m.%Y")

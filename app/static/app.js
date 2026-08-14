@@ -207,7 +207,7 @@ let state = {
     active: false,
     sel: {
       elementType: new Set(), subtype: new Set(), mark: new Set(),
-      crane: new Set(), stance: new Set(), floor: new Set(),
+      zakhvatka: new Set(), crane: new Set(), stance: new Set(), floor: new Set(),
       // Контракт — такой же срез, как остальные, но живёт не в левой
       // панели, а в своей области справа от схемы (см. renderPickerContracts).
       contract: new Set(),
@@ -745,24 +745,27 @@ async function applyRolePermissions() {
       group.style.display = видимые.length ? "" : "none";
     });
 
-  // Переключатель рабочего места (АРМ комплектовщика) — тому, кто ведёт
-  // контрактацию (решение пользователя 2026-08-10): рабочее место названо
-  // именем комплектовщика и сделано под его работу, а прорабу пока не
-  // показывается. Признак тот же, что у контрактных справочников
-  // (canEditContracting): с 2026-08-14 это не имя роли, а ПОРОГ раздела
-  // «Контракты» — кого туда пустили настройкой, тот и видит АРМ. Гасится весь
-  // переключатель целиком, а не одна кнопка: «Модель» без пары —
-  // переключатель из одного положения, то есть лишний элемент на экране.
-  // Гашение здесь ЧИСТО ИНТЕРФЕЙСНОЕ и правами не является: дашборд считает
-  // по тем же данным /plan-data, что уже пришли на схему, ничего сверх
-  // доступного роли он не показывает.
-  const switchEl = document.getElementById("workspace-switch");
-  if (switchEl) {
-    const можно = canEditContracting();
-    switchEl.style.display = можно ? "" : "none";
+  // Доступ к рабочим местам — РАЗДЕЛАМИ (2026-08-14, слияние двух работ):
+  // «АРМ комплектовщика» открывает раздел workspace_picker, «АРМ прораба» —
+  // workspace_foreman. Гасится каждая кнопка своим разделом, а не
+  // переключатель целиком: «Модель» и «АРМ прораба» — осмысленная пара и
+  // без третьего положения.
+  //
+  // Гашение ЧИСТО ИНТЕРФЕЙСНОЕ и правами не является: оба рабочих места
+  // считают по тем же данным /plan-data, что уже пришли на схему, и ничего
+  // сверх доступного роли не показывают.
+  const рабочиеМеста = [
+    ["btn-ws-picker", "workspace_picker", "picker"],
+    ["btn-ws-foreman", "workspace_foreman", "foreman"],
+  ];
+  for (const [id, раздел, режим] of рабочиеМеста) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    const можно = can(раздел, "read");
+    btn.style.display = можно ? "" : "none";
     // Роль могла смениться на живой вкладке (режим «от имени», повторный
     // /me) — человек, оказавшийся без права, не должен остаться в АРМ.
-    if (!можно && state.picker.active) setWorkspace("model");
+    if (!можно && workspace === режим) setWorkspace("model");
   }
 }
 
@@ -3455,6 +3458,13 @@ const PICKER_SLICERS = [
       return тип && тип !== String(v) ? `${текст} (${тип})` : текст;
     },
   },
+  // Захватка (живой запрос 2026-08-14): в АРМ её не было вовсе, и захватку
+  // приходилось набирать кранами и стоянками — а это разные разрезы, кран
+  // работает в нескольких захватках, и захватка обслуживается несколькими
+  // кранами (проверено на графике СМР: стоянки 4, 5, 10, 11, 16, 17 у
+  // каждого из трёх кранов относятся к двум захваткам сразу). Порядок в
+  // панели тот же, что в фильтрах «Модели»: захватка → кран → стоянка.
+  { key: "zakhvatka", title: "Захватка", valueFn: e => zoneFilterValue(e, "zone_zakhvatka_id", "zone_zakhvatka_status"), labelFor: zoneLabelFor },
   { key: "crane", title: "Кран", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status"), labelFor: zoneLabelFor },
   // Стоянка — тоже с владельцем в подписи, и по той же причине, что и
   // подтип выше: имя стоянки уникально только внутри своего крана
@@ -3596,7 +3606,8 @@ function pickerSelectionActive() {
 // правдоподобную выдумку (решение пользователя 2026-08-10).
 // Возвращает { value } либо { value: null, reason }.
 const PICKER_CONTRACT_BLOCKERS = [
-  ["subtype", "подтипу"], ["crane", "крану"], ["stance", "стоянке"], ["floor", "этажу"],
+  ["subtype", "подтипу"], ["zakhvatka", "захватке"], ["crane", "крану"],
+  ["stance", "стоянке"], ["floor", "этажу"],
 ];
 
 function pickerContracted() {
@@ -4781,10 +4792,57 @@ function describePickerSelection() {
 //
 // В «Модели» ничего этого нет: там панель закреплена и меняется размером за
 // ручку, как и была.
+// Закреплённая правая панель (живой запрос 2026-08-14). Закрепление — не
+// свойство рабочего места, а привычка человека: «мне удобно, чтобы свойства
+// не убегали». Поэтому хранится в localStorage, а не в state рабочего места
+// и не на сервере. В «Модели» панель закреплена всегда, и флаг там ни на
+// что не влияет — он читается только в АРМ.
+const SIDEBAR_PIN_KEY = "zhbi_sidebar_pinned";
+let sidebarPinned = localStorage.getItem(SIDEBAR_PIN_KEY) === "1";
+
+function sidebarIsFloating() {
+  return document.getElementById("sidebar").classList.contains("floating");
+}
+
 function pickerSidebarOpen() {
-  return document.getElementById("sidebar").classList.contains("floating")
+  return sidebarIsFloating()
     && !document.getElementById("sidebar").classList.contains("collapsed");
 }
+
+// Применить режим панели к разметке. Закреплённая панель в АРМ ведёт себя
+// ровно как в «Модели»: ручка ширины на месте, рейка закладок не нужна —
+// закладки видны в самой панели.
+function applySidebarPin() {
+  const sidebar = document.getElementById("sidebar");
+  const pin = document.getElementById("sidebar-pin");
+  const плавающая = state.picker.active && !sidebarPinned;
+  sidebar.classList.toggle("floating", плавающая);
+  document.getElementById("sidebar-rail").style.display = плавающая ? "" : "none";
+  document.getElementById("resize-handle").style.display = плавающая ? "none" : "";
+  if (плавающая) {
+    closePickerSidebar();
+  } else {
+    sidebar.classList.remove("collapsed");
+    sidebar.style.display = "";
+    document.querySelectorAll(".sidebar-rail-btn").forEach(b => b.classList.remove("active"));
+  }
+  // Кнопка есть только там, где закрепление что-то меняет, — в АРМ.
+  pin.style.display = state.picker.active ? "" : "none";
+  pin.classList.toggle("active", sidebarPinned);
+  pin.title = sidebarPinned
+    ? "Открепить панель (сворачивать по клику мимо неё)"
+    : "Закрепить панель рядом со схемой";
+}
+
+document.getElementById("sidebar-pin").addEventListener("click", (e) => {
+  e.stopPropagation();
+  sidebarPinned = !sidebarPinned;
+  localStorage.setItem(SIDEBAR_PIN_KEY, sidebarPinned ? "1" : "0");
+  applySidebarPin();
+  // Схема стала уже/шире на ширину панели — то же, что при переключении
+  // рабочего места (см. setWorkspace): 2D пересчитает себя сам, 3D нет.
+  on3DResize();
+});
 
 function openPickerSidebar(tab) {
   const sidebar = document.getElementById("sidebar");
@@ -4836,39 +4894,54 @@ document.addEventListener("keydown", (e) => {
 
 const btnWsModel = document.getElementById("btn-ws-model");
 const btnWsPicker = document.getElementById("btn-ws-picker");
+const btnWsForeman = document.getElementById("btn-ws-foreman");
+
+// Текущее рабочее место: "model" | "picker" | "foreman" (2026-08-14).
+// Раньше их было два, и хватало булева state.picker.active; он остался и
+// означает ровно одно — «действует отбор АРМ комплектовщика», от чего
+// зависит passesPlacementFilters. АРМ прораба работает на отборе «Модели»,
+// поэтому там picker.active = false, и ни одну проверку отбора трогать не
+// пришлось.
+let workspace = "model";
 
 function setWorkspace(ws) {
+  if (ws === workspace) return;
+  workspace = ws;
   const picker = ws === "picker";
-  if (picker === state.picker.active) return;
+  const foreman = ws === "foreman";
   state.picker.active = picker;
-  btnWsModel.classList.toggle("active", !picker);
+  btnWsModel.classList.toggle("active", ws === "model");
   btnWsPicker.classList.toggle("active", picker);
+  btnWsForeman.classList.toggle("active", foreman);
   document.getElementById("picker-panel").style.display = picker ? "" : "none";
   document.getElementById("picker-metrics").style.display = picker ? "" : "none";
   document.getElementById("picker-contracts").style.display = picker ? "" : "none";
   document.getElementById("picker-panel-resize").style.display = picker ? "" : "none";
   document.getElementById("picker-contracts-resize").style.display = picker ? "" : "none";
+  document.getElementById("foreman-panel").style.display = foreman ? "" : "none";
+  document.getElementById("foreman-panel-resize").style.display = foreman ? "" : "none";
+  // Блок фильтров переезжает между вкладкой правой панели и левой панелью
+  // АРМ прораба — одним и тем же узлом, со всеми обработчиками (см.
+  // комментарий в разметке у #foreman-panel).
+  const filtersBox = document.getElementById("filters-box");
+  const домой = foreman
+    ? document.getElementById("foreman-panel")
+    : document.getElementById("tab-filters");
+  if (filtersBox && filtersBox.parentElement !== домой) домой.appendChild(filtersBox);
   // Правая панель: в АРМ — свёрнута до ярлычка и раскрывается поверх схемы,
-  // в «Модели» — закреплена и тянется за ручку, как была.
-  const sidebar = document.getElementById("sidebar");
-  const rail = document.getElementById("sidebar-rail");
-  rail.style.display = picker ? "" : "none";
-  document.getElementById("resize-handle").style.display = picker ? "none" : "";
-  sidebar.classList.toggle("floating", picker);
-  if (picker) {
-    closePickerSidebar();
-  } else {
-    sidebar.classList.remove("collapsed");
-    sidebar.style.display = "";
-  }
-  // Вкладка «Фильтры» в сайдбаре относится к отбору «Модели», в АРМ он не
-  // действует (отборы раздельные) — прячем саму вкладку, чтобы её нельзя
-  // было принять за причину того, что видно на схеме. Остальные вкладки
-  // (карточка изделия, статусы, вид) в АРМ нужны так же, как и в «Модели».
+  // в «Модели» — закреплена и тянется за ручку, как была. Исключение —
+  // закреплённая пользователем панель (2026-08-14): она и в АРМ стоит
+  // рядом со схемой. Вся развилка живёт в applySidebarPin.
+  applySidebarPin();
+  // Вкладка «Фильтры» в сайдбаре прячется в обоих АРМ, но по разным
+  // причинам: у комплектовщика отбор свой и фильтры «Модели» не действуют
+  // вовсе (их нельзя принять за причину того, что видно на схеме), у
+  // прораба они действуют, но переехали в левую панель — пустая вкладка
+  // осталась бы обманкой. Остальные вкладки нужны и там, и там.
   const filtersTab = document.querySelector('.tab-btn[data-tab="filters"]');
   if (filtersTab) {
-    filtersTab.style.display = picker ? "none" : "";
-    if (picker && filtersTab.classList.contains("active")) {
+    filtersTab.style.display = picker || foreman ? "none" : "";
+    if ((picker || foreman) && filtersTab.classList.contains("active")) {
       document.querySelector('.tab-btn[data-tab="properties"]').click();
     }
   }
@@ -4889,6 +4962,7 @@ function setWorkspace(ws) {
 
 btnWsModel.addEventListener("click", () => setWorkspace("model"));
 btnWsPicker.addEventListener("click", () => setWorkspace("picker"));
+btnWsForeman.addEventListener("click", () => setWorkspace("foreman"));
 
 function renderAxisGrid(data) {
   const layer = document.getElementById("axis-layer");
@@ -6817,8 +6891,40 @@ function deliveryDatesHtml(element) {
       <tr class="${plannedLate ? "date-row-late" : ""}"><td class="k">Плановая дата</td><td>${plannedText}</td></tr>
       <tr class="${actualLate ? "date-row-late" : ""}"><td class="k">Фактическая дата</td><td>${element.actual_delivery_date ? formatDateRu(element.actual_delivery_date) : "—"}</td></tr>
       <tr><td class="k">Дата завершения СМР</td><td>${element.project_delivery_date ? formatDateRu(element.project_delivery_date) : "—"}</td></tr>
+      <!-- Прогноз приходит отдельным запросом карточки (GET /elements/{id}),
+           как и история статусов: в /plan-data его нет — это лишний запрос
+           на каждое из девяти тысяч изделий ради строки, которую смотрят у
+           одного. Пока ответ не пришёл, места он не занимает. -->
+      <tbody id="card-forecast"></tbody>
     </table>
   `;
+}
+
+// Прогноз по последней актуализации графика и отклонение от директивных дат
+// (2026-08-14). Показывается ТУТ ЖЕ, под базовыми датами, а не отдельным
+// блоком: вопрос «насколько отстаём» читается только рядом с ответом на
+// вопрос «когда надо», порознь эти две пары дат бессмысленны.
+//
+// Знак: плюс — позже директивной даты, то есть отставание (красным); минус —
+// опережение (зелёным). Ноль — «идём по графику».
+function forecastRowsHtml(f) {
+  if (!f) return "";
+  const дни = (n) => {
+    if (n === null || n === undefined) return "—";
+    const слово = plural(Math.abs(n), "день", "дня", "дней");
+    if (n === 0) return '<span class="dev-ok">в срок</span>';
+    return n > 0
+      ? `<span class="dev-late">+${n} ${слово}</span>`
+      : `<span class="dev-early">${n} ${слово}</span>`;
+  };
+  const заголовок = f.version_title || "последняя актуализация";
+  return `
+      <tr><td class="k" colspan="2" style="padding-top:8px">
+        <span class="hint-text">Прогноз · ${escapeHtml(заголовок)}</span></td></tr>
+      <tr><td class="k">Начало СМР (прогноз)</td><td>${f.forecast_start
+        ? formatDateRu(f.forecast_start) : "—"} ${дни(f.deviation_start)}</td></tr>
+      <tr><td class="k">Завершение (прогноз)</td><td>${f.forecast_end
+        ? formatDateRu(f.forecast_end) : "—"} ${дни(f.deviation_end)}</td></tr>`;
 }
 
 // ---------- привязка к зонам (захватка/кран/стоянка) — только для элементов
@@ -7089,6 +7195,8 @@ async function showCard(element) {
 
   try {
     const detail = await api(`/elements/${element.id}`);
+    const forecastBox = document.getElementById("card-forecast");
+    if (forecastBox) forecastBox.innerHTML = forecastRowsHtml(detail.schedule_forecast);
     const historyBox = document.getElementById("history-box");
     if (!historyBox) return;
     if (!detail.history.length) { historyBox.textContent = "нет записей"; return; }
@@ -8895,6 +9003,14 @@ function makePanelResizer(handle, panel, { fromRight, key, min = 220, max = 640 
 makePanelResizer(
   document.getElementById("picker-panel-resize"), document.getElementById("picker-panel"),
   { fromRight: false, key: "zhbi_picker_panel_width" },
+);
+makePanelResizer(
+  document.getElementById("foreman-panel-resize"), document.getElementById("foreman-panel"),
+  { fromRight: false, key: "zhbi_foreman_panel_width" },
+);
+makePanelResizer(
+  document.getElementById("foreman-panel-resize"), document.getElementById("foreman-panel"),
+  { fromRight: false, key: "zhbi_foreman_panel_width" },
 );
 makePanelResizer(
   document.getElementById("picker-contracts-resize"), document.getElementById("picker-contracts"),
@@ -14402,19 +14518,43 @@ document.getElementById("contracting-import-submit").addEventListener("click", a
 });
 
 const scheduleImportBackdrop = document.getElementById("schedule-import-backdrop");
+// Подсказка меняется вместе с выбором вида графика: разница между базовым и
+// актуализированным не косметическая (один правит даты изделий, другой нет),
+// и узнавать о ней постфактум по результату импорта — поздно.
+function scheduleImportKindHint() {
+  const kind = document.getElementById("schedule-import-kind").value;
+  document.getElementById("schedule-import-kind-hint").textContent = kind === "baseline"
+    ? "Директивные сроки: проставятся в сами изделия (начало и завершение СМР) и заменят "
+      + "прежний базовый график объекта. Даты, правленные вручную, останутся как есть."
+    : "Прогноз: сохранится отдельной версией и попадёт в отклонение от базового графика. "
+      + "Даты изделий не меняются, предыдущие версии остаются.";
+}
+
 document.getElementById("menu-schedule-import").addEventListener("click", () => {
   document.getElementById("schedule-import-file").value = "";
   document.getElementById("schedule-import-status").textContent = "";
+  // Тот же список объектов и та же подстановка текущего, что у импорта
+  // контрактации: график почти всегда грузят на открытую стройку, но выбор
+  // остаётся за человеком.
+  const подставить = objectsForAgreement().some(v => v.id === state.objectId) ? state.objectId : null;
+  document.getElementById("schedule-import-object").innerHTML = objectOptionsHtml(подставить);
+  scheduleImportKindHint();
   scheduleImportBackdrop.classList.add("open");
 });
+document.getElementById("schedule-import-kind").addEventListener("change", scheduleImportKindHint);
 document.getElementById("schedule-import-cancel").addEventListener("click", () => scheduleImportBackdrop.classList.remove("open"));
 document.getElementById("schedule-import-submit").addEventListener("click", async () => {
   const file = document.getElementById("schedule-import-file").files[0];
   const statusEl = document.getElementById("schedule-import-status");
+  const objectId = document.getElementById("schedule-import-object").value;
+  const kind = document.getElementById("schedule-import-kind").value;
   if (!file) { statusEl.textContent = "Сначала выберите файл .xlsx"; statusEl.style.color = "var(--color-danger)"; return; }
+  if (!objectId) { statusEl.textContent = "Выберите объект"; statusEl.style.color = "var(--color-danger)"; return; }
   statusEl.textContent = "Импорт…"; statusEl.style.color = "var(--color-text-muted)";
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("object_id", objectId);
+  formData.append("kind", kind);
   try {
     const res = await fetch("/import-schedule-xlsx", { method: "POST", body: formData });
     const body = await res.json().catch(() => null);
@@ -14423,7 +14563,11 @@ document.getElementById("schedule-import-submit").addEventListener("click", asyn
       statusEl.style.color = "var(--color-danger)";
       return;
     }
-    let msg = `Готово: строк обработано ${body.rows_processed}, пропущено ${body.rows_skipped}, элементов обновлено ${body.elements_updated}.`;
+    let msg = body.kind === "baseline"
+      ? `Готово: строк обработано ${body.rows_processed}, пропущено ${body.rows_skipped}, `
+        + `изделий обновлено ${body.elements_updated}.`
+      : `Готово: строк обработано ${body.rows_processed}, пропущено ${body.rows_skipped}, `
+        + `изделий в новой версии прогноза ${body.elements_in_version}.`;
     if (body.unmatched_blocks.length) msg += ` Блоков без совпадений: ${body.unmatched_blocks.length}.`;
     // Даты, правленные руками в форме элемента, импорт не перезаписывает —
     // но и молчать об этом нельзя: иначе новое значение из графика «не
@@ -17079,6 +17223,10 @@ function reportRequestBody() {
     body.report_date = document.getElementById("report-date").value || null;
     body.week_from = dynRange.from;
     body.week_to = dynRange.to;
+    // Режим кривых — в запрос, хотя экран мог бы переключить их и сам:
+    // тот же запрос собирают выгрузки XLSX/PDF (см. downloadReport), и
+    // файл обязан показывать выбранное на экране.
+    body.dyn_mode = document.getElementById("dyn-mode").value;
   }
   if (REPORTS[currentReport].needsPeriod) {
     body.date_from = document.getElementById("ds-from").value || null;
@@ -17134,13 +17282,38 @@ function renderTreeReport(data, opts = {}) {
 // библиотекой: те же координаты потом повторяет reportlab в PDF, и никакой
 // новый вендоринг не нужен.
 
+// Пары «план — факт» одного цвета, различаются штрихом (план — пунктир):
+// на графике из четырёх кривых видно, что синие — про монтаж, а оранжевые —
+// про поставку, и глазу не нужно сверяться с легендой на каждую линию.
+// Те же цвета и штрихи в PDF (app/reports.py, DYN_SERIES_COLORS).
 const DYN_COLORS = {
   plan_smr: "#4A86C8",
-  fact_delivery: "#E8703A",
   fact_montage: "#8C99A6",
+  forecast_montage: "#8C99A6",
+  plan_delivery: "#C2571A",
+  fact_delivery: "#E8703A",
+  forecast_delivery: "#E8703A",
 };
-// Порядок задаёт и порядок в легенде, и порядок отрисовки: факт поверх плана.
-const DYN_SERIES = ["plan_smr", "fact_delivery", "fact_montage"];
+const DYN_DASHED = new Set(["plan_smr", "plan_delivery"]);
+// Прогноз — штрихпунктиром и цветом ФАКТА своей пары: он читается как
+// продолжение фактической кривой, а не как третий план (формулировка
+// заказчика: «от серой линии факта идёт штрихпунктир прогноза»).
+const DYN_DASHDOT = new Set(["forecast_montage", "forecast_delivery"]);
+// Режимы графика (2026-08-14): поставка и монтаж смотрятся и порознь, и
+// вместе. Ряды сервер считает ВСЕ и всегда — режим только выбирает
+// показываемое, поэтому переключение не требует повторного запроса…
+const DYN_MODE_SERIES = {
+  montage: ["plan_smr", "fact_montage", "forecast_montage"],
+  delivery: ["plan_delivery", "fact_delivery", "forecast_delivery"],
+  both: ["plan_smr", "fact_montage", "forecast_montage",
+         "plan_delivery", "fact_delivery", "forecast_delivery"],
+};
+const DYN_MODE_LABELS = { montage: "Монтаж", delivery: "Поставка", both: "Обе" };
+// …но в отчёт он всё же уходит: выгрузки XLSX и PDF собираются на сервере и
+// обязаны показывать ровно то, что на экране (см. build_dynamics_report).
+// Порядок внутри режима задаёт и порядок в легенде, и порядок отрисовки.
+const dynSeriesFor = (data) => data.series_order || DYN_MODE_SERIES.both;
+const DYN_SERIES = DYN_MODE_SERIES.both;
 
 function niceMax(value) {
   // Верх шкалы — «круглое» число над максимумом, иначе подписи оси
@@ -17170,7 +17343,8 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   // такие точки не рисуются, кривая факта на отчётной дате обрывается.
   const seriesPoints = (key) => (data.series[key] || [])
     .map((v, i) => ({ v, i })).filter(p => p.v !== null && p.v !== undefined);
-  const maxY = niceMax(Math.max(1, ...DYN_SERIES.flatMap(k => seriesPoints(k).map(p => p.v))));
+  const ряды = dynSeriesFor(data);
+  const maxY = niceMax(Math.max(1, ...ряды.flatMap(k => seriesPoints(k).map(p => p.v))));
   const x = i => L + (weeks.length === 1 ? 0 : i * (width - L - R) / (weeks.length - 1));
   const y = v => height - B - (v / maxY) * (height - T - B);
 
@@ -17196,11 +17370,13 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   });
 
   // Линии
-  for (const key of DYN_SERIES) {
+  for (const key of ряды) {
     const points = seriesPoints(key);
     if (!points.some(p => p.v > 0)) continue;
     const d = points.map((p, n) => `${n ? "L" : "M"} ${x(p.i).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
-    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"/>`);
+    const штрих = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"'
+      : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"${штрих}/>`);
   }
 
   // Вехи: красная стрелка вниз к линии плана + выноска с датой
@@ -17251,8 +17427,10 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
 
   // Легенда (в compact её рисует HTML рядом — см. sideChartLegendHtml)
   let lx = L;
-  for (const key of compact ? [] : DYN_SERIES) {
-    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"/>`);
+  for (const key of compact ? [] : ряды) {
+    const штрих = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"'
+      : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"${штрих}/>`);
     parts.push(`<text x="${lx + 28}" y="${height - 6}" font-size="11" fill="#4A5460">${escapeHtml(data.series_labels[key])}</text>`);
     lx += 34 + data.series_labels[key].length * 6.2;
   }
@@ -17990,6 +18168,7 @@ async function switchReport(key) {
   [...document.querySelectorAll(".report-tab")].forEach(b => b.classList.toggle("active", b.dataset.report === key));
   document.getElementById("report-date-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-period-box").style.display = REPORTS[key].needsDate ? "" : "none";
+  document.getElementById("report-dyn-mode-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
   document.getElementById("report-contracting-box").style.display = REPORTS[key].needsScale ? "" : "none";
   document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
@@ -18047,6 +18226,9 @@ document.getElementById("dyn-range-reset").addEventListener("click", () => {
   dynRange = { from: null, to: null };
   loadReport();
 });
+// Перезапрос, а не перерисовка имеющегося отчёта: сам отчёт несёт в себе
+// выбранный режим (series_order), и его же берут выгрузки XLSX/PDF.
+document.getElementById("dyn-mode").addEventListener("change", loadReport);
 for (const id of ["mw-from", "mw-to", "mw-user"]) {
   document.getElementById(id).addEventListener("change", loadReport);
 }
@@ -18185,16 +18367,19 @@ document.getElementById("report-pdf").addEventListener("click", () => downloadRe
 const SIDE_REPORTS_DEBOUNCE_MS = 250;
 let sideStatusData = null;
 let sideDynData = null;
+let sideDevData = null;   // сводка отклонения от базового графика (2026-08-14)
 let sideStatusCollapsed = new Set();
 // Устаревание считается ПО ОТЧЁТУ, а не одним флагом на оба: свёрнутый отчёт
 // не пересчитывается, и когда его раскроют, надо знать, что он отстал.
-let sideStale = { status: true, dynamics: true };
+let sideStale = { status: true, dynamics: true, deviation: true };
 let sideReportsTimer = null;
 let sideReportsRequestId = 0;
-const sideReportsDirty = () => sideStale.status || sideStale.dynamics;
+const sideReportsDirty = () => sideStale.status || sideStale.dynamics || sideStale.deviation;
 
 const statusTabActive = () => document.getElementById("tab-status").classList.contains("active");
-const SIDE_SECTION_ID = { status: "side-status-section", dynamics: "side-dyn-section" };
+const SIDE_SECTION_ID = {
+  status: "side-status-section", dynamics: "side-dyn-section", deviation: "side-dev-section",
+};
 // Что реально нужно считать сейчас: раскрытое и устаревшее.
 const sideReportWanted = (key) => sideStale[key] && !sectionCollapsed(SIDE_SECTION_ID[key]);
 
@@ -18213,7 +18398,7 @@ function sideReportBody(withDate) {
 // пересчитаться одни и те же — отдельных хуков по всем местам смены статуса
 // заводить не нужно.
 function scheduleSidebarReports() {
-  sideStale = { status: true, dynamics: true };
+  sideStale = { status: true, dynamics: true, deviation: true };
   // Скрытую панель не считаем вовсе: запрос не дешёвый, а пользователь его
   // результата не видит. При переходе на вкладку пересчёт сделает switchTab.
   if (!statusTabActive()) return;
@@ -18233,21 +18418,34 @@ async function loadSidebarReports() {
     document.getElementById("side-status-line").textContent = "";
     return;
   }
-  const want = { status: sideReportWanted("status"), dynamics: sideReportWanted("dynamics") };
-  if (!want.status && !want.dynamics) return; // всё нужное уже посчитано или свёрнуто
+  const want = {
+    status: sideReportWanted("status"), dynamics: sideReportWanted("dynamics"),
+    deviation: sideReportWanted("deviation"),
+  };
+  if (!want.status && !want.dynamics && !want.deviation) return; // всё уже посчитано или свёрнуто
   const my = ++sideReportsRequestId;
+  const devBody = document.getElementById("side-dev-body");
   if (want.status && !sideStatusData) statusBody.innerHTML = '<div class="hint-text">Построение…</div>';
   if (want.dynamics && !sideDynData) dynBody.innerHTML = '<div class="hint-text">Построение…</div>';
+  if (want.deviation && !sideDevData) devBody.innerHTML = '<div class="hint-text">Построение…</div>';
   try {
     const post = (endpoint, withDate) => api(endpoint, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sideReportBody(withDate)),
     });
-    const [status, dyn] = await Promise.all([
+    const [status, dyn, dev] = await Promise.all([
       want.status ? post("/reports/status", false) : null,
       want.dynamics ? post("/reports/dynamics", true) : null,
+      // Отклонение — свой эндпоинт: это не отчёт, а сравнение двух версий
+      // графика, и общего с ними у него только список изделий среза.
+      want.deviation ? post("/schedule-versions/deviation", false) : null,
     ]);
     if (my !== sideReportsRequestId) return; // ответ на уже устаревший фильтр
+    if (want.deviation) {
+      sideDevData = dev;
+      sideStale.deviation = false;
+      renderSideDeviation();
+    }
     if (want.status) {
       sideStatusData = status;
       sideStatusCollapsed = defaultCollapsedTree(status);
@@ -18264,11 +18462,56 @@ async function loadSidebarReports() {
     // Данные прошлого расчёта здесь уже неактуальны (фильтр изменился) —
     // сбрасываем и подпись «Всего изделий», иначе она осталась бы от
     // прежнего фильтра и выглядела бы как настоящий результат.
-    sideStatusData = sideDynData = null;
+    sideStatusData = sideDynData = sideDevData = null;
     statusBody.innerHTML = "";
+    document.getElementById("side-dev-body").innerHTML = "";
     document.getElementById("side-status-line").textContent = "";
     dynBody.innerHTML = `<div class="error-text">Не удалось построить отчёты: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Отклонение от базового графика (2026-08-14). Показывается по ОБЕИМ датам
+// (решение пользователя): по началу СМР — когда изделие обязано быть на
+// площадке, по завершению — сам монтаж. Знак «плюс» = позже директивной
+// даты, то есть отставание.
+function renderSideDeviation() {
+  const body = document.getElementById("side-dev-body");
+  const d = sideDevData;
+  if (!d) { body.innerHTML = ""; return; }
+  if (!d.version_id) {
+    body.innerHTML = '<div class="hint-text">Актуализированный график ещё не загружен — '
+      + 'сравнивать не с чем.</div>';
+    return;
+  }
+  if (!d.elements) {
+    body.innerHTML = '<div class="hint-text">В текущем отборе нет изделий из этой версии графика.</div>';
+    return;
+  }
+  const строка = (title, block) => {
+    if (!block) return `<tr><td>${escapeHtml(title)}</td><td colspan="3" class="hint-text">нет дат</td></tr>`;
+    const цвет = (v) => v > 0 ? "dev-late" : v < 0 ? "dev-early" : "dev-ok";
+    const знак = (v) => v > 0 ? `+${v}` : String(v);
+    return `<tr>
+      <td>${escapeHtml(title)}</td>
+      <td class="${цвет(block.avg)}">${знак(block.avg)}</td>
+      <td class="${цвет(block.max)}">${знак(block.max)}</td>
+      <td>${block.late}</td>
+    </tr>`;
+  };
+  body.innerHTML = `
+    <div class="hint-text">${escapeHtml(d.version_title || "последняя актуализация")} ·
+      изделий в сравнении: ${d.elements}</div>
+    <table class="side-table side-dyn">
+      <tr><th></th><th title="Среднее отклонение, дней">сред.</th>
+          <th title="Наибольшее отклонение, дней">макс.</th>
+          <th title="Сколько изделий отстаёт">отстаёт</th></tr>
+      ${строка("Начало СМР", d.start)}
+      ${строка("Завершение", d.end)}
+    </table>
+    ${d.by_zakhvatka.length > 1 ? `<table class="side-table side-dyn" style="margin-top:6px">
+      <tr><th>Захватка</th><th>сред.</th><th>макс.</th><th>отстаёт</th></tr>
+      ${d.by_zakhvatka.map(z => строка(z.label, z.end)).join("")}
+    </table>` : ""}`;
 }
 
 function renderSideStatusReport() {
@@ -18302,8 +18545,9 @@ document.getElementById("side-status-body").addEventListener("click", (e) => {
 });
 
 function sideChartLegendHtml(data) {
-  return `<div class="side-chart-legend">${DYN_SERIES.map(k =>
-    `<span><i style="background:${DYN_COLORS[k]}"></i>${escapeHtml(data.series_labels[k])}</span>`
+  return `<div class="side-chart-legend">${dynSeriesFor(data).map(k =>
+    `<span><i style="background:${DYN_COLORS[k]}; color:${DYN_COLORS[k]}"${DYN_DASHED.has(k)
+      ? ' class="dashed"' : DYN_DASHDOT.has(k) ? ' class="dashdot"' : ""}></i>${escapeHtml(data.series_labels[k])}</span>`
   ).join("")}</div>`;
 }
 
@@ -18389,6 +18633,10 @@ function renderSideDynamicsReport() {
     (sideDynRange.from || sideDynRange.to) ? "" : "none";
 
   const windowed = sideDynWindow(data);
+  // Режим панели — свой, экранный: сервер прислал все четыре ряда, и выбор
+  // здесь только сужает показываемое (см. dynSeriesFor).
+  const режим = document.getElementById("side-dyn-mode").value;
+  windowed.series_order = DYN_MODE_SERIES[режим] || DYN_MODE_SERIES.both;
   const cov = data.plan_coverage;
   const warns = [];
   if (cov.smr < cov.total) warns.push(`СМР — у ${cov.smr} из ${cov.total}`);
@@ -18397,7 +18645,7 @@ function renderSideDynamicsReport() {
     <div class="side-chart">${windowed.weeks.length
       ? buildDynamicsChartSvg(windowed, 280, 150, { compact: true })
       : '<div class="hint-text">В выбранном периоде нет ни одной недели</div>'}</div>
-    ${sideChartLegendHtml(data)}
+    ${sideChartLegendHtml(windowed)}
     ${warns.length ? `<div class="side-dyn-warn">План задан не у всех изделий (${escapeHtml(warns.join("; "))}) — кривая плана неполная.</div>` : ""}
     ${sideDynBlock("Монтаж ЖБИ", data.montage, data.report_date)}
     ${sideDynBlock("Поставка ЖБИ", data.delivery, data.report_date)}
@@ -18424,6 +18672,8 @@ document.getElementById("side-dyn-range-reset").addEventListener("click", () => 
   sideDynRange = { from: null, to: null };
   renderSideDynamicsReport();
 });
+// Перерисовка без запроса: ряды уже все здесь (см. renderSideDynamicsReport).
+document.getElementById("side-dyn-mode").addEventListener("change", renderSideDynamicsReport);
 
 // «⤢» — тот же отчёт в полный размер. Галочку «учитывать фильтр» ставим:
 // иначе форма показала бы другие числа, чем панель, с которой её открыли.
@@ -22753,3 +23003,196 @@ document.getElementById("transfer-apply").addEventListener("click", async () => 
   }
 });
 
+
+// ==================== ГРАФИК СМР: ВЕРСИИ, ИСХОДНЫЕ ДАННЫЕ, РАСЧЁТ ==========
+// (2026-08-14, совещание — блоки E1/E4/E5)
+//
+// Одна форма на три вкладки: «какие версии есть», «из чего считаем» и
+// «посчитать». Разносить их по трём пунктам меню смысла нет — в одной работе
+// между ними ходят туда-обратно.
+const scheduleBackdrop = document.getElementById("schedule-backdrop");
+let scheduleInputs = null;   // {work_kinds, flow} — снимок на время открытой формы
+
+document.getElementById("menu-schedule").addEventListener("click", async () => {
+  scheduleBackdrop.classList.add("open");
+  switchScheduleTab("versions");
+  document.getElementById("schedule-calc-status").textContent = "";
+  document.getElementById("schedule-inputs-status").textContent = "";
+  await Promise.all([loadScheduleVersions(), loadScheduleInputs()]);
+});
+document.getElementById("schedule-close").addEventListener("click",
+  () => scheduleBackdrop.classList.remove("open"));
+
+function switchScheduleTab(name) {
+  document.querySelectorAll("#schedule-tabs .tab-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.schedTab === name));
+  for (const key of ["versions", "inputs", "calc"]) {
+    document.getElementById(`schedule-tab-${key}`).style.display = key === name ? "" : "none";
+  }
+}
+document.querySelectorAll("#schedule-tabs .tab-btn").forEach(btn =>
+  btn.addEventListener("click", () => switchScheduleTab(btn.dataset.schedTab)));
+
+async function loadScheduleVersions() {
+  const box = document.getElementById("schedule-versions-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const data = await api(`/schedule-versions?object_id=${state.objectId}`);
+    if (!data.versions.length) {
+      box.innerHTML = '<div class="hint-text">Версий графика ещё нет. Базовый график '
+        + 'загружается через «Обмен данными → Импорт графика MS Project из XLS», '
+        + 'актуализированный — там же или расчётом на вкладке «Расчёт».</div>';
+      return;
+    }
+    box.innerHTML = `<table class="dict-table">
+      <tr><th>Вид</th><th>Название</th><th>Изделий</th><th>Откуда</th><th>Загружена</th><th>Кто</th><th></th></tr>
+      ${data.versions.map(v => `<tr>
+        <td>${escapeHtml(v.kind_label)}</td>
+        <td>${escapeHtml(v.title || "—")}${v.id === data.current_id
+          ? ' <span class="hint-text">· текущий прогноз</span>' : ""}</td>
+        <td class="num">${v.elements}</td>
+        <td>${v.origin === "calc" ? "расчёт системы" : escapeHtml(v.source_file || "файл")}</td>
+        <td>${escapeHtml(formatMomentRu(v.loaded_at))}</td>
+        <td>${escapeHtml(v.loaded_by || "—")}</td>
+        <td><button class="link-btn" data-del-version="${v.id}">удалить</button></td>
+      </tr>`).join("")}
+    </table>`;
+    box.querySelectorAll("[data-del-version]").forEach(btn => btn.addEventListener("click", async () => {
+      if (!confirm("Удалить эту версию графика? Даты изделий при этом не меняются.")) return;
+      try {
+        await api(`/schedule-versions/${btn.dataset.delVersion}`, { method: "DELETE" });
+        await loadScheduleVersions();
+        // Отклонение и кривая прогноза считались по этой версии — пересчитать.
+        scheduleSidebarReports();
+      } catch (e) { showToast(e.message, "error"); }
+    }));
+  } catch (e) {
+    box.innerHTML = `<div class="error-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadScheduleInputs() {
+  try {
+    scheduleInputs = await api(`/schedule-calc/inputs?object_id=${state.objectId}`);
+  } catch (e) {
+    scheduleInputs = null;
+    document.getElementById("schedule-kinds-box").innerHTML =
+      `<div class="error-text">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  renderScheduleInputs();
+}
+
+// Строки берутся из модели (виды работ и фронты, которые в ней реально
+// есть) и дополняются уже сохранённой настройкой — набивать их руками,
+// гадая о сочетаниях, не нужно. Строка, которой в модели больше нет,
+// помечается: зона могла исчезнуть при переимпорте чертежа, и молча
+// пропасть из настройки она не должна.
+function renderScheduleInputs() {
+  const d = scheduleInputs;
+  const пометка = (r) => r.in_model ? "" : ' <span class="hint-text">· нет в модели</span>';
+  document.getElementById("schedule-kinds-box").innerHTML = `<table class="dict-table">
+    <tr><th>Тип</th><th>Подтип</th><th>Изделий</th><th>Темп, шт/сутки</th><th>Порядок</th></tr>
+    ${d.work_kinds.map((r, i) => `<tr>
+      <td>${escapeHtml(r.element_type)}${пометка(r)}</td>
+      <td>${escapeHtml(r.subtype || "—")}</td>
+      <td class="num">${r.quantity}</td>
+      <td><input type="number" step="0.1" min="0" style="width:80px"
+                 data-kind="${i}" data-field="rate_per_day"
+                 value="${r.rate_per_day === null || r.rate_per_day === undefined ? "" : r.rate_per_day}"/></td>
+      <td><input type="number" step="1" min="0" style="width:70px"
+                 data-kind="${i}" data-field="order_no"
+                 value="${r.order_no === null || r.order_no === undefined ? "" : r.order_no}"/></td>
+    </tr>`).join("")}
+  </table>`;
+  document.getElementById("schedule-flow-box").innerHTML = `<table class="dict-table">
+    <tr><th>Кран</th><th>Стоянка</th><th>Этаж</th><th>Изделий</th><th>Порядок</th></tr>
+    ${d.flow.map((r, i) => `<tr>
+      <td>${escapeHtml(r.crane_name)}${пометка(r)}</td>
+      <td>${escapeHtml(r.stance_name)}</td>
+      <td class="num">${r.floor}</td>
+      <td class="num">${r.quantity}</td>
+      <td><input type="number" step="1" min="0" style="width:70px"
+                 data-flow="${i}" data-field="order_no"
+                 value="${r.order_no === null || r.order_no === undefined ? "" : r.order_no}"/></td>
+    </tr>`).join("")}
+  </table>`;
+  const собрать = (e) => {
+    const строка = e.target.dataset.kind !== undefined
+      ? scheduleInputs.work_kinds[Number(e.target.dataset.kind)]
+      : scheduleInputs.flow[Number(e.target.dataset.flow)];
+    const значение = e.target.value === "" ? null : Number(e.target.value);
+    строка[e.target.dataset.field] = значение;
+  };
+  document.querySelectorAll("#schedule-kinds-box input, #schedule-flow-box input")
+    .forEach(inp => inp.addEventListener("change", собрать));
+}
+
+// «Заполнить поток по модели» — порядок фронтов по номерам стоянок и этажей
+// внутри каждого крана. Это ЧЕРНОВИК, а не истина: реальную очередь знает
+// прораб, и он её поправит. Но набивать две сотни номеров с нуля руками —
+// работа, ради которой инструмент и делается.
+document.getElementById("schedule-flow-autofill").addEventListener("click", () => {
+  if (!scheduleInputs) return;
+  const номер = (текст) => {
+    const m = String(текст).match(/(\d+)\s*$/);
+    return m ? Number(m[1]) : 0;
+  };
+  const по_кранам = {};
+  for (const r of scheduleInputs.flow) (по_кранам[r.crane_name] ||= []).push(r);
+  for (const строки of Object.values(по_кранам)) {
+    строки.sort((a, b) => номер(a.stance_name) - номер(b.stance_name) || a.floor - b.floor);
+    строки.forEach((r, i) => { r.order_no = i + 1; });
+  }
+  renderScheduleInputs();
+  document.getElementById("schedule-inputs-status").textContent =
+    "Поток заполнен по номерам стоянок и этажей — проверьте и сохраните.";
+});
+
+document.getElementById("schedule-inputs-save").addEventListener("click", async () => {
+  const status = document.getElementById("schedule-inputs-status");
+  status.textContent = "Сохранение…";
+  try {
+    const итог = await api("/schedule-calc/inputs", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        object_id: state.objectId,
+        work_kinds: scheduleInputs.work_kinds.map(r => ({
+          element_type: r.element_type, subtype: r.subtype,
+          rate_per_day: r.rate_per_day, order_no: r.order_no,
+        })),
+        flow: scheduleInputs.flow.map(r => ({
+          crane_name: r.crane_name, stance_name: r.stance_name,
+          floor: r.floor, order_no: r.order_no,
+        })),
+      }),
+    });
+    status.textContent = `Сохранено: видов работ ${итог.work_kinds}, фронтов ${итог.flow}.`;
+  } catch (e) {
+    status.textContent = e.message;
+  }
+});
+
+document.getElementById("schedule-calc-run").addEventListener("click", async () => {
+  const status = document.getElementById("schedule-calc-status");
+  const start = document.getElementById("schedule-calc-start").value;
+  if (!start) { status.textContent = "Укажите дату начала работ"; return; }
+  status.textContent = "Расчёт…";
+  try {
+    const итог = await api("/schedule-calc", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        object_id: state.objectId, start_date: start,
+        skip_installed: document.getElementById("schedule-calc-skip-installed").checked,
+      }),
+    });
+    status.textContent = `Готово: фронтов ${итог.fronts}, изделий ${итог.elements}, `
+      + `сроки с ${formatDateRu(итог.first_date)} по ${formatDateRu(итог.last_date)}.`
+      + (итог.warnings.length ? ` ${итог.warnings.join(" ")}` : "");
+    await loadScheduleVersions();
+    switchScheduleTab("versions");
+    scheduleSidebarReports();
+  } catch (e) {
+    status.textContent = e.message;
+  }
+});

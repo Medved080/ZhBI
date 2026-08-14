@@ -830,3 +830,94 @@ CREATE TABLE IF NOT EXISTS supplier_change_history_moves (
 CREATE INDEX IF NOT EXISTS idx_supplier_change_items_doc ON supplier_change_items (doc_id);
 CREATE INDEX IF NOT EXISTS idx_supplier_change_docs_object ON supplier_change_docs (object_id);
 CREATE INDEX IF NOT EXISTS idx_supplier_change_moves_doc ON supplier_change_history_moves (doc_id);
+
+-- ==================== ВЕРСИИ ГРАФИКА СМР (2026-08-14) ====================
+--
+-- До этой даты график жил ДВУМЯ ПОЛЯМИ у изделия
+-- (project_smr_start_date/project_delivery_date), и загрузка нового файла
+-- затирала предыдущий. Заказчик работает иначе (совещание 2026-08-14):
+-- есть БАЗОВЫЙ график — директивные даты, «когда это надо», он не
+-- меняется; и есть АКТУАЛИЗИРОВАННЫЙ, который пересчитывается раз в
+-- неделю и отвечает на другой вопрос — «насколько мы отстаём». Разница
+-- между ними и есть отставание, а последовательность актуализаций
+-- показывает, как менялся прогноз («две недели назад обещали 1 февраля,
+-- сейчас 15-е») — поэтому версии НАКАПЛИВАЮТСЯ, а не заменяют друг друга.
+--
+-- Базовая версия у объекта одна (уникальный индекс ниже). Поля изделия
+-- остаются источником правды для БАЗОВЫХ дат и никуда не уезжают: на них
+-- завязаны фильтры, подписи, отчёты и «Аналитическая справка», и переносить
+-- их в эту таблицу значило бы переписать половину системы ради хранения
+-- истории прогнозов.
+CREATE TABLE IF NOT EXISTS schedule_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    -- 'baseline' — базовый (директивный), 'current' — актуализированный.
+    kind TEXT NOT NULL CHECK (kind IN ('baseline', 'current')),
+    title TEXT,
+    source_file TEXT,
+    -- 'import' — загружен файлом MS Project, 'calc' — посчитан системой
+    -- (app/schedule_calc.py). Различать нужно: у расчёта свои исходные
+    -- данные, и «почему тут такие даты» отвечается по-разному.
+    origin TEXT NOT NULL DEFAULT 'import',
+    loaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    loaded_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    note TEXT
+);
+
+-- Даты изделий в версии. Ключ — (версия, изделие): одна строка на изделие,
+-- обе даты рядом. Изделий в версии столько же, сколько их попало под
+-- сопоставление с блоками файла (у графика строка описывает блок работ, а
+-- не изделие, см. app/schedule_import.py).
+CREATE TABLE IF NOT EXISTS schedule_version_dates (
+    version_id INTEGER NOT NULL REFERENCES schedule_versions (id) ON DELETE CASCADE,
+    element_id INTEGER NOT NULL REFERENCES elements (id) ON DELETE CASCADE,
+    smr_start_date TEXT,
+    smr_end_date TEXT,
+    PRIMARY KEY (version_id, element_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_versions_baseline
+    ON schedule_versions (object_id) WHERE kind = 'baseline';
+CREATE INDEX IF NOT EXISTS idx_schedule_versions_object
+    ON schedule_versions (object_id, kind, loaded_at);
+CREATE INDEX IF NOT EXISTS idx_schedule_version_dates_element
+    ON schedule_version_dates (element_id);
+
+-- ==================== ИСХОДНЫЕ ДАННЫЕ РАСЧЁТА ГРАФИКА (2026-08-14) ====
+--
+-- Три таблицы, которые заказчик до сих пор вёл руками в Excel-обработке
+-- Power Query (см. Docs/requirements-2026-08-14.md, разбор обработки):
+-- темп монтажа и порядок работ — по паре тип+подтип, поток — по тройке
+-- кран+стоянка+этаж. Всё остальное (количества) считается из модели.
+--
+-- Темп — изделий в сутки НА ОДИН КРАН; краны в модели по
+-- производительности не различаются (так же было и в расчёте заказчика).
+-- order_no — очередь вида работ внутри одного этажа стоянки: колонна
+-- нижняя → ригель периметральный → колонна средняя → ригель → плита и так
+-- вверх по отметкам.
+CREATE TABLE IF NOT EXISTS schedule_work_kinds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    element_type TEXT NOT NULL,
+    subtype TEXT,
+    rate_per_day REAL,
+    order_no INTEGER
+);
+
+-- Поток — очередь фронтов работ крана: в каком порядке кран проходит свои
+-- стоянки и этажи. Зоны названы ИМЕНАМИ, а не id: поток задаётся до и
+-- независимо от того, каким чертежом заведены зоны, и переимпорт чертежа
+-- (новые id тех же зон) не должен его обнулять.
+CREATE TABLE IF NOT EXISTS schedule_flow (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    crane_name TEXT NOT NULL,
+    stance_name TEXT NOT NULL,
+    floor INTEGER NOT NULL,
+    order_no INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_work_kinds_key
+    ON schedule_work_kinds (object_id, element_type, IFNULL(subtype, ''));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_flow_key
+    ON schedule_flow (object_id, crane_name, stance_name, floor);

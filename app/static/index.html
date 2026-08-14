@@ -757,6 +757,21 @@
      своего типа, иначе форма растягивается на несколько экранов и подтипы
      соседнего типа уезжают из виду. */
   .marks-scroll { max-height: 240px; overflow-y: auto; }
+  /* Таблицы формы «График СМР» (2026-08-14) — та же вёрстка, что у марок
+     (это такой же плотный список со строчными полями ввода), и та же
+     прокрутка внутри своей области: видов работ полтора десятка, а фронтов
+     потока — две сотни, и без неё форма растянулась бы на пять экранов. */
+  .sched-panel .dict-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .sched-panel .dict-table th {
+    text-align: left; font-weight: 600; color: var(--color-text-muted);
+    padding: 2px 6px 4px 0; position: sticky; top: 0; background: var(--color-surface);
+  }
+  .sched-panel .dict-table td { padding: 2px 6px 2px 0; vertical-align: middle; }
+  .sched-panel .dict-table td.num { text-align: right; width: 72px; color: var(--color-text-muted); }
+  .sched-panel h4 { font-size: 12px; margin: 14px 0 6px; }
+  #schedule-kinds-box, #schedule-flow-box, #schedule-versions-list {
+    max-height: 300px; overflow-y: auto;
+  }
 
   /* -------- диалог удаления записи справочника -------- */
   /* ВЫШЕ остальных модальных окон (z-index у них 100): удаление всегда
@@ -1308,6 +1323,15 @@
     width: 320px; flex-shrink: 0; background: var(--color-surface-2);
     border-right: 1px solid var(--color-border); padding: 12px; overflow-y: auto; font-size: 12px;
   }
+  /* Левая панель АРМ прораба — та же колонка, что у комплектовщика (те же
+     ширина, фон и ручка), но с содержимым правой панели: размер шрифта
+     берётся сайдбарный, иначе фильтры, приехавшие из #sidebar, выглядели бы
+     мельче, чем были. */
+  #foreman-panel {
+    width: 320px; flex-shrink: 0; background: var(--color-surface-2);
+    border-right: 1px solid var(--color-border); padding: 12px; overflow-y: auto; font-size: 13px;
+  }
+  #foreman-panel #filters-box > h3 { margin-top: 0; }
   #picker-metrics {
     display: flex; gap: 8px; padding: 10px 12px; flex-wrap: wrap;
     background: var(--color-surface-2); border-bottom: 1px solid var(--color-border); flex-shrink: 0;
@@ -1472,12 +1496,34 @@
   }
   #sidebar h3 { font-size: 12px; margin: 18px 0 8px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .03em; font-weight: 600; }
   #sidebar h3:first-child { margin-top: 0; }
-  .tabs { display: flex; gap: 4px; margin: -16px -16px 16px; padding: 0 8px; border-bottom: 1px solid var(--color-border); }
+  /* Строка вкладок ЗАКРЕПЛЕНА при прокрутке панели (живой запрос
+     2026-08-14): в «Статусе» и «Фильтрах» содержимое давно длиннее экрана,
+     и переключатель уезжал за верхний край — чтобы вернуться к «Свойствам»,
+     приходилось сначала прокрутить панель обратно наверх. Требование
+     общее, не про одно рабочее место, поэтому липкость живёт здесь, а не в
+     правилах АРМ.
+     top: -16px — ровно на padding-top самой панели (#sidebar), иначе
+     вкладки прилипали бы на 16px ниже верхнего края и над ними в щели
+     проезжало бы содержимое. Фон обязателен: панель прокручивается ПОД
+     строкой, а без подложки текст проступал бы сквозь неё. */
+  .tabs {
+    display: flex; gap: 4px; margin: -16px -16px 16px; padding: 0 8px;
+    border-bottom: 1px solid var(--color-border);
+    position: sticky; top: -16px; z-index: 5; background: var(--color-surface);
+  }
   .tab-btn {
     flex: 1; background: none; border: none; padding: 10px 4px; font-size: 12px; font-weight: 600;
     color: var(--color-text-muted); cursor: pointer; border-bottom: 2px solid transparent;
   }
   .tab-btn:hover { color: var(--color-text); }
+  /* Кнопка «закрепить панель» — не вкладка: не растягивается (flex:none) и
+     не подчёркивается снизу, иначе читалась бы как пятая закладка. */
+  .tab-pin {
+    flex: none; background: none; border: none; cursor: pointer; padding: 8px 6px;
+    font-size: 13px; line-height: 1; opacity: .45; filter: grayscale(1);
+  }
+  .tab-pin:hover { opacity: .9; filter: none; }
+  .tab-pin.active { opacity: 1; filter: none; }
   .tab-btn.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
@@ -1638,7 +1684,25 @@
   .side-chart svg { display: block; width: 100%; height: auto; }
   .side-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 10.5px; margin-top: 6px; color: var(--color-text-muted); }
   .side-chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  /* Отклонение от директивного графика (карточка изделия, сводка по срезу):
+     отставание красным, опережение зелёным, «в срок» — нейтрально. */
+  .dev-late { color: var(--color-danger); font-weight: 600; }
+  .dev-early { color: var(--color-success, #2e7d32); font-weight: 600; }
+  .dev-ok { color: var(--color-text-muted); }
   .side-chart-legend i { display: inline-block; width: 12px; height: 2px; }
+  /* Кривые плана на графике пунктирные — в легенде тот же штрих, иначе две
+     линии одного цвета (план и факт одной пары) в ней неразличимы. */
+  .side-chart-legend i.dashed {
+    height: 0; border-top: 2px dashed currentColor; background: none !important;
+    color: inherit;
+  }
+  /* Прогноз — штрихпунктир; в легенде на 12 px честного штрихпунктира не
+     нарисовать, поэтому точечный: главное — отличить от сплошного факта и
+     от пунктирного плана. */
+  .side-chart-legend i.dashdot {
+    height: 0; border-top: 2px dotted currentColor; background: none !important;
+    color: inherit;
+  }
   .side-dyn-block { margin-top: 10px; }
   .side-dyn-block h4 {
     font-size: 11px; font-weight: 600; margin: 0 0 4px; display: flex;
@@ -3247,6 +3311,11 @@
           <button type="button" class="submenu-trigger">Документы</button>
           <div class="dropdown-menu submenu-panel">
             <button id="menu-supplier-change" data-feature="supplier_change" data-feature-kind="write">Смена поставщика</button>
+            <!-- График СМР (2026-08-14): версии, исходные данные расчёта и
+                 сам расчёт. В «Документах», а не в «Обмене данными»: загрузка
+                 файла — лишь один из способов, каким график появляется, а
+                 сущность здесь — сам график объекта. -->
+            <button id="menu-schedule" data-feature="schedule" data-feature-kind="write">График СМР</button>
           </div>
         </div>
         <!-- Класс гашения — на КАЖДОМ пункте, а не на группе: часть
@@ -3429,6 +3498,15 @@
               title="Схема и панель фильтров">Модель</button>
       <button type="button" class="view-mode-btn" id="btn-ws-picker" data-ws="picker"
               title="Дашборд комплектации: свойства, количественные показатели и схема выбранного среза">АРМ комплектовщика</button>
+      <!-- АРМ прораба (2026-08-14). Не третий набор данных, а третья
+           РАСКЛАДКА тех же: фильтры «Модели» переезжают из вкладки правой
+           панели в постоянную панель слева, и прораб держит их под рукой,
+           не отнимая места у карточки изделия справа. Отбор — тот же самый
+           (state.placementFilters), поэтому переключение между «Моделью» и
+           этим АРМ ничего не сбрасывает; в АРМ комплектовщика отбор свой,
+           и там всё по-прежнему раздельно. -->
+      <button type="button" class="view-mode-btn" id="btn-ws-foreman" data-ws="foreman"
+              title="Фильтры «Модели» постоянной панелью слева, свойства и статус — справа">АРМ прораба</button>
     </div>
     <div class="view-mode-switch" id="view-mode-switch" role="group" aria-label="Режим отображения">
       <button type="button" class="view-mode-btn active" id="btn-view-2d" data-mode="2d">2D</button>
@@ -3482,6 +3560,14 @@
       пока не выбрано это рабочее место (см. app.js, setWorkspace). -->
  <div id="picker-panel" style="display:none"></div>
  <div id="picker-panel-resize" class="panel-resize-handle" style="display:none"
+      title="Перетащите, чтобы изменить ширину панели"></div>
+ <!-- АРМ прораба (2026-08-14): та же левая колонка, но в неё ПЕРЕЕЗЖАЕТ
+      готовый блок фильтров из вкладки правой панели (#filters-box). Именно
+      переезжает, а не рисуется второй раз: два экземпляра одних и тех же
+      чекбоксов пришлось бы держать согласованными, и первая же правка
+      фильтров в одном месте разошлась бы с другим. -->
+ <div id="foreman-panel" style="display:none"></div>
+ <div id="foreman-panel-resize" class="panel-resize-handle" style="display:none"
       title="Перетащите, чтобы изменить ширину панели"></div>
  <div id="stage-area">
   <!-- Полоса количественных показателей — над схемой и на всю её ширину:
@@ -3561,6 +3647,16 @@
       <button type="button" class="tab-btn" data-tab="status">Статус</button>
       <button type="button" class="tab-btn" data-tab="filters">Фильтры</button>
       <button type="button" class="tab-btn" data-tab="view">Вид</button>
+      <!-- Закрепить панель (живой запрос 2026-08-14). В АРМ правая панель
+           раскрывается поверх схемы и сворачивается от клика мимо неё —
+           удобно, пока смотришь одно изделие, и мучительно, когда работаешь
+           со свойствами подряд у отобранного десятка: панель убегает на
+           каждый клик по схеме. Кнопка переводит панель в закреплённый вид —
+           тот же, что в «Модели»: панель стоит рядом со схемой, тянется за
+           ручку и никуда не девается. Выбор помнится (localStorage).
+           В «Модели» панель закреплена всегда, и кнопка там не показывается. -->
+      <button type="button" id="sidebar-pin" class="tab-pin" style="display:none"
+              title="Закрепить панель рядом со схемой">📌</button>
     </div>
     <div id="tab-properties" class="tab-panel active">
       <h3>Карточка элемента</h3>
@@ -3600,6 +3696,20 @@
         </div>
       </div>
 
+      <!-- Отклонение от базового графика (2026-08-14). Считается по тем же
+           изделиям, что прошли текущий фильтр, — как и остальные блоки этой
+           вкладки: цифры на панели всегда про то, что сейчас выбрано. -->
+      <div class="side-report">
+        <div class="side-section-head">
+          <h3>Отклонение от базового графика</h3>
+          <button type="button" class="filter-expand-btn" data-collapse="side-dev-section"
+                  title="Свернуть/развернуть">▾</button>
+        </div>
+        <div id="side-dev-section">
+          <div id="side-dev-body"></div>
+        </div>
+      </div>
+
       <div class="side-report">
         <div class="side-section-head">
           <h3>Отчёт о динамике поставки и монтажа</h3>
@@ -3613,6 +3723,17 @@
                и таблицы), «Период» — только масштаб оси X графика; по
                умолчанию весь срок жизни проекта (живой запрос 2026-07-30). -->
           <div class="side-report-controls">
+            <!-- Те же три режима, что в полной форме (2026-08-14). Здесь это
+                 чисто экранный выбор: ряды уже пришли все, перезапрос не
+                 нужен — в отличие от формы, где режим уходит на сервер ради
+                 выгрузок XLSX/PDF. -->
+            <label>Показывать
+              <select id="side-dyn-mode">
+                <option value="both">поставку и монтаж</option>
+                <option value="delivery">только поставку</option>
+                <option value="montage">только монтаж</option>
+              </select>
+            </label>
             <label>На дату <input type="date" id="side-dyn-date"/></label>
             <label>Период <input type="date" id="side-dyn-from"/><span>—</span><input type="date" id="side-dyn-to"/></label>
             <button type="button" class="link-btn" id="side-dyn-range-reset">весь проект</button>
@@ -3622,9 +3743,13 @@
       </div>
     </div>
     <div id="tab-filters" class="tab-panel">
-      <h3>Фильтры</h3>
-      <input type="text" id="mark-search-input" placeholder="Поиск марки…"/>
-      <div id="placement-filters"></div>
+      <!-- Обёртка нужна, чтобы блок фильтров переезжал в левую панель АРМ
+           прораба ЦЕЛИКОМ, одним узлом (см. app.js, setWorkspace). -->
+      <div id="filters-box">
+        <h3>Фильтры</h3>
+        <input type="text" id="mark-search-input" placeholder="Поиск марки…"/>
+        <div id="placement-filters"></div>
+      </div>
     </div>
     <div id="tab-view" class="tab-panel">
       <h3>Настройка отображения</h3>
@@ -5046,6 +5171,17 @@
         <!-- Период графика «Динамики» — тот же, что на панели «Статус»:
              масштаб оси X, а не пересчёт (отчётная дата и таблицы
              «план/факт/отклонение» от него не зависят). -->
+        <!-- Что показывает график (2026-08-14): поставку, монтаж или обе
+             пары кривых. Ряды сервер считает всегда все — это выбор
+             показываемого, а не пересчёт. -->
+        <label class="field" id="report-dyn-mode-box" style="display:none; margin:0">
+          Показывать
+          <select id="dyn-mode" style="width:auto">
+            <option value="both">Поставку и монтаж</option>
+            <option value="delivery">Только поставку</option>
+            <option value="montage">Только монтаж</option>
+          </select>
+        </label>
         <span id="report-period-box" style="display:none">
           Период <input type="date" id="dyn-from" style="width:auto"/>
           <span>—</span>
@@ -5347,7 +5483,21 @@
 <div class="modal-backdrop" id="schedule-import-backdrop">
   <div class="modal">
     <h2>Импорт графика MS Project из XLS</h2>
-    <p class="hint-text">Заполняет дату завершения СМР и начало СМР элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип.</p>
+    <p class="hint-text">Сопоставляется с изделиями по блоку Захватка/Кран/Стоянка/Этаж/Вид работ.</p>
+    <!-- Объект — явно (2026-08-14): раньше сопоставление шло по всей базе,
+         и со вторым зданием даты уехали бы в чужой дом молча. -->
+    <label class="field">Объект</label>
+    <select id="schedule-import-object"></select>
+    <!-- Базовый или актуализированный (совещание 2026-08-14). Базовый —
+         директивные даты, «когда надо»: он проставляется в сами изделия и
+         у объекта единственный. Актуализированный — прогноз, «насколько
+         отстаём»: копится версиями, полей изделия не трогает. -->
+    <label class="field">Вид графика</label>
+    <select id="schedule-import-kind">
+      <option value="baseline">Базовый (директивные даты изделий)</option>
+      <option value="current">Актуализированный (прогноз, новая версия)</option>
+    </select>
+    <div class="hint-text" id="schedule-import-kind-hint" style="margin:4px 0 8px"></div>
     <label class="field">Файл .xlsx (лист графика)</label>
     <input type="file" id="schedule-import-file" accept=".xlsx"/>
     <div class="import-template" data-template="schedule"></div>
@@ -5355,6 +5505,57 @@
     <div class="actions">
       <button class="btn btn-secondary" id="schedule-import-cancel">Отмена</button>
       <button class="btn btn-primary" id="schedule-import-submit">Импортировать</button>
+    </div>
+  </div>
+</div>
+
+<!-- График СМР (2026-08-14): версии, исходные данные расчёта, расчёт.
+     Три вкладки одной формы, а не три пункта меню: это один предмет —
+     график объекта, и переключаться между «какие версии есть», «из чего
+     считаем» и «посчитать» приходится в одной работе. -->
+<div class="modal-backdrop" id="schedule-backdrop">
+  <div class="modal wide">
+    <h2>График СМР</h2>
+    <div class="tabs" id="schedule-tabs">
+      <button type="button" class="tab-btn active" data-sched-tab="versions">Версии</button>
+      <button type="button" class="tab-btn" data-sched-tab="inputs">Исходные данные расчёта</button>
+      <button type="button" class="tab-btn" data-sched-tab="calc">Расчёт</button>
+    </div>
+    <div id="schedule-tab-versions" class="sched-panel">
+      <div id="schedule-versions-list"></div>
+    </div>
+    <div id="schedule-tab-inputs" class="sched-panel" style="display:none">
+      <p class="hint-text">Темп монтажа — изделий в сутки на один кран; порядок — очередь видов
+        работ внутри одного этажа стоянки; поток — очередь фронтов у крана. До 2026-08-14 эти
+        три величины заказчик вёл вручную в Excel-обработке.</p>
+      <h4>Виды работ: темп и порядок</h4>
+      <div id="schedule-kinds-box"></div>
+      <h4>Поток: очередь фронтов крана</h4>
+      <div id="schedule-flow-box"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="schedule-flow-autofill">Заполнить поток по модели</button>
+        <button class="btn btn-primary" id="schedule-inputs-save">Сохранить исходные данные</button>
+      </div>
+      <div id="schedule-inputs-status" class="hint-text"></div>
+    </div>
+    <div id="schedule-tab-calc" class="sched-panel" style="display:none">
+      <p class="hint-text">Считает даты по исходным данным и количествам из модели:
+        длительность работы = количество / темп, фронты идут в порядке потока встык,
+        краны работают параллельно, календарь семидневный. Результат сохраняется новой
+        версией прогноза.</p>
+      <label class="field">Дата начала работ</label>
+      <input type="date" id="schedule-calc-start" style="width:auto"/>
+      <label class="toggle" style="margin-top:8px">
+        <input type="checkbox" id="schedule-calc-skip-installed" checked/>
+        Считать от факта: смонтированные изделия не планировать заново
+      </label>
+      <div class="actions">
+        <button class="btn btn-primary" id="schedule-calc-run">Рассчитать и сохранить версию</button>
+      </div>
+      <div id="schedule-calc-status" class="hint-text"></div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="schedule-close">Закрыть</button>
     </div>
   </div>
 </div>

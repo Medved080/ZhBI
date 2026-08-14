@@ -164,6 +164,10 @@ class ElementDetailOut(ElementOut):
     # Контур — сам JSON наружу не отдаём (в форме от него толку нет, он
     # рисуется на схеме), но факт наличия геометрии и её объём показать надо.
     outline_points: Optional[int] = None
+    # Прогноз по последней актуализации графика и отклонение от директивных
+    # дат (2026-08-14, см. app/schedule_versions.py). None — актуализаций у
+    # объекта ещё нет либо это изделие в них не попало.
+    schedule_forecast: Optional[dict] = None
 
 
 class ContractWarning(BaseModel):
