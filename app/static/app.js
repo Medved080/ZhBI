@@ -17570,7 +17570,16 @@ function anChartHtml(dyn) {
   // height:auto — иначе фиксированная высота при width:100% растягивает
   // соотношение сторон, и SVG вписывается в кадр с пустыми полями по бокам
   // (поймано живой проверкой: график занимал половину ширины формы).
-  return `<div class="an-chart"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+  // Подсказка по точке — тем же механизмом, что у «Динамики»
+  // (registerChartHover): один обработчик на все графики сервиса.
+  const svg = registerChartHover(`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">`, {
+    L, R, T, B, width: W, height: H, maxY: максимум, weeks: dyn.weeks,
+    xLabel: (w) => `Неделя с ${formatDateRu(w)}`,
+    unit: "изд.",
+    series: ряды.map(р => ({ key: р.key, label: р.label, color: р.color,
+                             values: dyn.series[р.key] || [] })),
+  });
+  return `<div class="an-chart">${svg}
       <line x1="${L}" y1="${T}" x2="${L}" y2="${H - B}" stroke="#e6e9ee"/>
       <line x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}" stroke="#e6e9ee"/>
       <text x="4" y="${T + 8}" font-size="10" fill="#6b7280">${максимум}</text>
@@ -17952,6 +17961,107 @@ function forecastCoverageHtml(data) {
 // Ширина текста оценивается по числу знаков: измерить её в SVG до
 // отрисовки нечем, а оценка с запасом ошибается в безопасную сторону —
 // лишняя полка, а не наложение.
+// ==================== ПОДСКАЗКА ПО ТОЧКЕ ГРАФИКА ====================
+// (2026-08-14, живой запрос: «в ближайшей к курсору точке графика
+// показывать текущую позицию, рядом — подсказку с наименованием показателя
+// и значениями по осям»).
+//
+// Один механизм на все графики: строитель регистрирует ГЕОМЕТРИЮ своего
+// SVG (поля, масштаб, ряды), а слушатель — общий, на документе. Иначе
+// каждый график заводил бы свои обработчики и свою всплывающую панель, а
+// их уже два («Динамика» и «Аналитическая справка») и будет больше.
+//
+// Регистр слабый (WeakMap по узлу SVG): график перерисовывается на каждое
+// изменение отчёта, и держать записи по идентификаторам значило бы копить
+// мусор от каждой перерисовки.
+const chartRegistry = new WeakMap();
+
+// data: { L, R, T, B, width, height, maxY, weeks, series: [{key,label,color,values}] }
+function registerChartHover(svgMarkup, geo) {
+  // Разметка возвращается строкой и вставляется через innerHTML, поэтому
+  // узла ещё нет. Помечаем SVG и доносим геометрию через очередь — её
+  // разбирает первый же наведённый курсор (см. chartGeoFor).
+  pendingChartGeo.push(geo);
+  return svgMarkup.replace("<svg ", `<svg data-chart-hover="${pendingChartGeo.length - 1}" `);
+}
+const pendingChartGeo = [];
+
+function chartGeoFor(svg) {
+  let geo = chartRegistry.get(svg);
+  if (geo) return geo;
+  const индекс = Number(svg.dataset.chartHover);
+  geo = pendingChartGeo[индекс];
+  if (geo) chartRegistry.set(svg, geo);
+  return geo || null;
+}
+
+function chartTooltipEl() {
+  let el = document.getElementById("chart-tooltip");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "chart-tooltip";
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function hideChartTooltip() {
+  const el = document.getElementById("chart-tooltip");
+  if (el) el.style.display = "none";
+  document.querySelectorAll("[data-chart-cursor]").forEach(g => g.remove());
+}
+
+document.addEventListener("mousemove", (e) => {
+  const svg = e.target.closest ? e.target.closest("svg[data-chart-hover]") : null;
+  if (!svg) { hideChartTooltip(); return; }
+  const geo = chartGeoFor(svg);
+  if (!geo) return;
+  const rect = svg.getBoundingClientRect();
+  // Курсор — в единицы viewBox: SVG растянут по ширине контейнера, и
+  // экранные пиксели с координатами графика не совпадают.
+  const k = rect.width / geo.width;
+  const vx = (e.clientX - rect.left) / k;
+  const vy = (e.clientY - rect.top) / k;
+
+  const шагX = geo.weeks.length > 1
+    ? (geo.width - geo.L - geo.R) / (geo.weeks.length - 1) : 0;
+  let i = шагX ? Math.round((vx - geo.L) / шагX) : 0;
+  i = Math.max(0, Math.min(geo.weeks.length - 1, i));
+
+  const X = (n) => geo.L + (шагX ? n * шагX : 0);
+  const Y = (v) => geo.height - geo.B - (v / geo.maxY) * (geo.height - geo.T - geo.B);
+
+  // Ближайший ряд — по вертикали в той же неделе: горизонталь у всех
+  // одинаковая, и выбирать по ней было бы не из чего.
+  let лучший = null;
+  for (const ряд of geo.series) {
+    const v = ряд.values[i];
+    if (v === null || v === undefined) continue;
+    const d = Math.abs(Y(v) - vy);
+    if (!лучший || d < лучший.d) лучший = { ряд, v, d };
+  }
+  if (!лучший) { hideChartTooltip(); return; }
+
+  document.querySelectorAll("[data-chart-cursor]").forEach(g => g.remove());
+  const px = X(i), py = Y(лучший.v);
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  g.setAttribute("data-chart-cursor", "1");
+  g.innerHTML = `<line x1="${px}" y1="${geo.T}" x2="${px}" y2="${geo.height - geo.B}"
+      stroke="#8A94A0" stroke-width="1" stroke-dasharray="3 3"/>
+    <circle cx="${px}" cy="${py}" r="4" fill="#fff" stroke="${лучший.ряд.color}" stroke-width="2.5"/>`;
+  svg.appendChild(g);
+
+  const el = chartTooltipEl();
+  el.innerHTML = `<b>${escapeHtml(лучший.ряд.label)}</b>`
+    + `<div>${escapeHtml(geo.xLabel(geo.weeks[i]))}</div>`
+    + `<div><b>${pickerNumber(Math.round(лучший.v))}</b> ${escapeHtml(geo.unit || "изд.")}</div>`;
+  el.style.display = "block";
+  // Подсказка не должна уезжать за правый край окна — там её не прочитать.
+  const ширина = el.offsetWidth;
+  el.style.left = Math.min(e.clientX + 14, window.innerWidth - ширина - 8) + "px";
+  el.style.top = (e.clientY + 16) + "px";
+});
+
 // Ширина подписи в единицах viewBox. Меряется НАСТОЯЩИМ измерителем
 // (canvas), а не числом знаков: оценка «знак ≈ 5,4 px» занижала ширину
 // кириллицы, и подписи всё равно налезали друг на друга — поймано живой
@@ -18117,7 +18227,18 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
     lx += 34 + data.series_labels[key].length * 6.2;
   }
   parts.push("</svg>");
-  return parts.join("");
+  // Регистрируем геометрию для подсказки по точке (registerChartHover):
+  // ряды берутся ТЕ ЖЕ, что нарисованы, иначе подсказка показывала бы
+  // значение кривой, которой на графике нет.
+  return registerChartHover(parts.join(""), {
+    L, R, T, B, width, height, maxY, weeks,
+    xLabel: (w) => `Неделя с ${formatDateRu(w)}`,
+    unit: "изд.",
+    series: ряды.map(key => ({
+      key, label: data.series_labels[key], color: DYN_COLORS[key],
+      values: data.series[key] || [],
+    })),
+  });
 }
 
 function dynBlockTable(caption, block, note) {

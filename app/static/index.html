@@ -2319,6 +2319,16 @@
     background: var(--color-surface-2); border: 1px solid var(--color-border);
     border-radius: var(--radius); line-height: 1.6;
   }
+  /* Подсказка по точке графика (2026-08-14). В body, а не внутри формы:
+     иначе её обрезала бы прокрутка отчёта у самого края графика. */
+  #chart-tooltip {
+    position: fixed; z-index: 200; display: none; pointer-events: none;
+    background: var(--color-surface); color: var(--color-text);
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md); padding: 6px 9px; font-size: 12px; line-height: 1.45;
+    max-width: 260px;
+  }
+  #chart-tooltip b { font-weight: 600; }
   #report-help-body { max-width: 78ch; }
   #report-help-body h4 {
     font-size: 12px; margin: 16px 0 6px; text-transform: uppercase;
@@ -2905,7 +2915,14 @@
   #db-table-backdrop .modal-sticky-scroll, #reports-backdrop .modal-sticky-scroll {
     background: var(--color-surface-2);
     border-radius: var(--radius);
-    padding: 8px;
+    /* СВЕРХУ поля нет намеренно (2026-08-14, живой репорт: «заголовок
+       таблицы оказывается не над ней, а внутри неё, и строки видны и под
+       заголовком, и над ним»). Липкий заголовок (`th { top: 0 }`)
+       прилипает к ПОЛЕ ПРОКРУТКИ, то есть на 8 px ниже её верхнего края, —
+       и в эту щель было видно уезжающие строки. Воздух сверху даёт внешний
+       отступ самой области (.modal-sticky-scroll { margin: 10px 0 }), он
+       вне прокрутки и щели не создаёт. */
+    padding: 0 8px 8px;
   }
 
   /* --- образец 1: списки записей, где строка — запись --- */
