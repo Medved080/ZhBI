@@ -544,14 +544,23 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     # мы должны были быть», а «когда закончим, если пойдём темпом прогноза»,
     # — это и есть прогноз завершения. Отставание при этом не прячется: оно
     # видно как расстояние по горизонтали между прогнозом и планом.
-    for key, факт in (("forecast_montage", "fact_montage"),
-                      ("forecast_delivery", "fact_delivery")):
+    for key, факт, сырые in (("forecast_montage", "fact_montage", прогноз["end"]),
+                             ("forecast_delivery", "fact_delivery", прогноз["start"])):
         ряд = series[key]
         if not ряд or cut >= len(ряд):
             continue
         основание = series[факт][cut] if cut < len(series[факт]) else None
         сдвиг = (основание or 0) - (ряд[cut] or 0)
-        series[key] = [None if i < cut else (v or 0) + сдвиг for i, v in enumerate(ряд)]
+        # Справа кривая ОБРЫВАЕТСЯ на своей последней дате — так же, как факт
+        # обрывается на отчётной (2026-08-14, живой репорт: «почему монтаж
+        # практически прекращается»). Накопительный итог за последней датой
+        # версии держал горизонтальную полку, и она читалась как «работы
+        # встали», хотя означает ровно обратное: в прогнозе закончились
+        # изделия. Линия должна кончаться там, где кончаются данные.
+        последняя = _week_start(max(d for d, _ in сырые)) if сырые else None
+        предел = weeks.index(последняя) if последняя in weeks else len(ряд) - 1
+        series[key] = [None if i < cut or i > предел else (v or 0) + сдвиг
+                       for i, v in enumerate(ряд)]
 
     # Период графика (живой запрос 2026-08-03: «в отчёт динамики добавь
     # интервал дат аналогичный тому что сделан … в правой панели») — это
@@ -630,6 +639,12 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
             "delivery": sum(n for _, n in raw_days["plan_delivery"]),
             "total": total,
         },
+        # Сколько изделий покрывает прогноз. Меньше общего — законно (изделие
+        # без привязки к крану, стоянке или этажу в расчёт не встаёт,
+        # смонтированные исключаются при пересчёте от факта), но об этом
+        # нужно СКАЗАТЬ: иначе кривая, не дорастающая до полного объёма,
+        # читается как «монтаж прекратился».
+        "forecast_coverage": {"elements": прогноз.get("elements", 0), "total": total},
     }
 
 
