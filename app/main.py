@@ -153,6 +153,7 @@ from app.models import (
 )
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
+from app.schedule_calc import router as schedule_calc_router
 from app.schedule_versions import element_deviation
 from app.schedule_versions import router as schedule_versions_router
 from app.admin_guide import router as admin_guide_router
@@ -273,6 +274,7 @@ app.include_router(fill_scope_router)
 app.include_router(contracts_router)
 app.include_router(supplier_change_router)
 app.include_router(schedule_versions_router)
+app.include_router(schedule_calc_router)
 app.include_router(counterparties_router)
 app.include_router(marks_router)
 app.include_router(dict_delete_router)

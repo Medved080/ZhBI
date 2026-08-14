@@ -22728,3 +22728,196 @@ document.getElementById("transfer-apply").addEventListener("click", async () => 
   }
 });
 
+
+// ==================== ГРАФИК СМР: ВЕРСИИ, ИСХОДНЫЕ ДАННЫЕ, РАСЧЁТ ==========
+// (2026-08-14, совещание — блоки E1/E4/E5)
+//
+// Одна форма на три вкладки: «какие версии есть», «из чего считаем» и
+// «посчитать». Разносить их по трём пунктам меню смысла нет — в одной работе
+// между ними ходят туда-обратно.
+const scheduleBackdrop = document.getElementById("schedule-backdrop");
+let scheduleInputs = null;   // {work_kinds, flow} — снимок на время открытой формы
+
+document.getElementById("menu-schedule").addEventListener("click", async () => {
+  scheduleBackdrop.classList.add("open");
+  switchScheduleTab("versions");
+  document.getElementById("schedule-calc-status").textContent = "";
+  document.getElementById("schedule-inputs-status").textContent = "";
+  await Promise.all([loadScheduleVersions(), loadScheduleInputs()]);
+});
+document.getElementById("schedule-close").addEventListener("click",
+  () => scheduleBackdrop.classList.remove("open"));
+
+function switchScheduleTab(name) {
+  document.querySelectorAll("#schedule-tabs .tab-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.schedTab === name));
+  for (const key of ["versions", "inputs", "calc"]) {
+    document.getElementById(`schedule-tab-${key}`).style.display = key === name ? "" : "none";
+  }
+}
+document.querySelectorAll("#schedule-tabs .tab-btn").forEach(btn =>
+  btn.addEventListener("click", () => switchScheduleTab(btn.dataset.schedTab)));
+
+async function loadScheduleVersions() {
+  const box = document.getElementById("schedule-versions-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const data = await api(`/schedule-versions?object_id=${state.objectId}`);
+    if (!data.versions.length) {
+      box.innerHTML = '<div class="hint-text">Версий графика ещё нет. Базовый график '
+        + 'загружается через «Обмен данными → Импорт графика MS Project из XLS», '
+        + 'актуализированный — там же или расчётом на вкладке «Расчёт».</div>';
+      return;
+    }
+    box.innerHTML = `<table class="dict-table">
+      <tr><th>Вид</th><th>Название</th><th>Изделий</th><th>Откуда</th><th>Загружена</th><th>Кто</th><th></th></tr>
+      ${data.versions.map(v => `<tr>
+        <td>${escapeHtml(v.kind_label)}</td>
+        <td>${escapeHtml(v.title || "—")}${v.id === data.current_id
+          ? ' <span class="hint-text">· текущий прогноз</span>' : ""}</td>
+        <td class="num">${v.elements}</td>
+        <td>${v.origin === "calc" ? "расчёт системы" : escapeHtml(v.source_file || "файл")}</td>
+        <td>${escapeHtml(formatMomentRu(v.loaded_at))}</td>
+        <td>${escapeHtml(v.loaded_by || "—")}</td>
+        <td><button class="link-btn" data-del-version="${v.id}">удалить</button></td>
+      </tr>`).join("")}
+    </table>`;
+    box.querySelectorAll("[data-del-version]").forEach(btn => btn.addEventListener("click", async () => {
+      if (!confirm("Удалить эту версию графика? Даты изделий при этом не меняются.")) return;
+      try {
+        await api(`/schedule-versions/${btn.dataset.delVersion}`, { method: "DELETE" });
+        await loadScheduleVersions();
+        // Отклонение и кривая прогноза считались по этой версии — пересчитать.
+        scheduleSidebarReports();
+      } catch (e) { showToast(e.message, "error"); }
+    }));
+  } catch (e) {
+    box.innerHTML = `<div class="error-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadScheduleInputs() {
+  try {
+    scheduleInputs = await api(`/schedule-calc/inputs?object_id=${state.objectId}`);
+  } catch (e) {
+    scheduleInputs = null;
+    document.getElementById("schedule-kinds-box").innerHTML =
+      `<div class="error-text">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  renderScheduleInputs();
+}
+
+// Строки берутся из модели (виды работ и фронты, которые в ней реально
+// есть) и дополняются уже сохранённой настройкой — набивать их руками,
+// гадая о сочетаниях, не нужно. Строка, которой в модели больше нет,
+// помечается: зона могла исчезнуть при переимпорте чертежа, и молча
+// пропасть из настройки она не должна.
+function renderScheduleInputs() {
+  const d = scheduleInputs;
+  const пометка = (r) => r.in_model ? "" : ' <span class="hint-text">· нет в модели</span>';
+  document.getElementById("schedule-kinds-box").innerHTML = `<table class="dict-table">
+    <tr><th>Тип</th><th>Подтип</th><th>Изделий</th><th>Темп, шт/сутки</th><th>Порядок</th></tr>
+    ${d.work_kinds.map((r, i) => `<tr>
+      <td>${escapeHtml(r.element_type)}${пометка(r)}</td>
+      <td>${escapeHtml(r.subtype || "—")}</td>
+      <td class="num">${r.quantity}</td>
+      <td><input type="number" step="0.1" min="0" style="width:80px"
+                 data-kind="${i}" data-field="rate_per_day"
+                 value="${r.rate_per_day === null || r.rate_per_day === undefined ? "" : r.rate_per_day}"/></td>
+      <td><input type="number" step="1" min="0" style="width:70px"
+                 data-kind="${i}" data-field="order_no"
+                 value="${r.order_no === null || r.order_no === undefined ? "" : r.order_no}"/></td>
+    </tr>`).join("")}
+  </table>`;
+  document.getElementById("schedule-flow-box").innerHTML = `<table class="dict-table">
+    <tr><th>Кран</th><th>Стоянка</th><th>Этаж</th><th>Изделий</th><th>Порядок</th></tr>
+    ${d.flow.map((r, i) => `<tr>
+      <td>${escapeHtml(r.crane_name)}${пометка(r)}</td>
+      <td>${escapeHtml(r.stance_name)}</td>
+      <td class="num">${r.floor}</td>
+      <td class="num">${r.quantity}</td>
+      <td><input type="number" step="1" min="0" style="width:70px"
+                 data-flow="${i}" data-field="order_no"
+                 value="${r.order_no === null || r.order_no === undefined ? "" : r.order_no}"/></td>
+    </tr>`).join("")}
+  </table>`;
+  const собрать = (e) => {
+    const строка = e.target.dataset.kind !== undefined
+      ? scheduleInputs.work_kinds[Number(e.target.dataset.kind)]
+      : scheduleInputs.flow[Number(e.target.dataset.flow)];
+    const значение = e.target.value === "" ? null : Number(e.target.value);
+    строка[e.target.dataset.field] = значение;
+  };
+  document.querySelectorAll("#schedule-kinds-box input, #schedule-flow-box input")
+    .forEach(inp => inp.addEventListener("change", собрать));
+}
+
+// «Заполнить поток по модели» — порядок фронтов по номерам стоянок и этажей
+// внутри каждого крана. Это ЧЕРНОВИК, а не истина: реальную очередь знает
+// прораб, и он её поправит. Но набивать две сотни номеров с нуля руками —
+// работа, ради которой инструмент и делается.
+document.getElementById("schedule-flow-autofill").addEventListener("click", () => {
+  if (!scheduleInputs) return;
+  const номер = (текст) => {
+    const m = String(текст).match(/(\d+)\s*$/);
+    return m ? Number(m[1]) : 0;
+  };
+  const по_кранам = {};
+  for (const r of scheduleInputs.flow) (по_кранам[r.crane_name] ||= []).push(r);
+  for (const строки of Object.values(по_кранам)) {
+    строки.sort((a, b) => номер(a.stance_name) - номер(b.stance_name) || a.floor - b.floor);
+    строки.forEach((r, i) => { r.order_no = i + 1; });
+  }
+  renderScheduleInputs();
+  document.getElementById("schedule-inputs-status").textContent =
+    "Поток заполнен по номерам стоянок и этажей — проверьте и сохраните.";
+});
+
+document.getElementById("schedule-inputs-save").addEventListener("click", async () => {
+  const status = document.getElementById("schedule-inputs-status");
+  status.textContent = "Сохранение…";
+  try {
+    const итог = await api("/schedule-calc/inputs", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        object_id: state.objectId,
+        work_kinds: scheduleInputs.work_kinds.map(r => ({
+          element_type: r.element_type, subtype: r.subtype,
+          rate_per_day: r.rate_per_day, order_no: r.order_no,
+        })),
+        flow: scheduleInputs.flow.map(r => ({
+          crane_name: r.crane_name, stance_name: r.stance_name,
+          floor: r.floor, order_no: r.order_no,
+        })),
+      }),
+    });
+    status.textContent = `Сохранено: видов работ ${итог.work_kinds}, фронтов ${итог.flow}.`;
+  } catch (e) {
+    status.textContent = e.message;
+  }
+});
+
+document.getElementById("schedule-calc-run").addEventListener("click", async () => {
+  const status = document.getElementById("schedule-calc-status");
+  const start = document.getElementById("schedule-calc-start").value;
+  if (!start) { status.textContent = "Укажите дату начала работ"; return; }
+  status.textContent = "Расчёт…";
+  try {
+    const итог = await api("/schedule-calc", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        object_id: state.objectId, start_date: start,
+        skip_installed: document.getElementById("schedule-calc-skip-installed").checked,
+      }),
+    });
+    status.textContent = `Готово: фронтов ${итог.fronts}, изделий ${итог.elements}, `
+      + `сроки с ${formatDateRu(итог.first_date)} по ${formatDateRu(итог.last_date)}.`
+      + (итог.warnings.length ? ` ${итог.warnings.join(" ")}` : "");
+    await loadScheduleVersions();
+    switchScheduleTab("versions");
+    scheduleSidebarReports();
+  } catch (e) {
+    status.textContent = e.message;
+  }
+});

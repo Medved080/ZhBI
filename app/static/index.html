@@ -757,6 +757,21 @@
      своего типа, иначе форма растягивается на несколько экранов и подтипы
      соседнего типа уезжают из виду. */
   .marks-scroll { max-height: 240px; overflow-y: auto; }
+  /* Таблицы формы «График СМР» (2026-08-14) — та же вёрстка, что у марок
+     (это такой же плотный список со строчными полями ввода), и та же
+     прокрутка внутри своей области: видов работ полтора десятка, а фронтов
+     потока — две сотни, и без неё форма растянулась бы на пять экранов. */
+  .sched-panel .dict-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .sched-panel .dict-table th {
+    text-align: left; font-weight: 600; color: var(--color-text-muted);
+    padding: 2px 6px 4px 0; position: sticky; top: 0; background: var(--color-surface);
+  }
+  .sched-panel .dict-table td { padding: 2px 6px 2px 0; vertical-align: middle; }
+  .sched-panel .dict-table td.num { text-align: right; width: 72px; color: var(--color-text-muted); }
+  .sched-panel h4 { font-size: 12px; margin: 14px 0 6px; }
+  #schedule-kinds-box, #schedule-flow-box, #schedule-versions-list {
+    max-height: 300px; overflow-y: auto;
+  }
 
   /* -------- диалог удаления записи справочника -------- */
   /* ВЫШЕ остальных модальных окон (z-index у них 100): удаление всегда
@@ -3212,6 +3227,11 @@
           <button type="button" class="submenu-trigger">Документы</button>
           <div class="dropdown-menu submenu-panel">
             <button id="menu-supplier-change" class="object-contract-only">Смена поставщика</button>
+            <!-- График СМР (2026-08-14): версии, исходные данные расчёта и
+                 сам расчёт. В «Документах», а не в «Обмене данными»: загрузка
+                 файла — лишь один из способов, каким график появляется, а
+                 сущность здесь — сам график объекта. -->
+            <button id="menu-schedule" class="object-admin-only">График СМР</button>
           </div>
         </div>
         <!-- Класс гашения — на КАЖДОМ пункте, а не на группе: часть
@@ -5357,6 +5377,57 @@
     <div class="actions">
       <button class="btn btn-secondary" id="schedule-import-cancel">Отмена</button>
       <button class="btn btn-primary" id="schedule-import-submit">Импортировать</button>
+    </div>
+  </div>
+</div>
+
+<!-- График СМР (2026-08-14): версии, исходные данные расчёта, расчёт.
+     Три вкладки одной формы, а не три пункта меню: это один предмет —
+     график объекта, и переключаться между «какие версии есть», «из чего
+     считаем» и «посчитать» приходится в одной работе. -->
+<div class="modal-backdrop" id="schedule-backdrop">
+  <div class="modal wide">
+    <h2>График СМР</h2>
+    <div class="tabs" id="schedule-tabs">
+      <button type="button" class="tab-btn active" data-sched-tab="versions">Версии</button>
+      <button type="button" class="tab-btn" data-sched-tab="inputs">Исходные данные расчёта</button>
+      <button type="button" class="tab-btn" data-sched-tab="calc">Расчёт</button>
+    </div>
+    <div id="schedule-tab-versions" class="sched-panel">
+      <div id="schedule-versions-list"></div>
+    </div>
+    <div id="schedule-tab-inputs" class="sched-panel" style="display:none">
+      <p class="hint-text">Темп монтажа — изделий в сутки на один кран; порядок — очередь видов
+        работ внутри одного этажа стоянки; поток — очередь фронтов у крана. До 2026-08-14 эти
+        три величины заказчик вёл вручную в Excel-обработке.</p>
+      <h4>Виды работ: темп и порядок</h4>
+      <div id="schedule-kinds-box"></div>
+      <h4>Поток: очередь фронтов крана</h4>
+      <div id="schedule-flow-box"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="schedule-flow-autofill">Заполнить поток по модели</button>
+        <button class="btn btn-primary" id="schedule-inputs-save">Сохранить исходные данные</button>
+      </div>
+      <div id="schedule-inputs-status" class="hint-text"></div>
+    </div>
+    <div id="schedule-tab-calc" class="sched-panel" style="display:none">
+      <p class="hint-text">Считает даты по исходным данным и количествам из модели:
+        длительность работы = количество / темп, фронты идут в порядке потока встык,
+        краны работают параллельно, календарь семидневный. Результат сохраняется новой
+        версией прогноза.</p>
+      <label class="field">Дата начала работ</label>
+      <input type="date" id="schedule-calc-start" style="width:auto"/>
+      <label class="toggle" style="margin-top:8px">
+        <input type="checkbox" id="schedule-calc-skip-installed" checked/>
+        Считать от факта: смонтированные изделия не планировать заново
+      </label>
+      <div class="actions">
+        <button class="btn btn-primary" id="schedule-calc-run">Рассчитать и сохранить версию</button>
+      </div>
+      <div id="schedule-calc-status" class="hint-text"></div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="schedule-close">Закрыть</button>
     </div>
   </div>
 </div>
