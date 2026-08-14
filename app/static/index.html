@@ -5620,6 +5620,18 @@
       <div id="schedule-kinds-box"></div>
       <h4>Поток: очередь фронтов крана</h4>
       <div id="schedule-flow-box"></div>
+      <!-- Загрузка из Excel-обработки заказчика (2026-08-14, живой запрос:
+           «сделай возможность загрузить настройки очерёдности и
+           производительности из того файла, что я давал»). Читаются листы
+           «hide» / «02_Technology» (темп и порядок) и «03_Flow» (поток);
+           значения подставляются В ФОРМУ, запись — по кнопке «Сохранить»:
+           файл описывает расчёт заказчика, а не обязательно то, что должно
+           лежать в системе. -->
+      <label class="field" style="margin-top:10px">Загрузить из файла обработки (.xlsx)</label>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <input type="file" id="schedule-inputs-file" accept=".xlsx"/>
+        <button class="btn btn-sm btn-secondary" id="schedule-inputs-load">Прочитать файл</button>
+      </div>
       <div class="actions">
         <button class="btn btn-secondary" id="schedule-flow-autofill">Заполнить поток по модели</button>
         <button class="btn btn-primary" id="schedule-inputs-save">Сохранить исходные данные</button>

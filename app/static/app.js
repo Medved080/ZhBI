@@ -23787,6 +23787,60 @@ document.getElementById("schedule-flow-autofill").addEventListener("click", () =
     "Поток заполнен по номерам стоянок и этажей — проверьте и сохраните.";
 });
 
+// Чтение обработки заказчика (2026-08-14). Значения ПОДСТАВЛЯЮТСЯ в форму,
+// а не пишутся в базу: файл описывает его расчёт, и человек должен увидеть
+// темпы рядом с количествами из модели, прежде чем согласиться.
+//
+// Строки сопоставляются по ключу: вид работ — по паре тип+подтип, фронт —
+// по крану, стоянке и этажу. Чего в модели нет, добавляется отдельной
+// строкой с пометкой «нет в модели»: молча выбросить строку из файла —
+// значит потерять данные, о которых человек не узнает.
+document.getElementById("schedule-inputs-load").addEventListener("click", async () => {
+  const status = document.getElementById("schedule-inputs-status");
+  const file = document.getElementById("schedule-inputs-file").files[0];
+  if (!file) { status.textContent = "Сначала выберите файл .xlsx"; return; }
+  status.textContent = "Чтение файла…";
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("object_id", state.objectId);
+  try {
+    const res = await fetch("/schedule-calc/inputs/parse", { method: "POST", body: formData });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) { status.textContent = (body && body.detail) || `Ошибка ${res.status}`; return; }
+
+    const ключВида = (r) => `${r.element_type}\u0000${r.subtype || ""}`;
+    const поВиду = new Map(scheduleInputs.work_kinds.map(r => [ключВида(r), r]));
+    let обновлено = 0, добавлено = 0;
+    for (const r of body.work_kinds) {
+      const свой = поВиду.get(ключВида(r));
+      if (свой) {
+        if (r.rate_per_day !== null) свой.rate_per_day = r.rate_per_day;
+        if (r.order_no !== null) свой.order_no = r.order_no;
+        обновлено++;
+      } else {
+        scheduleInputs.work_kinds.push({ ...r, quantity: 0, in_model: false });
+        добавлено++;
+      }
+    }
+    const ключФронта = (r) => `${r.crane_name}\u0000${r.stance_name}\u0000${r.floor}`;
+    const поФронту = new Map(scheduleInputs.flow.map(r => [ключФронта(r), r]));
+    let фронтов = 0, новых = 0;
+    for (const r of body.flow) {
+      const свой = поФронту.get(ключФронта(r));
+      if (свой) { свой.order_no = r.order_no; фронтов++; }
+      else { scheduleInputs.flow.push({ ...r, quantity: 0, in_model: false }); новых++; }
+    }
+    renderScheduleInputs();
+    status.textContent = `Прочитано: ${body.sheets.join(", ")}. `
+      + `Видов работ обновлено ${обновлено}${добавлено ? `, добавлено ${добавлено}` : ""}; `
+      + `фронтов потока ${фронтов}${новых ? `, добавлено ${новых}` : ""}. `
+      + `Проверьте значения и нажмите «Сохранить исходные данные».`
+      + (body.warnings.length ? ` ${body.warnings.join(" ")}` : "");
+  } catch (e) {
+    status.textContent = "Не удалось связаться с сервером: " + e.message;
+  }
+});
+
 document.getElementById("schedule-inputs-save").addEventListener("click", async () => {
   const status = document.getElementById("schedule-inputs-status");
   status.textContent = "Сохранение…";

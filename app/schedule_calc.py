@@ -37,11 +37,13 @@ Docs/requirements-2026-08-14.md) и проверена на них же: из 66
 участвует в отклонении и в кривой прогноза.
 """
 
+import io
+import re
 import sqlite3
 from datetime import date, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app import activity
@@ -201,6 +203,214 @@ class ScheduleCalcError(Exception):
 
 
 # ---------------------------------------------------------------- эндпоинты
+
+# ---------------------------------------- загрузка исходных данных файлом
+#
+# Заказчик ведёт эти три величины в своей Excel-обработке (Power Query,
+# «!_Обработка данных из WEB.xlsx») и присылает её целиком. Набивать полтора
+# десятка темпов и две сотни строк потока руками, когда файл уже есть, —
+# работа ради работы, поэтому форма умеет читать его напрямую.
+#
+# Колонки ищутся ПО ЗАГОЛОВКАМ, а не по номерам: на листе `hide` полезные
+# данные начинаются с четвёртой колонки, а первая занята другим списком, и
+# любой сдвиг при правке файла молча увёл бы разбор не туда.
+#
+# Читаются четыре листа, каждый по отдельности и каждый необязателен:
+#   `hide`           — темп и порядок монтажа (основной источник);
+#   `02_Technology`  — порядок монтажа (если на `hide` его нет);
+#   `01_WBS`         — темп (запасной источник: там он проставлен построчно);
+#   `03_Flow`        — поток: кран, стоянка, этаж, порядок.
+# Файл без единого узнанного листа отвергается: молча загрузить «ничего» —
+# худший исход, человек будет думать, что данные приняты.
+
+WORK_KIND_SHEETS = ("hide", "02_Technology", "01_WBS")
+FLOW_SHEET = "03_Flow"
+
+
+def _find_header(ws, нужные: set, предел: int = 20):
+    """Строка заголовков и карта «имя колонки → СПИСОК индексов».
+
+    Именно список: на листе `hide` заголовок «Элемент» встречается ДВАЖДЫ —
+    в первой колонке лежит посторонний алфавитный список, а рабочие данные
+    начинаются с четвёртой. Взять первое попавшееся вхождение значит увести
+    темпы и порядок к чужим видам работ (поймано при проверке на файле
+    заказчика: «Колонна верхняя» получала темп «Колонны нижней»).
+
+    Возвращает (номер строки, карта) или (None, None).
+    """
+    for номер, строка in enumerate(ws.iter_rows(values_only=True), start=1):
+        if номер > предел:
+            break
+        карта = {}
+        for i, значение in enumerate(строка):
+            if значение is None:
+                continue
+            имя = re.sub(r"\s+", " ", str(значение)).strip()
+            if имя:
+                карта.setdefault(имя, []).append(i)
+        if нужные <= set(карта):
+            return номер, карта
+    return None, None
+
+
+def _column_left_of(карта: dict, имя: str, границы: list) -> Optional[int]:
+    """Колонка `имя`, ближайшая СЛЕВА к своим данным.
+
+    Из нескольких одноимённых колонок берётся последняя перед первой из
+    колонок-«границ» (Темп, Порядок): в таблице подпись стоит слева от
+    чисел, к которым относится.
+    """
+    индексы = карта.get(имя) or []
+    if not индексы:
+        return None
+    предел = min(границы) if границы else None
+    if предел is None:
+        return индексы[0]
+    слева = [i for i in индексы if i < предел]
+    return max(слева) if слева else индексы[0]
+
+
+def _rows_after(ws, номер_заголовка: int):
+    for номер, строка in enumerate(ws.iter_rows(values_only=True), start=1):
+        if номер > номер_заголовка:
+            yield строка
+
+
+def parse_inputs_xlsx(content: bytes) -> dict:
+    """Разобрать обработку заказчика. Ничего не пишет в базу."""
+    from openpyxl import load_workbook
+
+    from app.schedule_import import TYPE_SUBTYPE_ALIASES, _normalize_type_subtype
+
+    try:
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise ScheduleCalcError("Файл повреждён или не является корректным .xlsx")
+
+    предупреждения = []
+    не_узнаны = set()
+    виды = {}     # (тип, подтип) -> {"rate", "order"}
+    листы = []
+
+    def вид_работ(значение):
+        """Текст вида работ → (тип, подтип) по тому же закрытому списку, что
+        и импорт графика: нераспознанное не угадывается, а перечисляется."""
+        имя = _normalize_type_subtype(str(значение))
+        пара = TYPE_SUBTYPE_ALIASES.get(имя)
+        if пара is None:
+            не_узнаны.add(имя)
+        return пара
+
+    for имя_листа in WORK_KIND_SHEETS:
+        if имя_листа not in wb.sheetnames:
+            continue
+        ws = wb[имя_листа]
+        # На «hide» и «02_Technology» колонка называется «Элемент», на
+        # «01_WBS» — тоже; различаются наборы соседних колонок.
+        номер, карта = _find_header(ws, {"Элемент"})
+        if номер is None:
+            continue
+        кол_темп = (карта.get("Темп") or [None])[0]
+        имя_порядка = next((k for k in ("Порядок монтажа", "Порядок") if k in карта), None)
+        кол_порядок = карта[имя_порядка][0] if имя_порядка else None
+        if кол_темп is None and кол_порядок is None:
+            continue
+        # Колонка с названием вида работ — та, что относится к этим числам
+        # (ближайшая слева), а не первая одноимённая на листе.
+        кол_вид = _column_left_of(карта, "Элемент",
+                                  [i for i in (кол_темп, кол_порядок) if i is not None])
+        if кол_вид is None:
+            continue
+        прочитано = 0
+        for строка in _rows_after(ws, номер):
+            сырое = строка[кол_вид] if кол_вид < len(строка) else None
+            if сырое is None or not str(сырое).strip():
+                continue
+            пара = вид_работ(сырое)
+            if пара is None:
+                continue
+            запись = виды.setdefault(пара, {"rate": None, "order": None})
+            if кол_темп is not None and кол_темп < len(строка):
+                темп = строка[кол_темп]
+                if isinstance(темп, (int, float)) and темп > 0 and запись["rate"] is None:
+                    запись["rate"] = float(темп)
+            if кол_порядок is not None and кол_порядок < len(строка):
+                порядок = строка[кол_порядок]
+                if isinstance(порядок, (int, float)) and запись["order"] is None:
+                    запись["order"] = int(порядок)
+            прочитано += 1
+        if прочитано:
+            листы.append(f"«{имя_листа}» — строк {прочитано}")
+
+    поток = []
+    if FLOW_SHEET in wb.sheetnames:
+        ws = wb[FLOW_SHEET]
+        номер, карта = _find_header(ws, {"Кран", "Стоянка", "Этаж", "Порядок"})
+        if номер is not None:
+            for строка in _rows_after(ws, номер):
+                def значение(имя):
+                    i = карта[имя][0]
+                    return строка[i] if i < len(строка) else None
+                кран, стоянка, этаж, порядок = (значение("Кран"), значение("Стоянка"),
+                                                значение("Этаж"), значение("Порядок"))
+                if not кран or not стоянка or этаж is None:
+                    continue
+                try:
+                    поток.append({
+                        "crane_name": str(кран).strip(),
+                        "stance_name": str(стоянка).strip(),
+                        "floor": int(str(этаж).strip()),
+                        "order_no": int(порядок) if isinstance(порядок, (int, float)) else None,
+                    })
+                except (TypeError, ValueError):
+                    continue
+            if поток:
+                листы.append(f"«{FLOW_SHEET}» — фронтов {len(поток)}")
+
+    if not виды and not поток:
+        raise ScheduleCalcError(
+            "В файле не нашлось ни темпов, ни порядка, ни потока. Ожидаются листы "
+            "«hide» или «02_Technology» (колонки «Элемент», «Темп», «Порядок монтажа») "
+            "и «03_Flow» (колонки «Кран», «Стоянка», «Этаж», «Порядок»).")
+    if не_узнаны:
+        предупреждения.append(
+            "Не распознаны виды работ (строки пропущены): "
+            + ", ".join(sorted(не_узнаны)[:10])
+            + (f" и ещё {len(не_узнаны) - 10}" if len(не_узнаны) > 10 else ""))
+
+    return {
+        "work_kinds": [
+            {"element_type": t, "subtype": st,
+             "rate_per_day": v["rate"], "order_no": v["order"]}
+            for (t, st), v in виды.items()
+        ],
+        "flow": поток,
+        "sheets": листы,
+        "warnings": предупреждения,
+    }
+
+
+@router.post("/inputs/parse")
+def parse_inputs(object_id: int = Form(...), file: UploadFile = File(...),
+                 user: sqlite3.Row = Depends(get_current_user)):
+    """Разобрать файл обработки и вернуть значения В ФОРМУ, не записывая.
+
+    Не сохраняем сразу намеренно: файл заказчика описывает его расчёт, а не
+    обязательно то, что должно лежать в системе, — человек должен увидеть
+    числа рядом с количествами из модели и нажать «Сохранить».
+    """
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "schedule", "write")
+    finally:
+        conn.close()
+    from app.upload_limits import read_upload_limited
+    content = read_upload_limited(file.file)
+    try:
+        return parse_inputs_xlsx(content)
+    except ScheduleCalcError as e:
+        raise HTTPException(status_code=422, detail=e.message)
+
 
 @router.get("/inputs")
 def get_inputs(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
