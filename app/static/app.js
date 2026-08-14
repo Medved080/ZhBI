@@ -706,8 +706,14 @@ async function applyRolePermissions() {
   // обслуживание сервиса, а не работа на стройке, и настраивать в них
   // нечего.
   document.querySelectorAll("#settings-menu [data-feature]").forEach(elm => {
-    const доступно = can(elm.dataset.feature, elm.dataset.featureKind || "write");
-    elm.style.display = доступно ? "" : "none";
+    // Разделов у пункта может быть НЕСКОЛЬКО через запятую — тогда пункт
+    // виден, если открыт хотя бы один. Так устроена «Смена поставщика»:
+    // одна форма ведёт два вида документа («Замена поставщика» и «Обмен
+    // привязками»), у каждого свой раздел, и доверить их можно разным
+    // людям.
+    const разделы = elm.dataset.feature.split(",").map(k => k.trim()).filter(Boolean);
+    const вид = elm.dataset.featureKind || "write";
+    elm.style.display = разделы.some(k => can(k, вид)) ? "" : "none";
   });
   document.querySelectorAll("#settings-menu .admin-only").forEach(elm => {
     elm.style.display = системнаяРоль === "admin" ? "" : "none";
