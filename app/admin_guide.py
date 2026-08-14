@@ -35,7 +35,7 @@ from fastapi import APIRouter, Depends, Response
 from urllib.parse import quote
 
 import app.db as _db
-from app.access import require_system_admin
+from app.access import require_service_feature
 from app.changelog import CHANGELOG
 from app.ldap_auth import load_config as _ldap_config
 from app.upload_limits import MAX_UPLOAD_MB
@@ -426,12 +426,12 @@ def as_markdown() -> str:
 
 
 @router.get("/admin-guide")
-def read_admin_guide(admin: sqlite3.Row = Depends(require_system_admin)):
+def read_admin_guide(admin: sqlite3.Row = Depends(require_service_feature("admin_guide", "read"))):
     return guide()
 
 
 @router.get("/admin-guide.md")
-def download_admin_guide(admin: sqlite3.Row = Depends(require_system_admin)):
+def download_admin_guide(admin: sqlite3.Row = Depends(require_service_feature("admin_guide", "read"))):
     имя = "Памятка администратора ЖБИ.md"
     return Response(
         content=as_markdown(),

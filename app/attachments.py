@@ -31,7 +31,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 
 from app import activity
-from app.access import assert_object_access, is_system_admin, require_system_admin
+from app.access import assert_object_feature, is_system_admin, require_system_admin
 from app.auth import audit_display_name, get_current_user
 from app.db import get_connection
 from app.upload_limits import read_upload_limited
@@ -56,7 +56,13 @@ def _object_of(conn, entity_type: str, entity_id: int) -> Optional[int]:
     return None
 
 
-def _guard(conn, user, entity_type: str, entity_id: int, minimum: str) -> None:
+def _guard(conn, user, entity_type: str, entity_id: int, key: str, kind: str) -> None:
+    """Доступ к вложению по его владельцу.
+
+    Порог берётся из настройки разделов (2026-08-14), а не из буквы в коде:
+    `key` — раздел («attachments» на чтение и добавление,
+    «attachments_delete» на удаление), `kind` — read или write.
+    """
     if entity_type not in ENTITY_TYPES:
         raise HTTPException(status_code=400, detail=f"Неизвестный вид сущности «{entity_type}»")
     if entity_type == "project":
@@ -78,7 +84,7 @@ def _guard(conn, user, entity_type: str, entity_id: int, minimum: str) -> None:
                 detail=f"{ENTITY_LABELS[entity_type].capitalize()} не найден",
             )
         return
-    assert_object_access(conn, user, object_id, minimum)
+    assert_object_feature(conn, user, object_id, key, kind)
 
 
 def _row_out(row: sqlite3.Row) -> dict:
@@ -177,7 +183,7 @@ def list_attachments(entity_type: str = Query(...), entity_id: int = Query(...),
                      user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        _guard(conn, user, entity_type, entity_id, "view")
+        _guard(conn, user, entity_type, entity_id, "attachments", "read")
         return {"attachments": list_for(conn, entity_type, entity_id)}
     finally:
         conn.close()
@@ -193,7 +199,7 @@ def upload_attachment(
 ):
     conn = get_connection()
     try:
-        _guard(conn, user, entity_type, entity_id, "user")
+        _guard(conn, user, entity_type, entity_id, "attachments", "write")
     finally:
         conn.close()
 
@@ -238,7 +244,7 @@ def download_attachment(attachment_id: int, user: sqlite3.Row = Depends(get_curr
         row = conn.execute("SELECT * FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Вложение не найдено")
-        _guard(conn, user, row["entity_type"], row["entity_id"], "view")
+        _guard(conn, user, row["entity_type"], row["entity_id"], "attachments", "read")
     finally:
         conn.close()
 
@@ -262,7 +268,7 @@ def delete_attachment(attachment_id: int, user: sqlite3.Row = Depends(get_curren
         row = conn.execute("SELECT * FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Вложение не найдено")
-        _guard(conn, user, row["entity_type"], row["entity_id"], "admin")
+        _guard(conn, user, row["entity_type"], row["entity_id"], "attachments_delete", "write")
         conn.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
         conn.commit()
         итог = list_for(conn, row["entity_type"], row["entity_id"])

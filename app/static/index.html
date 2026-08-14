@@ -877,8 +877,15 @@
      общей сетке, иначе выпадашки разной глубины разъезжаются по ширине. */
   .access-tree { border: 1px solid var(--color-border); border-radius: 6px;
     max-height: 260px; overflow-y: auto; padding: 6px; }
-  .access-row { display: grid; grid-template-columns: 1fr 190px; gap: 8px;
+  /* Вторая колонка шире прежних 190px: там теперь НАБОР ролей галочками, а
+     не один выпадающий список — ролей может быть сколько угодно, и они
+     складываются (2026-08-14). */
+  .access-row { display: grid; grid-template-columns: 1fr minmax(240px, 2fr); gap: 8px;
     align-items: center; padding: 3px 4px; border-radius: 4px; }
+  .access-roles { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .access-role { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+    white-space: nowrap; }
+  .access-role input { margin: 0; }
   .access-row + .access-row { margin-top: 2px; }
   .access-row-all { font-weight: 600; }
   .access-row-project { padding-left: 16px; }
@@ -886,8 +893,9 @@
   .access-row select { width: 100%; }
   .access-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
-  /* Унаследованная роль — приглушённо и мельче: она не выбрана здесь, а
-     получена сверху, и путать её с выбранной нельзя. */
+  /* Роли, приходящие СВЕРХУ, — приглушённо и мельче: они не выбраны здесь,
+     а прибавляются к выбранному (уровни складываются, 2026-08-14), и путать
+     их с отмеченными тут нельзя. */
   .access-inherited { font-size: 11px; color: var(--color-text-muted); }
   .access-tree-block { margin-top: 14px; border-top: 1px solid var(--color-border);
     padding-top: 12px; }
@@ -962,6 +970,82 @@
   #access-matrix-table tr.am-dirty .am-user { font-weight: 600; }
   #access-matrix-table .am-inherited { display: block; font-size: 10px; color: var(--color-text-muted); }
   #access-matrix-table .am-sysadmin td { color: var(--color-text-muted); }
+  /* Настройка ролей (2026-08-14): матрица «разделы × роли».
+     Ширина по содержимому — колонок столько, сколько ролей завели, и
+     жёсткая ширина при трёх ролях растянула бы форму на весь монитор, а
+     при десяти не хватила бы. Дальше работает прокрутка .rf-scroll. */
+  #roles-modal { width: max-content; max-width: 96vw; }
+  #roles-modal .modal-sticky-head .hint-text { max-width: 88ch; }
+
+  /* Шапка формы — та же карточка, что у блоков сайдбара и групп меню:
+     контур, скругление, тень «света из-под блока». Иначе поле ввода и
+     кнопка висят на голом фоне, а матрица под ними оформлена. */
+  .rf-toolbar {
+    background: var(--color-surface); border: 1px solid var(--color-border);
+    border-radius: var(--radius); box-shadow: var(--shadow-card);
+    padding: 10px 12px; margin-top: 10px;
+  }
+
+  /* ОБЕ прокрутки — здесь, и это обязательно, а не удобство: `position:
+     sticky` у шапки отсчитывается от ближайшего прокручиваемого предка.
+     Пока по вертикали прокручивалось модальное окно снаружи, а .rf-scroll
+     отвечал только за горизонталь, шапка липла к контейнеру, который сам
+     не прокручивается, — и названия ролей уезжали вверх при первом же
+     листании. Заодно `overflow-x: auto` всё равно делал этот блок
+     вертикально прокручиваемым (браузер поднимает overflow-y до auto),
+     так что «горизонтальный» он был только на словах. */
+  .rf-scroll {
+    overflow: auto; max-height: 64vh;
+    background: var(--color-surface); border: 1px solid var(--color-border);
+    border-radius: var(--radius); box-shadow: var(--shadow-card);
+  }
+  #roles-table { border-collapse: separate; border-spacing: 0; font-size: 12px;
+    width: 100%; }
+  #roles-table th, #roles-table td {
+    padding: 6px 10px; border-bottom: 1px solid var(--color-border); white-space: nowrap;
+    vertical-align: top; }
+  /* Контур КОЛОНКИ: каждая роль читается как отдельный блок, иначе при
+     шести ролях глаз теряет, в чьём столбце стоит «Изменение». */
+  #roles-table th.rf-role, #roles-table td.rf-cell,
+  #roles-table th.rf-sysadmin, #roles-table td.rf-sysadmin {
+    border-left: 1px solid var(--color-border); }
+  #roles-table thead th { position: sticky; top: 0; z-index: 3;
+    background: var(--color-surface-2); text-align: left; font-weight: 600;
+    /* Полоска снизу вместо общей границы строки: у прилипшей шапки
+       border-bottom уезжает вместе с прокруткой, box-shadow — нет. */
+    box-shadow: inset 0 -1px 0 var(--color-border); }
+  /* Название раздела прилипает слева: при десятке ролей строка уезжает за
+     край, и без этого не видно, чью ячейку правишь. */
+  #roles-table .rf-name { position: sticky; left: 0; z-index: 2;
+    background: var(--color-surface); text-align: left; min-width: 300px; white-space: normal;
+    box-shadow: inset -1px 0 0 var(--color-border); }
+  #roles-table thead .rf-name { z-index: 4; background: var(--color-surface-2);
+    box-shadow: inset -1px 0 0 var(--color-border), inset 0 -1px 0 var(--color-border); }
+  #roles-table .rf-role { min-width: 170px; }
+  #roles-table .rf-granted { display: block; font-weight: 400; font-size: 11px;
+    color: var(--color-text-muted); }
+  #roles-table .rf-role-tools { display: block; margin-top: 3px; }
+  #roles-table .rf-role-tools button { padding: 0 5px; font-size: 12px; line-height: 1.5; }
+  /* Полоса-разделитель групп: утопленный фон и линия сверху — так группа
+     читается блоком, а не очередной строкой таблицы. */
+  #roles-table tr.rf-section td { font-weight: 600; background: var(--color-surface-2);
+    border-top: 1px solid var(--color-border); padding: 7px 10px;
+    color: var(--color-primary); }
+  /* Липнет текст, а не ячейка: ячейка растянута colspan'ом на всю строку, и
+     закрепить её значило бы оторвать фон от содержимого. */
+  #roles-table .rf-section-name { position: sticky; left: 10px; display: inline-block; }
+  #roles-table select.rf-level { font-size: 12px; padding: 2px 4px; width: 100%;
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    background: var(--color-surface); }
+  /* Цветом отмечено только ИЗМЕНЕНИЕ: оно решает, что человек может
+     испортить, и в длинном столбце должно находиться взглядом. «Чтение» и
+     «Нет» различать краской незачем — их читают по подписи. */
+  #roles-table select.rf-write { font-weight: 600; border-color: var(--color-primary); }
+  #roles-table td.rf-dirty select { outline: 2px solid var(--color-primary); }
+  #roles-table .rf-sysadmin { color: var(--color-text-muted); font-weight: 400; }
+  #roles-table .rf-note { display: block; font-size: 11px; color: var(--color-text-muted);
+    white-space: normal; max-width: 48ch; }
+  #roles-table .rf-scope { display: block; font-size: 11px; color: var(--color-text-muted); }
   /* Матрица прав одного пользователя: разделы против объёма прав. */
   #rights-matrix-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   #rights-matrix-table th, #rights-matrix-table td {
@@ -3144,11 +3228,11 @@
             <button id="menu-view-mode" class="menu-item-strong">Цветовая схема</button>
             <button id="menu-change-password">Сменить пароль</button>
             <button id="menu-my-sessions">Мои сеансы</button>
-            <button id="menu-label-color" class="admin-only">Цвет подписей марок</button>
-            <button id="menu-colors" class="admin-only">Цвета статусов</button>
-            <button id="menu-shapes" class="admin-only">Форма маркеров</button>
-            <button id="menu-zone-colors" class="object-admin-only">Цвета зон</button>
-            <button id="menu-info-plate-settings" class="object-admin-only">Порог опоздания поставки</button>
+            <button id="menu-label-color" data-feature="users" data-feature-kind="write">Цвет подписей марок</button>
+            <button id="menu-colors" data-feature="dictionaries" data-feature-kind="write">Цвета статусов</button>
+            <button id="menu-shapes" data-feature="dictionaries" data-feature-kind="write">Форма маркеров</button>
+            <button id="menu-zone-colors" data-feature="zone_colors" data-feature-kind="write">Цвета зон</button>
+            <button id="menu-info-plate-settings" data-feature="info_plate" data-feature-kind="write">Порог опоздания поставки</button>
           </div>
         </div>
         <!-- ДОКУМЕНТЫ (2026-08-11, запрос пользователя) — перед
@@ -3162,7 +3246,7 @@
         <div class="submenu">
           <button type="button" class="submenu-trigger">Документы</button>
           <div class="dropdown-menu submenu-panel">
-            <button id="menu-supplier-change" class="object-contract-only">Смена поставщика</button>
+            <button id="menu-supplier-change" data-feature="supplier_change" data-feature-kind="write">Смена поставщика</button>
           </div>
         </div>
         <!-- Класс гашения — на КАЖДОМ пункте, а не на группе: часть
@@ -3183,14 +3267,14 @@
         <div class="submenu">
           <button type="button" class="submenu-trigger">Справочники</button>
           <div class="dropdown-menu submenu-panel">
-            <button id="menu-element-catalog" class="object-admin-only menu-item-strong">Элементы</button>
+            <button id="menu-element-catalog" class="menu-item-strong" data-feature="element_fields" data-feature-kind="write">Элементы</button>
             <div class="submenu">
               <button type="button" class="submenu-trigger">Проект и объект</button>
               <div class="dropdown-menu submenu-panel">
-                <button id="menu-projects" class="admin-only">Проекты</button>
-                <button id="menu-objects" class="admin-only">Объекты</button>
-                <button id="menu-project-card" class="object-admin-only">Карточка объекта</button>
-                <button id="menu-report-notes" class="object-admin-only">События, задачи, вопросы</button>
+                <button id="menu-projects" data-feature="projects" data-feature-kind="write">Проекты</button>
+                <button id="menu-objects" data-feature="projects" data-feature-kind="write">Объекты</button>
+                <button id="menu-project-card" data-feature="project_card" data-feature-kind="write">Карточка объекта</button>
+                <button id="menu-report-notes" data-feature="report_notes" data-feature-kind="write">События, задачи, вопросы</button>
                 <!-- ВРЕМЕННАЯ обработка (2026-08-03): дообъектное наследие —
                      записи, заведённые до того, как у них появилось поле
                      «Объект»/«Проект». Помечена временной и в названии пункта,
@@ -3206,23 +3290,23 @@
             <div class="submenu">
               <button type="button" class="submenu-trigger">Зоны</button>
               <div class="dropdown-menu submenu-panel">
-                <button id="menu-zones-zakhvatka" class="object-admin-only">Захватки</button>
-                <button id="menu-zones-crane" class="object-admin-only">Зоны кранов</button>
-                <button id="menu-zones-stance" class="object-admin-only">Стоянки кранов</button>
+                <button id="menu-zones-zakhvatka" data-feature="zones" data-feature-kind="write">Захватки</button>
+                <button id="menu-zones-crane" data-feature="zones" data-feature-kind="write">Зоны кранов</button>
+                <button id="menu-zones-stance" data-feature="zones" data-feature-kind="write">Стоянки кранов</button>
               </div>
             </div>
             <div class="submenu">
               <button type="button" class="submenu-trigger">Классификация</button>
               <div class="dropdown-menu submenu-panel">
-                <button id="menu-subtypes" class="admin-only">Типы и подтипы элементов</button>
-                <button id="menu-mark-prefixes" class="admin-only">Префиксы марок</button>
+                <button id="menu-subtypes" data-feature="dictionaries" data-feature-kind="write">Типы и подтипы элементов</button>
+                <button id="menu-mark-prefixes" data-feature="dictionaries" data-feature-kind="write">Префиксы марок</button>
               </div>
             </div>
             <div class="submenu">
               <button type="button" class="submenu-trigger">Контрактация</button>
               <div class="dropdown-menu submenu-panel">
-                <button id="menu-counterparties" class="object-contract-only">Контрагенты</button>
-                <button id="menu-contracts" class="object-contract-only">Контракты</button>
+                <button id="menu-counterparties" data-feature="counterparties" data-feature-kind="write">Контрагенты</button>
+                <button id="menu-contracts" data-feature="contracts" data-feature-kind="write">Контракты</button>
               </div>
             </div>
           </div>
@@ -3240,14 +3324,14 @@
             <!-- Первым и выделенным (живой запрос 2026-08-01): основной
                  повседневный способ править данные, остальное в группе —
                  разовые операции обмена. -->
-            <button id="menu-bulk-edit" class="admin-only menu-item-strong">Массовая правка через Excel</button>
-            <button id="btn-upload" class="object-admin-only">Загрузить чертёж</button>
-            <button id="btn-export" class="object-admin-only">Экспорт в XLS</button>
-            <button id="btn-export-pdf" class="object-admin-only">Экспорт в PDF</button>
-            <button id="menu-history-import" class="object-admin-only">Импорт истории из XLS</button>
-            <button id="menu-status-restore" class="object-admin-only">Восстановить статусы из выгрузки</button>
-            <button id="menu-contracting-import" class="admin-only">Импорт контрактации из XLS</button>
-            <button id="menu-schedule-import" class="admin-only">Импорт графика MS Project из XLS</button>
+            <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="write">Массовая правка через Excel</button>
+            <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
+            <button id="btn-export" data-feature="export" data-feature-kind="read">Экспорт в XLS</button>
+            <button id="btn-export-pdf" data-feature="export" data-feature-kind="read">Экспорт в PDF</button>
+            <button id="menu-history-import" data-feature="import_history" data-feature-kind="write">Импорт истории из XLS</button>
+            <button id="menu-status-restore" data-feature="import_history" data-feature-kind="write">Восстановить статусы из выгрузки</button>
+            <button id="menu-contracting-import" data-feature="import_contracting" data-feature-kind="write">Импорт контрактации из XLS</button>
+            <button id="menu-schedule-import" data-feature="import_schedule" data-feature-kind="write">Импорт графика MS Project из XLS</button>
             <button id="menu-import-input" class="admin-only">Загрузить из папки Input</button>
             <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
           </div>
@@ -3291,26 +3375,31 @@
                  командами обслуживается, и выгружается файлом на свою
                  машину (в аварии сервис как раз может не работать). -->
             <button id="menu-admin-guide" class="admin-only menu-item-strong">Памятка администратора</button>
-            <button id="menu-users" class="admin-only">Пользователи</button>
+            <button id="menu-users" data-feature="users" data-feature-kind="write">Пользователи</button>
             <!-- Права всех пользователей одной таблицей (2026-08-04, живой
                  запрос). Отдельным пунктом от «Пользователей»: там правят
                  ОДНОГО человека целиком, здесь сравнивают между собой всех
                  и раздают роли по стройкам. -->
-            <button id="menu-access-matrix" class="admin-only">Права пользователей</button>
+            <button id="menu-access-matrix" data-feature="users" data-feature-kind="read">Права пользователей</button>
+            <!-- Настройка ролей (2026-08-14). Рядом с «Правами
+                 пользователей» и сразу за ними: там роль ВЫДАЮТ, здесь
+                 определяют, что она значит. Порядок пунктов повторяет
+                 порядок вопросов — сначала «кому», потом «что именно». -->
+            <button id="menu-roles" data-feature="roles" data-feature-kind="read">Настройка ролей</button>
             <!-- Отдельным пунктом (живой запрос 2026-08-03): «кто сейчас в
                  системе» — вопрос обо всём сервисе, а не о конкретном
                  человеке, и искать его в карточке пользователя незачем. -->
-            <button id="menu-sessions" class="admin-only">Сеансы пользователей</button>
+            <button id="menu-sessions" data-feature="users" data-feature-kind="write">Сеансы пользователей</button>
             <!-- Рядом с «Пользователями» (2026-08-03): это настройка того,
                  ЧЕМ пользователь входит, и ходят сюда из той же формы. -->
-            <button id="menu-ldap" class="admin-only">Доменная авторизация</button>
-            <button id="menu-backups" class="admin-only">Резервные копии</button>
-            <button id="menu-activity" class="admin-only">Журнал действий</button>
+            <button id="menu-ldap" data-feature="ldap" data-feature-kind="read">Доменная авторизация</button>
+            <button id="menu-backups" data-feature="backups" data-feature-kind="read">Резервные копии</button>
+            <button id="menu-activity" data-feature="activity_log" data-feature-kind="read">Журнал действий</button>
             <!-- 2026-08-03: что реально лежит в базе — структура с назначением
                  каждого поля, объём по таблицам и просмотр содержимого.
                  Рядом с «Резервными копиями»: туда идут с тем же вопросом
                  «сколько всего накопилось и что именно копируем». -->
-            <button id="menu-db-status" class="admin-only">Состояние БД</button>
+            <button id="menu-db-status" data-feature="backups" data-feature-kind="read">Состояние БД</button>
             <!-- Последним и красным: необратимо и затрагивает ВСЕ чертежи разом. -->
             <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов</button>
           </div>
@@ -4256,6 +4345,45 @@
         <span class="hint-text" id="access-matrix-status"></span>
         <button class="btn btn-secondary" id="access-matrix-close">Закрыть</button>
         <button class="btn btn-primary" id="access-matrix-save">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Настройка ролей (2026-08-14): из чего состоит роль на объекте.
+     Слева лестница ступеней, справа разделы системы и порог каждого — с
+     какой ступени раздел виден и с какой его можно менять.
+
+     Почему в одном окне: порог задаётся ИМЕНЕМ ступени, и выбирать его,
+     не видя лестницы, — то же самое, что расставлять приоритеты по памяти.
+     Перечень разделов не настраивается и здесь не правится: раздел
+     заводит разработчик вместе с проверкой, которая его сторожит
+     (app/features.py). -->
+<div class="modal-backdrop" id="roles-backdrop">
+  <div class="modal wide modal-sticky" id="roles-modal">
+    <div class="modal-sticky-head">
+      <h2>Настройка ролей</h2>
+      <p class="hint-text">По вертикали — разделы системы, по горизонтали — роли, в ячейке
+        объём доступа. Роли НЕЗАВИСИМЫ: одна не включает другую, человеку можно выдать
+        несколько на одном объекте, и разрешения складываются — действует наибольшее из
+        выданного. Общесервисные разделы (контрагенты, пользователи, копии) проверяются не на
+        показываемом объекте, а на любом доступном. Администратор сервиса проходит все
+        проверки в обход, снять это нельзя — запереть систему настройкой не получится.</p>
+      <div class="row rf-toolbar" style="gap:8px">
+        <input id="roles-new-name" type="text" placeholder="Новая роль" style="max-width:240px">
+        <button class="btn btn-secondary" id="roles-add">Добавить роль</button>
+        <span class="hint-text">Новая роль заводится пустой — права отмечаются в её колонке.</span>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div class="rf-scroll"><table id="roles-table"></table></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="error-text" id="roles-error"></div>
+      <div class="actions">
+        <span class="hint-text" id="roles-status"></span>
+        <button class="btn btn-secondary" id="roles-close">Закрыть</button>
+        <button class="btn btn-primary" id="roles-save">Сохранить</button>
       </div>
     </div>
   </div>

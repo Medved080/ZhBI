@@ -42,9 +42,8 @@ from pydantic import BaseModel
 
 from app import activity, contract_guard, impersonation
 from app.access import (
-    assert_object_access,
-    require_object_access,
-    require_object_contractor,
+    assert_object_feature,
+    require_feature,
     require_system_admin,
 )
 from app.auth import get_current_user
@@ -508,7 +507,7 @@ def find_or_create_contract(conn, specification_id: int, theme: Optional[str] = 
     return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
 
-def _guard_specification(conn, user, specification_id: int, minimum: str = "contract") -> None:
+def _guard_specification(conn, user, specification_id: int, kind: str = "write") -> None:
     """Доступ к контракту — по объекту его спецификации: контракт ->
     спецификация -> договор -> object_id (цепочка этапа A).
 
@@ -534,10 +533,10 @@ def _guard_specification(conn, user, specification_id: int, minimum: str = "cont
                 detail="Договор спецификации не привязан к объекту — правит администратор сервиса",
             )
         return
-    assert_object_access(conn, user, row["object_id"], minimum)
+    assert_object_feature(conn, user, row["object_id"], "contracts", kind)
 
 
-def _guard_contract(conn, user, contract_id: int, minimum: str = "contract") -> None:
+def _guard_contract(conn, user, contract_id: int, kind: str = "write") -> None:
     """Доступ по ТЕКУЩЕМУ владельцу контракта.
 
     Отдельно от _guard_specification, и это не дублирование: та проверяет
@@ -563,7 +562,7 @@ def _guard_contract(conn, user, contract_id: int, minimum: str = "contract") -> 
                 detail="Контракт не привязан к объекту — доступен администратору сервиса",
             )
         return
-    assert_object_access(conn, user, row["object_id"], minimum)
+    assert_object_feature(conn, user, row["object_id"], "contracts", kind)
 
 
 def _accessible_contracts_clause(conn, user) -> tuple:
@@ -711,7 +710,7 @@ def list_contract_elements(contract_id: int, user: sqlite3.Row = Depends(get_cur
     5000 там) — реалистичный контракт заведомо укладывается в память."""
     conn = get_connection()
     try:
-        _guard_contract(conn, user, contract_id, "view")
+        _guard_contract(conn, user, contract_id, "read")
         existing = conn.execute("SELECT id FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Контракт не найден")
@@ -735,7 +734,7 @@ def list_contract_elements(contract_id: int, user: sqlite3.Row = Depends(get_cur
 # он видел бы список, а каждая смена значения молча получала бы 403.
 @router.get("/default-map")
 def get_default_contracts(object_id: int = Query(...),
-                          user: sqlite3.Row = Depends(require_object_access)):
+                          user: sqlite3.Row = Depends(require_feature("default_contracts", "read"))):
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -749,7 +748,7 @@ def get_default_contracts(object_id: int = Query(...),
 
 @router.put("/default-map")
 def set_default_contracts(mapping: dict, object_id: int = Query(...),
-                          admin: sqlite3.Row = Depends(require_object_contractor)):
+                          admin: sqlite3.Row = Depends(require_feature("default_contracts", "write"))):
     conn = get_connection()
     try:
         for element_type, contract_id in mapping.items():

@@ -34,7 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app import activity
-from app.access import assert_object_access, require_system_admin
+from app.access import assert_object_feature, require_service_feature
 from app.auth import get_current_user
 from app.db import get_connection
 from app.models import ZHBI_ELEMENT_TYPES
@@ -89,7 +89,7 @@ def list_marks(object_id: int = Query(...), element_type: Optional[str] = Query(
     заведённой импортом и не использованной ни разу."""
     conn = get_connection()
     try:
-        assert_object_access(conn, user, object_id, "view")
+        assert_object_feature(conn, user, object_id, "dict_marks", "read")
         sql = "SELECT * FROM marks WHERE object_id = ?"
         params = [object_id]
         if element_type:
@@ -126,7 +126,7 @@ def list_marks(object_id: int = Query(...), element_type: Optional[str] = Query(
 
 
 @router.post("/marks")
-def create_mark(body: MarkIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def create_mark(body: MarkIn, admin: sqlite3.Row = Depends(require_service_feature("dict_marks", "write"))):
     _check_type(body.element_type)
     name = body.name.strip()
     if not name:
@@ -160,7 +160,7 @@ def create_mark(body: MarkIn, admin: sqlite3.Row = Depends(require_system_admin)
 
 
 @router.patch("/marks/{mark_id}")
-def rename_mark(mark_id: int, body: MarkIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def rename_mark(mark_id: int, body: MarkIn, admin: sqlite3.Row = Depends(require_service_feature("dict_marks", "write"))):
     """Переименование ведёт за собой ТЕКСТ марки везде, где он лежит копией:
     у изделий (`elements.mark`) и в позициях контрактов
     (`contract_lines.mark`). Иначе справочник и текст разъедутся, а сверять

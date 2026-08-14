@@ -755,11 +755,19 @@ def _migrate_user_access_contract_role(conn: sqlite3.Connection, changes: list) 
     маркера: состояние описывает себя само. Смотрим именно на CHECK, а не
     на наличие строк с ролью 'contract' — гранты могут быть ещё не выданы, а
     ограничение уже расширено.
+
+    ОТСУТСТВИЕ CHECK — тоже «делать нечего», и это не то же самое, что
+    «ограничение не расширено». С 2026-08-14 набор ролей настраивается, и
+    _migrate_user_access_drop_role_check снимает CHECK насовсем; признак
+    «нет слова 'contract' в DDL» после этого снова становится истинным, и
+    две миграции принялись пересобирать таблицу друг за другом на КАЖДОМ
+    старте — поймано повторным прогоном на копии, а не рассуждением.
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'user_access'"
     ).fetchone()
-    if row is None or "'contract'" in (row["sql"] or ""):
+    ddl = (row["sql"] or "") if row else ""
+    if row is None or "CHECK (role IN" not in ddl or "'contract'" in ddl:
         return
 
     if conn.in_transaction:
@@ -787,6 +795,168 @@ def _migrate_user_access_contract_role(conn: sqlite3.Connection, changes: list) 
     # ОБЯЗАТЕЛЬНО вернуть проверку ключей — см. _migrate_user_access_global.
     conn.execute("PRAGMA foreign_keys = ON")
     changes.append("доступ: добавлена роль «Комплектовщик»")
+
+
+def _seed_object_roles(conn: sqlite3.Connection, changes: list) -> None:
+    """Заводит роли и их разрешения (2026-08-14).
+
+    Заводская раскладка — РОВНО то, что до этой даты было захардкожено:
+    четыре роли из прежней лестницы и то, что каждая из них могла
+    (`baseline` в app/features.py). Смысл именно в этом: в день выхода
+    объём прав обязан не измениться, и сверка матрицы прав до и после
+    миграции — способ это доказать. Отличие в том, что теперь это данные, а
+    роли независимы и складываются.
+
+    Роли заводятся ОДИН РАЗ (таблица пуста), разрешения — только для тех
+    ролей, у которых нет НИ ОДНОЙ строки. Разница не случайна: администратор
+    правит и снимает разрешения, и восстанавливать снятое на каждом старте
+    недопустимо — иначе отобранное возвращалось бы само.
+
+    НОВЫЙ РАЗДЕЛ, добавленный будущей версией, не выдаётся никому: строки
+    нет — значит «Нет». Ошибка в безопасную сторону; выдать его роли —
+    осознанное действие администратора.
+    """
+    from app.features import FEATURES, NONE  # локально: features.py — данные, db.py — их хранилище
+
+    if conn.execute("SELECT COUNT(*) AS n FROM object_roles").fetchone()["n"] == 0:
+        conn.executemany(
+            "INSERT INTO object_roles (key, name, rank) VALUES (?, ?, ?)",
+            [("view", "Просмотр", 10),
+             ("user", "Работа со статусами", 20),
+             ("contract", "Комплектовщик", 30),
+             ("admin", "Полные права на объекте", 40)],
+        )
+        changes.append("заведены роли на объекте (4 заводские)")
+
+    заполненные = {r["role_key"] for r in conn.execute(
+        "SELECT DISTINCT role_key FROM role_features")}
+    # Уровень «Нет» НЕ записывается: отсутствие строки и есть «Нет».
+    # Отсеиваем его явно, а не полагаемся на OR IGNORE: тот действительно
+    # проглотил бы такую строку (CHECK разрешает только read/write), но
+    # молча — и правильный результат получался бы по случайности, до первой
+    # правки ограничения.
+    строки = []
+    for f in FEATURES:
+        for роль, уровень in f.baseline.items():
+            if роль in заполненные or уровень == NONE:
+                continue
+            строки.append((роль, f.key, уровень))
+    if строки:
+        # OR IGNORE: роль могла быть заведена этой же миграцией, а часть её
+        # строк — прийти из более раннего запуска промежуточной версии.
+        conn.executemany(
+            "INSERT OR IGNORE INTO role_features (role_key, feature_key, level) VALUES (?, ?, ?)",
+            строки)
+        changes.append(f"разрешения ролей: заведено записей ({len(строки)})")
+
+
+def _migrate_user_access_multirole(conn: sqlite3.Connection, changes: list) -> None:
+    """Разрешает НЕСКОЛЬКО ролей на одном уровне гранта (2026-08-14).
+
+    Роли перестали быть лестницей и стали независимыми: человеку выдают
+    столько, сколько нужно, а разрешения складываются. Прежний уникальный
+    индекс по (пользователь, проект, объект) допускал ровно одну роль —
+    вторую он отвергал бы как дубль, то есть новая модель молча не
+    работала бы ровно в том месте, ради которого затевалась.
+
+    Идемпотентность — по тексту индекса в sqlite_master: состояние
+    описывает себя само.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_user_access_unique'"
+    ).fetchone()
+    if row is None or ", role)" in (row["sql"] or ""):
+        return
+    conn.execute("DROP INDEX idx_user_access_unique")
+    conn.execute("CREATE UNIQUE INDEX idx_user_access_unique ON user_access "
+                 "(user_id, COALESCE(project_id, -1), COALESCE(object_id, -1), role)")
+    changes.append("доступ: на одном уровне можно выдать несколько ролей")
+
+
+def _drop_feature_access(conn: sqlite3.Connection, changes: list) -> None:
+    """Убирает таблицу порогов `feature_access` (2026-08-14).
+
+    Промежуточная форма того же блока: пороги «с какой ступени лестницы
+    доступен раздел». Со снятием лестницы порог потерял смысл — разрешение
+    стало свойством КАЖДОЙ роли (role_features), а не рубежом на лестнице.
+
+    Таблица жила меньше суток и только на отладочной копии; на боевую базу
+    она не выезжала. Удаляем, а не оставляем «на всякий случай»: пока
+    таблица есть, кто-нибудь прочитает из неё порог и получит ответ,
+    который ни на что не влияет.
+    """
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='feature_access'"
+                    ).fetchone() is None:
+        return
+    conn.execute("DROP TABLE feature_access")
+    changes.append("убрана промежуточная таблица порогов feature_access")
+
+
+def _migrate_user_access_drop_role_check(conn: sqlite3.Connection, changes: list) -> None:
+    """Снимает CHECK с user_access.role и заменяет его ссылкой на
+    object_roles (2026-08-14, блок «Настройка ролей»).
+
+    Роли стали произвольными: администратор заводит свои ступени, и
+    ограничение, перечисляющее роли поимённо, пришлось бы пересобирать
+    таблицей на каждую заведённую — то есть проделывать миграцию из
+    пользовательского интерфейса.
+
+    Строго ПОСЛЕ _seed_object_roles: строки user_access уже ссылаются на
+    'view'/'user'/'contract'/'admin', и без заведённых ролей пересобранная
+    таблица оказалась бы с битыми ключами. Проверяем это здесь же, а не
+    полагаемся на порядок вызовов: PRAGMA foreign_key_check после
+    пересборки — единственное, что ловит такую ошибку, и на этапе D она уже
+    стоила 30 155 осиротевших записей.
+
+    Пересборка безопасна по тому же проверенному условию, что и у двух
+    предыдущих миграций этой таблицы: на user_access не ссылается никто,
+    поэтому RENAME не переписывает чужие внешние ключи.
+
+    Идемпотентность — по тексту ограничения в sqlite_master, без маркера.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'user_access'"
+    ).fetchone()
+    if row is None or "CHECK (role IN" not in (row["sql"] or ""):
+        return
+
+    осиротевшие = conn.execute(
+        "SELECT COUNT(*) AS n FROM user_access ua "
+        "WHERE NOT EXISTS (SELECT 1 FROM object_roles r WHERE r.key = ua.role)"
+    ).fetchone()["n"]
+    if осиротевшие:
+        raise RuntimeError(
+            f"Миграция ролей: {осиротевшие} грант(ов) ссылаются на роль, которой нет в "
+            "object_roles. Лестница должна быть заведена раньше (_seed_object_roles)")
+
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("""
+        CREATE TABLE user_access_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+            project_id INTEGER REFERENCES projects (id) ON DELETE CASCADE,
+            object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
+            role TEXT NOT NULL REFERENCES object_roles (key) ON UPDATE CASCADE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )""")
+    conn.execute(
+        "INSERT INTO user_access_new (id, user_id, project_id, object_id, role, created_at) "
+        "SELECT id, user_id, project_id, object_id, role, created_at FROM user_access")
+    conn.execute("DROP TABLE user_access")
+    conn.execute("ALTER TABLE user_access_new RENAME TO user_access")
+    conn.execute("DROP INDEX IF EXISTS idx_user_access_unique")
+    conn.execute("CREATE UNIQUE INDEX idx_user_access_unique ON user_access "
+                 "(user_id, COALESCE(project_id, -1), COALESCE(object_id, -1))")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_access_user ON user_access (user_id)")
+    conn.commit()
+    # ОБЯЗАТЕЛЬНО вернуть проверку ключей — см. _migrate_user_access_global.
+    conn.execute("PRAGMA foreign_keys = ON")
+    битые = conn.execute("PRAGMA foreign_key_check(user_access)").fetchall()
+    if битые:
+        raise RuntimeError(f"Миграция ролей: после пересборки user_access битых ключей: {len(битые)}")
+    changes.append("доступ: набор ролей стал настраиваемым")
 
 
 def _migrate_user_access_global(conn: sqlite3.Connection, changes: list) -> None:
@@ -1708,6 +1878,16 @@ def init_db() -> list:
         # эта расширяет ограничение до четырёх. В обратном порядке новая
         # роль тут же терялась бы.
         _migrate_user_access_contract_role(conn, changes)
+        # Строго ПОСЛЕ обеих пересборок user_access и строго ДО снятия
+        # CHECK: лестница должна существовать раньше, чем на неё сошлётся
+        # внешний ключ, иначе пересобранная таблица получит битые ключи.
+        _seed_object_roles(conn, changes)
+        _migrate_user_access_drop_role_check(conn, changes)
+        # Строго ПОСЛЕ пересборки таблицы: она заново создаёт индекс в
+        # прежней форме, и порядок наоборот тут же вернул бы ограничение
+        # «одна роль на уровень».
+        _migrate_user_access_multirole(conn, changes)
+        _drop_feature_access(conn, changes)
         _ensure_object_scoped_indexes(conn)
         # Строго ПОСЛЕ бутстрапа объекта: миграция зон опирается на
         # object_drawings, чтобы понять, какой чертёж актуален.

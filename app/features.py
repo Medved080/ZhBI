@@ -1,0 +1,342 @@
+"""
+Реестр РАЗДЕЛОВ системы — единственное место, где перечислено, из чего
+вообще состоят права (2026-08-14, блок «Настройка ролей»).
+
+Откуда взялся. До 2026-08-14 этот перечень жил в app/rights_matrix.py и был
+ОПИСАНИЕМ: пороги хранились в коде эндпоинтов, а матрица их пересказывала
+администратору. С появлением настройки ролей источник правды перевернулся:
+разрешения переехали в БД (таблица `role_features`), эндпоинт спрашивает их
+по ключу раздела, а здесь остался сам ПЕРЕЧЕНЬ — что за разделы бывают, как
+они называются на языке заказчика и какие проверки к ним относятся.
+
+Почему отдельный модуль, а не прежнее место. app/access.py обязан знать
+ключи разделов (он их проверяет), а app/rights_matrix.py обязан знать
+access.py (он считает по ролям). Оставь перечень в матрице — получишь цикл
+импортов. Здесь нет ни одного импорта из проекта, и это намеренно: реестр —
+данные, а не логика.
+
+РОЛИ НЕЗАВИСИМЫ (решение пользователя 2026-08-14, вторая редакция). Ролей у
+человека на объекте может быть несколько, и разрешения СКЛАДЫВАЮТСЯ: уровень
+доступа к разделу — максимум по всем его ролям. Лестницы больше нет: ни одна
+роль не «включает» другую, и «Комплектовщик» не даёт статусов даром — то,
+что он может, перечислено у него явно.
+
+Поле `baseline` ниже — ЗАВОДСКАЯ раскладка: что каждая из четырёх исходных
+ролей могла до появления настройки. Оно нужно ровно один раз, при первой
+миграции, чтобы в день выхода объём прав не изменился. Дальше раскладку
+правит администратор, и код на `baseline` больше не смотрит.
+
+Область проверки (`scope`) — где ищется роль:
+
+    "object"  — на КОНКРЕТНОМ объекте, к которому относится операция;
+    "service" — раздел к объекту не привязан (справочник контрагентов,
+                пользователи, резервные копии): роль засчитывается, если
+                она выдана ХОТЯ БЫ НА ОДНОМ доступном объекте. Правило не
+                выдумано под настройку ролей — ровно так с 2026-08-04
+                работал доступ к справочнику контрагентов, иначе
+                комплектовщик упирался бы в администратора сервиса на
+                первом же новом поставщике;
+    "self"    — своё каждый меняет сам, роль ни при чём.
+
+Уровни: NONE (нет доступа), READ (просмотр), WRITE (изменение; включает
+просмотр — «может править, но не может смотреть» читалось бы как ошибка).
+"""
+
+from typing import NamedTuple, Optional
+
+NONE = "none"
+READ = "read"
+WRITE = "write"
+
+# Порядок важен: по нему считается «максимум по ролям» при сложении.
+LEVELS = [NONE, READ, WRITE]
+LEVEL_LABELS = {NONE: "Нет", READ: "Чтение", WRITE: "Изменение"}
+
+SELF = "self"
+
+SCOPE_OBJECT = "object"
+SCOPE_SERVICE = "service"
+SCOPE_SELF = "self"
+
+SCOPE_LABELS = {
+    SCOPE_OBJECT: "На объекте",
+    SCOPE_SERVICE: "Хотя бы на одном объекте",
+    SCOPE_SELF: "Своё",
+}
+
+# Ключи заводских ролей — только для заводской раскладки ниже. В коде
+# проверок имён ролей БОЛЬШЕ НЕТ: раздел спрашивается по ключу, роли
+# перечислены в базе и настраиваются.
+VIEW, USER, CONTRACT, ADMIN = "view", "user", "contract", "admin"
+
+
+class Feature(NamedTuple):
+    """Один раздел системы.
+
+    `baseline` — заводская раскладка {ключ роли: уровень}; роли, которой в
+    словаре нет, раздел заводски не доступен. `sources` — где стоит
+    проверка: правишь права в коде — видно, что поправить здесь.
+    """
+
+    key: str
+    section: str
+    title: str
+    note: Optional[str]
+    sources: list
+    scope: str
+    baseline: dict
+
+
+def _все(уровень: str) -> dict:
+    """Раздел был доступен всем четырём заводским ролям в одном объёме."""
+    return {VIEW: уровень, USER: уровень, CONTRACT: уровень, ADMIN: уровень}
+
+
+def _от(роль: str, уровень: str, ниже: str = READ) -> dict:
+    """Заводская лестница словами: с указанной ступени и выше — `уровень`,
+    ниже — `ниже`. Так раскладка получается из прежних порогов механически,
+    без ручного перечисления шестнадцати клеток на каждую строку."""
+    порядок = [VIEW, USER, CONTRACT, ADMIN]
+    место = порядок.index(роль)
+    return {р: (уровень if i >= место else ниже) for i, р in enumerate(порядок)}
+
+
+def _только_админ_сервиса() -> dict:
+    """Раздел заводски не выдан ни одной роли: до 2026-08-14 он был за
+    администратором сервиса, а тот проходит проверки в обход."""
+    return {}
+
+
+FEATURES = [
+    # ------------------------------------------------------ Схема объекта
+    Feature("plan", "Схема объекта", "Схема, карточка изделия, фильтры, 3D",
+            "Схема только показывает данные — изменение относится к самим изделиям, строки ниже.",
+            ["POST /plan-data", "GET /elements", "GET /axis-grid"], SCOPE_OBJECT, _все(READ)),
+    Feature("status", "Схема объекта", "Статусы изделий: смена по одному и группой",
+            "Сюда же откат статуса и выбор контракта при уходе с «Запланирован».",
+            ["PATCH /elements/{id}/status", "PATCH /elements/bulk-status",
+             "PATCH /elements/{id}/contract"], SCOPE_OBJECT, _от(USER, WRITE)),
+    Feature("history", "Схема объекта", "История статусов: правка и удаление записей",
+            None,
+            ["PATCH /elements/{id}/history/{hid}", "DELETE /elements/{id}/history/{hid}"],
+            SCOPE_OBJECT, _от(USER, WRITE)),
+    Feature("planned_date", "Схема объекта", "Плановая дата поставки изделия",
+            None,
+            ["PATCH /elements/{id}/planned-delivery-date",
+             "PATCH /elements/bulk-planned-delivery-date"], SCOPE_OBJECT, _от(USER, WRITE)),
+    Feature("comment", "Схема объекта", "Комментарий к изделию",
+            None, ["PATCH /elements/{id}/comment"], SCOPE_OBJECT, _от(USER, WRITE)),
+    Feature("attachments", "Схема объекта", "Вложения: просмотр и добавление",
+            "Удаление — строка ниже: порог у него был выше, и сводить их в одну строку значило "
+            "бы отдать чужие акты и письма тому, кому доверена только отметка статуса.",
+            ["GET/POST /attachments"], SCOPE_OBJECT, _от(USER, WRITE)),
+    Feature("attachments_delete", "Схема объекта", "Вложения: удаление",
+            None, ["DELETE /attachments/{id}"], SCOPE_OBJECT, _от(ADMIN, WRITE, ниже=NONE)),
+    Feature("element_fields", "Схема объекта", "Реквизиты изделий: правка полей",
+            "Правка того, что пришло из чертежа: марка, отметка, зоны, этаж.",
+            ["PATCH /elements/{id}/fields"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("element_catalog", "Схема объекта", "Справочник элементов объекта",
+            None, ["GET /elements (списком)"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("export", "Схема объекта", "Выгрузка схемы в XLSX и PDF",
+            None, ["POST /export.xlsx", "GET /export.pdf"], SCOPE_OBJECT, _все(READ)),
+
+    # ---------------------------------------------------- Рабочие места
+    Feature("workspace_model", "Рабочие места", "«Модель»: схема, 2D и 3D",
+            "Основное рабочее место. Закрыть его роли, у которой есть доступ к объекту, значит "
+            "оставить человека без экрана вовсе.",
+            ["переключатель рабочего места в тулбаре"], SCOPE_OBJECT, _все(READ)),
+    Feature("workspace_picker", "Рабочие места", "«АРМ комплектовщика»: дашборд срезов",
+            "Гашение интерфейсное: дашборд считает по тем же данным, что уже пришли на схему, "
+            "ничего сверх доступного он не показывает.",
+            ["переключатель рабочего места в тулбаре"], SCOPE_OBJECT, _от(CONTRACT, READ, ниже=NONE)),
+
+    # ---------------------------------------------------- Зоны и чертёж
+    Feature("zones", "Зоны и чертёж", "Зоны: захватки, краны, стоянки",
+            "Сюда же пересчёт привязки изделий к зонам и вывод зон из работы.",
+            ["GET /zones", "PATCH/DELETE /zones/{id}", "POST /zones/{id}/undo"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("zone_colors", "Зоны и чертёж", "Цвета зон",
+            None, ["GET/PUT /zone-colors"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("drawings", "Зоны и чертёж", "Чертежи: загрузка DXF и переимпорт версии",
+            "Переимпорт переписывает геометрию всего объекта.",
+            ["GET /objects/{id}/drawings", "POST /import-dxf/analyze и /apply"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE)),
+
+    # ------------------------------------------------------ Контрактация
+    Feature("contracts", "Контрактация", "Контракты и их позиции",
+            None, ["GET /contracts", "POST/PATCH /contracts"], SCOPE_OBJECT, _от(CONTRACT, WRITE)),
+    Feature("agreements", "Контрактация", "Договоры и спецификации",
+            None, ["POST/PATCH /agreements, /specifications"], SCOPE_OBJECT, _от(CONTRACT, WRITE)),
+    Feature("counterparties", "Контрактация", "Справочник контрагентов",
+            "Справочник общесервисный: одна и та же организация возит на несколько строек, и "
+            "проверять его по показываемому объекту не за что.",
+            ["GET /counterparties/full", "POST/PATCH /counterparties"],
+            SCOPE_SERVICE, _от(CONTRACT, WRITE)),
+    Feature("default_contracts", "Контрактация", "Контракт по умолчанию по типу изделия",
+            None, ["GET/PUT /contracts/default-map"], SCOPE_OBJECT, _от(CONTRACT, WRITE)),
+    Feature("doc_supplier_change", "Контрактация", "Документ «Замена поставщика»",
+            "Проведение и его отмена — то же изменение: документ меняет привязки изделий к "
+            "контрактам, и разделять их значило бы разрешить создать документ, но не применить.",
+            ["POST/PATCH/DELETE /supplier-changes (kind=supplier_change)",
+             "POST /supplier-changes/{id}/post|unpost"], SCOPE_OBJECT, _от(CONTRACT, WRITE)),
+    Feature("doc_link_swap", "Контрактация", "Документ «Обмен привязками»",
+            None,
+            ["POST/PATCH/DELETE /supplier-changes (kind=link_swap)",
+             "POST /supplier-changes/{id}/post|unpost"], SCOPE_OBJECT, _от(CONTRACT, WRITE)),
+
+    # ------------------------------------------------------------ Отчёты
+    Feature("report_status", "Отчёты", "Статус монтажа",
+            None, ["POST /reports/status(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_dynamics", "Отчёты", "Динамика поставки и монтажа",
+            None, ["POST /reports/dynamics(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_delivery", "Отчёты", "График поставки",
+            None, ["POST /reports/delivery-schedule"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_completion", "Отчёты", "Статус комплектации",
+            None, ["POST /reports/completion(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_mywork", "Отчёты", "Моя работа",
+            None, ["POST /reports/my-work"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_contracting", "Отчёты", "График контрактации и поставки",
+            None, ["POST /reports/contracting-schedule"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_analytics", "Отчёты", "Аналитическая справка",
+            None, ["POST /reports/analytics(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_notes", "Отчёты", "Примечания к отчётам: события, задачи, вопросы",
+            None, ["GET /report-notes", "PUT/DELETE /report-notes"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("activity", "Отчёты", "Журнал действий по объекту: свои действия",
+            "Чистка журнала сервиса — другая строка, в «Ведении сервиса».",
+            ["GET /elements/{id}/activity", "GET /objects/{id}/activity-users"],
+            SCOPE_OBJECT, _все(READ)),
+    Feature("activity_others", "Отчёты", "Журнал и «Моя работа»: действия ДРУГИХ людей",
+            "Отдельно от строки выше: работать на объекте и наблюдать за коллегами — разные "
+            "права. До 2026-08-14 второе было привязано к «Полным правам на объекте».",
+            ["GET /objects/{id}/activity-users (выбор пользователя)",
+             "POST /elements/changed", "POST /reports/my-work (чужие)"],
+            SCOPE_OBJECT, _от(ADMIN, READ, ниже=NONE)),
+
+    # ------------------------------------------------------ Справочники
+    Feature("dict_marks", "Справочники", "Марки",
+            "Читать справочник мог каждый, у кого есть доступ к объекту; заводить и "
+            "переименовывать марки — только администратор сервиса.",
+            ["GET /marks", "POST/PATCH /marks"], SCOPE_SERVICE, _все(READ)),
+    Feature("dict_subtypes", "Справочники", "Типы и подтипы элементов",
+            None, ["POST/DELETE /allowed-subtypes"], SCOPE_SERVICE, _все(READ)),
+    Feature("dict_mark_prefixes", "Справочники", "Префиксы марок",
+            None, ["POST/DELETE /mark-type-prefixes"], SCOPE_SERVICE, _все(READ)),
+    Feature("dict_status_colors", "Справочники", "Цвета статусов",
+            None, ["PUT /status-colors"], SCOPE_SERVICE, _все(READ)),
+    Feature("dict_element_shapes", "Справочники", "Форма маркеров",
+            None, ["GET /layer-type-combinations", "PUT /element-shapes"],
+            SCOPE_SERVICE, _все(READ)),
+    Feature("dict_delete", "Справочники", "Удаление записей справочников с заменой ссылок",
+            "Действие необратимое и сквозное: удаление контрагента уносит его договоры, "
+            "спецификации и контракты, а изделия и история переезжают на выбранную замену.",
+            ["GET /dictionaries/{вид}/{ключ}/delete-plan",
+             "POST /dictionaries/{вид}/{ключ}/delete"], SCOPE_SERVICE, _только_админ_сервиса()),
+
+    # ------------------------------------------------- Настройки объекта
+    Feature("label_visibility", "Настройки объекта", "Видимость подписей марок и дат по типам",
+            None, ["GET/PUT /label-visibility", "GET/PUT /label-dates-visibility"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("info_plate", "Настройки объекта", "Порог опоздания поставки",
+            None, ["GET/PUT /info-plate-settings"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("project_card", "Настройки объекта", "Карточка проекта и объекта",
+            None, ["GET/PUT /project-card"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("projects", "Настройки объекта", "Справочники «Проекты» и «Объекты»",
+            "Видно те проекты и объекты, к которым есть доступ; заводить и править их до "
+            "2026-08-14 мог только администратор сервиса.",
+            ["GET /projects-tree", "POST/PATCH/DELETE /projects, /objects"],
+            SCOPE_SERVICE, _все(READ)),
+
+    # --------------------------------------------- Загрузка данных файлом
+    Feature("import_history", "Загрузка данных файлом", "Импорт истории статусов",
+            None, ["POST /import-history-xlsx"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("bulk_edit", "Загрузка данных файлом", "Массовая правка через Excel",
+            "Отбор строк по доступным объектам ещё не сделан (хвост этапа C): выдав раздел "
+            "роли, вы откроете ей и чужие объекты.",
+            ["POST /elements/bulk-edit/export|analyze|apply"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("import_contracting", "Загрузка данных файлом", "Импорт файла контрактации",
+            "Объект выбирается в форме и обязателен: договор заключается на объект.",
+            ["POST /import-contracting-xlsx"], SCOPE_OBJECT, _только_админ_сервиса()),
+    Feature("import_schedule", "Загрузка данных файлом", "Импорт графика MS Project",
+            None, ["POST /import-schedule-xlsx"], SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("import_input", "Загрузка данных файлом", "Загрузка чертежей из папки Input",
+            "Читает папку НА СЕРВЕРЕ, объект определяется содержимым файла.",
+            ["GET /admin/input-files", "POST /admin/import-input"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("settings_io", "Загрузка данных файлом", "Экспорт и импорт настроек",
+            None, ["GET /settings/export", "POST /settings/import"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+
+    # --------------------------------------------------- Ведение сервиса
+    Feature("users", "Ведение сервиса", "Пользователи и выдача доступов",
+            "Тот, кто правит доступы, может выдать их себе. Снять роль администратора сервиса "
+            "с самого себя нельзя ни этой строкой, ни какой-либо другой.",
+            ["GET/POST/PATCH /users*", "PUT /users/{id}/access"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("roles", "Ведение сервиса", "Настройка ролей и разрешений",
+            "Правка этой самой матрицы. Выдав раздел роли, вы отдаёте ей определение всех "
+            "остальных прав на стройке.",
+            ["GET /roles", "POST/PATCH/DELETE /roles", "PUT /roles/features"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("sessions", "Ведение сервиса", "Сеансы пользователей",
+            None, ["GET /users/sessions", "DELETE /users/sessions/{id}"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("ldap", "Ведение сервиса", "Доменная авторизация",
+            None, ["GET/PUT /ldap-settings", "POST /ldap-search"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("backups", "Ведение сервиса", "Резервные копии",
+            None, ["GET/POST /admin/backups*"], SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("db_status", "Ведение сервиса", "Состояние БД",
+            None, ["GET /admin/db-status*"], SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("db_transfer", "Ведение сервиса", "Перенос базы целиком между серверами",
+            "Полная ЗАМЕНА снимком, а не дополнение.",
+            ["POST /admin/db-transfer/*"], SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("activity_log", "Ведение сервиса", "Журнал действий сервиса и его очистка",
+            None, ["GET /activity", "POST /activity/cleanup"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("admin_guide", "Ведение сервиса", "Памятка администратора",
+            None, ["GET /admin-guide", "GET /admin-guide.md"],
+            SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("reset_history", "Ведение сервиса", "Очистка истории статусов",
+            "Необратимо и по всей базе.",
+            ["POST /admin/reset-status-history"], SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("release_tasks", "Ведение сервиса", "Обработки данных при обновлении",
+            "Повторный запуск обработки кнопкой в «Что нового».",
+            ["POST /release-tasks/{name}/run"], SCOPE_SERVICE, _только_админ_сервиса()),
+    Feature("fill_scope", "Ведение сервиса",
+            "Заполнить пустые «Объект» и «Проект» (временная)",
+            "Лечит дообъектное наследие; удалить вместе с наследием.",
+            ["GET/POST /admin/fill-empty-scope"], SCOPE_SERVICE, _только_админ_сервиса()),
+
+    # ---------------------------------------------------- Личные настройки
+    Feature("own_settings", "Личные настройки",
+            "Гамма, ракурс 3D, порог показа подписей, свой пароль",
+            "Своё меняет каждый сам, независимо от ролей; чужое — тот, кому выдан раздел "
+            "«Пользователи».",
+            ["PATCH /users/{id}/ui-theme, /view3d, /min-label-px, /set-password"],
+            SCOPE_SELF, {}),
+]
+
+FEATURES_BY_KEY = {f.key: f for f in FEATURES}
+
+# Порядок разделов в форме — тот, в котором они перечислены выше: он сложился
+# по смыслу, и сортировать его по алфавиту значит перемешать несвязанное.
+SECTIONS = list(dict.fromkeys(f.section for f in FEATURES))
+
+
+def feature(key: str) -> Feature:
+    """Раздел по ключу. Отсутствие ключа — ошибка ПРОГРАММИСТА, а не данных:
+    ключи приходят из этого же файла, и опечатка в проверке эндпоинта иначе
+    тихо превратилась бы в «прав нет ни у кого»."""
+    try:
+        return FEATURES_BY_KEY[key]
+    except KeyError:
+        raise KeyError(f"Неизвестный раздел прав: {key!r}. Он должен быть в app/features.py") from None
+
+
+def stronger(a: Optional[str], b: Optional[str]) -> str:
+    """Больший из двух уровней. Этим и складываются роли."""
+    ia = LEVELS.index(a) if a in LEVELS else 0
+    ib = LEVELS.index(b) if b in LEVELS else 0
+    return LEVELS[max(ia, ib)]

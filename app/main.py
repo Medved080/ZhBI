@@ -81,11 +81,12 @@ from app import contract_guard, contracting_bulk_edit, db_transfer, status_bulk_
 from app.access import (
     accessible_object_ids,
     assert_object_access,
+    assert_object_feature,
+    has_feature,
     is_system_admin,
-    object_role,
     object_roles,
-    require_object_access,
-    require_object_admin,
+    require_feature,
+    require_service_feature,
     require_system_admin,
 )
 from app.element_sync import summary_for_log
@@ -159,6 +160,7 @@ from app.fill_scope import router as fill_scope_router
 from app.ldap_auth import router as ldap_router
 from app.release_tasks import router as release_tasks_router
 from app.rights_matrix import router as rights_matrix_router
+from app.roles import router as roles_router
 from app.settings import router as settings_router
 from app.impersonation import ImpersonationMiddleware
 from app.upload_limits import (
@@ -261,6 +263,7 @@ app.include_router(auth_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
 # не должен иметь ни единого шанса уехать в {user_id}.
 app.include_router(rights_matrix_router)
+app.include_router(roles_router)
 app.include_router(release_tasks_router)
 app.include_router(users_router)
 app.include_router(sessions_router)
@@ -738,7 +741,7 @@ def get_element(element_id: int, user: sqlite3.Row = Depends(get_current_user)):
         # Карточка отдаёт элемент вместе со ВСЕЙ историей статусов (кто и
         # когда менял, с ФИО) и названием объекта — до аудита 2026-08-03
         # любому вошедшему по любому id (аудит безопасности).
-        _guard_elements(conn, user, [element_id], "view")
+        _guard_elements(conn, user, [element_id], "plan", "read")
         history_rows = conn.execute(
             "SELECT * FROM status_history WHERE element_id = ? ORDER BY changed_at",
             (element_id,),
@@ -777,7 +780,7 @@ def element_context(element_id: int, user: sqlite3.Row = Depends(get_current_use
         row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
-        _guard_elements(conn, user, [element_id], "view")
+        _guard_elements(conn, user, [element_id], "plan", "read")
 
         axes = [
             {"kind": r["kind"], "label": r["label"], "coord": r["coord"]}
@@ -849,7 +852,7 @@ def element_activity(element_id: int, limit: int = Query(200, le=1000),
     try:
         if conn.execute("SELECT 1 FROM elements WHERE id = ?", (element_id,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
-        _guard_elements(conn, user, [element_id], "view")
+        _guard_elements(conn, user, [element_id], "activity", "read")
         rows = conn.execute(
             "SELECT id, at, user_name, impersonator_name, action, old_value, new_value, "
             "request_id, details "
@@ -882,7 +885,7 @@ def update_status(
 ):
     conn = get_connection()
     try:
-        _guard_elements(conn, user, [element_id])
+        _guard_elements(conn, user, [element_id], "status", "write")
         # contract_id для новой записи — явно выбранный в диалоге (даже null —
         # "без контракта" осознанно) или унаследованный от предыдущей записи
         # (см. Docs/backlog.md, третий раунд, п.2 и app/contracts.py).
@@ -920,7 +923,7 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get
         missing = [i for i in ids if i not in existing_ids]
         if missing:
             raise HTTPException(status_code=404, detail=f"Элементы не найдены: {missing}")
-        _guard_elements(conn, user, ids)
+        _guard_elements(conn, user, ids, "status", "write")
 
         updated = []
         for item in body.items:
@@ -972,7 +975,7 @@ def set_element_contract(element_id: int, body: ElementContractIn,
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
-        _guard_elements(conn, user, [element_id], "user")
+        _guard_elements(conn, user, [element_id], "status", "write")
         if row["current_status"] == "planned":
             raise HTTPException(
                 status_code=409,
@@ -1050,7 +1053,7 @@ def update_element_comment(
     try:
         if conn.execute("SELECT 1 FROM elements WHERE id = ?", (element_id,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
-        _guard_elements(conn, user, [element_id])
+        _guard_elements(conn, user, [element_id], "comment", "write")
         conn.execute(
             "UPDATE elements SET comment = ?, updated_at = datetime('now') WHERE id = ?",
             (текст, element_id),
@@ -1073,7 +1076,7 @@ def update_element_planned_delivery_date(
     которую зовёт и развёрнутая таблица контракта на фронте)."""
     conn = get_connection()
     try:
-        _guard_elements(conn, user, [element_id])
+        _guard_elements(conn, user, [element_id], "planned_date", "write")
         data = set_planned_delivery_date(conn, element_id, body.planned_delivery_date, user)
         if data is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
@@ -1099,7 +1102,7 @@ def update_element_planned_delivery_date_bulk(
         missing = [i for i in ids if i not in existing_ids]
         if missing:
             raise HTTPException(status_code=404, detail=f"Элементы не найдены: {missing}")
-        _guard_elements(conn, user, ids)
+        _guard_elements(conn, user, ids, "planned_date", "write")
 
         updated = set_planned_delivery_dates_bulk(
             conn, [(item.element_id, item.planned_delivery_date) for item in body.items], user
@@ -1141,7 +1144,7 @@ def update_history_entry(
         element = conn.execute("SELECT object_id FROM elements WHERE id = ?", (element_id,)).fetchone()
         if element is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
-        assert_object_access(conn, admin, element["object_id"], "admin")
+        assert_object_feature(conn, admin, element["object_id"], "history", "write")
         entry = conn.execute(
             "SELECT * FROM status_history WHERE id = ? AND element_id = ?", (history_id, element_id)
         ).fetchone()
@@ -1210,7 +1213,7 @@ def delete_history_entry(
         row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
-        _guard_elements(conn, user, [element_id])
+        _guard_elements(conn, user, [element_id], "history", "write")
         entry = conn.execute(
             "SELECT id, status, changed_at FROM status_history WHERE id = ? AND element_id = ?",
             (history_id, element_id),
@@ -1323,7 +1326,7 @@ def _report_object_id(conn, body: "ReportRequestIn"):
     return _object_for_source_file(conn, body.source_file) if body.source_file else None
 
 
-def _guard_report(conn, user, body: "ReportRequestIn") -> "ReportRequestIn":
+def _guard_report(conn, user, body: "ReportRequestIn", key: str) -> "ReportRequestIn":
     """Доступ к отчёту и ОБЛАСТЬ его данных (аудит безопасности 2026-08-03).
 
     До этой правки все десять отчётов закрывались одним `get_current_user`,
@@ -1348,13 +1351,13 @@ def _guard_report(conn, user, body: "ReportRequestIn") -> "ReportRequestIn":
     """
     проверено = False
     if body.object_id is not None:
-        assert_object_access(conn, user, body.object_id, "view")
+        assert_object_feature(conn, user, body.object_id, key, "read")
         проверено = True
     if body.source_file:
-        _guard_source_file(conn, user, body.source_file, "view")
+        _guard_source_file(conn, user, body.source_file, key, "read")
         проверено = True
     if body.element_ids:
-        _guard_elements(conn, user, body.element_ids, "view")
+        _guard_elements(conn, user, body.element_ids, key, "read")
         проверено = True
 
     if not проверено:
@@ -1385,7 +1388,7 @@ def report_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current
     быть в тысячи элементов и не помещается в строку запроса."""
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body)
+        body = _guard_report(conn, user, body, "report_status")
         return build_status_report(conn, body.source_file, body.element_ids)
     finally:
         conn.close()
@@ -1396,7 +1399,7 @@ def report_dynamics(body: ReportRequestIn, user: sqlite3.Row = Depends(get_curre
     """Ежедневный «Отчёт о динамике поставки и монтажа»."""
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body)
+        body = _guard_report(conn, user, body, "report_dynamics")
         return build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
                                      _report_object_id(conn, body), body.week_from, body.week_to)
     finally:
@@ -1414,7 +1417,7 @@ def _report_file_response(content: bytes, name: str, media_type: str) -> Respons
 def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body)
+        body = _guard_report(conn, user, body, "report_dynamics")
         report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
                                        _report_object_id(conn, body), body.week_from, body.week_to)
     finally:
@@ -1428,7 +1431,7 @@ def report_dynamics_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_
 def report_dynamics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body)
+        body = _guard_report(conn, user, body, "report_dynamics")
         report = build_dynamics_report(conn, body.source_file, body.report_date, body.element_ids,
                                        _report_object_id(conn, body), body.week_from, body.week_to)
     finally:
@@ -1441,7 +1444,7 @@ def report_dynamics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_c
 def report_status_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body)
+        body = _guard_report(conn, user, body, "report_status")
         report = build_status_report(conn, body.source_file, body.element_ids)
     finally:
         conn.close()
@@ -1458,7 +1461,7 @@ def report_status_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_cu
 def report_status_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body)
+        body = _guard_report(conn, user, body, "report_status")
         report = build_status_report(conn, body.source_file, body.element_ids)
     finally:
         conn.close()
@@ -1476,7 +1479,7 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
     доступа ЗДЕСЬ, а не в каждом из трёх роутов: три копии одной проверки —
     ровно та схема, при которой забытая четвёртая открывает отчёт целиком
     (аудит безопасности 2026-08-03)."""
-    body = _guard_report(conn, user, body)
+    body = _guard_report(conn, user, body, "report_completion")
     return build_completion_report(conn, body.source_file, body.element_ids)
 
 
@@ -1491,7 +1494,7 @@ def report_contracting_schedule(body: ReportRequestIn,
     """
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body)
+        body = _guard_report(conn, user, body, "report_contracting")
         object_id = _report_object_id(conn, body)
         if object_id is None:
             raise HTTPException(
@@ -1513,7 +1516,7 @@ def _analytics(conn, user, body: ReportRequestIn) -> dict:
     «что с тем, что я сейчас выделил». Проверку прав это не ослабляет —
     объект берётся из `_guard_report`, то есть из уже проверенного чертежа.
     """
-    body = _guard_report(conn, user, body)
+    body = _guard_report(conn, user, body, "report_analytics")
     object_id = _report_object_id(conn, body)
     if object_id is None:
         raise HTTPException(status_code=400,
@@ -1598,7 +1601,7 @@ def _delivery_schedule(conn, user, body: "ReportRequestIn") -> dict:
     Проверка доступа тоже ЗДЕСЬ, а не в каждом из трёх роутов: три копии
     одной проверки — это ровно та схема, при которой забытая четвёртая
     открывает отчёт целиком (аудит безопасности 2026-08-03)."""
-    body = _guard_report(conn, user, body)
+    body = _guard_report(conn, user, body, "report_delivery")
     try:
         return build_delivery_schedule_report(
             conn, body.source_file, body.element_ids,
@@ -1634,7 +1637,7 @@ def report_delivery_schedule_cell(body: DeliveryCellIn,
     реальном файле это тысячи троек «строка × колонка × марка»."""
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body)
+        body = _guard_report(conn, user, body, "report_delivery")
         return build_delivery_cell_detail(
             conn, body.source_file, body.element_ids, body.date_from, body.date_to,
             body.step, body.group_by, body.path, body.column)
@@ -1691,10 +1694,16 @@ def _users_brief(conn, ids: list) -> list:
 
 
 def _admin_object_ids(conn, user) -> set:
-    """Объекты, на которых пользователь — администратор. Именно этот уровень
-    даёт право смотреть чужие действия: роль `user` на объекте — это право
-    работать, а не право наблюдать за коллегами."""
-    return {oid for oid, role in object_roles(conn, user).items() if role == "admin"}
+    """Объекты, где человеку позволено смотреть ЧУЖИЕ действия.
+
+    Работать на объекте и наблюдать за коллегами — разные права: до
+    2026-08-14 второе было привязано к роли «Полные права на объекте», а
+    теперь это отдельный раздел «activity_others», и кому его дать, решает
+    настройка ролей."""
+    if is_system_admin(user):
+        return {r["id"] for r in conn.execute("SELECT id FROM objects")}
+    return {oid for oid in object_roles(conn, user)
+            if has_feature(conn, user, "activity_others", "read", oid)}
 
 
 def _my_work_scope(conn, viewer, user_ids: Optional[list], all_users: bool = False) -> tuple:
@@ -1800,14 +1809,14 @@ def elements_changed(body: ChangedElementsIn, user: sqlite3.Row = Depends(get_cu
     """
     conn = get_connection()
     try:
-        assert_object_access(conn, user, body.object_id, "view")
+        assert_object_feature(conn, user, body.object_id, "plan", "read")
         свои = [user["id"]]
         нужны_чужие = body.user_ids is None or set(body.user_ids) != set(свои)
-        if нужны_чужие and not (is_system_admin(user)
-                                or object_role(conn, user, body.object_id) == "admin"):
+        if нужны_чужие and not has_feature(conn, user, "activity_others", "read", body.object_id):
             raise HTTPException(
                 status_code=403,
-                detail="Изменения других пользователей видит администратор объекта",
+                detail="Изменения других пользователей видит тот, кому выдан раздел "
+                       "«Журнал и „Моя работа“: действия других людей»",
             )
         ids = changed_element_ids(
             conn,
@@ -1836,8 +1845,8 @@ def object_activity_users(object_id: int, user: sqlite3.Row = Depends(get_curren
     """
     conn = get_connection()
     try:
-        assert_object_access(conn, user, object_id, "view")
-        админ = is_system_admin(user) or object_role(conn, user, object_id) == "admin"
+        assert_object_feature(conn, user, object_id, "activity", "read")
+        админ = has_feature(conn, user, "activity_others", "read", object_id)
         if not админ:
             # Обычный пользователь выбирать не может — отдаём только его
             # самого, чтобы форме не приходилось знать про права отдельно.
@@ -1877,14 +1886,14 @@ class BackupCreateIn(BaseModel):
 
 
 @app.get("/admin/backups")
-def admin_list_backups(admin: sqlite3.Row = Depends(require_system_admin)):
+def admin_list_backups(admin: sqlite3.Row = Depends(require_service_feature("backups", "read"))):
     """Все резервные копии на диске, новые сверху — из этого списка
     выбирается точка, на которую восстанавливаться."""
     return {"backups": list_backups()}
 
 
 @app.post("/admin/backups")
-def admin_create_backup(body: BackupCreateIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def admin_create_backup(body: BackupCreateIn, admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
     """Копия по кнопке. Записывается, КЕМ создана — в отличие от служебных,
     которые система снимает сама перед разрушительными операциями."""
     meta = create_backup(
@@ -1898,7 +1907,7 @@ def admin_create_backup(body: BackupCreateIn, admin: sqlite3.Row = Depends(requi
 
 
 @app.post("/admin/backups/{name}/restore")
-def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_system_admin)):
+def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
     """Восстановление на выбранный момент. ПЕРЕД восстановлением всегда
     снимается служебная копия текущего состояния — если выбрали не ту точку,
     вернуться будет куда.
@@ -1919,7 +1928,7 @@ def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_system_
 
 
 @app.delete("/admin/backups/{name}", status_code=204)
-def admin_delete_backup(name: str, admin: sqlite3.Row = Depends(require_system_admin)):
+def admin_delete_backup(name: str, admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
     try:
         delete_backup(name)
     except BackupError as e:
@@ -1929,7 +1938,7 @@ def admin_delete_backup(name: str, admin: sqlite3.Row = Depends(require_system_a
 
 
 @app.get("/admin/input-files")
-def admin_input_files(user: sqlite3.Row = Depends(require_system_admin)):
+def admin_input_files(user: sqlite3.Row = Depends(require_service_feature("import_input", "read"))):
     """Что сейчас лежит в Input/ — для диалога подтверждения перед импортом.
     Отдельным запросом, а не вместе с самим импортом: оператор должен
     увидеть список ДО того, как согласится перезаписать геометрию."""
@@ -1937,7 +1946,7 @@ def admin_input_files(user: sqlite3.Row = Depends(require_system_admin)):
 
 
 @app.post("/admin/import-input")
-def admin_import_input(user: sqlite3.Row = Depends(require_system_admin)):
+def admin_import_input(user: sqlite3.Row = Depends(require_service_feature("import_input", "write"))):
     """Импорт всех файлов из папки Input/ на сервере — по явной команде из
     меню. Раньше это происходило само при каждом старте сервера, то есть на
     каждый деплой и каждый перезапуск контейнера (см. on_startup, где
@@ -2032,7 +2041,7 @@ def search_activity(
     text: Optional[str] = Query(None, description="подстрока в марке/типе/подтипе/значениях"),
     limit: int = Query(200, le=2000),
     offset: int = Query(0, ge=0),
-    admin: sqlite3.Row = Depends(require_system_admin),
+    admin: sqlite3.Row = Depends(require_service_feature("activity_log", "read")),
 ):
     """Поиск по журналу. Только админу: журнал показывает, кто что делал, —
     это не то, что должно быть доступно всем ролям.
@@ -2091,7 +2100,7 @@ def search_activity(
 @app.post("/activity/cleanup")
 def cleanup_activity(
     before: str = Query(..., description="Удалить записи СТРОГО РАНЬШЕ этой даты, 'ГГГГ-ММ-ДД'"),
-    admin: sqlite3.Row = Depends(require_system_admin),
+    admin: sqlite3.Row = Depends(require_service_feature("activity_log", "write")),
 ):
     """Очистка журнала за период. Журнал растёт быстро (одна массовая смена
     статуса на реальном файле — это 9422 записи), поэтому механизм очистки
@@ -2149,7 +2158,7 @@ def get_changes(
         # Без проверки это давало непрерывное НАБЛЮДЕНИЕ за чужой стройкой:
         # опрос раз в 15 секунд отдаёт поток смен статусов, контрактов и дат
         # в реальном времени (аудит безопасности 2026-08-03).
-        _guard_source_file(conn, user, source_file, "view")
+        _guard_source_file(conn, user, source_file, "plan", "read")
         server_time = conn.execute("SELECT datetime('now') AS t").fetchone()["t"]
         if not since:
             return {"server_time": server_time, "elements": []}
@@ -2180,7 +2189,7 @@ def get_changes(
 
 
 @app.post("/admin/reset-status-history")
-def reset_status_history(user: sqlite3.Row = Depends(require_system_admin)):
+def reset_status_history(user: sqlite3.Row = Depends(require_service_feature("reset_history", "write"))):
     """Массовый сброс истории статусов ВСЕХ элементов — только для
     тестирования (живой запрос пользователя, см. Docs/backlog.md), НЕ
     ограничен одним чертежом/файлом. Каждый элемент возвращается в
@@ -2249,11 +2258,11 @@ def status_summary(
         where = f"WHERE {visible_elements_clause()}"
         params: list = []
         if object_id is not None:
-            assert_object_access(conn, user, object_id, "view")
+            assert_object_feature(conn, user, object_id, "plan", "read")
             where += " AND object_id = ?"
             params.append(object_id)
         elif source_file:
-            _guard_source_file(conn, user, source_file, "view")
+            _guard_source_file(conn, user, source_file, "plan", "read")
             where += " AND source_file = ?"
             params.append(source_file)
         else:
@@ -2330,7 +2339,7 @@ def get_status_colors(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.put("/status-colors")
-def set_status_colors(colors: dict[str, str], user: sqlite3.Row = Depends(require_system_admin)):
+def set_status_colors(colors: dict[str, str], user: sqlite3.Row = Depends(require_service_feature("dict_status_colors", "write"))):
     valid = {s.value for s in Status}
     for status in colors:
         if status not in valid:
@@ -2364,7 +2373,7 @@ def set_status_colors(colors: dict[str, str], user: sqlite3.Row = Depends(requir
 # есть доступ; правка — админу объекта, не сервиса).
 @app.get("/label-visibility")
 def get_label_visibility(object_id: int = Query(...),
-                         user: sqlite3.Row = Depends(require_object_access)):
+                         user: sqlite3.Row = Depends(require_feature("label_visibility", "read"))):
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -2378,7 +2387,7 @@ def get_label_visibility(object_id: int = Query(...),
 
 @app.put("/label-visibility")
 def set_label_visibility(settings: dict[str, bool], object_id: int = Query(...),
-                         user: sqlite3.Row = Depends(require_object_admin)):
+                         user: sqlite3.Row = Depends(require_feature("label_visibility", "write"))):
     conn = get_connection()
     try:
         for element_type, visible in settings.items():
@@ -2406,7 +2415,7 @@ def set_label_visibility(settings: dict[str, bool], object_id: int = Query(...),
 # не самой видимостью марки.
 @app.get("/label-dates-visibility")
 def get_label_dates_visibility(object_id: int = Query(...),
-                               user: sqlite3.Row = Depends(require_object_access)):
+                               user: sqlite3.Row = Depends(require_feature("label_visibility", "read"))):
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -2420,7 +2429,7 @@ def get_label_dates_visibility(object_id: int = Query(...),
 
 @app.put("/label-dates-visibility")
 def set_label_dates_visibility(settings: dict[str, bool], object_id: int = Query(...),
-                               user: sqlite3.Row = Depends(require_object_admin)):
+                               user: sqlite3.Row = Depends(require_feature("label_visibility", "write"))):
     conn = get_connection()
     try:
         for element_type, visible in settings.items():
@@ -2443,7 +2452,7 @@ def set_label_dates_visibility(settings: dict[str, bool], object_id: int = Query
 
 
 @app.get("/layer-type-combinations")
-def list_layer_type_combinations(admin: sqlite3.Row = Depends(require_system_admin)):
+def list_layer_type_combinations(admin: sqlite3.Row = Depends(require_service_feature("dict_element_shapes", "read"))):
     """Для экрана настроек формы маркера (п.11 третьего раунда) — все
     встреченные пары (слой, тип элемента) с их текущей формой (по
     умолчанию 'outline' — "как в оригинале", если явно не назначено иное в
@@ -2477,7 +2486,7 @@ def list_layer_type_combinations(admin: sqlite3.Row = Depends(require_system_adm
 
 
 @app.put("/element-shapes")
-def set_element_shapes(shapes: list[ElementShapeIn], user: sqlite3.Row = Depends(require_system_admin)):
+def set_element_shapes(shapes: list[ElementShapeIn], user: sqlite3.Row = Depends(require_service_feature("dict_element_shapes", "write"))):
     for s in shapes:
         if s.shape not in SHAPES:
             raise HTTPException(status_code=422, detail=f"Неизвестная форма: {s.shape}")
@@ -2499,7 +2508,7 @@ def set_element_shapes(shapes: list[ElementShapeIn], user: sqlite3.Row = Depends
 
 @app.get("/zone-colors")
 def list_zone_colors(object_id: int = Query(...),
-                     user: sqlite3.Row = Depends(require_object_access)):
+                     user: sqlite3.Row = Depends(require_feature("zone_colors", "read"))):
     """Для экрана настроек «Цвета зон» — цвет каждого крана ОБЪЕКТА (см.
     Docs/backlog.md, item 7). До этапа D ключом был файл, и список
     показывал один и тот же кран столько раз, сколько версий чертежа
@@ -2519,7 +2528,7 @@ def list_zone_colors(object_id: int = Query(...),
 
 @app.put("/zone-colors")
 def set_zone_colors(items: list[ZoneColorIn], object_id: int = Query(...),
-                    user: sqlite3.Row = Depends(require_object_admin)):
+                    user: sqlite3.Row = Depends(require_feature("zone_colors", "write"))):
     conn = get_connection()
     try:
         for item in items:
@@ -2634,7 +2643,7 @@ def zone_geometry(zone_id: int, user: sqlite3.Row = Depends(get_current_user)):
         # правка зоны объект проверяла, а чтение геометрии — нет (аудит
         # безопасности 2026-08-03, второй проход; ровно та же асимметрия
         # «писать нельзя, читать можно», что нашлась у справочника зон).
-        assert_object_access(conn, user, zone["object_id"], "view")
+        assert_object_feature(conn, user, zone["object_id"], "zones", "read")
 
         def levels_of(zid):
             return [
@@ -2795,7 +2804,7 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(ge
         # ярус»), и только потом отказ. Объект берётся из самой зоны —
         # принимать его параметром значило бы позволить назвать любой
         # доступный и править чужую зону.
-        assert_object_access(conn, admin, zone["object_id"], "admin")
+        assert_object_feature(conn, admin, zone["object_id"], "zones", "write")
         _validate_zone_edit(conn, zone, body)
 
         before = {
@@ -2883,7 +2892,7 @@ def undo_zone_edit(zone_id: int, admin: sqlite3.Row = Depends(get_current_user))
         zone = conn.execute("SELECT object_id FROM zones WHERE id = ?", (zone_id,)).fetchone()
         if zone is None:
             raise HTTPException(status_code=404, detail="Зона не найдена")
-        assert_object_access(conn, admin, zone["object_id"], "admin")
+        assert_object_feature(conn, admin, zone["object_id"], "zones", "write")
         result = zone_recalc.undo(conn, zone_id)
     finally:
         conn.close()
@@ -3210,7 +3219,7 @@ def update_element_fields(
         # Объект выводится из самого элемента: отдельным параметром его
         # передавать нельзя — клиент назвал бы любой, к которому у него есть
         # доступ, и правил бы чужой элемент.
-        assert_object_access(conn, admin, row["object_id"], "admin")
+        assert_object_feature(conn, admin, row["object_id"], "element_fields", "write")
 
         values = {}
         for field, raw in body.items():
@@ -3297,7 +3306,7 @@ class BulkEditExportIn(BaseModel):
 
 
 @app.post("/elements/bulk-edit/export")
-def bulk_edit_export(body: BulkEditExportIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def bulk_edit_export(body: BulkEditExportIn, admin: sqlite3.Row = Depends(require_service_feature("bulk_edit", "read"))):
     """Снимок реквизитов элементов ОДНИМ файлом — для правки в Excel и
     обратной загрузки (см. app/element_bulk_edit.py). Без element_ids — все
     элементы всех объектов, с ними — только отобранные фильтром схемы.
@@ -3342,7 +3351,7 @@ def bulk_edit_export(body: BulkEditExportIn, admin: sqlite3.Row = Depends(requir
 
 @app.post("/elements/bulk-edit/analyze")
 def bulk_edit_analyze(file: UploadFile = File(...), mode: str = Form("fields"),
-                      admin: sqlite3.Row = Depends(require_system_admin)):
+                      admin: sqlite3.Row = Depends(require_service_feature("bulk_edit", "write"))):
     """Сверяет загруженный файл с базой и возвращает список расхождений.
     НИЧЕГО НЕ ПИШЕТ — применение отдельным вызовом, после того как
     пользователь отметил флажками, что применять."""
@@ -3373,7 +3382,7 @@ class BulkEditApplyIn(BaseModel):
 
 
 @app.post("/elements/bulk-edit/apply")
-def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_service_feature("bulk_edit", "write"))):
     """Применяет отмеченные изменения."""
     if not body.changes:
         raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
@@ -3431,7 +3440,7 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
 
 
 @app.post("/admin/db-transfer/export")
-def db_transfer_export(admin: sqlite3.Row = Depends(require_system_admin)):
+def db_transfer_export(admin: sqlite3.Row = Depends(require_service_feature("db_transfer", "write"))):
     """Снимок ВСЕЙ базы и вложений одним архивом — то, что увозят с боевого
     сервера. Только администратор сервиса: в файле вся база целиком,
     включая пользователей и журнал."""
@@ -3461,7 +3470,7 @@ def db_transfer_export(admin: sqlite3.Row = Depends(require_system_admin)):
 
 
 @app.get("/admin/db-transfer/current")
-def db_transfer_current(admin: sqlite3.Row = Depends(require_system_admin)):
+def db_transfer_current(admin: sqlite3.Row = Depends(require_service_feature("db_transfer", "read"))):
     """Что сейчас в базе приёмника — левая колонка сверки «было/приедет».
     Отдельным запросом, до всякой загрузки: человек должен видеть, что
     именно он собирается потерять."""
@@ -3470,7 +3479,7 @@ def db_transfer_current(admin: sqlite3.Row = Depends(require_system_admin)):
 
 @app.post("/admin/db-transfer/stage")
 def db_transfer_stage(file: UploadFile = File(...),
-                      admin: sqlite3.Row = Depends(require_system_admin)):
+                      admin: sqlite3.Row = Depends(require_service_feature("db_transfer", "write"))):
     """Принять снимок и СВЕРИТЬ его с текущей базой. Ничего не меняет:
     замена — отдельным вызовом, с кодовым словом."""
     payload = read_upload_limited(file.file)
@@ -3497,7 +3506,7 @@ class DbTransferApplyIn(BaseModel):
 
 @app.post("/admin/db-transfer/apply")
 def db_transfer_apply(body: DbTransferApplyIn,
-                      admin: sqlite3.Row = Depends(require_system_admin)):
+                      admin: sqlite3.Row = Depends(require_service_feature("db_transfer", "write"))):
     """ПОЛНАЯ ЗАМЕНА базы и вложений содержимым снимка.
 
     Перед заменой всегда снимается служебная резервная копия (вид
@@ -3545,7 +3554,7 @@ class DbTransferForgetIn(BaseModel):
 
 @app.post("/admin/db-transfer/forget")
 def db_transfer_forget(body: DbTransferForgetIn,
-                       admin: sqlite3.Row = Depends(require_system_admin)):
+                       admin: sqlite3.Row = Depends(require_service_feature("db_transfer", "write"))):
     """Убрать загруженный снимок из очереди, не применяя. Архив — копия
     всей базы, и оставлять его на диске «на всякий случай» не надо."""
     db_transfer.forget_staged(body.token)
@@ -3561,7 +3570,7 @@ def _object_for_source_file(conn, source_file: str):
     return row["object_id"] if row else None
 
 
-def _guard_source_file(conn, user, source_file: str, minimum: str = "admin") -> None:
+def _guard_source_file(conn, user, source_file: str, key: str, kind: str = "write") -> None:
     """Доступ к операции над чертежом — по объекту этого чертежа.
 
     Файл без объекта отдаётся только администратору сервиса: раздавать
@@ -3576,10 +3585,10 @@ def _guard_source_file(conn, user, source_file: str, minimum: str = "admin") -> 
                        f"администратору сервиса",
             )
         return
-    assert_object_access(conn, user, object_id, minimum)
+    assert_object_feature(conn, user, object_id, key, kind)
 
 
-def _guard_elements(conn, user, element_ids, minimum: str = "user") -> None:
+def _guard_elements(conn, user, element_ids, key: str, kind: str = "write") -> None:
     """Доступ к правке элементов — по ОБЪЕКТАМ, которым они принадлежат.
 
     До 2026-08-02 эти операции (смена статуса, плановая дата, удаление
@@ -3616,7 +3625,7 @@ def _guard_elements(conn, user, element_ids, minimum: str = "user") -> None:
                            "администратору сервиса",
                 )
         else:
-            assert_object_access(conn, user, row["object_id"], minimum)
+            assert_object_feature(conn, user, row["object_id"], key, kind)
 
 
 def _accessible_objects_clause(conn, user, column: str = "object_id") -> tuple:
@@ -3671,7 +3680,7 @@ def _resolve_selection_item(conn, user, item):
     подтверждал бы и существование объекта, и его состояние (поймано на
     живой проверке этой же правки)."""
     if item.object_id is not None:
-        assert_object_access(conn, user, item.object_id, "view")
+        assert_object_feature(conn, user, item.object_id, "plan", "read")
     if not item.source_file and item.object_id is not None:
         try:
             item = item.model_copy(update={"source_file": object_source_file(conn, item.object_id)})
@@ -3680,7 +3689,7 @@ def _resolve_selection_item(conn, user, item):
     if item.source_file:
         # Явно присланный файл проверяется отдельно: он мог прийти и без
         # object_id (форма «Версии чертежа объекта»), и вместе с чужим.
-        _guard_source_file(conn, user, item.source_file, "view")
+        _guard_source_file(conn, user, item.source_file, "plan", "read")
     return item
 
 
@@ -3730,7 +3739,7 @@ def list_projects(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.post("/projects", response_model=ProjectOut)
-def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_service_feature("projects", "write"))):
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Наименование проекта не может быть пустым")
@@ -3749,7 +3758,7 @@ def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_system_
 
 
 @app.patch("/projects/{project_id}", response_model=ProjectOut)
-def update_project(project_id: int, body: ProjectIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def update_project(project_id: int, body: ProjectIn, admin: sqlite3.Row = Depends(require_service_feature("projects", "write"))):
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Наименование проекта не может быть пустым")
@@ -3775,7 +3784,7 @@ def update_project(project_id: int, body: ProjectIn, admin: sqlite3.Row = Depend
 
 
 @app.delete("/projects/{project_id}")
-def delete_project(project_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
+def delete_project(project_id: int, admin: sqlite3.Row = Depends(require_service_feature("projects", "write"))):
     """Удалять можно только ПУСТОЙ проект. Проект с объектами удалить нельзя
     и каскадом сносить его объекты тем более: за объектом стоят элементы со
     статусами и историей, и «удалил проект — потерял стройку» это ровно тот
@@ -3821,7 +3830,7 @@ def list_object_drawings(object_id: int, user: sqlite3.Row = Depends(get_current
         # require_object_access не подходит (она читает query) — проверка
         # той же функцией внутри. Она же различает 404 и 403 (аудит
         # безопасности 2026-08-03: раньше проверялось только существование).
-        assert_object_access(conn, user, object_id, "view")
+        assert_object_feature(conn, user, object_id, "drawings", "read")
         counts = {
             r["source_file"]: r["n"]
             for r in conn.execute(
@@ -3863,7 +3872,9 @@ def get_projects_tree(user: sqlite3.Row = Depends(get_current_user)):
         дерево = projects_tree(conn, accessible_object_ids(conn, user))
         for проект in дерево:
             for объект in проект["objects"]:
-                объект["role"] = роли.get(объект["id"])
+                # СПИСОК ролей, а не одна: с 2026-08-14 их может быть
+                # несколько, и разрешения складываются.
+                объект["roles"] = sorted(роли.get(объект["id"], set()))
         return {"projects": дерево,
                 "last_object_id": user["last_object_id"] if "last_object_id" in user.keys() else None}
     finally:
@@ -3886,7 +3897,7 @@ def set_last_object(body: LastObjectIn, user: sqlite3.Row = Depends(get_current_
             # пользователем чужой объект незачем, а ответ «такого объекта
             # нет» против «есть, но не твой» — уже подсказка (аудит
             # безопасности 2026-08-03).
-            assert_object_access(conn, user, body.object_id, "view")
+            assert_object_feature(conn, user, body.object_id, "plan", "read")
             exists = conn.execute("SELECT 1 FROM objects WHERE id = ?", (body.object_id,)).fetchone()
             if exists is None:
                 raise HTTPException(status_code=404, detail="Объект не найден")
@@ -3949,7 +3960,7 @@ class ObjectCreateIn(BaseModel):
 
 
 @app.post("/objects", response_model=ObjectOut)
-def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_service_feature("projects", "write"))):
     """Завести объект ЗАРАНЕЕ, до загрузки чертежа.
 
     Раньше объект появлялся только сам, при первом импорте, и создание было
@@ -3984,7 +3995,7 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_sys
 
 
 @app.patch("/objects/{object_id}", response_model=ObjectOut)
-def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depends(require_service_feature("projects", "write"))):
     """Переименование объекта. Создание и удаление намеренно НЕ поддержаны:
     объект появляется сам при первом импорте чертежа, а удаление отвязало бы
     все элементы с их историей — операция, которую пользователь отдельно
@@ -4040,7 +4051,7 @@ def get_allowed_subtypes(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @app.post("/allowed-subtypes")
-def add_allowed_subtype(body: AllowedSubtypeIn, user: sqlite3.Row = Depends(require_system_admin)):
+def add_allowed_subtype(body: AllowedSubtypeIn, user: sqlite3.Row = Depends(require_service_feature("dict_subtypes", "write"))):
     if body.element_type not in ZHBI_ELEMENT_TYPES:
         raise HTTPException(status_code=422, detail=f"Неизвестный тип элемента: {body.element_type}")
     if not body.subtype.strip():
@@ -4060,7 +4071,7 @@ def add_allowed_subtype(body: AllowedSubtypeIn, user: sqlite3.Row = Depends(requ
 
 
 @app.delete("/allowed-subtypes/{element_type}/{subtype}")
-def delete_allowed_subtype(element_type: str, subtype: str, user: sqlite3.Row = Depends(require_system_admin)):
+def delete_allowed_subtype(element_type: str, subtype: str, user: sqlite3.Row = Depends(require_service_feature("dict_subtypes", "write"))):
     conn = get_connection()
     try:
         conn.execute(
@@ -4077,7 +4088,7 @@ def delete_allowed_subtype(element_type: str, subtype: str, user: sqlite3.Row = 
 def axis_grid(source_file: str = Query(...), user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        _guard_source_file(conn, user, source_file, "view")
+        _guard_source_file(conn, user, source_file, "plan", "read")
         rows = conn.execute(
             "SELECT kind, label, coord FROM axis_lines WHERE source_file = ?",
             (source_file,),
@@ -4094,7 +4105,7 @@ def list_layers(source_file: str = Query(...), user: sqlite3.Row = Depends(get_c
     """Слои файла для выбора произвольного набора под источником (п.5 третьего раунда)."""
     conn = get_connection()
     try:
-        _guard_source_file(conn, user, source_file, "view")
+        _guard_source_file(conn, user, source_file, "plan", "read")
         rows = conn.execute(
             f"SELECT layer, COUNT(*) as n FROM elements WHERE source_file = ? "
             f"AND {visible_elements_clause()} GROUP BY layer ORDER BY layer",
@@ -4413,9 +4424,9 @@ def export_xlsx(body: ExportRequestIn, user: sqlite3.Row = Depends(get_current_u
         # и чтение через отчёт, а в режиме history сюда попадает вся
         # `status_history` с ФИО исполнителей (аудит безопасности 2026-08-03).
         if body.source_file:
-            _guard_source_file(conn, user, body.source_file, "view")
+            _guard_source_file(conn, user, body.source_file, "export", "read")
         elif body.element_ids:
-            _guard_elements(conn, user, body.element_ids, "view")
+            _guard_elements(conn, user, body.element_ids, "export", "read")
         elif not is_system_admin(user):
             raise HTTPException(
                 status_code=400,
@@ -4449,7 +4460,7 @@ def export_pdf(
 ):
     conn = get_connection()
     try:
-        _guard_source_file(conn, user, source_file, "view")
+        _guard_source_file(conn, user, source_file, "export", "read")
         try:
             content = build_schema_pdf(conn, source_file, date, format_display_name(user),
                                        _object_for_source_file(conn, source_file))
@@ -4478,7 +4489,7 @@ def import_dxf(
     # спрятанная кнопка — не защита, запрос к /import-dxf можно отправить
     # и без неё. Загрузка чертежа перезаписывает геометрию всех элементов
     # файла, то есть по последствиям это операция уровня админа.
-    user: sqlite3.Row = Depends(require_system_admin),
+    user: sqlite3.Row = Depends(require_service_feature("drawings", "write")),
 ):
     try:
         result = import_dxf_file(file, source_file, UPLOADS_DIR)
@@ -4527,7 +4538,7 @@ def analyze_dxf(
                            "объекты может только администратор сервиса",
                 )
         else:
-            assert_object_access(conn, user, object_id, "admin")
+            assert_object_feature(conn, user, object_id, "drawings", "write")
     finally:
         conn.close()
     try:
@@ -4567,7 +4578,7 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
         # чертёж применился бы в доступный объект.
         conn = get_connection()
         try:
-            assert_object_access(conn, user, analysis["object_id"], "admin")
+            assert_object_feature(conn, user, analysis["object_id"], "drawings", "write")
         finally:
             conn.close()
         # Метка операции — общая у сводного события ниже и у поэлементных
@@ -4623,7 +4634,7 @@ def import_history_xlsx(
     # закрытое соединение переиспользовалось следующей строкой. Поймано
     # живой проверкой формы.
     try:
-        _guard_source_file(conn, admin, source_file)
+        _guard_source_file(conn, admin, source_file, "import_history", "write")
         parsed = parse_history_xlsx(content)
         # Общая метка операции: сводное событие ниже и поэлементные события
         # внутри import_history связываются через неё (activity.new_request_id).
@@ -4658,7 +4669,7 @@ def import_history_xlsx(
 
 @app.post("/import-contracting-xlsx")
 def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query(...),
-                            admin: sqlite3.Row = Depends(require_system_admin)):
+                            admin: sqlite3.Row = Depends(require_service_feature("import_contracting", "write"))):
     """Файл "Контрактация" (см. app/contracting_import.py, Docs/backlog.md,
     "Контрактация 2.0") — создаёт/находит Контрагентов/Договоры/
     Спецификации/Контракты и их позиции по (тип, марка).
@@ -4688,7 +4699,7 @@ def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query
 
 
 @app.post("/import-schedule-xlsx")
-def import_schedule_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_system_admin)):
+def import_schedule_xlsx(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_service_feature("import_schedule", "write"))):
     """Файл графика MS Project (см. app/schedule_import.py, Docs/backlog.md,
     "Контрактация 2.0") — заполняет project_delivery_date/
     project_smr_start_date элементов по блоку Кран/Стоянка/Этаж/Тип/Подтип."""
@@ -4728,7 +4739,7 @@ def get_import_template_sample(key: str, user: sqlite3.Row = Depends(get_current
 
 
 @app.get("/settings/export")
-def export_settings(admin: sqlite3.Row = Depends(require_system_admin)):
+def export_settings(admin: sqlite3.Row = Depends(require_service_feature("settings_io", "read"))):
     # Экспорт включает password_hash/password_salt — это осознанно (п.10 в
     # связке с п.3: перенос настроек на другой сервер без необходимости всем
     # заново задавать пароли). Файл предназначен только администратору,
@@ -4774,7 +4785,7 @@ def export_settings(admin: sqlite3.Row = Depends(require_system_admin)):
 
 
 @app.post("/settings/import")
-def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_system_admin)):
+def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_service_feature("settings_io", "write"))):
     try:
         payload = json.loads(read_upload_limited(file.file))
     except json.JSONDecodeError:

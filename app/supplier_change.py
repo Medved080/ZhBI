@@ -72,7 +72,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app import activity, contract_guard, impersonation
-from app.access import assert_object_access, require_object_access, require_object_contractor
+from app.access import (
+    assert_object_any_feature,
+    assert_object_feature,
+    require_any_feature,
+)
 from app.auth import audit_display_name, get_current_user
 from app.contracts import _specification_chain, build_contract_name, recompute_status_and_actual_date
 from app.db import get_connection
@@ -85,6 +89,21 @@ STATUS_TITLES = {s.value: STATUS_LABELS_RU[s] for s in STATUS_ORDER}
 KIND_SUPPLIER = "supplier_change"
 KIND_SWAP = "link_swap"
 KIND_TITLES = {KIND_SUPPLIER: "Замена поставщика", KIND_SWAP: "Обмен привязками"}
+
+# Раздел прав у каждого вида свой (2026-08-14): администратор может доверить
+# кому-то замену поставщика, не открывая обмен привязками, и наоборот.
+KIND_FEATURES = {KIND_SUPPLIER: "doc_supplier_change", KIND_SWAP: "doc_link_swap"}
+DOC_FEATURES = tuple(KIND_FEATURES.values())
+
+
+def _раздел(kind: str) -> str:
+    """Раздел прав по виду документа. Неизвестный вид — ошибка запроса, а не
+    повод пустить: молча выбрать один из двух значило бы дать право,
+    которого не давали."""
+    try:
+        return KIND_FEATURES[kind]
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"Неизвестный вид документа «{kind}»") from None
 
 DRAFT, POSTED = "draft", "posted"
 DOC_STATUS_TITLES = {DRAFT: "Черновик", POSTED: "Проведён"}
@@ -241,7 +260,7 @@ def _available_in_contract(conn, contract_id: int) -> dict:
 
 @router.get("/refs")
 def supplier_change_refs(object_id: int = Query(...),
-                         user: sqlite3.Row = Depends(require_object_contractor)):
+                         user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write"))):
     """Справочные данные формы: контракты объекта. Отдельным запросом, а не
     из `state.contracts` на клиенте: тот список общий на все доступные
     стройки, а документ работает внутри одного объекта."""
@@ -257,7 +276,7 @@ def supplier_change_candidates(
     object_id: int = Query(...),
     from_contract_id: int = Query(...),
     to_contract_id: int = Query(...),
-    user: sqlite3.Row = Depends(require_object_contractor),
+    user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write")),
 ):
     """Что и в каком количестве можно перенести ЗАМЕНОЙ ПОСТАВЩИКА: позиции
     (тип, марка) с перечнем самих изделий.
@@ -321,7 +340,7 @@ def swap_elements(
     object_id: int = Query(...),
     contract_id: int = Query(...),
     mark: str = Query(...),
-    user: sqlite3.Row = Depends(require_object_contractor),
+    user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write")),
 ):
     """Изделия одной марки, стоящие на этом контракте, — материал для подбора
     рамкой на схеме.
@@ -337,7 +356,7 @@ def swap_elements(
     """
     conn = get_connection()
     try:
-        assert_object_access(conn, user, object_id, "contract")
+        assert_object_any_feature(conn, user, object_id, DOC_FEATURES, "write")
         _assert_contract_of_object(conn, contract_id, object_id, "стороны")
         rows = conn.execute(
             """
@@ -399,7 +418,7 @@ def swap_elements(
 def contract_marks(
     object_id: int = Query(...),
     contract_id: int = Query(...),
-    user: sqlite3.Row = Depends(require_object_contractor),
+    user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write")),
 ):
     """Марки, изделия которых стоят на ЭТОМ контракте, с количествами.
 
@@ -410,7 +429,7 @@ def contract_marks(
     """
     conn = get_connection()
     try:
-        assert_object_access(conn, user, object_id, "contract")
+        assert_object_any_feature(conn, user, object_id, DOC_FEATURES, "write")
         _assert_contract_of_object(conn, contract_id, object_id, "стороны 1")
         rows = conn.execute(
             "SELECT mark, element_type, COUNT(*) AS n FROM elements "
@@ -429,7 +448,7 @@ def mark_contracts(
     object_id: int = Query(...),
     mark: str = Query(...),
     exclude_contract_id: Optional[int] = Query(None),
-    user: sqlite3.Row = Depends(require_object_contractor),
+    user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write")),
 ):
     """Контракты объекта, на которых стоят изделия ЭТОЙ марки, с количествами.
 
@@ -443,7 +462,7 @@ def mark_contracts(
     """
     conn = get_connection()
     try:
-        assert_object_access(conn, user, object_id, "contract")
+        assert_object_any_feature(conn, user, object_id, DOC_FEATURES, "write")
         rows = conn.execute(
             """
             SELECT e.contract_id AS contract_id, e.element_type AS element_type, COUNT(*) AS n
@@ -527,7 +546,7 @@ def _doc_items(conn, doc_id: int) -> list:
 
 @router.get("")
 def list_supplier_changes(object_id: int = Query(...),
-                          user: sqlite3.Row = Depends(require_object_access)):
+                          user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "read"))):
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -550,7 +569,7 @@ def get_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_use
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        assert_object_access(conn, user, doc["object_id"], "view")
+        assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "read")
         return {**_doc_head(conn, doc), "items": _doc_items(conn, doc_id)}
     finally:
         conn.close()
@@ -645,7 +664,7 @@ def create_supplier_change(body: SupplierChangeIn,
     только намерение; применяет его отдельная кнопка «Провести»."""
     conn = get_connection()
     try:
-        assert_object_access(conn, user, body.object_id, "contract")
+        assert_object_feature(conn, user, body.object_id, _раздел(body.kind), "write")
         _validate_head(conn, body)
         номер = (body.number or "").strip() or _next_number(conn, body.object_id)
         if conn.execute(
@@ -688,7 +707,7 @@ def update_supplier_change(doc_id: int, body: SupplierChangeIn,
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        assert_object_access(conn, user, doc["object_id"], "contract")
+        assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "write")
         if doc["status"] != DRAFT:
             raise HTTPException(status_code=409,
                                 detail="Документ проведён — сначала отмените проведение")
@@ -725,7 +744,7 @@ def delete_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        assert_object_access(conn, user, doc["object_id"], "contract")
+        assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "write")
         if doc["status"] != DRAFT:
             raise HTTPException(status_code=409,
                                 detail="Проведённый документ не удаляется — сначала отмените проведение")
@@ -947,7 +966,7 @@ def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_us
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        assert_object_access(conn, user, doc["object_id"], "contract")
+        assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "write")
         if doc["status"] == POSTED:
             raise HTTPException(status_code=409, detail="Документ уже проведён")
         items = conn.execute(
@@ -1009,7 +1028,7 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        assert_object_access(conn, user, doc["object_id"], "contract")
+        assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "write")
         if doc["status"] != POSTED:
             raise HTTPException(status_code=409, detail="Документ не проведён")
         items = conn.execute(

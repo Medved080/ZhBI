@@ -610,34 +610,60 @@ function showApp() {
 // один человек бывает прорабом на одном здании и наблюдателем на
 // соседнем). Системный админ получает "admin" на всех объектах прямо от
 // сервера, отдельной ветки здесь не нужно.
-function currentObjectRole() {
+function currentObjectRoles() {
   const текущий = currentObject();
-  return текущий ? текущий.object.role : null;
+  return (текущий && текущий.object.roles) || [];
 }
 
-// Лестница ролей на объекте, по возрастанию прав — та же и в том же
-// порядке, что OBJECT_ROLES в app/access.py. Сравнивать роли перечислением
-// («admin или user») нельзя: с появлением `contract` (2026-08-04) каждое
-// такое место пришлось бы найти и дописать, а найденными оказались бы не
-// все. Порог задаётся именем роли, а не индексом.
-const OBJECT_ROLE_ORDER = ["view", "user", "contract", "admin"];
-function objectRoleAtLeast(minimum, роль = currentObjectRole()) {
-  if (!роль) return false;
-  return OBJECT_ROLE_ORDER.indexOf(роль) >= OBJECT_ROLE_ORDER.indexOf(minimum);
+// ПРАВА КЛИЕНТА ПРИХОДЯТ С СЕРВЕРА (2026-08-14, блок «Настройка ролей»).
+//
+// Здесь была своя копия лестницы ролей и свои пороги — «роль не ниже
+// user», «не ниже contract», — переписанные на второй язык руками. Пока
+// пороги были константами в коде, две копии расходились только при правке;
+// с настраиваемыми порогами копия начала бы врать при первой же смене
+// настройки: кнопка появлялась бы там, где сервер отказывает, и пропадала
+// бы там, где он разрешает.
+//
+// Теперь клиент ничего не выводит. GET /me/permissions отдаёт готовые
+// уровни по разделам (посчитанные тем же has_feature, что и проверки), а
+// вместе с ними лестницу и пороги — они нужны ровно для одного: посчитать
+// доступ на ДРУГОМ объекте, не показываемом сейчас (списки объектов в
+// формах документов).
+state.rights = { features: {}, role_features: {}, roles: [], object_roles: [], system_admin: false };
+
+async function loadPermissions() {
+  const адрес = state.objectId ? `/me/permissions?object_id=${state.objectId}` : "/me/permissions";
+  try {
+    state.rights = await api(адрес);
+  } catch (e) {
+    // Не смогли узнать права — считаем, что их нет. Оставить прежние
+    // значит показывать пункты чужого объекта после переключения.
+    state.rights = { features: {}, role_features: {}, roles: [], object_roles: [], system_admin: false };
+    console.warn("Не удалось получить права:", e.message);
+  }
 }
 
-// Право ПРАВИТЬ на показываемом объекте. Ровно то же, что проверяет
-// сервер: смена статуса и плановой даты — роль не ниже `user` на объекте
-// элемента (_guard_elements в app/main.py), правка реквизитов, истории и
-// зон — `admin`, контрактные справочники — `contract`. Держать это на
-// СИСТЕМНОЙ роли, как было до 2026-08-02, нельзя: она про ведение
-// сервиса, а не про стройку.
-function canEditOnObject() {
-  return objectRoleAtLeast("user");
+// Доступ к разделу на ПОКАЗЫВАЕМОМ объекте. kind: "read" | "write".
+// Уровень "write" включает чтение — это лестница, а не два независимых
+// признака.
+function can(key, kind = "write") {
+  const уровень = (state.rights.features || {})[key];
+  return kind === "write" ? уровень === "write" : уровень === "read" || уровень === "write";
 }
 
-function isObjectAdmin() {
-  return currentObjectRole() === "admin";
+// То же для ЧУЖОГО объекта, о котором известен только НАБОР ролей.
+// Повторяет app/access.has_feature: роли складываются, уровень — максимум
+// по набору. Расходиться им негде — разрешения приехали оттуда же.
+function canOn(роли, key, kind = "write") {
+  if (state.rights.system_admin) return true;
+  const выданное = state.rights.role_features || {};
+  let уровень = "none";
+  for (const роль of (роли || [])) {
+    const l = (выданное[роль] || {})[key];
+    if (l === "write") уровень = "write";
+    else if (l === "read" && уровень !== "write") уровень = "read";
+  }
+  return kind === "write" ? уровень === "write" : уровень !== "none";
 }
 
 // Администратор СЕРВИСА (users.role), а не объекта. Заведено 2026-08-05
@@ -650,49 +676,41 @@ function systemAdmin() {
 }
 
 // Ведение контрактных справочников: контрагенты, договоры, спецификации,
-// контракты. Отдельно от isObjectAdmin — комплектовщик ими занимается, а
-// зонами, чертежом и реквизитами изделий нет.
+// контракты. Отдельно от прав на зоны и реквизиты — комплектовщик
+// справочниками занимается, а чертежом и геометрией нет.
 function canEditContracting() {
-  return objectRoleAtLeast("contract");
+  return can("contracts", "write") || can("counterparties", "write");
 }
 
-function applyRolePermissions() {
+async function applyRolePermissions() {
   const системнаяРоль = state.currentUser.role;
+  await loadPermissions();
   // Смена пароля — самообслуживание, но у доменного пользователя пароля
   // сервиса нет: форма приняла бы пароль, а сервер отклонил бы его 409
   // (app/users.py set_password). Пароль домена меняется в самом домене.
   document.getElementById("menu-change-password").style.display =
     state.currentUser.auth_method === "domain" ? "none" : "";
-  // ТРИ РАЗНЫХ ПРАВИЛА, и путать их нельзя:
-  //  .admin-only           — ведение СЕРВИСА (пользователи, проекты,
-  //                          объекты, сквозные справочники, резервные
-  //                          копии, журнал). Гасится системной ролью.
-  //  .object-admin-only    — операции ВНУТРИ объекта (зоны, настройки
-  //                          объекта, загрузка чертежа, выгрузки).
-  //                          Гасится ролью на ПОКАЗЫВАЕМОМ объекте.
-  //  .object-contract-only — контрактные справочники (контрагенты,
-  //                          договоры, спецификации, контракты). Роль на
-  //                          показываемом объекте не ниже «Комплектовщик»
-  //                          (2026-08-04).
-  // До 2026-08-02 всё меню гасилось системной ролью, и администратор
-  // объекта не видел ничего из того, что сервер ему уже разрешал: этапы C
-  // и D разграничили доступ на сервере, а интерфейс остался прежним.
-  // Меню "Настройки" целиком видно всем ролям — внутри него живёт
-  // самообслуживание (смена пароля, цвет подписей).
+  // ПУНКТ МЕНЮ ГАСИТСЯ СВОИМ РАЗДЕЛОМ (2026-08-14).
+  //
+  // Раньше правил было три — `.admin-only` (ведение сервиса),
+  // `.object-admin-only` (операции внутри объекта), `.object-contract-only`
+  // (контрактные справочники), — и они огрубляли картину: за одним классом
+  // стояли пункты с РАЗНЫМИ порогами, а с настраиваемыми порогами такое
+  // огрубление сразу же начинает врать. Теперь у пункта написано, какой
+  // раздел он открывает (`data-feature`) и в каком объёме
+  // (`data-feature-kind`), а уровень доступа приезжает с сервера.
+  //
+  // `.admin-only` остался ровно у тех пунктов, которым раздела нет:
+  // памятка администратора, загрузка из папки Input, экспорт/импорт
+  // настроек, чистка истории, временная обработка пустых объектов. Это
+  // обслуживание сервиса, а не работа на стройке, и настраивать в них
+  // нечего.
+  document.querySelectorAll("#settings-menu [data-feature]").forEach(elm => {
+    const доступно = can(elm.dataset.feature, elm.dataset.featureKind || "write");
+    elm.style.display = доступно ? "" : "none";
+  });
   document.querySelectorAll("#settings-menu .admin-only").forEach(elm => {
     elm.style.display = системнаяРоль === "admin" ? "" : "none";
-  });
-  const объектныйАдмин = currentObjectRole() === "admin";
-  document.querySelectorAll("#settings-menu .object-admin-only").forEach(elm => {
-    elm.style.display = объектныйАдмин ? "" : "none";
-  });
-  // Администратор сервиса правит контрактные справочники всегда — сервер
-  // пускает его в обход грантов, и на пустой системе (объектов ещё нет,
-  // роли на объекте тоже) пункт иначе пропал бы у того единственного, кто
-  // и должен завести первого контрагента.
-  const комплектовщик = системнаяРоль === "admin" || canEditContracting();
-  document.querySelectorAll("#settings-menu .object-contract-only").forEach(elm => {
-    elm.style.display = комплектовщик ? "" : "none";
   });
   // Группа без единого видимого пункта не должна оставаться заголовком,
   // раскрывающим пустую панель. Считаем ПОСЛЕ применения ролей выше и по
@@ -727,12 +745,12 @@ function applyRolePermissions() {
       group.style.display = видимые.length ? "" : "none";
     });
 
-  // Переключатель рабочего места (АРМ комплектовщика) — администратору
-  // сервиса и КОМПЛЕКТОВЩИКУ (решение пользователя 2026-08-10): рабочее
-  // место названо его именем и сделано под его работу, а прорабу пока не
+  // Переключатель рабочего места (АРМ комплектовщика) — тому, кто ведёт
+  // контрактацию (решение пользователя 2026-08-10): рабочее место названо
+  // именем комплектовщика и сделано под его работу, а прорабу пока не
   // показывается. Признак тот же, что у контрактных справочников
-  // (`комплектовщик` выше): роль на ПОКАЗЫВАЕМОМ объекте не ниже
-  // «Комплектовщика», плюс администратор сервиса всегда. Гасится весь
+  // (canEditContracting): с 2026-08-14 это не имя роли, а ПОРОГ раздела
+  // «Контракты» — кого туда пустили настройкой, тот и видит АРМ. Гасится весь
   // переключатель целиком, а не одна кнопка: «Модель» без пары —
   // переключатель из одного положения, то есть лишний элемент на экране.
   // Гашение здесь ЧИСТО ИНТЕРФЕЙСНОЕ и правами не является: дашборд считает
@@ -740,7 +758,7 @@ function applyRolePermissions() {
   // доступного роли он не показывает.
   const switchEl = document.getElementById("workspace-switch");
   if (switchEl) {
-    const можно = комплектовщик;
+    const можно = canEditContracting();
     switchEl.style.display = можно ? "" : "none";
     // Роль могла смениться на живой вкладке (режим «от имени», повторный
     // /me) — человек, оказавшийся без права, не должен остаться в АРМ.
@@ -800,7 +818,7 @@ async function checkAuth() {
     if (серверная !== currentSkin()) { localStorage.setItem(SKIN_KEY, серверная); applySkin(серверная); }
     document.getElementById("user-name").textContent = user.display_name;
     applyImpersonationBar(user);
-    applyRolePermissions();
+    await applyRolePermissions();
     // Личная настройка меню — ПОСЛЕ применения прав: applyRolePermissions
     // прячет недоступные пункты, а порядок и избранное расставляются по
     // тем, что остались видимыми.
@@ -1187,7 +1205,7 @@ async function loadProjectsTree() {
   // Роль приходит вместе с деревом, а меню строится раньше (checkAuth) —
   // пересчитываем, иначе объектные пункты остались бы скрытыми до первого
   // переключения объекта.
-  applyRolePermissions();
+  await applyRolePermissions();
 }
 
 function currentObject() {
@@ -1314,7 +1332,7 @@ async function switchObject(objectId) {
   // наблюдатель на соседнем — обычный случай, ради которого роль и стала
   // свойством гранта. Меню пересобирается ДО загрузки схемы: даже если
   // она не загрузится, показывать пункты чужого объекта нельзя.
-  applyRolePermissions();
+  await applyRolePermissions();
   await loadLateThreshold();  // порог опоздания — настройка ОБЪЕКТА (этап D)
   try {
     await loadPlan(false);   // false — пересчитать вид: у объекта своя сетка осей
@@ -6751,7 +6769,7 @@ function contractDetailsHtml(element) {
     // повторным переводом — то есть враньём в истории ради реквизита.
     // Теперь по щелчку открывается тот же подбор контракта, что и при
     // уходе с «Запланирован», но статус не трогается.
-    const можно = element.current_status !== "planned" && canEditOnObject();
+    const можно = element.current_status !== "planned" && can("status", "write");
     if (!можно) return `<div class="hint-text">Контракт не назначен</div>`;
     return `<button type="button" class="card-pick-contract" data-pick-contract="${element.id}">
       Контракт не назначен <span class="hint-text">— выбрать</span></button>`;
@@ -6934,7 +6952,7 @@ function renderAttachments(container, entityType, entityId, { canUpload = false,
 
 async function showCard(element) {
   const card = document.getElementById("card");
-  const canEdit = canEditOnObject();
+  const canEdit = can("status", "write");
   const technicalHtml = TECHNICAL_FIELD_GROUPS.map(g => `
     <div class="card-block"><h4>${g.title}</h4><table>${fieldRowsHtml(element, g.fields)}</table></div>
   `).join("");
@@ -7025,7 +7043,7 @@ async function showCard(element) {
   // должен задерживать показ марки и статуса, ради которых карточку и
   // открывают.
   renderAttachments(document.getElementById("card-attachments"), "element", element.id,
-                    { canUpload: canEdit, canDelete: isObjectAdmin() });
+                    { canUpload: can("attachments", "write"), canDelete: can("attachments_delete", "write") });
 
   if (canEdit) {
     const кнопка = document.getElementById("card-comment-save");
@@ -7170,7 +7188,7 @@ function clearSelection() {
 const ctxMenu = document.getElementById("ctx-menu");
 
 function openCtxMenu(element, clientX, clientY) {
-  if (!canEditOnObject()) return;   // смена статуса — роль на объекте, не системная
+  if (!can("status", "write")) return;   // смена статуса — порог раздела, не системная роль
   ctxMenu.innerHTML = "";
   const title = document.createElement("div");
   title.className = "ctx-title";
@@ -10535,10 +10553,10 @@ async function renderObjectsModal(projectId = null) {
     if (!d.open || !место || место.dataset.loaded) return;
     место.dataset.loaded = "1";
     const oid = Number(место.dataset.attachObject);
-    const роль = (state.projects.flatMap(p => p.objects).find(x => x.id === oid) || {}).role;
+    const роли = (state.projects.flatMap(p => p.objects).find(x => x.id === oid) || {}).roles || [];
     renderAttachments(место, "object", oid, {
-      canUpload: роль === "admin" || роль === "user",
-      canDelete: роль === "admin",
+      canUpload: canOn(роли, "attachments", "write"),
+      canDelete: canOn(роли, "attachments_delete", "write"),
     });
   }));
 
@@ -11399,11 +11417,11 @@ async function openElementForm(elementId, show = true) {
   document.getElementById("ef-comment-status").textContent = "";
   // Комментарий может править прораб (роль user), реквизиты рядом — только
   // админ объекта: поле и кнопка живут по своим правам, а не по правам формы.
-  const можноКомментировать = canEditOnObject();
+  const можноКомментировать = can("comment", "write");
   document.getElementById("ef-comment").disabled = !можноКомментировать;
   document.getElementById("ef-comment-save").style.display = можноКомментировать ? "" : "none";
   renderAttachments(document.getElementById("ef-attachments"), "element", efElement.id,
-                    { canUpload: можноКомментировать, canDelete: isObjectAdmin() });
+                    { canUpload: can("attachments", "write"), canDelete: can("attachments_delete", "write") });
   if (show) elementFormBackdrop.classList.add("open");
 }
 
@@ -11692,7 +11710,7 @@ async function renderEcDetail() {
     box.innerHTML = `<p class="hint-text" style="color:var(--color-danger)">${escapeHtml(e.message)}</p>`;
     return;
   }
-  const admin = isObjectAdmin();   // правка реквизитов и истории — админ ОБЪЕКТА
+  const admin = can("element_fields", "write");   // правка реквизитов — свой порог
   const statusOptions = state.statusOrder
     .map(st => `<option value="${st}"${st === element.current_status ? " selected" : ""}>` +
                `${escapeHtml(state.statusLabels[st] || st)}</option>`).join("");
@@ -11861,7 +11879,7 @@ async function renderZonesModal() {
         ${zonesCategory === "Стоянка" ? '<th style="text-align:left">Кран</th>' : ""}
         <th style="text-align:left">Ярусы</th>
         <th style="text-align:right">Элементов</th>
-        ${systemAdmin() ? "<th></th>" : ""}
+        ${can("zones", "write") ? "<th></th>" : ""}
       </tr></thead>
       <tbody>${zones.map(z => `<tr data-zone-id="${z.id}"${z.is_current ? "" : ' class="hint-text"'}
         ${canEditZones() ? 'style="cursor:pointer"' : ""}>
@@ -11870,7 +11888,7 @@ async function renderZonesModal() {
         ${zonesCategory === "Стоянка" ? `<td>${escapeHtml(z.parent_name || "не определён")}</td>` : ""}
         <td>${escapeHtml(zoneLevelsText(z.levels))}</td>
         <td style="text-align:right">${z.elements}</td>
-        ${systemAdmin() ? `<td>${trashButtonHtml(`data-del-zone="${z.id}"`, "Удалить зону")}</td>` : ""}
+        ${can("zones", "write") ? `<td>${trashButtonHtml(`data-del-zone="${z.id}"`, "Удалить зону")}</td>` : ""}
       </tr>`).join("")}</tbody></table>`;
     if (canEditZones()) {
       box.querySelectorAll("tr[data-zone-id]").forEach(tr => {
@@ -11902,7 +11920,7 @@ async function renderZonesModal() {
 // с минимумом "admin"). Просмотр справочника доступен всем ролям, поэтому
 // строка кликабельна не у всех.
 function canEditZones() {
-  return isObjectAdmin();
+  return can("zones", "write");
 }
 
 // ---------- Форма правки зоны: точки + предпросмотр (решения З13, З14) ----------
@@ -12437,10 +12455,16 @@ document.getElementById("subtypes-close").addEventListener("click", () => subtyp
 // На каждом можно либо задать роль, либо оставить «не задано» — тогда
 // действует роль сверху, и она тут же подписана, чтобы результат был виден
 // без вычислений в уме.
-const OBJECT_ROLE_LABELS = {
-  view: "Просмотр", user: "Работа со статусами", contract: "Комплектовщик",
-  admin: "Полные права на объекте",
-};
+// Роли на объекте приходят с сервера вместе с картой прав
+// (GET /me/permissions): набор настраивается, и держать его копию в коде
+// значит врать после первой же заведённой роли.
+function objectRoleList() {
+  return state.rights.roles || [];
+}
+function objectRoleName(key) {
+  const r = objectRoleList().find(x => x.key === key);
+  return r ? r.name : key;
+}
 
 // Ключ уровня. Строкой, а не объектом: Map по объектам сравнивала бы их по
 // ссылке, и повторный рендер терял бы выбранное.
@@ -12448,24 +12472,35 @@ const ACCESS_ALL = "all";
 const accessProjectKey = (pid) => `p:${pid}`;
 const accessObjectKey = (pid, oid) => `o:${pid}:${oid}`;
 
-// Состояние открытой формы: ключ уровня -> роль. Живёт до сохранения, на
-// сервер уходит целиком (PUT /users/{id}/access) — форма задаёт СОСТОЯНИЕ
-// прав, а не разницу, и считать разницу на клиенте незачем.
+// Состояние открытой формы: ключ уровня -> НАБОР ролей. Живёт до
+// сохранения, на сервер уходит целиком (PUT /users/{id}/access) — форма
+// задаёт СОСТОЯНИЕ прав, а не разницу.
+//
+// Набор, а не одна роль (2026-08-14): ролей на уровне может быть несколько,
+// и разрешения складываются.
 let ueAccess = new Map();
 
-function accessEffectiveRole(pid, oid) {
-  if (oid != null && ueAccess.has(accessObjectKey(pid, oid))) return null; // задано явно
-  if (oid != null && ueAccess.has(accessProjectKey(pid))) return ueAccess.get(accessProjectKey(pid));
-  if (oid == null && pid != null && ueAccess.has(accessProjectKey(pid))) return null;
-  return ueAccess.get(ACCESS_ALL) || null;
+function ueRoles(key) {
+  return ueAccess.get(key) || new Set();
 }
 
-function accessRoleSelect(key, value) {
-  const опции = ['<option value="">— не задано —</option>'].concat(
-    Object.entries(OBJECT_ROLE_LABELS).map(([v, l]) =>
-      `<option value="${v}"${v === value ? " selected" : ""}>${escapeHtml(l)}</option>`)
-  );
-  return `<select data-access-key="${escapeHtml(key)}">${опции.join("")}</select>`;
+// Что приедет на этот уровень СВЕРХУ. С 2026-08-14 уровни СКЛАДЫВАЮТСЯ, а
+// не перекрываются: роль, выданная на «все проекты», действует и на объекте,
+// даже если у объекта есть свои роли. Поэтому подпись говорит «плюс
+// сверху», а не «действует» — и понизить человека точечно больше нельзя,
+// можно только не выдавать общий грант.
+function accessInherited(pid, oid) {
+  const сверху = new Set(ueRoles(ACCESS_ALL));
+  if (oid != null) for (const r of ueRoles(accessProjectKey(pid))) сверху.add(r);
+  return [...сверху];
+}
+
+function accessRoleChecks(key) {
+  const выбранные = ueRoles(key);
+  return objectRoleList().map(r =>
+    `<label class="access-role"><input type="checkbox" data-access-key="${escapeHtml(key)}"`
+    + ` data-access-role="${escapeHtml(r.key)}"${выбранные.has(r.key) ? " checked" : ""}>`
+    + `${escapeHtml(r.name)}</label>`).join("");
 }
 
 function renderAccessTree() {
@@ -12473,53 +12508,57 @@ function renderAccessTree() {
   const заметка = document.getElementById("ue-access-note");
   const системныйАдмин = document.getElementById("ue-role").value === "admin";
   заметка.textContent = системныйАдмин
-    ? "Администратор сервиса видит и правит все объекты в обход грантов — дерево ниже ему не нужно."
-    : "";
+    ? "Администратор сервиса видит и правит все объекты в обход выданных ролей — дерево ниже ему не нужно."
+    : "Роли складываются: выданное на верхнем уровне действует и ниже. Чтобы дать на одном объекте меньше, не выдавайте роль на все проекты.";
   box.style.opacity = системныйАдмин ? "0.5" : "";
 
-  const строка = (класс, имя, key, унаследовано) => {
-    const подпись = унаследовано
-      ? `<span class="access-inherited"> — ${escapeHtml(OBJECT_ROLE_LABELS[унаследовано])}</span>`
+  const строка = (класс, имя, key, сверху) => {
+    const подпись = (сверху && сверху.length)
+      ? `<span class="access-inherited"> + сверху: ${escapeHtml(сверху.map(objectRoleName).join(", "))}</span>`
       : "";
     return `<div class="access-row ${класс}">
       <span class="access-row-name">${escapeHtml(имя)}${подпись}</span>
-      ${accessRoleSelect(key, ueAccess.get(key) || "")}
+      <span class="access-roles">${accessRoleChecks(key)}</span>
     </div>`;
   };
 
   let html = строка("access-row-all", "Все проекты", ACCESS_ALL, null);
   for (const проект of state.projects.filter(p => p.id)) {
     html += строка("access-row-project", проект.name, accessProjectKey(проект.id),
-                   accessEffectiveRole(проект.id, null));
+                   accessInherited(проект.id, null));
     for (const объект of проект.objects) {
       html += строка("access-row-object", объект.name, accessObjectKey(проект.id, объект.id),
-                     accessEffectiveRole(проект.id, объект.id));
+                     accessInherited(проект.id, объект.id));
     }
   }
   box.innerHTML = html;
-  box.querySelectorAll("select[data-access-key]").forEach(sel => {
-    sel.disabled = системныйАдмин;
-    sel.addEventListener("change", () => {
-      const key = sel.dataset.accessKey;
-      if (sel.value) ueAccess.set(key, sel.value); else ueAccess.delete(key);
-      // Пересобираем целиком: снятие роли у проекта меняет подписи
-      // «унаследовано» у всех его объектов, и точечной правкой это не
-      // выразить.
+  box.querySelectorAll("input[data-access-key]").forEach(inp => {
+    inp.disabled = системныйАдмин;
+    inp.addEventListener("change", () => {
+      const key = inp.dataset.accessKey;
+      const набор = new Set(ueRoles(key));
+      if (inp.checked) набор.add(inp.dataset.accessRole); else набор.delete(inp.dataset.accessRole);
+      if (набор.size) ueAccess.set(key, набор); else ueAccess.delete(key);
+      // Пересобираем целиком: правка верхнего уровня меняет подписи
+      // «плюс сверху» у всего, что ниже, и точечно это не выразить.
       renderAccessTree();
     });
   });
 }
 
-// Гранты из дерева в том виде, в каком их ждёт сервер. Уровень «все
-// проекты» — оба поля пустые; проект — только project_id; объект — оба.
+// Гранты из дерева в том виде, в каком их ждёт сервер: по строке на КАЖДУЮ
+// роль уровня. Уровень «все проекты» — оба поля пустые; проект — только
+// project_id; объект — оба.
 function collectAccessGrants() {
   const гранты = [];
-  for (const [key, роль] of ueAccess) {
-    if (key === ACCESS_ALL) гранты.push({ project_id: null, object_id: null, role: роль });
-    else if (key.startsWith("p:")) гранты.push({ project_id: Number(key.slice(2)), object_id: null, role: роль });
-    else {
-      const [, pid, oid] = key.split(":");
-      гранты.push({ project_id: Number(pid), object_id: Number(oid), role: роль });
+  for (const [key, роли] of ueAccess) {
+    for (const роль of роли) {
+      if (key === ACCESS_ALL) гранты.push({ project_id: null, object_id: null, role: роль });
+      else if (key.startsWith("p:")) гранты.push({ project_id: Number(key.slice(2)), object_id: null, role: роль });
+      else {
+        const [, pid, oid] = key.split(":");
+        гранты.push({ project_id: Number(pid), object_id: Number(oid), role: роль });
+      }
     }
   }
   return гранты;
@@ -12530,9 +12569,11 @@ async function loadAccessInto(userId) {
   if (!userId) return;                     // новый пользователь — пустое дерево
   const data = await api(`/users/${userId}/access`);
   for (const g of data.grants) {
-    if (g.project_id == null) ueAccess.set(ACCESS_ALL, g.role);
-    else if (g.object_id == null) ueAccess.set(accessProjectKey(g.project_id), g.role);
-    else ueAccess.set(accessObjectKey(g.project_id, g.object_id), g.role);
+    const key = g.project_id == null ? ACCESS_ALL
+      : g.object_id == null ? accessProjectKey(g.project_id)
+      : accessObjectKey(g.project_id, g.object_id);
+    if (!ueAccess.has(key)) ueAccess.set(key, new Set());
+    ueAccess.get(key).add(g.role);
   }
 }
 
@@ -12770,14 +12811,18 @@ document.getElementById("user-password-save").addEventListener("click", async ()
 // значит превратить одну форму в десятки запросов. Копим и сохраняем разом.
 const accessMatrixBackdrop = document.getElementById("access-matrix-backdrop");
 let amUsers = [];                 // полные записи из GET /users (нужны для PATCH роли)
-let amAccess = new Map();         // userId -> Map(ключ уровня -> роль)
+let amAccess = new Map();         // userId -> Map(ключ уровня -> НАБОР ролей)
 let amSystemRole = new Map();     // userId -> системная роль
 let amOriginal = "";              // снимок для определения «что изменилось»
 
 function amSnapshot() {
+  // Наборы разворачиваем в отсортированные списки: Set сериализуется в
+  // JSON как «{}», и снимок был бы одинаковым при любых правках — форма
+  // считала бы, что менять нечего.
   return JSON.stringify(amUsers.map(u => [
     u.id, amSystemRole.get(u.id),
-    Array.from(amAccess.get(u.id) || new Map()).sort(),
+    Array.from(amAccess.get(u.id) || new Map())
+      .map(([k, набор]) => [k, [...набор].sort()]).sort(),
   ]));
 }
 
@@ -12799,24 +12844,31 @@ function amColumns() {
 // Роль, которая действует на уровне, если он сам «не задан», — то же
 // правило «частный перекрывает общий», что и в дереве карточки
 // (accessEffectiveRole), только для конкретного пользователя.
+// Что придёт на этот уровень СВЕРХУ: с 2026-08-14 уровни складываются, а
+// не перекрываются, поэтому подпись говорит «+ сверху», а не «действует».
 function amInherited(userId, column) {
   const роли = amAccess.get(userId) || new Map();
-  if (column.kind === "all") return null;
-  if (column.kind === "project") return роли.get(ACCESS_ALL) || null;
-  const проект = роли.get(accessProjectKey(column.projectId));
-  return проект || роли.get(ACCESS_ALL) || null;
+  const сверху = new Set(роли.get(ACCESS_ALL) || []);
+  if (column.kind === "object") {
+    for (const r of (роли.get(accessProjectKey(column.projectId)) || [])) сверху.add(r);
+  }
+  return column.kind === "all" ? [] : [...сверху];
 }
 
 function amRoleSelectHtml(userId, column, disabled) {
-  const value = (amAccess.get(userId) || new Map()).get(column.key) || "";
-  const опции = ['<option value="">— не задано —</option>'].concat(
-    Object.entries(OBJECT_ROLE_LABELS).map(([v, l]) =>
-      `<option value="${v}"${v === value ? " selected" : ""}>${escapeHtml(l)}</option>`));
-  const унаследовано = value ? null : amInherited(userId, column);
-  return `<select data-am-user="${userId}" data-am-key="${escapeHtml(column.key)}"`
+  const выбранные = (amAccess.get(userId) || new Map()).get(column.key) || new Set();
+  // Множественный выбор: ролей на уровне бывает несколько, и они
+  // складываются. Список, а не набор галочек, — иначе ячейка в таблице на
+  // десяток колонок вырастает в высоту вчетверо.
+  const опции = objectRoleList().map(r =>
+    `<option value="${escapeHtml(r.key)}"${выбранные.has(r.key) ? " selected" : ""}>`
+    + `${escapeHtml(r.name)}</option>`);
+  const сверху = amInherited(userId, column);
+  return `<select multiple size="${Math.min(Math.max(опции.length, 2), 4)}"`
+    + ` data-am-user="${userId}" data-am-key="${escapeHtml(column.key)}"`
     + `${disabled ? " disabled" : ""}>${опции.join("")}</select>`
-    + (унаследовано
-      ? `<span class="am-inherited">действует: ${escapeHtml(OBJECT_ROLE_LABELS[унаследовано])}</span>`
+    + (сверху.length
+      ? `<span class="am-inherited">+ сверху: ${escapeHtml(сверху.map(objectRoleName).join(", "))}</span>`
       : "");
 }
 
@@ -12877,10 +12929,12 @@ document.getElementById("access-matrix-table").addEventListener("change", (e) =>
     return;
   }
   const роли = amAccess.get(userId) || new Map();
-  if (sel.value) роли.set(sel.dataset.amKey, sel.value); else роли.delete(sel.dataset.amKey);
+  // Множественный выбор: берём ВСЁ выделенное в списке.
+  const набор = new Set([...sel.selectedOptions].map(o => o.value));
+  if (набор.size) роли.set(sel.dataset.amKey, набор); else роли.delete(sel.dataset.amKey);
   amAccess.set(userId, роли);
-  // Целиком: снятие роли у проекта меняет подписи «действует» у всех его
-  // объектов, точечной правкой это не выразить (тот же довод, что в дереве).
+  // Целиком: правка верхнего уровня меняет подписи «+ сверху» у всего, что
+  // ниже, точечной правкой это не выразить (тот же довод, что в дереве).
   renderAccessMatrix();
 });
 
@@ -12899,9 +12953,11 @@ async function openAccessMatrix() {
     amSystemRole.set(u.id, u.role);
     const роли = new Map();
     for (const g of (matrix.grants[String(u.id)] || [])) {
-      if (g.project_id == null) роли.set(ACCESS_ALL, g.role);
-      else if (g.object_id == null) роли.set(accessProjectKey(g.project_id), g.role);
-      else роли.set(accessObjectKey(g.project_id, g.object_id), g.role);
+      const key = g.project_id == null ? ACCESS_ALL
+        : g.object_id == null ? accessProjectKey(g.project_id)
+        : accessObjectKey(g.project_id, g.object_id);
+      if (!роли.has(key)) роли.set(key, new Set());
+      роли.get(key).add(g.role);
     }
     amAccess.set(u.id, роли);
   }
@@ -12909,6 +12965,222 @@ async function openAccessMatrix() {
   renderAccessMatrix();
   accessMatrixBackdrop.classList.add("open");
 }
+
+// ------------------------------------------------- настройка ролей
+//
+// МАТРИЦА: по вертикали разделы системы, по горизонтали роли, в ячейке
+// уровень доступа — Нет / Чтение / Изменение. Роли независимы, у человека
+// их может быть несколько, и разрешения складываются: чтобы понять, что
+// выйдет, ячейки читают по строке, беря наибольшее из выданного.
+//
+// Перечень РАЗДЕЛОВ не правится — он приходит с сервера (app/features.py) и
+// заводится вместе с кодом проверки; придумать в форме несуществующую
+// проверку нельзя.
+//
+// Роли сохраняются СРАЗУ (добавление, переименование, порядок, удаление),
+// ячейки — кнопкой. Разница намеренная: правка роли тянет за собой чужие
+// данные (выданные доступы) и должна быть отдельным осознанным действием с
+// немедленным результатом, а ячейки правят пачками по всей таблице, и
+// подтверждать каждую — мучение.
+const rolesBackdrop = document.getElementById("roles-backdrop");
+let rolesData = null;        // ответ GET /roles целиком
+let rolesDraft = new Map();  // "роль|раздел" -> уровень, до сохранения
+
+const rolesCellKey = (роль, раздел) => `${роль}|${раздел}`;
+
+function rolesLevel(роль, раздел) {
+  const правка = rolesDraft.get(rolesCellKey(роль, раздел));
+  if (правка !== undefined) return правка;
+  const строка = rolesData.features.find(f => f.key === раздел);
+  return (строка && строка.levels[роль]) || "none";
+}
+
+function renderRolesGrid() {
+  const роли = rolesData.roles;
+  const шапка = `<thead><tr><th class="rf-name">Раздел</th>`
+    + роли.map(r => `<th class="rf-role">${escapeHtml(r.name)}`
+        + `<span class="rf-granted" title="Кому выдана эта роль">выдана: ${r.granted}</span>`
+        + `<span class="rf-role-tools">`
+        + `<button class="btn btn-secondary" data-role-left="${r.key}" title="Левее">←</button>`
+        + `<button class="btn btn-secondary" data-role-right="${r.key}" title="Правее">→</button>`
+        + `<button class="btn btn-secondary" data-role-rename="${r.key}" title="Переименовать">✎</button>`
+        + `<button class="btn btn-secondary" data-role-del="${r.key}" title="Удалить роль">✕</button>`
+        + `</span></th>`).join("")
+    + `<th class="rf-sysadmin">Администратор<br>сервиса</th></tr></thead><tbody>`;
+
+  const строки = [];
+  let группа = null;
+  for (const f of rolesData.features) {
+    if (f.section !== группа) {
+      группа = f.section;
+      // Название группы в отдельном span: сама ячейка растянута на всю
+      // строку и прилипнуть к левому краю не может — уедет вместе с
+      // прокруткой. Липнет ТЕКСТ внутри неё.
+      строки.push(`<tr class="rf-section"><td colspan="${роли.length + 2}">`
+        + `<span class="rf-section-name">${escapeHtml(группа)}</span></td></tr>`);
+    }
+    const название = `<td class="rf-name">${escapeHtml(f.title)}`
+      + `<span class="rf-scope">${escapeHtml(f.scope_label || "")}</span>`
+      + (f.note ? `<span class="rf-note">${escapeHtml(f.note)}</span>` : "")
+      + `</td>`;
+    if (f.fixed) {
+      // «Своё» роли не подчиняется: показываем, но не даём править —
+      // спрятать строку значило бы оставить перечень неполным, а неполному
+      // перечню перестают доверять.
+      строки.push(`<tr>${название}<td colspan="${роли.length + 1}" class="rf-scope">`
+        + `Своё — меняет каждый сам, роли ни при чём</td></tr>`);
+      continue;
+    }
+    const ячейки = роли.map(r => {
+      const текущий = rolesLevel(r.key, f.key);
+      const изменена = rolesDraft.has(rolesCellKey(r.key, f.key));
+      const опции = Object.entries(rolesData.level_labels).map(([v, l]) =>
+        `<option value="${v}"${v === текущий ? " selected" : ""}>${escapeHtml(l)}</option>`).join("");
+      return `<td class="rf-cell${изменена ? " rf-dirty" : ""}">`
+        + `<select data-cell-role="${r.key}" data-cell-feature="${f.key}"`
+        + ` class="rf-level rf-${текущий}">${опции}</select></td>`;
+    }).join("");
+    // Администратор сервиса проходит проверки в обход настройки, и снять
+    // это нельзя — колонка показана, чтобы вопрос «а он-то что может»
+    // не возникал, но правке не подлежит.
+    строки.push(`<tr>${название}${ячейки}<td class="rf-sysadmin">Изменение</td></tr>`);
+  }
+  document.getElementById("roles-table").innerHTML = шапка + строки.join("") + "</tbody>";
+  document.getElementById("roles-status").textContent =
+    rolesDraft.size ? `Не сохранено ячеек: ${rolesDraft.size}` : "";
+}
+
+async function openRolesSetup() {
+  document.getElementById("roles-error").textContent = "";
+  rolesData = await api("/roles");
+  rolesDraft = new Map();
+  renderRolesGrid();
+  rolesBackdrop.classList.add("open");
+}
+
+async function reloadRoles() {
+  rolesData = await api("/roles");
+  renderRolesGrid();
+}
+
+document.getElementById("roles-table").addEventListener("change", (e) => {
+  const sel = e.target.closest("select[data-cell-role]");
+  if (!sel) return;
+  const { cellRole, cellFeature } = sel.dataset;
+  const строка = rolesData.features.find(f => f.key === cellFeature);
+  const было = (строка && строка.levels[cellRole]) || "none";
+  const ключ = rolesCellKey(cellRole, cellFeature);
+  // Вернули как было — правка снимается, а не остаётся «изменением в ноль»:
+  // счётчик несохранённого должен показывать реальную разницу.
+  if (sel.value === было) rolesDraft.delete(ключ);
+  else rolesDraft.set(ключ, sel.value);
+  renderRolesGrid();
+});
+
+document.getElementById("roles-table").addEventListener("click", async (e) => {
+  const кнопка = e.target.closest("button[data-role-left], button[data-role-right], "
+                                 + "button[data-role-rename], button[data-role-del]");
+  if (!кнопка) return;
+  const ошибка = document.getElementById("roles-error");
+  ошибка.textContent = "";
+  const d = кнопка.dataset;
+  try {
+    if (d.roleLeft || d.roleRight) {
+      // Порядок отправляется ЦЕЛИКОМ — сервер принимает только полный
+      // набор, чтобы клиент не считал разницу. Это ТОЛЬКО показ: роли
+      // независимы, и объём прав перестановкой не меняется.
+      const порядок = rolesData.roles.map(r => r.key);
+      const i = порядок.indexOf(d.roleLeft || d.roleRight);
+      const j = d.roleLeft ? i - 1 : i + 1;
+      if (j < 0 || j >= порядок.length) return;
+      [порядок[i], порядок[j]] = [порядок[j], порядок[i]];
+      await api("/roles/order", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keys: порядок }),
+      });
+    } else if (d.roleRename) {
+      const было = rolesData.roles.find(r => r.key === d.roleRename);
+      const имя = prompt("Новое название роли:", было ? было.name : "");
+      if (!имя || !имя.trim()) return;
+      await api(`/roles/${encodeURIComponent(d.roleRename)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: имя.trim() }),
+      });
+    } else if (d.roleDel) {
+      const план = await api(`/roles/${encodeURIComponent(d.roleDel)}/delete-plan`);
+      const роль = rolesData.roles.find(r => r.key === d.roleDel);
+      const текст = план.granted
+        ? `Роль «${роль ? роль.name : d.roleDel}» выдана ${план.users} чел. `
+          + `(${план.granted} выдач). Удаление снимет её у всех; у кого она была `
+          + `единственной на объекте — потеряют доступ к объекту.\n\nУдалить?`
+        : `Роль «${роль ? роль.name : d.roleDel}» никому не выдана. Удалить?`;
+      if (!confirm(текст)) return;
+      const итог = await api(`/roles/${encodeURIComponent(d.roleDel)}`, { method: "DELETE" });
+      showToast(итог.granted ? `Роль удалена, снято выдач: ${итог.granted}` : "Роль удалена",
+                "success");
+    }
+    // Ячейки в работе могли ссылаться на удалённую роль — правки сбрасываем
+    // вместе с перечиткой: сохранять их после смены набора ролей значит
+    // отправить на сервер то, чего человек уже не видит.
+    rolesDraft = new Map();
+    await reloadRoles();
+  } catch (err) {
+    ошибка.textContent = err.message;
+  }
+});
+
+document.getElementById("roles-add").addEventListener("click", async () => {
+  const поле = document.getElementById("roles-new-name");
+  const ошибка = document.getElementById("roles-error");
+  ошибка.textContent = "";
+  if (!поле.value.trim()) return;
+  try {
+    await api("/roles", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: поле.value.trim() }),
+    });
+    поле.value = "";
+    await reloadRoles();
+    showToast("Роль заведена пустой — отметьте, что ей можно", "info");
+  } catch (err) {
+    ошибка.textContent = err.message;
+  }
+});
+
+document.getElementById("roles-save").addEventListener("click", async () => {
+  const ошибка = document.getElementById("roles-error");
+  ошибка.textContent = "";
+  if (!rolesDraft.size) { showToast("Менять нечего", "info"); return; }
+  try {
+    const итог = await api("/roles/features", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: [...rolesDraft].map(([ключ, уровень]) => {
+          const [role_key, feature_key] = ключ.split("|");
+          return { role_key, feature_key, level: уровень };
+        }),
+      }),
+    });
+    rolesDraft = new Map();
+    await reloadRoles();
+    showToast(`Сохранено ячеек: ${итог.changed.length}`, "success");
+    // Свои права могли измениться этой же правкой — перечитываем карту,
+    // иначе меню осталось бы прежним до перезагрузки страницы.
+    await applyRolePermissions();
+  } catch (err) {
+    ошибка.textContent = err.message;
+  }
+});
+
+document.getElementById("menu-roles").addEventListener("click", async () => {
+  try {
+    await openRolesSetup();
+  } catch (e) {
+    showToast("Не удалось открыть настройку ролей: " + e.message, "warning");
+  }
+});
+document.getElementById("roles-close").addEventListener("click", () =>
+  rolesBackdrop.classList.remove("open"));
 
 document.getElementById("menu-access-matrix").addEventListener("click", async () => {
   try {
@@ -12933,12 +13205,18 @@ document.getElementById("access-matrix-save").addEventListener("click", async ()
   кнопка.disabled = true;
   try {
     for (const u of amUsers) {
-      const гранты = Array.from(amAccess.get(u.id) || new Map()).map(([key, роль]) => {
-        if (key === ACCESS_ALL) return { project_id: null, object_id: null, role: роль };
-        if (key.startsWith("p:")) return { project_id: Number(key.slice(2)), object_id: null, role: роль };
-        const [, pid, oid] = key.split(":");
-        return { project_id: Number(pid), object_id: Number(oid), role: роль };
-      });
+      // По строке на КАЖДУЮ роль уровня: ролей на уровне бывает несколько.
+      const гранты = [];
+      for (const [key, роли] of (amAccess.get(u.id) || new Map())) {
+        for (const роль of роли) {
+          if (key === ACCESS_ALL) гранты.push({ project_id: null, object_id: null, role: роль });
+          else if (key.startsWith("p:")) гранты.push({ project_id: Number(key.slice(2)), object_id: null, role: роль });
+          else {
+            const [, pid, oid] = key.split(":");
+            гранты.push({ project_id: Number(pid), object_id: Number(oid), role: роль });
+          }
+        }
+      }
       if (amSystemRole.get(u.id) !== u.role) {
         // Системная роль правится ПОЛНЫМ телом (UserUpdateIn) — берём его из
         // той же записи, что показана в таблице, чтобы правка роли не
@@ -13554,7 +13832,7 @@ async function renderCounterpartiesList() {
         <b>${escapeHtml(cp.short_name)}</b>
         <span class="hint-text dict-row-rest">${escapeHtml(cp.full_name)}${cp.inn ? " · ИНН " + escapeHtml(cp.inn) : ""}${cp.code ? " · код " + escapeHtml(cp.code) : ""}</span>
         <span class="dict-row-actions">
-          ${systemAdmin() ? trashButtonHtml(`data-del-counterparty="${cp.id}"`, "Удалить контрагента") : ""}
+          ${can("dict_delete", "write") ? trashButtonHtml(`data-del-counterparty="${cp.id}"`, "Удалить контрагента") : ""}
         </span>
       </div>
     `;
@@ -13589,7 +13867,7 @@ function objectsForAgreement() {
   const список = [];
   for (const p of state.projects) {
     for (const o of p.objects) {
-      if (objectRoleAtLeast("contract", o.role)) список.push({ id: o.id, label: `${p.name} · ${o.name}` });
+      if (canOn(o.roles, "doc_supplier_change", "write") || canOn(o.roles, "doc_link_swap", "write")) список.push({ id: o.id, label: `${p.name} · ${o.name}` });
     }
   }
   return список;
@@ -13665,7 +13943,7 @@ async function renderCounterpartyAgreements() {
         <span class="hint-text">${a.agreement_date ? "от " + formatDateRu(a.agreement_date) : "без даты"}</span>
         <span class="hint-text dict-row-rest">${escapeHtml(objectLabelById(a.object_id))}</span>
         <span class="dict-row-actions">
-          ${systemAdmin() ? trashButtonHtml(`data-del-agreement="${a.id}"`, "Удалить договор") : ""}
+          ${can("dict_delete", "write") ? trashButtonHtml(`data-del-agreement="${a.id}"`, "Удалить договор") : ""}
         </span>
       </span></summary>
       <div class="cpe-agreement-body">
@@ -13737,7 +14015,7 @@ async function renderCounterpartyAgreements() {
             <b>${escapeHtml(s.number)}</b>
             <span class="hint-text dict-row-rest">${s.specification_date ? "от " + formatDateRu(s.specification_date) : "без даты"}</span>
             <span class="dict-row-actions">
-              ${systemAdmin() ? trashButtonHtml(`data-del-spec="${s.id}"`, "Удалить спецификацию") : ""}
+              ${can("dict_delete", "write") ? trashButtonHtml(`data-del-spec="${s.id}"`, "Удалить спецификацию") : ""}
             </span>
           </span></summary>
           <div>
@@ -13793,7 +14071,7 @@ async function renderCounterpartyAgreements() {
                 <span class="hint-text">${позиций ? `позиций: ${позиций}, всего изделий: ${всего}` : "без позиций"}</span>
               </span>
               <span class="dict-row-actions">
-                ${systemAdmin() ? trashButtonHtml(`data-del-contract-here="${c.id}"`, "Удалить контракт") : ""}
+                ${can("dict_delete", "write") ? trashButtonHtml(`data-del-contract-here="${c.id}"`, "Удалить контракт") : ""}
               </span>`;
             contractsBox.appendChild(cRow);
             // Отдельным окном поверх формы контрагента (запрос пользователя):
@@ -14204,7 +14482,7 @@ async function renderContractsList() {
       <td style="white-space:nowrap;">
         <span class="dict-row-actions" style="justify-content:flex-end;">
           <button class="btn btn-sm btn-secondary" data-toggle-lines="${c.id}">Позиции…</button>
-          ${systemAdmin() ? trashButtonHtml(`data-del-contract="${c.id}"`, "Удалить контракт") : ""}
+          ${can("dict_delete", "write") ? trashButtonHtml(`data-del-contract="${c.id}"`, "Удалить контракт") : ""}
         </span>
       </td>
     `;

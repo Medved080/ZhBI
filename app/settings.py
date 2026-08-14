@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app import activity
-from app.access import require_object_access, require_object_admin
+from app.access import require_feature
 from app.db import get_connection
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -97,7 +97,7 @@ class ProjectCardIn(BaseModel):
 
 @router.get("/project-card")
 def read_project_card(object_id: int = Query(...),
-                      user: sqlite3.Row = Depends(require_object_access)):
+                      user: sqlite3.Row = Depends(require_feature("project_card", "read"))):
     conn = get_connection()
     try:
         return get_project_card(conn, object_id)
@@ -107,7 +107,7 @@ def read_project_card(object_id: int = Query(...),
 
 @router.put("/project-card")
 def write_project_card(body: ProjectCardIn, object_id: int = Query(...),
-                       admin: sqlite3.Row = Depends(require_object_admin)):
+                       admin: sqlite3.Row = Depends(require_feature("project_card", "write"))):
     conn = get_connection()
     try:
         set_setting(conn, PROJECT_CARD_KEY, object_id,
@@ -130,7 +130,7 @@ class InfoPlateSettingsIn(BaseModel):
 
 @router.get("/info-plate", response_model=InfoPlateSettingsOut)
 def get_info_plate_settings(object_id: int = Query(...),
-                            user: sqlite3.Row = Depends(require_object_access)):
+                            user: sqlite3.Row = Depends(require_feature("info_plate", "read"))):
     conn = get_connection()
     try:
         value = get_setting(conn, INFO_PLATE_THRESHOLD_KEY, object_id, "0")
@@ -141,7 +141,7 @@ def get_info_plate_settings(object_id: int = Query(...),
 
 @router.put("/info-plate", response_model=InfoPlateSettingsOut)
 def set_info_plate_settings(body: InfoPlateSettingsIn, object_id: int = Query(...),
-                            admin: sqlite3.Row = Depends(require_object_admin)):
+                            admin: sqlite3.Row = Depends(require_feature("info_plate", "write"))):
     if body.late_threshold_days < 0:
         raise HTTPException(status_code=400, detail="Порог не может быть отрицательным")
     conn = get_connection()
@@ -207,7 +207,7 @@ class ReportNotesIn(BaseModel):
 
 @router.get("/report-notes")
 def read_report_notes(object_id: int = Query(...), on_date: Optional[str] = None,
-                      user: sqlite3.Row = Depends(require_object_access)):
+                      user: sqlite3.Row = Depends(require_feature("report_notes", "read"))):
     """Без on_date — весь список редакций (для формы ведения). С on_date —
     одна редакция, действующая на эту дату (для отчёта)."""
     conn = get_connection()
@@ -221,7 +221,7 @@ def read_report_notes(object_id: int = Query(...), on_date: Optional[str] = None
 
 @router.put("/report-notes")
 def write_report_notes(body: ReportNotesIn, object_id: int = Query(...),
-                       admin: sqlite3.Row = Depends(require_object_admin)):
+                       admin: sqlite3.Row = Depends(require_feature("report_notes", "write"))):
     conn = get_connection()
     try:
         conn.execute(
@@ -246,7 +246,7 @@ def write_report_notes(body: ReportNotesIn, object_id: int = Query(...),
 
 @router.delete("/report-notes/{effective_date}", status_code=204)
 def delete_report_notes(effective_date: str, object_id: int = Query(...),
-                        admin: sqlite3.Row = Depends(require_object_admin)):
+                        admin: sqlite3.Row = Depends(require_feature("report_notes", "write"))):
     conn = get_connection()
     try:
         conn.execute("DELETE FROM report_notes WHERE object_id = ? AND effective_date = ?",

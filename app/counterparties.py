@@ -16,7 +16,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.access import assert_object_access, require_contracting, require_system_admin
+from app.access import (
+    assert_object_feature,
+    require_contracting,
+    require_service_feature,
+)
 from app.auth import get_current_user
 from app import activity
 from app.capacity import CapacityIn, load_counterparty_capacity, save_counterparty_capacity
@@ -327,7 +331,7 @@ def _guard_specification_owner(conn, user, specification_id: int, minimum: str =
                 detail="Договор спецификации не привязан к объекту — правит администратор сервиса",
             )
         return
-    assert_object_access(conn, user, row["object_id"], minimum)
+    assert_object_feature(conn, user, row["object_id"], "agreements", kind)
 
 
 def _accessible_agreements_clause(conn, user, column: str = "object_id") -> tuple:
@@ -365,7 +369,7 @@ def _guard_agreement(conn, user, agreement_id: int, minimum: str = "contract") -
                 detail="Договор не привязан к объекту — правит администратор сервиса",
             )
         return
-    assert_object_access(conn, user, row["object_id"], minimum)
+    assert_object_feature(conn, user, row["object_id"], "agreements", kind)
 
 
 @router.post("/agreements", response_model=AgreementOut)
@@ -394,7 +398,7 @@ def create_agreement(body: AgreementIn, user: sqlite3.Row = Depends(get_current_
         )
     conn = get_connection()
     try:
-        assert_object_access(conn, user, body.object_id, "contract")
+        assert_object_feature(conn, user, body.object_id, "agreements", "write")
         counterparty = conn.execute(
             "SELECT id FROM counterparties WHERE id = ?", (body.counterparty_id,)
         ).fetchone()
@@ -446,7 +450,7 @@ def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = 
             # Доступ проверяется и к НОВОМУ объекту: _guard_agreement выше
             # разрешил правку по СТАРОМУ, и без этой проверки комплектовщик
             # своего объекта перевесил бы договор на чужой.
-            assert_object_access(conn, admin, body.object_id, "contract")
+            assert_object_feature(conn, admin, body.object_id, "agreements", "write")
             # «Объект контракта = объект элемента» — инвариант схемы: объект
             # контракта не хранится, а выводится по цепочке
             # контракт → спецификация → договор. Значит, перевод договора на
@@ -572,7 +576,7 @@ def list_mark_type_prefixes(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @router.post("/mark-type-prefixes")
-def upsert_mark_type_prefix(body: MarkTypePrefixIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def upsert_mark_type_prefix(body: MarkTypePrefixIn, admin: sqlite3.Row = Depends(require_service_feature("dict_mark_prefixes", "write"))):
     conn = get_connection()
     try:
         conn.execute(
@@ -589,7 +593,7 @@ def upsert_mark_type_prefix(body: MarkTypePrefixIn, admin: sqlite3.Row = Depends
 
 
 @router.delete("/mark-type-prefixes/{prefix}")
-def delete_mark_type_prefix(prefix: str, admin: sqlite3.Row = Depends(require_system_admin)):
+def delete_mark_type_prefix(prefix: str, admin: sqlite3.Row = Depends(require_service_feature("dict_mark_prefixes", "write"))):
     conn = get_connection()
     try:
         conn.execute("DELETE FROM mark_type_prefixes WHERE prefix = ?", (prefix,))

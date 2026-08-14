@@ -72,7 +72,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from app import activity
-from app.access import require_system_admin
+from app.access import require_service_feature
 from app.auth import get_current_user
 from app.changelog import CHANGELOG
 from app.db import get_connection
@@ -758,7 +758,7 @@ def release_status(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @router.post("/release-tasks/{name}/run")
-def run_release_task(name: str, admin: sqlite3.Row = Depends(require_system_admin)):
+def run_release_task(name: str, admin: sqlite3.Row = Depends(require_service_feature("release_tasks", "write"))):
     """Повтор упавшей обработки или запуск уборки — без подключения к серверу.
 
     Копия базы снимается ПЕРЕД ЛЮБЫМ запуском отсюда (2026-08-10): перед

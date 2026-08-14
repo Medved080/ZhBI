@@ -405,6 +405,51 @@ CREATE TABLE IF NOT EXISTS object_drawings (
 -- через COALESCE, а не UNIQUE в таблице: обычный UNIQUE в SQLite не
 -- считает NULL=NULL, и грант "на весь проект" можно было бы завести
 -- дважды (тот же приём уже применён к contract_lines, см. app/db.py).
+-- РОЛИ НА ОБЪЕКТЕ (2026-08-14, блок «Настройка ролей»).
+--
+-- До этой даты ролей было четыре, они были списком в коде
+-- (app/access.OBJECT_ROLES) и выстроены ЛЕСТНИЦЕЙ: старшая включала всё,
+-- что могла младшая. Настройка ролей перевернула источник правды и заодно
+-- сняла лестницу (решение пользователя): роли НЕЗАВИСИМЫ, у человека их на
+-- объекте может быть несколько, разрешения СКЛАДЫВАЮТСЯ.
+--
+-- rank — только порядок ПОКАЗА в матрице (колонки слева направо). Смысла
+-- «старше/младше» у него больше нет: ни одна роль не включает другую, и то,
+-- что роль может, перечислено у неё явно в role_features. UNIQUE на rank
+-- НЕТ намеренно — перестановка иначе требовала бы промежуточных значений.
+CREATE TABLE IF NOT EXISTS object_roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_object_roles_rank ON object_roles (rank);
+
+-- РАЗРЕШЕНИЯ РОЛИ: что именно роль может с каждым разделом. Это и есть
+-- матрица настройки — по вертикали разделы, по горизонтали роли.
+--
+-- Перечень самих разделов — в app/features.py (данные, а не настройка:
+-- заводит их разработчик вместе с кодом проверки, придумать в интерфейсе
+-- несуществующую проверку нельзя).
+--
+-- level: 'read' — просмотр, 'write' — изменение (включает просмотр).
+-- ОТСУТСТВИЕ строки означает «Нет»: хранить нули незачем, а при заведении
+-- нового раздела он автоматически оказывается закрытым, а не открытым —
+-- ошибка в безопасную сторону.
+--
+-- Уровня «только администратор сервиса» здесь НЕТ: администратор сервиса
+-- проходит все проверки в обход грантов, поэтому раздел, не выданный ни
+-- одной роли, ему и так доступен, а всем остальным — нет.
+CREATE TABLE IF NOT EXISTS role_features (
+    role_key TEXT NOT NULL REFERENCES object_roles (key) ON DELETE CASCADE ON UPDATE CASCADE,
+    feature_key TEXT NOT NULL,
+    level TEXT NOT NULL CHECK (level IN ('read', 'write')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (role_key, feature_key)
+);
+
 -- Три уровня гранта, от общего к частному (project_id стал необязательным
 -- 2026-08-02):
 --   project_id IS NULL, object_id IS NULL — ВСЕ проекты, включая будущие;
@@ -418,18 +463,26 @@ CREATE TABLE IF NOT EXISTS user_access (
     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     project_id INTEGER REFERENCES projects (id) ON DELETE CASCADE,
     object_id INTEGER REFERENCES objects (id) ON DELETE CASCADE,
-    -- 'contract' — Комплектовщик (2026-08-04): между 'user' и 'admin' в
-    -- лестнице app/access.OBJECT_ROLES. На накопленных базах значение
-    -- добавляет _migrate_user_access_contract_role: CHECK в SQLite не
-    -- меняется ALTER'ом, таблица пересобирается.
-    role TEXT NOT NULL CHECK (role IN ('admin', 'contract', 'user', 'view')),
+    -- Ключ роли из object_roles. CHECK на перечень значений снят 2026-08-14
+    -- вместе с блоком «Настройка ролей»: набор ролей стал произвольным, и
+    -- ограничение, перечисляющее их поимённо, пришлось бы пересобирать
+    -- таблицей на каждую заведённую роль. Целостность держит внешний ключ.
+    --
+    -- ON DELETE RESTRICT намеренно: роль с выданными грантами не должна
+    -- исчезать молча — форма настройки требует указать замену и переводит
+    -- гранты на неё (app/roles.py, тот же приём, что в app/dict_delete.py).
+    role TEXT NOT NULL REFERENCES object_roles (key) ON UPDATE CASCADE,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- COALESCE по ОБОИМ уровням: обычный UNIQUE в SQLite не считает NULL = NULL,
 -- и грант «на все проекты» можно было бы завести дважды.
+--
+-- РОЛЬ ВХОДИТ В КЛЮЧ с 2026-08-14: ролей у человека на одном уровне может
+-- быть несколько, и они складываются. Прежний ключ без роли разрешал ровно
+-- одну — вторую он молча отвергал бы как дубль.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_access_unique
-    ON user_access (user_id, COALESCE(project_id, -1), COALESCE(object_id, -1));
+    ON user_access (user_id, COALESCE(project_id, -1), COALESCE(object_id, -1), role);
 CREATE INDEX IF NOT EXISTS idx_user_access_user ON user_access (user_id);
 
 -- Вложения к сущностям справочников (2026-08-02, живой запрос): произвольные

@@ -45,7 +45,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import activity
-from app.access import require_system_admin
+from app.access import require_service_feature
 from app.auth import PUBLIC_LOGIN_LIST
 from app.db import get_connection
 
@@ -426,7 +426,7 @@ def _domain_user_count(conn: sqlite3.Connection) -> int:
 
 
 @router.get("/ldap-settings")
-def read_ldap_settings(admin: sqlite3.Row = Depends(require_system_admin)):
+def read_ldap_settings(admin: sqlite3.Row = Depends(require_service_feature("ldap", "read"))):
     conn = get_connection()
     try:
         return {
@@ -440,7 +440,7 @@ def read_ldap_settings(admin: sqlite3.Row = Depends(require_system_admin)):
 
 
 @router.put("/ldap-settings")
-def write_ldap_settings(body: LdapConfigIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def write_ldap_settings(body: LdapConfigIn, admin: sqlite3.Row = Depends(require_service_feature("ldap", "write"))):
     config = body.model_dump()
     try:
         validate_config(config)
@@ -475,7 +475,7 @@ class LdapSearchIn(BaseModel):
 
 
 @router.post("/ldap-search")
-def search_domain_users(body: LdapSearchIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def search_domain_users(body: LdapSearchIn, admin: sqlite3.Row = Depends(require_service_feature("ldap", "read"))):
     """Отвечает 200 и при неудаче: это подсказка в форме, а не операция —
     администратору нужна причина, а не код ошибки HTTP."""
     conn = get_connection()
@@ -505,7 +505,7 @@ def search_domain_users(body: LdapSearchIn, admin: sqlite3.Row = Depends(require
 
 
 @router.post("/ldap-settings/test")
-def test_ldap_settings(body: LdapTestIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def test_ldap_settings(body: LdapTestIn, admin: sqlite3.Row = Depends(require_service_feature("ldap", "read"))):
     """Пробная привязка. Отвечает 200 и при неудаче: это диагностика, а не
     попытка входа, и администратору нужен не код ошибки HTTP, а причина."""
     conn = get_connection()

@@ -46,7 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 import app.activity as activity
 import app.db as _db
 import app.db_schema_doc as doc
-from app.access import require_system_admin
+from app.access import require_service_feature
 
 router = APIRouter(tags=["db-status"])
 
@@ -110,7 +110,7 @@ def _file_bytes() -> int:
 
 
 @router.get("/admin/db-status")
-def db_status(admin: sqlite3.Row = Depends(require_system_admin)):
+def db_status(admin: sqlite3.Row = Depends(require_service_feature("db_status", "read"))):
     conn = _db.get_connection()
     try:
         существующие = _db_tables(conn)
@@ -198,7 +198,7 @@ def table_rows(
     table: str,
     limit: int = Query(DEFAULT_PAGE, ge=1, le=MAX_PAGE),
     offset: int = Query(0, ge=0),
-    admin: sqlite3.Row = Depends(require_system_admin),
+    admin: sqlite3.Row = Depends(require_service_feature("db_status", "read")),
 ):
     conn = _db.get_connection()
     try:

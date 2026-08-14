@@ -46,24 +46,38 @@ HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 AUTH_DEPS = {
     "get_current_user",
     "require_system_admin",
-    "require_object_access",
-    "require_object_editor",
-    "require_object_admin",
+    # С 2026-08-14 проверка адресуется РАЗДЕЛОМ, а не именем роли: зависимость
+    # собирается фабрикой прямо в сигнатуре — `Depends(require_feature("zones",
+    # "write"))`. Без этих двух имён все переведённые роуты уехали бы в «без
+    # проверки входа»: их прежние require_object_* больше не встречаются.
+    "require_feature",
+    "require_any_feature",
+    "require_service_feature",
+    "require_contracting",
 }
 
 # Проверки уровня «ведение сервиса»: доступ ко всем стройкам разом.
-SYSTEM_ADMIN = {"require_system_admin", "is_system_admin"}
+# Проверки без объекта: администратор сервиса либо роль не ниже порога ХОТЯ
+# БЫ НА ОДНОМ доступном объекте (общесервисные разделы — контрагенты,
+# пользователи, копии). Обе решают доступ ко всей стройке разом.
+SYSTEM_ADMIN = {"require_system_admin", "is_system_admin", "require_service_feature",
+                "require_contracting"}
 
 # Всё, чем выборка сужается до объекта либо проверяется право на объект.
 OBJECT_SCOPE = {
     "assert_object_access",
+    "assert_object_feature",
     "has_object_access",
+    "has_feature",
+    "has_any_feature",
+    "assert_object_any_feature",
+    "feature_level_for",
     "accessible_object_ids",
     "object_role",
     "object_roles",
-    "require_object_access",
-    "require_object_editor",
-    "require_object_admin",
+    "object_role_keys",
+    "require_feature",
+    "require_any_feature",
 }
 
 # Намеренно публичные адреса. Список короткий и явный: любое пополнение —

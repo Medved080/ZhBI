@@ -49,7 +49,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app import activity, contract_guard
-from app.access import require_system_admin
+from app.access import require_service_feature
 from app.contracts import build_contract_name, build_document_label
 from app.db import get_connection
 
@@ -938,7 +938,7 @@ def _блокировки(узел) -> list:
 
 
 @router.get("/dictionaries/{kind}/{key}/delete-plan")
-def delete_plan(kind: str, key: str, admin: sqlite3.Row = Depends(require_system_admin)):
+def delete_plan(kind: str, key: str, admin: sqlite3.Row = Depends(require_service_feature("dict_delete", "read"))):
     conn = get_connection()
     try:
         план = build_plan(conn, kind, key)
@@ -949,7 +949,7 @@ def delete_plan(kind: str, key: str, admin: sqlite3.Row = Depends(require_system
 
 @router.get("/dictionaries/{kind}/candidates")
 def candidates(kind: str, key: str = Query(...), parent: Optional[str] = Query(None),
-               admin: sqlite3.Row = Depends(require_system_admin)):
+               admin: sqlite3.Row = Depends(require_service_feature("dict_delete", "read"))):
     """Чем можно заменить запись `key`, если её ВЛАДЕЛЕЦ заменён на `parent`.
 
     Отдельным запросом, а не списком внутри плана: список замен подчинённой
@@ -1016,7 +1016,7 @@ def _удалить_снизу_вверх(conn, узел) -> None:
 
 @router.post("/dictionaries/{kind}/{key}/delete")
 def delete_entry(kind: str, key: str, body: DeleteIn,
-                 admin: sqlite3.Row = Depends(require_system_admin)):
+                 admin: sqlite3.Row = Depends(require_service_feature("dict_delete", "write"))):
     """Проверка → замена → удаление, всё в ОДНОЙ транзакции.
 
     Порядок обязателен и не переставляется: перевести ссылки после удаления

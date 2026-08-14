@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
 from app import activity, impersonation, ldap_auth
-from app.access import OBJECT_ROLES, ROLE_LABELS as OBJECT_ROLE_LABELS, require_system_admin
+from app.access import is_system_admin, require_service_feature, role_keys
 from app.auth import (
     SESSION_COOKIE, SESSION_IDLE_HOURS, SESSION_TTL_DAYS, auth_method_of, create_session,
     forget_session, format_display_name, get_current_user, hash_password, list_sessions,
@@ -101,7 +101,7 @@ def _validate_auth_method(conn, auth_method: str):
 
 
 @router.get("", response_model=list[UserOut])
-def list_users(admin: sqlite3.Row = Depends(require_system_admin)):
+def list_users(admin: sqlite3.Row = Depends(require_service_feature("users", "read"))):
     conn = get_connection()
     try:
         rows = conn.execute("SELECT * FROM users ORDER BY last_name, first_name").fetchall()
@@ -111,7 +111,7 @@ def list_users(admin: sqlite3.Row = Depends(require_system_admin)):
 
 
 @router.post("", response_model=UserOut)
-def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_system_admin)):
+def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service_feature("users", "write"))):
     _validate_role(body.role)
     conn = get_connection()
     try:
@@ -147,7 +147,7 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_system_
 
 @router.patch("/{user_id}", response_model=UserOut)
 def update_user(user_id: int, body: UserUpdateIn, request: Request,
-                admin: sqlite3.Row = Depends(require_system_admin)):
+                admin: sqlite3.Row = Depends(require_service_feature("users", "write"))):
     _validate_role(body.role)
     conn = get_connection()
     try:
@@ -155,6 +155,20 @@ def update_user(user_id: int, body: UserUpdateIn, request: Request,
         if row is None:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
         было = auth_method_of(row)
+        # СНЯТЬ С СЕБЯ РОЛЬ АДМИНИСТРАТОРА СЕРВИСА НЕЛЬЗЯ (2026-08-14).
+        # Администратор сервиса — единственный, кто проходит проверки в
+        # обход настройки ролей, и потому единственный, кто может починить
+        # неудачную настройку. Разжаловав себя, он теряет и эту возможность,
+        # причём мгновенно и без предупреждения: вернуть роль будет некому,
+        # если других администраторов нет. Проверка на СЕРВЕРЕ, а не только
+        # в форме: запрос уходит и мимо неё.
+        if (row["id"] == admin["id"] and is_system_admin(row)
+                and body.role != "admin"):
+            raise HTTPException(
+                status_code=409,
+                detail="Нельзя снять роль администратора сервиса с самого себя: "
+                       "вернуть её будет некому. Попросите об этом другого администратора",
+            )
         conflict = conn.execute(
             "SELECT id FROM users WHERE domain_login = ? AND id != ?", (body.domain_login, user_id)
         ).fetchone()
@@ -302,7 +316,7 @@ sessions_router = APIRouter(tags=["sessions"])
 
 
 @sessions_router.get("/sessions")
-def all_sessions(request: Request, admin: sqlite3.Row = Depends(require_system_admin)):
+def all_sessions(request: Request, admin: sqlite3.Row = Depends(require_service_feature("sessions", "read"))):
     """Кто сейчас в системе. Текущий сеанс администратора помечен — чтобы
     он не оборвал сам себя, не поняв этого."""
     текущий = request.cookies.get(SESSION_COOKIE)
@@ -340,7 +354,7 @@ def all_sessions(request: Request, admin: sqlite3.Row = Depends(require_system_a
 
 
 @sessions_router.delete("/sessions/{public_id}")
-def drop_any_session(public_id: str, admin: sqlite3.Row = Depends(require_system_admin)):
+def drop_any_session(public_id: str, admin: sqlite3.Row = Depends(require_service_feature("sessions", "write"))):
     """Оборвать ОДИН любой сеанс по отпечатку.
 
     Раньше администратору был доступен только обрыв всех сеансов человека —
@@ -366,7 +380,7 @@ def drop_any_session(public_id: str, admin: sqlite3.Row = Depends(require_system
 
 @sessions_router.post("/sessions/close-others")
 def close_all_other_sessions(request: Request,
-                             admin: sqlite3.Row = Depends(require_system_admin)):
+                             admin: sqlite3.Row = Depends(require_service_feature("sessions", "write"))):
     """Оборвать ВСЕ сеансы всех пользователей, кроме своего текущего. То, что
     делают при подозрении на компрометацию: одним действием все входят
     заново."""
@@ -386,7 +400,7 @@ def close_all_other_sessions(request: Request,
 
 
 @router.get("/{user_id}/sessions")
-def user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
+def user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_service_feature("sessions", "read"))):
     """Активные сеансы ЛЮБОГО пользователя — для администратора сервиса.
     Свои сеансы человек смотрит сам через `GET /me/sessions`."""
     conn = get_connection()
@@ -401,7 +415,7 @@ def user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_system_admi
 
 
 @router.delete("/{user_id}/sessions")
-def close_user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
+def close_user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_service_feature("sessions", "write"))):
     """Оборвать ВСЕ сеансы пользователя — то, что делают, когда человек
     уволился или потерял ноутбук. Пароль при этом не трогается: учётную
     запись может понадобиться сохранить рабочей."""
@@ -431,7 +445,7 @@ def close_user_sessions(user_id: int, admin: sqlite3.Row = Depends(require_syste
 
 @router.post("/{user_id}/impersonate")
 def start_impersonation(user_id: int, request: Request,
-                        admin: sqlite3.Row = Depends(require_system_admin)):
+                        admin: sqlite3.Row = Depends(require_service_feature("users", "write"))):
     if impersonation.current() is not None:
         # Вложенность запрещена и здесь, и в app/auth._guard_impersonation:
         # цепочка «А от имени Б от имени В» в журнале не выражается.
@@ -464,7 +478,7 @@ def start_impersonation(user_id: int, request: Request,
 
 @router.patch("/{user_id}/label-color", response_model=UserOut)
 def set_label_color(
-    user_id: int, body: SetLabelColorIn, current: sqlite3.Row = Depends(require_system_admin)
+    user_id: int, body: SetLabelColorIn, current: sqlite3.Row = Depends(require_service_feature("users", "write"))
 ):
     """Цвет подписей марок — настройка АДМИНИСТРАТОРА СЕРВИСА (2026-08-04,
     решение пользователя), как и цвета статусов.
@@ -702,7 +716,7 @@ class AccessGrantsIn(BaseModel):
 
 
 @router.get("/{user_id}/access")
-def list_access(user_id: int, admin: sqlite3.Row = Depends(require_system_admin)):
+def list_access(user_id: int, admin: sqlite3.Row = Depends(require_service_feature("users", "read"))):
     """Гранты пользователя с расшифровкой названий.
 
     Системному администратору гранты не нужны — он видит всё в обход, и
@@ -735,7 +749,7 @@ def list_access(user_id: int, admin: sqlite3.Row = Depends(require_system_admin)
 
 @router.put("/{user_id}/access")
 def replace_access(user_id: int, body: AccessGrantsIn,
-                   admin: sqlite3.Row = Depends(require_system_admin)):
+                   admin: sqlite3.Row = Depends(require_service_feature("users", "write"))):
     """Заменяет ВЕСЬ набор грантов пользователя присланным.
 
     Замена целиком, а не «добавить один»/«удалить один» (так было до
@@ -747,8 +761,17 @@ def replace_access(user_id: int, body: AccessGrantsIn,
     Пустой список — законный ответ «доступа нет вовсе», а не ошибка: это
     единственный способ отобрать всё.
     """
+    # Лестница читается из базы: с 2026-08-14 набор ролей настраивается,
+    # и список допустимых значений перестал быть константой в коде.
+    # Набор ролей читается из базы: с 2026-08-14 роли настраиваются, и
+    # список допустимых значений перестал быть константой в коде.
+    conn_роли = get_connection()
+    try:
+        известные = set(role_keys(conn_роли))
+    finally:
+        conn_роли.close()
     for грант in body.grants:
-        if грант.role not in OBJECT_ROLES:
+        if грант.role not in известные:
             raise HTTPException(status_code=400, detail=f"Неизвестная роль «{грант.role}»")
         if грант.object_id is not None and грант.project_id is None:
             raise HTTPException(
@@ -758,9 +781,14 @@ def replace_access(user_id: int, body: AccessGrantsIn,
             )
     # Дубли ловим ДО записи: уникальный индекс тоже их не пропустит, но
     # ошибка SQLite ничего не скажет о том, какая именно строка задвоена.
-    ключи = [(г.project_id, г.object_id) for г in body.grants]
+    #
+    # Ключ включает РОЛЬ (2026-08-14): ролей на одном уровне бывает
+    # несколько, они складываются, и «два гранта на один объект» — теперь
+    # норма, а не ошибка. Повтор ОДНОЙ И ТОЙ ЖЕ роли на том же уровне
+    # ошибкой остаётся: он ничего не добавляет и означает промах формы.
+    ключи = [(г.project_id, г.object_id, г.role) for г in body.grants]
     if len(set(ключи)) != len(ключи):
-        raise HTTPException(status_code=400, detail="В наборе есть повторяющиеся уровни доступа")
+        raise HTTPException(status_code=400, detail="В наборе есть повторяющиеся роли на одном уровне")
 
     conn = get_connection()
     try:

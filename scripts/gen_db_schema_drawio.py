@@ -67,8 +67,8 @@ from app.db_schema_doc import (  # noqa: E402
 )
 
 COLUMNS = [
-    ["users", "sessions", "user_access", "attachments", "activity_log", "status_colors",
-     "element_shapes", "allowed_subtypes"],
+    ["users", "sessions", "user_access", "object_roles", "role_features", "attachments",
+     "activity_log", "status_colors", "element_shapes", "allowed_subtypes"],
     ["projects", "objects", "object_drawings", "label_visibility", "zone_colors",
      "app_settings", "report_notes", "release_tasks"],
     ["elements", "status_history", "axis_lines"],
@@ -87,6 +87,7 @@ PARENT_COLOR = {
     "objects":           "#1a73c8",
     "projects":          "#0b7285",
     "users":             "#2f9e44",
+    "object_roles":      "#37b24d",
     "elements":          "#e8590c",
     "contracts":         "#b54708",
     "zones":             "#7048e8",

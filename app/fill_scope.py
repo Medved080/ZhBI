@@ -48,7 +48,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import app.activity as activity
-from app.access import require_system_admin
+from app.access import require_service_feature
 from app.db import assign_missing_element_uids, get_connection
 
 router = APIRouter(tags=["fill-scope"])
@@ -188,7 +188,7 @@ def _конфликты_договоров(conn: sqlite3.Connection, object_id: 
 
 
 @router.get("/admin/fill-empty-scope")
-def scan(admin: sqlite3.Row = Depends(require_system_admin)):
+def scan(admin: sqlite3.Row = Depends(require_service_feature("fill_scope", "read"))):
     """Что сейчас не заполнено. В базу не пишет — это предпросмотр."""
     conn = get_connection()
     try:
@@ -216,7 +216,7 @@ class ЗаявкаНаЗаполнение(BaseModel):
 
 
 @router.post("/admin/fill-empty-scope/apply")
-def apply(body: ЗаявкаНаЗаполнение, admin: sqlite3.Row = Depends(require_system_admin)):
+def apply(body: ЗаявкаНаЗаполнение, admin: sqlite3.Row = Depends(require_service_feature("fill_scope", "write"))):
     """Заполнить выбранные поля выбранными объектом и проектом.
 
     Одна транзакция на все цели: наполовину привязанное наследие (зоны

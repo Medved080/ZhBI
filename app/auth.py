@@ -554,10 +554,13 @@ def _guard_must_change_password(request: Request, user: sqlite3.Row) -> None:
 # элемента ЧУЖОГО объекта, а прораб с грантом `user` НА объекте получал
 # 403 — одна и та же проверка была и дырой, и помехой.
 #
-# Замена — зависимости из app/access.py: require_system_admin (ведение
-# сервиса), require_object_access/require_object_editor/require_object_admin
-# (объект приходит параметром) и _guard_elements/_guard_source_file в
-# app/main.py там, где объект ВЫВОДИТСЯ из сущности.
+# Замена — зависимости из app/access.py. С 2026-08-14 (блок «Настройка
+# ролей») они адресуются РАЗДЕЛОМ, а не именем роли: require_feature(раздел,
+# вид) для объектных операций, require_service_feature — для тех, у которых
+# объекта нет, и _guard_elements/_guard_source_file в app/main.py там, где
+# объект ВЫВОДИТСЯ из сущности. Порог каждого раздела лежит в базе, а не в
+# коде проверки: прежние require_object_editor/require_object_admin были
+# буквальными «user» и «admin» и настройке не поддавались.
 #
 # Удалены, а не оставлены «на всякий случай», намеренно: пока функция
 # существует, ею кто-нибудь закроет следующий эндпоинт — и дыра вернётся
