@@ -17929,17 +17929,100 @@ function finishVerdictHtml(data) {
 function forecastCoverageHtml(data) {
   const c = data.forecast_coverage;
   if (!data.forecast_version_id || !c || !c.total || c.elements >= c.total) return "";
-  return `<div class="dyn-warn">Прогноз охватывает ${c.elements} изделий из ${c.total}:
-    кривая прогноза дорастает только до этого числа и на нём обрывается. Не попадают в
-    расчёт изделия без привязки к крану, стоянке и этажу, а при пересчёте от факта —
-    уже смонтированные.</div>`;
+  // Причины называются ФАКТИЧЕСКИЕ и только ненулевые (2026-08-14, живой
+  // запрос): перечень того, что «могло бы» повлиять, заставляет проверять
+  // варианты, которых в данных нет.
+  const причины = [];
+  if (c.installed) причины.push(`${c.installed} уже смонтировано`);
+  if (c.unbound) причины.push(`${c.unbound} без привязки к крану, стоянке или этажу`);
+  if (c.other) причины.push(`${c.other} не попало в расчёт по другим причинам`);
+  return `<div class="dyn-warn">Прогноз охватывает ${c.elements} изделий из ${c.total}`
+    + (причины.length ? ` (${причины.join(", ")})` : "")
+    + `: на этом числе кривая прогноза обрывается.</div>`;
+}
+
+// Вехи графика и их раскладка по «полкам» (2026-08-14, живой репорт:
+// «подписи наезжают друг на друга и становятся нечитаемыми»).
+//
+// Раньше высоты чередовались через одну: при двух близких вехах это
+// помогало, при четырёх (контрольные даты захваток плюс отсечки прогноза)
+// подписи ложились друг на друга буквально. Теперь каждая получает ПЕРВУЮ
+// свободную полку — ту, где справа от уже занятого места хватает ширины.
+//
+// Ширина текста оценивается по числу знаков: измерить её в SVG до
+// отрисовки нечем, а оценка с запасом ошибается в безопасную сторону —
+// лишняя полка, а не наложение.
+// Ширина подписи в единицах viewBox. Меряется НАСТОЯЩИМ измерителем
+// (canvas), а не числом знаков: оценка «знак ≈ 5,4 px» занижала ширину
+// кириллицы, и подписи всё равно налезали друг на друга — поймано живой
+// проверкой на семи вехах. Контекст создаётся один раз: measureText
+// вызывается на каждую веху при каждой перерисовке графика.
+let _измеритель = null;
+function измеритьТекст(text, font = "10.5px system-ui, sans-serif") {
+  if (_измеритель === null) {
+    try {
+      _измеритель = document.createElement("canvas").getContext("2d");
+    } catch (e) {
+      _измеритель = false;   // canvas недоступен — считаем по знакам
+    }
+  }
+  if (!_измеритель) return text.length * 6.2;
+  _измеритель.font = font;
+  return _измеритель.measureText(text).width;
+}
+
+function layoutChartMarks(data, weeks, x, width) {
+  const weekIndex = (iso) => {
+    const target = iso.slice(0, 10);
+    let best = 0;
+    weeks.forEach((w, i) => { if (w <= target) best = i; });
+    return best;
+  };
+  const inWindow = (iso) => {
+    const w = mondayOf(iso);
+    return w >= weeks[0] && w <= weeks[weeks.length - 1];
+  };
+  // Отсечка «завершение по прогнозу» — такая же веха, как контрольные даты
+  // объекта. Берётся по режиму: смотрим монтаж — показываем завершение
+  // монтажа, смотрим обе пары — обе отсечки, названные словом, иначе на
+  // графике две одинаковые красные стрелки без разницы между ними.
+  const режимРядов = dynSeriesFor(data);
+  const отсечки = [];
+  for (const [ключ, подпись] of [["montage", "монтажа"], ["delivery", "поставки"]]) {
+    const f = (data.finish || {})[ключ];
+    if (!f || !f.forecast || !режимРядов.includes(`forecast_${ключ}`)) continue;
+    const общий = режимРядов.includes("forecast_montage") && режимРядов.includes("forecast_delivery");
+    отсечки.push({ label: общий ? `Прогноз завершения ${подпись}` : "Прогноз завершения",
+                   date: f.forecast });
+  }
+  const marks = [{ label: "Отчётная дата", date: data.report_date }]
+    .concat((data.card.milestones || []).filter(m => m && m.date))
+    .concat(отсечки)
+    .filter(m => inWindow(m.date));
+
+  const ЗАЗОР = 8;       // минимальный просвет между соседними подписями
+  const полки = [];      // индекс полки → правый край занятого места
+  const размещённые = marks.map(m => {
+    const i = weekIndex(m.date);
+    const px = x(i);
+    const text = m.date === data.report_date && !m.label.includes("Захват")
+      ? m.label : `${m.label} ${formatDateRu(m.date)}`;
+    const w = измеритьТекст(text);
+    const anchor = px > width * 0.75 ? "end" : (px < width * 0.2 ? "start" : "middle");
+    const left = anchor === "end" ? px - w : anchor === "start" ? px : px - w / 2;
+    let полка = полки.findIndex(край => left > край + ЗАЗОР);
+    if (полка === -1) полка = полки.length;
+    полки[полка] = left + w;
+    return { m, i, px, text, anchor, полка };
+  });
+  return { размещённые, полок: полки.length };
 }
 
 function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   const compact = !!opts.compact;
   const weeks = data.weeks;
   if (!weeks.length) return "<div class='hint-text'>Нет данных для графика</div>";
-  const L = compact ? 30 : 52, R = compact ? 6 : 18, T = compact ? 8 : 46, B = compact ? 30 : 64;
+  const L = compact ? 30 : 52, R = compact ? 6 : 18, B = compact ? 30 : 64;
   const fsAxis = compact ? 8 : 11;
   // null в ряду — «за отчётной датой факта нет» (см. build_dynamics_report):
   // такие точки не рисуются, кривая факта на отчётной дате обрывается.
@@ -17953,6 +18036,13 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   const ряды = dynSeriesFor(data).filter(k => seriesPoints(k).some(p => p.v > 0));
   const maxY = niceMax(Math.max(1, ...ряды.flatMap(k => seriesPoints(k).map(p => p.v))));
   const x = i => L + (weeks.length === 1 ? 0 : i * (width - L - R) / (weeks.length - 1));
+
+  // Вехи и их раскладка считаются ЗДЕСЬ, до масштаба по вертикали: они
+  // зависят только от оси X, а их количество определяет, сколько места
+  // занять сверху. Иначе подписи, разложенные на четыре полки, ложились бы
+  // поверх самого графика.
+  const разметка = compact ? { размещённые: [], полок: 0 } : layoutChartMarks(data, weeks, x, width);
+  const T = compact ? 8 : 46 + Math.max(0, разметка.полок - 2) * 15;
   const y = v => height - B - (v / maxY) * (height - T - B);
 
   const parts = [`<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">`];
@@ -17986,65 +18076,34 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
     parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"${штрих}/>`);
   }
 
-  // Вехи: красная стрелка вниз к линии плана + выноска с датой
-  const weekIndex = (iso) => {
-    const target = iso.slice(0, 10);
-    let best = 0;
-    weeks.forEach((w, i) => { if (w <= target) best = i; });
-    return best;
-  };
-  // На панели выноски не рисуем вовсе — текст на 280 px превратился бы в
-  // мешанину; отчётная дата помечается одной тонкой вертикальной линией.
-  // Вехи за пределами показанного окна не рисуем вовсе: weekIndex поджал бы
-  // их к краю, и веха встала бы на чужую неделю. Раньше окно умела сужать
-  // только панель (там ветка compact выносок не рисует), с появлением
-  // периода в форме (2026-08-03) это стало нужно и здесь.
-  const inWindow = (iso) => {
-    const w = mondayOf(iso);
-    return w >= weeks[0] && w <= weeks[weeks.length - 1];
-  };
-  // Отсечка «завершение по прогнозу» (2026-08-14, живой запрос) — такая же
-  // веха, как контрольные даты объекта, и рисуется тем же механизмом.
-  // Берётся из режима: смотрим монтаж — показываем завершение монтажа,
-  // смотрим поставку — поставки; в режиме «обе» обе отсечки, названные
-  // словом, иначе на графике две одинаковые красные стрелки.
-  const режимРядов = dynSeriesFor(data);
-  const отсечки = [];
-  for (const [ключ, подпись] of [["montage", "монтажа"], ["delivery", "поставки"]]) {
-    const f = (data.finish || {})[ключ];
-    if (!f || !f.forecast) continue;
-    if (!режимРядов.includes(`forecast_${ключ}`)) continue;
-    const общий = режимРядов.includes("forecast_montage") && режимРядов.includes("forecast_delivery");
-    отсечки.push({ label: общий ? `Прогноз завершения ${подпись}` : "Прогноз завершения",
-                   date: f.forecast });
+  // Вехи: красная стрелка вниз к линии плана + выноска с датой.
+  // Сами вехи и их раскладка посчитаны выше (layoutChartMarks) — до
+  // масштаба по вертикали, потому что от числа полок зависит верхнее поле.
+  //
+  // На ПАНЕЛИ выносок нет вовсе: текст на 280 px превратился бы в мешанину,
+  // и отчётная дата помечается одной тонкой вертикальной линией. Рисуется
+  // она, только если отчётная дата попала в показанный период (панель умеет
+  // сужать окно, см. sideDynWindow): иначе метка сползла бы на край окна и
+  // встала бы на чужую неделю.
+  if (compact) {
+    const неделяОтчёта = mondayOf(data.report_date);
+    if (неделяОтчёта >= weeks[0] && неделяОтчёта <= weeks[weeks.length - 1]) {
+      let индекс = 0;
+      weeks.forEach((w, i) => { if (w <= data.report_date.slice(0, 10)) индекс = i; });
+      const px = x(индекс);
+      parts.push(`<line x1="${px}" y1="${T}" x2="${px}" y2="${height - B}" stroke="#C0392B" stroke-width="1" stroke-dasharray="3 3"/>`);
+    }
   }
-  const marks = compact
-    ? []
-    : [{ label: "Отчётная дата", date: data.report_date }]
-      .concat((data.card.milestones || []).filter(m => m && m.date))
-      .concat(отсечки)
-      .filter(m => inWindow(m.date));
-  // Линию рисуем только если отчётная дата попала в показанный период
-  // (панель умеет сужать окно, см. sideDynWindow): иначе weekIndex сполз бы
-  // на край окна и метка встала бы на чужую неделю.
-  const reportWeek = mondayOf(data.report_date);
-  if (compact && reportWeek >= weeks[0] && reportWeek <= weeks[weeks.length - 1]) {
-    const px = x(weekIndex(data.report_date));
-    parts.push(`<line x1="${px}" y1="${T}" x2="${px}" y2="${height - B}" stroke="#C0392B" stroke-width="1" stroke-dasharray="3 3"/>`);
-  }
-  marks.forEach((m, n) => {
-    const i = weekIndex(m.date);
-    const px = x(i);
+  разметка.размещённые.forEach(({ m, i, px, text, anchor, полка }) => {
     const plan = (data.series.plan_smr || [])[i] || 0;
     const py = y(plan);
-    // Выноски раскладываем на двух высотах через одну — иначе на близких
-    // датах подписи накладываются друг на друга.
-    const topY = 16 + (n % 2) * 16;
-    parts.push(`<line x1="${px}" y1="${topY + 6}" x2="${px}" y2="${py - 6}" stroke="#C0392B" stroke-width="1.4"/>`);
-    parts.push(`<path d="M ${px - 4} ${py - 10} L ${px} ${py - 2} L ${px + 4} ${py - 10} Z" fill="#C0392B"/>`);
-    const text = m.date === data.report_date && !m.label.includes("Захват")
-      ? m.label : `${m.label} ${formatDateRu(m.date)}`;
-    const anchor = px > width * 0.75 ? "end" : (px < width * 0.2 ? "start" : "middle");
+    const topY = 16 + полка * 15;
+    // Выноска не рисуется, если полка опустилась ниже точки, к которой она
+    // ведёт: стрелка вверх вместо вниз читалась бы как другая метка.
+    if (topY + 6 < py - 6) {
+      parts.push(`<line x1="${px}" y1="${topY + 6}" x2="${px}" y2="${py - 6}" stroke="#C0392B" stroke-width="1.4"/>`);
+      parts.push(`<path d="M ${px - 4} ${py - 10} L ${px} ${py - 2} L ${px + 4} ${py - 10} Z" fill="#C0392B"/>`);
+    }
     parts.push(`<text x="${px}" y="${topY}" font-size="10.5" fill="#C0392B" text-anchor="${anchor}">${escapeHtml(text)}</text>`);
   });
 

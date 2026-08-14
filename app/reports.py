@@ -480,8 +480,13 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     # это прогноз МОНТАЖА, а начало СМР — срок, к которому изделие обязано
     # быть на площадке, то есть прогноз ПОСТАВКИ (тот же смысл, что у
     # project_smr_start_date в критерии опоздания поставки).
-    from app.schedule_versions import cumulative_forecast
+    from app.schedule_versions import cumulative_forecast, forecast_gap
     прогноз = cumulative_forecast(conn, object_id) if object_id else {"start": [], "end": []}
+    # Причины неполного покрытия считаются ФАКТИЧЕСКИ (2026-08-14): отчёт
+    # называет только то, что реально влияет на кривую, а не перечисляет,
+    # что могло бы.
+    разрыв = (forecast_gap(conn, object_id, прогноз["version_id"])
+              if прогноз.get("version_id") else {})
 
     series_raw = {
         "plan_smr": [(_week_start(r["d"]), r["n"]) for r in plan_smr if r["d"]],
@@ -644,7 +649,7 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
         # смонтированные исключаются при пересчёте от факта), но об этом
         # нужно СКАЗАТЬ: иначе кривая, не дорастающая до полного объёма,
         # читается как «монтаж прекратился».
-        "forecast_coverage": {"elements": прогноз.get("elements", 0), "total": total},
+        "forecast_coverage": {"elements": прогноз.get("elements", 0), "total": total, **разрыв},
         # Завершение: когда работы кончатся по прогнозу и насколько это
         # расходится с плановым сроком (2026-08-14, живой запрос). Отсюда и
         # отсечка на графике, и вывод текстом под ним.
@@ -835,21 +840,41 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
                      + [m for m in card.get("milestones", []) if m.get("date")]
                      + отсечки
                      if in_window(m["date"])]
+            # Раскладка подписей по «полкам»: первая, где справа от занятого
+            # места хватает ширины (2026-08-14, тот же приём, что на экране,
+            # см. layoutChartMarks в app.js). Прежнее чередование двух высот
+            # на четырёх вехах давало наложение.
             c.setFont(FONT_REGULAR, 6)
-            for idx, m in enumerate(marks):
+            полки = []
+            подписи = []
+            for m in marks:
+                текст = (m["label"] if m["label"] == "Отчётная дата"
+                         else f"{m['label']} {_ru_date_short(m['date'])}")
                 target = m["date"][:10]
                 i = max([j for j, w in enumerate(weeks) if w <= target] or [0])
-                x = X(i)
+                px = X(i)
+                ширина = c.stringWidth(текст, FONT_REGULAR, 6)
+                справа = px > self.width * 0.75
+                left = px - ширина if справа else px - ширина / 2
+                полка = next((n for n, край in enumerate(полки) if left > край + 5), len(полки))
+                полки[полка:полка + 1] = [left + ширина]
+                подписи.append((m, i, px, текст, справа, полка))
+
+            for m, i, x, текст, справа, полка in подписи:
                 plan = (series.get("plan_smr") or [0])[i] if i < len(series.get("plan_smr", [])) else 0
                 y = Y(plan)
-                top_y = self.height - 6 - (idx % 2) * 8
+                # В reportlab начало координат ВНИЗУ, поэтому полки идут
+                # вниз вычитанием, а не прибавлением, как в SVG.
+                top_y = self.height - 6 - полка * 8
                 c.setStrokeColor(colors.HexColor("#C0392B"))
                 c.setFillColor(colors.HexColor("#C0392B"))
-                c.line(x, top_y - 4, x, y + 4)
-                p = c.beginPath(); p.moveTo(x - 2.5, y + 6); p.lineTo(x, y + 1); p.lineTo(x + 2.5, y + 6); p.close()
-                c.drawPath(p, fill=1, stroke=0)
-                text = m["label"] if m["label"] == "Отчётная дата" else f"{m['label']} {_ru_date_short(m['date'])}"
-                (c.drawRightString if x > self.width * 0.75 else c.drawCentredString)(x, top_y, text)
+                # Выноска не рисуется, если полка опустилась ниже точки, к
+                # которой ведёт (то же правило, что на экране).
+                if top_y - 4 > y + 4:
+                    c.line(x, top_y - 4, x, y + 4)
+                    p = c.beginPath(); p.moveTo(x - 2.5, y + 6); p.lineTo(x, y + 1); p.lineTo(x + 2.5, y + 6); p.close()
+                    c.drawPath(p, fill=1, stroke=0)
+                (c.drawRightString if справа else c.drawCentredString)(x, top_y, текст)
 
             lx = L
             for key in порядок:

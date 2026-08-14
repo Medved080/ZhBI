@@ -217,6 +217,39 @@ def deviation_summary(conn: sqlite3.Connection, object_id: int,
     }
 
 
+def forecast_gap(conn: sqlite3.Connection, object_id: int, version_id: int) -> dict:
+    """Почему прогноз покрывает не все изделия — ФАКТИЧЕСКИ, а не по списку
+    возможных причин (2026-08-14, живой запрос: «выводить только то, что
+    реально влияет на график»).
+
+    Каждое изделие, не попавшее в версию, относится ровно к одной причине:
+    сначала «уже смонтировано» (при пересчёте от факта такие исключаются
+    намеренно), затем «нет привязки к крану, стоянке или этажу» (расчёту
+    негде их разместить), остальное — «прочее»: изделие заведено после
+    расчёта либо не сопоставилось при загрузке файла.
+    """
+    rows = conn.execute(
+        """
+        SELECT e.current_status AS st,
+               (e.zone_crane_status = 'matched' AND e.zone_stance_status = 'matched'
+                AND e.floor IS NOT NULL) AS привязано
+        FROM elements e
+        WHERE e.object_id = ? AND e.is_current = 1
+          AND e.id NOT IN (SELECT element_id FROM schedule_version_dates WHERE version_id = ?)
+        """,
+        (object_id, version_id),
+    ).fetchall()
+    итог = {"missing": len(rows), "installed": 0, "unbound": 0, "other": 0}
+    for r in rows:
+        if r["st"] == "installed":
+            итог["installed"] += 1
+        elif not r["привязано"]:
+            итог["unbound"] += 1
+        else:
+            итог["other"] += 1
+    return итог
+
+
 def cumulative_forecast(conn: sqlite3.Connection, object_id: int,
                         version_id: Optional[int] = None) -> dict:
     """Даты последней актуализации по дням — для кривой прогноза на
