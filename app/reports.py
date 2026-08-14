@@ -645,6 +645,46 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
         # нужно СКАЗАТЬ: иначе кривая, не дорастающая до полного объёма,
         # читается как «монтаж прекратился».
         "forecast_coverage": {"elements": прогноз.get("elements", 0), "total": total},
+        # Завершение: когда работы кончатся по прогнозу и насколько это
+        # расходится с плановым сроком (2026-08-14, живой запрос). Отсюда и
+        # отсечка на графике, и вывод текстом под ним.
+        "finish": _finish_summary(raw_days, прогноз, card),
+    }
+
+
+def _finish_summary(raw_days: dict, прогноз: dict, card: dict) -> dict:
+    """Плановое и прогнозное завершение по монтажу и по поставке.
+
+    План завершения берётся из КАРТОЧКИ ОБЪЕКТА («окончание монтажа
+    изделий» / «окончание поставки»), если он там задан: это директивный
+    срок, по которому и отчитываются. Если не задан — последняя дата плана
+    в самих данных: она хотя бы честно отвечает «когда план кончается», а
+    отсутствие вывода вовсе хуже приблизительного.
+
+    Знак отклонения тот же, что везде в системе: плюс — позже плана, то
+    есть опоздание; минус — опережение.
+    """
+    def позже(даты):
+        значения = [d for d, _ in даты if d]
+        return max(значения) if значения else None
+
+    def блок(план_даты, срок_из_карточки, прогноз_даты):
+        план = _week_start_or_none(срок_из_карточки) and срок_из_карточки[:10] or позже(план_даты)
+        план_источник = "карточка объекта" if срок_из_карточки else "последняя дата плана"
+        факт_прогноз = позже(прогноз_даты)
+        дней = None
+        if план and факт_прогноз:
+            from datetime import date
+            try:
+                дней = (date.fromisoformat(факт_прогноз[:10]) - date.fromisoformat(план[:10])).days
+            except ValueError:
+                дней = None
+        return {"plan": план, "plan_source": план_источник,
+                "forecast": факт_прогноз, "deviation_days": дней}
+
+    return {
+        "montage": блок(raw_days["plan_smr"], card.get("montage_deadline"), прогноз.get("end") or []),
+        "delivery": блок(raw_days["plan_delivery"], card.get("delivery_deadline"), прогноз.get("start") or []),
     }
 
 
@@ -778,9 +818,22 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
                 неделя = _week_start_or_none(iso)
                 return bool(weeks) and неделя is not None and weeks[0] <= неделя <= weeks[-1]
 
+            # Отсечки «завершение по прогнозу» — те же вехи (2026-08-14).
+            # Показываются только для тех рядов, что нарисованы: в режиме
+            # «только монтаж» отсечка поставки была бы про кривую, которой
+            # на графике нет.
+            отсечки = []
+            for ключ, слово in (("montage", "монтажа"), ("delivery", "поставки")):
+                f = (report.get("finish") or {}).get(ключ) or {}
+                if not f.get("forecast") or f"forecast_{ключ}" not in порядок:
+                    continue
+                оба = ("forecast_montage" in порядок) and ("forecast_delivery" in порядок)
+                отсечки.append({"label": f"Прогноз завершения {слово}" if оба
+                                else "Прогноз завершения", "date": f["forecast"]})
             marks = [m for m in
                      [{"label": "Отчётная дата", "date": report["report_date"]}]
                      + [m for m in card.get("milestones", []) if m.get("date")]
+                     + отсечки
                      if in_window(m["date"])]
             c.setFont(FONT_REGULAR, 6)
             for idx, m in enumerate(marks):
@@ -848,7 +901,29 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
                        style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])))
     story.append(Spacer(1, 4 * mm))
     story.append(Chart(266 * mm, 62 * mm))
-    story.append(Spacer(1, 4 * mm))
+    story.append(Spacer(1, 3 * mm))
+
+    # Вывод словами — тот же, что на экране (2026-08-14): когда закончим по
+    # прогнозу и на сколько это расходится с планом. Выгрузка обязана
+    # повторять экран, иначе распечатанный отчёт говорит меньше исходного.
+    вывод = []
+    for ключ, что in (("montage", "Монтаж"), ("delivery", "Поставка")):
+        f = (report.get("finish") or {}).get(ключ) or {}
+        if not f.get("forecast") or f"forecast_{ключ}" not in DYN_MODE_SERIES.get(
+                report.get("mode", "both"), []):
+            continue
+        срок = f"плановый срок {_ru_date_short(f['plan'])}" if f.get("plan") else "плановый срок не задан"
+        d = f.get("deviation_days")
+        оценка = ""
+        if d is not None:
+            оценка = (f" — опоздание на {d} дн." if d > 0
+                      else f" — опережение на {abs(d)} дн." if d < 0 else " — день в день")
+        вывод.append(f"<b>{что}:</b> завершение по прогнозу {_ru_date_short(f['forecast'])}, "
+                     f"{срок}{оценка}")
+    if вывод:
+        story.append(Paragraph("<br/>".join(вывод), ParagraphStyle(
+            "finish", parent=small, alignment=1, leading=11)))
+        story.append(Spacer(1, 3 * mm))
 
     def status_table(caption, block, footnote):
         def dev(v):

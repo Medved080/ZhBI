@@ -2309,6 +2309,23 @@
     max-width: 98vw; max-height: 94vh; resize: none;
   }
   #report-size-toggle { font-size: 15px; line-height: 1; }
+  /* Справка — сплошной текст, и его читают, а не просматривают: ширина
+     строки ограничена, между абзацами воздух. */
+  /* Вывод под графиком «Динамики»: когда закончим и на сколько
+     расходимся с планом. Читается как итог, поэтому — рамкой и по центру
+     под самим графиком, а не строкой в общем тексте. */
+  .dyn-verdict {
+    margin: -4px 0 10px; padding: 8px 12px; text-align: center; font-size: 13px;
+    background: var(--color-surface-2); border: 1px solid var(--color-border);
+    border-radius: var(--radius); line-height: 1.6;
+  }
+  #report-help-body { max-width: 78ch; }
+  #report-help-body h4 {
+    font-size: 12px; margin: 16px 0 6px; text-transform: uppercase;
+    letter-spacing: .03em; color: var(--color-text-muted);
+  }
+  #report-help-body h4:first-child { margin-top: 4px; }
+  #report-help-body p { margin: 0 0 8px; line-height: 1.5; }
   .ds-controls { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 6px 0 8px; }
   .ds-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
   /* Фишка уровня: флажок «участвует» + стрелки переноса. Порядок фишек
@@ -5284,6 +5301,11 @@
                действий: это про то, КАК смотреть отчёт, а не про то, что с
                ним сделать. Размер и так тянется за правый нижний угол формы,
                кнопка — быстрый способ развернуть без возни с углом. -->
+          <!-- Справка по отчёту (2026-08-14, живой запрос): что показывает и
+               по каким правилам считает. Текст живёт в app/report_help.py —
+               рядом с кодом отчётов, а не в разметке. -->
+          <button class="btn btn-sm btn-secondary" id="report-help-btn"
+                  title="Как считается этот отчёт">Справка</button>
           <button class="btn btn-sm btn-secondary btn-icon-square" id="report-size-toggle"
                   title="Развернуть на весь экран" aria-label="Развернуть на весь экран">⛶</button>
         </div>
@@ -5665,6 +5687,19 @@
     </div>
     <div class="actions">
       <button class="btn btn-secondary" id="schedule-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Справка по отчёту. Отдельная модалка поверх формы отчётов: читать
+     описание, не теряя из виду сам отчёт, — обычное дело, а вкладкой внутри
+     формы оно вытесняло бы таблицу. -->
+<div class="modal-backdrop" id="report-help-backdrop">
+  <div class="modal wide">
+    <h2 id="report-help-title">Справка</h2>
+    <div id="report-help-body"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="report-help-close">Закрыть</button>
     </div>
   </div>
 </div>

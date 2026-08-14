@@ -154,6 +154,7 @@ from app.models import (
 )
 from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
+from app.report_help import help_for as report_help_for
 from app.schedule_calc import router as schedule_calc_router
 from app.schedule_versions import element_deviation
 from app.schedule_versions import router as schedule_versions_router
@@ -4784,6 +4785,14 @@ def import_schedule_xlsx(file: UploadFile = File(...),
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         conn.close()
+
+
+@app.get("/report-help/{key}")
+def get_report_help(key: str, user: sqlite3.Row = Depends(get_current_user)):
+    """Справка по отчёту (2026-08-14): что показывает и по каким правилам
+    считает. Под обычным входом: описание — не данные объекта, и прятать его
+    от того, кому отчёт виден, не от чего."""
+    return report_help_for(key)
 
 
 @app.get("/import-templates")

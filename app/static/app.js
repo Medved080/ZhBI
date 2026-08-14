@@ -17885,6 +17885,41 @@ function shortDate(iso) {
 // шрифта в единицах viewBox (виewBox почти совпадает с реальной шириной,
 // иначе текст 11 px сжался бы до нечитаемых 3 px), без выносок вех и без
 // легенды внутри SVG — легенда рисуется рядом обычным HTML.
+// Вывод словами: когда закончим по прогнозу и на сколько это расходится с
+// планом (2026-08-14, живой запрос «укажи текстом количество дней опоздания
+// или опережения»). Знак тот же, что везде в системе: позже плана —
+// опоздание (красным), раньше — опережение (зелёным).
+//
+// Пишется ТОЛЬКО когда есть прогноз: без загруженной или посчитанной
+// актуализации графика говорить «идём с опережением» не из чего.
+function finishVerdictHtml(data) {
+  const f = data.finish || {};
+  const ряды = dynSeriesFor(data);
+  const строки = [];
+  for (const [ключ, что] of [["montage", "Монтаж"], ["delivery", "Поставка"]]) {
+    const b = f[ключ];
+    if (!b || !b.forecast || !ряды.includes(`forecast_${ключ}`)) continue;
+    const срок = b.plan
+      ? `плановый срок ${formatDateRu(b.plan)}`
+      : "плановый срок не задан";
+    let оценка = "";
+    if (b.deviation_days !== null && b.deviation_days !== undefined) {
+      const d = b.deviation_days;
+      const слово = plural(Math.abs(d), "день", "дня", "дней");
+      оценка = d > 0
+        ? ` — <span class="dev-late">опоздание на ${d} ${слово}</span>`
+        : d < 0
+          ? ` — <span class="dev-early">опережение на ${Math.abs(d)} ${слово}</span>`
+          : ' — <span class="dev-ok">день в день</span>';
+    }
+    строки.push(`<div><b>${что}:</b> завершение по прогнозу
+      ${formatDateRu(b.forecast)}, ${escapeHtml(срок)}${оценка}
+      ${b.plan ? `<span class="hint-text">(${escapeHtml(b.plan_source)})</span>` : ""}</div>`);
+  }
+  if (!строки.length) return "";
+  return `<div class="dyn-verdict">${строки.join("")}</div>`;
+}
+
 // Прогноз охватывает не все изделия — об этом надо сказать прямо (живой
 // репорт 2026-08-14: «почему монтаж практически прекращается»). Кривая,
 // которая не дорастает до полного объёма, читается как остановка работ, а
@@ -17968,10 +18003,26 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
     const w = mondayOf(iso);
     return w >= weeks[0] && w <= weeks[weeks.length - 1];
   };
+  // Отсечка «завершение по прогнозу» (2026-08-14, живой запрос) — такая же
+  // веха, как контрольные даты объекта, и рисуется тем же механизмом.
+  // Берётся из режима: смотрим монтаж — показываем завершение монтажа,
+  // смотрим поставку — поставки; в режиме «обе» обе отсечки, названные
+  // словом, иначе на графике две одинаковые красные стрелки.
+  const режимРядов = dynSeriesFor(data);
+  const отсечки = [];
+  for (const [ключ, подпись] of [["montage", "монтажа"], ["delivery", "поставки"]]) {
+    const f = (data.finish || {})[ключ];
+    if (!f || !f.forecast) continue;
+    if (!режимРядов.includes(`forecast_${ключ}`)) continue;
+    const общий = режимРядов.includes("forecast_montage") && режимРядов.includes("forecast_delivery");
+    отсечки.push({ label: общий ? `Прогноз завершения ${подпись}` : "Прогноз завершения",
+                   date: f.forecast });
+  }
   const marks = compact
     ? []
     : [{ label: "Отчётная дата", date: data.report_date }]
       .concat((data.card.milestones || []).filter(m => m && m.date))
+      .concat(отсечки)
       .filter(m => inWindow(m.date));
   // Линию рисуем только если отчётная дата попала в показанный период
   // (панель умеет сужать окно, см. sideDynWindow): иначе weekIndex сполз бы
@@ -18069,6 +18120,7 @@ function renderDynamicsReport(data) {
       ${dynList("tasks", "Ключевые задачи", card.key_tasks)}
     </div>
     <div class="dyn-chart">${buildDynamicsChartSvg(data)}</div>
+    ${finishVerdictHtml(data)}
     <div class="dyn-bottom">
       <div class="dyn-tables">
         ${dynBlockTable("Статус монтажа ЖБИ", montage,
@@ -18807,6 +18859,31 @@ document.getElementById("dyn-range-reset").addEventListener("click", () => {
 // Перезапрос, а не перерисовка имеющегося отчёта: сам отчёт несёт в себе
 // выбранный режим (series_order), и его же берут выгрузки XLSX/PDF.
 document.getElementById("dyn-mode").addEventListener("change", loadReport);
+
+// ---------- справка по отчёту (2026-08-14, живой запрос) ----------
+// Текст приходит с сервера (app/report_help.py) — там же, где живёт код
+// отчётов, чтобы описание правили вместе с расчётом, а не переписывали
+// заново в разметке.
+const reportHelpBackdrop = document.getElementById("report-help-backdrop");
+
+document.getElementById("report-help-btn").addEventListener("click", async () => {
+  const body = document.getElementById("report-help-body");
+  document.getElementById("report-help-title").textContent = "Справка";
+  body.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  reportHelpBackdrop.classList.add("open");
+  try {
+    const данные = await api(`/report-help/${encodeURIComponent(currentReport)}`);
+    document.getElementById("report-help-title").textContent = данные.title;
+    body.innerHTML = данные.sections.map(([заголовок, абзацы]) =>
+      `<h4>${escapeHtml(заголовок)}</h4>`
+      + абзацы.map(t => `<p>${escapeHtml(t)}</p>`).join("")
+    ).join("");
+  } catch (e) {
+    body.innerHTML = `<div class="error-text">Не удалось загрузить справку: ${escapeHtml(e.message)}</div>`;
+  }
+});
+document.getElementById("report-help-close")
+  .addEventListener("click", () => reportHelpBackdrop.classList.remove("open"));
 
 // ---------- размер формы отчётов (2026-08-14, живой запрос) ----------
 // Ширина отчёта была свойством самого отчёта: «Графику поставки» её
