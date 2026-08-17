@@ -51,6 +51,13 @@
        свой набор, и «сделать во всех схемах» это не одна переменная. */
     --shadow-card: 0 1px 2px rgba(20,30,50,.06), 0 6px 16px rgba(20,30,50,.10);
     --shadow-card-hover: 0 2px 6px rgba(20,30,50,.10), 0 14px 30px rgba(20,30,50,.16);
+    /* Свечение непрочитанной записи «Что нового» (2026-08-17). Не тень:
+       тень отодвигает карточку от фона, а здесь нужно обратное — привлечь
+       к ней взгляд. Поэтому цвет акцентный, а не серый, и первый слой —
+       кант в цвет свечения, чтобы карточка читалась как подсвеченная и на
+       белом фоне, где мягкий ореол почти незаметен. У каждой гаммы своё
+       значение по той же причине, что и у --shadow-card выше. */
+    --glow-new: 0 0 0 1px rgba(19,83,214,.55), 0 0 16px 2px rgba(19,83,214,.35);
     --dict-card-border: transparent;
   }
   @media (prefers-color-scheme: dark) {
@@ -62,6 +69,8 @@
          больший радиус у нижнего слоя дают направление «свет снизу». */
       --shadow-card: 0 2px 6px rgba(255,255,255,.05), 0 8px 22px rgba(255,255,255,.07);
       --shadow-card-hover: 0 3px 10px rgba(255,255,255,.09), 0 14px 34px rgba(255,255,255,.13);
+      /* На тёмном свечение и работает лучше всего — берём ярче и шире. */
+      --glow-new: 0 0 0 1px rgba(96,152,255,.75), 0 0 18px 3px rgba(70,130,255,.45);
       --dict-card-border: rgba(255,255,255,.08);
       --color-bg: #14161a;
       --color-surface: #1e2126;
@@ -114,6 +123,7 @@
     --shadow-md: 0 8px 28px rgba(11,31,51,.12);
     --shadow-card: 0 1px 2px rgba(11,31,51,.05), 0 6px 16px rgba(11,31,51,.10);
     --shadow-card-hover: 0 2px 6px rgba(11,31,51,.10), 0 14px 30px rgba(11,31,51,.16);
+    --glow-new: 0 0 0 1px rgba(13,76,211,.55), 0 0 16px 2px rgba(13,76,211,.35);
     --dict-card-border: transparent;
   }
   /* Тёмная схема у пробы своя: базовая построена на серых, а здесь фон
@@ -127,6 +137,7 @@
          больший радиус у нижнего слоя дают направление «свет снизу». */
       --shadow-card: 0 2px 6px rgba(255,255,255,.05), 0 8px 22px rgba(255,255,255,.07);
       --shadow-card-hover: 0 3px 10px rgba(255,255,255,.09), 0 14px 34px rgba(255,255,255,.13);
+      --glow-new: 0 0 0 1px rgba(96,152,255,.75), 0 0 18px 3px rgba(70,130,255,.45);
       --dict-card-border: rgba(255,255,255,.08);
       --color-bg: #0E1621;
       --color-surface: #16202D;
@@ -2022,6 +2033,14 @@
   .changelog-entry:first-child { padding-top: 0; }
   .changelog-eyebrow { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
   .changelog-version { font-size: 12px; font-weight: 700; color: var(--color-primary); }
+  /* НЕПРОЧИТАННАЯ ЗАПИСЬ (2026-08-17, живой запрос). Метка стоит ПЕРЕД
+     номером версии — глаз идёт по левому краю, и «НОВОЕ» справа от номера
+     нашлось бы уже после того, как строку прочитали. Кто прочитал, а кто
+     нет, решает сервер (GET /changelog, поле unseen): «прочитано» — это
+     всё, что ниже подтверждённой кнопкой «Ознакомился» версии. */
+  .changelog-new { font-size: 10px; font-weight: 800; letter-spacing: .06em;
+    text-transform: uppercase; color: #fff; background: var(--color-primary);
+    border-radius: 3px; padding: 2px 5px; flex-shrink: 0; }
   .changelog-date { font-size: 12px; color: var(--color-text-muted); }
   .changelog-entry h3 { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
   .changelog-entry ul { margin: 0; padding-left: 18px; }
@@ -2939,6 +2958,11 @@
     margin-bottom: 6px;
     transition: box-shadow .12s ease;
   }
+  /* Непрочитанное светится ВМЕСТО тени, а не вдобавок: тень и свечение,
+     наложенные друг на друга, дают грязный ореол, в котором ни того ни
+     другого не разобрать. Правило идёт после общего образца карточек —
+     им же и перекрывает box-shadow. */
+  #changelog-list > .changelog-entry.unseen { box-shadow: var(--glow-new); }
   #settings-rows, #shapes-rows, #zone-colors-rows, #default-contracts-rows,
   #mark-type-prefixes-list, #file-select-list, #sc-contract-list, #cp-list,
   #changelog-list {

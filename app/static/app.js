@@ -20019,9 +20019,14 @@ async function openChangelog() {
   } else {
     backdrop.classList.add("open");
   }
+  // Непрочитанное помечает СЕРВЕР (поле unseen, см. GET /changelog): порядок
+  // версий и то, докуда человек дочитал, знает он, а сравнение номеров
+  // строками на клиенте («0.9» больше «0.53») перевернуло бы список на
+  // первом же двузначном номере.
   box.innerHTML = state.changelog.map(entry => `
-    <div class="changelog-entry">
+    <div class="changelog-entry${entry.unseen ? " unseen" : ""}">
       <div class="changelog-eyebrow">
+        ${entry.unseen ? '<span class="changelog-new">Новое</span>' : ""}
         <span class="changelog-version">v${escapeHtml(entry.version)}</span>
         <span class="changelog-date">${escapeHtml(entry.date)}</span>
       </div>
@@ -20150,6 +20155,11 @@ document.getElementById("changelog-ack").addEventListener("click", async () => {
     // только «непрочитанного больше нет». Появится новая запись — сервер
     // снова поднимет признак в /me, потому что сравнивает версии.
     if (state.currentUser) state.currentUser.changelog_unseen = false;
+    // Кэш журнала СБРАСЫВАЕМ: в нём лежат отметки «не прочитано», снятые
+    // этим самым нажатием (2026-08-17). Без сброса человек, открывший
+    // «Что нового» второй раз за сеанс, увидел бы «НОВОЕ» и свечение на
+    // том, что он только что подтвердил.
+    state.changelog = null;
     document.getElementById("changelog-ack").style.display = "none";
     document.getElementById("changelog-backdrop").classList.remove("open");
   } catch (e) {
