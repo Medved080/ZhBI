@@ -329,9 +329,10 @@
   :root[data-skin] h3, :root[data-skin] h4 { font-weight: 700; }
   :root[data-skin] .modal h2 { font-size: 24px; line-height: 32px; letter-spacing: -.01em; }
 
-  /* Верхняя панель: белая, с мягкой линией снизу — как шапка портала. */
+  /* Верхняя панель: подложка с мягкой линией снизу, инструменты на ней —
+     плашками (2026-08-17; до этого полоса была белой, как шапка портала). */
   :root[data-skin] #toolbar {
-    background: var(--color-surface);
+    background: var(--color-bg);
     border-bottom: 1px solid var(--color-border);
     box-shadow: none;
     gap: 10px;
@@ -457,27 +458,47 @@
      край без видимого скроллбара (см. Docs/backlog.md, разбор UX).
      Теперь скроллится только #toolbar-scroll (контекст чертежа/дата),
      #toolbar-pinned (аккаунт) — flex-shrink:0, всегда виден целиком. */
+  /* Отступы сверху и снизу РАЗНЫЕ и меньше прежних 10 px: место под тень
+     плашек отдано внутрь #toolbar-scroll (иначе она обрезается, см. там), а
+     оно же считается за отступ полосы. Полоса от этого подросла на 7 px —
+     живой репорт 2026-08-17 «тень снизу обрезана». */
   #toolbar {
     display: flex;
     align-items: center;
-    padding: 10px 16px;
-    background: var(--color-surface);
+    padding: 6px 16px 4px;
+    /* Подложка, а не белое полотно (2026-08-17): инструменты стали
+       плашками, а плашка в цвет фона под собой не читается. См. блок
+       «плашки инструментов в панели» ниже. */
+    background: var(--color-bg);
     border-bottom: 1px solid var(--color-border);
     box-shadow: var(--shadow-sm);
     flex-shrink: 0;
     font-size: 13px;
     z-index: 10;
   }
+  /* `overflow-y: hidden` режет по ГРАНИЦЕ ПОЛЯ ОТСТУПОВ, а не по краю
+     содержимого: без нижнего отступа тень плашек обрезалась ровно по их
+     нижней кромке (живой репорт 2026-08-17). Убрать клип нельзя — `visible`
+     по одной оси при `auto` по другой браузер всё равно считает за `auto`,
+     и панель обзавелась бы вертикальным скроллом. Поэтому место под тень —
+     отступом ВНУТРИ прокручиваемого блока; 14 px это смещение тени (6) плюс
+     её размытие (16), обрезанное пополам. */
   #toolbar-scroll {
     display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;
     overflow-x: auto; overflow-y: hidden;
+    padding: 4px 0 14px;
     scrollbar-width: thin;
   }
   #toolbar-scroll::-webkit-scrollbar { height: 6px; }
   #toolbar-scroll::-webkit-scrollbar-thumb { background: rgba(120,120,120,.4); border-radius: 3px; }
+  /* Разделительной черты слева больше нет (2026-08-17): аккаунт и «?» стали
+     плашками, и линия между ними и соседней плашкой — вторая граница подряд. */
+  /* Отступы — те же, что у прокручиваемой части, иначе плашки двух блоков
+     встают на разной высоте: у полосы `align-items: center`, и блок без
+     нижнего отступа центрируется по более высокому соседу. */
   #toolbar-pinned {
     display: flex; align-items: center; gap: 8px; flex-shrink: 0;
-    margin-left: 10px; padding-left: 10px; border-left: 1px solid var(--color-border);
+    margin-left: 10px; padding: 4px 0 14px;
   }
   #toolbar h1 { font-size: 13px; font-weight: 600; margin: 0 6px 0 0; white-space: nowrap; color: var(--color-text); flex-shrink: 0; }
   #toolbar select, #toolbar input {
@@ -570,6 +591,63 @@
   #workdate-box.active input { border-color: var(--color-primary); }
   #user-box { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; }
   #user-box b { color: var(--color-text); }
+
+  /* -------- плашки инструментов в панели (2026-08-17) -------- */
+  /* Живой запрос: «раздели поля выбора объекта и варианта отображения на
+     отдельных плашечках с тенью, аналогично остальные инструменты в панели
+     выдели». Причина: выбор объекта и выбор рабочего места стали двумя
+     одинаковыми кнопками-поповерами подряд и читались как одна группа —
+     хотя это два РАЗНЫХ вопроса (над чем работаю / чем работаю).
+
+     Приём взят готовый — карточка справочника (`--shadow-card` и
+     `--dict-card-border`, см. блок переменных со всеми оговорками): тень
+     отделяет блок от фона надёжнее линии, а на тёмных гаммах работу делает
+     светлый кант, потому что тень там не видна физически. Второго набора
+     значений для панели заводить не пришлось.
+
+     Сама полоса панели при этом стала ПОДЛОЖКОЙ (`--color-bg` вместо
+     `--color-surface`, см. #toolbar): плашка того же цвета, что и фон под
+     ней, отделяется только тенью, а на светлой гамме это почти ничего. */
+  /* Высота у всех плашек ОДНА (min-height + box-sizing), хотя содержимое
+     разной высоты: кнопка, сегментированный переключатель, подпись с полем.
+     Без этого ряд шёл ступеньками 28–40 px — рядом стоящие плашки разной
+     высоты читаются как разной важности, чего тут нет. 40 px — не круглое
+     число, а высота самой рослой плашки (кнопка + отступы плашки): меньшее
+     значение она бы всё равно переросла, и ступенька вернулась бы. */
+  .toolbar-tile {
+    display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+    box-sizing: border-box; min-height: 40px;
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    padding: 3px;
+  }
+  /* У кнопки внутри плашки своей рамки и своего фона нет: два канта в трёх
+     пикселях друг от друга дают «кнопку в кнопке». Остаётся подсветка под
+     курсором — без неё пропал бы отклик на наведение. */
+  .toolbar-tile > .btn { border-color: transparent; background: transparent; }
+  .toolbar-tile > .btn:hover { background: var(--color-surface-2); border-color: transparent; }
+  /* Сегментированный переключатель 2D/3D — плашка ЦЕЛИКОМ: у него свои
+     перегородки между кнопками, и внутренний отступ разорвал бы их по краям.
+     Скругление берётся плашечное, поэтому крайние кнопки подрезаются. */
+  .view-mode-switch.toolbar-tile {
+    padding: 0; overflow: hidden; border-color: var(--dict-card-border);
+    align-items: stretch;   /* кнопки на всю высоту плашки, иначе поля по краям */
+  }
+  /* Одиночная кнопка-инструмент («Обновить», «?») сама себе плашка: обёртка
+     вокруг круглой кнопки дала бы два скругления одно в другом. Селектор с
+     id — правила .btn стоят в файле ниже и при равном весе перебили бы. */
+  #toolbar .toolbar-tile-btn {
+    box-shadow: var(--shadow-card); border-color: var(--dict-card-border);
+    /* Размер — по высоте плашек, и обязательно квадрат: кнопка круглая
+       (.btn-icon-round), при разных сторонах вышел бы овал. */
+    width: 40px; height: 40px; min-height: 40px; padding: 0;
+  }
+  /* Плашки, начинающиеся с ТЕКСТА (подпись «Рабочая дата», фамилия), а не с
+     кнопки: 3 px до буквы мало — текст, в отличие от кнопки, своего отступа
+     не несёт и упирается в край плашки. */
+  #workdate-box.toolbar-tile, #user-box.toolbar-tile { padding-left: 10px; }
 
   /* Рабочая дата (backdating) — потенциально опасный режим (новые записи
      истории статусов датируются НЕ текущим моментом), а единственным
@@ -1903,6 +1981,25 @@
   #object-switch-menu button.object-switch-item.active { font-weight: 700; }
   .object-switch-count { color: var(--color-text-muted); font-size: 11px; }
   #btn-object-switch { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  /* -------- выбор рабочего места (2026-08-17) -------- */
+  /* Пояснение к пункту — строкой под названием, а не в title: в ряду кнопок
+     подсказка всплывала по наведению, а в списке человек выбирает из трёх
+     незнакомых слов сразу, и наводить на каждое, чтобы понять разницу, —
+     ровно та работа, которую список должен снимать. */
+  #workspace-menu { min-width: 300px; max-width: 360px; }
+  #workspace-menu button.workspace-item { padding: 8px 10px 8px 24px; position: relative; }
+  .workspace-item-name { display: block; }
+  .workspace-item-hint {
+    display: block; font-size: 11px; color: var(--color-text-muted);
+    margin-top: 2px; white-space: normal; line-height: 1.35;
+  }
+  #workspace-menu button.workspace-item.active .workspace-item-name { font-weight: 700; }
+  /* Галочка в отступе слева: подсветкой фона отметить нельзя — тот же фон
+     даёт наведение мышью, и выбранное сливалось бы с тем, на чём просто
+     стоит курсор. */
+  #workspace-menu button.workspace-item.active::before {
+    content: "✓"; position: absolute; left: 8px; top: 8px; color: var(--color-primary); font-size: 12px;
+  }
   .bulk-edit-steps { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
   .bulk-edit-steps .bulk-edit-block { flex: 1 1 210px; }
   /* Шаг с выбором файла — шире соседних: рядом со своей кнопкой браузер
@@ -3349,7 +3446,7 @@
     <!-- Название сервиса рядом со знаком: в логотипе его нет, а «ЖБИ»
          отличает этот сервис от остальных систем МСУ-1. -->
     <h1>ЖБИ</h1>
-    <div class="dropdown" id="settings-dropdown">
+    <div class="dropdown toolbar-tile" id="settings-dropdown">
       <button class="btn" id="btn-settings-menu">Действия ▾</button>
       <!-- Группы меню (2026-07-29, живой запрос): "Настройки" — оформление и
            параметры самой системы, включая личные; "Справочники" — ведение
@@ -3579,7 +3676,7 @@
          скроллится, а два <select> с длинными названиями съели бы половину.
          Стоит сразу после «Действий», до режима 2D/3D: это контекст ВСЕГО
          остального на экране. -->
-    <div class="dropdown" id="object-switch">
+    <div class="dropdown toolbar-tile" id="object-switch">
       <button class="btn" id="btn-object-switch" title="Выбрать проект и объект">
         <span id="object-switch-label">Объект не выбран</span> ▾
       </button>
@@ -3588,26 +3685,45 @@
     <!-- Рабочее место (2026-08-10). «Модель» — привычная схема с панелью
          фильтров; «АРМ комплектовщика» — дашборд: взаимозависимые блоки
          свойств и количественных показателей плюс та же схема 2D/3D,
-         показывающая выбранный срез. Отдельный переключатель, а не пункт
-         меню: это то, чем человек переключает СВОЙ род работы, и он должен
-         быть виден постоянно. Стоит ПЕРЕД 2D/3D: 2D/3D — это как показана
+         показывающая выбранный срез. Своё место в тулбаре, а не пункт меню
+         «Настройки»: это то, чем человек переключает СВОЙ род работы, и
+         текущее рабочее место должно быть видно постоянно — поэтому у
+         кнопки списка стоит НАЗВАНИЕ выбранного, а не слово «Рабочее
+         место». Стоит ПЕРЕД 2D/3D: 2D/3D — это как показана
          схема внутри выбранного рабочего места, то есть уровнем ниже. -->
-    <div class="view-mode-switch" id="workspace-switch" role="group" aria-label="Рабочее место">
-      <button type="button" class="view-mode-btn active" id="btn-ws-model" data-ws="model"
-              title="Схема и панель фильтров">Модель</button>
-      <button type="button" class="view-mode-btn" id="btn-ws-picker" data-ws="picker"
-              title="Дашборд комплектации: свойства, количественные показатели и схема выбранного среза">АРМ комплектовщика</button>
-      <!-- АРМ прораба (2026-08-14). Не третий набор данных, а третья
-           РАСКЛАДКА тех же: фильтры «Модели» переезжают из вкладки правой
-           панели в постоянную панель слева, и прораб держит их под рукой,
-           не отнимая места у карточки изделия справа. Отбор — тот же самый
-           (state.placementFilters), поэтому переключение между «Моделью» и
-           этим АРМ ничего не сбрасывает; в АРМ комплектовщика отбор свой,
-           и там всё по-прежнему раздельно. -->
-      <button type="button" class="view-mode-btn" id="btn-ws-foreman" data-ws="foreman"
-              title="Фильтры «Модели» постоянной панелью слева, свойства и статус — справа">АРМ прораба</button>
+    <!-- Выпадающий список, а не ряд кнопок (2026-08-17): рабочих мест уже
+         три, и АРМы будут добавляться — ряд рос бы вправо, отжимая 2D/3D и
+         рабочую дату в горизонтальный скролл тулбара. Список занимает место
+         одного пункта независимо от их числа. Новое рабочее место
+         добавляется ОДНОЙ строкой в это меню: подпись кнопки и отметка
+         выбранного строятся по data-ws (см. setWorkspace). -->
+    <div class="dropdown toolbar-tile" id="workspace-switch">
+      <button class="btn" id="btn-workspace" title="Рабочее место: набор панелей и отбор вокруг схемы">
+        <span id="workspace-label">Модель</span> ▾
+      </button>
+      <div class="dropdown-menu" id="workspace-menu">
+        <button type="button" class="workspace-item active" id="btn-ws-model" data-ws="model">
+          <span class="workspace-item-name">Модель</span>
+          <span class="workspace-item-hint">Схема и панель фильтров</span>
+        </button>
+        <button type="button" class="workspace-item" id="btn-ws-picker" data-ws="picker">
+          <span class="workspace-item-name">АРМ комплектовщика</span>
+          <span class="workspace-item-hint">Дашборд комплектации: свойства, количественные показатели и схема выбранного среза</span>
+        </button>
+        <!-- АРМ прораба (2026-08-14). Не третий набор данных, а третья
+             РАСКЛАДКА тех же: фильтры «Модели» переезжают из вкладки правой
+             панели в постоянную панель слева, и прораб держит их под рукой,
+             не отнимая места у карточки изделия справа. Отбор — тот же самый
+             (state.placementFilters), поэтому переключение между «Моделью» и
+             этим АРМ ничего не сбрасывает; в АРМ комплектовщика отбор свой,
+             и там всё по-прежнему раздельно. -->
+        <button type="button" class="workspace-item" id="btn-ws-foreman" data-ws="foreman">
+          <span class="workspace-item-name">АРМ прораба</span>
+          <span class="workspace-item-hint">Фильтры «Модели» постоянной панелью слева, свойства и статус — справа</span>
+        </button>
+      </div>
     </div>
-    <div class="view-mode-switch" id="view-mode-switch" role="group" aria-label="Режим отображения">
+    <div class="view-mode-switch toolbar-tile" id="view-mode-switch" role="group" aria-label="Режим отображения">
       <button type="button" class="view-mode-btn active" id="btn-view-2d" data-mode="2d">2D</button>
       <button type="button" class="view-mode-btn" id="btn-view-3d" data-mode="3d">3D</button>
       <!-- Третий режим, а не настройка: облегчённый 3D — это то, что
@@ -3618,12 +3734,12 @@
     </div>
     <!-- Обновление данных стоит рядом с выбором режима просмотра: и то и
          другое — про то, ЧТО и КАК сейчас видно на схеме. -->
-    <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-refresh"
+    <button class="btn btn-sm btn-secondary btn-icon-round toolbar-tile-btn" id="btn-refresh"
             title="Обновить данные с сервера" aria-label="Обновить данные с сервера">
       <img src="/static/refresh.svg" alt="" width="16" height="16"/>
     </button>
     <span class="spacer"></span>
-    <div id="workdate-box">
+    <div id="workdate-box" class="toolbar-tile">
       <label for="workdate-input">Рабочая дата</label>
       <input type="datetime-local" id="workdate-input"/>
       <button class="btn btn-sm btn-secondary" id="workdate-reset" title="Заполнить текущими датой/временем">Сейчас</button>
@@ -3631,11 +3747,11 @@
     </div>
   </div>
   <div id="toolbar-pinned">
-    <div id="user-box">
+    <div id="user-box" class="toolbar-tile">
       <span><b id="user-name"></b></span>
       <button class="btn btn-sm btn-secondary" id="btn-logout">Выйти</button>
     </div>
-    <button class="btn btn-sm btn-secondary btn-icon-round" id="btn-changelog" title="Что нового">?</button>
+    <button class="btn btn-sm btn-secondary btn-icon-round toolbar-tile-btn" id="btn-changelog" title="Что нового">?</button>
   </div>
 </div>
 <!-- «Вышло обновление» (2026-08-10). Полоса, а не модалка: перезагрузка —

@@ -789,6 +789,15 @@ async function applyRolePermissions() {
     // /me) — человек, оказавшийся без права, не должен остаться в АРМ.
     if (!можно && workspace === режим) setWorkspace("model");
   }
+  // Список из одного пункта — обманка: он предлагает выбор, которого нет.
+  // Роли без единого АРМ переключатель не показываем вовсе (в ряду кнопок
+  // такого вопроса не стояло — там оставалась одна нажатая «Модель»).
+  const переключатель = document.getElementById("workspace-switch");
+  if (переключатель) {
+    const доступно = [...переключатель.querySelectorAll(".workspace-item")]
+      .filter((b) => b.style.display !== "none").length;
+    переключатель.style.display = доступно > 1 ? "" : "none";
+  }
 }
 
 // Полоса «вы работаете от имени…». Признак приходит С СЕРВЕРА (/me), а не
@@ -4914,9 +4923,13 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- переключатель рабочего места (тулбар) ----------
 
-const btnWsModel = document.getElementById("btn-ws-model");
-const btnWsPicker = document.getElementById("btn-ws-picker");
-const btnWsForeman = document.getElementById("btn-ws-foreman");
+// Выпадающий список (2026-08-17): рабочих мест уже три и будут ещё, ряд
+// кнопок в тулбаре дальше не растягивается. Пункты живут В РАЗМЕТКЕ
+// (index.html, #workspace-menu), отсюда они только читаются: гашение по
+// правам (applyRolePermissions) адресуется к тем же кнопкам по id, и второй
+// перечень тех же рабочих мест в коде разъехался бы с первым.
+const workspaceMenu = document.getElementById("workspace-menu");
+const workspaceLabel = document.getElementById("workspace-label");
 
 // Текущее рабочее место: "model" | "picker" | "foreman" (2026-08-14).
 // Раньше их было два, и хватало булева state.picker.active; он остался и
@@ -4932,9 +4945,13 @@ function setWorkspace(ws) {
   const picker = ws === "picker";
   const foreman = ws === "foreman";
   state.picker.active = picker;
-  btnWsModel.classList.toggle("active", ws === "model");
-  btnWsPicker.classList.toggle("active", picker);
-  btnWsForeman.classList.toggle("active", foreman);
+  for (const item of workspaceMenu.querySelectorAll(".workspace-item")) {
+    const это = item.dataset.ws === ws;
+    item.classList.toggle("active", это);
+    // Подпись кнопки — название выбранного места, а не слово «Рабочее
+    // место»: свёрнутый список обязан показывать, где человек находится.
+    if (это) workspaceLabel.textContent = item.querySelector(".workspace-item-name").textContent;
+  }
   document.getElementById("picker-panel").style.display = picker ? "" : "none";
   document.getElementById("picker-metrics").style.display = picker ? "" : "none";
   document.getElementById("picker-contracts").style.display = picker ? "" : "none";
@@ -4982,9 +4999,27 @@ function setWorkspace(ws) {
   }
 }
 
-btnWsModel.addEventListener("click", () => setWorkspace("model"));
-btnWsPicker.addEventListener("click", () => setWorkspace("picker"));
-btnWsForeman.addEventListener("click", () => setWorkspace("foreman"));
+// Обработчик один на меню, а не по кнопке на пункт: добавление рабочего
+// места должно стоить одной строки разметки и ничего в коде.
+workspaceMenu.addEventListener("click", (e) => {
+  const item = e.target.closest(".workspace-item");
+  if (!item) return;
+  workspaceMenu.classList.remove("open");
+  setWorkspace(item.dataset.ws);
+});
+
+// Открытие — тем же приёмом, что у переключателя объектов: position: fixed и
+// координаты в JS, иначе меню обрезается overflow-y: hidden тулбара.
+document.getElementById("btn-workspace").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!workspaceMenu.classList.contains("open")) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    workspaceMenu.style.left = Math.min(rect.left, window.innerWidth - 380) + "px";
+    workspaceMenu.style.top = (rect.bottom + 6) + "px";
+  }
+  workspaceMenu.classList.toggle("open");
+});
+document.addEventListener("click", () => workspaceMenu.classList.remove("open"));
 
 function renderAxisGrid(data) {
   const layer = document.getElementById("axis-layer");
@@ -9118,6 +9153,8 @@ document.addEventListener("keydown", (e) => {
   }
   closeCtxMenu();
   document.getElementById("settings-menu").classList.remove("open");
+  document.getElementById("workspace-menu").classList.remove("open");
+  objectSwitchMenu.classList.remove("open");
 });
 
 // Открытие переключателя объектов — тем же приёмом, что и меню «Действия»:
