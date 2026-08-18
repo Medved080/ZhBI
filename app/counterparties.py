@@ -310,12 +310,16 @@ def list_agreements(counterparty_id: int = Query(...), user: sqlite3.Row = Depen
         conn.close()
 
 
-def _guard_specification_owner(conn, user, specification_id: int, minimum: str = "contract") -> None:
+def _guard_specification_owner(conn, user, specification_id: int, kind: str = "write") -> None:
     """Доступ по ТЕКУЩЕМУ договору спецификации (а не по присланному).
 
-    Порог правки — `contract`, а не `admin` (2026-08-04): спецификация это
-    контрактный справочник, и ведёт его комплектовщик. Администратор
-    объекта проходит тем же порогом — он в лестнице выше.
+    `kind` — что делаем с разделом «Договоры»: "write" (правка, по
+    умолчанию) или "read". Раньше параметр назывался `minimum` и нёс
+    ПОРОГ РОЛИ ("contract"/"view"); с переходом на матрицу разделов
+    (2026-08-14) порог стал настройкой, а в проверку уходит вид доступа.
+    Имя параметра тогда переименовать забыли — тело уже обращалось к
+    `kind`, и функция падала NameError на первом же вызове (см.
+    Docs/backlog.md 2026-08-18).
     """
     row = conn.execute(
         "SELECT a.object_id FROM specifications s "
@@ -347,7 +351,7 @@ def _accessible_agreements_clause(conn, user, column: str = "object_id") -> tupl
     return f"{column} IN ({marks})", list(ids)
 
 
-def _guard_agreement(conn, user, agreement_id: int, minimum: str = "contract") -> None:
+def _guard_agreement(conn, user, agreement_id: int, kind: str = "write") -> None:
     """Доступ к договору — по объекту, на который он заключён
     (agreements.object_id, этап A).
 
@@ -355,9 +359,9 @@ def _guard_agreement(conn, user, agreement_id: int, minimum: str = "contract") -
     правит только администратор сервиса: раздавать безобъектный договор
     «админам объектов» нельзя — неизвестно, чей он.
 
-    Порог правки — `contract` (2026-08-04): договор это контрактный
-    справочник, ведёт его комплектовщик, администратор объекта проходит
-    тем же порогом.
+    `kind` — вид доступа к разделу «Договоры»: "write" (правка, по
+    умолчанию) или "read". Про переименование из `minimum` — см.
+    _guard_specification_owner выше.
     """
     row = conn.execute("SELECT object_id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
     if row is None:
@@ -499,7 +503,8 @@ def list_specifications(agreement_id: int = Query(...), user: sqlite3.Row = Depe
         # Спецификации принадлежат объекту через свой договор — проверяем
         # доступ к нему, а не отдаём по любому присланному agreement_id
         # (аудит безопасности 2026-08-03).
-        _guard_agreement(conn, user, agreement_id, "view")
+        # "read", а не старое "view": вид доступа к разделу, не порог роли.
+        _guard_agreement(conn, user, agreement_id, "read")
         rows = conn.execute(
             "SELECT * FROM specifications WHERE agreement_id = ? ORDER BY number", (agreement_id,)
         ).fetchall()
