@@ -888,18 +888,40 @@
      удаления — тот вызывается в том числе из самой формы контракта. */
   #contract-edit-backdrop { z-index: 110; }
 
-  /* -------- сворачиваемые области формы контрагента -------- */
-  .cpe-section { margin-bottom: 8px; }
-  .cpe-section > summary {
-    cursor: pointer; font-weight: 600; font-size: 12px; padding: 4px 0;
-    color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .04em;
-    list-style: none;
+  /* -------- поля формы контрагента (2026-08-18) --------
+     Закладки этой формы — общие `.tabs .modal-tabs`, см. ниже: своего вида
+     у карточки контрагента нет и быть не должно. Пришли на смену
+     сворачиваемым областям `.cpe-section` (2026-08-05): свёрнутая группа
+     всё равно занимала строку, а раскрытая толкала остальные вниз. */
+  /* Несколько полей одной строкой. `.modal label.field` блочный, поэтому
+     каждая пара «подпись + поле» живёт в своей колонке, иначе подписи и
+     поля перемешались бы в одну ленту. */
+  .cpe-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .cpe-col { display: flex; flex-direction: column; min-width: 0; }
+  .cpe-col > label.field { margin-top: 10px; }
+  .cpe-grow { flex: 1; }
+  /* Поля с законодательно ограниченной длиной (ИНН 12, КПП 9, ОГРН 15, код
+     10 знаков) не тянутся во всю ширину формы: `--cpe-chars` — сколько
+     знаков надо вместить. Единица `ch` — ширина нуля, то есть ровно того,
+     что тут и вводят; +6px — место каретки после последнего знака.
+     `box-sizing: content-box` вопреки общему `* { border-box }` НЕ прихоть:
+     при border-box в width пришлось бы закладывать ещё и внутренние поля с
+     рамкой, а их задаёт оформление (`:root[data-skin] input` — 12px, а не
+     10px, как в базовом правиле), и вычтенная константа врала бы на каждой
+     смене темы — ИНН из 12 знаков уже не влезал.
+     Селектор с `input[type="text"]` — не для красоты: правило
+     `.modal input[type="text"] { width: 100% }` выше по специфичности, чем
+     один класс, и растягивало эти поля обратно во всю строку. */
+  .modal input[type="text"].cpe-fixed {
+    flex: none; box-sizing: content-box; width: calc(var(--cpe-chars) * 1ch + 6px);
   }
-  .cpe-section > summary::-webkit-details-marker { display: none; }
-  /* Треугольник рисуем сами: браузерный маркер выравнивается по базовой
-     линии текста и в верхнем регистре съезжает. */
-  .cpe-section > summary::before { content: "▸ "; display: inline-block; width: 1em; }
-  .cpe-section[open] > summary::before { content: "▾ "; }
+  /* Заголовок группы полей внутри закладки («Адреса», «Контакты»,
+     «Производительность») — той же типографики, что подписи разделов в
+     сайдбаре, с чертой сверху: без неё группы сливаются в общий список. */
+  .cpe-group { font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--color-text-muted);
+    margin: 18px 0 0; padding-top: 12px; border-top: 1px solid var(--color-border); }
+  .tab-panel > .cpe-group:first-child { margin-top: 0; padding-top: 0; border-top: none; }
   /* Блок одного договора внутри контрактации: рамка нужна, чтобы в свёрнутом
      виде было видно, где кончается один договор и начинается следующий. */
   /* Вид карточки (фон, тень, скругление) задан ниже одним правилом вместе
@@ -2122,6 +2144,16 @@
   .bulk-edit-rejected div { color: var(--color-danger); padding: 2px 0; }
   .modal.modal-sticky { display: flex; flex-direction: column; overflow: hidden; padding: 22px 0; }
   .modal-sticky-head, .modal-sticky-foot { flex: 0 0 auto; padding: 0 24px; }
+  /* «Обучение», выбор роли под строкой закладок. display задан ЗДЕСЬ, а не
+     инлайном: JS показывает блок через style.display = "", то есть возвращает
+     значение из таблицы стилей, и без правила label остался бы строчным —
+     прижать выбор вправо было бы нечем. */
+  #training-role-box { display: flex; align-items: center; justify-content: flex-end;
+    gap: 6px; margin-top: 8px; white-space: nowrap; }
+  /* Тем же приёмом, что у дат в `.modal .row`: `.modal select { width: 100% }`
+     внутри flex-строки становится flex-basis, и выбор растягивался во всю
+     ширину формы, а подпись «Вид инструкции» ломалась на две строки. */
+  #training-role-box select { flex: 0 0 auto; width: auto; }
   .modal-sticky-head h2 { margin-bottom: 14px; }
   .modal-sticky-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 24px; margin: 10px 0; }
   .modal-sticky-scroll table.bulk-status-table thead th {
@@ -3196,10 +3228,35 @@
   /* Состояние обновления в «Что нового» (2026-08-04). Зелёная плашка —
      обновление завершено, красная — есть незавершённые обработки: строка
      должна читаться с одного взгляда, поэтому цвет, а не текст мелким. */
-  /* Закладки «Что нового». .tabs рассчитан на сайдбар (отрицательные поля
-     под его padding), в модалке они дают разъезд — поэтому свои отступы. */
-  .cl-tabs { margin: 10px 0 0; padding: 0; }
-  .cl-tabs .tab-btn { flex: none; padding: 8px 14px; }
+  /* Закладки В МОДАЛЬНОМ ОКНЕ — один вид на все формы сервиса: «Что
+     нового», «График СМР», карточка контрагента.
+     Базовый `.tabs` рассчитан на САЙДБАР: отрицательные поля под его
+     padding, растяжение кнопок на всю ширину (flex: 1) и прилипание к
+     верхнему краю при прокрутке. В модалке всё три вредят — строка
+     разъезжается до краёв окна, три-четыре ярлыка растягиваются на всю
+     ширину и читаются как панель кнопок, а sticky кладёт лишний слой над
+     соседними окнами. Поэтому ярлыки здесь по ширине текста и прижаты
+     влево, как в любой закладочной форме.
+     Прилипание к верху ОСТАВЛЕНО (и починено): в сайдбаре его просили
+     живьём 08-14 — в длинной форме переключатель уезжает за верхний край, и
+     чтобы вернуться на соседнюю закладку, надо сперва прокрутить обратно.
+     В модалках длинных форм тоже хватает («График СМР» → «Исходные данные
+     расчёта», карточка контрагента с развёрнутыми договорами). Но `top`
+     здесь СВОЙ: у сайдбара это `-16px` — ровно его padding-top, а тут
+     -22px, ровно padding-top модалки. Смысл тот же: прилипнув, полоса
+     встаёт ВПЛОТНУЮ к верхнему краю окна
+     и закрывает собой всё, что уезжает под неё. С чужим `-16px` она
+     прилипала с обрезанным верхом, с `top: 0` — оставляла над собой щель в
+     22px, сквозь которую проезжало содержимое (видно на любой длинной
+     форме). Подложка обязательна (её задаёт `.tabs`): содержимое уезжает
+     ПОД строку, без фона текст проступал бы сквозь неё.
+     ВАЖНО: правило обязано стоять ПОСЛЕ `.tabs` — специфичность у них
+     одинаковая, решает порядок. Первая попытка положить такой же блок рядом
+     с остальными правилами формы контрагента (выше по файлу) не давала
+     ничего: `.tabs` шёл ниже и выигрывал, форма молча получала геометрию
+     сайдбара. */
+  .modal-tabs { margin: 10px 0 0; padding: 0; top: -22px; }
+  .modal-tabs .tab-btn { flex: none; padding: 8px 14px; }
   /* Значок у ярлыка закладки — точка, а не число: обработок с ошибкой бывает
      одна-две, и точка одинаково хорошо читается и в светлой, и в тёмной гамме. */
   .cl-tab-badge { display: none; width: 7px; height: 7px; border-radius: 50%;
@@ -4918,20 +4975,32 @@
       <h2>Обучение</h2>
       <p class="hint-text" id="training-subtitle">Инструкция собрана под ваши роли: в ней
         только те разделы, которые вам доступны.</p>
-      <div class="row" style="gap:6px; margin-top:8px; justify-content:flex-start; flex-wrap:wrap;">
-        <button class="btn btn-sm btn-primary" id="training-tab-guide" data-tab="guide">Инструкция</button>
-        <button class="btn btn-sm btn-secondary" id="training-tab-test" data-tab="test">Тест</button>
-        <button class="btn btn-sm btn-secondary" id="training-tab-my" data-tab="my">Мои попытки</button>
-        <button class="btn btn-sm btn-secondary" id="training-tab-people" data-tab="people"
+      <!-- Закладки — общие `.tabs .modal-tabs`, как в «Что нового», «Графике
+           СМР» и карточке контрагента (2026-08-18). Были кнопками-таблетками
+           (btn-primary у активной, btn-secondary у остальных): четыре
+           заливки подряд читались как панель действий, а не как переключатель
+           одного и того же экрана.
+           Атрибут СВОЙ (`data-training-tab`), не общий `data-tab`: последний
+           принадлежит вкладкам сайдбара, и общая на них разметка означала бы
+           один щелчок в двух местах. -->
+      <div class="tabs modal-tabs">
+        <button type="button" class="tab-btn active" id="training-tab-guide" data-training-tab="guide">Инструкция</button>
+        <button type="button" class="tab-btn" id="training-tab-test" data-training-tab="test">Тест</button>
+        <button type="button" class="tab-btn" id="training-tab-my" data-training-tab="my">Мои попытки</button>
+        <button type="button" class="tab-btn" id="training-tab-people" data-training-tab="people"
                 data-feature="training_admin" data-feature-kind="read">Как учатся сотрудники</button>
-        <!-- «Глазами роли»: нужно тому, кто раздаёт роли, — посмотреть, что
-             увидит человек, ДО того как роль выдана. Гасится тем же
-             признаком, что и сама настройка ролей. -->
-        <label class="hint-text" id="training-role-box" style="margin-left:auto; display:none;">
-          Вид инструкции:
-          <select id="training-role" class="input input-sm"></select>
-        </label>
       </div>
+      <!-- «Глазами роли»: нужно тому, кто раздаёт роли, — посмотреть, что
+           увидит человек, ДО того как роль выдана. Гасится тем же признаком,
+           что и сама настройка ролей.
+           Стоит ПОД строкой закладок, а не в ней (2026-08-18): выбор выше
+           ярлыков по росту и растягивал полосу, из-за чего подчёркивание
+           активной закладки уезжало от текста; и по смыслу он относится к
+           одной закладке «Инструкция», а не к переключателю. -->
+      <label class="hint-text" id="training-role-box" style="display:none;">
+        Вид инструкции:
+        <select id="training-role" class="input input-sm"></select>
+      </label>
     </div>
     <div class="modal-sticky-scroll">
       <div id="training-guide"></div>
@@ -5715,7 +5784,7 @@
            когда обновление не завершилось. Теперь это отдельная закладка, а
            в её ярлыке появляется значок, если есть что чинить: не завершено —
            видно, не мешая читать журнал. -->
-      <div class="tabs cl-tabs">
+      <div class="tabs modal-tabs">
         <button type="button" class="tab-btn active" data-cl-tab="news">Журнал версий</button>
         <button type="button" class="tab-btn" data-cl-tab="release">
           Обновление<span id="changelog-release-badge" class="cl-tab-badge"></span>
@@ -5801,7 +5870,7 @@
 <div class="modal-backdrop" id="schedule-backdrop">
   <div class="modal wide">
     <h2>График СМР</h2>
-    <div class="tabs" id="schedule-tabs">
+    <div class="tabs modal-tabs" id="schedule-tabs">
       <button type="button" class="tab-btn active" data-sched-tab="versions">Версии</button>
       <button type="button" class="tab-btn" data-sched-tab="inputs">Исходные данные расчёта</button>
       <button type="button" class="tab-btn" data-sched-tab="calc">Расчёт</button>
@@ -5893,73 +5962,88 @@
 <div class="modal-backdrop" id="counterparty-edit-backdrop">
   <div class="modal wide">
     <h2 id="counterparty-edit-title">Контрагент</h2>
-    <!-- Две сворачиваемые области (2026-08-05, запрос пользователя): у
-         контрагента с десятком договоров форма уезжала на несколько экранов,
-         и реквизиты юрлица — девять полей, которые правят раз в жизни, —
-         занимали первый экран целиком, отодвигая контрактацию, ради которой
-         форму и открывают. Теперь каждая часть сворачивается, а каждый
-         договор — ещё и отдельным блоком внутри.
-         `<details>`, а не самодельный аккордеон: состояние держит браузер,
-         работает клавиатурой и не требует ни строчки на синхронизацию. -->
-    <!-- Наименования — ВНЕ сворачиваемой области (2026-08-05, запрос
-         пользователя): это то, ЧЬЮ карточку человек открыл, и прятать его в
-         свёрнутую группу значит показывать форму без ответа на вопрос «чей
-         это договор». Внутрь убраны только реквизиты юрлица — ИНН, КПП,
-         адреса, контакты: их правят раз в жизни. -->
-    <label class="field">Краткое наименование</label><input type="text" id="cpe-short-name"/>
-    <label class="field">Полное наименование</label><input type="text" id="cpe-full-name"/>
-    <!-- Код — тоже НАРУЖУ (2026-08-05): в отличие от ИНН и адресов, он виден
-         пользователям каждый день — это допстрока подписи изделия на схеме,
-         и подбирают его глазами, сверяя с тем, что получится на чертеже. -->
-    <label class="field">Код (для компактной подписи на схеме)</label><input type="text" id="cpe-code"/>
-    <!-- Содержимое ОБЁРНУТО в один div, а не лежит прямо в <details>.
-         Свежий Chrome прячет содержимое через `::details-content`, и ему всё
-         равно, что на детях написано; движки постарше делают это правилом
-         `details:not([open]) > *:not(summary) { display: none }`, которое
-         перебивается любым более специфичным авторским — а у нас рядом стоят
-         `.modal label.field { display: block }` и `.row { display: flex }`.
-         На таком движке свёрнутая группа продолжала бы показывать все поля.
-         У обёртки display никто не задаёт, поэтому прячется везде.
-         Проверено на Chrome (свёрнутая форма — 349 px вместо нескольких
-         экранов); на старых движках — рассуждением, не запуском. -->
-    <details class="cpe-section" id="cpe-details-requisites" open>
-      <summary>Прочие реквизиты</summary>
-      <div>
-        <label class="field">ИНН</label><input type="text" id="cpe-inn"/>
-        <label class="field">КПП</label><input type="text" id="cpe-kpp"/>
-        <label class="field">ОГРН</label><input type="text" id="cpe-ogrn"/>
-        <label class="field">Юридический адрес</label><input type="text" id="cpe-legal-address"/>
-        <label class="field">Контактное лицо</label><input type="text" id="cpe-contact-person"/>
-        <label class="field">Контактный телефон</label><input type="text" id="cpe-contact-phone"/>
-      </div>
-    </details>
-    <!-- Производительность завода (2026-08-11): сколько изделий каждого типа
-         контрагент выпускает в КАЛЕНДАРНЫЙ день. По ней «Аналитическая
-         справка» считает, к какому сроку завод закроет дефицит; норматива
-         «срок изготовления в днях» у заказчика нет — он зависит от темпа
-         конкретного завода. Пустое поле = норматива нет, справка честно
-         пишет «сроки неизвестны» (см. app/capacity.py). -->
-    <details class="cpe-section" id="cpe-details-capacity">
-      <summary>Производительность</summary>
-      <div>
-        <p class="hint-text">Сколько изделий завод выпускает в календарный день.
-          Пустое поле — норматива нет: «Аналитическая справка» тогда не берётся
-          судить, успевает поставка или нет. В конкретном контракте значение можно
-          переопределить.</p>
-        <table id="cpe-capacity"></table>
-      </div>
-    </details>
-    <div class="error-text" id="counterparty-edit-error"></div>
-    <!-- Кнопки ВНЕ сворачиваемой области: со свёрнутыми реквизитами
-         «Отмена» должна оставаться доступной, иначе закрыть форму нечем. -->
-    <div class="actions">
-      <button class="btn btn-secondary" id="counterparty-edit-cancel">Отмена</button>
-      <button class="btn btn-primary" id="counterparty-edit-save">Сохранить</button>
+    <!-- Три закладки (2026-08-18, запрос пользователя) вместо трёх
+         сворачиваемых `<details>` (2026-08-05). Задача у них была одна —
+         карточка контрагента с десятком договоров уезжала на несколько
+         экранов, — но сворачиваемые области решали её наполовину: свёрнутая
+         группа всё равно занимает строку, а раскрытая толкает остальные
+         вниз, и человек листал форму, чтобы понять, где он находится.
+         Закладка показывает ровно одну часть и ничего кроме неё.
+         «Основное» — реквизиты юрлица, «Контрактация» — договоры со
+         спецификациями и контрактами, «Прочее» — производительность завода.
+         Заголовок, ошибка и кнопки «Отмена»/«Сохранить» — ВНЕ закладок:
+         сохранение относится ко всей карточке, а не к видимой части, и с
+         любой закладки должно быть на своём месте. -->
+    <div class="tabs modal-tabs">
+      <button type="button" class="tab-btn active" data-cpe-tab="main">Основное</button>
+      <button type="button" class="tab-btn" data-cpe-tab="contracting">Контрактация</button>
+      <button type="button" class="tab-btn" data-cpe-tab="other">Прочее</button>
     </div>
-    <div id="counterparty-agreements-section" style="display:none; margin-top:18px; border-top:1px solid var(--color-border); padding-top:12px;">
-      <details class="cpe-section" id="cpe-details-contracting" open>
-        <summary>Контрактация: договоры, спецификации, контракты</summary>
-        <div>
+
+    <div class="tab-panel active" data-cpe-panel="main">
+      <!-- Код и краткое наименование — одной строкой: код не длиннее 10
+           символов, и полем во всю ширину формы он обещал место, которого у
+           него нет. Рядом с ним — краткое наименование, из первого слова
+           которого код и порождается по умолчанию (см.
+           _generate_counterparty_code): их и подбирают вместе, глядя друг на
+           друга. -->
+      <div class="cpe-row">
+        <div class="cpe-col">
+          <label class="field">Код</label>
+          <!-- 11, хотя предел 10: `ch` — ширина НУЛЯ, а код набирают
+               прописными, и кириллическая заглавная шире цифры — код из
+               десяти букв в поле «на десять знаков» не помещался. -->
+          <input type="text" id="cpe-code" class="cpe-fixed" style="--cpe-chars:11" maxlength="10"
+                 title="Допстрока подписи изделия на схеме, до 10 символов"/>
+        </div>
+        <div class="cpe-col cpe-grow">
+          <label class="field">Краткое наименование</label>
+          <input type="text" id="cpe-short-name"/>
+        </div>
+      </div>
+      <p class="hint-text">Код — допстрока подписи изделия на схеме, до 10 символов.</p>
+      <label class="field">Полное наименование</label><input type="text" id="cpe-full-name"/>
+      <!-- ИНН, КПП и ОГРН — одной строкой, каждое поле в свою длину: длины
+           тут заданы законом и не меняются, поэтому поле во всю ширину формы
+           только вводило в заблуждение. ИНН — 10 знаков у юрлица и 12 у ИП,
+           КПП — ровно 9, ОГРН — 13 у юрлица и 15 у ИП (ОГРНИП); maxlength
+           поставлен по БОЛЬШЕМУ из вариантов, иначе ИНН индивидуального
+           предпринимателя не ввести. Ограничение только на ввод: в базе
+           поля остаются TEXT без длины — накопленные значения (в том числе
+           пришедшие импортом) не должны стать невалидными задним числом. -->
+      <div class="cpe-row">
+        <div class="cpe-col">
+          <label class="field">ИНН</label>
+          <input type="text" id="cpe-inn" class="cpe-fixed" style="--cpe-chars:12" maxlength="12"
+                 inputmode="numeric" title="10 знаков у юрлица, 12 у ИП"/>
+        </div>
+        <div class="cpe-col">
+          <label class="field">КПП</label>
+          <input type="text" id="cpe-kpp" class="cpe-fixed" style="--cpe-chars:9" maxlength="9"
+                 inputmode="numeric" title="9 знаков"/>
+        </div>
+        <div class="cpe-col">
+          <label class="field">ОГРН</label>
+          <input type="text" id="cpe-ogrn" class="cpe-fixed" style="--cpe-chars:15" maxlength="15"
+                 inputmode="numeric" title="13 знаков у юрлица, 15 у ИП (ОГРНИП)"/>
+        </div>
+      </div>
+      <h3 class="cpe-group">Адреса</h3>
+      <label class="field">Юридический адрес</label><input type="text" id="cpe-legal-address"/>
+      <h3 class="cpe-group">Контакты</h3>
+      <label class="field">Контактное лицо</label><input type="text" id="cpe-contact-person"/>
+      <label class="field">Контактный телефон</label><input type="text" id="cpe-contact-phone"/>
+    </div>
+
+    <div class="tab-panel" data-cpe-panel="contracting">
+      <!-- Договоры/спецификации — только у уже существующего контрагента (у
+           нового ещё нет id, договор ссылается на counterparty_id). Раньше
+           область просто пропадала, и закладка оказалась бы пустой без
+           объяснения — поэтому подсказка вместо пустоты. -->
+      <p class="hint-text" id="cpe-agreements-hint" style="display:none;">
+        Договоры заводятся после сохранения контрагента — заполните «Основное» и нажмите «Сохранить».
+      </p>
+      <div id="counterparty-agreements-section" style="display:none;">
         <!-- justify-content у .row — space-between, из-за чего эти две
              кнопки расходились по краям формы и читались как два разных
              действия в разных местах. Своя раскладка. -->
@@ -5968,19 +6052,50 @@
           <button class="btn btn-sm btn-secondary" id="cpe-expand-all" type="button">Развернуть все</button>
         </div>
         <div id="cpe-agreements-list"></div>
-        <!-- Объект обязателен (2026-08-03): договор без объекта не виден ни в
-             одном контракте объекта — по правилам доступа его показывают
-             только администратору сервиса. Поле стоит первым в строке: это
-             не реквизит документа, а то, к какой стройке он относится. -->
-        <div class="row" style="gap:6px; margin-top:8px;">
-          <select id="cpe-new-agreement-object" style="flex:1; min-width:0;"></select>
-          <input type="text" id="cpe-new-agreement-number" placeholder="номер договора" style="flex:1;"/>
-          <input type="date" id="cpe-new-agreement-date"/>
-          <button class="btn btn-sm btn-secondary" id="cpe-add-agreement">+ Договор</button>
+        <!-- Поля нового договора спрятаны за кнопкой (2026-08-18, живой
+             запрос): три пустых поля под списком стояли всегда, хотя договор
+             заводят раз в несколько месяцев, — и на каждом уровне иерархии
+             свои, то есть у контрагента с пятью договорами форма показывала
+             шесть наборов пустых полей разом. Развёрнутый вид — то же самое,
+             что было, плюс «Отмена», чтобы убрать поля обратно. -->
+        <button class="btn btn-sm btn-secondary" id="cpe-new-agreement-toggle" type="button"
+                style="margin-top:8px;">+ Договор</button>
+        <div id="cpe-new-agreement-form" style="display:none;">
+          <!-- Объект обязателен (2026-08-03): договор без объекта не виден ни в
+               одном контракте объекта — по правилам доступа его показывают
+               только администратору сервиса. Поле стоит первым в строке: это
+               не реквизит документа, а то, к какой стройке он относится. -->
+          <div class="row" style="gap:6px; margin-top:8px;">
+            <select id="cpe-new-agreement-object" style="flex:1; min-width:0;"></select>
+            <input type="text" id="cpe-new-agreement-number" placeholder="номер договора" style="flex:1;"/>
+            <input type="date" id="cpe-new-agreement-date"/>
+            <button class="btn btn-sm btn-primary" id="cpe-add-agreement">Добавить</button>
+            <button class="btn btn-sm btn-secondary" id="cpe-new-agreement-cancel" type="button">Отмена</button>
+          </div>
+          <div class="error-text" id="cpe-agreement-error"></div>
         </div>
-        <div class="error-text" id="cpe-agreement-error"></div>
-        </div>
-      </details>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-cpe-panel="other">
+      <!-- Производительность завода (2026-08-11): сколько изделий каждого типа
+           контрагент выпускает в КАЛЕНДАРНЫЙ день. По ней «Аналитическая
+           справка» считает, к какому сроку завод закроет дефицит; норматива
+           «срок изготовления в днях» у заказчика нет — он зависит от темпа
+           конкретного завода. Пустое поле = норматива нет, справка честно
+           пишет «сроки неизвестны» (см. app/capacity.py). -->
+      <h3 class="cpe-group">Производительность</h3>
+      <p class="hint-text">Сколько изделий завод выпускает в календарный день.
+        Пустое поле — норматива нет: «Аналитическая справка» тогда не берётся
+        судить, успевает поставка или нет. В конкретном контракте значение можно
+        переопределить.</p>
+      <table id="cpe-capacity"></table>
+    </div>
+
+    <div class="error-text" id="counterparty-edit-error"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="counterparty-edit-cancel">Отмена</button>
+      <button class="btn btn-primary" id="counterparty-edit-save">Сохранить</button>
     </div>
   </div>
 </div>

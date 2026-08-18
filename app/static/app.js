@@ -1483,14 +1483,21 @@ async function renderFileSelectMenu() {
 }
 
 // ---------- вкладки сайдбара: Свойства / Статус / Фильтры / Вид ----------
+// Селекторы ОГРАНИЧЕНЫ сайдбаром (2026-08-18). Классы `.tab-btn`/`.tab-panel`
+// общие на весь сервис — их носят и закладки модальных форм («Что нового»,
+// «График СМР», карточка контрагента, «Обучение»). Пока селектор был
+// глобальным, любое переключение вкладки сайдбара снимало `active` со ВСЕХ
+// чужих ярлыков и панелей: у формы, открытой в этот момент, содержимое
+// пропало бы целиком, потому что ни одна её панель под `tab-${name}` не
+// подходит. Своя разметка у каждой формы это не лечит — лечит область поиска.
 function switchTab(name) {
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
-  document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
+  document.querySelectorAll("#sidebar .tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll("#sidebar .tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
   // Отчёты панели «Статус» пока она скрыта не считаются (запрос не дешёвый) —
   // догоняем при переходе на неё, см. scheduleSidebarReports.
   if (name === "status" && sideReportsDirty()) loadSidebarReports();
 }
-document.querySelectorAll(".tab-btn").forEach(btn => {
+document.querySelectorAll("#sidebar .tab-btn").forEach(btn => {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
 });
 
@@ -4977,11 +4984,11 @@ function setWorkspace(ws) {
   // вовсе (их нельзя принять за причину того, что видно на схеме), у
   // прораба они действуют, но переехали в левую панель — пустая вкладка
   // осталась бы обманкой. Остальные вкладки нужны и там, и там.
-  const filtersTab = document.querySelector('.tab-btn[data-tab="filters"]');
+  const filtersTab = document.querySelector('#sidebar .tab-btn[data-tab="filters"]');
   if (filtersTab) {
     filtersTab.style.display = picker || foreman ? "none" : "";
     if ((picker || foreman) && filtersTab.classList.contains("active")) {
-      document.querySelector('.tab-btn[data-tab="properties"]').click();
+      document.querySelector('#sidebar .tab-btn[data-tab="properties"]').click();
     }
   }
   if (picker) renderPicker();
@@ -13653,10 +13660,8 @@ function trainingSetTab(tab) {
   document.getElementById("training-tab-people").style.display = чужие ? "" : "none";
   if (tab === "people" && !чужие) tab = "guide";
   trainingState.tab = tab;
-  for (const кнопка of trainingBackdrop.querySelectorAll("[data-tab]")) {
-    const активна = кнопка.dataset.tab === tab;
-    кнопка.classList.toggle("btn-primary", активна);
-    кнопка.classList.toggle("btn-secondary", !активна);
+  for (const кнопка of trainingBackdrop.querySelectorAll("[data-training-tab]")) {
+    кнопка.classList.toggle("active", кнопка.dataset.trainingTab === tab);
   }
   for (const имя of ["guide", "test", "my", "people"]) {
     document.getElementById(`training-${имя}`).style.display = имя === tab ? "" : "none";
@@ -14169,10 +14174,10 @@ document.getElementById("menu-training").addEventListener("click", () => openTra
 document.getElementById("menu-training-history").addEventListener("click", () => openTraining("people"));
 document.getElementById("training-close").addEventListener("click", () =>
   trainingBackdrop.classList.remove("open"));
-for (const кнопка of trainingBackdrop.querySelectorAll("[data-tab]")) {
+for (const кнопка of trainingBackdrop.querySelectorAll("[data-training-tab]")) {
   кнопка.addEventListener("click", () => {
-    trainingSetTab(кнопка.dataset.tab);
-    if (кнопка.dataset.tab === "guide") trainingLoadGuide();
+    trainingSetTab(кнопка.dataset.trainingTab);
+    if (кнопка.dataset.trainingTab === "guide") trainingLoadGuide();
   });
 }
 document.getElementById("training-role").addEventListener("change", (e) => {
@@ -14714,10 +14719,19 @@ async function renderCounterpartyAgreements() {
         </div>
         <div class="error-text cpe-edit-agreement-error"></div>
         <div class="cpe-specs-list"></div>
-        <div class="row" style="gap:6px; margin-top:6px;">
-          <input type="text" class="cpe-new-spec-number" placeholder="номер спецификации" style="flex:1;"/>
-          <input type="date" class="cpe-new-spec-date"/>
-          <button class="btn btn-sm btn-secondary cpe-add-spec" type="button">+ Спецификация</button>
+        <!-- Поля новой спецификации спрятаны за кнопкой (2026-08-18, живой
+             запрос) — по той же причине, что и поля нового договора: они
+             повторяются в КАЖДОМ договоре, и у контрагента с пятью
+             договорами форма показывала пять пустых строк подряд. -->
+        <button class="btn btn-sm btn-secondary cpe-new-spec-toggle" type="button"
+                style="margin-top:6px;">+ Спецификация</button>
+        <div class="cpe-new-spec-form" style="display:none;">
+          <div class="row" style="gap:6px; margin-top:6px;">
+            <input type="text" class="cpe-new-spec-number" placeholder="номер спецификации" style="flex:1;"/>
+            <input type="date" class="cpe-new-spec-date"/>
+            <button class="btn btn-sm btn-primary cpe-add-spec" type="button">Добавить</button>
+            <button class="btn btn-sm btn-secondary cpe-new-spec-cancel" type="button">Отмена</button>
+          </div>
         </div>
       </div>`;
     box.appendChild(блок);
@@ -14847,6 +14861,21 @@ async function renderCounterpartyAgreements() {
       }
     }
 
+    // Раскрытие/сворачивание полей новой спецификации. Фокус в поле номера
+    // сразу: кнопку нажали, чтобы начать вводить, а не чтобы посмотреть.
+    const specForm = блок.querySelector(".cpe-new-spec-form");
+    const specToggle = блок.querySelector(".cpe-new-spec-toggle");
+    specToggle.addEventListener("click", () => {
+      specForm.style.display = "";
+      specToggle.style.display = "none";
+      блок.querySelector(".cpe-new-spec-number").focus();
+    });
+    блок.querySelector(".cpe-new-spec-cancel").addEventListener("click", () => {
+      блок.querySelector(".cpe-new-spec-number").value = "";
+      блок.querySelector(".cpe-new-spec-date").value = "";
+      specForm.style.display = "none";
+      specToggle.style.display = "";
+    });
     блок.querySelector(".cpe-add-spec").addEventListener("click", async () => {
       const number = блок.querySelector(".cpe-new-spec-number").value.trim();
       if (!number) return;
@@ -14870,6 +14899,24 @@ function cpeToggleAll(open) {
 document.getElementById("cpe-collapse-all").addEventListener("click", () => cpeToggleAll(false));
 document.getElementById("cpe-expand-all").addEventListener("click", () => cpeToggleAll(true));
 
+// Поля нового договора — за кнопкой «+ Договор» (2026-08-18, живой запрос).
+// Сброс всегда полный: незакрытая форма с чужим номером, всплывающая при
+// следующем открытии карточки, читалась бы как начатый ввод.
+function cpeShowNewAgreementForm(показать) {
+  document.getElementById("cpe-new-agreement-form").style.display = показать ? "" : "none";
+  document.getElementById("cpe-new-agreement-toggle").style.display = показать ? "none" : "";
+  if (!показать) {
+    document.getElementById("cpe-new-agreement-number").value = "";
+    document.getElementById("cpe-new-agreement-date").value = "";
+    document.getElementById("cpe-agreement-error").textContent = "";
+  }
+}
+document.getElementById("cpe-new-agreement-toggle").addEventListener("click", () => {
+  cpeShowNewAgreementForm(true);
+  document.getElementById("cpe-new-agreement-number").focus();
+});
+document.getElementById("cpe-new-agreement-cancel").addEventListener("click", () => cpeShowNewAgreementForm(false));
+
 document.getElementById("cpe-add-agreement").addEventListener("click", async () => {
   if (!editingCounterpartyId) return; // только у уже сохранённого контрагента
   const errorEl = document.getElementById("cpe-agreement-error");
@@ -14889,8 +14936,7 @@ document.getElementById("cpe-add-agreement").addEventListener("click", async () 
     errorEl.textContent = e.message;
     return;
   }
-  document.getElementById("cpe-new-agreement-number").value = "";
-  document.getElementById("cpe-new-agreement-date").value = "";
+  cpeShowNewAgreementForm(false);
   await renderCounterpartyAgreements();
 });
 
@@ -14947,6 +14993,20 @@ function readCapacityTable(tableId) {
     .filter(c => Number.isFinite(c.per_day) && c.per_day > 0);
 }
 
+// Закладки карточки контрагента (2026-08-18). Все три панели уже в разметке
+// и уже наполнены — переключается только видимость: перерисовывать договоры
+// при каждом щелчке незачем, а свёрнутое/раскрытое состояние договоров при
+// перерисовке терялось бы.
+function cpeShowTab(имя) {
+  document.querySelectorAll("#counterparty-edit-backdrop [data-cpe-tab]").forEach(b =>
+    b.classList.toggle("active", b.dataset.cpeTab === имя));
+  document.querySelectorAll("#counterparty-edit-backdrop [data-cpe-panel]").forEach(p =>
+    p.classList.toggle("active", p.dataset.cpePanel === имя));
+}
+document.querySelectorAll("#counterparty-edit-backdrop [data-cpe-tab]").forEach(btn => {
+  btn.addEventListener("click", () => cpeShowTab(btn.dataset.cpeTab));
+});
+
 async function openCounterpartyEdit(cp) {
   editingCounterpartyId = cp ? cp.id : null;
   // Заголовок называет КОНТРАГЕНТА, а не операцию (2026-08-05): форма
@@ -14973,19 +15033,21 @@ async function openCounterpartyEdit(cp) {
   // Договоры/спецификации — только у уже существующего контрагента
   // (у нового ещё нет id, договор ссылается на counterparty_id).
   document.getElementById("counterparty-agreements-section").style.display = cp ? "" : "none";
-  document.getElementById("cpe-agreement-error").textContent = "";
+  document.getElementById("cpe-agreements-hint").style.display = cp ? "none" : "";
+  cpeShowNewAgreementForm(false);
   // По умолчанию — объект, который сейчас показан на схеме: договор почти
   // всегда заводят для той стройки, с которой работают. Если прав
   // администратора на нём нет, objectOptionsHtml оставит выбор пустым.
   const подставить = objectsForAgreement().some(v => v.id === state.objectId) ? state.objectId : null;
   document.getElementById("cpe-new-agreement-object").innerHTML = objectOptionsHtml(подставить);
-  // Реквизиты юрлица правят раз в жизни, а форму открывают ради
-  // контрактации — у существующего контрагента шапка свёрнута (2026-08-05).
-  // У НОВОГО раскрыта: иначе заполнять нечего, форма выглядела бы пустой.
   renderCapacityTable("cpe-capacity", (cp && cp.capacity) || [], { withComment: true });
-  document.getElementById("cpe-details-requisites").open = !cp;
-  document.getElementById("cpe-details-capacity").open = false;
-  document.getElementById("cpe-details-contracting").open = true;
+  // Карточка ВСЕГДА открывается на «Основном» (2026-08-18, живой запрос) —
+  // и у нового контрагента, и у существующего. Прежний приём «форму
+  // открывают ради контрактации, поэтому реквизиты свёрнуты» (2026-08-05)
+  // отменён вместе со сворачиваемыми областями: закладка отделена одним
+  // щелчком, а стартовая точка, зависящая от того, сохранён контрагент или
+  // нет, делала форму непредсказуемой — она открывалась в разных местах.
+  cpeShowTab("main");
   // Договоры при каждом открытии формы начинаются свёрнутыми: восстановление
   // раскрытого состояния (см. renderCounterpartyAgreements) работает внутри
   // одного сеанса работы с формой, а не между разными контрагентами.
@@ -15022,6 +15084,7 @@ document.getElementById("counterparty-edit-save").addEventListener("click", asyn
     // Договоры доступны только после сохранения — перерисовываем форму,
     // не закрываем её, чтобы сразу можно было добавить первый договор.
     document.getElementById("counterparty-agreements-section").style.display = "";
+    document.getElementById("cpe-agreements-hint").style.display = "none";
     await renderCounterpartyAgreements();
   } catch (e) {
     document.getElementById("counterparty-edit-error").textContent = e.message;
