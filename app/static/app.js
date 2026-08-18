@@ -5228,16 +5228,21 @@ function elementSubLabelText(element) {
 }
 
 // Класс допстроки (2D <text class="mark-sublabel ...">) — красный при
-// опоздании плановой/фактической даты против начала СМР, зелёный, если
-// опоздания нет и начало СМР вообще задано (иначе — нейтральный цвет
-// по умолчанию, сравнивать не с чем). Живой запрос пользователя — замена
-// убранной отдельной инфо-плашки (см. Docs/backlog.md), та же логика
+// опоздании (плановая/фактическая дата позже начала СМР, либо у
+// законтрактованного изделия дат нет вовсе, а начало СМР прошло —
+// см. computeDeliveryLateStatus), зелёный, если опоздания нет и начало
+// СМР вообще задано (иначе — нейтральный цвет по умолчанию, сравнивать
+// не с чем). Живой запрос пользователя — замена убранной отдельной
+// инфо-плашки (см. Docs/backlog.md), та же логика
 // опоздания (computeDeliveryLateStatus), просто раскрашивает уже
 // существующую подпись вместо отдельного DOM-узла на элемент.
 function deliveryClass(element) {
   const info = computeDeliveryLateStatus(element, state.lateThresholdDays);
   if (!info) return "";
-  return (info.planLate || info.actualLate) ? "delivery-late" : "delivery-ok";
+  // Собранный статус, а не перечисление флагов: видов опоздания три
+  // (planLate/actualLate/missingLate), и каждый новый пришлось бы
+  // дописывать во все точки раскраски — на этом уже спотыкались.
+  return info.status === "late" ? "delivery-late" : "delivery-ok";
 }
 function subLabelClass(element) {
   const cls = deliveryClass(element);
@@ -5250,7 +5255,7 @@ function subLabelClass(element) {
 function deliveryColorHex(element) {
   const info = computeDeliveryLateStatus(element, state.lateThresholdDays);
   if (!info) return "#555";
-  return (info.planLate || info.actualLate) ? "#c0392b" : "#2f7d3c";
+  return info.status === "late" ? "#c0392b" : "#2f7d3c";
 }
 
 // ---------- подпись марки как "наклейка" на контуре элемента (живой
@@ -5434,9 +5439,10 @@ function refreshSubLabelDeliveryColors() {
 // ---------- сравнение плановой/фактической даты поставки с началом СМР
 // (project_smr_start_date, из графика MS Project, см.
 // app/schedule_import.py) — общая точка, которой пользуются допстрока
-// марки (subLabelClass), всплывающая подсказка (computeTooltipDateRows) и
-// карточка элемента. К началу СМР изделия должны быть на площадке (живой
-// запрос пользователя) — "late", если плановая ИЛИ фактическая дата
+// марки (subLabelClass) и всплывающая подсказка (computeTooltipDateRows);
+// карточка элемента считает подсветку СВОИМ, более простым правилом (без
+// порога, см. deliveryDatesHtml). К началу СМР изделия должны быть на
+// площадке (живой запрос пользователя) — "late", если плановая ИЛИ фактическая дата
 // превышает начало СМР больше чем на threshold дней (Настройки → Порог
 // опоздания поставки); иначе "ok". Если начало СМР не задано — сравнивать
 // не с чем, null. Раньше сравнивали с датой завершения СМР
@@ -5448,6 +5454,15 @@ function diffDaysFromDate(dateStr, baseDateStr) {
   return Math.round((a - b) / 86400000);
 }
 
+// Сегодня как "YYYY-MM-DD" в МЕСТНОМ времени (не toISOString() — тот
+// отдаёт UTC и после 03:00 по Москве уже показывал бы вчерашний день).
+// Дальше уходит в diffDaysFromDate, где обе даты разбираются одинаково.
+function todayIsoDate() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 function computeDeliveryLateStatus(element, thresholdDays) {
   if (!element.project_smr_start_date) return null;
   const deltaPlan = element.planned_delivery_date
@@ -5456,9 +5471,25 @@ function computeDeliveryLateStatus(element, thresholdDays) {
     ? diffDaysFromDate(element.actual_delivery_date, element.project_smr_start_date) : null;
   const planLate = deltaPlan !== null && deltaPlan > thresholdDays;
   const actualLate = deltaActual !== null && deltaActual > thresholdDays;
+  // Третий вид опоздания (живой запрос пользователя 2026-08-18):
+  // ЗАКОНТРАКТОВАННОЕ изделие БЕЗ дат поставки вовсе (нет ни плановой, ни
+  // фактической), у которого начало СМР УЖЕ прошло. Контракт есть, работы
+  // на площадке уже должны идти, а когда привезут — неизвестно: это такое
+  // же опоздание, как заведомо поздняя дата, и красится так же. Порог тот
+  // же (Настройки → Порог опоздания поставки) — критерий "опоздания" в
+  // системе один. Незаконтрактованные СПЕЦИАЛЬНО не трогаем: у них пустая
+  // дата — это ещё не срыв поставки, а незакрытая контрактация, у неё свои
+  // срезы (см. "Привязано к контракту" в блоках-срезах АРМ).
+  // Точка отсчёта — СЕГОДНЯШНЯЯ дата, а не "рабочая дата" из тулбара: та
+  // задним числом проставляет статусы и на подсветку подписей не влияет
+  // нигде (подтверждено пользователем).
+  const noDates = !element.planned_delivery_date && !element.actual_delivery_date;
+  const deltaToday = (element.contract_id && noDates)
+    ? diffDaysFromDate(todayIsoDate(), element.project_smr_start_date) : null;
+  const missingLate = deltaToday !== null && deltaToday > thresholdDays;
   return {
-    status: (planLate || actualLate) ? "late" : "ok",
-    planLate, actualLate, deltaPlan, deltaActual,
+    status: (planLate || actualLate || missingLate) ? "late" : "ok",
+    planLate, actualLate, missingLate, deltaPlan, deltaActual, deltaToday,
   };
 }
 
@@ -5474,7 +5505,13 @@ function computeTooltipDateRows(element) {
   const plannedText = element.counterparty_code ? `${plannedDatePart} · ${element.counterparty_code}` : plannedDatePart;
   return [
     { cls: "neutral", text: `Начало СМР: ${formatDateRu(element.project_smr_start_date)}` },
-    { cls: info.planLate ? "late" : "ok", text: `Плановая: ${plannedText}${planLateText}` },
+    {
+      // missingLate — тот же случай, что красит допстроку марки: дат нет,
+      // а начало СМР прошло. Без этой ветки подсказка показывала бы
+      // зелёную строку "Плановая: —" под красной подписью.
+      cls: (info.planLate || info.missingLate) ? "late" : "ok",
+      text: `Плановая: ${plannedText}${planLateText}${info.missingLate ? ` (не задана, начало СМР прошло ${info.deltaToday} дн. назад)` : ""}`,
+    },
     {
       cls: info.actualLate ? "late" : (element.actual_delivery_date ? "ok" : "neutral"),
       text: `Фактическая: ${element.actual_delivery_date ? formatDateRu(element.actual_delivery_date) : "—"}${actualLateText}`,
