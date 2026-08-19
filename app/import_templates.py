@@ -384,6 +384,13 @@ TEMPLATES: dict[str, dict] = {
             _column("Дата начала СМР", False, "Так же, как плановая дата.", "2026-09-01"),
             _column("Дата завершения СМР", False, "Так же, как плановая дата.", "2026-10-20"),
             _column(
+                "Комментарий", False,
+                "Свободный текст — та же заметка, что в карточке изделия. Пустая ячейка "
+                "очищает комментарий (в отличие от контракта, который файлом не "
+                "очищается).",
+                "отбит угол при разгрузке",
+            ),
+            _column(
                 "Контракт", False,
                 "Из списка на листе «Контракты». Можно проставить или исправить, но "
                 "НЕЛЬЗЯ очистить и нельзя тронуть у элемента в статусе «Запланирован»: "
@@ -786,17 +793,37 @@ def _sample_bulk_edit() -> bytes:
     from app.element_bulk_edit import COLUMNS, SHEET_DATA
 
     headers = [label for _, label, _ in COLUMNS]
-    rows = [
-        ["0f3a9c1e-0000-0000-0000-00000000000%d" % i, "Москвич", status, t, sub, mark,
-         elev, floor, addr, plan, smr_start, smr_end, "", "", "", "", "", "", "", "", "260723_Чертежи для WEB.dxf", ""]
-        for i, (status, t, sub, mark, elev, floor, addr, plan, smr_start, smr_end) in enumerate([
-            ("planned", "Колонна", "нижняя", "1КН1", 0, 1, "1-2/А-Б", "2026-09-01", "2026-09-10", "2026-09-20"),
-            ("contracting", "Колонна", "верхняя", "8Кв1.3", 15800, 2, "3-4/В-Г", "2026-09-05", "", ""),
-            ("shipped", "Ригель", "периметральный", "3Р13", 15000, 2, "5-6/Д-Е", "", "2026-10-01", "2026-10-15"),
-            ("delivered", "Плита перекрытия", "на отм. +25.800", "4П-13", 25800, 3, "7-8/Ж-З", "2026-10-10", "", ""),
-            ("installed", "Колонна", "средняя верхний ярус", "15КС3.7", 25800, 3, "9-10/И-К", "", "", ""),
-        ], start=1)
+    # Строка собирается ПО КЛЮЧАМ колонок, а не позиционным списком с хвостом
+    # пустых ячеек: добавленная в COLUMNS колонка («Комментарий», 2026-08-19)
+    # сдвинула бы такой хвост, и образец разъехался бы с настоящей выгрузкой
+    # молча — ровно тот инцидент, о котором предупреждает докстрока.
+    демо = [
+        {"current_status": "planned", "element_type": "Колонна", "subtype": "нижняя",
+         "mark": "1КН1", "elevation_mm": 0, "floor": 1, "address": "1-2/А-Б",
+         "planned_delivery_date": "2026-09-01", "project_smr_start_date": "2026-09-10",
+         "project_delivery_date": "2026-09-20", "comment": "отбит угол при разгрузке"},
+        {"current_status": "contracting", "element_type": "Колонна", "subtype": "верхняя",
+         "mark": "8Кв1.3", "elevation_mm": 15800, "floor": 2, "address": "3-4/В-Г",
+         "planned_delivery_date": "2026-09-05"},
+        {"current_status": "shipped", "element_type": "Ригель", "subtype": "периметральный",
+         "mark": "3Р13", "elevation_mm": 15000, "floor": 2, "address": "5-6/Д-Е",
+         "project_smr_start_date": "2026-10-01", "project_delivery_date": "2026-10-15"},
+        {"current_status": "delivered", "element_type": "Плита перекрытия",
+         "subtype": "на отм. +25.800", "mark": "4П-13", "elevation_mm": 25800, "floor": 3,
+         "address": "7-8/Ж-З", "planned_delivery_date": "2026-10-10"},
+        {"current_status": "installed", "element_type": "Колонна",
+         "subtype": "средняя верхний ярус", "mark": "15КС3.7", "elevation_mm": 25800,
+         "floor": 3, "address": "9-10/И-К"},
     ]
+    rows = []
+    for i, значения in enumerate(демо, start=1):
+        значения = {
+            "element_uid": "0f3a9c1e-0000-0000-0000-00000000000%d" % i,
+            "object_name": "Москвич",
+            "source_file": "260723_Чертежи для WEB.dxf",
+            **значения,
+        }
+        rows.append([значения.get(key, "") for key, _, _ in COLUMNS])
     return _xlsx_bytes(SHEET_DATA, headers, rows)
 
 

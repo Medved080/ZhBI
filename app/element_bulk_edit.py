@@ -85,6 +85,7 @@ COLUMNS = [
     ("planned_delivery_date", FIELD_LABELS["planned_delivery_date"], True),
     ("project_smr_start_date", FIELD_LABELS["project_smr_start_date"], True),
     ("project_delivery_date", FIELD_LABELS["project_delivery_date"], True),
+    ("comment", FIELD_LABELS["comment"], True),
     ("contract_name", FIELD_LABELS["contract_id"], True),
     ("counterparty", "Контрагент (справочно)", False),
     ("agreement", "Договор (справочно)", False),
@@ -98,6 +99,21 @@ COLUMNS = [
 ]
 
 CONTRACT_COLUMN = "contract_name"
+
+# Комментарий к изделию (2026-08-19). Правится файлом наравне с реквизитами,
+# но идёт МИМО EDITABLE_FIELDS и мимо write_fields, и на то две причины.
+#
+# 1. Порог у него другой: реквизиты правит роль с разделом «Реквизиты
+#    изделий», а комментарий — та же, что меняет статус («отбит угол при
+#    разгрузке» пишет прораб). Здесь это ни на что не влияет — вся форма
+#    закрыта одним разделом `bulk_edit`, — но добавить `comment` в общий
+#    список значило бы открыть его и одиночной правке реквизитов, у которой
+#    порог свой.
+# 2. В manual_fields комментарий не попадает: импорт чертежа его не трогает,
+#    перезаписывать нечему, а лишняя пометка «правлено вручную» заставила бы
+#    согласовывать её при каждом переимпорте (тот же довод, что в
+#    app/main.py у PATCH /elements/{id}/comment).
+COMMENT_COLUMN = "comment"
 
 # Код статуса -> подпись, как в интерфейсе.
 STATUS_LABELS_RU_BY_VALUE = {s.value: STATUS_LABELS_RU[s] for s in STATUS_ORDER}
@@ -484,6 +500,14 @@ def _diff_row(conn, row, values: dict, contracts: dict, line_no: int) -> tuple[l
         for field, new in proposed.items():
             changes.append(describe(field, row[field], new))
 
+    # --- комментарий: пустая ячейка ОЧИЩАЕТ, как у прочих правимых полей
+    # (в отличие от контракта, который очистить файлом нельзя: снятие
+    # контракта — событие, а комментарий — заметка на полях).
+    if COMMENT_COLUMN in values:
+        новый = _comment_text(values[COMMENT_COLUMN])
+        if новый != (row[COMMENT_COLUMN] or None):
+            changes.append(describe(COMMENT_COLUMN, row[COMMENT_COLUMN], новый))
+
     # --- контракт: свои правила
     if CONTRACT_COLUMN in values:
         rej, change = _diff_contract(conn, row, values[CONTRACT_COLUMN], contracts, line_no, describe)
@@ -492,6 +516,16 @@ def _diff_row(conn, row, values: dict, contracts: dict, line_no: int) -> tuple[l
         if change:
             changes.append(change)
     return changes, rejected
+
+
+def _comment_text(raw) -> Optional[str]:
+    """Ячейка комментария → то, что ляжет в БД. Пустая — None («нет
+    комментария»), а не пустая строка: иначе «нет» и «стёрли» хранились бы
+    двумя разными значениями, и сверка показывала бы расхождение там, где
+    ничего не менялось. Ровно то же делает PATCH /elements/{id}/comment."""
+    if raw is None:
+        return None
+    return str(raw).strip() or None
 
 
 def _diff_contract(conn, row, raw, contracts: dict, line_no: int, describe):
@@ -576,7 +610,7 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
     # (app/main.py, _ELEMENT_EDITABLE_FIELDS) — иначе «в форме нельзя, а
     # через файл прошло», ровно та асимметрия, ради устранения которой
     # проверки полей и выносили в app/element_fields.py.
-    разрешено = set(EDITABLE_FIELDS) | {"contract_id"}
+    разрешено = set(EDITABLE_FIELDS) | {"contract_id", COMMENT_COLUMN}
     неизвестные = {str(sel.get("field")) for sel in selections} - разрешено
     if неизвестные:
         raise ValueError("Недопустимые поля для правки: " + ", ".join(sorted(неизвестные)))
@@ -597,10 +631,16 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
             continue
 
         values, contract_id = {}, None
+        # Отдельным признаком, а не «comment is not None»: None — законное
+        # значение (комментарий стёрли), и по нему не отличить «не трогали».
+        comment, comment_given = None, False
         for sel in items:
             field = sel["field"]
             if field == "contract_id":
                 contract_id = sel.get("contract_id")
+                continue
+            if field == COMMENT_COLUMN:
+                comment, comment_given = _comment_text(sel.get("now")), True
                 continue
             try:
                 values[field] = coerce_field(field, sel.get("now"))
@@ -621,6 +661,15 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
         changed, manual = ({}, None)
         if values:
             changed, manual = write_fields(conn, element_id, row, values)
+
+        # Комментарий — своим UPDATE, мимо write_fields: тот ведёт
+        # manual_fields, а комментарию там делать нечего (см. COMMENT_COLUMN).
+        if comment_given and (row[COMMENT_COLUMN] or None) != comment:
+            conn.execute(
+                "UPDATE elements SET comment = ?, updated_at = datetime('now') WHERE id = ?",
+                (comment, element_id),
+            )
+            changed = {**changed, COMMENT_COLUMN: (row[COMMENT_COLUMN], comment)}
 
         if contract_id is not None:
             # Та же проверка, что на сверке, но теперь по-настоящему: между

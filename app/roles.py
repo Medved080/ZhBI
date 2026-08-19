@@ -42,7 +42,8 @@ from pydantic import BaseModel
 from app import activity
 from app.access import require_service_feature, role_keys, role_list
 from app.db import get_connection
-from app.features import FEATURES, LEVEL_LABELS, LEVELS, NONE, SCOPE_LABELS, SCOPE_SELF, SECTIONS
+from app.features import (FEATURES, IO_HINTS, LEVEL_LABELS, LEVELS, NONE, SCOPE_LABELS,
+                          SCOPE_SELF, SECTIONS)
 
 router = APIRouter(prefix="/roles", tags=["roles"])
 
@@ -115,6 +116,11 @@ def read_roles(user: sqlite3.Row = Depends(require_service_feature("roles", "rea
                 "key": f.key, "section": f.section, "title": f.title, "note": f.note,
                 "scope": f.scope, "scope_label": SCOPE_LABELS.get(f.scope),
                 "sources": f.sources,
+                # Что уровни значат у раздела обмена данными: без этой
+                # строки администратор видит «Чтение» и «Изменение» и не
+                # знает, что первое здесь — выгрузка файла, а не просмотр
+                # экрана (app/features.py, блок про обмен данными).
+                "io": f.io, "io_hint": IO_HINTS.get(f.io),
                 # Что настраивать нельзя: «своё» роли не подчиняется вовсе.
                 "fixed": f.scope == SCOPE_SELF,
                 "levels": разрешения.get(f.key, {}),

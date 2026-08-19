@@ -38,7 +38,7 @@ from app.access import (
 )
 from app.auth import get_current_user
 from app.db import get_connection
-from app.features import FEATURES, LEVEL_LABELS, SCOPE_LABELS, SCOPE_OBJECT
+from app.features import FEATURES, IO_HINTS, LEVEL_LABELS, SCOPE_LABELS, SCOPE_OBJECT
 
 router = APIRouter(tags=["rights"])
 
@@ -64,6 +64,7 @@ def rights_for(conn, user_row, object_id: Optional[int]) -> dict:
         rows.append({
             "key": f.key, "section": f.section, "title": f.title,
             "note": f.note, "sources": f.sources,
+            "io": f.io, "io_hint": IO_HINTS.get(f.io),
             "scope": f.scope, "scope_label": SCOPE_LABELS.get(f.scope),
             "level": feature_level_for(conn, user_row, f.key, цель),
             # Откуда взялся уровень: какие из ролей человека его дают.

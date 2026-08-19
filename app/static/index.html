@@ -1187,6 +1187,10 @@
   #roles-table .rf-note { display: block; font-size: 11px; color: var(--color-text-muted);
     white-space: normal; max-width: 48ch; }
   #roles-table .rf-scope { display: block; font-size: 11px; color: var(--color-text-muted); }
+  /* Подсказка раздела обмена данными («Чтение» — выгрузка, «Изменение» —
+     загрузка). Не приглушена, в отличие от обычного примечания: это не
+     справка о разделе, а смысл той самой клетки, которую сейчас ставят. */
+  #roles-table .rf-io, #rights-matrix-table .rf-io { color: var(--color-text); }
   /* Матрица прав одного пользователя: разделы против объёма прав. */
   #rights-matrix-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   #rights-matrix-table th, #rights-matrix-table td {
@@ -3650,7 +3654,11 @@
             <!-- Первым и выделенным (живой запрос 2026-08-01): основной
                  повседневный способ править данные, остальное в группе —
                  разовые операции обмена. -->
-            <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="write">Массовая правка через Excel</button>
+            <!-- «Чтение» пускает в форму на ВЫГРУЗКУ (2026-08-19): раздел и
+                 отдаёт файл, и принимает его обратно, и делится по той же
+                 границе — см. признак io в app/features.py. Шаги загрузки
+                 внутри формы гасятся отдельно (applyBulkEditRights). -->
+            <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
             <button id="btn-export" data-feature="export" data-feature-kind="read">Экспорт в XLS</button>
             <button id="btn-export-pdf" data-feature="export" data-feature-kind="read">Экспорт в PDF</button>
@@ -5188,6 +5196,7 @@
              ЗАМЕНЯЕТ базу целиком. Разделитель и красный цвет — чтобы
              промах пальцем был виден до того, как что-то произойдёт. -->
         <button type="button" class="view-mode-btn mode-danger" data-bulk-mode="transfer"
+                id="bulk-edit-mode-transfer"
                 title="Полная замена базы снимком другого сервера">⚠ Перенос базы</button>
       </div>
       <!-- Два раздельных блока (живой запрос 2026-08-01): выгрузка и загрузка
@@ -5213,18 +5222,27 @@
           <div class="bulk-edit-status" id="bulk-edit-filter-count">Все элементы всех объектов
             одним файлом.</div>
         </div>
-        <div class="bulk-edit-block bulk-edit-block-file">
+        <div class="bulk-edit-block bulk-edit-block-file" id="bulk-edit-step-file">
           <div class="bulk-edit-block-title"><span class="step-num">2</span>Выбрать правленый файл</div>
           <div class="bulk-edit-controls">
             <input type="file" id="bulk-edit-file" accept=".xlsx"/>
           </div>
         </div>
-        <div class="bulk-edit-block">
+        <div class="bulk-edit-block" id="bulk-edit-step-analyze">
           <div class="bulk-edit-block-title"><span class="step-num">3</span>Сверить с базой</div>
           <div class="bulk-edit-controls">
             <button class="btn btn-secondary" id="bulk-edit-analyze">Сверить с базой</button>
           </div>
           <div class="bulk-edit-status">Ничего не изменит — только покажет расхождения.</div>
+        </div>
+        <!-- Виден только тому, у кого «Чтение» без «Изменения»: иначе шаг 1
+             в одиночку выглядит как форма, у которой отвалились остальные
+             кнопки (2026-08-19). -->
+        <div class="bulk-edit-block" id="bulk-edit-readonly-note" style="display:none;">
+          <div class="bulk-edit-block-title">Только выгрузка</div>
+          <div class="bulk-edit-status">Загрузка правленого файла требует уровня
+            «Изменение» по разделу «Массовая правка через Excel». Обратитесь
+            к администратору сервиса.</div>
         </div>
       </div>
       <div id="bulk-edit-status" class="bulk-edit-status"></div>

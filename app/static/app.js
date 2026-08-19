@@ -13240,6 +13240,11 @@ function renderRolesGrid() {
     }
     const название = `<td class="rf-name">${escapeHtml(f.title)}`
       + `<span class="rf-scope">${escapeHtml(f.scope_label || "")}</span>`
+      // Раздел обмена данными: чем «Чтение» отличается от «Изменения»
+      // (app/features.py, признак io). Отдельной строкой и перед общим
+      // примечанием: администратор ставит галочку в этой самой строке, и
+      // ответ на вопрос «что я сейчас раздаю» обязан стоять у галочки.
+      + (f.io_hint ? `<span class="rf-note rf-io">${escapeHtml(f.io_hint)}</span>` : "")
       + (f.note ? `<span class="rf-note">${escapeHtml(f.note)}</span>` : "")
       + `</td>`;
     if (f.fixed) {
@@ -13511,6 +13516,7 @@ async function renderRightsMatrix() {
       html += `<tr class="rm-section"><td colspan="3">${escapeHtml(раздел)}</td></tr>`;
     }
     html += `<tr><td>${escapeHtml(f.title)}`
+      + (f.io_hint ? `<span class="rm-note rf-io">${escapeHtml(f.io_hint)}</span>` : "")
       + (f.note ? `<span class="rm-note">${escapeHtml(f.note)}</span>` : "")
       + `</td>`
       + `<td class="rm-mark">${отметка(f.level === "read" || f.level === "write")}</td>`
@@ -23687,7 +23693,46 @@ function resetBulkEdit() {
   updateBulkEditSummary();
 }
 
+// Раздел обмена данными делится по границе «Чтение / Изменение»
+// (2026-08-19, признак io в app/features.py): выгрузка снимка — чтение,
+// загрузка правленого файла и применение правок — изменение. Сервер это уже
+// проверяет (`bulk_edit`, read у /export и write у /analyze и /apply), здесь
+// гашение ИНТЕРФЕЙСНОЕ — чтобы у человека с «Чтением» не было кнопок,
+// которые ему всё равно ответят 403.
+//
+// Гасится здесь, а не общим правилом applyRolePermissions: то ходит по
+// пунктам меню (`#settings-menu`), а это шаги внутри формы — ровно как у
+// вкладки чужих результатов в обучении (trainingSetTab).
+function applyBulkEditRights() {
+  const загрузка = can("bulk_edit", "write");
+  for (const id of ["bulk-edit-step-file", "bulk-edit-step-analyze"]) {
+    document.getElementById(id).style.display = загрузка ? "" : "none";
+  }
+  document.getElementById("bulk-edit-readonly-note").style.display = загрузка ? "none" : "";
+  bulkEditApplyBtn.style.display = загрузка ? "" : "none";
+  // Пояснение к режиму описывает круг целиком («поправьте и загрузите
+  // обратно… применится то, что отметите флажками») и тому, у кого только
+  // выгрузка, обещает несуществующее. Прячем именно ПОЯСНЕНИЯ: требования к
+  // файлу и образец рядом остаются — файл можно готовить и для того, кто
+  // потом его загрузит (по тому же доводу открыт и GET /import-templates).
+  // Именно <p>, а не всё с data-mode-intro: тем же признаком помечены блоки
+  // «Требования к файлу» и «Скачать образец» — они и есть то, что остаётся.
+  document.querySelectorAll("#bulk-edit-intro p[data-mode-intro]").forEach((el) => {
+    if (!загрузка) el.style.display = "none";
+  });
+  // «Перенос базы» — свой раздел и своя мерка (решение пользователя
+  // 2026-08-19: утилита остаётся целиком за администратором сервиса). В этом
+  // режиме нет ни одного действия дешевле «Изменения», поэтому и кнопка
+  // режима гасится по нему: показать её тому, кто внутри ничего не сможет,
+  // значит пообещать несуществующее.
+  const перенос = can("db_transfer", "write");
+  document.getElementById("bulk-edit-mode-transfer").style.display = перенос ? "" : "none";
+  return { загрузка, перенос };
+}
+
 document.getElementById("menu-bulk-edit").addEventListener("click", () => {
+  // Права применит setBulkEditMode — он зовёт applyBulkEditRights последним,
+  // после того как расставит по местам общие блоки формы.
   setBulkEditMode("fields");
   updateBulkEditFilterCount();
   bulkEditBackdrop.classList.add("open");
@@ -23757,6 +23802,10 @@ function setBulkEditMode(mode) {
   document.getElementById("bulk-edit-rejected").style.display = перенос ? "none" : "";
   bulkEditApplyBtn.style.display = перенос ? "none" : "";
   document.getElementById("bulk-transfer").style.display = перенос ? "" : "none";
+  // ПОСЛЕ общих правил, а не до: строки выше возвращают шаги и кнопку
+  // «Применить» на место при выходе из переноса, и в обратном порядке они
+  // всплыли бы у того, у кого только «Чтение».
+  if (!перенос) applyBulkEditRights();
 }
 
 document.querySelectorAll("#bulk-edit-mode [data-bulk-mode]").forEach((btn) => {
