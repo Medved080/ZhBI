@@ -881,6 +881,9 @@ def _migrate_user_access_contract_role(conn: sqlite3.Connection, changes: list) 
     changes.append("доступ: добавлена роль «Комплектовщик»")
 
 
+ROLE_SEED_MARKER = "role_features_seeded"
+
+
 def _seed_object_roles(conn: sqlite3.Connection, changes: list) -> None:
     """Заводит роли и их разрешения (2026-08-14).
 
@@ -891,18 +894,48 @@ def _seed_object_roles(conn: sqlite3.Connection, changes: list) -> None:
     миграции — способ это доказать. Отличие в том, что теперь это данные, а
     роли независимы и складываются.
 
-    Роли заводятся ОДИН РАЗ (таблица пуста), разрешения — только для тех
-    ролей, у которых нет НИ ОДНОЙ строки. Разница не случайна: администратор
-    правит и снимает разрешения, и восстанавливать снятое на каждом старте
-    недопустимо — иначе отобранное возвращалось бы само.
-
     НОВЫЙ РАЗДЕЛ, добавленный будущей версией, не выдаётся никому: строки
     нет — значит «Нет». Ошибка в безопасную сторону; выдать его роли —
     осознанное действие администратора.
+
+    РАСКЛАДКА НАКАТЫВАЕТСЯ ОДИН РАЗ, ЗА МАРКЕРОМ (2026-08-19, разбор
+    инцидента). До этого условием служило «у роли нет ни одной строки в
+    role_features», и оно роняло сервис насмерть.
+
+    Как это выглядело. Администратор удалил заводскую роль на экране
+    «Настройка ролей» — законное действие, оно там для того и есть.
+    `DELETE /roles/{key}` убирает и её выдачи, и её разрешения, и её саму.
+    Сервис при этом продолжал работать: старт уже прошёл. А при ближайшем
+    рестарте — деплой, `docker compose up`, любое падение — эта функция
+    видела, что таблица ролей НЕ пуста (значит, роли не заводим), что у
+    удалённой роли нет ни одной строки разрешений (значит, надо завести) —
+    и вставляла `role_features` со ссылкой на роль, которой больше нет.
+    Внешний ключ отвечал `FOREIGN KEY constraint failed`, исключение
+    уходило наверх из обработчика старта, FastAPI объявлял старт
+    несостоявшимся, а `restart: unless-stopped` крутил контейнер по кругу.
+    Снаружи — «сервис не поднялся после обновления», хотя обновление ни при
+    чём: упал бы любой следующий рестарт. `INSERT OR IGNORE` здесь не
+    спасает и никогда не спасал: в SQLite ON CONFLICT не распространяется
+    на внешние ключи.
+
+    Отсюда два барьера, и оба нужны:
+
+    1. **Маркер** `role_features_seeded` — тот же приём, что у
+       `user_access_seeded` рядом. Заводская раскладка это ОДНОРАЗОВОЕ
+       событие перехода, а не состояние, которое надо поддерживать на
+       каждом старте. Существующей базе, где раскладка уже есть, маркер
+       ставится без единой вставки — то, что администратор с тех пор снял,
+       снятым и остаётся. Прежнее условие возвращало заводские права роли,
+       у которой их обнулили руками, при ближайшем перезапуске.
+    2. **Фильтр по существующим ролям** — на случай, если маркера почему-то
+       нет (база из промежуточной версии, ручная правка). Ссылка на
+       несуществующую роль не должна появляться НИКОГДА: цена ей — не
+       кривая строка в таблице, а неподнимающийся сервис.
     """
     from app.features import FEATURES, NONE  # локально: features.py — данные, db.py — их хранилище
 
-    if conn.execute("SELECT COUNT(*) AS n FROM object_roles").fetchone()["n"] == 0:
+    свежие_роли = conn.execute("SELECT COUNT(*) AS n FROM object_roles").fetchone()["n"] == 0
+    if свежие_роли:
         conn.executemany(
             "INSERT INTO object_roles (key, name, rank) VALUES (?, ?, ?)",
             [("view", "Просмотр", 10),
@@ -912,6 +945,23 @@ def _seed_object_roles(conn: sqlite3.Connection, changes: list) -> None:
         )
         changes.append("заведены роли на объекте (4 заводские)")
 
+    маркер = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ? AND object_id IS NULL", (ROLE_SEED_MARKER,)
+    ).fetchone()
+    if маркер and маркер["value"]:
+        return
+
+    # База, где роли были заведены раньше и раскладка в ней уже есть, —
+    # просто помечается. Накатывать на неё baseline второй раз нечего: всё,
+    # что там сейчас стоит, поставил администратор, и «восстановить»
+    # означало бы отменить его правки.
+    раскладка_есть = conn.execute(
+        "SELECT COUNT(*) AS n FROM role_features").fetchone()["n"] > 0
+    if not свежие_роли and раскладка_есть:
+        _отметить_раскладку(conn)
+        return
+
+    существующие = {r["key"] for r in conn.execute("SELECT key FROM object_roles")}
     заполненные = {r["role_key"] for r in conn.execute(
         "SELECT DISTINCT role_key FROM role_features")}
     # Уровень «Нет» НЕ записывается: отсутствие строки и есть «Нет».
@@ -922,7 +972,7 @@ def _seed_object_roles(conn: sqlite3.Connection, changes: list) -> None:
     строки = []
     for f in FEATURES:
         for роль, уровень in f.baseline.items():
-            if роль in заполненные or уровень == NONE:
+            if роль not in существующие or роль in заполненные or уровень == NONE:
                 continue
             строки.append((роль, f.key, уровень))
     if строки:
@@ -932,6 +982,31 @@ def _seed_object_roles(conn: sqlite3.Connection, changes: list) -> None:
             "INSERT OR IGNORE INTO role_features (role_key, feature_key, level) VALUES (?, ?, ?)",
             строки)
         changes.append(f"разрешения ролей: заведено записей ({len(строки)})")
+    _отметить_раскладку(conn)
+
+
+def _отметить_раскладку(conn: sqlite3.Connection) -> None:
+    """Заводская раскладка ролей накатана — больше не возвращаться.
+
+    UPDATE, а при пустом результате INSERT — а НЕ `ON CONFLICT`, которым
+    ставит свой маркер `_seed_user_access` ниже. Разница не стилистическая:
+    уникальный индекс по `(key, COALESCE(object_id, -1))` заводит
+    `_ensure_object_scoped_indexes`, и на ЧИСТОЙ установке его к этому
+    моменту ещё нет — конфликтовать не с чем, а SQLite отвечает на такое
+    «ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE
+    constraint» и роняет старт. Поймано на проверке первой редакции этой
+    правки: сломанная база чинилась, а новая установка переставала
+    подниматься.
+    """
+    обновлено = conn.execute(
+        "UPDATE app_settings SET value = '1' WHERE key = ? AND object_id IS NULL",
+        (ROLE_SEED_MARKER,),
+    ).rowcount
+    if not обновлено:
+        conn.execute(
+            "INSERT INTO app_settings (key, object_id, value) VALUES (?, NULL, '1')",
+            (ROLE_SEED_MARKER,),
+        )
 
 
 def _migrate_user_access_multirole(conn: sqlite3.Connection, changes: list) -> None:

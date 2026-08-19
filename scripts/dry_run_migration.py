@@ -56,8 +56,15 @@ def copy_db(src, dst):
     """
     src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
     try:
-        if os.path.exists(dst):
-            os.remove(dst)
+        # Убирается не только сам файл, но и его СПУТНИКИ `-wal`/`-shm`
+        # (2026-08-19). Оставшийся от прошлого прогона журнал не подходит к
+        # новой копии, и SQLite отвечает на это «unable to open database
+        # file» — сообщением, по которому думаешь на права доступа и на
+        # исходный снимок, а не на мусор рядом. Ловится ровно тогда, когда
+        # прогон нужен: после прерванной проверки перед деплоем.
+        for хвост in ("", "-wal", "-shm"):
+            if os.path.exists(dst + хвост):
+                os.remove(dst + хвост)
         dst_conn = sqlite3.connect(dst)
         try:
             src_conn.backup(dst_conn)
