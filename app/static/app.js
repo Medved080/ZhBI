@@ -20295,6 +20295,42 @@ async function loadActivity() {
   }
 }
 
+// Состояние журнала ЦЕЛИКОМ — сколько записей и сколько места занимает
+// таблица (2026-08-20, живой запрос). Не путать со строкой «Найдено …» в
+// шапке: та про текущую выборку, эта про весь журнал, и стоит рядом с
+// очисткой — решение «пора чистить» принимают по ней.
+//
+// Отдельным запросом и не на каждый поиск: размер считает dbstat, читающий
+// базу целиком (на журнале в 2,6 млн записей — около двух секунд), а поиск
+// уходит на каждую букву в поле отбора. Зовём при открытии формы и после
+// очистки.
+async function loadActivityStats() {
+  const box = document.getElementById("activity-stats");
+  box.textContent = "Считаю объём журнала…";
+  try {
+    const s = await api("/activity/stats");
+    const части = [`В журнале ${s.rows.toLocaleString("ru-RU")} `
+      + plural(s.rows, "запись", "записи", "записей")];
+    // Размер может быть неизвестен — сборка SQLite без dbstat. Тогда так и
+    // говорим: ноль на этом месте читался бы как «таблица пустая».
+    части.push(s.bytes === null || s.bytes === undefined
+      ? "объём таблицы неизвестен (сборка SQLite без dbstat)"
+      : `${formatBytes(s.bytes)} с индексами из ${formatBytes(s.db_bytes)} базы`);
+    if (s.errors) части.push(`ошибок и отказов: ${s.errors.toLocaleString("ru-RU")}`);
+    if (s.oldest) части.push(`самая ранняя запись — ${activityTimeLocal(s.oldest).split(" ")[0]}`);
+    box.textContent = части.join(" · ");
+    // Про то, что файл базы после очистки не уменьшается, сказано в
+    // подсказке, а не в строке: это верно всегда и читать это каждый раз
+    // незачем, но человек, освободивший место и не увидевший изменения
+    // размера, должен где-то найти объяснение.
+    box.title = "Очистка убирает записи, но файл базы сам по себе не уменьшается: "
+      + "освободившееся место SQLite отдаёт под новые записи. "
+      + "Полностью вернуть его диску можно только сжатием базы (VACUUM).";
+  } catch (e) {
+    box.textContent = "Не удалось узнать объём журнала: " + e.message;
+  }
+}
+
 // Полный текст подробностей — по щелчку: в ячейке он обрезан одной
 // строкой, а у ошибки там путь, код и хвост трассировки, ради которых
 // журнал и открывают.
@@ -20317,6 +20353,7 @@ document.getElementById("menu-activity").addEventListener("click", async () => {
     }
   }
   loadActivity();
+  loadActivityStats();
 });
 document.getElementById("activity-close").addEventListener("click", () => activityBackdrop.classList.remove("open"));
 document.getElementById("activity-search").addEventListener("click", loadActivity);
@@ -20345,6 +20382,7 @@ document.getElementById("activity-cleanup").addEventListener("click", async () =
     const res = await api(`/activity/cleanup?before=${encodeURIComponent(before)}`, { method: "POST" });
     showToast(`Удалено записей: ${res.deleted}`, "info");
     loadActivity();
+    loadActivityStats();   // ради этих цифр очистку и делают
   } catch (e) {
     showToast("Не удалось очистить: " + e.message, "warning");
   }

@@ -35,11 +35,13 @@ from pydantic import BaseModel
 
 from app import activity
 from app import error_log
-from app.activity_actions import CATEGORY_ORDER, CATEGORY_TITLES
+from app.activity_actions import (
+    CATEGORY_DENIED, CATEGORY_ERROR, CATEGORY_ORDER, CATEGORY_TITLES,
+)
 from app.backups import (
     KIND_BEFORE_REBUILD, KIND_MANUAL, BackupError,
-    adopt_legacy_backup, create_backup, delete_backup, disk_state, list_backups,
-    restore_backup,
+    adopt_legacy_backup, create_backup, database_bytes, delete_backup, disk_state,
+    list_backups, restore_backup,
 )
 from app.contracts import (
     apply_status_change,
@@ -170,6 +172,7 @@ from app.schedule_versions import router as schedule_versions_router
 from app.admin_guide import router as admin_guide_router
 from app.training import router as training_router
 from app.db_status import router as db_status_router
+from app.db_status import table_bytes as db_status_table_bytes
 from app.fill_scope import router as fill_scope_router
 from app.ldap_auth import router as ldap_router
 from app.release_tasks import router as release_tasks_router
@@ -2387,6 +2390,49 @@ def search_activity(
             "action_titles": {a: action_title(a) for a in actions},
             "category_titles": CATEGORY_TITLES,
             "category_order": CATEGORY_ORDER,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/activity/stats")
+def activity_stats(
+    admin: sqlite3.Row = Depends(require_service_feature("activity_log", "read")),
+):
+    """Сколько журнал накопил и сколько места занимает (живой запрос
+    2026-08-20). Решение «пора чистить» принимают в самой форме журнала, а
+    цифры для него лежали на другом экране («Состояние БД»), куда за одной
+    величиной не пойдёшь.
+
+    ОТДЕЛЬНЫМ запросом, а не полем в выдаче поиска: размер считает `dbstat`,
+    который читает базу целиком (на журнале в 2,6 млн записей — около двух
+    секунд), а поиск отрабатывает на каждую букву в поле отбора. Здесь же
+    он вызывается дважды за сеанс работы с формой: при открытии и после
+    очистки.
+
+    Размер берётся ТОЙ ЖЕ функцией, что и экран «Состояние БД»
+    (`db_status.table_bytes`) — второй способ мерить то же самое дал бы два
+    разных числа на одном экране. Размер может быть неизвестен (сборка
+    SQLite без dbstat) — тогда `bytes` пустой, и форма скажет об этом, а не
+    покажет ноль.
+    """
+    conn = get_connection()
+    try:
+        # COUNT(*) и границы периода — по индексу, мгновенно даже на
+        # миллионах строк (замерено: 0,02 с на 2,6 млн).
+        всего = conn.execute("SELECT COUNT(*) AS n FROM activity_log").fetchone()["n"]
+        края = conn.execute("SELECT MIN(at) AS mn, MAX(at) AS mx FROM activity_log").fetchone()
+        ошибок = conn.execute(
+            "SELECT COUNT(*) AS n FROM activity_log WHERE category IN (?, ?)",
+            (CATEGORY_ERROR, CATEGORY_DENIED),
+        ).fetchone()["n"]
+        return {
+            "rows": всего,
+            "errors": ошибок,
+            "bytes": db_status_table_bytes(conn, "activity_log"),
+            "db_bytes": database_bytes(),
+            "oldest": края["mn"],
+            "newest": края["mx"],
         }
     finally:
         conn.close()

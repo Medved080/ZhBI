@@ -87,6 +87,26 @@ def _index_owners(conn: sqlite3.Connection) -> dict:
         "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'")}
 
 
+def table_bytes(conn: sqlite3.Connection, table: str) -> Optional[int]:
+    """Сколько занимает ОДНА таблица вместе со своими индексами.
+
+    Публичная — её зовёт строка состояния журнала действий (`GET
+    /activity/stats`, 2026-08-20): «сколько записей и сколько места»
+    решается перед очисткой журнала, а идти ради одной цифры на экран
+    «Состояние БД» неудобно. Считается тем же `dbstat`, что и весь этот
+    экран, — второй способ мерить то же самое дал бы два разных числа.
+
+    None — сборка SQLite без dbstat (см. строку документации модуля):
+    размер тогда неизвестен, и врать оценкой здесь не надо.
+    """
+    sizes = _dbstat_sizes(conn)
+    if sizes is None:
+        return None
+    owners = _index_owners(conn)
+    return sizes.get(table, 0) + sum(
+        байт for имя, байт in sizes.items() if owners.get(имя) == table)
+
+
 def _db_tables(conn: sqlite3.Connection) -> list:
     return [r["name"] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' "
