@@ -126,6 +126,20 @@ def _user_for_log(request) -> tuple:
         return None, None
 
 
+def _кто(request) -> str:
+    """Дешёвая примета «того же самого клиента» для ключа подавления: токен
+    сеанса, а у неаутентифицированного — адрес. Без обращения к базе."""
+    try:
+        from app.auth import SESSION_COOKIE
+
+        token = request.cookies.get(SESSION_COOKIE)
+        if token:
+            return token
+    except Exception:  # noqa: BLE001 — журнал не имеет права ронять ответ
+        pass
+    return request.client.host if request.client else "unknown"
+
+
 def _display(row: sqlite3.Row) -> str:
     фио = f"{row['last_name'] or ''} {row['first_name'] or ''}".strip()
     return фио or row["domain_login"]
@@ -136,10 +150,16 @@ def _write(request, *, action: str, category: str, status: int, detail: str,
     путь = request.url.path
     if (request.method, путь) in _SKIP:
         return
-    user_id, user_name = _user_for_log(request)
-    подавлено = _should_write((user_id, request.method, путь, status, detail[:120]))
+    # Подавление повторов — ПЕРВЫМ делом, ДО поиска пользователя: тот ходит
+    # в базу, а при шквале одинаковых отказов (вкладка с истёкшей сессией
+    # опрашивает `/changes`) это соединение на каждый подавленный повтор.
+    # Отличать «кого» в ключе можно и без базы — по токену сеанса, а без
+    # него по адресу: разным людям с одной и той же ошибкой достанутся
+    # разные ключи, а это всё, что от ключа требуется.
+    подавлено = _should_write((_кто(request), request.method, путь, status, detail[:120]))
     if подавлено is None:
         return
+    user_id, user_name = _user_for_log(request)
     подробности = {
         "путь": путь,
         "метод": request.method,
