@@ -1191,6 +1191,21 @@
      загрузка). Не приглушена, в отличие от обычного примечания: это не
      справка о разделе, а смысл той самой клетки, которую сейчас ставят. */
   #roles-table .rf-io, #rights-matrix-table .rf-io { color: var(--color-text); }
+  /* Свободное место на диске в форме копий (2026-08-19). Три состояния
+     одной плашкой: в норме приглушена и не отвлекает, при нехватке —
+     заметна. Цвета берутся из переменных темы, чтобы плашка не выпадала из
+     тёмной схемы. */
+  .disk-plate { display: none; font-size: 12px; line-height: 1.5;
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    padding: 7px 10px; margin: 8px 0; color: var(--color-text-muted); }
+  .disk-plate.shown { display: block; }
+  .disk-plate b { color: var(--color-text); }
+  .disk-plate.disk-warning { border-color: var(--color-warning, #b45309);
+    background: color-mix(in srgb, var(--color-warning, #b45309) 10%, transparent);
+    color: var(--color-text); }
+  .disk-plate.disk-critical { border-color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+    color: var(--color-text); font-weight: 500; }
   /* Матрица прав одного пользователя: разделы против объёма прав. */
   #rights-matrix-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   #rights-matrix-table th, #rights-matrix-table td {
@@ -5691,6 +5706,11 @@
         Восстановление всегда начинается с автоматической служебной копии текущего состояния —
         если выбрана не та точка, вернуться будет куда.
       </p>
+      <!-- Свободное место — НАД кнопкой «Создать копию» (2026-08-19): решение
+           «снимать ли копию сейчас» принимают здесь, и место надо видеть до
+           нажатия, а не узнавать из отказа. Плашка меняет цвет по уровню
+           (см. disk_state в app/backups.py). -->
+      <div id="backups-disk" class="disk-plate"></div>
       <div class="row" style="align-items:flex-end">
         <div style="flex:1"><label class="field">Комментарий к копии (необязательно)</label>
           <input type="text" id="backup-comment" placeholder="например: перед массовой сменой статусов"/></div>

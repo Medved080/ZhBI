@@ -859,6 +859,7 @@ async function checkAuth() {
     await loadMenuPrefs(user);
     applyLabelColor();
     showApp();
+    warnAboutDiskSpace();
     return true;
   } catch (e) {
     showLoginScreen();
@@ -866,7 +867,34 @@ async function checkAuth() {
   }
 }
 
-onUnauthorized = () => { state.currentUser = null; showLoginScreen(); };
+// Предупреждение о нехватке места — ОДИН РАЗ за сеанс, после входа
+// (2026-08-19, запрос пользователя). Место кончается медленно, а строка
+// состояния одна: повторять сообщение на каждое переключение объекта значит
+// вытеснять им всё остальное и приучить его не читать.
+//
+// Спрашиваем только у тех, кому раздел копий доступен: остальным нечего с
+// этим делать, а сервер на запрос ответил бы 403 — то есть в консоли у
+// прораба появлялась бы красная строка на ровном месте.
+//
+// Не await и с молчаливым перехватом: это ФОНОВОЕ уведомление. Ни задержать
+// показ приложения, ни свалить вход оно не должно — на неотвечающем
+// эндпоинте человек просто не увидит подсказки, а не останется без сервиса.
+let диск_предупреждён = false;
+function warnAboutDiskSpace() {
+  if (диск_предупреждён || !can("backups", "read")) return;
+  диск_предупреждён = true;
+  api("/admin/disk-space")
+    .then((disk) => {
+      // Вид один на оба уровня: класса `statusbar-danger` в оформлении нет,
+      // а `statusbar-warning` и так красный и жирный. Различает их сам
+      // текст — «Критически мало места» против «Мало места»; заводить
+      // четвёртый вид строки состояния ради одного сообщения не стоит.
+      if (disk && disk.message) showToast(disk.message, "warning");
+    })
+    .catch(() => {});
+}
+
+onUnauthorized = () => { state.currentUser = null; showLoginScreen(); диск_предупреждён = false; };
 
 document.getElementById("login-submit").addEventListener("click", async () => {
   const domain_login = currentLoginValue();
@@ -19766,9 +19794,51 @@ const backupsBackdrop = document.getElementById("backups-backdrop");
 
 function formatBytes(n) {
   if (!n) return "";
+  // Гигабайты добавлены 2026-08-19 вместе с показом свободного места: до
+  // этого шкала обрывалась на мегабайтах, и объём диска выглядел как
+  // «49189.8 МБ» — число, которое невозможно прочесть с одного взгляда.
+  // Копий это не задевает: файл меньше гигабайта показывается как прежде.
+  if (n >= 1073741824) return `${(n / 1073741824).toFixed(1)} ГБ`;
   const mb = n / 1048576;
   return mb >= 1 ? `${mb.toFixed(1)} МБ` : `${Math.round(n / 1024)} КБ`;
 }
+
+// Свободное место одной плашкой (2026-08-19). Считает СЕРВЕР
+// (app/backups.disk_state): пороги, склонения и объяснение причины живут
+// там же, где механика копий, — клиенту остаётся показать присланное. Своя
+// арифметика здесь разошлась бы с той, по которой сервис отказывает.
+function renderDiskPlate(disk) {
+  const box = document.getElementById("backups-disk");
+  if (!box) return;
+  if (!disk || !disk.known) {
+    box.className = "disk-plate shown";
+    box.textContent = (disk && disk.error) || "Свободное место узнать не удалось.";
+    return;
+  }
+  const уровень = disk.level === "ok" ? "" : ` disk-${disk.level}`;
+  box.className = `disk-plate shown${уровень}`;
+  // Сколько места — говорим ОДИН раз. Готовое сообщение с сервера уже
+  // называет и свободное, и общее; повторять их строкой ниже значит
+  // печатать одно число дважды, да ещё в двух разных округлениях («700 МБ»
+  // от сервера и «700.0 МБ» от formatBytes). Поэтому при нехватке под
+  // сообщением остаётся только то, чего в нём нет: размер копии и правило
+  // хранения.
+  const место = `Свободно на диске: <b>${formatBytes(disk.free_bytes)}</b> из `
+    + `${formatBytes(disk.total_bytes)}. `;
+  const копии = `Копия базы занимает ${formatBytes(disk.db_bytes)}`
+    + (disk.copies_fit ? ` — поместится ещё около ${disk.copies_fit}` : "")
+    + `. Служебных копий хранится ${BACKUP_KEEP} последних, лишние убираются сами; `
+    + `созданные вручную не удаляются никогда.`;
+  box.innerHTML = disk.message
+    ? `<b>${escapeHtml(disk.message)}</b><br>${копии}`
+    : место + копии;
+}
+
+// Столько служебных копий держит сервер (app/backups.KEEP_SERVICE_BACKUPS).
+// Число продублировано намеренно и только ради текста подсказки: слать его
+// отдельным полем ответа ради одной фразы не стоит, а разойдясь, оно
+// испортит подсказку, но не поведение.
+const BACKUP_KEEP = 5;
 
 async function loadBackups() {
   const tbody = document.getElementById("backups-tbody");
@@ -19776,6 +19846,7 @@ async function loadBackups() {
   status.textContent = "Загрузка списка…";
   try {
     const data = await api("/admin/backups");
+    renderDiskPlate(data.disk);
     if (!data.backups.length) {
       tbody.innerHTML = `<tr><td colspan="7" class="hint-text">Копий пока нет</td></tr>`;
       status.textContent = "";

@@ -30,7 +30,8 @@ from pydantic import BaseModel
 from app import activity
 from app.backups import (
     KIND_BEFORE_REBUILD, KIND_MANUAL, BackupError,
-    adopt_legacy_backup, create_backup, delete_backup, list_backups, restore_backup,
+    adopt_legacy_backup, create_backup, delete_backup, disk_state, list_backups,
+    restore_backup,
 )
 from app.contracts import (
     apply_status_change,
@@ -560,6 +561,15 @@ def on_startup():
     # автоматически, без человека, и единственная возможность вернуться —
     # копия, снятая ДО них. Ничего не делает, если версия та же (рестарт при
     # падении и `docker compose up` не должны забивать диск копиями).
+    # Место — ПЕРЕД копией, а не после (2026-08-19, запрос пользователя).
+    # Именно эта строка ниже упирается в кончившийся диск первой, и если она
+    # упадёт, старт не состоится вовсе. Тогда в журнале контейнера должна
+    # стоять внятная причина ВЫШЕ traceback'а, а не вместо него: человек
+    # читает лог сверху вниз и до разбора стека доходит не всегда.
+    место = disk_state()
+    if место.get("message"):
+        print(f"[startup] ВНИМАНИЕ: {место['message']}")
+
     from app import release_tasks
     копия = release_tasks.backup_before_update()
     if копия:
@@ -1996,8 +2006,25 @@ class BackupCreateIn(BaseModel):
 @app.get("/admin/backups")
 def admin_list_backups(admin: sqlite3.Row = Depends(require_service_feature("backups", "read"))):
     """Все резервные копии на диске, новые сверху — из этого списка
-    выбирается точка, на которую восстанавливаться."""
-    return {"backups": list_backups()}
+    выбирается точка, на которую восстанавливаться.
+
+    Вместе со списком — свободное место (2026-08-19, запрос пользователя):
+    это тот самый экран, где нажимают «Создать копию», и узнавать о нехватке
+    места из отказа кнопки поздно.
+    """
+    return {"backups": list_backups(), "disk": disk_state()}
+
+
+@app.get("/admin/disk-space")
+def admin_disk_space(admin: sqlite3.Row = Depends(require_service_feature("backups", "read"))):
+    """Свободное место отдельным запросом — для предупреждения при входе.
+
+    Отдельный лёгкий эндпоинт, а не поле в /me/permissions: права спрашивает
+    КАЖДЫЙ вход и каждое переключение объекта, а место интересно только тем,
+    кто может с ним что-то сделать, и один раз за сеанс. Порог раздела тот
+    же, что у копий: кому показаны копии, тому и место под них.
+    """
+    return disk_state()
 
 
 @app.post("/admin/backups")
