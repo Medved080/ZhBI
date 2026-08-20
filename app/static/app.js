@@ -17957,12 +17957,16 @@ const REPORTS = {
   // захватке, и отчёт по всей стройке разом здесь не рабочий случай, а
   // случайность на три тысячи строк.
   // wide: двенадцать колонок в 780 px не помещаются.
+  // completionViews: у отчёта ДВА вида — перечень позиций и сводная
+  // таблица по нему же (2026-08-20). Вид уходит в запрос, поэтому его же
+  // показывают выгрузки XLSX и PDF (см. reportRequestBody).
   completion: {
     title: "Статус комплектации",
     endpoint: "/reports/completion",
-    render: renderCompletionReport,
+    render: renderCompletionView,
     useFilterByDefault: true,
     flatList: true,
+    completionViews: true,
     wide: true,
   },
   // «Моя работа» (живой запрос 2026-08-03) — что человек изменил за период.
@@ -18060,6 +18064,18 @@ function reportRequestBody() {
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
   }
+  if (REPORTS[currentReport].completionViews) {
+    // Вид — в запрос, а не только в отрисовку: тот же запрос собирают
+    // выгрузки XLSX и PDF, и файл обязан показывать выбранное на экране.
+    body.view = completionView;
+    if (completionView === "pivot") {
+      body.date_scale = document.getElementById("cmp-scale").value;
+      // Шаг не отправляем, пока пользователь его не выбрал: на первом
+      // открытии его подбирает сервер по разбросу дат и возвращает обратно.
+      body.step = completionStepChosen ? document.getElementById("cmp-step").value : null;
+      body.group_by = completionGroupChooser.selected();
+    }
+  }
   if (REPORTS[currentReport].needsScale) {
     body.scale = document.getElementById("cs-scale").value;
   }
@@ -18078,7 +18094,7 @@ function reportRequestBody() {
     // Шаг не отправляем, пока пользователь его не выбрал: на первом
     // открытии его подбирает сервер по ширине периода и возвращает обратно.
     body.step = deliveryStepChosen ? document.getElementById("ds-step").value : null;
-    body.group_by = deliveryGroups.filter(g => g.on).map(g => g.key);
+    body.group_by = deliveryGroupChooser.selected();
   }
   return body;
 }
@@ -18604,6 +18620,88 @@ function renderDynamicsReport(data) {
 //
 // Порядок уровней хранится в localStorage: это настройка «как я привык
 // смотреть», а не свойство проекта, и на сервере ей делать нечего.
+// ---------- выбор уровней группировки (общий орган управления) ----------
+//
+// Один и тот же набор фишек нужен «Графику поставки» и сводной «Статуса
+// комплектации» (2026-08-20): список уровней в ТЕКУЩЕМ порядке, у каждого
+// галочка «участвует» и стрелки «левее/правее». Отдельные «список
+// включённых» + «список доступных» пришлось бы держать согласованными при
+// каждом переносе — здесь переносится один элемент.
+//
+// Порядок и флаги хранятся в localStorage, у каждого отчёта под своим
+// ключом: это настройка «как я привык смотреть», а не свойство проекта, и
+// на сервере ей делать нечего. Иерархии у отчётов разные, поэтому и ключи
+// разные — общий склеил бы «контрагент → контракт» с «завод → договор».
+function createGroupChooser({ containerId, storageKey, allGroups, defaultOn, onChange }) {
+  const container = document.getElementById(containerId);
+  const fallback = () => allGroups.map(g => ({ ...g, on: defaultOn.includes(g.key) }));
+
+  function load() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
+      if (!Array.isArray(saved)) return fallback();
+      // Из сохранённого берём только порядок и флаги; сам состав уровней —
+      // из кода, иначе новый уровень никогда не появился бы у тех, у кого
+      // настройка уже сохранена, а удалённый жил бы вечно.
+      const byKey = new Map(saved.map((item, i) => [item.key, { i, on: !!item.on }]));
+      const out = allGroups.map(g => ({ ...g, on: byKey.has(g.key) ? byKey.get(g.key).on : false }));
+      out.sort((a, b) => (byKey.get(a.key)?.i ?? 99) - (byKey.get(b.key)?.i ?? 99));
+      return out.some(g => g.on) ? out : fallback();
+    } catch (e) {
+      return fallback();
+    }
+  }
+
+  let groups = load();
+  const save = () => localStorage.setItem(storageKey,
+    JSON.stringify(groups.map(g => ({ key: g.key, on: g.on }))));
+
+  function render() {
+    container.innerHTML = groups.map((g, i) => `
+      <span class="ds-chip ${g.on ? "on" : "off"}">
+        <label><input type="checkbox" data-ds-toggle="${g.key}" ${g.on ? "checked" : ""}/>${escapeHtml(g.label)}</label>
+        <button type="button" class="ds-move" data-ds-move="${g.key}" data-dir="-1"
+          title="Левее (выше в иерархии)" ${i === 0 ? "disabled" : ""}>◀</button>
+        <button type="button" class="ds-move" data-ds-move="${g.key}" data-dir="1"
+          title="Правее (ниже в иерархии)" ${i === groups.length - 1 ? "disabled" : ""}>▶</button>
+      </span>`).join("");
+  }
+
+  container.addEventListener("click", (e) => {
+    const move = e.target.dataset.dsMove;
+    if (!move) return;
+    const dir = Number(e.target.dataset.dir);
+    const i = groups.findIndex(g => g.key === move);
+    const j = i + dir;
+    if (j < 0 || j >= groups.length) return;
+    [groups[i], groups[j]] = [groups[j], groups[i]];
+    save();
+    render();
+    onChange();
+  });
+
+  container.addEventListener("change", (e) => {
+    const key = e.target.dataset.dsToggle;
+    if (!key) return;
+    const group = groups.find(g => g.key === key);
+    if (!group) return;
+    if (group.on && groups.filter(g => g.on).length === 1) {
+      // Ноль уровней — это одна строка «Итого»; сервер в таком случае молча
+      // подставит группировку по умолчанию, и снятая галочка вернулась бы
+      // сама. Честнее не дать снять последнюю.
+      e.target.checked = true;
+      showToast("Хотя бы один уровень группировки должен остаться", "warning");
+      return;
+    }
+    group.on = e.target.checked;
+    save();
+    render();
+    onChange();
+  });
+
+  return { render, selected: () => groups.filter(g => g.on).map(g => g.key) };
+}
+
 const DS_GROUPS_KEY = "zhbi_delivery_groups";
 const DS_ALL_GROUPS = [
   { key: "counterparty", label: "Контрагент" },
@@ -18616,78 +18714,18 @@ const DS_ALL_GROUPS = [
 ];
 const DS_DEFAULT_ON = ["counterparty", "contract", "type"];
 
-// Один список всех шести уровней в ТЕКУЩЕМ порядке, у каждого флаг «участвует».
-// Отдельные «список включённых» + «список доступных» пришлось бы держать
-// согласованными при каждом переносе — здесь переносится один элемент.
-let deliveryGroups = loadDeliveryGroups();
+// Состав уровней продублирован здесь и в app/report_delivery.GROUPS: список
+// нужен ДО первого ответа сервера (иначе нечего показать и нечего
+// отправить). Ключи и подписи обязаны совпадать — сервер чужие ключи молча
+// отбрасывает, и разошедшийся список выглядел бы как «галочка не работает».
+const deliveryGroupChooser = createGroupChooser({
+  containerId: "ds-groups", storageKey: DS_GROUPS_KEY,
+  allGroups: DS_ALL_GROUPS, defaultOn: DS_DEFAULT_ON, onChange: () => loadReport(),
+});
+
 // Шаг оси на первом открытии подбирает сервер по ширине периода; как только
 // пользователь выбрал его сам, отправляем выбранное и больше не подменяем.
 let deliveryStepChosen = false;
-
-function loadDeliveryGroups() {
-  const fallback = () => DS_ALL_GROUPS.map(g => ({ ...g, on: DS_DEFAULT_ON.includes(g.key) }));
-  try {
-    const saved = JSON.parse(localStorage.getItem(DS_GROUPS_KEY) || "null");
-    if (!Array.isArray(saved)) return fallback();
-    // Из сохранённого берём только порядок и флаги; сам состав уровней —
-    // из кода, иначе новый уровень никогда не появился бы у тех, у кого
-    // настройка уже сохранена, а удалённый жил бы вечно.
-    const byKey = new Map(saved.map((s, i) => [s.key, { i, on: !!s.on }]));
-    const out = DS_ALL_GROUPS.map(g => ({ ...g, on: byKey.has(g.key) ? byKey.get(g.key).on : false }));
-    out.sort((a, b) => (byKey.get(a.key)?.i ?? 99) - (byKey.get(b.key)?.i ?? 99));
-    return out.some(g => g.on) ? out : fallback();
-  } catch (e) {
-    return fallback();
-  }
-}
-
-function saveDeliveryGroups() {
-  localStorage.setItem(DS_GROUPS_KEY,
-    JSON.stringify(deliveryGroups.map(g => ({ key: g.key, on: g.on }))));
-}
-
-function renderDeliveryGroupChips() {
-  document.getElementById("ds-groups").innerHTML = deliveryGroups.map((g, i) => `
-    <span class="ds-chip ${g.on ? "on" : "off"}">
-      <label><input type="checkbox" data-ds-toggle="${g.key}" ${g.on ? "checked" : ""}/>${escapeHtml(g.label)}</label>
-      <button type="button" class="ds-move" data-ds-move="${g.key}" data-dir="-1"
-        title="Левее (выше в иерархии)" ${i === 0 ? "disabled" : ""}>◀</button>
-      <button type="button" class="ds-move" data-ds-move="${g.key}" data-dir="1"
-        title="Правее (ниже в иерархии)" ${i === deliveryGroups.length - 1 ? "disabled" : ""}>▶</button>
-    </span>`).join("");
-}
-
-document.getElementById("ds-groups").addEventListener("click", (e) => {
-  const move = e.target.dataset.dsMove;
-  if (!move) return;
-  const dir = Number(e.target.dataset.dir);
-  const i = deliveryGroups.findIndex(g => g.key === move);
-  const j = i + dir;
-  if (j < 0 || j >= deliveryGroups.length) return;
-  [deliveryGroups[i], deliveryGroups[j]] = [deliveryGroups[j], deliveryGroups[i]];
-  saveDeliveryGroups();
-  renderDeliveryGroupChips();
-  loadReport();
-});
-
-document.getElementById("ds-groups").addEventListener("change", (e) => {
-  const key = e.target.dataset.dsToggle;
-  if (!key) return;
-  const group = deliveryGroups.find(g => g.key === key);
-  if (!group) return;
-  if (group.on && deliveryGroups.filter(g => g.on).length === 1) {
-    // Ноль уровней — это одна строка «Итого»; сервер в таком случае молча
-    // подставит группировку по умолчанию, и снятая галочка вернулась бы
-    // сама. Честнее не дать снять последнюю.
-    e.target.checked = true;
-    showToast("Хотя бы один уровень группировки должен остаться", "warning");
-    return;
-  }
-  group.on = e.target.checked;
-  saveDeliveryGroups();
-  renderDeliveryGroupChips();
-  loadReport();
-});
 
 for (const id of ["ds-from", "ds-to"]) {
   document.getElementById(id).addEventListener("change", loadReport);
@@ -18763,7 +18801,7 @@ function renderDeliveryReport(data) {
   return `<div class="hint-text" style="margin-bottom:2px">${escapeHtml(data.subtitle)}</div>
     <div class="hint-text" style="margin-bottom:6px">${legend}. <span class="ds-gap-legend">Розовым</span> — потребность не перекрыта: ни плановая поставка, ни факт не попадают в срок (всего ${data.total.gap_total || 0} изд.). Наведите на ячейку — разбор по маркам.</div>
     ${data.warning ? `<div class="dyn-warn">${escapeHtml(data.warning)}</div>` : ""}
-    <div class="ds-wrap"><table id="ds-table">${head}<tbody>${parts.join("")}</tbody></table></div>`;
+    <div class="ds-wrap"><table id="ds-table" class="cal-table">${head}<tbody>${parts.join("")}</tbody></table></div>`;
 }
 
 // ---------- подсказка по ячейке: чего не хватает и откуда переставить ----------
@@ -18948,6 +18986,129 @@ function renderCompletionReport(data) {
   return `<table id="cmp-table"><thead><tr>${шапка}</tr></thead>
     <tbody>${строки}${итог}</tbody></table>`;
 }
+
+// ---------- сводная таблица «Статуса комплектации» (2026-08-20) ----------
+//
+// Второй ВИД того же отчёта, а не отдельный отчёт (решение пользователя):
+// заказчик выгружал наш перечень в Excel и строил по нему сводную —
+// иерархия «завод → договор → спецификация → тип → подтип → марка» против
+// календаря дат поставки, в ячейке количество изделий. Теперь то же самое
+// считается внутри сервиса (app/report_pivot.py), а вид переключается в
+// самой форме: данные, права и галочка «учитывать фильтр схемы» у перечня
+// и сводной общие.
+//
+// Считает всё СЕРВЕР — здесь только вёрстка таблицы и параметры запроса.
+const CMP_VIEW_KEY = "zhbi_completion_view";
+const CMP_GROUPS_KEY = "zhbi_completion_pivot_groups";
+// Тот же список, что в app/report_pivot.GROUPS, и по той же причине, что у
+// «Графика поставки»: он нужен ДО первого ответа сервера. Ключи обязаны
+// совпадать — чужие сервер молча отбрасывает.
+const CMP_ALL_GROUPS = [
+  { key: "counterparty", label: "Завод" },
+  { key: "agreement", label: "Договор" },
+  { key: "specification", label: "Спецификация" },
+  { key: "type", label: "Тип" },
+  { key: "subtype", label: "Подтип" },
+  { key: "mark", label: "Марка" },
+  { key: "status", label: "Статус" },
+  { key: "crane", label: "Кран" },
+  { key: "stance", label: "Стоянка" },
+];
+const CMP_DEFAULT_ON = ["counterparty", "agreement", "specification", "type", "subtype", "mark"];
+
+// Вид помнится между сеансами: человек, который смотрит сводную, приходит
+// за ней и завтра (тот же приём, что у порядка уровней группировки).
+let completionView = localStorage.getItem(CMP_VIEW_KEY) === "pivot" ? "pivot" : "list";
+// Шаг календаря на первом открытии подбирает сервер по ширине данных; как
+// только пользователь выбрал его сам, отправляем выбранное.
+let completionStepChosen = false;
+
+const completionGroupChooser = createGroupChooser({
+  containerId: "cmp-groups", storageKey: CMP_GROUPS_KEY,
+  allGroups: CMP_ALL_GROUPS, defaultOn: CMP_DEFAULT_ON, onChange: () => loadReport(),
+});
+
+// Шкала дат, шаг и группировка относятся ТОЛЬКО к сводной: в перечне даты
+// стоят тремя колонками сразу, и «выбрать одну» там нечего.
+function updateCompletionControls() {
+  const сводная = completionView === "pivot";
+  for (const id of ["cmp-scale-box", "cmp-step-box", "cmp-groups-box"]) {
+    document.getElementById(id).style.display = сводная ? "" : "none";
+  }
+  if (сводная) completionGroupChooser.render();
+}
+
+// Какой вид рисовать, решает ПРИШЕДШИЙ отчёт, а не состояние формы: между
+// запросом и ответом вид могли переключить, и тогда разметка спорила бы с
+// числами.
+function renderCompletionView(data) {
+  return data.view === "pivot" ? renderCompletionPivot(data) : renderCompletionReport(data);
+}
+
+const cmpColClass = (col) => (col.kind === "edge" ? "ds-edge" : (col.weekend ? "ds-weekend" : ""));
+
+function cmpCellHtml(value, cls) {
+  // Пустая ячейка вместо нуля: на календаре из десятков колонок нули —
+  // шум, из-за которого не видно самих поставок.
+  return `<td class="${cls}">${value ? value : ""}</td>`;
+}
+
+function renderCompletionPivot(data) {
+  if (!data.total.total) {
+    return `<div class="cmp-empty">Под текущий отбор не попало ни одного изделия.</div>`;
+  }
+  const columns = data.columns;
+  const head = `<thead><tr>
+    <th class="ds-name">${escapeHtml(data.root_label)}</th>
+    ${columns.map(c => `<th class="${cmpColClass(c)}"${c.title ? ` title="${escapeHtml(c.title)}"` : ""}>${escapeHtml(c.label)}</th>`).join("")}
+    <th class="ds-sum">${escapeHtml(data.total_label)}</th>
+  </tr></thead>`;
+
+  const parts = [];
+  const walk = (node, path) => {
+    const свёрнут = reportCollapsed.has(path);
+    const есть_дети = node.children && node.children.length;
+    const toggle = `<button class="report-toggle${есть_дети ? "" : " empty"}" data-path="${escapeHtml(path)}">${свёрнут ? "▸" : "▾"}</button>`;
+    parts.push(`<tr class="lvl-${node.level}">
+      <td class="ds-name" style="padding-left:${4 + node.level * 14}px" title="${escapeHtml(node.label)}">${toggle}${escapeHtml(node.label)}</td>
+      ${columns.map(c => cmpCellHtml(node.values[c.key], cmpColClass(c))).join("")}
+      ${cmpCellHtml(node.total, "ds-sum")}</tr>`);
+    if (свёрнут) return;
+    for (const child of node.children || []) walk(child, `${path}/${child.label}`);
+  };
+  for (const row of data.rows) walk(row, row.label);
+
+  const total = data.total;
+  parts.push(`<tr class="ds-total">
+    <td class="ds-name">${escapeHtml(total.label)}</td>
+    ${columns.map(c => cmpCellHtml(total.values[c.key], cmpColClass(c))).join("")}
+    ${cmpCellHtml(total.total, "ds-sum")}</tr>`);
+
+  // Подпись и предупреждение приходят с сервера готовым текстом — тем же,
+  // что попадёт в Excel и PDF (см. app/report_pivot.py).
+  return `<div class="hint-text" style="margin-bottom:6px">${escapeHtml(data.subtitle)}</div>
+    ${data.warning ? `<div class="dyn-warn">${escapeHtml(data.warning)}</div>` : ""}
+    <div class="ds-wrap"><table id="cmp-pivot-table" class="cal-table">${head}<tbody>${parts.join("")}</tbody></table></div>`;
+}
+
+document.getElementById("cmp-view").addEventListener("change", (e) => {
+  completionView = e.target.value === "pivot" ? "pivot" : "list";
+  localStorage.setItem(CMP_VIEW_KEY, completionView);
+  updateCompletionControls();
+  loadReport();
+});
+// Шкала дат и шаг меняют САМ РАСЧЁТ (в какую колонку попадёт изделие), а
+// не вид уже посчитанного, — значит перезапрос, а не перерисовка.
+document.getElementById("cmp-scale").addEventListener("change", () => {
+  // Новая шкала — новый разброс дат, и прежний шаг может ей не подойти
+  // (у требуемой даты период вдвое шире планового). Пусть подберёт сервер,
+  // если человек шаг не выбирал сам.
+  loadReport();
+});
+document.getElementById("cmp-step").addEventListener("change", () => {
+  completionStepChosen = true;
+  loadReport();
+});
 
 // ============ отчёт «Моя работа» (живой запрос 2026-08-03) ============
 //
@@ -19181,7 +19342,9 @@ async function loadReport() {
     // Свёрнутость — только у древовидных отчётов; у «Моей работы» и
     // «Статуса комплектации» строки плоские, и defaultCollapsedTree набрал
     // бы туда undefined.
-    reportCollapsed = (def.needsWorkPeriod || def.flatList)
+    // Сводная «Статуса комплектации» — дерево, хотя сам отчёт помечен
+    // flatList: вид решает пришедший отчёт, а не запись в REPORTS.
+    reportCollapsed = (def.needsWorkPeriod || (def.flatList && reportData.view !== "pivot"))
       ? new Set() : defaultCollapsedTree(reportData);
     document.getElementById("report-body").innerHTML = def.render(reportData);
     if (def.needsWorkPeriod) {
@@ -19218,8 +19381,16 @@ async function loadReport() {
         (т.deficit > 0 ? `не законтрактовано ${т.deficit}` : "контрактация закрыта") +
         `. Всего по объекту: ${reportData.progress.total.percent} % контрактации.`;
     } else if (def.flatList) {
-      // Строка = отдельное изделие (группировки нет), поэтому число одно.
-      statusLine.textContent = `Позиций: ${reportData.total.count}`;
+      if (reportData.view === "pivot") {
+        statusLine.textContent = `Изделий: ${reportData.total.total}`;
+        // Шкалу и шаг подставляем ФАКТИЧЕСКИ применёнными: шаг на первом
+        // открытии выбирает сервер по разбросу дат.
+        document.getElementById("cmp-scale").value = reportData.scale;
+        document.getElementById("cmp-step").value = reportData.step;
+      } else {
+        // Строка = отдельное изделие (группировки нет), поэтому число одно.
+        statusLine.textContent = `Позиций: ${reportData.total.count}`;
+      }
     } else if (def.needsScale) {
       // «График контрактации»: главное число — не «сколько изделий», а
       // разрыв между потребностью и контрактами. Его и выносим в строку
@@ -19266,6 +19437,8 @@ async function switchReport(key) {
   document.getElementById("report-contracting-box").style.display = REPORTS[key].needsScale ? "" : "none";
   document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
   document.getElementById("report-analytics-box").style.display = REPORTS[key].needsAnalytics ? "" : "none";
+  document.getElementById("report-completion-box").style.display =
+    REPORTS[key].completionViews ? "" : "none";
   document.getElementById("report-use-filter-box").style.display =
     (REPORTS[key].needsWorkPeriod || REPORTS[key].noFilter) ? "none" : "";
   // Галочка «учитывать фильтр» — со СВОИМ состоянием у каждого отчёта (см.
@@ -19289,7 +19462,11 @@ async function switchReport(key) {
     const горизонт = document.getElementById("an-horizon");
     if (!горизонт.options.length) горизонт.innerHTML = `<option value="30">1 месяц</option>`;
   }
-  if (REPORTS[key].needsPeriod) renderDeliveryGroupChips();
+  if (REPORTS[key].completionViews) {
+    document.getElementById("cmp-view").value = completionView;
+    updateCompletionControls();
+  }
+  if (REPORTS[key].needsPeriod) deliveryGroupChooser.render();
   if (REPORTS[key].needsWorkPeriod) {
     // Период по умолчанию — текущий день (живой запрос). Заполняется один
     // раз: вернувшись на вкладку, человек ожидает увидеть свой выбор, а не
@@ -19562,7 +19739,10 @@ async function downloadReport(suffix, filename) {
 // файла, но не на нём.
 const reportFileName = (ext) => {
   const def = REPORTS[currentReport];
-  return `${def.inDevelopment ? `${def.title} ${IN_DEVELOPMENT_SUFFIX}` : def.title}.${ext}`;
+  // Сводная и перечень — разные файлы одного отчёта, и складывать их в
+  // одноимённые значило бы перезаписывать один другим в папке загрузок.
+  const вид = def.completionViews && completionView === "pivot" ? " (сводная)" : "";
+  return `${def.inDevelopment ? `${def.title} ${IN_DEVELOPMENT_SUFFIX}` : def.title}${вид}.${ext}`;
 };
 document.getElementById("report-xlsx").addEventListener("click", () => downloadReport(".xlsx", reportFileName("xlsx")));
 document.getElementById("report-pdf").addEventListener("click", () => downloadReport(".pdf", reportFileName("pdf")));

@@ -47,9 +47,21 @@ from typing import Optional
 
 from app.db import visible_elements_clause
 from app.reports import (
-    IN_DEVELOPMENT_COLOR, IN_DEVELOPMENT_NOTE, NO_FLOOR, NO_ZAKHVATKA, _floor_label,
-    _item_label, in_development_title, natural_key, pdf_text,
+    IN_DEVELOPMENT_COLOR, IN_DEVELOPMENT_NOTE, MAX_PERIOD_COLUMNS, NO_FLOOR,
+    NO_ZAKHVATKA, STEP_LABELS, STEPS, _floor_label, _item_label, auto_step,
+    bucket_next, bucket_start, build_period_columns, in_development_title,
+    natural_key, parse_iso_date, pdf_text, period_label,
 )
+
+# Календарная сетка (шаг, границы периода, подписи колонок) — ОБЩАЯ с
+# остальными отчётами и живёт в app/reports.py: тем же календарём колонок
+# устроена сводная «Статуса комплектации» (app/report_pivot.py). Здесь
+# оставлены только короткие имена, которыми модуль пользовался раньше.
+_parse = parse_iso_date
+_bucket_start = bucket_start
+_bucket_next = bucket_next
+_period_label = period_label
+_build_columns = build_period_columns
 
 TITLE = "График поставки ЖБИ"
 
@@ -99,22 +111,6 @@ GROUP_KEYS = [g["key"] for g in GROUPS]
 GROUP_LABELS = {g["key"]: g["label"] for g in GROUPS}
 DEFAULT_GROUPS = ["counterparty", "contract", "type"]
 
-STEPS = ("day", "week", "month")
-STEP_LABELS = {"day": "День", "week": "Неделя", "month": "Месяц"}
-
-# Потолок числа календарных колонок. Не «чтобы красиво»: 400 колонок ×
-# сотни строк — это и вес ответа, и намертво повисшая таблица в браузере.
-# Упереться в него можно только явно попросив дневной шаг на многолетнем
-# периоде — тогда честнее сказать об этом, чем молча подменить шаг.
-MAX_PERIOD_COLUMNS = 400
-
-# Границы автоподбора шага, когда клиент шаг не прислал (первое открытие).
-AUTO_DAY_MAX = 45
-AUTO_WEEK_MAX = 200
-
-MONTHS_SHORT = ["янв", "фев", "мар", "апр", "май", "июн",
-                "июл", "авг", "сен", "окт", "ноя", "дек"]
-
 BEFORE_KEY, AFTER_KEY, NONE_KEY = "before", "after", "none"
 
 # Статус изделия, которое физически лежит на площадке и ещё не пущено в
@@ -158,63 +154,9 @@ _COVERED_SQL = """
 
 # ---------- календарная сетка ----------
 
-def _parse(value: Optional[str]) -> Optional[date]:
-    try:
-        return date.fromisoformat(value[:10]) if value else None
-    except (ValueError, TypeError):
-        return None
-
-
-def _bucket_start(d: date, step: str) -> date:
-    """Начало периода, в который попадает дата. Ключ колонки — ISO-дата
-    этого начала (а не «2026-W32»/«2026-08»): так ключи сортируются как
-    обычные даты и одинаково устроены при любом шаге."""
-    if step == "week":
-        return d - timedelta(days=d.weekday())
-    if step == "month":
-        return d.replace(day=1)
-    return d
-
-
-def _bucket_next(d: date, step: str) -> date:
-    if step == "week":
-        return d + timedelta(days=7)
-    if step == "month":
-        return date(d.year + 1, 1, 1) if d.month == 12 else date(d.year, d.month + 1, 1)
-    return d + timedelta(days=1)
-
-
-def _period_label(d: date, step: str) -> str:
-    if step == "month":
-        return f"{MONTHS_SHORT[d.month - 1]} {d.year}"
-    if step == "week":
-        end = d + timedelta(days=6)
-        return f"{d.day:02d}.{d.month:02d}–{end.day:02d}.{end.month:02d}"
-    return f"{d.day:02d}.{d.month:02d}"
-
-
 def _ru(d) -> str:
     d = d if isinstance(d, date) else _parse(d)
     return f"{d.day:02d}.{d.month:02d}.{d.year}" if d else ""
-
-
-def _build_columns(start: date, end: date, step: str) -> list:
-    """Календарь строится СПЛОШНЫМ, включая дни без единой поставки: это
-    график, а не список событий — пустой день в середине недели такой же
-    результат, как заполненный."""
-    cols, cur = [], _bucket_start(start, step)
-    while cur <= end:
-        cols.append({
-            "key": cur.isoformat(),
-            "label": _period_label(cur, step),
-            "kind": "period",
-            "date": cur.isoformat(),
-            # Выходной подсвечивается только при дневном шаге — у недели и
-            # месяца понятия «выходной» нет.
-            "weekend": step == "day" and cur.weekday() >= 5,
-        })
-        cur = _bucket_next(cur, step)
-    return cols
 
 
 def column_bounds(column: str, start: date, end: date, step: str):
@@ -361,7 +303,7 @@ def build_delivery_schedule_report(
     if step not in STEPS:
         # Первое открытие: шаг подбирается по ширине периода. Полгода по
         # дням — это 180 колонок, читать нечего; переключатель шага рядом.
-        step = "day" if span <= AUTO_DAY_MAX else ("week" if span <= AUTO_WEEK_MAX else "month")
+        step = auto_step(span)
 
     period_columns = _build_columns(start, end, step)
     if len(period_columns) > MAX_PERIOD_COLUMNS:

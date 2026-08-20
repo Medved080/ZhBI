@@ -14,6 +14,7 @@
 сколько изделий ещё не сдвинулось с планового состояния.
 """
 
+from datetime import date, timedelta
 from typing import Optional
 
 from app.db import visible_elements_clause
@@ -98,6 +99,90 @@ def _item_label(element_type: str, subtype: Optional[str]) -> str:
     периметральный» — тип и подтип через пробел, как в исходной сводной
     таблице заказчика. Без подтипа — только тип."""
     return f"{element_type} {subtype}".strip() if subtype else element_type
+
+
+# ---------- календарная сетка отчётов (общая, 2026-08-20) ----------
+#
+# Живёт ЗДЕСЬ, а не в модуле отчёта, потому что календарь колонками нужен
+# уже двоим — «Графику поставки» (app/report_delivery.py) и сводной
+# «Статуса комплектации» (app/report_pivot.py). Вторая копия разошлась бы
+# с первой на первой же правке (границе недели, подписи месяца), причём
+# незаметно: числа в отчётах остались бы верными, разъехались бы колонки.
+MONTHS_SHORT = ["янв", "фев", "мар", "апр", "май", "июн",
+                "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+STEPS = ("day", "week", "month")
+STEP_LABELS = {"day": "День", "week": "Неделя", "month": "Месяц"}
+
+# Границы автоподбора шага, когда клиент шаг не прислал (первое открытие).
+AUTO_DAY_MAX = 45
+AUTO_WEEK_MAX = 200
+
+# Потолок числа календарных колонок. Не «чтобы красиво»: 400 колонок ×
+# сотни строк — это и вес ответа, и намертво повисшая таблица в браузере.
+MAX_PERIOD_COLUMNS = 400
+
+
+def parse_iso_date(value: Optional[str]) -> Optional[date]:
+    """Дата из текста базы. Хранится ISO-текстом, у части записей
+    исторически со временем — отсюда срез до десяти знаков."""
+    try:
+        return date.fromisoformat(value[:10]) if value else None
+    except (ValueError, TypeError):
+        return None
+
+
+def bucket_start(d: date, step: str) -> date:
+    """Начало периода, в который попадает дата. Ключ колонки — ISO-дата
+    этого начала (а не «2026-W32»/«2026-08»): так ключи сортируются как
+    обычные даты и одинаково устроены при любом шаге."""
+    if step == "week":
+        return d - timedelta(days=d.weekday())
+    if step == "month":
+        return d.replace(day=1)
+    return d
+
+
+def bucket_next(d: date, step: str) -> date:
+    if step == "week":
+        return d + timedelta(days=7)
+    if step == "month":
+        return date(d.year + 1, 1, 1) if d.month == 12 else date(d.year, d.month + 1, 1)
+    return d + timedelta(days=1)
+
+
+def period_label(d: date, step: str) -> str:
+    if step == "month":
+        return f"{MONTHS_SHORT[d.month - 1]} {d.year}"
+    if step == "week":
+        end = d + timedelta(days=6)
+        return f"{d.day:02d}.{d.month:02d}–{end.day:02d}.{end.month:02d}"
+    return f"{d.day:02d}.{d.month:02d}"
+
+
+def auto_step(span_days: int) -> str:
+    """Шаг по ширине периода — на первое открытие, пока пользователь не
+    выбрал его сам. Полгода по дням — это 180 колонок, читать нечего."""
+    return "day" if span_days <= AUTO_DAY_MAX else ("week" if span_days <= AUTO_WEEK_MAX else "month")
+
+
+def build_period_columns(start: date, end: date, step: str) -> list:
+    """Календарь строится СПЛОШНЫМ, включая периоды без единой поставки:
+    это график, а не список событий — пустой день в середине недели такой
+    же результат, как заполненный."""
+    cols, cur = [], bucket_start(start, step)
+    while cur <= end:
+        cols.append({
+            "key": cur.isoformat(),
+            "label": period_label(cur, step),
+            "kind": "period",
+            "date": cur.isoformat(),
+            # Выходной подсвечивается только при дневном шаге — у недели и
+            # месяца понятия «выходной» нет.
+            "weekend": step == "day" and cur.weekday() >= 5,
+        })
+        cur = bucket_next(cur, step)
+    return cols
 
 
 def build_status_report(conn, source_file: Optional[str], element_ids: Optional[list] = None) -> dict:

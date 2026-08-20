@@ -2608,34 +2608,39 @@
   }
   .ds-chip .ds-move:disabled { visibility: hidden; }
 
-  /* Таблица календаря: своя горизонтальная прокрутка (колонок могут быть
+  /* Календарная таблица отчётов (класс .cal-table, 2026-08-20): «График
+     поставки» и сводная «Статуса комплектации» устроены одинаково —
+     иерархия слева, календарь колонками, итог справа, — и оформляются
+     одним набором правил. Разное у них только содержимое ячейки, поэтому
+     по id остались лишь правила про подсказку по ячейке.
+     Таблица календаря: своя горизонтальная прокрутка (колонок могут быть
      сотни), закреплены шапка, колонка группировки слева и итог справа —
      иначе, уехав к декабрю, не поймёшь, чью строку смотришь.
      border-collapse: separate обязателен: со collapse липкие ячейки в
      Safari/Chrome теряют собственные границы. */
   .ds-wrap { overflow: auto; max-width: 100%; }
-  #ds-table { border-collapse: separate; border-spacing: 0; font-size: 11px; }
-  #ds-table th, #ds-table td {
+  .cal-table { border-collapse: separate; border-spacing: 0; font-size: 11px; }
+  .cal-table th, .cal-table td {
     border-right: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border);
     padding: 2px 5px; text-align: center; white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  #ds-table thead th {
+  .cal-table thead th {
     position: sticky; top: 0; z-index: 3; background: var(--color-surface-2);
     font-weight: 600; border-top: 1px solid var(--color-border);
   }
-  #ds-table .ds-name {
+  .cal-table .ds-name {
     position: sticky; left: 0; z-index: 2; text-align: left;
     background: var(--color-surface); min-width: 240px; max-width: 420px;
     border-left: 1px solid var(--color-border);
   }
-  #ds-table thead .ds-name { z-index: 4; background: var(--color-surface-2); }
-  #ds-table .ds-sum { position: sticky; right: 0; z-index: 2; background: var(--color-surface-2); font-weight: 600; }
-  #ds-table thead .ds-sum { z-index: 4; }
-  #ds-table th.ds-weekend, #ds-table td.ds-weekend { background: var(--color-surface-2); }
+  .cal-table thead .ds-name { z-index: 4; background: var(--color-surface-2); }
+  .cal-table .ds-sum { position: sticky; right: 0; z-index: 2; background: var(--color-surface-2); font-weight: 600; }
+  .cal-table thead .ds-sum { z-index: 4; }
+  .cal-table th.ds-weekend, .cal-table td.ds-weekend { background: var(--color-surface-2); }
   /* Служебные колонки «Ранее / Позже / Без даты» — тёплой подложкой: это
      не дни календаря, и путать их с ними нельзя. */
-  #ds-table th.ds-edge, #ds-table td.ds-edge { background: rgba(200, 150, 60, 0.10); }
+  .cal-table th.ds-edge, .cal-table td.ds-edge { background: rgba(200, 150, 60, 0.10); }
   /* Непокрытая потребность: ни плановая поставка, ни факт не попадают в
      срок. Цвет полупрозрачный — ложится и на светлые, и на тёмные схемы.
      Красится background-IMAGE, а не background: у липких колонок («Итого»
@@ -2643,20 +2648,20 @@
      полупрозрачным делала бы их прозрачными — сквозь «Итого» просвечивал
      бы уезжающий под ним календарь (поймано живой проверкой). Слой поверх
      сохраняет и непрозрачность, и подложки выходных/служебных колонок. */
-  #ds-table td.ds-gap {
+  .cal-table td.ds-gap {
     background-image: linear-gradient(rgba(192, 57, 43, .16), rgba(192, 57, 43, .16));
   }
-  #ds-table tr.ds-total > td.ds-gap, #ds-table tr.lvl-0 > td.ds-gap {
+  .cal-table tr.ds-total > td.ds-gap, .cal-table tr.lvl-0 > td.ds-gap {
     background-image: linear-gradient(rgba(192, 57, 43, .26), rgba(192, 57, 43, .26));
   }
   .ds-gap-legend {
     background: rgba(192, 57, 43, .16); padding: 0 4px; border-radius: 3px;
   }
-  #ds-table tr.lvl-0 > td { font-weight: 700; }
-  #ds-table tr.lvl-0 .ds-name { background: var(--color-surface-2); }
-  #ds-table tr.lvl-1 > td { font-weight: 600; }
-  #ds-table tr.ds-total > td { font-weight: 700; background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
-  #ds-table tr.ds-total .ds-name { background: var(--color-surface-2); }
+  .cal-table tr.lvl-0 > td { font-weight: 700; }
+  .cal-table tr.lvl-0 .ds-name { background: var(--color-surface-2); }
+  .cal-table tr.lvl-1 > td { font-weight: 600; }
+  .cal-table tr.ds-total > td { font-weight: 700; background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
+  .cal-table tr.ds-total .ds-name { background: var(--color-surface-2); }
   /* Три числа ячейки различаются ЦВЕТОМ, а не только порядком: подряд
      идущие «4/4/0» иначе читаются как одно число. Потребность — основной
      цвет (это норматив), план — синий, факт — зелёный. */
@@ -2700,7 +2705,7 @@
        (её содержание повторено строкой подписи над таблицей). */
     .ds-controls { display: none !important; }
     .ds-wrap { overflow: visible !important; }
-    #ds-table thead th, #ds-table .ds-name, #ds-table .ds-sum { position: static; }
+    .cal-table thead th, .cal-table .ds-name, .cal-table .ds-sum { position: static; }
   }
 
   #backups-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -5697,6 +5702,38 @@
         </label>
         <label class="toggle"><input type="checkbox" id="cs-only-deficit"/>
           Только марки с дефицитом</label>
+      </div>
+      <!-- «Статус комплектации» в двух видах (2026-08-20, живой запрос по
+           образцу заказчика): перечень позиций и сводная таблица по нему же.
+           Шкала дат, шаг календаря и порядок уровней — только для сводной,
+           поэтому эти три поля гасятся в виде «перечень» (см. app.js,
+           updateCompletionControls). Иерархию задаёт пользователь: одному
+           нужен разрез по заводам, другому по типам изделий. -->
+      <div class="ds-controls" id="report-completion-box" style="display:none">
+        <label class="field">Вид
+          <select id="cmp-view" style="width:auto">
+            <option value="list">Перечень позиций</option>
+            <option value="pivot">Сводная таблица</option>
+          </select>
+        </label>
+        <label class="field" id="cmp-scale-box">Колонки
+          <select id="cmp-scale" style="width:auto">
+            <option value="plan">Плановая дата поставки</option>
+            <option value="fact">Фактическая дата поставки</option>
+            <option value="need">Требуемая дата поставки</option>
+          </select>
+        </label>
+        <label class="field" id="cmp-step-box">Шаг
+          <select id="cmp-step" style="width:auto">
+            <option value="day">День</option>
+            <option value="week">Неделя</option>
+            <option value="month">Месяц</option>
+          </select>
+        </label>
+        <div class="ds-chips" id="cmp-groups-box">
+          <span class="hint-text">Группировка:</span>
+          <span id="cmp-groups"></span>
+        </div>
       </div>
       <!-- «Аналитическая справка»: дата, на которую строится, и горизонт —
            сколько вперёд считать этапы под контрактацию. Галочки «учитывать

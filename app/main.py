@@ -123,6 +123,10 @@ from app.report_delivery import (
     IN_DEVELOPMENT as DELIVERY_IN_DEVELOPMENT, build_delivery_cell_detail,
     build_delivery_schedule_pdf, build_delivery_schedule_report, build_delivery_schedule_xlsx,
 )
+from app.report_pivot import (
+    VIEW_PIVOT, build_completion_pivot, build_completion_pivot_pdf,
+    build_completion_pivot_xlsx, normalize_view,
+)
 from app.report_my_work import (
     FILE_LIMIT, NON_CHANGE_ACTIONS, SCREEN_LIMIT, action_title, build_my_work_pdf,
     build_my_work_report, build_my_work_xlsx, changed_element_ids, value_text,
@@ -1452,8 +1456,20 @@ class ReportRequestIn(BaseModel):
     # же приём, что у XLS-экспорта: критерии фильтра живут на клиенте, и
     # дублировать их на сервере значило бы держать две расходящиеся копии.
     element_ids: Optional[list[int]] = None
-    # Только для «Графика поставки»: период календаря, шаг оси и ПОРЯДОК
-    # уровней группировки (его задаёт пользователь, см. app/report_delivery.py).
+    # Вид «Статуса комплектации»: "list" — плоский перечень позиций,
+    # "pivot" — сводная таблица по нему же (app/report_pivot.py). Это ОДИН
+    # отчёт в двух видах, а не два отчёта: данные, права и галочка «учитывать
+    # фильтр схемы» у них общие. Пусто = перечень.
+    view: Optional[str] = None
+    # Шкала дат сводной: "plan" / "fact" / "need" — одна на всю таблицу.
+    # Названа не `scale`, потому что `scale` выше уже занят масштабом оси
+    # «Графика контрактации»; два разных смысла в одном поле однажды
+    # склеились бы молча.
+    date_scale: Optional[str] = None
+    # Для «Графика поставки»: период календаря, шаг оси и ПОРЯДОК уровней
+    # группировки (его задаёт пользователь, см. app/report_delivery.py).
+    # Сводная «Статуса комплектации» берёт отсюда же `step` и `group_by` —
+    # это один и тот же вопрос «как разложить», а не два разных.
     # Пусто = сервер подставит свои значения и вернёт применённые.
     date_from: Optional[str] = None
     date_to: Optional[str] = None
@@ -1644,9 +1660,21 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
     """Общая точка для экрана, XLSX и PDF «Статуса комплектации». Проверка
     доступа ЗДЕСЬ, а не в каждом из трёх роутов: три копии одной проверки —
     ровно та схема, при которой забытая четвёртая открывает отчёт целиком
-    (аудит безопасности 2026-08-03)."""
+    (аудит безопасности 2026-08-03).
+
+    Вид (перечень или сводная) выбирается ЗДЕСЬ же: экран, Excel и PDF
+    обязаны показывать одно и то же, и развести выбор по роутам значило бы
+    получить сводную на экране и перечень в файле."""
     body = _guard_report(conn, user, body, "report_completion")
-    return build_completion_report(conn, body.source_file, body.element_ids)
+    if normalize_view(body.view) != VIEW_PIVOT:
+        return build_completion_report(conn, body.source_file, body.element_ids)
+    try:
+        return build_completion_pivot(conn, body.source_file, body.element_ids,
+                                      body.group_by, body.step, body.date_scale)
+    except ValueError as exc:
+        # Слишком много календарных колонок — это ошибка ЗАПРОСА, а не сбой:
+        # отдаём 400 с текстом, который уже объясняет, что сделать.
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/reports/contracting-schedule")
@@ -1726,8 +1754,10 @@ def report_analytics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_
 
 @app.post("/reports/completion")
 def report_completion(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
-    """Отчёт «Статус комплектации» — плоский перечень «кран · стоянка ·
-    изделие · контракт · три даты» с количеством."""
+    """Отчёт «Статус комплектации» в одном из двух видов (`view`): плоский
+    перечень «кран · стоянка · изделие · контракт · три даты» с количеством
+    либо сводная таблица по нему же — иерархия строк против календаря дат
+    поставки (app/report_pivot.py)."""
     conn = get_connection()
     try:
         return _completion(conn, user, body)
@@ -1742,6 +1772,10 @@ def report_completion_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(ge
         report = _completion(conn, user, body)
     finally:
         conn.close()
+    if report.get("view") == VIEW_PIVOT:
+        return _report_file_response(
+            build_completion_pivot_xlsx(report), "Статус комплектации (сводная).xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     return _report_file_response(
         build_completion_report_xlsx(report), "Статус комплектации.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1755,6 +1789,9 @@ def report_completion_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get
     finally:
         conn.close()
     subtitle = f"Чертёж: {body.source_file}" if body.source_file else ""
+    if report.get("view") == VIEW_PIVOT:
+        return _report_file_response(build_completion_pivot_pdf(report, subtitle),
+                                     "Статус комплектации (сводная).pdf", "application/pdf")
     return _report_file_response(build_completion_report_pdf(report, subtitle),
                                  "Статус комплектации.pdf", "application/pdf")
 
