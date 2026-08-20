@@ -72,6 +72,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from app import activity
+from app.activity_actions import ACTION_CATEGORIES, CATEGORY_OTHER
 from app.access import require_service_feature
 from app.auth import get_current_user
 from app.changelog import CHANGELOG
@@ -435,6 +436,45 @@ def _grant_feature_to_all_roles(conn: sqlite3.Connection, feature_key: str) -> s
     return f"раздел «{feature_key}» открыт ролям: {len(новые)}"
 
 
+def _fill_activity_categories(conn: sqlite3.Connection) -> str:
+    """Раздать категорию записям журнала, накопленным до 2026-08-20.
+
+    Категория проставляется при записи по коду действия
+    (app/activity_actions.py), но у накопленных записей колонки не было —
+    без этой обработки фильтр «покажи ошибки» показывал бы только то, что
+    произошло ПОСЛЕ обновления, а вся история попадала бы в «Прочее».
+
+    Одним UPDATE на категорию, а не построчно: в журнале боевого сервера
+    сотни тысяч строк (одна массовая смена статуса — 9422 события), и
+    построчный проход занял бы старт сервиса. Условие `category IS NULL`
+    делает обработку идемпотентной и заодно безвредной для записей, чью
+    категорию администратор менять не должен: второй проход не тронет
+    ничего.
+
+    Коды, которых в реестре нет (действия отжившие или из будущих версий),
+    получают «Прочее» последним запросом — иначе они остались бы с пустой
+    колонкой и выпали бы из фильтра совсем.
+    """
+    по_категориям = {}
+    for code, category in ACTION_CATEGORIES.items():
+        по_категориям.setdefault(category, []).append(code)
+    всего = 0
+    for category, codes in по_категориям.items():
+        места = ", ".join("?" for _ in codes)
+        cur = conn.execute(
+            f"UPDATE activity_log SET category = ? "
+            f"WHERE category IS NULL AND action IN ({места})",
+            [category, *codes])
+        всего += cur.rowcount
+    прочее = conn.execute(
+        "UPDATE activity_log SET category = ? WHERE category IS NULL",
+        (CATEGORY_OTHER,)).rowcount
+    if not всего and not прочее:
+        return "все записи журнала уже с категорией"
+    return (f"категория проставлена записям: {всего}"
+            + (f", в «Прочее» ушло: {прочее}" if прочее else ""))
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -503,6 +543,18 @@ RELEASE_TASKS = [
                "сервиса",
         "kind": KIND_DATA,
         "run": lambda conn: _grant_feature_to_all_roles(conn, "training"),
+    },
+    {
+        "name": "2026-08-20-activity-categories",
+        "version": "0.60",
+        "date": "2026-08-20",
+        "title": "Раздать категорию накопленным записям журнала",
+        "why": "категория события («Ошибка», «Безопасность», «Данные», …) проставляется при "
+               "записи, но у всего, что журнал накопил до этой версии, её нет — фильтр по "
+               "категории показывал бы только сегодняшнее, а вся прежняя история молча "
+               "оказалась бы в «Прочем»",
+        "kind": KIND_DATA,
+        "run": _fill_activity_categories,
     },
 ]
 

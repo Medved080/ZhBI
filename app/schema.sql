@@ -665,6 +665,8 @@ CREATE TABLE IF NOT EXISTS activity_log (
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     user_name TEXT,                   -- снимок ФИО на момент события (переживёт переименование)
     action TEXT NOT NULL,             -- 'status_change', 'form_open', 'import_input', ...
+    category TEXT,                    -- о чём событие: error/denied/security/data/settings/
+                                      -- transfer/system/view (app/activity_actions.py)
     entity_type TEXT,                 -- 'element' | 'contract' | ...
     entity_id INTEGER,
     element_type TEXT,                -- тип/подтип/марка — снимок на момент события:
@@ -683,6 +685,10 @@ CREATE INDEX IF NOT EXISTS idx_activity_at ON activity_log (at);
 CREATE INDEX IF NOT EXISTS idx_activity_user_at ON activity_log (user_id, at);
 CREATE INDEX IF NOT EXISTS idx_activity_action_at ON activity_log (action, at);
 CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log (entity_type, entity_id);
+-- Индекс по category СЮДА НЕ СТАВИТСЯ: колонка добавляется миграцией
+-- (app/db._COLUMN_MIGRATIONS), а этот файл выполняется РАНЬШЕ миграций —
+-- на накопленной базе CREATE INDEX упал бы на «no such column». Он живёт
+-- в app/db._ensure_activity_category_index, рядом с такими же поздними.
 
 -- Редакции текстовых блоков ежедневного отчёта (живой запрос 2026-07-29:
 -- «ключевые события, задачи и вопросы должны обновляться на определённые

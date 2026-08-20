@@ -38,6 +38,7 @@ from typing import Optional
 import app.db as _db  # модулем, а не `from ... import DB_PATH`: путь читается в
                       # момент подключения, иначе подмена DB_PATH (тесты,
                       # scripts/rebuild_db.py) не подхватилась бы этим потоком
+from app.activity_actions import CATEGORY_ERROR, category_of
 
 # Верхняя граница очереди. При переполнении события ОТБРАСЫВАЮТСЯ, а не
 # блокируют запрос: журнал не должен уметь остановить работу сервиса.
@@ -53,7 +54,7 @@ _dropped = 0
 _dropped_lock = threading.Lock()
 
 _COLUMNS = (
-    "at", "source", "user_id", "user_name", "action", "entity_type", "entity_id",
+    "at", "source", "user_id", "user_name", "action", "category", "entity_type", "entity_id",
     "element_type", "subtype", "mark", "old_value", "new_value", "duration_ms",
     "request_id", "details", "impersonator_user_id", "impersonator_name",
 )
@@ -95,10 +96,17 @@ def log(
     request_id: Optional[str] = None,
     details: Optional[dict] = None,
     at: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> None:
     """Положить событие в очередь. Никогда не бросает исключений и не ждёт:
     сбой журналирования не должен ронять и не должен задерживать само
-    действие пользователя."""
+    действие пользователя.
+
+    `category` обычно не передают: она берётся по коду действия из реестра
+    `app/activity_actions.py` — иначе полторы сотни мест вызова проставляли
+    бы её вручную и разошлись бы между собой. Явно категория нужна там, где
+    она зависит от ЗНАЧЕНИЯ, а не от кода: ответ 500 — «Ошибка», ответ 403 —
+    «Отказ», а действие у них одно (см. app/main.py, обработчики ошибок)."""
     global _dropped
     if user is not None:
         user_id = user["id"] if user_id is None else user_id
@@ -112,6 +120,7 @@ def log(
         "user_id": user_id,
         "user_name": user_name,
         "action": action,
+        "category": category or category_of(action),
         "entity_type": entity_type,
         "entity_id": entity_id,
         "element_type": element_type,
@@ -199,7 +208,7 @@ def _run() -> None:
                 batch.append({
                     **{c: None for c in _COLUMNS},
                     "at": _now(), "source": "server", "action": "log_overflow",
-                    "new_value": str(dropped),
+                    "category": CATEGORY_ERROR, "new_value": str(dropped),
                     "details": json.dumps({"сообщение": "события журнала отброшены — очередь переполнена"},
                                           ensure_ascii=False),
                 })

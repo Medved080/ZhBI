@@ -372,14 +372,48 @@ async function downloadFromServer(url) {
 }
 
 async function api(path, opts) {
-  const res = await fetch(path, opts);
+  // Неудачи запросов идут в общий журнал (2026-08-20). Сервер пишет свою
+  // сторону сам, но видит не всё: обрыв связи до него не доходит вовсе, а
+  // сообщение, которое реально увидел человек, известно только здесь.
+  //
+  // Исключён ровно один запрос — ОТПРАВКА клиентских событий (POST
+  // /activity): запись об ошибке отправки уходила бы тем же способом,
+  // который только что не сработал. Поиск по журналу (GET /activity)
+  // логируется как всё остальное.
+  const пишемОшибки = !(String(path).startsWith("/activity")
+                        && opts && String(opts.method).toUpperCase() === "POST");
+  let res;
+  try {
+    res = await fetch(path, opts);
+  } catch (e) {
+    // fetch отвергает промис только когда запрос не дошёл: сеть, VPN,
+    // перезапуск сервиса. HTTP-код ошибки сюда не попадает.
+    if (пишемОшибки) {
+      logClientError("client_offline", `offline|${path}`, {
+        "путь": path,
+        "метод": (opts && opts.method) || "GET",
+        "сообщение": String((e && e.message) || e),
+      });
+    }
+    throw e;
+  }
   if (res.status === 401) {
     if (onUnauthorized) onUnauthorized();
     throw new Error("Не авторизован");
   }
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(describeApiError(body, res));
+    const сообщение = describeApiError(body, res);
+    if (пишемОшибки) {
+      // 5xx — сбой программы, 4xx — отказ: разные категории в журнале, и
+      // выбирает их клиент, потому что только он знает код ответа.
+      logClientError(
+        res.status >= 500 ? "client_request_failed" : "client_request_denied",
+        `${res.status}|${path}|${сообщение}`,
+        { "путь": path, "метод": (opts && opts.method) || "GET",
+          "код": res.status, "сообщение": сообщение });
+    }
+    throw new Error(сообщение);
   }
   return res.status === 204 ? null : res.json();
 }
@@ -6606,6 +6640,68 @@ function startTiming(action, opts = {}) {
     ...opts, ...extra, durationMs: Math.round((performance.now() - t0) * 10) / 10,
   });
 }
+
+// ---------- Ошибки браузера в общий журнал (2026-08-20) ----------
+//
+// До этого сбой на стороне клиента не покидал компьютера прораба: скрипт
+// падал, кнопка переставала работать, а до администратора это доходило
+// пересказом «ничего не открывается». Теперь тот же журнал, что и
+// серверные ошибки, — с категорией «Ошибка»/«Отказ» (её проставляет
+// сервер по коду события, см. app/activity_actions.py).
+//
+// Повторы подавляются: одна и та же ошибка в цикле перерисовки даёт сотни
+// одинаковых событий в секунду и вытеснила бы из очереди всё остальное.
+// Считаются они честно и уезжают полем «повторов подавлено» — молчаливая
+// потеря была бы хуже.
+const CLIENT_ERROR_WINDOW_MS = 60000;
+const clientErrorSeen = new Map(); // подпись -> {at, suppressed}
+
+function logClientError(action, signature, details) {
+  const now = Date.now();
+  const было = clientErrorSeen.get(signature);
+  if (было && now - было.at < CLIENT_ERROR_WINDOW_MS) {
+    было.suppressed += 1;
+    return;
+  }
+  const подавлено = было ? было.suppressed : 0;
+  clientErrorSeen.set(signature, { at: now, suppressed: 0 });
+  if (clientErrorSeen.size > 200) {
+    for (const [k, v] of clientErrorSeen) {
+      if (now - v.at > CLIENT_ERROR_WINDOW_MS * 10) clientErrorSeen.delete(k);
+    }
+  }
+  logClientEvent(action, {
+    details: подавлено ? { ...details, "повторов подавлено": подавлено } : details,
+  });
+  // Отправляем не дожидаясь очередного цикла: страница после сбоя может и
+  // не дожить до него — например, если человек её сразу перезагрузит.
+  flushActivity();
+}
+
+window.addEventListener("error", (e) => {
+  // Сбой ЗАГРУЗКИ ресурса (картинка, скрипт) приходит сюда же, но без
+  // message — отличаем по наличию e.error/e.message, иначе в журнал
+  // сыпались бы «ошибки» от каждой недокачанной иконки.
+  if (!e || (!e.message && !e.error)) return;
+  const где = `${e.filename || ""}:${e.lineno || 0}`;
+  logClientError("client_error", `${e.message}|${где}`, {
+    "сообщение": String(e.message || e.error),
+    "файл": где,
+    "страница": location.pathname,
+    // Первые кадры стека: по ним видно, какая именно функция упала.
+    "стек": e.error && e.error.stack ? String(e.error.stack).slice(0, 1500) : undefined,
+  });
+});
+
+window.addEventListener("unhandledrejection", (e) => {
+  const причина = e && e.reason;
+  const текст = причина && причина.message ? причина.message : String(причина);
+  logClientError("client_promise_rejected", текст, {
+    "сообщение": текст,
+    "страница": location.pathname,
+    "стек": причина && причина.stack ? String(причина.stack).slice(0, 1500) : undefined,
+  });
+});
 
 async function flushActivity() {
   if (!activityQueue.length || !state.currentUser) return;
@@ -19262,61 +19358,85 @@ document.getElementById("report-help-close")
 // Помнится за компьютером, а не за пользователем: это свойство ЭКРАНА, с
 // которого смотрят, — на ноутбуке и на большом мониторе выбор разный, а
 // учётная запись одна и та же.
-const REPORT_SIZE_KEY = "zhbi_report_size";
-const reportsModal = () => reportsBackdrop.querySelector(".modal");
+// Механика ОБЩАЯ для форм, которым нужен ручной размер (2026-08-20, когда
+// то же самое попросили для журнала действий): две копии этого кода
+// разошлись бы уже на первой правке — например, кнопка ⛶ у одной формы
+// перестала бы переключать подпись. Вызов заводит форму целиком:
+// применение сохранённого размера, кнопку разворота и запоминание того,
+// что осталось после перетаскивания угла.
+function setupResizableModal({ backdrop, storageKey, toggleId, maximizedClass }) {
+  const modalOf = () => backdrop.querySelector(".modal");
 
-function applyReportSize() {
-  const modal = reportsModal();
-  if (!modal) return;
-  let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(REPORT_SIZE_KEY) || "null"); } catch (e) { /* приватный режим */ }
-  const развёрнут = !!(saved && saved.maximized);
-  modal.classList.toggle("report-maximized", развёрнут);
-  // Ручной размер применяем только в обычном режиме: в развёрнутом за
-  // размеры отвечает класс, и inline-ширина спорила бы с ним.
-  if (!развёрнут && saved && saved.width && saved.height) {
-    modal.style.width = saved.width + "px";
-    modal.style.height = saved.height + "px";
-  } else if (развёрнут) {
-    modal.style.width = modal.style.height = "";
+  function read() {
+    try { return JSON.parse(localStorage.getItem(storageKey) || "null"); }
+    catch (e) { return null; /* приватный режим */ }
   }
-  const btn = document.getElementById("report-size-toggle");
-  if (btn) {
-    btn.textContent = развёрнут ? "🗗" : "⛶";
-    btn.title = развёрнут ? "Свернуть к обычному размеру" : "Развернуть на весь экран";
-    btn.setAttribute("aria-label", btn.title);
+
+  function save(patch) {
+    const saved = read() || {};
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ ...saved, ...patch }));
+    } catch (e) { /* приватный режим — размер просто не запомнится */ }
   }
+
+  function apply() {
+    const modal = modalOf();
+    if (!modal) return;
+    const saved = read();
+    const развёрнут = !!(saved && saved.maximized);
+    modal.classList.toggle(maximizedClass, развёрнут);
+    // Ручной размер применяем только в обычном режиме: в развёрнутом за
+    // размеры отвечает класс, и inline-ширина спорила бы с ним.
+    if (!развёрнут && saved && saved.width && saved.height) {
+      modal.style.width = saved.width + "px";
+      modal.style.height = saved.height + "px";
+    } else if (развёрнут) {
+      modal.style.width = modal.style.height = "";
+    }
+    const btn = document.getElementById(toggleId);
+    if (btn) {
+      btn.textContent = развёрнут ? "🗗" : "⛶";
+      btn.title = развёрнут ? "Свернуть к обычному размеру" : "Развернуть на весь экран";
+      btn.setAttribute("aria-label", btn.title);
+    }
+  }
+
+  const toggle = document.getElementById(toggleId);
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      const modal = modalOf();
+      save({ maximized: !modal.classList.contains(maximizedClass) });
+      apply();
+    });
+  }
+
+  // Размер, оставленный ручкой, запоминаем по окончании перетаскивания.
+  // ResizeObserver, а не событие мыши: у CSS-resize своего события нет, а
+  // наблюдатель ловит и клавиатурное изменение размера окна браузером.
+  if (window.ResizeObserver) {
+    const наблюдатель = new ResizeObserver((записи) => {
+      const modal = modalOf();
+      if (!modal || !backdrop.classList.contains("open")) return;
+      if (modal.classList.contains(maximizedClass)) return;
+      const { width, height } = записи[0].contentRect;
+      save({ width: Math.round(width), height: Math.round(height) });
+    });
+    const m = modalOf();
+    if (m) наблюдатель.observe(m);
+  }
+
+  return apply;
 }
 
-function saveReportSize(patch) {
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(REPORT_SIZE_KEY) || "{}") || {}; } catch (e) { /* приватный режим */ }
-  try {
-    localStorage.setItem(REPORT_SIZE_KEY, JSON.stringify({ ...saved, ...patch }));
-  } catch (e) { /* приватный режим — размер просто не запомнится */ }
-}
-
-document.getElementById("report-size-toggle").addEventListener("click", () => {
-  const modal = reportsModal();
-  const станет = !modal.classList.contains("report-maximized");
-  saveReportSize({ maximized: станет });
-  applyReportSize();
+// Помнится за компьютером, а не за пользователем: это свойство ЭКРАНА, с
+// которого смотрят, — на ноутбуке и на большом мониторе выбор разный, а
+// учётная запись одна и та же.
+const applyReportSize = setupResizableModal({
+  backdrop: reportsBackdrop,
+  storageKey: "zhbi_report_size",
+  toggleId: "report-size-toggle",
+  maximizedClass: "report-maximized",
 });
-
-// Размер, оставленный ручкой, запоминаем по окончании перетаскивания.
-// ResizeObserver, а не событие мыши: у CSS-resize своего события нет, а
-// наблюдатель ловит и клавиатурное изменение размера окна браузером.
-if (window.ResizeObserver) {
-  const наблюдатель = new ResizeObserver((записи) => {
-    const modal = reportsModal();
-    if (!modal || !reportsBackdrop.classList.contains("open")) return;
-    if (modal.classList.contains("report-maximized")) return;
-    const { width, height } = записи[0].contentRect;
-    saveReportSize({ width: Math.round(width), height: Math.round(height) });
-  });
-  const m = reportsModal();
-  if (m) наблюдатель.observe(m);
-}
 for (const id of ["mw-from", "mw-to", "mw-user"]) {
   document.getElementById(id).addEventListener("change", loadReport);
 }
@@ -19985,20 +20105,159 @@ function activityBoundToUtc(dateStr, endOfDay) {
 // у них нет автора.
 const ACTIVITY_SOURCE_LABELS = { client: "браузер", server: "сервер", system: "система" };
 
+// Колонки журнала и способ отбора по каждой (живой запрос 2026-08-20:
+// «добавь возможность фильтрации по любой колонке»). Ключ — имя колонки
+// таблицы activity_log, оно же имя параметра запроса: список ОДИН на
+// шапку, строку отбора и запрос, потому что три списка одних и тех же
+// колонок разъезжаются на первой же новой.
+//
+//   filter: "eq"   — выпадашка значениями, которые реально встретились
+//                    (их отдаёт сервер, см. GET /activity → values);
+//           "like" — подстрока;
+//           "num"  — точное число;
+//           "min"  — «не меньше» (длительность: ищут «что дольше 500 мс»);
+//           null   — отбора нет (время отбирается полями «С даты»/«По дату»
+//                    в шапке формы — там календарь, а не строка).
+const ACTIVITY_COLUMNS = [
+  { key: "at", label: "Время", filter: null },
+  { key: "category", label: "Категория", filter: "eq" },
+  { key: "source", label: "Источник", filter: "eq" },
+  { key: "user_name", label: "Пользователь", filter: "like" },
+  // «Выполнил администратор» — режим «Зайти под пользователем»
+  // (2026-08-05): «Пользователь» остаётся тем, ОТ ЧЬЕГО имени шла работа
+  // (там же, где видны последствия), а здесь виден тот, кто её на самом
+  // деле выполнил. Пусто у обычных действий.
+  { key: "impersonator_name", label: "Выполнил администратор", filter: "like" },
+  { key: "action", label: "Действие", filter: "eq" },
+  { key: "element_type", label: "Тип", filter: "eq" },
+  { key: "subtype", label: "Подтип", filter: "eq" },
+  { key: "mark", label: "Марка", filter: "like" },
+  { key: "entity_type", label: "Сущность", filter: "eq" },
+  { key: "entity_id", label: "№", filter: "num" },
+  { key: "old_value", label: "Было", filter: "like" },
+  { key: "new_value", label: "Стало", filter: "like" },
+  { key: "duration_ms", label: "Длительность, мс", filter: "min" },
+  { key: "request_id", label: "Операция", filter: "like" },
+  { key: "details", label: "Подробности", filter: "like" },
+];
+
+// Выбранные значения отбора: {колонка: значение}. Пустая строка = «любое».
+let activityFilters = {};
+// Наборы значений выпадашек и подписи — приходят с сервера на каждый
+// поиск: набор действий и категорий растёт по ходу работы, а зашитый в
+// клиент список означал бы «новое событие в фильтре не появится».
+let activityValues = {};
+let activityActionTitles = {};
+let activityCategoryTitles = {};
+let activityCategoryOrder = [];
+
+// Сентинел «не заполнено» — тот же, что в справочнике элементов: в журнале
+// пустых значений много (у системных событий нет ни пользователя, ни
+// изделия), и отобрать именно их — рабочий вопрос.
+const ACTIVITY_NONE = "__none__";
+
+function activityValueLabel(column, value) {
+  if (column === "category") return activityCategoryTitles[value] || value;
+  if (column === "source") return ACTIVITY_SOURCE_LABELS[value] || value;
+  if (column === "action") return activityActionTitles[value] || value;
+  return String(value);
+}
+
+// Подробности события — JSON произвольной формы (у ошибки там путь, код и
+// хвост трассировки). В ячейку идёт однострочная выжимка, полный текст —
+// в подсказке и по щелчку: ради трассировки колонку не расширишь, а без
+// неё разбирать ошибку не по чему.
+function activityDetailsText(raw) {
+  if (!raw) return "";
+  try {
+    const d = JSON.parse(raw);
+    return Object.entries(d)
+      .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
+      .join("; ");
+  } catch (e) {
+    return String(raw);
+  }
+}
+
 function activityRowHtml(r) {
-  const element = [r.element_type, r.subtype, r.mark].filter(Boolean).join(" / ");
   const label = v => (v && state.statusLabels[v]) || v || "";
-  return `<tr>
-    <td>${escapeHtml(activityTimeLocal(r.at))}</td>
-    <td>${ACTIVITY_SOURCE_LABELS[r.source] || r.source || ""}</td>
-    <td>${escapeHtml(r.user_name || "")}</td>
-    <td class="act-impersonated">${escapeHtml(r.impersonator_name || "")}</td>
-    <td>${escapeHtml(r.action)}</td>
-    <td>${escapeHtml(element)}${r.entity_id ? ` <span class="hint-text">#${r.entity_id}</span>` : ""}</td>
-    <td>${escapeHtml(label(r.old_value))}</td>
-    <td>${escapeHtml(label(r.new_value))}</td>
-    <td>${r.duration_ms === null || r.duration_ms === undefined ? "" : r.duration_ms}</td>
+  const подробности = activityDetailsText(r.details);
+  const ячейка = (текст, klass) =>
+    `<td${klass ? ` class="${klass}"` : ""}>${escapeHtml(текст)}</td>`;
+  return `<tr class="act-row act-cat-${escapeHtml(r.category || "other")}">
+    ${ячейка(activityTimeLocal(r.at))}
+    <td><span class="act-badge act-badge-${escapeHtml(r.category || "other")}">${
+      escapeHtml(activityCategoryTitles[r.category] || r.category || "")}</span></td>
+    ${ячейка(ACTIVITY_SOURCE_LABELS[r.source] || r.source || "")}
+    ${ячейка(r.user_name || "")}
+    ${ячейка(r.impersonator_name || "", "act-impersonated")}
+    <td title="${escapeHtml(r.action)}">${escapeHtml(activityActionTitles[r.action] || r.action)}</td>
+    ${ячейка(r.element_type || "")}
+    ${ячейка(r.subtype || "")}
+    ${ячейка(r.mark || "")}
+    ${ячейка(r.entity_type || "")}
+    ${ячейка(r.entity_id === null || r.entity_id === undefined ? "" : String(r.entity_id))}
+    ${ячейка(label(r.old_value))}
+    ${ячейка(label(r.new_value))}
+    ${ячейка(r.duration_ms === null || r.duration_ms === undefined ? "" : String(r.duration_ms))}
+    ${ячейка(r.request_id || "")}
+    <td class="act-details" title="${escapeHtml(подробности)}">${escapeHtml(подробности)}</td>
   </tr>`;
+}
+
+// Шапка таблицы — ДВЕ строки: заголовки и поля отбора под ними. Строится
+// кодом, а не разметкой: колонок шестнадцать, и держать их второй список
+// в index.html значило бы получить колонку без фильтра при первой правке.
+function renderActivityHead() {
+  const thead = document.getElementById("activity-thead");
+  const заголовки = ACTIVITY_COLUMNS
+    .map(c => `<th>${escapeHtml(c.label)}</th>`).join("");
+  const отбор = ACTIVITY_COLUMNS.map(col => {
+    const текущее = activityFilters[col.key] || "";
+    if (!col.filter) return "<td></td>";
+    if (col.filter === "eq") {
+      const пункты = [`<option value="">— любое —</option>`,
+                      `<option value="${ACTIVITY_NONE}"${текущее === ACTIVITY_NONE ? " selected" : ""}>Не заполнено</option>`]
+        .concat((activityValues[col.key] || []).map(v =>
+          `<option value="${escapeHtml(String(v))}"${String(v) === текущее ? " selected" : ""}>` +
+          `${escapeHtml(activityValueLabel(col.key, v))}</option>`)).join("");
+      return `<td><select data-act-filter="${col.key}">${пункты}</select></td>`;
+    }
+    const подсказка = col.filter === "min" ? "от" : col.filter === "num" ? "номер" : "часть значения";
+    return `<td><input type="text" data-act-text="${col.key}" placeholder="${подсказка}"
+      value="${escapeHtml(текущее)}"/></td>`;
+  }).join("");
+  thead.innerHTML = `<tr>${заголовки}</tr><tr class="act-filter-row">${отбор}</tr>`;
+  // Прилипшая строка отбора встаёт ровно под строкой заголовков, и её
+  // `top` — ЗАМЕРЕННАЯ высота первой строки, а не число в стилях: у
+  // справочника элементов такое число уже разъезжалось со шрифтом, и в
+  // зазор проглядывали уезжающие строки таблицы (живой репорт).
+  const высотаЗаголовков = thead.querySelector("tr:first-child").getBoundingClientRect().height;
+  thead.querySelectorAll("tr.act-filter-row td").forEach(td => {
+    td.style.top = `${Math.round(высотаЗаголовков)}px`;
+  });
+
+  thead.querySelectorAll("select[data-act-filter]").forEach(sel =>
+    sel.addEventListener("change", () => {
+      activityFilters[sel.getAttribute("data-act-filter")] = sel.value;
+      loadActivity();
+    }));
+  // С задержкой: перерисовка шапки после поиска забирала бы фокус на
+  // каждой букве, поэтому запрос уходит, когда человек перестал печатать.
+  let таймер = null;
+  thead.querySelectorAll("input[data-act-text]").forEach(input =>
+    input.addEventListener("input", () => {
+      clearTimeout(таймер);
+      const key = input.getAttribute("data-act-text");
+      const значение = input.value.trim();
+      таймер = setTimeout(() => {
+        activityFilters[key] = значение;
+        loadActivity().then(() => {
+          const снова = document.querySelector(`#activity-thead input[data-act-text="${key}"]`);
+          if (снова) { снова.focus(); снова.setSelectionRange(значение.length, значение.length); }
+        });
+      }, 400);
+    }));
 }
 
 async function loadActivity() {
@@ -20006,40 +20265,47 @@ async function loadActivity() {
   const from = document.getElementById("activity-from").value;
   const to = document.getElementById("activity-to").value;
   const userId = document.getElementById("activity-user").value;
-  const action = document.getElementById("activity-action").value;
   const text = document.getElementById("activity-text").value.trim();
   if (from) params.set("date_from", activityBoundToUtc(from, false));
   if (to) params.set("date_to", activityBoundToUtc(to, true));
   if (userId) params.set("user_id", userId);
-  if (action) params.set("action", action);
   if (text) params.set("text", text);
+  for (const [key, value] of Object.entries(activityFilters)) if (value) params.set(key, value);
   const summary = document.getElementById("activity-summary");
   summary.textContent = "Поиск…";
   try {
     const data = await api(`/activity?${params.toString()}`);
+    activityValues = data.values || {};
+    activityActionTitles = data.action_titles || {};
+    activityCategoryTitles = data.category_titles || {};
+    activityCategoryOrder = data.category_order || [];
+    // Категории показываем в порядке реестра (сначала ошибки и отказы —
+    // ради них журнал чаще всего и открывают), а не по алфавиту.
+    if (activityValues.category) {
+      activityValues.category = activityCategoryOrder
+        .filter(c => activityValues.category.includes(c));
+    }
+    renderActivityHead();
     document.getElementById("activity-tbody").innerHTML = data.rows.map(activityRowHtml).join("");
     summary.textContent = data.total > data.rows.length
       ? `Найдено ${data.total}, показаны первые ${data.rows.length}`
       : `Найдено ${data.total}`;
-    // Список действий заполняем ФАКТИЧЕСКИ встретившимися, а не хардкодом:
-    // набор действий будет расти, и забытый пункт в списке — это молча
-    // недоступный фильтр.
-    // Пересобираем список действий на КАЖДЫЙ поиск, сохраняя выбор: набор
-    // действий растёт по ходу работы, а прежнее условие (заполнять только
-    // если список пуст) означало, что новое действие не появится в фильтре
-    // до перезагрузки страницы — то есть выглядит как "оно не пишется".
-    const sel = document.getElementById("activity-action");
-    const keep = sel.value;
-    sel.innerHTML = ['<option value="">— любое —</option>']
-      .concat(data.actions.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`)).join("");
-    if (keep && data.actions.includes(keep)) sel.value = keep;
   } catch (e) {
     summary.textContent = "Ошибка: " + e.message;
   }
 }
 
+// Полный текст подробностей — по щелчку: в ячейке он обрезан одной
+// строкой, а у ошибки там путь, код и хвост трассировки, ради которых
+// журнал и открывают.
+document.getElementById("activity-tbody").addEventListener("click", (e) => {
+  const td = e.target.closest("td.act-details");
+  if (td) td.classList.toggle("act-details-open");
+});
+
 document.getElementById("menu-activity").addEventListener("click", async () => {
   activityBackdrop.classList.add("open");
+  applyActivitySize();
   const userSel = document.getElementById("activity-user");
   if (userSel.options.length === 0) {
     try {
@@ -20054,6 +20320,22 @@ document.getElementById("menu-activity").addEventListener("click", async () => {
 });
 document.getElementById("activity-close").addEventListener("click", () => activityBackdrop.classList.remove("open"));
 document.getElementById("activity-search").addEventListener("click", loadActivity);
+document.getElementById("activity-filters-reset").addEventListener("click", () => {
+  activityFilters = {};
+  document.getElementById("activity-text").value = "";
+  loadActivity();
+});
+
+// Размер формы журнала — той же механикой, что у отчётов (живой запрос
+// 2026-08-20: «добавь возможность изменения размеров окна журнала по
+// горизонтали и открытия на весь экран»). Шестнадцать колонок в 780 px не
+// помещаются в принципе, а сколько нужно — зависит от экрана.
+const applyActivitySize = setupResizableModal({
+  backdrop: activityBackdrop,
+  storageKey: "zhbi_activity_size",
+  toggleId: "activity-size-toggle",
+  maximizedClass: "activity-maximized",
+});
 
 document.getElementById("activity-cleanup").addEventListener("click", async () => {
   const before = document.getElementById("activity-cleanup-date").value;

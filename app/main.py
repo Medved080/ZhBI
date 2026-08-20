@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from shapely.geometry import Point, Polygon
@@ -28,6 +34,8 @@ from urllib.parse import quote
 from pydantic import BaseModel
 
 from app import activity
+from app import error_log
+from app.activity_actions import CATEGORY_ORDER, CATEGORY_TITLES
 from app.backups import (
     KIND_BEFORE_REBUILD, KIND_MANUAL, BackupError,
     adopt_legacy_backup, create_backup, delete_backup, disk_state, list_backups,
@@ -247,7 +255,44 @@ async def security_headers(request, call_next):
     # вкладка показывала старые).
     if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
+    # Неуспешный ответ — в журнал (2026-08-20). Здесь ловится ХВОСТ: то, до
+    # чего обработчики исключений ниже не доходят — отказ по размеру тела
+    # (его отдаёт посредник снаружи роутера), ответ, собранный роутом
+    # вручную. Уже записанное не дублируется: обработчик ставит на запрос
+    # отметку (app/error_log.note_response).
+    if response.status_code >= 400:
+        error_log.note_response(request, response.status_code)
     return response
+
+
+# Обработчики ошибок — ЕДИНСТВЕННОЕ место, где сбой попадает в журнал
+# (2026-08-20, живой запрос «добавь сквозную регистрацию ошибок»). Раньше
+# исключение уходило только трассировкой в лог uvicorn на сервере, а отказ
+# по правам не оставлял следа вовсе.
+#
+# Ответ пользователю остаётся ПРЕЖНИМ: каждый обработчик отдаёт ровно то,
+# что отдавал FastAPI по умолчанию (те же функции), и только попутно пишет
+# событие. Иначе тексты ошибок в интерфейсе разъехались бы с привычными.
+@app.exception_handler(StarletteHTTPException)
+async def _log_http_exception(request: Request, exc: StarletteHTTPException):
+    error_log.note_http_error(request, exc.status_code, str(exc.detail))
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_validation_error(request: Request, exc: RequestValidationError):
+    error_log.note_validation_error(request, str(exc.errors())[:500])
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def _log_unhandled_exception(request: Request, exc: Exception):
+    """Необработанное исключение. Трассировка в логе uvicorn остаётся:
+    ServerErrorMiddleware пробрасывает исключение дальше уже ПОСЛЕ вызова
+    этого обработчика, поэтому запись в журнал не отменяет привычного
+    разбора по логам сервера."""
+    error_log.note_exception(request, exc)
+    return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка сервера"})
 
 
 # Лимит тела запроса — САМЫМ ВНЕШНИМ слоем (add_middleware ставит
@@ -2166,13 +2211,50 @@ def post_activity(body: ClientEventsIn, user: sqlite3.Row = Depends(get_current_
     return {"accepted": len(events), "dropped": dropped}
 
 
+# ---------- Журнал действий: отбор по любой колонке ----------
+#
+# Реестр колонок, по которым журнал отбирается (живой запрос 2026-08-20:
+# «добавь возможность фильтрации по любой колонке журнала»). Ключ — имя
+# колонки, оно же имя параметра запроса и атрибут поля в шапке таблицы:
+# три списка одних и тех же колонок (сигнатура, SQL, разметка) разошлись бы
+# на первой же новой колонке, поэтому список ровно один — этот.
+#
+# Вид отбора:
+#   "eq"   — выпадашка с фактически встретившимися значениями (их немного:
+#            источник, категория, действие, тип сущности);
+#   "like" — подстрока (марка, значения «было/стало», ФИО, подробности:
+#            значений тысячи, выпадашка по ним бесполезна);
+#   "num"  — точное число (идентификатор сущности);
+#   "min"  — «не меньше» (длительность: ищут «что тормозило дольше 500 мс»).
+_ACT_FILTERS = {
+    "source": "eq",
+    "category": "eq",
+    "action": "eq",
+    "entity_type": "eq",
+    "element_type": "eq",
+    "subtype": "eq",
+    "user_name": "like",
+    "impersonator_name": "like",
+    "mark": "like",
+    "old_value": "like",
+    "new_value": "like",
+    "request_id": "like",
+    "details": "like",
+    "entity_id": "num",
+    "user_id": "num",
+    "duration_ms": "min",
+}
+# Колонки с выпадашкой — им сервер отдаёт наборы встретившихся значений.
+_ACT_DROPDOWNS = tuple(k for k, kind in _ACT_FILTERS.items() if kind == "eq")
+# Параметры запроса, которые отбором НЕ являются.
+_ACT_RESERVED = {"date_from", "date_to", "text", "limit", "offset"}
+
+
 @app.get("/activity")
 def search_activity(
+    request: Request,
     date_from: Optional[str] = Query(None, description="'ГГГГ-ММ-ДД' включительно"),
     date_to: Optional[str] = Query(None, description="'ГГГГ-ММ-ДД' включительно"),
-    user_id: Optional[int] = Query(None),
-    action: Optional[str] = Query(None),
-    entity_id: Optional[int] = Query(None),
     text: Optional[str] = Query(None, description="подстрока в марке/типе/подтипе/значениях"),
     limit: int = Query(200, le=2000),
     offset: int = Query(0, ge=0),
@@ -2181,9 +2263,20 @@ def search_activity(
     """Поиск по журналу. Только админу: журнал показывает, кто что делал, —
     это не то, что должно быть доступно всем ролям.
 
-    Отдаёт и общее число совпадений (для постраничного просмотра), и саму
-    страницу. Поиск по подстроке идёт по снимкам марки/типа/подтипа и по
-    значениям — то есть по тем полям, которые в журнале и ищут.
+    Отбор принимается ПРОИЗВОЛЬНЫМИ параметрами «колонка=значение» из
+    реестра `_ACT_FILTERS` (тот же приём, что у справочника элементов), а не
+    перечислением аргументов в сигнатуре: колонок в журнале полтора десятка,
+    и держать их список в трёх местах — верный способ получить колонку, по
+    которой «фильтр не работает». Неизвестный ключ — 400, а не молчаливый
+    пропуск: опечатка иначе выглядела бы точно так же.
+
+    Отдаёт страницу строк, общее число совпадений и наборы значений для
+    выпадашек. Наборы считаются по тому же отбору, что и строки, но БЕЗ
+    условия самой этой колонки — иначе, выбрав значение, пользователь терял
+    бы возможность переключиться на другое.
+
+    Свободный `text` остаётся сверх поколоночного отбора: он ищет сразу по
+    марке, типу, значениям и ФИО, когда неизвестно, в какой колонке искомое.
     """
     # activity_log.at хранится в UTC (app/activity._now), а пользователь
     # выбирает границы по своему местному календарю — поэтому клиент
@@ -2191,43 +2284,110 @@ def search_activity(
     # loadActivity, app.js). Строка без времени тоже принимается — тогда
     # трактуем её как раньше, целыми сутками: так продолжают работать
     # прямые вызовы эндпоинта (curl, внешние скрипты).
-    clauses, params = [], []
-    if date_from:
-        clauses.append("at >= ?")
-        params.append(date_from if " " in date_from else f"{date_from} 00:00:00.000")
-    if date_to:
-        clauses.append("at <= ?")
-        params.append(date_to if " " in date_to else f"{date_to} 23:59:59.999")
-    if user_id is not None:
-        clauses.append("user_id = ?")
-        params.append(user_id)
-    if action:
-        clauses.append("action = ?")
-        params.append(action)
-    if entity_id is not None:
-        clauses.append("entity_id = ?")
-        params.append(entity_id)
-    if text:
-        # Регистронезависимый поиск кириллицы — на стороне SQL LIKE его не
-        # получить (SQLite без ICU кириллицу не приводит, см. Docs/TZ.md),
-        # поэтому сравниваем как есть; для марок/типов этого достаточно —
-        # они и хранятся в том виде, в каком их ищут.
-        like = f"%{text}%"
-        clauses.append("(mark LIKE ? OR element_type LIKE ? OR subtype LIKE ? "
-                       "OR old_value LIKE ? OR new_value LIKE ? OR user_name LIKE ?)")
-        params.extend([like] * 6)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    filters = {}
+    for key, value in request.query_params.items():
+        if key in _ACT_RESERVED:
+            continue
+        if key not in _ACT_FILTERS:
+            raise HTTPException(status_code=400, detail=f"Отбор по «{key}» не поддерживается")
+        if value != "":
+            filters[key] = value
+
+    def clauses_for(skip: Optional[str] = None):
+        parts, params = [], []
+        if date_from:
+            parts.append("at >= ?")
+            params.append(date_from if " " in date_from else f"{date_from} 00:00:00.000")
+        if date_to:
+            parts.append("at <= ?")
+            params.append(date_to if " " in date_to else f"{date_to} 23:59:59.999")
+        for column, value in filters.items():
+            if column == skip:
+                continue
+            kind = _ACT_FILTERS[column]
+            if value == PLACEMENT_NONE_SENTINEL:
+                # «Не заполнено» — тот же сентинел, что в справочнике
+                # элементов: у журнала пустых значений много (у системных
+                # событий нет ни пользователя, ни изделия), и отобрать
+                # именно их — рабочий вопрос.
+                parts.append(f"({column} IS NULL OR {column} = '')")
+            elif kind == "eq":
+                parts.append(f"{column} = ?")
+                params.append(value)
+            elif kind == "num":
+                if not str(value).lstrip("-").isdigit():
+                    raise HTTPException(status_code=400,
+                                        detail=f"«{column}»: ожидается число, получено «{value}»")
+                parts.append(f"{column} = ?")
+                params.append(int(value))
+            elif kind == "min":
+                try:
+                    порог = float(str(value).replace(",", "."))
+                except ValueError:
+                    raise HTTPException(status_code=400,
+                                        detail=f"«{column}»: ожидается число, получено «{value}»")
+                parts.append(f"{column} >= ?")
+                params.append(порог)
+            else:
+                # Регистронезависимый поиск кириллицы SQLite без ICU не
+                # умеет (см. Docs/TZ.md), поэтому сравниваем как есть — для
+                # марок, кодов и значений этого достаточно: они хранятся в
+                # том виде, в каком их ищут.
+                parts.append(f"{column} LIKE ?")
+                params.append(f"%{value}%")
+        if text:
+            like = f"%{text}%"
+            parts.append("(mark LIKE ? OR element_type LIKE ? OR subtype LIKE ? "
+                         "OR old_value LIKE ? OR new_value LIKE ? OR user_name LIKE ?)")
+            params.extend([like] * 6)
+        return (f"WHERE {' AND '.join(parts)}" if parts else ""), params
 
     conn = get_connection()
     try:
+        where, params = clauses_for()
         total = conn.execute(f"SELECT COUNT(*) AS n FROM activity_log {where}", params).fetchone()["n"]
         rows = conn.execute(
             f"SELECT * FROM activity_log {where} ORDER BY at DESC, id DESC LIMIT ? OFFSET ?",
             params + [limit, offset],
         ).fetchall()
-        actions = [r["action"] for r in conn.execute(
-            "SELECT DISTINCT action FROM activity_log ORDER BY action").fetchall()]
-        return {"total": total, "rows": [dict(r) for r in rows], "actions": actions}
+
+        # Наборы значений для выпадашек — по ОТОБРАННЫМ строкам, одним
+        # проходом на все колонки сразу: отдельный DISTINCT на каждую — это
+        # шесть проходов по таблице, которая на одной массовой смене
+        # статуса вырастает на 9422 строки. Колонке, по которой отбор уже
+        # включён, набор считается своим запросом без её собственного
+        # условия — иначе, выбрав значение, из него нельзя было бы выйти.
+        наборы = {c: set() for c in _ACT_DROPDOWNS}
+        сводка = ", ".join(_ACT_DROPDOWNS)
+        for r in conn.execute(f"SELECT DISTINCT {сводка} FROM activity_log {where}", params):
+            for i, column in enumerate(_ACT_DROPDOWNS):
+                if r[i] not in (None, ""):
+                    наборы[column].add(r[i])
+        for column in filters:
+            if column not in наборы:
+                continue
+            sub_where, sub_params = clauses_for(skip=column)
+            наборы[column] = {
+                r[0] for r in conn.execute(
+                    f"SELECT DISTINCT {column} FROM activity_log {sub_where}", sub_params)
+                if r[0] not in (None, "")
+            }
+        values = {c: sorted(v, key=str) for c, v in наборы.items()}
+        # Список действий отдельным полем — прежний договор с клиентом
+        # (выпадашка «Действие» в шапке формы) остаётся рабочим.
+        actions = values["action"]
+        return {
+            "total": total,
+            "rows": [dict(r) for r in rows],
+            "actions": actions,
+            "values": values,
+            # Подписи — с сервера: реестр действий и категорий живёт в
+            # app/activity_actions.py, и вторая его копия в браузере
+            # разошлась бы с первой на очередном новом событии.
+            "action_titles": {a: action_title(a) for a in actions},
+            "category_titles": CATEGORY_TITLES,
+            "category_order": CATEGORY_ORDER,
+        }
     finally:
         conn.close()
 

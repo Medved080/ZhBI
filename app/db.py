@@ -203,6 +203,12 @@ _COLUMN_MIGRATIONS = [
     ("activity_log", "impersonator_user_id",
      "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
     ("activity_log", "impersonator_name", "TEXT"),
+    # Категория события (2026-08-20): «о чём это» — ошибка, отказ,
+    # безопасность, данные, настройка, обмен, система, просмотр. Значение
+    # проставляется при записи по коду действия (app/activity_actions.py);
+    # накопленным записям его раздаёт обработка обновления
+    # 2026-08-20-activity-categories, поэтому колонка допускает NULL.
+    ("activity_log", "category", "TEXT"),
     # Этаж — из суффикса "_этаж N" в конце имени слоя нового стандарта
     # (см. scripts/layer_naming.py, Docs/backlog.md, "Свойство 'этаж'").
     # NULL у элементов, чьи слои этот суффикс ещё не проставляют.
@@ -1297,6 +1303,19 @@ def _ensure_element_uid_index(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_activity_category_index(conn: sqlite3.Connection) -> None:
+    """Категория события в журнале (2026-08-20). «Покажи ошибки за неделю»
+    — самый частый повод открыть журнал после того, как в него стали
+    попадать сбои, и без индекса это полный проход по таблице, которая на
+    одной массовой смене статуса вырастает на 9422 строки.
+
+    Здесь, а не в schema.sql: колонка добавляется миграцией, а
+    executescript отрабатывает раньше — см. _ensure_element_uid_index."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_activity_category_at ON activity_log (category, at)"
+    )
+
+
 def _bootstrap_default_object(conn: sqlite3.Connection, changes: list) -> None:
     """Заводит первый Объект на уже накопленной БД и привязывает к нему
     АКТУАЛЬНЫЙ чертёж. Идемпотентно: срабатывает только когда таблица
@@ -2030,6 +2049,7 @@ def init_db() -> list:
         _ensure_contract_lines_index(conn)
         _ensure_elements_contract_line_index(conn)
         _ensure_element_uid_index(conn)
+        _ensure_activity_category_index(conn)
         _bootstrap_default_object(conn, changes)
         # Строго ПОСЛЕ бутстрапа объекта: проекту нужны объекты, которые он
         # подхватит, а бутстрап объекта заводит их на накопленной БД.
