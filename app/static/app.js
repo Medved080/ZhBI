@@ -7050,7 +7050,9 @@ function fieldRowsHtml(element, fields) {
 }
 
 function showPlaceholderCard() {
-  document.getElementById("card").innerHTML = '<div id="placeholder">Кликните по элементу на схеме</div>';
+  const card = document.getElementById("card");
+  card.innerHTML = '<div id="placeholder">Кликните по элементу на схеме</div>';
+  delete card.dataset.skeleton;   // каркас разрушен, следующая карточка собирается заново
 }
 
 // Контрагент/Договор/Спецификация — вычисляются из elements.contract_id
@@ -7276,191 +7278,257 @@ function renderAttachments(container, entityType, entityId, { canUpload = false,
     });
   };
 
-  api(`/attachments?entity_type=${encodeURIComponent(entityType)}&entity_id=${entityId}`)
+  // Возвращаем промис: вызывающему бывает нужно узнать, что список уже
+  // на месте (карточка изделия придерживает высоту блока, пока он грузится,
+  // — иначе панель дёргалась бы на каждом переходе, см. showCard).
+  return api(`/attachments?entity_type=${encodeURIComponent(entityType)}&entity_id=${entityId}`)
     .then(d => перерисовать(d.attachments))
     .catch(e => { container.innerHTML = `<div class="hint-text">не удалось загрузить список: ${escapeHtml(e.message)}</div>`; });
 }
 
-// ---------- панель не «прыгает» при переходе от изделия к изделию ----------
+// ---------- панель не перерисовывается целиком (2026-08-21) ----------
 //
-// Живой запрос 2026-08-21: карточку читают ПОДРЯД у отобранного десятка
-// изделий, и если нужны технические данные, то при каждом клике по схеме
-// приходилось заново прокручивать панель вниз и разворачивать группу.
-// Поэтому запоминаются две вещи:
-//   * раскрыт ли блок «Технические данные» — в localStorage: это
-//     настройка человека, а не состояние одной карточки, и переживает
-//     перезагрузку страницы, как закрепление панели;
-//   * прокрутка панели — на время сеанса: восстанавливается ТОЛЬКО при
-//     переходе с карточки на карточку. При первом открытии панель
-//     остаётся наверху, иначе изделие открывалось бы сразу с середины.
+// Живой репорт: при переходе от изделия к изделию правая панель
+// ВЗДРАГИВАЛА. Причина — карточка собиралась заново на каждый выбор:
+// innerHTML сносил всё дерево, панель на кадр становилась пустой и
+// уезжала наверх, а прокрутку приходилось возвращать вручную — то есть
+// уже после того, как рывок увидел глаз.
+//
+// Теперь каркас карточки строится ОДИН РАЗ, а на переходе меняются только
+// значения: подписи, таблицы блоков и содержимое трёх догружаемых
+// областей. Ничего не схлопывается — панель остаётся на месте и сама
+// держит и прокрутку, и раскрытие «Технических данных» (человек читает
+// карточки подряд у отобранного десятка изделий, и прокручивать панель
+// вниз на каждый клик по схеме было мучением — тот же живой запрос).
+//
+// Каркас пересобирается, только если сменились ПРАВА: от них зависят и
+// кнопки действий, и вид блока комментария. Признак собранного каркаса —
+// data-skeleton на #card; плейсхолдер («Кликните по элементу») его
+// снимает, потому что разрушает дерево.
+//
+// Раскрытие «Технических данных» дополнительно помнится в localStorage:
+// каркас переживает переход между изделиями, но не перезагрузку страницы,
+// а это настройка человека, как закрепление панели.
 const CARD_TECHNICAL_OPEN_KEY = "card-technical-open";
 
 function cardTechnicalOpen() {
   return localStorage.getItem(CARD_TECHNICAL_OPEN_KEY) === "1";
 }
 
-async function showCard(element) {
-  const card = document.getElementById("card");
-  const sidebar = document.getElementById("sidebar");
-  // Карточка уже показана — значит переход С изделия НА изделие, и
-  // прокрутку надо сохранить. Плейсхолдер («Кликните по элементу»)
-  // за карточку не считается.
-  const прежняяПрокрутка = (sidebar && !card.querySelector("#placeholder")) ? sidebar.scrollTop : null;
-  const canEdit = can("status", "write");
-  const technicalHtml = TECHNICAL_FIELD_GROUPS.map(g => `
-    <div class="card-block"><h4>${g.title}</h4><table>${fieldRowsHtml(element, g.fields)}</table></div>
-  `).join("");
-  const hasZoneData = element.zone_zakhvatka_status || element.zone_crane_status || element.zone_stance_status;
-  const zonesBlockHtml = hasZoneData ? `
-    <div class="card-block"><h4>Зоны</h4><table>
-      <tr><td class="k">Захватка</td><td>${zoneBindingHtml(element, "zone_zakhvatka_id", "zone_zakhvatka_status", "Захватка")}</td></tr>
-      <tr><td class="k">Кран</td><td>${zoneBindingHtml(element, "zone_crane_id", "zone_crane_status", "Кран")}</td></tr>
-      <tr><td class="k">Стоянка</td><td>${zoneBindingHtml(element, "zone_stance_id", "zone_stance_status", "Стоянка")}</td></tr>
-    </table></div>
-  ` : "";
-  // Основное — марка/тип/статус — сразу видно, без прокрутки мимо
-  // технических полей (см. TECHNICAL_FIELD_GROUPS выше). Кнопки действий
-  // тут же — раньше сменить статус/партию можно было только повторным
-  // правым кликом по фигуре на схеме, отдельно от чтения карточки (см.
-  // Docs/backlog.md, разбор UX) — теперь то же самое меню статуса и тот же
-  // диалог партии, но без возврата на схему.
-  // Тип элемента — тем же шрифтом/начертанием, что и марка (см.
-  // Docs/backlog.md, разбор UX) — раньше был мелким серым служебным
-  // текстом рядом с крупной жирной маркой, хотя тип для бригадира не
-  // менее важен для идентификации элемента на схеме, чем сама марка.
-  // Подтип остаётся мелким/приглушённым — это уточняющая деталь, не
-  // основной идентификатор.
-  const typeSubtypeHtml = element.subtype
-    ? `${escapeHtml(element.element_type)} <span class="card-subtype">· ${escapeHtml(element.subtype)}</span>`
-    : escapeHtml(element.element_type);
-  card.innerHTML = `
+// Изделие, которое сейчас в карточке. Обработчики каркаса живут дольше
+// одной карточки и обязаны брать изделие ОТСЮДА, а не из замыкания, иначе
+// кнопка «Изменить статус…» открывала бы меню на изделии, которое
+// показывали пять кликов назад.
+let cardElement = null;
+
+function cardSkeletonHtml(canEdit) {
+  return `
     <div class="card-block card-primary">
       <div class="card-primary-row">
-        <div class="card-primary-type">${typeSubtypeHtml}</div>
-        <div class="card-primary-mark">${escapeHtml(element.mark || "—")}</div>
+        <div class="card-primary-type" id="card-type"></div>
+        <div class="card-primary-mark" id="card-mark"></div>
       </div>
       <div class="card-status-row">
-        <span class="swatch" style="background:${colorFor(element.current_status)}"></span>
-        <span class="card-status-label">${escapeHtml(state.statusLabels[element.current_status] || element.current_status)}</span>
+        <span class="swatch" id="card-status-swatch"></span>
+        <span class="card-status-label" id="card-status-label"></span>
       </div>
       ${canEdit ? `
         <div class="card-actions">
           <button type="button" class="btn btn-sm btn-secondary" id="card-change-status-btn">Изменить статус…</button>
-          <button type="button" class="btn btn-sm btn-secondary" id="card-planned-date-btn">${element.planned_delivery_date ? "Изменить плановую дату…" : "Задать плановую дату…"}</button>
+          <button type="button" class="btn btn-sm btn-secondary" id="card-planned-date-btn"></button>
         </div>
       ` : ""}
     </div>
-    <div class="card-block"><h4>Контрактация${
-      // Карандаш — только когда контракт уже есть: без него в блоке и так
-      // кнопка «Контракт не назначен — выбрать». Условие то же, что у неё:
-      // на «Запланирован» контракта не бывает (инвариант сервера).
-      element.contract_id && element.current_status !== "planned" && canEdit
-        ? `<button type="button" class="card-block-edit" data-pick-contract="${element.id}"
-             title="Изменить контракт…">✎</button>` : ""
-    }</h4>
-      ${contractDetailsHtml(element)}
-    </div>
+    <div class="card-block" id="card-contract-block"></div>
     <div class="card-block"><h4>Даты поставки</h4>
-      ${deliveryDatesHtml(element)}
+      <div id="card-dates"></div>
     </div>
-    ${zonesBlockHtml}
+    <div id="card-zones-slot"></div>
     <div class="card-block"><h4>Комментарий</h4>
       ${canEdit
         ? `<textarea id="card-comment" class="card-comment" rows="2"
-             placeholder="произвольная заметка: «отбит угол при разгрузке», «ждём согласование замены»">${escapeHtml(element.comment || "")}</textarea>
+             placeholder="произвольная заметка: «отбит угол при разгрузке», «ждём согласование замены»"></textarea>
            <div class="card-comment-foot">
              <span class="hint-text" id="card-comment-status"></span>
              <button type="button" class="btn btn-sm btn-secondary" id="card-comment-save">Сохранить</button>
            </div>`
-        : `<div class="card-comment-ro">${element.comment ? escapeHtml(element.comment) : '<span class="hint-text">нет</span>'}</div>`}
+        : `<div class="card-comment-ro" id="card-comment-ro"></div>`}
     </div>
     <div class="card-block"><h4>Вложения</h4>
       <div id="card-attachments"></div>
     </div>
     <details class="card-technical"${cardTechnicalOpen() ? " open" : ""}>
       <summary>Технические данные</summary>
-      ${technicalHtml}
+      <div id="card-technical-body"></div>
     </details>
-    <h3 style="margin-bottom:4px;">История статусов</h3><div id="history-box">Загрузка…</div>
+    <h3 style="margin-bottom:4px;">История статусов</h3><div id="history-box"></div>
     <!-- История ИЗМЕНЕНИЙ (журнал действий). Грузится СРАЗУ вместе с
          карточкой (живой запрос 2026-08-03: «точно вывод занимает ощутимое
          время?»). Замер на журнале в 377 тыс. записей: 0,4 мс — столько же,
          сколько сама карточка (0,3 мс), которая грузится всегда. Кнопка
          «Показать» была лишним кликом на каждое изделие. -->
     <h3 style="margin-bottom:4px;">История изменений</h3>
-    <div id="element-activity-box">
-      <div class="loading-inline"><span class="spinner"></span>Читаю журнал…</div>
-    </div>
+    <div id="element-activity-box"></div>
   `;
+}
 
-  const технические = card.querySelector(".card-technical");
+// Обработчики каркаса — вешаются ОДИН РАЗ на сборку, изделие берут из
+// cardElement. (Кнопка выбора контракта сюда не входит: она делегирована
+// на #card целиком, см. обработчик [data-pick-contract].)
+function attachCardHandlers(canEdit) {
+  const технические = document.querySelector(".card-technical");
   if (технические) {
     технические.addEventListener("toggle", () => {
       localStorage.setItem(CARD_TECHNICAL_OPEN_KEY, технические.open ? "1" : "0");
     });
   }
-  if (прежняяПрокрутка !== null) {
-    // Дважды: сразу и следующим кадром. Вложения и история догружаются
-    // своими запросами и меняют высоту карточки уже после отрисовки —
-    // одного восстановления не хватало бы ровно на эту разницу.
-    sidebar.scrollTop = прежняяПрокрутка;
-    requestAnimationFrame(() => { sidebar.scrollTop = прежняяПрокрутка; });
+  if (!canEdit) return;
+
+  document.getElementById("card-change-status-btn").addEventListener("click", (e) => {
+    if (!cardElement) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    openCtxMenu(cardElement, rect.left, rect.bottom + 4);
+  });
+  document.getElementById("card-planned-date-btn").addEventListener("click", () => {
+    if (cardElement) openPlannedDateDialog(cardElement);
+  });
+
+  const кнопка = document.getElementById("card-comment-save");
+  const поле = document.getElementById("card-comment");
+  const статус = document.getElementById("card-comment-status");
+  кнопка.addEventListener("click", async () => {
+    const элемент = cardElement;
+    if (!элемент) return;
+    кнопка.disabled = true;
+    статус.textContent = "Сохранение…";
+    try {
+      const d = await api(`/elements/${элемент.id}/comment`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comment: поле.value }),
+      });
+      // Обновляем и объект в памяти, и строку в state.byId: карточку
+      // открывают повторно из уже загруженного набора, и без этого
+      // сохранённый текст пропал бы при следующем клике по элементу.
+      элемент.comment = d.comment;
+      const вПамяти = state.byId.get(элемент.id);
+      if (вПамяти) вПамяти.comment = d.comment;
+      if (cardElement === элемент) {
+        поле.value = d.comment || "";
+        статус.textContent = "Сохранено.";
+      }
+    } catch (e) {
+      статус.textContent = "Не удалось: " + e.message;
+    } finally {
+      кнопка.disabled = false;
+    }
+  });
+}
+
+// Придержать высоту блока, пока в него грузится новое содержимое: иначе
+// на время запроса блок схлопывается до строчки «Загрузка…», и всё, что
+// ниже, прыгает вверх — тот самый рывок панели.
+function holdCardBoxHeight(box) {
+  const высота = box.offsetHeight;
+  if (высота) box.style.minHeight = `${высота}px`;
+  return () => { box.style.minHeight = ""; };
+}
+
+async function showCard(element) {
+  const card = document.getElementById("card");
+  const canEdit = can("status", "write");
+  const каркас = canEdit ? "edit" : "read";
+  if (card.dataset.skeleton !== каркас) {
+    card.innerHTML = cardSkeletonHtml(canEdit);
+    card.dataset.skeleton = каркас;
+    attachCardHandlers(canEdit);
   }
+  cardElement = element;
+
+  // Тип элемента — тем же шрифтом/начертанием, что и марка (см.
+  // Docs/backlog.md, разбор UX) — раньше был мелким серым служебным
+  // текстом рядом с крупной жирной маркой, хотя тип для бригадира не
+  // менее важен для идентификации элемента на схеме, чем сама марка.
+  // Подтип остаётся мелким/приглушённым — это уточняющая деталь, не
+  // основной идентификатор.
+  document.getElementById("card-type").innerHTML = element.subtype
+    ? `${escapeHtml(element.element_type)} <span class="card-subtype">· ${escapeHtml(element.subtype)}</span>`
+    : escapeHtml(element.element_type);
+  document.getElementById("card-mark").textContent = element.mark || "—";
+  document.getElementById("card-status-swatch").style.background = colorFor(element.current_status);
+  document.getElementById("card-status-label").textContent =
+    state.statusLabels[element.current_status] || element.current_status;
+  if (canEdit) {
+    document.getElementById("card-planned-date-btn").textContent =
+      element.planned_delivery_date ? "Изменить плановую дату…" : "Задать плановую дату…";
+  }
+
+  // Карандаш — только когда контракт уже есть: без него в блоке и так
+  // кнопка «Контракт не назначен — выбрать». Условие то же, что у неё:
+  // на «Запланирован» контракта не бывает (инвариант сервера).
+  document.getElementById("card-contract-block").innerHTML = `
+    <h4>Контрактация${
+      element.contract_id && element.current_status !== "planned" && canEdit
+        ? `<button type="button" class="card-block-edit" data-pick-contract="${element.id}"
+             title="Изменить контракт…">✎</button>` : ""
+    }</h4>
+    ${contractDetailsHtml(element)}`;
+  // Высота блока дат придерживается до прихода ПРОГНОЗА: он приезжает
+  // отдельным запросом и живёт внутри этой же таблицы (#card-forecast),
+  // так что на переходе строки прогноза сначала исчезают и возвращаются
+  // только с ответом. Без придержки панель проседала на их высоту
+  // (замер: 115 px на три кадра — тот самый рывок).
+  const блокДат = document.getElementById("card-dates");
+  const отпуститьДаты = holdCardBoxHeight(блокДат);
+  блокДат.innerHTML = deliveryDatesHtml(element);
+
+  // У элементов старого стандарта имён слоёв зон нет вовсе — блок не
+  // показывается (гнездо остаётся пустым, каркас от этого не меняется).
+  const hasZoneData = element.zone_zakhvatka_status || element.zone_crane_status || element.zone_stance_status;
+  document.getElementById("card-zones-slot").innerHTML = hasZoneData ? `
+    <div class="card-block"><h4>Зоны</h4><table>
+      <tr><td class="k">Захватка</td><td>${zoneBindingHtml(element, "zone_zakhvatka_id", "zone_zakhvatka_status", "Захватка")}</td></tr>
+      <tr><td class="k">Кран</td><td>${zoneBindingHtml(element, "zone_crane_id", "zone_crane_status", "Кран")}</td></tr>
+      <tr><td class="k">Стоянка</td><td>${zoneBindingHtml(element, "zone_stance_id", "zone_stance_status", "Стоянка")}</td></tr>
+    </table></div>` : "";
+
+  if (canEdit) {
+    document.getElementById("card-comment").value = element.comment || "";
+    document.getElementById("card-comment-status").textContent = "";
+  } else {
+    document.getElementById("card-comment-ro").innerHTML =
+      element.comment ? escapeHtml(element.comment) : '<span class="hint-text">нет</span>';
+  }
+
+  document.getElementById("card-technical-body").innerHTML = TECHNICAL_FIELD_GROUPS.map(g => `
+    <div class="card-block"><h4>${g.title}</h4><table>${fieldRowsHtml(element, g.fields)}</table></div>
+  `).join("");
 
   // Вложения — своим запросом, ПОСЛЕ отрисовки карточки: список файлов не
   // должен задерживать показ марки и статуса, ради которых карточку и
-  // открывают.
-  renderAttachments(document.getElementById("card-attachments"), "element", element.id,
-                    { canUpload: can("attachments", "write"), canDelete: can("attachments_delete", "write") });
-
-  if (canEdit) {
-    const кнопка = document.getElementById("card-comment-save");
-    const поле = document.getElementById("card-comment");
-    const статус = document.getElementById("card-comment-status");
-    кнопка.addEventListener("click", async () => {
-      кнопка.disabled = true;
-      статус.textContent = "Сохранение…";
-      try {
-        const d = await api(`/elements/${element.id}/comment`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ comment: поле.value }),
-        });
-        // Обновляем и объект в памяти, и строку в state.byId: карточку
-        // открывают повторно из уже загруженного набора, и без этого
-        // сохранённый текст пропал бы при следующем клике по элементу.
-        element.comment = d.comment;
-        const вПамяти = state.byId.get(element.id);
-        if (вПамяти) вПамяти.comment = d.comment;
-        поле.value = d.comment || "";
-        статус.textContent = "Сохранено.";
-      } catch (e) {
-        статус.textContent = "Не удалось: " + e.message;
-      } finally {
-        кнопка.disabled = false;
-      }
-    });
-  }
+  // открывают. Высота блока придерживается, пока список едет.
+  const вложения = document.getElementById("card-attachments");
+  const отпуститьВложения = holdCardBoxHeight(вложения);
+  renderAttachments(вложения, "element", element.id,
+                    { canUpload: can("attachments", "write"), canDelete: can("attachments_delete", "write") })
+    .finally(() => { if (cardElement === element) отпуститьВложения(); });
 
   // Вместе с вложениями и историей статусов — тремя параллельными
   // запросами, ни один из которых не задерживает показ марки и статуса.
-  loadElementActivity(element.id);
+  const журнал = document.getElementById("element-activity-box");
+  const отпуститьЖурнал = holdCardBoxHeight(журнал);
+  журнал.innerHTML = `<div class="loading-inline"><span class="spinner"></span>Читаю журнал…</div>`;
+  loadElementActivity(element.id).finally(() => { if (cardElement === element) отпуститьЖурнал(); });
 
-  if (canEdit) {
-    document.getElementById("card-change-status-btn").addEventListener("click", (e) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      openCtxMenu(element, rect.left, rect.bottom + 4);
-    });
-    document.getElementById("card-planned-date-btn").addEventListener("click", () => {
-      openPlannedDateDialog(element);
-    });
-  }
-
+  const historyBox = document.getElementById("history-box");
+  const отпуститьИсторию = holdCardBoxHeight(historyBox);
+  historyBox.textContent = "Загрузка…";
   try {
     const detail = await api(`/elements/${element.id}`);
+    // Пока шёл запрос, карточку могли переоткрыть на другом изделии —
+    // придержки снимет уже её вызов, свои трогать нельзя.
+    if (cardElement !== element) return;
     const forecastBox = document.getElementById("card-forecast");
     if (forecastBox) forecastBox.innerHTML = forecastRowsHtml(detail.schedule_forecast);
-    const historyBox = document.getElementById("history-box");
-    if (!historyBox) return;
     if (!detail.history.length) { historyBox.textContent = "нет записей"; return; }
     const rowsHtml = detail.history.slice().reverse().map(h => `
       <tr>
@@ -7487,8 +7555,9 @@ async function showCard(element) {
       });
     }
   } catch (e) {
-    const historyBox = document.getElementById("history-box");
-    if (historyBox) historyBox.textContent = "не удалось загрузить историю";
+    if (cardElement === element) historyBox.textContent = "не удалось загрузить историю";
+  } finally {
+    if (cardElement === element) { отпуститьИсторию(); отпуститьДаты(); }
   }
 }
 
@@ -22279,14 +22348,16 @@ const COLUMN_BEAM_END_MATCH_TOLERANCE_MM = 1000;
 // через клетку и потеряется.
 const COLUMN_GRID_CELL_MM = 3000;
 
-// Запас на габарит при проверке «перекрытие над этой точкой». У ПЛИТЫ
-// он большой: центр крайней колонны ряда лежит на грани плиты, а не
-// внутри неё (на реальных данных — 200 мм снаружи), и точное попадание
-// в контур такую колонну теряло бы. У РИГЕЛЯ — маленький: ригель
-// опирается на колонну, то есть накрывает её центр (на тех же данных
-// 270 мм), а проходящий в метре — уже чужой, и метровым запасом
-// колонна цеплялась бы за ригели соседней надстройки.
-const DECK_OVER_COLUMN_TOLERANCE_MM = 1000;
+// Запас на габарит при проверке «перекрытие над этой точкой». Центр
+// крайней колонны ряда лежит НЕ внутри плиты, а чуть снаружи: плита
+// кончается по грани ригеля, под которым стоит колонна (на реальных
+// данных — 200 мм, у ригеля 270 мм). Точное попадание в контур такую
+// колонну теряло бы, поэтому запас есть, но он МАЛЕНЬКИЙ — порядка
+// половины сечения колонны. Метровый запас, стоявший здесь сначала,
+// цеплял чужое: колонны +27720 в 900 мм от края кровли машинного
+// отделения +39300 «несли» её и торчали на четыре метра над своей
+// крышей (живой репорт 2026-08-21, изделия 39597 и 39598).
+const DECK_OVER_COLUMN_TOLERANCE_MM = 400;
 const BEAM_OVER_COLUMN_TOLERANCE_MM = 500;
 
 // Насколько ниже типичного должен оказаться стык яруса, чтобы ярус
