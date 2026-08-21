@@ -975,6 +975,37 @@
   .gantt-bar { position: absolute; height: 7px; border-radius: 2px; min-width: 2px; }
   .gantt-bar.plan { top: 3px; background: var(--gantt-plan); }
   .gantt-bar.fc { top: 12px; background: var(--gantt-fc); }
+  /* Процент фактически смонтированного — у конца полосы, а не внутри неё:
+     полоса высотой 7 px текст не вмещает, а растить строку ради подписи,
+     которая есть у меньшинства строк, значило бы растянуть всю диаграмму. */
+  .gantt-pct {
+    position: absolute; font-size: 10px; line-height: 11px; font-weight: 600;
+    color: var(--color-text); white-space: nowrap; pointer-events: none;
+  }
+  .gantt-pct.plan { top: 1px; }
+  .gantt-pct.fc { top: 10px; }
+  .gantt-pct.left { transform: translateX(-100%); }
+
+  /* -------- полноэкранный режим формы графика (2026-08-22) --------
+     Класс вешается и при настоящем полном экране (Fullscreen API), и когда
+     тот недоступен — тогда форма просто занимает всё окно. Оформление у обоих
+     случаев одно, поэтому и класс один. */
+  #schedule-backdrop.full { padding: 0; background: var(--color-surface); }
+  #schedule-backdrop.full .modal {
+    width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh;
+    border-radius: 0; display: flex; flex-direction: column;
+  }
+  /* Панель закладки тянется на всю оставшуюся высоту, а внутри неё тянется
+     сама диаграмма. `min-height: 0` обязателен: без него flex-элемент не
+     сжимается ниже своего содержимого, и вместо прокрутки внутри диаграммы
+     форма вылезала бы за экран. */
+  #schedule-backdrop.full .sched-panel {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  }
+  #schedule-backdrop.full .gantt-box { max-height: none; flex: 1 1 auto; min-height: 0; }
+  #schedule-backdrop.full #schedule-versions-list,
+  #schedule-backdrop.full #schedule-kinds-box,
+  #schedule-backdrop.full #schedule-flow-box { max-height: none; }
 
   /* -------- диалог удаления записи справочника -------- */
   /* ВЫШЕ остальных модальных окон (z-index у них 100): удаление всегда
@@ -6256,6 +6287,7 @@
         <span style="margin-left:auto; display:flex; gap:6px; align-items:center">
           <button class="btn btn-sm btn-secondary" id="gantt-zoom-out" title="Мельче">−</button>
           <button class="btn btn-sm btn-secondary" id="gantt-zoom-in" title="Крупнее">+</button>
+          <button class="btn btn-sm btn-secondary" id="gantt-full">Во весь экран</button>
         </span>
       </div>
       <div id="gantt-box" class="gantt-box"></div>

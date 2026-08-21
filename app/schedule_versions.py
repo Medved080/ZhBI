@@ -330,6 +330,7 @@ def _gantt_span(node: dict, ps, pe, fs, fe) -> None:
 def gantt_tree(conn: sqlite3.Connection, object_id: int,
                version_id: Optional[int] = None) -> dict:
     """Дерево узлов группировки с плановыми и прогнозными сроками."""
+    from app.models import Status
     from app.reports import natural_key
     from app.schedule_calc import _flow, _work_kinds
 
@@ -337,7 +338,7 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
     rows = conn.execute(
         """
         SELECT zc.name AS crane, zs.name AS stance, e.floor AS floor,
-               e.element_type AS etype, e.subtype AS subtype,
+               e.element_type AS etype, e.subtype AS subtype, e.current_status AS st,
                e.project_smr_start_date AS ps, e.project_delivery_date AS pe,
                d.smr_start_date AS fs, d.smr_end_date AS fe
         FROM elements e
@@ -354,7 +355,7 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
     ХВОСТ = 10 ** 6                         # то, чему порядок не задан, — в конец
 
     def новый(label: str, level: str, sort) -> dict:
-        return {"label": label, "level": level, "sort": sort, "quantity": 0,
+        return {"label": label, "level": level, "sort": sort, "quantity": 0, "installed": 0,
                 "plan_start": None, "plan_end": None,
                 "forecast_start": None, "forecast_end": None, "children": {}}
 
@@ -377,6 +378,7 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
             # читается как потерянные данные (та же беда, что у кривой
             # прогноза в «Динамике», см. forecast_gap).
             без_прогноза += 1
+        смонтировано = 1 if r["st"] == Status.INSTALLED.value else 0
         кран = r["crane"] or GANTT_NO_CRANE
         стоянка = r["stance"] or GANTT_NO_STANCE
         этаж = r["floor"]
@@ -409,9 +411,11 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
             if sort < узел["sort"]:
                 узел["sort"] = sort
             узел["quantity"] += 1
+            узел["installed"] += смонтировано
             _gantt_span(узел, r["ps"], r["pe"], r["fs"], r["fe"])
         _gantt_span(корень, r["ps"], r["pe"], r["fs"], r["fe"])
         корень["quantity"] += 1
+        корень["installed"] += смонтировано
 
     счётчик = [0]
 
@@ -423,6 +427,13 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
             готовые.append({
                 "id": счётчик[0], "label": д["label"], "level": д["level"],
                 "quantity": д["quantity"],
+                # Доля смонтированного — по изделиям САМОГО узла (у родителя в
+                # неё входят изделия всех его детей). Округление до целых, но
+                # ноль показывается, только когда не смонтировано ничего:
+                # «0 %» при одном смонтированном изделии из тысячи — не то же
+                # самое, что «не начинали», а на диаграмме читалось бы так.
+                "installed": д["installed"],
+                "fact_pct": round(100 * д["installed"] / д["quantity"]) if д["quantity"] else 0,
                 "plan_start": д["plan_start"], "plan_end": д["plan_end"],
                 "forecast_start": д["forecast_start"], "forecast_end": д["forecast_end"],
                 "deviation_start": _days_between(д["plan_start"], д["forecast_start"]),
@@ -443,6 +454,7 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
         "loaded_at": v["loaded_at"] if v else None,
         "nodes": узлы,
         "elements": корень["quantity"],
+        "installed": корень["installed"],
         "undated": без_дат,
         "no_forecast": без_прогноза,
         "min_date": min(даты)[:10] if даты else None,

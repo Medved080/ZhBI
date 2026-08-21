@@ -25552,8 +25552,13 @@ document.getElementById("menu-schedule").addEventListener("click", async () => {
   await loadScheduleVersions();
   await Promise.all([loadScheduleGantt(), loadScheduleInputs()]);
 });
-document.getElementById("schedule-close").addEventListener("click",
-  () => scheduleBackdrop.classList.remove("open"));
+document.getElementById("schedule-close").addEventListener("click", () => {
+  // Уйти из полного экрана вместе с формой: иначе она закроется, а браузер
+  // останется развёрнутым поверх схемы, на которую человек и возвращается.
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  scheduleBackdrop.classList.remove("full", "open");
+  document.getElementById("gantt-full").textContent = "Во весь экран";
+});
 
 function switchScheduleTab(name) {
   document.querySelectorAll("#schedule-tabs .tab-btn").forEach(b =>
@@ -25831,6 +25836,7 @@ document.getElementById("schedule-calc-run").addEventListener("click", async () 
 // по алфавиту на клиенте значило бы показать не «последовательность этапов»,
 // а список.
 const GANTT_NAME_W = 340;   // ширина закреплённой колонки названий, px
+const GANTT_PCT_W = 34;     // запас под подпись процента, px (оценка «100 %»)
 const GANTT_ROW_H = 22;
 const GANTT_MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
                       "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -25948,12 +25954,28 @@ function ganttDevCell(n) {
   return `<span class="dev ${класс}">${текст}</span>`;
 }
 
+// Процент фактически смонтированного — подписью у полосы (2026-08-22, просьба
+// пользователя). Только когда он не ноль: у большинства строк работа ещё не
+// начиналась, и «0 %» в каждой из полутора тысяч строк — шум, за которым не
+// видно тех, где монтаж идёт.
+//
+// Округление до целых даёт ноль там, где смонтировано одно изделие из тысячи.
+// Такая строка пишется «<1 %»: это НЕ то же самое, что «не начинали», и
+// показывать её нулём значило бы соврать ровно про те строки, ради которых
+// подпись и заводится.
+function ganttFactLabel(n) {
+  if (!n.installed) return "";
+  return n.fact_pct >= 1 ? `${n.fact_pct} %` : "<1 %";
+}
+
 function ganttTitle(n) {
   const срок = (a, b) => (a || b)
     ? `${formatDateRu(a) || "?"} — ${formatDateRu(b) || "?"}` : "нет дат";
   const дн = (v) => v === null || v === undefined ? "нет" :
     (v > 0 ? `+${v}` : String(v)) + " " + plural(Math.abs(v), "день", "дня", "дней");
-  return `${n.label} · изделий ${n.quantity}\n`
+  const факт = n.installed
+    ? `, смонтировано ${n.installed} (${ganttFactLabel(n)})` : ", не смонтировано ничего";
+  return `${n.label} · изделий ${n.quantity}${факт}\n`
     + `План: ${срок(n.plan_start, n.plan_end)}\n`
     + `Прогноз: ${срок(n.forecast_start, n.forecast_end)}\n`
     + `Отклонение: начало ${дн(n.deviation_start)}, завершение ${дн(n.deviation_end)}`;
@@ -26045,6 +26067,7 @@ function renderGantt() {
     const треугольник = n.children.length
       ? `<button type="button" class="gantt-tw" data-gantt-toggle="${n.id}">${развёрнут ? "▾" : "▸"}</button>`
       : '<span class="gantt-tw"></span>';
+    let конецПлана = null;   // к чему привязать подпись процента
     const полоса = (класс, a, b) => {
       const начало = a || b, конец = b || a;
       if (!начало) return "";
@@ -26053,8 +26076,22 @@ function renderGantt() {
       // Полдня по масштабу, но не меньше двух пикселей: это по-прежнему
       // «одна точка на шкале», но точка нарисованная.
       const w = Math.max(2, X(конец) - x);
+      if (конецПлана === null) конецПлана = { x: x + w, класс };
       return `<div class="gantt-bar ${класс}" style="left:${x}px;width:${w}px"></div>`;
     };
+    const полосы = полоса("plan", n.plan_start, n.plan_end)
+      + полоса("fc", n.forecast_start, n.forecast_end);
+    // Подпись процента ставится у ПЛАНОВОЙ полосы (а её нет — у прогнозной):
+    // факт сравнивают с директивным сроком, и число должно стоять там же, где
+    // этот срок нарисован. У правого края сетки подпись разворачивается
+    // ВЛЕВО, за конец полосы, иначе она уезжала бы за пределы диаграммы.
+    const факт = ganttFactLabel(n);
+    const подпись = факт && конецПлана
+      ? `<div class="gantt-pct ${конецПлана.класс}`
+        + `${конецПлана.x + GANTT_PCT_W > trackW ? " left" : ""}" `
+        + `style="left:${конецПлана.x + (конецПлана.x + GANTT_PCT_W > trackW ? -3 : 4)}px">`
+        + `${факт}</div>`
+      : "";
     части.push(`<div class="gantt-row lvl-${n.level}" title="${escapeHtml(ganttTitle(n))}">`
       + `<div class="gantt-name" style="width:${GANTT_NAME_W}px;padding-left:${уровень * 14}px">`
       + треугольник
@@ -26062,8 +26099,7 @@ function renderGantt() {
       + `<span class="qty">${n.quantity}</span>`
       + ganttDevCell(n)
       + `</div><div class="gantt-track" style="width:${trackW}px">`
-      + полоса("plan", n.plan_start, n.plan_end)
-      + полоса("fc", n.forecast_start, n.forecast_end)
+      + полосы + подпись
       + "</div></div>");
   }
   части.push("</div>");
@@ -26141,3 +26177,37 @@ function ganttCurrentPxPerDay(box) {
 }
 document.getElementById("gantt-zoom-in").addEventListener("click", () => ganttZoom(1.6));
 document.getElementById("gantt-zoom-out").addEventListener("click", () => ganttZoom(1 / 1.6));
+
+// ---------------------------------------- полный экран (2026-08-22, просьба)
+// Дерево на полторы тысячи строк в форме высотой 58 % экрана показывает
+// два десятка из них. Настоящий полный экран (Fullscreen API) отдаёт ещё и
+// место под панелями браузера, а если он недоступен (политика встраивания,
+// отказ пользователя) — форма занимает всё окно тем же классом. Оформление
+// одинаковое, поэтому и класс один.
+function ganttSetFull(включён) {
+  scheduleBackdrop.classList.toggle("full", включён);
+  document.getElementById("gantt-full").textContent = включён ? "Свернуть" : "Во весь экран";
+  // Масштаб «вписать в окно» и подпись процента у правого края считаются от
+  // ширины, а она только что изменилась.
+  if (ganttData) renderGantt();
+}
+
+document.getElementById("gantt-full").addEventListener("click", async () => {
+  if (scheduleBackdrop.classList.contains("full")) {
+    if (document.fullscreenElement) {
+      try { await document.exitFullscreen(); } catch (e) { /* уже вышли */ }
+    }
+    ganttSetFull(false);
+  } else {
+    try { await scheduleBackdrop.requestFullscreen(); } catch (e) { /* без API — во всё окно */ }
+    ganttSetFull(true);
+  }
+});
+
+// Из полного экрана выходят и мимо кнопки — клавишей Esc. Событие ловится
+// только когда форма в этом режиме: полноэкранным бывает и 3D-вид.
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement && scheduleBackdrop.classList.contains("full")) {
+    ganttSetFull(false);
+  }
+});
