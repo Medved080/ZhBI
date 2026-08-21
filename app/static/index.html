@@ -895,6 +895,7 @@
   }
   .gantt-legend i.plan { background: var(--gantt-plan); }
   .gantt-legend i.fc { background: var(--gantt-fc); }
+  .gantt-legend .hint-text { font-size: 11px; }
   /* Цвета — те же, что у пар «план — факт» на графике «Динамики»
      (DYN_COLORS в app.js): синий про план, оранжевый про то, как идёт на
      самом деле. Человек ходит между этими двумя экранами, и разная
@@ -972,9 +973,34 @@
   .gantt-tw { flex: 0 0 14px; text-align: center; color: var(--color-text-muted); font-size: 9px; }
   button.gantt-tw { border: 0; background: none; cursor: pointer; padding: 0; }
   .gantt-track { position: relative; flex: 0 0 auto; }
-  .gantt-bar { position: absolute; height: 7px; border-radius: 2px; min-width: 2px; }
-  .gantt-bar.plan { top: 3px; background: var(--gantt-plan); }
-  .gantt-bar.fc { top: 12px; background: var(--gantt-fc); }
+  /* Уровень группировки виден по САМОЙ полосе — толщиной и насыщенностью
+     (2026-08-22, просьба пользователя). Отступ подписи слева говорит об
+     уровне только в левой колонке, а глаз при этом на полосе, за сотни
+     пикселей от неё, и приходилось возвращаться к названию, чтобы понять,
+     итог это по крану или одна работа. Выше уровень — толще и темнее, как в
+     любом привычном графике работ, где сводные строки тяжелее подчинённых.
+
+     Полосы каждой строки стоят в двух дорожках с постоянными центрами
+     (6,5 px — план, 15,5 px — прогноз), поэтому при смене толщины ряды не
+     «прыгают» по вертикали: top пересчитан от центра, а не от края. */
+  .gantt-bar { position: absolute; border-radius: 2px; min-width: 2px; }
+  .gantt-bar.plan { background: var(--gantt-plan); }
+  .gantt-bar.fc { background: var(--gantt-fc); }
+  .gantt-row.lvl-crane .gantt-bar { height: 9px; }
+  .gantt-row.lvl-crane .gantt-bar.plan { top: 2px; background: #1F4E79; }
+  .gantt-row.lvl-crane .gantt-bar.fc { top: 11px; background: #9C3D0E; }
+  .gantt-row.lvl-stance .gantt-bar { height: 8px; }
+  .gantt-row.lvl-stance .gantt-bar.plan { top: 3px; background: #2E6DA8; }
+  .gantt-row.lvl-stance .gantt-bar.fc { top: 12px; background: #C2571A; }
+  .gantt-row.lvl-floor .gantt-bar { height: 7px; }
+  .gantt-row.lvl-floor .gantt-bar.plan { top: 3px; background: var(--gantt-plan); }
+  .gantt-row.lvl-floor .gantt-bar.fc { top: 12px; background: var(--gantt-fc); }
+  .gantt-row.lvl-type .gantt-bar { height: 6px; }
+  .gantt-row.lvl-type .gantt-bar.plan { top: 4px; background: #7BA9DA; }
+  .gantt-row.lvl-type .gantt-bar.fc { top: 13px; background: #F0956C; }
+  .gantt-row.lvl-subtype .gantt-bar { height: 5px; }
+  .gantt-row.lvl-subtype .gantt-bar.plan { top: 4px; background: #A6C6E9; }
+  .gantt-row.lvl-subtype .gantt-bar.fc { top: 13px; background: #F6BCA2; }
   /* Процент фактически смонтированного — у конца полосы, а не внутри неё:
      полоса высотой 7 px текст не вмещает, а растить строку ради подписи,
      которая есть у меньшинства строк, значило бы растянуть всю диаграмму. */
@@ -6279,6 +6305,7 @@
         <div class="gantt-legend">
           <span><i class="plan"></i>план (директивные даты)</span>
           <span><i class="fc"></i>прогноз</span>
+          <span class="hint-text">выше уровень — толще и темнее полоса</span>
         </div>
         <!-- Выбор глубины показа переехал в шапку колонки группировок
              (2026-08-22, просьба пользователя): уровни называются там же, где
