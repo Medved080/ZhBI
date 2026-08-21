@@ -236,6 +236,7 @@ FEATURES = [
     Feature("schedule", "Контрактация", "График СМР: версии, исходные данные, расчёт, визуализация",
             "Загрузка файла графика — отдельный раздел «Импорт графика MS Project».",
             ["GET /schedule-versions", "GET /schedule-versions/gantt",
+             "GET /schedule-versions/gantt.xlsx|.pdf",
              "DELETE /schedule-versions/{id}",
              "GET/PUT /schedule-calc/inputs", "POST /schedule-calc"],
             SCOPE_OBJECT, _от(CONTRACT, WRITE)),

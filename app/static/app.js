@@ -25835,7 +25835,14 @@ document.getElementById("schedule-calc-run").addEventListener("click", async () 
 // то есть та же последовательность, по которой раскладывает расчёт. Сортировать
 // по алфавиту на клиенте значило бы показать не «последовательность этапов»,
 // а список.
-const GANTT_NAME_W = 340;   // ширина закреплённой колонки названий, px
+// Ширина колонки названий: на старте подбирается ПО САМОЙ ДЛИННОЙ подписи,
+// чтобы ни одна не пряталась под многоточие (2026-08-22, живой репорт:
+// «названия некоторых группировок не помещаются»), и дальше двигается
+// границей вручную. Фиксированные 340 px не годились ни в одну сторону: на
+// «Плите перекрытия на отм. +39.200» с отступом четвёртого уровня их не
+// хватало, а на свёрнутом до кранов дереве они впустую съедали треть шкалы.
+const GANTT_NAME_MIN = 180;
+const GANTT_NAME_MAX_SHARE = 0.6;   // не больше этой доли ширины окна диаграммы
 const GANTT_PCT_W = 34;     // запас под подпись процента, px (оценка «100 %»)
 const GANTT_ROW_H = 22;
 const GANTT_MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
@@ -25849,8 +25856,12 @@ const GANTT_LEVELS = [
   { depth: 1, label: "Краны" },
   { depth: 2, label: "Стоянки" },
   { depth: 3, label: "Этажи" },
-  { depth: 4, label: "Типы" },
-  { depth: 5, label: "Подтипы" },
+  // Тип и подтип — ОДИН уровень (2026-08-22): «Колонна нижняя», «Плита
+  // перекрытия на отм. +15.000». Это вид работ, которым расчёт и адресует
+  // темп с порядком; двумя уровнями он показывал бы иерархию, которой нет, и
+  // заодно путал порядок — «Ригель периметральный» уезжал внутрь «Ригеля»,
+  // хотя по технологии идёт раньше «Колонны средней».
+  { depth: 4, label: "Тип + подтип" },
 ];
 // Шаги подписи чисел месяца. Берётся первый, при котором соседние подписи
 // расходятся хотя бы на GANTT_DAY_MIN_PX; не подошёл ни один — чисел нет
@@ -25863,6 +25874,8 @@ let ganttCollapsed = new Set();   // id узлов, чьи дети спрята
 let ganttDepth = GANTT_LEVELS.length;  // до какого уровня раскрыто; null — тронули вручную
 let ganttPxPerDay = null;         // null — вписать весь срок в ширину окна
 let ganttVersionId = null;        // null — текущий прогноз (последняя актуализация)
+let ganttNameW = null;            // null — подобрать по самой длинной подписи
+let ganttNameWShown = GANTT_NAME_MIN;   // что получилось на последней отрисовке
 
 const ganttDay = (iso) => Date.parse(iso.slice(0, 10) + "T00:00:00Z") / 86400000;
 
@@ -25879,6 +25892,7 @@ async function loadScheduleGantt() {
     ganttCollapsed = new Set();
     ganttDepth = GANTT_LEVELS.length;
     ganttPxPerDay = null;
+    ganttNameW = null;
     renderGanttVersionSelect();
     renderGantt();
   } catch (e) {
@@ -25928,6 +25942,31 @@ function applyGanttDepth(depth) {
     }
   };
   обход(ganttData.nodes, 0);
+}
+
+// Ширина колонки под самую длинную подпись. Меряется НАСТОЯЩИМ измерением
+// текста (canvas 2d тем же шрифтом), а не оценкой по числу знаков: подписи
+// кириллические и разной начертанности — у крана жирная, у стоянки
+// полужирная, — и оценка «знак ≈ 7 px» ошибалась на десятки пикселей в обе
+// стороны.
+function ganttNameWidthFor(строки, доступно) {
+  const ctx = ganttNameWidthFor.ctx
+    || (ganttNameWidthFor.ctx = document.createElement("canvas").getContext("2d"));
+  const семейство = getComputedStyle(document.body).fontFamily;
+  let макс = 0;
+  for (const { n, уровень } of строки) {
+    const жирность = n.level === "crane" ? 700 : n.level === "stance" ? 600 : 400;
+    ctx.font = `${жирность} 12px ${семейство}`;
+    // уровень * 14 — отступ вложенности, 14 — треугольник свёртки.
+    макс = Math.max(макс, уровень * 14 + 14 + ctx.measureText(n.label).width);
+  }
+  // 42 — колонка количества, 44 — отклонения, 12 — три зазора flex между
+  // четырьмя ячейками строки (gap: 4px), 8 — правый отступ, 4 — запас на
+  // округление. Зазоры однажды уже забыли, и подписи обрезались ровно на два
+  // пикселя — незаметно в коде и очень заметно на экране.
+  const нужно = Math.ceil(макс + 42 + 44 + 12 + 8 + 4);
+  return Math.max(GANTT_NAME_MIN,
+                  Math.min(нужно, Math.round(доступно * GANTT_NAME_MAX_SHARE)));
 }
 
 function ganttFlatRows() {
@@ -26002,9 +26041,18 @@ function renderGantt() {
   const до = Date.UTC(последняя.getUTCFullYear(), последняя.getUTCMonth() + 1, 1) / 86400000;
   const дней = Math.max(1, до - от);
 
+  // Ширина колонки названий: заданная перетаскиванием границы либо
+  // подобранная по самой длинной подписи ТЕКУЩЕГО дерева — свернули до
+  // кранов, и колонка ужимается под «Кран 1».
+  const строки = ganttFlatRows();
+  const nameW = ganttNameW !== null
+    ? Math.max(GANTT_NAME_MIN, Math.min(ganttNameW, box.clientWidth - 200))
+    : ganttNameWidthFor(строки, box.clientWidth - 18);
+  ganttNameWShown = nameW;
+
   // Масштаб по умолчанию вписывает весь срок в видимую ширину: график
   // полугодовой, и первое, что от него нужно, — увидеть его целиком.
-  const свободно = Math.max(360, box.clientWidth - GANTT_NAME_W - 18);
+  const свободно = Math.max(360, box.clientWidth - nameW - 18);
   const px = ganttPxPerDay || (свободно / дней);
   const trackW = Math.max(360, Math.round(дней * px));
   const X = (iso) => Math.round((ganttDay(iso) - от) * px);
@@ -26039,14 +26087,15 @@ function renderGantt() {
     (Date.UTC(сегодня.getFullYear(), сегодня.getMonth(), сегодня.getDate()) / 86400000 - от) * px);
 
   const части = [];
-  части.push(`<div class="gantt-wrap" style="width:${GANTT_NAME_W + trackW}px">`);
-  части.push(`<div class="gantt-grid" style="left:${GANTT_NAME_W}px;width:${trackW}px">`
+  части.push(`<div class="gantt-wrap" style="--gname:${nameW}px;width:${nameW + trackW}px">`);
+  части.push(`<div class="gantt-grid" style="width:${trackW}px">`
     + месяцы.map(m => `<div class="m" style="left:${m.x}px"></div>`).join("")
     + (xСегодня >= 0 && xСегодня <= trackW
         ? `<div class="today" style="left:${xСегодня}px"></div>` : "")
     + "</div>");
   части.push(`<div class="gantt-head">
-      <div class="gantt-head-name" style="width:${GANTT_NAME_W}px">
+      <div class="gantt-head-name">
+        <div class="gantt-splitter" title="Потянуть — изменить ширину колонки названий"></div>
         <div class="gantt-head-title">Этап СМР</div>
         <div class="gantt-levels">`
     + GANTT_LEVELS.map(l => `<button type="button" data-gantt-level="${l.depth}"`
@@ -26062,7 +26111,7 @@ function renderGantt() {
         + `<div class="day" style="left:${d.x}px">${d.d}</div>`).join("")
     + "</div></div>");
 
-  for (const { n, уровень } of ganttFlatRows()) {
+  for (const { n, уровень } of строки) {
     const развёрнут = !ganttCollapsed.has(n.id);
     const треугольник = n.children.length
       ? `<button type="button" class="gantt-tw" data-gantt-toggle="${n.id}">${развёрнут ? "▾" : "▸"}</button>`
@@ -26098,7 +26147,7 @@ function renderGantt() {
         + `${факт}</div>`
       : "";
     части.push(`<div class="gantt-row lvl-${n.level}" title="${escapeHtml(ganttTitle(n))}">`
-      + `<div class="gantt-name" style="width:${GANTT_NAME_W}px;padding-left:${уровень * 14}px">`
+      + `<div class="gantt-name" style="padding-left:${уровень * 14}px">`
       + треугольник
       + `<span class="txt">${escapeHtml(n.label)}</span>`
       + `<span class="qty">${n.quantity}</span>`
@@ -26123,6 +26172,42 @@ function renderGantt() {
     ganttDepth = null;
     перерисовать();
   }));
+  const splitter = box.querySelector(".gantt-splitter");
+  if (splitter) splitter.addEventListener("pointerdown", (e) => {
+    const wrap = box.querySelector(".gantt-wrap");
+    const начало = e.clientX, была = ganttNameWShown;
+    splitter.setPointerCapture(e.pointerId);
+    wrap.classList.add("resizing");
+    e.preventDefault();
+    const тянем = (ev) => {
+      // Двигается ТОЛЬКО переменная ширины: полторы тысячи строк на каждое
+      // движение мыши не перерисовать, и таскание дёргалось бы. Полоски при
+      // этом стоят на месте — окончательный вид даёт перерисовка на
+      // отпускание, где заново считается масштаб «вписать в окно».
+      ganttNameW = Math.max(GANTT_NAME_MIN,
+        Math.min(была + ev.clientX - начало, box.clientWidth - 200));
+      wrap.style.setProperty("--gname", `${ganttNameW}px`);
+    };
+    const бросили = () => {
+      splitter.removeEventListener("pointermove", тянем);
+      splitter.removeEventListener("pointerup", бросили);
+      splitter.removeEventListener("pointercancel", бросили);
+      wrap.classList.remove("resizing");
+      const слева = box.scrollLeft, сверху = box.scrollTop;
+      renderGantt();
+      box.scrollLeft = слева; box.scrollTop = сверху;
+    };
+    splitter.addEventListener("pointermove", тянем);
+    splitter.addEventListener("pointerup", бросили);
+    splitter.addEventListener("pointercancel", бросили);
+  });
+  // Двойной щелчок по границе возвращает автоподбор по самой длинной подписи:
+  // после ручной правки вернуться к нему иначе было бы нечем.
+  if (splitter) splitter.addEventListener("dblclick", () => {
+    ganttNameW = null;
+    renderGantt();
+  });
+
   box.querySelectorAll("[data-gantt-level]").forEach(btn => btn.addEventListener("click", () => {
     applyGanttDepth(Number(btn.dataset.ganttLevel));
     // Прокрутка сверху: после смены глубины строка под курсором — уже другая,
@@ -26178,10 +26263,37 @@ function ganttCurrentPxPerDay(box) {
   const от = Date.UTC(первая.getUTCFullYear(), первая.getUTCMonth(), 1) / 86400000;
   const последняя = new Date(ganttData.max_date + "T00:00:00Z");
   const до = Date.UTC(последняя.getUTCFullYear(), последняя.getUTCMonth() + 1, 1) / 86400000;
-  return Math.max(360, box.clientWidth - GANTT_NAME_W - 18) / Math.max(1, до - от);
+  return Math.max(360, box.clientWidth - ganttNameWShown - 18) / Math.max(1, до - от);
 }
 document.getElementById("gantt-zoom-in").addEventListener("click", () => ganttZoom(1.6));
 document.getElementById("gantt-zoom-out").addEventListener("click", () => ganttZoom(1 / 1.6));
+
+// ---------------------------------------------- выгрузка XLSX и PDF (08-22)
+// Файл собирает СЕРВЕР из того же дерева, что рисует экран: считать его на
+// клиенте значило бы завести второй источник тех же чисел (та же причина, что
+// у отчётов, см. шапку app/reports.py). Выгружается всё дерево, поэтому
+// текущая глубина показа в запрос не идёт — только объект и версия прогноза.
+async function downloadGantt(вид) {
+  const status = document.getElementById("gantt-status");
+  const было = status.textContent;
+  status.textContent = `Готовим ${вид.toUpperCase()}…`;
+  try {
+    const res = await fetch(`/schedule-versions/gantt.${вид}?object_id=${state.objectId}`
+      + (ganttVersionId ? `&version_id=${ganttVersionId}` : ""));
+    if (!res.ok) throw new Error(`Ошибка ${res.status}`);
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `График СМР — диаграмма Ганта.${вид}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    status.textContent = было;
+  } catch (e) {
+    status.textContent = `Не удалось выгрузить ${вид.toUpperCase()}: ${e.message}`;
+  }
+}
+document.getElementById("gantt-xlsx").addEventListener("click", () => downloadGantt("xlsx"));
+document.getElementById("gantt-pdf").addEventListener("click", () => downloadGantt("pdf"));
 
 // ---------------------------------------- полный экран (2026-08-22, просьба)
 // Дерево на полторы тысячи строк в форме высотой 58 % экрана показывает

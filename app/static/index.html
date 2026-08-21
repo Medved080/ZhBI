@@ -902,11 +902,16 @@
      раскраска одного и того же смысла заставляла бы сверяться с легендой. */
   :root { --gantt-plan: #4A86C8; --gantt-fc: #E8703A; }
   .gantt-box { overflow: auto; max-height: 58vh; border: 1px solid var(--color-border); border-radius: 8px; }
-  .gantt-wrap { position: relative; width: max-content; min-width: 100%; }
+  /* Ширина колонки названий живёт в CSS-переменной, а не в стиле каждой
+     строки: при перетаскивании границы её меняет ОДНА запись на весь узел, и
+     полторы тысячи строк перерисовывать не приходится — иначе таскание
+     границы дёргалось бы. Полная перерисовка нужна только на отпускание:
+     от ширины колонки зависит масштаб «вписать в окно». */
+  .gantt-wrap { position: relative; width: max-content; min-width: 100%; --gname: 340px; }
   /* Сетка месяцев — ОДНИМ слоем на всю диаграмму, а не линиями в каждой
      строке: строк полторы тысячи, и полтора десятка divs в каждой из них
      стоили бы двадцать тысяч узлов на ровном месте. */
-  .gantt-grid { position: absolute; top: 0; bottom: 0; pointer-events: none; }
+  .gantt-grid { position: absolute; top: 0; bottom: 0; left: var(--gname); pointer-events: none; }
   .gantt-grid .m { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--color-border); }
   .gantt-grid .today { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--color-danger); opacity: .5; }
   .gantt-head {
@@ -914,10 +919,29 @@
     background: var(--color-surface); border-bottom: 1px solid var(--color-border);
   }
   .gantt-head-name {
-    position: sticky; left: 0; z-index: 4; flex: 0 0 auto;
+    position: sticky; left: 0; z-index: 4; flex: 0 0 auto; width: var(--gname);
     background: var(--color-surface); border-right: 1px solid var(--color-border);
     box-sizing: border-box;
   }
+  /* Граница между колонкой названий и диаграммой — тянется мышью.
+     Ручка живёт в ШАПКЕ, а не отдельным слоем во всю высоту: шапка и так
+     закреплена сверху и слева, то есть видна всегда, а слой во всю высоту
+     пришлось бы держать поверх строк и он перехватывал бы наведение на них. */
+  .gantt-splitter {
+    position: absolute; top: 0; right: -3px; bottom: 0; width: 7px; z-index: 5;
+    cursor: col-resize;
+  }
+  .gantt-splitter::after {
+    content: ""; position: absolute; top: 4px; bottom: 4px; left: 3px; width: 1px;
+    background: var(--color-border);
+  }
+  .gantt-splitter:hover::after, .gantt-wrap.resizing .gantt-splitter::after {
+    background: var(--color-primary); width: 2px;
+  }
+  /* Пока тянут — курсор «изменение ширины» на всей странице и никакого
+     выделения текста: иначе мышь, уехавшая со строки, тащила бы за собой
+     подсветку подписей. */
+  .gantt-wrap.resizing { user-select: none; }
   .gantt-head-title {
     font-size: 11px; font-weight: 600; color: var(--color-text-muted); padding: 2px 8px 0;
   }
@@ -957,7 +981,8 @@
   .gantt-row { display: flex; align-items: stretch; height: 22px; }
   .gantt-row:hover { background: var(--color-surface-2); }
   .gantt-name {
-    position: sticky; left: 0; z-index: 2; flex: 0 0 auto; display: flex; align-items: center;
+    position: sticky; left: 0; z-index: 2; flex: 0 0 auto; width: var(--gname);
+    display: flex; align-items: center;
     gap: 4px; background: var(--color-surface); border-right: 1px solid var(--color-border);
     font-size: 12px; padding: 0 8px 0 0; box-sizing: border-box;
   }
@@ -995,12 +1020,9 @@
   .gantt-row.lvl-floor .gantt-bar { height: 7px; }
   .gantt-row.lvl-floor .gantt-bar.plan { top: 3px; background: var(--gantt-plan); }
   .gantt-row.lvl-floor .gantt-bar.fc { top: 12px; background: var(--gantt-fc); }
-  .gantt-row.lvl-type .gantt-bar { height: 6px; }
-  .gantt-row.lvl-type .gantt-bar.plan { top: 4px; background: #7BA9DA; }
-  .gantt-row.lvl-type .gantt-bar.fc { top: 13px; background: #F0956C; }
-  .gantt-row.lvl-subtype .gantt-bar { height: 5px; }
-  .gantt-row.lvl-subtype .gantt-bar.plan { top: 4px; background: #A6C6E9; }
-  .gantt-row.lvl-subtype .gantt-bar.fc { top: 13px; background: #F6BCA2; }
+  .gantt-row.lvl-item .gantt-bar { height: 6px; }
+  .gantt-row.lvl-item .gantt-bar.plan { top: 4px; background: #7BA9DA; }
+  .gantt-row.lvl-item .gantt-bar.fc { top: 13px; background: #F0956C; }
   /* Процент фактически смонтированного — у конца полосы, а не внутри неё:
      полоса высотой 7 px текст не вмещает, а растить строку ради подписи,
      которая есть у меньшинства строк, значило бы растянуть всю диаграмму. */
@@ -6315,6 +6337,14 @@
           <button class="btn btn-sm btn-secondary" id="gantt-zoom-out" title="Мельче">−</button>
           <button class="btn btn-sm btn-secondary" id="gantt-zoom-in" title="Крупнее">+</button>
           <button class="btn btn-sm btn-secondary" id="gantt-full">Во весь экран</button>
+          <!-- Выгрузка отдаёт ВСЁ дерево, а не текущую глубину показа
+               (решение пользователя 2026-08-22): файл живёт своей жизнью, и
+               «в нём нет стоянок, потому что я их свернул» — не то свойство,
+               которое стоит объяснять получателю письма. -->
+          <button class="btn btn-sm btn-secondary" id="gantt-xlsx"
+                  title="Выгрузить всё дерево в Excel">XLSX</button>
+          <button class="btn btn-sm btn-secondary" id="gantt-pdf"
+                  title="Выгрузить всё дерево в PDF">PDF</button>
         </span>
       </div>
       <div id="gantt-box" class="gantt-box"></div>

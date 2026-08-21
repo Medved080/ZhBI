@@ -306,7 +306,13 @@ GANTT_NO_CRANE = "Кран не определён"
 GANTT_NO_STANCE = "Стоянка не определена"
 GANTT_NO_FLOOR = "Этаж не определён"
 GANTT_NO_TYPE = "Тип не указан"
-GANTT_LEVELS = ("crane", "stance", "floor", "type", "subtype")
+# Четыре уровня, а не пять (2026-08-22, просьба пользователя): тип и подтип
+# сведены в один — «Колонна нижняя», «Плита перекрытия на отм. +15.000». Это и
+# есть вид работ: расчёт адресует темп и порядок ПАРОЙ тип+подтип, а не
+# каждым по отдельности, и разводить их по двум уровням дерева значило бы
+# показывать иерархию, которой в данных нет. Подпись собирает _item_label из
+# app/reports.py — та же, что в отчётах, вторая её копия однажды разошлась бы.
+GANTT_LEVELS = ("crane", "stance", "floor", "item")
 
 
 def _gantt_span(node: dict, ps, pe, fs, fe) -> None:
@@ -331,7 +337,7 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
                version_id: Optional[int] = None) -> dict:
     """Дерево узлов группировки с плановыми и прогнозными сроками."""
     from app.models import Status
-    from app.reports import natural_key
+    from app.reports import _item_label, natural_key
     from app.schedule_calc import _flow, _work_kinds
 
     version_id = version_id if version_id is not None else latest_current_id(conn, object_id)
@@ -392,13 +398,9 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
             (стоянка, "stance", (фронт, natural_key(стоянка))),
             (f"{этаж} этаж" if этаж is not None else GANTT_NO_FLOOR, "floor",
              (фронт, ХВОСТ if этаж is None else этаж)),
-            (r["etype"] or GANTT_NO_TYPE, "type",
-             (порядок_вида, natural_key(r["etype"] or GANTT_NO_TYPE))),
         ]
-        # Уровень подтипа появляется, только когда подтип есть: «Колонна →
-        # Без подтипа» — лишний щелчок ради строки, повторяющей родителя.
-        if r["subtype"]:
-            путь.append((r["subtype"], "subtype", (порядок_вида, natural_key(r["subtype"]))))
+        вид = _item_label(r["etype"] or GANTT_NO_TYPE, r["subtype"])
+        путь.append((вид, "item", (порядок_вида, natural_key(вид))))
 
         узел = корень
         for label, level, sort in путь:
@@ -486,6 +488,51 @@ def get_gantt(object_id: int, version_id: Optional[int] = None,
         return gantt_tree(conn, object_id, version_id=version_id)
     finally:
         conn.close()
+
+
+def _gantt_file(object_id: int, version_id: Optional[int], user, вид: str):
+    """Диаграмма файлом. GET, а не POST: выгружается ВСЁ дерево объекта, и
+    сужать его списком id (как это делают отчёты) незачем — тела запроса
+    не нужно."""
+    from urllib.parse import quote
+
+    from fastapi import Response
+
+    from app.schedule_gantt_export import build_gantt_pdf, build_gantt_xlsx
+
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "schedule", "read")
+        data = gantt_tree(conn, object_id, version_id=version_id)
+        row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
+        имя_объекта = row["name"] if row else "—"
+    finally:
+        conn.close()
+    if вид == "xlsx":
+        содержимое = build_gantt_xlsx(data, имя_объекта)
+        имя = "График СМР — диаграмма Ганта.xlsx"
+        тип = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        содержимое = build_gantt_pdf(data, имя_объекта)
+        имя = "График СМР — диаграмма Ганта.pdf"
+        тип = "application/pdf"
+    return Response(
+        content=содержимое, media_type=тип,
+        headers={"Content-Disposition":
+                 f"attachment; filename=\"gantt.{вид}\"; filename*=UTF-8''{quote(имя)}"},
+    )
+
+
+@router.get("/gantt.xlsx")
+def get_gantt_xlsx(object_id: int, version_id: Optional[int] = None,
+                   user: sqlite3.Row = Depends(get_current_user)):
+    return _gantt_file(object_id, version_id, user, "xlsx")
+
+
+@router.get("/gantt.pdf")
+def get_gantt_pdf(object_id: int, version_id: Optional[int] = None,
+                  user: sqlite3.Row = Depends(get_current_user)):
+    return _gantt_file(object_id, version_id, user, "pdf")
 
 
 @router.get("/deviation")
