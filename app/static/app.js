@@ -135,6 +135,17 @@ let state = {
   // объявляется в начале файла, до её объявления (temporal dead zone). При
   // смене ключа поправить ОБА места.
   lowSpec: localStorage.getItem("zhbi_low_spec") === "1",
+  // Солнце и тени в 3D (см. SHADOWS_3D_KEY). Настройка КОМПЬЮТЕРА, как и
+  // лёгкий режим, и читается здесь по той же причине: карта теней
+  // включается в рендерере, а его создаёт init3DScene — раньше, чем
+  // отрисуется меню настроек. Ключ литералом, а не константой: та же
+  // temporal dead zone, что у lowSpec; при смене ключа поправить ОБА места.
+  shadows3d: localStorage.getItem("zhbi_shadows_3d") === "1",
+  // К чему привязано направление солнца в 3D: "model" — к модели (стоит на
+  // месте при вращении), "camera" — к камере (освещённая сторона всегда к
+  // смотрящему). См. SUN_3D_MODE_KEY; ключ литералом по той же причине, что
+  // и у соседей выше.
+  sun3dMode: localStorage.getItem("zhbi_sun_3d_mode") === "camera" ? "camera" : "model",
   // Видимость КОНКРЕТНОЙ стоянки (все её ярусы разом) — opt-in множество
   // логических ключей (см. stanceLogicalKey), а не excludedSet, как у
   // фильтров: по умолчанию ничего не видно (та же логика быстродействия,
@@ -287,6 +298,10 @@ let state = {
     zoneMeshByLevel: new Map(), // level_id -> THREE.Mesh (захватка/кран/стоянка)
     zoneLabelSpriteByLevel: new Map(), // level_id -> THREE.Sprite (подпись Кран/Стоянка в основании яруса)
     siteBaseMesh: null, // едва заметная подложка границ всего проекта — см. build3DSiteBaseMesh
+    sunLight: null, // направленный свет; при включённой настройке он же отбрасывает тени (см. place3DSun)
+    shadowCatcherMesh: null, // плоскость земли, ловящая тень здания — см. build3DShadowCatcher
+    sunFit: null, // {cx, cy, cz, radius} — куда и на какой охват посажен свет (см. fit3DSunToModel)
+    sunDirection: null, // THREE.Vector3, текущее направление НА солнце — база для сравнения (см. place3DSun)
     axisLines: null, // ОДИН LineSegments на все оси сетки — см. build3DAxisGrid
     axisLabelSprites: [], // номера и буквы на концах осей (спрайты, всегда лицом к камере)
     labelSpriteById: new Map(), // element.id -> THREE.Sprite (постоянная подпись марки, запасной вариант)
@@ -10031,6 +10046,8 @@ document.getElementById("menu-view-mode").addEventListener("click", () => {
   const { pitch, yaw } = initial3DAngles();
   document.getElementById("view3d-pitch").value = pitch;
   document.getElementById("view3d-yaw").value = yaw;
+  document.getElementById("shadows-3d").checked = state.shadows3d;
+  document.querySelectorAll('input[name="sun-3d-mode"]').forEach(r => { r.checked = r.value === state.sun3dMode; });
   document.getElementById("menu-view-backdrop").classList.add("open");
 });
 document.getElementById("menu-view-close").addEventListener("click", () =>
@@ -10097,6 +10114,26 @@ document.getElementById("min-label-px-apply").addEventListener("click", async ()
 
 document.querySelectorAll('input[name="menu-view"]').forEach(r => r.addEventListener("change", () => {
   if (r.checked) localStorage.setItem(MENU_VIEW_KEY, r.value);
+}));
+
+// Тени в 3D — применяются СРАЗУ, без закрытия окна и без пересборки сцены
+// (см. apply3DShadowSetting): человек ставит галочку именно чтобы посмотреть,
+// как станет. Если 3D ещё не открывали, сцены нет — тени включатся при входе
+// в неё, состояние настройки уже в state.
+document.getElementById("shadows-3d").addEventListener("change", (e) => {
+  state.shadows3d = e.target.checked;
+  localStorage.setItem(SHADOWS_3D_KEY, state.shadows3d ? "1" : "0");
+  apply3DShadowSetting();
+});
+
+// Привязка солнца — к модели или к камере (см. SUN_3D_MODE_KEY). Действует и
+// при выключенных тенях: от направления света зависит, какая сторона здания
+// освещена, поэтому применяется всегда, а не только вместе с тенями.
+document.querySelectorAll('input[name="sun-3d-mode"]').forEach(r => r.addEventListener("change", () => {
+  if (!r.checked) return;
+  state.sun3dMode = r.value === "camera" ? "camera" : "model";
+  localStorage.setItem(SUN_3D_MODE_KEY, state.sun3dMode);
+  apply3DSunSetting();
 }));
 
 document.getElementById("btn-settings-menu").addEventListener("click", (e) => {
@@ -21678,6 +21715,65 @@ const EDGE_LINE_WIDTH_PX = 2;
 // БД. У прорабов машины разные, общая на всех настройка была бы бессмысленной.
 const LOW_SPEC_KEY = "zhbi_low_spec";
 
+// ---------- солнце и тени в 3D ----------
+
+// Тени — НАСТРОЙКА, а не режим просмотра: направленный свет в сцене был с
+// самого начала (см. init3DScene), объём у граней есть всегда; галочка
+// добавляет к нему карту теней — силуэт здания на земле и затенение
+// элементов друг другом. По умолчанию выключено: на плотной застройке тень
+// плиты накрывает колонны под ней, и решать, помогает это или мешает,
+// должен человек. Настройка КОМПЬЮТЕРА (localStorage), как и лёгкий режим:
+// у прорабов машины разные, а карта теней — это память видеокарты.
+const SHADOWS_3D_KEY = "zhbi_shadows_3d";
+
+// В лёгком режиме теней не бывает никогда: он и заведён под встроенные
+// видеокарты и удалённый рабочий стол (см. LOW_SPEC_KEY). Настройка при
+// этом не сбрасывается — вернулся в обычный 3D, тени снова на месте.
+function shadows3DEnabled() {
+  return state.shadows3d && !state.lowSpec;
+}
+
+// Направление на солнце, когда оно привязано к МОДЕЛИ, — ровно то же, что
+// было у направленного света до появления теней: справа-сверху-спереди при
+// нулевом повороте камеры. Угол над горизонтом atan(2/√2) ≈ 55°, то есть
+// тень на земле длиной примерно в 0,7 высоты здания: силуэт читается, но не
+// расползается на всю площадку.
+const SUN_3D_DIRECTION = [1, 2, 1];
+
+// К чему привязано солнце (2026-08-22, запрос пользователя). Настройка
+// влияет не только на тени: направленный свет в сцене есть всегда, и от неё
+// зависит, какая сторона здания освещена.
+//
+//  - "model" (по умолчанию) — солнце стоит НАД СТРОЙКОЙ: вращаешь модель,
+//    тень остаётся на своей стороне здания, как настоящая. Плата: с части
+//    ракурсов смотришь на затенённую сторону.
+//  - "camera" — солнце едет ЗА КАМЕРОЙ, из-за плеча смотрящего: освещённая
+//    сторона всегда обращена к нему, тень всегда падает от него. Плата:
+//    тень ползает при вращении и как источник сведений о форме здания уже
+//    не работает — зато ничего не темнеет.
+//
+// Настройка КОМПЬЮТЕРА, как и сами тени: живёт в localStorage.
+const SUN_3D_MODE_KEY = "zhbi_sun_3d_mode";
+
+function sun3DFollowsCamera() {
+  return state.sun3dMode === "camera";
+}
+
+// Насколько должно повернуться солнце, чтобы имело смысл пересчитывать
+// карту теней (косинус угла). 0,99999 — это около четверти градуса: при
+// вращении камеры порог проходится на каждом кадре, а при кадре по другому
+// поводу (смена статуса, выделение) — нет, и лишнего прохода не будет.
+const SUN_3D_ROTATION_EPS = 0.99999;
+
+// Сторона карты теней в текселях. Дорого по видеопамяти (4096² ≈ 67 МБ), но
+// платится ОДИН РАЗ: геометрия статична между пересборками сцены, поэтому
+// карта пересчитывается не каждый кадр, а по shadowMap.needsUpdate (см.
+// create3DRendererAndControls). Разрешение приходится брать максимальное
+// из-за масштаба: модель меряется в миллиметрах, ортокамера источника
+// натягивается на габарит стройки (сотни тысяч единиц), и уже на 2048 один
+// тексель тени — больше 10 см, то есть рваный край у колонны 400×400.
+const SHADOW_MAP_3D_SIZE = 4096;
+
 // Потолок частоты кадров в лёгком режиме. Смысл не в экономии видеокарты (её
 // и так пасует requestAnimationFrame), а в том, чтобы не отдавать протоколу
 // удалённого стола больше кадров, чем он способен закодировать и передать.
@@ -21728,6 +21824,12 @@ function getFaceMaterial() {
     v3.faceMaterial = new THREE.MeshStandardMaterial({
       vertexColors: true,
       side: THREE.DoubleSide,
+      // В карту теней пишется ТОЛЬКО дальняя сторона. Материал двусторонний,
+      // и по умолчанию (shadowSide наследует side) в карту попали бы обе:
+      // освещённая грань оказывалась бы в собственной тени — сплошное
+      // "акне" самозатенения по всей модели. Остаток добирает смещение
+      // вдоль нормали (normalBias, см. fit3DSunToModel).
+      shadowSide: THREE.BackSide,
       polygonOffset: true,
       polygonOffsetFactor: 4,
       polygonOffsetUnits: 4,
@@ -21903,6 +22005,14 @@ function build3DMergedGeometry(elements, levels, columnTops) {
   geometry.setAttribute("normal", new THREE.BufferAttribute(normalArray, 3));
   geometry.setAttribute("color", new THREE.BufferAttribute(colorArray, 3));
   const mesh = new THREE.Mesh(geometry, getFaceMaterial());
+  // Флаги стоят ВСЕГДА: при выключенной карте теней они ничего не стоят, а
+  // включение настройки не требует пересборки девяти тысяч элементов (см.
+  // apply3DShadowSetting). Вся геометрия — один меш, поэтому построение
+  // карты теней это один вызов отрисовки, а не девять тысяч. Тень на землю
+  // ловит отдельная плоскость (build3DShadowCatcher): подложка основания
+  // тени не принимает — у неё неосвещаемый материал.
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
 
   let edges = null;
   if (edgeFloatCount) {
@@ -23597,6 +23707,56 @@ function clear3DAxisGrid() {
 }
 
 function build3DSiteBaseMesh() {
+  const bbox = model3DPlanBBox();
+  if (!bbox) return null;
+  const { minX, maxX, minZ, maxZ } = bbox;
+
+  const geometry = new THREE.PlaneGeometry(maxX - minX, maxZ - minZ);
+  geometry.rotateX(-Math.PI / 2);
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x808080, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  // world.X=dxf.x, world.Z=-dxf.y — поправка уже внесена в model3DPlanBBox
+  // (см. build3DElementGeometry, Docs/backlog.md "3D — зеркальность").
+  mesh.position.set((minX + maxX) / 2, SITE_BASE_3D_Y, (minZ + maxZ) / 2);
+  return mesh;
+}
+
+// Плоскость земли, на которую ложится тень здания. Отдельная от подложки
+// основания (build3DSiteBaseMesh) по двум причинам: у той материал
+// неосвещаемый (MeshBasicMaterial тень не принимает в принципе), и та
+// повторяет габарит застройки, а тень выходит за него тем дальше, чем выше
+// здание. ShadowMaterial рисует ТОЛЬКО тень: вне неё плоскость полностью
+// прозрачна и на картинку никак не влияет, поэтому при выключенной
+// настройке достаточно скрыть её (visible), а не пересобирать сцену.
+function build3DShadowCatcher(groundY, topY) {
+  const bbox = model3DPlanBBox();
+  if (!bbox) return null;
+  const { minX, maxX, minZ, maxZ } = bbox;
+  // Запас за габарит плана — две высоты здания. Солнце стоит над горизонтом
+  // под ~55° при привязке к модели и от 38° (камера у горизонта) до 90°
+  // (взгляд сверху) при привязке к камере, то есть самая длинная тень —
+  // около 1,3 высоты: двойной высоты хватает с запасом, а плоскость при
+  // этом не становится бесконечной (её всё же надо накрыть картой теней,
+  // см. fit3DSunToModel).
+  const запас = Math.max((topY - groundY) * 2, 5000);
+  const geometry = new THREE.PlaneGeometry(maxX - minX + запас * 2, maxZ - minZ + запас * 2);
+  geometry.rotateX(-Math.PI / 2);
+  const mesh = new THREE.Mesh(geometry, new THREE.ShadowMaterial({ opacity: 0.3 }));
+  mesh.receiveShadow = true;
+  // Чуть НИЖЕ подложки основания и сетки осей (SITE_BASE_3D_Y): обе
+  // полупрозрачны и не пишут глубину, спорить им тут не за что, но порядок
+  // "земля под подложкой" делает картинку предсказуемой.
+  mesh.position.set((minX + maxX) / 2, groundY - 1, (minZ + maxZ) / 2);
+  mesh.visible = shadows3DEnabled();
+  return mesh;
+}
+
+// Габарит модели в плане, уже в МИРОВЫХ координатах сцены (world.Z = -dxf.y,
+// см. build3DElementGeometry). По контурам, а не по центрам элементов: тень
+// отбрасывает контур.
+function model3DPlanBBox() {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const e of state.elements) {
     const pts = e.outline && e.outline.length ? e.outline : [[e.x, e.y]];
@@ -23608,17 +23768,136 @@ function build3DSiteBaseMesh() {
     }
   }
   if (!Number.isFinite(minX) || !Number.isFinite(minY) || maxX <= minX || maxY <= minY) return null;
+  return { minX, maxX, minZ: -maxY, maxZ: -minY };
+}
 
-  const geometry = new THREE.PlaneGeometry(maxX - minX, maxY - minY);
-  geometry.rotateX(-Math.PI / 2);
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x808080, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  // world.X=dxf.x, world.Z=-dxf.y — та же поправка, что и у элементов
-  // (см. build3DElementGeometry, Docs/backlog.md "3D — зеркальность").
-  mesh.position.set((minX + maxX) / 2, SITE_BASE_3D_Y, -(minY + maxY) / 2);
-  return mesh;
+// Объём ортокамеры источника. У направленного света тень существует ровно
+// внутри него: что за его пределами — тени не отбрасывает и не принимает
+// вовсе. Поэтому объём натягивается на габарит модели при КАЖДОЙ пересборке
+// сцены (фильтры габарит не меняют — считается по всем элементам, как и
+// высота зон, — но данные могут и перезагрузиться). Объём сферический, от
+// направления солнца не зависит: при привязке к камере оно меняется на
+// каждом кадре, и пересчитывать его было бы нечем оправдать.
+function fit3DSunToModel(groundY, topY) {
+  const v3 = state.view3d;
+  const light = v3.sunLight;
+  const bbox = model3DPlanBBox();
+  if (!light || !bbox) return;
+  const cx = (bbox.minX + bbox.maxX) / 2;
+  const cz = (bbox.minZ + bbox.maxZ) / 2;
+  const cy = (groundY + topY) / 2;
+  // Радиус описанной сферы вокруг габарита, плюс треть про запас — на тень,
+  // выходящую за пределы застройки, и на ловца под ней.
+  const radius = Math.max(
+    Math.hypot(bbox.maxX - bbox.minX, bbox.maxZ - bbox.minZ) / 2,
+    (topY - groundY) / 2,
+    1000,
+  ) * 1.35;
+  v3.sunFit = { cx, cy, cz, radius };
+  place3DSun();
+
+  const camera = light.shadow.camera;
+  camera.left = -radius;
+  camera.right = radius;
+  camera.top = radius;
+  camera.bottom = -radius;
+  camera.near = radius * 0.5;
+  camera.far = radius * 4;
+  camera.updateProjectionMatrix();
+  // Смещение вдоль нормали — в МИРОВЫХ единицах, то есть в миллиметрах, и
+  // единственного правильного числа тут нет: оно должно быть порядка
+  // размера тексели тени, иначе либо акне самозатенения (мало), либо тень
+  // отрывается от подошвы (много). Тексель = 2*radius/SHADOW_MAP_3D_SIZE,
+  // на реальном файле это ~90 мм. Обычного bias нет намеренно: он в долях
+  // глубины, а глубина тут растянута на сотни тысяч миллиметров — любое
+  // осмысленное значение отрывало бы тень на десятки сантиметров.
+  light.shadow.normalBias = Math.max(2 * radius / SHADOW_MAP_3D_SIZE, 10);
+}
+
+// Куда светит солнце ПРЯМО СЕЙЧАС. При привязке к модели считается один раз
+// (направление — константа), при привязке к камере — на каждом кадре, из
+// базиса камеры. Возвращает true, если направление заметно изменилось: по
+// этому признаку заказывается пересчёт карты теней (см. render3DFrame).
+let sun3DTemp = null;
+
+function place3DSun() {
+  const v3 = state.view3d;
+  const light = v3.sunLight;
+  if (!light || !v3.sunFit) return false;
+  // Векторы создаются один раз и переиспользуются: функция зовётся на кадр,
+  // а мусор в кадре 3D — это подёргивания сборщика при вращении. Не в
+  // константах модуля, потому что THREE подгружается динамически.
+  if (!sun3DTemp) {
+    sun3DTemp = { dir: new THREE.Vector3(), ось: new THREE.Vector3() };
+    v3.sunDirection = new THREE.Vector3();
+  }
+  const { dir, ось } = sun3DTemp;
+
+  if (sun3DFollowsCamera()) {
+    // Солнце из-за плеча смотрящего: столбец 2 матрицы камеры — направление
+    // "назад" (от цели к камере), столбец 1 — "вверх" экрана, столбец 0 —
+    // "вправо". Смесь даёт свет сверху-справа-сзади относительно ЭКРАНА:
+    // освещена всегда та сторона, на которую смотрят, а тень уходит от
+    // смотрящего влево-вниз. Доли подобраны так, чтобы при обычном ракурсе
+    // солнце стояло примерно там же над горизонтом, что и привязанное к
+    // модели, — переключение настройки не должно менять яркость сцены.
+    // Матрицу камеры обновляем сами: Three.js делает это при отрисовке, то
+    // есть ПОСЛЕ нас, и свет отставал бы от камеры на кадр.
+    v3.camera.updateMatrixWorld();
+    const m = v3.camera.matrixWorld;
+    dir.setFromMatrixColumn(m, 2);
+    dir.addScaledVector(ось.setFromMatrixColumn(m, 1), 0.85);
+    dir.addScaledVector(ось.setFromMatrixColumn(m, 0), 0.45);
+    dir.normalize();
+  } else {
+    dir.set(...SUN_3D_DIRECTION).normalize();
+  }
+
+  const изменилось = v3.sunDirection.lengthSq() === 0
+    || v3.sunDirection.dot(dir) < SUN_3D_ROTATION_EPS;
+  if (!изменилось) return false;
+  v3.sunDirection.copy(dir);
+
+  const { cx, cy, cz, radius } = v3.sunFit;
+  light.target.position.set(cx, cy, cz);
+  light.target.updateMatrixWorld();
+  light.position.set(cx, cy, cz).addScaledVector(dir, radius * 2);
+  return true;
+}
+
+// Переключение настройки на ЖИВОЙ сцене, без пересборки: меняются только
+// флаг рендерера, флаг источника света и видимость ловца тени — девять
+// тысяч элементов пересобирать незачем. Материалы приходится пометить на
+// перекомпиляцию: включение карты теней меняет сам шейдер (Three.js
+// собирает его с учётом renderer.shadowMap.enabled), и без needsUpdate
+// сцена продолжила бы рисоваться прежней программой — тень бы не появилась.
+// Помечаются только материалы, которые вообще участвуют в освещении:
+// спрайты подписей и линии рёбер к свету равнодушны, а их в сцене тысячи.
+function apply3DShadowSetting() {
+  const v3 = state.view3d;
+  if (!v3.renderer || !v3.scene) return;
+  const включены = shadows3DEnabled();
+  v3.renderer.shadowMap.enabled = включены;
+  if (v3.sunLight) v3.sunLight.castShadow = включены;
+  if (v3.shadowCatcherMesh) v3.shadowCatcherMesh.visible = включены;
+  for (const material of [v3.faceMaterial, v3.highlightMaterial, v3.locatedMaterial,
+                          v3.shadowCatcherMesh && v3.shadowCatcherMesh.material]) {
+    if (material) material.needsUpdate = true;
+  }
+  for (const mesh of v3.zoneMeshByLevel.values()) mesh.material.needsUpdate = true;
+  v3.renderer.shadowMap.needsUpdate = true;
+  requestRender3D();
+}
+
+// Смена привязки солнца. Пересобирать нечего — свет просто переезжает, но
+// вместе с ним устаревает карта теней. Работает и при выключенных тенях:
+// от направления света зависит, какая сторона здания освещена.
+function apply3DSunSetting() {
+  const v3 = state.view3d;
+  if (!v3.renderer || !v3.scene) return;
+  place3DSun();
+  v3.renderer.shadowMap.needsUpdate = true;
+  requestRender3D();
 }
 
 // preserveCamera=true — пересобрать содержимое, НЕ трогая ракурс. Нужно при
@@ -23633,6 +23912,12 @@ function build3DScene(preserveCamera = false) {
     v3.siteBaseMesh.geometry.dispose();
     v3.siteBaseMesh.material.dispose();
     v3.siteBaseMesh = null;
+  }
+  if (v3.shadowCatcherMesh) {
+    v3.scene.remove(v3.shadowCatcherMesh);
+    v3.shadowCatcherMesh.geometry.dispose();
+    v3.shadowCatcherMesh.material.dispose();
+    v3.shadowCatcherMesh = null;
   }
   clear3DAxisGrid();
   // Вся геометрия элементов — два объекта (грани + рёбра), см.
@@ -23760,6 +24045,17 @@ function build3DScene(preserveCamera = false) {
   v3.siteBaseMesh = build3DSiteBaseMesh();
   if (v3.siteBaseMesh) v3.scene.add(v3.siteBaseMesh);
 
+  // Земля под тень и объём карты теней — здесь, где верх модели уже
+  // посчитан (heightRange выше дотянут до самой верхней точки). Уровень
+  // земли — тот же, что у сетки осей: ниже и подложки основания, и низа
+  // застройки. Карта теней после пересборки заведомо устарела — заказываем
+  // пересчёт (autoUpdate у неё выключен, см. create3DRendererAndControls).
+  const groundY = Math.min(SITE_BASE_3D_Y, heightRange.bottom);
+  v3.shadowCatcherMesh = build3DShadowCatcher(groundY, heightRange.top);
+  if (v3.shadowCatcherMesh) v3.scene.add(v3.shadowCatcherMesh);
+  fit3DSunToModel(groundY, heightRange.top);
+  if (v3.renderer) v3.renderer.shadowMap.needsUpdate = true;
+
   // Сетка осей — на уровне подложки основания и НЕ зависит от фильтров:
   // это система координат стройки, а не данные. Строится последней, чтобы
   // взять уже посчитанный низ застройки.
@@ -23782,9 +24078,24 @@ function init3DScene() {
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / Math.max(container.clientHeight, 1), 10, 5_000_000);
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x505050, 1.3));
-  const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
-  dirLight.position.set(1, 2, 1);
-  scene.add(dirLight);
+  // Направленный свет — "солнце". Направление фиксированное (см.
+  // SUN_3D_DIRECTION), яркость и наклон те же, что были до появления
+  // теней, — включение настройки не должно менять освещённость сцены, оно
+  // только добавляет к ней тень. При включённых тенях позиция источника и
+  // его ортокамера натягиваются на габарит модели
+  // (fit3DSunToModel): у направленного света на яркость это не
+  // влияет — важно только направление, — но объём карты теней задаётся
+  // именно ими.
+  const sunLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  sunLight.position.set(...SUN_3D_DIRECTION);
+  sunLight.castShadow = shadows3DEnabled();
+  sunLight.shadow.mapSize.set(SHADOW_MAP_3D_SIZE, SHADOW_MAP_3D_SIZE);
+  scene.add(sunLight);
+  // Цель источника по умолчанию — начало координат, а модель от него далеко
+  // (координаты стройки в миллиметрах). Цель — объект сцены: без добавления
+  // её матрица не пересчитывается, и свет светил бы мимо.
+  scene.add(sunLight.target);
+  v3.sunLight = sunLight;
 
   v3.scene = scene;
   v3.camera = camera;
@@ -23848,6 +24159,17 @@ function create3DRendererAndControls(container) {
   // дешевле полного 2x, картинка всё ещё существенно чётче, чем при 1x.
   renderer.setPixelRatio(pixelRatioForCurrentMode());
   renderer.setSize(container.clientWidth, Math.max(container.clientHeight, 1));
+  // Тени — настройка, см. SHADOWS_3D_KEY. autoUpdate=false принципиален:
+  // кадры рисуются по требованию (requestRender3D), а геометрия между
+  // пересборками сцены не меняется — пересчитывать карту теней на каждое
+  // движение мыши значило бы рисовать все 9000+ элементов ДВАЖДЫ за кадр.
+  // Вместо этого пересчёт заказывается точечно, флагом needsUpdate: при
+  // пересборке сцены (build3DScene) и при переключении настройки
+  // (apply3DShadowSetting). Первый кадр после создания рендерера — тоже.
+  renderer.shadowMap.enabled = shadows3DEnabled();
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
   container.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(v3.camera, renderer.domElement);
@@ -23914,6 +24236,9 @@ function rebuild3DRenderer() {
   create3DRendererAndControls(container);
   if (target) v3.controls.target.copy(target);
   v3.controls.update();
+  // Профиль сменился — вместе с ним и право на тени: в лёгком режиме их не
+  // бывает (shadows3DEnabled). Настройка при этом не трогается.
+  apply3DShadowSetting();
   on3DResize(); // размер холста + resolution у материала рёбер — под новый рендерер
 }
 
@@ -24070,6 +24395,14 @@ function render3DFrame() {
   // ракурса и должно быть посчитано ровно один раз на показанный кадр.
   update3DAxisLabelVisibility();
   updateZoomIndicator3D();
+  // Солнце, привязанное к камере, переставляется перед каждым кадром — и
+  // если оно реально повернулось, карта теней устарела (её autoUpdate
+  // выключен, см. create3DRendererAndControls). Это и есть цена такой
+  // привязки: при вращении с включёнными тенями сцена рисуется дважды за
+  // кадр. При привязке к модели свет стоит на месте и пересчитывать нечего.
+  if (sun3DFollowsCamera() && place3DSun() && v3.renderer.shadowMap.enabled) {
+    v3.renderer.shadowMap.needsUpdate = true;
+  }
   v3.renderer.render(v3.scene, v3.camera);
 }
 
