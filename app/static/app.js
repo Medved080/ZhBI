@@ -22209,12 +22209,17 @@ const COLUMN_BEAM_END_MATCH_TOLERANCE_MM = 1000;
 // надёжности:
 //   1) ближайшая колонна ВЫШЕ в той же точке плана — колонны стоят
 //      стопкой, и низ следующей и есть верх этой;
-//   2) её нет — ближайшая плита перекрытия или ригель выше НАД ЭТОЙ
-//      ТОЧКОЙ: колонна последняя в своей секции, над ней перекрытие
-//      или кровля;
-//   3) нет и их — шаг этажа СНИЗУ (высота колонны под этой же точкой):
-//      над колонной в модели пусто, но этаж под ней задаёт масштаб
-//      лучше, чем отметка из другой части здания.
+//   2) её нет — перекрытие или ригель выше НАД ЭТОЙ ТОЧКОЙ, но не выше
+//      следующего яруса колонн: колонна последняя в своей секции, и
+//      несёт всё, что над ней есть, до начала чужого пролёта. Берётся
+//      САМОЕ ВЕРХНЕЕ такое перекрытие, а не ближайшее: колонна проходит
+//      СКВОЗЬ перекрытия (у АБК «средняя» идёт сквозь два — стык колонн
+//      примерно двумя метрами выше пола), и ближайшее оборвало бы её на
+//      середине собственного пролёта. У самого верхнего яруса границы
+//      нет и правило другое — ближайшее перекрытие сверху (подробности
+//      у шага 2 в коде);
+//   3) нет и их — оценка этажа: меньшее из своего пролёта снизу и
+//      медианного шага перекрытий модели (см. typicalDeckStep).
 // Порядок важен: колонна ищется ПЕРВОЙ. Иначе ригель-парапет на
 // промежуточной отметке (в реальных данных +5200 между ярусами колонн 0
 // и +8050) обрезал бы колонну, которая на самом деле идёт до следующего
@@ -22272,6 +22277,25 @@ function _outlineBox(outline, pad) {
   return { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad };
 }
 
+// «Этаж этого дома» — медиана расстояний между соседними отметками
+// перекрытий модели. Медиана, а не среднее: пара мелких служебных
+// площадок между этажами (у АБК их четыре на 2599 плит) утянула бы
+// среднее вниз, а медиану — нет.
+function typicalDeckStep() {
+  const set = new Set();
+  for (const e of state.elements) {
+    if (e.element_type !== "Плита перекрытия") continue;
+    if (e.elevation_mm === null || e.elevation_mm === undefined) continue;
+    set.add(e.elevation_mm);
+  }
+  const elevations = Array.from(set).sort((a, b) => a - b);
+  if (elevations.length < 2) return null;
+  const steps = [];
+  for (let i = 1; i < elevations.length; i++) steps.push(elevations[i] - elevations[i - 1]);
+  steps.sort((a, b) => a - b);
+  return steps[Math.floor(steps.length / 2)];
+}
+
 function computeColumnTops(levels) {
   const tops = new Map();
 
@@ -22326,6 +22350,24 @@ function computeColumnTops(levels) {
   if (!noColumnAbove.length) return tops;
 
   // ---- 2) перекрытие или ригель выше над этой точкой ----
+  //
+  // Ярус колонн — НЕ этаж: у реального здания (АБК) колонна «средняя»
+  // идёт от +7020 до +16920 СКВОЗЬ два перекрытия (+10050 и +15000) —
+  // стык колонн стоит примерно двумя метрами выше пола. Поэтому взять
+  // просто ближайшее перекрытие сверху нельзя: колонна оборвалась бы на
+  // середине своего пролёта, а этаж над ней остался бы без колонн.
+  //
+  // Верхнюю границу пролёта задаёт СЛЕДУЮЩИЙ ярус колонн: колонна не
+  // может подняться выше отметки, с которой начинается колонна над ней.
+  // Внутри этой границы берём САМОЕ ВЕРХНЕЕ перекрытие над точкой — оно
+  // и есть последнее, что эта колонна несёт.
+  //
+  // У САМОГО ВЕРХНЕГО яруса модели такой границы нет, и там правило
+  // другое — ближайшее перекрытие сверху: выше него колонну поднимает
+  // только ригель, опирающийся на неё концом (локальная кровля
+  // техпомещения, см. ниже). Иначе колонна под серединой такой кровли
+  // пробила бы основную крышу, а это ровно то, что заказчик отдельно
+  // запретил.
   const deckByCell = new Map();
   const bigDecks = [];
   for (const e of state.elements) {
@@ -22341,12 +22383,16 @@ function computeColumnTops(levels) {
     }
   }
 
-  function deckAbove(col) {
+  // limit — верх пролёта (следующий ярус колонн); null у верхнего яруса.
+  // С границей берём самое верхнее перекрытие под ней, без границы —
+  // ближайшее сверху.
+  function deckAbove(col, limit) {
     let best = null;
     const consider = (deck) => {
       if (deck.elev <= col.elev) return;
+      if (limit !== null && deck.elev > limit) return;
       if (col.cx < deck.minX || col.cx > deck.maxX || col.cy < deck.minY || col.cy > deck.maxY) return;
-      if (best === null || deck.elev < best) best = deck.elev;
+      if (best === null || (limit !== null ? deck.elev > best : deck.elev < best)) best = deck.elev;
     };
     const bucket = deckByCell.get(_gridCell(col.cx, col.cy));
     if (bucket) for (const deck of bucket) consider(deck);
@@ -22356,21 +22402,43 @@ function computeColumnTops(levels) {
 
   const stillOpen = [];
   for (const col of noColumnAbove) {
-    const deck = deckAbove(col);
+    const idx = levels.indexOf(col.elev);
+    const limit = (idx !== -1 && idx < levels.length - 1) ? levels[idx + 1] : null;
+    const deck = deckAbove(col, limit);
     if (deck !== null) tops.set(col.id, deck);
     else stillOpen.push(col);
   }
 
-  // ---- 3) шаг этажа снизу ----
-  for (const col of stillOpen) {
-    if (col.below !== null && col.below < col.elev) tops.set(col.id, col.elev + (col.elev - col.below));
+  // ---- 3) оценка этажа: меньшее из своего пролёта снизу и типичного
+  //         шага перекрытий по модели ----
+  //
+  // Над колонной в модели пусто (колонны машинного отделения АБК: стоят
+  // на кровле +39300, своей крыши в чертеже нет). Один свой пролёт снизу
+  // тут врёт: у той же колонны он двухэтажный (11 800 мм), и она встала
+  // бы одиннадцатиметровой свечой над крышей. Медианный шаг перекрытий —
+  // это «этаж этого дома»; меньшее из двух и берём, чтобы ошибаться в
+  // сторону «не торчит».
+  if (stillOpen.length) {
+    const typical = typicalDeckStep();
+    for (const col of stillOpen) {
+      const own = (col.below !== null && col.below < col.elev) ? col.elev - col.below : null;
+      const step = (own !== null && typical !== null) ? Math.min(own, typical) : (own !== null ? own : typical);
+      if (step !== null && step > 0) tops.set(col.id, col.elev + step);
+    }
   }
 
   // ---- ригель, опирающийся концом на колонну выше её потолка ----
   //
-  // Кандидаты — только колонны без колонны сверху: у остальных верх
-  // определён стопкой, и ригель этажом выше их не касается.
-  if (noColumnAbove.length) {
+  // Кандидаты — колонны САМОГО ВЕРХНЕГО яруса, у которых сверху нет
+  // колонны. Ярусом ниже такому ригелю взяться неоткуда: над колонной
+  // непромежуточного яруса начинается следующая колонна, и «локальная
+  // кровля» там — чужая. На реальных данных без этого ограничения
+  // ригель на +25800 поднимал до себя колонну яруса +7020, у которой
+  // просто не нашлось соседа сверху в допуске.
+  const topLevelForBeams = levels.length ? levels[levels.length - 1] : null;
+  const beamCandidates = noColumnAbove.filter(col => col.elev === topLevelForBeams);
+  for (const col of beamCandidates) col.beamCandidate = true;
+  if (beamCandidates.length) {
     for (const beam of state.elements) {
       if (beam.element_type !== "Ригель") continue;
       if (beam.elevation_mm === null || beam.elevation_mm === undefined) continue;
@@ -22389,7 +22457,7 @@ function computeColumnTops(levels) {
             const bucket = columnsByCell.get(`${gx + cx}:${gy + cy}`);
             if (!bucket) continue;
             for (const col of bucket) {
-              if (!col.openTop) continue;                    // верх задан колонной сверху — ригель тут ни при чём
+              if (!col.beamCandidate) continue;               // не верхний ярус либо верх задан колонной сверху
               if (col.elev >= beam.elevation_mm) continue;   // ригель не выше колонны — не он её накрывает
               if (tops.has(col.id) && tops.get(col.id) >= beam.elevation_mm) continue;
               const d = Math.hypot(col.cx - ex, col.cy - ey);
