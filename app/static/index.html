@@ -883,7 +883,26 @@
      прогноза различались только цветом, но не длиной. Ширина ЗАДАЁТСЯ, как
      у #actions-panel-modal, — у `.modal` её нет, содержимое диаграммы
      тянулось бы за самой длинной подписью. */
-  #schedule-backdrop .modal { width: 1180px; max-width: 96vw; }
+  /* Форма — flex-колонка, и скроллится ВНУТРИ неё только диаграмма
+     (2026-08-22, живой репорт: «чтобы увидеть нижнюю границу и кнопку
+     „Закрыть“, надо скроллить»). Раньше высота собиралась сложением:
+     заголовок + закладки + шапка диаграммы + сама диаграмма (58 % экрана) +
+     строка итога + кнопки — и легко перерастала `max-height: 82vh` у
+     `.modal`, после чего уезжала за экран вся нижняя часть формы, включая
+     единственную кнопку выхода. Теперь высоту задаёт форма, а диаграмма
+     занимает то, что осталось. `min-height: 0` обязателен: без него
+     flex-элемент не сжимается ниже своего содержимого, а содержимое тут —
+     девятьсот строк. */
+  #schedule-backdrop .modal {
+    width: 1180px; max-width: 96vw;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #schedule-backdrop .sched-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  #schedule-tab-gantt.sched-panel { display: flex; flex-direction: column; overflow: hidden; }
+  /* Заголовок, закладки и кнопки формы не сжимаются — сжимается диаграмма. */
+  #schedule-backdrop .modal > h2,
+  #schedule-backdrop .modal > .tabs,
+  #schedule-backdrop .modal > .actions { flex: 0 0 auto; }
   .gantt-toolbar {
     display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;
   }
@@ -901,7 +920,10 @@
      самом деле. Человек ходит между этими двумя экранами, и разная
      раскраска одного и того же смысла заставляла бы сверяться с легендой. */
   :root { --gantt-plan: #4A86C8; --gantt-fc: #E8703A; }
-  .gantt-box { overflow: auto; max-height: 58vh; border: 1px solid var(--color-border); border-radius: 8px; }
+  .gantt-box {
+    overflow: auto; flex: 1 1 auto; min-height: 0;
+    border: 1px solid var(--color-border); border-radius: 8px;
+  }
   /* Ширина колонки названий живёт в CSS-переменной, а не в стиле каждой
      строки: при перетаскивании границы её меняет ОДНА запись на весь узел, и
      полторы тысячи строк перерисовывать не приходится — иначе таскание
@@ -1039,18 +1061,11 @@
      тот недоступен — тогда форма просто занимает всё окно. Оформление у обоих
      случаев одно, поэтому и класс один. */
   #schedule-backdrop.full { padding: 0; background: var(--color-surface); }
+  /* Полный экран меняет только РАЗМЕР: flex-колонкой и прокруткой внутри
+     диаграммы форма стала в обычном состоянии, см. выше. */
   #schedule-backdrop.full .modal {
-    width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh;
-    border-radius: 0; display: flex; flex-direction: column;
+    width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0;
   }
-  /* Панель закладки тянется на всю оставшуюся высоту, а внутри неё тянется
-     сама диаграмма. `min-height: 0` обязателен: без него flex-элемент не
-     сжимается ниже своего содержимого, и вместо прокрутки внутри диаграммы
-     форма вылезала бы за экран. */
-  #schedule-backdrop.full .sched-panel {
-    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
-  }
-  #schedule-backdrop.full .gantt-box { max-height: none; flex: 1 1 auto; min-height: 0; }
   #schedule-backdrop.full #schedule-versions-list,
   #schedule-backdrop.full #schedule-kinds-box,
   #schedule-backdrop.full #schedule-flow-box { max-height: none; }
