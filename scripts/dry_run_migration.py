@@ -35,11 +35,17 @@ COUNTED = [
     "elements", "status_history", "zones", "zone_levels", "axis_lines",
     "objects", "projects", "object_drawings", "users", "user_access",
     "contracts", "contract_lines", "counterparties", "agreements",
-    "specifications", "marks", "label_visibility", "zone_colors", "report_notes",
-    "default_contracts", "app_settings", "activity_log",
+    "specifications", "marks", "allowed_subtypes", "label_visibility", "zone_colors",
+    "report_notes", "default_contracts", "app_settings", "activity_log",
 ]
 
-OBJECT_SCOPED = ["label_visibility", "zone_colors", "report_notes",
+# Раскладка по объектам печатается отдельно: у этих таблиц ошибка миграции
+# выглядит не как «строк стало меньше», а как «строки уехали не в тот
+# объект», и общий счётчик её не поймает. allowed_subtypes здесь с
+# 2026-08-21 — её раскладка считается ПО ФАКТУ УПОТРЕБЛЕНИЯ подтипов в
+# elements, то есть зависит от ЗНАЧЕНИЙ, и на боевых данных может выйти
+# иначе, чем на копии.
+OBJECT_SCOPED = ["allowed_subtypes", "label_visibility", "zone_colors", "report_notes",
                  "default_contracts", "app_settings"]
 
 

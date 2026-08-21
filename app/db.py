@@ -829,6 +829,87 @@ def _migrate_object_scoped_tables(conn: sqlite3.Connection, changes: list) -> No
     changes.append("справочники и настройки перенесены внутрь объекта: " + ", ".join(todo))
 
 
+def _migrate_allowed_subtypes_to_object(conn: sqlite3.Connection, changes: list) -> None:
+    """Переносит справочник подтипов ВНУТРЬ объекта (2026-08-21).
+
+    Зачем. Подтип у этого заказчика — почти всегда ОТМЕТКА перекрытия
+    («на отм. +15.000»), то есть свойство конкретного здания: у соседнего
+    дома другая высота этажа и другой набор отметок целиком. Общий на всю
+    систему справочник их смешивал — после загрузки второго здания в
+    фильтрах и массовой правке первого появились два десятка чужих
+    отметок, которых там нет ни у одного изделия.
+
+    Куда попадают накопленные строки — НЕ «все в объект по умолчанию», как
+    у прежнего переноса справочников (_migrate_object_scoped_tables). Здесь
+    есть точный источник: подтип, которым реально размечены изделия
+    объекта, этому объекту и принадлежит. Поэтому основная раскладка —
+    по фактическому употреблению в `elements`, и она сама разводит два
+    здания по своим наборам отметок.
+
+    Остаток — строки справочника, которых нет ни у одного изделия НИ
+    ОДНОГО объекта (заведённые руками впрок, отменённые отметки, «Панель»
+    из исходной спецификации, под которую чертежей так и не было). Их
+    нельзя ни разложить по факту, ни потерять: человек их заводил
+    осознанно. Они уходят в объект с наименьшим id — тот единственный, для
+    которого справочник и наполнялся, пока объект был один.
+
+    Идемпотентность — по наличию колонки object_id, без маркера: состояние
+    само себя описывает. На allowed_subtypes не ссылается ни один внешний
+    ключ (проверено PRAGMA foreign_key_list по всем таблицам), поэтому
+    RENAME новой таблицы в старое имя ничьих ссылок не задевает — то самое
+    условие, из-за которого пересборка таблиц дважды ломала схему.
+    """
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(allowed_subtypes)")}
+    if not columns or "object_id" in columns:
+        return  # свежая установка (таблицу создаст schema.sql) либо уже перенесено
+    if conn.execute("SELECT COUNT(*) AS n FROM objects").fetchone()["n"] == 0:
+        return
+    default_object = conn.execute("SELECT MIN(id) AS id FROM objects").fetchone()["id"]
+
+    if conn.in_transaction:
+        conn.commit()   # посреди транзакции PRAGMA — молчаливый no-op
+    conn.execute("PRAGMA foreign_keys = OFF")
+
+    conn.execute("""
+        CREATE TABLE allowed_subtypes_new (
+            object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+            element_type TEXT NOT NULL,
+            subtype TEXT NOT NULL,
+            PRIMARY KEY (object_id, element_type, subtype)
+        )""")
+    # 1. По факту: чем размечены изделия объекта. Берутся ВСЕ строки, в том
+    #    числе is_current = 0: изделие, убранное из чертежа, может вернуться
+    #    следующей версией, и подтип должен быть на месте заранее.
+    conn.execute(
+        "INSERT OR IGNORE INTO allowed_subtypes_new (object_id, element_type, subtype) "
+        "SELECT DISTINCT object_id, element_type, subtype FROM elements "
+        "WHERE object_id IS NOT NULL AND subtype IS NOT NULL AND subtype <> ''"
+    )
+    # 2. Остаток справочника, не подтверждённый ни одним изделием, — в
+    #    объект по умолчанию (см. docstring).
+    conn.execute(
+        "INSERT OR IGNORE INTO allowed_subtypes_new (object_id, element_type, subtype) "
+        "SELECT ?, s.element_type, s.subtype FROM allowed_subtypes s "
+        "WHERE NOT EXISTS (SELECT 1 FROM allowed_subtypes_new n "
+        "                  WHERE n.element_type = s.element_type AND n.subtype = s.subtype)",
+        (default_object,),
+    )
+    по_объектам = conn.execute(
+        "SELECT object_id, COUNT(*) AS n FROM allowed_subtypes_new GROUP BY object_id"
+    ).fetchall()
+    conn.execute("DROP TABLE allowed_subtypes")
+    conn.execute("ALTER TABLE allowed_subtypes_new RENAME TO allowed_subtypes")
+
+    conn.commit()
+    # ОБЯЗАТЕЛЬНО вернуть проверку ключей: дальше по init_db идёт чистка
+    # наследия, которая рассчитывает на каскады (см.
+    # _migrate_object_scoped_tables — там это стоило 30 155 осиротевших
+    # записей истории при «успешной» миграции).
+    conn.execute("PRAGMA foreign_keys = ON")
+    расклад = ", ".join(f"объект #{r['object_id']}: {r['n']}" for r in по_объектам)
+    changes.append(f"справочник подтипов перенесён внутрь объекта ({расклад or 'пусто'})")
+
+
 def _migrate_user_access_contract_role(conn: sqlite3.Connection, changes: list) -> None:
     """Разрешает роль «Комплектовщик» в грантах (2026-08-04).
 
@@ -1983,24 +2064,22 @@ def _normalize_element_type_vocabulary(conn: sqlite3.Connection, changes: list) 
                     (new, layer, old),
                 )
 
-        # allowed_subtypes ключуется парой (тип, подтип) — та же коллизия, что
-        # и у остальных справочников ниже: при совпадении оставляем строку под
-        # новым именем, старую удаляем.
-        for row in conn.execute(
-            "SELECT subtype FROM allowed_subtypes WHERE element_type = ?", (old,)
-        ).fetchall():
-            subtype = row["subtype"]
-            if conn.execute(
-                "SELECT 1 FROM allowed_subtypes WHERE element_type = ? AND subtype = ?", (new, subtype)
-            ).fetchone():
-                conn.execute(
-                    "DELETE FROM allowed_subtypes WHERE element_type = ? AND subtype = ?", (old, subtype)
-                )
-            else:
-                conn.execute(
-                    "UPDATE allowed_subtypes SET element_type = ? WHERE element_type = ? AND subtype = ?",
-                    (new, old, subtype),
-                )
+        # allowed_subtypes ключуется тройкой (объект, тип, подтип) с
+        # 2026-08-21 — та же коллизия, что и у справочников выше, только
+        # сравнивать надо В ПРЕДЕЛАХ ОБЪЕКТА: «Ригель · периметральный» у
+        # одного объекта не мешает такой же строке у другого. Сначала
+        # удаляем те строки старого типа, у которых в ЭТОМ ЖЕ объекте уже
+        # есть двойник под новым именем, затем переименовываем остаток.
+        conn.execute(
+            "DELETE FROM allowed_subtypes WHERE element_type = ? AND EXISTS ("
+            "  SELECT 1 FROM allowed_subtypes b WHERE b.element_type = ?"
+            "    AND b.object_id = allowed_subtypes.object_id"
+            "    AND b.subtype = allowed_subtypes.subtype)",
+            (old, new),
+        )
+        conn.execute(
+            "UPDATE allowed_subtypes SET element_type = ? WHERE element_type = ?", (new, old)
+        )
 
         for row in conn.execute(
             "SELECT contract_id FROM contract_lines WHERE element_type = ?", (old,)
@@ -2059,6 +2138,10 @@ def init_db() -> list:
         # наследия и выдача доступов ставят там маркеры, а до переноса у
         # таблицы нет колонки object_id.
         _migrate_object_scoped_tables(conn, changes)
+        # Строго ПОСЛЕ бутстрапа объекта (нужен объект, куда переносить) и
+        # строго ДО _normalize_element_type_vocabulary: та переименовывает
+        # типы в справочнике подтипов и уже рассчитывает на ключ с объектом.
+        _migrate_allowed_subtypes_to_object(conn, changes)
         _migrate_user_access_global(conn, changes)
         # Строго ПОСЛЕ: та пересобирает таблицу с прежним CHECK на три роли,
         # эта расширяет ограничение до четырёх. В обратном порядке новая

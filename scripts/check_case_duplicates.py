@@ -78,13 +78,14 @@ from app.release_tasks import _ключ_без_регистра, _выбрать
     ),
     (
         "Подтипы",
-        "SELECT rowid AS id, element_type, subtype FROM allowed_subtypes",
-        lambda r: (r["element_type"], _ключ_без_регистра(r["subtype"])),
+        "SELECT rowid AS id, object_id, element_type, subtype FROM allowed_subtypes",
+        lambda r: (r["object_id"], r["element_type"], _ключ_без_регистра(r["subtype"])),
         lambda conn, r: conn.execute(
-            "SELECT COUNT(*) AS n FROM elements WHERE element_type = ? AND subtype = ?",
-            (r["element_type"], r["subtype"]),
+            "SELECT COUNT(*) AS n FROM elements "
+            "WHERE object_id = ? AND element_type = ? AND subtype = ?",
+            (r["object_id"], r["element_type"], r["subtype"]),
         ).fetchone()["n"],
-        lambda r: f"{r['element_type']} / «{r['subtype']}»",
+        lambda r: f"объект #{r['object_id']}, {r['element_type']} / «{r['subtype']}»",
         "изделий",
     ),
 ]

@@ -10518,7 +10518,11 @@ function renderSubtypesObjectSelect() {
 
 async function renderSubtypesModal() {
   renderSubtypesObjectSelect();
-  const подтипы = await api("/allowed-subtypes"); // {element_type: [subtype, ...]}
+  // Справочник подтипов принадлежит ОБЪЕКТУ (2026-08-21) — как и марки
+  // рядом, поэтому берётся по тому же subtypesObjectId, что и они.
+  const подтипы = subtypesObjectId
+    ? await api(`/allowed-subtypes?object_id=${subtypesObjectId}`)
+    : {};
   const марки = subtypesObjectId
     ? await api(`/marks?object_id=${subtypesObjectId}`) : [];
   const маркиПоТипу = new Map();
@@ -10559,17 +10563,18 @@ async function renderSubtypesModal() {
     // одном списке — то есть невыбираемым и невосстановимым.
     row.querySelectorAll("[data-remove]").forEach(btn => {
       btn.addEventListener("click", () => openDictDelete(
-        "subtype", `${elementType}|${btn.dataset.remove}`, { onDone: renderSubtypesModal }));
+        "subtype", `${subtypesObjectId}|${elementType}|${btn.dataset.remove}`,
+        { onDone: renderSubtypesModal }));
     });
 
     const input = row.querySelector("[data-add-input]");
     const addBtn = row.querySelector("[data-add-btn]");
     const submitAdd = async () => {
       const subtype = input.value.trim();
-      if (!subtype) return;
+      if (!subtype || subtypesObjectId == null) return;
       await api("/allowed-subtypes", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ element_type: elementType, subtype }),
+        body: JSON.stringify({ object_id: subtypesObjectId, element_type: elementType, subtype }),
       });
       await renderSubtypesModal();
     };
@@ -11436,7 +11441,9 @@ async function renderElementCatalog() {
 // текстом там, где нужен подчинённый справочник (подтип зависит от типа).
 const elementFormBackdrop = document.getElementById("element-form-backdrop");
 let efElement = null;
-let efAllowedSubtypes = null; // {тип: [подтипы]} — грузится один раз за сеанс
+let efAllowedSubtypes = null; // {тип: [подтипы]} справочник ОБЪЕКТА открытого
+                              // изделия — перечитывается на каждое открытие формы
+                              // (объектным стал 2026-08-21, кэш на сеанс отдавал бы чужой дом)
 let efMarks = [];             // справочник марок ОБЪЕКТА этого элемента
 
 // Правимые поля. Порядок и подписи — как в карточке на схеме (сначала «что
@@ -11722,24 +11729,24 @@ async function openElementForm(elementId, show = true) {
       // Не админ или список недоступен — свободный ввод и так работает.
     }
   }
-  if (!efAllowedSubtypes) {
-    try {
-      efAllowedSubtypes = await api("/allowed-subtypes");
-    } catch (e) {
-      efAllowedSubtypes = {};
-    }
-  }
   efElement = await api(`/elements/${elementId}`);
-  // Марки — справочник ОБЪЕКТА (2026-08-05), поэтому список перечитывается
-  // на каждое открытие формы, а не кэшируется на сеанс, как подтипы: форма
-  // открывается по элементам разных объектов, и чужой список означал бы
-  // выпадающий список, в котором нет собственной марки элемента.
+  // Марки И ПОДТИПЫ — справочники ОБЪЕКТА (марки с 2026-08-05, подтипы с
+  // 2026-08-21), поэтому оба списка перечитываются на каждое открытие
+  // формы, а не кэшируются на сеанс: форма открывается по элементам разных
+  // объектов, и чужой список означал бы выпадающий список, в котором нет
+  // собственного значения элемента.
   efMarks = [];
+  efAllowedSubtypes = {};
   if (efElement.object_id != null) {
     try {
       efMarks = await api(`/marks?object_id=${efElement.object_id}`);
     } catch (e) {
       efMarks = [];
+    }
+    try {
+      efAllowedSubtypes = await api(`/allowed-subtypes?object_id=${efElement.object_id}`);
+    } catch (e) {
+      efAllowedSubtypes = {};
     }
   }
   document.getElementById("ef-title").textContent =
@@ -20582,6 +20589,13 @@ document.getElementById("menu-import-input").addEventListener("click", async () 
   filesEl.innerHTML = "<div class='hint-text'>Читаю папку…</div>";
   importInputSubmit.disabled = true;
   importInputBackdrop.classList.add("open");
+  // Список объектов — тот же, что в форме загрузки чертежа, и с той же
+  // предустановкой на текущий объект схемы: оператор чаще всего кладёт в
+  // папку чертёж того здания, которое сейчас перед ним.
+  const objSel = document.getElementById("import-input-object");
+  objSel.innerHTML = state.projects.flatMap(p => p.objects.map(o =>
+    `<option value="${o.id}">${escapeHtml(p.name)} · ${escapeHtml(o.name)}</option>`)).join("");
+  if (state.objectId) objSel.value = String(state.objectId);
   try {
     const data = await api("/admin/input-files");
     const rows = [];
@@ -20609,7 +20623,11 @@ importInputSubmit.addEventListener("click", async () => {
   importInputSubmit.disabled = true;
   reportEl.innerHTML = "<div class='hint-text'>Загрузка… это может занять до нескольких минут.</div>";
   try {
-    const res = await api("/admin/import-input", { method: "POST" });
+    const целевой = document.getElementById("import-input-object").value;
+    const res = await api("/admin/import-input", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ object_id: целевой ? Number(целевой) : null }),
+    });
     reportEl.innerHTML = `<div class="hint-text"><b>Готово:</b><br>${res.report.map(escapeHtml).join("<br>")}</div>`;
     // Схема на экране показывает уже устаревшие данные — перечитываем и
     // список источников (мог появиться новый чертёж), и сам план.
@@ -21193,6 +21211,31 @@ function openImportReview(analysis) {
     </details>` : "") +
     (c.zones_new ? `<div class="hint-text" style="margin-top:6px">Новых зон в чертеже:
       ${c.zones_new} — будут добавлены в справочники.</div>` : "") +
+    // Новые подтипы (2026-08-21). Показываются СПИСКОМ, а не числом, и
+    // раскрытыми: справочник подтипов у объекта свой и пополняется самой
+    // загрузкой, то есть это единственный момент, когда опечатку в имени
+    // слоя («на отм. +27370» рядом с «на отм. +27.370») ещё можно заметить
+    // до того, как она станет записью справочника и подтипом у изделий.
+    // Изделия, для которых марка в чертеже не нашлась (2026-08-21).
+    // Показывается ДО применения, а не только в итоговой строке после:
+    // марка — это ключ, по которому изделие связывается с позицией
+    // контракта, и «загрузилось, но без марок» надо видеть тогда, когда
+    // загрузку ещё можно отменить и вернуть чертёж проектировщику.
+    ((analysis.by_mark_source || {}).unresolved ? `<div style="margin-top:10px; color:var(--color-danger)">
+      <b>${analysis.by_mark_source.unresolved}</b> изделий без марки — в чертеже для них не нашлось подписи.
+      <div class="hint-text">Такое изделие загрузится, но не свяжется с позицией контракта:
+        привязка идёт по паре «тип + марка».</div>
+    </div>` : "") +
+    (c.subtypes_new ? `<details style="margin-top:10px" open>
+      <summary><b>Новых подтипов у объекта: ${c.subtypes_new}</b></summary>
+      <div class="hint-text">Справочник подтипов свой у каждого объекта и пополняется
+        загрузкой. Проверьте список — похожие написания рядом обычно означают опечатку
+        в имени слоя чертежа.</div>
+      <div style="font-size:12px; margin-top:6px">
+        ${analysis.details.subtypes_new.map(s => `<div style="margin-bottom:2px">
+          ${escapeHtml(s.element_type)} · <b>${escapeHtml(s.subtype)}</b></div>`).join("")}
+      </div>
+    </details>` : "") +
     // Расхождения с правленными руками полями (решение Э4). По умолчанию
     // галочки СНЯТЫ — ручное значение сохраняется: терять правку человека
     // молча нельзя, а вернуть значение из чертежа он может одним щелчком.

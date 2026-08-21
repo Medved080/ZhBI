@@ -27,6 +27,15 @@ LayerNameError с именем проблемного слоя и причино
 стандарт от старого LAYER_CONFIG в parse_zhbi.py (файлы по самому
 первому, дозаголовочному стандарту вроде "WEB_Колонна_нижняя" под эту
 грамматику не подходят) — оба пути сосуществуют, см. parse_zhbi.py.
+
+ЕДИНСТВЕННОЕ исключение из строгости — НЕЗНАКОМЫЙ ПОДТИП (2026-08-21,
+решение пользователя). Он не отвергается, а принимается как есть и
+помечается `subtype_is_new`: справочник подтипов принадлежит объекту и
+наполняется самой загрузкой чертежа (см. app/dxf_import.py, schema.sql).
+Строгость от этого не страдает — незнакомый подтип и не был отклонением
+от стандарта, он был отсутствием строки в справочнике. Всё остальное —
+незнакомый тип, роль, категория, лишние части имени и, отдельно,
+испорченная отметка "ОТМ..." — по-прежнему отказ.
 """
 
 import re
@@ -97,6 +106,11 @@ class ParsedLayerName:
     elevation_mm: Optional[int]  # со знаком; None — отметки в имени нет
     role: str  # ZHBI_ROLES или "Зона"/"Наименование" в зависимости от group
     floor: Optional[int] = None  # см. parse_floor_token — None, пока заказчик не начал проставлять "_этаж N"
+    # Подтипа не было в справочнике объекта, написание взято из файла
+    # (2026-08-21). Разбору это ничем не мешает — признак нужен
+    # записывающему коду, чтобы добавить подтип объекту и показать в сводке
+    # загрузки, что именно прибавилось.
+    subtype_is_new: bool = False
 
 
 def _ci_lookup(token: str, canonical_values) -> Optional[str]:
@@ -210,6 +224,7 @@ def _parse_zhbi_layer(name: str, tokens: list, allowed_subtypes: dict) -> Parsed
         raise LayerNameError(name, "слишком много частей между типом и ролью (ожидается максимум подтип + отметка)")
 
     subtype = None
+    subtype_is_new = False
     elevation_mm = None
     for token in middle:
         elev = parse_elevation_token(token)
@@ -219,19 +234,51 @@ def _parse_zhbi_layer(name: str, tokens: list, allowed_subtypes: dict) -> Parsed
             elevation_mm = elev
             continue
         if subtype is not None:
+            if token.upper().startswith("ОТМ"):
+                # Самый частый случай на реальных файлах: подтип разобран, а
+                # отметка следом написана с ошибкой. Говорим про отметку, а
+                # не «не подтип и не отметка» — иначе проектировщик ищет
+                # проблему не в том месте имени.
+                raise LayerNameError(
+                    name,
+                    f"не удалось разобрать отметку {token!r}: ожидается ОТМ, затем "
+                    f"необязательный знак П/М и ровно пять цифр (например ОТМП30750)",
+                )
             raise LayerNameError(name, f"не удалось распознать часть имени {token!r} (не подтип и не отметка)")
+        # Токен, похожий на ИСПОРЧЕННУЮ отметку, подтипом не считается
+        # (2026-08-21). Иначе опечатка проектировщика в самой отметке
+        # ("ОТМП30.750" вместо "ОТМП30750", "ОТМП1234" вместо пяти цифр)
+        # молча заводила бы подтип с таким именем — и вместо понятного
+        # отказа система получала бы мусор в справочнике и потерянную
+        # отметку у сотен изделий. Всё, что начинается на "ОТМ", обязано
+        # быть отметкой либо ошибкой.
+        if token.upper().startswith("ОТМ"):
+            raise LayerNameError(
+                name,
+                f"не удалось разобрать отметку {token!r}: ожидается ОТМ, затем "
+                f"необязательный знак П/М и ровно пять цифр (например ОТМП30750)",
+            )
         allowed = allowed_subtypes.get(type_canonical, set())
         subtype_canonical = _ci_lookup(token, allowed) if allowed else None
         if subtype_canonical is None:
-            raise LayerNameError(
-                name,
-                f"неизвестный подтип {token!r} для типа {type_canonical!r} "
-                f"(допустимые: {sorted(allowed) if allowed else 'справочник пуст'})",
-            )
+            # Подтипа ещё нет в справочнике — это НЕ ошибка (2026-08-21,
+            # решение пользователя). Справочник подтипов принадлежит
+            # объекту и наполняется загрузкой чертежа: у нового объекта он
+            # пуст по определению, и требовать завести два десятка отметок
+            # руками ДО первой загрузки — работа ни о чём, ответ на неё всё
+            # равно целиком лежит в файле.
+            #
+            # Берётся написание ИЗ ФАЙЛА: в справочник попадёт ровно то, что
+            # стоит в слое. Записывающий код (app/dxf_import.py) добавит его
+            # объекту, и со следующей загрузки сработает обычное сравнение
+            # без учёта регистра.
+            subtype, subtype_is_new = token, True
+            continue
         subtype = subtype_canonical
 
     return ParsedLayerName(
-        group="zhbi", type_or_category=type_canonical, subtype=subtype, elevation_mm=elevation_mm, role=role_canonical
+        group="zhbi", type_or_category=type_canonical, subtype=subtype, elevation_mm=elevation_mm,
+        role=role_canonical, subtype_is_new=subtype_is_new,
     )
 
 

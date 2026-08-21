@@ -55,11 +55,12 @@ from app.db import get_connection
 
 router = APIRouter(tags=["dictionaries"])
 
-# Разделитель составного ключа. Подтип адресуется парой (тип, подтип), и
-# передавать её двумя параметрами пути значило бы городить отдельный маршрут
-# ради одного справочника. Делится по ПЕРВОМУ вхождению (str.partition),
-# поэтому тот же символ внутри подтипа ничего не ломает — достаточно, что
-# его нет ни в одном из четырёх типов элементов.
+# Разделитель составного ключа. Подтип адресуется ТРОЙКОЙ (объект, тип,
+# подтип) — с 2026-08-21, когда справочник подтипов стал объектным, — и
+# передавать её тремя параметрами пути значило бы городить отдельный
+# маршрут ради одного справочника. Делится по ПЕРВЫМ ДВУМ вхождениям
+# (str.split с maxsplit), поэтому тот же символ внутри подтипа ничего не
+# ломает — достаточно, что его нет ни в одном из четырёх типов элементов.
 SEP = "|"
 
 
@@ -150,48 +151,63 @@ def _mark_delete(conn, row):
 # ==================== ПОДТИПЫ ====================
 
 
+# Ключ подтипа — ТРОЙКА (объект, тип, подтип) с 2026-08-21: справочник
+# принадлежит объекту, и «Ригель · периметральный» у одного здания и у
+# соседнего — две разные записи, которые удаляются по отдельности. Первые
+# два разделителя служебные (id объекта и тип), остаток целиком — подтип:
+# сам подтип может содержать что угодно, включая SEP.
 def _subtype_load(conn, key):
-    element_type, _, subtype = key.partition(SEP)
+    части = key.split(SEP, 2)
+    if len(части) != 3 or not части[0].isdigit():
+        return None
+    object_id, element_type, subtype = int(части[0]), части[1], части[2]
     return conn.execute(
-        "SELECT element_type, subtype FROM allowed_subtypes WHERE element_type = ? AND subtype = ?",
-        (element_type, subtype),
+        "SELECT object_id, element_type, subtype FROM allowed_subtypes "
+        "WHERE object_id = ? AND element_type = ? AND subtype = ?",
+        (object_id, element_type, subtype),
     ).fetchone()
 
 
 def _subtype_key(row):
-    return f"{row['element_type']}{SEP}{row['subtype']}"
+    return f"{row['object_id']}{SEP}{row['element_type']}{SEP}{row['subtype']}"
 
 
 def _subtype_refs(conn, row):
+    # Считаются изделия ТОЛЬКО своего объекта: у соседнего здания подтип с
+    # тем же названием — чужая запись, и удаление этой его не касается.
     n = conn.execute(
-        "SELECT COUNT(*) AS n FROM elements WHERE element_type = ? AND subtype = ?",
-        (row["element_type"], row["subtype"]),
+        "SELECT COUNT(*) AS n FROM elements "
+        "WHERE object_id = ? AND element_type = ? AND subtype = ?",
+        (row["object_id"], row["element_type"], row["subtype"]),
     ).fetchone()["n"]
     return _непустые([("Изделия", n)])
 
 
 def _subtype_candidates(conn, row, parent_target):
     rows = conn.execute(
-        "SELECT subtype FROM allowed_subtypes WHERE element_type = ? AND subtype <> ? "
+        "SELECT subtype FROM allowed_subtypes "
+        "WHERE object_id = ? AND element_type = ? AND subtype <> ? "
         "ORDER BY subtype COLLATE NOCASE",
-        (row["element_type"], row["subtype"]),
+        (row["object_id"], row["element_type"], row["subtype"]),
     ).fetchall()
-    return [{"key": f"{row['element_type']}{SEP}{r['subtype']}", "label": r["subtype"]}
+    return [{"key": f"{row['object_id']}{SEP}{row['element_type']}{SEP}{r['subtype']}",
+             "label": r["subtype"]}
             for r in rows]
 
 
 def _subtype_repoint(conn, row, target):
     n = conn.execute(
         "UPDATE elements SET subtype = ?, updated_at = datetime('now') "
-        "WHERE element_type = ? AND subtype = ?",
-        (target["subtype"], row["element_type"], row["subtype"]),
+        "WHERE object_id = ? AND element_type = ? AND subtype = ?",
+        (target["subtype"], row["object_id"], row["element_type"], row["subtype"]),
     ).rowcount
     return _непустые([("Изделия", n)])
 
 
 def _subtype_delete(conn, row):
-    conn.execute("DELETE FROM allowed_subtypes WHERE element_type = ? AND subtype = ?",
-                 (row["element_type"], row["subtype"]))
+    conn.execute(
+        "DELETE FROM allowed_subtypes WHERE object_id = ? AND element_type = ? AND subtype = ?",
+        (row["object_id"], row["element_type"], row["subtype"]))
 
 
 # ==================== ПРЕФИКСЫ МАРОК ====================

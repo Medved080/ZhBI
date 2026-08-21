@@ -290,21 +290,46 @@ def build_leader_pool(old_leaders, multi_leaders, texts):
     "стрелки". Глобальная жадная сортировка по расстоянию в
     resolve_via_leaders() ниже гарантирует, что более близкий (и, скорее
     всего, верный) кандидат-элемент заберёт текст раньше более далёкого.
+
+    **ПУСТАЯ подпись в пул не попадает** (2026-08-21). Пустой текстовый
+    объект — не марка, а мусор, оставшийся в чертеже, и марку он не несёт
+    ни при каком расстоянии. А вот отобрать её у изделия может: сортировка
+    жадная по расстоянию, и пустышка, лежащая на 90 мм ближе настоящей
+    подписи, забирает изделие себе — изделие остаётся БЕЗ марки, а
+    настоящая подпись не достаётся никому. Ровно это и случилось на
+    реальном файле второго здания: у 28 ригелей (оси 12–13, семь отметок)
+    рядом лежали и пустышка в ~900 мм, и марка «Рк1» в 1031 мм, и
+    выигрывала пустышка. Проектировщик к тому моменту подписи уже дописал —
+    мешала им система (`Docs/backlog.md` 2026-08-21).
+
+    Хуже того, изделие при этом считалось РАСПОЗНАННЫМ (`source="leader"`
+    при пустой марке), то есть в сводку загрузки как проблема не попадало.
+    Теперь такое изделие честно остаётся `unresolved` и видно числом.
     """
     pool = []  # [{points: [Vec2, ...], text: str, handle: str}]
     used_text_ids = set()
 
+    def есть_текст(значение) -> bool:
+        return bool((значение or "").strip())
+
     for ml in multi_leaders:
+        if not есть_текст(ml["text"]):
+            continue
         pool.append({"points": ml["arrow_points"], "text": ml["text"], "handle": ml["handle"]})
 
     for leader in old_leaders:
         entry = find_nearest_text_entry(leader["tail"], texts, MAX_LEADER_TEXT_DISTANCE)
-        if entry:
+        if entry and есть_текст(entry["text"]):
             pool.append({"points": [leader["arrow"]], "text": entry["text"], "handle": leader["handle"]})
+            # Помечается потреблённым в любом случае, когда выноска его
+            # нашла: пустышка, «принадлежащая» выноске, не должна вторым
+            # заходом попасть в пул как самостоятельный голый текст.
+            used_text_ids.add(id(entry))
+        elif entry:
             used_text_ids.add(id(entry))
 
     for t in texts:
-        if id(t) in used_text_ids:
+        if id(t) in used_text_ids or not есть_текст(t["text"]):
             continue
         pool.append({"points": [t["point"]], "text": t["text"], "handle": t["handle"]})
 
@@ -430,7 +455,11 @@ def resolve_via_polygon_texts(pending: list[dict], texts: list[dict]) -> dict:
         candidate_idx = tree.query(poly.buffer(TEXT_INSIDE_POLYGON_TOLERANCE_MM), predicate="contains")
         for t_idx in candidate_idx:
             t = texts[t_idx]
-            if not t["text"]:
+            # Пустой фрагмент пропускается — как и в build_leader_pool
+            # (2026-08-21). `.strip()` добавлен туда же: текст из одних
+            # пробелов ведёт себя как пустой, а «не пустая строка» его
+            # пропускала.
+            if not (t["text"] or "").strip():
                 continue
             dist = item["point"].distance(t["point"])
             pairs.append((dist, e_idx, t_idx))

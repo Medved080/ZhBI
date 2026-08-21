@@ -159,26 +159,39 @@ def coerce_field(field: str, raw) -> Optional[object]:
     return str(raw).strip()
 
 
-def check_subtype(conn, element_type: Optional[str], subtype: Optional[str]) -> Optional[str]:
+def check_subtype(conn, element_type: Optional[str], subtype: Optional[str],
+                  object_id: Optional[int] = None) -> Optional[str]:
     """Проверяет пару тип+подтип по справочнику allowed_subtypes. Возвращает
     текст ошибки или None.
 
     Проверка именно ПАРЫ, а не подтипа в одиночку: текст подтипа намеренно
     переиспользуется между типами («на отм. +15.000» есть и у Ригеля, и у
     Плиты перекрытия), поэтому «такой подтип существует» ничего не значит.
+
+    object_id — справочник принадлежит объекту (2026-08-21): «на отм.
+    +30.750» есть у одного здания и отсутствует у соседнего, и разрешать
+    правку по чужому набору отметок нельзя. Пусто — сверка по ВСЕМ
+    объектам сразу; так зовёт только массовая правка через Excel, где файл
+    по-прежнему содержит изделия всех объектов (хвост этапа C), а объект
+    конкретной строки известен вызывающему и передаётся им.
     """
     if subtype is None:
         return None
-    allowed = {
-        r["subtype"] for r in conn.execute(
-            "SELECT subtype FROM allowed_subtypes WHERE element_type = ?", (element_type,)
+    if object_id is None:
+        rows = conn.execute(
+            "SELECT DISTINCT subtype FROM allowed_subtypes WHERE element_type = ?", (element_type,)
         )
-    }
+    else:
+        rows = conn.execute(
+            "SELECT subtype FROM allowed_subtypes WHERE element_type = ? AND object_id = ?",
+            (element_type, object_id),
+        )
+    allowed = {r["subtype"] for r in rows}
     if subtype in allowed:
         return None
     return (f"Подтип «{subtype}» не разрешён для типа «{element_type}». "
             f"Допустимые: {', '.join(sorted(allowed)) or 'нет'} "
-            f"(правится в «Действия → Справочники → Подтипы»)")
+            f"(правится в «Действия → Справочники → Подтипы»; справочник свой у каждого объекта)")
 
 
 def contract_mismatch(conn, contract_id, element_type, mark, element_id=None) -> Optional[str]:

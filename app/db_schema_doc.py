@@ -356,9 +356,10 @@ TABLES = [
     ("created_at", "TEXT", "", "создана"),
     ("updated_at", "TEXT", "", "изменена"),
 ]),
-("allowed_subtypes", "allowed_subtypes — Допустимые подтипы", C_REF, S_REF, [
+("allowed_subtypes", "allowed_subtypes — Подтипы объекта", C_REF, S_REF, [
+    ("object_id", "INTEGER", "PK FK", "объект-владелец: подтип — обычно отметка перекрытия, то есть свойство здания"),
     ("element_type", "TEXT", "PK", "тип элемента"),
-    ("subtype", "TEXT", "PK", "разрешённый подтип (разбор имени слоя без учёта регистра)"),
+    ("subtype", "TEXT", "PK", "подтип объекта (разбор имени слоя без учёта регистра); заводится загрузкой чертежа"),
 ]),
 ("status_colors", "status_colors — Цвета статусов", C_REF, S_REF, [
     ("status", "TEXT", "PK", "код статуса (planned, delivered, …)"),
@@ -550,6 +551,7 @@ FKS = [
     ("default_contracts", "object_id", "objects", "id", "CASCADE"),
     ("default_contracts", "contract_id", "contracts", "id", "SET NULL"),
     ("label_visibility", "object_id", "objects", "id", "CASCADE"),
+    ("allowed_subtypes", "object_id", "objects", "id", "CASCADE"),
     ("app_settings", "object_id", "objects", "id", "CASCADE"),
     ("report_notes", "object_id", "objects", "id", "CASCADE"),
     ("activity_log", "user_id", "users", "id", "SET NULL"),
@@ -562,7 +564,7 @@ SOFT = [
     ("axis_lines", "source_file", "object_drawings", "source_file", "сетка осей файла"),
     ("zones", "source_file", "object_drawings", "source_file", "происхождение"),
     ("elements", "current_status", "status_colors", "status", "цвет статуса"),
-    ("elements", "subtype", "allowed_subtypes", "subtype", "справочник подтипов"),
+    ("elements", "subtype", "allowed_subtypes", "subtype", "справочник подтипов объекта"),
     ("elements", "layer", "element_shapes", "layer", "форма маркера"),
     ("elements", "element_type", "label_visibility", "element_type", "видимость подписей"),
     ("elements", "element_type", "default_contracts", "element_type", "контракт по умолчанию"),

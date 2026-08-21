@@ -40,8 +40,8 @@ from app.activity_actions import (
 )
 from app.backups import (
     KIND_BEFORE_REBUILD, KIND_MANUAL, BackupError,
-    adopt_legacy_backup, create_backup, database_bytes, delete_backup, disk_state,
-    list_backups, restore_backup,
+    adopt_legacy_backup, backup_before_import, create_backup, database_bytes,
+    delete_backup, disk_state, list_backups, restore_backup,
 )
 from app.contracts import (
     apply_status_change,
@@ -290,6 +290,24 @@ async def _log_http_exception(request: Request, exc: StarletteHTTPException):
 async def _log_validation_error(request: Request, exc: RequestValidationError):
     error_log.note_validation_error(request, str(exc.errors())[:500])
     return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(BackupError)
+async def _backup_error(request: Request, exc: BackupError):
+    """Копию базы снять не удалось — чаще всего кончилось место (507).
+
+    Обработчик общий, а не try/except у каждого вызова: копия снимается
+    перед КАЖДОЙ загрузкой данных из файла (2026-08-21, восемь точек), и
+    восемь одинаковых обёрток разошлись бы при первой же правке. Текст
+    BackupError уже написан для человека и говорит, что делать, — отдаём
+    его как есть.
+
+    Отказ здесь означает, что загрузка НЕ НАЧАЛАСЬ: копия снимается до
+    первой записи. Это и есть требуемое поведение — данные важнее
+    загрузки (см. шапку app/backups.py).
+    """
+    error_log.note_http_error(request, exc.status_code, exc.message)
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
 
 @app.exception_handler(Exception)
@@ -2165,17 +2183,34 @@ def admin_input_files(user: sqlite3.Row = Depends(require_service_feature("impor
     return list_input_files()
 
 
+class ImportInputIn(BaseModel):
+    # В какой объект грузится ВСЯ пачка (2026-08-21, запрос пользователя).
+    # Необязателен ради старого клиента и первой в жизни установки, где
+    # объекта ещё нет: тогда объект выводит сам импорт, как раньше.
+    object_id: Optional[int] = None
+
+
 @app.post("/admin/import-input")
-def admin_import_input(user: sqlite3.Row = Depends(require_service_feature("import_input", "write"))):
+def admin_import_input(body: Optional[ImportInputIn] = None,
+                       user: sqlite3.Row = Depends(require_service_feature("import_input", "write"))):
     """Импорт всех файлов из папки Input/ на сервере — по явной команде из
     меню. Раньше это происходило само при каждом старте сервера, то есть на
     каждый деплой и каждый перезапуск контейнера (см. on_startup, где
     объяснено, почему так делать не следует).
 
+    **Объект спрашивается в форме** (2026-08-21). До этого папка объект не
+    принимала вовсе, и на базе с двумя зданиями пакетная загрузка перестала
+    работать в принципе: чертёж уходил в отказ «в базе несколько объектов»,
+    а график СМР — что хуже — грузился, сопоставляя строки по ВСЕЙ базе, то
+    есть развозя даты по чужому дому. Один объект на всю пачку: папка — это
+    способ положить на сервер тяжёлый чертёж, а не разложить стройку по
+    зданиям.
+
     Порядок вызовов важен и совпадает с scripts/rebuild_db.py: сначала DXF
     (графику нужны уже привязанные к зонам элементы), затем xlsx. Файл
-    контрактации из папки НЕ грузится (2026-08-12) — его импорту нужен явный
-    выбор объекта, см. app/input_import.import_input_xlsx.
+    контрактации из папки НЕ грузится (2026-08-12) и с появлением выбора
+    объекта тоже: его объект выбирается ОТДЕЛЬНО, см.
+    app/input_import.import_input_xlsx.
 
     Возвращает построчный отчёт обоих импортов — то же самое, что уходит в
     лог сервера, но оператор лог не читает.
@@ -2184,14 +2219,25 @@ def admin_import_input(user: sqlite3.Row = Depends(require_service_feature("impo
     (source_file, dxf_handle)); статусы и история живут в отдельных
     таблицах и не затрагиваются. Предупреждение об этом — в диалоге
     подтверждения на фронтенде."""
-    report = import_input_dxf()
-    report += import_input_xlsx()
+    object_id = body.object_id if body else None
+    if object_id is not None:
+        # Права на КОНКРЕТНОМ объекте, а не только доступ к разделу: раздел
+        # общесервисный, а пишет загрузка в выбранное здание — та же
+        # проверка, что у загрузки чертежа по одному файлу.
+        conn = get_connection()
+        try:
+            assert_object_feature(conn, user, object_id, "drawings", "write")
+        finally:
+            conn.close()
+    backup_before_import("папка Input", audit_display_name(user), user["id"])
+    report = import_input_dxf(object_id)
+    report += import_input_xlsx(object_id)
     # В журнал: до 2026-07-30 массовая загрузка из Input/ нигде не
     # фиксировалась, кроме stdout сервера, — а она перезаписывает геометрию
     # всех элементов и создаёт контракты (живой репорт пользователя о
     # незаписанных системных событиях).
     activity.log(
-        "import_input", user=user,
+        "import_input", user=user, entity_type="object", entity_id=object_id,
         new_value=f"файлов обработано: {len(report)}",
         details={"report": report},
     )
@@ -3609,7 +3655,7 @@ def update_element_fields(
         new_type = values.get("element_type", row["element_type"])
         new_subtype = values.get("subtype", row["subtype"])
         if "element_type" in values or "subtype" in values:
-            err = check_subtype(conn, new_type, new_subtype)
+            err = check_subtype(conn, new_type, new_subtype, row["object_id"])
             if err:
                 raise HTTPException(status_code=400, detail=err)
 
@@ -3771,6 +3817,10 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
     if not body.changes:
         raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
     _check_bulk_mode(body.mode)
+    # Файл читается на фазе /analyze, пишет — эта: копия снимается здесь,
+    # чтобы не плодить её на каждый просмотр расхождений.
+    backup_before_import(f"массовая правка через Excel ({body.mode})",
+                         audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
         if body.mode == "contracting":
@@ -4416,15 +4466,38 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
     return next(o for o in list_objects(admin) if o.id == object_id)
 
 
+def _subtypes_object(conn, object_id: Optional[int]) -> int:
+    """Объект, чей справочник подтипов открыт. Справочник объектный с
+    2026-08-21, и объект здесь ОБЯЗАТЕЛЕН: «подтипы вообще», без здания, —
+    это ровно та общая куча отметок, от которой уходили. Пусто приходит
+    только от старого клиента, не перезагрузившего страницу после
+    обновления, — отвечаем внятно, а не пустым списком."""
+    if object_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Справочник подтипов свой у каждого объекта — выберите объект в тулбаре")
+    if conn.execute("SELECT id FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
+        raise HTTPException(status_code=404, detail="Объект не найден")
+    return object_id
+
+
 @app.get("/allowed-subtypes")
-def get_allowed_subtypes(user: sqlite3.Row = Depends(get_current_user)):
-    """Справочник допустимых подтипов по новому стандарту имён слоёв (см.
-    Docs/backlog.md) — редактируется через "Настройки → Справочник
-    подтипов", сознательно не зашит в код разбора (scripts/layer_naming.py)."""
+def get_allowed_subtypes(object_id: Optional[int] = None,
+                         user: sqlite3.Row = Depends(get_current_user)):
+    """Справочник подтипов ОДНОГО объекта по новому стандарту имён слоёв
+    (см. Docs/backlog.md). Наполняется сам при загрузке чертежа
+    (app/dxf_import.py), правится через «Действия → Справочники → Типы и
+    подтипы элементов»; в код разбора сознательно не зашит
+    (scripts/layer_naming.py принимает его параметром).
+
+    У нового объекта справочник ПУСТ — это норма, а не сбой: подтипы
+    появятся с первым же чертежом."""
     conn = get_connection()
     try:
+        object_id = _subtypes_object(conn, object_id)
         rows = conn.execute(
-            "SELECT element_type, subtype FROM allowed_subtypes ORDER BY element_type, subtype"
+            "SELECT element_type, subtype FROM allowed_subtypes WHERE object_id = ? "
+            "ORDER BY element_type, subtype", (object_id,)
         ).fetchall()
         result = {t: [] for t in ZHBI_ELEMENT_TYPES}
         for r in rows:
@@ -4442,29 +4515,36 @@ def add_allowed_subtype(body: AllowedSubtypeIn, user: sqlite3.Row = Depends(requ
         raise HTTPException(status_code=422, detail="Подтип не может быть пустым")
     conn = get_connection()
     try:
+        object_id = _subtypes_object(conn, body.object_id)
         conn.execute(
-            "INSERT OR IGNORE INTO allowed_subtypes (element_type, subtype) VALUES (?, ?)",
-            (body.element_type, body.subtype.strip()),
+            "INSERT OR IGNORE INTO allowed_subtypes (object_id, element_type, subtype) "
+            "VALUES (?, ?, ?)",
+            (object_id, body.element_type, body.subtype.strip()),
         )
         conn.commit()
     finally:
         conn.close()
     activity.log("subtype_add", user=user, element_type=body.element_type,
+                 entity_type="object", entity_id=object_id,
                  new_value=body.subtype.strip())
     return {"status": "ok"}
 
 
 @app.delete("/allowed-subtypes/{element_type}/{subtype}")
-def delete_allowed_subtype(element_type: str, subtype: str, user: sqlite3.Row = Depends(require_service_feature("dict_subtypes", "write"))):
+def delete_allowed_subtype(element_type: str, subtype: str, object_id: Optional[int] = None,
+                           user: sqlite3.Row = Depends(require_service_feature("dict_subtypes", "write"))):
     conn = get_connection()
     try:
+        object_id = _subtypes_object(conn, object_id)
         conn.execute(
-            "DELETE FROM allowed_subtypes WHERE element_type = ? AND subtype = ?", (element_type, subtype)
+            "DELETE FROM allowed_subtypes WHERE object_id = ? AND element_type = ? AND subtype = ?",
+            (object_id, element_type, subtype)
         )
         conn.commit()
     finally:
         conn.close()
-    activity.log("subtype_delete", user=user, element_type=element_type, old_value=subtype)
+    activity.log("subtype_delete", user=user, element_type=element_type,
+                 entity_type="object", entity_id=object_id, old_value=subtype)
     return {"status": "ok"}
 
 
@@ -4875,10 +4955,25 @@ def import_dxf(
     # файла, то есть по последствиям это операция уровня админа.
     user: sqlite3.Row = Depends(require_service_feature("drawings", "write")),
 ):
+    # Копию снимает сам process_upload — ПОСЛЕ разбора и сверки, до первой
+    # записи (см. его docstring). Здесь её брать нельзя: этот путь
+    # отказывает на «в базе несколько объектов», и копия оставалась бы от
+    # загрузки, которая не произошла.
     try:
         result = import_dxf_file(file, source_file, UPLOADS_DIR)
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ValueError as e:
+        # Объект не определился (element_sync.resolve_import_object). Это
+        # отказ ЗАПРОСА, а не сбой сервера: до 2026-08-21 исключение уходило
+        # наверх, и пользователь получал 500 «Внутренняя ошибка сервера» без
+        # единой подсказки, что делать. У ЭТОГО эндпоинта параметра объекта
+        # нет и не будет — он неинтерактивный, поэтому подсказка отправляет
+        # в форму, где объект спрашивают.
+        raise HTTPException(
+            status_code=400,
+            detail=f"{e} Загрузите чертёж формой «Действия → Обмен данными → "
+                   f"Загрузить чертёж» — она выбирает объект первым шагом.")
     # Одношаговый путь (без диалога сверки) тоже журналируется — иначе в
     # журнале была бы видна только загрузка через новую двухфазную форму.
     activity.log(
@@ -4928,7 +5023,11 @@ def analyze_dxf(
     try:
         saved_path = save_uploaded_file(file, UPLOADS_DIR)
         name = source_file or saved_path.name
-        parsed = parse_drawing(saved_path, name)
+        # object_id уходит и в РАЗБОР: справочник подтипов принадлежит
+        # объекту (2026-08-21), и разбирать имена слоёв надо по набору
+        # ИМЕННО этого здания. Пусто — первая в жизни установка, где объекта
+        # ещё нет: справочник тогда пуст, и все подтипы файла новые.
+        parsed = parse_drawing(saved_path, name, object_id)
         analysis = analyze_drawing(parsed, object_id)
         token = remember_pending(parsed, analysis)
     except DxfProcessingError as e:
@@ -4965,6 +5064,13 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
             assert_object_feature(conn, user, analysis["object_id"], "drawings", "write")
         finally:
             conn.close()
+        # Копия базы — здесь, на ФАЗЕ ПРИМЕНЕНИЯ, и после проверки доступа:
+        # фаза анализа не пишет ничего, и снимать копию под каждый
+        # «посмотреть, что изменится» значило бы забивать очередь копий
+        # отменёнными загрузками.
+        backup_before_import(
+            f"чертёж {parsed.source_file} → {analysis['object_name']}",
+            audit_display_name(user), user["id"])
         # Метка операции — общая у сводного события ниже и у поэлементных
         # событий внутри apply_import (изменившиеся изделия).
         операция = activity.new_request_id()
@@ -5010,6 +5116,8 @@ def import_history_xlsx(
     admin: sqlite3.Row = Depends(get_current_user),
 ):
     content = read_upload_limited(file.file)
+    backup_before_import(f"история статусов из {file.filename or 'файла'}",
+                         audit_display_name(admin), admin["id"])
     conn = get_connection()
     # Соединение живёт до конца запроса и закрывается ОДИН раз, в finally
     # ниже. До 2026-08-12 здесь стоял отдельный `finally: conn.close()`
@@ -5064,6 +5172,8 @@ def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query
     не берётся из текущего вида схемы: файл контрактации приходит от
     снабжения и вполне может относиться к соседнему зданию."""
     content = read_upload_limited(file.file)
+    backup_before_import(f"контрактация из {file.filename or 'файла'}",
+                         audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
         if conn.execute("SELECT id FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
@@ -5097,6 +5207,8 @@ def import_schedule_xlsx(file: UploadFile = File(...),
     даты, проставляются в изделия) или «актуализированный» (прогноз, живёт
     отдельной версией и полей изделия не трогает)."""
     content = read_upload_limited(file.file)
+    backup_before_import(f"график MS Project из {file.filename or 'файла'}",
+                         audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
         parsed = parse_schedule_xlsx(content)
@@ -5196,6 +5308,8 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
     except json.JSONDecodeError:
         raise HTTPException(status_code=422, detail="Файл повреждён или не является корректным JSON")
 
+    backup_before_import(f"настройки из {file.filename or 'файла'}",
+                         audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
         users_upserted = 0

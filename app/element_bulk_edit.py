@@ -46,7 +46,7 @@ from app.contracts import (
 # «Запланирован» от импорта чертежа перекрыть событие, датированное задним
 # числом. Вторая реализация того же сдвига неминуемо разошлась бы с первой.
 from app.history_import import _shift_planned_before_first_event as shift_planned_before_first_event
-from app.models import STATUS_LABELS_RU, STATUS_ORDER
+from app.models import STATUS_LABELS_RU, STATUS_ORDER, ZHBI_ELEMENT_TYPES
 from app.element_fields import (
     EXCEL_DATE_FORMAT,
     to_excel_date,
@@ -227,10 +227,21 @@ def build_export_workbook(conn, element_ids: Optional[set] = None) -> Workbook:
     лишил бы пользователя ровно того, ради чего он файл открыл."""
     contracts = _contract_catalog(conn)
     contract_names = [c["name"] for c in contracts]
-    types = [r["element_type"] for r in conn.execute(
-        "SELECT DISTINCT element_type FROM allowed_subtypes ORDER BY element_type")]
+    # Типы — из КОНСТАНТЫ, а не из справочника подтипов (2026-08-21).
+    # Раньше список типов добывался как "DISTINCT element_type FROM
+    # allowed_subtypes", и это работало лишь потому, что справочник был
+    # общий и непустой. Справочник стал объектным и у нового объекта пуст —
+    # выпадающий список типов оказался бы пустым на ровном месте. Типов
+    # ЖБИ фиксированный набор, он и так объявлен в app/models.
+    types = list(ZHBI_ELEMENT_TYPES)
+    # Подтипы — ОБЪЕДИНЕНИЕМ по всем объектам: файл массовой правки
+    # по-прежнему содержит изделия всех объектов (хвост этапа C), и сузить
+    # подсказку до одного объекта значило бы спрятать половину значений.
+    # Это подсказка в выпадающем списке; настоящую проверку делает
+    # check_subtype, и она сверяет по объекту КОНКРЕТНОЙ строки.
     subtypes = conn.execute(
-        "SELECT element_type, subtype FROM allowed_subtypes ORDER BY element_type, subtype").fetchall()
+        "SELECT DISTINCT element_type, subtype FROM allowed_subtypes "
+        "ORDER BY element_type, subtype").fetchall()
     objects = conn.execute("SELECT name, COALESCE(description,'') AS description FROM objects ORDER BY name").fetchall()
 
     wb = Workbook()
@@ -471,7 +482,7 @@ def _diff_row(conn, row, values: dict, contracts: dict, line_no: int) -> tuple[l
     if proposed:
         final_type = proposed.get("element_type", row["element_type"])
         final_subtype = proposed.get("subtype", row["subtype"])
-        err = check_subtype(conn, final_type, final_subtype)
+        err = check_subtype(conn, final_type, final_subtype, row["object_id"])
         if err and ("element_type" in proposed or "subtype" in proposed):
             rejected.append({"line": line_no, "uid": row["element_uid"], "reason": err,
                              "element_id": row["id"], "mark": row["mark"],
@@ -652,6 +663,7 @@ def apply_changes(conn, selections: list, user_name: str, user_id: Optional[int]
                 conn,
                 values.get("element_type", row["element_type"]),
                 values.get("subtype", row["subtype"]),
+                row["object_id"],
             )
             if err:
                 skipped.append({"element_id": element_id, "reason": err})

@@ -362,6 +362,11 @@ class ObjectPatchIn(BaseModel):
 class AllowedSubtypeIn(BaseModel):
     element_type: str
     subtype: str
+    # Объект, в чей справочник добавляем (2026-08-21): справочник подтипов
+    # принадлежит зданию, а не системе. Optional только ради внятного
+    # отказа на стороне сервера вместо 422 от валидатора — см.
+    # main._subtypes_object.
+    object_id: Optional[int] = None
 
 
 class ZoneColorIn(BaseModel):

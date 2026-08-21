@@ -66,7 +66,12 @@ def get_current_object(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
 def resolve_import_object(conn: sqlite3.Connection, object_id: Optional[int], source_file: str) -> int:
     """Определяет объект, в который идёт импорт. Если объектов ещё нет
     (первая установка) — заводит первый по имени файла: пользователь
-    переименует его в справочнике, но безымянным объект не остаётся."""
+    переименует его в справочнике, но безымянным объект не остаётся.
+
+    ValueError здесь — не сбой сервера, а «так нельзя»: вызывающий обязан
+    превратить его в понятный отказ клиенту (400), а не дать уйти наверх
+    пятисоткой. См. app/main.import_dxf и app/input_import.import_input_dxf.
+    """
     if object_id is not None:
         row = conn.execute("SELECT id FROM objects WHERE id = ?", (object_id,)).fetchone()
         if row is None:
@@ -77,7 +82,15 @@ def resolve_import_object(conn: sqlite3.Connection, object_id: Optional[int], so
     if len(existing) == 1:
         return existing[0]["id"]
     if len(existing) > 1:
-        raise ValueError("В базе несколько объектов — укажите, в какой импортировать")
+        # Текст НЕЙТРАЛЬНЫЙ: куда идти дальше, знает только вызывающий, и у
+        # разных путей это разные места (форма загрузки чертежа, выбор
+        # объекта в форме папки Input). Раньше подсказка была зашита прямо
+        # сюда и устарела в тот же день, когда у папки Input появился свой
+        # выбор объекта.
+        raise ValueError(
+            "В базе несколько объектов — не определить, в какой из них загружать. "
+            "Объект нужно выбрать явно."
+        )
 
     conn.execute("INSERT INTO objects (name) VALUES (?)", (source_file,))
     новый = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]

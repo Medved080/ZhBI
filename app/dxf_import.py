@@ -12,7 +12,7 @@ CLI-скриптов) — открытый ezdxf-документ переисп
 
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -25,8 +25,9 @@ import import_elements
 import new_standard_pipeline
 import parse_zhbi
 from layer_naming import LayerNameError
+from zone_parser import classify_layers
 
-from app import element_sync, zone_sync
+from app import activity, element_sync, zone_sync
 from app.db import get_connection, init_db
 from app.models import DxfImportResult, ZoneImportSummary
 from app.upload_limits import copy_upload_limited
@@ -44,9 +45,20 @@ _KNOWN_OLD_LAYERS = (
 )
 
 
-def _load_allowed_subtypes(conn) -> dict:
+def _load_allowed_subtypes(conn, object_id: Optional[int]) -> dict:
+    """Справочник подтипов ОДНОГО объекта (2026-08-21): у соседнего здания
+    свой набор отметок, и подставлять его в разбор этого чертежа незачем.
+
+    object_id = None — объекта ещё нет (первая в жизни установка, объект
+    заведёт сам импорт). Справочник тогда пуст, и КАЖДЫЙ подтип файла
+    окажется новым: ровно то, что нужно, — объект наполнится с нуля.
+    """
     result = {}
-    for row in conn.execute("SELECT element_type, subtype FROM allowed_subtypes"):
+    if object_id is None:
+        return result
+    for row in conn.execute(
+        "SELECT element_type, subtype FROM allowed_subtypes WHERE object_id = ?", (object_id,)
+    ):
         result.setdefault(row["element_type"], set()).add(row["subtype"])
     return result
 
@@ -82,9 +94,37 @@ class ParsedDrawing:
     grid: object
     by_mark_source: dict
     by_axis_status: dict
+    # Подтипы, которых в справочнике ОБЪЕКТА ещё не было: [(тип, подтип), ...]
+    # в порядке появления (2026-08-21). Записываются в справочник на фазе
+    # ПРИМЕНЕНИЯ, не разбора: фаза анализа не пишет в базу ничего (решение И3),
+    # и «загрузку отменили, а подтипы остались» было бы ровно таким письмом.
+    new_subtypes: list = field(default_factory=list)
 
 
-def parse_drawing(dxf_path: Path, source_file: str) -> ParsedDrawing:
+def _collect_new_subtypes(msp, allowed_subtypes: dict) -> list:
+    """Какие подтипы файла отсутствуют в справочнике объекта.
+
+    Считается ОТДЕЛЬНЫМ проходом по именам слоёв, а не внутри
+    new_standard_pipeline.process: тот возвращает записи изделий, и подтип,
+    попавший только на слой «Марка» без парного слоя «Элемент», в них не
+    виден вовсе — а в справочник он нужен, иначе следующая загрузка снова
+    сочтёт его новым. Проход дешёвый: это разбор нескольких десятков строк
+    с именами слоёв, а не обход геометрии.
+    """
+    unclaimed = new_standard_pipeline.discover_unclaimed_web_layers(msp, _KNOWN_OLD_LAYERS)
+    итог = []
+    for parsed in classify_layers(unclaimed, allowed_subtypes).values():
+        if parsed.subtype_is_new and (parsed.type_or_category, parsed.subtype) not in итог:
+            итог.append((parsed.type_or_category, parsed.subtype))
+    return итог
+
+
+def parse_drawing(dxf_path: Path, source_file: str, object_id: Optional[int] = None) -> ParsedDrawing:
+    """object_id — объект, в чей справочник подтипов смотрит разбор
+    (2026-08-21). Он известен ДО разбора: форма загрузки спрашивает объект
+    первым шагом, а неинтерактивные пути разрешают его сами (см.
+    element_sync.resolve_import_object). Пусто — только первая в жизни
+    установка, где объекта ещё нет."""
     try:
         doc = ezdxf.readfile(str(dxf_path))
     except Exception:
@@ -100,7 +140,20 @@ def parse_drawing(dxf_path: Path, source_file: str) -> ParsedDrawing:
     init_db()
     conn = get_connection()
     try:
-        allowed_subtypes = _load_allowed_subtypes(conn)
+        allowed_subtypes = _load_allowed_subtypes(conn, object_id)
+        # Считается ДО process(): тот получает справочник и пополняет
+        # разобранные записи, а нам нужен состав ИМЕННО нового — то есть
+        # разница со справочником в его исходном виде.
+        #
+        # LayerNameError ловится ЗДЕСЬ ЖЕ, а не только вокруг process():
+        # проход по именам слоёв тот же самый, и первым до непроходного слоя
+        # доходит он. Без этого отказ по имени слоя уходил бы наружу сырым
+        # исключением — то есть 500 вместо понятного 422 (поймано прогоном
+        # на реальном файле с опечаткой в отметке).
+        try:
+            new_subtypes = _collect_new_subtypes(msp, allowed_subtypes)
+        except LayerNameError as e:
+            raise DxfProcessingError(422, str(e))
 
         # Старый конвейер (LAYER_CONFIG) — без изменений.
         old_records = parse_zhbi.parse_dxf_from_doc(doc)
@@ -150,6 +203,7 @@ def parse_drawing(dxf_path: Path, source_file: str) -> ParsedDrawing:
         grid=grid,
         by_mark_source=by_mark_source,
         by_axis_status=by_axis_status,
+        new_subtypes=new_subtypes,
     )
 
 
@@ -280,6 +334,14 @@ def analyze_drawing(parsed: ParsedDrawing, object_id: Optional[int] = None) -> d
         analysis["counts"]["zone_binding_changes_with_progress"] = sum(
             1 for e in смена_зон if e["current_status"] != "planned")
         analysis["details"]["zone_binding_changes"] = смена_зон[:element_sync.DETAIL_LIMIT]
+        # Новые подтипы — в сводку наравне с прочими расхождениями
+        # (2026-08-21): загрузка пополняет справочник объекта сама, и
+        # пользователь обязан увидеть заранее, ЧТО именно там появится.
+        # Опечатка в имени слоя иначе тихо превратилась бы в подтип.
+        analysis["counts"]["subtypes_new"] = len(parsed.new_subtypes)
+        analysis["details"]["subtypes_new"] = [
+            {"element_type": тип, "subtype": подтип} for тип, подтип in parsed.new_subtypes
+        ][:element_sync.DETAIL_LIMIT]
         object_row = conn.execute(
             "SELECT name FROM objects WHERE id = ?", (resolved_object_id,)
         ).fetchone()
@@ -318,6 +380,26 @@ def apply_drawing(
     init_db()
     conn = get_connection()
     try:
+        # Подтипы — ПЕРВЫМИ, до записи изделий: изделие ссылается на подтип
+        # своим полем, и проверка реквизитов (app/element_fields) сверяет
+        # его со справочником ОБЪЕКТА. В обратном порядке только что
+        # загруженное изделие на мгновение оказывалось бы с подтипом,
+        # которого в справочнике ещё нет.
+        for тип, подтип in parsed.new_subtypes:
+            conn.execute(
+                "INSERT OR IGNORE INTO allowed_subtypes (object_id, element_type, subtype) "
+                "VALUES (?, ?, ?)",
+                (object_id, тип, подтип),
+            )
+        if parsed.new_subtypes:
+            conn.commit()
+            activity.log(
+                "subtype_add_import", user=user, request_id=request_id,
+                entity_type="object", entity_id=object_id,
+                new_value=", ".join(f"{тип} · {подтип}" for тип, подтип in parsed.new_subtypes)[:400],
+                details={"чертёж": parsed.source_file,
+                         "подтипы": [list(p) for p in parsed.new_subtypes]},
+            )
         applied = element_sync.apply_import(
             conn, object_id, parsed.source_file, parsed.rows, analysis["match"],
             accept_mark_changes=accept_mark_changes,
@@ -409,12 +491,39 @@ def forget_pending(token: str) -> None:
     _PENDING_IMPORTS.pop(token, None)
 
 
-def process_upload(dxf_path: Path, source_file: str, object_id: Optional[int] = None) -> DxfImportResult:
+def process_upload(dxf_path: Path, source_file: str, object_id: Optional[int] = None,
+                   backup_comment: Optional[str] = None) -> DxfImportResult:
     """Одношаговый импорт с решениями по умолчанию — путь для НЕинтерактивных
     вызовов (scripts/rebuild_db.py, загрузка из Input/, решение З3: смены
-    марок принимаются, но сводка печатается, а не проглатывается молча)."""
-    parsed = parse_drawing(dxf_path, source_file)
+    марок принимаются, но сводка печатается, а не проглатывается молча).
+
+    backup_comment — снять копию базы перед записью и подписать её так.
+    Пусто — НЕ снимать: копию уже взял вызывающий. Так у загрузки из папки
+    Input одна копия на весь пакет (а не по одной на каждый чертёж), а у
+    полной пересборки — своя, `auto_before_rebuild`.
+    """
+    # Объект разрешается ДО разбора (2026-08-21): разбору нужен справочник
+    # подтипов ИМЕННО этого объекта. Раньше здесь передавалось None, и
+    # разбор шёл по пустому справочнику — повторная загрузка на базе с
+    # одним объектом докладывала бы, что все до единого подтипа новые.
+    # Заодно отказ «в базе несколько объектов» приходит сразу, а не после
+    # разбора девяти тысяч изделий.
+    init_db()
+    conn = get_connection()
+    try:
+        object_id = element_sync.resolve_import_object(conn, object_id, source_file)
+        conn.commit()
+    finally:
+        conn.close()
+
+    parsed = parse_drawing(dxf_path, source_file, object_id)
     analysis = analyze_drawing(parsed, object_id)
+    # Копия — ПОСЛЕ разбора и сверки, но ДО первой записи: разбор ничего не
+    # пишет, и снимать копию под файл, который сейчас окажется битым или
+    # не тем, незачем.
+    if backup_comment:
+        from app import backups
+        backups.backup_before_import(backup_comment)
     print(f"[import] {source_file}: {element_sync.summary_for_log(analysis['counts'])}")
     return apply_drawing(parsed, analysis)
 
@@ -422,4 +531,5 @@ def process_upload(dxf_path: Path, source_file: str, object_id: Optional[int] = 
 def import_dxf_file(upload_file, source_file_override, uploads_dir: Path = UPLOADS_DIR) -> DxfImportResult:
     saved_path = save_uploaded_file(upload_file, uploads_dir)
     source_file = source_file_override or saved_path.name
-    return process_upload(saved_path, source_file)
+    return process_upload(saved_path, source_file,
+                          backup_comment=f"чертёж {source_file} (одношаговая загрузка)")

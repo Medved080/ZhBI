@@ -59,6 +59,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from app import activity, contract_guard, impersonation
 from app.contracts import build_contract_name
 from app.element_fields import EXCEL_DATE_FORMAT, to_excel_date
+from app.models import ZHBI_ELEMENT_TYPES
 
 SHEET_DATA = "Контрактация"
 SHEET_CONTRACTS = "Контракты"
@@ -206,8 +207,9 @@ def build_contracting_workbook(conn) -> Workbook:
     отношения не имеют. Форма в этом режиме галочку «Учитывать фильтр»
     прячет."""
     rows = _rows(conn)
-    types = [r["element_type"] for r in conn.execute(
-        "SELECT DISTINCT element_type FROM allowed_subtypes ORDER BY element_type")]
+    # Типы — из константы, а не из справочника подтипов: тот стал объектным
+    # и у нового объекта пуст (см. app/element_bulk_edit.build_export_workbook).
+    types = list(ZHBI_ELEMENT_TYPES)
 
     wb = Workbook()
     ws = wb.active
@@ -398,8 +400,7 @@ def analyze(conn, file_bytes: bytes) -> dict:
     by_contract = {}
     for r in rows:
         by_contract.setdefault(r["contract_id"], r)
-    types = {r["element_type"] for r in conn.execute(
-        "SELECT DISTINCT element_type FROM allowed_subtypes")}
+    types = set(ZHBI_ELEMENT_TYPES)
     существующие_позиции = {
         (r["contract_id"], r["element_type"], r["mark"]) for r in rows if r["line_id"] is not None
     }

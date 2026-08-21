@@ -358,15 +358,20 @@ def _fold_case_duplicates(conn) -> str:
         dd._subtype_repoint(conn, лишний, основной)
         dd._subtype_delete(conn, лишний)
 
+    # Ключ включает ОБЪЕКТ (2026-08-21): справочник подтипов стал объектным,
+    # и одинаковое название у двух зданий — не задвоение, а две законные
+    # записи. Без объекта в ключе обработка склеила бы отметки соседних
+    # домов и увела бы изделия одного здания на подтип другого.
     свернуть(
         "подтипы",
-        "SELECT rowid AS id, element_type, subtype FROM allowed_subtypes",
-        lambda r: (r["element_type"], _ключ_без_регистра(r["subtype"])),
+        "SELECT rowid AS id, object_id, element_type, subtype FROM allowed_subtypes",
+        lambda r: (r["object_id"], r["element_type"], _ключ_без_регистра(r["subtype"])),
         lambda r: conn.execute(
-            "SELECT COUNT(*) AS n FROM elements WHERE element_type = ? AND subtype = ?",
-            (r["element_type"], r["subtype"])).fetchone()["n"],
+            "SELECT COUNT(*) AS n FROM elements "
+            "WHERE object_id = ? AND element_type = ? AND subtype = ?",
+            (r["object_id"], r["element_type"], r["subtype"])).fetchone()["n"],
         слить_подтипы,
-        lambda r: f"{r['element_type']} / «{r['subtype']}»",
+        lambda r: f"объект #{r['object_id']}, {r['element_type']} / «{r['subtype']}»",
     )
 
     # --- префиксы марок НЕ сворачиваются ---
