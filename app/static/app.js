@@ -7281,8 +7281,31 @@ function renderAttachments(container, entityType, entityId, { canUpload = false,
     .catch(e => { container.innerHTML = `<div class="hint-text">не удалось загрузить список: ${escapeHtml(e.message)}</div>`; });
 }
 
+// ---------- панель не «прыгает» при переходе от изделия к изделию ----------
+//
+// Живой запрос 2026-08-21: карточку читают ПОДРЯД у отобранного десятка
+// изделий, и если нужны технические данные, то при каждом клике по схеме
+// приходилось заново прокручивать панель вниз и разворачивать группу.
+// Поэтому запоминаются две вещи:
+//   * раскрыт ли блок «Технические данные» — в localStorage: это
+//     настройка человека, а не состояние одной карточки, и переживает
+//     перезагрузку страницы, как закрепление панели;
+//   * прокрутка панели — на время сеанса: восстанавливается ТОЛЬКО при
+//     переходе с карточки на карточку. При первом открытии панель
+//     остаётся наверху, иначе изделие открывалось бы сразу с середины.
+const CARD_TECHNICAL_OPEN_KEY = "card-technical-open";
+
+function cardTechnicalOpen() {
+  return localStorage.getItem(CARD_TECHNICAL_OPEN_KEY) === "1";
+}
+
 async function showCard(element) {
   const card = document.getElementById("card");
+  const sidebar = document.getElementById("sidebar");
+  // Карточка уже показана — значит переход С изделия НА изделие, и
+  // прокрутку надо сохранить. Плейсхолдер («Кликните по элементу»)
+  // за карточку не считается.
+  const прежняяПрокрутка = (sidebar && !card.querySelector("#placeholder")) ? sidebar.scrollTop : null;
   const canEdit = can("status", "write");
   const technicalHtml = TECHNICAL_FIELD_GROUPS.map(g => `
     <div class="card-block"><h4>${g.title}</h4><table>${fieldRowsHtml(element, g.fields)}</table></div>
@@ -7354,7 +7377,7 @@ async function showCard(element) {
     <div class="card-block"><h4>Вложения</h4>
       <div id="card-attachments"></div>
     </div>
-    <details class="card-technical">
+    <details class="card-technical"${cardTechnicalOpen() ? " open" : ""}>
       <summary>Технические данные</summary>
       ${technicalHtml}
     </details>
@@ -7369,6 +7392,20 @@ async function showCard(element) {
       <div class="loading-inline"><span class="spinner"></span>Читаю журнал…</div>
     </div>
   `;
+
+  const технические = card.querySelector(".card-technical");
+  if (технические) {
+    технические.addEventListener("toggle", () => {
+      localStorage.setItem(CARD_TECHNICAL_OPEN_KEY, технические.open ? "1" : "0");
+    });
+  }
+  if (прежняяПрокрутка !== null) {
+    // Дважды: сразу и следующим кадром. Вложения и история догружаются
+    // своими запросами и меняют высоту карточки уже после отрисовки —
+    // одного восстановления не хватало бы ровно на эту разницу.
+    sidebar.scrollTop = прежняяПрокрутка;
+    requestAnimationFrame(() => { sidebar.scrollTop = прежняяПрокрутка; });
+  }
 
   // Вложения — своим запросом, ПОСЛЕ отрисовки карточки: список файлов не
   // должен задерживать показ марки и статуса, ради которых карточку и
@@ -22242,10 +22279,26 @@ const COLUMN_BEAM_END_MATCH_TOLERANCE_MM = 1000;
 // через клетку и потеряется.
 const COLUMN_GRID_CELL_MM = 3000;
 
-// Запас на габарит плиты/ригеля при проверке «перекрытие над этой
-// точкой». Центр крайней колонны ряда лежит на грани плиты, а не внутри
-// неё, и точное попадание в контур такую колонну теряло бы.
+// Запас на габарит при проверке «перекрытие над этой точкой». У ПЛИТЫ
+// он большой: центр крайней колонны ряда лежит на грани плиты, а не
+// внутри неё (на реальных данных — 200 мм снаружи), и точное попадание
+// в контур такую колонну теряло бы. У РИГЕЛЯ — маленький: ригель
+// опирается на колонну, то есть накрывает её центр (на тех же данных
+// 270 мм), а проходящий в метре — уже чужой, и метровым запасом
+// колонна цеплялась бы за ригели соседней надстройки.
 const DECK_OVER_COLUMN_TOLERANCE_MM = 1000;
+const BEAM_OVER_COLUMN_TOLERANCE_MM = 500;
+
+// Насколько ниже типичного должен оказаться стык яруса, чтобы ярус
+// считался СТОЙКАМИ на перекрытии, а не продолжением колонн снизу. На
+// реальных данных разрыв огромен — 520 мм против 1920, — так что метр
+// разводит эти случаи с запасом в обе стороны.
+const COLUMN_SPLICE_SPREAD_MM = 1000;
+
+// Насколько глубоко под низом колонны искать перекрытие, от которого
+// считается высота стыка. Больше этажа заглядывать незачем: перекрытия
+// глубже — это чужие этажи, а не пол под этой колонной.
+const COLUMN_DECK_BELOW_LOOKUP_MM = 4000;
 
 function _gridCell(x, y) {
   return `${Math.floor(x / COLUMN_GRID_CELL_MM)}:${Math.floor(y / COLUMN_GRID_CELL_MM)}`;
@@ -22331,25 +22384,8 @@ function computeColumnTops(levels) {
     return out;
   }
 
-  // ---- 1) колонна выше в той же точке ----
-  const noColumnAbove = [];
-  for (const col of columns) {
-    let above = null, below = null;
-    for (const other of neighbourColumns(col)) {
-      if (other.elev > col.elev) { if (above === null || other.elev < above) above = other.elev; }
-      else if (other.elev < col.elev) { if (below === null || other.elev > below) below = other.elev; }
-    }
-    col.below = below;
-    if (above !== null) {
-      tops.set(col.id, above);
-    } else {
-      col.openTop = true;   // верх ничем не занят — только такую колонну вправе поднять ригель
-      noColumnAbove.push(col);
-    }
-  }
-  if (!noColumnAbove.length) return tops;
-
-  // ---- 2) перекрытие или ригель выше над этой точкой ----
+  // ---- индекс перекрытий: нужен и шагу 1 (проверка «стоит на
+  //      перекрытии»), и шагу 2 ----
   //
   // Ярус колонн — НЕ этаж: у реального здания (АБК) колонна «средняя»
   // идёт от +7020 до +16920 СКВОЗЬ два перекрытия (+10050 и +15000) —
@@ -22374,7 +22410,8 @@ function computeColumnTops(levels) {
     if (e.element_type !== "Плита перекрытия" && e.element_type !== "Ригель") continue;
     if (e.elevation_mm === null || e.elevation_mm === undefined) continue;
     if (!e.outline || e.outline.length < 3) continue;
-    const deck = Object.assign({ elev: e.elevation_mm }, _outlineBox(e.outline, DECK_OVER_COLUMN_TOLERANCE_MM));
+    const pad = e.element_type === "Ригель" ? BEAM_OVER_COLUMN_TOLERANCE_MM : DECK_OVER_COLUMN_TOLERANCE_MM;
+    const deck = Object.assign({ elev: e.elevation_mm }, _outlineBox(e.outline, pad));
     const cells = _cellsOfBox(deck);
     if (cells === null) { bigDecks.push(deck); continue; }
     for (const key of cells) {
@@ -22383,7 +22420,80 @@ function computeColumnTops(levels) {
     }
   }
 
-  // limit — верх пролёта (следующий ярус колонн); null у верхнего яруса.
+  // ---- ярусы-СТОЙКИ: низ лежит на перекрытии, а не на стыке ----
+  //
+  // Сборный стык колонн у этого заказчика стоит примерно на одной и той
+  // же высоте над полом — это видно прямо в данных: у АБК 7020 = 5010 +
+  // 2010, 16920 = 15000 + 1920, 27720 = 25800 + 1920. А ярус +39520
+  // (машинное отделение) начинается в 520 мм над своими ригелями +39000,
+  // то есть СТОИТ на них: это не продолжение колонны снизу, а отдельная
+  // стойка на кровле. Колонна под такой стойкой кончается на том, что
+  // несёт сама, и тянуться к её низу не должна.
+  //
+  // Решение принимается на ЯРУС целиком, по медиане, а не на каждую
+  // колонну: в чертеже попадаются одиночные ригели на промежуточных
+  // отметках (у АБК их по три штуки на +6180, +16230, +26880), и
+  // поколонная проверка от них шаталась бы.
+  function deckBelow(col) {
+    let best = null;
+    const consider = (deck) => {
+      if (deck.elev > col.elev || deck.elev < col.elev - COLUMN_DECK_BELOW_LOOKUP_MM) return;
+      if (col.cx < deck.minX || col.cx > deck.maxX || col.cy < deck.minY || col.cy > deck.maxY) return;
+      if (best === null || deck.elev > best) best = deck.elev;
+    };
+    const bucket = deckByCell.get(_gridCell(col.cx, col.cy));
+    if (bucket) for (const deck of bucket) consider(deck);
+    for (const deck of bigDecks) consider(deck);
+    return best;
+  }
+
+  const median = (arr) => {
+    const sorted = arr.slice().sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  };
+  const offsetsByTier = new Map();
+  for (const col of columns) {
+    const deck = deckBelow(col);
+    if (deck === null) continue;
+    const bucket = offsetsByTier.get(col.elev);
+    if (bucket) bucket.push(col.elev - deck); else offsetsByTier.set(col.elev, [col.elev - deck]);
+  }
+  const tierOffset = new Map();
+  for (const [tier, offsets] of offsetsByTier) tierOffset.set(tier, median(offsets));
+  const standaloneTiers = new Set();
+  if (tierOffset.size) {
+    const typical = median(Array.from(tierOffset.values()));
+    for (const [tier, offset] of tierOffset) {
+      if (offset < typical - COLUMN_SPLICE_SPREAD_MM) standaloneTiers.add(tier);
+    }
+  }
+
+  // ---- 1) колонна выше в той же точке ----
+  const noColumnAbove = [];
+  for (const col of columns) {
+    let aboveCol = null, below = null;
+    for (const other of neighbourColumns(col)) {
+      if (other.elev > col.elev) { if (aboveCol === null || other.elev < aboveCol.elev) aboveCol = other; }
+      else if (other.elev < col.elev) { if (below === null || other.elev > below) below = other.elev; }
+    }
+    col.below = below;
+    const above = aboveCol ? aboveCol.elev : null;
+    if (above !== null && !standaloneTiers.has(above)) {
+      tops.set(col.id, above);
+    } else {
+      // Верх колонны определяют перекрытия над ней; выше низа чужой
+      // стойки она в любом случае не поднимается.
+      col.spanLimit = above;
+      col.openTop = true;   // только такую колонну вправе поднять ригель
+      noColumnAbove.push(col);
+    }
+  }
+  if (!noColumnAbove.length) return tops;
+
+  // ---- 2) перекрытие или ригель выше над этой точкой ----
+  //
+  // limit — верх пролёта (следующий ярус колонн либо низ чужой стойки);
+  // null у верхнего яруса.
   // С границей берём самое верхнее перекрытие под ней, без границы —
   // ближайшее сверху.
   function deckAbove(col, limit) {
@@ -22403,7 +22513,10 @@ function computeColumnTops(levels) {
   const stillOpen = [];
   for (const col of noColumnAbove) {
     const idx = levels.indexOf(col.elev);
-    const limit = (idx !== -1 && idx < levels.length - 1) ? levels[idx + 1] : null;
+    let limit = (idx !== -1 && idx < levels.length - 1) ? levels[idx + 1] : null;
+    if (col.spanLimit !== undefined && col.spanLimit !== null) {
+      limit = (limit === null) ? col.spanLimit : Math.min(limit, col.spanLimit);
+    }
     const deck = deckAbove(col, limit);
     if (deck !== null) tops.set(col.id, deck);
     else stillOpen.push(col);

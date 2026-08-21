@@ -1888,6 +1888,12 @@
 
   #card table { width: 100%; border-collapse: collapse; }
   #card td { padding: 5px 2px; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+  /* Значение переносится ВНУТРИ ячейки, даже если это одно длинное слово
+     без пробелов: имя слоя чертежа (WEB_констр_Колонна_верхняя_ОТМП27720_…)
+     иначе уезжало за правый край панели вместе с колонкой (живой репорт
+     2026-08-21). Подписи (td.k) это не касается — они короткие и намеренно
+     неразрывные. */
+  #card td:not(.k) { overflow-wrap: anywhere; }
   #card td.k { color: var(--color-text-muted); white-space: nowrap; padding-right: 10px; font-size: 12px; }
   #card tr.date-row-late td { color: #9c3428; font-weight: 600; }
   #card tr.date-row-late td.k { color: #9c3428; }
