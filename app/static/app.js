@@ -21481,23 +21481,25 @@ function computeTopColumnCeiling(levels) {
   return topLevel + lastGap;
 }
 
-// - Колонна — от своей отметки до следующего яруса; для самого верхнего
-//   яруса — до ближайшей плиты перекрытия выше (см. computeTopColumnCeiling),
-//   а если такой нет — запасной вариант, высота предыдущего яруса (или
-//   дефолт, если ярус всего один). Если эта же колонна стоит под КОНЦОМ
-//   ригеля ЕЩЁ ВЫШЕ (см. computeColumnEndExtensions, columnTopOverrides)
-//   — вытягивается до него вместо базового потолка.
+// - Колонна — до потолка, найденного НАД НЕЙ САМОЙ (см. computeColumnTops,
+//   columnTops): ближайшая колонна выше в той же точке плана, иначе
+//   ближайшая плита/ригель выше над этой точкой, иначе шаг этажа снизу.
+//   Глобальные ярусы (levels) остались ЗАПАСНЫМ вариантом — на случай,
+//   когда над колонной в модели нет вообще ничего.
 // - Плита перекрытия — фиксированная толщина (см. FLOOR_SLAB_THICKNESS_MM).
 // - Ригель/Плита/Панель — квадратное сечение, высота = ширина контура.
-function elementExtrusionHeight(element, levels, columnTopOverrides) {
+function elementExtrusionHeight(element, levels, columnTops) {
   if (element.element_type === "Колонна") {
+    const top = columnTops && columnTops.get(element.id);
+    if (top !== undefined && top > element.elevation_mm) return top - element.elevation_mm;
+    // Запасной вариант — прежнее правило по глобальным ярусам. Сюда
+    // попадает колонна, над которой в модели ПУСТО: ни колонны, ни плиты,
+    // ни ригеля, ни колонны под ней (по ним считается computeColumnTops).
     const idx = levels.indexOf(element.elevation_mm);
     if (idx !== -1 && idx < levels.length - 1) return levels[idx + 1] - levels[idx];
     if (idx === levels.length - 1) {
-      let ceiling = computeTopColumnCeiling(levels);
-      const override = columnTopOverrides && columnTopOverrides.get(element.id);
-      if (override !== undefined && (ceiling === null || override > ceiling)) ceiling = override;
-      if (ceiling !== null) return ceiling - element.elevation_mm;
+      const ceiling = computeTopColumnCeiling(levels);
+      if (ceiling !== null && ceiling > element.elevation_mm) return ceiling - element.elevation_mm;
     }
     if (idx > 0) return levels[idx] - levels[idx - 1];
     return DEFAULT_EXTRUSION_HEIGHT;
@@ -21678,9 +21680,9 @@ function getHighlightMeshMaterial(status, located) {
 // вершины, не вынесена в mesh.position — у слитой геометрии общая точка
 // отсчёта на всю сцену). Дальше эта геометрия не становится собственным
 // мешем, а вливается в общий буфер (см. build3DMergedGeometry).
-function build3DElementGeometry(element, levels, columnTopOverrides) {
+function build3DElementGeometry(element, levels, columnTops) {
   if (!element.outline || element.outline.length < 3) return null; // нечего экструдировать
-  const height = elementExtrusionHeight(element, levels, columnTopOverrides);
+  const height = elementExtrusionHeight(element, levels, columnTops);
   // Shape строится в локальной плоскости XY, shapeY = мировой Y как есть
   // (БЕЗ инверсии — см. Docs/backlog.md, "3D — зеркальность"). После
   // поворота geometry.rotateX(-90°) локальная (x,y,z) -> мировая (x,z,-y):
@@ -21737,7 +21739,7 @@ function build3DElementGeometry(element, levels, columnTopOverrides) {
 // rotateX(-90°) не гарантирован, а ребро лежит РОВНО на поверхности грани
 // (заказчик запретил любые зазоры/офсеты в геометрии), и без сдвига в
 // буфере глубины грань всегда выигрывала бы у линии.
-function build3DMergedGeometry(elements, levels, columnTopOverrides) {
+function build3DMergedGeometry(elements, levels, columnTops) {
   const v3 = state.view3d;
   const positions = [], normals = [], colors = [];
   const faceElementIds = [];
@@ -21747,7 +21749,7 @@ function build3DMergedGeometry(elements, levels, columnTopOverrides) {
   const color = new THREE.Color();
 
   for (const element of elements) {
-    const geometry = build3DElementGeometry(element, levels, columnTopOverrides);
+    const geometry = build3DElementGeometry(element, levels, columnTops);
     if (!geometry) continue;
     const position = geometry.attributes.position.array;
     const normal = geometry.attributes.normal.array;
@@ -22193,56 +22195,216 @@ function footprintCentroid(outline) {
 // БД (см. Docs/backlog.md).
 const COLUMN_BEAM_END_MATCH_TOLERANCE_MM = 1000;
 
-// Колонны верхнего яруса, которые нужно вытянуть ВЫШЕ базового потолка
-// (computeTopColumnCeiling) — конкретно те, что стоят под КОНЦОМ ригеля
-// на ещё более высокой отметке (например, локальная кровля техпомещения
-// над основной крышей — новый ярус ригелей/плит выше уже учтённого
-// потолка). Колонна, которая просто оказалась ГЕОМЕТРИЧЕСКИ под
-// серединой пролёта такого ригеля (не под его концом), высоту НЕ меняет
-// — так и должно быть, ригель на неё не опирается (живой запрос
-// пользователя, см. Docs/backlog.md). Только "Ригель" — по условию
-// заказчика плита перекрытия лежит на ригеле, а не на колонне напрямую.
-// Возвращает Map(id колонны -> самая высокая подходящая отметка).
-function computeColumnEndExtensions(levels) {
-  const overrides = new Map();
-  if (!levels.length) return overrides;
-  const topLevel = levels[levels.length - 1];
-  const baseCeiling = computeTopColumnCeiling(levels);
-  if (baseCeiling === null) return overrides;
+// ---------- потолок колонны: считается ПО МЕСТУ (2026-08-21) ----------
+//
+// Раньше высота колонны бралась по ГЛОБАЛЬНОМУ списку ярусов
+// (computeColumnLevels): «до следующей отметки колонн, какая есть в
+// модели». На здании из секций РАЗНОЙ высоты это выдавливало колонну
+// низкой секции до отметки, которая существует только в высокой части, —
+// колонны торчали над своей кровлей на этаж и больше (живой репорт
+// 2026-08-21 по объекту АБК: 12 этажей, 24 отметки, секции разной
+// высоты). Список ярусов один на всю модель, а этажность — нет.
+//
+// Теперь потолок ищется НАД САМОЙ КОЛОННОЙ, в порядке убывания
+// надёжности:
+//   1) ближайшая колонна ВЫШЕ в той же точке плана — колонны стоят
+//      стопкой, и низ следующей и есть верх этой;
+//   2) её нет — ближайшая плита перекрытия или ригель выше НАД ЭТОЙ
+//      ТОЧКОЙ: колонна последняя в своей секции, над ней перекрытие
+//      или кровля;
+//   3) нет и их — шаг этажа СНИЗУ (высота колонны под этой же точкой):
+//      над колонной в модели пусто, но этаж под ней задаёт масштаб
+//      лучше, чем отметка из другой части здания.
+// Порядок важен: колонна ищется ПЕРВОЙ. Иначе ригель-парапет на
+// промежуточной отметке (в реальных данных +5200 между ярусами колонн 0
+// и +8050) обрезал бы колонну, которая на самом деле идёт до следующего
+// этажа — ровно та ошибка, от которой список ярусов и защищал.
+//
+// Отдельным правилом сверху остаётся ригель, ОПИРАЮЩИЙСЯ КОНЦОМ на
+// колонну выше найденного потолка (локальная кровля техпомещения над
+// основной крышей): такой ригель колонну ВЫТЯГИВАЕТ. Колонна, которая
+// просто оказалась под серединой его пролёта, высоту не меняет — ригель
+// на неё не опирается (живой запрос пользователя). Только «Ригель»: по
+// условию заказчика плита перекрытия лежит на ригеле, а не на колонне.
+//
+// Возвращает Map(id колонны -> отметка верха). Колонны, для которой не
+// нашлось ничего, в карте нет — она достаётся запасному правилу по
+// глобальным ярусам (см. elementExtrusionHeight).
 
-  const topColumns = [];
+// Сторона клетки пространственного индекса. Не «покрупнее для скорости»:
+// поиск смотрит клетку и восемь соседних, поэтому сторона обязана быть
+// НЕ МЕНЬШЕ допуска привязки (1000 мм) — иначе сосед в допуске окажется
+// через клетку и потеряется.
+const COLUMN_GRID_CELL_MM = 3000;
+
+// Запас на габарит плиты/ригеля при проверке «перекрытие над этой
+// точкой». Центр крайней колонны ряда лежит на грани плиты, а не внутри
+// неё, и точное попадание в контур такую колонну теряло бы.
+const DECK_OVER_COLUMN_TOLERANCE_MM = 1000;
+
+function _gridCell(x, y) {
+  return `${Math.floor(x / COLUMN_GRID_CELL_MM)}:${Math.floor(y / COLUMN_GRID_CELL_MM)}`;
+}
+
+// Клетки, которые задевает прямоугольник. Плита размером с этаж накрыла
+// бы тысячи клеток — такие (шире BIG_DECK_CELLS клеток по любой стороне)
+// в индекс не кладутся вовсе, а просматриваются отдельным списком: их
+// единицы, а раздувание индекса стоило бы дороже перебора.
+const BIG_DECK_CELLS = 24;
+
+function _cellsOfBox(box) {
+  const x0 = Math.floor(box.minX / COLUMN_GRID_CELL_MM), x1 = Math.floor(box.maxX / COLUMN_GRID_CELL_MM);
+  const y0 = Math.floor(box.minY / COLUMN_GRID_CELL_MM), y1 = Math.floor(box.maxY / COLUMN_GRID_CELL_MM);
+  if (x1 - x0 > BIG_DECK_CELLS || y1 - y0 > BIG_DECK_CELLS) return null;
+  const cells = [];
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) cells.push(`${x}:${y}`);
+  return cells;
+}
+
+function _outlineBox(outline, pad) {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of outline) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad };
+}
+
+function computeColumnTops(levels) {
+  const tops = new Map();
+
+  // ---- колонны с их точкой на плане, разложенные по клеткам ----
+  const columns = [];
+  const columnsByCell = new Map();
   for (const e of state.elements) {
-    if (e.element_type === "Колонна" && e.elevation_mm === topLevel && e.outline && e.outline.length >= 3) {
-      const [ccx, ccy] = footprintCentroid(e.outline);
-      topColumns.push({ id: e.id, cx: ccx, cy: ccy });
-    }
+    if (e.element_type !== "Колонна") continue;
+    if (e.elevation_mm === null || e.elevation_mm === undefined) continue;
+    if (!e.outline || e.outline.length < 3) continue;
+    const [cx, cy] = footprintCentroid(e.outline);
+    const col = { id: e.id, elev: e.elevation_mm, cx, cy };
+    columns.push(col);
+    const key = _gridCell(cx, cy);
+    const bucket = columnsByCell.get(key);
+    if (bucket) bucket.push(col); else columnsByCell.set(key, [col]);
   }
-  if (!topColumns.length) return overrides;
+  if (!columns.length) return tops;
 
-  for (const beam of state.elements) {
-    if (beam.element_type !== "Ригель") continue;
-    if (beam.elevation_mm == null || beam.elevation_mm <= baseCeiling) continue; // уже накрыт базовым потолком
-    if (!beam.outline || beam.outline.length < 3) continue;
-    const dims = footprintDimensions(beam.outline);
-    if (!dims) continue;
-    const angle = footprintLongAxisAngle(beam.outline);
-    const [bcx, bcy] = footprintCentroid(beam.outline);
-    const halfLen = dims.length / 2;
-    const dx = Math.cos(angle) * halfLen, dy = Math.sin(angle) * halfLen;
-    const ends = [[bcx + dx, bcy + dy], [bcx - dx, bcy - dy]];
-    for (const [ex, ey] of ends) {
-      let best = null;
-      for (const col of topColumns) {
-        const d = Math.hypot(col.cx - ex, col.cy - ey);
-        if (!best || d < best.d) best = { d, id: col.id };
+  function neighbourColumns(col) {
+    const out = [];
+    const gx = Math.floor(col.cx / COLUMN_GRID_CELL_MM), gy = Math.floor(col.cy / COLUMN_GRID_CELL_MM);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const bucket = columnsByCell.get(`${gx + dx}:${gy + dy}`);
+        if (!bucket) continue;
+        for (const other of bucket) {
+          if (other === col) continue;
+          if (Math.hypot(other.cx - col.cx, other.cy - col.cy) <= COLUMN_BEAM_END_MATCH_TOLERANCE_MM) out.push(other);
+        }
       }
-      if (best && best.d <= COLUMN_BEAM_END_MATCH_TOLERANCE_MM) {
-        const prev = overrides.get(best.id);
-        if (prev === undefined || beam.elevation_mm > prev) overrides.set(best.id, beam.elevation_mm);
+    }
+    return out;
+  }
+
+  // ---- 1) колонна выше в той же точке ----
+  const noColumnAbove = [];
+  for (const col of columns) {
+    let above = null, below = null;
+    for (const other of neighbourColumns(col)) {
+      if (other.elev > col.elev) { if (above === null || other.elev < above) above = other.elev; }
+      else if (other.elev < col.elev) { if (below === null || other.elev > below) below = other.elev; }
+    }
+    col.below = below;
+    if (above !== null) {
+      tops.set(col.id, above);
+    } else {
+      col.openTop = true;   // верх ничем не занят — только такую колонну вправе поднять ригель
+      noColumnAbove.push(col);
+    }
+  }
+  if (!noColumnAbove.length) return tops;
+
+  // ---- 2) перекрытие или ригель выше над этой точкой ----
+  const deckByCell = new Map();
+  const bigDecks = [];
+  for (const e of state.elements) {
+    if (e.element_type !== "Плита перекрытия" && e.element_type !== "Ригель") continue;
+    if (e.elevation_mm === null || e.elevation_mm === undefined) continue;
+    if (!e.outline || e.outline.length < 3) continue;
+    const deck = Object.assign({ elev: e.elevation_mm }, _outlineBox(e.outline, DECK_OVER_COLUMN_TOLERANCE_MM));
+    const cells = _cellsOfBox(deck);
+    if (cells === null) { bigDecks.push(deck); continue; }
+    for (const key of cells) {
+      const bucket = deckByCell.get(key);
+      if (bucket) bucket.push(deck); else deckByCell.set(key, [deck]);
+    }
+  }
+
+  function deckAbove(col) {
+    let best = null;
+    const consider = (deck) => {
+      if (deck.elev <= col.elev) return;
+      if (col.cx < deck.minX || col.cx > deck.maxX || col.cy < deck.minY || col.cy > deck.maxY) return;
+      if (best === null || deck.elev < best) best = deck.elev;
+    };
+    const bucket = deckByCell.get(_gridCell(col.cx, col.cy));
+    if (bucket) for (const deck of bucket) consider(deck);
+    for (const deck of bigDecks) consider(deck);
+    return best;
+  }
+
+  const stillOpen = [];
+  for (const col of noColumnAbove) {
+    const deck = deckAbove(col);
+    if (deck !== null) tops.set(col.id, deck);
+    else stillOpen.push(col);
+  }
+
+  // ---- 3) шаг этажа снизу ----
+  for (const col of stillOpen) {
+    if (col.below !== null && col.below < col.elev) tops.set(col.id, col.elev + (col.elev - col.below));
+  }
+
+  // ---- ригель, опирающийся концом на колонну выше её потолка ----
+  //
+  // Кандидаты — только колонны без колонны сверху: у остальных верх
+  // определён стопкой, и ригель этажом выше их не касается.
+  if (noColumnAbove.length) {
+    for (const beam of state.elements) {
+      if (beam.element_type !== "Ригель") continue;
+      if (beam.elevation_mm === null || beam.elevation_mm === undefined) continue;
+      if (!beam.outline || beam.outline.length < 3) continue;
+      const dims = footprintDimensions(beam.outline);
+      if (!dims) continue;
+      const angle = footprintLongAxisAngle(beam.outline);
+      const [bcx, bcy] = footprintCentroid(beam.outline);
+      const halfLen = dims.length / 2;
+      const dx = Math.cos(angle) * halfLen, dy = Math.sin(angle) * halfLen;
+      for (const [ex, ey] of [[bcx + dx, bcy + dy], [bcx - dx, bcy - dy]]) {
+        let best = null;
+        const gx = Math.floor(ex / COLUMN_GRID_CELL_MM), gy = Math.floor(ey / COLUMN_GRID_CELL_MM);
+        for (let cx = -1; cx <= 1; cx++) {
+          for (let cy = -1; cy <= 1; cy++) {
+            const bucket = columnsByCell.get(`${gx + cx}:${gy + cy}`);
+            if (!bucket) continue;
+            for (const col of bucket) {
+              if (!col.openTop) continue;                    // верх задан колонной сверху — ригель тут ни при чём
+              if (col.elev >= beam.elevation_mm) continue;   // ригель не выше колонны — не он её накрывает
+              if (tops.has(col.id) && tops.get(col.id) >= beam.elevation_mm) continue;
+              const d = Math.hypot(col.cx - ex, col.cy - ey);
+              if (!best || d < best.d) best = { d, col };
+            }
+          }
+        }
+        if (best && best.d <= COLUMN_BEAM_END_MATCH_TOLERANCE_MM) {
+          tops.set(best.col.id, beam.elevation_mm);
+        }
       }
     }
   }
-  return overrides;
+
+  return tops;
 }
 
 // ---------- НАКЛЕЙКИ СЛИТЫ В ОБЩИЙ БУФЕР ----------
@@ -22373,14 +22535,14 @@ function decalLabelFor(element) {
 // на поверхности, а не иногда падать на плавающую табличку).
 // world.X=dxf.x, world.Z=-dxf.y (см. build3DElementGeometry) — та же
 // поправка знака применяется здесь ко всем мировым координатам наклейки.
-function collectMarkDecalQuads(element, label, aspect, levels, columnTopOverrides) {
+function collectMarkDecalQuads(element, label, aspect, levels, columnTops) {
   // Марка+допстрока — ОДНА строка (см. buildDecalAtlas): длина для
   // фит-чека суммарная, не максимум из двух отдельных строк.
   const maxTextLen = element.mark.length + (label.subText ? label.subText.length + 1 : 0);
   const quads = [];
 
   if (element.element_type === "Колонна") {
-    const height = elementExtrusionHeight(element, levels, columnTopOverrides);
+    const height = elementExtrusionHeight(element, levels, columnTops);
     const sides = polygonSides(element.outline);
     const centroid = footprintCentroid(element.outline);
     for (const side of sides) {
@@ -22410,7 +22572,7 @@ function collectMarkDecalQuads(element, label, aspect, levels, columnTopOverride
 
   const angle = footprintLongAxisAngle(element.outline);
   const right = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle));
-  const height = elementExtrusionHeight(element, levels, columnTopOverrides);
+  const height = elementExtrusionHeight(element, levels, columnTops);
   const [cx0, cy0] = footprintCentroid(element.outline);
   const cx = cx0, cz = -cy0;
   const decalWorldWidth = fontSize * aspect;
@@ -22464,7 +22626,7 @@ function collectMarkDecalQuads(element, label, aspect, levels, columnTopOverride
 // мешу на пару (тип элемента, страница атласа). Тип остаётся отдельным
 // мешем намеренно — тумблер «Подписи» по типу должен быть переключением
 // видимости, а не пересборкой буфера.
-function buildMergedDecals(elements, levels, columnTopOverrides) {
+function buildMergedDecals(elements, levels, columnTops) {
   const labelByElementId = new Map();
   const labels = new Map(); // ключ надписи -> {mark, subText, subColor}
   for (const element of elements) {
@@ -22488,7 +22650,7 @@ function buildMergedDecals(elements, levels, columnTopOverrides) {
     const label = labelByElementId.get(element.id);
     if (!label) continue;
     const rect = atlas.rects.get(label.key);
-    const quads = collectMarkDecalQuads(element, label, rect.aspect, levels, columnTopOverrides);
+    const quads = collectMarkDecalQuads(element, label, rect.aspect, levels, columnTops);
     if (!quads || !quads.length) continue;
     elementIds.add(element.id);
 
@@ -22658,11 +22820,11 @@ function computeBuildingHeightRange() {
 //
 // Считается по ВСЕМ элементам модели, а не по показанным фильтрами: иначе
 // объёмы зон прыгали бы по высоте от каждого фильтра.
-function computeModelTopY(levels, columnTopOverrides) {
+function computeModelTopY(levels, columnTops) {
   let top = null;
   for (const element of state.elements) {
     if (!element.outline || element.outline.length < 3) continue;
-    const y = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
+    const y = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTops);
     if (top === null || y > top) top = y;
   }
   return top;
@@ -22902,12 +23064,12 @@ function rebuildMergedDecals() {
   if (!v3.scene || !v3.merged) return;
   disposeMergedDecals();
   const levels = computeColumnLevels();
-  const columnTopOverrides = computeColumnEndExtensions(levels);
+  const columnTops = computeColumnTops(levels);
   // Ровно тот набор, что реально построен в слитой геометрии — он же
   // отражает текущий фильтр размещения (отфильтрованное в сцену не
   // попадает вовсе, см. build3DScene).
   const shown = state.elements.filter(e => v3.merged.rangeById.has(e.id));
-  const decals = buildMergedDecals(shown, levels, columnTopOverrides);
+  const decals = buildMergedDecals(shown, levels, columnTops);
   v3.decalMeshes = decals.meshes;
   v3.decalTextures = decals.textures;
   v3.decalElementIds = decals.elementIds;
@@ -22925,10 +23087,6 @@ function rebuildMergedDecals() {
 function rebuild3DLabelSprite(element) {
   const v3 = state.view3d;
   if (!v3.scene) return;
-  const levels = computeColumnLevels();
-  const columnTopOverrides = computeColumnEndExtensions(levels);
-  const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
-
   // Наклейка на грани ТОЖЕ несёт допстроку (код контрагента + плановая
   // дата, живой запрос пользователя — раньше показывала только марку),
   // значит тоже нуждается в пересборке при смене статуса/плановой даты.
@@ -22936,11 +23094,19 @@ function rebuild3DLabelSprite(element) {
   // объекта у элемента нет — пересобирается буфер целиком, но ОТЛОЖЕННО,
   // одним разом на всю пачку изменений (массовая смена статуса зовёт эту
   // функцию на каждое изделие).
+  //
+  // Проверка стоит ПЕРЕД расчётом высоты намеренно: расчёт потолков
+  // (computeColumnTops) обходит всю модель, а массовая смена статуса зовёт
+  // эту функцию на каждое изделие — до перестановки это был обход модели
+  // на каждое из тысяч изделий подряд.
   if (v3.decalElementIds.has(element.id)) {
     scheduleMergedDecalRebuild();
     return;
   }
   {
+    const levels = computeColumnLevels();
+    const columnTops = computeColumnTops(levels);
+    const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTops);
     const old = v3.labelSpriteById.get(element.id);
     if (old) {
       old.removeFromParent();
@@ -23252,7 +23418,7 @@ function build3DScene(preserveCamera = false) {
   disposeMergedDecals();
 
   const levels = computeColumnLevels();
-  const columnTopOverrides = computeColumnEndExtensions(levels);
+  const columnTops = computeColumnTops(levels);
 
   // Отфильтрованный элемент НЕ строится вовсе — ни геометрии, ни наклейки,
   // ни текстуры (живой запрос 2026-07-29: "система не занимается обработкой
@@ -23265,7 +23431,7 @@ function build3DScene(preserveCamera = false) {
   // связать» (АРМ) показываются сверх среза и обязаны быть построены, иначе
   // мерцать в 3D было бы нечему.
   const shown = state.elements.filter(elementVisibleNow);
-  v3.merged = build3DMergedGeometry(shown, levels, columnTopOverrides);
+  v3.merged = build3DMergedGeometry(shown, levels, columnTops);
   if (v3.merged) {
     v3.scene.add(v3.merged.mesh);
     if (v3.merged.edges) v3.scene.add(v3.merged.edges);
@@ -23283,7 +23449,7 @@ function build3DScene(preserveCamera = false) {
   // атласа), см. buildMergedDecals. Элементы, которым наклейка не
   // полагается (не тот тип, короткая марка не помещается), получают прежнюю
   // плавающую табличку-спрайт.
-  const decals = buildMergedDecals(withGeometry, levels, columnTopOverrides);
+  const decals = buildMergedDecals(withGeometry, levels, columnTops);
   v3.decalMeshes = decals.meshes;
   v3.decalTextures = decals.textures;
   v3.decalElementIds = decals.elementIds;
@@ -23292,7 +23458,7 @@ function build3DScene(preserveCamera = false) {
 
   for (const element of withGeometry) {
     if (decals.elementIds.has(element.id)) continue;
-    const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTopOverrides);
+    const topY = (element.elevation_mm || 0) + elementExtrusionHeight(element, levels, columnTops);
     // Подписи кладутся не в корень сцены, а в контейнер СВОЕГО типа
     // элемента (label3DContainer) — выключенный тип отсекается рендерером
     // одной проверкой, а не девятью тысячами.
@@ -23314,7 +23480,7 @@ function build3DScene(preserveCamera = false) {
   // Верх зон — по самой верхней точке модели (см. computeModelTopY), а не
   // по потолку верхнего яруса колонн: ригели и плиты сверху лежат над ним.
   const heightRange = computeBuildingHeightRange();
-  const modelTop = computeModelTopY(levels, columnTopOverrides);
+  const modelTop = computeModelTopY(levels, columnTops);
   if (modelTop !== null && modelTop > heightRange.top) heightRange.top = modelTop;
   const stanceTiers = stanceTierElevations();
   // По записи на ЯРУС (см. zoneMeshByLevel): у стоянки ярусов несколько, и
