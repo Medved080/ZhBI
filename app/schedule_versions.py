@@ -284,6 +284,172 @@ def cumulative_forecast(conn: sqlite3.Connection, object_id: int,
     }
 
 
+# ------------------------------------------------- диаграмма Ганта (2026-08-22)
+#
+# «Визуализация» — четвёртая вкладка формы графика: та же последовательность
+# работ, что раскладывает расчёт, но нарисованная во времени. Строка — узел
+# группировки (кран → стоянка → этаж → тип → подтип), у неё ДВЕ полосы:
+# директивные сроки и прогноз выбранной версии.
+#
+# Почему группировка именно такая: это ровно ключ фронта работ в расчёте
+# (кран + стоянка + этаж) плюс вид работ (тип + подтип). Диаграмма и
+# «Исходные данные расчёта» говорят об одних и тех же строках, и порядок
+# строк берётся оттуда же — из потока и из порядка технологии, а не по
+# алфавиту: иначе «последовательность этапов СМР» читалась бы как случайный
+# список.
+#
+# План берётся из ПОЛЕЙ изделия, а не из базовой версии (решение
+# пользователя 2026-08-22) — по той же причине, что и в карточке изделия
+# (см. element_deviation): поля — источник правды директивных дат, их правят
+# руками, и диаграмма обязана показывать то, что в системе сейчас.
+GANTT_NO_CRANE = "Кран не определён"
+GANTT_NO_STANCE = "Стоянка не определена"
+GANTT_NO_FLOOR = "Этаж не определён"
+GANTT_NO_TYPE = "Тип не указан"
+GANTT_LEVELS = ("crane", "stance", "floor", "type", "subtype")
+
+
+def _gantt_span(node: dict, ps, pe, fs, fe) -> None:
+    """Сроки узла — от самой ранней даты его изделий до самой поздней.
+
+    Начало и конец накапливаются ПОРОЗНЬ по каждой из двух пар: у изделия
+    может быть заполнена только одна дата из двух (импорт заполняет их
+    независимо, см. 5.6), и требовать обе значило бы выкинуть строку,
+    про которую кое-что известно.
+    """
+    for ключ, значение, крайний in (
+        ("plan_start", ps, min), ("plan_end", pe, max),
+        ("forecast_start", fs, min), ("forecast_end", fe, max),
+    ):
+        if not значение:
+            continue
+        текущее = node[ключ]
+        node[ключ] = значение if текущее is None else крайний(текущее, значение)
+
+
+def gantt_tree(conn: sqlite3.Connection, object_id: int,
+               version_id: Optional[int] = None) -> dict:
+    """Дерево узлов группировки с плановыми и прогнозными сроками."""
+    from app.reports import natural_key
+    from app.schedule_calc import _flow, _work_kinds
+
+    version_id = version_id if version_id is not None else latest_current_id(conn, object_id)
+    rows = conn.execute(
+        """
+        SELECT zc.name AS crane, zs.name AS stance, e.floor AS floor,
+               e.element_type AS etype, e.subtype AS subtype,
+               e.project_smr_start_date AS ps, e.project_delivery_date AS pe,
+               d.smr_start_date AS fs, d.smr_end_date AS fe
+        FROM elements e
+        LEFT JOIN zones zc ON zc.id = e.zone_crane_id AND e.zone_crane_status = 'matched'
+        LEFT JOIN zones zs ON zs.id = e.zone_stance_id AND e.zone_stance_status = 'matched'
+        LEFT JOIN schedule_version_dates d ON d.element_id = e.id AND d.version_id = ?
+        WHERE e.object_id = ? AND e.is_current = 1
+        """,
+        (version_id if version_id is not None else -1, object_id),
+    ).fetchall()
+
+    поток = _flow(conn, object_id)          # (кран, стоянка, этаж) → номер фронта
+    виды = _work_kinds(conn, object_id)     # (тип, подтип) → {"rate", "order"}
+    ХВОСТ = 10 ** 6                         # то, чему порядок не задан, — в конец
+
+    def новый(label: str, level: str, sort) -> dict:
+        return {"label": label, "level": level, "sort": sort, "quantity": 0,
+                "plan_start": None, "plan_end": None,
+                "forecast_start": None, "forecast_end": None, "children": {}}
+
+    корень = новый("", "root", ())
+    без_дат = 0
+    без_прогноза = 0
+    for r in rows:
+        if not (r["ps"] or r["pe"] or r["fs"] or r["fe"]):
+            # Изделие, у которого нет ни директивных дат, ни прогноза, рисовать
+            # нечем. Молча пропасть оно не должно — сколько таких, диаграмма
+            # пишет отдельной строкой под собой.
+            без_дат += 1
+            continue
+        if version_id is not None and not (r["fs"] or r["fe"]):
+            # Изделие есть на диаграмме (директивные даты у него есть), но
+            # прогноза по нему нет: строка идёт с одной полосой из двух и без
+            # отклонения. Причина законная — расчёт «от факта» исключает
+            # смонтированное, а изделие без привязки к крану, стоянке и этажу
+            # в него не встаёт вовсе, — но само по себе половинчатое дерево
+            # читается как потерянные данные (та же беда, что у кривой
+            # прогноза в «Динамике», см. forecast_gap).
+            без_прогноза += 1
+        кран = r["crane"] or GANTT_NO_CRANE
+        стоянка = r["stance"] or GANTT_NO_STANCE
+        этаж = r["floor"]
+        фронт = поток.get((r["crane"], r["stance"], этаж))
+        фронт = ХВОСТ if фронт is None else фронт
+        порядок_вида = (виды.get((r["etype"], r["subtype"] or None)) or {}).get("order")
+        порядок_вида = ХВОСТ if порядок_вида is None else порядок_вида
+
+        путь = [
+            (кран, "crane", (natural_key(кран),)),
+            (стоянка, "stance", (фронт, natural_key(стоянка))),
+            (f"{этаж} этаж" if этаж is not None else GANTT_NO_FLOOR, "floor",
+             (фронт, ХВОСТ if этаж is None else этаж)),
+            (r["etype"] or GANTT_NO_TYPE, "type",
+             (порядок_вида, natural_key(r["etype"] or GANTT_NO_TYPE))),
+        ]
+        # Уровень подтипа появляется, только когда подтип есть: «Колонна →
+        # Без подтипа» — лишний щелчок ради строки, повторяющей родителя.
+        if r["subtype"]:
+            путь.append((r["subtype"], "subtype", (порядок_вида, natural_key(r["subtype"]))))
+
+        узел = корень
+        for label, level, sort in путь:
+            узел = узел["children"].setdefault(label, новый(label, level, sort))
+            # Порядок узла — МИНИМУМ по его изделиям, а не порядок первого
+            # встреченного: у стоянки свой номер фронта на каждом этаже, у
+            # типа — свой порядок технологии на каждом подтипе. Иначе место
+            # строки в списке зависело бы от того, в каком порядке SQLite
+            # вернул строки, и менялось бы само собой.
+            if sort < узел["sort"]:
+                узел["sort"] = sort
+            узел["quantity"] += 1
+            _gantt_span(узел, r["ps"], r["pe"], r["fs"], r["fe"])
+        _gantt_span(корень, r["ps"], r["pe"], r["fs"], r["fe"])
+        корень["quantity"] += 1
+
+    счётчик = [0]
+
+    def собрать(узел: dict) -> list:
+        дети = sorted(узел["children"].values(), key=lambda n: n["sort"])
+        готовые = []
+        for д in дети:
+            счётчик[0] += 1
+            готовые.append({
+                "id": счётчик[0], "label": д["label"], "level": д["level"],
+                "quantity": д["quantity"],
+                "plan_start": д["plan_start"], "plan_end": д["plan_end"],
+                "forecast_start": д["forecast_start"], "forecast_end": д["forecast_end"],
+                "deviation_start": _days_between(д["plan_start"], д["forecast_start"]),
+                "deviation_end": _days_between(д["plan_end"], д["forecast_end"]),
+                "children": собрать(д),
+            })
+        return готовые
+
+    узлы = собрать(корень)
+    даты = [d for d in (корень["plan_start"], корень["plan_end"],
+                        корень["forecast_start"], корень["forecast_end"]) if d]
+    v = conn.execute("SELECT title, kind, loaded_at FROM schedule_versions WHERE id = ?",
+                     (version_id,)).fetchone() if version_id is not None else None
+    return {
+        "version_id": version_id,
+        "version_title": v["title"] if v else None,
+        "version_kind": v["kind"] if v else None,
+        "loaded_at": v["loaded_at"] if v else None,
+        "nodes": узлы,
+        "elements": корень["quantity"],
+        "undated": без_дат,
+        "no_forecast": без_прогноза,
+        "min_date": min(даты)[:10] if даты else None,
+        "max_date": max(даты)[:10] if даты else None,
+    }
+
+
 # ---------------------------------------------------------------- эндпоинты
 
 @router.get("")
@@ -294,6 +460,18 @@ def get_versions(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
         return {"versions": list_versions(conn, object_id),
                 "baseline_id": baseline_id(conn, object_id),
                 "current_id": latest_current_id(conn, object_id)}
+    finally:
+        conn.close()
+
+
+@router.get("/gantt")
+def get_gantt(object_id: int, version_id: Optional[int] = None,
+              user: sqlite3.Row = Depends(get_current_user)):
+    """Дерево для диаграммы Ганта. version_id не задан — текущий прогноз."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "schedule", "read")
+        return gantt_tree(conn, object_id, version_id=version_id)
     finally:
         conn.close()
 

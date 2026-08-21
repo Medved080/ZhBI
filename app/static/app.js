@@ -25529,6 +25529,10 @@ document.getElementById("transfer-apply").addEventListener("click", async () => 
 // между ними ходят туда-обратно.
 const scheduleBackdrop = document.getElementById("schedule-backdrop");
 let scheduleInputs = null;   // {work_kinds, flow} — снимок на время открытой формы
+// Список версий держится в переменной, а не перечитывается «Визуализацией»
+// своим запросом: закладка «Версии» его уже загрузила, и второй запрос за тем
+// же самым отличался бы от первого только временем ответа.
+let scheduleVersionsList = null;
 
 document.getElementById("menu-schedule").addEventListener("click", async () => {
   scheduleBackdrop.classList.add("open");
@@ -25536,6 +25540,10 @@ document.getElementById("menu-schedule").addEventListener("click", async () => {
   document.getElementById("schedule-calc-status").textContent = "";
   document.getElementById("schedule-inputs-status").textContent = "";
   scheduleCalcDateLabel();
+  // Снимок диаграммы сбрасывается на каждое открытие формы: объект мог
+  // смениться, версию могли удалить или пересчитать.
+  ganttData = null;
+  ganttVersionId = null;
   await Promise.all([loadScheduleVersions(), loadScheduleInputs()]);
 });
 document.getElementById("schedule-close").addEventListener("click",
@@ -25544,9 +25552,14 @@ document.getElementById("schedule-close").addEventListener("click",
 function switchScheduleTab(name) {
   document.querySelectorAll("#schedule-tabs .tab-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.schedTab === name));
-  for (const key of ["versions", "inputs", "calc"]) {
+  for (const key of ["versions", "inputs", "calc", "gantt"]) {
     document.getElementById(`schedule-tab-${key}`).style.display = key === name ? "" : "none";
   }
+  // Диаграмма считается ЛЕНИВО, при первом заходе на закладку: дерево строится
+  // по всем изделиям объекта, и платить за него при каждом открытии формы —
+  // когда чаще открывают «Версии» — незачем. Ширину для масштаба «вписать в
+  // окно» тоже узнать нельзя, пока панель скрыта: у скрытой clientWidth = 0.
+  if (name === "gantt" && !ganttData) loadScheduleGantt();
 }
 document.querySelectorAll("#schedule-tabs .tab-btn").forEach(btn =>
   btn.addEventListener("click", () => switchScheduleTab(btn.dataset.schedTab)));
@@ -25556,6 +25569,7 @@ async function loadScheduleVersions() {
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
   try {
     const data = await api(`/schedule-versions?object_id=${state.objectId}`);
+    scheduleVersionsList = data;
     if (!data.versions.length) {
       box.innerHTML = '<div class="hint-text">Версий графика ещё нет. Базовый график '
         + 'загружается через «Обмен данными → Импорт графика MS Project из XLS», '
@@ -25580,6 +25594,10 @@ async function loadScheduleVersions() {
       try {
         await api(`/schedule-versions/${btn.dataset.delVersion}`, { method: "DELETE" });
         await loadScheduleVersions();
+        // Диаграмма могла быть построена по удалённой версии — пересобрать её
+        // при следующем заходе на закладку.
+        ganttData = null;
+        ganttVersionId = null;
         // Отклонение и кривая прогноза считались по этой версии — пересчитать.
         scheduleSidebarReports();
       } catch (e) { showToast(e.message, "error"); }
@@ -25777,9 +25795,268 @@ document.getElementById("schedule-calc-run").addEventListener("click", async () 
       + `сроки с ${formatDateRu(итог.first_date)} по ${formatDateRu(итог.last_date)}.`
       + (итог.warnings.length ? ` ${итог.warnings.join(" ")}` : "");
     await loadScheduleVersions();
+    ganttData = null;          // появилась новая версия — диаграмму пересобрать
+    ganttVersionId = null;
     switchScheduleTab("versions");
     scheduleSidebarReports();
   } catch (e) {
     status.textContent = e.message;
   }
 });
+
+
+// ==================== ВИЗУАЛИЗАЦИЯ: ДИАГРАММА ГАНТА ====================
+// (2026-08-22, запрос пользователя: «диаграмма Ганта, этапы СМР
+// последовательно, сгруппировано по кранам, стоянкам, этажам, типам и
+// подтипам; плановые и прогнозные сроки разным цветом».)
+//
+// Рисуется НЕ в SVG, в отличие от «Динамики» и аналитической справки, и это
+// сознательно: строк тут полторы тысячи, каждая со своей подписью, и всё это
+// должно прокручиваться в обе стороны с закреплённой колонкой названий и
+// закреплённой шкалой сверху. В SVG закрепление пришлось бы делать руками —
+// пересчётом координат на каждое событие прокрутки; в вёрстке это две
+// строчки `position: sticky`. Полоса — обычный div, а не <rect>: их вдвое
+// больше, чем строк, и разницы в цене нет.
+//
+// Порядок строк задаёт СЕРВЕР (gantt_tree): поток крана и порядок технологии,
+// то есть та же последовательность, по которой раскладывает расчёт. Сортировать
+// по алфавиту на клиенте значило бы показать не «последовательность этапов»,
+// а список.
+const GANTT_NAME_W = 340;   // ширина закреплённой колонки названий, px
+const GANTT_ROW_H = 22;
+const GANTT_MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
+                      "июл", "авг", "сен", "окт", "ноя", "дек"];
+
+let ganttData = null;
+let ganttCollapsed = new Set();   // id узлов, чьи дети спрятаны
+let ganttPxPerDay = null;         // null — вписать весь срок в ширину окна
+let ganttVersionId = null;        // null — текущий прогноз (последняя актуализация)
+
+const ganttDay = (iso) => Date.parse(iso.slice(0, 10) + "T00:00:00Z") / 86400000;
+
+async function loadScheduleGantt() {
+  const box = document.getElementById("gantt-box");
+  const status = document.getElementById("gantt-status");
+  box.innerHTML = '<div class="hint-text" style="padding:12px">Загрузка…</div>';
+  status.textContent = "";
+  try {
+    const запрос = `/schedule-versions/gantt?object_id=${state.objectId}`
+      + (ganttVersionId ? `&version_id=${ganttVersionId}` : "");
+    ganttData = await api(запрос);
+    ganttVersionId = ganttData.version_id;
+    ganttCollapsed = new Set();
+    ganttPxPerDay = null;
+    renderGanttVersionSelect();
+    renderGantt();
+  } catch (e) {
+    ganttData = null;
+    box.innerHTML = `<div class="error-text" style="padding:12px">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// Выбор версии прогноза. В списке ВСЕ версии, включая базовую: она такой же
+// снимок дат, и сравнить с ней директивные поля изделия — законный вопрос
+// («что мы правили руками после загрузки базового графика»).
+function renderGanttVersionSelect() {
+  const sel = document.getElementById("gantt-version");
+  const версии = (scheduleVersionsList && scheduleVersionsList.versions) || [];
+  if (!версии.length) {
+    sel.innerHTML = '<option value="">версий графика нет</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = версии.map(v => {
+    const текущая = scheduleVersionsList.current_id === v.id ? " · текущий прогноз" : "";
+    return `<option value="${v.id}"${v.id === ganttData.version_id ? " selected" : ""}>`
+      + escapeHtml(`${v.kind_label}: ${v.title || "без названия"}${текущая}`)
+      + "</option>";
+  }).join("");
+}
+
+function ganttFlatRows() {
+  const строки = [];
+  const обход = (узлы, уровень) => {
+    for (const n of узлы) {
+      строки.push({ n, уровень });
+      if (n.children.length && !ganttCollapsed.has(n.id)) обход(n.children, уровень + 1);
+    }
+  };
+  обход(ganttData.nodes, 0);
+  return строки;
+}
+
+// Отклонение по завершению — единственное число в строке. Из двух отклонений
+// (по началу и по завершению) в колонку шириной в четыре знака помещается
+// одно; берётся то, которое отвечает на вопрос «когда закончим». Второе есть
+// во всплывающей подсказке строки.
+function ganttDevCell(n) {
+  const d = n.deviation_end;
+  if (d === null || d === undefined) return '<span class="dev"></span>';
+  const класс = d > 0 ? "dev-late" : d < 0 ? "dev-early" : "dev-ok";
+  const текст = d > 0 ? `+${d}` : d < 0 ? `−${Math.abs(d)}` : "0";
+  return `<span class="dev ${класс}">${текст}</span>`;
+}
+
+function ganttTitle(n) {
+  const срок = (a, b) => (a || b)
+    ? `${formatDateRu(a) || "?"} — ${formatDateRu(b) || "?"}` : "нет дат";
+  const дн = (v) => v === null || v === undefined ? "нет" :
+    (v > 0 ? `+${v}` : String(v)) + " " + plural(Math.abs(v), "день", "дня", "дней");
+  return `${n.label} · изделий ${n.quantity}\n`
+    + `План: ${срок(n.plan_start, n.plan_end)}\n`
+    + `Прогноз: ${срок(n.forecast_start, n.forecast_end)}\n`
+    + `Отклонение: начало ${дн(n.deviation_start)}, завершение ${дн(n.deviation_end)}`;
+}
+
+function renderGantt() {
+  const box = document.getElementById("gantt-box");
+  const status = document.getElementById("gantt-status");
+  const d = ganttData;
+  if (!d) return;
+  if (!d.nodes.length) {
+    box.innerHTML = '<div class="hint-text" style="padding:12px">Рисовать нечего: ни у одного '
+      + 'изделия объекта нет ни директивных дат СМР, ни прогноза.</div>';
+    status.textContent = "";
+    return;
+  }
+
+  // Домен — от начала месяца самой ранней даты до начала месяца, следующего
+  // за самой поздней: полоса, упирающаяся в край сетки, читается как
+  // обрезанная, а подписи месяцев без запаса налезают на границу.
+  const первая = new Date(d.min_date + "T00:00:00Z");
+  const от = Date.UTC(первая.getUTCFullYear(), первая.getUTCMonth(), 1) / 86400000;
+  const последняя = new Date(d.max_date + "T00:00:00Z");
+  const до = Date.UTC(последняя.getUTCFullYear(), последняя.getUTCMonth() + 1, 1) / 86400000;
+  const дней = Math.max(1, до - от);
+
+  // Масштаб по умолчанию вписывает весь срок в видимую ширину: график
+  // полугодовой, и первое, что от него нужно, — увидеть его целиком.
+  const свободно = Math.max(360, box.clientWidth - GANTT_NAME_W - 18);
+  const px = ganttPxPerDay || (свободно / дней);
+  const trackW = Math.max(360, Math.round(дней * px));
+  const X = (iso) => Math.round((ganttDay(iso) - от) * px);
+
+  const месяцы = [];
+  for (let t = от; t < до;) {
+    const дата = new Date(t * 86400000);
+    месяцы.push({ x: Math.round((t - от) * px), m: дата.getUTCMonth(), y: дата.getUTCFullYear() });
+    t = Date.UTC(дата.getUTCFullYear(), дата.getUTCMonth() + 1, 1) / 86400000;
+  }
+  const сегодня = new Date();
+  const xСегодня = Math.round(
+    (Date.UTC(сегодня.getFullYear(), сегодня.getMonth(), сегодня.getDate()) / 86400000 - от) * px);
+
+  const части = [];
+  части.push(`<div class="gantt-wrap" style="width:${GANTT_NAME_W + trackW}px">`);
+  части.push(`<div class="gantt-grid" style="left:${GANTT_NAME_W}px;width:${trackW}px">`
+    + месяцы.map(m => `<div class="m" style="left:${m.x}px"></div>`).join("")
+    + (xСегодня >= 0 && xСегодня <= trackW
+        ? `<div class="today" style="left:${xСегодня}px"></div>` : "")
+    + "</div>");
+  части.push(`<div class="gantt-head">
+      <div class="gantt-head-name" style="width:${GANTT_NAME_W}px">Этап СМР</div>
+      <div class="gantt-scale" style="width:${trackW}px">`
+    + месяцы.map(m => `<div class="mon" style="left:${m.x}px">`
+        + `${GANTT_MONTHS[m.m]} ${String(m.y).slice(2)}</div>`).join("")
+    + "</div></div>");
+
+  for (const { n, уровень } of ganttFlatRows()) {
+    const развёрнут = !ganttCollapsed.has(n.id);
+    const треугольник = n.children.length
+      ? `<button type="button" class="gantt-tw" data-gantt-toggle="${n.id}">${развёрнут ? "▾" : "▸"}</button>`
+      : '<span class="gantt-tw"></span>';
+    const полоса = (класс, a, b) => {
+      const начало = a || b, конец = b || a;
+      if (!начало) return "";
+      const x = X(начало);
+      // Работа длиной в день даёт нулевую ширину — полосу видно не будет.
+      // Полдня по масштабу, но не меньше двух пикселей: это по-прежнему
+      // «одна точка на шкале», но точка нарисованная.
+      const w = Math.max(2, X(конец) - x);
+      return `<div class="gantt-bar ${класс}" style="left:${x}px;width:${w}px"></div>`;
+    };
+    части.push(`<div class="gantt-row lvl-${n.level}" title="${escapeHtml(ganttTitle(n))}">`
+      + `<div class="gantt-name" style="width:${GANTT_NAME_W}px;padding-left:${уровень * 14}px">`
+      + треугольник
+      + `<span class="txt">${escapeHtml(n.label)}</span>`
+      + `<span class="qty">${n.quantity}</span>`
+      + ganttDevCell(n)
+      + `</div><div class="gantt-track" style="width:${trackW}px">`
+      + полоса("plan", n.plan_start, n.plan_end)
+      + полоса("fc", n.forecast_start, n.forecast_end)
+      + "</div></div>");
+  }
+  части.push("</div>");
+  box.innerHTML = части.join("");
+
+  box.querySelectorAll("[data-gantt-toggle]").forEach(btn => btn.addEventListener("click", () => {
+    const id = Number(btn.dataset.ganttToggle);
+    if (ganttCollapsed.has(id)) ganttCollapsed.delete(id); else ganttCollapsed.add(id);
+    const слева = box.scrollLeft, сверху = box.scrollTop;
+    renderGantt();
+    box.scrollLeft = слева; box.scrollTop = сверху;
+  }));
+
+  // Итог словами. Про изделия без единой даты сказать обязательно: их
+  // на диаграмме нет, и молчание об этом читается как «в системе больше
+  // ничего нет» (та же причина, что у forecastCoverageHtml в «Динамике»).
+  const хвост = (d.undated
+    ? ` Не показано ${d.undated} ${plural(d.undated, "изделие", "изделия", "изделий")}: `
+      + "у них нет ни директивных дат СМР, ни прогноза."
+    : "")
+    // Строка с одной полосой вместо двух — не сбой отрисовки: прогноз
+    // покрывает не всё (смонтированное исключается при пересчёте от факта,
+    // изделие без привязки к крану, стоянке и этажу в расчёт не встаёт).
+    // Сказать об этом числом дешевле, чем разбираться с этим глазами.
+    + (d.no_forecast
+      ? ` У ${d.no_forecast} ${plural(d.no_forecast, "изделия", "изделий", "изделий")} `
+        + "в этой версии нет прогноза — их строки идут только с плановой полосой."
+      : "");
+  status.textContent = d.version_id
+    ? `Прогноз: «${d.version_title || "без названия"}», загружен ${formatMomentRu(d.loaded_at)}. `
+      + `На диаграмме ${d.elements} ${plural(d.elements, "изделие", "изделия", "изделий")}, `
+      + `сроки с ${formatDateRu(d.min_date)} по ${formatDateRu(d.max_date)}.` + хвост
+    : "Версий графика нет — показаны только директивные сроки."
+      + ` На диаграмме ${d.elements} ${plural(d.elements, "изделие", "изделия", "изделий")}.` + хвост;
+}
+
+document.getElementById("gantt-version").addEventListener("change", (e) => {
+  ganttVersionId = e.target.value ? Number(e.target.value) : null;
+  loadScheduleGantt();
+});
+document.getElementById("gantt-expand").addEventListener("click", () => {
+  ganttCollapsed = new Set();
+  renderGantt();
+});
+// «Свернуть до кранов» прячет всё, что ниже верхнего уровня: краны остаются
+// видны, их содержимое — нет. Свернуть ВСЁ было бы пустым экраном.
+document.getElementById("gantt-collapse").addEventListener("click", () => {
+  if (!ganttData) return;
+  ganttCollapsed = new Set(ganttData.nodes.map(n => n.id));
+  renderGantt();
+});
+const ganttZoom = (k) => {
+  if (!ganttData) return;
+  const box = document.getElementById("gantt-box");
+  const вписано = ganttCurrentPxPerDay(box);
+  const новый = (ganttPxPerDay || вписано) * k;
+  // Мельче, чем «весь срок в ширину окна», масштаба нет: под ним диаграмма
+  // не показывает больше, а полосы схлопываются в точки. Уменьшение
+  // возвращает ровно в это состояние — отдельной кнопки «вписать» тогда не
+  // нужно, а без неё из увеличенного вида было бы не выбраться.
+  ganttPxPerDay = новый <= вписано ? null : Math.min(40, новый);
+  renderGantt();
+};
+// Текущий масштаб при «вписано в ширину» не хранится — он выводится из
+// ширины окна, и первое нажатие на «крупнее» обязано отталкиваться от него,
+// а не от произвольного числа.
+function ganttCurrentPxPerDay(box) {
+  const первая = new Date(ganttData.min_date + "T00:00:00Z");
+  const от = Date.UTC(первая.getUTCFullYear(), первая.getUTCMonth(), 1) / 86400000;
+  const последняя = new Date(ganttData.max_date + "T00:00:00Z");
+  const до = Date.UTC(последняя.getUTCFullYear(), последняя.getUTCMonth() + 1, 1) / 86400000;
+  return Math.max(360, box.clientWidth - GANTT_NAME_W - 18) / Math.max(1, до - от);
+}
+document.getElementById("gantt-zoom-in").addEventListener("click", () => ganttZoom(1.6));
+document.getElementById("gantt-zoom-out").addEventListener("click", () => ganttZoom(1 / 1.6));

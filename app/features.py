@@ -233,9 +233,10 @@ FEATURES = [
     # исходные данные расчёта (темп, порядок работ, поток) и сам расчёт. Один
     # раздел на всю форму: разделять «смотреть версии» и «считать» смысла нет
     # — это одна работа планировщика.
-    Feature("schedule", "Контрактация", "График СМР: версии, исходные данные, расчёт",
+    Feature("schedule", "Контрактация", "График СМР: версии, исходные данные, расчёт, визуализация",
             "Загрузка файла графика — отдельный раздел «Импорт графика MS Project».",
-            ["GET /schedule-versions", "DELETE /schedule-versions/{id}",
+            ["GET /schedule-versions", "GET /schedule-versions/gantt",
+             "DELETE /schedule-versions/{id}",
              "GET/PUT /schedule-calc/inputs", "POST /schedule-calc"],
             SCOPE_OBJECT, _от(CONTRACT, WRITE)),
 

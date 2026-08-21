@@ -877,6 +877,75 @@
     max-height: 300px; overflow-y: auto;
   }
 
+  /* -------- «Визуализация»: диаграмма Ганта графика СМР (2026-08-22) -------- */
+  /* Форма шире обычной `.modal.wide` (780 px): на ней шкала времени
+     полугодового графика сжималась до сотни пикселей, и полосы плана и
+     прогноза различались только цветом, но не длиной. Ширина ЗАДАЁТСЯ, как
+     у #actions-panel-modal, — у `.modal` её нет, содержимое диаграммы
+     тянулось бы за самой длинной подписью. */
+  #schedule-backdrop .modal { width: 1180px; max-width: 96vw; }
+  .gantt-toolbar {
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;
+  }
+  .gantt-toolbar select { max-width: 320px; }
+  .gantt-legend { display: flex; gap: 12px; align-items: center; font-size: 12px; }
+  .gantt-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .gantt-legend i {
+    width: 18px; height: 7px; border-radius: 2px; display: inline-block;
+  }
+  .gantt-legend i.plan { background: var(--gantt-plan); }
+  .gantt-legend i.fc { background: var(--gantt-fc); }
+  /* Цвета — те же, что у пар «план — факт» на графике «Динамики»
+     (DYN_COLORS в app.js): синий про план, оранжевый про то, как идёт на
+     самом деле. Человек ходит между этими двумя экранами, и разная
+     раскраска одного и того же смысла заставляла бы сверяться с легендой. */
+  :root { --gantt-plan: #4A86C8; --gantt-fc: #E8703A; }
+  .gantt-box { overflow: auto; max-height: 58vh; border: 1px solid var(--color-border); border-radius: 8px; }
+  .gantt-wrap { position: relative; width: max-content; min-width: 100%; }
+  /* Сетка месяцев — ОДНИМ слоем на всю диаграмму, а не линиями в каждой
+     строке: строк полторы тысячи, и полтора десятка divs в каждой из них
+     стоили бы двадцать тысяч узлов на ровном месте. */
+  .gantt-grid { position: absolute; top: 0; bottom: 0; pointer-events: none; }
+  .gantt-grid .m { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--color-border); }
+  .gantt-grid .today { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--color-danger); opacity: .5; }
+  .gantt-head {
+    position: sticky; top: 0; z-index: 3; display: flex;
+    background: var(--color-surface); border-bottom: 1px solid var(--color-border);
+  }
+  .gantt-head-name {
+    position: sticky; left: 0; z-index: 4; flex: 0 0 auto;
+    background: var(--color-surface); border-right: 1px solid var(--color-border);
+    font-size: 11px; font-weight: 600; color: var(--color-text-muted);
+    padding: 4px 8px; box-sizing: border-box;
+  }
+  .gantt-scale { position: relative; height: 22px; flex: 0 0 auto; }
+  .gantt-scale .mon {
+    position: absolute; top: 3px; font-size: 11px; color: var(--color-text-muted);
+    white-space: nowrap; padding-left: 4px;
+  }
+  .gantt-row { display: flex; align-items: stretch; height: 22px; }
+  .gantt-row:hover { background: var(--color-surface-2); }
+  .gantt-name {
+    position: sticky; left: 0; z-index: 2; flex: 0 0 auto; display: flex; align-items: center;
+    gap: 4px; background: var(--color-surface); border-right: 1px solid var(--color-border);
+    font-size: 12px; padding: 0 8px 0 0; box-sizing: border-box;
+  }
+  .gantt-row:hover .gantt-name { background: var(--color-surface-2); }
+  .gantt-name .txt { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gantt-row.lvl-crane .gantt-name .txt { font-weight: 700; }
+  .gantt-row.lvl-stance .gantt-name .txt { font-weight: 600; }
+  .gantt-name .qty { flex: 0 0 42px; text-align: right; color: var(--color-text-muted); font-size: 11px; }
+  .gantt-name .dev { flex: 0 0 44px; text-align: right; font-size: 11px; }
+  /* Треугольник свёртки — на месте у ВСЕХ строк, в том числе у листьев
+     (там он пустой): без этого подпись листа съезжала влево на его ширину и
+     уровень читался неверно. */
+  .gantt-tw { flex: 0 0 14px; text-align: center; color: var(--color-text-muted); font-size: 9px; }
+  button.gantt-tw { border: 0; background: none; cursor: pointer; padding: 0; }
+  .gantt-track { position: relative; flex: 0 0 auto; }
+  .gantt-bar { position: absolute; height: 7px; border-radius: 2px; min-width: 2px; }
+  .gantt-bar.plan { top: 3px; background: var(--gantt-plan); }
+  .gantt-bar.fc { top: 12px; background: var(--gantt-fc); }
+
   /* -------- диалог удаления записи справочника -------- */
   /* ВЫШЕ остальных модальных окон (z-index у них 100): удаление всегда
      вызывается ИЗ формы справочника, и на общем уровне он оказывался под
@@ -6076,6 +6145,7 @@
       <button type="button" class="tab-btn active" data-sched-tab="versions">Версии</button>
       <button type="button" class="tab-btn" data-sched-tab="inputs">Исходные данные расчёта</button>
       <button type="button" class="tab-btn" data-sched-tab="calc">Расчёт</button>
+      <button type="button" class="tab-btn" data-sched-tab="gantt">Визуализация</button>
     </div>
     <div id="schedule-tab-versions" class="sched-panel">
       <div id="schedule-versions-list"></div>
@@ -6130,6 +6200,31 @@
         <button class="btn btn-primary" id="schedule-calc-run">Рассчитать и сохранить версию</button>
       </div>
       <div id="schedule-calc-status" class="hint-text"></div>
+    </div>
+    <!-- Визуализация (2026-08-22, запрос пользователя): та же
+         последовательность работ, что раскладывает расчёт, но нарисованная во
+         времени. Строка — узел группировки «кран → стоянка → этаж → тип →
+         подтип», у неё две полосы: директивные сроки и прогноз выбранной
+         версии. Дерево на старте развёрнуто целиком (решение пользователя):
+         строк полторы тысячи, но искать глазами, что раскрыть, — работа,
+         которой быть не должно. -->
+    <div id="schedule-tab-gantt" class="sched-panel" style="display:none">
+      <div class="gantt-toolbar">
+        <label class="field" style="margin:0">Прогноз</label>
+        <select id="gantt-version"></select>
+        <div class="gantt-legend">
+          <span><i class="plan"></i>план (директивные даты)</span>
+          <span><i class="fc"></i>прогноз</span>
+        </div>
+        <span style="margin-left:auto; display:flex; gap:6px; align-items:center">
+          <button class="btn btn-sm btn-secondary" id="gantt-expand">Развернуть всё</button>
+          <button class="btn btn-sm btn-secondary" id="gantt-collapse">Свернуть до кранов</button>
+          <button class="btn btn-sm btn-secondary" id="gantt-zoom-out" title="Мельче">−</button>
+          <button class="btn btn-sm btn-secondary" id="gantt-zoom-in" title="Крупнее">+</button>
+        </span>
+      </div>
+      <div id="gantt-box" class="gantt-box"></div>
+      <div id="gantt-status" class="hint-text" style="margin-top:6px"></div>
     </div>
     <div class="actions">
       <button class="btn btn-secondary" id="schedule-close">Закрыть</button>
