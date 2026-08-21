@@ -909,19 +909,49 @@
   .gantt-grid .m { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--color-border); }
   .gantt-grid .today { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--color-danger); opacity: .5; }
   .gantt-head {
-    position: sticky; top: 0; z-index: 3; display: flex;
+    position: sticky; top: 0; z-index: 3; display: flex; height: 40px;
     background: var(--color-surface); border-bottom: 1px solid var(--color-border);
   }
   .gantt-head-name {
     position: sticky; left: 0; z-index: 4; flex: 0 0 auto;
     background: var(--color-surface); border-right: 1px solid var(--color-border);
-    font-size: 11px; font-weight: 600; color: var(--color-text-muted);
-    padding: 4px 8px; box-sizing: border-box;
+    box-sizing: border-box;
   }
-  .gantt-scale { position: relative; height: 22px; flex: 0 0 auto; }
+  .gantt-head-title {
+    font-size: 11px; font-weight: 600; color: var(--color-text-muted); padding: 2px 8px 0;
+  }
+  /* Уровни группировки одной кнопкой (2026-08-22). Нажатие задаёт ГЛУБИНУ
+     показа: с более мелкой она разворачивает дерево до этого уровня, с более
+     крупной — сворачивает. Отдельных «развернуть» и «свернуть» не нужно —
+     это крайние кнопки ряда. */
+  .gantt-levels { display: flex; gap: 3px; padding: 2px 6px 0; }
+  .gantt-levels button {
+    border: 1px solid var(--color-border); background: none; border-radius: 9px;
+    font-size: 10px; line-height: 14px; padding: 0 6px; cursor: pointer;
+    color: var(--color-text-muted); white-space: nowrap;
+  }
+  .gantt-levels button:hover { border-color: var(--color-primary); }
+  /* Подсветка снимается, как только дерево тронули вручную: показывать
+     «сейчас до этажей», когда одна ветка раскрыта до подтипов, — врать. */
+  .gantt-levels button.active {
+    background: var(--color-primary); color: var(--color-on-primary, #fff);
+    border-color: var(--color-primary); font-weight: 600;
+  }
+  .gantt-scale { position: relative; height: 40px; flex: 0 0 auto; }
   .gantt-scale .mon {
-    position: absolute; top: 3px; font-size: 11px; color: var(--color-text-muted);
+    position: absolute; top: 2px; font-size: 11px; color: var(--color-text-muted);
     white-space: nowrap; padding-left: 4px;
+  }
+  /* Числа месяца появляются, только когда масштаб их вмещает (см.
+     ganttDayStep): подписи, налезающие друг на друга, читаются хуже, чем их
+     отсутствие. Засечка обязательна — число без неё не привязано к точке
+     шкалы. */
+  .gantt-scale .day {
+    position: absolute; top: 19px; font-size: 10px; color: var(--color-text-muted);
+    white-space: nowrap; padding-left: 3px;
+  }
+  .gantt-scale .dtick {
+    position: absolute; top: 33px; height: 7px; width: 1px; background: var(--color-border);
   }
   .gantt-row { display: flex; align-items: stretch; height: 22px; }
   .gantt-row:hover { background: var(--color-surface-2); }
@@ -6142,12 +6172,15 @@
   <div class="modal wide">
     <h2>График СМР</h2>
     <div class="tabs modal-tabs" id="schedule-tabs">
-      <button type="button" class="tab-btn active" data-sched-tab="versions">Версии</button>
+      <!-- «Визуализация» первой и открытой по умолчанию (2026-08-22, просьба
+           пользователя): чаще всего от формы графика нужен ответ «как идём»,
+           а не «что загружено». -->
+      <button type="button" class="tab-btn active" data-sched-tab="gantt">Визуализация</button>
+      <button type="button" class="tab-btn" data-sched-tab="versions">Версии</button>
       <button type="button" class="tab-btn" data-sched-tab="inputs">Исходные данные расчёта</button>
       <button type="button" class="tab-btn" data-sched-tab="calc">Расчёт</button>
-      <button type="button" class="tab-btn" data-sched-tab="gantt">Визуализация</button>
     </div>
-    <div id="schedule-tab-versions" class="sched-panel">
+    <div id="schedule-tab-versions" class="sched-panel" style="display:none">
       <div id="schedule-versions-list"></div>
     </div>
     <div id="schedule-tab-inputs" class="sched-panel" style="display:none">
@@ -6216,9 +6249,11 @@
           <span><i class="plan"></i>план (директивные даты)</span>
           <span><i class="fc"></i>прогноз</span>
         </div>
+        <!-- Выбор глубины показа переехал в шапку колонки группировок
+             (2026-08-22, просьба пользователя): уровни называются там же, где
+             и показываются, а «Развернуть всё» и «Свернуть до кранов» — это
+             просто крайние из них. -->
         <span style="margin-left:auto; display:flex; gap:6px; align-items:center">
-          <button class="btn btn-sm btn-secondary" id="gantt-expand">Развернуть всё</button>
-          <button class="btn btn-sm btn-secondary" id="gantt-collapse">Свернуть до кранов</button>
           <button class="btn btn-sm btn-secondary" id="gantt-zoom-out" title="Мельче">−</button>
           <button class="btn btn-sm btn-secondary" id="gantt-zoom-in" title="Крупнее">+</button>
         </span>

@@ -25536,7 +25536,6 @@ let scheduleVersionsList = null;
 
 document.getElementById("menu-schedule").addEventListener("click", async () => {
   scheduleBackdrop.classList.add("open");
-  switchScheduleTab("versions");
   document.getElementById("schedule-calc-status").textContent = "";
   document.getElementById("schedule-inputs-status").textContent = "";
   scheduleCalcDateLabel();
@@ -25544,7 +25543,14 @@ document.getElementById("menu-schedule").addEventListener("click", async () => {
   // смениться, версию могли удалить или пересчитать.
   ganttData = null;
   ganttVersionId = null;
-  await Promise.all([loadScheduleVersions(), loadScheduleInputs()]);
+  // Форма открывается на «Визуализации» (2026-08-22). Порядок здесь ВАЖЕН:
+  // выпадашка версий диаграммы наполняется из списка, который грузит закладка
+  // «Версии», поэтому диаграмма идёт вторым шагом, а не в общей пачке.
+  // Закладка переключается ДО загрузки — иначе у скрытой панели clientWidth
+  // = 0 и масштаб «вписать в окно» посчитать не из чего.
+  switchScheduleTab("gantt");
+  await loadScheduleVersions();
+  await Promise.all([loadScheduleGantt(), loadScheduleInputs()]);
 });
 document.getElementById("schedule-close").addEventListener("click",
   () => scheduleBackdrop.classList.remove("open"));
@@ -25555,14 +25561,16 @@ function switchScheduleTab(name) {
   for (const key of ["versions", "inputs", "calc", "gantt"]) {
     document.getElementById(`schedule-tab-${key}`).style.display = key === name ? "" : "none";
   }
-  // Диаграмма считается ЛЕНИВО, при первом заходе на закладку: дерево строится
-  // по всем изделиям объекта, и платить за него при каждом открытии формы —
-  // когда чаще открывают «Версии» — незачем. Ширину для масштаба «вписать в
-  // окно» тоже узнать нельзя, пока панель скрыта: у скрытой clientWidth = 0.
-  if (name === "gantt" && !ganttData) loadScheduleGantt();
 }
 document.querySelectorAll("#schedule-tabs .tab-btn").forEach(btn =>
-  btn.addEventListener("click", () => switchScheduleTab(btn.dataset.schedTab)));
+  btn.addEventListener("click", () => {
+    switchScheduleTab(btn.dataset.schedTab);
+    // Возврат на «Визуализацию» после удаления версии или расчёта: снимок
+    // сброшен, дерево надо построить заново. Загрузка висит здесь, а не в
+    // switchScheduleTab, потому что при открытии формы её ведёт сам
+    // обработчик меню — со списком версий вперёд диаграммы.
+    if (btn.dataset.schedTab === "gantt" && !ganttData) loadScheduleGantt();
+  }));
 
 async function loadScheduleVersions() {
   const box = document.getElementById("schedule-versions-list");
@@ -25827,8 +25835,26 @@ const GANTT_ROW_H = 22;
 const GANTT_MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
                       "июл", "авг", "сен", "окт", "ноя", "дек"];
 
+// Уровни группировки. Кнопка ряда задаёт ГЛУБИНУ показа: нажатая с более
+// мелкой глубины она дерево разворачивает, с более крупной — сворачивает
+// (просьба пользователя 2026-08-22: «сворачивает или разворачивает до этого
+// уровня в зависимости от текущего состояния»).
+const GANTT_LEVELS = [
+  { depth: 1, label: "Краны" },
+  { depth: 2, label: "Стоянки" },
+  { depth: 3, label: "Этажи" },
+  { depth: 4, label: "Типы" },
+  { depth: 5, label: "Подтипы" },
+];
+// Шаги подписи чисел месяца. Берётся первый, при котором соседние подписи
+// расходятся хотя бы на GANTT_DAY_MIN_PX; не подошёл ни один — чисел нет
+// вовсе, остаются только месяцы.
+const GANTT_DAY_STEPS = [1, 2, 5, 10];
+const GANTT_DAY_MIN_PX = 24;
+
 let ganttData = null;
 let ganttCollapsed = new Set();   // id узлов, чьи дети спрятаны
+let ganttDepth = GANTT_LEVELS.length;  // до какого уровня раскрыто; null — тронули вручную
 let ganttPxPerDay = null;         // null — вписать весь срок в ширину окна
 let ganttVersionId = null;        // null — текущий прогноз (последняя актуализация)
 
@@ -25845,6 +25871,7 @@ async function loadScheduleGantt() {
     ganttData = await api(запрос);
     ganttVersionId = ganttData.version_id;
     ganttCollapsed = new Set();
+    ganttDepth = GANTT_LEVELS.length;
     ganttPxPerDay = null;
     renderGanttVersionSelect();
     renderGantt();
@@ -25872,6 +25899,29 @@ function renderGanttVersionSelect() {
       + escapeHtml(`${v.kind_label}: ${v.title || "без названия"}${текущая}`)
       + "</option>";
   }).join("");
+}
+
+// Шаг подписи чисел месяца по масштабу. Ноль — не подписывать вовсе: даты,
+// налезающие друг на друга, читаются хуже, чем их отсутствие.
+function ganttDayStep(px) {
+  for (const шаг of GANTT_DAY_STEPS) if (шаг * px >= GANTT_DAY_MIN_PX) return шаг;
+  return 0;
+}
+
+// Показать дерево ровно до заданного уровня. Одна и та же кнопка и
+// разворачивает, и сворачивает: она задаёт глубину, а что при этом
+// произойдёт — зависит от того, где дерево было.
+function applyGanttDepth(depth) {
+  if (!ganttData) return;
+  ganttDepth = depth;
+  ganttCollapsed = new Set();
+  const обход = (узлы, уровень) => {
+    for (const n of узлы) {
+      if (n.children.length && уровень + 1 >= depth) ganttCollapsed.add(n.id);
+      обход(n.children, уровень + 1);
+    }
+  };
+  обход(ganttData.nodes, 0);
 }
 
 function ganttFlatRows() {
@@ -25943,6 +25993,25 @@ function renderGantt() {
     месяцы.push({ x: Math.round((t - от) * px), m: дата.getUTCMonth(), y: дата.getUTCFullYear() });
     t = Date.UTC(дата.getUTCFullYear(), дата.getUTCMonth() + 1, 1) / 86400000;
   }
+  // Числа месяца — только если масштаб их вмещает (2026-08-22, просьба
+  // пользователя). Шаг отсчитывается ОТ ПЕРВОГО ЧИСЛА каждого месяца, а не
+  // подряд от начала шкалы: иначе к декабрю подписи разъезжались бы с
+  // границами месяцев и «5 января» приходилось бы искать глазами.
+  const шаг = ganttDayStep(px);
+  const дни = [];
+  if (шаг) {
+    for (let t = от; t < до; t++) {
+      const дата = new Date(t * 86400000);
+      const число = дата.getUTCDate();
+      if ((число - 1) % шаг !== 0) continue;
+      // Последняя подпись месяца пропускается, если до его конца осталось
+      // меньше шага: иначе «31 июля» и «1 августа» стоят вплотную и
+      // сливаются в нечитаемое «311».
+      const в_месяце = new Date(Date.UTC(дата.getUTCFullYear(), дата.getUTCMonth() + 1, 0)).getUTCDate();
+      if (в_месяце - число + 1 < шаг) continue;
+      дни.push({ x: Math.round((t - от) * px), d: число });
+    }
+  }
   const сегодня = new Date();
   const xСегодня = Math.round(
     (Date.UTC(сегодня.getFullYear(), сегодня.getMonth(), сегодня.getDate()) / 86400000 - от) * px);
@@ -25955,10 +26024,20 @@ function renderGantt() {
         ? `<div class="today" style="left:${xСегодня}px"></div>` : "")
     + "</div>");
   части.push(`<div class="gantt-head">
-      <div class="gantt-head-name" style="width:${GANTT_NAME_W}px">Этап СМР</div>
+      <div class="gantt-head-name" style="width:${GANTT_NAME_W}px">
+        <div class="gantt-head-title">Этап СМР</div>
+        <div class="gantt-levels">`
+    + GANTT_LEVELS.map(l => `<button type="button" data-gantt-level="${l.depth}"`
+        + `${l.depth === ganttDepth ? ' class="active"' : ""}`
+        + ` title="${escapeHtml(`Показать дерево до уровня «${l.label}»`)}">`
+        + `${l.label}</button>`).join("")
+    + `</div>
+      </div>
       <div class="gantt-scale" style="width:${trackW}px">`
     + месяцы.map(m => `<div class="mon" style="left:${m.x}px">`
         + `${GANTT_MONTHS[m.m]} ${String(m.y).slice(2)}</div>`).join("")
+    + дни.map(d => `<div class="dtick" style="left:${d.x}px"></div>`
+        + `<div class="day" style="left:${d.x}px">${d.d}</div>`).join("")
     + "</div></div>");
 
   for (const { n, уровень } of ganttFlatRows()) {
@@ -25990,12 +26069,25 @@ function renderGantt() {
   части.push("</div>");
   box.innerHTML = части.join("");
 
-  box.querySelectorAll("[data-gantt-toggle]").forEach(btn => btn.addEventListener("click", () => {
-    const id = Number(btn.dataset.ganttToggle);
-    if (ganttCollapsed.has(id)) ganttCollapsed.delete(id); else ganttCollapsed.add(id);
+  const перерисовать = () => {
     const слева = box.scrollLeft, сверху = box.scrollTop;
     renderGantt();
     box.scrollLeft = слева; box.scrollTop = сверху;
+  };
+  box.querySelectorAll("[data-gantt-toggle]").forEach(btn => btn.addEventListener("click", () => {
+    const id = Number(btn.dataset.ganttToggle);
+    if (ganttCollapsed.has(id)) ganttCollapsed.delete(id); else ganttCollapsed.add(id);
+    // Одну ветку тронули руками — дерево больше не «до уровня N», и
+    // подсвеченная кнопка уровня стала бы неправдой.
+    ganttDepth = null;
+    перерисовать();
+  }));
+  box.querySelectorAll("[data-gantt-level]").forEach(btn => btn.addEventListener("click", () => {
+    applyGanttDepth(Number(btn.dataset.ganttLevel));
+    // Прокрутка сверху: после смены глубины строка под курсором — уже другая,
+    // и сохранять положение значило бы бросить человека в случайное место.
+    renderGantt();
+    box.scrollTop = 0;
   }));
 
   // Итог словами. Про изделия без единой даты сказать обязательно: их
@@ -26024,17 +26116,6 @@ function renderGantt() {
 document.getElementById("gantt-version").addEventListener("change", (e) => {
   ganttVersionId = e.target.value ? Number(e.target.value) : null;
   loadScheduleGantt();
-});
-document.getElementById("gantt-expand").addEventListener("click", () => {
-  ganttCollapsed = new Set();
-  renderGantt();
-});
-// «Свернуть до кранов» прячет всё, что ниже верхнего уровня: краны остаются
-// видны, их содержимое — нет. Свернуть ВСЁ было бы пустым экраном.
-document.getElementById("gantt-collapse").addEventListener("click", () => {
-  if (!ganttData) return;
-  ganttCollapsed = new Set(ganttData.nodes.map(n => n.id));
-  renderGantt();
 });
 const ganttZoom = (k) => {
   if (!ganttData) return;
