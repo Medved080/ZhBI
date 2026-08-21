@@ -23743,7 +23743,16 @@ function build3DShadowCatcher(groundY, topY) {
   const запас = Math.max((topY - groundY) * 2, 5000);
   const geometry = new THREE.PlaneGeometry(maxX - minX + запас * 2, maxZ - minZ + запас * 2);
   geometry.rotateX(-Math.PI / 2);
-  const mesh = new THREE.Mesh(geometry, new THREE.ShadowMaterial({ opacity: 0.3 }));
+  const material = new THREE.ShadowMaterial({ opacity: 0.3 });
+  // depthWrite: false — ОБЯЗАТЕЛЬНО, и по той же причине, что у подложки
+  // основания. Плоскость лежит в миллиметре под сеткой осей и её подписями
+  // (обе на SITE_BASE_3D_Y), а миллиметр на дистанции в сотни метров — уже
+  // за пределами точности буфера глубины: с записью глубины плоскость
+  // выигрывала у подписей случайными кусками, и номера осей выглядели
+  // изъеденными (живой репорт 2026-08-22, скриншот). Тень от этого не
+  // страдает: она не глубина, а цвет с прозрачностью.
+  material.depthWrite = false;
+  const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
   // Чуть НИЖЕ подложки основания и сетки осей (SITE_BASE_3D_Y): обе
   // полупрозрачны и не пишут глубину, спорить им тут не за что, но порядок
