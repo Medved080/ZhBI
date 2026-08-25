@@ -26955,6 +26955,14 @@ async function showRevitCard(elementId) {
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
                 loop: null, key: null, поколение: 0 };
 
+// Предел, за которым рёбра не строятся. Взят с запасом на весь объект
+// (КР 3693 + АР 25 131): именно на здании целиком рёбра нужнее всего, и
+// отключать их там, где без них картинка превращается в серое пятно, —
+// значит выключить как раз нужное. Полтора десятка тысяч отрезков в одном
+// буфере рисуются свободно, ощутимо только само построение, и о нём
+// говорит строка «Сборка 3D…».
+const EDGES_LIMIT = 40000;
+
 function mfrMode() {
   const on = document.querySelector("#mfr-view-switch .view-mode-btn.active");
   return on ? on.dataset.mfrMode : "2d";
@@ -27029,6 +27037,12 @@ async function buildMfr3D() {
   const низ = Math.min(...data.elements.map((e) => e["отм"] ?? 0));
   const поКатегориям = new Map();
   let пропущено = 0;
+  // Рёбра — единственное, что делает объём читаемым: без них соседние
+  // грани одного цвета сливаются в пятно. На очень больших выборках их
+  // построение стоит секунд, поэтому есть предел, и о нём говорится.
+  const рёбраНужны = data.elements.length <= EDGES_LIMIT;
+  const рёбра = [];
+  let рёберТочек = 0;
 
   for (const el of data.elements) {
     const контур = el["контур"];
@@ -27045,6 +27059,15 @@ async function buildMfr3D() {
       g = new THREE.ExtrudeGeometry(shape, { depth: высота, bevelEnabled: false, steps: 1 });
     } catch (err) { пропущено++; continue; }
     g.translate(0, 0, (el["отм"] ?? 0) - низ);
+    // Рёбра считаются ДО удаления геометрии: EdgesGeometry берёт только
+    // резкие грани, поэтому цилиндры и скругления не превращаются в
+    // проволочный клубок, а коробки получают ровно свои двенадцать линий.
+    if (рёбраНужны) {
+      const e = new THREE.EdgesGeometry(g, 25);
+      рёбра.push(e.attributes.position.array);
+      рёберТочек += e.attributes.position.count;
+      e.dispose();
+    }
     const g2 = g.toNonIndexed();
     g.dispose();
     if (!поКатегориям.has(el["кат"])) поКатегориям.set(el["кат"], { геом: [], ids: [] });
@@ -27054,13 +27077,18 @@ async function buildMfr3D() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(themeColor("--stage-3d-bg", 0xeceff3));
-  // Свет мягкий и рассеянный: при контрастном направленном освещении узкие
-  // грани стен уходят в тень и пастель на них не читается — здание опять
-  // выглядит тёмной массой, ради ухода от которой гамму и меняли.
-  scene.add(new THREE.HemisphereLight(0xffffff, 0xc8ccd2, 1.7));
-  const солнце = new THREE.DirectionalLight(0xffffff, 0.55);
-  солнце.position.set(1, -1, 2);
+  // Свет: рассеянный даёт общую светлоту, направленный — РАЗНИЦУ между
+  // гранями. Слишком мягкий свет её съедал, и здание читалось плоским
+  // пятном; слишком жёсткий загонял узкие грани в тень. Два направленных
+  // источника с разных сторон и разной силы: главный лепит объём,
+  // подсветка вытягивает теневую сторону, не убивая контраст.
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xb9bec6, 0.85));
+  const солнце = new THREE.DirectionalLight(0xffffff, 0.95);
+  солнце.position.set(2, -3, 4);
   scene.add(солнце);
+  const подсветка = new THREE.DirectionalLight(0xffffff, 0.35);
+  подсветка.position.set(-3, 2, 1);
+  scene.add(подсветка);
 
   let верх = 0;
   for (const [кат, набор] of поКатегориям) {
@@ -27089,6 +27117,23 @@ async function buildMfr3D() {
     scene.add(mesh);
     geometry.computeBoundingBox();
     верх = Math.max(верх, geometry.boundingBox.max.z);
+  }
+
+  // Все рёбра — ОДНИМ объектом сцены: по отрезку на элемент означало бы
+  // десятки тысяч объектов, а рисуются они одинаково.
+  if (рёбра.length) {
+    const массив = new Float32Array(рёберТочек * 3);
+    let сдвиг = 0;
+    for (const кусок of рёбра) { массив.set(кусок, сдвиг); сдвиг += кусок.length; }
+    const геом = new THREE.BufferGeometry();
+    геом.setAttribute("position", new THREE.BufferAttribute(массив, 3));
+    // Полупрозрачные и тонкие: рёбра должны очерчивать форму, а не
+    // перекрывать её сеткой. Толщину задать нельзя — большинство браузеров
+    // всё равно рисует линию в один пиксель.
+    const линии = new THREE.LineSegments(геом, new THREE.LineBasicMaterial({
+      color: 0x2f3438, transparent: true, opacity: 0.35, depthWrite: false }));
+    линии.renderOrder = 2;
+    scene.add(линии);
   }
 
   const container = box;
@@ -27136,7 +27181,8 @@ async function buildMfr3D() {
   };
   кадр();
   revitPlanStatus(`3D: ${data.elements.length - пропущено} элементов`
-    + (пропущено ? `, без высоты и не показаны: ${пропущено}` : ""));
+    + (пропущено ? `, без высоты и не показаны: ${пропущено}` : "")
+    + (рёбраНужны ? "" : `, рёбра не построены (больше ${EDGES_LIMIT} элементов)`));
 }
 
 // Выбор элемента в 3D. Луч из курсора -> грань слитого меша -> номер
@@ -27156,6 +27202,7 @@ function bindMfr3DPick(canvas, camera, scene) {
     точка.x = ((e.clientX - r.left) / r.width) * 2 - 1;
     точка.y = -((e.clientY - r.top) / r.height) * 2 + 1;
     raycaster.setFromCamera(точка, camera);
+    // Только меши: рёбра — линии, попадание в них ничего не значит.
     const меши = scene.children.filter((o) => o.isMesh);
     const попадания = raycaster.intersectObjects(меши, false);
     if (!попадания.length) return;
