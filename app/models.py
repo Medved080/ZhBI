@@ -340,6 +340,10 @@ class ProjectOut(ProjectIn):
 class ObjectOut(BaseModel):
     id: int
     name: str
+    # Тип объекта: 'zhbi' (поштучный учёт сборных изделий) или 'mfr' (учёт
+    # работ по блокам из модели Revit). От него зависит СОСТАВ разделов —
+    # см. app/features.py.
+    kind: str = "zhbi"
     address: Optional[str] = None
     project_id: Optional[int] = None
     project_name: Optional[str] = None
@@ -357,6 +361,9 @@ class ObjectPatchIn(BaseModel):
     # форма, не приславшая поле, молча выкинула бы объект из проекта.
     project_id: Optional[int] = None
     description: Optional[str] = None
+    # Тип объекта: 'zhbi' или 'mfr'. Меняется отдельной командой в
+    # справочнике объектов; от него зависит состав разделов.
+    kind: Optional[str] = None
 
 
 class AllowedSubtypeIn(BaseModel):

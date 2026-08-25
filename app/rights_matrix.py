@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.access import (
     feature_level_for,
+    object_kind,
     is_system_admin,
     object_role_keys,
     require_service_feature,
@@ -38,7 +39,9 @@ from app.access import (
 )
 from app.auth import get_current_user
 from app.db import get_connection
-from app.features import FEATURES, IO_HINTS, LEVEL_LABELS, SCOPE_LABELS, SCOPE_OBJECT
+from app.features import (
+    FEATURES, IO_HINTS, KIND_LABELS, LEVEL_LABELS, SCOPE_LABELS, SCOPE_OBJECT,
+)
 
 router = APIRouter(tags=["rights"])
 
@@ -56,12 +59,20 @@ def rights_for(conn, user_row, object_id: Optional[int]) -> dict:
     подписи = role_labels(conn)
     роли = (object_role_keys(conn, user_row, object_id)
             if object_id is not None and not is_system_admin(user_row) else set())
+    вид_объекта = object_kind(conn, object_id) if object_id is not None else None
     rows = []
     for f in FEATURES:
         # Выбранный объект подставляется ТОЛЬКО объектным разделам —
         # см. docstring выше.
         цель = object_id if f.scope == SCOPE_OBJECT else None
+        # «Раздела здесь нет» и «доступ не выдан» — РАЗНЫЕ ответы, и путать
+        # их нельзя: во втором случае администратор пойдёт править роли и
+        # ничего не добьётся, потому что править нечего. Тип объекта
+        # определяет состав разделов, а не их доступность.
+        неприменим = bool(f.kinds and вид_объекта and вид_объекта not in f.kinds)
         rows.append({
+            "not_applicable": неприменим,
+            "kinds": list(f.kinds),
             "key": f.key, "section": f.section, "title": f.title,
             "note": f.note, "sources": f.sources,
             "io": f.io, "io_hint": IO_HINTS.get(f.io),
@@ -77,6 +88,8 @@ def rights_for(conn, user_row, object_id: Optional[int]) -> dict:
     return {
         "user_id": user_row["id"],
         "object_id": object_id,
+        "object_kind": вид_объекта,
+        "object_kind_label": KIND_LABELS.get(вид_объекта),
         "object_roles": sorted(подписи.get(р, р) for р in роли),
         "system_admin": is_system_admin(user_row),
         "features": rows,

@@ -375,6 +375,11 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS objects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
+    -- Тип объекта: 'zhbi' — поштучный учёт сборных ЖБИ-изделий по чертежу
+    -- DXF; 'mfr' — учёт работ по блокам «этаж + секция» из модели Revit.
+    -- От типа зависит СОСТАВ разделов: контрактация изделий на объекте МФР
+    -- не бессмысленна из-за прав, её там просто нет (app/features.py).
+    kind TEXT NOT NULL DEFAULT 'zhbi',
     description TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))

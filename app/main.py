@@ -72,6 +72,7 @@ from app.dxf_import import (
     save_uploaded_file,
 )
 from app import revit_import, revit_plan
+from app.features import KIND_LABELS, KIND_ZHBI, KINDS
 from app.element_fields import (
     EDITABLE_FIELDS,
     FieldError,
@@ -4377,6 +4378,7 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
             current = next((d["source_file"] for d in drawings if d["is_current"]), None)
             result.append(ObjectOut(
                 id=row["id"], name=row["name"], description=row["description"],
+                kind=(row["kind"] if "kind" in row.keys() and row["kind"] else KIND_ZHBI),
                 address=row["address"] if "address" in row.keys() else None,
                 project_id=row["project_id"] if "project_id" in row.keys() else None,
                 project_name=projects.get(row["project_id"] if "project_id" in row.keys() else None),
@@ -4390,11 +4392,28 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
         conn.close()
 
 
+def _valid_kind(value) -> str:
+    """Тип объекта из запроса. Неизвестное значение — отказ, а не тихий
+    'zhbi': опечатка в типе меняет СОСТАВ разделов объекта, и заметить её
+    потом можно только по пропавшему меню."""
+    if value in (None, ""):
+        return KIND_ZHBI
+    if value not in KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail="Тип объекта бывает %s" % ", ".join(
+                "%s (%s)" % (k, KIND_LABELS[k]) for k in KINDS))
+    return value
+
+
 class ObjectCreateIn(BaseModel):
     name: str
     project_id: int
     address: Optional[str] = None
     description: Optional[str] = None
+    # Тип объекта: 'zhbi' (по умолчанию) или 'mfr'. От него зависит
+    # состав разделов — см. app/features.py.
+    kind: Optional[str] = None
 
 
 @app.post("/objects", response_model=ObjectOut)
@@ -4421,8 +4440,10 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
         if conn.execute("SELECT 1 FROM objects WHERE name = ?", (name,)).fetchone():
             raise HTTPException(status_code=409, detail="Объект с таким наименованием уже есть")
         conn.execute(
-            "INSERT INTO objects (name, address, description, project_id) VALUES (?, ?, ?, ?)",
-            (name, body.address, body.description, body.project_id),
+            "INSERT INTO objects (name, address, description, project_id, kind) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, body.address, body.description, body.project_id,
+             _valid_kind(body.kind)),
         )
         conn.commit()
         new_id = conn.execute("SELECT id FROM objects WHERE name = ?", (name,)).fetchone()["id"]
@@ -4455,6 +4476,11 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
             if conn.execute("SELECT 1 FROM projects WHERE id = ?", (body.project_id,)).fetchone() is None:
                 raise HTTPException(status_code=404, detail="Проект не найден")
             conn.execute("UPDATE objects SET project_id = ? WHERE id = ?", (body.project_id, object_id))
+        # Тип меняется, только если он ЯВНО прислан: форма, не знающая о
+        # поле, не должна молча переводить объект в другой тип учёта.
+        if body.kind is not None:
+            conn.execute("UPDATE objects SET kind = ? WHERE id = ?",
+                         (_valid_kind(body.kind), object_id))
         conn.execute(
             "UPDATE objects SET name = ?, address = ?, description = ?, "
             "updated_at = datetime('now') WHERE id = ?",
@@ -5117,7 +5143,7 @@ def revit_plan_filters(object_id: int, user: sqlite3.Row = Depends(get_current_u
     """Что есть у объекта из модели: этажи, секции, разделы, категории."""
     conn = get_connection()
     try:
-        assert_object_feature(conn, user, object_id, "drawings", "read")
+        assert_object_feature(conn, user, object_id, "revit_model", "read")
         return revit_plan.filters(conn, object_id)
     finally:
         conn.close()
@@ -5136,7 +5162,7 @@ def revit_plan_elements(
     тридцать тысяч элементов, и единственный осмысленный разрез — этаж."""
     conn = get_connection()
     try:
-        assert_object_feature(conn, user, object_id, "drawings", "read")
+        assert_object_feature(conn, user, object_id, "revit_model", "read")
         return revit_plan.elements(conn, object_id, level_id=level_id,
                                    section_id=section_id, part=part,
                                    category=category)
@@ -5149,7 +5175,7 @@ def revit_plan_element(object_id: int, element_id: int,
                        user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
-        assert_object_feature(conn, user, object_id, "drawings", "read")
+        assert_object_feature(conn, user, object_id, "revit_model", "read")
         data = revit_plan.card(conn, object_id, element_id)
     finally:
         conn.close()
@@ -5172,7 +5198,7 @@ def analyze_revit(
     """
     conn = get_connection()
     try:
-        assert_object_feature(conn, user, object_id, "drawings", "write")
+        assert_object_feature(conn, user, object_id, "revit_import", "write")
         uploads = [(f.filename or "пакет", read_upload_limited(f.file)) for f in files]
         try:
             packages = revit_import.parse_uploads(uploads)
@@ -5213,7 +5239,7 @@ def apply_revit(body: RevitApplyIn, user: sqlite3.Row = Depends(get_current_user
     try:
         # Объект берётся ИЗ ТОКЕНА, а не от клиента: иначе подменой токена
         # чужой комплект применился бы в доступный объект.
-        assert_object_feature(conn, user, object_id, "drawings", "write")
+        assert_object_feature(conn, user, object_id, "revit_import", "write")
     finally:
         conn.close()
 

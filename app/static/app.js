@@ -11014,6 +11014,17 @@ async function renderObjectsModal(projectId = null) {
             ${projects.map(p => `<option value="${p.id}" ${p.id === o.project_id ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}
           </select>
         </label>
+        <!-- Тип учёта меняется здесь же, но это не косметика: от него
+             зависит СОСТАВ разделов объекта. Смена типа у объекта с уже
+             загруженными данными ничего не удаляет — разделы просто
+             перестают показываться. -->
+        <label class="object-field">
+          <span>Тип учёта</span>
+          <select data-object-id="${o.id}" class="object-kind" ${админ ? "" : "disabled"}>
+            <option value="zhbi" ${(o.kind || "zhbi") === "zhbi" ? "selected" : ""}>ЖБИ — изделия по чертежу</option>
+            <option value="mfr" ${o.kind === "mfr" ? "selected" : ""}>МФР — блоки из модели Revit</option>
+          </select>
+        </label>
         <label class="object-field object-field-wide">
           <span>Адрес объекта</span>
           <input type="text" data-object-id="${o.id}" class="object-address" value="${escapeHtml(o.address || "")}"/>
@@ -11081,6 +11092,7 @@ async function renderObjectsModal(projectId = null) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: input.value,
+            kind: box.querySelector(`select.object-kind[data-object-id="${id}"]`).value,
             address: box.querySelector(`input.object-address[data-object-id="${id}"]`).value || null,
             project_id: Number(box.querySelector(`select.object-project[data-object-id="${id}"]`).value) || null,
           }),
@@ -11111,6 +11123,7 @@ document.getElementById("object-add").addEventListener("click", async () => {
     await api("/objects", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, project_id: projectId,
+                             kind: document.getElementById("object-new-kind").value,
                              address: document.getElementById("object-new-address").value || null }),
     });
     toggleAddForm("object-add-form", false);

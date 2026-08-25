@@ -126,6 +126,14 @@ class Feature(NamedTuple):
     # обменивается, и требовать признак от каждой строки значило бы
     # переписать сотню строк ради трёх.
     io: Optional[str] = IO_NONE
+    # Типы объектов, где раздел ВООБЩЕ существует. Пусто = оба.
+    #
+    # Это не право, а ПРИМЕНИМОСТЬ: контрактация изделий на объекте МФР не
+    # «запрещена» — её там нет, потому что нет самих изделий. Поэтому тип
+    # проверяется РАНЬШЕ обхода администратора сервиса (app/access.py):
+    # показывать администратору раздел, которому не на чем работать, —
+    # такая же ошибка, как прятать нужный.
+    kinds: tuple = ()
 
 
 def _все(уровень: str) -> dict:
@@ -147,6 +155,14 @@ def _только_админ_сервиса() -> dict:
     администратором сервиса, а тот проходит проверки в обход."""
     return {}
 
+
+KIND_ZHBI = "zhbi"      # поштучный учёт сборных ЖБИ по чертежу DXF
+KIND_MFR = "mfr"        # учёт работ по блокам «этаж + секция» из модели Revit
+KIND_LABELS = {KIND_ZHBI: "ЖБИ", KIND_MFR: "МФР"}
+KINDS = (KIND_ZHBI, KIND_MFR)
+
+_Ж = (KIND_ZHBI,)
+_М = (KIND_MFR,)
 
 FEATURES = [
     # ------------------------------------------------------ Схема объекта
@@ -395,6 +411,59 @@ FEATURES = [
             "«Пользователи».",
             ["PATCH /users/{id}/ui-theme, /view3d, /min-label-px, /set-password"],
             SCOPE_SELF, {}),
+
+    # ------------------------------------------------------- Модель Revit
+    Feature("revit_import", "Модель Revit",
+            "Загрузка выгрузок из Revit: пакеты разделов",
+            "Грузится не модель, а компактный пакет, который делает скрипт внутри Revit. "
+            "«Чтение» разрешает посмотреть сводку, «Изменение» — применить её.",
+            ["POST /import-revit/analyze", "POST /import-revit/apply"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE), io=IO_IMPORT),
+    Feature("revit_model", "Модель Revit",
+            "План модели: этажи, секции, категории, карточка элемента",
+            "Только показ: у элементов модели нет статусов, это другой контур учёта.",
+            ["GET /revit-plan/filters", "GET /revit-plan/elements", "GET /revit-plan/element"],
+            SCOPE_OBJECT, _все(READ)),
+]
+
+# ======================= ПРИМЕНИМОСТЬ К ТИПАМ ОБЪЕКТА =======================
+#
+# Раздел, не перечисленный ниже, существует у ОБОИХ типов. Здесь — только
+# те, что привязаны к одному: их состав определяется предметом учёта, а не
+# правами. На объекте МФР нет сборных изделий, поэтому нет ни их статусов,
+# ни контрактации, ни отчётов по ним; на объекте ЖБИ нет модели Revit.
+#
+# ВНИМАНИЕ: это разметка ПЕРВОГО приближения, согласуется с пользователем.
+_ТОЛЬКО_ЖБИ = {
+    # изделия и работа с ними
+    "status", "history", "planned_date", "element_fields", "element_catalog",
+    # зоны и чертёж
+    "zones", "zone_colors", "drawings",
+    # контрактация
+    "contracts", "agreements", "default_contracts",
+    "doc_supplier_change", "doc_link_swap", "schedule",
+    # отчёты по изделиям
+    "report_status", "report_dynamics", "report_delivery", "report_completion",
+    "report_contracting", "report_analytics",
+    # справочники изделий
+    "dict_marks", "dict_subtypes", "dict_mark_prefixes",
+    "dict_status_colors", "dict_element_shapes",
+    # настройки показа изделий
+    "label_visibility", "info_plate",
+    # загрузка данных по изделиям
+    "import_history", "bulk_edit", "import_contracting", "import_schedule",
+    "import_input",
+    # рабочее место комплектовщика — про комплектацию изделий
+    "workspace_picker",
+    # схема по чертежу DXF и её выгрузка
+    "plan", "export", "workspace_model", "workspace_foreman",
+}
+_ТОЛЬКО_МФР = {"revit_import", "revit_model"}
+
+FEATURES = [
+    f._replace(kinds=_Ж) if f.key in _ТОЛЬКО_ЖБИ else
+    f._replace(kinds=_М) if f.key in _ТОЛЬКО_МФР else f
+    for f in FEATURES
 ]
 
 FEATURES_BY_KEY = {f.key: f for f in FEATURES}

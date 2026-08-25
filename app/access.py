@@ -45,6 +45,7 @@ from fastapi import Depends, HTTPException, Query
 from app.auth import get_current_user
 from app.db import get_connection
 from app.features import (
+    KIND_ZHBI,
     NONE,
     READ,
     SCOPE_OBJECT,
@@ -101,6 +102,14 @@ def role_level(conn: sqlite3.Connection, roles, key: str) -> str:
     return итог
 
 
+def object_kind(conn: sqlite3.Connection, object_id: int) -> str:
+    """Тип объекта: 'zhbi' или 'mfr'. Неизвестный объект считается ЖБИ —
+    так вели себя все объекты до появления типа, и молча закрыть разделы у
+    объекта, которого нет, значит выдать 403 там, где ожидается 404."""
+    row = conn.execute("SELECT kind FROM objects WHERE id = ?", (object_id,)).fetchone()
+    return (row["kind"] if row and row["kind"] else KIND_ZHBI)
+
+
 def has_feature(conn: sqlite3.Connection, user: sqlite3.Row, key: str, kind: str,
                 object_id: Optional[int] = None) -> bool:
     """Есть ли у человека доступ к разделу в требуемом объёме.
@@ -127,6 +136,16 @@ def has_feature(conn: sqlite3.Connection, user: sqlite3.Row, key: str, kind: str
     раздел = feature(key)
     if раздел.scope == SCOPE_SELF:
         return True
+
+    # ТИП ОБЪЕКТА проверяется РАНЬШЕ обхода администратора сервиса, и это
+    # не оплошность. Тип — не право, а применимость: контрактации изделий
+    # на объекте МФР не «не хватает прав», её там нет, потому что нет самих
+    # изделий. Показать администратору раздел, которому не на чем работать,
+    # — такая же ошибка, как спрятать нужный.
+    if раздел.kinds and object_id is not None:
+        if object_kind(conn, object_id) not in раздел.kinds:
+            return False
+
     if is_system_admin(user):
         return True
 

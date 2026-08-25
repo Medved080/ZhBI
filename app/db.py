@@ -368,6 +368,7 @@ _COLUMN_MIGRATIONS = [
     ("training_attempts", "current_question", "TEXT"),
     ("training_attempts", "current_options", "TEXT"),
     ("training_attempts", "asked_at", "TEXT"),
+    ("objects", "kind", "TEXT NOT NULL DEFAULT 'zhbi'"),
     ("training_answers", "feature_key", "TEXT"),
     ("training_answers", "spent_ms", "INTEGER"),
 ]
@@ -1871,9 +1872,10 @@ def projects_tree(conn: sqlite3.Connection, allowed_object_ids=None) -> list:
     for proj in conn.execute("SELECT id, name, address, description FROM projects ORDER BY name"):
         objects = [
             {"id": o["id"], "name": o["name"], "address": o["address"],
+             "kind": o["kind"] or "zhbi",
              "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
             for o in conn.execute(
-                "SELECT id, name, address FROM objects WHERE project_id = ? ORDER BY name",
+                "SELECT id, name, address, kind FROM objects WHERE project_id = ? ORDER BY name",
                 (proj["id"],),
             )
             if visible(o["id"])
@@ -1887,8 +1889,9 @@ def projects_tree(conn: sqlite3.Connection, allowed_object_ids=None) -> list:
     # исчезнет вместе со всеми своими элементами.
     orphans = [
         {"id": o["id"], "name": o["name"], "address": o["address"],
+         "kind": o["kind"] or "zhbi",
          "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
-        for o in conn.execute("SELECT id, name, address FROM objects WHERE project_id IS NULL ORDER BY name")
+        for o in conn.execute("SELECT id, name, address, kind FROM objects WHERE project_id IS NULL ORDER BY name")
         if visible(o["id"])
     ]
     if orphans:

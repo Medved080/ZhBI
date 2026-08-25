@@ -3956,8 +3956,8 @@
                  внутри формы гасятся отдельно (applyBulkEditRights). -->
             <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
-            <button id="btn-upload-revit" data-feature="drawings" data-feature-kind="write">Загрузить из Revit</button>
-            <button id="btn-revit-plan" data-feature="drawings" data-feature-kind="read">Модель из Revit</button>
+            <button id="btn-upload-revit" data-feature="revit_import" data-feature-kind="write">Загрузить из Revit</button>
+            <button id="btn-revit-plan" data-feature="revit_model" data-feature-kind="read">Модель из Revit</button>
             <button id="btn-export" data-feature="export" data-feature-kind="read">Экспорт в XLS</button>
             <button id="btn-export-pdf" data-feature="export" data-feature-kind="read">Экспорт в PDF</button>
             <button id="menu-history-import" data-feature="import_history" data-feature-kind="write">Импорт истории из XLS</button>
@@ -4664,6 +4664,14 @@
             <input type="text" id="object-new-name"/></label>
           <label class="object-field"><span>Проект</span>
             <select id="object-new-project"></select></label>
+          <!-- Тип задаётся ПРИ СОЗДАНИИ и определяет состав разделов
+               объекта: на ЖБИ нет модели Revit, на МФР нет контрактации
+               изделий и отчётов по ним (app/features.py). -->
+          <label class="object-field"><span>Тип учёта</span>
+            <select id="object-new-kind">
+              <option value="zhbi">ЖБИ — поштучный учёт изделий по чертежу</option>
+              <option value="mfr">МФР — учёт работ по блокам из модели Revit</option>
+            </select></label>
           <label class="object-field object-field-wide"><span>Адрес объекта</span>
             <input type="text" id="object-new-address"/></label>
         </div>
