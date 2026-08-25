@@ -5192,6 +5192,7 @@ class RevitColorsIn(BaseModel):
     preset: str = "custom"
     colors: dict = {}
     opacity: dict = {}
+    glow: dict = {}
 
 
 @app.put("/revit-plan/colors")
@@ -5201,7 +5202,7 @@ def revit_plan_colors_save(object_id: int, body: RevitColorsIn,
     try:
         assert_object_feature(conn, user, object_id, "revit_model", "write")
         данные = revit_colors.save(conn, object_id, body.preset, body.colors,
-                                   body.opacity)
+                                   body.opacity, body.glow)
     finally:
         conn.close()
     activity.log("revit_colors", user=user, entity_type="object", entity_id=object_id,

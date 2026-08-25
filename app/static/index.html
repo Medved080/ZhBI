@@ -2444,6 +2444,22 @@
   .revit-pick-on { background: var(--color-accent-soft); font-weight:500;
     border-left-color: var(--color-primary); }
   .revit-pick-on:hover { background: var(--color-accent-soft-hover); }
+  /* Боковые панели рабочего места МФР — той же природы, что #sidebar:
+     та же ширина, фон и граница, чтобы экран не распадался на «наш» и
+     «не наш». */
+  .mfr-side {
+    flex: 0 0 250px; overflow: auto; padding: 10px;
+    background: var(--color-surface); border-right: 1px solid var(--color-border);
+  }
+  .mfr-side-right { flex-basis: 300px; border-right: none; border-left: 1px solid var(--color-border); }
+  .revit-list { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: auto; }
+  /* Строки карточки элемента — «подпись слева, значение справа», как в
+     карточке изделия: значение бывает длинным (типоразмер, uid) и должно
+     переноситься, не растягивая панель. */
+  .card-row { display: flex; gap: 8px; font-size: 12px; padding: 2px 0; align-items: baseline; }
+  .card-key { color: var(--color-text-muted); flex: 0 0 42%; }
+  .card-val { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .card-block h4 .revit-reset { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
   .revit-reset { font-size:11px; color: var(--color-text-muted); text-decoration:none; }
   .revit-reset:hover { color: var(--color-primary); text-decoration:underline; }
   .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
@@ -4189,57 +4205,51 @@
        #stage и показывается вместо него — координаты у модели общие
        (площадочные), а у чертежа свои, и рисовать их в одном холсте
        нельзя (см. app/revit_plan.py). -->
-  <div id="mfr-workspace" style="display:none; flex:1 1 auto; min-height:0;
-       padding:10px; gap:12px">
+  <div id="mfr-workspace" style="display:none; flex:1 1 auto; min-height:0">
     <!-- Отбор МНОЖЕСТВЕННЫЙ в каждой группе: нажатие добавляет и убирает
          строку. У группы с действующим отбором появляется «сбросить», а
          над списком — «сбросить всё». Пустой набор означает «отбор снят»,
-         а не «ничего не подходит». -->
-    <div style="flex:0 0 220px; overflow:auto">
-      <div style="display:flex; align-items:baseline; justify-content:space-between">
-        <label class="field" style="margin:0">Этаж</label>
-        <a href="#" class="revit-reset" data-reset="levels" hidden>сбросить</a>
+         а не «ничего не подходит».
+
+         Вёрстка теми же средствами, что и остальной сервис: слева и
+         справа — панели сайдбара (#sidebar), внутри — карточки-блоки
+         (.card-block) с заголовками <h4>. Свой набор стилей здесь был бы
+         вторым языком для того же самого. -->
+    <div id="mfr-filters" class="mfr-side">
+      <div class="card-block">
+        <h4>Этаж <a href="#" class="revit-reset" data-reset="levels" hidden>сбросить</a></h4>
+        <div id="revit-plan-levels" class="revit-list" style="max-height:36vh"></div>
       </div>
-      <div id="revit-plan-levels" style="max-height:40vh; overflow:auto;
-           border:1px solid var(--color-border); border-radius:6px"></div>
-      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:10px">
-        <label class="field" style="margin:0">Раздел</label>
-        <a href="#" class="revit-reset" data-reset="parts" hidden>сбросить</a>
+      <div class="card-block">
+        <h4>Раздел <a href="#" class="revit-reset" data-reset="parts" hidden>сбросить</a></h4>
+        <div id="revit-plan-parts" class="revit-list"></div>
       </div>
-      <div id="revit-plan-parts"></div>
-      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:10px">
-        <label class="field" style="margin:0">Секция</label>
-        <a href="#" class="revit-reset" data-reset="sections" hidden>сбросить</a>
+      <div class="card-block">
+        <h4>Секция <a href="#" class="revit-reset" data-reset="sections" hidden>сбросить</a></h4>
+        <div id="revit-plan-sections" class="revit-list"></div>
       </div>
-      <div id="revit-plan-sections"></div>
-      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:10px">
-        <label class="field" style="margin:0">Категория</label>
-        <a href="#" class="revit-reset" data-reset="categories" hidden>сбросить</a>
+      <div class="card-block">
+        <h4>Категория <a href="#" class="revit-reset" data-reset="categories" hidden>сбросить</a></h4>
+        <div id="revit-plan-categories" class="revit-list" style="max-height:24vh"></div>
       </div>
-      <div id="revit-plan-categories" style="max-height:24vh; overflow:auto"></div>
     </div>
-    <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column">
-      <!-- Две строки, а не одна: счётчики, легенда, переключатель режима и
-           «Вписать» в один ряд не помещались и наезжали на соседнюю
-           колонку. Управление — первой строкой, легенда — второй, она
-           переносится по словам и растёт вниз, а не вбок. -->
-      <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px">
+    <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:10px">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
         <div class="hint-text" id="revit-plan-head" style="flex:1 1 auto; min-width:0"></div>
+        <button class="btn btn-sm btn-secondary" id="revit-reset-all" hidden>Сбросить фильтры</button>
+        <button class="btn btn-sm btn-secondary" id="revit-colors-open"
+                title="Цветовая схема модели">Цвета</button>
         <div class="view-mode-switch" id="mfr-view-switch" role="group"
-             aria-label="Режим отображения модели" style="flex:0 0 auto">
+             aria-label="Режим отображения модели">
           <button type="button" class="view-mode-btn active" data-mfr-mode="2d">2D</button>
           <button type="button" class="view-mode-btn" data-mfr-mode="3d">3D</button>
         </div>
-        <button class="btn btn-sm btn-secondary" id="revit-reset-all"
-                style="flex:0 0 auto" hidden>Сбросить фильтры</button>
-        <button class="btn btn-sm btn-secondary" id="revit-colors-open"
-                style="flex:0 0 auto" title="Цветовая схема модели">Цвета</button>
         <button class="btn btn-sm btn-secondary" id="revit-plan-fit"
-                style="flex:0 0 auto" title="Вернуть исходный масштаб">Вписать</button>
+                title="Вернуть исходный масштаб">Вписать</button>
       </div>
       <div class="hint-text" id="revit-plan-legend" style="margin-bottom:6px"></div>
       <div style="flex:1 1 auto; min-height:0; position:relative;
-           border:1px solid var(--color-border); border-radius:6px;
+           border:1px solid var(--color-border); border-radius:var(--radius);
            background:var(--color-surface); overflow:hidden">
         <div id="revit-plan-canvas" style="position:absolute; inset:0"></div>
         <!-- Сцена 3D лежит поверх плана и показывается вместо него. Своя, а
@@ -4250,9 +4260,11 @@
       </div>
       <div class="hint-text" id="revit-plan-status" style="margin-top:6px"></div>
     </div>
-    <div style="flex:0 0 240px; overflow:auto">
-      <label class="field">Элемент</label>
-      <div id="revit-plan-card" class="hint-text">Нажмите на элемент плана.</div>
+    <div id="mfr-card-panel" class="mfr-side mfr-side-right">
+      <div class="card-block">
+        <h4>Элемент</h4>
+        <div id="revit-plan-card" class="hint-text">Нажмите на элемент плана.</div>
+      </div>
     </div>
   </div>
   <div id="stage">
@@ -4633,7 +4645,7 @@
      его словами «серое — стены», своя раскраска у каждого сделала бы такой
      разговор невозможным. -->
 <div class="modal-backdrop" id="revit-colors-backdrop">
-  <div class="modal" style="max-width:560px">
+  <div class="modal" style="max-width:720px">
     <h2>Цвета модели</h2>
     <p class="hint-text">Шаблон задаёт всю схему разом; любой цвет можно
       поправить отдельно — тогда схема считается своей.</p>

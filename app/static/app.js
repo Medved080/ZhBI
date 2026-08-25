@@ -26665,6 +26665,12 @@ function revitFill(имя) {
   return revitColors.colors[имя] || revitColors.fallback;
 }
 
+// Свечение категории в долях: самосвечение материала в 3D. В 2D не
+// действует — там нечему светиться.
+function revitGlow(имя) {
+  return Math.min(100, Math.max(0, Number((revitColors.glow || {})[имя] || 0))) / 100;
+}
+
 // Прозрачность категории в ПРОЦЕНТАХ -> непрозрачность 0..1 для отрисовки.
 function revitOpacity(имя) {
   const процент = Number((revitColors.opacity || {})[имя] || 0);
@@ -26918,13 +26924,17 @@ async function showRevitCard(elementId) {
   const res = await fetch(`/revit-plan/element?object_id=${revitPlanState.objectId}&element_id=${elementId}`);
   if (!res.ok) { box.textContent = "Не удалось получить карточку"; return; }
   const card = await res.json();
+  // Разметка та же, что у карточки изделия в ЖБИ: строка «подпись —
+  // значение», параметры модели отдельным блоком с заголовком.
+  const строка = ([k, v]) =>
+    `<div class="card-row"><span class="card-key">${escapeHtml(k)}</span>` +
+    `<span class="card-val">${escapeHtml(String(v))}</span></div>`;
   const строки = Object.entries(card)
     .filter(([k, v]) => k !== "параметры" && k !== "id" && v !== null && v !== "" && v !== false)
-    .map(([k, v]) => `<div><span style="color:var(--color-text-muted)">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`);
-  const доп = Object.entries(card["параметры"] || {})
-    .map(([k, v]) => `<div><span style="color:var(--color-text-muted)">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`);
-  box.innerHTML = строки.join("") + (доп.length
-    ? `<div style="margin-top:8px;font-weight:500">Параметры Revit</div>` + доп.join("") : "");
+    .map(строка);
+  const доп = Object.entries(card["параметры"] || {}).map(строка);
+  box.innerHTML = строки.join("")
+    + (доп.length ? `<h4 style="margin-top:12px">Параметры Revit</h4>` + доп.join("") : "");
 }
 
 // ==================== 3D МОДЕЛИ МФР (2026-08-25) ====================
@@ -27052,8 +27062,14 @@ async function buildMfr3D() {
     const диапазоны = [];
     const geometry = mergePositions(набор.геом, набор.ids, диапазоны);
     const непрозрачность = revitOpacity(имяКат);
+    const базовый = new THREE.Color(revitFill(имяКат));
+    const свечение = revitGlow(имяКат);
     const material = new THREE.MeshLambertMaterial({
-      color: new THREE.Color(revitFill(имяКат)),
+      color: базовый,
+      // Самосвечение тем же цветом: окно светится своим стеклом, а не
+      // белым пятном. Источников света не добавляем — лампа в каждой
+      // комнате означала бы тысячи источников и вставшую сцену.
+      emissive: свечение > 0 ? базовый.clone().multiplyScalar(свечение) : new THREE.Color(0x000000),
       transparent: непрозрачность < 1,
       opacity: непрозрачность,
       // Прозрачное не пишет в буфер глубины — иначе оно закрывает собой
@@ -27196,15 +27212,24 @@ function renderRevitColorsDialog() {
 
   document.getElementById("revit-colors-list").innerHTML = категории.map((имя) => {
     const п = Number((revitColors.opacity || {})[имя] || 0);
+    const св = Number((revitColors.glow || {})[имя] || 0);
     return `<div style="display:flex; align-items:center; gap:10px; padding:4px 0">
        <input type="color" data-cat="${escapeHtml(имя)}" value="${revitFill(имя)}"
               style="width:44px; height:26px; padding:0; border:1px solid var(--color-border)"/>
        <span style="flex:1 1 auto">${escapeHtml(имя)}</span>
-       <label class="hint-text" style="display:flex; align-items:center; gap:6px"
+       <label class="hint-text" style="display:flex; align-items:center; gap:4px"
               title="Прозрачность: сквозь окна видно, что за ними">
+         <span style="width:36px">прозр.</span>
          <input type="range" min="0" max="95" step="5" value="${п}"
-                data-opacity="${escapeHtml(имя)}" style="width:90px"/>
-         <span style="width:34px; text-align:right">${п}%</span>
+                data-opacity="${escapeHtml(имя)}" style="width:80px"/>
+         <span style="width:32px; text-align:right">${п}%</span>
+       </label>
+       <label class="hint-text" style="display:flex; align-items:center; gap:4px"
+              title="Свечение: самосвечение в 3D, «в окнах горит». В 2D не действует">
+         <span style="width:36px">свеч.</span>
+         <input type="range" min="0" max="100" step="5" value="${св}"
+                data-glow="${escapeHtml(имя)}" style="width:80px"/>
+         <span style="width:32px; text-align:right">${св}%</span>
        </label>
      </div>`;
   }).join("") || "<div class='hint-text'>Категорий пока нет — загрузите выгрузку.</div>";
@@ -27239,11 +27264,21 @@ document.getElementById("revit-colors-presets").addEventListener("click", (e) =>
   const шаблон = (revitColors.presets || []).find((p) => p.key === btn.dataset.preset);
   if (!шаблон) return;
   revitColors = { ...revitColors, preset: шаблон.key, colors: { ...шаблон.colors },
-                  opacity: { ...(шаблон.opacity || {}) } };
+                  opacity: { ...(шаблон.opacity || {}) },
+                  glow: { ...(шаблон.glow || {}) } };
   renderRevitColorsDialog();
 });
 
 document.getElementById("revit-colors-list").addEventListener("input", (e) => {
+  const свеч = e.target.closest("input[data-glow]");
+  if (свеч) {
+    revitColors = { ...revitColors, preset: "custom",
+                    glow: { ...(revitColors.glow || {}),
+                            [свеч.dataset.glow]: Number(свеч.value) } };
+    const подпись = свеч.parentElement.querySelector("span:last-child");
+    if (подпись) подпись.textContent = `${свеч.value}%`;
+    return;
+  }
   const ползунок = e.target.closest("input[data-opacity]");
   if (ползунок) {
     revitColors = { ...revitColors, preset: "custom",
@@ -27251,7 +27286,7 @@ document.getElementById("revit-colors-list").addEventListener("input", (e) => {
                                [ползунок.dataset.opacity]: Number(ползунок.value) } };
     // Перерисовываем только подпись процента: полная перерисовка списка
     // на каждом шаге ползунка сбрасывала бы захват мышью.
-    const подпись = ползунок.parentElement.querySelector("span");
+    const подпись = ползунок.parentElement.querySelector("span:last-child");
     if (подпись) подпись.textContent = `${ползунок.value}%`;
     return;
   }
@@ -27270,7 +27305,8 @@ document.getElementById("revit-colors-save").addEventListener("click", async () 
     const итог = await api(`/revit-plan/colors?object_id=${revitPlanState.objectId}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ preset: revitColors.preset, colors: revitColors.colors,
-                             opacity: revitColors.opacity || {} }),
+                             opacity: revitColors.opacity || {},
+                             glow: revitColors.glow || {} }),
     });
     revitColors = { ...revitColors, ...итог };
     document.getElementById("revit-colors-backdrop").classList.remove("open");

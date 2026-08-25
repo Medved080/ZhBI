@@ -27,6 +27,12 @@ FALLBACK = "#c8c8c8"
 # превращает разбор модели в разглядывание тумана.
 DEFAULT_OPACITY = {"Окна": 90}
 
+# Свечение в ПРОЦЕНТАХ: самосвечение материала в 3D. Не источник света —
+# настоящая подсветка изнутри означала бы лампу в каждой комнате, а их
+# тысячи, и сцена встала бы. Эмиссия даёт тот же вид «в окнах горит» и не
+# стоит ничего. В 2D не действует: там нечему светиться.
+DEFAULT_GLOW = {"Окна": 35}
+
 PRESETS = {
     "grey": {
         "title": "Оттенки серого",
@@ -45,6 +51,7 @@ PRESETS = {
             "Обобщенные модели": "#cfcfcf",
         },
         "opacity": dict(DEFAULT_OPACITY),
+        "glow": dict(DEFAULT_GLOW),
     },
     "pastel": {
         "title": "Пастельная",
@@ -63,6 +70,7 @@ PRESETS = {
             "Обобщенные модели": "#d5d5d5",
         },
         "opacity": dict(DEFAULT_OPACITY),
+        "glow": dict(DEFAULT_GLOW),
     },
     "contrast": {
         "title": "Контрастная",
@@ -81,6 +89,7 @@ PRESETS = {
             "Обобщенные модели": "#8a8a8a",
         },
         "opacity": dict(DEFAULT_OPACITY),
+        "glow": dict(DEFAULT_GLOW),
     },
 }
 
@@ -101,18 +110,22 @@ def scheme(conn, object_id: int) -> dict:
             if isinstance(data, dict) and isinstance(data.get("colors"), dict):
                 return {"preset": data.get("preset") or "custom",
                         "colors": data["colors"],
-                        "opacity": data.get("opacity") or {}}
+                        "opacity": data.get("opacity") or {},
+                        "glow": data.get("glow") or {}}
         except (TypeError, ValueError):
             pass
     return {"preset": DEFAULT_PRESET,
             "colors": dict(PRESETS[DEFAULT_PRESET]["colors"]),
-            "opacity": dict(PRESETS[DEFAULT_PRESET]["opacity"])}
+            "opacity": dict(PRESETS[DEFAULT_PRESET]["opacity"]),
+            "glow": dict(PRESETS[DEFAULT_PRESET]["glow"])}
 
 
-def save(conn, object_id: int, preset: str, colors: dict, opacity: dict = None) -> dict:
+def save(conn, object_id: int, preset: str, colors: dict,
+         opacity: dict = None, glow: dict = None) -> dict:
     if preset in PRESETS and not colors:
         colors = dict(PRESETS[preset]["colors"])
         opacity = dict(PRESETS[preset]["opacity"])
+        glow = dict(PRESETS[preset]["glow"])
     чистые = {}
     for имя, цвет in (colors or {}).items():
         цвет = str(цвет or "").strip()
@@ -134,8 +147,16 @@ def save(conn, object_id: int, preset: str, colors: dict, opacity: dict = None) 
         # пропавшего, и объяснить это потом будет нечем.
         if число > 0:
             прозрачность[str(имя)[:100]] = max(0, min(95, число))
+    свечение = {}
+    for имя, значение in (glow or {}).items():
+        try:
+            число = int(значение)
+        except (TypeError, ValueError):
+            continue
+        if число > 0:
+            свечение[str(имя)[:100]] = max(0, min(100, число))
     data = {"preset": preset if preset in PRESETS else "custom",
-            "colors": чистые, "opacity": прозрачность}
+            "colors": чистые, "opacity": прозрачность, "glow": свечение}
     set_setting(conn, SETTING_KEY, object_id, json.dumps(data, ensure_ascii=False))
     conn.commit()
     return data
@@ -143,5 +164,5 @@ def save(conn, object_id: int, preset: str, colors: dict, opacity: dict = None) 
 
 def presets_for_client() -> list:
     return [{"key": k, "title": v["title"], "hint": v["hint"],
-             "colors": v["colors"], "opacity": v["opacity"]}
+             "colors": v["colors"], "opacity": v["opacity"], "glow": v["glow"]}
             for k, v in PRESETS.items()]
