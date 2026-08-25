@@ -26633,6 +26633,12 @@ function revitFill(имя) {
   return revitColors.colors[имя] || revitColors.fallback;
 }
 
+// Прозрачность категории в ПРОЦЕНТАХ -> непрозрачность 0..1 для отрисовки.
+function revitOpacity(имя) {
+  const процент = Number((revitColors.opacity || {})[имя] || 0);
+  return Math.max(0.05, 1 - Math.min(95, Math.max(0, процент)) / 100);
+}
+
 // Обводка на плане — та же заливка, притемнённая: считать её отдельным
 // набором пришлось бы дважды при каждой правке цвета, а светлый контур на
 // светлой заливке не читается вовсе.
@@ -26784,7 +26790,9 @@ function drawRevitPlan(data) {
     const d = "M" + el["контур"].map((p) => `${p[0]} ${h - p[1]}`).join("L") + "Z";
     const color = revitFill((data.categories || [])[el["кат"]]);
     const обводка = darken(color);
-    return `<path d="${d}" data-id="${el.id}" fill="${color}" fill-opacity="0.55"
+    const имяКат = (data.categories || [])[el["кат"]];
+    return `<path d="${d}" data-id="${el.id}" fill="${color}"
+      fill-opacity="${(0.55 * revitOpacity(имяКат)).toFixed(2)}"
       stroke="${обводка}" stroke-width="${Math.max(w / 900, 20)}"
       ${el["приб"] ? 'stroke-dasharray="' + Math.max(w / 300, 60) + '"' : ""}/>`;
   });
@@ -26908,15 +26916,19 @@ function applyMfrMode() {
 
 // Склейка нескольких геометрий в одну: только позиции и нормали, без
 // индексов. Больше 3D модели ничего не нужно — материал один на категорию.
-function mergePositions(geometries) {
+function mergePositions(geometries, ids, диапазоны) {
   let точек = 0;
   for (const g of geometries) точек += g.attributes.position.count;
   const позиции = new Float32Array(точек * 3);
   const нормали = new Float32Array(точек * 3);
   let сдвиг = 0;
-  for (const g of geometries) {
+  for (let i = 0; i < geometries.length; i++) {
+    const g = geometries[i];
     позиции.set(g.attributes.position.array, сдвиг * 3);
     нормали.set(g.attributes.normal.array, сдвиг * 3);
+    // Границы вершин каждого элемента — по ним клик по грани находит
+    // изделие. Без них слитый меш безымянен, и в 3D ничего не выбрать.
+    if (диапазоны) диапазоны.push({ конец: сдвиг + g.attributes.position.count, id: ids[i] });
     сдвиг += g.attributes.position.count;
     g.dispose();
   }
@@ -26972,8 +26984,9 @@ async function buildMfr3D() {
     g.translate(0, 0, (el["отм"] ?? 0) - низ);
     const g2 = g.toNonIndexed();
     g.dispose();
-    if (!поКатегориям.has(el["кат"])) поКатегориям.set(el["кат"], []);
-    поКатегориям.get(el["кат"]).push(g2);
+    if (!поКатегориям.has(el["кат"])) поКатегориям.set(el["кат"], { геом: [], ids: [] });
+    поКатегориям.get(el["кат"]).геом.push(g2);
+    поКатегориям.get(el["кат"]).ids.push(el.id);
   }
 
   const scene = new THREE.Scene();
@@ -26987,10 +27000,23 @@ async function buildMfr3D() {
   scene.add(солнце);
 
   let верх = 0;
-  for (const [кат, список] of поКатегориям) {
-    const geometry = mergePositions(список);
-    const цвет = new THREE.Color(revitFill((data.categories || [])[кат]));
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: цвет }));
+  for (const [кат, набор] of поКатегориям) {
+    const имяКат = (data.categories || [])[кат];
+    const диапазоны = [];
+    const geometry = mergePositions(набор.геом, набор.ids, диапазоны);
+    const непрозрачность = revitOpacity(имяКат);
+    const material = new THREE.MeshLambertMaterial({
+      color: new THREE.Color(revitFill(имяКат)),
+      transparent: непрозрачность < 1,
+      opacity: непрозрачность,
+      // Прозрачное не пишет в буфер глубины — иначе оно закрывает собой
+      // то, что за ним, и «прозрачное окно» перестаёт быть прозрачным.
+      depthWrite: непрозрачность >= 1,
+      side: непрозрачность < 1 ? THREE.DoubleSide : THREE.FrontSide,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.userData.диапазоны = диапазоны;
+    mesh.renderOrder = непрозрачность < 1 ? 1 : 0;   // прозрачное рисуется последним
     scene.add(mesh);
     geometry.computeBoundingBox();
     верх = Math.max(верх, geometry.boundingBox.max.z);
@@ -27032,6 +27058,7 @@ async function buildMfr3D() {
 
   mfr3d.scene = scene; mfr3d.camera = camera;
   mfr3d.renderer = renderer; mfr3d.controls = controls; mfr3d.key = ключ;
+  bindMfr3DPick(renderer.domElement, camera, scene);
 
   const кадр = () => {
     mfr3d.loop = requestAnimationFrame(кадр);
@@ -27041,6 +27068,34 @@ async function buildMfr3D() {
   кадр();
   revitPlanStatus(`3D: ${data.elements.length - пропущено} элементов`
     + (пропущено ? `, без высоты и не показаны: ${пропущено}` : ""));
+}
+
+// Выбор элемента в 3D. Луч из курсора -> грань слитого меша -> номер
+// вершины -> элемент: сами меши общие на категорию, и без границ вершин
+// (mesh.userData.диапазоны) сцена безымянна.
+function bindMfr3DPick(canvas, camera, scene) {
+  const raycaster = new THREE.Raycaster();
+  const точка = new THREE.Vector2();
+  let старт = null;
+
+  canvas.addEventListener("pointerdown", (e) => { старт = { x: e.clientX, y: e.clientY }; });
+  canvas.addEventListener("pointerup", async (e) => {
+    // Отличаем клик от вращения: OrbitControls съедает движение, и без
+    // этой проверки каждый разворот модели открывал бы чужую карточку.
+    if (!старт || Math.abs(e.clientX - старт.x) + Math.abs(e.clientY - старт.y) > 4) return;
+    const r = canvas.getBoundingClientRect();
+    точка.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+    точка.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+    raycaster.setFromCamera(точка, camera);
+    const меши = scene.children.filter((o) => o.isMesh);
+    const попадания = raycaster.intersectObjects(меши, false);
+    if (!попадания.length) return;
+    const hit = попадания[0];
+    const вершина = (hit.faceIndex || 0) * 3;
+    const диапазоны = hit.object.userData.диапазоны || [];
+    const найден = диапазоны.find((д) => вершина < д.конец);
+    if (найден) await showRevitCard(найден.id);
+  });
 }
 
 function onMfr3DResize() {
@@ -27092,13 +27147,20 @@ function renderRevitColorsDialog() {
     + `<span class="hint-text" style="align-self:center">${
         revitColors.preset === "custom" ? "сейчас: своя схема" : ""}</span>`;
 
-  document.getElementById("revit-colors-list").innerHTML = категории.map((имя) =>
-    `<label style="display:flex; align-items:center; gap:10px; padding:4px 0">
+  document.getElementById("revit-colors-list").innerHTML = категории.map((имя) => {
+    const п = Number((revitColors.opacity || {})[имя] || 0);
+    return `<div style="display:flex; align-items:center; gap:10px; padding:4px 0">
        <input type="color" data-cat="${escapeHtml(имя)}" value="${revitFill(имя)}"
               style="width:44px; height:26px; padding:0; border:1px solid var(--color-border)"/>
        <span style="flex:1 1 auto">${escapeHtml(имя)}</span>
-       <span class="hint-text">${revitFill(имя)}</span>
-     </label>`).join("") || "<div class='hint-text'>Категорий пока нет — загрузите выгрузку.</div>";
+       <label class="hint-text" style="display:flex; align-items:center; gap:6px"
+              title="Прозрачность: сквозь окна видно, что за ними">
+         <input type="range" min="0" max="95" step="5" value="${п}"
+                data-opacity="${escapeHtml(имя)}" style="width:90px"/>
+         <span style="width:34px; text-align:right">${п}%</span>
+       </label>
+     </div>`;
+  }).join("") || "<div class='hint-text'>Категорий пока нет — загрузите выгрузку.</div>";
 }
 
 document.getElementById("revit-colors-open").addEventListener("click", () => {
@@ -27114,11 +27176,23 @@ document.getElementById("revit-colors-presets").addEventListener("click", (e) =>
   if (!btn) return;
   const шаблон = (revitColors.presets || []).find((p) => p.key === btn.dataset.preset);
   if (!шаблон) return;
-  revitColors = { ...revitColors, preset: шаблон.key, colors: { ...шаблон.colors } };
+  revitColors = { ...revitColors, preset: шаблон.key, colors: { ...шаблон.colors },
+                  opacity: { ...(шаблон.opacity || {}) } };
   renderRevitColorsDialog();
 });
 
 document.getElementById("revit-colors-list").addEventListener("input", (e) => {
+  const ползунок = e.target.closest("input[data-opacity]");
+  if (ползунок) {
+    revitColors = { ...revitColors, preset: "custom",
+                    opacity: { ...(revitColors.opacity || {}),
+                               [ползунок.dataset.opacity]: Number(ползунок.value) } };
+    // Перерисовываем только подпись процента: полная перерисовка списка
+    // на каждом шаге ползунка сбрасывала бы захват мышью.
+    const подпись = ползунок.parentElement.querySelector("span");
+    if (подпись) подпись.textContent = `${ползунок.value}%`;
+    return;
+  }
   const inp = e.target.closest("input[data-cat]");
   if (!inp) return;
   // Правка любого цвета делает схему СВОЕЙ: показывать «Оттенки серого»
@@ -27133,7 +27207,8 @@ document.getElementById("revit-colors-save").addEventListener("click", async () 
   try {
     const итог = await api(`/revit-plan/colors?object_id=${revitPlanState.objectId}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ preset: revitColors.preset, colors: revitColors.colors }),
+      body: JSON.stringify({ preset: revitColors.preset, colors: revitColors.colors,
+                             opacity: revitColors.opacity || {} }),
     });
     revitColors = { ...revitColors, ...итог };
     document.getElementById("revit-colors-backdrop").classList.remove("open");

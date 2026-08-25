@@ -21,6 +21,12 @@ SETTING_KEY = "revit_colors"
 # встречаются и редкие категории, и терять их на схеме нельзя.
 FALLBACK = "#c8c8c8"
 
+# Прозрачность в ПРОЦЕНТАХ (0 — глухой, 100 — невидимый), по категориям.
+# Заводски прозрачны окна: сквозь них видно, что внутри, а сами они на
+# фасаде и так читаются рамой. Остальное глухое — прозрачная стена
+# превращает разбор модели в разглядывание тумана.
+DEFAULT_OPACITY = {"Окна": 70}
+
 PRESETS = {
     "grey": {
         "title": "Оттенки серого",
@@ -38,6 +44,7 @@ PRESETS = {
             "Потолки": "#e6e6e6",
             "Обобщенные модели": "#cfcfcf",
         },
+        "opacity": dict(DEFAULT_OPACITY),
     },
     "pastel": {
         "title": "Пастельная",
@@ -55,6 +62,7 @@ PRESETS = {
             "Потолки": "#e6ddc0",
             "Обобщенные модели": "#d5d5d5",
         },
+        "opacity": dict(DEFAULT_OPACITY),
     },
     "contrast": {
         "title": "Контрастная",
@@ -72,6 +80,7 @@ PRESETS = {
             "Потолки": "#9b9b6a",
             "Обобщенные модели": "#8a8a8a",
         },
+        "opacity": dict(DEFAULT_OPACITY),
     },
 }
 
@@ -91,15 +100,19 @@ def scheme(conn, object_id: int) -> dict:
             data = json.loads(raw)
             if isinstance(data, dict) and isinstance(data.get("colors"), dict):
                 return {"preset": data.get("preset") or "custom",
-                        "colors": data["colors"]}
+                        "colors": data["colors"],
+                        "opacity": data.get("opacity") or {}}
         except (TypeError, ValueError):
             pass
-    return {"preset": DEFAULT_PRESET, "colors": dict(PRESETS[DEFAULT_PRESET]["colors"])}
+    return {"preset": DEFAULT_PRESET,
+            "colors": dict(PRESETS[DEFAULT_PRESET]["colors"]),
+            "opacity": dict(PRESETS[DEFAULT_PRESET]["opacity"])}
 
 
-def save(conn, object_id: int, preset: str, colors: dict) -> dict:
+def save(conn, object_id: int, preset: str, colors: dict, opacity: dict = None) -> dict:
     if preset in PRESETS and not colors:
         colors = dict(PRESETS[preset]["colors"])
+        opacity = dict(PRESETS[preset]["opacity"])
     чистые = {}
     for имя, цвет in (colors or {}).items():
         цвет = str(цвет or "").strip()
@@ -111,12 +124,24 @@ def save(conn, object_id: int, preset: str, colors: dict) -> dict:
             except ValueError:
                 continue
             чистые[str(имя)[:100]] = цвет.lower()
-    data = {"preset": preset if preset in PRESETS else "custom", "colors": чистые}
+    прозрачность = {}
+    for имя, значение in (opacity or {}).items():
+        try:
+            число = int(значение)
+        except (TypeError, ValueError):
+            continue
+        # Держим в 0..95: полностью невидимый элемент неотличим от
+        # пропавшего, и объяснить это потом будет нечем.
+        if число > 0:
+            прозрачность[str(имя)[:100]] = max(0, min(95, число))
+    data = {"preset": preset if preset in PRESETS else "custom",
+            "colors": чистые, "opacity": прозрачность}
     set_setting(conn, SETTING_KEY, object_id, json.dumps(data, ensure_ascii=False))
     conn.commit()
     return data
 
 
 def presets_for_client() -> list:
-    return [{"key": k, "title": v["title"], "hint": v["hint"], "colors": v["colors"]}
+    return [{"key": k, "title": v["title"], "hint": v["hint"],
+             "colors": v["colors"], "opacity": v["opacity"]}
             for k, v in PRESETS.items()]
