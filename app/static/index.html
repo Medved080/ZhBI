@@ -4193,15 +4193,31 @@
       <div id="revit-plan-categories" style="max-height:24vh; overflow:auto"></div>
     </div>
     <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column">
-      <div style="display:flex; align-items:flex-start; gap:10px; margin-bottom:6px">
-        <div class="hint-text" id="revit-plan-head" style="flex:0 0 auto"></div>
-        <div class="hint-text" id="revit-plan-legend" style="flex:1 1 auto"></div>
+      <!-- Две строки, а не одна: счётчики, легенда, переключатель режима и
+           «Вписать» в один ряд не помещались и наезжали на соседнюю
+           колонку. Управление — первой строкой, легенда — второй, она
+           переносится по словам и растёт вниз, а не вбок. -->
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px">
+        <div class="hint-text" id="revit-plan-head" style="flex:1 1 auto; min-width:0"></div>
+        <div class="view-mode-switch" id="mfr-view-switch" role="group"
+             aria-label="Режим отображения модели" style="flex:0 0 auto">
+          <button type="button" class="view-mode-btn active" data-mfr-mode="2d">2D</button>
+          <button type="button" class="view-mode-btn" data-mfr-mode="3d">3D</button>
+        </div>
         <button class="btn btn-sm btn-secondary" id="revit-plan-fit"
                 style="flex:0 0 auto" title="Вернуть исходный масштаб">Вписать</button>
       </div>
-      <div id="revit-plan-canvas" style="flex:1 1 auto; min-height:0;
+      <div class="hint-text" id="revit-plan-legend" style="margin-bottom:6px"></div>
+      <div style="flex:1 1 auto; min-height:0; position:relative;
            border:1px solid var(--color-border); border-radius:6px;
-           background:var(--color-surface); overflow:hidden"></div>
+           background:var(--color-surface); overflow:hidden">
+        <div id="revit-plan-canvas" style="position:absolute; inset:0"></div>
+        <!-- Сцена 3D лежит поверх плана и показывается вместо него. Своя, а
+             не общая с 3D чертежа: та завязана на изделия, их статусы и
+             расчёт высот эвристиками, а здесь высота и отметка приходят из
+             модели готовыми. -->
+        <div id="mfr-3d-canvas" style="position:absolute; inset:0; display:none"></div>
+      </div>
       <div class="hint-text" id="revit-plan-status" style="margin-top:6px"></div>
     </div>
     <div style="flex:0 0 240px; overflow:auto">

@@ -5105,6 +5105,8 @@ function setWorkspace(ws) {
   const строка = document.getElementById("statusbar-text");
   if (строка) строка.style.display = мфр ? "none" : "";
   if (мфр) openMfrWorkspace();
+  // Сцена 3D держит контекст WebGL и кадровый цикл — уходя, освобождаем.
+  if (!мфр) disposeMfr3D();
 
   // Правая панель: в АРМ — свёрнута до ярлычка и раскрывается поверх схемы,
   // в «Модели» — закреплена и тянется за ручку, как была. Исключение —
@@ -26659,10 +26661,14 @@ async function loadRevitPlanFilters() {
   // Строки «без этажа» и «без секции» показываются ВСЕГДА, когда такие
   // элементы есть: на реальной выгрузке это 120 и 4307 штук, и молчаливое
   // исчезновение четырёх тысяч элементов со схемы — худший вид ошибки.
-  const этажи = f.levels.filter((l) => l.elements > 0).map((l) =>
+  // «Все этажи» первой строкой: в 3D это единственный осмысленный вид —
+  // здание целиком, — а в 2D полезно как «показать всё, что есть».
+  const этажи = [`<div class="revit-pick" data-kind="level" data-id="all">все этажи
+      <span style="float:right;color:var(--color-text-muted)">${всего}</span></div>`];
+  этажи.push(...f.levels.filter((l) => l.elements > 0).map((l) =>
     `<div class="revit-pick" data-kind="level" data-id="${l.id}">${escapeHtml(l.key)}
       <span style="float:right;color:var(--color-text-muted)">${l.elements}</span>
-      ${l.elevation_suspect ? ' <span title="отметке верить нельзя">⚠</span>' : ""}</div>`);
+      ${l.elevation_suspect ? ' <span title="отметке верить нельзя">⚠</span>' : ""}</div>`));
   if (f.without_level) {
     этажи.push(`<div class="revit-pick" data-kind="level" data-id="0">без этажа
       <span style="float:right;color:var(--color-danger)">${f.without_level}</span></div>`);
@@ -26696,7 +26702,8 @@ function markRevitPicks() {
   document.querySelectorAll(".revit-pick").forEach((el) => {
     const kind = el.dataset.kind, id = el.dataset.id;
     const active =
-      (kind === "level" && String(revitPlanState.levelId) === id) ||
+      (kind === "level" && (id === "all" ? revitPlanState.levelId === null
+                                        : String(revitPlanState.levelId) === id)) ||
       (kind === "section" && String(revitPlanState.sectionId) === id) ||
       (kind === "part" && revitPlanState.part === id) ||
       (kind === "category" && revitPlanState.category === id);
@@ -26710,7 +26717,7 @@ document.getElementById("mfr-workspace").addEventListener("click", async (e) => 
   const { kind, id } = pick.dataset;
   // Повторное нажатие СНИМАЕТ фильтр — кроме этажа: план без этажа это
   // все двадцать восемь тысяч контуров друг на друге, читать нечего.
-  if (kind === "level") revitPlanState.levelId = Number(id);
+  if (kind === "level") revitPlanState.levelId = (id === "all") ? null : Number(id);
   if (kind === "section") revitPlanState.sectionId = String(revitPlanState.sectionId) === id ? null : Number(id);
   if (kind === "part") revitPlanState.part = revitPlanState.part === id ? null : id;
   if (kind === "category") revitPlanState.category = revitPlanState.category === id ? null : id;
@@ -26733,6 +26740,8 @@ async function loadRevitPlanElements() {
   drawRevitPlan(data);
   revitPlanStatus(`Показано ${data.elements.length} элементов`
     + (data.truncated ? " (список обрезан)" : ""));
+  // Режим мог быть 3D — тогда сцену надо пересобрать под новый отбор.
+  applyMfrMode();
 }
 
 function drawRevitPlan(data) {
@@ -26832,4 +26841,172 @@ async function showRevitCard(elementId) {
     .map(([k, v]) => `<div><span style="color:var(--color-text-muted)">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`);
   box.innerHTML = строки.join("") + (доп.length
     ? `<div style="margin-top:8px;font-weight:500">Параметры Revit</div>` + доп.join("") : "");
+}
+
+// ==================== 3D МОДЕЛИ МФР (2026-08-25) ====================
+// Своя сцена, а не общая с 3D чертежа. Та завязана на изделия, их статусы
+// и расчёт высоты эвристиками по ярусам колонн; здесь отметка низа и
+// высота приходят из модели готовыми, и вся эта машинерия не нужна.
+//
+// Геометрия склеивается ВРУЧНУЮ, по одному мешу на категорию: отдельный
+// меш на элемент — это десятки тысяч объектов сцены, а BufferGeometryUtils
+// в вендоренном наборе нет, и вендорить новое без спроса нельзя.
+
+const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
+                loop: null, key: null };
+
+function mfrMode() {
+  const on = document.querySelector("#mfr-view-switch .view-mode-btn.active");
+  return on ? on.dataset.mfrMode : "2d";
+}
+
+document.getElementById("mfr-view-switch").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-mfr-mode]");
+  if (!btn) return;
+  for (const b of document.querySelectorAll("#mfr-view-switch .view-mode-btn")) {
+    b.classList.toggle("active", b === btn);
+  }
+  applyMfrMode();
+});
+
+function applyMfrMode() {
+  const трёхмерный = mfrMode() === "3d";
+  document.getElementById("revit-plan-canvas").style.display = трёхмерный ? "none" : "";
+  document.getElementById("mfr-3d-canvas").style.display = трёхмерный ? "" : "none";
+  document.getElementById("revit-plan-fit").style.display = трёхмерный ? "none" : "";
+  if (трёхмерный) buildMfr3D();
+}
+
+// Склейка нескольких геометрий в одну: только позиции и нормали, без
+// индексов. Больше 3D модели ничего не нужно — материал один на категорию.
+function mergePositions(geometries) {
+  let точек = 0;
+  for (const g of geometries) точек += g.attributes.position.count;
+  const позиции = new Float32Array(точек * 3);
+  const нормали = new Float32Array(точек * 3);
+  let сдвиг = 0;
+  for (const g of geometries) {
+    позиции.set(g.attributes.position.array, сдвиг * 3);
+    нормали.set(g.attributes.normal.array, сдвиг * 3);
+    сдвиг += g.attributes.position.count;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute("position", new THREE.BufferAttribute(позиции, 3));
+  out.setAttribute("normal", new THREE.BufferAttribute(нормали, 3));
+  return out;
+}
+
+async function buildMfr3D() {
+  const data = revitPlanState.data;
+  const box = document.getElementById("mfr-3d-canvas");
+  if (!data || !data.elements.length) {
+    box.innerHTML = "<div class='hint-text' style='padding:16px'>Нет элементов по этому отбору.</div>";
+    return;
+  }
+  // Ключ отбора: пересобирать сцену на каждое переключение вкладки незачем,
+  // а на смену этажа — обязательно.
+  const ключ = JSON.stringify([revitPlanState.levelId, revitPlanState.sectionId,
+                               revitPlanState.part, revitPlanState.category]);
+  if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
+
+  revitPlanStatus(`Сборка 3D: ${data.elements.length} элементов…`);
+  await ensureThreeLoaded();
+  disposeMfr3D();
+  box.innerHTML = "";
+
+  const [w, h] = data.size;
+  const низ = Math.min(...data.elements.map((e) => e["отм"] ?? 0));
+  const поКатегориям = new Map();
+  let пропущено = 0;
+
+  for (const el of data.elements) {
+    const контур = el["контур"];
+    const высота = el["выс"];
+    // Без высоты выдавливать нечего: такой элемент в 3D не появится, и
+    // это надо сказать, а не молча потерять.
+    if (!высота || высота <= 0 || !контур || контур.length < 3) { пропущено++; continue; }
+    const shape = new THREE.Shape();
+    shape.moveTo(контур[0][0], контур[0][1]);
+    for (let i = 1; i < контур.length; i++) shape.lineTo(контур[i][0], контур[i][1]);
+    shape.closePath();
+    let g;
+    try {
+      g = new THREE.ExtrudeGeometry(shape, { depth: высота, bevelEnabled: false, steps: 1 });
+    } catch (err) { пропущено++; continue; }
+    g.translate(0, 0, (el["отм"] ?? 0) - низ);
+    const g2 = g.toNonIndexed();
+    g.dispose();
+    if (!поКатегориям.has(el["кат"])) поКатегориям.set(el["кат"], []);
+    поКатегориям.get(el["кат"]).push(g2);
+  }
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(themeColor("--stage-3d-bg", 0xeceff3));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x505050, 1.2));
+  const солнце = new THREE.DirectionalLight(0xffffff, 0.9);
+  солнце.position.set(1, -1, 2);
+  scene.add(солнце);
+
+  let верх = 0;
+  for (const [кат, список] of поКатегориям) {
+    const geometry = mergePositions(список);
+    const цвет = new THREE.Color(REVIT_CAT_COLORS[кат % REVIT_CAT_COLORS.length]);
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: цвет }));
+    scene.add(mesh);
+    geometry.computeBoundingBox();
+    верх = Math.max(верх, geometry.boundingBox.max.z);
+  }
+
+  const container = box;
+  const camera = new THREE.PerspectiveCamera(
+    50, container.clientWidth / Math.max(container.clientHeight, 1), 10, 5_000_000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  container.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(w / 2, h / 2, верх / 2);
+  const охват = Math.max(w, h, верх) || 1000;
+  camera.position.set(w / 2 + охват, h / 2 - охват, верх + охват * 0.6);
+  camera.up.set(0, 0, 1);          // Z — вверх, как в модели
+  controls.update();
+
+  mfr3d.scene = scene; mfr3d.camera = camera;
+  mfr3d.renderer = renderer; mfr3d.controls = controls; mfr3d.key = ключ;
+
+  const кадр = () => {
+    mfr3d.loop = requestAnimationFrame(кадр);
+    controls.update();
+    renderer.render(scene, camera);
+  };
+  кадр();
+  revitPlanStatus(`3D: ${data.elements.length - пропущено} элементов`
+    + (пропущено ? `, без высоты и не показаны: ${пропущено}` : ""));
+}
+
+function onMfr3DResize() {
+  const box = document.getElementById("mfr-3d-canvas");
+  if (!mfr3d.renderer || !box.clientWidth) return;
+  mfr3d.camera.aspect = box.clientWidth / Math.max(box.clientHeight, 1);
+  mfr3d.camera.updateProjectionMatrix();
+  mfr3d.renderer.setSize(box.clientWidth, box.clientHeight);
+}
+window.addEventListener("resize", onMfr3DResize);
+
+function disposeMfr3D() {
+  if (mfr3d.loop) cancelAnimationFrame(mfr3d.loop);
+  if (mfr3d.renderer) {
+    mfr3d.renderer.dispose();
+    mfr3d.renderer.domElement.remove();
+  }
+  if (mfr3d.scene) {
+    mfr3d.scene.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+  }
+  Object.assign(mfr3d, { scene: null, camera: null, renderer: null,
+                         controls: null, loop: null, key: null });
 }

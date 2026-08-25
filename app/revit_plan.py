@@ -94,7 +94,8 @@ def elements(conn, object_id: int, level_id=None, section_id=None,
     # полторы тысячи элементов метаданные весят больше самой геометрии —
     # один `uid` это 45 символов, а рисовать по нему нечего.
     rows = conn.execute(
-        "SELECT id, category, outline_json, outline_approx "
+        "SELECT id, category, outline_json, outline_approx, "
+        "       elevation_mm, height_mm "
         "FROM revit_elements WHERE " + " AND ".join(where) +
         " ORDER BY id LIMIT ?", (*params, limit + 1)
     ).fetchall()
@@ -136,6 +137,11 @@ def elements(conn, object_id: int, level_id=None, section_id=None,
             "id": row["id"],
             "кат": index[name],
             "приб": 1 if row["outline_approx"] else 0,
+            # Для 3D: низ и высота. Отдаются всегда, а не по отдельному
+            # запросу — это два числа, а второй запрос ради них удвоил бы
+            # обращения при каждом переключении этажа.
+            "отм": row["elevation_mm"],
+            "выс": row["height_mm"],
             "контур": [[int(round(p[0] - origin_x)), int(round(p[1] - origin_y))]
                        for p in outline],
         })
