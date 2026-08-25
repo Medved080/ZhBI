@@ -3951,6 +3951,7 @@
                  внутри формы гасятся отдельно (applyBulkEditRights). -->
             <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
+            <button id="btn-upload-revit" data-feature="drawings" data-feature-kind="write">Загрузить из Revit</button>
             <button id="btn-export" data-feature="export" data-feature-kind="read">Экспорт в XLS</button>
             <button id="btn-export-pdf" data-feature="export" data-feature-kind="read">Экспорт в PDF</button>
             <button id="menu-history-import" data-feature="import_history" data-feature-kind="write">Импорт истории из XLS</button>
@@ -4454,6 +4455,71 @@
       <div class="actions">
         <button class="btn btn-secondary" id="import-review-cancel">Отменить импорт</button>
         <button class="btn btn-primary" id="import-review-apply">Применить чертёж</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Загрузка выгрузок из Revit (2026-08-25, ветка МФР). Отдельная форма, а
+     не вкладка в «Чертежах»: источник другой, единица другая (пакет
+     раздела, а не файл чертежа), и грузить можно НЕСКОЛЬКО пакетов за
+     раз. Шаги те же три и теми же классами — чтобы читалось как одна
+     последовательность, а не как незнакомое окно. -->
+<div class="modal-backdrop" id="revit-backdrop">
+  <div class="modal wide">
+    <h2>Загрузка из Revit</h2>
+    <div class="hint-text">Грузится не модель, а пакет выгрузки
+      (<code>*.zhbi.json</code> или <code>.json.gz</code>), который делает скрипт
+      внутри Revit. Один пакет — один раздел проекта: КР, АР. За раз можно
+      приложить несколько разделов.</div>
+
+    <div class="bulk-edit-steps" style="margin-top:14px">
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title"><span class="step-num">1</span>Выбрать объект и пакеты</div>
+        <label class="object-field" style="margin-bottom:8px"><span>Загрузить в объект</span>
+          <select id="revit-object"></select></label>
+        <input type="file" id="revit-file-input" accept=".json,.gz" multiple/>
+        <div class="hint-text" id="revit-known"></div>
+      </div>
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title"><span class="step-num">2</span>Разобрать пакеты</div>
+        <div class="bulk-edit-controls">
+          <button class="btn btn-primary" id="revit-submit">Разобрать</button>
+        </div>
+        <div class="bulk-edit-status">Пакеты читаются и сверяются с тем, что уже
+          в базе. Ничего не записывается.</div>
+      </div>
+      <div class="bulk-edit-block" id="revit-step-apply">
+        <div class="bulk-edit-block-title"><span class="step-num">3</span>Применить</div>
+        <div class="bulk-edit-status">Откроется сводка: что появится, что изменится,
+          что исчезло из модели, и план контуров для проверки координат.</div>
+      </div>
+    </div>
+    <div id="revit-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="revit-cancel">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Сводка перед применением. Главный элемент здесь — ПЛАН КОНТУРОВ:
+     разделы одного объекта обязаны стоять в общих координатах, и раздел,
+     приехавший в двух километрах от здания, видно только глазом. После
+     записи в базу ловить это уже нечем. -->
+<div class="modal-backdrop" id="revit-review-backdrop">
+  <div class="modal modal-sticky" style="max-width:900px">
+    <div class="modal-sticky-head">
+      <h2><span class="step-num">3</span>Применение выгрузки: что изменится</h2>
+      <div class="hint-text" id="revit-review-head"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="revit-review-body"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="revit-review-status" style="font-size:12px; color:var(--color-text-muted);"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="revit-review-cancel">Отменить</button>
+        <button class="btn btn-primary" id="revit-review-apply">Применить</button>
       </div>
     </div>
   </div>

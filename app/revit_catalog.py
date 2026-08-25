@@ -102,6 +102,24 @@ def _existing(conn, object_id: int) -> tuple:
     return sections, levels, aliases
 
 
+def _public_level(entry: dict) -> dict:
+    """Этаж в виде, пригодном для ответа наружу.
+
+    Ключи `aliases` — КОРТЕЖИ (раздел, имя), и в JSON такой словарь не
+    сериализуется вовсе: эндпоинт падал бы на первом вызове. Наружу уходит
+    только то, что показывает сводка.
+    """
+    return {
+        "key": entry["key"],
+        "floor": entry["floor"],
+        "kind": entry["kind"],
+        "name": entry["name"],
+        "elevation_mm": entry["elevation_mm"],
+        "suspect": bool(entry.get("suspect")),
+        "aliases": len(entry.get("aliases") or {}),
+    }
+
+
 def analyze(conn, object_id: int, packages) -> dict:
     """Фаза 1: что появится в справочниках. Ничего не пишет."""
     found_sections, found_levels = collect(packages)
@@ -153,7 +171,7 @@ def analyze(conn, object_id: int, packages) -> dict:
             "counts": found_sections,
         },
         "levels": {
-            "new": [found_levels[k] for k in new_levels],
+            "new": [_public_level(found_levels[k]) for k in new_levels],
             "existing": sorted(k for k in found_levels if k in have_levels),
             "new_aliases": new_aliases,
             "elevation_gaps": elevation_gaps,

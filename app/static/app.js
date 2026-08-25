@@ -26328,3 +26328,177 @@ document.addEventListener("fullscreenchange", () => {
     ganttSetFull(false);
   }
 });
+
+// ==================== ЗАГРУЗКА ИЗ REVIT (2026-08-25, ветка МФР) ====================
+// Отдельный поток от загрузки чертежа: источник другой, единица другая
+// (пакет РАЗДЕЛА, а не файл чертежа), и пакетов за раз может быть
+// несколько. Шаги те же три и теми же классами — чтобы читалось как одна
+// последовательность.
+
+const revitBackdrop = document.getElementById("revit-backdrop");
+const revitFileInput = document.getElementById("revit-file-input");
+const revitStatus = document.getElementById("revit-status");
+const revitSubmit = document.getElementById("revit-submit");
+const revitReviewBackdrop = document.getElementById("revit-review-backdrop");
+let revitPending = null;   // то, что вернул analyze
+
+function setRevitStatus(text, isError) {
+  revitStatus.textContent = text;
+  revitStatus.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+document.getElementById("btn-upload-revit").addEventListener("click", async () => {
+  revitFileInput.value = "";
+  setRevitStatus("", false);
+  document.getElementById("revit-known").textContent = "";
+  const sel = document.getElementById("revit-object");
+  sel.innerHTML = state.projects.flatMap((p) => p.objects.map((o) =>
+    `<option value="${o.id}">${escapeHtml(p.name)} · ${escapeHtml(o.name)}</option>`)).join("");
+  if (state.objectId) sel.value = String(state.objectId);
+  revitBackdrop.classList.add("open");
+});
+document.getElementById("revit-cancel").addEventListener("click",
+  () => revitBackdrop.classList.remove("open"));
+document.getElementById("revit-review-cancel").addEventListener("click", () => {
+  revitReviewBackdrop.classList.remove("open");
+  revitPending = null;
+});
+
+revitSubmit.addEventListener("click", async () => {
+  const files = Array.from(revitFileInput.files || []);
+  if (!files.length) { setRevitStatus("Сначала выберите хотя бы один пакет", true); return; }
+
+  revitSubmit.disabled = true;
+  setRevitStatus("Разбор пакетов… на большой модели это может занять до минуты.", false);
+  const form = new FormData();
+  form.append("object_id", document.getElementById("revit-object").value);
+  for (const f of files) form.append("files", f);
+
+  try {
+    const res = await fetch("/import-revit/analyze", { method: "POST", body: form });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      setRevitStatus((body && body.detail) ? body.detail : `Ошибка ${res.status}`, true);
+      return;
+    }
+    setRevitStatus("Разбор готов — проверьте сводку.", false);
+    revitPending = body;
+    renderRevitReview(body);
+    revitReviewBackdrop.classList.add("open");
+  } catch (e) {
+    setRevitStatus("Не удалось связаться с сервером: " + e.message, true);
+  } finally {
+    revitSubmit.disabled = false;
+  }
+});
+
+// План контуров. Рисуется ОДНОЙ строкой path на группу: полторы тысячи
+// отдельных <polygon> тормозят раскладку заметно, а разницы на глаз нет.
+function revitPreviewSvg(preview) {
+  const boxes = [preview.incoming.bbox, preview.existing.bbox].filter(Boolean);
+  if (!boxes.length) return "";
+  const minX = Math.min(...boxes.map((b) => b[0])), minY = Math.min(...boxes.map((b) => b[1]));
+  const maxX = Math.max(...boxes.map((b) => b[2])), maxY = Math.max(...boxes.map((b) => b[3]));
+  const w = Math.max(maxX - minX, 1), h = Math.max(maxY - minY, 1);
+  const path = (outlines) => outlines.map((o) =>
+    "M" + o.map((p) => `${(p[0] - minX).toFixed(0)} ${(maxY - p[1]).toFixed(0)}`).join("L") + "Z"
+  ).join("");
+  // Цвета — из палитры приложения. `--color-accent` в ней НЕТ: с ним
+  // stroke становился невалидным, контуры нового не рисовались вовсе, и
+  // на плане был виден только серый «уже есть» — то есть экран показывал
+  // ровно обратное тому, ради чего сделан.
+  const было = preview.existing.outlines.length
+    ? `<path d="${path(preview.existing.outlines)}" fill="none" stroke="var(--color-text-muted)"
+        stroke-width="${w / 500}" opacity="0.55"/>` : "";
+  const стало = `<path d="${path(preview.incoming.outlines)}" fill="none" stroke="var(--color-primary)" stroke-width="${w / 350}"/>`;
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:340px;border:1px solid var(--color-border);
+    border-radius:6px;background:var(--color-surface)">${было}${стало}</svg>`;
+}
+
+function revitCountLine(label, value, danger) {
+  if (!value) return "";
+  return `<div style="color:${danger ? "var(--color-danger)" : "inherit"}"><b>${value}</b> — ${escapeHtml(label)}</div>`;
+}
+
+function renderRevitReview(data) {
+  const c = (data.elements || {}).counts || {};
+  const packages = (data.packages || []).map((p) =>
+    `<tr><td>${escapeHtml(p["раздел"] || "")}</td><td>${escapeHtml(p["модель"] || "")}</td>
+     <td>${escapeHtml(p["дата"] || "")}</td><td style="text-align:right">${p["элементов"]}</td>
+     <td style="text-align:right">${p["помещений"]}</td></tr>`).join("");
+
+  const warnings = (data.warnings || []).length
+    ? `<div class="warning-text"><b>Предупреждения</b>${(data.warnings || []).map((w) =>
+        `<div>• ${escapeHtml(w)}</div>`).join("")}</div>` : "";
+
+  const секции = data.sections || {};
+  const этажи = data.levels || {};
+  const разрывы = (этажи["elevation_gaps"] || []).map((g) =>
+    `<div>• ${escapeHtml(g["этаж"])}: разброс отметок ${g["разброс_мм"]} мм — отметке верить нельзя</div>`).join("");
+
+  document.getElementById("revit-review-head").textContent =
+    `Объект «${data.object_name}» · разделов ${(data.packages || []).length}`;
+
+  document.getElementById("revit-review-body").innerHTML = `
+    ${warnings}
+    <h3>Что приехало</h3>
+    <table class="bulk-edit-table"><thead><tr><th>Раздел</th><th>Модель</th><th>Выгружено</th>
+      <th style="text-align:right">Элементов</th><th style="text-align:right">Помещений</th></tr></thead>
+      <tbody>${packages}</tbody></table>
+
+    <h3>Что изменится</h3>
+    ${revitCountLine("новых элементов", c["новых"])}
+    ${revitCountLine("изменившихся", c["изменённых"])}
+    ${revitCountLine("без изменений", c["без изменений"])}
+    ${revitCountLine("исчезло из модели — будут списаны", c["исчезло из модели"], true)}
+    ${revitCountLine("помещений", c["помещений"])}
+    ${revitCountLine("квартир", c["квартир"])}
+
+    <h3>Справочники</h3>
+    ${revitCountLine("новых секций: " + (секции["new"] || []).join(", "), (секции["new"] || []).length)}
+    ${revitCountLine("новых этажей", (этажи["new"] || []).length)}
+    ${разрывы}
+
+    <h3>Качество данных</h3>
+    ${revitCountLine("элементов без секции — в блок не попадут", c["без секции"], true)}
+    ${revitCountLine("контур габаритный, а не настоящий", c["контур габаритный"])}
+
+    <h3>План контуров</h3>
+    <div class="hint-text">Серым — то, что уже в объекте, цветом — новое. Разделы
+      обязаны стоять в общих координатах: если новое лежит в стороне от старого,
+      выгрузка сделана не в тех координатах, и применять её нельзя.</div>
+    ${revitPreviewSvg((data.elements || {}).preview || { incoming: { outlines: [], bbox: null }, existing: { outlines: [], bbox: null } })}
+  `;
+}
+
+document.getElementById("revit-review-apply").addEventListener("click", async () => {
+  if (!revitPending) return;
+  const btn = document.getElementById("revit-review-apply");
+  const status = document.getElementById("revit-review-status");
+  btn.disabled = true;
+  status.textContent = "Применение…";
+  try {
+    const res = await fetch("/import-revit/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: revitPending.token }),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      status.textContent = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
+      status.style.color = "var(--color-danger)";
+      return;
+    }
+    status.style.color = "var(--color-text-muted)";
+    status.textContent = `Готово: элементов ${body.elements}, помещений ${body.rooms}, `
+      + `квартир ${body.flats}, списано ${body.retired}.`;
+    revitPending = null;
+    revitReviewBackdrop.classList.remove("open");
+    revitBackdrop.classList.remove("open");
+    setRevitStatus(status.textContent, false);
+  } catch (e) {
+    status.textContent = "Не удалось связаться с сервером: " + e.message;
+    status.style.color = "var(--color-danger)";
+  } finally {
+    btn.disabled = false;
+  }
+});

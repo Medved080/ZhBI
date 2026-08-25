@@ -176,6 +176,7 @@ def analyze(conn, object_id: int, packages) -> dict:
                            room.get("квартира")))
 
     return {
+        "preview": preview(conn, object_id, packages),
         "counts": {
             "новых": new,
             "изменённых": updated,
@@ -319,3 +320,57 @@ def rebuild_flats(conn, object_id: int) -> int:
     return conn.execute(
         "SELECT COUNT(*) FROM object_flats WHERE object_id = ?", (object_id,)
     ).fetchone()[0]
+
+
+# Сколько контуров уходит в превью. 1500 достаточно, чтобы увидеть форму
+# здания и промах с системой координат, и при этом сводка остаётся лёгкой:
+# на 25 тысячах элементов полный набор контуров — это мегабайты.
+PREVIEW_LIMIT = 1500
+
+
+def _sample(items, limit=PREVIEW_LIMIT):
+    """Равномерная выборка, а не первые N: элементы в пакете идут по
+    категориям, и первые N оказались бы одними стенами одного этажа."""
+    if len(items) <= limit:
+        return list(items)
+    step = len(items) / float(limit)
+    return [items[int(i * step)] for i in range(limit)]
+
+
+def _bbox(outlines):
+    xs = [p[0] for o in outlines for p in o]
+    ys = [p[1] for o in outlines for p in o]
+    if not xs:
+        return None
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def preview(conn, object_id: int, packages) -> dict:
+    """Контуры для визуальной сверки ДО применения.
+
+    Главный смысл — поймать промах с системой координат: разделы одного
+    объекта обязаны стоять в общих координатах, и раздел, приехавший в
+    двух километрах от здания, видно только глазом. После записи в базу
+    ловить это уже нечем.
+    """
+    incoming = []
+    for package in packages:
+        outlines = [e["контур"] for e in package.elements if e.get("контур")]
+        for outline in _sample(outlines):
+            incoming.append(outline)
+
+    existing = []
+    rows = conn.execute(
+        "SELECT outline_json FROM revit_elements "
+        "WHERE object_id = ? AND is_current = 1 AND outline_json IS NOT NULL",
+        (object_id,)).fetchall()
+    for row in _sample([r["outline_json"] for r in rows]):
+        try:
+            existing.append(json.loads(row))
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "incoming": {"outlines": incoming, "bbox": _bbox(incoming)},
+        "existing": {"outlines": existing, "bbox": _bbox(existing)},
+    }

@@ -5145,7 +5145,11 @@ def analyze_revit(
         known_sections=analysis["known_sections"],
         sections=analysis["sections"],
         levels={k: v for k, v in analysis["levels"].items()},
-        elements=analysis["elements"]["counts"],
+        # Только то, что показывает сводка. `retired_uids` намеренно не
+        # отдаётся: на большой модели это список из тысяч строк, который
+        # клиенту не нужен — списание считает сервер по токену.
+        elements={k: v for k, v in analysis["elements"].items()
+                  if k in ("counts", "preview", "by_section", "changes")},
         warnings=analysis["warnings"],
     )
 
