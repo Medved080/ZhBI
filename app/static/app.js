@@ -26623,10 +26623,17 @@ const revitPlanState = { objectId: null, levelId: null, sectionId: null,
                          part: null, category: null, filters: null, data: null,
                          view: null };
 
-// Цвета категорий — из палитры приложения, по кругу. Категорий у модели
-// около десятка, и запоминать их пользователю не нужно: рядом легенда.
-const REVIT_CAT_COLORS = ["#2f6f4f", "#8a6d1f", "#3a5f8a", "#7a3f6a",
-                          "#4a7a7a", "#8a4a2f", "#5a5a8a", "#6a7a3a"];
+// Цвета категорий — светлые пастельные, по кругу. Тёмная насыщенная
+// гамма на здании в тридцать тысяч элементов сливалась в чёрную массу:
+// на просвет читались только силуэт и перекрытия. Пастель разделяет
+// категории и не спорит со светлым фоном сцены.
+//
+// Обводка на плане — отдельным набором, темнее заливки на пару тонов:
+// пастельный контур на пастельном фоне не читался бы вовсе.
+const REVIT_CAT_COLORS = ["#a9c6dd", "#e0cfa8", "#c9b6dd", "#a8d9c6",
+                          "#e0b9a8", "#c9dda8", "#ddaec9", "#b6b9dd"];
+const REVIT_CAT_STROKES = ["#5b8bb0", "#b2965a", "#8f74b0", "#59b090",
+                           "#b27a5a", "#8fb05a", "#b06590", "#7478b0"];
 
 // Открывается переключателем рабочих мест (setWorkspace), а не пунктом
 // меню: на объекте МФР это ЕДИНСТВЕННОЕ рабочее место, и прятать его в
@@ -26737,9 +26744,19 @@ async function loadRevitPlanElements() {
   if (!res.ok) { revitPlanStatus("Не удалось получить план", true); return; }
   const data = await res.json();
   revitPlanState.data = data;
+  // Ключ сцены 3D сбрасывается на КАЖДЫЙ приход данных. Иначе так:
+  // пользователь жмёт «все этажи», сразу переключается в 3D, сцена
+  // собирается на ещё не заменённых данных одного этажа, а когда данные
+  // приходят — ключ уже совпадает с новым отбором, и пересборки не
+  // происходит. В 3D остаётся один этаж вместо здания.
+  mfr3d.key = null;
   drawRevitPlan(data);
-  revitPlanStatus(`Показано ${data.elements.length} элементов`
-    + (data.truncated ? " (список обрезан)" : ""));
+  // Обрезка — не примечание, а брак показа: вырезается произвольный
+  // хвост по id, и в 3D это выглядит как дыра в здании. Говорим красным.
+  revitPlanStatus(
+    `Показано ${data.elements.length} элементов`
+    + (data.truncated ? " — СПИСОК ОБРЕЗАН, показано не всё: сузьте отбор" : ""),
+    !!data.truncated);
   // Режим мог быть 3D — тогда сцену надо пересобрать под новый отбор.
   applyMfrMode();
 }
@@ -26756,8 +26773,9 @@ function drawRevitPlan(data) {
   const paths = data.elements.map((el) => {
     const d = "M" + el["контур"].map((p) => `${p[0]} ${h - p[1]}`).join("L") + "Z";
     const color = REVIT_CAT_COLORS[el["кат"] % REVIT_CAT_COLORS.length];
-    return `<path d="${d}" data-id="${el.id}" fill="${color}" fill-opacity="0.35"
-      stroke="${color}" stroke-width="${Math.max(w / 900, 20)}"
+    const обводка = REVIT_CAT_STROKES[el["кат"] % REVIT_CAT_STROKES.length];
+    return `<path d="${d}" data-id="${el.id}" fill="${color}" fill-opacity="0.55"
+      stroke="${обводка}" stroke-width="${Math.max(w / 900, 20)}"
       ${el["приб"] ? 'stroke-dasharray="' + Math.max(w / 300, 60) + '"' : ""}/>`;
   });
   // Исходный охват держим отдельно от текущего вида: «Вписать» должна
@@ -26770,7 +26788,8 @@ function drawRevitPlan(data) {
   document.getElementById("revit-plan-legend").innerHTML =
     (data.categories || []).map((name, i) =>
       `<span style="margin-right:12px"><span style="display:inline-block;width:10px;height:10px;
-        background:${REVIT_CAT_COLORS[i % REVIT_CAT_COLORS.length]};margin-right:4px"></span>${escapeHtml(name)}</span>`
+        background:${REVIT_CAT_COLORS[i % REVIT_CAT_COLORS.length]};
+        border:1px solid ${REVIT_CAT_STROKES[i % REVIT_CAT_STROKES.length]};margin-right:4px"></span>${escapeHtml(name)}</span>`
     ).join("") + '<span style="margin-left:8px">пунктиром — габаритный контур</span>';
 
   bindRevitPlanZoom(document.getElementById("revit-plan-svg"));
@@ -26853,7 +26872,7 @@ async function showRevitCard(elementId) {
 // в вендоренном наборе нет, и вендорить новое без спроса нельзя.
 
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
-                loop: null, key: null };
+                loop: null, key: null, поколение: 0 };
 
 function mfrMode() {
   const on = document.querySelector("#mfr-view-switch .view-mode-btn.active");
@@ -26898,8 +26917,13 @@ function mergePositions(geometries) {
 }
 
 async function buildMfr3D() {
-  const data = revitPlanState.data;
+  // Сборок может идти ДВЕ сразу: пользователь жмёт «все этажи» и тут же
+  // 3D, первая сборка засыпает на загрузке Three.js со старыми данными, а
+  // когда просыпается — дописывает сцену поверх новой. Побеждала та, что
+  // начиналась раньше, и в 3D оставался один этаж вместо здания.
+  const моё = ++mfr3d.поколение;
   const box = document.getElementById("mfr-3d-canvas");
+  const data = revitPlanState.data;
   if (!data || !data.elements.length) {
     box.innerHTML = "<div class='hint-text' style='padding:16px'>Нет элементов по этому отбору.</div>";
     return;
@@ -26912,7 +26936,8 @@ async function buildMfr3D() {
 
   revitPlanStatus(`Сборка 3D: ${data.elements.length} элементов…`);
   await ensureThreeLoaded();
-  disposeMfr3D();
+  if (моё !== mfr3d.поколение) return;   // нас обогнала более свежая сборка
+  disposeMfr3D();                        // счётчик поколений он не трогает
   box.innerHTML = "";
 
   const [w, h] = data.size;
@@ -26943,8 +26968,11 @@ async function buildMfr3D() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(themeColor("--stage-3d-bg", 0xeceff3));
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x505050, 1.2));
-  const солнце = new THREE.DirectionalLight(0xffffff, 0.9);
+  // Свет мягкий и рассеянный: при контрастном направленном освещении узкие
+  // грани стен уходят в тень и пастель на них не читается — здание опять
+  // выглядит тёмной массой, ради ухода от которой гамму и меняли.
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xc8ccd2, 1.7));
+  const солнце = new THREE.DirectionalLight(0xffffff, 0.55);
   солнце.position.set(1, -1, 2);
   scene.add(солнце);
 

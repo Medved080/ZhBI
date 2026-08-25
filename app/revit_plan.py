@@ -65,8 +65,17 @@ def filters(conn, object_id: int) -> dict:
     }
 
 
+# Предохранитель от запроса, который положит браузер. Не «разумное
+# ограничение показа»: на реальном объекте (КР 3693 + АР 25 131) прежние
+# 20 000 отрезали 5131 элемент, и в 3D это выглядело как восьмиметровый
+# разрыв в здании с висящим над ним куском — метры с 52-го по 59-й
+# оставались пусты. Отбор идёт по id, поэтому вырезается не «лишнее», а
+# произвольный хвост.
+ELEMENTS_LIMIT = 60000
+
+
 def elements(conn, object_id: int, level_id=None, section_id=None,
-             part=None, category=None, limit: int = 20000) -> dict:
+             part=None, category=None, limit: int = ELEMENTS_LIMIT) -> dict:
     """Контуры для отрисовки. `level_id = 0` означает «без этажа»."""
     where = ["object_id = ?", "is_current = 1", "outline_json IS NOT NULL"]
     params = [object_id]
