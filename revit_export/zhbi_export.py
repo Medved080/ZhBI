@@ -33,6 +33,20 @@ import sys
 import traceback
 from datetime import datetime
 
+# Подключение сборок Revit. pyRevit и RevitPythonShell делают это сами,
+# а Python-узел Dynamo — НЕТ: без AddReference он падает с "No module named
+# Autodesk.Revit.DB". Обёрнуто в try, чтобы не мешать хостам, где всё уже
+# подключено; работает одинаково на IronPython 2.7 и CPython 3.
+try:
+    import clr
+    for _assembly in ("RevitAPI", "RevitAPIUI", "RevitServices"):
+        try:
+            clr.AddReference(_assembly)
+        except Exception:
+            pass
+except ImportError:
+    pass
+
 from Autodesk.Revit.DB import (
     BuiltInCategory, BuiltInParameter, ElementId, ElementMulticategoryFilter,
     ExtrusionAnalyzer, FilteredElementCollector, GeometryInstance, Level,
@@ -71,6 +85,12 @@ CATEGORIES = [
     BuiltInCategory.OST_Roofs,
     BuiltInCategory.OST_Ceilings,
     BuiltInCategory.OST_GenericModel,
+    # Для АР: заполнение проёмов и светопрозрачные конструкции — под виды
+    # работ «Монтаж ПВХ конструкций», «Монтаж металлических дверей»,
+    # «Монтаж люков» из WBS. Для КР эти категории просто пусты.
+    BuiltInCategory.OST_Doors,
+    BuiltInCategory.OST_Windows,
+    BuiltInCategory.OST_Railings,
 ]
 
 # Именованные параметры, которые снимаем с каждого элемента. Список
@@ -98,19 +118,42 @@ NAMED_PARAMS = [
 # значение печатается в сводке — проверьте его перед отправкой.
 SECTION_CODE = ""
 
+# Квартирография — параметры ПОМЕЩЕНИЙ. Вычитаны прямо из модели АР
+# (Docs/revit-import.md, раздел 12): квартира в Revit не отдельный объект,
+# она собирается по номеру, проставленному у комнат. Без этих полей восемь
+# видов работ WBS в единице «кв.эт/сек» не к чему привязать.
+ROOM_PARAMS = [
+    ("квартира",         ["ROOM_КВ_Номер", "3_ROOM_Номер квартиры",
+                          "Номер квартиры", "Номер помещения квартиры"]),
+    ("комнат",           ["ROOM_КВ_Кол.Комнат"]),
+    ("тип_планировки",   ["ROOM_Тип планировки"]),
+    ("категория_помещения", ["ROOM_Категория"]),
+    ("тип_помещения",    ["ROOM_Тип"]),
+    ("площадь_квартиры", ["ROOM_КВ_Площадь"]),
+    ("жилая_площадь",    ["ROOM_КВ_Жил.Площадь"]),
+    ("площадь_с_неотапливаемыми", ["ROOM_КВ_Пл.+Неот."]),
+]
+
+# Поля из ROOM_PARAMS, которые Revit хранит в футах и надо перевести в м2.
+ROOM_AREA_FIELDS = ("площадь_квартиры", "жилая_площадь",
+                    "площадь_с_неотапливаемыми")
+
 FEET_TO_MM = 304.8
 SCHEMA_VERSION = 1
-EXPORTER_VERSION = "1.0"
+EXPORTER_VERSION = "1.2"
 
 # ======================================================================
 
 
 def get_document():
     """Документ из любого хоста: pyRevit, RevitPythonShell или Dynamo."""
-    try:
-        return __revit__.ActiveUIDocument.Document  # noqa: F821
-    except NameError:
-        pass
+    # pyRevit и RevitPythonShell кладут `__revit__` в globals исполняемого
+    # скрипта. Берём его именно оттуда, а не голым именем: голое имя — это
+    # отложенный NameError для любого читателя и для стража
+    # scripts/check_undefined_names.py, который такое не пропускает.
+    host = globals().get("__revit__")
+    if host is not None:
+        return host.ActiveUIDocument.Document
     try:
         from RevitServices.Persistence import DocumentManager
         return DocumentManager.Instance.CurrentDBDocument
@@ -312,10 +355,36 @@ def level_name_of(document, element, cache):
     return cache[key]
 
 
-def collect_levels(document):
+def type_name_of(type_element):
+    """Имя типоразмера. Через `.Name` не берётся — на пилоте вернуло None
+    у всех 2000 элементов (свойство Element.Name из Python отдаётся не
+    везде одинаково). Штатные параметры имени типа надёжнее."""
+    if type_element is None:
+        return None
+    for bip in (BuiltInParameter.SYMBOL_NAME_PARAM,
+                BuiltInParameter.ALL_MODEL_TYPE_NAME):
+        value = builtin(type_element, bip)
+        if value:
+            return value
+    try:
+        return type_element.Name
+    except Exception:
+        return None
+
+
+def collect_levels(document, transform):
+    """Уровни в ТЕХ ЖЕ координатах, что и элементы. Без этого отметки
+    несопоставимы: на пилоте элементы приехали в общих координатах
+    площадки (абсолютных), а уровни оставались в проектных — расхождение
+    около 156 метров. Проектную отметку сохраняем рядом: её читает человек."""
     out = []
     for level in FilteredElementCollector(document).OfClass(Level):
-        out.append({"имя": level.Name, "отметка": mm(level.Elevation)})
+        z = level.Elevation
+        if transform is not None:
+            z = transform.OfPoint(XYZ(0.0, 0.0, z)).Z
+        out.append({"имя": level.Name,
+                    "отметка": mm(z),
+                    "отметка_проектная": mm(level.Elevation)})
     out.sort(key=lambda item: item["отметка"])
     return out
 
@@ -360,7 +429,7 @@ def collect_rooms(document, transform):
         if not area:
             continue                      # неразмещённое помещение
         type_element = None
-        out.append({
+        row = {
             "uid": room.UniqueId,
             "номер": builtin(room, BuiltInParameter.ROOM_NUMBER),
             "имя": builtin(room, BuiltInParameter.ROOM_NAME),
@@ -368,7 +437,16 @@ def collect_rooms(document, transform):
             "уровень": level_name_of(document, room, {}),
             "секция": lookup(room, type_element, ["MCY_Секция", "МСУ_Секция"]),
             "этаж": lookup(room, type_element, ["MCY_Этаж", "МСУ_Этаж"]),
-        })
+        }
+        for field, names in ROOM_PARAMS:
+            value = lookup(room, type_element, names)
+            if value is not None and field in ROOM_AREA_FIELDS:
+                try:
+                    value = round(float(value) * FEET_TO_MM * FEET_TO_MM / 1e6, 3)
+                except (TypeError, ValueError):
+                    pass
+            row[field] = value
+        out.append(row)
     return out
 
 
@@ -414,6 +492,14 @@ def export():
         transform = None
 
     code, code_source = resolve_section_code(document)
+
+    base_point = None
+    if transform is not None:
+        try:
+            zero = transform.OfPoint(XYZ(0.0, 0.0, 0.0))
+            base_point = [mm(zero.X), mm(zero.Y), mm(zero.Z)]
+        except Exception:
+            base_point = None
 
     options = Options()
     options.DetailLevel = ViewDetailLevel.Coarse   # заметно быстрее Fine
@@ -471,7 +557,7 @@ def export():
                 "рабочий_набор": None,
             }
             if type_element is not None:
-                row["типоразмер"] = getattr(type_element, "Name", None)
+                row["типоразмер"] = type_name_of(type_element)
                 family = getattr(type_element, "FamilyName", None)
                 row["семейство"] = family
 
@@ -549,8 +635,11 @@ def export():
             "единицы": "мм",
             "координаты": "общие" if transform is not None else "внутренние",
             "неполная_выгрузка": MAX_ELEMENTS is not None,
+            # Внутренний ноль проекта в общих координатах. По нему сервер
+            # переводит абсолютные отметки в проектные (0.000 = 1 этаж).
+            "база_проекта": base_point,
         },
-        "уровни": collect_levels(document),
+        "уровни": collect_levels(document, transform),
         "оси": collect_grids(document, transform),
         "помещения": collect_rooms(document, transform),
         "элементы": elements,
@@ -565,6 +654,10 @@ def export():
         finally:
             handle.close()
     except Exception:
+        try:
+            os.remove(path)          # обрывок gzip, иначе их станет два
+        except Exception:
+            pass
         path = path[:-3]
         stream = io.open(path, "wb")
         try:
@@ -592,9 +685,10 @@ def export():
     say("Элементов выгружено: %d" % stats["всего"])
     if MAX_ELEMENTS is not None:
         say("  ВНИМАНИЕ: пробный прогон, MAX_ELEMENTS = %d" % MAX_ELEMENTS)
-    say("Уровней: %d, осей: %d, помещений: %d"
+    flats = set(r.get("квартира") for r in package["помещения"] if r.get("квартира"))
+    say("Уровней: %d, осей: %d, помещений: %d, квартир: %d"
         % (len(package["уровни"]), len(package["оси"]),
-           len(package["помещения"])))
+           len(package["помещения"]), len(flats)))
     say("-" * 62)
     say("MCY_Секция заполнена у  %d (%d%%)"
         % (stats["с_секцией"], stats["с_секцией"] * 100 // total))

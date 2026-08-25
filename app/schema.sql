@@ -984,3 +984,78 @@ CREATE INDEX IF NOT EXISTS idx_training_attempts_user
     ON training_attempts (user_id, finished_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_training_answers_attempt_ord
     ON training_answers (attempt_id, ord);
+
+-- ==================== СПРАВОЧНИКИ ИЗ ВЫГРУЗОК REVIT ====================
+-- Введены 2026-08-25 вместе с приёмом пакетов (Docs/revit-import.md).
+-- Живут на уровне ОБЪЕКТА и общие для всех его разделов: один объект —
+-- один набор секций и этажей, сколько бы моделей его ни описывало.
+
+-- Секция здания. Хранится в КАНОНИЧЕСКОЙ форме `С01`, потому что разделы
+-- одного объекта называют её по-разному: КР пишет `С01`, АР — `Секция 1`,
+-- встречается и `С1`. Без сведения к общей форме справочник задвоился бы
+-- на второй же загрузке (app/revit_package.normalize_section).
+CREATE TABLE IF NOT EXISTS object_sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    name TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, code)
+);
+
+-- Этаж объекта. Ключ `key` — то, по чему сшиваются РАЗНЫЕ разделы:
+-- `этаж:8`, `этаж:-1`, `кровля:С01`. Именно номер, а не отметка и не имя:
+-- на реальном объекте один и тот же 8-й этаж в КР назван
+-- `С01-02_8_этаж_основной_+22.950` и стоит на 180630 мм, а в АР —
+-- `С01-02_8_этаж` на 178660 мм (верх плиты против чистого пола).
+CREATE TABLE IF NOT EXISTS object_levels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    floor INTEGER,
+    kind TEXT NOT NULL,
+    name TEXT,
+    elevation_mm REAL,
+    elevation_source TEXT,
+    -- 1 = отметке верить нельзя: разделы дали для этого этажа расходящиеся
+    -- значения. На реальном АР так вышло у 21-го этажа — в модели 11 лишних
+    -- уровней с именем «21 этаж», стоящих на отметках 2-го, 11-го и 23-го,
+    -- и разброс составил 63 метра. Автоматически правильное не выбирается
+    -- (мусора больше, чем правды), поэтому отметка помечается, а вся логика
+    -- опирается на НОМЕР этажа, который у таких уровней верный.
+    elevation_suspect INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, key)
+);
+
+-- Как этаж назван в конкретном разделе. Отдельная таблица, а не поле:
+-- имён у одного этажа столько же, сколько разделов, и по этому имени
+-- элемент раздела находит общий этаж объекта.
+CREATE TABLE IF NOT EXISTS object_level_aliases (
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    section_code TEXT NOT NULL,
+    level_name TEXT NOT NULL,
+    level_id INTEGER NOT NULL REFERENCES object_levels (id) ON DELETE CASCADE,
+    elevation_mm REAL,
+    PRIMARY KEY (object_id, section_code, level_name)
+);
+
+-- Реестр загруженных пакетов. `section_code` — раздел проекта (КР, АР):
+-- ОБЛАСТЬ, внутри которой считается «элемент исчез из модели». Имя файла
+-- в идентичность не входит намеренно: у заказчика файлы переименовывают
+-- между выдачами (Docs/revit-import.md, раздел 1).
+CREATE TABLE IF NOT EXISTS revit_packages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    section_code TEXT NOT NULL,
+    model TEXT,
+    exported_at TEXT,
+    exporter TEXT,
+    coordinates TEXT,
+    base_point TEXT,
+    elements_count INTEGER NOT NULL DEFAULT 0,
+    is_current INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
