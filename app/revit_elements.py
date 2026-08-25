@@ -19,6 +19,7 @@
 
 import json
 
+from app import revit_sections
 from app.revit_package import normalize_section, resolve_section
 
 # Поля, расхождение которых показывается в сводке. Марка — отдельно и
@@ -292,10 +293,17 @@ def apply(conn, object_id: int, packages, analysis: dict) -> dict:
             [(object_id, uid) for uid in retired],
         )
 
+    # Доопределение секции по геометрии — ПОСЛЕ записи всех разделов
+    # комплекта: зона строится по элементам с известной секцией, и чем
+    # больше их записано, тем точнее граница. Параметр не перебивается.
+    sections = revit_sections.fill_missing(conn, object_id)
+
     flats = rebuild_flats(conn, object_id)
     conn.commit()
     return {"elements": written, "rooms": rooms_written,
-            "retired": len(retired), "flats": flats}
+            "retired": len(retired), "flats": flats,
+            "sections_by_geometry": sections["назначено"],
+            "sections_unknown": sections["осталось"]}
 
 
 def rebuild_flats(conn, object_id: int) -> int:

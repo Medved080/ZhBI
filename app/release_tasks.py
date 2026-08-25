@@ -515,6 +515,31 @@ def _recount_level_elevation_suspect(conn: sqlite3.Connection) -> str:
     return "снято %d, оставлено %d" % (len(было - подозрительные), len(подозрительные))
 
 
+def _fill_revit_sections(conn: sqlite3.Connection) -> str:
+    """Доопределить секцию по геометрии у уже загруженных элементов Revit.
+
+    До появления зон секция бралась только из параметра модели и из имени
+    уровня, а у заказчика `MCY_Секция` заполнена не везде: на реальной
+    выгрузке пусто у 4374 элементов из 25 131. Такие элементы не попадали
+    ни в один блок «этаж + секция», то есть выпадали из учёта работ.
+    """
+    from app import revit_sections
+
+    объекты = [r["object_id"] for r in conn.execute(
+        "SELECT DISTINCT object_id FROM revit_elements WHERE is_current = 1")]
+    if not объекты:
+        return "выгрузок Revit нет"
+    назначено = осталось = 0
+    for object_id in объекты:
+        итог = revit_sections.fill_missing(conn, object_id)
+        назначено += итог["назначено"]
+        осталось += итог["осталось"]
+    conn.commit()
+    if not назначено:
+        return "доопределять нечего, без секции осталось %d" % осталось
+    return "назначено %d, без секции осталось %d" % (назначено, осталось)
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -606,6 +631,17 @@ RELEASE_TASKS = [
                "принимала за дефект модели",
         "kind": KIND_DATA,
         "run": _recount_level_elevation_suspect,
+    },
+    {
+        "name": "2026-08-25-revit-sections-by-geometry",
+        "version": "0.66",
+        "date": "2026-08-25",
+        "title": "Определить секцию по геометрии там, где её нет в модели",
+        "why": "элементы без секции не попадали ни в один блок «этаж + секция» "
+               "и выпадали из учёта работ; в модели заказчика такой параметр "
+               "заполнен не у всех",
+        "kind": KIND_DATA,
+        "run": _fill_revit_sections,
     },
 ]
 

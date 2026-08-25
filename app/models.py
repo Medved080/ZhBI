@@ -484,3 +484,8 @@ class RevitImportResult(BaseModel):
     rooms: int
     retired: int
     flats: int
+    # Сколько секций доопределено геометрией и сколько так и осталось без
+    # секции: показывается в итоге загрузки, чтобы доопределение не было
+    # молчаливым.
+    sections_by_geometry: int = 0
+    sections_unknown: int = 0

@@ -26624,7 +26624,13 @@ document.getElementById("revit-review-apply").addEventListener("click", async ()
     }
     status.style.color = "var(--color-text-muted)";
     status.textContent = `Готово: элементов ${body.elements}, помещений ${body.rooms}, `
-      + `квартир ${body.flats}, списано ${body.retired}.`;
+      + `квартир ${body.flats}, списано ${body.retired}.`
+      // Доопределение секции по геометрии не должно быть молчаливым: это
+      // не то же самое, что значение, проставленное проектировщиком.
+      + (body.sections_by_geometry
+         ? ` Секция определена геометрически у ${body.sections_by_geometry}` : "")
+      + (body.sections_unknown ? `, без секции осталось ${body.sections_unknown}` : "")
+      + (body.sections_by_geometry || body.sections_unknown ? "." : "");
     revitPending = null;
     revitReviewBackdrop.classList.remove("open");
     revitBackdrop.classList.remove("open");
