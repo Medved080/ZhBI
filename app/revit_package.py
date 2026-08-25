@@ -34,8 +34,16 @@ FORMAT_NAME = "zhbi-revit-package"
 SUPPORTED_SCHEMA = 1
 
 # Секция: `С01`, `С1`, `Секция 1`, `C01` (латинская C — частая опечатка).
+#
+# Отдельно — БУКВА О ВМЕСТО НУЛЯ: в выгрузке КР рядом с `С01`/`С02` стоят
+# `СО1` (904 элемента) и `СО2` (342), где второй знак — кириллическая «О».
+# На экране они неотличимы, а для программы это разные секции; без замены
+# 1246 элементов уехали бы в «без секции».
 _SECTION_RE = re.compile(
-    r'^\s*(?:секция\s*|сек\.?\s*|[СC])\s*(\d{1,2})\s*$', re.IGNORECASE)
+    r'^\s*(?:секция\s*|сек\.?\s*|[СCсc])\s*([\dОоOo]{1,3})\s*$', re.IGNORECASE)
+
+# Что считать нулём в номере секции: обе «О» — кириллическая и латинская.
+_ZERO_LOOKALIKES = str.maketrans({"О": "0", "о": "0", "O": "0", "o": "0"})
 
 # Имя уровня: `С01-02_8_этаж`, `С01-С02_-1_подземный этаж`,
 # `С01-02_21_этаж_основной_+61,951`.
@@ -76,7 +84,10 @@ def normalize_section(value) -> Optional[str]:
     found = _SECTION_RE.match(str(value))
     if not found:
         return None
-    return "С%02d" % int(found.group(1))
+    номер = found.group(1).translate(_ZERO_LOOKALIKES)
+    if not номер.isdigit():
+        return None
+    return "С%02d" % int(номер)
 
 
 def _sections_from_span(text: str) -> list:
