@@ -26349,6 +26349,7 @@ function setRevitStatus(text, isError) {
 
 document.getElementById("btn-upload-revit").addEventListener("click", async () => {
   revitFileInput.value = "";
+  revitSelectedFiles = [];
   renderRevitFileList();
   setRevitStatus("", false);
   document.getElementById("revit-known").textContent = "";
@@ -26361,31 +26362,51 @@ document.getElementById("btn-upload-revit").addEventListener("click", async () =
 document.getElementById("revit-cancel").addEventListener("click",
   () => revitBackdrop.classList.remove("open"));
 
-// Что выбрано — своей строкой: родная подпись поля в узкой колонке шага
-// обрезается до «Фа...ан» и бесполезна и до выбора, и после.
+// Выбранные пакеты КОПЯТСЯ, а не берутся из input.files напрямую.
+// Причина: каждый новый выбор в диалоге браузера ЗАМЕНЯЕТ предыдущий, и
+// набрать два раздела по одному было невозможно — выделять оба сразу с
+// Ctrl/Cmd догадается не каждый, а комплект из КР и АР это обычный
+// случай, а не редкость.
+let revitSelectedFiles = [];
+
 function renderRevitFileList() {
-  const files = Array.from(revitFileInput.files || []);
   const box = document.getElementById("revit-file-list");
-  if (!files.length) {
-    box.textContent = "Файлы не выбраны";
+  if (!revitSelectedFiles.length) {
+    box.textContent = "Пакеты не выбраны";
     box.style.color = "var(--color-text-muted)";
     return;
   }
   box.style.color = "var(--color-text)";
-  box.innerHTML = files.map((f) =>
+  box.innerHTML = revitSelectedFiles.map((f, i) =>
     `<div>• ${escapeHtml(f.name)} <span style="color:var(--color-text-muted)">${
-      (f.size / 1048576).toFixed(1)} МБ</span></div>`).join("");
+      (f.size / 1048576).toFixed(1)} МБ</span>
+      <a href="#" data-drop="${i}" style="margin-left:4px" title="убрать">×</a></div>`).join("");
 }
-revitFileInput.addEventListener("change", renderRevitFileList);
+
+revitFileInput.addEventListener("change", () => {
+  for (const f of Array.from(revitFileInput.files || [])) {
+    const дубль = revitSelectedFiles.some((x) => x.name === f.name && x.size === f.size);
+    if (!дубль) revitSelectedFiles.push(f);
+  }
+  revitFileInput.value = "";   // иначе повторный выбор того же файла не даст события
+  renderRevitFileList();
+});
 document.getElementById("revit-file-pick").addEventListener("click",
   () => revitFileInput.click());
+document.getElementById("revit-file-list").addEventListener("click", (e) => {
+  const drop = e.target.closest("a[data-drop]");
+  if (!drop) return;
+  e.preventDefault();
+  revitSelectedFiles.splice(Number(drop.dataset.drop), 1);
+  renderRevitFileList();
+});
 document.getElementById("revit-review-cancel").addEventListener("click", () => {
   revitReviewBackdrop.classList.remove("open");
   revitPending = null;
 });
 
 revitSubmit.addEventListener("click", async () => {
-  const files = Array.from(revitFileInput.files || []);
+  const files = revitSelectedFiles;
   if (!files.length) { setRevitStatus("Сначала выберите хотя бы один пакет", true); return; }
 
   revitSubmit.disabled = true;
@@ -26662,7 +26683,10 @@ function drawRevitPlan(data) {
       stroke="${color}" stroke-width="${Math.max(w / 900, 20)}"
       ${el["приб"] ? 'stroke-dasharray="' + Math.max(w / 300, 60) + '"' : ""}/>`;
   });
+  // Исходный охват держим отдельно от текущего вида: «Вписать» должна
+  // возвращать именно его, а не пересчитывать по элементам заново.
   revitPlanState.view = { x: 0, y: 0, w, h };
+  revitPlanState.fit = { x: 0, y: 0, w, h };
   box.innerHTML = `<svg id="revit-plan-svg" viewBox="0 0 ${w} ${h}"
     style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${paths.join("")}</svg>`;
 
@@ -26681,10 +26705,14 @@ function drawRevitPlan(data) {
 function bindRevitPlanZoom(svg) {
   const v = revitPlanState.view;
   const apply = () => svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+  revitPlanState.applyView = apply;
   svg.addEventListener("wheel", (e) => {
     e.preventDefault();
     const k = e.deltaY > 0 ? 1.15 : 1 / 1.15;
     const r = svg.getBoundingClientRect();
+    // Пока окно скрыто (или ещё не разложено), размеры нулевые, и деление
+    // на них даёт NaN в viewBox — план после этого исчезает совсем.
+    if (!r.width || !r.height) return;
     const px = v.x + ((e.clientX - r.left) / r.width) * v.w;
     const py = v.y + ((e.clientY - r.top) / r.height) * v.h;
     v.x = px - (px - v.x) * k; v.y = py - (py - v.y) * k;
@@ -26699,6 +26727,7 @@ function bindRevitPlanZoom(svg) {
   svg.addEventListener("pointermove", (e) => {
     if (!drag) return;
     const r = svg.getBoundingClientRect();
+    if (!r.width || !r.height) return;
     v.x -= (e.clientX - drag.x) * (v.w / r.width);
     v.y -= (e.clientY - drag.y) * (v.h / r.height);
     drag = { x: e.clientX, y: e.clientY };
@@ -26713,6 +26742,14 @@ function bindRevitPlanZoom(svg) {
     await showRevitCard(Number(path.dataset.id));
   });
 }
+
+document.getElementById("revit-plan-fit").addEventListener("click", () => {
+  const fit = revitPlanState.fit, v = revitPlanState.view;
+  if (!fit || !v || !revitPlanState.applyView) return;
+  v.x = fit.x; v.y = fit.y; v.w = fit.w; v.h = fit.h;
+  revitPlanState.applyView();
+});
+
 
 async function showRevitCard(elementId) {
   const box = document.getElementById("revit-plan-card");

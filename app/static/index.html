@@ -4495,8 +4495,8 @@
         <input type="file" id="revit-file-input" accept=".json,.gz" multiple
                style="position:absolute; width:1px; height:1px; opacity:0; pointer-events:none"/>
         <button type="button" class="btn btn-secondary" id="revit-file-pick"
-                style="width:100%">Выбрать пакеты…</button>
-        <div class="hint-text" id="revit-file-list">Файлы не выбраны</div>
+                style="width:100%">Добавить пакет…</button>
+        <div class="hint-text" id="revit-file-list">Пакеты не выбраны</div>
         <div class="hint-text" id="revit-known"></div>
       </div>
       <div class="bulk-edit-block">
@@ -4568,9 +4568,18 @@
           <div id="revit-plan-categories" style="max-height:180px; overflow:auto"></div>
         </div>
         <div style="flex:1 1 auto; min-width:0">
+          <!-- Легенда НАД планом, а не под ним: под планом она уезжала за
+               нижний край на любом невысоком окне, а вместе с ней и кнопка
+               «Вписать». Высота плана привязана к высоте окна по той же
+               причине. -->
+          <div style="display:flex; align-items:flex-start; gap:10px; margin-bottom:6px">
+            <div class="hint-text" id="revit-plan-legend" style="flex:1 1 auto"></div>
+            <button class="btn btn-secondary" id="revit-plan-fit"
+                    style="flex:0 0 auto" title="Вернуть исходный масштаб">Вписать</button>
+          </div>
           <div id="revit-plan-canvas" style="border:1px solid var(--color-border);
-               border-radius:6px; background:var(--color-surface); height:460px; overflow:hidden"></div>
-          <div class="hint-text" id="revit-plan-legend" style="margin-top:6px"></div>
+               border-radius:6px; background:var(--color-surface);
+               height:min(460px, 52vh); overflow:hidden"></div>
         </div>
         <div style="flex:0 0 250px">
           <label class="field">Элемент</label>
