@@ -4336,10 +4336,12 @@ def set_last_object(body: LastObjectIn, user: sqlite3.Row = Depends(get_current_
             # пользователем чужой объект незачем, а ответ «такого объекта
             # нет» против «есть, но не твой» — уже подсказка (аудит
             # безопасности 2026-08-03).
-            assert_object_feature(conn, user, body.object_id, "plan", "read")
-            exists = conn.execute("SELECT 1 FROM objects WHERE id = ?", (body.object_id,)).fetchone()
-            if exists is None:
-                raise HTTPException(status_code=404, detail="Объект не найден")
+            #
+            # Именно доступ к ОБЪЕКТУ, а не раздел «Схема»: на объекте МФР
+            # схемы по чертежу нет вовсе (app/features.py), и проверка по
+            # ней отвечала 403 на попытку запомнить такой объект — человек
+            # каждый раз возвращался на чужое здание после перезагрузки.
+            assert_object_access(conn, user, body.object_id)
         conn.execute("UPDATE users SET last_object_id = ? WHERE id = ?", (body.object_id, user["id"]))
         conn.commit()
         activity.log("last_object", user=user, entity_type="object", entity_id=body.object_id,
@@ -5152,20 +5154,22 @@ def revit_plan_filters(object_id: int, user: sqlite3.Row = Depends(get_current_u
 @app.get("/revit-plan/elements")
 def revit_plan_elements(
     object_id: int,
-    level_id: Optional[int] = None,
-    section_id: Optional[int] = None,
-    part: Optional[str] = None,
-    category: Optional[str] = None,
+    # Наборы, а не одиночные значения: отбор множественный (несколько
+    # этажей, несколько категорий). Пустой набор = отбор снят.
+    level_id: Optional[list[int]] = Query(None),
+    section_id: Optional[list[int]] = Query(None),
+    part: Optional[list[str]] = Query(None),
+    category: Optional[list[str]] = Query(None),
     user: sqlite3.Row = Depends(get_current_user),
 ):
-    """Контуры модели для плана. Показ идёт по этажам: в объекте под
-    тридцать тысяч элементов, и единственный осмысленный разрез — этаж."""
+    """Контуры модели для плана. Показ обычно по этажам: в объекте под
+    тридцать тысяч элементов, и самый осмысленный разрез — этаж."""
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "revit_model", "read")
-        return revit_plan.elements(conn, object_id, level_id=level_id,
-                                   section_id=section_id, part=part,
-                                   category=category)
+        return revit_plan.elements(conn, object_id, level_ids=level_id,
+                                   section_ids=section_id, parts=part,
+                                   categories=category)
     finally:
         conn.close()
 

@@ -98,29 +98,39 @@ def filters(conn, object_id: int) -> dict:
 ELEMENTS_LIMIT = 60000
 
 
-def elements(conn, object_id: int, level_id=None, section_id=None,
-             part=None, category=None, limit: int = ELEMENTS_LIMIT) -> dict:
-    """Контуры для отрисовки. `level_id = 0` означает «без этажа»."""
+def _in_clause(column: str, значения, where: list, params: list,
+               пустое_как_null: bool = False) -> None:
+    """Условие «поле входит в набор». Пустой набор — НЕ условие вовсе:
+    отбор по категории считается снятым, а не «не подходит ничего».
+
+    `пустое_как_null` — для этажа и секции: ноль в наборе означает строку
+    «без этажа» / «без секции», и она обязана отбираться наравне с
+    остальными, иначе четыре тысячи элементов без секции нельзя было бы
+    посмотреть.
+    """
+    значения = [v for v in (значения or []) if v is not None]
+    if not значения:
+        return
+    куски = []
+    конкретные = [v for v in значения if not (пустое_как_null and v == 0)]
+    if пустое_как_null and any(v == 0 for v in значения):
+        куски.append("%s IS NULL" % column)
+    if конкретные:
+        куски.append("%s IN (%s)" % (column, ",".join("?" * len(конкретные))))
+        params.extend(конкретные)
+    where.append("(" + " OR ".join(куски) + ")")
+
+
+def elements(conn, object_id: int, level_ids=None, section_ids=None,
+             parts=None, categories=None, limit: int = ELEMENTS_LIMIT) -> dict:
+    """Контуры для отрисовки. В наборе этажей и секций 0 означает «без
+    этажа» / «без секции»."""
     where = ["object_id = ?", "is_current = 1", "outline_json IS NOT NULL"]
     params = [object_id]
-    if level_id is not None:
-        if level_id == 0:
-            where.append("level_id IS NULL")
-        else:
-            where.append("level_id = ?")
-            params.append(level_id)
-    if section_id is not None:
-        if section_id == 0:
-            where.append("section_id IS NULL")
-        else:
-            where.append("section_id = ?")
-            params.append(section_id)
-    if part:
-        where.append("section_code = ?")
-        params.append(part)
-    if category:
-        where.append("category = ?")
-        params.append(category)
+    _in_clause("level_id", level_ids, where, params, пустое_как_null=True)
+    _in_clause("section_id", section_ids, where, params, пустое_как_null=True)
+    _in_clause("section_code", parts, where, params)
+    _in_clause("category", categories, where, params)
 
     # Только то, что нужно ОТРИСОВКЕ. Карточка элемента (марка, семейство,
     # объём, отметка) берётся отдельным запросом по клику: на этаже в

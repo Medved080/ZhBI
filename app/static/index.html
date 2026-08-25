@@ -2444,6 +2444,8 @@
   .revit-pick-on { background: var(--color-accent-soft); font-weight:500;
     border-left-color: var(--color-primary); }
   .revit-pick-on:hover { background: var(--color-accent-soft-hover); }
+  .revit-reset { font-size:11px; color: var(--color-text-muted); text-decoration:none; }
+  .revit-reset:hover { color: var(--color-primary); text-decoration:underline; }
   .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
 
   /* Требования к загружаемому файлу + кнопка образца — один и тот же блок
@@ -4189,15 +4191,31 @@
        нельзя (см. app/revit_plan.py). -->
   <div id="mfr-workspace" style="display:none; flex:1 1 auto; min-height:0;
        padding:10px; gap:12px">
+    <!-- Отбор МНОЖЕСТВЕННЫЙ в каждой группе: нажатие добавляет и убирает
+         строку. У группы с действующим отбором появляется «сбросить», а
+         над списком — «сбросить всё». Пустой набор означает «отбор снят»,
+         а не «ничего не подходит». -->
     <div style="flex:0 0 220px; overflow:auto">
-      <label class="field">Этаж</label>
+      <div style="display:flex; align-items:baseline; justify-content:space-between">
+        <label class="field" style="margin:0">Этаж</label>
+        <a href="#" class="revit-reset" data-reset="levels" hidden>сбросить</a>
+      </div>
       <div id="revit-plan-levels" style="max-height:40vh; overflow:auto;
            border:1px solid var(--color-border); border-radius:6px"></div>
-      <label class="field" style="margin-top:10px">Раздел</label>
+      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:10px">
+        <label class="field" style="margin:0">Раздел</label>
+        <a href="#" class="revit-reset" data-reset="parts" hidden>сбросить</a>
+      </div>
       <div id="revit-plan-parts"></div>
-      <label class="field" style="margin-top:10px">Секция</label>
+      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:10px">
+        <label class="field" style="margin:0">Секция</label>
+        <a href="#" class="revit-reset" data-reset="sections" hidden>сбросить</a>
+      </div>
       <div id="revit-plan-sections"></div>
-      <label class="field" style="margin-top:10px">Категория</label>
+      <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:10px">
+        <label class="field" style="margin:0">Категория</label>
+        <a href="#" class="revit-reset" data-reset="categories" hidden>сбросить</a>
+      </div>
       <div id="revit-plan-categories" style="max-height:24vh; overflow:auto"></div>
     </div>
     <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column">
@@ -4212,6 +4230,8 @@
           <button type="button" class="view-mode-btn active" data-mfr-mode="2d">2D</button>
           <button type="button" class="view-mode-btn" data-mfr-mode="3d">3D</button>
         </div>
+        <button class="btn btn-sm btn-secondary" id="revit-reset-all"
+                style="flex:0 0 auto" hidden>Сбросить фильтры</button>
         <button class="btn btn-sm btn-secondary" id="revit-colors-open"
                 style="flex:0 0 auto" title="Цветовая схема модели">Цвета</button>
         <button class="btn btn-sm btn-secondary" id="revit-plan-fit"

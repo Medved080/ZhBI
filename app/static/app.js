@@ -847,12 +847,19 @@ async function applyRolePermissions() {
     btn.style.display = можно ? "" : "none";
     if (можно && !первоеДоступное) первоеДоступное = режим;
   }
-  // Уйти НЕ на «Модель», а на первое доступное. С появлением типов объекта
-  // «Модель» перестала быть всегда доступной: на объекте МФР её нет вовсе,
-  // и прежний безусловный переход оставлял бы человека на пустом экране.
+  // Уйти НЕ на «Модель», а на запомненное, если оно доступно, иначе на
+  // первое доступное. С появлением типов объекта «Модель» перестала быть
+  // всегда доступной: на объекте МФР её нет вовсе, и прежний безусловный
+  // переход оставлял бы человека на пустом экране.
   const текущееДоступно = рабочиеМеста.some(
     ([, раздел, режим]) => режим === workspace && can(раздел, "read"));
-  if (!текущееДоступно && первоеДоступное) setWorkspace(первоеДоступное);
+  if (!текущееДоступно) {
+    const запомненное = вспомнить(WS_KEY);
+    const годится = рабочиеМеста.some(
+      ([, раздел, режим]) => режим === запомненное && can(раздел, "read"));
+    const цель = годится ? запомненное : первоеДоступное;
+    if (цель) setWorkspace(цель);
+  }
   // Список из одного пункта — обманка: он предлагает выбор, которого нет.
   // Роли без единого АРМ переключатель не показываем вовсе (в ряду кнопок
   // такого вопроса не стояло — там оставалась одна нажатая «Модель»).
@@ -5050,9 +5057,25 @@ const workspaceLabel = document.getElementById("workspace-label");
 // пришлось.
 let workspace = "model";
 
+// Рабочее место и режим показа модели переживают перезагрузку страницы.
+// В localStorage, а не на сервере: это не настройка учётной записи, а
+// «где я только что был», и у одного человека на двух вкладках оно
+// законно разное. Объект помнит сервер (/me/last-object) — он общий для
+// всех вкладок и вправду принадлежит пользователю.
+const WS_KEY = "zhbi.workspace";
+const MFR_MODE_KEY = "zhbi.mfrMode";
+
+function запомнить(ключ, значение) {
+  try { localStorage.setItem(ключ, значение); } catch (e) { /* приватный режим */ }
+}
+function вспомнить(ключ) {
+  try { return localStorage.getItem(ключ); } catch (e) { return null; }
+}
+
 function setWorkspace(ws) {
   if (ws === workspace) return;
   workspace = ws;
+  запомнить(WS_KEY, ws);
   const picker = ws === "picker";
   const foreman = ws === "foreman";
   // Рабочее место МФР показывается ВМЕСТО схемы: у модели общие координаты
@@ -26619,9 +26642,18 @@ document.getElementById("revit-review-apply").addEventListener("click", async ()
 // у чертежа — свои, и совмещать их без привязки нельзя. Показ по этажам:
 // в объекте под тридцать тысяч элементов, на этаже — около тысячи.
 
-const revitPlanState = { objectId: null, levelId: null, sectionId: null,
-                         part: null, category: null, filters: null, data: null,
-                         view: null };
+// Отбор МНОЖЕСТВЕННЫЙ: в каждой группе набор выбранных значений. Пустой
+// набор = отбор по этой группе снят. Так «показать два этажа» и «показать
+// всё» выражаются одним и тем же механизмом, без особого пункта «все».
+const revitPlanState = { objectId: null, filters: null, data: null, view: null,
+                         levels: new Set(), sections: new Set(),
+                         parts: new Set(), categories: new Set() };
+
+const REVIT_GROUPS = ["levels", "sections", "parts", "categories"];
+
+function revitFilterActive() {
+  return REVIT_GROUPS.some((g) => revitPlanState[g].size > 0);
+}
 
 // Цвет привязан к ИМЕНИ категории, а не к её номеру в текущей выборке.
 // По номеру было так: отфильтровал двери — индексы съехали, и стены
@@ -26655,9 +26687,16 @@ function darken(hex, k = 0.55) {
 async function openMfrWorkspace() {
   if (revitPlanState.objectId === state.objectId && revitPlanState.data) return;
   revitPlanState.objectId = state.objectId;
-  revitPlanState.levelId = null; revitPlanState.sectionId = null;
-  revitPlanState.part = null; revitPlanState.category = null;
+  for (const g of REVIT_GROUPS) revitPlanState[g].clear();
   document.getElementById("revit-plan-card").textContent = "Нажмите на элемент плана.";
+  // Режим показа восстанавливается ДО загрузки: иначе план успевает
+  // отрисоваться в 2D, а потом дёргается в 3D на глазах у человека.
+  const запомненныйРежим = вспомнить(MFR_MODE_KEY);
+  if (запомненныйРежим) {
+    for (const b of document.querySelectorAll("#mfr-view-switch .view-mode-btn")) {
+      b.classList.toggle("active", b.dataset.mfrMode === запомненныйРежим);
+    }
+  }
   await loadRevitColors();      // раньше отбора: план рисуется сразу после него
   await loadRevitPlanFilters();
 }
@@ -26683,10 +26722,9 @@ async function loadRevitPlanFilters() {
   // Строки «без этажа» и «без секции» показываются ВСЕГДА, когда такие
   // элементы есть: на реальной выгрузке это 120 и 4307 штук, и молчаливое
   // исчезновение четырёх тысяч элементов со схемы — худший вид ошибки.
-  // «Все этажи» первой строкой: в 3D это единственный осмысленный вид —
-  // здание целиком, — а в 2D полезно как «показать всё, что есть».
-  const этажи = [`<div class="revit-pick" data-kind="level" data-id="all">все этажи
-      <span style="float:right;color:var(--color-text-muted)">${всего}</span></div>`];
+  // Отдельной строки «все этажи» нет: снятый отбор и означает «все», а
+  // два способа сказать одно и то же расходятся при первой же правке.
+  const этажи = [];
   этажи.push(...f.levels.filter((l) => l.elements > 0).map((l) =>
     `<div class="revit-pick" data-kind="level" data-id="${l.id}"
        title="${escapeHtml(l.name || l.key)}">${escapeHtml(l.title || l.key)}
@@ -26715,35 +26753,44 @@ async function loadRevitPlanFilters() {
     `<div class="revit-pick" data-kind="category" data-id="${escapeHtml(c.category || "")}">${escapeHtml(c.category || "—")}
       <span style="float:right;color:var(--color-text-muted)">${c.elements}</span></div>`).join("");
 
+  // При первом открытии показываем один этаж, а не весь объект: без
+  // отбора это под тридцать тысяч контуров друг на друге — и медленно, и
+  // читать нечего. Дальше человек снимает отбор сам, одной ссылкой.
   const первый = f.levels.find((l) => l.elements > 0);
-  if (первый) { revitPlanState.levelId = первый.id; await loadRevitPlanElements(); }
-  else { revitPlanStatus(""); }
+  if (первый && !revitFilterActive()) revitPlanState.levels.add(String(первый.id));
   markRevitPicks();
+  if (первый) await loadRevitPlanElements();
+  else revitPlanStatus("");
 }
 
 function markRevitPicks() {
   document.querySelectorAll(".revit-pick").forEach((el) => {
     const kind = el.dataset.kind, id = el.dataset.id;
-    const active =
-      (kind === "level" && (id === "all" ? revitPlanState.levelId === null
-                                        : String(revitPlanState.levelId) === id)) ||
-      (kind === "section" && String(revitPlanState.sectionId) === id) ||
-      (kind === "part" && revitPlanState.part === id) ||
-      (kind === "category" && revitPlanState.category === id);
-    el.classList.toggle("revit-pick-on", !!active);
+    const набор = { level: "levels", section: "sections",
+                    part: "parts", category: "categories" }[kind];
+    el.classList.toggle("revit-pick-on", !!набор && revitPlanState[набор].has(id));
   });
+  // «Сбросить» показывается только там, где есть что сбрасывать: ссылка,
+  // которая ничего не делает, читается как сломанная.
+  for (const g of REVIT_GROUPS) {
+    const ссылка = document.querySelector(`.revit-reset[data-reset="${g}"]`);
+    if (ссылка) ссылка.hidden = revitPlanState[g].size === 0;
+  }
+  const общая = document.getElementById("revit-reset-all");
+  if (общая) общая.hidden = !revitFilterActive();
 }
 
 document.getElementById("mfr-workspace").addEventListener("click", async (e) => {
   const pick = e.target.closest(".revit-pick");
   if (!pick) return;
   const { kind, id } = pick.dataset;
-  // Повторное нажатие СНИМАЕТ фильтр — кроме этажа: план без этажа это
-  // все двадцать восемь тысяч контуров друг на друге, читать нечего.
-  if (kind === "level") revitPlanState.levelId = (id === "all") ? null : Number(id);
-  if (kind === "section") revitPlanState.sectionId = String(revitPlanState.sectionId) === id ? null : Number(id);
-  if (kind === "part") revitPlanState.part = revitPlanState.part === id ? null : id;
-  if (kind === "category") revitPlanState.category = revitPlanState.category === id ? null : id;
+  const набор = { level: "levels", section: "sections",
+                  part: "parts", category: "categories" }[kind];
+  if (!набор) return;
+  // Нажатие ДОБАВЛЯЕТ и УБИРАЕТ значение: так набирается «этажи 3 и 4», а
+  // повторное нажатие по последнему выбранному снимает отбор целиком.
+  if (revitPlanState[набор].has(id)) revitPlanState[набор].delete(id);
+  else revitPlanState[набор].add(id);
   markRevitPicks();
   await loadRevitPlanElements();
 });
@@ -26751,10 +26798,10 @@ document.getElementById("mfr-workspace").addEventListener("click", async (e) => 
 async function loadRevitPlanElements() {
   const s = revitPlanState;
   const q = new URLSearchParams({ object_id: s.objectId });
-  if (s.levelId !== null) q.set("level_id", s.levelId);
-  if (s.sectionId !== null) q.set("section_id", s.sectionId);
-  if (s.part) q.set("part", s.part);
-  if (s.category) q.set("category", s.category);
+  for (const id of s.levels) q.append("level_id", id);
+  for (const id of s.sections) q.append("section_id", id);
+  for (const код of s.parts) q.append("part", код);
+  for (const имя of s.categories) q.append("category", имя);
   revitPlanStatus("Загрузка плана…");
   const res = await fetch("/revit-plan/elements?" + q.toString());
   if (!res.ok) { revitPlanStatus("Не удалось получить план", true); return; }
@@ -26908,6 +26955,7 @@ document.getElementById("mfr-view-switch").addEventListener("click", async (e) =
 
 function applyMfrMode() {
   const трёхмерный = mfrMode() === "3d";
+  запомнить(MFR_MODE_KEY, трёхмерный ? "3d" : "2d");
   document.getElementById("revit-plan-canvas").style.display = трёхмерный ? "none" : "";
   document.getElementById("mfr-3d-canvas").style.display = трёхмерный ? "" : "none";
   document.getElementById("revit-plan-fit").style.display = трёхмерный ? "none" : "";
@@ -26952,8 +27000,7 @@ async function buildMfr3D() {
   }
   // Ключ отбора: пересобирать сцену на каждое переключение вкладки незачем,
   // а на смену этажа — обязательно.
-  const ключ = JSON.stringify([revitPlanState.levelId, revitPlanState.sectionId,
-                               revitPlanState.part, revitPlanState.category]);
+  const ключ = JSON.stringify(REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()));
   if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
 
   revitPlanStatus(`Сборка 3D: ${data.elements.length} элементов…`);
@@ -27162,6 +27209,21 @@ function renderRevitColorsDialog() {
      </div>`;
   }).join("") || "<div class='hint-text'>Категорий пока нет — загрузите выгрузку.</div>";
 }
+
+document.getElementById("mfr-workspace").addEventListener("click", async (e) => {
+  const ссылка = e.target.closest(".revit-reset");
+  if (!ссылка) return;
+  e.preventDefault();
+  revitPlanState[ссылка.dataset.reset].clear();
+  markRevitPicks();
+  await loadRevitPlanElements();
+});
+
+document.getElementById("revit-reset-all").addEventListener("click", async () => {
+  for (const g of REVIT_GROUPS) revitPlanState[g].clear();
+  markRevitPicks();
+  await loadRevitPlanElements();
+});
 
 document.getElementById("revit-colors-open").addEventListener("click", () => {
   renderRevitColorsDialog();
