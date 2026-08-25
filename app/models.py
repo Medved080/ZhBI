@@ -489,3 +489,7 @@ class RevitImportResult(BaseModel):
     # молчаливым.
     sections_by_geometry: int = 0
     sections_unknown: int = 0
+    # Элементы, у которых секция из модели не совпадает с зоной: параметр
+    # оставлен главным, но при отборе по секции они окажутся в чужой
+    # половине дома, и знать об этом надо.
+    sections_conflicting: int = 0

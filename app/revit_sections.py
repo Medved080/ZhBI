@@ -132,11 +132,31 @@ def fill_missing(conn, object_id: int) -> dict:
             continue
 
     if not известные:
-        return {"назначено": 0, "осталось": 0, "зон": 0}
+        return {"назначено": 0, "осталось": 0, "зон": 0, "конфликтов": 0}
 
     зоны = build_zones(известные)
     коды = {row["code"]: row["id"] for row in conn.execute(
         "SELECT id, code FROM object_sections WHERE object_id = ?", (object_id,))}
+
+    # Расхождение параметра с зоной. Не исправляем — параметр остаётся
+    # главным, — но СЧИТАЕМ: на реальном объекте 448 элементов несут
+    # секцию С02, а стоят в зоне С01, и при отборе по секции они
+    # показываются в чужой половине дома. Молча это выглядит как ошибка
+    # программы, хотя это данные модели, и адресат у неё — проектировщик.
+    конфликтов = 0
+    for row in conn.execute(
+        "SELECT s.code AS code, e.outline_json AS outline FROM revit_elements e "
+        "JOIN object_sections s ON s.id = e.section_id "
+        "WHERE e.object_id = ? AND e.is_current = 1 AND e.outline_json IS NOT NULL "
+        "AND e.section_source = 'параметр'", (object_id,),
+    ):
+        try:
+            контур = json.loads(row["outline"])
+        except (TypeError, ValueError):
+            continue
+        по_зоне = section_at(зоны, контур)
+        if по_зоне and по_зоне != row["code"]:
+            конфликтов += 1
 
     правки = []
     осталось = 0
@@ -163,4 +183,5 @@ def fill_missing(conn, object_id: int) -> dict:
         conn.executemany(
             "UPDATE revit_elements SET section_id = ?, section_source = 'геометрия', "
             "updated_at = datetime('now') WHERE id = ?", правки)
-    return {"назначено": len(правки), "осталось": осталось, "зон": len(зоны)}
+    return {"назначено": len(правки), "осталось": осталось, "зон": len(зоны),
+            "конфликтов": конфликтов}

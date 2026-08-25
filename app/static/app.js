@@ -26633,7 +26633,13 @@ document.getElementById("revit-review-apply").addEventListener("click", async ()
       + (body.sections_by_geometry
          ? ` Секция определена геометрически у ${body.sections_by_geometry}` : "")
       + (body.sections_unknown ? `, без секции осталось ${body.sections_unknown}` : "")
-      + (body.sections_by_geometry || body.sections_unknown ? "." : "");
+      + (body.sections_by_geometry || body.sections_unknown ? "." : "")
+      // Расхождение параметра с зоной — не наша ошибка и не повод её
+      // прятать: при отборе по секции такие элементы окажутся в чужой
+      // половине дома, и человек должен знать почему.
+      + (body.sections_conflicting
+         ? ` У ${body.sections_conflicting} элементов секция из модели не совпадает`
+           + ` с их расположением — оставлена как в модели.` : "");
     revitPending = null;
     revitReviewBackdrop.classList.remove("open");
     revitBackdrop.classList.remove("open");

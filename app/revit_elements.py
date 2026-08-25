@@ -303,7 +303,8 @@ def apply(conn, object_id: int, packages, analysis: dict) -> dict:
     return {"elements": written, "rooms": rooms_written,
             "retired": len(retired), "flats": flats,
             "sections_by_geometry": sections["назначено"],
-            "sections_unknown": sections["осталось"]}
+            "sections_unknown": sections["осталось"],
+            "sections_conflicting": sections["конфликтов"]}
 
 
 def rebuild_flats(conn, object_id: int) -> int:
