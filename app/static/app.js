@@ -26349,6 +26349,7 @@ function setRevitStatus(text, isError) {
 
 document.getElementById("btn-upload-revit").addEventListener("click", async () => {
   revitFileInput.value = "";
+  renderRevitFileList();
   setRevitStatus("", false);
   document.getElementById("revit-known").textContent = "";
   const sel = document.getElementById("revit-object");
@@ -26359,6 +26360,25 @@ document.getElementById("btn-upload-revit").addEventListener("click", async () =
 });
 document.getElementById("revit-cancel").addEventListener("click",
   () => revitBackdrop.classList.remove("open"));
+
+// Что выбрано — своей строкой: родная подпись поля в узкой колонке шага
+// обрезается до «Фа...ан» и бесполезна и до выбора, и после.
+function renderRevitFileList() {
+  const files = Array.from(revitFileInput.files || []);
+  const box = document.getElementById("revit-file-list");
+  if (!files.length) {
+    box.textContent = "Файлы не выбраны";
+    box.style.color = "var(--color-text-muted)";
+    return;
+  }
+  box.style.color = "var(--color-text)";
+  box.innerHTML = files.map((f) =>
+    `<div>• ${escapeHtml(f.name)} <span style="color:var(--color-text-muted)">${
+      (f.size / 1048576).toFixed(1)} МБ</span></div>`).join("");
+}
+revitFileInput.addEventListener("change", renderRevitFileList);
+document.getElementById("revit-file-pick").addEventListener("click",
+  () => revitFileInput.click());
 document.getElementById("revit-review-cancel").addEventListener("click", () => {
   revitReviewBackdrop.classList.remove("open");
   revitPending = null;
@@ -26502,3 +26522,209 @@ document.getElementById("revit-review-apply").addEventListener("click", async ()
     btn.disabled = false;
   }
 });
+
+// ==================== ПЛАН МОДЕЛИ REVIT (2026-08-25) ====================
+// Отдельное окно от обычной схемы: координаты у модели общие (площадочные),
+// у чертежа — свои, и совмещать их без привязки нельзя. Показ по этажам:
+// в объекте под тридцать тысяч элементов, на этаже — около тысячи.
+
+const revitPlanBackdrop = document.getElementById("revit-plan-backdrop");
+const revitPlanState = { objectId: null, levelId: null, sectionId: null,
+                         part: null, category: null, filters: null, data: null,
+                         view: null };
+
+// Цвета категорий — из палитры приложения, по кругу. Категорий у модели
+// около десятка, и запоминать их пользователю не нужно: рядом легенда.
+const REVIT_CAT_COLORS = ["#2f6f4f", "#8a6d1f", "#3a5f8a", "#7a3f6a",
+                          "#4a7a7a", "#8a4a2f", "#5a5a8a", "#6a7a3a"];
+
+document.getElementById("btn-revit-plan").addEventListener("click", async () => {
+  revitPlanState.objectId = state.objectId;
+  revitPlanState.levelId = null; revitPlanState.sectionId = null;
+  revitPlanState.part = null; revitPlanState.category = null;
+  revitPlanBackdrop.classList.add("open");
+  document.getElementById("revit-plan-card").textContent = "Нажмите на элемент плана.";
+  await loadRevitPlanFilters();
+});
+document.getElementById("revit-plan-close").addEventListener("click",
+  () => revitPlanBackdrop.classList.remove("open"));
+
+function revitPlanStatus(text, isError) {
+  const el = document.getElementById("revit-plan-status");
+  el.textContent = text;
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+async function loadRevitPlanFilters() {
+  revitPlanStatus("Загрузка справочников…");
+  const res = await fetch(`/revit-plan/filters?object_id=${revitPlanState.objectId}`);
+  if (!res.ok) { revitPlanStatus("Не удалось получить состав модели", true); return; }
+  const f = await res.json();
+  revitPlanState.filters = f;
+
+  const всего = (f.parts || []).reduce((s, p) => s + p.elements, 0);
+  document.getElementById("revit-plan-head").textContent = всего
+    ? `Элементов ${всего}, этажей ${f.levels.length}, секций ${f.sections.length}`
+    : "Для этого объекта выгрузки из Revit ещё не загружались.";
+
+  // Строки «без этажа» и «без секции» показываются ВСЕГДА, когда такие
+  // элементы есть: на реальной выгрузке это 120 и 4307 штук, и молчаливое
+  // исчезновение четырёх тысяч элементов со схемы — худший вид ошибки.
+  const этажи = f.levels.filter((l) => l.elements > 0).map((l) =>
+    `<div class="revit-pick" data-kind="level" data-id="${l.id}">${escapeHtml(l.key)}
+      <span style="float:right;color:var(--color-text-muted)">${l.elements}</span>
+      ${l.elevation_suspect ? ' <span title="отметке верить нельзя">⚠</span>' : ""}</div>`);
+  if (f.without_level) {
+    этажи.push(`<div class="revit-pick" data-kind="level" data-id="0">без этажа
+      <span style="float:right;color:var(--color-danger)">${f.without_level}</span></div>`);
+  }
+  document.getElementById("revit-plan-levels").innerHTML = этажи.join("") || "<div class='hint-text'>нет</div>";
+
+  document.getElementById("revit-plan-parts").innerHTML = (f.parts || []).map((p) =>
+    `<div class="revit-pick" data-kind="part" data-id="${escapeHtml(p.code)}">${escapeHtml(p.code)}
+      <span style="float:right;color:var(--color-text-muted)">${p.elements}</span></div>`).join("");
+
+  const секции = f.sections.filter((s) => s.elements > 0).map((s) =>
+    `<div class="revit-pick" data-kind="section" data-id="${s.id}">${escapeHtml(s.code)}
+      <span style="float:right;color:var(--color-text-muted)">${s.elements}</span></div>`);
+  if (f.without_section) {
+    секции.push(`<div class="revit-pick" data-kind="section" data-id="0">без секции
+      <span style="float:right;color:var(--color-danger)">${f.without_section}</span></div>`);
+  }
+  document.getElementById("revit-plan-sections").innerHTML = секции.join("");
+
+  document.getElementById("revit-plan-categories").innerHTML = (f.categories || []).map((c) =>
+    `<div class="revit-pick" data-kind="category" data-id="${escapeHtml(c.category || "")}">${escapeHtml(c.category || "—")}
+      <span style="float:right;color:var(--color-text-muted)">${c.elements}</span></div>`).join("");
+
+  const первый = f.levels.find((l) => l.elements > 0);
+  if (первый) { revitPlanState.levelId = первый.id; await loadRevitPlanElements(); }
+  else { revitPlanStatus(""); }
+  markRevitPicks();
+}
+
+function markRevitPicks() {
+  document.querySelectorAll(".revit-pick").forEach((el) => {
+    const kind = el.dataset.kind, id = el.dataset.id;
+    const active =
+      (kind === "level" && String(revitPlanState.levelId) === id) ||
+      (kind === "section" && String(revitPlanState.sectionId) === id) ||
+      (kind === "part" && revitPlanState.part === id) ||
+      (kind === "category" && revitPlanState.category === id);
+    el.classList.toggle("revit-pick-on", !!active);
+  });
+}
+
+document.getElementById("revit-plan-backdrop").addEventListener("click", async (e) => {
+  const pick = e.target.closest(".revit-pick");
+  if (!pick) return;
+  const { kind, id } = pick.dataset;
+  // Повторное нажатие СНИМАЕТ фильтр — кроме этажа: план без этажа это
+  // все двадцать восемь тысяч контуров друг на друге, читать нечего.
+  if (kind === "level") revitPlanState.levelId = Number(id);
+  if (kind === "section") revitPlanState.sectionId = String(revitPlanState.sectionId) === id ? null : Number(id);
+  if (kind === "part") revitPlanState.part = revitPlanState.part === id ? null : id;
+  if (kind === "category") revitPlanState.category = revitPlanState.category === id ? null : id;
+  markRevitPicks();
+  await loadRevitPlanElements();
+});
+
+async function loadRevitPlanElements() {
+  const s = revitPlanState;
+  const q = new URLSearchParams({ object_id: s.objectId });
+  if (s.levelId !== null) q.set("level_id", s.levelId);
+  if (s.sectionId !== null) q.set("section_id", s.sectionId);
+  if (s.part) q.set("part", s.part);
+  if (s.category) q.set("category", s.category);
+  revitPlanStatus("Загрузка плана…");
+  const res = await fetch("/revit-plan/elements?" + q.toString());
+  if (!res.ok) { revitPlanStatus("Не удалось получить план", true); return; }
+  const data = await res.json();
+  revitPlanState.data = data;
+  drawRevitPlan(data);
+  revitPlanStatus(`Показано ${data.elements.length} элементов`
+    + (data.truncated ? " (список обрезан)" : ""));
+}
+
+function drawRevitPlan(data) {
+  const box = document.getElementById("revit-plan-canvas");
+  if (!data.elements.length || !data.size) {
+    box.innerHTML = "<div class='hint-text' style='padding:16px'>Нет элементов по этому отбору.</div>";
+    document.getElementById("revit-plan-legend").textContent = "";
+    return;
+  }
+  const [w, h] = data.size;
+  // Y переворачивается: в модели он растёт вверх, в SVG — вниз.
+  const paths = data.elements.map((el) => {
+    const d = "M" + el["контур"].map((p) => `${p[0]} ${h - p[1]}`).join("L") + "Z";
+    const color = REVIT_CAT_COLORS[el["кат"] % REVIT_CAT_COLORS.length];
+    return `<path d="${d}" data-id="${el.id}" fill="${color}" fill-opacity="0.35"
+      stroke="${color}" stroke-width="${Math.max(w / 900, 20)}"
+      ${el["приб"] ? 'stroke-dasharray="' + Math.max(w / 300, 60) + '"' : ""}/>`;
+  });
+  revitPlanState.view = { x: 0, y: 0, w, h };
+  box.innerHTML = `<svg id="revit-plan-svg" viewBox="0 0 ${w} ${h}"
+    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${paths.join("")}</svg>`;
+
+  document.getElementById("revit-plan-legend").innerHTML =
+    (data.categories || []).map((name, i) =>
+      `<span style="margin-right:12px"><span style="display:inline-block;width:10px;height:10px;
+        background:${REVIT_CAT_COLORS[i % REVIT_CAT_COLORS.length]};margin-right:4px"></span>${escapeHtml(name)}</span>`
+    ).join("") + '<span style="margin-left:8px">пунктиром — габаритный контур</span>';
+
+  bindRevitPlanZoom(document.getElementById("revit-plan-svg"));
+}
+
+// Колесо — масштаб, перетаскивание — сдвиг. Через viewBox, а не CSS-трансформ:
+// толщина линий тогда остаётся в координатах модели и не «худеет» при
+// увеличении.
+function bindRevitPlanZoom(svg) {
+  const v = revitPlanState.view;
+  const apply = () => svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+  svg.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const k = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+    const r = svg.getBoundingClientRect();
+    const px = v.x + ((e.clientX - r.left) / r.width) * v.w;
+    const py = v.y + ((e.clientY - r.top) / r.height) * v.h;
+    v.x = px - (px - v.x) * k; v.y = py - (py - v.y) * k;
+    v.w *= k; v.h *= k;
+    apply();
+  }, { passive: false });
+  let drag = null;
+  svg.addEventListener("pointerdown", (e) => {
+    drag = { x: e.clientX, y: e.clientY };
+    svg.setPointerCapture(e.pointerId); svg.style.cursor = "grabbing";
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const r = svg.getBoundingClientRect();
+    v.x -= (e.clientX - drag.x) * (v.w / r.width);
+    v.y -= (e.clientY - drag.y) * (v.h / r.height);
+    drag = { x: e.clientX, y: e.clientY };
+    apply();
+  });
+  svg.addEventListener("pointerup", (e) => {
+    drag = null; svg.style.cursor = "grab"; svg.releasePointerCapture(e.pointerId);
+  });
+  svg.addEventListener("click", async (e) => {
+    const path = e.target.closest("path[data-id]");
+    if (!path) return;
+    await showRevitCard(Number(path.dataset.id));
+  });
+}
+
+async function showRevitCard(elementId) {
+  const box = document.getElementById("revit-plan-card");
+  box.textContent = "Загрузка…";
+  const res = await fetch(`/revit-plan/element?object_id=${revitPlanState.objectId}&element_id=${elementId}`);
+  if (!res.ok) { box.textContent = "Не удалось получить карточку"; return; }
+  const card = await res.json();
+  const строки = Object.entries(card)
+    .filter(([k, v]) => k !== "параметры" && k !== "id" && v !== null && v !== "" && v !== false)
+    .map(([k, v]) => `<div><span style="color:var(--color-text-muted)">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`);
+  const доп = Object.entries(card["параметры"] || {})
+    .map(([k, v]) => `<div><span style="color:var(--color-text-muted)">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`);
+  box.innerHTML = строки.join("") + (доп.length
+    ? `<div style="margin-top:8px;font-weight:500">Параметры Revit</div>` + доп.join("") : "");
+}

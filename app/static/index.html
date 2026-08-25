@@ -2431,6 +2431,11 @@
   .modal input[type="file"]::file-selector-button { padding: 8px 16px; }
   .error-text { color: var(--color-danger); font-size: 12px; margin-top: 8px; }
   .warning-text { color: #b8860b; font-size: 12px; margin-top: 6px; }
+  /* Пункты отбора на плане модели: строка-переключатель, а не чекбокс —
+     их десятки, и колонка галочек читалась бы хуже, чем список с числами. */
+  .revit-pick { padding:4px 8px; font-size:12px; cursor:pointer; border-bottom:1px solid var(--color-border-soft); }
+  .revit-pick:hover { background: var(--color-surface-alt); }
+  .revit-pick-on { background: var(--color-accent-soft); font-weight:500; }
   .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
 
   /* Требования к загружаемому файлу + кнопка образца — один и тот же блок
@@ -3952,6 +3957,7 @@
             <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
             <button id="btn-upload-revit" data-feature="drawings" data-feature-kind="write">Загрузить из Revit</button>
+            <button id="btn-revit-plan" data-feature="drawings" data-feature-kind="read">Модель из Revit</button>
             <button id="btn-export" data-feature="export" data-feature-kind="read">Экспорт в XLS</button>
             <button id="btn-export-pdf" data-feature="export" data-feature-kind="read">Экспорт в PDF</button>
             <button id="menu-history-import" data-feature="import_history" data-feature-kind="write">Импорт истории из XLS</button>
@@ -4478,7 +4484,19 @@
         <div class="bulk-edit-block-title"><span class="step-num">1</span>Выбрать объект и пакеты</div>
         <label class="object-field" style="margin-bottom:8px"><span>Загрузить в объект</span>
           <select id="revit-object"></select></label>
-        <input type="file" id="revit-file-input" accept=".json,.gz" multiple/>
+        <!-- Родная подпись поля («Файлы не выбраны», потом имена) в узкой
+             колонке шага обрезается до «Фа...ан» и не читается ни в одном
+             состоянии. Поэтому поле растянуто на всю ширину, а что выбрано —
+             своей строкой ниже, где есть место под несколько имён. -->
+        <!-- Само поле скрыто: рядом с его кнопкой браузер рисует свою
+             подпись («Файлы не выбраны» / имена), которая в узкой колонке
+             обрезается до «Фа...ран» и не читается ни в одном состоянии.
+             Управляем им своей кнопкой, а что выбрано — строкой ниже. -->
+        <input type="file" id="revit-file-input" accept=".json,.gz" multiple
+               style="position:absolute; width:1px; height:1px; opacity:0; pointer-events:none"/>
+        <button type="button" class="btn btn-secondary" id="revit-file-pick"
+                style="width:100%">Выбрать пакеты…</button>
+        <div class="hint-text" id="revit-file-list">Файлы не выбраны</div>
         <div class="hint-text" id="revit-known"></div>
       </div>
       <div class="bulk-edit-block">
@@ -4520,6 +4538,50 @@
       <div class="actions">
         <button class="btn btn-secondary" id="revit-review-cancel">Отменить</button>
         <button class="btn btn-primary" id="revit-review-apply">Применить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- План загруженной модели Revit. ОТДЕЛЬНОЕ окно, а не слой обычной
+     схемы: элементы модели лежат в общих координатах площадки, а элементы
+     чертежа — в координатах чертежа; наложить их без привязки нельзя, а
+     рисовать «как будто совместилось» значило бы показывать неправду.
+     Показ по ЭТАЖАМ — в объекте под тридцать тысяч элементов. -->
+<div class="modal-backdrop" id="revit-plan-backdrop">
+  <div class="modal modal-sticky" style="max-width:1180px">
+    <div class="modal-sticky-head">
+      <h2>Модель из Revit</h2>
+      <div class="hint-text" id="revit-plan-head"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div style="display:flex; gap:14px; align-items:flex-start">
+        <div style="flex:0 0 240px">
+          <label class="field">Этаж</label>
+          <div id="revit-plan-levels" style="max-height:300px; overflow:auto;
+               border:1px solid var(--color-border); border-radius:6px"></div>
+          <label class="field" style="margin-top:10px">Раздел</label>
+          <div id="revit-plan-parts"></div>
+          <label class="field" style="margin-top:10px">Секция</label>
+          <div id="revit-plan-sections"></div>
+          <label class="field" style="margin-top:10px">Категория</label>
+          <div id="revit-plan-categories" style="max-height:180px; overflow:auto"></div>
+        </div>
+        <div style="flex:1 1 auto; min-width:0">
+          <div id="revit-plan-canvas" style="border:1px solid var(--color-border);
+               border-radius:6px; background:var(--color-surface); height:460px; overflow:hidden"></div>
+          <div class="hint-text" id="revit-plan-legend" style="margin-top:6px"></div>
+        </div>
+        <div style="flex:0 0 250px">
+          <label class="field">Элемент</label>
+          <div id="revit-plan-card" class="hint-text">Нажмите на элемент плана.</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="revit-plan-status" style="font-size:12px; color:var(--color-text-muted);"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="revit-plan-close">Закрыть</button>
       </div>
     </div>
   </div>

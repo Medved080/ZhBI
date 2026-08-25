@@ -71,7 +71,7 @@ from app.dxf_import import (
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
     save_uploaded_file,
 )
-from app import revit_import
+from app import revit_import, revit_plan
 from app.element_fields import (
     EDITABLE_FIELDS,
     FieldError,
@@ -5110,6 +5110,52 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
         },
     )
     return result
+
+
+@app.get("/revit-plan/filters")
+def revit_plan_filters(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Что есть у объекта из модели: этажи, секции, разделы, категории."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "drawings", "read")
+        return revit_plan.filters(conn, object_id)
+    finally:
+        conn.close()
+
+
+@app.get("/revit-plan/elements")
+def revit_plan_elements(
+    object_id: int,
+    level_id: Optional[int] = None,
+    section_id: Optional[int] = None,
+    part: Optional[str] = None,
+    category: Optional[str] = None,
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Контуры модели для плана. Показ идёт по этажам: в объекте под
+    тридцать тысяч элементов, и единственный осмысленный разрез — этаж."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "drawings", "read")
+        return revit_plan.elements(conn, object_id, level_id=level_id,
+                                   section_id=section_id, part=part,
+                                   category=category)
+    finally:
+        conn.close()
+
+
+@app.get("/revit-plan/element")
+def revit_plan_element(object_id: int, element_id: int,
+                       user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "drawings", "read")
+        data = revit_plan.card(conn, object_id, element_id)
+    finally:
+        conn.close()
+    if data is None:
+        raise HTTPException(status_code=404, detail="Элемент не найден")
+    return data
 
 
 @app.post("/import-revit/analyze", response_model=RevitAnalyzeResult)
