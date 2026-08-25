@@ -426,8 +426,9 @@ FEATURES = [
     Feature("revit_model", "Модель Revit",
             "План модели: этажи, секции, категории, карточка элемента",
             "Только показ: у элементов модели нет статусов, это другой контур учёта.",
-            ["GET /revit-plan/filters", "GET /revit-plan/elements", "GET /revit-plan/element"],
-            SCOPE_OBJECT, _все(READ)),
+            ["GET /revit-plan/filters", "GET /revit-plan/elements",
+             "GET /revit-plan/element", "GET/PUT /revit-plan/colors"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE)),
 ]
 
 # ======================= ПРИМЕНИМОСТЬ К ТИПАМ ОБЪЕКТА =======================

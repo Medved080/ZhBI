@@ -2433,9 +2433,17 @@
   .warning-text { color: #b8860b; font-size: 12px; margin-top: 6px; }
   /* Пункты отбора на плане модели: строка-переключатель, а не чекбокс —
      их десятки, и колонка галочек читалась бы хуже, чем список с числами. */
-  .revit-pick { padding:4px 8px; font-size:12px; cursor:pointer; border-bottom:1px solid var(--color-border-soft); }
+  .revit-pick { padding:4px 8px 4px 12px; font-size:12px; cursor:pointer;
+    border-bottom:1px solid var(--color-border-soft); border-left:4px solid transparent; }
   .revit-pick:hover { background: var(--color-surface-alt); }
-  .revit-pick-on { background: var(--color-accent-soft); font-weight:500; }
+  /* Выбранная строка должна оставаться выбранной ПОД КУРСОРОМ. У
+     `.revit-pick:hover` специфичность выше, чем у `.revit-pick-on`, и
+     наведение затирало фон выбора — становилось непонятно, нажатие
+     выберет или снимет. Отсюда два средства: правило для наведения на
+     выбранную строку и полоска слева, которую фон вообще не трогает. */
+  .revit-pick-on { background: var(--color-accent-soft); font-weight:500;
+    border-left-color: var(--color-primary); }
+  .revit-pick-on:hover { background: var(--color-accent-soft-hover); }
   .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
 
   /* Требования к загружаемому файлу + кнопка образца — один и тот же блок
@@ -4204,6 +4212,8 @@
           <button type="button" class="view-mode-btn active" data-mfr-mode="2d">2D</button>
           <button type="button" class="view-mode-btn" data-mfr-mode="3d">3D</button>
         </div>
+        <button class="btn btn-sm btn-secondary" id="revit-colors-open"
+                style="flex:0 0 auto" title="Цветовая схема модели">Цвета</button>
         <button class="btn btn-sm btn-secondary" id="revit-plan-fit"
                 style="flex:0 0 auto" title="Вернуть исходный масштаб">Вписать</button>
       </div>
@@ -4594,6 +4604,25 @@
         <button class="btn btn-secondary" id="revit-review-cancel">Отменить</button>
         <button class="btn btn-primary" id="revit-review-apply">Применить</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Цветовая схема модели. Цвет привязан к КАТЕГОРИИ Revit и хранится у
+     ОБЪЕКТА, а не у пользователя: люди смотрят на одно здание и обсуждают
+     его словами «серое — стены», своя раскраска у каждого сделала бы такой
+     разговор невозможным. -->
+<div class="modal-backdrop" id="revit-colors-backdrop">
+  <div class="modal" style="max-width:560px">
+    <h2>Цвета модели</h2>
+    <p class="hint-text">Шаблон задаёт всю схему разом; любой цвет можно
+      поправить отдельно — тогда схема считается своей.</p>
+    <div id="revit-colors-presets" style="display:flex; gap:8px; flex-wrap:wrap; margin:10px 0"></div>
+    <div id="revit-colors-list" style="max-height:46vh; overflow:auto"></div>
+    <div id="revit-colors-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="revit-colors-cancel">Отмена</button>
+      <button class="btn btn-primary" id="revit-colors-save">Сохранить</button>
     </div>
   </div>
 </div>

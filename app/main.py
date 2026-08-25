@@ -71,7 +71,7 @@ from app.dxf_import import (
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
     save_uploaded_file,
 )
-from app import revit_import, revit_plan
+from app import revit_colors, revit_import, revit_plan
 from app.features import KIND_LABELS, KIND_ZHBI, KINDS
 from app.element_fields import (
     EDITABLE_FIELDS,
@@ -5168,6 +5168,39 @@ def revit_plan_elements(
                                    category=category)
     finally:
         conn.close()
+
+
+@app.get("/revit-plan/colors")
+def revit_plan_colors(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Цветовая схема объекта плюс перечень шаблонов."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "revit_model", "read")
+        данные = revit_colors.scheme(conn, object_id)
+    finally:
+        conn.close()
+    данные["presets"] = revit_colors.presets_for_client()
+    данные["fallback"] = revit_colors.FALLBACK
+    return данные
+
+
+class RevitColorsIn(BaseModel):
+    preset: str = "custom"
+    colors: dict = {}
+
+
+@app.put("/revit-plan/colors")
+def revit_plan_colors_save(object_id: int, body: RevitColorsIn,
+                           user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "revit_model", "write")
+        данные = revit_colors.save(conn, object_id, body.preset, body.colors)
+    finally:
+        conn.close()
+    activity.log("revit_colors", user=user, entity_type="object", entity_id=object_id,
+                 new_value=данные["preset"], details={"цветов": len(данные["colors"])})
+    return данные
 
 
 @app.get("/revit-plan/element")

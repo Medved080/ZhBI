@@ -26623,17 +26623,25 @@ const revitPlanState = { objectId: null, levelId: null, sectionId: null,
                          part: null, category: null, filters: null, data: null,
                          view: null };
 
-// Цвета категорий — светлые пастельные, по кругу. Тёмная насыщенная
-// гамма на здании в тридцать тысяч элементов сливалась в чёрную массу:
-// на просвет читались только силуэт и перекрытия. Пастель разделяет
-// категории и не спорит со светлым фоном сцены.
-//
-// Обводка на плане — отдельным набором, темнее заливки на пару тонов:
-// пастельный контур на пастельном фоне не читался бы вовсе.
-const REVIT_CAT_COLORS = ["#a9c6dd", "#e0cfa8", "#c9b6dd", "#a8d9c6",
-                          "#e0b9a8", "#c9dda8", "#ddaec9", "#b6b9dd"];
-const REVIT_CAT_STROKES = ["#5b8bb0", "#b2965a", "#8f74b0", "#59b090",
-                           "#b27a5a", "#8fb05a", "#b06590", "#7478b0"];
+// Цвет привязан к ИМЕНИ категории, а не к её номеру в текущей выборке.
+// По номеру было так: отфильтровал двери — индексы съехали, и стены
+// поменяли цвет. Схема приезжает с сервера (app/revit_colors.py) и
+// хранится у объекта.
+let revitColors = { preset: "grey", colors: {}, presets: [], fallback: "#c8c8c8" };
+
+function revitFill(имя) {
+  return revitColors.colors[имя] || revitColors.fallback;
+}
+
+// Обводка на плане — та же заливка, притемнённая: считать её отдельным
+// набором пришлось бы дважды при каждой правке цвета, а светлый контур на
+// светлой заливке не читается вовсе.
+function darken(hex, k = 0.55) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+  if (!m) return "#888888";
+  const ch = (i) => Math.round(parseInt(m[i], 16) * k).toString(16).padStart(2, "0");
+  return `#${ch(1)}${ch(2)}${ch(3)}`;
+}
 
 // Открывается переключателем рабочих мест (setWorkspace), а не пунктом
 // меню: на объекте МФР это ЕДИНСТВЕННОЕ рабочее место, и прятать его в
@@ -26644,6 +26652,7 @@ async function openMfrWorkspace() {
   revitPlanState.levelId = null; revitPlanState.sectionId = null;
   revitPlanState.part = null; revitPlanState.category = null;
   document.getElementById("revit-plan-card").textContent = "Нажмите на элемент плана.";
+  await loadRevitColors();      // раньше отбора: план рисуется сразу после него
   await loadRevitPlanFilters();
 }
 
@@ -26673,7 +26682,8 @@ async function loadRevitPlanFilters() {
   const этажи = [`<div class="revit-pick" data-kind="level" data-id="all">все этажи
       <span style="float:right;color:var(--color-text-muted)">${всего}</span></div>`];
   этажи.push(...f.levels.filter((l) => l.elements > 0).map((l) =>
-    `<div class="revit-pick" data-kind="level" data-id="${l.id}">${escapeHtml(l.key)}
+    `<div class="revit-pick" data-kind="level" data-id="${l.id}"
+       title="${escapeHtml(l.name || l.key)}">${escapeHtml(l.title || l.key)}
       <span style="float:right;color:var(--color-text-muted)">${l.elements}</span>
       ${l.elevation_suspect ? ' <span title="отметке верить нельзя">⚠</span>' : ""}</div>`));
   if (f.without_level) {
@@ -26772,8 +26782,8 @@ function drawRevitPlan(data) {
   // Y переворачивается: в модели он растёт вверх, в SVG — вниз.
   const paths = data.elements.map((el) => {
     const d = "M" + el["контур"].map((p) => `${p[0]} ${h - p[1]}`).join("L") + "Z";
-    const color = REVIT_CAT_COLORS[el["кат"] % REVIT_CAT_COLORS.length];
-    const обводка = REVIT_CAT_STROKES[el["кат"] % REVIT_CAT_STROKES.length];
+    const color = revitFill((data.categories || [])[el["кат"]]);
+    const обводка = darken(color);
     return `<path d="${d}" data-id="${el.id}" fill="${color}" fill-opacity="0.55"
       stroke="${обводка}" stroke-width="${Math.max(w / 900, 20)}"
       ${el["приб"] ? 'stroke-dasharray="' + Math.max(w / 300, 60) + '"' : ""}/>`;
@@ -26788,8 +26798,8 @@ function drawRevitPlan(data) {
   document.getElementById("revit-plan-legend").innerHTML =
     (data.categories || []).map((name, i) =>
       `<span style="margin-right:12px"><span style="display:inline-block;width:10px;height:10px;
-        background:${REVIT_CAT_COLORS[i % REVIT_CAT_COLORS.length]};
-        border:1px solid ${REVIT_CAT_STROKES[i % REVIT_CAT_STROKES.length]};margin-right:4px"></span>${escapeHtml(name)}</span>`
+        background:${revitFill(name)};
+        border:1px solid ${darken(revitFill(name))};margin-right:4px"></span>${escapeHtml(name)}</span>`
     ).join("") + '<span style="margin-left:8px">пунктиром — габаритный контур</span>';
 
   bindRevitPlanZoom(document.getElementById("revit-plan-svg"));
@@ -26979,7 +26989,7 @@ async function buildMfr3D() {
   let верх = 0;
   for (const [кат, список] of поКатегориям) {
     const geometry = mergePositions(список);
-    const цвет = new THREE.Color(REVIT_CAT_COLORS[кат % REVIT_CAT_COLORS.length]);
+    const цвет = new THREE.Color(revitFill((data.categories || [])[кат]));
     const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: цвет }));
     scene.add(mesh);
     geometry.computeBoundingBox();
@@ -26994,11 +27004,30 @@ async function buildMfr3D() {
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
 
+  // `up` задаётся ДО создания управления. Если после — OrbitControls уже
+  // построил свою сферическую систему от Y, и вращение начинает
+  // «сопротивляться»: тянешь вбок, а модель уходит не туда. Это и было.
+  camera.up.set(0, 0, 1);          // Z — вверх, как в модели
+
+  const охват = Math.max(w, h, верх) || 1000;
+  // Взгляд с юго-запада сверху под ~30°: узнаваемая аксонометрия, в
+  // которой сразу читаются и высота, и обе стороны здания. Камера над
+  // серединой модели, а не над началом координат.
+  camera.position.set(w / 2 - охват * 0.9, h / 2 - охват * 0.9, верх + охват * 0.7);
+
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(w / 2, h / 2, верх / 2);
-  const охват = Math.max(w, h, верх) || 1000;
-  camera.position.set(w / 2 + охват, h / 2 - охват, верх + охват * 0.6);
-  camera.up.set(0, 0, 1);          // Z — вверх, как в модели
+  // Колесо крутит медленно на дальней камере: шаг наезда пропорционален
+  // расстоянию, а оно тут в десятки метров. Ускоряем и наезжаем В КУРСОР —
+  // так не приходится сначала приблизиться, потом отдельно доехать.
+  controls.zoomSpeed = 2.4;
+  controls.zoomToCursor = true;
+  controls.enableDamping = true;   // инерция: вращение перестаёт быть рывками
+  controls.dampingFactor = 0.12;
+  controls.screenSpacePanning = true;
+  // Ниже горизонта камера не опускается: смотреть на здание снизу сквозь
+  // землю не нужно, а «перевернуть мир» случайным движением легко.
+  controls.maxPolarAngle = Math.PI / 2;
   controls.update();
 
   mfr3d.scene = scene; mfr3d.camera = camera;
@@ -27038,3 +27067,84 @@ function disposeMfr3D() {
   Object.assign(mfr3d, { scene: null, camera: null, renderer: null,
                          controls: null, loop: null, key: null });
 }
+
+// ---------- настройка цветовой схемы модели ----------
+
+async function loadRevitColors() {
+  try {
+    revitColors = await api(`/revit-plan/colors?object_id=${revitPlanState.objectId}`);
+  } catch (e) {
+    // Без схемы показывать всё равно надо: серый по умолчанию честнее
+    // пустого экрана, а сообщение объяснит, почему цвета не те.
+    console.warn("Не удалось получить цветовую схему:", e.message);
+  }
+}
+
+function renderRevitColorsDialog() {
+  const категории = (revitPlanState.filters?.categories || [])
+    .map((c) => c.category).filter(Boolean);
+  // Категории берутся из СОСТАВА ОБЪЕКТА, а не из текущего отбора: иначе,
+  // отфильтровав двери, их цвет стало бы негде поправить.
+  document.getElementById("revit-colors-presets").innerHTML =
+    (revitColors.presets || []).map((p) =>
+      `<button class="btn btn-sm ${revitColors.preset === p.key ? "btn-primary" : "btn-secondary"}"
+        data-preset="${p.key}" title="${escapeHtml(p.hint)}">${escapeHtml(p.title)}</button>`).join("")
+    + `<span class="hint-text" style="align-self:center">${
+        revitColors.preset === "custom" ? "сейчас: своя схема" : ""}</span>`;
+
+  document.getElementById("revit-colors-list").innerHTML = категории.map((имя) =>
+    `<label style="display:flex; align-items:center; gap:10px; padding:4px 0">
+       <input type="color" data-cat="${escapeHtml(имя)}" value="${revitFill(имя)}"
+              style="width:44px; height:26px; padding:0; border:1px solid var(--color-border)"/>
+       <span style="flex:1 1 auto">${escapeHtml(имя)}</span>
+       <span class="hint-text">${revitFill(имя)}</span>
+     </label>`).join("") || "<div class='hint-text'>Категорий пока нет — загрузите выгрузку.</div>";
+}
+
+document.getElementById("revit-colors-open").addEventListener("click", () => {
+  renderRevitColorsDialog();
+  document.getElementById("revit-colors-status").textContent = "";
+  document.getElementById("revit-colors-backdrop").classList.add("open");
+});
+document.getElementById("revit-colors-cancel").addEventListener("click",
+  () => document.getElementById("revit-colors-backdrop").classList.remove("open"));
+
+document.getElementById("revit-colors-presets").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-preset]");
+  if (!btn) return;
+  const шаблон = (revitColors.presets || []).find((p) => p.key === btn.dataset.preset);
+  if (!шаблон) return;
+  revitColors = { ...revitColors, preset: шаблон.key, colors: { ...шаблон.colors } };
+  renderRevitColorsDialog();
+});
+
+document.getElementById("revit-colors-list").addEventListener("input", (e) => {
+  const inp = e.target.closest("input[data-cat]");
+  if (!inp) return;
+  // Правка любого цвета делает схему СВОЕЙ: показывать «Оттенки серого»
+  // там, где серым осталась половина, — враньё.
+  revitColors = { ...revitColors, preset: "custom",
+                  colors: { ...revitColors.colors, [inp.dataset.cat]: inp.value } };
+  renderRevitColorsDialog();
+});
+
+document.getElementById("revit-colors-save").addEventListener("click", async () => {
+  const status = document.getElementById("revit-colors-status");
+  try {
+    const итог = await api(`/revit-plan/colors?object_id=${revitPlanState.objectId}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preset: revitColors.preset, colors: revitColors.colors }),
+    });
+    revitColors = { ...revitColors, ...итог };
+    document.getElementById("revit-colors-backdrop").classList.remove("open");
+    // Перерисовываем оба режима: цвет сменился и на плане, и в сцене.
+    if (revitPlanState.data) {
+      drawRevitPlan(revitPlanState.data);
+      mfr3d.key = null;
+      applyMfrMode();
+    }
+  } catch (e) {
+    status.style.color = "var(--color-danger)";
+    status.textContent = e.message || "Не удалось сохранить";
+  }
+});
