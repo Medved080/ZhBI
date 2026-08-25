@@ -71,12 +71,26 @@ def collect(packages) -> tuple:
             # прыгало бы от порядка загрузки разделов.
             entry["aliases"][(package.section_code, level.name)] = level.elevation_mm
 
-    # Разброс отметок одного этажа между алиасами означает, что отметке
-    # верить нельзя (см. комментарий в schema.sql к elevation_suspect).
+    # Отметке нельзя верить, только если она расходится ВНУТРИ ОДНОГО
+    # РАЗДЕЛА: два уровня с одним номером этажа на разных отметках в одной
+    # модели — это ошибка модели (в АР так нашлись 11 лишних уровней с
+    # именем «21 этаж»).
+    #
+    # Расхождение МЕЖДУ разделами — не дефект, а норма: КР ставит уровень
+    # по верху плиты, АР по чистому полу, разница систематическая (на ЖУ30
+    # это 1970 мм на всех надземных этажах). Прежняя проверка не различала
+    # эти случаи и после загрузки второго раздела помечала подозрительными
+    # ВСЕ этажи разом — предупреждение, которое стоит на каждой строке, не
+    # значит ничего.
     for entry in levels.values():
-        values = [v for v in entry["aliases"].values() if v is not None]
-        if len(values) > 1 and max(values) - min(values) > 1.0:
-            entry["suspect"] = True
+        по_разделам = {}
+        for (section_code, _имя), отметка in entry["aliases"].items():
+            if отметка is not None:
+                по_разделам.setdefault(section_code, []).append(отметка)
+        entry["suspect"] = any(
+            max(значения) - min(значения) > 1.0
+            for значения in по_разделам.values() if len(значения) > 1
+        )
 
     return sections, levels
 
@@ -139,17 +153,28 @@ def analyze(conn, object_id: int, packages) -> dict:
                 new_aliases.append({"раздел": section_code, "имя": name,
                                     "этаж": entry["key"]})
 
-    # Расхождение отметок одного этажа между разделами — НЕ ошибка (верх
-    # плиты против чистого пола), но пользователь должен его видеть: это
-    # единственный признак того, что разделы моделируют этаж по-разному.
+    # Расхождения показываются РАЗНЫМИ строками, потому что означают
+    # разное: внутри раздела это ошибка модели, между разделами — обычная
+    # разница в том, где раздел ставит уровень.
     elevation_gaps = []
     for entry in found_levels.values():
-        values = [v for v in entry["aliases"].values() if v is not None]
-        if len(values) > 1 and max(values) - min(values) > 1.0:
+        по_разделам = {}
+        for (section_code, _имя), отметка in entry["aliases"].items():
+            if отметка is not None:
+                по_разделам.setdefault(section_code, []).append(отметка)
+        for section_code, значения in по_разделам.items():
+            if len(значения) > 1 and max(значения) - min(значения) > 1.0:
+                elevation_gaps.append({
+                    "этаж": entry["key"], "вид": "внутри раздела",
+                    "разброс_мм": round(max(значения) - min(значения), 1),
+                    "разделы": [section_code],
+                })
+        средние = {к: sum(v) / len(v) for к, v in по_разделам.items()}
+        if len(средние) > 1 and max(средние.values()) - min(средние.values()) > 1.0:
             elevation_gaps.append({
-                "этаж": entry["key"],
-                "разброс_мм": round(max(values) - min(values), 1),
-                "разделы": sorted({s for s, _ in entry["aliases"]}),
+                "этаж": entry["key"], "вид": "между разделами",
+                "разброс_мм": round(max(средние.values()) - min(средние.values()), 1),
+                "разделы": sorted(средние),
             })
 
     warnings = []

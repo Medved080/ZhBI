@@ -480,6 +480,41 @@ def _fill_activity_categories(conn: sqlite3.Connection) -> str:
             + (f", в «Прочее» ушло: {прочее}" if прочее else ""))
 
 
+def _recount_level_elevation_suspect(conn: sqlite3.Connection) -> str:
+    """Пересчитать признак «отметке верить нельзя» у этажей объекта.
+
+    Первая версия признака сравнивала отметки этажа по ВСЕМ разделам сразу
+    и потому помечала подозрительными все этажи разом, стоило загрузить
+    второй раздел: КР ставит уровень по верху плиты, АР по чистому полу, и
+    систематическая разница (на реальном объекте 1970 мм) выглядела как
+    дефект. Предупреждение, стоящее на каждой строке, не значит ничего.
+
+    Считаем заново по тому же правилу, что и загрузка: расхождение внутри
+    ОДНОГО раздела — дефект модели, между разделами — норма.
+    """
+    подозрительные = {
+        r["level_id"] for r in conn.execute(
+            "SELECT level_id FROM object_level_aliases "
+            "WHERE elevation_mm IS NOT NULL "
+            "GROUP BY level_id, section_code "
+            "HAVING MAX(elevation_mm) - MIN(elevation_mm) > 1.0"
+        )
+    }
+    было = {
+        r["id"] for r in conn.execute(
+            "SELECT id FROM object_levels WHERE elevation_suspect = 1")
+    }
+    if подозрительные == было:
+        return "пересчитывать нечего"
+    conn.execute("UPDATE object_levels SET elevation_suspect = 0")
+    if подозрительные:
+        conn.executemany(
+            "UPDATE object_levels SET elevation_suspect = 1 WHERE id = ?",
+            [(i,) for i in sorted(подозрительные)])
+    conn.commit()
+    return "снято %d, оставлено %d" % (len(было - подозрительные), len(подозрительные))
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -560,6 +595,17 @@ RELEASE_TASKS = [
                "оказалась бы в «Прочем»",
         "kind": KIND_DATA,
         "run": _fill_activity_categories,
+    },
+    {
+        "name": "2026-08-25-level-suspect-recount",
+        "version": "0.66",
+        "date": "2026-08-25",
+        "title": "Пересчитать признак сомнительной отметки у этажей",
+        "why": "первая версия признака помечала подозрительными все этажи разом "
+               "после загрузки второго раздела: разницу между КР и АР она "
+               "принимала за дефект модели",
+        "kind": KIND_DATA,
+        "run": _recount_level_elevation_suspect,
     },
 ]
 
