@@ -203,6 +203,7 @@ ACTIONS = {
 
     # ---- Обмен: файлы туда и обратно, копии, перенос базы ----
     "import_dxf": ("Загрузка чертежа", _T),
+    "import_revit": ("Загрузка выгрузки из Revit", _T),
     "import_input": ("Загрузка из папки Input", _T),
     "import_history": ("Импорт истории статусов", _T),
     "import_schedule": ("Импорт графика MS Project", _T),

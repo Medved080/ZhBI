@@ -71,6 +71,7 @@ from app.dxf_import import (
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
     save_uploaded_file,
 )
+from app import revit_import
 from app.element_fields import (
     EDITABLE_FIELDS,
     FieldError,
@@ -132,6 +133,9 @@ from app.report_my_work import (
     build_my_work_report, build_my_work_xlsx, changed_element_ids, value_text,
 )
 from app.models import (
+    RevitAnalyzeResult,
+    RevitApplyIn,
+    RevitImportResult,
     ProjectIn,
     ProjectOut,
     SHAPES,
@@ -5106,6 +5110,91 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
         },
     )
     return result
+
+
+@app.post("/import-revit/analyze", response_model=RevitAnalyzeResult)
+def analyze_revit(
+    files: list[UploadFile] = File(...),
+    object_id: int = Form(...),
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Фаза 1 загрузки пакетов Revit: что появится в справочниках объекта.
+
+    Объект спрашивается ЯВНО, без догадок по имени файла: имена моделей у
+    заказчика меняются между выдачами (Docs/revit-import.md, раздел 1), и
+    угадывать по ним объект — верный способ загрузить чужое здание.
+    """
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "drawings", "write")
+        uploads = [(f.filename or "пакет", read_upload_limited(f.file)) for f in files]
+        try:
+            packages = revit_import.parse_uploads(uploads)
+            analysis = revit_import.analyze(conn, object_id, packages)
+        except revit_import.RevitProcessingError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+    token = revit_import.remember_pending(packages, analysis)
+    return RevitAnalyzeResult(
+        token=token,
+        object_id=object_id,
+        object_name=analysis["object_name"],
+        packages=analysis["packages"],
+        known_sections=analysis["known_sections"],
+        sections=analysis["sections"],
+        levels={k: v for k, v in analysis["levels"].items()},
+        warnings=analysis["warnings"],
+    )
+
+
+@app.post("/import-revit/apply", response_model=RevitImportResult)
+def apply_revit(body: RevitApplyIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Фаза 2: применяет уже показанную сводку."""
+    try:
+        packages, analysis = revit_import.get_pending(body.token)
+    except revit_import.RevitProcessingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+    object_id = analysis["object_id"]
+    conn = get_connection()
+    try:
+        # Объект берётся ИЗ ТОКЕНА, а не от клиента: иначе подменой токена
+        # чужой комплект применился бы в доступный объект.
+        assert_object_feature(conn, user, object_id, "drawings", "write")
+    finally:
+        conn.close()
+
+    backup_before_import(
+        "выгрузка Revit (%s) → %s"
+        % (", ".join(p.section_code for p in packages), analysis["object_name"]),
+        audit_display_name(user), user["id"])
+
+    операция = activity.new_request_id()
+    conn = get_connection()
+    try:
+        result = revit_import.apply(conn, object_id, packages, analysis)
+    finally:
+        conn.close()
+    revit_import.forget_pending(body.token)
+
+    activity.log(
+        "import_revit",
+        user=user,
+        request_id=операция,
+        entity_type="object",
+        entity_id=object_id,
+        new_value=", ".join(p.section_code for p in packages),
+        details={
+            "summary": revit_import.summary_for_log(analysis),
+            "packages": analysis["packages"],
+            "sections_added": result["sections_added"],
+            "levels_added": result["levels_added"],
+            "warnings": analysis["warnings"],
+        },
+    )
+    return RevitImportResult(object_id=object_id, **result)
 
 
 @app.post("/import-history-xlsx")

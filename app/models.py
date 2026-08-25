@@ -443,3 +443,32 @@ class DxfApplyIn(BaseModel):
     # может оставить прежние марки — либо все разом, либо перечислением.
     accept_mark_changes: bool = True
     keep_mark_element_ids: list[int] = []
+
+
+class RevitAnalyzeResult(BaseModel):
+    """Первая фаза загрузки пакетов Revit: что появится в справочниках
+    объекта. В БД к моменту ответа не записано ничего.
+
+    Поля `sections`, `levels` и элементы списков приходят словарями с
+    РУССКИМИ ключами — так их отдаёт app/revit_catalog, и так они попадают
+    прямо в сводку интерфейса без переименований по дороге."""
+    token: str
+    object_id: int
+    object_name: str
+    packages: list[dict]
+    known_sections: list[dict]
+    sections: dict
+    levels: dict
+    warnings: list[str]
+
+
+class RevitApplyIn(BaseModel):
+    token: str
+
+
+class RevitImportResult(BaseModel):
+    object_id: int
+    sections_added: int
+    levels_added: int
+    aliases_added: int
+    packages: int
