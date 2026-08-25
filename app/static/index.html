@@ -3957,7 +3957,6 @@
             <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
             <button id="btn-upload-revit" data-feature="revit_import" data-feature-kind="write">Загрузить из Revit</button>
-            <button id="btn-revit-plan" data-feature="revit_model" data-feature-kind="read">Модель из Revit</button>
             <button id="btn-export" data-feature="export" data-feature-kind="read">Экспорт в XLS</button>
             <button id="btn-export-pdf" data-feature="export" data-feature-kind="read">Экспорт в PDF</button>
             <button id="menu-history-import" data-feature="import_history" data-feature-kind="write">Импорт истории из XLS</button>
@@ -4087,6 +4086,12 @@
           <span class="workspace-item-name">Модель</span>
           <span class="workspace-item-hint">Схема и панель фильтров</span>
         </button>
+        <!-- Рабочее место объектов МФР. У них нет схемы по чертежу, и без
+             этого места человек попадал бы на пустой экран. -->
+        <button type="button" class="workspace-item" id="btn-ws-mfr" data-ws="mfr">
+          <span class="workspace-item-name">Модель МФР</span>
+          <span class="workspace-item-hint">План по этажам из выгрузки Revit</span>
+        </button>
         <button type="button" class="workspace-item" id="btn-ws-picker" data-ws="picker">
           <span class="workspace-item-name">АРМ комплектовщика</span>
           <span class="workspace-item-hint">Дашборд комплектации: свойства, количественные показатели и схема выбранного среза</span>
@@ -4170,6 +4175,40 @@
        это итоги ВЫБРАННОГО СРЕЗА, а срез виден на схеме под ними. -->
   <div id="picker-metrics" style="display:none"></div>
   <button type="button" class="btn btn-sm btn-primary" id="back-to-report">← Вернуться к отчёту</button>
+  <!-- Рабочее место МФР: план модели из выгрузки Revit. Живёт рядом со
+       #stage и показывается вместо него — координаты у модели общие
+       (площадочные), а у чертежа свои, и рисовать их в одном холсте
+       нельзя (см. app/revit_plan.py). -->
+  <div id="mfr-workspace" style="display:none; flex:1 1 auto; min-height:0;
+       padding:10px; gap:12px">
+    <div style="flex:0 0 220px; overflow:auto">
+      <label class="field">Этаж</label>
+      <div id="revit-plan-levels" style="max-height:40vh; overflow:auto;
+           border:1px solid var(--color-border); border-radius:6px"></div>
+      <label class="field" style="margin-top:10px">Раздел</label>
+      <div id="revit-plan-parts"></div>
+      <label class="field" style="margin-top:10px">Секция</label>
+      <div id="revit-plan-sections"></div>
+      <label class="field" style="margin-top:10px">Категория</label>
+      <div id="revit-plan-categories" style="max-height:24vh; overflow:auto"></div>
+    </div>
+    <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column">
+      <div style="display:flex; align-items:flex-start; gap:10px; margin-bottom:6px">
+        <div class="hint-text" id="revit-plan-head" style="flex:0 0 auto"></div>
+        <div class="hint-text" id="revit-plan-legend" style="flex:1 1 auto"></div>
+        <button class="btn btn-sm btn-secondary" id="revit-plan-fit"
+                style="flex:0 0 auto" title="Вернуть исходный масштаб">Вписать</button>
+      </div>
+      <div id="revit-plan-canvas" style="flex:1 1 auto; min-height:0;
+           border:1px solid var(--color-border); border-radius:6px;
+           background:var(--color-surface); overflow:hidden"></div>
+      <div class="hint-text" id="revit-plan-status" style="margin-top:6px"></div>
+    </div>
+    <div style="flex:0 0 240px; overflow:auto">
+      <label class="field">Элемент</label>
+      <div id="revit-plan-card" class="hint-text">Нажмите на элемент плана.</div>
+    </div>
+  </div>
   <div id="stage">
     <svg id="svg-root" preserveAspectRatio="xMidYMid meet">
       <g id="flip" transform="scale(1,-1)">
@@ -4538,59 +4577,6 @@
       <div class="actions">
         <button class="btn btn-secondary" id="revit-review-cancel">Отменить</button>
         <button class="btn btn-primary" id="revit-review-apply">Применить</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- План загруженной модели Revit. ОТДЕЛЬНОЕ окно, а не слой обычной
-     схемы: элементы модели лежат в общих координатах площадки, а элементы
-     чертежа — в координатах чертежа; наложить их без привязки нельзя, а
-     рисовать «как будто совместилось» значило бы показывать неправду.
-     Показ по ЭТАЖАМ — в объекте под тридцать тысяч элементов. -->
-<div class="modal-backdrop" id="revit-plan-backdrop">
-  <div class="modal modal-sticky" style="max-width:1180px">
-    <div class="modal-sticky-head">
-      <h2>Модель из Revit</h2>
-      <div class="hint-text" id="revit-plan-head"></div>
-    </div>
-    <div class="modal-sticky-scroll">
-      <div style="display:flex; gap:14px; align-items:flex-start">
-        <div style="flex:0 0 240px">
-          <label class="field">Этаж</label>
-          <div id="revit-plan-levels" style="max-height:300px; overflow:auto;
-               border:1px solid var(--color-border); border-radius:6px"></div>
-          <label class="field" style="margin-top:10px">Раздел</label>
-          <div id="revit-plan-parts"></div>
-          <label class="field" style="margin-top:10px">Секция</label>
-          <div id="revit-plan-sections"></div>
-          <label class="field" style="margin-top:10px">Категория</label>
-          <div id="revit-plan-categories" style="max-height:180px; overflow:auto"></div>
-        </div>
-        <div style="flex:1 1 auto; min-width:0">
-          <!-- Легенда НАД планом, а не под ним: под планом она уезжала за
-               нижний край на любом невысоком окне, а вместе с ней и кнопка
-               «Вписать». Высота плана привязана к высоте окна по той же
-               причине. -->
-          <div style="display:flex; align-items:flex-start; gap:10px; margin-bottom:6px">
-            <div class="hint-text" id="revit-plan-legend" style="flex:1 1 auto"></div>
-            <button class="btn btn-secondary" id="revit-plan-fit"
-                    style="flex:0 0 auto" title="Вернуть исходный масштаб">Вписать</button>
-          </div>
-          <div id="revit-plan-canvas" style="border:1px solid var(--color-border);
-               border-radius:6px; background:var(--color-surface);
-               height:min(460px, 52vh); overflow:hidden"></div>
-        </div>
-        <div style="flex:0 0 250px">
-          <label class="field">Элемент</label>
-          <div id="revit-plan-card" class="hint-text">Нажмите на элемент плана.</div>
-        </div>
-      </div>
-    </div>
-    <div class="modal-sticky-foot">
-      <div id="revit-plan-status" style="font-size:12px; color:var(--color-text-muted);"></div>
-      <div class="actions">
-        <button class="btn btn-secondary" id="revit-plan-close">Закрыть</button>
       </div>
     </div>
   </div>

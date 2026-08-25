@@ -419,6 +419,10 @@ FEATURES = [
             "«Чтение» разрешает посмотреть сводку, «Изменение» — применить её.",
             ["POST /import-revit/analyze", "POST /import-revit/apply"],
             SCOPE_OBJECT, _от(ADMIN, WRITE), io=IO_IMPORT),
+    Feature("workspace_mfr", "Рабочие места", "«Модель МФР»: план по этажам",
+            "Рабочее место объектов МФР. У них нет схемы по чертежу DXF, и без этого места "
+            "человек попадал бы на пустой экран.",
+            ["переключатель рабочего места в тулбаре"], SCOPE_OBJECT, _все(READ)),
     Feature("revit_model", "Модель Revit",
             "План модели: этажи, секции, категории, карточка элемента",
             "Только показ: у элементов модели нет статусов, это другой контур учёта.",
@@ -458,7 +462,7 @@ _ТОЛЬКО_ЖБИ = {
     # схема по чертежу DXF и её выгрузка
     "plan", "export", "workspace_model", "workspace_foreman",
 }
-_ТОЛЬКО_МФР = {"revit_import", "revit_model"}
+_ТОЛЬКО_МФР = {"revit_import", "revit_model", "workspace_mfr"}
 
 FEATURES = [
     f._replace(kinds=_Ж) if f.key in _ТОЛЬКО_ЖБИ else

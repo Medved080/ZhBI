@@ -678,7 +678,8 @@ function currentObjectRoles() {
 // вместе с ними лестницу и пороги — они нужны ровно для одного: посчитать
 // доступ на ДРУГОМ объекте, не показываемом сейчас (списки объектов в
 // формах документов).
-state.rights = { features: {}, role_features: {}, roles: [], object_roles: [], system_admin: false };
+state.rights = { features: {}, role_features: {}, roles: [], object_roles: [],
+                 not_applicable: [], system_admin: false };
 
 async function loadPermissions() {
   const адрес = state.objectId ? `/me/permissions?object_id=${state.objectId}` : "/me/permissions";
@@ -687,7 +688,8 @@ async function loadPermissions() {
   } catch (e) {
     // Не смогли узнать права — считаем, что их нет. Оставить прежние
     // значит показывать пункты чужого объекта после переключения.
-    state.rights = { features: {}, role_features: {}, roles: [], object_roles: [], system_admin: false };
+    state.rights = { features: {}, role_features: {}, roles: [], object_roles: [],
+                     not_applicable: [], system_admin: false };
     console.warn("Не удалось получить права:", e.message);
     // Молчать здесь нельзя: снаружи это выглядит не как сбой, а как отнятые
     // права — пункты меню и рабочие места просто исчезают, и человек идёт
@@ -711,6 +713,12 @@ function can(key, kind = "write") {
   // себе, а не из уровней, — он и должен уцелеть ровно тогда, когда
   // уровней нет. `canOn` (доступ на другом объекте) так поступал всегда,
   // и расхождение между двумя проверками было ошибкой.
+  // ТИП ОБЪЕКТА проверяется РАНЬШЕ обхода администратора — ровно как на
+  // сервере (app/access.has_feature). Раздела, которого на этом объекте
+  // нет, администратору показывать не надо: это не «он всё может», а
+  // «работать не на чем». Список приезжает с сервера; не приехал (права
+  // не загрузились) — пусто, и прежнее поведение сохраняется.
+  if ((state.rights.not_applicable || []).includes(key)) return false;
   if (systemAdmin() || state.rights.system_admin) return true;
   const уровень = (state.rights.features || {})[key];
   return kind === "write" ? уровень === "write" : уровень === "read" || уровень === "write";
@@ -826,18 +834,25 @@ async function applyRolePermissions() {
   // считают по тем же данным /plan-data, что уже пришли на схему, и ничего
   // сверх доступного роли не показывают.
   const рабочиеМеста = [
+    ["btn-ws-model", "workspace_model", "model"],
     ["btn-ws-picker", "workspace_picker", "picker"],
     ["btn-ws-foreman", "workspace_foreman", "foreman"],
+    ["btn-ws-mfr", "workspace_mfr", "mfr"],
   ];
+  let первоеДоступное = null;
   for (const [id, раздел, режим] of рабочиеМеста) {
     const btn = document.getElementById(id);
     if (!btn) continue;
     const можно = can(раздел, "read");
     btn.style.display = можно ? "" : "none";
-    // Роль могла смениться на живой вкладке (режим «от имени», повторный
-    // /me) — человек, оказавшийся без права, не должен остаться в АРМ.
-    if (!можно && workspace === режим) setWorkspace("model");
+    if (можно && !первоеДоступное) первоеДоступное = режим;
   }
+  // Уйти НЕ на «Модель», а на первое доступное. С появлением типов объекта
+  // «Модель» перестала быть всегда доступной: на объекте МФР её нет вовсе,
+  // и прежний безусловный переход оставлял бы человека на пустом экране.
+  const текущееДоступно = рабочиеМеста.some(
+    ([, раздел, режим]) => режим === workspace && can(раздел, "read"));
+  if (!текущееДоступно && первоеДоступное) setWorkspace(первоеДоступное);
   // Список из одного пункта — обманка: он предлагает выбор, которого нет.
   // Роли без единого АРМ переключатель не показываем вовсе (в ряду кнопок
   // такого вопроса не стояло — там оставалась одна нажатая «Модель»).
@@ -1445,6 +1460,14 @@ async function switchObject(objectId) {
   // она не загрузится, показывать пункты чужого объекта нельзя.
   await applyRolePermissions();
   await loadLateThreshold();  // порог опоздания — настройка ОБЪЕКТА (этап D)
+  // Схема по чертежу грузится только там, где она ЕСТЬ. На объекте МФР
+  // раздела «plan» нет по типу объекта, и прежний безусловный вызов
+  // получал законный отказ 403, показывая внизу ошибку «не удалось
+  // открыть объект» на совершенно исправном переключении.
+  if (!can("plan", "read")) {
+    clearWorkspace();
+    return;
+  }
   try {
     await loadPlan(false);   // false — пересчитать вид: у объекта своя сетка осей
   } catch (e) {
@@ -4938,7 +4961,11 @@ function applySidebarPin() {
     closePickerSidebar();
   } else {
     sidebar.classList.remove("collapsed");
-    sidebar.style.display = "";
+    // В рабочем месте МФР панель свойств изделия не показывается вовсе:
+    // изделий там нет. Проверка здесь, а не только в setWorkspace, потому
+    // что эта функция вызывается и сама по себе (закрепление панели) и
+    // иначе возвращала бы её обратно.
+    sidebar.style.display = (workspace === "mfr") ? "none" : "";
     document.querySelectorAll(".sidebar-rail-btn").forEach(b => b.classList.remove("active"));
   }
   // Кнопка есть только там, где закрепление что-то меняет, — в АРМ.
@@ -5028,6 +5055,9 @@ function setWorkspace(ws) {
   workspace = ws;
   const picker = ws === "picker";
   const foreman = ws === "foreman";
+  // Рабочее место МФР показывается ВМЕСТО схемы: у модели общие координаты
+  // площадки, у чертежа — свои, и в одном холсте им делать нечего.
+  const мфр = ws === "mfr";
   state.picker.active = picker;
   for (const item of workspaceMenu.querySelectorAll(".workspace-item")) {
     const это = item.dataset.ws === ws;
@@ -5051,6 +5081,23 @@ function setWorkspace(ws) {
     ? document.getElementById("foreman-panel")
     : document.getElementById("tab-filters");
   if (filtersBox && filtersBox.parentElement !== домой) домой.appendChild(filtersBox);
+  // Переключение ПОСЛЕ гашения панелей АРМ, а не вместо него: уходя из
+  // АРМ в МФР, панели комплектовщика и прораба обязаны убраться, иначе они
+  // остаются висеть поверх плана.
+  const мфрБокс = document.getElementById("mfr-workspace");
+  if (мфрБокс) мфрБокс.style.display = мфр ? "flex" : "none";
+  const stageBox = document.getElementById("stage");
+  if (stageBox) stageBox.style.display = мфр ? "none" : "";
+  // Вместе со схемой убираются и её органы управления: 2D/3D и правая
+  // панель со свойствами изделия относятся к чертежу, которого на объекте
+  // МФР нет. Оставленные, они предлагают режимы, которые ничего не
+  // переключают, и карточку, которая никогда не заполнится.
+  for (const id of ["view-mode-switch", "sidebar"]) {
+    const box = document.getElementById(id);
+    if (box) box.style.display = мфр ? "none" : "";
+  }
+  if (мфр) openMfrWorkspace();
+
   // Правая панель: в АРМ — свёрнута до ярлычка и раскрывается поверх схемы,
   // в «Модели» — закреплена и тянется за ручку, как была. Исключение —
   // закреплённая пользователем панель (2026-08-14): она и в АРМ стоит
@@ -26562,7 +26609,6 @@ document.getElementById("revit-review-apply").addEventListener("click", async ()
 // у чертежа — свои, и совмещать их без привязки нельзя. Показ по этажам:
 // в объекте под тридцать тысяч элементов, на этаже — около тысячи.
 
-const revitPlanBackdrop = document.getElementById("revit-plan-backdrop");
 const revitPlanState = { objectId: null, levelId: null, sectionId: null,
                          part: null, category: null, filters: null, data: null,
                          view: null };
@@ -26572,16 +26618,17 @@ const revitPlanState = { objectId: null, levelId: null, sectionId: null,
 const REVIT_CAT_COLORS = ["#2f6f4f", "#8a6d1f", "#3a5f8a", "#7a3f6a",
                           "#4a7a7a", "#8a4a2f", "#5a5a8a", "#6a7a3a"];
 
-document.getElementById("btn-revit-plan").addEventListener("click", async () => {
+// Открывается переключателем рабочих мест (setWorkspace), а не пунктом
+// меню: на объекте МФР это ЕДИНСТВЕННОЕ рабочее место, и прятать его в
+// меню значило бы оставить человека на пустом экране.
+async function openMfrWorkspace() {
+  if (revitPlanState.objectId === state.objectId && revitPlanState.data) return;
   revitPlanState.objectId = state.objectId;
   revitPlanState.levelId = null; revitPlanState.sectionId = null;
   revitPlanState.part = null; revitPlanState.category = null;
-  revitPlanBackdrop.classList.add("open");
   document.getElementById("revit-plan-card").textContent = "Нажмите на элемент плана.";
   await loadRevitPlanFilters();
-});
-document.getElementById("revit-plan-close").addEventListener("click",
-  () => revitPlanBackdrop.classList.remove("open"));
+}
 
 function revitPlanStatus(text, isError) {
   const el = document.getElementById("revit-plan-status");
@@ -26649,7 +26696,7 @@ function markRevitPicks() {
   });
 }
 
-document.getElementById("revit-plan-backdrop").addEventListener("click", async (e) => {
+document.getElementById("mfr-workspace").addEventListener("click", async (e) => {
   const pick = e.target.closest(".revit-pick");
   if (!pick) return;
   const { kind, id } = pick.dataset;
