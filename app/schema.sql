@@ -1059,3 +1059,90 @@ CREATE TABLE IF NOT EXISTS revit_packages (
     is_current INTEGER NOT NULL DEFAULT 0,
     imported_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Элементы из выгрузок Revit. ОТДЕЛЬНАЯ таблица, а не общая с `elements`,
+-- намеренно: блочный учёт — отдельная ветка варианта учёта, и она не
+-- должна влиять на поштучный учёт сборного ЖБИ (Docs/block-accounting.md).
+-- Двадцать восемь тысяч элементов модели в `elements` означали бы, что они
+-- появятся во всех существующих экранах, отчётах и контрактах.
+--
+-- `section_code` — раздел проекта (КР, АР), ОБЛАСТЬ списания: «исчез из
+-- модели» считается строго внутри своего раздела, иначе загрузка АР
+-- списала бы весь КР.
+CREATE TABLE IF NOT EXISTS revit_elements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    section_code TEXT NOT NULL,
+    uid TEXT NOT NULL,
+    revit_id INTEGER,
+    category TEXT,
+    family TEXT,
+    type_name TEXT,
+    mark TEXT,
+    level_id INTEGER REFERENCES object_levels (id) ON DELETE SET NULL,
+    level_name TEXT,
+    section_id INTEGER REFERENCES object_sections (id) ON DELETE SET NULL,
+    section_source TEXT,
+    elevation_mm REAL,
+    height_mm REAL,
+    x REAL, y REAL, z REAL,
+    outline_json TEXT,
+    -- 1 = контур габаритный, а не настоящий. У дверей, окон и откосов это
+    -- норма (плоские вставки в стену), у стен — признак беды.
+    outline_approx INTEGER NOT NULL DEFAULT 0,
+    volume REAL,
+    area REAL,
+    workset TEXT,
+    params_json TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, uid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_revit_elements_scope
+    ON revit_elements (object_id, section_code, is_current);
+
+-- Помещения (комнаты). Квартира в Revit не объект: она собирается по
+-- номеру, проставленному у комнат, — отсюда поле `flat`.
+CREATE TABLE IF NOT EXISTS revit_rooms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    section_code TEXT NOT NULL,
+    uid TEXT NOT NULL,
+    number TEXT,
+    name TEXT,
+    area REAL,
+    level_id INTEGER REFERENCES object_levels (id) ON DELETE SET NULL,
+    level_name TEXT,
+    section_id INTEGER REFERENCES object_sections (id) ON DELETE SET NULL,
+    flat TEXT,
+    rooms_count INTEGER,
+    plan_type TEXT,
+    flat_area REAL,
+    living_area REAL,
+    total_area REAL,
+    room_category TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, uid)
+);
+
+-- Квартира объекта. Ключ — ТРОЙКА (секция, этаж, номер): номер не
+-- сквозной, «4» повторяется на разных этажах, и агрегация по одному
+-- номеру давала «квартиры» из 35 комнат (Docs/revit-import.md, раздел 12).
+-- Единица `кв.эт/сек` из WBS — это ровно она.
+CREATE TABLE IF NOT EXISTS object_flats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    section_id INTEGER REFERENCES object_sections (id) ON DELETE CASCADE,
+    level_id INTEGER REFERENCES object_levels (id) ON DELETE CASCADE,
+    number TEXT NOT NULL,
+    rooms_count INTEGER,
+    plan_type TEXT,
+    flat_area REAL,
+    living_area REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, section_id, level_id, number)
+);

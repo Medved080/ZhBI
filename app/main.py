@@ -5145,6 +5145,7 @@ def analyze_revit(
         known_sections=analysis["known_sections"],
         sections=analysis["sections"],
         levels={k: v for k, v in analysis["levels"].items()},
+        elements=analysis["elements"]["counts"],
         warnings=analysis["warnings"],
     )
 
@@ -5191,6 +5192,8 @@ def apply_revit(body: RevitApplyIn, user: sqlite3.Row = Depends(get_current_user
             "packages": analysis["packages"],
             "sections_added": result["sections_added"],
             "levels_added": result["levels_added"],
+            "elements": result["elements"],
+            "retired": result["retired"],
             "warnings": analysis["warnings"],
         },
     )

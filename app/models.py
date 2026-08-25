@@ -459,6 +459,7 @@ class RevitAnalyzeResult(BaseModel):
     known_sections: list[dict]
     sections: dict
     levels: dict
+    elements: dict
     warnings: list[str]
 
 
@@ -472,3 +473,7 @@ class RevitImportResult(BaseModel):
     levels_added: int
     aliases_added: int
     packages: int
+    elements: int
+    rooms: int
+    retired: int
+    flats: int

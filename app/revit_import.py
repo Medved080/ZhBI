@@ -11,14 +11,14 @@
 из модели». Поэтому два пакета одного раздела в одном комплекте — ошибка,
 а не повод молча взять последний.
 
-Сейчас применяются только СПРАВОЧНИКИ (секции, этажи, реестр пакетов).
-Элементы — следующий шаг; пакет уже разобран и лежит в памяти, менять
-здесь ничего не придётся.
+Применяются справочники (секции, этажи), элементы, помещения и квартиры,
+плюс реестр пакетов. Порядок внутри `apply` обязателен: справочники
+раньше элементов, иначе элемент не к чему привязать.
 """
 
 import uuid
 
-from app import revit_catalog
+from app import revit_catalog, revit_elements
 from app.revit_package import Package, PackageError, load
 
 # Разобранные, но не применённые комплекты. В памяти процесса, а не в БД —
@@ -68,6 +68,7 @@ def parse_uploads(uploads) -> list:
 def analyze(conn, object_id: int, packages) -> dict:
     """Фаза 1. В БД не пишет ничего."""
     analysis = revit_catalog.analyze(conn, object_id, packages)
+    analysis["elements"] = revit_elements.analyze(conn, object_id, packages)
 
     row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
     analysis["object_name"] = row["name"] if row else ""
@@ -97,8 +98,16 @@ def analyze(conn, object_id: int, packages) -> dict:
 
 
 def apply(conn, object_id: int, packages, analysis: dict) -> dict:
-    """Фаза 2. Пока применяет только справочники и реестр пакетов."""
-    return revit_catalog.apply(conn, object_id, packages, analysis)
+    """Фаза 2.
+
+    Порядок обязателен: сначала справочники, потом элементы. Элемент
+    привязывается к этажу и секции по справочнику, и на невыведенный
+    справочник привязать его не к чему.
+    """
+    result = revit_catalog.apply(conn, object_id, packages, analysis)
+    result.update(revit_elements.apply(conn, object_id, packages,
+                                       analysis["elements"]))
+    return result
 
 
 def remember_pending(packages, analysis: dict) -> str:
@@ -128,6 +137,10 @@ def summary_for_log(analysis: dict) -> str:
     """Короткая строка для журнала и лога — читается без раскрытия сводки."""
     sections = analysis["sections"]
     levels = analysis["levels"]
-    return ("разделов %d, новых секций %d, новых этажей %d, предупреждений %d"
+    counts = analysis.get("elements", {}).get("counts", {})
+    return ("разделов %d, новых секций %d, новых этажей %d, элементов "
+            "новых %d / изменённых %d / исчезло %d, предупреждений %d"
             % (len(analysis["packages"]), len(sections["new"]),
-               len(levels["new"]), len(analysis["warnings"])))
+               len(levels["new"]), counts.get("новых", 0),
+               counts.get("изменённых", 0), counts.get("исчезло из модели", 0),
+               len(analysis["warnings"])))
