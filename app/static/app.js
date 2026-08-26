@@ -26498,6 +26498,69 @@ document.getElementById("revit-review-cancel").addEventListener("click", () => {
   revitPending = null;
 });
 
+// Отладочная очистка справочников объекта (2026-08-26) — общая для форм
+// Revit и PDF: применяется СРАЗУ, без сводки, потому что это инструмент
+// отладки (частые повторные загрузки «с нуля» при подборе алгоритма), а не
+// рабочий импорт. Резервную копию перед стиранием снимает сервер.
+async function runClearImportData(source, objectId, flags, statusEl, btn) {
+  if (!objectId) {
+    statusEl.style.color = "var(--color-danger)";
+    statusEl.textContent = "Сначала выберите объект";
+    return;
+  }
+  if (!flags.elements && !flags.structure && !flags.work) {
+    statusEl.style.color = "var(--color-danger)";
+    statusEl.textContent = "Отметьте хотя бы одну группу для очистки";
+    return;
+  }
+  const части = [];
+  if (flags.elements) части.push(source === "pdf" ? "помещения из PDF" : "элементы Revit");
+  if (flags.structure) части.push("секции и этажи (а с ними — блоки и статусы работ по ним)");
+  if (flags.work) части.push("виды работ и статусы блоков");
+  if (!confirm(`Стереть безвозвратно: ${части.join(", ")}?\n\n`
+    + "Перед этим будет снята резервная копия.")) return;
+
+  btn.disabled = true;
+  statusEl.style.color = "var(--color-text-muted)";
+  statusEl.textContent = "Очистка…";
+  try {
+    const res = await fetch(`/objects/${objectId}/clear-import-data`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, ...flags }),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      statusEl.style.color = "var(--color-danger)";
+      statusEl.textContent = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
+      return;
+    }
+    const строки = Object.entries(body.counts || {}).filter(([, n]) => n)
+      .map(([t, n]) => `${t}: ${n}`);
+    statusEl.style.color = "var(--color-text-muted)";
+    statusEl.textContent = строки.length
+      ? `Готово. Удалено — ${строки.join(", ")}.` : "Готово. Удалять было нечего.";
+  } catch (e) {
+    statusEl.style.color = "var(--color-danger)";
+    statusEl.textContent = "Не удалось связаться с сервером: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("revit-clear-submit").addEventListener("click", () => {
+  runClearImportData(
+    "revit",
+    document.getElementById("revit-object").value,
+    {
+      elements: document.getElementById("revit-clear-elements").checked,
+      structure: document.getElementById("revit-clear-structure").checked,
+      work: document.getElementById("revit-clear-work").checked,
+    },
+    document.getElementById("revit-clear-status"),
+    document.getElementById("revit-clear-submit"),
+  );
+});
+
 revitSubmit.addEventListener("click", async () => {
   const files = revitSelectedFiles;
   if (!files.length) { setRevitStatus("Сначала выберите хотя бы один пакет", true); return; }
@@ -26662,7 +26725,7 @@ document.getElementById("revit-review-apply").addEventListener("click", async ()
 // всё» выражаются одним и тем же механизмом, без особого пункта «все».
 const revitPlanState = { objectId: null, filters: null, data: null, view: null,
                          levels: new Set(), sections: new Set(),
-                         parts: new Set(), categories: new Set() };
+                         parts: new Set(), categories: new Set(), blocksData: [] };
 
 const REVIT_GROUPS = ["levels", "sections", "parts", "categories"];
 
@@ -26828,6 +26891,18 @@ async function loadRevitPlanElements() {
   if (!res.ok) { revitPlanStatus("Не удалось получить план", true); return; }
   const data = await res.json();
   revitPlanState.data = data;
+
+  // Геометрия блоков (Docs/TZ.md, «Геометрия блока») — тем же отбором
+  // этажей/секций, что и элементы. Грузится ВСЕГДА, а не только при
+  // включённом слое «Блоки»: переключение слоя не должно ждать сеть.
+  const bq = new URLSearchParams();
+  for (const id of s.levels) bq.append("level_id", id);
+  for (const id of s.sections) bq.append("section_id", id);
+  try {
+    const bres = await fetch(`/objects/${s.objectId}/blocks/geometry?` + bq.toString());
+    revitPlanState.blocksData = bres.ok ? await bres.json() : [];
+  } catch (e) { revitPlanState.blocksData = []; }
+
   // Ключ сцены 3D сбрасывается на КАЖДЫЙ приход данных. Иначе так:
   // пользователь жмёт «все этажи», сразу переключается в 3D, сцена
   // собирается на ещё не заменённых данных одного этажа, а когда данные
@@ -26852,10 +26927,26 @@ function drawRevitPlan(data) {
     document.getElementById("revit-plan-legend").textContent = "";
     return;
   }
-  const [w, h] = data.size;
+  const [ow, oh] = data.size;
+  const [ox, oy] = data.origin || [0, 0];
+
+  // Блоки — геометрия по осям здания, НЕЗАВИСИМАЯ от того, что попало в
+  // текущий отбор элементов: блок секции обычно шире, чем габарит одной
+  // стены на этаже. `data.origin`/`data.size` посчитаны сервером ТОЛЬКО
+  // по элементам, поэтому включённый слой «Блоки» может потребовать
+  // область больше — иначе часть параллелепипеда рисовалась бы за
+  // пределами viewBox и была бы невидима, хотя формально в разметке есть.
+  const blocks = mfrShowBlocks() ? revitPlanState.blocksData.filter((b) => b.ok) : [];
+  let minX = 0, minY = 0, maxX = ow, maxY = oh;
+  for (const b of blocks) {
+    minX = Math.min(minX, b.x0 - ox); maxX = Math.max(maxX, b.x1 - ox);
+    minY = Math.min(minY, b.y0 - oy); maxY = Math.max(maxY, b.y1 - oy);
+  }
+  const w = maxX - minX, h = maxY - minY;
+
   // Y переворачивается: в модели он растёт вверх, в SVG — вниз.
-  const paths = data.elements.map((el) => {
-    const d = "M" + el["контур"].map((p) => `${p[0]} ${h - p[1]}`).join("L") + "Z";
+  const paths = mfrShowElements() ? data.elements.map((el) => {
+    const d = "M" + el["контур"].map((p) => `${p[0] - minX} ${h - (p[1] - minY)}`).join("L") + "Z";
     const color = revitFill((data.categories || [])[el["кат"]]);
     const обводка = darken(color);
     const имяКат = (data.categories || [])[el["кат"]];
@@ -26863,13 +26954,28 @@ function drawRevitPlan(data) {
       fill-opacity="${(0.55 * revitOpacity(имяКат)).toFixed(2)}"
       stroke="${обводка}" stroke-width="${Math.max(w / 900, 20)}"
       ${el["приб"] ? 'stroke-dasharray="' + Math.max(w / 300, 60) + '"' : ""}/>`;
+  }) : [];
+
+  // Прямоугольник ГАБАРИТА блока в плане. Блоков без геометрии (`ok:
+  // false` — нет привязки к осям или ненадёжная отметка этажа) на плане
+  // не показываем — молчаливо приблизительный контур хуже честного
+  // отсутствия.
+  const blockRects = blocks.map((b) => {
+    const x0 = b.x0 - ox - minX, x1 = b.x1 - ox - minX,
+          y0 = b.y0 - oy - minY, y1 = b.y1 - oy - minY;
+    return `<rect data-block-id="${b.id}" x="${Math.min(x0, x1)}" y="${h - Math.max(y0, y1)}"
+      width="${Math.abs(x1 - x0)}" height="${Math.abs(y1 - y0)}"
+      fill="var(--color-primary)" fill-opacity="0.12"
+      stroke="var(--color-primary)" stroke-width="${Math.max(w / 500, 30)}"
+      stroke-dasharray="${Math.max(w / 150, 80)}"/>`;
   });
+
   // Исходный охват держим отдельно от текущего вида: «Вписать» должна
   // возвращать именно его, а не пересчитывать по элементам заново.
   revitPlanState.view = { x: 0, y: 0, w, h };
   revitPlanState.fit = { x: 0, y: 0, w, h };
   box.innerHTML = `<svg id="revit-plan-svg" viewBox="0 0 ${w} ${h}"
-    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${paths.join("")}</svg>`;
+    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${paths.join("")}${blockRects.join("")}</svg>`;
 
   document.getElementById("revit-plan-legend").innerHTML =
     (data.categories || []).map((name, i) =>
@@ -26920,8 +27026,9 @@ function bindRevitPlanZoom(svg) {
   });
   svg.addEventListener("click", async (e) => {
     const path = e.target.closest("path[data-id]");
-    if (!path) return;
-    await showRevitCard(Number(path.dataset.id));
+    if (path) { await showRevitCard(Number(path.dataset.id)); return; }
+    const rect = e.target.closest("rect[data-block-id]");
+    if (rect) await showBlockCard(Number(rect.dataset.blockId));
   });
 }
 
@@ -26950,6 +27057,61 @@ async function showRevitCard(elementId) {
   const доп = Object.entries(card["параметры"] || {}).map(строка);
   box.innerHTML = строки.join("")
     + (доп.length ? `<h4 style="margin-top:12px">Параметры Revit</h4>` + доп.join("") : "");
+}
+
+// Карточка блока (Docs/TZ.md, «Геометрия блока») — по клику на
+// параллелепипед в 2D или 3D. Отдельная панель от карточки элемента: обе
+// могут быть видны одновременно, это разные, независимые сущности.
+async function showBlockCard(blockId) {
+  const panel = document.getElementById("block-card-block");
+  const box = document.getElementById("block-card");
+  panel.style.display = "";
+  box.textContent = "Загрузка…";
+  const res = await fetch(`/objects/${revitPlanState.objectId}/blocks/${blockId}/card`);
+  if (!res.ok) { box.textContent = "Не удалось получить карточку"; return; }
+  const card = await res.json();
+  const строка = ([k, v]) =>
+    `<div class="card-row"><span class="card-key">${escapeHtml(k)}</span>` +
+    `<span class="card-val">${escapeHtml(String(v))}</span></div>`;
+  const строки = [
+    ["Секция", card["секция"]], ["Этаж", card["этаж"]],
+    ["Элементов модели", card["элементов"]], ["Помещений", card["помещений"]],
+  ].map(строка);
+
+  const геом = card["геометрия"] || {};
+  const геомСтрока = геом.ok
+    ? `Габарит: ${Math.round(геом.x1 - геом.x0)}×${Math.round(геом.y1 - геом.y0)}×`
+      + `${Math.round(геом.z1 - геом.z0)} мм`
+      + (геом.approx_height ? " (высота приблизительно — соседний этаж не даёт точной)" : "")
+    : `Геометрия недоступна: ${escapeHtml(геом.reason || "не определена")}`;
+
+  const статусы = card["статусы_работ"] || {};
+  const статусыСтрока = статусы["всего"]
+    ? `Работы: план ${статусы["план"]}, в работе ${статусы["в_работе"]}, `
+      + `выполнено ${статусы["выполнено"]} из ${статусы["всего"]}`
+    : "Видов работ, адресуемых на блок, не заведено";
+
+  box.innerHTML = строки.join("")
+    + `<div class="card-row">${геомСтрока}</div>`
+    + `<div class="card-row">${статусыСтрока}</div>`;
+}
+
+// Слои «Элементы»/«Блоки» — независимые переключатели: можно смотреть по
+// отдельности или вместе. Переключение не ходит на сервер: данные обеих
+// уже загружены при последнем отборе этажей/секций.
+function mfrShowElements() {
+  return document.getElementById("mfr-show-elements").checked;
+}
+function mfrShowBlocks() {
+  return document.getElementById("mfr-show-blocks").checked;
+}
+for (const id of ["mfr-show-elements", "mfr-show-blocks"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    if (!revitPlanState.data) return;
+    drawRevitPlan(revitPlanState.data);
+    mfr3d.key = null;
+    applyMfrMode();
+  });
 }
 
 // ==================== 3D МОДЕЛИ МФР (2026-08-25) ====================
@@ -27032,8 +27194,9 @@ async function buildMfr3D() {
     return;
   }
   // Ключ отбора: пересобирать сцену на каждое переключение вкладки незачем,
-  // а на смену этажа — обязательно.
-  const ключ = JSON.stringify(REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()));
+  // а на смену этажа или слоя «Элементы»/«Блоки» — обязательно.
+  const ключ = JSON.stringify([REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()),
+                               mfrShowElements(), mfrShowBlocks()]);
   if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
 
   revitPlanStatus(`Сборка 3D: ${data.elements.length} элементов…`);
@@ -27053,7 +27216,9 @@ async function buildMfr3D() {
   const рёбра = [];
   let рёберТочек = 0;
 
-  for (const el of data.elements) {
+  // Элементы — только если включён слой «Элементы»: снятая галочка не
+  // должна тратить время на выдавливание того, что тут же скрыть.
+  if (mfrShowElements()) for (const el of data.elements) {
     const контур = el["контур"];
     const высота = el["выс"];
     // Без высоты выдавливать нечего: такой элемент в 3D не появится, и
@@ -27126,6 +27291,37 @@ async function buildMfr3D() {
     scene.add(mesh);
     geometry.computeBoundingBox();
     верх = Math.max(верх, geometry.boundingBox.max.z);
+  }
+
+  // Слой «Блоки» (Docs/TZ.md, «Геометрия блока») — независимые от
+  // элементов полупрозрачные параллелепипеды, каждый отдельным мешем: их
+  // на объект единицы-десятки (не тысячи, как элементов), склейка не
+  // нужна. Блоков без геометрии (`ok: false`) не рисуем — молчаливо
+  // приблизительный объём хуже честного отсутствия.
+  if (mfrShowBlocks() && data.origin) {
+    const [ox, oy] = data.origin;
+    for (const b of revitPlanState.blocksData) {
+      if (!b.ok) continue;
+      const width = b.x1 - b.x0, depth = b.y1 - b.y0, height = b.z1 - b.z0;
+      if (width <= 0 || depth <= 0 || height <= 0) continue;
+      const geometry = new THREE.BoxGeometry(width, depth, height);
+      const material = new THREE.MeshLambertMaterial({
+        color: 0x2f6fed, transparent: true, opacity: 0.16,
+        depthWrite: false, side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set((b.x0 - ox) + width / 2, (b.y0 - oy) + depth / 2,
+                        (b.z0 - низ) + height / 2);
+      mesh.userData.blockId = b.id;
+      mesh.renderOrder = 3;
+      scene.add(mesh);
+      const рёбраБлока = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geometry),
+        new THREE.LineBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.6 }));
+      рёбраБлока.position.copy(mesh.position);
+      scene.add(рёбраБлока);
+      верх = Math.max(верх, (b.z1 - низ));
+    }
   }
 
   // Все рёбра — ОДНИМ объектом сцены: по отрезку на элемент означало бы
@@ -27211,15 +27407,22 @@ function bindMfr3DPick(canvas, camera, scene) {
     точка.x = ((e.clientX - r.left) / r.width) * 2 - 1;
     точка.y = -((e.clientY - r.top) / r.height) * 2 + 1;
     raycaster.setFromCamera(точка, camera);
-    // Только меши: рёбра — линии, попадание в них ничего не значит.
-    const меши = scene.children.filter((o) => o.isMesh);
-    const попадания = raycaster.intersectObjects(меши, false);
-    if (!попадания.length) return;
-    const hit = попадания[0];
-    const вершина = (hit.faceIndex || 0) * 3;
-    const диапазоны = hit.object.userData.диапазоны || [];
-    const найден = диапазоны.find((д) => вершина < д.конец);
-    if (найден) await showRevitCard(найден.id);
+    // Элементы — ПЕРВЫМ приоритетом: блок полупрозрачный и охватывает их
+    // снаружи, ближе к камере, и без разделения луч всегда попадал бы в
+    // блок раньше, чем в элемент внутри него. Блок кликабелен там, где
+    // элемента под ним нет (щели, пустой блок) или элементы скрыты.
+    const элементМеши = scene.children.filter((o) => o.isMesh && !o.userData.blockId);
+    const попаданияЭл = raycaster.intersectObjects(элементМеши, false);
+    if (попаданияЭл.length) {
+      const hit = попаданияЭл[0];
+      const вершина = (hit.faceIndex || 0) * 3;
+      const диапазоны = hit.object.userData.диапазоны || [];
+      const найден = диапазоны.find((д) => вершина < д.конец);
+      if (найден) { await showRevitCard(найден.id); return; }
+    }
+    const блокМеши = scene.children.filter((o) => o.isMesh && o.userData.blockId);
+    const попаданияБлок = raycaster.intersectObjects(блокМеши, false);
+    if (попаданияБлок.length) await showBlockCard(попаданияБлок[0].object.userData.blockId);
   });
 }
 
@@ -27381,5 +27584,559 @@ document.getElementById("revit-colors-save").addEventListener("click", async () 
   } catch (e) {
     status.style.color = "var(--color-danger)";
     status.textContent = e.message || "Не удалось сохранить";
+  }
+});
+
+// ==================== УЧЁТ ПО БЛОКАМ (2026-08-25) ====================
+// Docs/block-accounting.md: второй контур учёта, независимый от сборного
+// ЖБИ и от модели Revit — вид работ × блок (этаж+секция) -> статус.
+// Секции/этажи пишутся в те же таблицы, что и Revit-импорт (app/blocks.py),
+// поэтому появившаяся позже выгрузка сольётся с уже заведённым вручную.
+
+let blkSections = [];
+let blkLevels = [];
+let blkBlocks = [];
+let blkGrids = [];
+let blkBlocksLoaded = false;
+let wtPending = null;
+let wpData = null;
+
+const WP_UNIT_BLOCK = "эт/сек", WP_UNIT_SECTION = "сек", WP_UNIT_WHOLE = "компл";
+
+document.getElementById("menu-blocks").addEventListener("click", async () => {
+  document.getElementById("blocks-backdrop").classList.add("open");
+  blkBlocksLoaded = false;
+  switchBlocksTab("setup");
+  await loadBlkSectionsLevels();
+});
+document.getElementById("blocks-close").addEventListener("click", () => {
+  document.getElementById("blocks-backdrop").classList.remove("open");
+});
+
+function switchBlocksTab(name) {
+  document.querySelectorAll("#blocks-tabs .tab-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.blkTab === name));
+  for (const key of ["setup", "blocks", "worktypes", "progress"]) {
+    document.getElementById(`blk-tab-${key}`).style.display = key === name ? "" : "none";
+  }
+  if (name === "blocks") loadBlkMatrix();
+  if (name === "worktypes") loadWorkTypesTree();
+  if (name === "progress") loadWorkProgress();
+}
+document.querySelectorAll("#blocks-tabs .tab-btn").forEach(btn =>
+  btn.addEventListener("click", () => switchBlocksTab(btn.dataset.blkTab)));
+
+// -------- Секции и этажи (вкладка «Секции и этажи») --------
+
+async function loadBlkSectionsLevels() {
+  const filters = await api(`/revit-plan/filters?object_id=${state.objectId}`).catch(() => null);
+  blkGrids = (filters && filters.grids) || [];
+  [blkSections, blkLevels] = await Promise.all([
+    api(`/objects/${state.objectId}/sections`),
+    api(`/objects/${state.objectId}/levels`),
+  ]);
+  renderBlkSections();
+  renderBlkLevels();
+  renderBlkLevelSectionsBox();
+}
+
+// Привязка секции к осям здания — для параллелепипеда блока в «Модели
+// МФР» (Docs/TZ.md, «Геометрия блока»). Одна привязка на секцию, сразу
+// на все её этажи. Без осей у объекта (PDF-only, либо Revit без
+// сохранённых осей) выпадающие списки не строим — привязывать нечему.
+function axisSelect(cssClass, selected) {
+  if (!blkGrids.length) return "";
+  const options = ['<option value="">—</option>']
+    .concat(blkGrids.map(g => `<option value="${escapeHtml(g.label)}"${g.label === selected ? " selected" : ""}>${escapeHtml(g.label)}</option>`));
+  return `<select class="${cssClass}">${options.join("")}</select>`;
+}
+
+function renderBlkSections() {
+  const box = document.getElementById("blk-sections-list");
+  if (!blkSections.length) {
+    box.innerHTML = '<div class="hint-text">Секций ещё нет.</div>';
+    return;
+  }
+  const осиКолонка = blkGrids.length;
+  box.innerHTML = `<table class="dict-table"><tr><th>Код</th><th>Подпись</th>
+      ${осиКолонка ? "<th>Ось от</th><th>Ось до</th>" : ""}<th></th></tr>
+    ${blkSections.map(s => `<tr data-section-row="${s.id}"><td>${escapeHtml(s.code)}</td>
+      <td>${escapeHtml(s.name || "")}</td>
+      ${осиКолонка ? `<td>${axisSelect("blk-axis-from", s.axis_from)}</td>
+        <td>${axisSelect("blk-axis-to", s.axis_to)}</td>` : ""}
+      <td><button class="link-btn" data-del-section="${s.id}">удалить</button></td></tr>`).join("")}
+  </table>
+  ${осиКолонка ? "" : '<div class="hint-text" style="margin-top:6px">Осей у объекта нет — '
+    + "привязка границ секции недоступна, пока не загружена выгрузка Revit с осями."
+    + "</div>"}`;
+  box.querySelectorAll("[data-del-section]").forEach(btn => btn.addEventListener("click", async () => {
+    if (!confirm("Удалить секцию?")) return;
+    try {
+      await api(`/objects/${state.objectId}/sections/${btn.dataset.delSection}`, { method: "DELETE" });
+      await loadBlkSectionsLevels();
+    } catch (e) { showToast(e.message, "error"); }
+  }));
+  box.querySelectorAll("[data-section-row]").forEach(row => {
+    const id = row.dataset.sectionRow;
+    const fromSel = row.querySelector(".blk-axis-from");
+    const toSel = row.querySelector(".blk-axis-to");
+    if (!fromSel || !toSel) return;
+    const save = async () => {
+      const секция = blkSections.find(s => String(s.id) === String(id));
+      try {
+        await api(`/objects/${state.objectId}/sections/${id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: секция.name || секция.code,
+            axis_from: fromSel.value || null, axis_to: toSel.value || null,
+          }),
+        });
+        await loadBlkSectionsLevels();
+      } catch (e) { showToast(e.message, "error"); await loadBlkSectionsLevels(); }
+    };
+    fromSel.addEventListener("change", save);
+    toSel.addEventListener("change", save);
+  });
+}
+
+document.getElementById("blk-section-add").addEventListener("click", async () => {
+  const code = document.getElementById("blk-section-code").value.trim();
+  const name = document.getElementById("blk-section-name").value.trim();
+  if (!code) return;
+  try {
+    await api(`/objects/${state.objectId}/sections`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, name: name || null }),
+    });
+    document.getElementById("blk-section-code").value = "";
+    document.getElementById("blk-section-name").value = "";
+    await loadBlkSectionsLevels();
+  } catch (e) { showToast(e.message, "error"); }
+});
+
+function renderBlkLevels() {
+  const box = document.getElementById("blk-levels-list");
+  if (!blkLevels.length) {
+    box.innerHTML = '<div class="hint-text">Этажей ещё нет.</div>';
+    return;
+  }
+  box.innerHTML = `<table class="dict-table"><tr><th>Этаж</th><th>Вид</th><th>Отметка, мм</th><th></th></tr>
+    ${blkLevels.map(l => `<tr><td>${escapeHtml(l.name || l.key)}</td><td>${escapeHtml(l.kind)}</td>
+      <td class="num">${l.elevation_mm != null ? l.elevation_mm : "—"}</td>
+      <td><button class="link-btn" data-del-level="${l.id}">удалить</button></td></tr>`).join("")}
+  </table>`;
+  box.querySelectorAll("[data-del-level]").forEach(btn => btn.addEventListener("click", async () => {
+    if (!confirm("Удалить этаж?")) return;
+    try {
+      await api(`/objects/${state.objectId}/levels/${btn.dataset.delLevel}`, { method: "DELETE" });
+      await loadBlkSectionsLevels();
+    } catch (e) { showToast(e.message, "error"); }
+  }));
+}
+
+document.getElementById("blk-level-kind").addEventListener("change", renderBlkLevelSectionsBox);
+
+function renderBlkLevelSectionsBox() {
+  const kind = document.getElementById("blk-level-kind").value;
+  const floorInput = document.getElementById("blk-level-floor");
+  const box = document.getElementById("blk-level-sections-box");
+  if (kind === "кровля") {
+    floorInput.style.display = "none";
+    box.style.display = "";
+    box.innerHTML = blkSections.length
+      ? blkSections.map(s => `<label style="margin-right:8px"><input type="checkbox" value="${s.code}"/> ${escapeHtml(s.code)}</label>`).join("")
+      : '<span class="hint-text">сначала заведите секцию</span>';
+  } else {
+    floorInput.style.display = "";
+    box.style.display = "none";
+  }
+}
+
+document.getElementById("blk-level-add").addEventListener("click", async () => {
+  const kind = document.getElementById("blk-level-kind").value;
+  const name = document.getElementById("blk-level-name").value.trim();
+  const elevRaw = document.getElementById("blk-level-elevation").value;
+  const body = { kind, name: name || null, elevation_mm: elevRaw ? Number(elevRaw) : null };
+  if (kind === "кровля") {
+    body.section_codes = [...document.querySelectorAll("#blk-level-sections-box input:checked")].map(i => i.value);
+    if (!body.section_codes.length) { showToast("Отметьте хотя бы одну секцию", "error"); return; }
+  } else {
+    const floorRaw = document.getElementById("blk-level-floor").value;
+    if (!floorRaw) { showToast("Укажите номер этажа", "error"); return; }
+    body.floor = Number(floorRaw);
+  }
+  try {
+    await api(`/objects/${state.objectId}/levels`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    document.getElementById("blk-level-floor").value = "";
+    document.getElementById("blk-level-name").value = "";
+    document.getElementById("blk-level-elevation").value = "";
+    await loadBlkSectionsLevels();
+  } catch (e) { showToast(e.message, "error"); }
+});
+
+// -------- Блоки (вкладка «Блоки»): матрица секция × этаж --------
+
+async function loadBlkMatrix() {
+  blkBlocksLoaded = true;
+  const box = document.getElementById("blk-matrix-box");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  [blkSections, blkLevels, blkBlocks] = await Promise.all([
+    api(`/objects/${state.objectId}/sections`),
+    api(`/objects/${state.objectId}/levels`),
+    api(`/objects/${state.objectId}/blocks`),
+  ]);
+  renderBlkMatrix();
+}
+
+function renderBlkMatrix() {
+  const box = document.getElementById("blk-matrix-box");
+  if (!blkSections.length || !blkLevels.length) {
+    box.innerHTML = '<div class="hint-text">Сначала заведите секции и этажи на вкладке «Секции и этажи».</div>';
+    return;
+  }
+  const have = new Set(blkBlocks.map(b => `${b.section_id}:${b.level_id}`));
+  const rows = blkLevels.map(l => `<tr>
+    <th class="blk-row-name">${escapeHtml(l.name || l.key)}</th>
+    ${blkSections.map(s => {
+      const on = have.has(`${s.id}:${l.id}`);
+      return `<td class="blk-cell${on ? " on" : ""}" data-sec="${s.id}" data-lvl="${l.id}">${on ? "✓" : "—"}</td>`;
+    }).join("")}
+  </tr>`).join("");
+  box.innerHTML = `<table id="blk-matrix-table">
+    <thead><tr><th class="blk-row-name">Этаж \\ Секция</th>
+      ${blkSections.map(s => `<th>${escapeHtml(s.code)}</th>`).join("")}</tr></thead>
+    <tbody>${rows}</tbody></table>`;
+  box.querySelectorAll("td.blk-cell").forEach(td => td.addEventListener("click", async () => {
+    const sectionId = Number(td.dataset.sec), levelId = Number(td.dataset.lvl);
+    const on = td.classList.contains("on");
+    try {
+      if (on) {
+        const b = blkBlocks.find(x => x.section_id === sectionId && x.level_id === levelId);
+        if (b) await api(`/objects/${state.objectId}/blocks/${b.id}`, { method: "DELETE" });
+      } else {
+        await api(`/objects/${state.objectId}/blocks`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ section_id: sectionId, level_id: levelId }),
+        });
+      }
+      blkBlocks = await api(`/objects/${state.objectId}/blocks`);
+      renderBlkMatrix();
+    } catch (e) { showToast(e.message, "error"); }
+  }));
+}
+
+// -------- Виды работ (вкладка «Виды работ»): загрузка xlsx --------
+
+document.getElementById("wt-analyze").addEventListener("click", async () => {
+  const fileInput = document.getElementById("wt-file");
+  const status = document.getElementById("wt-status");
+  if (!fileInput.files.length) { status.textContent = "Выберите файл"; return; }
+  status.textContent = "Разбор…";
+  const form = new FormData();
+  form.append("file", fileInput.files[0]);
+  try {
+    const res = await fetch(`/objects/${state.objectId}/work-types/analyze`, { method: "POST", body: form });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) { status.textContent = (body && body.detail) || `Ошибка ${res.status}`; return; }
+    wtPending = body;
+    status.textContent = "Разбор готов — проверьте сводку.";
+    renderWtSummary(body);
+    document.getElementById("wt-apply-box").style.display = "";
+  } catch (e) {
+    status.textContent = "Не удалось связаться с сервером: " + e.message;
+  }
+});
+
+function renderWtSummary(data) {
+  const box = document.getElementById("wt-summary");
+  const warn = (data.warnings || []).length
+    ? `<div class="warning-text"><b>Предупреждения</b>${data.warnings.map(w => `<div>• ${escapeHtml(w)}</div>`).join("")}</div>`
+    : "";
+  box.innerHTML = `${warn}
+    <div>Всего строк: <b>${data.total_rows}</b></div>
+    <div>Новых: <b>${data.new.length}</b></div>
+    <div>Возвращаются (были списаны раньше): <b>${data.reviving.length}</b></div>
+    <div>Пропадут из файла (спишутся, статусы сохранятся): <b>${data.retiring.length}</b>
+      ${data.retiring.length ? "— " + data.retiring.map(escapeHtml).join(", ") : ""}</div>
+    <div>Без изменений: <b>${data.unchanged}</b></div>`;
+}
+
+document.getElementById("wt-apply").addEventListener("click", async () => {
+  if (!wtPending) return;
+  try {
+    const res = await api(`/objects/${state.objectId}/work-types/apply`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: wtPending.token }),
+    });
+    showToast(`Готово: добавлено ${res.added}, возвращено ${res.revived}, списано ${res.retired}.`, "success");
+    wtPending = null;
+    document.getElementById("wt-apply-box").style.display = "none";
+    document.getElementById("wt-summary").innerHTML = "";
+    document.getElementById("wt-file").value = "";
+    await loadWorkTypesTree();
+  } catch (e) { showToast(e.message, "error"); }
+});
+
+async function loadWorkTypesTree() {
+  const box = document.getElementById("wt-tree-box");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  wpData = await api(`/objects/${state.objectId}/work-progress`);
+  box.innerHTML = wpData.tree.length
+    ? renderWtTreeReadonly(wpData.tree)
+    : '<div class="hint-text">Справочник ещё пуст — загрузите xlsx выше.</div>';
+}
+
+function renderWtTreeReadonly(nodes, depth = 0) {
+  return nodes.map(n => {
+    const line = n.row_kind === "узел"
+      ? `<div style="padding-left:${depth * 16}px"><b>${escapeHtml(n.name)}</b></div>`
+      : `<div style="padding-left:${depth * 16}px">${escapeHtml(n.name || "(без названия)")}
+          <span class="hint-text">· ${escapeHtml(n.row_kind)}${n.unit ? " · " + escapeHtml(n.unit) : ""}</span></div>`;
+    return line + (n.children && n.children.length ? renderWtTreeReadonly(n.children, depth + 1) : "");
+  }).join("");
+}
+
+// -------- Статусы (вкладка «Статусы»): матрица вид работ × блок/секция --------
+
+async function loadWorkProgress() {
+  const box = document.getElementById("wp-matrix-box");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  wpData = await api(`/objects/${state.objectId}/work-progress`);
+  renderWpMatrix();
+}
+
+function wpFlatten(nodes, depth, out) {
+  for (const n of nodes) {
+    out.push({ node: n, depth });
+    if (n.children && n.children.length) wpFlatten(n.children, depth + 1, out);
+  }
+  return out;
+}
+
+function wpColumnList() {
+  const blockCols = wpData.blocks.map(b => ({
+    unit: WP_UNIT_BLOCK, block_id: b.id, section_id: null,
+    label: `${b.section_code} · ${b.level_name || ("эт. " + b.floor)}`,
+  }));
+  const sectionCols = wpData.sections.map(s => ({
+    unit: WP_UNIT_SECTION, block_id: null, section_id: s.id, label: `${s.code} целиком`,
+  }));
+  return [...blockCols, ...sectionCols, { unit: WP_UNIT_WHOLE, block_id: null, section_id: null, label: "Объект" }];
+}
+
+function wpCellStatus(node, col) {
+  if (!node.cells) return null;
+  if (col.unit === WP_UNIT_BLOCK) return node.cells[col.block_id];
+  if (col.unit === WP_UNIT_SECTION) return node.cells[col.section_id];
+  return node.cells["объект"];
+}
+
+function renderWpMatrix() {
+  const box = document.getElementById("wp-matrix-box");
+  if (!wpData.tree.length) {
+    box.innerHTML = '<div class="hint-text">Справочник видов работ ещё не загружен '
+      + '(вкладка «Виды работ»).</div>';
+    return;
+  }
+  if (!wpData.blocks.length && !wpData.sections.length) {
+    box.innerHTML = '<div class="hint-text">Блоков ещё нет (вкладка «Блоки»).</div>';
+    return;
+  }
+  const cols = wpColumnList();
+  const rows = wpFlatten(wpData.tree, 0, []);
+  const head = `<tr><th class="wp-row-name">Вид работ</th>
+    ${cols.map(c => `<th title="${escapeHtml(c.label)}">${escapeHtml(c.label)}</th>`).join("")}</tr>`;
+  const body = rows.map(({ node, depth }) => {
+    const nameCell = `<td class="wp-row-name" style="padding-left:${8 + depth * 16}px">`
+      + `${escapeHtml(node.name || "(без названия)")}</td>`;
+    if (node.row_kind === "узел") {
+      return `<tr class="wp-node">${nameCell}${cols.map(() => "<td></td>").join("")}</tr>`;
+    }
+    const cells = cols.map(c => {
+      if (!node.addressable || c.unit !== node.unit) {
+        return `<td class="wp-cell wp-off"><span class="wp-dot"></span></td>`;
+      }
+      const status = wpCellStatus(node, c) || "plan";
+      const blockAttr = c.block_id != null ? ` data-block="${c.block_id}"` : "";
+      const sectionAttr = c.section_id != null ? ` data-section="${c.section_id}"` : "";
+      return `<td class="wp-cell wp-${status}" data-wt="${node.id}"${blockAttr}${sectionAttr}>`
+        + `<span class="wp-dot"></span></td>`;
+    }).join("");
+    return `<tr>${nameCell}${cells}</tr>`;
+  }).join("");
+  box.innerHTML = `<table id="wp-matrix-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+  box.querySelectorAll("td.wp-cell[data-wt]").forEach(td =>
+    td.addEventListener("click", () => wpCycleCell(td)));
+}
+
+async function wpCycleCell(td) {
+  const workTypeId = Number(td.dataset.wt);
+  const blockId = td.dataset.block ? Number(td.dataset.block) : null;
+  const sectionId = td.dataset.section ? Number(td.dataset.section) : null;
+  const cur = td.classList.contains("wp-in_progress") ? "in_progress"
+    : td.classList.contains("wp-done") ? "done" : "plan";
+  // План -> В работе -> Выполнено -> План (снимает простановку).
+  const next = cur === "plan" ? "in_progress" : cur === "in_progress" ? "done" : null;
+  try {
+    await api(`/objects/${state.objectId}/work-progress/cell`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        work_type_id: workTypeId, block_id: blockId, section_id: sectionId, status: next,
+      }),
+    });
+    td.classList.remove("wp-plan", "wp-in_progress", "wp-done");
+    td.classList.add("wp-" + (next || "plan"));
+  } catch (e) { showToast(e.message, "error"); }
+}
+
+// ==================== ЗАГРУЗКА ПОМЕЩЕНИЙ ИЗ PDF (2026-08-26) ====================
+// Второй, помимо Revit, источник геометрии для «Модели МФР». Работает на
+// объекте, который выбран сейчас, — своего выпадающего списка, как у формы
+// Revit, нет: комплект чертежей жёстко привязан к одному объекту.
+
+const pdfImportBackdrop = document.getElementById("pdf-import-backdrop");
+const pdfImportFileInput = document.getElementById("pdf-import-file-input");
+const pdfImportStatus = document.getElementById("pdf-import-status");
+const pdfReviewBackdrop = document.getElementById("pdf-review-backdrop");
+let pdfImportFile = null;
+let pdfImportPending = null;
+
+function setPdfImportStatus(text, isError) {
+  pdfImportStatus.textContent = text;
+  pdfImportStatus.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+document.getElementById("btn-upload-pdf").addEventListener("click", () => {
+  pdfImportFile = null;
+  pdfImportFileInput.value = "";
+  document.getElementById("pdf-import-file-name").textContent = "Файл не выбран";
+  setPdfImportStatus("", false);
+  pdfImportBackdrop.classList.add("open");
+});
+document.getElementById("pdf-import-cancel").addEventListener("click",
+  () => pdfImportBackdrop.classList.remove("open"));
+document.getElementById("pdf-import-file-pick").addEventListener("click",
+  () => pdfImportFileInput.click());
+pdfImportFileInput.addEventListener("change", () => {
+  pdfImportFile = (pdfImportFileInput.files && pdfImportFileInput.files[0]) || null;
+  document.getElementById("pdf-import-file-name").textContent =
+    pdfImportFile ? pdfImportFile.name : "Файл не выбран";
+});
+
+document.getElementById("pdf-clear-submit").addEventListener("click", () => {
+  runClearImportData(
+    "pdf",
+    state.objectId,
+    {
+      elements: document.getElementById("pdf-clear-elements").checked,
+      structure: document.getElementById("pdf-clear-structure").checked,
+      work: document.getElementById("pdf-clear-work").checked,
+    },
+    document.getElementById("pdf-clear-status"),
+    document.getElementById("pdf-clear-submit"),
+  );
+});
+
+document.getElementById("pdf-import-submit").addEventListener("click", async () => {
+  if (!pdfImportFile) { setPdfImportStatus("Сначала выберите файл", true); return; }
+  const btn = document.getElementById("pdf-import-submit");
+  btn.disabled = true;
+  setPdfImportStatus("Разбор файла… на комплекте из 22 листов это может занять до минуты.", false);
+  const form = new FormData();
+  form.append("object_id", state.objectId);
+  form.append("file", pdfImportFile);
+  try {
+    const res = await fetch("/import-pdf/analyze", { method: "POST", body: form });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      setPdfImportStatus((body && body.detail) ? body.detail : `Ошибка ${res.status}`, true);
+      return;
+    }
+    setPdfImportStatus("Разбор готов — проверьте сводку.", false);
+    pdfImportPending = body;
+    renderPdfReview(body);
+    pdfReviewBackdrop.classList.add("open");
+  } catch (e) {
+    setPdfImportStatus("Не удалось связаться с сервером: " + e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("pdf-review-cancel").addEventListener("click", () => {
+  pdfReviewBackdrop.classList.remove("open");
+  pdfImportPending = null;
+});
+
+function renderPdfReview(data) {
+  document.getElementById("pdf-review-head").textContent =
+    `Объект «${data.object_name}» · помещений в файле ${data.total_rooms}`;
+
+  const floors = Object.keys(data.by_floor || {});
+  const rows = floors.map((floor) => {
+    const s = data.by_floor[floor];
+    return `<tr><td>${escapeHtml(floor)}</td><td class="num">${s["помещений"]}</td>
+      <td class="num">${s["с площадью"]}</td></tr>`;
+  }).join("");
+
+  const warnings = (data.warnings || []).length
+    ? `<div class="warning-text"><b>Предупреждения</b>${(data.warnings || []).map((w) =>
+        `<div>• ${escapeHtml(w)}</div>`).join("")}</div>`
+    : "";
+
+  document.getElementById("pdf-review-body").innerHTML = `
+    ${warnings}
+    <h3>Что изменится</h3>
+    <div><b>${data.new}</b> — новых помещений</div>
+    <div><b>${data.unchanged}</b> — без изменений</div>
+    ${data.retiring
+      ? `<div style="color:var(--color-danger)"><b>${data.retiring}</b> — исчезло из чертежа, будет списано</div>`
+      : ""}
+    <h3>По этажам</h3>
+    <table class="bulk-edit-table">
+      <thead><tr><th>Этаж</th><th style="text-align:right">Помещений</th>
+        <th style="text-align:right">С площадью</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+document.getElementById("pdf-review-apply").addEventListener("click", async () => {
+  if (!pdfImportPending) return;
+  const btn = document.getElementById("pdf-review-apply");
+  const status = document.getElementById("pdf-review-status");
+  btn.disabled = true;
+  status.textContent = "Применение…";
+  status.style.color = "var(--color-text-muted)";
+  try {
+    const res = await fetch("/import-pdf/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: pdfImportPending.token }),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      status.textContent = (body && body.detail) ? body.detail : `Ошибка ${res.status}`;
+      status.style.color = "var(--color-danger)";
+      return;
+    }
+    let текст = `Готово: помещений ${body.rooms_written}, списано ${body.retired}.`;
+    // У общих этажей (1-8, обе секции сразу) секцию помещения взять неоткуда
+    // — не молчим об этом, а называем число прямо (docstring app/pdf_import
+    // .apply — геометрическое довыведение здесь физически не работает).
+    if (body.section_unknown) {
+      текст += ` Секция известна у ${body.with_known_section}, `
+        + `не определена у ${body.section_unknown} (общие этажи секций).`;
+    }
+    pdfImportPending = null;
+    pdfReviewBackdrop.classList.remove("open");
+    pdfImportBackdrop.classList.remove("open");
+    setPdfImportStatus(текст, false);
+  } catch (e) {
+    status.textContent = "Не удалось связаться с сервером: " + e.message;
+    status.style.color = "var(--color-danger)";
+  } finally {
+    btn.disabled = false;
   }
 });

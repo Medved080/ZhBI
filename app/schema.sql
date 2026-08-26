@@ -999,11 +999,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_training_answers_attempt_ord
 -- одного объекта называют её по-разному: КР пишет `С01`, АР — `Секция 1`,
 -- встречается и `С1`. Без сведения к общей форме справочник задвоился бы
 -- на второй же загрузке (app/revit_package.normalize_section).
+-- `axis_from`/`axis_to` — привязка ГОРИЗОНТАЛЬНОЙ границы секции к осям
+-- здания (метки из `object_grids`), для параллелепипеда блока
+-- (Docs/TZ.md, «Геометрия блока»). Одна привязка на секцию, действует на
+-- ВСЕ её этажи — секция не гуляет по горизонтали от этажа к этажу.
+-- NULL у обеих — секция без геометрии, учёт по блокам работает как есть.
 CREATE TABLE IF NOT EXISTS object_sections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
     code TEXT NOT NULL,
     name TEXT,
+    axis_from TEXT,
+    axis_to TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (object_id, code)
@@ -1045,6 +1052,22 @@ CREATE TABLE IF NOT EXISTS object_level_aliases (
     level_id INTEGER NOT NULL REFERENCES object_levels (id) ON DELETE CASCADE,
     elevation_mm REAL,
     PRIMARY KEY (object_id, section_code, level_name)
+);
+
+-- Оси здания (сетка осей Revit) — свойство ЗДАНИЯ, а не раздела: КР и АР
+-- моделируют одну и ту же физическую сетку. Если по факту разошлись
+-- (модель разъехалась), последний применённый пакет побеждает — так же,
+-- как уже ведут себя секции/этажи при расхождении между разделами.
+-- `x1,y1,x2,y2` — отрезок оси В ОБЩИХ координатах площадки, как он
+-- пришёл из пакета (Docs/revit-import.md, поле `"оси"`); используется
+-- для параллелепипеда блока (Docs/TZ.md, «Геометрия блока»).
+CREATE TABLE IF NOT EXISTS object_grids (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    kind TEXT,
+    x1 REAL NOT NULL, y1 REAL NOT NULL, x2 REAL NOT NULL, y2 REAL NOT NULL,
+    UNIQUE (object_id, label)
 );
 
 -- Реестр загруженных пакетов. `section_code` — раздел проекта (КР, АР):
@@ -1150,4 +1173,59 @@ CREATE TABLE IF NOT EXISTS object_flats (
     living_area REAL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (object_id, section_id, level_id, number)
+);
+
+-- Второй контур учёта (Docs/block-accounting.md): вид работ × блок
+-- (этаж + секция) -> План/В работе/Выполнено. НЕ читает и не пишет
+-- `elements`/контракты/график поставки — общий у контуров только объект.
+
+-- Блок = пара (секция, этаж). НЕ декартово произведение: у секции может не
+-- быть верхних этажей, поэтому блок заводится явно, а не порождается
+-- автоматически из всех пар.
+CREATE TABLE IF NOT EXISTS blocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    section_id INTEGER NOT NULL REFERENCES object_sections (id) ON DELETE CASCADE,
+    level_id INTEGER NOT NULL REFERENCES object_levels (id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (section_id, level_id)
+);
+
+-- Справочник видов работ (WBS), перезагружаемый xlsx (block-accounting.md
+-- §4). Ключ записи — ПУТЬ по дереву, а не код и не название: на реальном
+-- файле заказчика код не уникален (`290-13` встречается 7 раз), название
+-- тоже («Стены» — 6 раз), уникален только путь.
+CREATE TABLE IF NOT EXISTS work_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES work_types (id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    row_kind TEXT NOT NULL,
+    code TEXT,
+    name TEXT NOT NULL,
+    unit TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    -- пропал при перезагрузке справочника — не удаляется, иначе потерялась
+    -- бы простановленная по нему история статусов.
+    retired_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, path)
+);
+
+-- Статус вида работ на привязке. Отсутствие строки = «План»
+-- (block-accounting.md §3) — держать по строке на каждую пару вид
+-- работ/блок со значением по умолчанию означало бы тысячи пустых строк.
+-- Ровно один из `block_id`/`section_id` заполнен по единице измерения
+-- вида работ (`эт/сек` -> block_id, `сек` -> section_id, `компл` -> оба
+-- пустые); правило проверяется в коде, а не CHECK, — единиц измерения
+-- будет больше одной комбинации.
+CREATE TABLE IF NOT EXISTS work_progress (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_type_id INTEGER NOT NULL REFERENCES work_types (id) ON DELETE CASCADE,
+    block_id INTEGER REFERENCES blocks (id) ON DELETE CASCADE,
+    section_id INTEGER REFERENCES object_sections (id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('in_progress', 'done')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by INTEGER REFERENCES users (id),
+    UNIQUE (work_type_id, block_id, section_id)
 );

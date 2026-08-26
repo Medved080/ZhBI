@@ -15,6 +15,8 @@
 
 import json
 
+from app import block_geometry
+
 
 def _level_row(row) -> dict:
     """Строка этажа для интерфейса. `key` — технический ключ сшивки
@@ -79,6 +81,14 @@ def filters(conn, object_id: int) -> dict:
         "SELECT SUM(level_id IS NULL) AS без_этажа, SUM(section_id IS NULL) AS без_секции "
         "FROM revit_elements WHERE object_id = ? AND is_current = 1", (object_id,)
     ).fetchone()
+    # Метки осей — для выпадающих списков привязки секции к границам
+    # блока (Docs/TZ.md, «Геометрия блока»). Пусто у объектов без
+    # выгрузки Revit (PDF-only) или пока оси не сохранились.
+    grids = [
+        dict(row) for row in conn.execute(
+            "SELECT label, kind FROM object_grids WHERE object_id = ? ORDER BY label",
+            (object_id,))
+    ]
     return {
         "levels": levels,
         "sections": sections,
@@ -86,6 +96,7 @@ def filters(conn, object_id: int) -> dict:
         "categories": categories,
         "without_level": orphans["без_этажа"] or 0,
         "without_section": orphans["без_секции"] or 0,
+        "grids": grids,
     }
 
 
@@ -229,4 +240,64 @@ def card(conn, object_id: int, element_id: int):
         "рабочий набор": data["workset"],
         "контур габаритный": bool(data["outline_approx"]),
         "параметры": extra,
+    }
+
+
+def blocks_geometry(conn, object_id: int, level_ids=None, section_ids=None) -> list:
+    """Параллелепипеды РЕАЛЬНЫХ блоков (Docs/TZ.md, «Геометрия блока») —
+    слой «Блоки» в «Модели МФР», тем же языком фильтра, что `elements()`.
+    У блока без привязки секции к осям или без надёжной отметки этажа
+    геометрии не будет — `ok: false` с причиной, не приблизительная."""
+    where = ["b.object_id = ?"]
+    params = [object_id]
+    _in_clause("b.level_id", level_ids, where, params)
+    _in_clause("b.section_id", section_ids, where, params)
+    rows = conn.execute(
+        "SELECT b.id, b.section_id, b.level_id, s.code AS section_code, "
+        "l.name AS level_name "
+        "FROM blocks b "
+        "JOIN object_sections s ON s.id = b.section_id "
+        "JOIN object_levels l ON l.id = b.level_id "
+        "WHERE " + " AND ".join(where), tuple(params),
+    ).fetchall()
+    out = []
+    for row in rows:
+        entry = {
+            "id": row["id"], "section_id": row["section_id"], "level_id": row["level_id"],
+            "секция": row["section_code"], "этаж": row["level_name"],
+        }
+        entry.update(block_geometry.block_box(conn, object_id, row["section_id"], row["level_id"]))
+        out.append(entry)
+    return out
+
+
+def block_card(conn, object_id: int, block_id: int):
+    """Карточка одного блока — по клику на параллелепипед плана."""
+    row = conn.execute(
+        "SELECT b.id, b.section_id, b.level_id, s.code AS section_code, "
+        "s.name AS section_name, l.name AS level_name, l.floor, l.kind "
+        "FROM blocks b "
+        "JOIN object_sections s ON s.id = b.section_id "
+        "JOIN object_levels l ON l.id = b.level_id "
+        "WHERE b.object_id = ? AND b.id = ?", (object_id, block_id),
+    ).fetchone()
+    if row is None:
+        return None
+
+    geometry = block_geometry.block_box(conn, object_id, row["section_id"], row["level_id"])
+    elements_count = conn.execute(
+        "SELECT COUNT(*) FROM revit_elements WHERE object_id = ? AND is_current = 1 "
+        "AND section_id = ? AND level_id = ?",
+        (object_id, row["section_id"], row["level_id"]),
+    ).fetchone()[0]
+    rooms_count = conn.execute(
+        "SELECT COUNT(*) FROM revit_rooms WHERE object_id = ? AND is_current = 1 "
+        "AND section_id = ? AND level_id = ?",
+        (object_id, row["section_id"], row["level_id"]),
+    ).fetchone()[0]
+
+    return {
+        "id": row["id"], "секция": row["section_code"], "этаж": row["level_name"],
+        "геометрия": geometry,
+        "элементов": elements_count, "помещений": rooms_count,
     }

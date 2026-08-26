@@ -429,6 +429,29 @@ FEATURES = [
             ["GET /revit-plan/filters", "GET /revit-plan/elements",
              "GET /revit-plan/element", "GET/PUT /revit-plan/colors"],
             SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("pdf_import", "Модель Revit", "Загрузка помещений из PDF",
+            "Второй, помимо Revit, источник геометрии для «Модели МФР»: контуры и площади "
+            "помещений из архитектурного чертежа PDF, своим разделом (не задваивает и не "
+            "трогает данные из Revit, если они появятся позже на этом же объекте).",
+            ["POST /import-pdf/analyze", "POST /import-pdf/apply"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE), io=IO_IMPORT),
+
+    # ------------------------------------- Учёт работ по блокам (Docs/block-accounting.md)
+    Feature("blocks", "Учёт по блокам", "Секции, этажи и блоки объекта",
+            "Второй контур учёта, независимый от модели Revit и от сборного ЖБИ: секции и "
+            "этажи заводятся здесь вручную (или приезжают из Revit-выгрузки, если она "
+            "появится позже — справочники общие), блок — отмеченная пара секция+этаж.",
+            ["GET/POST/PATCH/DELETE /objects/{id}/sections",
+             "GET/POST/PATCH/DELETE /objects/{id}/levels",
+             "GET/POST/DELETE /objects/{id}/blocks"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("work_progress", "Учёт по блокам", "Виды работ и статус по блокам",
+            "Справочник видов работ грузится перезагружаемым xlsx (путь по дереву — ключ "
+            "записи). Статус блока ставит человек, не арифметика по изделиям: «Выполнено» "
+            "— это приёмка.",
+            ["POST /objects/{id}/work-types/analyze", "POST /objects/{id}/work-types/apply",
+             "GET /objects/{id}/work-progress", "PUT /objects/{id}/work-progress/cell"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE), io=IO_IMPORT),
 ]
 
 # ======================= ПРИМЕНИМОСТЬ К ТИПАМ ОБЪЕКТА =======================
@@ -463,7 +486,8 @@ _ТОЛЬКО_ЖБИ = {
     # схема по чертежу DXF и её выгрузка
     "plan", "export", "workspace_model", "workspace_foreman",
 }
-_ТОЛЬКО_МФР = {"revit_import", "revit_model", "workspace_mfr"}
+_ТОЛЬКО_МФР = {"revit_import", "revit_model", "workspace_mfr", "blocks", "work_progress",
+               "pdf_import"}
 
 FEATURES = [
     f._replace(kinds=_Ж) if f.key in _ТОЛЬКО_ЖБИ else

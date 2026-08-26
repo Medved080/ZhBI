@@ -263,6 +263,7 @@ def apply(conn, object_id: int, packages, analysis: dict) -> dict:
             have_aliases[(section_code, name)] = level_id
             added_aliases += 1
 
+    added_grids = 0
     for package in packages:
         # Актуальным остаётся один пакет на раздел: предыдущая выгрузка
         # того же раздела перестаёт быть текущей, но из реестра не
@@ -282,14 +283,43 @@ def apply(conn, object_id: int, packages, analysis: dict) -> dict:
              json.dumps(package.base_point) if package.base_point else None,
              len(package.elements)),
         )
+        added_grids += _apply_grids(conn, object_id, package.grids)
 
     conn.commit()
     return {
         "sections_added": added_sections,
         "levels_added": added_levels,
         "aliases_added": added_aliases,
+        "grids_added": added_grids,
         "packages": len(packages),
     }
+
+
+def _apply_grids(conn, object_id: int, grids: list) -> int:
+    """Оси здания — свойство ЗДАНИЯ, а не раздела (докстрока
+    `object_grids` в app/schema.sql): последний применённый пакет,
+    в котором встретилась метка, побеждает, без сверки с другими
+    разделами. Раньше `Package.grids` вовсе не сохранялось — только
+    считалось в сводке (`"осей": len(p.grids)` выше)."""
+    written = 0
+    for grid in grids or []:
+        точки = grid.get("точки") or []
+        if len(точки) != 2:
+            continue
+        (x1, y1), (x2, y2) = точки
+        метка = (grid.get("имя") or "").strip()
+        if not метка:
+            continue
+        conn.execute(
+            "INSERT INTO object_grids (object_id, label, kind, x1, y1, x2, y2) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT (object_id, label) DO UPDATE SET "
+            "kind = excluded.kind, x1 = excluded.x1, y1 = excluded.y1, "
+            "x2 = excluded.x2, y2 = excluded.y2",
+            (object_id, метка, grid.get("тип"), x1, y1, x2, y2),
+        )
+        written += 1
+    return written
 
 
 class _Entry:

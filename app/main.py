@@ -72,6 +72,12 @@ from app.dxf_import import (
     save_uploaded_file,
 )
 from app import revit_colors, revit_import, revit_plan
+from app import blocks as blocks_mod
+from app import work_progress as work_progress_mod
+from app import work_types_import
+from app import pdf_import
+from app import pdf_rooms
+from app import import_reset
 from app.features import KIND_LABELS, KIND_ZHBI, KINDS
 from app.element_fields import (
     EDITABLE_FIELDS,
@@ -5314,6 +5320,479 @@ def apply_revit(body: RevitApplyIn, user: sqlite3.Row = Depends(get_current_user
         },
     )
     return RevitImportResult(object_id=object_id, **result)
+
+
+@app.post("/import-pdf/analyze")
+def analyze_pdf(
+    file: UploadFile = File(...),
+    object_id: int = Form(...),
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Фаза 1 загрузки помещений из PDF-чертежа: что появится в модели
+    объекта. В БД не пишет ничего — даже справочники секций/этажей."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "pdf_import", "write")
+        data = read_upload_limited(file.file)
+        try:
+            analysis = pdf_import.analyze(conn, object_id, data)
+        except (pdf_import.PdfImportError, pdf_rooms.PdfRoomsError) as e:
+            status = getattr(e, "status_code", 422)
+            raise HTTPException(status_code=status, detail=e.message)
+    finally:
+        conn.close()
+
+    token = pdf_import.remember_pending(analysis)
+    return {
+        "token": token,
+        "object_id": object_id,
+        "object_name": analysis["object_name"],
+        "total_rooms": analysis["total_rooms"],
+        "new": analysis["new"],
+        "unchanged": analysis["unchanged"],
+        "retiring": analysis["retiring"],
+        "by_floor": analysis["by_floor"],
+        "warnings": analysis["warnings"],
+    }
+
+
+class PdfApplyIn(BaseModel):
+    token: str
+
+
+@app.post("/import-pdf/apply")
+def apply_pdf(body: PdfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Фаза 2: применяет уже показанную сводку."""
+    try:
+        analysis = pdf_import.get_pending(body.token)
+    except pdf_import.PdfImportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+    object_id = analysis["object_id"]
+    conn = get_connection()
+    try:
+        # Объект — из токена, не от клиента: та же причина, что у Revit.
+        assert_object_feature(conn, user, object_id, "pdf_import", "write")
+    finally:
+        conn.close()
+
+    backup_before_import(
+        "помещения из PDF → %s" % analysis["object_name"],
+        audit_display_name(user), user["id"])
+
+    операция = activity.new_request_id()
+    conn = get_connection()
+    try:
+        result = pdf_import.apply(conn, object_id, analysis)
+    finally:
+        conn.close()
+    pdf_import.forget_pending(body.token)
+
+    activity.log(
+        "import_pdf",
+        user=user,
+        request_id=операция,
+        entity_type="object",
+        entity_id=object_id,
+        new_value=str(analysis["total_rooms"]),
+        details={
+            "помещений": result["rooms_written"],
+            "списано": result["retired"],
+            "секция_известна": result["with_known_section"],
+            "секция_не_определена": result["section_unknown"],
+            "предупреждения": analysis["warnings"],
+        },
+    )
+    return {"object_id": object_id, **result}
+
+
+class ClearImportDataIn(BaseModel):
+    source: str  # "revit" | "pdf" — экран, с которого вызвана очистка
+    elements: bool = False
+    structure: bool = False
+    work: bool = False
+
+
+@app.post("/objects/{object_id}/clear-import-data")
+def clear_import_data(object_id: int, body: ClearImportDataIn,
+                       user: sqlite3.Row = Depends(get_current_user)):
+    """Отладочная очистка справочников объекта перед повторной загрузкой
+    Revit/PDF (app/import_reset.py) — не двухфазная, применяется сразу:
+    это инструмент отладки, а не рабочий импорт со сводкой."""
+    if body.source not in ("revit", "pdf"):
+        raise HTTPException(status_code=422, detail="source должен быть 'revit' или 'pdf'")
+    if not (body.elements or body.structure or body.work):
+        raise HTTPException(status_code=422, detail="Отметьте хотя бы одну группу для очистки")
+
+    feature_key = "revit_import" if body.source == "revit" else "pdf_import"
+    conn = get_connection()
+    try:
+        if body.elements:
+            assert_object_feature(conn, user, object_id, feature_key, "write")
+        if body.structure:
+            assert_object_feature(conn, user, object_id, "blocks", "write")
+        if body.work:
+            assert_object_feature(conn, user, object_id, "blocks", "write")
+            assert_object_feature(conn, user, object_id, "work_progress", "write")
+        row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
+        object_name = row["name"] if row else str(object_id)
+    finally:
+        conn.close()
+
+    what = ", ".join(label for flag, label in (
+        (body.elements, "элементы"), (body.structure, "секции/этажи"), (body.work, "виды работ"),
+    ) if flag)
+    backup_before_import(
+        "очистка справочников (%s, %s) → %s" % (body.source, what, object_name),
+        audit_display_name(user), user["id"])
+
+    conn = get_connection()
+    try:
+        counts = import_reset.clear(
+            conn, object_id,
+            elements=body.elements, elements_source=body.source,
+            structure=body.structure, work=body.work,
+        )
+    finally:
+        conn.close()
+
+    activity.log(
+        "clear_import_data",
+        user=user,
+        entity_type="object",
+        entity_id=object_id,
+        details={"источник": body.source, "счётчики": counts},
+    )
+    return {"object_id": object_id, "counts": counts}
+
+
+# ============== Учёт по блокам «этаж + секция» (Docs/block-accounting.md) ==============
+#
+# Второй контур учёта, независимый от сборного ЖБИ и от модели Revit
+# (общий у контуров только объект). Секции/этажи заводятся здесь вручную —
+# в те же таблицы, что заполняет `revit_catalog.apply` при импорте Revit,
+# поэтому появившаяся позже Revit-выгрузка совместится с уже заведённым по
+# коду секции / номеру этажа, а не задвоит справочник.
+
+
+class BlockSectionIn(BaseModel):
+    code: str
+    name: Optional[str] = None
+
+
+class BlockSectionRenameIn(BaseModel):
+    name: str
+    # Привязка к осям здания для геометрии блока (Docs/TZ.md, «Геометрия
+    # блока») — обе пустые снимают привязку, см. blocks._set_section_axes.
+    axis_from: Optional[str] = None
+    axis_to: Optional[str] = None
+
+
+@app.get("/objects/{object_id}/sections")
+def list_block_sections(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "read")
+        return blocks_mod.list_sections(conn, object_id)
+    finally:
+        conn.close()
+
+
+@app.post("/objects/{object_id}/sections")
+def create_block_section(object_id: int, body: BlockSectionIn,
+                         user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            row = blocks_mod.create_section(conn, object_id, body.code, body.name)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    activity.log("block_section_add", user=user, entity_type="object", entity_id=object_id,
+                new_value=row["code"])
+    return row
+
+
+@app.patch("/objects/{object_id}/sections/{section_id}")
+def rename_block_section(object_id: int, section_id: int, body: BlockSectionRenameIn,
+                         user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            blocks_mod.update_section(conn, object_id, section_id, body.name,
+                                      body.axis_from, body.axis_to)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/objects/{object_id}/sections/{section_id}")
+def delete_block_section(object_id: int, section_id: int,
+                         user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            blocks_mod.delete_section(conn, object_id, section_id)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    activity.log("block_section_delete", user=user, entity_type="object", entity_id=object_id,
+                old_value=str(section_id))
+    return {"ok": True}
+
+
+class BlockLevelIn(BaseModel):
+    kind: str  # "этаж" | "подземный" | "кровля"
+    floor: Optional[int] = None
+    name: Optional[str] = None
+    elevation_mm: Optional[float] = None
+    section_codes: list[str] = []  # только для kind="кровля"
+
+
+class BlockLevelEditIn(BaseModel):
+    name: Optional[str] = None
+    elevation_mm: Optional[float] = None
+
+
+@app.get("/objects/{object_id}/levels")
+def list_block_levels(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "read")
+        return blocks_mod.list_levels(conn, object_id)
+    finally:
+        conn.close()
+
+
+@app.post("/objects/{object_id}/levels")
+def create_block_level(object_id: int, body: BlockLevelIn,
+                       user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            row = blocks_mod.create_level(conn, object_id, body.kind, body.floor, body.name,
+                                          body.elevation_mm, body.section_codes)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    activity.log("block_level_add", user=user, entity_type="object", entity_id=object_id,
+                new_value=row["key"])
+    return row
+
+
+@app.patch("/objects/{object_id}/levels/{level_id}")
+def edit_block_level(object_id: int, level_id: int, body: BlockLevelEditIn,
+                     user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            blocks_mod.update_level(conn, object_id, level_id, body.name, body.elevation_mm)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/objects/{object_id}/levels/{level_id}")
+def delete_block_level(object_id: int, level_id: int,
+                       user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            blocks_mod.delete_level(conn, object_id, level_id)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    activity.log("block_level_delete", user=user, entity_type="object", entity_id=object_id,
+                old_value=str(level_id))
+    return {"ok": True}
+
+
+class BlockCreateIn(BaseModel):
+    section_id: int
+    level_id: int
+
+
+@app.get("/objects/{object_id}/blocks")
+def list_blocks_endpoint(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "read")
+        return blocks_mod.list_blocks(conn, object_id)
+    finally:
+        conn.close()
+
+
+@app.post("/objects/{object_id}/blocks")
+def create_block_endpoint(object_id: int, body: BlockCreateIn,
+                          user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            row = blocks_mod.create_block(conn, object_id, body.section_id, body.level_id)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    activity.log("block_add", user=user, entity_type="object", entity_id=object_id,
+                details={"section_id": body.section_id, "level_id": body.level_id})
+    return row
+
+
+@app.delete("/objects/{object_id}/blocks/{block_id}")
+def delete_block_endpoint(object_id: int, block_id: int,
+                          user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            blocks_mod.delete_block(conn, object_id, block_id)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    activity.log("block_delete", user=user, entity_type="object", entity_id=object_id,
+                old_value=str(block_id))
+    return {"ok": True}
+
+
+@app.get("/objects/{object_id}/blocks/geometry")
+def blocks_geometry_endpoint(
+    object_id: int,
+    level_id: Optional[list[int]] = Query(None),
+    section_id: Optional[list[int]] = Query(None),
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Параллелепипеды блоков для слоя «Блоки» в «Модели МФР»
+    (Docs/TZ.md, «Геометрия блока») — тем же языком отбора, что
+    `/revit-plan/elements`."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "read")
+        return revit_plan.blocks_geometry(conn, object_id, level_ids=level_id,
+                                          section_ids=section_id)
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/blocks/{block_id}/card")
+def block_card_endpoint(object_id: int, block_id: int,
+                        user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "read")
+        card = revit_plan.block_card(conn, object_id, block_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail="Блок не найден")
+        card["статусы_работ"] = work_progress_mod.block_status_summary(conn, object_id, block_id)
+        return card
+    finally:
+        conn.close()
+
+
+@app.post("/objects/{object_id}/work-types/analyze")
+def analyze_work_types(object_id: int, file: UploadFile = File(...),
+                       user: sqlite3.Row = Depends(get_current_user)):
+    """Фаза 1: разбор xlsx со справочником видов работ. В БД не пишет."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        data = read_upload_limited(file.file)
+        try:
+            analysis = work_types_import.analyze(conn, object_id, data)
+        except work_types_import.WorkTypesError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+    token = work_types_import.remember_pending(analysis)
+    return {
+        "token": token, "object_id": object_id, "total_rows": analysis["total_rows"],
+        "new": analysis["new"], "reviving": analysis["reviving"],
+        "retiring": analysis["retiring"], "unchanged": analysis["unchanged"],
+        "warnings": analysis["warnings"],
+    }
+
+
+class WorkTypesApplyIn(BaseModel):
+    token: str
+
+
+@app.post("/objects/{object_id}/work-types/apply")
+def apply_work_types(object_id: int, body: WorkTypesApplyIn,
+                     user: sqlite3.Row = Depends(get_current_user)):
+    """Фаза 2: применяет уже показанную сводку по токену."""
+    try:
+        analysis = work_types_import.get_pending(body.token)
+    except work_types_import.WorkTypesError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    if analysis["object_id"] != object_id:
+        raise HTTPException(status_code=409, detail="Токен относится к другому объекту.")
+
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        result = work_types_import.apply(conn, object_id, analysis)
+    finally:
+        conn.close()
+    work_types_import.forget_pending(body.token)
+    activity.log("import_work_types", user=user, entity_type="object", entity_id=object_id,
+                details=result)
+    return result
+
+
+@app.get("/objects/{object_id}/work-progress")
+def get_work_progress(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        return work_progress_mod.matrix(conn, object_id)
+    finally:
+        conn.close()
+
+
+class WorkProgressCellIn(BaseModel):
+    work_type_id: int
+    block_id: Optional[int] = None
+    section_id: Optional[int] = None
+    status: Optional[str] = None  # None = снять простановку («План»)
+
+
+@app.put("/objects/{object_id}/work-progress/cell")
+def set_work_progress_cell(object_id: int, body: WorkProgressCellIn,
+                           user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            if body.status is None:
+                work_progress_mod.clear_status(conn, object_id, body.work_type_id,
+                                               body.block_id, body.section_id)
+            else:
+                work_progress_mod.set_status(conn, object_id, user["id"], body.work_type_id,
+                                             body.block_id, body.section_id, body.status)
+        except work_progress_mod.ProgressError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+    activity.log("work_progress_set", user=user, entity_type="object", entity_id=object_id,
+                new_value=body.status or "план",
+                details={"work_type_id": body.work_type_id, "block_id": body.block_id,
+                        "section_id": body.section_id})
+    return {"ok": True}
 
 
 @app.post("/import-history-xlsx")

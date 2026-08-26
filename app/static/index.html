@@ -1070,6 +1070,69 @@
   #schedule-backdrop.full #schedule-kinds-box,
   #schedule-backdrop.full #schedule-flow-box { max-height: none; }
 
+  /* -------- «Учёт по блокам» (2026-08-25, Docs/block-accounting.md) --------
+     Второй контур учёта: вид работ × блок (этаж+секция) -> статус. Форма и
+     матрица статусов — по образцу «Графика СМР» и «Настройки ролей»
+     (#roles-table): та же сцепка «шапка и первая колонка прилипают,
+     скроллится содержимое». */
+  #blocks-backdrop .modal { width: 1100px; max-width: 96vw;
+    display: flex; flex-direction: column; overflow: hidden; }
+  #blocks-backdrop .blk-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  #blocks-backdrop .modal > h2, #blocks-backdrop .modal > .tabs,
+  #blocks-backdrop .modal > .actions { flex: 0 0 auto; }
+  .blk-cols { display: flex; gap: 24px; }
+  .blk-cols > div { flex: 1 1 0; min-width: 0; }
+  .blk-add-row { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; align-items: center; }
+  .blk-add-row input, .blk-add-row select { padding: 3px 6px; }
+  .blk-add-row input[type=text] { width: 90px; }
+  .blk-add-row input[type=number] { width: 70px; }
+  #blk-sections-list, #blk-levels-list { max-height: 320px; overflow-y: auto; }
+  /* Матрица «блоки»: секция × этаж, клик по клетке отмечает/снимает блок. */
+  #blk-matrix-box { overflow: auto; max-height: 60vh;
+    border: 1px solid var(--color-border); border-radius: var(--radius); }
+  #blk-matrix-table { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+  #blk-matrix-table th, #blk-matrix-table td { padding: 4px 8px; text-align: center;
+    border-bottom: 1px solid var(--color-border); border-left: 1px solid var(--color-border); }
+  #blk-matrix-table thead th { position: sticky; top: 0; z-index: 3;
+    background: var(--color-surface-2); box-shadow: inset 0 -1px 0 var(--color-border); }
+  #blk-matrix-table td.blk-row-name, #blk-matrix-table th.blk-row-name {
+    position: sticky; left: 0; z-index: 2; background: var(--color-surface);
+    text-align: left; white-space: nowrap;
+    box-shadow: inset -1px 0 0 var(--color-border); }
+  #blk-matrix-table thead th.blk-row-name { z-index: 4; background: var(--color-surface-2); }
+  #blk-matrix-table td.blk-cell { cursor: pointer; color: var(--color-text-muted); }
+  #blk-matrix-table td.blk-cell.on { color: var(--color-primary); font-weight: 700; }
+  /* Дерево видов работ и матрица статусов — тот же приём: узел раскрывается
+     отступом, лист несёт ячейки по колонкам блоков/секций. */
+  #wp-matrix-box { overflow: auto; max-height: 58vh;
+    border: 1px solid var(--color-border); border-radius: var(--radius); }
+  #wp-matrix-table { border-collapse: separate; border-spacing: 0; font-size: 12px; white-space: nowrap; }
+  #wp-matrix-table th, #wp-matrix-table td { padding: 3px 8px;
+    border-bottom: 1px solid var(--color-border); border-left: 1px solid var(--color-border); }
+  #wp-matrix-table thead th { position: sticky; top: 0; z-index: 3;
+    background: var(--color-surface-2); box-shadow: inset 0 -1px 0 var(--color-border); text-align: center; }
+  #wp-matrix-table td.wp-row-name, #wp-matrix-table th.wp-row-name {
+    position: sticky; left: 0; z-index: 2; background: var(--color-surface);
+    text-align: left; min-width: 260px; box-shadow: inset -1px 0 0 var(--color-border); }
+  #wp-matrix-table thead th.wp-row-name { z-index: 4; background: var(--color-surface-2); }
+  #wp-matrix-table tr.wp-node td.wp-row-name { font-weight: 600; background: var(--color-surface-2); }
+  #wp-matrix-table td.wp-cell { text-align: center; cursor: pointer; user-select: none; }
+  /* Три состояния статуса — цветом, без иконок: план серый (пусто), в
+     работе жёлтый кружок, выполнено зелёный. Отдельная палитра от
+     status_colors ЖБИ намеренно (Docs/block-accounting.md §1) — это другая
+     статусная модель, смешивать их означало бы, что общий цвет читается
+     как общий смысл. */
+  #wp-matrix-table td.wp-cell .wp-dot { display: inline-block; width: 12px; height: 12px;
+    border-radius: 50%; border: 1px solid var(--color-border); }
+  #wp-matrix-table td.wp-cell.wp-plan .wp-dot { background: transparent; }
+  #wp-matrix-table td.wp-cell.wp-in_progress .wp-dot { background: #E8A33D; border-color: #E8A33D; }
+  #wp-matrix-table td.wp-cell.wp-done .wp-dot { background: #3FA76A; border-color: #3FA76A; }
+  #wp-matrix-table td.wp-cell.wp-off { cursor: default; opacity: 0.25; }
+  .wp-legend { display: flex; gap: 16px; align-items: center; font-size: 12px;
+    color: var(--color-text-muted); margin: 6px 0; }
+  .wp-legend .wp-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    border: 1px solid var(--color-border); margin-right: 4px; vertical-align: middle; }
+
   /* -------- диалог удаления записи справочника -------- */
   /* ВЫШЕ остальных модальных окон (z-index у них 100): удаление всегда
      вызывается ИЗ формы справочника, и на общем уровне он оказывался под
@@ -3899,6 +3962,10 @@
                  файла — лишь один из способов, каким график появляется, а
                  сущность здесь — сам график объекта. -->
             <button id="menu-schedule" data-feature="schedule" data-feature-kind="write">График СМР</button>
+            <!-- Учёт по блокам (2026-08-25, Docs/block-accounting.md) —
+                 второй контур учёта, объекты МФР без модели Revit; сервер
+                 сам скроет пункт на объектах ЖБИ (раздел там не применим). -->
+            <button id="menu-blocks" data-feature="blocks,work_progress" data-feature-kind="read">Учёт по блокам</button>
           </div>
         </div>
         <!-- Класс гашения — на КАЖДОМ пункте, а не на группе: часть
@@ -3983,6 +4050,7 @@
             <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
             <button id="btn-upload-revit" data-feature="revit_import" data-feature-kind="write">Загрузить из Revit</button>
+            <button id="btn-upload-pdf" data-feature="pdf_import" data-feature-kind="write">Загрузить из PDF</button>
             <button id="btn-export" data-feature="export" data-feature-kind="read">Экспорт в XLS</button>
             <button id="btn-export-pdf" data-feature="export" data-feature-kind="read">Экспорт в PDF</button>
             <button id="menu-history-import" data-feature="import_history" data-feature-kind="write">Импорт истории из XLS</button>
@@ -4239,6 +4307,14 @@
         <button class="btn btn-sm btn-secondary" id="revit-reset-all" hidden>Сбросить фильтры</button>
         <button class="btn btn-sm btn-secondary" id="revit-colors-open"
                 title="Цветовая схема модели">Цвета</button>
+        <!-- Слой «Блоки» (2026-08-26, Docs/TZ.md «Геометрия блока») —
+             НЕЗАВИСИМЫЙ от показа элементов: обе галочки можно снять/
+             поставить в любой комбинации, «видеть по отдельности или
+             вместе» буквально означает эти два переключателя. -->
+        <label class="toggle" style="margin:0" title="Детальные контуры элементов/помещений модели">
+          <input type="checkbox" id="mfr-show-elements" checked/>Элементы</label>
+        <label class="toggle" style="margin:0" title="Параллелепипеды блоков «этаж+секция» (Учёт по блокам)">
+          <input type="checkbox" id="mfr-show-blocks"/>Блоки</label>
         <div class="view-mode-switch" id="mfr-view-switch" role="group"
              aria-label="Режим отображения модели">
           <button type="button" class="view-mode-btn active" data-mfr-mode="2d">2D</button>
@@ -4264,6 +4340,10 @@
       <div class="card-block">
         <h4>Элемент</h4>
         <div id="revit-plan-card" class="hint-text">Нажмите на элемент плана.</div>
+      </div>
+      <div class="card-block" id="block-card-block" style="display:none">
+        <h4>Блок</h4>
+        <div id="block-card" class="hint-text"></div>
       </div>
     </div>
   </div>
@@ -4611,6 +4691,29 @@
       </div>
     </div>
     <div id="revit-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+
+    <!-- Отладочный инструмент (2026-08-26): при подборе алгоритма секций/
+         этажей нужны частые повторные загрузки «с чистого листа», иначе
+         хвосты предыдущей версии логики мешают сравнивать результат новой.
+         Применяется СРАЗУ, без сводки — это не рабочий импорт. -->
+    <details class="card-technical" id="revit-clear-details" style="margin-top:10px">
+      <summary>Очистить справочники объекта перед загрузкой (отладка)</summary>
+      <div class="hint-text" style="margin:6px 0">Стирает отмеченное сразу, без сводки.
+        Перед стиранием снимается резервная копия.</div>
+      <label class="toggle"><input type="checkbox" id="revit-clear-elements"/>
+        Элементы Revit — модель, помещения, пакеты, квартиры</label>
+      <label class="toggle"><input type="checkbox" id="revit-clear-structure"/>
+        Секции и этажи объекта</label>
+      <div class="warning-text" style="margin:2px 0 6px 22px">Общие с «Учётом по блокам»:
+        удаление каскадом сотрёт и блоки, и проставленные по ним статусы работ.</div>
+      <label class="toggle"><input type="checkbox" id="revit-clear-work"/>
+        Виды работ и статусы блоков</label>
+      <div class="bulk-edit-controls" style="margin-top:8px">
+        <button type="button" class="btn btn-danger btn-sm" id="revit-clear-submit">Очистить отмеченное</button>
+      </div>
+      <div class="hint-text" id="revit-clear-status" style="margin-top:6px"></div>
+    </details>
+
     <div class="actions">
       <button class="btn btn-secondary" id="revit-cancel">Закрыть</button>
     </div>
@@ -4635,6 +4738,90 @@
       <div class="actions">
         <button class="btn btn-secondary" id="revit-review-cancel">Отменить</button>
         <button class="btn btn-primary" id="revit-review-apply">Применить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Загрузка помещений из PDF (2026-08-26) — второй, помимо Revit, источник
+     геометрии для «Модели МФР». Работает на объекте, который выбран сейчас
+     (как «Учёт по блокам»), а не на своём выпадающем списке, как форма
+     Revit: комплект чертежей жёстко привязан к одному конкретному объекту,
+     выбирать тут физически не из чего. -->
+<div class="modal-backdrop" id="pdf-import-backdrop">
+  <div class="modal wide">
+    <h2>Загрузка из PDF</h2>
+    <div class="hint-text">Комплект чертежей жёстко привязан к одному объекту
+      (имена слоёв и разбивка листов на этажи — соглашение конкретного
+      архитектора). Даёт контуры и площади помещений; стен с толщиной,
+      проёмов и номеров квартир — не даёт, источник этого не позволяет.</div>
+
+    <div class="bulk-edit-steps" style="margin-top:14px">
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title"><span class="step-num">1</span>Выбрать файл</div>
+        <input type="file" id="pdf-import-file-input" accept=".pdf"
+               style="position:absolute; width:1px; height:1px; opacity:0; pointer-events:none"/>
+        <button type="button" class="btn btn-secondary" id="pdf-import-file-pick"
+                style="width:100%">Выбрать PDF…</button>
+        <div class="hint-text" id="pdf-import-file-name">Файл не выбран</div>
+      </div>
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title"><span class="step-num">2</span>Разобрать файл</div>
+        <div class="bulk-edit-controls">
+          <button class="btn btn-primary" id="pdf-import-submit">Разобрать</button>
+        </div>
+        <div class="bulk-edit-status">Файл читается и сверяется с тем, что уже
+          в базе. Ничего не записывается.</div>
+      </div>
+      <div class="bulk-edit-block">
+        <div class="bulk-edit-block-title"><span class="step-num">3</span>Применить</div>
+        <div class="bulk-edit-status">Откроется сводка: сколько помещений
+          новых, без изменений и спишется, по этажам.</div>
+      </div>
+    </div>
+    <div id="pdf-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
+
+    <!-- Тот же отладочный инструмент, что на форме Revit (см. её докстрок) —
+         своя копия чекбоксов, потому что «элементы» тут чистят раздел PDF,
+         а не Revit. -->
+    <details class="card-technical" id="pdf-clear-details" style="margin-top:10px">
+      <summary>Очистить справочники объекта перед загрузкой (отладка)</summary>
+      <div class="hint-text" style="margin:6px 0">Стирает отмеченное сразу, без сводки.
+        Перед стиранием снимается резервная копия.</div>
+      <label class="toggle"><input type="checkbox" id="pdf-clear-elements"/>
+        Помещения из PDF на этом объекте</label>
+      <label class="toggle"><input type="checkbox" id="pdf-clear-structure"/>
+        Секции и этажи объекта</label>
+      <div class="warning-text" style="margin:2px 0 6px 22px">Общие с «Учётом по блокам»:
+        удаление каскадом сотрёт и блоки, и проставленные по ним статусы работ.</div>
+      <label class="toggle"><input type="checkbox" id="pdf-clear-work"/>
+        Виды работ и статусы блоков</label>
+      <div class="bulk-edit-controls" style="margin-top:8px">
+        <button type="button" class="btn btn-danger btn-sm" id="pdf-clear-submit">Очистить отмеченное</button>
+      </div>
+      <div class="hint-text" id="pdf-clear-status" style="margin-top:6px"></div>
+    </details>
+
+    <div class="actions">
+      <button class="btn btn-secondary" id="pdf-import-cancel">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="pdf-review-backdrop">
+  <div class="modal modal-sticky" style="max-width:760px">
+    <div class="modal-sticky-head">
+      <h2><span class="step-num">3</span>Применение: что изменится</h2>
+      <div class="hint-text" id="pdf-review-head"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="pdf-review-body"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="pdf-review-status" style="font-size:12px; color:var(--color-text-muted);"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="pdf-review-cancel">Отменить</button>
+        <button class="btn btn-primary" id="pdf-review-apply">Применить</button>
       </div>
     </div>
   </div>
@@ -6575,6 +6762,95 @@
     </div>
     <div class="actions">
       <button class="btn btn-secondary" id="schedule-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Учёт по блокам (2026-08-25, Docs/block-accounting.md): второй контур
+     учёта — вид работ × блок (этаж+секция) -> статус, независимый от
+     сборного ЖБИ и от модели Revit. Четыре вкладки одной формы: секции и
+     этажи заводятся вручную, блоки — отмеченные пары, виды работ грузятся
+     xlsx, статусы ставятся в матрице. -->
+<div class="modal-backdrop" id="blocks-backdrop">
+  <div class="modal wide">
+    <h2>Учёт по блокам</h2>
+    <div class="tabs modal-tabs" id="blocks-tabs">
+      <button type="button" class="tab-btn active" data-blk-tab="setup">Секции и этажи</button>
+      <button type="button" class="tab-btn" data-blk-tab="blocks">Блоки</button>
+      <button type="button" class="tab-btn" data-blk-tab="worktypes">Виды работ</button>
+      <button type="button" class="tab-btn" data-blk-tab="progress">Статусы</button>
+    </div>
+
+    <div id="blk-tab-setup" class="blk-panel">
+      <p class="hint-text">Этаж — общая запись объекта: если он есть у нескольких секций, они
+        стоят на одной отметке (как в модели Revit). Кровля — исключение, у каждой секции своя.
+        Появится выгрузка из Revit позже — секции и этажи с теми же кодами/номерами сольются с
+        уже заведёнными вручную, а не задвоятся.</p>
+      <div class="blk-cols">
+        <div>
+          <h4>Секции</h4>
+          <div class="blk-add-row">
+            <input type="text" id="blk-section-code" placeholder="С01 / Секция 1 / 1"/>
+            <input type="text" id="blk-section-name" placeholder="Подпись (необязательно)"/>
+            <button class="btn btn-sm btn-secondary" id="blk-section-add">Добавить</button>
+          </div>
+          <div id="blk-sections-list"></div>
+        </div>
+        <div>
+          <h4>Этажи</h4>
+          <div class="blk-add-row">
+            <select id="blk-level-kind">
+              <option value="этаж">этаж</option>
+              <option value="подземный">подземный этаж</option>
+              <option value="кровля">кровля</option>
+            </select>
+            <input type="number" id="blk-level-floor" placeholder="номер"/>
+            <input type="text" id="blk-level-name" placeholder="Подпись (необязательно)"/>
+            <input type="number" id="blk-level-elevation" placeholder="отметка, мм"/>
+            <span id="blk-level-sections-box" style="display:none"></span>
+            <button class="btn btn-sm btn-secondary" id="blk-level-add">Добавить</button>
+          </div>
+          <div id="blk-levels-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="blk-tab-blocks" class="blk-panel" style="display:none">
+      <p class="hint-text">Блоки — НЕ декартово произведение секций и этажей: у секции может
+        не быть верхних этажей. Отметьте клеткой те пары, что реально есть.</p>
+      <div id="blk-matrix-box"></div>
+    </div>
+
+    <div id="blk-tab-worktypes" class="blk-panel" style="display:none">
+      <p class="hint-text">Справочник видов работ (WBS), перезагружаемый xlsx-файлом: колонки
+        «Уровень WBS», «Идентификатор операции», «Название операции», «Единицы измерения»,
+        «Кодификатор». Ключ записи — путь по дереву, а не код: повторная загрузка обновляет
+        совпавшее по пути и не трогает уже проставленные статусы.</p>
+      <div class="blk-add-row">
+        <input type="file" id="wt-file" accept=".xlsx"/>
+        <button class="btn btn-sm btn-secondary" id="wt-analyze">Разобрать файл</button>
+      </div>
+      <div id="wt-status" class="hint-text"></div>
+      <div id="wt-summary"></div>
+      <div class="actions" id="wt-apply-box" style="display:none">
+        <button class="btn btn-primary" id="wt-apply">Применить</button>
+      </div>
+      <h4>Текущий справочник</h4>
+      <div id="wt-tree-box" style="max-height:38vh; overflow:auto"></div>
+    </div>
+
+    <div id="blk-tab-progress" class="blk-panel" style="display:none">
+      <div class="wp-legend">
+        <span><i class="wp-dot" style="background:transparent"></i>план</span>
+        <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
+        <span><i class="wp-dot" style="background:#3FA76A;border-color:#3FA76A"></i>выполнено</span>
+        <span class="hint-text">клик по клетке переключает статус</span>
+      </div>
+      <div id="wp-matrix-box"></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-secondary" id="blocks-close">Закрыть</button>
     </div>
   </div>
 </div>

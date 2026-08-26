@@ -371,6 +371,11 @@ _COLUMN_MIGRATIONS = [
     ("objects", "kind", "TEXT NOT NULL DEFAULT 'zhbi'"),
     ("training_answers", "feature_key", "TEXT"),
     ("training_answers", "spent_ms", "INTEGER"),
+    # Привязка секции к осям здания для геометрии блока (Docs/TZ.md,
+    # «Геометрия блока») — `object_sections` уже существует на локальных
+    # копиях без этих колонок.
+    ("object_sections", "axis_from", "TEXT"),
+    ("object_sections", "axis_to", "TEXT"),
 ]
 
 
