@@ -28072,7 +28072,8 @@ document.getElementById("pdf-review-cancel").addEventListener("click", () => {
 
 function renderPdfReview(data) {
   document.getElementById("pdf-review-head").textContent =
-    `Объект «${data.object_name}» · помещений в файле ${data.total_rooms}`;
+    `Объект «${data.object_name}» · помещений в файле ${data.total_rooms}`
+    + `, стен/перегородок ${data.total_walls}, плит перекрытия ${data.total_slabs}`;
 
   const floors = Object.keys(data.by_floor || {});
   const rows = floors.map((floor) => {
@@ -28121,7 +28122,8 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
       status.style.color = "var(--color-danger)";
       return;
     }
-    let текст = `Готово: помещений ${body.rooms_written}, списано ${body.retired}.`;
+    let текст = `Готово: помещений ${body.rooms_written}, стен/перегородок `
+      + `${body.walls_written}, плит ${body.slabs_written}, списано ${body.retired}.`;
     // Секция считается по границе подписей осей «…с1»/«…с2» на листе — не
     // молчим, если на каком-то листе подписей не нашлось и она не вышла
     // (см. docstring app/pdf_rooms._axis_boundary_x).

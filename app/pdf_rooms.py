@@ -70,6 +70,7 @@ from typing import Optional
 
 import fitz
 from shapely.geometry import Point, Polygon
+from shapely.ops import unary_union
 
 ROOM_LAYER = "оо_ПЛОЩАДИ_помещений.оо"
 
@@ -81,6 +82,41 @@ _SCALE_RE = re.compile(r'М\s*1\s*:\s*(\d+)')
 # Подпись оси: «Ас1», «1с2», «15с1» — буква/номер оси + номер секции.
 # Группа 1 — метка оси («А», «15»), группа 2 — номер секции.
 _AXIS_RE = re.compile(r'^([A-ZА-Я0-9]{1,2})с(\d)$', re.IGNORECASE)
+
+# Слой чертежа (штриховка материала стены/перегородки) -> (категория,
+# материал). Слой определяет материал НАПРЯМУЮ, по имени — не нужен разбор
+# цвета: имена слоёв — то же соглашение архитектора, что и у остальных
+# слоёв этого комплекта (`ROOM_LAYER` и т.п.), и ИМЕННО эти слои несут и
+# сами стены на плане, и образцы легенды материалов на каждом листе (см.
+# `_LEGEND_MARGIN_MM`). Категории — «Стены»/«Перекрытия» существующие в
+# `app/revit_colors.py` (готовый цвет в любой палитре), «Перегородки» —
+# новая, добавлена туда же.
+_WALL_LAYERS = {
+    "]]]_СТ_вн_Бетон": ("Стены", "Монолитный железобетон"),
+    "]]]_СТ_вн_Кирпич": ("Стены", "Кирпич"),
+    "]]]_СТ_вн_Газосиликат": ("Стены", "Ячеистый бетон (газосиликат)"),
+    "]]]_СТ_вн_Газобетон": ("Стены", "Ячеистый бетон (газобетон)"),
+    "]]]_ст100_вн_Пазогребневые": ("Перегородки", "Пазогребневые плиты, 100мм"),
+    "]]]_ст80_вн_Пазогребневые": ("Перегородки", "Пазогребневые плиты, 80мм"),
+    "]]]_СТ_вн_Пазогребневые": ("Перегородки", "Пазогребневые плиты"),
+    "]_100_влаг_Пазогребневые": ("Перегородки", "Пазогребневые плиты гидрофобизированные, 100мм"),
+    "]]]_СТ_влагост_Пазогребневые": ("Перегородки", "Пазогребневые плиты гидрофобизированные"),
+    "]]]_СТ_вн_Гипсокартон": ("Перегородки", "Гипсокартон"),
+    "]_Гипс80": ("Перегородки", "Гипсокартон, 80мм"),
+}
+
+# Отступ вокруг охвата помещений листа, в пределах которого фигура слоя
+# материала считается настоящей стеной, а не образцом легенды (та же
+# легенда, что и у пользователя на скриншоте, напечатана на КАЖДОМ листе
+# плана теми же слоями — проверено: минимальный зазор между легендой и
+# зданием на проверенных листах 7000мм, отступ здесь заведомо меньше).
+_LEGEND_MARGIN_MM = 3000
+
+# Толщина плиты перекрытия «в основании этажа» — не с чертежа (отдельного
+# слоя плиты на планах нет, только в разрезе на нечитаемых для этого
+# конвейера листах 18/20), а то же круглое число, что у монолита в
+# легенде — приближение, а не измерение, честно с ним и названо.
+_SLAB_THICKNESS_MM = 200
 
 
 class PdfRoomsError(Exception):
@@ -127,6 +163,36 @@ _SPEC.append(("технический (секция 2)", 15, 73650, 76800, ("С0
 
 FLOOR_PLANS = [RoomPlan(floor=f, page=p, z0=z0, z1=z1, section_codes=s)
               for f, p, z0, z1, s in _SPEC]
+
+
+@dataclass
+class WallSegment:
+    """Один ПРЯМОЙ участок стены/перегородки — не вся стена целиком: на
+    чертеже она приходит уже разрезанной на прямые куски (по одному
+    залитому прямоугольнику слоя материала на кусок), см. докстрока
+    `_wall_segments_raw`. Идентичность — как у `Room`: порядковый индекс
+    после сортировки по центроиду, не устойчивый ключ."""
+
+    floor: str
+    index: int
+    category: str              # "Стены" | "Перегородки" — см. _WALL_LAYERS
+    material: str
+    polygon_mm: list
+    thickness_mm: float
+    section: Optional[str] = None
+    page: int = 0
+
+
+@dataclass
+class Slab:
+    """Плита перекрытия этажа — приближение контуром здания (объединение
+    контуров помещений и стен этого этажа), не измерение: отдельного слоя
+    плиты на планах нет (см. `_SLAB_THICKNESS_MM`). Одна на этаж, без
+    деления на секции."""
+
+    floor: str
+    polygon_mm: list
+    page: int = 0
 
 
 @dataclass
@@ -290,6 +356,149 @@ def parse_document(doc) -> tuple:
                                   section=known_section or r.section,
                                   page=plan.page))
     return all_rooms, warnings
+
+
+def _wall_segments_raw(page, scale: int, shift_x: float, shift_y: float) -> list:
+    """Залитые прямоугольники слоёв материала стен (`_WALL_LAYERS`) на
+    ВСЁМ листе — легенда материалов ещё не отсечена (см. `parse_walls_
+    page`). Один прямоугольник — один ПРЯМОЙ участок стены: под
+    штриховкой (тысячи мелких обрывков линий, `type == "s"`, о них
+    докстрока модуля) лежит настоящая заливка (`type == "f"`) — по одной
+    фигуре на прямой кусок стены между углами/проёмами, толщина —
+    короткая сторона её прямоугольника. `shift_x`/`shift_y` — тот же сдвиг
+    выравнивания, что и у `_room_polygons` (передаётся, а не считается
+    заново — один и тот же для всех слоёв листа)."""
+    H = page.rect.height
+    out = []
+    for d in page.get_cdrawings():
+        spec = _WALL_LAYERS.get(d.get("layer"))
+        if not spec or d["type"] != "f":
+            continue
+        pts = [it[1] for it in d["items"] if it[0] == "l"]
+        if d["items"]:
+            pts.append(d["items"][-1][2])
+        if len(pts) < 3:
+            continue
+        rect = d["rect"]
+        if (rect[2] - rect[0]) * (rect[3] - rect[1]) < 0.05:
+            continue  # шум — точечные обрывки контура
+        poly = [(x * PT_TO_MM * scale - shift_x, (H - y) * PT_TO_MM * scale - shift_y)
+                for x, y in pts]
+        category, material = spec
+        thickness = round(min(rect[2] - rect[0], rect[3] - rect[1]) * PT_TO_MM * scale, 1)
+        out.append({"category": category, "material": material,
+                    "polygon_mm": poly, "thickness_mm": thickness})
+    return out
+
+
+def _seg_centroid(poly) -> tuple:
+    n = len(poly)
+    return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
+
+
+def parse_walls_page(page) -> tuple:
+    """Стены и перегородки листа, за вычетом легенды материалов, плюс их
+    секция (по той же границе подписей осей, что и у помещений — см.
+    `_axis_boundary_x`). Возвращает (список словарей, предупреждения)."""
+    scale = _page_scale(page)
+    room_polys, (shift_x, shift_y) = _room_polygons(page, scale)
+    segments = _wall_segments_raw(page, scale, shift_x, shift_y)
+    warnings = []
+    if not room_polys:
+        return [], warnings
+
+    xs = [x for poly in room_polys for x, _ in poly]
+    ys = [y for poly in room_polys for _, y in poly]
+    x0, x1 = min(xs) - _LEGEND_MARGIN_MM, max(xs) + _LEGEND_MARGIN_MM
+    y0, y1 = min(ys) - _LEGEND_MARGIN_MM, max(ys) + _LEGEND_MARGIN_MM
+    segments = [s for s in segments
+               if x0 <= _seg_centroid(s["polygon_mm"])[0] <= x1
+               and y0 <= _seg_centroid(s["polygon_mm"])[1] <= y1]
+
+    words = page.get_text("words")
+    boundary_pt = _axis_boundary_x(words)
+    if boundary_pt is not None:
+        boundary_mm = boundary_pt * PT_TO_MM * scale - shift_x
+        for s in segments:
+            s["section"] = "С01" if _seg_centroid(s["polygon_mm"])[0] < boundary_mm else "С02"
+    else:
+        for s in segments:
+            s["section"] = None
+
+    segments.sort(key=lambda s: (-round(_seg_centroid(s["polygon_mm"])[1]),
+                                 round(_seg_centroid(s["polygon_mm"])[0])))
+    return segments, warnings
+
+
+def _floor_slab_polygon(room_polys: list, wall_polys: list) -> Optional[list]:
+    """Контур плиты перекрытия — приближение объединением контуров
+    помещений и стен этажа (см. докстрока `Slab`), а не измерение.
+    Внутренние отверстия объединения (шахты, колодцы) отбрасываются —
+    это контур ЗДАНИЯ, а не точная форма плиты со всеми вырезами."""
+    shapes = []
+    for poly in room_polys + wall_polys:
+        if len(poly) < 3:
+            continue
+        try:
+            shp = Polygon(poly).buffer(0)
+        except Exception:
+            continue
+        if shp and not shp.is_empty:
+            shapes.append(shp)
+    if not shapes:
+        return None
+    merged = unary_union(shapes)
+    if merged.is_empty:
+        return None
+    if merged.geom_type == "MultiPolygon":
+        merged = max(merged.geoms, key=lambda g: g.area)
+    if merged.geom_type != "Polygon":
+        return None
+    return [(round(x, 1), round(y, 1)) for x, y in merged.exterior.coords[:-1]]
+
+
+def parse_walls_document(doc, rooms: list) -> tuple:
+    """Стены, перегородки и плиты перекрытия по тем же листам, что и
+    `parse_document`. `rooms` — уже разобранные помещения (тот же вызов) —
+    их контуры участвуют в приближении плиты и не разбираются заново.
+
+    Возвращает (список WallSegment, список Slab, предупреждения)."""
+    rooms_by_floor = {}
+    for r in rooms:
+        rooms_by_floor.setdefault(r.floor, []).append(r.polygon_mm)
+
+    all_walls = []
+    all_slabs = []
+    warnings = []
+    page_cache = {}
+    for plan in FLOOR_PLANS:
+        if plan.page not in page_cache:
+            page = doc[plan.page - 1]
+            try:
+                page_cache[plan.page] = parse_walls_page(page)
+            except PdfRoomsError as e:
+                warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {e.message}")
+                page_cache[plan.page] = ([], [])
+        segments, page_warnings = page_cache[plan.page]
+        for w in page_warnings:
+            warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {w}")
+
+        known_section = plan.section_codes[0] if len(plan.section_codes) == 1 else None
+        for i, s in enumerate(segments):
+            all_walls.append(WallSegment(
+                floor=plan.floor, index=i, page=plan.page,
+                category=s["category"], material=s["material"],
+                polygon_mm=s["polygon_mm"], thickness_mm=s["thickness_mm"],
+                section=known_section or s.get("section")))
+
+        room_polys = rooms_by_floor.get(plan.floor) or []
+        slab_poly = _floor_slab_polygon(room_polys, [s["polygon_mm"] for s in segments])
+        if slab_poly:
+            all_slabs.append(Slab(floor=plan.floor, polygon_mm=slab_poly, page=plan.page))
+        elif room_polys:
+            warnings.append(f"Лист {plan.page} (этаж {plan.floor}): "
+                           "не удалось приблизить контур плиты перекрытия")
+    return all_walls, all_slabs, warnings
 
 
 def page_axis_labels(page) -> dict:

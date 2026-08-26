@@ -31,6 +31,15 @@ Revit, категорией `"Помещение"` и СВОИМ раздело�
 Каждое помещение несёт источник в `params_json` — имя PDF-файла и номер
 листа (`build_rows`, докстрока): у элемента из PDF нет `revit_id`,
 по которому можно найти исходник в чертеже.
+
+Стены, перегородки и плиты перекрытия (`app/pdf_rooms.parse_walls_document`,
+2026-08-26) пишутся туда же, категориями «Стены»/«Перегородки»/«Перекрытия»
+(первая и третья — существующие категории Revit, готовый цвет в любой
+палитре `app/revit_colors.py`; «Перегородки» — новая, добавлена туда же).
+Материал — из ИМЕНИ слоя чертежа (`pdf_rooms._WALL_LAYERS`), не из цвета
+легенды: слой определяет материал напрямую и однозначно. Идентичность —
+как у помещений, порядковый индекс по этажу и категории, не устойчивый
+ключ.
 """
 
 import json
@@ -127,6 +136,101 @@ def _floor_elevation(floor_label: str) -> tuple:
     raise KeyError(floor_label)
 
 
+def _source_params(filename: str, page: int) -> str:
+    data = {"источник_pdf": filename, "страница": page} if filename else {"страница": page}
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _level_name(floor_label: str) -> str:
+    return "этаж %s" % floor_label if floor_label.lstrip("-").isdigit() else floor_label
+
+
+# Категория -> префикс uid, чтобы стены/перегородки/плиты не задваивались
+# с помещениями по индексу этажа (у "pdf:{этаж}:{индекс}" — префикса уже
+# нет, это существующая схема помещений, менять её — переизобретать
+# идентичность уже загруженных строк).
+_WALL_UID_PREFIX = {"Стены": "стена", "Перегородки": "перегородка"}
+
+
+def build_wall_rows(walls: list, floors: dict, section_ids: dict, filename: str = None) -> list:
+    """Стены и перегородки `pdf_rooms.WallSegment` -> строки для
+    revit_elements. Высота — во весь этаж (пол-потолок), как и у
+    помещений: своей высоты (например, для проёма или парапета) на
+    чертеже не нашлось, но исходная высотная привязка честная (этаж, к
+    которому относится сегмент), а не додуманная."""
+    rows = []
+    for i, w in enumerate(walls):
+        z0, z1 = _floor_elevation(w.floor)
+        level_id, _section_id_list = floors[w.floor]
+        if w.section:
+            section_id, section_source = section_ids[w.section], "параметр"
+        else:
+            section_id, section_source = None, None
+        outline = [[round(x, 1), round(y, 1)] for x, y in w.polygon_mm]
+        rows.append({
+            "section_code": "PDF",
+            "uid": "pdf:%s:%s:%d" % (_WALL_UID_PREFIX[w.category], w.floor, w.index),
+            "revit_id": None,
+            "category": w.category,
+            "family": None,
+            "type_name": w.material,
+            "mark": None,
+            "level_id": level_id,
+            "level_name": _level_name(w.floor),
+            "section_id": section_id,
+            "section_source": section_source,
+            "elevation_mm": z0,
+            "height_mm": z1 - z0,
+            "x": None, "y": None, "z": None,
+            "outline_json": json.dumps(outline, ensure_ascii=False),
+            "outline_approx": 0,
+            "volume": None,
+            "area": None,
+            "workset": None,
+            "params_json": json.dumps(
+                ({"источник_pdf": filename} if filename else {})
+                | {"страница": w.page, "материал": w.material,
+                   "толщина_мм": w.thickness_mm},
+                ensure_ascii=False),
+        })
+    return rows
+
+
+def build_slab_rows(slabs: list, floors: dict, filename: str = None) -> list:
+    """Плиты перекрытия `pdf_rooms.Slab` -> строки для revit_elements.
+    Контур — приближение (объединение помещений и стен этажа, см.
+    докстрока `Slab`), высота — фиксированная `_SLAB_THICKNESS_MM`,
+    у основания этажа (`elevation_mm = z0 - толщина`)."""
+    rows = []
+    for s in slabs:
+        z0, _z1 = _floor_elevation(s.floor)
+        level_id, _section_id_list = floors[s.floor]
+        outline = [[round(x, 1), round(y, 1)] for x, y in s.polygon_mm]
+        rows.append({
+            "section_code": "PDF",
+            "uid": "pdf:плита:%s" % s.floor,
+            "revit_id": None,
+            "category": "Перекрытия",
+            "family": None,
+            "type_name": "Плита перекрытия (приближение контуром)",
+            "mark": None,
+            "level_id": level_id,
+            "level_name": _level_name(s.floor),
+            "section_id": None,
+            "section_source": None,
+            "elevation_mm": z0 - pdf_rooms._SLAB_THICKNESS_MM,
+            "height_mm": pdf_rooms._SLAB_THICKNESS_MM,
+            "x": None, "y": None, "z": None,
+            "outline_json": json.dumps(outline, ensure_ascii=False),
+            "outline_approx": 1,
+            "volume": None,
+            "area": None,
+            "workset": None,
+            "params_json": _source_params(filename, s.page),
+        })
+    return rows
+
+
 def build_rows(rooms: list, floors: dict, section_ids: dict, filename: str = None) -> list:
     """Помещения pdf_rooms.Room -> строки для revit_elements.
 
@@ -157,8 +261,7 @@ def build_rows(rooms: list, floors: dict, section_ids: dict, filename: str = Non
             "type_name": None,
             "mark": None,
             "level_id": level_id,
-            "level_name": ("этаж %s" % room.floor if room.floor.lstrip("-").isdigit()
-                          else room.floor),
+            "level_name": _level_name(room.floor),
             "section_id": section_id,
             "section_source": section_source,
             "elevation_mm": z0,
@@ -169,10 +272,7 @@ def build_rows(rooms: list, floors: dict, section_ids: dict, filename: str = Non
             "volume": None,
             "area": room.area_m2,
             "workset": None,
-            "params_json": json.dumps(
-                {"источник_pdf": filename, "страница": room.page} if filename
-                else {"страница": room.page},
-                ensure_ascii=False),
+            "params_json": _source_params(filename, room.page),
         })
     return rows
 
@@ -181,11 +281,13 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
     """Фаза 1: разбор файла и сверка. В БД не пишет ничего — даже
     справочники секций/этажей, они заводятся только в apply()."""
     doc = pdf_rooms.load(data)
-    rooms, parse_warnings = pdf_rooms.parse_document(doc)
-    axis_grid = pdf_rooms.extract_axis_grid(doc)
+    rooms, room_warnings = pdf_rooms.parse_document(doc)
     if not rooms:
         raise PdfImportError(422, "В файле не нашлось ни одного помещения — "
                              "проверьте, тот ли это комплект чертежей.")
+    walls, slabs, wall_warnings = pdf_rooms.parse_walls_document(doc, rooms)
+    axis_grid = pdf_rooms.extract_axis_grid(doc)
+    parse_warnings = room_warnings + wall_warnings
 
     row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
     object_name = row["name"] if row else ""
@@ -196,6 +298,8 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
             "AND section_code = 'PDF' AND is_current = 1", (object_id,))
     }
     seen = {"pdf:%s:%d" % (room.floor, room.index) for room in rooms}
+    seen |= {"pdf:%s:%s:%d" % (_WALL_UID_PREFIX[w.category], w.floor, w.index) for w in walls}
+    seen |= {"pdf:плита:%s" % s.floor for s in slabs}
     retired_uids = sorted(existing - seen)
     new_count = len(seen - existing)
     unchanged_count = len(seen & existing)
@@ -211,12 +315,16 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
         "object_id": object_id,
         "object_name": object_name,
         "total_rooms": len(rooms),
+        "total_walls": len(walls),
+        "total_slabs": len(slabs),
         "new": new_count,
         "unchanged": unchanged_count,
         "retiring": len(retired_uids),
         "by_floor": by_floor,
         "warnings": parse_warnings,
         "_rooms": rooms,
+        "_walls": walls,
+        "_slabs": slabs,
         "_retired_uids": retired_uids,
         "_axis_grid": axis_grid,
         "filename": filename,
@@ -233,7 +341,8 @@ _INSERT = (
     ":elevation_mm, :height_mm, :x, :y, :z, :outline_json, :outline_approx, "
     ":volume, :area, :workset, :params_json, 1) "
     "ON CONFLICT (object_id, uid) DO UPDATE SET "
-    "category=excluded.category, level_id=excluded.level_id, "
+    "category=excluded.category, type_name=excluded.type_name, "
+    "level_id=excluded.level_id, "
     "level_name=excluded.level_name, section_id=excluded.section_id, "
     "section_source=excluded.section_source, elevation_mm=excluded.elevation_mm, "
     "height_mm=excluded.height_mm, outline_json=excluded.outline_json, "
@@ -314,8 +423,13 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     известна из `pdf_rooms` напрямую, по границе подписей осей «…с1»/
     «…с2» на самом чертеже (Docs/TZ.md §3а), а не подобрана статистически."""
     rooms = analysis["_rooms"]
+    walls = analysis.get("_walls") or []
+    slabs = analysis.get("_slabs") or []
+    filename = analysis.get("filename")
     floors, section_ids = _ensure_catalog(conn, object_id)
-    rows = build_rows(rooms, floors, section_ids, analysis.get("filename"))
+    rows = build_rows(rooms, floors, section_ids, filename)
+    rows += build_wall_rows(walls, floors, section_ids, filename)
+    rows += build_slab_rows(slabs, floors, filename)
     for r in rows:
         r["object_id"] = object_id
     conn.executemany(_INSERT, rows)
@@ -331,12 +445,18 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
         )
 
     conn.commit()
-    known_section = sum(1 for r in rows if r["section_id"] is not None)
+    # Плиты — на весь этаж, без секции по устройству (build_slab_rows),
+    # это не «не определилась», а «не применимо» — не считаем их в сводке
+    # про неизвестную секцию, иначе 26 плит выглядели бы как брак разбора.
+    sectioned = [r for r in rows if r["category"] != "Перекрытия"]
+    known_section = sum(1 for r in sectioned if r["section_id"] is not None)
     return {
-        "rooms_written": len(rows),
+        "rooms_written": len(rooms),
+        "walls_written": len(walls),
+        "slabs_written": len(slabs),
         "retired": len(retired),
         "with_known_section": known_section,
-        "section_unknown": len(rows) - known_section,
+        "section_unknown": len(sectioned) - known_section,
         "sections_with_axes": sections_with_axes,
     }
 

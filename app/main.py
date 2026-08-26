@@ -5348,6 +5348,8 @@ def analyze_pdf(
         "object_id": object_id,
         "object_name": analysis["object_name"],
         "total_rooms": analysis["total_rooms"],
+        "total_walls": analysis["total_walls"],
+        "total_slabs": analysis["total_slabs"],
         "new": analysis["new"],
         "unchanged": analysis["unchanged"],
         "retiring": analysis["retiring"],
@@ -5397,6 +5399,8 @@ def apply_pdf(body: PdfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
         new_value=str(analysis["total_rooms"]),
         details={
             "помещений": result["rooms_written"],
+            "стен_и_перегородок": result["walls_written"],
+            "плит": result["slabs_written"],
             "списано": result["retired"],
             "секция_известна": result["with_known_section"],
             "секция_не_определена": result["section_unknown"],
