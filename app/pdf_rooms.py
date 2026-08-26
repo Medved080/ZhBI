@@ -82,6 +82,18 @@ _SCALE_RE = re.compile(r'М\s*1\s*:\s*(\d+)')
 # Подпись оси: «Ас1», «1с2», «15с1» — буква/номер оси + номер секции.
 # Группа 1 — метка оси («А», «15»), группа 2 — номер секции.
 _AXIS_RE = re.compile(r'^([A-ZА-Я0-9]{1,2})с(\d)$', re.IGNORECASE)
+# Дополнительная БУКВЕННАЯ ось вне основной сетки — «Аа», «Ва», «Га», «Да»
+# (черчение ГОСТ для доосей за пределами сетки, без номера секции — не то
+# же самое, что `_AXIS_RE`). Нужна только для охвата здания
+# (`_axis_envelope`): у подземного этажа к основной сетке пристроено
+# крыло (паркинг) со своими осями этой конвенции — без них охват
+# получался УЖЕ настоящего здания и обрезал настоящие помещения
+# (2026-08-27). НЕ цифровая и НЕ регистронезависимая версия намеренно:
+# «<цифра>а» неотличимо от кода типа квартиры в таблице экспликации
+# («2а», «4а»), а без учёта регистра сюда попадает предлог «на» — оба
+# случая пойманы на реальных данных этого же дня; буквенных доосей для
+# охвата здания хватило, цифровые («14а») не понадобились.
+_AXIS_AUX_RE = re.compile(r'^([A-ZА-Я]{1,2})а$')
 
 # Слой чертежа (штриховка материала стены/перегородки) -> (категория,
 # материал). Слой определяет материал НАПРЯМУЮ, по имени — не нужен разбор
@@ -263,49 +275,140 @@ def _room_polygons(page, scale: int) -> tuple:
     return polys, (shift_x, shift_y)
 
 
-_LEGEND_ROOM_GAP_MM = 4000
+_AXIS_ENVELOPE_MARGIN_MM = 3000
+_WALL_COVERAGE_MIN = 0.5
+
+def _axis_envelope(page) -> Optional[tuple]:
+    """Охват здания по СЕТКЕ ОСЕЙ листа (`page_axis_labels`, включая
+    вспомогательные — `_AXIS_AUX_RE`) — авторитетная граница «где на самом
+    деле здание», а не эвристика: ось на чертеже — не случайное совпадение
+    координат, а прямое утверждение проектировщика. Испробован и отброшен
+    менее надёжный признак (2026-08-27): «нет подписанной площади» — не
+    работает, у врезок площадь тоже часто есть (честная копия настоящей
+    комнаты). Ось — тоже не абсолютная истина: это ЦЕНТР стены/колонны, не
+    её грань, а иногда два РЕАЛЬНЫХ, но очень разных по сути случая
+    (настоящее техпомещение у периметра и посторонняя заливка под текстом)
+    оказываются на ПОЧТИ ОДИНАКОВОМ расстоянии от сетки (разница около
+    100мм из 5000) — расстоянием одним их не развести. Поэтому здесь два
+    порога: `_AXIS_ENVELOPE_MARGIN_MM` — уверенный допуск (толщина стены/
+    консоль, оставляем без вопросов), дальше — решает не расстояние, а
+    связность с реальной геометрией листа (`_perimeter_coverage` в
+    `parse_page`). `None`, если на листе не нашлось ни одной подписи оси."""
+    labels = page_axis_labels(page)
+    xs = [coord for _label, (направление, coord) in labels.items() if направление == "x"]
+    ys = [coord for _label, (направление, coord) in labels.items() if направление == "y"]
+    if not xs or not ys:
+        return None
+    return (min(xs), max(xs), min(ys), max(ys))
 
 
-def _drop_disconnected_rooms(rooms: list) -> tuple:
-    """Некоторые листы несут ВРЕЗКИ — каталог типов квартир («трёхкомнатные
-    (для МГН)»), подпись «ФРАГМЕНТ ПЛАНА»/«Фрагмент остекления» — тем же
-    слоем помещений, что и сам план (как и легенда материалов стен,
-    `_LEGEND_MARGIN_MM`). Отличить их от настоящего, но далёкого
-    помещения по площади или тексту рядом НЕНАДЁЖНО (проверено
-    2026-08-27: у «ФРАГМЕНТ ПЛАНА» на этаже 1 площадь НАШЛАСЬ — это
-    честная копия настоящей комнаты, просто отпечатанная второй раз в
-    другом месте листа). Надёжный признак — только СВЯЗНОСТЬ: настоящее
-    помещение всегда КАСАЕТСЯ соседей через дверной проём/коридор (даже
-    удалённое от жилых комнат техническое — проверено на вестибюле с
-    лифтом и техзоне у выхода на кровлю), врезка — нет, она стоит совсем
-    отдельно на пустом месте листа.
+def _within_envelope(polygon_mm: list, envelope: tuple, margin: float = None) -> bool:
+    x0, x1, y0, y1 = envelope
+    m = _AXIS_ENVELOPE_MARGIN_MM if margin is None else margin
+    xs = [p[0] for p in polygon_mm]
+    ys = [p[1] for p in polygon_mm]
+    return (x0 - m <= min(xs) and max(xs) <= x1 + m
+            and y0 - m <= min(ys) and max(ys) <= y1 + m)
 
-    Отбрасывается КАЖДЫЙ кусок (после раздутия контуров на
-    `_LEGEND_ROOM_GAP_MM`, чтобы помещения, касающиеся впритык, считались
-    одним целым), кроме одного — с наибольшей суммарной площадью полигонов
-    (сам план). Возвращает (оставшиеся, отброшенные)."""
+
+def _perimeter_coverage(polygon_mm: list, neighbors_mm: list, buf: float = 250) -> float:
+    """Доля периметра полигона, покрытая соседями (другие помещения плюс
+    СЫРЫЕ, ещё не отфильтрованные стены листа — `_wall_segments_raw`) в
+    пределах `buf` мм. Настоящее помещение всегда к чему-то примыкает —
+    хотя бы одной стороной к стене или соседней комнате через проём;
+    заливка под одиночной подписью в пустом месте листа не примыкает ни к
+    чему (проверено: 31% у подозрительного случая против 85% у
+    настоящего далёкого техпомещения, 2026-08-27). Используется ТОЛЬКО
+    для пограничных случаев (`parse_page`), не как общий признак — сама
+    по себе связность подводила и в другую сторону (см. `_axis_envelope`,
+    докстрока прежней версии в истории git)."""
+    if not neighbors_mm:
+        return 0.0
+    boundary = Polygon(polygon_mm).exterior
+    if boundary.length == 0:
+        return 0.0
+    near = unary_union([Polygon(p).buffer(buf) for p in neighbors_mm if len(p) >= 3])
+    return boundary.intersection(near).length / boundary.length
+
+
+# Подпись «Фрагмент…» («Фрагмент плана», «Фрагмент остекления») — прямое
+# текстовое признание чертежа, что здесь ВРЕЗКА-ДЕТАЛЬ, а не сам план.
+# Нужна отдельно от `_perimeter_coverage`: у дублирующей врезки часто
+# нарисованы и свои (тоже дублирующие) стены, покрытие периметра у нёй
+# от этого обманчиво высокое — ровно как у настоящего далёкого
+# помещения (2026-08-27, «вестибюль» на этаже 1). Текст сильнее.
+_FRAGMENT_LABEL_RE = re.compile(r'фрагмент', re.IGNORECASE)
+_FRAGMENT_LABEL_RADIUS_MM = 30000
+
+
+def _page_fragment_labels(page, scale: int, shift_x: float, shift_y: float) -> list:
+    H = page.rect.height
+    out = []
+    for w in page.get_text("words"):
+        if _FRAGMENT_LABEL_RE.match(w[4]):
+            x_mm = w[0] * PT_TO_MM * scale - shift_x
+            y_mm = (H - w[1]) * PT_TO_MM * scale - shift_y
+            out.append((x_mm, y_mm))
+    return out
+
+
+def _near_fragment_label(polygon_mm: list, labels: list,
+                         radius: float = _FRAGMENT_LABEL_RADIUS_MM) -> bool:
+    if not labels:
+        return False
+    cx = sum(p[0] for p in polygon_mm) / len(polygon_mm)
+    cy = sum(p[1] for p in polygon_mm) / len(polygon_mm)
+    return any((cx - lx) ** 2 + (cy - ly) ** 2 <= radius ** 2 for lx, ly in labels)
+
+
+def _page_section_boundary_mm(page) -> Optional[float]:
+    """Граница осей секций 1/2 листа (`_axis_boundary_x`) в тех же
+    выровненных мм-координатах, что и контуры помещений/стен. Секция 1 —
+    ВСЕГДА левее границы, секция 2 — правее (`_axis_boundary_x`,
+    докстрока: `s1_max < s2_min`).
+
+    Нужна не только для подписи секции у общих этажей 1-8, но и для
+    ПОЛНОГО СРЕЗА на этажах с ЕДИНСТВЕННОЙ секцией (замечено пользователем
+    2026-08-27): на этажах выше 8-го секция 1 на листе показана «для
+    информации» (кровля/техническая часть) — там нет ни одного элемента
+    ЭТОГО этажа, а плановая и стеновая геометрия слева от границы всё
+    равно присутствует на листе и, будучи заведомо в пределах сетки осей
+    здания (`_axis_envelope` её не отсечёт — это тоже часть корпуса,
+    просто другой секции), иначе просочилась бы в модель как элементы
+    несуществующего на этом этаже участка."""
+    scale = _page_scale(page)
+    _, (shift_x, _shift_y) = _room_polygons(page, scale)
+    boundary_pt = _axis_boundary_x(page.get_text("words"))
+    if boundary_pt is None:
+        return None
+    return boundary_pt * PT_TO_MM * scale - shift_x
+
+
+_ROOM_BBOX_RATIO_MAX = 0.4
+
+
+def _drop_oversized_rooms(rooms: list) -> tuple:
+    """Полигон, чей габарит — почти весь этаж (доля от габарита ОХВАТА
+    ВСЕХ помещений листа выше `_ROOM_BBOX_RATIO_MAX`), — не отдельное
+    помещение, а фоновая заливка/штриховка на весь этаж (найдено
+    2026-08-27 на двух листах: 259 и 145 вершин, доля 86% и 100% — у
+    настоящих, даже сложных по форме помещений на тех же листах доля не
+    больше 10%). Отбрасывается ДО сопоставления площади (иначе гигантский
+    полигон перехватывает подпись площади ближайшей настоящей комнаты,
+    накрывая её собой). Возвращает (оставшиеся, отброшенные)."""
     if len(rooms) < 2:
         return rooms, []
-    shapely_rooms = [Polygon(r.polygon_mm) for r in rooms]
-    buffered = [p.buffer(_LEGEND_ROOM_GAP_MM) for p in shapely_rooms]
-    merged = unary_union(buffered)
-    pieces = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
-    if len(pieces) <= 1:
+    xs = [x for r in rooms for x, _ in r.polygon_mm]
+    ys = [y for r in rooms for _, y in r.polygon_mm]
+    total_area = (max(xs) - min(xs)) * (max(ys) - min(ys))
+    if total_area <= 0:
         return rooms, []
-
-    comp_of = []
-    for poly in shapely_rooms:
-        c = poly.centroid
-        comp_of.append(next((i for i, p in enumerate(pieces) if p.contains(c)), -1))
-
-    area_by_comp = {}
-    for poly, ci in zip(shapely_rooms, comp_of):
-        area_by_comp[ci] = area_by_comp.get(ci, 0.0) + poly.area
-    main_ci = max(area_by_comp, key=area_by_comp.get)
-
     kept, dropped = [], []
-    for r, ci in zip(rooms, comp_of):
-        (kept if ci == main_ci else dropped).append(r)
+    for r in rooms:
+        rxs = [x for x, _ in r.polygon_mm]
+        rys = [y for _, y in r.polygon_mm]
+        own_bbox = (max(rxs) - min(rxs)) * (max(rys) - min(rys))
+        (dropped if own_bbox / total_area > _ROOM_BBOX_RATIO_MAX else kept).append(r)
     return kept, dropped
 
 
@@ -328,6 +431,9 @@ def parse_page(page) -> tuple:
     polygons_mm.sort(key=centroid_key)
     rooms = [Room(floor="", index=i, polygon_mm=poly)
             for i, poly in enumerate(polygons_mm)]
+    rooms, oversized = _drop_oversized_rooms(rooms)
+    for i, r in enumerate(rooms):
+        r.index = i
     shapely_rooms = [Polygon(r.polygon_mm) for r in rooms]
 
     words = page.get_text("words")
@@ -362,7 +468,35 @@ def parse_page(page) -> tuple:
                 matched_area += 1
                 break
 
-    rooms, dropped = _drop_disconnected_rooms(rooms)
+    # врезки — каталог типов квартир, «ФРАГМЕНТ ПЛАНА» и т.п., тем же слоем
+    # помещений, что и сам план (см. докстрока `_axis_envelope`) — вне
+    # уверенного допуска сетки осей отбрасываются; в пограничной зоне
+    # решает не расстояние, а связность с реальной геометрией листа
+    # (`_perimeter_coverage`) — расстояние одно там не разводит настоящее
+    # от постороннего (см. докстрока `_axis_envelope`).
+    envelope = _axis_envelope(page)
+    if envelope is not None:
+        inside = [r for r in rooms if _within_envelope(r.polygon_mm, envelope)]
+        outside = [r for r in rooms if not _within_envelope(r.polygon_mm, envelope)]
+        dropped = []
+        if outside:
+            raw_walls = [w["polygon_mm"] for w in _wall_segments_raw(page, scale, shift_x, shift_y)]
+            fragment_labels = _page_fragment_labels(page, scale, shift_x, shift_y)
+            all_polys = [r.polygon_mm for r in rooms]
+            for r in outside:
+                # подпись «Фрагмент…» сильнее связности: у врезки бывают
+                # свои (дублирующие) стены, покрытие периметра обманчиво.
+                if _near_fragment_label(r.polygon_mm, fragment_labels):
+                    dropped.append(r)
+                    continue
+                neighbors = [p for p in all_polys if p is not r.polygon_mm] + raw_walls
+                if _perimeter_coverage(r.polygon_mm, neighbors) >= _WALL_COVERAGE_MIN:
+                    inside.append(r)
+                else:
+                    dropped.append(r)
+        rooms = inside
+    else:
+        dropped = []
     for i, r in enumerate(rooms):
         r.index = i  # переиндексация после отбрасывания — без разрывов
 
@@ -375,12 +509,23 @@ def parse_page(page) -> tuple:
         warnings.append(
             "граница осей секций не определена (нет подписей «…с1»/«…с2» "
             "обеих секций сразу) — секция помещений этого листа не проставлена")
+    if envelope is None:
+        warnings.append(
+            "на листе не нашлось ни одной подписи оси — врезки (каталог "
+            "типов квартир, «Фрагмент плана» и т.п.), если они есть, не "
+            "отфильтрованы")
     if dropped:
-        индексы = ", ".join(str(r.index) for r in dropped)
+        площади = ", ".join(
+            (f"{r.area_m2}" if r.area_m2 is not None else "без площади") for r in dropped)
         warnings.append(
             f"{len(dropped)} фигур(ы) слоя помещений отброшены как врезка "
-            f"(каталог типов квартир, «Фрагмент плана» и т.п. — отдельно "
-            f"от здания на листе, не элементы схемы): индексы {индексы}")
+            f"(каталог типов квартир, «Фрагмент плана» и т.п. — вне сетки "
+            f"осей листа, не элементы схемы): {площади}")
+    if oversized:
+        warnings.append(
+            f"{len(oversized)} фигур(ы) слоя помещений отброшены как фоновая "
+            f"заливка на весь этаж (габарит почти во весь охват листа — не "
+            f"отдельное помещение), не элементы схемы")
     return rooms, warnings
 
 
@@ -394,11 +539,13 @@ def parse_document(doc) -> tuple:
         if plan.page not in page_cache:
             page = doc[plan.page - 1]
             try:
-                page_cache[plan.page] = parse_page(page)
+                rooms, page_warnings = parse_page(page)
+                boundary_mm = _page_section_boundary_mm(page)
             except PdfRoomsError as e:
                 warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {e.message}")
-                page_cache[plan.page] = ([], [])
-        rooms, page_warnings = page_cache[plan.page]
+                rooms, page_warnings, boundary_mm = [], [], None
+            page_cache[plan.page] = (rooms, page_warnings, boundary_mm)
+        rooms, page_warnings, boundary_mm = page_cache[plan.page]
         for w in page_warnings:
             warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {w}")
         # Этаж с ОДНОЙ возможной секцией — она известна из таблицы этажей
@@ -406,8 +553,24 @@ def parse_document(doc) -> tuple:
         # общих для нескольких секций (иначе шум на границе листа мог бы
         # переспорить заведомо известный факт).
         known_section = plan.section_codes[0] if len(plan.section_codes) == 1 else None
-        for r in rooms:
-            all_rooms.append(Room(floor=plan.floor, index=r.index,
+        floor_rooms = rooms
+        # Секция 1 на листах этажей выше 8-го показана «для информации»
+        # (кровля/техчасть) — у ЭТОГО этажа её нет вовсе (замечено
+        # пользователем 2026-08-27): всё левее границы осей секций
+        # отбрасывается для единственно-секционных этажей целиком, не
+        # просто переподписывается.
+        if known_section == "С02" and boundary_mm is not None:
+            def _cx(r):
+                return sum(x for x, _ in r.polygon_mm) / len(r.polygon_mm)
+            excluded = [r for r in floor_rooms if _cx(r) < boundary_mm]
+            if excluded:
+                warnings.append(
+                    f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
+                    "помещений(-ие) левее границы секций — секция 1 «для "
+                    "информации» на этом листе, у этажа её нет, отброшены")
+            floor_rooms = [r for r in floor_rooms if _cx(r) >= boundary_mm]
+        for i, r in enumerate(floor_rooms):
+            all_rooms.append(Room(floor=plan.floor, index=i,
                                   polygon_mm=r.polygon_mm, area_m2=r.area_m2,
                                   section=known_section or r.section,
                                   page=plan.page))
@@ -458,7 +621,7 @@ def parse_walls_page(page, room_polys: list = None) -> tuple:
     `_axis_boundary_x`). Возвращает (список словарей, предупреждения).
 
     `room_polys` — контуры помещений ЭТОГО листа, УЖЕ БЕЗ врезок
-    (`_drop_disconnected_rooms`, тот же список, что для соответствующего
+    (`_axis_envelope`, тот же список, что для соответствующего
     этажа вернул `parse_document`) — иначе врезка («ФРАГМЕНТ ПЛАНА» и
     т.п.) раздувает отступ легенды (`_LEGEND_MARGIN_MM`) до себя самой,
     и дублирующие стены/перегородки этой врезки просачиваются в модель
@@ -552,7 +715,20 @@ def parse_walls_document(doc, rooms: list) -> tuple:
             warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {w}")
 
         known_section = plan.section_codes[0] if len(plan.section_codes) == 1 else None
-        for i, s in enumerate(segments):
+        floor_segments = segments
+        # Секция 1 на листах этажей выше 8-го — «для информации», у этого
+        # этажа её нет (тот же случай, что и у помещений, `parse_document`):
+        # стены/перегородки левее границы осей секций отбрасываются
+        # целиком для единственно-секционных этажей.
+        if known_section == "С02":
+            excluded = [s for s in floor_segments if s.get("section") == "С01"]
+            if excluded:
+                warnings.append(
+                    f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
+                    "стен(-ы)/перегородок левее границы секций — секция 1 "
+                    "«для информации» на этом листе, у этажа её нет, отброшены")
+            floor_segments = [s for s in floor_segments if s.get("section") != "С01"]
+        for i, s in enumerate(floor_segments):
             all_walls.append(WallSegment(
                 floor=plan.floor, index=i, page=plan.page,
                 category=s["category"], material=s["material"],
@@ -560,7 +736,7 @@ def parse_walls_document(doc, rooms: list) -> tuple:
                 section=known_section or s.get("section")))
 
         room_polys = rooms_by_floor.get(plan.floor) or []
-        slab_poly = _floor_slab_polygon(room_polys, [s["polygon_mm"] for s in segments])
+        slab_poly = _floor_slab_polygon(room_polys, [s["polygon_mm"] for s in floor_segments])
         if slab_poly:
             all_slabs.append(Slab(floor=plan.floor, polygon_mm=slab_poly, page=plan.page))
         elif room_polys:
@@ -570,19 +746,25 @@ def parse_walls_document(doc, rooms: list) -> tuple:
 
 
 def page_axis_labels(page) -> dict:
-    """Подписи осей листа (см. `_AXIS_RE`) в тех же выровненных мм-
+    """Подписи осей листа — основных (`_AXIS_RE`, «Ас1») и вспомогательных
+    (`_AXIS_AUX_RE`, «Аа», без номера секции) — в тех же выровненных мм-
     координатах, что и контуры помещений (`_room_polygons` — тот же сдвиг,
     независимо посчитанный для этого листа). Возвращает `{подпись:
     (направление, координата)}`: направление `'x'` — вертикальная ось
     (подпись цифрой, «1», «15» — стандартное черчение нумерует ими
     вертикальные оси), `'y'` — горизонтальная (подпись буквой, «А», «Б»).
-    Несколько вхождений одной подписи на листе — координата усредняется."""
+    Несколько вхождений одной подписи на листе — координата усредняется.
+
+    Потребителю, которому нужны СТРОГО основные оси с номером секции
+    (`app/pdf_import._apply_axis_grid` — привязка секции к осям), это не
+    мешает: он сам заново проверяет подпись через `_AXIS_RE` и молча
+    пропускает вспомогательные — они у него не участвуют."""
     scale = _page_scale(page)
     _, (shift_x, shift_y) = _room_polygons(page, scale)
     H = page.rect.height
     buckets = {}
     for w in page.get_text("words"):
-        m = _AXIS_RE.match(w[4])
+        m = _AXIS_RE.match(w[4]) or _AXIS_AUX_RE.match(w[4])
         if not m:
             continue
         label = w[4]
