@@ -21,6 +21,16 @@ Revit, категорией `"Помещение"` и СВОИМ раздело�
 этажах 1-8 — по границе подписей осей «…с1»/«…с2» на самом чертеже
 (замечено пользователем 2026-08-26). `app/revit_sections.fill_missing`
 (геометрическое голосование по зонам) здесь не нужен вовсе.
+
+Тем же подписям осей `apply()` находит применение второй раз — пишет
+позиции осей (`object_grids`) и привязку `axis_from`/`axis_to` у секций
+С01/С02 (`_apply_axis_grid`), иначе у объекта из PDF нет геометрии блока
+и «Блоки» не рисуются в 3D (`app/block_geometry.py` возвращал бы «у
+секции не заданы оси» — до этой версии так и было).
+
+Каждое помещение несёт источник в `params_json` — имя PDF-файла и номер
+листа (`build_rows`, докстрока): у элемента из PDF нет `revit_id`,
+по которому можно найти исходник в чертеже.
 """
 
 import json
@@ -67,16 +77,23 @@ def _ensure_section(conn, object_id: int, code: str) -> int:
 
 
 def _ensure_level(conn, object_id: int, floor_label: str) -> tuple:
-    """Возвращает (level_id, key)."""
+    """Возвращает (level_id, key). Отметка — из таблицы этажей чертежа
+    (`pdf_rooms.FLOOR_PLANS`, z0): без неё блок не получает высоты
+    (`app/block_geometry.block_box` — «отметке этажа верить нельзя»).
+    Уже заведённую отметку не трогает — только дополняет пустую."""
     floor_no, kind, name = _floor_spec(floor_label)
     key = "этаж:%d" % floor_no
+    z0, _z1 = _floor_elevation(floor_label)
     row = conn.execute(
-        "SELECT id FROM object_levels WHERE object_id = ? AND key = ?",
+        "SELECT id, elevation_mm FROM object_levels WHERE object_id = ? AND key = ?",
         (object_id, key)).fetchone()
     if row:
+        if row["elevation_mm"] is None:
+            blocks_mod.update_level(conn, object_id, row["id"], elevation_mm=z0)
         return row["id"], key
     try:
-        created = blocks_mod.create_level(conn, object_id, kind, floor=floor_no, name=name)
+        created = blocks_mod.create_level(conn, object_id, kind, floor=floor_no, name=name,
+                                          elevation_mm=z0)
     except BlockError:
         row = conn.execute(
             "SELECT id FROM object_levels WHERE object_id = ? AND key = ?",
@@ -110,14 +127,18 @@ def _floor_elevation(floor_label: str) -> tuple:
     raise KeyError(floor_label)
 
 
-def build_rows(rooms: list, floors: dict, section_ids: dict) -> list:
+def build_rows(rooms: list, floors: dict, section_ids: dict, filename: str = None) -> list:
     """Помещения pdf_rooms.Room -> строки для revit_elements.
 
     Секция берётся из `room.section` — на этажах с единственной возможной
     секцией это она (проставлено в `pdf_rooms.parse_document`), на общих
     этажах (1-8) — определена по границе подписей осей «…с1»/«…с2»
     (Docs/TZ.md §3а). `None` бывает только если на листе не нашлось подписей
-    обеих секций сразу — тогда честно остаётся неопределённой, не гадаем."""
+    обеих секций сразу — тогда честно остаётся неопределённой, не гадаем.
+
+    `params_json` несёт источник — имя PDF-файла и номер листа: у элемента
+    из PDF нет `revit_id`, по которому можно найти исходник, а лист даже у
+    одного и того же файла меняется от комплекта к комплекту."""
     rows = []
     for room in rooms:
         z0, z1 = _floor_elevation(room.floor)
@@ -148,16 +169,20 @@ def build_rows(rooms: list, floors: dict, section_ids: dict) -> list:
             "volume": None,
             "area": room.area_m2,
             "workset": None,
-            "params_json": None,
+            "params_json": json.dumps(
+                {"источник_pdf": filename, "страница": room.page} if filename
+                else {"страница": room.page},
+                ensure_ascii=False),
         })
     return rows
 
 
-def analyze(conn, object_id: int, data: bytes) -> dict:
+def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
     """Фаза 1: разбор файла и сверка. В БД не пишет ничего — даже
     справочники секций/этажей, они заводятся только в apply()."""
     doc = pdf_rooms.load(data)
     rooms, parse_warnings = pdf_rooms.parse_document(doc)
+    axis_grid = pdf_rooms.extract_axis_grid(doc)
     if not rooms:
         raise PdfImportError(422, "В файле не нашлось ни одного помещения — "
                              "проверьте, тот ли это комплект чертежей.")
@@ -193,6 +218,8 @@ def analyze(conn, object_id: int, data: bytes) -> dict:
         "warnings": parse_warnings,
         "_rooms": rooms,
         "_retired_uids": retired_uids,
+        "_axis_grid": axis_grid,
+        "filename": filename,
     }
 
 
@@ -211,13 +238,76 @@ _INSERT = (
     "section_source=excluded.section_source, elevation_mm=excluded.elevation_mm, "
     "height_mm=excluded.height_mm, outline_json=excluded.outline_json, "
     "outline_approx=excluded.outline_approx, area=excluded.area, "
+    "params_json=excluded.params_json, "
     "is_current=1, updated_at=datetime('now')"
 )
 
 
+def _section_bbox(rooms: list, code: str):
+    """Охват (x0,x1,y0,y1) в мм всех помещений секции `code` с известной
+    секцией — используется как пролёт оси, раз сама линия оси на чертеже
+    не извлекается (см. докстрока `app/pdf_rooms.py`). `None`, если у
+    секции ещё нет ни одного помещения с определённой секцией."""
+    pts = [(x, y) for r in rooms if r.section == code for x, y in r.polygon_mm]
+    if not pts:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def _apply_axis_grid(conn, object_id: int, rooms: list, axis_grid: dict, section_ids: dict) -> None:
+    """Пишет оси здания (`object_grids`) и привязку секций к ним
+    (`object_sections.axis_from/axis_to`) по подписям осей чертежа —
+    иначе у объекта из PDF нет геометрии блока и «Блоки» не рисуются
+    в 3D (`app/block_geometry.py`). Позиция оси — реальная (из подписи на
+    листе), пролёт — фактический охват помещений своей секции (не сама
+    линия оси — она не извлекается, см. докстрока `app/pdf_rooms.py`);
+    для параллелепипеда блока этого достаточно, для точного контура — нет.
+
+    `axis_from`/`axis_to` секции — две КРАЙНИЕ пронумерованные (вертикальные)
+    оси этой секции; если их меньше двух, привязка не выставляется — блок
+    остаётся без геометрии, как и раньше (`block_box` вернёт причину)."""
+    if not axis_grid:
+        return
+    bbox_by_code = {code: _section_bbox(rooms, code) for code in section_ids}
+    vertical_by_code = {code: [] for code in section_ids}
+    for label, (направление, coord) in axis_grid.items():
+        m = pdf_rooms._AXIS_RE.match(label)
+        if not m:
+            continue
+        code = "С0" + m.group(2)
+        bbox = bbox_by_code.get(code)
+        if bbox is None:
+            continue
+        x0, x1, y0, y1 = bbox
+        if направление == "x":
+            line = (coord, y0, coord, y1)
+            vertical_by_code[code].append((coord, label))
+        else:
+            line = (x0, coord, x1, coord)
+        conn.execute(
+            "INSERT INTO object_grids (object_id, label, kind, x1, y1, x2, y2) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT (object_id, label) DO UPDATE SET "
+            "kind=excluded.kind, x1=excluded.x1, y1=excluded.y1, "
+            "x2=excluded.x2, y2=excluded.y2",
+            (object_id, label, направление) + line,
+        )
+    sections_with_axes = 0
+    for code, section_id in section_ids.items():
+        verticals = sorted(vertical_by_code.get(code) or [])
+        if len(verticals) < 2:
+            continue
+        blocks_mod._set_section_axes(conn, object_id, section_id,
+                                     verticals[0][1], verticals[-1][1])
+        sections_with_axes += 1
+    return sections_with_axes
+
+
 def apply(conn, object_id: int, analysis: dict) -> dict:
-    """Фаза 2: заводит секции/этажи/блоки, пишет помещения, списывает
-    пропавшие.
+    """Фаза 2: заводит секции/этажи/блоки, пишет помещения, оси и привязку
+    секций к ним, списывает пропавшие.
 
     `revit_sections.fill_missing` (доопределение секции геометрией по
     зонам голосованием) сюда НЕ подключается — секция помещения уже
@@ -225,10 +315,12 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     «…с2» на самом чертеже (Docs/TZ.md §3а), а не подобрана статистически."""
     rooms = analysis["_rooms"]
     floors, section_ids = _ensure_catalog(conn, object_id)
-    rows = build_rows(rooms, floors, section_ids)
+    rows = build_rows(rooms, floors, section_ids, analysis.get("filename"))
     for r in rows:
         r["object_id"] = object_id
     conn.executemany(_INSERT, rows)
+    sections_with_axes = _apply_axis_grid(
+        conn, object_id, rooms, analysis.get("_axis_grid") or {}, section_ids)
 
     retired = analysis["_retired_uids"]
     if retired:
@@ -245,6 +337,7 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
         "retired": len(retired),
         "with_known_section": known_section,
         "section_unknown": len(rows) - known_section,
+        "sections_with_axes": sections_with_axes,
     }
 
 

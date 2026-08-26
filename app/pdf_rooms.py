@@ -45,6 +45,15 @@ import.md` §13, где описана и методика: подпись «N �
 диапазонах X листа с чистым зазором (на разных листах от 20 до 30 pt) — по
 этой границе, а не по голосованию зон, и определяется секция комнаты.
 
+Те же подписи осей (`extract_axis_grid`/`page_axis_labels`) дают и позицию
+оси для геометрии блока (`app/block_geometry.py`, `object_grids`) — только
+позицию, не саму линию: линии осей на чертеже не извлекаются (слой
+`$_ОСИ.·`* — тысячи фрагментов пунктира, как и штриховка стен, см. ниже),
+поэтому пролёт оси берётся из фактического охвата помещений своей секции,
+а не из чертежа. Для параллелепипеда блока (не точного контура) этого
+достаточно; `app/pdf_import._apply_axis_grid` берёт из подписей только ДВЕ
+крайние вертикальные (пронумерованные) оси секции — `axis_from`/`axis_to`.
+
 Раз номера нет, идентичность помещения при повторной загрузке — порядковый
 индекс после сортировки по центроиду контура (см. `Room.index`), а не
 устойчивый естественный ключ. Это слабее, чем `Element.UniqueId` у Revit
@@ -70,7 +79,8 @@ PT_TO_MM = 25.4 / 72.0
 _AREA_RE = re.compile(r'^\d{1,4}[.,]\d$')
 _SCALE_RE = re.compile(r'М\s*1\s*:\s*(\d+)')
 # Подпись оси: «Ас1», «1с2», «15с1» — буква/номер оси + номер секции.
-_AXIS_RE = re.compile(r'^[A-ZА-Я0-9]{1,2}с(\d)$', re.IGNORECASE)
+# Группа 1 — метка оси («А», «15»), группа 2 — номер секции.
+_AXIS_RE = re.compile(r'^([A-ZА-Я0-9]{1,2})с(\d)$', re.IGNORECASE)
 
 
 class PdfRoomsError(Exception):
@@ -126,6 +136,7 @@ class Room:
     polygon_mm: list           # [(x, y), ...] в мм, локальные координаты листа
     area_m2: Optional[float] = None
     section: Optional[str] = None   # "С01" | "С02" | None — см. _axis_boundary_x
+    page: int = 0               # номер листа PDF — для params_json элемента
 
 
 def _axis_boundary_x(words) -> Optional[float]:
@@ -133,8 +144,8 @@ def _axis_boundary_x(words) -> Optional[float]:
     в СЫРЫХ координатах листа (pt, до перевода в мм и сдвига). `None`, если
     на листе нет подписей обеих секций сразу (граница не определена — не
     гадаем, откуда её брать)."""
-    s1_x = [w[0] for w in words if (m := _AXIS_RE.match(w[4])) and m.group(1) == "1"]
-    s2_x = [w[0] for w in words if (m := _AXIS_RE.match(w[4])) and m.group(1) == "2"]
+    s1_x = [w[0] for w in words if (m := _AXIS_RE.match(w[4])) and m.group(2) == "1"]
+    s2_x = [w[0] for w in words if (m := _AXIS_RE.match(w[4])) and m.group(2) == "2"]
     if not s1_x or not s2_x:
         return None
     s1_max, s2_min = max(s1_x), min(s2_x)
@@ -276,8 +287,46 @@ def parse_document(doc) -> tuple:
         for r in rooms:
             all_rooms.append(Room(floor=plan.floor, index=r.index,
                                   polygon_mm=r.polygon_mm, area_m2=r.area_m2,
-                                  section=known_section or r.section))
+                                  section=known_section or r.section,
+                                  page=plan.page))
     return all_rooms, warnings
+
+
+def page_axis_labels(page) -> dict:
+    """Подписи осей листа (см. `_AXIS_RE`) в тех же выровненных мм-
+    координатах, что и контуры помещений (`_room_polygons` — тот же сдвиг,
+    независимо посчитанный для этого листа). Возвращает `{подпись:
+    (направление, координата)}`: направление `'x'` — вертикальная ось
+    (подпись цифрой, «1», «15» — стандартное черчение нумерует ими
+    вертикальные оси), `'y'` — горизонтальная (подпись буквой, «А», «Б»).
+    Несколько вхождений одной подписи на листе — координата усредняется."""
+    scale = _page_scale(page)
+    _, (shift_x, shift_y) = _room_polygons(page, scale)
+    H = page.rect.height
+    buckets = {}
+    for w in page.get_text("words"):
+        m = _AXIS_RE.match(w[4])
+        if not m:
+            continue
+        label = w[4]
+        направление = "x" if m.group(1).isdigit() else "y"
+        x_mm = w[0] * PT_TO_MM * scale - shift_x
+        y_mm = (H - w[1]) * PT_TO_MM * scale - shift_y
+        координата = x_mm if направление == "x" else y_mm
+        buckets.setdefault(label, (направление, []))[1].append(координата)
+    return {label: (направление, sum(coords) / len(coords))
+            for label, (направление, coords) in buckets.items()}
+
+
+def extract_axis_grid(doc) -> dict:
+    """Подписи осей обеих секций сразу — с одного листа общего этажа
+    (`RoomPlan.section_codes` из двух кодов, см. `_SPEC`): только там
+    заведомо показаны оси и секции 1, и секции 2 (та же логика, что у
+    `_axis_boundary_x`). `{}`, если такого листа в комплекте нет."""
+    shared = next((p for p in FLOOR_PLANS if len(p.section_codes) == 2), None)
+    if shared is None:
+        return {}
+    return page_axis_labels(doc[shared.page - 1])
 
 
 def load(data: bytes):

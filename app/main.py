@@ -5335,7 +5335,7 @@ def analyze_pdf(
         assert_object_feature(conn, user, object_id, "pdf_import", "write")
         data = read_upload_limited(file.file)
         try:
-            analysis = pdf_import.analyze(conn, object_id, data)
+            analysis = pdf_import.analyze(conn, object_id, data, file.filename)
         except (pdf_import.PdfImportError, pdf_rooms.PdfRoomsError) as e:
             status = getattr(e, "status_code", 422)
             raise HTTPException(status_code=status, detail=e.message)
