@@ -266,23 +266,24 @@ def _room_polygons(page, scale: int) -> tuple:
 _LEGEND_ROOM_GAP_MM = 4000
 
 
-def _drop_legend_room_swatches(rooms: list) -> tuple:
-    """Каталог типов квартир («трёхкомнатные (для МГН)» и т.п.) на
-    некоторых листах напечатан ТЕМ ЖЕ слоем помещений, что и сам план —
-    как и легенда материалов стен (`_LEGEND_MARGIN_MM`), только тут
-    нельзя просто отсечь по охвату здания: настоящие помещения тоже
-    бывают в стороне от основной массы комнат (проверено — техническое
-    помещение при входе на этаже 1, вестибюль с лифтом, тоже неблизко от
-    жилых комнат). Надёжный признак каталога — не расстояние, а то, что у
-    него НИКОГДА не находится площадь (`Room.area_m2 is None`): у образца
-    в каталоге рядом только текстовое описание типа квартиры, не подпись
-    вида «NN,N м2». У настоящего помещения, даже далёкого, площадь на
-    плане подписана (проверено на всех найденных случаях, 2026-08-27).
+def _drop_disconnected_rooms(rooms: list) -> tuple:
+    """Некоторые листы несут ВРЕЗКИ — каталог типов квартир («трёхкомнатные
+    (для МГН)»), подпись «ФРАГМЕНТ ПЛАНА»/«Фрагмент остекления» — тем же
+    слоем помещений, что и сам план (как и легенда материалов стен,
+    `_LEGEND_MARGIN_MM`). Отличить их от настоящего, но далёкого
+    помещения по площади или тексту рядом НЕНАДЁЖНО (проверено
+    2026-08-27: у «ФРАГМЕНТ ПЛАНА» на этаже 1 площадь НАШЛАСЬ — это
+    честная копия настоящей комнаты, просто отпечатанная второй раз в
+    другом месте листа). Надёжный признак — только СВЯЗНОСТЬ: настоящее
+    помещение всегда КАСАЕТСЯ соседей через дверной проём/коридор (даже
+    удалённое от жилых комнат техническое — проверено на вестибюле с
+    лифтом и техзоне у выхода на кровлю), врезка — нет, она стоит совсем
+    отдельно на пустом месте листа.
 
-    Отбрасывается только ЦЕЛИКОМ ОТДЕЛЬНЫЙ от основной массы кусок (после
-    раздутия контуров на `_LEGEND_ROOM_GAP_MM`, как соседние — то же
-    расстояние, что и у фильтра легенды стен), где площадь не нашлась НИ
-    У ОДНОГО помещения куска. Возвращает (оставшиеся, отброшенные)."""
+    Отбрасывается КАЖДЫЙ кусок (после раздутия контуров на
+    `_LEGEND_ROOM_GAP_MM`, чтобы помещения, касающиеся впритык, считались
+    одним целым), кроме одного — с наибольшей суммарной площадью полигонов
+    (сам план). Возвращает (оставшиеся, отброшенные)."""
     if len(rooms) < 2:
         return rooms, []
     shapely_rooms = [Polygon(r.polygon_mm) for r in rooms]
@@ -298,18 +299,13 @@ def _drop_legend_room_swatches(rooms: list) -> tuple:
         comp_of.append(next((i for i, p in enumerate(pieces) if p.contains(c)), -1))
 
     area_by_comp = {}
-    has_area_by_comp = {}
-    for r, poly, ci in zip(rooms, shapely_rooms, comp_of):
+    for poly, ci in zip(shapely_rooms, comp_of):
         area_by_comp[ci] = area_by_comp.get(ci, 0.0) + poly.area
-        has_area_by_comp[ci] = has_area_by_comp.get(ci, False) or (r.area_m2 is not None)
     main_ci = max(area_by_comp, key=area_by_comp.get)
 
     kept, dropped = [], []
     for r, ci in zip(rooms, comp_of):
-        if ci != main_ci and not has_area_by_comp.get(ci, False):
-            dropped.append(r)
-        else:
-            kept.append(r)
+        (kept if ci == main_ci else dropped).append(r)
     return kept, dropped
 
 
@@ -366,7 +362,7 @@ def parse_page(page) -> tuple:
                 matched_area += 1
                 break
 
-    rooms, dropped = _drop_legend_room_swatches(rooms)
+    rooms, dropped = _drop_disconnected_rooms(rooms)
     for i, r in enumerate(rooms):
         r.index = i  # переиндексация после отбрасывания — без разрывов
 
@@ -380,10 +376,11 @@ def parse_page(page) -> tuple:
             "граница осей секций не определена (нет подписей «…с1»/«…с2» "
             "обеих секций сразу) — секция помещений этого листа не проставлена")
     if dropped:
+        индексы = ", ".join(str(r.index) for r in dropped)
         warnings.append(
-            f"{len(dropped)} фигур(ы) слоя помещений отброшены как образцы каталога "
-            "типов квартир (в стороне от здания, без подписанной площади) — "
-            "не элементы схемы")
+            f"{len(dropped)} фигур(ы) слоя помещений отброшены как врезка "
+            f"(каталог типов квартир, «Фрагмент плана» и т.п. — отдельно "
+            f"от здания на листе, не элементы схемы): индексы {индексы}")
     return rooms, warnings
 
 
@@ -455,12 +452,23 @@ def _seg_centroid(poly) -> tuple:
     return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
 
 
-def parse_walls_page(page) -> tuple:
+def parse_walls_page(page, room_polys: list = None) -> tuple:
     """Стены и перегородки листа, за вычетом легенды материалов, плюс их
     секция (по той же границе подписей осей, что и у помещений — см.
-    `_axis_boundary_x`). Возвращает (список словарей, предупреждения)."""
+    `_axis_boundary_x`). Возвращает (список словарей, предупреждения).
+
+    `room_polys` — контуры помещений ЭТОГО листа, УЖЕ БЕЗ врезок
+    (`_drop_disconnected_rooms`, тот же список, что для соответствующего
+    этажа вернул `parse_document`) — иначе врезка («ФРАГМЕНТ ПЛАНА» и
+    т.п.) раздувает отступ легенды (`_LEGEND_MARGIN_MM`) до себя самой,
+    и дублирующие стены/перегородки этой врезки просачиваются в модель
+    точно так же, как просачивались бы дублирующие помещения. При `None`
+    считается заново по слою помещений БЕЗ разбора врезок — годится для
+    автономного вызова, не для `parse_walls_document`."""
     scale = _page_scale(page)
-    room_polys, (shift_x, shift_y) = _room_polygons(page, scale)
+    raw_polys, (shift_x, shift_y) = _room_polygons(page, scale)
+    if room_polys is None:
+        room_polys = raw_polys
     segments = _wall_segments_raw(page, scale, shift_x, shift_y)
     warnings = []
     if not room_polys:
@@ -534,7 +542,8 @@ def parse_walls_document(doc, rooms: list) -> tuple:
         if plan.page not in page_cache:
             page = doc[plan.page - 1]
             try:
-                page_cache[plan.page] = parse_walls_page(page)
+                page_cache[plan.page] = parse_walls_page(
+                    page, rooms_by_floor.get(plan.floor) or [])
             except PdfRoomsError as e:
                 warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {e.message}")
                 page_cache[plan.page] = ([], [])
