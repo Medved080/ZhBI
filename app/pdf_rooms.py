@@ -263,6 +263,56 @@ def _room_polygons(page, scale: int) -> tuple:
     return polys, (shift_x, shift_y)
 
 
+_LEGEND_ROOM_GAP_MM = 4000
+
+
+def _drop_legend_room_swatches(rooms: list) -> tuple:
+    """Каталог типов квартир («трёхкомнатные (для МГН)» и т.п.) на
+    некоторых листах напечатан ТЕМ ЖЕ слоем помещений, что и сам план —
+    как и легенда материалов стен (`_LEGEND_MARGIN_MM`), только тут
+    нельзя просто отсечь по охвату здания: настоящие помещения тоже
+    бывают в стороне от основной массы комнат (проверено — техническое
+    помещение при входе на этаже 1, вестибюль с лифтом, тоже неблизко от
+    жилых комнат). Надёжный признак каталога — не расстояние, а то, что у
+    него НИКОГДА не находится площадь (`Room.area_m2 is None`): у образца
+    в каталоге рядом только текстовое описание типа квартиры, не подпись
+    вида «NN,N м2». У настоящего помещения, даже далёкого, площадь на
+    плане подписана (проверено на всех найденных случаях, 2026-08-27).
+
+    Отбрасывается только ЦЕЛИКОМ ОТДЕЛЬНЫЙ от основной массы кусок (после
+    раздутия контуров на `_LEGEND_ROOM_GAP_MM`, как соседние — то же
+    расстояние, что и у фильтра легенды стен), где площадь не нашлась НИ
+    У ОДНОГО помещения куска. Возвращает (оставшиеся, отброшенные)."""
+    if len(rooms) < 2:
+        return rooms, []
+    shapely_rooms = [Polygon(r.polygon_mm) for r in rooms]
+    buffered = [p.buffer(_LEGEND_ROOM_GAP_MM) for p in shapely_rooms]
+    merged = unary_union(buffered)
+    pieces = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
+    if len(pieces) <= 1:
+        return rooms, []
+
+    comp_of = []
+    for poly in shapely_rooms:
+        c = poly.centroid
+        comp_of.append(next((i for i, p in enumerate(pieces) if p.contains(c)), -1))
+
+    area_by_comp = {}
+    has_area_by_comp = {}
+    for r, poly, ci in zip(rooms, shapely_rooms, comp_of):
+        area_by_comp[ci] = area_by_comp.get(ci, 0.0) + poly.area
+        has_area_by_comp[ci] = has_area_by_comp.get(ci, False) or (r.area_m2 is not None)
+    main_ci = max(area_by_comp, key=area_by_comp.get)
+
+    kept, dropped = [], []
+    for r, ci in zip(rooms, comp_of):
+        if ci != main_ci and not has_area_by_comp.get(ci, False):
+            dropped.append(r)
+        else:
+            kept.append(r)
+    return kept, dropped
+
+
 def parse_page(page) -> tuple:
     """Возвращает (список Room с пустым `floor`, предупреждения). `floor`
     проставляется вызывающим кодом — одна страница может обслуживать
@@ -316,6 +366,10 @@ def parse_page(page) -> tuple:
                 matched_area += 1
                 break
 
+    rooms, dropped = _drop_legend_room_swatches(rooms)
+    for i, r in enumerate(rooms):
+        r.index = i  # переиндексация после отбрасывания — без разрывов
+
     warnings = []
     if rooms and matched_area < len(rooms) * 0.5:
         warnings.append(
@@ -325,6 +379,11 @@ def parse_page(page) -> tuple:
         warnings.append(
             "граница осей секций не определена (нет подписей «…с1»/«…с2» "
             "обеих секций сразу) — секция помещений этого листа не проставлена")
+    if dropped:
+        warnings.append(
+            f"{len(dropped)} фигур(ы) слоя помещений отброшены как образцы каталога "
+            "типов квартир (в стороне от здания, без подписанной площади) — "
+            "не элементы схемы")
     return rooms, warnings
 
 
