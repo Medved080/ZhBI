@@ -5,8 +5,12 @@
 Блок «Учёта по блокам» (app/blocks.py, Docs/block-accounting.md) — пара
 (секция, этаж), абстрактная запись без формы. Здесь она получает форму:
 прямоугольник в плане, взятый из ДВУХ осей здания (`object_grids`, куда
-их сохраняет `app/revit_catalog._apply_grids`), и вертикальный диапазон
-из отметок этажей (`object_levels`).
+их сохраняет `app/revit_catalog._apply_grids`), обрезанный по факту
+контуров элементов ИМЕННО этого этажа (`_section_element_bounds`, 2026-
+08-27) — оси на реальных чертежах продолжены далеко за периметр здания,
+а здание почти всегда уже к верхним этажам, поэтому один размер на всю
+секцию не годится (Docs/TZ.md, «Геометрия блока»). Вертикальный диапазон
+— из отметок этажей (`object_levels`).
 
 `axis_position`/`section_box_xy` — чистые функции без БД, как
 `app/revit_package.py`: изолированно проверяются на синтетических
@@ -43,12 +47,16 @@ def section_box_xy(from_line, to_line, element_bounds=None):
     выбрана неверно.
 
     `element_bounds` — необязательный `(x0, y0, x1, y1)` реальной
-    геометрии секции (по элементам модели), которым ОБРЕЗАЕТСЯ поперечный
+    геометрии (по элементам модели), которым ОБРЕЗАЕТСЯ поперечный
     размер. Нужен потому, что на реальных чертежах оси сплошь и рядом
     продолжены далеко за периметр здания под выносные линии и подписи
     (ровно то, что было на скриншоте пользователя, откуда взят весь этот
     механизм) — без обрезки блок расползается на пустое место вокруг
-    здания. Продольный размер (между самими осями) не обрезается: это
+    здания. `block_box` передаёт сюда габарит КОНКРЕТНОГО этажа секции,
+    не всей секции целиком (2026-08-27, продолжение того же разбора):
+    здание почти всегда УЖЕ к верхним этажам, и один размер на всю
+    секцию раздувал бы узкие верхние этажи до ширины нижнего/самого
+    широкого. Продольный размер (между самими осями) не обрезается: это
     ОСОЗНАННЫЙ выбор пользователя, кому доверять больше, чем геометрии."""
     ось1, коорд1, пролёт1 = axis_position(from_line)
     ось2, коорд2, пролёт2 = axis_position(to_line)
@@ -72,25 +80,31 @@ def section_box_xy(from_line, to_line, element_bounds=None):
     return {"x0": поперёк_низ, "x1": поперёк_верх, "y0": низ, "y1": верх}
 
 
-def _section_element_bounds(conn, object_id: int, section_id: int):
-    """Реальный габарит секции по КОНТУРАМ элементов модели (все этажи
-    секции сразу — секция одна на всю высоту дома), а не по точкам
-    вставки: последние могут стоять у центра/торца элемента и заузить
-    границу там, где стена на самом деле ещё продолжается. `json_each` —
-    штатное расширение SQLite (JSON1), в проекте до сих пор не
-    использовалось, но всегда включено в обычной сборке.
+def _section_element_bounds(conn, object_id: int, section_id: int, level_id: int = None):
+    """Реальный габарит по КОНТУРАМ элементов модели — этого КОНКРЕТНОГО
+    этажа секции (`level_id` передан) либо секции целиком, все этажи
+    сразу (не передан — например, для отладочного вызова без привязки к
+    этажу). По контурам, не по точкам вставки: последние могут стоять у
+    центра/торца элемента и заузить границу там, где стена на самом деле
+    ещё продолжается. `json_each` — штатное расширение SQLite (JSON1), в
+    проекте до сих пор не использовалось, но всегда включено в обычной
+    сборке.
 
-    `None`, если у секции ещё нет ни одного элемента с контуром —
+    `None`, если у этажа/секции ещё нет ни одного элемента с контуром —
     обрезать тогда не по чему, используется пролёт осей как есть."""
+    where = ["e.object_id = ?", "e.section_id = ?", "e.is_current = 1",
+             "e.outline_json IS NOT NULL"]
+    params = [object_id, section_id]
+    if level_id is not None:
+        where.append("e.level_id = ?")
+        params.append(level_id)
     row = conn.execute(
         "SELECT MIN(json_extract(pt.value, '$[0]')) AS x0, "
         "       MIN(json_extract(pt.value, '$[1]')) AS y0, "
         "       MAX(json_extract(pt.value, '$[0]')) AS x1, "
         "       MAX(json_extract(pt.value, '$[1]')) AS y1 "
         "FROM revit_elements e, json_each(e.outline_json) AS pt "
-        "WHERE e.object_id = ? AND e.section_id = ? AND e.is_current = 1 "
-        "AND e.outline_json IS NOT NULL",
-        (object_id, section_id),
+        "WHERE " + " AND ".join(where), tuple(params),
     ).fetchone()
     if row is None or row["x0"] is None:
         return None
@@ -154,10 +168,10 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
         return {"ok": False, "reason": "ось секции не найдена в модели объекта"}
 
     xy = section_box_xy(from_line, to_line,
-                        _section_element_bounds(conn, object_id, section_id))
+                        _section_element_bounds(conn, object_id, section_id, level_id))
     if xy is None:
         return {"ok": False, "reason": "оси секции разнонаправленные "
-                "(или геометрия секции не пересекается с пролётом осей)"}
+                "(или геометрия этажа не пересекается с пролётом осей)"}
 
     level = conn.execute(
         "SELECT floor, elevation_mm, elevation_suspect FROM object_levels WHERE id = ?",
