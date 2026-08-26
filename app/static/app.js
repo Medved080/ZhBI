@@ -28122,12 +28122,12 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
       return;
     }
     let текст = `Готово: помещений ${body.rooms_written}, списано ${body.retired}.`;
-    // У общих этажей (1-8, обе секции сразу) секцию помещения взять неоткуда
-    // — не молчим об этом, а называем число прямо (docstring app/pdf_import
-    // .apply — геометрическое довыведение здесь физически не работает).
+    // Секция считается по границе подписей осей «…с1»/«…с2» на листе — не
+    // молчим, если на каком-то листе подписей не нашлось и она не вышла
+    // (см. docstring app/pdf_rooms._axis_boundary_x).
     if (body.section_unknown) {
-      текст += ` Секция известна у ${body.with_known_section}, `
-        + `не определена у ${body.section_unknown} (общие этажи секций).`;
+      текст += ` Секция не определена у ${body.section_unknown} — `
+        + `проверьте предупреждения разбора для этих листов.`;
     }
     pdfImportPending = null;
     pdfReviewBackdrop.classList.remove("open");

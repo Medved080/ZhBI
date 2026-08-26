@@ -16,10 +16,11 @@ Revit, категорией `"Помещение"` и СВОИМ раздело�
 
 Секции/этажи объекта заводятся тем же путём, что и ручной ввод в «Учёт по
 блокам» (`app/blocks.py`) — идемпотентно, без дублей при повторной
-загрузке. Секция помещений этажей 1-8 (общих для обеих секций объекта)
-остаётся НЕОПРЕДЕЛЕННОЙ — см. докстроку `apply()`, почему геометрическое
-довыведение (`app/revit_sections.fill_missing`, применимо к элементам
-Revit) для PDF-помещений не подходит.
+загрузке. Секция помещений — из `app/pdf_rooms.Room.section`: на этажах
+с единственной секцией она известна из таблицы этажей, на общих
+этажах 1-8 — по границе подписей осей «…с1»/«…с2» на самом чертеже
+(замечено пользователем 2026-08-26). `app/revit_sections.fill_missing`
+(геометрическое голосование по зонам) здесь не нужен вовсе.
 """
 
 import json
@@ -84,9 +85,10 @@ def _ensure_level(conn, object_id: int, floor_label: str) -> tuple:
     return created["id"], key
 
 
-def _ensure_catalog(conn, object_id: int) -> dict:
-    """Секции и этажи объекта — идемпотентно. Возвращает
-    {(этаж-строка): (level_id, [section_id, ...])}."""
+def _ensure_catalog(conn, object_id: int) -> tuple:
+    """Секции и этажи объекта — идемпотентно. Возвращает (по_этажу,
+    section_ids): по_этажу — {этаж-строка: (level_id, [section_id, ...])},
+    section_ids — {"С01": id, "С02": id}."""
     section_ids = {code: _ensure_section(conn, object_id, code) for code in ("С01", "С02")}
     out = {}
     for plan in pdf_rooms.FLOOR_PLANS:
@@ -98,7 +100,7 @@ def _ensure_catalog(conn, object_id: int) -> dict:
                 blocks_mod.create_block(conn, object_id, sid, level_id)
             except BlockError:
                 pass  # блок уже существует или конфликтует — не критично для импорта помещений
-    return out
+    return out, section_ids
 
 
 def _floor_elevation(floor_label: str) -> tuple:
@@ -108,18 +110,20 @@ def _floor_elevation(floor_label: str) -> tuple:
     raise KeyError(floor_label)
 
 
-def build_rows(rooms: list, catalog: dict) -> list:
-    """Помещения pdf_rooms.Room -> строки для revit_elements (без object_id
-    и section_id — секция общих этажей 1-8 подставляется geometry-путём
-    ПОСЛЕ вставки, см. модуль `app/revit_sections`)."""
+def build_rows(rooms: list, floors: dict, section_ids: dict) -> list:
+    """Помещения pdf_rooms.Room -> строки для revit_elements.
+
+    Секция берётся из `room.section` — на этажах с единственной возможной
+    секцией это она (проставлено в `pdf_rooms.parse_document`), на общих
+    этажах (1-8) — определена по границе подписей осей «…с1»/«…с2»
+    (Docs/TZ.md §3а). `None` бывает только если на листе не нашлось подписей
+    обеих секций сразу — тогда честно остаётся неопределённой, не гадаем."""
     rows = []
     for room in rooms:
         z0, z1 = _floor_elevation(room.floor)
-        level_id, section_id_list = catalog[room.floor]
-        # у общего этажа (обе секции) секция неизвестна заранее; у
-        # секции-2-only этажа она единственная и известна точно.
-        if len(section_id_list) == 1:
-            section_id, section_source = section_id_list[0], "уровень"
+        level_id, _section_id_list = floors[room.floor]
+        if room.section:
+            section_id, section_source = section_ids[room.section], "параметр"
         else:
             section_id, section_source = None, None
         outline = [[round(x, 1), round(y, 1)] for x, y in room.polygon_mm]
@@ -216,17 +220,12 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     пропавшие.
 
     `revit_sections.fill_missing` (доопределение секции геометрией по
-    зонам) сюда НЕ подключается — и это не забыто, а проверено: у
-    помещений из PDF единственная секция, известная НАПРЯМУЮ, это С02
-    (этажи 9+, не общие с С01). «Известных» примеров С01 нет вообще —
-    голосование по зонам физически не может ничего отдать С01, только
-    С02 или «не определено», и на общих этажах 1-8 честно ошиблось бы
-    примерно у половины помещений. Секция общих этажей поэтому остаётся
-    не определена, пока не появится способ отличить крыло секции 1 от
-    крыла секции 2 (например, настоящая выгрузка Revit по этому объекту)."""
+    зонам голосованием) сюда НЕ подключается — секция помещения уже
+    известна из `pdf_rooms` напрямую, по границе подписей осей «…с1»/
+    «…с2» на самом чертеже (Docs/TZ.md §3а), а не подобрана статистически."""
     rooms = analysis["_rooms"]
-    catalog = _ensure_catalog(conn, object_id)
-    rows = build_rows(rooms, catalog)
+    floors, section_ids = _ensure_catalog(conn, object_id)
+    rows = build_rows(rooms, floors, section_ids)
     for r in rows:
         r["object_id"] = object_id
     conn.executemany(_INSERT, rows)

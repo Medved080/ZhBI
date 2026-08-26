@@ -37,6 +37,14 @@ import.md` §13, где описана и методика: подпись «N �
   эталонной планировкой каталога) — не реализовано, отдельная и
   существенно более тяжёлая задача.
 
+Секция помещения на этажах, общих для нескольких секций объекта, ОПРЕДЕЛЯЕТСЯ
+— по подписям осей (замечено пользователем 2026-08-26, до этого считалась
+неопределимой). Каждая ось на любом листе подписана в форме `<метка>с<N>`
+(«Ас1», «1с2», …) — номер секции зашит В САМОЙ ПОДПИСИ. Проверено на всех
+проверенных листах: подписи `…с1` и `…с2` всегда лежат в НЕПЕРЕСЕКАЮЩИХСЯ
+диапазонах X листа с чистым зазором (на разных листах от 20 до 30 pt) — по
+этой границе, а не по голосованию зон, и определяется секция комнаты.
+
 Раз номера нет, идентичность помещения при повторной загрузке — порядковый
 индекс после сортировки по центроиду контура (см. `Room.index`), а не
 устойчивый естественный ключ. Это слабее, чем `Element.UniqueId` у Revit
@@ -61,6 +69,8 @@ PT_TO_MM = 25.4 / 72.0
 # Площадь: «14,3» — запятая, без единицы (единица «м2» отдельным словом рядом).
 _AREA_RE = re.compile(r'^\d{1,4}[.,]\d$')
 _SCALE_RE = re.compile(r'М\s*1\s*:\s*(\d+)')
+# Подпись оси: «Ас1», «1с2», «15с1» — буква/номер оси + номер секции.
+_AXIS_RE = re.compile(r'^[A-ZА-Я0-9]{1,2}с(\d)$', re.IGNORECASE)
 
 
 class PdfRoomsError(Exception):
@@ -115,6 +125,22 @@ class Room:
     index: int                 # порядковый номер на этаже — см. docstring модуля
     polygon_mm: list           # [(x, y), ...] в мм, локальные координаты листа
     area_m2: Optional[float] = None
+    section: Optional[str] = None   # "С01" | "С02" | None — см. _axis_boundary_x
+
+
+def _axis_boundary_x(words) -> Optional[float]:
+    """Граница между подписями осей секции 1 («…с1») и секции 2 («…с2»)
+    в СЫРЫХ координатах листа (pt, до перевода в мм и сдвига). `None`, если
+    на листе нет подписей обеих секций сразу (граница не определена — не
+    гадаем, откуда её брать)."""
+    s1_x = [w[0] for w in words if (m := _AXIS_RE.match(w[4])) and m.group(1) == "1"]
+    s2_x = [w[0] for w in words if (m := _AXIS_RE.match(w[4])) and m.group(1) == "2"]
+    if not s1_x or not s2_x:
+        return None
+    s1_max, s2_min = max(s1_x), min(s2_x)
+    if s1_max >= s2_min:
+        return None  # диапазоны пересеклись — на этом листе границе верить нельзя
+    return (s1_max + s2_min) / 2
 
 
 def _page_scale(page) -> int:
@@ -187,6 +213,16 @@ def parse_page(page) -> tuple:
         return (x_pt * PT_TO_MM * scale - shift_x,
                 (H - y_pt) * PT_TO_MM * scale - shift_y)
 
+    # секция: центроид комнаты по одну или другую сторону границы осей
+    # «…с1»/«…с2» (см. _axis_boundary_x) — считается один раз на лист, в
+    # тех же сырых координатах (pt), что и сами подписи осей.
+    boundary_pt = _axis_boundary_x(words)
+    if boundary_pt is not None:
+        boundary_mm = boundary_pt * PT_TO_MM * scale - shift_x
+        for room, poly in zip(rooms, shapely_rooms):
+            cx = poly.centroid.x
+            room.section = "С01" if cx < boundary_mm else "С02"
+
     # площадь: число вида «14,3» рядом со словом «м2», центр — в комнате
     matched_area = 0
     for i, w in enumerate(words):
@@ -208,6 +244,10 @@ def parse_page(page) -> tuple:
         warnings.append(
             f"площадь найдена только у {matched_area} из {len(rooms)} "
             "помещений — проверьте разбор этого листа отдельно")
+    if rooms and boundary_pt is None:
+        warnings.append(
+            "граница осей секций не определена (нет подписей «…с1»/«…с2» "
+            "обеих секций сразу) — секция помещений этого листа не проставлена")
     return rooms, warnings
 
 
@@ -228,9 +268,15 @@ def parse_document(doc) -> tuple:
         rooms, page_warnings = page_cache[plan.page]
         for w in page_warnings:
             warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {w}")
+        # Этаж с ОДНОЙ возможной секцией — она известна из таблицы этажей
+        # надёжнее любой геометрии; определение по осям только для этажей,
+        # общих для нескольких секций (иначе шум на границе листа мог бы
+        # переспорить заведомо известный факт).
+        known_section = plan.section_codes[0] if len(plan.section_codes) == 1 else None
         for r in rooms:
             all_rooms.append(Room(floor=plan.floor, index=r.index,
-                                  polygon_mm=r.polygon_mm, area_m2=r.area_m2))
+                                  polygon_mm=r.polygon_mm, area_m2=r.area_m2,
+                                  section=known_section or r.section))
     return all_rooms, warnings
 
 
