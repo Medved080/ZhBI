@@ -19226,7 +19226,13 @@ function renderCompletionReport(data) {
     if (c.key === "count") return `<td class="cmp-num">${data.total.count}</td>`;
     return "<td></td>";
   }).join("") + "</tr>";
-  return `<table id="cmp-table"><thead><tr>${шапка}</tr></thead>
+  // Предупреждение приходит с сервера готовым текстом — тем же, что попадёт
+  // в PDF (см. app/report_completion.py). Оно объясняет пустые «Требуемые
+  // даты»: колонка берётся из актуализированного графика, и у изделия без
+  // прогноза заполнять её нечем. Без этой строки пустота читалась бы как
+  // сбой выгрузки.
+  return `${data.warning ? `<div class="dyn-warn">${escapeHtml(data.warning)}</div>` : ""}
+    <table id="cmp-table"><thead><tr>${шапка}</tr></thead>
     <tbody>${строки}${итог}</tbody></table>`;
 }
 

@@ -98,6 +98,38 @@ def latest_current_id(conn: sqlite3.Connection, object_id: int) -> Optional[int]
     return row["id"] if row else None
 
 
+# ---------------------------------------------- прогноз в отчётах (2026-08-30)
+#
+# «Требуемая дата поставки» в «Статусе комплектации» — это «Начало СМР
+# (прогноз)» из АКТУАЛИЗИРОВАННОГО графика, а не поле изделия
+# `project_smr_start_date` (живой запрос 2026-08-30). Поле хранит
+# ДИРЕКТИВНЫЙ срок — то, что обещали изначально; к какому числу изделие
+# реально нужно на площадке, говорит текущий прогноз, и снабжение работает
+# по нему. На обезличенной копии директивная дата и прогноз расходятся у
+# 9148 изделий из 9151 — то есть колонка меняла смысл целиком.
+#
+# Версия ищется по ОБЪЕКТУ ИЗДЕЛИЯ, а не одна на запрос: в отбор отчёта
+# попадают изделия разных объектов, и у каждого своя последняя
+# актуализация. Порядок выбора — тот же, что в latest_current_id (loaded_at,
+# при равенстве id): иначе карточка изделия и отчёт показывали бы разные
+# даты одного и того же изделия.
+#
+# Дублей джойн не даёт — ключ `schedule_version_dates` это (version_id,
+# element_id), а версия здесь ровно одна. Алиасы фиксированы: `e` —
+# elements, `f` — даты прогноза; так же они названы в обоих отчётах.
+FORECAST_JOIN = """
+        LEFT JOIN schedule_version_dates f
+               ON f.element_id = e.id
+              AND f.version_id = (SELECT v.id FROM schedule_versions v
+                                  WHERE v.object_id = e.object_id AND v.kind = 'current'
+                                  ORDER BY v.loaded_at DESC, v.id DESC LIMIT 1)
+"""
+
+# Само выражение с прогнозной датой начала СМР — чтобы отчёты не повторяли
+# имя алиаса своими строками.
+FORECAST_START = "f.smr_start_date"
+
+
 def baseline_id(conn: sqlite3.Connection, object_id: int) -> Optional[int]:
     row = conn.execute(
         "SELECT id FROM schedule_versions WHERE object_id = ? AND kind = 'baseline'",

@@ -1695,11 +1695,17 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
     обязаны показывать одно и то же, и развести выбор по роутам значило бы
     получить сводную на экране и перечень в файле."""
     body = _guard_report(conn, user, body, "report_completion")
+    # Объект — ещё одно сужение выборки, вдобавок к чертежу (живой запрос
+    # 2026-08-30: «отчёт только по активному объекту»). Берётся тем же
+    # способом, что у «Динамики»: явно присланный клиентом либо выведенный
+    # из чертежа.
+    object_id = _report_object_id(conn, body)
     if normalize_view(body.view) != VIEW_PIVOT:
-        return build_completion_report(conn, body.source_file, body.element_ids)
+        return build_completion_report(conn, body.source_file, body.element_ids, object_id)
     try:
         return build_completion_pivot(conn, body.source_file, body.element_ids,
-                                      body.group_by, body.step, body.date_scale)
+                                      body.group_by, body.step, body.date_scale,
+                                      object_id)
     except ValueError as exc:
         # Слишком много календарных колонок — это ошибка ЗАПРОСА, а не сбой:
         # отдаём 400 с текстом, который уже объясняет, что сделать.

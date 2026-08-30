@@ -52,6 +52,7 @@ from app.reports import (
     MAX_PERIOD_COLUMNS, STEP_LABELS, STEPS, auto_step, bucket_start,
     build_period_columns, natural_key, parse_iso_date, pdf_text,
 )
+from app.schedule_versions import FORECAST_JOIN, FORECAST_START
 
 TITLE = "Статус комплектации"
 
@@ -72,12 +73,18 @@ NONE_KEY = "none"
 # Шкала дат: одна на всю таблицу, в отличие от «Графика поставки» с его
 # тремя числами в ячейке. Порядок — порядок в переключателе на форме.
 SCALES = [
-    {"key": "plan", "label": "Плановая дата поставки", "column": "planned_delivery_date"},
-    {"key": "fact", "label": "Фактическая дата поставки", "column": "actual_delivery_date"},
-    # Требуемая — дата начала СМР: к ней изделие обязано быть на площадке.
-    # Не `project_delivery_date`, та означает ЗАВЕРШЕНИЕ работ по фронту
-    # (см. app/schedule_import.py) и к поставке отношения не имеет.
-    {"key": "need", "label": "Требуемая дата поставки", "column": "project_smr_start_date"},
+    {"key": "plan", "label": "Плановая дата поставки", "expr": "e.planned_delivery_date"},
+    {"key": "fact", "label": "Фактическая дата поставки", "expr": "e.actual_delivery_date"},
+    # Требуемая — «Начало СМР (прогноз)» из АКТУАЛИЗИРОВАННОГО графика, а не
+    # директивное поле изделия (живой запрос 2026-08-30, см.
+    # app/report_completion.py). Перечень и сводная — два ВИДА одного отчёта,
+    # и дату они обязаны брать одну: разойдись источники, одно и то же
+    # изделие вставало бы в разные месяцы при переключении вида. Изделие без
+    # прогноза уходит в колонку «Без даты» — туда же, где изделия с
+    # незаполненной плановой, и предупреждение под заголовком считает их так
+    # же. Не `smr_end_date`: та означает ЗАВЕРШЕНИЕ работ по фронту (см.
+    # app/schedule_import.py) и к поставке отношения не имеет.
+    {"key": "need", "label": "Требуемая дата поставки", "expr": FORECAST_START},
 ]
 SCALE_KEYS = [s["key"] for s in SCALES]
 # По умолчанию — плановая: именно по ней собрана сводная заказчика.
@@ -198,6 +205,7 @@ def build_completion_pivot(
     group_by: Optional[list] = None,
     step: Optional[str] = None,
     scale: Optional[str] = None,
+    object_id: Optional[int] = None,
 ) -> dict:
     """Сводная по тем же изделиям, что и плоский перечень.
 
@@ -205,12 +213,18 @@ def build_completion_pivot(
     остальных отчётов: критерии фильтра живут на клиенте, сервер получает
     готовый список id). Галочка у этого отчёта включена по умолчанию —
     и для перечня, и для сводной.
+
+    object_id — активный объект; сужение то же и по той же причине, что в
+    перечне (см. build_completion_report).
     """
     groups = _normalize_groups(group_by)
     scale_key = _normalize_scale(scale)
-    date_column = _scale(scale_key)["column"]
+    date_expr = _scale(scale_key)["expr"]
 
     clauses, params = [visible_elements_clause("e")], []
+    if object_id is not None:
+        clauses.append("e.object_id = ?")
+        params.append(object_id)
     if source_file:
         clauses.append("e.source_file = ?")
         params.append(source_file)
@@ -234,9 +248,10 @@ def build_completion_pivot(
                e.current_status AS status,
                zc.name AS crane_name, zc.number AS crane_number,
                zs.name AS stance_name, zs.number AS stance_number,
-               substr(e.{date_column}, 1, 10) AS d,
+               substr({date_expr}, 1, 10) AS d,
                COUNT(*) AS n
         FROM elements e
+        {FORECAST_JOIN}
         LEFT JOIN zones zc ON zc.id = e.zone_crane_id
         LEFT JOIN zones zs ON zs.id = e.zone_stance_id
         LEFT JOIN contracts c ON c.id = e.contract_id
@@ -361,7 +376,9 @@ def build_completion_pivot(
         "step_label": STEP_LABELS[step],
         "scale": scale_key,
         "scale_label": _scale(scale_key)["label"],
-        "scales": SCALES,
+        # Клиенту — только ключ и подпись: в SCALES рядом с ними лежит
+        # SQL-выражение шкалы, а ему в браузере делать нечего.
+        "scales": [{"key": s["key"], "label": s["label"]} for s in SCALES],
         "steps": [{"key": k, "label": STEP_LABELS[k]} for k in STEPS],
         "groups": GROUPS,
         "group_by": groups,

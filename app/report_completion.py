@@ -28,10 +28,20 @@
 (см. app/report_delivery.py):
   Плановая дата поставки    — `planned_delivery_date` (контракт/логистика);
   Фактическая дата поставки — `actual_delivery_date` (переход в «Доставлено»);
-  Требуемая дата поставки   — `project_smr_start_date`, дата начала СМР:
-      к ней изделие обязано быть на площадке, из неё и раскладывается
-      потребность. Не `project_delivery_date` — та означает ЗАВЕРШЕНИЕ СМР
-      (см. app/schedule_import.py) и к поставке отношения не имеет.
+  Требуемая дата поставки   — «Начало СМР (прогноз)» из АКТУАЛИЗИРОВАННОГО
+      графика: к этому числу изделие обязано быть на площадке, из него и
+      раскладывается потребность. С 2026-08-30 (живой запрос) это прогноз
+      последней актуализации объекта, а НЕ директивное поле
+      `project_smr_start_date`: поле хранит то, что обещали изначально, а
+      снабжение работает по текущему графику. Откуда берётся дата и почему
+      версия ищется по объекту изделия — `FORECAST_JOIN` в
+      app/schedule_versions.py. Не `smr_end_date` — та означает ЗАВЕРШЕНИЕ
+      СМР (см. app/schedule_import.py) и к поставке отношения не имеет.
+      Прогноза на изделие нет — ячейка ПУСТАЯ (решение пользователя
+      2026-08-30): подстановка директивной даты смешала бы в одной колонке
+      два разных срока, и понять, какой из них перед тобой, стало бы
+      нельзя. Молчать об этом тоже нельзя — сколько позиций осталось без
+      прогноза и почему, говорит строка над таблицей (`warning`).
 
 Кран и стоянка выводятся НОМЕРОМ (`zones.number`), как в образце, а не
 именем: имя формата «Стоянка 03» менялось между версиями чертежа, а по
@@ -48,6 +58,7 @@ from app.contracts import build_document_label
 from app.db import visible_elements_clause
 from app.models import STATUS_LABELS_RU, STATUS_ORDER, Status
 from app.reports import natural_key, pdf_text
+from app.schedule_versions import FORECAST_JOIN, FORECAST_START
 
 TITLE = "Статус комплектации"
 
@@ -132,16 +143,29 @@ def _sort_key(value):
 
 
 def build_completion_report(conn, source_file: Optional[str],
-                            element_ids: Optional[list] = None) -> dict:
+                            element_ids: Optional[list] = None,
+                            object_id: Optional[int] = None) -> dict:
     """element_ids — необязательное сужение до конкретных элементов (тот же
     приём, что у остальных отчётов и XLS-экспорта: фильтры схемы живут на
     клиенте, сервер получает готовый список id).
+
+    object_id — АКТИВНЫЙ объект (живой запрос 2026-08-30: «отчёт только по
+    активному объекту, чужие в нём не нужны»). Отбор по чертежу его уже
+    почти обеспечивал, но держался на одном признаке: стоило клиенту
+    прислать пустой `source_file` (объект без чертежа оставляет в
+    `state.sourceFile` файл ПРЕДЫДУЩЕГО объекта), и администратор сервиса
+    получал перечень по всей базе. Условие по объекту ставится ВДОБАВОК к
+    чертежу, а не вместо: два независимых сужения на один отчёт дешевле
+    одного разбирательства, почему в перечне чужие изделия.
 
     Для ЭТОГО отчёта сужение — основной режим работы: галочка «Учитывать
     текущий фильтр схемы» у него включена по умолчанию (живой запрос),
     потому что перечень комплектации читают по конкретной захватке или
     стоянке, а не по всей стройке разом."""
     clauses, params = [visible_elements_clause("e")], []
+    if object_id is not None:
+        clauses.append("e.object_id = ?")
+        params.append(object_id)
     if source_file:
         clauses.append("e.source_file = ?")
         params.append(source_file)
@@ -163,10 +187,11 @@ def build_completion_report(conn, source_file: Optional[str],
                sp.number AS sp_number, sp.specification_date AS sp_date,
                e.planned_delivery_date AS plan_date,
                e.actual_delivery_date AS fact_date,
-               e.project_smr_start_date AS need_date,
+               {FORECAST_START} AS need_date,
                e.element_uid AS guid,
                e.current_status AS status
         FROM elements e
+        {FORECAST_JOIN}
         LEFT JOIN zones zc ON zc.id = e.zone_crane_id
         LEFT JOIN zones zs ON zs.id = e.zone_stance_id
         LEFT JOIN contracts c ON c.id = e.contract_id
@@ -222,7 +247,7 @@ def build_completion_report(conn, source_file: Optional[str],
     } for r in rows]
     out.sort(key=lambda row: tuple(_sort_key(row[k]) for k in SORT_KEYS))
 
-    return {
+    report = {
         "title": TITLE,
         "columns": COLUMNS,
         "rows": out,
@@ -230,6 +255,33 @@ def build_completion_report(conn, source_file: Optional[str],
         # группировки): «строк» и «изделий» теперь означали бы одно и то же.
         "total": {"label": TOTAL_LABEL, "count": len(out)},
     }
+    # Предупреждение считается ЗДЕСЬ и уходит готовым текстом — его
+    # показывают и экран, и PDF, а две копии одной фразы разошлись бы на
+    # первой же правке формулировки (тот же приём, что в сводной).
+    report["warning"] = forecast_warning(report)
+    return report
+
+
+def forecast_warning(report: dict) -> str:
+    """Честная пометка о пустых «Требуемых датах» — та же, что у сводной
+    (coverage_warning в app/report_pivot.py) и по той же причине: колонка
+    берётся из актуализированного графика, и у изделия, не попавшего в
+    последнюю актуализацию, она пустая. Без этой строки пустота читалась бы
+    как сбой выгрузки, а не как «прогноза на это изделие нет».
+
+    Причины перечислены те же, что в forecast_gap (app/schedule_versions.py),
+    — сюда они попадают текстом, а не числами: отчёт о комплектации не место
+    для разбора графика, для него есть форма «График СМР».
+    """
+    всего = len(report["rows"])
+    без = sum(1 for r in report["rows"] if not r["need_date"])
+    if not всего or not без:
+        return ""
+    return (f"Требуемая дата поставки — «Начало СМР (прогноз)» из последней "
+            f"актуализации графика СМР; она заполнена у {всего - без} позиций из "
+            f"{всего}. У остальных {без} прогноза нет (по объекту не загружен "
+            f"актуализированный график, изделие уже смонтировано либо не "
+            f"привязано к крану, стоянке и этажу) — у них ячейка пустая.")
 
 
 # ---------- выгрузка того же отчёта в файлы ----------
@@ -295,6 +347,19 @@ def build_completion_report_xlsx(report: dict) -> bytes:
         cell.fill = head_fill
         cell.border = border
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    # Предупреждение о пустых «Требуемых датах» — ПРИМЕЧАНИЕМ к заголовку
+    # колонки, а не строкой над таблицей (как в сводной). Лист перечня
+    # намеренно начинается с шапки в первой строке: по нему строят сводные
+    # в Excel, у него автофильтр и закреплённая шапка, и текстовая строка
+    # сверху сдвинула бы всё это — вместе с уже настроенными у заказчика
+    # диапазонами.
+    if report.get("warning"):
+        from openpyxl.comments import Comment
+        need_col = [c["key"] for c in columns].index("need_date") + 1
+        примечание = Comment(report["warning"], "ЖБИ-трекер")
+        примечание.width, примечание.height = 420, 110
+        ws.cell(row=header_row, column=need_col).comment = примечание
 
     # Номер строки ведём СВОИМ счётчиком: `ws.max_row` в openpyxl — не
     # счётчик, а максимум по всем ячейкам листа, и обращение к нему в цикле
@@ -371,10 +436,15 @@ def build_completion_report_pdf(report: dict, subtitle: str = "") -> bytes:
     title_style = ParagraphStyle("t", fontName=FONT_BOLD, fontSize=14, leading=18)
     sub_style = ParagraphStyle("s", fontName=FONT_REGULAR, fontSize=9, leading=12,
                                textColor=colors.HexColor("#666666"))
+    warn_style = ParagraphStyle("w", parent=sub_style, textColor=colors.HexColor("#C0392B"))
 
     story = [Paragraph(pdf_text(report["title"]), title_style)]
     if subtitle:
         story.append(Paragraph(pdf_text(subtitle), sub_style))
+    # Тот же текст, что на экране: пустые «Требуемые даты» объясняются и в
+    # файле — распечатку читают отдельно от экрана (см. forecast_warning).
+    if report.get("warning"):
+        story.append(Paragraph(pdf_text(report["warning"]), warn_style))
     story.append(Spacer(1, 5 * mm))
 
     columns = report["columns"]
