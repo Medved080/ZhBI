@@ -610,6 +610,82 @@ def _wall_segments_raw(page, scale: int, shift_x: float, shift_y: float) -> list
     return out
 
 
+# Слой фасадной штриховки — по умолчанию декоративный мусор (тысячи
+# обрывков кирпичной/панельной текстуры), но у экструзионного стыка между
+# двумя монолитными участками (на плане — прямоугольниками поперёк фасада)
+# на нём же лежит НАСТОЯЩАЯ кладка простенка и переплёт окна между ними,
+# без которых простенок остаётся дырой (2026-08-31, найдено по указанию
+# пользователя на конкретном узле между осями 14с2/16с2, лист 13). Слой не
+# добавлен в `_WALL_LAYERS` — фигуры там нельзя брать все подряд, нужен
+# отдельный отбор, см. `_exterior_infill_segments`.
+_EXTERIOR_FACADE_LAYER = "]]]_СТЕНЫ_наружные.]"
+_EXTERIOR_INFILL_MATERIAL = ("Стены", "Ячеистый бетон (наружная кладка)")
+# Минимальный габарит фигуры, чтобы считаться настоящим блоком кладки, а
+# не точечным обрывком декоративной штриховки (мелкие обрывки текстуры —
+# порядка 80×80мм и меньше, реальные простенки в проверенном случае от
+# 520×200мм).
+_EXTERIOR_INFILL_MIN_AREA_MM2 = 30000
+
+
+def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
+                              envelope) -> list:
+    """Кладка простенков наружного фасада (`_EXTERIOR_FACADE_LAYER`) —
+    БЕЗ переплёта окон, который на том же слое нарисован тем же способом
+    (заливка, не штриховка). Различить их по слою/цвету нельзя — оба
+    белые; надёжный признак — окно всегда собрано из НЕСКОЛЬКИХ
+    одинаковых по размеру повторяющихся фигур (переплёт/импосты), кладка —
+    из фигур РАЗНОГО размера (нерегулярные куски простенка). Фигура,
+    совпадающая по (ширине, высоте) с двумя и более другими в пределах
+    10мм, — часть повторяющегося узора (окно), отбрасывается целиком.
+
+    Ограничено сеткой осей листа (`envelope`, см. `_axis_envelope`) — тот
+    же слой несёт фасадную штриховку по всему листу, не только у стен."""
+    if envelope is None:
+        return []
+    x0, x1, y0, y1 = envelope
+    m = _AXIS_ENVELOPE_MARGIN_MM
+    H = page.rect.height
+    candidates = []
+    for d in page.get_cdrawings():
+        if d.get("layer") != _EXTERIOR_FACADE_LAYER or d["type"] != "f":
+            continue
+        fill = d.get("fill")
+        if not fill or sum(fill[:3]) < 2.9:   # только белые фигуры (кладка/окно) — серые (вентфасад) не наш случай
+            continue
+        rect = d["rect"]
+        w_mm = (rect[2] - rect[0]) * PT_TO_MM * scale
+        h_mm = (rect[3] - rect[1]) * PT_TO_MM * scale
+        if w_mm * h_mm < _EXTERIOR_INFILL_MIN_AREA_MM2:
+            continue
+        pts = [it[1] for it in d["items"] if it[0] == "l"]
+        if d["items"]:
+            pts.append(d["items"][-1][2])
+        if len(pts) < 3:
+            continue
+        poly = [(x * PT_TO_MM * scale - shift_x, (H - y) * PT_TO_MM * scale - shift_y)
+                for x, y in pts]
+        cx, cy = _seg_centroid(poly)
+        if not (x0 - m <= cx <= x1 + m and y0 - m <= cy <= y1 + m):
+            continue
+        candidates.append({"poly": poly, "w": w_mm, "h": h_mm, "thickness": min(w_mm, h_mm)})
+
+    # группировка по (ширина, высота) с допуском 10мм — повторяющиеся
+    # группы (окно) отбрасываются целиком.
+    sizes = [(round(c["w"] / 10) * 10, round(c["h"] / 10) * 10) for c in candidates]
+    counts = {}
+    for s in sizes:
+        counts[s] = counts.get(s, 0) + 1
+
+    category, material = _EXTERIOR_INFILL_MATERIAL
+    out = []
+    for c, s in zip(candidates, sizes):
+        if counts[s] >= 3:
+            continue
+        out.append({"category": category, "material": material,
+                    "polygon_mm": c["poly"], "thickness_mm": round(c["thickness"], 1)})
+    return out
+
+
 def _seg_centroid(poly) -> tuple:
     n = len(poly)
     return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
@@ -644,6 +720,8 @@ def parse_walls_page(page, room_polys: list = None) -> tuple:
     segments = [s for s in segments
                if x0 <= _seg_centroid(s["polygon_mm"])[0] <= x1
                and y0 <= _seg_centroid(s["polygon_mm"])[1] <= y1]
+    segments += _exterior_infill_segments(page, scale, shift_x, shift_y,
+                                          _axis_envelope(page))
 
     words = page.get_text("words")
     boundary_pt = _axis_boundary_x(words)
