@@ -76,6 +76,26 @@ class Mapping:
             self.groups.setdefault(group, {})[original] = replacement
         return replacement
 
+    def all_pairs(self) -> list[tuple[str, str]]:
+        """Все пары «исходное → псевдоним» разом, для точечной замены в
+        свободном тексте (не в структурированных полях, а внутри строки —
+        например, Revit-параметры, где заранее не угадать, какой именно
+        ключ несёт название стройки). Тот же фильтр длины/совпадения, что
+        у `needles()`; при коллизии оригинала между группами остаётся
+        первый найденный псевдоним — для удаления утечки неважно, какой
+        именно, лишь бы оригинал пропал из текста."""
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for pairs in self.groups.values():
+            for original, replacement in pairs.items():
+                if original == replacement or len(original.strip()) < 3:
+                    continue
+                if original in seen:
+                    continue
+                seen.add(original)
+                out.append((original, replacement))
+        return out
+
     def needles(self) -> list[tuple[str, str]]:
         """Пары «откуда значение → само значение» для проверки на утечки.
 
@@ -222,6 +242,18 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
         scrub_person("attachments", "uploaded_by", "uploaded_by_user_id"),
     )
     count("report_notes.updated_by", scrub_person("report_notes", "updated_by", None))
+    count(
+        "activity_log.impersonator_name",
+        scrub_person("activity_log", "impersonator_name", "impersonator_user_id"),
+    )
+    count(
+        "supplier_change_docs.created_by",
+        scrub_person("supplier_change_docs", "created_by", "created_by_user_id"),
+    )
+    count(
+        "supplier_change_docs.posted_by",
+        scrub_person("supplier_change_docs", "posted_by", "posted_by_user_id"),
+    )
 
     # ----------------------------------------------- юридическая цепочка
     rows = conn.execute("SELECT * FROM counterparties ORDER BY id").fetchall()
@@ -370,7 +402,101 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
             scrubbed += 1
     count("app_settings (скрыто значений)", scrubbed)
 
+    # ------------------------------------------------- модель Revit / МФР
+    # До 2026-08-31 эти четыре таблицы вообще не трогались — обнаружилось
+    # только на реальных данных, когда собственная проверка на утечки
+    # (`find_leaks`) отказалась принять готовую копию: имя модели
+    # (`revit_packages.model`) и куски названия объекта проникали в
+    # свободный текст `revit_elements`/`revit_rooms`/`object_flats`
+    # (заказчик кладёт в Revit-модель произвольные параметры, ключ,
+    # унёсший название стройки, заранее не угадать). Имя модели — тем же
+    # приёмом, что имя чертежа (`source_file`) выше; свободный текст —
+    # точечной заменой УЖЕ накопленных к этому месту псевдонимов (люди,
+    # проекты/объекты, контрагенты, номера договоров, имена файлов) —
+    # угадывать конкретный виновный ключ не нужно, достаточно вычистить
+    # сами утёкшие значения, где бы они ни лежали.
+    models: set[str] = set()
+    for row in conn.execute(
+        "SELECT DISTINCT model FROM revit_packages WHERE model IS NOT NULL AND model <> ''"
+    ):
+        models.add(row["model"])
+    for n, original in enumerate(sorted(models), start=1):
+        replacement = f"Модель-{n}.rvt"
+        mapping.put("revit_packages.model", original, replacement)
+        conn.execute("UPDATE revit_packages SET model=? WHERE model=?", (replacement, original))
+    count("revit_packages.model", len(models))
+
+    count(
+        "revit_packages.exporter (скрыто)",
+        conn.execute(
+            "UPDATE revit_packages SET exporter='экспортёр скрыт'"
+            " WHERE exporter IS NOT NULL AND exporter <> ''"
+        ).rowcount,
+    )
+
+    pairs = mapping.all_pairs()
+    if pairs:
+        compiled = [
+            (re.compile(r"\b" + re.escape(original) + r"\b"), replacement)
+            for original, replacement in sorted(pairs, key=lambda p: len(p[0]), reverse=True)
+        ]
+
+        def scrub(value):
+            if not value:
+                return value, False
+            new_value = value
+            for pattern, replacement in compiled:
+                new_value = pattern.sub(replacement, new_value)
+            return new_value, new_value != value
+
+        # params_json остаётся ПОДСТРОЧНОЙ заменой найденных значений (не
+        # разбором JSON, как `_blank_json_strings` у настроек): состав
+        # ключей заказчика меняется (см. `_EXTRA_PARAMS` в
+        # `app/revit_elements.py`), большинство из них — марки и типы,
+        # которые CLAUDE.md намеренно оставляет настоящими; вычищать нужно
+        # ровно утёкшие значения, а не всё поле целиком. Ни один псевдоним
+        # не несёт символа `"` — подстрока внутри JSON-строки заменяется
+        # безопасно, структура не портится.
+        for table, columns in (
+            ("revit_elements", ("family", "type_name", "level_name", "workset", "params_json")),
+            ("revit_rooms", ("number", "name", "plan_type", "level_name")),
+            ("object_flats", ("plan_type",)),
+            ("object_roles", ("name",)),
+        ):
+            n = 0
+            for row in conn.execute(f"SELECT rowid AS rid, {', '.join(columns)} FROM {table}"):
+                updates = {}
+                for col in columns:
+                    new_value, changed = scrub(row[col])
+                    if changed:
+                        updates[col] = new_value
+                if updates:
+                    conn.execute(
+                        f"UPDATE {table} SET {', '.join(f'{c}=?' for c in updates)} WHERE rowid=?",
+                        (*updates.values(), row["rid"]),
+                    )
+                    n += 1
+            count(f"{table} (точечная замена)", n)
+
+    # uid — не всегда чистый GUID (зависит от экспортёра заказчика), риск
+    # точечной заменой испортить его непредсказуем; переписывается целиком
+    # на синтетический, id остаётся уникальным сам по себе. Для отладки
+    # содержательного смысла в исходном uid нет — это ключ upsert'а, не
+    # то, что читает человек.
+    for table in ("revit_elements", "revit_rooms"):
+        n = conn.execute(f"UPDATE {table} SET uid = 'x' || id WHERE uid IS NOT NULL").rowcount
+        count(f"{table}.uid", n)
+
     return stats
+
+
+# Колонки с ФИКСИРОВАННЫМ системным словарём, не свободным текстом
+# заказчика (`ZHBI_ELEMENT_TYPES` в `app/models.py` — четыре значения,
+# одинаковые на любом развёртывании). Без исключения короткая «тема
+# поставки», случайно совпавшая с одним словом словаря («Плита»), даёт
+# ложное срабатывание на КАЖДОЙ таблице, где есть `element_type` — это
+# не общий заказчиком реквизит, а термин самой предметной области.
+_ENUM_COLUMNS = {"element_type"}
 
 
 def find_leaks(conn: sqlite3.Connection, needles: list[tuple[str, str]]) -> list[tuple[str, str, str]]:
@@ -396,7 +522,8 @@ def find_leaks(conn: sqlite3.Connection, needles: list[tuple[str, str]]) -> list
         if not r["name"].startswith("sqlite_")
     ]
     for table in tables:
-        columns = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+        columns = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")
+                   if r["name"] not in _ENUM_COLUMNS]
         if not columns:
             continue
         for row in conn.execute(f"SELECT {', '.join(columns)} FROM {table}"):
