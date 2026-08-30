@@ -26852,7 +26852,17 @@ async function loadRevitPlanFilters() {
   // отбора это под тридцать тысяч контуров друг на друге — и медленно, и
   // читать нечего. Дальше человек снимает отбор сам, одной ссылкой.
   const первый = f.levels.find((l) => l.elements > 0);
-  if (первый && !revitFilterActive()) revitPlanState.levels.add(String(первый.id));
+  const этоПервыйЗаход = !revitFilterActive();
+  if (первый && этоПервыйЗаход) revitPlanState.levels.add(String(первый.id));
+  // «Помещение» по умолчанию выключено (2026-08-31): мелкие контуры комнат
+  // перекрывают стены и друг друга на одном плане, читать эту кашу тяжело.
+  // Остальные категории показаны все сразу — отбор ставится тем же кликом
+  // по фишке категории, что и всегда, просто стартовая точка другая.
+  if (этоПервыйЗаход) {
+    for (const c of (f.categories || [])) {
+      if (c.category && c.category !== "Помещение") revitPlanState.categories.add(c.category);
+    }
+  }
   markRevitPicks();
   if (первый) await loadRevitPlanElements();
   else revitPlanStatus("");
@@ -28084,7 +28094,8 @@ document.getElementById("pdf-review-cancel").addEventListener("click", () => {
 function renderPdfReview(data) {
   document.getElementById("pdf-review-head").textContent =
     `Объект «${data.object_name}» · помещений в файле ${data.total_rooms}`
-    + `, стен/перегородок ${data.total_walls}, плит перекрытия ${data.total_slabs}`;
+    + `, стен/перегородок ${data.total_walls}, окон ${data.total_windows}`
+    + `, плит перекрытия ${data.total_slabs}`;
 
   const floors = Object.keys(data.by_floor || {});
   const rows = floors.map((floor) => {
@@ -28134,7 +28145,8 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
       return;
     }
     let текст = `Готово: помещений ${body.rooms_written}, стен/перегородок `
-      + `${body.walls_written}, плит ${body.slabs_written}, списано ${body.retired}.`;
+      + `${body.walls_written}, окон ${body.windows_written}, плит `
+      + `${body.slabs_written}, списано ${body.retired}.`;
     // Секция считается по границе подписей осей «…с1»/«…с2» на листе — не
     // молчим, если на каком-то листе подписей не нашлось и она не вышла
     // (см. docstring app/pdf_rooms._axis_boundary_x).

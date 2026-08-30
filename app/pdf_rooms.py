@@ -69,7 +69,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import fitz
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
 
 ROOM_LAYER = "оо_ПЛОЩАДИ_помещений.оо"
@@ -187,12 +187,14 @@ class WallSegment:
 
     floor: str
     index: int
-    category: str              # "Стены" | "Перегородки" — см. _WALL_LAYERS
+    category: str              # "Стены" | "Перегородки" | "Окна" — см. _WALL_LAYERS
     material: str
     polygon_mm: list
     thickness_mm: float
     section: Optional[str] = None
     page: int = 0
+    z_offset_mm: Optional[float] = None   # окно: смещение низа от отметки этажа
+    z_height_mm: Optional[float] = None   # окно: своя высота вместо всей высоты этажа
 
 
 @dataclass
@@ -625,23 +627,42 @@ _EXTERIOR_INFILL_MATERIAL = ("Стены", "Ячеистый бетон (нар�
 # порядка 80×80мм и меньше, реальные простенки в проверенном случае от
 # 520×200мм).
 _EXTERIOR_INFILL_MIN_AREA_MM2 = 30000
+# Зазор для ПРОСТРАНСТВЕННОЙ кластеризации (см. докстрока функции) — на
+# порядок больше типичного зазора между соседними импостами одного окна
+# (десятки мм), но заведомо меньше расстояния между соседними окнами
+# (простенок между ними — от 500мм).
+_EXTERIOR_CLUSTER_GAP_MM = 400
+_WINDOW_CATEGORY = ("Окна", "Окно (типовое, по узору переплёта)")
+# Высота и отступ окна от отметки этажа — ПРИБЛИЖЕНИЕ, не измерение: в
+# плане (вид сверху) вертикальная привязка не нарисована вовсе, взять её
+# неоткуда. Значения — типовой подоконник/высота окна жилого дома.
+_WINDOW_SILL_MM = 900
+_WINDOW_HEIGHT_MM = 1500
 
 
 def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
-                              envelope) -> list:
-    """Кладка простенков наружного фасада (`_EXTERIOR_FACADE_LAYER`) —
-    БЕЗ переплёта окон, который на том же слое нарисован тем же способом
-    (заливка, не штриховка). Различить их по слою/цвету нельзя — оба
-    белые; надёжный признак — окно всегда собрано из НЕСКОЛЬКИХ
-    одинаковых по размеру повторяющихся фигур (переплёт/импосты), кладка —
-    из фигур РАЗНОГО размера (нерегулярные куски простенка). Фигура,
-    совпадающая по (ширине, высоте) с двумя и более другими в пределах
-    10мм, — часть повторяющегося узора (окно), отбрасывается целиком.
+                              envelope) -> tuple:
+    """Кладка простенков наружного фасада И оконные проёмы между ними
+    (`_EXTERIOR_FACADE_LAYER`) — на одном слое, одним способом (заливка,
+    не штриховка), различить по слою/цвету нельзя — оба белые. Надёжный
+    признак — окно всегда собрано из НЕСКОЛЬКИХ одинаковых по размеру
+    повторяющихся фигур (переплёт/импосты), кладка — из фигур РАЗНОГО
+    размера (нерегулярные куски простенка).
+
+    Прежде чем сравнивать размеры, фигуры делятся на ПРОСТРАНСТВЕННЫЕ
+    кластеры (`_EXTERIOR_CLUSTER_GAP_MM`) — иначе два РАЗНЫХ окна одного
+    типоразмера в разных местах фасада слились бы в один прямоугольник
+    через всю стену между ними. Внутри кластера фигура, совпадающая по
+    (ширине, высоте) ещё с двумя и более в пределах 10мм, — окно; иначе —
+    кладка.
 
     Ограничено сеткой осей листа (`envelope`, см. `_axis_envelope`) — тот
-    же слой несёт фасадную штриховку по всему листу, не только у стен."""
+    же слой несёт фасадную штриховку по всему листу, не только у стен.
+    Возвращает (кладка, окна) — оба списка словарей вида `_wall_segments_
+    raw`, окна дополнительно несут `z_offset_mm`/`z_height_mm`
+    (`_WINDOW_SILL_MM`/`_WINDOW_HEIGHT_MM`)."""
     if envelope is None:
-        return []
+        return [], []
     x0, x1, y0, y1 = envelope
     m = _AXIS_ENVELOPE_MARGIN_MM
     H = page.rect.height
@@ -667,22 +688,83 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
         cx, cy = _seg_centroid(poly)
         if not (x0 - m <= cx <= x1 + m and y0 - m <= cy <= y1 + m):
             continue
-        candidates.append({"poly": poly, "w": w_mm, "h": h_mm, "thickness": min(w_mm, h_mm)})
+        candidates.append({"poly": poly, "w": w_mm, "h": h_mm})
+    if not candidates:
+        return [], []
 
-    # группировка по (ширина, высота) с допуском 10мм — повторяющиеся
-    # группы (окно) отбрасываются целиком.
-    sizes = [(round(c["w"] / 10) * 10, round(c["h"] / 10) * 10) for c in candidates]
-    counts = {}
-    for s in sizes:
-        counts[s] = counts.get(s, 0) + 1
+    # Кластеризовать все фигуры сразу (по проксимити) НЕЛЬЗЯ: кладка идёт
+    # сплошной цепочкой вдоль всего фасада, поэтому buffer+union по всем
+    # фигурам склеивает периметр этажа в один кластер, а не по окнам —
+    # окно тогда получалось растянутым через весь этаж. Сначала группируем
+    # по РАЗМЕРУ (одинаковый переплёт), и только одинаковые по размеру
+    # фигуры кластеризуем пространственно — так простенок между двумя
+    # разными окнами одного типоразмера их не склеивает.
+    wall_category, wall_material = _EXTERIOR_INFILL_MATERIAL
+    win_category, win_material = _WINDOW_CATEGORY
+    walls_out, windows_out = [], []
+    by_size = {}
+    for c in candidates:
+        size = (round(c["w"] / 10) * 10, round(c["h"] / 10) * 10)
+        by_size.setdefault(size, []).append(c)
 
-    category, material = _EXTERIOR_INFILL_MATERIAL
-    out = []
-    for c, s in zip(candidates, sizes):
-        if counts[s] >= 3:
+    claimed = set()
+    for members in by_size.values():
+        if len(members) < 3:
             continue
-        out.append({"category": category, "material": material,
-                    "polygon_mm": c["poly"], "thickness_mm": round(c["thickness"], 1)})
+        # buffer(GAP/2) на каждую фигуру — слипаются те, у кого реальный
+        # зазор МЕНЬШЕ GAP (не 2×GAP, как было бы при buffer(GAP)).
+        shapes = [Polygon(c["poly"]).buffer(_EXTERIOR_CLUSTER_GAP_MM / 2) for c in members]
+        merged = unary_union(shapes)
+        pieces = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
+        for piece in pieces:
+            group = [c for c in members if piece.contains(Polygon(c["poly"]).centroid)]
+            if len(group) < 3:
+                continue
+            xs = [x for c in group for x, _ in c["poly"]]
+            ys = [y for c in group for _, y in c["poly"]]
+            windows_out.append({
+                "category": win_category, "material": win_material,
+                "polygon_mm": [(min(xs), min(ys)), (max(xs), min(ys)),
+                              (max(xs), max(ys)), (min(xs), max(ys))],
+                "thickness_mm": round(min(max(xs) - min(xs), max(ys) - min(ys)), 1),
+                "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
+            })
+            claimed.update(id(c) for c in group)
+
+    for c in candidates:
+        if id(c) in claimed:
+            continue
+        walls_out.append({"category": wall_category, "material": wall_material,
+                          "polygon_mm": c["poly"],
+                          "thickness_mm": round(min(c["w"], c["h"]), 1)})
+    return walls_out, _merge_overlapping_windows(windows_out)
+
+
+def _merge_overlapping_windows(windows: list) -> list:
+    """Один физический проём часто даёт ДВА типоразмера повторяющихся
+    фигур (рама и створка/импосты внутри неё) — каждый проходит отбор
+    `_exterior_infill_segments` независимо и превращается в свой прямо-
+    угольник почти в одном месте. Здесь такие пересекающиеся прямоугольники
+    сливаются в один — по объединению их габаритов."""
+    if not windows:
+        return windows
+    boxes = [box(*Polygon(w["polygon_mm"]).bounds) for w in windows]
+    merged = unary_union(boxes)
+    pieces = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
+    out = []
+    for piece in pieces:
+        group = [w for w, b in zip(windows, boxes) if piece.intersects(b.centroid)]
+        if not group:
+            continue
+        xs = [x for w in group for x, _ in w["polygon_mm"]]
+        ys = [y for w in group for _, y in w["polygon_mm"]]
+        base = group[0]
+        out.append({
+            **base,
+            "polygon_mm": [(min(xs), min(ys)), (max(xs), min(ys)),
+                          (max(xs), max(ys)), (min(xs), max(ys))],
+            "thickness_mm": round(min(max(xs) - min(xs), max(ys) - min(ys)), 1),
+        })
     return out
 
 
@@ -720,8 +802,10 @@ def parse_walls_page(page, room_polys: list = None) -> tuple:
     segments = [s for s in segments
                if x0 <= _seg_centroid(s["polygon_mm"])[0] <= x1
                and y0 <= _seg_centroid(s["polygon_mm"])[1] <= y1]
-    segments += _exterior_infill_segments(page, scale, shift_x, shift_y,
-                                          _axis_envelope(page))
+    infill_walls, infill_windows = _exterior_infill_segments(
+        page, scale, shift_x, shift_y, _axis_envelope(page))
+    segments += infill_walls
+    segments += infill_windows
 
     words = page.get_text("words")
     boundary_pt = _axis_boundary_x(words)
@@ -811,7 +895,8 @@ def parse_walls_document(doc, rooms: list) -> tuple:
                 floor=plan.floor, index=i, page=plan.page,
                 category=s["category"], material=s["material"],
                 polygon_mm=s["polygon_mm"], thickness_mm=s["thickness_mm"],
-                section=known_section or s.get("section")))
+                section=known_section or s.get("section"),
+                z_offset_mm=s.get("z_offset_mm"), z_height_mm=s.get("z_height_mm")))
 
         room_polys = rooms_by_floor.get(plan.floor) or []
         slab_poly = _floor_slab_polygon(room_polys, [s["polygon_mm"] for s in floor_segments])

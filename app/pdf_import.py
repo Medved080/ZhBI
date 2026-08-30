@@ -149,15 +149,19 @@ def _level_name(floor_label: str) -> str:
 # с помещениями по индексу этажа (у "pdf:{этаж}:{индекс}" — префикса уже
 # нет, это существующая схема помещений, менять её — переизобретать
 # идентичность уже загруженных строк).
-_WALL_UID_PREFIX = {"Стены": "стена", "Перегородки": "перегородка"}
+_WALL_UID_PREFIX = {"Стены": "стена", "Перегородки": "перегородка", "Окна": "окно"}
 
 
 def build_wall_rows(walls: list, floors: dict, section_ids: dict, filename: str = None) -> list:
-    """Стены и перегородки `pdf_rooms.WallSegment` -> строки для
+    """Стены, перегородки и окна `pdf_rooms.WallSegment` -> строки для
     revit_elements. Высота — во весь этаж (пол-потолок), как и у
-    помещений: своей высоты (например, для проёма или парапета) на
-    чертеже не нашлось, но исходная высотная привязка честная (этаж, к
-    которому относится сегмент), а не додуманная."""
+    помещений: своей высоты на чертеже (виде сверху) не нашлось, но
+    исходная высотная привязка честная (этаж, к которому относится
+    сегмент), а не додуманная. Категория «Окна» — исключение: у нее ЕСТЬ
+    своя высота/отступ (`w.z_offset_mm`/`w.z_height_mm`,
+    `pdf_rooms._WINDOW_SILL_MM`/`_WINDOW_HEIGHT_MM`) — тоже приближение
+    (типовые подоконник/высота), не измерение, но честнее, чем во весь
+    этаж — окно во всю высоту читалось бы как витраж, а это не так."""
     rows = []
     for i, w in enumerate(walls):
         z0, z1 = _floor_elevation(w.floor)
@@ -167,6 +171,10 @@ def build_wall_rows(walls: list, floors: dict, section_ids: dict, filename: str 
         else:
             section_id, section_source = None, None
         outline = [[round(x, 1), round(y, 1)] for x, y in w.polygon_mm]
+        if w.z_offset_mm is not None and w.z_height_mm is not None:
+            elevation_mm, height_mm = z0 + w.z_offset_mm, w.z_height_mm
+        else:
+            elevation_mm, height_mm = z0, z1 - z0
         rows.append({
             "section_code": "PDF",
             "uid": "pdf:%s:%s:%d" % (_WALL_UID_PREFIX[w.category], w.floor, w.index),
@@ -179,8 +187,8 @@ def build_wall_rows(walls: list, floors: dict, section_ids: dict, filename: str 
             "level_name": _level_name(w.floor),
             "section_id": section_id,
             "section_source": section_source,
-            "elevation_mm": z0,
-            "height_mm": z1 - z0,
+            "elevation_mm": elevation_mm,
+            "height_mm": height_mm,
             "x": None, "y": None, "z": None,
             "outline_json": json.dumps(outline, ensure_ascii=False),
             "outline_approx": 0,
@@ -190,7 +198,9 @@ def build_wall_rows(walls: list, floors: dict, section_ids: dict, filename: str 
             "params_json": json.dumps(
                 ({"источник_pdf": filename} if filename else {})
                 | {"страница": w.page, "материал": w.material,
-                   "толщина_мм": w.thickness_mm},
+                   "толщина_мм": w.thickness_mm}
+                | ({"высота_и_отступ": "типовые, не измерены — в плане нет "
+                    "вертикальной привязки"} if w.z_offset_mm is not None else {}),
                 ensure_ascii=False),
         })
     return rows
@@ -311,11 +321,13 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
         if room.area_m2 is not None:
             s["с площадью"] += 1
 
+    _windows_count = sum(1 for w in walls if w.category == "Окна")
     return {
         "object_id": object_id,
         "object_name": object_name,
         "total_rooms": len(rooms),
-        "total_walls": len(walls),
+        "total_walls": len(walls) - _windows_count,
+        "total_windows": _windows_count,
         "total_slabs": len(slabs),
         "new": new_count,
         "unchanged": unchanged_count,
@@ -450,9 +462,11 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     # про неизвестную секцию, иначе 26 плит выглядели бы как брак разбора.
     sectioned = [r for r in rows if r["category"] != "Перекрытия"]
     known_section = sum(1 for r in sectioned if r["section_id"] is not None)
+    windows_count = sum(1 for w in walls if w.category == "Окна")
     return {
         "rooms_written": len(rooms),
-        "walls_written": len(walls),
+        "walls_written": len(walls) - windows_count,
+        "windows_written": windows_count,
         "slabs_written": len(slabs),
         "retired": len(retired),
         "with_known_section": known_section,
