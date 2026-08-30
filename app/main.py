@@ -5701,6 +5701,19 @@ def blocks_geometry_endpoint(
         conn.close()
 
 
+@app.get("/objects/{object_id}/grids")
+def object_grids_endpoint(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Сетка осей для слоя «Оси» в «Модели МФР» — тем же правом, что
+    сами элементы: сетка не отдельная сущность доступа, а вспомогательный
+    слой показа."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "revit_model", "read")
+        return revit_plan.grids(conn, object_id)
+    finally:
+        conn.close()
+
+
 @app.get("/objects/{object_id}/blocks/{block_id}/card")
 def block_card_endpoint(object_id: int, block_id: int,
                         user: sqlite3.Row = Depends(get_current_user)):

@@ -243,6 +243,19 @@ def card(conn, object_id: int, element_id: int):
     }
 
 
+def grids(conn, object_id: int) -> list:
+    """Сетка осей объекта — слой «Оси» в «Модели МФР», для сверки
+    параллелепипеда блока (`blocks_geometry`) с реальной геометрией: обе
+    координаты, и оси, и элементов — в ОБЩИХ координатах площадки, без
+    привязки к текущему отбору этажа/секции (в отличие от `elements()`) —
+    сетка одна на весь объект."""
+    return [
+        dict(row) for row in conn.execute(
+            "SELECT label, kind, x1, y1, x2, y2 FROM object_grids "
+            "WHERE object_id = ? ORDER BY label", (object_id,))
+    ]
+
+
 def blocks_geometry(conn, object_id: int, level_ids=None, section_ids=None) -> list:
     """Параллелепипеды РЕАЛЬНЫХ блоков (Docs/TZ.md, «Геометрия блока») —
     слой «Блоки» в «Модели МФР», тем же языком фильтра, что `elements()`.

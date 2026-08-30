@@ -26924,6 +26924,16 @@ async function loadRevitPlanElements() {
     revitPlanState.blocksData = bres.ok ? await bres.json() : [];
   } catch (e) { revitPlanState.blocksData = []; }
 
+  // Сетка осей — одна на весь объект, отбором этажа/секции не сужается
+  // (`revit_plan.grids`). Грузится тем же приёмом «всегда», что и блоки.
+  if (revitPlanState.gridsObjectId !== s.objectId) {
+    try {
+      const gres = await fetch(`/objects/${s.objectId}/grids`);
+      revitPlanState.gridsData = gres.ok ? await gres.json() : [];
+    } catch (e) { revitPlanState.gridsData = []; }
+    revitPlanState.gridsObjectId = s.objectId;
+  }
+
   // Ключ сцены 3D сбрасывается на КАЖДЫЙ приход данных. Иначе так:
   // пользователь жмёт «все этажи», сразу переключается в 3D, сцена
   // собирается на ещё не заменённых данных одного этажа, а когда данные
@@ -26958,10 +26968,15 @@ function drawRevitPlan(data) {
   // область больше — иначе часть параллелепипеда рисовалась бы за
   // пределами viewBox и была бы невидима, хотя формально в разметке есть.
   const blocks = mfrShowBlocks() ? revitPlanState.blocksData.filter((b) => b.ok) : [];
+  const axes = mfrShowAxes() ? revitPlanState.gridsData || [] : [];
   let minX = 0, minY = 0, maxX = ow, maxY = oh;
   for (const b of blocks) {
     minX = Math.min(minX, b.x0 - ox); maxX = Math.max(maxX, b.x1 - ox);
     minY = Math.min(minY, b.y0 - oy); maxY = Math.max(maxY, b.y1 - oy);
+  }
+  for (const a of axes) {
+    minX = Math.min(minX, a.x1 - ox, a.x2 - ox); maxX = Math.max(maxX, a.x1 - ox, a.x2 - ox);
+    minY = Math.min(minY, a.y1 - oy, a.y2 - oy); maxY = Math.max(maxY, a.y1 - oy, a.y2 - oy);
   }
   const w = maxX - minX, h = maxY - minY;
 
@@ -26991,12 +27006,30 @@ function drawRevitPlan(data) {
       stroke-dasharray="${Math.max(w / 150, 80)}"/>`;
   });
 
+  // Сетка осей (`object_grids`, слой «Оси») — для сверки блока с реальной
+  // геометрией (Docs/OPEN.md, «Блок заметно меньше реальной геометрии»):
+  // подпись у ОБОИХ концов отрезка, а не только у одного — расхождение
+  // ищется именно по краю здания, и у какого конца он обнаружится, заранее
+  // не известно. Толщина и кегль — в тех же относительных единицах `w`,
+  // что обводка элементов чуть выше.
+  const axisStroke = Math.max(w / 1200, 15);
+  const axisFont = Math.max(w / 90, 350);
+  const axisLines = axes.map((a) => {
+    const x1 = a.x1 - ox - minX, y1 = h - (a.y1 - oy - minY);
+    const x2 = a.x2 - ox - minX, y2 = h - (a.y2 - oy - minY);
+    const label = escapeHtml(a.label || "");
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
+      stroke="var(--axis-line, #c4c4c4)" stroke-width="${axisStroke}" stroke-dasharray="${axisFont * 0.6}"/>
+      <text x="${x1}" y="${y1}" font-size="${axisFont}" fill="var(--axis-label, #9a9a9a)">${label}</text>
+      <text x="${x2}" y="${y2}" font-size="${axisFont}" fill="var(--axis-label, #9a9a9a)">${label}</text>`;
+  });
+
   // Исходный охват держим отдельно от текущего вида: «Вписать» должна
   // возвращать именно его, а не пересчитывать по элементам заново.
   revitPlanState.view = { x: 0, y: 0, w, h };
   revitPlanState.fit = { x: 0, y: 0, w, h };
   box.innerHTML = `<svg id="revit-plan-svg" viewBox="0 0 ${w} ${h}"
-    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${paths.join("")}${blockRects.join("")}</svg>`;
+    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${paths.join("")}${blockRects.join("")}${axisLines.join("")}</svg>`;
 
   document.getElementById("revit-plan-legend").innerHTML =
     (data.categories || []).map((name, i) =>
@@ -27126,7 +27159,10 @@ function mfrShowElements() {
 function mfrShowBlocks() {
   return document.getElementById("mfr-show-blocks").checked;
 }
-for (const id of ["mfr-show-elements", "mfr-show-blocks"]) {
+function mfrShowAxes() {
+  return document.getElementById("mfr-show-axes").checked;
+}
+for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes"]) {
   document.getElementById(id).addEventListener("change", () => {
     if (!revitPlanState.data) return;
     drawRevitPlan(revitPlanState.data);
@@ -27217,7 +27253,7 @@ async function buildMfr3D() {
   // Ключ отбора: пересобирать сцену на каждое переключение вкладки незачем,
   // а на смену этажа или слоя «Элементы»/«Блоки» — обязательно.
   const ключ = JSON.stringify([REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()),
-                               mfrShowElements(), mfrShowBlocks()]);
+                               mfrShowElements(), mfrShowBlocks(), mfrShowAxes()]);
   if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
 
   revitPlanStatus(`Сборка 3D: ${data.elements.length} элементов…`);
@@ -27345,6 +27381,53 @@ async function buildMfr3D() {
     }
   }
 
+  // Слой «Оси» (Docs/OPEN.md, «Блок заметно меньше реальной геометрии») —
+  // сетка `object_grids` на уровне земли этажа, для сверки на глаз:
+  // параллелепипед блока строится ИМЕННО по этим осям (`app/block_geometry.
+  // py`), и если он короче серой массы элементов — видно, у какой оси
+  // именно. Мировая система координат тут ПРЯМАЯ (x,y,z без разворота), в
+  // отличие от 3D «Схемы» — см. позиционирование элементов выше.
+  if (mfrShowAxes() && data.origin && revitPlanState.gridsData?.length) {
+    const [ox, oy] = data.origin;
+    const точки = [];
+    for (const a of revitPlanState.gridsData) {
+      точки.push(a.x1 - ox, a.y1 - oy, низ, a.x2 - ox, a.y2 - oy, низ);
+    }
+    const геомОсей = new THREE.BufferGeometry();
+    геомОсей.setAttribute("position", new THREE.BufferAttribute(new Float32Array(точки), 3));
+    const линииОсей = new THREE.LineSegments(геомОсей, new THREE.LineBasicMaterial({
+      color: 0xc4922f, transparent: true, opacity: 0.75 }));
+    линииОсей.renderOrder = 3;
+    scene.add(линииОсей);
+
+    // Подписи — спрайтами у ОБОИХ концов отрезка: край здания, где ищут
+    // расхождение, заранее не известен. Масштаб мировой (sizeAttenuation
+    // по умолчанию), не экранный — полноценный пересчёт при зуме, как у
+    // 3D «Схемы», здесь избыточен: сетка объекта смотрится один раз, для
+    // сверки, а не как постоянный слой.
+    const охватОсей = Math.max(w, h) || 1000;
+    for (const a of revitPlanState.gridsData) {
+      for (const [px, py] of [[a.x1 - ox, a.y1 - oy], [a.x2 - ox, a.y2 - oy]]) {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        const fontPx = 48, padding = 6;
+        ctx.font = `${fontPx}px sans-serif`;
+        canvas.width = Math.ceil(ctx.measureText(a.label || "").width) + padding * 2;
+        canvas.height = fontPx + padding * 2;
+        ctx.fillStyle = "#c4922f";
+        ctx.textBaseline = "middle";
+        ctx.font = `${fontPx}px sans-serif`;
+        ctx.fillText(a.label || "", padding, canvas.height / 2);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: new THREE.CanvasTexture(canvas), depthTest: true }));
+        const высотаСпрайта = охватОсей * 0.02;
+        sprite.scale.set(высотаСпрайта * (canvas.width / canvas.height), высотаСпрайта, 1);
+        sprite.position.set(px, py, низ + высотаСпрайта / 2);
+        scene.add(sprite);
+      }
+    }
+  }
+
   // Все рёбра — ОДНИМ объектом сцены: по отрезку на элемент означало бы
   // десятки тысяч объектов, а рисуются они одинаково.
   if (рёбра.length) {
@@ -27465,6 +27548,10 @@ function disposeMfr3D() {
   if (mfr3d.scene) {
     mfr3d.scene.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
+      // .material.dispose() текстуру НЕ освобождает (у подписей осей —
+      // canvas-текстура на спрайт) — без явного map.dispose() она копится
+      // в видеопамяти при каждой пересборке сцены.
+      if (o.material?.map) o.material.map.dispose();
       if (o.material) o.material.dispose();
     });
   }
