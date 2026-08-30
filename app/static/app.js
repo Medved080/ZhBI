@@ -26951,6 +26951,23 @@ async function loadRevitPlanElements() {
   applyMfrMode();
 }
 
+// Ось «не имеет отношения к отфильтрованной области» (живой запрос
+// пользователя, 2026-08-31 — на всём объекте разом сетка двух секций
+// перекрывалась подписями), если её отрезок целиком вне габарита ТЕКУЩИХ
+// (уже отфильтрованных по этажу/секции) элементов — с запасом в 5% на
+// ось ровно по границе. Общая для 2D и 3D: держит подписи вменяемыми и
+// заодно гарантирует, что 3D-камера, наведённая на элементы, не
+// промахивается мимо осей — они уже внутри того же габарита.
+function relevantAxes(list, ox, oy, ow, oh) {
+  const margin = Math.max(ow, oh) * 0.05;
+  const bx0 = -margin, bx1 = ow + margin, by0 = -margin, by1 = oh + margin;
+  return (list || []).filter((a) => {
+    const ax0 = Math.min(a.x1, a.x2) - ox, ax1 = Math.max(a.x1, a.x2) - ox;
+    const ay0 = Math.min(a.y1, a.y2) - oy, ay1 = Math.max(a.y1, a.y2) - oy;
+    return ax0 <= bx1 && ax1 >= bx0 && ay0 <= by1 && ay1 >= by0;
+  });
+}
+
 function drawRevitPlan(data) {
   const box = document.getElementById("revit-plan-canvas");
   if (!data.elements.length || !data.size) {
@@ -26968,7 +26985,7 @@ function drawRevitPlan(data) {
   // область больше — иначе часть параллелепипеда рисовалась бы за
   // пределами viewBox и была бы невидима, хотя формально в разметке есть.
   const blocks = mfrShowBlocks() ? revitPlanState.blocksData.filter((b) => b.ok) : [];
-  const axes = mfrShowAxes() ? revitPlanState.gridsData || [] : [];
+  const axes = mfrShowAxes() ? relevantAxes(revitPlanState.gridsData, ox, oy, ow, oh) : [];
   let minX = 0, minY = 0, maxX = ow, maxY = oh;
   for (const b of blocks) {
     minX = Math.min(minX, b.x0 - ox); maxX = Math.max(maxX, b.x1 - ox);
@@ -27010,18 +27027,22 @@ function drawRevitPlan(data) {
   // геометрией (Docs/OPEN.md, «Блок заметно меньше реальной геометрии»):
   // подпись у ОБОИХ концов отрезка, а не только у одного — расхождение
   // ищется именно по краю здания, и у какого конца он обнаружится, заранее
-  // не известно. Толщина и кегль — в тех же относительных единицах `w`,
-  // что обводка элементов чуть выше.
-  const axisStroke = Math.max(w / 1200, 15);
-  const axisFont = Math.max(w / 90, 350);
-  const axisLines = axes.map((a) => {
+  // не известно. Линия — `vector-effect="non-scaling-stroke"`, толщина
+  // постоянна на экране при любом зуме (та же техника, что у сетки осей
+  // «Схемы»). Кегль подписи ставится и ограничивается сверху отдельно,
+  // `updateMfrAxisLabelSizing` — фикс. толщина линии здесь для этого не
+  // подходит, шрифт масштабом viewBox не берётся.
+  const axisLines = axes.map((a, i) => {
     const x1 = a.x1 - ox - minX, y1 = h - (a.y1 - oy - minY);
     const x2 = a.x2 - ox - minX, y2 = h - (a.y2 - oy - minY);
     const label = escapeHtml(a.label || "");
     return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
-      stroke="var(--axis-line, #c4c4c4)" stroke-width="${axisStroke}" stroke-dasharray="${axisFont * 0.6}"/>
-      <text x="${x1}" y="${y1}" font-size="${axisFont}" fill="var(--axis-label, #9a9a9a)">${label}</text>
-      <text x="${x2}" y="${y2}" font-size="${axisFont}" fill="var(--axis-label, #9a9a9a)">${label}</text>`;
+      stroke="var(--axis-line, #c4c4c4)" stroke-width="1.5" vector-effect="non-scaling-stroke"
+      stroke-dasharray="6 4" data-mfr-axis="${i}"/>
+      <text class="mfr-axis-label" data-end="0" data-mfr-axis="${i}" x="${x1}" y="${y1}"
+        fill="var(--axis-label, #9a9a9a)">${label}</text>
+      <text class="mfr-axis-label" data-end="1" data-mfr-axis="${i}" x="${x2}" y="${y2}"
+        fill="var(--axis-label, #9a9a9a)">${label}</text>`;
   });
 
   // Исходный охват держим отдельно от текущего вида: «Вписать» должна
@@ -27041,13 +27062,44 @@ function drawRevitPlan(data) {
   bindRevitPlanZoom(document.getElementById("revit-plan-svg"));
 }
 
+// Подписи осей — постоянный ЭКРАННЫЙ кегль (`MAX_AXIS_FONT_PX`, тот же
+// предел, что у сетки осей «Схемы», app.js:70) и прореживание по коллизии:
+// две подписи ближе `MAX_AXIS_FONT_PX*2.2`px друг к другу на экране —
+// вторая скрывается целиком, а не уменьшается (живой запрос пользователя,
+// 2026-08-31: без предела кегль растёт вместе с зумом без остановки, а без
+// прореживания подписи соседних осей секций С01/С02 ложатся друг на
+// друга). В отличие от `updateAxisLabelSizing` «Схемы» подписи НЕ
+// прикреплены к краю видимой области — сетка объекта смотрится разово,
+// для сверки, полноценное поведение «как заголовок таблицы» здесь
+// избыточно.
+function updateMfrAxisLabelSizing(svg, v) {
+  const r = svg.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const pxPerUnitX = r.width / v.w, pxPerUnitY = r.height / v.h;
+  const fontUnits = MAX_AXIS_FONT_PX / Math.min(pxPerUnitX, pxPerUnitY);
+  const needPx = MAX_AXIS_FONT_PX * 2.2;
+  const placed = [];
+  for (const el of svg.querySelectorAll("text.mfr-axis-label")) {
+    el.setAttribute("font-size", fontUnits.toFixed(2));
+    const mx = parseFloat(el.getAttribute("x")), my = parseFloat(el.getAttribute("y"));
+    const sx = (mx - v.x) * pxPerUnitX, sy = (my - v.y) * pxPerUnitY;
+    const тесно = placed.some((p) => Math.hypot(p[0] - sx, p[1] - sy) < needPx);
+    el.style.display = тесно ? "none" : "";
+    if (!тесно) placed.push([sx, sy]);
+  }
+}
+
 // Колесо — масштаб, перетаскивание — сдвиг. Через viewBox, а не CSS-трансформ:
 // толщина линий тогда остаётся в координатах модели и не «худеет» при
 // увеличении.
 function bindRevitPlanZoom(svg) {
   const v = revitPlanState.view;
-  const apply = () => svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+  const apply = () => {
+    svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+    updateMfrAxisLabelSizing(svg, v);
+  };
   revitPlanState.applyView = apply;
+  apply();
   svg.addEventListener("wheel", (e) => {
     e.preventDefault();
     const k = e.deltaY > 0 ? 1.15 : 1 / 1.15;
@@ -27389,8 +27441,13 @@ async function buildMfr3D() {
   // отличие от 3D «Схемы» — см. позиционирование элементов выше.
   if (mfrShowAxes() && data.origin && revitPlanState.gridsData?.length) {
     const [ox, oy] = data.origin;
+    // Только оси, относящиеся к текущему отбору (`relevantAxes` — она же
+    // у 2D-плана): иначе вся сетка объекта разом может оказаться далеко
+    // за пределами того, что охватывает камера, наведённая на элементы
+    // текущего этажа/секции — «оси за кадром», живой запрос пользователя.
+    const оси = relevantAxes(revitPlanState.gridsData, ox, oy, w, h);
     const точки = [];
-    for (const a of revitPlanState.gridsData) {
+    for (const a of оси) {
       точки.push(a.x1 - ox, a.y1 - oy, низ, a.x2 - ox, a.y2 - oy, низ);
     }
     const геомОсей = new THREE.BufferGeometry();
@@ -27406,7 +27463,7 @@ async function buildMfr3D() {
     // 3D «Схемы», здесь избыточен: сетка объекта смотрится один раз, для
     // сверки, а не как постоянный слой.
     const охватОсей = Math.max(w, h) || 1000;
-    for (const a of revitPlanState.gridsData) {
+    for (const a of оси) {
       for (const [px, py] of [[a.x1 - ox, a.y1 - oy], [a.x2 - ox, a.y2 - oy]]) {
         const canvas = document.createElement("canvas");
         const ctx = canvas.getContext("2d");
