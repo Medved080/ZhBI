@@ -17995,7 +17995,12 @@ function renderContractingReport(data) {
   }
 
   const легенда = CS_SERIES.map(с => `<span class="${с.css}">■</span> ${с.label}`).join(" · ");
-  return `<div class="hint-text cs-legend">В клетке накопительным итогом: ${легенда}.
+  // Предупреждение приходит с сервера готовым текстом (см.
+  // app/report_contracting.py): у изделия без прогноза нет даты
+  // потребности, и кривая до итога слева не дорастает. Без этой строки
+  // расхождение читалось бы как ошибка расчёта.
+  return `${data.warning ? `<div class="dyn-warn">${escapeHtml(data.warning)}</div>` : ""}
+    <div class="hint-text cs-legend">В клетке накопительным итогом: ${легенда}.
       Масштаб — ${escapeHtml(data.scale_label)}; периодов ${периодов}.
       ${толькоДефицит ? "Показаны только марки с дефицитом." : ""}</div>
     <div class="cs-scroll"><table class="cs-table">${шапка}

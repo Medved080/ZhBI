@@ -21,10 +21,20 @@
 
 Инварианты (решения пользователя 2026-08-11, менять только с ним):
 
-  **Потребность** — изделия МОДЕЛИ, разложенные по `project_smr_start_date`
-      (дата начала СМР: к ней изделие обязано быть на площадке;
-      `project_delivery_date` означает ЗАВЕРШЕНИЕ СМР и к поставке
-      отношения не имеет — см. app/schedule_import.py).
+  **Потребность** — изделия МОДЕЛИ, разложенные по дате начала СМР: к ней
+      изделие обязано быть на площадке (дата ЗАВЕРШЕНИЯ СМР к поставке
+      отношения не имеет, см. app/schedule_import.py). С 2026-08-31 дата
+      берётся из АКТУАЛИЗИРОВАННОГО графика («Начало СМР (прогноз)»,
+      `FORECAST_JOIN` в app/schedule_versions.py), а не из директивного поля
+      `project_smr_start_date` — решение пользователя, та же правка, что
+      08-30 сделана в «Статусе комплектации»: справка отвечает на вопрос
+      «что мешает стройке СЕЙЧАС», а на него отвечает действующий график, а
+      не обещанный когда-то. Изделие без прогноза (прежде всего уже
+      смонтированное — пересчёт от факта исключает такие из актуализации)
+      попадает в «не размечено: без даты начала СМР» и в расчёт горизонта,
+      критического пути и очереди завода не входит. Это принято сознательно
+      (решение пользователя 2026-08-31) и отчёт говорит об этом сам —
+      строкой в выводах.
 
   **Ярус** — отметка яруса стоянки (`elements.zone_stance_level_id` →
       `zone_levels.elevation_mm`), а не этаж и не подтип: логика «нельзя
@@ -66,6 +76,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from app.capacity import CapacityBook
+from app.schedule_versions import FORECAST_JOIN, FORECAST_START
 from app.models import Status
 from app.reports import natural_key, pdf_text
 from app.settings import get_notes_for_date
@@ -263,7 +274,7 @@ def _build_queues(изделия: list, book: CapacityBook, today: date) -> dict
     # Изделия без даты уходят в хвост (иначе они заняли бы мощность впереди
     # тех, у кого срок известен, — то есть неразмеченность двигала бы сроки).
     def ключ_сортировки(e):
-        нужно = _parse(e["project_smr_start_date"])
+        нужно = _parse(e["need_date"])
         return (0, нужно, e["id"]) if нужно else (1, date.max, e["id"])
 
     готовность = {}
@@ -316,14 +327,15 @@ def build_analytics_report(conn: sqlite3.Connection, object_id: int,
     конец_горизонта = today + timedelta(days=горизонт)
 
     изделия = [dict(r) for r in conn.execute(
-        """
+        f"""
         SELECT e.id, e.element_type, e.mark, e.floor, e.contract_id, e.current_status,
-               e.project_smr_start_date, e.planned_delivery_date, e.actual_delivery_date,
+               {FORECAST_START} AS need_date,
+               e.planned_delivery_date, e.actual_delivery_date,
                e.zone_crane_id, e.zone_stance_id, e.zone_stance_level_id,
                zc.number AS crane_number, zc.name AS crane_name,
                zs.number AS stance_number, zs.name AS stance_name,
                zl.elevation_mm AS level_mm
-        FROM elements e
+        FROM elements e{FORECAST_JOIN}
         LEFT JOIN zones zc ON zc.id = e.zone_crane_id
         LEFT JOIN zones zs ON zs.id = e.zone_stance_id
         LEFT JOIN zone_levels zl ON zl.id = e.zone_stance_level_id
@@ -359,7 +371,11 @@ def build_analytics_report(conn: sqlite3.Connection, object_id: int,
     готовность = _build_queues(изделия, book, today)
 
     # ---------- разметка изделий по этапам и ярусам ----------
-    неразмечено_дата = [e for e in изделия if not e["project_smr_start_date"]]
+    # «Без даты начала СМР» — теперь это «без прогноза»: у изделия нет
+    # строки в последней актуализации графика. Чаще всего оно уже
+    # смонтировано (пересчёт от факта исключает такие намеренно), и в
+    # горизонт с критическим путём ему действительно нечего добавить.
+    неразмечено_дата = [e for e in изделия if not e["need_date"]]
     неразмечено_ярус = [e for e in изделия if e["zone_stance_level_id"] is None]
 
     этапы: dict = {}
@@ -376,7 +392,7 @@ def build_analytics_report(conn: sqlite3.Connection, object_id: int,
         этап["elements"].append(e)
         if e["level_mm"] is not None:
             этап["elevations"].add(e["level_mm"])
-        нужно = _parse(e["project_smr_start_date"])
+        нужно = _parse(e["need_date"])
         if нужно and (этап["start"] is None or нужно < этап["start"]):
             этап["start"] = нужно
 
@@ -620,8 +636,8 @@ def build_analytics_report(conn: sqlite3.Connection, object_id: int,
 
     критический_путь = []
     for строка in критические.values():
-        нужно_к = min((_parse(e["project_smr_start_date"]) for e in строка["elements"]
-                       if e["project_smr_start_date"]), default=None)
+        нужно_к = min((_parse(e["need_date"]) for e in строка["elements"]
+                       if e["need_date"]), default=None)
         план = min((_parse(e["planned_delivery_date"]) for e in строка["elements"]
                     if e["planned_delivery_date"]), default=None)
         готово, источник = _готовность_строки(строка["elements"])
@@ -743,7 +759,7 @@ def _build_dynamics(conn, object_id: int, изделия: list, законтра
         точки[шкала][неделя] = точки[шкала].get(неделя, 0) + сколько
 
     for e in изделия:
-        плюс("need", _parse(e["project_smr_start_date"]))
+        плюс("need", _parse(e["need_date"]))
         плюс("delivered", _parse(e["actual_delivery_date"]))
 
     for r in conn.execute(
@@ -864,9 +880,12 @@ def _build_conclusions(строки_горизонта: list, фронт: list, 
     if неразмечено_дата or неразмечено_ярус:
         выводы.append({
             "severity": "data",
-            "text": (f"Не размечено: без даты начала СМР — {len(неразмечено_дата)} шт., "
-                     f"без привязки к ярусу — {len(неразмечено_ярус)} шт. "
-                     f"В расчёт горизонта и критического пути они не входят."),
+            "text": (f"Не размечено: без прогнозной даты начала СМР — "
+                     f"{len(неразмечено_дата)} шт., без привязки к ярусу — "
+                     f"{len(неразмечено_ярус)} шт. В расчёт горизонта, критического "
+                     f"пути и очереди завода они не входят. Дата берётся из последней "
+                     f"актуализации графика СМР; чаще всего её нет у уже смонтированных "
+                     f"изделий — пересчёт графика от факта исключает их намеренно."),
         })
     if not book.average:
         выводы.append({
@@ -1108,9 +1127,10 @@ def build_analytics_report_pdf(report: dict) -> bytes:
     неразмечено = report.get("unmapped") or {}
     if неразмечено.get("no_smr_date") or неразмечено.get("no_level"):
         story.append(Paragraph(
-            f"Не размечено: без даты начала СМР — {неразмечено.get('no_smr_date', 0)} шт., "
-            f"без привязки к ярусу — {неразмечено.get('no_level', 0)} шт. "
-            f"В расчёт горизонта и критического пути они не входят.", мелкий))
+            f"Не размечено: без прогнозной даты начала СМР — "
+            f"{неразмечено.get('no_smr_date', 0)} шт., без привязки к ярусу — "
+            f"{неразмечено.get('no_level', 0)} шт. В расчёт горизонта, критического "
+            f"пути и очереди завода они не входят.", мелкий))
     story += [Spacer(1, 2 * mm), Paragraph(pdf_text(report["disclaimer"]), мелкий)]
 
     doc.build(story)

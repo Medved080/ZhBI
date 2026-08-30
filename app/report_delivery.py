@@ -1,10 +1,14 @@
 """
 Отчёт «График поставки» (живой запрос 2026-08-02).
 
-Смысл: все ЖБ изделия должны быть на объекте К ДАТЕ НАЧАЛА СМР
-(`elements.project_smr_start_date`, заполняется импортом графика MS
-Project) — значит из этой даты раскладывается календарная ПОТРЕБНОСТЬ в
-поставке. По горизонтали — календарь (день / неделя / месяц), по
+Смысл: все ЖБ изделия должны быть на объекте К ДАТЕ НАЧАЛА СМР — значит из
+этой даты раскладывается календарная ПОТРЕБНОСТЬ в поставке. Дата берётся из
+АКТУАЛИЗИРОВАННОГО графика СМР (`schedule_version_dates.smr_start_date`
+последней актуализации объекта, джойн `FORECAST_JOIN` в
+app/schedule_versions.py), а не из директивного поля изделия
+`project_smr_start_date` (решение пользователя 2026-08-31, после такой же
+правки «Статуса комплектации» 08-30): поле хранит срок, который обещали
+изначально, а снабжение работает по действующему графику. По горизонтали — календарь (день / неделя / месяц), по
 вертикали — иерархия группировки, СОСТАВ И ПОРЯДОК КОТОРОЙ ЗАДАЁТ
 ПОЛЬЗОВАТЕЛЬ (одному нужен разрез по поставщикам, другому — по захваткам
 и этажам; фиксированная иерархия, как в отчёте «Статусы», здесь не
@@ -12,8 +16,8 @@ Project) — значит из этой даты раскладывается к
 
 В ячейке ТРИ числа (живой запрос того же дня) — три независимые шкалы
 дат одного и того же изделия:
-  потребность — `project_smr_start_date`, «к этой дате изделие обязано
-                быть на площадке» (проектный график);
+  потребность — прогнозное начало СМР, «к этой дате изделие обязано быть
+                на площадке» (действующий график);
   план        — `planned_delivery_date`, на какую дату поставку реально
                 запланировали (контракт/логистика);
   факт        — `actual_delivery_date`, когда поставили на самом деле.
@@ -26,8 +30,12 @@ Project) — значит из этой даты раскладывается к
 колонки «Ранее» / «Позже» (решение пользователя): иначе итог справа
 перестал бы сходиться с реальным объёмом группы, и сужение периода молча
 меняло бы общее число изделий. Третья служебная колонка — «Без даты»:
-проектная дата на реальном файле есть не у всех изделий, и молча их
-терять нельзя (та же честность, что у `plan_coverage` в «Динамике»).
+прогноз есть не у всех изделий, и молча их терять нельзя (та же честность,
+что у `plan_coverage` в «Динамике»). Кто в неё попадает по потребности —
+прежде всего УЖЕ СМОНТИРОВАННЫЕ: пересчёт графика от факта исключает их из
+актуализации намеренно. Это принято сознательно (решение пользователя
+2026-08-31): «поставлено вовремя» по закрытым этапам больше не считается,
+зато отчёт не смешивает в одной шкале директивный срок с прогнозным.
 Факт в «Без даты» не попадает никогда: изделие без фактической даты
 просто не поставлено, а не «поставлено неизвестно когда».
 
@@ -46,6 +54,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from app.db import visible_elements_clause
+from app.schedule_versions import FORECAST_JOIN, FORECAST_START
 from app.reports import (
     IN_DEVELOPMENT_COLOR, IN_DEVELOPMENT_NOTE, MAX_PERIOD_COLUMNS, NO_FLOOR,
     NO_ZAKHVATKA, STEP_LABELS, STEPS, _floor_label, _item_label, auto_step,
@@ -83,8 +92,11 @@ NO_MARK = "без марки"
 # Три шкалы одной ячейки. Порядок задаёт и порядок чисел на экране, и
 # порядок колонок в Excel — он один на все три представления.
 SCALES = [
-    {"key": "need", "label": "Потребность", "column": "project_smr_start_date",
-     "hint": "к дате начала СМР"},
+    # У потребности источник — не поле изделия, а последняя актуализация
+    # графика (FORECAST_START); у плана и факта — поля. Ключ `column` здесь
+    # справочный, в SQL он не подставляется ни у одной шкалы.
+    {"key": "need", "label": "Потребность", "column": "schedule_version_dates.smr_start_date",
+     "hint": "к дате начала СМР по действующему графику"},
     {"key": "plan", "label": "План", "column": "planned_delivery_date",
      "hint": "плановая дата поставки"},
     {"key": "fact", "label": "Факт", "column": "actual_delivery_date",
@@ -142,12 +154,12 @@ def _covered(need_d: Optional[date], plan_d: Optional[date], fact_d: Optional[da
 
 # Та же формула в SQL — для разбора ячейки по маркам. substr(...,1,10):
 # даты текстовые, у части записей исторически со временем.
-_COVERED_SQL = """
-    (CASE WHEN e.project_smr_start_date IS NULL THEN 1
+_COVERED_SQL = f"""
+    (CASE WHEN {FORECAST_START} IS NULL THEN 1
           WHEN e.actual_delivery_date IS NOT NULL
-               THEN substr(e.actual_delivery_date,1,10) <= substr(e.project_smr_start_date,1,10)
+               THEN substr(e.actual_delivery_date,1,10) <= substr({FORECAST_START},1,10)
           WHEN e.planned_delivery_date IS NOT NULL
-               THEN substr(e.planned_delivery_date,1,10) <= substr(e.project_smr_start_date,1,10)
+               THEN substr(e.planned_delivery_date,1,10) <= substr({FORECAST_START},1,10)
           ELSE 0 END)
 """
 
@@ -220,8 +232,12 @@ def _sort_key(label: str):
 # Один и тот же набор JOIN-ов нужен и отчёту, и разбору ячейки: если их
 # развести, условия группировки в одном месте начнут ссылаться на алиасы,
 # которых нет в другом.
-_JOINS = """
-        FROM elements e
+# Джойн прогноза стоит В ОБЩЕМ наборе таблиц, а не в одном запросе:
+# потребность считают ЧЕТЫРЕ запроса этого модуля (сам отчёт, разбор ячейки
+# по маркам, поиск источников, покрытие), и добавленный в один из них он
+# развёл бы их числа молча.
+_JOINS = f"""
+        FROM elements e{FORECAST_JOIN}
         LEFT JOIN zones zz ON zz.id = e.zone_zakhvatka_id
         LEFT JOIN zones zs ON zs.id = e.zone_stance_id
         LEFT JOIN zones zc ON zc.id = e.zone_crane_id
@@ -277,7 +293,7 @@ def build_delivery_schedule_report(
                e.zone_crane_id AS crane_id, zc.name AS crane,
                e.floor AS floor, e.element_type AS element_type, e.subtype AS subtype,
                e.mark AS mark,
-               e.project_smr_start_date AS need_date,
+               {FORECAST_START} AS need_date,
                e.planned_delivery_date AS plan_date,
                e.actual_delivery_date AS fact_date,
                COUNT(*) AS n
@@ -286,7 +302,7 @@ def build_delivery_schedule_report(
         GROUP BY cp.id, ag.number, ag.agreement_date, sp.number, sp.specification_date,
                  c.id, c.theme, e.zone_zakhvatka_id, e.zone_stance_id, e.zone_crane_id,
                  e.floor, e.element_type, e.subtype, e.mark,
-                 e.project_smr_start_date, e.planned_delivery_date, e.actual_delivery_date
+                 {FORECAST_START}, e.planned_delivery_date, e.actual_delivery_date
         """,
         params,
     ).fetchall()
@@ -585,7 +601,7 @@ def build_delivery_cell_detail(
     base_clauses, base_params = _base_filters(source_file, element_ids)
     group_clauses, group_params = _group_conditions(groups, path)
 
-    need_sql, need_params = _scale_in_column("e.project_smr_start_date", bounds, column)
+    need_sql, need_params = _scale_in_column(FORECAST_START, bounds, column)
     plan_sql, plan_params = _scale_in_column("e.planned_delivery_date", bounds, column)
     # Факт в колонку «Без даты» не попадает (см. модуль выше) — там условие
     # заведомо ложно, а не «фактической даты нет».
@@ -639,7 +655,7 @@ def build_delivery_cell_detail(
         rows = conn.execute(
             f"""
             SELECT e.mark AS mark, zc.name AS crane, zs.name AS stance, e.floor AS floor,
-                   COUNT(*) AS n, MIN(e.project_smr_start_date) AS earliest_need
+                   COUNT(*) AS n, MIN({FORECAST_START}) AS earliest_need
             {_JOINS}
             WHERE {' AND '.join(base_clauses)} AND e.current_status = ?
               AND e.mark IN ({placeholders}) AND {not_cell}

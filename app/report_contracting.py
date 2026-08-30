@@ -14,10 +14,17 @@
       потребность задаёт проект, а контракт — это ответ на неё. Если
       считать потребность по контрактам, дефицит перестаёт существовать по
       построению, и отчёт теряет смысл (решение пользователя 2026-08-06).
-      Во времени раскладывается по `project_smr_start_date` — дате, к
-      которой изделие обязано быть на площадке (та же трактовка, что в
-      «Статусе комплектации»: `project_delivery_date` означает ЗАВЕРШЕНИЕ
-      СМР и к поставке отношения не имеет).
+      Во времени раскладывается по дате начала СМР — той, к которой
+      изделие обязано быть на площадке. С 2026-08-31 это дата из
+      АКТУАЛИЗИРОВАННОГО графика («Начало СМР (прогноз)», `FORECAST_JOIN`
+      в app/schedule_versions.py), а не директивное поле
+      `project_smr_start_date`: та же правка, что 08-30 сделана в «Статусе
+      комплектации», и по той же причине — снабжение работает по
+      действующему графику. Изделие без прогноза (прежде всего уже
+      СМОНТИРОВАННОЕ: пересчёт от факта исключает такие из актуализации)
+      считается в итоговой «Потребности», но на ось времени не встаёт —
+      накопительная кривая до итога не дорастает. Молчать об этом нельзя,
+      поэтому отчёт отдаёт `need_coverage` и готовую строку `warning`.
 
   **Законтрактовано** — сумма количеств в позициях НЕархивных контрактов
       (`contract_lines.quantity`) по этой марке. То есть «выкуплено
@@ -52,6 +59,8 @@
 import sqlite3
 from datetime import date, datetime, timedelta
 from typing import Optional
+
+from app.schedule_versions import FORECAST_JOIN, FORECAST_START
 
 # Признак «в разработке» (2026-08-06, решение пользователя: доработка отчёта
 # приостановлена). Доступ он не ограничивает — отчёт виден всем, кому был
@@ -167,10 +176,11 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
         scale = "month"
 
     изделия = conn.execute(
-        """
+        f"""
         SELECT e.id, e.element_type, e.mark, e.contract_id,
-               e.project_smr_start_date, e.planned_delivery_date, e.actual_delivery_date
-        FROM elements e
+               {FORECAST_START} AS need_date,
+               e.planned_delivery_date, e.actual_delivery_date
+        FROM elements e{FORECAST_JOIN}
         WHERE e.object_id = ? AND e.is_current = 1
           AND e.mark IS NOT NULL AND trim(e.mark) <> ''
         """,
@@ -200,7 +210,7 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
 
     все_даты = []
     for e in изделия:
-        все_даты += [_parse(e["project_smr_start_date"]), _parse(e["planned_delivery_date"]),
+        все_даты += [_parse(e["need_date"]), _parse(e["planned_delivery_date"]),
                      _parse(e["actual_delivery_date"])]
     for p in позиции:
         все_даты.append(_parse(p["specification_date"]))
@@ -240,7 +250,7 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
     for e in изделия:
         r = строка(e["element_type"], e["mark"])
         r["need"] += 1
-        _add(r["deltas"]["need"], _index_of(периоды, _parse(e["project_smr_start_date"]), scale), 1)
+        _add(r["deltas"]["need"], _index_of(периоды, _parse(e["need_date"]), scale), 1)
         план = _parse(e["planned_delivery_date"])
         if план:
             r["planned"] += 1
@@ -309,7 +319,11 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
     # получить ответа.
     порядок = sorted(строки.values(),
                      key=lambda r: (-max(r["deficit"], 0), r["element_type"] or "", r["mark"]))
-    return {
+    # Честная пометка о покрытии прогнозом — та же, что у «Статуса
+    # комплектации» и у сводной: без неё кривая потребности просто не
+    # дорастает до итога слева, и это читается как ошибка расчёта.
+    с_датой = sum(1 for e in изделия if e["need_date"])
+    отчёт = {
         "in_development": IN_DEVELOPMENT,
         "object_id": object_id,
         "scale": scale,
@@ -317,4 +331,26 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
         "periods": [{"start": d.isoformat(), "label": _period_label(d, scale)} for d in периоды],
         "rows": порядок,
         "totals": итог,
+        "need_coverage": {"with_date": с_датой, "total": len(изделия)},
     }
+    отчёт["warning"] = need_coverage_warning(отчёт)
+    return отчёт
+
+
+def need_coverage_warning(отчёт: dict) -> str:
+    """Строка «потребность на оси времени неполная» или пусто, если полная.
+
+    Считается ЗДЕСЬ и уходит готовым текстом: показывает её экран, и если у
+    отчёта появятся выгрузки — покажут и они, а две копии одной фразы
+    разошлись бы на первой же правке формулировки.
+    """
+    cov = отчёт["need_coverage"]
+    if cov["with_date"] >= cov["total"]:
+        return ""
+    без = cov["total"] - cov["with_date"]
+    return (f"Внимание: дата потребности («Начало СМР (прогноз)» из последней "
+            f"актуализации графика СМР) есть у {cov['with_date']} изделий из "
+            f"{cov['total']}. Остальные {без} считаются в колонке «Потребность», "
+            f"но на ось времени не встают — чаще всего это уже смонтированные "
+            f"изделия, их пересчёт графика от факта исключает. Накопительная "
+            f"кривая потребности до итога не дорастает.")
