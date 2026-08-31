@@ -607,6 +607,26 @@ def parse_document(doc) -> tuple:
     return all_rooms, warnings
 
 
+# Разметка машиномест лежит на том же слое, что монолитный бетон
+# (`]]]_СТ_вн_Бетон`), и тоже заливкой — по слою/типу от настоящей стены
+# не отличить (2026-08-31, прямое указание пользователя на разбор той же
+# парковки: жёлтым — просто границы места, зелёным — настоящие
+# несущие стены, других стен в зоне парковки нет). Разводит ЦВЕТ заливки:
+# на всём листе подвала это ровно 74 фигуры, все — этот жёлтый и только
+# на этом слое (проверено), у остальных материалов такого цвета нет нигде
+# в комплекте — яркий жёлтый для железобетона/кирпича/газобетона не
+# используется никем, это цвет разметки, а не материала.
+_MARKING_FILL_COLOR = (0.925, 0.925, 0.0)
+_MARKING_FILL_TOLERANCE = 0.02
+
+
+def _is_marking_fill(fill) -> bool:
+    if not fill:
+        return False
+    return all(abs(c - m) <= _MARKING_FILL_TOLERANCE
+              for c, m in zip(fill, _MARKING_FILL_COLOR))
+
+
 def _wall_segments_raw(page, scale: int, shift_x: float, shift_y: float) -> list:
     """Залитые прямоугольники слоёв материала стен (`_WALL_LAYERS`) на
     ВСЁМ листе — легенда материалов ещё не отсечена (см. `parse_walls_
@@ -616,12 +636,13 @@ def _wall_segments_raw(page, scale: int, shift_x: float, shift_y: float) -> list
     фигуре на прямой кусок стены между углами/проёмами, толщина —
     короткая сторона её прямоугольника. `shift_x`/`shift_y` — тот же сдвиг
     выравнивания, что и у `_room_polygons` (передаётся, а не считается
-    заново — один и тот же для всех слоёв листа)."""
+    заново — один и тот же для всех слоёв листа). Разметка машиномест
+    (`_is_marking_fill`) исключается — не материал, а линия по месту."""
     H = page.rect.height
     out = []
     for d in page.get_cdrawings():
         spec = _WALL_LAYERS.get(d.get("layer"))
-        if not spec or d["type"] != "f":
+        if not spec or d["type"] != "f" or _is_marking_fill(d.get("fill")):
             continue
         pts = [it[1] for it in d["items"] if it[0] == "l"]
         if d["items"]:
