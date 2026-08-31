@@ -689,6 +689,16 @@ _EXTERIOR_INFILL_ENVELOPE_MARGIN_MM = 4000
 # (десятки мм), но заведомо меньше расстояния между соседними окнами
 # (простенок между ними — от 500мм).
 _EXTERIOR_CLUSTER_GAP_MM = 400
+# Сколько повторов размера в одном пространственном кластере считать
+# окном (2026-08-31, живой найдено на этаже 1 — там повторов только 2, не
+# 3+, окна не распознавались вовсе). При 2 растёт риск случайного
+# совпадения размера у НЕ связанных фрагментов — ограничен размером
+# итога, см. `_WINDOW_MAX_SPAN_MM`.
+_WINDOW_MIN_REPEAT = 2
+# Настоящее окно жилого дома — единицы метров max; проверенный ложный
+# случай на пороге 2 — 15300мм (случайно совпавшая по размеру пара
+# фрагментов кладки в разных концах фасада).
+_WINDOW_MAX_SPAN_MM = 6000
 _WINDOW_CATEGORY = ("Окна", "Окно (типовое, по узору переплёта)")
 # Высота и отступ окна от отметки этажа — ПРИБЛИЖЕНИЕ, не измерение: в
 # плане (вид сверху) вертикальная привязка не нарисована вовсе, взять её
@@ -766,7 +776,7 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
 
     claimed = set()
     for members in by_size.values():
-        if len(members) < 3:
+        if len(members) < _WINDOW_MIN_REPEAT:
             continue
         # buffer(GAP/2) на каждую фигуру — слипаются те, у кого реальный
         # зазор МЕНЬШЕ GAP (не 2×GAP, как было бы при buffer(GAP)).
@@ -775,10 +785,19 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
         pieces = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
         for piece in pieces:
             group = [c for c in members if piece.contains(Polygon(c["poly"]).centroid)]
-            if len(group) < 3:
+            if len(group) < _WINDOW_MIN_REPEAT:
                 continue
             xs = [x for c in group for x, _ in c["poly"]]
             ys = [y for c in group for _, y in c["poly"]]
+            # Порог повтора снижен до 2 (2026-08-31, живой найдено на
+            # этаже 1 — там у окна только 2 повторяющихся импоста, не 3+,
+            # и окна не распознавались вовсе). При 2 случайная пара
+            # похожих по размеру, но НЕ связанных фрагментов кладки
+            # изредка проходит порог — отсекаем размером: настоящее окно
+            # не бывает шире `_WINDOW_MAX_SPAN_MM` (проверенный ложный
+            # случай — 15300мм, реальные окна — единицы метров).
+            if max(max(xs) - min(xs), max(ys) - min(ys)) > _WINDOW_MAX_SPAN_MM:
+                continue
             windows_out.append({
                 "category": win_category, "material": win_material,
                 "polygon_mm": [(min(xs), min(ys)), (max(xs), min(ys)),
