@@ -389,7 +389,7 @@ def _page_section_boundary_mm(page) -> Optional[float]:
 _ROOM_BBOX_RATIO_MAX = 0.4
 
 
-def _drop_oversized_rooms(rooms: list) -> tuple:
+def _drop_oversized_rooms(rooms: list, area_label_points: list = None) -> tuple:
     """Полигон, чей габарит — почти весь этаж (доля от габарита ОХВАТА
     ВСЕХ помещений листа выше `_ROOM_BBOX_RATIO_MAX`), — не отдельное
     помещение, а фоновая заливка/штриховка на весь этаж (найдено
@@ -397,7 +397,20 @@ def _drop_oversized_rooms(rooms: list) -> tuple:
     настоящих, даже сложных по форме помещений на тех же листах доля не
     больше 10%). Отбрасывается ДО сопоставления площади (иначе гигантский
     полигон перехватывает подпись площади ближайшей настоящей комнаты,
-    накрывая её собой). Возвращает (оставшиеся, отброшенные)."""
+    накрывая её собой).
+
+    ИСКЛЮЧЕНИЕ (2026-08-31, живой найдено пользователем — «один блок без
+    деления», открытая парковка на подземном этаже): открытая парковка —
+    ТОЖЕ огромный по габариту полигон (86% в одном проверенном случае —
+    то самое число из примера выше; выходит, свою же калибровку эта
+    эвристика когда-то и отбрасывала), но НАСТОЯЩИЙ, не заливка — внутри
+    у него своя подпись площади («1 199,7 м²» на проверенном чертеже).
+    `area_label_points` — координаты (мм) уже найденных на листе подписей
+    «<число> м²» (тот же признак, каким ниже площадь сопоставляется
+    помещениям): у декоративной заливки такой подписи внутри не бывает
+    вовсе — точка, а не площадь, разводит эти два случая безопасно, не
+    ослабляя эвристику для настоящих обрывков штриховки. Возвращает
+    (оставшиеся, отброшенные)."""
     if len(rooms) < 2:
         return rooms, []
     xs = [x for r in rooms for x, _ in r.polygon_mm]
@@ -405,12 +418,17 @@ def _drop_oversized_rooms(rooms: list) -> tuple:
     total_area = (max(xs) - min(xs)) * (max(ys) - min(ys))
     if total_area <= 0:
         return rooms, []
+    label_points = [Point(x, y) for x, y in (area_label_points or [])]
     kept, dropped = [], []
     for r in rooms:
         rxs = [x for x, _ in r.polygon_mm]
         rys = [y for _, y in r.polygon_mm]
         own_bbox = (max(rxs) - min(rxs)) * (max(rys) - min(rys))
-        (dropped if own_bbox / total_area > _ROOM_BBOX_RATIO_MAX else kept).append(r)
+        if own_bbox / total_area <= _ROOM_BBOX_RATIO_MAX:
+            kept.append(r)
+            continue
+        poly = Polygon(r.polygon_mm)
+        (kept if any(poly.contains(p) for p in label_points) else dropped).append(r)
     return kept, dropped
 
 
@@ -430,19 +448,29 @@ def parse_page(page) -> tuple:
         cy = sum(p[1] for p in poly) / n
         return (-round(cy), round(cx))  # сверху вниз (Y уже инвертирован в мм)
 
-    polygons_mm.sort(key=centroid_key)
-    rooms = [Room(floor="", index=i, polygon_mm=poly)
-            for i, poly in enumerate(polygons_mm)]
-    rooms, oversized = _drop_oversized_rooms(rooms)
-    for i, r in enumerate(rooms):
-        r.index = i
-    shapely_rooms = [Polygon(r.polygon_mm) for r in rooms]
-
     words = page.get_text("words")
 
     def to_mm(x_pt, y_pt):
         return (x_pt * PT_TO_MM * scale - shift_x,
                 (H - y_pt) * PT_TO_MM * scale - shift_y)
+
+    # Те же подписи «<число> м²», что ниже сопоставляются помещениям —
+    # нужны РАНЬШЕ, чтобы отличить настоящую большую комнату (открытая
+    # парковка целиком, с подписанной площадью) от декоративной заливки
+    # без единой подписи внутри (`_drop_oversized_rooms`).
+    area_label_points = [
+        to_mm(w[0], w[1]) for i, w in enumerate(words)
+        if _AREA_RE.match(w[4]) and i + 1 < len(words)
+        and "м2" in words[i + 1][4].replace("²", "2")
+    ]
+
+    polygons_mm.sort(key=centroid_key)
+    rooms = [Room(floor="", index=i, polygon_mm=poly)
+            for i, poly in enumerate(polygons_mm)]
+    rooms, oversized = _drop_oversized_rooms(rooms, area_label_points)
+    for i, r in enumerate(rooms):
+        r.index = i
+    shapely_rooms = [Polygon(r.polygon_mm) for r in rooms]
 
     # секция: центроид комнаты по одну или другую сторону границы осей
     # «…с1»/«…с2» (см. _axis_boundary_x) — считается один раз на лист, в
@@ -773,23 +801,26 @@ def _seg_centroid(poly) -> tuple:
     return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
 
 
-def parse_walls_page(page, room_polys: list = None) -> tuple:
+def parse_walls_page(page, rooms: list = None) -> tuple:
     """Стены и перегородки листа, за вычетом легенды материалов, плюс их
     секция (по той же границе подписей осей, что и у помещений — см.
     `_axis_boundary_x`). Возвращает (список словарей, предупреждения).
 
-    `room_polys` — контуры помещений ЭТОГО листа, УЖЕ БЕЗ врезок
+    `rooms` — пары (контур, секция) помещений ЭТОГО листа, УЖЕ БЕЗ врезок
     (`_axis_envelope`, тот же список, что для соответствующего
     этажа вернул `parse_document`) — иначе врезка («ФРАГМЕНТ ПЛАНА» и
     т.п.) раздувает отступ легенды (`_LEGEND_MARGIN_MM`) до себя самой,
     и дублирующие стены/перегородки этой врезки просачиваются в модель
-    точно так же, как просачивались бы дублирующие помещения. При `None`
-    считается заново по слою помещений БЕЗ разбора врезок — годится для
+    точно так же, как просачивались бы дублирующие помещения. Секция
+    помещения используется и для СВОИХ стен — каждая берёт секцию
+    БЛИЖАЙШЕГО помещения листа (см. ниже) — при `None` считается заново
+    по слою помещений без разбора врезок и без секций: годится для
     автономного вызова, не для `parse_walls_document`."""
     scale = _page_scale(page)
     raw_polys, (shift_x, shift_y) = _room_polygons(page, scale)
-    if room_polys is None:
-        room_polys = raw_polys
+    if rooms is None:
+        rooms = [(p, None) for p in raw_polys]
+    room_polys = [p for p, _ in rooms]
     segments = _wall_segments_raw(page, scale, shift_x, shift_y)
     warnings = []
     if not room_polys:
@@ -811,8 +842,28 @@ def parse_walls_page(page, room_polys: list = None) -> tuple:
     boundary_pt = _axis_boundary_x(words)
     if boundary_pt is not None:
         boundary_mm = boundary_pt * PT_TO_MM * scale - shift_x
+        # Одно большое помещение (открытая парковка без перегородок между
+        # секциями — «один блок без деления», найдено пользователем по
+        # исходному чертежу) может физически перекрывать границу осей
+        # «…с1»/«…с2»: у самого помещения это не проблема (`parse_page`
+        # решает по центроиду ВСЕЙ комнаты, не режет её), а вот её же
+        # стены/колонны — каждая по СВОЕМУ центроиду — раскладывались бы
+        # по разным секциям вперемешку друг с другом, хотя комната внутри
+        # уже одна, и порой далеко от самой границы (проверено на реальном
+        # чертеже — до 6,3м). Секция стены поэтому берётся у БЛИЖАЙШЕГО
+        # помещения листа, а не по своему центроиду и границе; черта
+        # остаётся резервом только когда списка помещений с секциями нет
+        # вовсе (автономный вызов, `rooms=None`).
+        near_rooms = [(Polygon(p), sec) for p, sec in rooms if sec and len(p) >= 3]
         for s in segments:
-            s["section"] = "С01" if _seg_centroid(s["polygon_mm"])[0] < boundary_mm else "С02"
+            cx, cy = _seg_centroid(s["polygon_mm"])
+            if near_rooms:
+                point = Point(cx, cy)
+                _, s["section"] = min(
+                    ((poly.distance(point), sec) for poly, sec in near_rooms),
+                    key=lambda t: t[0])
+            else:
+                s["section"] = "С01" if cx < boundary_mm else "С02"
     else:
         for s in segments:
             s["section"] = None
@@ -857,7 +908,7 @@ def parse_walls_document(doc, rooms: list) -> tuple:
     Возвращает (список WallSegment, список Slab, предупреждения)."""
     rooms_by_floor = {}
     for r in rooms:
-        rooms_by_floor.setdefault(r.floor, []).append(r.polygon_mm)
+        rooms_by_floor.setdefault(r.floor, []).append((r.polygon_mm, r.section))
 
     all_walls = []
     all_slabs = []
@@ -898,7 +949,7 @@ def parse_walls_document(doc, rooms: list) -> tuple:
                 section=known_section or s.get("section"),
                 z_offset_mm=s.get("z_offset_mm"), z_height_mm=s.get("z_height_mm")))
 
-        room_polys = rooms_by_floor.get(plan.floor) or []
+        room_polys = [p for p, _ in (rooms_by_floor.get(plan.floor) or [])]
         slab_poly = _floor_slab_polygon(room_polys, [s["polygon_mm"] for s in floor_segments])
         if slab_poly:
             all_slabs.append(Slab(floor=plan.floor, polygon_mm=slab_poly, page=plan.page))
