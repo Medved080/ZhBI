@@ -944,11 +944,35 @@ def extract_axis_grid(doc) -> dict:
     """Подписи осей обеих секций сразу — с одного листа общего этажа
     (`RoomPlan.section_codes` из двух кодов, см. `_SPEC`): только там
     заведомо показаны оси и секции 1, и секции 2 (та же логика, что у
-    `_axis_boundary_x`). `{}`, если такого листа в комплекте нет."""
-    shared = next((p for p in FLOOR_PLANS if len(p.section_codes) == 2), None)
-    if shared is None:
+    `_axis_boundary_x`). `{}`, если такого листа в комплекте нет.
+
+    Лист выбирается не первым попавшимся, а ТИПОВЫМ по сдвигу
+    (`_room_polygons` выравнивает каждый лист по своему верхнему правому
+    углу застройки, см. её докстроку) — 2026-08-31, найдено пользователем
+    по нестыковке сетки осей с реальными стенами на верхних этажах.
+    Подземный этаж и 1-2 этажи шире/уже типовой башни (парковка,
+    вестибюль) и потому выравниваются на ДРУГУЮ точку — их сдвиг не
+    совпадает с большинством листов (проверено: 90469±0 мм у семи листов
+    из девяти, у подземного 111619, у 1 этажа 108799, у 2 этажа 96088).
+    `object_grids` — ОДНА сетка на весь объект (те же самые физические
+    оси на любом этаже), поэтому важно взять её с листа, чей сдвиг
+    совпадает с большинством, а не с первого попавшегося, где есть обе
+    секции сразу."""
+    shared_pages = [p for p in FLOOR_PLANS if len(p.section_codes) == 2]
+    if not shared_pages:
         return {}
-    return page_axis_labels(doc[shared.page - 1])
+    shifts = {}
+    for page_no in sorted({p.page for p in FLOOR_PLANS}):
+        page = doc[page_no - 1]
+        _, shift = _room_polygons(page, _page_scale(page))
+        shifts[page_no] = (round(shift[0]), round(shift[1]))
+    counts = {}
+    for s in shifts.values():
+        counts[s] = counts.get(s, 0) + 1
+    типовой_сдвиг = max(counts.items(), key=lambda kv: kv[1])[0]
+    typical_pages = {page_no for page_no, s in shifts.items() if s == типовой_сдвиг}
+    shared_pages.sort(key=lambda p: (p.page not in typical_pages, p.page))
+    return page_axis_labels(doc[shared_pages[0].page - 1])
 
 
 def load(data: bytes):
