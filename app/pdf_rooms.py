@@ -148,11 +148,17 @@ class RoomPlan:
     section_codes: tuple = ()   # к каким секциям относится этаж
 
 
+# Секция открытой парковки подземного этажа — ОТДЕЛЬНАЯ от С01/С02
+# (2026-08-31, прямое уточнение пользователя: своя ось, чёткая
+# прямоугольная граница), не их объединение и не выбор одной из двух по
+# случайному положению центроида относительно границы.
+_PARKING_SECTION = "Паркинг"
+
 # (этаж(и), страница, z0, z1) — буквально таблица из Docs/revit-import.md §13.
 _FLOOR_HEIGHT = 3000
 
 _SPEC = [
-    ("подземный", 3, -6450, 0, ("С01", "С02")),
+    ("подземный", 3, -6450, 0, ("С01", "С02", _PARKING_SECTION)),
     ("1", 5, 0, 4650, ("С01", "С02")),
     ("2", 6, 4650, 7650, ("С01", "С02")),
     ("3", 7, 7650, 10650, ("С01", "С02")),
@@ -215,7 +221,7 @@ class Room:
     index: int                 # порядковый номер на этаже — см. docstring модуля
     polygon_mm: list           # [(x, y), ...] в мм, локальные координаты листа
     area_m2: Optional[float] = None
-    section: Optional[str] = None   # "С01" | "С02" | None — см. _axis_boundary_x
+    section: Optional[str] = None   # "С01" | "С02" | "Паркинг" | None — см. _axis_boundary_x
     page: int = 0               # номер листа PDF — для params_json элемента
 
 
@@ -409,7 +415,13 @@ def _drop_oversized_rooms(rooms: list, area_label_points: list = None) -> tuple:
     «<число> м²» (тот же признак, каким ниже площадь сопоставляется
     помещениям): у декоративной заливки такой подписи внутри не бывает
     вовсе — точка, а не площадь, разводит эти два случая безопасно, не
-    ослабляя эвристику для настоящих обрывков штриховки. Возвращает
+    ослабляя эвристику для настоящих обрывков штриховки.
+
+    Спасённая комната сразу помечается СВОЕЙ секцией «Паркинг»
+    (2026-08-31, прямое уточнение пользователя со скриншотом — у зоны
+    паркинга свои оси и чёткая прямоугольная граница, отдельная от С01/
+    С02, а не их объединение): `parse_page` уважает уже проставленную
+    секцию и не пересчитывает её по границе `С01`/`С02`. Возвращает
     (оставшиеся, отброшенные)."""
     if len(rooms) < 2:
         return rooms, []
@@ -428,7 +440,11 @@ def _drop_oversized_rooms(rooms: list, area_label_points: list = None) -> tuple:
             kept.append(r)
             continue
         poly = Polygon(r.polygon_mm)
-        (kept if any(poly.contains(p) for p in label_points) else dropped).append(r)
+        if any(poly.contains(p) for p in label_points):
+            r.section = _PARKING_SECTION
+            kept.append(r)
+        else:
+            dropped.append(r)
     return kept, dropped
 
 
@@ -474,11 +490,15 @@ def parse_page(page) -> tuple:
 
     # секция: центроид комнаты по одну или другую сторону границы осей
     # «…с1»/«…с2» (см. _axis_boundary_x) — считается один раз на лист, в
-    # тех же сырых координатах (pt), что и сами подписи осей.
+    # тех же сырых координатах (pt), что и сами подписи осей. Комнату с
+    # УЖЕ проставленной секцией (парковка, `_drop_oversized_rooms`) не
+    # трогаем — у неё своя, не по границе С01/С02.
     boundary_pt = _axis_boundary_x(words)
     if boundary_pt is not None:
         boundary_mm = boundary_pt * PT_TO_MM * scale - shift_x
         for room, poly in zip(rooms, shapely_rooms):
+            if room.section is not None:
+                continue
             cx = poly.centroid.x
             room.section = "С01" if cx < boundary_mm else "С02"
 

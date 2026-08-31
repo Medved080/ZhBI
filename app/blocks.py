@@ -51,8 +51,16 @@ def list_sections(conn, object_id: int) -> list:
     ]
 
 
-def create_section(conn, object_id: int, code_input: str, name: str = None) -> dict:
-    code = normalize_section(code_input)
+def create_section(conn, object_id: int, code_input: str, name: str = None,
+                   trusted: bool = False) -> dict:
+    """`trusted=True` — вызывающий код сам ручается за код (константа в
+    своём модуле, не введённое человеком или Revit-метаданными значение)
+    и пропускает `normalize_section`. Только для этого: она защищает от
+    МУСОРА (docstring `normalize_section`, «Автостоянка» из Revit-
+    выгрузки) — не от осознанно заведённых секций вне формата «С0N»
+    (2026-08-31, секция «Паркинг» из PDF-загрузки, прямое уточнение
+    пользователя)."""
+    code = code_input if trusted else normalize_section(code_input)
     if not code:
         raise BlockError(
             "Не похоже на секцию: «%s». Ожидается «С01», «Секция 1» или «1»." % code_input)

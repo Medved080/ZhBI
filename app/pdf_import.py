@@ -76,7 +76,7 @@ def _ensure_section(conn, object_id: int, code: str) -> int:
     if row:
         return row["id"]
     try:
-        created = blocks_mod.create_section(conn, object_id, code)
+        created = blocks_mod.create_section(conn, object_id, code, trusted=True)
     except BlockError:
         row = conn.execute(
             "SELECT id FROM object_sections WHERE object_id = ? AND code = ?",
@@ -114,8 +114,13 @@ def _ensure_level(conn, object_id: int, floor_label: str) -> tuple:
 def _ensure_catalog(conn, object_id: int) -> tuple:
     """Секции и этажи объекта — идемпотентно. Возвращает (по_этажу,
     section_ids): по_этажу — {этаж-строка: (level_id, [section_id, ...])},
-    section_ids — {"С01": id, "С02": id}."""
-    section_ids = {code: _ensure_section(conn, object_id, code) for code in ("С01", "С02")}
+    section_ids — {"С01": id, "С02": id, "Паркинг": id}. Паркинг —
+    отдельная секция подземного этажа (2026-08-31, прямое уточнение
+    пользователя), не подсекция С01/С02."""
+    section_ids = {
+        code: _ensure_section(conn, object_id, code)
+        for code in ("С01", "С02", pdf_rooms._PARKING_SECTION)
+    }
     out = {}
     for plan in pdf_rooms.FLOOR_PLANS:
         level_id, _key = _ensure_level(conn, object_id, plan.floor)
