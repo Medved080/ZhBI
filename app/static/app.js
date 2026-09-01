@@ -26924,6 +26924,17 @@ async function loadRevitPlanElements() {
     revitPlanState.blocksData = bres.ok ? await bres.json() : [];
   } catch (e) { revitPlanState.blocksData = []; }
 
+  // Элементов нет вовсе (упрощённая загрузка по фасадам — Docs/backlog.md,
+  // 2026-09-01), а слой «Блоки» по умолчанию ВЫКЛЮЧЕН: без этой подсказки
+  // экран выглядел бы совсем пустым, хотя габарит блоков в БД уже есть —
+  // единственный слой с содержимым просто не включён. Только ВКЛЮЧАЕМ
+  // сами, никогда не выключаем — не отбирать у пользователя его собственный
+  // выбор слоёв, когда элементы на этаже всё-таки есть.
+  if (!data.elements.length && revitPlanState.blocksData.some((b) => b.ok)) {
+    const blocksToggle = document.getElementById("mfr-show-blocks");
+    if (blocksToggle && !blocksToggle.checked) blocksToggle.checked = true;
+  }
+
   // Сетка осей — одна на весь объект, отбором этажа/секции не сужается
   // (`revit_plan.grids`). Грузится тем же приёмом «всегда», что и блоки.
   if (revitPlanState.gridsObjectId !== s.objectId) {
