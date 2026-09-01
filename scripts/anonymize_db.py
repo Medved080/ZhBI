@@ -564,8 +564,19 @@ def main() -> int:
     # режиме WAL, и последние транзакции лежат в отдельном файле `-wal` —
     # обычная копия взяла бы базу без них (тот же довод, что в
     # scripts/dry_run_migration.py и app/backups.py).
-    if out.exists():
-        out.unlink()
+    #
+    # Спутники `-wal`/`-shm` СТАРОЙ копии удаляются вместе с ней, не только
+    # сам файл (2026-08-31, живой инцидент): если предыдущую `out` держит
+    # открытой работающий сервер отладки (zhbi-server-anon), его `-shm`
+    # остаётся на диске и после удаления `out.db` — свежий `sqlite3.connect(out)`
+    # ниже находит по тому же пути ЧУЖОЙ, несовместимый с новым файлом `-shm`
+    # (индекс WAL от совсем другого содержимого) и получает битую копию
+    # (`PRAGMA integrity_check` → `disk I/O error`). Тот же приём уже стоит в
+    # `scripts/dry_run_migration.py.copy_db` по той же причине.
+    for suffix in ("", "-wal", "-shm"):
+        sidecar = out.with_name(out.name + suffix)
+        if sidecar.exists():
+            sidecar.unlink()
     _src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
     try:
         _dst = sqlite3.connect(out)
