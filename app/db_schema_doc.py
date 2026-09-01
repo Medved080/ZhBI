@@ -488,11 +488,25 @@ TABLES = [
     ("spent_ms", "INTEGER", "", "сколько думал, миллисекунд; считает СЕРВЕР от asked_at — клиентское время подделывается"),
     ("answered_at", "TEXT", "", "момент ответа"),
 ]),
+("blocks", "blocks — Блок (секция × этаж)", C_ELEM, S_ELEM, [
+    ("id", "INTEGER", "PK", "идентификатор блока"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("section_id", "INTEGER", "FK", "секция → object_sections.id (CASCADE)"),
+    ("level_id", "INTEGER", "FK", "этаж → object_levels.id (CASCADE), пара с section_id уникальна"),
+    ("x0", "REAL", "", "прямая геометрия (упрощённый импорт из PDF по фасадам): левая граница в общих координатах площадки, мм; NULL — форма вычисляется на лету по осям секции (block_geometry.block_box)"),
+    ("x1", "REAL", "", "прямая геометрия: правая граница, мм"),
+    ("y0", "REAL", "", "прямая геометрия: нижняя граница, мм"),
+    ("y1", "REAL", "", "прямая геометрия: верхняя граница, мм"),
+    ("created_at", "TEXT", "", "момент создания блока"),
+]),
 ]
 
 # ------------------------------------------------------------------- связи
 # (таблица-потомок, поле, таблица-предок, поле, подпись)
 FKS = [
+    ("blocks", "object_id", "objects", "id", "CASCADE"),
+    ("blocks", "section_id", "object_sections", "id", "CASCADE"),
+    ("blocks", "level_id", "object_levels", "id", "CASCADE"),
     ("schedule_versions", "object_id", "objects", "id", "CASCADE"),
     ("schedule_versions", "loaded_by", "users", "id", "SET NULL"),
     ("schedule_version_dates", "version_id", "schedule_versions", "id", "CASCADE"),

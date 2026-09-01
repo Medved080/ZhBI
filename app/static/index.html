@@ -4758,6 +4758,18 @@
       архитектора). Даёт контуры и площади помещений; стен с толщиной,
       проёмов и номеров квартир — не даёт, источник этого не позволяет.</div>
 
+    <div class="bulk-edit-block" style="margin-top:14px">
+      <div class="bulk-edit-block-title">Что разобрать</div>
+      <label class="toggle"><input type="radio" name="pdf-import-mode" id="pdf-import-mode-full" checked/>
+        Полный разбор — помещения, стены, окна</label>
+      <label class="toggle"><input type="radio" name="pdf-import-mode" id="pdf-import-mode-facade"/>
+        Только фасады — макет блоков без начинки</label>
+      <div class="hint-text" style="margin:4px 0 0 22px">Только фасады: блок
+        «этаж×секция» строится по ступенчатому силуэту на фасадных чертежах
+        (высота + ширина/глубина), без разбора помещений/стен — быстрее, но
+        внутри блока ничего не будет, кроме габарита.</div>
+    </div>
+
     <div class="bulk-edit-steps" style="margin-top:14px">
       <div class="bulk-edit-block">
         <div class="bulk-edit-block-title"><span class="step-num">1</span>Выбрать файл</div>
@@ -4779,6 +4791,11 @@
         <div class="bulk-edit-block-title"><span class="step-num">3</span>Применить</div>
         <div class="bulk-edit-status">Откроется сводка: сколько помещений
           новых, без изменений и спишется, по этажам.</div>
+      </div>
+    </div>
+    <div id="pdf-import-progress-wrap" style="display:none; margin-top:10px">
+      <div style="height:8px; border-radius:4px; background:var(--color-accent-soft); overflow:hidden">
+        <div id="pdf-import-progress-bar" style="height:100%; width:0%; background:var(--color-primary); transition:width .3s"></div>
       </div>
     </div>
     <div id="pdf-import-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>

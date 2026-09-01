@@ -1187,6 +1187,19 @@ CREATE TABLE IF NOT EXISTS blocks (
     object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
     section_id INTEGER NOT NULL REFERENCES object_sections (id) ON DELETE CASCADE,
     level_id INTEGER NOT NULL REFERENCES object_levels (id) ON DELETE CASCADE,
+    -- Геометрия блока ПРЯМЫМ хранением (2026-09-01, упрощённый импорт из
+    -- PDF по фасадам, без разбора помещений/стен) — мм, те же общие
+    -- координаты площадки, что у revit_elements. NULL у блоков без нужды в
+    -- ней (обычный путь — блок ВЫЧИСЛЯЕТСЯ на лету по оси секции +
+    -- габариту загруженных элементов, `block_geometry.block_box`): для
+    -- фасадного импорта элементов нет вовсе, а этаж внутри секции сужается
+    -- по высоте (башня уже цоколя) — вычислить не из чего, значение нужно
+    -- готовым. Когда заполнено — `block_box` берёт его В ПРИОРИТЕТЕ, минуя
+    -- вычисление по оси.
+    x0 REAL,
+    x1 REAL,
+    y0 REAL,
+    y1 REAL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (section_id, level_id)
 );

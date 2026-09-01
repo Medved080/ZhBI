@@ -75,6 +75,7 @@ from app import revit_colors, revit_import, revit_plan
 from app import blocks as blocks_mod
 from app import work_progress as work_progress_mod
 from app import work_types_import
+from app import pdf_facade_import
 from app import pdf_import
 from app import pdf_rooms
 from app import import_reset
@@ -5426,6 +5427,82 @@ def apply_pdf(body: PdfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
             "секция_известна": result["with_known_section"],
             "секция_не_определена": result["section_unknown"],
             "предупреждения": analysis["warnings"],
+        },
+    )
+    return {"object_id": object_id, **result}
+
+
+@app.post("/import-pdf-facade/analyze")
+def analyze_pdf_facade(
+    file: UploadFile = File(...),
+    object_id: int = Form(...),
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    """Упрощённая загрузка — «только фасады» (Docs/TZ.md §3а, Docs/
+    backlog.md 2026-09-01): блоки (этаж×секция) напрямую из фасадных
+    чертежей, без разбора помещений/стен. Синхронно — разбор занимает
+    секунды (анализ растра четырёх фасадов), фонового потока/прогресса,
+    в отличие от `/import-pdf/analyze/start`, не нужно."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "pdf_import", "write")
+        data = read_upload_limited(file.file)
+        try:
+            analysis = pdf_facade_import.analyze(conn, object_id, data, file.filename)
+        except (pdf_facade_import.PdfFacadeImportError, pdf_rooms.PdfRoomsError) as e:
+            raise HTTPException(status_code=getattr(e, "status_code", 422), detail=e.message)
+    finally:
+        conn.close()
+
+    token = pdf_facade_import.remember_pending(analysis)
+    return {
+        "token": token,
+        "object_id": object_id,
+        "object_name": analysis["object_name"],
+        "total_blocks": analysis["total_blocks"],
+        "total_floors": analysis["total_floors"],
+        "by_floor": analysis["by_floor"],
+    }
+
+
+@app.post("/import-pdf-facade/apply")
+def apply_pdf_facade(body: PdfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Фаза 2 упрощённой загрузки — применяет уже показанную сводку."""
+    try:
+        analysis = pdf_facade_import.get_pending(body.token)
+    except pdf_facade_import.PdfFacadeImportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+    object_id = analysis["object_id"]
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "pdf_import", "write")
+    finally:
+        conn.close()
+
+    backup_before_import(
+        "блоки из PDF по фасадам → %s" % analysis["object_name"],
+        audit_display_name(user), user["id"])
+
+    операция = activity.new_request_id()
+    conn = get_connection()
+    try:
+        result = pdf_facade_import.apply(conn, object_id, analysis)
+    finally:
+        conn.close()
+    pdf_facade_import.forget_pending(body.token)
+
+    activity.log(
+        "import_pdf_facade",
+        user=user,
+        request_id=операция,
+        entity_type="object",
+        entity_id=object_id,
+        new_value=str(result["blocks_written"]),
+        details={
+            "блоков": result["blocks_written"],
+            "секций": result["sections"],
+            "этажей": result["floors"],
         },
     )
     return {"object_id": object_id, **result}

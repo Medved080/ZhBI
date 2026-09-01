@@ -130,21 +130,38 @@ def _grid_line(conn, object_id: int, label: str):
     return [row["x1"], row["y1"], row["x2"], row["y2"]]
 
 
-def _level_height(conn, object_id: int, floor, z0: float):
-    """Высота этажа = отметка СЛЕДУЮЩЕГО по номеру этажа объекта минус
-    текущая (этаж — общая запись объекта, не по секции). Для последнего
-    этажа (следующего нет) берётся шаг ПРЕДЫДУЩЕГО и возвращается
-    `approx=True` — высота не додумана незаметно, а помечена."""
+def _level_height(conn, object_id: int, section_id: int, floor, z0: float):
+    """Высота этажа = отметка СЛЕДУЮЩЕГО по ОТМЕТКЕ этажа минус текущая.
+    Для последнего этажа (следующего нет) берётся шаг ПРЕДЫДУЩЕГО и
+    возвращается `approx=True` — высота не додумана незаметно, а
+    помечена.
+
+    Круг «соседей» — этажи, где у ЭТОЙ секции есть блок (join на
+    `blocks`), не все этажи объекта разом (до 2026-09-01 было наоборот —
+    этаж считался общей записью объекта, без разбора по секциям). Иначе
+    секция с независимым «хвостом» своих верхних ярусов (у секции 1 —
+    технический этаж/кровля, заведены на отметках 25650/29400мм, см.
+    `_floor_spec`, `app/pdf_import.py`) подхватывала бы в качестве
+    «следующего» чужой этаж секции 2, оказавшийся ближайшим по отметке
+    лишь случайно (было: кровля секции 1 получала высоту из этажа 10
+    секции 2 — считанные сотни мм вместо своих над техническим этажом).
+    Соседа ищем по ОТМЕТКЕ, не по номеру этажа — для секции, где номер и
+    отметка растут вместе (типовой случай), разницы не видно, но у
+    заведённого В КОНЕЦ (номер 26/27, чтобы не столкнуться по `key` с
+    этажами 9/10 секции 2) технического этажа/кровли секции 1 расходятся:
+    по номеру сосед — за пределами круга секции (следующего попросту
+    нет), по отметке — верно найден бы, будь он в круге секции."""
     if floor is None:
         return None, False
     rows = conn.execute(
-        "SELECT floor, elevation_mm FROM object_levels "
-        "WHERE object_id = ? AND floor IS NOT NULL AND elevation_mm IS NOT NULL "
-        "AND elevation_suspect = 0 ORDER BY floor",
-        (object_id,),
+        "SELECT ol.floor, ol.elevation_mm FROM object_levels ol "
+        "JOIN blocks b ON b.level_id = ol.id AND b.section_id = ? "
+        "WHERE ol.object_id = ? AND ol.floor IS NOT NULL AND ol.elevation_mm IS NOT NULL "
+        "AND ol.elevation_suspect = 0 ORDER BY ol.floor",
+        (section_id, object_id),
     ).fetchall()
     отметки = {r["floor"]: r["elevation_mm"] for r in rows}
-    этажи = sorted(отметки)
+    этажи = sorted(отметки, key=lambda f: отметки[f])
     if floor not in этажи:
         return None, False
     idx = этажи.index(floor)
@@ -163,24 +180,40 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
     Возвращает `{"ok": False, "reason": "..."}` либо `{"ok": True,
     "approx_height": bool, "x0","x1","y0","y1","z0","z1"}` (координаты —
     в общих координатах площадки, как у `revit_elements`)."""
-    section = conn.execute(
-        "SELECT axis_from, axis_to FROM object_sections WHERE id = ?", (section_id,)
+    block = conn.execute(
+        "SELECT x0, x1, y0, y1 FROM blocks WHERE section_id = ? AND level_id = ?",
+        (section_id, level_id),
     ).fetchone()
-    if section is None:
-        return {"ok": False, "reason": "секция не найдена"}
-    if not section["axis_from"] or not section["axis_to"]:
-        return {"ok": False, "reason": "у секции не заданы оси"}
+    прямая_геометрия = (block is not None and block["x0"] is not None
+                        and block["x1"] is not None and block["y0"] is not None
+                        and block["y1"] is not None)
+    # Прямое хранение (упрощённый импорт из PDF по фасадам, 2026-09-01,
+    # см. schema.sql) — в ПРИОРИТЕТЕ и минует привязку к осям целиком: у
+    # такого блока оси секции может не быть вовсе (без разбора помещений/
+    # стен привязывать не по чему), а форма по высоте всё равно СВОЯ у
+    # каждого этажа (тело здания сужается кверху) — то, ради чего заведено
+    # хранение, а не общий на секцию прямоугольник по одной паре осей.
+    if прямая_геометрия:
+        xy = {"x0": block["x0"], "x1": block["x1"], "y0": block["y0"], "y1": block["y1"]}
+    else:
+        section = conn.execute(
+            "SELECT axis_from, axis_to FROM object_sections WHERE id = ?", (section_id,)
+        ).fetchone()
+        if section is None:
+            return {"ok": False, "reason": "секция не найдена"}
+        if not section["axis_from"] or not section["axis_to"]:
+            return {"ok": False, "reason": "у секции не заданы оси"}
 
-    from_line = _grid_line(conn, object_id, section["axis_from"])
-    to_line = _grid_line(conn, object_id, section["axis_to"])
-    if from_line is None or to_line is None:
-        return {"ok": False, "reason": "ось секции не найдена в модели объекта"}
+        from_line = _grid_line(conn, object_id, section["axis_from"])
+        to_line = _grid_line(conn, object_id, section["axis_to"])
+        if from_line is None or to_line is None:
+            return {"ok": False, "reason": "ось секции не найдена в модели объекта"}
 
-    xy = section_box_xy(from_line, to_line,
-                        _section_element_bounds(conn, object_id, section_id, level_id))
-    if xy is None:
-        return {"ok": False, "reason": "оси секции разнонаправленные "
-                "(или геометрия этажа не пересекается с пролётом осей)"}
+        xy = section_box_xy(from_line, to_line,
+                            _section_element_bounds(conn, object_id, section_id, level_id))
+        if xy is None:
+            return {"ok": False, "reason": "оси секции разнонаправленные "
+                    "(или геометрия этажа не пересекается с пролётом осей)"}
 
     level = conn.execute(
         "SELECT floor, elevation_mm, elevation_suspect FROM object_levels WHERE id = ?",
@@ -192,7 +225,7 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
         return {"ok": False, "reason": "отметке этажа верить нельзя"}
 
     z0 = level["elevation_mm"]
-    высота, approx = _level_height(conn, object_id, level["floor"], z0)
+    высота, approx = _level_height(conn, object_id, section_id, level["floor"], z0)
     if высота is None:
         return {"ok": False, "reason": "высоту этажа определить не из чего"}
 

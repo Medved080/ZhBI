@@ -213,6 +213,7 @@ ACTIONS = {
     "import_revit": ("Загрузка выгрузки из Revit", _T),
     "import_work_types": ("Загрузка справочника видов работ", _T),
     "import_pdf": ("Загрузка помещений из PDF", _T),
+    "import_pdf_facade": ("Упрощённая загрузка блоков из PDF (по фасадам)", _T),
     "clear_import_data": ("Очистка справочников объекта (Revit/PDF)", _T),
     "revit_colors": ("Цветовая схема модели", _T),
     "import_input": ("Загрузка из папки Input", _T),
