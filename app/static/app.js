@@ -26943,13 +26943,28 @@ async function loadRevitPlanElements() {
   drawRevitPlan(data);
   // Обрезка — не примечание, а брак показа: вырезается произвольный
   // хвост по id, и в 3D это выглядит как дыра в здании. Говорим красным.
+  // Ноль элементов при непустых блоках — не брак, а упрощённая загрузка
+  // «по фасадам» (Docs/backlog.md, 2026-09-01): молча «0 элементов» тут
+  // выглядело бы как пустой результат, хотя габарит блоков показан.
+  const блоковПоказано = data.elements.length ? 0
+    : revitPlanState.blocksData.filter((b) => b.ok).length;
   revitPlanStatus(
-    `Показано ${data.elements.length} элементов`
+    (блоковПоказано
+      ? `Показан только габарит блоков (${блоковПоказано}) — элементы не разбирались (упрощённая загрузка по фасадам)`
+      : `Показано ${data.elements.length} элементов`)
     + (data.truncated ? " — СПИСОК ОБРЕЗАН, показано не всё: сузьте отбор" : ""),
     !!data.truncated);
   // Режим мог быть 3D — тогда сцену надо пересобрать под новый отбор.
   applyMfrMode();
 }
+
+// Блок в плане и в 3D рисуется НА ЭТОТ отступ шире своих осевых границ
+// (живой запрос пользователя, 2026-09-01) — сами стены/фасад иногда чуть
+// выступают за габарит блока (толщина кладки, балконная плита), и клик
+// точно по видимой грани здания промахивался мимо блока. Отступ — только
+// для ОТРИСОВКИ и попадания клика, сама геометрия блока (`blocksData`,
+// общая с полосами фасада) не меняется.
+const MFR_BLOCK_MARGIN_MM = 200;
 
 // Ось «не имеет отношения к отфильтрованной области» (живой запрос
 // пользователя, 2026-08-31 — на всём объекте разом сетка двух секций
@@ -26970,7 +26985,10 @@ function relevantAxes(list, ox, oy, ow, oh) {
 
 function drawRevitPlan(data) {
   const box = document.getElementById("revit-plan-canvas");
-  if (!data.elements.length || !data.size) {
+  // `!data.size` — единственное, что означает «рисовать нечего»: при
+  // упрощённой загрузке «по фасадам» элементов нет вовсе, только габарит
+  // блоков, но size сервер считает и по ним (Docs/backlog.md, 2026-09-01).
+  if (!data.size) {
     box.innerHTML = "<div class='hint-text' style='padding:16px'>Нет элементов по этому отбору.</div>";
     document.getElementById("revit-plan-legend").textContent = "";
     return;
@@ -27014,13 +27032,14 @@ function drawRevitPlan(data) {
   // не показываем — молчаливо приблизительный контур хуже честного
   // отсутствия.
   const blockRects = blocks.map((b) => {
-    const x0 = b.x0 - ox - minX, x1 = b.x1 - ox - minX,
-          y0 = b.y0 - oy - minY, y1 = b.y1 - oy - minY;
+    const x0 = b.x0 - ox - minX - MFR_BLOCK_MARGIN_MM, x1 = b.x1 - ox - minX + MFR_BLOCK_MARGIN_MM,
+          y0 = b.y0 - oy - minY - MFR_BLOCK_MARGIN_MM, y1 = b.y1 - oy - minY + MFR_BLOCK_MARGIN_MM;
     return `<rect data-block-id="${b.id}" x="${Math.min(x0, x1)}" y="${h - Math.max(y0, y1)}"
       width="${Math.abs(x1 - x0)}" height="${Math.abs(y1 - y0)}"
       fill="var(--color-primary)" fill-opacity="0.12"
-      stroke="var(--color-primary)" stroke-width="${Math.max(w / 500, 30)}"
-      stroke-dasharray="${Math.max(w / 150, 80)}"/>`;
+      stroke="var(--color-primary)" stroke-width="${Math.max(w / 300, 45)}"
+      stroke-opacity="0.9"
+      stroke-dasharray="${Math.max(w / 220, 55)}"/>`;
   });
 
   // Сетка осей (`object_grids`, слой «Оси») — для сверки блока с реальной
@@ -27179,8 +27198,11 @@ async function showBlockCard(blockId) {
   const строка = ([k, v]) =>
     `<div class="card-row"><span class="card-key">${escapeHtml(k)}</span>` +
     `<span class="card-val">${escapeHtml(String(v))}</span></div>`;
+  // Секция и этаж — самые важные свойства блока (живой запрос
+  // пользователя, 2026-09-01): отдельной крупной строкой над остальными
+  // card-row, а не наравне с «элементов модели»/«помещений».
+  const заголовок = [card["секция"], card["этаж"]].filter(Boolean).join(" · ");
   const строки = [
-    ["Секция", card["секция"]], ["Этаж", card["этаж"]],
     ["Элементов модели", card["элементов"]], ["Помещений", card["помещений"]],
   ].map(строка);
 
@@ -27197,7 +27219,8 @@ async function showBlockCard(blockId) {
       + `выполнено ${статусы["выполнено"]} из ${статусы["всего"]}`
     : "Видов работ, адресуемых на блок, не заведено";
 
-  box.innerHTML = строки.join("")
+  box.innerHTML = (заголовок ? `<div class="card-block-title">${escapeHtml(заголовок)}</div>` : "")
+    + строки.join("")
     + `<div class="card-row">${геомСтрока}</div>`
     + `<div class="card-row">${статусыСтрока}</div>`;
 }
@@ -27214,7 +27237,10 @@ function mfrShowBlocks() {
 function mfrShowAxes() {
   return document.getElementById("mfr-show-axes").checked;
 }
-for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes"]) {
+function mfrShowFacades() {
+  return document.getElementById("mfr-show-facades").checked;
+}
+for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-show-facades"]) {
   document.getElementById(id).addEventListener("change", () => {
     if (!revitPlanState.data) return;
     drawRevitPlan(revitPlanState.data);
@@ -27234,6 +27260,60 @@ for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes"]) {
 
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
                 loop: null, key: null, поколение: 0 };
+
+// Фасады объекта (2026-08-31, живой запрос пользователя) — картинки
+// вырезаны из последних листов PDF-комплекта («Фасад в осях 1-4/4-1/А-В/
+// Б-А», Docs/TZ.md §3а) заранее, вручную, и лежат статикой — не
+// извлекаются на лету при каждой загрузке 3D. ЖЁСТКО привязаны к этому
+// конкретному объекту/комплекту чертежей, как и весь остальной
+// PDF-конвейер (`app/pdf_rooms.py`, докстрока модуля) — не общий для всех
+// объектов слой, справочная картинка одного конкретного здания.
+//
+// Какая сторона здания — какой картинке: сопоставление ПРИБЛИЗИТЕЛЬНОЕ
+// (по чтению номеров осей слева направо на исходном чертеже), не
+// сверено с компасом на чертеже листа. Если сторона перепутана — это
+// значит поменять местами два `side` ниже, геометрию это не портит.
+// Сторона — развёрнута на 180° против первой версии (2026-08-31, живой
+// найдено пользователем в браузере: рисунок фасада не совпадал с
+// моделью). Разворот всей сборки на 180° вокруг Z — это поменять местами
+// yMax↔yMin и xMax↔xMin разом, так и сделано.
+//
+// `mirror: true` — у ЭТОЙ картинки план читается СПРАВА НАЛЕВО (снята с
+// противоположной стороны здания, чем её пара) — найдено вживую тем же
+// приёмом, что и разворот: у «4-1» типовая башня нарисована СЛЕВА,
+// а у «1-4» (той же башни, вид с другой стороны) — СПРАВА. Мировая
+// координата X у обеих растёт в одну сторону, а куда при этом смотрит
+// рисунок — зависит от того, с какой стороны здания его снимали, поэтому
+// доля ширины текстуры (`uA`/`uB` в цикле полос) для зеркальной картинки
+// считается в обратную сторону.
+// Хвост "?v=" — обход браузерного кеша при переобрезке картинок
+// (2026-09-01, живой запрос пользователя: после правки калибровки кропа
+// в открытой вкладке ещё долго висели старые PNG, потому что
+// mfrFacadeTextures — кеш THREE.Texture на весь срок вкладки, а имя
+// файла не менялось). Поднимать вручную при каждой переобрезке.
+const MFR_FACADES_VERSION = "20260901b";
+const MFR_FACADES = [
+  { url: `/static/mfr_facades/facade_1_4.png?v=${MFR_FACADES_VERSION}`, side: "yMin", mirror: false },
+  { url: `/static/mfr_facades/facade_4_1.png?v=${MFR_FACADES_VERSION}`, side: "yMax", mirror: true },
+  { url: `/static/mfr_facades/facade_AB.png?v=${MFR_FACADES_VERSION}`, side: "xMax", mirror: false },
+  { url: `/static/mfr_facades/facade_BA.png?v=${MFR_FACADES_VERSION}`, side: "xMin", mirror: true },
+];
+// Реальные отметки низа/верха фасада (мм, мировые Z) — те же «+0,000» и
+// «+80,300», что на самом чертеже фасада (2026-08-31, живой запрос
+// пользователя: связать высоту рисунка с отметками этажей). Картинки
+// (`scripts`, разово) обрезаны СТРОГО по этим двум отметкам на исходном
+// PDF — v=0..1 текстуры линейно соответствует 0..80300мм, без отдельного
+// подбора коэффициента.
+const MFR_FACADE_Z0_MM = 0;
+const MFR_FACADE_Z1_MM = 80300;
+// Отступ наружу от стены (2026-08-31, живой запрос пользователя —
+// картинка ровно в плоскости стены мерцает, z-fighting: рендерер на
+// каждый кадр по-разному решает, какая из двух совпадающих поверхностей
+// ближе к камере). Плоскость фасада строится по факту охвата блока —
+// той же координате, что и внешняя грань стены, — так что зазор нужен
+// всегда, не только при точном совпадении на глаз.
+const MFR_FACADE_OFFSET_MM = 60;
+const mfrFacadeTextures = new Map();   // url -> THREE.Texture, кэш между пересборками сцены
 
 // Предел, за которым рёбра не строятся. Взят с запасом на весь объект
 // (КР 3693 + АР 25 131): именно на здании целиком рёбра нужнее всего, и
@@ -27298,24 +27378,36 @@ async function buildMfr3D() {
   const моё = ++mfr3d.поколение;
   const box = document.getElementById("mfr-3d-canvas");
   const data = revitPlanState.data;
-  if (!data || !data.elements.length) {
+  // `!data.size` — единственное, что означает «строить нечего»: при
+  // упрощённой загрузке «по фасадам» элементов нет вовсе, только габарит
+  // блоков, но size сервер считает и по ним (Docs/backlog.md, 2026-09-01).
+  if (!data || !data.size) {
     box.innerHTML = "<div class='hint-text' style='padding:16px'>Нет элементов по этому отбору.</div>";
     return;
   }
   // Ключ отбора: пересобирать сцену на каждое переключение вкладки незачем,
   // а на смену этажа или слоя «Элементы»/«Блоки» — обязательно.
   const ключ = JSON.stringify([REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()),
-                               mfrShowElements(), mfrShowBlocks(), mfrShowAxes()]);
+                               mfrShowElements(), mfrShowBlocks(), mfrShowAxes(), mfrShowFacades()]);
   if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
 
-  revitPlanStatus(`Сборка 3D: ${data.elements.length} элементов…`);
+  revitPlanStatus(data.elements.length
+    ? `Сборка 3D: ${data.elements.length} элементов…`
+    : "Сборка 3D: только габарит блоков (упрощённая загрузка по фасадам)…");
   await ensureThreeLoaded();
   if (моё !== mfr3d.поколение) return;   // нас обогнала более свежая сборка
   disposeMfr3D();                        // счётчик поколений он не трогает
   box.innerHTML = "";
 
   const [w, h] = data.size;
-  const низ = Math.min(...data.elements.map((e) => e["отм"] ?? 0));
+  // Элементов может не быть вовсе (упрощённая загрузка «по фасадам» —
+  // Docs/backlog.md, 2026-09-01): «низ» тогда берётся по нижней отметке
+  // среди блоков, а не элементов. `0` последним аргументом — подпорка
+  // против пустого спреда (Math.min() без аргументов даёт Infinity), а
+  // не содержательное значение по умолчанию.
+  const низ = data.elements.length
+    ? Math.min(...data.elements.map((e) => e["отм"] ?? 0))
+    : Math.min(0, ...revitPlanState.blocksData.filter((b) => b.ok).map((b) => b.z0));
   const поКатегориям = new Map();
   let пропущено = 0;
   // Рёбра — единственное, что делает объём читаемым: без них соседние
@@ -27411,7 +27503,9 @@ async function buildMfr3D() {
     const [ox, oy] = data.origin;
     for (const b of revitPlanState.blocksData) {
       if (!b.ok) continue;
-      const width = b.x1 - b.x0, depth = b.y1 - b.y0, height = b.z1 - b.z0;
+      const width = b.x1 - b.x0 + MFR_BLOCK_MARGIN_MM * 2,
+            depth = b.y1 - b.y0 + MFR_BLOCK_MARGIN_MM * 2,
+            height = b.z1 - b.z0;
       if (width <= 0 || depth <= 0 || height <= 0) continue;
       const geometry = new THREE.BoxGeometry(width, depth, height);
       const material = new THREE.MeshLambertMaterial({
@@ -27419,15 +27513,20 @@ async function buildMfr3D() {
         depthWrite: false, side: THREE.DoubleSide,
       });
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set((b.x0 - ox) + width / 2, (b.y0 - oy) + depth / 2,
+      mesh.position.set((b.x0 - ox) + width / 2 - MFR_BLOCK_MARGIN_MM,
+                        (b.y0 - oy) + depth / 2 - MFR_BLOCK_MARGIN_MM,
                         (b.z0 - низ) + height / 2);
       mesh.userData.blockId = b.id;
       mesh.renderOrder = 3;
       scene.add(mesh);
+      // Толще и непрозрачнее фасадных/осевых линий — форма каждого блока
+      // должна читаться сразу, не сливаясь с рёбрами модели под ним
+      // (живой запрос пользователя, 2026-09-01).
       const рёбраБлока = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.6 }));
+        new THREE.LineBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.95, linewidth: 2 }));
       рёбраБлока.position.copy(mesh.position);
+      рёбраБлока.renderOrder = 5;
       scene.add(рёбраБлока);
       верх = Math.max(верх, (b.z1 - низ));
     }
@@ -27446,9 +27545,20 @@ async function buildMfr3D() {
     // за пределами того, что охватывает камера, наведённая на элементы
     // текущего этажа/секции — «оси за кадром», живой запрос пользователя.
     const оси = relevantAxes(revitPlanState.gridsData, ox, oy, w, h);
+    // Z — 0, а не «низ»: «низ» это МИРОВАЯ отметка нижнего элемента
+    // текущего отбора (для вычитания из чужих мировых Z, как у блоков и
+    // фасада), а не готовая сценовая координата сама по себе. Ось без
+    // собственной высоты кладётся к подножию текущего отбора — то есть
+    // ровно там, где после вычитания «низ» оказались стены нижнего этажа
+    // (их лоскут — на Z=0). Раньше тут стояло `низ` без вычитания —
+    // при отборе высокого этажа (низ = его отметка, например 25650мм)
+    // сетка осей улетала на эту же величину ВВЕРХ от видимых стен и
+    // пропадала из кадра (2026-09-01, живой найдено пользователем при
+    // проверке отдельных этажей — на нижних этажах, где «низ» близко к
+    // нулю, эффект был незаметен).
     const точки = [];
     for (const a of оси) {
-      точки.push(a.x1 - ox, a.y1 - oy, низ, a.x2 - ox, a.y2 - oy, низ);
+      точки.push(a.x1 - ox, a.y1 - oy, 0, a.x2 - ox, a.y2 - oy, 0);
     }
     const геомОсей = new THREE.BufferGeometry();
     геомОсей.setAttribute("position", new THREE.BufferAttribute(new Float32Array(точки), 3));
@@ -27479,8 +27589,129 @@ async function buildMfr3D() {
           map: new THREE.CanvasTexture(canvas), depthTest: true }));
         const высотаСпрайта = охватОсей * 0.02;
         sprite.scale.set(высотаСпрайта * (canvas.width / canvas.height), высотаСпрайта, 1);
-        sprite.position.set(px, py, низ + высотаСпрайта / 2);
+        sprite.position.set(px, py, высотаСпрайта / 2);
         scene.add(sprite);
+      }
+    }
+  }
+
+  // Слой «Фасады» (2026-08-31, живой запрос пользователя — картинки есть
+  // с каждой стороны здания на последних листах PDF) — текстурные
+  // плоскости по сторонам ВСЕГО объекта, не текущего отбора: иначе при
+  // просмотре одного этажа плоскости прыгали бы по высоте вместе с
+  // фильтром, а картинка — вид на здание целиком.
+  //
+  // НЕ один параллелепипед на всё здание (первая версия, живой найдено
+  // пользователем — «здание не параллелепипед, плоскости висят в
+  // воздухе»): секция С01 (8 этажей) короче и обычно уже секции С02 (24
+  // этажа), а нижние этажи (парковка/вестибюль) шире типовых — общий
+  // охват по ВСЕМ этажам разом оставлял бы картинку не касающейся стен
+  // там, где этаж уже. Вместо этого — «полосы» по высоте: одна полоса на
+  // каждую уникальную пару отметок (z0,z1) среди блоков «Учёт по блокам»
+  // (готовая геометрия секция+этаж, `blocksData`, без фильтра по
+  // текущему отбору), плоскость каждой полосы — ПО ФАКТИЧЕСКОМУ охвату
+  // блоков этой полосы, не общему. Подземный этаж (парковка, z0<0)
+  // исключён — у чертежа фасада его нет вовсе, фасад показывает только
+  // наземную часть от «+0,000».
+  if (mfrShowFacades() && data.origin && revitPlanState.blocksData?.length) {
+    const [ox, oy] = data.origin;
+    const этажныеБлоки = revitPlanState.blocksData.filter((b) => b.ok && b.z0 > -1);
+    if (этажныеБлоки.length) {
+      const полосыMap = new Map();
+      for (const b of этажныеБлоки) {
+        const ключ = `${Math.round(b.z0)}|${Math.round(b.z1)}`;
+        let полоса = полосыMap.get(ключ);
+        if (!полоса) {
+          полоса = { z0: b.z0, z1: b.z1, x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+          полосыMap.set(ключ, полоса);
+        }
+        полоса.x0 = Math.min(полоса.x0, b.x0); полоса.x1 = Math.max(полоса.x1, b.x1);
+        полоса.y0 = Math.min(полоса.y0, b.y0); полоса.y1 = Math.max(полоса.y1, b.y1);
+      }
+      const полосы = [...полосыMap.values()].sort((a, b) => a.z0 - b.z0);
+      // Парапет/кровельное оборудование блоками не заведены (у них нет
+      // «этажа»), а на чертеже фасада есть и достаёт до MFR_FACADE_Z1_MM —
+      // верх последней полосы дотягивается до неё, чтобы текстура
+      // использовалась целиком, без обрезанной верхушки.
+      полосы[полосы.length - 1].z1 = Math.max(полосы[полосы.length - 1].z1, MFR_FACADE_Z1_MM);
+
+      // Общий охват — ТОЛЬКО чтобы перевести мировые X/Y в долю ширины
+      // текстуры (0..1): широкий цоколь показывает БОЛЬШЕ картинки по
+      // ширине, узкий типовой этаж выше — меньше, тем же самым рисунком,
+      // без искажения пропорций окон и без разрыва картинки на стыке
+      // полос (2026-08-31, тот же живой запрос).
+      const gx0 = Math.min(...полосы.map((p) => p.x0)), gx1 = Math.max(...полосы.map((p) => p.x1));
+      const gy0 = Math.min(...полосы.map((p) => p.y0)), gy1 = Math.max(...полосы.map((p) => p.y1));
+      const пролётZ = MFR_FACADE_Z1_MM - MFR_FACADE_Z0_MM;
+
+      for (const f of MFR_FACADES) {
+        let texture = mfrFacadeTextures.get(f.url);
+        if (!texture) {
+          texture = new THREE.TextureLoader().load(f.url);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          mfrFacadeTextures.set(f.url, texture);
+        }
+        const позиции = [], uv = [];
+        for (const полоса of полосы) {
+          const vz0 = (Math.max(полоса.z0, MFR_FACADE_Z0_MM) - MFR_FACADE_Z0_MM) / пролётZ;
+          const vz1 = (полоса.z1 - MFR_FACADE_Z0_MM) / пролётZ;
+          const sz0 = полоса.z0 - низ, sz1 = полоса.z1 - низ;
+          let p0, p1, p2, p3, uA, uB;   // против часовой стрелки, если смотреть СНАРУЖИ
+          if (f.side === "yMax" || f.side === "yMin") {
+            const смещение = f.side === "yMax" ? MFR_FACADE_OFFSET_MM : -MFR_FACADE_OFFSET_MM;
+            const y = (f.side === "yMax" ? полоса.y1 : полоса.y0) - oy + смещение;
+            const x0 = полоса.x0 - ox, x1 = полоса.x1 - ox;
+            p0 = [x0, y, sz0]; p1 = [x1, y, sz0]; p2 = [x1, y, sz1]; p3 = [x0, y, sz1];
+            uA = (полоса.x0 - gx0) / (gx1 - gx0); uB = (полоса.x1 - gx0) / (gx1 - gx0);
+          } else {
+            // Порядок обхода ПРОТИВОПОЛОЖНЫЙ ветке yMax/yMin (не y0→y1, а
+            // y1→y0) — при замене осей X/Y в одной и той же правой системе
+            // координат меняется хиральность обхода: без разворота
+            // картинка выходила зеркальной (2026-08-31, увидено вживую на
+            // грани «Б-А» — заголовок листа читался в зеркале).
+            const смещение = f.side === "xMax" ? MFR_FACADE_OFFSET_MM : -MFR_FACADE_OFFSET_MM;
+            const x = (f.side === "xMax" ? полоса.x1 : полоса.x0) - ox + смещение;
+            const y0 = полоса.y0 - oy, y1 = полоса.y1 - oy;
+            p0 = [x, y1, sz0]; p1 = [x, y0, sz0]; p2 = [x, y0, sz1]; p3 = [x, y1, sz1];
+            uA = (полоса.y1 - gy0) / (gy1 - gy0); uB = (полоса.y0 - gy0) / (gy1 - gy0);
+          }
+          // Картинка снята с ПРОТИВОПОЛОЖНОЙ стороны здания (см. `mirror`
+          // в MFR_FACADES) — доля ширины текстуры отражается (`1-u`), не
+          // просто меняются местами уже посчитанные uA/uB. Для полос,
+          // близких по охвату к gx0..gx1 (общий охват секций), разницы не
+          // видно — простая перестановка местами давала тот же результат.
+          // Но для УЗКОЙ полосы (типовой этаж одной башни, вдали от края
+          // общего охвата — например верхние этажи С02, где С01 уже нет)
+          // перестановка оставляла ту же самую пару чисел у противоположной
+          // стороны картинки — попадали не на башню, а на пустое место
+          // рядом с ней (2026-09-01, живой найдено пользователем: половина
+          // грани «4-1»/«Б-А» — белое поле на типовых этажах, хотя сама
+          // картинка не пустая, просто читалась не с того места).
+          if (f.mirror) { uA = 1 - uA; uB = 1 - uB; }
+          позиции.push(...p0, ...p1, ...p2, ...p0, ...p2, ...p3);
+          uv.push(uA, vz0, uB, vz0, uB, vz1, uA, vz0, uB, vz1, uA, vz1);
+        }
+        const геом = new THREE.BufferGeometry();
+        геом.setAttribute("position", new THREE.BufferAttribute(new Float32Array(позиции), 3));
+        геом.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uv), 2));
+        геом.computeVertexNormals();
+        // Мирового отступа (MFR_FACADE_OFFSET_MM) одного не хватило —
+        // мерцание вернулось на пологих углах обзора (2026-09-01, живой
+        // найдено пользователем: чем ближе луч взгляда к плоскости стены,
+        // тем меньше в пикселях разница глубины между двумя поверхностями,
+        // и на некотором угле она снова проваливается в один и тот же
+        // пиксель буфера глубины, каким бы ни был отступ в мм). Правильное
+        // средство — сдвиг САМОГО БУФЕРА ГЛУБИНЫ при растеризации
+        // (`polygonOffset`), а не сдвиг геометрии в пространстве: работает
+        // одинаково на любом угле обзора, а не только там, где отступ в мм
+        // успел накопиться в заметную разницу глубины.
+        const material = new THREE.MeshBasicMaterial({
+          map: texture, side: THREE.DoubleSide, transparent: true, opacity: 0.92,
+          polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+        });
+        const mesh = new THREE.Mesh(геом, material);
+        mesh.renderOrder = 4;
+        scene.add(mesh);
       }
     }
   }
@@ -27531,9 +27762,10 @@ async function buildMfr3D() {
   controls.enableDamping = true;   // инерция: вращение перестаёт быть рывками
   controls.dampingFactor = 0.12;
   controls.screenSpacePanning = true;
-  // Ниже горизонта камера не опускается: смотреть на здание снизу сквозь
-  // землю не нужно, а «перевернуть мир» случайным движением легко.
-  controls.maxPolarAngle = Math.PI / 2;
+  // Было: не ниже горизонта (защита от «переворота мира» случайным
+  // движением). Снято по прямому запросу пользователя (2026-08-31) —
+  // нужен полный обзор по вертикали, в том числе снизу.
+  controls.maxPolarAngle = Math.PI;
   controls.update();
 
   mfr3d.scene = scene; mfr3d.camera = camera;
@@ -27546,9 +27778,11 @@ async function buildMfr3D() {
     renderer.render(scene, camera);
   };
   кадр();
-  revitPlanStatus(`3D: ${data.elements.length - пропущено} элементов`
-    + (пропущено ? `, без высоты и не показаны: ${пропущено}` : "")
-    + (рёбраНужны ? "" : `, рёбра не построены (больше ${EDGES_LIMIT} элементов)`));
+  revitPlanStatus(data.elements.length
+    ? `3D: ${data.elements.length - пропущено} элементов`
+      + (пропущено ? `, без высоты и не показаны: ${пропущено}` : "")
+      + (рёбраНужны ? "" : `, рёбра не построены (больше ${EDGES_LIMIT} элементов)`)
+    : "3D: только габарит блоков (упрощённая загрузка по фасадам, элементы не разбирались)");
 }
 
 // Выбор элемента в 3D. Луч из курсора -> грань слитого меша -> номер
@@ -27568,10 +27802,18 @@ function bindMfr3DPick(canvas, camera, scene) {
     точка.x = ((e.clientX - r.left) / r.width) * 2 - 1;
     точка.y = -((e.clientY - r.top) / r.height) * 2 + 1;
     raycaster.setFromCamera(точка, camera);
-    // Элементы — ПЕРВЫМ приоритетом: блок полупрозрачный и охватывает их
-    // снаружи, ближе к камере, и без разделения луч всегда попадал бы в
-    // блок раньше, чем в элемент внутри него. Блок кликабелен там, где
-    // элемента под ним нет (щели, пустой блок) или элементы скрыты.
+    const блокМеши = scene.children.filter((o) => o.isMesh && o.userData.blockId);
+    // Если слой «Блоки» включён — блок ПЕРВЫМ приоритетом (живой запрос
+    // пользователя, 2026-09-01: включили блоки — значит хотят смотреть
+    // именно блок, а не элемент под ним). Блоки рисуются только когда
+    // включён их слой (см. mfrShowBlocks() выше по функции), так что
+    // непустой блокМеши уже означает «слой включён» — отдельная проверка
+    // не нужна. Иначе — прежний порядок: элементы первым приоритетом,
+    // блок кликабелен там, где элемента под ним нет (щели, пустой блок).
+    if (блокМеши.length) {
+      const попаданияБлок = raycaster.intersectObjects(блокМеши, false);
+      if (попаданияБлок.length) { await showBlockCard(попаданияБлок[0].object.userData.blockId); return; }
+    }
     const элементМеши = scene.children.filter((o) => o.isMesh && !o.userData.blockId);
     const попаданияЭл = raycaster.intersectObjects(элементМеши, false);
     if (попаданияЭл.length) {
@@ -27579,11 +27821,8 @@ function bindMfr3DPick(canvas, camera, scene) {
       const вершина = (hit.faceIndex || 0) * 3;
       const диапазоны = hit.object.userData.диапазоны || [];
       const найден = диапазоны.find((д) => вершина < д.конец);
-      if (найден) { await showRevitCard(найден.id); return; }
+      if (найден) await showRevitCard(найден.id);
     }
-    const блокМеши = scene.children.filter((o) => o.isMesh && o.userData.blockId);
-    const попаданияБлок = raycaster.intersectObjects(блокМеши, false);
-    if (попаданияБлок.length) await showBlockCard(попаданияБлок[0].object.userData.blockId);
   });
 }
 
@@ -28164,13 +28403,57 @@ async function wpCycleCell(td) {
 const pdfImportBackdrop = document.getElementById("pdf-import-backdrop");
 const pdfImportFileInput = document.getElementById("pdf-import-file-input");
 const pdfImportStatus = document.getElementById("pdf-import-status");
+const pdfImportProgressWrap = document.getElementById("pdf-import-progress-wrap");
+const pdfImportProgressBar = document.getElementById("pdf-import-progress-bar");
 const pdfReviewBackdrop = document.getElementById("pdf-review-backdrop");
 let pdfImportFile = null;
 let pdfImportPending = null;
+let pdfImportPendingMode = "full";  // "full" | "facade" — какой флоу применять на шаге 3
 
 function setPdfImportStatus(text, isError) {
   pdfImportStatus.textContent = text;
   pdfImportStatus.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+function setPdfImportProgress(fraction) {
+  // fraction === null — скрыть полосу (простой + ошибка, ждём новый запуск).
+  if (fraction === null) {
+    pdfImportProgressWrap.style.display = "none";
+    return;
+  }
+  pdfImportProgressWrap.style.display = "";
+  pdfImportProgressBar.style.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
+}
+
+// Опрос фоновой задачи разбора (см. app/pdf_import.start_analyze_job —
+// сам разбор ~30с на реальном комплекте, отдельный HTTP-запрос столько не
+// держат). Оба этапа (`parse_document`/`parse_walls_document`) идут по
+// одному и тому же набору уникальных листов — прогресс считаем как долю
+// пройденных «лист×этап» из двух этапов суммарно.
+async function pollPdfAnalyzeJob(jobId) {
+  const res = await fetch(`/import-pdf/analyze/progress/${jobId}`);
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((body && body.detail) ? body.detail : `Ошибка ${res.status}`);
+  }
+  if (body.status === "done") {
+    return body.result;
+  }
+  if (body.total) {
+    // Пока идёт первый этап («Разбираю помещения») — доля 0..0.5, второй
+    // («Разбираю стены…») — 0.5..1: обе стадии перебирают один и тот же
+    // список уникальных листов, поэтому вклад каждой стадии одинаков.
+    // page_number (номер листа в PDF, может быть больше total — легенды/
+    // разрезы/фасады в разбор не входят) и page/total (счётчик уже
+    // разобранных уникальных листов) — числа разной природы, не «N из M»
+    // одного смысла (2026-08-31, запутало пользователя в первой версии).
+    const stageBase = body.stage === "Разбираю стены и перекрытия" ? 0.5 : 0;
+    setPdfImportProgress(stageBase + (body.page / body.total) * 0.5);
+    setPdfImportStatus(
+      `${body.stage}: лист №${body.page_number} (${body.page} из ${body.total})…`, false);
+  }
+  await new Promise((r) => setTimeout(r, 700));
+  return pollPdfAnalyzeJob(jobId);
 }
 
 document.getElementById("btn-upload-pdf").addEventListener("click", () => {
@@ -28178,6 +28461,7 @@ document.getElementById("btn-upload-pdf").addEventListener("click", () => {
   pdfImportFileInput.value = "";
   document.getElementById("pdf-import-file-name").textContent = "Файл не выбран";
   setPdfImportStatus("", false);
+  setPdfImportProgress(null);
   pdfImportBackdrop.classList.add("open");
 });
 document.getElementById("pdf-import-cancel").addEventListener("click",
@@ -28207,24 +28491,49 @@ document.getElementById("pdf-clear-submit").addEventListener("click", () => {
 document.getElementById("pdf-import-submit").addEventListener("click", async () => {
   if (!pdfImportFile) { setPdfImportStatus("Сначала выберите файл", true); return; }
   const btn = document.getElementById("pdf-import-submit");
+  const facadeOnly = document.getElementById("pdf-import-mode-facade").checked;
   btn.disabled = true;
-  setPdfImportStatus("Разбор файла… на комплекте из 22 листов это может занять до минуты.", false);
+  setPdfImportStatus("Отправляю файл…", false);
+  setPdfImportProgress(facadeOnly ? null : 0);
   const form = new FormData();
   form.append("object_id", state.objectId);
   form.append("file", pdfImportFile);
   try {
-    const res = await fetch("/import-pdf/analyze", { method: "POST", body: form });
-    const body = await res.json().catch(() => null);
-    if (!res.ok) {
-      setPdfImportStatus((body && body.detail) ? body.detail : `Ошибка ${res.status}`, true);
+    if (facadeOnly) {
+      // Разбор по фасадам — секунды (анализ растра четырёх фасадов, не
+      // помещений/стен), фоновой задачи с прогрессом не нужно.
+      setPdfImportStatus("Разбираю фасады…", false);
+      const res = await fetch("/import-pdf-facade/analyze", { method: "POST", body: form });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setPdfImportStatus((body && body.detail) ? body.detail : `Ошибка ${res.status}`, true);
+        return;
+      }
+      setPdfImportStatus("Разбор готов — проверьте сводку.", false);
+      pdfImportPending = body;
+      pdfImportPendingMode = "facade";
+      renderPdfFacadeReview(body);
+      pdfReviewBackdrop.classList.add("open");
       return;
     }
+    const startRes = await fetch("/import-pdf/analyze/start", { method: "POST", body: form });
+    const startBody = await startRes.json().catch(() => null);
+    if (!startRes.ok) {
+      setPdfImportStatus((startBody && startBody.detail) ? startBody.detail : `Ошибка ${startRes.status}`, true);
+      setPdfImportProgress(null);
+      return;
+    }
+    setPdfImportStatus("Разбираю чертёж…", false);
+    const body = await pollPdfAnalyzeJob(startBody.job_id);
+    setPdfImportProgress(1);
     setPdfImportStatus("Разбор готов — проверьте сводку.", false);
     pdfImportPending = body;
+    pdfImportPendingMode = "full";
     renderPdfReview(body);
     pdfReviewBackdrop.classList.add("open");
   } catch (e) {
     setPdfImportStatus("Не удалось связаться с сервером: " + e.message, true);
+    setPdfImportProgress(null);
   } finally {
     btn.disabled = false;
   }
@@ -28234,6 +28543,31 @@ document.getElementById("pdf-review-cancel").addEventListener("click", () => {
   pdfReviewBackdrop.classList.remove("open");
   pdfImportPending = null;
 });
+
+function renderPdfFacadeReview(data) {
+  document.getElementById("pdf-review-head").textContent =
+    `Объект «${data.object_name}» · блоков в файле ${data.total_blocks}`
+    + ` на ${data.total_floors} этажах`;
+
+  const floors = Object.keys(data.by_floor || {});
+  const rows = floors.map((floor) => {
+    const sections = data.by_floor[floor];
+    const строкаРазмеров = Object.entries(sections).map(([code, s]) =>
+      `${escapeHtml(code)}: ${s["ширина_мм"]}×${s["глубина_мм"]}мм`).join(", ");
+    return `<tr><td>${escapeHtml(floor)}</td><td>${строкаРазмеров}</td></tr>`;
+  }).join("");
+
+  document.getElementById("pdf-review-body").innerHTML = `
+    <div class="hint-text">Только габарит блока (ширина×глубина) — без
+      помещений, стен и окон. Секции и этажи заводятся, если их ещё нет;
+      уже существующий блок получит эту геометрию поверх прежней.</div>
+    <h3>По этажам</h3>
+    <table class="bulk-edit-table">
+      <thead><tr><th>Этаж</th><th>Секции — ширина×глубина</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
 
 function renderPdfReview(data) {
   document.getElementById("pdf-review-head").textContent =
@@ -28278,7 +28612,8 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
   status.textContent = "Применение…";
   status.style.color = "var(--color-text-muted)";
   try {
-    const res = await fetch("/import-pdf/apply", {
+    const facadeOnly = pdfImportPendingMode === "facade";
+    const res = await fetch(facadeOnly ? "/import-pdf-facade/apply" : "/import-pdf/apply", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: pdfImportPending.token }),
     });
@@ -28288,15 +28623,21 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
       status.style.color = "var(--color-danger)";
       return;
     }
-    let текст = `Готово: помещений ${body.rooms_written}, стен/перегородок `
-      + `${body.walls_written}, окон ${body.windows_written}, плит `
-      + `${body.slabs_written}, списано ${body.retired}.`;
-    // Секция считается по границе подписей осей «…с1»/«…с2» на листе — не
-    // молчим, если на каком-то листе подписей не нашлось и она не вышла
-    // (см. docstring app/pdf_rooms._axis_boundary_x).
-    if (body.section_unknown) {
-      текст += ` Секция не определена у ${body.section_unknown} — `
-        + `проверьте предупреждения разбора для этих листов.`;
+    let текст;
+    if (facadeOnly) {
+      текст = `Готово: блоков ${body.blocks_written} на ${body.floors} `
+        + `этажах, секций ${body.sections}.`;
+    } else {
+      текст = `Готово: помещений ${body.rooms_written}, стен/перегородок `
+        + `${body.walls_written}, окон ${body.windows_written}, плит `
+        + `${body.slabs_written}, списано ${body.retired}.`;
+      // Секция считается по границе подписей осей «…с1»/«…с2» на листе —
+      // не молчим, если на каком-то листе подписей не нашлось и она не
+      // вышла (см. docstring app/pdf_rooms._axis_boundary_x).
+      if (body.section_unknown) {
+        текст += ` Секция не определена у ${body.section_unknown} — `
+          + `проверьте предупреждения разбора для этих листов.`;
+      }
     }
     pdfImportPending = null;
     pdfReviewBackdrop.classList.remove("open");
