@@ -174,6 +174,17 @@ def elements(conn, object_id: int, level_ids=None, section_ids=None,
             ys.append(point[1])
         parsed.append((row, outline))
 
+    if not xs:
+        # Упрощённый импорт «по фасадам» не пишет revit_elements вовсе
+        # (Docs/backlog.md, 2026-09-01) — тогда охват берётся из блоков,
+        # иначе origin/size уходят в None, и слою «Блоки» в «Модели МФР»
+        # негде отрисоваться, хотя геометрия в БД есть.
+        for b in blocks_geometry(conn, object_id, level_ids, section_ids):
+            if not b.get("ok"):
+                continue
+            xs += [b["x0"], b["x1"]]
+            ys += [b["y0"], b["y1"]]
+
     origin_x = min(xs) if xs else 0
     origin_y = min(ys) if ys else 0
 
