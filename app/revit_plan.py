@@ -46,19 +46,28 @@ def filters(conn, object_id: int) -> dict:
     """Что вообще есть у объекта: этажи, секции, разделы, категории — с
     количествами. Считается по всему объекту, а не по текущему фильтру:
     иначе, отфильтровав, пользователь перестал бы видеть, куда вернуться."""
+    # `blocks` считаются ОТДЕЛЬНЫМ LEFT JOIN, не общим с revit_elements —
+    # у упрощённой загрузки по фасадам (2026-09-01) элементов нет вовсе,
+    # только блоки; общий JOIN дал бы декартово произведение и завысил
+    # счётчики там, где есть и то, и другое.
     levels = [
         _level_row(row) for row in conn.execute(
             "SELECT l.id, l.key, l.floor, l.kind, l.name, l.elevation_mm, "
-            "       l.elevation_suspect, COUNT(e.id) AS elements "
+            "       l.elevation_suspect, COUNT(DISTINCT e.id) AS elements, "
+            "       COUNT(DISTINCT b.id) AS blocks "
             "FROM object_levels l "
             "LEFT JOIN revit_elements e ON e.level_id = l.id AND e.is_current = 1 "
+            "LEFT JOIN blocks b ON b.level_id = l.id "
             "WHERE l.object_id = ? GROUP BY l.id ORDER BY l.sort_order",
             (object_id,))
     ]
     sections = [
         dict(row) for row in conn.execute(
-            "SELECT s.id, s.code, COUNT(e.id) AS elements FROM object_sections s "
+            "SELECT s.id, s.code, COUNT(DISTINCT e.id) AS elements, "
+            "       COUNT(DISTINCT b.id) AS blocks "
+            "FROM object_sections s "
             "LEFT JOIN revit_elements e ON e.section_id = s.id AND e.is_current = 1 "
+            "LEFT JOIN blocks b ON b.section_id = s.id "
             "WHERE s.object_id = ? GROUP BY s.id ORDER BY s.sort_order",
             (object_id,))
     ]

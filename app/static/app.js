@@ -26809,9 +26809,18 @@ async function loadRevitPlanFilters() {
   const f = await res.json();
   revitPlanState.filters = f;
 
-  const всего = (f.parts || []).reduce((s, p) => s + p.elements, 0);
-  document.getElementById("revit-plan-head").textContent = всего
-    ? `Элементов ${всего}, этажей ${f.levels.length}, секций ${f.sections.length}`
+  // Блоки — ОТДЕЛЬНЫЙ счётчик от элементов (`l.blocks`, `s.blocks`,
+  // `app/revit_plan.filters`): у упрощённой загрузки по фасадам
+  // (2026-09-01) элементов нет вовсе, только блоки, а фильтр по
+  // элементам (`elements > 0`) прятал бы тогда ВСЕ этажи и секции разом
+  // — список выглядел бы пустым, хотя импорт прошёл (живой запрос
+  // пользователя, «не появились ни этажи, ни секции для фильтрации»).
+  const всегоЭлементов = (f.parts || []).reduce((s, p) => s + p.elements, 0);
+  const всегоБлоков = f.levels.reduce((s, l) => s + (l.blocks || 0), 0);
+  document.getElementById("revit-plan-head").textContent = всегоЭлементов
+    ? `Элементов ${всегоЭлементов}, этажей ${f.levels.length}, секций ${f.sections.length}`
+    : всегоБлоков
+    ? `Блоков ${всегоБлоков} (без разбора помещений/стен — упрощённая загрузка по фасадам)`
     : "Для этого объекта выгрузки из Revit ещё не загружались.";
 
   // Строки «без этажа» и «без секции» показываются ВСЕГДА, когда такие
@@ -26820,10 +26829,10 @@ async function loadRevitPlanFilters() {
   // Отдельной строки «все этажи» нет: снятый отбор и означает «все», а
   // два способа сказать одно и то же расходятся при первой же правке.
   const этажи = [];
-  этажи.push(...f.levels.filter((l) => l.elements > 0).map((l) =>
+  этажи.push(...f.levels.filter((l) => l.elements > 0 || l.blocks > 0).map((l) =>
     `<div class="revit-pick" data-kind="level" data-id="${l.id}"
        title="${escapeHtml(l.name || l.key)}">${escapeHtml(l.title || l.key)}
-      <span style="float:right;color:var(--color-text-muted)">${l.elements}</span>
+      <span style="float:right;color:var(--color-text-muted)">${l.elements || l.blocks}</span>
       ${l.elevation_suspect ? ' <span title="отметке верить нельзя">⚠</span>' : ""}</div>`));
   if (f.without_level) {
     этажи.push(`<div class="revit-pick" data-kind="level" data-id="0">без этажа
