@@ -66,6 +66,7 @@ import.md` §13, где описана и методика: подпись «N �
 
 import re
 from dataclasses import dataclass
+from statistics import median
 from typing import Optional
 
 import fitz
@@ -148,7 +149,8 @@ class PdfRoomsError(Exception):
 class RoomPlan:
     """Один физический этаж: контуры помещений одной страницы плюс отметки."""
 
-    floor: str          # "1".."24", "подземный", "технический (секция 2)"
+    floor: str          # "1".."24", "подземный", "технический (секция 1)",
+                        # "кровля (секция 1)", "технический (секция 2)"
     page: int           # 1-based номер листа в PDF
     z0: float
     z1: float
@@ -174,6 +176,20 @@ _SPEC = [
     ("6", 8, 16650, 19650, ("С01", "С02")),
     ("7", 9, 19650, 22650, ("С01", "С02")),
     ("8", 9, 22650, 25650, ("С01", "С02")),
+    # Выше 8-го этажа у секции 1 — свои два яруса, не жилые этажи (листы
+    # 10 и 11, каждый делит лист с типовым этажом секции 2 — та же
+    # компоновка, что у «технический (секция 2)» ниже). Пропущены в
+    # первой версии таблицы: секция 1 на листах ВЫШЕ них (12+, кровля
+    # секции 2) — действительно только «для информации», и по ошибке тот
+    # же вывод распространили на листы 10 и 11 (2026-09-01, живая правка
+    # пользователя — прислал сам план техпространства, страница 10, с
+    # подписанными помещениями и перегородками). Отметки — НЕ с самих
+    # этих листов (там только локальные, промежуточные — площадка/
+    # мезонин внутри яруса), а с разреза, лист 18 — тот же авторитетный
+    # источник, что и у всей остальной таблицы (Docs/revit-import.md §13,
+    # там же и «кровля (секция 1)» — правее по тексту, но тем же приёмом).
+    ("технический (секция 1)", 10, 25650, 29400, ("С01",)),
+    ("кровля (секция 1)", 11, 29400, 32400, ("С01",)),
     ("9", 10, 25650, 28650, ("С02",)),
     ("10", 11, 28650, 31650, ("С02",)),
 ]
@@ -256,7 +272,7 @@ def _page_scale(page) -> int:
     return int(m.group(1))
 
 
-def _room_polygons(page, scale: int) -> tuple:
+def _room_polygons(page, scale: int, correction: tuple = (0.0, 0.0)) -> tuple:
     """Полигоны слоя площадей — каждый СВОЕЙ фигурой, без объединения.
     Возвращает (полигоны, (сдвиг_x, сдвиг_y)).
 
@@ -266,7 +282,15 @@ def _room_polygons(page, scale: int) -> tuple:
     на месте от листа к листу (проверено на прототипе-«массе» этой же
     сессии: правый край 90469±20 мм, верхний край 73791..73841 мм у девяти
     разных листов). Без этого шага этажи с разных листов стояли бы в
-    несовместимых координатах и не собрались бы в одно здание."""
+    несовместимых координатах и не собрались бы в одно здание.
+
+    `correction` — поправка (см. `_page_shift_correction`) для листов, чей
+    верхний правый угол застройки физически ДРУГАЯ точка (подземный этаж,
+    1-2 этажи — шире/уже типовой башни: парковка, вестибюль). Без неё их
+    геометрия ложится в координаты СВОЕГО угла, а не в общую сетку осей
+    объекта (`extract_axis_grid` берёт её с типового листа) — оси между
+    этажами совпадают, а стены/помещения сдвинуты (2026-08-31, увидено
+    пользователем на модели вживую)."""
     H = page.rect.height
     raw = []
     for d in page.get_cdrawings():
@@ -284,8 +308,8 @@ def _room_polygons(page, scale: int) -> tuple:
         raw.append(poly)
     if not raw:
         return [], (0.0, 0.0)
-    shift_x = max(x for poly in raw for x, _ in poly)
-    shift_y = max(y for poly in raw for _, y in poly)
+    shift_x = max(x for poly in raw for x, _ in poly) + correction[0]
+    shift_y = max(y for poly in raw for _, y in poly) + correction[1]
     polys = [[(x - shift_x, y - shift_y) for x, y in poly] for poly in raw]
     return polys, (shift_x, shift_y)
 
@@ -293,7 +317,7 @@ def _room_polygons(page, scale: int) -> tuple:
 _AXIS_ENVELOPE_MARGIN_MM = 3000
 _WALL_COVERAGE_MIN = 0.5
 
-def _axis_envelope(page) -> Optional[tuple]:
+def _axis_envelope(page, correction: tuple = (0.0, 0.0)) -> Optional[tuple]:
     """Охват здания по СЕТКЕ ОСЕЙ листа (`page_axis_labels`, включая
     вспомогательные — `_AXIS_AUX_RE`) — авторитетная граница «где на самом
     деле здание», а не эвристика: ось на чертеже — не случайное совпадение
@@ -309,7 +333,7 @@ def _axis_envelope(page) -> Optional[tuple]:
     консоль, оставляем без вопросов), дальше — решает не расстояние, а
     связность с реальной геометрией листа (`_perimeter_coverage` в
     `parse_page`). `None`, если на листе не нашлось ни одной подписи оси."""
-    labels = page_axis_labels(page)
+    labels = page_axis_labels(page, correction)
     xs = [coord for _label, (направление, coord) in labels.items() if направление == "x"]
     ys = [coord for _label, (направление, coord) in labels.items() if направление == "y"]
     if not xs or not ys:
@@ -376,23 +400,26 @@ def _near_fragment_label(polygon_mm: list, labels: list,
     return any((cx - lx) ** 2 + (cy - ly) ** 2 <= radius ** 2 for lx, ly in labels)
 
 
-def _page_section_boundary_mm(page) -> Optional[float]:
+def _page_section_boundary_mm(page, correction: tuple = (0.0, 0.0)) -> Optional[float]:
     """Граница осей секций 1/2 листа (`_axis_boundary_x`) в тех же
     выровненных мм-координатах, что и контуры помещений/стен. Секция 1 —
     ВСЕГДА левее границы, секция 2 — правее (`_axis_boundary_x`,
     докстрока: `s1_max < s2_min`).
 
     Нужна не только для подписи секции у общих этажей 1-8, но и для
-    ПОЛНОГО СРЕЗА на этажах с ЕДИНСТВЕННОЙ секцией (замечено пользователем
-    2026-08-27): на этажах выше 8-го секция 1 на листе показана «для
-    информации» (кровля/техническая часть) — там нет ни одного элемента
-    ЭТОГО этажа, а плановая и стеновая геометрия слева от границы всё
-    равно присутствует на листе и, будучи заведомо в пределах сетки осей
-    здания (`_axis_envelope` её не отсечёт — это тоже часть корпуса,
-    просто другой секции), иначе просочилась бы в модель как элементы
-    несуществующего на этом этаже участка."""
+    ПОЛНОГО СРЕЗА на этажах с ЕДИНСТВЕННОЙ секцией — в обе стороны
+    (замечено пользователем 2026-08-27, уточнено 2026-09-01): выше 8-го
+    этажа у каждой секции СВОИ, разные по высоте, ярусы, и лист одного
+    яруса нередко показывает СОСЕДНИЙ ярус другой секции «для информации»
+    (кровля секции 2 на листах 10-11 секции 1 и наоборот, технические
+    пространства секции 1 на листах 10-11 секции 2) — там нет ни одного
+    элемента ЭТОГО этажа, а плановая и стеновая геометрия по другую
+    сторону границы всё равно присутствует на листе и, будучи заведомо в
+    пределах сетки осей здания (`_axis_envelope` её не отсечёт — это тоже
+    часть корпуса, просто другого яруса), иначе просочилась бы в модель
+    как элементы несуществующего на этом этаже участка."""
     scale = _page_scale(page)
-    _, (shift_x, _shift_y) = _room_polygons(page, scale)
+    _, (shift_x, _shift_y) = _room_polygons(page, scale, correction)
     boundary_pt = _axis_boundary_x(page.get_text("words"))
     if boundary_pt is None:
         return None
@@ -455,15 +482,19 @@ def _drop_oversized_rooms(rooms: list, area_label_points: list = None) -> tuple:
     return kept, dropped
 
 
-def parse_page(page) -> tuple:
+def parse_page(page, correction: tuple = (0.0, 0.0)) -> tuple:
     """Возвращает (список Room с пустым `floor`, предупреждения). `floor`
     проставляется вызывающим кодом — одна страница может обслуживать
     несколько физических этажей (типовые планы). Порядок и `index` —
     по центроиду контура (сначала сверху вниз, потом слева направо в
-    координатах листа), детерминированно от запуска к запуску."""
+    координатах листа), детерминированно от запуска к запуску.
+
+    `correction` — см. `_room_polygons`/`_page_shift_correction`: поправка
+    сдвига листа под общую сетку осей объекта, для листов с нетиповым
+    верхним правым углом застройки (подземный этаж, 1-2 этажи)."""
     scale = _page_scale(page)
     H = page.rect.height
-    polygons_mm, (shift_x, shift_y) = _room_polygons(page, scale)
+    polygons_mm, (shift_x, shift_y) = _room_polygons(page, scale, correction)
 
     def centroid_key(poly):
         n = len(poly)
@@ -531,7 +562,7 @@ def parse_page(page) -> tuple:
     # решает не расстояние, а связность с реальной геометрией листа
     # (`_perimeter_coverage`) — расстояние одно там не разводит настоящее
     # от постороннего (см. докстрока `_axis_envelope`).
-    envelope = _axis_envelope(page)
+    envelope = _axis_envelope(page, correction)
     if envelope is not None:
         inside = [r for r in rooms if _within_envelope(r.polygon_mm, envelope)]
         outside = [r for r in rooms if not _within_envelope(r.polygon_mm, envelope)]
@@ -586,22 +617,47 @@ def parse_page(page) -> tuple:
     return rooms, warnings
 
 
-def parse_document(doc) -> tuple:
+def parse_document(doc, on_progress=None) -> tuple:
     """Разбор всего комплекта по FLOOR_PLANS. `doc` — уже открытый
-    `fitz.Document` (см. `load()`). Возвращает (список Room, предупреждения)."""
+    `fitz.Document` (см. `load()`). `on_progress(номер_листа, разобрано,
+    всего)` — необязательный колбэк, вызывается после разбора КАЖДОГО
+    уникального листа (тяжёлая часть — само чтение геометрии PDF, секунды
+    на лист; листы, общие для нескольких этажей типового плана,
+    разбираются один раз и колбэк для них не повторяется) — единственный
+    практичный способ показать прогресс долгой загрузки (2026-08-31,
+    прямой запрос пользователя: "сколько ещё ждать"). `разобрано`/`всего`
+    — счётчик и общее число УНИКАЛЬНЫХ листов (не то же самое, что номер
+    листа в PDF: страниц в файле может быть 22, а уникальных листов планов
+    среди них — 12, страницы вразнобой — 3, 5, 8, 15… «номер листа» и
+    «всего» разной природы, показывать их как N из M нельзя, ровно это и
+    спутало пользователя на первой версии прогресс-бара). Возвращает
+    (список Room, предупреждения).
+
+    Каждый лист разбирается с поправкой (`_page_shift_correction`) под
+    каноническую сетку осей объекта (`extract_axis_grid`) — иначе
+    геометрия нетиповых листов (подземный этаж, 1-2 этажи) ложится в
+    координаты СВОЕГО угла застройки, а не в общую сетку (см. докстроку
+    `_page_shift_correction`)."""
     all_rooms = []
     warnings = []
     page_cache = {}
+    canonical_grid = extract_axis_grid(doc)
+    total_pages = len({plan.page for plan in FLOOR_PLANS})
+    processed = 0
     for plan in FLOOR_PLANS:
         if plan.page not in page_cache:
             page = doc[plan.page - 1]
             try:
-                rooms, page_warnings = parse_page(page)
-                boundary_mm = _page_section_boundary_mm(page)
+                correction = _page_shift_correction(page, canonical_grid)
+                rooms, page_warnings = parse_page(page, correction)
+                boundary_mm = _page_section_boundary_mm(page, correction)
             except PdfRoomsError as e:
                 warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {e.message}")
                 rooms, page_warnings, boundary_mm = [], [], None
             page_cache[plan.page] = (rooms, page_warnings, boundary_mm)
+            processed += 1
+            if on_progress:
+                on_progress(plan.page, processed, total_pages)
         rooms, page_warnings, boundary_mm = page_cache[plan.page]
         for w in page_warnings:
             warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {w}")
@@ -626,6 +682,22 @@ def parse_document(doc) -> tuple:
                     "помещений(-ие) левее границы секций — секция 1 «для "
                     "информации» на этом листе, у этажа её нет, отброшены")
             floor_rooms = [r for r in floor_rooms if _cx(r) >= boundary_mm]
+        # Зеркальный случай (2026-09-01, живая правка пользователя —
+        # выше 8-го этажа у секции 1 ЕСТЬ собственные ярусы: техническое
+        # пространство и выход на кровлю, листы 10 и 11 показывают их
+        # рядом с типовым этажом секции 2 на том же листе): всё ПРАВЕЕ
+        # границы осей секций отбрасывается для единственно-секционных
+        # этажей секции 1.
+        if known_section == "С01" and boundary_mm is not None:
+            def _cx(r):
+                return sum(x for x, _ in r.polygon_mm) / len(r.polygon_mm)
+            excluded = [r for r in floor_rooms if _cx(r) >= boundary_mm]
+            if excluded:
+                warnings.append(
+                    f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
+                    "помещений(-ие) правее границы секций — секция 2 на "
+                    "этом листе относится к другому этажу, отброшены")
+            floor_rooms = [r for r in floor_rooms if _cx(r) < boundary_mm]
         for i, r in enumerate(floor_rooms):
             all_rooms.append(Room(floor=plan.floor, index=i,
                                   polygon_mm=r.polygon_mm, area_m2=r.area_m2,
@@ -734,6 +806,38 @@ _WINDOW_MIN_REPEAT = 2
 # случай на пороге 2 — 15300мм (случайно совпавшая по размеру пара
 # фрагментов кладки в разных концах фасада).
 _WINDOW_MAX_SPAN_MM = 6000
+
+# Ручной довесок окон листа 1 этажа (2026-08-31, прямой запрос
+# пользователя — на плане 16 окон, автоматика находит только 9). Причина
+# не в баге, а в самой природе признака: окно на этом слое отличается от
+# простенка кладки ТОЛЬКО повтором размера (`_WINDOW_MIN_REPEAT`), а у
+# каждого из этих восьми — свой уникальный размер (нежилые помещения
+# первого этажа разной ширины), повтора с чем-либо на листе нет вовсе.
+# Перепробовано четыре других признака (цвет+рост, штриховка остекления
+# рядом, толщина полосы, любой цвет+кластер) — ни один не отделяет окно от
+# простенка, не давая при этом регресса на типовых этажах (там 22 из 24
+# «окон» первого прохода сами оказались тонкими полосами не в 1830мм, как
+# ожидалось, а в 150мм — план, а не фасад, высота окна не рисуется вовсе;
+# см. Docs/backlog.md). Восемь позиций и размеров сняты РУКАМИ:
+# пользователь прислал скриншот с жёлтой разметкой всех 16 окон,
+# координаты жёлтых меток переведены в мм калибровкой по границам чертежа,
+# ширина каждого — по факту ближайшей белой фигуры этого же слоя (кроме
+# последней, в закруглении фасада — там форма проёма кривая, размер
+# приближённый). ЖЁСТКО привязано к этому конкретному листу/экспорту PDF,
+# как и весь остальной модуль (докстрока файла) — не универсальный приём,
+# а роспись одного известного случая, где автоматика доказанно не
+# справляется. (x0, y0, x1, y1) — в тех же выровненных мм-координатах, что
+# и остальная геометрия листа (после `_page_shift_correction`).
+_FLOOR1_MANUAL_WINDOWS_MM = [
+    (-22560, 220, -21875, 370),
+    (-38850, -180, -37730, -30),
+    (-57710, -180, -57350, -30),
+    (-46440, -180, -45430, -30),
+    (-63830, -14180, -63680, -13200),
+    (-38870, -16530, -38280, -16380),
+    (-26980, -16380, -26830, -14880),
+    (-19030, -16530, -17780, -16380),
+]
 _WINDOW_CATEGORY = ("Окна", "Окно (типовое, по узору переплёта)")
 # Высота и отступ окна от отметки этажа — ПРИБЛИЖЕНИЕ, не измерение: в
 # плане (вид сверху) вертикальная привязка не нарисована вовсе, взять её
@@ -887,7 +991,7 @@ def _seg_centroid(poly) -> tuple:
     return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
 
 
-def parse_walls_page(page, rooms: list = None) -> tuple:
+def parse_walls_page(page, rooms: list = None, correction: tuple = (0.0, 0.0)) -> tuple:
     """Стены и перегородки листа, за вычетом легенды материалов, плюс их
     секция (по той же границе подписей осей, что и у помещений — см.
     `_axis_boundary_x`). Возвращает (список словарей, предупреждения).
@@ -901,9 +1005,14 @@ def parse_walls_page(page, rooms: list = None) -> tuple:
     помещения используется и для СВОИХ стен — каждая берёт секцию
     БЛИЖАЙШЕГО помещения листа (см. ниже) — при `None` считается заново
     по слою помещений без разбора врезок и без секций: годится для
-    автономного вызова, не для `parse_walls_document`."""
+    автономного вызова, не для `parse_walls_document`.
+
+    `correction` — см. `_room_polygons`/`_page_shift_correction`: та же
+    поправка, что и у `parse_page` этого листа — иначе стены легли бы в
+    координаты своего угла застройки, а помещения (`rooms`, уже с
+    поправкой из `parse_document`) — в координаты общей сетки осей."""
     scale = _page_scale(page)
-    raw_polys, (shift_x, shift_y) = _room_polygons(page, scale)
+    raw_polys, (shift_x, shift_y) = _room_polygons(page, scale, correction)
     if rooms is None:
         rooms = [(p, None) for p in raw_polys]
     room_polys = [p for p, _ in rooms]
@@ -923,9 +1032,18 @@ def parse_walls_page(page, rooms: list = None) -> tuple:
                      if page.number + 1 == _ROUNDED_CORNER_PAGE
                      else _AXIS_ENVELOPE_MARGIN_MM)
     infill_walls, infill_windows = _exterior_infill_segments(
-        page, scale, shift_x, shift_y, _axis_envelope(page), infill_margin)
+        page, scale, shift_x, shift_y, _axis_envelope(page, correction), infill_margin)
     segments += infill_walls
     segments += infill_windows
+    if page.number + 1 == _ROUNDED_CORNER_PAGE:
+        win_category, win_material = _WINDOW_CATEGORY
+        for x0m, y0m, x1m, y1m in _FLOOR1_MANUAL_WINDOWS_MM:
+            segments.append({
+                "category": win_category, "material": win_material,
+                "polygon_mm": [(x0m, y0m), (x1m, y0m), (x1m, y1m), (x0m, y1m)],
+                "thickness_mm": round(min(x1m - x0m, y1m - y0m), 1),
+                "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
+            })
 
     words = page.get_text("words")
     boundary_pt = _axis_boundary_x(words)
@@ -1000,29 +1118,58 @@ def _floor_slab_polygon(room_polys: list, wall_polys: list) -> Optional[list]:
     return [(round(x, 1), round(y, 1)) for x, y in merged.exterior.coords[:-1]]
 
 
-def parse_walls_document(doc, rooms: list) -> tuple:
+def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
     """Стены, перегородки и плиты перекрытия по тем же листам, что и
     `parse_document`. `rooms` — уже разобранные помещения (тот же вызов) —
     их контуры участвуют в приближении плиты и не разбираются заново.
+    `on_progress` — см. `parse_document`, тот же приём, тот же смысл.
+
+    Поправка сдвига (`_page_shift_correction`) под каноническую сетку осей
+    — та же, что и у `parse_document` для этого же листа: `rooms` уже
+    приехали с ней, стенам этого листа нужна ровно та же поправка, иначе
+    они разойдутся с уже поправленными помещениями (см. докстроку
+    `_page_shift_correction`).
 
     Возвращает (список WallSegment, список Slab, предупреждения)."""
     rooms_by_floor = {}
+    # Лист (а не этаж) — единица кеша ниже: с 2026-09-01 один лист может
+    # обслуживать ДВА разных этажа (технический этаж/кровля секции 1
+    # делят страницу с этажами 9/10 секции 2 — см. `_SPEC`). Список
+    # помещений для `parse_walls_page` (легенда материалов, секция стены
+    # по ближайшему помещению — см. её докстроку) должен быть по ВСЕМУ
+    # листу, не по одному из двух этажей: кеш заполняется один раз, тем
+    # плану, что первым дошёл до этой страницы в порядке `FLOOR_PLANS`, и
+    # если дать ему только СВОИ помещения, у стен второго этажа листа
+    # ближайшее помещение окажется вообще с другого этажа — почти всегда
+    # чужой секции, и они массово потеряют свою секцию и отсеются как
+    # «не эта секция» (2026-09-01, живой найдено пользователем: этажи 9 и
+    # 10 остались без внутренних стен после того, как на их листах завели
+    # техэтаж/кровлю секции 1).
+    rooms_by_page = {}
     for r in rooms:
         rooms_by_floor.setdefault(r.floor, []).append((r.polygon_mm, r.section))
+        rooms_by_page.setdefault(r.page, []).append((r.polygon_mm, r.section))
 
     all_walls = []
     all_slabs = []
     warnings = []
     page_cache = {}
+    canonical_grid = extract_axis_grid(doc)
+    total_pages = len({plan.page for plan in FLOOR_PLANS})
+    processed = 0
     for plan in FLOOR_PLANS:
         if plan.page not in page_cache:
             page = doc[plan.page - 1]
             try:
+                correction = _page_shift_correction(page, canonical_grid)
                 page_cache[plan.page] = parse_walls_page(
-                    page, rooms_by_floor.get(plan.floor) or [])
+                    page, rooms_by_page.get(plan.page) or [], correction)
             except PdfRoomsError as e:
                 warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {e.message}")
                 page_cache[plan.page] = ([], [])
+            processed += 1
+            if on_progress:
+                on_progress(plan.page, processed, total_pages)
         segments, page_warnings = page_cache[plan.page]
         for w in page_warnings:
             warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {w}")
@@ -1041,6 +1188,16 @@ def parse_walls_document(doc, rooms: list) -> tuple:
                     "стен(-ы)/перегородок левее границы секций — секция 1 "
                     "«для информации» на этом листе, у этажа её нет, отброшены")
             floor_segments = [s for s in floor_segments if s.get("section") != "С01"]
+        # Зеркальный случай — см. ту же правку в `parse_document` (техническое
+        # пространство и выход на кровлю секции 1, листы 10 и 11).
+        if known_section == "С01":
+            excluded = [s for s in floor_segments if s.get("section") == "С02"]
+            if excluded:
+                warnings.append(
+                    f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
+                    "стен(-ы)/перегородок правее границы секций — секция 2 "
+                    "на этом листе относится к другому этажу, отброшены")
+            floor_segments = [s for s in floor_segments if s.get("section") != "С02"]
         for i, s in enumerate(floor_segments):
             all_walls.append(WallSegment(
                 floor=plan.floor, index=i, page=plan.page,
@@ -1059,7 +1216,8 @@ def parse_walls_document(doc, rooms: list) -> tuple:
     return all_walls, all_slabs, warnings
 
 
-def page_axis_labels(page) -> dict:
+def page_axis_labels(page, correction: tuple = (0.0, 0.0),
+                     bbox: Optional[tuple] = None) -> dict:
     """Подписи осей листа — основных (`_AXIS_RE`, «Ас1») и вспомогательных
     (`_AXIS_AUX_RE`, «Аа», без номера секции) — в тех же выровненных мм-
     координатах, что и контуры помещений (`_room_polygons` — тот же сдвиг,
@@ -1072,9 +1230,25 @@ def page_axis_labels(page) -> dict:
     Потребителю, которому нужны СТРОГО основные оси с номером секции
     (`app/pdf_import._apply_axis_grid` — привязка секции к осям), это не
     мешает: он сам заново проверяет подпись через `_AXIS_RE` и молча
-    пропускает вспомогательные — они у него не участвуют."""
+    пропускает вспомогательные — они у него не участвуют.
+
+    `correction` по умолчанию (0, 0) — НАМЕРЕННО: `_page_shift_correction`
+    сам вызывает эту функцию БЕЗ поправки, чтобы измерить расхождение
+    подписи на листе с каноническим значением сетки (см. её докстроку) —
+    передать сюда уже готовую поправку значило бы сравнивать поправленное
+    само с собой.
+
+    `bbox` — (x0, x1, y0, y1) в тех же мм-координатах: вхождение подписи
+    ВНЕ этого охвата не участвует вовсе, даже в усреднении с другими
+    вхождениями ТОЙ ЖЕ подписи. Нужен `_page_shift_correction` (см. её
+    докстроку) — на листе 1 этажа подпись «Ас1» напечатана ДВАЖДЫ, второй
+    раз на ~40м ниже реального плана (2026-08-31, живой найдено
+    пользователем при проверке применённой поправки — подземный этаж лёгся
+    ровно, 1 этаж нет), и усреднение обоих вхождений давало не позицию оси,
+    а произвольную точку между планом и посторонним содержимым листа.
+    По умолчанию `None` — не ограничивает ничего, как раньше."""
     scale = _page_scale(page)
-    _, (shift_x, shift_y) = _room_polygons(page, scale)
+    _, (shift_x, shift_y) = _room_polygons(page, scale, correction)
     H = page.rect.height
     buckets = {}
     for w in page.get_text("words"):
@@ -1085,10 +1259,62 @@ def page_axis_labels(page) -> dict:
         направление = "x" if m.group(1).isdigit() else "y"
         x_mm = w[0] * PT_TO_MM * scale - shift_x
         y_mm = (H - w[1]) * PT_TO_MM * scale - shift_y
+        if bbox is not None:
+            x0, x1, y0, y1 = bbox
+            if not (x0 <= x_mm <= x1 and y0 <= y_mm <= y1):
+                continue
         координата = x_mm if направление == "x" else y_mm
         buckets.setdefault(label, (направление, []))[1].append(координата)
     return {label: (направление, sum(coords) / len(coords))
             for label, (направление, coords) in buckets.items()}
+
+
+def _page_shift_correction(page, canonical_grid: dict) -> tuple:
+    """Поправка сдвига листа под каноническую сетку осей объекта
+    (`extract_axis_grid`, с типового листа) — для листов, чей верхний
+    правый угол застройки физически ДРУГАЯ точка (подземный этаж, 1-2
+    этажи — шире/уже типовой башни: парковка, вестибюль, см. докстроку
+    `extract_axis_grid`). Без неё их геометрия ложится в координаты
+    СВОЕГО угла: оси между этажами совпадают (сетка ОДНА на объект), а
+    стены/помещения этих листов — нет (2026-08-31, увидено пользователем
+    на модели вживую — подземный этаж заметно сдвинут против остальных).
+
+    Подписи осей — общий для ВСЕХ листов физический ориентир (одна и та
+    же ось на любом этаже — одна и та же координата здания). Расхождение
+    координаты ОДНОЙ И ТОЙ ЖЕ подписи на этом листе (свой, НЕПОПРАВЛЕННЫЙ
+    сдвиг — `page_axis_labels` без коррекции) и в канонической сетке —
+    точная поправка, не подбор на глаз по чертежу. Медиана по всем
+    совпавшим подписям одного направления — устойчива к редкой ошибке
+    распознавания одной подписи. Возвращает (dx, dy) — ПРИБАВИТЬ к сдвигу
+    листа (`_room_polygons`); (0.0, 0.0), если сверяться не с чем (пустая
+    каноническая сетка или на листе не нашлось ни одной общей подписи —
+    типовые листы, чей сдвиг и есть источник канонической сетки, сюда
+    обычно попадают с пустым результатом каждого списка ниже).
+
+    Подписи ищутся ТОЛЬКО рядом с реальным контуром помещений листа
+    (`bbox` у `page_axis_labels`, тот же допуск `_AXIS_ENVELOPE_MARGIN_MM`,
+    что и у `_axis_envelope`) — иначе повторное вхождение той же подписи
+    в постороннем месте листа (найдено на этаже 1 — см. докстроку
+    `page_axis_labels`) усредняется в мусор вместе с настоящим."""
+    if not canonical_grid:
+        return 0.0, 0.0
+    scale = _page_scale(page)
+    polys, _ = _room_polygons(page, scale)
+    bbox = None
+    if polys:
+        xs = [x for poly in polys for x, _ in poly]
+        ys = [y for poly in polys for _, y in poly]
+        bbox = (min(xs) - _AXIS_ENVELOPE_MARGIN_MM, max(xs) + _AXIS_ENVELOPE_MARGIN_MM,
+                min(ys) - _AXIS_ENVELOPE_MARGIN_MM, max(ys) + _AXIS_ENVELOPE_MARGIN_MM)
+    own = page_axis_labels(page, bbox=bbox)
+    by_dir = {"x": [], "y": []}
+    for label, (направление, coord) in own.items():
+        canon = canonical_grid.get(label)
+        if canon is None or canon[0] != направление:
+            continue
+        by_dir[направление].append(coord - canon[1])
+    return (median(by_dir["x"]) if by_dir["x"] else 0.0,
+            median(by_dir["y"]) if by_dir["y"] else 0.0)
 
 
 def extract_axis_grid(doc) -> dict:
