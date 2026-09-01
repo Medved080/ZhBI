@@ -43,14 +43,25 @@ Revit, категорией `"Помещение"` и СВОИМ раздело�
 """
 
 import json
+import threading
 import uuid
 
 from app import blocks as blocks_mod
+from app import db as db_mod
 from app import pdf_rooms
 from app.blocks import BlockError
 
 _PENDING = {}
 _PENDING_LIMIT = 3
+
+# Задачи разбора PDF в фоновом потоке (2026-08-31, прогресс-бар — сам
+# разбор занимает ~30с, отдельный запрос столько не держат). Тот же приём
+# ключ-значение в памяти, что и _PENDING, но недолгоживущий: запись нужна
+# только на время «Разбираю…», после готовности результат уходит в
+# _PENDING по своему токену, а сама задача остаётся в _JOBS лишь для того,
+# чтобы клиент, опрашивающий её, увидел финальный статус разок-другой.
+_JOBS = {}
+_JOBS_LIMIT = 5
 
 
 class PdfImportError(Exception):
@@ -307,15 +318,36 @@ def build_rows(rooms: list, floors: dict, section_ids: dict, filename: str = Non
     return rows
 
 
-def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
+def analyze(conn, object_id: int, data: bytes, filename: str = None,
+            on_progress=None) -> dict:
     """Фаза 1: разбор файла и сверка. В БД не пишет ничего — даже
-    справочники секций/этажей, они заводятся только в apply()."""
+    справочники секций/этажей, они заводятся только в apply().
+
+    `on_progress(этап, номер_листа, разобрано, всего)` — необязательный
+    колбэк для прогресс-бара (2026-08-31, запрос пользователя «сколько ещё
+    ждать»): вызывается после каждого уникального листа обеих тяжёлых
+    стадий разбора (`pdf_rooms.parse_document`/`parse_walls_document`, см.
+    их докстроки — почему по листам, а не по этажам, и почему
+    `номер_листа` и `всего` разной природы — путать их в одном «N из M»
+    нельзя, первая версия прогресс-бара так и делала и запутала
+    пользователя). `extract_axis_grid` в колбэк не попадает — доли секунды
+    на фоне ~30с двух стадий выше."""
     doc = pdf_rooms.load(data)
-    rooms, room_warnings = pdf_rooms.parse_document(doc)
+
+    def _rooms_progress(page_number, processed, total):
+        if on_progress:
+            on_progress("Разбираю помещения", page_number, processed, total)
+
+    def _walls_progress(page_number, processed, total):
+        if on_progress:
+            on_progress("Разбираю стены и перекрытия", page_number, processed, total)
+
+    rooms, room_warnings = pdf_rooms.parse_document(doc, on_progress=_rooms_progress)
     if not rooms:
         raise PdfImportError(422, "В файле не нашлось ни одного помещения — "
                              "проверьте, тот ли это комплект чертежей.")
-    walls, slabs, wall_warnings = pdf_rooms.parse_walls_document(doc, rooms)
+    walls, slabs, wall_warnings = pdf_rooms.parse_walls_document(
+        doc, rooms, on_progress=_walls_progress)
     axis_grid = pdf_rooms.extract_axis_grid(doc)
     parse_warnings = room_warnings + wall_warnings
 
@@ -513,3 +545,73 @@ def get_pending(token: str) -> dict:
 
 def forget_pending(token: str) -> None:
     _PENDING.pop(token, None)
+
+
+def _run_analyze_job(job_id: str, object_id: int, data: bytes, filename: str) -> None:
+    """Тело фонового потока — своё соединение с БД, своё целиком (не
+    расшаривается с потоком запроса, см. прецедент `app/activity.py`,
+    `_worker`/`_run`): `analyze()` только читает, но sqlite3-соединение
+    из другого потока использовать нельзя (`check_same_thread`)."""
+    job = _JOBS[job_id]
+
+    def on_progress(stage, page_number, processed, total):
+        job["stage"] = stage
+        job["page_number"] = page_number
+        job["page"] = processed
+        job["total"] = total
+
+    conn = db_mod.get_connection()
+    try:
+        analysis = analyze(conn, object_id, data, filename, on_progress=on_progress)
+    except (PdfImportError, pdf_rooms.PdfRoomsError) as e:
+        job["status"] = "error"
+        job["error"] = e.message
+        job["error_status"] = getattr(e, "status_code", 422)
+        return
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = "Внутренняя ошибка разбора: %s" % e
+        job["error_status"] = 500
+        return
+    finally:
+        conn.close()
+
+    token = remember_pending(analysis)
+    job["status"] = "done"
+    job["result"] = {
+        "token": token,
+        "object_id": object_id,
+        "object_name": analysis["object_name"],
+        "total_rooms": analysis["total_rooms"],
+        "total_walls": analysis["total_walls"],
+        "total_windows": analysis["total_windows"],
+        "total_slabs": analysis["total_slabs"],
+        "new": analysis["new"],
+        "unchanged": analysis["unchanged"],
+        "retiring": analysis["retiring"],
+        "by_floor": analysis["by_floor"],
+        "warnings": analysis["warnings"],
+    }
+
+
+def start_analyze_job(object_id: int, data: bytes, filename: str = None) -> str:
+    """Запускает разбор в фоновом потоке, возвращает идентификатор задачи
+    немедленно — файл уже прочитан (`data`) вызывающим кодом ДО этого
+    вызова, пока соединение и `UploadFile` ещё живы в потоке запроса."""
+    job_id = uuid.uuid4().hex
+    _JOBS[job_id] = {"status": "running", "stage": "Открываю файл",
+                     "page_number": None, "page": 0, "total": 0}
+    while len(_JOBS) > _JOBS_LIMIT:
+        _JOBS.pop(next(iter(_JOBS)))
+    threading.Thread(
+        target=_run_analyze_job, args=(job_id, object_id, data, filename), daemon=True,
+    ).start()
+    return job_id
+
+
+def get_job(job_id: str) -> dict:
+    job = _JOBS.get(job_id)
+    if job is None:
+        raise PdfImportError(410, "Задача разбора не найдена (сервер "
+                             "перезапускался или задача устарела). Загрузите файл заново.")
+    return job

@@ -5328,40 +5328,53 @@ def apply_revit(body: RevitApplyIn, user: sqlite3.Row = Depends(get_current_user
     return RevitImportResult(object_id=object_id, **result)
 
 
-@app.post("/import-pdf/analyze")
-def analyze_pdf(
+@app.post("/import-pdf/analyze/start")
+def start_analyze_pdf(
     file: UploadFile = File(...),
     object_id: int = Form(...),
     user: sqlite3.Row = Depends(get_current_user),
 ):
-    """Фаза 1 загрузки помещений из PDF-чертежа: что появится в модели
-    объекта. В БД не пишет ничего — даже справочники секций/этажей."""
+    """Фаза 1 загрузки помещений из PDF, шаг 1: запускает разбор в фоновом
+    потоке (~30с на реальном комплекте) и сразу отдаёт идентификатор задачи
+    — прогресс дальше опрашивается `/import-pdf/analyze/progress/{job_id}`
+    (2026-08-31, запрос пользователя «сколько ещё ждать»). В БД не пишет
+    ничего — даже справочники секций/этажей."""
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "pdf_import", "write")
         data = read_upload_limited(file.file)
-        try:
-            analysis = pdf_import.analyze(conn, object_id, data, file.filename)
-        except (pdf_import.PdfImportError, pdf_rooms.PdfRoomsError) as e:
-            status = getattr(e, "status_code", 422)
-            raise HTTPException(status_code=status, detail=e.message)
     finally:
         conn.close()
 
-    token = pdf_import.remember_pending(analysis)
+    job_id = pdf_import.start_analyze_job(object_id, data, file.filename)
+    return {"job_id": job_id}
+
+
+@app.get("/import-pdf/analyze/progress/{job_id}")
+def analyze_pdf_progress(job_id: str, user: sqlite3.Row = Depends(get_current_user)):
+    """Фаза 1, шаг 2: состояние фоновой задачи разбора. `status` —
+    running/done/error; при `done` в `result` та же сводка, что раньше
+    отдавал синхронный `/import-pdf/analyze` целиком. При `running`:
+    `page_number` — номер листа PDF, который сейчас разбирается (может
+    быть больше `total` — это номер в самом файле, не счётчик), `page`/
+    `total` — счётчик и общее число УЖЕ уникальных листов, которые
+    участвуют в разборе (страниц в файле обычно больше — легенды, разрезы,
+    фасады в счётчик не входят, см. `pdf_rooms.parse_document`)."""
+    try:
+        job = pdf_import.get_job(job_id)
+    except pdf_import.PdfImportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+    if job["status"] == "error":
+        raise HTTPException(status_code=job.get("error_status", 422), detail=job["error"])
+    if job["status"] == "done":
+        return {"status": "done", "result": job["result"]}
     return {
-        "token": token,
-        "object_id": object_id,
-        "object_name": analysis["object_name"],
-        "total_rooms": analysis["total_rooms"],
-        "total_walls": analysis["total_walls"],
-        "total_windows": analysis["total_windows"],
-        "total_slabs": analysis["total_slabs"],
-        "new": analysis["new"],
-        "unchanged": analysis["unchanged"],
-        "retiring": analysis["retiring"],
-        "by_floor": analysis["by_floor"],
-        "warnings": analysis["warnings"],
+        "status": "running",
+        "stage": job["stage"],
+        "page_number": job["page_number"],
+        "page": job["page"],
+        "total": job["total"],
     }
 
 
