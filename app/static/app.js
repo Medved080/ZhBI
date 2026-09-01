@@ -28650,6 +28650,15 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
           + `проверьте предупреждения разбора для этих листов.`;
       }
     }
+    // «Модель МФР» кэширует свои данные по объекту (`openMfrWorkspace` не
+    // перезапрашивает, если объект тот же и данные уже есть) — если вкладку
+    // открывали ДО импорта (например, чтобы убедиться, что там пусто), она
+    // так и осталась бы пустой НАВСЕГДА после успешного применения, даже
+    // если вернуться на неё заново: `objectId` не меняется, значит и повод
+    // перезапросить не появляется сам по себе. Перезапрашиваем здесь же, не
+    // дожидаясь навигации (живой запрос пользователя, «применил — ничего
+    // не появляется», 2026-09-01).
+    if (revitPlanState.objectId === body.object_id) await loadRevitPlanElements();
     pdfImportPending = null;
     pdfReviewBackdrop.classList.remove("open");
     pdfImportBackdrop.classList.remove("open");
