@@ -17,6 +17,9 @@
   как на планах этажей (проверено 2026-09-01: 18 векторных заливок на
   весь лист против 301 картинки) — векторный разбор, как у `pdf_rooms.
   parse_page`, здесь не работает, годного слоя с контуром помещений нет.
+  Используются ОБА листа каждого направления (вторая итерация 2026-09-01):
+  зеркальный отражается и сводится с прямым (`_combine_sheets`) — лишний
+  штрих одного листа гасится вторым.
 
 Метод — сродни компьютерному зрению, не парсингу чертежа:
 1. Вертикальная калибровка (`_vertical_calibration`) — подписи высотных
@@ -37,10 +40,18 @@
    выхода/технического этажа секции 1 (только одна секция в кадре)
    диапазон просто обрезается этой же границей.
 
-Известное упрощение первой версии (не решалось — не совпадает с целью
-«этажи не пустые»): ширина ВКЛЮЧАЕТ балконные выступы (фасад рисует
-видимый силуэт здания, а не грань несущей стены) — на 5-15% шире, чем
-у детального разбора `pdf_rooms`, это ожидаемо для макета, не брак.
+Против «ступенек» там, где стены отвесные (вторая итерация 2026-09-01):
+прогоны закрашенных колонок у'же `_MIN_RUN_MM` выбрасываются (стойки
+ограждений, выносные линии), близкие края этажей прищёлкиваются к
+медиане кластера (`_snap_edges`), листы направления сверяются друг с
+другом (`_combine_sheets`). Ярус, оставшийся вовсе без собственного
+силуэта (кровля надстройки), наследует габарит нижнего яруса той же
+секции.
+
+Известное упрощение (не решалось — не совпадает с целью «этажи не
+пустые»): ширина ВКЛЮЧАЕТ балконные выступы (фасад рисует видимый
+силуэт здания, а не грань несущей стены) — на 5-15% шире, чем у
+детального разбора `pdf_rooms`, это ожидаемо для макета, не брак.
 Глубина (Y) не делится на секции — для граней «А-В»/«Б-А» видимого
 разделения секций 1/2 нет (секция 1 не выступает на эту грань), общая
 глубина отдаётся ОБЕИМ секциям этажа.
@@ -91,13 +102,51 @@ def _parse_elev_mm(text: str):
     return -mm if sign == "-" else mm
 
 
-# (страница PDF, 0-based, клип-прямоугольник в pt) — по одному месту на
-# направление; «1-4» и «А-В» достаточно (обе стороны здания видны на них
-# полностью для этого объекта), «4-1»/«Б-А» не используются — первая
-# версия, см. докстрока модуля.
-_FACADE_X = (20, fitz.Rect(50, 150, 1330, 1400))    # «1-4» — ширина по X
-_FACADE_Y = (20, fitz.Rect(1350, 150, 1790, 1400))  # «А-В» — глубина по Y
+# (страница PDF, 0-based, клип-прямоугольник в pt, зеркален ли лист) —
+# по ДВА листа на направление (2026-09-01, вторая итерация): «1-4»+«4-1»
+# для ширины по X, «А-В»+«Б-А» для глубины по Y. Противоположный фасад
+# зеркален (наблюдатель с другой стороны), его координаты отражаются
+# перед сведением; проекционная ширина силуэта от стороны взгляда не
+# зависит, поэтому листы обязаны сходиться — расхождение сверх
+# `_CROSS_TOL_MM` значит мусор на одном из листов (выносная линия,
+# дорисованный только с одной стороны козырёк), берётся пересечение.
+# Оба листа сведены в одном чертёжном шаблоне и масштабе — вертикальная
+# калибровка общая (`_CALIBRATION_PAGES`).
+_FACADE_X = (
+    (20, fitz.Rect(50, 150, 1330, 1400), False),    # «1-4»
+    (21, fitz.Rect(50, 150, 1330, 1400), True),     # «4-1» — зеркален
+)
+_FACADE_Y = (
+    (20, fitz.Rect(1350, 150, 1790, 1400), False),  # «А-В»
+    (21, fitz.Rect(1350, 150, 1790, 1400), True),   # «Б-А» — зеркален
+)
 _CALIBRATION_PAGES = (20, 21)
+
+# Минимальная ширина непрерывного прогона закрашенных колонок, чтобы
+# считать его частью здания. Уже 300мм стен не бывает; всё, что тоньше —
+# стойки ограждения кровли (~70мм с шагом ~300мм), выносные линии подписей
+# (1px..24мм) — именно они растягивали габарит техэтажей/кровли на метры
+# (Docs/backlog.md 09-01: «+4м глубины у верха башни», «фантомная ширина
+# кровли секции 1»). Проверено на реальном комплекте: у настоящих стен
+# краеобразующие прогоны 517мм и шире — запас больше полутора раз.
+# ВАЖНО: фильтр отбрасывает узкие КУСКИ, а не режет по РАЗРЫВАМ между
+# ними — отклонённый ранее `_GAP_TOLERANCE` (см. backlog 09-01) делал
+# второе и разваливал здание: внутри настоящего контура есть разрывы
+# плотности до 9,5м (середина башни), их трогать нельзя.
+_MIN_RUN_MM = 300
+# Разрывы в прогоне мельче этого (антиалиасинг растровой подложки)
+# склеиваются ДО фильтра по ширине — чтобы один волосяной просвет не
+# разрезал настоящую стену на два «узких» куска.
+_RUN_GAP_PX = 3
+# Края этажей, отличающиеся меньше чем на это, прищёлкиваются к медиане
+# своего кластера (`_snap_edges`) — остаточный пиксельный джиттер (±1px ≈
+# 24мм при zoom=3) убирается, стены типовых этажей строго отвесны.
+# Настоящие архитектурные уступы (цоколь +5,4м, переход секций, кровля)
+# на порядок крупнее и в один кластер не слипаются.
+_SNAP_TOL_MM = 200
+# Допуск сведения двух листов одного направления: в пределах — среднее
+# (гасит ±1px разночтения), сверх — пересечение (мусор одного листа).
+_CROSS_TOL_MM = 300
 
 
 def _vertical_calibration(doc, max_iter=15, final_thresh=2.0):
@@ -150,7 +199,20 @@ def _frame_columns(arr, thresh=250, frame_density=0.9):
     return non_white.mean(axis=0) > frame_density
 
 
-def _band_extent(arr, clip_x0, zoom, row0, row1, frame_cols, density=0.5, thresh=250):
+def _column_runs(mask):
+    """Непрерывные прогоны True в одномерной маске -> [(нач, кон)]
+    включительно, в индексах колонок."""
+    idx = np.where(mask)[0]
+    if len(idx) == 0:
+        return []
+    breaks = np.where(np.diff(idx) > 1)[0]
+    starts = np.concatenate(([idx[0]], idx[breaks + 1]))
+    ends = np.concatenate((idx[breaks], [idx[-1]]))
+    return list(zip(starts.tolist(), ends.tolist()))
+
+
+def _band_extent(arr, clip_x0, zoom, row0, row1, frame_cols, min_run_px,
+                 density=0.5, thresh=250):
     """Левый/правый край непустого содержимого (силуэт здания) в полосе
     [row0,row1) пикселей — «непустое» по плотности закрашенных строк
     внутри полосы (`density`), не по единственному пикселю: тонкие
@@ -169,8 +231,16 @@ def _band_extent(arr, clip_x0, zoom, row0, row1, frame_cols, density=0.5, thresh
     2-24 почти целиком по Y) дают РОВНО одно и то же значение до
     пиксельной точности, а настоящие архитектурные уступы (шире —
     первый этаж/цоколь, у'же — кровля, ступень на переходе секции 1→2)
-    остаются на месте. Ни на одном этаже полоса не опустела при этом
-    пороге — запас есть."""
+    остаются на месте.
+
+    Колонки, прошедшие порог плотности, дополнительно группируются в
+    непрерывные прогоны (с подклейкой волосяных разрывов `_RUN_GAP_PX`);
+    прогоны у'же `min_run_px` выбрасываются целиком — см. `_MIN_RUN_MM`.
+    Возвращается охват ОСТАВШИХСЯ прогонов (min/max), либо `None`, когда
+    в полосе не нашлось ни одного куска здания (ярус без собственного
+    силуэта — например, кровля надстройки, где над парапетом лишь
+    редкие стойки ограждения; такой ярус наследует габарит нижнего,
+    см. `compute_facade_blocks`)."""
     row0 = max(0, row0); row1 = min(arr.shape[0], row1)
     if row1 <= row0:
         return None
@@ -178,10 +248,17 @@ def _band_extent(arr, clip_x0, zoom, row0, row1, frame_cols, density=0.5, thresh
     non_white = np.any(strip < thresh, axis=2)
     frac = non_white.mean(axis=0).copy()
     frac[frame_cols] = 0
-    cols = np.where(frac >= density)[0]
-    if len(cols) == 0:
+    runs = _column_runs(frac >= density)
+    merged = []
+    for s, e in runs:
+        if merged and s - merged[-1][1] - 1 <= _RUN_GAP_PX:
+            merged[-1] = (merged[-1][0], e)
+        else:
+            merged.append((s, e))
+    wide = [(s, e) for s, e in merged if e - s + 1 >= min_run_px]
+    if not wide:
         return None
-    return clip_x0 + cols.min() / zoom, clip_x0 + cols.max() / zoom
+    return clip_x0 + wide[0][0] / zoom, clip_x0 + wide[-1][1] / zoom
 
 
 def _render(doc, page_no, clip, zoom=3):
@@ -189,6 +266,92 @@ def _render(doc, page_no, clip, zoom=3):
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
     arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
     return arr, zoom
+
+
+def _sheet_extents(doc, a, b, floors, page_no, clip, mirrored, scale):
+    """{этаж: (лево, право) в pt | None} по одному фасадному листу.
+    У зеркального листа (противоположный фасад) координаты отражаются
+    (x -> -x): сведение с прямым листом дальше идёт в одном направлении,
+    сдвиг систем координат снимает `_combine_sheets`."""
+    arr, zoom = _render(doc, page_no, clip)
+    frame = _frame_columns(arr)
+    min_run_px = _MIN_RUN_MM * scale * zoom
+    out = {}
+    for plan in floors:
+        y0pt, y1pt = a * plan.z1 + b, a * plan.z0 + b
+        ext = _band_extent(
+            arr, clip.x0, zoom,
+            int((y0pt - clip.y0) * zoom), int((y1pt - clip.y0) * zoom),
+            frame, min_run_px)
+        if ext and mirrored:
+            ext = (-ext[1], -ext[0])
+        out[plan.floor] = ext
+    return out
+
+
+def _combine_sheets(e1, e2, scale):
+    """Сведение двух листов одного направления (прямого и уже отражённого
+    зеркального) в один набор {этаж: (лево, право)}. Системы координат
+    листов различаются переносом — он оценивается медианой поэтажных
+    разностей краёв (устойчиво к паре грязных этажей). Дальше по краям:
+    расхождение в пределах `_CROSS_TOL_MM` — среднее (гасит ±1px
+    разночтения рендера), сверх — пересечение (широкий мусор, дорисованный
+    только на одном листе: козырёк, штриховая скрытая линия). Этаж, взятый
+    лишь одним листом, идёт как есть."""
+    diffs = [
+        e1[f][i] - e2[f][i]
+        for f in e1 if e1.get(f) and e2.get(f) for i in (0, 1)]
+    if not diffs:
+        return dict(e1) if any(e1.values()) else dict(e2)
+    diffs.sort()
+    t = diffs[len(diffs) // 2]
+    tol = _CROSS_TOL_MM * scale
+    out = {}
+    for f in e1:
+        v1, v2 = e1.get(f), e2.get(f)
+        if v2:
+            v2 = (v2[0] + t, v2[1] + t)
+        if v1 and v2:
+            lo = (v1[0] + v2[0]) / 2 if abs(v1[0] - v2[0]) <= tol else max(v1[0], v2[0])
+            hi = (v1[1] + v2[1]) / 2 if abs(v1[1] - v2[1]) <= tol else min(v1[1], v2[1])
+            out[f] = (lo, hi) if lo < hi else v1
+        else:
+            out[f] = v1 or v2
+    return out
+
+
+def _snap_edges(extents, scale):
+    """Прищёлкивание краёв к отвесной прямой: значения одного края
+    (лево и право порознь), различающиеся меньше `_SNAP_TOL_MM`,
+    сводятся к медиане своего кластера — типовые этажи получают
+    математически одинаковый габарит вместо «почти одинакового» с
+    пиксельным джиттером. Кластеры строятся по цепочке соседних
+    отсортированных значений; настоящие уступы (метры) в одну цепочку
+    с типовым краем не попадают."""
+    tol = _SNAP_TOL_MM * scale
+
+    def snap(values):
+        # values: {этаж: значение}; -> {этаж: прищёлкнутое значение}
+        items = sorted(values.items(), key=lambda kv: kv[1])
+        if not items:
+            return {}
+        groups, cur = [], [items[0]]
+        for f, v in items[1:]:
+            if v - cur[-1][1] <= tol:
+                cur.append((f, v))
+            else:
+                groups.append(cur); cur = [(f, v)]
+        groups.append(cur)
+        out = {}
+        for g in groups:
+            med = sorted(v for _, v in g)[len(g) // 2]
+            for f, _ in g:
+                out[f] = med
+        return out
+
+    lo = snap({f: v[0] for f, v in extents.items() if v})
+    hi = snap({f: v[1] for f, v in extents.items() if v})
+    return {f: ((lo[f], hi[f]) if v else None) for f, v in extents.items()}
 
 
 def compute_facade_blocks(doc) -> dict:
@@ -203,25 +366,17 @@ def compute_facade_blocks(doc) -> dict:
             "Не нашлись подписи высотных отметок на фасадных листах — "
             "упрощённый разбор по фасадам недоступен для этого комплекта.")
     a, b = calib
-
-    def y_of(mm):
-        return a * mm + b
-
-    arr_x, zoom_x = _render(doc, *_FACADE_X)
-    frame_x = _frame_columns(arr_x)
-    arr_y, zoom_y = _render(doc, *_FACADE_Y)
-    frame_y = _frame_columns(arr_y)
+    scale = abs(a)  # pt/мм, изотропный чертёж (М1:200 в обоих направлениях)
 
     floors = [p for p in pdf_rooms.FLOOR_PLANS if p.z0 >= 0]
-    raw_x, raw_y = {}, {}
-    for plan in floors:
-        y0pt, y1pt = y_of(plan.z1), y_of(plan.z0)
-        raw_x[plan.floor] = _band_extent(
-            arr_x, _FACADE_X[1].x0, zoom_x,
-            int((y0pt - _FACADE_X[1].y0) * zoom_x), int((y1pt - _FACADE_X[1].y0) * zoom_x), frame_x)
-        raw_y[plan.floor] = _band_extent(
-            arr_y, _FACADE_Y[1].x0, zoom_y,
-            int((y0pt - _FACADE_Y[1].y0) * zoom_y), int((y1pt - _FACADE_Y[1].y0) * zoom_y), frame_y)
+    # По каждому направлению: замер обоих листов -> сведение (зеркальный
+    # уже отражён в `_sheet_extents`) -> прищёлкивание краёв к отвесу.
+    raw_x = _snap_edges(_combine_sheets(
+        _sheet_extents(doc, a, b, floors, *_FACADE_X[0], scale),
+        _sheet_extents(doc, a, b, floors, *_FACADE_X[1], scale), scale), scale)
+    raw_y = _snap_edges(_combine_sheets(
+        _sheet_extents(doc, a, b, floors, *_FACADE_Y[0], scale),
+        _sheet_extents(doc, a, b, floors, *_FACADE_Y[1], scale), scale), scale)
 
     # типовой левый край башни (секция 2) по X — медиана среди заведомо
     # односекционных этажей (не первых/не технических — там силуэт может
@@ -236,7 +391,6 @@ def compute_facade_blocks(doc) -> dict:
             "секций по фасаду.")
     tower_x0 = tower_candidates[len(tower_candidates) // 2]
 
-    scale = abs(a)  # pt/мм, изотропный чертёж (М1:200 в обоих направлениях)
     # Общий якорь по каждому направлению — самая левая точка среди ВСЕХ
     # полос: относительные мм-координаты от него, не только ширина/
     # глубина сами по себе — иначе секции/этажи легли бы друг на друга
@@ -250,8 +404,16 @@ def compute_facade_blocks(doc) -> dict:
     def to_mm_y(pt):
         return (pt - y_anchor) / scale
 
-    result = {}
-    for plan in floors:
+    min_width_pt = _MIN_RUN_MM * scale
+    result = {plan.floor: {} for plan in floors}
+    # Ярус без собственного силуэта в своей секции (после фильтра мелочи
+    # там пусто либо диапазон схлопнулся при обрезке границей секций —
+    # так у кровли надстройки секции 1, где над парапетом только стойки
+    # ограждения) наследует габарит ближайшего НИЖНЕГО яруса той же
+    # секции — кровля повторяет контур того, что под ней. Отсюда обход
+    # этажей по z, а не в порядке `FLOOR_PLANS`.
+    last_by_section = {}
+    for plan in sorted(floors, key=lambda p: p.z0):
         x = raw_x.get(plan.floor)
         y = raw_y.get(plan.floor)
         c01_x = c02_x = None
@@ -262,12 +424,18 @@ def compute_facade_blocks(doc) -> dict:
                 c01_x = (x[0], min(x[1], tower_x0))
             elif plan.section_codes == ("С02",):
                 c02_x = (max(x[0], tower_x0), x[1])
-        row = {}
         for code, xr in (("С01", c01_x), ("С02", c02_x)):
-            if xr is None or y is None or code not in plan.section_codes:
+            if code not in plan.section_codes:
                 continue
-            row[code] = (to_mm_x(xr[0]), to_mm_x(xr[1]), to_mm_y(y[0]), to_mm_y(y[1]))
-        result[plan.floor] = row
+            box = None
+            if xr is not None and y is not None and xr[1] - xr[0] >= min_width_pt:
+                box = (to_mm_x(xr[0]), to_mm_x(xr[1]), to_mm_y(y[0]), to_mm_y(y[1]))
+            if box is None:
+                box = last_by_section.get(code)
+            if box is None:
+                continue
+            result[plan.floor][code] = box
+            last_by_section[code] = box
     return result
 
 
