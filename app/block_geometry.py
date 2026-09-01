@@ -171,6 +171,18 @@ def _level_height(conn, object_id: int, section_id: int, floor, z0: float):
     if idx > 0:
         высота = z0 - отметки[этажи[idx - 1]]
         return (высота, True) if высота > 0 else (None, False)
+    # Секция с ЕДИНСТВЕННЫМ этажом (паркинг подземного этажа — «один блок
+    # без деления», 2026-09-02, упрощённая загрузка по фасадам): соседей в
+    # круге секции нет вовсе — берётся ближайший СВЕРХУ этаж всего объекта
+    # по отметке (для паркинга это 1-й этаж, +0,000 — низ здания и есть
+    # потолок парковки). Помечается как приблизительная: сосед — чужой.
+    row = conn.execute(
+        "SELECT MIN(elevation_mm) AS z FROM object_levels WHERE object_id = ? "
+        "AND elevation_mm > ? AND elevation_suspect = 0",
+        (object_id, z0),
+    ).fetchone()
+    if row and row["z"] is not None and row["z"] - z0 > 0:
+        return row["z"] - z0, True
     return None, False
 
 

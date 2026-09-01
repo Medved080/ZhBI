@@ -92,6 +92,11 @@ def _floor_spec(floor: str) -> tuple:
         return 26, "этаж", "Технический этаж (секция 1)"
     if floor == "кровля (секция 1)":
         return 27, "этаж", "Кровля (секция 1)"
+    # Выход на кровлю секции 2 — ярус только упрощённой загрузки по фасадам
+    # (2026-09-02, `pdf_facade_import._PLAN_ROOF2_FLOOR`): в `FLOOR_PLANS`
+    # его нет, детальный разбор лист 16 не читает (см. `_FACADE_ONLY_LEVELS`).
+    if floor == "кровля (секция 2)":
+        return 28, "этаж", "Кровля (секция 2)"
     return int(floor), "этаж", None
 
 
@@ -160,10 +165,20 @@ def _ensure_catalog(conn, object_id: int) -> tuple:
     return out, section_ids
 
 
+# Ярусы, которых нет в `pdf_rooms.FLOOR_PLANS` (детальный разбор их не
+# читает), но которые заводит упрощённая загрузка по фасадам — отметки по
+# подписям фасадного листа: выход на кровлю секции 2 стоит на верхе
+# техэтажа (+76,800), его кровля «Кровля 2 С2» +78,750, лифтовая головка
+# выше до +79,800 (2026-09-02, живой запрос пользователя; Docs/backlog.md).
+_FACADE_ONLY_LEVELS = {"кровля (секция 2)": (76800, 78750)}
+
+
 def _floor_elevation(floor_label: str) -> tuple:
     for plan in pdf_rooms.FLOOR_PLANS:
         if plan.floor == floor_label:
             return plan.z0, plan.z1
+    if floor_label in _FACADE_ONLY_LEVELS:
+        return _FACADE_ONLY_LEVELS[floor_label]
     raise KeyError(floor_label)
 
 

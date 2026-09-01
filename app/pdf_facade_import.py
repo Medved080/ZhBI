@@ -166,6 +166,35 @@ _INHERIT_FLOORS = {"технический (секция 1)"}
 #    половине; наследовать контур, как техэтаж, ему как раз НЕЛЬЗЯ.
 _LOWER_HALF_FLOORS = {"кровля (секция 1)"}
 
+# Ярусы, которых на фасаде НЕТ или которые растр фасада не берёт (2026-09-02,
+# живой запрос пользователя): их габарит снимается с ПЛАНА — теми же
+# помещениями, что читает детальный разбор (`pdf_rooms.parse_page`), но
+# только с двух листов, а не со всех.
+#  - Подземный этаж (лист 3): фасад начинается с «+0,000», под землёй его
+#    нет; на плане — паркинг (одно помещение «один блок без деления», своя
+#    секция «Паркинг») и подвальные части секций 1/2.
+#  - Выход на кровлю секции 2 (лист 16, три помещения: машинное помещение
+#    лифта, помещение оконечных устройств, лестничная клетка — 65,1 м² по
+#    экспликации): на фасаде надстройка нарисована стенами с точечной
+#    фактурой, растр её не видит (плотность ниже порога даже 0.2 — замерено
+#    по обеим граням), высота — по подписям отметок (`pdf_import.
+#    _FACADE_ONLY_LEVELS`).
+# Координаты плана — общая сетка осей объекта (`extract_axis_grid` +
+# поправка листа); в систему координат фасадного режима они переводятся
+# переносом, снятым по ТИПОВОМУ этажу башни (`_PLAN_TYPICAL_*`): центр
+# габарита помещений секции 2 на плане совмещается с центром её же блока
+# по фасаду. По центрам, не по краям: фасадный габарит включает балконы и
+# на ~1,1 м шире плана по помещениям — совмещение краёв перекосило бы на
+# половину этой разницы. Знак по Y проверен по выходу на кровлю: и на
+# плане (у оси А), и на грани «А-В» (левая часть) он на одной стороне.
+_PLAN_TYPICAL_PAGE, _PLAN_TYPICAL_FLOOR = 12, "12"
+_PLAN_BASEMENT_PAGE, _PLAN_BASEMENT_FLOOR = 3, "подземный"
+_PLAN_ROOF2_PAGE, _PLAN_ROOF2_FLOOR, _PLAN_ROOF2_SECTION = 16, "кровля (секция 2)", "С02"
+# Помещения — внутренний контур; блок по ним расширяется на толщину стены
+# с каждой стороны, как и у детального разбора, где габарит блока идёт по
+# стенам, а не по помещениям.
+_ROOM_WALL_MARGIN_MM = 250
+
 
 def _vertical_calibration(doc, max_iter=15, final_thresh=2.0):
     """(a, b): y_pt = a*z_mm + b — прямая по подписям отметок обеих
@@ -487,12 +516,85 @@ def compute_facade_blocks(doc) -> dict:
     return result
 
 
+def _plan_rooms_canonical(doc, page_no: int, grid: dict) -> list:
+    """Помещения листа (1-based номер, как в `pdf_rooms._SPEC`) в ОБЩЕЙ сетке
+    осей объекта: [(секция, контур_мм)]. Поправка листа (`_page_shift_
+    correction`) выравнивает нетиповые листы по подписям осей; остаток
+    (лист, где помещений мало и «верхний правый угол застройки» — не угол
+    здания: лист 16 с одной надстройкой на весь план кровли) снимается
+    медианой разностей координат ОБЩИХ подписей осей листа и канонической
+    сетки — на листе 16 это ровно (15030, 7630) по всем 45 подписям."""
+    page = doc[page_no - 1]
+    correction = pdf_rooms._page_shift_correction(page, grid)
+    rooms, _warnings = pdf_rooms.parse_page(page, correction)
+    labels = pdf_rooms.page_axis_labels(page, correction)
+    shifts = {}
+    for axis in ("x", "y"):
+        diffs = sorted(
+            labels[k][1] - grid[k][1]
+            for k in labels if k in grid and grid[k][0] == axis == labels[k][0])
+        shifts[axis] = diffs[len(diffs) // 2] if diffs else 0.0
+    return [(r.section, [(x - shifts["x"], y - shifts["y"]) for x, y in r.polygon_mm])
+            for r in rooms]
+
+
+def _bbox(polys: list):
+    pts = [p for poly in polys for p in poly]
+    if not pts:
+        return None
+    return (min(p[0] for p in pts), max(p[0] for p in pts),
+            min(p[1] for p in pts), max(p[1] for p in pts))
+
+
+def compute_plan_blocks(doc, facade_blocks: dict) -> dict:
+    """Ярусы по ПЛАНУ (см. `_PLAN_*`): {этаж: {секция: (x0,x1,y0,y1)}} в
+    системе координат фасадного режима. Пусто, если типовой этаж башни не
+    нашёлся ни на плане, ни по фасаду — тогда переносу не по чему
+    калиброваться, и лучше не добавить ярус, чем поставить его мимо."""
+    tower_f = (facade_blocks.get(_PLAN_TYPICAL_FLOOR) or {}).get(_PLAN_ROOF2_SECTION)
+    if not tower_f:
+        return {}
+    grid = pdf_rooms.extract_axis_grid(doc)
+    typical = _plan_rooms_canonical(doc, _PLAN_TYPICAL_PAGE, grid)
+    tower_c = _bbox([poly for sec, poly in typical if sec == _PLAN_ROOF2_SECTION])
+    if not tower_c:
+        return {}
+    tx = (tower_f[0] + tower_f[1]) / 2 - (tower_c[0] + tower_c[1]) / 2
+    ty = (tower_f[2] + tower_f[3]) / 2 - (tower_c[2] + tower_c[3]) / 2
+    m = _ROOM_WALL_MARGIN_MM
+
+    def to_facade(box):
+        return (box[0] + tx - m, box[1] + tx + m, box[2] + ty - m, box[3] + ty + m)
+
+    out = {}
+    by_section = {}
+    for sec, poly in _plan_rooms_canonical(doc, _PLAN_BASEMENT_PAGE, grid):
+        if sec:
+            by_section.setdefault(sec, []).append(poly)
+    basement = {sec: to_facade(_bbox(polys)) for sec, polys in by_section.items()}
+    if basement:
+        out[_PLAN_BASEMENT_FLOOR] = basement
+    roof = _bbox([poly for sec, poly in _plan_rooms_canonical(doc, _PLAN_ROOF2_PAGE, grid)
+                  if sec == _PLAN_ROOF2_SECTION])
+    if roof:
+        out[_PLAN_ROOF2_FLOOR] = {_PLAN_ROOF2_SECTION: to_facade(roof)}
+    return out
+
+
 def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
     """Фаза 1: разбор фасадов и подсчёт габаритов. В БД не пишет ничего.
     Синхронный (секунды, не десятки секунд детального разбора) — фонового
     потока/прогресса не нужно, см. докстрока `_PENDING`."""
     doc = pdf_rooms.load(data)
-    blocks = compute_facade_blocks(doc)
+    facade = compute_facade_blocks(doc)
+    plan = compute_plan_blocks(doc, facade)
+    # Порядок — снизу вверх: подвал, этажи по фасаду, выход на кровлю.
+    blocks = {}
+    if _PLAN_BASEMENT_FLOOR in plan:
+        blocks[_PLAN_BASEMENT_FLOOR] = plan[_PLAN_BASEMENT_FLOOR]
+    blocks.update(facade)
+    if _PLAN_ROOF2_FLOOR in plan:
+        blocks[_PLAN_ROOF2_FLOOR] = plan[_PLAN_ROOF2_FLOOR]
 
     row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
     object_name = row["name"] if row else ""
