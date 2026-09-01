@@ -26960,6 +26960,7 @@ async function loadRevitPlanElements() {
   // приходят — ключ уже совпадает с новым отбором, и пересборки не
   // происходит. В 3D остаётся один этаж вместо здания.
   mfr3d.key = null;
+  syncMfrFacadesToggle();
   drawRevitPlan(data);
   // Обрезка — не примечание, а брак показа: вырезается произвольный
   // хвост по id, и в 3D это выглядит как дыра в здании. Говорим красным.
@@ -27259,6 +27260,30 @@ function mfrShowAxes() {
 }
 function mfrShowFacades() {
   return document.getElementById("mfr-show-facades").checked;
+}
+
+// Слой «Фасады» осмыслен только на ЦЕЛОМ здании: картинка фасада натянута
+// на полный силуэт блоков, при отборе этажей/секций она висела бы на
+// обрезанном габарите мимо реальных граней (живой запрос пользователя,
+// 2026-09-01). При активном отборе чекбокс гасится и блокируется; желание
+// пользователя запоминается и возвращается со сбросом отбора. Отбор по
+// частям/категориям слой не трогает — набор блоков от них не меняется.
+let mfrFacadesWanted = false;
+function syncMfrFacadesToggle() {
+  const cb = document.getElementById("mfr-show-facades");
+  const отборРежетЗдание =
+    revitPlanState.levels.size > 0 || revitPlanState.sections.size > 0;
+  if (отборРежетЗдание) {
+    if (!cb.disabled) mfrFacadesWanted = cb.checked;
+    cb.checked = false;
+    cb.disabled = true;
+    cb.parentElement.title =
+      "Фасады показываются только на целом здании — сбросьте отбор этажей и секций";
+  } else if (cb.disabled) {
+    cb.disabled = false;
+    cb.checked = mfrFacadesWanted;
+    cb.parentElement.title = "";
+  }
 }
 for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-show-facades"]) {
   document.getElementById(id).addEventListener("change", () => {

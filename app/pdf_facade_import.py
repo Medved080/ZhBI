@@ -148,6 +148,24 @@ _SNAP_TOL_MM = 200
 # (гасит ±1px разночтения), сверх — пересечение (мусор одного листа).
 _CROSS_TOL_MM = 300
 
+# Поправки, снятые с натуры реального комплекта (модуль и так жёстко
+# привязан к нему, см. докстроку): полоса яруса не всегда совпадает с его
+# стенами по высоте (2026-09-01, живой запрос пользователя — «техэтаж
+# первой секции идёт до контуров здания, а выход на кровлю — отдельным
+# параллелепипедом внутри контура»).
+#  - Технический этаж секции 1: стены идут ПО КОНТУРУ здания (проверено
+#    полосой нижних 3м — сплошной прогон, как у этажа 8), но выше них в
+#    той же полосе — кровля с ограждением: плотность на целой полосе
+#    размывается ниже порога, и собственный замер видел бы только выход
+#    на кровлю в середине. Габарит — наследованием от этажа ниже.
+_INHERIT_FLOORS = {"технический (секция 1)"}
+#  - Кровля секции 1: единственный объём яруса — выход на кровлю,
+#    небольшой параллелепипед ВНУТРИ контура; по высоте он занимает
+#    только нижнюю половину полосы (выше — воздух, замерено: в верхней
+#    половине нет ни одного прогона шире фильтра). Меряется по нижней
+#    половине; наследовать контур, как техэтаж, ему как раз НЕЛЬЗЯ.
+_LOWER_HALF_FLOORS = {"кровля (секция 1)"}
+
 
 def _vertical_calibration(doc, max_iter=15, final_thresh=2.0):
     """(a, b): y_pt = a*z_mm + b — прямая по подписям отметок обеих
@@ -212,7 +230,7 @@ def _column_runs(mask):
 
 
 def _band_extent(arr, clip_x0, zoom, row0, row1, frame_cols, min_run_px,
-                 density=0.5, thresh=250):
+                 density=0.5, thresh=250, col_hi=None):
     """Левый/правый край непустого содержимого (силуэт здания) в полосе
     [row0,row1) пикселей — «непустое» по плотности закрашенных строк
     внутри полосы (`density`), не по единственному пикселю: тонкие
@@ -237,10 +255,13 @@ def _band_extent(arr, clip_x0, zoom, row0, row1, frame_cols, min_run_px,
     непрерывные прогоны (с подклейкой волосяных разрывов `_RUN_GAP_PX`);
     прогоны у'же `min_run_px` выбрасываются целиком — см. `_MIN_RUN_MM`.
     Возвращается охват ОСТАВШИХСЯ прогонов (min/max), либо `None`, когда
-    в полосе не нашлось ни одного куска здания (ярус без собственного
-    силуэта — например, кровля надстройки, где над парапетом лишь
-    редкие стойки ограждения; такой ярус наследует габарит нижнего,
-    см. `compute_facade_blocks`)."""
+    в полосе не нашлось ни одного куска здания (такой ярус наследует
+    габарит нижнего, см. `compute_facade_blocks`).
+
+    `col_hi` (колонка, px) — правая граница поиска: колонки правее неё
+    игнорируются. Нужна одно-секционным ярусам подле границы секций
+    (выход на кровлю секции 1): в их высотной полосе стоит и башня
+    соседней секции, без предела min/max перепрыгивал бы на неё."""
     row0 = max(0, row0); row1 = min(arr.shape[0], row1)
     if row1 <= row0:
         return None
@@ -248,6 +269,8 @@ def _band_extent(arr, clip_x0, zoom, row0, row1, frame_cols, min_run_px,
     non_white = np.any(strip < thresh, axis=2)
     frac = non_white.mean(axis=0).copy()
     frac[frame_cols] = 0
+    if col_hi is not None:
+        frac[max(0, int(col_hi)):] = 0
     runs = _column_runs(frac >= density)
     merged = []
     for s, e in runs:
@@ -268,24 +291,29 @@ def _render(doc, page_no, clip, zoom=3):
     return arr, zoom
 
 
-def _sheet_extents(doc, a, b, floors, page_no, clip, mirrored, scale):
-    """{этаж: (лево, право) в pt | None} по одному фасадному листу.
-    У зеркального листа (противоположный фасад) координаты отражаются
-    (x -> -x): сведение с прямым листом дальше идёт в одном направлении,
-    сдвиг систем координат снимает `_combine_sheets`."""
+def _sheet_extents(doc, a, b, bands, page_no, clip, mirrored, scale,
+                   col_hi_pt=None):
+    """{этаж: (лево, право) в pt | None} по одному фасадному листу;
+    `bands` — [(этаж, z0, z1)] с уже применёнными поправками высот
+    (`_LOWER_HALF_FLOORS`). У зеркального листа (противоположный фасад)
+    координаты отражаются (x -> -x): сведение с прямым листом дальше
+    идёт в одном направлении, сдвиг систем координат снимает
+    `_combine_sheets`. `col_hi_pt` — правый предел поиска в pt страницы
+    (только для прямого листа, см. `_band_extent`)."""
     arr, zoom = _render(doc, page_no, clip)
     frame = _frame_columns(arr)
     min_run_px = _MIN_RUN_MM * scale * zoom
+    col_hi = None if col_hi_pt is None else (col_hi_pt - clip.x0) * zoom
     out = {}
-    for plan in floors:
-        y0pt, y1pt = a * plan.z1 + b, a * plan.z0 + b
+    for floor, z0, z1 in bands:
+        y0pt, y1pt = a * z1 + b, a * z0 + b
         ext = _band_extent(
             arr, clip.x0, zoom,
             int((y0pt - clip.y0) * zoom), int((y1pt - clip.y0) * zoom),
-            frame, min_run_px)
+            frame, min_run_px, col_hi=col_hi)
         if ext and mirrored:
             ext = (-ext[1], -ext[0])
-        out[plan.floor] = ext
+        out[floor] = ext
     return out
 
 
@@ -369,14 +397,18 @@ def compute_facade_blocks(doc) -> dict:
     scale = abs(a)  # pt/мм, изотропный чертёж (М1:200 в обоих направлениях)
 
     floors = [p for p in pdf_rooms.FLOOR_PLANS if p.z0 >= 0]
+    bands = [
+        (p.floor, p.z0,
+         (p.z0 + p.z1) / 2 if p.floor in _LOWER_HALF_FLOORS else p.z1)
+        for p in floors if p.floor not in _INHERIT_FLOORS]
     # По каждому направлению: замер обоих листов -> сведение (зеркальный
     # уже отражён в `_sheet_extents`) -> прищёлкивание краёв к отвесу.
     raw_x = _snap_edges(_combine_sheets(
-        _sheet_extents(doc, a, b, floors, *_FACADE_X[0], scale),
-        _sheet_extents(doc, a, b, floors, *_FACADE_X[1], scale), scale), scale)
+        _sheet_extents(doc, a, b, bands, *_FACADE_X[0], scale),
+        _sheet_extents(doc, a, b, bands, *_FACADE_X[1], scale), scale), scale)
     raw_y = _snap_edges(_combine_sheets(
-        _sheet_extents(doc, a, b, floors, *_FACADE_Y[0], scale),
-        _sheet_extents(doc, a, b, floors, *_FACADE_Y[1], scale), scale), scale)
+        _sheet_extents(doc, a, b, bands, *_FACADE_Y[0], scale),
+        _sheet_extents(doc, a, b, bands, *_FACADE_Y[1], scale), scale), scale)
 
     # типовой левый край башни (секция 2) по X — медиана среди заведомо
     # односекционных этажей (не первых/не технических — там силуэт может
@@ -390,6 +422,22 @@ def compute_facade_blocks(doc) -> dict:
             "Не нашлось ни одного типового этажа секции 2 для калибровки границы "
             "секций по фасаду.")
     tower_x0 = tower_candidates[len(tower_candidates) // 2]
+
+    # Повторный замер одно-секционных ярусов секции 1 (выход на кровлю)
+    # В ПРЕДЕЛАХ своей стороны от границы секций: в их высотной полосе
+    # стоит и башня секции 2, без предела extent дотягивался до неё, а
+    # обрезка результата границей секций (`min(x1, tower_x0)`) растягивала
+    # маленький объём до самой башни. Замер по прямому листу — предел в
+    # его системе координат, зеркальному его не передать без лишней
+    # машинерии (сдвиг систем живёт внутри `_combine_sheets`), а листы
+    # для этих ярусов расходились лишь на ±1px.
+    solo_c01 = [bd for bd in bands
+                if next(p for p in floors if p.floor == bd[0]).section_codes == ("С01",)]
+    if solo_c01:
+        limited = _sheet_extents(
+            doc, a, b, solo_c01, *_FACADE_X[0], scale, col_hi_pt=tower_x0)
+        for floor, ext in limited.items():
+            raw_x[floor] = ext
 
     # Общий якорь по каждому направлению — самая левая точка среди ВСЕХ
     # полос: относительные мм-координаты от него, не только ширина/
@@ -406,12 +454,12 @@ def compute_facade_blocks(doc) -> dict:
 
     min_width_pt = _MIN_RUN_MM * scale
     result = {plan.floor: {} for plan in floors}
-    # Ярус без собственного силуэта в своей секции (после фильтра мелочи
-    # там пусто либо диапазон схлопнулся при обрезке границей секций —
-    # так у кровли надстройки секции 1, где над парапетом только стойки
-    # ограждения) наследует габарит ближайшего НИЖНЕГО яруса той же
-    # секции — кровля повторяет контур того, что под ней. Отсюда обход
-    # этажей по z, а не в порядке `FLOOR_PLANS`.
+    # Ярус без собственного замера наследует габарит ближайшего НИЖНЕГО
+    # яруса той же секции: сюда попадают `_INHERIT_FLOORS` (техэтаж
+    # секции 1 — стены по контуру, но собственная полоса размыта, см.
+    # комментарий у константы) и любой ярус, у которого после фильтра
+    # мелочи пусто либо диапазон схлопнулся при обрезке границей секций.
+    # Отсюда обход этажей по z, а не в порядке `FLOOR_PLANS`.
     last_by_section = {}
     for plan in sorted(floors, key=lambda p: p.z0):
         x = raw_x.get(plan.floor)
