@@ -26890,9 +26890,14 @@ async function loadRevitPlanFilters() {
   // При первом открытии показываем один этаж, а не весь объект: без
   // отбора это под тридцать тысяч контуров друг на друге — и медленно, и
   // читать нечего. Дальше человек снимает отбор сам, одной ссылкой.
-  const первый = [...группы.values()][0];
+  // При первом открытии — ВСЁ здание, без отбора по этажу (2026-09-02,
+  // живой запрос пользователя: «при запуске устанавливается фильтр по
+  // самому нижнему этажу, он не нужен — при старте должно быть видно всё
+  // здание»). Раньше здесь выбирался первый непустой этаж — от тяжести
+  // полного отбора на выгрузке Revit в 28 тысяч элементов; предел
+  // `ELEMENTS_LIMIT` и красное «СПИСОК ОБРЕЗАН» на такой случай остаются,
+  // отбор этажа человек ставит сам, одним кликом.
   const этоПервыйЗаход = !revitFilterActive();
-  if (первый && этоПервыйЗаход) for (const id of первый.ids) revitPlanState.levels.add(id);
   // «Помещение» по умолчанию выключено (2026-08-31): мелкие контуры комнат
   // перекрывают стены и друг друга на одном плане, читать эту кашу тяжело.
   // Остальные категории показаны все сразу — отбор ставится тем же кликом
@@ -26903,7 +26908,7 @@ async function loadRevitPlanFilters() {
     }
   }
   markRevitPicks();
-  if (первый) await loadRevitPlanElements();
+  if (группы.size) await loadRevitPlanElements();
   else revitPlanStatus("");
 }
 
@@ -27025,6 +27030,9 @@ const MFR_BLOCK_MARGIN_MM = 200;
 // Те же цвета, что у полосы прогресса в панели блока (.bp-bar-fill) и у
 // точек матрицы «Статусы» (.wp-dot) — одна палитра статуса на весь экран.
 const MFR_CHESS_COLORS = { plan: "var(--color-text-muted)", in_progress: "#E8A33D", done: "#3FA76A" };
+// Та же палитра для 3D (THREE.Color не понимает переменные CSS, нужен
+// конкретный цвет) плюс «off» — блок вне отбора выбранной операции.
+const MFR_CHESS_COLORS_3D = { plan: 0x9aa0a6, in_progress: 0xe8a33d, done: 0x3fa76a, off: 0xbdbdbd };
 
 // Ось «не имеет отношения к отфильтрованной области» (живой запрос
 // пользователя, 2026-08-31 — на всём объекте разом сетка двух секций
@@ -27778,6 +27786,11 @@ async function selectMfrChessWorkType(workTypeId) {
     mfrChessValues = {};
   }
   if (revitPlanState.data) drawRevitPlan(revitPlanState.data);
+  // 3D кэширует сцену по ключу отбора (mfr3d.key) — сама «Шахматка» в него
+  // не входит, иначе смена операции без смены этажа/секции не заставила бы
+  // пересобрать блоки заново. Принудительный сброс, как у чекбоксов слоёв.
+  mfr3d.key = null;
+  applyMfrMode();
 }
 
 // ==================== 3D МОДЕЛИ МФР (2026-08-25) ====================
@@ -27899,6 +27912,37 @@ function mergePositions(geometries, ids, диапазоны) {
   out.setAttribute("position", new THREE.BufferAttribute(позиции, 3));
   out.setAttribute("normal", new THREE.BufferAttribute(нормали, 3));
   return out;
+}
+
+// Подпись процентом над блоком в «Шахматке» (2026-09-02) — билборд-спрайт
+// с canvas-текстурой, тот же приём, что у build3DZoneLabelSprite, но своя
+// функция: у неё своя система координат (mfr3d — ПРЯМАЯ x,y,z, Z вверх,
+// без разворота Y↔-Z, см. camera.up выше) и не нужен цвет по категории.
+const MFR_CHESS_LABEL_WORLD_HEIGHT = 2200;
+function buildMfrChessLabelSprite(text, cx, cy, topZ) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const fontPx = 56;
+  const paddingX = 14, paddingY = 10;
+  ctx.font = `700 ${fontPx}px sans-serif`;
+  canvas.width = Math.ceil(ctx.measureText(text).width) + paddingX * 2;
+  canvas.height = fontPx + paddingY * 2;
+
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#1a1a1a";
+  ctx.textBaseline = "middle";
+  ctx.font = `700 ${fontPx}px sans-serif`;
+  ctx.fillText(text, paddingX, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, depthTest: true, sizeAttenuation: true });
+  const sprite = new THREE.Sprite(material);
+  const worldPerPx = MFR_CHESS_LABEL_WORLD_HEIGHT / canvas.height;
+  sprite.scale.set(canvas.width * worldPerPx, MFR_CHESS_LABEL_WORLD_HEIGHT, 1);
+  sprite.position.set(cx, cy, topZ + MFR_CHESS_LABEL_WORLD_HEIGHT * 0.7);
+  sprite.renderOrder = 6;
+  return sprite;
 }
 
 async function buildMfr3D() {
@@ -28045,15 +28089,23 @@ async function buildMfr3D() {
             depth = b.y1 - b.y0 + MFR_BLOCK_MARGIN_MM * 2,
             height = b.z1 - b.z0;
       if (width <= 0 || depth <= 0 || height <= 0) continue;
+      // «Шахматка» (2026-09-02, живой запрос пользователя): здание целиком
+      // и БЕЗ отбора по этажам видно только в 3D — раскраска 2D-плана одной
+      // раскраской без неё не решала задачу «сравнить блоки между собой».
+      const chess = mfrChessWorkTypeId ? mfrChessValues[b.id] : null;
+      const colorHex = mfrChessWorkTypeId
+        ? (chess ? MFR_CHESS_COLORS_3D[chess.status] : MFR_CHESS_COLORS_3D.off)
+        : 0x2f6fed;
       const geometry = new THREE.BoxGeometry(width, depth, height);
       const material = new THREE.MeshLambertMaterial({
-        color: 0x2f6fed, transparent: true, opacity: 0.16,
+        color: colorHex, transparent: true, opacity: (mfrChessWorkTypeId && chess) ? 0.5 : 0.16,
         depthWrite: false, side: THREE.DoubleSide,
       });
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set((b.x0 - ox) + width / 2 - MFR_BLOCK_MARGIN_MM,
-                        (b.y0 - oy) + depth / 2 - MFR_BLOCK_MARGIN_MM,
-                        (b.z0 - низ) + height / 2);
+      const centerX = (b.x0 - ox) + width / 2 - MFR_BLOCK_MARGIN_MM,
+            centerY = (b.y0 - oy) + depth / 2 - MFR_BLOCK_MARGIN_MM,
+            centerZ = (b.z0 - низ) + height / 2;
+      mesh.position.set(centerX, centerY, centerZ);
       mesh.userData.blockId = b.id;
       mesh.renderOrder = 3;
       scene.add(mesh);
@@ -28062,11 +28114,16 @@ async function buildMfr3D() {
       // (живой запрос пользователя, 2026-09-01).
       const рёбраБлока = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: 0x2f6fed, transparent: true, opacity: 0.95, linewidth: 2 }));
+        new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.95, linewidth: 2 }));
       рёбраБлока.position.copy(mesh.position);
       рёбраБлока.renderOrder = 5;
       scene.add(рёбраБлока);
       верх = Math.max(верх, (b.z1 - низ));
+      if (chess) {
+        const label = buildMfrChessLabelSprite(
+          `${chess.percent}%`, centerX, centerY, centerZ + height / 2);
+        if (label) scene.add(label);
+      }
     }
   }
 
