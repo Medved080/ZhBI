@@ -28764,7 +28764,8 @@ function renderBlkSections() {
   box.innerHTML = `<table class="dict-table"><tr><th>Код</th><th>Подпись</th>
       ${осиКолонка ? "<th>Ось от</th><th>Ось до</th>" : ""}<th></th></tr>
     ${blkSections.map(s => `<tr data-section-row="${s.id}"><td>${escapeHtml(s.code)}</td>
-      <td>${escapeHtml(s.name || "")}</td>
+      <td><input class="blk-inline" data-section-name="${s.id}" value="${escapeHtml(s.name || "")}"
+           placeholder="подпись" title="Подпись секции — правится на месте, сохраняется при уходе из поля"/></td>
       ${осиКолонка ? `<td>${axisSelect("blk-axis-from", s.axis_from)}</td>
         <td>${axisSelect("blk-axis-to", s.axis_to)}</td>` : ""}
       <td><button class="link-btn" data-del-section="${s.id}">удалить</button></td></tr>`).join("")}
@@ -28779,26 +28780,32 @@ function renderBlkSections() {
       await loadBlkSectionsLevels();
     } catch (e) { showToast(e.message, "error"); }
   }));
+  // Всё правится на месте (2026-09-02, живой запрос пользователя: «все
+  // разделы учёта по блокам интерактивно редактируемыми»): подпись —
+  // текстовое поле, оси — выпадающие списки; любое изменение сразу
+  // уходит PATCH'ем, код секции — нет (держит ключи блоков и элементов).
   box.querySelectorAll("[data-section-row]").forEach(row => {
     const id = row.dataset.sectionRow;
     const fromSel = row.querySelector(".blk-axis-from");
     const toSel = row.querySelector(".blk-axis-to");
-    if (!fromSel || !toSel) return;
+    const nameInput = row.querySelector("[data-section-name]");
     const save = async () => {
       const секция = blkSections.find(s => String(s.id) === String(id));
       try {
         await api(`/objects/${state.objectId}/sections/${id}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            name: секция.name || секция.code,
-            axis_from: fromSel.value || null, axis_to: toSel.value || null,
+            name: (nameInput && nameInput.value.trim()) || секция.name || секция.code,
+            axis_from: fromSel ? (fromSel.value || null) : секция.axis_from,
+            axis_to: toSel ? (toSel.value || null) : секция.axis_to,
           }),
         });
         await loadBlkSectionsLevels();
       } catch (e) { showToast(e.message, "error"); await loadBlkSectionsLevels(); }
     };
-    fromSel.addEventListener("change", save);
-    toSel.addEventListener("change", save);
+    if (fromSel) fromSel.addEventListener("change", save);
+    if (toSel) toSel.addEventListener("change", save);
+    if (nameInput) nameInput.addEventListener("change", save);
   });
 }
 
@@ -28823,11 +28830,35 @@ function renderBlkLevels() {
     box.innerHTML = '<div class="hint-text">Этажей ещё нет.</div>';
     return;
   }
-  box.innerHTML = `<table class="dict-table"><tr><th>Этаж</th><th>Вид</th><th>Отметка, мм</th><th></th></tr>
-    ${blkLevels.map(l => `<tr><td>${escapeHtml(l.name || l.key)}</td><td>${escapeHtml(l.kind)}</td>
-      <td class="num">${l.elevation_mm != null ? l.elevation_mm : "—"}</td>
+  // Подпись, отметка и высота — на месте (2026-09-02, живой запрос
+  // пользователя: «…в том числе высоты этажей»); сохраняются при уходе
+  // из поля. Пустая высота — «неизвестна», блок считается до следующего
+  // этажа секции (Docs/TZ.md, «Явная высота этажа»); стереть уже
+  // записанную нельзя — только заменить.
+  box.innerHTML = `<table class="dict-table"><tr><th>Этаж</th><th>Вид</th><th>Отметка, мм</th><th>Высота, мм</th><th></th></tr>
+    ${blkLevels.map(l => `<tr data-level-row="${l.id}">
+      <td><input class="blk-inline" data-level-field="name" value="${escapeHtml(l.name || l.key)}"/></td>
+      <td>${escapeHtml(l.kind)}</td>
+      <td class="num"><input class="blk-inline num" type="number" step="1" data-level-field="elevation_mm"
+           value="${l.elevation_mm != null ? l.elevation_mm : ""}" placeholder="—"/></td>
+      <td class="num"><input class="blk-inline num" type="number" step="1" min="1" data-level-field="height_mm"
+           value="${l.height_mm != null ? l.height_mm : ""}" placeholder="по соседям"/></td>
       <td><button class="link-btn" data-del-level="${l.id}">удалить</button></td></tr>`).join("")}
   </table>`;
+  box.querySelectorAll("[data-level-row] [data-level-field]").forEach(inp => inp.addEventListener("change", async () => {
+    const id = inp.closest("[data-level-row]").dataset.levelRow;
+    const field = inp.dataset.levelField;
+    const raw = inp.value.trim();
+    if (field !== "name" && raw !== "" && !Number.isFinite(Number(raw))) { showToast("Нужно число, мм", "error"); return; }
+    if (field !== "name" && raw === "") { await loadBlkSectionsLevels(); return; }   // пустое не пишем
+    const body = { [field]: field === "name" ? raw : Number(raw) };
+    try {
+      await api(`/objects/${state.objectId}/levels/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      await loadBlkSectionsLevels();
+    } catch (e) { showToast(e.message, "error"); await loadBlkSectionsLevels(); }
+  }));
   box.querySelectorAll("[data-del-level]").forEach(btn => btn.addEventListener("click", async () => {
     if (!confirm("Удалить этаж?")) return;
     try {
@@ -28907,10 +28938,54 @@ function renderBlkMatrix() {
       return `<td class="blk-cell${on ? " on" : ""}" data-sec="${s.id}" data-lvl="${l.id}">${on ? "✓" : "—"}</td>`;
     }).join("")}
   </tr>`).join("");
+  // Геометрия блоков — таблица под матрицей (2026-09-02, живой запрос
+  // пользователя: «…в том числе координаты вершин блоков»): четыре
+  // координаты прямоугольника блока в общей сетке осей объекта, мм.
+  // Пусто — блок считается по осям секции (или как загрузился из PDF);
+  // все четыре заполнены — прямая геометрия поверх; «по осям» стирает.
+  // Правка любой из четырёх сохраняется, когда заполнены все.
+  const порядок = [...blkBlocks].sort((a, b) => (a.level_sort - b.level_sort) || String(a.section_code).localeCompare(String(b.section_code)));
+  const геоСтроки = порядок.map(b => {
+    const v = k => (b[k] != null ? Math.round(b[k]) : "");
+    return `<tr data-block-geo="${b.id}">
+      <td>${escapeHtml(b.level_name || b.level_key)}</td><td>${escapeHtml(b.section_code)}</td>
+      ${["x0", "x1", "y0", "y1"].map(k => `<td class="num"><input class="blk-inline num" type="number" step="1"
+         data-geo="${k}" value="${v(k)}" placeholder="—"/></td>`).join("")}
+      <td>${b.x0 != null ? `<button class="link-btn" data-geo-reset="${b.id}">по осям</button>` : ""}</td></tr>`;
+  }).join("");
   box.innerHTML = `<table id="blk-matrix-table">
     <thead><tr><th class="blk-row-name">Этаж \\ Секция</th>
       ${blkSections.map(s => `<th>${escapeHtml(s.code)}</th>`).join("")}</tr></thead>
-    <tbody>${rows}</tbody></table>`;
+    <tbody>${rows}</tbody></table>
+    ${blkBlocks.length ? `<h4 style="margin-top:16px">Геометрия блоков, мм (общая сетка осей объекта)</h4>
+    <div class="hint-text" style="margin-bottom:6px">Пусто — по осям секции или как загрузилось из PDF;
+      заполнены все четыре — прямая геометрия поверх. Сохраняется при уходе из поля.</div>
+    <table class="dict-table"><tr><th>Этаж</th><th>Секция</th><th>x0</th><th>x1</th><th>y0</th><th>y1</th><th></th></tr>
+      ${геоСтроки}</table>` : ""}`;
+  const patchGeo = async (id, body) => {
+    try {
+      await api(`/objects/${state.objectId}/blocks/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      blkBlocks = await api(`/objects/${state.objectId}/blocks`);
+      renderBlkMatrix();
+      revitPlanState.blocksData = [];   // «Модель МФР» перечитает геометрию при следующем показе
+    } catch (e) { showToast(e.message, "error"); }
+  };
+  box.querySelectorAll("[data-block-geo] [data-geo]").forEach(inp => inp.addEventListener("change", async () => {
+    const row = inp.closest("[data-block-geo]");
+    const vals = {};
+    for (const k of ["x0", "x1", "y0", "y1"]) {
+      const raw = row.querySelector(`[data-geo="${k}"]`).value.trim();
+      if (raw === "") return;   // ждём, пока заполнят все четыре
+      if (!Number.isFinite(Number(raw))) { showToast("Нужно число, мм", "error"); return; }
+      vals[k] = Number(raw);
+    }
+    await patchGeo(row.dataset.blockGeo, vals);
+  }));
+  box.querySelectorAll("[data-geo-reset]").forEach(btn => btn.addEventListener("click", async () => {
+    await patchGeo(btn.dataset.geoReset, { x0: null, x1: null, y0: null, y1: null });
+  }));
   box.querySelectorAll("td.blk-cell").forEach(td => td.addEventListener("click", async () => {
     const sectionId = Number(td.dataset.sec), levelId = Number(td.dataset.lvl);
     const on = td.classList.contains("on");

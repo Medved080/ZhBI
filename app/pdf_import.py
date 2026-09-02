@@ -517,19 +517,35 @@ def _apply_parking_block(conn, object_id: int, rooms: list, axis_grid: dict,
     from app import pdf_facade_import  # локально: тот модуль импортирует этот
     basement = [(r.section, r.polygon_mm) for r in rooms if r.floor == "подземный"]
     level = floors.get("подземный")
-    sid = section_ids.get(pdf_rooms._PARKING_SECTION)
-    if not basement or not level or not sid:
+    if not basement or not level:
         return
     boxes = pdf_facade_import._basement_boxes(basement, _sections_boundary_x(axis_grid))
-    box = boxes.get(pdf_rooms._PARKING_SECTION)
-    if not box:
-        return
     m = pdf_facade_import._ROOM_WALL_MARGIN_MM
-    x0, x1, y0, y1 = box
+    parking = boxes.get(pdf_rooms._PARKING_SECTION)
+    if parking:
+        x0, x1, y0, y1 = parking
+        _set_block_geometry(conn, object_id, section_ids[pdf_rooms._PARKING_SECTION], level[0],
+                            (x0 - m, x1 + m, y0, y1 + m))
+    # Рампа — четвёртый блок подземного этажа (2026-09-02, схема
+    # пользователя): секция и блок заводятся здесь же, общая грань с
+    # паркингом справа — его левый край (с запасом), снизу — верх контура.
+    ramp = boxes.get(pdf_rooms._RAMP_SECTION)
+    if ramp and parking:
+        sid = _ensure_section(conn, object_id, pdf_rooms._RAMP_SECTION)
+        try:
+            blocks_mod.create_block(conn, object_id, sid, level[0])
+        except BlockError:
+            pass
+        x0, _x1, y0, y1 = ramp
+        _set_block_geometry(conn, object_id, sid, level[0],
+                            (x0 - m, parking[0] - m, y0, y1 + m))
+
+
+def _set_block_geometry(conn, object_id: int, section_id: int, level_id: int, box: tuple) -> None:
     conn.execute(
         "UPDATE blocks SET x0 = ?, x1 = ?, y0 = ?, y1 = ? "
         "WHERE object_id = ? AND section_id = ? AND level_id = ?",
-        (x0 - m, x1 + m, y0, y1 + m, object_id, sid, level[0]))
+        (*box, object_id, section_id, level_id))
 
 
 def _apply_axis_grid(conn, object_id: int, rooms: list, axis_grid: dict, section_ids: dict) -> None:

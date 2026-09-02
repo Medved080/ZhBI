@@ -201,6 +201,7 @@ _ROOM_WALL_MARGIN_MM = 250
 # не выше верхней грани помещений С02 больше чем на это (толщина стены).
 _BASEMENT_TOP_TOL_MM = 500
 _PARKING_SECTION = pdf_rooms._PARKING_SECTION
+_RAMP_SECTION = pdf_rooms._RAMP_SECTION
 
 
 def _vertical_calibration(doc, max_iter=15, final_thresh=2.0):
@@ -601,6 +602,16 @@ def _basement_boxes(rooms: list, boundary_x) -> dict:
         if not region.is_empty:
             x0, y0, x1, y1 = region.bounds
             out[_PARKING_SECTION] = (x0, x1, max(y0, top), y1)
+    # Рампа (2026-09-02, схема пользователя: четвёртый блок подземного
+    # этажа) — полоса въезда между левым краем секции 1 и «языком» паркинга
+    # (помещениями С01 над контуром), от верха контура здания до верха
+    # этих помещений: на листе 3 это проезд между осями 1с1–4с1 и Ес1–Ба,
+    # без заливки слоя помещений — как помещение не читается, только по
+    # соседям.
+    if above_c01 and _PARKING_SECTION in out:
+        tongue = _bbox(above_c01)
+        if tongue[0] > box_c01[0] + 1000:
+            out[_RAMP_SECTION] = (box_c01[0], tongue[0], top, tongue[3])
     return out
 
 
@@ -616,6 +627,9 @@ def _snap_shared_edges(box_m, sec: str, basement: dict):
         return (x0, seam, y0, top)
     if sec == "С02":
         return (seam, x1, y0, top)
+    if sec == _RAMP_SECTION and _PARKING_SECTION in basement:
+        # общая грань с паркингом справа — его левый край с тем же запасом
+        return (x0, basement[_PARKING_SECTION][0] - _ROOM_WALL_MARGIN_MM, top, y1)
     return (x0, x1, top, y1)
 
 

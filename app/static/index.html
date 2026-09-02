@@ -2547,16 +2547,25 @@
      пользователя): крупнее и без приглушённого цвета подписи, отдельной
      строкой над обычными card-row. */
   .card-block-title { font-size: 16px; font-weight: 600; padding: 2px 0 8px; }
+  /* Поля правки на месте в таблицах «Учёта по блокам» (секции, этажи,
+     геометрия блоков) — компактные, в строку таблицы, без рамки до фокуса. */
+  .blk-inline { width: 100%; min-width: 60px; box-sizing: border-box; padding: 2px 4px; font: inherit;
+    border: 1px solid transparent; border-radius: 4px; background: transparent; }
+  .blk-inline.num { width: 96px; text-align: right; }
+  .blk-inline:hover { border-color: var(--color-border, #ddd); }
+  .blk-inline:focus { border-color: var(--color-primary); background: var(--color-bg, #fff); outline: none; }
   /* Выбранный элемент/блок на плане (app.js, mfrHighlightSelection):
      оранжевая обводка постоянной экранной толщины поверх любой заливки —
      иначе непонятно, чьи свойства в правой панели. Выбранный блок при
      активной «Шахматке» красится своим, более насыщенным цветом статуса
-     вместо общего оранжевого (живой запрос пользователя, 2026-09-02) —
-     JS выставляет --mfr-sel-color на самом элементе, здесь только запасное
-     (обычное) значение, если её нет. */
+     (--mfr-sel-fill) с БЕЛОЙ, а не той же тонной обводкой (--mfr-sel-stroke,
+     живой запрос пользователя, 2026-09-02: «более контрастные грани» —
+     цветной контур того же тона на цветной заливке читался хуже). Обе
+     переменные ставит JS на самом элементе; здесь только запасные
+     (обычные, для клика по элементу вне «Шахматки») значения. */
   #revit-plan-svg .mfr-selected {
-    stroke: var(--mfr-sel-color, #ff6a00) !important; stroke-width: 3px !important; stroke-dasharray: none !important;
-    vector-effect: non-scaling-stroke; fill: var(--mfr-sel-color, #ffb347) !important; fill-opacity: .85 !important;
+    stroke: var(--mfr-sel-stroke, #ff6a00) !important; stroke-width: 3px !important; stroke-dasharray: none !important;
+    vector-effect: non-scaling-stroke; fill: var(--mfr-sel-fill, #ffb347) !important; fill-opacity: .85 !important;
   }
   .card-block h4 .revit-reset { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
   .revit-reset { font-size:11px; color: var(--color-text-muted); text-decoration:none; }

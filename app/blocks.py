@@ -175,7 +175,7 @@ def list_levels(conn, object_id: int) -> list:
         dict(row)
         for row in conn.execute(
             "SELECT id, key, floor, kind, name, elevation_mm, elevation_suspect, "
-            "sort_order FROM object_levels WHERE object_id = ? "
+            "height_mm, sort_order FROM object_levels WHERE object_id = ? "
             "ORDER BY sort_order, floor",
             (object_id,),
         )
@@ -255,7 +255,7 @@ def list_blocks(conn, object_id: int) -> list:
         for row in conn.execute(
             "SELECT b.id, b.section_id, s.code AS section_code, s.name AS section_name, "
             "b.level_id, l.key AS level_key, l.floor, l.kind, l.name AS level_name, "
-            "l.sort_order AS level_sort "
+            "l.sort_order AS level_sort, b.x0, b.x1, b.y0, b.y1 "
             "FROM blocks b "
             "JOIN object_sections s ON s.id = b.section_id "
             "JOIN object_levels l ON l.id = b.level_id "
@@ -264,6 +264,28 @@ def list_blocks(conn, object_id: int) -> list:
             (object_id,),
         )
     ]
+
+
+def update_block_geometry(conn, object_id: int, block_id: int, x0=None, x1=None,
+                          y0=None, y1=None) -> None:
+    """Прямая геометрия блока (`blocks.x0/x1/y0/y1`, Docs/TZ.md «Геометрия
+    блока») руками — экран «Учёт по блокам → Блоки» (2026-09-02, живой
+    запрос пользователя: «все разделы учёта по блокам интерактивно
+    редактируемыми, в том числе координаты вершин блоков»). Либо все
+    четыре числа, либо все пустые — тогда блок снова считается по осям
+    секции; половинчатого состояния не бывает, `block_box` его не поймёт."""
+    values = (x0, x1, y0, y1)
+    given = [v for v in values if v is not None]
+    if given and len(given) != 4:
+        raise BlockError("Нужны все четыре координаты (x0, x1, y0, y1) — или ни одной.")
+    if given and (x1 <= x0 or y1 <= y0):
+        raise BlockError("x1 должен быть больше x0, y1 — больше y0.")
+    cur = conn.execute(
+        "UPDATE blocks SET x0 = ?, x1 = ?, y0 = ?, y1 = ? WHERE id = ? AND object_id = ?",
+        (*values, block_id, object_id))
+    if cur.rowcount == 0:
+        raise BlockError("Блок не найден.")
+    conn.commit()
 
 
 def create_block(conn, object_id: int, section_id: int, level_id: int) -> dict:

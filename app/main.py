@@ -5662,6 +5662,7 @@ class BlockLevelIn(BaseModel):
 class BlockLevelEditIn(BaseModel):
     name: Optional[str] = None
     elevation_mm: Optional[float] = None
+    height_mm: Optional[float] = None
 
 
 @app.get("/objects/{object_id}/levels")
@@ -5699,11 +5700,45 @@ def edit_block_level(object_id: int, level_id: int, body: BlockLevelEditIn,
     try:
         assert_object_feature(conn, user, object_id, "blocks", "write")
         try:
-            blocks_mod.update_level(conn, object_id, level_id, body.name, body.elevation_mm)
+            blocks_mod.update_level(conn, object_id, level_id, body.name, body.elevation_mm,
+                                    body.height_mm)
         except blocks_mod.BlockError as e:
             raise HTTPException(status_code=422, detail=str(e))
     finally:
         conn.close()
+    activity.log("block_level_edit", user=user, entity_type="object", entity_id=object_id,
+                details={"level_id": level_id, "name": body.name,
+                         "elevation_mm": body.elevation_mm, "height_mm": body.height_mm})
+    return {"ok": True}
+
+
+class BlockGeometryIn(BaseModel):
+    """Прямая геометрия блока, мм в общей сетке осей; все четыре или ни
+    одной (тогда — снова по осям секции)."""
+    x0: Optional[float] = None
+    x1: Optional[float] = None
+    y0: Optional[float] = None
+    y1: Optional[float] = None
+
+
+@app.patch("/objects/{object_id}/blocks/{block_id}")
+def edit_block_geometry(object_id: int, block_id: int, body: BlockGeometryIn,
+                        user: sqlite3.Row = Depends(get_current_user)):
+    """Экран «Учёт по блокам → Блоки» (2026-09-02): координаты блока руками
+    поверх вычисленных по осям/загруженных из PDF."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        try:
+            blocks_mod.update_block_geometry(conn, object_id, block_id,
+                                             body.x0, body.x1, body.y0, body.y1)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    activity.log("block_geometry_edit", user=user, entity_type="object", entity_id=object_id,
+                details={"block_id": block_id, "x0": body.x0, "x1": body.x1,
+                         "y0": body.y0, "y1": body.y1})
     return {"ok": True}
 
 
