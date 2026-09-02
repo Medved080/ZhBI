@@ -27356,11 +27356,19 @@ function mfrHighlightSelection() {
   // насыщенным цветом статуса вместо общего MFR_HIGHLIGHT_COLOR (см. выше).
   const chessSel = sel && sel.kind === "block" && mfrChessWorkTypeId ? mfrChessValues[sel.id] : null;
   const boldColor = chessSel ? mfrChessBoldColor(MFR_CHESS_STATUS_HEX[chessSel.status]) : null;
+  // Грань выбранного блока — БЕЛАЯ, а не тот же цвет статуса, что заливка
+  // (живой запрос пользователя, 2026-09-02: «более контрастные грани»):
+  // цветной контур того же тона на цветной заливке читается хуже, особенно
+  // у тусклого серого «план» — белый виден на любом статусе одинаково
+  // чётко. У обычного (не «Шахматка») выделения контур остаётся прежним
+  // оранжевым — там заливка и так не залита цветом статуса.
+  const edgeColor = boldColor ? "#ffffff" : null;
   const svg = document.getElementById("revit-plan-svg");
   if (svg) {
     svg.querySelectorAll(".mfr-selected").forEach((el) => {
       el.classList.remove("mfr-selected");
-      el.style.removeProperty("--mfr-sel-color");
+      el.style.removeProperty("--mfr-sel-fill");
+      el.style.removeProperty("--mfr-sel-stroke");
     });
     if (sel) {
       const el = sel.kind === "element"
@@ -27368,7 +27376,8 @@ function mfrHighlightSelection() {
         : svg.querySelector(`rect[data-block-id="${sel.id}"]`);
       if (el) {
         el.classList.add("mfr-selected");
-        if (boldColor) el.style.setProperty("--mfr-sel-color", boldColor);
+        if (boldColor) el.style.setProperty("--mfr-sel-fill", boldColor);
+        if (edgeColor) el.style.setProperty("--mfr-sel-stroke", edgeColor);
         el.parentNode.appendChild(el);
       }
     }
@@ -27381,6 +27390,7 @@ function mfrHighlightSelection() {
   }
   if (!sel) return;
   const highlightColor = boldColor ? new THREE.Color(boldColor).getHex() : MFR_HIGHLIGHT_COLOR;
+  const highlightEdgeColor = edgeColor ? new THREE.Color(edgeColor).getHex() : MFR_HIGHLIGHT_COLOR;
   const material = new THREE.MeshBasicMaterial({
     color: highlightColor, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
   });
@@ -27408,7 +27418,7 @@ function mfrHighlightSelection() {
   mesh.position.copy(position); mesh.renderOrder = 20;
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(geometry),
-    new THREE.LineBasicMaterial({ color: highlightColor, depthTest: false, transparent: true, opacity: 1 }));
+    new THREE.LineBasicMaterial({ color: highlightEdgeColor, depthTest: false, transparent: true, opacity: 1 }));
   edges.position.copy(position); edges.renderOrder = 21;
   group.add(mesh); group.add(edges);
   mfr3d.scene.add(group);
@@ -27867,7 +27877,7 @@ async function selectMfrChessWorkType(workTypeId) {
 // в вендоренном наборе нет, и вендорить новое без спроса нельзя.
 
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
-                loop: null, key: null, поколение: 0, chessLabels: [] };
+                loop: null, key: null, поколение: 0 };
 
 // Фасады объекта (2026-08-31, живой запрос пользователя) — картинки
 // вырезаны из последних листов PDF-комплекта («Фасад в осях 1-4/4-1/А-В/
@@ -27978,15 +27988,16 @@ function mergePositions(geometries, ids, диапазоны) {
   return out;
 }
 
-// «Наклейка» процентом на блоке в «Шахматке» (2026-09-02, живой запрос
-// пользователя: не точка над крышей, а лицевая грань, на которую смотрит
-// пользователь) — билборд-спрайт с canvas-текстурой, тот же приём, что у
-// build3DZoneLabelSprite, но своя функция: своя система координат (mfr3d —
-// ПРЯМАЯ x,y,z, Z вверх, без разворота Y↔-Z, см. camera.up выше), не нужен
-// цвет по категории, и позиция не фиксирована — её каждый кадр пересчитывает
-// updateMfrChessLabels() по текущей стороне блока, обращённой к камере.
+// «Наклейка» процентом на блоке в «Шахматке» — НЕ билборд-спрайт (тот
+// поворачивается к камере, живой запрос пользователя, 2026-09-02: «как на
+// ЖБИ — наклейки с марками, чётко на поверхности грани параллельно ей,
+// наклейка не поворачивается в сторону пользователя»; см. у ЖБИ
+// collectMarkDecalQuads/buildMergedDecals — та же идея: плоский меш,
+// развёрнутый по нормали грани, а не спрайт). Здесь без атласа и общего
+// буфера — наклеек на объект единицы-десятки (не тысячи меток ЖБИ),
+// склейка не нужна, свой PlaneGeometry на каждую.
 const MFR_CHESS_LABEL_WORLD_HEIGHT = 2200;
-function buildMfrChessLabelSprite(text) {
+function buildMfrChessLabelMesh(text, x, y, z, normal) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const fontPx = 56;
@@ -28003,30 +28014,40 @@ function buildMfrChessLabelSprite(text) {
   ctx.fillText(text, paddingX, canvas.height / 2);
 
   const texture = new THREE.CanvasTexture(canvas);
-  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, sizeAttenuation: true });
-  const sprite = new THREE.Sprite(material);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture, transparent: true, depthTest: true, side: THREE.DoubleSide,
+  });
   const worldPerPx = MFR_CHESS_LABEL_WORLD_HEIGHT / canvas.height;
-  sprite.scale.set(canvas.width * worldPerPx, MFR_CHESS_LABEL_WORLD_HEIGHT, 1);
-  sprite.renderOrder = 6;
-  return sprite;
+  const geometry = new THREE.PlaneGeometry(canvas.width * worldPerPx, MFR_CHESS_LABEL_WORLD_HEIGHT);
+  const mesh = new THREE.Mesh(geometry, material);
+  // PlaneGeometry смотрит локальным +Z при локальном «верх» +Y — базис
+  // (право, верх=мировой Z, нормаль) разворачивает её в плоскость грани,
+  // сохраняя текст читаемым (не вверх ногами и не зеркально) на любой из
+  // четырёх стен: «право» — всегда горизонтальный вектор, ортогональный
+  // нормали (up×normal), «верх» — мировой Z, он и так вертикален и
+  // ортогонален горизонтальной normal, пересчитывать не нужно.
+  const up = new THREE.Vector3(0, 0, 1);
+  const right = new THREE.Vector3().crossVectors(up, normal).normalize();
+  mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, normal));
+  mesh.position.set(x, y, z);
+  mesh.renderOrder = 6;
+  return mesh;
 }
 
-// Пересчитывает позицию каждой «наклейки» на грань блока, обращённую к
-// текущей камере: направление из центра блока к камере, вытянутое до
-// пересечения с поверхностью параллелепипеда (та же арифметика, что у
-// проекции вектора на куб в кубической текстуре — t = 1 / max(|dx|/hx,
-// |dy|/hy, |dz|/hz)), плюс небольшой вынос НАРУЖУ, чтобы не тонуть в
-// полупрозрачной толще блока. Вызывается каждый кадр (`кадр()` ниже) —
-// OrbitControls вращает камеру, и лицевая грань всё время новая.
-function updateMfrChessLabels(camera) {
-  for (const L of mfr3d.chessLabels) {
-    const dx = camera.position.x - L.cx, dy = camera.position.y - L.cy, dz = camera.position.z - L.cz;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    const ux = dx / len, uy = dy / len, uz = dz / len;
-    const t = 1 / Math.max(Math.abs(ux) / L.hx, Math.abs(uy) / L.hy, Math.abs(uz) / L.hz, 1e-6);
-    const вынос = t + Math.min(L.hx, L.hy, L.hz) * 0.05 + 30;
-    L.sprite.position.set(L.cx + ux * вынос, L.cy + uy * вынос, L.cz + uz * вынос);
-  }
+// Направление «наружу» для наклейки — от центра ВСЕГО здания (в плане) к
+// центру блока, снапнутое на ближайшую из 4 стен той же арифметикой
+// проекции на грань куба, что и раньше, но БЕЗ камеры (живой запрос
+// пользователя: наклейка не должна следить за зрителем — фиксируется один
+// раз при сборке сцены, как решение «какая грань блока — внешняя», а не
+// «какая грань сейчас видна»). Блок ровно в центре — вырожденный случай
+// (сам себе центр здания), берём любую сторону.
+function mfrChessOutwardOffset(cx, cy, hx, hy, buildingCx, buildingCy) {
+  let dx = cx - buildingCx, dy = cy - buildingCy;
+  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) dx = 1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const t = 1 / Math.max(Math.abs(ux) / hx, Math.abs(uy) / hy, 1e-6);
+  return { ux, uy, вынос: t + 400 };
 }
 
 async function buildMfr3D() {
@@ -28055,7 +28076,7 @@ async function buildMfr3D() {
     : "Сборка 3D: только габарит блоков (упрощённая загрузка по фасадам)…");
   await ensureThreeLoaded();
   if (моё !== mfr3d.поколение) return;   // нас обогнала более свежая сборка
-  disposeMfr3D();     // счётчик поколений не трогает; chessLabels обнуляет тоже он
+  disposeMfr3D();                        // счётчик поколений он не трогает
   box.innerHTML = "";
 
   const [w, h] = data.size;
@@ -28204,18 +28225,14 @@ async function buildMfr3D() {
       scene.add(рёбраБлока);
       верх = Math.max(верх, (b.z1 - низ));
       if (chess) {
-        // «Наклейка» на ЛИЦЕВОЙ стороне (живой запрос пользователя,
-        // 2026-09-02): не фиксированная точка над крышей, а грань,
-        // обращённая к камере — пересчитывается каждый кадр в
-        // updateMfrChessLabels(), т.к. камера у OrbitControls вращается
-        // вокруг здания. Полуразмеры блока — geometry ещё не повёрнута и
-        // не смещена, поэтому это просто half(width/depth/height).
-        const label = buildMfrChessLabelSprite(`${chess.percent}%`);
-        scene.add(label);
-        mfr3d.chessLabels.push({
-          sprite: label, cx: centerX, cy: centerY, cz: centerZ,
-          hx: width / 2, hy: depth / 2, hz: height / 2,
-        });
+        // «Наклейка» на ВНЕШНЕЙ грани — фиксированная сторона блока
+        // (наружу от центра здания), не билборд и не зависит от камеры.
+        const { ux, uy, вынос } = mfrChessOutwardOffset(
+          centerX, centerY, width / 2, depth / 2, w / 2, h / 2);
+        const decal = buildMfrChessLabelMesh(
+          `${chess.percent}%`, centerX + ux * вынос, centerY + uy * вынос, centerZ,
+          new THREE.Vector3(ux, uy, 0));
+        scene.add(decal);
       }
     }
   }
@@ -28471,7 +28488,6 @@ async function buildMfr3D() {
   const кадр = () => {
     mfr3d.loop = requestAnimationFrame(кадр);
     controls.update();
-    if (mfr3d.chessLabels.length) updateMfrChessLabels(camera);
     renderer.render(scene, camera);
   };
   кадр();
@@ -28551,7 +28567,7 @@ function disposeMfr3D() {
     });
   }
   Object.assign(mfr3d, { scene: null, camera: null, renderer: null,
-                         controls: null, loop: null, key: null, chessLabels: [] });
+                         controls: null, loop: null, key: null });
 }
 
 // ---------- настройка цветовой схемы модели ----------
