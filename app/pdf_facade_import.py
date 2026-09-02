@@ -62,6 +62,9 @@ import uuid
 
 import fitz
 import numpy as np
+from shapely.geometry import Polygon, box
+from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 from . import blocks as blocks_mod
 from . import pdf_import
@@ -194,6 +197,10 @@ _PLAN_ROOF2_PAGE, _PLAN_ROOF2_FLOOR, _PLAN_ROOF2_SECTION = 16, "кровля (с
 # с каждой стороны, как и у детального разбора, где габарит блока идёт по
 # стенам, а не по помещениям.
 _ROOM_WALL_MARGIN_MM = 250
+# Помещение подвала считается «в основном контуре здания», если его верх
+# не выше верхней грани помещений С02 больше чем на это (толщина стены).
+_BASEMENT_TOP_TOL_MM = 500
+_PARKING_SECTION = pdf_rooms._PARKING_SECTION
 
 
 def _vertical_calibration(doc, max_iter=15, final_thresh=2.0):
@@ -546,6 +553,73 @@ def _bbox(polys: list):
             min(p[1] for p in pts), max(p[1] for p in pts))
 
 
+def _basement_boxes(rooms: list, boundary_x) -> dict:
+    """Подземный этаж — ТРИ соседние непересекающиеся области (по плану
+    листа 3, прямое уточнение пользователя 2026-09-02): подвальная часть
+    секции 1, подвальная часть секции 2 и паркинг — правая верхняя часть
+    этажа. Габариты помещений сами по себе пересекаются: коридор подвала
+    тянется под обеими секциями (bbox помещений С02 заходит под С01 на
+    11м), контур паркинга — «клубок» на 989 м² поверх всего этажа. Поэтому:
+    - шов секций — граница осей (та же, что у детального разбора);
+    - верх основного контура здания — верхняя грань помещений С02;
+    - С01/С02 — помещения секции в пределах основного контура, обрезанные
+      швом; помещения С01 ВЫШЕ контура (пандус въезда, тамбуры у него —
+      x −56..−41м, y до +4,2м) относятся к паркингу, он к ним примыкает;
+    - паркинг — всё, что от контура паркинга и этих помещений осталось
+      вне двух подвальных областей секций (`shapely.difference`), с
+      обрезкой снизу верхом контура здания.
+    Возвращает {секция: (x0,x1,y0,y1)} в общей сетке осей, без запаса на
+    стены — общие грани должны совпасть точно, см. `_snap_shared_edges`."""
+    by_sec = {}
+    for sec, poly in rooms:
+        if sec:
+            by_sec.setdefault(sec, []).append(poly)
+    c02 = by_sec.get("С02") or []
+    c01 = by_sec.get("С01") or []
+    if not c02 or not c01 or boundary_x is None:
+        return {}
+    top = _bbox(c02)[3]
+    main_c01 = [p for p in c01 if max(y for _, y in p) <= top + _BASEMENT_TOP_TOL_MM]
+    above_c01 = [p for p in c01 if p not in main_c01]
+    b02 = _bbox(c02)
+    b01 = _bbox(main_c01) if main_c01 else _bbox(c01)
+    box_c02 = (max(b02[0], boundary_x), b02[1], b02[2], top)
+    box_c01 = (b01[0], min(b01[1], boundary_x), b01[2], top)
+    out = {"С01": box_c01, "С02": box_c02}
+
+    parking_polys = (by_sec.get(_PARKING_SECTION) or []) + above_c01
+    if parking_polys:
+        def _polygons(g):
+            if g.geom_type == "Polygon":
+                return [g]
+            return [q for sub in getattr(g, "geoms", []) for q in _polygons(sub)]
+        parts = [q for poly in parking_polys for q in _polygons(make_valid(Polygon(poly)))
+                 if q.area > 0]
+        region = unary_union(parts)
+        for bx in (box_c01, box_c02):
+            region = region.difference(box(bx[0], bx[2], bx[1], bx[3]))
+        if not region.is_empty:
+            x0, y0, x1, y1 = region.bounds
+            out[_PARKING_SECTION] = (x0, x1, max(y0, top), y1)
+    return out
+
+
+def _snap_shared_edges(box_f, sec: str, basement: dict, tx: float, ty: float):
+    """Запас на стену (`_ROOM_WALL_MARGIN_MM`) уже добавлен со всех сторон
+    — на ОБЩИХ гранях трёх областей подвала он дал бы нахлёст в 500мм;
+    общие грани возвращаются точно: шов секций (x) у С01/С02 и верх
+    контура здания (y) у всех трёх. Координаты — фасадного режима
+    (`tx`/`ty` — тот же перенос, что у `to_facade`)."""
+    top = basement["С02"][3] + ty
+    seam = basement["С02"][0] + tx
+    x0, x1, y0, y1 = box_f
+    if sec == "С01":
+        return (x0, seam, y0, top)
+    if sec == "С02":
+        return (seam, x1, y0, top)
+    return (x0, x1, top, y1)
+
+
 def compute_plan_blocks(doc, facade_blocks: dict) -> dict:
     """Ярусы по ПЛАНУ (см. `_PLAN_*`): {этаж: {секция: (x0,x1,y0,y1)}} в
     системе координат фасадного режима. Пусто, если типовой этаж башни не
@@ -567,13 +641,13 @@ def compute_plan_blocks(doc, facade_blocks: dict) -> dict:
         return (box[0] + tx - m, box[1] + tx + m, box[2] + ty - m, box[3] + ty + m)
 
     out = {}
-    by_section = {}
-    for sec, poly in _plan_rooms_canonical(doc, _PLAN_BASEMENT_PAGE, grid):
-        if sec:
-            by_section.setdefault(sec, []).append(poly)
-    basement = {sec: to_facade(_bbox(polys)) for sec, polys in by_section.items()}
+    basement = _basement_boxes(
+        _plan_rooms_canonical(doc, _PLAN_BASEMENT_PAGE, grid),
+        pdf_rooms._page_section_boundary_mm(doc[_PLAN_TYPICAL_PAGE - 1], (0.0, 0.0)))
     if basement:
-        out[_PLAN_BASEMENT_FLOOR] = basement
+        out[_PLAN_BASEMENT_FLOOR] = {
+            sec: _snap_shared_edges(to_facade(box), sec, basement, tx, ty)
+            for sec, box in basement.items()}
     roof = _bbox([poly for sec, poly in _plan_rooms_canonical(doc, _PLAN_ROOF2_PAGE, grid)
                   if sec == _PLAN_ROOF2_SECTION])
     if roof:
