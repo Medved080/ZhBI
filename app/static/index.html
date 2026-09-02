@@ -2507,6 +2507,27 @@
   .revit-pick-on { background: var(--color-accent-soft); font-weight:500;
     border-left-color: var(--color-primary); }
   .revit-pick-on:hover { background: var(--color-accent-soft-hover); }
+  /* «Шахматка» (2026-09-02): свои классы, а не переиспользование
+     .revit-pick — тот управляется общим обработчиком клика #mfr-workspace
+     и общим markRevitPicks() по kind∈{level,section,part,category}, «chess»
+     там не значится, и оба тут же гасили бы подсветку выбора этой строки. */
+  .chess-group { font-weight: 600; font-size: 12px; padding: 5px 8px 2px;
+    color: var(--color-text-muted); }
+  .chess-pick { padding: 4px 8px; font-size: 12px; cursor: pointer;
+    border-bottom: 1px solid var(--color-border-soft); border-left: 4px solid transparent; }
+  .chess-pick:hover { background: var(--color-surface-alt); }
+  .chess-pick-on { background: var(--color-accent-soft); font-weight: 500;
+    border-left-color: var(--color-primary); }
+  .chess-pick-on:hover { background: var(--color-accent-soft-hover); }
+  /* Поле-«текущий выбор» в сайдбаре: только название, БЕЗ иерархии (живой
+     запрос пользователя — путь по дереву в узкое поле не влезал); путь
+     стрелочками — отдельной строкой под названием, мельче и приглушённо.
+     Сам выбор — по клику открывается #mfr-chess-modal-backdrop. */
+  .mfr-chess-current { display: block; width: 100%; text-align: left; font: inherit; cursor: pointer;
+    background: var(--color-surface); border: 1px solid var(--color-border);
+    border-radius: var(--radius); padding: 6px 10px; }
+  .mfr-chess-current:hover { background: var(--color-surface-alt); }
+  #mfr-chess-current-path { margin-top: 2px; font-size: 11px; }
   /* Боковые панели рабочего места МФР — той же природы, что #sidebar:
      та же ширина, фон и граница, чтобы экран не распадался на «наш» и
      «не наш». */
@@ -2712,6 +2733,53 @@
   #report-table tr.total td { font-weight: 700; background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
   .report-toggle { border: none; background: none; cursor: pointer; width: 16px; padding: 0; margin-right: 4px; color: var(--color-text-muted); }
   .report-toggle.empty { visibility: hidden; }
+
+  /* ---- панель блока в «Модели МФР»: иерархия операций «эт/сек» с
+     процентом (app/work_fact.py) ---- */
+  #block-progress-tree { font-size: 12px; }
+  #block-progress-tree .bp-node { font-weight: 600; padding: 6px 0 2px; }
+  #block-progress-tree .bp-op { padding: 3px 0; }
+  #block-progress-tree .bp-op-name { overflow-wrap: anywhere; }
+  #block-progress-tree .bp-op-bar-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+  #block-progress-tree .bp-bar { flex: 1 1 auto; height: 6px; border-radius: 3px;
+    background: var(--color-surface-2); border: 1px solid var(--color-border); overflow: hidden; }
+  #block-progress-tree .bp-bar-fill { height: 100%; background: var(--color-text-muted); }
+  #block-progress-tree .bp-bar-fill.bp-in_progress { background: #E8A33D; }
+  #block-progress-tree .bp-bar-fill.bp-done { background: #3FA76A; }
+  #block-progress-tree .bp-percent { flex: 0 0 auto; color: var(--color-text-muted); min-width: 30px; text-align: right; }
+
+  /* ---- «Настройки»: чекбокс-список операций блока ---- */
+  .block-settings-row { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0;
+    border-bottom: 1px solid var(--color-border); font-size: 13px; }
+  .block-settings-row input { margin-top: 3px; }
+
+  /* ---- «Факт»: список отчётов + ползунки процента по операциям ---- */
+  .bf-layout { display: flex; gap: 16px; }
+  .bf-reports-col { flex: 0 0 220px; }
+  .bf-items-col { flex: 1 1 auto; min-width: 0; }
+  .bf-report-row { padding: 6px 8px; border: 1px solid var(--color-border); border-radius: var(--radius);
+    margin-bottom: 4px; cursor: pointer; font-size: 12px; }
+  .bf-report-row:hover { background: var(--color-surface-2); }
+  .bf-report-row.active { border-color: var(--color-primary); background: var(--color-surface-2); }
+  .bf-item { display: grid; grid-template-columns: 1fr 140px 68px; gap: 8px; align-items: center;
+    padding: 5px 0; border-bottom: 1px solid var(--color-border); font-size: 13px; }
+  .bf-item-name { overflow-wrap: anywhere; }
+  .bf-item input[type=number] { width: 100%; padding: 3px 4px; text-align: right; }
+
+  /* ---- справочник видов работ (вкладка «Виды работ»): дерево со сворачиванием,
+     значения полей — по своим колонкам, а не слеплены в одну строку. ---- */
+  #wt-tree-table { border-collapse: separate; border-spacing: 0; font-size: 12px; width: 100%; }
+  #wt-tree-table th, #wt-tree-table td { padding: 3px 8px;
+    border-bottom: 1px solid var(--color-border); border-left: 1px solid var(--color-border); }
+  #wt-tree-table thead th { position: sticky; top: 0; z-index: 3;
+    background: var(--color-surface-2); box-shadow: inset 0 -1px 0 var(--color-border); text-align: left; }
+  #wt-tree-table td.wt-name, #wt-tree-table th.wt-name {
+    position: sticky; left: 0; z-index: 2; background: var(--color-surface);
+    text-align: left; min-width: 320px; box-shadow: inset -1px 0 0 var(--color-border); }
+  #wt-tree-table thead th.wt-name { z-index: 4; background: var(--color-surface-2); }
+  #wt-tree-table tr.wt-node td { font-weight: 600; background: var(--color-surface-2); }
+  #wt-tree-table td.wt-code, #wt-tree-table td.wt-unit { white-space: nowrap; color: var(--color-text-muted); }
+  #wt-tree-table td.wt-note { color: var(--color-text-muted); font-style: italic; }
 
   /* ---- отчёт «Статус комплектации» ---- */
   /* Плоская таблица по образцу заказчика: строк тысячи, поэтому шапка
@@ -4311,6 +4379,26 @@
         <h4>Категория <a href="#" class="revit-reset" data-reset="categories" hidden>сбросить</a></h4>
         <div id="revit-plan-categories" class="revit-list" style="max-height:24vh"></div>
       </div>
+      <!-- Шахматка (2026-09-02, живой запрос пользователя): выбор ОДНОЙ
+           операции «эт/сек» красит все блоки плана её статусом и подписывает
+           процентом. Поле выбора — БЕЗ иерархии (только название), путь по
+           предкам стрелочками под ним; сам выбор — в отдельном крупном
+           окне с иерархическим списком (узлы-предки заголовками, пустые
+           группы не показываются — только операции, реально запланированные
+           хотя бы для одного блока, app/work_fact.py::used_work_types_tree).
+           Клик по блоку поведения не меняет — карточка справа та же. -->
+      <div class="card-block">
+        <h4>Шахматка</h4>
+        <button type="button" class="mfr-chess-current" id="mfr-chess-open">
+          <div id="mfr-chess-current-name">— выключено —</div>
+          <div id="mfr-chess-current-path" class="hint-text" style="display:none"></div>
+        </button>
+        <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px">
+          <span><i class="wp-dot" style="background:var(--color-text-muted);border-color:var(--color-text-muted)"></i>план</span>
+          <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
+          <span><i class="wp-dot" style="background:#3FA76A;border-color:#3FA76A"></i>выполнено</span>
+        </div>
+      </div>
     </div>
     <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:10px">
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
@@ -4359,6 +4447,11 @@
       <div class="card-block" id="block-card-block" style="display:none">
         <h4>Блок</h4>
         <div id="block-card" class="hint-text"></div>
+        <div class="actions" style="margin:8px 0">
+          <button class="btn btn-sm btn-secondary" id="block-progress-settings-btn">Настройки</button>
+          <button class="btn btn-sm btn-primary" id="block-progress-fact-btn">Факт</button>
+        </div>
+        <div id="block-progress-tree"></div>
       </div>
     </div>
   </div>
@@ -6867,11 +6960,20 @@
       <div class="actions" id="wt-apply-box" style="display:none">
         <button class="btn btn-primary" id="wt-apply">Применить</button>
       </div>
-      <h4>Текущий справочник</h4>
-      <div id="wt-tree-box" style="max-height:38vh; overflow:auto"></div>
+      <div class="blk-add-row" style="justify-content:space-between">
+        <h4 style="margin:0">Текущий справочник</h4>
+        <span>
+          <button class="btn btn-sm btn-secondary" id="wt-expand-all">Развернуть всё</button>
+          <button class="btn btn-sm btn-secondary" id="wt-collapse-all">Свернуть всё</button>
+        </span>
+      </div>
+      <div id="wt-tree-box" style="max-height:50vh; overflow:auto"></div>
     </div>
 
     <div id="blk-tab-progress" class="blk-panel" style="display:none">
+      <p class="hint-text">Операции «эт/сек» сюда больше не проставляются — процент по ним
+        настраивается и вводится в карточке блока («Модель МФР», клик по блоку: кнопки
+        «Настройки» и «Факт»). Здесь остались «сек» и «компл».</p>
       <div class="wp-legend">
         <span><i class="wp-dot" style="background:transparent"></i>план</span>
         <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
@@ -6883,6 +6985,66 @@
 
     <div class="actions">
       <button class="btn btn-secondary" id="blocks-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Настройки: отбор операций «эт/сек», реально идущих на КОНКРЕТНОМ блоке
+     (app/work_fact.py, живой запрос пользователя 2026-09-02) — открывается
+     из карточки блока в «Модели МФР». -->
+<div class="modal-backdrop" id="block-settings-backdrop">
+  <div class="modal wide">
+    <h2>Настройки: операции блока</h2>
+    <p class="hint-text" id="block-settings-hint"></p>
+    <div class="actions" style="margin-bottom:8px">
+      <button class="btn btn-sm btn-secondary" id="block-settings-select-all">Отметить всё</button>
+      <button class="btn btn-sm btn-secondary" id="block-settings-select-none">Снять всё</button>
+    </div>
+    <div id="block-settings-list" style="max-height:50vh; overflow:auto"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-primary" id="block-settings-save">Сохранить</button>
+      <button class="btn btn-secondary" id="block-settings-close">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- Факт: отчёт о фактическом выполнении по блоку (app/work_fact.py) —
+     документ на дату, аналог бумажного отчёта прораба; к любому можно
+     вернуться и исправить зафиксированные цифры. -->
+<div class="modal-backdrop" id="block-fact-backdrop">
+  <div class="modal wide">
+    <h2>Факт: отчёт о выполнении</h2>
+    <div class="bf-layout">
+      <div class="bf-reports-col">
+        <div class="actions" style="margin-bottom:8px">
+          <button class="btn btn-sm btn-primary" id="block-fact-new">Новый отчёт</button>
+        </div>
+        <div id="block-fact-reports-list" style="max-height:52vh; overflow:auto"></div>
+      </div>
+      <div class="bf-items-col">
+        <label>Дата отчёта <input type="date" id="block-fact-date"></label>
+        <div id="block-fact-items" style="max-height:46vh; overflow:auto; margin-top:8px"></div>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-primary" id="block-fact-save">Сохранить</button>
+      <button class="btn btn-secondary" id="block-fact-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- «Шахматка»: выбор операции для раскраски блоков — крупное окно с
+     иерархическим списком (2026-09-02, живой запрос пользователя: поле в
+     сайдбаре слишком узкое для пути по дереву). -->
+<div class="modal-backdrop" id="mfr-chess-modal-backdrop">
+  <div class="modal wide">
+    <h2>Шахматка: выбор операции</h2>
+    <p class="hint-text">Только операции, реально запланированные хотя бы для одного блока
+      объекта — пустые группы не показаны.</p>
+    <div id="mfr-chess-modal-tree" style="max-height:56vh; overflow:auto"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-secondary" id="mfr-chess-modal-off">Выключить раскраску</button>
+      <button class="btn btn-secondary" id="mfr-chess-modal-close">Закрыть</button>
     </div>
   </div>
 </div>

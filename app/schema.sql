@@ -1223,6 +1223,10 @@ CREATE TABLE IF NOT EXISTS work_types (
     code TEXT,
     name TEXT NOT NULL,
     unit TEXT,
+    -- необязательная колонка «Примечание» исходного файла (не у всех строк
+    -- заполнена, не во всех файлах вообще есть) — пояснения вроде «выбрать
+    -- нужную технологию».
+    note TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     -- пропал при перезагрузке справочника — не удаляется, иначе потерялась
     -- бы простановленная по нему история статусов.
@@ -1247,4 +1251,48 @@ CREATE TABLE IF NOT EXISTS work_progress (
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_by INTEGER REFERENCES users (id),
     UNIQUE (work_type_id, block_id, section_id)
+);
+
+-- Процент выполнения по блоку (2026-09-02, живой запрос пользователя) —
+-- НАДСТРОЙКА над `work_progress` для операций «эт/сек» конкретно: для них
+-- План/В работе/Выполнено больше не проставляется кликом-циклом, источник
+-- истины — процент отсюда (см. app/work_progress.py, ADDRESSABLE_UNITS, и
+-- app/work_fact.py). Для «сек»/«компл» ничего не меняется.
+
+-- Отбор операций «эт/сек», реально идущих на КОНКРЕТНОМ блоке — не каждая
+-- операция справочника применима к каждому блоку (не на всех этажах есть,
+-- например, кладка). Отсутствие строк здесь у блока с
+-- `blocks.work_types_configured_at IS NULL` значит «не настраивали, взято
+-- ВСЁ» — так вело себя старое поведение матрицы статусов, отбор его не
+-- меняет, пока форму «Настройки» не сохранили явно хоть раз.
+CREATE TABLE IF NOT EXISTS block_work_types (
+    block_id INTEGER NOT NULL REFERENCES blocks (id) ON DELETE CASCADE,
+    work_type_id INTEGER NOT NULL REFERENCES work_types (id) ON DELETE CASCADE,
+    PRIMARY KEY (block_id, work_type_id)
+);
+
+-- Отчёт о фактическом выполнении — ДОКУМЕНТ на дату (аналог бумажного
+-- отчёта ответственного со стройки, живой запрос пользователя), а не
+-- запись в неизменяемом журнале: к любому отчёту можно вернуться и
+-- исправить зафиксированные цифры. Текущий процент операции на блоке —
+-- значение из отчёта с максимальной `report_date` среди тех, что её
+-- касаются (при равенстве дат — из записанного позже, см.
+-- app/work_fact.py::_current_percents).
+CREATE TABLE IF NOT EXISTS work_fact_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    block_id INTEGER NOT NULL REFERENCES blocks (id) ON DELETE CASCADE,
+    report_date TEXT NOT NULL,
+    created_by INTEGER REFERENCES users (id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by INTEGER REFERENCES users (id),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_work_fact_reports_block ON work_fact_reports (block_id, report_date);
+
+CREATE TABLE IF NOT EXISTS work_fact_items (
+    report_id INTEGER NOT NULL REFERENCES work_fact_reports (id) ON DELETE CASCADE,
+    work_type_id INTEGER NOT NULL REFERENCES work_types (id) ON DELETE CASCADE,
+    percent INTEGER NOT NULL CHECK (percent BETWEEN 0 AND 100),
+    PRIMARY KEY (report_id, work_type_id)
 );

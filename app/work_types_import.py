@@ -6,15 +6,26 @@
 уже посчитанное по токену.
 
 Формат листа: `Уровень WBS | Идентификатор операции | Название операции |
-Единицы измерения | Кодификатор`. Три ловушки исходного файла заказчика
+Единицы измерения | Кодификатор`. Четыре ловушки исходного файла заказчика
 (проверено на реальном файле «WBS МФР типовой», см. документ):
 
   * у УЗЛА название лежит в колонке «Идентификатор операции», а у
     ОПЕРАЦИИ/ВЕХИ — в «Название операции». Колонка «Уровень WBS» несёт для
-    узла НОМЕР УРОВНЯ («1», «1.2», «2.1.3» — по числу точек считается
-    глубина), а для операции/вехи — слово `оп`/`веха` (тип строки, не
-    глубина); операция/веха всегда становится ребёнком ПОСЛЕДНЕГО
+    узла НОМЕР УРОВНЯ, а для операции/вехи — слово `оп`/`веха` (тип строки,
+    не глубина); операция/веха всегда становится ребёнком ПОСЛЕДНЕГО
     встреченного узла, а не следующего числового уровня;
+  * «номер уровня» узла бывает в ДВУХ разных обозначениях, и файл
+    выдерживает только одно из них целиком: путь по дереву («1», «1.2»,
+    «2.1.3» — глубина считается по числу точек) или голое число абсолютной
+    глубины («1», «2», «3», «4» — глубина это само число). В файле «WBS МФР
+    типовой» — второй вариант: узел третьего уровня вложенности обозначен
+    просто «3», а не «1.1.3». Перепутать критично: посчитать голое число
+    точками — все узлы дерева, глубина которых не 1, схлопнутся в одну
+    глубину и одноимённые категории из разных веток («Земляные работы»,
+    «Металлоконструкции» и т.п.) склеятся по пути в один узел, затерев
+    большую часть подчинённых операций. Формат определяется один раз на
+    весь лист (`_uses_dotted_levels`): точка хоть где-то в колонке — путь по
+    дереву, иначе — голое число;
   * кодификатор МОЖЕТ повторяться и МОЖЕТ отсутствовать — ключом записи
     служит ПУТЬ по дереву (имена всех предков + своё), он и только он
     уникален;
@@ -28,6 +39,12 @@ from openpyxl import load_workbook
 
 HEADERS = ("Уровень WBS", "Идентификатор операции", "Название операции",
           "Единицы измерения", "Кодификатор")
+
+# Необязательная колонка: встречается не во всех файлах и не у всех строк
+# файла, где есть (в «WBS МФР типовой» заполнена у 5 строк из 224) — но
+# несёт содержательные пояснения («выбрать нужную технологию»), поэтому
+# сохраняется, если колонка в файле есть, и просто не заполняется, если нет.
+COL_NOTE = "Примечание"
 
 ROW_NODE = "узел"
 ROW_OP = "оп"
@@ -55,14 +72,33 @@ def _header_index(header_row) -> dict:
                 422, "В файле нет колонки «%s». Ожидаются: %s"
                 % (name, ", ".join(HEADERS)))
         index[name] = values.index(name)
+    if COL_NOTE in values:
+        index[COL_NOTE] = values.index(COL_NOTE)
     return index
+
+
+def _uses_dotted_levels(sheet, idx) -> bool:
+    """Определяет формат колонки «Уровень WBS» по всему листу разом: если
+    хоть где-то встретилась точка («2.1.3») — это путь по дереву, и глубина
+    везде считается по числу точек; если точек нет ни у одной строки (везде
+    голые «1», «2», «3», «4») — число само и есть абсолютная глубина узла.
+    Ловушка ровно на этом: у файла «WBS МФР типовой» узел на глубине 3
+    обозначен просто «3», а не «1.1.3» — при счёте точек это дало бы
+    глубину 1 всем узлам подряд и склеило разные ветки дерева в одну."""
+    i = idx["Уровень WBS"]
+    for row in sheet.iter_rows(min_row=2):
+        v = row[i].value if i < len(row) else None
+        cell = str(v).strip() if v is not None else ""
+        if cell and cell.lower() not in (ROW_OP, ROW_MILESTONE) and "." in cell:
+            return True
+    return False
 
 
 def parse_xlsx(data: bytes) -> tuple:
     """Разбор листа в плоский список строк дерева с уже посчитанным путём.
 
     Возвращает (rows, warnings). `rows` — список словарей: path, parent_path,
-    row_kind, code, name, unit, sort_order, depth.
+    row_kind, code, name, unit, note, sort_order.
     """
     try:
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
@@ -75,6 +111,7 @@ def parse_xlsx(data: bytes) -> tuple:
     except StopIteration:
         raise WorkTypesError(422, "Лист пуст.")
     idx = _header_index(header_row)
+    dotted_levels = _uses_dotted_levels(sheet, idx)
 
     warnings = []
     result = []
@@ -85,7 +122,9 @@ def parse_xlsx(data: bytes) -> tuple:
 
     for excel_row_no, row in enumerate(rows_iter, start=2):
         def cell(col):
-            i = idx[col]
+            i = idx.get(col)
+            if i is None:
+                return ""   # необязательная колонка (COL_NOTE), в файле нет
             v = row[i].value if i < len(row) else None
             return str(v).strip() if v is not None else ""
 
@@ -95,6 +134,7 @@ def parse_xlsx(data: bytes) -> tuple:
 
         code = cell("Кодификатор") or None
         unit = cell("Единицы измерения") or None
+        note = cell(COL_NOTE) or None
         kind_word = level_cell.lower()
 
         if kind_word in (ROW_OP, ROW_MILESTONE):
@@ -113,12 +153,23 @@ def parse_xlsx(data: bytes) -> tuple:
             sort_order += 1
             result.append({
                 "path": path, "parent_path": last_node_path, "row_kind": row_kind,
-                "code": code, "name": name, "unit": unit, "sort_order": sort_order,
+                "code": code, "name": name, "unit": unit, "note": note, "sort_order": sort_order,
             })
             continue
 
-        # Иначе — узел: «Уровень WBS» несёт номер уровня («1», «1.2», …).
-        depth = level_cell.count(".") + 1 if level_cell else None
+        # Иначе — узел: «Уровень WBS» несёт номер уровня. Формат — либо путь
+        # по дереву («1», «1.2», «2.1.3» — глубина по числу точек), либо
+        # голое число абсолютной глубины («1», «2», «3», «4») — какой из
+        # двух, решено один раз на весь лист в _uses_dotted_levels.
+        if not level_cell:
+            depth = None
+        elif dotted_levels:
+            depth = level_cell.count(".") + 1
+        else:
+            try:
+                depth = int(level_cell)
+            except ValueError:
+                depth = None
         name = cell("Идентификатор операции")
         if not name:
             warnings.append(
@@ -127,8 +178,9 @@ def parse_xlsx(data: bytes) -> tuple:
             continue
         if depth is None:
             warnings.append(
-                "Строка %d: не удалось определить уровень узла «%s» (пусто в "
-                "колонке «Уровень WBS»), строка пропущена" % (excel_row_no, name))
+                "Строка %d: не удалось определить уровень узла «%s» (значение "
+                "«%s» в колонке «Уровень WBS» не распознано), строка пропущена"
+                % (excel_row_no, name, level_cell))
             continue
 
         while stack and stack[-1][0] >= depth:
@@ -138,7 +190,7 @@ def parse_xlsx(data: bytes) -> tuple:
         sort_order += 1
         result.append({
             "path": path, "parent_path": parent_path, "row_kind": ROW_NODE,
-            "code": code, "name": name, "unit": unit, "sort_order": sort_order,
+            "code": code, "name": name, "unit": unit, "note": note, "sort_order": sort_order,
         })
         stack.append((depth, path))
         last_node_path = path
@@ -156,7 +208,7 @@ def _existing(conn, object_id: int) -> dict:
     return {
         row["path"]: dict(row)
         for row in conn.execute(
-            "SELECT id, path, row_kind, code, name, unit, retired_at FROM work_types "
+            "SELECT id, path, row_kind, code, name, unit, note, retired_at FROM work_types "
             "WHERE object_id = ?", (object_id,))
     }
 
@@ -202,9 +254,9 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
         if existing is None:
             cur = conn.execute(
                 "INSERT INTO work_types (object_id, parent_id, path, row_kind, code, "
-                "name, unit, sort_order, retired_at) VALUES (?,?,?,?,?,?,?,?,NULL)",
+                "name, unit, note, sort_order, retired_at) VALUES (?,?,?,?,?,?,?,?,?,NULL)",
                 (object_id, parent_id, r["path"], r["row_kind"], r["code"],
-                 r["name"], r["unit"], r["sort_order"]),
+                 r["name"], r["unit"], r["note"], r["sort_order"]),
             )
             path_to_id[r["path"]] = cur.lastrowid
             added += 1
@@ -212,9 +264,9 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
             if existing["retired_at"]:
                 revived += 1
             conn.execute(
-                "UPDATE work_types SET parent_id = ?, code = ?, name = ?, unit = ?, "
+                "UPDATE work_types SET parent_id = ?, code = ?, name = ?, unit = ?, note = ?, "
                 "sort_order = ?, retired_at = NULL WHERE id = ?",
-                (parent_id, r["code"], r["name"], r["unit"], r["sort_order"], existing["id"]),
+                (parent_id, r["code"], r["name"], r["unit"], r["note"], r["sort_order"], existing["id"]),
             )
 
     retired = 0

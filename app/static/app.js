@@ -26793,8 +26793,12 @@ async function openMfrWorkspace() {
       b.classList.toggle("active", b.dataset.mfrMode === запомненныйРежим);
     }
   }
+  mfrChessWorkTypeId = null;
+  mfrChessValues = {};
+  document.getElementById("mfr-chess-legend").style.display = "none";
   await loadRevitColors();      // раньше отбора: план рисуется сразу после него
   await loadRevitPlanFilters();
+  await loadMfrChessOptions();
 }
 
 function revitPlanStatus(text, isError) {
@@ -27018,6 +27022,10 @@ async function loadRevitPlanElements() {
 // общая с полосами фасада) не меняется.
 const MFR_BLOCK_MARGIN_MM = 200;
 
+// Те же цвета, что у полосы прогресса в панели блока (.bp-bar-fill) и у
+// точек матрицы «Статусы» (.wp-dot) — одна палитра статуса на весь экран.
+const MFR_CHESS_COLORS = { plan: "var(--color-text-muted)", in_progress: "#E8A33D", done: "#3FA76A" };
+
 // Ось «не имеет отношения к отфильтрованной области» (живой запрос
 // пользователя, 2026-08-31 — на всём объекте разом сетка двух секций
 // перекрывалась подписями), если её отрезок целиком вне габарита ТЕКУЩИХ
@@ -27096,15 +27104,29 @@ function drawRevitPlan(data) {
   // false` — нет привязки к осям или ненадёжная отметка этажа) на плане
   // не показываем — молчаливо приблизительный контур хуже честного
   // отсутствия.
-  const blockRects = blocks.map((b) => {
+  // «Шахматка» (2026-09-02): вместо единого цвета-подсветки — цвет по
+  // статусу выбранной операции плюс подпись процентом. Блок вне отбора
+  // этой операции (work_type_block_values его не вернул) красится тускло-
+  // серым без подписи — «неприменимо», а не «0%», это разные вещи.
+  const blockRects = blocks.flatMap((b) => {
     const x0 = b.x0 - ox - minX - MFR_BLOCK_MARGIN_MM, x1 = b.x1 - ox - minX + MFR_BLOCK_MARGIN_MM,
           y0 = b.y0 - oy - minY - MFR_BLOCK_MARGIN_MM, y1 = b.y1 - oy - minY + MFR_BLOCK_MARGIN_MM;
-    return `<rect data-block-id="${b.id}" x="${Math.min(x0, x1)}" y="${h - Math.max(y0, y1)}"
-      width="${Math.abs(x1 - x0)}" height="${Math.abs(y1 - y0)}"
-      fill="var(--color-primary)" fill-opacity="0.12"
-      stroke="var(--color-primary)" stroke-width="${Math.max(w / 300, 45)}"
+    const rx = Math.min(x0, x1), ry = h - Math.max(y0, y1),
+          rw = Math.abs(x1 - x0), rh = Math.abs(y1 - y0);
+    const chess = mfrChessWorkTypeId ? mfrChessValues[b.id] : null;
+    const fill = mfrChessWorkTypeId
+      ? (chess ? MFR_CHESS_COLORS[chess.status] : "var(--color-text-muted)")
+      : "var(--color-primary)";
+    const rect = `<rect data-block-id="${b.id}" x="${rx}" y="${ry}" width="${rw}" height="${rh}"
+      fill="${fill}" fill-opacity="${mfrChessWorkTypeId ? (chess ? 0.55 : 0.15) : 0.12}"
+      stroke="${fill}" stroke-width="${Math.max(w / 300, 45)}"
       stroke-opacity="0.9"
       stroke-dasharray="${Math.max(w / 220, 55)}"/>`;
+    if (!chess) return [rect];
+    const label = `<text x="${rx + rw / 2}" y="${ry + rh / 2}" text-anchor="middle"
+      dominant-baseline="central" font-size="${Math.max(w / 45, 900)}" font-weight="700"
+      fill="#1a1a1a" style="pointer-events:none">${chess.percent}%</text>`;
+    return [rect, label];
   });
 
   // Сетка осей (`object_grids`, слой «Оси») — для сверки блока с реальной
@@ -27362,7 +27384,237 @@ async function showBlockCard(blockId) {
     + строки.join("")
     + `<div class="card-row">${геомСтрока}</div>`
     + `<div class="card-row">${статусыСтрока}</div>`;
+
+  loadBlockProgressPanel(blockId);
 }
+
+// -------- Панель блока: процент выполнения операций «эт/сек»
+// (app/work_fact.py, живой запрос пользователя 2026-09-02) — «Настройки»
+// отбирает, какие операции справочника вообще идут на этом блоке, «Факт»
+// пишет отчёт о фактическом выполнении. Отдельно от старой матрицы
+// План/В работе/Выполнено (вкладка «Статусы») — та эт/сек больше не знает. --------
+
+async function loadBlockProgressPanel(blockId) {
+  const box = document.getElementById("block-progress-tree");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const data = await api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/progress`);
+    box.innerHTML = data.tree.length
+      ? renderBlockProgressTree(data.tree, 0)
+      : '<div class="hint-text">Операций не выбрано — кнопка «Настройки».</div>';
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderBlockProgressTree(nodes, depth) {
+  return nodes.map(n => {
+    const pad = depth * 12;
+    if (n.row_kind === "узел") {
+      const kids = n.children && n.children.length ? renderBlockProgressTree(n.children, depth + 1) : "";
+      return `<div class="bp-node" style="padding-left:${pad}px">${escapeHtml(n.name)}</div>${kids}`;
+    }
+    const percent = n.percent || 0;
+    return `<div class="bp-op" style="padding-left:${pad}px">
+      <div class="bp-op-name">${escapeHtml(n.name || "(без названия)")}</div>
+      <div class="bp-op-bar-row">
+        <div class="bp-bar"><div class="bp-bar-fill bp-${n.status}" style="width:${percent}%"></div></div>
+        <span class="bp-percent">${percent}%</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function currentSelectedBlockId() {
+  return revitPlanState.selected && revitPlanState.selected.kind === "block"
+    ? revitPlanState.selected.id : null;
+}
+
+function workTypePathParts(путь) {
+  const parts = путь.split(" / ");
+  const name = parts.pop();
+  return { name, crumb: parts.join(" / ") };
+}
+
+// -------- «Настройки»: отбор операций «эт/сек» для блока --------
+
+let blockSettingsBlockId = null;
+
+document.getElementById("block-progress-settings-btn").addEventListener("click", async () => {
+  const blockId = currentSelectedBlockId();
+  if (!blockId) return;
+  blockSettingsBlockId = blockId;
+  document.getElementById("block-settings-backdrop").classList.add("open");
+  const box = document.getElementById("block-settings-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const data = await api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/work-types-settings`);
+    document.getElementById("block-settings-hint").textContent = data.configured
+      ? "Отбор для этого блока уже настроен."
+      : "Отбор ещё не настраивали — отмечены все операции «эт/сек» справочника.";
+    const selected = new Set(data.selected);
+    box.innerHTML = data.options.length
+      ? data.options.map(o => {
+          const { name, crumb } = workTypePathParts(o["путь"]);
+          return `<label class="block-settings-row">
+            <input type="checkbox" value="${o.id}" ${selected.has(o.id) ? "checked" : ""}>
+            <span>${crumb ? `<span class="hint-text">${escapeHtml(crumb)} / </span>` : ""}${escapeHtml(name)}</span>
+          </label>`;
+        }).join("")
+      : '<div class="hint-text">В справочнике нет операций с единицей «эт/сек».</div>';
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+});
+
+document.getElementById("block-settings-select-all").addEventListener("click", () => {
+  document.querySelectorAll("#block-settings-list input[type=checkbox]").forEach(cb => { cb.checked = true; });
+});
+document.getElementById("block-settings-select-none").addEventListener("click", () => {
+  document.querySelectorAll("#block-settings-list input[type=checkbox]").forEach(cb => { cb.checked = false; });
+});
+document.getElementById("block-settings-close").addEventListener("click", () => {
+  document.getElementById("block-settings-backdrop").classList.remove("open");
+});
+document.getElementById("block-settings-save").addEventListener("click", async () => {
+  const work_type_ids = [...document.querySelectorAll("#block-settings-list input[type=checkbox]:checked")]
+    .map(cb => Number(cb.value));
+  try {
+    await api(`/objects/${revitPlanState.objectId}/blocks/${blockSettingsBlockId}/work-types-settings`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ work_type_ids }),
+    });
+    document.getElementById("block-settings-backdrop").classList.remove("open");
+    showToast("Отбор операций сохранён", "success");
+    if (currentSelectedBlockId() === blockSettingsBlockId) showBlockCard(blockSettingsBlockId);
+  } catch (e) { showToast(e.message, "error"); }
+});
+
+// -------- «Факт»: отчёт о фактическом выполнении (документ на дату) --------
+
+let blockFactBlockId = null;
+let blockFactCurrentReportId = null;   // null = ещё не сохранённый новый отчёт
+let blockFactOptions = [];             // операции, выбранные для блока (Настройки)
+
+document.getElementById("block-progress-fact-btn").addEventListener("click", async () => {
+  const blockId = currentSelectedBlockId();
+  if (!blockId) return;
+  blockFactBlockId = blockId;
+  document.getElementById("block-fact-backdrop").classList.add("open");
+  const [settings, reports] = await Promise.all([
+    api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/work-types-settings`),
+    api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/fact-reports`),
+  ]);
+  const selected = new Set(settings.selected);
+  blockFactOptions = settings.options.filter(o => selected.has(o.id));
+  renderBlockFactReportsList(reports);
+  await startNewBlockFactReport();
+});
+
+function renderBlockFactReportsList(reports) {
+  const box = document.getElementById("block-fact-reports-list");
+  box.innerHTML = reports.length
+    ? reports.map(r => {
+        const кемПравлен = r.updated_by && r.updated_by !== r.created_by
+          ? ` · правил: ${escapeHtml(r.updated_by)}` : "";
+        return `<div class="bf-report-row" data-report="${r.id}">
+          <div>${escapeHtml(r.report_date)}</div>
+          <div class="hint-text">${escapeHtml(r.created_by || "")}${кемПравлен}</div>
+        </div>`;
+      }).join("")
+    : '<div class="hint-text">Отчётов ещё нет.</div>';
+  box.querySelectorAll(".bf-report-row").forEach(row =>
+    row.addEventListener("click", () => openExistingBlockFactReport(Number(row.dataset.report))));
+  highlightActiveBlockFactReport();
+}
+
+function highlightActiveBlockFactReport() {
+  document.querySelectorAll("#block-fact-reports-list .bf-report-row").forEach(row =>
+    row.classList.toggle("active", Number(row.dataset.report) === blockFactCurrentReportId));
+}
+
+async function startNewBlockFactReport() {
+  blockFactCurrentReportId = null;
+  document.getElementById("block-fact-date").value = new Date().toISOString().slice(0, 10);
+  // Предзаполняем ТЕКУЩИМИ процентами (панель блока): за один день обычно
+  // меняется немногое, и не нужно перетаскивать все ползунки заново.
+  const progress = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/progress`);
+  const percents = {};
+  (function walk(nodes) {
+    for (const n of nodes) {
+      if (n.percent !== undefined) percents[n.id] = n.percent;
+      if (n.children) walk(n.children);
+    }
+  })(progress.tree);
+  renderBlockFactItems(percents);
+  highlightActiveBlockFactReport();
+}
+
+async function openExistingBlockFactReport(reportId) {
+  blockFactCurrentReportId = reportId;
+  const report = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports/${reportId}`);
+  document.getElementById("block-fact-date").value = report.report_date;
+  renderBlockFactItems(report.items);
+  highlightActiveBlockFactReport();
+}
+
+function renderBlockFactItems(percents) {
+  const box = document.getElementById("block-fact-items");
+  box.innerHTML = blockFactOptions.length
+    ? blockFactOptions.map(o => {
+        const { name, crumb } = workTypePathParts(o["путь"]);
+        const percent = percents[o.id] || 0;
+        return `<div class="bf-item" data-wt="${o.id}">
+          <div class="bf-item-name">${crumb ? `<span class="hint-text">${escapeHtml(crumb)} / </span>` : ""}${escapeHtml(name)}</div>
+          <input type="range" min="0" max="100" value="${percent}" class="bf-slider">
+          <input type="number" min="0" max="100" value="${percent}" class="bf-number">
+        </div>`;
+      }).join("")
+    : '<div class="hint-text">Для этого блока не выбрано ни одной операции — сначала «Настройки».</div>';
+}
+
+document.getElementById("block-fact-items").addEventListener("input", (e) => {
+  const item = e.target.closest(".bf-item");
+  if (!item) return;
+  const value = Math.max(0, Math.min(100, Math.round(Number(e.target.value)) || 0));
+  item.querySelector(".bf-slider").value = value;
+  item.querySelector(".bf-number").value = value;
+});
+
+document.getElementById("block-fact-new").addEventListener("click", () => startNewBlockFactReport());
+document.getElementById("block-fact-close").addEventListener("click", () => {
+  document.getElementById("block-fact-backdrop").classList.remove("open");
+});
+document.getElementById("block-fact-save").addEventListener("click", async () => {
+  const items = {};
+  document.querySelectorAll("#block-fact-items .bf-item").forEach(item => {
+    items[Number(item.dataset.wt)] = Number(item.querySelector(".bf-number").value) || 0;
+  });
+  const report_date = document.getElementById("block-fact-date").value;
+  if (!report_date) { showToast("Укажите дату отчёта", "error"); return; }
+  try {
+    if (blockFactCurrentReportId) {
+      await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports/${blockFactCurrentReportId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ report_date, items }),
+      });
+    } else {
+      const res = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ report_date, items }),
+      });
+      blockFactCurrentReportId = res.id;
+    }
+    showToast("Отчёт сохранён", "success");
+    const reports = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports`);
+    renderBlockFactReportsList(reports);
+    // Полный showBlockCard, а не только дерево: строка «Работы: план/в
+    // работе/выполнено» в простой карточке считается тем же процентом и
+    // тоже должна обновиться (живой баг — 2026-09-02, при live-проверке
+    // фичи: после «Факт» дерево обновлялось, а строка сводки — нет).
+    if (currentSelectedBlockId() === blockFactBlockId) showBlockCard(blockFactBlockId);
+  } catch (e) { showToast(e.message, "error"); }
+});
 
 // Слои «Элементы»/«Блоки» — независимые переключатели: можно смотреть по
 // отдельности или вместе. Переключение не ходит на сервер: данные обеих
@@ -27410,6 +27662,122 @@ for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-
     mfr3d.key = null;
     applyMfrMode();
   });
+}
+
+// -------- «Шахматка»: одна операция «эт/сек» красит все блоки плана
+// (app/work_fact.py, живой запрос пользователя 2026-09-02). Только 2D —
+// подпись процентом поверх параллелепипеда, клик по блоку не меняется. --------
+
+let mfrChessWorkTypeId = null;
+let mfrChessValues = {};   // block_id -> {percent, status}, только 2D-раскраска
+let mfrChessTree = [];     // дерево используемых операций, для окна выбора
+
+async function loadMfrChessOptions() {
+  mfrChessTree = [];
+  try {
+    const data = await api(`/objects/${revitPlanState.objectId}/blocks/work-types-in-use`);
+    mfrChessTree = data.tree || [];
+  } catch (e) {
+    // Список — удобство, не критичная функция: тихо оставляем дерево
+    // пустым, человек попробует позже (кнопка «Обновить данные с сервера»).
+  }
+  updateMfrChessCurrent();
+}
+
+function findMfrChessNode(nodes, id) {
+  for (const n of nodes) {
+    if (n.row_kind !== "узел" && n.id === id) return n;
+    if (n.children && n.children.length) {
+      const found = findMfrChessNode(n.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Поле в сайдбаре — БЕЗ иерархии, только название (живой запрос
+// пользователя: путь по дереву в узкое поле не влезал); путь отдельной
+// строкой под ним, стрелочками, а не как в дереве («/»).
+function updateMfrChessCurrent() {
+  const nameEl = document.getElementById("mfr-chess-current-name");
+  const pathEl = document.getElementById("mfr-chess-current-path");
+  const node = mfrChessWorkTypeId ? findMfrChessNode(mfrChessTree, mfrChessWorkTypeId) : null;
+  if (!node) {
+    nameEl.textContent = "— выключено —";
+    pathEl.style.display = "none";
+    return;
+  }
+  const { name, crumb } = workTypePathParts(node["путь"] || node.name);
+  nameEl.textContent = name;
+  if (crumb) {
+    pathEl.textContent = crumb.split(" / ").join(" → ");
+    pathEl.style.display = "";
+  } else {
+    pathEl.style.display = "none";
+  }
+}
+
+// Окно выбора — иерархический список (живой запрос пользователя): узлы
+// заголовками, пустых групп нет (дерево уже обрезано до предков используемых
+// операций на сервере, app/work_fact.py::used_work_types_tree).
+function mfrChessModalTreeHtml(nodes, depth) {
+  return nodes.map((n) => {
+    const pad = 8 + depth * 16;
+    if (n.row_kind === "узел") {
+      const kids = n.children && n.children.length ? mfrChessModalTreeHtml(n.children, depth + 1) : "";
+      return `<div class="chess-group" style="padding-left:${pad}px">${escapeHtml(n.name)}</div>${kids}`;
+    }
+    const on = mfrChessWorkTypeId === n.id;
+    return `<div class="chess-pick${on ? " chess-pick-on" : ""}" data-chess-id="${n.id}" style="padding-left:${pad}px">
+      ${escapeHtml(n.name || "(без названия)")}
+    </div>`;
+  }).join("");
+}
+
+function renderMfrChessModal() {
+  document.getElementById("mfr-chess-modal-tree").innerHTML = mfrChessTree.length
+    ? mfrChessModalTreeHtml(mfrChessTree, 0)
+    : '<div class="hint-text">Операций «эт/сек», запланированных хотя бы для одного блока, ещё нет.</div>';
+}
+
+document.getElementById("mfr-chess-open").addEventListener("click", () => {
+  renderMfrChessModal();
+  document.getElementById("mfr-chess-modal-backdrop").classList.add("open");
+});
+document.getElementById("mfr-chess-modal-close").addEventListener("click", () => {
+  document.getElementById("mfr-chess-modal-backdrop").classList.remove("open");
+});
+document.getElementById("mfr-chess-modal-off").addEventListener("click", () => {
+  document.getElementById("mfr-chess-modal-backdrop").classList.remove("open");
+  selectMfrChessWorkType(null);
+});
+document.getElementById("mfr-chess-modal-tree").addEventListener("click", (e) => {
+  const pick = e.target.closest(".chess-pick");
+  if (!pick) return;
+  document.getElementById("mfr-chess-modal-backdrop").classList.remove("open");
+  selectMfrChessWorkType(Number(pick.dataset.chessId));
+});
+
+async function selectMfrChessWorkType(workTypeId) {
+  mfrChessWorkTypeId = workTypeId;
+  updateMfrChessCurrent();
+  document.getElementById("mfr-chess-legend").style.display = mfrChessWorkTypeId ? "" : "none";
+  if (mfrChessWorkTypeId) {
+    try {
+      mfrChessValues = await api(
+        `/objects/${revitPlanState.objectId}/blocks/work-type-progress?work_type_id=${mfrChessWorkTypeId}`);
+    } catch (err) {
+      showToast(err.message, "error");
+      mfrChessValues = {};
+    }
+    // Раскраска осмыслена только при показанном слое «Блоки» — включаем
+    // сам, а не заставляем сначала искать соседний чекбокс.
+    const blocksToggle = document.getElementById("mfr-show-blocks");
+    if (!blocksToggle.checked) blocksToggle.checked = true;
+  } else {
+    mfrChessValues = {};
+  }
+  if (revitPlanState.data) drawRevitPlan(revitPlanState.data);
 }
 
 // ==================== 3D МОДЕЛИ МФР (2026-08-25) ====================
@@ -28463,24 +28831,82 @@ document.getElementById("wt-apply").addEventListener("click", async () => {
   } catch (e) { showToast(e.message, "error"); }
 });
 
+// Свёрнуто по умолчанию всё — у реального файла заказчика 224+ строки,
+// разворачивать сразу всё дерево неудобно. Множество путей, а не id: id
+// известен только после загрузки, а состояние должно пережить повторный
+// wt-analyze/apply того же файла (пути стабильны, см. work_types_import.py).
+let wtExpanded = new Set();
+
 async function loadWorkTypesTree() {
   const box = document.getElementById("wt-tree-box");
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  wtExpanded = new Set();
   wpData = await api(`/objects/${state.objectId}/work-progress`);
-  box.innerHTML = wpData.tree.length
-    ? renderWtTreeReadonly(wpData.tree)
-    : '<div class="hint-text">Справочник ещё пуст — загрузите xlsx выше.</div>';
+  renderWtTree();
 }
 
-function renderWtTreeReadonly(nodes, depth = 0) {
-  return nodes.map(n => {
-    const line = n.row_kind === "узел"
-      ? `<div style="padding-left:${depth * 16}px"><b>${escapeHtml(n.name)}</b></div>`
-      : `<div style="padding-left:${depth * 16}px">${escapeHtml(n.name || "(без названия)")}
-          <span class="hint-text">· ${escapeHtml(n.row_kind)}${n.unit ? " · " + escapeHtml(n.unit) : ""}</span></div>`;
-    return line + (n.children && n.children.length ? renderWtTreeReadonly(n.children, depth + 1) : "");
-  }).join("");
+function wtFlatten(nodes, parentPath, depth, out) {
+  for (const n of nodes) {
+    const path = parentPath ? `${parentPath}/${n.name}` : String(n.name);
+    out.push({ node: n, path, depth });
+    if (n.children && n.children.length && wtExpanded.has(path)) {
+      wtFlatten(n.children, path, depth + 1, out);
+    }
+  }
+  return out;
 }
+
+function renderWtTree() {
+  const box = document.getElementById("wt-tree-box");
+  if (!wpData.tree.length) {
+    box.innerHTML = '<div class="hint-text">Справочник ещё пуст — загрузите xlsx выше.</div>';
+    return;
+  }
+  const rows = wtFlatten(wpData.tree, "", 0, []);
+  const body = rows.map(({ node: n, path, depth }) => {
+    const hasChildren = n.children && n.children.length > 0;
+    const expanded = wtExpanded.has(path);
+    const toggle = `<button class="report-toggle${hasChildren ? "" : " empty"}" data-path="${escapeHtml(path)}">${hasChildren ? (expanded ? "▾" : "▸") : ""}</button>`;
+    const nameHtml = n.row_kind === "узел" ? `<b>${escapeHtml(n.name)}</b>` : escapeHtml(n.name || "(без названия)");
+    return `<tr class="${n.row_kind === "узел" ? "wt-node" : ""}">
+      <td class="wt-name" style="padding-left:${8 + depth * 16}px">${toggle}${nameHtml}</td>
+      <td class="wt-code">${n.code ? escapeHtml(n.code) : ""}</td>
+      <td class="wt-unit">${n.unit ? escapeHtml(n.unit) : ""}</td>
+      <td class="wt-note">${n.note ? escapeHtml(n.note) : ""}</td>
+    </tr>`;
+  }).join("");
+  box.innerHTML = `<table id="wt-tree-table"><thead><tr>
+      <th class="wt-name">Вид работ</th><th>Код</th><th>Ед. изм.</th><th>Примечание</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+document.getElementById("wt-tree-box").addEventListener("click", (e) => {
+  const btn = e.target.closest(".report-toggle");
+  if (!btn || btn.classList.contains("empty")) return;
+  const path = btn.dataset.path;
+  if (wtExpanded.has(path)) wtExpanded.delete(path); else wtExpanded.add(path);
+  renderWtTree();
+});
+
+function wtAllPaths(nodes, parentPath, out) {
+  for (const n of nodes) {
+    const path = parentPath ? `${parentPath}/${n.name}` : String(n.name);
+    if (n.children && n.children.length) {
+      out.push(path);
+      wtAllPaths(n.children, path, out);
+    }
+  }
+  return out;
+}
+
+document.getElementById("wt-expand-all").addEventListener("click", () => {
+  wtExpanded = new Set(wtAllPaths(wpData.tree, "", []));
+  renderWtTree();
+});
+document.getElementById("wt-collapse-all").addEventListener("click", () => {
+  wtExpanded = new Set();
+  renderWtTree();
+});
 
 // -------- Статусы (вкладка «Статусы»): матрица вид работ × блок/секция --------
 

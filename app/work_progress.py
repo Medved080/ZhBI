@@ -18,9 +18,18 @@ STATUS_DONE = "done"
 STATUSES = (STATUS_IN_PROGRESS, STATUS_DONE)
 
 # Виды работ вне блочного контура (`шт`, `м2`, `м3`, `т`, `пог.м`, `опора`,
-# `кв.эт/сек` — квартиры без Revit-выгрузки завести нечем, block-accounting.md
+# `кв.эт/сек» — квартиры без Revit-выгрузки завести нечем, block-accounting.md
 # §2/§9) в матрице показываются, но статус на них не ставится.
-ADDRESSABLE_UNITS = (UNIT_BLOCK, UNIT_SECTION, UNIT_WHOLE)
+#
+# UNIT_BLOCK («эт/сек») сюда НЕ входит (2026-09-02, живой запрос
+# пользователя): для операций на блоке План/В работе/Выполнено больше не
+# проставляется кликом-циклом здесь — источник истины стал процент из
+# отдельного отчёта о фактическом выполнении (app/work_fact.py), у него и
+# отбор операций per-блок, которого эта матрица не знает. Матрица статусов
+# просто перестала быть местом, где эт/сек-операции живут; узел с ней не
+# кликается, но и не должен — правка переехала в панель блока в «Модели
+# МФР» (клик по блоку).
+ADDRESSABLE_UNITS = (UNIT_SECTION, UNIT_WHOLE)
 
 
 class ProgressError(Exception):
@@ -70,7 +79,7 @@ def matrix(conn, object_id: int) -> dict:
     rows = [
         dict(row)
         for row in conn.execute(
-            "SELECT id, parent_id, row_kind, code, name, unit, sort_order FROM work_types "
+            "SELECT id, parent_id, row_kind, code, name, unit, note, sort_order FROM work_types "
             "WHERE object_id = ? AND retired_at IS NULL ORDER BY sort_order",
             (object_id,),
         )
@@ -103,7 +112,7 @@ def matrix(conn, object_id: int) -> dict:
     for row in rows:
         node = {
             "id": row["id"], "row_kind": row["row_kind"], "code": row["code"],
-            "name": row["name"], "unit": row["unit"], "children": [],
+            "name": row["name"], "unit": row["unit"], "note": row["note"], "children": [],
             "addressable": row["unit"] in ADDRESSABLE_UNITS,
         }
         if row["row_kind"] != "узел":
@@ -139,27 +148,6 @@ def set_status(conn, object_id: int, user_id: int, work_type_id: int,
             (work_type_id, block_id, section_id, status, user_id),
         )
     conn.commit()
-
-
-def block_status_summary(conn, object_id: int, block_id: int) -> dict:
-    """Сводка статусов ОДНОГО блока — для карточки блока в «Модели МФР»
-    (Docs/TZ.md, «Геометрия блока»). Считает только виды работ,
-    адресуемые на блок (`UNIT_BLOCK`) — секция/объект целиком сюда не
-    входят, у них не блок, а другая единица учёта."""
-    total = conn.execute(
-        "SELECT COUNT(*) FROM work_types WHERE object_id = ? AND retired_at IS NULL AND unit = ?",
-        (object_id, UNIT_BLOCK),
-    ).fetchone()[0]
-    by_status = dict(conn.execute(
-        "SELECT wp.status, COUNT(*) FROM work_progress wp "
-        "JOIN work_types wt ON wt.id = wp.work_type_id "
-        "WHERE wt.object_id = ? AND wt.retired_at IS NULL AND wp.block_id = ? "
-        "GROUP BY wp.status", (object_id, block_id),
-    ).fetchall())
-    выполнено = by_status.get(STATUS_DONE, 0)
-    в_работе = by_status.get(STATUS_IN_PROGRESS, 0)
-    return {"всего": total, "план": total - выполнено - в_работе,
-            "в_работе": в_работе, "выполнено": выполнено}
 
 
 def clear_status(conn, object_id: int, work_type_id: int, block_id, section_id) -> None:

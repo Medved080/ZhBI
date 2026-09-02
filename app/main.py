@@ -75,6 +75,7 @@ from app import revit_colors, revit_import, revit_plan
 from app import blocks as blocks_mod
 from app import work_progress as work_progress_mod
 from app import work_types_import
+from app import work_fact
 from app import pdf_facade_import
 from app import pdf_import
 from app import pdf_rooms
@@ -5813,7 +5814,7 @@ def block_card_endpoint(object_id: int, block_id: int,
         card = revit_plan.block_card(conn, object_id, block_id)
         if card is None:
             raise HTTPException(status_code=404, detail="Блок не найден")
-        card["статусы_работ"] = work_progress_mod.block_status_summary(conn, object_id, block_id)
+        card["статусы_работ"] = work_fact.block_summary(conn, object_id, block_id)
         return card
     finally:
         conn.close()
@@ -5907,6 +5908,149 @@ def set_work_progress_cell(object_id: int, body: WorkProgressCellIn,
                 new_value=body.status or "план",
                 details={"work_type_id": body.work_type_id, "block_id": body.block_id,
                         "section_id": body.section_id})
+    return {"ok": True}
+
+
+# -------- Процент выполнения по блоку (app/work_fact.py, живой запрос
+# пользователя 2026-09-02): отбор операций «эт/сек» для блока и отчёты о
+# фактическом выполнении — панель блока в «Модели МФР», клик по блоку. --------
+
+@app.get("/objects/{object_id}/blocks/{block_id}/work-types-settings")
+def get_block_work_types_settings(object_id: int, block_id: int,
+                                  user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        try:
+            return work_fact.block_settings(conn, object_id, block_id)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+class BlockWorkTypesSettingsIn(BaseModel):
+    work_type_ids: list[int]
+
+
+@app.put("/objects/{object_id}/blocks/{block_id}/work-types-settings")
+def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWorkTypesSettingsIn,
+                                  user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            work_fact.save_block_settings(conn, object_id, block_id, body.work_type_ids)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+    activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
+                details={"block_id": block_id, "count": len(body.work_type_ids)})
+    return {"ok": True}
+
+
+@app.get("/objects/{object_id}/blocks/{block_id}/progress")
+def get_block_progress(object_id: int, block_id: int,
+                       user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        try:
+            return work_fact.block_progress_tree(conn, object_id, block_id)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+# -------- «Шахматка» (2026-09-02, живой запрос пользователя): раскраска
+# всех блоков плана по ОДНОЙ операции «эт/сек» разом — статус (цвет) и
+# процент (подпись) на каждом блоке. Клик по блоку ведёт себя как раньше. --------
+
+@app.get("/objects/{object_id}/blocks/work-types-in-use")
+def get_blocks_work_types_in_use(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        return {"tree": work_fact.used_work_types_tree(conn, object_id)}
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/blocks/work-type-progress")
+def get_blocks_work_type_progress(object_id: int, work_type_id: int,
+                                  user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        try:
+            return work_fact.work_type_block_values(conn, object_id, work_type_id)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/blocks/{block_id}/fact-reports")
+def list_block_fact_reports(object_id: int, block_id: int,
+                            user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        return work_fact.list_reports(conn, object_id, block_id)
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/blocks/{block_id}/fact-reports/{report_id}")
+def get_block_fact_report(object_id: int, block_id: int, report_id: int,
+                          user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        try:
+            return work_fact.get_report(conn, object_id, block_id, report_id)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+class FactReportIn(BaseModel):
+    report_date: str
+    items: dict[int, int]   # work_type_id -> процент
+
+
+@app.post("/objects/{object_id}/blocks/{block_id}/fact-reports")
+def create_block_fact_report(object_id: int, block_id: int, body: FactReportIn,
+                             user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            report_id = work_fact.save_report(conn, object_id, user["id"], block_id, None,
+                                              body.report_date, body.items)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+    return {"id": report_id}
+
+
+@app.put("/objects/{object_id}/blocks/{block_id}/fact-reports/{report_id}")
+def update_block_fact_report(object_id: int, block_id: int, report_id: int, body: FactReportIn,
+                             user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            work_fact.save_report(conn, object_id, user["id"], block_id, report_id,
+                                  body.report_date, body.items)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
     return {"ok": True}
 
 
