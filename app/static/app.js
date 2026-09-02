@@ -27138,9 +27138,13 @@ function drawRevitPlan(data) {
   const blocks = mfrShowBlocks() ? revitPlanState.blocksData.filter((b) => b.ok) : [];
   const axes = mfrShowAxes() ? relevantAxes(revitPlanState.gridsData, ox, oy, ow, oh) : [];
   let minX = 0, minY = 0, maxX = ow, maxY = oh;
+  // Блок теперь — набор прямоугольников (block_boxes, 2026-09-05: один не
+  // выражал Г-образные/ступенчатые этажи), охват — по всем сразу.
   for (const b of blocks) {
-    minX = Math.min(minX, b.x0 - ox); maxX = Math.max(maxX, b.x1 - ox);
-    minY = Math.min(minY, b.y0 - oy); maxY = Math.max(maxY, b.y1 - oy);
+    for (const box of b.boxes) {
+      minX = Math.min(minX, box.x0 - ox); maxX = Math.max(maxX, box.x1 - ox);
+      minY = Math.min(minY, box.y0 - oy); maxY = Math.max(maxY, box.y1 - oy);
+    }
   }
   for (const a of axes) {
     minX = Math.min(minX, a.x1 - ox, a.x2 - ox); maxX = Math.max(maxX, a.x1 - ox, a.x2 - ox);
@@ -27169,24 +27173,33 @@ function drawRevitPlan(data) {
   // этой операции (work_type_block_values его не вернул) красится тускло-
   // серым без подписи — «неприменимо», а не «0%», это разные вещи.
   const blockRects = blocks.flatMap((b) => {
-    const x0 = b.x0 - ox - minX - MFR_BLOCK_MARGIN_MM, x1 = b.x1 - ox - minX + MFR_BLOCK_MARGIN_MM,
-          y0 = b.y0 - oy - minY - MFR_BLOCK_MARGIN_MM, y1 = b.y1 - oy - minY + MFR_BLOCK_MARGIN_MM;
-    const rx = Math.min(x0, x1), ry = h - Math.max(y0, y1),
-          rw = Math.abs(x1 - x0), rh = Math.abs(y1 - y0);
     const chess = mfrChessWorkTypeId ? mfrChessValues[b.id] : null;
     const fill = mfrChessWorkTypeId
       ? (chess ? MFR_CHESS_COLORS[chess.status] : "var(--color-text-muted)")
       : "var(--color-primary)";
-    const rect = `<rect data-block-id="${b.id}" x="${rx}" y="${ry}" width="${rw}" height="${rh}"
-      fill="${fill}" fill-opacity="${mfrChessWorkTypeId ? (chess ? 0.55 : 0.15) : 0.12}"
-      stroke="${fill}" stroke-width="${Math.max(w / 300, 45)}"
-      stroke-opacity="0.9"
-      stroke-dasharray="${Math.max(w / 220, 55)}"/>`;
-    if (!chess) return [rect];
-    const label = `<text x="${rx + rw / 2}" y="${ry + rh / 2}" text-anchor="middle"
-      dominant-baseline="central" font-size="${Math.max(w / 45, 900)}" font-weight="700"
+    // Блок — набор прямоугольников (block_boxes, 2026-09-05): один
+    // <rect> на каждый, все с одним и тем же data-block-id — клик на
+    // любой из них ведёт себя одинаково (см. обработчик клика по SVG).
+    const rects = b.boxes.map((box) => {
+      const x0 = box.x0 - ox - minX - MFR_BLOCK_MARGIN_MM, x1 = box.x1 - ox - minX + MFR_BLOCK_MARGIN_MM,
+            y0 = box.y0 - oy - minY - MFR_BLOCK_MARGIN_MM, y1 = box.y1 - oy - minY + MFR_BLOCK_MARGIN_MM;
+      const rx = Math.min(x0, x1), ry = h - Math.max(y0, y1),
+            rw = Math.abs(x1 - x0), rh = Math.abs(y1 - y0);
+      return { rx, ry, rw, rh, html: `<rect data-block-id="${b.id}" x="${rx}" y="${ry}" width="${rw}" height="${rh}"
+        fill="${fill}" fill-opacity="${mfrChessWorkTypeId ? (chess ? 0.55 : 0.15) : 0.12}"
+        stroke="${fill}" stroke-width="${Math.max(w / 300, 45)}"
+        stroke-opacity="0.9"
+        stroke-dasharray="${Math.max(w / 220, 55)}"/>` };
+    });
+    if (!chess) return rects.map((r) => r.html);
+    // Подпись — на САМОМ КРУПНОМ прямоугольнике блока: центр объединённого
+    // габарита у Г-образной формы может попасть в вырез, где блока
+    // физически нет.
+    const крупнейший = rects.reduce((a, r) => (r.rw * r.rh > a.rw * a.rh ? r : a));
+    const label = `<text x="${крупнейший.rx + крупнейший.rw / 2}" y="${крупнейший.ry + крупнейший.rh / 2}"
+      text-anchor="middle" dominant-baseline="central" font-size="${Math.max(w / 45, 900)}" font-weight="700"
       fill="#1a1a1a" style="pointer-events:none">${chess.percent}%</text>`;
-    return [rect, label];
+    return [...rects.map((r) => r.html), label];
   });
 
   // Сетка осей (`object_grids`, слой «Оси») — для сверки блока с реальной
@@ -27391,14 +27404,15 @@ function mfrHighlightSelection() {
   if (!sel) return;
   const highlightColor = boldColor ? new THREE.Color(boldColor).getHex() : MFR_HIGHLIGHT_COLOR;
   const highlightEdgeColor = edgeColor ? new THREE.Color(edgeColor).getHex() : MFR_HIGHLIGHT_COLOR;
-  const material = new THREE.MeshBasicMaterial({
-    color: highlightColor, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
-  });
-  let geometry = null, position = null;
+  // (геометрия, позиция) на каждый — у блока их может быть НЕСКОЛЬКО
+  // (block_boxes, 2026-09-05: один параллелепипед на прямоугольник блока,
+  // накладка выделения обязана покрыть их все, не только первый попавшийся).
+  let части = [];
   if (sel.kind === "block") {
-    const mesh = mfr3d.scene.children.find((o) => o.isMesh && o.userData.blockId === sel.id);
-    if (!mesh) return;
-    geometry = mesh.geometry.clone(); position = mesh.position.clone();
+    части = mfr3d.scene.children
+      .filter((o) => o.isMesh && o.userData.blockId === sel.id)
+      .map((mesh) => ({ geometry: mesh.geometry.clone(), position: mesh.position.clone() }));
+    if (!части.length) return;
   } else {
     const el = (revitPlanState.data?.elements || []).find((e) => e.id === sel.id);
     const контур = el && el["контур"];
@@ -27407,20 +27421,26 @@ function mfrHighlightSelection() {
     shape.moveTo(контур[0][0], контур[0][1]);
     for (let i = 1; i < контур.length; i++) shape.lineTo(контур[i][0], контур[i][1]);
     shape.closePath();
+    let geometry;
     try {
       geometry = new THREE.ExtrudeGeometry(shape, { depth: el["выс"], bevelEnabled: false, steps: 1 });
     } catch (err) { return; }
     geometry.translate(0, 0, (el["отм"] ?? 0) - (mfr3d.низ || 0));
-    position = new THREE.Vector3(0, 0, 0);
+    части = [{ geometry, position: new THREE.Vector3(0, 0, 0) }];
   }
   const group = new THREE.Group();
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.copy(position); mesh.renderOrder = 20;
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(geometry),
-    new THREE.LineBasicMaterial({ color: highlightEdgeColor, depthTest: false, transparent: true, opacity: 1 }));
-  edges.position.copy(position); edges.renderOrder = 21;
-  group.add(mesh); group.add(edges);
+  for (const { geometry, position } of части) {
+    const material = new THREE.MeshBasicMaterial({
+      color: highlightColor, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(position); mesh.renderOrder = 20;
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geometry),
+      new THREE.LineBasicMaterial({ color: highlightEdgeColor, depthTest: false, transparent: true, opacity: 1 }));
+    edges.position.copy(position); edges.renderOrder = 21;
+    group.add(mesh); group.add(edges);
+  }
   mfr3d.scene.add(group);
   mfr3d.highlight = group;
 }
@@ -27450,9 +27470,15 @@ async function showBlockCard(blockId) {
   ].map(строка);
 
   const геом = card["геометрия"] || {};
+  // Габарит — по ОБЪЕДИНЁННОМУ контуру всех прямоугольников блока
+  // (block_boxes, 2026-09-05): у Г-образного блока это не форма, а просто
+  // общий охват, отсюда пометка «N прямоугольников» при их больше одного.
+  const boxes = геом.boxes || [];
   const геомСтрока = геом.ok
-    ? `Габарит: ${Math.round(геом.x1 - геом.x0)}×${Math.round(геом.y1 - геом.y0)}×`
+    ? `Габарит: ${Math.round(Math.max(...boxes.map(b => b.x1)) - Math.min(...boxes.map(b => b.x0)))}×`
+      + `${Math.round(Math.max(...boxes.map(b => b.y1)) - Math.min(...boxes.map(b => b.y0)))}×`
       + `${Math.round(геом.z1 - геом.z0)} мм`
+      + (boxes.length > 1 ? ` (${boxes.length} прямоугольника, общий охват)` : "")
       + (геом.approx_height ? " (высота приблизительно — соседний этаж не даёт точной)" : "")
     : `Геометрия недоступна: ${escapeHtml(геом.reason || "не определена")}`;
 
@@ -28190,10 +28216,8 @@ async function buildMfr3D() {
     const [ox, oy] = data.origin;
     for (const b of revitPlanState.blocksData) {
       if (!b.ok) continue;
-      const width = b.x1 - b.x0 + MFR_BLOCK_MARGIN_MM * 2,
-            depth = b.y1 - b.y0 + MFR_BLOCK_MARGIN_MM * 2,
-            height = b.z1 - b.z0;
-      if (width <= 0 || depth <= 0 || height <= 0) continue;
+      const height = b.z1 - b.z0;
+      if (height <= 0) continue;
       // «Шахматка» (2026-09-02, живой запрос пользователя): здание целиком
       // и БЕЗ отбора по этажам видно только в 3D — раскраска 2D-плана одной
       // раскраской без неё не решала задачу «сравнить блоки между собой».
@@ -28201,37 +28225,50 @@ async function buildMfr3D() {
       const colorHex = mfrChessWorkTypeId
         ? (chess ? MFR_CHESS_COLORS_3D[chess.status] : MFR_CHESS_COLORS_3D.off)
         : 0x2f6fed;
-      const geometry = new THREE.BoxGeometry(width, depth, height);
-      const material = new THREE.MeshLambertMaterial({
-        color: colorHex, transparent: true, opacity: (mfrChessWorkTypeId && chess) ? 0.5 : 0.16,
-        depthWrite: false, side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      const centerX = (b.x0 - ox) + width / 2 - MFR_BLOCK_MARGIN_MM,
-            centerY = (b.y0 - oy) + depth / 2 - MFR_BLOCK_MARGIN_MM,
-            centerZ = (b.z0 - низ) + height / 2;
-      mesh.position.set(centerX, centerY, centerZ);
-      mesh.userData.blockId = b.id;
-      mesh.renderOrder = 3;
-      scene.add(mesh);
-      // Толще и непрозрачнее фасадных/осевых линий — форма каждого блока
-      // должна читаться сразу, не сливаясь с рёбрами модели под ним
-      // (живой запрос пользователя, 2026-09-01).
-      const рёбраБлока = new THREE.LineSegments(
-        new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.95, linewidth: 2 }));
-      рёбраБлока.position.copy(mesh.position);
-      рёбраБлока.renderOrder = 5;
-      scene.add(рёбраБлока);
+      // Блок — набор прямоугольников (block_boxes, 2026-09-05): один
+      // Mesh+рёбра на каждый, все с тем же userData.blockId — раскраска
+      // клика (bindMfr3DPick) и подсветки выбора видят блок целиком.
+      // Крупнейший прямоугольник несёт наклейку процентом.
+      let крупнейший = null;
+      for (const box of b.boxes) {
+        const width = box.x1 - box.x0 + MFR_BLOCK_MARGIN_MM * 2,
+              depth = box.y1 - box.y0 + MFR_BLOCK_MARGIN_MM * 2;
+        if (width <= 0 || depth <= 0) continue;
+        const geometry = new THREE.BoxGeometry(width, depth, height);
+        const material = new THREE.MeshLambertMaterial({
+          color: colorHex, transparent: true, opacity: (mfrChessWorkTypeId && chess) ? 0.5 : 0.16,
+          depthWrite: false, side: THREE.DoubleSide,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        const centerX = (box.x0 - ox) + width / 2 - MFR_BLOCK_MARGIN_MM,
+              centerY = (box.y0 - oy) + depth / 2 - MFR_BLOCK_MARGIN_MM,
+              centerZ = (b.z0 - низ) + height / 2;
+        mesh.position.set(centerX, centerY, centerZ);
+        mesh.userData.blockId = b.id;
+        mesh.renderOrder = 3;
+        scene.add(mesh);
+        // Толще и непрозрачнее фасадных/осевых линий — форма каждого блока
+        // должна читаться сразу, не сливаясь с рёбрами модели под ним
+        // (живой запрос пользователя, 2026-09-01).
+        const рёбраБлока = new THREE.LineSegments(
+          new THREE.EdgesGeometry(geometry),
+          new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.95, linewidth: 2 }));
+        рёбраБлока.position.copy(mesh.position);
+        рёбраБлока.renderOrder = 5;
+        scene.add(рёбраБлока);
+        if (!крупнейший || width * depth > крупнейший.width * крупнейший.depth) {
+          крупнейший = { width, depth, centerX, centerY, centerZ };
+        }
+      }
       верх = Math.max(верх, (b.z1 - низ));
-      if (chess) {
+      if (chess && крупнейший) {
         // «Наклейка» на ВНЕШНЕЙ грани — фиксированная сторона блока
         // (наружу от центра здания), не билборд и не зависит от камеры.
         const { ux, uy, вынос } = mfrChessOutwardOffset(
-          centerX, centerY, width / 2, depth / 2, w / 2, h / 2);
+          крупнейший.centerX, крупнейший.centerY, крупнейший.width / 2, крупнейший.depth / 2, w / 2, h / 2);
         const decal = buildMfrChessLabelMesh(
-          `${chess.percent}%`, centerX + ux * вынос, centerY + uy * вынос, centerZ,
-          new THREE.Vector3(ux, uy, 0));
+          `${chess.percent}%`, крупнейший.centerX + ux * вынос, крупнейший.centerY + uy * вынос,
+          крупнейший.centerZ, new THREE.Vector3(ux, uy, 0));
         scene.add(decal);
       }
     }
@@ -28946,65 +28983,31 @@ function renderBlkMatrix() {
     box.innerHTML = '<div class="hint-text">Сначала заведите секции и этажи на вкладке «Секции и этажи».</div>';
     return;
   }
-  const have = new Set(blkBlocks.map(b => `${b.section_id}:${b.level_id}`));
+  const haveBlock = new Map(blkBlocks.map(b => [`${b.section_id}:${b.level_id}`, b]));
+  // «✎» открывает редактор геометрии (2026-09-05, живой запрос
+  // пользователя: «в блоках… добавь редактирование… перетаскивания точек
+  // и указания координат вручную») — отдельная кнопка внутри клетки,
+  // «✓»/«—» по-прежнему переключает наличие блока, оба клика не путаются
+  // (свои обработчики на своих классах, не общий на всю ячейку).
   const rows = blkLevels.map(l => `<tr>
     <th class="blk-row-name">${escapeHtml(l.name || l.key)}</th>
     ${blkSections.map(s => {
-      const on = have.has(`${s.id}:${l.id}`);
-      return `<td class="blk-cell${on ? " on" : ""}" data-sec="${s.id}" data-lvl="${l.id}">${on ? "✓" : "—"}</td>`;
+      const b = haveBlock.get(`${s.id}:${l.id}`);
+      return `<td class="blk-cell${b ? " on" : ""}">
+        <span class="blk-cell-toggle" data-sec="${s.id}" data-lvl="${l.id}">${b ? "✓" : "—"}</span>
+        ${b ? `<button class="blk-cell-edit" data-geo-block="${b.id}" data-sec-code="${escapeHtml(s.code)}"
+             data-lvl-name="${escapeHtml(l.name || l.key)}" data-lvl-id="${l.id}"
+             title="Геометрия блока">✎</button>` : ""}
+      </td>`;
     }).join("")}
   </tr>`).join("");
-  // Геометрия блоков — таблица под матрицей (2026-09-02, живой запрос
-  // пользователя: «…в том числе координаты вершин блоков»): четыре
-  // координаты прямоугольника блока в общей сетке осей объекта, мм.
-  // Пусто — блок считается по осям секции (или как загрузился из PDF);
-  // все четыре заполнены — прямая геометрия поверх; «по осям» стирает.
-  // Правка любой из четырёх сохраняется, когда заполнены все.
-  const порядок = [...blkBlocks].sort((a, b) => (a.level_sort - b.level_sort) || String(a.section_code).localeCompare(String(b.section_code)));
-  const геоСтроки = порядок.map(b => {
-    const v = k => (b[k] != null ? Math.round(b[k]) : "");
-    return `<tr data-block-geo="${b.id}">
-      <td>${escapeHtml(b.level_name || b.level_key)}</td><td>${escapeHtml(b.section_code)}</td>
-      ${["x0", "x1", "y0", "y1"].map(k => `<td class="num"><input class="blk-inline num" type="number" step="1"
-         data-geo="${k}" value="${v(k)}" placeholder="—"/></td>`).join("")}
-      <td>${b.x0 != null ? `<button class="link-btn" data-geo-reset="${b.id}">по осям</button>` : ""}</td></tr>`;
-  }).join("");
   box.innerHTML = `<table id="blk-matrix-table">
     <thead><tr><th class="blk-row-name">Этаж \\ Секция</th>
       ${blkSections.map(s => `<th>${escapeHtml(s.code)}</th>`).join("")}</tr></thead>
-    <tbody>${rows}</tbody></table>
-    ${blkBlocks.length ? `<h4 style="margin-top:16px">Геометрия блоков, мм (общая сетка осей объекта)</h4>
-    <div class="hint-text" style="margin-bottom:6px">Пусто — по осям секции или как загрузилось из PDF;
-      заполнены все четыре — прямая геометрия поверх. Сохраняется при уходе из поля.</div>
-    <table class="dict-table"><tr><th>Этаж</th><th>Секция</th><th>x0</th><th>x1</th><th>y0</th><th>y1</th><th></th></tr>
-      ${геоСтроки}</table>` : ""}`;
-  const patchGeo = async (id, body) => {
-    try {
-      await api(`/objects/${state.objectId}/blocks/${id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      blkBlocks = await api(`/objects/${state.objectId}/blocks`);
-      renderBlkMatrix();
-      revitPlanState.blocksData = [];   // «Модель МФР» перечитает геометрию при следующем показе
-    } catch (e) { showToast(e.message, "error"); }
-  };
-  box.querySelectorAll("[data-block-geo] [data-geo]").forEach(inp => inp.addEventListener("change", async () => {
-    const row = inp.closest("[data-block-geo]");
-    const vals = {};
-    for (const k of ["x0", "x1", "y0", "y1"]) {
-      const raw = row.querySelector(`[data-geo="${k}"]`).value.trim();
-      if (raw === "") return;   // ждём, пока заполнят все четыре
-      if (!Number.isFinite(Number(raw))) { showToast("Нужно число, мм", "error"); return; }
-      vals[k] = Number(raw);
-    }
-    await patchGeo(row.dataset.blockGeo, vals);
-  }));
-  box.querySelectorAll("[data-geo-reset]").forEach(btn => btn.addEventListener("click", async () => {
-    await patchGeo(btn.dataset.geoReset, { x0: null, x1: null, y0: null, y1: null });
-  }));
-  box.querySelectorAll("td.blk-cell").forEach(td => td.addEventListener("click", async () => {
-    const sectionId = Number(td.dataset.sec), levelId = Number(td.dataset.lvl);
-    const on = td.classList.contains("on");
+    <tbody>${rows}</tbody></table>`;
+  box.querySelectorAll(".blk-cell-toggle").forEach(el => el.addEventListener("click", async () => {
+    const sectionId = Number(el.dataset.sec), levelId = Number(el.dataset.lvl);
+    const on = el.parentElement.classList.contains("on");
     try {
       if (on) {
         const b = blkBlocks.find(x => x.section_id === sectionId && x.level_id === levelId);
@@ -29019,7 +29022,204 @@ function renderBlkMatrix() {
       renderBlkMatrix();
     } catch (e) { showToast(e.message, "error"); }
   }));
+  box.querySelectorAll(".blk-cell-edit").forEach(btn => btn.addEventListener("click", () => {
+    openBlkGeoEditor(Number(btn.dataset.geoBlock), btn.dataset.secCode,
+                     btn.dataset.lvlName, Number(btn.dataset.lvlId));
+  }));
 }
+
+// -------- Геометрия блока: редактор набором прямоугольников --------
+//
+// Заменяет одиночный прямоугольник (2026-09-02) — Г-образный/ступенчатый
+// этаж им не выразить, блоки соседних секций пересекались (живой отчёт
+// пользователя со скриншотом, 2026-09-05). Перетаскивание СВОЕЙ формы (и
+// целиком, и за угол) плюс числовые поля — оба способа сразу, по прямой
+// просьбе. Соседние блоки того же этажа рисуются для сверки, но НЕ
+// перетаскиваются — правятся только через свою же карточку.
+
+let blkGeoBlockId = null, blkGeoLevelId = null;
+let blkGeoBoxes = [];    // рабочая копия — [{x0,x1,y0,y1}], без id
+let blkGeoOthers = [];   // [{секция, boxes:[{x0,x1,y0,y1}]}] — соседи, только вид
+let blkGeoDrag = null;   // {kind:"move"|"corner", boxIndex, corner, startX, startY, orig}
+
+async function openBlkGeoEditor(blockId, sectionCode, levelName, levelId) {
+  blkGeoBlockId = blockId; blkGeoLevelId = levelId;
+  document.getElementById("blk-geo-title").textContent = `Геометрия блока: ${sectionCode} · ${levelName}`;
+  document.getElementById("blk-geo-editor").style.display = "";
+  document.getElementById("blk-geo-canvas-box").innerHTML = '<div class="hint-text" style="padding:8px">Загрузка…</div>';
+  const [boxes, geometry] = await Promise.all([
+    api(`/objects/${state.objectId}/blocks/${blockId}/boxes`),
+    api(`/objects/${state.objectId}/blocks/geometry?level_id=${levelId}`),
+  ]);
+  blkGeoBoxes = boxes.map(b => ({ x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1 }));
+  if (!blkGeoBoxes.length) {
+    // Пусто — блок ещё не настраивали руками: подставляем то, что сейчас
+    // считается по осям, чтобы было ЧТО тащить, а не голый холст.
+    const мой = geometry.find(g => g.id === blockId);
+    if (мой && мой.ok) blkGeoBoxes = мой.boxes.map(b => ({ ...b }));
+  }
+  blkGeoOthers = geometry.filter(g => g.id !== blockId && g.ok)
+    .map(g => ({ секция: g["секция"], boxes: g.boxes }));
+  document.getElementById("blk-geo-warnings").textContent = "";
+  renderBlkGeoEditor();
+}
+
+function blkGeoBounds() {
+  const all = [...blkGeoBoxes, ...blkGeoOthers.flatMap(o => o.boxes)];
+  const finish = (minX, minY, w, h) => {
+    // viewBox — в мм площадки (десятки тысяч), а не экранных пикселях:
+    // фиксированные r="7"/stroke-width="2" были бы долями пикселя и
+    // невидимы (живая проверка, 2026-09-05) — толщина и ручки считаются
+    // ДОЛЕЙ охвата, тем же приёмом, что у обводки блоков основного плана
+    // (`Math.max(w / 300, …)`, см. drawRevitPlan).
+    const scale = Math.max(w, h);
+    return { minX, minY, w, h, strokeW: Math.max(scale / 300, 40), handleR: Math.max(scale / 90, 60) };
+  };
+  if (!all.length) return finish(0, 0, 10000, 10000);
+  const margin = 1500;
+  const minX = Math.min(...all.map(b => b.x0)) - margin, maxX = Math.max(...all.map(b => b.x1)) + margin;
+  const minY = Math.min(...all.map(b => b.y0)) - margin, maxY = Math.max(...all.map(b => b.y1)) + margin;
+  return finish(minX, minY, maxX - minX, maxY - minY);
+}
+
+function renderBlkGeoEditor() {
+  const { minX, minY, w, h, strokeW, handleR } = blkGeoBounds();
+  const toSvgY = (worldY) => h - (worldY - minY);   // мир Y вверх, SVG Y вниз — как основной план
+  const fontSize = Math.max(w, h) / 60;
+  const otherRects = blkGeoOthers.flatMap((o) => o.boxes.map((b) => `
+    <rect x="${b.x0 - minX}" y="${toSvgY(b.y1)}" width="${b.x1 - b.x0}" height="${b.y1 - b.y0}"
+      fill="var(--color-text-muted)" fill-opacity="0.18" stroke="var(--color-text-muted)" stroke-opacity="0.6"
+      stroke-width="${strokeW}"/>
+    <text x="${b.x0 - minX + fontSize * 0.3}" y="${toSvgY(b.y1) + fontSize}" font-size="${fontSize}"
+      fill="var(--color-text-muted)">${escapeHtml(o.секция)}</text>`).join(""));
+  const myRects = blkGeoBoxes.map((b, i) => {
+    const x = b.x0 - minX, y = toSvgY(b.y1), rw = b.x1 - b.x0, rh = b.y1 - b.y0;
+    const corners = [["tl", x, y], ["tr", x + rw, y], ["bl", x, y + rh], ["br", x + rw, y + rh]];
+    return `<rect class="geo-box" data-box-i="${i}" x="${x}" y="${y}" width="${rw}" height="${rh}"
+        fill="var(--color-primary)" fill-opacity="0.3" stroke="var(--color-primary)" stroke-width="${strokeW}"/>
+      ${corners.map(([c, cx, cy]) => `<circle class="geo-handle" data-box-i="${i}" data-corner="${c}"
+          cx="${cx}" cy="${cy}" r="${handleR}"/>`).join("")}`;
+  }).join("");
+  const canvasBox = document.getElementById("blk-geo-canvas-box");
+  canvasBox.innerHTML = `<svg id="blk-geo-svg" viewBox="0 0 ${w} ${h}" style="width:100%;height:100%"
+      preserveAspectRatio="xMidYMid meet">${otherRects}${myRects}</svg>`;
+
+  const rows = blkGeoBoxes.map((b, i) => `<div class="blk-geo-row" data-box-i="${i}">
+    ${["x0", "x1", "y0", "y1"].map(k => `<input class="blk-inline num" type="number" step="1"
+       data-box-i="${i}" data-field="${k}" value="${Math.round(b[k])}"/>`).join("")}
+    <button class="link-btn" data-remove-box="${i}">удалить</button>
+  </div>`).join("");
+  document.getElementById("blk-geo-boxes").innerHTML = rows
+    || '<div class="hint-text">Прямоугольников нет — блок будет считаться по осям секции.</div>';
+
+  document.querySelectorAll("#blk-geo-boxes input").forEach((inp) => inp.addEventListener("change", () => {
+    const i = Number(inp.dataset.boxI), field = inp.dataset.field, v = Number(inp.value);
+    if (!Number.isFinite(v)) return;
+    blkGeoBoxes[i][field] = v;
+    renderBlkGeoEditor();
+  }));
+  document.querySelectorAll("[data-remove-box]").forEach((btn) => btn.addEventListener("click", () => {
+    blkGeoBoxes.splice(Number(btn.dataset.removeBox), 1);
+    renderBlkGeoEditor();
+  }));
+  bindBlkGeoDrag();
+}
+
+function blkGeoSvgPoint(evt) {
+  const svg = document.getElementById("blk-geo-svg");
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+// Полный renderBlkGeoEditor() пересчитывает охват (blkGeoBounds) из ТЕКУЩИХ
+// прямоугольников — вызови его на каждый pointermove, и viewBox/CTM сдвинется
+// вместе с перетаскиваемой формой, а startSvg (снят один раз на pointerdown,
+// в СТАРОЙ системе координат) тут же перестанет соответствовать курсору —
+// перетаскивание дёргалось бы. Поэтому во время жеста охват ЗАМОРОЖЕН
+// (снят один раз на pointerdown), а обновляются только атрибуты нужных
+// SVG-элементов и значения полей; полный ре-рендер — только по pointerup.
+function bindBlkGeoDrag() {
+  const svg = document.getElementById("blk-geo-svg");
+  if (!svg) return;
+  svg.querySelectorAll(".geo-handle, .geo-box").forEach((el) => el.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const i = Number(el.dataset.boxI);
+    const p = blkGeoSvgPoint(e);
+    blkGeoDrag = el.classList.contains("geo-handle")
+      ? { kind: "corner", boxIndex: i, corner: el.dataset.corner, startSvg: p, orig: { ...blkGeoBoxes[i] },
+          bounds: blkGeoBounds() }
+      : { kind: "move", boxIndex: i, startSvg: p, orig: { ...blkGeoBoxes[i] }, bounds: blkGeoBounds() };
+    svg.setPointerCapture(e.pointerId);
+  }));
+  svg.addEventListener("pointermove", (e) => {
+    if (!blkGeoDrag) return;
+    const p = blkGeoSvgPoint(e);
+    const dxWorld = p.x - blkGeoDrag.startSvg.x;
+    const dyWorld = -(p.y - blkGeoDrag.startSvg.y);   // SVG вниз = мир вниз по Y (см. toSvgY)
+    const box = blkGeoBoxes[blkGeoDrag.boxIndex], orig = blkGeoDrag.orig;
+    if (blkGeoDrag.kind === "move") {
+      box.x0 = orig.x0 + dxWorld; box.x1 = orig.x1 + dxWorld;
+      box.y0 = orig.y0 + dyWorld; box.y1 = orig.y1 + dyWorld;
+    } else {
+      const west = blkGeoDrag.corner.includes("l"), north = blkGeoDrag.corner === "tl" || blkGeoDrag.corner === "tr";
+      if (west) box.x0 = orig.x0 + dxWorld; else box.x1 = orig.x1 + dxWorld;
+      if (north) box.y1 = orig.y1 + dyWorld; else box.y0 = orig.y0 + dyWorld;
+    }
+    blkGeoUpdateBoxVisual(blkGeoDrag.boxIndex, blkGeoDrag.bounds);
+  });
+  window.addEventListener("pointerup", () => {
+    if (!blkGeoDrag) return;
+    blkGeoDrag = null;
+    renderBlkGeoEditor();   // один раз, начисто — пересчитать охват под итог
+  });
+}
+
+function blkGeoUpdateBoxVisual(i, { minX, minY, h }) {
+  const b = blkGeoBoxes[i];
+  const toSvgY = (worldY) => h - (worldY - minY);
+  const x = b.x0 - minX, y = toSvgY(b.y1), rw = b.x1 - b.x0, rh = b.y1 - b.y0;
+  const rect = document.querySelector(`.geo-box[data-box-i="${i}"]`);
+  rect.setAttribute("x", x); rect.setAttribute("y", y);
+  rect.setAttribute("width", rw); rect.setAttribute("height", rh);
+  const corners = { tl: [x, y], tr: [x + rw, y], bl: [x, y + rh], br: [x + rw, y + rh] };
+  for (const [c, [cx, cy]] of Object.entries(corners)) {
+    const handle = document.querySelector(`.geo-handle[data-box-i="${i}"][data-corner="${c}"]`);
+    handle.setAttribute("cx", cx); handle.setAttribute("cy", cy);
+  }
+  document.querySelectorAll(`.blk-geo-row[data-box-i="${i}"] input`).forEach((inp) => {
+    inp.value = Math.round(b[inp.dataset.field]);
+  });
+}
+
+document.getElementById("blk-geo-add").addEventListener("click", () => {
+  const { minX, minY, w, h } = blkGeoBounds();
+  const size = Math.min(w, h) * 0.2 || 3000;
+  blkGeoBoxes.push({ x0: minX + w * 0.4, x1: minX + w * 0.4 + size, y0: minY + h * 0.4, y1: minY + h * 0.4 + size });
+  renderBlkGeoEditor();
+});
+document.getElementById("blk-geo-reset").addEventListener("click", () => {
+  blkGeoBoxes = [];
+  renderBlkGeoEditor();
+});
+document.getElementById("blk-geo-close").addEventListener("click", () => {
+  document.getElementById("blk-geo-editor").style.display = "none";
+  blkGeoBlockId = null;
+});
+document.getElementById("blk-geo-save").addEventListener("click", async () => {
+  for (const b of blkGeoBoxes) {
+    if (!(b.x1 > b.x0) || !(b.y1 > b.y0)) { showToast("x1 должен быть больше x0, y1 — больше y0", "error"); return; }
+  }
+  try {
+    const res = await api(`/objects/${state.objectId}/blocks/${blkGeoBlockId}/boxes`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ boxes: blkGeoBoxes }),
+    });
+    document.getElementById("blk-geo-warnings").innerHTML = (res.warnings || []).map(escapeHtml).join("<br>");
+    showToast("Геометрия сохранена", "success");
+    revitPlanState.blocksData = [];   // «Модель МФР» перечитает геометрию при следующем показе
+  } catch (e) { showToast(e.message, "error"); }
+});
 
 // -------- Виды работ (вкладка «Виды работ»): загрузка xlsx --------
 

@@ -7,7 +7,7 @@ import sqlite3
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exception_handlers import (
@@ -5712,34 +5712,54 @@ def edit_block_level(object_id: int, level_id: int, body: BlockLevelEditIn,
     return {"ok": True}
 
 
-class BlockGeometryIn(BaseModel):
-    """Прямая геометрия блока, мм в общей сетке осей; все четыре или ни
-    одной (тогда — снова по осям секции)."""
-    x0: Optional[float] = None
-    x1: Optional[float] = None
-    y0: Optional[float] = None
-    y1: Optional[float] = None
+class BlockBoxIn(BaseModel):
+    x0: float
+    x1: float
+    y0: float
+    y1: float
 
 
-@app.patch("/objects/{object_id}/blocks/{block_id}")
-def edit_block_geometry(object_id: int, block_id: int, body: BlockGeometryIn,
-                        user: sqlite3.Row = Depends(get_current_user)):
-    """Экран «Учёт по блокам → Блоки» (2026-09-02): координаты блока руками
-    поверх вычисленных по осям/загруженных из PDF."""
+class BlockBoxesIn(BaseModel):
+    """Прямая геометрия блока — набор прямоугольников, мм в общей сетке
+    осей объекта; пустой список — снова по осям секции. Форма всегда шлёт
+    полный набор разом (Docs/block-accounting.md)."""
+    boxes: List[BlockBoxIn]
+
+
+@app.get("/objects/{object_id}/blocks/{block_id}/boxes")
+def get_block_boxes(object_id: int, block_id: int,
+                    user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "read")
+        try:
+            return blocks_mod.list_block_boxes(conn, object_id, block_id)
+        except blocks_mod.BlockError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.put("/objects/{object_id}/blocks/{block_id}/boxes")
+def put_block_boxes(object_id: int, block_id: int, body: BlockBoxesIn,
+                    user: sqlite3.Row = Depends(get_current_user)):
+    """Экран «Учёт по блокам → Блоки»: геометрия блока руками — набором
+    прямоугольников, поверх вычисленных по осям/загруженных из PDF
+    (2026-09-05, живой запрос пользователя: один прямоугольник не выражает
+    Г-образные/ступенчатые этажи)."""
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "blocks", "write")
+        boxes = [b.model_dump() for b in body.boxes]
         try:
-            blocks_mod.update_block_geometry(conn, object_id, block_id,
-                                             body.x0, body.x1, body.y0, body.y1)
+            warnings = blocks_mod.set_block_boxes(conn, object_id, block_id, boxes)
         except blocks_mod.BlockError as e:
             raise HTTPException(status_code=422, detail=str(e))
     finally:
         conn.close()
     activity.log("block_geometry_edit", user=user, entity_type="object", entity_id=object_id,
-                details={"block_id": block_id, "x0": body.x0, "x1": body.x1,
-                         "y0": body.y0, "y1": body.y1})
-    return {"ok": True}
+                details={"block_id": block_id, "прямоугольников": len(boxes)})
+    return {"ok": True, "warnings": warnings}
 
 
 @app.delete("/objects/{object_id}/levels/{level_id}")

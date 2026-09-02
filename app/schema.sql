@@ -1193,21 +1193,41 @@ CREATE TABLE IF NOT EXISTS blocks (
     object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
     section_id INTEGER NOT NULL REFERENCES object_sections (id) ON DELETE CASCADE,
     level_id INTEGER NOT NULL REFERENCES object_levels (id) ON DELETE CASCADE,
-    -- Геометрия блока ПРЯМЫМ хранением (2026-09-01, упрощённый импорт из
-    -- PDF по фасадам, без разбора помещений/стен) — мм, те же общие
-    -- координаты площадки, что у revit_elements. NULL у блоков без нужды в
-    -- ней (обычный путь — блок ВЫЧИСЛЯЕТСЯ на лету по оси секции +
-    -- габариту загруженных элементов, `block_geometry.block_box`): для
-    -- фасадного импорта элементов нет вовсе, а этаж внутри секции сужается
-    -- по высоте (башня уже цоколя) — вычислить не из чего, значение нужно
-    -- готовым. Когда заполнено — `block_box` берёт его В ПРИОРИТЕТЕ, минуя
-    -- вычисление по оси.
+    -- x0..y1 — НАСЛЕДИЕ (2026-09-01..09-02, до block_boxes ниже): один
+    -- прямоугольник прямой геометрии блока. Заменены таблицей `block_boxes`
+    -- (2026-09-05, живой запрос пользователя: один прямоугольник не
+    -- выражает Г-образные/ступенчатые этажи — блоки соседних секций
+    -- пересекались) — данные перенесены обработкой при обновлении
+    -- (`app/release_tasks.py`), сами колонки оставлены НЕ ТРОГАТЬ:
+    -- SQLite не роняет DROP COLUMN бесплатно, а разработка тут ведётся не
+    -- ORM-миграциями. Новый код их не читает и не пишет.
     x0 REAL,
     x1 REAL,
     y0 REAL,
     y1 REAL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (section_id, level_id)
+);
+
+-- Прямая геометрия блока НАБОРОМ прямоугольников (2026-09-05, живой запрос
+-- пользователя, Docs/block-accounting.md): 0 строк — блок считается по
+-- осям секции (`block_geometry.block_box`), как и раньше; 1+ строка —
+-- прямая геометрия, приоритет над осями, УНИЯ всех прямоугольников. Замена
+-- одиночных blocks.x0..y1 — тот прямоугольник выражал только сам себя, а
+-- Г-образный/ступенчатый этаж требует нескольких. Пересечение с блоком
+-- ДРУГОЙ секции на том же этаже при сохранении не запрещается (только
+-- предупреждение, app/blocks.py) — реальные исходники заказчика уже
+-- содержали законные пограничные случаи для похожей проверки осей
+-- (Docs/backlog.md, «258723»).
+CREATE TABLE IF NOT EXISTS block_boxes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    block_id INTEGER NOT NULL REFERENCES blocks (id) ON DELETE CASCADE,
+    x0 REAL NOT NULL,
+    x1 REAL NOT NULL,
+    y0 REAL NOT NULL,
+    y1 REAL NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Справочник видов работ (WBS), перезагружаемый xlsx (block-accounting.md

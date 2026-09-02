@@ -1100,8 +1100,23 @@
     text-align: left; white-space: nowrap;
     box-shadow: inset -1px 0 0 var(--color-border); }
   #blk-matrix-table thead th.blk-row-name { z-index: 4; background: var(--color-surface-2); }
-  #blk-matrix-table td.blk-cell { cursor: pointer; color: var(--color-text-muted); }
+  #blk-matrix-table td.blk-cell { color: var(--color-text-muted); position: relative; }
   #blk-matrix-table td.blk-cell.on { color: var(--color-primary); font-weight: 700; }
+  #blk-matrix-table .blk-cell-toggle { cursor: pointer; padding: 4px 6px; display: inline-block; }
+  /* «✎» — геометрия блока (2026-09-05): своя кнопка, не тот же клик, что
+     ставит/снимает блок целиком, иначе один жест значил бы два разных дела. */
+  #blk-matrix-table .blk-cell-edit { cursor: pointer; border: none; background: none;
+    color: var(--color-text-muted); font-size: 11px; padding: 0 0 0 4px; vertical-align: middle; }
+  #blk-matrix-table .blk-cell-edit:hover { color: var(--color-primary); }
+
+  /* Редактор геометрии блока: перетаскивание прямоугольника целиком и по
+     углам (2026-09-05, живой запрос пользователя). */
+  #blk-geo-svg .geo-box { cursor: move; touch-action: none; }
+  #blk-geo-svg .geo-handle { fill: var(--color-primary); stroke: var(--color-surface);
+    stroke-width: 1.5; cursor: nwse-resize; touch-action: none; }
+  .blk-geo-row { display: flex; gap: 6px; align-items: center; padding: 3px 0;
+    border-bottom: 1px solid var(--color-border-soft); }
+  .blk-geo-row input { width: 90px; }
   /* Дерево видов работ и матрица статусов — тот же приём: узел раскрывается
      отступом, лист несёт ячейки по колонкам блоков/секций. */
   #wp-matrix-box { overflow: auto; max-height: 58vh;
@@ -6955,8 +6970,27 @@
 
     <div id="blk-tab-blocks" class="blk-panel" style="display:none">
       <p class="hint-text">Блоки — НЕ декартово произведение секций и этажей: у секции может
-        не быть верхних этажей. Отметьте клеткой те пары, что реально есть.</p>
+        не быть верхних этажей. Отметьте клеткой те пары, что реально есть. Значок «✎» у
+        занятой клетки открывает геометрию блока — по умолчанию считается по осям секции,
+        руками задаётся набором прямоугольников (для Г-образных/ступенчатых этажей — не один).</p>
       <div id="blk-matrix-box"></div>
+      <div id="blk-geo-editor" style="display:none; margin-top:16px; border-top:1px solid var(--color-border); padding-top:12px">
+        <div class="blk-add-row" style="justify-content:space-between">
+          <h4 id="blk-geo-title" style="margin:0">Геометрия блока</h4>
+          <button class="btn btn-sm btn-secondary" id="blk-geo-close">Закрыть</button>
+        </div>
+        <div id="blk-geo-canvas-box" style="border:1px solid var(--color-border); border-radius:var(--radius);
+             background:var(--color-surface); overflow:hidden; height:40vh; position:relative"></div>
+        <p class="hint-text" style="margin:6px 0">Перетаскивайте прямоугольник целиком или его угол; серым — блоки
+          других секций на этом же этаже, для сверки на пересечение.</p>
+        <div id="blk-geo-boxes"></div>
+        <div class="actions" style="margin-top:8px">
+          <button class="btn btn-sm btn-secondary" id="blk-geo-add">Добавить прямоугольник</button>
+          <button class="btn btn-sm btn-secondary" id="blk-geo-reset">По осям (сбросить)</button>
+          <button class="btn btn-primary" id="blk-geo-save">Сохранить</button>
+        </div>
+        <div id="blk-geo-warnings" class="warning-text" style="margin-top:8px"></div>
+      </div>
     </div>
 
     <div id="blk-tab-worktypes" class="blk-panel" style="display:none">

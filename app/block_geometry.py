@@ -187,26 +187,34 @@ def _level_height(conn, object_id: int, section_id: int, floor, z0: float):
 
 
 def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
-    """Параллелепипед блока — или причина, почему его нет.
+    """Параллелепипеды блока — или причина, почему их нет.
 
     Возвращает `{"ok": False, "reason": "..."}` либо `{"ok": True,
-    "approx_height": bool, "x0","x1","y0","y1","z0","z1"}` (координаты —
-    в общих координатах площадки, как у `revit_elements`)."""
+    "approx_height": bool, "boxes": [{"x0","x1","y0","y1"}, ...], "z0",
+    "z1"}` (координаты — в общих координатах площадки, как у
+    `revit_elements`). `boxes` — ОДИН элемент почти всегда (по осям секции
+    — всегда один; прямая геометрия — обычно тоже один, но может быть
+    несколько сразу, см. ниже), потребитель обязан уметь несколько."""
     block = conn.execute(
-        "SELECT x0, x1, y0, y1 FROM blocks WHERE section_id = ? AND level_id = ?",
+        "SELECT id FROM blocks WHERE section_id = ? AND level_id = ?",
         (section_id, level_id),
     ).fetchone()
-    прямая_геометрия = (block is not None and block["x0"] is not None
-                        and block["x1"] is not None and block["y0"] is not None
-                        and block["y1"] is not None)
-    # Прямое хранение (упрощённый импорт из PDF по фасадам, 2026-09-01,
-    # см. schema.sql) — в ПРИОРИТЕТЕ и минует привязку к осям целиком: у
-    # такого блока оси секции может не быть вовсе (без разбора помещений/
-    # стен привязывать не по чему), а форма по высоте всё равно СВОЯ у
-    # каждого этажа (тело здания сужается кверху) — то, ради чего заведено
-    # хранение, а не общий на секцию прямоугольник по одной паре осей.
-    if прямая_геометрия:
-        xy = {"x0": block["x0"], "x1": block["x1"], "y0": block["y0"], "y1": block["y1"]}
+    прямые_прямоугольники = [] if block is None else [
+        dict(row) for row in conn.execute(
+            "SELECT x0, x1, y0, y1 FROM block_boxes WHERE block_id = ? ORDER BY sort_order, id",
+            (block["id"],),
+        )
+    ]
+    # Прямое хранение (`block_boxes` — набор прямоугольников, 2026-09-05;
+    # до неё — упрощённый импорт из PDF по фасадам, 2026-09-01, одним
+    # прямоугольником в `blocks.x0..y1`, см. schema.sql) — в ПРИОРИТЕТЕ и
+    # минует привязку к осям целиком: у такого блока оси секции может не
+    # быть вовсе (без разбора помещений/стен привязывать не по чему), а
+    # форма по высоте всё равно СВОЯ у каждого этажа (тело здания сужается
+    # кверху) — то, ради чего заведено хранение, а не общий на секцию
+    # прямоугольник по одной паре осей.
+    if прямые_прямоугольники:
+        boxes = прямые_прямоугольники
     else:
         section = conn.execute(
             "SELECT axis_from, axis_to FROM object_sections WHERE id = ?", (section_id,)
@@ -226,6 +234,7 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
         if xy is None:
             return {"ok": False, "reason": "оси секции разнонаправленные "
                     "(или геометрия этажа не пересекается с пролётом осей)"}
+        boxes = [xy]
 
     level = conn.execute(
         "SELECT floor, elevation_mm, elevation_suspect, height_mm FROM object_levels WHERE id = ?",
@@ -249,8 +258,4 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
     if высота is None:
         return {"ok": False, "reason": "высоту этажа определить не из чего"}
 
-    return {
-        "ok": True, "approx_height": approx,
-        "x0": xy["x0"], "x1": xy["x1"], "y0": xy["y0"], "y1": xy["y1"],
-        "z0": z0, "z1": z0 + высота,
-    }
+    return {"ok": True, "approx_height": approx, "boxes": boxes, "z0": z0, "z1": z0 + высота}

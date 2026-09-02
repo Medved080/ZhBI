@@ -540,6 +540,24 @@ def _fill_revit_sections(conn: sqlite3.Connection) -> str:
     return "назначено %d, без секции осталось %d" % (назначено, осталось)
 
 
+def _backfill_block_boxes(conn: sqlite3.Connection) -> str:
+    """У блока с прямой геометрией (`blocks.x0..y1`, один прямоугольник) и
+    ещё без строк в `block_boxes` — завести одну строку с теми же
+    координатами. Идемпотентно: условие `NOT EXISTS` пропускает уже
+    перенесённые и блоки, у которых своей геометрии никогда не было
+    (считаются по осям — там переносить нечего)."""
+    cur = conn.execute(
+        "INSERT INTO block_boxes (block_id, x0, x1, y0, y1, sort_order) "
+        "SELECT id, x0, x1, y0, y1, 0 FROM blocks b "
+        "WHERE x0 IS NOT NULL AND x1 IS NOT NULL AND y0 IS NOT NULL AND y1 IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM block_boxes bb WHERE bb.block_id = b.id)"
+    )
+    conn.commit()
+    if not cur.rowcount:
+        return "переносить нечего — прямой геометрии по старой схеме нет"
+    return "перенесено прямоугольников: %d" % cur.rowcount
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -642,6 +660,19 @@ RELEASE_TASKS = [
                "заполнен не у всех",
         "kind": KIND_DATA,
         "run": _fill_revit_sections,
+    },
+    {
+        "name": "2026-09-05-block-boxes-backfill",
+        "version": "0.68",
+        "date": "2026-09-05",
+        "title": "Перенести прямую геометрию блока в набор прямоугольников",
+        "why": "blocks.x0..y1 (один прямоугольник) заменены таблицей "
+               "block_boxes (несколько) — Г-образные/ступенчатые этажи одним "
+               "прямоугольником не выразить, блоки соседних секций "
+               "пересекались; уже настроенная вручную геометрия не должна "
+               "потеряться",
+        "kind": KIND_DATA,
+        "run": _backfill_block_boxes,
     },
 ]
 

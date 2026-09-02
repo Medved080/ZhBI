@@ -21,7 +21,7 @@
 у секции может не быть верхних этажей, поэтому блок создаётся явно.
 """
 
-from app.block_geometry import section_box_xy
+from app.block_geometry import block_box, section_box_xy
 from app.revit_package import KIND_ROOF, normalize_section
 
 
@@ -255,7 +255,7 @@ def list_blocks(conn, object_id: int) -> list:
         for row in conn.execute(
             "SELECT b.id, b.section_id, s.code AS section_code, s.name AS section_name, "
             "b.level_id, l.key AS level_key, l.floor, l.kind, l.name AS level_name, "
-            "l.sort_order AS level_sort, b.x0, b.x1, b.y0, b.y1 "
+            "l.sort_order AS level_sort "
             "FROM blocks b "
             "JOIN object_sections s ON s.id = b.section_id "
             "JOIN object_levels l ON l.id = b.level_id "
@@ -266,26 +266,77 @@ def list_blocks(conn, object_id: int) -> list:
     ]
 
 
-def update_block_geometry(conn, object_id: int, block_id: int, x0=None, x1=None,
-                          y0=None, y1=None) -> None:
-    """Прямая геометрия блока (`blocks.x0/x1/y0/y1`, Docs/TZ.md «Геометрия
-    блока») руками — экран «Учёт по блокам → Блоки» (2026-09-02, живой
-    запрос пользователя: «все разделы учёта по блокам интерактивно
-    редактируемыми, в том числе координаты вершин блоков»). Либо все
-    четыре числа, либо все пустые — тогда блок снова считается по осям
-    секции; половинчатого состояния не бывает, `block_box` его не поймёт."""
-    values = (x0, x1, y0, y1)
-    given = [v for v in values if v is not None]
-    if given and len(given) != 4:
-        raise BlockError("Нужны все четыре координаты (x0, x1, y0, y1) — или ни одной.")
-    if given and (x1 <= x0 or y1 <= y0):
-        raise BlockError("x1 должен быть больше x0, y1 — больше y0.")
-    cur = conn.execute(
-        "UPDATE blocks SET x0 = ?, x1 = ?, y0 = ?, y1 = ? WHERE id = ? AND object_id = ?",
-        (*values, block_id, object_id))
-    if cur.rowcount == 0:
+def list_block_boxes(conn, object_id: int, block_id: int) -> list:
+    row = conn.execute(
+        "SELECT id FROM blocks WHERE id = ? AND object_id = ?", (block_id, object_id),
+    ).fetchone()
+    if row is None:
         raise BlockError("Блок не найден.")
+    return [
+        dict(r) for r in conn.execute(
+            "SELECT id, x0, x1, y0, y1 FROM block_boxes WHERE block_id = ? ORDER BY sort_order, id",
+            (block_id,),
+        )
+    ]
+
+
+def _rects_overlap(a: dict, b: dict) -> bool:
+    return a["x0"] < b["x1"] and b["x0"] < a["x1"] and a["y0"] < b["y1"] and b["y0"] < a["y1"]
+
+
+def _overlap_warnings(conn, object_id: int, section_id: int, level_id: int, boxes: list) -> list:
+    """Блоки ДРУГИХ секций на том же этаже, чей контур пересекается хоть с
+    одним из новых прямоугольников — мягкая проверка (живой запрос
+    пользователя, 2026-09-05): предупреждает, но сохранению не мешает,
+    реальные пограничные случаи разметки заказчика уже бывали законными."""
+    if not boxes:
+        return []
+    others = conn.execute(
+        "SELECT b.section_id, s.code AS section_code FROM blocks b "
+        "JOIN object_sections s ON s.id = b.section_id "
+        "WHERE b.object_id = ? AND b.level_id = ? AND b.section_id != ?",
+        (object_id, level_id, section_id),
+    ).fetchall()
+    warnings = []
+    for other in others:
+        geometry = block_box(conn, object_id, other["section_id"], level_id)
+        if not geometry.get("ok"):
+            continue
+        if any(_rects_overlap(mine, theirs) for mine in boxes for theirs in geometry["boxes"]):
+            warnings.append("Пересекается с блоком секции «%s» на этом этаже" % other["section_code"])
+    return warnings
+
+
+def set_block_boxes(conn, object_id: int, block_id: int, boxes: list) -> list:
+    """Прямая геометрия блока — набором прямоугольников (Docs/TZ.md
+    «Геометрия блока», живой запрос пользователя 2026-09-05: «в блоках…
+    добавь редактирование… возможность перетаскивания точек и указания
+    координат вручную»; заменяет одиночный прямоугольник `blocks.x0..y1` —
+    Г-образный/ступенчатый этаж им не выразить). `boxes` — список словарей
+    {x0,x1,y0,y1}; форма всегда шлёт ПОЛНЫЙ набор разом (тот же принцип,
+    что у `work_fact.save_report`) — старые прямоугольники блока стираются
+    и заводятся заново. Пустой список — блок снова считается по осям
+    секции. Возвращает список предупреждений о пересечении с блоками
+    ДРУГИХ секций того же этажа — сохраняет тем не менее (мягкая
+    проверка, реальные исходники заказчика уже давали законные пограничные
+    случаи для похожей проверки осей)."""
+    block = conn.execute(
+        "SELECT section_id, level_id FROM blocks WHERE id = ? AND object_id = ?",
+        (block_id, object_id),
+    ).fetchone()
+    if block is None:
+        raise BlockError("Блок не найден.")
+    for b in boxes:
+        if b["x1"] <= b["x0"] or b["y1"] <= b["y0"]:
+            raise BlockError("x1 должен быть больше x0, y1 — больше y0.")
+    conn.execute("DELETE FROM block_boxes WHERE block_id = ?", (block_id,))
+    for i, b in enumerate(boxes):
+        conn.execute(
+            "INSERT INTO block_boxes (block_id, x0, x1, y0, y1, sort_order) VALUES (?,?,?,?,?,?)",
+            (block_id, b["x0"], b["x1"], b["y0"], b["y1"], i),
+        )
     conn.commit()
+    return _overlap_warnings(conn, object_id, block["section_id"], block["level_id"], boxes)
 
 
 def create_block(conn, object_id: int, section_id: int, level_id: int) -> dict:
