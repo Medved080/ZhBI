@@ -481,6 +481,57 @@ def _section_bbox(rooms: list, code: str):
     return min(xs), max(xs), min(ys), max(ys)
 
 
+def _sections_boundary_x(axis_grid: dict):
+    """Граница секций в общей сетке осей — середина между крайней правой
+    вертикальной осью «…с1» и крайней левой «…с2» (тот же приём, что
+    `pdf_rooms._axis_boundary_x` по подписям листа, но по уже разобранной
+    канонической сетке). `None`, если осей обеих секций нет."""
+    s1, s2 = [], []
+    for label, (направление, coord) in axis_grid.items():
+        m = pdf_rooms._AXIS_RE.match(label)
+        if not m or направление != "x":
+            continue
+        (s1 if m.group(2) == "1" else s2).append(coord)
+    if not s1 or not s2 or max(s1) >= min(s2):
+        return None
+    return (max(s1) + min(s2)) / 2
+
+
+def _apply_parking_block(conn, object_id: int, rooms: list, axis_grid: dict,
+                         floors: dict, section_ids: dict) -> None:
+    """Прямая геометрия блока «Паркинг» подземного этажа (2026-09-02, живой
+    вопрос пользователя: «при считывании полной модели блок парковки не
+    формируется, а при загрузке только фасадов — формируется»). Причина:
+    у секции «Паркинг» в модели нет осей — её собственная сетка («1а…14а»,
+    «Аа…Да») не разбирается, `_apply_axis_grid` заводит оси только по
+    подписям «…с1»/«…с2» — и `block_geometry.block_box` честно отвечал
+    «у секции не заданы оси», блок был, а объёма у него не было. Режим
+    «только фасады» пишет блокам прямую геометрию и этой проблемы не знал.
+
+    Паркинг — правая верхняя часть подземного этажа, ВНЕ подвальных частей
+    С01/С02 (`pdf_facade_import._basement_boxes` — та же раскладка трёх
+    соседних областей, что у фасадного режима, координаты тут уже
+    канонические, переноса не нужно). С01/С02 по-прежнему по осям. Запас
+    на стену — по трём наружным сторонам; снизу — верх контура здания,
+    общая грань с секциями, без нахлёста."""
+    from app import pdf_facade_import  # локально: тот модуль импортирует этот
+    basement = [(r.section, r.polygon_mm) for r in rooms if r.floor == "подземный"]
+    level = floors.get("подземный")
+    sid = section_ids.get(pdf_rooms._PARKING_SECTION)
+    if not basement or not level or not sid:
+        return
+    boxes = pdf_facade_import._basement_boxes(basement, _sections_boundary_x(axis_grid))
+    box = boxes.get(pdf_rooms._PARKING_SECTION)
+    if not box:
+        return
+    m = pdf_facade_import._ROOM_WALL_MARGIN_MM
+    x0, x1, y0, y1 = box
+    conn.execute(
+        "UPDATE blocks SET x0 = ?, x1 = ?, y0 = ?, y1 = ? "
+        "WHERE object_id = ? AND section_id = ? AND level_id = ?",
+        (x0 - m, x1 + m, y0, y1 + m, object_id, sid, level[0]))
+
+
 def _apply_axis_grid(conn, object_id: int, rooms: list, axis_grid: dict, section_ids: dict) -> None:
     """Пишет оси здания (`object_grids`) и привязку секций к ним
     (`object_sections.axis_from/axis_to`) по подписям осей чертежа —
@@ -551,6 +602,8 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     conn.executemany(_INSERT, rows)
     sections_with_axes = _apply_axis_grid(
         conn, object_id, rooms, analysis.get("_axis_grid") or {}, section_ids)
+    _apply_parking_block(conn, object_id, rooms, analysis.get("_axis_grid") or {},
+                         floors, section_ids)
 
     retired = analysis["_retired_uids"]
     if retired:
