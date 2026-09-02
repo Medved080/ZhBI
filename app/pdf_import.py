@@ -74,9 +74,9 @@ class PdfImportError(Exception):
 def _floor_spec(floor: str) -> tuple:
     """floor-строка pdf_rooms.Room -> (номер этажа, вид, подпись)."""
     if floor == "подземный":
-        return -1, "подземный", None
+        return -1, "подземный", None, None
     if floor == "технический (секция 2)":
-        return 25, "этаж", "Технический этаж (секция 2)"
+        return 25, "этаж", "Технический этаж (секция 2)", None
     # Секция 1 заканчивается на 8-м этаже, а её технический этаж и кровля
     # (2026-09-01) физически стоят на отметках 25650 и 29400мм — они НЕ
     # могут разделить `key`/`sort_order` с этажами «9» и «10» секции 2 (те
@@ -88,16 +88,25 @@ def _floor_spec(floor: str) -> tuple:
     # технического этажа секции 2), а не рядом с 8-м, это только порядок в
     # списке, не отметка (та берётся из `pdf_rooms.FLOOR_PLANS`, не из
     # этого номера).
+    # С 2026-09-02 — этажи 9 и 10 СЕКЦИИ 1 (живой запрос пользователя: «9 и
+    # 10 этаж первой секции не отбираются фильтрами — значатся как
+    # технический этаж; чтобы отбирались все этажи по номерам»): номер тот
+    # же, что у соседних этажей секции 2 на близких отметках, а запись
+    # своя — ключ с секцией (`blocks._level_key`), отметка своя. В списке
+    # этажей «Модели МФР» строки с одним номером сводятся в одну «9 этаж»
+    # (app.js, `loadRevitPlanFilters`). Заведённые ранее записи 26/27
+    # переименовываются на месте (`_LEGACY_LEVEL_KEYS`), элементы и блоки
+    # остаются на них.
     if floor == "технический (секция 1)":
-        return 26, "этаж", "Технический этаж (секция 1)"
+        return 9, "этаж", "9 этаж (секция 1, техническое пространство)", ["С01"]
     if floor == "кровля (секция 1)":
-        return 27, "этаж", "Кровля (секция 1)"
+        return 10, "этаж", "10 этаж (секция 1, выход на кровлю)", ["С01"]
     # Выход на кровлю секции 2 — ярус только упрощённой загрузки по фасадам
     # (2026-09-02, `pdf_facade_import._PLAN_ROOF2_FLOOR`): в `FLOOR_PLANS`
     # его нет, детальный разбор лист 16 не читает (см. `_FACADE_ONLY_LEVELS`).
     if floor == "кровля (секция 2)":
-        return 28, "этаж", "Кровля (секция 2)"
-    return int(floor), "этаж", None
+        return 28, "этаж", "Кровля (секция 2)", None
+    return int(floor), "этаж", None, None
 
 
 def _ensure_section(conn, object_id: int, code: str) -> int:
@@ -121,9 +130,22 @@ def _ensure_level(conn, object_id: int, floor_label: str) -> tuple:
     (`pdf_rooms.FLOOR_PLANS`, z0): без неё блок не получает высоты
     (`app/block_geometry.block_box` — «отметке этажа верить нельзя»).
     Уже заведённую отметку не трогает — только дополняет пустую."""
-    floor_no, kind, name = _floor_spec(floor_label)
-    key = "этаж:%d" % floor_no
+    floor_no, kind, name, codes = _floor_spec(floor_label)
+    key = blocks_mod._level_key(kind, floor_no, codes)
     z0, z1 = _floor_elevation(floor_label)
+    # Запись, заведённая до 2026-09-02 под старым ключом («этаж:26»/«этаж:27»
+    # — технический этаж/кровля секции 1), переименовывается на месте: тот
+    # же id, элементы и блоки остаются на ней, меняются ключ/номер/подпись.
+    legacy = _LEGACY_LEVEL_KEYS.get(key)
+    if legacy and not conn.execute(
+            "SELECT 1 FROM object_levels WHERE object_id = ? AND key = ?", (object_id, key)).fetchone():
+        old = conn.execute(
+            "SELECT id FROM object_levels WHERE object_id = ? AND key = ?", (object_id, legacy)).fetchone()
+        if old:
+            conn.execute(
+                "UPDATE object_levels SET key = ?, floor = ?, name = ?, sort_order = ? WHERE id = ?",
+                (key, floor_no, name, floor_no, old["id"]))
+            conn.commit()
     # Высота этажа — из той же таблицы чертежа (`FLOOR_PLANS`/
     # `_FACADE_ONLY_LEVELS`), явно (`object_levels.height_mm`, 2026-09-02):
     # иначе блок считался бы «до следующего этажа секции», и техпространство
@@ -142,7 +164,8 @@ def _ensure_level(conn, object_id: int, floor_label: str) -> tuple:
         return row["id"], key
     try:
         created = blocks_mod.create_level(conn, object_id, kind, floor=floor_no, name=name,
-                                          elevation_mm=z0, height_mm=height)
+                                          elevation_mm=z0, height_mm=height,
+                                          section_codes=codes)
     except BlockError:
         row = conn.execute(
             "SELECT id FROM object_levels WHERE object_id = ? AND key = ?",
@@ -180,6 +203,11 @@ def _ensure_catalog(conn, object_id: int) -> tuple:
 # техэтажа (+76,800), его кровля «Кровля 2 С2» +78,750, лифтовая головка
 # выше до +79,800 (2026-09-02, живой запрос пользователя; Docs/backlog.md).
 _FACADE_ONLY_LEVELS = {"кровля (секция 2)": (76800, 78750)}
+
+# Старые ключи этажей секции 1 над 8-м (до 2026-09-02 заводились под
+# свободными номерами 26/27, см. `_floor_spec`) — для переименования на
+# месте в `_ensure_level`.
+_LEGACY_LEVEL_KEYS = {"этаж:9:С01": "этаж:26", "этаж:10:С01": "этаж:27"}
 
 
 def _floor_elevation(floor_label: str) -> tuple:

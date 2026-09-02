@@ -26828,12 +26828,32 @@ async function loadRevitPlanFilters() {
   // исчезновение четырёх тысяч элементов со схемы — худший вид ошибки.
   // Отдельной строки «все этажи» нет: снятый отбор и означает «все», а
   // два способа сказать одно и то же расходятся при первой же правке.
+  // Этажи с ОДНИМ номером — одной строкой (2026-09-02, живой запрос
+  // пользователя: «9 и 10 этаж первой секции не отбираются фильтрами —
+  // значатся как технический этаж; чтобы отбирались все этажи по
+  // номерам»): техпространство и выход на кровлю секции 1 заведены как её
+  // этажи 9 и 10 своими записями (своя отметка), и строка «9 этаж» несёт
+  // ОБА уровня — data-id со списком через запятую, клик берёт все. Уровни
+  // без номера (кровля) — как раньше, по одному.
+  const группы = new Map();
+  for (const l of f.levels) {
+    if (!(l.elements > 0 || l.blocks > 0)) continue;
+    const ключ = (l.floor === null || l.floor === undefined) ? `id:${l.id}` : `floor:${l.floor}`;
+    let g = группы.get(ключ);
+    if (!g) {
+      g = { ids: [], title: l.title || l.key, names: [], elements: 0, blocks: 0, suspect: false };
+      группы.set(ключ, g);
+    }
+    g.ids.push(String(l.id)); g.names.push(l.name || l.key);
+    g.elements += l.elements; g.blocks += l.blocks || 0;
+    g.suspect = g.suspect || !!l.elevation_suspect;
+  }
   const этажи = [];
-  этажи.push(...f.levels.filter((l) => l.elements > 0 || l.blocks > 0).map((l) =>
-    `<div class="revit-pick" data-kind="level" data-id="${l.id}"
-       title="${escapeHtml(l.name || l.key)}">${escapeHtml(l.title || l.key)}
-      <span style="float:right;color:var(--color-text-muted)">${l.elements || l.blocks}</span>
-      ${l.elevation_suspect ? ' <span title="отметке верить нельзя">⚠</span>' : ""}</div>`));
+  этажи.push(...[...группы.values()].map((g) =>
+    `<div class="revit-pick" data-kind="level" data-id="${g.ids.join(",")}"
+       title="${escapeHtml(g.names.join(" · "))}">${escapeHtml(g.title)}
+      <span style="float:right;color:var(--color-text-muted)">${g.elements || g.blocks}</span>
+      ${g.suspect ? ' <span title="отметке верить нельзя">⚠</span>' : ""}</div>`));
   if (f.without_level) {
     этажи.push(`<div class="revit-pick" data-kind="level" data-id="0">без этажа
       <span style="float:right;color:var(--color-danger)">${f.without_level}</span></div>`);
@@ -26860,9 +26880,9 @@ async function loadRevitPlanFilters() {
   // При первом открытии показываем один этаж, а не весь объект: без
   // отбора это под тридцать тысяч контуров друг на друге — и медленно, и
   // читать нечего. Дальше человек снимает отбор сам, одной ссылкой.
-  const первый = f.levels.find((l) => l.elements > 0);
+  const первый = [...группы.values()][0];
   const этоПервыйЗаход = !revitFilterActive();
-  if (первый && этоПервыйЗаход) revitPlanState.levels.add(String(первый.id));
+  if (первый && этоПервыйЗаход) for (const id of первый.ids) revitPlanState.levels.add(id);
   // «Помещение» по умолчанию выключено (2026-08-31): мелкие контуры комнат
   // перекрывают стены и друг друга на одном плане, читать эту кашу тяжело.
   // Остальные категории показаны все сразу — отбор ставится тем же кликом
@@ -26882,7 +26902,11 @@ function markRevitPicks() {
     const kind = el.dataset.kind, id = el.dataset.id;
     const набор = { level: "levels", section: "sections",
                     part: "parts", category: "categories" }[kind];
-    el.classList.toggle("revit-pick-on", !!набор && revitPlanState[набор].has(id));
+    // data-id строки этажа может нести несколько уровней (один номер —
+    // одна строка, см. `loadRevitPlanFilters`): строка «включена», когда
+    // включены ВСЕ её уровни.
+    const ids = String(id).split(",");
+    el.classList.toggle("revit-pick-on", !!набор && ids.every((x) => revitPlanState[набор].has(x)));
   });
   // «Сбросить» показывается только там, где есть что сбрасывать: ссылка,
   // которая ничего не делает, читается как сломанная.
@@ -26903,8 +26927,9 @@ document.getElementById("mfr-workspace").addEventListener("click", async (e) => 
   if (!набор) return;
   // Нажатие ДОБАВЛЯЕТ и УБИРАЕТ значение: так набирается «этажи 3 и 4», а
   // повторное нажатие по последнему выбранному снимает отбор целиком.
-  if (revitPlanState[набор].has(id)) revitPlanState[набор].delete(id);
-  else revitPlanState[набор].add(id);
+  const ids = String(id).split(",");   // строка этажа — все уровни с этим номером
+  if (ids.every((x) => revitPlanState[набор].has(x))) ids.forEach((x) => revitPlanState[набор].delete(x));
+  else ids.forEach((x) => revitPlanState[набор].add(x));
   markRevitPicks();
   await loadRevitPlanElements();
 });
@@ -26994,6 +27019,19 @@ const MFR_BLOCK_MARGIN_MM = 200;
 // ось ровно по границе. Общая для 2D и 3D: держит подписи вменяемыми и
 // заодно гарантирует, что 3D-камера, наведённая на элементы, не
 // промахивается мимо осей — они уже внутри того же габарита.
+// Ось рисуется ДЛИННЕЕ своего отрезка (пролёт в `object_grids` — габарит
+// помещений/блоков секции, то есть ровно контур здания) на этот вынос с
+// каждого конца: подписи иначе стоят вплотную к стене/под плитой и не
+// читаются (живой запрос пользователя, 2026-09-02). Только для отрисовки —
+// сами данные осей не меняются.
+const MFR_AXIS_OVERHANG_MM = 3000;
+function mfrAxisEnds(a, ox, oy) {
+  const dx = a.x2 - a.x1, dy = a.y2 - a.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ex = dx / len * MFR_AXIS_OVERHANG_MM, ey = dy / len * MFR_AXIS_OVERHANG_MM;
+  return [[a.x1 - ox - ex, a.y1 - oy - ey], [a.x2 - ox + ex, a.y2 - oy + ey]];
+}
+
 function relevantAxes(list, ox, oy, ow, oh) {
   const margin = Math.max(ow, oh) * 0.05;
   const bx0 = -margin, bx1 = ow + margin, by0 = -margin, by1 = oh + margin;
@@ -27073,8 +27111,9 @@ function drawRevitPlan(data) {
   // `updateMfrAxisLabelSizing` — фикс. толщина линии здесь для этого не
   // подходит, шрифт масштабом viewBox не берётся.
   const axisLines = axes.map((a, i) => {
-    const x1 = a.x1 - ox - minX, y1 = h - (a.y1 - oy - minY);
-    const x2 = a.x2 - ox - minX, y2 = h - (a.y2 - oy - minY);
+    const [p1, p2] = mfrAxisEnds(a, ox, oy);   // за контур, как и в 3D
+    const x1 = p1[0] - minX, y1 = h - (p1[1] - minY);
+    const x2 = p2[0] - minX, y2 = h - (p2[1] - minY);
     const label = escapeHtml(a.label || "");
     return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
       stroke="var(--axis-line, #c4c4c4)" stroke-width="1.5" vector-effect="non-scaling-stroke"
@@ -27607,9 +27646,17 @@ async function buildMfr3D() {
     // пропадала из кадра (2026-09-01, живой найдено пользователем при
     // проверке отдельных этажей — на нижних этажах, где «низ» близко к
     // нулю, эффект был незаметен).
+    // Плоскость сетки — ВСЕГДА под видимой моделью (низ отбора, сценовый
+    // Z=0: если видно всё здание — под подземным этажом), а наружу
+    // выносятся только ПОДПИСИ — концы отрезков за контур здания
+    // (`mfrAxisEnds`; прямое уточнение пользователя 2026-09-02: «сама
+    // плоскость сеток осей должна быть всегда под видимой моделью, но
+    // наименования осей — рядом с моделью снаружи, а не внутри неё»).
+    const осьZ = 0;
     const точки = [];
     for (const a of оси) {
-      точки.push(a.x1 - ox, a.y1 - oy, 0, a.x2 - ox, a.y2 - oy, 0);
+      const [p1, p2] = mfrAxisEnds(a, ox, oy);
+      точки.push(p1[0], p1[1], осьZ, p2[0], p2[1], осьZ);
     }
     const геомОсей = new THREE.BufferGeometry();
     геомОсей.setAttribute("position", new THREE.BufferAttribute(new Float32Array(точки), 3));
@@ -27625,7 +27672,7 @@ async function buildMfr3D() {
     // сверки, а не как постоянный слой.
     const охватОсей = Math.max(w, h) || 1000;
     for (const a of оси) {
-      for (const [px, py] of [[a.x1 - ox, a.y1 - oy], [a.x2 - ox, a.y2 - oy]]) {
+      for (const [px, py] of mfrAxisEnds(a, ox, oy)) {
         const canvas = document.createElement("canvas");
         const ctx = canvas.getContext("2d");
         const fontPx = 48, padding = 6;
@@ -27640,7 +27687,7 @@ async function buildMfr3D() {
           map: new THREE.CanvasTexture(canvas), depthTest: true }));
         const высотаСпрайта = охватОсей * 0.02;
         sprite.scale.set(высотаСпрайта * (canvas.width / canvas.height), высотаСпрайта, 1);
-        sprite.position.set(px, py, высотаСпрайта / 2);
+        sprite.position.set(px, py, осьZ + высотаСпрайта / 2);
         scene.add(sprite);
       }
     }
