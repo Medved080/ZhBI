@@ -26784,6 +26784,7 @@ async function openMfrWorkspace() {
   revitPlanState.objectId = state.objectId;
   for (const g of REVIT_GROUPS) revitPlanState[g].clear();
   document.getElementById("revit-plan-card").textContent = "Нажмите на элемент плана.";
+  revitPlanState.selected = null;   // другой объект — чужое выделение не тянем
   // Режим показа восстанавливается ДО загрузки: иначе план успевает
   // отрисоваться в 2D, а потом дёргается в 3D на глазах у человека.
   const запомненныйРежим = вспомнить(MFR_MODE_KEY);
@@ -26844,9 +26845,14 @@ async function loadRevitPlanFilters() {
       g = { ids: [], title: l.title || l.key, names: [], elements: 0, blocks: 0, suspect: false };
       группы.set(ключ, g);
     }
-    g.ids.push(String(l.id)); g.names.push(l.name || l.key);
+    g.ids.push(String(l.id)); g.names.push(l.title || l.name || l.key);
     g.elements += l.elements; g.blocks += l.blocks || 0;
     g.suspect = g.suspect || !!l.elevation_suspect;
+    // Несколько уровней под одним номером — строка подписана номером
+    // («9 этаж»), а не именем первого из них («9 этаж (секция 1, …)»);
+    // одиночный уровень с собственным именем («Технический этаж (секция
+    // 2)») — своим именем, см. `revit_plan._level_row`.
+    if (g.ids.length > 1) g.title = `${l.floor} этаж`;
   }
   const этажи = [];
   этажи.push(...[...группы.values()].map((g) =>
@@ -27139,6 +27145,7 @@ function drawRevitPlan(data) {
     ).join("") + '<span style="margin-left:8px">пунктиром — габаритный контур</span>';
 
   bindRevitPlanZoom(document.getElementById("revit-plan-svg"));
+  mfrHighlightSelection();   // выделение переживает пересборку плана
 }
 
 // Подписи осей — постоянный ЭКРАННЫЙ кегль (`MAX_AXIS_FONT_PX`, тот же
@@ -27227,6 +27234,8 @@ document.getElementById("revit-plan-fit").addEventListener("click", () => {
 
 async function showRevitCard(elementId) {
   const box = document.getElementById("revit-plan-card");
+  revitPlanState.selected = { kind: "element", id: Number(elementId) };
+  mfrHighlightSelection();
   box.textContent = "Загрузка…";
   const res = await fetch(`/revit-plan/element?object_id=${revitPlanState.objectId}&element_id=${elementId}`);
   if (!res.ok) { box.textContent = "Не удалось получить карточку"; return; }
@@ -27244,12 +27253,82 @@ async function showRevitCard(elementId) {
     + (доп.length ? `<h4 style="margin-top:12px">Параметры Revit</h4>` + доп.join("") : "");
 }
 
+// Выделение выбранного элемента/блока на плане и в 3D (живой запрос
+// пользователя, 2026-09-02: «надо ярко выделять выбранный блок и элемент,
+// иначе непонятно, свойства какого блока или элемента указаны в правой
+// панели»). Одно на оба вида: `revitPlanState.selected` ставят
+// `showRevitCard`/`showBlockCard` (в них приходят и клики 2D, и 3D), а
+// отрисовка вызывается и отсюда, и после каждой пересборки плана/сцены —
+// иначе выделение пропадало бы при смене этажа или слоя.
+//
+// 2D — класс `mfr-selected` у контура (оранжевая обводка постоянной
+// экранной толщины, см. index.html) и перенос в конец SVG, чтобы соседи
+// его не перекрывали. 3D — отдельный меш-накладка поверх сцены: элементы
+// слиты в один меш на категорию, перекрасить один из них нельзя, а
+// накладка с `depthTest: false` видна и сквозь стены; у блока — копия его
+// геометрии тем же приёмом.
+const MFR_HIGHLIGHT_COLOR = 0xff6a00;
+function mfrHighlightSelection() {
+  const sel = revitPlanState.selected;
+  const svg = document.getElementById("revit-plan-svg");
+  if (svg) {
+    svg.querySelectorAll(".mfr-selected").forEach((el) => el.classList.remove("mfr-selected"));
+    if (sel) {
+      const el = sel.kind === "element"
+        ? svg.querySelector(`path[data-id="${sel.id}"]`)
+        : svg.querySelector(`rect[data-block-id="${sel.id}"]`);
+      if (el) { el.classList.add("mfr-selected"); el.parentNode.appendChild(el); }
+    }
+  }
+  if (!mfr3d.scene || typeof THREE === "undefined") return;
+  if (mfr3d.highlight) {
+    mfr3d.scene.remove(mfr3d.highlight);
+    mfr3d.highlight.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    mfr3d.highlight = null;
+  }
+  if (!sel) return;
+  const material = new THREE.MeshBasicMaterial({
+    color: MFR_HIGHLIGHT_COLOR, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
+  });
+  let geometry = null, position = null;
+  if (sel.kind === "block") {
+    const mesh = mfr3d.scene.children.find((o) => o.isMesh && o.userData.blockId === sel.id);
+    if (!mesh) return;
+    geometry = mesh.geometry.clone(); position = mesh.position.clone();
+  } else {
+    const el = (revitPlanState.data?.elements || []).find((e) => e.id === sel.id);
+    const контур = el && el["контур"];
+    if (!контур || контур.length < 3 || !(el["выс"] > 0)) return;
+    const shape = new THREE.Shape();
+    shape.moveTo(контур[0][0], контур[0][1]);
+    for (let i = 1; i < контур.length; i++) shape.lineTo(контур[i][0], контур[i][1]);
+    shape.closePath();
+    try {
+      geometry = new THREE.ExtrudeGeometry(shape, { depth: el["выс"], bevelEnabled: false, steps: 1 });
+    } catch (err) { return; }
+    geometry.translate(0, 0, (el["отм"] ?? 0) - (mfr3d.низ || 0));
+    position = new THREE.Vector3(0, 0, 0);
+  }
+  const group = new THREE.Group();
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.copy(position); mesh.renderOrder = 20;
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry),
+    new THREE.LineBasicMaterial({ color: MFR_HIGHLIGHT_COLOR, depthTest: false, transparent: true, opacity: 1 }));
+  edges.position.copy(position); edges.renderOrder = 21;
+  group.add(mesh); group.add(edges);
+  mfr3d.scene.add(group);
+  mfr3d.highlight = group;
+}
+
 // Карточка блока (Docs/TZ.md, «Геометрия блока») — по клику на
 // параллелепипед в 2D или 3D. Отдельная панель от карточки элемента: обе
 // могут быть видны одновременно, это разные, независимые сущности.
 async function showBlockCard(blockId) {
   const panel = document.getElementById("block-card-block");
   const box = document.getElementById("block-card");
+  revitPlanState.selected = { kind: "block", id: Number(blockId) };
+  mfrHighlightSelection();
   panel.style.display = "";
   box.textContent = "Загрузка…";
   const res = await fetch(`/objects/${revitPlanState.objectId}/blocks/${blockId}/card`);
@@ -27498,6 +27577,7 @@ async function buildMfr3D() {
   const низ = data.elements.length
     ? Math.min(...data.elements.map((e) => e["отм"] ?? 0))
     : (отметкиБлоков.length ? Math.min(...отметкиБлоков) : 0);
+  mfr3d.низ = низ;   // нужен накладке выделения (`mfrHighlightSelection`)
   const поКатегориям = new Map();
   let пропущено = 0;
   // Рёбра — единственное, что делает объём читаемым: без них соседние
@@ -27876,6 +27956,8 @@ async function buildMfr3D() {
     renderer.render(scene, camera);
   };
   кадр();
+  mfr3d.highlight = null;      // старая накладка ушла вместе со сценой (disposeMfr3D)
+  mfrHighlightSelection();     // выделение переживает пересборку сцены
   revitPlanStatus(data.elements.length
     ? `3D: ${data.elements.length - пропущено} элементов`
       + (пропущено ? `, без высоты и не показаны: ${пропущено}` : "")

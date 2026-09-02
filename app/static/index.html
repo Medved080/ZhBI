@@ -2526,6 +2526,13 @@
      пользователя): крупнее и без приглушённого цвета подписи, отдельной
      строкой над обычными card-row. */
   .card-block-title { font-size: 16px; font-weight: 600; padding: 2px 0 8px; }
+  /* Выбранный элемент/блок на плане (app.js, mfrHighlightSelection):
+     оранжевая обводка постоянной экранной толщины поверх любой заливки —
+     иначе непонятно, чьи свойства в правой панели. */
+  #revit-plan-svg .mfr-selected {
+    stroke: #ff6a00 !important; stroke-width: 3px !important; stroke-dasharray: none !important;
+    vector-effect: non-scaling-stroke; fill: #ffb347 !important; fill-opacity: .85 !important;
+  }
   .card-block h4 .revit-reset { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
   .revit-reset { font-size:11px; color: var(--color-text-muted); text-decoration:none; }
   .revit-reset:hover { color: var(--color-primary); text-decoration:underline; }
