@@ -554,6 +554,18 @@ def _bbox(polys: list):
             min(p[1] for p in pts), max(p[1] for p in pts))
 
 
+def _rects(geometry) -> list:
+    """Геометрия блока в словаре ярусов — либо один прямоугольник
+    (кортеж, ярусы по фасаду), либо список (ярусы по плану: паркинг из двух)."""
+    return list(geometry) if isinstance(geometry, list) else [geometry]
+
+
+def _bbox_of(geometry) -> tuple:
+    rects = _rects(geometry)
+    return (min(r[0] for r in rects), max(r[1] for r in rects),
+            min(r[2] for r in rects), max(r[3] for r in rects))
+
+
 def _basement_boxes(rooms: list, boundary_x) -> dict:
     """Подземный этаж — ТРИ соседние непересекающиеся области (по плану
     листа 3, прямое уточнение пользователя 2026-09-02): подвальная часть
@@ -586,9 +598,16 @@ def _basement_boxes(rooms: list, boundary_x) -> dict:
     b01 = _bbox(main_c01) if main_c01 else _bbox(c01)
     box_c02 = (max(b02[0], boundary_x), b02[1], b02[2], top)
     box_c01 = (b01[0], min(b01[1], boundary_x), b01[2], top)
-    out = {"С01": box_c01, "С02": box_c02}
+    # Значения — СПИСКИ прямоугольников (с 2026-09-05 блок хранит набор,
+    # `block_boxes`): у С01/С02/рампы по одному, у паркинга — два, он
+    # Г-образный (схема пользователя): основной зал справа-сверху плюс
+    # «язык» над секцией 1 (помещения С01 над контуром — тамбуры/кладовые
+    # под паркингом). Одним габаритом язык накрывал бы пустой угол
+    # 15,8×14,4м между ними.
+    out = {"С01": [box_c01], "С02": [box_c02]}
 
-    parking_polys = (by_sec.get(_PARKING_SECTION) or []) + above_c01
+    parking_polys = by_sec.get(_PARKING_SECTION) or []
+    tongue = _bbox(above_c01) if above_c01 else None
     if parking_polys:
         def _polygons(g):
             if g.geom_type == "Polygon":
@@ -601,17 +620,21 @@ def _basement_boxes(rooms: list, boundary_x) -> dict:
             region = region.difference(box(bx[0], bx[2], bx[1], bx[3]))
         if not region.is_empty:
             x0, y0, x1, y1 = region.bounds
-            out[_PARKING_SECTION] = (x0, x1, max(y0, top), y1)
+            main = (x0, x1, max(y0, top), y1)
+            rects = [main]
+            if tongue and tongue[0] < main[0] - 1000:
+                # язык — от своего левого края до основного зала, по высоте
+                # своих помещений; общая грань с залом — его левый край
+                rects.append((tongue[0], main[0], top, tongue[3]))
+            out[_PARKING_SECTION] = rects
     # Рампа (2026-09-02, схема пользователя: четвёртый блок подземного
     # этажа) — полоса въезда между левым краем секции 1 и «языком» паркинга
     # (помещениями С01 над контуром), от верха контура здания до верха
     # этих помещений: на листе 3 это проезд между осями 1с1–4с1 и Ес1–Ба,
     # без заливки слоя помещений — как помещение не читается, только по
     # соседям.
-    if above_c01 and _PARKING_SECTION in out:
-        tongue = _bbox(above_c01)
-        if tongue[0] > box_c01[0] + 1000:
-            out[_RAMP_SECTION] = (box_c01[0], tongue[0], top, tongue[3])
+    if tongue and _PARKING_SECTION in out and tongue[0] > box_c01[0] + 1000:
+        out[_RAMP_SECTION] = [(box_c01[0], tongue[0], top, tongue[3])]
     return out
 
 
@@ -620,16 +643,28 @@ def _snap_shared_edges(box_m, sec: str, basement: dict):
     — на ОБЩИХ гранях трёх областей подвала он дал бы нахлёст в 500мм;
     общие грани возвращаются точно: шов секций (x) у С01/С02 и верх
     контура здания (y) у всех трёх."""
-    top = basement["С02"][3]
-    seam = basement["С02"][0]
+    top = basement["С02"][0][3]
+    seam = basement["С02"][0][0]
     x0, x1, y0, y1 = box_m
     if sec == "С01":
         return (x0, seam, y0, top)
     if sec == "С02":
         return (seam, x1, y0, top)
     if sec == _RAMP_SECTION and _PARKING_SECTION in basement:
-        # общая грань с паркингом справа — его левый край с тем же запасом
-        return (x0, basement[_PARKING_SECTION][0] - _ROOM_WALL_MARGIN_MM, top, y1)
+        # общая грань с паркингом справа — левый край его крайнего левого
+        # прямоугольника («языка») с тем же запасом
+        left = min(r[0] for r in basement[_PARKING_SECTION])
+        return (x0, left - _ROOM_WALL_MARGIN_MM, top, y1)
+    if sec == _PARKING_SECTION:
+        # прямоугольники паркинга примыкают друг к другу: общая грань — без
+        # запаса (левый край зала = правый край языка)
+        rects = basement[_PARKING_SECTION]
+        if len(rects) > 1:
+            main_x0 = rects[0][0]
+            if abs((x0 + _ROOM_WALL_MARGIN_MM) - main_x0) < 1:      # это зал
+                return (main_x0, x1, top, y1)
+            if abs((x1 - _ROOM_WALL_MARGIN_MM) - main_x0) < 1:      # это язык
+                return (x0, main_x0, top, y1)
     return (x0, x1, top, y1)
 
 
@@ -668,8 +703,8 @@ def compute_plan_blocks(doc, facade_blocks: dict) -> dict:
         pdf_rooms._page_section_boundary_mm(doc[_PLAN_TYPICAL_PAGE - 1], (0.0, 0.0)))
     if basement:
         out[_PLAN_BASEMENT_FLOOR] = {
-            sec: _snap_shared_edges(with_margin(box), sec, basement)
-            for sec, box in basement.items()}
+            sec: [_snap_shared_edges(with_margin(box), sec, basement) for box in rects]
+            for sec, rects in basement.items()}
     roof = _bbox([poly for sec, poly in _plan_rooms_canonical(doc, _PLAN_ROOF2_PAGE, grid)
                   if sec == _PLAN_ROOF2_SECTION])
     if roof:
@@ -684,7 +719,8 @@ def _grid_lines(grid: dict, blocks: dict) -> list:
     там пролёт — охват помещений). [(подпись, направление, x1,y1,x2,y2)]."""
     extent = {}
     for sections in blocks.values():
-        for code, (x0, x1, y0, y1) in sections.items():
+        for code, geometry in sections.items():
+            x0, x1, y0, y1 = _bbox_of(geometry)   # у паркинга — несколько прямоугольников
             e = extent.get(code)
             extent[code] = ((min(e[0], x0), max(e[1], x1), min(e[2], y0), max(e[3], y1))
                             if e else (x0, x1, y0, y1))
@@ -736,8 +772,10 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
     total_blocks = 0
     for floor, sections in blocks.items():
         by_floor[floor] = {
-            code: {"ширина_мм": round(x1 - x0), "глубина_мм": round(y1 - y0)}
-            for code, (x0, x1, y0, y1) in sections.items()
+            code: {"ширина_мм": round(_bbox_of(geometry)[1] - _bbox_of(geometry)[0]),
+                   "глубина_мм": round(_bbox_of(geometry)[3] - _bbox_of(geometry)[2]),
+                   **({"прямоугольников": len(_rects(geometry))} if len(_rects(geometry)) > 1 else {})}
+            for code, geometry in sections.items()
         }
         total_blocks += len(sections)
 
@@ -769,11 +807,14 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     written = 0
     for floor, sections in blocks.items():
         level_id, _key = pdf_import._ensure_level(conn, object_id, floor)
-        for code, (x0, x1, y0, y1) in sections.items():
+        for code, geometry in sections.items():
             block = blocks_mod.create_block(conn, object_id, section_ids[code], level_id)
-            conn.execute(
-                "UPDATE blocks SET x0 = ?, x1 = ?, y0 = ?, y1 = ? WHERE id = ?",
-                (x0, x1, y0, y1, block["id"]))
+            # Геометрия — набором прямоугольников (`block_boxes`, 2026-09-05;
+            # прежняя запись в `blocks.x0..y1` уже никем не читается — после
+            # неё блоки при повторной загрузке оставались без объёма, а
+            # секции считались по осям и пересекались, 2026-09-02 вечер).
+            blocks_mod.set_block_boxes(conn, object_id, block["id"], [
+                {"x0": x0, "x1": x1, "y0": y0, "y1": y1} for x0, x1, y0, y1 in _rects(geometry)])
             written += 1
     # Оси здания (`object_grids`) — слой «Оси» «Модели МФР»: те же подписи
     # осей чертежа, что и у детального разбора, в той же общей сетке

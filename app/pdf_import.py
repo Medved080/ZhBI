@@ -514,38 +514,37 @@ def _apply_parking_block(conn, object_id: int, rooms: list, axis_grid: dict,
     канонические, переноса не нужно). С01/С02 по-прежнему по осям. Запас
     на стену — по трём наружным сторонам; снизу — верх контура здания,
     общая грань с секциями, без нахлёста."""
-    from app import pdf_facade_import  # локально: тот модуль импортирует этот
+    from app import pdf_facade_import as pfi  # локально: тот модуль импортирует этот
     basement = [(r.section, r.polygon_mm) for r in rooms if r.floor == "подземный"]
     level = floors.get("подземный")
     if not basement or not level:
         return
-    boxes = pdf_facade_import._basement_boxes(basement, _sections_boundary_x(axis_grid))
-    m = pdf_facade_import._ROOM_WALL_MARGIN_MM
-    parking = boxes.get(pdf_rooms._PARKING_SECTION)
-    if parking:
-        x0, x1, y0, y1 = parking
-        _set_block_geometry(conn, object_id, section_ids[pdf_rooms._PARKING_SECTION], level[0],
-                            (x0 - m, x1 + m, y0, y1 + m))
-    # Рампа — четвёртый блок подземного этажа (2026-09-02, схема
-    # пользователя): секция и блок заводятся здесь же, общая грань с
-    # паркингом справа — его левый край (с запасом), снизу — верх контура.
-    ramp = boxes.get(pdf_rooms._RAMP_SECTION)
-    if ramp and parking:
-        sid = _ensure_section(conn, object_id, pdf_rooms._RAMP_SECTION)
+    boxes = pfi._basement_boxes(basement, _sections_boundary_x(axis_grid))
+    if not boxes:
+        return
+    # ВСЕ четыре области подвала — прямой геометрией, той же раскладкой и
+    # с той же сшивкой общих граней, что у фасадного режима (`with_margin`
+    # + `_snap_shared_edges`): С01/С02 подвала по осям пересекались друг с
+    # другом (коридор под обеими секциями, 11м) и с паркингом (350мм) —
+    # «секции ни на одном из этажей не пересекаются», прямое требование
+    # пользователя 2026-09-02. Рампа — секция и блок заводятся здесь же.
+    m = pfi._ROOM_WALL_MARGIN_MM
+    for sec, rects in boxes.items():
+        sid = section_ids.get(sec) or _ensure_section(conn, object_id, sec)
         try:
-            blocks_mod.create_block(conn, object_id, sid, level[0])
+            block = blocks_mod.create_block(conn, object_id, sid, level[0])
         except BlockError:
-            pass
-        x0, _x1, y0, y1 = ramp
-        _set_block_geometry(conn, object_id, sid, level[0],
-                            (x0 - m, parking[0] - m, y0, y1 + m))
-
-
-def _set_block_geometry(conn, object_id: int, section_id: int, level_id: int, box: tuple) -> None:
-    conn.execute(
-        "UPDATE blocks SET x0 = ?, x1 = ?, y0 = ?, y1 = ? "
-        "WHERE object_id = ? AND section_id = ? AND level_id = ?",
-        (*box, object_id, section_id, level_id))
+            block = None
+        if block is None:
+            row = conn.execute("SELECT id FROM blocks WHERE section_id = ? AND level_id = ?",
+                               (sid, level[0])).fetchone()
+            if row is None:
+                continue
+            block = {"id": row["id"]}
+        snapped = [pfi._snap_shared_edges((r[0] - m, r[1] + m, r[2] - m, r[3] + m), sec, boxes)
+                   for r in rects]
+        blocks_mod.set_block_boxes(conn, object_id, block["id"], [
+            {"x0": x0, "x1": x1, "y0": y0, "y1": y1} for x0, x1, y0, y1 in snapped])
 
 
 def _apply_axis_grid(conn, object_id: int, rooms: list, axis_grid: dict, section_ids: dict) -> None:

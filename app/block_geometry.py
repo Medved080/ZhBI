@@ -120,6 +120,46 @@ def _section_element_bounds(conn, object_id: int, section_id: int, level_id: int
     return (row["x0"], row["y0"], row["x1"], row["y1"])
 
 
+import re
+
+_SEAM_LABEL_RE = re.compile(r"с([12])$")
+
+
+def _section_seam_x(conn, object_id: int):
+    """Шов секций С01/С02 по общей сетке осей — середина между крайней правой
+    вертикальной осью «…с1» и крайней левой «…с2» (тот же приём, что у
+    разбора PDF, `pdf_import._sections_boundary_x`). `None`, если осей
+    обеих секций нет (Revit-объект с другой разметкой)."""
+    s1, s2 = [], []
+    for row in conn.execute(
+            "SELECT label, kind, x1, x2 FROM object_grids WHERE object_id = ?", (object_id,)):
+        m = _SEAM_LABEL_RE.search(row["label"] or "")
+        if not m or row["kind"] != "x":
+            continue
+        (s1 if m.group(1) == "1" else s2).append((row["x1"] + row["x2"]) / 2)
+    if not s1 or not s2 or max(s1) >= min(s2):
+        return None
+    return (max(s1) + min(s2)) / 2
+
+
+def _clip_to_seam(conn, object_id: int, section_code: str, xy: dict) -> dict:
+    """Блок по осям обрезается швом секций (2026-09-02, прямое требование
+    пользователя — «секции ни на одном из этажей не пересекаются»):
+    подгонка по факту тянет С01 до его наружной стены (−34130), а С02 — до
+    своей (−34280) — нахлёст 150мм на каждом общем этаже, в подвале коридор
+    под обеими секциями давал 11м. У С01 срезается правый край, у С02 —
+    левый; остальные секции (паркинг, рампа, Revit-разметка без «…с1/с2»)
+    не трогаются."""
+    seam = _section_seam_x(conn, object_id)
+    if seam is None:
+        return xy
+    if section_code == "С01" and xy["x1"] > seam > xy["x0"]:
+        return {**xy, "x1": seam}
+    if section_code == "С02" and xy["x0"] < seam < xy["x1"]:
+        return {**xy, "x0": seam}
+    return xy
+
+
 def _grid_line(conn, object_id: int, label: str):
     row = conn.execute(
         "SELECT x1, y1, x2, y2 FROM object_grids WHERE object_id = ? AND label = ?",
@@ -217,7 +257,7 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
         boxes = прямые_прямоугольники
     else:
         section = conn.execute(
-            "SELECT axis_from, axis_to FROM object_sections WHERE id = ?", (section_id,)
+            "SELECT code, axis_from, axis_to FROM object_sections WHERE id = ?", (section_id,)
         ).fetchone()
         if section is None:
             return {"ok": False, "reason": "секция не найдена"}
@@ -234,6 +274,7 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
         if xy is None:
             return {"ok": False, "reason": "оси секции разнонаправленные "
                     "(или геометрия этажа не пересекается с пролётом осей)"}
+        xy = _clip_to_seam(conn, object_id, section["code"], xy)
         boxes = [xy]
 
     level = conn.execute(
