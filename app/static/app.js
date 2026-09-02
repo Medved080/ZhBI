@@ -27033,6 +27033,58 @@ const MFR_CHESS_COLORS = { plan: "var(--color-text-muted)", in_progress: "#E8A33
 // Та же палитра для 3D (THREE.Color не понимает переменные CSS, нужен
 // конкретный цвет) плюс «off» — блок вне отбора выбранной операции.
 const MFR_CHESS_COLORS_3D = { plan: 0x9aa0a6, in_progress: 0xe8a33d, done: 0x3fa76a, off: 0xbdbdbd };
+// Та же палитра строкой «#rrggbb» — годится и SVG (2D), и THREE.Color (3D,
+// принимает строку так же, как число), нужна для HSL-буста ниже.
+const MFR_CHESS_STATUS_HEX = { plan: "#9aa0a6", in_progress: "#e8a33d", done: "#3fa76a" };
+
+// Подсветка ВЫБРАННОГО блока при активной «Шахматке» (живой запрос
+// пользователя, 2026-09-02) — не отдельный цвет вроде оранжевого
+// MFR_HIGHLIGHT_COLOR, а более насыщенный и тёмный вариант ТОГО ЖЕ цвета
+// статуса: иначе выбранный «в работе» блок выглядел бы просто оранжевым
+// (общий с MFR_HIGHLIGHT_COLOR цвет уже занят под обычное выделение) и
+// терялся среди других «в работе» блоков того же статуса. Ручной HSL-буст
+// без сторонних библиотек — берёт строку "#rrggbb" (SVG и THREE.Color
+// обе принимают такую), поднимает насыщенность и темнит.
+//
+// Буст ТОЛЬКО множителем, без прибавки константы: у серого «план»
+// (#9aa0a6) насыщенность и так почти нулевая (6%, чуть голубит) — фиксная
+// прибавка (было `s*1.6+0.25`) утраивала её до заметных 35% и превращала
+// нейтрально-серый в откровенно синий, а не «тот же серый, но ярче»
+// (найдено в 3D живой проверкой, 2026-09-02). Множитель безопасен для
+// любой базы: серый остаётся серым (6%→10%), а насыщенные план/зелёный
+// действительно становятся гуще.
+function mfrChessBoldColor(hex) {
+  const m = hex.replace("#", "");
+  const r0 = parseInt(m.slice(0, 2), 16) / 255,
+        g0 = parseInt(m.slice(2, 4), 16) / 255,
+        b0 = parseInt(m.slice(4, 6), 16) / 255;
+  const max = Math.max(r0, g0, b0), min = Math.min(r0, g0, b0), l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r0) h = (g0 - b0) / d + (g0 < b0 ? 6 : 0);
+    else if (max === g0) h = (b0 - r0) / d + 2;
+    else h = (r0 - g0) / d + 4;
+    h /= 6;
+  }
+  const s2 = Math.min(1, s * 1.7), l2 = Math.max(0, l * 0.68);
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  let r2, g2, b2;
+  if (s2 === 0) { r2 = g2 = b2 = l2; } else {
+    const q = l2 < 0.5 ? l2 * (1 + s2) : l2 + s2 - l2 * s2, p = 2 * l2 - q;
+    r2 = hue2rgb(p, q, h + 1 / 3); g2 = hue2rgb(p, q, h); b2 = hue2rgb(p, q, h - 1 / 3);
+  }
+  const toHex = (x) => Math.round(x * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r2)}${toHex(g2)}${toHex(b2)}`;
+}
 
 // Ось «не имеет отношения к отфильтрованной области» (живой запрос
 // пользователя, 2026-08-31 — на всём объекте разом сетка двух секций
@@ -27300,14 +27352,25 @@ async function showRevitCard(elementId) {
 const MFR_HIGHLIGHT_COLOR = 0xff6a00;
 function mfrHighlightSelection() {
   const sel = revitPlanState.selected;
+  // Выбран блок, включённый в отбор активной операции «Шахматки» — своим
+  // насыщенным цветом статуса вместо общего MFR_HIGHLIGHT_COLOR (см. выше).
+  const chessSel = sel && sel.kind === "block" && mfrChessWorkTypeId ? mfrChessValues[sel.id] : null;
+  const boldColor = chessSel ? mfrChessBoldColor(MFR_CHESS_STATUS_HEX[chessSel.status]) : null;
   const svg = document.getElementById("revit-plan-svg");
   if (svg) {
-    svg.querySelectorAll(".mfr-selected").forEach((el) => el.classList.remove("mfr-selected"));
+    svg.querySelectorAll(".mfr-selected").forEach((el) => {
+      el.classList.remove("mfr-selected");
+      el.style.removeProperty("--mfr-sel-color");
+    });
     if (sel) {
       const el = sel.kind === "element"
         ? svg.querySelector(`path[data-id="${sel.id}"]`)
         : svg.querySelector(`rect[data-block-id="${sel.id}"]`);
-      if (el) { el.classList.add("mfr-selected"); el.parentNode.appendChild(el); }
+      if (el) {
+        el.classList.add("mfr-selected");
+        if (boldColor) el.style.setProperty("--mfr-sel-color", boldColor);
+        el.parentNode.appendChild(el);
+      }
     }
   }
   if (!mfr3d.scene || typeof THREE === "undefined") return;
@@ -27317,8 +27380,9 @@ function mfrHighlightSelection() {
     mfr3d.highlight = null;
   }
   if (!sel) return;
+  const highlightColor = boldColor ? new THREE.Color(boldColor).getHex() : MFR_HIGHLIGHT_COLOR;
   const material = new THREE.MeshBasicMaterial({
-    color: MFR_HIGHLIGHT_COLOR, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
+    color: highlightColor, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
   });
   let geometry = null, position = null;
   if (sel.kind === "block") {
@@ -27344,7 +27408,7 @@ function mfrHighlightSelection() {
   mesh.position.copy(position); mesh.renderOrder = 20;
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(geometry),
-    new THREE.LineBasicMaterial({ color: MFR_HIGHLIGHT_COLOR, depthTest: false, transparent: true, opacity: 1 }));
+    new THREE.LineBasicMaterial({ color: highlightColor, depthTest: false, transparent: true, opacity: 1 }));
   edges.position.copy(position); edges.renderOrder = 21;
   group.add(mesh); group.add(edges);
   mfr3d.scene.add(group);
@@ -27803,7 +27867,7 @@ async function selectMfrChessWorkType(workTypeId) {
 // в вендоренном наборе нет, и вендорить новое без спроса нельзя.
 
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
-                loop: null, key: null, поколение: 0 };
+                loop: null, key: null, поколение: 0, chessLabels: [] };
 
 // Фасады объекта (2026-08-31, живой запрос пользователя) — картинки
 // вырезаны из последних листов PDF-комплекта («Фасад в осях 1-4/4-1/А-В/
@@ -27914,12 +27978,15 @@ function mergePositions(geometries, ids, диапазоны) {
   return out;
 }
 
-// Подпись процентом над блоком в «Шахматке» (2026-09-02) — билборд-спрайт
-// с canvas-текстурой, тот же приём, что у build3DZoneLabelSprite, но своя
-// функция: у неё своя система координат (mfr3d — ПРЯМАЯ x,y,z, Z вверх,
-// без разворота Y↔-Z, см. camera.up выше) и не нужен цвет по категории.
+// «Наклейка» процентом на блоке в «Шахматке» (2026-09-02, живой запрос
+// пользователя: не точка над крышей, а лицевая грань, на которую смотрит
+// пользователь) — билборд-спрайт с canvas-текстурой, тот же приём, что у
+// build3DZoneLabelSprite, но своя функция: своя система координат (mfr3d —
+// ПРЯМАЯ x,y,z, Z вверх, без разворота Y↔-Z, см. camera.up выше), не нужен
+// цвет по категории, и позиция не фиксирована — её каждый кадр пересчитывает
+// updateMfrChessLabels() по текущей стороне блока, обращённой к камере.
 const MFR_CHESS_LABEL_WORLD_HEIGHT = 2200;
-function buildMfrChessLabelSprite(text, cx, cy, topZ) {
+function buildMfrChessLabelSprite(text) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const fontPx = 56;
@@ -27936,13 +28003,30 @@ function buildMfrChessLabelSprite(text, cx, cy, topZ) {
   ctx.fillText(text, paddingX, canvas.height / 2);
 
   const texture = new THREE.CanvasTexture(canvas);
-  const material = new THREE.SpriteMaterial({ map: texture, depthTest: true, sizeAttenuation: true });
+  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, sizeAttenuation: true });
   const sprite = new THREE.Sprite(material);
   const worldPerPx = MFR_CHESS_LABEL_WORLD_HEIGHT / canvas.height;
   sprite.scale.set(canvas.width * worldPerPx, MFR_CHESS_LABEL_WORLD_HEIGHT, 1);
-  sprite.position.set(cx, cy, topZ + MFR_CHESS_LABEL_WORLD_HEIGHT * 0.7);
   sprite.renderOrder = 6;
   return sprite;
+}
+
+// Пересчитывает позицию каждой «наклейки» на грань блока, обращённую к
+// текущей камере: направление из центра блока к камере, вытянутое до
+// пересечения с поверхностью параллелепипеда (та же арифметика, что у
+// проекции вектора на куб в кубической текстуре — t = 1 / max(|dx|/hx,
+// |dy|/hy, |dz|/hz)), плюс небольшой вынос НАРУЖУ, чтобы не тонуть в
+// полупрозрачной толще блока. Вызывается каждый кадр (`кадр()` ниже) —
+// OrbitControls вращает камеру, и лицевая грань всё время новая.
+function updateMfrChessLabels(camera) {
+  for (const L of mfr3d.chessLabels) {
+    const dx = camera.position.x - L.cx, dy = camera.position.y - L.cy, dz = camera.position.z - L.cz;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const ux = dx / len, uy = dy / len, uz = dz / len;
+    const t = 1 / Math.max(Math.abs(ux) / L.hx, Math.abs(uy) / L.hy, Math.abs(uz) / L.hz, 1e-6);
+    const вынос = t + Math.min(L.hx, L.hy, L.hz) * 0.05 + 30;
+    L.sprite.position.set(L.cx + ux * вынос, L.cy + uy * вынос, L.cz + uz * вынос);
+  }
 }
 
 async function buildMfr3D() {
@@ -27971,7 +28055,7 @@ async function buildMfr3D() {
     : "Сборка 3D: только габарит блоков (упрощённая загрузка по фасадам)…");
   await ensureThreeLoaded();
   if (моё !== mfr3d.поколение) return;   // нас обогнала более свежая сборка
-  disposeMfr3D();                        // счётчик поколений он не трогает
+  disposeMfr3D();     // счётчик поколений не трогает; chessLabels обнуляет тоже он
   box.innerHTML = "";
 
   const [w, h] = data.size;
@@ -28120,9 +28204,18 @@ async function buildMfr3D() {
       scene.add(рёбраБлока);
       верх = Math.max(верх, (b.z1 - низ));
       if (chess) {
-        const label = buildMfrChessLabelSprite(
-          `${chess.percent}%`, centerX, centerY, centerZ + height / 2);
-        if (label) scene.add(label);
+        // «Наклейка» на ЛИЦЕВОЙ стороне (живой запрос пользователя,
+        // 2026-09-02): не фиксированная точка над крышей, а грань,
+        // обращённая к камере — пересчитывается каждый кадр в
+        // updateMfrChessLabels(), т.к. камера у OrbitControls вращается
+        // вокруг здания. Полуразмеры блока — geometry ещё не повёрнута и
+        // не смещена, поэтому это просто half(width/depth/height).
+        const label = buildMfrChessLabelSprite(`${chess.percent}%`);
+        scene.add(label);
+        mfr3d.chessLabels.push({
+          sprite: label, cx: centerX, cy: centerY, cz: centerZ,
+          hx: width / 2, hy: depth / 2, hz: height / 2,
+        });
       }
     }
   }
@@ -28378,6 +28471,7 @@ async function buildMfr3D() {
   const кадр = () => {
     mfr3d.loop = requestAnimationFrame(кадр);
     controls.update();
+    if (mfr3d.chessLabels.length) updateMfrChessLabels(camera);
     renderer.render(scene, camera);
   };
   кадр();
@@ -28457,7 +28551,7 @@ function disposeMfr3D() {
     });
   }
   Object.assign(mfr3d, { scene: null, camera: null, renderer: null,
-                         controls: null, loop: null, key: null });
+                         controls: null, loop: null, key: null, chessLabels: [] });
 }
 
 // ---------- настройка цветовой схемы модели ----------
