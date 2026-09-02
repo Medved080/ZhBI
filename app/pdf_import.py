@@ -123,17 +123,26 @@ def _ensure_level(conn, object_id: int, floor_label: str) -> tuple:
     Уже заведённую отметку не трогает — только дополняет пустую."""
     floor_no, kind, name = _floor_spec(floor_label)
     key = "этаж:%d" % floor_no
-    z0, _z1 = _floor_elevation(floor_label)
+    z0, z1 = _floor_elevation(floor_label)
+    # Высота этажа — из той же таблицы чертежа (`FLOOR_PLANS`/
+    # `_FACADE_ONLY_LEVELS`), явно (`object_levels.height_mm`, 2026-09-02):
+    # иначе блок считался бы «до следующего этажа секции», и техпространство
+    # секции 1 (1,79м) выходило бы блоком в 3,75м. Уже заведённой высоты не
+    # трогает — только дополняет пустую (тот же приём, что у отметки).
+    height = z1 - z0 if z1 > z0 else None
     row = conn.execute(
-        "SELECT id, elevation_mm FROM object_levels WHERE object_id = ? AND key = ?",
+        "SELECT id, elevation_mm, height_mm FROM object_levels WHERE object_id = ? AND key = ?",
         (object_id, key)).fetchone()
     if row:
-        if row["elevation_mm"] is None:
-            blocks_mod.update_level(conn, object_id, row["id"], elevation_mm=z0)
+        if row["elevation_mm"] is None or (row["height_mm"] is None and height):
+            blocks_mod.update_level(
+                conn, object_id, row["id"],
+                elevation_mm=z0 if row["elevation_mm"] is None else None,
+                height_mm=height if row["height_mm"] is None else None)
         return row["id"], key
     try:
         created = blocks_mod.create_level(conn, object_id, kind, floor=floor_no, name=name,
-                                          elevation_mm=z0)
+                                          elevation_mm=z0, height_mm=height)
     except BlockError:
         row = conn.execute(
             "SELECT id FROM object_levels WHERE object_id = ? AND key = ?",

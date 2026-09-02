@@ -228,7 +228,7 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
                     "(или геометрия этажа не пересекается с пролётом осей)"}
 
     level = conn.execute(
-        "SELECT floor, elevation_mm, elevation_suspect FROM object_levels WHERE id = ?",
+        "SELECT floor, elevation_mm, elevation_suspect, height_mm FROM object_levels WHERE id = ?",
         (level_id,),
     ).fetchone()
     if level is None:
@@ -237,7 +237,15 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
         return {"ok": False, "reason": "отметке этажа верить нельзя"}
 
     z0 = level["elevation_mm"]
-    высота, approx = _level_height(conn, object_id, section_id, level["floor"], z0)
+    # Явная высота этажа (`object_levels.height_mm`, 2026-09-02) — в
+    # приоритете над вычислением по соседям: техпространство секции 1 —
+    # 1,79м, а следующий этаж секции стоит на 3,75м выше; у верхних ярусов
+    # (выход на кровлю) соседа сверху нет вовсе, и «шаг предыдущего» давал
+    # им чужую высоту. Пусто — по соседям, как раньше.
+    if level["height_mm"] is not None and level["height_mm"] > 0:
+        высота, approx = level["height_mm"], False
+    else:
+        высота, approx = _level_height(conn, object_id, section_id, level["floor"], z0)
     if высота is None:
         return {"ok": False, "reason": "высоту этажа определить не из чего"}
 

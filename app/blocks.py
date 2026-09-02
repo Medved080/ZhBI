@@ -176,7 +176,8 @@ def list_levels(conn, object_id: int) -> list:
 
 
 def create_level(conn, object_id: int, kind: str, floor: int = None, name: str = None,
-                 elevation_mm: float = None, section_codes: list = None) -> dict:
+                 elevation_mm: float = None, section_codes: list = None,
+                 height_mm: float = None) -> dict:
     key = _level_key(kind, floor, section_codes)
     exists = conn.execute(
         "SELECT id FROM object_levels WHERE object_id = ? AND key = ?",
@@ -188,28 +189,30 @@ def create_level(conn, object_id: int, kind: str, floor: int = None, name: str =
     order = floor if floor is not None else 9000 + _next_sort_order(conn, "object_levels", object_id)
     cur = conn.execute(
         "INSERT INTO object_levels (object_id, key, floor, kind, name, elevation_mm, "
-        "elevation_source, elevation_suspect, sort_order) VALUES (?,?,?,?,?,?,?,0,?)",
-        (object_id, key, floor, kind, display_name, elevation_mm, "вручную", order),
+        "elevation_source, elevation_suspect, sort_order, height_mm) VALUES (?,?,?,?,?,?,?,0,?,?)",
+        (object_id, key, floor, kind, display_name, elevation_mm, "вручную", order, height_mm),
     )
     conn.commit()
     return {"id": cur.lastrowid, "key": key, "floor": floor, "kind": kind,
-            "name": display_name, "elevation_mm": elevation_mm, "sort_order": order}
+            "name": display_name, "elevation_mm": elevation_mm, "sort_order": order,
+            "height_mm": height_mm}
 
 
 def update_level(conn, object_id: int, level_id: int, name: str = None,
-                 elevation_mm: float = None) -> None:
-    """Правятся только подпись и отметка — `key`/`floor`/`kind` держат
-    блоки и (потенциально) привязку элементов модели."""
+                 elevation_mm: float = None, height_mm: float = None) -> None:
+    """Правятся только подпись, отметка и высота — `key`/`floor`/`kind`
+    держат блоки и (потенциально) привязку элементов модели."""
     row = conn.execute(
-        "SELECT id, name, elevation_mm FROM object_levels WHERE id = ? AND object_id = ?",
+        "SELECT id, name, elevation_mm, height_mm FROM object_levels WHERE id = ? AND object_id = ?",
         (level_id, object_id),
     ).fetchone()
     if not row:
         raise BlockError("Этаж не найден.")
     conn.execute(
-        "UPDATE object_levels SET name = ?, elevation_mm = ? WHERE id = ?",
+        "UPDATE object_levels SET name = ?, elevation_mm = ?, height_mm = ? WHERE id = ?",
         (name.strip() if name is not None else row["name"],
          elevation_mm if elevation_mm is not None else row["elevation_mm"],
+         height_mm if height_mm is not None else row["height_mm"],
          level_id),
     )
     conn.commit()
