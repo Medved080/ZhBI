@@ -29082,7 +29082,13 @@ let blkGeoDrag = null;   // {kind:"move"|"corner", boxIndex, corner, startX, sta
 async function openBlkGeoEditor(blockId, sectionCode, levelName, levelId) {
   blkGeoBlockId = blockId; blkGeoLevelId = levelId;
   document.getElementById("blk-geo-title").textContent = `Геометрия блока: ${sectionCode} · ${levelName}`;
-  document.getElementById("blk-geo-editor").style.display = "";
+  const editor = document.getElementById("blk-geo-editor");
+  editor.style.display = "";
+  // Редактор рисуется ПОСЛЕ матрицы (у той своя внутренняя прокрутка,
+  // max-height:60vh) — без автопрокрутки открытие происходит НИЖЕ видимой
+  // части модалки, ничего на экране не меняется, и выглядит как «клик по
+  // ✎ ничего не делает» (живой отчёт пользователя, 2026-09-05).
+  editor.scrollIntoView({ behavior: "smooth", block: "start" });
   document.getElementById("blk-geo-canvas-box").innerHTML = '<div class="hint-text" style="padding:8px">Загрузка…</div>';
   const [boxes, geometry] = await Promise.all([
     api(`/objects/${state.objectId}/blocks/${blockId}/boxes`),
