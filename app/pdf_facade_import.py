@@ -604,15 +604,14 @@ def _basement_boxes(rooms: list, boundary_x) -> dict:
     return out
 
 
-def _snap_shared_edges(box_f, sec: str, basement: dict, tx: float, ty: float):
+def _snap_shared_edges(box_m, sec: str, basement: dict):
     """Запас на стену (`_ROOM_WALL_MARGIN_MM`) уже добавлен со всех сторон
     — на ОБЩИХ гранях трёх областей подвала он дал бы нахлёст в 500мм;
     общие грани возвращаются точно: шов секций (x) у С01/С02 и верх
-    контура здания (y) у всех трёх. Координаты — фасадного режима
-    (`tx`/`ty` — тот же перенос, что у `to_facade`)."""
-    top = basement["С02"][3] + ty
-    seam = basement["С02"][0] + tx
-    x0, x1, y0, y1 = box_f
+    контура здания (y) у всех трёх."""
+    top = basement["С02"][3]
+    seam = basement["С02"][0]
+    x0, x1, y0, y1 = box_m
     if sec == "С01":
         return (x0, seam, y0, top)
     if sec == "С02":
@@ -621,10 +620,19 @@ def _snap_shared_edges(box_f, sec: str, basement: dict, tx: float, ty: float):
 
 
 def compute_plan_blocks(doc, facade_blocks: dict) -> dict:
-    """Ярусы по ПЛАНУ (см. `_PLAN_*`): {этаж: {секция: (x0,x1,y0,y1)}} в
-    системе координат фасадного режима. Пусто, если типовой этаж башни не
-    нашёлся ни на плане, ни по фасаду — тогда переносу не по чему
-    калиброваться, и лучше не добавить ярус, чем поставить его мимо."""
+    """Ярусы по ПЛАНУ (см. `_PLAN_*`) и перевод ВСЕГО макета в общую сетку
+    осей объекта. Возвращает {"blocks": {этаж: {секция: (x0,x1,y0,y1)}},
+    "grid": {подпись: (направление, координата)}, "shift": (tx, ty)} —
+    блоки в общей сетке осей (той же, что у детального разбора и у
+    `object_grids`), либо `{}`, если типовой этаж башни не нашёлся ни на
+    плане, ни по фасаду — тогда переносу не по чему калиброваться, и
+    макет остаётся в собственной системе координат фасада, без осей.
+
+    Почему макет переводится в сетку осей, а не оси в макет (2026-09-02,
+    живой запрос пользователя — «оси только в одном углу»): у объекта с
+    детальным разбором оси и элементы уже лежат в сетке, и блоки в своей
+    системе (сдвиг ≈ 69,5м по X, 16,8м по Y) не сходились с ними — в охват
+    блоков попадал случайный угол сетки. Одна система на всё."""
     tower_f = (facade_blocks.get(_PLAN_TYPICAL_FLOOR) or {}).get(_PLAN_ROOF2_SECTION)
     if not tower_f:
         return {}
@@ -637,8 +645,8 @@ def compute_plan_blocks(doc, facade_blocks: dict) -> dict:
     ty = (tower_f[2] + tower_f[3]) / 2 - (tower_c[2] + tower_c[3]) / 2
     m = _ROOM_WALL_MARGIN_MM
 
-    def to_facade(box):
-        return (box[0] + tx - m, box[1] + tx + m, box[2] + ty - m, box[3] + ty + m)
+    def with_margin(box):
+        return (box[0] - m, box[1] + m, box[2] - m, box[3] + m)
 
     out = {}
     basement = _basement_boxes(
@@ -646,13 +654,39 @@ def compute_plan_blocks(doc, facade_blocks: dict) -> dict:
         pdf_rooms._page_section_boundary_mm(doc[_PLAN_TYPICAL_PAGE - 1], (0.0, 0.0)))
     if basement:
         out[_PLAN_BASEMENT_FLOOR] = {
-            sec: _snap_shared_edges(to_facade(box), sec, basement, tx, ty)
+            sec: _snap_shared_edges(with_margin(box), sec, basement)
             for sec, box in basement.items()}
     roof = _bbox([poly for sec, poly in _plan_rooms_canonical(doc, _PLAN_ROOF2_PAGE, grid)
                   if sec == _PLAN_ROOF2_SECTION])
     if roof:
-        out[_PLAN_ROOF2_FLOOR] = {_PLAN_ROOF2_SECTION: to_facade(roof)}
-    return out
+        out[_PLAN_ROOF2_FLOOR] = {_PLAN_ROOF2_SECTION: with_margin(roof)}
+    return {"blocks": out, "grid": grid, "shift": (tx, ty)}
+
+
+def _grid_lines(grid: dict, blocks: dict) -> list:
+    """Оси для `object_grids` из подписей осей чертежа: положение — из
+    подписи, пролёт — габарит блоков СВОЕЙ секции по всем ярусам (тот же
+    приём, что у детального разбора, `pdf_import._apply_axis_grid`, только
+    там пролёт — охват помещений). [(подпись, направление, x1,y1,x2,y2)]."""
+    extent = {}
+    for sections in blocks.values():
+        for code, (x0, x1, y0, y1) in sections.items():
+            e = extent.get(code)
+            extent[code] = ((min(e[0], x0), max(e[1], x1), min(e[2], y0), max(e[3], y1))
+                            if e else (x0, x1, y0, y1))
+    lines = []
+    for label, (direction, coord) in grid.items():
+        match = pdf_rooms._AXIS_RE.match(label)
+        if not match:
+            continue
+        e = extent.get("С0" + match.group(2))
+        if e is None:
+            continue
+        if direction == "x":
+            lines.append((label, "x", coord, e[2], coord, e[3]))
+        else:
+            lines.append((label, "y", e[0], coord, e[1], coord))
+    return lines
 
 
 def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
@@ -661,7 +695,16 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
     потока/прогресса не нужно, см. докстрока `_PENDING`."""
     doc = pdf_rooms.load(data)
     facade = compute_facade_blocks(doc)
-    plan = compute_plan_blocks(doc, facade)
+    aligned = compute_plan_blocks(doc, facade)
+    grids = []
+    if aligned:
+        # Макет — в общую сетку осей (см. докстроку `compute_plan_blocks`).
+        tx, ty = aligned["shift"]
+        facade = {
+            floor: {code: (x0 - tx, x1 - tx, y0 - ty, y1 - ty)
+                    for code, (x0, x1, y0, y1) in sections.items()}
+            for floor, sections in facade.items()}
+    plan = aligned.get("blocks", {}) if aligned else {}
     # Порядок — снизу вверх: подвал, этажи по фасаду, выход на кровлю.
     blocks = {}
     if _PLAN_BASEMENT_FLOOR in plan:
@@ -669,6 +712,8 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
     blocks.update(facade)
     if _PLAN_ROOF2_FLOOR in plan:
         blocks[_PLAN_ROOF2_FLOOR] = plan[_PLAN_ROOF2_FLOOR]
+    if aligned:
+        grids = _grid_lines(aligned["grid"], blocks)
 
     row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
     object_name = row["name"] if row else ""
@@ -688,7 +733,9 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None) -> dict:
         "total_blocks": total_blocks,
         "total_floors": len(blocks),
         "by_floor": by_floor,
+        "axes": len(grids),
         "_blocks": blocks,
+        "_grids": grids,
         "filename": filename,
     }
 
@@ -714,8 +761,21 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
                 "UPDATE blocks SET x0 = ?, x1 = ?, y0 = ?, y1 = ? WHERE id = ?",
                 (x0, x1, y0, y1, block["id"]))
             written += 1
+    # Оси здания (`object_grids`) — слой «Оси» «Модели МФР»: те же подписи
+    # осей чертежа, что и у детального разбора, в той же общей сетке
+    # (2026-09-02, живой запрос пользователя — «оси только в одном углу»);
+    # тот же upsert по подписи, что у `pdf_import._apply_axis_grid`.
+    for label, kind, x1, y1, x2, y2 in analysis.get("_grids") or []:
+        conn.execute(
+            "INSERT INTO object_grids (object_id, label, kind, x1, y1, x2, y2) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT (object_id, label) DO UPDATE SET "
+            "kind=excluded.kind, x1=excluded.x1, y1=excluded.y1, "
+            "x2=excluded.x2, y2=excluded.y2",
+            (object_id, label, kind, x1, y1, x2, y2))
     conn.commit()
-    return {"blocks_written": written, "sections": len(section_ids), "floors": len(blocks)}
+    return {"blocks_written": written, "sections": len(section_ids), "floors": len(blocks),
+            "axes": len(analysis.get("_grids") or [])}
 
 
 def remember_pending(analysis: dict) -> str:
