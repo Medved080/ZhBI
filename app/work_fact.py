@@ -24,6 +24,7 @@
 отчёты не дублирует — это не тот жанр, документы сами себе журнал.
 """
 
+from app import work_progress
 from app.work_progress import UNIT_BLOCK, STATUS_PLAN, STATUS_IN_PROGRESS, STATUS_DONE
 
 
@@ -353,3 +354,90 @@ def save_report(conn, object_id: int, user_id: int, block_id: int, report_id, re
     )
     conn.commit()
     return report_id
+
+
+def _percents_as_of(conn, block_id: int, report_date: str) -> dict:
+    """Тот же принцип, что `_current_percents`, но НА ДАТУ — последний
+    отчёт блока с `report_date` не позже указанной, а не вообще самый
+    свежий (нужно для отчёта «Отчёты → Учёт по блокам: статусы», где дату
+    выбирают, а не всегда смотрят на сегодня)."""
+    rows = conn.execute(
+        "SELECT i.work_type_id, i.percent FROM work_fact_items i "
+        "JOIN work_fact_reports r ON r.id = i.report_id "
+        "WHERE r.block_id = ? AND r.report_date <= ? "
+        "ORDER BY r.report_date ASC, r.id ASC", (block_id, report_date),
+    ).fetchall()
+    result = {}
+    for row in rows:
+        result[row["work_type_id"]] = row["percent"]  # позже в сортировке — победил
+    return result
+
+
+def set_cell_percent(conn, user_id: int, object_id: int, block_id: int, work_type_id: int,
+                     percent: int, report_date: str) -> dict:
+    """Правка ОДНОЙ ячейки отчёта «Учёт по блокам: статусы» (2026-09-05,
+    живой запрос пользователя: «в ячейках устанавливайте процент
+    выполнения») — `save_report` принимает только полный слепок операций
+    блока разом (форма панели блока и шлёт весь набор), а здесь правится
+    одна операция. Слепок собирается на лету: состояние блока НА
+    `report_date` (последний отчёт не позже неё, недостающим операциям —
+    0) плюс правка этой одной — и уходит в `save_report` как обычно, то
+    есть попадает в ТОТ ЖЕ отчёт-документ на эту дату (новый или уже
+    существующий), а не в отдельный безымянный след."""
+    settings = block_settings(conn, object_id, block_id)
+    if work_type_id not in settings["selected"]:
+        raise FactError(422, "Операция не выбрана для этого блока — сначала «Настройки».")
+    items = _percents_as_of(conn, block_id, report_date)
+    for wt_id in settings["selected"]:
+        items.setdefault(wt_id, 0)
+    items[work_type_id] = percent
+    existing = conn.execute(
+        "SELECT id FROM work_fact_reports WHERE object_id = ? AND block_id = ? AND report_date = ?",
+        (object_id, block_id, report_date),
+    ).fetchone()
+    save_report(conn, object_id, user_id, block_id,
+               existing["id"] if existing else None, report_date, items)
+    return {"percent": percent, "status": _status_from_percent(percent)}
+
+
+def status_report(conn, object_id: int, report_date: "str | None" = None) -> dict:
+    """Экран «Отчёты → Учёт по блокам: статусы» (2026-09-05, живой запрос
+    пользователя: перенос вкладки «Статусы» из «Учёта по блокам», с правкой
+    процента прямо в ячейке) — то же дерево, что у `work_progress.matrix`
+    (все виды работ, все единицы, те же колонки блоков/секций), но у
+    операций «эт/сек» в ячейке — процент и статус НА `report_date`
+    (последний отчёт блока не позже неё), а не устаревший клик-цикл: общая
+    матрица их больше не адресует (см. `work_progress.py`, docstring
+    `ADDRESSABLE_UNITS`). У «сек»/«компл» — как и раньше, ТЕКУЩИЙ статус:
+    для них истории по датам не существует вовсе, `work_progress` хранит
+    только последнее значение. Пусто — сегодня (тот же приём, что у
+    `report_analytics.build_analytics_report`); фактически применённая дата
+    возвращается в ответе — форма подхватывает её в свой выбор даты."""
+    from datetime import date
+    report_date = report_date or date.today().isoformat()
+    base = work_progress.matrix(conn, object_id)
+    settings_cache, percents_cache = {}, {}
+
+    def selected(block_id):
+        if block_id not in settings_cache:
+            settings_cache[block_id] = set(block_settings(conn, object_id, block_id)["selected"])
+        return settings_cache[block_id]
+
+    def percents(block_id):
+        if block_id not in percents_cache:
+            percents_cache[block_id] = _percents_as_of(conn, block_id, report_date)
+        return percents_cache[block_id]
+
+    def walk(nodes):
+        for n in nodes:
+            if n["row_kind"] != "узел" and n.get("unit") == UNIT_BLOCK:
+                cells = {}
+                for b in base["blocks"]:
+                    if n["id"] in selected(b["id"]):
+                        p = percents(b["id"]).get(n["id"], 0)
+                        cells[b["id"]] = {"percent": p, "status": _status_from_percent(p)}
+                n["cells"] = cells
+                n["addressable"] = True
+            walk(n["children"])
+    walk(base["tree"])
+    return {**base, "report_date": report_date}

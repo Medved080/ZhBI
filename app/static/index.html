@@ -1143,6 +1143,18 @@
   #wp-matrix-table td.wp-cell.wp-in_progress .wp-dot { background: #E8A33D; border-color: #E8A33D; }
   #wp-matrix-table td.wp-cell.wp-done .wp-dot { background: #3FA76A; border-color: #3FA76A; }
   #wp-matrix-table td.wp-cell.wp-off { cursor: default; opacity: 0.25; }
+  /* Операции «эт/сек» в отчёте «Учёт по блокам: статусы» (2026-09-05,
+     живой запрос пользователя) — процент числом в ячейке, а не кружком:
+     фон клетки красится цветом статуса (та же палитра, что у .wp-dot),
+     сам ввод остаётся кликабельным полем, не переключателем-циклом. */
+  #wp-matrix-table td.wp-percent-cell { cursor: default; padding: 1px 4px; }
+  #wp-matrix-table td.wp-percent-cell.wp-plan { background: var(--color-surface-2); }
+  #wp-matrix-table td.wp-percent-cell.wp-in_progress { background: color-mix(in srgb, #E8A33D 25%, var(--color-surface)); }
+  #wp-matrix-table td.wp-percent-cell.wp-done { background: color-mix(in srgb, #3FA76A 25%, var(--color-surface)); }
+  #wp-matrix-table .wp-percent-input { width: 48px; text-align: right; border: 1px solid transparent;
+    background: transparent; font-size: 12px; padding: 2px 4px; }
+  #wp-matrix-table .wp-percent-input:hover, #wp-matrix-table .wp-percent-input:focus {
+    border-color: var(--color-border); background: var(--color-surface); }
   .wp-legend { display: flex; gap: 16px; align-items: center; font-size: 12px;
     color: var(--color-text-muted); margin: 6px 0; }
   .wp-legend .wp-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
@@ -4192,6 +4204,13 @@
                  критический путь поставки. Всем ролям, как и остальные
                  отчёты. -->
             <button id="menu-report-analytics">Аналитическая справка</button>
+            <!-- «Учёт по блокам: статусы» (2026-09-05, живой запрос
+                 пользователя) — бывшая вкладка «Статусы» «Учёта по блокам»:
+                 процент «эт/сек» прямо в ячейке, на выбранную дату. Только
+                 для объектов, где ведётся учёт по блокам — на остальных
+                 пустой отчёт с пояснением, отдельного права не заводится
+                 (те же права, что у самого «Учёта по блокам»). -->
+            <button id="menu-report-block-status">Учёт по блокам: статусы</button>
           </div>
         </div>
         <!-- «Обучение» (2026-08-14). Инструкция собирается под роли самого
@@ -6375,6 +6394,7 @@
           <button type="button" class="report-tab" data-report="mywork">Моя работа</button>
           <button type="button" class="report-tab in-dev" data-report="contracting">График контрактации и поставки <span class="in-dev-mark">(в разработке)</span></button>
           <button type="button" class="report-tab" data-report="analytics">Аналитическая справка</button>
+          <button type="button" class="report-tab" data-report="block_status">Учёт по блокам: статусы</button>
         </div>
         <!-- «Моя работа»: период (по умолчанию текущий день) и выбор
              пользователя. Список пользователей приходит с сервера вместе с
@@ -6523,6 +6543,13 @@
         </label>
         <label class="toggle"><input type="checkbox" id="an-only-deficit" checked/>
           Только позиции с дефицитом</label>
+      </div>
+      <!-- «Учёт по блокам: статусы» (2026-09-05) — единственная своя
+           настройка: дата, на которую смотрим/правим процент «эт/сек».
+           Своя история у каждого блока — выбор даты не «фильтр показа», а
+           «какой день редактируем», см. work_fact.set_cell_percent. -->
+      <div class="ds-controls" id="report-block-status-box" style="display:none">
+        <label class="field">На дату <input type="date" id="bs-date" style="width:auto"/></label>
       </div>
       <!-- Сужение фильтром схемы к «Моей работе» неприменимо: там строки —
            события журнала, а не изделия, и часть из них к изделиям вообще
@@ -6921,9 +6948,12 @@
 
 <!-- Учёт по блокам (2026-08-25, Docs/block-accounting.md): второй контур
      учёта — вид работ × блок (этаж+секция) -> статус, независимый от
-     сборного ЖБИ и от модели Revit. Четыре вкладки одной формы: секции и
-     этажи заводятся вручную, блоки — отмеченные пары, виды работ грузятся
-     xlsx, статусы ставятся в матрице. -->
+     сборного ЖБИ и от модели Revit. Три вкладки одной формы: секции и
+     этажи заводятся вручную, блоки — отмеченные пары (плюс геометрия по
+     «✎»), виды работ грузятся xlsx. Статусы (бывшая четвёртая вкладка) —
+     перенесены в «Отчёты → Учёт по блокам: статусы» (2026-09-05, живой
+     запрос пользователя): там же теперь и правка процента «эт/сек» прямо в
+     ячейке, а не только в панели блока «Модели МФР». -->
 <div class="modal-backdrop" id="blocks-backdrop">
   <div class="modal wide">
     <h2>Учёт по блокам</h2>
@@ -6931,7 +6961,6 @@
       <button type="button" class="tab-btn active" data-blk-tab="setup">Секции и этажи</button>
       <button type="button" class="tab-btn" data-blk-tab="blocks">Блоки</button>
       <button type="button" class="tab-btn" data-blk-tab="worktypes">Виды работ</button>
-      <button type="button" class="tab-btn" data-blk-tab="progress">Статусы</button>
     </div>
 
     <div id="blk-tab-setup" class="blk-panel">
@@ -7015,19 +7044,6 @@
         </span>
       </div>
       <div id="wt-tree-box" style="max-height:50vh; overflow:auto"></div>
-    </div>
-
-    <div id="blk-tab-progress" class="blk-panel" style="display:none">
-      <p class="hint-text">Операции «эт/сек» сюда больше не проставляются — процент по ним
-        настраивается и вводится в карточке блока («Модель МФР», клик по блоку: кнопки
-        «Настройки» и «Факт»). Здесь остались «сек» и «компл».</p>
-      <div class="wp-legend">
-        <span><i class="wp-dot" style="background:transparent"></i>план</span>
-        <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
-        <span><i class="wp-dot" style="background:#3FA76A;border-color:#3FA76A"></i>выполнено</span>
-        <span class="hint-text">клик по клетке переключает статус</span>
-      </div>
-      <div id="wp-matrix-box"></div>
     </div>
 
     <div class="actions">

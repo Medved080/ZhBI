@@ -18253,6 +18253,20 @@ const REPORTS = {
     noFilter: true,
     wide: true,
   },
+  // «Учёт по блокам: статусы» (2026-09-05, живой запрос пользователя) —
+  // бывшая вкладка «Статусы» «Учёта по блокам», перенесённая сюда: у
+  // операций «эт/сек» в ячейке процент НА ВЫБРАННУЮ ДАТУ, правится тут же.
+  // Своя настройка (только дата) — needsBlockStatusDate, отдельная от
+  // needsDate/needsAnalytics: у тех дата приходит в комплекте с чужими
+  // полями (период, режим графика, горизонт), которые здесь не нужны.
+  block_status: {
+    title: "Учёт по блокам: статусы",
+    endpoint: "/reports/block-status",
+    render: renderBlockStatusReport,
+    needsBlockStatusDate: true,
+    noFilter: true,
+    wide: true,
+  },
 };
 let currentReport = "status";
 // Период графика «Динамики» в ФОРМЕ (живой запрос 2026-08-03) — тот же, что
@@ -18308,6 +18322,10 @@ function reportRequestBody() {
     body.report_date = document.getElementById("an-date").value || null;
     body.horizon_days = Number(document.getElementById("an-horizon").value) || null;
     return body;   // фильтр схемы справка не учитывает — она про объект целиком
+  }
+  if (REPORTS[currentReport].needsBlockStatusDate) {
+    body.report_date = document.getElementById("bs-date").value || null;
+    return body;   // фильтр схемы неприменим — это учёт по блокам, не по изделиям
   }
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
@@ -19634,6 +19652,13 @@ async function loadReport() {
         `Горизонт до ${formatDateRu(reportData.horizon_end)}: потребность ${т.need}, ` +
         (т.deficit > 0 ? `не законтрактовано ${т.deficit}` : "контрактация закрыта") +
         `. Всего по объекту: ${reportData.progress.total.percent} % контрактации.`;
+    } else if (def.needsBlockStatusDate) {
+      // Дату подставляем фактически применённой: пустое поле сервер читает
+      // как «сегодня» (см. work_fact.status_report).
+      document.getElementById("bs-date").value = reportData.report_date;
+      statusLine.textContent = reportData.tree.length
+        ? `Блоков: ${reportData.blocks.length}, секций: ${reportData.sections.length}`
+        : "Справочник видов работ ещё не загружен (Учёт по блокам → Виды работ)";
     } else if (def.flatList) {
       if (reportData.view === "pivot") {
         statusLine.textContent = `Изделий: ${reportData.total.total}`;
@@ -19691,6 +19716,8 @@ async function switchReport(key) {
   document.getElementById("report-contracting-box").style.display = REPORTS[key].needsScale ? "" : "none";
   document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
   document.getElementById("report-analytics-box").style.display = REPORTS[key].needsAnalytics ? "" : "none";
+  document.getElementById("report-block-status-box").style.display =
+    REPORTS[key].needsBlockStatusDate ? "" : "none";
   document.getElementById("report-completion-box").style.display =
     REPORTS[key].completionViews ? "" : "none";
   document.getElementById("report-use-filter-box").style.display =
@@ -19715,6 +19742,10 @@ async function switchReport(key) {
     // До первого ответа в поле стоит умолчание, иначе запрос ушёл бы пустым.
     const горизонт = document.getElementById("an-horizon");
     if (!горизонт.options.length) горизонт.innerHTML = `<option value="30">1 месяц</option>`;
+  }
+  if (REPORTS[key].needsBlockStatusDate) {
+    const дата = document.getElementById("bs-date");
+    if (!дата.value) дата.value = todayIsoLocal();
   }
   if (REPORTS[key].completionViews) {
     document.getElementById("cmp-view").value = completionView;
@@ -19968,6 +19999,13 @@ document.getElementById("menu-report-analytics").addEventListener("click", () =>
 // без запроса.
 document.getElementById("an-date").addEventListener("change", loadReport);
 document.getElementById("an-horizon").addEventListener("change", loadReport);
+document.getElementById("menu-report-block-status").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  applyReportSize();
+  showBackToReport(false);
+  switchReport("block_status");
+});
+document.getElementById("bs-date").addEventListener("change", loadReport);
 document.getElementById("an-only-deficit").addEventListener("change", () => {
   if (reportData) document.getElementById("report-body").innerHTML = renderAnalyticsReport(reportData);
 });
@@ -28772,12 +28810,11 @@ document.getElementById("blocks-close").addEventListener("click", () => {
 function switchBlocksTab(name) {
   document.querySelectorAll("#blocks-tabs .tab-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.blkTab === name));
-  for (const key of ["setup", "blocks", "worktypes", "progress"]) {
+  for (const key of ["setup", "blocks", "worktypes"]) {
     document.getElementById(`blk-tab-${key}`).style.display = key === name ? "" : "none";
   }
   if (name === "blocks") loadBlkMatrix();
   if (name === "worktypes") loadWorkTypesTree();
-  if (name === "progress") loadWorkProgress();
 }
 document.querySelectorAll("#blocks-tabs .tab-btn").forEach(btn =>
   btn.addEventListener("click", () => switchBlocksTab(btn.dataset.blkTab)));
@@ -29350,14 +29387,18 @@ document.getElementById("wt-collapse-all").addEventListener("click", () => {
   renderWtTree();
 });
 
-// -------- Статусы (вкладка «Статусы»): матрица вид работ × блок/секция --------
-
-async function loadWorkProgress() {
-  const box = document.getElementById("wp-matrix-box");
-  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
-  wpData = await api(`/objects/${state.objectId}/work-progress`);
-  renderWpMatrix();
-}
+// -------- Отчёт «Учёт по блокам: статусы» (2026-09-05) --------
+//
+// Бывшая вкладка «Статусы» «Учёта по блокам», перенесённая в «Отчёты»
+// (живой запрос пользователя). Матрица вид работ × блок/секция/объект, как
+// и раньше, но с двумя РАЗНЫМИ способами простановки в одной таблице:
+//   - «эт/сек» — ПРОЦЕНТ в ячейке (числовое поле), правится тут же на
+//     выбранную дату отчёта (PUT .../work-progress-cell, попадает в тот же
+//     отчёт-документ блока, что и «Факт» в панели блока);
+//   - «сек»/«компл» — как и раньше, клик по клетке крутит План → В работе →
+//     Выполнено → План (PUT .../work-progress/cell) — для них истории по
+//     датам не существует вовсе, дата отчёта на них не влияет.
+// Фон клетки — цвет статуса в обоих случаях, для единообразия взгляда.
 
 function wpFlatten(nodes, depth, out) {
   for (const n of nodes) {
@@ -29367,37 +29408,27 @@ function wpFlatten(nodes, depth, out) {
   return out;
 }
 
-function wpColumnList() {
-  const blockCols = wpData.blocks.map(b => ({
+function bsColumnList(data) {
+  const blockCols = data.blocks.map(b => ({
     unit: WP_UNIT_BLOCK, block_id: b.id, section_id: null,
     label: `${b.section_code} · ${b.level_name || ("эт. " + b.floor)}`,
   }));
-  const sectionCols = wpData.sections.map(s => ({
+  const sectionCols = data.sections.map(s => ({
     unit: WP_UNIT_SECTION, block_id: null, section_id: s.id, label: `${s.code} целиком`,
   }));
   return [...blockCols, ...sectionCols, { unit: WP_UNIT_WHOLE, block_id: null, section_id: null, label: "Объект" }];
 }
 
-function wpCellStatus(node, col) {
-  if (!node.cells) return null;
-  if (col.unit === WP_UNIT_BLOCK) return node.cells[col.block_id];
-  if (col.unit === WP_UNIT_SECTION) return node.cells[col.section_id];
-  return node.cells["объект"];
-}
-
-function renderWpMatrix() {
-  const box = document.getElementById("wp-matrix-box");
-  if (!wpData.tree.length) {
-    box.innerHTML = '<div class="hint-text">Справочник видов работ ещё не загружен '
-      + '(вкладка «Виды работ»).</div>';
-    return;
+function renderBlockStatusReport(data) {
+  if (!data.tree.length) {
+    return '<div class="hint-text" style="padding:8px">Справочник видов работ ещё не загружен '
+      + '(Учёт по блокам → Виды работ).</div>';
   }
-  if (!wpData.blocks.length && !wpData.sections.length) {
-    box.innerHTML = '<div class="hint-text">Блоков ещё нет (вкладка «Блоки»).</div>';
-    return;
+  if (!data.blocks.length && !data.sections.length) {
+    return '<div class="hint-text" style="padding:8px">Блоков ещё нет (Учёт по блокам → Блоки).</div>';
   }
-  const cols = wpColumnList();
-  const rows = wpFlatten(wpData.tree, 0, []);
+  const cols = bsColumnList(data);
+  const rows = wpFlatten(data.tree, 0, []);
   const head = `<tr><th class="wp-row-name">Вид работ</th>
     ${cols.map(c => `<th title="${escapeHtml(c.label)}">${escapeHtml(c.label)}</th>`).join("")}</tr>`;
   const body = rows.map(({ node, depth }) => {
@@ -29410,7 +29441,13 @@ function renderWpMatrix() {
       if (!node.addressable || c.unit !== node.unit) {
         return `<td class="wp-cell wp-off"><span class="wp-dot"></span></td>`;
       }
-      const status = wpCellStatus(node, c) || "plan";
+      if (c.unit === WP_UNIT_BLOCK) {
+        const cell = node.cells ? node.cells[c.block_id] : null;
+        if (!cell) return `<td class="wp-cell wp-off" title="Операция не выбрана для этого блока — «Настройки» в панели блока"><span class="wp-dot"></span></td>`;
+        return `<td class="wp-cell wp-percent-cell wp-${cell.status}" data-wt="${node.id}" data-block="${c.block_id}">
+          <input type="number" class="wp-percent-input" min="0" max="100" step="1" value="${cell.percent}"/></td>`;
+      }
+      const status = (c.unit === WP_UNIT_SECTION ? node.cells?.[c.section_id] : node.cells?.["объект"]) || "plan";
       const blockAttr = c.block_id != null ? ` data-block="${c.block_id}"` : "";
       const sectionAttr = c.section_id != null ? ` data-section="${c.section_id}"` : "";
       return `<td class="wp-cell wp-${status}" data-wt="${node.id}"${blockAttr}${sectionAttr}>`
@@ -29418,18 +29455,37 @@ function renderWpMatrix() {
     }).join("");
     return `<tr>${nameCell}${cells}</tr>`;
   }).join("");
-  box.innerHTML = `<table id="wp-matrix-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
-  box.querySelectorAll("td.wp-cell[data-wt]").forEach(td =>
-    td.addEventListener("click", () => wpCycleCell(td)));
+  return `<table id="wp-matrix-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 
-async function wpCycleCell(td) {
+document.getElementById("report-body").addEventListener("change", async (e) => {
+  const input = e.target.closest(".wp-percent-input");
+  if (!input) return;
+  const td = input.closest("td");
+  const percent = Math.max(0, Math.min(100, Math.round(Number(input.value) || 0)));
+  input.value = percent;
+  try {
+    const res = await api(`/objects/${state.objectId}/blocks/${td.dataset.block}/work-progress-cell`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        work_type_id: Number(td.dataset.wt), percent,
+        report_date: document.getElementById("bs-date").value,
+      }),
+    });
+    td.className = `wp-cell wp-percent-cell wp-${res.status}`;
+  } catch (e2) { showToast(e2.message, "error"); }
+});
+
+document.getElementById("report-body").addEventListener("click", async (e) => {
+  // «сек»/«компл» — клик крутит статус, как и раньше; «эт/сек» правится
+  // числовым полем (событие "change" выше), не кликом.
+  const td = e.target.closest("td.wp-cell:not(.wp-percent-cell)[data-wt]");
+  if (!td || currentReport !== "block_status") return;
   const workTypeId = Number(td.dataset.wt);
   const blockId = td.dataset.block ? Number(td.dataset.block) : null;
   const sectionId = td.dataset.section ? Number(td.dataset.section) : null;
   const cur = td.classList.contains("wp-in_progress") ? "in_progress"
     : td.classList.contains("wp-done") ? "done" : "plan";
-  // План -> В работе -> Выполнено -> План (снимает простановку).
   const next = cur === "plan" ? "in_progress" : cur === "in_progress" ? "done" : null;
   try {
     await api(`/objects/${state.objectId}/work-progress/cell`, {
@@ -29440,8 +29496,8 @@ async function wpCycleCell(td) {
     });
     td.classList.remove("wp-plan", "wp-in_progress", "wp-done");
     td.classList.add("wp-" + (next || "plan"));
-  } catch (e) { showToast(e.message, "error"); }
-}
+  } catch (err) { showToast(err.message, "error"); }
+});
 
 // ==================== ЗАГРУЗКА ПОМЕЩЕНИЙ ИЗ PDF (2026-08-26) ====================
 // Второй, помимо Revit, источник геометрии для «Модели МФР». Работает на

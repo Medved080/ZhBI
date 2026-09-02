@@ -1536,8 +1536,16 @@ def _report_object_id(conn, body: "ReportRequestIn"):
     return _object_for_source_file(conn, body.source_file) if body.source_file else None
 
 
-def _guard_report(conn, user, body: "ReportRequestIn", key: str) -> "ReportRequestIn":
+def _guard_report(conn, user, body: "ReportRequestIn", key: str,
+                  needs_source_file: bool = True) -> "ReportRequestIn":
     """Доступ к отчёту и ОБЛАСТЬ его данных (аудит безопасности 2026-08-03).
+
+    `needs_source_file=False` (2026-09-05, «Учёт по блокам: статусы») — для
+    отчёта, который выбирает данные ПО object_id напрямую (work_progress/
+    work_fact), а не по source_file/element_ids, как остальные девять:
+    объект МФР чертежа не имеет вовсе (это ЖБИ-понятие), и обязательное
+    расширение object_id → source_file ниже роняло бы отчёт «нет
+    актуального чертежа» на любом МФР-объекте.
 
     До этой правки все десять отчётов закрывались одним `get_current_user`,
     то есть любой вошедший строил отчёт по любому объекту, назвав чужой
@@ -1582,7 +1590,7 @@ def _guard_report(conn, user, body: "ReportRequestIn", key: str) -> "ReportReque
             )
         return body
 
-    if not body.source_file and body.object_id is not None:
+    if needs_source_file and not body.source_file and body.object_id is not None:
         try:
             return body.model_copy(update={"source_file": object_source_file(conn, body.object_id)})
         except LookupError:
@@ -1787,6 +1795,27 @@ def report_analytics_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_
         conn.close()
     return _report_file_response(build_analytics_report_pdf(report), f"{ANALYTICS_TITLE}.pdf",
                                  "application/pdf")
+
+
+@app.post("/reports/block-status")
+def report_block_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «Учёт по блокам: статусы» (2026-09-05, живой запрос
+    пользователя) — бывшая вкладка «Статусы» «Учёта по блокам», перенесённая
+    в «Отчёты»: у операций «эт/сек» в ячейке процент на выбранную дату,
+    правится тут же (PUT /objects/{id}/blocks/{id}/work-progress-cell), а не
+    устаревшим клик-циклом. Права — те же, что у «Учёта по блокам»
+    (`work_progress`), отдельного раздела прав не заводится. Выгрузки
+    XLSX/PDF не заведены — это редактируемый экран, а не статичная сводка."""
+    conn = get_connection()
+    try:
+        body = _guard_report(conn, user, body, "work_progress", needs_source_file=False)
+        object_id = _report_object_id(conn, body)
+        if object_id is None:
+            raise HTTPException(status_code=400,
+                                detail="Отчёт строится по объекту — выберите объект в тулбаре")
+        return work_fact.status_report(conn, object_id, body.report_date)
+    finally:
+        conn.close()
 
 
 @app.post("/reports/completion")
@@ -6003,6 +6032,36 @@ def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWork
     activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
                 details={"block_id": block_id, "count": len(body.work_type_ids)})
     return {"ok": True}
+
+
+class BlockPercentCellIn(BaseModel):
+    work_type_id: int
+    percent: int
+    report_date: str
+
+
+@app.put("/objects/{object_id}/blocks/{block_id}/work-progress-cell")
+def set_block_percent_cell(object_id: int, block_id: int, body: BlockPercentCellIn,
+                           user: sqlite3.Row = Depends(get_current_user)):
+    """Правка одной ячейки в отчёте «Учёт по блокам: статусы» (2026-09-05,
+    живой запрос пользователя) — попадает в тот же отчёт-документ блока на
+    `report_date`, что и «Факт» в панели блока, и потому НЕ пишет в общий
+    журнал действий: это тот же механизм (`work_fact.save_report`), а у
+    «Факт» уже есть свой аудит — `created_by`/`updated_by`/даты прямо на
+    отчёте (Docs/block-accounting.md §8, «Отдельно от общего журнала
+    действий» — вторая запись в activity_actions на то же изменение была бы
+    задвоением, не новой информацией)."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            result = work_fact.set_cell_percent(conn, user["id"], object_id, block_id,
+                                                body.work_type_id, body.percent, body.report_date)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+    return result
 
 
 @app.get("/objects/{object_id}/blocks/{block_id}/progress")
