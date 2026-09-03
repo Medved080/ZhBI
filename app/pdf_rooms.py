@@ -140,6 +140,12 @@ _NEAREST_ROOM_MAX_MM = 5000
 # легенде стен (80мм): при 60 она отсеивалась вместе с линиями.
 _MIN_WALL_THICKNESS_MM = 45
 
+# Толще — не простенок наружного фасада, а парапет/ограждение террасы
+# на том же слое (920мм на проверенном листе); настоящая наружная кладка
+# комплекта — 150..500мм. Только для материала `_EXTERIOR_INFILL_MATERIAL`
+# и не на листе закруглённого угла (`_ROUNDED_CORNER_PAGE`).
+_MAX_INFILL_THICKNESS_MM = 600
+
 # Верхние ярусы, где стенами считается ТОЛЬКО конструкция, выделенная на
 # листе цветом (монолит — бурые стены выхода на кровлю, синие колонны):
 # выход на кровлю секции 1 (лист 11) и технический этаж секции 2 (лист 15).
@@ -1341,6 +1347,21 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
                 f"Лист {plan.page} (этаж {plan.floor}): {len(thin)} фигур(-ы) слоёв стен "
                 f"тоньше {_MIN_WALL_THICKNESS_MM:.0f}мм — линии контура, не стены, отброшены")
             floor_segments = [s for s in floor_segments if s["thickness_mm"] >= _MIN_WALL_THICKNESS_MM]
+        # Простенок наружного фасада толще любой кладки — парапет/ограждение
+        # террасы на слое фасада (2026-09-02, живой запрос пользователя со
+        # скриншотом: на 2-м этаже «торчащая стена» 8,3м×920мм вдоль края
+        # террасы над закруглённым углом первого этажа, на 3-м её нет).
+        # Кроме листа 1-го этажа: там закруглённый угол нарисован одной
+        # большой заливкой (5,5×7,8м), и это настоящая кладка.
+        if plan.page != _ROUNDED_CORNER_PAGE:
+            fat = [s for s in floor_segments
+                   if s.get("material") == _EXTERIOR_INFILL_MATERIAL[1]
+                   and s["thickness_mm"] > _MAX_INFILL_THICKNESS_MM]
+            if fat:
+                warnings.append(
+                    f"Лист {plan.page} (этаж {plan.floor}): {len(fat)} фигур(-ы) фасада толще "
+                    f"{_MAX_INFILL_THICKNESS_MM:.0f}мм — парапет/ограждение, не кладка, отброшены")
+                floor_segments = [s for s in floor_segments if s not in fat]
         for i, s in enumerate(floor_segments):
             all_walls.append(WallSegment(
                 floor=plan.floor, index=i, page=plan.page,
