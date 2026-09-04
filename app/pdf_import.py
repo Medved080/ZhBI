@@ -48,6 +48,7 @@ import uuid
 
 from app import blocks as blocks_mod
 from app import db as db_mod
+from app import pdf_plan_images
 from app import pdf_rooms
 from app.blocks import BlockError
 
@@ -402,6 +403,12 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
         doc, rooms, on_progress=_walls_progress)
     axis_grid = pdf_rooms.extract_axis_grid(doc)
     parse_warnings = room_warnings + wall_warnings
+    # Картинки планов этажей по контуру плиты (2026-09-02, живой запрос
+    # пользователя) — здесь, в фоновом разборе, а не в `apply()`: тут есть
+    # открытый документ, а рендер 28 листов — секунды.
+    if on_progress:
+        on_progress("Снимаю картинки планов", None, 0, len(pdf_rooms.FLOOR_PLANS))
+    plan_images = pdf_plan_images.render_floor_images(doc, rooms, walls, axis_grid)
 
     row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
     object_name = row["name"] if row else ""
@@ -443,6 +450,7 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
         "_slabs": slabs,
         "_retired_uids": retired_uids,
         "_axis_grid": axis_grid,
+        "_plan_images": plan_images,
         "filename": filename,
     }
 
@@ -619,6 +627,19 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
         conn, object_id, rooms, analysis.get("_axis_grid") or {}, section_ids)
     _apply_parking_block(conn, object_id, rooms, analysis.get("_axis_grid") or {},
                          floors, section_ids)
+    # Картинки планов — одна на этаж, повторная загрузка перезаписывает
+    # (см. `app/pdf_plan_images.py`, schema.sql: level_plan_images).
+    for img in analysis.get("_plan_images") or []:
+        level = floors.get(img["floor"])
+        if not level:
+            continue
+        conn.execute("DELETE FROM level_plan_images WHERE object_id = ? AND level_id = ?",
+                     (object_id, level[0]))
+        conn.execute(
+            "INSERT INTO level_plan_images (object_id, level_id, page, x0, x1, y0, y1, "
+            "width_px, height_px, png) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (object_id, level[0], img["page"], img["x0"], img["x1"], img["y0"], img["y1"],
+             img["width"], img["height"], img["png"]))
 
     retired = analysis["_retired_uids"]
     if retired:

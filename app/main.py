@@ -5889,6 +5889,49 @@ def object_grids_endpoint(object_id: int, user: sqlite3.Row = Depends(get_curren
         conn.close()
 
 
+@app.get("/objects/{object_id}/plan-images")
+def plan_images_list_endpoint(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Слой «Планы» «Модели МФР» (2026-09-02, app/pdf_plan_images.py):
+    у каких этажей есть картинка плана и куда её класть — охват в мм общей
+    сетки, отметка этажа; сам PNG — отдельным запросом по `url` (в нём
+    `v=id`, чтобы после повторной загрузки браузер не показал старую из
+    кэша)."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "revit_model", "read")
+        rows = conn.execute(
+            "SELECT i.id, i.level_id, i.page, i.x0, i.x1, i.y0, i.y1, i.width_px, i.height_px, "
+            "       l.elevation_mm, l.name AS level_name "
+            "FROM level_plan_images i JOIN object_levels l ON l.id = i.level_id "
+            "WHERE i.object_id = ? ORDER BY l.sort_order", (object_id,)).fetchall()
+        return [{
+            **{k: r[k] for k in ("level_id", "page", "x0", "x1", "y0", "y1",
+                                 "width_px", "height_px", "elevation_mm", "level_name")},
+            "url": f"/objects/{object_id}/plan-images/{r['level_id']}.png?v={r['id']}",
+        } for r in rows]
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/plan-images/{level_id}.png")
+def plan_image_endpoint(object_id: int, level_id: int,
+                        user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "revit_model", "read")
+        row = conn.execute(
+            "SELECT png FROM level_plan_images WHERE object_id = ? AND level_id = ?",
+            (object_id, level_id)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="У этого этажа нет картинки плана")
+    # Картинка меняется только повторной загрузкой, а в url тогда меняется
+    # `v` — кэшировать можно смело.
+    return Response(content=bytes(row["png"]), media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=86400"})
+
+
 @app.get("/objects/{object_id}/blocks/{block_id}/card")
 def block_card_endpoint(object_id: int, block_id: int,
                         user: sqlite3.Row = Depends(get_current_user)):

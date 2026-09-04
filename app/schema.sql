@@ -1285,6 +1285,27 @@ CREATE TABLE IF NOT EXISTS work_progress (
 -- `blocks.work_types_configured_at IS NULL` значит «не настраивали, взято
 -- ВСЁ» — так вело себя старое поведение матрицы статусов, отбор его не
 -- меняет, пока форму «Настройки» не сохранили явно хоть раз.
+-- Картинки планов этажей из PDF (2026-09-02, app/pdf_plan_images.py):
+-- растр листа, обрезанный по контуру здания на этаже (снаружи прозрачно),
+-- лежит на полу этажа в «Модели МФР» (слой «Планы»). Одна на этаж, при
+-- повторной загрузке перезаписывается. x0..y1 — охват картинки в мм общей
+-- сетки осей (как у revit_elements), png — файл целиком.
+CREATE TABLE IF NOT EXISTS level_plan_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    level_id INTEGER NOT NULL REFERENCES object_levels (id) ON DELETE CASCADE,
+    page INTEGER,
+    x0 REAL NOT NULL,
+    x1 REAL NOT NULL,
+    y0 REAL NOT NULL,
+    y1 REAL NOT NULL,
+    width_px INTEGER NOT NULL,
+    height_px INTEGER NOT NULL,
+    png BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (level_id)
+);
+
 CREATE TABLE IF NOT EXISTS block_work_types (
     block_id INTEGER NOT NULL REFERENCES blocks (id) ON DELETE CASCADE,
     work_type_id INTEGER NOT NULL REFERENCES work_types (id) ON DELETE CASCADE,

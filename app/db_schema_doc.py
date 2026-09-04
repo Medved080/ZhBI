@@ -488,6 +488,20 @@ TABLES = [
     ("spent_ms", "INTEGER", "", "сколько думал, миллисекунд; считает СЕРВЕР от asked_at — клиентское время подделывается"),
     ("answered_at", "TEXT", "", "момент ответа"),
 ]),
+("level_plan_images", "level_plan_images — Картинка плана этажа из PDF", C_ELEM, S_ELEM, [
+    ("id", "INTEGER", "PK", "идентификатор"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("level_id", "INTEGER", "FK", "этаж → object_levels.id (CASCADE), одна картинка на этаж"),
+    ("page", "INTEGER", "", "номер листа PDF (1-based), с которого снята"),
+    ("x0", "REAL", "", "охват картинки в мм общей сетки осей: левая граница"),
+    ("x1", "REAL", "", "правая граница, мм"),
+    ("y0", "REAL", "", "нижняя граница, мм"),
+    ("y1", "REAL", "", "верхняя граница, мм"),
+    ("width_px", "INTEGER", "", "ширина PNG, px"),
+    ("height_px", "INTEGER", "", "высота PNG, px"),
+    ("png", "BLOB", "", "PNG с альфа-каналом: снаружи контура здания прозрачно"),
+    ("created_at", "TEXT", "", "момент записи (загрузка из PDF)"),
+]),
 ("blocks", "blocks — Блок (секция × этаж)", C_ELEM, S_ELEM, [
     ("id", "INTEGER", "PK", "идентификатор блока"),
     ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
@@ -534,6 +548,8 @@ TABLES = [
 # ------------------------------------------------------------------- связи
 # (таблица-потомок, поле, таблица-предок, поле, подпись)
 FKS = [
+    ("level_plan_images", "object_id", "objects", "id", "CASCADE"),
+    ("level_plan_images", "level_id", "object_levels", "id", "CASCADE"),
     ("blocks", "object_id", "objects", "id", "CASCADE"),
     ("blocks", "section_id", "object_sections", "id", "CASCADE"),
     ("blocks", "level_id", "object_levels", "id", "CASCADE"),

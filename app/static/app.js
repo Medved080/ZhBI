@@ -27031,6 +27031,14 @@ async function loadRevitPlanElements() {
     } catch (e) { revitPlanState.gridsData = []; }
     revitPlanState.gridsObjectId = s.objectId;
   }
+  // Картинки планов этажей — тем же приёмом «один раз на объект».
+  if (revitPlanState.plansObjectId !== s.objectId) {
+    try {
+      const pres = await fetch(`/objects/${s.objectId}/plan-images`);
+      revitPlanState.plansData = pres.ok ? await pres.json() : [];
+    } catch (e) { revitPlanState.plansData = []; }
+    revitPlanState.plansObjectId = s.objectId;
+  }
 
   // Ключ сцены 3D сбрасывается на КАЖДЫЙ приход данных. Иначе так:
   // пользователь жмёт «все этажи», сразу переключается в 3D, сцена
@@ -27188,7 +27196,23 @@ function drawRevitPlan(data) {
     minX = Math.min(minX, a.x1 - ox, a.x2 - ox); maxX = Math.max(maxX, a.x1 - ox, a.x2 - ox);
     minY = Math.min(minY, a.y1 - oy, a.y2 - oy); maxY = Math.max(maxY, a.y1 - oy, a.y2 - oy);
   }
+  // Слой «Планы» в 2D — подложка ТОЛЬКО при выборе одного этажа: картинки
+  // разных этажей в плане накладываются друг на друга в одних координатах.
+  let planImage = null;
+  if (mfrShowPlans() && revitPlanState.levels.size === 1) {
+    const lid = [...revitPlanState.levels][0];
+    planImage = (revitPlanState.plansData || []).find((q) => String(q.level_id) === lid) || null;
+    if (planImage) {
+      minX = Math.min(minX, planImage.x0 - ox); maxX = Math.max(maxX, planImage.x1 - ox);
+      minY = Math.min(minY, planImage.y0 - oy); maxY = Math.max(maxY, planImage.y1 - oy);
+    }
+  }
   const w = maxX - minX, h = maxY - minY;
+  const planUnderlay = planImage
+    ? `<image href="${escapeHtml(planImage.url)}" x="${planImage.x0 - ox - minX}"
+        y="${h - (planImage.y1 - oy - minY)}" width="${planImage.x1 - planImage.x0}"
+        height="${planImage.y1 - planImage.y0}" preserveAspectRatio="none" opacity="0.9"/>`
+    : "";
 
   // Y переворачивается: в модели он растёт вверх, в SVG — вниз.
   const paths = mfrShowElements() ? data.elements.map((el) => {
@@ -27268,7 +27292,7 @@ function drawRevitPlan(data) {
   revitPlanState.view = { x: 0, y: 0, w, h };
   revitPlanState.fit = { x: 0, y: 0, w, h };
   box.innerHTML = `<svg id="revit-plan-svg" viewBox="0 0 ${w} ${h}"
-    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${paths.join("")}${blockRects.join("")}${axisLines.join("")}</svg>`;
+    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${planUnderlay}${paths.join("")}${blockRects.join("")}${axisLines.join("")}</svg>`;
 
   document.getElementById("revit-plan-legend").innerHTML =
     (data.categories || []).map((name, i) =>
@@ -27778,6 +27802,20 @@ function mfrShowFacades() {
   return document.getElementById("mfr-show-facades").checked;
 }
 
+// Слой «Планы» (2026-09-02, живой запрос пользователя): картинки планов
+// этажей из PDF, обрезанные по контуру здания (снаружи прозрачно), —
+// «как бы лежат на полу» соответствующего этажа в 3D, а в 2D — подложкой
+// под контурами, когда выбран один этаж. Список картинок грузится один
+// раз на объект (`revitPlanState.plansData`, как сетка осей), сами PNG —
+// текстурами по url с `v=id` (см. /objects/{id}/plan-images).
+function mfrShowPlans() {
+  return document.getElementById("mfr-show-plans").checked;
+}
+const mfrPlanTextures = new Map();
+// Картинка поднята над полом на это, мм — иначе она в одной плоскости с
+// верхом плиты перекрытия (z0) и мерцает с ней.
+const MFR_PLAN_LIFT_MM = 30;
+
 // Слой «Фасады» осмыслен только на ЦЕЛОМ здании: картинка фасада натянута
 // на полный силуэт блоков, при отборе этажей/секций она висела бы на
 // обрезанном габарите мимо реальных граней (живой запрос пользователя,
@@ -27801,7 +27839,7 @@ function syncMfrFacadesToggle() {
     cb.parentElement.title = "";
   }
 }
-for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-show-facades"]) {
+for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-show-facades", "mfr-show-plans"]) {
   document.getElementById(id).addEventListener("change", () => {
     if (!revitPlanState.data) return;
     drawRevitPlan(revitPlanState.data);
@@ -28132,7 +28170,8 @@ async function buildMfr3D() {
   // Ключ отбора: пересобирать сцену на каждое переключение вкладки незачем,
   // а на смену этажа или слоя «Элементы»/«Блоки» — обязательно.
   const ключ = JSON.stringify([REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()),
-                               mfrShowElements(), mfrShowBlocks(), mfrShowAxes(), mfrShowFacades()]);
+                               mfrShowElements(), mfrShowBlocks(), mfrShowAxes(), mfrShowFacades(),
+                               mfrShowPlans()]);
   if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
 
   revitPlanStatus(data.elements.length
@@ -28507,6 +28546,38 @@ async function buildMfr3D() {
         mesh.renderOrder = 4;
         scene.add(mesh);
       }
+    }
+  }
+
+  // Слой «Планы» — картинка плана на полу каждого этажа отбора (без
+  // отбора — всех этажей, у которых она есть). PNG с прозрачностью вне
+  // контура здания; `polygonOffset` — та же защита от мерцания, что у
+  // фасадов, плюс подъём на MFR_PLAN_LIFT_MM над верхом плиты.
+  if (mfrShowPlans() && data.origin && (revitPlanState.plansData || []).length) {
+    const [ox, oy] = data.origin;
+    const выбранные = revitPlanState.levels;
+    for (const p of revitPlanState.plansData) {
+      if (выбранные.size && !выбранные.has(String(p.level_id))) continue;
+      if (p.elevation_mm == null) continue;
+      let texture = mfrPlanTextures.get(p.url);
+      if (!texture) {
+        texture = new THREE.TextureLoader().load(p.url);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        mfrPlanTextures.set(p.url, texture);
+      }
+      const w = p.x1 - p.x0, h = p.y1 - p.y0;
+      if (!(w > 0) || !(h > 0)) continue;
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, h),
+        new THREE.MeshBasicMaterial({
+          map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+          polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+        }));
+      mesh.position.set((p.x0 + p.x1) / 2 - ox, (p.y0 + p.y1) / 2 - oy,
+                        (p.elevation_mm - низ) + MFR_PLAN_LIFT_MM);
+      mesh.renderOrder = 3;
+      scene.add(mesh);
+      верх = Math.max(верх, p.elevation_mm - низ);
     }
   }
 
