@@ -210,9 +210,11 @@ let state = {
   // множество = «все», клик по строке добавляет/убирает значение. Так
   // ведут себя срезы в дашбордах, и так же читается вопрос комплектовщика
   // («покажи стоянку 3»), а не «сними галочки со всех остальных».
-  //   metric — плитка количественного показателя, выбранная как фильтр
+  //   metrics — плитки количественных показателей, выбранные как фильтр
   //   (кросс-фильтр: клик по «Доставлено» оставляет только доставленные и
-  //   в блоках свойств, и на схеме); null — плитка не выбрана.
+  //   в блоках свойств, и на схеме); множественный выбор — как у остальных
+  //   срезов, элемент проходит, если подходит ХОТЯ БЫ ПОД ОДНУ выбранную
+  //   плитку (живой запрос 2026-09-04); пусто — ни одна плитка не выбрана.
   //   search — введённый текст поиска по блоку (сейчас только «Марка»).
   picker: {
     active: false,
@@ -223,7 +225,7 @@ let state = {
       // панели, а в своей области справа от схемы (см. renderPickerContracts).
       contract: new Set(),
     },
-    metric: null,
+    metrics: new Set(),
     search: {},
     // Какие контракты развёрнуты по маркам в правой области (2026-08-10).
     expandedContracts: new Set(),
@@ -239,6 +241,11 @@ let state = {
     // поведение схемы непредсказуемым. Теперь это явный тумблер и статичная
     // подсветка, по умолчанию выключенная.
     highlightUnlinked: false,
+    // «С остатком» — фильтр видимости списка контрактов (2026-09-04, живой
+    // запрос): скрывает контракты, у которых остаток (всего минус привязано)
+    // равен нулю — закупать по ним больше нечего. Тумблер, как и подсветка
+    // несвязанных: не входит в срез (state.picker.sel) и не считается им.
+    onlyWithRemainder: false,
   },
   // id изделий без контракта, подсвеченных на схеме: показываются СВЕРХ
   // текущего среза. Пересчитывается в applyPlacementFilters —
@@ -3650,17 +3657,22 @@ const PICKER_METRICS = [
     hint: "Элементов в срезе, выбранном блоками свойств. Выбранная плитка-показатель на числа плиток не влияет — плитки не фильтруют сами себя, иначе сравнивать их между собой было бы не с чем",
   },
   // status — цвет плитки и её числа (см. applyStatusInk). Ставится там, где
-  // показателю ОТВЕЧАЕТ статус жизненного цикла: «законтрактовано» и
-  // «привязано к контракту» — это «Контрактация», остальные два названы
-  // своими статусами прямо. «В модели» и «Известна плановая дата» цвета не
+  // показателю ОТВЕЧАЕТ статус жизненного цикла: «запланировано» и
+  // «законтрактовано» — свои статусы прямо, «доставлено»/«смонтировано» —
+  // тоже. «В модели», «Без контракта» и «Известна плановая дата» цвета не
   // получают: своего статуса у них нет, и красить их пришлось бы наугад.
+  {
+    key: "statusPlanned", title: "Запланировано", test: e => e.current_status === "planned",
+    status: "planned",
+    hint: "Текущий статус — «Запланирован» (элемент ещё не законтрактован)",
+  },
   {
     key: "contracted", title: "Законтрактовано", status: "contracting",
     hint: "Сумма количеств в позициях контрактов объекта по выбранным типам и маркам",
   },
   {
-    key: "linked", title: "Привязано к контракту", test: e => !!e.contract_id, status: "contracting",
-    hint: "У элемента модели указан контракт",
+    key: "unlinked", title: "Без контракта", test: e => !e.contract_id,
+    hint: "У элемента модели НЕ указан контракт",
   },
   {
     key: "planned", title: "Известна плановая дата поставки", test: e => !!e.planned_delivery_date,
@@ -3723,9 +3735,15 @@ function pickerElementPasses(element, exceptKey = null) {
     const sel = state.picker.sel[def.key];
     if (sel.size && !sel.has(def.valueFn(element))) return false;
   }
-  if (!except.includes("__metric__") && state.picker.metric) {
-    const metric = pickerMetricDef(state.picker.metric);
-    if (metric && metric.test && !metric.test(element)) return false;
+  if (!except.includes("__metric__") && state.picker.metrics.size) {
+    // Как и у остальных срезов — ИЛИ внутри группы: элемент проходит, если
+    // подходит хотя бы под одну из выбранных плиток.
+    let подходит = false;
+    for (const key of state.picker.metrics) {
+      const metric = pickerMetricDef(key);
+      if (metric && metric.test && metric.test(element)) { подходит = true; break; }
+    }
+    if (!подходит) return false;
   }
   return true;
 }
@@ -3739,7 +3757,7 @@ function pickerElementPasses(element, exceptKey = null) {
 const РАЗВОРОТ_БЕЗ = ["contract", "mark", "elementType"];
 
 function pickerSelectionActive() {
-  return !!state.picker.metric || PICKER_SLICERS.some(d => state.picker.sel[d.key].size);
+  return state.picker.metrics.size > 0 || PICKER_SLICERS.some(d => state.picker.sel[d.key].size);
 }
 
 // «Законтрактовано» — сумма contract_lines.quantity (см.
@@ -3757,7 +3775,7 @@ const PICKER_CONTRACT_BLOCKERS = [
 
 function pickerContracted() {
   const blocked = PICKER_CONTRACT_BLOCKERS.filter(([key]) => state.picker.sel[key].size).map(([, word]) => word);
-  if (state.picker.metric) blocked.push("показателю");
+  if (state.picker.metrics.size) blocked.push("показателю");
   if (blocked.length) {
     return { value: null, reason: `Позиция контракта не делится по ${blocked.join(", ")} — числа в этом разрезе не существует` };
   }
@@ -3799,7 +3817,7 @@ function pickerContracted() {
 // pickerElementPasses): строки блока должны быть сравнимы между собой.
 function pickerContractedFor(key, value) {
   if (key !== "elementType" && key !== "mark") return null;
-  if (state.picker.metric) return null;
+  if (state.picker.metrics.size) return null;
   if (PICKER_CONTRACT_BLOCKERS.some(([k]) => state.picker.sel[k].size)) return null;
   const types = state.picker.sel.elementType;
   const marks = state.picker.sel.mark;
@@ -3930,9 +3948,10 @@ function buildPickerMetricTile(metric, base) {
     share.textContent = base.length ? `${Math.round((count / base.length) * 100)}% среза` : "";
     tile.appendChild(share);
     tile.classList.add("clickable");
-    if (state.picker.metric === metric.key) tile.classList.add("active");
+    if (state.picker.metrics.has(metric.key)) tile.classList.add("active");
     tile.addEventListener("click", () => {
-      state.picker.metric = state.picker.metric === metric.key ? null : metric.key;
+      if (state.picker.metrics.has(metric.key)) state.picker.metrics.delete(metric.key);
+      else state.picker.metrics.add(metric.key);
       onPickerChange();
     });
   }
@@ -4025,8 +4044,10 @@ function buildPickerSlicer(def) {
     // почему, а не молчим — иначе колонки просто исчезают без причины.
     const note = document.createElement("div");
     note.className = "picker-block-note";
-    note.textContent = state.picker.metric
-      ? "законтрактовано — не в этом разрезе (выбран показатель)"
+    note.textContent = state.picker.metrics.size
+      ? (state.picker.metrics.size > 1
+        ? "законтрактовано — не в этом разрезе (выбраны показатели)"
+        : "законтрактовано — не в этом разрезе (выбран показатель)")
       : "законтрактовано — не в этом разрезе";
     note.title = "У позиции контракта есть только тип элемента и марка: по подтипу, крану, стоянке, этажу и показателю она не делится";
     block.appendChild(note);
@@ -4372,7 +4393,7 @@ function renderPickerContracts() {
   // внутри среза, а «всего» остаётся документальным. Молчать об этом
   // нельзя (см. комментарий выше).
   const срезСужен = PICKER_SLICERS.some(d => d.key !== "contract" && state.picker.sel[d.key].size)
-    || !!state.picker.metric;
+    || state.picker.metrics.size > 0;
   if (срезСужен) {
     const note = document.createElement("div");
     note.className = "picker-block-note";
@@ -4396,6 +4417,23 @@ function renderPickerContracts() {
     onPickerChange();
   });
   box.appendChild(toggle);
+
+  // «С остатком» — тумблер видимости (2026-09-04, живой запрос): прячет из
+  // списка контракты, у которых остаток (всего минус привязано) равен нулю.
+  // Это ФИЛЬТР отображения, а не срез — как и подсветка выше, он не входит в
+  // state.picker.sel и не считается «применённым срезом» слева.
+  const остатокToggle = document.createElement("button");
+  остатокToggle.type = "button";
+  остатокToggle.className = "btn btn-sm " + (state.picker.onlyWithRemainder ? "btn-primary" : "btn-secondary");
+  остатокToggle.style.cssText = "width:100%; margin-bottom:6px;";
+  остатокToggle.textContent = state.picker.onlyWithRemainder
+    ? "Показаны только с остатком" : "Показать только с остатком";
+  остатокToggle.title = "Скрыть контракты, у которых остаток (всего минус привязано) равен нулю — закупать по ним больше нечего";
+  остатокToggle.addEventListener("click", () => {
+    state.picker.onlyWithRemainder = !state.picker.onlyWithRemainder;
+    renderPickerContracts();
+  });
+  box.appendChild(остатокToggle);
 
   // Что сейчас с подсветкой. Молчать нельзя: человек включил её у контракта
   // с остатком, схема не изменилась — и без строки-ответа это выглядит как
@@ -4460,15 +4498,22 @@ function renderPickerContracts() {
   // отдельно проще, чем угадывать момент вставки черты.
   const доступныеУзлы = document.createDocumentFragment();
   const недоступныеУзлы = document.createDocumentFragment();
+  // «С остатком»: контракт проходит, если всего минус привязано не равно
+  // нулю — выбранные не прячем никогда, иначе тумблер молча снял бы отбор.
+  const остатокНеНулевой = c => sel.has(c.id) || (totals.get(c.id) || 0) - (linked.get(c.id) || 0) !== 0;
   for (const cp of counterparties) {
     const цель = доступен(cp) ? доступныеУзлы : недоступныеУзлы;
     // Внутри контрагента — тем же правилом и с такой же чертой (живой
     // запрос 2026-08-10): контракты, в которых изделий текущего среза нет,
     // уходят вниз группы под разделитель. Сортировка стабильна, поэтому
     // алфавит внутри каждой половины сохраняется.
-    const contracts = byCounterparty.get(cp)
+    let contracts = byCounterparty.get(cp)
       .sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }))
       .sort((a, b) => (контрактВСрезе(a.id) ? 0 : 1) - (контрактВСрезе(b.id) ? 0 : 1));
+    if (state.picker.onlyWithRemainder) {
+      contracts = contracts.filter(остатокНеНулевой);
+      if (!contracts.length) continue;   // у контрагента не осталось, что закупать
+    }
     const ids = contracts.map(c => c.id);
     const всего = ids.reduce((s, id) => s + (totals.get(id) || 0), 0);
     const привязано = ids.reduce((s, id) => s + (linked.get(id) || 0), 0);
@@ -4616,10 +4661,16 @@ function renderPickerContracts() {
   });
   noneRow.insertBefore(expandNone, noneRow.firstChild);
 
-  const цельПустой = (безКонтракта || выбранаПустая) ? доступныеУзлы : недоступныеУзлы;
-  цельПустой.appendChild(noneGroup);
-  цельПустой.appendChild(noneRow);
-  if (развёрнутаПустая) цельПустой.appendChild(buildNoContractMarkRows());
+  // «С остатком» не относится к «без контракта»: остаток здесь всегда
+  // прочерк (закупать нечего — документа нет), а не число, которое может
+  // быть отлично от нуля. При включённом фильтре строку прячем — как и
+  // любой контракт с нулевым остатком, — но не тогда, когда она уже выбрана.
+  if (!state.picker.onlyWithRemainder || выбранаПустая) {
+    const цельПустой = (безКонтракта || выбранаПустая) ? доступныеУзлы : недоступныеУзлы;
+    цельПустой.appendChild(noneGroup);
+    цельПустой.appendChild(noneRow);
+    if (развёрнутаПустая) цельПустой.appendChild(buildNoContractMarkRows());
+  }
 
   list.appendChild(доступныеУзлы);
   if (недоступныеУзлы.childElementCount) {
@@ -4884,7 +4935,7 @@ function renderPicker() {
     reset.textContent = "Сбросить срез";
     reset.addEventListener("click", () => {
       for (const def of PICKER_SLICERS) state.picker.sel[def.key].clear();
-      state.picker.metric = null;
+      state.picker.metrics.clear();
       onPickerChange();
     });
     panel.appendChild(reset);
@@ -4922,8 +4973,10 @@ function describePickerSelection() {
       ? `${def.title}: ${values.map(v => def.labelFor(v)).join(", ")}`
       : `${def.title}: выбрано ${values.length}`);
   }
-  const metric = state.picker.metric ? pickerMetricDef(state.picker.metric) : null;
-  if (metric) parts.push(`Показатель: ${metric.title}`);
+  if (state.picker.metrics.size) {
+    const titles = Array.from(state.picker.metrics).map(k => pickerMetricDef(k)?.title).filter(Boolean);
+    if (titles.length) parts.push(`Показатель: ${titles.join(", ")}`);
+  }
   return parts;
 }
 
@@ -5643,7 +5696,7 @@ function computeDeliveryLateStatus(element, thresholdDays) {
   // же (Настройки → Порог опоздания поставки) — критерий "опоздания" в
   // системе один. Незаконтрактованные СПЕЦИАЛЬНО не трогаем: у них пустая
   // дата — это ещё не срыв поставки, а незакрытая контрактация, у неё свои
-  // срезы (см. "Привязано к контракту" в блоках-срезах АРМ).
+  // срезы (см. "Без контракта" в блоках-срезах АРМ).
   // Точка отсчёта — СЕГОДНЯШНЯЯ дата, а не "рабочая дата" из тулбара: та
   // задним числом проставляет статусы и на подсветку подписей не влияет
   // нигде (подтверждено пользователем).
@@ -6662,7 +6715,7 @@ function clearWorkspace() {
   // Срез АРМ — тоже про элементы закрытого чертежа (марки, стоянки, этажи
   // другого объекта), переносить его на следующий чертёж нельзя.
   for (const key of Object.keys(state.picker.sel)) state.picker.sel[key].clear();
-  state.picker.metric = null;
+  state.picker.metrics.clear();
   state.picker.search = {};
   state.picker.sort = {};
   state.picker.expandedContracts.clear();
