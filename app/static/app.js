@@ -27809,7 +27809,11 @@ function mfrShowFacades() {
 // раз на объект (`revitPlanState.plansData`, как сетка осей), сами PNG —
 // текстурами по url с `v=id` (см. /objects/{id}/plan-images).
 function mfrShowPlans() {
-  return document.getElementById("mfr-show-plans").checked;
+  // `?.` — вкладка со СТАРЫМ index.html (без чекбокса) и новым app.js
+  // не должна терять весь план: пока страницу не обновили, слоя просто нет
+  // (2026-09-02, живой отчёт пользователя «при отборе по этажу пропадает
+  // вся схема» сразу после выкладки).
+  return !!document.getElementById("mfr-show-plans")?.checked;
 }
 const mfrPlanTextures = new Map();
 // Картинка поднята над полом на это, мм — иначе она в одной плоскости с
@@ -27840,7 +27844,10 @@ function syncMfrFacadesToggle() {
   }
 }
 for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-show-facades", "mfr-show-plans"]) {
-  document.getElementById(id).addEventListener("change", () => {
+  // Чекбокса может не быть у вкладки со старым index.html (см.
+  // `mfrShowPlans`) — иначе исключение здесь обрывало бы ВСЮ дальнейшую
+  // инициализацию скрипта.
+  document.getElementById(id)?.addEventListener("change", () => {
     if (!revitPlanState.data) return;
     drawRevitPlan(revitPlanState.data);
     mfr3d.key = null;
