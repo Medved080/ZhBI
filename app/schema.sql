@@ -1247,12 +1247,34 @@ CREATE TABLE IF NOT EXISTS work_types (
     -- заполнена, не во всех файлах вообще есть) — пояснения вроде «выбрать
     -- нужную технологию».
     note TEXT,
+    -- Код колонки «Трек планирования» (2026-09-04, живой запрос): «1»..«20» —
+    -- шахматка с визуализацией на модели (имя — в planning_tracks по этому же
+    -- коду), «0» — линейный трек (просто процентная шкала, без раскраски
+    -- блоков), «компл»/«Веха» — вне области этой доработки. NULL — колонки
+    -- нет в файле (старые файлы вроде «WBS МФР типовой»).
+    planning_track_code TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     -- пропал при перезагрузке справочника — не удаляется, иначе потерялась
     -- бы простановленная по нему история статусов.
     retired_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (object_id, path)
+);
+
+-- Расшифровка кода «Трек планирования» (лист PlanningTrack того же xlsx,
+-- что и work_types) — код -> название/примечание, перезагружается вместе
+-- со справочником видов работ (app/work_types_import.py). Маленький
+-- справочник без собственной истории: по коду ни на что не ссылаются
+-- (work_types.planning_track_code — сравнение по значению, не FK), поэтому
+-- при перезагрузке файла просто переустанавливается целиком по объекту.
+CREATE TABLE IF NOT EXISTS planning_tracks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, code)
 );
 
 -- Статус вида работ на привязке. Отсутствие строки = «План»

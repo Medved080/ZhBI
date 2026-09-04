@@ -395,6 +395,10 @@ _COLUMN_MIGRATIONS = [
     # Отбор операций «эт/сек» для блока настраивали хоть раз (2026-09-02,
     # app/work_fact.py) — NULL значит «нет, отбор ещё = весь список».
     ("blocks", "work_types_configured_at", "TEXT"),
+    # Код колонки «Трек планирования» справочника видов работ (2026-09-04) —
+    # не во всех файлах есть, добавлена в schema.sql позже создания таблицы
+    # work_types (см. planning_tracks там же).
+    ("work_types", "planning_track_code", "TEXT"),
 ]
 
 

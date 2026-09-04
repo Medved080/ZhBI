@@ -5,9 +5,15 @@
 разбирает файл и считает расхождения, ничего не пишет; `apply` применяет
 уже посчитанное по токену.
 
-Формат листа: `Уровень WBS | Идентификатор операции | Название операции |
-Единицы измерения | Кодификатор`. Четыре ловушки исходного файла заказчика
-(проверено на реальном файле «WBS МФР типовой», см. документ):
+Формат листа `WBS` (или первого листа книги, если листа с таким именем нет
+— старые однолистовые файлы): `Уровень WBS | Идентификатор операции |
+Название операции | Единицы измерения | Кодификатор`, плюс необязательные
+«Примечание» и «Трек планирования» (2026-09-04) — код группы «Шахматка»
+(`app/work_fact.py`, Docs/block-accounting.md §8), расшифровка кодов — на
+листе `PlanningTrack` той же книги (`Код | Наименование | Примечание`,
+`parse_planning_track`), перезагружаемая вместе со справочником в таблицу
+`planning_tracks`. Четыре ловушки исходного файла заказчика (проверено на
+реальном файле «WBS МФР типовой», см. документ):
 
   * у УЗЛА название лежит в колонке «Идентификатор операции», а у
     ОПЕРАЦИИ/ВЕХИ — в «Название операции». Колонка «Уровень WBS» несёт для
@@ -46,6 +52,24 @@ HEADERS = ("Уровень WBS", "Идентификатор операции", 
 # сохраняется, если колонка в файле есть, и просто не заполняется, если нет.
 COL_NOTE = "Примечание"
 
+# Тоже необязательная, тем же приёмом (2026-09-04, живой запрос): код
+# «1»..«20» — операция входит в шахматку с визуализацией на модели (имя
+# доски — на листе PlanningTrack по этому коду), «0» — линейный трек без
+# раскраски блоков, «компл»/«Веха» — вне области этой доработки. У файлов
+# без этой колонки (например «WBS МФР типовой») просто не заполняется.
+COL_TRACK = "Трек планирования"
+
+# Имена листов нового формата файла (WBS_*.xlsx, 2026-09-04): данные — на
+# листе «WBS», расшифровка кодов трека — на «PlanningTrack». У старых
+# однолистовых файлов такого имени нет — тогда берётся первый лист книги,
+# а расшифровки треков просто не будет (колонки «Трек планирования» у них
+# тоже нет).
+SHEET_WBS = "WBS"
+SHEET_PLANNING_TRACK = "PlanningTrack"
+
+TRACK_HEADERS = ("Код", "Наименование")
+TRACK_COL_NOTE = "Примечание"
+
 ROW_NODE = "узел"
 ROW_OP = "оп"
 ROW_MILESTONE = "веха"
@@ -63,18 +87,35 @@ class WorkTypesError(Exception):
         super().__init__(message)
 
 
-def _header_index(header_row) -> dict:
+def _index_by_headers(header_row, required, optional, sheet_label) -> dict:
     values = [str(c.value).strip() if c.value is not None else "" for c in header_row]
     index = {}
-    for name in HEADERS:
+    for name in required:
         if name not in values:
             raise WorkTypesError(
-                422, "В файле нет колонки «%s». Ожидаются: %s"
-                % (name, ", ".join(HEADERS)))
+                422, "На листе «%s» нет колонки «%s». Ожидаются: %s"
+                % (sheet_label, name, ", ".join(required)))
         index[name] = values.index(name)
-    if COL_NOTE in values:
-        index[COL_NOTE] = values.index(COL_NOTE)
+    for name in optional:
+        if name in values:
+            index[name] = values.index(name)
     return index
+
+
+def _header_index(header_row) -> dict:
+    return _index_by_headers(header_row, HEADERS, (COL_NOTE, COL_TRACK), SHEET_WBS)
+
+
+def _code_str(v):
+    """Код (трека или строки справочника) — к строке без «.0» у чисел:
+    openpyxl отдаёт числовые коды ячейками типа float/int (0, 1, 2…20), и
+    только «компл»/«Веха» приходят текстом."""
+    if v is None:
+        return None
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    s = str(v).strip()
+    return s or None
 
 
 def _uses_dotted_levels(sheet, idx) -> bool:
@@ -94,17 +135,69 @@ def _uses_dotted_levels(sheet, idx) -> bool:
     return False
 
 
-def parse_xlsx(data: bytes) -> tuple:
-    """Разбор листа в плоский список строк дерева с уже посчитанным путём.
+def parse_planning_track(sheet) -> tuple:
+    """Разбор листа PlanningTrack: код -> название/примечание (2026-09-04).
+    Возвращает (tracks, warnings). Тем же приёмом, что и WBS: «Примечание»
+    необязательна, код — строкой без «.0» у чисел (_code_str)."""
+    rows_iter = sheet.iter_rows()
+    try:
+        header_row = next(rows_iter)
+    except StopIteration:
+        return [], ["Лист «%s» пуст." % SHEET_PLANNING_TRACK]
+    idx = _index_by_headers(header_row, TRACK_HEADERS, (TRACK_COL_NOTE,), SHEET_PLANNING_TRACK)
 
-    Возвращает (rows, warnings). `rows` — список словарей: path, parent_path,
-    row_kind, code, name, unit, note, sort_order.
+    warnings = []
+    tracks = []
+    seen = {}
+    for excel_row_no, row in enumerate(rows_iter, start=2):
+        def cellv(col):
+            i = idx.get(col)
+            return row[i].value if i is not None and i < len(row) else None
+
+        code = _code_str(cellv("Код"))
+        name = _code_str(cellv("Наименование"))
+        note = _code_str(cellv(TRACK_COL_NOTE))
+        if code is None and name is None:
+            continue  # пустая строка
+        if code is None:
+            warnings.append("Лист «%s», строка %d: пуст код, строка пропущена"
+                            % (SHEET_PLANNING_TRACK, excel_row_no))
+            continue
+        if not name:
+            warnings.append("Лист «%s», строка %d: у кода «%s» нет названия"
+                            % (SHEET_PLANNING_TRACK, excel_row_no, code))
+        if code in seen:
+            warnings.append("Лист «%s»: код «%s» встретился дважды — вторая строка перезатёрла первую"
+                            % (SHEET_PLANNING_TRACK, code))
+        entry = {"code": code, "name": name or "", "note": note}
+        if code in seen:
+            tracks[seen[code]] = entry
+        else:
+            seen[code] = len(tracks)
+            tracks.append(entry)
+    return tracks, warnings
+
+
+def parse_xlsx(data: bytes) -> tuple:
+    """Разбор книги в плоский список строк дерева с уже посчитанным путём,
+    плюс расшифровку кодов трека планирования (лист PlanningTrack, если он
+    в книге есть).
+
+    Возвращает (rows, warnings, tracks). `rows` — список словарей: path,
+    parent_path, row_kind, code, name, unit, note, track_code, sort_order.
+    `tracks` — список словарей code/name/note с листа PlanningTrack (пусто,
+    если такого листа в книге нет — старые однолистовые файлы).
     """
     try:
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except Exception as e:
         raise WorkTypesError(422, "Файл не открылся как xlsx: %s" % e)
-    sheet = wb.worksheets[0]
+    sheet = wb[SHEET_WBS] if SHEET_WBS in wb.sheetnames else wb.worksheets[0]
+
+    tracks, warnings = ([], [])
+    if SHEET_PLANNING_TRACK in wb.sheetnames:
+        tracks, warnings = parse_planning_track(wb[SHEET_PLANNING_TRACK])
+
     rows_iter = sheet.iter_rows()
     try:
         header_row = next(rows_iter)
@@ -113,7 +206,6 @@ def parse_xlsx(data: bytes) -> tuple:
     idx = _header_index(header_row)
     dotted_levels = _uses_dotted_levels(sheet, idx)
 
-    warnings = []
     result = []
     # Стек текущих узлов: [(глубина, путь, порядковый_номер)].
     stack = []
@@ -135,6 +227,7 @@ def parse_xlsx(data: bytes) -> tuple:
         code = cell("Кодификатор") or None
         unit = cell("Единицы измерения") or None
         note = cell(COL_NOTE) or None
+        track_code = cell(COL_TRACK) or None
         kind_word = level_cell.lower()
 
         if kind_word in (ROW_OP, ROW_MILESTONE):
@@ -149,11 +242,16 @@ def parse_xlsx(data: bytes) -> tuple:
                     "Строка %d: %s встретилась раньше первого узла, пропущена"
                     % (excel_row_no, row_kind))
                 continue
+            if track_code and track_code not in {t["code"] for t in tracks}:
+                warnings.append(
+                    "Строка %d: код трека «%s» не найден на листе «%s»"
+                    % (excel_row_no, track_code, SHEET_PLANNING_TRACK))
             path = last_node_path + PATH_SEP + (name or "(без названия, строка %d)" % excel_row_no)
             sort_order += 1
             result.append({
                 "path": path, "parent_path": last_node_path, "row_kind": row_kind,
-                "code": code, "name": name, "unit": unit, "note": note, "sort_order": sort_order,
+                "code": code, "name": name, "unit": unit, "note": note,
+                "track_code": track_code, "sort_order": sort_order,
             })
             continue
 
@@ -190,7 +288,8 @@ def parse_xlsx(data: bytes) -> tuple:
         sort_order += 1
         result.append({
             "path": path, "parent_path": parent_path, "row_kind": ROW_NODE,
-            "code": code, "name": name, "unit": unit, "note": note, "sort_order": sort_order,
+            "code": code, "name": name, "unit": unit, "note": note,
+            "track_code": None, "sort_order": sort_order,
         })
         stack.append((depth, path))
         last_node_path = path
@@ -201,7 +300,7 @@ def parse_xlsx(data: bytes) -> tuple:
             warnings.append("Путь «%s» встретился дважды — вторая строка перезатёрла первую"
                             % r["path"])
         seen_paths[r["path"]] = r
-    return list(seen_paths.values()), warnings
+    return list(seen_paths.values()), warnings, tracks
 
 
 def _existing(conn, object_id: int) -> dict:
@@ -215,7 +314,7 @@ def _existing(conn, object_id: int) -> dict:
 
 def analyze(conn, object_id: int, data: bytes) -> dict:
     """Фаза 1. В БД не пишет ничего."""
-    parsed, warnings = parse_xlsx(data)
+    parsed, warnings, tracks = parse_xlsx(data)
     have = _existing(conn, object_id)
 
     parsed_paths = {r["path"] for r in parsed}
@@ -232,8 +331,10 @@ def analyze(conn, object_id: int, data: bytes) -> dict:
         "reviving": [{"путь": r["path"]} for r in reviving],
         "retiring": sorted(retiring),
         "unchanged": len(existing_active) - len(reviving),
+        "tracks": [{"код": t["code"], "название": t["name"]} for t in tracks],
         "warnings": warnings,
         "_parsed": parsed,
+        "_tracks": tracks,
     }
 
 
@@ -242,6 +343,7 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     Пропавшие пути помечаются `retired_at`, а не удаляются — иначе
     потерялась бы простановленная по ним история статусов."""
     parsed = analysis["_parsed"]
+    tracks = analysis.get("_tracks", [])
     have = _existing(conn, object_id)
     parsed_paths = {r["path"] for r in parsed}
 
@@ -254,9 +356,10 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
         if existing is None:
             cur = conn.execute(
                 "INSERT INTO work_types (object_id, parent_id, path, row_kind, code, "
-                "name, unit, note, sort_order, retired_at) VALUES (?,?,?,?,?,?,?,?,?,NULL)",
+                "name, unit, note, planning_track_code, sort_order, retired_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,NULL)",
                 (object_id, parent_id, r["path"], r["row_kind"], r["code"],
-                 r["name"], r["unit"], r["note"], r["sort_order"]),
+                 r["name"], r["unit"], r["note"], r["track_code"], r["sort_order"]),
             )
             path_to_id[r["path"]] = cur.lastrowid
             added += 1
@@ -265,8 +368,9 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
                 revived += 1
             conn.execute(
                 "UPDATE work_types SET parent_id = ?, code = ?, name = ?, unit = ?, note = ?, "
-                "sort_order = ?, retired_at = NULL WHERE id = ?",
-                (parent_id, r["code"], r["name"], r["unit"], r["note"], r["sort_order"], existing["id"]),
+                "planning_track_code = ?, sort_order = ?, retired_at = NULL WHERE id = ?",
+                (parent_id, r["code"], r["name"], r["unit"], r["note"], r["track_code"],
+                 r["sort_order"], existing["id"]),
             )
 
     retired = 0
@@ -278,8 +382,27 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
             )
             retired += 1
 
+    # Справочник треков (planning_tracks) — маленький, без своей истории:
+    # переустанавливается целиком по объекту, а не сверяется построчно, как
+    # work_types (см. модуль docstring и schema.sql).
+    have_track_codes = {
+        row["code"] for row in conn.execute(
+            "SELECT code FROM planning_tracks WHERE object_id = ?", (object_id,))
+    }
+    parsed_track_codes = {t["code"] for t in tracks}
+    for code in have_track_codes - parsed_track_codes:
+        conn.execute(
+            "DELETE FROM planning_tracks WHERE object_id = ? AND code = ?", (object_id, code))
+    for t in tracks:
+        conn.execute(
+            "INSERT INTO planning_tracks (object_id, code, name, note) VALUES (?,?,?,?) "
+            "ON CONFLICT (object_id, code) DO UPDATE SET name = excluded.name, note = excluded.note",
+            (object_id, t["code"], t["name"], t["note"]),
+        )
+
     conn.commit()
-    return {"added": added, "revived": revived, "retired": retired, "total": len(parsed)}
+    return {"added": added, "revived": revived, "retired": retired, "total": len(parsed),
+            "tracks": len(tracks)}
 
 
 def remember_pending(analysis: dict) -> str:

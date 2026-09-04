@@ -26825,9 +26825,17 @@ document.getElementById("revit-review-apply").addEventListener("click", async ()
 // Отбор МНОЖЕСТВЕННЫЙ: в каждой группе набор выбранных значений. Пустой
 // набор = отбор по этой группе снят. Так «показать два этажа» и «показать
 // всё» выражаются одним и тем же механизмом, без особого пункта «все».
+// `selected` — что выбрано СЕЙЧАС (элемент или блок), под карточку справа.
+// `selectedBlocks` — множественное выделение блоков (2026-09-05, живой
+// запрос: «выделить несколько блоков и задать группе одинаковый список
+// операций»): Ctrl+клик добавляет/убирает блок. Обычный клик всегда
+// оставляет ровно один — прежнее поведение не меняется, пока Ctrl не нажат.
+// `selected.id` при группе — последний тронутый блок: карточка блока и
+// «Факт» по-прежнему про ОДИН блок, групповые только «Настройки».
 const revitPlanState = { objectId: null, filters: null, data: null, view: null,
                          levels: new Set(), sections: new Set(),
-                         parts: new Set(), categories: new Set(), blocksData: [] };
+                         parts: new Set(), categories: new Set(), blocksData: [],
+                         selectedBlocks: new Set() };
 
 const REVIT_GROUPS = ["levels", "sections", "parts", "categories"];
 
@@ -26876,6 +26884,9 @@ async function openMfrWorkspace() {
   for (const g of REVIT_GROUPS) revitPlanState[g].clear();
   document.getElementById("revit-plan-card").textContent = "Нажмите на элемент плана.";
   revitPlanState.selected = null;   // другой объект — чужое выделение не тянем
+  revitPlanState.selectedBlocks.clear();
+  document.getElementById("block-card-block").style.display = "none";
+  updateBlockGroupUi();
   // Режим показа восстанавливается ДО загрузки: иначе план успевает
   // отрисоваться в 2D, а потом дёргается в 3D на глазах у человека.
   const запомненныйРежим = вспомнить(MFR_MODE_KEY);
@@ -26884,7 +26895,7 @@ async function openMfrWorkspace() {
       b.classList.toggle("active", b.dataset.mfrMode === запомненныйРежим);
     }
   }
-  mfrChessWorkTypeId = null;
+  mfrChessTrackCode = null;
   mfrChessValues = {};
   document.getElementById("mfr-chess-legend").style.display = "none";
   await loadRevitColors();      // раньше отбора: план рисуется сразу после него
@@ -27136,6 +27147,71 @@ const MFR_CHESS_COLORS_3D = { plan: 0x9aa0a6, in_progress: 0xe8a33d, done: 0x3fa
 // принимает строку так же, как число), нужна для HSL-буста ниже.
 const MFR_CHESS_STATUS_HEX = { plan: "#9aa0a6", in_progress: "#e8a33d", done: "#3fa76a" };
 
+// Раскладка наклейки «Шахматки» — ОДНА на 2D и 3D (2026-09-05, живой запрос
+// пользователя): строка на операцию, в строке — имя, следом полоса
+// выполнения, следом процент; полосы ВСЕХ строк начинаются с одного x
+// (выровнены по левому краю — колонка имени шириной по самому длинному), а
+// высота полосы равна строке. Считается в долях опорного кегля F: 2D и 3D
+// подставляют свой измеритель текста и потом масштабируют результат разом
+// под свой габарит — так план и сцена показывают одно и то же.
+function mfrChessLabelLayout(ops, F, measure) {
+  const lineH = F * 1.35, gap = F * 0.45, padX = F * 0.5, padY = F * 0.3;
+  const barW = F * 5, barH = F * 1.0;
+  let nameW = 0;
+  for (const op of ops) nameW = Math.max(nameW, measure(op.name || ""));
+  const pctW = measure("100%");
+  const barX = padX + nameW + gap;
+  return {
+    lineH, gap, padX, padY, barW, barH, nameW, pctW, barX,
+    pctX: barX + barW + gap,
+    totalW: barX + barW + gap + pctW + padX,
+    totalH: padY * 2 + ops.length * lineH,
+  };
+}
+
+// Подпись на блоке при выбранной доске (2026-09-04) — по строке на операцию
+// (см. mfrChessLabelLayout), нарисованная SVG прямо на плане, а не HTML в
+// панели. Цвет полосы — статус ЭТОЙ операции, а не средний статус блока (он
+// уже виден заливкой самого прямоугольника).
+//
+// Размер — КОМПАКТНАЯ наклейка в области блока (живой репорт со скриншотом
+// 2026-09-05: «в 2D нечитаемая огромная надпись вместо компактной наклейки»).
+// Три ограничения разом, берётся самое строгое: вписаться в ширину блока,
+// вписаться в его высоту и не разрастаться на больших блоках — потолок в
+// долях ширины всего плана. Наклейка центрируется в габарите блока и лежит
+// на своей полупрозрачной плашке, чтобы читаться поверх чертежа.
+const MFR_CHESS_LABEL_F = 100;      // опорный кегль раскладки
+const MFR_CHESS_LABEL_PLAN_SHARE = 0.28;   // потолок ширины: доля ширины плана
+function mfrChessOpsLabelSvg(ops, box, planW) {
+  const L = mfrChessLabelLayout(ops, MFR_CHESS_LABEL_F,
+    (t) => измеритьТекст(t, `600 ${MFR_CHESS_LABEL_F}px system-ui, sans-serif`));
+  const s = Math.min(box.rw * 0.92 / L.totalW, box.rh * 0.92 / L.totalH,
+                     planW * MFR_CHESS_LABEL_PLAN_SHARE / L.totalW);
+  const W = L.totalW * s, H = L.totalH * s;
+  const x0 = box.rx + (box.rw - W) / 2, y0 = box.ry + (box.rh - H) / 2;
+  const font = MFR_CHESS_LABEL_F * s;
+  const barW = L.barW * s, barH = L.barH * s;
+  const rows = ops.map((op, i) => {
+    const rowTop = y0 + (L.padY + i * L.lineH) * s;
+    const baseline = rowTop + L.lineH * 0.5 * s + font * 0.35;   // текст по центру строки
+    const barY = rowTop + (L.lineH - L.barH) / 2 * s;
+    const barX = x0 + L.barX * s;
+    const fillColor = MFR_CHESS_STATUS_HEX[op.status] || MFR_CHESS_STATUS_HEX.plan;
+    const filled = barW * Math.max(0, Math.min(100, op.percent)) / 100;
+    return `<text x="${x0 + L.padX * s}" y="${baseline}" font-size="${font}" font-weight="600"
+        fill="#1a1a1a">${escapeHtml(op.name || "")}</text>
+      <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH * 0.25}"
+        fill="#000000" fill-opacity="0.12"/>
+      <rect x="${barX}" y="${barY}" width="${filled}" height="${barH}" rx="${barH * 0.25}"
+        fill="${fillColor}"/>
+      <text x="${x0 + L.pctX * s}" y="${baseline}" font-size="${font}"
+        font-weight="600" fill="#1a1a1a">${op.percent}%</text>`;
+  }).join("");
+  return `<g style="pointer-events:none">
+    <rect x="${x0}" y="${y0}" width="${W}" height="${H}" rx="${font * 0.3}"
+      fill="#ffffff" fill-opacity="0.88"/>${rows}</g>`;
+}
+
 // Подсветка ВЫБРАННОГО блока при активной «Шахматке» (живой запрос
 // пользователя, 2026-09-02) — не отдельный цвет вроде оранжевого
 // MFR_HIGHLIGHT_COLOR, а более насыщенный и тёмный вариант ТОГО ЖЕ цвета
@@ -27283,13 +27359,14 @@ function drawRevitPlan(data) {
   // false` — нет привязки к осям или ненадёжная отметка этажа) на плане
   // не показываем — молчаливо приблизительный контур хуже честного
   // отсутствия.
-  // «Шахматка» (2026-09-02): вместо единого цвета-подсветки — цвет по
-  // статусу выбранной операции плюс подпись процентом. Блок вне отбора
-  // этой операции (work_type_block_values его не вернул) красится тускло-
-  // серым без подписи — «неприменимо», а не «0%», это разные вещи.
+  // «Шахматка» (2026-09-02, доска — с 2026-09-04): вместо единого цвета-
+  // подсветки — цвет по СРЕДНЕМУ статусу операций выбранной доски на блоке,
+  // плюс подпись — по строке на каждую такую операцию (mfrChessOpsLabelSvg).
+  // Блок вне отбора доски (board_block_values его не вернул) красится
+  // тускло-серым без подписи — «неприменимо», а не «0%», это разные вещи.
   const blockRects = blocks.flatMap((b) => {
-    const chess = mfrChessWorkTypeId ? mfrChessValues[b.id] : null;
-    const fill = mfrChessWorkTypeId
+    const chess = mfrChessTrackCode ? mfrChessValues[b.id] : null;
+    const fill = mfrChessTrackCode
       ? (chess ? MFR_CHESS_COLORS[chess.status] : "var(--color-text-muted)")
       : "var(--color-primary)";
     // Блок — набор прямоугольников (block_boxes, 2026-09-05): один
@@ -27301,7 +27378,7 @@ function drawRevitPlan(data) {
       const rx = Math.min(x0, x1), ry = h - Math.max(y0, y1),
             rw = Math.abs(x1 - x0), rh = Math.abs(y1 - y0);
       return { rx, ry, rw, rh, html: `<rect data-block-id="${b.id}" x="${rx}" y="${ry}" width="${rw}" height="${rh}"
-        fill="${fill}" fill-opacity="${mfrChessWorkTypeId ? (chess ? 0.55 : 0.15) : 0.12}"
+        fill="${fill}" fill-opacity="${mfrChessTrackCode ? (chess ? 0.55 : 0.15) : 0.12}"
         stroke="${fill}" stroke-width="${Math.max(w / 300, 45)}"
         stroke-opacity="0.9"
         stroke-dasharray="${Math.max(w / 220, 55)}"/>` };
@@ -27311,9 +27388,7 @@ function drawRevitPlan(data) {
     // габарита у Г-образной формы может попасть в вырез, где блока
     // физически нет.
     const крупнейший = rects.reduce((a, r) => (r.rw * r.rh > a.rw * a.rh ? r : a));
-    const label = `<text x="${крупнейший.rx + крупнейший.rw / 2}" y="${крупнейший.ry + крупнейший.rh / 2}"
-      text-anchor="middle" dominant-baseline="central" font-size="${Math.max(w / 45, 900)}" font-weight="700"
-      fill="#1a1a1a" style="pointer-events:none">${chess.percent}%</text>`;
+    const label = mfrChessOpsLabelSvg(chess.ops, крупнейший, w);
     return [...rects.map((r) => r.html), label];
   });
 
@@ -27410,8 +27485,13 @@ function bindRevitPlanZoom(svg) {
     apply();
   }, { passive: false });
   let drag = null;
+  // Точка нажатия — чтобы отличить клик от панорамирования: сброс выделения
+  // по клику мимо блоков (см. ниже) иначе срабатывал бы после каждого
+  // перетаскивания плана. Тот же приём и порог, что у выбора в 3D.
+  let нажатие = null;
   svg.addEventListener("pointerdown", (e) => {
     drag = { x: e.clientX, y: e.clientY };
+    нажатие = { x: e.clientX, y: e.clientY };
     svg.setPointerCapture(e.pointerId); svg.style.cursor = "grabbing";
   });
   svg.addEventListener("pointermove", (e) => {
@@ -27427,10 +27507,26 @@ function bindRevitPlanZoom(svg) {
     drag = null; svg.style.cursor = "grab"; svg.releasePointerCapture(e.pointerId);
   });
   svg.addEventListener("click", async (e) => {
-    const path = e.target.closest("path[data-id]");
+    // Фигуру под курсором берём ХИТ-ТЕСТОМ, а не из e.target: при
+    // панорамировании SVG забирает pointer capture (setPointerCapture в
+    // pointerdown выше), и браузер адресует последующий click самому <svg>,
+    // а не фигуре. e.target.closest() тогда не находит ничего — клики по
+    // блокам и элементам в 2D не срабатывали совсем (найдено живой
+    // проверкой 2026-09-05: карточка по клику в 2D не открывалась, хотя в
+    // 3D всё работало — там своего pointer capture нет).
+    const под = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+    const path = под.closest?.("path[data-id]");
     if (path) { await showRevitCard(Number(path.dataset.id)); return; }
-    const rect = e.target.closest("rect[data-block-id]");
-    if (rect) await showBlockCard(Number(rect.dataset.blockId));
+    const rect = под.closest?.("rect[data-block-id]");
+    // Ctrl (Cmd на маке) — добавить/убрать блок из выделения, обычный клик —
+    // выбрать один, как раньше.
+    if (rect) { await showBlockCard(Number(rect.dataset.blockId), e.ctrlKey || e.metaKey); return; }
+    // Клик по пустому месту — снять выделение блоков (2026-09-05, живой
+    // запрос). Только по ПУСТОМУ: клик по элементу модели выделение блоков
+    // не трогает — карточки элемента и блока намеренно живут рядом и
+    // независимо (см. showBlockCard). Панорамирование сюда не считается.
+    const сдвиг = нажатие ? Math.abs(e.clientX - нажатие.x) + Math.abs(e.clientY - нажатие.y) : 0;
+    if (сдвиг <= 4) clearBlockSelection();
   });
 }
 
@@ -27480,9 +27576,10 @@ async function showRevitCard(elementId) {
 const MFR_HIGHLIGHT_COLOR = 0xff6a00;
 function mfrHighlightSelection() {
   const sel = revitPlanState.selected;
-  // Выбран блок, включённый в отбор активной операции «Шахматки» — своим
-  // насыщенным цветом статуса вместо общего MFR_HIGHLIGHT_COLOR (см. выше).
-  const chessSel = sel && sel.kind === "block" && mfrChessWorkTypeId ? mfrChessValues[sel.id] : null;
+  // Выбран блок, включённый в отбор активной доски «Шахматки» — своим
+  // насыщенным цветом статуса (среднего по операциям доски) вместо общего
+  // MFR_HIGHLIGHT_COLOR (см. выше).
+  const chessSel = sel && sel.kind === "block" && mfrChessTrackCode ? mfrChessValues[sel.id] : null;
   const boldColor = chessSel ? mfrChessBoldColor(MFR_CHESS_STATUS_HEX[chessSel.status]) : null;
   // Грань выбранного блока — БЕЛАЯ, а не тот же цвет статуса, что заливка
   // (живой запрос пользователя, 2026-09-02: «более контрастные грани»):
@@ -27491,6 +27588,11 @@ function mfrHighlightSelection() {
   // чётко. У обычного (не «Шахматка») выделения контур остаётся прежним
   // оранжевым — там заливка и так не залита цветом статуса.
   const edgeColor = boldColor ? "#ffffff" : null;
+  // Подсвечиваются ВСЕ выделенные блоки (2026-09-05, групповое выделение), а
+  // у блока к тому же может быть НЕСКОЛЬКО прямоугольников (block_boxes) —
+  // отсюда querySelectorAll по каждому id, а не один querySelector.
+  const выделеныБлоки = sel && sel.kind === "block"
+    ? [...revitPlanState.selectedBlocks] : [];
   const svg = document.getElementById("revit-plan-svg");
   if (svg) {
     svg.querySelectorAll(".mfr-selected").forEach((el) => {
@@ -27498,16 +27600,18 @@ function mfrHighlightSelection() {
       el.style.removeProperty("--mfr-sel-fill");
       el.style.removeProperty("--mfr-sel-stroke");
     });
-    if (sel) {
-      const el = sel.kind === "element"
-        ? svg.querySelector(`path[data-id="${sel.id}"]`)
-        : svg.querySelector(`rect[data-block-id="${sel.id}"]`);
-      if (el) {
-        el.classList.add("mfr-selected");
-        if (boldColor) el.style.setProperty("--mfr-sel-fill", boldColor);
-        if (edgeColor) el.style.setProperty("--mfr-sel-stroke", edgeColor);
-        el.parentNode.appendChild(el);
-      }
+    const узлы = [];
+    if (sel && sel.kind === "element") {
+      const el = svg.querySelector(`path[data-id="${sel.id}"]`);
+      if (el) узлы.push(el);
+    } else {
+      for (const id of выделеныБлоки) узлы.push(...svg.querySelectorAll(`rect[data-block-id="${id}"]`));
+    }
+    for (const el of узлы) {
+      el.classList.add("mfr-selected");
+      if (boldColor) el.style.setProperty("--mfr-sel-fill", boldColor);
+      if (edgeColor) el.style.setProperty("--mfr-sel-stroke", edgeColor);
+      el.parentNode.appendChild(el);
     }
   }
   if (!mfr3d.scene || typeof THREE === "undefined") return;
@@ -27524,8 +27628,9 @@ function mfrHighlightSelection() {
   // накладка выделения обязана покрыть их все, не только первый попавшийся).
   let части = [];
   if (sel.kind === "block") {
+    const свои = new Set(выделеныБлоки);
     части = mfr3d.scene.children
-      .filter((o) => o.isMesh && o.userData.blockId === sel.id)
+      .filter((o) => o.isMesh && свои.has(o.userData.blockId))
       .map((mesh) => ({ geometry: mesh.geometry.clone(), position: mesh.position.clone() }));
     if (!части.length) return;
   } else {
@@ -27560,13 +27665,97 @@ function mfrHighlightSelection() {
   mfr3d.highlight = group;
 }
 
+// Снять выделение блоков целиком — клик по пустому месту плана или сцены
+// (2026-09-05, живой запрос). Карточку элемента не трогает: она про другую
+// сущность и живёт своей жизнью.
+function clearBlockSelection() {
+  if (!revitPlanState.selectedBlocks.size) return;
+  revitPlanState.selectedBlocks.clear();
+  if (revitPlanState.selected && revitPlanState.selected.kind === "block") {
+    revitPlanState.selected = null;
+  }
+  document.getElementById("block-card-block").style.display = "none";
+  updateBlockGroupUi();
+  mfrHighlightSelection();
+}
+
+// Плашка и кнопки при ГРУППОВОМ выделении блоков (2026-09-05). «Настройки»
+// работают на всю группу, «Факт» — нет: отчёт о выполнении у каждого блока
+// свой, один документ на несколько блоков — не то же самое действие, и
+// пользователь просил именно общий список операций. Поэтому при группе
+// «Факт» гаснет и объясняет почему.
+function updateBlockGroupUi() {
+  const выделены = revitPlanState.selectedBlocks;
+  const bar = document.getElementById("block-group-bar");
+  const факт = document.getElementById("block-progress-fact-btn");
+  const настройки = document.getElementById("block-progress-settings-btn");
+  const группа = выделены.size > 1;
+  bar.style.display = группа ? "" : "none";
+  if (группа) {
+    // Подписи блоков — из blocksData, ключи там русские («секция»/«этаж»),
+    // те же, что показывает карточка блока.
+    const имена = [...выделены]
+      .map(id => (revitPlanState.blocksData || []).find(b => b.id === id))
+      .filter(Boolean)
+      .map(b => [b["секция"], b["этаж"]].filter(Boolean).join(" · "));
+    bar.innerHTML = `<b>Выделено блоков: ${выделены.size}</b>
+      <div class="hint-text">${escapeHtml(имена.join(", ")) || "&nbsp;"}</div>
+      <div class="hint-text">«Настройки» применятся ко всем выделенным.</div>
+      <button type="button" class="link-btn" id="block-group-reset">снять выделение</button>`;
+  }
+  настройки.textContent = группа ? `Настройки (${выделены.size})` : "Настройки";
+  факт.disabled = группа;
+  факт.title = группа
+    ? "Отчёт о выполнении заполняется по одному блоку — снимите групповое выделение"
+    : "";
+}
+
+document.getElementById("block-group-bar").addEventListener("click", (e) => {
+  if (!e.target.closest("#block-group-reset")) return;
+  const id = revitPlanState.selected && revitPlanState.selected.id;
+  revitPlanState.selectedBlocks.clear();
+  if (id) revitPlanState.selectedBlocks.add(id);   // остаётся тот, чья карточка открыта
+  updateBlockGroupUi();
+  mfrHighlightSelection();
+});
+
 // Карточка блока (Docs/TZ.md, «Геометрия блока») — по клику на
 // параллелепипед в 2D или 3D. Отдельная панель от карточки элемента: обе
 // могут быть видны одновременно, это разные, независимые сущности.
-async function showBlockCard(blockId) {
+//
+// `additive` — Ctrl/Cmd-клик (2026-09-05): блок добавляется к выделению или
+// убирается из него. Карточка при этом всё равно про ОДИН блок (последний
+// тронутый): группа нужна «Настройкам» операций, а «элементов модели» и
+// «Факт» у каждого блока свои, складывать их не во что.
+async function showBlockCard(blockId, additive = false) {
+  const выделены = revitPlanState.selectedBlocks;
+  blockId = Number(blockId);
+  if (additive) {
+    if (выделены.has(blockId)) выделены.delete(blockId); else выделены.add(blockId);
+  } else {
+    выделены.clear();
+    выделены.add(blockId);
+  }
+  // Сняли последний выбранный блок — панели больше не о чем рассказывать.
+  if (!выделены.size) {
+    revitPlanState.selected = null;
+    document.getElementById("block-card-block").style.display = "none";
+    updateBlockGroupUi();
+    mfrHighlightSelection();
+    return;
+  }
+  // Карточка — про тронутый блок, а если его только что сняли — про любой из
+  // оставшихся выделенных (иначе панель показывала бы уже не выбранное).
+  await renderBlockCard(выделены.has(blockId) ? blockId : [...выделены][выделены.size - 1]);
+}
+
+// Отрисовка карточки БЕЗ изменения выделения — ею же перерисовывается панель
+// после сохранения «Настроек», когда групповое выделение надо сохранить.
+async function renderBlockCard(blockId) {
   const panel = document.getElementById("block-card-block");
   const box = document.getElementById("block-card");
   revitPlanState.selected = { kind: "block", id: Number(blockId) };
+  updateBlockGroupUi();
   mfrHighlightSelection();
   panel.style.display = "";
   box.textContent = "Загрузка…";
@@ -27659,57 +27848,164 @@ function workTypePathParts(путь) {
   return { name, crumb: parts.join(" / ") };
 }
 
-// -------- «Настройки»: отбор операций «эт/сек» для блока --------
+// -------- «Настройки»: отбор операций «эт/сек» для блока (или сразу для
+// ГРУППЫ выделенных блоков — 2026-09-05, живой запрос) --------
 
-let blockSettingsBlockId = null;
+let blockSettingsBlockIds = [];   // блоки, к которым применится сохранение
+
+// Список формы — ИЕРАРХИЧЕСКИЙ (2026-09-05, живой запрос пользователя):
+// раньше это был плоский перечень, где у каждой операции полный путь по
+// дереву печатался приглушённой строкой-хлебной крошкой. На реальном
+// справочнике (130+ операций «эт/сек») крошки повторяются десятками строк
+// подряд, а сравнить «что уже отмечено внутри Секции 1» глазами нельзя.
+// Дерево строится ИЗ ПУТЕЙ прямо здесь: сервер отдаёт плоский список с
+// полем «путь» (`work_fact.block_settings`), отдельного дерева ему для
+// этой формы заводить не нужно.
+//
+// У узла — свой чекбокс на всю ветку (отметить/снять раздел целиком),
+// с промежуточным состоянием, когда внутри отмечено не всё: без него в
+// длинном дереве не видно, тронута ветка или нет.
+function blockSettingsTreeHtml(options, selected, partial = new Set()) {
+  const корень = { дети: new Map(), операции: [] };
+  for (const o of options) {
+    const части = String(o["путь"] || "").split(" / ");
+    const имя = части.pop();
+    let узел = корень;
+    for (const p of части) {
+      if (!узел.дети.has(p)) узел.дети.set(p, { дети: new Map(), операции: [] });
+      узел = узел.дети.get(p);
+    }
+    узел.операции.push({ id: o.id, имя });
+  }
+  const куски = [];
+  const обойти = (узел, глубина) => {
+    for (const [имя, ветка] of узел.дети) {
+      куски.push(`<div class="bs-branch"><div class="bs-group" style="padding-left:${глубина * 18}px">
+        <input type="checkbox" class="bs-group-box">
+        <span>${escapeHtml(имя)}</span></div>`);
+      обойти(ветка, глубина + 1);
+      куски.push("</div>");
+    }
+    for (const оп of узел.операции) {
+      // `data-partial` — операция есть только у ЧАСТИ выделенных блоков
+      // (групповое выделение): в HTML промежуточное состояние не задаётся,
+      // ставится свойством после отрисовки (см. вызывающий код).
+      куски.push(`<label class="block-settings-row" style="padding-left:${глубина * 18}px">
+        <input type="checkbox" value="${оп.id}" ${selected.has(оп.id) ? "checked" : ""}
+          ${partial.has(оп.id) ? 'data-partial="1"' : ""}>
+        <span>${escapeHtml(оп.имя || "(без названия)")}</span></label>`);
+    }
+  };
+  обойти(корень, 0);
+  return куски.join("");
+}
+
+// Состояние чекбоксов узлов по их содержимому: отмечено всё / ничего /
+// частично (indeterminate). Пересчитывается целиком — веток десятки, а не
+// тысячи, точечное обновление тут не окупается. «Частично» у узла даёт и
+// нетронутая операция из ЧАСТИ блоков группы (её собственный indeterminate).
+function refreshBlockSettingsGroups() {
+  document.querySelectorAll("#block-settings-list .bs-branch").forEach(ветка => {
+    const свои = [...ветка.querySelectorAll("input[value]")];
+    const отмечено = свои.filter(cb => cb.checked).length;
+    const спорных = свои.filter(cb => cb.indeterminate).length;
+    const узел = ветка.querySelector(":scope > .bs-group > .bs-group-box");
+    if (!узел) return;
+    узел.checked = свои.length > 0 && отмечено === свои.length;
+    узел.indeterminate = !узел.checked && (отмечено > 0 || спорных > 0);
+  });
+}
 
 document.getElementById("block-progress-settings-btn").addEventListener("click", async () => {
-  const blockId = currentSelectedBlockId();
-  if (!blockId) return;
-  blockSettingsBlockId = blockId;
+  const blockIds = [...revitPlanState.selectedBlocks];
+  if (!blockIds.length) return;
+  blockSettingsBlockIds = blockIds;
   document.getElementById("block-settings-backdrop").classList.add("open");
   const box = document.getElementById("block-settings-list");
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  document.getElementById("block-settings-title").textContent = blockIds.length > 1
+    ? `Настройки: операции ${blockIds.length} блоков` : "Настройки: операции блока";
   try {
-    const data = await api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/work-types-settings`);
-    document.getElementById("block-settings-hint").textContent = data.configured
-      ? "Отбор для этого блока уже настроен."
-      : "Отбор ещё не настраивали — отмечены все операции «эт/сек» справочника.";
-    const selected = new Set(data.selected);
+    // Один блок — прежний эндпоинт; группа — общий (2026-09-05): у него
+    // варианты одни на объект, а отмеченное приходит двумя множествами —
+    // «есть у всех» и «есть у части».
+    const один = blockIds.length === 1;
+    const data = один
+      ? await api(`/objects/${revitPlanState.objectId}/blocks/${blockIds[0]}/work-types-settings`)
+      : await api(`/objects/${revitPlanState.objectId}/blocks/work-types-settings`
+                  + `?block_ids=${blockIds.join(",")}`);
+    const selected = new Set(один ? data.selected : data.selected_all);
+    const partial = new Set(один ? [] : data.selected_some);
+    document.getElementById("block-settings-hint").textContent = один
+      ? (data.configured
+        ? "Отбор для этого блока уже настроен."
+        : "Отбор ещё не настраивали — отмечены все операции «эт/сек» справочника.")
+      : `Выделено блоков: ${data.blocks} (настроен отбор у ${data.configured}). Галочка — операция`
+        + " есть у всех выделенных, серый квадрат — только у части. Сохранение поставит ВСЕМ"
+        + " выделенным блокам один и тот же список: то, что осталось серым и не тронуто, будет снято.";
     box.innerHTML = data.options.length
-      ? data.options.map(o => {
-          const { name, crumb } = workTypePathParts(o["путь"]);
-          return `<label class="block-settings-row">
-            <input type="checkbox" value="${o.id}" ${selected.has(o.id) ? "checked" : ""}>
-            <span>${crumb ? `<span class="hint-text">${escapeHtml(crumb)} / </span>` : ""}${escapeHtml(name)}</span>
-          </label>`;
-        }).join("")
+      ? blockSettingsTreeHtml(data.options, selected, partial)
       : '<div class="hint-text">В справочнике нет операций с единицей «эт/сек».</div>';
+    box.querySelectorAll("input[data-partial]").forEach(cb => { cb.indeterminate = true; });
+    refreshBlockSettingsGroups();
   } catch (e) {
     box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
   }
 });
 
+// Клик по чекбоксу узла — вся его ветка разом; по операции — только
+// пересчёт состояния узлов над ней.
+document.getElementById("block-settings-list").addEventListener("change", (e) => {
+  const box = e.target;
+  if (box.classList?.contains("bs-group-box")) {
+    box.closest(".bs-branch").querySelectorAll("input[value]")
+      .forEach(cb => { cb.checked = box.checked; });
+  }
+  refreshBlockSettingsGroups();
+});
+
+// «Отметить всё»/«Снять всё» трогают ТОЛЬКО операции (input[value]) —
+// чекбоксы узлов пересчитываются следом сами, иначе у них осталось бы
+// висеть промежуточное состояние.
 document.getElementById("block-settings-select-all").addEventListener("click", () => {
-  document.querySelectorAll("#block-settings-list input[type=checkbox]").forEach(cb => { cb.checked = true; });
+  document.querySelectorAll("#block-settings-list input[value]").forEach(cb => { cb.checked = true; });
+  refreshBlockSettingsGroups();
 });
 document.getElementById("block-settings-select-none").addEventListener("click", () => {
-  document.querySelectorAll("#block-settings-list input[type=checkbox]").forEach(cb => { cb.checked = false; });
+  document.querySelectorAll("#block-settings-list input[value]").forEach(cb => { cb.checked = false; });
+  refreshBlockSettingsGroups();
 });
 document.getElementById("block-settings-close").addEventListener("click", () => {
   document.getElementById("block-settings-backdrop").classList.remove("open");
 });
 document.getElementById("block-settings-save").addEventListener("click", async () => {
-  const work_type_ids = [...document.querySelectorAll("#block-settings-list input[type=checkbox]:checked")]
+  // Строго input[value] — у чекбоксов узлов значения нет, они не операции.
+  // Промежуточные (операция у части блоков группы, её не трогали) в checked
+  // не попадают и снимутся у всех — так пользователь и просил: один список
+  // на всю группу.
+  const work_type_ids = [...document.querySelectorAll("#block-settings-list input[value]:checked")]
     .map(cb => Number(cb.value));
+  const ids = blockSettingsBlockIds;
   try {
-    await api(`/objects/${revitPlanState.objectId}/blocks/${blockSettingsBlockId}/work-types-settings`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ work_type_ids }),
-    });
+    if (ids.length === 1) {
+      await api(`/objects/${revitPlanState.objectId}/blocks/${ids[0]}/work-types-settings`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ work_type_ids }),
+      });
+    } else {
+      await api(`/objects/${revitPlanState.objectId}/blocks/work-types-settings`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ block_ids: ids, work_type_ids }),
+      });
+    }
     document.getElementById("block-settings-backdrop").classList.remove("open");
-    showToast("Отбор операций сохранён", "success");
-    if (currentSelectedBlockId() === blockSettingsBlockId) showBlockCard(blockSettingsBlockId);
+    showToast(ids.length === 1
+      ? "Отбор операций сохранён"
+      : `Отбор операций сохранён для ${ids.length} блоков`, "success");
+    // Перерисовываем карточку, НЕ трогая выделение: после группового
+    // сохранения группа должна остаться выделенной.
+    const текущий = currentSelectedBlockId();
+    if (текущий && ids.includes(текущий)) renderBlockCard(текущий);
   } catch (e) { showToast(e.message, "error"); }
 });
 
@@ -27831,11 +28127,12 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
     showToast("Отчёт сохранён", "success");
     const reports = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports`);
     renderBlockFactReportsList(reports);
-    // Полный showBlockCard, а не только дерево: строка «Работы: план/в
-    // работе/выполнено» в простой карточке считается тем же процентом и
-    // тоже должна обновиться (живой баг — 2026-09-02, при live-проверке
+    // Полная перерисовка карточки, а не только дерево: строка «Работы:
+    // план/в работе/выполнено» в простой карточке считается тем же процентом
+    // и тоже должна обновиться (живой баг — 2026-09-02, при live-проверке
     // фичи: после «Факт» дерево обновлялось, а строка сводки — нет).
-    if (currentSelectedBlockId() === blockFactBlockId) showBlockCard(blockFactBlockId);
+    // renderBlockCard, а не showBlockCard: выделение трогать незачем.
+    if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
   } catch (e) { showToast(e.message, "error"); }
 });
 
@@ -27908,80 +28205,56 @@ for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-
   });
 }
 
-// -------- «Шахматка»: одна операция «эт/сек» красит все блоки плана
-// (app/work_fact.py, живой запрос пользователя 2026-09-02). Только 2D —
-// подпись процентом поверх параллелепипеда, клик по блоку не меняется. --------
+// -------- «Шахматка»: доска (группа операций одного кода «Трек
+// планирования») красит все блоки плана разом (app/work_fact.py, живой
+// запрос пользователя 2026-09-02, переосмыслено 2026-09-04: раньше доска
+// была одной операцией «эт/сек», теперь — группой по треку из справочника
+// PlanningTrack). Цвет блока — среднее по его операциям доски, подпись —
+// по строке на каждую такую операцию (мини-прогресс-бар + процент, как в
+// правой панели карточки блока, .bp-bar/.bp-percent). Клик по блоку не
+// меняется. --------
 
-let mfrChessWorkTypeId = null;
-let mfrChessValues = {};   // block_id -> {percent, status}, только 2D-раскраска
-let mfrChessTree = [];     // дерево используемых операций, для окна выбора
+let mfrChessTrackCode = null;
+let mfrChessValues = {};   // block_id -> {status, percent, ops:[{id,name,percent,status}]}
+let mfrChessTracks = [];   // [{код, название}], плоский список досок для окна выбора
 
 async function loadMfrChessOptions() {
-  mfrChessTree = [];
+  mfrChessTracks = [];
   try {
-    const data = await api(`/objects/${revitPlanState.objectId}/blocks/work-types-in-use`);
-    mfrChessTree = data.tree || [];
+    const data = await api(`/objects/${revitPlanState.objectId}/blocks/planning-tracks`);
+    mfrChessTracks = data.tracks || [];
   } catch (e) {
-    // Список — удобство, не критичная функция: тихо оставляем дерево
+    // Список — удобство, не критичная функция: тихо оставляем его
     // пустым, человек попробует позже (кнопка «Обновить данные с сервера»).
   }
   updateMfrChessCurrent();
 }
 
-function findMfrChessNode(nodes, id) {
-  for (const n of nodes) {
-    if (n.row_kind !== "узел" && n.id === id) return n;
-    if (n.children && n.children.length) {
-      const found = findMfrChessNode(n.children, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-// Поле в сайдбаре — БЕЗ иерархии, только название (живой запрос
-// пользователя: путь по дереву в узкое поле не влезал); путь отдельной
-// строкой под ним, стрелочками, а не как в дереве («/»).
+// Поле в сайдбаре — просто название доски (у доски, в отличие от прежней
+// одной операции, нет пути по дереву — она сама объединяет операции из
+// разных веток справочника).
 function updateMfrChessCurrent() {
   const nameEl = document.getElementById("mfr-chess-current-name");
-  const pathEl = document.getElementById("mfr-chess-current-path");
-  const node = mfrChessWorkTypeId ? findMfrChessNode(mfrChessTree, mfrChessWorkTypeId) : null;
-  if (!node) {
-    nameEl.textContent = "— выключено —";
-    pathEl.style.display = "none";
-    return;
-  }
-  const { name, crumb } = workTypePathParts(node["путь"] || node.name);
-  nameEl.textContent = name;
-  if (crumb) {
-    pathEl.textContent = crumb.split(" / ").join(" → ");
-    pathEl.style.display = "";
-  } else {
-    pathEl.style.display = "none";
-  }
+  const track = mfrChessTrackCode ? mfrChessTracks.find(t => t["код"] === mfrChessTrackCode) : null;
+  nameEl.textContent = track ? track["название"] : "— выключено —";
 }
 
-// Окно выбора — иерархический список (живой запрос пользователя): узлы
-// заголовками, пустых групп нет (дерево уже обрезано до предков используемых
-// операций на сервере, app/work_fact.py::used_work_types_tree).
-function mfrChessModalTreeHtml(nodes, depth) {
-  return nodes.map((n) => {
-    const pad = 8 + depth * 16;
-    if (n.row_kind === "узел") {
-      const kids = n.children && n.children.length ? mfrChessModalTreeHtml(n.children, depth + 1) : "";
-      return `<div class="chess-group" style="padding-left:${pad}px">${escapeHtml(n.name)}</div>${kids}`;
-    }
-    const on = mfrChessWorkTypeId === n.id;
-    return `<div class="chess-pick${on ? " chess-pick-on" : ""}" data-chess-id="${n.id}" style="padding-left:${pad}px">
-      ${escapeHtml(n.name || "(без названия)")}
+// Окно выбора — плоский список досок (2026-09-04, было деревом операций):
+// доска — фиксированное название из PlanningTrack, дерево внутри неё не
+// нужно, операции этой доски и так видны построчно на самом блоке.
+function mfrChessModalListHtml() {
+  return mfrChessTracks.map((t) => {
+    const on = mfrChessTrackCode === t["код"];
+    return `<div class="chess-pick${on ? " chess-pick-on" : ""}" data-chess-code="${escapeHtml(t["код"])}">
+      ${escapeHtml(t["название"])}
     </div>`;
   }).join("");
 }
 
 function renderMfrChessModal() {
-  document.getElementById("mfr-chess-modal-tree").innerHTML = mfrChessTree.length
-    ? mfrChessModalTreeHtml(mfrChessTree, 0)
-    : '<div class="hint-text">Операций «эт/сек», запланированных хотя бы для одного блока, ещё нет.</div>';
+  document.getElementById("mfr-chess-modal-tree").innerHTML = mfrChessTracks.length
+    ? mfrChessModalListHtml()
+    : '<div class="hint-text">Досок «Шахматка», запланированных хотя бы для одного блока, ещё нет.</div>';
 }
 
 document.getElementById("mfr-chess-open").addEventListener("click", () => {
@@ -27993,23 +28266,23 @@ document.getElementById("mfr-chess-modal-close").addEventListener("click", () =>
 });
 document.getElementById("mfr-chess-modal-off").addEventListener("click", () => {
   document.getElementById("mfr-chess-modal-backdrop").classList.remove("open");
-  selectMfrChessWorkType(null);
+  selectMfrChessTrack(null);
 });
 document.getElementById("mfr-chess-modal-tree").addEventListener("click", (e) => {
   const pick = e.target.closest(".chess-pick");
   if (!pick) return;
   document.getElementById("mfr-chess-modal-backdrop").classList.remove("open");
-  selectMfrChessWorkType(Number(pick.dataset.chessId));
+  selectMfrChessTrack(pick.dataset.chessCode);
 });
 
-async function selectMfrChessWorkType(workTypeId) {
-  mfrChessWorkTypeId = workTypeId;
+async function selectMfrChessTrack(trackCode) {
+  mfrChessTrackCode = trackCode;
   updateMfrChessCurrent();
-  document.getElementById("mfr-chess-legend").style.display = mfrChessWorkTypeId ? "" : "none";
-  if (mfrChessWorkTypeId) {
+  document.getElementById("mfr-chess-legend").style.display = mfrChessTrackCode ? "" : "none";
+  if (mfrChessTrackCode) {
     try {
       mfrChessValues = await api(
-        `/objects/${revitPlanState.objectId}/blocks/work-type-progress?work_type_id=${mfrChessWorkTypeId}`);
+        `/objects/${revitPlanState.objectId}/blocks/track-progress?track_code=${encodeURIComponent(mfrChessTrackCode)}`);
     } catch (err) {
       showToast(err.message, "error");
       mfrChessValues = {};
@@ -28023,7 +28296,7 @@ async function selectMfrChessWorkType(workTypeId) {
   }
   if (revitPlanState.data) drawRevitPlan(revitPlanState.data);
   // 3D кэширует сцену по ключу отбора (mfr3d.key) — сама «Шахматка» в него
-  // не входит, иначе смена операции без смены этажа/секции не заставила бы
+  // не входит, иначе смена доски без смены этажа/секции не заставила бы
   // пересобрать блоки заново. Принудительный сброс, как у чекбоксов слоёв.
   mfr3d.key = null;
   applyMfrMode();
@@ -28150,38 +28423,85 @@ function mergePositions(geometries, ids, диапазоны) {
   return out;
 }
 
-// «Наклейка» процентом на блоке в «Шахматке» — НЕ билборд-спрайт (тот
-// поворачивается к камере, живой запрос пользователя, 2026-09-02: «как на
-// ЖБИ — наклейки с марками, чётко на поверхности грани параллельно ей,
-// наклейка не поворачивается в сторону пользователя»; см. у ЖБИ
+// «Наклейка» на блоке в «Шахматке» — НЕ билборд-спрайт (тот поворачивается
+// к камере, живой запрос пользователя, 2026-09-02: «как на ЖБИ — наклейки
+// с марками, чётко на поверхности грани параллельно ей, наклейка не
+// поворачивается в сторону пользователя»; см. у ЖБИ
 // collectMarkDecalQuads/buildMergedDecals — та же идея: плоский меш,
 // развёрнутый по нормали грани, а не спрайт). Здесь без атласа и общего
 // буфера — наклеек на объект единицы-десятки (не тысячи меток ЖБИ),
 // склейка не нужна, свой PlaneGeometry на каждую.
-const MFR_CHESS_LABEL_WORLD_HEIGHT = 2200;
-function buildMfrChessLabelMesh(text, x, y, z, normal) {
+//
+// Раньше — одна строка процентом на операцию (2026-09-02); с 2026-09-04
+// доска — группа операций, и канвас рисует по строке на каждую ТОЙ ЖЕ
+// раскладкой, что 2D (`mfrChessLabelLayout`): имя, полоса, процент в одну
+// строку, полосы строк выровнены по левому краю, высота полосы — в строку.
+//
+// Размер в мировых единицах — ПО ГАБАРИТУ ГРАНИ БЛОКА (faceWidth/faceHeight
+// — ширина и высота именно ЭТОГО этажа, а не константа: живой репорт
+// пользователя со скриншотом, 2026-09-05). Раньше высота строки была
+// фиксированной мировой константой независимо от размера блока — на башне
+// с частым шагом этажей подпись была выше самого этажа и накрывала соседние
+// этажи внахлёст. Масштаб канвас→мир один на весь канвас и выбирается
+// МЕНЬШИМ из двух отношений (вписать, а не заполнить) — подпись не вылезает
+// ни по высоте, ни по ширине грани, сколько бы ни было операций.
+// Плашка на ВСЕ ЧЕТЫРЕ боковые грани блока (2026-09-05, живой запрос
+// пользователя: «сделай надписи не на одной, а на всех видимых боковых
+// гранях»): выбирать одну «наружную» грань не годится — с любого другого
+// ракурса блок оказывался без подписи. Канвас рисуется ОДИН на блок и
+// переиспользуется всеми четырьмя мешами (одинаковое содержимое —
+// пересобирать текстуру на каждую стену незачем), а `side: FrontSide`
+// оставляет каждую плашку видимой только со своей стороны: иначе сквозь
+// полупрозрачный блок читалась бы зеркальная изнанка противоположной.
+const MFR_CHESS_LABEL_CANVAS_F = 40;   // опорный кегль раскладки на канвасе
+function buildMfrChessLabelFace(ops) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
-  const fontPx = 56;
-  const paddingX = 14, paddingY = 10;
-  ctx.font = `700 ${fontPx}px sans-serif`;
-  canvas.width = Math.ceil(ctx.measureText(text).width) + paddingX * 2;
-  canvas.height = fontPx + paddingY * 2;
+  const F = MFR_CHESS_LABEL_CANVAS_F;
+  const шрифт = `600 ${F}px system-ui, sans-serif`;
+  ctx.font = шрифт;
+  const L = mfrChessLabelLayout(ops, F, (t) => ctx.measureText(t).width);
+  canvas.width = Math.ceil(L.totalW);
+  canvas.height = Math.ceil(L.totalH);
 
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fillStyle = "rgba(255,255,255,0.88)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#1a1a1a";
   ctx.textBaseline = "middle";
-  ctx.font = `700 ${fontPx}px sans-serif`;
-  ctx.fillText(text, paddingX, canvas.height / 2);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  const material = new THREE.MeshBasicMaterial({
-    map: texture, transparent: true, depthTest: true, side: THREE.DoubleSide,
+  ops.forEach((op, i) => {
+    const rowTop = L.padY + i * L.lineH;
+    const серединаСтроки = rowTop + L.lineH / 2;
+    ctx.font = шрифт;
+    ctx.fillStyle = "#1a1a1a";
+    ctx.fillText(op.name || "", L.padX, серединаСтроки);
+    const barY = rowTop + (L.lineH - L.barH) / 2;
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    ctx.fillRect(L.barX, barY, L.barW, L.barH);
+    ctx.fillStyle = MFR_CHESS_STATUS_HEX[op.status] || MFR_CHESS_STATUS_HEX.plan;
+    ctx.fillRect(L.barX, barY, L.barW * Math.max(0, Math.min(100, op.percent)) / 100, L.barH);
+    ctx.fillStyle = "#1a1a1a";
+    ctx.fillText(`${op.percent}%`, L.pctX, серединаСтроки);
   });
-  const worldPerPx = MFR_CHESS_LABEL_WORLD_HEIGHT / canvas.height;
-  const geometry = new THREE.PlaneGeometry(canvas.width * worldPerPx, MFR_CHESS_LABEL_WORLD_HEIGHT);
-  const mesh = new THREE.Mesh(geometry, material);
+
+  return {
+    w: canvas.width, h: canvas.height,
+    material: new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(canvas), transparent: true,
+      depthTest: true, side: THREE.FrontSide,
+    }),
+  };
+}
+
+// Один меш-наклейка: готовая плашка (`buildMfrChessLabelFace`), вписанная в
+// габарит КОНКРЕТНОЙ грани блока — faceWidth/faceHeight в мировых метрах.
+// Масштаб канвас→мир выбирается МЕНЬШИМ из двух отношений (вписать, а не
+// заполнить): подпись не вылезает ни по высоте, ни по ширине грани, сколько
+// бы ни было операций (живой репорт со скриншотом 2026-09-05 — раньше
+// высота строки была мировой константой, и на башне с частым шагом этажей
+// подпись была выше самого этажа и накрывала соседние внахлёст).
+function buildMfrChessLabelMesh(плашка, x, y, z, normal, faceWidth, faceHeight) {
+  const worldPerPx = Math.min(faceWidth / плашка.w, faceHeight / плашка.h);
+  const geometry = new THREE.PlaneGeometry(плашка.w * worldPerPx, плашка.h * worldPerPx);
+  const mesh = new THREE.Mesh(geometry, плашка.material);
   // PlaneGeometry смотрит локальным +Z при локальном «верх» +Y — базис
   // (право, верх=мировой Z, нормаль) разворачивает её в плоскость грани,
   // сохраняя текст читаемым (не вверх ногами и не зеркально) на любой из
@@ -28196,21 +28516,13 @@ function buildMfrChessLabelMesh(text, x, y, z, normal) {
   return mesh;
 }
 
-// Направление «наружу» для наклейки — от центра ВСЕГО здания (в плане) к
-// центру блока, снапнутое на ближайшую из 4 стен той же арифметикой
-// проекции на грань куба, что и раньше, но БЕЗ камеры (живой запрос
-// пользователя: наклейка не должна следить за зрителем — фиксируется один
-// раз при сборке сцены, как решение «какая грань блока — внешняя», а не
-// «какая грань сейчас видна»). Блок ровно в центре — вырожденный случай
-// (сам себе центр здания), берём любую сторону.
-function mfrChessOutwardOffset(cx, cy, hx, hy, buildingCx, buildingCy) {
-  let dx = cx - buildingCx, dy = cy - buildingCy;
-  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) dx = 1;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len, uy = dy / len;
-  const t = 1 / Math.max(Math.abs(ux) / hx, Math.abs(uy) / hy, 1e-6);
-  return { ux, uy, вынос: t + 400 };
-}
+// Выбора «какая грань наружная» больше нет (2026-09-05): наклейка ставится
+// на ВСЕ ЧЕТЫРЕ боковые грани блока разом — см. buildMfrChessLabelFace и
+// цикл по сторонам в buildMfr3D. Прежний mfrChessOutwardOffset решал, куда
+// поставить ЕДИНСТВЕННУЮ наклейку (направление от центра здания к центру
+// блока), и дважды приводил к живым репортам: сырое диагональное
+// направление ставило плашку на ребро, а любая одна грань оставляла блок
+// без подписи со всех остальных ракурсов.
 
 async function buildMfr3D() {
   // Сборок может идти ДВЕ сразу: пользователь жмёт «все этажи» и тут же
@@ -28358,8 +28670,8 @@ async function buildMfr3D() {
       // «Шахматка» (2026-09-02, живой запрос пользователя): здание целиком
       // и БЕЗ отбора по этажам видно только в 3D — раскраска 2D-плана одной
       // раскраской без неё не решала задачу «сравнить блоки между собой».
-      const chess = mfrChessWorkTypeId ? mfrChessValues[b.id] : null;
-      const colorHex = mfrChessWorkTypeId
+      const chess = mfrChessTrackCode ? mfrChessValues[b.id] : null;
+      const colorHex = mfrChessTrackCode
         ? (chess ? MFR_CHESS_COLORS_3D[chess.status] : MFR_CHESS_COLORS_3D.off)
         : 0x2f6fed;
       // Блок — набор прямоугольников (block_boxes, 2026-09-05): один
@@ -28373,7 +28685,7 @@ async function buildMfr3D() {
         if (width <= 0 || depth <= 0) continue;
         const geometry = new THREE.BoxGeometry(width, depth, height);
         const material = new THREE.MeshLambertMaterial({
-          color: colorHex, transparent: true, opacity: (mfrChessWorkTypeId && chess) ? 0.5 : 0.16,
+          color: colorHex, transparent: true, opacity: (mfrChessTrackCode && chess) ? 0.5 : 0.16,
           depthWrite: false, side: THREE.DoubleSide,
         });
         const mesh = new THREE.Mesh(geometry, material);
@@ -28399,14 +28711,25 @@ async function buildMfr3D() {
       }
       верх = Math.max(верх, (b.z1 - низ));
       if (chess && крупнейший) {
-        // «Наклейка» на ВНЕШНЕЙ грани — фиксированная сторона блока
-        // (наружу от центра здания), не билборд и не зависит от камеры.
-        const { ux, uy, вынос } = mfrChessOutwardOffset(
-          крупнейший.centerX, крупнейший.centerY, крупнейший.width / 2, крупнейший.depth / 2, w / 2, h / 2);
-        const decal = buildMfrChessLabelMesh(
-          `${chess.percent}%`, крупнейший.centerX + ux * вынос, крупнейший.centerY + uy * вынос,
-          крупнейший.centerZ, new THREE.Vector3(ux, uy, 0));
-        scene.add(decal);
+        // Наклейка на ВСЕ ЧЕТЫРЕ боковые грани блока (2026-09-05, живой
+        // запрос): с любого ракурса блок подписан, ни одна сторона не
+        // остаётся пустой. Плашка строится один раз на блок и делится между
+        // гранями; каждая видна только со своей стороны (FrontSide).
+        const плашка = buildMfrChessLabelFace(chess.ops);
+        const hx = крупнейший.width / 2, hy = крупнейший.depth / 2;
+        for (const [ux, uy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const поX = ux !== 0;
+          // Габарит грани, в который вписывается подпись: нормаль вдоль X —
+          // грань тянется по Y (и наоборот), высота — фактическая высота
+          // этажа. Небольшой запас (0.92/0.8) — чтобы наклейка не касалась
+          // соседних этажей и рёбер блока вплотную. Вынос на 400 мм от
+          // стены: наклейка не должна тонуть в облицовке (см. ЖБИ-марки).
+          const вынос = (поX ? hx : hy) + 400;
+          const faceWidth = (поX ? hy : hx) * 2 * 0.92;
+          scene.add(buildMfrChessLabelMesh(
+            плашка, крупнейший.centerX + ux * вынос, крупнейший.centerY + uy * вынос,
+            крупнейший.centerZ, new THREE.Vector3(ux, uy, 0), faceWidth, height * 0.8));
+        }
       }
     }
   }
@@ -28739,7 +29062,11 @@ function bindMfr3DPick(canvas, camera, scene) {
     // блок кликабелен там, где элемента под ним нет (щели, пустой блок).
     if (блокМеши.length) {
       const попаданияБлок = raycaster.intersectObjects(блокМеши, false);
-      if (попаданияБлок.length) { await showBlockCard(попаданияБлок[0].object.userData.blockId); return; }
+      if (попаданияБлок.length) {
+        // Ctrl/Cmd — множественное выделение, как и в 2D.
+        await showBlockCard(попаданияБлок[0].object.userData.blockId, e.ctrlKey || e.metaKey);
+        return;
+      }
     }
     const элементМеши = scene.children.filter((o) => o.isMesh && !o.userData.blockId);
     const попаданияЭл = raycaster.intersectObjects(элементМеши, false);
@@ -28748,8 +29075,11 @@ function bindMfr3DPick(canvas, camera, scene) {
       const вершина = (hit.faceIndex || 0) * 3;
       const диапазоны = hit.object.userData.диапазоны || [];
       const найден = диапазоны.find((д) => вершина < д.конец);
-      if (найден) await showRevitCard(найден.id);
+      if (найден) { await showRevitCard(найден.id); return; }
     }
+    // Луч не попал ни в блок, ни в элемент — клик мимо всего, снимаем
+    // выделение блоков (2026-09-05, живой запрос; то же и в 2D).
+    clearBlockSelection();
   });
 }
 
@@ -29527,13 +29857,16 @@ function renderWtSummary(data) {
   const warn = (data.warnings || []).length
     ? `<div class="warning-text"><b>Предупреждения</b>${data.warnings.map(w => `<div>• ${escapeHtml(w)}</div>`).join("")}</div>`
     : "";
+  const tracks = data.tracks || [];
   box.innerHTML = `${warn}
     <div>Всего строк: <b>${data.total_rows}</b></div>
     <div>Новых: <b>${data.new.length}</b></div>
     <div>Возвращаются (были списаны раньше): <b>${data.reviving.length}</b></div>
     <div>Пропадут из файла (спишутся, статусы сохранятся): <b>${data.retiring.length}</b>
       ${data.retiring.length ? "— " + data.retiring.map(escapeHtml).join(", ") : ""}</div>
-    <div>Без изменений: <b>${data.unchanged}</b></div>`;
+    <div>Без изменений: <b>${data.unchanged}</b></div>
+    <div>Треков планирования на листе PlanningTrack: <b>${tracks.length}</b>
+      ${tracks.length ? "— " + tracks.map(t => escapeHtml(`${t["код"]} «${t["название"]}»`)).join(", ") : "(лист не найден или пуст — файл без него импортируется как раньше)"}</div>`;
 }
 
 document.getElementById("wt-apply").addEventListener("click", async () => {
@@ -29543,7 +29876,8 @@ document.getElementById("wt-apply").addEventListener("click", async () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: wtPending.token }),
     });
-    showToast(`Готово: добавлено ${res.added}, возвращено ${res.revived}, списано ${res.retired}.`, "success");
+    showToast(`Готово: добавлено ${res.added}, возвращено ${res.revived}, списано ${res.retired}, `
+      + `треков планирования ${res.tracks}.`, "success");
     wtPending = null;
     document.getElementById("wt-apply-box").style.display = "none";
     document.getElementById("wt-summary").innerHTML = "";
@@ -29558,11 +29892,21 @@ document.getElementById("wt-apply").addEventListener("click", async () => {
 // wt-analyze/apply того же файла (пути стабильны, см. work_types_import.py).
 let wtExpanded = new Set();
 
+// Код → название трека (2026-09-04) — для колонки «Трек» ниже; отдельный
+// эндпоинт от used_planning_tracks («Шахматка»): здесь нужны ВСЕ коды
+// (включая «0»/«компл»/«Веха»), а не только доски с визуализацией.
+let wtTrackNames = {};
+
 async function loadWorkTypesTree() {
   const box = document.getElementById("wt-tree-box");
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
   wtExpanded = new Set();
-  wpData = await api(`/objects/${state.objectId}/work-progress`);
+  const [progress, tracks] = await Promise.all([
+    api(`/objects/${state.objectId}/work-progress`),
+    api(`/objects/${state.objectId}/planning-tracks`).catch(() => ({ tracks: [] })),
+  ]);
+  wpData = progress;
+  wtTrackNames = Object.fromEntries((tracks.tracks || []).map(t => [t["код"], t["название"]]));
   renderWtTree();
 }
 
@@ -29589,15 +29933,17 @@ function renderWtTree() {
     const expanded = wtExpanded.has(path);
     const toggle = `<button class="report-toggle${hasChildren ? "" : " empty"}" data-path="${escapeHtml(path)}">${hasChildren ? (expanded ? "▾" : "▸") : ""}</button>`;
     const nameHtml = n.row_kind === "узел" ? `<b>${escapeHtml(n.name)}</b>` : escapeHtml(n.name || "(без названия)");
+    const trackName = n.track_code ? (wtTrackNames[n.track_code] || n.track_code) : "";
     return `<tr class="${n.row_kind === "узел" ? "wt-node" : ""}">
       <td class="wt-name" style="padding-left:${8 + depth * 16}px">${toggle}${nameHtml}</td>
       <td class="wt-code">${n.code ? escapeHtml(n.code) : ""}</td>
       <td class="wt-unit">${n.unit ? escapeHtml(n.unit) : ""}</td>
+      <td class="wt-track">${trackName ? escapeHtml(trackName) : ""}</td>
       <td class="wt-note">${n.note ? escapeHtml(n.note) : ""}</td>
     </tr>`;
   }).join("");
   box.innerHTML = `<table id="wt-tree-table"><thead><tr>
-      <th class="wt-name">Вид работ</th><th>Код</th><th>Ед. изм.</th><th>Примечание</th>
+      <th class="wt-name">Вид работ</th><th>Код</th><th>Ед. изм.</th><th>Трек</th><th>Примечание</th>
     </tr></thead><tbody>${body}</tbody></table>`;
 }
 

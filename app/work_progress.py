@@ -11,6 +11,17 @@
 UNIT_BLOCK = "эт/сек"      # блок = секция + этаж
 UNIT_SECTION = "сек"       # секция целиком
 UNIT_WHOLE = "компл"       # объект целиком
+# Квартира (2026-09-04, живой запрос пользователя) — своей геометрии у
+# квартиры в БД нет (object_flats/revit_rooms без контура), а лежит она
+# внутри одного блока, поэтому процент по ней вводится ОДНИМ числом на
+# блок — тем же механизмом, что «эт/сек» (app/work_fact.py), а не отдельной
+# сущностью. Задел на будущее: когда появится дробление по квартирам,
+# понадобится своя адресация — пока её нет.
+UNIT_APARTMENT = "кв.эт/сек"
+# Единицы, адресуемые через app/work_fact.py (отбор операций на блок,
+# процент, «Шахматка» досками по треку планирования) — НЕ через клик-цикл
+# ниже (см. ADDRESSABLE_UNITS): обе живут только в work_fact.
+BLOCK_UNITS = (UNIT_BLOCK, UNIT_APARTMENT)
 
 STATUS_PLAN = "plan"       # нет строки в work_progress
 STATUS_IN_PROGRESS = "in_progress"
@@ -79,8 +90,9 @@ def matrix(conn, object_id: int) -> dict:
     rows = [
         dict(row)
         for row in conn.execute(
-            "SELECT id, parent_id, row_kind, code, name, unit, note, sort_order FROM work_types "
-            "WHERE object_id = ? AND retired_at IS NULL ORDER BY sort_order",
+            "SELECT id, parent_id, row_kind, code, name, unit, note, planning_track_code, "
+            "sort_order FROM work_types WHERE object_id = ? AND retired_at IS NULL "
+            "ORDER BY sort_order",
             (object_id,),
         )
     ]
@@ -112,7 +124,8 @@ def matrix(conn, object_id: int) -> dict:
     for row in rows:
         node = {
             "id": row["id"], "row_kind": row["row_kind"], "code": row["code"],
-            "name": row["name"], "unit": row["unit"], "note": row["note"], "children": [],
+            "name": row["name"], "unit": row["unit"], "note": row["note"],
+            "track_code": row["planning_track_code"], "children": [],
             "addressable": row["unit"] in ADDRESSABLE_UNITS,
         }
         if row["row_kind"] != "узел":

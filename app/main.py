@@ -6083,6 +6083,54 @@ def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWork
     return {"ok": True}
 
 
+# -------- Тот же отбор, но сразу на ГРУППУ блоков (2026-09-05, живой запрос
+# пользователя: выделить несколько блоков и задать им одинаковый список
+# операций). Путь без {block_id} — сами блоки перечисляются параметром, а
+# хранение и проверки те же, что у одиночного блока (work_fact). --------
+
+@app.get("/objects/{object_id}/blocks/work-types-settings")
+def get_blocks_work_types_settings(object_id: int, block_ids: str,
+                                   user: sqlite3.Row = Depends(get_current_user)):
+    try:
+        ids = [int(x) for x in block_ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=422, detail="block_ids: ожидается список id через запятую.")
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        try:
+            return work_fact.blocks_settings(conn, object_id, ids)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+class BlocksWorkTypesSettingsIn(BaseModel):
+    block_ids: list[int]
+    work_type_ids: list[int]
+
+
+@app.put("/objects/{object_id}/blocks/work-types-settings")
+def set_blocks_work_types_settings(object_id: int, body: BlocksWorkTypesSettingsIn,
+                                   user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            work_fact.save_blocks_settings(conn, object_id, body.block_ids, body.work_type_ids)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+    # Тот же код журнала, что у одиночного блока: действие одно и то же, просто
+    # применённое к нескольким блокам — новый код завёл бы в отчётах вторую
+    # строку про то же самое (см. app/activity_actions.py).
+    activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
+                details={"block_ids": body.block_ids, "count": len(body.work_type_ids)})
+    return {"ok": True, "blocks": len(body.block_ids)}
+
+
 class BlockPercentCellIn(BaseModel):
     work_type_id: int
     percent: int
@@ -6127,30 +6175,41 @@ def get_block_progress(object_id: int, block_id: int,
         conn.close()
 
 
-# -------- «Шахматка» (2026-09-02, живой запрос пользователя): раскраска
-# всех блоков плана по ОДНОЙ операции «эт/сек» разом — статус (цвет) и
-# процент (подпись) на каждом блоке. Клик по блоку ведёт себя как раньше. --------
+# -------- «Шахматка» (2026-09-02, переосмыслена 2026-09-04): раскраска
+# всех блоков плана по ДОСКЕ — группе операций одного кода «Трек
+# планирования» (planning_tracks, лист PlanningTrack исходного xlsx) — цвет
+# блока по среднему проценту его операций доски, подпись на блоке — по
+# строке на каждую такую операцию. Клик по блоку ведёт себя как раньше. --------
 
-@app.get("/objects/{object_id}/blocks/work-types-in-use")
-def get_blocks_work_types_in_use(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+@app.get("/objects/{object_id}/blocks/planning-tracks")
+def get_blocks_planning_tracks(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
-        return {"tree": work_fact.used_work_types_tree(conn, object_id)}
+        return {"tracks": work_fact.used_planning_tracks(conn, object_id)}
     finally:
         conn.close()
 
 
-@app.get("/objects/{object_id}/blocks/work-type-progress")
-def get_blocks_work_type_progress(object_id: int, work_type_id: int,
-                                  user: sqlite3.Row = Depends(get_current_user)):
+@app.get("/objects/{object_id}/blocks/track-progress")
+def get_blocks_track_progress(object_id: int, track_code: str,
+                              user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
-        try:
-            return work_fact.work_type_block_values(conn, object_id, work_type_id)
-        except work_fact.FactError as e:
-            raise HTTPException(status_code=e.status_code, detail=e.message)
+        return work_fact.board_block_values(conn, object_id, track_code)
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/planning-tracks")
+def get_planning_tracks(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Весь справочник треков объекта (не только доски «Шахматки») — для
+    вкладки «Учёт по блокам → Виды работ»."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        return {"tracks": work_fact.all_planning_tracks(conn, object_id)}
     finally:
         conn.close()
 

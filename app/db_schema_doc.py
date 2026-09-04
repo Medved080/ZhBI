@@ -543,6 +543,14 @@ TABLES = [
     ("work_type_id", "INTEGER", "PK,FK", "операция → work_types.id (CASCADE)"),
     ("percent", "INTEGER", "", "процент выполнения операции на дату отчёта, 0..100"),
 ]),
+("planning_tracks", "planning_tracks — Расшифровка кода «Трек планирования»", C_ELEM, S_ELEM, [
+    ("id", "INTEGER", "PK", "идентификатор строки"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("code", "TEXT", "U", "код из колонки «Трек планирования» листа WBS («1»..«20» — доска «Шахматка», «0» — линейный трек, «компл»/«Веха» — вне визуализации на модели)"),
+    ("name", "TEXT", "", "название доски/трека (лист PlanningTrack исходного xlsx)"),
+    ("note", "TEXT", "", "примечание листа PlanningTrack, если заполнено"),
+    ("created_at", "TEXT", "", "момент записи (загрузка справочника видов работ)"),
+]),
 ]
 
 # ------------------------------------------------------------------- связи
@@ -562,6 +570,7 @@ FKS = [
     ("work_fact_reports", "updated_by", "users", "id", "SET NULL"),
     ("work_fact_items", "report_id", "work_fact_reports", "id", "CASCADE"),
     ("work_fact_items", "work_type_id", "work_types", "id", "CASCADE"),
+    ("planning_tracks", "object_id", "objects", "id", "CASCADE"),
     ("schedule_versions", "object_id", "objects", "id", "CASCADE"),
     ("schedule_versions", "loaded_by", "users", "id", "SET NULL"),
     ("schedule_version_dates", "version_id", "schedule_versions", "id", "CASCADE"),

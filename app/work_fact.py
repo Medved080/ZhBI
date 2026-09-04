@@ -1,18 +1,25 @@
 """
-Отбор операций «эт/сек» для конкретного блока и отчёты о фактическом
-выполнении (живой запрос пользователя, 2026-09-02) — надстройка над
-контуром «Учёт по блокам» (Docs/block-accounting.md) поверх операций с
-единицей «эт/сек» конкретно. Для них План/В работе/Выполнено больше не
-проставляется кликом-циклом в общей матрице (`work_progress.py`,
+Отбор операций «эт/сек»/«кв.эт/сек» для конкретного блока и отчёты о
+фактическом выполнении (живой запрос пользователя, 2026-09-02) — надстройка
+над контуром «Учёт по блокам» (Docs/block-accounting.md) поверх операций с
+единицей из `work_progress.BLOCK_UNITS`. Для них План/В работе/Выполнено
+больше не проставляется кликом-циклом в общей матрице (`work_progress.py`,
 `ADDRESSABLE_UNITS`) — источник истины теперь процент отсюда. Для «сек» и
 «компл» ничего не меняется, они по-прежнему живут в `work_progress`.
+
+«кв.эт/сек» (квартира, 2026-09-04) добавлена в BLOCK_UNITS тем же
+механизмом, что «эт/сек»: своей геометрии у квартиры в БД нет, а лежит она
+внутри одного блока — процент вводится ОДНИМ числом на пару (блок,
+операция), без деления по отдельным квартирам (задел на будущее, решение
+пользователя).
 
 Отбор операций на блоке (`block_work_types`) — ИСКЛЮЧЕНИЕ из общего
 списка, а не отдельное состояние по умолчанию: пока блок не настраивали
 (`blocks.work_types_configured_at IS NULL`), выбранным считается ВЕСЬ
-список «эт/сек»-операций объекта — так вела себя матрица статусов раньше,
-отбор её не меняет, пока форму «Настройки» не сохранили явно хоть раз (даже
-если сохранённый список совпал с «всё»).
+список операций объекта с единицей из BLOCK_UNITS — так вела себя матрица
+статусов раньше (тогда только для «эт/сек»), отбор её не меняет, пока форму
+«Настройки» не сохранили явно хоть раз (даже если сохранённый список совпал
+с «всё»).
 
 Отчёт о фактическом выполнении — ДОКУМЕНТ на дату, а не строка в
 неизменяемом журнале действий: пользователь явно попросил возможность
@@ -22,10 +29,24 @@
 тех, что её касаются; при равенстве дат — из отчёта с бóльшим id (записан
 позже). Отдельный явный журнал действий (`app/activity_actions.py`) эти
 отчёты не дублирует — это не тот жанр, документы сами себе журнал.
+
+«Шахматка» (2026-09-02, переосмыслена 2026-09-04) — раньше красила все
+блоки по ОДНОЙ выбранной операции; теперь ДОСКА = группа операций одного
+кода «Трек планирования» (`planning_tracks`, коды «1»-«20» — заказчик
+называет их шахматками с визуализацией на модели, лист `PlanningTrack`
+исходного xlsx, `app/work_types_import.py`). Цвет/статус блока — среднее
+арифметическое процентов ЕГО операций этого трека (`_status_from_percent`
+от среднего), подпись на блоке — по строке на каждую такую операцию.
+Единицы вне BLOCK_UNITS (сек/компл/шт/м2/м3/т/пог.м/опора), даже если у них
+есть код трека 1-20 в файле (в реальном файле встречается — код 1
+«Монолит» наполовину «м3», в некоторых кодах подмешан «компл»), в доску не
+входят — остаются видны только в дереве «Виды работ» и старой матрице.
 """
 
 from app import work_progress
-from app.work_progress import UNIT_BLOCK, STATUS_PLAN, STATUS_IN_PROGRESS, STATUS_DONE
+from app.work_progress import (
+    BLOCK_UNITS, STATUS_PLAN, STATUS_IN_PROGRESS, STATUS_DONE,
+)
 
 
 class FactError(Exception):
@@ -42,13 +63,16 @@ def _block_exists(conn, object_id: int, block_id: int) -> bool:
 
 
 def _block_op_work_types(conn, object_id: int) -> list:
-    """Активные «оп»-строки справочника с единицей «эт/сек» — ровно то,
-    из чего вообще может выбирать «Настройки» блока."""
+    """Активные «оп»-строки справочника с единицей из BLOCK_UNITS
+    («эт/сек», «кв.эт/сек») — ровно то, из чего вообще может выбирать
+    «Настройки» блока."""
+    placeholders = ", ".join("?" for _ in BLOCK_UNITS)
     return [
         dict(row) for row in conn.execute(
-            "SELECT id, path, code, name, sort_order FROM work_types "
-            "WHERE object_id = ? AND retired_at IS NULL AND row_kind = 'оп' AND unit = ? "
-            "ORDER BY sort_order", (object_id, UNIT_BLOCK),
+            "SELECT id, path, code, name, planning_track_code, sort_order FROM work_types "
+            "WHERE object_id = ? AND retired_at IS NULL AND row_kind = 'оп' "
+            "AND unit IN (%s) ORDER BY sort_order" % placeholders,
+            (object_id, *BLOCK_UNITS),
         )
     ]
 
@@ -93,6 +117,46 @@ def save_block_settings(conn, object_id: int, block_id: int, work_type_ids: list
         (block_id,),
     )
     conn.commit()
+
+
+def blocks_settings(conn, object_id: int, block_ids: list) -> dict:
+    """Отбор операций сразу для НЕСКОЛЬКИХ блоков (2026-09-05, живой запрос
+    пользователя: выделить группу блоков и задать им один список). Список
+    вариантов у них общий — он объектный, — а вот отмеченное различается,
+    поэтому возвращаются ДВА множества: что стоит у ВСЕХ выделенных и что
+    только у ЧАСТИ. Форма показывает первое галочкой, второе — промежуточным
+    состоянием: сразу видно, где блоки расходятся (решение пользователя)."""
+    if not block_ids:
+        raise FactError(422, "Не выбран ни один блок.")
+    наборы = []
+    настроенных = 0
+    for block_id in block_ids:
+        свои = block_settings(conn, object_id, block_id)   # он же проверит блок
+        наборы.append(set(свои["selected"]))
+        if свои["configured"]:
+            настроенных += 1
+    у_всех = set.intersection(*наборы)
+    у_любого = set.union(*наборы)
+    return {
+        "blocks": len(block_ids),
+        "configured": настроенных,
+        "options": [{"id": r["id"], "путь": r["path"], "код": r["code"]}
+                    for r in _block_op_work_types(conn, object_id)],
+        "selected_all": sorted(у_всех),
+        "selected_some": sorted(у_любого - у_всех),
+    }
+
+
+def save_blocks_settings(conn, object_id: int, block_ids: list, work_type_ids: list) -> int:
+    """Один и тот же список операций — всем выделенным блокам разом. Каждый
+    блок проверяется и пишется тем же save_block_settings, что и поодиночке:
+    отдельной ветки хранения у группового применения нет, «группа» живёт
+    только в интерфейсе."""
+    if not block_ids:
+        raise FactError(422, "Не выбран ни один блок.")
+    for block_id in block_ids:
+        save_block_settings(conn, object_id, block_id, work_type_ids)
+    return len(block_ids)
 
 
 def _current_percents(conn, block_id: int) -> dict:
@@ -177,12 +241,33 @@ def block_summary(conn, object_id: int, block_id: int) -> dict:
             "в_работе": в_работе, "выполнено": done}
 
 
-def used_work_types(conn, object_id: int) -> list:
-    """Операции «эт/сек», реально применимые хотя бы к одному блоку объекта
-    — список для выбора в «Шахматке» (живой запрос пользователя, 2026-09-02).
-    Блок без явной настройки использует ВЕСЬ список (см. block_settings) —
-    значит, при наличии хоть одного неотнастроенного блока используются
-    вообще все операции «эт/сек», отдельно проверять нечего."""
+def all_planning_tracks(conn, object_id: int) -> list:
+    """Весь справочник треков объекта (2026-09-04) — для вкладки «Виды
+    работ», где нужны имена ВСЕХ кодов (включая «0»/«компл»/«Веха»), а не
+    только досок «Шахматки». Числовые коды впереди по возрастанию,
+    нечисловые — следом, по алфавиту."""
+    rows = [
+        dict(row) for row in conn.execute(
+            "SELECT code, name, note FROM planning_tracks WHERE object_id = ?", (object_id,))
+    ]
+
+    def order_key(r):
+        try:
+            return (0, int(r["code"]))
+        except (TypeError, ValueError):
+            return (1, r["code"])
+    rows.sort(key=order_key)
+    return [{"код": r["code"], "название": r["name"], "примечание": r["note"]} for r in rows]
+
+
+def used_planning_tracks(conn, object_id: int) -> list:
+    """Доски «Шахматки» для пикера (2026-09-04, замена used_work_types):
+    коды строго «1»-«20» (остальные вне визуализации на модели — см. модуль
+    docstring), у которых есть хотя бы одна операция BLOCK_UNITS, реально
+    применимая хотя бы к одному блоку — тот же критерий, что раньше был у
+    used_work_types (неотнастроенный блок использует ВЕСЬ список, значит при
+    наличии такого блока используются вообще все операции, отдельно
+    проверять нечего)."""
     options = _block_op_work_types(conn, object_id)
     if not options:
         return []
@@ -197,59 +282,30 @@ def used_work_types(conn, object_id: int) -> list:
                 "JOIN blocks b ON b.id = bwt.block_id WHERE b.object_id = ?", (object_id,))
         }
         options = [o for o in options if o["id"] in used_ids]
-    # Та же форма, что у block_settings()["options"] — фронт (workTypePathParts)
-    # рассчитывает на ключ «путь», а не сырое «path» из _block_op_work_types.
-    return [{"id": o["id"], "путь": o["path"], "код": o["code"]} for o in options]
+    used_track_codes = {o["planning_track_code"] for o in options if o["planning_track_code"]}
 
-
-def used_work_types_tree(conn, object_id: int) -> list:
-    """То же самое (used_work_types), но деревом — обрезанным до предков
-    используемых операций, как block_progress_tree. «Шахматка» выбирает
-    операцию иерархическим списком (живой запрос пользователя, 2026-09-02),
-    а не плоским: у одноимённых листьев из разных веток («Металлоконструкции»
-    встречается дважды) в плоском списке не разобрать, какой из них какой."""
-    used_ids = {o["id"] for o in used_work_types(conn, object_id)}
-    if not used_ids:
-        return []
-    rows = [
-        dict(row) for row in conn.execute(
-            "SELECT id, parent_id, row_kind, name, path FROM work_types "
-            "WHERE object_id = ? AND retired_at IS NULL ORDER BY sort_order", (object_id,))
-    ]
-    by_id = {r["id"]: r for r in rows}
-    keep = set()
-    for wt_id in used_ids:
-        cur = wt_id
-        while cur is not None and cur not in keep:
-            keep.add(cur)
-            cur = by_id.get(cur, {}).get("parent_id")
-
-    nodes = {}
-    roots = []
-    for r in rows:
-        if r["id"] not in keep:
+    track_names = {
+        r["code"]: r["name"] for r in conn.execute(
+            "SELECT code, name FROM planning_tracks WHERE object_id = ?", (object_id,))
+    }
+    boards = []
+    for code in used_track_codes:
+        try:
+            n = int(code)
+        except (TypeError, ValueError):
             continue
-        node = {"id": r["id"], "row_kind": r["row_kind"], "name": r["name"], "children": []}
-        if r["id"] in used_ids:
-            node["путь"] = r["path"]
-        nodes[r["id"]] = node
-        parent = nodes.get(r["parent_id"]) if r["parent_id"] else None
-        (parent["children"] if parent else roots).append(node)
-    return roots
+        if not (1 <= n <= 20) or code not in track_names:
+            continue
+        boards.append({"код": code, "название": track_names[code], "_n": n})
+    boards.sort(key=lambda b: b["_n"])
+    for b in boards:
+        del b["_n"]
+    return boards
 
 
-def work_type_block_values(conn, object_id: int, work_type_id: int) -> dict:
-    """block_id -> {percent, status} по ОДНОЙ операции для всех блоков
-    объекта, где она входит в отбор — для раскраски «Шахматки». Блок, для
-    которого операция вне отбора, в результат не попадает вовсе (фронт
-    рисует его отдельным, «неприменимо», видом)."""
-    wt = conn.execute(
-        "SELECT id FROM work_types WHERE id = ? AND object_id = ? AND retired_at IS NULL "
-        "AND row_kind = 'оп' AND unit = ?", (work_type_id, object_id, UNIT_BLOCK),
-    ).fetchone()
-    if wt is None:
-        raise FactError(404, "Операция не найдена.")
-
+def _op_included_percents(conn, object_id: int, work_type_id: int) -> dict:
+    """block_id -> процент, только для блоков, где эта операция входит в
+    отбор (см. block_settings) — единица логики для board_block_values."""
     percents = {}
     for row in conn.execute(
         "SELECT i.percent, r.block_id FROM work_fact_items i "
@@ -267,10 +323,40 @@ def work_type_block_values(conn, object_id: int, work_type_id: int) -> dict:
         "ON bwt.block_id = b.id AND bwt.work_type_id = ? "
         "WHERE b.object_id = ?", (work_type_id, object_id),
     ):
-        if not row["included"]:
-            continue
-        percent = percents.get(row["id"], 0)
-        result[row["id"]] = {"percent": percent, "status": _status_from_percent(percent)}
+        if row["included"]:
+            result[row["id"]] = percents.get(row["id"], 0)
+    return result
+
+
+def board_block_values(conn, object_id: int, track_code: str) -> dict:
+    """block_id -> {status, percent, ops: [{id, name, percent, status}, …]}
+    по ДОСКЕ «Шахматка» (2026-09-04, замена work_type_block_values) — группе
+    операций одного кода трека планирования, входящих в BLOCK_UNITS. Блок
+    без единой применимой операции доски в результат не попадает (фронт
+    красит его «неприменимо»); у остальных percent/status блока — СРЕДНЕЕ по
+    его операциям доски (решение пользователя), а не по какой-то одной."""
+    placeholders = ", ".join("?" for _ in BLOCK_UNITS)
+    ops = [
+        dict(row) for row in conn.execute(
+            "SELECT id, name FROM work_types WHERE object_id = ? AND retired_at IS NULL "
+            "AND row_kind = 'оп' AND unit IN (%s) AND planning_track_code = ? "
+            "ORDER BY sort_order" % placeholders,
+            (object_id, *BLOCK_UNITS, track_code),
+        )
+    ]
+
+    per_block = {}
+    for op in ops:
+        for block_id, percent in _op_included_percents(conn, object_id, op["id"]).items():
+            per_block.setdefault(block_id, []).append({
+                "id": op["id"], "name": op["name"], "percent": percent,
+                "status": _status_from_percent(percent),
+            })
+
+    result = {}
+    for block_id, op_list in per_block.items():
+        avg = round(sum(o["percent"] for o in op_list) / len(op_list))
+        result[block_id] = {"status": _status_from_percent(avg), "percent": avg, "ops": op_list}
     return result
 
 
@@ -405,10 +491,11 @@ def status_report(conn, object_id: int, report_date: "str | None" = None) -> dic
     пользователя: перенос вкладки «Статусы» из «Учёта по блокам», с правкой
     процента прямо в ячейке) — то же дерево, что у `work_progress.matrix`
     (все виды работ, все единицы, те же колонки блоков/секций), но у
-    операций «эт/сек» в ячейке — процент и статус НА `report_date`
-    (последний отчёт блока не позже неё), а не устаревший клик-цикл: общая
-    матрица их больше не адресует (см. `work_progress.py`, docstring
-    `ADDRESSABLE_UNITS`). У «сек»/«компл» — как и раньше, ТЕКУЩИЙ статус:
+    операций из BLOCK_UNITS («эт/сек», «кв.эт/сек») в ячейке — процент и
+    статус НА `report_date` (последний отчёт блока не позже неё), а не
+    устаревший клик-цикл: общая матрица их больше не адресует (см.
+    `work_progress.py`, docstring `ADDRESSABLE_UNITS`). У «сек»/«компл» —
+    как и раньше, ТЕКУЩИЙ статус:
     для них истории по датам не существует вовсе, `work_progress` хранит
     только последнее значение. Пусто — сегодня (тот же приём, что у
     `report_analytics.build_analytics_report`); фактически применённая дата
@@ -430,7 +517,7 @@ def status_report(conn, object_id: int, report_date: "str | None" = None) -> dic
 
     def walk(nodes):
         for n in nodes:
-            if n["row_kind"] != "узел" and n.get("unit") == UNIT_BLOCK:
+            if n["row_kind"] != "узел" and n.get("unit") in BLOCK_UNITS:
                 cells = {}
                 for b in base["blocks"]:
                     if n["id"] in selected(b["id"]):

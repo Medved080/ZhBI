@@ -2597,15 +2597,14 @@
   .chess-pick-on { background: var(--color-accent-soft); font-weight: 500;
     border-left-color: var(--color-primary); }
   .chess-pick-on:hover { background: var(--color-accent-soft-hover); }
-  /* Поле-«текущий выбор» в сайдбаре: только название, БЕЗ иерархии (живой
-     запрос пользователя — путь по дереву в узкое поле не влезал); путь
-     стрелочками — отдельной строкой под названием, мельче и приглушённо.
-     Сам выбор — по клику открывается #mfr-chess-modal-backdrop. */
+  /* Поле-«текущий выбор» в сайдбаре: название доски (у доски, в отличие от
+     прежней одной операции, нет пути по дереву — путь-стрелочками под
+     названием убран вместе с этим 2026-09-04). Сам выбор — по клику
+     открывается #mfr-chess-modal-backdrop. */
   .mfr-chess-current { display: block; width: 100%; text-align: left; font: inherit; cursor: pointer;
     background: var(--color-surface); border: 1px solid var(--color-border);
     border-radius: var(--radius); padding: 6px 10px; }
   .mfr-chess-current:hover { background: var(--color-surface-alt); }
-  #mfr-chess-current-path { margin-top: 2px; font-size: 11px; }
   /* Боковые панели рабочего места МФР — той же природы, что #sidebar:
      та же ширина, фон и граница, чтобы экран не распадался на «наш» и
      «не наш». */
@@ -2839,10 +2838,54 @@
   #block-progress-tree .bp-bar-fill.bp-done { background: #3FA76A; }
   #block-progress-tree .bp-percent { flex: 0 0 auto; color: var(--color-text-muted); min-width: 30px; text-align: right; }
 
-  /* ---- «Настройки»: чекбокс-список операций блока ---- */
-  .block-settings-row { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0;
-    border-bottom: 1px solid var(--color-border); font-size: 13px; }
+  /* ПОСТОЯННАЯ вертикальная полоса прокрутки у длинного списка (2026-09-05,
+     живой запрос пользователя). Два отдельных приёма, оба обязательны:
+     `overflow-y: scroll` держит дорожку всегда, даже когда содержимое влезло
+     целиком (при `auto` список дёргался по ширине, стоило отбору стать
+     короче); явные `::-webkit-scrollbar` нужны ради macOS — там полоса по
+     умолчанию НАКЛАДНАЯ и прячется, пока не крутишь, и «постоянной»
+     становится только у оформленной вручную.
+     `scrollbar-width`/`scrollbar-color` здесь НЕ ставятся намеренно (в
+     отличие от `#toolbar-scroll` и `.legend-table-wrap`): с Chrome 121
+     стандартное свойство отключает ::-webkit-scrollbar целиком, и полоса
+     снова становится накладной и прячущейся — проверено живьём, ширина
+     дорожки была 0. Firefox своей полосой полосу всё равно покажет:
+     `overflow-y: scroll` там место резервирует. */
+  .scroll-always { overflow-y: scroll; }
+  .scroll-always::-webkit-scrollbar { width: 10px; }
+  .scroll-always::-webkit-scrollbar-track {
+    background: rgba(120, 120, 120, .12); border-radius: 5px; }
+  .scroll-always::-webkit-scrollbar-thumb {
+    background: rgba(120, 120, 120, .45); border-radius: 5px; }
+  .scroll-always::-webkit-scrollbar-thumb:hover { background: rgba(120, 120, 120, .65); }
+
+  /* Плашка группового выделения блоков (2026-09-05): сколько блоков взято и
+     чем это отличается от обычного выбора одного. Тон — акцентный фон
+     панели, а не тревожный: это рабочий режим, а не предупреждение. */
+  .block-group-bar { background: var(--color-accent-soft); border-radius: var(--radius);
+    padding: 6px 8px; margin-bottom: 8px; font-size: 12px; }
+  .block-group-bar b { font-size: 13px; }
+  .block-group-bar .hint-text { margin: 2px 0 0; }
+  .block-group-bar .link-btn { margin-top: 4px; }
+
+  /* ---- «Настройки»: ИЕРАРХИЧЕСКИЙ чекбокс-список операций блока ----
+     Узлы дерева — заголовки со своим чекбоксом на всю ветку (2026-09-05,
+     живой запрос); отступ строки задаётся инлайном по глубине, как в
+     остальных деревьях приложения (см. renderBlockProgressTree). Черта
+     между строками только у операций: у заголовков она разрезала бы группу
+     на полосы и мешала видеть, где кончается ветка.
+
+     ГЛАВНОЕ в списке — САМА ОПЕРАЦИЯ (живой запрос пользователя,
+     2026-09-05): её и отмечают галочкой, разделы дерева — только адрес,
+     где она лежит. Поэтому операция крупнее и жирнее, а узлы — мельче и
+     приглушённо, хотя обычно в деревьях этого приложения наоборот
+     (заголовок жирный, лист обычный). */
+  .block-settings-row { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0;
+    border-bottom: 1px solid var(--color-border); font-size: 13.5px; font-weight: 600; }
   .block-settings-row input { margin-top: 3px; }
+  .bs-group { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0 1px;
+    font-size: 11.5px; font-weight: 400; color: var(--color-text-muted); }
+  .bs-group input { margin-top: 2px; transform: scale(0.85); transform-origin: left center; }
 
   /* ---- «Факт»: список отчётов + ползунки процента по операциям ---- */
   .bf-layout { display: flex; gap: 16px; }
@@ -2869,7 +2912,8 @@
     text-align: left; min-width: 320px; box-shadow: inset -1px 0 0 var(--color-border); }
   #wt-tree-table thead th.wt-name { z-index: 4; background: var(--color-surface-2); }
   #wt-tree-table tr.wt-node td { font-weight: 600; background: var(--color-surface-2); }
-  #wt-tree-table td.wt-code, #wt-tree-table td.wt-unit { white-space: nowrap; color: var(--color-text-muted); }
+  #wt-tree-table td.wt-code, #wt-tree-table td.wt-unit, #wt-tree-table td.wt-track {
+    white-space: nowrap; color: var(--color-text-muted); }
   #wt-tree-table td.wt-note { color: var(--color-text-muted); font-style: italic; }
 
   /* ---- отчёт «Статус комплектации» ---- */
@@ -4511,19 +4555,21 @@
         <h4>Категория <a href="#" class="revit-reset" data-reset="categories" hidden>сбросить</a></h4>
         <div id="revit-plan-categories" class="revit-list" style="max-height:24vh"></div>
       </div>
-      <!-- Шахматка (2026-09-02, живой запрос пользователя): выбор ОДНОЙ
-           операции «эт/сек» красит все блоки плана её статусом и подписывает
-           процентом. Поле выбора — БЕЗ иерархии (только название), путь по
-           предкам стрелочками под ним; сам выбор — в отдельном крупном
-           окне с иерархическим списком (узлы-предки заголовками, пустые
-           группы не показываются — только операции, реально запланированные
-           хотя бы для одного блока, app/work_fact.py::used_work_types_tree).
-           Клик по блоку поведения не меняет — карточка справа та же. -->
+      <!-- Шахматка (2026-09-02, переосмыслена 2026-09-04, живой запрос
+           пользователя): выбор ДОСКИ — группы операций одного кода «Трек
+           планирования» (planning_tracks, лист PlanningTrack исходного
+           xlsx, коды «1»-«20») — красит все блоки плана средним статусом её
+           операций и подписывает каждую из них отдельной строкой прямо на
+           блоке. Поле выбора — плоское название доски (у доски, в отличие
+           от прежней одной операции, нет пути по дереву); сам выбор — в
+           отдельном крупном окне плоским списком (только доски, реально
+           запланированные хотя бы для одного блока,
+           app/work_fact.py::used_planning_tracks). Клик по блоку поведения
+           не меняет — карточка справа та же. -->
       <div class="card-block">
         <h4>Шахматка</h4>
         <button type="button" class="mfr-chess-current" id="mfr-chess-open">
           <div id="mfr-chess-current-name">— выключено —</div>
-          <div id="mfr-chess-current-path" class="hint-text" style="display:none"></div>
         </button>
         <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px">
           <span><i class="wp-dot" style="background:var(--color-text-muted);border-color:var(--color-text-muted)"></i>план</span>
@@ -4580,6 +4626,11 @@
       </div>
       <div class="card-block" id="block-card-block" style="display:none">
         <h4>Блок</h4>
+        <!-- Групповое выделение блоков (2026-09-05, живой запрос): Ctrl+клик
+             по блокам на плане или в 3D. Плашка появляется, только когда
+             выделено больше одного, — иначе она была бы шумом при обычной
+             работе с одним блоком. -->
+        <div id="block-group-bar" class="block-group-bar" style="display:none"></div>
         <div id="block-card" class="hint-text"></div>
         <div class="actions" style="margin:8px 0">
           <button class="btn btn-sm btn-secondary" id="block-progress-settings-btn">Настройки</button>
@@ -7125,13 +7176,38 @@
     </div>
 
     <div id="blk-tab-worktypes" class="blk-panel" style="display:none">
-      <p class="hint-text">Справочник видов работ (WBS), перезагружаемый xlsx-файлом: колонки
-        «Уровень WBS», «Идентификатор операции», «Название операции», «Единицы измерения»,
-        «Кодификатор». Ключ записи — путь по дереву, а не код: повторная загрузка обновляет
-        совпавшее по пути и не трогает уже проставленные статусы.</p>
-      <div class="blk-add-row">
-        <input type="file" id="wt-file" accept=".xlsx"/>
-        <button class="btn btn-sm btn-secondary" id="wt-analyze">Разобрать файл</button>
+      <p class="hint-text">Справочник видов работ (WBS), перезагружаемый xlsx-файлом: на листе
+        «WBS» — колонки «Уровень WBS», «Идентификатор операции», «Название операции»,
+        «Единицы измерения», «Кодификатор», необязательные «Примечание» и «Трек планирования»
+        (код доски «Шахматка» — см. «Модель МФР»); расшифровка кодов — на листе «PlanningTrack»
+        той же книги («Код», «Наименование», «Примечание»). Ключ записи — путь по дереву, а не
+        код: повторная загрузка обновляет совпавшее по пути и не трогает уже проставленные
+        статусы.</p>
+      <!-- Загрузка разложена на ПРОНУМЕРОВАННЫЕ шаги (2026-09-04, запрос
+           пользователя «аналогично другим формам загрузки из внешних
+           xlsx») — те же классы `bulk-edit-steps`/`step-num`, что у загрузки
+           чертежа и PDF (см. их докстроки): та же двухфазная схема
+           разобрать → применить, вид у одинаковых по смыслу форм должен
+           совпадать. -->
+      <div class="bulk-edit-steps">
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">1</span>Выбрать файл</div>
+          <input type="file" id="wt-file" accept=".xlsx"/>
+        </div>
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">2</span>Разобрать файл</div>
+          <div class="bulk-edit-controls">
+            <button class="btn btn-primary" id="wt-analyze">Разобрать</button>
+          </div>
+          <div class="bulk-edit-status">Файл читается и сверяется с тем, что уже в базе.
+            Ничего не записывается.</div>
+        </div>
+        <div class="bulk-edit-block" id="wt-step-apply">
+          <div class="bulk-edit-block-title"><span class="step-num">3</span>Применить</div>
+          <div class="bulk-edit-status">Сводка ниже покажет, что добавится, вернётся из
+            списанного или спишется, и сколько треков планирования разобрано. Записывается
+            только после подтверждения.</div>
+        </div>
       </div>
       <div id="wt-status" class="hint-text"></div>
       <div id="wt-summary"></div>
@@ -7159,13 +7235,16 @@
      из карточки блока в «Модели МФР». -->
 <div class="modal-backdrop" id="block-settings-backdrop">
   <div class="modal wide">
-    <h2>Настройки: операции блока</h2>
+    <!-- Заголовок меняется на «операции N блоков», когда сохранение уйдёт
+         на группу выделенных (2026-09-05): цена ошибки тут — переписанный
+         отбор у десятка блоков, и знать об этом надо ДО «Сохранить». -->
+    <h2 id="block-settings-title">Настройки: операции блока</h2>
     <p class="hint-text" id="block-settings-hint"></p>
     <div class="actions" style="margin-bottom:8px">
       <button class="btn btn-sm btn-secondary" id="block-settings-select-all">Отметить всё</button>
       <button class="btn btn-sm btn-secondary" id="block-settings-select-none">Снять всё</button>
     </div>
-    <div id="block-settings-list" style="max-height:50vh; overflow:auto"></div>
+    <div id="block-settings-list" class="scroll-always" style="max-height:50vh"></div>
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-primary" id="block-settings-save">Сохранить</button>
       <button class="btn btn-secondary" id="block-settings-close">Отмена</button>
@@ -7184,11 +7263,11 @@
         <div class="actions" style="margin-bottom:8px">
           <button class="btn btn-sm btn-primary" id="block-fact-new">Новый отчёт</button>
         </div>
-        <div id="block-fact-reports-list" style="max-height:52vh; overflow:auto"></div>
+        <div id="block-fact-reports-list" class="scroll-always" style="max-height:52vh"></div>
       </div>
       <div class="bf-items-col">
         <label>Дата отчёта <input type="date" id="block-fact-date"></label>
-        <div id="block-fact-items" style="max-height:46vh; overflow:auto; margin-top:8px"></div>
+        <div id="block-fact-items" class="scroll-always" style="max-height:46vh; margin-top:8px"></div>
       </div>
     </div>
     <div class="actions" style="margin-top:12px">
@@ -7203,9 +7282,10 @@
      сайдбаре слишком узкое для пути по дереву). -->
 <div class="modal-backdrop" id="mfr-chess-modal-backdrop">
   <div class="modal wide">
-    <h2>Шахматка: выбор операции</h2>
-    <p class="hint-text">Только операции, реально запланированные хотя бы для одного блока
-      объекта — пустые группы не показаны.</p>
+    <h2>Шахматка: выбор доски</h2>
+    <p class="hint-text">Доска — группа операций одного кода «Трек планирования» (лист
+      PlanningTrack исходного файла видов работ). Только доски, реально запланированные
+      хотя бы для одного блока объекта.</p>
     <div id="mfr-chess-modal-tree" style="max-height:56vh; overflow:auto"></div>
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-secondary" id="mfr-chess-modal-off">Выключить раскраску</button>
