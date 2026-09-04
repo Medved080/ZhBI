@@ -29344,8 +29344,22 @@ function renderBlkGeoEditor() {
   const myRects = blkGeoBoxes.map((b, i) => {
     const x = b.x0 - minX, y = toSvgY(b.y1), rw = b.x1 - b.x0, rh = b.y1 - b.y0;
     const corners = [["tl", x, y], ["tr", x + rw, y], ["bl", x, y + rh], ["br", x + rw, y + rh]];
+    // Ручки на РЁБРАХ (2026-09-05, живой запрос пользователя: «менять форму
+    // не только за вершину, но и за ребро, смещая его параллельно себе») —
+    // перекладина посередине каждой стороны, тянет ТОЛЬКО эту границу
+    // (см. bindBlkGeoDrag, kind="edge"), в отличие от угла, который тянет
+    // сразу две.
+    const barLen = handleR * 2.4, barThick = handleR * 1.1;
+    const edges = [
+      { edge: "n", cx: x + rw / 2, cy: y, bw: barLen, bh: barThick },
+      { edge: "s", cx: x + rw / 2, cy: y + rh, bw: barLen, bh: barThick },
+      { edge: "w", cx: x, cy: y + rh / 2, bw: barThick, bh: barLen },
+      { edge: "e", cx: x + rw, cy: y + rh / 2, bw: barThick, bh: barLen },
+    ].map(({ edge, cx, cy, bw, bh }) => `<rect class="geo-edge" data-box-i="${i}" data-edge="${edge}"
+        x="${cx - bw / 2}" y="${cy - bh / 2}" width="${bw}" height="${bh}" rx="${Math.min(bw, bh) / 2}"/>`).join("");
     return `<rect class="geo-box" data-box-i="${i}" x="${x}" y="${y}" width="${rw}" height="${rh}"
         fill="var(--color-primary)" fill-opacity="0.3" stroke="var(--color-primary)" stroke-width="${strokeW}"/>
+      ${edges}
       ${corners.map(([c, cx, cy]) => `<circle class="geo-handle" data-box-i="${i}" data-corner="${c}"
           cx="${cx}" cy="${cy}" r="${handleR}"/>`).join("")}`;
   }).join("");
@@ -29391,14 +29405,19 @@ function blkGeoSvgPoint(evt) {
 function bindBlkGeoDrag() {
   const svg = document.getElementById("blk-geo-svg");
   if (!svg) return;
-  svg.querySelectorAll(".geo-handle, .geo-box").forEach((el) => el.addEventListener("pointerdown", (e) => {
+  svg.querySelectorAll(".geo-handle, .geo-box, .geo-edge").forEach((el) => el.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     const i = Number(el.dataset.boxI);
     const p = blkGeoSvgPoint(e);
-    blkGeoDrag = el.classList.contains("geo-handle")
-      ? { kind: "corner", boxIndex: i, corner: el.dataset.corner, startSvg: p, orig: { ...blkGeoBoxes[i] },
-          bounds: blkGeoBounds() }
-      : { kind: "move", boxIndex: i, startSvg: p, orig: { ...blkGeoBoxes[i] }, bounds: blkGeoBounds() };
+    const bounds = blkGeoBounds();
+    const orig = { ...blkGeoBoxes[i] };
+    if (el.classList.contains("geo-handle")) {
+      blkGeoDrag = { kind: "corner", boxIndex: i, corner: el.dataset.corner, startSvg: p, orig, bounds };
+    } else if (el.classList.contains("geo-edge")) {
+      blkGeoDrag = { kind: "edge", boxIndex: i, edge: el.dataset.edge, startSvg: p, orig, bounds };
+    } else {
+      blkGeoDrag = { kind: "move", boxIndex: i, startSvg: p, orig, bounds };
+    }
     svg.setPointerCapture(e.pointerId);
   }));
   svg.addEventListener("pointermove", (e) => {
@@ -29410,6 +29429,14 @@ function bindBlkGeoDrag() {
     if (blkGeoDrag.kind === "move") {
       box.x0 = orig.x0 + dxWorld; box.x1 = orig.x1 + dxWorld;
       box.y0 = orig.y0 + dyWorld; box.y1 = orig.y1 + dyWorld;
+    } else if (blkGeoDrag.kind === "edge") {
+      // Ребро тянет ТОЛЬКО свою границу, смещая её параллельно себе —
+      // противоположная сторона и обе границы по другой оси не трогаются
+      // (2026-09-05, живой запрос пользователя).
+      if (blkGeoDrag.edge === "w") box.x0 = orig.x0 + dxWorld;
+      else if (blkGeoDrag.edge === "e") box.x1 = orig.x1 + dxWorld;
+      else if (blkGeoDrag.edge === "n") box.y1 = orig.y1 + dyWorld;
+      else if (blkGeoDrag.edge === "s") box.y0 = orig.y0 + dyWorld;
     } else {
       const west = blkGeoDrag.corner.includes("l"), north = blkGeoDrag.corner === "tl" || blkGeoDrag.corner === "tr";
       if (west) box.x0 = orig.x0 + dxWorld; else box.x1 = orig.x1 + dxWorld;
@@ -29435,6 +29462,12 @@ function blkGeoUpdateBoxVisual(i, { minX, minY, h }) {
   for (const [c, [cx, cy]] of Object.entries(corners)) {
     const handle = document.querySelector(`.geo-handle[data-box-i="${i}"][data-corner="${c}"]`);
     handle.setAttribute("cx", cx); handle.setAttribute("cy", cy);
+  }
+  const edgeMid = { n: [x + rw / 2, y], s: [x + rw / 2, y + rh], w: [x, y + rh / 2], e: [x + rw, y + rh / 2] };
+  for (const [edge, [cx, cy]] of Object.entries(edgeMid)) {
+    const bar = document.querySelector(`.geo-edge[data-box-i="${i}"][data-edge="${edge}"]`);
+    const bw = Number(bar.getAttribute("width")), bh = Number(bar.getAttribute("height"));
+    bar.setAttribute("x", cx - bw / 2); bar.setAttribute("y", cy - bh / 2);
   }
   document.querySelectorAll(`.blk-geo-row[data-box-i="${i}"] input`).forEach((inp) => {
     inp.value = Math.round(b[inp.dataset.field]);

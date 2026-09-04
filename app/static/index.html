@@ -1148,6 +1148,13 @@
   #blk-geo-svg .geo-box { cursor: move; touch-action: none; }
   #blk-geo-svg .geo-handle { fill: var(--color-primary); stroke: var(--color-surface);
     stroke-width: 1.5; cursor: nwse-resize; touch-action: none; }
+  /* Перекладина посередине ребра (2026-09-05, живой запрос пользователя:
+     менять форму не только за угол, но и за ребро, смещая его параллельно
+     себе) — тянет ТОЛЬКО эту сторону, курсор направлен вдоль движения. */
+  #blk-geo-svg .geo-edge { fill: var(--color-primary); fill-opacity: .85;
+    stroke: var(--color-surface); stroke-width: 1; touch-action: none; }
+  #blk-geo-svg .geo-edge[data-edge="n"], #blk-geo-svg .geo-edge[data-edge="s"] { cursor: ns-resize; }
+  #blk-geo-svg .geo-edge[data-edge="w"], #blk-geo-svg .geo-edge[data-edge="e"] { cursor: ew-resize; }
   .blk-geo-row { display: flex; gap: 6px; align-items: center; padding: 3px 0;
     border-bottom: 1px solid var(--color-border-soft); }
   .blk-geo-row input { width: 90px; }
@@ -7088,9 +7095,11 @@
             </div>
             <div id="blk-geo-canvas-box" style="border:1px solid var(--color-border); border-radius:var(--radius);
                  background:var(--color-surface); overflow:hidden; position:relative"></div>
-            <p class="hint-text blk-geo-hint-block" style="margin:6px 0">Перетаскивайте прямоугольник целиком или его угол; серым — блоки
-              других секций на этом же этаже, для сверки на пересечение; подложкой — план этажа из PDF (если
-              загружался), в тех же координатах и масштабе, что и сама схема.</p>
+            <p class="hint-text blk-geo-hint-block" style="margin:6px 0">Перетаскивайте прямоугольник целиком,
+              угол (меняет сразу две границы) или перекладину на ребре (сдвигает только эту сторону, параллельно
+              себе, остальные три границы на месте); серым — блоки других секций на этом же этаже, для сверки на
+              пересечение; подложкой — план этажа из PDF (если загружался), в тех же координатах и масштабе, что
+              и сама схема.</p>
             <p class="hint-text blk-geo-hint-floor" style="margin:6px 0">Показаны все занятые блоки этого этажа сразу
               по всем секциям, подложкой — план этажа из PDF (если загружался). Для правки геометрии ОДНОГО блока
               закройте окно и нажмите «✎» у нужной клетки в матрице.</p>
