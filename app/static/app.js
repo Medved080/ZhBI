@@ -29090,10 +29090,13 @@ async function loadBlkMatrix() {
   blkBlocksLoaded = true;
   const box = document.getElementById("blk-matrix-box");
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
-  [blkSections, blkLevels, blkBlocks] = await Promise.all([
+  closeBlkGeoEditor();
+  const plansRes = await fetch(`/objects/${state.objectId}/plan-images`).catch(() => null);
+  [blkSections, blkLevels, blkBlocks, blkPlanImages] = await Promise.all([
     api(`/objects/${state.objectId}/sections`),
     api(`/objects/${state.objectId}/levels`),
     api(`/objects/${state.objectId}/blocks`),
+    plansRes && plansRes.ok ? plansRes.json() : Promise.resolve([]),
   ]);
   renderBlkMatrix();
 }
@@ -29105,20 +29108,21 @@ function renderBlkMatrix() {
     return;
   }
   const haveBlock = new Map(blkBlocks.map(b => [`${b.section_id}:${b.level_id}`, b]));
-  // «✎» открывает редактор геометрии (2026-09-05, живой запрос
-  // пользователя: «в блоках… добавь редактирование… перетаскивания точек
-  // и указания координат вручную») — отдельная кнопка внутри клетки,
-  // «✓»/«—» по-прежнему переключает наличие блока, оба клика не путаются
-  // (свои обработчики на своих классах, не общий на всю ячейку).
+  // Клик по занятой клетке (или «✎» в ней) открывает редактор геометрии
+  // ОДНОГО блока справа; клик по подписи этажа слева — обзор ВСЕХ блоков
+  // этажа сразу, по всем секциям (2026-09-05, живой запрос пользователя:
+  // «этаж некликабельный, просто текст» + «добавь в колонки кнопку
+  // редактирования»). «✓»/«—» и «✎» — свои вложенные элементы со своими
+  // обработчиками (stopPropagation), чтобы переключение блока и открытие
+  // геометрии не путались.
   const rows = blkLevels.map(l => `<tr>
-    <th class="blk-row-name">${escapeHtml(l.name || l.key)}</th>
+    <th class="blk-row-name" data-lvl="${l.id}" title="Показать все блоки этого этажа">${escapeHtml(l.name || l.key)}</th>
     ${blkSections.map(s => {
       const b = haveBlock.get(`${s.id}:${l.id}`);
-      return `<td class="blk-cell${b ? " on" : ""}">
+      return `<td class="blk-cell${b ? " on" : ""}" data-sec="${s.id}" data-lvl="${l.id}"
+          ${b ? `data-block-id="${b.id}"` : ""}>
         <span class="blk-cell-toggle" data-sec="${s.id}" data-lvl="${l.id}">${b ? "✓" : "—"}</span>
-        ${b ? `<button class="blk-cell-edit" data-geo-block="${b.id}" data-sec-code="${escapeHtml(s.code)}"
-             data-lvl-name="${escapeHtml(l.name || l.key)}" data-lvl-id="${l.id}"
-             title="Геометрия блока">✎</button>` : ""}
+        ${b ? `<button class="blk-cell-edit" title="Геометрия блока">✎</button>` : ""}
       </td>`;
     }).join("")}
   </tr>`).join("");
@@ -29126,13 +29130,15 @@ function renderBlkMatrix() {
     <thead><tr><th class="blk-row-name">Этаж \\ Секция</th>
       ${blkSections.map(s => `<th>${escapeHtml(s.code)}</th>`).join("")}</tr></thead>
     <tbody>${rows}</tbody></table>`;
-  box.querySelectorAll(".blk-cell-toggle").forEach(el => el.addEventListener("click", async () => {
+  box.querySelectorAll(".blk-cell-toggle").forEach(el => el.addEventListener("click", async (e) => {
+    e.stopPropagation();
     const sectionId = Number(el.dataset.sec), levelId = Number(el.dataset.lvl);
     const on = el.parentElement.classList.contains("on");
     try {
       if (on) {
         const b = blkBlocks.find(x => x.section_id === sectionId && x.level_id === levelId);
         if (b) await api(`/objects/${state.objectId}/blocks/${b.id}`, { method: "DELETE" });
+        if (blkGeoBlockId === (b && b.id)) closeBlkGeoEditor();
       } else {
         await api(`/objects/${state.objectId}/blocks`, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -29143,9 +29149,25 @@ function renderBlkMatrix() {
       renderBlkMatrix();
     } catch (e) { showToast(e.message, "error"); }
   }));
-  box.querySelectorAll(".blk-cell-edit").forEach(btn => btn.addEventListener("click", () => {
-    openBlkGeoEditor(Number(btn.dataset.geoBlock), btn.dataset.secCode,
-                     btn.dataset.lvlName, Number(btn.dataset.lvlId));
+  const openCellEditor = (td) => {
+    const sectionId = Number(td.dataset.sec), levelId = Number(td.dataset.lvl);
+    const s = blkSections.find(x => x.id === sectionId), l = blkLevels.find(x => x.id === levelId);
+    if (!s || !l) return;
+    box.querySelectorAll("td.blk-cell-active").forEach(x => x.classList.remove("blk-cell-active"));
+    td.classList.add("blk-cell-active");
+    openBlkGeoEditor(Number(td.dataset.blockId), s.code, l.name || l.key, l.id);
+  };
+  box.querySelectorAll("td.blk-cell.on").forEach(td => td.addEventListener("click", () => openCellEditor(td)));
+  box.querySelectorAll(".blk-cell-edit").forEach(btn => btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openCellEditor(btn.closest("td.blk-cell"));
+  }));
+  box.querySelectorAll("th.blk-row-name[data-lvl]").forEach(th => th.addEventListener("click", () => {
+    const levelId = Number(th.dataset.lvl);
+    const l = blkLevels.find(x => x.id === levelId);
+    if (!l) return;
+    box.querySelectorAll("td.blk-cell-active").forEach(x => x.classList.remove("blk-cell-active"));
+    openBlkFloorView(levelId, l.name || l.key);
   }));
 }
 
@@ -29159,21 +29181,24 @@ function renderBlkMatrix() {
 // перетаскиваются — правятся только через свою же карточку.
 
 let blkGeoBlockId = null, blkGeoLevelId = null;
-let blkGeoBoxes = [];    // рабочая копия — [{x0,x1,y0,y1}], без id
+let blkGeoFloorMode = false;  // true — обзор ВСЕХ блоков этажа (клик по подписи), не правка одного
+let blkGeoBoxes = [];    // рабочая копия — [{x0,x1,y0,y1}], без id; в обзоре этажа всегда пустая
 let blkGeoOthers = [];   // [{секция, boxes:[{x0,x1,y0,y1}]}] — соседи, только вид
 let blkGeoDrag = null;   // {kind:"move"|"corner", boxIndex, corner, startX, startY, orig}
+let blkPlanImages = [];  // список /objects/{id}/plan-images, грузится вместе с матрицей
+let blkGeoPlanImage = null;   // картинка плана ТЕКУЩЕГО этажа (или null — её нет)
 
 async function openBlkGeoEditor(blockId, sectionCode, levelName, levelId) {
-  blkGeoBlockId = blockId; blkGeoLevelId = levelId;
+  blkGeoBlockId = blockId; blkGeoLevelId = levelId; blkGeoFloorMode = false;
+  document.getElementById("blk-geo-body").classList.remove("blk-geo-floor-mode");
   document.getElementById("blk-geo-title").textContent = `Геометрия блока: ${sectionCode} · ${levelName}`;
-  const editor = document.getElementById("blk-geo-editor");
-  editor.style.display = "";
-  // Редактор рисуется ПОСЛЕ матрицы (у той своя внутренняя прокрутка,
-  // max-height:60vh) — без автопрокрутки открытие происходит НИЖЕ видимой
-  // части модалки, ничего на экране не меняется, и выглядит как «клик по
-  // ✎ ничего не делает» (живой отчёт пользователя, 2026-09-05).
-  editor.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById("blk-geo-placeholder").style.display = "none";
+  document.getElementById("blk-geo-body").style.display = "";
   document.getElementById("blk-geo-canvas-box").innerHTML = '<div class="hint-text" style="padding:8px">Загрузка…</div>';
+  // Подложка — картинка плана этого этажа из PDF (app/pdf_plan_images.py),
+  // та же, что «Модель МФР» кладёт под контуры (слой «Планы»). Список уже
+  // загружен вместе с матрицей (loadBlkMatrix) — здесь только выбор этажа.
+  blkGeoPlanImage = blkPlanImages.find(p => String(p.level_id) === String(levelId)) || null;
   const [boxes, geometry] = await Promise.all([
     api(`/objects/${state.objectId}/blocks/${blockId}/boxes`),
     api(`/objects/${state.objectId}/blocks/geometry?level_id=${levelId}`),
@@ -29191,8 +29216,43 @@ async function openBlkGeoEditor(blockId, sectionCode, levelName, levelId) {
   renderBlkGeoEditor();
 }
 
+// Обзор ВСЕХ блоков этажа сразу, по всем секциям (2026-09-05, живой запрос
+// пользователя: клик по подписи этажа в матрице). Только показ — без ручек
+// перетаскивания и формы: у обзора нет ОДНОГО блока-владельца, чью
+// геометрию сохранять. Правка конкретного блока — по-прежнему через клик
+// по клетке/«✎» (openBlkGeoEditor).
+async function openBlkFloorView(levelId, levelName) {
+  blkGeoBlockId = null; blkGeoLevelId = levelId; blkGeoFloorMode = true;
+  document.getElementById("blk-geo-body").classList.add("blk-geo-floor-mode");
+  document.getElementById("blk-geo-title").textContent = `Блоки этажа: ${levelName}`;
+  document.getElementById("blk-geo-placeholder").style.display = "none";
+  document.getElementById("blk-geo-body").style.display = "";
+  document.getElementById("blk-geo-canvas-box").innerHTML = '<div class="hint-text" style="padding:8px">Загрузка…</div>';
+  blkGeoPlanImage = blkPlanImages.find(p => String(p.level_id) === String(levelId)) || null;
+  const geometry = await api(`/objects/${state.objectId}/blocks/geometry?level_id=${levelId}`);
+  blkGeoBoxes = [];
+  blkGeoOthers = geometry.filter(g => g.ok).map(g => ({ секция: g["секция"], boxes: g.boxes }));
+  document.getElementById("blk-geo-warnings").textContent = "";
+  renderBlkGeoEditor();
+}
+
+function closeBlkGeoEditor() {
+  document.getElementById("blk-geo-placeholder").style.display = "";
+  document.getElementById("blk-geo-body").style.display = "none";
+  document.getElementById("blk-geo-body").classList.remove("blk-geo-floor-mode");
+  document.querySelectorAll("#blk-matrix-box td.blk-cell-active")
+    .forEach(x => x.classList.remove("blk-cell-active"));
+  blkGeoBlockId = null; blkGeoLevelId = null; blkGeoPlanImage = null; blkGeoFloorMode = false;
+}
+
 function blkGeoBounds() {
   const all = [...blkGeoBoxes, ...blkGeoOthers.flatMap(o => o.boxes)];
+  // Подложка входит в охват наравне с прямоугольниками (2026-09-05, живой
+  // запрос пользователя «подложка должна быть синхронизирована со схемой
+  // по координатам и масштабу») — один viewBox на всё, никакого отдельного
+  // пересчёта масштаба под картинку.
+  if (blkGeoPlanImage) all.push({ x0: blkGeoPlanImage.x0, x1: blkGeoPlanImage.x1,
+                                  y0: blkGeoPlanImage.y0, y1: blkGeoPlanImage.y1 });
   const finish = (minX, minY, w, h) => {
     // viewBox — в мм площадки (десятки тысяч), а не экранных пикселях:
     // фиксированные r="7"/stroke-width="2" были бы долями пикселя и
@@ -29213,6 +29273,15 @@ function renderBlkGeoEditor() {
   const { minX, minY, w, h, strokeW, handleR } = blkGeoBounds();
   const toSvgY = (worldY) => h - (worldY - minY);   // мир Y вверх, SVG Y вниз — как основной план
   const fontSize = Math.max(w, h) / 60;
+  // Та же формула x/y/width/height, что у слоя «Планы» в `drawRevitPlan`
+  // (см. `planUnderlay`) — координаты картинки и прямоугольников блока
+  // берутся из ОДНОЙ общей сетки осей объекта (мм), поэтому синхронизация
+  // не требует отдельной подгонки, только общий viewBox/toSvgY.
+  const planUnderlay = blkGeoPlanImage
+    ? `<image href="${escapeHtml(blkGeoPlanImage.url)}" x="${blkGeoPlanImage.x0 - minX}"
+        y="${toSvgY(blkGeoPlanImage.y1)}" width="${blkGeoPlanImage.x1 - blkGeoPlanImage.x0}"
+        height="${blkGeoPlanImage.y1 - blkGeoPlanImage.y0}" preserveAspectRatio="none" opacity="0.9"/>`
+    : "";
   const otherRects = blkGeoOthers.flatMap((o) => o.boxes.map((b) => `
     <rect x="${b.x0 - minX}" y="${toSvgY(b.y1)}" width="${b.x1 - b.x0}" height="${b.y1 - b.y0}"
       fill="var(--color-text-muted)" fill-opacity="0.18" stroke="var(--color-text-muted)" stroke-opacity="0.6"
@@ -29229,7 +29298,7 @@ function renderBlkGeoEditor() {
   }).join("");
   const canvasBox = document.getElementById("blk-geo-canvas-box");
   canvasBox.innerHTML = `<svg id="blk-geo-svg" viewBox="0 0 ${w} ${h}" style="width:100%;height:100%"
-      preserveAspectRatio="xMidYMid meet">${otherRects}${myRects}</svg>`;
+      preserveAspectRatio="xMidYMid meet">${planUnderlay}${otherRects}${myRects}</svg>`;
 
   const rows = blkGeoBoxes.map((b, i) => `<div class="blk-geo-row" data-box-i="${i}">
     ${["x0", "x1", "y0", "y1"].map(k => `<input class="blk-inline num" type="number" step="1"
@@ -29329,10 +29398,7 @@ document.getElementById("blk-geo-reset").addEventListener("click", () => {
   blkGeoBoxes = [];
   renderBlkGeoEditor();
 });
-document.getElementById("blk-geo-close").addEventListener("click", () => {
-  document.getElementById("blk-geo-editor").style.display = "none";
-  blkGeoBlockId = null;
-});
+document.getElementById("blk-geo-close").addEventListener("click", closeBlkGeoEditor);
 document.getElementById("blk-geo-save").addEventListener("click", async () => {
   for (const b of blkGeoBoxes) {
     if (!(b.x1 > b.x0) || !(b.y1 > b.y0)) { showToast("x1 должен быть больше x0, y1 — больше y0", "error"); return; }

@@ -102,6 +102,7 @@ from app import contract_guard, contracting_bulk_edit, db_transfer, status_bulk_
 from app.access import (
     accessible_object_ids,
     assert_object_access,
+    assert_object_any_feature,
     assert_object_feature,
     has_feature,
     is_system_admin,
@@ -5895,10 +5896,14 @@ def plan_images_list_endpoint(object_id: int, user: sqlite3.Row = Depends(get_cu
     у каких этажей есть картинка плана и куда её класть — охват в мм общей
     сетки, отметка этажа; сам PNG — отдельным запросом по `url` (в нём
     `v=id`, чтобы после повторной загрузки браузер не показал старую из
-    кэша)."""
+    кэша).
+
+    Доступ — «Модель Revit» ИЛИ «Учёт по блокам» (2026-09-05): редактор
+    геометрии блока подкладывает ту же картинку подложкой, а его пользователь
+    может не иметь права на сам показ модели."""
     conn = get_connection()
     try:
-        assert_object_feature(conn, user, object_id, "revit_model", "read")
+        assert_object_any_feature(conn, user, object_id, ["revit_model", "blocks"], "read")
         rows = conn.execute(
             "SELECT i.id, i.level_id, i.page, i.x0, i.x1, i.y0, i.y1, i.width_px, i.height_px, "
             "       l.elevation_mm, l.name AS level_name "
@@ -5916,9 +5921,10 @@ def plan_images_list_endpoint(object_id: int, user: sqlite3.Row = Depends(get_cu
 @app.get("/objects/{object_id}/plan-images/{level_id}.png")
 def plan_image_endpoint(object_id: int, level_id: int,
                         user: sqlite3.Row = Depends(get_current_user)):
+    """Доступ — «Модель Revit» ИЛИ «Учёт по блокам», см. plan_images_list_endpoint."""
     conn = get_connection()
     try:
-        assert_object_feature(conn, user, object_id, "revit_model", "read")
+        assert_object_any_feature(conn, user, object_id, ["revit_model", "blocks"], "read")
         row = conn.execute(
             "SELECT png FROM level_plan_images WHERE object_id = ? AND level_id = ?",
             (object_id, level_id)).fetchone()

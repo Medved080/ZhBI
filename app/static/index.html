@@ -1074,8 +1074,11 @@
      Второй контур учёта: вид работ × блок (этаж+секция) -> статус. Форма и
      матрица статусов — по образцу «Графика СМР» и «Настройки ролей»
      (#roles-table): та же сцепка «шапка и первая колонка прилипают,
-     скроллится содержимое». */
-  #blocks-backdrop .modal { width: 1100px; max-width: 96vw;
+     скроллится содержимое».
+     Окно растянуто почти на весь экран (2026-09-05, живой запрос
+     пользователя): вкладка «Блоки» держит рядом матрицу и редактор
+     геометрии с подложкой из PDF, обеим нужно место. */
+  #blocks-backdrop .modal { width: 96vw; max-width: 96vw; height: 92vh; max-height: 92vh;
     display: flex; flex-direction: column; overflow: hidden; }
   #blocks-backdrop .blk-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   #blocks-backdrop .modal > h2, #blocks-backdrop .modal > .tabs,
@@ -1087,8 +1090,18 @@
   .blk-add-row input[type=text] { width: 90px; }
   .blk-add-row input[type=number] { width: 70px; }
   #blk-sections-list, #blk-levels-list { max-height: 320px; overflow-y: auto; }
-  /* Матрица «блоки»: секция × этаж, клик по клетке отмечает/снимает блок. */
-  #blk-matrix-box { overflow: auto; max-height: 60vh;
+  /* Вкладка «Блоки»: матрица слева, редактор геометрии — СПРАВА (2026-09-05,
+     живой запрос пользователя: раньше редактор раскрывался ПОД матрицей и
+     требовал прокрутки, чтобы его увидеть). Колонка редактора шире матрицы —
+     в ней подложка из PDF и числовые поля прямоугольников. */
+  .blk-blocks-layout { display: flex; gap: 16px; height: 100%; min-height: 0; }
+  .blk-matrix-col { flex: 0 0 auto; max-width: 40%; min-width: 0;
+    display: flex; flex-direction: column; }
+  .blk-geo-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+    border-left: 1px solid var(--color-border); padding-left: 16px; }
+  /* Матрица «блоки»: секция × этаж, клик по клетке отмечает/снимает блок,
+     клик по ЗАНЯТОЙ клетке (мимо «✓») открывает её геометрию справа. */
+  #blk-matrix-box { overflow: auto; flex: 1 1 auto; min-height: 0;
     border: 1px solid var(--color-border); border-radius: var(--radius); }
   #blk-matrix-table { border-collapse: separate; border-spacing: 0; font-size: 12px; }
   #blk-matrix-table th, #blk-matrix-table td { padding: 4px 8px; text-align: center;
@@ -1100,23 +1113,45 @@
     text-align: left; white-space: nowrap;
     box-shadow: inset -1px 0 0 var(--color-border); }
   #blk-matrix-table thead th.blk-row-name { z-index: 4; background: var(--color-surface-2); }
+  /* Подпись этажа тоже кликабельна (2026-09-05, живой запрос пользователя:
+     «этаж некликабельный, просто текст») — открывает справа ОБЗОР всех
+     блоков этажа сразу (все секции), в отличие от клетки/«✎», которые
+     открывают ОДИН блок на правку. Только у СТРОК (tbody), не у шапки. */
+  #blk-matrix-table tbody th.blk-row-name { cursor: pointer; }
+  #blk-matrix-table tbody th.blk-row-name:hover { background: var(--color-surface-2); }
   #blk-matrix-table td.blk-cell { color: var(--color-text-muted); position: relative; }
-  #blk-matrix-table td.blk-cell.on { color: var(--color-primary); font-weight: 700; }
+  #blk-matrix-table td.blk-cell.on { color: var(--color-primary); font-weight: 700; cursor: pointer; }
+  #blk-matrix-table td.blk-cell.on:hover { background: var(--color-surface-2); }
+  #blk-matrix-table td.blk-cell.on.blk-cell-active { background: color-mix(in srgb, var(--color-primary) 16%, var(--color-surface)); }
   #blk-matrix-table .blk-cell-toggle { cursor: pointer; padding: 4px 6px; display: inline-block; }
-  /* «✎» — геометрия блока (2026-09-05): своя кнопка, не тот же клик, что
-     ставит/снимает блок целиком, иначе один жест значил бы два разных дела. */
+  /* «✎» — явная кнопка правки ОДНОГО блока (вернулась 2026-09-05, живой
+     запрос пользователя: у клетки нужен видимый признак кликабельности,
+     а не только курсор при наведении на весь фон). Делает то же самое,
+     что клик по клетке — просто заметнее. */
   #blk-matrix-table .blk-cell-edit { cursor: pointer; border: none; background: none;
     color: var(--color-text-muted); font-size: 11px; padding: 0 0 0 4px; vertical-align: middle; }
   #blk-matrix-table .blk-cell-edit:hover { color: var(--color-primary); }
 
   /* Редактор геометрии блока: перетаскивание прямоугольника целиком и по
      углам (2026-09-05, живой запрос пользователя). */
+  #blk-geo-placeholder { padding: 16px 0; }
+  #blk-geo-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+  #blk-geo-canvas-box { flex: 1 1 auto; min-height: 260px; }
+  /* Обзор этажа (клик по подписи этажа) — только показ, без ручек
+     перетаскивания и формы: числовые поля, кнопки добавления/сброса и
+     сохранение относятся к ОДНОМУ блоку, тут блока-владельца нет. */
+  #blk-geo-body:not(.blk-geo-floor-mode) .blk-geo-hint-floor,
+  #blk-geo-body.blk-geo-floor-mode .blk-geo-hint-block,
+  #blk-geo-body.blk-geo-floor-mode #blk-geo-boxes,
+  #blk-geo-body.blk-geo-floor-mode .actions,
+  #blk-geo-body.blk-geo-floor-mode #blk-geo-warnings { display: none; }
   #blk-geo-svg .geo-box { cursor: move; touch-action: none; }
   #blk-geo-svg .geo-handle { fill: var(--color-primary); stroke: var(--color-surface);
     stroke-width: 1.5; cursor: nwse-resize; touch-action: none; }
   .blk-geo-row { display: flex; gap: 6px; align-items: center; padding: 3px 0;
     border-bottom: 1px solid var(--color-border-soft); }
   .blk-geo-row input { width: 90px; }
+  #blk-geo-boxes { flex: 0 0 auto; max-height: 22vh; overflow-y: auto; }
   /* Дерево видов работ и матрица статусов — тот же приём: узел раскрывается
      отступом, лист несёт ячейки по колонкам блоков/секций. */
   #wp-matrix-box { overflow: auto; max-height: 58vh;
@@ -4081,10 +4116,6 @@
                  файла — лишь один из способов, каким график появляется, а
                  сущность здесь — сам график объекта. -->
             <button id="menu-schedule" data-feature="schedule" data-feature-kind="write">График СМР</button>
-            <!-- Учёт по блокам (2026-08-25, Docs/block-accounting.md) —
-                 второй контур учёта, объекты МФР без модели Revit; сервер
-                 сам скроет пункт на объектах ЖБИ (раздел там не применим). -->
-            <button id="menu-blocks" data-feature="blocks,work_progress" data-feature-kind="read">Учёт по блокам</button>
           </div>
         </div>
         <!-- Класс гашения — на КАЖДОМ пункте, а не на группе: часть
@@ -4106,6 +4137,13 @@
           <button type="button" class="submenu-trigger">Справочники</button>
           <div class="dropdown-menu submenu-panel">
             <button id="menu-element-catalog" class="menu-item-strong" data-feature="element_fields" data-feature-kind="write">Элементы</button>
+            <!-- Учёт по блокам (2026-08-25, Docs/block-accounting.md;
+                 перенесён из «Документов» сюда 2026-09-05, живой запрос
+                 пользователя: это не документ о событии, а раздел настройки
+                 объекта — секции, этажи, блоки и виды работ, второй контур
+                 учёта для объектов МФР без модели Revit; сервер сам скроет
+                 пункт на объектах ЖБИ (раздел там не применим). -->
+            <button id="menu-blocks" data-feature="blocks,work_progress" data-feature-kind="read">Учёт по блокам</button>
             <div class="submenu">
               <button type="button" class="submenu-trigger">Проект и объект</button>
               <div class="dropdown-menu submenu-panel">
@@ -7001,26 +7039,39 @@
 
     <div id="blk-tab-blocks" class="blk-panel" style="display:none">
       <p class="hint-text">Блоки — НЕ декартово произведение секций и этажей: у секции может
-        не быть верхних этажей. Отметьте клеткой те пары, что реально есть. Значок «✎» у
-        занятой клетки открывает геометрию блока — по умолчанию считается по осям секции,
-        руками задаётся набором прямоугольников (для Г-образных/ступенчатых этажей — не один).</p>
-      <div id="blk-matrix-box"></div>
-      <div id="blk-geo-editor" style="display:none; margin-top:16px; border-top:1px solid var(--color-border); padding-top:12px">
-        <div class="blk-add-row" style="justify-content:space-between">
-          <h4 id="blk-geo-title" style="margin:0">Геометрия блока</h4>
-          <button class="btn btn-sm btn-secondary" id="blk-geo-close">Закрыть</button>
+        не быть верхних этажей. Отметьте клеткой те пары, что реально есть; клик по подписи
+        этажа слева показывает справа все блоки этажа сразу (по всем секциям), клик по занятой
+        клетке или «✎» в ней — геометрию ОДНОГО блока для правки: по умолчанию считается по
+        осям секции, руками задаётся набором прямоугольников (для Г-образных/ступенчатых
+        этажей — не один), подложкой в обоих случаях — картинка плана этажа из PDF, если
+        она есть.</p>
+      <div class="blk-blocks-layout">
+        <div class="blk-matrix-col"><div id="blk-matrix-box"></div></div>
+        <div class="blk-geo-col">
+          <div id="blk-geo-placeholder" class="hint-text">Выберите занятую клетку слева, чтобы
+            посмотреть и поправить геометрию блока.</div>
+          <div id="blk-geo-body" style="display:none">
+            <div class="blk-add-row" style="justify-content:space-between">
+              <h4 id="blk-geo-title" style="margin:0">Геометрия блока</h4>
+              <button class="btn btn-sm btn-secondary" id="blk-geo-close">Закрыть</button>
+            </div>
+            <div id="blk-geo-canvas-box" style="border:1px solid var(--color-border); border-radius:var(--radius);
+                 background:var(--color-surface); overflow:hidden; position:relative"></div>
+            <p class="hint-text blk-geo-hint-block" style="margin:6px 0">Перетаскивайте прямоугольник целиком или его угол; серым — блоки
+              других секций на этом же этаже, для сверки на пересечение; подложкой — план этажа из PDF (если
+              загружался), в тех же координатах и масштабе, что и сама схема.</p>
+            <p class="hint-text blk-geo-hint-floor" style="margin:6px 0">Показаны все занятые блоки этого этажа сразу
+              по всем секциям, подложкой — план этажа из PDF (если загружался). Для правки геометрии ОДНОГО блока
+              закройте окно и нажмите «✎» у нужной клетки в матрице.</p>
+            <div id="blk-geo-boxes"></div>
+            <div class="actions" style="margin-top:8px">
+              <button class="btn btn-sm btn-secondary" id="blk-geo-add">Добавить прямоугольник</button>
+              <button class="btn btn-sm btn-secondary" id="blk-geo-reset">По осям (сбросить)</button>
+              <button class="btn btn-primary" id="blk-geo-save">Сохранить</button>
+            </div>
+            <div id="blk-geo-warnings" class="warning-text" style="margin-top:8px"></div>
+          </div>
         </div>
-        <div id="blk-geo-canvas-box" style="border:1px solid var(--color-border); border-radius:var(--radius);
-             background:var(--color-surface); overflow:hidden; height:40vh; position:relative"></div>
-        <p class="hint-text" style="margin:6px 0">Перетаскивайте прямоугольник целиком или его угол; серым — блоки
-          других секций на этом же этаже, для сверки на пересечение.</p>
-        <div id="blk-geo-boxes"></div>
-        <div class="actions" style="margin-top:8px">
-          <button class="btn btn-sm btn-secondary" id="blk-geo-add">Добавить прямоугольник</button>
-          <button class="btn btn-sm btn-secondary" id="blk-geo-reset">По осям (сбросить)</button>
-          <button class="btn btn-primary" id="blk-geo-save">Сохранить</button>
-        </div>
-        <div id="blk-geo-warnings" class="warning-text" style="margin-top:8px"></div>
       </div>
     </div>
 
