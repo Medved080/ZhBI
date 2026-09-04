@@ -1083,6 +1083,15 @@
   #blocks-backdrop .blk-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   #blocks-backdrop .modal > h2, #blocks-backdrop .modal > .tabs,
   #blocks-backdrop .modal > .actions { flex: 0 0 auto; }
+  /* Вкладка «Блоки» — САМА flex-колонка (2026-09-06, живой запрос
+     пользователя: кнопки под схемой не влезали без скролла). Без этого
+     `.blk-blocks-layout` со своим `height:100%` считал проценты от ВСЕЙ
+     высоты вкладки, не вычитая место вводного абзаца НАД собой (обычный
+     блочный поток складывает их высоты, а не делит), и уезжал вниз ровно
+     на высоту абзаца — кнопки «Сохранить»/«Закрыть» падали за пределы
+     видимой области. Теперь абзац и `.blk-blocks-layout` — flex-элементы
+     одной колонки, второй флекс-растягивается РОВНО в остаток. */
+  #blk-tab-blocks.blk-panel { display: flex; flex-direction: column; }
   .blk-cols { display: flex; gap: 24px; }
   .blk-cols > div { flex: 1 1 0; min-width: 0; }
   .blk-add-row { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; align-items: center; }
@@ -1094,10 +1103,10 @@
      живой запрос пользователя: раньше редактор раскрывался ПОД матрицей и
      требовал прокрутки, чтобы его увидеть). Колонка редактора шире матрицы —
      в ней подложка из PDF и числовые поля прямоугольников. */
-  .blk-blocks-layout { display: flex; gap: 16px; height: 100%; min-height: 0; }
-  .blk-matrix-col { flex: 0 0 auto; max-width: 40%; min-width: 0;
+  .blk-blocks-layout { display: flex; gap: 16px; flex: 1 1 auto; min-height: 0; }
+  .blk-matrix-col { flex: 0 0 auto; max-width: 40%; min-width: 0; min-height: 0;
     display: flex; flex-direction: column; }
-  .blk-geo-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+  .blk-geo-col { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column;
     border-left: 1px solid var(--color-border); padding-left: 16px; }
   /* Матрица «блоки»: секция × этаж, клик по клетке отмечает/снимает блок,
      клик по ЗАНЯТОЙ клетке (мимо «✓») открывает её геометрию справа. */
