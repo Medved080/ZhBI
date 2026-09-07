@@ -29,6 +29,7 @@ from app.attachments import delete_for_entity as delete_attachments_for
 from app.attachments import router as attachments_router
 from app.changelog import CHANGELOG
 from app.kladr import router as kladr_router
+from app.project_map import router as project_map_router
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
 from urllib.parse import quote
 
@@ -239,13 +240,25 @@ app = FastAPI(
 # хэш ниже нужно пересчитать — иначе 3D-режим молча перестанет
 # резолвить "three" (ровно так это один раз и сломалось при выносе
 # инлайнового JS в /static/app.js, см. Docs/backlog.md).
+#
+# Карта проектов (2026-09-07) добавила к политике три послабления, и все три
+# — про blob:, а НЕ про внешние адреса. MapLibre GL заводит рабочие потоки
+# из blob-URL и рисует тайлы в них, поэтому нужны `worker-src blob:` и
+# `child-src blob:` (второй — запасной путь для браузеров постарше), а
+# готовые изображения отдаёт как blob, отсюда blob: в `img-src`.
+#
+# `connect-src` остаётся 'self': и подложка, и шрифты карты лежат на нашем
+# же сервере (data/map, app/static/vendor). Наружу карта не ходит — в этом
+# и был смысл офлайн-подложки.
 _CSP = (
     "default-src 'self'; "
     "script-src 'self' 'sha256-GGgqHO/YpgtINWBQBdyPoj2n6zSoZ9PEznPWfb/aFu4='; "
     "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; "
+    "img-src 'self' data: blob:; "
     "font-src 'self'; "
     "connect-src 'self'; "
+    "worker-src 'self' blob:; "
+    "child-src 'self' blob:; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "
@@ -367,6 +380,7 @@ app.include_router(admin_guide_router)
 app.include_router(training_router)
 app.include_router(db_status_router)
 app.include_router(kladr_router)
+app.include_router(project_map_router)
 app.include_router(fill_scope_router)
 app.include_router(contracts_router)
 app.include_router(supplier_change_router)

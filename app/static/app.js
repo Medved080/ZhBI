@@ -11195,6 +11195,9 @@ const catalog = {
 // формы — тем же приёмом, что сцена Three.js. На верхнем уровне его трогать
 // нельзя: модуль ещё не загружен.
 let addressModule = null;
+// Живая мини-карта формы: держим ссылку, чтобы уничтожить её перед
+// следующей отрисовкой (см. renderCatalogForm).
+let catalogPinMap = null;
 async function ensureAddressWidget() {
   if (!addressModule) {
     addressModule = await import("/static/address.js");
@@ -11411,6 +11414,9 @@ function catalogFieldsHtml(запись, тип, редактируем) {
           <input type="number" step="0.000001" data-field="lon" value="${з(запись && запись.lon)}" ${выкл}/></label>
         <span class="hint-text">Без координат запись не попадёт на карту проектов.</span>
       </div>
+      <!-- Пин на мини-карте вместо ввода шести знаков после запятой руками:
+           координат нет ни в КЛАДР, ни в ГАР, ставит их человек. -->
+      <div class="catalog-pin-map" id="catalog-pin-map"></div>
     </div>`;
 
   return реквизиты + адрес;
@@ -11500,6 +11506,46 @@ function renderCatalogForm() {
     postal_code: (запись && запись.postal_code) || null,
     address_note: (запись && запись.address_note) || null,
   };
+  // Мини-карта: перетаскивание пина пишет координаты в поля формы, а ввод в
+  // поля двигает пин — иначе два способа задать одно и то же расходятся.
+  const местоКарты = document.getElementById("catalog-pin-map");
+  if (местоКарты) {
+    // Прежняя мини-карта уничтожается явно. Форма перерисовывается на каждый
+    // щелчок по дереву, а каждая карта держит свой графический контекст;
+    // браузер выдаёт их считанные десятки, после чего новые карты просто
+    // перестают строиться — молча, без ошибки.
+    if (catalogPinMap) {
+      try { catalogPinMap.карта.remove(); } catch (e) {}
+      catalogPinMap = null;
+    }
+    const поляШД = () => ({
+      lat: место.querySelector('[data-field="lat"]'),
+      lon: место.querySelector('[data-field="lon"]'),
+    });
+    ensureMapModule().then((m) => m.createPinMap(местоКарты, {
+      lat: запись ? запись.lat : null,
+      lon: запись ? запись.lon : null,
+      canEdit: редактируем,
+      onMove: (широта, долгота) => {
+        const п = поляШД();
+        п.lat.value = String(широта);
+        п.lon.value = String(долгота);
+        markCatalogDirty();
+      },
+    })).then((пин) => {
+      catalogPinMap = пин;
+      const п = поляШД();
+      [п.lat, п.lon].forEach((поле) => поле && поле.addEventListener("change", () => {
+        const широта = parseFloat(п.lat.value), долгота = parseFloat(п.lon.value);
+        if (!isNaN(широта) && !isNaN(долгота)) пин.показать(широта, долгота);
+      }));
+    }).catch((e) => {
+      // Карта не построилась (нет WebGL, не загрузилась библиотека) — поля
+      // координат остаются, форма работает.
+      местоКарты.innerHTML = `<div class="map-empty">Карта недоступна: ${escapeHtml(e.message || "")}</div>`;
+    });
+  }
+
   const местоАдреса = document.getElementById("catalog-address");
   if (местоАдреса) {
     ensureAddressWidget().then((m) => m.mountAddressWidget(местоАдреса, {
@@ -11655,6 +11701,10 @@ document.getElementById("menu-catalog").addEventListener("click", openCatalog);
 document.getElementById("catalog-close").addEventListener("click", () => {
   if (!можноЗакрытьФорму(catalogBackdrop)) return;
   clearCatalogDirty();
+  if (catalogPinMap) {
+    try { catalogPinMap.карта.remove(); } catch (e) {}
+    catalogPinMap = null;
+  }
   catalogBackdrop.classList.remove("open");
 });
 document.getElementById("catalog-save").addEventListener("click", saveCatalog);
@@ -11697,6 +11747,128 @@ setupResizableModal({
   storageKey: "zhbi.catalogModalSize",
   toggleId: "catalog-size-toggle",
   maximizedClass: "catalog-maximized",
+});
+
+// ==================== КАРТА ПРОЕКТОВ (2026-09-07) ====================
+//
+// Отчёт, а не рабочее место: рабочее место — это раскладка вокруг ТЕКУЩЕГО
+// объекта, а карта показывает все доступные сразу и по клику переключает
+// текущий, оставляя человека в его рабочем месте.
+//
+// Модуль карты грузится по первому открытию: MapLibre весит под мегабайт, и
+// тянуть его на каждое открытие страницы ради экрана, куда заходят раз в
+// день, незачем.
+const mapBackdrop = document.getElementById("map-backdrop");
+let mapModule = null;
+let projectMap = null;      // результат renderProjectMap
+
+async function ensureMapModule() {
+  if (!mapModule) {
+    mapModule = await import("/static/map.js");
+    mapModule.init({ api, escapeHtml, showToast, switchObject });
+  }
+  return mapModule;
+}
+
+function renderMapSide(объекты, фильтр) {
+  const место = document.getElementById("map-side");
+  const строка = (фильтр || "").trim().toLowerCase();
+  const видимые = строка
+    ? объекты.filter((o) => [o.name, o.project_name, o.address]
+        .filter(Boolean).join(" ").toLowerCase().includes(строка))
+    : объекты;
+  место.innerHTML = "";
+  if (!видимые.length) {
+    место.innerHTML = `<div class="map-empty">Ничего не найдено.</div>`;
+    return;
+  }
+  let текущийПроект = null;
+  const фрагмент = document.createDocumentFragment();
+  видимые.forEach((o) => {
+    if (o.project_name !== текущийПроект) {
+      текущийПроект = o.project_name;
+      const заголовок = document.createElement("div");
+      заголовок.className = "map-side-project";
+      заголовок.textContent = текущийПроект || "Без проекта";
+      фрагмент.appendChild(заголовок);
+    }
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "map-side-item";
+    const точка = document.createElement("span");
+    точка.className = "map-side-dot";
+    точка.style.background = o.percent === null ? "#9e9e9e"
+      : o.percent >= 100 ? "#2e7d32" : o.percent >= 60 ? "#7cb342"
+      : o.percent >= 30 ? "#f9a825" : o.percent > 0 ? "#ef6c00" : "#9e9e9e";
+    const имя = document.createElement("span");
+    имя.className = "map-side-name";
+    имя.textContent = o.name;
+    const доля = document.createElement("span");
+    доля.className = "map-side-percent";
+    доля.textContent = o.percent === null ? "—" : o.percent + "%";
+    b.append(точка, имя, доля);
+    b.addEventListener("click", () => projectMap && projectMap.навести(o.id));
+    фрагмент.appendChild(b);
+  });
+  место.appendChild(фрагмент);
+}
+
+async function openProjectMap() {
+  mapBackdrop.classList.add("open");
+  const холст = document.getElementById("map-canvas");
+  const заметка = document.getElementById("map-note");
+  // Прежняя карта уничтожается по той же причине, что и мини-карта в форме:
+  // графических контекстов у браузера считанные десятки.
+  if (projectMap) {
+    try { projectMap.карта.remove(); } catch (e) {}
+    projectMap = null;
+  }
+  холст.innerHTML = "";
+  заметка.textContent = "Загрузка карты…";
+  try {
+    const m = await ensureMapModule();
+    projectMap = await m.renderProjectMap(холст, {
+      onOpenObject: async (id) => {
+        mapBackdrop.classList.remove("open");
+        await switchObject(id);
+      },
+      onEmptyCoords: (без, всего, естьПодложка) => {
+        const части = [`Объектов на карте: ${всего}.`];
+        if (без) части.push(`Без координат: ${без} — их не видно на карте.`);
+        if (!естьПодложка) {
+          части.push("Подложка не загружена: объекты показаны на пустом фоне.");
+        }
+        заметка.textContent = части.join(" ");
+      },
+    });
+    renderMapSide(projectMap.объекты, "");
+  } catch (e) {
+    // WebGL может не работать на тонком клиенте или в удалённой сессии —
+    // это не повод показывать пустой прямоугольник без объяснения.
+    холст.innerHTML = `<div class="map-empty">Не удалось построить карту: ${escapeHtml(e.message || "")}.
+      Возможно, в этом браузере или на этом рабочем месте недоступен WebGL.</div>`;
+    заметка.textContent = "";
+  }
+}
+
+document.getElementById("menu-report-map").addEventListener("click", openProjectMap);
+document.getElementById("map-close").addEventListener("click", () => {
+  mapBackdrop.classList.remove("open");
+});
+document.getElementById("map-search").addEventListener("input", (e) => {
+  if (projectMap) renderMapSide(projectMap.объекты, e.target.value);
+});
+document.getElementById("map-fit").addEventListener("click", () => {
+  if (projectMap) projectMap.показатьВсе();
+});
+document.getElementById("map-current").addEventListener("click", () => {
+  if (projectMap && state.objectId) projectMap.навести(state.objectId);
+});
+setupResizableModal({
+  backdrop: mapBackdrop,
+  storageKey: "zhbi.mapModalSize",
+  toggleId: "map-size-toggle",
+  maximizedClass: "map-maximized",
 });
 
 // ============ НАСТРОЙКА: АДРЕСНЫЙ КЛАССИФИКАТОР КЛАДР (2026-09-07) ============
