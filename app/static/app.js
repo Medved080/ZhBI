@@ -10111,7 +10111,7 @@ function кнопкаПанели(оригинал) {
     // Снимаем признак с самой кнопки: он переехал на обёртку, а два узла с
     // одним и тем же data-menu-id дали бы в собранном порядке дубли
     // (поймано живой проверкой: ["menu-element-catalog",
-    // "menu-element-catalog", "menu-objects"]).
+    // "menu-element-catalog", "menu-catalog"]).
     delete b.dataset.menuId;
   }
   const ручка = document.createElement("span");
@@ -11164,348 +11164,502 @@ document.getElementById("subtypes-object").addEventListener("change", async (e) 
   await renderSubtypesModal();
 });
 
-// ==================== СПРАВОЧНИК ОБЪЕКТОВ ====================
-// Объект — то, к чему привязана идентичность элементов (см. Docs/TZ.md).
-// Форма минимальная: показать, чем объект сейчас описан (актуальный чертёж,
-// сколько элементов актуальны и сколько исчезли из чертежа), и дать
-// переименовать — автоматически заведённый объект называется "Объект 1".
-// Форма добавления раскрывается по кнопке и прячется обратно после
-// успеха или отмены (живой запрос 2026-08-01): в справочнике пустые поля
-// ввода внизу — постоянный шум, а добавляют редко.
-function toggleAddForm(formId, show) {
-  const form = document.getElementById(formId);
-  form.hidden = !show;
-  // Кнопка раскрытия прячется вместе с раскрытой формой: две кнопки
-  // «Добавить» рядом читались бы как выбор между ними.
-  const btn = document.getElementById(formId.replace("-form", "-show"));
-  if (btn) btn.hidden = show;
-  if (show) form.querySelector("input")?.focus();
-  else form.querySelectorAll("input").forEach((i) => { i.value = ""; });
-}
+// ============ СПРАВОЧНИК «ПРОЕКТЫ И ОБЪЕКТЫ» (2026-09-07) ============
+//
+// Раскладка «дерево слева, форма справа» вместо прежних двух модалок со
+// списком раскрытых карточек. Причина — рост справочника до двух сотен
+// позиций: двести карточек по четыре поля не охватить глазом, а нужную
+// можно найти только прокруткой. Здесь список остаётся списком (строка на
+// запись), а поля показываются у одной записи — той, которую правят.
+//
+// Проекты и объекты в ОДНОЙ форме, а не в двух: это две половины одной
+// иерархии, и правят их вперемежку — завёл проект, тут же завёл в нём
+// объект.
+const catalogBackdrop = document.getElementById("catalog-backdrop");
 
-let objectsFilterProjectId = null;
+const catalog = {
+  projects: [],
+  objects: [],
+  // Что открыто в правой колонке: {type: "project"|"object", id} либо
+  // {type, id: null} для новой, ещё не сохранённой записи.
+  selected: null,
+  // Раскрытые проекты. По умолчанию раскрыт проект текущего объекта — тот
+  // же приём, что в переключателе тулбара.
+  expanded: new Set(),
+  query: "",
+  status: "active",
+  dirty: false,
+};
 
-function renderObjectsFilterChip(всеОбъекты) {
-  const box = document.getElementById("objects-filter");
-  if (!objectsFilterProjectId) { box.innerHTML = ""; return; }
-  const обр = всеОбъекты.find((o) => o.project_id === objectsFilterProjectId);
-  const имя = обр ? обр.project_name : "проект";
-  box.innerHTML = "";
-  const chip = document.createElement("div");
-  chip.className = "objects-filter-chip";
-  chip.append(`Показаны объекты проекта «${имя}»`);
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "link-like";
-  btn.textContent = "показать все";
-  btn.addEventListener("click", () => renderObjectsModal(null));
-  chip.appendChild(btn);
-  box.appendChild(chip);
-}
+const CATALOG_STATUS_LABELS = {
+  active: "В работе",
+  completed: "Завершён",
+  archived: "Архивный",
+};
 
-// ==================== СПРАВОЧНИК ПРОЕКТОВ (этап B) ====================
-const projectsBackdrop = document.getElementById("projects-backdrop");
-
-function setProjectsStatus(text, isError) {
-  const el = document.getElementById("projects-status");
-  el.textContent = text;
+function setCatalogStatus(text, isError) {
+  const el = document.getElementById("catalog-status");
+  el.textContent = text || "";
   el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
-async function renderProjectsModal() {
-  const box = document.getElementById("projects-rows");
-  setProjectsStatus("", false);
-  const projects = await api("/projects");
-  const админ = state.currentUser && state.currentUser.role === "admin";
-  if (!projects.length) {
-    box.innerHTML = `<p class="hint-text">Проектов пока нет.</p>`;
-    return;
-  }
-  box.innerHTML = projects.map((p) => `
-    <div class="object-card">
-      <div class="object-fields">
-        <label class="object-field">
-          <span>Наименование проекта</span>
-          <input type="text" data-pid="${p.id}" class="project-name" value="${escapeHtml(p.name)}"/>
-        </label>
-        <label class="object-field">
-          <span>Адрес</span>
-          <input type="text" data-pid="${p.id}" class="project-address" value="${escapeHtml(p.address || "")}"/>
-        </label>
-      </div>
-      <div class="object-card-foot">
-        <div class="hint-text">
-        <button type="button" class="link-like" data-open-objects="${p.id}"
-                title="Открыть объекты этого проекта">Объектов: ${p.objects_count}</button>.
-        Элементов: ${p.elements_count}.
-        Сроки СМР (сводно): ${p.smr_start ? formatDateRu(p.smr_start) : "—"} — ${p.smr_end ? formatDateRu(p.smr_end) : "—"}.
-        </div>
-        <div style="display:flex; gap:6px;">
-          ${админ ? `<button class="btn btn-sm btn-secondary" data-save-project="${p.id}">Сохранить</button>` : ""}
-          ${админ ? trashButtonHtml(`data-del-project="${p.id}"`, "Удалить проект") : ""}
-        </div>
-      </div>
-      <details class="card-technical"><summary>Вложения</summary>
-        <div data-attach-project="${p.id}"></div>
-      </details>
-    </div>`).join("");
-
-  // Вложения — под свёрткой и своим запросом на карточку: проектов в списке
-  // может быть много, и грузить файлы всех сразу ради одного, который
-  // откроют, незачем. Список запрашивается при первом раскрытии.
-  box.querySelectorAll("details").forEach(d => d.addEventListener("toggle", () => {
-    const место = d.querySelector("[data-attach-project]");
-    if (!d.open || !место || место.dataset.loaded) return;
-    место.dataset.loaded = "1";
-    renderAttachments(место, "project", Number(место.dataset.attachProject),
-                      { canUpload: админ, canDelete: админ });
-  }));
-
-  // Переход из проекта к его объектам (живой запрос 2026-08-01): справочники
-  // связаны, и искать нужный объект в общем списке руками — лишняя работа.
-  box.querySelectorAll("[data-open-objects]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const pid = Number(btn.getAttribute("data-open-objects"));
-      projectsBackdrop.classList.remove("open");
-      objectsBackdrop.classList.add("open");
-      toggleAddForm("object-add-form", false);
-      await renderObjectsModal(pid);
-    });
-  });
-
-  box.querySelectorAll("[data-save-project]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.getAttribute("data-save-project");
-      try {
-        await api(`/projects/${id}`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: box.querySelector(`input.project-name[data-pid="${id}"]`).value,
-            address: box.querySelector(`input.project-address[data-pid="${id}"]`).value || null,
-          }),
-        });
-        await renderProjectsModal();
-        // Дерево в тулбаре построено на этих же именах — иначе крошка
-        // показывала бы старое название до перезагрузки страницы.
-        await loadProjectsTree();
-        setProjectsStatus("Сохранено.", false);
-      } catch (e) { setProjectsStatus(e.message || "Не удалось сохранить", true); }
-    });
-  });
-  // Кнопка стоит у ЛЮБОГО проекта, а не только у пустого, как было раньше:
-  // спрятанная кнопка не объясняет, почему проект не удаляется, а диалог
-  // показывает — «в проекте столько-то объектов». Отказ остаётся тем же,
-  // но становится понятным (2026-08-05).
-  box.querySelectorAll("[data-del-project]").forEach((btn) => {
-    btn.addEventListener("click", () => openDictDelete(
-      "project", btn.getAttribute("data-del-project"), { onDone: async () => {
-        await renderProjectsModal();
-        await loadProjectsTree();
-        setProjectsStatus("Проект удалён.", false);
-      } }));
-  });
+// Правку показываем по РАЗДЕЛУ, а не по системной роли: раздел «Проекты и
+// объекты» с 2026-08-14 выдаётся любой роли, и прежняя проверка
+// `role === "admin"` оставляла такому человеку форму только для чтения —
+// сервер правку принимал, а интерфейс её не предлагал.
+function catalogCanEdit() {
+  return can("projects", "write");
 }
 
-document.getElementById("menu-projects").addEventListener("click", async () => {
-  projectsBackdrop.classList.add("open");
-  toggleAddForm("project-add-form", false);
-  await renderProjectsModal();
-});
-document.getElementById("projects-close").addEventListener("click", () => projectsBackdrop.classList.remove("open"));
-document.getElementById("project-add-show").addEventListener("click", () => toggleAddForm("project-add-form", true));
-document.getElementById("project-add-cancel").addEventListener("click", () => {
-  toggleAddForm("project-add-form", false);
-  setProjectsStatus("", false);
-});
-document.getElementById("project-add").addEventListener("click", async () => {
-  const name = document.getElementById("project-new-name").value.trim();
-  if (!name) { setProjectsStatus("Укажите наименование проекта", true); return; }
-  try {
-    await api("/projects", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, address: document.getElementById("project-new-address").value || null }),
-    });
-    toggleAddForm("project-add-form", false);
-    await renderProjectsModal();
-    await loadProjectsTree();
-    setProjectsStatus("Проект добавлен.", false);
-  } catch (e) { setProjectsStatus(e.message || "Не удалось добавить", true); }
-});
+// ---------------------------------------------------------------- данные
+async function loadCatalogData() {
+  const [projects, objects] = await Promise.all([api("/projects"), api("/objects")]);
+  catalog.projects = projects;
+  catalog.objects = objects;
+}
 
-const objectsBackdrop = document.getElementById("objects-backdrop");
+function catalogObjectsOf(projectId) {
+  return catalog.objects.filter((o) => o.project_id === projectId);
+}
 
-// projectId — необязательный отбор: справочник открыт «из проекта».
-// Отбор сеансовый и виден плашкой сверху, чтобы человек не решил, что
-// половина объектов пропала.
-async function renderObjectsModal(projectId = null) {
-  const box = document.getElementById("objects-rows");
-  const statusBox = document.getElementById("objects-status");
-  statusBox.textContent = "";
-  objectsFilterProjectId = projectId;
-  const все = await api("/objects");
-  const objects = projectId ? все.filter((o) => o.project_id === projectId) : все;
-  renderObjectsFilterChip(все);
-  if (!objects.length) {
-    box.innerHTML = projectId
-      ? `<p class="hint-text">В этом проекте пока нет объектов.</p>`
-      : `<p class="hint-text">Объектов пока нет — добавьте объект кнопкой ниже.</p>`;
+function catalogMatches(запись, имяПроекта) {
+  if (catalog.status && (запись.status || "active") !== catalog.status) return false;
+  if (!catalog.query) return true;
+  return [запись.name, запись.address, имяПроекта]
+    .filter(Boolean).join(" ").toLowerCase().includes(catalog.query);
+}
+
+// ---------------------------------------------------------------- дерево
+function catalogNodeButton({ тип, запись, проект }) {
+  const b = document.createElement("button");
+  b.type = "button";
+  const выбран = catalog.selected && catalog.selected.type === тип
+    && catalog.selected.id === запись.id;
+  b.className = `catalog-node catalog-node-${тип === "project" ? "project" : "object"}`
+    + (выбран ? " selected" : "");
+
+  if (тип === "project") {
+    const шеврон = document.createElement("span");
+    шеврон.className = "catalog-node-chevron";
+    шеврон.textContent = catalog.expanded.has(запись.id) ? "▼" : "▶";
+    b.appendChild(шеврон);
+  }
+
+  const имя = document.createElement("span");
+  имя.className = "catalog-node-name";
+  имя.textContent = запись.name;
+  b.appendChild(имя);
+
+  const статус = запись.status || "active";
+  if (статус !== "active") {
+    const метка = document.createElement("span");
+    метка.className = "catalog-node-badge";
+    метка.textContent = статус === "archived" ? "архив" : "завершён";
+    b.appendChild(метка);
+  }
+
+  // Чего не хватает для карты. Два значка вместо слов: колонка узкая, а
+  // смысл считывается по наведению.
+  const нет = [];
+  if (!запись.address) нет.push("адреса");
+  if (запись.lat === null || запись.lat === undefined) нет.push("координат");
+  if (нет.length) {
+    const флаги = document.createElement("span");
+    флаги.className = "catalog-node-flags";
+    флаги.textContent = нет.includes("адреса") ? "⌂" : "◎";
+    флаги.title = "Не заполнено: " + нет.join(", ") + " — на карту не попадёт";
+    b.appendChild(флаги);
+  }
+
+  const счёт = document.createElement("span");
+  счёт.className = "catalog-node-count";
+  счёт.textContent = тип === "project"
+    ? `${запись.objects_count} · ${запись.elements_count}`
+    : (запись.elements_current ? String(запись.elements_current) : "пусто");
+  b.appendChild(счёт);
+
+  b.addEventListener("click", () => {
+    if (тип === "project") {
+      // Клик по проекту делает ДВА дела сразу: раскрывает группу и
+      // открывает его реквизиты. Разделять их на «стрелку» и «строку» —
+      // прицеливание в четыре пикселя ради экономии одного клика.
+      if (catalog.expanded.has(запись.id)) catalog.expanded.delete(запись.id);
+      else catalog.expanded.add(запись.id);
+    }
+    selectCatalogNode(тип, запись.id);
+  });
+  return b;
+}
+
+function renderCatalogTree() {
+  const дерево = document.getElementById("catalog-tree");
+  const фрагмент = document.createDocumentFragment();
+  let показано = 0;
+
+  for (const проект of catalog.projects) {
+    const свои = catalogObjectsOf(проект.id).filter((o) => catalogMatches(o, проект.name));
+    const проектПодходит = catalogMatches(проект, null);
+    // Проект показывается, если подходит сам ИЛИ подходит хоть один его
+    // объект: иначе поиск по адресу объекта прятал бы найденное вместе с
+    // родителем.
+    if (!проектПодходит && !свои.length) continue;
+
+    фрагмент.appendChild(catalogNodeButton({ тип: "project", запись: проект }));
+    показано += 1;
+    // При поиске группы раскрыты всегда — искали объект, а не проект.
+    const раскрыт = !!catalog.query || catalog.expanded.has(проект.id);
+    if (раскрыт) {
+      свои.forEach((o) => {
+        фрагмент.appendChild(catalogNodeButton({ тип: "object", запись: o, проект }));
+        показано += 1;
+      });
+    }
+  }
+
+  // Объекты без проекта не должны существовать, но если появятся — обязаны
+  // быть видны, иначе исчезнут вместе со своими элементами.
+  const сироты = catalog.objects.filter((o) => !o.project_id && catalogMatches(o, null));
+  if (сироты.length) {
+    const шапка = document.createElement("div");
+    шапка.className = "catalog-node catalog-node-project";
+    шапка.textContent = "Без проекта";
+    фрагмент.appendChild(шапка);
+    сироты.forEach((o) => фрагмент.appendChild(catalogNodeButton({ тип: "object", запись: o })));
+  }
+
+  дерево.innerHTML = "";
+  if (!показано && !сироты.length) {
+    const пусто = document.createElement("div");
+    пусто.className = "catalog-empty";
+    пусто.textContent = catalog.query
+      ? "Ничего не найдено."
+      : "Здесь пока пусто — заведите проект кнопкой ниже.";
+    дерево.appendChild(пусто);
+  } else {
+    дерево.appendChild(фрагмент);
+  }
+}
+
+// ----------------------------------------------------------------- форма
+function catalogSelectedRecord() {
+  if (!catalog.selected) return null;
+  const { type, id } = catalog.selected;
+  if (id === null) return null;   // новая запись
+  const список = type === "project" ? catalog.projects : catalog.objects;
+  return список.find((x) => x.id === id) || null;
+}
+
+function catalogFieldsHtml(запись, тип, редактируем) {
+  const выкл = редактируем ? "" : "disabled";
+  const з = (v) => escapeHtml(v == null ? "" : String(v));
+  const статус = (запись && запись.status) || "active";
+  const проекты = catalog.projects.map((p) =>
+    `<option value="${p.id}" ${запись && p.id === запись.project_id ? "selected" : ""}>${escapeHtml(p.name)}</option>`
+  ).join("");
+
+  const реквизиты = `
+    <div class="form-card">
+      <h4>Реквизиты</h4>
+      <div class="object-fields">
+        <label class="object-field"><span>Наименование</span>
+          <input type="text" data-field="name" value="${з(запись && запись.name)}" ${выкл}/></label>
+        <label class="object-field"><span>Статус</span>
+          <select data-field="status" ${выкл}>
+            ${Object.entries(CATALOG_STATUS_LABELS).map(([k, v]) =>
+              `<option value="${k}" ${статус === k ? "selected" : ""}>${v}</option>`).join("")}
+          </select></label>
+        ${тип === "object" ? `
+        <label class="object-field"><span>Проект</span>
+          <select data-field="project_id" ${выкл}>${проекты}</select></label>
+        <!-- Тип учёта задаёт СОСТАВ разделов объекта: на ЖБИ нет модели
+             Revit, на МФР нет контрактации изделий. Смена типа у объекта с
+             данными ничего не удаляет — разделы просто перестают
+             показываться. -->
+        <label class="object-field"><span>Тип учёта</span>
+          <select data-field="kind" ${выкл}>
+            <option value="zhbi" ${(!запись || (запись.kind || "zhbi") === "zhbi") ? "selected" : ""}>ЖБИ — изделия по чертежу</option>
+            <option value="mfr" ${запись && запись.kind === "mfr" ? "selected" : ""}>МФР — блоки из модели</option>
+          </select></label>` : ""}
+        <label class="object-field object-field-wide"><span>Описание</span>
+          <input type="text" data-field="description" value="${з(запись && запись.description)}" ${выкл}/></label>
+      </div>
+    </div>`;
+
+  // Адрес пока строкой: подсказки по классификатору появятся вместе с самим
+  // классификатором. Координаты уже здесь — без них запись не попадёт на
+  // карту, а заполнять их можно и до классификатора.
+  const адрес = `
+    <div class="form-card">
+      <h4>Адрес и координаты</h4>
+      <div class="object-fields">
+        <label class="object-field object-field-wide"><span>Адрес</span>
+          <input type="text" data-field="address" value="${з(запись && запись.address)}" ${выкл}
+                 placeholder="Населённый пункт, улица, дом"/></label>
+        <label class="object-field object-field-wide"><span>Уточнение</span>
+          <input type="text" data-field="address_note" value="${з(запись && запись.address_note)}" ${выкл}
+                 placeholder="Корпус, участок, ориентир"/></label>
+      </div>
+      <div class="catalog-coords">
+        <label class="object-field"><span>Широта</span>
+          <input type="number" step="0.000001" data-field="lat" value="${з(запись && запись.lat)}" ${выкл}/></label>
+        <label class="object-field"><span>Долгота</span>
+          <input type="number" step="0.000001" data-field="lon" value="${з(запись && запись.lon)}" ${выкл}/></label>
+        <span class="hint-text">Без координат запись не попадёт на карту проектов.</span>
+      </div>
+    </div>`;
+
+  return реквизиты + адрес;
+}
+
+function catalogSummaryHtml(запись, тип) {
+  if (!запись) return "";
+  if (тип === "project") {
+    return `<div class="form-card"><h4>Сводка</h4><div class="hint-text">
+      Объектов: ${запись.objects_count}. Элементов: ${запись.elements_count}.<br/>
+      Сроки СМР сводно: ${запись.smr_start ? formatDateRu(запись.smr_start) : "—"} —
+      ${запись.smr_end ? formatDateRu(запись.smr_end) : "—"}.
+    </div></div>`;
+  }
+  return `<div class="form-card"><h4>Сводка</h4><div class="hint-text">
+    Актуальный чертёж: ${escapeHtml(запись.current_source_file || "—")}.<br/>
+    Элементов: ${запись.elements_current}${запись.elements_retired
+      ? `, исчезли из чертежа: ${запись.elements_retired}` : ""}.
+    ${запись.drawings.length > 1 ? `Загружалось версий: ${запись.drawings.length}.` : ""}
+  </div></div>`;
+}
+
+function renderCatalogForm() {
+  const место = document.getElementById("catalog-form");
+  const кнопкаСохранить = document.getElementById("catalog-save");
+  const кнопкаОтмена = document.getElementById("catalog-cancel");
+
+  if (!catalog.selected) {
+    место.innerHTML = `<div class="catalog-empty">Выберите проект или объект слева, чтобы посмотреть и поправить реквизиты.</div>`;
+    кнопкаСохранить.hidden = true;
+    кнопкаОтмена.hidden = true;
     return;
   }
-  // Список проектов нужен для выпадашки «Проект» у каждого объекта:
-  // перенос объекта в другой проект — обычная правка реквизита.
-  const projects = await api("/projects");
-  const админ = state.currentUser && state.currentUser.role === "admin";
-  // Каждое поле с ПОДПИСЬЮ и в своей ячейке сетки, а не в общей flex-строке
-  // (живой репорт со скриншотом 2026-08-01: «где тут указать проект и где
-  // наименование объекта?»). У .modal select ширина 100%, во flex-строке
-  // она становится flex-basis и вытесняет соседний input с flex:1 почти в
-  // ноль — тот же класс бага, что уже был с полем даты в форме договора.
-  box.innerHTML = objects.map(o => `
-    <div class="object-card">
-      <div class="object-fields">
-        <label class="object-field">
-          <span>Наименование объекта</span>
-          <input type="text" data-object-id="${o.id}" class="object-name" value="${escapeHtml(o.name)}"/>
-        </label>
-        <label class="object-field">
-          <span>Проект</span>
-          <select data-object-id="${o.id}" class="object-project" ${админ ? "" : "disabled"}>
-            ${projects.map(p => `<option value="${p.id}" ${p.id === o.project_id ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}
-          </select>
-        </label>
-        <!-- Тип учёта меняется здесь же, но это не косметика: от него
-             зависит СОСТАВ разделов объекта. Смена типа у объекта с уже
-             загруженными данными ничего не удаляет — разделы просто
-             перестают показываться. -->
-        <label class="object-field">
-          <span>Тип учёта</span>
-          <select data-object-id="${o.id}" class="object-kind" ${админ ? "" : "disabled"}>
-            <option value="zhbi" ${(o.kind || "zhbi") === "zhbi" ? "selected" : ""}>ЖБИ — изделия по чертежу</option>
-            <option value="mfr" ${o.kind === "mfr" ? "selected" : ""}>МФР — блоки из модели Revit</option>
-          </select>
-        </label>
-        <label class="object-field object-field-wide">
-          <span>Адрес объекта</span>
-          <input type="text" data-object-id="${o.id}" class="object-address" value="${escapeHtml(o.address || "")}"/>
-        </label>
-      </div>
-      <div class="object-card-foot">
-        <div class="hint-text">
-          Актуальный чертёж: ${escapeHtml(o.current_source_file || "—")}.
-          Элементов: ${o.elements_current}${o.elements_retired ? `, исчезли из чертежа: ${o.elements_retired}` : ""}.
-          ${o.drawings.length > 1 ? `Загружалось версий: ${o.drawings.length}.` : ""}
-        </div>
-        <div style="display:flex; gap:6px;">
-          ${админ ? `<button class="btn btn-sm btn-secondary" data-save-object="${o.id}">Сохранить</button>` : ""}
-          ${админ ? trashButtonHtml(`data-del-object="${o.id}"`, "Удалить объект") : ""}
-        </div>
-      </div>
-      <details class="card-technical"><summary>Вложения</summary>
-        <div data-attach-object="${o.id}"></div>
-      </details>
-    </div>`).join("");
 
-  // Права на вложения объекта — по роли НА НЁМ, а не по системной: у
-  // объекта они могут быть у прораба, которого системная роль ничем не
-  // наделяет. Прикладывать — роль не ниже user, удалять — admin; сервер
-  // проверяет так же, здесь только зеркало.
-  box.querySelectorAll("details").forEach(d => d.addEventListener("toggle", () => {
-    const место = d.querySelector("[data-attach-object]");
-    if (!d.open || !место || место.dataset.loaded) return;
-    место.dataset.loaded = "1";
-    const oid = Number(место.dataset.attachObject);
-    const роли = (state.projects.flatMap(p => p.objects).find(x => x.id === oid) || {}).roles || [];
-    renderAttachments(место, "object", oid, {
-      canUpload: canOn(роли, "attachments", "write"),
-      canDelete: canOn(роли, "attachments_delete", "write"),
-    });
-  }));
+  const { type } = catalog.selected;
+  const запись = catalogSelectedRecord();
+  const новая = catalog.selected.id === null;
+  const редактируем = catalogCanEdit();
+  const заголовок = новая
+    ? (type === "project" ? "Новый проект" : "Новый объект")
+    : (запись ? запись.name : "");
 
-  const newProject = document.getElementById("object-new-project");
-  newProject.innerHTML = projects.map(p =>
-    `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
-  // Проект по умолчанию — тот, в котором сейчас работает пользователь:
-  // новое здание почти всегда добавляют на текущую площадку.
-  const текущий = currentObject();
-  if (текущий && текущий.project.id) newProject.value = String(текущий.project.id);
+  место.innerHTML = `
+    <div class="catalog-form-title">
+      <span class="catalog-form-kind">${type === "project" ? "Проект" : "Объект"}</span>
+      <h3>${escapeHtml(заголовок)}</h3>
+      ${(!новая && редактируем) ? trashButtonHtml(`id="catalog-delete"`,
+          type === "project" ? "Удалить проект" : "Удалить объект") : ""}
+    </div>
+    ${catalogFieldsHtml(запись, type, редактируем)}
+    ${новая ? "" : catalogSummaryHtml(запись, type)}
+    ${новая ? "" : `<details class="card-technical"><summary>Вложения</summary>
+      <div id="catalog-attachments"></div></details>`}
+    ${(новая && type === "object")
+      ? `<p class="hint-text">Чертёж загружается отдельно — «Обмен данными → Загрузить чертёж».</p>` : ""}`;
 
-  // Объект удаляется только пустым — замена для него не предлагается (см.
-  // app/dict_delete.py: «замена объекта» была бы слиянием двух зданий с
-  // разными чертежами и координатами). Диалог показывает, что именно за
-  // объектом стоит, и этого хватает, чтобы убрать пустышку.
-  box.querySelectorAll("[data-del-object]").forEach(btn => {
-    btn.addEventListener("click", () => openDictDelete(
-      "object", btn.getAttribute("data-del-object"), { onDone: async () => {
-        await renderObjectsModal(objectsFilterProjectId);
-        await loadProjectsTree();
-      } }));
+  кнопкаСохранить.hidden = !редактируем;
+  кнопкаОтмена.hidden = !редактируем;
+  кнопкаСохранить.disabled = !новая && !catalog.dirty;
+  кнопкаОтмена.disabled = !новая && !catalog.dirty;
+
+  // У новой записи проект по умолчанию — тот, в котором человек сейчас
+  // работает: новое здание почти всегда добавляют на текущую площадку.
+  if (новая && type === "object") {
+    const селект = место.querySelector('[data-field="project_id"]');
+    const текущий = currentObject();
+    const подсказка = (catalog.selected.projectId
+      || (текущий && текущий.project.id)
+      || (catalog.projects[0] && catalog.projects[0].id));
+    if (селект && подсказка) селект.value = String(подсказка);
+  }
+
+  место.querySelectorAll("input, select").forEach((el) => {
+    el.addEventListener("input", markCatalogDirty);
+    el.addEventListener("change", markCatalogDirty);
   });
 
-  box.querySelectorAll("[data-save-object]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const id = btn.getAttribute("data-save-object");
-      const input = box.querySelector(`input.object-name[data-object-id="${id}"]`);
-      try {
-        await api(`/objects/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: input.value,
-            kind: box.querySelector(`select.object-kind[data-object-id="${id}"]`).value,
-            address: box.querySelector(`input.object-address[data-object-id="${id}"]`).value || null,
-            project_id: Number(box.querySelector(`select.object-project[data-object-id="${id}"]`).value) || null,
-          }),
+  const урна = document.getElementById("catalog-delete");
+  if (урна) {
+    урна.addEventListener("click", () => openDictDelete(type, String(catalog.selected.id), {
+      onDone: async () => {
+        catalog.selected = null;
+        catalog.dirty = false;
+        await refreshCatalog();
+        setCatalogStatus(type === "project" ? "Проект удалён." : "Объект удалён.", false);
+      },
+    }));
+  }
+
+  // Вложения — под свёрткой и своим запросом: список открывают у одной
+  // записи из сотни, грузить файлы заранее незачем.
+  const свёртка = место.querySelector("details");
+  if (свёртка) {
+    свёртка.addEventListener("toggle", () => {
+      const бокс = document.getElementById("catalog-attachments");
+      if (!свёртка.open || !бокс || бокс.dataset.loaded) return;
+      бокс.dataset.loaded = "1";
+      if (type === "project") {
+        renderAttachments(бокс, "project", catalog.selected.id,
+                          { canUpload: редактируем, canDelete: редактируем });
+      } else {
+        // Права на вложения объекта — по роли НА НЁМ, а не по системной: у
+        // объекта они могут быть у прораба, которого системная роль ничем
+        // не наделяет.
+        const роли = (state.projects.flatMap((p) => p.objects)
+          .find((x) => x.id === catalog.selected.id) || {}).roles || [];
+        renderAttachments(бокс, "object", catalog.selected.id, {
+          canUpload: canOn(роли, "attachments", "write"),
+          canDelete: canOn(роли, "attachments_delete", "write"),
         });
-        // Перерисовка ПЕРЕД сообщением, а не после: renderObjectsModal
-        // первым делом очищает эту же строку состояния, и в обратном порядке
-        // подтверждение гасло бы сразу после появления.
-        await renderObjectsModal();
-        // Крошка и поповер в тулбаре построены на этих же именах и связях
-        await loadProjectsTree();
-        statusBox.style.color = "var(--color-text-muted)";
-        statusBox.textContent = "Сохранено.";
-      } catch (e) {
-        statusBox.style.color = "var(--color-danger)";
-        statusBox.textContent = e.message || "Не удалось сохранить";
       }
     });
-  });
+  }
 }
 
-document.getElementById("object-add").addEventListener("click", async () => {
-  const statusBox = document.getElementById("objects-status");
-  const name = document.getElementById("object-new-name").value.trim();
-  const projectId = Number(document.getElementById("object-new-project").value);
-  if (!name) { statusBox.style.color = "var(--color-danger)"; statusBox.textContent = "Укажите наименование объекта"; return; }
-  if (!projectId) { statusBox.style.color = "var(--color-danger)"; statusBox.textContent = "Сначала заведите проект"; return; }
+function markCatalogDirty() {
+  catalog.dirty = true;
+  catalogBackdrop.dataset.dirty = "1";   // общий сторож несохранённого (Esc, закрытие)
+  document.getElementById("catalog-save").disabled = false;
+  document.getElementById("catalog-cancel").disabled = false;
+}
+
+function clearCatalogDirty() {
+  catalog.dirty = false;
+  delete catalogBackdrop.dataset.dirty;
+}
+
+function selectCatalogNode(тип, id, extra) {
+  // Уход с несохранённой записи спрашивает подтверждение: правки в форме
+  // справа не видны в дереве слева, и потерять их щелчком мимо — легко.
+  if (catalog.dirty && !confirm("В форме есть несохранённые изменения. Перейти к другой записи?")) return;
+  clearCatalogDirty();
+  catalog.selected = Object.assign({ type: тип, id }, extra || {});
+  setCatalogStatus("", false);
+  renderCatalogTree();
+  renderCatalogForm();
+}
+
+// ------------------------------------------------------------ сохранение
+function readCatalogForm() {
+  const тело = {};
+  document.querySelectorAll("#catalog-form [data-field]").forEach((el) => {
+    const поле = el.dataset.field;
+    let значение = el.value;
+    if (поле === "project_id") значение = Number(значение) || null;
+    else if (поле === "lat" || поле === "lon") значение = значение === "" ? null : Number(значение);
+    else if (значение === "") значение = null;
+    тело[поле] = значение;
+  });
+  return тело;
+}
+
+async function saveCatalog() {
+  const { type, id } = catalog.selected;
+  const тело = readCatalogForm();
+  if (!тело.name) { setCatalogStatus("Укажите наименование", true); return; }
   try {
-    await api("/objects", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, project_id: projectId,
-                             kind: document.getElementById("object-new-kind").value,
-                             address: document.getElementById("object-new-address").value || null }),
-    });
-    toggleAddForm("object-add-form", false);
-    await renderObjectsModal();
-    await loadProjectsTree();   // объект должен сразу появиться в переключателе
-    statusBox.style.color = "var(--color-text-muted)";
-    statusBox.textContent = "Объект добавлен. Чертёж загружается отдельно.";
+    let ответ;
+    if (id === null) {
+      ответ = await api(type === "project" ? "/projects" : "/objects", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(тело),
+      });
+    } else {
+      ответ = await api(`${type === "project" ? "/projects" : "/objects"}/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(тело),
+      });
+    }
+    clearCatalogDirty();
+    catalog.selected = { type, id: ответ.id };
+    await refreshCatalog();
+    setCatalogStatus(id === null ? "Добавлено." : "Сохранено.", false);
   } catch (e) {
-    statusBox.style.color = "var(--color-danger)";
-    statusBox.textContent = e.message || "Не удалось добавить объект";
+    setCatalogStatus(e.message || "Не удалось сохранить", true);
   }
+}
+
+async function refreshCatalog() {
+  await loadCatalogData();
+  // Крошка в тулбаре построена на тех же именах и связях — иначе она
+  // показывала бы старое название до перезагрузки страницы.
+  await loadProjectsTree();
+  renderCatalogTree();
+  renderCatalogForm();
+}
+
+async function openCatalog() {
+  catalogBackdrop.classList.add("open");
+  clearCatalogDirty();
+  setCatalogStatus("", false);
+  catalog.query = "";
+  document.getElementById("catalog-search").value = "";
+  await loadCatalogData();
+  // Раскрыт проект текущего объекта, и он же выбран: чаще всего правят
+  // именно ту площадку, на которой сейчас работают.
+  const текущий = currentObject();
+  if (текущий && текущий.project.id) {
+    catalog.expanded.add(текущий.project.id);
+    catalog.selected = { type: "object", id: текущий.object.id };
+  } else {
+    catalog.selected = null;
+  }
+  renderCatalogTree();
+  renderCatalogForm();
+}
+
+// ------------------------------------------------------------ обработчики
+document.getElementById("menu-catalog").addEventListener("click", openCatalog);
+document.getElementById("catalog-close").addEventListener("click", () => {
+  if (!можноЗакрытьФорму(catalogBackdrop)) return;
+  clearCatalogDirty();
+  catalogBackdrop.classList.remove("open");
+});
+document.getElementById("catalog-save").addEventListener("click", saveCatalog);
+document.getElementById("catalog-cancel").addEventListener("click", () => {
+  clearCatalogDirty();
+  // Новая запись при отмене исчезает совсем, у существующей — возвращаются
+  // сохранённые значения.
+  if (catalog.selected && catalog.selected.id === null) catalog.selected = null;
+  renderCatalogForm();
+  setCatalogStatus("", false);
 });
 
-document.getElementById("menu-objects").addEventListener("click", async () => {
-  objectsBackdrop.classList.add("open");
-  toggleAddForm("object-add-form", false);
-  await renderObjectsModal();
+let catalogSearchTimer = null;
+document.getElementById("catalog-search").addEventListener("input", (e) => {
+  clearTimeout(catalogSearchTimer);
+  catalogSearchTimer = setTimeout(() => {
+    catalog.query = e.target.value.trim().toLowerCase();
+    renderCatalogTree();
+  }, 150);
 });
-document.getElementById("objects-close").addEventListener("click", () => objectsBackdrop.classList.remove("open"));
-document.getElementById("object-add-show").addEventListener("click", () => toggleAddForm("object-add-form", true));
-document.getElementById("object-add-cancel").addEventListener("click", () => {
-  toggleAddForm("object-add-form", false);
-  document.getElementById("objects-status").textContent = "";
+document.getElementById("catalog-status-filter").addEventListener("change", (e) => {
+  catalog.status = e.target.value;
+  renderCatalogTree();
+});
+document.getElementById("catalog-add-project").addEventListener("click", () => {
+  selectCatalogNode("project", null);
+});
+document.getElementById("catalog-add-object").addEventListener("click", () => {
+  // Новый объект встаёт в тот проект, который сейчас открыт слева, — а не в
+  // первый попавшийся.
+  const выбран = catalog.selected;
+  const проект = выбран && (выбран.type === "project"
+    ? выбран.id
+    : (catalogSelectedRecord() || {}).project_id);
+  selectCatalogNode("object", null, { projectId: проект });
+});
+
+setupResizableModal({
+  backdrop: catalogBackdrop,
+  storageKey: "zhbi.catalogModalSize",
+  toggleId: "catalog-size-toggle",
+  maximizedClass: "catalog-maximized",
 });
 
 // ============ ВРЕМЕННАЯ ОБРАБОТКА: пустые «Объект» и «Проект» ============
