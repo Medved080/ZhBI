@@ -2476,6 +2476,39 @@
      при 80vh на форму оставалось меньше двух полей. */
   @media (max-height: 800px) { #catalog-modal { height: 92vh; } }
   #catalog-modal.catalog-maximized { width: 96vw; max-width: 96vw; height: 92vh; }
+  /* -------- виджет адреса по классификатору (2026-09-07) -------- */
+  /* Подсказки — свой список, а не <datalist>: тот не даёт показать вторую
+     строку с полным путём, а без неё одноимённые населённые пункты
+     («Александровка» в четырёх районах) неразличимы. */
+  .address-field { position: relative; }
+  .address-suggest {
+    position: absolute; z-index: 70; left: 0; right: 0; top: 100%;
+    max-height: 260px; overflow-y: auto; background: var(--color-surface);
+    border: 1px solid var(--color-border); border-radius: var(--radius);
+    box-shadow: var(--shadow-md); padding: 4px 0;
+  }
+  button.address-suggest-item {
+    display: block; width: 100%; text-align: left; border: 0; background: none;
+    padding: 6px 10px; cursor: pointer; font-size: 12px;
+  }
+  button.address-suggest-item:hover, button.address-suggest-item.kb-focus {
+    background: var(--color-surface-2);
+  }
+  .address-suggest-label { display: block; }
+  .address-suggest-path { display: block; font-size: 11px; color: var(--color-text-muted); }
+  .address-summary { margin-top: 6px; font-weight: 600; }
+  .address-mode-hint { margin-top: 4px; }
+  .address-house-check { margin-top: 4px; }
+  .address-house-check.address-warn { color: var(--color-danger); }
+  /* Список регионов в настройке — в несколько колонок: их под девяносто, и
+     одной колонкой это метровая простыня. */
+  .address-region-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 2px 12px; margin-top: 6px;
+  }
+  .address-region-list label { display: flex; align-items: baseline; gap: 6px; font-size: 12px; padding: 2px 0; }
+  .address-region-count { color: var(--color-text-muted); font-size: 11px; }
+  .address-houses-toggle { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 12px; }
   /* На узком экране (ноутбук 1366 и меньше в масштабе) дерево ужимается, но
      не исчезает: без него теряется навигация. */
   @media (max-width: 1100px) {
@@ -4494,6 +4527,7 @@
                  ЧЕМ пользователь входит, и ходят сюда из той же формы. -->
             <button id="menu-ldap" data-feature="ldap" data-feature-kind="read">Доменная авторизация</button>
             <button id="menu-backups" data-feature="backups" data-feature-kind="read">Резервные копии</button>
+            <button id="menu-address-classifier" data-feature="address_load" data-feature-kind="write">Адресный классификатор</button>
             <button id="menu-activity" data-feature="activity_log" data-feature-kind="read">Журнал действий</button>
             <!-- 2026-08-03: что реально лежит в базе — структура с назначением
                  каждого поля, объём по таблицам и просмотр содержимого.
@@ -6840,6 +6874,54 @@
       <button class="btn btn-secondary" id="rn-close">Закрыть</button>
       <button class="btn btn-primary" id="rn-save">Сохранить</button>
     </div></div>
+  </div>
+</div>
+
+<!-- Адресный классификатор КЛАДР (2026-09-07). Разовая операция
+     обслуживания: человек кладёт распакованные файлы классификатора в
+     data/kladr/ на томе сервера, отмечает нужные регионы и запускает
+     загрузку. Грузить всю страну незачем — предприятие строит в одном-трёх
+     регионах, а улиц в файле полтора миллиона. -->
+<div class="modal-backdrop" id="address-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Адресный классификатор</h2>
+      <p class="hint-text">
+        Даёт подсказки по адресу в справочнике «Проекты и объекты»: регион,
+        населённый пункт, улица, проверка номера дома и почтовый индекс.
+        Источник — КЛАДР Федеральной налоговой службы,
+        <code>nalog.gov.ru/files/kladr/BASE.7z</code>. Скачайте архив, распакуйте
+        у себя и положите файлы <code>KLADR.DBF</code>, <code>STREET.DBF</code>,
+        <code>DOMA.DBF</code> и <code>SOCRBASE.DBF</code> в папку
+        <code id="address-dir">data/kladr/</code> на диске сервера.
+        Классификатор хранится отдельным файлом и в резервные копии базы не входит.
+      </p>
+      <div id="address-loaded" class="disk-plate"></div>
+      <div class="hint-text" id="address-status"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <h4>Файлы в папке</h4>
+      <table id="address-files"><thead><tr>
+        <th>Файл</th><th>Размер</th><th>Изменён</th><th></th>
+      </tr></thead><tbody id="address-files-tbody"></tbody></table>
+
+      <h4 style="margin-top:16px">Регионы в файле</h4>
+      <p class="hint-text" id="address-regions-hint">
+        Отметьте регионы, где ведётся строительство. Повторная загрузка региона
+        заменяет его данные — задвоения не будет.
+      </p>
+      <div id="address-regions" class="address-region-list"></div>
+      <label class="address-houses-toggle" title="Дома нужны для проверки номера и уточнения индекса">
+        <input type="checkbox" id="address-load-houses" checked/> Загружать дома (файл крупный, но точнее индекс)
+      </label>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="address-progress" class="hint-text"></div>
+      <div class="actions">
+        <button class="btn btn-primary" id="address-load">Загрузить отмеченные</button>
+        <button class="btn btn-secondary" id="address-close">Закрыть</button>
+      </div>
+    </div>
   </div>
 </div>
 

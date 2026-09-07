@@ -1,0 +1,1023 @@
+# -*- coding: utf-8 -*-
+"""Адресный классификатор КЛАДР: загрузка, хранение, подсказки.
+
+Зачем он вообще. Адрес проекта и объекта до 2026-09-07 был свободной
+строкой, и на двух сотнях площадок это перестаёт работать: один и тот же
+город пишут «г. Тверь», «Тверь», «г.Тверь», отобрать записи по региону
+нельзя, а карту проектов по такому адресу не построить.
+
+Почему КЛАДР, а не ФИАС/ГАР. Источник выбран пользователем
+(`https://www.nalog.gov.ru/files/kladr/BASE.7z`). Он проще: иерархия
+закодирована в самом коде записи, отдельная таблица связей не нужна, а
+объём в разы меньше. Взамен он обновляется реже ГАР — для адресов
+стройплощадок это приемлемо, а поле `source` в таблицах оставляет
+возможность подключить ГАР, не переделывая схему.
+
+Что человек делает руками (и почему):
+
+1. Качает `BASE.7z` браузером и РАСПАКОВЫВАЕТ у себя.
+2. Кладёт полученные `.DBF` в каталог `data/kladr/` на томе сервера.
+3. Открывает «Действия → Администрирование → Адресный классификатор»,
+   отмечает нужные регионы и жмёт «Загрузить».
+
+Распаковка на стороне человека — не прихоть: Python не открывает 7z, а
+единственная годная библиотека тянет за собой восемь пакетов, часть с
+C-расширениями, в образ, который собирается без сборочных инструментов.
+Если в системе всё же найден бинарь `7z`, загрузчик распакует архив сам —
+но полагаться на это нельзя.
+
+Хранилище — ОТДЕЛЬНЫЙ файл `data/addr.db`, не основная база: это
+справочные данные объёмом в сотни мегабайт, которым нечего делать ни в
+резервных копиях, ни в обезличенной копии, ни в миграциях схемы.
+"""
+
+import os
+import re
+import shutil
+import sqlite3
+import struct
+import subprocess
+import threading
+import time
+import zipfile
+from typing import Dict, Iterator, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+
+from app import activity
+from app.access import require_service_feature
+from app.auth import get_current_user
+
+# Каталог, куда человек кладёт файлы классификатора, и файл базы.
+KLADR_DIR = os.environ.get("ZHBI_KLADR_DIR") or "data/kladr"
+ADDR_DB_PATH = os.environ.get("ZHBI_ADDR_DB_PATH") or "data/addr.db"
+
+# Имена файлов КЛАДР, которые нас интересуют. DOMA — по отдельной галочке
+# (см. load_regions): это самый крупный файл, а нужен он только ради
+# уточнения почтового индекса.
+FILE_OBJECTS = "KLADR.DBF"
+FILE_STREETS = "STREET.DBF"
+FILE_HOUSES = "DOMA.DBF"
+FILE_SOCR = "SOCRBASE.DBF"
+
+ALL_FILES = (FILE_OBJECTS, FILE_STREETS, FILE_HOUSES, FILE_SOCR)
+
+
+# ---------------------------------------------------------------- разбор DBF
+#
+# Свой разборщик вместо библиотеки: формат dBase III — это заголовок в 32
+# байта, дескрипторы полей по 32 байта и записи фиксированной длины. Сотня
+# строк против новой зависимости в образе. Прецедент в проекте есть: график
+# рисуется своим SVG, а не библиотекой графиков.
+
+class DbfError(Exception):
+    """Файл не похож на DBF или повреждён."""
+
+
+def _dbf_fields(header: bytes):
+    """Дескрипторы полей: [(имя, тип, длина), ...]."""
+    поля = []
+    смещение = 32
+    while смещение < len(header):
+        кусок = header[смещение:смещение + 32]
+        if not кусок or кусок[0] in (0x0D, 0x00):
+            break
+        имя = кусок[0:11].split(b"\x00")[0].decode("ascii", "replace").strip()
+        тип = chr(кусок[11])
+        длина = кусок[16]
+        поля.append((имя, тип, длина))
+        смещение += 32
+    if not поля:
+        raise DbfError("в файле нет описания полей")
+    return поля
+
+
+def read_dbf(path: str, encoding: str = "cp866") -> Iterator[Dict[str, str]]:
+    """Записи DBF по одной. Удалённые (помеченные «*») пропускаются.
+
+    Читается потоком, а не целиком: STREET.DBF — это полтора миллиона строк,
+    и держать их в памяти списком незачем.
+    """
+    with open(path, "rb") as f:
+        начало = f.read(32)
+        if len(начало) < 32:
+            raise DbfError("файл короче заголовка DBF")
+        записей, длина_заголовка, длина_записи = struct.unpack("<IHH", начало[4:12])
+        f.seek(0)
+        заголовок = f.read(длина_заголовка)
+        поля = _dbf_fields(заголовок)
+        # Смещения считаем сами: поле «смещение» в дескрипторе не заполняют.
+        границы, поз = [], 1          # 1 — байт признака удаления
+        for имя, тип, длина in поля:
+            границы.append((имя, поз, поз + длина))
+            поз += длина
+
+        f.seek(длина_заголовка)
+        for _ in range(записей):
+            строка = f.read(длина_записи)
+            if len(строка) < длина_записи:
+                break                  # обрезанный хвост файла — не ошибка
+            if строка[0:1] == b"*":
+                continue               # запись помечена удалённой
+            yield {
+                имя: строка[a:b].decode(encoding, "replace").strip()
+                for имя, a, b in границы
+            }
+
+
+# ------------------------------------------------------------- коды КЛАДР
+#
+# Код записи 13 знаков: SS RRR GGG PPP AA — регион, район, город,
+# населённый пункт и два знака актуальности («00» — действующая запись).
+# Улица дописывает к первым 11 ещё 4 знака, дом — ещё 4. Отсюда два
+# следствия, на которых держится весь поиск: родитель находится обнулением
+# младших разрядов, а потомки — сравнением префикса.
+
+_РЕГИОН = slice(0, 2)
+_РАЙОН = slice(2, 5)
+_ГОРОД = slice(5, 8)
+_ПУНКТ = slice(8, 11)
+
+LEVEL_REGION = 1
+LEVEL_AREA = 2
+LEVEL_CITY = 3
+LEVEL_SETTLEMENT = 4
+
+
+def code_is_actual(code: str) -> bool:
+    """Действующая запись. Последние два знака — признак актуальности:
+    «00» значит, что запись живая, иначе это след переименования."""
+    return len(code) >= 2 and code[-2:] == "00"
+
+
+def object_level(code: str) -> int:
+    """Уровень записи КЛАДР по её собственному коду.
+
+    По коду, а не по полю LEVEL из SOCRBASE: сокращение («г», «д», «тер»)
+    описывает ТИП объекта, а не место в иерархии, и посёлок городского типа
+    внутри района по нему неотличим от посёлка внутри города.
+    """
+    if code[_ПУНКТ] != "000":
+        return LEVEL_SETTLEMENT
+    if code[_ГОРОД] != "000":
+        return LEVEL_CITY
+    if code[_РАЙОН] != "000":
+        return LEVEL_AREA
+    return LEVEL_REGION
+
+
+def parent_code(code: str) -> Optional[str]:
+    """Код родителя: обнуляем младший непустой разряд."""
+    уровень = object_level(code)
+    if уровень == LEVEL_REGION:
+        return None
+    if уровень == LEVEL_SETTLEMENT:
+        return code[:8] + "000" + "00"
+    if уровень == LEVEL_CITY:
+        return code[:5] + "000000" + "00"
+    return code[:2] + "000000000" + "00"
+
+
+def format_name(name: str, socr: str, level: Optional[int] = None) -> str:
+    """«Тверь» + «г» → «г Тверь», «Тверская» + «обл» → «Тверская обл».
+
+    Порядок слов зависит от уровня, и это не косметика: по-русски пишут
+    «Тверская обл, Калининский р-н, д Аввакумово» — у региона и района тип
+    идёт ПОСЛЕ названия, у города и посёлка ПЕРЕД ним. Обратный порядок
+    («обл Тверская») сразу читается как машинный вывод.
+    """
+    name, socr = (name or "").strip(), (socr or "").strip()
+    if not socr:
+        return name
+    if level is None:
+        level = LEVEL_SETTLEMENT
+    if level in (LEVEL_REGION, LEVEL_AREA):
+        return "%s %s" % (name, socr)
+    return "%s %s" % (socr, name)
+
+
+def format_street(name: str, socr: str) -> str:
+    """У улиц тип всегда впереди: «ул Советская», «пр-кт Ленинский»."""
+    name, socr = (name or "").strip(), (socr or "").strip()
+    if not socr:
+        return name
+    return "%s %s" % (socr, name)
+
+
+# ------------------------------------------------------------- база адресов
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS addr_objects (
+    code        TEXT PRIMARY KEY,   -- 13 знаков КЛАДР
+    name        TEXT NOT NULL,
+    -- Имя в нижнем регистре для поиска. Отдельной колонкой, а не через
+    -- lower() в запросе: LIKE и lower() в SQLite приводят регистр только у
+    -- латиницы, поэтому «совет» не находил «Советскую» — человек набирает
+    -- строчными почти всегда, и поиск молча возвращал пустоту.
+    name_lower  TEXT NOT NULL DEFAULT '',
+    socr        TEXT,               -- сокращение типа: обл, г, д, п
+    level       INTEGER NOT NULL,   -- 1 регион, 2 район, 3 город, 4 нас. пункт
+    region      TEXT NOT NULL,      -- два знака кода региона
+    parent      TEXT,               -- код родителя
+    postal_code TEXT,
+    okato       TEXT,
+    full_path   TEXT NOT NULL       -- «Тверская обл, Калининский р-н, д Аввакумово»
+);
+CREATE INDEX IF NOT EXISTS idx_addr_objects_region ON addr_objects(region);
+CREATE INDEX IF NOT EXISTS idx_addr_objects_parent ON addr_objects(parent);
+CREATE INDEX IF NOT EXISTS idx_addr_objects_lower ON addr_objects(name_lower);
+
+CREATE TABLE IF NOT EXISTS addr_streets (
+    code        TEXT PRIMARY KEY,   -- 17 знаков
+    name        TEXT NOT NULL,
+    name_lower  TEXT NOT NULL DEFAULT '',   -- см. addr_objects.name_lower
+    socr        TEXT,
+    region      TEXT NOT NULL,
+    parent      TEXT NOT NULL,      -- код населённого пункта (13 знаков)
+    postal_code TEXT,
+    full_path   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_addr_streets_parent ON addr_streets(parent);
+CREATE INDEX IF NOT EXISTS idx_addr_streets_region ON addr_streets(region);
+CREATE INDEX IF NOT EXISTS idx_addr_streets_lower ON addr_streets(name_lower);
+
+-- Дома нужны ровно для одного: подтвердить введённый номер и уточнить
+-- почтовый индекс. Выбирать дом из списка КЛАДР нельзя — он хранит их
+-- диапазонами («1,3,5-9») в одной строке.
+CREATE TABLE IF NOT EXISTS addr_houses (
+    code        TEXT PRIMARY KEY,   -- 19 знаков
+    parent      TEXT NOT NULL,      -- код улицы (17) или населённого пункта (13)
+    region      TEXT NOT NULL,
+    nums        TEXT NOT NULL,      -- «1,3,5-9» как в КЛАДР
+    korp        TEXT,
+    postal_code TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_addr_houses_parent ON addr_houses(parent);
+
+CREATE TABLE IF NOT EXISTS addr_regions (
+    code        TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    objects     INTEGER NOT NULL DEFAULT 0,
+    streets     INTEGER NOT NULL DEFAULT 0,
+    houses      INTEGER NOT NULL DEFAULT 0,
+    loaded_at   TEXT,
+    source_file TEXT
+);
+
+CREATE TABLE IF NOT EXISTS addr_meta (key TEXT PRIMARY KEY, value TEXT);
+"""
+
+# Полнотекстовый поиск. Не во всякой сборке SQLite есть FTS5, поэтому его
+# отсутствие не должно ломать загрузку: без него поиск идёт по префиксу
+# имени через обычный индекс — медленнее, но работает.
+_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS addr_objects_fts
+USING fts5(name, full_path, code UNINDEXED, tokenize='unicode61', prefix='2 3 4');
+CREATE VIRTUAL TABLE IF NOT EXISTS addr_streets_fts
+USING fts5(name, code UNINDEXED, parent UNINDEXED, tokenize='unicode61', prefix='2 3 4');
+"""
+
+_fts_available = None
+
+
+def has_fts(conn: sqlite3.Connection) -> bool:
+    """Есть ли полнотекстовый поиск — и заодно создать его таблицы.
+
+    Создание выполняется на КАЖДОМ соединении, а не один раз на процесс:
+    таблицы живут в файле, а флаг в памяти, и стоит файлу смениться (базу
+    удалили и грузят заново), как флаг начинает врать. Ровно так загрузка и
+    падала с «no such table: addr_objects_fts». Запросы идемпотентные
+    (IF NOT EXISTS), поэтому повторный вызов ничего не стоит; кэшируется
+    только приговор «движок FTS5 не умеет вовсе».
+    """
+    global _fts_available
+    if _fts_available is False:
+        return False
+    try:
+        conn.executescript(_FTS_SCHEMA)
+        _fts_available = True
+    except sqlite3.OperationalError:
+        _fts_available = False
+    return _fts_available
+
+
+def get_addr_connection() -> sqlite3.Connection:
+    """Соединение с базой классификатора. Своё, не из app/db.py: это другой
+    файл и другая жизнь — его можно удалить и загрузить заново, не трогая
+    рабочие данные."""
+    каталог = os.path.dirname(os.path.abspath(ADDR_DB_PATH))
+    if каталог:
+        os.makedirs(каталог, exist_ok=True)
+    conn = sqlite3.connect(ADDR_DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(_SCHEMA)
+    # База классификатора могла быть собрана прошлой версией: дописываем
+    # недостающие колонки на месте, чтобы не заставлять грузить регионы
+    # заново.
+    for таблица in ("addr_objects", "addr_streets"):
+        колонки = {r["name"] for r in conn.execute("PRAGMA table_info(%s)" % таблица)}
+        if "name_lower" not in колонки:
+            conn.execute("ALTER TABLE %s ADD COLUMN name_lower TEXT NOT NULL DEFAULT ''" % таблица)
+            conn.execute("UPDATE %s SET name_lower = lower(name)" % таблица)
+            conn.commit()
+    has_fts(conn)
+    return conn
+
+
+def addr_db_size() -> int:
+    try:
+        return os.path.getsize(ADDR_DB_PATH)
+    except OSError:
+        return 0
+
+
+# ---------------------------------------------------------------- загрузка
+
+# Один активный разбор на процесс: две одновременные загрузки писали бы в
+# одни и те же таблицы, а пользы от параллельности здесь нет.
+_job_lock = threading.Lock()
+_job: Dict[str, object] = {}
+
+
+def job_status() -> Optional[dict]:
+    return dict(_job) if _job else None
+
+
+def _set_job(**поля):
+    _job.update(поля)
+
+
+def list_source_files() -> List[dict]:
+    """Что человек положил в data/kladr/ — с размером и датой.
+
+    Имя файла берётся ТОЛЬКО базовое: путь из запроса сюда не попадает
+    никогда, иначе это чтение произвольного файла на сервере.
+    """
+    out = []
+    try:
+        имена = sorted(os.listdir(KLADR_DIR))
+    except OSError:
+        return out
+    for имя in имена:
+        путь = os.path.join(KLADR_DIR, имя)
+        if not os.path.isfile(путь):
+            continue
+        верх = имя.upper()
+        if верх not in ALL_FILES and not верх.endswith(".7Z") and not верх.endswith(".ZIP"):
+            continue
+        try:
+            ст = os.stat(путь)
+        except OSError:
+            continue
+        out.append({
+            "name": имя,
+            "size": ст.st_size,
+            "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(ст.st_mtime)),
+            "kind": "archive" if верх.endswith((".7Z", ".ZIP")) else "dbf",
+        })
+    return out
+
+
+def _find_7z() -> Optional[str]:
+    for имя in ("7z", "7za", "7zz"):
+        путь = shutil.which(имя)
+        if путь:
+            return путь
+    return None
+
+
+def unpack_archive(имя_файла: str) -> List[str]:
+    """Распаковать архив из data/kladr/ рядом с ним.
+
+    Работает только если в системе есть бинарь 7z (для .zip — своими
+    силами). Основной путь другой: человек распаковывает у себя и кладёт
+    сюда уже .DBF.
+    """
+    имя = os.path.basename(имя_файла)
+    путь = os.path.join(KLADR_DIR, имя)
+    if not os.path.isfile(путь):
+        raise FileNotFoundError("Файл не найден: %s" % имя)
+    if имя.upper().endswith(".ZIP"):
+        with zipfile.ZipFile(путь) as z:
+            имена = [n for n in z.namelist() if n.upper().endswith(".DBF")]
+            for n in имена:
+                # Только имя файла, без путей из архива.
+                цель = os.path.join(KLADR_DIR, os.path.basename(n))
+                with z.open(n) as src, open(цель, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        return [os.path.basename(n) for n in имена]
+    бинарь = _find_7z()
+    if not бинарь:
+        raise RuntimeError(
+            "Архив 7z распаковать нечем: на сервере нет программы 7z. "
+            "Распакуйте архив у себя и положите в data/kladr/ файлы .DBF")
+    subprocess.run([бинарь, "x", "-y", "-o" + KLADR_DIR, путь],
+                   check=True, capture_output=True, timeout=1800)
+    return [f["name"] for f in list_source_files() if f["kind"] == "dbf"]
+
+
+def regions_in_file() -> List[dict]:
+    """Какие регионы есть в положенном KLADR.DBF — с числом записей.
+
+    Читается весь файл: 130 тысяч строк, единицы секунд. Зато человек
+    выбирает регионы, видя их названия, а не двузначные коды.
+    """
+    путь = os.path.join(KLADR_DIR, FILE_OBJECTS)
+    if not os.path.isfile(путь):
+        return []
+    названия, счёт = {}, {}
+    for row in read_dbf(путь):
+        code = (row.get("CODE") or "").strip()
+        if len(code) < 13 or not code_is_actual(code):
+            continue
+        region = code[_РЕГИОН]
+        счёт[region] = счёт.get(region, 0) + 1
+        if object_level(code) == LEVEL_REGION:
+            названия[region] = format_name(row.get("NAME"), row.get("SOCR"), LEVEL_REGION)
+    return sorted(
+        ({"code": к, "name": названия.get(к, "Регион %s" % к), "objects": счёт[к]}
+         for к in счёт),
+        key=lambda r: r["name"],
+    )
+
+
+def loaded_regions() -> List[dict]:
+    conn = get_addr_connection()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM addr_regions ORDER BY name")]
+    finally:
+        conn.close()
+
+
+def _load_socr() -> Dict[str, str]:
+    """Расшифровка сокращений: «обл» → «область». Нужна подсказкам, чтобы
+    человек не гадал, что такое «тер» или «нп»."""
+    путь = os.path.join(KLADR_DIR, FILE_SOCR)
+    if not os.path.isfile(путь):
+        return {}
+    out = {}
+    for row in read_dbf(путь):
+        краткое = (row.get("SCNAME") or "").strip()
+        полное = (row.get("SOCRNAME") or "").strip()
+        if краткое and полное:
+            out.setdefault(краткое, полное)
+    return out
+
+
+def load_regions(коды: List[str], грузить_дома: bool = True) -> dict:
+    """Загрузить выбранные регионы в data/addr.db.
+
+    Идемпотентно: данные региона сначала удаляются, потом вставляются
+    заново, всё в одной транзакции. Повторная загрузка того же файла не
+    задваивает записи и не оставляет половину старых.
+    """
+    коды = [к for к in коды if re.fullmatch(r"\d{2}", к or "")]
+    if not коды:
+        raise ValueError("Не выбран ни один регион")
+    путь_объектов = os.path.join(KLADR_DIR, FILE_OBJECTS)
+    if not os.path.isfile(путь_объектов):
+        raise FileNotFoundError(
+            "Не найден %s в %s — положите распакованные файлы классификатора"
+            % (FILE_OBJECTS, KLADR_DIR))
+
+    набор = set(коды)
+    conn = get_addr_connection()
+    итог = {"objects": 0, "streets": 0, "houses": 0}
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("BEGIN")
+        for к in коды:
+            # Поисковый индекс чистится ВМЕСТЕ с данными. Отдельная таблица
+            # FTS каскадом не убирается, и без этой строки повторная
+            # загрузка того же региона задваивала каждую подсказку.
+            if _fts_available:
+                conn.execute(
+                    "DELETE FROM addr_objects_fts WHERE code IN "
+                    "(SELECT code FROM addr_objects WHERE region = ?)", (к,))
+                conn.execute(
+                    "DELETE FROM addr_streets_fts WHERE code IN "
+                    "(SELECT code FROM addr_streets WHERE region = ?)", (к,))
+            conn.execute("DELETE FROM addr_objects WHERE region = ?", (к,))
+            conn.execute("DELETE FROM addr_streets WHERE region = ?", (к,))
+            conn.execute("DELETE FROM addr_houses WHERE region = ?", (к,))
+
+        # --- населённые пункты ---
+        _set_job(stage="Населённые пункты", done=0)
+        имена: Dict[str, str] = {}          # код -> «г Тверь»
+        пути: Dict[str, str] = {}           # код -> «Тверская обл, г Тверь»
+        родители: Dict[str, str] = {}
+        пачка = []
+        for row in read_dbf(путь_объектов):
+            code = (row.get("CODE") or "").strip()
+            if len(code) < 13 or code[_РЕГИОН] not in набор or not code_is_actual(code):
+                continue
+            подпись = format_name(row.get("NAME"), row.get("SOCR"), object_level(code))
+            имена[code] = подпись
+            родитель = parent_code(code)
+            родители[code] = родитель
+            пачка.append((code, (row.get("NAME") or "").strip(), (row.get("SOCR") or "").strip(),
+                          object_level(code), code[_РЕГИОН], родитель,
+                          (row.get("INDEX") or "").strip() or None,
+                          (row.get("OCATD") or "").strip() or None))
+            if len(пачка) >= 5000:
+                итог["objects"] += _записать_объекты(conn, пачка, имена, родители, пути)
+                пачка = []
+                _set_job(done=итог["objects"])
+        итог["objects"] += _записать_объекты(conn, пачка, имена, родители, пути)
+        _set_job(done=итог["objects"])
+
+        # --- улицы ---
+        путь_улиц = os.path.join(KLADR_DIR, FILE_STREETS)
+        if os.path.isfile(путь_улиц):
+            _set_job(stage="Улицы", done=0)
+            пачка = []
+            for row in read_dbf(путь_улиц):
+                code = (row.get("CODE") or "").strip()
+                if len(code) < 17 or code[_РЕГИОН] not in набор or not code_is_actual(code):
+                    continue
+                родитель = code[:11] + "00"
+                # ПОЛНЫЙ путь населённого пункта, а не одно его имя: иначе
+                # улица показывалась бы как «г Тверь, ул Советская» — без
+                # области, а одноимённых городов в стране хватает.
+                путь_подписи = пути.get(родитель) or имена.get(родитель, "")
+                подпись = format_street(row.get("NAME"), row.get("SOCR"))
+                имя_улицы = (row.get("NAME") or "").strip()
+                пачка.append((code, имя_улицы, имя_улицы.lower(),
+                              (row.get("SOCR") or "").strip(), code[_РЕГИОН], родитель,
+                              (row.get("INDEX") or "").strip() or None,
+                              (путь_подписи + ", " + подпись) if путь_подписи else подпись))
+                if len(пачка) >= 5000:
+                    итог["streets"] += _записать_улицы(conn, пачка)
+                    пачка = []
+                    _set_job(done=итог["streets"])
+            итог["streets"] += _записать_улицы(conn, пачка)
+            _set_job(done=итог["streets"])
+
+        # --- дома ---
+        путь_домов = os.path.join(KLADR_DIR, FILE_HOUSES)
+        if грузить_дома and os.path.isfile(путь_домов):
+            _set_job(stage="Дома", done=0)
+            пачка = []
+            for row in read_dbf(путь_домов):
+                code = (row.get("CODE") or "").strip()
+                if len(code) < 15 or code[_РЕГИОН] not in набор:
+                    continue
+                # У дома код длиннее улицы на четыре знака плюс признак;
+                # родителем считаем первые 17 знаков, если они есть, иначе
+                # населённый пункт.
+                родитель = (code[:15] + "00") if len(code) >= 19 else (code[:11] + "00")
+                пачка.append((code, родитель, code[_РЕГИОН],
+                              (row.get("NAME") or "").strip(),
+                              (row.get("KORP") or "").strip() or None,
+                              (row.get("INDEX") or "").strip() or None))
+                if len(пачка) >= 5000:
+                    итог["houses"] += _записать_дома(conn, пачка)
+                    пачка = []
+                    _set_job(done=итог["houses"])
+            итог["houses"] += _записать_дома(conn, пачка)
+            _set_job(done=итог["houses"])
+
+        # --- отметка о регионах ---
+        for к in коды:
+            # Код региона — это его две цифры и одиннадцать нулей.
+            имя = conn.execute(
+                "SELECT name, socr, level FROM addr_objects WHERE code = ?",
+                (к + "0" * 11,)).fetchone()
+            подпись = (format_name(имя["name"], имя["socr"], имя["level"])
+                       if имя else "Регион %s" % к)
+            n_o = conn.execute("SELECT COUNT(*) c FROM addr_objects WHERE region = ?", (к,)).fetchone()["c"]
+            n_s = conn.execute("SELECT COUNT(*) c FROM addr_streets WHERE region = ?", (к,)).fetchone()["c"]
+            n_h = conn.execute("SELECT COUNT(*) c FROM addr_houses WHERE region = ?", (к,)).fetchone()["c"]
+            conn.execute(
+                "INSERT INTO addr_regions (code, name, objects, streets, houses, loaded_at, source_file) "
+                "VALUES (?,?,?,?,?,datetime('now'),?) "
+                "ON CONFLICT(code) DO UPDATE SET name=excluded.name, objects=excluded.objects, "
+                "streets=excluded.streets, houses=excluded.houses, loaded_at=excluded.loaded_at, "
+                "source_file=excluded.source_file",
+                (к, подпись, n_o, n_s, n_h, FILE_OBJECTS))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+    return итог
+
+
+def _полный_путь(code: str, имена: Dict[str, str], родители: Dict[str, str]) -> str:
+    """«Тверская обл, Калининский р-н, д Аввакумово».
+
+    Собирается ПРИ ЗАГРУЗКЕ и хранится готовой строкой: иначе каждая
+    подсказка стоила бы трёх соединений, а показывается их по двадцать на
+    каждое нажатие клавиши.
+    """
+    части, текущий, защита = [], code, 0
+    while текущий and защита < 6:
+        подпись = имена.get(текущий)
+        if подпись:
+            части.append(подпись)
+        текущий = родители.get(текущий) or parent_code(текущий)
+        защита += 1
+    return ", ".join(reversed(части))
+
+
+def _записать_объекты(conn, пачка, имена, родители, пути=None) -> int:
+    if not пачка:
+        return 0
+    строки = []
+    for (code, name, socr, level, region, parent, postal, okato) in пачка:
+        полный = _полный_путь(code, имена, родители)
+        if пути is not None:
+            пути[code] = полный          # понадобится улицам этого же региона
+        строки.append((code, name, (name or "").lower(), socr, level, region,
+                       parent, postal, okato, полный))
+    conn.executemany(
+        "INSERT OR REPLACE INTO addr_objects "
+        "(code, name, name_lower, socr, level, region, parent, postal_code, okato, full_path) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)", строки)
+    if _fts_available:
+        conn.executemany(
+            "INSERT INTO addr_objects_fts (name, full_path, code) VALUES (?,?,?)",
+            [(s[1], s[9], s[0]) for s in строки])
+    return len(строки)
+
+
+def _записать_улицы(conn, пачка) -> int:
+    if not пачка:
+        return 0
+    conn.executemany(
+        "INSERT OR REPLACE INTO addr_streets "
+        "(code, name, name_lower, socr, region, parent, postal_code, full_path) "
+        "VALUES (?,?,?,?,?,?,?,?)", пачка)
+    if _fts_available:
+        conn.executemany(
+            "INSERT INTO addr_streets_fts (name, code, parent) VALUES (?,?,?)",
+            [(p[1], p[0], p[5]) for p in пачка])
+    return len(пачка)
+
+
+def _записать_дома(conn, пачка) -> int:
+    if not пачка:
+        return 0
+    conn.executemany(
+        "INSERT OR REPLACE INTO addr_houses (code, parent, region, nums, korp, postal_code) "
+        "VALUES (?,?,?,?,?,?)", пачка)
+    return len(пачка)
+
+
+def start_load(коды: List[str], грузить_дома: bool = True) -> dict:
+    """Запустить загрузку в фоновом потоке.
+
+    В фоне, а не в запросе: регион уровня Московской области — это миллионы
+    строк и минуты работы, а браузер к тому времени давно отвалится по
+    таймауту. Прогресс читается отдельным запросом.
+    """
+    if not _job_lock.acquire(blocking=False):
+        raise RuntimeError("Загрузка уже идёт")
+    _job.clear()
+    _set_job(state="running", regions=list(коды), stage="Подготовка", done=0,
+             started_at=time.strftime("%Y-%m-%d %H:%M:%S"), error=None, result=None)
+
+    def работа():
+        try:
+            итог = load_regions(коды, грузить_дома)
+            _set_job(state="done", result=итог, stage="Готово")
+        except Exception as e:                       # noqa: BLE001 — в статус, не в лог
+            _set_job(state="error", error=str(e), stage="Ошибка")
+        finally:
+            _job_lock.release()
+
+    threading.Thread(target=работа, name="kladr-load", daemon=True).start()
+    return job_status()
+
+
+# ---------------------------------------------------------------- подсказки
+
+def _поиск_объектов(conn, q: str, limit: int) -> List[sqlite3.Row]:
+    if _fts_available:
+        try:
+            return list(conn.execute(
+                "SELECT o.* FROM addr_objects_fts f JOIN addr_objects o ON o.code = f.code "
+                "WHERE addr_objects_fts MATCH ? ORDER BY o.level, o.name LIMIT ?",
+                (_fts_query(q), limit)))
+        except sqlite3.OperationalError:
+            pass
+    return list(conn.execute(
+        "SELECT * FROM addr_objects WHERE name_lower LIKE ? ORDER BY level, name LIMIT ?",
+        (q.lower() + "%", limit)))
+
+
+def _fts_query(q: str) -> str:
+    """Запрос к FTS5 из пользовательского ввода.
+
+    Спецсимволы вырезаются, а не экранируются: «*», кавычки и скобки в
+    названии населённого пункта не встречаются, зато любая из них роняет
+    разбор запроса FTS с ошибкой синтаксиса.
+    """
+    слова = re.findall(r"[\w\-]+", q, flags=re.UNICODE)
+    if not слова:
+        return '""'
+    return " ".join('"%s"*' % с for с in слова)
+
+
+def suggest_settlements(q: str, region: Optional[str] = None, limit: int = 20) -> List[dict]:
+    """Подсказки по населённым пунктам: регионы, районы, города, посёлки."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+    conn = get_addr_connection()
+    try:
+        строки = _поиск_объектов(conn, q, limit * 3 if region else limit)
+        out = []
+        for r in строки:
+            if region and r["region"] != region:
+                continue
+            out.append({
+                "code": r["code"],
+                "label": format_name(r["name"], r["socr"], r["level"]),
+                "full_path": r["full_path"],
+                "level": r["level"],
+                "region": r["region"],
+                "postal_code": r["postal_code"],
+            })
+            if len(out) >= limit:
+                break
+        return out
+    finally:
+        conn.close()
+
+
+def suggest_streets(parent: str, q: str = "", limit: int = 20) -> List[dict]:
+    """Улицы внутри населённого пункта. Пустой запрос отдаёт первые по
+    алфавиту: в маленьком посёлке улиц десяток, и набирать нечего."""
+    if not re.fullmatch(r"\d{13}", parent or ""):
+        return []
+    q = (q or "").strip()
+    conn = get_addr_connection()
+    try:
+        if q:
+            # Поиск по подстроке в нижнем регистре: улицу ищут по любому
+            # слову названия («советск» в «2-я Советская»), а набирают
+            # строчными.
+            строки = conn.execute(
+                "SELECT * FROM addr_streets WHERE parent = ? AND name_lower LIKE ? "
+                "ORDER BY name LIMIT ?", (parent, "%" + q.lower() + "%", limit))
+        else:
+            строки = conn.execute(
+                "SELECT * FROM addr_streets WHERE parent = ? ORDER BY name LIMIT ?",
+                (parent, limit))
+        return [{
+            "code": r["code"],
+            "label": format_street(r["name"], r["socr"]),
+            "full_path": r["full_path"],
+            "postal_code": r["postal_code"],
+        } for r in строки]
+    finally:
+        conn.close()
+
+
+# -------------------------------------------------------- проверка номера дома
+#
+# КЛАДР хранит дома ДИАПАЗОНАМИ в одной строке: «1,3,5-9,11А». Выбрать дом
+# из списка поэтому нельзя — номер вводится руками и сверяется с
+# диапазонами. Диапазон в КЛАДР перечисляет номера ЧЕРЕЗ ОДИН (нечётная или
+# чётная сторона улицы), поэтому «5-9» это 5, 7, 9, а не 5, 6, 7, 8, 9.
+
+_НОМЕР = re.compile(r"^(\d+)\s*(.*)$")
+
+
+def _номера_из_диапазона(кусок: str) -> Iterator[str]:
+    кусок = кусок.strip().upper()
+    if not кусок:
+        return
+    if "-" in кусок:
+        начало, _, конец = кусок.partition("-")
+        m1, m2 = _НОМЕР.match(начало.strip()), _НОМЕР.match(конец.strip())
+        if m1 and m2:
+            a, b = int(m1.group(1)), int(m2.group(1))
+            if a <= b and b - a <= 400:      # защита от мусора в данных
+                for n in range(a, b + 1, 2):
+                    yield str(n)
+                return
+    yield кусок
+
+
+def house_matches(nums: str, номер: str) -> bool:
+    """Есть ли номер дома в строке диапазонов КЛАДР."""
+    номер = (номер or "").strip().upper().replace(" ", "")
+    if not номер:
+        return False
+    for кусок in (nums or "").split(","):
+        for вариант in _номера_из_диапазона(кусок):
+            if вариант.replace(" ", "") == номер:
+                return True
+    return False
+
+
+def check_house(parent: str, номер: str, korp: str = "") -> dict:
+    """Проверить номер дома по классификатору и уточнить индекс.
+
+    Дом не найден — это НЕ ошибка: у стройплощадки номер бывает
+    нестандартный («участок 4/1»), и запретить его значило бы запретить
+    завести объект. Возвращается пометка, а решение остаётся за человеком.
+    """
+    if not re.fullmatch(r"\d{13}|\d{17}", parent or ""):
+        return {"found": False, "postal_code": None}
+    conn = get_addr_connection()
+    try:
+        for r in conn.execute(
+            "SELECT nums, korp, postal_code FROM addr_houses WHERE parent = ?", (parent,)
+        ):
+            if not house_matches(r["nums"], номер):
+                continue
+            if korp and (r["korp"] or "").strip().upper() not in ("", korp.strip().upper()):
+                continue
+            return {"found": True, "postal_code": r["postal_code"]}
+        return {"found": False, "postal_code": None}
+    finally:
+        conn.close()
+
+
+def resolve(code: str) -> Optional[dict]:
+    """Собрать адрес по коду: строку, части и индекс.
+
+    Строку собирает СЕРВЕР, а не клиент: она попадёт в отчёты и печать, и
+    двух разных способов её склеить быть не должно.
+    """
+    code = (code or "").strip()
+    if not re.fullmatch(r"\d{13}|\d{17}|\d{19}", code):
+        return None
+    conn = get_addr_connection()
+    try:
+        части = {}
+        индекс = None
+        населённый = code[:11] + "00"
+        улица = None
+        if len(code) >= 17:
+            улица = code[:15] + "00"
+            r = conn.execute("SELECT * FROM addr_streets WHERE code = ?", (улица,)).fetchone()
+            if r:
+                части["street"] = {"name": r["name"], "type": r["socr"], "code": r["code"]}
+                индекс = r["postal_code"] or индекс
+        цепочка, текущий, защита = [], населённый, 0
+        while текущий and защита < 6:
+            r = conn.execute("SELECT * FROM addr_objects WHERE code = ?", (текущий,)).fetchone()
+            if r:
+                цепочка.append(r)
+                индекс = индекс or r["postal_code"]
+            текущий = parent_code(текущий)
+            защита += 1
+        ключи = {1: "region", 2: "area", 3: "city", 4: "settlement"}
+        for r in цепочка:
+            части[ключи.get(r["level"], "settlement")] = {
+                "name": r["name"], "type": r["socr"], "code": r["code"]}
+        if not цепочка:
+            return None
+        подписи = [format_name(r["name"], r["socr"], r["level"]) for r in reversed(цепочка)]
+        if "street" in части:
+            подписи.append(format_street(части["street"]["name"], части["street"]["type"]))
+        return {
+            "code": code,
+            "source": "kladr",
+            "region": code[_РЕГИОН],
+            "address": ", ".join(подписи),
+            "parts": части,
+            "postal_code": индекс,
+        }
+    finally:
+        conn.close()
+
+
+def status() -> dict:
+    """Что показывать в настройке: файлы, регионы в них, что загружено."""
+    conn = get_addr_connection()
+    try:
+        регионы = [dict(r) for r in conn.execute("SELECT * FROM addr_regions ORDER BY name")]
+        всего = conn.execute("SELECT COUNT(*) c FROM addr_objects").fetchone()["c"]
+    finally:
+        conn.close()
+    return {
+        "dir": KLADR_DIR,
+        "files": list_source_files(),
+        "loaded": регионы,
+        "objects_total": всего,
+        "db_size": addr_db_size(),
+        "has_7z": bool(_find_7z()),
+        "job": job_status(),
+    }
+
+
+# ------------------------------------------------------------------- API
+#
+# Подсказки открыты любому вошедшему: это справочные данные, по которым
+# нельзя узнать ничего о стройках предприятия. Загрузка — отдельный раздел
+# прав, только администратору сервиса: она пишет сотни мегабайт на диск
+# сервера и занимает минуты.
+
+router = APIRouter(prefix="/address", tags=["address"])
+
+
+class AddressLoadIn(BaseModel):
+    regions: List[str]
+    # Дома нужны только ради уточнения почтового индекса и проверки номера,
+    # а это самый крупный файл — пусть их загрузку можно будет отключить,
+    # если места на сервере в обрез.
+    houses: bool = True
+
+
+@router.get("/status")
+def address_status(user=Depends(get_current_user)):
+    """Что загружено и что лежит в каталоге. Нужен и виджету адреса — он по
+    нему понимает, показывать подсказки или свободный ввод."""
+    return status()
+
+
+@router.get("/regions-in-file")
+def address_regions_in_file(
+    admin=Depends(require_service_feature("address_load", "write"))
+):
+    """Регионы в положенном KLADR.DBF — чтобы человек отмечал их по
+    названиям, а не по двузначным кодам."""
+    return {"regions": regions_in_file()}
+
+
+@router.post("/unpack")
+def address_unpack(
+    name: str = Query(..., description="Имя архива в каталоге классификатора"),
+    admin=Depends(require_service_feature("address_load", "write")),
+):
+    try:
+        файлы = unpack_archive(name)
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:                        # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Не удалось распаковать: %s" % e)
+    activity.log("address_unpack", user=admin, new_value=name)
+    return {"files": файлы}
+
+
+@router.post("/load")
+def address_load(
+    body: AddressLoadIn,
+    admin=Depends(require_service_feature("address_load", "write")),
+):
+    try:
+        job = start_load(body.regions, body.houses)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    activity.log("address_load", user=admin, new_value=", ".join(body.regions))
+    return job
+
+
+@router.get("/load-status")
+def address_load_status(
+    admin=Depends(require_service_feature("address_load", "write"))
+):
+    """Прогресс фоновой загрузки. Пусто — значит в этом запуске сервера её
+    не было: состояние живёт в памяти процесса и перезапуск его теряет."""
+    return {"job": job_status()}
+
+
+@router.get("/settlements")
+def address_settlements(
+    q: str = Query("", max_length=100),
+    region: Optional[str] = Query(None, max_length=2),
+    user=Depends(get_current_user),
+):
+    return {"items": suggest_settlements(q, region)}
+
+
+@router.get("/streets")
+def address_streets(
+    parent: str = Query(..., max_length=13),
+    q: str = Query("", max_length=100),
+    user=Depends(get_current_user),
+):
+    return {"items": suggest_streets(parent, q)}
+
+
+@router.get("/check-house")
+def address_check_house(
+    parent: str = Query(..., max_length=17),
+    number: str = Query(..., max_length=40),
+    korp: str = Query("", max_length=20),
+    user=Depends(get_current_user),
+):
+    """Есть ли такой дом в классификаторе. Ответ «нет» не запрещает
+    сохранить адрес — у стройплощадки номер бывает нестандартный."""
+    return check_house(parent, number, korp)
+
+
+@router.get("/resolve")
+def address_resolve(
+    code: str = Query(..., max_length=19),
+    user=Depends(get_current_user),
+):
+    r = resolve(code)
+    if r is None:
+        raise HTTPException(status_code=404, detail="Адрес по этому коду не найден")
+    return r

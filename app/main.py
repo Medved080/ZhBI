@@ -28,6 +28,7 @@ from app.attachments import counts_for as attachment_counts
 from app.attachments import delete_for_entity as delete_attachments_for
 from app.attachments import router as attachments_router
 from app.changelog import CHANGELOG
+from app.kladr import router as kladr_router
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
 from urllib.parse import quote
 
@@ -365,6 +366,7 @@ app.include_router(ldap_router)
 app.include_router(admin_guide_router)
 app.include_router(training_router)
 app.include_router(db_status_router)
+app.include_router(kladr_router)
 app.include_router(fill_scope_router)
 app.include_router(contracts_router)
 app.include_router(supplier_change_router)

@@ -11191,6 +11191,18 @@ const catalog = {
   dirty: false,
 };
 
+// Виджет адреса живёт отдельным файлом и подгружается по первому открытию
+// формы — тем же приёмом, что сцена Three.js. На верхнем уровне его трогать
+// нельзя: модуль ещё не загружен.
+let addressModule = null;
+async function ensureAddressWidget() {
+  if (!addressModule) {
+    addressModule = await import("/static/address.js");
+    addressModule.init({ api, escapeHtml });
+  }
+  return addressModule;
+}
+
 const CATALOG_STATUS_LABELS = {
   active: "В работе",
   completed: "Завершён",
@@ -11385,20 +11397,13 @@ function catalogFieldsHtml(запись, тип, редактируем) {
       </div>
     </div>`;
 
-  // Адрес пока строкой: подсказки по классификатору появятся вместе с самим
-  // классификатором. Координаты уже здесь — без них запись не попадёт на
-  // карту, а заполнять их можно и до классификатора.
+  // Адрес рисует отдельный виджет (app/static/address.js): подсказки по
+  // классификатору КЛАДР либо свободный ввод, если классификатор не
+  // загружен. Сюда он монтируется после отрисовки формы.
   const адрес = `
     <div class="form-card">
       <h4>Адрес и координаты</h4>
-      <div class="object-fields">
-        <label class="object-field object-field-wide"><span>Адрес</span>
-          <input type="text" data-field="address" value="${з(запись && запись.address)}" ${выкл}
-                 placeholder="Населённый пункт, улица, дом"/></label>
-        <label class="object-field object-field-wide"><span>Уточнение</span>
-          <input type="text" data-field="address_note" value="${з(запись && запись.address_note)}" ${выкл}
-                 placeholder="Корпус, участок, ориентир"/></label>
-      </div>
+      <div id="catalog-address"></div>
       <div class="catalog-coords">
         <label class="object-field"><span>Широта</span>
           <input type="number" step="0.000001" data-field="lat" value="${з(запись && запись.lat)}" ${выкл}/></label>
@@ -11483,6 +11488,36 @@ function renderCatalogForm() {
     el.addEventListener("change", markCatalogDirty);
   });
 
+  // Адресные поля не лежат в форме как [data-field]: их набор зависит от
+  // того, выбран адрес по классификатору или введён руками. Виджет отдаёт
+  // их целиком, а форма держит последнее отданное значение.
+  catalog.address = {
+    address: (запись && запись.address) || null,
+    address_code: (запись && запись.address_code) || null,
+    address_source: (запись && запись.address_source) || null,
+    address_region: (запись && запись.address_region) || null,
+    address_parts: (запись && запись.address_parts) || null,
+    postal_code: (запись && запись.postal_code) || null,
+    address_note: (запись && запись.address_note) || null,
+  };
+  const местоАдреса = document.getElementById("catalog-address");
+  if (местоАдреса) {
+    ensureAddressWidget().then((m) => m.mountAddressWidget(местоАдреса, {
+      value: catalog.address,
+      canEdit: редактируем,
+      onChange: (значения) => {
+        catalog.address = значения;
+        markCatalogDirty();
+      },
+    })).catch((e) => {
+      // Виджет не загрузился — форма обязана остаться рабочей: показываем
+      // обычное поле, чтобы адрес можно было ввести руками.
+      местоАдреса.innerHTML = `<label class="object-field object-field-wide">
+        <span>Адрес</span><input type="text" data-field="address"/></label>`;
+      console.warn("Виджет адреса не загрузился:", e.message);
+    });
+  }
+
   const урна = document.getElementById("catalog-delete");
   if (урна) {
     урна.addEventListener("click", () => openDictDelete(type, String(catalog.selected.id), {
@@ -11555,7 +11590,9 @@ function readCatalogForm() {
     else if (значение === "") значение = null;
     тело[поле] = значение;
   });
-  return тело;
+  // Адрес приходит не из полей формы, а из виджета — целиком, включая
+  // разбор по классификатору и почтовый индекс.
+  return Object.assign(тело, catalog.address || {});
 }
 
 async function saveCatalog() {
@@ -11660,6 +11697,154 @@ setupResizableModal({
   storageKey: "zhbi.catalogModalSize",
   toggleId: "catalog-size-toggle",
   maximizedClass: "catalog-maximized",
+});
+
+// ============ НАСТРОЙКА: АДРЕСНЫЙ КЛАССИФИКАТОР КЛАДР (2026-09-07) ============
+//
+// Разовая операция обслуживания, как резервные копии: человек кладёт
+// распакованные файлы на том сервера, отмечает регионы и запускает загрузку.
+// Она идёт в фоновом потоке — регион уровня Московской области это миллионы
+// строк и минуты работы, — а прогресс опрашивается отдельным запросом.
+const addressBackdrop = document.getElementById("address-backdrop");
+let addressPollTimer = null;
+
+function setAddressStatus(text, isError) {
+  const el = document.getElementById("address-status");
+  el.textContent = text || "";
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+function renderAddressFiles(файлы) {
+  const tbody = document.getElementById("address-files-tbody");
+  if (!файлы.length) {
+    tbody.innerHTML = `<tr><td colspan="4" class="hint-text">Папка пуста — положите сюда файлы классификатора.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = файлы.map((f) => `
+    <tr>
+      <td>${escapeHtml(f.name)}</td>
+      <td>${(f.size / 1048576).toFixed(1)} МБ</td>
+      <td>${escapeHtml(f.modified)}</td>
+      <td>${f.kind === "archive"
+        ? `<button class="btn btn-sm btn-secondary" data-unpack="${escapeHtml(f.name)}">Распаковать</button>`
+        : ""}</td>
+    </tr>`).join("");
+  tbody.querySelectorAll("[data-unpack]").forEach((b) => {
+    b.addEventListener("click", async () => {
+      setAddressStatus("Распаковка…", false);
+      try {
+        await api("/address/unpack?name=" + encodeURIComponent(b.dataset.unpack), { method: "POST" });
+        await renderAddressModal();
+        setAddressStatus("Распаковано.", false);
+      } catch (e) {
+        setAddressStatus(e.message || "Не удалось распаковать", true);
+      }
+    });
+  });
+}
+
+async function renderAddressModal() {
+  const st = await api("/address/status");
+  document.getElementById("address-dir").textContent = st.dir + "/";
+  renderAddressFiles(st.files || []);
+
+  const плашка = document.getElementById("address-loaded");
+  if ((st.loaded || []).length) {
+    плашка.textContent = "Загружено: "
+      + st.loaded.map((r) => `${r.name} (${r.objects} нас. пунктов, ${r.streets} улиц`
+        + (r.houses ? `, ${r.houses} домов` : "") + `)`).join("; ")
+      + `. Размер базы классификатора: ${(st.db_size / 1048576).toFixed(1)} МБ.`;
+  } else {
+    плашка.textContent = "Пока не загружен ни один регион — подсказки по адресу не работают, "
+      + "адрес вводится вручную.";
+  }
+
+  // Список регионов читается из самого файла и только администратором: это
+  // разбор 130 тысяч строк, и делать его на каждое открытие справочника
+  // адресов незачем.
+  const место = document.getElementById("address-regions");
+  место.innerHTML = `<span class="hint-text">Читаем файл…</span>`;
+  try {
+    const r = await api("/address/regions-in-file");
+    const загружены = new Set((st.loaded || []).map((x) => x.code));
+    if (!r.regions.length) {
+      место.innerHTML = `<span class="hint-text">В папке нет KLADR.DBF — положите распакованные файлы.</span>`;
+      return;
+    }
+    место.innerHTML = r.regions.map((x) => `
+      <label>
+        <input type="checkbox" value="${escapeHtml(x.code)}" ${загружены.has(x.code) ? "checked" : ""}/>
+        <span>${escapeHtml(x.name)}</span>
+        <span class="address-region-count">${x.objects}</span>
+      </label>`).join("");
+  } catch (e) {
+    место.innerHTML = `<span class="hint-text">Не удалось прочитать файл: ${escapeHtml(e.message || "")}</span>`;
+  }
+}
+
+function stopAddressPolling() {
+  clearInterval(addressPollTimer);
+  addressPollTimer = null;
+}
+
+function startAddressPolling() {
+  stopAddressPolling();
+  addressPollTimer = setInterval(async () => {
+    try {
+      const { job } = await api("/address/load-status");
+      const место = document.getElementById("address-progress");
+      if (!job) { stopAddressPolling(); место.textContent = ""; return; }
+      if (job.state === "running") {
+        место.textContent = `${job.stage}: обработано ${job.done || 0}…`;
+        место.style.color = "var(--color-text-muted)";
+      } else if (job.state === "done") {
+        const r = job.result || {};
+        место.textContent = `Готово: населённых пунктов ${r.objects || 0}, улиц ${r.streets || 0}, домов ${r.houses || 0}.`;
+        stopAddressPolling();
+        // Виджет адреса запоминал, что классификатора нет: после загрузки
+        // он обязан узнать, что теперь есть.
+        if (addressModule) addressModule.resetClassifierCache();
+        await renderAddressModal();
+      } else if (job.state === "error") {
+        место.textContent = "Ошибка: " + (job.error || "");
+        место.style.color = "var(--color-danger)";
+        stopAddressPolling();
+      }
+    } catch (e) { stopAddressPolling(); }
+  }, 1000);
+}
+
+document.getElementById("menu-address-classifier").addEventListener("click", async () => {
+  addressBackdrop.classList.add("open");
+  setAddressStatus("", false);
+  document.getElementById("address-progress").textContent = "";
+  await renderAddressModal();
+  const { job } = await api("/address/load-status");
+  if (job && job.state === "running") startAddressPolling();
+});
+
+document.getElementById("address-close").addEventListener("click", () => {
+  stopAddressPolling();
+  addressBackdrop.classList.remove("open");
+});
+
+document.getElementById("address-load").addEventListener("click", async () => {
+  const коды = Array.from(document.querySelectorAll("#address-regions input:checked"))
+    .map((i) => i.value);
+  if (!коды.length) { setAddressStatus("Отметьте хотя бы один регион", true); return; }
+  setAddressStatus("", false);
+  try {
+    await api("/address/load", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        regions: коды,
+        houses: document.getElementById("address-load-houses").checked,
+      }),
+    });
+    startAddressPolling();
+  } catch (e) {
+    setAddressStatus(e.message || "Не удалось запустить загрузку", true);
+  }
 });
 
 // ============ ВРЕМЕННАЯ ОБРАБОТКА: пустые «Объект» и «Проект» ============
