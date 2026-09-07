@@ -54,6 +54,28 @@ def _safe_name(name: str) -> str:
     return имя
 
 
+# Файл PMTiles начинается с семи байт «PMTiles» и номера версии формата.
+# Проверяется здесь, а НЕ в браузере: недокачанный или не тот файл иначе
+# роняет чтение подложки внутри библиотеки, ошибка уходит только в консоль,
+# а человек видит пустой фон без единого слова о причине.
+_PMTILES_МЕТКА = b"PMTiles"
+_PMTILES_ВЕРСИЯ = 3
+
+
+def _проверить_подложку(путь: str) -> Optional[str]:
+    """None — файл годен, иначе причина отказа человеческими словами."""
+    try:
+        with open(путь, "rb") as f:
+            начало = f.read(8)
+    except OSError as e:
+        return "файл не читается (%s)" % e.strerror
+    if len(начало) < 8 or начало[:7] != _PMTILES_МЕТКА:
+        return "это не файл PMTiles (возможно, скачался не полностью)"
+    if начало[7] != _PMTILES_ВЕРСИЯ:
+        return "версия формата %d, поддерживается %d" % (начало[7], _PMTILES_ВЕРСИЯ)
+    return None
+
+
 def basemaps() -> list:
     """Файлы подложки, лежащие на сервере. Их может быть несколько: обзорный
     на всю страну и детальные вырезки по регионам присутствия."""
@@ -66,9 +88,11 @@ def basemaps() -> list:
         if not имя.endswith(".pmtiles"):
             continue
         путь = os.path.join(MAP_DIR, имя)
-        if os.path.isfile(путь):
-            out.append({"name": имя, "size": os.path.getsize(путь),
-                        "url": "/map/tiles/" + имя})
+        if not os.path.isfile(путь):
+            continue
+        беда = _проверить_подложку(путь)
+        out.append({"name": имя, "size": os.path.getsize(путь),
+                    "url": "/map/tiles/" + имя, "problem": беда})
     return out
 
 

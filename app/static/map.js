@@ -75,7 +75,7 @@ function стильКарты(config) {
     id: "фон", type: "background",
     paint: { "background-color": "#eceff1" },
   }];
-  (config.basemaps || []).forEach((b, i) => {
+  (config.basemaps || []).filter((b) => !b.problem).forEach((b, i) => {
     const имя = "basemap" + i;
     источники[имя] = {
       type: "vector",
@@ -176,9 +176,14 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
   // секунд: при первом открытии библиотека карты (почти мегабайт) грузится
   // одновременно со схемой объекта, и десяти секунд там не хватало.
   await new Promise((resolve, reject) => {
-    const срок = Date.now() + 20000;
+    let срок = Date.now() + 20000;
     const проверить = () => {
       if (карта.isStyleLoaded()) return resolve();
+      // Пока вкладка скрыта, браузер не вызывает кадры отрисовки, и карта
+      // не грузится в принципе. Отсчёт терпения в это время не идёт: иначе
+      // карта, открытая в фоновой вкладке, встречала бы человека ложным
+      // сообщением «не успела загрузиться».
+      if (document.hidden) срок = Date.now() + 20000;
       if (Date.now() > срок) {
         return reject(new Error("карта не успела загрузиться за 20 секунд"));
       }
@@ -278,12 +283,20 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
   }
   показатьВсе();
 
-  const естьПодложка = (config.basemaps || []).length > 0;
+  // Годные и негодные файлы подложки различает СЕРВЕР (см. project_map.py):
+  // ошибка чтения внутри библиотеки уходит только в консоль браузера, и
+  // человек видел бы пустой фон без единого слова о причине.
+  const негодные = (config.basemaps || []).filter((b) => b.problem);
+  const естьПодложка = (config.basemaps || []).some((b) => !b.problem);
+  const бедаСПодложкой = негодные.length
+    ? `Файл подложки «${негодные[0].name}» не годится: ${негодные[0].problem}.`
+    : null;
   // Признак передаётся В колбэк, а не читается вызывающим кодом из
   // результата: результат присваивается только ПОСЛЕ возврата из этой
   // функции, и заметка «подложка не загружена» не показывалась никогда.
   if (onEmptyCoords) {
-    onEmptyCoords(данные.without_coords, данные.objects.length, естьПодложка);
+    onEmptyCoords(данные.without_coords, данные.objects.length,
+                  естьПодложка, бедаСПодложкой);
   }
   return {
     карта, объекты: данные.objects, показатьВсе, естьПодложка,
