@@ -66,16 +66,52 @@ from app.db_schema_doc import (  # noqa: E402
     verify as verify_description,
 )
 
+# Раскладка холста: список колонок, в каждой — таблицы сверху вниз. Колонки
+# собраны ПО СМЫСЛУ (модель МФР, структура объекта, учёт по блокам,
+# пользователи, зоны и график СМР, элементы, контрактация), а внутри колонки
+# первой идёт таблица, на которую ссылаются остальные, — так линии короче.
+#
+# ПОРЯДОК КОЛОНОК выбран не по вкусу, а по числу дальних связей: связь через
+# две и более колонки уходит на «шину» под схемой (см. edge_xml) и читается
+# хуже соседской. Перебор всех порядков групп при условии «иерархия объекта
+# слева» даёт минимум именно на этом: 24 дальних связи против 38 у порядка
+# «по алфавиту групп». Отсюда и неочевидные соседства: структура объекта
+# зажата между выгрузками Revit и учётом по блокам (оба ссылаются на секции
+# и этажи), users стоит в середине (на него ссылаются с обеих сторон), а
+# elements — рядом с зонами и контрактацией, куда ведут его ключи.
+# Меняешь состав групп — прогони перебор заново, иначе схема поплывёт.
+#
+# Состав обязан совпадать со списком TABLES в app/db_schema_doc.py — иначе
+# build_xml откажется собирать файл: таблица без места на холсте иначе
+# потерялась бы молча.
 COLUMNS = [
-    ["users", "sessions", "user_access", "object_roles", "role_features", "attachments",
-     "activity_log", "status_colors", "element_shapes", "allowed_subtypes"],
-    ["projects", "objects", "object_drawings", "label_visibility", "zone_colors",
-     "app_settings", "report_notes", "release_tasks"],
-    ["elements", "status_history", "axis_lines"],
-    ["zones", "zone_levels", "zone_edit_undo", "default_contracts", "mark_type_prefixes",
-     "marks"],
+    # Выгрузки модели МФР (Revit). Обработки релиза ни с чем не связаны —
+    # им место в самой короткой колонке, линий они не добавляют.
+    ["revit_packages", "revit_elements", "revit_rooms", "release_tasks"],
+    # Иерархия «проект → объект» и структура объекта: секции, этажи, оси,
+    # квартиры, подложки планов. Соседствует с теми, кто ссылается на неё чаще
+    # всего — выгрузками модели слева и учётом по блокам справа.
+    ["projects", "objects", "object_drawings", "object_sections", "object_levels",
+     "object_level_aliases", "object_grids", "object_flats", "level_plan_images"],
+    # Учёт по блокам: блок (этаж × секция), виды работ, статусы и отчёты факта.
+    ["blocks", "block_boxes", "work_types", "block_work_types", "work_progress",
+     "work_fact_reports", "work_fact_items", "planning_tracks"],
+    # Пользователи, доступ, журнал действий, обучение. В середине схемы: на
+    # users ссылаются и учёт по блокам слева, и график с историей справа.
+    ["users", "sessions", "user_access", "object_roles", "role_features",
+     "attachments", "activity_log", "training_attempts", "training_answers"],
+    # Зоны (захватка / кран / стоянка) и график СМР: версии, темпы, поток.
+    ["zones", "zone_levels", "zone_edit_undo", "zone_colors",
+     "schedule_versions", "schedule_version_dates", "schedule_work_kinds",
+     "schedule_flow"],
+    # Элементы ЖБИ с историей плюс справочники и настройки, от которых
+    # зависит их отображение (цвета, формы, подписи, подтипы).
+    ["elements", "status_history", "axis_lines", "marks", "mark_type_prefixes",
+     "allowed_subtypes", "status_colors", "element_shapes", "label_visibility",
+     "app_settings", "report_notes"],
+    # Контрактация: от контрагента и договора до документов смены поставщика.
     ["counterparties", "counterparty_capacity", "agreements", "specifications", "contracts",
-     "contract_lines", "contract_capacity", "contract_incidents",
+     "contract_lines", "contract_capacity", "contract_incidents", "default_contracts",
      "supplier_change_docs", "supplier_change_items", "supplier_change_history_moves"],
 ]
 
@@ -104,6 +140,12 @@ PARENT_COLOR = {
     "contract_lines":    "#a16207",
     "mark_type_prefixes": "#78716c",
     "supplier_change_docs": "#b45309",
+    # Справочники структуры объекта и учёта по блокам: на каждый ссылается
+    # по три-шесть таблиц, без своего цвета пучки слились бы с синим objects.
+    "object_levels":     "#00695c",
+    "object_sections":   "#827717",
+    "blocks":            "#4527a0",
+    "work_types":        "#ad1457",
 }
 
 EDGE_BASE = ("edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=12;html=1;fontSize=10;"

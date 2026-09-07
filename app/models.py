@@ -320,9 +320,77 @@ class ZonePatchIn(BaseModel):
     levels: list[ZoneLevelIn]
 
 
-class ProjectIn(BaseModel):
-    name: str
+# Статус записи справочника «Проекты и объекты» (2026-09-07). Появился
+# вместе с ростом справочника до сотен позиций: без него список нечем
+# разгрузить, а удалять завершённую стройку нельзя — на ней держатся отчёты.
+#
+# active     — в работе, показывается везде;
+# completed  — работы закончены; видна, но с меткой и в свёрнутой группе;
+# archived   — скрыта из крошки в тулбаре, дерева справочника, карты и
+#              выпадашек выбора объекта; возвращается галочкой «Показать
+#              архивные».
+#
+# Набор значений держит КОД, а не CHECK в схеме: SQLite не принимает CHECK в
+# ALTER TABLE ADD COLUMN — ровно как у objects.kind.
+CATALOG_STATUSES = ("active", "completed", "archived")
+
+CATALOG_STATUS_LABELS_RU = {
+    "active": "В работе",
+    "completed": "Завершён",
+    "archived": "Архивный",
+}
+
+
+class AddressFields(BaseModel):
+    """Адрес записи справочника — одинаково у проекта и у объекта.
+
+    Адрес остаётся СТРОКОЙ (`address`), а разбор по классификатору лежит
+    рядом: адреса, введённые руками до появления классификатора, продолжают
+    работать, а привязка появляется у тех записей, где её задали. Пустой
+    `address_code` — законное состояние: у стройплощадки почтового адреса
+    часто нет вовсе, она адресуется кадастровым номером участка.
+    """
+
     address: Optional[str] = None
+    # Код КЛАДР самого глубокого выбранного уровня: 13 знаков — населённый
+    # пункт, 17 — улица, 19 — дом.
+    address_code: Optional[str] = None
+    # Источник кода: сейчас всегда "kladr". Задел на ФИАС/ГАР — чтобы второй
+    # источник не потребовал переделки полей.
+    address_source: Optional[str] = None
+    address_region: Optional[str] = None
+    # Разобранная цепочка: регион, район, город, населённый пункт, улица,
+    # дом. Словарём в модели, текстом-JSON в базе.
+    address_parts: Optional[dict] = None
+    postal_code: Optional[str] = None
+    # Уточнение свободным текстом: корпус, участок, ориентир. Отдельно от
+    # address, потому что классификатор его не знает и при пересборке строки
+    # затёр бы.
+    address_note: Optional[str] = None
+    # Координаты WGS-84 для карты проектов. Классификатор их не содержит —
+    # ставятся пином на карте или подтягиваются из подложки по населённому
+    # пункту. Пусто — запись просто не попадает на карту.
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+class ProjectIn(AddressFields):
+    name: str
+    status: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ProjectPatchIn(AddressFields):
+    """Правка проекта: меняются ТОЛЬКО присланные поля.
+
+    Отдельная модель со всеми необязательными полями нужна из-за
+    `model_fields_set`: обработчик собирает UPDATE из того, что реально
+    пришло в теле запроса. Прежняя общая модель обновляла колонки
+    безусловно, и форма, не приславшая описание, молча его затирала.
+    """
+
+    name: Optional[str] = None
+    status: Optional[str] = None
     description: Optional[str] = None
 
 
@@ -337,14 +405,14 @@ class ProjectOut(ProjectIn):
     smr_end: Optional[str] = None
 
 
-class ObjectOut(BaseModel):
+class ObjectOut(AddressFields):
     id: int
     name: str
     # Тип объекта: 'zhbi' (поштучный учёт сборных изделий) или 'mfr' (учёт
     # работ по блокам из модели Revit). От него зависит СОСТАВ разделов —
     # см. app/features.py.
     kind: str = "zhbi"
-    address: Optional[str] = None
+    status: str = "active"
     project_id: Optional[int] = None
     project_name: Optional[str] = None
     description: Optional[str] = None
@@ -354,11 +422,12 @@ class ObjectOut(BaseModel):
     elements_retired: int = 0
 
 
-class ObjectPatchIn(BaseModel):
-    name: str
-    address: Optional[str] = None
-    # Перенос объекта в другой проект. None означает «не менять» — иначе
-    # форма, не приславшая поле, молча выкинула бы объект из проекта.
+class ObjectPatchIn(AddressFields):
+    """Правка объекта: меняются ТОЛЬКО присланные поля (см. ProjectPatchIn)."""
+
+    name: Optional[str] = None
+    status: Optional[str] = None
+    # Перенос объекта в другой проект.
     project_id: Optional[int] = None
     description: Optional[str] = None
     # Тип объекта: 'zhbi' или 'mfr'. Меняется отдельной командой в

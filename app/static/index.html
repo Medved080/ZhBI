@@ -2367,15 +2367,59 @@
      Docs/backlog.md) — модалка становится flex-колонкой на всю
      max-height, .modal сам больше не скроллится (overflow:hidden),
      скролл только у .modal-sticky-scroll между шапкой и подвалом. */
-  #object-switch-menu { min-width: 300px; max-height: 60vh; overflow-y: auto; padding: 4px 0; }
-  .object-switch-project {
-    font-size: 11px; font-weight: 700; color: var(--color-text-muted);
-    padding: 6px 12px 2px; text-transform: uppercase; letter-spacing: .03em;
+  /* Поповер выбора объекта. Прокручивается ТОЛЬКО список: поле поиска
+     сверху и галочка «архивные» снизу закреплены — при двух сотнях объектов
+     уехавшее вместе со списком поле поиска пришлось бы искать прокруткой
+     обратно. */
+  #object-switch-menu { min-width: 380px; max-width: 420px; max-height: 70vh; padding: 0; }
+  /* display задаётся ТОЛЬКО вместе с .open. Правило по идентификатору
+     перебивает `.dropdown-menu { display: none }` по специфичности, и
+     заданный здесь безусловный display оставлял поповер на экране
+     постоянно — он висел поверх схемы с открытия страницы. */
+  #object-switch-menu.open { display: flex; flex-direction: column; }
+  .object-switch-search { padding: 8px; border-bottom: 1px solid var(--color-border); }
+  .object-switch-search input { width: 100%; box-sizing: border-box; }
+  #object-switch-list { overflow-y: auto; padding: 4px 0; flex: 1 1 auto; }
+  .object-switch-foot {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 6px 10px; border-top: 1px solid var(--color-border);
+    font-size: 11px; color: var(--color-text-muted);
   }
+  .object-switch-foot label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  /* Заголовок проекта — КНОПКА, а не подпись: по ней сворачивают группу.
+     Развёрнут только проект текущего объекта, иначе список остаётся тем же
+     полотном, от которого уходили. */
+  #object-switch-menu button.object-switch-project {
+    display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+    font-size: 11px; font-weight: 700; color: var(--color-text-muted);
+    padding: 6px 12px 4px; text-transform: uppercase; letter-spacing: .03em;
+    background: none; border: 0; cursor: pointer;
+  }
+  .object-switch-project-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .object-switch-project-addr { font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; }
-  #object-switch-menu button.object-switch-item { display: flex; justify-content: space-between; gap: 12px; }
+  .object-switch-chevron { flex: 0 0 auto; font-size: 9px; }
+  .object-switch-group-title {
+    font-size: 11px; font-weight: 700; color: var(--color-text-muted);
+    padding: 8px 12px 2px; text-transform: uppercase; letter-spacing: .03em;
+  }
+  #object-switch-menu button.object-switch-item {
+    display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
+  }
   #object-switch-menu button.object-switch-item.active { font-weight: 700; }
-  .object-switch-count { color: var(--color-text-muted); font-size: 11px; }
+  /* Клавиатурное выделение — рамкой, а не фоном: фоном показывается
+     наведение мышью, и два разных состояния слились бы в одно. */
+  #object-switch-menu button.object-switch-item.kb-focus {
+    outline: 2px solid var(--color-primary); outline-offset: -2px;
+  }
+  .object-switch-count { color: var(--color-text-muted); font-size: 11px; flex: 0 0 auto; }
+  .object-switch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Метка статуса: завершённый объект видно, архивный показывается только по
+     галочке — но, показавшись, обязан отличаться от рабочего. */
+  .object-switch-badge {
+    font-size: 10px; padding: 1px 5px; border-radius: 8px; flex: 0 0 auto;
+    background: var(--color-surface-sunken); color: var(--color-text-muted);
+  }
+  .object-switch-empty { padding: 12px; color: var(--color-text-muted); font-size: 12px; }
   #btn-object-switch { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
   /* -------- выбор рабочего места (2026-08-17) -------- */
   /* Пояснение к пункту — строкой под названием, а не в title: в ряду кнопок
@@ -4409,7 +4453,23 @@
       <button class="btn" id="btn-object-switch" title="Выбрать проект и объект">
         <span id="object-switch-label">Объект не выбран</span> ▾
       </button>
-      <div class="dropdown-menu" id="object-switch-menu"></div>
+      <!-- Поповер под две сотни объектов (2026-09-07): поиск, недавние,
+           свёрнутые группы проектов. Плоский список всех объектов всех
+           проектов, каким он был, при таком числе перестаёт быть выбором и
+           становится прокруткой. -->
+      <div class="dropdown-menu" id="object-switch-menu">
+        <div class="object-switch-search">
+          <input type="text" id="object-switch-query" placeholder="Найти объект, проект или адрес"
+                 autocomplete="off" spellcheck="false"/>
+        </div>
+        <div id="object-switch-list"></div>
+        <div class="object-switch-foot">
+          <label title="Архивные объекты и проекты скрыты, пока не понадобятся">
+            <input type="checkbox" id="object-switch-archived"/> Показать архивные
+          </label>
+          <span id="object-switch-total" class="object-switch-count"></span>
+        </div>
+      </div>
     </div>
     <!-- Рабочее место (2026-08-10). «Модель» — привычная схема с панелью
          фильтров; «АРМ комплектовщика» — дашборд: взаимозависимые блоки

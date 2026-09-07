@@ -312,6 +312,11 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
     count("contract_incidents.description", len(rows))
 
     # ------------------------------------------------- проекты и объекты
+    # Куда переезжают координаты обезличенных объектов: середина Онежского
+    # озера. Место выбрано намеренно нежилое — увидев такую точку на карте,
+    # сразу понятно, что смотришь копию, а не боевые данные.
+    ФИКТИВНЫЙ_ЦЕНТР = (61.85, 35.40)
+
     for table, prefix in (("projects", "Проект"), ("objects", "Объект")):
         rows = conn.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
         columns = rows[0].keys() if rows else []
@@ -326,6 +331,31 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
                 mapping.put(f"{table}.description", row["description"], "Описание скрыто")
                 sets.append("description=?")
                 params.append("Описание скрыто")
+            # Разбор адреса по классификатору (2026-09-07) выдаёт заказчика
+            # ровно так же, как сама строка адреса: код КЛАДР ищется в
+            # открытом справочнике за секунду. Обнуляем целиком — привязка к
+            # классификатору отладке копии не нужна, а сам виджет проверяется
+            # на записях, заведённых руками.
+            for колонка in ("address_code", "address_source", "address_region",
+                            "address_parts", "postal_code", "address_note"):
+                if колонка in columns and row[колонка]:
+                    mapping.put(f"{table}.{колонка}", str(row[колонка]), "")
+                    sets.append(f"{колонка}=?")
+                    params.append(None)
+            # Координаты — тот же реквизит: точка на карте показывает реальную
+            # площадку заказчика с точностью до здания. Но обнулить их нельзя
+            # (карта на копии перестала бы отлаживаться), поэтому запись
+            # переезжает в центр условного региона с небольшим разбросом:
+            # объекты остаются на карте и рядом друг с другом, а место —
+            # вымышленное. Разброс детерминированный (от id), чтобы повторная
+            # сборка копии давала тот же результат.
+            if "lat" in columns and row["lat"] is not None:
+                mapping.put(f"{table}.lat", str(row["lat"]), "")
+                mapping.put(f"{table}.lon", str(row["lon"]), "")
+                sets.append("lat=?")
+                params.append(round(ФИКТИВНЫЙ_ЦЕНТР[0] + (row["id"] % 17) * 0.01, 6))
+                sets.append("lon=?")
+                params.append(round(ФИКТИВНЫЙ_ЦЕНТР[1] + (row["id"] % 13) * 0.015, 6))
             params.append(row["id"])
             conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE id=?", params)
         count(table, len(rows))

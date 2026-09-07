@@ -399,6 +399,69 @@ _COLUMN_MIGRATIONS = [
     # не во всех файлах есть, добавлена в schema.sql позже создания таблицы
     # work_types (см. planning_tracks там же).
     ("work_types", "planning_track_code", "TEXT"),
+
+    # ------------------------------------------------------------------
+    # Справочники «Проекты и объекты» под 200+ позиций (2026-09-07):
+    # статус записи, структурный адрес и координаты — одинаково у проекта и
+    # у объекта.
+    #
+    # Статус: active — в работе, completed — работы закончены (запись видна,
+    # но с меткой), archived — скрыт из крошки, дерева, карты и выпадашек.
+    # CHECK в ADD COLUMN SQLite не принимает, поэтому набор значений держит
+    # код (_valid_status в app/main.py) — ровно как у objects.kind выше.
+    ("projects", "status", "TEXT NOT NULL DEFAULT 'active'"),
+    ("objects", "status", "TEXT NOT NULL DEFAULT 'active'"),
+
+    # Адрес остаётся СТРОКОЙ (`address`, уже есть), а разбор лежит рядом:
+    # старые значения, введённые руками, продолжают работать, а привязка к
+    # классификатору появляется у тех записей, где её задали. Пустой
+    # address_code — законное состояние: у стройплощадки почтового адреса
+    # часто нет вовсе, она адресуется кадастровым номером участка.
+    #
+    # address_code — код КЛАДР самого глубокого выбранного уровня:
+    # 13 знаков населённый пункт, 17 улица, 19 дом. Иерархия закодирована в
+    # самом коде (регион 2 + район 3 + город 3 + н.п. 3 + признак 2), поэтому
+    # родитель ищется обнулением младших разрядов, а потомки — префиксом.
+    ("projects", "address_code", "TEXT"),
+    ("objects", "address_code", "TEXT"),
+    # Откуда взят код. Сейчас всегда 'kladr'; поле — задел на ФИАС/ГАР, чтобы
+    # подключение второго источника не потребовало переделки колонок.
+    ("projects", "address_source", "TEXT"),
+    ("objects", "address_source", "TEXT"),
+    # Двузначный код региона — отбор в дереве справочника и на карте, а также
+    # центрирование мини-карты, когда координат ещё нет.
+    ("projects", "address_region", "TEXT"),
+    ("objects", "address_region", "TEXT"),
+    # Разобранная цепочка JSON: регион, район, город, населённый пункт,
+    # улица, дом. Хранится РЯДОМ со строкой намеренно: показ адреса не должен
+    # ходить в базу классификатора, а сам адрес обязан пережить её
+    # перезагрузку (регион перезалили — записи не должны осыпаться).
+    ("projects", "address_parts", "TEXT"),
+    ("objects", "address_parts", "TEXT"),
+    # Почтовый индекс: самый глубокий непустой из цепочки (у дома точнее, чем
+    # у улицы). КЛАДР отдаёт его на каждом уровне.
+    ("projects", "postal_code", "TEXT"),
+    ("objects", "postal_code", "TEXT"),
+    # Свободное уточнение: корпус, строение, участок, ориентир («напротив
+    # КПП-2»). Отдельно от address, потому что классификатор его не знает и
+    # при пересборке строки затёр бы.
+    ("projects", "address_note", "TEXT"),
+    ("objects", "address_note", "TEXT"),
+    # Координаты WGS-84 для карты проектов. Классификатор их НЕ содержит — ни
+    # КЛАДР, ни ГАР, — поэтому ставятся пином на карте или подтягиваются из
+    # подложки по населённому пункту. Пусто — законно: запись просто не
+    # попадает на карту и помечается в дереве.
+    ("projects", "lat", "REAL"),
+    ("projects", "lon", "REAL"),
+    ("objects", "lat", "REAL"),
+    ("objects", "lon", "REAL"),
+
+    # Недавние объекты пользователя для поповера в тулбаре — JSON-список id,
+    # новые первыми. На ПОЛЬЗОВАТЕЛЯ, а не в localStorage, по той же причине,
+    # что и last_object_id рядом: человек садится за другой компьютер и
+    # должен увидеть тот же короткий список. Хранится текстом, как menu_prefs:
+    # читается и пишется целиком, связей с чем-либо нет.
+    ("users", "recent_objects", "TEXT"),
 ]
 
 
@@ -1896,14 +1959,26 @@ def projects_tree(conn: sqlite3.Connection, allowed_object_ids=None) -> list:
     def visible(object_id):
         return allowed_object_ids is None or object_id in allowed_object_ids
 
+    def объект(o):
+        # Статус едет в дерево вместе с объектом: переключатель в тулбаре
+        # прячет по нему архивные и метит завершённые, а второй запрос ради
+        # одного поля — лишний круг на каждое открытие страницы.
+        return {"id": o["id"], "name": o["name"], "address": o["address"],
+                "kind": o["kind"] or "zhbi",
+                "status": o["status"] or "active",
+                "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
+
+    поля = "id, name, address, kind, COALESCE(status, 'active') AS status"
+
     tree = []
-    for proj in conn.execute("SELECT id, name, address, description FROM projects ORDER BY name"):
+    for proj in conn.execute(
+        "SELECT id, name, address, description, COALESCE(status, 'active') AS status "
+        "FROM projects ORDER BY name"
+    ):
         objects = [
-            {"id": o["id"], "name": o["name"], "address": o["address"],
-             "kind": o["kind"] or "zhbi",
-             "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
+            объект(o)
             for o in conn.execute(
-                "SELECT id, name, address, kind FROM objects WHERE project_id = ? ORDER BY name",
+                f"SELECT {поля} FROM objects WHERE project_id = ? ORDER BY name",
                 (proj["id"],),
             )
             if visible(o["id"])
@@ -1911,19 +1986,20 @@ def projects_tree(conn: sqlite3.Connection, allowed_object_ids=None) -> list:
         if not objects:
             continue
         tree.append({"id": proj["id"], "name": proj["name"], "address": proj["address"],
+                     "status": proj["status"],
                      "description": proj["description"], "objects": objects})
     # Объекты без проекта не должны существовать (_bootstrap_default_project
     # их подбирает), но если такой появится — он обязан быть ВИДЕН, иначе
     # исчезнет вместе со всеми своими элементами.
     orphans = [
-        {"id": o["id"], "name": o["name"], "address": o["address"],
-         "kind": o["kind"] or "zhbi",
-         "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
-        for o in conn.execute("SELECT id, name, address, kind FROM objects WHERE project_id IS NULL ORDER BY name")
+        объект(o)
+        for o in conn.execute(
+            f"SELECT {поля} FROM objects WHERE project_id IS NULL ORDER BY name")
         if visible(o["id"])
     ]
     if orphans:
         tree.append({"id": None, "name": "Без проекта", "address": None,
+                     "status": "active",
                      "description": "Объекты, не привязанные к проекту", "objects": orphans})
     return tree
 

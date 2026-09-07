@@ -146,8 +146,12 @@ from app.models import (
     RevitAnalyzeResult,
     RevitApplyIn,
     RevitImportResult,
+    AddressFields,
     ProjectIn,
     ProjectOut,
+    ProjectPatchIn,
+    CATALOG_STATUSES,
+    CATALOG_STATUS_LABELS_RU,
     SHAPES,
     STATUS_LABELS_RU,
     STATUS_ORDER,
@@ -4176,6 +4180,109 @@ def _resolve_selection_item(conn, user, item):
     return item
 
 
+# ---------------------------------------------------------------- справочник
+# «Проекты и объекты»: статус записи, адрес и координаты (2026-09-07).
+#
+# Адресные колонки одинаковые у проекта и у объекта, поэтому и разбор запроса
+# один на обоих — иначе поле, добавленное с одной стороны, тихо перестало бы
+# сохраняться с другой.
+_АДРЕСНЫЕ_КОЛОНКИ = (
+    "address", "address_code", "address_source", "address_region",
+    "address_parts", "postal_code", "address_note", "lat", "lon",
+)
+
+
+def _valid_status(value) -> str:
+    """Статус записи справочника. Неизвестное значение — отказ, а не тихий
+    'active': от статуса зависит, видно ли запись в переключателе объектов,
+    и опечатка спрятала бы стройку целиком."""
+    if value in (None, ""):
+        return "active"
+    if value not in CATALOG_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="Статус бывает %s" % ", ".join(
+                "%s (%s)" % (k, CATALOG_STATUS_LABELS_RU[k]) for k in CATALOG_STATUSES))
+    return value
+
+
+def _valid_coord(поле: str, значение):
+    """Координата WGS-84 или пусто. Проверяется здесь, а не только на клиенте:
+    перепутанные местами широта и долгота уводят пин в другое полушарие, и
+    заметить это можно лишь глазами на карте."""
+    if значение is None or значение == "":
+        return None
+    try:
+        число = float(значение)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Координата должна быть числом")
+    предел = 90 if поле == "lat" else 180
+    if not -предел <= число <= предел:
+        raise HTTPException(
+            status_code=400,
+            detail="%s вне допустимого диапазона (±%d)" % (
+                "Широта" if поле == "lat" else "Долгота", предел))
+    return число
+
+
+def _адресные_правки(body) -> list:
+    """Пары «колонка — значение» для ПРИСЛАННЫХ адресных полей.
+
+    Ключевое слово — присланных: берётся `model_fields_set`, то есть то, что
+    реально было в теле запроса. Прежние обработчики писали все колонки
+    подряд, и форма, не знавшая про поле, молча его затирала (так терялось
+    описание проекта).
+    """
+    правки = []
+    for поле in _АДРЕСНЫЕ_КОЛОНКИ:
+        if поле not in body.model_fields_set:
+            continue
+        значение = getattr(body, поле)
+        if поле == "address_parts":
+            # В модели словарь, в базе текст-JSON: адрес показывается сотнями
+            # раз, а разбирается один раз при сохранении.
+            значение = json.dumps(значение, ensure_ascii=False) if значение else None
+        elif поле in ("lat", "lon"):
+            значение = _valid_coord(поле, значение)
+        elif isinstance(значение, str):
+            значение = значение.strip() or None
+        правки.append((поле, значение))
+    return правки
+
+
+def _адрес_из_строки(row) -> dict:
+    """Адресные поля записи для ответа. Отсутствующая колонка — не ошибка:
+    на копиях базы, куда миграция ещё не дошла, справочник обязан открыться."""
+    ключи = row.keys()
+    out = {}
+    for поле in _АДРЕСНЫЕ_КОЛОНКИ:
+        значение = row[поле] if поле in ключи else None
+        if поле == "address_parts" and значение:
+            try:
+                значение = json.loads(значение)
+            except (TypeError, ValueError):
+                значение = None
+        out[поле] = значение
+    return out
+
+
+def _проверить_архивацию_проекта(conn, project_id: int, статус: str) -> None:
+    """Проект уходит в архив, только когда в нём не осталось активных
+    объектов. Иначе стройка исчезла бы из переключателя вместе с проектом,
+    а человек искал бы её в справочнике, не понимая, куда она делась."""
+    if статус != "archived":
+        return
+    n = conn.execute(
+        "SELECT COUNT(*) AS n FROM objects WHERE project_id = ? AND COALESCE(status, 'active') = 'active'",
+        (project_id,),
+    ).fetchone()["n"]
+    if n:
+        raise HTTPException(
+            status_code=409,
+            detail=f"В проекте {n} активн(ый/ых) объект(ов) — сначала завершите или заархивируйте их",
+        )
+
+
 @app.get("/projects", response_model=list[ProjectOut])
 def list_projects(user: sqlite3.Row = Depends(get_current_user)):
     """Справочник проектов. Сроки СВОДЯТСЯ из объектов (решение П5), а не
@@ -4209,12 +4316,14 @@ def list_projects(user: sqlite3.Row = Depends(get_current_user)):
                 continue
 
             out.append(ProjectOut(
-                id=row["id"], name=row["name"], address=row["address"],
+                id=row["id"], name=row["name"],
+                status=(row["status"] if "status" in row.keys() and row["status"] else "active"),
                 description=row["description"],
                 objects_count=a["objects_count"] if a else 0,
                 elements_count=a["elements_count"] if a else 0,
                 smr_start=a["smr_start"] if a else None,
                 smr_end=a["smr_end"] if a else None,
+                **_адрес_из_строки(row),
             ))
         return out
     finally:
@@ -4230,8 +4339,16 @@ def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_service
     try:
         if conn.execute("SELECT 1 FROM projects WHERE name = ?", (name,)).fetchone():
             raise HTTPException(status_code=409, detail="Проект с таким наименованием уже есть")
-        conn.execute("INSERT INTO projects (name, address, description) VALUES (?, ?, ?)",
-                     (name, body.address, body.description))
+        колонки = ["name", "description", "status"]
+        значения = [name, body.description, _valid_status(body.status)]
+        for колонка, значение in _адресные_правки(body):
+            колонки.append(колонка)
+            значения.append(значение)
+        conn.execute(
+            "INSERT INTO projects (%s) VALUES (%s)" % (
+                ", ".join(колонки), ", ".join("?" * len(колонки))),
+            значения,
+        )
         conn.commit()
         new_id = conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()["id"]
     finally:
@@ -4241,28 +4358,63 @@ def create_project(body: ProjectIn, admin: sqlite3.Row = Depends(require_service
 
 
 @app.patch("/projects/{project_id}", response_model=ProjectOut)
-def update_project(project_id: int, body: ProjectIn, admin: sqlite3.Row = Depends(require_service_feature("projects", "write"))):
-    name = (body.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Наименование проекта не может быть пустым")
+def update_project(project_id: int, body: ProjectPatchIn, admin: sqlite3.Row = Depends(require_service_feature("projects", "write"))):
+    """Правка реквизитов проекта. Меняются ТОЛЬКО присланные поля: форма,
+    не знающая о поле, не должна его затирать (так терялось описание)."""
     conn = get_connection()
+    записать = []          # (колонка, значение)
+    события = []           # (код действия, было, стало)
     try:
-        row = conn.execute("SELECT name FROM projects WHERE id = ?", (project_id,)).fetchone()
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Проект не найден")
-        if conn.execute("SELECT 1 FROM projects WHERE name = ? AND id <> ?", (name, project_id)).fetchone():
-            raise HTTPException(status_code=409, detail="Проект с таким наименованием уже есть")
-        conn.execute(
-            "UPDATE projects SET name = ?, address = ?, description = ?, "
-            "updated_at = datetime('now') WHERE id = ?",
-            (name, body.address, body.description, project_id),
-        )
-        conn.commit()
-        old = row["name"]
+
+        if "name" in body.model_fields_set:
+            name = (body.name or "").strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="Наименование проекта не может быть пустым")
+            if conn.execute("SELECT 1 FROM projects WHERE name = ? AND id <> ?", (name, project_id)).fetchone():
+                raise HTTPException(status_code=409, detail="Проект с таким наименованием уже есть")
+            записать.append(("name", name))
+            # Переименование пишется в журнал, только если имя ДЕЙСТВИТЕЛЬНО
+            # изменилось: раньше запись появлялась при любом сохранении, и
+            # журнал заполнялся строками «переименован из А в А».
+            if name != row["name"]:
+                события.append(("project_rename", row["name"], name))
+
+        if "status" in body.model_fields_set:
+            статус = _valid_status(body.status)
+            _проверить_архивацию_проекта(conn, project_id, статус)
+            записать.append(("status", статус))
+            было = row["status"] if "status" in row.keys() and row["status"] else "active"
+            if статус != было:
+                события.append(("project_status",
+                                CATALOG_STATUS_LABELS_RU.get(было, было),
+                                CATALOG_STATUS_LABELS_RU[статус]))
+
+        if "description" in body.model_fields_set:
+            записать.append(("description", body.description))
+
+        адресные = _адресные_правки(body)
+        if адресные:
+            записать.extend(адресные)
+            было = row["address"] if "address" in row.keys() else None
+            стало = dict(адресные).get("address", было)
+            if стало != было:
+                события.append(("project_address", было, стало))
+
+        if записать:
+            conn.execute(
+                "UPDATE projects SET %s, updated_at = datetime('now') WHERE id = ?" % (
+                    ", ".join("%s = ?" % колонка for колонка, _ in записать)),
+                [значение for _, значение in записать] + [project_id],
+            )
+            conn.commit()
     finally:
         conn.close()
-    activity.log("project_rename", user=admin, entity_type="project", entity_id=project_id,
-                 old_value=old, new_value=name)
+    for код, было, стало in события:
+        activity.log(код, user=admin, entity_type="project", entity_id=project_id,
+                     old_value=было, new_value=стало)
     return next(p for p in list_projects(admin) if p.id == project_id)
 
 
@@ -4359,13 +4511,53 @@ def get_projects_tree(user: sqlite3.Row = Depends(get_current_user)):
                 # несколько, и разрешения складываются.
                 объект["roles"] = sorted(роли.get(объект["id"], set()))
         return {"projects": дерево,
-                "last_object_id": user["last_object_id"] if "last_object_id" in user.keys() else None}
+                "last_object_id": user["last_object_id"] if "last_object_id" in user.keys() else None,
+                # Недавние — для группы вверху поповера в тулбаре. Приезжают
+                # вместе с деревом: это ровно тот запрос, которым клиент
+                # узнаёт про объекты.
+                "recent_object_ids": _недавние_объекты(user)}
     finally:
         conn.close()
 
 
 class LastObjectIn(BaseModel):
     object_id: Optional[int] = None
+
+
+# Сколько объектов помнить в группе «Недавние». Шесть — чтобы группа не
+# вытесняла собой сам список проектов: при двух сотнях объектов поповер и так
+# длинный.
+_НЕДАВНИХ_МАКСИМУМ = 6
+
+
+def _недавние_объекты(user) -> list:
+    """Недавно открытые объекты пользователя, новые первыми.
+
+    Битый JSON (правка руками, оборванная запись) не должен ронять открытие
+    страницы: список — удобство, а не условие работы, поэтому в таком случае
+    он просто считается пустым."""
+    if "recent_objects" not in user.keys() or not user["recent_objects"]:
+        return []
+    try:
+        значения = json.loads(user["recent_objects"])
+    except (TypeError, ValueError):
+        return []
+    return [int(x) for x in значения if isinstance(x, int)][:_НЕДАВНИХ_МАКСИМУМ]
+
+
+def _запомнить_недавний(conn, user, object_id: Optional[int]) -> None:
+    """Двигает объект в начало списка недавних.
+
+    Список ведётся ЗА ПОЛЬЗОВАТЕЛЕМ на сервере по той же причине, что и
+    last_object_id рядом: человек садится за другой компьютер и должен
+    увидеть тот же короткий список, а не пустоту."""
+    if object_id is None:
+        return
+    список = [object_id] + [x for x in _недавние_объекты(user) if x != object_id]
+    conn.execute(
+        "UPDATE users SET recent_objects = ? WHERE id = ?",
+        (json.dumps(список[:_НЕДАВНИХ_МАКСИМУМ]), user["id"]),
+    )
 
 
 @app.put("/me/last-object")
@@ -4387,6 +4579,7 @@ def set_last_object(body: LastObjectIn, user: sqlite3.Row = Depends(get_current_
             # каждый раз возвращался на чужое здание после перезагрузки.
             assert_object_access(conn, user, body.object_id)
         conn.execute("UPDATE users SET last_object_id = ? WHERE id = ?", (body.object_id, user["id"]))
+        _запомнить_недавний(conn, user, body.object_id)
         conn.commit()
         activity.log("last_object", user=user, entity_type="object", entity_id=body.object_id,
                      new_value=str(body.object_id))
@@ -4407,31 +4600,41 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
         # адреса, счётчики и имена файлов чертежей (аудит безопасности
         # 2026-08-03). Отбор тот же, что у /projects-tree.
         доступ, доступ_params = _accessible_objects_clause(conn, user, "id")
+
+        # Чертежи и счётчики — ДВА запроса на весь справочник, а не по два на
+        # каждую строку: при двух сотнях объектов прежний разбор давал под
+        # полтысячи запросов на одно открытие формы.
+        чертежи = {}
+        for d in conn.execute(
+            "SELECT object_id, source_file, is_current FROM object_drawings ORDER BY imported_at"
+        ):
+            чертежи.setdefault(d["object_id"], []).append(d)
+        счётчики = {
+            r["object_id"]: r
+            for r in conn.execute(
+                "SELECT object_id, SUM(is_current = 1) AS cur, SUM(is_current = 0) AS gone "
+                "FROM elements GROUP BY object_id"
+            )
+        }
+
         result = []
         for row in conn.execute(
             f"SELECT * FROM objects WHERE {доступ} ORDER BY id", доступ_params
         ):
-            drawings = conn.execute(
-                "SELECT source_file, is_current FROM object_drawings "
-                "WHERE object_id = ? ORDER BY imported_at",
-                (row["id"],),
-            ).fetchall()
-            counts = conn.execute(
-                "SELECT SUM(is_current = 1) AS cur, SUM(is_current = 0) AS gone "
-                "FROM elements WHERE object_id = ?",
-                (row["id"],),
-            ).fetchone()
+            drawings = чертежи.get(row["id"], [])
+            counts = счётчики.get(row["id"])
             current = next((d["source_file"] for d in drawings if d["is_current"]), None)
             result.append(ObjectOut(
                 id=row["id"], name=row["name"], description=row["description"],
                 kind=(row["kind"] if "kind" in row.keys() and row["kind"] else KIND_ZHBI),
-                address=row["address"] if "address" in row.keys() else None,
+                status=(row["status"] if "status" in row.keys() and row["status"] else "active"),
                 project_id=row["project_id"] if "project_id" in row.keys() else None,
                 project_name=projects.get(row["project_id"] if "project_id" in row.keys() else None),
                 current_source_file=current,
                 drawings=[d["source_file"] for d in drawings],
-                elements_current=counts["cur"] or 0,
-                elements_retired=counts["gone"] or 0,
+                elements_current=(counts["cur"] or 0) if counts else 0,
+                elements_retired=(counts["gone"] or 0) if counts else 0,
+                **_адрес_из_строки(row),
             ))
         return result
     finally:
@@ -4452,10 +4655,10 @@ def _valid_kind(value) -> str:
     return value
 
 
-class ObjectCreateIn(BaseModel):
+class ObjectCreateIn(AddressFields):
     name: str
     project_id: int
-    address: Optional[str] = None
+    status: Optional[str] = None
     description: Optional[str] = None
     # Тип объекта: 'zhbi' (по умолчанию) или 'mfr'. От него зависит
     # состав разделов — см. app/features.py.
@@ -4485,11 +4688,16 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
             raise HTTPException(status_code=404, detail="Проект не найден")
         if conn.execute("SELECT 1 FROM objects WHERE name = ?", (name,)).fetchone():
             raise HTTPException(status_code=409, detail="Объект с таким наименованием уже есть")
+        колонки = ["name", "description", "project_id", "kind", "status"]
+        значения = [name, body.description, body.project_id,
+                    _valid_kind(body.kind), _valid_status(body.status)]
+        for колонка, значение in _адресные_правки(body):
+            колонки.append(колонка)
+            значения.append(значение)
         conn.execute(
-            "INSERT INTO objects (name, address, description, project_id, kind) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (name, body.address, body.description, body.project_id,
-             _valid_kind(body.kind)),
+            "INSERT INTO objects (%s) VALUES (%s)" % (
+                ", ".join(колонки), ", ".join("?" * len(колонки))),
+            значения,
         )
         conn.commit()
         new_id = conn.execute("SELECT id FROM objects WHERE name = ?", (name,)).fetchone()["id"]
@@ -4501,44 +4709,75 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
 
 @app.patch("/objects/{object_id}", response_model=ObjectOut)
 def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depends(require_service_feature("projects", "write"))):
-    """Переименование объекта. Создание и удаление намеренно НЕ поддержаны:
-    объект появляется сам при первом импорте чертежа, а удаление отвязало бы
-    все элементы с их историей — операция, которую пользователь отдельно
-    признал ненужной."""
-    name = (body.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Наименование объекта не может быть пустым")
+    """Правка реквизитов объекта: наименование, проект, тип учёта, статус,
+    адрес и координаты. Меняются ТОЛЬКО присланные поля (см. update_project).
+
+    Удаление здесь не поддержано намеренно — оно идёт общим движком
+    справочников (app/dict_delete.py) и только для пустого объекта: за
+    объектом стоят элементы с историей."""
     conn = get_connection()
+    записать = []
+    события = []
     try:
-        if conn.execute("SELECT 1 FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
+        row = conn.execute("SELECT * FROM objects WHERE id = ?", (object_id,)).fetchone()
+        if row is None:
             raise HTTPException(status_code=404, detail="Объект не найден")
-        clash = conn.execute(
-            "SELECT 1 FROM objects WHERE name = ? AND id <> ?", (name, object_id)
-        ).fetchone()
-        if clash:
-            raise HTTPException(status_code=409, detail="Объект с таким наименованием уже есть")
-        old = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()["name"]
+
+        if "name" in body.model_fields_set:
+            name = (body.name or "").strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="Наименование объекта не может быть пустым")
+            if conn.execute("SELECT 1 FROM objects WHERE name = ? AND id <> ?",
+                            (name, object_id)).fetchone():
+                raise HTTPException(status_code=409, detail="Объект с таким наименованием уже есть")
+            записать.append(("name", name))
+            if name != row["name"]:
+                события.append(("object_rename", row["name"], name))
+
+        # Перенос в другой проект. None означает «не менять» — иначе форма,
+        # не приславшая поле, молча выкинула бы объект из проекта.
         if body.project_id is not None:
             if conn.execute("SELECT 1 FROM projects WHERE id = ?", (body.project_id,)).fetchone() is None:
                 raise HTTPException(status_code=404, detail="Проект не найден")
-            conn.execute("UPDATE objects SET project_id = ? WHERE id = ?", (body.project_id, object_id))
+            записать.append(("project_id", body.project_id))
+
         # Тип меняется, только если он ЯВНО прислан: форма, не знающая о
         # поле, не должна молча переводить объект в другой тип учёта.
         if body.kind is not None:
-            conn.execute("UPDATE objects SET kind = ? WHERE id = ?",
-                         (_valid_kind(body.kind), object_id))
-        conn.execute(
-            "UPDATE objects SET name = ?, address = ?, description = ?, "
-            "updated_at = datetime('now') WHERE id = ?",
-            (name, body.address, body.description, object_id),
-        )
-        conn.commit()
+            записать.append(("kind", _valid_kind(body.kind)))
+
+        if "status" in body.model_fields_set:
+            статус = _valid_status(body.status)
+            записать.append(("status", статус))
+            было = row["status"] if "status" in row.keys() and row["status"] else "active"
+            if статус != было:
+                события.append(("object_status",
+                                CATALOG_STATUS_LABELS_RU.get(было, было),
+                                CATALOG_STATUS_LABELS_RU[статус]))
+
+        if "description" in body.model_fields_set:
+            записать.append(("description", body.description))
+
+        адресные = _адресные_правки(body)
+        if адресные:
+            записать.extend(адресные)
+            было = row["address"] if "address" in row.keys() else None
+            стало = dict(адресные).get("address", было)
+            if стало != было:
+                события.append(("object_address", было, стало))
+
+        if записать:
+            conn.execute(
+                "UPDATE objects SET %s, updated_at = datetime('now') WHERE id = ?" % (
+                    ", ".join("%s = ?" % колонка for колонка, _ in записать)),
+                [значение for _, значение in записать] + [object_id],
+            )
+            conn.commit()
     finally:
         conn.close()
-    activity.log(
-        "object_rename", user=admin, entity_type="object", entity_id=object_id,
-        old_value=old, new_value=name,
-    )
+    for код, было, стало in события:
+        activity.log(код, user=admin, entity_type="object", entity_id=object_id,
+                     old_value=было, new_value=стало)
     return next(o for o in list_objects(admin) if o.id == object_id)
 
 

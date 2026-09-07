@@ -80,6 +80,10 @@ let state = {
   // им пользуются экспорт, импорт истории и опрос /changes.
   objectId: null,
   projects: [],   // дерево из /projects-tree
+  // Недавно открытые объекты, новые первыми — группа вверху переключателя.
+  // Приезжают с сервера вместе с деревом: список ведётся за пользователем,
+  // а не в браузере (см. users.recent_objects).
+  recentObjectIds: [],
   selection: new Map(), // source_file -> Set(layer) | null (null = все слои файла); сеансовый выбор, не сохраняется (п.13)
   elements: [],
   byId: new Map(),
@@ -1330,17 +1334,76 @@ function currentChangedAt() {
 
 const objectSwitchMenu = document.getElementById("object-switch-menu");
 const objectSwitchLabel = document.getElementById("object-switch-label");
+const objectSwitchList = document.getElementById("object-switch-list");
+const objectSwitchQuery = document.getElementById("object-switch-query");
+const objectSwitchArchived = document.getElementById("object-switch-archived");
+const objectSwitchTotal = document.getElementById("object-switch-total");
+
+// Состояние поповера выбора объекта. Сеансовое (кроме галочки «архивные»):
+// свёрнутые группы и строка поиска — это то, что человек делает ПРЯМО
+// СЕЙЧАС, и переживать перезагрузку страницы им незачем.
+const objectSwitch = {
+  query: "",
+  // Раскрытые проекты. Изначально раскрыт только проект текущего объекта:
+  // при двух сотнях объектов раскрытые все — то же полотно, от которого
+  // уходили.
+  expanded: new Set(),
+  // Плоский индекс для поиска: строится один раз на загрузку дерева, а не
+  // на каждое нажатие клавиши.
+  index: [],
+  kbIndex: -1,   // клавиатурное выделение, -1 — нет
+};
+
+const OBJECT_STATUS_BADGE = { completed: "завершён", archived: "архив" };
+
+// Галочка «Показать архивные» — единственное, что живёт дольше сеанса:
+// человек, разбирающий архив, делает это подряд и не должен ставить её
+// заново после каждой перезагрузки.
+const OS_ARCHIVED_KEY = "zhbi.objectSwitch.archived";
+try { objectSwitchArchived.checked = localStorage.getItem(OS_ARCHIVED_KEY) === "1"; } catch (e) {}
+
+function buildObjectSwitchIndex() {
+  // Ключ поиска считается ЗАРАНЕЕ и в нижнем регистре: иначе на каждый
+  // введённый символ пришлось бы приводить регистр у пятисот строк заново.
+  objectSwitch.index = [];
+  for (const проект of state.projects) {
+    for (const объект of проект.objects) {
+      objectSwitch.index.push({
+        проект, объект,
+        ключ: [объект.name, проект.name, объект.address, проект.address]
+          .filter(Boolean).join(" ").toLowerCase(),
+      });
+    }
+  }
+}
+
+function objectSwitchVisible(запись, показыватьАрхив) {
+  const статусОбъекта = запись.объект.status || "active";
+  const статусПроекта = запись.проект.status || "active";
+  if (!показыватьАрхив && (статусОбъекта === "archived" || статусПроекта === "archived")) return false;
+  if (!objectSwitch.query) return true;
+  return запись.ключ.includes(objectSwitch.query);
+}
 
 async function loadProjectsTree() {
   const data = await api("/projects-tree");
   state.projects = data.projects || [];
+  state.recentObjectIds = data.recent_object_ids || [];
+  buildObjectSwitchIndex();
   const все = state.projects.flatMap((p) => p.objects);
   if (!все.length) { state.objectId = null; renderObjectSwitch(); return; }
   // Восстанавливаем последний выбор пользователя; если объект исчез (или
   // выбора ещё не было) — берём первый непустой, а совсем пустой список
   // объектов означает, что чертежей ещё не загружали.
-  const запомненный = все.find((o) => o.id === data.last_object_id);
-  state.objectId = (запомненный || все.find((o) => o.elements > 0) || все[0]).id;
+  //
+  // Архивный объект в качестве запомненного не годится: он скрыт из
+  // переключателя, и человек оказался бы на здании, которого не видит в
+  // списке, без единого объяснения. Тогда — первый активный.
+  const активен = (o) => (o.status || "active") !== "archived";
+  const запомненный = все.find((o) => o.id === data.last_object_id && активен(o));
+  state.objectId = (запомненный
+    || все.find((o) => o.elements > 0 && активен(o))
+    || все.find(активен) || все[0]).id;
   renderObjectSwitch();
   // Роль приходит вместе с деревом, а меню строится раньше (checkAuth) —
   // пересчитываем, иначе объектные пункты остались бы скрытыми до первого
@@ -1356,7 +1419,39 @@ function currentObject() {
   return null;
 }
 
-function renderObjectSwitch() {
+function objectSwitchItemButton(проект, объект, показатьПроект) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "object-switch-item" + (объект.id === state.objectId ? " active" : "");
+  b.dataset.objectId = String(объект.id);
+  const имя = document.createElement("span");
+  имя.className = "object-switch-name";
+  // В «Недавних» и в результатах поиска объект показывается ВМЕСТЕ с
+  // проектом: вне своей группы одно имя «Корпус 3» ничего не говорит — таких
+  // корпусов на площадках предприятия несколько.
+  имя.textContent = показатьПроект ? `${проект.name} · ${объект.name}` : объект.name;
+  b.appendChild(имя);
+  const статус = объект.status || "active";
+  if (OBJECT_STATUS_BADGE[статус]) {
+    const метка = document.createElement("span");
+    метка.className = "object-switch-badge";
+    метка.textContent = OBJECT_STATUS_BADGE[статус];
+    b.appendChild(метка);
+  }
+  const счёт = document.createElement("span");
+  счёт.className = "object-switch-count";
+  // Счётчик виден в списке намеренно: пустой объект иначе неотличим от
+  // загруженного, и узнать это переключением — худший способ.
+  счёт.textContent = объект.elements ? `${объект.elements}` : "пусто";
+  b.appendChild(счёт);
+  b.addEventListener("click", () => {
+    document.getElementById("object-switch").classList.remove("open");
+    switchObject(объект.id);
+  });
+  return b;
+}
+
+function renderObjectSwitchLabel() {
   const текущий = currentObject();
   // Проект показывается ВСЕГДА, даже когда он один (живой репорт
   // 2026-08-01: «а где проекты? почему я вижу только объект?»). Прежняя
@@ -1365,37 +1460,118 @@ function renderObjectSwitch() {
   objectSwitchLabel.textContent = текущий
     ? `${текущий.project.name} · ${текущий.object.name}`
     : "Проект и объект не выбраны";
-  objectSwitchMenu.innerHTML = "";
-  for (const проект of state.projects) {
-    const head = document.createElement("div");
-    head.className = "object-switch-project";
-    head.textContent = проект.name;
-    if (проект.address) {
-      const addr = document.createElement("div");
-      addr.className = "object-switch-project-addr";
-      addr.textContent = проект.address;
-      head.appendChild(addr);
-    }
-    objectSwitchMenu.appendChild(head);
-    for (const объект of проект.objects) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "object-switch-item" + (объект.id === state.objectId ? " active" : "");
-      const имя = document.createElement("span");
-      имя.textContent = объект.name;
-      const счёт = document.createElement("span");
-      счёт.className = "object-switch-count";
-      // Счётчик виден в списке намеренно: пустой объект иначе неотличим от
-      // загруженного, и узнать это переключением — худший способ.
-      счёт.textContent = объект.elements ? `${объект.elements}` : "пусто";
-      b.append(имя, счёт);
-      b.addEventListener("click", () => {
-        document.getElementById("object-switch").classList.remove("open");
-        switchObject(объект.id);
-      });
-      objectSwitchMenu.appendChild(b);
+}
+
+function renderObjectSwitchList() {
+  const показыватьАрхив = objectSwitchArchived.checked;
+  const видимые = objectSwitch.index.filter((з) => objectSwitchVisible(з, показыватьАрхив));
+  const текущий = currentObject();
+
+  // Собирается во фрагменте и вставляется одним куском: при двух сотнях
+  // объектов вставка по элементу заставляла бы браузер пересчитывать
+  // раскладку на каждой строке.
+  const фрагмент = document.createDocumentFragment();
+
+  // ---- Недавние ----
+  // Только когда поиск пуст: при активном поиске человек ищет конкретное, и
+  // группа «недавние» сверху сдвигала бы найденное вниз.
+  if (!objectSwitch.query) {
+    const недавние = (state.recentObjectIds || [])
+      .map((id) => видимые.find((з) => з.объект.id === id))
+      .filter(Boolean);
+    if (недавние.length > 1) {
+      const заголовок = document.createElement("div");
+      заголовок.className = "object-switch-group-title";
+      заголовок.textContent = "Недавние";
+      фрагмент.appendChild(заголовок);
+      недавние.forEach((з) => фрагмент.appendChild(
+        objectSwitchItemButton(з.проект, з.объект, true)));
     }
   }
+
+  // ---- Группы по проектам ----
+  for (const проект of state.projects) {
+    const свои = видимые.filter((з) => з.проект === проект);
+    if (!свои.length) continue;
+    // При поиске группы раскрыты всегда: человек ищет объект, а не проект, и
+    // заставлять его дораскрывать найденное — лишний ход.
+    const раскрыт = !!objectSwitch.query
+      || objectSwitch.expanded.has(проект.id)
+      || (текущий && текущий.project === проект);
+
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "object-switch-project";
+    const шеврон = document.createElement("span");
+    шеврон.className = "object-switch-chevron";
+    шеврон.textContent = раскрыт ? "▼" : "▶";
+    const имя = document.createElement("span");
+    имя.className = "object-switch-project-name";
+    имя.textContent = проект.name;
+    if (проект.address) {
+      const addr = document.createElement("span");
+      addr.className = "object-switch-project-addr";
+      addr.textContent = " · " + проект.address;
+      имя.appendChild(addr);
+    }
+    const счёт = document.createElement("span");
+    счёт.className = "object-switch-count";
+    счёт.textContent = String(свои.length);
+    head.append(шеврон, имя, счёт);
+    head.addEventListener("click", () => {
+      if (objectSwitch.expanded.has(проект.id)) objectSwitch.expanded.delete(проект.id);
+      else objectSwitch.expanded.add(проект.id);
+      renderObjectSwitchList();
+    });
+    фрагмент.appendChild(head);
+
+    if (раскрыт) {
+      свои.forEach((з) => фрагмент.appendChild(
+        objectSwitchItemButton(з.проект, з.объект, false)));
+    }
+  }
+
+  if (!видимые.length) {
+    const пусто = document.createElement("div");
+    пусто.className = "object-switch-empty";
+    пусто.textContent = objectSwitch.query
+      ? "Ничего не найдено." + (показыватьАрхив ? "" : " Возможно, объект в архиве.")
+      : "Объектов пока нет.";
+    фрагмент.appendChild(пусто);
+  }
+
+  objectSwitchList.innerHTML = "";
+  objectSwitchList.appendChild(фрагмент);
+  objectSwitchTotal.textContent = видимые.length
+    ? `${видимые.length} из ${objectSwitch.index.length}`
+    : "";
+  objectSwitch.kbIndex = -1;
+}
+
+function renderObjectSwitch() {
+  renderObjectSwitchLabel();
+  renderObjectSwitchList();
+}
+
+// ---- Клавиатура в поповере ----
+// Стрелки и Enter, потому что при двух сотнях объектов набрать три буквы и
+// нажать Enter быстрее, чем целиться мышью в строку списка.
+function objectSwitchItems() {
+  return Array.from(objectSwitchList.querySelectorAll("button.object-switch-item"));
+}
+
+function moveObjectSwitchFocus(шаг) {
+  const кнопки = objectSwitchItems();
+  if (!кнопки.length) return;
+  кнопки.forEach((b) => b.classList.remove("kb-focus"));
+  objectSwitch.kbIndex = objectSwitch.kbIndex < 0
+    ? (шаг > 0 ? 0 : кнопки.length - 1)
+    : (objectSwitch.kbIndex + шаг + кнопки.length) % кнопки.length;
+  const цель = кнопки[objectSwitch.kbIndex];
+  цель.classList.add("kb-focus");
+  // Фокус НЕ переносится на кнопку: он остаётся в поле поиска, иначе
+  // следующая набранная буква ушла бы в никуда.
+  цель.scrollIntoView({ block: "nearest" });
 }
 
 // Объектные настройки (этап D, 2026-08-02): подписи, цвета зон, контракт по
@@ -1428,6 +1604,11 @@ async function loadLateThreshold() {
 async function switchObject(objectId) {
   if (objectId === state.objectId) return;
   state.objectId = objectId;
+  // Недавние двигаются СРАЗУ, не дожидаясь следующей загрузки дерева: иначе
+  // группа вверху поповера показывала бы вчерашний порядок до перезагрузки
+  // страницы. Сервер запоминает то же самое в users.recent_objects ниже.
+  state.recentObjectIds = [objectId].concat(
+    (state.recentObjectIds || []).filter((id) => id !== objectId)).slice(0, 6);
   renderObjectSwitch();
 
   // Смена объекта — это не «перезагрузить данные». Всё, что относилось к
@@ -9588,12 +9769,57 @@ document.getElementById("btn-object-switch").addEventListener("click", (e) => {
   const willOpen = !menu.classList.contains("open");
   if (willOpen) {
     const rect = e.currentTarget.getBoundingClientRect();
-    menu.style.left = Math.min(rect.left, window.innerWidth - 320) + "px";
+    menu.style.left = Math.min(rect.left, window.innerWidth - 440) + "px";
     menu.style.top = (rect.bottom + 6) + "px";
+    // Поиск сбрасывается при каждом открытии: прошлый запрос показал бы
+    // урезанный список, и человек решил бы, что объекты пропали.
+    objectSwitch.query = "";
+    objectSwitchQuery.value = "";
+    renderObjectSwitchList();
   }
   menu.classList.toggle("open");
+  // Фокус в поле — после показа: скрытый элемент фокус не принимает.
+  if (willOpen) objectSwitchQuery.focus();
 });
+// Клик ВНУТРИ поповера не должен его закрывать: там теперь поле ввода,
+// галочка и заголовки групп, по которым сворачивают.
+objectSwitchMenu.addEventListener("click", (e) => e.stopPropagation());
 document.addEventListener("click", () => objectSwitchMenu.classList.remove("open"));
+
+// Ввод в поиске. Задержка небольшая: список уже в памяти, ходить на сервер
+// не надо — она нужна только чтобы не перерисовывать полтысячи строк на
+// каждое нажатие при быстром наборе.
+let objectSwitchSearchTimer = null;
+objectSwitchQuery.addEventListener("input", () => {
+  clearTimeout(objectSwitchSearchTimer);
+  objectSwitchSearchTimer = setTimeout(() => {
+    objectSwitch.query = objectSwitchQuery.value.trim().toLowerCase();
+    renderObjectSwitchList();
+  }, 100);
+});
+
+objectSwitchQuery.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    moveObjectSwitchFocus(e.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const кнопки = objectSwitchItems();
+    // Без явного выделения Enter выбирает единственный результат поиска:
+    // набрал «корп 3», нажал — и ты там. Если результатов несколько, а
+    // выделения нет, ничего не происходит: угадывать за человека нельзя.
+    const цель = objectSwitch.kbIndex >= 0 ? кнопки[objectSwitch.kbIndex]
+      : (кнопки.length === 1 ? кнопки[0] : null);
+    if (цель) цель.click();
+  }
+});
+
+objectSwitchArchived.addEventListener("change", () => {
+  try { localStorage.setItem(OS_ARCHIVED_KEY, objectSwitchArchived.checked ? "1" : "0"); } catch (e) {}
+  renderObjectSwitchList();
+});
 
 // ==================== МЕНЮ "НАСТРОЙКИ" ====================
 const settingsMenu = document.getElementById("settings-menu");

@@ -272,6 +272,15 @@ FEATURES = [
             None, ["POST /reports/contracting-schedule"], SCOPE_OBJECT, _все(READ)),
     Feature("report_analytics", "Отчёты", "Аналитическая справка",
             None, ["POST /reports/analytics(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
+    # Карта — обзор ВСЕХ доступных объектов сразу, поэтому SCOPE_SERVICE, а не
+    # SCOPE_OBJECT, как у остальных отчётов: раздел засчитывается, если он
+    # выдан хоть на одном объекте, а сами точки на карте всё равно отбираются
+    # по доступу (2026-09-07).
+    Feature("map", "Отчёты", "Карта проектов",
+            "Показывает объекты с координатами на карте: где стройка, сколько элементов, "
+            "сколько смонтировано. Подложка карты и координаты не покидают контур — "
+            "файл карты лежит на сервере.",
+            ["GET /map/objects", "GET /map/config"], SCOPE_SERVICE, _все(READ)),
     Feature("report_notes", "Отчёты", "Примечания к отчётам: события, задачи, вопросы",
             None, ["GET /report-notes", "PUT/DELETE /report-notes"],
             SCOPE_OBJECT, _от(ADMIN, WRITE)),
