@@ -29,6 +29,9 @@ from app.attachments import delete_for_entity as delete_attachments_for
 from app.attachments import router as attachments_router
 from app.changelog import CHANGELOG
 from app.kladr import router as kladr_router
+from app.project_map import ONLINE_TILES_HOST as PROJECT_MAP_TILES_HOST
+from app.project_map import load_online_tiles_setting as load_project_map_setting
+from app.project_map import online_tiles_enabled as project_map_online
 from app.project_map import router as project_map_router
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
 from urllib.parse import quote
@@ -266,10 +269,26 @@ _CSP = (
 )
 
 
+def _csp_for_request() -> str:
+    """Политика безопасности для текущего состояния сервиса.
+
+    Единственное, что её меняет, — включённая администратором подложка карты
+    из интернета: тогда и только тогда в неё добавляется ровно один внешний
+    адрес. Пока настройка выключена (по умолчанию), политика не содержит
+    внешних адресов вовсе.
+    """
+    if not project_map_online():
+        return _CSP
+    хост = PROJECT_MAP_TILES_HOST
+    return (_CSP
+            .replace("img-src 'self' data: blob:", "img-src 'self' data: blob: " + хост)
+            .replace("connect-src 'self'", "connect-src 'self' " + хост))
+
+
 @app.middleware("http")
 async def security_headers(request, call_next):
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["Content-Security-Policy"] = _csp_for_request()
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
@@ -729,6 +748,16 @@ def on_startup():
     выполнено = release_tasks.run_pending()
     if выполнено:
         print(f"[startup] обработок релиза выполнено: {len(выполнено)}")
+
+    # Подложка карты из интернета: настройка читается в память один раз, её
+    # значение нужно КАЖДОМУ ответу сервера (политика безопасности строится
+    # в middleware), а ходить за ним в базу на каждый запрос незачем.
+    conn = get_connection()
+    try:
+        if load_project_map_setting(conn):
+            print("[startup] подложка карты берётся из интернета (включена администратором)")
+    finally:
+        conn.close()
 
 
 # СТРАЖ РЕГИСТРАЦИИ СТАРТА (2026-08-17). Проверка стоит здесь, а не в тестах,

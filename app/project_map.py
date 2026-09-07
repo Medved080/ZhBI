@@ -28,11 +28,46 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from pydantic import BaseModel
+
+from app import activity
 from app.access import require_service_feature
 from app.auth import get_current_user
 from app.db import get_connection
 
 MAP_DIR = os.environ.get("ZHBI_MAP_DIR") or "data/map"
+
+# ------------------------------------------------------- подложка из сети
+#
+# Основной путь — файл на диске: контур закрытый, наружу сервер не ходит.
+# Но собрать такой файл может не каждый: нужна отдельная утилита и часы на
+# вырезку. Поэтому есть второй путь — брать карту прямо из OpenStreetMap.
+#
+# ВЫКЛЮЧЕН ПО УМОЛЧАНИЮ и включается администратором осознанно: это
+# единственное место во всём сервисе, где браузер пользователя ходит на
+# чужой адрес. Адрес вшит в код, а не берётся из настройки: настройка с
+# произвольным адресом — это дыра в политике безопасности размером с любой
+# сайт в интернете.
+ONLINE_TILES_KEY = "map_online_tiles"
+ONLINE_TILES_HOST = "https://tile.openstreetmap.org"
+ONLINE_TILES_URL = ONLINE_TILES_HOST + "/{z}/{x}/{y}.png"
+
+# Значение читается на КАЖДЫЙ ответ сервера (политика безопасности строится
+# в middleware), поэтому держится в памяти, а не запрашивается из базы.
+_online_tiles = False
+
+
+def online_tiles_enabled() -> bool:
+    return _online_tiles
+
+
+def load_online_tiles_setting(conn) -> bool:
+    """Прочитать настройку из базы в память. Зовётся при старте и после
+    каждой правки — иначе политика безопасности и карта разъедутся."""
+    global _online_tiles
+    from app.settings import get_setting
+    _online_tiles = get_setting(conn, ONLINE_TILES_KEY, None, "0") == "1"
+    return _online_tiles
 
 # Подложка из OpenStreetMap распространяется по ODbL, и указание авторства —
 # требование лицензии, а не вежливость. Показывается в углу карты.
@@ -104,7 +139,38 @@ def map_config(user: sqlite3.Row = Depends(require_service_feature("map", "read"
         "attribution": ATTRIBUTION,
         "default_center": {"lat": DEFAULT_CENTER[0], "lon": DEFAULT_CENTER[1]},
         "default_zoom": DEFAULT_ZOOM,
+        "online": _online_tiles,
+        "online_url": ONLINE_TILES_URL if _online_tiles else None,
     }
+
+
+class OnlineTilesIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/online-tiles")
+def set_online_tiles(
+    body: OnlineTilesIn,
+    admin: sqlite3.Row = Depends(require_service_feature("map", "write")),
+):
+    """Включить или выключить подложку из интернета.
+
+    Отдельное осознанное действие администратора: пока оно выключено, ни
+    один браузер не ходит наружу, и политика безопасности не содержит ни
+    одного внешнего адреса.
+    """
+    from app.settings import set_setting
+
+    conn = get_connection()
+    try:
+        set_setting(conn, ONLINE_TILES_KEY, None, "1" if body.enabled else "0")
+        conn.commit()
+        load_online_tiles_setting(conn)
+    finally:
+        conn.close()
+    activity.log("map_online_tiles", user=admin,
+                 new_value="включена" if body.enabled else "выключена")
+    return {"online": _online_tiles}
 
 
 @router.get("/tiles/{name}")

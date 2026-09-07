@@ -2519,6 +2519,7 @@
   #map-modal.map-maximized { width: 96vw; max-width: 96vw; height: 94vh; }
   .map-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
   .map-toolbar input { flex: 0 1 260px; }
+  .map-online-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
   .map-layout { display: flex; gap: 0; padding: 0; overflow: hidden; }
   /* Список слева — не украшение: на карте страны точки сливаются, а найти
      объект по названию нужно чаще, чем разглядывать его положение. */
@@ -6938,6 +6939,13 @@
         <input type="text" id="map-search" placeholder="Найти объект на карте" autocomplete="off"/>
         <button class="btn btn-sm btn-secondary" id="map-fit">Показать все</button>
         <button class="btn btn-sm btn-secondary" id="map-current">Мой объект</button>
+        <!-- Подложка из интернета: единственное место в сервисе, где браузер
+             ходит на чужой адрес, поэтому переключатель виден только тем, кто
+             может его включить, и выключен по умолчанию. -->
+        <label class="map-online-toggle" id="map-online-box" hidden
+               title="Карта будет загружаться с сайта OpenStreetMap. Требуется доступ в интернет с рабочих мест.">
+          <input type="checkbox" id="map-online"/> Карта из интернета
+        </label>
         <span class="hint-text" id="map-note"></span>
       </div>
     </div>

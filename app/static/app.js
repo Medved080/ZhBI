@@ -11815,6 +11815,9 @@ function renderMapSide(объекты, фильтр) {
 
 async function openProjectMap() {
   mapBackdrop.classList.add("open");
+  // Переключатель подложки из интернета — только тем, кто может её включить.
+  const коробка = document.getElementById("map-online-box");
+  коробка.hidden = !can("map", "write");
   const холст = document.getElementById("map-canvas");
   const заметка = document.getElementById("map-note");
   // Прежняя карта уничтожается по той же причине, что и мини-карта в форме:
@@ -11827,6 +11830,9 @@ async function openProjectMap() {
   заметка.textContent = "Загрузка карты…";
   try {
     const m = await ensureMapModule();
+    // Состояние переключателя приходит с сервера: настройка общая, а не
+    // личная, и человек должен видеть, как есть на самом деле.
+    api("/map/config").then((c) => { document.getElementById("map-online").checked = !!c.online; });
     projectMap = await m.renderProjectMap(холст, {
       onOpenObject: async (id) => {
         mapBackdrop.classList.remove("open");
@@ -11838,7 +11844,10 @@ async function openProjectMap() {
         if (бедаСПодложкой) {
           части.push(бедаСПодложкой + " Объекты показаны на пустом фоне.");
         } else if (!естьПодложка) {
-          части.push("Подложка не загружена: объекты показаны на пустом фоне.");
+          части.push("Подложка не загружена: объекты показаны на пустом фоне. "
+            + (can("map", "write")
+              ? "Включите «Карту из интернета» или положите файл подложки на сервер."
+              : "Обратитесь к администратору сервиса."));
         }
         заметка.textContent = части.join(" ");
       },
@@ -11865,6 +11874,25 @@ document.getElementById("map-fit").addEventListener("click", () => {
 });
 document.getElementById("map-current").addEventListener("click", () => {
   if (projectMap && state.objectId) projectMap.навести(state.objectId);
+});
+document.getElementById("map-online").addEventListener("change", async (e) => {
+  const включить = e.target.checked;
+  try {
+    await api("/map/online-tiles", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: включить }),
+    });
+    // Политика безопасности отдаётся на каждый ответ сервера и уже
+    // изменилась, но СТРАНИЦА получила прежнюю: без перезагрузки браузер
+    // запретил бы картинки с чужого адреса.
+    showToast(включить
+      ? "Подложка включена. Страница перезагрузится."
+      : "Подложка выключена. Страница перезагрузится.", "info");
+    setTimeout(() => window.location.reload(), 900);
+  } catch (err) {
+    e.target.checked = !включить;
+    showToast(err.message || "Не удалось изменить настройку", "error");
+  }
 });
 setupResizableModal({
   backdrop: mapBackdrop,

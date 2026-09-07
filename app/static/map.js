@@ -75,6 +75,19 @@ function стильКарты(config) {
     id: "фон", type: "background",
     paint: { "background-color": "#eceff1" },
   }];
+
+  // Подложка из интернета — если администратор её включил. Растровая: это
+  // готовые картинки, им не нужны ни шрифты, ни файл на диске.
+  if (config.online && config.online_url) {
+    источники.osm = {
+      type: "raster",
+      tiles: [config.online_url],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: config.attribution,
+    };
+    слои.push({ id: "osm", type: "raster", source: "osm" });
+  }
   (config.basemaps || []).filter((b) => !b.problem).forEach((b, i) => {
     const имя = "basemap" + i;
     источники[имя] = {
@@ -287,7 +300,11 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
   // ошибка чтения внутри библиотеки уходит только в консоль браузера, и
   // человек видел бы пустой фон без единого слова о причине.
   const негодные = (config.basemaps || []).filter((b) => b.problem);
-  const естьПодложка = (config.basemaps || []).some((b) => !b.problem);
+  // Подложка есть, если годен хоть один файл ИЛИ включена карта из
+  // интернета: иначе экран сообщал бы «подложка не загружена», показывая
+  // при этом карту.
+  const естьПодложка = !!config.online
+    || (config.basemaps || []).some((b) => !b.problem);
   const бедаСПодложкой = негодные.length
     ? `Файл подложки «${негодные[0].name}» не годится: ${негодные[0].problem}.`
     : null;
