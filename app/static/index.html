@@ -2509,6 +2509,11 @@
   .address-region-list label { display: flex; align-items: baseline; gap: 6px; font-size: 12px; padding: 2px 0; }
   .address-region-count { color: var(--color-text-muted); font-size: 11px; }
   .address-houses-toggle { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 12px; }
+  .address-получить { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 4px; }
+  .address-получить .address-houses-toggle { margin-top: 0; }
+  /* Метка, притворяющаяся кнопкой: настоящее поле выбора файла спрятано,
+     потому что его вид браузер не даёт причесать. */
+  .address-получить label.btn { cursor: pointer; }
   /* -------- карта проектов (2026-09-07) -------- */
   #map-modal { width: 1100px; max-width: 96vw; height: 82vh; }
   #map-modal.map-maximized { width: 96vw; max-width: 96vw; height: 94vh; }
@@ -6953,14 +6958,25 @@
       <p class="hint-text">
         Даёт подсказки по адресу в справочнике «Проекты и объекты»: регион,
         населённый пункт, улица, проверка номера дома и почтовый индекс.
-        Источник — КЛАДР Федеральной налоговой службы,
-        <code>nalog.gov.ru/files/kladr/BASE.7z</code>. Скачайте архив, распакуйте
-        у себя и положите файлы <code>KLADR.DBF</code>, <code>STREET.DBF</code>,
-        <code>DOMA.DBF</code> и <code>SOCRBASE.DBF</code> в папку
-        <code id="address-dir">data/kladr/</code> на диске сервера.
-        Классификатор хранится отдельным файлом и в резервные копии базы не входит.
+        Источник — КЛАДР Федеральной налоговой службы. Система скачивает и
+        распаковывает его сама; если у сервера нет выхода в интернет, скачайте
+        <code>nalog.gov.ru/files/kladr/BASE.7z</code> на свой компьютер и
+        загрузите файл кнопкой ниже. Классификатор хранится отдельно от базы и
+        в резервные копии не входит; папка на сервере —
+        <code id="address-dir">data/kladr/</code>.
       </p>
       <div id="address-loaded" class="disk-plate"></div>
+      <!-- Два пути получить классификатор. Первый — одной кнопкой, когда у
+           сервера есть интернет. Второй — файлом из браузера, для закрытого
+           контура: человек качает архив у себя. -->
+      <div class="address-получить">
+        <button class="btn btn-primary" id="address-fetch">Скачать и распаковать</button>
+        <label class="btn btn-secondary" for="address-file">Загрузить файл…</label>
+        <input type="file" id="address-file" accept=".7z,.zip,.dbf" hidden/>
+        <label class="address-houses-toggle" title="Дома нужны для проверки номера и уточнения индекса">
+          <input type="checkbox" id="address-with-houses" checked/> С домами (архив распакуется дольше)
+        </label>
+      </div>
       <div class="hint-text" id="address-status"></div>
     </div>
     <div class="modal-sticky-scroll">
@@ -6976,7 +6992,7 @@
       </p>
       <div id="address-regions" class="address-region-list"></div>
       <label class="address-houses-toggle" title="Дома нужны для проверки номера и уточнения индекса">
-        <input type="checkbox" id="address-load-houses" checked/> Загружать дома (файл крупный, но точнее индекс)
+        <input type="checkbox" id="address-load-houses" checked/> Загружать дома в базу (точнее почтовый индекс)
       </label>
     </div>
     <div class="modal-sticky-foot">

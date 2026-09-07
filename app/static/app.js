@@ -11907,7 +11907,9 @@ function renderAddressFiles(файлы) {
     b.addEventListener("click", async () => {
       setAddressStatus("Распаковка…", false);
       try {
-        await api("/address/unpack?name=" + encodeURIComponent(b.dataset.unpack), { method: "POST" });
+        const дома = document.getElementById("address-with-houses").checked;
+        await api("/address/unpack?name=" + encodeURIComponent(b.dataset.unpack)
+                  + "&houses=" + дома, { method: "POST" });
         await renderAddressModal();
         setAddressStatus("Распаковано.", false);
       } catch (e) {
@@ -11987,6 +11989,86 @@ function startAddressPolling() {
     } catch (e) { stopAddressPolling(); }
   }, 1000);
 }
+
+// Прогресс скачивания и распаковки: в отличие от загрузки регионов, здесь
+// известен общий объём, поэтому показываем проценты — иначе полсотни
+// мегабайт по сети выглядят как зависание.
+function отчётОПрогрессе(job) {
+  if (!job) return "";
+  const доля = job.total
+    ? ` ${Math.round((job.done || 0) * 100 / job.total)} %`
+    : (job.done ? ` ${(job.done / 1048576).toFixed(0)} МБ` : "");
+  return `${job.stage}${доля}…`;
+}
+
+async function ждатьЗадачу(наГотово) {
+  stopAddressPolling();
+  addressPollTimer = setInterval(async () => {
+    try {
+      const { job } = await api("/address/load-status");
+      const место = document.getElementById("address-progress");
+      if (!job) { stopAddressPolling(); место.textContent = ""; return; }
+      место.style.color = "var(--color-text-muted)";
+      if (job.state === "running") {
+        место.textContent = отчётОПрогрессе(job);
+      } else if (job.state === "done") {
+        stopAddressPolling();
+        место.textContent = "";
+        if (addressModule) addressModule.resetClassifierCache();
+        await наГотово(job);
+      } else if (job.state === "error") {
+        stopAddressPolling();
+        место.textContent = "Ошибка: " + (job.error || "");
+        место.style.color = "var(--color-danger)";
+      }
+    } catch (e) { stopAddressPolling(); }
+  }, 700);
+}
+
+document.getElementById("address-fetch").addEventListener("click", async () => {
+  const дома = document.getElementById("address-with-houses").checked;
+  setAddressStatus("", false);
+  try {
+    await api(`/address/fetch?houses=${дома}&download=true`, { method: "POST" });
+    ждатьЗадачу(async (job) => {
+      await renderAddressModal();
+      const файлы = (job.result && job.result.files) || [];
+      setAddressStatus("Классификатор получен: " + файлы.join(", ")
+        + ". Отметьте регионы и нажмите «Загрузить отмеченные».", false);
+    });
+  } catch (e) {
+    setAddressStatus(e.message || "Не удалось начать загрузку", true);
+  }
+});
+
+document.getElementById("address-file").addEventListener("change", async (e) => {
+  const файл = e.target.files && e.target.files[0];
+  if (!файл) return;
+  setAddressStatus(`Загружаем «${файл.name}» (${(файл.size / 1048576).toFixed(1)} МБ)…`, false);
+  const форма = new FormData();
+  форма.append("file", файл);
+  try {
+    const r = await fetch("/address/upload", { method: "POST", body: форма });
+    if (!r.ok) throw new Error(((await r.json()) || {}).detail || "не удалось загрузить");
+    e.target.value = "";
+    // Архив распаковывается сразу: человек принёс его именно за этим.
+    if (/\.(7z|zip)$/i.test(файл.name)) {
+      const дома = document.getElementById("address-with-houses").checked;
+      await api(`/address/fetch?houses=${дома}&download=false`, { method: "POST" });
+      ждатьЗадачу(async (job) => {
+        await renderAddressModal();
+        const файлы = (job.result && job.result.files) || [];
+        setAddressStatus("Готово: " + файлы.join(", ")
+          + ". Отметьте регионы и нажмите «Загрузить отмеченные».", false);
+      });
+    } else {
+      await renderAddressModal();
+      setAddressStatus("Файл загружен.", false);
+    }
+  } catch (err) {
+    setAddressStatus(err.message || "Не удалось загрузить файл", true);
+  }
+});
 
 document.getElementById("menu-address-classifier").addEventListener("click", async () => {
   addressBackdrop.classList.add("open");

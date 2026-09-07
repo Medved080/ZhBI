@@ -35,19 +35,24 @@ import os
 import re
 import shutil
 import sqlite3
+import lzma
 import struct
 import subprocess
 import threading
 import time
+import urllib.request
 import zipfile
 from typing import Dict, Iterator, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app import activity
 from app.access import require_service_feature
 from app.auth import get_current_user
+from app.upload_limits import copy_upload_limited
 
 # Каталог, куда человек кладёт файлы классификатора, и файл базы.
 KLADR_DIR = os.environ.get("ZHBI_KLADR_DIR") or "data/kladr"
@@ -126,6 +131,355 @@ def read_dbf(path: str, encoding: str = "cp866") -> Iterator[Dict[str, str]]:
             }
 
 
+# --------------------------------------------------------- распаковка 7z
+#
+# КЛАДР раздаётся ФНС ТОЛЬКО в формате 7z, а Python его не открывает.
+# Готовая библиотека (py7zr) тянет девять зависимостей, часть с
+# C-расширениями, в образ, который собирается без сборочных инструментов, —
+# ради одной разовой операции это дорого.
+#
+# Здесь распаковывается ЧАСТНЫЙ СЛУЧАЙ: архив из одного сплошного потока,
+# сжатого обычным LZMA, без шифрования и без цепочек фильтров. Именно так
+# собран BASE.7z (проверено на живом файле: кодер 030101, свойства
+# 5d00000001). Сам LZMA умеет стандартный модуль `lzma`, поэтому работы
+# ровно на разбор оглавления. Любой другой случай — внятный отказ, а не
+# попытка угадать.
+#
+# Прецедент в проекте: разбор DBF выше написан по той же причине.
+
+SEVEN_ZIP_SIGNATURE = b"7z\xbc\xaf\x27\x1c"
+
+# Идентификаторы кодеров, которые мы умеем.
+_CODER_LZMA1 = bytes.fromhex("030101")
+_CODER_LZMA2 = bytes.fromhex("21")
+_CODER_COPY = bytes.fromhex("00")
+
+
+class SevenZipError(Exception):
+    """Архив не тот, повреждён или сжат способом, которого мы не умеем."""
+
+
+class _Reader:
+    """Чтение оглавления 7z: числа переменной длины и битовые векторы."""
+
+    def __init__(self, data: bytes):
+        self.d = data
+        self.i = 0
+
+    def byte(self) -> int:
+        if self.i >= len(self.d):
+            raise SevenZipError("оглавление архива обрывается")
+        b = self.d[self.i]
+        self.i += 1
+        return b
+
+    def take(self, n: int) -> bytes:
+        if self.i + n > len(self.d):
+            raise SevenZipError("оглавление архива обрывается")
+        r = self.d[self.i:self.i + n]
+        self.i += n
+        return r
+
+    def number(self) -> int:
+        """Число 7z: маска в первом байте говорит, сколько байт следом."""
+        first = self.byte()
+        mask = 0x80
+        value = 0
+        for i in range(8):
+            if not (first & mask):
+                return value | ((first & (mask - 1)) << (8 * i))
+            value |= self.byte() << (8 * i)
+            mask >>= 1
+        return value
+
+    def bits(self, n: int) -> list:
+        out, current, mask = [], 0, 0
+        for _ in range(n):
+            if mask == 0:
+                current, mask = self.byte(), 0x80
+            out.append(bool(current & mask))
+            mask >>= 1
+        return out
+
+    def bool_vector(self, n: int) -> list:
+        """«Все определены» одним байтом либо битовый вектор."""
+        return [True] * n if self.byte() else self.bits(n)
+
+
+def _lzma_filters(coder_id: bytes, props: bytes) -> list:
+    if coder_id == _CODER_LZMA1:
+        if len(props) < 5:
+            raise SevenZipError("нет свойств LZMA")
+        d = props[0]
+        return [{
+            "id": lzma.FILTER_LZMA1,
+            "dict_size": struct.unpack("<I", props[1:5])[0],
+            "lc": d % 9, "lp": (d // 9) % 5, "pb": (d // 9) // 5,
+        }]
+    if coder_id == _CODER_LZMA2:
+        return [{"id": lzma.FILTER_LZMA2}]
+    raise SevenZipError(
+        "архив сжат неподдерживаемым способом (кодер %s). "
+        "Распакуйте его на своём компьютере и положите файлы .DBF рядом"
+        % coder_id.hex())
+
+
+def _decompress(data: bytes, coder_id: bytes, props: bytes, size: int) -> bytes:
+    if coder_id == _CODER_COPY:
+        return data[:size]
+    d = lzma.LZMADecompressor(format=lzma.FORMAT_RAW,
+                              filters=_lzma_filters(coder_id, props))
+    return d.decompress(data, size)
+
+
+def _read_streams_info(r: _Reader) -> dict:
+    """Секция StreamsInfo: где лежат сжатые куски и что из них получается."""
+    info = {"pack_pos": 0, "pack_sizes": [], "folders": [], "unpack_sizes": [],
+            "sub_sizes": []}
+    t = r.byte()
+    if t == 0x06:                                    # kPackInfo
+        info["pack_pos"] = r.number()
+        n = r.number()
+        t = r.byte()
+        while t != 0x00:
+            if t == 0x09:                            # kSize
+                info["pack_sizes"] = [r.number() for _ in range(n)]
+            elif t == 0x0A:                          # kCRC
+                if r.byte():
+                    r.take(4 * n)
+                else:
+                    определены = r.bits(n)
+                    r.take(4 * sum(1 for x in определены if x))
+            else:
+                raise SevenZipError("неизвестная запись 0x%02x в PackInfo" % t)
+            t = r.byte()
+        t = r.byte()
+
+    if t == 0x07:                                    # kUnPackInfo
+        if r.byte() != 0x0B:                         # kFolder
+            raise SevenZipError("ожидалось описание папок архива")
+        число_папок = r.number()
+        if r.byte():
+            raise SevenZipError("оглавление во внешнем потоке не поддерживается")
+        for _ in range(число_папок):
+            кодеров = r.number()
+            папка = []
+            for _ in range(кодеров):
+                флаги = r.byte()
+                cid = r.take(флаги & 0x0F)
+                if флаги & 0x10:                     # сложный кодер: много входов
+                    r.number(); r.number()
+                props = b""
+                if флаги & 0x20:
+                    props = r.take(r.number())
+                папка.append((cid, props))
+            if кодеров != 1:
+                raise SevenZipError(
+                    "архив собран цепочкой кодеров — такой мы не распаковываем")
+            info["folders"].append(папка)
+        if r.byte() != 0x0C:                         # kCodersUnPackSize
+            raise SevenZipError("нет размеров распакованных папок")
+        info["unpack_sizes"] = [r.number() for _ in info["folders"]]
+        t = r.byte()
+        while t != 0x00:
+            if t == 0x0A:                            # kCRC папок
+                n = len(info["folders"])
+                if r.byte():
+                    r.take(4 * n)
+                else:
+                    определены = r.bits(n)
+                    r.take(4 * sum(1 for x in определены if x))
+            else:
+                raise SevenZipError("неизвестная запись 0x%02x в UnPackInfo" % t)
+            t = r.byte()
+        t = r.byte()
+
+    if t == 0x08:                                    # kSubStreamsInfo
+        числа = [1] * len(info["folders"])
+        t = r.byte()
+        if t == 0x0D:                                # kNumUnPackStream
+            числа = [r.number() for _ in info["folders"]]
+            t = r.byte()
+        размеры = []
+        if t == 0x09:                                # kSize
+            for i, сколько in enumerate(числа):
+                сумма = 0
+                for _ in range(сколько - 1):
+                    v = r.number()
+                    размеры.append(v)
+                    сумма += v
+                if сколько:
+                    размеры.append(info["unpack_sizes"][i] - сумма)
+            t = r.byte()
+        else:
+            for i, сколько in enumerate(числа):
+                if сколько == 1:
+                    размеры.append(info["unpack_sizes"][i])
+        info["sub_sizes"] = размеры
+        while t != 0x00:
+            if t == 0x0A:                            # kCRC подпотоков
+                неизвестных = len(размеры)
+                if r.byte():
+                    r.take(4 * неизвестных)
+                else:
+                    определены = r.bits(неизвестных)
+                    r.take(4 * sum(1 for x in определены if x))
+            else:
+                raise SevenZipError("неизвестная запись 0x%02x в SubStreamsInfo" % t)
+            t = r.byte()
+        t = r.byte()
+
+    if t != 0x00:
+        raise SevenZipError("оглавление архива устроено не так, как ожидалось")
+    if not info["sub_sizes"]:
+        info["sub_sizes"] = list(info["unpack_sizes"])
+    return info
+
+
+def _read_names(r: _Reader, число_файлов: int) -> list:
+    """Имена файлов из секции FilesInfo. Пустые записи (папки) отбрасываются
+    вместе со своими флагами."""
+    имена, пустые = [], [False] * число_файлов
+    while True:
+        тип = r.byte()
+        if тип == 0x00:
+            break
+        размер = r.number()
+        конец = r.i + размер
+        if тип == 0x11:                              # kName
+            if r.byte():
+                raise SevenZipError("имена файлов во внешнем потоке")
+            сырые = r.take(конец - r.i)
+            имена = [x for x in сырые.decode("utf-16-le", "replace").split("\x00") if x]
+        elif тип == 0x0E:                            # kEmptyStream
+            пустые = r.bits(число_файлов)
+        r.i = конец
+    return имена, пустые
+
+
+def read_7z_index(path: str) -> dict:
+    """Оглавление архива: имена файлов, их размеры и как добраться до данных."""
+    with open(path, "rb") as f:
+        подпись = f.read(32)
+        if len(подпись) < 32 or подпись[:6] != SEVEN_ZIP_SIGNATURE:
+            raise SevenZipError("это не архив 7z")
+        смещение, размер, _ = struct.unpack("<QQI", подпись[12:32])
+        f.seek(32 + смещение)
+        хвост = f.read(размер)
+        if len(хвост) < размер:
+            raise SevenZipError("архив скачан не полностью")
+
+        r = _Reader(хвост)
+        тип = r.byte()
+        if тип == 0x17:                              # kEncodedHeader — сам сжат
+            служебный = _read_streams_info(r)
+            cid, props = служебный["folders"][0][0]
+            f.seek(32 + служебный["pack_pos"])
+            сырой = f.read(служебный["pack_sizes"][0])
+            заголовок = _decompress(сырой, cid, props, служебный["unpack_sizes"][0])
+            r = _Reader(заголовок)
+            тип = r.byte()
+        if тип != 0x01:
+            raise SevenZipError("в архиве нет оглавления")
+
+        t = r.byte()
+        streams = None
+        имена, пустые = [], []
+        while t != 0x00:
+            if t == 0x04:                            # kMainStreamsInfo
+                streams = _read_streams_info(r)
+            elif t == 0x05:                          # kFilesInfo
+                число = r.number()
+                имена, пустые = _read_names(r, число)
+            elif t == 0x02:                          # kArchiveProperties
+                while True:
+                    pt = r.byte()
+                    if pt == 0:
+                        break
+                    r.take(r.number())
+            else:
+                raise SevenZipError("неизвестная секция 0x%02x в оглавлении" % t)
+            t = r.byte()
+
+        if streams is None or not streams["folders"]:
+            raise SevenZipError("в архиве нет данных")
+        if len(streams["folders"]) != 1:
+            raise SevenZipError(
+                "архив состоит из нескольких блоков — такой мы не распаковываем")
+
+        # Имена файлов С ДАННЫМИ: пустые записи (каталоги) размеров не имеют.
+        с_данными = [имя for имя, пусто in zip(имена, пустые or [False] * len(имена))
+                     if not пусто] if пустые else имена
+        размеры = streams["sub_sizes"]
+        if len(с_данными) != len(размеры):
+            # Имена и размеры разошлись — работаем по размерам, имена
+            # подставляем позиционно: лучше распаковать под номерами, чем
+            # отказать целиком.
+            с_данными = (с_данными + ["file%d" % i for i in range(len(размеры))])[:len(размеры)]
+        cid, props = streams["folders"][0][0]
+        return {
+            "names": с_данными,
+            "sizes": размеры,
+            "pack_pos": 32 + streams["pack_pos"],
+            "pack_size": streams["pack_sizes"][0],
+            "unpack_size": streams["unpack_sizes"][0],
+            "coder": cid,
+            "props": props,
+        }
+
+
+def extract_7z(path: str, dest_dir: str, only: Optional[set] = None,
+               on_progress=None) -> List[str]:
+    """Распаковать нужные файлы из архива.
+
+    Поток разжимается КУСКАМИ и сразу пишется на диск: внутри BASE.7z около
+    шестисот мегабайт, и держать их в памяти незачем. Ненужные файлы
+    (например, дома, если их не просили) пропускаются без записи — данные
+    всё равно приходится прогонять через декомпрессор, потому что поток
+    сплошной.
+    """
+    индекс = read_7z_index(path)
+    os.makedirs(dest_dir, exist_ok=True)
+    фильтр = {n.upper() for n in only} if only else None
+
+    записаны = []
+    d = lzma.LZMADecompressor(format=lzma.FORMAT_RAW,
+                              filters=_lzma_filters(индекс["coder"], индекс["props"]))
+    with open(path, "rb") as f:
+        f.seek(индекс["pack_pos"])
+        осталось_сжатого = индекс["pack_size"]
+        буфер = b""
+        сделано = 0
+
+        for имя, размер in zip(индекс["names"], индекс["sizes"]):
+            короткое = os.path.basename(имя.replace("\\", "/"))
+            нужен = фильтр is None or короткое.upper() in фильтр
+            цель = open(os.path.join(dest_dir, короткое), "wb") if нужен else None
+            осталось = размер
+            try:
+                while осталось > 0:
+                    if not буфер:
+                        порция = f.read(min(1 << 20, осталось_сжатого)) if осталось_сжатого > 0 else b""
+                        осталось_сжатого -= len(порция)
+                        буфер = d.decompress(порция, 1 << 22)
+                        if not буфер and not порция:
+                            raise SevenZipError("архив кончился раньше времени")
+                    кусок = буфер[:осталось]
+                    буфер = буфер[len(кусок):]
+                    осталось -= len(кусок)
+                    сделано += len(кусок)
+                    if цель:
+                        цель.write(кусок)
+                    if on_progress:
+                        on_progress(короткое, сделано, индекс["unpack_size"])
+            finally:
+                if цель:
+                    цель.close()
+            if нужен:
+                записаны.append(короткое)
+    return записаны
+
+
 # ------------------------------------------------------------- коды КЛАДР
 #
 # Код записи 13 знаков: SS RRR GGG PPP AA — регион, район, город,
@@ -179,20 +533,31 @@ def parent_code(code: str) -> Optional[str]:
     return code[:2] + "000000000" + "00"
 
 
+# Сокращения, которые пишутся ПОСЛЕ названия: «Тверская обл», «Калининский
+# р-н». Всё остальное — перед: «г Тверь», «д Аввакумово».
+#
+# Решает именно сокращение, а НЕ уровень записи. По уровню выходила «Москва
+# г»: город федерального значения — регион, но пишется он как город. Набор
+# собран по живому файлу КЛАДР (все сокращения уровней 1-3).
+_СОКРАЩЕНИЯ_ПОСЛЕ = {
+    "обл", "край", "респ", "ао", "аобл", "аокр", "р-н", "у", "чувашия",
+    "с/п", "с/с", "с/мо", "с/а", "с/о", "п/о", "волость", "нац. р-н",
+}
+
+
 def format_name(name: str, socr: str, level: Optional[int] = None) -> str:
     """«Тверь» + «г» → «г Тверь», «Тверская» + «обл» → «Тверская обл».
 
-    Порядок слов зависит от уровня, и это не косметика: по-русски пишут
-    «Тверская обл, Калининский р-н, д Аввакумово» — у региона и района тип
-    идёт ПОСЛЕ названия, у города и посёлка ПЕРЕД ним. Обратный порядок
-    («обл Тверская») сразу читается как машинный вывод.
+    Порядок слов — не косметика: по-русски пишут «Тверская обл, Калининский
+    р-н, д Аввакумово». Обратный порядок («обл Тверская») сразу читается как
+    машинный вывод.
+
+    `level` больше ни на что не влияет и оставлен ради совместимости вызовов.
     """
     name, socr = (name or "").strip(), (socr or "").strip()
     if not socr:
         return name
-    if level is None:
-        level = LEVEL_SETTLEMENT
-    if level in (LEVEL_REGION, LEVEL_AREA):
+    if socr.lower() in _СОКРАЩЕНИЯ_ПОСЛЕ:
         return "%s %s" % (name, socr)
     return "%s %s" % (socr, name)
 
@@ -348,6 +713,23 @@ def _set_job(**поля):
     _job.update(поля)
 
 
+def найти_файл(имя: str) -> Optional[str]:
+    """Путь к файлу классификатора БЕЗ учёта регистра.
+
+    В архиве ФНС файлы названы «KLADR.dbf», а в наших константах —
+    «KLADR.DBF». На macOS разницы нет, а на Linux (то есть на сервере) файл
+    просто не находится — и классификатор молча считается незагруженным.
+    """
+    цель = имя.upper()
+    try:
+        for f in os.listdir(KLADR_DIR):
+            if f.upper() == цель:
+                return os.path.join(KLADR_DIR, f)
+    except OSError:
+        pass
+    return None
+
+
 def list_source_files() -> List[dict]:
     """Что человек положил в data/kladr/ — с размером и датой.
 
@@ -379,6 +761,57 @@ def list_source_files() -> List[dict]:
     return out
 
 
+# Откуда система качает классификатор сама. Один официальный адрес, вшитый
+# в код: подставлять сюда произвольную ссылку из запроса — это скачивание
+# чего угодно откуда угодно руками сервера.
+KLADR_URL = "https://www.nalog.gov.ru/files/kladr/BASE.7z"
+
+# Имя, под которым архив ложится в каталог классификатора.
+ARCHIVE_NAME = "BASE.7z"
+
+
+def download_archive(on_progress=None) -> dict:
+    """Скачать архив КЛАДР с сайта ФНС прямо на сервер.
+
+    Работает там, где у сервера есть выход наружу. В закрытом контуре
+    вернётся внятный отказ, и остаётся второй путь — загрузить файл через
+    браузер со своего компьютера.
+
+    Своё имя клиента обязательно: без него сайт отвечает отказом.
+    """
+    os.makedirs(KLADR_DIR, exist_ok=True)
+    цель = os.path.join(KLADR_DIR, ARCHIVE_NAME)
+    временный = цель + ".part"
+    запрос = urllib.request.Request(
+        KLADR_URL, headers={"User-Agent": "zhbi-tool/1.0"})
+    try:
+        with urllib.request.urlopen(запрос, timeout=120) as ответ:
+            всего = int(ответ.headers.get("Content-Length") or 0)
+            принято = 0
+            with open(временный, "wb") as f:
+                while True:
+                    кусок = ответ.read(1 << 20)
+                    if not кусок:
+                        break
+                    f.write(кусок)
+                    принято += len(кусок)
+                    if on_progress:
+                        on_progress(принято, всего)
+    except Exception as e:                            # noqa: BLE001
+        try:
+            os.remove(временный)
+        except OSError:
+            pass
+        raise RuntimeError(
+            "Не удалось скачать классификатор с сайта ФНС: %s. "
+            "Если у сервера нет выхода в интернет — скачайте файл на своём "
+            "компьютере и загрузите его кнопкой ниже." % e)
+    # Переименование в самом конце: недокачанный файл не должен выглядеть
+    # готовым, иначе следующая загрузка сломается на полпути.
+    os.replace(временный, цель)
+    return {"name": ARCHIVE_NAME, "size": os.path.getsize(цель)}
+
+
 def _find_7z() -> Optional[str]:
     for имя in ("7z", "7za", "7zz"):
         путь = shutil.which(имя)
@@ -387,7 +820,7 @@ def _find_7z() -> Optional[str]:
     return None
 
 
-def unpack_archive(имя_файла: str) -> List[str]:
+def unpack_archive(имя_файла: str, нужны_дома: bool = True, on_progress=None) -> List[str]:
     """Распаковать архив из data/kladr/ рядом с ним.
 
     Работает только если в системе есть бинарь 7z (для .zip — своими
@@ -395,8 +828,8 @@ def unpack_archive(имя_файла: str) -> List[str]:
     сюда уже .DBF.
     """
     имя = os.path.basename(имя_файла)
-    путь = os.path.join(KLADR_DIR, имя)
-    if not os.path.isfile(путь):
+    путь = найти_файл(имя)
+    if not путь:
         raise FileNotFoundError("Файл не найден: %s" % имя)
     if имя.upper().endswith(".ZIP"):
         with zipfile.ZipFile(путь) as z:
@@ -407,14 +840,26 @@ def unpack_archive(имя_файла: str) -> List[str]:
                 with z.open(n) as src, open(цель, "wb") as dst:
                     shutil.copyfileobj(src, dst)
         return [os.path.basename(n) for n in имена]
-    бинарь = _find_7z()
-    if not бинарь:
-        raise RuntimeError(
-            "Архив 7z распаковать нечем: на сервере нет программы 7z. "
-            "Распакуйте архив у себя и положите в data/kladr/ файлы .DBF")
-    subprocess.run([бинарь, "x", "-y", "-o" + KLADR_DIR, путь],
-                   check=True, capture_output=True, timeout=1800)
-    return [f["name"] for f in list_source_files() if f["kind"] == "dbf"]
+
+    # Свой распаковщик 7z (см. выше): системного `7z` на сервере может не
+    # быть, а ставить его туда некому. Берём только нужные файлы — из
+    # шестисот мегабайт архива дома занимают почти четыреста.
+    нужные = {FILE_OBJECTS, FILE_STREETS, FILE_SOCR}
+    if нужны_дома:
+        нужные.add(FILE_HOUSES)
+    try:
+        return extract_7z(путь, KLADR_DIR, only=нужные, on_progress=on_progress)
+    except SevenZipError as e:
+        # Свой распаковщик умеет частный случай. Не тот случай — пробуем
+        # системную программу, если она есть, и только потом сдаёмся.
+        бинарь = _find_7z()
+        if not бинарь:
+            raise RuntimeError(
+                "Не удалось распаковать архив: %s. Распакуйте его на своём "
+                "компьютере и загрузите файлы .DBF по одному." % e)
+        subprocess.run([бинарь, "x", "-y", "-o" + KLADR_DIR, путь],
+                       check=True, capture_output=True, timeout=1800)
+        return [f["name"] for f in list_source_files() if f["kind"] == "dbf"]
 
 
 def regions_in_file() -> List[dict]:
@@ -423,8 +868,8 @@ def regions_in_file() -> List[dict]:
     Читается весь файл: 130 тысяч строк, единицы секунд. Зато человек
     выбирает регионы, видя их названия, а не двузначные коды.
     """
-    путь = os.path.join(KLADR_DIR, FILE_OBJECTS)
-    if not os.path.isfile(путь):
+    путь = найти_файл(FILE_OBJECTS)
+    if not путь:
         return []
     названия, счёт = {}, {}
     for row in read_dbf(путь):
@@ -454,8 +899,8 @@ def loaded_regions() -> List[dict]:
 def _load_socr() -> Dict[str, str]:
     """Расшифровка сокращений: «обл» → «область». Нужна подсказкам, чтобы
     человек не гадал, что такое «тер» или «нп»."""
-    путь = os.path.join(KLADR_DIR, FILE_SOCR)
-    if not os.path.isfile(путь):
+    путь = найти_файл(FILE_SOCR)
+    if not путь:
         return {}
     out = {}
     for row in read_dbf(путь):
@@ -476,8 +921,8 @@ def load_regions(коды: List[str], грузить_дома: bool = True) -> d
     коды = [к for к in коды if re.fullmatch(r"\d{2}", к or "")]
     if not коды:
         raise ValueError("Не выбран ни один регион")
-    путь_объектов = os.path.join(KLADR_DIR, FILE_OBJECTS)
-    if not os.path.isfile(путь_объектов):
+    путь_объектов = найти_файл(FILE_OBJECTS)
+    if not путь_объектов:
         raise FileNotFoundError(
             "Не найден %s в %s — положите распакованные файлы классификатора"
             % (FILE_OBJECTS, KLADR_DIR))
@@ -529,8 +974,8 @@ def load_regions(коды: List[str], грузить_дома: bool = True) -> d
         _set_job(done=итог["objects"])
 
         # --- улицы ---
-        путь_улиц = os.path.join(KLADR_DIR, FILE_STREETS)
-        if os.path.isfile(путь_улиц):
+        путь_улиц = найти_файл(FILE_STREETS)
+        if путь_улиц:
             _set_job(stage="Улицы", done=0)
             пачка = []
             for row in read_dbf(путь_улиц):
@@ -556,8 +1001,8 @@ def load_regions(коды: List[str], грузить_дома: bool = True) -> d
             _set_job(done=итог["streets"])
 
         # --- дома ---
-        путь_домов = os.path.join(KLADR_DIR, FILE_HOUSES)
-        if грузить_дома and os.path.isfile(путь_домов):
+        путь_домов = найти_файл(FILE_HOUSES)
+        if грузить_дома and путь_домов:
             _set_job(stage="Дома", done=0)
             пачка = []
             for row in read_dbf(путь_домов):
@@ -665,6 +1110,51 @@ def _записать_дома(conn, пачка) -> int:
         "INSERT OR REPLACE INTO addr_houses (code, parent, region, nums, korp, postal_code) "
         "VALUES (?,?,?,?,?,?)", пачка)
     return len(пачка)
+
+
+def start_fetch(грузить_дома: bool = True, скачивать: bool = True) -> dict:
+    """Получить классификатор: скачать архив и распаковать нужные файлы.
+
+    Отдельный шаг от загрузки регионов, потому что регионы выбирают ПО
+    СПИСКУ, а список читается уже из распакованного файла. В фоне — потому
+    что это полсотни мегабайт по сети и полтерабайта... вернее, шестьсот
+    мегабайт распаковки: браузер столько ждать не станет.
+    """
+    if not _job_lock.acquire(blocking=False):
+        raise RuntimeError("Загрузка уже идёт")
+    _job.clear()
+    _set_job(state="running", stage="Подготовка", done=0, total=0,
+             started_at=time.strftime("%Y-%m-%d %H:%M:%S"), error=None, result=None)
+
+    def работа():
+        try:
+            архив = os.path.join(KLADR_DIR, ARCHIVE_NAME)
+            if скачивать or not os.path.isfile(архив):
+                _set_job(stage="Скачиваем с сайта ФНС", done=0, total=0)
+
+                def прогресс_скачивания(принято, всего):
+                    _set_job(done=принято, total=всего)
+
+                download_archive(прогресс_скачивания)
+            _set_job(stage="Распаковываем", done=0, total=0)
+
+            последний = {"имя": None}
+
+            def прогресс_распаковки(имя, сделано, всего):
+                if имя != последний["имя"]:
+                    последний["имя"] = имя
+                    _set_job(stage="Распаковываем: " + имя)
+                _set_job(done=сделано, total=всего)
+
+            файлы = unpack_archive(ARCHIVE_NAME, грузить_дома, прогресс_распаковки)
+            _set_job(state="done", stage="Готово", result={"files": файлы})
+        except Exception as e:                        # noqa: BLE001
+            _set_job(state="error", error=str(e), stage="Ошибка")
+        finally:
+            _job_lock.release()
+
+    threading.Thread(target=работа, name="kladr-fetch", daemon=True).start()
+    return job_status()
 
 
 def start_load(коды: List[str], грузить_дома: bool = True) -> dict:
@@ -943,13 +1433,52 @@ def address_regions_in_file(
     return {"regions": regions_in_file()}
 
 
+@router.post("/fetch")
+def address_fetch(
+    houses: bool = Query(True, description="Распаковывать ли файл домов"),
+    download: bool = Query(True, description="Скачать заново, даже если архив уже лежит"),
+    admin=Depends(require_service_feature("address_load", "write")),
+):
+    """Скачать классификатор с сайта ФНС и распаковать — одной кнопкой."""
+    try:
+        job = start_fetch(houses, download)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    activity.log("address_fetch", user=admin, new_value=KLADR_URL)
+    return job
+
+
+@router.post("/upload")
+def address_upload(
+    file: UploadFile = File(...),
+    admin=Depends(require_service_feature("address_load", "write")),
+):
+    """Принять файл классификатора, выбранный в браузере.
+
+    Второй путь на случай, когда у сервера нет выхода в интернет: человек
+    качает архив у себя и отдаёт его системе. Принимается и архив, и
+    отдельный файл .DBF.
+    """
+    имя = os.path.basename(file.filename or "")
+    if not re.fullmatch(r"[A-Za-z0-9._\-]{1,60}", имя) or not имя.upper().endswith(
+            (".7Z", ".ZIP", ".DBF")):
+        raise HTTPException(
+            status_code=400,
+            detail="Ожидается архив классификатора (.7z, .zip) или файл .DBF")
+    os.makedirs(KLADR_DIR, exist_ok=True)
+    copy_upload_limited(file.file, Path(KLADR_DIR) / имя)
+    activity.log("address_upload", user=admin, new_value=имя)
+    return {"name": имя, "size": os.path.getsize(os.path.join(KLADR_DIR, имя))}
+
+
 @router.post("/unpack")
 def address_unpack(
     name: str = Query(..., description="Имя архива в каталоге классификатора"),
+    houses: bool = Query(True),
     admin=Depends(require_service_feature("address_load", "write")),
 ):
     try:
-        файлы = unpack_archive(name)
+        файлы = unpack_archive(name, houses)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:                        # noqa: BLE001
