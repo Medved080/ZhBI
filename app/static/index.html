@@ -4755,8 +4755,16 @@
            становится прокруткой. -->
       <div class="dropdown-menu" id="object-switch-menu">
         <div class="object-switch-search">
+          <!-- autocomplete="off" Chrome для этого поля игнорирует (живой
+               запрос 2026-09-08: поле само не про адрес, но слово «адрес» в
+               подсказке заставляет браузер решить, что это форма ввода
+               почтового адреса, и предлагать сохранённые в профиле адреса
+               человека поверх списка объектов). "new-password" — не про
+               пароль, это единственный токен, который Chrome трактует как
+               «никогда не подставлять и не запоминать» для ЛЮБОГО типа
+               поля, а не только для password. -->
           <input type="text" id="object-switch-query" placeholder="Найти объект, проект или адрес"
-                 autocomplete="off" spellcheck="false"/>
+                 autocomplete="new-password" spellcheck="false"/>
         </div>
         <div id="object-switch-list"></div>
         <div class="object-switch-foot">
@@ -5624,8 +5632,12 @@
       <!-- Левая колонка: дерево со своей прокруткой -->
       <div class="catalog-tree-pane">
         <div class="catalog-tree-tools">
+          <!-- autocomplete="new-password" — та же причина, что у поиска в
+               поповере выбора объекта: слово «адресу» в подсказке заставляет
+               Chrome игнорировать autocomplete="off" и предлагать
+               сохранённые в профиле человека почтовые адреса. -->
           <input type="text" id="catalog-search" placeholder="Найти по названию или адресу"
-                 autocomplete="off" spellcheck="false"/>
+                 autocomplete="new-password" spellcheck="false"/>
           <select id="catalog-status-filter" title="Отбор по статусу записи">
             <option value="active">В работе</option>
             <option value="perspective">Перспективные</option>
