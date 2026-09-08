@@ -4614,8 +4614,49 @@
          (2026-09-08): это тот же контекст «где я сейчас работаю», только
          показанный на карте, а не крошкой с именем. -->
     <div class="toolbar-tile" data-feature="map" data-feature-kind="read">
-      <button class="btn btn-secondary btn-icon-round toolbar-tile-btn" id="btn-toolbar-map"
-              title="Карта проектов">🗺️</button>
+      <!-- Логотип — булавка + сложенная карта с маршрутом, по образцу,
+           присланному пользователем (2026-09-08). Многоцветный, в отличие
+           от остальных значков тулбара (которые monochrome, currentColor):
+           это отдельный, самостоятельный вход на карту проектов, и яркая
+           метка здесь уместна тем же способом, что и цветной логотип
+           заказчика в левом углу тулбара. -->
+      <button class="btn btn-secondary btn-icon-round toolbar-tile-btn map-logo-btn" id="btn-toolbar-map"
+              title="Карта проектов">
+        <svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true">
+          <defs>
+            <linearGradient id="mapLogoPin" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#E03131"/>
+              <stop offset="1" stop-color="#FF7A1A"/>
+            </linearGradient>
+            <linearGradient id="mapLogoLeaf" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#8BC34A"/>
+              <stop offset="1" stop-color="#4E8F2C"/>
+            </linearGradient>
+            <linearGradient id="mapLogoMid" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#A9D66B"/>
+              <stop offset="1" stop-color="#6FAE3A"/>
+            </linearGradient>
+            <linearGradient id="mapLogoRight" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#8BC34A"/>
+              <stop offset="0.55" stop-color="#D4B830"/>
+              <stop offset="1" stop-color="#F2994A"/>
+            </linearGradient>
+          </defs>
+          <!-- сложенная карта: три панели гармошкой -->
+          <polygon points="24,22 38,16 38,50 24,56" fill="url(#mapLogoLeaf)"/>
+          <polygon points="38,16 51,22 51,56 38,50" fill="url(#mapLogoMid)"/>
+          <polygon points="51,22 62,17 62,51 51,56" fill="url(#mapLogoRight)"/>
+          <!-- маршрут через карту -->
+          <path d="M27 51 L34 44 L38 47 L46 36 L44 28" fill="none"
+                stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+          <!-- малая метка на карте -->
+          <circle cx="46" cy="30" r="4.5" fill="#FFA733" stroke="#ffffff" stroke-width="1.4"/>
+          <!-- крупная булавка слева, поверх сгиба карты -->
+          <path d="M18 6c-7.2 0-13 5.8-13 13 0 9.7 13 25 13 25s13-15.3 13-25c0-7.2-5.8-13-13-13z"
+                fill="url(#mapLogoPin)"/>
+          <circle cx="18" cy="19" r="6.4" fill="#ffffff"/>
+        </svg>
+      </button>
     </div>
     <!-- Рабочее место (2026-08-10). «Модель» — привычная схема с панелью
          фильтров; «АРМ комплектовщика» — дашборд: взаимозависимые блоки
