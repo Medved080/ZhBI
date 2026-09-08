@@ -2021,6 +2021,17 @@ def projects_tree(conn: sqlite3.Connection, allowed_object_ids=None) -> list:
             f"WHERE object_id IS NOT NULL AND {visible_elements_clause('')} GROUP BY object_id"
         )
     }
+    # У объектов kind=mfr своя модель — не в elements, а в revit_elements
+    # (загрузка из Revit или PDF, app/revit_elements.py и app/pdf_import.py).
+    # Без этого счётчика заполненный МФР всегда выглядел «пусто» и уезжал в
+    # раздел «Без модели» переключателя (живой репорт 2026-09-08).
+    revit_counts = {
+        r["object_id"]: r["n"]
+        for r in conn.execute(
+            "SELECT object_id, COUNT(*) AS n FROM revit_elements "
+            "WHERE is_current = 1 GROUP BY object_id"
+        )
+    }
     drawings = {
         r["object_id"]: r["source_file"]
         for r in conn.execute(
@@ -2034,10 +2045,13 @@ def projects_tree(conn: sqlite3.Connection, allowed_object_ids=None) -> list:
         # Статус едет в дерево вместе с объектом: переключатель в тулбаре
         # прячет по нему архивные и метит завершённые, а второй запрос ради
         # одного поля — лишний круг на каждое открытие страницы.
+        вид = o["kind"] or "zhbi"
+        число = (revit_counts.get(o["id"], 0) if вид == "mfr"
+                 else counts.get(o["id"], 0))
         return {"id": o["id"], "name": o["name"], "address": o["address"],
-                "kind": o["kind"] or "zhbi",
+                "kind": вид,
                 "status": o["status"] or "active",
-                "source_file": drawings.get(o["id"]), "elements": counts.get(o["id"], 0)}
+                "source_file": drawings.get(o["id"]), "elements": число}
 
     поля = "id, name, address, kind, COALESCE(status, 'active') AS status"
 
