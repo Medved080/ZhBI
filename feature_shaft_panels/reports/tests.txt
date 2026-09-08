@@ -1,0 +1,61 @@
+test_acl_before_parsing (test_feature.ApiTests) ... ok
+test_full_http_import_and_consumed_token (test_feature.ApiTests) ... /Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/ezdxf/query.py:444: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+  query_args = EntityQueryParser.parseString(query, parseAll=True)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/pyparsing/util.py:466: PyparsingDeprecationWarning: 'parseAll' argument is deprecated, use 'parse_all'
+  return fn(self, *args, **kwargs)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/ezdxf/query.py:444: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+  query_args = EntityQueryParser.parseString(query, parseAll=True)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/pyparsing/util.py:466: PyparsingDeprecationWarning: 'parseAll' argument is deprecated, use 'parse_all'
+  return fn(self, *args, **kwargs)
+ok
+test_surface_preview_and_thickness_block (test_feature.ApiTests) ... /Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/ezdxf/query.py:444: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+  query_args = EntityQueryParser.parseString(query, parseAll=True)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/pyparsing/util.py:466: PyparsingDeprecationWarning: 'parseAll' argument is deprecated, use 'parse_all'
+  return fn(self, *args, **kwargs)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/ezdxf/query.py:444: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+  query_args = EntityQueryParser.parseString(query, parseAll=True)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/pyparsing/util.py:466: PyparsingDeprecationWarning: 'parseAll' argument is deprecated, use 'parse_all'
+  return fn(self, *args, **kwargs)
+ok
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/ezdxf/query.py:444: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+  query_args = EntityQueryParser.parseString(query, parseAll=True)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/pyparsing/util.py:466: PyparsingDeprecationWarning: 'parseAll' argument is deprecated, use 'parse_all'
+  return fn(self, *args, **kwargs)
+test_another_object_has_independent_identity (test_feature.DrawingTests) ... ok
+test_axis_mismatch_and_nan_rejected (test_feature.DrawingTests) ... ok
+test_contract_change_and_manual_change_are_conflicts (test_feature.DrawingTests) ... ok
+test_corrupt_dxf (test_feature.DrawingTests) ... ok
+test_duplicate_panel_rejected (test_feature.DrawingTests) ... /Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/ezdxf/query.py:444: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+  query_args = EntityQueryParser.parseString(query, parseAll=True)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/pyparsing/util.py:466: PyparsingDeprecationWarning: 'parseAll' argument is deprecated, use 'parse_all'
+  return fn(self, *args, **kwargs)
+ok
+test_exact_geometric_controls (test_feature.DrawingTests) ... ok
+test_initial_import_preserves_base_drawing (test_feature.DrawingTests) ... ok
+test_mfr_and_warning_bypass_rejected (test_feature.DrawingTests) ... ok
+test_mirror_registration (test_feature.DrawingTests) ... ok
+test_missing_label_fails_instead_of_partial_success (test_feature.DrawingTests) ... /Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/ezdxf/query.py:444: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+  query_args = EntityQueryParser.parseString(query, parseAll=True)
+/Users/max/zhbi-tool/.venv/lib/python3.9/site-packages/pyparsing/util.py:466: PyparsingDeprecationWarning: 'parseAll' argument is deprecated, use 'parse_all'
+  return fn(self, *args, **kwargs)
+ok
+test_no_guessed_thickness (test_feature.DrawingTests) ... ok
+test_normals_and_jamb_labels (test_feature.DrawingTests) ... ok
+test_primary_drawing_registration_preserves_supplement (test_feature.DrawingTests) ... ok
+test_real_inventory (test_feature.DrawingTests) ... ok
+test_reimport_does_not_reset_state_or_duplicate (test_feature.DrawingTests) ... ok
+test_rename_file_and_handles_does_not_duplicate (test_feature.DrawingTests) ... ok
+test_retirement_is_explicit_and_scoped (test_feature.DrawingTests) ... ok
+test_schema_is_idempotent_and_analysis_is_readonly (test_feature.DrawingTests) ... ok
+test_stale_preview_rejected (test_feature.DrawingTests) ... ok
+test_standard_import_cannot_retire_panels (test_feature.DrawingTests) ... ok
+test_tampered_payload_rejected (test_feature.DrawingTests) ... ok
+test_transaction_rolls_back_on_host_hook_failure (test_feature.DrawingTests) ... ok
+test_units_and_bad_level_are_explicit (test_feature.DrawingTests) ... ok
+test_owner_and_one_time_contract (test_feature.TokenTests) ... ok
+test_ttl_and_capacity (test_feature.TokenTests) ... ok
+
+----------------------------------------------------------------------
+Ran 28 tests in 4.526s
+
+OK

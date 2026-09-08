@@ -1,0 +1,92 @@
+[
+  {
+    "file": "app/static/app.js",
+    "line": 23259,
+    "function": "computeColumnLevels",
+    "value": "Колонна"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 23310,
+    "function": "computeTopColumnCeiling",
+    "value": "Плита перекрытия"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 23327,
+    "function": "elementExtrusionHeight",
+    "value": "Колонна"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 23342,
+    "function": "elementExtrusionHeight",
+    "value": "Плита перекрытия"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 23864,
+    "function": null,
+    "value": "Плита перекрытия"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 23864,
+    "function": null,
+    "value": "Ригель"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 23864,
+    "function": null,
+    "value": "Колонна"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 24213,
+    "function": "typicalDeckStep",
+    "value": "Плита перекрытия"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 24232,
+    "function": "computeColumnTops",
+    "value": "Колонна"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 24283,
+    "function": "computeColumnTops",
+    "value": "Плита перекрытия"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 24283,
+    "function": "computeColumnTops",
+    "value": "Ригель"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 24286,
+    "function": "computeColumnTops",
+    "value": "Ригель"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 24429,
+    "function": "computeColumnTops",
+    "value": "Ригель"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 24598,
+    "function": "collectMarkDecalQuads",
+    "value": "Колонна"
+  },
+  {
+    "file": "app/static/app.js",
+    "line": 24651,
+    "function": "collectMarkDecalQuads",
+    "value": "Ригель"
+  }
+]

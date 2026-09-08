@@ -1,0 +1,2402 @@
+{
+  "app/main.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "_csp_for_request",
+      "line": 276,
+      "signature": ""
+    },
+    {
+      "kind": "AsyncFunctionDef",
+      "name": "security_headers",
+      "line": 295,
+      "signature": "request, call_next"
+    },
+    {
+      "kind": "AsyncFunctionDef",
+      "name": "_log_http_exception",
+      "line": 341,
+      "signature": "request: Request, exc: StarletteHTTPException"
+    },
+    {
+      "kind": "AsyncFunctionDef",
+      "name": "_log_validation_error",
+      "line": 347,
+      "signature": "request: Request, exc: RequestValidationError"
+    },
+    {
+      "kind": "AsyncFunctionDef",
+      "name": "_backup_error",
+      "line": 353,
+      "signature": "request: Request, exc: BackupError"
+    },
+    {
+      "kind": "AsyncFunctionDef",
+      "name": "_log_unhandled_exception",
+      "line": 371,
+      "signature": "request: Request, exc: Exception"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_input_dir_filenames",
+      "line": 433,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "estimate_marker_radius",
+      "line": 448,
+      "signature": "points, bbox_diag, fraction=0.25"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_warn_users_without_password",
+      "line": 492,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_probe_schema_health",
+      "line": 566,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_warn_unknown_menu_features",
+      "line": 621,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "on_startup",
+      "line": 655,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "health",
+      "line": 803,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_compute_app_build",
+      "line": 821,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_app_build",
+      "line": 839,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_changelog",
+      "line": 848,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "ack_changelog",
+      "line": 875,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_elements",
+      "line": 901,
+      "signature": "status: Optional[str]=Query(None, description='Фильтр по current_status'), element_type: Optional[str]=Query(None), source_file: Optional[str]=Query(None), mark: Optional[str]=Query(None, description='Подстрока в марке'), limit: int=Query(500, le=5000), offset: int=Query(0, ge=0), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_element_reference_labels",
+      "line": 939,
+      "signature": "conn, data: dict"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_element",
+      "line": 980,
+      "signature": "element_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "element_context",
+      "line": 1008,
+      "signature": "element_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "element_activity",
+      "line": 1086,
+      "signature": "element_id: int, limit: int=Query(200, le=1000), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_status",
+      "line": 1132,
+      "signature": "element_id: int, body: StatusUpdateIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_status_bulk",
+      "line": 1156,
+      "signature": "body: BulkStatusUpdateIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ElementCommentIn",
+      "line": 1190,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ElementContractIn",
+      "line": 1194,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_element_contract",
+      "line": 1201,
+      "signature": "element_id: int, body: ElementContractIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_element_comment",
+      "line": 1284,
+      "signature": "element_id: int, body: ElementCommentIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_element_planned_delivery_date",
+      "line": 1319,
+      "signature": "element_id: int, body: ElementPlannedDateIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_element_planned_delivery_date_bulk",
+      "line": 1339,
+      "signature": "body: BulkPlannedDateUpdateIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_history_entry",
+      "line": 1366,
+      "signature": "element_id: int, history_id: int, body: dict, admin: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "delete_history_entry",
+      "line": 1453,
+      "signature": "element_id: int, history_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ReportRequestIn",
+      "line": 1515,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_report_object_id",
+      "line": 1586,
+      "signature": "conn, body: 'ReportRequestIn'"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_guard_report",
+      "line": 1595,
+      "signature": "conn, user, body: 'ReportRequestIn', key: str, needs_source_file: bool=True"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_status",
+      "line": 1660,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_dynamics",
+      "line": 1672,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_report_file_response",
+      "line": 1684,
+      "signature": "content: bytes, name: str, media_type: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_dynamics_xlsx",
+      "line": 1692,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_dynamics_pdf",
+      "line": 1707,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_status_xlsx",
+      "line": 1721,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_status_pdf",
+      "line": 1738,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_completion",
+      "line": 1754,
+      "signature": "conn, user, body: 'ReportRequestIn'"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_contracting_schedule",
+      "line": 1782,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_analytics",
+      "line": 1805,
+      "signature": "conn, user, body: ReportRequestIn"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_analytics",
+      "line": 1823,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_analytics_xlsx",
+      "line": 1834,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_analytics_pdf",
+      "line": 1846,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_block_status",
+      "line": 1857,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_completion",
+      "line": 1878,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_completion_xlsx",
+      "line": 1891,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_completion_pdf",
+      "line": 1907,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_delivery_schedule",
+      "line": 1921,
+      "signature": "conn, user, body: 'ReportRequestIn'"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_delivery_schedule",
+      "line": 1939,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "DeliveryCellIn",
+      "line": 1949,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_delivery_schedule_cell",
+      "line": 1958,
+      "signature": "body: DeliveryCellIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_delivery_file_base",
+      "line": 1975,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_delivery_schedule_xlsx",
+      "line": 1983,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_delivery_schedule_pdf",
+      "line": 1995,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_users_brief",
+      "line": 2011,
+      "signature": "conn, ids: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_admin_object_ids",
+      "line": 2021,
+      "signature": "conn, user"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_my_work_scope",
+      "line": 2034,
+      "signature": "conn, viewer, user_ids: Optional[list], all_users: bool=False"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_my_work",
+      "line": 2065,
+      "signature": "conn, user, body: ReportRequestIn, limit: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_my_work",
+      "line": 2077,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_my_work_xlsx",
+      "line": 2089,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "report_my_work_pdf",
+      "line": 2101,
+      "signature": "body: ReportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ChangedElementsIn",
+      "line": 2111,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "elements_changed",
+      "line": 2125,
+      "signature": "body: ChangedElementsIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "object_activity_users",
+      "line": 2162,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BackupCreateIn",
+      "line": 2209,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "admin_list_backups",
+      "line": 2214,
+      "signature": "admin: sqlite3.Row=Depends(require_service_feature('backups', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "admin_disk_space",
+      "line": 2226,
+      "signature": "admin: sqlite3.Row=Depends(require_service_feature('backups', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "admin_create_backup",
+      "line": 2238,
+      "signature": "body: BackupCreateIn, admin: sqlite3.Row=Depends(require_service_feature('backups', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "admin_restore_backup",
+      "line": 2252,
+      "signature": "name: str, admin: sqlite3.Row=Depends(require_service_feature('backups', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "admin_delete_backup",
+      "line": 2273,
+      "signature": "name: str, admin: sqlite3.Row=Depends(require_service_feature('backups', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "admin_input_files",
+      "line": 2283,
+      "signature": "user: sqlite3.Row=Depends(require_service_feature('import_input', 'read'))"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ImportInputIn",
+      "line": 2290,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "admin_import_input",
+      "line": 2298,
+      "signature": "body: Optional[ImportInputIn]=None, user: sqlite3.Row=Depends(require_service_feature('import_input', 'write'))"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ClientEventIn",
+      "line": 2351,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ClientEventsIn",
+      "line": 2361,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "post_activity",
+      "line": 2366,
+      "signature": "body: ClientEventsIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "search_activity",
+      "line": 2444,
+      "signature": "request: Request, date_from: Optional[str]=Query(None, description=\"'ГГГГ-ММ-ДД' включительно\"), date_to: Optional[str]=Query(None, description=\"'ГГГГ-ММ-ДД' включительно\"), text: Optional[str]=Query(None, description='подстрока в марке/типе/подтипе/значениях'), limit: int=Query(200, le=2000), offset: int=Query(0, ge=0), admin: sqlite3.Row=Depends(require_service_feature('activity_log', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "activity_stats",
+      "line": 2586,
+      "signature": "admin: sqlite3.Row=Depends(require_service_feature('activity_log', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "cleanup_activity",
+      "line": 2629,
+      "signature": "before: str=Query(..., description=\"Удалить записи СТРОГО РАНЬШЕ этой даты, 'ГГГГ-ММ-ДД'\"), admin: sqlite3.Row=Depends(require_service_feature('activity_log', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_changes",
+      "line": 2654,
+      "signature": "source_file: str=Query(...), since: Optional[str]=Query(None, description=\"UTC 'ГГГГ-ММ-ДД ЧЧ:ММ:СС'; пусто — только метка времени\"), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "reset_status_history",
+      "line": 2720,
+      "signature": "user: sqlite3.Row=Depends(require_service_feature('reset_history', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "status_summary",
+      "line": 2762,
+      "signature": "object_id: Optional[int]=Query(None), source_file: Optional[str]=Query(None), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_source_files",
+      "line": 2823,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_status_colors",
+      "line": 2860,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_status_colors",
+      "line": 2870,
+      "signature": "colors: dict[str, str], user: sqlite3.Row=Depends(require_service_feature('dict_status_colors', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_label_visibility",
+      "line": 2903,
+      "signature": "object_id: int=Query(...), user: sqlite3.Row=Depends(require_feature('label_visibility', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_label_visibility",
+      "line": 2917,
+      "signature": "settings: dict[str, bool], object_id: int=Query(...), user: sqlite3.Row=Depends(require_feature('label_visibility', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_label_dates_visibility",
+      "line": 2945,
+      "signature": "object_id: int=Query(...), user: sqlite3.Row=Depends(require_feature('label_visibility', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_label_dates_visibility",
+      "line": 2959,
+      "signature": "settings: dict[str, bool], object_id: int=Query(...), user: sqlite3.Row=Depends(require_feature('label_visibility', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_layer_type_combinations",
+      "line": 2983,
+      "signature": "admin: sqlite3.Row=Depends(require_service_feature('dict_element_shapes', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_element_shapes",
+      "line": 3017,
+      "signature": "shapes: list[ElementShapeIn], user: sqlite3.Row=Depends(require_service_feature('dict_element_shapes', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_zone_colors",
+      "line": 3038,
+      "signature": "object_id: int=Query(...), user: sqlite3.Row=Depends(require_feature('zone_colors', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_zone_colors",
+      "line": 3058,
+      "signature": "items: list[ZoneColorIn], object_id: int=Query(...), user: sqlite3.Row=Depends(require_feature('zone_colors', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_zones",
+      "line": 3084,
+      "signature": "category: str=Query(..., description='Захватка | Кран | Стоянка'), include_retired: bool=Query(False, description='Показывать зоны, которых нет в актуальном чертеже'), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "zone_geometry",
+      "line": 3152,
+      "signature": "zone_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_validate_zone_edit",
+      "line": 3240,
+      "signature": "conn, zone: sqlite3.Row, body: ZonePatchIn"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_zone",
+      "line": 3309,
+      "signature": "zone_id: int, body: ZonePatchIn, admin: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "undo_zone_edit",
+      "line": 3414,
+      "signature": "zone_id: int, admin: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ec_value_sort_key",
+      "line": 3540,
+      "signature": "value"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "elements_catalog",
+      "line": 3554,
+      "signature": "request: Request, limit: int=Query(200, le=2000), offset: int=Query(0, ge=0), sort: str=Query('id'), direction: str=Query('asc'), search: Optional[str]=Query(None, description='подстрока в марке или адресе'), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_element_fields",
+      "line": 3717,
+      "signature": "element_id: int, body: dict, confirm_contract_mismatch: bool=Query(False), admin: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_check_bulk_mode",
+      "line": 3821,
+      "signature": "mode: str"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BulkEditExportIn",
+      "line": 3827,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "bulk_edit_export",
+      "line": 3837,
+      "signature": "body: BulkEditExportIn, admin: sqlite3.Row=Depends(require_service_feature('bulk_edit', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "bulk_edit_analyze",
+      "line": 3887,
+      "signature": "file: UploadFile=File(...), mode: str=Form('fields'), admin: sqlite3.Row=Depends(require_service_feature('bulk_edit', 'write'))"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BulkEditApplyIn",
+      "line": 3907,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "bulk_edit_apply",
+      "line": 3919,
+      "signature": "body: BulkEditApplyIn, admin: sqlite3.Row=Depends(require_service_feature('bulk_edit', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "db_transfer_export",
+      "line": 3981,
+      "signature": "admin: sqlite3.Row=Depends(require_service_feature('db_transfer', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "db_transfer_current",
+      "line": 4011,
+      "signature": "admin: sqlite3.Row=Depends(require_service_feature('db_transfer', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "db_transfer_stage",
+      "line": 4019,
+      "signature": "file: UploadFile=File(...), admin: sqlite3.Row=Depends(require_service_feature('db_transfer', 'write'))"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "DbTransferApplyIn",
+      "line": 4037,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "db_transfer_apply",
+      "line": 4046,
+      "signature": "body: DbTransferApplyIn, admin: sqlite3.Row=Depends(require_service_feature('db_transfer', 'write'))"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "DbTransferForgetIn",
+      "line": 4089,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "db_transfer_forget",
+      "line": 4094,
+      "signature": "body: DbTransferForgetIn, admin: sqlite3.Row=Depends(require_service_feature('db_transfer', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_object_for_source_file",
+      "line": 4102,
+      "signature": "conn, source_file: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_guard_source_file",
+      "line": 4111,
+      "signature": "conn, user, source_file: str, key: str, kind: str='write'"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_guard_elements",
+      "line": 4129,
+      "signature": "conn, user, element_ids, key: str, kind: str='write'"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_accessible_objects_clause",
+      "line": 4169,
+      "signature": "conn, user, column: str='object_id'"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_resolve_selection_item",
+      "line": 4199,
+      "signature": "conn, user, item"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_valid_status",
+      "line": 4246,
+      "signature": "value"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_valid_coord",
+      "line": 4260,
+      "signature": "поле: str, значение"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_адресные_правки",
+      "line": 4279,
+      "signature": "body"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_реквизитные_правки",
+      "line": 4309,
+      "signature": "body"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_адрес_из_строки",
+      "line": 4319,
+      "signature": "row"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_проверить_архивацию_проекта",
+      "line": 4335,
+      "signature": "conn, project_id: int, статус: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_projects",
+      "line": 4353,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "create_project",
+      "line": 4400,
+      "signature": "body: ProjectIn, admin: sqlite3.Row=Depends(require_service_feature('projects', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_project",
+      "line": 4427,
+      "signature": "project_id: int, body: ProjectPatchIn, admin: sqlite3.Row=Depends(require_service_feature('projects', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "delete_project",
+      "line": 4488,
+      "signature": "project_id: int, admin: sqlite3.Row=Depends(require_service_feature('projects', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_object_drawings",
+      "line": 4516,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_projects_tree",
+      "line": 4555,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "LastObjectIn",
+      "line": 4589,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_недавние_объекты",
+      "line": 4599,
+      "signature": "user"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_запомнить_недавний",
+      "line": 4614,
+      "signature": "conn, user, object_id: Optional[int]"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_last_object",
+      "line": 4630,
+      "signature": "body: LastObjectIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_objects",
+      "line": 4658,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_valid_kind",
+      "line": 4717,
+      "signature": "value"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ObjectCreateIn",
+      "line": 4731,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "create_object",
+      "line": 4747,
+      "signature": "body: ObjectCreateIn, admin: sqlite3.Row=Depends(require_service_feature('projects', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_object",
+      "line": 4789,
+      "signature": "object_id: int, body: ObjectPatchIn, admin: sqlite3.Row=Depends(require_service_feature('projects', 'write'))"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ObjectAvatarIn",
+      "line": 4864,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_object_avatar",
+      "line": 4869,
+      "signature": "object_id: int, body: ObjectAvatarIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_object_avatar",
+      "line": 4909,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_subtypes_object",
+      "line": 4941,
+      "signature": "conn, object_id: Optional[int]"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_allowed_subtypes",
+      "line": 4957,
+      "signature": "object_id: Optional[int]=None, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "add_allowed_subtype",
+      "line": 4983,
+      "signature": "body: AllowedSubtypeIn, user: sqlite3.Row=Depends(require_service_feature('dict_subtypes', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "delete_allowed_subtype",
+      "line": 5006,
+      "signature": "element_type: str, subtype: str, object_id: Optional[int]=None, user: sqlite3.Row=Depends(require_service_feature('dict_subtypes', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "axis_grid",
+      "line": 5024,
+      "signature": "source_file: str=Query(...), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_layers",
+      "line": 5040,
+      "signature": "source_file: str=Query(...), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "plan_data",
+      "line": 5056,
+      "signature": "body: PlanSelectionIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "export_xlsx",
+      "line": 5354,
+      "signature": "body: ExportRequestIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "export_pdf",
+      "line": 5392,
+      "signature": "source_file: str=Query(...), date: Optional[str]=Query(None, description='Статусы актуальны на эту дату (YYYY-MM-DD); пусто — текущие'), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_dxf",
+      "line": 5417,
+      "signature": "file: UploadFile=File(...), source_file: Optional[str]=Form(None), user: sqlite3.Row=Depends(require_service_feature('drawings', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "analyze_dxf",
+      "line": 5467,
+      "signature": "file: UploadFile=File(...), source_file: Optional[str]=Form(None), object_id: Optional[int]=Form(None), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "apply_dxf",
+      "line": 5527,
+      "signature": "body: DxfApplyIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "revit_plan_filters",
+      "line": 5584,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "revit_plan_elements",
+      "line": 5595,
+      "signature": "object_id: int, level_id: Optional[list[int]]=Query(None), section_id: Optional[list[int]]=Query(None), part: Optional[list[str]]=Query(None), category: Optional[list[str]]=Query(None), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "revit_plan_colors",
+      "line": 5618,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "RevitColorsIn",
+      "line": 5631,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "revit_plan_colors_save",
+      "line": 5639,
+      "signature": "object_id: int, body: RevitColorsIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "revit_plan_element",
+      "line": 5654,
+      "signature": "object_id: int, element_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "analyze_revit",
+      "line": 5668,
+      "signature": "files: list[UploadFile]=File(...), object_id: int=Form(...), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "apply_revit",
+      "line": 5710,
+      "signature": "body: RevitApplyIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "start_analyze_pdf",
+      "line": 5760,
+      "signature": "file: UploadFile=File(...), object_id: int=Form(...), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "analyze_pdf_progress",
+      "line": 5782,
+      "signature": "job_id: str, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "PdfApplyIn",
+      "line": 5809,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "apply_pdf",
+      "line": 5814,
+      "signature": "body: PdfApplyIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "analyze_pdf_facade",
+      "line": 5863,
+      "signature": "file: UploadFile=File(...), object_id: int=Form(...), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "apply_pdf_facade",
+      "line": 5896,
+      "signature": "body: PdfApplyIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ClearImportDataIn",
+      "line": 5938,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "clear_import_data",
+      "line": 5946,
+      "signature": "object_id: int, body: ClearImportDataIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockSectionIn",
+      "line": 6007,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockSectionRenameIn",
+      "line": 6012,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_block_sections",
+      "line": 6021,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "create_block_section",
+      "line": 6031,
+      "signature": "object_id: int, body: BlockSectionIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "rename_block_section",
+      "line": 6048,
+      "signature": "object_id: int, section_id: int, body: BlockSectionRenameIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "delete_block_section",
+      "line": 6064,
+      "signature": "object_id: int, section_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockLevelIn",
+      "line": 6080,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockLevelEditIn",
+      "line": 6088,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_block_levels",
+      "line": 6095,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "create_block_level",
+      "line": 6105,
+      "signature": "object_id: int, body: BlockLevelIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "edit_block_level",
+      "line": 6123,
+      "signature": "object_id: int, level_id: int, body: BlockLevelEditIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockBoxIn",
+      "line": 6141,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockBoxesIn",
+      "line": 6148,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_block_boxes",
+      "line": 6156,
+      "signature": "object_id: int, block_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "put_block_boxes",
+      "line": 6170,
+      "signature": "object_id: int, block_id: int, body: BlockBoxesIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "delete_block_level",
+      "line": 6192,
+      "signature": "object_id: int, level_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockCreateIn",
+      "line": 6208,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_blocks_endpoint",
+      "line": 6214,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "create_block_endpoint",
+      "line": 6224,
+      "signature": "object_id: int, body: BlockCreateIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "delete_block_endpoint",
+      "line": 6241,
+      "signature": "object_id: int, block_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "blocks_geometry_endpoint",
+      "line": 6258,
+      "signature": "object_id: int, level_id: Optional[list[int]]=Query(None), section_id: Optional[list[int]]=Query(None), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "object_grids_endpoint",
+      "line": 6277,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "plan_images_list_endpoint",
+      "line": 6290,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "plan_image_endpoint",
+      "line": 6318,
+      "signature": "object_id: int, level_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "block_card_endpoint",
+      "line": 6338,
+      "signature": "object_id: int, block_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "analyze_work_types",
+      "line": 6353,
+      "signature": "object_id: int, file: UploadFile=File(...), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "WorkTypesApplyIn",
+      "line": 6375,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "apply_work_types",
+      "line": 6380,
+      "signature": "object_id: int, body: WorkTypesApplyIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_work_progress",
+      "line": 6403,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "WorkProgressCellIn",
+      "line": 6412,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_work_progress_cell",
+      "line": 6420,
+      "signature": "object_id: int, body: WorkProgressCellIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_block_work_types_settings",
+      "line": 6448,
+      "signature": "object_id: int, block_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockWorkTypesSettingsIn",
+      "line": 6461,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_block_work_types_settings",
+      "line": 6466,
+      "signature": "object_id: int, block_id: int, body: BlockWorkTypesSettingsIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_blocks_work_types_settings",
+      "line": 6488,
+      "signature": "object_id: int, block_ids: str, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlocksWorkTypesSettingsIn",
+      "line": 6505,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_blocks_work_types_settings",
+      "line": 6511,
+      "signature": "object_id: int, body: BlocksWorkTypesSettingsIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BlockPercentCellIn",
+      "line": 6530,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "set_block_percent_cell",
+      "line": 6537,
+      "signature": "object_id: int, block_id: int, body: BlockPercentCellIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_block_progress",
+      "line": 6561,
+      "signature": "object_id: int, block_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_blocks_planning_tracks",
+      "line": 6581,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_blocks_track_progress",
+      "line": 6591,
+      "signature": "object_id: int, track_code: str, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_planning_tracks",
+      "line": 6602,
+      "signature": "object_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_block_fact_reports",
+      "line": 6614,
+      "signature": "object_id: int, block_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_block_fact_report",
+      "line": 6625,
+      "signature": "object_id: int, block_id: int, report_id: int, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "FactReportIn",
+      "line": 6638,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "create_block_fact_report",
+      "line": 6644,
+      "signature": "object_id: int, block_id: int, body: FactReportIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "update_block_fact_report",
+      "line": 6660,
+      "signature": "object_id: int, block_id: int, report_id: int, body: FactReportIn, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_history_xlsx",
+      "line": 6676,
+      "signature": "file: UploadFile=File(...), source_file: str=Form(...), mode: str=Form(...), admin: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_contracting_xlsx",
+      "line": 6727,
+      "signature": "file: UploadFile=File(...), object_id: int=Query(...), admin: sqlite3.Row=Depends(require_service_feature('import_contracting', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "objects_import_analyze",
+      "line": 6760,
+      "signature": "file: UploadFile=File(...), admin: sqlite3.Row=Depends(require_service_feature('import_objects', 'write'))"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ObjectsImportApplyIn",
+      "line": 6776,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "objects_import_apply",
+      "line": 6783,
+      "signature": "body: ObjectsImportApplyIn, admin: sqlite3.Row=Depends(require_service_feature('import_objects', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_schedule_xlsx",
+      "line": 6803,
+      "signature": "file: UploadFile=File(...), object_id: Optional[int]=Form(None), kind: str=Form('baseline'), admin: sqlite3.Row=Depends(require_service_feature('import_schedule', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_report_help",
+      "line": 6839,
+      "signature": "key: str, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_import_templates",
+      "line": 6847,
+      "signature": "user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_import_template_sample",
+      "line": 6856,
+      "signature": "key: str, user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "export_settings",
+      "line": 6866,
+      "signature": "admin: sqlite3.Row=Depends(require_service_feature('settings_io', 'read'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_settings",
+      "line": 6912,
+      "signature": "file: UploadFile=File(...), admin: sqlite3.Row=Depends(require_service_feature('settings_io', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "serve_index",
+      "line": 7037,
+      "signature": ""
+    }
+  ],
+  "app/db.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "get_connection",
+      "line": 26,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "touch_elements",
+      "line": 35,
+      "signature": "conn: sqlite3.Connection, element_ids"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "ensure_wal",
+      "line": 69,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_apply_migrations",
+      "line": 503,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_contracts_structure",
+      "line": 511,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_contracts_hierarchy",
+      "line": 597,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_contracts_theme",
+      "line": 674,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_elements_drop_batch_id",
+      "line": 719,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_seed_user_access",
+      "line": 759,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_object_scoped_tables",
+      "line": 812,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_allowed_subtypes_to_object",
+      "line": 959,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_user_access_contract_role",
+      "line": 1040,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_seed_object_roles",
+      "line": 1101,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_отметить_раскладку",
+      "line": 1202,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_user_access_multirole",
+      "line": 1226,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_drop_feature_access",
+      "line": 1249,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_user_access_drop_role_check",
+      "line": 1268,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_user_access_global",
+      "line": 1335,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ensure_object_scoped_indexes",
+      "line": 1392,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_reconcile_contract_from_history",
+      "line": 1420,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_enforce_planned_has_no_contract",
+      "line": 1461,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ensure_element_uid_index",
+      "line": 1494,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ensure_activity_category_index",
+      "line": 1514,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_bootstrap_default_object",
+      "line": 1527,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_bootstrap_default_project",
+      "line": 1576,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_purge_legacy_elements",
+      "line": 1623,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "parse_zone_number",
+      "line": 1709,
+      "signature": "name"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_migrate_zones_to_catalog",
+      "line": 1727,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_heal_zone_stance_levels",
+      "line": 1861,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "visible_elements_clause",
+      "line": 1923,
+      "signature": "alias: str=''"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "object_source_file",
+      "line": 1946,
+      "signature": "conn: sqlite3.Connection, object_id: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "projects_tree",
+      "line": 1967,
+      "signature": "conn: sqlite3.Connection, allowed_object_ids=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "assign_missing_element_uids",
+      "line": 2042,
+      "signature": "conn: sqlite3.Connection, object_id: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ensure_zone_level_index",
+      "line": 2058,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ensure_contract_lines_index",
+      "line": 2069,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ensure_elements_contract_line_index",
+      "line": 2088,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_seed_reference_data",
+      "line": 2122,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_normalize_element_type_vocabulary",
+      "line": 2158,
+      "signature": "conn: sqlite3.Connection, changes: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "init_db",
+      "line": 2243,
+      "signature": ""
+    }
+  ],
+  "app/element_sync.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "get_current_object",
+      "line": 58,
+      "signature": "conn: sqlite3.Connection"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "resolve_import_object",
+      "line": 66,
+      "signature": "conn: sqlite3.Connection, object_id: Optional[int], source_file: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "load_object_elements",
+      "line": 105,
+      "signature": "conn: sqlite3.Connection, object_id: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_contract_conflict",
+      "line": 119,
+      "signature": "conn, contract_id, element_type, mark"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "analyze_import",
+      "line": 132,
+      "signature": "conn: sqlite3.Connection, object_id: int, rows: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "apply_import",
+      "line": 234,
+      "signature": "conn: sqlite3.Connection, object_id: int, source_file: str, rows: list, match: MatchResult, accept_mark_changes: bool=True, keep_mark_element_ids: Optional[set]=None, refill_manual_fields: Optional[dict]=None, user=None, request_id: Optional[str]=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_sync_mark_links",
+      "line": 372,
+      "signature": "conn: sqlite3.Connection, object_id: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_register_drawing",
+      "line": 413,
+      "signature": "conn: sqlite3.Connection, object_id: int, source_file: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "summary_for_log",
+      "line": 428,
+      "signature": "counts: dict"
+    }
+  ],
+  "app/dxf_import.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "_load_allowed_subtypes",
+      "line": 48,
+      "signature": "conn, object_id: Optional[int]"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "DxfProcessingError",
+      "line": 66,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "save_uploaded_file",
+      "line": 73,
+      "signature": "upload_file, uploads_dir: Path=UPLOADS_DIR"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ParsedDrawing",
+      "line": 85,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_collect_new_subtypes",
+      "line": 104,
+      "signature": "msp, allowed_subtypes: dict"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "parse_drawing",
+      "line": 122,
+      "signature": "dxf_path: Path, source_file: str, object_id: Optional[int]=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_zones_summary",
+      "line": 210,
+      "signature": "parsed: ParsedDrawing"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_zone_change_review",
+      "line": 236,
+      "signature": "conn, object_id: int, parsed: ParsedDrawing, match"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "analyze_drawing",
+      "line": 308,
+      "signature": "parsed: ParsedDrawing, object_id: Optional[int]=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "apply_drawing",
+      "line": 366,
+      "signature": "parsed: ParsedDrawing, analysis: dict, accept_mark_changes: bool=True, keep_mark_element_ids=None, refill_manual_fields=None, create_new_zone_ids=None, user=None, request_id=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "remember_pending",
+      "line": 469,
+      "signature": "parsed: ParsedDrawing, analysis: dict"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "get_pending",
+      "line": 479,
+      "signature": "token: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "forget_pending",
+      "line": 490,
+      "signature": "token: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "process_upload",
+      "line": 494,
+      "signature": "dxf_path: Path, source_file: str, object_id: Optional[int]=None, backup_comment: Optional[str]=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_dxf_file",
+      "line": 531,
+      "signature": "upload_file, source_file_override, uploads_dir: Path=UPLOADS_DIR"
+    }
+  ],
+  "app/input_import.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "_real_files",
+      "line": 20,
+      "signature": "pattern: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_input_files",
+      "line": 29,
+      "signature": ""
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_input_dxf",
+      "line": 39,
+      "signature": "object_id: Optional[int]=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_input_xlsx",
+      "line": 99,
+      "signature": "object_id: Optional[int]=None"
+    }
+  ],
+  "app/element_identity.py": [
+    {
+      "kind": "ClassDef",
+      "name": "ElementMatch",
+      "line": 53,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "MatchResult",
+      "line": 62,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_outline_of",
+      "line": 90,
+      "signature": "row"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "centroid_of",
+      "line": 105,
+      "signature": "row"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_changes_between",
+      "line": 119,
+      "signature": "existing, incoming"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_bucket",
+      "line": 129,
+      "signature": "centroid, tolerance"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "match_elements",
+      "line": 133,
+      "signature": "existing_rows, incoming_rows, tolerance=GEOMETRY_TOLERANCE_MM"
+    }
+  ],
+  "app/models.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "validate_color",
+      "line": 22,
+      "signature": "value: str, field: str='Цвет'"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "Status",
+      "line": 28,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ElementOut",
+      "line": 63,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "StatusHistoryOut",
+      "line": 141,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ElementDetailOut",
+      "line": 150,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ContractWarning",
+      "line": 173,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "StatusUpdateResult",
+      "line": 181,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "StatusUpdateIn",
+      "line": 185,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BulkStatusItem",
+      "line": 196,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BulkStatusUpdateIn",
+      "line": 205,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BulkStatusUpdateResult",
+      "line": 211,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ElementPlannedDateIn",
+      "line": 215,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ElementPlannedDateUpdateResult",
+      "line": 222,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BulkPlannedDateItem",
+      "line": 226,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BulkPlannedDateUpdateIn",
+      "line": 231,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "BulkPlannedDateUpdateResult",
+      "line": 235,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "StatusSummaryEntry",
+      "line": 239,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "PlanSelectionItem",
+      "line": 245,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "PlanSelectionIn",
+      "line": 256,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ExportRequestIn",
+      "line": 260,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ElementShapeIn",
+      "line": 276,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ZoneLevelOut",
+      "line": 288,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ZoneOut",
+      "line": 295,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ZoneLevelIn",
+      "line": 310,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ZonePatchIn",
+      "line": 316,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "AddressFields",
+      "line": 352,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ProjectIn",
+      "line": 385,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ProjectPatchIn",
+      "line": 391,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ProjectOut",
+      "line": 405,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ObjectOut",
+      "line": 416,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ObjectPatchIn",
+      "line": 451,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "AllowedSubtypeIn",
+      "line": 469,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ZoneColorIn",
+      "line": 479,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ZoneImportSummary",
+      "line": 493,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "DxfImportResult",
+      "line": 500,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "DxfAnalyzeResult",
+      "line": 521,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "DxfApplyIn",
+      "line": 538,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "RevitAnalyzeResult",
+      "line": 555,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "RevitApplyIn",
+      "line": 573,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "RevitImportResult",
+      "line": 577,
+      "signature": null
+    }
+  ],
+  "app/zone_recalc.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "_handle",
+      "line": 47,
+      "signature": "zone_id: int, level_id: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_parse_handle",
+      "line": 53,
+      "signature": "handle: Optional[str]"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "can_recalculate",
+      "line": 60,
+      "signature": "conn: sqlite3.Connection, object_id: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_zone_records",
+      "line": 87,
+      "signature": "conn: sqlite3.Connection, object_id: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "recalculate",
+      "line": 122,
+      "signature": "conn: sqlite3.Connection, object_id: int, user=None, request_id: Optional[str]=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "capture_bindings",
+      "line": 184,
+      "signature": "conn: sqlite3.Connection, zone_id: int, category: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "merge_bindings",
+      "line": 208,
+      "signature": "pre_edit: list, after_recalc: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "save_undo",
+      "line": 220,
+      "signature": "conn: sqlite3.Connection, zone_id: int, user, zone_before: dict, bindings_before: list"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "undo",
+      "line": 238,
+      "signature": "conn: sqlite3.Connection, zone_id: int"
+    }
+  ],
+  "app/marks.py": [
+    {
+      "kind": "ClassDef",
+      "name": "MarkIn",
+      "line": 45,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_check_type",
+      "line": 51,
+      "signature": "element_type: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_mark_row",
+      "line": 56,
+      "signature": "conn, mark_id: int"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "mark_usage",
+      "line": 63,
+      "signature": "conn, row"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "list_marks",
+      "line": 85,
+      "signature": "object_id: int=Query(...), element_type: Optional[str]=Query(None), user: sqlite3.Row=Depends(get_current_user)"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "create_mark",
+      "line": 129,
+      "signature": "body: MarkIn, admin: sqlite3.Row=Depends(require_service_feature('dict_marks', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "rename_mark",
+      "line": 163,
+      "signature": "mark_id: int, body: MarkIn, admin: sqlite3.Row=Depends(require_service_feature('dict_marks', 'write'))"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_rename_contract_lines",
+      "line": 215,
+      "signature": "conn, mark_row, new_name: str"
+    }
+  ],
+  "app/element_fields.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "ru_date_text",
+      "line": 80,
+      "signature": "value"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "ru_dates_in_text",
+      "line": 95,
+      "signature": "text"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "to_excel_date",
+      "line": 105,
+      "signature": "value"
+    },
+    {
+      "kind": "ClassDef",
+      "name": "FieldError",
+      "line": 121,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "coerce_field",
+      "line": 127,
+      "signature": "field: str, raw"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "check_subtype",
+      "line": 162,
+      "signature": "conn, element_type: Optional[str], subtype: Optional[str], object_id: Optional[int]=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "contract_mismatch",
+      "line": 197,
+      "signature": "conn, contract_id, element_type, mark, element_id=None"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "resolve_mark_id",
+      "line": 230,
+      "signature": "conn, object_id, element_type, mark, create: bool=True"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "write_fields",
+      "line": 267,
+      "signature": "conn, element_id: int, row, values: dict"
+    }
+  ],
+  "scripts/import_elements.py": [
+    {
+      "kind": "FunctionDef",
+      "name": "to_float_or_none",
+      "line": 45,
+      "signature": "value"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "build_row",
+      "line": 51,
+      "signature": "record: ElementRecord, address: dict"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "read_rows",
+      "line": 91,
+      "signature": "csv_path"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "ensure_label_visibility",
+      "line": 117,
+      "signature": "conn, element_types, object_id"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "upsert_elements",
+      "line": 134,
+      "signature": "conn, rows, source_file"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_elements",
+      "line": 215,
+      "signature": "csv_path, source_file"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "save_axis_grid",
+      "line": 224,
+      "signature": "conn, grid, source_file"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ensure_zone_colors",
+      "line": 249,
+      "signature": "conn, zones, object_id"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "upsert_zones",
+      "line": 282,
+      "signature": "conn, zones, source_file"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "apply_zone_bindings",
+      "line": 331,
+      "signature": "conn, source_file, element_records, zone_handle_to_id"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "import_axis_grid",
+      "line": 366,
+      "signature": "dxf_path, source_file"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "main",
+      "line": 382,
+      "signature": ""
+    }
+  ],
+  "scripts/layer_naming.py": [
+    {
+      "kind": "ClassDef",
+      "name": "LayerNameError",
+      "line": 89,
+      "signature": null
+    },
+    {
+      "kind": "ClassDef",
+      "name": "ParsedLayerName",
+      "line": 102,
+      "signature": null
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_ci_lookup",
+      "line": 116,
+      "signature": "token: str, canonical_values"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "parse_elevation_token",
+      "line": 126,
+      "signature": "token: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "parse_floor_token",
+      "line": 146,
+      "signature": "token: str"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "parse_layer_name",
+      "line": 153,
+      "signature": "name: str, allowed_subtypes: dict"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_parse_zhbi_layer",
+      "line": 204,
+      "signature": "name: str, tokens: list, allowed_subtypes: dict"
+    },
+    {
+      "kind": "FunctionDef",
+      "name": "_parse_zone_layer",
+      "line": 285,
+      "signature": "name: str, tokens: list"
+    }
+  ]
+}
