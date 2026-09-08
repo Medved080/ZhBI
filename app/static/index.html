@@ -2456,9 +2456,12 @@
   .object-switch-project-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .object-switch-project-addr { font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; }
   .object-switch-chevron { flex: 0 0 auto; font-size: 9px; }
+  /* Заголовок раздела «Ведётся учёт» / «Без модели» (живой запрос
+     2026-09-08) — на границе между плашками с данными и без, только когда
+     в списке есть оба рода сразу. */
   .object-switch-group-title {
     font-size: 11px; font-weight: 700; color: var(--color-text-muted);
-    padding: 8px 12px 2px; text-transform: uppercase; letter-spacing: .03em;
+    padding: 10px 12px 2px; text-transform: uppercase; letter-spacing: .03em;
   }
   #object-switch-menu button.object-switch-item {
     display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
@@ -2479,7 +2482,13 @@
     outline: 2px solid var(--color-primary); outline-offset: -2px;
   }
   .object-switch-count { color: var(--color-text-muted); font-size: 11px; flex: 0 0 auto; }
-  .object-switch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* flex: 1 1 auto — иначе оставшееся место `justify-content: space-between`
+     делит ПОРОВНУ между всеми соседями (кружком слева и меткой/счётчиком
+     справа), и название визуально съезжает к центру строки вместо левого
+     края (живой запрос 2026-09-08 «выровняй текст по левому краю»). */
+  .object-switch-name {
+    flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
+  }
   /* Метка статуса: завершённый объект видно, архивный показывается только по
      галочке — но, показавшись, обязан отличаться от рабочего. */
   .object-switch-badge {
@@ -2542,6 +2551,14 @@
     border-radius: var(--radius-sm); overflow: hidden; cursor: pointer; background: none;
   }
   .catalog-form-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* «+ Фото» — тот же размер места в шапке, что и у миниатюры превью выше:
+     показывается только одна из двух кнопок, вторая скрыта. */
+  .catalog-form-avatar-add {
+    flex: 0 0 auto; width: 40px; height: 40px; padding: 0; border: 1px dashed var(--color-border);
+    border-radius: var(--radius-sm); cursor: pointer; background: none;
+    color: var(--color-text-muted); font-size: 10px; line-height: 1.2;
+  }
+  .catalog-form-avatar-add:hover { border-color: var(--color-primary); color: var(--color-primary); }
   .catalog-form-title h3 { margin: 0; font-size: 15px; flex: 1 1 auto; }
   .catalog-form-kind { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .04em; }
   .catalog-empty { color: var(--color-text-muted); font-size: 13px; padding: 24px 4px; }
@@ -2605,24 +2622,39 @@
   #map-modal { width: 96vw; max-width: 96vw; height: 94vh; max-height: 94vh; }
   .map-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
   .map-toolbar input { flex: 0 1 260px; }
+  .map-toolbar select { flex: 0 1 190px; }
   .map-online-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
   .map-layout { display: flex; gap: 0; padding: 0; overflow: hidden; }
   /* Список слева — не украшение: на карте страны точки сливаются, а найти
-     объект по названию нужно чаще, чем разглядывать его положение. */
+     объект по названию нужно чаще, чем разглядывать его положение. Ширину
+     можно тянуть ручкой #map-side-resize (живой запрос 2026-09-08), тем же
+     приёмом, что у остальных изменяемых панелей сервиса (makePanelResizer) —
+     ширина запоминается за компьютером в localStorage. */
   .map-side {
-    flex: 0 0 250px; overflow-y: auto; border-right: 1px solid var(--color-border);
-    background: var(--color-surface-sunken); padding: 6px 0;
+    width: 250px; flex-shrink: 0; overflow-y: auto; border-right: 1px solid var(--color-border);
+    background: var(--color-surface-sunken); padding: 8px;
   }
   .map-canvas { flex: 1 1 auto; min-width: 0; position: relative; }
   .map-canvas .maplibregl-map { position: absolute; inset: 0; }
+  /* Проект и его объекты — одной плашкой с тенью (живой запрос 2026-09-08:
+     «раздели группы Проект-объект на плашки с тенью как в других разделах
+     сервиса»), классом поповера выбора объекта в тулбаре. */
+  .map-side .object-switch-card { margin: 0 0 8px; }
+  .map-side .object-switch-card:last-child { margin-bottom: 0; }
   button.map-side-item {
-    display: flex; align-items: baseline; gap: 6px; width: 100%; text-align: left;
-    border: 0; background: none; padding: 5px 10px; cursor: pointer; font-size: 12px;
+    display: flex; align-items: flex-start; gap: 6px; width: 100%; text-align: left;
+    border: 0; background: none; padding: 7px 10px; cursor: pointer; font-size: 12px;
   }
   button.map-side-item:hover { background: var(--color-surface-2); }
-  .map-side-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; }
-  .map-side-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .map-side-project { font-size: 11px; color: var(--color-text-muted); padding: 8px 10px 2px; text-transform: uppercase; }
+  /* Кружки — по верхнему краю первой строки названия, а не по центру: имя
+     теперь переносится на несколько строк (живой запрос 2026-09-08: «убери
+     адрес над названием, а название переноси и выводи полностью» — заголовок
+     плашки раньше показывал название ПРОЕКТА, а у площадки оно почти всегда
+     совпадает с адресом и с названием объекта внутри — чистое дублирование,
+     да ещё и обрезанное многоточием). */
+  .map-side-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; margin-top: 3px; }
+  button.map-side-item .status-dot { margin-top: 3px; }
+  .map-side-name { flex: 1 1 auto; white-space: normal; word-break: break-word; }
   .map-side-percent { flex: 0 0 auto; font-size: 11px; color: var(--color-text-muted); }
   .map-popup-project { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; }
   .map-popup-name { font-weight: 700; margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
@@ -2630,7 +2662,11 @@
      карте проектов тоже») — рядом с кружком доли смонтированного (тот
      цвет — про ДРУГОЕ измерение, прогресс монтажа, а не про стадию). */
   .map-popup-status { font-size: 11px; font-weight: 400; color: var(--color-text-muted); }
-  .map-popup-addr { font-size: 12px; color: var(--color-text-muted); margin-bottom: 4px; }
+  /* Превью и описание объекта во всплывашке (живой запрос 2026-09-08) — та
+     же аватарка, что и в дереве справочника, и то же поле «Описание». */
+  .map-popup-avatar { display: block; width: 100%; max-height: 160px; object-fit: cover;
+    border-radius: var(--radius-sm); margin-bottom: 6px; }
+  .map-popup-desc { font-size: 12px; margin-bottom: 6px; white-space: pre-wrap; }
   .map-popup-facts { font-size: 12px; margin-bottom: 8px; }
   .map-empty { padding: 20px; color: var(--color-text-muted); font-size: 13px; }
   /* Мини-карта в форме объекта: фиксированной высоты, иначе она либо
@@ -4679,6 +4715,13 @@
             <button id="menu-ldap" data-feature="ldap" data-feature-kind="read">Доменная авторизация</button>
             <button id="menu-backups" data-feature="backups" data-feature-kind="read">Резервные копии</button>
             <button id="menu-address-classifier" data-feature="address_load" data-feature-kind="write">Адресный классификатор</button>
+            <!-- Подложка карты и разрешение ходить в интернет (перенесено
+                 из «Карты проектов», живой запрос 2026-09-08: настройка
+                 сервиса в целом, а не экрана одного просмотра — рядом с
+                 остальными пунктами администрирования, а не в рабочей
+                 форме). Права те же, что были у элементов на карте:
+                 require_service_feature("map", "write"). -->
+            <button id="menu-map-admin" data-feature="map" data-feature-kind="write">Карта: подложка и источник</button>
             <button id="menu-activity" data-feature="activity_log" data-feature-kind="read">Журнал действий</button>
             <!-- 2026-08-03: что реально лежит в базе — структура с назначением
                  каждого поля, объём по таблицам и просмотр содержимого.
@@ -7144,34 +7187,74 @@
       <h2>Карта проектов</h2>
       <div class="map-toolbar">
         <input type="text" id="map-search" placeholder="Найти объект на карте" autocomplete="off"/>
+        <!-- Отбор по статусу и по факту загрузки модели (живой запрос
+             2026-09-08, уточнение той же просьбы): список из 200+ объектов
+             на одной карте иначе не разобрать. Второй отбор — НЕ по проекту
+             (объекты и так сгруппированы по проектам в списке слева), а по
+             тому, ведётся ли по объекту учёт — то есть загружен ли по нему
+             чертёж (есть элементы), — или он пока только занесён в
+             справочник без модели. -->
+        <select id="map-filter-status" title="Отбор по статусу объекта">
+          <option value="">Все статусы</option>
+        </select>
+        <select id="map-filter-tracked" title="Отбор по признаку загрузки модели">
+          <option value="">Все объекты</option>
+          <option value="yes">Ведётся учёт (модель загружена)</option>
+          <option value="no">Только в справочнике (без модели)</option>
+        </select>
         <button class="btn btn-sm btn-secondary" id="map-fit">Показать все</button>
         <button class="btn btn-sm btn-secondary" id="map-current">Мой объект</button>
-        <!-- Подложка из интернета: единственное место в сервисе, где браузер
-             ходит на чужой адрес, поэтому переключатель виден только тем, кто
-             может его включить, и выключен по умолчанию. -->
-        <label class="map-online-toggle" id="map-online-box" hidden
-               title="Карта и определение координат по адресу будут работать через сайты OpenStreetMap. Требуется доступ в интернет с рабочих мест.">
-          <input type="checkbox" id="map-online"/> Карта и адреса из интернета
-        </label>
-        <!-- Второй путь получить подложку — файлом, для закрытого контура
-             (сервер сам в интернет не ходит): человек готовит файл заранее
-             (scripts/fetch_map_tiles.py на машине с интернетом) и отдаёт
-             его системе тем же способом, что и архив классификатора КЛАДР.
-             Виден тем же, кому виден переключатель выше. -->
-        <label class="btn btn-sm btn-secondary" id="map-tiles-upload-box" for="map-tiles-file" hidden
-               title="Файл подложки .pmtiles, подготовленный заранее на машине с интернетом (scripts/fetch_map_tiles.py)">
-          Загрузить файл подложки…
-        </label>
-        <input type="file" id="map-tiles-file" accept=".pmtiles" hidden/>
         <span class="hint-text" id="map-note"></span>
       </div>
     </div>
     <div class="modal-sticky-scroll map-layout">
       <div class="map-side" id="map-side"></div>
+      <div id="map-side-resize" class="panel-resize-handle" title="Перетащите, чтобы изменить ширину списка"></div>
       <div class="map-canvas" id="map-canvas"></div>
     </div>
     <div class="modal-sticky-foot">
       <div class="actions"><button class="btn btn-secondary" id="map-close">Закрыть</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- «Карта: подложка и источник» (перенесено из «Карты проектов»,
+     2026-09-08) — настройка сервиса в целом: включена ли подложка из
+     интернета и какие файлы .pmtiles загружены. Права и вызовы те же, что
+     были у элементов на самой карте (PUT /map/online-tiles,
+     POST /map/tiles/upload) — переехала только разметка. -->
+<div class="modal-backdrop" id="map-admin-backdrop">
+  <div class="modal" id="map-admin-modal">
+    <div class="modal-sticky-head">
+      <h2>Карта: подложка и источник</h2>
+      <p class="hint-text">
+        Подложку карты в «Карте проектов» и на мини-карте объекта можно
+        получить из интернета либо загрузить файлом заранее.
+      </p>
+    </div>
+    <div class="modal-sticky-scroll">
+      <!-- Единственное место в сервисе, где браузер ходит на чужой адрес —
+           поэтому переключатель выключен по умолчанию и требует явного
+           решения администратора. -->
+      <label class="map-online-toggle" id="map-online-box"
+             title="Карта и определение координат по адресу будут работать через сайты OpenStreetMap. Требуется доступ в интернет с рабочих мест.">
+        <input type="checkbox" id="map-online"/> Карта и адреса из интернета
+      </label>
+      <!-- Второй путь получить подложку — файлом, для закрытого контура
+           (сервер сам в интернет не ходит): человек готовит файл заранее
+           (scripts/fetch_map_tiles.py на машине с интернетом) и отдаёт его
+           системе тем же способом, что и архив классификатора КЛАДР. -->
+      <div style="margin-top:12px">
+        <label class="btn btn-sm btn-secondary" id="map-tiles-upload-box" for="map-tiles-file"
+               title="Файл подложки .pmtiles, подготовленный заранее на машине с интернетом (scripts/fetch_map_tiles.py)">
+          Загрузить файл подложки…
+        </label>
+        <input type="file" id="map-tiles-file" accept=".pmtiles" hidden/>
+      </div>
+      <div class="hint-text" id="map-admin-note" style="margin-top:8px"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions"><button class="btn btn-secondary" id="map-admin-close">Закрыть</button></div>
     </div>
   </div>
 </div>

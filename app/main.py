@@ -4610,53 +4610,13 @@ def get_projects_tree(user: sqlite3.Row = Depends(get_current_user)):
                 # несколько, и разрешения складываются.
                 объект["roles"] = sorted(роли.get(объект["id"], set()))
         return {"projects": дерево,
-                "last_object_id": user["last_object_id"] if "last_object_id" in user.keys() else None,
-                # Недавние — для группы вверху поповера в тулбаре. Приезжают
-                # вместе с деревом: это ровно тот запрос, которым клиент
-                # узнаёт про объекты.
-                "recent_object_ids": _недавние_объекты(user)}
+                "last_object_id": user["last_object_id"] if "last_object_id" in user.keys() else None}
     finally:
         conn.close()
 
 
 class LastObjectIn(BaseModel):
     object_id: Optional[int] = None
-
-
-# Сколько объектов помнить в группе «Недавние». Шесть — чтобы группа не
-# вытесняла собой сам список проектов: при двух сотнях объектов поповер и так
-# длинный.
-_НЕДАВНИХ_МАКСИМУМ = 6
-
-
-def _недавние_объекты(user) -> list:
-    """Недавно открытые объекты пользователя, новые первыми.
-
-    Битый JSON (правка руками, оборванная запись) не должен ронять открытие
-    страницы: список — удобство, а не условие работы, поэтому в таком случае
-    он просто считается пустым."""
-    if "recent_objects" not in user.keys() or not user["recent_objects"]:
-        return []
-    try:
-        значения = json.loads(user["recent_objects"])
-    except (TypeError, ValueError):
-        return []
-    return [int(x) for x in значения if isinstance(x, int)][:_НЕДАВНИХ_МАКСИМУМ]
-
-
-def _запомнить_недавний(conn, user, object_id: Optional[int]) -> None:
-    """Двигает объект в начало списка недавних.
-
-    Список ведётся ЗА ПОЛЬЗОВАТЕЛЕМ на сервере по той же причине, что и
-    last_object_id рядом: человек садится за другой компьютер и должен
-    увидеть тот же короткий список, а не пустоту."""
-    if object_id is None:
-        return
-    список = [object_id] + [x for x in _недавние_объекты(user) if x != object_id]
-    conn.execute(
-        "UPDATE users SET recent_objects = ? WHERE id = ?",
-        (json.dumps(список[:_НЕДАВНИХ_МАКСИМУМ]), user["id"]),
-    )
 
 
 @app.put("/me/last-object")
@@ -4678,7 +4638,6 @@ def set_last_object(body: LastObjectIn, user: sqlite3.Row = Depends(get_current_
             # каждый раз возвращался на чужое здание после перезагрузки.
             assert_object_access(conn, user, body.object_id)
         conn.execute("UPDATE users SET last_object_id = ? WHERE id = ?", (body.object_id, user["id"]))
-        _запомнить_недавний(conn, user, body.object_id)
         conn.commit()
         activity.log("last_object", user=user, entity_type="object", entity_id=body.object_id,
                      new_value=str(body.object_id))

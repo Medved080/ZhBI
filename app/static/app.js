@@ -80,10 +80,6 @@ let state = {
   // им пользуются экспорт, импорт истории и опрос /changes.
   objectId: null,
   projects: [],   // дерево из /projects-tree
-  // Недавно открытые объекты, новые первыми — группа вверху переключателя.
-  // Приезжают с сервера вместе с деревом: список ведётся за пользователем,
-  // а не в браузере (см. users.recent_objects).
-  recentObjectIds: [],
   selection: new Map(), // source_file -> Set(layer) | null (null = все слои файла); сеансовый выбор, не сохраняется (п.13)
   elements: [],
   byId: new Map(),
@@ -1396,7 +1392,6 @@ function objectSwitchVisible(запись, показыватьАрхив) {
 async function loadProjectsTree() {
   const data = await api("/projects-tree");
   state.projects = data.projects || [];
-  state.recentObjectIds = data.recent_object_ids || [];
   buildObjectSwitchIndex();
   const все = state.projects.flatMap((p) => p.objects);
   if (!все.length) { state.objectId = null; renderObjectSwitch(); return; }
@@ -1496,23 +1491,6 @@ function renderObjectSwitchList() {
   // раскладку на каждой строке.
   const фрагмент = document.createDocumentFragment();
 
-  // ---- Недавние ----
-  // Только когда поиск пуст: при активном поиске человек ищет конкретное, и
-  // группа «недавние» сверху сдвигала бы найденное вниз.
-  if (!objectSwitch.query) {
-    const недавние = (state.recentObjectIds || [])
-      .map((id) => видимые.find((з) => з.объект.id === id))
-      .filter(Boolean);
-    if (недавние.length > 1) {
-      const заголовок = document.createElement("div");
-      заголовок.className = "object-switch-group-title";
-      заголовок.textContent = "Недавние";
-      фрагмент.appendChild(заголовок);
-      недавние.forEach((з) => фрагмент.appendChild(
-        objectSwitchItemButton(з.проект, з.объект, true)));
-    }
-  }
-
   // ---- Группы по проектам ----
   // Сначала проекты, где есть хоть один объект с загруженными элементами
   // (живой запрос 2026-09-08: «сначала проекты с данными, ниже все
@@ -1531,12 +1509,26 @@ function renderObjectSwitchList() {
   }
   группыПроектов.sort((a, b) => (b.естьДанные ? 1 : 0) - (a.естьДанные ? 1 : 0));
 
-  for (const { проект, свои } of группыПроектов) {
-    // При поиске группы раскрыты всегда: человек ищет объект, а не проект, и
-    // заставлять его дораскрывать найденное — лишний ход.
-    const раскрыт = !!objectSwitch.query
-      || objectSwitch.expanded.has(проект.id)
-      || (текущий && текущий.project === проект);
+  // Заголовок раздела вставляется РОВНО на границе (живой запрос 2026-09-08:
+  // «отдели сверху объекты по которым ведётся учёт от тех по которым модели
+  // нет») — и только когда в текущем отфильтрованном списке есть ОБА
+  // раздела: если все проекты одного рода, подписывать нечего, это был бы
+  // заголовок ради заголовка.
+  const естьОбаРаздела = группыПроектов.some((g) => g.естьДанные)
+    && группыПроектов.some((g) => !g.естьДанные);
+  let текущийРаздел = null;
+
+  for (const { проект, свои, естьДанные } of группыПроектов) {
+    if (естьОбаРаздела) {
+      const раздел = естьДанные ? "tracked" : "empty";
+      if (раздел !== текущийРаздел) {
+        текущийРаздел = раздел;
+        const заголовокРаздела = document.createElement("div");
+        заголовокРаздела.className = "object-switch-group-title";
+        заголовокРаздела.textContent = естьДанные ? "Ведётся учёт" : "Без модели";
+        фрагмент.appendChild(заголовокРаздела);
+      }
+    }
 
     // Проект и его объекты — ОДНОЙ плашкой с тенью (2026-09-08, живой
     // запрос «объединение объектов вместе с их проектом на одной плашке с
@@ -1545,6 +1537,24 @@ function renderObjectSwitchList() {
     // списка со свободно висящей строкой-заголовком.
     const карточка = document.createElement("div");
     карточка.className = "object-switch-card";
+
+    // Единственный объект в проекте — БЕЗ сворачиваемого заголовка (живой
+    // запрос 2026-09-08: «если в проекте только один объект, не группируй в
+    // проект, показывай сразу строку объекта»): и сворачивать/разворачивать
+    // нечего, и на реальных данных название проекта — это адрес площадки,
+    // совпадающий с названием того же единственного объекта внутри —
+    // заголовок был бы тем же дублированием, что убрали на карте проектов.
+    if (свои.length === 1) {
+      карточка.appendChild(objectSwitchItemButton(проект, свои[0].объект, false));
+      фрагмент.appendChild(карточка);
+      continue;
+    }
+
+    // При поиске группы раскрыты всегда: человек ищет объект, а не проект, и
+    // заставлять его дораскрывать найденное — лишний ход.
+    const раскрыт = !!objectSwitch.query
+      || objectSwitch.expanded.has(проект.id)
+      || (текущий && текущий.project === проект);
 
     const head = document.createElement("button");
     head.type = "button";
@@ -1652,11 +1662,6 @@ async function loadLateThreshold() {
 async function switchObject(objectId) {
   if (objectId === state.objectId) return;
   state.objectId = objectId;
-  // Недавние двигаются СРАЗУ, не дожидаясь следующей загрузки дерева: иначе
-  // группа вверху поповера показывала бы вчерашний порядок до перезагрузки
-  // страницы. Сервер запоминает то же самое в users.recent_objects ниже.
-  state.recentObjectIds = [objectId].concat(
-    (state.recentObjectIds || []).filter((id) => id !== objectId)).slice(0, 6);
   renderObjectSwitch();
 
   // Смена объекта — это не «перезагрузить данные». Всё, что относилось к
@@ -11895,12 +11900,29 @@ function renderCatalogForm() {
   const доступенДляПерехода = type === "object" && !новая
     && state.projects.flatMap((p) => p.objects).some((o) => o.id === catalog.selected.id);
 
+  // Права на фото — те же, что на вложения объекта вообще (та же роль, что
+  // проверяет сервер и что уже используется для блока «Вложения» ниже).
+  const роли = (type === "object" && !новая)
+    ? ((state.projects.flatMap((p) => p.objects).find((o) => o.id === catalog.selected.id) || {}).roles || [])
+    : [];
+  const можноЗагрузитьФото = type === "object" && !новая && canOn(роли, "attachments", "write");
+
   место.innerHTML = `
     <div class="catalog-form-title">
-      ${type === "object" ? `<button type="button" class="catalog-form-avatar" id="catalog-form-avatar"
-                 title="Открыть превью" ${запись && запись.has_avatar ? "" : "hidden"}>
+      ${type === "object" && !новая ? `
+      <button type="button" class="catalog-form-avatar" id="catalog-form-avatar"
+              title="Открыть превью" ${запись && запись.has_avatar ? "" : "hidden"}>
         <img src="${запись && запись.has_avatar ? `/objects/${запись.id}/avatar` : ""}" alt=""/>
-      </button>` : ""}
+      </button>
+      ${можноЗагрузитьФото ? `
+      <!-- Кнопка добавить фото — прямо в шапке (живой запрос 2026-09-08:
+           «сделай кнопку прямо в карточке»), без захода в свёрнутые
+           «Вложения»: та же загрузка + назначение превью одним действием. -->
+      <button type="button" class="catalog-form-avatar-add" id="catalog-form-avatar-add"
+              title="Добавить фото объекта" ${запись && запись.has_avatar ? "hidden" : ""}>+ Фото</button>
+      <input type="file" id="catalog-form-avatar-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden/>
+      ` : ""}
+      ` : ""}
       <span class="catalog-form-kind">${type === "project" ? "Проект" : "Объект"}</span>
       <h3>${escapeHtml(заголовок)}</h3>
       ${доступенДляПерехода
@@ -11925,6 +11947,58 @@ function renderCatalogForm() {
   if (кнопкаАватар) {
     кнопкаАватар.addEventListener("click", () =>
       openImageLightbox(кнопкаАватар.querySelector("img").src, заголовок));
+  }
+
+  // «+ Фото» — загрузка и назначение превью ОДНИМ действием (живой запрос
+  // 2026-09-08), без захода в свёрнутые «Вложения»: та же загрузка (POST
+  // /attachments) и то же назначение (PUT /objects/{id}/avatar), что там.
+  const кнопкаДобавитьФото = document.getElementById("catalog-form-avatar-add");
+  const файлФото = document.getElementById("catalog-form-avatar-file");
+  if (кнопкаДобавитьФото && файлФото) {
+    кнопкаДобавитьФото.addEventListener("click", () => файлФото.click());
+    файлФото.addEventListener("change", async (e) => {
+      const файл = e.target.files[0];
+      e.target.value = ""; // тот же файл повторно выбрать можно сразу
+      if (!файл) return;
+      кнопкаДобавитьФото.disabled = true;
+      кнопкаДобавитьФото.textContent = "Загрузка…";
+      try {
+        const данные = new FormData();
+        данные.append("entity_type", "object");
+        данные.append("entity_id", String(запись.id));
+        данные.append("file", файл);
+        // Raw fetch, не api(): та же причина, что у остальных
+        // multipart-загрузок в сервисе — нужен файл в теле запроса.
+        const ответЗагрузки = await fetch("/attachments", { method: "POST", body: данные });
+        const телоЗагрузки = await ответЗагрузки.json().catch(() => null);
+        if (!ответЗагрузки.ok) {
+          throw new Error((телоЗагрузки && телоЗагрузки.detail) || `Ошибка ${ответЗагрузки.status}`);
+        }
+        // Сервер отдаёт весь список вложений объекта — только что
+        // загруженное окажется последним.
+        const вложение = (телоЗагрузки.attachments || []).slice(-1)[0];
+        if (!вложение) throw new Error("Сервер не вернул загруженный файл");
+        const ответАватара = await api(`/objects/${запись.id}/avatar`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ attachment_id: вложение.id }),
+        });
+        запись.avatar_attachment_id = ответАватара.avatar_attachment_id;
+        запись.has_avatar = !!ответАватара.avatar_attachment_id;
+        refreshCatalogFormAvatar(запись);
+        renderCatalogTree();
+        // «Вложения» кэшированы лениво (dataset.loaded, см. свёртку ниже) —
+        // сбрасываем метку, чтобы при следующем разворачивании список
+        // подтянул свежий файл, а не показал устаревший без него.
+        const бокс = document.getElementById("catalog-attachments");
+        if (бокс) delete бокс.dataset.loaded;
+        showToast("Фото добавлено и назначено превью.", "info");
+      } catch (err) {
+        showToast(err.message || "Не удалось загрузить фото", "error");
+      } finally {
+        кнопкаДобавитьФото.disabled = false;
+        кнопкаДобавитьФото.textContent = "+ Фото";
+      }
+    });
   }
 
   // У новой записи проект по умолчанию — тот, в котором человек сейчас
@@ -12167,13 +12241,19 @@ function renderCatalogForm() {
 function refreshCatalogFormAvatar(запись) {
   const кнопка = document.getElementById("catalog-form-avatar");
   if (!кнопка) return;
+  // «+ Фото» и миниатюра превью — одно и то же место в шапке, показывается
+  // только одна из двух: заведено превью — миниатюра, нет — предложение
+  // добавить (живой запрос 2026-09-08 «сделай кнопку прямо в карточке»).
+  const кнопкаДобавить = document.getElementById("catalog-form-avatar-add");
   if (запись && запись.has_avatar) {
     кнопка.hidden = false;
     // Метка времени — иначе браузер показал бы старую картинку из кэша под
     // тем же адресом, если превью сменили на другое вложение.
     кнопка.querySelector("img").src = `/objects/${запись.id}/avatar?t=${Date.now()}`;
+    if (кнопкаДобавить) кнопкаДобавить.hidden = true;
   } else {
     кнопка.hidden = true;
+    if (кнопкаДобавить) кнопкаДобавить.hidden = false;
   }
 }
 
@@ -12420,41 +12500,67 @@ async function ensureMapModule() {
   return mapModule;
 }
 
-function renderMapSide(объекты, фильтр) {
+// Отбор над картой (живой запрос 2026-09-08, уточнён тем же днём: «отбор не
+// выбором проекта, а по признаку — ведётся ли учёт в системе, или объект
+// только занесён в справочник, а модель по нему ещё не загружена») — текст,
+// статус и признак загрузки модели вместе, одним состоянием на весь экран
+// карты. Объекты и так сгруппированы по проектам в списке слева — отдельный
+// отбор по проекту был бы вторым способом делать то же самое.
+let mapFilters = { query: "", status: "", tracked: "" };
+
+function mapVisibleObjects() {
+  if (!projectMap) return [];
+  const строка = mapFilters.query.trim().toLowerCase();
+  return projectMap.объекты.filter((o) => {
+    if (mapFilters.status && (o.status || "active") !== mapFilters.status) return false;
+    // «Ведётся учёт» = по объекту загружен чертёж, то есть есть элементы;
+    // «только в справочнике» = объект заведён, а элементов пока нет.
+    if (mapFilters.tracked === "yes" && !(o.elements > 0)) return false;
+    if (mapFilters.tracked === "no" && o.elements > 0) return false;
+    if (строка) {
+      const текст = [o.name, o.project_name, o.address].filter(Boolean).join(" ").toLowerCase();
+      if (!текст.includes(строка)) return false;
+    }
+    return true;
+  });
+}
+
+function renderMapSide() {
   const место = document.getElementById("map-side");
-  const строка = (фильтр || "").trim().toLowerCase();
-  const видимые = строка
-    ? объекты.filter((o) => [o.name, o.project_name, o.address]
-        .filter(Boolean).join(" ").toLowerCase().includes(строка))
-    : объекты;
+  const видимые = mapVisibleObjects();
   место.innerHTML = "";
   if (!видимые.length) {
     место.innerHTML = `<div class="map-empty">Ничего не найдено.</div>`;
     return;
   }
+  // Проект и его объекты — одной плашкой с тенью (живой запрос 2026-09-08:
+  // «раздели группы Проект-объект на плашки с тенью как в других разделах
+  // сервиса»), классом поповера выбора объекта в тулбаре. БЕЗ заголовка с
+  // названием проекта (живой запрос тем же днём: «убери адрес над
+  // названием» — на реальных данных проект называется адресом площадки и
+  // почти всегда совпадает с названием единственного объекта внутри, так
+  // что заголовок был чистым дублированием, да ещё обрезанным многоточием).
   let текущийПроект = null;
+  let карточка = null;
   const фрагмент = document.createDocumentFragment();
   видимые.forEach((o) => {
     if (o.project_name !== текущийПроект) {
       текущийПроект = o.project_name;
-      const заголовок = document.createElement("div");
-      заголовок.className = "map-side-project";
-      заголовок.textContent = текущийПроект || "Без проекта";
-      фрагмент.appendChild(заголовок);
+      карточка = document.createElement("div");
+      карточка.className = "object-switch-card";
+      фрагмент.appendChild(карточка);
     }
     const b = document.createElement("button");
     b.type = "button";
     b.className = "map-side-item";
-    // Два разных кружка — не спутать: этот, зелёно-серый, про ДОЛЮ
-    // СМОНТИРОВАННОГО (как и был), а .status-dot ниже — про СТАДИЮ стройки
+    // Два разных кружка — не спутать: .status-dot — про СТАДИЮ стройки
     // (перспективный/в работе/приостановлен/завершён/архивный, живой запрос
-    // 2026-09-08 «статус везде цветом... и на карте проектов тоже»). Разные
-    // измерения одного объекта, оба на виду разом.
-    const точка = document.createElement("span");
-    точка.className = "map-side-dot";
-    точка.style.background = o.percent === null ? "#9e9e9e"
-      : o.percent >= 100 ? "#2e7d32" : o.percent >= 60 ? "#7cb342"
-      : o.percent >= 30 ? "#f9a825" : o.percent > 0 ? "#ef6c00" : "#9e9e9e";
+    // 2026-09-08 «статус везде цветом... и на карте проектов тоже»), а этот,
+    // зелёно-оранжевый, — про ДОЛЮ СМОНТИРОВАННОГО. Второй кружок рисуется,
+    // только когда есть что показывать: у объекта «только в справочнике»
+    // (элементов нет, o.percent === null) он был бы всегда серым и не нёс бы
+    // никакой информации сверх статуса — живой запрос 2026-09-08 «почему у
+    // объектов слева 2 точки и одна серая».
     const статусТочка = document.createElement("span");
     статусТочка.className = "status-dot";
     статусТочка.style.background = objStatusColor(o.status);
@@ -12464,21 +12570,46 @@ function renderMapSide(объекты, фильтр) {
     имя.textContent = o.name;
     const доля = document.createElement("span");
     доля.className = "map-side-percent";
-    доля.textContent = o.percent === null ? "—" : o.percent + "%";
-    b.append(статусТочка, точка, имя, доля);
+    b.append(статусТочка, имя);
+    if (o.percent !== null) {
+      const точка = document.createElement("span");
+      точка.className = "map-side-dot";
+      точка.style.background = o.percent >= 100 ? "#2e7d32" : o.percent >= 60 ? "#7cb342"
+        : o.percent >= 30 ? "#f9a825" : o.percent > 0 ? "#ef6c00" : "#9e9e9e";
+      точка.title = "Смонтировано";
+      доля.textContent = o.percent + "%";
+      b.append(точка, доля);
+    }
     b.addEventListener("click", () => projectMap && projectMap.навести(o.id));
-    фрагмент.appendChild(b);
+    карточка.appendChild(b);
   });
   место.appendChild(фрагмент);
 }
 
+// Список статусов строится ЗАНОВО при каждом открытии карты
+// (CATALOG_STATUS_LABELS — общий справочник статусов сервиса); у отбора «по
+// факту загрузки модели» варианты фиксированы прямо в разметке.
+function populateMapFilters() {
+  const статусСписок = document.getElementById("map-filter-status");
+  // Цвет прямо в списке выбора (живой запрос 2026-09-08), тем же светофором
+  // по стадии, что и у точек статуса везде в интерфейсе (OBJ_STATUS_COLORS).
+  // Раскрытый нативный <select> не умеет цветной кружок внутри option —
+  // красим сам текст пункта инлайновым style, это единственное, что браузер
+  // рисует именно в развёрнутом списке (не только в схлопнутой кнопке).
+  статусСписок.innerHTML = `<option value="">Все статусы</option>` + Object.keys(CATALOG_STATUS_LABELS)
+    .map((s) => `<option value="${s}" style="color:${OBJ_STATUS_COLORS[s]};font-weight:600">`
+      + `${escapeHtml(CATALOG_STATUS_LABELS[s])}</option>`).join("");
+  статусСписок.value = mapFilters.status;
+  document.getElementById("map-filter-tracked").value = mapFilters.tracked;
+}
+
+function applyMapFilters() {
+  renderMapSide();
+  if (projectMap) projectMap.фильтровать(mapVisibleObjects());
+}
+
 async function openProjectMap() {
   mapBackdrop.classList.add("open");
-  // Переключатель подложки из интернета и загрузка файла подложки — только
-  // тем, кто может их менять (тот же раздел прав, что и у самой настройки).
-  const коробка = document.getElementById("map-online-box");
-  коробка.hidden = !can("map", "write");
-  document.getElementById("map-tiles-upload-box").hidden = !can("map", "write");
   const холст = document.getElementById("map-canvas");
   const заметка = document.getElementById("map-note");
   // Прежняя карта уничтожается по той же причине, что и мини-карта в форме:
@@ -12491,9 +12622,6 @@ async function openProjectMap() {
   заметка.textContent = "Загрузка карты…";
   try {
     const m = await ensureMapModule();
-    // Состояние переключателя приходит с сервера: настройка общая, а не
-    // личная, и человек должен видеть, как есть на самом деле.
-    api("/map/config").then((c) => { document.getElementById("map-online").checked = !!c.online; });
     projectMap = await m.renderProjectMap(холст, {
       onOpenObject: async (id) => {
         // Клик по точке ведёт на СВОЙСТВА объекта, а не сразу переключает
@@ -12511,13 +12639,16 @@ async function openProjectMap() {
         } else if (!естьПодложка) {
           части.push("Подложка не загружена: объекты показаны на пустом фоне. "
             + (can("map", "write")
-              ? "Включите «Карту из интернета» или загрузите файл подложки кнопкой выше."
+              ? "Настройте её в «Действия → Администрирование → Карта: подложка и источник»."
               : "Обратитесь к администратору сервиса."));
         }
         заметка.textContent = части.join(" ");
       },
     });
-    renderMapSide(projectMap.объекты, "");
+    mapFilters = { query: "", status: "", tracked: "" };
+    document.getElementById("map-search").value = "";
+    populateMapFilters();
+    renderMapSide();
   } catch (e) {
     // WebGL может не работать на тонком клиенте или в удалённой сессии —
     // это не повод показывать пустой прямоугольник без объяснения.
@@ -12533,13 +12664,53 @@ document.getElementById("map-close").addEventListener("click", () => {
   mapBackdrop.classList.remove("open");
 });
 document.getElementById("map-search").addEventListener("input", (e) => {
-  if (projectMap) renderMapSide(projectMap.объекты, e.target.value);
+  mapFilters.query = e.target.value;
+  applyMapFilters();
+});
+document.getElementById("map-filter-status").addEventListener("change", (e) => {
+  mapFilters.status = e.target.value;
+  applyMapFilters();
+});
+document.getElementById("map-filter-tracked").addEventListener("change", (e) => {
+  mapFilters.tracked = e.target.value;
+  applyMapFilters();
 });
 document.getElementById("map-fit").addEventListener("click", () => {
   if (projectMap) projectMap.показатьВсе();
 });
 document.getElementById("map-current").addEventListener("click", () => {
   if (projectMap && state.objectId) projectMap.навести(state.objectId);
+});
+// Ширина списка слева — тем же механизмом, что у сайдбара и панелей АРМ
+// (makePanelResizer, определён выше по файлу): ручка #map-side-resize,
+// ширина запоминается за компьютером в localStorage.
+makePanelResizer(
+  document.getElementById("map-side-resize"), document.getElementById("map-side"),
+  { fromRight: false, key: "zhbi_map_side_width", min: 180, max: 480 },
+);
+// Раньше здесь был setupResizableModal с кнопкой «развернуть» и малым
+// размером по умолчанию. Живой запрос 2026-09-08 (та же причина, что у
+// справочника «Проекты и объекты»): у карты остаётся ЕДИНСТВЕННЫЙ размер —
+// почти во весь экран, без переключателя; сам размер задан в CSS
+// (#map-modal, index.html).
+
+// ---- «Карта: подложка и источник» (Действия → Администрирование) ----
+// Переехало сюда из самой карты (живой запрос 2026-09-08, п.3): это
+// настройка сервиса в целом, а не экрана одного просмотра. Вызовы API и
+// права те же (require_service_feature("map", "write")), поменялась только
+// разметка вокруг них.
+const mapAdminBackdrop = document.getElementById("map-admin-backdrop");
+
+document.getElementById("menu-map-admin").addEventListener("click", async () => {
+  mapAdminBackdrop.classList.add("open");
+  document.getElementById("map-admin-note").textContent = "";
+  try {
+    const c = await api("/map/config");
+    document.getElementById("map-online").checked = !!c.online;
+  } catch (e) { /* заметку не показываем — переключатель просто останется как был */ }
+});
+document.getElementById("map-admin-close").addEventListener("click", () => {
+  mapAdminBackdrop.classList.remove("open");
 });
 document.getElementById("map-online").addEventListener("change", async (e) => {
   const включить = e.target.checked;
@@ -12564,7 +12735,7 @@ document.getElementById("map-tiles-file").addEventListener("change", async (e) =
   const файл = e.target.files[0];
   e.target.value = ""; // тот же файл повторно выбрать можно сразу
   if (!файл) return;
-  const заметка = document.getElementById("map-note");
+  const заметка = document.getElementById("map-admin-note");
   заметка.textContent = `Загрузка «${файл.name}»…`;
   const данные = new FormData();
   данные.append("file", файл);
@@ -12576,20 +12747,17 @@ document.getElementById("map-tiles-file").addEventListener("change", async (e) =
     if (!ответ.ok) {
       throw new Error((тело && тело.detail) || `Ошибка ${ответ.status}`);
     }
+    заметка.textContent = `Подложка «${тело.name}» загружена.`;
     showToast(`Подложка «${тело.name}» загружена.`, "info");
-    // Карта строится один раз при открытии из /map/config — переоткрываем,
-    // чтобы новый файл подложки подхватился сразу, без перезагрузки страницы.
-    await openProjectMap();
+    // Карта строится один раз при открытии из /map/config — если она уже
+    // открыта за спиной этого окна, переоткрываем, чтобы файл подхватился
+    // сразу, без перезагрузки страницы.
+    if (mapBackdrop.classList.contains("open")) await openProjectMap();
   } catch (err) {
     заметка.textContent = "";
     showToast(err.message || "Не удалось загрузить файл подложки", "error");
   }
 });
-// Раньше здесь был setupResizableModal с кнопкой «развернуть» и малым
-// размером по умолчанию. Живой запрос 2026-09-08 (та же причина, что у
-// справочника «Проекты и объекты»): у карты остаётся ЕДИНСТВЕННЫЙ размер —
-// почти во весь экран, без переключателя; сам размер задан в CSS
-// (#map-modal, index.html).
 
 // ============ НАСТРОЙКА: АДРЕСНЫЙ КЛАССИФИКАТОР КЛАДР (2026-09-07) ============
 //

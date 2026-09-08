@@ -322,16 +322,24 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
     const p = e.features[0].properties;
     const доля = (p.percent === null || p.percent === undefined || p.percent === "null")
       ? "—" : p.percent + " %";
+    // Превью — та же аватарка, что и в дереве справочника (GET
+    // /objects/{id}/avatar); onerror прячет картинку молча, если файл вдруг
+    // пропал с диска или у человека нет доступа к вложениям ИМЕННО этого
+    // объекта (карта и вложения — разные разделы прав).
+    const естьПревью = p.has_avatar === true || p.has_avatar === "true";
+    const описание = (p.description || "").trim();
     const узел = document.createElement("div");
     узел.className = "map-popup";
     узел.innerHTML = `
+      ${естьПревью ? `<img class="map-popup-avatar" src="/objects/${Number(p.id)}/avatar" alt=""
+        onerror="this.remove()"/>` : ""}
       <div class="map-popup-project">${deps.escapeHtml(p.project_name || "")}</div>
       <div class="map-popup-name">
         <span class="status-dot" style="background:${deps.statusColor(p.status)}"></span>
         ${deps.escapeHtml(p.name)}
         <span class="map-popup-status">${deps.escapeHtml(deps.statusLabel(p.status))}</span>
       </div>
-      ${p.address ? `<div class="map-popup-addr">${deps.escapeHtml(p.address)}</div>` : ""}
+      ${описание ? `<div class="map-popup-desc">${deps.escapeHtml(описание)}</div>` : ""}
       <div class="map-popup-facts">
         Элементов: ${p.elements}. Смонтировано: ${доля}.
         ${p.smr_start || p.smr_end ? `<br/>Сроки СМР: ${p.smr_start || "—"} — ${p.smr_end || "—"}.` : ""}
@@ -393,6 +401,14 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
     навести: (id) => {
       const o = данные.objects.find((x) => x.id === id);
       if (o) карта.easeTo({ center: [o.lon, o.lat], zoom: 15 });
+    },
+    // Отбор над картой (живой запрос 2026-09-08): источник точек создан ОДИН
+    // раз при открытии, поэтому отбор перерисовывает не слой, а данные
+    // самого источника — setData дешевле, чем пересоздавать источник и слои.
+    // `объекты` (полный список для боковой панели без отбора) не трогаем —
+    // список статусов/проектов в отборе строится по нему целиком.
+    фильтровать: (список) => {
+      карта.getSource("объекты").setData(точкиGeoJSON(список));
     },
   };
 }

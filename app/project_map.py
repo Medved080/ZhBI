@@ -260,6 +260,7 @@ def map_objects(user: sqlite3.Row = Depends(require_service_feature("map", "read
         строки = conn.execute(
             "SELECT o.id, o.name, o.kind, COALESCE(o.status, 'active') AS status, "
             "       o.address, o.address_region, o.lat, o.lon, "
+            "       o.description, o.avatar_attachment_id, "
             "       o.project_id, p.name AS project_name, "
             "       p.lat AS project_lat, p.lon AS project_lon, "
             "       COUNT(e.id) AS elements, "
@@ -294,6 +295,11 @@ def map_objects(user: sqlite3.Row = Depends(require_service_feature("map", "read
                 "status": r["status"],
                 "project_id": r["project_id"], "project_name": r["project_name"],
                 "address": r["address"], "region": r["address_region"],
+                # Описание и превью — во всплывашке на карте (живой запрос
+                # 2026-09-08): та же аватарка, что и в дереве справочника
+                # (GET /objects/{id}/avatar), лишнего эндпоинта не заводим.
+                "description": r["description"],
+                "has_avatar": bool(r["avatar_attachment_id"]),
                 "lat": lat, "lon": lon, "inherited": унаследованы,
                 "elements": элементов, "mounted": смонтировано,
                 # Доля считается ЗДЕСЬ: у клиента она понадобилась бы и для
