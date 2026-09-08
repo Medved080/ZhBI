@@ -1190,26 +1190,37 @@ def _поиск_объектов(conn, q: str, limit: int) -> List[sqlite3.Row]:
         try:
             return list(conn.execute(
                 "SELECT o.* FROM addr_objects_fts f JOIN addr_objects o ON o.code = f.code "
-                "WHERE addr_objects_fts MATCH ? ORDER BY o.level, o.name LIMIT ?",
-                (_fts_query(q), limit)))
+                "WHERE addr_objects_fts MATCH ? "
+                "ORDER BY CASE WHEN o.socr = 'г' THEN 0 WHEN o.level = 4 THEN 1 WHEN o.level = 1 THEN 2 ELSE 3 END, "
+                "o.name LIMIT ?",
+                (_fts_query(q, "name"), limit)))
         except sqlite3.OperationalError:
             pass
     return list(conn.execute(
-        "SELECT * FROM addr_objects WHERE name_lower LIKE ? ORDER BY level, name LIMIT ?",
+        "SELECT * FROM addr_objects WHERE name_lower LIKE ? "
+        "ORDER BY CASE WHEN socr = 'г' THEN 0 WHEN level = 4 THEN 1 WHEN level = 1 THEN 2 ELSE 3 END, "
+        "name LIMIT ?",
         (q.lower() + "%", limit)))
 
 
-def _fts_query(q: str) -> str:
+def _fts_query(q: str, колонка: str = None) -> str:
     """Запрос к FTS5 из пользовательского ввода.
 
     Спецсимволы вырезаются, а не экранируются: «*», кавычки и скобки в
     названии населённого пункта не встречаются, зато любая из них роняет
     разбор запроса FTS с ошибкой синтаксиса.
+
+    `колонка` ограничивает поиск ОДНИМ полем — собственным именем объекта, а
+    не полным путём. Без этого «новосибирск» находил любой населённый пункт
+    Новосибирской области (его путь содержит слово «Новосибирская»), и
+    настоящий город Новосибирск тонул среди десятков совпадений с чужим
+    именем, отсортированных по алфавиту.
     """
     слова = re.findall(r"[\w\-]+", q, flags=re.UNICODE)
     if not слова:
         return '""'
-    return " ".join('"%s"*' % с for с in слова)
+    запрос = " ".join('"%s"*' % с for с in слова)
+    return "%s : (%s)" % (колонка, запрос) if колонка else запрос
 
 
 def suggest_settlements(q: str, region: Optional[str] = None, limit: int = 20) -> List[dict]:

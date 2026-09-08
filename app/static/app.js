@@ -789,7 +789,10 @@ async function applyRolePermissions() {
   // настроек, чистка истории, временная обработка пустых объектов. Это
   // обслуживание сервиса, а не работа на стройке, и настраивать в них
   // нечего.
-  document.querySelectorAll("#settings-menu [data-feature]").forEach(elm => {
+  // #toolbar добавлен ради кнопки карты (2026-09-08): она стоит рядом с
+  // крошкой выбора объекта, а не в выпадающем меню «Действия», но правило
+  // то же самое — раздел решает видимость.
+  document.querySelectorAll("#settings-menu [data-feature], #toolbar [data-feature]").forEach(elm => {
     // Разделов у пункта может быть НЕСКОЛЬКО через запятую — тогда пункт
     // виден, если открыт хотя бы один. Так устроена «Смена поставщика»:
     // одна форма ведёт два вида документа («Замена поставщика» и «Обмен
@@ -11511,10 +11514,21 @@ function renderCatalogForm() {
     ? (type === "project" ? "Новый проект" : "Новый объект")
     : (запись ? запись.name : "");
 
+  // «Перейти к объекту» — только у объекта (у проекта нет своей схемы),
+  // только у сохранённой записи и только когда доступ на НЕГО у человека
+  // есть: раздел «Проекты и объекты» может быть открыт и без доступа на
+  // конкретный объект, а переключиться туда, куда доступа нет, всё равно
+  // не получится (сервер откажет).
+  const доступенДляПерехода = type === "object" && !новая
+    && state.projects.flatMap((p) => p.objects).some((o) => o.id === catalog.selected.id);
+
   место.innerHTML = `
     <div class="catalog-form-title">
       <span class="catalog-form-kind">${type === "project" ? "Проект" : "Объект"}</span>
       <h3>${escapeHtml(заголовок)}</h3>
+      ${доступенДляПерехода
+        ? `<button type="button" class="btn btn-sm btn-secondary" id="catalog-open-object"
+                   title="Сделать этот объект текущим и закрыть справочник">Перейти к объекту</button>` : ""}
       ${(!новая && редактируем) ? trashButtonHtml(`id="catalog-delete"`,
           type === "project" ? "Удалить проект" : "Удалить объект") : ""}
     </div>
@@ -11673,6 +11687,20 @@ function renderCatalogForm() {
     });
   }
 
+  const кнопкаПерейти = document.getElementById("catalog-open-object");
+  if (кнопкаПерейти) {
+    кнопкаПерейти.addEventListener("click", async () => {
+      if (catalog.dirty
+          && !confirm("В форме есть несохранённые изменения. Перейти к объекту без сохранения?")) {
+        return;
+      }
+      const id = catalog.selected.id;
+      catalogBackdrop.classList.remove("open");
+      clearCatalogDirty();
+      await switchObject(id);
+    });
+  }
+
   const урна = document.getElementById("catalog-delete");
   if (урна) {
     урна.addEventListener("click", () => openDictDelete(type, String(catalog.selected.id), {
@@ -11785,21 +11813,32 @@ async function refreshCatalog() {
   renderCatalogForm();
 }
 
-async function openCatalog() {
+// `предвыбор` — что открыть вместо записи по умолчанию: {type, id}. Нужен
+// карте (2026-09-08): клик по точке открывает СВОЙСТВА именно этого
+// объекта, а не текущего рабочего.
+async function openCatalog(предвыбор) {
   catalogBackdrop.classList.add("open");
   clearCatalogDirty();
   setCatalogStatus("", false);
   catalog.query = "";
   document.getElementById("catalog-search").value = "";
   await loadCatalogData();
-  // Раскрыт проект текущего объекта, и он же выбран: чаще всего правят
-  // именно ту площадку, на которой сейчас работают.
-  const текущий = currentObject();
-  if (текущий && текущий.project.id) {
-    catalog.expanded.add(текущий.project.id);
-    catalog.selected = { type: "object", id: текущий.object.id };
+  if (предвыбор) {
+    catalog.selected = предвыбор;
+    if (предвыбор.type === "object") {
+      const объект = catalog.objects.find((o) => o.id === предвыбор.id);
+      if (объект && объект.project_id) catalog.expanded.add(объект.project_id);
+    }
   } else {
-    catalog.selected = null;
+    // Раскрыт проект текущего объекта, и он же выбран: чаще всего правят
+    // именно ту площадку, на которой сейчас работают.
+    const текущий = currentObject();
+    if (текущий && текущий.project.id) {
+      catalog.expanded.add(текущий.project.id);
+      catalog.selected = { type: "object", id: текущий.object.id };
+    } else {
+      catalog.selected = null;
+    }
   }
   renderCatalogTree();
   renderCatalogForm();
@@ -11944,8 +11983,12 @@ async function openProjectMap() {
     api("/map/config").then((c) => { document.getElementById("map-online").checked = !!c.online; });
     projectMap = await m.renderProjectMap(холст, {
       onOpenObject: async (id) => {
+        // Клик по точке ведёт на СВОЙСТВА объекта, а не сразу переключает
+        // текущий: с карты обычно смотрят «что там вообще за площадка», а
+        // не обязательно намерены сейчас на ней работать. Перейти к работе
+        // на объекте — отдельная кнопка внутри самой карточки.
         mapBackdrop.classList.remove("open");
-        await switchObject(id);
+        await openCatalog({ type: "object", id });
       },
       onEmptyCoords: (без, всего, естьПодложка, бедаСПодложкой) => {
         const части = [`Объектов на карте: ${всего}.`];
@@ -11972,6 +12015,7 @@ async function openProjectMap() {
 }
 
 document.getElementById("menu-report-map").addEventListener("click", openProjectMap);
+document.getElementById("btn-toolbar-map").addEventListener("click", openProjectMap);
 document.getElementById("map-close").addEventListener("click", () => {
   mapBackdrop.classList.remove("open");
 });

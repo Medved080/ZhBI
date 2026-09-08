@@ -334,7 +334,7 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
         ${p.inherited === true || p.inherited === "true"
           ? `<br/><span class="hint-text">Координаты взяты у проекта.</span>` : ""}
       </div>
-      <button type="button" class="btn btn-sm btn-primary map-popup-open">Открыть объект</button>`;
+      <button type="button" class="btn btn-sm btn-primary map-popup-open">Свойства объекта</button>`;
     узел.querySelector(".map-popup-open").addEventListener("click", () => {
       попап.remove();
       onOpenObject(Number(p.id));
