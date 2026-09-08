@@ -7118,6 +7118,16 @@
                title="Карта и определение координат по адресу будут работать через сайты OpenStreetMap. Требуется доступ в интернет с рабочих мест.">
           <input type="checkbox" id="map-online"/> Карта и адреса из интернета
         </label>
+        <!-- Второй путь получить подложку — файлом, для закрытого контура
+             (сервер сам в интернет не ходит): человек готовит файл заранее
+             (scripts/fetch_map_tiles.py на машине с интернетом) и отдаёт
+             его системе тем же способом, что и архив классификатора КЛАДР.
+             Виден тем же, кому виден переключатель выше. -->
+        <label class="btn btn-sm btn-secondary" id="map-tiles-upload-box" for="map-tiles-file" hidden
+               title="Файл подложки .pmtiles, подготовленный заранее на машине с интернетом (scripts/fetch_map_tiles.py)">
+          Загрузить файл подложки…
+        </label>
+        <input type="file" id="map-tiles-file" accept=".pmtiles" hidden/>
         <span class="hint-text" id="map-note"></span>
       </div>
     </div>

@@ -12329,9 +12329,11 @@ function renderMapSide(объекты, фильтр) {
 
 async function openProjectMap() {
   mapBackdrop.classList.add("open");
-  // Переключатель подложки из интернета — только тем, кто может её включить.
+  // Переключатель подложки из интернета и загрузка файла подложки — только
+  // тем, кто может их менять (тот же раздел прав, что и у самой настройки).
   const коробка = document.getElementById("map-online-box");
   коробка.hidden = !can("map", "write");
+  document.getElementById("map-tiles-upload-box").hidden = !can("map", "write");
   const холст = document.getElementById("map-canvas");
   const заметка = document.getElementById("map-note");
   // Прежняя карта уничтожается по той же причине, что и мини-карта в форме:
@@ -12364,7 +12366,7 @@ async function openProjectMap() {
         } else if (!естьПодложка) {
           части.push("Подложка не загружена: объекты показаны на пустом фоне. "
             + (can("map", "write")
-              ? "Включите «Карту из интернета» или положите файл подложки на сервер."
+              ? "Включите «Карту из интернета» или загрузите файл подложки кнопкой выше."
               : "Обратитесь к администратору сервиса."));
         }
         заметка.textContent = части.join(" ");
@@ -12411,6 +12413,31 @@ document.getElementById("map-online").addEventListener("change", async (e) => {
   } catch (err) {
     e.target.checked = !включить;
     showToast(err.message || "Не удалось изменить настройку", "error");
+  }
+});
+document.getElementById("map-tiles-file").addEventListener("change", async (e) => {
+  const файл = e.target.files[0];
+  e.target.value = ""; // тот же файл повторно выбрать можно сразу
+  if (!файл) return;
+  const заметка = document.getElementById("map-note");
+  заметка.textContent = `Загрузка «${файл.name}»…`;
+  const данные = new FormData();
+  данные.append("file", файл);
+  try {
+    // Raw fetch, не api(): та же причина, что у остальных multipart-загрузок
+    // в сервисе (DXF, классификатор КЛАДР) — нужен файл в теле запроса.
+    const ответ = await fetch("/map/tiles/upload", { method: "POST", body: данные });
+    const тело = await ответ.json().catch(() => null);
+    if (!ответ.ok) {
+      throw new Error((тело && тело.detail) || `Ошибка ${ответ.status}`);
+    }
+    showToast(`Подложка «${тело.name}» загружена.`, "info");
+    // Карта строится один раз при открытии из /map/config — переоткрываем,
+    // чтобы новый файл подложки подхватился сразу, без перезагрузки страницы.
+    await openProjectMap();
+  } catch (err) {
+    заметка.textContent = "";
+    showToast(err.message || "Не удалось загрузить файл подложки", "error");
   }
 });
 // Раньше здесь был setupResizableModal с кнопкой «развернуть» и малым

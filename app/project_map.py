@@ -25,7 +25,9 @@ import re
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from pydantic import BaseModel
@@ -34,6 +36,7 @@ from app import activity
 from app.access import require_service_feature
 from app.auth import get_current_user
 from app.db import get_connection
+from app.upload_limits import copy_upload_limited
 
 MAP_DIR = os.environ.get("ZHBI_MAP_DIR") or "data/map"
 
@@ -187,6 +190,36 @@ def set_online_tiles(
     activity.log("map_online_tiles", user=admin,
                  new_value="включена" if body.enabled else "выключена")
     return {"online": _online_tiles}
+
+
+@router.post("/tiles/upload")
+def map_tiles_upload(
+    file: UploadFile = File(...),
+    admin: sqlite3.Row = Depends(require_service_feature("map", "write")),
+):
+    """Принять файл подложки PMTiles, выбранный в браузере.
+
+    Второй путь на случай, когда СЕРВЕР сам не может дойти до
+    build.protomaps.com (закрытый контур), а рабочие места — могут: файл
+    готовится заранее ЛЮБОЙ машиной с интернетом (`pmtiles` +
+    `scripts/fetch_map_tiles.py`), а отдаётся системе тем же способом, что
+    и архив классификатора КЛАДР (`app.kladr.address_upload`) — без
+    SSH/копирования на диск сервера руками.
+    """
+    имя = _safe_name(file.filename or "")
+    os.makedirs(MAP_DIR, exist_ok=True)
+    путь = os.path.join(MAP_DIR, имя)
+    copy_upload_limited(file.file, Path(путь))
+    беда = _проверить_подложку(путь)
+    if беда:
+        # Недокачанный или не тот файл — не оставляем его на диске похожим
+        # на готовую подложку: следующий basemaps() показал бы его в списке
+        # с пометкой «беда», а до этой правки список читали только по факту
+        # открытия карты.
+        os.remove(путь)
+        raise HTTPException(status_code=400, detail=f"Файл не похож на подложку PMTiles: {беда}")
+    activity.log("map_tiles_upload", user=admin, new_value=имя)
+    return {"name": имя, "size": os.path.getsize(путь)}
 
 
 @router.get("/tiles/{name}")
