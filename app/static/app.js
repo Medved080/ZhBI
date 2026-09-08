@@ -12306,12 +12306,11 @@ document.getElementById("map-online").addEventListener("change", async (e) => {
     showToast(err.message || "Не удалось изменить настройку", "error");
   }
 });
-setupResizableModal({
-  backdrop: mapBackdrop,
-  storageKey: "zhbi.mapModalSize",
-  toggleId: "map-size-toggle",
-  maximizedClass: "map-maximized",
-});
+// Раньше здесь был setupResizableModal с кнопкой «развернуть» и малым
+// размером по умолчанию. Живой запрос 2026-09-08 (та же причина, что у
+// справочника «Проекты и объекты»): у карты остаётся ЕДИНСТВЕННЫЙ размер —
+// почти во весь экран, без переключателя; сам размер задан в CSS
+// (#map-modal, index.html).
 
 // ============ НАСТРОЙКА: АДРЕСНЫЙ КЛАССИФИКАТОР КЛАДР (2026-09-07) ============
 //

@@ -2569,8 +2569,11 @@
      потому что его вид браузер не даёт причесать. */
   .address-получить label.btn { cursor: pointer; }
   /* -------- карта проектов (2026-09-07) -------- */
-  #map-modal { width: 1100px; max-width: 96vw; height: 82vh; }
-  #map-modal.map-maximized { width: 96vw; max-width: 96vw; height: 94vh; }
+  /* Единственный размер — почти во весь экран (живой запрос 2026-09-08,
+     та же причина, что у справочника «Проекты и объекты» выше: карта
+     показывает все площадки разом, и мелкий размер с переключателем ⛶
+     только мешал). Переключатель убран совсем, а не просто скрыт. */
+  #map-modal { width: 96vw; max-width: 96vw; height: 94vh; max-height: 94vh; }
   .map-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
   .map-toolbar input { flex: 0 1 260px; }
   .map-online-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
@@ -7080,9 +7083,7 @@
 <div class="modal-backdrop" id="map-backdrop">
   <div class="modal wide modal-sticky" id="map-modal">
     <div class="modal-sticky-head">
-      <h2>Карта проектов
-        <button class="btn-icon modal-size-toggle" id="map-size-toggle" title="Развернуть на весь экран">⛶</button>
-      </h2>
+      <h2>Карта проектов</h2>
       <div class="map-toolbar">
         <input type="text" id="map-search" placeholder="Найти объект на карте" autocomplete="off"/>
         <button class="btn btn-sm btn-secondary" id="map-fit">Показать все</button>
