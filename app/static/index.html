@@ -1731,7 +1731,7 @@
     font: inherit; font-size: 12px; color: var(--color-text); }
   .actions-panel button:hover { background: var(--color-surface-2); }
   .actions-panel button.menu-item-danger { color: var(--color-danger); }
-  .attach-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+  .attach-row { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 8px;
     align-items: baseline; padding: 4px 0; border-bottom: 1px dashed var(--color-border); }
   .attach-name { background: none; border: none; padding: 0; cursor: pointer; text-align: left;
     color: var(--color-primary); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
@@ -1741,6 +1741,15 @@
   .attach-del { grid-row: 1 / 3; background: none; border: none; cursor: pointer;
     color: var(--color-text-muted); font-size: 13px; align-self: center; }
   .attach-del:hover { color: var(--color-danger); }
+  /* Кнопка «превью» (2026-09-08) — назначить вложение аватаркой объекта в
+     дереве справочника. Только у картинок, только когда есть право
+     приложить вложение (тот же уровень, что назначить превью). */
+  .attach-avatar-btn { grid-row: 1 / 3; background: none; border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm); cursor: pointer; color: var(--color-text-muted);
+    font-size: 11px; align-self: center; padding: 2px 6px; white-space: nowrap; }
+  .attach-avatar-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+  .attach-avatar-btn.active { border-color: var(--color-primary); color: var(--color-primary);
+    background: var(--color-accent-soft); }
   .attach-upload { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   .attach-upload input[type=file] { font-size: 11px; max-width: 100%; }
   .attach-upload input[type=text] { flex: 1 1 120px; min-width: 0; }
@@ -2356,6 +2365,19 @@
     align-items: center; justify-content: center; z-index: 100;
   }
   .modal-backdrop.open { display: flex; }
+  /* Лайтбокс превью объекта (2026-09-08) — картинка во весь возможный
+     размер экрана, без формы вокруг: это просмотр, а не диалог. */
+  .image-lightbox-backdrop { z-index: 200; background: rgba(10,12,18,.85); }
+  .image-lightbox-inner { position: relative; max-width: 90vw; max-height: 90vh;
+    display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .image-lightbox-inner img { max-width: 90vw; max-height: 82vh; border-radius: var(--radius-sm);
+    box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+  .image-lightbox-caption { color: #fff; font-size: 13px; }
+  .image-lightbox-close {
+    position: absolute; top: -34px; right: 0; background: none; border: none;
+    color: #fff; font-size: 20px; cursor: pointer; line-height: 1; padding: 4px;
+  }
+  .image-lightbox-close:hover { color: var(--color-primary); }
   .modal {
     background: var(--color-surface); border-radius: var(--radius); padding: 22px 24px; min-width: 340px; max-width: 480px;
     max-height: 82vh; overflow-y: auto; font-size: 13px; box-shadow: var(--shadow-md);
@@ -2432,6 +2454,11 @@
   .catalog-tree-tools { display: flex; gap: 6px; padding: 10px; }
   .catalog-tree-tools input { flex: 1 1 auto; min-width: 0; }
   .catalog-tree-tools select { flex: 0 0 auto; max-width: 130px; }
+  /* Вторая строка фильтров (2026-09-08) — своя, без верхнего паддинга:
+     первая уже отступила от шапки, а зазор между двумя рядами фильтров
+     должен быть меньше, чем между поиском и деревом. */
+  .catalog-tree-filters { padding-top: 0; flex-wrap: wrap; }
+  .catalog-tree-filters select { flex: 1 1 90px; max-width: none; min-width: 0; }
   .catalog-tree { flex: 1 1 auto; overflow-y: auto; padding: 0 0 8px; }
   .catalog-tree-foot { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--color-border); }
   /* Строка дерева — кнопка во всю ширину. Проект и объект различаются
@@ -2456,8 +2483,20 @@
     flex: 0 0 auto; font-size: 10px; padding: 0 5px; border-radius: 8px;
     background: var(--color-surface-2); color: var(--color-text-muted); font-weight: 400;
   }
+  /* Миниатюра превью в дереве (2026-09-08). Кликабельна отдельно от строки —
+     открывает крупное изображение вместо выбора записи. */
+  .catalog-node-avatar {
+    flex: 0 0 auto; width: 18px; height: 18px; border-radius: 3px; object-fit: cover;
+    cursor: pointer;
+  }
   .catalog-form-pane { flex: 1 1 auto; overflow-y: auto; padding: 14px 16px; min-width: 0; }
   .catalog-form-title { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
+  /* Превью в шапке формы — то же изображение крупнее, тоже кликабельно. */
+  .catalog-form-avatar {
+    flex: 0 0 auto; width: 40px; height: 40px; padding: 0; border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm); overflow: hidden; cursor: pointer; background: none;
+  }
+  .catalog-form-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .catalog-form-title h3 { margin: 0; font-size: 15px; flex: 1 1 auto; }
   .catalog-form-kind { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .04em; }
   .catalog-empty { color: var(--color-text-muted); font-size: 13px; padding: 24px 4px; }
@@ -2676,6 +2715,12 @@
   #transfer-apply:disabled { opacity: .38; cursor: default; }
   #transfer-confirm-word:disabled { opacity: .5; cursor: default; }
   .bulk-edit-rejected div { color: var(--color-danger); padding: 2px 0; }
+  /* Предупреждения импорта объектов (2026-09-08) — не блокируют строку, в
+     отличие от отклонённых, поэтому мягче цветом: жёлтый читается как
+     «посмотри», красный — как «не применилось». */
+  #objects-import-warnings div { color: var(--color-warning, #b7791f); padding: 2px 0; }
+  .objects-import-group-row td { font-weight: 700; padding-top: 10px; border-bottom: none; }
+  .objects-import-group-row.is-create td { color: var(--color-primary); }
   .modal.modal-sticky { display: flex; flex-direction: column; overflow: hidden; padding: 22px 0; }
   .modal-sticky-head, .modal-sticky-foot { flex: 0 0 auto; padding: 0 24px; }
   /* «Обучение», выбор роли под строкой закладок. display задан ЗДЕСЬ, а не
@@ -4481,6 +4526,7 @@
             <button id="menu-history-import" data-feature="import_history" data-feature-kind="write">Импорт истории из XLS</button>
             <button id="menu-status-restore" data-feature="import_history" data-feature-kind="write">Восстановить статусы из выгрузки</button>
             <button id="menu-contracting-import" data-feature="import_contracting" data-feature-kind="write">Импорт контрактации из XLS</button>
+            <button id="menu-objects-import" data-feature="import_objects" data-feature-kind="write">Загрузка справочника объектов из Excel</button>
             <button id="menu-schedule-import" data-feature="import_schedule" data-feature-kind="write">Импорт графика MS Project из XLS</button>
             <button id="menu-import-input" class="admin-only">Загрузить из папки Input</button>
             <button id="menu-settings-io" class="admin-only">Экспорт/импорт настроек</button>
@@ -5449,11 +5495,22 @@
           <input type="text" id="catalog-search" placeholder="Найти по названию или адресу"
                  autocomplete="off" spellcheck="false"/>
           <select id="catalog-status-filter" title="Отбор по статусу записи">
-            <option value="active">Активные</option>
+            <option value="active">В работе</option>
+            <option value="perspective">Перспективные</option>
+            <option value="suspended">Приостановленные</option>
             <option value="completed">Завершённые</option>
             <option value="archived">Архивные</option>
             <option value="">Все</option>
           </select>
+        </div>
+        <!-- Отбор по реквизитам объекта (2026-09-08, живой запрос): пункты
+             списка строит JS из значений, реально встречающихся среди
+             загруженных объектов (populateCatalogFilterOptions) — готового
+             справочника СМУ или ответственных в системе нет. -->
+        <div class="catalog-tree-tools catalog-tree-filters">
+          <select id="catalog-smu-filter" title="Отбор по СМУ"><option value="">СМУ: все</option></select>
+          <select id="catalog-responsible-filter" title="Отбор по ответственному"><option value="">Ответственный: все</option></select>
+          <select id="catalog-region-filter" title="Отбор по региону"><option value="">Регион: все</option></select>
         </div>
         <div id="catalog-tree" class="catalog-tree"></div>
         <div class="catalog-tree-foot admin-only">
@@ -5474,6 +5531,17 @@
     </div>
   </div>
 </div>
+</div>
+
+<!-- Лайтбокс превью объекта (2026-09-08): один оверлей на всё приложение,
+     открывается по клику на миниатюру в дереве справочника или в шапке
+     формы (app.js: openImageLightbox). -->
+<div class="modal-backdrop image-lightbox-backdrop" id="image-lightbox-backdrop">
+  <div class="image-lightbox-inner">
+    <button type="button" class="image-lightbox-close" id="image-lightbox-close" title="Закрыть">✕</button>
+    <img alt=""/>
+    <div class="image-lightbox-caption"></div>
+  </div>
 </div>
 
 <!-- ВРЕМЕННАЯ обработка: заполнение пустых полей «Объект» и «Проект».
@@ -7254,6 +7322,60 @@
     <div class="actions">
       <button class="btn btn-secondary" id="contracting-import-cancel">Отмена</button>
       <button class="btn btn-primary" id="contracting-import-submit">Импортировать</button>
+    </div>
+  </div>
+</div>
+
+<!-- Загрузка справочника объектов из Excel «Объекты на карте» (2026-09-08,
+     живой запрос). Та же двухшаговая механика с обязательным подтверждением
+     построчных расхождений, что у «Массовой правки через Excel»
+     (#bulk-edit-backdrop) — переиспользует её CSS-классы для таблицы
+     расхождений и шагов, но это отдельная, более простая форма: своего
+     переключателя режимов и переноса базы здесь нет, только сверка и
+     применение. -->
+<div class="modal-backdrop" id="objects-import-backdrop">
+  <div class="modal modal-sticky" style="max-width:1100px; width:94vw; max-height:88vh;">
+    <div class="modal-sticky-head">
+      <h2>Загрузка справочника объектов из Excel</h2>
+      <p class="hint-text" style="margin-top:0;">
+        Файл реестра заказчика (лист «Объекты на карте»): строка — один объект,
+        сопоставление по <b>наименованию</b>. Новое наименование заведёт объект
+        (и проект с тем же названием — «один объект = один проект»); совпавшее
+        с уже внесённым — покажет расхождения. Ничего не применяется, пока вы
+        не отметите нужное флажками и не нажмёте «Применить отмеченное».
+        Ссылка на фото/видео сохраняется текстом — сервер её не скачивает,
+        снимок прикладывают вручную через вложения объекта.
+      </p>
+      <div class="bulk-edit-steps">
+        <div class="bulk-edit-block bulk-edit-block-file">
+          <div class="bulk-edit-block-title"><span class="step-num">1</span>Выбрать файл</div>
+          <div class="bulk-edit-controls">
+            <input type="file" id="objects-import-file" accept=".xlsx"/>
+          </div>
+        </div>
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">2</span>Сверить с базой</div>
+          <div class="bulk-edit-controls">
+            <button class="btn btn-secondary" id="objects-import-analyze">Сверить с базой</button>
+          </div>
+          <div class="bulk-edit-status">Ничего не изменит — только покажет расхождения.</div>
+        </div>
+      </div>
+      <div id="objects-import-status" class="bulk-edit-status"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div class="bulk-edit-table-wrap" id="objects-import-table-wrap">
+        <table class="bulk-edit-table" id="objects-import-table"></table>
+      </div>
+      <div id="objects-import-warnings" class="bulk-edit-rejected"></div>
+      <div id="objects-import-rejected" class="bulk-edit-rejected"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="objects-import-summary" class="bulk-edit-status"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="objects-import-cancel">Закрыть</button>
+        <button class="btn btn-primary" id="objects-import-apply" disabled>Применить отмеченное</button>
+      </div>
     </div>
   </div>
 </div>

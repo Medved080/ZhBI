@@ -1357,7 +1357,12 @@ const objectSwitch = {
   kbIndex: -1,   // клавиатурное выделение, -1 — нет
 };
 
-const OBJECT_STATUS_BADGE = { completed: "завершён", archived: "архив" };
+// Метка в крошке тулбара — у любого статуса, кроме «в работе» (он и так
+// подразумевается по умолчанию и не нуждается в пометке).
+const OBJECT_STATUS_BADGE = {
+  perspective: "перспективный", suspended: "приостановлен",
+  completed: "завершён", archived: "архив",
+};
 
 // Галочка «Показать архивные» — единственное, что живёт дольше сеанса:
 // человек, разбирающий архив, делает это подряд и не должен ставить её
@@ -7529,6 +7534,11 @@ function zoneBindingHtml(element, idField, statusField, category) {
 // вынимать.
 const ATTACHMENT_ICON = "📎";
 
+// Зеркало AVATAR_MIME из app/attachments.py: какие вложения можно назначить
+// превью объекта. Список дублируется, а не приходит с сервера — он не
+// меняется без правки кода по обе стороны разом.
+const AVATAR_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
 function formatFileSize(байт) {
   if (байт < 1024) return `${байт} Б`;
   if (байт < 1024 * 1024) return `${Math.round(байт / 1024)} КБ`;
@@ -7546,22 +7556,58 @@ async function downloadAttachment(id, имя) {
   URL.revokeObjectURL(url);
 }
 
+// ---------- лайтбокс: крупный просмотр картинки по клику на миниатюру ----------
+//
+// Один оверлей на всё приложение (разметка в index.html, #image-lightbox-backdrop),
+// а не создание элемента на лету: у него уже есть класс modal-backdrop, и
+// закрытие по Esc и клику по подложке работает само — оба обработчика в
+// app.js подписаны на ВСЕ .modal-backdrop, найденные при загрузке страницы.
+function openImageLightbox(src, подпись) {
+  if (!src) return;
+  const оверлей = document.getElementById("image-lightbox-backdrop");
+  оверлей.querySelector("img").src = src;
+  оверлей.querySelector(".image-lightbox-caption").textContent = подпись || "";
+  оверлей.classList.add("open");
+}
+
+{
+  const оверлей = document.getElementById("image-lightbox-backdrop");
+  const закрыть = () => {
+    оверлей.classList.remove("open");
+    оверлей.querySelector("img").src = "";   // не держать картинку в памяти вкладки
+  };
+  document.getElementById("image-lightbox-close").addEventListener("click", закрыть);
+  // Клик по тёмному полю вокруг картинки закрывает так же, как крестик —
+  // обычное поведение просмотрщика изображений.
+  оверлей.addEventListener("click", (e) => { if (e.target === оверлей) закрыть(); });
+}
+
 // canDelete отдельно от canUpload: приложить фото дефекта — работа прораба
 // (роль user), а снять чужое доказательство — уже admin на объекте. Так же
 // проверяет и сервер, здесь только зеркало, чтобы не показывать кнопку,
 // которая заведомо ответит 403.
-function renderAttachments(container, entityType, entityId, { canUpload = false, canDelete = false } = {}) {
+function renderAttachments(container, entityType, entityId, { canUpload = false, canDelete = false, avatar = null } = {}) {
   container.innerHTML = '<div class="hint-text">Загрузка…</div>';
 
   const перерисовать = (список) => {
-    const строки = список.length ? список.map(a => `
+    const строки = список.length ? список.map(a => {
+      const можноПревью = avatar && canUpload && AVATAR_MIME_TYPES.includes(a.content_type);
+      const этоПревью = avatar && avatar.current === a.id;
+      const кнопкаПревью = можноПревью ? (этоПревью
+        ? `<button type="button" class="attach-avatar-btn active" data-avatar-unset="${a.id}"
+                   title="Убрать как превью объекта">★ превью</button>`
+        : `<button type="button" class="attach-avatar-btn" data-avatar-set="${a.id}"
+                   title="Сделать превью объекта">☆ превью</button>`) : "";
+      return `
       <div class="attach-row">
         <button type="button" class="attach-name" data-download="${a.id}"
                 data-name="${escapeHtml(a.filename)}" title="Скачать">${ATTACHMENT_ICON} ${escapeHtml(a.filename)}</button>
         <span class="attach-meta">${formatFileSize(a.size)}${a.description ? " · " + escapeHtml(a.description) : ""}
           · ${escapeHtml(a.uploaded_by || "—")}, ${escapeHtml((a.uploaded_at || "").slice(0, 16))}</span>
+        ${кнопкаПревью}
         ${canDelete ? `<button type="button" class="attach-del" data-del="${a.id}" title="Удалить">✕</button>` : "<span></span>"}
-      </div>`).join("") : '<div class="hint-text">файлов нет</div>';
+      </div>`;
+    }).join("") : '<div class="hint-text">файлов нет</div>';
     container.innerHTML = строки + (canUpload ? `
       <div class="attach-upload">
         <input type="file" class="attach-file" multiple/>
@@ -7572,10 +7618,37 @@ function renderAttachments(container, entityType, entityId, { canUpload = false,
 
     container.querySelectorAll("[data-download]").forEach(b => b.addEventListener("click", () =>
       downloadAttachment(b.dataset.download, b.dataset.name)));
+    if (avatar) {
+      container.querySelectorAll("[data-avatar-set],[data-avatar-unset]").forEach(b => b.addEventListener("click", async () => {
+        const id = b.dataset.avatarSet ? Number(b.dataset.avatarSet) : null;
+        b.disabled = true;
+        try {
+          await api(`/objects/${avatar.objectId}/avatar`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ attachment_id: id }),
+          });
+          avatar.current = id;
+          if (avatar.onChange) avatar.onChange(id);
+          перерисовать(список);
+        } catch (e) {
+          b.disabled = false;
+          alert("Не удалось назначить превью: " + e.message);
+        }
+      }));
+    }
     container.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => {
       if (!confirm("Удалить вложение? Восстановить его будет нечем.")) return;
       try {
-        const d = await api(`/attachments/${b.dataset.del}`, { method: "DELETE" });
+        const id = Number(b.dataset.del);
+        const d = await api(`/attachments/${id}`, { method: "DELETE" });
+        // Удалили именно то вложение, что было превью: на сервере ссылка уже
+        // снята каскадом (ON DELETE SET NULL), клиентское состояние и
+        // миниатюры в дереве и в шапке формы обязаны узнать об этом сразу,
+        // а не показывать картинку по адресу, который теперь отвечает 404.
+        if (avatar && avatar.current === id) {
+          avatar.current = null;
+          if (avatar.onChange) avatar.onChange(null);
+        }
         перерисовать(d.attachments);
       } catch (e) { alert("Не удалось удалить: " + e.message); }
     }));
@@ -11191,6 +11264,13 @@ const catalog = {
   expanded: new Set(),
   query: "",
   status: "active",
+  // Отбор по ключевым полям объекта (2026-09-08, живой запрос: «Добавь
+  // возможность отбора объектов по ключевым полям — по ответственным,
+  // статусу, подразделению (СМУ), по региону»). Пусто — фильтр не действует.
+  // У проекта этих полей нет — в catalogMatches он тогда просто не проверяется.
+  smu: "",
+  responsible: "",
+  region: "",
   dirty: false,
   // Координаты уже стоят (сохранены раньше) или человек тронул их сам
   // (потащил пин, ткнул по карте, вписал число руками) — тогда
@@ -11252,8 +11332,11 @@ function setCatalogCoordsStatus(text, isError) {
   el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
+// Синхронизировано с CATALOG_STATUSES/CATALOG_STATUS_LABELS_RU в app/models.py.
 const CATALOG_STATUS_LABELS = {
+  perspective: "Перспективный",
   active: "В работе",
+  suspended: "Приостановлен",
   completed: "Завершён",
   archived: "Архивный",
 };
@@ -11285,6 +11368,22 @@ function catalogObjectsOf(projectId) {
 
 function catalogMatches(запись, имяПроекта) {
   if (catalog.status && (запись.status || "active") !== catalog.status) return false;
+  // СМУ/ответственный/регион — только у объекта ('smu' в записи отличает
+  // объект от проекта, у которого этих полей вовсе нет).
+  const объектныйФильтрАктивен = !!(catalog.smu || catalog.responsible || catalog.region);
+  if ("smu" in запись) {
+    if (catalog.smu && (запись.smu || "") !== catalog.smu) return false;
+    if (catalog.responsible && (запись.responsible || "") !== catalog.responsible) return false;
+    if (catalog.region && (запись.address_region || "") !== catalog.region) return false;
+  } else if (объектныйФильтрАктивен) {
+    // У проекта этих полей нет — сам по себе он «не подходит», пока
+    // фильтр по ним активен: видимость решает каскад в renderCatalogTree
+    // (проект остаётся виден, только пока подходит хоть один его объект).
+    // Без этой ветки при включённом фильтре СМУ дерево показывало бы ВСЕ
+    // проекты пустыми свёрнутыми заголовками — ровно тот шум, ради ухода
+    // от которого затевался отбор.
+    return false;
+  }
   if (!catalog.query) return true;
   return [запись.name, запись.address, имяПроекта]
     .filter(Boolean).join(" ").toLowerCase().includes(catalog.query);
@@ -11304,6 +11403,20 @@ function catalogNodeButton({ тип, запись, проект }) {
     шеврон.className = "catalog-node-chevron";
     шеврон.textContent = catalog.expanded.has(запись.id) ? "▼" : "▶";
     b.appendChild(шеврон);
+  }
+
+  if (тип === "object" && запись.has_avatar) {
+    const превью = document.createElement("img");
+    превью.className = "catalog-node-avatar";
+    превью.src = `/objects/${запись.id}/avatar`;
+    превью.alt = "";
+    // Клик по миниатюре открывает крупное изображение, а не карточку
+    // объекта: строка дерева и так одним кликом выбирает запись.
+    превью.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openImageLightbox(превью.src, запись.name);
+    });
+    b.appendChild(превью);
   }
 
   const имя = document.createElement("span");
@@ -11367,8 +11480,11 @@ function renderCatalogTree() {
 
     фрагмент.appendChild(catalogNodeButton({ тип: "project", запись: проект }));
     показано += 1;
-    // При поиске группы раскрыты всегда — искали объект, а не проект.
-    const раскрыт = !!catalog.query || catalog.expanded.has(проект.id);
+    // При поиске или отборе по реквизитам объекта группы раскрыты всегда —
+    // искали объект, а не проект, и заставлять дораскрывать найденное было
+    // бы лишним ходом.
+    const раскрыт = !!catalog.query || !!(catalog.smu || catalog.responsible || catalog.region)
+      || catalog.expanded.has(проект.id);
     if (раскрыт) {
       свои.forEach((o) => {
         фрагмент.appendChild(catalogNodeButton({ тип: "object", запись: o, проект }));
@@ -11446,6 +11562,28 @@ function catalogFieldsHtml(запись, тип, редактируем) {
       </div>
     </div>`;
 
+  // Реквизиты внутреннего реестра заказчика (2026-09-08) — те же поля, что
+  // заполняет загрузка справочника объектов из Excel («Действия → Обмен
+  // данными → Загрузка справочника объектов из Excel»); руками правятся
+  // здесь же, импорт — не единственный способ их заполнить.
+  const реквизитыЗаказчика = тип === "object" ? `
+    <div class="form-card">
+      <h4>Реквизиты заказчика</h4>
+      <div class="object-fields">
+        <label class="object-field"><span>СМУ</span>
+          <input type="text" data-field="smu" value="${з(запись && запись.smu)}" ${выкл}/></label>
+        <label class="object-field"><span>Директор СМУ</span>
+          <input type="text" data-field="smu_director" value="${з(запись && запись.smu_director)}" ${выкл}/></label>
+        <label class="object-field"><span>Ответственный (ДП/РП)</span>
+          <input type="text" data-field="responsible" value="${з(запись && запись.responsible)}" ${выкл}/></label>
+        <label class="object-field"><span>Старт СМР</span>
+          <input type="date" data-field="smr_start_reported" value="${з(запись && запись.smr_start_reported)}" ${выкл}/></label>
+        <label class="object-field object-field-wide"><span>Ссылка на фото/видео</span>
+          <input type="text" data-field="media_url" value="${з(запись && запись.media_url)}" ${выкл}
+                 placeholder="папка на Яндекс.Диске и т.п. — сервер её не скачивает"/></label>
+      </div>
+    </div>` : "";
+
   // Адрес рисует отдельный виджет (app/static/address.js): подсказки по
   // классификатору КЛАДР либо свободный ввод, если классификатор не
   // загружен. Сюда он монтируется после отрисовки формы.
@@ -11469,7 +11607,7 @@ function catalogFieldsHtml(запись, тип, редактируем) {
       <div class="catalog-pin-map" id="catalog-pin-map"></div>
     </div>`;
 
-  return реквизиты + адрес;
+  return реквизиты + реквизитыЗаказчика + адрес;
 }
 
 function catalogSummaryHtml(запись, тип) {
@@ -11524,6 +11662,10 @@ function renderCatalogForm() {
 
   место.innerHTML = `
     <div class="catalog-form-title">
+      ${type === "object" ? `<button type="button" class="catalog-form-avatar" id="catalog-form-avatar"
+                 title="Открыть превью" ${запись && запись.has_avatar ? "" : "hidden"}>
+        <img src="${запись && запись.has_avatar ? `/objects/${запись.id}/avatar` : ""}" alt=""/>
+      </button>` : ""}
       <span class="catalog-form-kind">${type === "project" ? "Проект" : "Объект"}</span>
       <h3>${escapeHtml(заголовок)}</h3>
       ${доступенДляПерехода
@@ -11543,6 +11685,12 @@ function renderCatalogForm() {
   кнопкаОтмена.hidden = !редактируем;
   кнопкаСохранить.disabled = !новая && !catalog.dirty;
   кнопкаОтмена.disabled = !новая && !catalog.dirty;
+
+  const кнопкаАватар = document.getElementById("catalog-form-avatar");
+  if (кнопкаАватар) {
+    кнопкаАватар.addEventListener("click", () =>
+      openImageLightbox(кнопкаАватар.querySelector("img").src, заголовок));
+  }
 
   // У новой записи проект по умолчанию — тот, в котором человек сейчас
   // работает: новое здание почти всегда добавляют на текущую площадку.
@@ -11733,9 +11881,36 @@ function renderCatalogForm() {
         renderAttachments(бокс, "object", catalog.selected.id, {
           canUpload: canOn(роли, "attachments", "write"),
           canDelete: canOn(роли, "attachments_delete", "write"),
+          avatar: {
+            objectId: catalog.selected.id,
+            current: запись ? запись.avatar_attachment_id : null,
+            onChange: (id) => {
+              if (запись) {
+                запись.avatar_attachment_id = id;
+                запись.has_avatar = !!id;
+              }
+              refreshCatalogFormAvatar(запись);
+              renderCatalogTree();
+            },
+          },
         });
       }
     });
+  }
+}
+
+// Превью в шапке формы обновляется точечно (а не пересборкой всей формы),
+// чтобы назначение превью не сворачивало только что открытый блок вложений.
+function refreshCatalogFormAvatar(запись) {
+  const кнопка = document.getElementById("catalog-form-avatar");
+  if (!кнопка) return;
+  if (запись && запись.has_avatar) {
+    кнопка.hidden = false;
+    // Метка времени — иначе браузер показал бы старую картинку из кэша под
+    // тем же адресом, если превью сменили на другое вложение.
+    кнопка.querySelector("img").src = `/objects/${запись.id}/avatar?t=${Date.now()}`;
+  } else {
+    кнопка.hidden = true;
   }
 }
 
@@ -11806,6 +11981,7 @@ async function saveCatalog() {
 
 async function refreshCatalog() {
   await loadCatalogData();
+  populateCatalogFilterOptions();
   // Крошка в тулбаре построена на тех же именах и связях — иначе она
   // показывала бы старое название до перезагрузки страницы.
   await loadProjectsTree();
@@ -11823,6 +11999,7 @@ async function openCatalog(предвыбор) {
   catalog.query = "";
   document.getElementById("catalog-search").value = "";
   await loadCatalogData();
+  populateCatalogFilterOptions();
   if (предвыбор) {
     catalog.selected = предвыбор;
     if (предвыбор.type === "object") {
@@ -11876,6 +12053,54 @@ document.getElementById("catalog-search").addEventListener("input", (e) => {
 document.getElementById("catalog-status-filter").addEventListener("change", (e) => {
   catalog.status = e.target.value;
   renderCatalogTree();
+});
+
+// Регион показывается по имени, если оно известно (address_parts.region.name
+// у ЛЮБОГО объекта этого региона, откуда бы ни взялся код — сам классификатор
+// или геодетект при импорте), иначе — сырым кодом: лучше код, чем пустая
+// строка в списке.
+function catalogRegionLabel(код, объекты) {
+  for (const o of объекты) {
+    if (o.address_region !== код) continue;
+    const имя = o.address_parts && o.address_parts.region && o.address_parts.region.name;
+    if (имя) return имя;
+  }
+  return код;
+}
+
+// Списки строятся из значений, реально встречающихся в загруженных объектах
+// (готового справочника СМУ или ответственных в системе нет) — и делают это
+// заново при каждом refreshCatalog/openCatalog: импорт мог принести новые.
+// Текущий выбор сохраняется, если значение всё ещё встречается.
+function populateCatalogFilterOptions() {
+  const объекты = catalog.objects;
+  const наборы = { smu: new Set(), responsible: new Set(), region: new Set() };
+  объекты.forEach((o) => {
+    if (o.smu) наборы.smu.add(o.smu);
+    if (o.responsible) наборы.responsible.add(o.responsible);
+    if (o.address_region) наборы.region.add(o.address_region);
+  });
+
+  const заполнить = (id, значения, метка, подпись) => {
+    const select = document.getElementById(id);
+    const текущий = catalog[значения[0]];
+    select.innerHTML = `<option value="">${метка}: все</option>`
+      + [...значения[1]].sort().map((v) =>
+          `<option value="${escapeHtml(v)}">${escapeHtml(подпись ? подпись(v) : v)}</option>`).join("");
+    if (текущий && [...значения[1]].includes(текущий)) select.value = текущий;
+    else catalog[значения[0]] = "";
+  };
+  заполнить("catalog-smu-filter", ["smu", наборы.smu], "СМУ");
+  заполнить("catalog-responsible-filter", ["responsible", наборы.responsible], "Ответственный");
+  заполнить("catalog-region-filter", ["region", наборы.region], "Регион",
+    (код) => catalogRegionLabel(код, объекты));
+}
+
+["smu", "responsible", "region"].forEach((поле) => {
+  document.getElementById(`catalog-${поле}-filter`).addEventListener("change", (e) => {
+    catalog[поле] = e.target.value;
+    renderCatalogTree();
+  });
 });
 document.getElementById("catalog-add-project").addEventListener("click", () => {
   selectCatalogNode("project", null);
@@ -16647,6 +16872,236 @@ document.getElementById("contracting-import-submit").addEventListener("click", a
   } catch (e) {
     statusEl.textContent = "Не удалось связаться с сервером: " + e.message;
     statusEl.style.color = "var(--color-danger)";
+  }
+});
+
+// ---------- загрузка справочника объектов из Excel (2026-09-08) ----------
+//
+// Тот же принцип, что у «Массовой правки через Excel»: сначала сверка
+// (ничего не пишет), затем применение только отмеченного флажками. Своя,
+// более простая форма — без переключателя режимов, см. app/objects_import.py.
+
+// Зеркало FIELD_LABELS из app/objects_import.py — нужно только для сводки
+// строки «Новый объект», где сервер отдаёт словарь полей без подписей;
+// у остальных правок подпись уже приходит в `field_label`.
+const OBJECTS_IMPORT_FIELD_LABELS = {
+  address: "Адрес", address_region: "Регион (по адресу)", smu: "СМУ",
+  smu_director: "Директор СМУ", responsible: "Ответственный (ДП/РП)",
+  status: "Статус", lat: "Широта", lon: "Долгота",
+  media_url: "Ссылка на фото/видео", smr_start_reported: "Старт СМР",
+};
+
+const objectsImportBackdrop = document.getElementById("objects-import-backdrop");
+let objectsImportChanges = [];
+let objectsImportChecked = new Set();
+
+function objectsImportSetStatus(text, isError) {
+  const el = document.getElementById("objects-import-status");
+  el.textContent = text || "";
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
+}
+
+function objectsImportValueText(field, value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (field === "status") return CATALOG_STATUS_LABELS[value] || value;
+  return String(value);
+}
+
+function objectsImportFieldsSummary(fields) {
+  const записи = Object.entries(fields || {});
+  if (!записи.length) return "(без дополнительных полей)";
+  return записи.map(([k, v]) => `${OBJECTS_IMPORT_FIELD_LABELS[k] || k}: ${objectsImportValueText(k, v)}`).join("; ");
+}
+
+function objectsImportGroupBy(changes) {
+  const map = new Map();
+  changes.forEach((c, i) => {
+    if (!map.has(c.key)) map.set(c.key, []);
+    map.get(c.key).push(i);
+  });
+  return map;
+}
+
+function updateObjectsImportSummary() {
+  const el = document.getElementById("objects-import-summary");
+  const total = objectsImportChanges.length;
+  const n = objectsImportChecked.size;
+  el.textContent = total ? `Отмечено ${n} из ${total} правок` : "";
+  document.getElementById("objects-import-apply").disabled = n === 0;
+}
+
+function renderObjectsImportTable() {
+  const table = document.getElementById("objects-import-table");
+  table.innerHTML = "";
+  if (!objectsImportChanges.length) { updateObjectsImportSummary(); return; }
+
+  const thead = document.createElement("thead");
+  thead.innerHTML = `<tr>
+    <th style="width:26px;"><input type="checkbox" id="objects-import-all" title="Отметить все"/></th>
+    <th>Объект</th><th>Поле</th><th>Было</th><th>Станет</th>
+  </tr>`;
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  const groups = objectsImportGroupBy(objectsImportChanges);
+  for (const [key, idxs] of groups) {
+    const первая = objectsImportChanges[idxs[0]];
+    if (первая.kind === "create") {
+      const tr = document.createElement("tr");
+      const tdCb = document.createElement("td");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = objectsImportChecked.has(idxs[0]);
+      cb.addEventListener("change", () => {
+        if (cb.checked) objectsImportChecked.add(idxs[0]); else objectsImportChecked.delete(idxs[0]);
+        updateObjectsImportSummary();
+      });
+      tdCb.appendChild(cb);
+      tr.appendChild(tdCb);
+      const tdName = document.createElement("td");
+      tdName.innerHTML = `<b>+ ${escapeHtml(key)}</b>`;
+      tr.appendChild(tdName);
+      const tdField = document.createElement("td");
+      tdField.textContent = "Новый объект и проект";
+      tr.appendChild(tdField);
+      const tdWas = document.createElement("td");
+      tdWas.className = "was";
+      tdWas.textContent = "—";
+      tr.appendChild(tdWas);
+      const tdNow = document.createElement("td");
+      tdNow.className = "now";
+      tdNow.textContent = objectsImportFieldsSummary(первая.fields);
+      tr.appendChild(tdNow);
+      tbody.appendChild(tr);
+      continue;
+    }
+
+    const заголовок = document.createElement("tr");
+    заголовок.className = "objects-import-group-row";
+    заголовок.innerHTML = `<td></td><td colspan="4">${escapeHtml(key)}</td>`;
+    tbody.appendChild(заголовок);
+
+    idxs.forEach((i) => {
+      const c = objectsImportChanges[i];
+      const tr = document.createElement("tr");
+      const tdCb = document.createElement("td");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = objectsImportChecked.has(i);
+      cb.addEventListener("change", () => {
+        if (cb.checked) objectsImportChecked.add(i); else objectsImportChecked.delete(i);
+        updateObjectsImportSummary();
+      });
+      tdCb.appendChild(cb);
+      tr.appendChild(tdCb);
+      tr.appendChild(document.createElement("td"));
+      const tdField = document.createElement("td");
+      tdField.textContent = c.field_label;
+      tr.appendChild(tdField);
+      const tdWas = document.createElement("td");
+      tdWas.className = "was";
+      tdWas.textContent = objectsImportValueText(c.field, c.was);
+      tr.appendChild(tdWas);
+      const tdNow = document.createElement("td");
+      tdNow.className = "now";
+      tdNow.textContent = objectsImportValueText(c.field, c.now);
+      tr.appendChild(tdNow);
+      tbody.appendChild(tr);
+    });
+  }
+  table.appendChild(tbody);
+
+  document.getElementById("objects-import-all").addEventListener("change", (e) => {
+    objectsImportChecked = e.target.checked ? new Set(objectsImportChanges.map((_, i) => i)) : new Set();
+    renderObjectsImportTable();
+  });
+  updateObjectsImportSummary();
+}
+
+function objectsImportRenderIssues(containerId, title, items, labelWith) {
+  const el = document.getElementById(containerId);
+  if (!items.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<b>${title} (${items.length}):</b>`;
+  items.forEach((it) => {
+    const d = document.createElement("div");
+    d.textContent = `${labelWith(it)}`;
+    el.appendChild(d);
+  });
+}
+
+function resetObjectsImport() {
+  document.getElementById("objects-import-file").value = "";
+  objectsImportChanges = [];
+  objectsImportChecked = new Set();
+  document.getElementById("objects-import-table").innerHTML = "";
+  document.getElementById("objects-import-warnings").innerHTML = "";
+  document.getElementById("objects-import-rejected").innerHTML = "";
+  objectsImportSetStatus("", false);
+  updateObjectsImportSummary();
+}
+
+document.getElementById("menu-objects-import").addEventListener("click", () => {
+  resetObjectsImport();
+  objectsImportBackdrop.classList.add("open");
+});
+document.getElementById("objects-import-cancel").addEventListener("click", () => objectsImportBackdrop.classList.remove("open"));
+
+document.getElementById("objects-import-analyze").addEventListener("click", async () => {
+  const file = document.getElementById("objects-import-file").files[0];
+  if (!file) { objectsImportSetStatus("Сначала выберите файл .xlsx", true); return; }
+  objectsImportSetStatus("Сверяем файл с базой…", false);
+  document.getElementById("objects-import-table").innerHTML = "";
+  document.getElementById("objects-import-warnings").innerHTML = "";
+  document.getElementById("objects-import-rejected").innerHTML = "";
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const res = await fetch("/objects-import/analyze", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `Ошибка ${res.status}`);
+    objectsImportChanges = data.changes || [];
+    objectsImportChecked = new Set(objectsImportChanges.map((_, i) => i));
+    objectsImportSetStatus(
+      `Прочитано строк: ${data.rows_read}. Новых объектов: ${data.objects_new}, `
+      + `правок у существующих: ${data.objects_updated}.`, false);
+    objectsImportRenderIssues("objects-import-warnings", "Предупреждения, не блокируют применение",
+      data.warnings || [], (w) => `стр. ${w.line}${w.name ? " («" + w.name + "»)" : ""}: ${w.reason}`);
+    objectsImportRenderIssues("objects-import-rejected", "Не может быть применено",
+      data.rejected || [], (r) => `стр. ${r.line}${r.name ? " («" + r.name + "»)" : ""}: ${r.reason}`);
+    renderObjectsImportTable();
+  } catch (e) {
+    objectsImportSetStatus(`Сверка не удалась: ${e.message}`, true);
+  }
+});
+
+document.getElementById("objects-import-apply").addEventListener("click", async () => {
+  const selected = objectsImportChanges.filter((_, i) => objectsImportChecked.has(i));
+  if (!selected.length) return;
+  if (!confirm(`Применить ${selected.length} изменений?`)) return;
+  const btn = document.getElementById("objects-import-apply");
+  btn.disabled = true;
+  objectsImportSetStatus("Применяем…", false);
+  try {
+    const data = await api("/objects-import/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes: selected }),
+    });
+    let text = `Готово: создано объектов ${data.created}, обновлено ${data.updated}.`;
+    if ((data.skipped || []).length) text += ` Пропущено: ${data.skipped.length}.`;
+    objectsImportSetStatus(text, false);
+    showToast(text, "info");
+    objectsImportRenderIssues("objects-import-rejected", "Пропущено при применении",
+      data.skipped || [], (s) => `${s.name ? "«" + s.name + "»: " : ""}${s.reason}`);
+    objectsImportChanges = [];
+    objectsImportChecked = new Set();
+    document.getElementById("objects-import-table").innerHTML = "";
+    updateObjectsImportSummary();
+    // Дерево справочника и крошка в тулбаре построены на тех же данных —
+    // без обновления новые объекты не появились бы до перезагрузки страницы.
+    await refreshCatalog();
+  } catch (e) {
+    objectsImportSetStatus(`Не удалось применить: ${e.message}`, true);
+    btn.disabled = false;
   }
 });
 

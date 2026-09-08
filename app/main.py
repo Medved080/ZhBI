@@ -24,6 +24,8 @@ from shapely.strtree import STRtree
 
 from app.auth import audit_display_name, format_display_name, get_current_user
 from app.auth import router as auth_router
+from app.attachments import ATTACHMENTS_DIR, AVATAR_MIME
+from app.attachments import attachment_row
 from app.attachments import counts_for as attachment_counts
 from app.attachments import delete_for_entity as delete_attachments_for
 from app.attachments import router as attachments_router
@@ -86,6 +88,7 @@ from app import pdf_facade_import
 from app import pdf_import
 from app import pdf_rooms
 from app import import_reset
+from app import objects_import
 from app.features import KIND_LABELS, KIND_ZHBI, KINDS
 from app.element_fields import (
     EDITABLE_FIELDS,
@@ -4298,6 +4301,21 @@ def _адресные_правки(body) -> list:
     return правки
 
 
+# Реквизиты из внутреннего реестра заказчика (2026-09-08) — только у
+# объекта. Та же логика «пишем только присланное», что у адресных полей.
+_РЕКВИЗИТНЫЕ_КОЛОНКИ = ("smu", "smu_director", "responsible", "media_url", "smr_start_reported")
+
+
+def _реквизитные_правки(body) -> list:
+    правки = []
+    for поле in _РЕКВИЗИТНЫЕ_КОЛОНКИ:
+        if поле not in body.model_fields_set:
+            continue
+        значение = getattr(body, поле)
+        правки.append((поле, значение.strip() or None if isinstance(значение, str) else значение))
+    return правки
+
+
 def _адрес_из_строки(row) -> dict:
     """Адресные поля записи для ответа. Отсутствующая колонка — не ошибка:
     на копиях базы, куда миграция ещё не дошла, справочник обязан открыться."""
@@ -4682,6 +4700,13 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 drawings=[d["source_file"] for d in drawings],
                 elements_current=(counts["cur"] or 0) if counts else 0,
                 elements_retired=(counts["gone"] or 0) if counts else 0,
+                smu=row["smu"] if "smu" in row.keys() else None,
+                smu_director=row["smu_director"] if "smu_director" in row.keys() else None,
+                responsible=row["responsible"] if "responsible" in row.keys() else None,
+                media_url=row["media_url"] if "media_url" in row.keys() else None,
+                smr_start_reported=row["smr_start_reported"] if "smr_start_reported" in row.keys() else None,
+                has_avatar=bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False,
+                avatar_attachment_id=(row["avatar_attachment_id"] if "avatar_attachment_id" in row.keys() else None),
                 **_адрес_из_строки(row),
             ))
         return result
@@ -4711,6 +4736,11 @@ class ObjectCreateIn(AddressFields):
     # Тип объекта: 'zhbi' (по умолчанию) или 'mfr'. От него зависит
     # состав разделов — см. app/features.py.
     kind: Optional[str] = None
+    smu: Optional[str] = None
+    smu_director: Optional[str] = None
+    responsible: Optional[str] = None
+    media_url: Optional[str] = None
+    smr_start_reported: Optional[str] = None
 
 
 @app.post("/objects", response_model=ObjectOut)
@@ -4739,7 +4769,7 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
         колонки = ["name", "description", "project_id", "kind", "status"]
         значения = [name, body.description, body.project_id,
                     _valid_kind(body.kind), _valid_status(body.status)]
-        for колонка, значение in _адресные_правки(body):
+        for колонка, значение in _адресные_правки(body) + _реквизитные_правки(body):
             колонки.append(колонка)
             значения.append(значение)
         conn.execute(
@@ -4814,6 +4844,8 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
             if стало != было:
                 события.append(("object_address", было, стало))
 
+        записать.extend(_реквизитные_правки(body))
+
         if записать:
             conn.execute(
                 "UPDATE objects SET %s, updated_at = datetime('now') WHERE id = ?" % (
@@ -4827,6 +4859,83 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
         activity.log(код, user=admin, entity_type="object", entity_id=object_id,
                      old_value=было, new_value=стало)
     return next(o for o in list_objects(admin) if o.id == object_id)
+
+
+class ObjectAvatarIn(BaseModel):
+    attachment_id: Optional[int] = None
+
+
+@app.put("/objects/{object_id}/avatar")
+def set_object_avatar(object_id: int, body: ObjectAvatarIn,
+                      user: sqlite3.Row = Depends(get_current_user)):
+    """Назначить или снять превью объекта в дереве справочника.
+
+    Аватарка — не отдельная загрузка, а ссылка на уже приложенное вложение
+    (см. app/attachments.py): право её менять — то же, что право прикладывать
+    вложения объекта, а не полное право на реквизиты («Проекты и объекты»).
+    Приложить фото стройки и назначить его превью — работа того же уровня,
+    что и просто приложить фото.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT avatar_attachment_id FROM objects WHERE id = ?",
+                            (object_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
+        assert_object_feature(conn, user, object_id, "attachments", "write")
+        было = row["avatar_attachment_id"]
+        if body.attachment_id is not None:
+            вложение = attachment_row(conn, body.attachment_id)
+            if (вложение is None or вложение["entity_type"] != "object"
+                    or вложение["entity_id"] != object_id):
+                raise HTTPException(status_code=404, detail="Вложение не найдено у этого объекта")
+            if (вложение["content_type"] or "") not in AVATAR_MIME:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Превью может быть только изображением (jpeg, png, webp, gif)")
+        conn.execute("UPDATE objects SET avatar_attachment_id = ? WHERE id = ?",
+                     (body.attachment_id, object_id))
+        conn.commit()
+    finally:
+        conn.close()
+    if body.attachment_id != было:
+        activity.log("object_avatar", user=user, entity_type="object", entity_id=object_id,
+                     old_value=("вложение №%d" % было) if было else "нет",
+                     new_value=("вложение №%d" % body.attachment_id) if body.attachment_id else "снято")
+    return {"avatar_attachment_id": body.attachment_id}
+
+
+@app.get("/objects/{object_id}/avatar")
+def get_object_avatar(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Отдаёт саму картинку — единственное место, где вложение возвращается
+    СВОИМ content_type для показа в <img>, а не application/octet-stream
+    (см. комментарий у DOWNLOAD_CONTENT_TYPE в app/attachments.py).
+    Безопасно ровно потому, что тип ограничен закрытым списком растровых
+    форматов (AVATAR_MIME) — декодер картинки в браузере байты как код не
+    исполняет ни при каких обстоятельствах.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT avatar_attachment_id FROM objects WHERE id = ?", (object_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
+        if row["avatar_attachment_id"] is None:
+            raise HTTPException(status_code=404, detail="У объекта нет превью")
+        assert_object_feature(conn, user, object_id, "attachments", "read")
+        вложение = attachment_row(conn, row["avatar_attachment_id"])
+        if вложение is None or (вложение["content_type"] or "") not in AVATAR_MIME:
+            raise HTTPException(status_code=404, detail="У объекта нет превью")
+    finally:
+        conn.close()
+    путь = ATTACHMENTS_DIR / вложение["stored_name"]
+    if not путь.is_file():
+        raise HTTPException(status_code=410, detail="Файл превью отсутствует на диске")
+    return Response(
+        content=путь.read_bytes(), media_type=вложение["content_type"],
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 def _subtypes_object(conn, object_id: Optional[int]) -> int:
@@ -6643,6 +6752,49 @@ def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query
         return итог
     except ContractingImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+@app.post("/objects-import/analyze")
+def objects_import_analyze(file: UploadFile = File(...),
+                           admin: sqlite3.Row = Depends(require_service_feature("import_objects", "write"))):
+    """Сверяет файл «Объекты на карте» со справочником и возвращает список
+    расхождений построчно (см. app/objects_import.py). НИЧЕГО НЕ ПИШЕТ —
+    применение отдельным вызовом, после того как человек отметил флажками,
+    что применять."""
+    payload = read_upload_limited(file.file)
+    conn = get_connection()
+    try:
+        return objects_import.analyze(conn, payload)
+    except objects_import.ObjectsImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    finally:
+        conn.close()
+
+
+class ObjectsImportApplyIn(BaseModel):
+    # Ровно то, что вернул analyze(), отфильтрованное флажками — файл
+    # заново не читается (см. app/element_bulk_edit.py, тот же приём).
+    changes: list[dict]
+
+
+@app.post("/objects-import/apply")
+def objects_import_apply(body: ObjectsImportApplyIn,
+                         admin: sqlite3.Row = Depends(require_service_feature("import_objects", "write"))):
+    """Применяет отмеченные изменения — создаёт новые объекты (и проекты под
+    них) и правит реквизиты уже существующих."""
+    if not body.changes:
+        raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
+    backup_before_import("загрузка справочника объектов из Excel",
+                         audit_display_name(admin), admin["id"])
+    conn = get_connection()
+    try:
+        return objects_import.apply_changes(conn, body.changes, admin)
+    except ValueError as exc:
+        # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400), а не
+        # сбой сервера (тот же белый список, что у element_bulk_edit).
+        raise HTTPException(status_code=400, detail=str(exc))
     finally:
         conn.close()
 

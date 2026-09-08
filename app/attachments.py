@@ -261,6 +261,23 @@ def download_attachment(attachment_id: int, user: sqlite3.Row = Depends(get_curr
     )
 
 
+# Растровые форматы, которым разрешено показываться КАРТИНКОЙ (аватарка
+# объекта в дереве справочника), а не только скачиваться файлом. Список
+# закрытый и намеренно без SVG: SVG-файл может нести собственный `<script>`,
+# и хотя браузеры не исполняют его через `<img src>`, полагаться на это как
+# на единственную защиту — плохая идея, когда закрытый список растровых
+# типов решает то же самое без всяких «хотя». Используется в app/main.py,
+# эндпоинтом объекта, а не здесь: аватарка — свойство ОБЪЕКТА, вложение для
+# неё лишь источник байт.
+AVATAR_MIME = ("image/jpeg", "image/png", "image/webp", "image/gif")
+
+
+def attachment_row(conn, attachment_id: int):
+    """Строка вложения или None. Общий с аватаркой геттер — не заводить
+    второй SELECT с той же формой запроса в app/main.py."""
+    return conn.execute("SELECT * FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+
+
 @router.delete("/{attachment_id}")
 def delete_attachment(attachment_id: int, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
