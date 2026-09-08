@@ -1306,6 +1306,54 @@ def house_matches(nums: str, номер: str) -> bool:
     return False
 
 
+def _номер_для_сортировки(токен: str):
+    """Ключ естественной сортировки: «12» раньше «14», «14» раньше «14А»,
+    а не как получится при обычном алфавитном сравнении строк."""
+    m = _НОМЕР.match(токен.upper())
+    if not m:
+        return (10 ** 9, токен)
+    return (int(m.group(1)), m.group(2))
+
+
+def suggest_houses(parent: str, q: str = "", limit: int = 30) -> List[dict]:
+    """Дома на улице (или прямо в населённом пункте, если улицы нет).
+
+    В отличие от справочника ФНС по деревням-улицам, здесь нет отдельной
+    таблицы «один дом — одна строка»: КЛАДР хранит номера домов ПАЧКАМИ,
+    через запятую, в одной строке `addr_houses.nums` («10к1,10стр2,12,14»).
+    Прежде считалось, что внутри пачки бывают ещё и диапазоны через дефис
+    («5-9») — проверка на 290 тысячах домов Москвы и области ни одного
+    такого случая не показала: КЛАДР перечисляет номера по одному, включая
+    корпуса и строения. Поэтому подсказка — это разбор пачек на отдельные
+    номера, а не разворачивание диапазонов (см. `house_matches` ниже: он
+    по-прежнему умеет диапазоны — на случай встречи в данных, которых в
+    выборке не было, но исключать которые для всей страны рано).
+    """
+    if not re.fullmatch(r"\d{13}|\d{17}", parent or ""):
+        return []
+    q = (q or "").strip().upper().replace(" ", "")
+    conn = get_addr_connection()
+    try:
+        строки = list(conn.execute(
+            "SELECT nums, postal_code FROM addr_houses WHERE parent = ?", (parent,)))
+    finally:
+        conn.close()
+
+    найдено = {}   # номер -> индекс, чтобы не показывать дубликаты
+    for r in строки:
+        for кусок in (r["nums"] or "").split(","):
+            токен = кусок.strip()
+            if not токен:
+                continue
+            if q and not токен.upper().replace(" ", "").startswith(q):
+                continue
+            if токен not in найдено:
+                найдено[токен] = r["postal_code"]
+
+    номера = sorted(найдено, key=_номер_для_сортировки)[:limit]
+    return [{"label": n, "postal_code": найдено[n]} for n in номера]
+
+
 def check_house(parent: str, номер: str, korp: str = "") -> dict:
     """Проверить номер дома по классификатору и уточнить индекс.
 
@@ -1527,6 +1575,19 @@ def address_streets(
     user=Depends(get_current_user),
 ):
     return {"items": suggest_streets(parent, q)}
+
+
+@router.get("/houses")
+def address_houses(
+    parent: str = Query(..., max_length=17),
+    q: str = Query("", max_length=40),
+    user=Depends(get_current_user),
+):
+    """Номера домов на улице (или в населённом пункте, если улицы нет) —
+    подсказка к полю «Дом». Список, а не только проверка: реальные данные
+    показали, что КЛАДР перечисляет дома по одному через запятую, без
+    диапазонов, — выбрать стало можно, раньше считалось, что нельзя."""
+    return {"items": suggest_houses(parent, q)}
 
 
 @router.get("/check-house")

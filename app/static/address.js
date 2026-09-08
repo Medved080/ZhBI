@@ -54,19 +54,16 @@ function эл(тег, класс, текст) {
   return e;
 }
 
-// Одно поле с выпадающим списком подсказок. Список — обычный div, а не
-// <datalist>: последний не даёт показать вторую строку с полным путём, а без
-// неё одноимённые населённые пункты неразличимы.
-function поле({ подпись, placeholder, значение, disabled, искать, выбрать, свободное }) {
-  const обёртка = эл("label", "object-field address-field");
-  обёртка.appendChild(эл("span", null, подпись));
-  const поле_ввода = document.createElement("input");
-  поле_ввода.type = "text";
-  поле_ввода.placeholder = placeholder || "";
-  поле_ввода.value = значение || "";
-  poleDisabled(поле_ввода, disabled);
-  обёртка.appendChild(поле_ввода);
-
+// Подсказки под полем ввода — общая механика для населённого пункта,
+// улицы И дома. Список — обычный div, а не <datalist>: последний не даёт
+// показать вторую строку с полным путём, а без неё одноимённые записи
+// (одноимённые населённые пункты, номера домов с разными индексами)
+// неразличимы.
+//
+// `наВвод` — необязательный колбэк на КАЖДОЕ нажатие клавиши, синхронно, до
+// запроса подсказок: полю «Дом» кроме списка нужна ещё живая проверка по
+// классификатору и пересборка адреса на лету, а не только выбор мышью.
+function attachSuggestions(поле_ввода, обёртка, { искать, выбрать, наВвод }) {
   const список = эл("div", "address-suggest");
   список.hidden = true;
   обёртка.appendChild(список);
@@ -79,7 +76,7 @@ function поле({ подпись, placeholder, значение, disabled, и�
   function показать(варианты) {
     список.innerHTML = "";
     if (!варианты.length) { закрыть(); return; }
-    варианты.forEach((в, i) => {
+    варианты.forEach((в) => {
       const кнопка = эл("button", "address-suggest-item");
       кнопка.type = "button";
       кнопка.appendChild(эл("span", "address-suggest-label", в.label));
@@ -100,8 +97,8 @@ function поле({ подпись, placeholder, значение, disabled, и�
   }
 
   poleВвод(поле_ввода, () => {
+    if (наВвод) наВвод(поле_ввода.value);
     clearTimeout(таймер);
-    if (свободное && свободное()) return;      // режим ручного ввода
     таймер = setTimeout(async () => {
       const варианты = await искать(поле_ввода.value.trim());
       показать(варианты || []);
@@ -125,6 +122,22 @@ function поле({ подпись, placeholder, значение, disabled, и�
     }
   });
   поле_ввода.addEventListener("blur", () => setTimeout(закрыть, 150));
+
+  return { закрыть };
+}
+
+// Поле населённого пункта/улицы: подпись, ввод и подсказки одним куском.
+function поле({ подпись, placeholder, значение, disabled, искать, выбрать }) {
+  const обёртка = эл("label", "object-field address-field");
+  обёртка.appendChild(эл("span", null, подпись));
+  const поле_ввода = document.createElement("input");
+  поле_ввода.type = "text";
+  поле_ввода.placeholder = placeholder || "";
+  поле_ввода.value = значение || "";
+  poleDisabled(поле_ввода, disabled);
+  обёртка.appendChild(поле_ввода);
+
+  const { закрыть } = attachSuggestions(поле_ввода, обёртка, { искать, выбрать });
 
   return { обёртка, поле_ввода, закрыть };
 }
@@ -299,10 +312,16 @@ export async function mountAddressWidget(контейнер, { value, canEdit, o
     });
     сетка.appendChild(полеУлицы.обёртка);
 
-    // Дом — свободный ввод с проверкой. Списка нет намеренно: КЛАДР хранит
-    // дома диапазонами («1,3,5-9») в одной строке, и разложить их в
-    // выпадашку значит выдумать номера, которых в классификаторе нет.
-    const домОбёртка = эл("label", "object-field");
+    // Дом — поле со свободным вводом И подсказками разом. Раньше подсказок
+    // не было: считалось, что КЛАДР хранит дома диапазонами («1,3,5-9») и
+    // разложить их в список — значит выдумать номера, которых нет. Проверка
+    // на 290 тысячах домов Москвы и области ни одного такого диапазона не
+    // нашла: КЛАДР перечисляет номера по одному, включая корпуса и
+    // строения («10к1», «12стр2»), и список стало можно строить честно —
+    // из тех же данных, по которым идёт последующая проверка. Свободный
+    // ввод остаётся: у площадки номер бывает нестандартным («участок 4/1»),
+    // и заставлять выбирать из списка нельзя.
+    const домОбёртка = эл("label", "object-field address-field");
     домОбёртка.appendChild(эл("span", null, "Дом"));
     const домВвод = document.createElement("input");
     домВвод.type = "text";
@@ -315,36 +334,67 @@ export async function mountAddressWidget(контейнер, { value, canEdit, o
     const отметка = эл("div", "hint-text address-house-check");
     контейнер.appendChild(отметка);
 
-    let таймерДома = null;
-    домВвод.addEventListener("input", () => {
-      clearTimeout(таймерДома);
-      const номер = домВвод.value.trim();
-      const родитель = улица ? улица.code : кодПункта;
-      // Адрес пересобирается сразу, не дожидаясь проверки: номер дома —
-      // часть адреса независимо от того, знает его классификатор или нет.
+    // Родитель для поиска домов — улица, если выбрана, иначе сам населённый
+    // пункт: у промплощадки без улицы номер иногда привязан прямо к нему.
+    const родительДома = () => (улица ? улица.code : кодПункта);
+
+    function применитьНомерДома(номер, известныйИндекс) {
       const основа = состояние.address_parts || {};
       состояние.address_parts = Object.assign({}, основа,
         номер ? { house: { name: номер, type: "д", code: null } } : { house: null });
       const базовый = (состояние.address || "").split(", д ")[0];
       состояние.address = номер ? базовый + ", д " + номер : базовый;
+      if (известныйИндекс) состояние.postal_code = известныйИндекс;
       сообщить();
       запуститьГеокодирование();
-      if (!номер || !родитель) { отметка.textContent = ""; return; }
-      таймерДома = setTimeout(async () => {
-        try {
-          const r = await deps.api("/address/check-house?parent=" + encodeURIComponent(родитель)
-            + "&number=" + encodeURIComponent(номер));
-          if (r.found) {
-            отметка.textContent = "Дом есть в классификаторе"
-              + (r.postal_code ? ", индекс " + r.postal_code : "") + ".";
-            отметка.classList.remove("address-warn");
-            if (r.postal_code) { состояние.postal_code = r.postal_code; сообщить(); }
-          } else {
-            отметка.textContent = "Такого дома в классификаторе нет — адрес всё равно сохранится.";
-            отметка.classList.add("address-warn");
-          }
-        } catch (e) { отметка.textContent = ""; }
-      }, 300);
+    }
+
+    let таймерДома = null;
+    const { закрыть: закрытьПодсказкиДома } = attachSuggestions(домВвод, домОбёртка, {
+      искать: async (q) => {
+        const родитель = родительДома();
+        if (!родитель) return [];
+        const r = await deps.api("/address/houses?parent=" + encodeURIComponent(родитель)
+          + "&q=" + encodeURIComponent(q));
+        return (r.items || []).map((x) => ({
+          label: x.label, full_path: x.postal_code ? "индекс " + x.postal_code : "",
+        }));
+      },
+      выбрать: (в) => {
+        // Выбрано из списка — дом заведомо есть в классификаторе, отдельно
+        // спрашивать проверкой незачем: сам список из неё и построен.
+        применитьНомерДома(в.label);
+        const индекс = (в.full_path || "").replace("индекс ", "") || null;
+        отметка.textContent = "Дом есть в классификаторе" + (индекс ? ", индекс " + индекс + "." : ".");
+        отметка.classList.remove("address-warn");
+        if (индекс) { состояние.postal_code = индекс; сообщить(); }
+      },
+      наВвод: () => {
+        clearTimeout(таймерДома);
+        const номер = домВвод.value.trim();
+        применитьНомерДома(номер);
+        const родитель = родительДома();
+        if (!номер || !родитель) { отметка.textContent = ""; return; }
+        // Свободно набранный номер по-прежнему сверяется с классификатором
+        // отдельным запросом: то, что список подсказок его не показал в
+        // ЭТОТ момент (запрос ещё не пришёл или номер набран не до конца),
+        // не значит, что дома нет вовсе.
+        таймерДома = setTimeout(async () => {
+          try {
+            const r = await deps.api("/address/check-house?parent=" + encodeURIComponent(родитель)
+              + "&number=" + encodeURIComponent(номер));
+            if (r.found) {
+              отметка.textContent = "Дом есть в классификаторе"
+                + (r.postal_code ? ", индекс " + r.postal_code : "") + ".";
+              отметка.classList.remove("address-warn");
+              if (r.postal_code) { состояние.postal_code = r.postal_code; сообщить(); }
+            } else {
+              отметка.textContent = "Такого дома в классификаторе нет — адрес всё равно сохранится.";
+              отметка.classList.add("address-warn");
+            }
+          } catch (e) { отметка.textContent = ""; }
+        }, 300);
+      },
     });
 
     const итог = эл("div", "hint-text address-summary");
