@@ -10,7 +10,11 @@ def elevation_svg(data):
     panels=data['panels'];xs=[v for p in panels for v in (p['bounds'][0],p['bounds'][2])]
     ys=[v for p in panels for v in (p['bounds'][1],p['bounds'][3])]
     left,right,bottom,top=min(xs),max(xs),min(ys),max(ys)
-    parts=[f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{left-600} {-top-1400} {right-left+1200} {top-bottom+2400}" role="img" aria-label="184 панели на развертках">']
+    # Число панелей на этой картинке — уже СХЛОПНУТОЕ (см.
+    # _merge_shared_wall в parser.py, живой запрос 2026-09-08): сторона Д
+    # (ГП2) сюда не попадает вовсе, её панели — те же, что у стороны В
+    # (ГП1), просто на другой развёртке.
+    parts=[f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{left-600} {-top-1400} {right-left+1200} {top-bottom+2400}" role="img" aria-label="{len(panels)} панелей на развертках">']
     for face in data['faces']:
         x=(face['sheet_u0']+face['sheet_u1'])/2
         parts.append(f'<text x="{x}" y="{-top-400}" text-anchor="middle" font-size="650">{face["shaft"]} / {face["face"]}</text>')

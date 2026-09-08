@@ -98,20 +98,23 @@ class DrawingTests(unittest.TestCase):
         self.assertFalse(self.surface['commit_ready']);self.assertIsNone(self.surface['panels'][0]['outline'])
         # Санитарный потолок (500 мм) — от случайной лишней цифры, не от
         # реального значения: 300 мм подтверждено спецификацией изделия
-        # 2026-09-08 и больше НЕ отклоняется (см. test_shared_wall_overlap_warning).
+        # 2026-09-08 и больше НЕ отклоняется (см. test_shared_wall_panel_placed_once).
         with self.assertRaises(DrawingError):place_panels(self.drawing,self.axes,thickness_mm=3000)
 
-    def test_shared_wall_overlap_warning(self):
-        # Панель В (ГП1) и панель Д (ГП2) продолжаются друг на друга вглубь
-        # ОДНОЙ общей стенки (~300 мм). Толщина изделия 300 мм — реальное
-        # подтверждённое значение (2026-09-08) — их физически перекрывает;
-        # предупреждение требует явного подтверждения, но не блокирует.
+    def test_shared_wall_panel_placed_once(self):
+        # Раньше здесь проверялось предупреждение shared_wall_overlap: панели
+        # В (ГП1) и Д (ГП2) считались двумя разными изделиями, физически
+        # перекрывающимися в общей стенке. Пользователь 2026-09-08 указал,
+        # что это ОДНА панель, дважды описанная на двух развёртках — теперь
+        # place_panels её не дублирует и предупреждения не даёт: со стороны
+        # геометрии просто нет второго объекта, с которым можно перекрыться.
         placed=place_panels(self.drawing,self.axes,thickness_mm=300.)
-        self.assertIn('shared_wall_overlap',{w['code'] for w in placed['warnings']})
+        self.assertNotIn('shared_wall_overlap',{w['code'] for w in placed['warnings']})
         self.assertTrue(placed['commit_ready'])
-        # Толщина заметно меньше половины стены — перекрытия нет, предупреждения тоже.
-        thin=place_panels(self.drawing,self.axes,thickness_mm=60.)
-        self.assertNotIn('shared_wall_overlap',{w['code'] for w in thin['warnings']})
+        # Панель В (ГП1) размещена ОДИН раз — своим фреймом, без пары на
+        # стороне Д (ГП2), которой в списке панелей больше нет вовсе.
+        faces={p['face'] for p in placed['panels']}
+        self.assertIn('В',faces);self.assertNotIn('Д',faces)
 
     def test_axis_mismatch_and_nan_rejected(self):
         axes=copy.deepcopy(self.axes);axes['numeric']['7']+=100
