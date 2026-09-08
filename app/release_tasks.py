@@ -558,6 +558,43 @@ def _backfill_block_boxes(conn: sqlite3.Connection) -> str:
     return "перенесено прямоугольников: %d" % cur.rowcount
 
 
+def _migrate_smu_individuals(conn) -> str:
+    """Свободный текст objects.smu/smu_director/responsible — в справочники
+    smu_catalog/individuals, с проставлением objects.smu_id/smu_director_id/
+    responsible_id (2026-09-08, живой запрос: «сделай реквизиты заказчика в
+    карточке объекта выбираемыми каждый из своего справочника»).
+
+    Идемпотентно от состояния, не от факта запуска: условие в WHERE — «есть
+    текст, но ещё не проставлен id», а UPDATE берёт COALESCE(*_id, новое) —
+    повтор не тронет уже разнесённые объекты, даже если прошлый запуск успел
+    заполнить только часть трёх полей. Старые текстовые колонки НЕ трогаются
+    и не удаляются — релиз только добавляет (см. шапку модуля).
+
+    find_or_create_* — те же самые, что у ручного создания записи из
+    комбобокса формы и у загрузки справочника объектов из Excel: один
+    механизм «найти по имени или завести», не три разных."""
+    from app.reference_catalogs import find_or_create_individual, find_or_create_smu
+
+    затронуто = 0
+    for row in conn.execute(
+        "SELECT id, smu, smu_director, responsible FROM objects "
+        "WHERE (smu IS NOT NULL AND smu_id IS NULL) "
+        "   OR (smu_director IS NOT NULL AND smu_director_id IS NULL) "
+        "   OR (responsible IS NOT NULL AND responsible_id IS NULL)"
+    ):
+        smu_id = find_or_create_smu(conn, row["smu"])
+        director_id = find_or_create_individual(conn, row["smu_director"])
+        responsible_id = find_or_create_individual(conn, row["responsible"])
+        conn.execute(
+            "UPDATE objects SET smu_id = COALESCE(smu_id, ?), "
+            "smu_director_id = COALESCE(smu_director_id, ?), "
+            "responsible_id = COALESCE(responsible_id, ?) WHERE id = ?",
+            (smu_id, director_id, responsible_id, row["id"]),
+        )
+        затронуто += 1
+    return f"объектов разнесено по справочникам СМУ/физлиц: {затронуто}"
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -687,6 +724,42 @@ RELEASE_TASKS = [
                "этой выдачи она осталась бы видна одному администратору сервиса",
         "kind": KIND_DATA,
         "run": lambda conn: _grant_feature_to_all_roles(conn, "map"),
+    },
+    {
+        "name": "2026-09-08-smu-individuals-backfill",
+        # Версия — та, с которой справочники выйдут; запись журнала версий
+        # под неё ещё не согласована с пользователем (стоячая инструкция).
+        "version": "0.74",
+        "date": "2026-09-08",
+        "title": "Разнести СМУ и физлиц объекта по справочникам",
+        "why": "objects.smu/smu_director/responsible были свободным текстом; "
+               "с появлением справочников smu_catalog/individuals реквизиты "
+               "выбираются из них, а уже накопленный текст сам собой в "
+               "справочник не попадает",
+        "kind": KIND_DATA,
+        "run": _migrate_smu_individuals,
+    },
+    {
+        "name": "2026-09-08-grant-dict-smu-read",
+        "version": "0.74",
+        "date": "2026-09-08",
+        "title": "Открыть справочник «СМУ» существующим ролям",
+        "why": "новый раздел прав по умолчанию не выдан никому "
+               "(app/db._seed_object_roles: нет строки — значит «Нет»), а без "
+               "чтения справочника выпадашка «СМУ» в карточке объекта осталась "
+               "бы пустой у всех, кроме администратора сервиса",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_to_all_roles(conn, "dict_smu"),
+    },
+    {
+        "name": "2026-09-08-grant-dict-individuals-read",
+        "version": "0.74",
+        "date": "2026-09-08",
+        "title": "Открыть справочник «Физлица» существующим ролям",
+        "why": "тот же случай, что и с «СМУ» выше — новый раздел прав не "
+               "выдан никому по умолчанию",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_to_all_roles(conn, "dict_individuals"),
     },
 ]
 

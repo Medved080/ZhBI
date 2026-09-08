@@ -30,7 +30,11 @@
   Excel (`app/objects_import.py`, `POST /objects-import/analyze|apply`,
   раздел `import_objects`) — сверка построчно с подтверждением флажками,
   ключ сопоставления — наименование; новое имя заводит объект И проект под
-  тем же названием.
+  тем же названием. **Справочники СМУ и физлиц** (`app/reference_catalogs.py`,
+  09-08): СМУ/Директор СМУ/Ответственный в карточке объекта — выпадашки из
+  `smu_catalog`/`individuals`, не свободный текст; загрузка из Excel заводит
+  недостающие записи сама (`find_or_create_smu`/`find_or_create_individual`).
+  Удаление — тем же `dict_delete.py` (kind `smu`/`individual`).
 - **Карта проектов** (`app/project_map.py`, `app/static/map.js`, 09-07):
   объекты с координатами на офлайн-подложке PMTiles из `data/map/`; отчёт, а
   не рабочее место. Подложку готовит `scripts/fetch_map_tiles.py` на машине

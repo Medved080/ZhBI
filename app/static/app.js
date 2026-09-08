@@ -11106,6 +11106,114 @@ document.getElementById("dict-delete-confirm").addEventListener("click", async (
   if (готово) await готово();
 });
 
+// ---------- простой справочник: СМУ и Физлица (2026-09-08) ----------
+//
+// Один экран на оба: список + добавление + переименование по месту (клик в
+// строку, Enter/blur сохраняет) + удаление через общий dict-delete (та же
+// проверка ссылок и обязательная замена, что у остальных справочников).
+const simpleCatalogBackdrop = document.getElementById("simple-catalog-backdrop");
+let simpleCatalogConfig = null;   // {title, path, dictKind}
+
+function openSimpleCatalog(config) {
+  simpleCatalogConfig = config;
+  document.getElementById("simple-catalog-title").textContent = config.title;
+  document.getElementById("simple-catalog-new-name").value = "";
+  simpleCatalogBackdrop.classList.add("open");
+  renderSimpleCatalogList();
+}
+
+async function renderSimpleCatalogList() {
+  const место = document.getElementById("simple-catalog-list");
+  место.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  let items;
+  try {
+    items = await api(simpleCatalogConfig.path);
+  } catch (e) {
+    место.innerHTML = `<div class="hint-text">Не удалось загрузить: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!items.length) {
+    место.innerHTML = '<div class="hint-text">Список пуст.</div>';
+    return;
+  }
+  место.innerHTML = "";
+  const фрагмент = document.createDocumentFragment();
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "simple-catalog-row";
+    const имя = document.createElement("input");
+    имя.type = "text";
+    имя.value = item.name;
+    имя.addEventListener("keydown", (e) => { if (e.key === "Enter") имя.blur(); });
+    имя.addEventListener("change", async () => {
+      const новое = имя.value.trim();
+      if (!новое || новое === item.name) { имя.value = item.name; return; }
+      try {
+        await api(`${simpleCatalogConfig.path}/${item.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: новое }),
+        });
+        item.name = новое;
+        await refreshReferenceCatalogs();
+      } catch (e) {
+        alert("Не удалось переименовать: " + e.message);
+        имя.value = item.name;
+      }
+    });
+    row.appendChild(имя);
+    row.insertAdjacentHTML("beforeend", trashButtonHtml(`data-id="${item.id}"`, "Удалить"));
+    row.querySelector("[data-id]").addEventListener("click", () => openDictDelete(
+      simpleCatalogConfig.dictKind, String(item.id),
+      { onDone: async () => { await renderSimpleCatalogList(); await refreshReferenceCatalogs(); } },
+    ));
+    фрагмент.appendChild(row);
+  });
+  место.appendChild(фрагмент);
+}
+
+// После добавления/переименования/удаления записи — карточка объекта
+// (выпадашки) и фильтры дерева должны увидеть свежий справочник, если сейчас
+// открыты; закрытыми их трогать незачем.
+async function refreshReferenceCatalogs() {
+  const [smuList, individualsList] = await Promise.all([api("/smu"), api("/individuals")]);
+  catalog.smuList = smuList;
+  catalog.individualsList = individualsList;
+  if (catalogBackdrop.classList.contains("open")) {
+    renderCatalogForm();
+    populateCatalogFilterOptions();
+    renderCatalogTree();
+  }
+}
+
+document.getElementById("simple-catalog-add-btn").addEventListener("click", async () => {
+  const поле = document.getElementById("simple-catalog-new-name");
+  const имя = поле.value.trim();
+  if (!имя) return;
+  try {
+    await api(simpleCatalogConfig.path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: имя }),
+    });
+    поле.value = "";
+    await renderSimpleCatalogList();
+    await refreshReferenceCatalogs();
+  } catch (e) {
+    alert("Не удалось добавить: " + e.message);
+  }
+});
+document.getElementById("simple-catalog-new-name").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("simple-catalog-add-btn").click();
+});
+document.getElementById("simple-catalog-close").addEventListener("click", () => {
+  simpleCatalogBackdrop.classList.remove("open");
+});
+document.getElementById("menu-dict-smu").addEventListener("click", () => openSimpleCatalog({
+  title: "Справочник СМУ", path: "/smu", dictKind: "smu",
+}));
+document.getElementById("menu-dict-individuals").addEventListener("click", () => openSimpleCatalog({
+  title: "Справочник физлиц", path: "/individuals", dictKind: "individual",
+}));
+
 // ---------- справочники типа элемента: подтипы и марки ----------
 const subtypesBackdrop = document.getElementById("subtypes-backdrop");
 
@@ -11296,6 +11404,10 @@ const catalogBackdrop = document.getElementById("catalog-backdrop");
 const catalog = {
   projects: [],
   objects: [],
+  // Справочники реквизитов заказчика (2026-09-08) — для выпадашек формы и
+  // для подписей в фильтрах: {id, name}[], загружаются вместе с деревом.
+  smuList: [],
+  individualsList: [],
   // Что открыто в правой колонке: {type: "project"|"object", id} либо
   // {type, id: null} для новой, ещё не сохранённой записи.
   selected: null,
@@ -11428,9 +11540,13 @@ function catalogCanEdit() {
 
 // ---------------------------------------------------------------- данные
 async function loadCatalogData() {
-  const [projects, objects] = await Promise.all([api("/projects"), api("/objects")]);
+  const [projects, objects, smuList, individualsList] = await Promise.all([
+    api("/projects"), api("/objects"), api("/smu"), api("/individuals"),
+  ]);
   catalog.projects = projects;
   catalog.objects = objects;
+  catalog.smuList = smuList;
+  catalog.individualsList = individualsList;
 }
 
 function catalogObjectsOf(projectId) {
@@ -11439,12 +11555,12 @@ function catalogObjectsOf(projectId) {
 
 function catalogMatches(запись, имяПроекта) {
   if (catalog.status && (запись.status || "active") !== catalog.status) return false;
-  // СМУ/ответственный/регион — только у объекта ('smu' в записи отличает
+  // СМУ/ответственный/регион — только у объекта ('smu_id' в записи отличает
   // объект от проекта, у которого этих полей вовсе нет).
   const объектныйФильтрАктивен = !!(catalog.smu || catalog.responsible || catalog.region);
-  if ("smu" in запись) {
-    if (catalog.smu && (запись.smu || "") !== catalog.smu) return false;
-    if (catalog.responsible && (запись.responsible || "") !== catalog.responsible) return false;
+  if ("smu_id" in запись) {
+    if (catalog.smu && String(запись.smu_id ?? "") !== catalog.smu) return false;
+    if (catalog.responsible && String(запись.responsible_id ?? "") !== catalog.responsible) return false;
     if (catalog.region && (запись.address_region || "") !== catalog.region) return false;
   } else if (объектныйФильтрАктивен) {
     // У проекта этих полей нет — сам по себе он «не подходит», пока
@@ -11661,16 +11777,33 @@ function catalogFieldsHtml(запись, тип, редактируем) {
   // заполняет загрузка справочника объектов из Excel («Действия → Обмен
   // данными → Загрузка справочника объектов из Excel»); руками правятся
   // здесь же, импорт — не единственный способ их заполнить.
+  // СМУ и физлица — выпадашками из своих справочников (2026-09-08, живой
+  // запрос: «сделай реквизиты заказчика в карточке объекта выбираемыми
+  // каждый из своего справочника»), а не свободным текстом. Новую запись
+  // заводят в самом справочнике (Действия → Справочники → СМУ / Физлица)
+  // или загрузкой из Excel — та заводит недостающее сама.
+  const опцииСМУ = (catalog.smuList || []).map((s) =>
+    `<option value="${s.id}" ${запись && запись.smu_id === s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`
+  ).join("");
+  const опцииФизлиц = (текущийId) => (catalog.individualsList || []).map((p) =>
+    `<option value="${p.id}" ${текущийId === p.id ? "selected" : ""}>${escapeHtml(p.name)}</option>`
+  ).join("");
   const реквизитыЗаказчика = тип === "object" ? `
     <div class="form-card">
       <h4>Реквизиты заказчика</h4>
       <div class="object-fields">
         <label class="object-field"><span>СМУ</span>
-          <input type="text" data-field="smu" value="${з(запись && запись.smu)}" ${выкл}/></label>
+          <select data-field="smu_id" ${выкл}>
+            <option value="">— не выбрано —</option>${опцииСМУ}
+          </select></label>
         <label class="object-field"><span>Директор СМУ</span>
-          <input type="text" data-field="smu_director" value="${з(запись && запись.smu_director)}" ${выкл}/></label>
+          <select data-field="smu_director_id" ${выкл}>
+            <option value="">— не выбрано —</option>${опцииФизлиц(запись && запись.smu_director_id)}
+          </select></label>
         <label class="object-field"><span>Ответственный (ДП/РП)</span>
-          <input type="text" data-field="responsible" value="${з(запись && запись.responsible)}" ${выкл}/></label>
+          <select data-field="responsible_id" ${выкл}>
+            <option value="">— не выбрано —</option>${опцииФизлиц(запись && запись.responsible_id)}
+          </select></label>
         <label class="object-field"><span>Старт СМР</span>
           <input type="date" data-field="smr_start_reported" value="${з(запись && запись.smr_start_reported)}" ${выкл}/></label>
         <label class="object-field object-field-wide"><span>Ссылка на фото/видео</span>
@@ -12073,8 +12206,9 @@ function readCatalogForm() {
   document.querySelectorAll("#catalog-form [data-field]").forEach((el) => {
     const поле = el.dataset.field;
     let значение = el.value;
-    if (поле === "project_id") значение = Number(значение) || null;
-    else if (поле === "lat" || поле === "lon") значение = значение === "" ? null : Number(значение);
+    if (поле === "project_id" || поле === "smu_id" || поле === "smu_director_id" || поле === "responsible_id") {
+      значение = значение === "" ? null : Number(значение);
+    } else if (поле === "lat" || поле === "lon") значение = значение === "" ? null : Number(значение);
     else if (значение === "") значение = null;
     тело[поле] = значение;
   });
@@ -12204,26 +12338,37 @@ function catalogRegionLabel(код, объекты) {
 // Текущий выбор сохраняется, если значение всё ещё встречается.
 function populateCatalogFilterOptions() {
   const объекты = catalog.objects;
-  const наборы = { smu: new Set(), responsible: new Set(), region: new Set() };
+  // СМУ/ответственный фильтруются по id справочника (2026-09-08, вместе с
+  // переводом реквизитов на справочники) — точнее текста и не путается на
+  // разном регистре одного и того же имени.
+  const смуКарта = new Map();
+  const ответственныеКарта = new Map();
+  const region = new Set();
   объекты.forEach((o) => {
-    if (o.smu) наборы.smu.add(o.smu);
-    if (o.responsible) наборы.responsible.add(o.responsible);
-    if (o.address_region) наборы.region.add(o.address_region);
+    if (o.smu_id != null) смуКарта.set(String(o.smu_id), o.smu_name || "");
+    if (o.responsible_id != null) ответственныеКарта.set(String(o.responsible_id), o.responsible_name || "");
+    if (o.address_region) region.add(o.address_region);
   });
 
-  const заполнить = (id, значения, метка, подпись) => {
+  const заполнитьКарту = (id, поле, карта, метка) => {
     const select = document.getElementById(id);
-    const текущий = catalog[значения[0]];
+    const текущий = catalog[поле];
+    const записи = [...карта.entries()].sort((a, b) => a[1].localeCompare(b[1], "ru"));
     select.innerHTML = `<option value="">${метка}: все</option>`
-      + [...значения[1]].sort().map((v) =>
-          `<option value="${escapeHtml(v)}">${escapeHtml(подпись ? подпись(v) : v)}</option>`).join("");
-    if (текущий && [...значения[1]].includes(текущий)) select.value = текущий;
-    else catalog[значения[0]] = "";
+      + записи.map(([id2, имя]) => `<option value="${escapeHtml(id2)}">${escapeHtml(имя)}</option>`).join("");
+    if (текущий && карта.has(текущий)) select.value = текущий;
+    else catalog[поле] = "";
   };
-  заполнить("catalog-smu-filter", ["smu", наборы.smu], "СМУ");
-  заполнить("catalog-responsible-filter", ["responsible", наборы.responsible], "Ответственный");
-  заполнить("catalog-region-filter", ["region", наборы.region], "Регион",
-    (код) => catalogRegionLabel(код, объекты));
+  заполнитьКарту("catalog-smu-filter", "smu", смуКарта, "СМУ");
+  заполнитьКарту("catalog-responsible-filter", "responsible", ответственныеКарта, "Ответственный");
+
+  const selectРегион = document.getElementById("catalog-region-filter");
+  const текущийРегион = catalog.region;
+  selectРегион.innerHTML = `<option value="">Регион: все</option>`
+    + [...region].sort().map((код) =>
+        `<option value="${escapeHtml(код)}">${escapeHtml(catalogRegionLabel(код, объекты))}</option>`).join("");
+  if (текущийРегион && region.has(текущийРегион)) selectРегион.value = текущийРегион;
+  else catalog.region = "";
 }
 
 ["smu", "responsible", "region"].forEach((поле) => {
@@ -17052,8 +17197,10 @@ document.getElementById("contracting-import-submit").addEventListener("click", a
 // строки «Новый объект», где сервер отдаёт словарь полей без подписей;
 // у остальных правок подпись уже приходит в `field_label`.
 const OBJECTS_IMPORT_FIELD_LABELS = {
-  address: "Адрес", address_region: "Регион (по адресу)", smu: "СМУ",
-  smu_director: "Директор СМУ", responsible: "Ответственный (ДП/РП)",
+  address: "Адрес", address_region: "Регион (по адресу)",
+  // Ключи — реальные колонки objects (ссылки на справочники), значение,
+  // что течёт через diff, — имя текстом, не id (см. app/objects_import.py).
+  smu_id: "СМУ", smu_director_id: "Директор СМУ", responsible_id: "Ответственный (ДП/РП)",
   status: "Статус", lat: "Широта", lon: "Долгота",
   media_url: "Ссылка на фото/видео", smr_start_reported: "Старт СМР",
   postal_code: "Почтовый индекс",

@@ -65,6 +65,7 @@ from app.supplier_change import router as supplier_change_router
 from app.counterparties import router as counterparties_router
 from app.dict_delete import router as dict_delete_router
 from app.marks import router as marks_router
+from app.reference_catalogs import router as reference_catalogs_router
 from app import zone_recalc
 from app.db import (
     DB_PATH,
@@ -415,6 +416,7 @@ app.include_router(schedule_versions_router)
 app.include_router(schedule_calc_router)
 app.include_router(counterparties_router)
 app.include_router(marks_router)
+app.include_router(reference_catalogs_router)
 app.include_router(dict_delete_router)
 app.include_router(settings_router)
 app.include_router(attachments_router)
@@ -4306,7 +4308,10 @@ def _адресные_правки(body) -> list:
 
 # Реквизиты из внутреннего реестра заказчика (2026-09-08) — только у
 # объекта. Та же логика «пишем только присланное», что у адресных полей.
-_РЕКВИЗИТНЫЕ_КОЛОНКИ = ("smu", "smu_director", "responsible", "media_url", "smr_start_reported")
+# СМУ/директор СМУ/ответственный сюда не входят — с 2026-09-08 это ссылки
+# на справочники (smu_catalog/individuals), проверяются отдельно, см.
+# _справочные_правки: обычному тексту чужого id не проверить.
+_РЕКВИЗИТНЫЕ_КОЛОНКИ = ("media_url", "smr_start_reported")
 
 
 def _реквизитные_правки(body) -> list:
@@ -4316,6 +4321,31 @@ def _реквизитные_правки(body) -> list:
             continue
         значение = getattr(body, поле)
         правки.append((поле, значение.strip() or None if isinstance(значение, str) else значение))
+    return правки
+
+
+# (таблица справочника, подпись для отказа) по каждому полю-ссылке.
+_СПРАВОЧНЫЕ_ПОЛЯ = {
+    "smu_id": ("smu_catalog", "СМУ"),
+    "smu_director_id": ("individuals", "Физлицо (директор СМУ)"),
+    "responsible_id": ("individuals", "Физлицо (ответственный)"),
+}
+
+
+def _справочные_правки(conn, body) -> list:
+    """Правки smu_id/smu_director_id/responsible_id — проверяет, что
+    присланный id реально есть в соответствующем справочнике, иначе объект
+    сослался бы в никуда (тем же способом, что и project_id при создании)."""
+    правки = []
+    for поле, (таблица, подпись) in _СПРАВОЧНЫЕ_ПОЛЯ.items():
+        if поле not in body.model_fields_set:
+            continue
+        значение = getattr(body, поле)
+        if значение is not None and conn.execute(
+            f"SELECT 1 FROM {таблица} WHERE id = ?", (значение,)
+        ).fetchone() is None:
+            raise HTTPException(status_code=404, detail=f"{подпись}: запись справочника не найдена")
+        правки.append((поле, значение))
     return правки
 
 
@@ -4664,6 +4694,8 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         projects = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM projects")}
+        смус = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM smu_catalog")}
+        физлица = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM individuals")}
         # Раньше отдавались ВСЕ объекты всем вошедшим — это и был готовый
         # «каталог целей» для перебора id в /plan-data и отчётах: имена,
         # адреса, счётчики и имена файлов чертежей (аудит безопасности
@@ -4721,9 +4753,12 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 drawings=[d["source_file"] for d in drawings],
                 elements_current=(counts["cur"] or 0) if counts else 0,
                 elements_retired=(counts["gone"] or 0) if counts else 0,
-                smu=row["smu"] if "smu" in row.keys() else None,
-                smu_director=row["smu_director"] if "smu_director" in row.keys() else None,
-                responsible=row["responsible"] if "responsible" in row.keys() else None,
+                smu_id=(row["smu_id"] if "smu_id" in row.keys() else None),
+                smu_name=смус.get(row["smu_id"] if "smu_id" in row.keys() else None),
+                smu_director_id=(row["smu_director_id"] if "smu_director_id" in row.keys() else None),
+                smu_director_name=физлица.get(row["smu_director_id"] if "smu_director_id" in row.keys() else None),
+                responsible_id=(row["responsible_id"] if "responsible_id" in row.keys() else None),
+                responsible_name=физлица.get(row["responsible_id"] if "responsible_id" in row.keys() else None),
                 media_url=row["media_url"] if "media_url" in row.keys() else None,
                 smr_start_reported=row["smr_start_reported"] if "smr_start_reported" in row.keys() else None,
                 has_avatar=bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False,
@@ -4757,9 +4792,9 @@ class ObjectCreateIn(AddressFields):
     # Тип объекта: 'zhbi' (по умолчанию) или 'mfr'. От него зависит
     # состав разделов — см. app/features.py.
     kind: Optional[str] = None
-    smu: Optional[str] = None
-    smu_director: Optional[str] = None
-    responsible: Optional[str] = None
+    smu_id: Optional[int] = None
+    smu_director_id: Optional[int] = None
+    responsible_id: Optional[int] = None
     media_url: Optional[str] = None
     smr_start_reported: Optional[str] = None
 
@@ -4790,7 +4825,8 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
         колонки = ["name", "description", "project_id", "kind", "status"]
         значения = [name, body.description, body.project_id,
                     _valid_kind(body.kind), _valid_status(body.status)]
-        for колонка, значение in _адресные_правки(body) + _реквизитные_правки(body):
+        for колонка, значение in (_адресные_правки(body) + _реквизитные_правки(body)
+                                  + _справочные_правки(conn, body)):
             колонки.append(колонка)
             значения.append(значение)
         conn.execute(
@@ -4866,6 +4902,7 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
                 события.append(("object_address", было, стало))
 
         записать.extend(_реквизитные_правки(body))
+        записать.extend(_справочные_правки(conn, body))
 
         if записать:
             conn.execute(

@@ -372,6 +372,29 @@ CREATE TABLE IF NOT EXISTS projects (
 -- чертежа давала полный набор новых строк со статусом "Запланирован", а
 -- старые оставались мёртвым слоем. Объект отвязывает "какой это физически
 -- элемент" от "из какого файла он пришёл в последний раз".
+-- Справочники реквизитов заказчика (2026-09-08, живой запрос: «сделай
+-- реквизиты заказчика в карточке объекта выбираемыми каждый из своего
+-- справочника»). Глобальные, без object_id — СМУ и физлицо не привязаны к
+-- одной стройке, один директор СМУ обычно ведёт несколько объектов сразу.
+--
+-- smu_catalog — подразделения (СМУ, дивизионы). individuals — физлица,
+-- ОДИН справочник на обе роли объекта («Директор СМУ» и «Ответственный
+-- (ДП/РП)»): это один и тот же класс сущности — человек, ФИО строкой, —
+-- заводить два одинаковых справочника под разные подписи поля незачем.
+CREATE TABLE IF NOT EXISTS smu_catalog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS individuals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS objects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,

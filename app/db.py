@@ -497,6 +497,18 @@ _COLUMN_MIGRATIONS = [
     # поле человек (или импорт) проставляет вручную и оно не пересчитывается
     # ничем.
     ("objects", "smr_start_reported", "TEXT"),
+    # СМУ и физлица (директор СМУ, ответственный) переведены со свободного
+    # текста на справочники (2026-09-08, живой запрос: «сделай реквизиты
+    # заказчика в карточке объекта выбираемыми каждый из своего
+    # справочника»). Прежние текстовые smu/smu_director/responsible
+    # НАМЕРЕННО остаются в схеме нетронутыми (§ «Обновление и обработки
+    # данных», Docs/DECISIONS.md: релиз только ДОБАВЛЯЕТ, уборка отжившего
+    # — отдельный вид обработки по кнопке админа, не автоматом при
+    # старте) — их переносит в справочники release_tasks.migrate_smu_individuals,
+    # а сам код после миграции читает и пишет уже только *_id.
+    ("objects", "smu_id", "INTEGER REFERENCES smu_catalog(id) ON DELETE SET NULL"),
+    ("objects", "smu_director_id", "INTEGER REFERENCES individuals(id) ON DELETE SET NULL"),
+    ("objects", "responsible_id", "INTEGER REFERENCES individuals(id) ON DELETE SET NULL"),
 ]
 
 

@@ -51,6 +51,17 @@ app/element_bulk_edit.py («Семья B» из исследования арх�
 
 Широта/долгота в файле УЖЕ есть готовыми числами — геокодирование по адресу
 (app/project_map.py) не требуется, они идут прямыми полями.
+
+СМУ, директор СМУ и ответственный — с 2026-09-08 ссылки на справочники
+(smu_catalog/individuals, app/reference_catalogs.py), не свободный текст:
+живой запрос «сделай реквизиты заказчика в карточке объекта выбираемыми
+каждый из своего справочника... и при загрузке из xlsx надо не найденные по
+наименованию элементы вносить в справочники». analyze() только ИЩЕТ
+совпадение по имени (без учёта регистра) — ничего не заводит, она обязана
+оставаться read-only; не нашлось — предупреждение «будет создано», но
+строка не отклоняется. Само создание — в apply(), тем же find_or_create_*,
+которым пользуется и комбобокс формы, и ручное добавление в справочник:
+один механизм на все три источника записи, а не три разных.
 """
 
 import io
@@ -62,6 +73,7 @@ from openpyxl import load_workbook
 
 from app import activity
 from app.kladr import region_from_address, resolve_free_text_address
+from app.reference_catalogs import find_or_create_individual, find_or_create_smu
 
 # --------------------------------------------------------------- колонки
 
@@ -87,9 +99,11 @@ KEY_COLUMN = "name"
 FIELD_LABELS = {
     "address": "Адрес",
     "address_region": "Регион (по адресу)",
-    "smu": "СМУ",
-    "smu_director": "Директор СМУ",
-    "responsible": "Ответственный (ДП/РП)",
+    # Ключ — реальная колонка objects (ссылка на справочник), а не то, как
+    # поле называется в файле: apply() пишет по этому имени, см. _UPDATE_FIELDS.
+    "smu_id": "СМУ",
+    "smu_director_id": "Директор СМУ",
+    "responsible_id": "Ответственный (ДП/РП)",
     "status": "Статус",
     "lat": "Широта",
     "lon": "Долгота",
@@ -124,6 +138,24 @@ _STATUS_MAP = {
 
 class ObjectsImportError(Exception):
     pass
+
+
+# Колонка файла → (реальная колонка objects, таблица справочника, подпись
+# для предупреждения). Значение, что течёт через changes/fields, — ИМЯ
+# текстом, не id: analyze() только смотрит, есть ли такое имя в справочнике
+# (для предупреждения «будет создано»), а резолвит в id уже apply() — тем же
+# find_or_create_*, которым пользуется форма (см. докстрок модуля).
+_REFERENCE_FIELDS = {
+    "smu": ("smu_id", "smu_catalog", "СМУ"),
+    "smu_director": ("smu_director_id", "individuals", "Директор СМУ"),
+    "responsible": ("responsible_id", "individuals", "Ответственный (ДП/РП)"),
+}
+
+
+def _reference_exists(conn, таблица: str, имя: str) -> bool:
+    return conn.execute(
+        f"SELECT 1 FROM {таблица} WHERE name = ? COLLATE NOCASE", (имя,)
+    ).fetchone() is not None
 
 
 # ------------------------------------------------------------- разбор ячеек
@@ -244,11 +276,11 @@ def analyze(conn, file_bytes: bytes) -> dict:
 
         row = existing.get(name)
         if row is None:
-            change, row_warnings = _build_create(line_no, name, values)
+            change, row_warnings = _build_create(conn, line_no, name, values)
             changes.append(change)
             warnings.extend(row_warnings)
         else:
-            row_changes, row_warnings = _build_update(row, line_no, values)
+            row_changes, row_warnings = _build_update(conn, row, line_no, values)
             changes.extend(row_changes)
             warnings.extend(row_warnings)
 
@@ -262,7 +294,7 @@ def analyze(conn, file_bytes: bytes) -> dict:
     }
 
 
-def _build_create(line_no: int, name: str, values: dict) -> tuple:
+def _build_create(conn, line_no: int, name: str, values: dict) -> tuple:
     warnings = []
     fields = {}
 
@@ -286,10 +318,19 @@ def _build_create(line_no: int, name: str, values: dict) -> tuple:
             if регион:
                 fields["address_region"] = регион
 
-    for key in ("smu", "smu_director", "responsible", "media_url"):
-        v = _clean_text(values.get(key))
-        if v is not None:
-            fields[key] = v
+    for key, (db_key, таблица, подпись) in _REFERENCE_FIELDS.items():
+        значение = _clean_text(values.get(key))
+        if значение is None:
+            continue
+        fields[db_key] = значение
+        if not _reference_exists(conn, таблица, значение):
+            warnings.append({"line": line_no, "name": name,
+                             "reason": "%s «%s» не найден(о) в справочнике — будет создан(о)"
+                                       % (подпись, значение)})
+
+    media_url = _clean_text(values.get("media_url"))
+    if media_url is not None:
+        fields["media_url"] = media_url
 
     статус, предупреждение = _parse_status(values.get("status_raw"))
     if предупреждение:
@@ -317,7 +358,7 @@ def _build_create(line_no: int, name: str, values: dict) -> tuple:
     }, warnings
 
 
-def _build_update(row, line_no: int, values: dict) -> tuple:
+def _build_update(conn, row, line_no: int, values: dict) -> tuple:
     """Расхождения для УЖЕ существующего объекта.
 
     Пустая ячейка здесь значит «файл не несёт сведений об этом поле», а НЕ
@@ -374,13 +415,27 @@ def _build_update(row, line_no: int, values: dict) -> tuple:
                 if регион and регион != row["address_region"]:
                     changes.append(describe("address_region", row["address_region"], регион))
 
-    for key in ("smu", "smu_director", "responsible", "media_url"):
+    for key, (db_key, таблица, подпись) in _REFERENCE_FIELDS.items():
         новое = _clean_text(values.get(key))
         if новое is None:
             continue
-        старое = row[key] if key in row.keys() else None
-        if новое != старое:
-            changes.append(describe(key, старое, новое))
+        старый_id = row[db_key] if db_key in row.keys() else None
+        старое = None
+        if старый_id is not None:
+            r = conn.execute(f"SELECT name FROM {таблица} WHERE id = ?", (старый_id,)).fetchone()
+            старое = r["name"] if r else None
+        if новое.lower() != (старое or "").lower():
+            changes.append(describe(db_key, старое, новое))
+            if not _reference_exists(conn, таблица, новое):
+                warnings.append({"line": line_no, "name": name,
+                                 "reason": "%s «%s» не найден(о) в справочнике — будет создан(о)"
+                                           % (подпись, новое)})
+
+    media_url = _clean_text(values.get("media_url"))
+    if media_url is not None:
+        старый_url = row["media_url"] if "media_url" in row.keys() else None
+        if media_url != старый_url:
+            changes.append(describe("media_url", старый_url, media_url))
 
     статус, предупреждение = _parse_status(values.get("status_raw"))
     if предупреждение:
@@ -461,6 +516,12 @@ def apply_changes(conn, selections: list, admin) -> dict:
                 continue
             fields = dict(creates[0].get("fields") or {})
             статус = _valid_status(fields.pop("status", None))
+            if "smu_id" in fields:
+                fields["smu_id"] = find_or_create_smu(conn, fields["smu_id"])
+            if "smu_director_id" in fields:
+                fields["smu_director_id"] = find_or_create_individual(conn, fields["smu_director_id"])
+            if "responsible_id" in fields:
+                fields["responsible_id"] = find_or_create_individual(conn, fields["responsible_id"])
             project_id = _find_or_create_project(conn, admin, name, fields.get("address"))
             колонки = ["name", "project_id", "status", "kind"] + list(fields.keys())
             значения = [name, project_id, статус, "zhbi"] + list(fields.values())
@@ -523,6 +584,10 @@ def apply_changes(conn, selections: list, admin) -> dict:
                     new = _valid_status(new)
                 elif field in ("lat", "lon") and new is not None:
                     new = round(float(new), 6)
+                elif field == "smu_id":
+                    new = find_or_create_smu(conn, new)
+                elif field in ("smu_director_id", "responsible_id"):
+                    new = find_or_create_individual(conn, new)
                 записать.append((field, new))
                 описание[field] = (sel.get("was"), new)
             conn.execute(

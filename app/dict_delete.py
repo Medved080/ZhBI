@@ -682,6 +682,94 @@ def _merge_stances(conn, src_id: int, dst_id: int, отчёт: list) -> None:
             отчёт.append(f"стоянка {z['number']} перенесена")
 
 
+# ==================== СМУ И ФИЗЛИЦА ====================
+#
+# Глобальные плоские справочники реквизитов заказчика (2026-09-08): без
+# object_id, без подчинённых записей — простейший случай в этом файле,
+# ближе всего к «Префиксам марок», но, в отличие от них, НА них ссылаются
+# объекты, поэтому нужны refs/candidates/repoint (перевод на замену, не
+# обнуление — правило 1 в шапке модуля).
+
+def _smu_load(conn, key):
+    return conn.execute("SELECT * FROM smu_catalog WHERE id = ?", (int(key),)).fetchone()
+
+
+def _smu_label(conn, row):
+    return row["name"]
+
+
+def _smu_refs(conn, row):
+    объектов = conn.execute(
+        "SELECT COUNT(*) AS n FROM objects WHERE smu_id = ?", (row["id"],)
+    ).fetchone()["n"]
+    return _непустые([("Объекты", объектов)])
+
+
+def _smu_candidates(conn, row, parent_target):
+    rows = conn.execute(
+        "SELECT id, name FROM smu_catalog WHERE id <> ? ORDER BY name COLLATE NOCASE",
+        (row["id"],),
+    ).fetchall()
+    return [{"key": str(r["id"]), "label": r["name"]} for r in rows]
+
+
+def _smu_repoint(conn, row, target):
+    объектов = conn.execute(
+        "UPDATE objects SET smu_id = ?, updated_at = datetime('now') WHERE smu_id = ?",
+        (target["id"], row["id"]),
+    ).rowcount
+    return _непустые([("Объекты", объектов)])
+
+
+def _smu_delete(conn, row):
+    conn.execute("DELETE FROM smu_catalog WHERE id = ?", (row["id"],))
+
+
+def _individual_load(conn, key):
+    return conn.execute("SELECT * FROM individuals WHERE id = ?", (int(key),)).fetchone()
+
+
+def _individual_label(conn, row):
+    return row["name"]
+
+
+def _individual_refs(conn, row):
+    # Одно физлицо может стоять и директором СМУ, и ответственным — на
+    # разных объектах разом (тот же человек, две роли), поэтому считаем
+    # обе ссылки, а не одну.
+    директор = conn.execute(
+        "SELECT COUNT(*) AS n FROM objects WHERE smu_director_id = ?", (row["id"],)
+    ).fetchone()["n"]
+    ответственный = conn.execute(
+        "SELECT COUNT(*) AS n FROM objects WHERE responsible_id = ?", (row["id"],)
+    ).fetchone()["n"]
+    return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный)])
+
+
+def _individual_candidates(conn, row, parent_target):
+    rows = conn.execute(
+        "SELECT id, name FROM individuals WHERE id <> ? ORDER BY name COLLATE NOCASE",
+        (row["id"],),
+    ).fetchall()
+    return [{"key": str(r["id"]), "label": r["name"]} for r in rows]
+
+
+def _individual_repoint(conn, row, target):
+    директор = conn.execute(
+        "UPDATE objects SET smu_director_id = ?, updated_at = datetime('now') WHERE smu_director_id = ?",
+        (target["id"], row["id"]),
+    ).rowcount
+    ответственный = conn.execute(
+        "UPDATE objects SET responsible_id = ?, updated_at = datetime('now') WHERE responsible_id = ?",
+        (target["id"], row["id"]),
+    ).rowcount
+    return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный)])
+
+
+def _individual_delete(conn, row):
+    conn.execute("DELETE FROM individuals WHERE id = ?", (row["id"],))
+
+
 # ==================== РЕЕСТР ====================
 #
 # Один список на все справочники — та же причина, по которой в проекте одна
@@ -696,6 +784,23 @@ KINDS = {
         "refs": _mark_refs, "candidates": _mark_candidates,
         "repoint": _mark_repoint, "delete": _mark_delete,
         "fk_handled": {"elements.mark_id": "перевод на замену"},
+    },
+    "smu": {
+        "title": "СМУ", "plural": "Подразделения (СМУ)", "table": "smu_catalog",
+        "load": _smu_load, "label": _smu_label,
+        "refs": _smu_refs, "candidates": _smu_candidates,
+        "repoint": _smu_repoint, "delete": _smu_delete,
+        "fk_handled": {"objects.smu_id": "перевод на замену"},
+    },
+    "individual": {
+        "title": "Физлицо", "plural": "Физлица", "table": "individuals",
+        "load": _individual_load, "label": _individual_label,
+        "refs": _individual_refs, "candidates": _individual_candidates,
+        "repoint": _individual_repoint, "delete": _individual_delete,
+        "fk_handled": {
+            "objects.smu_director_id": "перевод на замену",
+            "objects.responsible_id": "перевод на замену",
+        },
     },
     "subtype": {
         "title": "Подтип", "plural": "Подтипы",

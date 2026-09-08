@@ -436,11 +436,17 @@ class ObjectOut(AddressFields):
     elements_current: int = 0
     elements_retired: int = 0
     # Реквизиты из внутреннего реестра заказчика (2026-09-08, импорт из
-    # Excel «Объекты на карте»). «Не требуется» у smu/smu_director хранится
-    # как есть — это осмысленный факт, а не пропуск.
-    smu: Optional[str] = None
-    smu_director: Optional[str] = None
-    responsible: Optional[str] = None
+    # Excel «Объекты на карте»). СМУ и физлица (директор СМУ, ответственный)
+    # — записи справочников (smu_catalog/individuals), а не свободный текст
+    # (живой запрос 2026-09-08: «сделай выбираемыми каждый из своего
+    # справочника»); *_id — ссылка, *_name — имя для показа без второго
+    # запроса, тем же способом, что project_id/project_name.
+    smu_id: Optional[int] = None
+    smu_name: Optional[str] = None
+    smu_director_id: Optional[int] = None
+    smu_director_name: Optional[str] = None
+    responsible_id: Optional[int] = None
+    responsible_name: Optional[str] = None
     media_url: Optional[str] = None
     # Дата начала СМР из того же реестра, строкой ГГГГ-ММ-ДД. Не путать со
     # сводкой в форме — та считается по датам элементов и хранится не здесь.
@@ -466,9 +472,12 @@ class ObjectPatchIn(AddressFields):
     # Тип объекта: 'zhbi' или 'mfr'. Меняется отдельной командой в
     # справочнике объектов; от него зависит состав разделов.
     kind: Optional[str] = None
-    smu: Optional[str] = None
-    smu_director: Optional[str] = None
-    responsible: Optional[str] = None
+    # Ссылки на справочники (2026-09-08). Присланное явным null снимает
+    # привязку — общий приём partial-update этого файла: значение читается,
+    # только если поле есть в body.model_fields_set (main.py).
+    smu_id: Optional[int] = None
+    smu_director_id: Optional[int] = None
+    responsible_id: Optional[int] = None
     media_url: Optional[str] = None
     smr_start_reported: Optional[str] = None
 

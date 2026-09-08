@@ -1770,6 +1770,16 @@
   .attach-upload input[type=file] { font-size: 11px; max-width: 100%; }
   .attach-upload input[type=text] { flex: 1 1 120px; min-width: 0; }
   .attach-status { margin: 4px 0 0; min-height: 14px; }
+  /* Простой справочник — СМУ/Физлица (2026-09-08). */
+  .simple-catalog-add { display: flex; gap: 6px; margin-bottom: 10px; }
+  .simple-catalog-add input { flex: 1 1 auto; min-width: 0; }
+  .simple-catalog-list { max-height: 50vh; overflow-y: auto; }
+  .simple-catalog-row { display: flex; gap: 6px; align-items: center; padding: 4px 0;
+    border-bottom: 1px dashed var(--color-border); }
+  .simple-catalog-row input { flex: 1 1 auto; min-width: 0; border: 1px solid transparent;
+    background: none; padding: 2px 4px; }
+  .simple-catalog-row input:hover, .simple-catalog-row input:focus {
+    border-color: var(--color-border); background: var(--color-surface); }
   /* Комментарий в карточке: поле во всю ширину панели, кнопка под ним
      справа — панель узкая (320 px), в строку они не помещаются. */
   .card-comment { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 12px;
@@ -4503,6 +4513,12 @@
                      две половины одной иерархии, и правят их вперемежку —
                      завёл проект, тут же завёл в нём объект. -->
                 <button id="menu-catalog" data-feature="projects" data-feature-kind="write">Проекты и объекты</button>
+                <!-- Справочники реквизитов объекта (2026-09-08): СМУ и
+                     физлица (один справочник на «Директор СМУ» и
+                     «Ответственный (ДП/РП)») — выпадашки в карточке объекта
+                     заполняются отсюда. -->
+                <button id="menu-dict-smu" data-feature="dict_smu" data-feature-kind="read">СМУ</button>
+                <button id="menu-dict-individuals" data-feature="dict_individuals" data-feature-kind="read">Физлица</button>
                 <button id="menu-project-card" data-feature="project_card" data-feature-kind="write">Карточка объекта</button>
                 <button id="menu-report-notes" data-feature="report_notes" data-feature-kind="write">События, задачи, вопросы</button>
                 <!-- ВРЕМЕННАЯ обработка (2026-08-03): дообъектное наследие —
@@ -6018,6 +6034,25 @@
     <div class="actions">
       <button class="btn btn-secondary" id="dict-delete-cancel">Отмена</button>
       <button class="btn btn-danger" id="dict-delete-confirm">Удалить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Простой справочник (2026-09-08) — общая форма для СМУ и Физлиц:
+     список + добавление + переименование по месту + удаление через общий
+     dict-delete (проверка ссылок, обязательная замена). Один backdrop на
+     оба справочника — openSimpleCatalog(config) подставляет заголовок и
+     пути API, разницы в устройстве экрана между ними нет. -->
+<div class="modal-backdrop" id="simple-catalog-backdrop">
+  <div class="modal">
+    <h2 id="simple-catalog-title">Справочник</h2>
+    <div class="simple-catalog-add">
+      <input type="text" id="simple-catalog-new-name" placeholder="Новая запись" autocomplete="off"/>
+      <button class="btn btn-sm btn-secondary" id="simple-catalog-add-btn">Добавить</button>
+    </div>
+    <div id="simple-catalog-list" class="simple-catalog-list"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="simple-catalog-close">Закрыть</button>
     </div>
   </div>
 </div>
