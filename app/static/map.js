@@ -318,8 +318,12 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
 
   const попап = new ml.Popup({ closeButton: true, closeOnClick: true, maxWidth: "320px" });
 
-  карта.on("click", "объекты-точки", (e) => {
-    const p = e.features[0].properties;
+  // Вынесено из обработчика клика по точке (живой запрос 2026-09-08:
+  // «при клике в списке слева сразу открывать окошко, как будто по объекту
+  // кликнули на карте») — строка сайдбара передаёт сюда СВОЙ объект из
+  // `данные.objects` (обычный JS-объект), а клик по точке — properties
+  // GeoJSON-фичи; поля совпадают, поэтому функция одна на оба случая.
+  function открытьПопап(p, lngLat) {
     const доля = (p.percent === null || p.percent === undefined || p.percent === "null")
       ? "—" : p.percent + " %";
     // Превью — та же аватарка, что и в дереве справочника (GET
@@ -351,7 +355,11 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
       попап.remove();
       onOpenObject(Number(p.id));
     });
-    попап.setLngLat(e.lngLat).setDOMContent(узел).addTo(карта);
+    попап.setLngLat(lngLat).setDOMContent(узел).addTo(карта);
+  }
+
+  карта.on("click", "объекты-точки", (e) => {
+    открытьПопап(e.features[0].properties, e.lngLat);
   });
 
   // Клик по кластеру приближает к нему: разворачивать список в попапе
@@ -400,7 +408,12 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
     карта, объекты: данные.objects, показатьВсе, естьПодложка,
     навести: (id) => {
       const o = данные.objects.find((x) => x.id === id);
-      if (o) карта.easeTo({ center: [o.lon, o.lat], zoom: 15 });
+      if (!o) return;
+      карта.easeTo({ center: [o.lon, o.lat], zoom: 15 });
+      // Открывается СРАЗУ, а не по завершении полёта камеры: попап привязан
+      // к географической точке и сам переезжает вместе с картой, тем же
+      // способом, что и клик по самой точке (живой запрос 2026-09-08).
+      открытьПопап(o, [o.lon, o.lat]);
     },
     // Отбор над картой (живой запрос 2026-09-08): источник точек создан ОДИН
     // раз при открытии, поэтому отбор перерисовывает не слой, а данные
