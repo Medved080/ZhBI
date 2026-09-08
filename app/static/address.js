@@ -13,8 +13,14 @@
 // поле уточнения. Классификатор не загружен или адрес заведён руками:
 // работает как обычное поле ввода, потому что у стройплощадки почтового
 // адреса часто нет вовсе.
+//
+// По мере того как адрес складывается, виджет САМ просит координаты у
+// внешнего геокодера (`deps.geocode`, реализован в app/static/map.js через
+// Nominatim) и отдаёт их вызывающей стороне колбэком `onGeocode` —
+// применять их или нет, решает форма: у уже сохранённой или тронутой
+// вручную точки автоматика ничего не перезаписывает.
 
-let deps = null;   // {api, escapeHtml}
+let deps = null;   // {api, escapeHtml, geocode}
 
 export function init(зависимости) {
   deps = зависимости;
@@ -133,11 +139,53 @@ function poleВвод(el, fn) { el.addEventListener("input", fn); }
  * address_note, postal_code, address_region}. onChange получает те же поля
  * целиком: собирать адрес из кусков — дело сервера, здесь только выбор.
  */
-export async function mountAddressWidget(контейнер, { value, canEdit, onChange, manual }) {
+export async function mountAddressWidget(контейнер, { value, canEdit, onChange, onGeocode, manual }) {
   const состояние = Object.assign({
     address: "", address_code: null, address_source: null, address_region: null,
     address_parts: null, postal_code: null, address_note: "",
   }, value || {});
+
+  // Автоматическое определение координат по адресу (2026-09-08): человек
+  // выбирает или вводит адрес, а координаты подставляются сами через
+  // геокодер OpenStreetMap — без этого пришлось бы ставить пин руками на
+  // каждую из сотен площадок. `onGeocode` решает, применять ли найденное
+  // (в форме это заблокировано, если координаты уже стоят или тронуты
+  // вручную) — здесь только запрос.
+  // Строку показа («г Москва», «ул Советская») геокодеру не отдаём — Nominatim
+  // ОДНАЖДЫ прочитал «г Москва» как «гора Москва» и вернул точку в четырёх
+  // тысячах километров от настоящей (см. app/static/map.js). Вместо этого
+  // собираем структурированный запрос из ЧИСТЫХ имён частей — они у
+  // классификатора уже без сокращений (`address_parts[...].name`), и поиск
+  // «город ищем в поле города» такой ошибки не допускает. Свободный ввод
+  // (классификатор не выбран) остаётся строкой — точность здесь уже на
+  // совести того, что написал человек.
+  function собратьЗапросГеокодера() {
+    const части = состояние.address_parts;
+    if (!части) return состояние.address || null;
+    const пункт = части.settlement || части.city || части.area || части.region || null;
+    if (!пункт || !пункт.name) return null;
+    const запрос = { city: пункт.name, country: "Россия" };
+    if (части.region && части.region.name && части.region !== пункт) {
+      запрос.state = части.region.name;
+    }
+    if (части.street && части.street.name) {
+      const дом = части.house && части.house.name;
+      запрос.street = дом ? `${части.street.name} ${дом}` : части.street.name;
+    }
+    return запрос;
+  }
+
+  let геокодТаймер = null;
+  function запуститьГеокодирование() {
+    if (!deps.geocode || !onGeocode) return;
+    clearTimeout(геокодТаймер);
+    геокодТаймер = setTimeout(async () => {
+      const запрос = собратьЗапросГеокодера();
+      if (!запрос) return;
+      const место = await deps.geocode(запрос);
+      if (место) onGeocode(место.lat, место.lon);
+    }, 500);
+  }
 
   const готов = await classifierReady();
   // Ручной режим — когда классификатора нет вовсе или адрес заведён без
@@ -162,7 +210,7 @@ export async function mountAddressWidget(контейнер, { value, canEdit, o
 
   function перерисовать(режим) {
     mountAddressWidget(контейнер, {
-      value: состояние, canEdit, onChange, manual: режим,
+      value: состояние, canEdit, onChange, onGeocode, manual: режим,
     });
   }
 
@@ -182,6 +230,7 @@ export async function mountAddressWidget(контейнер, { value, canEdit, o
       состояние.address_source = null;
       состояние.address_parts = null;
       сообщить();
+      запуститьГеокодирование();
     });
     строка.appendChild(ввод);
     сетка.appendChild(строка);
@@ -219,6 +268,7 @@ export async function mountAddressWidget(контейнер, { value, canEdit, o
           address_region: r.region, address_parts: r.parts, postal_code: r.postal_code,
         });
         сообщить();
+        запуститьГеокодирование();
         перерисовать(false);
       },
     });
@@ -243,6 +293,7 @@ export async function mountAddressWidget(контейнер, { value, canEdit, o
           address_region: r.region, address_parts: r.parts, postal_code: r.postal_code,
         });
         сообщить();
+        запуститьГеокодирование();
         перерисовать(false);
       },
     });
@@ -277,6 +328,7 @@ export async function mountAddressWidget(контейнер, { value, canEdit, o
       const базовый = (состояние.address || "").split(", д ")[0];
       состояние.address = номер ? базовый + ", д " + номер : базовый;
       сообщить();
+      запуститьГеокодирование();
       if (!номер || !родитель) { отметка.textContent = ""; return; }
       таймерДома = setTimeout(async () => {
         try {

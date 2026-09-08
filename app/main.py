@@ -29,6 +29,7 @@ from app.attachments import delete_for_entity as delete_attachments_for
 from app.attachments import router as attachments_router
 from app.changelog import CHANGELOG
 from app.kladr import router as kladr_router
+from app.project_map import ONLINE_HOSTS as PROJECT_MAP_ONLINE_HOSTS
 from app.project_map import ONLINE_TILES_HOST as PROJECT_MAP_TILES_HOST
 from app.project_map import load_online_tiles_setting as load_project_map_setting
 from app.project_map import online_tiles_enabled as project_map_online
@@ -272,17 +273,19 @@ _CSP = (
 def _csp_for_request() -> str:
     """Политика безопасности для текущего состояния сервиса.
 
-    Единственное, что её меняет, — включённая администратором подложка карты
-    из интернета: тогда и только тогда в неё добавляется ровно один внешний
-    адрес. Пока настройка выключена (по умолчанию), политика не содержит
-    внешних адресов вовсе.
+    Единственное, что её меняет, — включённая администратором подложка и
+    геокодирование из интернета (один выключатель на оба, см.
+    `app/project_map.py`): тогда и только тогда в политику добавляются два
+    вшитых в код адреса OpenStreetMap. Пока настройка выключена (по
+    умолчанию), политика не содержит внешних адресов вовсе.
     """
     if not project_map_online():
         return _CSP
-    хост = PROJECT_MAP_TILES_HOST
+    хосты = " ".join(PROJECT_MAP_ONLINE_HOSTS)
     return (_CSP
-            .replace("img-src 'self' data: blob:", "img-src 'self' data: blob: " + хост)
-            .replace("connect-src 'self'", "connect-src 'self' " + хост))
+            # img-src — только тайлы: геокодер отдаёт JSON, картинок не грузит.
+            .replace("img-src 'self' data: blob:", "img-src 'self' data: blob: " + PROJECT_MAP_TILES_HOST)
+            .replace("connect-src 'self'", "connect-src 'self' " + хосты))
 
 
 @app.middleware("http")

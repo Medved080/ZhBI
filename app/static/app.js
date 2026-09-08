@@ -11189,6 +11189,12 @@ const catalog = {
   query: "",
   status: "active",
   dirty: false,
+  // Координаты уже стоят (сохранены раньше) или человек тронул их сам
+  // (потащил пин, ткнул по карте, вписал число руками) — тогда
+  // автоматическое определение по адресу их не трогает: перезаписывать
+  // намеренно уточнённую точку из-за правки опечатки в адресе — плохая
+  // неожиданность. Сбрасывается в renderCatalogForm на каждую запись.
+  coordsLocked: false,
 };
 
 // Виджет адреса живёт отдельным файлом и подгружается по первому открытию
@@ -11201,9 +11207,46 @@ let catalogPinMap = null;
 async function ensureAddressWidget() {
   if (!addressModule) {
     addressModule = await import("/static/address.js");
-    addressModule.init({ api, escapeHtml });
+    addressModule.init({
+      api, escapeHtml,
+      // Определение координат по адресу — через карту: тот же модуль уже
+      // знает, включена ли «Карта и адреса из интернета», и как спросить
+      // геокодер. Возвращает null молча, если сервис недоступен.
+      geocode: async (query) => (await ensureMapModule()).geocodeAddress(query),
+    });
   }
   return addressModule;
+}
+
+// Та же логика, что в app/static/address.js: геокодеру отдаём ЧИСТЫЕ имена
+// частей адреса, а не отформатированную строку с сокращениями («г Москва»).
+// Nominatim однажды прочитал «г» как «гора» и вернул точку в Красноярском
+// крае вместо настоящей Москвы — структурный поиск такой ошибки не
+// допускает, потому что «город» ищется в поле города, а не гадается по
+// свободному тексту. Дублирование небольшое (десяток строк), а тянуть сюда
+// внутреннее состояние виджета адреса ради переиспользования — сложнее,
+// чем оправдано.
+function geocodeQueryFromAddress(addr) {
+  const части = addr && addr.address_parts;
+  if (!части) return (addr && addr.address) || null;
+  const пункт = части.settlement || части.city || части.area || части.region || null;
+  if (!пункт || !пункт.name) return null;
+  const запрос = { city: пункт.name, country: "Россия" };
+  if (части.region && части.region.name && части.region !== пункт) {
+    запрос.state = части.region.name;
+  }
+  if (части.street && части.street.name) {
+    const дом = части.house && части.house.name;
+    запрос.street = дом ? `${части.street.name} ${дом}` : части.street.name;
+  }
+  return запрос;
+}
+
+function setCatalogCoordsStatus(text, isError) {
+  const el = document.getElementById("catalog-coords-status");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-text-muted)";
 }
 
 const CATALOG_STATUS_LABELS = {
@@ -11412,10 +11455,14 @@ function catalogFieldsHtml(запись, тип, редактируем) {
           <input type="number" step="0.000001" data-field="lat" value="${з(запись && запись.lat)}" ${выкл}/></label>
         <label class="object-field"><span>Долгота</span>
           <input type="number" step="0.000001" data-field="lon" value="${з(запись && запись.lon)}" ${выкл}/></label>
-        <span class="hint-text">Без координат запись не попадёт на карту проектов.</span>
+        ${редактируем ? `<button type="button" class="link-like" id="catalog-coords-refresh">Определить по адресу заново</button>` : ""}
       </div>
-      <!-- Пин на мини-карте вместо ввода шести знаков после запятой руками:
-           координат нет ни в КЛАДР, ни в ГАР, ставит их человек. -->
+      <div class="hint-text" id="catalog-coords-status"></div>
+      <!-- Координаты подставляются САМИ по мере ввода адреса — нужна
+           включённая администратором «Карта и адреса из интернета»
+           (Действия → Отчёты → Карта проектов). Мини-карта ниже — для
+           точной подгонки, когда автоматика недоступна или ошиблась: у
+           КЛАДР и ГАР координат нет вовсе, только внешний геокодер. -->
       <div class="catalog-pin-map" id="catalog-pin-map"></div>
     </div>`;
 
@@ -11454,6 +11501,11 @@ function renderCatalogForm() {
   const { type } = catalog.selected;
   const запись = catalogSelectedRecord();
   const новая = catalog.selected.id === null;
+  // У уже сохранённой записи с координатами автопозиционирование по адресу
+  // не трогает точку — вдруг она уточнена руками именно там, где нужно.
+  // Пустая запись (новая или ещё без координат) остаётся разблокированной:
+  // пусть координаты уточняются по мере того, как достраивается адрес.
+  catalog.coordsLocked = !!(запись && запись.lat !== null && запись.lat !== undefined);
   const редактируем = catalogCanEdit();
   const заголовок = новая
     ? (type === "project" ? "Новый проект" : "Новый объект")
@@ -11506,8 +11558,29 @@ function renderCatalogForm() {
     postal_code: (запись && запись.postal_code) || null,
     address_note: (запись && запись.address_note) || null,
   };
+  // Применить координаты (от геокодера или от «Определить заново») —
+  // сразу в оба места: числовые поля формы и пин на мини-карте. Функция
+  // читает `catalogPinMap` В МОМЕНТ ВЫЗОВА, а не при объявлении: карта
+  // строится асинхронно и к первому автоматическому определению адреса
+  // может быть ещё не готова — тогда координаты просто ждут её в полях.
+  function применитьНайденныеКоординаты(широта, долгота) {
+    const полеШироты = место.querySelector('[data-field="lat"]');
+    const полеДолготы = место.querySelector('[data-field="lon"]');
+    if (полеШироты) полеШироты.value = String(широта);
+    if (полеДолготы) полеДолготы.value = String(долгота);
+    if (catalogPinMap) catalogPinMap.показать(широта, долгота);
+    markCatalogDirty();
+    setCatalogCoordsStatus("Найдены автоматически по адресу.", false);
+  }
+
+  setCatalogCoordsStatus(
+    (запись && запись.lat !== null && запись.lat !== undefined)
+      ? "Координаты заданы." : "Без координат запись не попадёт на карту проектов.", false);
+
   // Мини-карта: перетаскивание пина пишет координаты в поля формы, а ввод в
   // поля двигает пин — иначе два способа задать одно и то же расходятся.
+  // Любое из этих действий — явная воля человека, и дальше автоматическое
+  // определение по адресу эту точку уже не трогает (см. coordsLocked).
   const местоКарты = document.getElementById("catalog-pin-map");
   if (местоКарты) {
     // Прежняя мини-карта уничтожается явно. Форма перерисовывается на каждый
@@ -11527,22 +11600,54 @@ function renderCatalogForm() {
       lon: запись ? запись.lon : null,
       canEdit: редактируем,
       onMove: (широта, долгота) => {
+        catalog.coordsLocked = true;
         const п = поляШД();
         п.lat.value = String(широта);
         п.lon.value = String(долгота);
         markCatalogDirty();
+        setCatalogCoordsStatus("Указаны вручную.", false);
       },
     })).then((пин) => {
       catalogPinMap = пин;
       const п = поляШД();
       [п.lat, п.lon].forEach((поле) => поле && поле.addEventListener("change", () => {
+        catalog.coordsLocked = true;
         const широта = parseFloat(п.lat.value), долгота = parseFloat(п.lon.value);
-        if (!isNaN(широта) && !isNaN(долгота)) пин.показать(широта, долгота);
+        if (!isNaN(широта) && !isNaN(долгота)) {
+          пин.показать(широта, долгота);
+          setCatalogCoordsStatus("Указаны вручную.", false);
+        }
       }));
     }).catch((e) => {
       // Карта не построилась (нет WebGL, не загрузилась библиотека) — поля
       // координат остаются, форма работает.
       местоКарты.innerHTML = `<div class="map-empty">Карта недоступна: ${escapeHtml(e.message || "")}</div>`;
+    });
+  }
+
+  // «Определить по адресу заново» — на случай, если найденная точка не
+  // подошла (типовой случай: геокодер попал в соседний населённый пункт с
+  // тем же названием) или запись уже заблокирована сохранёнными
+  // координатами, а адрес с тех пор поправили.
+  const кнопкаПересчитать = document.getElementById("catalog-coords-refresh");
+  if (кнопкаПересчитать) {
+    кнопкаПересчитать.addEventListener("click", async () => {
+      catalog.coordsLocked = false;
+      setCatalogCoordsStatus("Ищем координаты…", false);
+      try {
+        const m = await ensureMapModule();
+        const запрос = geocodeQueryFromAddress(catalog.address);
+        const найдено = запрос ? await m.geocodeAddress(запрос) : null;
+        if (найдено) {
+          применитьНайденныеКоординаты(найдено.lat, найдено.lon);
+        } else {
+          setCatalogCoordsStatus(
+            "Не найдено. Проверьте адрес, включите «Карту и адреса из интернета» "
+            + "(Действия → Отчёты → Карта проектов) или укажите точку на карте ниже.", true);
+        }
+      } catch (e) {
+        setCatalogCoordsStatus("Не удалось определить координаты: " + (e.message || ""), true);
+      }
     });
   }
 
@@ -11554,6 +11659,10 @@ function renderCatalogForm() {
       onChange: (значения) => {
         catalog.address = значения;
         markCatalogDirty();
+      },
+      onGeocode: (широта, долгота) => {
+        if (catalog.coordsLocked) return;   // координаты уже стоят или тронуты руками
+        применитьНайденныеКоординаты(широта, долгота);
       },
     })).catch((e) => {
       // Виджет не загрузился — форма обязана остаться рабочей: показываем
