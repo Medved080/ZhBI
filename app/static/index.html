@@ -2620,6 +2620,10 @@
      показывает все площадки разом, и мелкий размер с переключателем ⛶
      только мешал). Переключатель убран совсем, а не просто скрыт. */
   #map-modal { width: 96vw; max-width: 96vw; height: 94vh; max-height: 94vh; }
+  /* Длинные команды в подсказке «Как подготовить файл подложки» переносятся
+     по слову, а не растягивают модалку горизонтальным скроллом. */
+  #map-admin-modal code { word-break: break-word; }
+  #map-admin-modal li { margin-bottom: 6px; }
   .map-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
   .map-toolbar input { flex: 0 1 260px; }
   .map-toolbar select { flex: 0 1 190px; }
@@ -7251,7 +7255,7 @@
      были у элементов на самой карте (PUT /map/online-tiles,
      POST /map/tiles/upload) — переехала только разметка. -->
 <div class="modal-backdrop" id="map-admin-backdrop">
-  <div class="modal" id="map-admin-modal">
+  <div class="modal wide" id="map-admin-modal">
     <div class="modal-sticky-head">
       <h2>Карта: подложка и источник</h2>
       <p class="hint-text">
@@ -7278,6 +7282,46 @@
         </label>
         <input type="file" id="map-tiles-file" accept=".pmtiles" hidden/>
       </div>
+      <!-- Подсказка командами — под свёрткой (живой запрос 2026-09-08:
+           «добавь на эту форму подсказки о командах, которыми можно скачать
+           карты. И напиши как это сделать»): читают один раз при первой
+           подготовке файла, а не каждый визит в форму. Текст и аргументы
+           командной строки взяты из докстроки самого scripts/fetch_map_tiles.py
+           — если скрипт изменится, разойдётся с этой подсказкой, но не с
+           реальным поведением: сверять по `--help`. -->
+      <details class="card-technical" style="margin-top:14px">
+        <summary>Как подготовить файл подложки</summary>
+        <p class="hint-text">
+          Сервер сам в интернет не ходит — файл готовится ЗАРАНЕЕ на любой
+          другой машине с доступом в интернет (например, на ноутбуке)
+          скриптом <code>scripts/fetch_map_tiles.py</code> из этого же
+          репозитория, а сюда просто загружается кнопкой выше.
+        </p>
+        <ol class="hint-text" style="padding-left:18px; margin:8px 0">
+          <li>Поставить утилиту <code>pmtiles</code> (один раз, она вырезает
+            нужный кусок карты, не скачивая всю планету): на Mac —
+            <code>brew install protomaps/tap/pmtiles</code>, иначе — скачать
+            бинарь со страницы
+            <code>github.com/protomaps/go-pmtiles/releases</code> и положить
+            его в PATH.</li>
+          <li>На машине с интернетом, из корня репозитория:
+            <code>python3 scripts/fetch_map_tiles.py</code> — подготовит
+            обзор по всей России и детальную подложку по Москве и области
+            (это и есть значения по умолчанию).</li>
+          <li>Готовые файлы появятся в папке <code>data/map/</code> на ТОЙ
+            машине, где запускали скрипт — например,
+            <code>basemap-ru.pmtiles</code> и <code>basemap-msk.pmtiles</code>.
+            Каждый файл загружается сюда кнопкой «Загрузить файл
+            подложки…» по отдельности.</li>
+        </ol>
+        <p class="hint-text">
+          Нужна другая область, не вся Россия и не Москва с областью —
+          <code>python3 scripts/fetch_map_tiles.py --bbox
+          запад,юг,восток,север --maxzoom 13 --name своё_имя</code>;
+          список уже заготовленных областей —
+          <code>python3 scripts/fetch_map_tiles.py --list</code>.
+        </p>
+      </details>
       <div class="hint-text" id="map-admin-note" style="margin-top:8px"></div>
     </div>
     <div class="modal-sticky-foot">
