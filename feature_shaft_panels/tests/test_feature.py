@@ -57,11 +57,19 @@ class DrawingTests(unittest.TestCase):
 
     def test_real_inventory(self):
         d=self.drawing
+        # counts.panels — СЫРОЙ контур-счётчик из чертежа (184: 92 на сторону
+        # ГП1 + 92 на сторону ГП2, каждая сторона общей стенки посчитана по
+        # разу на КАЖДОЙ развёртке); d['panels'] — уже СХЛОПНУТЫЙ список на
+        # импорт (158 = 184 - 26 пар В/ГП1↔Д/ГП2, см. _merge_shared_wall).
         self.assertEqual(d['counts']['panels'],184);self.assertEqual(d['counts']['plan_contours'],13)
         self.assertEqual(len(d['counts']['by_mark']),30)
         self.assertEqual(d['counts']['by_method'],{'inside':161,'external_unique':23})
+        self.assertEqual(d['counts']['shared_wall_pairs'],26)
         self.assertEqual(sum(p['shaft']=='ГП1' for p in d['panels']),92)
-        self.assertEqual(len({p['physical_key'] for p in d['panels']}),184)
+        self.assertEqual(sum(p['shaft']=='ГП2' for p in d['panels']),66)
+        self.assertEqual(len(d['panels']),158)
+        self.assertEqual(len({p['physical_key'] for p in d['panels']}),158)
+        self.assertNotIn('Д',{p['face'] for p in d['panels']})
 
     def test_exact_geometric_controls(self):
         p=next(p for p in self.surface['panels'] if p['handle']=='120B')
@@ -73,8 +81,11 @@ class DrawingTests(unittest.TestCase):
         self.assertEqual(max(p['z']+p['height_mm'] for p in self.surface['panels']),31290.)
 
     def test_normals_and_jamb_labels(self):
+        # Сторона Д (ГП2) в результате не появляется вовсе — она СХЛОПНУТА в
+        # соответствующую панель В (ГП1) как один физический объект (живой
+        # запрос 2026-09-08, см. _merge_shared_wall в parser.py).
         normals={p['face']:p['normal_xy'] for p in self.surface['panels']}
-        self.assertEqual(normals,dict(zip('АБВГДЕЖИ',[[-1,0],[0,1],[1,0],[0,-1]]*2)))
+        self.assertEqual(normals,dict(zip('АБВГЕЖИ',[[-1,0],[0,1],[1,0],[0,-1],[0,1],[1,0],[0,-1]])))
         p=next(p for p in self.drawing['panels'] if p['handle']=='133B')
         self.assertEqual((p['mark'],p['face'],p['width_mm']),('ПП2','Б',150.))
 
@@ -144,19 +155,21 @@ class DrawingTests(unittest.TestCase):
         self.analyze();self.assertEqual(self.c.total_changes,count)
 
     def test_initial_import_preserves_base_drawing(self):
-        self.assertEqual(self.commit()['new'],184)
+        # 158, не 184: панели общей стенки В(ГП1)/Д(ГП2) уже схлопнуты в одну
+        # запись на уровне parse_drawing (см. test_real_inventory).
+        self.assertEqual(self.commit()['new'],158)
         e=self.c.execute('SELECT * FROM elements WHERE id=1').fetchone()
         self.assertEqual((e['current_status'],e['contract_id'],e['planned_delivery_date'],e['is_current']),('mounted',42,'2026-09-01',1))
         self.assertEqual(self.c.execute('SELECT is_current FROM object_drawings WHERE source_file="base.dxf"').fetchone()[0],1)
         self.assertEqual(self.c.execute('SELECT count(*) FROM marks').fetchone()[0],30)
-        self.assertEqual(self.c.execute('SELECT count(*) FROM status_history').fetchone()[0],184)
+        self.assertEqual(self.c.execute('SELECT count(*) FROM status_history').fetchone()[0],158)
 
     def test_reimport_does_not_reset_state_or_duplicate(self):
         self.commit();self.c.execute("UPDATE elements SET current_status='mounted',contract_id=7,planned_delivery_date='2026-10-01' WHERE id=2");self.c.commit()
-        r=self.commit();self.assertEqual((r['new'],r['unchanged']),(0,184))
+        r=self.commit();self.assertEqual((r['new'],r['unchanged']),(0,158))
         self.assertEqual(self.c.execute('SELECT current_status FROM elements WHERE id=2').fetchone()[0],'mounted')
-        self.assertEqual(self.c.execute('SELECT count(*) FROM elements').fetchone()[0],185)
-        self.assertEqual(self.c.execute('SELECT count(*) FROM status_history').fetchone()[0],184)
+        self.assertEqual(self.c.execute('SELECT count(*) FROM elements').fetchone()[0],159)
+        self.assertEqual(self.c.execute('SELECT count(*) FROM status_history').fetchone()[0],158)
 
     def test_rename_file_and_handles_does_not_duplicate(self):
         self.commit();d=copy.deepcopy(self.placed);d['source_file']='new.dxf'
@@ -164,7 +177,7 @@ class DrawingTests(unittest.TestCase):
         self.assertEqual(self.commit(placed=d)['new'],0)
 
     def test_another_object_has_independent_identity(self):
-        self.commit();r=self.commit(preview=self.analyze(obj=2));self.assertEqual(r['new'],184)
+        self.commit();r=self.commit(preview=self.analyze(obj=2));self.assertEqual(r['new'],158)
 
     def test_stale_preview_rejected(self):
         self.commit();p=self.analyze();self.c.execute("UPDATE elements SET current_status='delivered' WHERE id=2");self.c.commit()
@@ -277,8 +290,8 @@ class ApiTests(unittest.TestCase):
         r=self.upload(thickness=60);self.assertEqual(r.status_code,200,r.text);d=r.json()
         body={'token':d['token'],'acknowledged_warnings':[w['code'] for w in d['drawing']['warnings']]}
         applied=self.client.post('/shaft-panels/apply',json=body)
-        self.assertEqual(applied.status_code,200,applied.text);self.assertEqual(applied.json()['new'],184)
-        self.assertEqual(self.backups,[1]);self.assertEqual(self.hooks,[184])
+        self.assertEqual(applied.status_code,200,applied.text);self.assertEqual(applied.json()['new'],158)
+        self.assertEqual(self.backups,[1]);self.assertEqual(self.hooks,[158])
         self.assertEqual(self.client.post('/shaft-panels/apply',json=body).status_code,410)
 
 

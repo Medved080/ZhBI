@@ -8,17 +8,45 @@ export function panelExtrusionHeight(element) {
   return element.height_mm;
 }
 
+// Разметка — общий язык форм сервиса (2026-09-08, живой запрос «дизайн
+// формы в соответствии с общими правилами сервиса»): нумерованные шаги
+// (.bulk-edit-steps/.bulk-edit-block/.step-num — тот же приём, что у
+// «Массовой правки через Excel» и загрузки справочника объектов), кнопки
+// .btn/.btn-primary/.btn-secondary, таблица .bulk-edit-table, чекбоксы
+// label.toggle. Раньше форма была голой (button без класса, table без
+// стиля) и выбивалась из остального интерфейса.
 export function mountShaftImport(container, { objectId, request, onApplied }) {
   if (!Number.isInteger(objectId) || objectId <= 0) throw new Error('Выберите объект ЖБИ');
   const form = document.createElement('form');
-  form.innerHTML = `<h2>Панели облицовки лифтовых шахт</h2>
-    <p>Развертки ГП1/ГП2 привязываются к осям 5–7 / Е–Ж выбранного объекта.</p>
-    <label>Чертеж DXF <input name="drawing" type="file" accept=".dxf" required></label>
-    <label>Толщина отдельной панели, мм <input name="thickness" type="number" min="1" max="500" step="0.1" placeholder="По данным изделия"></label>
-    <p>Без толщины доступно распознавание лицевых поверхностей. Размер стенки 300 мм не подставляется как толщина панели.</p>
-    <button type="submit">Распознать и проверить</button>
-    <button type="button" data-action="cancel">Отменить анализ</button>
-    <p role="status" data-status></p><div data-result></div>`;
+  form.innerHTML = `
+    <div class="modal-sticky-head">
+      <h2>Панели облицовки лифтовых шахт</h2>
+      <p class="hint-text">Развёртки ГП1/ГП2 привязываются к осям 5–7 / Е–Ж выбранного объекта.</p>
+      <div class="bulk-edit-steps">
+        <div class="bulk-edit-block bulk-edit-block-file">
+          <div class="bulk-edit-block-title"><span class="step-num">1</span>Чертёж и толщина</div>
+          <div class="bulk-edit-controls">
+            <input name="drawing" type="file" accept=".dxf" required>
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+            Толщина панели, мм
+            <input name="thickness" type="number" min="1" max="500" step="0.1"
+                   placeholder="по паспорту изделия" style="width:90px">
+          </label>
+          <div class="bulk-edit-status">Без толщины доступно только распознавание лицевых
+            поверхностей — размер стенки 300&nbsp;мм не подставляется как толщина панели.</div>
+        </div>
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">2</span>Распознать и проверить</div>
+          <div class="bulk-edit-controls">
+            <button type="submit" class="btn btn-primary">Распознать</button>
+            <button type="button" class="btn btn-secondary" data-action="cancel">Отменить анализ</button>
+          </div>
+          <p role="status" class="bulk-edit-status" data-status></p>
+        </div>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll" data-result></div>`;
   container.replaceChildren(form);
   let current = null, busy = false, disposed = false;
   const status = form.querySelector('[data-status]');
@@ -45,9 +73,11 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
   function drawPreview(data) {
     result.replaceChildren();
     const summary = document.createElement('p');
+    summary.className = 'hint-text';
     summary.textContent = `${data.drawing.panels.length} панелей; ${Object.keys(data.drawing.counts.by_mark).length} марок. Сетка: ${data.grid_source}.`;
     result.append(summary);
     const table = document.createElement('table');
+    table.className = 'bulk-edit-table';
     const head = table.createTHead().insertRow();
     ['Марка','Шахта / сторона','Ш × В, мм','Расположение'].forEach(t => {
       const th = document.createElement('th'); th.textContent = t; head.append(th);
@@ -57,21 +87,56 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
       const row = body.insertRow();
       [p.mark, `${p.shaft}/${p.face}`, `${p.width_mm} × ${p.height_mm}`, p.address].forEach(t => row.insertCell().textContent = t);
     });
-    const scroll = document.createElement('div'); scroll.style.cssText = 'max-height:320px;overflow:auto'; scroll.append(table); result.append(scroll);
-    for (const warning of data.drawing.warnings) {
-      const label = document.createElement('label'); label.style.display = 'block';
-      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.dataset.warning = warning.code;
-      label.append(checkbox, document.createTextNode(warning.message)); result.append(label);
+    const wrap = document.createElement('div');
+    wrap.className = 'bulk-edit-table-wrap';
+    wrap.style.maxHeight = '320px';
+    wrap.style.overflowY = 'auto';
+    wrap.append(table);
+    result.append(wrap);
+    if (data.drawing.warnings.length) {
+      const warnBlock = document.createElement('div');
+      warnBlock.className = 'bulk-edit-block';
+      warnBlock.style.marginTop = '10px';
+      const title = document.createElement('div');
+      title.className = 'bulk-edit-block-title';
+      title.textContent = 'Замечания к чертежу — подтвердите каждое';
+      warnBlock.append(title);
+      for (const warning of data.drawing.warnings) {
+        const label = document.createElement('label'); label.className = 'toggle';
+        const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.dataset.warning = warning.code;
+        label.append(checkbox, document.createTextNode(warning.message)); warnBlock.append(label);
+      }
+      result.append(warnBlock);
     }
     if (!data.analysis) return;
-    const counts = document.createElement('p');
+    const stepApply = document.createElement('div');
+    stepApply.className = 'bulk-edit-block';
+    stepApply.style.marginTop = '10px';
+    const stepTitle = document.createElement('div');
+    stepTitle.className = 'bulk-edit-block-title';
+    stepTitle.innerHTML = '<span class="step-num">3</span>Применить';
+    stepApply.append(stepTitle);
+    const counts = document.createElement('div');
+    counts.className = 'bulk-edit-status';
     counts.textContent = `Добавить: ${data.analysis.counts.new}; обновить: ${data.analysis.counts.updated}; без изменений: ${data.analysis.counts.unchanged}; отсутствуют в новой версии: ${data.analysis.counts.missing}.`;
-    result.append(counts);
-    data.analysis.conflicts.forEach(c => { const p = document.createElement('p'); p.textContent = `Элемент ${c.id}: ${c.reason}`; result.append(p); });
+    stepApply.append(counts);
+    data.analysis.conflicts.forEach(c => {
+      const p = document.createElement('p'); p.className = 'hint-text';
+      p.textContent = `Элемент ${c.id}: ${c.reason}`; stepApply.append(p);
+    });
     const retire = document.createElement('input'); retire.type = 'checkbox';
-    const label = document.createElement('label'); label.append(retire, document.createTextNode('Снять актуальность отсутствующих панелей только ГП1/ГП2; сохранить их историю')); result.append(label);
-    const apply = document.createElement('button'); apply.type = 'button'; apply.textContent = 'Добавить панели в объект';
-    apply.disabled = data.analysis.conflicts.length > 0; result.append(apply);
+    const retireLabel = document.createElement('label'); retireLabel.className = 'toggle';
+    retireLabel.append(retire, document.createTextNode('Снять актуальность отсутствующих панелей только ГП1/ГП2; сохранить их историю'));
+    stepApply.append(retireLabel);
+    const controls = document.createElement('div');
+    controls.className = 'bulk-edit-controls';
+    controls.style.marginTop = '8px';
+    const apply = document.createElement('button'); apply.type = 'button'; apply.className = 'btn btn-primary';
+    apply.textContent = 'Добавить панели в объект';
+    apply.disabled = data.analysis.conflicts.length > 0;
+    controls.append(apply);
+    stepApply.append(controls);
+    result.append(stepApply);
     apply.addEventListener('click', async () => {
       if (busy || data.analysis.conflicts.length) return;
       const checks = [...result.querySelectorAll('[data-warning]')];

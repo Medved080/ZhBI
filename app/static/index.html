@@ -2822,6 +2822,12 @@
   #training-role-box select { flex: 0 0 auto; width: auto; }
   .modal-sticky-head h2 { margin-bottom: 14px; }
   .modal-sticky-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 24px; margin: 10px 0; }
+  /* Форма панелей облицовки шахт монтируется ES-модулем внутри своего
+     <form> (2026-09-08) и сама строит .modal-sticky-head/-scroll — контейнер
+     монтирования и сам <form> не должны участвовать в раскладке как ЕЩЁ
+     один уровень блока, иначе .modal-sticky-scroll не дотянется до низа
+     модалки. Тот же приём, что у .bfm-row в дереве блоков МФР. */
+  #shaft-panels-mount, #shaft-panels-mount form { display: contents; }
   .modal-sticky-scroll table.bulk-status-table thead th {
     position: sticky; top: 0; background: var(--color-surface); z-index: 1;
   }
@@ -5307,12 +5313,21 @@
      дополняющий импорт внутри объекта ЖБИ, своя область (scope='gp1-gp2'),
      не подменяет форму «Чертежи» выше — см. app.shaft_panels,
      app/static/shaft-panels.js. Содержимое монтирует ES-модуль лениво
-     (mountShaftImport), сама модалка — только контейнер и заголовок. -->
+     (mountShaftImport), сама модалка — только контейнер и заголовок.
+     `.modal-sticky` (живой запрос 2026-09-08: «дизайн формы в соответствии
+     с общими правилами сервиса» — раньше была голая форма без шагов и без
+     стилей кнопок). Мод'уль строит `.modal-sticky-head`/`-scroll` внутри
+     СВОЕГО `<form>`, поэтому и контейнер монтирования, и сама форма —
+     `display: contents` (см. CSS рядом), чтобы их дети участвовали в
+     общей flex-колонке `.modal.modal-sticky` напрямую, тем же приёмом,
+     что и `.bfm-row` в дереве блоков МФР. -->
 <div class="modal-backdrop" id="shaft-panels-backdrop">
-  <div class="modal wide">
+  <div class="modal wide modal-sticky">
     <div id="shaft-panels-mount"></div>
-    <div class="actions">
-      <button class="btn btn-secondary" id="shaft-panels-close">Закрыть</button>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="shaft-panels-close">Закрыть</button>
+      </div>
     </div>
   </div>
 </div>

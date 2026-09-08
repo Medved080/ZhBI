@@ -199,6 +199,7 @@ def parse_drawing(path):
             'u0_mm':round(u0,3),'u1_mm':round(u1,3),'z_min_mm':round(z0,3),'z_max_mm':round(z1,3),
             'width_mm':round(x1-x0,3),'height_mm':round(y1-y0,3),
             'area_m2':round(p['polygon'].area/1e6,6)})
+    result_panels, shared_wall_pairs = _merge_shared_wall(result_panels)
     return {'profile':PROFILE,'source_file':path.name,'source_sha256':sha256(path.read_bytes()).hexdigest(),
             'header_insunits':doc.header.get('$INSUNITS'),'unit_scale_mm':1.,
             'axes':axes,'axis_evidence':axis_evidence,'z_zero_sheet':zero,'levels':levels,
@@ -207,4 +208,37 @@ def parse_drawing(path):
             'counts':{'source_contours':len(all_shapes),'panels':len(panels),'plan_contours':len(plan),
                       'marks':len(marks),'by_mark':dict(sorted(Counter(p['mark'] for p in panels).items())),
                       'by_face':dict(Counter(p['view']['face'] for p in panels)),
-                      'by_method':dict(Counter(p['mark_method'] for p in panels))}}
+                      'by_method':dict(Counter(p['mark_method'] for p in panels)),
+                      'shared_wall_pairs':shared_wall_pairs}}
+
+
+def _merge_shared_wall(result_panels):
+    """Столбец В (ГП1) и столбец Д (ГП2) — не два соседних изделия, а ОДНА
+    физическая панель общей продольной стенки между шахтами, описанная
+    дважды: по разу на каждой развёртке, каждая своей стороной наружу
+    (см. _plan_frames в placement.py — normal обеих сторон указывает ДРУГ
+    НА ДРУГА вглубь именно этой стенки). Подтверждено пользователем
+    2026-09-08 на реальных данных: все панели В(ГП1) и Д(ГП2) идут парами
+    с ИДЕНТИЧНОЙ маркой на ОДИНАКОВОЙ отметке Z — координата вдоль стены
+    (u0/u1) при этом закономерно разная, потому что она отсчитывается от
+    начала КАЖДОЙ своей развёртки, а не потому, что это разные панели.
+
+    Схлопывается ДО того, как элемент попадёт в БД (а не постфактум через
+    dict_delete или ручную чистку): дубль иначе успевает получить свою
+    историю статусов и контракт, и связку было бы уже не разъединить без
+    потери данных. Одна из пары (В/ГП1) остаётся канонической записью —
+    какая именно, роли не играет, обе стороны описывают один и тот же
+    физический объект; Д/ГП2 удаляется целиком, включая свои handle/mark_*
+    — это не двусторонний учёт одной панели, а именно дубликат.
+    """
+    по_в = {(p['mark'], round(p['z_min_mm'],1), round(p['z_max_mm'],1)): p
+            for p in result_panels if p['shaft'] == 'ГП1' and p['face'] == 'В'}
+    по_д = {(p['mark'], round(p['z_min_mm'],1), round(p['z_max_mm'],1)): p
+            for p in result_panels if p['shaft'] == 'ГП2' and p['face'] == 'Д'}
+    if set(по_в) != set(по_д):
+        raise DrawingError(
+            'Панели общей стенки (В/ГП1 и Д/ГП2) не сходятся попарно по марке и отметке Z — '
+            'схлопнуть их в одну запись нельзя, пока расхождение не объяснено')
+    дубликаты = {id(p) for p in по_д.values()}
+    merged = [p for p in result_panels if id(p) not in дубликаты]
+    return merged, len(по_в)
