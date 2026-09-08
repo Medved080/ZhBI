@@ -85,7 +85,22 @@ class DrawingTests(unittest.TestCase):
 
     def test_no_guessed_thickness(self):
         self.assertFalse(self.surface['commit_ready']);self.assertIsNone(self.surface['panels'][0]['outline'])
-        with self.assertRaises(DrawingError):place_panels(self.drawing,self.axes,thickness_mm=300)
+        # Санитарный потолок (500 мм) — от случайной лишней цифры, не от
+        # реального значения: 300 мм подтверждено спецификацией изделия
+        # 2026-09-08 и больше НЕ отклоняется (см. test_shared_wall_overlap_warning).
+        with self.assertRaises(DrawingError):place_panels(self.drawing,self.axes,thickness_mm=3000)
+
+    def test_shared_wall_overlap_warning(self):
+        # Панель В (ГП1) и панель Д (ГП2) продолжаются друг на друга вглубь
+        # ОДНОЙ общей стенки (~300 мм). Толщина изделия 300 мм — реальное
+        # подтверждённое значение (2026-09-08) — их физически перекрывает;
+        # предупреждение требует явного подтверждения, но не блокирует.
+        placed=place_panels(self.drawing,self.axes,thickness_mm=300.)
+        self.assertIn('shared_wall_overlap',{w['code'] for w in placed['warnings']})
+        self.assertTrue(placed['commit_ready'])
+        # Толщина заметно меньше половины стены — перекрытия нет, предупреждения тоже.
+        thin=place_panels(self.drawing,self.axes,thickness_mm=60.)
+        self.assertNotIn('shared_wall_overlap',{w['code'] for w in thin['warnings']})
 
     def test_axis_mismatch_and_nan_rejected(self):
         axes=copy.deepcopy(self.axes);axes['numeric']['7']+=100

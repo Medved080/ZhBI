@@ -49,21 +49,36 @@ def _plan_frames(drawing):
                 [(0,1),(1,0),(0,-1),(-1,0)],
                 [(-1,0),(0,1),(1,0),(0,-1)]):
             frames[face]={'shaft':shaft,'origin':origin,'u':u,'normal':n}
-    return frames
+    # vertical[1] — СРЕДНЯЯ продольная стенка, единственная общая у ГП1/ГП2
+    # (vertical[0] и vertical[2] — внешние, каждая граничит только с одной
+    # шахтой). Панель В (ГП1) и панель Д (ГП2) продолжаются normal'ю ДРУГ НА
+    # ДРУГА вглубь именно этой стенки — см. предупреждение shared_wall_overlap
+    # в place_panels, если толщина изделия больше половины её ширины.
+    shared_wall_mm = vertical[1]['bounds'][2]-vertical[1]['bounds'][0]
+    return frames, shared_wall_mm
 
 
 def place_panels(drawing, target_axes, *, thickness_mm=None, z_offset_mm=0.):
-    """None thickness gives precise front surfaces only, not invented solids.
+    """Пустая толщина — только точные лицевые поверхности, без выдуманных
+    объёмов.
 
-    The drawing's 300 mm is a wall thickness, not an individual panel
-    thickness. An explicit product thickness is required for DB commit.
+    300 мм на плане — толщина стенки шахты, не толщина отдельной панели:
+    для записи в БД нужна явно подтверждённая толщина изделия. 500 мм —
+    потолок здравого смысла против случайной лишней цифры (3000 вместо
+    300), а не утверждение о том, какой панель может быть на самом деле:
+    подтверждено 2026-09-08, что у этого профиля реальная толщина панели
+    — около 300 мм (спецификация/паспорт изделия), то есть панели с двух
+    сторон общей стенки (300 мм) физически толще её половины и
+    перекрываются в 3D-модели — см. предупреждение shared_wall_overlap
+    ниже: это подтверждается пользователем явно, а не проверяется тихим
+    запретом.
     """
     if not isfinite(z_offset_mm):
         raise DrawingError('Некорректный сдвиг отметок')
-    if thickness_mm is not None and (not isfinite(thickness_mm) or not 0<thickness_mm<=150):
-        raise DrawingError('Толщина должна быть >0 и ≤150 мм (две облицовки в общей стенке 300 мм)')
+    if thickness_mm is not None and (not isfinite(thickness_mm) or not 0<thickness_mm<=500):
+        raise DrawingError('Толщина должна быть >0 и ≤500 мм')
     transform = _register(drawing['axes'],target_axes)
-    frames = _plan_frames(drawing)
+    frames, shared_wall_mm = _plan_frames(drawing)
     result = deepcopy(drawing)
     result['target_axes'] = deepcopy(target_axes)
     result['registration'] = {'x_sign':transform[0][0],'dx_mm':transform[0][1],
@@ -74,6 +89,17 @@ def place_panels(drawing, target_axes, *, thickness_mm=None, z_offset_mm=0.):
     result['warnings'].append({'code':'plan_joint', 'message':'Развертка 5700 мм соответствует расстоянию между внутренними гранями поперечных стен; продольный контур плана 5680 мм оставляет по 10 мм стыка. Сохранены размеры развертки.'})
     if thickness_mm is None:
         result['warnings'].append({'code':'thickness_required','message':'В DXF есть толщина стенки 300 мм, но нет толщины отдельной облицовочной панели. Вычислены лицевые поверхности; для объемов требуется толщина изделия.'})
+    elif 2*thickness_mm > shared_wall_mm+.1:
+        # Панели В (ГП1) и Д (ГП2) продолжаются друг на друга вглубь ОДНОЙ и
+        # той же средней стенки (см. _plan_frames). Если толщина изделия
+        # больше половины её ширины, в 3D-модели они физически перекрываются
+        # — это не баг геометрии, а следствие того, что панель толще
+        # половины стены. Явное подтверждение, а не тихое допущение.
+        result['warnings'].append({'code':'shared_wall_overlap',
+            'message':f'Толщина {thickness_mm:g} мм с каждой стороны общей стенки ГП1/ГП2 '
+                     f'(~{shared_wall_mm:.0f} мм) даёт перекрытие ~{2*thickness_mm-shared_wall_mm:.0f} мм '
+                     'между панелями В и Д в 3D-модели: подтвердите, что это соответствует реальной '
+                     'конструкции, а не ошибка ввода толщины.'})
     placed = []
     for panel in result['panels']:
         frame=frames[panel['face']]

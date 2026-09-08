@@ -14,7 +14,7 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
   form.innerHTML = `<h2>Панели облицовки лифтовых шахт</h2>
     <p>Развертки ГП1/ГП2 привязываются к осям 5–7 / Е–Ж выбранного объекта.</p>
     <label>Чертеж DXF <input name="drawing" type="file" accept=".dxf" required></label>
-    <label>Толщина отдельной панели, мм <input name="thickness" type="number" min="1" max="150" step="0.1" placeholder="По данным изделия"></label>
+    <label>Толщина отдельной панели, мм <input name="thickness" type="number" min="1" max="500" step="0.1" placeholder="По данным изделия"></label>
     <p>Без толщины доступно распознавание лицевых поверхностей. Размер стенки 300 мм не подставляется как толщина панели.</p>
     <button type="submit">Распознать и проверить</button>
     <button type="button" data-action="cancel">Отменить анализ</button>
