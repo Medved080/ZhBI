@@ -20,7 +20,7 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
   const form = document.createElement('form');
   form.innerHTML = `
     <div class="modal-sticky-head">
-      <h2>Панели облицовки лифтовых шахт</h2>
+      <h2>Панели облицовки шахт подъемников</h2>
       <p class="hint-text">Развёртки ГП1/ГП2 привязываются к осям 5–7 / Е–Ж выбранного объекта.</p>
       <div class="bulk-edit-steps">
         <div class="bulk-edit-block bulk-edit-block-file">
