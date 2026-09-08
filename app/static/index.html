@@ -377,8 +377,15 @@
   /* В ШАПКЕ кнопки компактнее общего правила: рост 40 и отступы 16 хороши в
      формах, а здесь их десяток в один ряд плюс широкий знак — при общих
      размерах панель переполнялась и обрезала «Сейчас» (поймано снимком
-     экрана). Поле рабочей даты дополнительно разрешено сжимать. */
-  :root[data-skin] #toolbar .btn { min-height: 32px; padding: 5px 12px; font-size: 13px; }
+     экрана). Поле рабочей даты дополнительно разрешено сжимать.
+     :not(.btn-icon-round) — иначе паддинг 12px слева-справа не оставлял
+     круглой кнопке-иконке («Карта проектов», «Обновить», «?») почти
+     ничего: правило #toolbar .toolbar-tile-btn ниже метит именно
+     padding: 0 для них, но здесь та же кнопка ЕЩЁ И .btn, а этот селектор
+     специфичнее его на два уровня (:root[data-skin] + #toolbar) — держал
+     значок сплющенным в неквадратную область 16×30 из 40×40 (живой запрос
+     2026-09-08, «значок на кнопке слишком мелкий»). */
+  :root[data-skin] #toolbar .btn:not(.btn-icon-round) { min-height: 32px; padding: 5px 12px; font-size: 13px; }
   :root[data-skin] #toolbar .btn-sm { min-height: 28px; padding: 4px 10px; font-size: 12px; }
   :root[data-skin] #toolbar input[type="datetime-local"] { min-width: 0; padding: 4px 8px; }
   :root[data-skin] #toolbar .view-mode-btn { min-height: 30px; padding: 5px 12px; font-size: 13px; }
@@ -4681,7 +4688,7 @@
            заказчика в левом углу тулбара. -->
       <button class="btn btn-secondary btn-icon-round toolbar-tile-btn map-logo-btn" id="btn-toolbar-map"
               title="Карта проектов">
-        <svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
           <defs>
             <linearGradient id="mapLogoPin" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0" stop-color="#E03131"/>
