@@ -11526,6 +11526,16 @@ function catalogSelectedRecord() {
   return список.find((x) => x.id === id) || null;
 }
 
+// Ссылку разрешаем открыть, только если это действительно http(s)-адрес:
+// поле текстовое и правит его человек с доступом к объекту, а кликает —
+// любой, у кого есть доступ на чтение. Без проверки схемы `javascript:...`,
+// вписанный в это поле, исполнился бы у ЛЮБОГО, кто откроет карточку и
+// нажмёт кнопку, — то есть хранимый XSS чужими руками.
+function safeHttpUrl(текст) {
+  const значение = (текст || "").trim();
+  return /^https?:\/\//i.test(значение) ? значение : "";
+}
+
 function catalogFieldsHtml(запись, тип, редактируем) {
   const выкл = редактируем ? "" : "disabled";
   const з = (v) => escapeHtml(v == null ? "" : String(v));
@@ -11579,8 +11589,15 @@ function catalogFieldsHtml(запись, тип, редактируем) {
         <label class="object-field"><span>Старт СМР</span>
           <input type="date" data-field="smr_start_reported" value="${з(запись && запись.smr_start_reported)}" ${выкл}/></label>
         <label class="object-field object-field-wide"><span>Ссылка на фото/видео</span>
-          <input type="text" data-field="media_url" value="${з(запись && запись.media_url)}" ${выкл}
-                 placeholder="папка на Яндекс.Диске и т.п. — сервер её не скачивает"/></label>
+          <div class="field-with-link">
+            <input type="text" data-field="media_url" id="catalog-media-url"
+                   value="${з(запись && запись.media_url)}" ${выкл}
+                   placeholder="папка на Яндекс.Диске и т.п. — сервер её не скачивает"/>
+            <a id="catalog-media-url-open" class="field-link-btn" target="_blank" rel="noopener noreferrer"
+               title="Открыть ссылку в новой вкладке"
+               href="${escapeHtml(safeHttpUrl(запись && запись.media_url))}"
+               ${safeHttpUrl(запись && запись.media_url) ? "" : "hidden"}>↗</a>
+          </div></label>
       </div>
     </div>` : "";
 
@@ -11708,6 +11725,18 @@ function renderCatalogForm() {
     el.addEventListener("change", markCatalogDirty);
   });
 
+  // Кнопка «открыть ссылку» следует за полем вживую — иначе она вела бы на
+  // старое значение, если человек уже вписал новую ссылку, но ещё не сохранил.
+  const полеСсылки = document.getElementById("catalog-media-url");
+  const кнопкаСсылки = document.getElementById("catalog-media-url-open");
+  if (полеСсылки && кнопкаСсылки) {
+    полеСсылки.addEventListener("input", () => {
+      const значение = safeHttpUrl(полеСсылки.value);
+      кнопкаСсылки.href = значение;
+      кнопкаСсылки.hidden = !значение;
+    });
+  }
+
   // Адресные поля не лежат в форме как [data-field]: их набор зависит от
   // того, выбран адрес по классификатору или введён руками. Виджет отдаёт
   // их целиком, а форма держит последнее отданное значение.
@@ -11760,7 +11789,14 @@ function renderCatalogForm() {
     ensureMapModule().then((m) => m.createPinMap(местоКарты, {
       lat: запись ? запись.lat : null,
       lon: запись ? запись.lon : null,
-      canEdit: редактируем,
+      // Правка кликом/перетаскиванием пина ВРЕМЕННО закрыта (живой запрос
+      // 2026-09-08): клик по карте просто при просмотре списка объектов
+      // случайно сдвигал точку (и помечал форму несохранённой правкой).
+      // Карта по умолчанию — только просмотр; координаты задаются через
+      // адрес (автоопределение) или полями «Широта»/«Долгота» руками.
+      // createPinMap ЭТО УМЕЕТ и дальше — верните canEdit: редактируем,
+      // когда решите вернуть правку кликом.
+      canEdit: false,
       onMove: (широта, долгота) => {
         catalog.coordsLocked = true;
         const п = поляШД();
@@ -12115,12 +12151,10 @@ document.getElementById("catalog-add-object").addEventListener("click", () => {
   selectCatalogNode("object", null, { projectId: проект });
 });
 
-setupResizableModal({
-  backdrop: catalogBackdrop,
-  storageKey: "zhbi.catalogModalSize",
-  toggleId: "catalog-size-toggle",
-  maximizedClass: "catalog-maximized",
-});
+// Раньше здесь был setupResizableModal с кнопкой «развернуть» и малым
+// размером по умолчанию (2026-09-07). Живой запрос 2026-09-08: у справочника
+// остаётся ЕДИНСТВЕННЫЙ размер — почти во весь экран, без переключателя;
+// сам размер задан в CSS (#catalog-modal, index.html).
 
 // ==================== КАРТА ПРОЕКТОВ (2026-09-07) ====================
 //
@@ -16889,6 +16923,7 @@ const OBJECTS_IMPORT_FIELD_LABELS = {
   smu_director: "Директор СМУ", responsible: "Ответственный (ДП/РП)",
   status: "Статус", lat: "Широта", lon: "Долгота",
   media_url: "Ссылка на фото/видео", smr_start_reported: "Старт СМР",
+  postal_code: "Почтовый индекс",
 };
 
 const objectsImportBackdrop = document.getElementById("objects-import-backdrop");
@@ -16907,8 +16942,13 @@ function objectsImportValueText(field, value) {
   return String(value);
 }
 
+// Служебные поля разбора по классификатору (address_code/source/parts) не
+// показываем в сводке новой строки: адрес уже виден как строка, а
+// address_parts — сырой JSON, читать который человеку незачем.
+const OBJECTS_IMPORT_HIDDEN_FIELDS = new Set(["address_code", "address_source", "address_parts"]);
+
 function objectsImportFieldsSummary(fields) {
-  const записи = Object.entries(fields || {});
+  const записи = Object.entries(fields || {}).filter(([k]) => !OBJECTS_IMPORT_HIDDEN_FIELDS.has(k));
   if (!записи.length) return "(без дополнительных полей)";
   return записи.map(([k, v]) => `${OBJECTS_IMPORT_FIELD_LABELS[k] || k}: ${objectsImportValueText(k, v)}`).join("; ");
 }

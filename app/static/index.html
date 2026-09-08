@@ -1343,6 +1343,15 @@
   .object-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .object-field > span { font-size: 11px; color: var(--color-text-muted); }
   .object-field-wide { grid-column: 1 / -1; }
+  /* Ссылка на фото/видео (2026-09-08) — рядом с полем ввода кнопка,
+     открывающая её в новой вкладке; сама ссылка остаётся редактируемым
+     текстом, кнопка появляется только когда есть что открывать. */
+  .field-with-link { display: flex; gap: 6px; align-items: center; }
+  .field-with-link input { flex: 1 1 auto; min-width: 0; }
+  .field-link-btn { flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    color: var(--color-primary); text-decoration: none; font-size: 14px; }
+  .field-link-btn:hover { background: var(--color-surface-2); }
   .object-card-foot { display: flex; align-items: flex-end; justify-content: space-between;
     gap: 12px; margin-top: 8px; }
   .object-card-foot .hint-text { margin: 0; }
@@ -2507,14 +2516,13 @@
      после точки выглядят как ошибка вёрстки. */
   .catalog-coords { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
   .catalog-coords .object-field { flex: 0 0 150px; }
-  /* Шире обычной «широкой» модалки (780px): в двух колонках она делится
-     между деревом и формой, и на 780 форма ужимается до одной колонки
-     полей. 1040 — минимум, при котором реквизиты встают в два столбца. */
-  #catalog-modal { width: 1040px; max-width: 96vw; height: 80vh; }
-  /* На низком экране (ноутбук 768 и ниже) окну отдаётся почти вся высота:
-     при 80vh на форму оставалось меньше двух полей. */
-  @media (max-height: 800px) { #catalog-modal { height: 92vh; } }
-  #catalog-modal.catalog-maximized { width: 96vw; max-width: 96vw; height: 92vh; }
+  /* Единственный размер — почти во весь экран (живой запрос 2026-09-08:
+     «справочник объектов может разворачиваться почти на весь экран —
+     сделай это единственной рабочей формой, маленькая не нужна»). Прежде
+     окно открывалось в 1040px с кнопкой развернуть; малый размер убран
+     совсем, а не просто скрыт — в двух колонках (дерево + форма) ему и
+     так было тесно. */
+  #catalog-modal { width: 96vw; max-width: 96vw; height: 92vh; max-height: 92vh; }
   /* -------- виджет адреса по классификатору (2026-09-07) -------- */
   /* Подсказки — свой список, а не <datalist>: тот не даёт показать вторую
      строку с полным путём, а без неё одноимённые населённые пункты
@@ -5477,9 +5485,7 @@
 <div class="modal-backdrop" id="catalog-backdrop">
   <div class="modal wide modal-sticky" id="catalog-modal">
     <div class="modal-sticky-head">
-      <h2>Проекты и объекты
-        <button class="btn-icon modal-size-toggle" id="catalog-size-toggle" title="Развернуть на весь экран">⛶</button>
-      </h2>
+      <h2>Проекты и объекты</h2>
       <!-- Пояснение в одну строку: на ноутбуке шапка отнимает высоту у той
            самой формы, ради которой окно и открыли. Подробности про то, что
            у проекта нет собственных данных, показываются в его реквизитах. -->

@@ -34,23 +34,34 @@ app/element_bulk_edit.py («Семья B» из исследования арх�
 уточнение «Пятый статус: „Приостановлен“ отдельно»). «Архивный» в файле не
 встречается — это исключительно ручное действие после закрытия объекта.
 
-Адрес из файла — ПЛОСКИЙ текст без кода классификатора (в отличие от
-адресного виджета справочника, см. app/kladr.py): колонка в файле не несёт
-кода КЛАДР. Если объект уже привязан к классификатору (`address_code`
-заполнен), правка адреса из файла ИГНОРИРУЕТСЯ — иначе строка потеряла бы
-связь с классификатором, а `address` и `address_code` разошлись бы.
+Адрес из файла — текст без кода классификатора: колонка в файле не несёт
+кода КЛАДР, а разложить строку по нему пытается ЭТОТ модуль сам
+(`app.kladr.resolve_free_text_address`, 2026-09-08, живой запрос «при
+загрузке из xls надо по возможности разложить по адресному
+классификатору») — тот же уровень (населённый пункт → улица → дом), что
+у интерактивного виджета, но автоматически и строго консервативно: только
+точное совпадение имени, при малейшей неоднозначности — обычный текст, а
+не подозрительная привязка. Если объект уже привязан к классификатору
+(`address_code` заполнен), правка адреса из файла ИГНОРИРУЕТСЯ — иначе
+строка потеряла бы связь с классификатором, а `address` и `address_code`
+разошлись бы. Привязка по классификатору — ОДНО бундлированное изменение
+(`kind: "address_link"`), а не набор независимых полей: применить «Адрес»,
+но не «address_code», значило бы разорвать пару текст/код, которую вся
+остальная система считает согласованной.
+
 Широта/долгота в файле УЖЕ есть готовыми числами — геокодирование по адресу
 (app/project_map.py) не требуется, они идут прямыми полями.
 """
 
 import io
+import json
 from datetime import date, datetime
 from typing import Optional
 
 from openpyxl import load_workbook
 
 from app import activity
-from app.kladr import region_from_address
+from app.kladr import region_from_address, resolve_free_text_address
 
 # --------------------------------------------------------------- колонки
 
@@ -91,6 +102,14 @@ FIELD_LABELS = {
 # у element_bulk_edit.apply_changes (см. его докстрок про белый список),
 # закрывается тем же способом: только то, что реально есть в этом перечне.
 _UPDATE_FIELDS = frozenset(FIELD_LABELS)
+
+# Поля бандла "address_link" (см. _build_update) — своя, более узкая
+# проверка: это данные, собранные resolve_free_text_address() внутри
+# analyze(), а не то, что человек мог отметить построчно, но клиент к
+# apply() приходит тем же JSON, и доверять ему нельзя так же, как любому
+# другому телу запроса.
+_ADDRESS_LINK_FIELDS = frozenset(
+    {"address", "address_code", "address_source", "address_region", "address_parts", "postal_code"})
 
 # «Статус ОС» в файле → технический статус объекта (CATALOG_STATUSES).
 # «Архивный» сюда не входит: в файле заказчика его не бывает.
@@ -236,7 +255,7 @@ def analyze(conn, file_bytes: bytes) -> dict:
     return {
         "rows_read": len(parsed),
         "objects_new": sum(1 for c in changes if c["kind"] == "create"),
-        "objects_updated": len({c["object_id"] for c in changes if c["kind"] == "update"}),
+        "objects_updated": len({c["object_id"] for c in changes if c["kind"] in ("update", "address_link")}),
         "changes": changes,
         "rejected": rejected,
         "warnings": warnings,
@@ -249,10 +268,23 @@ def _build_create(line_no: int, name: str, values: dict) -> tuple:
 
     address = _clean_text(values.get("address"))
     if address:
-        fields["address"] = address
-        регион = region_from_address(address)
-        if регион:
-            fields["address_region"] = регион
+        # Разложить по классификатору — чистая прибавка для НОВОГО объекта
+        # (не UPDATE, ломать нечего): не вышло уверенно — тот же текст и
+        # регион по нему офлайн, что и раньше.
+        разложено = resolve_free_text_address(address)
+        if разложено:
+            fields["address"] = разложено["address"]
+            fields["address_code"] = разложено["code"]
+            fields["address_source"] = разложено["source"]
+            fields["address_region"] = разложено["region"]
+            fields["address_parts"] = json.dumps(разложено["parts"], ensure_ascii=False)
+            if разложено.get("postal_code"):
+                fields["postal_code"] = разложено["postal_code"]
+        else:
+            fields["address"] = address
+            регион = region_from_address(address)
+            if регион:
+                fields["address_region"] = регион
 
     for key in ("smu", "smu_director", "responsible", "media_url"):
         v = _clean_text(values.get(key))
@@ -314,11 +346,33 @@ def _build_update(row, line_no: int, values: dict) -> tuple:
             if новый_адрес != (row["address"] or None):
                 warnings.append({"line": line_no, "name": name,
                                  "reason": "Адрес привязан к классификатору — адрес из файла проигнорирован"})
-        elif новый_адрес != (row["address"] or None):
-            changes.append(describe("address", row["address"], новый_адрес))
-            регион = region_from_address(новый_адрес)
-            if регион and регион != row["address_region"]:
-                changes.append(describe("address_region", row["address_region"], регион))
+        else:
+            разложено = resolve_free_text_address(новый_адрес)
+            if разложено and разложено["code"] != (row["address_code"] or None):
+                # Один бундл, а не набор независимых полей: применить «Адрес»
+                # без «address_code» значило бы разорвать пару, которую вся
+                # остальная система (виджет, apply_object PATCH) считает
+                # согласованной.
+                поля_бандла = {
+                    "address": разложено["address"],
+                    "address_code": разложено["code"],
+                    "address_source": разложено["source"],
+                    "address_region": разложено["region"],
+                    "address_parts": json.dumps(разложено["parts"], ensure_ascii=False),
+                }
+                if разложено.get("postal_code"):
+                    поля_бандла["postal_code"] = разложено["postal_code"]
+                changes.append({
+                    "kind": "address_link", "key": name, "object_id": row["id"], "line": line_no,
+                    "field": "address", "field_label": "Адрес (по классификатору)",
+                    "was": row["address"], "now": разложено["address"],
+                    "fields": поля_бандла,
+                })
+            elif not разложено and новый_адрес != (row["address"] or None):
+                changes.append(describe("address", row["address"], новый_адрес))
+                регион = region_from_address(новый_адрес)
+                if регион and регион != row["address_region"]:
+                    changes.append(describe("address_region", row["address_region"], регион))
 
     for key in ("smu", "smu_director", "responsible", "media_url"):
         новое = _clean_text(values.get(key))
@@ -394,6 +448,7 @@ def apply_changes(conn, selections: list, admin) -> dict:
     for key, items in by_key.items():
         creates = [s for s in items if s.get("kind") == "create"]
         updates = [s for s in items if s.get("kind") == "update"]
+        address_links = [s for s in items if s.get("kind") == "address_link"]
 
         if creates:
             name = (key or "").strip()
@@ -421,35 +476,70 @@ def apply_changes(conn, selections: list, admin) -> dict:
                          details={"source": "xlsx", "fields": {**fields, "status": статус}})
             continue
 
-        if not updates:
+        if not updates and not address_links:
             continue
         row = conn.execute("SELECT * FROM objects WHERE name = ?", (key,)).fetchone()
         if row is None:
             skipped.append({"name": key, "reason": "Объект исчез между сверкой и применением"})
             continue
 
-        записать, описание = [], {}
-        for sel in updates:
-            field = sel["field"]
-            new = sel.get("now")
-            if field == "status":
-                new = _valid_status(new)
-            elif field in ("lat", "lon") and new is not None:
-                new = round(float(new), 6)
-            записать.append((field, new))
-            описание[field] = (sel.get("was"), new)
-        conn.execute(
-            "UPDATE objects SET %s, updated_at = datetime('now') WHERE id = ?" % (
-                ", ".join("%s = ?" % f for f, _ in записать)),
-            [v for _, v in записать] + [row["id"]],
-        )
-        updated += 1
-        activity.log(
-            "object_import", user=admin, entity_type="object", entity_id=row["id"],
-            old_value="; ".join("%s: %s" % (f, w) for f, (w, _) in описание.items())[:500],
-            new_value="; ".join("%s: %s" % (f, n) for f, (_, n) in описание.items())[:500],
-            details={"source": "xlsx"},
-        )
+        затронут = False
+
+        if address_links:
+            поля_бандла = dict(address_links[0].get("fields") or {})
+            неизвестные_подполя = set(поля_бандла) - _ADDRESS_LINK_FIELDS
+            if неизвестные_подполя:
+                raise ValueError("Недопустимые поля адреса: " + ", ".join(sorted(неизвестные_подполя)))
+            if row["address_code"]:
+                # Между сверкой и применением адрес уже кто-то привязал —
+                # тот же случай, что и на сверке (см. _build_update), просто
+                # обнаружился позже.
+                skipped.append({"name": key,
+                                "reason": "Адрес уже привязан к классификатору — пропущено"})
+            else:
+                conn.execute(
+                    "UPDATE objects SET %s, updated_at = datetime('now') WHERE id = ?" % (
+                        ", ".join("%s = ?" % f for f in поля_бандла)),
+                    list(поля_бандла.values()) + [row["id"]],
+                )
+                затронут = True
+                activity.log(
+                    "object_import", user=admin, entity_type="object", entity_id=row["id"],
+                    old_value="адрес: %s" % (row["address"] or "—"),
+                    new_value="адрес по классификатору: %s" % поля_бандла.get("address"),
+                    details={"source": "xlsx"},
+                )
+                # Дальнейшие правки (ниже) должны видеть уже привязанный
+                # адрес — иначе, например, сравнение address_region пошло бы
+                # по устаревшей строке.
+                row = conn.execute("SELECT * FROM objects WHERE id = ?", (row["id"],)).fetchone()
+
+        if updates:
+            записать, описание = [], {}
+            for sel in updates:
+                field = sel["field"]
+                new = sel.get("now")
+                if field == "status":
+                    new = _valid_status(new)
+                elif field in ("lat", "lon") and new is not None:
+                    new = round(float(new), 6)
+                записать.append((field, new))
+                описание[field] = (sel.get("was"), new)
+            conn.execute(
+                "UPDATE objects SET %s, updated_at = datetime('now') WHERE id = ?" % (
+                    ", ".join("%s = ?" % f for f, _ in записать)),
+                [v for _, v in записать] + [row["id"]],
+            )
+            затронут = True
+            activity.log(
+                "object_import", user=admin, entity_type="object", entity_id=row["id"],
+                old_value="; ".join("%s: %s" % (f, w) for f, (w, _) in описание.items())[:500],
+                new_value="; ".join("%s: %s" % (f, n) for f, (_, n) in описание.items())[:500],
+                details={"source": "xlsx"},
+            )
+
+        if затронут:
+            updated += 1
 
     conn.commit()
     return {"created": created, "updated": updated, "skipped": skipped}
