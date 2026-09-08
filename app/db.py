@@ -1954,10 +1954,34 @@ def object_source_file(conn: sqlite3.Connection, object_id: int) -> str:
     выбирает. Перевод в одном месте, а не в каждом эндпоинте, — по той же
     причине, что и visible_elements_clause: разъехавшееся правило выбора
     чертежа ловится потом только живым репортом.
+
+    С панелями облицовки шахт (2026-09-08) у объекта может быть ДВА
+    актуальных чертежа сразу — основной и дополняющая развертка ГП1/ГП2
+    (`app.shaft_panels`, `app.shaft_panels_scope.register_primary_drawing`).
+    Эта функция по-прежнему возвращает ОДИН файл — основной: там, где нужны
+    оба (схема, `POST /plan-data` для показа объекта целиком), выборка
+    расширяется отдельно через `current_drawing_sources`, а не здесь.
+
+    Дополняющий источник узнаётся через `elements.source_file` панельных
+    строк (JOIN по `shaft_panel_geometry.element_id`), а НЕ через
+    `shaft_panel_geometry.source_name`: это разные строки по замыслу —
+    `source_name` хранит имя ЗАГРУЖЕННОГО DXF (для хэша/дедупликации),
+    а `object_drawings.source_file`/`elements.source_file` панели — синтетическое
+    имя `f'Панели шахт {{scope}} (объект {{id}}).dxf'`
+    (`app.shaft_panels.storage._row`). Та же логика — в
+    `app.shaft_panels_scope.register_primary_drawing`; разойтись с ней —
+    получить обратно неоднозначный выбор «текущего» файла. `ORDER BY
+    imported_at` — детерминированная подстраховка на случай, если у объекта
+    временно окажется больше одного «основного» чертежа не из числа
+    панельных.
     """
     row = conn.execute(
-        "SELECT source_file FROM object_drawings WHERE object_id = ? AND is_current = 1",
-        (object_id,),
+        "SELECT source_file FROM object_drawings "
+        "WHERE object_id = ? AND is_current = 1 AND source_file NOT IN ("
+        "  SELECT DISTINCT e.source_file FROM elements e "
+        "  JOIN shaft_panel_geometry g ON g.element_id = e.id WHERE g.object_id = ?"
+        ") ORDER BY imported_at ASC LIMIT 1",
+        (object_id, object_id),
     ).fetchone()
     if row is None:
         raise LookupError(f"У объекта #{object_id} нет актуального чертежа")
@@ -2320,6 +2344,14 @@ def init_db() -> list:
         _reconcile_contract_from_history(conn, changes)
         _enforce_planned_has_no_contract(conn, changes)
         _normalize_element_type_vocabulary(conn, changes)
+        # Панели облицовки шахт (2026-09-08): своя схема (elements.height_mm,
+        # shaft_panel_geometry, shaft_panel_imports), ставится тем же
+        # идемпотентным вызовом, что и весь остальной набор миграций —
+        # ПОСЛЕ базовой схемы/миграций elements и objects, ДО обработки
+        # данных и до первого запроса. Сам импорт геометрии — действие
+        # пользователя после предпросмотра, не часть старта сервера.
+        from app.shaft_panels.storage import install_schema as _install_shaft_panels_schema
+        _install_shaft_panels_schema(conn)
         _seed_reference_data(conn)
         conn.commit()
     finally:

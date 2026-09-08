@@ -108,7 +108,7 @@ COLUMNS = [
     # зависит их отображение (цвета, формы, подписи, подтипы).
     ["elements", "status_history", "axis_lines", "marks", "mark_type_prefixes",
      "allowed_subtypes", "status_colors", "element_shapes", "label_visibility",
-     "app_settings", "report_notes"],
+     "app_settings", "report_notes", "shaft_panel_geometry", "shaft_panel_imports"],
     # Контрактация: от контрагента и договора до документов смены поставщика.
     ["counterparties", "counterparty_capacity", "agreements", "specifications", "contracts",
      "contract_lines", "contract_capacity", "contract_incidents", "default_contracts",

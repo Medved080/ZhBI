@@ -1,3 +1,9 @@
+> **Внедрено (2026-09-08).** Ядро (`shaft_panels/*.py`, адаптеры) перенесено
+> в `app/shaft_panels*`, дублей больше нет — правки вносятся ТОЛЬКО там.
+> Здесь остаются исходная постановка, разбор DXF, отчёты по проверенному
+> файлу и регрессионный тест (теперь гоняет живой `app.shaft_panels`).
+> Актуальное состояние фичи — `Docs/TZ.md`/`Docs/MAP.md`/`Docs/OPEN.md`.
+
 # Панели облицовки лифтовых шахт — отдельный комплект разработки
 
 Назначение: импорт поштучных панелей ГП1/ГП2 в существующий объект **«Москвич», тип учета ЖБИ**. Это панели внутри здания, не фасадные панели и не новый объект МФР.
@@ -50,13 +56,13 @@ HTML собран из проверенного JSON, SVG проверяются
 
 ```bash
 cd /Users/max/zhbi-tool
-PYTHONPATH=feature_shaft_panels .venv/bin/python -m unittest discover -s feature_shaft_panels/tests -v
+PYTHONPATH=. .venv/bin/python -m unittest discover -s feature_shaft_panels/tests -v
 ```
 
 Восстановить отчет с координатами плана DXF:
 
 ```bash
-PYTHONPATH=feature_shaft_panels .venv/bin/python -m shaft_panels \
+.venv/bin/python -m app.shaft_panels \
   'Input/260908_ПП 5-7_Е-Ж.dxf' \
   --out feature_shaft_panels/reports/local-plan
 ```
@@ -64,7 +70,7 @@ PYTHONPATH=feature_shaft_panels .venv/bin/python -m shaft_panels \
 Восстановить отчет с сеткой объекта из обезличенной копии (в проверенной копии нужная сетка у объекта №1; в другой базе ID нужно выбрать, не зашивать):
 
 ```bash
-PYTHONPATH=feature_shaft_panels .venv/bin/python -m shaft_panels \
+.venv/bin/python -m app.shaft_panels \
   'Input/260908_ПП 5-7_Е-Ж.dxf' \
   --db-readonly data/zhbi.anon.db --object-id 1 \
   --out feature_shaft_panels/reports
@@ -73,7 +79,7 @@ PYTHONPATH=feature_shaft_panels .venv/bin/python -m shaft_panels \
 Повторить проверку совместимости с БД без изменения исходного файла:
 
 ```bash
-PYTHONPATH=feature_shaft_panels .venv/bin/python \
+.venv/bin/python \
   feature_shaft_panels/tests/check_database_copy.py \
   --db data/zhbi.anon.db --object-id 1 \
   --dxf 'Input/260908_ПП 5-7_Е-Ж.dxf' \

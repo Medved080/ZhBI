@@ -4,6 +4,7 @@ Source bindings verified against this checkout on 2026-09-08.
 The main.py glue is in CLAUDE_CODE.md. This file is not loaded by the kit.
 """
 import json
+from app import activity
 from app.auth import audit_display_name, get_current_user
 from app.access import assert_object_feature
 from app.backups import backup_before_import
@@ -49,5 +50,15 @@ def before_commit(conn,user,object_id,changed_ids,summary):
     touch_elements(conn,changed_ids)
 
 
+def after_apply(user,object_id,summary):
+    # ПОСЛЕ commit (storage.apply уже вернул результат) — событие успеха не
+    # пишется раньше фиксации. shaft_panel_imports уже атомарно записан
+    # внутри транзакции и остаётся первичным доказательством применения;
+    # это — только отображение в общем журнале действий.
+    activity.log('import_dxf',user=user,entity_type='object',entity_id=object_id,
+                details={'kind':'shaft_panels','object_id':object_id,'summary':summary})
+
+
 router=build_router(connection_factory=get_connection,get_user=get_current_user,
-                    assert_access=assert_access,backup=backup,before_commit=before_commit)
+                    assert_access=assert_access,backup=backup,before_commit=before_commit,
+                    after_apply=after_apply)

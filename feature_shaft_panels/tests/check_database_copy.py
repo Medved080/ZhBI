@@ -3,8 +3,8 @@ import argparse
 import json
 from pathlib import Path
 import sqlite3
-from shaft_panels import parse_drawing,place_panels
-from shaft_panels.storage import install_schema,load_target_axes,analyze,apply
+from app.shaft_panels import parse_drawing,place_panels
+from app.shaft_panels.storage import install_schema,load_target_axes,analyze,apply
 
 
 def main():

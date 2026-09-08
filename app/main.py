@@ -211,6 +211,8 @@ from app.rights_matrix import router as rights_matrix_router
 from app.roles import router as roles_router
 from app.settings import router as settings_router
 from app.impersonation import ImpersonationMiddleware
+from app.shaft_panels_host import router as shaft_panels_router
+from app import shaft_panels_scope
 from app.upload_limits import (
     MAX_UPLOAD_BYTES,
     MAX_UPLOAD_MB,
@@ -416,6 +418,7 @@ app.include_router(marks_router)
 app.include_router(dict_delete_router)
 app.include_router(settings_router)
 app.include_router(attachments_router)
+app.include_router(shaft_panels_router)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -4682,6 +4685,20 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 "FROM elements GROUP BY object_id"
             )
         }
+        # Панели облицовки шахт (2026-09-08): их дополняющий чертёж тоже
+        # is_current=1, но «текущий чертёж объекта» в этом справочнике —
+        # ОСНОВНОЙ. Без исключения `next(...)` мог бы показать имя развертки
+        # ГП1/ГП2 вместо настоящего чертежа здания — порядок в `чертежи`
+        # только по imported_at, ничего не гарантирует. Источник узнаётся
+        # через elements.source_file панельных строк, а НЕ через
+        # shaft_panel_geometry.source_name — это разные имена по замыслу,
+        # см. app.db.object_source_file.
+        панельные_источники = {
+            r["source_file"] for r in conn.execute(
+                "SELECT DISTINCT e.source_file FROM elements e "
+                "JOIN shaft_panel_geometry g ON g.element_id = e.id"
+            )
+        }
 
         result = []
         for row in conn.execute(
@@ -4689,7 +4706,11 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
         ):
             drawings = чертежи.get(row["id"], [])
             counts = счётчики.get(row["id"])
-            current = next((d["source_file"] for d in drawings if d["is_current"]), None)
+            current = next(
+                (d["source_file"] for d in drawings
+                 if d["is_current"] and d["source_file"] not in панельные_источники),
+                None,
+            )
             result.append(ObjectOut(
                 id=row["id"], name=row["name"], description=row["description"],
                 kind=(row["kind"] if "kind" in row.keys() and row["kind"] else KIND_ZHBI),
@@ -5077,7 +5098,32 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             r["source_file"]
             for r in conn.execute("SELECT source_file FROM object_drawings WHERE is_current = 1")
         }
-        for item in body.selection:
+        # Панели облицовки шахт (2026-09-08): у объекта может быть НЕСКОЛЬКО
+        # актуальных чертежей сразу — основной и дополняющая развертка
+        # ГП1/ГП2 (app.shaft_panels_scope.register_primary_drawing). Элемент
+        # выборки с ГОЛЫМ object_id (обычный показ объекта целиком, без явно
+        # выбранной версии — см. app.js loadPlanInner) разворачивается ЗДЕСЬ
+        # во ВСЕ текущие source_file объекта, каждый — отдельным элементом со
+        # своим source_file. Явно присланный source_file (форма «Версии
+        # чертежа объекта», в том числе просмотр НЕактуальной версии) не
+        # трогается — это исторический просмотр, его логика не меняется.
+        _seen_element_ids = set()
+        _expanded_selection = []
+        for raw_item in body.selection:
+            if raw_item.object_id is not None and not raw_item.source_file:
+                assert_object_feature(conn, user, raw_item.object_id, "plan", "read")
+                sources = shaft_panels_scope.current_drawing_sources(conn, raw_item.object_id)
+                if not sources:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"У объекта #{raw_item.object_id} нет актуального чертежа",
+                    )
+                _expanded_selection.extend(
+                    raw_item.model_copy(update={"source_file": s}) for s in sources
+                )
+            else:
+                _expanded_selection.append(raw_item)
+        for item in _expanded_selection:
             # Этап B: клиент выбирает ОБЪЕКТ, файл выводит сервер. Явно
             # переданный source_file уважается — им пользуется форма
             # «Версии чертежа объекта», чтобы показать НЕ актуальную версию.
@@ -5113,6 +5159,15 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             else:
                 rows = []
             for r in rows:
+                # Дедупликация по id (защита от совпадения): один и тот же
+                # элемент не должен попасть дважды, если объект развернулся
+                # в несколько source_file И один из них попал в выборку ещё
+                # раз явным элементом (сейчас так не бывает — состояние
+                # клиента не совмещает эти два режима, — но проверка дешёвая
+                # и не зависит от этого совпадения).
+                if r["id"] in _seen_element_ids:
+                    continue
+                _seen_element_ids.add(r["id"])
                 el = dict(r)
                 raw_outline = el.pop("outline_json", None)
                 el["outline"] = json.loads(raw_outline) if raw_outline else None
@@ -5556,6 +5611,12 @@ def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
         )
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ValueError as e:
+        # Защита второго направления (app.shaft_panels_scope.assert_standard_match):
+        # обычный импорт не должен коснуться панелей отдельной развертки. В
+        # штатной работе не срабатывает — сверка их уже исключает раньше; это
+        # заслон на случай расхождения, а не ожидаемый путь пользователя.
+        raise HTTPException(status_code=409, detail=str(e))
     forget_pending(body.token)
 
     counts = analysis["counts"]

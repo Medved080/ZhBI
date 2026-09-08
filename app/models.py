@@ -97,6 +97,13 @@ class ElementOut(BaseModel):
     subtype: Optional[str] = None
     elevation_mm: Optional[int] = None
     floor: Optional[int] = None
+    # Вертикальная высота ИЗДЕЛИЯ, мм (панели облицовки шахты и, в будущем,
+    # другие типы с явной высотой из чертежа) — объявлено ЯВНО по той же
+    # причине, что подтип/отметка/этаж выше: без объявления pydantic срезал
+    # бы поле из ответа, и 3D не мог бы вычислить экструзию (см.
+    # app.shaft_panels). НЕ высота этажа — outline_json остаётся
+    # горизонтальным следом, height_mm его не заменяет.
+    height_mm: Optional[float] = None
     current_status: Status
     contract_id: Optional[int] = None
     # Денормализованный скаляр для допстроки подписи на схеме (см.

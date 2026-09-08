@@ -23210,6 +23210,55 @@ importReviewApply.addEventListener("click", async () => {
   }
 });
 
+// ==================== ПАНЕЛИ ОБЛИЦОВКИ ШАХТ (app.shaft_panels) ====================
+// Отдельный дополняющий импорт внутри объекта ЖБИ (2026-09-08): своя
+// область (scope='gp1-gp2'), свой дополняющий чертёж, не подменяет форму
+// «Чертежи» выше. Форма — ES-модуль, загружается лениво по тому же
+// принципу, что address.js/map.js (см. ensureAddressWidget).
+const shaftPanelsBackdrop = document.getElementById("shaft-panels-backdrop");
+const shaftPanelsMount = document.getElementById("shaft-panels-mount");
+let shaftPanelsModule = null;
+let shaftPanelsUnmount = null;
+
+async function ensureShaftPanelsModule() {
+  if (!shaftPanelsModule) shaftPanelsModule = await import("/static/shaft-panels.js");
+  return shaftPanelsModule;
+}
+
+function closeShaftPanelsModal() {
+  shaftPanelsBackdrop.classList.remove("open");
+  if (shaftPanelsUnmount) { shaftPanelsUnmount(); shaftPanelsUnmount = null; }
+}
+
+document.getElementById("btn-upload-shaft-panels").addEventListener("click", async () => {
+  if (!state.objectId) { showToast("Сначала выберите объект", "info"); return; }
+  shaftPanelsBackdrop.classList.add("open");
+  shaftPanelsMount.textContent = "Загрузка формы…";
+  try {
+    const m = await ensureShaftPanelsModule();
+    shaftPanelsUnmount = m.mountShaftImport(shaftPanelsMount, {
+      objectId: state.objectId,
+      // Модуль независим от app() — сессия куки-based, отдельного
+      // CSRF-заголовка на JSON/multipart запросах в этом сервисе нет (та же
+      // причина, по которой обычная загрузка чертежа выше зовёт fetch()
+      // напрямую, а не через api()). Обёртка нужна лишь потому, что голая
+      // ссылка на fetch без объекта window падает "Illegal invocation".
+      request: (url, opts) => fetch(url, opts),
+      onApplied: async () => {
+        await loadSourceFiles();
+        // Выборка возвращается к «весь объект» — plan-data теперь сама
+        // разворачивает её во ВСЕ текущие чертежи объекта (основной и
+        // панели шахт), см. app/main.py plan_data.
+        state.selection.clear();
+        await loadPlan(false);
+      },
+    });
+  } catch (e) {
+    shaftPanelsMount.textContent = "Не удалось загрузить форму: " + e.message;
+  }
+});
+document.getElementById("shaft-panels-close").addEventListener("click", closeShaftPanelsModal);
+
 // ==================== 3D-РЕЖИМ СХЕМЫ (Three.js, см. Docs/backlog.md) ====================
 // Библиотека — локально (app/static/vendor/three/, не CDN), подключается
 // ЛЕНИВО через динамический import() при первом включении кнопкой "3D",
@@ -23322,8 +23371,17 @@ function computeTopColumnCeiling(levels) {
 //   Глобальные ярусы (levels) остались ЗАПАСНЫМ вариантом — на случай,
 //   когда над колонной в модели нет вообще ничего.
 // - Плита перекрытия — фиксированная толщина (см. FLOOR_SLAB_THICKNESS_MM).
+// - Панель облицовки шахты — РЕАЛЬНАЯ высота изделия из DXF (elements.height_mm,
+//   см. app.shaft_panels): контур в плане не даёт высоты, "квадратное сечение"
+//   ниже дало бы толщину в 60-150 мм вместо метра с лишним.
 // - Ригель/Плита/Панель — квадратное сечение, высота = ширина контура.
 function elementExtrusionHeight(element, levels, columnTops) {
+  if (element.element_type === "Панель облицовки шахты") {
+    if (!Number.isFinite(element.height_mm) || element.height_mm <= 0) {
+      throw new Error(`У панели ${element.id} отсутствует высота из DXF`);
+    }
+    return element.height_mm;
+  }
   if (element.element_type === "Колонна") {
     const top = columnTops && columnTops.get(element.id);
     if (top !== undefined && top > element.elevation_mm) return top - element.elevation_mm;

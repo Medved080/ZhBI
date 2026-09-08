@@ -4527,6 +4527,11 @@
                  внутри формы гасятся отдельно (applyBulkEditRights). -->
             <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
+            <!-- Панели облицовки лифтовых шахт ГП1/ГП2 (2026-09-08): отдельный
+                 дополняющий импорт внутри объекта ЖБИ, не подменяет обычную
+                 загрузку чертежа выше — см. app.shaft_panels. Тот же раздел
+                 прав (drawings/write), что у обычного импорта. -->
+            <button id="btn-upload-shaft-panels" data-feature="drawings" data-feature-kind="write">Панели облицовки шахты</button>
             <button id="btn-upload-revit" data-feature="revit_import" data-feature-kind="write">Загрузить из Revit</button>
             <button id="btn-upload-pdf" data-feature="pdf_import" data-feature-kind="write">Загрузить из PDF</button>
             <button id="btn-export" data-feature="export" data-feature-kind="read">Экспорт в XLS</button>
@@ -5202,6 +5207,20 @@
     <div id="upload-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="upload-cancel">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Панели облицовки лифтовых шахт ГП1/ГП2 (2026-09-08): отдельный
+     дополняющий импорт внутри объекта ЖБИ, своя область (scope='gp1-gp2'),
+     не подменяет форму «Чертежи» выше — см. app.shaft_panels,
+     app/static/shaft-panels.js. Содержимое монтирует ES-модуль лениво
+     (mountShaftImport), сама модалка — только контейнер и заголовок. -->
+<div class="modal-backdrop" id="shaft-panels-backdrop">
+  <div class="modal wide">
+    <div id="shaft-panels-mount"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="shaft-panels-close">Закрыть</button>
     </div>
   </div>
 </div>

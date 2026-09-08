@@ -29,6 +29,7 @@ from import_elements import ensure_label_visibility
 from app import activity
 from app.db import touch_elements, assign_missing_element_uids
 from app.element_identity import MatchResult, match_elements
+from app.shaft_panels_scope import exclude_shaft_panels, assert_standard_match, register_primary_drawing
 
 # Поля строки чертежа, которые переносятся в существующую строку БД при
 # сопоставлении. Здесь НЕТ ни current_status, ни contract_id, ни дат
@@ -135,6 +136,11 @@ def analyze_import(conn: sqlite3.Connection, object_id: int, rows: list) -> dict
     MatchResult под ключом "match" — apply_import принимает его как есть,
     чтобы не считать сопоставление дважды."""
     existing = load_object_elements(conn, object_id)
+    # Панели облицовки шахт живут в СВОЕЙ области (scope='gp1-gp2',
+    # app.shaft_panels) и своём дополняющем чертеже — сверка обычного DXF их
+    # не видит вовсе, иначе первая же обычная перезагрузка чертежа сочла бы
+    # их «пропавшими» и сняла актуальность (см. Docs/DECISIONS.md).
+    existing = exclude_shaft_panels(conn, object_id, existing)
     match = match_elements(existing, rows)
     existing_by_id = {row["id"]: row for row in existing}
 
@@ -250,6 +256,10 @@ def apply_import(
     обновляется в любом случае: расходиться с чертежом по форме и
     координатам элемент не должен.
     """
+    # Защита второго направления: даже если сверка каким-то путём попала сюда
+    # с чужим match'ем, обычный импорт не должен коснуться панелей шахт —
+    # проверка ПЕРЕД первой записью (см. app.shaft_panels_scope).
+    assert_standard_match(conn, object_id, match)
     keep_marks = set(keep_mark_element_ids or ())
     refill_fields = refill_manual_fields or {}
     element_types = set()
@@ -412,17 +422,14 @@ def _sync_mark_links(conn: sqlite3.Connection, object_id: int) -> None:
 
 def _register_drawing(conn: sqlite3.Connection, object_id: int, source_file: str) -> None:
     """Актуальным становится только что загруженный чертёж; прежний
-    остаётся в списке чертежей объекта как история загрузок."""
-    conn.execute(
-        "UPDATE object_drawings SET is_current = 0 WHERE object_id = ?", (object_id,)
-    )
-    conn.execute(
-        "INSERT INTO object_drawings (object_id, source_file, is_current, imported_at) "
-        "VALUES (?, ?, 1, datetime('now')) "
-        "ON CONFLICT(object_id, source_file) DO UPDATE SET "
-        "is_current = 1, imported_at = datetime('now')",
-        (object_id, source_file),
-    )
+    остаётся в списке чертежей объекта как история загрузок.
+
+    Делегирует app.shaft_panels_scope.register_primary_drawing: она делает
+    то же самое (снимает is_current с прежних версий и ставит его новому
+    файлу), но НЕ трогает дополняющие чертежи панелей облицовки шахт
+    (`app.shaft_panels`) — обычная перезагрузка чертежа не должна снимать
+    их актуальность."""
+    register_primary_drawing(conn, object_id, source_file)
 
 
 def summary_for_log(counts: dict) -> str:

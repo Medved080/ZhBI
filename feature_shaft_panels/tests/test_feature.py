@@ -7,11 +7,15 @@ import tempfile
 import unittest
 
 import ezdxf
-from shaft_panels import TYPE, DrawingError, parse_drawing, place_panels
-from shaft_panels import storage
-from shaft_panels.api import PendingStore
+from app.shaft_panels import TYPE, DrawingError, parse_drawing, place_panels
+from app.shaft_panels import storage
+from app.shaft_panels.api import PendingStore
 from fastapi import HTTPException
 
+# ROOT — корень репозитория (../.. от feature_shaft_panels/tests): регрессия
+# гоняет ЖИВОЙ подключённый модуль app.shaft_panels, а не копию в комплекте
+# (её больше нет — единое ядро, см. feature_shaft_panels/CLAUDE_CODE.md §3).
+# Запуск из корня: .venv/bin/python -m unittest discover -s feature_shaft_panels/tests -t . -v
 ROOT=Path(__file__).resolve().parents[2]
 DXF=Path(os.environ.get('SHAFT_DXF', ROOT/'Input/260908_ПП 5-7_Е-Ж.dxf'))
 
@@ -182,27 +186,25 @@ class DrawingTests(unittest.TestCase):
 
 
     def test_standard_import_cannot_retire_panels(self):
-        import runpy
         from types import SimpleNamespace
-        helpers=runpy.run_path(str(ROOT/'feature_shaft_panels/integration/protect_standard_import.py'))
+        from app import shaft_panels_scope as helpers
         self.commit()
         rows=[dict(r) for r in self.c.execute('SELECT * FROM elements')]
-        self.assertEqual([r['id'] for r in helpers['exclude_shaft_panels'](self.c,1,rows)],[1])
+        self.assertEqual([r['id'] for r in helpers.exclude_shaft_panels(self.c,1,rows)],[1])
         with self.assertRaises(ValueError):
-            helpers['assert_standard_match'](self.c,1,SimpleNamespace(matched=[],retired_ids=[2]))
-        helpers['assert_standard_match'](self.c,1,SimpleNamespace(matched=[],retired_ids=[1]))
+            helpers.assert_standard_match(self.c,1,SimpleNamespace(matched=[],retired_ids=[2]))
+        helpers.assert_standard_match(self.c,1,SimpleNamespace(matched=[],retired_ids=[1]))
 
     def test_primary_drawing_registration_preserves_supplement(self):
-        import runpy
-        helpers=runpy.run_path(str(ROOT/'feature_shaft_panels/integration/protect_standard_import.py'))
+        from app import shaft_panels_scope as helpers
         self.commit()
-        helpers['register_primary_drawing'](self.c,1,'base-v2.dxf')
-        current=helpers['current_drawing_sources'](self.c,1)
+        helpers.register_primary_drawing(self.c,1,'base-v2.dxf')
+        current=helpers.current_drawing_sources(self.c,1)
         self.assertEqual(len(current),2)
         self.assertIn('base-v2.dxf',current)
         self.assertNotIn('base.dxf',current)
         supplement=next(name for name in current if name!='base-v2.dxf')
-        with self.assertRaises(ValueError):helpers['register_primary_drawing'](self.c,1,supplement)
+        with self.assertRaises(ValueError):helpers.register_primary_drawing(self.c,1,supplement)
 
 
 class TokenTests(unittest.TestCase):
@@ -227,7 +229,7 @@ class TokenTests(unittest.TestCase):
 class ApiTests(unittest.TestCase):
     def setUp(self):
         from fastapi import FastAPI
-        from shaft_panels.api import build_router
+        from app.shaft_panels.api import build_router
         self.tmp=tempfile.TemporaryDirectory();self.path=Path(self.tmp.name)/'test.db'
         c=database();c2=sqlite3.connect(self.path);c.backup(c2);c.close()
         axes={'numeric':{'5':10000,'7':19000},'letter':{'Е':20000,'Ж':32000}}

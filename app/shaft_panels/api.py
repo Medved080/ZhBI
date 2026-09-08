@@ -51,12 +51,16 @@ class ApplyRequest(BaseModel):
     retire_missing: bool = False
 
 
-def build_router(*,connection_factory,get_user,assert_access,backup,before_commit):
+def build_router(*,connection_factory,get_user,assert_access,backup,before_commit,after_apply=None):
     """Required host callbacks:
     assert_access(conn,user,object_id) -> enforces drawings/write.
     backup(user,object_id) -> app's backup_before_import wrapper.
     before_commit(conn,user,object_id,changed_ids,summary) -> no commit, no second writer.
     get_user -> normal cookie-session dependency (preserves host CSRF middleware).
+    after_apply(user,object_id,summary) -> OPTIONAL, called AFTER the transaction has
+    committed (storage.apply() already returned). Best-effort: a failure here must not
+    make the caller believe the import itself failed, since shaft_panel_imports already
+    recorded it — exceptions are swallowed.
     """
     router=APIRouter(prefix='/shaft-panels',tags=['shaft-panels'])
     pending=PendingStore()
@@ -124,6 +128,11 @@ def build_router(*,connection_factory,get_user,assert_access,backup,before_commi
                     acknowledged_warnings=body.acknowledged_warnings,retire_missing=body.retire_missing,
                     before_commit=checked_hook)
                 pending.items.pop(body.token,None)
+                if after_apply:
+                    try:
+                        after_apply(user,object_id,result)
+                    except Exception:
+                        pass
                 return result
             except DrawingError as exc:
                 raise HTTPException(409,str(exc)) from exc
