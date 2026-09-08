@@ -8,7 +8,7 @@
 // потому что сервер в интернет не выпущен. Файла нет — рисуем точки на
 // пустом фоне: взаимное расположение площадок видно и так.
 
-let deps = null;          // {api, escapeHtml, showToast, switchObject}
+let deps = null;          // {api, escapeHtml, showToast, switchObject, statusColor, statusLabel}
 let maplibre = null;      // window.maplibregl после загрузки UMD-сборки
 let pmtilesReady = false;
 
@@ -326,7 +326,11 @@ export async function renderProjectMap(контейнер, { onOpenObject, onEmp
     узел.className = "map-popup";
     узел.innerHTML = `
       <div class="map-popup-project">${deps.escapeHtml(p.project_name || "")}</div>
-      <div class="map-popup-name">${deps.escapeHtml(p.name)}</div>
+      <div class="map-popup-name">
+        <span class="status-dot" style="background:${deps.statusColor(p.status)}"></span>
+        ${deps.escapeHtml(p.name)}
+        <span class="map-popup-status">${deps.escapeHtml(deps.statusLabel(p.status))}</span>
+      </div>
       ${p.address ? `<div class="map-popup-addr">${deps.escapeHtml(p.address)}</div>` : ""}
       <div class="map-popup-facts">
         Элементов: ${p.elements}. Смонтировано: ${доля}.

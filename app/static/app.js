@@ -1438,12 +1438,23 @@ function objectSwitchItemButton(проект, объект, показатьПр
   // проектом: вне своей группы одно имя «Корпус 3» ничего не говорит — таких
   // корпусов на площадках предприятия несколько.
   имя.textContent = показатьПроект ? `${проект.name} · ${объект.name}` : объект.name;
-  b.appendChild(имя);
   const статус = объект.status || "active";
+  // Кружок цвета статуса — ПЕРЕД именем, у любого статуса, включая «в
+  // работе» (2026-09-08, живой запрос «статус везде цветом, в том числе в
+  // форме выбора»): текстовая метка ниже по-прежнему молчит про «в работе»
+  // — это подразумеваемое по умолчанию, а цвет читается быстрее текста.
+  const точка = document.createElement("span");
+  точка.className = "status-dot";
+  точка.style.background = objStatusColor(статус);
+  точка.title = CATALOG_STATUS_LABELS[статус] || "";
+  b.appendChild(точка);
+  b.appendChild(имя);
   if (OBJECT_STATUS_BADGE[статус]) {
     const метка = document.createElement("span");
     метка.className = "object-switch-badge";
     метка.textContent = OBJECT_STATUS_BADGE[статус];
+    метка.style.color = objStatusColor(статус);
+    метка.style.background = `color-mix(in srgb, ${objStatusColor(статус)} 15%, var(--color-surface-sunken))`;
     b.appendChild(метка);
   }
   const счёт = document.createElement("span");
@@ -1465,8 +1476,13 @@ function renderObjectSwitchLabel() {
   // 2026-08-01: «а где проекты? почему я вижу только объект?»). Прежняя
   // экономия места скрывала уровень иерархии: человек не видел, в каком
   // проекте работает, и слово «проект» из интерфейса просто исчезало.
-  objectSwitchLabel.textContent = текущий
-    ? `${текущий.project.name} · ${текущий.object.name}`
+  //
+  // Кружок цвета статуса ОБЪЕКТА — впереди, тем же способом, что и везде
+  // (2026-09-08, живой запрос «статус везде цветом, в том числе в форме
+  // выбора на панели»): крошка это тоже форма выбора, только свёрнутая.
+  objectSwitchLabel.innerHTML = текущий
+    ? objStatusDotHtml(текущий.object.status)
+      + escapeHtml(`${текущий.project.name} · ${текущий.object.name}`)
     : "Проект и объект не выбраны";
 }
 
@@ -1498,14 +1514,37 @@ function renderObjectSwitchList() {
   }
 
   // ---- Группы по проектам ----
+  // Сначала проекты, где есть хоть один объект с загруженными элементами
+  // (живой запрос 2026-09-08: «сначала проекты с данными, ниже все
+  // остальные») — стройка, где уже идёт работа, находится первым взглядом,
+  // а пустые заготовки (проект заведён заранее, чертёж ещё не загружен) не
+  // перемешиваются с ними вперемешку. Внутри каждой из двух групп порядок
+  // прежний — по имени, как отдаёт /projects-tree.
+  const группыПроектов = [];
   for (const проект of state.projects) {
     const свои = видимые.filter((з) => з.проект === проект);
     if (!свои.length) continue;
+    группыПроектов.push({
+      проект, свои,
+      естьДанные: свои.some((з) => (з.объект.elements || 0) > 0),
+    });
+  }
+  группыПроектов.sort((a, b) => (b.естьДанные ? 1 : 0) - (a.естьДанные ? 1 : 0));
+
+  for (const { проект, свои } of группыПроектов) {
     // При поиске группы раскрыты всегда: человек ищет объект, а не проект, и
     // заставлять его дораскрывать найденное — лишний ход.
     const раскрыт = !!objectSwitch.query
       || objectSwitch.expanded.has(проект.id)
       || (текущий && текущий.project === проект);
+
+    // Проект и его объекты — ОДНОЙ плашкой с тенью (2026-09-08, живой
+    // запрос «объединение объектов вместе с их проектом на одной плашке с
+    // тенью, согласно общему дизайну») — тем же языком карточек, что у
+    // .form-card и .toolbar-tile по всему интерфейсу, вместо плоского
+    // списка со свободно висящей строкой-заголовком.
+    const карточка = document.createElement("div");
+    карточка.className = "object-switch-card";
 
     const head = document.createElement("button");
     head.type = "button";
@@ -1531,12 +1570,13 @@ function renderObjectSwitchList() {
       else objectSwitch.expanded.add(проект.id);
       renderObjectSwitchList();
     });
-    фрагмент.appendChild(head);
+    карточка.appendChild(head);
 
     if (раскрыт) {
-      свои.forEach((з) => фрагмент.appendChild(
+      свои.forEach((з) => карточка.appendChild(
         objectSwitchItemButton(з.проект, з.объект, false)));
     }
+    фрагмент.appendChild(карточка);
   }
 
   if (!видимые.length) {
@@ -11341,6 +11381,37 @@ const CATALOG_STATUS_LABELS = {
   archived: "Архивный",
 };
 
+// Цвет статуса объекта/проекта — «светофор по стадии» (2026-09-08,
+// согласовано с пользователем): холодный → тёплый → тревожный → спокойный →
+// нейтральный. Один фиксированный набор на весь интерфейс (крошка тулбара,
+// поповер выбора объекта, дерево справочника, форма) — не путать с
+// НАСТРАИВАЕМЫМИ цветами статуса МОНТАЖА изделия (app/settings.py,
+// «Цвет по статусу»): это про стадию стройки целиком, не про элемент.
+// OBJ_ — префикс, чтобы не столкнуться с statusColor/statusBadgeHtml ниже
+// по файлу: та пара про НАСТРАИВАЕМЫЙ цвет статуса МОНТАЖА изделия
+// (state.statusColors из БД), это — про фиксированную стадию стройки
+// объекта/проекта. Разные домены, случайно одинаковое короткое имя —
+// один раз уже столкнулись молча (statusColor() тихо резолвился в чужую
+// функцию, все кружки красились одним и тем же серым #9aa0a6).
+const OBJ_STATUS_COLORS = {
+  perspective: "#4C6EF5",
+  active: "#2F9E44",
+  suspended: "#F08C00",
+  completed: "#1971C2",
+  archived: "#868E96",
+};
+
+function objStatusColor(статус) {
+  return OBJ_STATUS_COLORS[статус || "active"] || OBJ_STATUS_COLORS.active;
+}
+
+// Кружок-индикатор цвета статуса — переиспользуется везде, где статус
+// показывается не текстовой меткой (крошка тулбара, форма справочника).
+function objStatusDotHtml(статус, title) {
+  return `<span class="status-dot" style="background:${objStatusColor(статус)}" ` +
+    `title="${escapeHtml(title || CATALOG_STATUS_LABELS[статус] || "")}"></span>`;
+}
+
 function setCatalogStatus(text, isError) {
   const el = document.getElementById("catalog-status");
   el.textContent = text || "";
@@ -11419,16 +11490,27 @@ function catalogNodeButton({ тип, запись, проект }) {
     b.appendChild(превью);
   }
 
+  const статус = запись.status || "active";
+  const точка = document.createElement("span");
+  точка.className = "status-dot";
+  точка.style.background = objStatusColor(статус);
+  точка.title = CATALOG_STATUS_LABELS[статус] || "";
+  b.appendChild(точка);
+
   const имя = document.createElement("span");
   имя.className = "catalog-node-name";
   имя.textContent = запись.name;
   b.appendChild(имя);
 
-  const статус = запись.status || "active";
   if (статус !== "active") {
+    // Полная подпись по статусу, а не только «архив»/«завершён»: раньше
+    // любой ИНОЙ статус (перспективный, приостановлен) молча показывался
+    // как «завершён» — двузначная ветка не поспевала за пятью значениями.
     const метка = document.createElement("span");
     метка.className = "catalog-node-badge";
-    метка.textContent = статус === "archived" ? "архив" : "завершён";
+    метка.textContent = CATALOG_STATUS_LABELS[статус] || статус;
+    метка.style.color = objStatusColor(статус);
+    метка.style.background = `color-mix(in srgb, ${objStatusColor(статус)} 15%, var(--color-surface-2))`;
     b.appendChild(метка);
   }
 
@@ -11551,10 +11633,13 @@ function catalogFieldsHtml(запись, тип, редактируем) {
         <label class="object-field"><span>Наименование</span>
           <input type="text" data-field="name" value="${з(запись && запись.name)}" ${выкл}/></label>
         <label class="object-field"><span>Статус</span>
-          <select data-field="status" ${выкл}>
-            ${Object.entries(CATALOG_STATUS_LABELS).map(([k, v]) =>
-              `<option value="${k}" ${статус === k ? "selected" : ""}>${v}</option>`).join("")}
-          </select></label>
+          <div class="field-with-link">
+            <span class="status-dot" id="catalog-status-dot" style="background:${objStatusColor(статус)}"></span>
+            <select data-field="status" id="catalog-status-select" ${выкл}>
+              ${Object.entries(CATALOG_STATUS_LABELS).map(([k, v]) =>
+                `<option value="${k}" ${статус === k ? "selected" : ""}>${v}</option>`).join("")}
+            </select>
+          </div></label>
         ${тип === "object" ? `
         <label class="object-field"><span>Проект</span>
           <select data-field="project_id" ${выкл}>${проекты}</select></label>
@@ -11734,6 +11819,15 @@ function renderCatalogForm() {
       const значение = safeHttpUrl(полеСсылки.value);
       кнопкаСсылки.href = значение;
       кнопкаСсылки.hidden = !значение;
+    });
+  }
+
+  // Кружок статуса — вживую вслед за выбором в select, той же логикой.
+  const селектСтатуса = document.getElementById("catalog-status-select");
+  const точкаСтатуса = document.getElementById("catalog-status-dot");
+  if (селектСтатуса && точкаСтатуса) {
+    селектСтатуса.addEventListener("change", () => {
+      точкаСтатуса.style.background = objStatusColor(селектСтатуса.value);
     });
   }
 
@@ -12172,7 +12266,11 @@ let projectMap = null;      // результат renderProjectMap
 async function ensureMapModule() {
   if (!mapModule) {
     mapModule = await import("/static/map.js");
-    mapModule.init({ api, escapeHtml, showToast, switchObject });
+    mapModule.init({
+      api, escapeHtml, showToast, switchObject,
+      statusColor: objStatusColor,
+      statusLabel: (s) => CATALOG_STATUS_LABELS[s || "active"] || s || "",
+    });
   }
   return mapModule;
 }
@@ -12202,18 +12300,27 @@ function renderMapSide(объекты, фильтр) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "map-side-item";
+    // Два разных кружка — не спутать: этот, зелёно-серый, про ДОЛЮ
+    // СМОНТИРОВАННОГО (как и был), а .status-dot ниже — про СТАДИЮ стройки
+    // (перспективный/в работе/приостановлен/завершён/архивный, живой запрос
+    // 2026-09-08 «статус везде цветом... и на карте проектов тоже»). Разные
+    // измерения одного объекта, оба на виду разом.
     const точка = document.createElement("span");
     точка.className = "map-side-dot";
     точка.style.background = o.percent === null ? "#9e9e9e"
       : o.percent >= 100 ? "#2e7d32" : o.percent >= 60 ? "#7cb342"
       : o.percent >= 30 ? "#f9a825" : o.percent > 0 ? "#ef6c00" : "#9e9e9e";
+    const статусТочка = document.createElement("span");
+    статусТочка.className = "status-dot";
+    статусТочка.style.background = objStatusColor(o.status);
+    статусТочка.title = CATALOG_STATUS_LABELS[o.status || "active"] || "";
     const имя = document.createElement("span");
     имя.className = "map-side-name";
     имя.textContent = o.name;
     const доля = document.createElement("span");
     доля.className = "map-side-percent";
     доля.textContent = o.percent === null ? "—" : o.percent + "%";
-    b.append(точка, имя, доля);
+    b.append(статусТочка, точка, имя, доля);
     b.addEventListener("click", () => projectMap && projectMap.навести(o.id));
     фрагмент.appendChild(b);
   });

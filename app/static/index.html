@@ -2424,13 +2424,23 @@
     font-size: 11px; color: var(--color-text-muted);
   }
   .object-switch-foot label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  /* Плашка «проект + его объекты» (2026-09-08, живой запрос: «объединение
+     объектов вместе с их проектом на одной плашке с тенью, согласно общему
+     дизайну») — тот же язык карточек, что у .form-card и .toolbar-tile по
+     всему интерфейсу: фон, рамка, скругление, тень. Раньше заголовок
+     проекта был свободно висящей строкой без выраженной границы группы. */
+  .object-switch-card {
+    margin: 6px 8px; background: var(--color-surface);
+    border: 1px solid var(--dict-card-border); border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card); overflow: hidden;
+  }
   /* Заголовок проекта — КНОПКА, а не подпись: по ней сворачивают группу.
      Развёрнут только проект текущего объекта, иначе список остаётся тем же
      полотном, от которого уходили. */
   #object-switch-menu button.object-switch-project {
     display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
     font-size: 11px; font-weight: 700; color: var(--color-text-muted);
-    padding: 6px 12px 4px; text-transform: uppercase; letter-spacing: .03em;
+    padding: 8px 12px 6px; text-transform: uppercase; letter-spacing: .03em;
     background: none; border: 0; cursor: pointer;
   }
   .object-switch-project-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
@@ -2442,6 +2452,15 @@
   }
   #object-switch-menu button.object-switch-item {
     display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
+  }
+  /* Кружок цвета статуса (2026-09-08, живой запрос «статус везде цветом») —
+     общий класс, переиспользуется в поповере выбора объекта, в крошке
+     тулбара и в дереве справочника «Проекты и объекты». Цвет задаётся
+     инлайново (STATUS_COLORS в app.js) — статусов ровно пять и фиксированы,
+     заводить под них ещё один настраиваемый справочник цветов незачем. */
+  .status-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    flex: 0 0 auto; margin-right: 2px;
   }
   #object-switch-menu button.object-switch-item.active { font-weight: 700; }
   /* Клавиатурное выделение — рамкой, а не фоном: фоном показывается
@@ -2596,7 +2615,11 @@
   .map-side-project { font-size: 11px; color: var(--color-text-muted); padding: 8px 10px 2px; text-transform: uppercase; }
   .map-side-percent { flex: 0 0 auto; font-size: 11px; color: var(--color-text-muted); }
   .map-popup-project { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; }
-  .map-popup-name { font-weight: 700; margin-bottom: 2px; }
+  .map-popup-name { font-weight: 700; margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
+  /* Стадия стройки (2026-09-08, живой запрос «статус везде цветом... и на
+     карте проектов тоже») — рядом с кружком доли смонтированного (тот
+     цвет — про ДРУГОЕ измерение, прогресс монтажа, а не про стадию). */
+  .map-popup-status { font-size: 11px; font-weight: 400; color: var(--color-text-muted); }
   .map-popup-addr { font-size: 12px; color: var(--color-text-muted); margin-bottom: 4px; }
   .map-popup-facts { font-size: 12px; margin-bottom: 8px; }
   .map-empty { padding: 20px; color: var(--color-text-muted); font-size: 13px; }
