@@ -164,7 +164,7 @@ def fill_missing(conn, object_id: int) -> dict:
     # могла измениться, и прежнее решение должно пересчитаться, а не
     # остаться навсегда.
     for row in conn.execute(
-        "SELECT id, outline_json FROM revit_elements "
+        "SELECT id, section_id, outline_json FROM revit_elements "
         "WHERE object_id = ? AND is_current = 1 AND outline_json IS NOT NULL "
         "AND (section_id IS NULL OR section_source = 'геометрия')", (object_id,),
     ):
@@ -175,7 +175,14 @@ def fill_missing(conn, object_id: int) -> dict:
             continue
         код = section_at(зоны, outline)
         if код and код in коды:
-            правки.append((коды[код], row["id"]))
+            # Уже верно назначенное — не трогать: без этой проверки
+            # «назначено» на КАЖДЫЙ прогон пересчитывало заново всё, что
+            # уже правильно стоит геометрией (лишняя запись в БД и
+            # `updated_at`), и отчёт кнопки «Обновить принадлежность»
+            # никогда не сходился к нулю, даже когда менять уже нечего
+            # (живая проверка 2026-09-09).
+            if коды[код] != row["section_id"]:
+                правки.append((коды[код], row["id"]))
         else:
             осталось += 1
 
@@ -219,7 +226,7 @@ def _overlap_area(footprint, box):
     return площадь if площадь > 0 else 1.0
 
 
-def fill_by_volume(conn, object_id: int) -> dict:
+def fill_by_volume(conn, object_id: int, override_param: bool = False) -> dict:
     """Доопределение секции по ОБЪЁМУ блока (`app.block_geometry.block_box`
     — прямая геометрия `block_boxes` или, второй по приоритету, оси
     здания), а не по растровому голосованию соседей (`fill_missing`).
@@ -234,8 +241,23 @@ def fill_by_volume(conn, object_id: int) -> dict:
     Побеждает секция, куда попала БОЛЬШАЯ часть габарита элемента (площадь
     пересечения), не просто точка внутри контура — прямое требование
     пользователя (2026-09-09): элемент на стыке двух секций достаётся той,
-    что накрыла его большей долей. Параметр не перебивается — тот же
-    инвариант, что у `fill_missing`."""
+    что накрыла его большей долей.
+
+    `override_param=False` (по умолчанию, автоматические проходы —
+    загрузка пакета Revit, сохранение осей/прямоугольников блока):
+    параметр не перебивается, тот же инвариант, что у `fill_missing`, —
+    «это данные модели, а не брак программы».
+
+    `override_param=True` (только кнопка «Обновить принадлежность» —
+    ручное, осознанное действие пользователя с проверкой результата
+    глазами): перебивает и `section_source='параметр'` тоже, если
+    геометрия явно не согласна. Прямое решение пользователя 2026-09-09 —
+    живой пример показал, что инвариант ломается для секции, которой на
+    момент исходного разбора PDF ещё не было («Рампа»): стена физически
+    внутри её блока, а параметр остался указывать на С01, потому что при
+    разборе секция «Рампа» не существовала как область чертежа и делить
+    контур было не с чем. Ручная геометрия блока — то, что человек только
+    что сам нарисовал, — точнее эвристики парсера PDF на таких стыках."""
     from app.block_geometry import section_level_boxes_xy
 
     sections = [dict(r) for r in conn.execute(
@@ -276,33 +298,44 @@ def fill_by_volume(conn, object_id: int) -> dict:
     if not зоны_по_этажам:
         return {"назначено": 0, "осталось": 0, "без_геометрии": без_геометрии}
 
+    условие_кандидата = ("is_current = 1" if override_param
+                         else "is_current = 1 AND (section_id IS NULL OR section_source = 'геометрия')")
     правки = []
     осталось = 0
+    перебито_у_параметра = 0
     for row in conn.execute(
-        "SELECT id, level_id, outline_json, x, y FROM revit_elements "
-        "WHERE object_id = ? AND is_current = 1 "
-        "AND (section_id IS NULL OR section_source = 'геометрия')", (object_id,),
+        "SELECT id, section_id, section_source, level_id, outline_json, x, y FROM revit_elements "
+        "WHERE object_id = ? AND " + условие_кандидата, (object_id,),
     ):
         candidates = зоны_по_этажам.get(row["level_id"])
         footprint = _footprint(row["outline_json"], row["x"], row["y"]) if candidates else None
         if not candidates or footprint is None:
-            осталось += 1
+            if row["section_id"] is None:
+                осталось += 1
             continue
         победитель, лучшая_площадь = None, 0.0
         for section_id, boxes in candidates:
             доля = sum(_overlap_area(footprint, box) for box in boxes)
             if доля > лучшая_площадь:
                 победитель, лучшая_площадь = section_id, доля
-        if победитель is not None:
+        if победитель is None:
+            if row["section_id"] is None:
+                осталось += 1
+        elif победитель != row["section_id"]:
+            # Уже верно назначенное (совпало с параметром/уровнем) трогать
+            # незачем — переписывать source на 'геометрия', когда геометрия
+            # и так согласна с моделью, только обесценило бы более
+            # надёжную пометку без всякой причины.
+            if row["section_source"] == "параметр":
+                перебито_у_параметра += 1
             правки.append((победитель, row["id"]))
-        else:
-            осталось += 1
 
     if правки:
         conn.executemany(
             "UPDATE revit_elements SET section_id = ?, section_source = 'геометрия', "
             "updated_at = datetime('now') WHERE id = ?", правки)
-    return {"назначено": len(правки), "осталось": осталось, "без_геометрии": без_геометрии}
+    return {"назначено": len(правки), "осталось": осталось, "без_геометрии": без_геометрии,
+            "перебито_у_параметра": перебито_у_параметра}
 
 
 def fill_missing_levels(conn, object_id: int) -> dict:
@@ -366,16 +399,46 @@ def recalc_membership(conn, object_id: int) -> dict:
     блокам». Этаж по отметке — ПЕРВЫМ: он ни от чего не зависит, а
     доопределение секции (и растром, и объёмом) само использует
     `level_id` элемента, чтобы понять, В КАКОМ этаже искать зону/блок —
-    чем больше элементов уже получили этаж, тем точнее секция."""
-    levels = fill_missing_levels(conn, object_id)
+    чем больше элементов уже получили этаж, тем точнее секция.
+
+    Объёмный проход идёт с `override_param=True` — ТОЛЬКО здесь, это
+    ручное действие пользователя с проверкой результата глазами (прямое
+    решение 2026-09-09, живой пример — «Рампа», см. `fill_by_volume`).
+    Растровый проход параметр по-прежнему не трогает: голосование соседей
+    эвристичнее нарисованной руками геометрии блока, перебивать им модель
+    не тот уровень доверия.
+
+    Отчёт — по факту «было/стало», а не суммой счётчиков «назначено» у
+    трёх проходов: растр и объём на спорных элементах иногда решают
+    ПО-РАЗНОМУ (застройка на стыке блоков) — растр назначает своё, объём
+    внутри того же вызова тут же переигрывает на своё, следующий прогон
+    растр переигрывает обратно; итоговые данные при этом стабильны (то же
+    значение снова и снова), но сумма «назначено» — нет, и кнопка на
+    ровном месте показывала бы «пересчитано 286» на объекте, где на
+    самом деле уже нечего менять (живая проверка 2026-09-09)."""
+    было = {r["id"]: (r["section_id"], r["level_id"]) for r in conn.execute(
+        "SELECT id, section_id, level_id FROM revit_elements "
+        "WHERE object_id = ? AND is_current = 1", (object_id,))}
+
+    fill_missing_levels(conn, object_id)
     by_raster = fill_missing(conn, object_id)
-    by_volume = fill_by_volume(conn, object_id)
+    by_volume = fill_by_volume(conn, object_id, override_param=True)
     conn.commit()
+
+    стало = {r["id"]: (r["section_id"], r["level_id"]) for r in conn.execute(
+        "SELECT id, section_id, level_id FROM revit_elements "
+        "WHERE object_id = ? AND is_current = 1", (object_id,))}
+    этажей_изменено = sum(1 for i, (s0, l0) in было.items() if стало[i][1] != l0)
+    секций_изменено = sum(1 for i, (s0, l0) in было.items() if стало[i][0] != s0)
+    без_этажа = sum(1 for _, l in стало.values() if l is None)
+    без_секции = sum(1 for s, _ in стало.values() if s is None)
+
     return {
-        "этажей_назначено": levels["назначено"],
-        "этажей_осталось": levels["осталось"],
-        "секций_назначено": by_raster["назначено"] + by_volume["назначено"],
-        "секций_осталось": by_volume["осталось"],
+        "этажей_назначено": этажей_изменено,
+        "этажей_осталось": без_этажа,
+        "секций_назначено": секций_изменено,
+        "секций_осталось": без_секции,
         "конфликтов": by_raster["конфликтов"],
         "без_геометрии": by_volume.get("без_геометрии") or [],
+        "перебито_у_параметра": by_volume.get("перебито_у_параметра") or 0,
     }

@@ -31421,6 +31421,13 @@ document.getElementById("blk-recalc-membership").addEventListener("click", async
       `Секций назначено: ${итог.секций_назначено} (без секции осталось: ${итог.секций_осталось})`,
     ];
     if (итог.конфликтов) строки.push(`Расхождений параметра модели с геометрией: ${итог.конфликтов}`);
+    // Кнопка, в отличие от автоматических проходов, перебивает и
+    // section_source='параметр' геометрией (2026-09-09, прямое решение
+    // пользователя) — сколько именно перебито, стоит видеть явно, а не
+    // догадываться по общему счётчику «Секций назначено».
+    if (итог.перебито_у_параметра) {
+      строки.push(`Из них перебито у параметра модели геометрией блока: ${итог.перебито_у_параметра}`);
+    }
     // Явная причина, а не молчаливый нуль (2026-09-09, живой отчёт
     // пользователя: секция заведена, а элементы всё равно оставались в
     // соседней) — без прямоугольника блока или осей объёму нечем
@@ -31954,21 +31961,29 @@ function bindBlkGeoDrag() {
         box.y0 = r.value; blocked = r.blocked;
       }
     } else {
-      // Угол двигает ДВЕ границы разом — клампятся последовательно, каждая
-      // по СВЕЖЕМУ состоянию бокса (та же логика, что у переноса целиком).
+      // Угол двигает ДВЕ границы разом. Обе клампятся по ОДНОМУ и тому же
+      // замороженному `orig` (не по текущему `box`, который в X-шаге на
+      // этом же кадре ещё несёт Y с ПРЕДЫДУЩЕГО кадра, а не с этого) —
+      // иначе X-шаг и Y-шаг попеременно читают друг у друга état с
+      // разных кадров, и у самого угла соседнего блока это превращалось в
+      // обратную связь между кадрами: клин дрожал и отскакивал вместо
+      // того, чтобы просто остановиться (живой отчёт пользователя,
+      // 2026-09-09). Ценой чуть менее точного диагонального клампа у
+      // самого угла — зато детерминированно и без дрожи.
       const west = blkGeoDrag.corner.includes("l"), north = blkGeoDrag.corner === "tl" || blkGeoDrag.corner === "tr";
+      const refBox = { x0: orig.x0, x1: orig.x1, y0: orig.y0, y1: orig.y1 };
       if (west) {
-        const r = blkGeoClampEdgeValue({ x0: orig.x0, x1: orig.x1, y0: box.y0, y1: box.y1 }, "x0", orig.x0 + dxWorld, others);
+        const r = blkGeoClampEdgeValue(refBox, "x0", orig.x0 + dxWorld, others);
         box.x0 = r.value; blocked = blocked || r.blocked;
       } else {
-        const r = blkGeoClampEdgeValue({ x0: orig.x0, x1: orig.x1, y0: box.y0, y1: box.y1 }, "x1", orig.x1 + dxWorld, others);
+        const r = blkGeoClampEdgeValue(refBox, "x1", orig.x1 + dxWorld, others);
         box.x1 = r.value; blocked = blocked || r.blocked;
       }
       if (north) {
-        const r = blkGeoClampEdgeValue({ x0: box.x0, x1: box.x1, y0: orig.y0, y1: orig.y1 }, "y1", orig.y1 + dyWorld, others);
+        const r = blkGeoClampEdgeValue(refBox, "y1", orig.y1 + dyWorld, others);
         box.y1 = r.value; blocked = blocked || r.blocked;
       } else {
-        const r = blkGeoClampEdgeValue({ x0: box.x0, x1: box.x1, y0: orig.y0, y1: orig.y1 }, "y0", orig.y0 + dyWorld, others);
+        const r = blkGeoClampEdgeValue(refBox, "y0", orig.y0 + dyWorld, others);
         box.y0 = r.value; blocked = blocked || r.blocked;
       }
     }
