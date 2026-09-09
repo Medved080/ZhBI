@@ -266,6 +266,18 @@ def fill_by_volume(conn, object_id: int, override_param: bool = False) -> dict:
         return {"назначено": 0, "осталось": 0, "без_геометрии": []}
     levels = [dict(r) for r in conn.execute(
         "SELECT id FROM object_levels WHERE object_id = ?", (object_id,))]
+    # Секция участвует в объёме ТОЛЬКО там, где у неё есть БЛОК (пара
+    # секция×этаж, заводится ЯВНО — `app/blocks.py`, «блоки — НЕ декартово
+    # произведение секций и этажей»). Без этой проверки удаление блока не
+    # останавливало бы объём вовсе: оси заданы НА СЕКЦИЮ целиком (одна
+    # привязка «действует на ВСЕ её этажи»), и `section_level_boxes_xy`
+    # честно считает осевой прямоугольник для любого этажа секции, даже
+    # там, где пользователь только что явно стёр блок — «удалил С01 с
+    # подземного этажа, остались Паркинг и Рампа» (живой отчёт
+    # пользователя 2026-09-10): без проверки С01 всё равно оставался бы
+    # кандидатом на этом этаже через осевой запасной путь.
+    блоки_объекта = {(r["section_id"], r["level_id"]) for r in conn.execute(
+        "SELECT section_id, level_id FROM blocks WHERE object_id = ?", (object_id,))}
 
     # этаж -> [(section_id, [(x0,y0,x1,y1), ...]), ...] — только там, где у
     # секции вообще есть объём на этом этаже. Только x,y (`block_box` даёт
@@ -278,6 +290,8 @@ def fill_by_volume(conn, object_id: int, override_param: bool = False) -> dict:
     for level in levels:
         candidates = []
         for section in sections:
+            if (section["id"], level["id"]) not in блоки_объекта:
+                continue
             box = section_level_boxes_xy(conn, object_id, section["id"], level["id"])
             if box.get("ok"):
                 candidates.append((section["id"],
@@ -364,10 +378,20 @@ def section_shares(conn, object_id: int, element_id: int) -> list:
     fx0, fy0, fx1, fy1 = footprint
     габарит = (fx1 - fx0) * (fy1 - fy0)
 
+    # Та же оговорка, что у fill_by_volume: секция считается кандидатом
+    # только там, где у неё есть БЛОК на этом этаже (пара заводится
+    # ЯВНО) — иначе удалённый блок не переставал бы участвовать в долях
+    # через осевой запасной путь (оси заданы на секцию целиком).
+    блоки_этажа = {r["section_id"] for r in conn.execute(
+        "SELECT section_id FROM blocks WHERE object_id = ? AND level_id = ?",
+        (object_id, row["level_id"]))}
+
     результат = []
     for section in conn.execute(
         "SELECT id, code FROM object_sections WHERE object_id = ?", (object_id,)
     ):
+        if section["id"] not in блоки_этажа:
+            continue
         box = section_level_boxes_xy(conn, object_id, section["id"], row["level_id"])
         if not box.get("ok"):
             continue
