@@ -82,6 +82,7 @@ from app.dxf_import import (
 )
 from app import revit_colors, revit_import, revit_plan
 from app import blocks as blocks_mod
+from app import revit_sections
 from app import work_progress as work_progress_mod
 from app import work_types_import
 from app import work_fact
@@ -6238,11 +6239,20 @@ def put_block_boxes(object_id: int, block_id: int, body: BlockBoxesIn,
             warnings = blocks_mod.set_block_boxes(conn, object_id, block_id, boxes)
         except blocks_mod.BlockError as e:
             raise HTTPException(status_code=422, detail=str(e))
+        # Только на РУЧНОЙ правке из этого экрана — не внутри
+        # `blocks_mod.set_block_boxes` самого: тот же вызов используется
+        # массовым импортом PDF (`app/pdf_import.py`,
+        # `app/pdf_facade_import.py`), который решает секцию элемента
+        # НАПРЯМУЮ по границе чертежа и не должен получать статистическую
+        # геометрическую переоценку на каждый из десятков блоков разом.
+        итог = {"назначено": 0, "осталось": 0}
+        if boxes:
+            итог = revit_sections.fill_by_volume(conn, object_id)
     finally:
         conn.close()
     activity.log("block_geometry_edit", user=user, entity_type="object", entity_id=object_id,
                 details={"block_id": block_id, "прямоугольников": len(boxes)})
-    return {"ok": True, "warnings": warnings}
+    return {"ok": True, "warnings": warnings, **итог}
 
 
 @app.delete("/objects/{object_id}/levels/{level_id}")
@@ -6265,6 +6275,24 @@ def delete_block_level(object_id: int, level_id: int,
 class BlockCreateIn(BaseModel):
     section_id: int
     level_id: int
+
+
+@app.post("/objects/{object_id}/blocks/recalc-membership")
+def recalc_block_membership(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Кнопка «Обновить принадлежность» («Учёт по блокам»): пересчитать
+    этаж и секцию элементов модели заново — вручную заданную геометрию
+    блоков (`block_boxes`) массовая правка/импорт не всегда успевает
+    подхватить сама (2026-09-09, живой отчёт пользователя: геометрия
+    задана руками, без осей, счётчик секции оставался нулевым)."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "blocks", "write")
+        итог = revit_sections.recalc_membership(conn, object_id)
+    finally:
+        conn.close()
+    activity.log("revit_section_recalc", user=user, entity_type="object", entity_id=object_id,
+                details=итог)
+    return {"ok": True, **итог}
 
 
 @app.get("/objects/{object_id}/blocks")

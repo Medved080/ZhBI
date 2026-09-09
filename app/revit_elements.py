@@ -304,6 +304,12 @@ def apply(conn, object_id: int, packages, analysis: dict) -> dict:
     # объёма источник геометрии свой — прямоугольник блока секции, не
     # чужие элементы). Оба обновляют один и тот же контур (`section_id
     # IS NULL OR section_source='геометрия'`), второй проход безопасен.
+    # Этаж по отметке — перед секцией: у элемента, чьё ИМЯ уровня не
+    # сопоставилось ни с одной записью `object_levels` (level_id остался
+    # NULL), отметка низа всё равно записана — сырой атрибут модели,
+    # секцию по объёму искать в правильном этаже, а не только в общем
+    # растре, можно только когда этаж уже известен.
+    revit_sections.fill_missing_levels(conn, object_id)
     sections = revit_sections.fill_missing(conn, object_id)
     by_volume = revit_sections.fill_by_volume(conn, object_id)
 

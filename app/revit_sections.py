@@ -292,3 +292,78 @@ def fill_by_volume(conn, object_id: int) -> dict:
             "UPDATE revit_elements SET section_id = ?, section_source = 'геометрия', "
             "updated_at = datetime('now') WHERE id = ?", правки)
     return {"назначено": len(правки), "осталось": осталось}
+
+
+def fill_missing_levels(conn, object_id: int) -> dict:
+    """Доопределить ЭТАЖ по отметке низа элемента (`elevation_mm`) — это
+    сырой атрибут модели (`element.get("отметка_низа")`, `build_row`),
+    записывается независимо от того, сопоставилось ли ИМЯ уровня элемента
+    ни с одной строкой `object_levels` (тогда `level_id` остаётся NULL —
+    у заказчика имя уровня отличалось на пробел/регистр, `app.
+    revit_package.resolve_section`/`level_index` сводят имя, а не отметку).
+
+    Окно этажа — его СОБСТВЕННЫЕ отметка и высота (`object_levels.
+    elevation_mm`/`height_mm`, задаются в «Учёте по блокам» вручную или
+    приходят из Revit) — секция и геометрия блока тут ни при чём, а брать
+    высоту этажа по соседям (`block_geometry._level_height`) незачем: этаж
+    заводится один раз, вручную, отметка либо задана, либо нет. Без высоты
+    этажа принимается только ТОЧНОЕ совпадение отметки (в пределах
+    полуметра — отметки в Revit и на чертеже иногда расходятся на
+    сантиметры при разной точке отсчёта) — не берёмся угадывать границу
+    этажа, которой не видно. Элемент, чья отметка не попала ни в одно
+    окно и не совпала ни с одной точкой, остаётся без этажа — тем же
+    инвариантом «не додумывать», что у `fill_missing`/`fill_by_volume`."""
+    floors = [dict(r) for r in conn.execute(
+        "SELECT id, elevation_mm, height_mm FROM object_levels "
+        "WHERE object_id = ? AND elevation_mm IS NOT NULL AND elevation_suspect = 0",
+        (object_id,))]
+    if not floors:
+        return {"назначено": 0, "осталось": 0}
+
+    правки = []
+    осталось = 0
+    for row in conn.execute(
+        "SELECT id, elevation_mm FROM revit_elements WHERE object_id = ? AND is_current = 1 "
+        "AND level_id IS NULL AND elevation_mm IS NOT NULL", (object_id,),
+    ):
+        z = row["elevation_mm"]
+        победитель = None
+        for f in floors:
+            z0 = f["elevation_mm"]
+            if f["height_mm"]:
+                if z0 <= z < z0 + f["height_mm"]:
+                    победитель = f["id"]
+                    break
+            elif abs(z - z0) <= 500:
+                победитель = f["id"]
+                break
+        if победитель is not None:
+            правки.append((победитель, row["id"]))
+        else:
+            осталось += 1
+
+    if правки:
+        conn.executemany(
+            "UPDATE revit_elements SET level_id = ?, updated_at = datetime('now') WHERE id = ?",
+            правки)
+    return {"назначено": len(правки), "осталось": осталось}
+
+
+def recalc_membership(conn, object_id: int) -> dict:
+    """Пересчитать принадлежность элементов блокам (секция + этаж) целиком
+    — три прохода подряд, кнопка «Обновить принадлежность» в «Учёте по
+    блокам». Этаж по отметке — ПЕРВЫМ: он ни от чего не зависит, а
+    доопределение секции (и растром, и объёмом) само использует
+    `level_id` элемента, чтобы понять, В КАКОМ этаже искать зону/блок —
+    чем больше элементов уже получили этаж, тем точнее секция."""
+    levels = fill_missing_levels(conn, object_id)
+    by_raster = fill_missing(conn, object_id)
+    by_volume = fill_by_volume(conn, object_id)
+    conn.commit()
+    return {
+        "этажей_назначено": levels["назначено"],
+        "этажей_осталось": levels["осталось"],
+        "секций_назначено": by_raster["назначено"] + by_volume["назначено"],
+        "секций_осталось": by_volume["осталось"],
+        "конфликтов": by_raster["конфликтов"],
+    }

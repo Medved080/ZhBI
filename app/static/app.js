@@ -31400,6 +31400,22 @@ async function refreshMfrPlanIfOpen() {
   if (revitPlanState.objectId === state.objectId) await loadRevitPlanFilters();
 }
 
+document.getElementById("blk-recalc-membership").addEventListener("click", async () => {
+  const btn = document.getElementById("blk-recalc-membership");
+  btn.disabled = true;
+  try {
+    const итог = await api(`/objects/${state.objectId}/blocks/recalc-membership`, { method: "POST" });
+    await loadBlkSectionsLevels();
+    await refreshMfrPlanIfOpen();
+    showToast(
+      `Этажей назначено: ${итог.этажей_назначено} (осталось без этажа: ${итог.этажей_осталось}). `
+      + `Секций назначено: ${итог.секций_назначено} (осталось без секции: ${итог.секций_осталось})`,
+      "success",
+    );
+  } catch (e) { showToast(e.message, "error"); }
+  finally { btn.disabled = false; }
+});
+
 document.getElementById("blk-section-add").addEventListener("click", async () => {
   const code = document.getElementById("blk-section-code").value.trim();
   const name = document.getElementById("blk-section-name").value.trim();
