@@ -1099,6 +1099,10 @@
      видимой области. Теперь абзац и `.blk-blocks-layout` — flex-элементы
      одной колонки, второй флекс-растягивается РОВНО в остаток. */
   #blk-tab-blocks.blk-panel { display: flex; flex-direction: column; }
+  /* Живой упор в границу соседней секции при перетаскивании (2026-09-09,
+     прямой запрос пользователя) — та же форма, но красная, пока курсор
+     держит её у самого края чужого блока. */
+  .geo-box.geo-box-blocked { fill: var(--color-danger); fill-opacity: 0.35; stroke: var(--color-danger); }
   .blk-cols { display: flex; gap: 24px; }
   .blk-cols > div { flex: 1 1 0; min-width: 0; }
   .blk-add-row { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; align-items: center; }
@@ -7917,6 +7921,7 @@
       <div id="wt-tree-box" style="max-height:50vh; overflow:auto"></div>
     </div>
 
+    <div id="blk-recalc-report" class="hint-text" style="padding:2px 0 6px"></div>
     <div class="actions" style="justify-content:space-between">
       <button class="btn btn-sm btn-secondary" id="blk-recalc-membership"
               title="Пересчитать этаж и секцию элементов модели заново по их геометрии — на случай, если после ручной правки блоков (осей, прямоугольников) в фильтрах «Модели МФР» остались устаревшие счётчики.">

@@ -31288,6 +31288,7 @@ document.getElementById("menu-blocks").addEventListener("click", async () => {
   await loadBlkSectionsLevels();
 });
 document.getElementById("blocks-close").addEventListener("click", () => {
+  if (!blkGeoConfirmDiscard()) return;
   document.getElementById("blocks-backdrop").classList.remove("open");
 });
 
@@ -31401,18 +31402,38 @@ async function refreshMfrPlanIfOpen() {
 }
 
 document.getElementById("blk-recalc-membership").addEventListener("click", async () => {
+  // Отчёт — ВНУТРИ модалки (2026-09-09, живой отчёт пользователя: кнопка
+  // «молчала», хотя на самом деле отрабатывала) — общая строка состояния
+  // внизу экрана (`showToast`) в этот момент физически перекрыта
+  // бэкдропом модалки (`.modal-backdrop`, z-index выше) и не видна,
+  // сколько бы там ни писалось.
   const btn = document.getElementById("blk-recalc-membership");
+  const report = document.getElementById("blk-recalc-report");
   btn.disabled = true;
+  report.textContent = "Считаю…";
+  report.style.color = "";
   try {
     const итог = await api(`/objects/${state.objectId}/blocks/recalc-membership`, { method: "POST" });
     await loadBlkSectionsLevels();
     await refreshMfrPlanIfOpen();
-    showToast(
-      `Этажей назначено: ${итог.этажей_назначено} (осталось без этажа: ${итог.этажей_осталось}). `
-      + `Секций назначено: ${итог.секций_назначено} (осталось без секции: ${итог.секций_осталось})`,
-      "success",
-    );
-  } catch (e) { showToast(e.message, "error"); }
+    const строки = [
+      `Этажей назначено: ${итог.этажей_назначено} (без этажа осталось: ${итог.этажей_осталось})`,
+      `Секций назначено: ${итог.секций_назначено} (без секции осталось: ${итог.секций_осталось})`,
+    ];
+    if (итог.конфликтов) строки.push(`Расхождений параметра модели с геометрией: ${итог.конфликтов}`);
+    // Явная причина, а не молчаливый нуль (2026-09-09, живой отчёт
+    // пользователя: секция заведена, а элементы всё равно оставались в
+    // соседней) — без прямоугольника блока или осей объёму нечем
+    // голосовать за эту секцию, сколько раз кнопку ни нажимай.
+    if (итог.без_геометрии && итог.без_геометрии.length) {
+      строки.push(`Без геометрии, в пересчёте не участвуют (задайте прямоугольник блока `
+        + `или оси на вкладке «Блоки»/«Секции и этажи»): ${итог.без_геометрии.join(", ")}`);
+    }
+    report.innerHTML = строки.map(escapeHtml).join("<br>");
+  } catch (e) {
+    report.textContent = "Не удалось пересчитать: " + e.message;
+    report.style.color = "var(--color-danger)";
+  }
   finally { btn.disabled = false; }
 });
 
@@ -31521,6 +31542,7 @@ document.getElementById("blk-level-add").addEventListener("click", async () => {
 // -------- Блоки (вкладка «Блоки»): матрица секция × этаж --------
 
 async function loadBlkMatrix() {
+  if (!blkGeoConfirmDiscard()) return;
   blkBlocksLoaded = true;
   const box = document.getElementById("blk-matrix-box");
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
@@ -31572,7 +31594,9 @@ function renderBlkMatrix() {
       if (on) {
         const b = blkBlocks.find(x => x.section_id === sectionId && x.level_id === levelId);
         if (b) await api(`/objects/${state.objectId}/blocks/${b.id}`, { method: "DELETE" });
-        if (blkGeoBlockId === (b && b.id)) closeBlkGeoEditor();
+        // Блок удаляется целиком — несохранённая геометрия всё равно
+        // относилась к уже несуществующей записи, спрашивать нечего.
+        if (blkGeoBlockId === (b && b.id)) { blkGeoDirty = false; closeBlkGeoEditor(); }
       } else {
         await api(`/objects/${state.objectId}/blocks`, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -31584,6 +31608,7 @@ function renderBlkMatrix() {
     } catch (e) { showToast(e.message, "error"); }
   }));
   const openCellEditor = (td) => {
+    if (!blkGeoConfirmDiscard()) return;
     const sectionId = Number(td.dataset.sec), levelId = Number(td.dataset.lvl);
     const s = blkSections.find(x => x.id === sectionId), l = blkLevels.find(x => x.id === levelId);
     if (!s || !l) return;
@@ -31597,6 +31622,7 @@ function renderBlkMatrix() {
     openCellEditor(btn.closest("td.blk-cell"));
   }));
   box.querySelectorAll("th.blk-row-name[data-lvl]").forEach(th => th.addEventListener("click", () => {
+    if (!blkGeoConfirmDiscard()) return;
     const levelId = Number(th.dataset.lvl);
     const l = blkLevels.find(x => x.id === levelId);
     if (!l) return;
@@ -31621,6 +31647,20 @@ let blkGeoOthers = [];   // [{секция, boxes:[{x0,x1,y0,y1}]}] — сосе
 let blkGeoDrag = null;   // {kind:"move"|"corner", boxIndex, corner, startX, startY, orig}
 let blkPlanImages = [];  // список /objects/{id}/plan-images, грузится вместе с матрицей
 let blkGeoPlanImage = null;   // картинка плана ТЕКУЩЕГО этажа (или null — её нет)
+// Несохранённая правка геометрии (2026-09-09, прямой запрос пользователя):
+// драг и числовые поля правят blkGeoBoxes НАПРЯМУЮ, без DOM-событий
+// input/change, поэтому общий сторож несохранённого у модалок (Esc,
+// document.dataset.dirty) её не видит вовсе — свой флаг и свои проверки
+// на каждом выходе (другой блок, другой этаж, «Закрыть» формы геометрии,
+// «Закрыть» всей модалки «Учёт по блокам»).
+let blkGeoDirty = false;
+
+function blkGeoConfirmDiscard() {
+  if (!blkGeoDirty) return true;
+  if (!confirm("Геометрия блока изменена и не сохранена. Продолжить без сохранения?")) return false;
+  blkGeoDirty = false;
+  return true;
+}
 
 async function openBlkGeoEditor(blockId, sectionCode, levelName, levelId) {
   blkGeoBlockId = blockId; blkGeoLevelId = levelId; blkGeoFloorMode = false;
@@ -31647,6 +31687,7 @@ async function openBlkGeoEditor(blockId, sectionCode, levelName, levelId) {
   blkGeoOthers = geometry.filter(g => g.id !== blockId && g.ok)
     .map(g => ({ секция: g["секция"], boxes: g.boxes }));
   document.getElementById("blk-geo-warnings").textContent = "";
+  blkGeoDirty = false;
   renderBlkGeoEditor();
 }
 
@@ -31667,6 +31708,7 @@ async function openBlkFloorView(levelId, levelName) {
   blkGeoBoxes = [];
   blkGeoOthers = geometry.filter(g => g.ok).map(g => ({ секция: g["секция"], boxes: g.boxes }));
   document.getElementById("blk-geo-warnings").textContent = "";
+  blkGeoDirty = false;
   renderBlkGeoEditor();
 }
 
@@ -31701,6 +31743,77 @@ function blkGeoBounds() {
   const minX = Math.min(...all.map(b => b.x0)) - margin, maxX = Math.max(...all.map(b => b.x1)) + margin;
   const minY = Math.min(...all.map(b => b.y0)) - margin, maxY = Math.max(...all.map(b => b.y1)) + margin;
   return finish(minX, minY, maxX - minX, maxY - minY);
+}
+
+// -------- Живой запрет на пересечение с соседней секцией (2026-09-09,
+// прямой запрос пользователя) --------
+//
+// Раньше пересечение считалось только на сервере, ПОСЛЕ сохранения
+// (`_overlap_warnings` в app/blocks.py) — мягкое предупреждение, не
+// мешавшее сохранить. Здесь — наоборот: во время перетаскивания граница
+// СВОЕГО прямоугольника не может пересечь чужой того же этажа вовсе,
+// клампится к его краю. Логика — клиентский аналог `_rects_overlap`,
+// применённый не к готовому результату, а к каждому шагу жеста.
+
+const BLK_GEO_EPS = 1;   // мм — запас от «прилипания» на стыке из-за float
+
+function blkGeoFlatOthers() {
+  return blkGeoOthers.flatMap((o) => o.boxes.map((b) => ({ ...b, секция: o.секция })));
+}
+
+// `fixed` — три границы прямоугольника, которые СЕЙЧАС не двигаются (для
+// ребра x0/x1 это его y0/y1, и наоборот) — по ним проверяется, стоит ли
+// чужой прямоугольник вообще на пути (перпендикулярные диапазоны должны
+// пересекаться), а не считается расстояние до случайного соседа сбоку.
+function blkGeoClampEdgeValue(ref, edge, value, others) {
+  // `ref` — коробка ДО этого шага драга (все четыре границы). Порог для
+  // направления роста берётся из ЕЁ ЖЕ границы, которую сейчас двигают
+  // (`ref.x1` для «x1», не `ref.x0`) — иначе сосед, уже перекрывающий
+  // прямоугольник где-то в его текущей ширине (легальное существующее
+  // пересечение, «мягкая проверка» на сервере), ошибочно принимался бы
+  // за преграду и клин застревал на месте, даже двигаясь в СВОБОДНУЮ
+  // сторону (живой баг, пойман при проверке 2026-09-09).
+  let bound = null, blockedBy = null;
+  for (const o of others) {
+    const поперёкПересекается = (edge === "x0" || edge === "x1")
+      ? ref.y0 < o.y1 - BLK_GEO_EPS && o.y0 < ref.y1 - BLK_GEO_EPS
+      : ref.x0 < o.x1 - BLK_GEO_EPS && o.x0 < ref.x1 - BLK_GEO_EPS;
+    if (!поперёкПересекается) continue;
+    if (edge === "x1" && o.x0 >= ref.x1 - BLK_GEO_EPS && (bound === null || o.x0 < bound)) { bound = o.x0; blockedBy = o.секция; }
+    else if (edge === "x0" && o.x1 <= ref.x0 + BLK_GEO_EPS && (bound === null || o.x1 > bound)) { bound = o.x1; blockedBy = o.секция; }
+    else if (edge === "y1" && o.y0 >= ref.y1 - BLK_GEO_EPS && (bound === null || o.y0 < bound)) { bound = o.y0; blockedBy = o.секция; }
+    else if (edge === "y0" && o.y1 <= ref.y0 + BLK_GEO_EPS && (bound === null || o.y1 > bound)) { bound = o.y1; blockedBy = o.секция; }
+  }
+  if (bound === null) return { value, blocked: null };
+  const растёт = edge === "x1" || edge === "y1";
+  if (растёт ? value > bound : value < bound) return { value: bound, blocked: blockedBy };
+  return { value, blocked: null };
+}
+
+// Перенос всего прямоугольника — оси клампятся по очереди (сначала X по
+// НЕСДВИНУТОМУ Y, потом Y по уже сдвинутому X): точная диагональная
+// коллизия для этого редактора не нужна, а последовательный зажим ведёт
+// себя предсказуемо и не даёт форме «проскочить» соседа по диагонали.
+function blkGeoClampMove(orig, dxWorld, dyWorld, others) {
+  let dxMin = -Infinity, dxMax = Infinity, blockedX = null;
+  for (const o of others) {
+    if (!(orig.y0 < o.y1 - BLK_GEO_EPS && o.y0 < orig.y1 - BLK_GEO_EPS)) continue;
+    if (o.x0 >= orig.x1 && o.x0 - orig.x1 < dxMax) { dxMax = o.x0 - orig.x1; blockedX = o.секция; }
+    if (o.x1 <= orig.x0 && o.x1 - orig.x0 > dxMin) { dxMin = o.x1 - orig.x0; blockedX = o.секция; }
+  }
+  const dx = Math.min(Math.max(dxWorld, dxMin), dxMax);
+  const shiftedX0 = orig.x0 + dx, shiftedX1 = orig.x1 + dx;
+  let dyMin = -Infinity, dyMax = Infinity, blockedY = null;
+  for (const o of others) {
+    if (!(shiftedX0 < o.x1 - BLK_GEO_EPS && o.x0 < shiftedX1 - BLK_GEO_EPS)) continue;
+    if (o.y0 >= orig.y1 && o.y0 - orig.y1 < dyMax) { dyMax = o.y0 - orig.y1; blockedY = o.секция; }
+    if (o.y1 <= orig.y0 && o.y1 - orig.y0 > dyMin) { dyMin = o.y1 - orig.y0; blockedY = o.секция; }
+  }
+  const dy = Math.min(Math.max(dyWorld, dyMin), dyMax);
+  return {
+    dx, dy,
+    blocked: (dx !== dxWorld ? blockedX : null) || (dy !== dyWorld ? blockedY : null),
+  };
 }
 
 function renderBlkGeoEditor() {
@@ -31759,11 +31872,18 @@ function renderBlkGeoEditor() {
   document.querySelectorAll("#blk-geo-boxes input").forEach((inp) => inp.addEventListener("change", () => {
     const i = Number(inp.dataset.boxI), field = inp.dataset.field, v = Number(inp.value);
     if (!Number.isFinite(v)) return;
-    blkGeoBoxes[i][field] = v;
+    const box = blkGeoBoxes[i];
+    const r = blkGeoClampEdgeValue({ x0: box.x0, x1: box.x1, y0: box.y0, y1: box.y1 }, field, v, blkGeoFlatOthers());
+    box[field] = r.value;
+    blkGeoDirty = true;
     renderBlkGeoEditor();
+    if (r.blocked) {
+      showToast(`Упирается в границу секции «${r.blocked}» — значение подрезано, области не должны пересекаться.`, "warning");
+    }
   }));
   document.querySelectorAll("[data-remove-box]").forEach((btn) => btn.addEventListener("click", () => {
     blkGeoBoxes.splice(Number(btn.dataset.removeBox), 1);
+    blkGeoDirty = true;
     renderBlkGeoEditor();
   }));
   bindBlkGeoDrag();
@@ -31807,38 +31927,77 @@ function bindBlkGeoDrag() {
     const dxWorld = p.x - blkGeoDrag.startSvg.x;
     const dyWorld = -(p.y - blkGeoDrag.startSvg.y);   // SVG вниз = мир вниз по Y (см. toSvgY)
     const box = blkGeoBoxes[blkGeoDrag.boxIndex], orig = blkGeoDrag.orig;
+    const others = blkGeoFlatOthers();
+    let blocked = null;
     if (blkGeoDrag.kind === "move") {
-      box.x0 = orig.x0 + dxWorld; box.x1 = orig.x1 + dxWorld;
-      box.y0 = orig.y0 + dyWorld; box.y1 = orig.y1 + dyWorld;
+      const r = blkGeoClampMove(orig, dxWorld, dyWorld, others);
+      box.x0 = orig.x0 + r.dx; box.x1 = orig.x1 + r.dx;
+      box.y0 = orig.y0 + r.dy; box.y1 = orig.y1 + r.dy;
+      blocked = r.blocked;
     } else if (blkGeoDrag.kind === "edge") {
       // Ребро тянет ТОЛЬКО свою границу, смещая её параллельно себе —
       // противоположная сторона и обе границы по другой оси не трогаются
-      // (2026-09-05, живой запрос пользователя).
-      if (blkGeoDrag.edge === "w") box.x0 = orig.x0 + dxWorld;
-      else if (blkGeoDrag.edge === "e") box.x1 = orig.x1 + dxWorld;
-      else if (blkGeoDrag.edge === "n") box.y1 = orig.y1 + dyWorld;
-      else if (blkGeoDrag.edge === "s") box.y0 = orig.y0 + dyWorld;
+      // (2026-09-05, живой запрос пользователя). Клампится тем же приёмом
+      // (2026-09-09) — дальше соседней секции граница не уходит.
+      const fixed = { x0: orig.x0, x1: orig.x1, y0: orig.y0, y1: orig.y1 };
+      if (blkGeoDrag.edge === "w") {
+        const r = blkGeoClampEdgeValue(fixed, "x0", orig.x0 + dxWorld, others);
+        box.x0 = r.value; blocked = r.blocked;
+      } else if (blkGeoDrag.edge === "e") {
+        const r = blkGeoClampEdgeValue(fixed, "x1", orig.x1 + dxWorld, others);
+        box.x1 = r.value; blocked = r.blocked;
+      } else if (blkGeoDrag.edge === "n") {
+        const r = blkGeoClampEdgeValue(fixed, "y1", orig.y1 + dyWorld, others);
+        box.y1 = r.value; blocked = r.blocked;
+      } else if (blkGeoDrag.edge === "s") {
+        const r = blkGeoClampEdgeValue(fixed, "y0", orig.y0 + dyWorld, others);
+        box.y0 = r.value; blocked = r.blocked;
+      }
     } else {
+      // Угол двигает ДВЕ границы разом — клампятся последовательно, каждая
+      // по СВЕЖЕМУ состоянию бокса (та же логика, что у переноса целиком).
       const west = blkGeoDrag.corner.includes("l"), north = blkGeoDrag.corner === "tl" || blkGeoDrag.corner === "tr";
-      if (west) box.x0 = orig.x0 + dxWorld; else box.x1 = orig.x1 + dxWorld;
-      if (north) box.y1 = orig.y1 + dyWorld; else box.y0 = orig.y0 + dyWorld;
+      if (west) {
+        const r = blkGeoClampEdgeValue({ x0: orig.x0, x1: orig.x1, y0: box.y0, y1: box.y1 }, "x0", orig.x0 + dxWorld, others);
+        box.x0 = r.value; blocked = blocked || r.blocked;
+      } else {
+        const r = blkGeoClampEdgeValue({ x0: orig.x0, x1: orig.x1, y0: box.y0, y1: box.y1 }, "x1", orig.x1 + dxWorld, others);
+        box.x1 = r.value; blocked = blocked || r.blocked;
+      }
+      if (north) {
+        const r = blkGeoClampEdgeValue({ x0: box.x0, x1: box.x1, y0: orig.y0, y1: orig.y1 }, "y1", orig.y1 + dyWorld, others);
+        box.y1 = r.value; blocked = blocked || r.blocked;
+      } else {
+        const r = blkGeoClampEdgeValue({ x0: box.x0, x1: box.x1, y0: orig.y0, y1: orig.y1 }, "y0", orig.y0 + dyWorld, others);
+        box.y0 = r.value; blocked = blocked || r.blocked;
+      }
     }
-    blkGeoUpdateBoxVisual(blkGeoDrag.boxIndex, blkGeoDrag.bounds);
+    // Запасной пол на случай зажима с обеих сторон разом (соседи ближе
+    // 50мм друг к другу) — вырожденный/отрицательный прямоугольник хуже,
+    // чем временный крошечный.
+    if (box.x1 - box.x0 < 50) box.x1 = box.x0 + 50;
+    if (box.y1 - box.y0 < 50) box.y1 = box.y0 + 50;
+    blkGeoDirty = true;
+    blkGeoUpdateBoxVisual(blkGeoDrag.boxIndex, blkGeoDrag.bounds, blocked);
   });
   window.addEventListener("pointerup", () => {
     if (!blkGeoDrag) return;
     blkGeoDrag = null;
+    document.getElementById("blk-geo-warnings").textContent = "";
     renderBlkGeoEditor();   // один раз, начисто — пересчитать охват под итог
   });
 }
 
-function blkGeoUpdateBoxVisual(i, { minX, minY, h }) {
+function blkGeoUpdateBoxVisual(i, { minX, minY, h }, blocked) {
   const b = blkGeoBoxes[i];
   const toSvgY = (worldY) => h - (worldY - minY);
   const x = b.x0 - minX, y = toSvgY(b.y1), rw = b.x1 - b.x0, rh = b.y1 - b.y0;
   const rect = document.querySelector(`.geo-box[data-box-i="${i}"]`);
   rect.setAttribute("x", x); rect.setAttribute("y", y);
   rect.setAttribute("width", rw); rect.setAttribute("height", rh);
+  rect.classList.toggle("geo-box-blocked", !!blocked);
+  document.getElementById("blk-geo-warnings").textContent = blocked
+    ? `Упирается в границу секции «${blocked}» — области не должны пересекаться.` : "";
   const corners = { tl: [x, y], tr: [x + rw, y], bl: [x, y + rh], br: [x + rw, y + rh] };
   for (const [c, [cx, cy]] of Object.entries(corners)) {
     const handle = document.querySelector(`.geo-handle[data-box-i="${i}"][data-corner="${c}"]`);
@@ -31859,13 +32018,18 @@ document.getElementById("blk-geo-add").addEventListener("click", () => {
   const { minX, minY, w, h } = blkGeoBounds();
   const size = Math.min(w, h) * 0.2 || 3000;
   blkGeoBoxes.push({ x0: minX + w * 0.4, x1: minX + w * 0.4 + size, y0: minY + h * 0.4, y1: minY + h * 0.4 + size });
+  blkGeoDirty = true;
   renderBlkGeoEditor();
 });
 document.getElementById("blk-geo-reset").addEventListener("click", () => {
   blkGeoBoxes = [];
+  blkGeoDirty = true;
   renderBlkGeoEditor();
 });
-document.getElementById("blk-geo-close").addEventListener("click", closeBlkGeoEditor);
+document.getElementById("blk-geo-close").addEventListener("click", () => {
+  if (!blkGeoConfirmDiscard()) return;
+  closeBlkGeoEditor();
+});
 document.getElementById("blk-geo-save").addEventListener("click", async () => {
   for (const b of blkGeoBoxes) {
     if (!(b.x1 > b.x0) || !(b.y1 > b.y0)) { showToast("x1 должен быть больше x0, y1 — больше y0", "error"); return; }
@@ -31877,6 +32041,7 @@ document.getElementById("blk-geo-save").addEventListener("click", async () => {
     });
     document.getElementById("blk-geo-warnings").innerHTML = (res.warnings || []).map(escapeHtml).join("<br>");
     showToast("Геометрия сохранена", "success");
+    blkGeoDirty = false;
     revitPlanState.blocksData = [];   // «Модель МФР» перечитает геометрию при следующем показе
   } catch (e) { showToast(e.message, "error"); }
 });

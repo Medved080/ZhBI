@@ -239,9 +239,9 @@ def fill_by_volume(conn, object_id: int) -> dict:
     from app.block_geometry import section_level_boxes_xy
 
     sections = [dict(r) for r in conn.execute(
-        "SELECT id FROM object_sections WHERE object_id = ?", (object_id,))]
+        "SELECT id, code FROM object_sections WHERE object_id = ?", (object_id,))]
     if not sections:
-        return {"назначено": 0, "осталось": 0}
+        return {"назначено": 0, "осталось": 0, "без_геометрии": []}
     levels = [dict(r) for r in conn.execute(
         "SELECT id FROM object_levels WHERE object_id = ?", (object_id,))]
 
@@ -252,6 +252,7 @@ def fill_by_volume(conn, object_id: int) -> dict:
     # `block_box` отказал бы всему этажу, хотя прямоугольник в плане уже
     # известен по осям).
     зоны_по_этажам = {}
+    с_геометрией = set()
     for level in levels:
         candidates = []
         for section in sections:
@@ -259,11 +260,21 @@ def fill_by_volume(conn, object_id: int) -> dict:
             if box.get("ok"):
                 candidates.append((section["id"],
                                    [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in box["boxes"]]))
+                с_геометрией.add(section["id"])
         if candidates:
             зоны_по_этажам[level["id"]] = candidates
 
+    # Секции вовсе БЕЗ геометрии (ни осей, ни прямоугольника блока хотя бы
+    # на одном этаже) — не браку алгоритма, а причина, почему кнопка не
+    # может отдать им ни одного элемента: голосовать её объёмом не с чего
+    # (2026-09-09, живой отчёт пользователя: секция «Рампа» заведена, но
+    # элементы всё равно оставались в соседней — у неё не было задано ни
+    # прямоугольника, ни осей). Показывается в отчёте как явная причина, а
+    # не молчаливый нуль.
+    без_геометрии = [s["code"] for s in sections if s["id"] not in с_геометрией]
+
     if not зоны_по_этажам:
-        return {"назначено": 0, "осталось": 0}
+        return {"назначено": 0, "осталось": 0, "без_геометрии": без_геометрии}
 
     правки = []
     осталось = 0
@@ -291,7 +302,7 @@ def fill_by_volume(conn, object_id: int) -> dict:
         conn.executemany(
             "UPDATE revit_elements SET section_id = ?, section_source = 'геометрия', "
             "updated_at = datetime('now') WHERE id = ?", правки)
-    return {"назначено": len(правки), "осталось": осталось}
+    return {"назначено": len(правки), "осталось": осталось, "без_геометрии": без_геометрии}
 
 
 def fill_missing_levels(conn, object_id: int) -> dict:
@@ -366,4 +377,5 @@ def recalc_membership(conn, object_id: int) -> dict:
         "секций_назначено": by_raster["назначено"] + by_volume["назначено"],
         "секций_осталось": by_volume["осталось"],
         "конфликтов": by_raster["конфликтов"],
+        "без_геометрии": by_volume.get("без_геометрии") or [],
     }
