@@ -48,6 +48,12 @@ from app.work_progress import (
     BLOCK_UNITS, STATUS_PLAN, STATUS_IN_PROGRESS, STATUS_DONE,
 )
 
+# «Динамика за период» с пустыми датами (живой запрос пользователя,
+# 2026-09-10) — не «выключено», а «за весь период»: нижняя граница —
+# заведомо раньше любого реального отчёта, верхняя, если не выбрана, —
+# сегодня (см. block_progress_tree/blocks_fact_changes).
+_DYNAMICS_MIN_DATE = "0001-01-01"
+
 
 class FactError(Exception):
     def __init__(self, status_code: int, message: str):
@@ -181,16 +187,21 @@ def _status_from_percent(percent: int) -> str:
     return STATUS_PLAN
 
 
-def block_progress_tree(conn, object_id: int, block_id: int) -> dict:
+def block_progress_tree(conn, object_id: int, block_id: int,
+                        date_from: "str | None" = None, date_to: "str | None" = None) -> dict:
     """Дерево справочника, обрезанное до предков только выбранных для
     блока операций, с текущим процентом в листьях — для панели блока в
-    «Модели МФР»."""
+    «Модели МФР». `date_from`/`date_to` (живой запрос пользователя,
+    «Динамика за период») — вместо текущего процента в лист кладутся ДВА
+    значения на границы периода (percent_from/percent_to), источник тот же
+    `_percents_as_of`, что у отчёта «Учёт по блокам: статусы»."""
     settings = block_settings(conn, object_id, block_id)
     selected_ids = set(settings["selected"])
 
     rows = [
         dict(row) for row in conn.execute(
-            "SELECT id, parent_id, row_kind, code, name, unit, note, sort_order FROM work_types "
+            "SELECT id, parent_id, row_kind, code, name, unit, note, sort_order, "
+            "planning_track_code FROM work_types "
             "WHERE object_id = ? AND retired_at IS NULL ORDER BY sort_order", (object_id,))
     ]
     by_id = {r["id"]: r for r in rows}
@@ -201,7 +212,20 @@ def block_progress_tree(conn, object_id: int, block_id: int) -> dict:
             keep.add(cur)
             cur = by_id.get(cur, {}).get("parent_id")
 
-    percents = _current_percents(conn, block_id)
+    # Присутствие ХОТЯ БЫ ОДНОГО параметра — сигнал «режим динамики», а не
+    # его непустота: пустая строка (обе даты не выбраны, живой запрос
+    # пользователя 2026-09-10 — «за весь период», не «выключено») всё равно
+    # должна лечь в _DYNAMICS_MIN_DATE/сегодня, а не откатиться к обычному
+    # текущему проценту. Обычный режим — параметры вовсе НЕ переданы (None).
+    dynamics = date_from is not None or date_to is not None
+    if dynamics:
+        from datetime import date as _date
+        resolved_from = date_from or _DYNAMICS_MIN_DATE
+        resolved_to = date_to or _date.today().isoformat()
+        percents_from = _percents_as_of(conn, block_id, resolved_from)
+        percents_to = _percents_as_of(conn, block_id, resolved_to)
+    else:
+        percents = _current_percents(conn, block_id)
 
     nodes = {}
     roots = []
@@ -210,11 +234,18 @@ def block_progress_tree(conn, object_id: int, block_id: int) -> dict:
             continue
         node = {
             "id": r["id"], "row_kind": r["row_kind"], "code": r["code"], "name": r["name"],
-            "unit": r["unit"], "note": r["note"], "children": [],
+            "unit": r["unit"], "note": r["note"], "planning_track_code": r["planning_track_code"],
+            "children": [],
         }
         if r["id"] in selected_ids:
-            node["percent"] = percents.get(r["id"], 0)
-            node["status"] = _status_from_percent(node["percent"])
+            if dynamics:
+                node["percent_from"] = percents_from.get(r["id"], 0)
+                node["percent_to"] = percents_to.get(r["id"], 0)
+                node["status_from"] = _status_from_percent(node["percent_from"])
+                node["status_to"] = _status_from_percent(node["percent_to"])
+            else:
+                node["percent"] = percents.get(r["id"], 0)
+                node["status"] = _status_from_percent(node["percent"])
         nodes[r["id"]] = node
         parent = nodes.get(r["parent_id"]) if r["parent_id"] else None
         (parent["children"] if parent else roots).append(node)
@@ -457,6 +488,67 @@ def _percents_as_of(conn, block_id: int, report_date: str) -> dict:
     for row in rows:
         result[row["work_type_id"]] = row["percent"]  # позже в сортировке — победил
     return result
+
+
+def op_fact_history(conn, object_id: int, block_id: int, work_type_id: int) -> list:
+    """История значений факта ОДНОЙ операции на блоке — по всем отчётам, что
+    её касаются (живой запрос пользователя: подсказка при наведении на
+    полосу прогресса в панели блока — «перечисление дат, значений и
+    пользователя»). Схема не хранит, кто менял именно эту строку внутри
+    документа (только автора/редактора отчёта целиком, см. docstring
+    модуля и `save_report`) — отсюда пользователь тут это создатель отчёта,
+    а если отчёт правили позже, то правивший (то же правило, что у
+    `list_reports`)."""
+    rows = conn.execute(
+        "SELECT r.report_date, i.percent, "
+        "cu.last_name AS cu_last, cu.first_name AS cu_first, "
+        "uu.last_name AS uu_last, uu.first_name AS uu_first "
+        "FROM work_fact_items i "
+        "JOIN work_fact_reports r ON r.id = i.report_id "
+        "LEFT JOIN users cu ON cu.id = r.created_by "
+        "LEFT JOIN users uu ON uu.id = r.updated_by "
+        "WHERE r.object_id = ? AND r.block_id = ? AND i.work_type_id = ? "
+        "ORDER BY r.report_date ASC, r.id ASC",
+        (object_id, block_id, work_type_id),
+    ).fetchall()
+    return [{
+        "дата": r["report_date"], "процент": r["percent"],
+        "пользователь": _user_label(r["uu_last"], r["uu_first"]) or _user_label(r["cu_last"], r["cu_first"]),
+    } for r in rows]
+
+
+def blocks_fact_changes(conn, object_id: int, date_from: "str | None" = None,
+                        date_to: "str | None" = None, track_code: "str | None" = None) -> list:
+    """Блоки, у которых факт менялся внутри периода (живой запрос
+    пользователя, «Динамика за период») — для подсветки на плане. Область
+    сравнения зависит от активной доски «Шахматка» (решение пользователя):
+    если она задана — сравниваются только операции ЭТОЙ доски, иначе — все
+    операции, отобранные для блока (то же множество, что у
+    `block_progress_tree`/`block_summary`). Отдельного лога для этого не
+    нужно — `_percents_as_of` уже умеет отдать снимок на любую дату.
+    Обе даты необязательны (2026-09-10, живой запрос) — «не выбрано» здесь
+    значит «за весь период», а не «отбор снят», поэтому дыры заполняются
+    сентинелом/сегодня, а не выходом без результата."""
+    from datetime import date
+    date_from = date_from or _DYNAMICS_MIN_DATE
+    date_to = date_to or date.today().isoformat()
+    track_ids = None
+    if track_code:
+        track_ids = {o["id"] for o in _block_op_work_types(conn, object_id)
+                     if o["planning_track_code"] == track_code}
+    block_ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM blocks WHERE object_id = ?", (object_id,))]
+    changed = []
+    for block_id in block_ids:
+        selected = set(block_settings(conn, object_id, block_id)["selected"])
+        relevant = (selected & track_ids) if track_ids is not None else selected
+        if not relevant:
+            continue
+        percents_from = _percents_as_of(conn, block_id, date_from)
+        percents_to = _percents_as_of(conn, block_id, date_to)
+        if any(percents_from.get(i, 0) != percents_to.get(i, 0) for i in relevant):
+            changed.append(block_id)
+    return changed
 
 
 def set_cell_percent(conn, user_id: int, object_id: int, block_id: int, work_type_id: int,

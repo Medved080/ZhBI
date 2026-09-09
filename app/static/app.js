@@ -6403,8 +6403,11 @@ document.querySelectorAll("[data-collapse]").forEach(btn => {
     const collapsed = !sectionCollapsed(btn.dataset.collapse);
     setSectionCollapsed(btn, collapsed);
     // Свёрнутый отчёт не считается вовсе (см. loadSidebarReports) — при
-    // раскрытии догоняем, если он устарел, пока был закрыт.
-    if (!collapsed) loadSidebarReports();
+    // раскрытии догоняем, если он устарел, пока был закрыт. Хук специфичен
+    // для панели «Статус» — механизм переиспользуют и другие экраны
+    // (карточки фильтров «Модели МФР», живой запрос пользователя), им
+    // догонять нечего.
+    if (!collapsed && btn.closest("#sidebar")) loadSidebarReports();
   });
 });
 
@@ -9810,6 +9813,10 @@ makePanelResizer(
 makePanelResizer(
   document.getElementById("picker-contracts-resize"), document.getElementById("picker-contracts"),
   { fromRight: true, key: "zhbi_picker_contracts_width", min: 240 },
+);
+makePanelResizer(
+  document.getElementById("mfr-card-panel-resize"), document.getElementById("mfr-card-panel"),
+  { fromRight: true, key: "zhbi_mfr_card_panel_width", min: 260, max: 520 },
 );
 
 // ==================== Esc ЗАКРЫВАЕТ ВЕРХНЮЮ ОТКРЫТУЮ ФОРМУ ====================
@@ -28899,11 +28906,13 @@ async function openMfrWorkspace() {
   if (revitPlanState.objectId === state.objectId && revitPlanState.data) return;
   revitPlanState.objectId = state.objectId;
   for (const g of REVIT_GROUPS) revitPlanState[g].clear();
-  document.getElementById("revit-plan-card").textContent = "Нажмите на элемент плана.";
+  document.getElementById("revit-plan-card").textContent = "Нажмите на элемент или блок плана.";
+  document.getElementById("element-card-block").style.display = "";
   revitPlanState.selected = null;   // другой объект — чужое выделение не тянем
   revitPlanState.selectedBlocks.clear();
   document.getElementById("block-card-block").style.display = "none";
   updateBlockGroupUi();
+  switchMfrPanelTab("properties");
   // Режим показа восстанавливается ДО загрузки: иначе план успевает
   // отрисоваться в 2D, а потом дёргается в 3D на глазах у человека.
   const запомненныйРежим = вспомнить(MFR_MODE_KEY);
@@ -28915,10 +28924,32 @@ async function openMfrWorkspace() {
   mfrChessTrackCode = null;
   mfrChessValues = {};
   document.getElementById("mfr-chess-legend").style.display = "none";
+  // Другой объект — другие блоки: незачем тащить в него дату/подсветку
+  // динамики прошлого объекта.
+  mfrDynamics = { active: false, from: null, to: null };
+  mfrDynamicsBlocks = new Set();
+  document.getElementById("mfr-dynamics-toggle").checked = false;
+  document.getElementById("mfr-dynamics-dates").style.display = "none";
+  document.getElementById("mfr-dynamics-from").value = "";
+  document.getElementById("mfr-dynamics-to").value = "";
+  updateMfrDynamicsCaption();
   await loadRevitColors();      // раньше отбора: план рисуется сразу после него
   await loadRevitPlanFilters();
   await loadMfrChessOptions();
 }
+
+// Вкладки правой панели МФР (живой запрос пользователя) — по образцу
+// switchTab/#sidebar, но свой селектор: .tabs/.tab-panel общие на весь
+// проект классы, а #sidebar в switchTab захватил бы и наши узлы, и чужие
+// (модалки) при переключении наших вкладок — см. комментарий у switchTab.
+function switchMfrPanelTab(name) {
+  document.querySelectorAll("#mfr-panel-tabs .tab-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.mfrPanelTab === name));
+  document.querySelectorAll("#mfr-card-panel > .tab-panel").forEach(p =>
+    p.classList.toggle("active", p.id === `mfr-panel-tab-${name}`));
+}
+document.querySelectorAll("#mfr-panel-tabs .tab-btn").forEach(btn =>
+  btn.addEventListener("click", () => switchMfrPanelTab(btn.dataset.mfrPanelTab)));
 
 function revitPlanStatus(text, isError) {
   const el = document.getElementById("revit-plan-status");
@@ -29558,6 +29589,11 @@ document.getElementById("revit-plan-fit").addEventListener("click", () => {
 async function showRevitCard(elementId) {
   const box = document.getElementById("revit-plan-card");
   revitPlanState.selected = { kind: "element", id: Number(elementId) };
+  // На схеме элемент и блок и так взаимоисключающие (mfrHighlightSelection
+  // красит только текущего sel.kind) — панель справа была рассинхронизирована
+  // с этим (живой запрос пользователя, обе карточки были видны разом).
+  document.getElementById("block-card-block").style.display = "none";
+  document.getElementById("element-card-block").style.display = "";
   mfrHighlightSelection();
   box.textContent = "Загрузка…";
   const res = await fetch(`/revit-plan/element?object_id=${revitPlanState.objectId}&element_id=${elementId}`);
@@ -29643,12 +29679,42 @@ function mfrHighlightSelection() {
       if (edgeColor) el.style.setProperty("--mfr-sel-stroke", edgeColor);
       el.parentNode.appendChild(el);
     }
+    // «Изменился факт за период» (живой запрос пользователя) — НЕ зависит от
+    // текущего выбора, красится поверх обычной заливки статуса своим ярким
+    // пунктиром у ВСЕХ блоков из mfrDynamicsBlocks разом; пересчитывается
+    // здесь же, чтобы пережить пересборку плана, как и обычное выделение.
+    svg.querySelectorAll(".mfr-fact-changed").forEach((el) => el.classList.remove("mfr-fact-changed"));
+    for (const id of mfrDynamicsBlocks) {
+      svg.querySelectorAll(`rect[data-block-id="${id}"]`).forEach((el) => el.classList.add("mfr-fact-changed"));
+    }
   }
   if (!mfr3d.scene || typeof THREE === "undefined") return;
   if (mfr3d.highlight) {
     mfr3d.scene.remove(mfr3d.highlight);
     mfr3d.highlight.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
     mfr3d.highlight = null;
+  }
+  // Та же подсветка «изменился факт», но в 3D — только рёбра (без заливки,
+  // иначе несколько подсвеченных блоков разом перекрыли бы друг другу цвет
+  // статуса), НЕЗАВИСИМО от `sel`, поэтому строится ДО `if (!sel) return`.
+  if (mfr3d.dynamicsHighlight) {
+    mfr3d.scene.remove(mfr3d.dynamicsHighlight);
+    mfr3d.dynamicsHighlight.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    mfr3d.dynamicsHighlight = null;
+  }
+  if (mfrDynamicsBlocks.size) {
+    const dGroup = new THREE.Group();
+    for (const mesh of mfr3d.scene.children) {
+      if (!mesh.isMesh || !mfrDynamicsBlocks.has(mesh.userData.blockId)) continue;
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(mesh.geometry),
+        new THREE.LineBasicMaterial({ color: 0x00e5ff, depthTest: false, transparent: true, opacity: 1 }));
+      edges.position.copy(mesh.position);
+      edges.renderOrder = 19;
+      dGroup.add(edges);
+    }
+    mfr3d.scene.add(dGroup);
+    mfr3d.dynamicsHighlight = dGroup;
   }
   if (!sel) return;
   const highlightColor = boldColor ? new THREE.Color(boldColor).getHex() : MFR_HIGHLIGHT_COLOR;
@@ -29705,6 +29771,7 @@ function clearBlockSelection() {
     revitPlanState.selected = null;
   }
   document.getElementById("block-card-block").style.display = "none";
+  document.getElementById("element-card-block").style.display = "";
   updateBlockGroupUi();
   mfrHighlightSelection();
 }
@@ -29770,6 +29837,7 @@ async function showBlockCard(blockId, additive = false) {
   if (!выделены.size) {
     revitPlanState.selected = null;
     document.getElementById("block-card-block").style.display = "none";
+    document.getElementById("element-card-block").style.display = "";
     updateBlockGroupUi();
     mfrHighlightSelection();
     return;
@@ -29787,6 +29855,7 @@ async function renderBlockCard(blockId) {
   revitPlanState.selected = { kind: "block", id: Number(blockId) };
   updateBlockGroupUi();
   mfrHighlightSelection();
+  document.getElementById("element-card-block").style.display = "none";
   panel.style.display = "";
   box.textContent = "Загрузка…";
   const res = await fetch(`/objects/${revitPlanState.objectId}/blocks/${blockId}/card`);
@@ -29836,17 +29905,64 @@ async function renderBlockCard(blockId) {
 // пишет отчёт о фактическом выполнении. Отдельно от старой матрицы
 // План/В работе/Выполнено (вкладка «Статусы») — та эт/сек больше не знает. --------
 
+// Сырое дерево последнего ответа сервера — фильтр «раздел»/статус (см. ниже)
+// режет его на лету, без повторного похода на сервер.
+let blockProgressTreeData = null;
+let blockProgressBlockId = null;   // для истории факта по наведению — см. bpHistoryTooltip
+let blockProgressFilter = { trackCode: null, statuses: new Set(["plan", "in_progress", "done"]) };
+
 async function loadBlockProgressPanel(blockId) {
   const box = document.getElementById("block-progress-tree");
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  blockProgressBlockId = blockId;
   try {
-    const data = await api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/progress`);
-    box.innerHTML = data.tree.length
-      ? renderBlockProgressTree(data.tree, 0)
-      : '<div class="hint-text">Операций не выбрано — кнопка «Настройки».</div>';
+    // В режиме «Динамика за период» (mfrDynamics, вкладка «Фильтры») сервер
+    // кладёт в лист percent_from/percent_to вместо percent — см.
+    // work_fact.block_progress_tree и renderBlockProgressTree ниже. Даты
+    // отправляются ОБЕ, даже пустыми (2026-09-10, живой запрос — пустой
+    // период значит «за всё время», а не «выключено»): именно ПРИСУТСТВИЕ
+    // параметров в запросе, а не их непустота, включает на сервере режим
+    // динамики (см. work_fact.block_progress_tree, dynamics = ... is not None).
+    const qs = mfrDynamics.active
+      ? `?date_from=${encodeURIComponent(mfrDynamics.from || "")}&date_to=${encodeURIComponent(mfrDynamics.to || "")}`
+      : "";
+    const data = await api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/progress${qs}`);
+    blockProgressTreeData = data.tree;
+    renderBlockProgressPanel();
   } catch (e) {
+    blockProgressTreeData = null;
     box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Раздел режет по planning_track_code листа, статус — по status (в режиме
+// динамики — по status_to, состоянию НА КОНЕЦ периода: фильтр про «что сейчас
+// в этом статусе», а не про то, каким он был в начале). «Узел» без детей
+// после фильтрации отбрасывается — иначе висели бы пустые заголовки разделов.
+function filterBlockProgressTree(nodes) {
+  const result = [];
+  for (const n of nodes) {
+    if (n.row_kind === "узел") {
+      const kids = filterBlockProgressTree(n.children || []);
+      if (kids.length) result.push({ ...n, children: kids });
+      continue;
+    }
+    if (blockProgressFilter.trackCode && n.planning_track_code !== blockProgressFilter.trackCode) continue;
+    const status = n.status_to || n.status;
+    if (!blockProgressFilter.statuses.has(status)) continue;
+    result.push(n);
+  }
+  return result;
+}
+
+function renderBlockProgressPanel() {
+  const box = document.getElementById("block-progress-tree");
+  if (!blockProgressTreeData) return;
+  const filtered = filterBlockProgressTree(blockProgressTreeData);
+  box.innerHTML = blockProgressTreeData.length
+    ? (filtered.length ? renderBlockProgressTree(filtered, 0)
+                        : '<div class="hint-text">Ничего не подходит под фильтр.</div>')
+    : '<div class="hint-text">Операций не выбрано — кнопка «Настройки».</div>';
 }
 
 function renderBlockProgressTree(nodes, depth) {
@@ -29856,16 +29972,147 @@ function renderBlockProgressTree(nodes, depth) {
       const kids = n.children && n.children.length ? renderBlockProgressTree(n.children, depth + 1) : "";
       return `<div class="bp-node" style="padding-left:${pad}px">${escapeHtml(n.name)}</div>${kids}`;
     }
-    const percent = n.percent || 0;
+    // Режим «Динамика за период» — ОДИН прогресс-бар (живой запрос
+    // пользователя, 2026-09-10, заменяет прежние две отдельные полосы
+    // было/стало): заливка до percent_to, риска-метка на percent_from,
+    // подпись «было → стало». history-подсказка по наведению — общая для
+    // обоих режимов, см. bindBlockProgressHistoryHover.
+    const dynamics = n.percent_from !== undefined;
+    const percent = dynamics ? n.percent_to : (n.percent || 0);
+    const status = dynamics ? n.status_to : n.status;
+    const marker = dynamics
+      ? `<div class="bp-bar-marker" style="left:${n.percent_from}%"></div>` : "";
+    const label = dynamics
+      ? `<span class="bp-percent bp-percent-range">${n.percent_from}% → ${n.percent_to}%</span>`
+      : `<span class="bp-percent">${percent}%</span>`;
     return `<div class="bp-op" style="padding-left:${pad}px">
       <div class="bp-op-name">${escapeHtml(n.name || "(без названия)")}</div>
       <div class="bp-op-bar-row">
-        <div class="bp-bar"><div class="bp-bar-fill bp-${n.status}" style="width:${percent}%"></div></div>
-        <span class="bp-percent">${percent}%</span>
+        <div class="bp-bar" data-work-type-id="${n.id}"><div class="bp-bar-fill bp-${status}" style="width:${percent}%"></div>${marker}</div>
+        ${label}
       </div>
     </div>`;
   }).join("");
 }
+
+// -------- История факта операции по наведению (живой запрос пользователя)
+// — та же плавающая карточка, что у #chart-tooltip, свой независимый
+// экземпляр (#bp-history-tooltip): триггер другой (mouseenter/mouseleave по
+// строке дерева, не mousemove по SVG), а элемент общий на все карточки
+// блока сразу переиспользовать нельзя — история у каждой операции своя. --------
+
+const bpHistoryCache = new Map();   // "blockId:workTypeId" -> ответ сервера, дерево не переоткрывают на каждый чих
+
+function bpHistoryTooltipEl() {
+  let el = document.getElementById("bp-history-tooltip");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "bp-history-tooltip";
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function hideBpHistoryTooltip() {
+  const el = document.getElementById("bp-history-tooltip");
+  if (el) el.style.display = "none";
+}
+
+function bpHistoryRowsHtml(history) {
+  if (!history.length) return '<div class="hint-text">Отчётов ещё не было.</div>';
+  return history.map(h => `<div class="bp-history-row">
+    <span>${escapeHtml(h["дата"])} — ${h["процент"]}%</span>
+    <span class="bp-history-user">${escapeHtml(h["пользователь"] || "—")}</span>
+  </div>`).join("");
+}
+
+async function showBpHistoryTooltip(bar) {
+  const blockId = blockProgressBlockId, workTypeId = Number(bar.dataset.workTypeId);
+  if (!blockId || !workTypeId) return;
+  const el = bpHistoryTooltipEl();
+  const rect = bar.getBoundingClientRect();
+  el.style.left = `${rect.left}px`;
+  el.style.top = `${rect.bottom + 6}px`;
+  el.style.display = "block";
+  const key = `${blockId}:${workTypeId}`;
+  if (bpHistoryCache.has(key)) {
+    el.innerHTML = `<div class="bp-history-title">История факта</div>${bpHistoryRowsHtml(bpHistoryCache.get(key))}`;
+    return;
+  }
+  el.innerHTML = `<div class="bp-history-title">История факта</div><div class="hint-text">Загрузка…</div>`;
+  try {
+    const data = await api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/work-types/${workTypeId}/fact-history`);
+    bpHistoryCache.set(key, data.history);
+    // Наведение могло уйти на другую строку, пока грузилось, — не подменяем
+    // чужую подсказку своим ответом.
+    if (Number(bar.dataset.workTypeId) === workTypeId && el.style.display === "block") {
+      el.innerHTML = `<div class="bp-history-title">История факта</div>${bpHistoryRowsHtml(data.history)}`;
+    }
+  } catch (e) {
+    el.innerHTML = `<div class="bp-history-title">История факта</div><div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+document.getElementById("block-progress-tree").addEventListener("mouseover", (e) => {
+  const bar = e.target.closest(".bp-bar");
+  if (!bar || bar.contains(e.relatedTarget)) return;
+  showBpHistoryTooltip(bar);
+});
+document.getElementById("block-progress-tree").addEventListener("mouseout", (e) => {
+  const bar = e.target.closest(".bp-bar");
+  if (!bar || bar.contains(e.relatedTarget)) return;
+  hideBpHistoryTooltip();
+});
+
+// -------- Фильтр «раздел»/статус над деревом операций блока (живой запрос
+// пользователя) — ЛОКАЛЬНЫЙ отбор дашборда, не путать с «Шахматкой» выше:
+// та красит план, этот только сужает дерево, уже полученное с сервера. --------
+
+function bpFilterModalListHtml() {
+  return mfrChessTracks.map((t) => {
+    const on = blockProgressFilter.trackCode === t["код"];
+    return `<div class="chess-pick${on ? " chess-pick-on" : ""}" data-bp-filter-code="${escapeHtml(t["код"])}">
+      ${escapeHtml(t["название"])}
+    </div>`;
+  }).join("");
+}
+
+function updateBpFilterSectionName() {
+  const track = blockProgressFilter.trackCode
+    ? mfrChessTracks.find((t) => t["код"] === blockProgressFilter.trackCode) : null;
+  document.getElementById("bp-filter-section-name").textContent = track ? track["название"] : "Все разделы";
+}
+
+document.getElementById("bp-filter-section-open").addEventListener("click", () => {
+  document.getElementById("bp-filter-modal-tree").innerHTML = mfrChessTracks.length
+    ? bpFilterModalListHtml()
+    : '<div class="hint-text">Досок «Шахматка», запланированных хотя бы для одного блока, ещё нет.</div>';
+  document.getElementById("bp-filter-modal-backdrop").classList.add("open");
+});
+document.getElementById("bp-filter-modal-close").addEventListener("click", () => {
+  document.getElementById("bp-filter-modal-backdrop").classList.remove("open");
+});
+document.getElementById("bp-filter-modal-all").addEventListener("click", () => {
+  document.getElementById("bp-filter-modal-backdrop").classList.remove("open");
+  blockProgressFilter.trackCode = null;
+  updateBpFilterSectionName();
+  renderBlockProgressPanel();
+});
+document.getElementById("bp-filter-modal-tree").addEventListener("click", (e) => {
+  const pick = e.target.closest(".chess-pick");
+  if (!pick) return;
+  document.getElementById("bp-filter-modal-backdrop").classList.remove("open");
+  blockProgressFilter.trackCode = pick.dataset.bpFilterCode;
+  updateBpFilterSectionName();
+  renderBlockProgressPanel();
+});
+document.querySelectorAll(".bp-status-check").forEach((cb) => {
+  cb.addEventListener("change", () => {
+    blockProgressFilter.statuses = new Set(
+      [...document.querySelectorAll(".bp-status-check:checked")].map((c) => c.value));
+    renderBlockProgressPanel();
+  });
+});
 
 function currentSelectedBlockId() {
   return revitPlanState.selected && revitPlanState.selected.kind === "block"
@@ -30155,6 +30402,7 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
       blockFactCurrentReportId = res.id;
     }
     showToast("Отчёт сохранён", "success");
+    bpHistoryCache.clear();   // сохранённые значения устарели — история по наведению должна их подхватить
     const reports = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports`);
     renderBlockFactReportsList(reports);
     // Полная перерисовка карточки, а не только дерево: строка «Работы:
@@ -30330,7 +30578,78 @@ async function selectMfrChessTrack(trackCode) {
   // пересобрать блоки заново. Принудительный сброс, как у чекбоксов слоёв.
   mfr3d.key = null;
   applyMfrMode();
+  // Область «изменился факт» зависит от активной доски (см. ниже,
+  // reloadMfrDynamics) — смена доски пересчитывает подсветку, если период
+  // вообще включён; сама reloadMfrDynamics уже сделает свой redraw.
+  if (mfrDynamics.active) await reloadMfrDynamics();
 }
+
+// ==================== ДИНАМИКА ФАКТА ЗА ПЕРИОД (живой запрос пользователя) ====================
+// Подсветка блоков, у которых факт менялся внутри периода. Источника-журнала
+// для BLOCK_UNITS нет (app/work_fact.py — отчёты на дату, не append-only лог),
+// поэтому «изменилось» — сравнение двух «снимков на дату» на границах
+// периода (_percents_as_of дважды, см. work_fact.blocks_fact_changes). Если
+// активна доска «Шахматка» — сравниваются только её операции (решение
+// пользователя: динамика должна быть про то же, что сейчас красит план),
+// иначе — все операции, отобранные для блока.
+let mfrDynamics = { active: false, from: null, to: null };
+let mfrDynamicsBlocks = new Set();
+
+// Пустые даты (2026-09-10, живой запрос пользователя) — НЕ «выключено», а
+// «за весь период»: подсвечиваются все блоки, где факт вообще когда-либо
+// менялся. Сервер сам подставляет сентинельную раннюю дату/сегодня взамен
+// отсутствующей границы (work_fact._DYNAMICS_MIN_DATE) — здесь только текст
+// подписи различает три случая (обе даты, одна, ни одной).
+function updateMfrDynamicsCaption() {
+  const el = document.getElementById("mfr-dynamics-caption");
+  if (!mfrDynamics.active) { el.style.display = "none"; return; }
+  el.style.display = "";
+  if (mfrDynamics.from && mfrDynamics.to) el.textContent = `Динамика за период с ${mfrDynamics.from} по ${mfrDynamics.to}`;
+  else if (mfrDynamics.from) el.textContent = `Динамика с ${mfrDynamics.from} по настоящее время`;
+  else if (mfrDynamics.to) el.textContent = `Динамика по ${mfrDynamics.to}`;
+  else el.textContent = "Динамика за весь период";
+}
+
+async function reloadMfrDynamics() {
+  if (!mfrDynamics.active) {
+    mfrDynamicsBlocks = new Set();
+  } else {
+    try {
+      // Обе даты — ВСЕГДА в запросе, даже пустыми: присутствие параметра, а
+      // не его непустота, включает на сервере сентинельные границы «за весь
+      // период» (см. work_fact.blocks_fact_changes).
+      const qs = new URLSearchParams({ date_from: mfrDynamics.from || "", date_to: mfrDynamics.to || "" });
+      if (mfrChessTrackCode) qs.set("track_code", mfrChessTrackCode);
+      const data = await api(`/objects/${revitPlanState.objectId}/blocks/fact-changes?${qs}`);
+      mfrDynamicsBlocks = new Set(data.blocks || []);
+    } catch (err) {
+      showToast(err.message, "error");
+      mfrDynamicsBlocks = new Set();
+    }
+  }
+  updateMfrDynamicsCaption();
+  if (revitPlanState.data) drawRevitPlan(revitPlanState.data);
+  mfr3d.key = null;
+  applyMfrMode();
+  // Открытая карточка блока перерисовывается тем же режимом (текущее
+  // значение/динамика), чтобы дерево операций не осталось от предыдущего.
+  const selId = currentSelectedBlockId();
+  if (selId) await renderBlockCard(selId);
+}
+
+document.getElementById("mfr-dynamics-toggle").addEventListener("change", (e) => {
+  mfrDynamics.active = e.target.checked;
+  document.getElementById("mfr-dynamics-dates").style.display = mfrDynamics.active ? "" : "none";
+  reloadMfrDynamics();
+});
+document.getElementById("mfr-dynamics-from").addEventListener("change", (e) => {
+  mfrDynamics.from = e.target.value || null;
+  reloadMfrDynamics();
+});
+document.getElementById("mfr-dynamics-to").addEventListener("change", (e) => {
+  mfrDynamics.to = e.target.value || null;
+  reloadMfrDynamics();
+});
 
 // ==================== 3D МОДЕЛИ МФР (2026-08-25) ====================
 // Своя сцена, а не общая с 3D чертежа. Та завязана на изделия, их статусы
@@ -31037,8 +31356,14 @@ async function buildMfr3D() {
   // так не приходится сначала приблизиться, потом отдельно доехать.
   controls.zoomSpeed = 2.4;
   controls.zoomToCursor = true;
-  controls.enableDamping = true;   // инерция: вращение перестаёт быть рывками
-  controls.dampingFactor = 0.12;
+  // enableDamping=false — та же правка, что в 2026-07-25 у основной 3D-сцены
+  // ЖБИ (create3DRendererAndControls) и мини-сцен efMap3d/zonePreview3d:
+  // включённая инерция (dampingFactor) доворачивает камеру ещё несколько
+  // секунд ПОСЛЕ отпускания мыши — ракурс продолжает чуть смещаться, из-за
+  // чего блики/грани/наклейки «переливаются», хотя жест уже закончен
+  // (живой запрос пользователя 2026-09-10: тот же эффект здесь, в 3D МФР,
+  // фикс на неё тогда не перенесли). Камера должна останавливаться СРАЗУ.
+  controls.enableDamping = false;
   controls.screenSpacePanning = true;
   // Было: не ниже горизонта (защита от «переворота мира» случайным
   // движением). Снято по прямому запросу пользователя (2026-08-31) —

@@ -2097,6 +2097,11 @@
   .filter-group-header .link-btn:disabled { opacity: .4; cursor: default; text-decoration: none; }
   .card-block { margin-bottom: 14px; }
   .card-block h4 { font-size: 11px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 4px; font-weight: 600; }
+  /* Сворачиваемые карточки фильтров МФР (живой запрос пользователя) —
+     .side-section-head/.filter-expand-btn общие с панелью «Статус» АРМ ЖБИ,
+     здесь заголовок — <h4>, а не <h3>, отсюда точечный оверрайд margin/flex. */
+  .card-block .side-section-head { margin: 0 0 4px; }
+  .card-block .side-section-head h4 { margin: 0; flex: 1; }
   /* «Контракт не назначен» в карточке — кликабельно, когда изделие уже в
      работе (2026-08-06). Выглядит как ссылка, а не как кнопка: это не
      действие над схемой, а переход к выбору. */
@@ -2934,6 +2939,16 @@
     background: var(--color-surface); border-right: 1px solid var(--color-border);
   }
   .mfr-side-right { flex-basis: 300px; border-right: none; border-left: 1px solid var(--color-border); }
+  /* Регулируемая ширина (живой запрос пользователя) — makePanelResizer
+     (app.js) ставит panel.style.width, а при заданном flex-basis браузер
+     игнорирует width для размера по главной оси; поэтому у ЭТОЙ панели
+     конкретно свой flex: 0 0 auto, как у #picker-contracts, а не
+     flex-basis из .mfr-side/.mfr-side-right (ID-селектор их перебивает). */
+  #mfr-card-panel { flex: 0 0 auto; width: 300px; }
+  /* Вкладки внутри #mfr-card-panel — общий .tabs залипает с отступом,
+     рассчитанным на padding:16px у #sidebar; здесь padding:10px
+     (.mfr-side), отступ у своей копии меньше. */
+  #mfr-card-panel .tabs { margin: -10px -10px 12px; top: -10px; }
   .revit-list { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: auto; }
   /* Строки карточки элемента — «подпись слева, значение справа», как в
      карточке изделия: значение бывает длинным (типоразмер, uid) и должно
@@ -2964,6 +2979,14 @@
   #revit-plan-svg .mfr-selected {
     stroke: var(--mfr-sel-stroke, #ff6a00) !important; stroke-width: 3px !important; stroke-dasharray: none !important;
     vector-effect: non-scaling-stroke; fill: var(--mfr-sel-fill, #ffb347) !important; fill-opacity: .85 !important;
+  }
+  /* «Изменился факт за период» (живой запрос пользователя) — независимо от
+     выбора и статуса: заливка статуса остаётся как есть, поверх только
+     яркая пунктирная обводка-сигнал «загляни сюда» (см. app.js,
+     mfrDynamicsBlocks/mfrHighlightSelection). */
+  #revit-plan-svg .mfr-fact-changed {
+    stroke: #00e5ff !important; stroke-width: 3px !important; stroke-dasharray: 6 4 !important;
+    vector-effect: non-scaling-stroke;
   }
   .card-block h4 .revit-reset { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
   .revit-reset { font-size:11px; color: var(--color-text-muted); text-decoration:none; }
@@ -3152,12 +3175,48 @@
   #block-progress-tree .bp-op { padding: 3px 0; }
   #block-progress-tree .bp-op-name { overflow-wrap: anywhere; }
   #block-progress-tree .bp-op-bar-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
-  #block-progress-tree .bp-bar { flex: 1 1 auto; height: 6px; border-radius: 3px;
-    background: var(--color-surface-2); border: 1px solid var(--color-border); overflow: hidden; }
+  #block-progress-tree .bp-bar { position: relative; flex: 1 1 auto; height: 6px; border-radius: 3px;
+    background: var(--color-surface-2); border: 1px solid var(--color-border); overflow: hidden; cursor: help; }
   #block-progress-tree .bp-bar-fill { height: 100%; background: var(--color-text-muted); }
   #block-progress-tree .bp-bar-fill.bp-in_progress { background: #E8A33D; }
   #block-progress-tree .bp-bar-fill.bp-done { background: #3FA76A; }
+  /* Метка начала периода на едином прогресс-баре «Динамики» (живой запрос
+     пользователя, 2026-09-10, заменяет прежние ДВЕ полоски было/стало) —
+     тонкая вертикальная риска поверх заливки-«стало», на позиции
+     percent_from; сама заливка идёт до percent_to. */
+  #block-progress-tree .bp-bar-marker {
+    position: absolute; top: -1px; bottom: -1px; width: 2px;
+    background: var(--color-text); opacity: .6;
+  }
   #block-progress-tree .bp-percent { flex: 0 0 auto; color: var(--color-text-muted); min-width: 30px; text-align: right; }
+  /* «→» в подписи периода шире, чем один разряд процента — своя, чуть
+     большая минимальная ширина, иначе колонка процентов дёргается по
+     ширине от строки к строке. */
+  #block-progress-tree .bp-percent.bp-percent-range { min-width: 76px; }
+  /* Подсказка-история факта по наведению на полосу (живой запрос
+     пользователя) — тот же визуальный приём, что у #chart-tooltip
+     (плавающая карточка у курсора), свой экземпляр: разные источники
+     данных и разный триггер наведения (там — mousemove по SVG графика,
+     здесь — mouseenter/mouseleave по строке дерева). */
+  #bp-history-tooltip {
+    position: fixed; z-index: 200; display: none; pointer-events: none;
+    background: var(--color-surface); color: var(--color-text);
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md); padding: 8px 10px; font-size: 12px; line-height: 1.5;
+    max-width: 260px; max-height: 220px; overflow-y: auto;
+  }
+  #bp-history-tooltip .bp-history-title { font-weight: 600; margin-bottom: 4px; }
+  #bp-history-tooltip .bp-history-row { display: flex; gap: 8px; justify-content: space-between; }
+  #bp-history-tooltip .bp-history-row + .bp-history-row { margin-top: 2px; }
+  #bp-history-tooltip .bp-history-user { color: var(--color-text-muted); }
+  /* Фильтр дашборда блока (живой запрос пользователя) — раздел + статус,
+     режут уже полученное дерево на фронте (app.js, filterBlockProgressTree). */
+  .bp-filter-bar { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+  .bp-status-filter { display: flex; gap: 10px; font-size: 12px; flex-wrap: wrap; }
+  .bp-status-filter label { display: flex; align-items: center; gap: 4px; cursor: pointer; font-weight: 400; }
+  /* Динамика факта за период: поля дат под переключателем — своя строка,
+     не .filter-group/.toggle-sub (те — под конкретные экраны фильтров ЖБИ). */
+  .mfr-dynamics-dates-row { display: flex; gap: 10px; align-items: center; font-size: 12px; margin-top: 6px; }
 
   /* ПОСТОЯННАЯ вертикальная полоса прокрутки у длинного списка (2026-09-05,
      живой запрос пользователя). Два отдельных приёма, оба обязательны:
@@ -4949,55 +5008,6 @@
        (площадочные), а у чертежа свои, и рисовать их в одном холсте
        нельзя (см. app/revit_plan.py). -->
   <div id="mfr-workspace" style="display:none; flex:1 1 auto; min-height:0">
-    <!-- Отбор МНОЖЕСТВЕННЫЙ в каждой группе: нажатие добавляет и убирает
-         строку. У группы с действующим отбором появляется «сбросить», а
-         над списком — «сбросить всё». Пустой набор означает «отбор снят»,
-         а не «ничего не подходит».
-
-         Вёрстка теми же средствами, что и остальной сервис: слева и
-         справа — панели сайдбара (#sidebar), внутри — карточки-блоки
-         (.card-block) с заголовками <h4>. Свой набор стилей здесь был бы
-         вторым языком для того же самого. -->
-    <div id="mfr-filters" class="mfr-side">
-      <div class="card-block">
-        <h4>Этаж <a href="#" class="revit-reset" data-reset="levels" hidden>сбросить</a></h4>
-        <div id="revit-plan-levels" class="revit-list" style="max-height:36vh"></div>
-      </div>
-      <div class="card-block">
-        <h4>Раздел <a href="#" class="revit-reset" data-reset="parts" hidden>сбросить</a></h4>
-        <div id="revit-plan-parts" class="revit-list"></div>
-      </div>
-      <div class="card-block">
-        <h4>Секция <a href="#" class="revit-reset" data-reset="sections" hidden>сбросить</a></h4>
-        <div id="revit-plan-sections" class="revit-list"></div>
-      </div>
-      <div class="card-block">
-        <h4>Категория <a href="#" class="revit-reset" data-reset="categories" hidden>сбросить</a></h4>
-        <div id="revit-plan-categories" class="revit-list" style="max-height:24vh"></div>
-      </div>
-      <!-- Шахматка (2026-09-02, переосмыслена 2026-09-04, живой запрос
-           пользователя): выбор ДОСКИ — группы операций одного кода «Трек
-           планирования» (planning_tracks, лист PlanningTrack исходного
-           xlsx, коды «1»-«20») — красит все блоки плана средним статусом её
-           операций и подписывает каждую из них отдельной строкой прямо на
-           блоке. Поле выбора — плоское название доски (у доски, в отличие
-           от прежней одной операции, нет пути по дереву); сам выбор — в
-           отдельном крупном окне плоским списком (только доски, реально
-           запланированные хотя бы для одного блока,
-           app/work_fact.py::used_planning_tracks). Клик по блоку поведения
-           не меняет — карточка справа та же. -->
-      <div class="card-block">
-        <h4>Шахматка</h4>
-        <button type="button" class="mfr-chess-current" id="mfr-chess-open">
-          <div id="mfr-chess-current-name">— выключено —</div>
-        </button>
-        <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px">
-          <span><i class="wp-dot" style="background:var(--color-text-muted);border-color:var(--color-text-muted)"></i>план</span>
-          <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
-          <span><i class="wp-dot" style="background:#3FA76A;border-color:#3FA76A"></i>выполнено</span>
-        </div>
-      </div>
-    </div>
     <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:10px">
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
         <div class="hint-text" id="revit-plan-head" style="flex:1 1 auto; min-width:0"></div>
@@ -5036,27 +5046,171 @@
              расчёт высот эвристиками, а здесь высота и отметка приходят из
              модели готовыми. -->
         <div id="mfr-3d-canvas" style="position:absolute; inset:0; display:none"></div>
+        <!-- Общий для 2D и 3D оверлей (не внутри SVG, не на 3D-канвасе) —
+             виден в обоих режимах без дублирования разметки (живой запрос
+             пользователя: подпись «Динамика за период» нужна и там, и там). -->
+        <div id="mfr-dynamics-caption" class="hint-text" style="display:none; position:absolute; top:6px; left:50%; transform:translateX(-50%); z-index:5; background:var(--color-surface); padding:2px 10px; border-radius:var(--radius); border:1px solid var(--color-border)"></div>
       </div>
       <div class="hint-text" id="revit-plan-status" style="margin-top:6px"></div>
     </div>
+    <!-- Регулируемая ширина (живой запрос пользователя) — тот же приём, что
+         у #picker-contracts (см. CSS #mfr-card-panel и app.js makePanelResizer). -->
+    <div id="mfr-card-panel-resize" class="panel-resize-handle"></div>
     <div id="mfr-card-panel" class="mfr-side mfr-side-right">
-      <div class="card-block">
-        <h4>Элемент</h4>
-        <div id="revit-plan-card" class="hint-text">Нажмите на элемент плана.</div>
+      <!-- Вкладки (живой запрос пользователя, по образцу #sidebar в АРМ ЖБИ,
+           app.js switchTab) — «Свойства» показывает карточку АКТИВНОЙ
+           сущности (элемент или блок, взаимоисключающе — см.
+           showRevitCard/renderBlockCard), «Фильтры» — то, что раньше стояло
+           отдельной панелью слева от схемы; освободившееся место отдано ей. -->
+      <div class="tabs" id="mfr-panel-tabs">
+        <button class="tab-btn active" data-mfr-panel-tab="properties">Свойства</button>
+        <button class="tab-btn" data-mfr-panel-tab="filters">Фильтры</button>
       </div>
-      <div class="card-block" id="block-card-block" style="display:none">
-        <h4>Блок</h4>
-        <!-- Групповое выделение блоков (2026-09-05, живой запрос): Ctrl+клик
-             по блокам на плане или в 3D. Плашка появляется, только когда
-             выделено больше одного, — иначе она была бы шумом при обычной
-             работе с одним блоком. -->
-        <div id="block-group-bar" class="block-group-bar" style="display:none"></div>
-        <div id="block-card" class="hint-text"></div>
-        <div class="actions" style="margin:8px 0">
-          <button class="btn btn-sm btn-secondary" id="block-progress-settings-btn">Настройки</button>
-          <button class="btn btn-sm btn-primary" id="block-progress-fact-btn">Факт</button>
+      <div id="mfr-panel-tab-properties" class="tab-panel active">
+        <div class="card-block" id="element-card-block">
+          <h4>Элемент</h4>
+          <div id="revit-plan-card" class="hint-text">Нажмите на элемент или блок плана.</div>
         </div>
-        <div id="block-progress-tree"></div>
+        <div class="card-block" id="block-card-block" style="display:none">
+          <h4>Блок</h4>
+          <!-- Групповое выделение блоков (2026-09-05, живой запрос): Ctrl+клик
+               по блокам на плане или в 3D. Плашка появляется, только когда
+               выделено больше одного, — иначе она была бы шумом при обычной
+               работе с одним блоком. -->
+          <div id="block-group-bar" class="block-group-bar" style="display:none"></div>
+          <div id="block-card" class="hint-text"></div>
+          <div class="actions" style="margin:8px 0">
+            <button class="btn btn-sm btn-secondary" id="block-progress-settings-btn">Настройки</button>
+            <button class="btn btn-sm btn-primary" id="block-progress-fact-btn">Факт</button>
+          </div>
+          <!-- Фильтр дашборда блока (живой запрос пользователя) — СВОЙ,
+               локальный отбор списка операций: не путать с «Шахматкой» на
+               вкладке «Фильтры» — та красит весь план, этот только сужает
+               дерево ниже. Выбор раздела оформлен так же, как «Шахматка»
+               (модалка со списком .chess-pick, #bp-filter-modal-backdrop),
+               но это отдельный экземпляр со своим состоянием. -->
+          <div class="bp-filter-bar">
+            <button type="button" class="mfr-chess-current" id="bp-filter-section-open">
+              <div id="bp-filter-section-name">Все разделы</div>
+            </button>
+            <div class="bp-status-filter">
+              <label><input type="checkbox" class="bp-status-check" value="plan" checked>неначатые</label>
+              <label><input type="checkbox" class="bp-status-check" value="in_progress" checked>в работе</label>
+              <label><input type="checkbox" class="bp-status-check" value="done" checked>завершено</label>
+            </div>
+          </div>
+          <div id="block-progress-tree"></div>
+        </div>
+      </div>
+      <div id="mfr-panel-tab-filters" class="tab-panel">
+        <!-- Отбор МНОЖЕСТВЕННЫЙ в каждой группе: нажатие добавляет и убирает
+             строку. У группы с действующим отбором появляется «сбросить», а
+             над списком — «сбросить всё». Пустой набор означает «отбор снят»,
+             а не «ничего не подходит». Перенесено сюда со своего прежнего
+             места слева от схемы (живой запрос пользователя). -->
+        <!-- Все карточки ниже сворачиваемые, вид группировки — как у групп
+             фильтров ЖБИ (живой запрос пользователя, 2026-09-10: было по
+             образцу панели «Статус» — заголовок КАПСОМ, стрелка справа;
+             теперь та же вёрстка, что у filterGroupShell — стрелка ПЕРВОЙ,
+             слева, заголовок обычным текстом). Persistence — по-прежнему
+             свой общий механизм data-collapse/.side-collapsed
+             (app.js: setSectionCollapsed), а не state.topFilterCollapsed
+             filterGroupShell — тот в памяти на сессию, этот в localStorage
+             навсегда, как остальные панели проекта. -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-levels-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Этаж</span>
+            <a href="#" class="revit-reset" data-reset="levels" hidden>сбросить</a>
+          </div>
+          <div id="mfr-filter-levels-body">
+            <div id="revit-plan-levels" class="revit-list" style="max-height:36vh"></div>
+          </div>
+        </div>
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-parts-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Раздел</span>
+            <a href="#" class="revit-reset" data-reset="parts" hidden>сбросить</a>
+          </div>
+          <div id="mfr-filter-parts-body">
+            <div id="revit-plan-parts" class="revit-list"></div>
+          </div>
+        </div>
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-sections-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Секция</span>
+            <a href="#" class="revit-reset" data-reset="sections" hidden>сбросить</a>
+          </div>
+          <div id="mfr-filter-sections-body">
+            <div id="revit-plan-sections" class="revit-list"></div>
+          </div>
+        </div>
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-categories-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Категория</span>
+            <a href="#" class="revit-reset" data-reset="categories" hidden>сбросить</a>
+          </div>
+          <div id="mfr-filter-categories-body">
+            <div id="revit-plan-categories" class="revit-list" style="max-height:24vh"></div>
+          </div>
+        </div>
+        <!-- Шахматка (2026-09-02, переосмыслена 2026-09-04, живой запрос
+             пользователя): выбор ДОСКИ — группы операций одного кода «Трек
+             планирования» (planning_tracks, лист PlanningTrack исходного
+             xlsx, коды «1»-«20») — красит все блоки плана средним статусом её
+             операций и подписывает каждую из них отдельной строкой прямо на
+             блоке. Поле выбора — плоское название доски (у доски, в отличие
+             от прежней одной операции, нет пути по дереву); сам выбор — в
+             отдельном крупном окне плоским списком (только доски, реально
+             запланированные хотя бы для одного блока,
+             app/work_fact.py::used_planning_tracks). Клик по блоку поведения
+             не меняет — карточка справа та же. -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-chess-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Шахматка</span>
+          </div>
+          <div id="mfr-filter-chess-body">
+            <button type="button" class="mfr-chess-current" id="mfr-chess-open">
+              <div id="mfr-chess-current-name">— выключено —</div>
+            </button>
+            <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px">
+              <span><i class="wp-dot" style="background:var(--color-text-muted);border-color:var(--color-text-muted)"></i>план</span>
+              <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
+              <span><i class="wp-dot" style="background:#3FA76A;border-color:#3FA76A"></i>выполнено</span>
+            </div>
+          </div>
+        </div>
+        <!-- Динамика факта за период (живой запрос пользователя): подсветка
+             блоков, где факт менялся внутри периода, — источник не журнал
+             (для «эт/сек»/«кв.эт/сек» его нет), а сравнение двух «снимков на
+             дату» (work_fact._percents_as_of) на границах периода. Если
+             активна «Шахматка» выше — сравниваются только её операции, иначе
+             — все, отобранные для блока (app.js, reloadMfrDynamics). Пустые
+             даты (2026-09-10, живой запрос) — не «выключено», а «за весь
+             период»: сравнение идёт от сентинельной ранней даты/сегодня. -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-dynamics-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Динамика факта за период</span>
+          </div>
+          <div id="mfr-filter-dynamics-body">
+            <label class="toggle"><input type="checkbox" id="mfr-dynamics-toggle">показывать изменения факта</label>
+            <div id="mfr-dynamics-dates" class="mfr-dynamics-dates-row" style="display:none">
+              <label>с <input type="date" id="mfr-dynamics-from"></label>
+              <label>по <input type="date" id="mfr-dynamics-to"></label>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -7993,6 +8147,22 @@
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-secondary" id="mfr-chess-modal-off">Выключить раскраску</button>
       <button class="btn btn-secondary" id="mfr-chess-modal-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Фильтр «раздел» дашборда блока (живой запрос пользователя) — та же
+     вёрстка, что у выбора доски «Шахматки» выше (список .chess-pick), но
+     ЛОКАЛЬНЫЙ отбор списка операций одного блока, а не раскраска плана. -->
+<div class="modal-backdrop" id="bp-filter-modal-backdrop">
+  <div class="modal wide">
+    <h2>Фильтр по разделу</h2>
+    <p class="hint-text">Раздел — та же группа операций одного кода «Трек планирования», что и доска
+      «Шахматка». Сужает список операций в карточке блока, план не перекрашивает.</p>
+    <div id="bp-filter-modal-tree" style="max-height:56vh; overflow:auto"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-secondary" id="bp-filter-modal-all">Показать все</button>
+      <button class="btn btn-secondary" id="bp-filter-modal-close">Закрыть</button>
     </div>
   </div>
 </div>

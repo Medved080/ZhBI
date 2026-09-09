@@ -6643,15 +6643,39 @@ def set_block_percent_cell(object_id: int, block_id: int, body: BlockPercentCell
 
 
 @app.get("/objects/{object_id}/blocks/{block_id}/progress")
-def get_block_progress(object_id: int, block_id: int,
+def get_block_progress(object_id: int, block_id: int, date_from: Optional[str] = None,
+                       date_to: Optional[str] = None,
                        user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
         try:
-            return work_fact.block_progress_tree(conn, object_id, block_id)
+            return work_fact.block_progress_tree(conn, object_id, block_id, date_from, date_to)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/blocks/fact-changes")
+def get_blocks_fact_changes(object_id: int, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                            track_code: Optional[str] = None,
+                            user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        return {"blocks": work_fact.blocks_fact_changes(conn, object_id, date_from, date_to, track_code)}
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/blocks/{block_id}/work-types/{work_type_id}/fact-history")
+def get_block_op_fact_history(object_id: int, block_id: int, work_type_id: int,
+                              user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        return {"history": work_fact.op_fact_history(conn, object_id, block_id, work_type_id)}
     finally:
         conn.close()
 
