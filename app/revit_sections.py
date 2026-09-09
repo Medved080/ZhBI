@@ -236,7 +236,7 @@ def fill_by_volume(conn, object_id: int) -> dict:
     пользователя (2026-09-09): элемент на стыке двух секций достаётся той,
     что накрыла его большей долей. Параметр не перебивается — тот же
     инвариант, что у `fill_missing`."""
-    from app.block_geometry import block_box
+    from app.block_geometry import section_level_boxes_xy
 
     sections = [dict(r) for r in conn.execute(
         "SELECT id FROM object_sections WHERE object_id = ?", (object_id,))]
@@ -246,12 +246,16 @@ def fill_by_volume(conn, object_id: int) -> dict:
         "SELECT id FROM object_levels WHERE object_id = ?", (object_id,))]
 
     # этаж -> [(section_id, [(x0,y0,x1,y1), ...]), ...] — только там, где у
-    # секции вообще есть объём на этом этаже.
+    # секции вообще есть объём на этом этаже. Только x,y (`block_box` даёт
+    # ещё и высоту, но она тут не нужна и вредна — у только что заведённой
+    # секции нет ни одного блока, чтобы взять высоту у соседа по этажу, и
+    # `block_box` отказал бы всему этажу, хотя прямоугольник в плане уже
+    # известен по осям).
     зоны_по_этажам = {}
     for level in levels:
         candidates = []
         for section in sections:
-            box = block_box(conn, object_id, section["id"], level["id"])
+            box = section_level_boxes_xy(conn, object_id, section["id"], level["id"])
             if box.get("ok"):
                 candidates.append((section["id"],
                                    [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in box["boxes"]]))

@@ -226,15 +226,18 @@ def _level_height(conn, object_id: int, section_id: int, floor, z0: float):
     return None, False
 
 
-def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
-    """Параллелепипеды блока — или причина, почему их нет.
+def section_level_boxes_xy(conn, object_id: int, section_id: int, level_id: int) -> dict:
+    """Прямоугольники блока В ПЛАНЕ — или причина, почему их нет. Отдельно
+    от `block_box`, БЕЗ высоты этажа: разбор принадлежности элемента
+    секции (`app.revit_sections.fill_by_volume`) смотрит только на x,y, а
+    требовать ещё и отметку/высоту незачем — и вредно: у только что
+    заведённой секции нет ни одного блока (блок заводится ЯВНО, не
+    декартовым произведением, `app/blocks.py`), соседей для высоты
+    (`_level_height`) взять неоткуда, и `block_box` отказал бы всему
+    этажу целиком, хотя прямоугольник в плане уже известен по осям.
 
-    Возвращает `{"ok": False, "reason": "..."}` либо `{"ok": True,
-    "approx_height": bool, "boxes": [{"x0","x1","y0","y1"}, ...], "z0",
-    "z1"}` (координаты — в общих координатах площадки, как у
-    `revit_elements`). `boxes` — ОДИН элемент почти всегда (по осям секции
-    — всегда один; прямая геометрия — обычно тоже один, но может быть
-    несколько сразу, см. ниже), потребитель обязан уметь несколько."""
+    Возвращает `{"ok": False, "reason": "..."}` либо `{"ok": True, "boxes":
+    [{"x0","x1","y0","y1"}, ...]}`."""
     block = conn.execute(
         "SELECT id FROM blocks WHERE section_id = ? AND level_id = ?",
         (section_id, level_id),
@@ -254,28 +257,43 @@ def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
     # кверху) — то, ради чего заведено хранение, а не общий на секцию
     # прямоугольник по одной паре осей.
     if прямые_прямоугольники:
-        boxes = прямые_прямоугольники
-    else:
-        section = conn.execute(
-            "SELECT code, axis_from, axis_to FROM object_sections WHERE id = ?", (section_id,)
-        ).fetchone()
-        if section is None:
-            return {"ok": False, "reason": "секция не найдена"}
-        if not section["axis_from"] or not section["axis_to"]:
-            return {"ok": False, "reason": "у секции не заданы оси"}
+        return {"ok": True, "boxes": прямые_прямоугольники}
 
-        from_line = _grid_line(conn, object_id, section["axis_from"])
-        to_line = _grid_line(conn, object_id, section["axis_to"])
-        if from_line is None or to_line is None:
-            return {"ok": False, "reason": "ось секции не найдена в модели объекта"}
+    section = conn.execute(
+        "SELECT code, axis_from, axis_to FROM object_sections WHERE id = ?", (section_id,)
+    ).fetchone()
+    if section is None:
+        return {"ok": False, "reason": "секция не найдена"}
+    if not section["axis_from"] or not section["axis_to"]:
+        return {"ok": False, "reason": "у секции не заданы оси"}
 
-        xy = section_box_xy(from_line, to_line,
-                            _section_element_bounds(conn, object_id, section_id, level_id))
-        if xy is None:
-            return {"ok": False, "reason": "оси секции разнонаправленные "
-                    "(или геометрия этажа не пересекается с пролётом осей)"}
-        xy = _clip_to_seam(conn, object_id, section["code"], xy)
-        boxes = [xy]
+    from_line = _grid_line(conn, object_id, section["axis_from"])
+    to_line = _grid_line(conn, object_id, section["axis_to"])
+    if from_line is None or to_line is None:
+        return {"ok": False, "reason": "ось секции не найдена в модели объекта"}
+
+    xy = section_box_xy(from_line, to_line,
+                        _section_element_bounds(conn, object_id, section_id, level_id))
+    if xy is None:
+        return {"ok": False, "reason": "оси секции разнонаправленные "
+                "(или геометрия этажа не пересекается с пролётом осей)"}
+    xy = _clip_to_seam(conn, object_id, section["code"], xy)
+    return {"ok": True, "boxes": [xy]}
+
+
+def block_box(conn, object_id: int, section_id: int, level_id: int) -> dict:
+    """Параллелепипеды блока — или причина, почему их нет.
+
+    Возвращает `{"ok": False, "reason": "..."}` либо `{"ok": True,
+    "approx_height": bool, "boxes": [{"x0","x1","y0","y1"}, ...], "z0",
+    "z1"}` (координаты — в общих координатах площадки, как у
+    `revit_elements`). `boxes` — ОДИН элемент почти всегда (по осям секции
+    — всегда один; прямая геометрия — обычно тоже один, но может быть
+    несколько сразу, см. ниже), потребитель обязан уметь несколько."""
+    xy_result = section_level_boxes_xy(conn, object_id, section_id, level_id)
+    if not xy_result["ok"]:
+        return xy_result
+    boxes = xy_result["boxes"]
 
     level = conn.execute(
         "SELECT floor, elevation_mm, elevation_suspect, height_mm FROM object_levels WHERE id = ?",
