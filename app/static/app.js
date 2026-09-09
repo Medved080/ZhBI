@@ -31864,9 +31864,22 @@ function renderBlkGeoEditor() {
       ${corners.map(([c, cx, cy]) => `<circle class="geo-handle" data-box-i="${i}" data-corner="${c}"
           cx="${cx}" cy="${cy}" r="${handleR}"/>`).join("")}`;
   }).join("");
+  // Живая подсказка «упирается в границу» — ВНУТРИ SVG, не отдельным
+  // блоком под канвасом (2026-09-10, живой отчёт пользователя: «дёргается
+  // видимо потому что снизу появляется предупреждение и форма
+  // перерисовывается» — точный диагноз. `#blk-geo-canvas-box` растянут
+  // `flex: 1 1 auto`, а `#blk-geo-warnings` — сосед снизу без
+  // фиксированной высоты; текст на каждый pointermove менял высоту этого
+  // соседа, canvas-box пересчитывал flex-размер, и вся SVG-картинка
+  // ощутимо прыгала на экране, хотя мировые координаты бокса стояли
+  // смирно). Текст внутри SVG не участвует в layout документа вовсе —
+  // появляется/исчезает, не трогая размер канваса.
+  const hintY = fontSize * 1.4;
   const canvasBox = document.getElementById("blk-geo-canvas-box");
   canvasBox.innerHTML = `<svg id="blk-geo-svg" viewBox="0 0 ${w} ${h}" style="width:100%;height:100%"
-      preserveAspectRatio="xMidYMid meet">${planUnderlay}${otherRects}${myRects}</svg>`;
+      preserveAspectRatio="xMidYMid meet">${planUnderlay}${otherRects}${myRects}
+      <text id="blk-geo-drag-hint" x="${fontSize * 0.5}" y="${hintY}" font-size="${fontSize * 1.3}"
+        font-weight="bold" fill="var(--color-danger)" style="display:none"></text></svg>`;
 
   const rows = blkGeoBoxes.map((b, i) => `<div class="blk-geo-row" data-box-i="${i}">
     ${["x0", "x1", "y0", "y1"].map(k => `<input class="blk-inline num" type="number" step="1"
@@ -32011,8 +32024,14 @@ function blkGeoUpdateBoxVisual(i, { minX, minY, h }, blocked) {
   rect.setAttribute("x", x); rect.setAttribute("y", y);
   rect.setAttribute("width", rw); rect.setAttribute("height", rh);
   rect.classList.toggle("geo-box-blocked", !!blocked);
-  document.getElementById("blk-geo-warnings").textContent = blocked
-    ? `Упирается в границу секции «${blocked}» — области не должны пересекаться.` : "";
+  // Внутри SVG (см. renderBlkGeoEditor) — не в отдельном DOM-блоке под
+  // канвасом, чтобы появление текста не меняло layout и не дёргало
+  // картинку (2026-09-10).
+  const hint = document.getElementById("blk-geo-drag-hint");
+  if (hint) {
+    hint.style.display = blocked ? "" : "none";
+    if (blocked) hint.textContent = `Упирается в границу секции «${blocked}»`;
+  }
   const corners = { tl: [x, y], tr: [x + rw, y], bl: [x, y + rh], br: [x + rw, y + rh] };
   for (const [c, [cx, cy]] of Object.entries(corners)) {
     const handle = document.querySelector(`.geo-handle[data-box-i="${i}"][data-corner="${c}"]`);
