@@ -16,7 +16,7 @@
 import json
 import re
 
-from app import block_geometry
+from app import block_geometry, revit_sections
 
 # Шаблонное имя этажа (Revit — «Этаж 9», `blocks.create_level` по умолчанию
 # — «Этаж 9», ручное «9 этаж»): такое в списке заменяется словами по номеру
@@ -275,6 +275,11 @@ def card(conn, object_id: int, element_id: int):
         "рабочий набор": data["workset"],
         "контур габаритный": bool(data["outline_approx"]),
         "параметры": extra,
+        # Диагностика «почему секция такая» (2026-09-10, живой отчёт
+        # пользователя — толстая стена на стыке блоков визуально в одном,
+        # а по площади контура в другом): доли площади габарита элемента
+        # по секциям-кандидатам того же этажа, только для чтения.
+        "доли по секциям": revit_sections.section_shares(conn, object_id, element_id),
     }
 
 

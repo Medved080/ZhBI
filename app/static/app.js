@@ -29569,10 +29569,23 @@ async function showRevitCard(elementId) {
     `<div class="card-row"><span class="card-key">${escapeHtml(k)}</span>` +
     `<span class="card-val">${escapeHtml(String(v))}</span></div>`;
   const строки = Object.entries(card)
-    .filter(([k, v]) => k !== "параметры" && k !== "id" && v !== null && v !== "" && v !== false)
+    .filter(([k, v]) => k !== "параметры" && k !== "id" && k !== "доли по секциям"
+      && v !== null && v !== "" && v !== false)
     .map(строка);
   const доп = Object.entries(card["параметры"] || {}).map(строка);
+  // Диагностика геометрического решения (2026-09-10, живой отчёт
+  // пользователя: толстая стена визуально в одной секции, а по площади
+  // контура — в другой; на глаз объёмный блок в 3D этого не показывает) —
+  // доля площади габарита элемента по каждой секции-кандидату того же
+  // этажа, у кого её вообще есть чем посчитать (нулевые не приходят).
+  const доли = card["доли по секциям"] || [];
+  const долиHtml = доли.length ? `<h4 style="margin-top:12px">Доли по секциям (геометрия)</h4>`
+    + доли.map((d) => `<div class="card-row"><span class="card-key">${escapeHtml(d["код"])}</span>` +
+      `<span class="card-val">${d["доля"] != null ? d["доля"] + "%" : "—"}` +
+      ` <span style="color:var(--color-text-muted)">(${d["площадь"].toLocaleString("ru-RU")} мм²)</span></span></div>`)
+      .join("") : "";
   box.innerHTML = строки.join("")
+    + долиHtml
     + (доп.length ? `<h4 style="margin-top:12px">Параметры Revit</h4>` + доп.join("") : "");
 }
 

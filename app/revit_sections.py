@@ -338,6 +338,52 @@ def fill_by_volume(conn, object_id: int, override_param: bool = False) -> dict:
             "перебито_у_параметра": перебито_у_параметра}
 
 
+def section_shares(conn, object_id: int, element_id: int) -> list:
+    """Доли площади габарита ЭТОГО элемента по секциям-кандидатам на его
+    этаже — диагностика для карточки, не пересчёт: почему `fill_by_volume`
+    решил именно так, когда решение неочевидно человеку на глаз (толстая
+    стена на стыке двух блоков — живой отчёт пользователя 2026-09-09,
+    «на скриншоте элемент внутри Рампы, а секция всё равно С01»: по
+    площади контура большая часть стены и правда оставалась в соседней
+    секции, 3D-габарит блока на плане это не показывает).
+
+    Возвращает список `{"код": секция, "площадь": мм², "доля": 0..100 или
+    None}`, отсортированный по убыванию площади; пусто — у объекта нет ни
+    одной секции с объёмом на этом этаже или у элемента нет геометрии."""
+    from app.block_geometry import section_level_boxes_xy
+
+    row = conn.execute(
+        "SELECT level_id, outline_json, x, y FROM revit_elements "
+        "WHERE object_id = ? AND id = ?", (object_id, element_id)
+    ).fetchone()
+    if row is None or row["level_id"] is None:
+        return []
+    footprint = _footprint(row["outline_json"], row["x"], row["y"])
+    if footprint is None:
+        return []
+    fx0, fy0, fx1, fy1 = footprint
+    габарит = (fx1 - fx0) * (fy1 - fy0)
+
+    результат = []
+    for section in conn.execute(
+        "SELECT id, code FROM object_sections WHERE object_id = ?", (object_id,)
+    ):
+        box = section_level_boxes_xy(conn, object_id, section["id"], row["level_id"])
+        if not box.get("ok"):
+            continue
+        площадь = sum(_overlap_area(footprint, (b["x0"], b["y0"], b["x1"], b["y1"]))
+                     for b in box["boxes"])
+        if площадь <= 0:
+            continue
+        результат.append({
+            "код": section["code"],
+            "площадь": round(площадь),
+            "доля": round(площадь / габарит * 100, 1) if габарит > 0 else None,
+        })
+    результат.sort(key=lambda r: r["площадь"], reverse=True)
+    return результат
+
+
 def fill_missing_levels(conn, object_id: int) -> dict:
     """Доопределить ЭТАЖ по отметке низа элемента (`elevation_mm`) — это
     сырой атрибут модели (`element.get("отметка_низа")`, `build_row`),
