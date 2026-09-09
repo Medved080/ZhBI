@@ -2990,6 +2990,12 @@
   }
   .card-block h4 .revit-reset { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
   .revit-reset { font-size:11px; color: var(--color-text-muted); text-decoration:none; }
+  /* Тот же вид, что у .revit-reset, но НЕ этот класс: делегированный
+     обработчик #mfr-workspace на .revit-reset читает data-reset и чистит
+     revitPlanState[...] — у «Видов работ» отбор в другом месте
+     (blockProgressFilter.trackCodes), свой data-атрибут заведён не был,
+     и общий обработчик падал на dataset.reset===undefined (живой баг). */
+  .mfr-worktypes-reset { font-size:11px; color: var(--color-text-muted); text-decoration:none; }
   .revit-reset:hover { color: var(--color-primary); text-decoration:underline; }
   .hint-text { color: var(--color-text-muted); font-size: 12px; margin-top: 0; }
 
@@ -5014,20 +5020,6 @@
         <button class="btn btn-sm btn-secondary" id="revit-reset-all" hidden>Сбросить фильтры</button>
         <button class="btn btn-sm btn-secondary" id="revit-colors-open"
                 title="Цветовая схема модели">Цвета</button>
-        <!-- Слой «Блоки» (2026-08-26, Docs/TZ.md «Геометрия блока») —
-             НЕЗАВИСИМЫЙ от показа элементов: обе галочки можно снять/
-             поставить в любой комбинации, «видеть по отдельности или
-             вместе» буквально означает эти два переключателя. -->
-        <label class="toggle" style="margin:0" title="Детальные контуры элементов/помещений модели">
-          <input type="checkbox" id="mfr-show-elements" checked/>Элементы</label>
-        <label class="toggle" style="margin:0" title="Параллелепипеды блоков «этаж+секция» (Учёт по блокам)">
-          <input type="checkbox" id="mfr-show-blocks"/>Блоки</label>
-        <label class="toggle" style="margin:0" title="Сетка осей объекта (object_grids) — для сверки геометрии блока с реальными контурами">
-          <input type="checkbox" id="mfr-show-axes"/>Оси</label>
-        <label class="toggle" style="margin:0" title="Фасады здания по сторонам (справочная картинка с чертежа, только 3D)">
-          <input type="checkbox" id="mfr-show-facades"/>Фасады</label>
-        <label class="toggle" style="margin:0" title="Картинки планов этажей с чертежа PDF, обрезанные по контуру здания, — лежат на полу этажа (3D) и подложкой под планом (2D, при выборе одного этажа)">
-          <input type="checkbox" id="mfr-show-plans"/>Планы</label>
         <div class="view-mode-switch" id="mfr-view-switch" role="group"
              aria-label="Режим отображения модели">
           <button type="button" class="view-mode-btn active" data-mfr-mode="2d">2D</button>
@@ -5065,6 +5057,7 @@
       <div class="tabs" id="mfr-panel-tabs">
         <button class="tab-btn active" data-mfr-panel-tab="properties">Свойства</button>
         <button class="tab-btn" data-mfr-panel-tab="filters">Фильтры</button>
+        <button class="tab-btn" data-mfr-panel-tab="view">Вид</button>
       </div>
       <div id="mfr-panel-tab-properties" class="tab-panel active">
         <div class="card-block" id="element-card-block">
@@ -5083,22 +5076,10 @@
             <button class="btn btn-sm btn-secondary" id="block-progress-settings-btn">Настройки</button>
             <button class="btn btn-sm btn-primary" id="block-progress-fact-btn">Факт</button>
           </div>
-          <!-- Фильтр дашборда блока (живой запрос пользователя) — СВОЙ,
-               локальный отбор списка операций: не путать с «Шахматкой» на
-               вкладке «Фильтры» — та красит весь план, этот только сужает
-               дерево ниже. Выбор раздела оформлен так же, как «Шахматка»
-               (модалка со списком .chess-pick, #bp-filter-modal-backdrop),
-               но это отдельный экземпляр со своим состоянием. -->
-          <div class="bp-filter-bar">
-            <button type="button" class="mfr-chess-current" id="bp-filter-section-open">
-              <div id="bp-filter-section-name">Все разделы</div>
-            </button>
-            <div class="bp-status-filter">
-              <label><input type="checkbox" class="bp-status-check" value="plan" checked>неначатые</label>
-              <label><input type="checkbox" class="bp-status-check" value="in_progress" checked>в работе</label>
-              <label><input type="checkbox" class="bp-status-check" value="done" checked>завершено</label>
-            </div>
-          </div>
+          <!-- Фильтр дашборда блока (раздел/статус) переехал на вкладку
+               «Фильтры» целиком (живой запрос пользователя, 2026-09-10) —
+               «Виды работ»/«Статус выполнения» ниже; здесь только само
+               дерево, состояние фильтра общее (blockProgressFilter). -->
           <div id="block-progress-tree"></div>
         </div>
       </div>
@@ -5116,7 +5097,14 @@
              свой общий механизм data-collapse/.side-collapsed
              (app.js: setSectionCollapsed), а не state.topFilterCollapsed
              filterGroupShell — тот в памяти на сессию, этот в localStorage
-             навсегда, как остальные панели проекта. -->
+             навсегда, как остальные панели проекта.
+
+             «Раздел» (revit-plan-parts) и «Категория» (revit-plan-categories)
+             убраны отсюда целиком (живой запрос пользователя, 2026-09-10 —
+             на этом объекте не нужны, «Раздел» вообще всегда один пункт
+             «PDF»). Состояние `revitPlanState.parts`/`.categories` в JS не
+             тронуто (пустой Set = «без отбора», уже штатное поведение), эти
+             две группы просто больше некому показывать. -->
         <div class="filter-group">
           <div class="filter-group-header">
             <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-levels-body"
@@ -5130,17 +5118,6 @@
         </div>
         <div class="filter-group">
           <div class="filter-group-header">
-            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-parts-body"
-                    title="Свернуть/развернуть">▾</button>
-            <span>Раздел</span>
-            <a href="#" class="revit-reset" data-reset="parts" hidden>сбросить</a>
-          </div>
-          <div id="mfr-filter-parts-body">
-            <div id="revit-plan-parts" class="revit-list"></div>
-          </div>
-        </div>
-        <div class="filter-group">
-          <div class="filter-group-header">
             <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-sections-body"
                     title="Свернуть/развернуть">▾</button>
             <span>Секция</span>
@@ -5150,15 +5127,89 @@
             <div id="revit-plan-sections" class="revit-list"></div>
           </div>
         </div>
+        <!-- «Виды работ» (2026-09-10, живой запрос пользователя — было
+             «Фильтр по разделу» на вкладке «Свойства», модалкой, ОДИН выбор;
+             стало здесь, списком как Этаж/Секция выше, МНОЖЕСТВЕННЫЙ выбор)
+             — сужает дерево операций открытой карточки блока по коду «Трек
+             планирования» (те же доски, что у «Шахматки» на вкладке «Вид»,
+             но это НЕЗАВИСИМЫЙ отбор — план не перекрашивает). Пустой набор
+             — без отбора, как и у остальных групп здесь. -->
         <div class="filter-group">
           <div class="filter-group-header">
-            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-categories-body"
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-worktypes-body"
                     title="Свернуть/развернуть">▾</button>
-            <span>Категория</span>
-            <a href="#" class="revit-reset" data-reset="categories" hidden>сбросить</a>
+            <span>Виды работ</span>
+            <a href="#" id="mfr-worktypes-reset" class="mfr-worktypes-reset" hidden>сбросить</a>
           </div>
-          <div id="mfr-filter-categories-body">
-            <div id="revit-plan-categories" class="revit-list" style="max-height:24vh"></div>
+          <div id="mfr-filter-worktypes-body">
+            <div id="mfr-worktypes-list" class="revit-list"></div>
+          </div>
+        </div>
+        <!-- «Статус выполнения» (2026-09-10, живой запрос — было частью
+             .bp-filter-bar на вкладке «Свойства», переехало сюда целиком) —
+             тот же blockProgressFilter.statuses, что и раньше. -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-status-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Статус выполнения</span>
+          </div>
+          <div id="mfr-filter-status-body">
+            <div class="bp-status-filter">
+              <label><input type="checkbox" class="bp-status-check" value="plan" checked>неначатые</label>
+              <label><input type="checkbox" class="bp-status-check" value="in_progress" checked>в работе</label>
+              <label><input type="checkbox" class="bp-status-check" value="done" checked>завершено</label>
+            </div>
+          </div>
+        </div>
+        <!-- Динамика факта за период (живой запрос пользователя): подсветка
+             блоков, где факт менялся внутри периода, — источник не журнал
+             (для «эт/сек»/«кв.эт/сек» его нет), а сравнение двух «снимков на
+             дату» (work_fact._percents_as_of) на границах периода. Если
+             активна «Шахматка» (вкладка «Вид») — сравниваются только её
+             операции, иначе — все, отобранные для блока (app.js,
+             reloadMfrDynamics). Пустые даты (2026-09-10, живой запрос) — не
+             «выключено», а «за весь период»: сравнение идёт от сентинельной
+             ранней даты/сегодня. -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-dynamics-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Динамика факта за период</span>
+          </div>
+          <div id="mfr-filter-dynamics-body">
+            <label class="toggle"><input type="checkbox" id="mfr-dynamics-toggle">показывать изменения факта</label>
+            <div id="mfr-dynamics-dates" class="mfr-dynamics-dates-row" style="display:none">
+              <label>с <input type="date" id="mfr-dynamics-from"></label>
+              <label>по <input type="date" id="mfr-dynamics-to"></label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="mfr-panel-tab-view" class="tab-panel">
+        <!-- Видимость слоёв схемы (2026-09-10, живой запрос пользователя —
+             было строкой чекбоксов над схемой, переехало сюда целиком).
+             «Блоки» (2026-08-26, Docs/TZ.md «Геометрия блока») —
+             НЕЗАВИСИМЫЙ от показа элементов слой: обе галочки можно снять/
+             поставить в любой комбинации, «видеть по отдельности или
+             вместе» буквально означает эти два переключателя. -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-layers-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Показывать</span>
+          </div>
+          <div id="mfr-filter-layers-body">
+            <label class="toggle" title="Детальные контуры элементов/помещений модели">
+              <input type="checkbox" id="mfr-show-elements" checked/>Элементы</label>
+            <label class="toggle" title="Параллелепипеды блоков «этаж+секция» (Учёт по блокам)">
+              <input type="checkbox" id="mfr-show-blocks"/>Блоки</label>
+            <label class="toggle" title="Сетка осей объекта (object_grids) — для сверки геометрии блока с реальными контурами">
+              <input type="checkbox" id="mfr-show-axes"/>Оси</label>
+            <label class="toggle" title="Фасады здания по сторонам (справочная картинка с чертежа, только 3D)">
+              <input type="checkbox" id="mfr-show-facades"/>Фасады</label>
+            <label class="toggle" title="Картинки планов этажей с чертежа PDF, обрезанные по контуру здания, — лежат на полу этажа (3D) и подложкой под планом (2D, при выборе одного этажа)">
+              <input type="checkbox" id="mfr-show-plans"/>Планы</label>
           </div>
         </div>
         <!-- Шахматка (2026-09-02, переосмыслена 2026-09-04, живой запрос
@@ -5171,7 +5222,9 @@
              отдельном крупном окне плоским списком (только доски, реально
              запланированные хотя бы для одного блока,
              app/work_fact.py::used_planning_tracks). Клик по блоку поведения
-             не меняет — карточка справа та же. -->
+             не меняет — карточка справа та же. Переехала на вкладку «Вид»
+             (2026-09-10, живой запрос — она красит план, а не фильтрует
+             дерево, значит про «как выглядит план», а не про отбор). -->
         <div class="filter-group">
           <div class="filter-group-header">
             <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-chess-body"
@@ -5186,28 +5239,6 @@
               <span><i class="wp-dot" style="background:var(--color-text-muted);border-color:var(--color-text-muted)"></i>план</span>
               <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
               <span><i class="wp-dot" style="background:#3FA76A;border-color:#3FA76A"></i>выполнено</span>
-            </div>
-          </div>
-        </div>
-        <!-- Динамика факта за период (живой запрос пользователя): подсветка
-             блоков, где факт менялся внутри периода, — источник не журнал
-             (для «эт/сек»/«кв.эт/сек» его нет), а сравнение двух «снимков на
-             дату» (work_fact._percents_as_of) на границах периода. Если
-             активна «Шахматка» выше — сравниваются только её операции, иначе
-             — все, отобранные для блока (app.js, reloadMfrDynamics). Пустые
-             даты (2026-09-10, живой запрос) — не «выключено», а «за весь
-             период»: сравнение идёт от сентинельной ранней даты/сегодня. -->
-        <div class="filter-group">
-          <div class="filter-group-header">
-            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-dynamics-body"
-                    title="Свернуть/развернуть">▾</button>
-            <span>Динамика факта за период</span>
-          </div>
-          <div id="mfr-filter-dynamics-body">
-            <label class="toggle"><input type="checkbox" id="mfr-dynamics-toggle">показывать изменения факта</label>
-            <div id="mfr-dynamics-dates" class="mfr-dynamics-dates-row" style="display:none">
-              <label>с <input type="date" id="mfr-dynamics-from"></label>
-              <label>по <input type="date" id="mfr-dynamics-to"></label>
             </div>
           </div>
         </div>
@@ -8147,22 +8178,6 @@
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-secondary" id="mfr-chess-modal-off">Выключить раскраску</button>
       <button class="btn btn-secondary" id="mfr-chess-modal-close">Закрыть</button>
-    </div>
-  </div>
-</div>
-
-<!-- Фильтр «раздел» дашборда блока (живой запрос пользователя) — та же
-     вёрстка, что у выбора доски «Шахматки» выше (список .chess-pick), но
-     ЛОКАЛЬНЫЙ отбор списка операций одного блока, а не раскраска плана. -->
-<div class="modal-backdrop" id="bp-filter-modal-backdrop">
-  <div class="modal wide">
-    <h2>Фильтр по разделу</h2>
-    <p class="hint-text">Раздел — та же группа операций одного кода «Трек планирования», что и доска
-      «Шахматка». Сужает список операций в карточке блока, план не перекрашивает.</p>
-    <div id="bp-filter-modal-tree" style="max-height:56vh; overflow:auto"></div>
-    <div class="actions" style="margin-top:12px">
-      <button class="btn btn-secondary" id="bp-filter-modal-all">Показать все</button>
-      <button class="btn btn-secondary" id="bp-filter-modal-close">Закрыть</button>
     </div>
   </div>
 </div>

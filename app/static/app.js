@@ -28924,6 +28924,10 @@ async function openMfrWorkspace() {
   mfrChessTrackCode = null;
   mfrChessValues = {};
   document.getElementById("mfr-chess-legend").style.display = "none";
+  // Другой объект — другие доски: коды «1»..«20» у него могут значить
+  // совсем другие разделы работ, отбор с прошлого объекта не переносим.
+  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
+  document.querySelectorAll(".bp-status-check").forEach((cb) => { cb.checked = true; });
   // Другой объект — другие блоки: незачем тащить в него дату/подсветку
   // динамики прошлого объекта.
   mfrDynamics = { active: false, from: null, to: null };
@@ -29020,10 +29024,6 @@ async function loadRevitPlanFilters() {
   }
   document.getElementById("revit-plan-levels").innerHTML = этажи.join("") || "<div class='hint-text'>нет</div>";
 
-  document.getElementById("revit-plan-parts").innerHTML = (f.parts || []).map((p) =>
-    `<div class="revit-pick" data-kind="part" data-id="${escapeHtml(p.code)}">${escapeHtml(p.code)}
-      <span style="float:right;color:var(--color-text-muted)">${p.elements}</span></div>`).join("");
-
   const секции = f.sections.filter((s) => s.elements > 0 || s.blocks > 0).map((s) =>
     `<div class="revit-pick" data-kind="section" data-id="${s.id}">${escapeHtml(s.code)}
       <span style="float:right;color:var(--color-text-muted)">${s.elements}</span></div>`);
@@ -29033,30 +29033,13 @@ async function loadRevitPlanFilters() {
   }
   document.getElementById("revit-plan-sections").innerHTML = секции.join("");
 
-  document.getElementById("revit-plan-categories").innerHTML = (f.categories || []).map((c) =>
-    `<div class="revit-pick" data-kind="category" data-id="${escapeHtml(c.category || "")}">${escapeHtml(c.category || "—")}
-      <span style="float:right;color:var(--color-text-muted)">${c.elements}</span></div>`).join("");
-
-  // При первом открытии показываем один этаж, а не весь объект: без
-  // отбора это под тридцать тысяч контуров друг на друге — и медленно, и
-  // читать нечего. Дальше человек снимает отбор сам, одной ссылкой.
-  // При первом открытии — ВСЁ здание, без отбора по этажу (2026-09-02,
-  // живой запрос пользователя: «при запуске устанавливается фильтр по
-  // самому нижнему этажу, он не нужен — при старте должно быть видно всё
-  // здание»). Раньше здесь выбирался первый непустой этаж — от тяжести
-  // полного отбора на выгрузке Revit в 28 тысяч элементов; предел
-  // `ELEMENTS_LIMIT` и красное «СПИСОК ОБРЕЗАН» на такой случай остаются,
-  // отбор этажа человек ставит сам, одним кликом.
-  const этоПервыйЗаход = !revitFilterActive();
-  // «Помещение» по умолчанию выключено (2026-08-31): мелкие контуры комнат
-  // перекрывают стены и друг друга на одном плане, читать эту кашу тяжело.
-  // Остальные категории показаны все сразу — отбор ставится тем же кликом
-  // по фишке категории, что и всегда, просто стартовая точка другая.
-  if (этоПервыйЗаход) {
-    for (const c of (f.categories || [])) {
-      if (c.category && c.category !== "Помещение") revitPlanState.categories.add(c.category);
-    }
-  }
+  // «Раздел» (parts) и «Категория» (categories) сняты с вкладки «Фильтры»
+  // (живой запрос пользователя, 2026-09-10 — на этом объекте не нужны).
+  // revitPlanState.parts/.categories никто больше не пополняет — пустой
+  // Set там и означает «без отбора» (штатный смысл для этих групп), то
+  // есть элементы всех категорий показываются всегда, включая «Помещение»
+  // (раньше исключалось по умолчанию только для читаемости 2D-плана —
+  // сейчас регулировать эту видимость нечем, значит показываем как есть).
   markRevitPicks();
   if (группы.size) await loadRevitPlanElements();
   else revitPlanStatus("");
@@ -29905,11 +29888,14 @@ async function renderBlockCard(blockId) {
 // пишет отчёт о фактическом выполнении. Отдельно от старой матрицы
 // План/В работе/Выполнено (вкладка «Статусы») — та эт/сек больше не знает. --------
 
-// Сырое дерево последнего ответа сервера — фильтр «раздел»/статус (см. ниже)
-// режет его на лету, без повторного похода на сервер.
+// Сырое дерево последнего ответа сервера — фильтр «Виды работ»/«Статус
+// выполнения» (вкладка «Фильтры», см. ниже) режет его на лету, без
+// повторного похода на сервер.
 let blockProgressTreeData = null;
 let blockProgressBlockId = null;   // для истории факта по наведению — см. bpHistoryTooltip
-let blockProgressFilter = { trackCode: null, statuses: new Set(["plan", "in_progress", "done"]) };
+// trackCodes — МНОЖЕСТВЕННЫЙ отбор (2026-09-10, живой запрос, было ОДНО
+// значение trackCode): пустой Set — без отбора, как у Этажа/Секции.
+let blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
 
 async function loadBlockProgressPanel(blockId) {
   const box = document.getElementById("block-progress-tree");
@@ -29947,7 +29933,7 @@ function filterBlockProgressTree(nodes) {
       if (kids.length) result.push({ ...n, children: kids });
       continue;
     }
-    if (blockProgressFilter.trackCode && n.planning_track_code !== blockProgressFilter.trackCode) continue;
+    if (blockProgressFilter.trackCodes.size && !blockProgressFilter.trackCodes.has(n.planning_track_code)) continue;
     const status = n.status_to || n.status;
     if (!blockProgressFilter.statuses.has(status)) continue;
     result.push(n);
@@ -30064,46 +30050,40 @@ document.getElementById("block-progress-tree").addEventListener("mouseout", (e) 
   hideBpHistoryTooltip();
 });
 
-// -------- Фильтр «раздел»/статус над деревом операций блока (живой запрос
-// пользователя) — ЛОКАЛЬНЫЙ отбор дашборда, не путать с «Шахматкой» выше:
-// та красит план, этот только сужает дерево, уже полученное с сервера. --------
+// -------- «Виды работ»/«Статус выполнения» на вкладке «Фильтры» (живой
+// запрос пользователя, 2026-09-10) — ОТБОР дерева операций открытой
+// карточки блока, не путать с «Шахматкой» на вкладке «Вид»: та красит
+// план, этот только сужает дерево, уже полученное с сервера. «Виды работ»
+// — было модалкой с ОДНИМ выбором («Фильтр по разделу» на вкладке
+// «Свойства»), стало списком с МНОЖЕСТВЕННЫМ, как Этаж/Секция выше —
+// тот же паттерн `.revit-pick`/`.revit-pick-on`, но свой обработчик клика
+// (не общий делегат #mfr-workspace: там маппинг kind→revitPlanState[...],
+// «доски» под ним нет и не должно быть — это другой набор данных). --------
 
-function bpFilterModalListHtml() {
-  return mfrChessTracks.map((t) => {
-    const on = blockProgressFilter.trackCode === t["код"];
-    return `<div class="chess-pick${on ? " chess-pick-on" : ""}" data-bp-filter-code="${escapeHtml(t["код"])}">
-      ${escapeHtml(t["название"])}
-    </div>`;
-  }).join("");
+function renderMfrWorktypesList() {
+  const box = document.getElementById("mfr-worktypes-list");
+  if (!box) return;
+  box.innerHTML = mfrChessTracks.length ? mfrChessTracks.map((t) => {
+    const on = blockProgressFilter.trackCodes.has(t["код"]);
+    return `<div class="revit-pick bp-track-pick${on ? " revit-pick-on" : ""}" data-track-code="${escapeHtml(t["код"])}">${escapeHtml(t["название"])}</div>`;
+  }).join("") : "<div class='hint-text'>Досок «Шахматка», запланированных хотя бы для одного блока, ещё нет.</div>";
+  const ссылка = document.getElementById("mfr-worktypes-reset");
+  if (ссылка) ссылка.hidden = blockProgressFilter.trackCodes.size === 0;
 }
 
-function updateBpFilterSectionName() {
-  const track = blockProgressFilter.trackCode
-    ? mfrChessTracks.find((t) => t["код"] === blockProgressFilter.trackCode) : null;
-  document.getElementById("bp-filter-section-name").textContent = track ? track["название"] : "Все разделы";
-}
-
-document.getElementById("bp-filter-section-open").addEventListener("click", () => {
-  document.getElementById("bp-filter-modal-tree").innerHTML = mfrChessTracks.length
-    ? bpFilterModalListHtml()
-    : '<div class="hint-text">Досок «Шахматка», запланированных хотя бы для одного блока, ещё нет.</div>';
-  document.getElementById("bp-filter-modal-backdrop").classList.add("open");
-});
-document.getElementById("bp-filter-modal-close").addEventListener("click", () => {
-  document.getElementById("bp-filter-modal-backdrop").classList.remove("open");
-});
-document.getElementById("bp-filter-modal-all").addEventListener("click", () => {
-  document.getElementById("bp-filter-modal-backdrop").classList.remove("open");
-  blockProgressFilter.trackCode = null;
-  updateBpFilterSectionName();
+document.getElementById("mfr-worktypes-list").addEventListener("click", (e) => {
+  const pick = e.target.closest(".bp-track-pick");
+  if (!pick) return;
+  const code = pick.dataset.trackCode;
+  if (blockProgressFilter.trackCodes.has(code)) blockProgressFilter.trackCodes.delete(code);
+  else blockProgressFilter.trackCodes.add(code);
+  renderMfrWorktypesList();
   renderBlockProgressPanel();
 });
-document.getElementById("bp-filter-modal-tree").addEventListener("click", (e) => {
-  const pick = e.target.closest(".chess-pick");
-  if (!pick) return;
-  document.getElementById("bp-filter-modal-backdrop").classList.remove("open");
-  blockProgressFilter.trackCode = pick.dataset.bpFilterCode;
-  updateBpFilterSectionName();
+document.getElementById("mfr-worktypes-reset").addEventListener("click", (e) => {
+  e.preventDefault();
+  blockProgressFilter.trackCodes.clear();
+  renderMfrWorktypesList();
   renderBlockProgressPanel();
 });
 document.querySelectorAll(".bp-status-check").forEach((cb) => {
@@ -30506,6 +30486,7 @@ async function loadMfrChessOptions() {
     // пустым, человек попробует позже (кнопка «Обновить данные с сервера»).
   }
   updateMfrChessCurrent();
+  renderMfrWorktypesList();   // тот же список досок питает «Виды работ» на вкладке «Фильтры»
 }
 
 // Поле в сайдбаре — просто название доски (у доски, в отличие от прежней
