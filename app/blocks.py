@@ -21,6 +21,7 @@
 у секции может не быть верхних этажей, поэтому блок создаётся явно.
 """
 
+from app import revit_sections
 from app.block_geometry import block_box, section_box_xy
 from app.revit_package import KIND_ROOF, normalize_section
 
@@ -80,11 +81,19 @@ def create_section(conn, object_id: int, code_input: str, name: str = None,
 
 
 def update_section(conn, object_id: int, section_id: int, name: str,
-                   axis_from: str = None, axis_to: str = None) -> None:
+                   axis_from: str = None, axis_to: str = None) -> dict:
     """Правится подпись и (опционально) привязка к осям для геометрии
     блока (Docs/TZ.md, «Геометрия блока») — код держит ключи блоков,
     `revit_elements` и `object_level_aliases`, менять его после создания
-    нельзя."""
+    нельзя.
+
+    Как только у секции появляются ОБЕ оси (сама привязка могла быть
+    задана и раньше — сохраняем идемпотентно на каждое сохранение формы,
+    а не только на первое), элементы модели без надёжной секции
+    пересматриваются по объёму блока (`revit_sections.fill_by_volume`,
+    2026-09-09) — растровое `fill_missing` этого не может: у только что
+    заведённой секции нет ни одного элемента, чтобы с него начать
+    голосование."""
     cur = conn.execute(
         "UPDATE object_sections SET name = ? WHERE id = ? AND object_id = ?",
         (name.strip(), section_id, object_id),
@@ -92,7 +101,11 @@ def update_section(conn, object_id: int, section_id: int, name: str,
     if cur.rowcount == 0:
         raise BlockError("Секция не найдена.")
     _set_section_axes(conn, object_id, section_id, axis_from, axis_to)
+    итог = {"назначено": 0, "осталось": 0}
+    if (axis_from or "").strip() and (axis_to or "").strip():
+        итог = revit_sections.fill_by_volume(conn, object_id)
     conn.commit()
+    return итог
 
 
 def _set_section_axes(conn, object_id: int, section_id: int,

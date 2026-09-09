@@ -6108,13 +6108,13 @@ def rename_block_section(object_id: int, section_id: int, body: BlockSectionRena
     try:
         assert_object_feature(conn, user, object_id, "blocks", "write")
         try:
-            blocks_mod.update_section(conn, object_id, section_id, body.name,
-                                      body.axis_from, body.axis_to)
+            итог = blocks_mod.update_section(conn, object_id, section_id, body.name,
+                                             body.axis_from, body.axis_to)
         except blocks_mod.BlockError as e:
             raise HTTPException(status_code=422, detail=str(e))
     finally:
         conn.close()
-    return {"ok": True}
+    return {"ok": True, **итог}
 
 
 @app.delete("/objects/{object_id}/sections/{section_id}")

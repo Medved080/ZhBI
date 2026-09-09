@@ -28993,7 +28993,7 @@ async function loadRevitPlanFilters() {
     `<div class="revit-pick" data-kind="part" data-id="${escapeHtml(p.code)}">${escapeHtml(p.code)}
       <span style="float:right;color:var(--color-text-muted)">${p.elements}</span></div>`).join("");
 
-  const секции = f.sections.filter((s) => s.elements > 0).map((s) =>
+  const секции = f.sections.filter((s) => s.elements > 0 || s.blocks > 0).map((s) =>
     `<div class="revit-pick" data-kind="section" data-id="${s.id}">${escapeHtml(s.code)}
       <span style="float:right;color:var(--color-text-muted)">${s.elements}</span></div>`);
   if (f.without_section) {
@@ -31352,6 +31352,7 @@ function renderBlkSections() {
     try {
       await api(`/objects/${state.objectId}/sections/${btn.dataset.delSection}`, { method: "DELETE" });
       await loadBlkSectionsLevels();
+      await refreshMfrPlanIfOpen();
     } catch (e) { showToast(e.message, "error"); }
   }));
   // Всё правится на месте (2026-09-02, живой запрос пользователя: «все
@@ -31366,7 +31367,11 @@ function renderBlkSections() {
     const save = async () => {
       const секция = blkSections.find(s => String(s.id) === String(id));
       try {
-        await api(`/objects/${state.objectId}/sections/${id}`, {
+        // Как только у секции появились ОБЕ оси, сервер сам пересматривает
+        // элементы модели без надёжной секции по объёму блока
+        // (`revit_sections.fill_by_volume`) — назначено/осталось приходит
+        // в ответе, отдельно вызывать нечего.
+        const итог = await api(`/objects/${state.objectId}/sections/${id}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: (nameInput && nameInput.value.trim()) || секция.name || секция.code,
@@ -31375,12 +31380,24 @@ function renderBlkSections() {
           }),
         });
         await loadBlkSectionsLevels();
+        await refreshMfrPlanIfOpen();
+        if (итог && итог.назначено > 0) {
+          showToast(`По объёму секции переопределено элементов: ${итог.назначено}`, "success");
+        }
       } catch (e) { showToast(e.message, "error"); await loadBlkSectionsLevels(); }
     };
     if (fromSel) fromSel.addEventListener("change", save);
     if (toSel) toSel.addEventListener("change", save);
     if (nameInput) nameInput.addEventListener("change", save);
   });
+}
+
+// «Модель МФР» держит свой кеш (`revitPlanState`) и не знает о правках в
+// модалке «Блоки» — без этого добавленная/перепривязанная секция не
+// появлялась бы в фильтрах до смены объекта или перезагрузки страницы
+// (2026-09-09, живой отчёт пользователя).
+async function refreshMfrPlanIfOpen() {
+  if (revitPlanState.objectId === state.objectId) await loadRevitPlanFilters();
 }
 
 document.getElementById("blk-section-add").addEventListener("click", async () => {
@@ -31395,6 +31412,7 @@ document.getElementById("blk-section-add").addEventListener("click", async () =>
     document.getElementById("blk-section-code").value = "";
     document.getElementById("blk-section-name").value = "";
     await loadBlkSectionsLevels();
+    await refreshMfrPlanIfOpen();
   } catch (e) { showToast(e.message, "error"); }
 });
 

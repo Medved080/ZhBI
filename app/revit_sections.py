@@ -185,3 +185,106 @@ def fill_missing(conn, object_id: int) -> dict:
             "updated_at = datetime('now') WHERE id = ?", правки)
     return {"назначено": len(правки), "осталось": осталось, "зон": len(зоны),
             "конфликтов": конфликтов}
+
+
+def _footprint(outline_json, x, y):
+    """Габарит элемента в плане — по контуру, а точкой вставки как
+    запасной вариант (у части категорий контура нет вовсе)."""
+    if outline_json:
+        try:
+            outline = json.loads(outline_json)
+            xs = [p[0] for p in outline]
+            ys = [p[1] for p in outline]
+            if xs and ys:
+                return (min(xs), min(ys), max(xs), max(ys))
+        except (TypeError, ValueError, IndexError):
+            pass
+    if x is not None and y is not None:
+        return (x, y, x, y)
+    return None
+
+
+def _overlap_area(footprint, box):
+    """Площадь пересечения габарита элемента с прямоугольником секции.
+    Точка (нулевая площадь габарита) внутри прямоугольника засчитывается
+    целиком — иначе категории без контура (двери, окна) никогда бы не
+    попали ни в одну секцию."""
+    fx0, fy0, fx1, fy1 = footprint
+    bx0, by0, bx1, by1 = box
+    ix0, iy0 = max(fx0, bx0), max(fy0, by0)
+    ix1, iy1 = min(fx1, bx1), min(fy1, by1)
+    if ix1 < ix0 or iy1 < iy0:
+        return 0.0
+    площадь = (ix1 - ix0) * (iy1 - iy0)
+    return площадь if площадь > 0 else 1.0
+
+
+def fill_by_volume(conn, object_id: int) -> dict:
+    """Доопределение секции по ОБЪЁМУ блока (`app.block_geometry.block_box`
+    — прямая геометрия `block_boxes` или, второй по приоритету, оси
+    здания), а не по растровому голосованию соседей (`fill_missing`).
+
+    Нужна для секции, у которой ДО СИХ ПОР не было ни одного элемента с
+    надёжной секцией: `fill_missing` строит зоны голосованием уже
+    привязанных элементов и для только что заведённой вручную секции —
+    нулевых голосов — не присвоит её код никогда, сколько раз ни запускай.
+    Здесь источник геометрии секции другой — её собственный объём, а не
+    чужие элементы, поэтому бутстрап работает и с нуля.
+
+    Побеждает секция, куда попала БОЛЬШАЯ часть габарита элемента (площадь
+    пересечения), не просто точка внутри контура — прямое требование
+    пользователя (2026-09-09): элемент на стыке двух секций достаётся той,
+    что накрыла его большей долей. Параметр не перебивается — тот же
+    инвариант, что у `fill_missing`."""
+    from app.block_geometry import block_box
+
+    sections = [dict(r) for r in conn.execute(
+        "SELECT id FROM object_sections WHERE object_id = ?", (object_id,))]
+    if not sections:
+        return {"назначено": 0, "осталось": 0}
+    levels = [dict(r) for r in conn.execute(
+        "SELECT id FROM object_levels WHERE object_id = ?", (object_id,))]
+
+    # этаж -> [(section_id, [(x0,y0,x1,y1), ...]), ...] — только там, где у
+    # секции вообще есть объём на этом этаже.
+    зоны_по_этажам = {}
+    for level in levels:
+        candidates = []
+        for section in sections:
+            box = block_box(conn, object_id, section["id"], level["id"])
+            if box.get("ok"):
+                candidates.append((section["id"],
+                                   [(b["x0"], b["y0"], b["x1"], b["y1"]) for b in box["boxes"]]))
+        if candidates:
+            зоны_по_этажам[level["id"]] = candidates
+
+    if not зоны_по_этажам:
+        return {"назначено": 0, "осталось": 0}
+
+    правки = []
+    осталось = 0
+    for row in conn.execute(
+        "SELECT id, level_id, outline_json, x, y FROM revit_elements "
+        "WHERE object_id = ? AND is_current = 1 "
+        "AND (section_id IS NULL OR section_source = 'геометрия')", (object_id,),
+    ):
+        candidates = зоны_по_этажам.get(row["level_id"])
+        footprint = _footprint(row["outline_json"], row["x"], row["y"]) if candidates else None
+        if not candidates or footprint is None:
+            осталось += 1
+            continue
+        победитель, лучшая_площадь = None, 0.0
+        for section_id, boxes in candidates:
+            доля = sum(_overlap_area(footprint, box) for box in boxes)
+            if доля > лучшая_площадь:
+                победитель, лучшая_площадь = section_id, доля
+        if победитель is not None:
+            правки.append((победитель, row["id"]))
+        else:
+            осталось += 1
+
+    if правки:
+        conn.executemany(
+            "UPDATE revit_elements SET section_id = ?, section_source = 'геометрия', "
+            "updated_at = datetime('now') WHERE id = ?", правки)
+    return {"назначено": len(правки), "осталось": осталось}

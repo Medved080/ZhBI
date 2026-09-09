@@ -296,14 +296,23 @@ def apply(conn, object_id: int, packages, analysis: dict) -> dict:
     # Доопределение секции по геометрии — ПОСЛЕ записи всех разделов
     # комплекта: зона строится по элементам с известной секцией, и чем
     # больше их записано, тем точнее граница. Параметр не перебивается.
+    # Растровое голосование (`fill_missing`) первым — оно не требует осей
+    # объекта и держит связность с уже пройденной раскладкой; следом
+    # объёмное `fill_by_volume` (2026-09-09) добирает то, что растру
+    # оставить нечем: элементов, которых не было НИ У ОДНОЙ секции ни разу
+    # (тогда голосовать за код попросту некому — растр стоит на месте, а у
+    # объёма источник геометрии свой — прямоугольник блока секции, не
+    # чужие элементы). Оба обновляют один и тот же контур (`section_id
+    # IS NULL OR section_source='геометрия'`), второй проход безопасен.
     sections = revit_sections.fill_missing(conn, object_id)
+    by_volume = revit_sections.fill_by_volume(conn, object_id)
 
     flats = rebuild_flats(conn, object_id)
     conn.commit()
     return {"elements": written, "rooms": rooms_written,
             "retired": len(retired), "flats": flats,
-            "sections_by_geometry": sections["назначено"],
-            "sections_unknown": sections["осталось"],
+            "sections_by_geometry": sections["назначено"] + by_volume["назначено"],
+            "sections_unknown": by_volume["осталось"],
             "sections_conflicting": sections["конфликтов"]}
 
 
