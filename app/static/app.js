@@ -31319,6 +31319,25 @@ document.querySelectorAll("#blocks-tabs .tab-btn").forEach(btn =>
 
 // -------- Секции и этажи (вкладка «Секции и этажи») --------
 
+// Сохранение полей секции/этажа идёт на месте, по blur/change, без
+// отдельной кнопки — и было совсем без обратной связи (живой отчёт
+// пользователя, 2026-09-10: «нажатие на сохранение никак не отзывается,
+// пользователь не понимает, произошло ли сохранение»). `showToast` тут
+// не годится по той же причине, что и у геометрии блока/кнопки
+// «Обновить принадлежность»: строка состояния внизу экрана в момент
+// правки физически перекрыта бэкдропом открытой модалки. Свой статус —
+// прямо в модалке, над списками; `min-height` у контейнера в разметке
+// не даёт появлению/исчезновению текста дёргать layout.
+let blkSetupStatusTimer = null;
+function blkSetupStatus(text, isError) {
+  const el = document.getElementById("blk-setup-status");
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-success)";
+  if (blkSetupStatusTimer) clearTimeout(blkSetupStatusTimer);
+  blkSetupStatusTimer = setTimeout(() => { el.textContent = ""; }, 5000);
+}
+
 async function loadBlkSectionsLevels() {
   const filters = await api(`/revit-plan/filters?object_id=${state.objectId}`).catch(() => null);
   blkGrids = (filters && filters.grids) || [];
@@ -31395,10 +31414,9 @@ function renderBlkSections() {
         });
         await loadBlkSectionsLevels();
         await refreshMfrPlanIfOpen();
-        if (итог && итог.назначено > 0) {
-          showToast(`По объёму секции переопределено элементов: ${итог.назначено}`, "success");
-        }
-      } catch (e) { showToast(e.message, "error"); await loadBlkSectionsLevels(); }
+        blkSetupStatus(`Секция «${секция.code}» сохранена`
+          + (итог && итог.назначено > 0 ? ` — по объёму переопределено элементов: ${итог.назначено}` : ""));
+      } catch (e) { blkSetupStatus(`Секция «${секция.code}»: ${e.message}`, true); await loadBlkSectionsLevels(); }
     };
     if (fromSel) fromSel.addEventListener("change", save);
     if (toSel) toSel.addEventListener("change", save);
@@ -31498,7 +31516,12 @@ function renderBlkLevels() {
     const id = inp.closest("[data-level-row]").dataset.levelRow;
     const field = inp.dataset.levelField;
     const raw = inp.value.trim();
-    if (field !== "name" && raw !== "" && !Number.isFinite(Number(raw))) { showToast("Нужно число, мм", "error"); return; }
+    const этаж = blkLevels.find(l => String(l.id) === String(id));
+    const подпись = (этаж && (этаж.name || этаж.key)) || "";
+    if (field !== "name" && raw !== "" && !Number.isFinite(Number(raw))) {
+      blkSetupStatus(`Этаж «${подпись}»: нужно число, мм`, true);
+      return;
+    }
     if (field !== "name" && raw === "") { await loadBlkSectionsLevels(); return; }   // пустое не пишем
     const body = { [field]: field === "name" ? raw : Number(raw) };
     try {
@@ -31506,7 +31529,8 @@ function renderBlkLevels() {
         method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       await loadBlkSectionsLevels();
-    } catch (e) { showToast(e.message, "error"); await loadBlkSectionsLevels(); }
+      blkSetupStatus(`Этаж «${подпись}» сохранён`);
+    } catch (e) { blkSetupStatus(`Этаж «${подпись}»: ${e.message}`, true); await loadBlkSectionsLevels(); }
   }));
   box.querySelectorAll("[data-del-level]").forEach(btn => btn.addEventListener("click", async () => {
     if (!confirm("Удалить этаж?")) return;
