@@ -250,7 +250,7 @@ def delete_level(conn, object_id: int, level_id: int) -> None:
         "UNION SELECT 1 FROM revit_elements WHERE level_id = ? "
         "UNION SELECT 1 FROM revit_rooms WHERE level_id = ? "
         "UNION SELECT 1 FROM object_flats WHERE level_id = ?",
-        (level_id, level_id, level_id),
+        (level_id, level_id, level_id, level_id),
     ).fetchone()
     if used:
         raise BlockError(

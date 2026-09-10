@@ -32407,7 +32407,13 @@ function renderBlkSections() {
       await api(`/objects/${state.objectId}/sections/${btn.dataset.delSection}`, { method: "DELETE" });
       await loadBlkSectionsLevels();
       await refreshMfrPlanIfOpen();
-    } catch (e) { showToast(e.message, "error"); }
+    // showToast пишет в общую строку состояния — она физически перекрыта
+    // бэкдропом этой модалки и не видна (тот же баг, что был у «Обновить
+    // принадлежность элементов», см. коммент там); отказ удаления
+    // («секция используется») здесь самый частый случай ошибки, и он
+    // должен быть виден, а не молча проглочен (живой отчёт пользователя
+    // «не работает удаление секций», 09-10).
+    } catch (e) { blkSetupStatus(e.message, true); }
   }));
   // Всё правится на месте (2026-09-02, живой запрос пользователя: «все
   // разделы учёта по блокам интерактивно редактируемыми»): подпись —
@@ -32509,7 +32515,9 @@ document.getElementById("blk-section-add").addEventListener("click", async () =>
     document.getElementById("blk-section-name").value = "";
     await loadBlkSectionsLevels();
     await refreshMfrPlanIfOpen();
-  } catch (e) { showToast(e.message, "error"); }
+  // См. коммент у data-del-section — тот же баг с невидимым showToast,
+  // здесь самый частый случай ошибки — код секции не по формату.
+  } catch (e) { blkSetupStatus(e.message, true); }
 });
 
 function renderBlkLevels() {
@@ -32558,7 +32566,8 @@ function renderBlkLevels() {
     try {
       await api(`/objects/${state.objectId}/levels/${btn.dataset.delLevel}`, { method: "DELETE" });
       await loadBlkSectionsLevels();
-    } catch (e) { showToast(e.message, "error"); }
+    // См. коммент у data-del-section — тот же невидимый showToast.
+    } catch (e) { blkSetupStatus(e.message, true); }
   }));
 }
 
@@ -32585,12 +32594,14 @@ document.getElementById("blk-level-add").addEventListener("click", async () => {
   const name = document.getElementById("blk-level-name").value.trim();
   const elevRaw = document.getElementById("blk-level-elevation").value;
   const body = { kind, name: name || null, elevation_mm: elevRaw ? Number(elevRaw) : null };
+  // См. коммент у data-del-section — тот же невидимый showToast, здесь
+  // тоже заменён на blkSetupStatus (видна внутри модалки).
   if (kind === "кровля") {
     body.section_codes = [...document.querySelectorAll("#blk-level-sections-box input:checked")].map(i => i.value);
-    if (!body.section_codes.length) { showToast("Отметьте хотя бы одну секцию", "error"); return; }
+    if (!body.section_codes.length) { blkSetupStatus("Отметьте хотя бы одну секцию", true); return; }
   } else {
     const floorRaw = document.getElementById("blk-level-floor").value;
-    if (!floorRaw) { showToast("Укажите номер этажа", "error"); return; }
+    if (!floorRaw) { blkSetupStatus("Укажите номер этажа", true); return; }
     body.floor = Number(floorRaw);
   }
   try {
@@ -32601,7 +32612,7 @@ document.getElementById("blk-level-add").addEventListener("click", async () => {
     document.getElementById("blk-level-name").value = "";
     document.getElementById("blk-level-elevation").value = "";
     await loadBlkSectionsLevels();
-  } catch (e) { showToast(e.message, "error"); }
+  } catch (e) { blkSetupStatus(e.message, true); }
 });
 
 // -------- Блоки (вкладка «Блоки»): матрица секция × этаж --------
