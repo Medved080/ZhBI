@@ -6554,7 +6554,7 @@ def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWork
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
-            work_fact.save_block_settings(conn, object_id, block_id, body.work_type_ids)
+            work_fact.save_block_settings(conn, object_id, block_id, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
@@ -6599,7 +6599,7 @@ def set_blocks_work_types_settings(object_id: int, body: BlocksWorkTypesSettings
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
-            work_fact.save_blocks_settings(conn, object_id, body.block_ids, body.work_type_ids)
+            work_fact.save_blocks_settings(conn, object_id, body.block_ids, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:

@@ -1351,11 +1351,53 @@ CREATE TABLE IF NOT EXISTS level_plan_images (
     UNIQUE (level_id)
 );
 
-CREATE TABLE IF NOT EXISTS block_work_types (
+-- Запланированная работа (ЗР, 2026-09-10) — операция справочника видов
+-- работ, поставленная в план на конкретный блок. Замена block_work_types:
+-- та же пара (block_id, work_type_id) — «операция включена в отбор блока»,
+-- — но теперь с id (адресуется из URL/истории/отчётов), директивными
+-- (plan_*) и актуализированными (forecast_*) сроками. Обе пары дат
+-- НЕ обязательны — у ЗР может не быть ни одной, только сам факт включения
+-- в план блока. Явность: у блока, который не настраивали, строк здесь
+-- просто нет — никакого неявного «всё» (Docs/block-works-schedule-task.md
+-- §2.2), в отличие от старого поведения block_work_types.
+CREATE TABLE IF NOT EXISTS block_works (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Дублирует blocks.object_id ради отчётов по объекту без лишнего джойна
+    -- через blocks — тот же приём, что у work_fact_reports.object_id.
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
     block_id INTEGER NOT NULL REFERENCES blocks (id) ON DELETE CASCADE,
     work_type_id INTEGER NOT NULL REFERENCES work_types (id) ON DELETE CASCADE,
-    PRIMARY KEY (block_id, work_type_id)
+    plan_start TEXT,
+    plan_end TEXT,
+    forecast_start TEXT,
+    forecast_end TEXT,
+    -- Дублирует дату/автора последней записи block_work_forecasts — ради
+    -- скорости отчётов и списков (не джойнить версии на каждой строке).
+    forecast_at TEXT,
+    forecast_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    UNIQUE (block_id, work_type_id)
 );
+CREATE INDEX IF NOT EXISTS idx_block_works_object ON block_works (object_id, work_type_id);
+
+-- Версии актуализации сроков ЗР (2026-09-10) — как у графика СМР ЖБИ
+-- (app/schedule_versions.py): каждое сохранение прогноза — НОВАЯ запись,
+-- старые не правятся, чтобы было видно, как прогноз менялся во времени.
+-- Текущие значения денормализованы на block_works.forecast_* (см. выше).
+CREATE TABLE IF NOT EXISTS block_work_forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    block_work_id INTEGER NOT NULL REFERENCES block_works (id) ON DELETE CASCADE,
+    forecast_start TEXT,
+    forecast_end TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_block_work_forecasts_bw ON block_work_forecasts (block_work_id, created_at);
 
 -- Отчёт о фактическом выполнении — ДОКУМЕНТ на дату (аналог бумажного
 -- отчёта ответственного со стройки, живой запрос пользователя), а не

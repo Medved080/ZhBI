@@ -92,10 +92,16 @@ COLUMNS = [
     # квартиры, подложки планов. Соседствует с теми, кто ссылается на неё чаще
     # всего — выгрузками модели слева и учётом по блокам справа.
     ["projects", "objects", "object_drawings", "object_sections", "object_levels",
-     "object_level_aliases", "object_grids", "object_flats", "level_plan_images"],
-    # Учёт по блокам: блок (этаж × секция), виды работ, статусы и отчёты факта.
-    ["blocks", "block_boxes", "work_types", "block_work_types", "work_progress",
-     "work_fact_reports", "work_fact_items", "planning_tracks"],
+     "object_level_aliases", "object_grids", "object_flats", "level_plan_images",
+     # Справочники реквизитов заказчика (2026-09-08) — на них ссылаются
+     # objects.smu_id/smu_director_id/responsible_id; в COLUMNS не попали при
+     # заведении, из-за чего build_xml отказывался собирать файл (найдено
+     # 2026-09-10 при доработке «Учёта по блокам», к ней самой не относится).
+     "smu_catalog", "individuals"],
+    # Учёт по блокам: блок (этаж × секция), виды работ, статусы, отчёты факта
+    # и запланированная работа (ЗР) со сроками.
+    ["blocks", "block_boxes", "work_types", "block_works", "block_work_forecasts",
+     "work_progress", "work_fact_reports", "work_fact_items", "planning_tracks"],
     # Пользователи, доступ, журнал действий, обучение. В середине схемы: на
     # users ссылаются и учёт по блокам слева, и график с историей справа.
     ["users", "sessions", "user_access", "object_roles", "role_features",

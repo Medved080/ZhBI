@@ -509,6 +509,18 @@ _COLUMN_MIGRATIONS = [
     ("objects", "smu_id", "INTEGER REFERENCES smu_catalog(id) ON DELETE SET NULL"),
     ("objects", "smu_director_id", "INTEGER REFERENCES individuals(id) ON DELETE SET NULL"),
     ("objects", "responsible_id", "INTEGER REFERENCES individuals(id) ON DELETE SET NULL"),
+
+    # «Запланированная работа по блоку» (2026-09-10,
+    # Docs/block-works-schedule-task.md §2.4). Ссылка на ЗР, которой отчёт
+    # факта касается — пара report.block_id + item.work_type_id и так
+    # однозначно даёт ЗР, но прямая ссылка делает выборки истории (кто менял
+    # ИМЕННО эту строку, «Динамика» по ЗР) без лишнего джойна через блок.
+    # NULLable и ДОБАВОЧНАЯ к work_type_id, а не взамен него (пока, этап 1):
+    # заполняется обработкой релиза (app/release_tasks.py), которая может
+    # не успеть выполниться или упасть, не блокируя старт сервера, — код
+    # чтения факта обязан продолжать работать по work_type_id, пока это не
+    # так; полная замена ключа — отдельный шаг, не в этом этапе.
+    ("work_fact_items", "block_work_id", "INTEGER REFERENCES block_works(id) ON DELETE SET NULL"),
 ]
 
 
@@ -763,6 +775,48 @@ def _migrate_elements_drop_batch_id(conn: sqlite3.Connection, changes: list) -> 
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("ALTER TABLE elements DROP COLUMN batch_id")
     changes.append("снята колонка elements.batch_id (висячий внешний ключ на удалённую таблицу batches)")
+
+
+def _migrate_block_work_types_to_block_works(conn: sqlite3.Connection, changes: list) -> None:
+    """block_work_types (пара block_id×work_type_id без id) → block_works
+    (та же пара плюс id, сроки, реквизиты) — 2026-09-10,
+    Docs/block-works-schedule-task.md §2.1.
+
+    Перенос МЕХАНИЧЕСКИЙ: каждая строка старой таблицы становится строкой
+    новой 1:1, без всякого суждения над данными (object_id берётся простым
+    джойном через blocks) — тот же класс миграции, что
+    `_migrate_object_scoped_tables` выше, поэтому она и живёт здесь, в
+    db.py, а не в app/release_tasks.py. Business-логика (восстановление ЗР
+    по фактам, у которых явной пары никогда не было) — отдельно, в
+    release_tasks: ей можно упасть без остановки старта, а этому переносу —
+    нет, старая таблица исчезает безвозвратно в этой же транзакции.
+
+    Идемпотентность — по существованию таблицы `block_work_types`: на
+    свежей установке её не создаёт уже schema.sql (там сразу block_works),
+    здесь она просто не находится и функция сразу выходит. INSERT OR IGNORE
+    вдобавок защищает от повторной вставки, если процесс прервался между
+    переносом строк и DROP TABLE на предыдущем запуске.
+
+    DROP, а не оставить «на всякий случай»: данные не теряются (перенесены
+    строка в строку), а держать рядом два источника правды об одном и том
+    же отбором операций — верный способ однажды прочитать не тот. Тот же
+    выбор, что у `_migrate_contracts_theme` (колонки, чьи данные переехали,
+    снимаются в той же миграции, что и перенос).
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'block_work_types'"
+    ).fetchone()
+    if exists is None:
+        return
+    if conn.in_transaction:
+        conn.commit()
+    n = conn.execute(
+        "INSERT OR IGNORE INTO block_works (object_id, block_id, work_type_id) "
+        "SELECT b.object_id, bwt.block_id, bwt.work_type_id "
+        "FROM block_work_types bwt JOIN blocks b ON b.id = bwt.block_id"
+    ).rowcount
+    conn.execute("DROP TABLE block_work_types")
+    changes.append(f"block_work_types перенесена в block_works ({n} пар), старая таблица удалена")
 
 
 ACCESS_SEED_MARKER = "user_access_seeded"
@@ -2370,6 +2424,11 @@ def init_db() -> list:
         _reconcile_contract_from_history(conn, changes)
         _enforce_planned_has_no_contract(conn, changes)
         _normalize_element_type_vocabulary(conn, changes)
+        # Строго ПОСЛЕ создания схемы (executescript выше уже завёл
+        # block_works из schema.sql) и может идти где угодно после нею —
+        # переносимые строки зависят только от blocks, который существует
+        # с самого начала.
+        _migrate_block_work_types_to_block_works(conn, changes)
         # Панели облицовки шахт (2026-09-08): своя схема (elements.height_mm,
         # shaft_panel_geometry, shaft_panel_imports), ставится тем же
         # идемпотентным вызовом, что и весь остальной набор миграций —
