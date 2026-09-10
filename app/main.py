@@ -6805,7 +6805,12 @@ def get_blocks_track_progress(object_id: int, track_code: str,
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
-        return work_fact.board_block_values(conn, object_id, track_code)
+        # Обе сводки доски разом — по выполнению (как раньше) и по срокам
+        # (этап 3 задания «Запланированная работа по блоку») — фронт
+        # переключает режим раскраски без нового запроса к серверу.
+        from datetime import date as _date
+        return block_works.board_block_deviation_by_track(
+            conn, object_id, track_code, _date.today().isoformat())
     finally:
         conn.close()
 

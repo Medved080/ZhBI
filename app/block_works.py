@@ -460,6 +460,39 @@ def _bulk_shift(conn, object_id, user_id, bw_ids, field, days) -> int:
     return затронуто
 
 
+def board_block_deviation_by_track(conn: sqlite3.Connection, object_id: int, track_code: str,
+                                   today: str) -> dict:
+    """Обе сводки доски «Шахматка» разом — по выполнению (среднее
+    процентов, как раньше отдавала `work_fact.board_block_values`) и по
+    срокам (худший признак среди её операций на блоке, DEADLINE_ORDER) —
+    §6.4 задания: «не дёргать сервер при переключении режима».
+
+    Обёртка НАД `work_fact.board_block_values`, не самостоятельный запрос:
+    список операций доски, их отбор на блок (`block_works`, но с точки
+    зрения СОСТАВА, не сроков) и текущий процент по ним уже считает она —
+    здесь только доклеиваются даты поверх готового ответа, тем же приёмом,
+    что `merge_dates_into_tree` поверх дерева `block_progress_tree`."""
+    from app import work_fact as _work_fact
+    base = _work_fact.board_block_values(conn, object_id, track_code)
+    dates_cache: dict = {}
+    for block_id, entry in base.items():
+        if block_id not in dates_cache:
+            dates_cache[block_id] = _block_dates_by_work_type(conn, block_id)
+        dates_by_wt = dates_cache[block_id]
+        worst = None
+        for op in entry["ops"]:
+            zr = dates_by_wt.get(op["id"])
+            d = derive(zr, op["percent"], today) if zr else None
+            op["deviation_end"] = d["deviation_end"] if d else None
+            op["deadline"] = d["deadline"] if d else DEADLINE_NO_DATES
+            op["deadline_label"] = DEADLINE_LABELS_RU[op["deadline"]]
+            if worst is None or DEADLINE_ORDER.index(op["deadline"]) < DEADLINE_ORDER.index(worst):
+                worst = op["deadline"]
+        entry["deadline"] = worst or DEADLINE_NO_DATES
+        entry["deadline_label"] = DEADLINE_LABELS_RU[entry["deadline"]]
+    return base
+
+
 def _bulk_forecast_equals_plan(conn, object_id, user_id, bw_ids) -> int:
     from app.work_fact import current_percents_by_block_work
     percents = current_percents_by_block_work(conn, object_id)

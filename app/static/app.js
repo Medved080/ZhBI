@@ -28922,8 +28922,16 @@ async function openMfrWorkspace() {
   document.getElementById("mfr-chess-legend").style.display = "none";
   // Другой объект — другие доски: коды «1»..«20» у него могут значить
   // совсем другие разделы работ, отбор с прошлого объекта не переносим.
-  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
+  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]),
+    deadlines: new Set(), period: { active: false, field: "plan", from: null, to: null } };
   document.querySelectorAll(".bp-status-check").forEach((cb) => { cb.checked = true; });
+  document.querySelectorAll(".bp-deadline-check").forEach((cb) => { cb.checked = false; });
+  document.getElementById("mfr-period-toggle").checked = false;
+  document.getElementById("mfr-period-field").value = "plan";
+  document.getElementById("mfr-period-dates").style.display = "none";
+  document.getElementById("mfr-period-from").value = "";
+  document.getElementById("mfr-period-to").value = "";
+  updateMfrPeriodTitle();
   // Другой объект — другие блоки: незачем тащить в него дату/подсветку
   // динамики прошлого объекта.
   mfrDynamics = { active: false, from: null, to: null };
@@ -29172,6 +29180,26 @@ const MFR_CHESS_COLORS_3D = { plan: 0x9aa0a6, in_progress: 0xe8a33d, done: 0x3fa
 // принимает строку так же, как число), нужна для HSL-буста ниже.
 const MFR_CHESS_STATUS_HEX = { plan: "#9aa0a6", in_progress: "#e8a33d", done: "#3fa76a" };
 
+// Режим раскраски доски «Шахматка» (этап 3, задание «Запланированная
+// работа по блоку»): «progress» — как было, среднее процентов; «deadline»
+// — худший признак сроков среди операций доски на блоке. Палитра — своя,
+// НЕ пересекается со статусной (иначе «отстаёт» и «в работе» одним и тем
+// же оранжевым читались бы как один и тот же признак, хотя это разные
+// вопросы — процент и срок).
+let mfrChessMode = "progress";
+const MFR_CHESS_DEADLINE_HEX = {
+  on_track: "#3fa76a", behind: "#e8a33d", overdue: "#c0392b",
+  not_started_on_time: "#d35400", no_dates: "#9aa0a6",
+};
+const MFR_CHESS_COLORS_3D_DEADLINE = {
+  on_track: 0x3fa76a, behind: 0xe8a33d, overdue: 0xc0392b,
+  not_started_on_time: 0xd35400, no_dates: 0x9aa0a6, off: 0xbdbdbd,
+};
+const MFR_CHESS_DEADLINE_LABELS = {
+  on_track: "в графике", behind: "отстаёт", overdue: "просрочена",
+  not_started_on_time: "не начата в срок", no_dates: "без сроков",
+};
+
 // Раскладка наклейки «Шахматки» — ОДНА на 2D и 3D (2026-09-05, живой запрос
 // пользователя): строка на операцию, в строке — имя, следом полоса
 // выполнения, следом процент; полосы ВСЕХ строк начинаются с одного x
@@ -29179,12 +29207,16 @@ const MFR_CHESS_STATUS_HEX = { plan: "#9aa0a6", in_progress: "#e8a33d", done: "#
 // высота полосы равна строке. Считается в долях опорного кегля F: 2D и 3D
 // подставляют свой измеритель текста и потом масштабируют результат разом
 // под свой габарит — так план и сцена показывают одно и то же.
-function mfrChessLabelLayout(ops, F, measure) {
+function mfrChessLabelLayout(ops, F, measure, pctSample = "100%") {
   const lineH = F * 1.35, gap = F * 0.45, padX = F * 0.5, padY = F * 0.3;
   const barW = F * 5, barH = F * 1.0;
   let nameW = 0;
   for (const op of ops) nameW = Math.max(nameW, measure(op.name || ""));
-  const pctW = measure("100%");
+  // pctSample — образец САМОЙ ДЛИННОЙ строки колонки процента, под нём
+  // считается ширина. В режиме «по срокам» (этап 3) туда добавляется
+  // «±N дн», колонка шире — без своего образца текст обрезался бы о
+  // габарит плашки, посчитанный под короткую «100%».
+  const pctW = measure(pctSample);
   const barX = padX + nameW + gap;
   return {
     lineH, gap, padX, padY, barW, barH, nameW, pctW, barX,
@@ -29206,10 +29238,56 @@ function mfrChessLabelLayout(ops, F, measure) {
 // долях ширины всего плана. Наклейка центрируется в габарите блока и лежит
 // на своей полупрозрачной плашке, чтобы читаться поверх чертежа.
 const MFR_CHESS_LABEL_F = 100;      // опорный кегль раскладки
+
+// Цвет полосы и текст правой колонки строки операции — по режиму раскраски
+// (этап 3): «progress» — статус и просто процент (как было); «deadline» —
+// признак сроков этой операции и процент с «±N дн» рядом. Общая точка для
+// 2D (mfrChessOpsLabelSvg) и 3D (buildMfrChessLabelFace) — раньше строка
+// строилась в каждой по отдельности, разошлась бы при первой же правке.
+function bwOpLabelBits(op) {
+  if (mfrChessMode === "deadline") {
+    return {
+      color: MFR_CHESS_DEADLINE_HEX[op.deadline] || MFR_CHESS_DEADLINE_HEX.no_dates,
+      pctText: `${op.percent}% ${bwDeviationLabel(op.deviation_end)}`.trim(),
+    };
+  }
+  return {
+    color: MFR_CHESS_STATUS_HEX[op.status] || MFR_CHESS_STATUS_HEX.plan,
+    pctText: `${op.percent}%`,
+  };
+}
+// Образец для ширины колонки процента — самый длинный реальный текст этого
+// режима, не "100%" по умолчанию (см. mfrChessLabelLayout): в режиме сроков
+// строка длиннее на «±N дн».
+const MFR_CHESS_PCT_SAMPLE = { progress: "100%", deadline: "100% +99 дн" };
+
+// Цвет заливки БЛОКА целиком (не отдельной строки операции — см.
+// bwOpLabelBits) — по среднему статусу (progress) или худшему признаку
+// сроков (deadline) доски на этом блоке. 2D берёт CSS-переменную, 3D — hex:
+// те же две палитры, что у MFR_CHESS_COLORS/MFR_CHESS_COLORS_3D.
+function bwChessFill2D(chess) {
+  if (!chess) return "var(--color-text-muted)";
+  return mfrChessMode === "deadline"
+    ? (MFR_CHESS_DEADLINE_HEX[chess.deadline] || MFR_CHESS_DEADLINE_HEX.no_dates)
+    : MFR_CHESS_COLORS[chess.status];
+}
+function bwChessFill3D(chess) {
+  if (!chess) return MFR_CHESS_COLORS_3D.off;
+  return mfrChessMode === "deadline"
+    ? (MFR_CHESS_COLORS_3D_DEADLINE[chess.deadline] ?? MFR_CHESS_COLORS_3D_DEADLINE.no_dates)
+    : MFR_CHESS_COLORS_3D[chess.status];
+}
+function bwChessStatusHexForSelection(chess) {
+  return mfrChessMode === "deadline"
+    ? (MFR_CHESS_DEADLINE_HEX[chess.deadline] || MFR_CHESS_DEADLINE_HEX.no_dates)
+    : MFR_CHESS_STATUS_HEX[chess.status];
+}
+
 const MFR_CHESS_LABEL_PLAN_SHARE = 0.28;   // потолок ширины: доля ширины плана
 function mfrChessOpsLabelSvg(ops, box, planW) {
   const L = mfrChessLabelLayout(ops, MFR_CHESS_LABEL_F,
-    (t) => измеритьТекст(t, `600 ${MFR_CHESS_LABEL_F}px system-ui, sans-serif`));
+    (t) => измеритьТекст(t, `600 ${MFR_CHESS_LABEL_F}px system-ui, sans-serif`),
+    MFR_CHESS_PCT_SAMPLE[mfrChessMode]);
   const s = Math.min(box.rw * 0.92 / L.totalW, box.rh * 0.92 / L.totalH,
                      planW * MFR_CHESS_LABEL_PLAN_SHARE / L.totalW);
   const W = L.totalW * s, H = L.totalH * s;
@@ -29221,7 +29299,7 @@ function mfrChessOpsLabelSvg(ops, box, planW) {
     const baseline = rowTop + L.lineH * 0.5 * s + font * 0.35;   // текст по центру строки
     const barY = rowTop + (L.lineH - L.barH) / 2 * s;
     const barX = x0 + L.barX * s;
-    const fillColor = MFR_CHESS_STATUS_HEX[op.status] || MFR_CHESS_STATUS_HEX.plan;
+    const { color: fillColor, pctText } = bwOpLabelBits(op);
     const filled = barW * Math.max(0, Math.min(100, op.percent)) / 100;
     return `<text x="${x0 + L.padX * s}" y="${baseline}" font-size="${font}" font-weight="600"
         fill="#1a1a1a">${escapeHtml(op.name || "")}</text>
@@ -29230,7 +29308,7 @@ function mfrChessOpsLabelSvg(ops, box, planW) {
       <rect x="${barX}" y="${barY}" width="${filled}" height="${barH}" rx="${barH * 0.25}"
         fill="${fillColor}"/>
       <text x="${x0 + L.pctX * s}" y="${baseline}" font-size="${font}"
-        font-weight="600" fill="#1a1a1a">${op.percent}%</text>`;
+        font-weight="600" fill="#1a1a1a">${escapeHtml(pctText)}</text>`;
   }).join("");
   return `<g style="pointer-events:none">
     <rect x="${x0}" y="${y0}" width="${W}" height="${H}" rx="${font * 0.3}"
@@ -29391,9 +29469,7 @@ function drawRevitPlan(data) {
   // тускло-серым без подписи — «неприменимо», а не «0%», это разные вещи.
   const blockRects = blocks.flatMap((b) => {
     const chess = mfrChessTrackCode ? mfrChessValues[b.id] : null;
-    const fill = mfrChessTrackCode
-      ? (chess ? MFR_CHESS_COLORS[chess.status] : "var(--color-text-muted)")
-      : "var(--color-primary)";
+    const fill = mfrChessTrackCode ? bwChessFill2D(chess) : "var(--color-primary)";
     // Блок — набор прямоугольников (block_boxes, 2026-09-05): один
     // <rect> на каждый, все с одним и тем же data-block-id — клик на
     // любой из них ведёт себя одинаково (см. обработчик клика по SVG).
@@ -29623,7 +29699,7 @@ function mfrHighlightSelection() {
   // насыщенным цветом статуса (среднего по операциям доски) вместо общего
   // MFR_HIGHLIGHT_COLOR (см. выше).
   const chessSel = sel && sel.kind === "block" && mfrChessTrackCode ? mfrChessValues[sel.id] : null;
-  const boldColor = chessSel ? mfrChessBoldColor(MFR_CHESS_STATUS_HEX[chessSel.status]) : null;
+  const boldColor = chessSel ? mfrChessBoldColor(bwChessStatusHexForSelection(chessSel)) : null;
   // Грань выбранного блока — БЕЛАЯ, а не тот же цвет статуса, что заливка
   // (живой запрос пользователя, 2026-09-02: «более контрастные грани»):
   // цветной контур того же тона на цветной заливке читается хуже, особенно
@@ -29889,7 +29965,13 @@ let blockProgressTreeData = null;
 let blockProgressBlockId = null;   // для истории факта по наведению — см. bpHistoryTooltip
 // trackCodes — МНОЖЕСТВЕННЫЙ отбор (2026-09-10, живой запрос, было ОДНО
 // значение trackCode): пустой Set — без отбора, как у Этажа/Секции.
-let blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
+// deadlines — тот же приём, что statuses (пустой Set — без отбора).
+// period — «Период по плану» (этап 3, задание «Запланированная работа по
+// блоку»): field переключает план/прогноз, from/to — границы (обе
+// опциональны, как у mfrDynamics — но ЭТО НЕЗАВИСИМЫЙ отбор, а не «за весь
+// период по умолчанию»: active=false просто выключает группу целиком).
+let blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]),
+  deadlines: new Set(), period: { active: false, field: "plan", from: null, to: null } };
 
 async function loadBlockProgressPanel(blockId) {
   const box = document.getElementById("block-progress-tree");
@@ -29929,6 +30011,19 @@ function bwShortDate(iso) {
   return m ? `${m[3]}.${m[2]}` : iso;
 }
 
+// «Период по плану/прогнозу» (этап 3) — ЗР участвует, если её интервал
+// (start..end) пересекается с выбранным периодом (from..to, любая граница
+// может быть не задана — открытый конец). Без ОБЕИХ собственных дат
+// сравнивать не с чем — ЗР в отбор не попадает (не «неизвестно, значит
+// подходит», а прямо противоположное: без дат нечего сравнивать с периодом).
+function bwPeriodIntersects(start, end, from, to) {
+  if (!start && !end) return false;
+  const s = start || end, e = end || start;   // одна дата задана — точка
+  if (from && e < from) return false;
+  if (to && s > to) return false;
+  return true;
+}
+
 function bwDeviationLabel(days) {
   if (days === null || days === undefined) return "";
   if (days === 0) return "±0 дн";
@@ -29960,6 +30055,18 @@ function filterBlockProgressTree(nodes) {
     if (blockProgressFilter.trackCodes.size && !blockProgressFilter.trackCodes.has(n.planning_track_code)) continue;
     const status = n.status_to || n.status;
     if (!blockProgressFilter.statuses.has(status)) continue;
+    // «Сроки»/«Период» — только в обычном режиме (этап 3, задание
+    // «Запланированная работа по блоку»): в режиме «Динамика за период»
+    // узел несёт percent_from/percent_to, а не deadline/plan_*/forecast_*
+    // — сервер их туда не примешивает (см. block_works.merge_dates_into_tree).
+    if (n.percent_from === undefined) {
+      if (blockProgressFilter.deadlines.size && !blockProgressFilter.deadlines.has(n.deadline)) continue;
+      if (blockProgressFilter.period.active) {
+        const поле = blockProgressFilter.period.field;
+        if (!bwPeriodIntersects(n[`${поле}_start`], n[`${поле}_end`],
+                                blockProgressFilter.period.from, blockProgressFilter.period.to)) continue;
+      }
+    }
     result.push(n);
   }
   return result;
@@ -30137,6 +30244,43 @@ document.querySelectorAll(".bp-status-check").forEach((cb) => {
       [...document.querySelectorAll(".bp-status-check:checked")].map((c) => c.value));
     renderBlockProgressPanel();
   });
+});
+
+// -------- «Сроки»/«Период по плану» (этап 3, задание «Запланированная
+// работа по блоку») — те же две группы вкладки «Фильтры», режут дерево
+// карточки блока на лету, без похода на сервер (тот же приём, что «Виды
+// работ»/«Статус выполнения» выше). --------
+
+document.querySelectorAll(".bp-deadline-check").forEach((cb) => {
+  cb.addEventListener("change", () => {
+    blockProgressFilter.deadlines = new Set(
+      [...document.querySelectorAll(".bp-deadline-check:checked")].map((c) => c.value));
+    renderBlockProgressPanel();
+  });
+});
+
+function updateMfrPeriodTitle() {
+  document.getElementById("mfr-period-title").textContent =
+    document.getElementById("mfr-period-field").value === "forecast" ? "Период по прогнозу" : "Период по плану";
+}
+
+document.getElementById("mfr-period-toggle").addEventListener("change", (e) => {
+  blockProgressFilter.period.active = e.target.checked;
+  document.getElementById("mfr-period-dates").style.display = e.target.checked ? "" : "none";
+  renderBlockProgressPanel();
+});
+document.getElementById("mfr-period-field").addEventListener("change", (e) => {
+  blockProgressFilter.period.field = e.target.value;
+  updateMfrPeriodTitle();
+  if (blockProgressFilter.period.active) renderBlockProgressPanel();
+});
+document.getElementById("mfr-period-from").addEventListener("change", (e) => {
+  blockProgressFilter.period.from = e.target.value || null;
+  if (blockProgressFilter.period.active) renderBlockProgressPanel();
+});
+document.getElementById("mfr-period-to").addEventListener("change", (e) => {
+  blockProgressFilter.period.to = e.target.value || null;
+  if (blockProgressFilter.period.active) renderBlockProgressPanel();
 });
 
 function currentSelectedBlockId() {
@@ -30742,6 +30886,34 @@ function updateMfrChessCurrent() {
   nameEl.textContent = track ? track["название"] : "— выключено —";
 }
 
+// Легенда доски — своя палитра под режим раскраски (этап 3): цвета из
+// bwOpLabelBits/bwChessFill2D, подписи — MFR_CHESS_DEADLINE_LABELS для
+// сроков, обычные «план/в работе/выполнено» для процента.
+function renderMfrChessLegend() {
+  const box = document.getElementById("mfr-chess-legend");
+  const строка = (color, label) =>
+    `<span><i class="wp-dot" style="background:${color};border-color:${color}"></i>${escapeHtml(label)}</span>`;
+  box.innerHTML = mfrChessMode === "deadline"
+    ? Object.entries(MFR_CHESS_DEADLINE_LABELS)
+        .map(([code, label]) => строка(MFR_CHESS_DEADLINE_HEX[code], label)).join("")
+    : строка("var(--color-text-muted)", "план") + строка("#E8A33D", "в работе") + строка("#3FA76A", "выполнено");
+}
+
+document.querySelectorAll('input[name="mfr-chess-mode"]').forEach((radio) => {
+  radio.addEventListener("change", (e) => {
+    if (!e.target.checked) return;
+    mfrChessMode = e.target.value;
+    renderMfrChessLegend();
+    if (!mfrChessTrackCode) return;
+    // Тот же редрев, что при смене доски (selectMfrChessTrack) — сервер
+    // уже отдал обе сводки разом (board_block_deviation_by_track), новый
+    // запрос не нужен, только перерисовка готовыми данными.
+    if (revitPlanState.data) drawRevitPlan(revitPlanState.data);
+    mfr3d.key = null;
+    applyMfrMode();
+  });
+});
+
 // Окно выбора — плоский список досок (2026-09-04, было деревом операций):
 // доска — фиксированное название из PlanningTrack, дерево внутри неё не
 // нужно, операции этой доски и так видны построчно на самом блоке.
@@ -30782,6 +30954,7 @@ async function selectMfrChessTrack(trackCode) {
   mfrChessTrackCode = trackCode;
   updateMfrChessCurrent();
   document.getElementById("mfr-chess-legend").style.display = mfrChessTrackCode ? "" : "none";
+  if (mfrChessTrackCode) renderMfrChessLegend();
   if (mfrChessTrackCode) {
     try {
       mfrChessValues = await api(
@@ -31034,7 +31207,7 @@ function buildMfrChessLabelFace(ops) {
   const F = MFR_CHESS_LABEL_CANVAS_F;
   const шрифт = `600 ${F}px system-ui, sans-serif`;
   ctx.font = шрифт;
-  const L = mfrChessLabelLayout(ops, F, (t) => ctx.measureText(t).width);
+  const L = mfrChessLabelLayout(ops, F, (t) => ctx.measureText(t).width, MFR_CHESS_PCT_SAMPLE[mfrChessMode]);
   canvas.width = Math.ceil(L.totalW);
   canvas.height = Math.ceil(L.totalH);
 
@@ -31044,16 +31217,17 @@ function buildMfrChessLabelFace(ops) {
   ops.forEach((op, i) => {
     const rowTop = L.padY + i * L.lineH;
     const серединаСтроки = rowTop + L.lineH / 2;
+    const { color: fillColor, pctText } = bwOpLabelBits(op);
     ctx.font = шрифт;
     ctx.fillStyle = "#1a1a1a";
     ctx.fillText(op.name || "", L.padX, серединаСтроки);
     const barY = rowTop + (L.lineH - L.barH) / 2;
     ctx.fillStyle = "rgba(0,0,0,0.12)";
     ctx.fillRect(L.barX, barY, L.barW, L.barH);
-    ctx.fillStyle = MFR_CHESS_STATUS_HEX[op.status] || MFR_CHESS_STATUS_HEX.plan;
+    ctx.fillStyle = fillColor;
     ctx.fillRect(L.barX, barY, L.barW * Math.max(0, Math.min(100, op.percent)) / 100, L.barH);
     ctx.fillStyle = "#1a1a1a";
-    ctx.fillText(`${op.percent}%`, L.pctX, серединаСтроки);
+    ctx.fillText(pctText, L.pctX, серединаСтроки);
   });
 
   return {
@@ -31245,9 +31419,7 @@ async function buildMfr3D() {
       // и БЕЗ отбора по этажам видно только в 3D — раскраска 2D-плана одной
       // раскраской без неё не решала задачу «сравнить блоки между собой».
       const chess = mfrChessTrackCode ? mfrChessValues[b.id] : null;
-      const colorHex = mfrChessTrackCode
-        ? (chess ? MFR_CHESS_COLORS_3D[chess.status] : MFR_CHESS_COLORS_3D.off)
-        : 0x2f6fed;
+      const colorHex = mfrChessTrackCode ? bwChessFill3D(chess) : 0x2f6fed;
       // Блок — набор прямоугольников (block_boxes, 2026-09-05): один
       // Mesh+рёбра на каждый, все с тем же userData.blockId — раскраска
       // клика (bindMfr3DPick) и подсветки выбора видят блок целиком.
@@ -31760,9 +31932,17 @@ document.getElementById("mfr-workspace").addEventListener("click", async (e) => 
 document.getElementById("mfr-reset-all-filters").addEventListener("click", async () => {
   for (const g of REVIT_GROUPS) revitPlanState[g].clear();
   markRevitPicks();
-  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
+  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]),
+    deadlines: new Set(), period: { active: false, field: "plan", from: null, to: null } };
   renderMfrWorktypesList();
   document.querySelectorAll(".bp-status-check").forEach((cb) => { cb.checked = true; });
+  document.querySelectorAll(".bp-deadline-check").forEach((cb) => { cb.checked = false; });
+  document.getElementById("mfr-period-toggle").checked = false;
+  document.getElementById("mfr-period-field").value = "plan";
+  document.getElementById("mfr-period-dates").style.display = "none";
+  document.getElementById("mfr-period-from").value = "";
+  document.getElementById("mfr-period-to").value = "";
+  updateMfrPeriodTitle();
   renderBlockProgressPanel();
   mfrDynamics = { active: false, from: null, to: null };
   document.getElementById("mfr-dynamics-toggle").checked = false;

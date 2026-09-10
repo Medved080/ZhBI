@@ -5224,6 +5224,50 @@
             </div>
           </div>
         </div>
+        <!-- «Сроки» (этап 3, задание «Запланированная работа по блоку») —
+             чекбоксы признака ЗР (app/block_works.py, DEADLINE_*), режет
+             дерево карточки блока тем же приёмом, что «Статус выполнения»
+             выше (blockProgressFilter.deadlines, пустой набор — без
+             отбора). -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-deadline-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Сроки</span>
+          </div>
+          <div id="mfr-filter-deadline-body">
+            <div class="bp-status-filter">
+              <label><input type="checkbox" class="bp-deadline-check" value="on_track">в графике</label>
+              <label><input type="checkbox" class="bp-deadline-check" value="behind">отстаёт</label>
+              <label><input type="checkbox" class="bp-deadline-check" value="overdue">просрочена</label>
+              <label><input type="checkbox" class="bp-deadline-check" value="not_started_on_time">не начата в срок</label>
+              <label><input type="checkbox" class="bp-deadline-check" value="no_dates">без сроков</label>
+            </div>
+          </div>
+        </div>
+        <!-- «Период по плану» (этап 3) — ЗР, чей план (или, переключателем,
+             прогноз) пересекается с указанным периодом: «что должно идти на
+             этой неделе». Та же пара дат, что «Динамика» ниже, но своя,
+             НЕЗАВИСИМАЯ (разные вопросы: там — что менялось, здесь — что
+             должно идти сейчас). -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-period-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span id="mfr-period-title">Период по плану</span>
+          </div>
+          <div id="mfr-filter-period-body">
+            <label class="toggle"><input type="checkbox" id="mfr-period-toggle">отбирать по периоду</label>
+            <label>по <select id="mfr-period-field">
+              <option value="plan">плану</option>
+              <option value="forecast">прогнозу</option>
+            </select></label>
+            <div id="mfr-period-dates" class="mfr-dynamics-dates-row" style="display:none">
+              <label>с <input type="date" id="mfr-period-from"></label>
+              <label>по <input type="date" id="mfr-period-to"></label>
+            </div>
+          </div>
+        </div>
         <!-- Динамика факта за период (живой запрос пользователя): подсветка
              блоков, где факт менялся внутри периода, — источник не журнал
              (для «эт/сек»/«кв.эт/сек» его нет), а сравнение двух «снимков на
@@ -5297,11 +5341,17 @@
             <button type="button" class="mfr-chess-current" id="mfr-chess-open">
               <div id="mfr-chess-current-name">— выключено —</div>
             </button>
-            <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px">
-              <span><i class="wp-dot" style="background:var(--color-text-muted);border-color:var(--color-text-muted)"></i>план</span>
-              <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
-              <span><i class="wp-dot" style="background:#3FA76A;border-color:#3FA76A"></i>выполнено</span>
+            <!-- Режим раскраски доски (этап 3, задание «Запланированная
+                 работа по блоку») — «по выполнению» (среднее процентов,
+                 как раньше) или «по срокам» (худший признак среди операций
+                 доски на блоке). Сервер отдаёт обе сводки разом
+                 (board_block_deviation_by_track), переключатель не ходит
+                 на сервер повторно. -->
+            <div class="mfr-chess-mode-row" style="margin-top:6px">
+              <label><input type="radio" name="mfr-chess-mode" value="progress" checked>по выполнению</label>
+              <label><input type="radio" name="mfr-chess-mode" value="deadline">по срокам</label>
             </div>
+            <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px"></div>
           </div>
         </div>
       </div>
