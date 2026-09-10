@@ -85,15 +85,19 @@ def create_section(conn, object_id: int, code_input: str, name: str = None,
                    trusted: bool = False) -> dict:
     """`trusted=True` — вызывающий код сам ручается за код (константа в
     своём модуле, не введённое человеком или Revit-метаданными значение)
-    и пропускает `normalize_section`. Только для этого: она защищает от
-    МУСОРА (docstring `normalize_section`, «Автостоянка» из Revit-
-    выгрузки) — не от осознанно заведённых секций вне формата «С0N»
-    (2026-08-31, секция «Паркинг» из PDF-загрузки, прямое уточнение
-    пользователя)."""
-    code = code_input if trusted else normalize_section(code_input)
+    и пропускает `normalize_section` целиком. Для остальных (в том числе
+    ручного ввода из формы «Секции и этажи») — `normalize_section` сперва
+    пробует привести типовой числовой ввод («1», «Секция 1») к «С0N», а
+    если код вне этого формата — используется КАК ЕСТЬ, а не отклоняется:
+    `normalize_section` защищает от МУСОРА автоматического Revit-импорта
+    (docstring там же, «Автостоянка» из выгрузки) — не от осознанно
+    заведённых секций вне формата «С0N» что руками через PDF-загрузку
+    (2026-08-31, секция «Паркинг»), что теперь и через саму форму
+    (2026-09-10, живой запрос пользователя, секция «Парковка 2»: «что за
+    ограничение» — ограничение было лишним именно для ручного ввода)."""
+    code = code_input if trusted else (normalize_section(code_input) or code_input.strip())
     if not code:
-        raise BlockError(
-            "Не похоже на секцию: «%s». Ожидается «С01», «Секция 1» или «1»." % code_input)
+        raise BlockError("Код секции не может быть пустым.")
     exists = conn.execute(
         "SELECT id FROM object_sections WHERE object_id = ? AND code = ?",
         (object_id, code),
