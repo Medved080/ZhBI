@@ -521,6 +521,31 @@ def list_reports(conn, object_id: int, block_id: int) -> list:
     } for r in rows]
 
 
+def list_reports_with_percent(conn, object_id: int, block_id: int, work_type_id: int) -> list:
+    """Документы факта блока — тот же список, что `list_reports`, но с
+    процентом ИМЕННО этой операции в каждом (LEFT JOIN — документ мог не
+    коснуться операции, тогда None). Источник для карточки ЗР (§ живой
+    запрос пользователя, 2026-09-10 — «список документов фиксации факта»,
+    который правится/удаляется прямо оттуда, не только читается)."""
+    rows = conn.execute(
+        "SELECT r.id, r.report_date, r.created_at, r.updated_at, i.percent AS percent, "
+        "cu.last_name AS cu_last, cu.first_name AS cu_first, "
+        "uu.last_name AS uu_last, uu.first_name AS uu_first "
+        "FROM work_fact_reports r "
+        "LEFT JOIN users cu ON cu.id = r.created_by "
+        "LEFT JOIN users uu ON uu.id = r.updated_by "
+        "LEFT JOIN work_fact_items i ON i.report_id = r.id AND i.work_type_id = ? "
+        "WHERE r.object_id = ? AND r.block_id = ? ORDER BY r.report_date DESC, r.id DESC",
+        (work_type_id, object_id, block_id),
+    ).fetchall()
+    return [{
+        "id": r["id"], "report_date": r["report_date"], "percent": r["percent"],
+        "created_at": r["created_at"], "updated_at": r["updated_at"],
+        "created_by": _user_label(r["cu_last"], r["cu_first"]),
+        "updated_by": _user_label(r["uu_last"], r["uu_first"]),
+    } for r in rows]
+
+
 def get_report(conn, object_id: int, block_id: int, report_id: int) -> dict:
     row = conn.execute(
         "SELECT id, report_date FROM work_fact_reports "

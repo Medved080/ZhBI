@@ -30508,9 +30508,11 @@ let blockFactBlockId = null;
 let blockFactCurrentReportId = null;   // null = ещё не сохранённый новый отчёт
 let blockFactOptions = [];             // операции, выбранные для блока (Настройки)
 
-document.getElementById("block-progress-fact-btn").addEventListener("click", async () => {
-  const blockId = currentSelectedBlockId();
-  if (!blockId) return;
+// Открыть «Факт» блока — общая точка для кнопки в панели блока (новый
+// отчёт) и для «Править» в списке документов карточки ЗР (2026-09-10,
+// живой запрос: документ — снимок ВСЕГО блока, поэтому правится тем же
+// экраном, что и обычно, просто сразу на нужном отчёте, а не с чистого листа).
+async function openBlockFactForm(blockId, reportId) {
   blockFactBlockId = blockId;
   document.getElementById("block-fact-backdrop").classList.add("open");
   const [settings, reports] = await Promise.all([
@@ -30520,7 +30522,14 @@ document.getElementById("block-progress-fact-btn").addEventListener("click", asy
   const selected = new Set(settings.selected);
   blockFactOptions = settings.options.filter(o => selected.has(o.id));
   renderBlockFactReportsList(reports);
-  await startNewBlockFactReport();
+  if (reportId) await openExistingBlockFactReport(reportId);
+  else await startNewBlockFactReport();
+}
+
+document.getElementById("block-progress-fact-btn").addEventListener("click", () => {
+  const blockId = currentSelectedBlockId();
+  if (!blockId) return;
+  openBlockFactForm(blockId, null);
 });
 
 function renderBlockFactReportsList(reports) {
@@ -30618,6 +30627,7 @@ document.getElementById("block-fact-delete").addEventListener("click", async () 
     renderBlockFactReportsList(reports);
     await startNewBlockFactReport();
     if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
+    refreshPlansTabIfOpen(blockFactBlockId);
   } catch (e) { showToast(e.message, "error"); }
 });
 document.getElementById("block-fact-save").addEventListener("click", async () => {
@@ -30651,6 +30661,7 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
     // фичи: после «Факт» дерево обновлялось, а строка сводки — нет).
     // renderBlockCard, а не showBlockCard: выделение трогать незачем.
     if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
+    refreshPlansTabIfOpen(blockFactBlockId);
   } catch (e) { showToast(e.message, "error"); }
 });
 
@@ -30679,10 +30690,23 @@ function renderBlockWorkCard(d) {
     (v.created_by ? ` · ${escapeHtml(v.created_by)}` : "") +
     (v.note ? ` · ${escapeHtml(v.note)}` : "") + `</span></div>`
   ).join("") || '<div class="hint-text">Версий ещё нет.</div>';
-  const история = (d["история_факта"] || []).map(h =>
-    `<div class="card-row"><span class="card-key">${escapeHtml(h["дата"])}</span>` +
-    `<span class="card-val">${h["процент"]}%${h["пользователь"] ? " · " + escapeHtml(h["пользователь"]) : ""}</span></div>`
-  ).join("") || '<div class="hint-text">Фактов ещё не было.</div>';
+  // Документы факта — ИНТЕРАКТИВНЫЙ список (живой запрос пользователя,
+  // 2026-09-10): не только читается, но и правится/удаляется прямо
+  // отсюда. Документ — снимок ВСЕГО блока на дату (§8 block-accounting.md),
+  // поэтому «Править» открывает тот же «Факт» блока на нужном отчёте, а не
+  // отдельную форму на одну операцию — правка одной операции в отрыве от
+  // остальных документу не соответствовала бы. Процент — «—», если
+  // документ этой операции не коснулся (существовал раньше, чем ЗР).
+  const документы = (d["документы_факта"] || []).map(doc =>
+    `<div class="card-row bw-doc-row" data-report-id="${doc.id}">
+      <span class="card-key">${escapeHtml(formatDateRu(doc.report_date))}</span>
+      <span class="card-val">${doc.percent === null || doc.percent === undefined ? "—" : doc.percent + "%"}
+        ${doc.updated_by || doc.created_by ? "· " + escapeHtml(doc.updated_by || doc.created_by) : ""}
+        <button type="button" class="btn btn-sm btn-secondary bw-doc-edit">Править</button>
+        <button type="button" class="btn btn-sm btn-danger bw-doc-delete">Удалить</button>
+      </span>
+    </div>`
+  ).join("") || '<div class="hint-text">Документов факта ещё не было.</div>';
   // Построчная история правок (этап 4, В6) — каждая ПРАВКА уже сохранённой
   // строки («было X% → стало Y%»), отдельно от «Истории факта» выше (та —
   // снимок по датам отчётов, может быть одно значение на много дней).
@@ -30719,11 +30743,42 @@ function renderBlockWorkCard(d) {
       <textarea id="bw-note" rows="2" style="width:100%" ${disabled}>${escapeHtml(d.note || "")}</textarea>
       <button class="btn btn-sm btn-secondary" id="bw-note-save" ${disabled}>Сохранить</button>
     </fieldset>
-    <fieldset style="margin-top:10px"><legend>История факта</legend>${история}</fieldset>
+    <fieldset style="margin-top:10px"><legend>Документы факта</legend>${документы}</fieldset>
     ${историяПравок ? `<fieldset style="margin-top:10px"><legend>История правок факта</legend>${историяПравок}</fieldset>` : ""}
     <p class="hint-text" style="margin-top:6px">
       Заведена: ${escapeHtml(formatMomentRu(d.created_at) || "—")}${d.created_by ? " · " + escapeHtml(d.created_by) : ""}
     </p>`;
+
+  // Документы факта — правятся/удаляются независимо от того, снята ли ЗР
+  // (документ — снимок всего блока, а не только этой операции; удаление
+  // документа целиком остаётся законным действием и для снятой ЗР).
+  body.querySelectorAll(".bw-doc-edit").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const reportId = Number(btn.closest(".bw-doc-row").dataset.reportId);
+      // Закрываем карточку ЗР перед открытием «Факта» — оба окна одного
+      // z-index, поверх друг друга не видны (живой баг, пойман при
+      // проверке «Документов факта», 2026-09-10). «Факт» после сохранения
+      // сам обновит карточку через refreshPlansTabIfOpen.
+      document.getElementById("block-work-backdrop").classList.remove("open");
+      openBlockFactForm(d.block_id, reportId);
+    });
+  });
+  body.querySelectorAll(".bw-doc-delete").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const reportId = Number(btn.closest(".bw-doc-row").dataset.reportId);
+      if (!confirm("Удалить документ факта целиком? Действие необратимо.")) return;
+      try {
+        await api(`/objects/${revitPlanState.objectId}/blocks/${d.block_id}/fact-reports/${reportId}`,
+          { method: "DELETE" });
+        showToast("Документ удалён", "success");
+        bpHistoryCache.clear();
+        const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`);
+        renderBlockWorkCard(updated);
+        refreshOpenBlockCard();
+        refreshPlansTabIfOpen(d.block_id);
+      } catch (e) { showToast(e.message, "error"); }
+    });
+  });
 
   if (retired) return;   // ниже — только обработчики форм правки, которых для снятой ЗР нет
   document.getElementById("bw-plan-save").addEventListener("click", async () => {
@@ -30738,6 +30793,7 @@ function renderBlockWorkCard(d) {
       showToast("Базовый срок сохранён", "success");
       renderBlockWorkCard(updated);
       refreshOpenBlockCard();
+      refreshPlansTabIfOpen(d.block_id);
     } catch (e) { showToast(e.message, "error"); }
   });
   document.getElementById("bw-forecast-save").addEventListener("click", async () => {
@@ -30752,6 +30808,7 @@ function renderBlockWorkCard(d) {
       showToast("Новая версия прогноза сохранена", "success");
       renderBlockWorkCard(updated);
       refreshOpenBlockCard();
+      refreshPlansTabIfOpen(d.block_id);
     } catch (e) { showToast(e.message, "error"); }
   });
   document.getElementById("bw-note-save").addEventListener("click", async () => {
@@ -30837,6 +30894,7 @@ document.getElementById("block-works-dates-table").addEventListener("click", asy
     showToast("Сроки сохранены", "success");
     await loadBlockWorksDatesTable();
     refreshOpenBlockCard();
+    refreshPlansTabIfOpen();
   } catch (e2) { showToast(e2.message, "error"); }
 });
 
@@ -30862,6 +30920,7 @@ async function runBlockWorksBulk(op, extra) {
     showToast(`Изменено ЗР: ${res.changed} из ${res.requested}`, "success");
     await loadBlockWorksDatesTable();
     refreshOpenBlockCard();
+    refreshPlansTabIfOpen();
   } catch (e) { showToast(e.message, "error"); }
 }
 
@@ -32161,14 +32220,100 @@ document.getElementById("blocks-close").addEventListener("click", () => {
 function switchBlocksTab(name) {
   document.querySelectorAll("#blocks-tabs .tab-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.blkTab === name));
-  for (const key of ["setup", "blocks", "worktypes"]) {
+  for (const key of ["setup", "blocks", "worktypes", "plans"]) {
     document.getElementById(`blk-tab-${key}`).style.display = key === name ? "" : "none";
   }
   if (name === "blocks") loadBlkMatrix();
   if (name === "worktypes") loadWorkTypesTree();
+  if (name === "plans") loadBlkPlansBlocks();
 }
 document.querySelectorAll("#blocks-tabs .tab-btn").forEach(btn =>
   btn.addEventListener("click", () => switchBlocksTab(btn.dataset.blkTab)));
+
+// -------- «Запланированные работы» (2026-09-10, живой запрос пользователя)
+// — блоки объекта слева, ЗР выбранного блока справа; клик по ЗР открывает
+// ту же карточку (#block-work-backdrop), что и из панели блока «Модели
+// МФР». Карточка и форма «Факт» читают revitPlanState.objectId, а эта
+// вкладка открывается из общего меню «Действия» и могла НИ РАЗУ не
+// проходить через openMfrWorkspace — отсюда выравнивание ниже (тот же
+// приём, что у menu-mfr-colors: не открывать рабочее место по-настоящему,
+// только привести objectId в соответствие). --------
+
+let blkPlansBlockId = null;
+
+async function loadBlkPlansBlocks() {
+  revitPlanState.objectId = state.objectId;
+  const box = document.getElementById("blk-plans-blocks-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const blocks = await api(`/objects/${state.objectId}/blocks`);
+    if (!blocks.length) {
+      box.innerHTML = '<div class="hint-text">Блоков ещё нет (вкладка «Блоки»).</div>';
+      return;
+    }
+    box.innerHTML = blocks.map(b => {
+      const метка = `${escapeHtml(b.section_code)} · ${escapeHtml(b.level_name || (b.floor + " этаж"))}`;
+      return `<div class="blk-plans-block-row${b.id === blkPlansBlockId ? " active" : ""}"
+        data-block-id="${b.id}">${метка}</div>`;
+    }).join("");
+    box.querySelectorAll(".blk-plans-block-row").forEach(row => {
+      row.addEventListener("click", () => selectBlkPlansBlock(Number(row.dataset.blockId)));
+    });
+    // Уже выбранный блок остаётся выбранным при возврате на вкладку (то же
+    // блоков был выбран раньше) — но если объект сменился, список ЗР мог
+    // относиться к чужому блоку; на всякий случай просто перезагружаем.
+    if (blkPlansBlockId && blocks.some(b => b.id === blkPlansBlockId)) {
+      await loadBlkPlansZrList(blkPlansBlockId);
+    }
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function selectBlkPlansBlock(blockId) {
+  blkPlansBlockId = blockId;
+  document.querySelectorAll("#blk-plans-blocks-list .blk-plans-block-row").forEach(row =>
+    row.classList.toggle("active", Number(row.dataset.blockId) === blockId));
+  loadBlkPlansZrList(blockId);
+}
+
+async function loadBlkPlansZrList(blockId) {
+  const box = document.getElementById("blk-plans-zr-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const data = await api(`/objects/${state.objectId}/block-works?block_ids=${blockId}`);
+    const items = data.items;
+    box.innerHTML = items.length ? items.map(it => `
+      <div class="blk-plans-zr-row" data-bw-id="${it.id}">
+        <div class="blk-plans-zr-name">${escapeHtml(it["название"] || it["путь"] || "")}</div>
+        <div class="blk-plans-zr-meta">
+          план ${bwShortDate(it.plan_start)}–${bwShortDate(it.plan_end)} ·
+          прогноз ${bwShortDate(it.forecast_start)}–${bwShortDate(it.forecast_end)} ·
+          ${it.percent}% ·
+          <span class="bw-deadline-${it.deadline}">${escapeHtml(it.deadline_label)}</span>
+        </div>
+      </div>`).join("")
+      : '<div class="hint-text">У этого блока нет ни одной ЗР — «Настройки» в панели блока «Модели МФР».</div>';
+    box.querySelectorAll(".blk-plans-zr-row").forEach(row => {
+      row.addEventListener("click", () => openBlockWorkCard(Number(row.dataset.bwId)));
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// Вызывается после правок ЗР/фактов из ДРУГИХ мест (панель блока «Модели
+// МФР», форма «Сроки», «Факт») — список этой вкладки, если она открыта и
+// показывает ТОТ ЖЕ блок, иначе просто устарел бы молча. blockId не
+// передан (групповая правка сразу нескольких блоков) — обновляем без
+// сверки, дороже, но реже, чем правка одной ЗР.
+function refreshPlansTabIfOpen(blockId) {
+  if (!document.getElementById("blocks-backdrop").classList.contains("open")) return;
+  if (document.getElementById("blk-tab-plans").style.display === "none") return;
+  if (!blkPlansBlockId) return;
+  if (blockId && blockId !== blkPlansBlockId) return;
+  loadBlkPlansZrList(blkPlansBlockId);
+}
 
 // -------- Секции и этажи (вкладка «Секции и этажи») --------
 

@@ -3236,6 +3236,18 @@
   .bsch-gantt-bar { position: absolute; top: 1px; height: 6px; border-radius: 3px; }
   .bsch-gantt-bar.bsch-gantt-plan { top: 1px; background: #4A86C8; }
   .bsch-gantt-bar.bsch-gantt-forecast { top: 9px; background: #E8703A; }
+  /* «Учёт по блокам» → «Запланированные работы» (2026-09-10) — блоки
+     слева, ЗР выбранного блока справа. */
+  .blk-plans-layout { display: flex; gap: 16px; height: 60vh; }
+  .blk-plans-blocks-col { flex: 0 0 260px; overflow-y: auto; border-right: 1px solid var(--color-border); padding-right: 8px; }
+  .blk-plans-zr-col { flex: 1 1 auto; overflow-y: auto; }
+  .blk-plans-block-row { padding: 5px 8px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
+  .blk-plans-block-row:hover { background: var(--color-surface-2); }
+  .blk-plans-block-row.active { background: var(--color-primary); color: #fff; }
+  .blk-plans-zr-row { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; border-bottom: 1px solid var(--color-border); }
+  .blk-plans-zr-row:hover { background: var(--color-surface-2); }
+  .blk-plans-zr-name { font-size: 13px; }
+  .blk-plans-zr-meta { font-size: 11px; color: var(--color-text-muted); margin-top: 2px; }
   /* Подсказка-история факта по наведению на полосу (живой запрос
      пользователя) — тот же визуальный приём, что у #chart-tooltip
      (плавающая карточка у курсора), свой экземпляр: разные источники
@@ -8141,6 +8153,11 @@
       <button type="button" class="tab-btn active" data-blk-tab="setup">Секции и этажи</button>
       <button type="button" class="tab-btn" data-blk-tab="blocks">Блоки</button>
       <button type="button" class="tab-btn" data-blk-tab="worktypes">Виды работ</button>
+      <!-- «Запланированные работы» (2026-09-10, живой запрос пользователя)
+           — отдельная закладка: слева блоки объекта, справа от выбранного
+           блока — список его ЗР, клик по ЗР открывает ту же карточку, что
+           и из панели блока «Модели МФР» (#block-work-backdrop). -->
+      <button type="button" class="tab-btn" data-blk-tab="plans">Запланированные работы</button>
     </div>
 
     <div id="blk-tab-setup" class="blk-panel">
@@ -8265,6 +8282,24 @@
         </span>
       </div>
       <div id="wt-tree-box" style="max-height:50vh; overflow:auto"></div>
+    </div>
+
+    <!-- «Запланированные работы» (2026-09-10, живой запрос пользователя) —
+         слева блоки объекта, справа ЗР выбранного блока; клик по ЗР
+         открывает её карточку (#block-work-backdrop, та же, что из панели
+         блока «Модели МФР») с реквизитами и списком документов факта. -->
+    <div id="blk-tab-plans" class="blk-panel" style="display:none">
+      <p class="hint-text">Слева — блоки объекта, справа — запланированные работы (ЗР) выбранного
+        блока. Клик по ЗР открывает карточку: реквизиты, сроки, версии прогноза и документы
+        факта — там же их можно поправить или удалить.</p>
+      <div class="blk-plans-layout">
+        <div class="blk-plans-blocks-col">
+          <div id="blk-plans-blocks-list"><div class="hint-text">Загрузка…</div></div>
+        </div>
+        <div class="blk-plans-zr-col">
+          <div id="blk-plans-zr-list" class="hint-text">Выберите блок слева.</div>
+        </div>
+      </div>
     </div>
 
     <div id="blk-recalc-report" class="hint-text" style="padding:2px 0 6px"></div>

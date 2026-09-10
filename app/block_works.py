@@ -28,7 +28,9 @@ from app.db import get_connection
 # проценту — один и тот же расчёт что там, что здесь; вторая реализация
 # разошлась бы при первой же правке порогов. Тот же приём, что у импорта
 # `_shift_planned_before_first_event` в app/element_bulk_edit.py.
-from app.work_fact import FactError, _status_from_percent, op_fact_history, item_edit_history
+from app.work_fact import (
+    FactError, _status_from_percent, list_reports_with_percent, item_edit_history,
+)
 # Тоже приватное имя по месту объявления (`app/schedule_versions.py`) — то
 # же вычисление «разница в днях, устойчивая к пустой/битой дате», что у
 # отклонения графика СМР ЖБИ; своя копия разошлась бы при первой же правке.
@@ -316,11 +318,17 @@ def get_block_work(conn: sqlite3.Connection, object_id: int, bw_id: int, today: 
             "SELECT * FROM block_work_forecasts WHERE block_work_id = ? "
             "ORDER BY created_at DESC, id DESC", (bw_id,))
     ]
-    d["история_факта"] = op_fact_history(conn, object_id, row["block_id"], row["work_type_id"])
-    # Построчная история правок (этап 4, В6) — отдельно от «истории факта»
-    # выше: та один снимок на отчёт (дата → процент), эта — каждая правка
-    # внутри уже сохранённого документа (было X% → стало Y%, в т.ч. несколько
-    # за один день).
+    # Документы факта блока с процентом ИМЕННО этой операции в каждом —
+    # интерактивный список карточки ЗР (живой запрос пользователя,
+    # 2026-09-10): не только читается, но и правится/удаляется прямо
+    # отсюда (правка — тот же «Факт» блока, открытый на нужном отчёте;
+    # удаление — DELETE .../fact-reports/{id}).
+    d["документы_факта"] = list_reports_with_percent(
+        conn, object_id, row["block_id"], row["work_type_id"])
+    # Построчная история правок (этап 4, В6) — отдельно от документов
+    # факта выше: та один снимок на отчёт (дата → процент), эта — каждая
+    # правка внутри уже сохранённого документа (было X% → стало Y%, в т.ч.
+    # несколько за один день).
     d["история_правок"] = item_edit_history(conn, bw_id)
     return d
 
