@@ -20286,6 +20286,17 @@ const REPORTS = {
     noFilter: true,
     wide: true,
   },
+  // «График работ по блокам» (этап 5, задание «Запланированная работа по
+  // блоку») — ЗР с планом/прогнозом/процентом/отклонением/признаком сроков,
+  // группировка строк выбирается на экране (app/report_block_schedule.py).
+  block_schedule: {
+    title: "График работ по блокам",
+    endpoint: "/reports/block-schedule",
+    render: renderBlockScheduleReport,
+    needsBlockSchedule: true,
+    noFilter: true,
+    wide: true,
+  },
 };
 let currentReport = "status";
 // Период графика «Динамики» в ФОРМЕ (живой запрос 2026-08-03) — тот же, что
@@ -20345,6 +20356,11 @@ function reportRequestBody() {
   if (REPORTS[currentReport].needsBlockStatusDate) {
     body.report_date = document.getElementById("bs-date").value || null;
     return body;   // фильтр схемы неприменим — это учёт по блокам, не по изделиям
+  }
+  if (REPORTS[currentReport].needsBlockSchedule) {
+    body.group_by = blockScheduleGroupChooser.selected();
+    body.view = document.getElementById("bsch-view").value;
+    return body;   // фильтр схемы неприменим — та же причина, что у block_status
   }
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
@@ -21007,6 +21023,24 @@ const deliveryGroupChooser = createGroupChooser({
   containerId: "ds-groups", storageKey: DS_GROUPS_KEY,
   allGroups: DS_ALL_GROUPS, defaultOn: DS_DEFAULT_ON, onChange: () => loadReport(),
 });
+
+// «График работ по блокам» — состав уровней продублирован здесь и в
+// app/report_block_schedule.GROUPS (тот же приём и та же оговорка, что у
+// deliveryGroupChooser выше: ключи и подписи обязаны совпадать).
+const BSCH_GROUPS_KEY = "zhbi_block_schedule_groups";
+const BSCH_ALL_GROUPS = [
+  { key: "track", label: "Трек" },
+  { key: "wbs_section", label: "Раздел WBS" },
+  { key: "operation", label: "Операция" },
+  { key: "section", label: "Секция" },
+  { key: "floor", label: "Этаж" },
+];
+const BSCH_DEFAULT_ON = ["track", "wbs_section", "operation", "section", "floor"];
+const blockScheduleGroupChooser = createGroupChooser({
+  containerId: "bsch-groups", storageKey: BSCH_GROUPS_KEY,
+  allGroups: BSCH_ALL_GROUPS, defaultOn: BSCH_DEFAULT_ON, onChange: () => loadReport(),
+});
+document.getElementById("bsch-view").addEventListener("change", loadReport);
 
 // Шаг оси на первом открытии подбирает сервер по ширине периода; как только
 // пользователь выбрал его сам, отправляем выбранное и больше не подменяем.
@@ -21689,6 +21723,10 @@ async function loadReport() {
         // Строка = отдельное изделие (группировки нет), поэтому число одно.
         statusLine.textContent = `Позиций: ${reportData.total.count}`;
       }
+    } else if (def.needsBlockSchedule) {
+      statusLine.textContent = reportData.elements
+        ? `Запланированных работ: ${reportData.elements}`
+        : "Запланированных работ ещё нет — «Настройки» в панели блока";
     } else if (def.needsScale) {
       // «График контрактации»: главное число — не «сколько изделий», а
       // разрыв между потребностью и контрактами. Его и выносим в строку
@@ -21737,6 +21775,8 @@ async function switchReport(key) {
   document.getElementById("report-analytics-box").style.display = REPORTS[key].needsAnalytics ? "" : "none";
   document.getElementById("report-block-status-box").style.display =
     REPORTS[key].needsBlockStatusDate ? "" : "none";
+  document.getElementById("report-block-schedule-box").style.display =
+    REPORTS[key].needsBlockSchedule ? "" : "none";
   document.getElementById("report-completion-box").style.display =
     REPORTS[key].completionViews ? "" : "none";
   document.getElementById("report-use-filter-box").style.display =
@@ -21750,6 +21790,7 @@ async function switchReport(key) {
   // колонок, две из которых — свободный текст «было/стало».
   reportsBackdrop.querySelector(".modal").classList.toggle(
     "report-full", !!(REPORTS[key].needsPeriod || REPORTS[key].needsWorkPeriod || REPORTS[key].wide));
+  if (REPORTS[key].needsBlockSchedule) blockScheduleGroupChooser.render();
   if (REPORTS[key].needsAnalytics) {
     // Дата и горизонт заполняются один раз: вернувшись на вкладку, человек
     // ожидает свой выбор, а не сброс к сегодняшнему дню (тот же приём, что
@@ -22025,6 +22066,12 @@ document.getElementById("menu-report-block-status").addEventListener("click", ()
   switchReport("block_status");
 });
 document.getElementById("bs-date").addEventListener("change", loadReport);
+document.getElementById("menu-report-block-schedule").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  applyReportSize();
+  showBackToReport(false);
+  switchReport("block_schedule");
+});
 document.getElementById("an-only-deficit").addEventListener("change", () => {
   if (reportData) document.getElementById("report-body").innerHTML = renderAnalyticsReport(reportData);
 });
@@ -33100,6 +33147,18 @@ function bsColumnList(data) {
   return [...blockCols, ...sectionCols, { unit: WP_UNIT_WHOLE, block_id: null, section_id: null, label: "Объект" }];
 }
 
+// Режим показа (§6.5 задания «Запланированная работа по блоку», этап 5) —
+// те же ячейки, другая величина; правка ячейки доступна только в «percent»
+// (см. ветку ниже — остальные режимы рисуют обычный <td>, не <input>).
+let bsStatusMode = "percent";
+
+document.getElementById("bs-mode").addEventListener("change", (e) => {
+  bsStatusMode = e.target.value;
+  if (currentReport === "block_status" && reportData) {
+    document.getElementById("report-body").innerHTML = renderBlockStatusReport(reportData);
+  }
+});
+
 function renderBlockStatusReport(data) {
   if (!data.tree.length) {
     return '<div class="hint-text" style="padding:8px">Справочник видов работ ещё не загружен '
@@ -33125,8 +33184,27 @@ function renderBlockStatusReport(data) {
       if (c.unit === WP_UNIT_BLOCK) {
         const cell = node.cells ? node.cells[c.block_id] : null;
         if (!cell) return `<td class="wp-cell wp-off" title="Операция не выбрана для этого блока — «Настройки» в панели блока"><span class="wp-dot"></span></td>`;
-        return `<td class="wp-cell wp-percent-cell wp-${cell.status}" data-wt="${node.id}" data-block="${c.block_id}">
-          <input type="number" class="wp-percent-input" min="0" max="100" step="1" value="${cell.percent}"/></td>`;
+        if (bsStatusMode === "percent") {
+          return `<td class="wp-cell wp-percent-cell wp-${cell.status}" data-wt="${node.id}" data-block="${c.block_id}">
+            <input type="number" class="wp-percent-input" min="0" max="100" step="1" value="${cell.percent}"/></td>`;
+        }
+        // План/прогноз/отклонение — только показ (правка ячейки есть
+        // исключительно у процента, см. docstring block_works.
+        // status_report_with_deadlines): подсказка «есть N%, по плану
+        // должно быть M%» — везде, где известен ожидаемый процент.
+        const ожидание = cell.expected_percent !== null && cell.expected_percent !== undefined
+          ? `есть ${cell.percent}%, по плану должно быть ${cell.expected_percent}%` : "";
+        if (bsStatusMode === "plan") {
+          return `<td class="wp-cell wp-${cell.status}" title="${escapeHtml(ожидание)}">`
+            + `${bwShortDate(cell.plan_start)}–${bwShortDate(cell.plan_end)}</td>`;
+        }
+        if (bsStatusMode === "forecast") {
+          return `<td class="wp-cell wp-${cell.status}" title="${escapeHtml(ожидание)}">`
+            + `${bwShortDate(cell.forecast_start)}–${bwShortDate(cell.forecast_end)}</td>`;
+        }
+        // deviation
+        return `<td class="wp-cell wp-${cell.status} bw-deadline-${cell.deadline}" title="${escapeHtml(ожидание)}">`
+          + `${cell.deviation_end === null || cell.deviation_end === undefined ? "—" : bwDeviationLabel(cell.deviation_end)}</td>`;
       }
       const status = (c.unit === WP_UNIT_SECTION ? node.cells?.[c.section_id] : node.cells?.["объект"]) || "plan";
       const blockAttr = c.block_id != null ? ` data-block="${c.block_id}"` : "";
@@ -33137,6 +33215,95 @@ function renderBlockStatusReport(data) {
     return `<tr>${nameCell}${cells}</tr>`;
   }).join("");
   return `<table id="wp-matrix-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+// -------- «График работ по блокам» (этап 5, задание «Запланированная
+// работа по блоку») — группировка выбирается на экране (blockScheduleGroupChooser),
+// вид «таблица»/«Гант» переключается локально (данные с сервера одни и те
+// же — обе пары дат и производные уже в каждой строке). --------
+
+function bschAggText(agg) {
+  const доля = agg.доля_выполненных === null ? "—" : `${agg.доля_выполненных}%`;
+  const откл = agg.среднее_отклонение === null ? "—" : `${agg.среднее_отклонение > 0 ? "+" : ""}${agg.среднее_отклонение} дн`;
+  return `всего ${agg.всего} · выполнено ${доля} · среднее отклонение ${откл} · отстают ${agg.отстают}`;
+}
+
+function bschDateRange(report) {
+  let min = null, max = null;
+  const consider = (d) => {
+    if (!d) return;
+    if (!min || d < min) min = d;
+    if (!max || d > max) max = d;
+  };
+  (function walk(nodes) {
+    for (const n of nodes) {
+      for (const r of n.rows) {
+        consider(r.plan_start); consider(r.plan_end);
+        consider(r.forecast_start); consider(r.forecast_end);
+      }
+      walk(n.children);
+    }
+  })(report.rows);
+  return { min, max };
+}
+
+function bschBarStyle(start, end, min, max) {
+  if (!start && !end) return null;
+  const s = start || end, e = end || start;
+  const span = (new Date(max) - new Date(min)) || 1;
+  const left = Math.max(0, (new Date(s) - new Date(min)) / span * 100);
+  const width = Math.max(0.6, (new Date(e) - new Date(s)) / span * 100);
+  return `left:${left.toFixed(2)}%; width:${width.toFixed(2)}%`;
+}
+
+function renderBlockScheduleRows(nodes, depth, range, view) {
+  return nodes.map(n => {
+    const pad = 8 + depth * 16;
+    const header = `<tr class="bsch-group"><td style="padding-left:${pad}px" colspan="8">`
+      + `<b>${escapeHtml(n.label)}</b> <span class="hint-text">${escapeHtml(bschAggText(n.agg))}</span></td></tr>`;
+    const rowsHtml = n.rows.map(r => {
+      if (view === "gantt") {
+        const planStyle = bschBarStyle(r.plan_start, r.plan_end, range.min, range.max);
+        const fcStyle = bschBarStyle(r.forecast_start, r.forecast_end, range.min, range.max);
+        return `<tr class="bsch-row">
+          <td style="padding-left:${pad + 16}px">${escapeHtml(r["название"] || "")}</td>
+          <td colspan="6" class="bsch-gantt-cell">
+            <div class="bsch-gantt-track">
+              ${planStyle ? `<div class="bsch-gantt-bar bsch-gantt-plan" style="${planStyle}" title="План: ${bwShortDate(r.plan_start)}–${bwShortDate(r.plan_end)}"></div>` : ""}
+              ${fcStyle ? `<div class="bsch-gantt-bar bsch-gantt-forecast" style="${fcStyle}" title="Прогноз: ${bwShortDate(r.forecast_start)}–${bwShortDate(r.forecast_end)}"></div>` : ""}
+            </div>
+          </td>
+          <td class="bw-deadline-${r.deadline}">${r.percent}%</td>
+        </tr>`;
+      }
+      return `<tr class="bsch-row">
+        <td style="padding-left:${pad + 16}px">${escapeHtml(r["название"] || "")}</td>
+        <td>${bwShortDate(r.plan_start)}–${bwShortDate(r.plan_end)}</td>
+        <td>${bwShortDate(r.forecast_start)}–${bwShortDate(r.forecast_end)}</td>
+        <td>${r.percent}%</td>
+        <td class="bw-deadline-${r.deadline}">${r.deviation_end === null || r.deviation_end === undefined ? "—" : bwDeviationLabel(r.deviation_end)}</td>
+        <td class="bw-deadline-${r.deadline}">${escapeHtml(r.deadline_label)}</td>
+        <td>${escapeHtml(r["ответственный"] || "")}</td>
+      </tr>`;
+    }).join("");
+    return header + rowsHtml + renderBlockScheduleRows(n.children, depth + 1, range, view);
+  }).join("");
+}
+
+function renderBlockScheduleReport(data) {
+  if (!data.elements) {
+    return '<div class="hint-text" style="padding:8px">Запланированных работ ещё нет — «Настройки» в панели блока.</div>';
+  }
+  const range = bschDateRange(data);
+  const head = data.view === "gantt"
+    ? `<tr><th>Операция</th><th colspan="6">План / прогноз</th><th>%</th></tr>`
+    : `<tr><th>Операция</th><th>План</th><th>Прогноз</th><th>%</th><th>Откл., дн</th><th>Признак</th><th>Ответственный</th></tr>`;
+  return `<table id="bsch-table" class="bsch-table">
+    <thead>${head}</thead>
+    <tbody>${renderBlockScheduleRows(data.rows, 0, range, data.view)}
+      <tr class="bsch-total"><td colspan="8"><b>Итого:</b> ${escapeHtml(bschAggText(data.total))}</td></tr>
+    </tbody>
+  </table>`;
 }
 
 document.getElementById("report-body").addEventListener("change", async (e) => {

@@ -87,6 +87,7 @@ from app import work_progress as work_progress_mod
 from app import work_types_import
 from app import work_fact
 from app import block_works
+from app import report_block_schedule
 from app import pdf_facade_import
 from app import pdf_import
 from app import pdf_rooms
@@ -1866,17 +1867,21 @@ def report_block_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_c
     пользователя) — бывшая вкладка «Статусы» «Учёта по блокам», перенесённая
     в «Отчёты»: у операций «эт/сек» в ячейке процент на выбранную дату,
     правится тут же (PUT /objects/{id}/blocks/{id}/work-progress-cell), а не
-    устаревшим клик-циклом. Права — те же, что у «Учёта по блокам»
-    (`work_progress`), отдельного раздела прав не заводится. Выгрузки
-    XLSX/PDF не заведены — это редактируемый экран, а не статичная сводка."""
+    устаревшим клик-циклом. Свой раздел прав `report_block_status` (этап 5
+    задания «Запланированная работа по блоку», 2026-09-10) — до этого был
+    закрыт разделом «Учёт по блокам» (`work_progress`) без своей строки в
+    матрице. Выгрузки XLSX/PDF не заведены — это редактируемый экран, а не
+    статичная сводка."""
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body, "work_progress", needs_source_file=False)
+        body = _guard_report(conn, user, body, "report_block_status", needs_source_file=False)
         object_id = _report_object_id(conn, body)
         if object_id is None:
             raise HTTPException(status_code=400,
                                 detail="Отчёт строится по объекту — выберите объект в тулбаре")
-        return work_fact.status_report(conn, object_id, body.report_date)
+        from datetime import date as _date
+        return block_works.status_report_with_deadlines(
+            conn, object_id, body.report_date, _date.today().isoformat())
     finally:
         conn.close()
 
@@ -2007,6 +2012,66 @@ def report_delivery_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depe
         conn.close()
     return _report_file_response(build_delivery_schedule_pdf(report),
                                  f"{_delivery_file_base()}.pdf", "application/pdf")
+
+
+def _block_schedule(conn, user, body: "ReportRequestIn") -> dict:
+    """Общая точка для экрана, XLSX и PDF «Графика работ по блокам» (этап 5
+    задания «Запланированная работа по блоку») — тот же приём, что у
+    `_delivery_schedule`: проверка доступа и сборка данных ОДИН раз, все
+    три маршрута зовут её, а не копируют."""
+    body = _guard_report(conn, user, body, "report_block_schedule", needs_source_file=False)
+    object_id = _report_object_id(conn, body)
+    if object_id is None:
+        raise HTTPException(status_code=400,
+                            detail="Отчёт строится по объекту — выберите объект в тулбаре")
+    from datetime import date as _date
+    return report_block_schedule.build_block_schedule_report(
+        conn, object_id, _date.today().isoformat(),
+        group_by=body.group_by, view=body.view)
+
+
+@app.post("/reports/block-schedule")
+def report_block_schedule_endpoint(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «График работ по блокам» — ЗР (запланированные работы) с
+    планом, прогнозом, процентом, отклонением и признаком сроков,
+    группировка строк выбирается на экране."""
+    conn = get_connection()
+    try:
+        return _block_schedule(conn, user, body)
+    finally:
+        conn.close()
+
+
+def _block_schedule_object_name(conn, object_id: int) -> str:
+    row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
+    return row["name"] if row else "—"
+
+
+@app.post("/reports/block-schedule.xlsx")
+def report_block_schedule_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _block_schedule(conn, user, body)
+        имя_объекта = _block_schedule_object_name(conn, report["object_id"])
+    finally:
+        conn.close()
+    return _report_file_response(
+        report_block_schedule.build_block_schedule_xlsx(report, имя_объекта),
+        "График работ по блокам.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.post("/reports/block-schedule.pdf")
+def report_block_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _block_schedule(conn, user, body)
+        имя_объекта = _block_schedule_object_name(conn, report["object_id"])
+    finally:
+        conn.close()
+    return _report_file_response(
+        report_block_schedule.build_block_schedule_pdf(report, имя_объекта),
+        "График работ по блокам.pdf", "application/pdf")
 
 
 # ==================== «Моя работа»: что человек изменил за период ====================

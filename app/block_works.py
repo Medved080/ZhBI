@@ -504,6 +504,47 @@ def board_block_deviation_by_track(conn: sqlite3.Connection, object_id: int, tra
     return base
 
 
+def status_report_with_deadlines(conn: sqlite3.Connection, object_id: int,
+                                 report_date: "str | None", today: str) -> dict:
+    """Отчёт «Учёт по блокам: статусы» (§6.5 задания, этап 5) — та же
+    обёртка-поверх-готового, что у доски «Шахматки»: `work_fact.
+    status_report` уже считает дерево и процент НА ДАТУ, здесь только
+    доклеиваются план/прогноз/отклонение в ячейки BLOCK_UNITS, чтобы
+    переключатель показа на фронте (процент/план/прогноз/отклонение) не
+    ходил на сервер повторно. Правка ячейки (PUT .../work-progress-cell)
+    по-прежнему работает только с процентом — эта надстройка его не трогает."""
+    from app import work_fact as _work_fact
+    from app.work_progress import BLOCK_UNITS
+    report = _work_fact.status_report(conn, object_id, report_date)
+    dates_cache: dict = {}
+
+    def walk(nodes):
+        for n in nodes:
+            if n.get("unit") in BLOCK_UNITS and "cells" in n:
+                for block_id, cell in n["cells"].items():
+                    if block_id not in dates_cache:
+                        dates_cache[block_id] = _block_dates_by_work_type(conn, block_id)
+                    zr = dates_cache[block_id].get(n["id"])
+                    if zr:
+                        d = derive(zr, cell["percent"], today)
+                        cell.update({k: d[k] for k in (
+                            "plan_start", "plan_end", "forecast_start", "forecast_end",
+                            "deviation_start", "deviation_end", "deadline", "deadline_label",
+                            "expected_percent")})
+                    else:
+                        cell.update({
+                            "plan_start": None, "plan_end": None, "forecast_start": None,
+                            "forecast_end": None, "deviation_start": None, "deviation_end": None,
+                            "deadline": DEADLINE_NO_DATES,
+                            "deadline_label": DEADLINE_LABELS_RU[DEADLINE_NO_DATES],
+                            "expected_percent": None,
+                        })
+            walk(n.get("children") or [])
+
+    walk(report["tree"])
+    return report
+
+
 def _bulk_forecast_equals_plan(conn, object_id, user_id, bw_ids) -> int:
     from app.work_fact import current_percents_by_block_work
     percents = current_percents_by_block_work(conn, object_id)

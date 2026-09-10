@@ -3224,6 +3224,18 @@
   #block-works-dates-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
   #block-works-dates-table th, #block-works-dates-table td { padding: 3px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
   #block-works-dates-table input[type=date] { width: 128px; font-size: 12px; }
+  /* Отчёт «График работ по блокам» (этап 5) — группировка + вид таблица/
+     Гант, обе на одних и тех же строках (renderBlockScheduleReport). */
+  .bsch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .bsch-table th { text-align: left; padding: 4px 6px; border-bottom: 2px solid var(--color-border); }
+  .bsch-table td { padding: 3px 6px; border-bottom: 1px solid var(--color-border); }
+  .bsch-group td { background: var(--color-surface-2); padding-top: 6px; padding-bottom: 6px; }
+  .bsch-total td { background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
+  .bsch-gantt-cell { padding: 2px 6px; }
+  .bsch-gantt-track { position: relative; height: 16px; background: var(--color-surface-2); border-radius: 3px; }
+  .bsch-gantt-bar { position: absolute; top: 1px; height: 6px; border-radius: 3px; }
+  .bsch-gantt-bar.bsch-gantt-plan { top: 1px; background: #4A86C8; }
+  .bsch-gantt-bar.bsch-gantt-forecast { top: 9px; background: #E8703A; }
   /* Подсказка-история факта по наведению на полосу (живой запрос
      пользователя) — тот же визуальный приём, что у #chart-tooltip
      (плавающая карточка у курсора), свой экземпляр: разные источники
@@ -4798,6 +4810,12 @@
                  пустой отчёт с пояснением, отдельного права не заводится
                  (те же права, что у самого «Учёта по блокам»). -->
             <button id="menu-report-block-status">Учёт по блокам: статусы</button>
+            <!-- «График работ по блокам» (этап 5 задания «Запланированная
+                 работа по блоку», 2026-09-10) — ЗР с планом, прогнозом,
+                 процентом, отклонением, признаком сроков; группировка
+                 строк и вид «Гант» — на экране. Свой раздел прав
+                 (report_block_schedule), отдельная строка в меню. -->
+            <button id="menu-report-block-schedule">График работ по блокам</button>
           </div>
         </div>
         <!-- «Обучение» (2026-08-14). Инструкция собирается под роли самого
@@ -7447,6 +7465,36 @@
            «какой день редактируем», см. work_fact.set_cell_percent. -->
       <div class="ds-controls" id="report-block-status-box" style="display:none">
         <label class="field">На дату <input type="date" id="bs-date" style="width:auto"/></label>
+        <!-- Переключатель показа (§6.5 задания «Запланированная работа по
+             блоку», этап 5) — те же ячейки «эт/сек»/«кв.эт/сек», другая
+             величина; правка по-прежнему только в «процент» (клетка тогда
+             редактируемая, в остальных режимах — просто текст). -->
+        <label class="field">Показывать
+          <select id="bs-mode">
+            <option value="percent">процент</option>
+            <option value="plan">план</option>
+            <option value="forecast">прогноз</option>
+            <option value="deviation">отклонение</option>
+          </select>
+        </label>
+      </div>
+      <!-- «График работ по блокам» (этап 5 задания «Запланированная работа
+           по блоку») — группировка строк тем же органом, что у «Графика
+           поставки» (createGroupChooser), плюс переключатель вида
+           таблица/Гант. Фильтр схемы неприменим — это учёт по блокам МФР,
+           не по изделиям ЖБИ (та же причина, что у «Учёта по блокам:
+           статусы» выше). -->
+      <div class="ds-controls" id="report-block-schedule-box" style="display:none">
+        <label class="field">Вид
+          <select id="bsch-view">
+            <option value="table">таблица</option>
+            <option value="gantt">Гант</option>
+          </select>
+        </label>
+        <div class="ds-chips">
+          <span class="hint-text">Группировка:</span>
+          <span id="bsch-groups"></span>
+        </div>
       </div>
       <!-- Сужение фильтром схемы к «Моей работе» неприменимо: там строки —
            события журнала, а не изделия, и часть из них к изделиям вообще
