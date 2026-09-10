@@ -30468,8 +30468,8 @@ function blockSettingsTreeHtml(options, selected, partial = new Set()) {
 // частично (indeterminate). Пересчитывается целиком — веток десятки, а не
 // тысячи, точечное обновление тут не окупается. «Частично» у узла даёт и
 // нетронутая операция из ЧАСТИ блоков группы (её собственный indeterminate).
-function refreshBlockSettingsGroups() {
-  document.querySelectorAll("#block-settings-list .bs-branch").forEach(ветка => {
+function refreshBlockSettingsGroups(containerId = "block-settings-list") {
+  document.querySelectorAll(`#${containerId} .bs-branch`).forEach(ветка => {
     const свои = [...ветка.querySelectorAll("input[value]")];
     const отмечено = свои.filter(cb => cb.checked).length;
     const спорных = свои.filter(cb => cb.indeterminate).length;
@@ -30570,6 +30570,10 @@ document.getElementById("block-settings-save").addEventListener("click", async (
     // сохранения группа должна остаться выделенной.
     const текущий = currentSelectedBlockId();
     if (текущий && ids.includes(текущий)) renderBlockCard(текущий);
+    // Счётчик активных ЗР вкладки «Запланированные работы» меняется вместе
+    // с составом — без этого он расходился бы с реальностью до следующего
+    // открытия вкладки (живой запрос пользователя, 2026-09-10).
+    refreshPlansTabIfOpen(ids.length === 1 ? ids[0] : undefined);
   } catch (e) { showToast(e.message, "error"); }
 });
 
@@ -30586,6 +30590,14 @@ let blockFactOptions = [];             // операции, выбранные �
 async function openBlockFactForm(blockId, reportId) {
   blockFactBlockId = blockId;
   document.getElementById("block-fact-backdrop").classList.add("open");
+  document.getElementById("block-fact-save-status").textContent = "";
+  // Редактирование — по правам (живой запрос пользователя, 2026-09-10):
+  // сервер и так отклонит запись без права «work_progress: write», но
+  // кнопка, которая всё равно приведёт к ошибке, — плохой UX; та же
+  // проверка, что уже прячет «Новый отчёт»/«Удалить» в журнале.
+  const пишем = can("work_progress", "write");
+  document.getElementById("block-fact-new").style.display = пишем ? "" : "none";
+  document.getElementById("block-fact-save").style.display = пишем ? "" : "none";
   const [settings, reports] = await Promise.all([
     api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/work-types-settings`),
     api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/fact-reports`),
@@ -30629,7 +30641,8 @@ function highlightActiveBlockFactReport() {
 // документа: у черновика нового отчёта (blockFactCurrentReportId === null)
 // удалять нечего, форма про него ещё ничего не отправляла на сервер.
 function updateBlockFactDeleteVisibility() {
-  document.getElementById("block-fact-delete").hidden = blockFactCurrentReportId === null;
+  document.getElementById("block-fact-delete").hidden =
+    blockFactCurrentReportId === null || !can("work_progress", "write");
 }
 
 async function startNewBlockFactReport() {
@@ -30661,14 +30674,15 @@ async function openExistingBlockFactReport(reportId) {
 
 function renderBlockFactItems(percents) {
   const box = document.getElementById("block-fact-items");
+  const disabled = can("work_progress", "write") ? "" : "disabled";
   box.innerHTML = blockFactOptions.length
     ? blockFactOptions.map(o => {
         const { name, crumb } = workTypePathParts(o["путь"]);
         const percent = percents[o.id] || 0;
         return `<div class="bf-item" data-wt="${o.id}">
           <div class="bf-item-name">${crumb ? `<span class="hint-text">${escapeHtml(crumb)} / </span>` : ""}${escapeHtml(name)}</div>
-          <input type="range" min="0" max="100" value="${percent}" class="bf-slider">
-          <input type="number" min="0" max="100" value="${percent}" class="bf-number">
+          <input type="range" min="0" max="100" value="${percent}" class="bf-slider" ${disabled}>
+          <input type="number" min="0" max="100" value="${percent}" class="bf-number" ${disabled}>
         </div>`;
       }).join("")
     : '<div class="hint-text">Для этого блока не выбрано ни одной операции — сначала «Настройки».</div>';
@@ -30683,12 +30697,26 @@ document.getElementById("block-fact-items").addEventListener("input", (e) => {
 });
 
 document.getElementById("block-fact-new").addEventListener("click", () => startNewBlockFactReport());
+// Возврат в «Журнал факта» (2026-09-10, живой запрос пользователя) — если
+// форма была открыта ИЗ журнала (строка/«Новый отчёт»), закрытие формы
+// возвращает туда же с прежними отборами и прокруткой, а не оставляет
+// пользователя «в никуда»; fjReturnOnClose и openFactJournal() — см. ниже,
+// у самого журнала.
 document.getElementById("block-fact-close").addEventListener("click", () => {
   document.getElementById("block-fact-backdrop").classList.remove("open");
+  if (fjReturnOnClose) { fjReturnOnClose = false; openFactJournal(); }
 });
 document.getElementById("block-fact-delete").addEventListener("click", async () => {
   if (blockFactCurrentReportId === null) return;
-  if (!confirm("Удалить отчёт целиком? Действие необратимо.")) return;
+  // Детали последствий — то же, что «Удалить отчёт блока» из журнала
+  // (живой запрос пользователя: «показывай дату, секцию, этаж и
+  // количество затрагиваемых работ»); здесь блок и так открыт в форме,
+  // хватает даты и числа операций.
+  const датаОтчёта = document.getElementById("block-fact-date").value;
+  const затронутоРабот = document.querySelectorAll("#block-fact-items .bf-item").length;
+  if (!confirm(`Удалить отчёт целиком? Дата ${formatDateRu(датаОтчёта) || датаОтчёта}, `
+    + `работ в документе: ${затронутоРабот}. Действие необратимо.`)) return;
+  const statusEl = document.getElementById("block-fact-save-status");
   try {
     await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports/${blockFactCurrentReportId}`,
       { method: "DELETE" });
@@ -30699,7 +30727,10 @@ document.getElementById("block-fact-delete").addEventListener("click", async () 
     await startNewBlockFactReport();
     if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
     refreshPlansTabIfOpen(blockFactBlockId);
-  } catch (e) { showToast(e.message, "error"); }
+  } catch (e) {
+    statusEl.textContent = "Не удалось удалить: " + e.message;
+    statusEl.style.color = "var(--color-danger)";
+  }
 });
 document.getElementById("block-fact-save").addEventListener("click", async () => {
   const items = {};
@@ -30707,7 +30738,18 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
     items[Number(item.dataset.wt)] = Number(item.querySelector(".bf-number").value) || 0;
   });
   const report_date = document.getElementById("block-fact-date").value;
-  if (!report_date) { showToast("Укажите дату отчёта", "error"); return; }
+  const statusEl = document.getElementById("block-fact-save-status");
+  if (!report_date) {
+    statusEl.textContent = "Укажите дату отчёта"; statusEl.style.color = "var(--color-danger)";
+    return;
+  }
+  // «Сохраняется…»/«Сохранено»/«Не удалось сохранить» — рядом с формой, не
+  // общий toast (живой запрос пользователя, 2026-09-10: «сделай понятным
+  // состояние сохранения», «ошибки должны быть видны в активной форме»).
+  // Введённое НЕ стирается при ошибке — items/report_date остаются в полях
+  // формы как есть, catch ничего не перерисовывает.
+  statusEl.textContent = "Сохраняется…";
+  statusEl.style.color = "";
   try {
     if (blockFactCurrentReportId) {
       await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports/${blockFactCurrentReportId}`, {
@@ -30722,7 +30764,8 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
       blockFactCurrentReportId = res.id;
       updateBlockFactDeleteVisibility();
     }
-    showToast("Отчёт сохранён", "success");
+    statusEl.textContent = "Сохранено";
+    statusEl.style.color = "var(--color-success)";
     bpHistoryCache.clear();   // сохранённые значения устарели — история по наведению должна их подхватить
     const reports = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports`);
     renderBlockFactReportsList(reports);
@@ -30733,7 +30776,278 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
     // renderBlockCard, а не showBlockCard: выделение трогать незачем.
     if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
     refreshPlansTabIfOpen(blockFactBlockId);
-  } catch (e) { showToast(e.message, "error"); }
+  } catch (e) {
+    statusEl.textContent = "Не удалось сохранить: " + e.message;
+    statusEl.style.color = "var(--color-danger)";
+  }
+});
+
+// -------- «Журнал факта» (2026-09-10, живой запрос пользователя) — прямой
+// доступ к документам work_fact_reports ВСЕГО объекта, без предварительного
+// поиска блока/работы (Действия → Документы → «Журнал факта», и переход из
+// «Учёта по блокам»/панели блока). Одна строка — один документ, клик
+// закрывает журнал и открывает уже существующую форму «Факт»
+// (openBlockFactForm) — без второй реализации и без стека модалок;
+// закрытие формы (fjReturnOnClose, см. block-fact-close выше) возвращает в
+// журнал с прежними отборами и прокруткой (fjState). --------
+
+let fjReturnOnClose = false;
+let fjOptionsObjectId = null;      // объект, для которого уже загружены секции/этажи/виды работ
+let fjSections = [], fjLevels = [], fjWorkTypeOptions = [];
+let fjState = {
+  sectionIds: new Set(), levelIds: new Set(), workTypeIds: new Set(),
+  dateFrom: "", dateTo: "", scrollTop: 0,
+};
+
+async function openFactJournal(initial) {
+  // Объект сменился с прошлого открытия — прежний отбор к новому объекту
+  // не относится (живой запрос пользователя: «при смене объекта сбрасывай
+  // несовместимый выбор и не показывай данные предыдущего объекта»).
+  if (fjOptionsObjectId !== null && fjOptionsObjectId !== state.objectId) {
+    fjState = { sectionIds: new Set(), levelIds: new Set(), workTypeIds: new Set(),
+               dateFrom: "", dateTo: "", scrollTop: 0 };
+    fjOptionsObjectId = null;
+  }
+  if (initial) {
+    // Явный переход (из блока/из работы) ЗАМЕНЯЕТ отбор, а не добавляет к
+    // прежнему — «переход должен открывать ту же форму с установленными
+    // отборами», а не смешивать их с тем, что было выбрано раньше.
+    fjState.sectionIds = new Set(initial.sectionIds || []);
+    fjState.levelIds = new Set(initial.levelIds || []);
+    fjState.workTypeIds = new Set(initial.workTypeIds || []);
+    fjState.scrollTop = 0;
+  }
+  const объект = currentObject();
+  document.getElementById("fj-object-name").textContent = объект ? объект.object.name : "";
+  document.getElementById("fj-new-report").style.display = can("work_progress", "write") ? "" : "none";
+  document.getElementById("fact-journal-backdrop").classList.add("open");
+  if (fjOptionsObjectId !== state.objectId) {
+    document.getElementById("fj-sections-list").innerHTML = '<div class="hint-text">Загрузка…</div>';
+    document.getElementById("fj-levels-list").innerHTML = "";
+    document.getElementById("fj-worktypes-list").innerHTML = "";
+    const [sections, levels, workTypes] = await Promise.all([
+      api(`/objects/${state.objectId}/sections`),
+      api(`/objects/${state.objectId}/levels`),
+      api(`/objects/${state.objectId}/block-work-types`),
+    ]);
+    fjSections = sections; fjLevels = levels; fjWorkTypeOptions = workTypes.options;
+    fjOptionsObjectId = state.objectId;
+  }
+  renderFjFilterLists();
+  document.getElementById("fj-date-from").value = fjState.dateFrom;
+  document.getElementById("fj-date-to").value = fjState.dateTo;
+  await applyFjFilters();
+  // Прокрутка — ПОСЛЕ отрисовки таблицы, иначе scrollHeight ещё не готов.
+  document.getElementById("fj-table-box").scrollTop = fjState.scrollTop;
+}
+
+function renderFjFilterLists() {
+  document.getElementById("fj-sections-list").innerHTML = fjSections.length
+    ? fjSections.map(s => `<label><input type="checkbox" class="fj-sec-cb" value="${s.id}"
+        ${fjState.sectionIds.has(s.id) ? "checked" : ""}> ${escapeHtml(s.code)}</label>`).join("")
+    : '<div class="hint-text">Секций нет.</div>';
+  document.getElementById("fj-levels-list").innerHTML = fjLevels.length
+    ? fjLevels.map(l => `<label><input type="checkbox" class="fj-lvl-cb" value="${l.id}"
+        ${fjState.levelIds.has(l.id) ? "checked" : ""}> ${escapeHtml(l.name || l.key)}</label>`).join("")
+    : '<div class="hint-text">Этажей нет.</div>';
+  // Тот же рендерер дерева, что у формы «Настройки» блока
+  // (blockSettingsTreeHtml) — групповой чекбокс отмечает разом всех своих
+  // потомков-операций (живой запрос пользователя: «для группового узла
+  // справочника отбор включает его дочерние работы»); на сервер уходят
+  // только id уже раскрытых операций (input[value]), группа сама по себе
+  // не передаётся — те же семантика и код, что там.
+  document.getElementById("fj-worktypes-list").innerHTML = fjWorkTypeOptions.length
+    ? blockSettingsTreeHtml(fjWorkTypeOptions.map(o => ({ id: o.id, "путь": o.path })), fjState.workTypeIds)
+    : '<div class="hint-text">В справочнике нет операций «эт/сек»/«кв.эт/сек».</div>';
+  refreshBlockSettingsGroups("fj-worktypes-list");
+}
+
+document.getElementById("fj-sections-list").addEventListener("change", (e) => {
+  if (!e.target.classList?.contains("fj-sec-cb")) return;
+  const id = Number(e.target.value);
+  if (e.target.checked) fjState.sectionIds.add(id); else fjState.sectionIds.delete(id);
+  applyFjFilters();
+});
+document.getElementById("fj-levels-list").addEventListener("change", (e) => {
+  if (!e.target.classList?.contains("fj-lvl-cb")) return;
+  const id = Number(e.target.value);
+  if (e.target.checked) fjState.levelIds.add(id); else fjState.levelIds.delete(id);
+  applyFjFilters();
+});
+document.getElementById("fj-worktypes-list").addEventListener("change", (e) => {
+  const box = e.target;
+  if (box.classList?.contains("bs-group-box")) {
+    box.closest(".bs-branch").querySelectorAll("input[value]").forEach(cb => { cb.checked = box.checked; });
+  }
+  refreshBlockSettingsGroups("fj-worktypes-list");
+  fjState.workTypeIds = new Set(
+    [...document.querySelectorAll("#fj-worktypes-list input[value]:checked")].map(cb => Number(cb.value)));
+  applyFjFilters();
+});
+document.getElementById("fj-date-from").addEventListener("change", (e) => {
+  fjState.dateFrom = e.target.value; applyFjFilters();
+});
+document.getElementById("fj-date-to").addEventListener("change", (e) => {
+  fjState.dateTo = e.target.value; applyFjFilters();
+});
+document.getElementById("fj-reset-filters").addEventListener("click", () => {
+  fjState.sectionIds.clear(); fjState.levelIds.clear(); fjState.workTypeIds.clear();
+  fjState.dateFrom = ""; fjState.dateTo = "";
+  document.getElementById("fj-date-from").value = "";
+  document.getElementById("fj-date-to").value = "";
+  renderFjFilterLists();
+  applyFjFilters();
+});
+
+async function applyFjFilters() {
+  const box = document.getElementById("fj-table-box");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  const params = new URLSearchParams();
+  fjState.sectionIds.forEach(id => params.append("section_id", id));
+  fjState.levelIds.forEach(id => params.append("level_id", id));
+  fjState.workTypeIds.forEach(id => params.append("work_type_id", id));
+  if (fjState.dateFrom) params.append("date_from", fjState.dateFrom);
+  if (fjState.dateTo) params.append("date_to", fjState.dateTo);
+  try {
+    const data = await api(`/objects/${state.objectId}/fact-journal?${params}`);
+    fjRenderTable(data.items);
+    fjUpdateStatusRow(data.items.length);
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function fjHasActiveFilters() {
+  return !!(fjState.sectionIds.size || fjState.levelIds.size || fjState.workTypeIds.size
+    || fjState.dateFrom || fjState.dateTo);
+}
+
+function fjUpdateStatusRow(count) {
+  const части = [];
+  if (fjState.sectionIds.size) части.push(`секций: ${fjState.sectionIds.size}`);
+  if (fjState.levelIds.size) части.push(`этажей: ${fjState.levelIds.size}`);
+  if (fjState.workTypeIds.size) части.push(`видов работ: ${fjState.workTypeIds.size}`);
+  if (fjState.dateFrom || fjState.dateTo) части.push(`период: ${fjState.dateFrom || "…"}–${fjState.dateTo || "…"}`);
+  document.getElementById("fj-active-filters").textContent = части.length
+    ? `Отборы: ${части.join(", ")}` : "Отборов нет";
+  document.getElementById("fj-count").textContent = `Документов: ${count}`;
+}
+
+// Пустые состояния РАЗНЫЕ (живой запрос пользователя, 2026-09-10): «отчётов
+// ещё нет» (на объекте вообще ни одного документа) и «по условиям не
+// найдено» (документы есть, но не под ЭТИМ отбором) — разные причины,
+// разное действие пользователя (завести первый отчёт / ослабить отбор).
+function fjRenderTable(items) {
+  const box = document.getElementById("fj-table-box");
+  const canWrite = can("work_progress", "write");
+  if (!items.length) {
+    box.innerHTML = `<div class="hint-text">${fjHasActiveFilters()
+      ? "По выбранным условиям отчёты не найдены."
+      : "Отчётов ещё нет."}</div>`;
+    return;
+  }
+  box.innerHTML = `<table class="fj-table">
+    <thead><tr><th>Дата</th><th>Секция</th><th>Этаж / блок</th><th class="num">Работ</th>
+      <th>Автор</th><th>Изменено</th><th></th></tr></thead>
+    <tbody>${items.map(it => {
+      const изменено = it.updated_at && it.updated_at !== it.created_at
+        ? `${escapeHtml(formatMomentRu(it.updated_at) || it.updated_at)}${it.updated_by ? " · " + escapeHtml(it.updated_by) : ""}`
+        : "—";
+      return `<tr data-report-id="${it.id}" data-block-id="${it.block_id}">
+        <td>${escapeHtml(formatDateRu(it.report_date) || it.report_date)}</td>
+        <td>${escapeHtml(it.section_code || "")}</td>
+        <td>${escapeHtml(it.level_name || "")}</td>
+        <td class="num">${it.ops_count}</td>
+        <td>${escapeHtml(it.created_by || "")}</td>
+        <td>${изменено}</td>
+        <td>${canWrite ? `<button type="button" class="link-btn fj-delete-btn" title="Удалить отчёт блока">Удалить</button>` : ""}</td>
+      </tr>`;
+    }).join("")}</tbody></table>`;
+  box.querySelectorAll("tbody tr").forEach(row => {
+    row.addEventListener("click", () => {
+      fjState.scrollTop = box.scrollTop;
+      document.getElementById("fact-journal-backdrop").classList.remove("open");
+      fjReturnOnClose = true;
+      openBlockFactForm(Number(row.dataset.blockId), Number(row.dataset.reportId));
+    });
+  });
+  // «Удалить отчёт блока» — ОТДЕЛЬНОЕ второстепенное действие прямо в
+  // строке журнала, а не только через открытие формы «Факт» (живой запрос
+  // пользователя): дата/секция/этаж/число работ уже есть в самой строке,
+  // повторный запрос за ними не нужен.
+  box.querySelectorAll(".fj-delete-btn").forEach(btn => btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const row = btn.closest("tr");
+    const reportId = Number(row.dataset.reportId), blockId = Number(row.dataset.blockId);
+    const it = items.find(x => x.id === reportId);
+    if (!confirm(`Удалить отчёт блока целиком?\n\nДата: ${formatDateRu(it.report_date) || it.report_date}\n`
+      + `Секция: ${it.section_code || "—"}, этаж: ${it.level_name || "—"}\n`
+      + `Работ в документе: ${it.ops_count}\n\nЭто удалит весь документ блока. Действие необратимо.`)) return;
+    try {
+      await api(`/objects/${state.objectId}/blocks/${blockId}/fact-reports/${reportId}`, { method: "DELETE" });
+      showToast("Отчёт удалён", "success");
+      refreshPlansTabIfOpen(blockId);
+      applyFjFilters();
+    } catch (e) { showToast(e.message, "error"); }
+  }));
+}
+
+document.getElementById("fj-close").addEventListener("click", () => {
+  document.getElementById("fact-journal-backdrop").classList.remove("open");
+});
+
+document.getElementById("menu-fact-journal").addEventListener("click", () => {
+  // Тот же приём, что у menu-mfr-colors/loadBlkPlansBlocks: пункт открыт из
+  // общего меню «Действия» и мог ни разу не проходить через
+  // openMfrWorkspace — revitPlanState.objectId иначе разошёлся бы.
+  revitPlanState.objectId = state.objectId;
+  // Верхнее меню доступно поверх любой открытой модалки — если «Учёт по
+  // блокам» уже был открыт, не копим стек (см. коммент у
+  // blk-plans-to-journal выше).
+  document.getElementById("blocks-backdrop").classList.remove("open");
+  openFactJournal();
+});
+
+// «Новый отчёт» из журнала (живой запрос пользователя, 2026-09-10:
+// «сначала явно выбрать блок и дату, затем заполнить существующую форму
+// факта») — журнал, в отличие от панели блока/вкладки «Запланированные
+// работы», блок заранее не знает.
+document.getElementById("fj-new-report").addEventListener("click", () => {
+  document.getElementById("fj-new-report-backdrop").classList.add("open");
+  const hint = document.getElementById("fj-new-hint");
+  hint.textContent = ""; hint.style.color = "";
+  document.getElementById("fj-new-date").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("fj-new-section").innerHTML =
+    fjSections.map(s => `<option value="${s.id}">${escapeHtml(s.code)}</option>`).join("");
+  document.getElementById("fj-new-level").innerHTML =
+    fjLevels.map(l => `<option value="${l.id}">${escapeHtml(l.name || l.key)}</option>`).join("");
+});
+document.getElementById("fj-new-cancel").addEventListener("click", () => {
+  document.getElementById("fj-new-report-backdrop").classList.remove("open");
+});
+document.getElementById("fj-new-continue").addEventListener("click", async () => {
+  const hint = document.getElementById("fj-new-hint");
+  const sectionId = Number(document.getElementById("fj-new-section").value);
+  const levelId = Number(document.getElementById("fj-new-level").value);
+  const date = document.getElementById("fj-new-date").value;
+  if (!date) { hint.textContent = "Укажите дату отчёта"; hint.style.color = "var(--color-danger)"; return; }
+  let blocks;
+  try {
+    blocks = await api(`/objects/${state.objectId}/blocks`);
+  } catch (e) { hint.textContent = e.message; hint.style.color = "var(--color-danger)"; return; }
+  const block = blocks.find(b => b.section_id === sectionId && b.level_id === levelId);
+  if (!block) {
+    hint.textContent = "У этой пары секция/этаж ещё нет блока — заведите его на вкладке «Блоки».";
+    hint.style.color = "var(--color-danger)";
+    return;
+  }
+  document.getElementById("fj-new-report-backdrop").classList.remove("open");
+  document.getElementById("fact-journal-backdrop").classList.remove("open");
+  fjReturnOnClose = true;
+  await openBlockFactForm(block.id, null);
+  // openBlockFactForm -> startNewBlockFactReport предзаполняет СЕГОДНЯШНЕЙ
+  // датой — восстанавливаем ту, что выбрал пользователь в этой форме.
+  document.getElementById("block-fact-date").value = date;
 });
 
 // -------- Карточка ЗР (запланированной работы) — app/block_works.py,
@@ -30793,6 +31107,7 @@ function renderBlockWorkCard(d) {
 
   body.innerHTML = `
     <p class="hint-text">${escapeHtml(d["путь"] || "")}</p>
+    <button type="button" class="link-btn" id="bw-to-journal">В журнал факта (этот блок и работа)</button>
     ${retired ? `<p class="hint-text" style="color:#C0392B">Операция снята с плана блока `
       + `${escapeHtml(formatMomentRu(d.retired_at))} — реквизиты доступны только для просмотра.</p>` : ""}
     <div class="card-row"><span class="card-key">Признак сроков</span>
@@ -30895,6 +31210,25 @@ function renderBlockWorkCard(d) {
       showToast("Примечание сохранено", "success");
       renderBlockWorkCard(updated);
     } catch (e) { showToast(e.message, "error"); }
+  });
+  // Переход «из работы — в журнал с отбором по блоку и виду работы» (живой
+  // запрос пользователя, 2026-09-10) — секции/этажа в d нет (карточка ЗР
+  // хранит только код/этаж для показа, не id), резолвим через block_id.
+  document.getElementById("bw-to-journal").addEventListener("click", async () => {
+    const blocks = await api(`/objects/${revitPlanState.objectId}/blocks`);
+    const block = blocks.find(b => b.id === d.block_id);
+    document.getElementById("block-work-backdrop").classList.remove("open");
+    // Карточка ЗР открывается и поверх «Учёта по блокам» (вкладка
+    // «Запланированные работы»), и поверх панели блока «Модели МФР» — во
+    // втором случае закрывать нечего, remove у уже закрытой/непричастной
+    // модалки безвреден. Не стек модалок (см. коммент у
+    // blk-plans-to-journal выше).
+    document.getElementById("blocks-backdrop").classList.remove("open");
+    openFactJournal({
+      sectionIds: block ? [block.section_id] : [],
+      levelIds: block ? [block.level_id] : [],
+      workTypeIds: [d.work_type_id],
+    });
   });
 }
 
@@ -32387,7 +32721,12 @@ const WP_UNIT_BLOCK = "эт/сек", WP_UNIT_SECTION = "сек", WP_UNIT_WHOLE =
 document.getElementById("menu-blocks").addEventListener("click", async () => {
   document.getElementById("blocks-backdrop").classList.add("open");
   blkBlocksLoaded = false;
-  switchBlocksTab("setup");
+  // Последняя вкладка — за ОБЪЕКТОМ (живой запрос пользователя, 2026-09-10):
+  // у одного объекта обычно работают на «Секциях и этажах», у другого —
+  // постоянно смотрят «Запланированные работы», разные привычки не должны
+  // сбрасываться друг другом.
+  const сохранённая = localStorage.getItem(`zhbi_blocks_tab_${state.objectId}`);
+  switchBlocksTab(["setup", "blocks", "worktypes", "plans"].includes(сохранённая) ? сохранённая : "setup");
   await loadBlkSectionsLevels();
 });
 document.getElementById("blocks-close").addEventListener("click", () => {
@@ -32401,6 +32740,7 @@ function switchBlocksTab(name) {
   for (const key of ["setup", "blocks", "worktypes", "plans"]) {
     document.getElementById(`blk-tab-${key}`).style.display = key === name ? "" : "none";
   }
+  try { localStorage.setItem(`zhbi_blocks_tab_${state.objectId}`, name); } catch (e) { /* приватный режим — не критично */ }
   if (name === "blocks") loadBlkMatrix();
   if (name === "worktypes") loadWorkTypesTree();
   if (name === "plans") loadBlkPlansBlocks();
@@ -32418,76 +32758,209 @@ document.querySelectorAll("#blocks-tabs .tab-btn").forEach(btn =>
 // только привести objectId в соответствие). --------
 
 let blkPlansBlockId = null;
+let blkPlansAllBlocks = [];
+// Счётчики активных ЗР по блоку: null — ещё не пробовали/грузится, "error"
+// — запрос упал, объект {block_id: n} — загружено. Три состояния держатся
+// РАЗДЕЛЬНО от нуля (живой запрос пользователя, 2026-09-10: «не подменяй
+// неизвестное количество нулём») — «0» показывается, только когда счётчик
+// реально пришёл и у блока нет ни одной активной ЗР.
+let blkPlansCounts = null;
+let blkPlansSearch = "";
+let blkPlansZrItems = [];
+let blkPlansZrFilterStatus = "";
+let blkPlansZrFilterDeadline = "";
 
 async function loadBlkPlansBlocks() {
   revitPlanState.objectId = state.objectId;
   const box = document.getElementById("blk-plans-blocks-list");
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  blkPlansCounts = null;
   try {
     const blocks = await api(`/objects/${state.objectId}/blocks`);
+    blkPlansAllBlocks = blocks;
     if (!blocks.length) {
       box.innerHTML = '<div class="hint-text">Блоков ещё нет (вкладка «Блоки»).</div>';
       return;
     }
-    box.innerHTML = blocks.map(b => {
-      const метка = `${escapeHtml(b.section_code)} · ${escapeHtml(b.level_name || (b.floor + " этаж"))}`;
-      return `<div class="blk-plans-block-row${b.id === blkPlansBlockId ? " active" : ""}"
-        data-block-id="${b.id}">${метка}</div>`;
-    }).join("");
-    box.querySelectorAll(".blk-plans-block-row").forEach(row => {
-      row.addEventListener("click", () => selectBlkPlansBlock(Number(row.dataset.blockId)));
-    });
-    // Уже выбранный блок остаётся выбранным при возврате на вкладку (то же
-    // блоков был выбран раньше) — но если объект сменился, список ЗР мог
-    // относиться к чужому блоку; на всякий случай просто перезагружаем.
+    renderBlkPlansBlocks();
+    // Счётчики — ОТДЕЛЬНЫМ агрегированным запросом (живой запрос
+    // пользователя: «без отдельного запроса на каждый блок»), best-effort:
+    // список блоков не должен пропадать, если этот запрос упал — тогда
+    // счётчики просто показывают состояние «ошибка», а не нули.
+    try {
+      const counts = await api(`/objects/${state.objectId}/block-works/active-counts`);
+      blkPlansCounts = counts.counts;
+    } catch (e) {
+      blkPlansCounts = "error";
+    }
+    renderBlkPlansBlocks();
+    // Уже выбранный блок остаётся выбранным при возврате на вкладку — но
+    // если объект сменился или блок пропал, список ЗР мог относиться к
+    // чужому/несуществующему блоку: сброс, а не показ чужих данных (живой
+    // запрос пользователя: «при смене объекта сбрасывай несовместимый
+    // выбор и не показывай данные предыдущего объекта»).
     if (blkPlansBlockId && blocks.some(b => b.id === blkPlansBlockId)) {
       await loadBlkPlansZrList(blkPlansBlockId);
+    } else {
+      blkPlansBlockId = null;
+      blkPlansZrItems = [];
+      renderBlkPlansZrHead();
+      document.getElementById("blk-plans-zr-filters").style.display = "none";
+      document.getElementById("blk-plans-to-journal").style.display = "none";
+      document.getElementById("blk-plans-zr-list").innerHTML = '<div class="hint-text">Выберите блок слева.</div>';
     }
   } catch (e) {
     box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
   }
 }
 
+function blkPlansCountBadge(blockId) {
+  if (blkPlansCounts === null) return '<span class="blk-plans-block-count loading">…</span>';
+  if (blkPlansCounts === "error") {
+    return '<span class="blk-plans-block-count error" title="Не удалось получить количество">?</span>';
+  }
+  return `<span class="blk-plans-block-count">${blkPlansCounts[blockId] || 0}</span>`;
+}
+
+// Группировка по секциям, а не плоским списком (живой запрос пользователя,
+// 2026-09-10); поиск сужает список без похода на сервер — блоков на
+// объекте десятки-сотни, не тысячи.
+function renderBlkPlansBlocks() {
+  const box = document.getElementById("blk-plans-blocks-list");
+  const запрос = blkPlansSearch.trim().toLowerCase();
+  const filtered = запрос
+    ? blkPlansAllBlocks.filter(b =>
+        `${b.section_code} ${b.level_name || b.floor}`.toLowerCase().includes(запрос))
+    : blkPlansAllBlocks;
+  if (!filtered.length) {
+    box.innerHTML = '<div class="hint-text">Ничего не найдено.</div>';
+    return;
+  }
+  const bySection = new Map();
+  for (const b of filtered) {
+    const key = b.section_code || "—";
+    if (!bySection.has(key)) bySection.set(key, []);
+    bySection.get(key).push(b);
+  }
+  let html = "";
+  for (const [sectionCode, blocks] of bySection) {
+    html += `<div class="blk-plans-section-head">${escapeHtml(sectionCode)}</div>`;
+    html += blocks.map(b => {
+      const метка = escapeHtml(b.level_name || (b.floor + " этаж"));
+      return `<div class="blk-plans-block-row${b.id === blkPlansBlockId ? " active" : ""}"
+        data-block-id="${b.id}"><span class="blk-plans-block-name">${метка}</span>${blkPlansCountBadge(b.id)}</div>`;
+    }).join("");
+  }
+  box.innerHTML = html;
+  box.querySelectorAll(".blk-plans-block-row").forEach(row => {
+    row.addEventListener("click", () => selectBlkPlansBlock(Number(row.dataset.blockId)));
+  });
+}
+
+document.getElementById("blk-plans-search").addEventListener("input", (e) => {
+  blkPlansSearch = e.target.value;
+  renderBlkPlansBlocks();
+});
+
 function selectBlkPlansBlock(blockId) {
   blkPlansBlockId = blockId;
-  document.querySelectorAll("#blk-plans-blocks-list .blk-plans-block-row").forEach(row =>
-    row.classList.toggle("active", Number(row.dataset.blockId) === blockId));
+  renderBlkPlansBlocks();
   loadBlkPlansZrList(blockId);
 }
 
 async function loadBlkPlansZrList(blockId) {
   const box = document.getElementById("blk-plans-zr-list");
   box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  document.getElementById("blk-plans-zr-filters").style.display = "none";
+  document.getElementById("blk-plans-to-journal").style.display = "none";
   try {
     const data = await api(`/objects/${state.objectId}/block-works?block_ids=${blockId}`);
-    const items = data.items;
-    box.innerHTML = items.length ? items.map(it => `
-      <div class="blk-plans-zr-row" data-bw-id="${it.id}">
-        <div class="blk-plans-zr-name">${escapeHtml(it["название"] || it["путь"] || "")}</div>
-        <div class="blk-plans-zr-meta">
-          план ${bwShortDate(it.plan_start)}–${bwShortDate(it.plan_end)} ·
-          прогноз ${bwShortDate(it.forecast_start)}–${bwShortDate(it.forecast_end)} ·
-          ${it.percent}% ·
-          <span class="bw-deadline-${it.deadline}">${escapeHtml(it.deadline_label)}</span>
-        </div>
-      </div>`).join("")
-      : '<div class="hint-text">У этого блока нет ни одной ЗР — «Настройки» в панели блока «Модели МФР».</div>';
-    box.querySelectorAll(".blk-plans-zr-row").forEach(row => {
-      row.addEventListener("click", () => openBlockWorkCard(Number(row.dataset.bwId)));
-    });
+    blkPlansZrItems = data.items;
+    renderBlkPlansZrHead();
+    renderBlkPlansZrTable();
+    if (blkPlansZrItems.length) document.getElementById("blk-plans-zr-filters").style.display = "";
+    document.getElementById("blk-plans-to-journal").style.display = "";
   } catch (e) {
     box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
   }
 }
 
+function renderBlkPlansZrHead() {
+  const title = document.getElementById("blk-plans-zr-title");
+  const block = blkPlansAllBlocks.find(b => b.id === blkPlansBlockId);
+  if (!block) { title.textContent = "Выберите блок слева"; return; }
+  const метка = `${block.section_code} · ${block.level_name || (block.floor + " этаж")}`;
+  title.textContent = `${escapeHtml(метка)} — работ: ${blkPlansZrItems.length}`;
+}
+
+// Таблица, а не строка через «·» (живой запрос пользователя, 2026-09-10:
+// «план, прогноз, процент и состояние сроков — в выровненных колонках»);
+// фильтры по статусу/срокам режут уже загруженный список на фронте, без
+// повторного запроса — те же поля, что уже посчитаны на сервере
+// (block_works.derive), никакого параллельного расчёта.
+function renderBlkPlansZrTable() {
+  const box = document.getElementById("blk-plans-zr-list");
+  if (!blkPlansZrItems.length) {
+    box.innerHTML = '<div class="hint-text">У этого блока нет ни одной ЗР — «Настройки» в панели блока «Модели МФР».</div>';
+    return;
+  }
+  const filtered = blkPlansZrItems.filter(it =>
+    (!blkPlansZrFilterStatus || it.status === blkPlansZrFilterStatus) &&
+    (!blkPlansZrFilterDeadline || it.deadline === blkPlansZrFilterDeadline));
+  if (!filtered.length) {
+    box.innerHTML = '<div class="hint-text">По выбранным условиям работ не найдено.</div>';
+    return;
+  }
+  box.innerHTML = `<table class="blk-plans-zr-table">
+    <thead><tr><th>Работа</th><th>План</th><th>Прогноз</th><th class="num">%</th><th>Срок</th></tr></thead>
+    <tbody>${filtered.map(it => `
+      <tr data-bw-id="${it.id}">
+        <td class="blk-plans-zr-name">${escapeHtml(it["название"] || it["путь"] || "")}</td>
+        <td>${bwShortDate(it.plan_start)}–${bwShortDate(it.plan_end)}</td>
+        <td>${bwShortDate(it.forecast_start)}–${bwShortDate(it.forecast_end)}</td>
+        <td class="num">${it.percent}%</td>
+        <td><span class="bw-deadline-${it.deadline}">${escapeHtml(it.deadline_label)}</span></td>
+      </tr>`).join("")}</tbody></table>`;
+  box.querySelectorAll("tbody tr").forEach(row => {
+    row.addEventListener("click", () => openBlockWorkCard(Number(row.dataset.bwId)));
+  });
+}
+
+document.getElementById("blk-plans-filter-status").addEventListener("change", (e) => {
+  blkPlansZrFilterStatus = e.target.value;
+  renderBlkPlansZrTable();
+});
+document.getElementById("blk-plans-filter-deadline").addEventListener("change", (e) => {
+  blkPlansZrFilterDeadline = e.target.value;
+  renderBlkPlansZrTable();
+});
+
+// Переход «из блока — в журнал с отбором по этому блоку» (живой запрос
+// пользователя, 2026-09-10) — тот же фильтр по секции+этажу блока, что
+// журнал понимает сам; openFactJournal определена ниже, у самого журнала.
+document.getElementById("blk-plans-to-journal").addEventListener("click", () => {
+  const block = blkPlansAllBlocks.find(b => b.id === blkPlansBlockId);
+  if (!block) return;
+  // Закрываем «Учёт по блокам» перед открытием журнала — не стек модалок
+  // (живой запрос пользователя: «не создавай цепочки перекрывающих друг
+  // друга модальных окон»), тот же приём, что у карточки ЗР → журнал ниже.
+  document.getElementById("blocks-backdrop").classList.remove("open");
+  openFactJournal({ sectionIds: [block.section_id], levelIds: [block.level_id] });
+});
+
 // Вызывается после правок ЗР/фактов из ДРУГИХ мест (панель блока «Модели
-// МФР», форма «Сроки», «Факт») — список этой вкладки, если она открыта и
-// показывает ТОТ ЖЕ блок, иначе просто устарел бы молча. blockId не
-// передан (групповая правка сразу нескольких блоков) — обновляем без
-// сверки, дороже, но реже, чем правка одной ЗР.
+// МФР», форма «Сроки», «Факт», «Настройки») — список этой вкладки, если она
+// открыта и показывает ТОТ ЖЕ блок, иначе просто устарел бы молча. blockId
+// не передан (групповая правка сразу нескольких блоков) — обновляем без
+// сверки, дороже, но реже, чем правка одной ЗР. Счётчики слева обновляются
+// тем же вызовом — состав мог измениться вместе с тем, что вызвало правку.
 function refreshPlansTabIfOpen(blockId) {
   if (!document.getElementById("blocks-backdrop").classList.contains("open")) return;
   if (document.getElementById("blk-tab-plans").style.display === "none") return;
+  api(`/objects/${state.objectId}/block-works/active-counts`).then(counts => {
+    blkPlansCounts = counts.counts;
+    renderBlkPlansBlocks();
+  }).catch(() => {});
   if (!blkPlansBlockId) return;
   if (blockId && blockId !== blkPlansBlockId) return;
   loadBlkPlansZrList(blkPlansBlockId);
@@ -32842,7 +33315,8 @@ function renderBlkMatrix() {
       return `<td class="blk-cell${b ? " on" : ""}" data-sec="${s.id}" data-lvl="${l.id}"
           ${b ? `data-block-id="${b.id}"` : ""}>
         <span class="blk-cell-toggle" data-sec="${s.id}" data-lvl="${l.id}">${b ? "✓" : "—"}</span>
-        ${b ? `<button class="blk-cell-edit" title="Геометрия блока">✎</button>` : ""}
+        ${b ? `<button class="blk-cell-edit" title="Геометрия блока">✎</button>
+               <button class="blk-cell-delete" title="Удалить блок">✕</button>` : ""}
       </td>`;
     }).join("")}
   </tr>`).join("");
@@ -32850,23 +33324,25 @@ function renderBlkMatrix() {
     <thead><tr><th class="blk-row-name">Этаж \\ Секция</th>
       ${blkSections.map(s => `<th>${escapeHtml(s.code)}</th>`).join("")}</tr></thead>
     <tbody>${rows}</tbody></table>`;
+  // Занятая клетка — «галочка» БОЛЬШЕ НЕ удаляет блок кликом (живой запрос
+  // пользователя, 2026-09-10: «если галочка внутри ячейки по-прежнему
+  // удаляет блок, убери это поведение») — просто не глушим событие, оно
+  // всплывает к обработчику `td.blk-cell.on` ниже (openCellEditor), тем
+  // же путём, что клик по остальной площади клетки. Удаление — отдельная
+  // явная кнопка `.blk-cell-delete` с предупреждением (см. ниже):
+  // `delete_block` вдобавок оказался вовсе без защиты ЗР/документов факта
+  // (только устаревший work_progress) — тихо уносил их каскадом, см.
+  // app/blocks.py и Docs/block-accounting.md.
   box.querySelectorAll(".blk-cell-toggle").forEach(el => el.addEventListener("click", async (e) => {
+    const on = el.parentElement.classList.contains("on");
+    if (on) return;
     e.stopPropagation();
     const sectionId = Number(el.dataset.sec), levelId = Number(el.dataset.lvl);
-    const on = el.parentElement.classList.contains("on");
     try {
-      if (on) {
-        const b = blkBlocks.find(x => x.section_id === sectionId && x.level_id === levelId);
-        if (b) await api(`/objects/${state.objectId}/blocks/${b.id}`, { method: "DELETE" });
-        // Блок удаляется целиком — несохранённая геометрия всё равно
-        // относилась к уже несуществующей записи, спрашивать нечего.
-        if (blkGeoBlockId === (b && b.id)) { blkGeoDirty = false; closeBlkGeoEditor(); }
-      } else {
-        await api(`/objects/${state.objectId}/blocks`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ section_id: sectionId, level_id: levelId }),
-        });
-      }
+      await api(`/objects/${state.objectId}/blocks`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ section_id: sectionId, level_id: levelId }),
+      });
       blkBlocks = await api(`/objects/${state.objectId}/blocks`);
       renderBlkMatrix();
     } catch (e) { blkMatrixStatus(e.message, true); }
@@ -32884,6 +33360,18 @@ function renderBlkMatrix() {
   box.querySelectorAll(".blk-cell-edit").forEach(btn => btn.addEventListener("click", (e) => {
     e.stopPropagation();
     openCellEditor(btn.closest("td.blk-cell"));
+  }));
+  box.querySelectorAll(".blk-cell-delete").forEach(btn => btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const td = btn.closest("td.blk-cell");
+    const blockId = Number(td.dataset.blockId);
+    try {
+      const удалено = await deleteBlkEntity(`/objects/${state.objectId}/blocks/${blockId}`);
+      if (!удалено) return;
+      if (blkGeoBlockId === blockId) { blkGeoDirty = false; closeBlkGeoEditor(); }
+      blkBlocks = await api(`/objects/${state.objectId}/blocks`);
+      renderBlkMatrix();
+    } catch (e) { blkMatrixStatus(e.message, true); }
   }));
   box.querySelectorAll("th.blk-row-name[data-lvl]").forEach(th => th.addEventListener("click", () => {
     if (!blkGeoConfirmDiscard()) return;

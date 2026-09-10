@@ -434,16 +434,29 @@ def create_block(conn, object_id: int, section_id: int, level_id: int) -> dict:
     return {"id": block_id, "section_id": section_id, "level_id": level_id}
 
 
-def delete_block(conn, object_id: int, block_id: int) -> None:
+def delete_block(conn, object_id: int, block_id: int, force: bool = False) -> None:
+    """До этой правки проверялся только `work_progress` («сек»/«компл») —
+    ЗР (`block_works`, со сроками и построчным аудитом факта) и документы
+    факта (`work_fact_reports`) не проверялись вовсе, хотя ссылаются на
+    блок с `ON DELETE CASCADE` (app/schema.sql): удаление занятой клетки
+    матрицы (живой запрос пользователя, 2026-09-10 — «если галочка внутри
+    ячейки по-прежнему удаляет блок, убери это поведение») тихо уносило их
+    без единого предупреждения — тот же класс дыры, что уже закрыт для
+    секций/этажей (`delete_section`/`delete_level`, `UsageWarning`),
+    здесь не был закрыт вовсе."""
     row = conn.execute(
         "SELECT id FROM blocks WHERE id = ? AND object_id = ?", (block_id, object_id),
     ).fetchone()
     if not row:
         raise BlockError("Блок не найден.")
-    used = conn.execute(
-        "SELECT 1 FROM work_progress WHERE block_id = ?", (block_id,),
-    ).fetchone()
-    if used:
-        raise BlockError("По блоку уже проставлены статусы работ — сначала снимите их.")
+    if not force:
+        deletes = {label: n for label, n in (
+            ("запланированных работ (со сроками и фактом)",
+             _count(conn, "block_works", "block_id", block_id)),
+            ("документов факта", _count(conn, "work_fact_reports", "block_id", block_id)),
+            ("записей статусов работ", _count(conn, "work_progress", "block_id", block_id)),
+        ) if n}
+        if deletes:
+            raise UsageWarning({}, deletes)
     conn.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
     conn.commit()

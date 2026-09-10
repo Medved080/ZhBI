@@ -291,6 +291,23 @@ def list_block_works(conn: sqlite3.Connection, object_id: int, today: str, *,
     return out
 
 
+def active_counts(conn: sqlite3.Connection, object_id: int) -> dict:
+    """block_id -> число активных ЗР (`retired_at IS NULL`), одним запросом
+    на объект — для колонки счётчика в списке блоков вкладки
+    «Запланированные работы» (живой запрос пользователя, 2026-09-10:
+    «счётчики загружай агрегированно, без отдельного запроса на каждый
+    блок»). Блок без единой строки просто отсутствует в результате —
+    вызывающий код должен различать «0» (был в ответе `blocks`, но не в
+    этом словаре) и «ещё не спрошено» сам, здесь только сырые числа."""
+    return {
+        r["block_id"]: r["n"] for r in conn.execute(
+            "SELECT block_id, COUNT(*) AS n FROM block_works "
+            "WHERE object_id = ? AND retired_at IS NULL GROUP BY block_id",
+            (object_id,),
+        )
+    }
+
+
 def get_block_work(conn: sqlite3.Connection, object_id: int, bw_id: int, today: str) -> dict:
     rows = _list_rows(conn, object_id, None, None, include_retired=True)
     row = next((r for r in rows if r["id"] == bw_id), None)

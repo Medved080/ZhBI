@@ -546,6 +546,113 @@ def list_reports_with_percent(conn, object_id: int, block_id: int, work_type_id:
     } for r in rows]
 
 
+def _expand_work_type_selection(conn, object_id: int, ids) -> set:
+    """Групповой узел справочника -> множество его дочерних ОПЕРАЦИЙ
+    (рекурсивно, до листьев); сама операция возвращается как есть. Источник
+    семантики «отбор по виду работ включает дочерние работы» для журнала
+    факта (живой запрос пользователя, 2026-09-10) — точное наличие работы
+    в документе решает `work_fact_items.work_type_id`, а листовые «оп»-узлы
+    это ровно то, что там может быть; группового id там никогда не будет."""
+    ids = set(ids)
+    if not ids:
+        return set()
+    rows = {
+        r["id"]: dict(r) for r in conn.execute(
+            "SELECT id, parent_id, row_kind FROM work_types "
+            "WHERE object_id = ? AND retired_at IS NULL", (object_id,))
+    }
+    children: dict = {}
+    for r in rows.values():
+        if r["parent_id"] is not None:
+            children.setdefault(r["parent_id"], []).append(r["id"])
+    result = set()
+    stack = list(ids)
+    while stack:
+        wt_id = stack.pop()
+        r = rows.get(wt_id)
+        if not r:
+            continue
+        if r["row_kind"] == "оп":
+            result.add(wt_id)
+        else:
+            stack.extend(children.get(wt_id, []))
+    return result
+
+
+def journal_work_type_options(conn, object_id: int) -> list:
+    """Справочник BLOCK_UNITS объекта для дерева отбора «Виды работ» в
+    «Журнале факта» — те же варианты, что у формы «Настройки» блока
+    (`_block_op_work_types`), но без привязки к одному блоку: журнал
+    отбирает по объекту целиком."""
+    return _block_op_work_types(conn, object_id)
+
+
+def list_journal(conn, object_id: int, *, section_ids: "list | None" = None,
+                 level_ids: "list | None" = None, work_type_ids: "list | None" = None,
+                 date_from: "str | None" = None, date_to: "str | None" = None) -> list:
+    """«Журнал факта» — документы (`work_fact_reports`) ВСЕГО объекта, а не
+    одного блока (живой запрос пользователя, 2026-09-10: «находить,
+    открывать, создавать и исправлять документы факта без предварительного
+    поиска работы в блоке»). Одна строка — один документ, а не операция:
+    `ops_count` — сколько операций он охватывает, отбор по виду работ
+    (`work_type_ids`, раскрывается через `_expand_work_type_selection`) —
+    EXISTS по `work_fact_items`, а не JOIN, иначе документ с несколькими
+    совпавшими операциями задвоился бы в списке. Секция/этаж — блока
+    документа (`blocks.section_id`/`level_id`), а не самого отчёта — он
+    своих не хранит, они производные от block_id."""
+    clauses = ["r.object_id = ?"]
+    params: list = [object_id]
+    if section_ids:
+        clauses.append(f"b.section_id IN ({','.join('?' * len(section_ids))})")
+        params.extend(section_ids)
+    if level_ids:
+        clauses.append(f"b.level_id IN ({','.join('?' * len(level_ids))})")
+        params.extend(level_ids)
+    if date_from:
+        clauses.append("r.report_date >= ?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("r.report_date <= ?")
+        params.append(date_to)
+    if work_type_ids:
+        expanded = _expand_work_type_selection(conn, object_id, work_type_ids)
+        if not expanded:
+            return []   # отбор указан, но ни одна из выбранных операций не существует
+        clauses.append(
+            "EXISTS (SELECT 1 FROM work_fact_items i WHERE i.report_id = r.id "
+            f"AND i.work_type_id IN ({','.join('?' * len(expanded))}))")
+        params.extend(expanded)
+    rows = conn.execute(
+        f"""
+        SELECT r.id, r.report_date, r.block_id, r.created_at, r.updated_at,
+               b.section_id, s.code AS section_code,
+               b.level_id, l.floor AS level_floor, l.name AS level_name,
+               (SELECT COUNT(*) FROM work_fact_items i WHERE i.report_id = r.id) AS ops_count,
+               cu.last_name AS cu_last, cu.first_name AS cu_first,
+               uu.last_name AS uu_last, uu.first_name AS uu_first
+        FROM work_fact_reports r
+        JOIN blocks b ON b.id = r.block_id
+        JOIN object_sections s ON s.id = b.section_id
+        JOIN object_levels l ON l.id = b.level_id
+        LEFT JOIN users cu ON cu.id = r.created_by
+        LEFT JOIN users uu ON uu.id = r.updated_by
+        WHERE {' AND '.join(clauses)}
+        ORDER BY r.report_date DESC, r.id DESC
+        """,
+        params,
+    ).fetchall()
+    return [{
+        "id": r["id"], "report_date": r["report_date"], "block_id": r["block_id"],
+        "section_id": r["section_id"], "section_code": r["section_code"],
+        "level_id": r["level_id"],
+        "level_name": r["level_name"] or (f'{r["level_floor"]} этаж' if r["level_floor"] is not None else "—"),
+        "ops_count": r["ops_count"],
+        "created_at": r["created_at"], "updated_at": r["updated_at"],
+        "created_by": _user_label(r["cu_last"], r["cu_first"]),
+        "updated_by": _user_label(r["uu_last"], r["uu_first"]),
+    } for r in rows]
+
+
 def get_report(conn, object_id: int, block_id: int, report_id: int) -> dict:
     row = conn.execute(
         "SELECT id, report_date FROM work_fact_reports "
