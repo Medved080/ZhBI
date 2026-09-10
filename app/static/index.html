@@ -1151,6 +1151,13 @@
   #blk-matrix-table .blk-cell-edit { cursor: pointer; border: none; background: none;
     color: var(--color-text-muted); font-size: 11px; padding: 0 0 0 4px; vertical-align: middle; }
   #blk-matrix-table .blk-cell-edit:hover { color: var(--color-primary); }
+  /* Удаление блока — своя явная кнопка (2026-09-10, живой запрос
+     пользователя: «галочка внутри ячейки по-прежнему удаляет блок, убери
+     это поведение») — раньше срабатывало от одного клика по «✓» без
+     единого подтверждения. */
+  #blk-matrix-table .blk-cell-delete { cursor: pointer; border: none; background: none;
+    color: var(--color-text-muted); font-size: 11px; padding: 0 0 0 2px; vertical-align: middle; }
+  #blk-matrix-table .blk-cell-delete:hover { color: var(--color-danger); }
 
   /* Редактор геометрии блока: перетаскивание прямоугольника целиком и по
      углам (2026-09-05, живой запрос пользователя). */
@@ -3244,16 +3251,92 @@
   .bsch-gantt-bar.bsch-gantt-forecast { top: 9px; background: #E8703A; }
   /* «Учёт по блокам» → «Запланированные работы» (2026-09-10) — блоки
      слева, ЗР выбранного блока справа. */
-  .blk-plans-layout { display: flex; gap: 16px; height: 60vh; }
-  .blk-plans-blocks-col { flex: 0 0 260px; overflow-y: auto; border-right: 1px solid var(--color-border); padding-right: 8px; }
-  .blk-plans-zr-col { flex: 1 1 auto; overflow-y: auto; }
-  .blk-plans-block-row { padding: 5px 8px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
+  .blk-plans-layout { display: flex; gap: 16px; height: 58vh; }
+  .blk-plans-blocks-col { flex: 0 0 280px; display: flex; flex-direction: column; min-height: 0;
+    border-right: 1px solid var(--color-border); padding-right: 8px; }
+  .blk-plans-search { flex: 0 0 auto; margin-bottom: 6px; font-size: 12px; padding: 5px 8px;
+    border-radius: var(--radius-sm); border: 1px solid var(--color-border);
+    background: var(--color-surface); color: var(--color-text); }
+  #blk-plans-blocks-list { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+  .blk-plans-zr-col { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  .blk-plans-zr-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 6px; }
+  .blk-plans-zr-title { font-size: 13px; font-weight: 600; }
+  .blk-plans-zr-filters { flex: 0 0 auto; display: flex; gap: 8px; margin-bottom: 8px; }
+  .blk-plans-zr-filters select { font-size: 12px; padding: 4px 6px; border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
+  #blk-plans-zr-list { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+
+  /* Секции — группами (2026-09-10, живой запрос пользователя), не плоским
+     списком: заголовок группы не кликабелен, сам счёт — по блокам внутри. */
+  .blk-plans-section-head { font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .03em; color: var(--color-text-muted); padding: 8px 8px 2px; }
+  .blk-plans-section-head:first-child { padding-top: 2px; }
+  .blk-plans-block-row { padding: 5px 8px; border-radius: var(--radius); cursor: pointer; font-size: 13px;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .blk-plans-block-row:hover { background: var(--color-surface-2); }
   .blk-plans-block-row.active { background: var(--color-primary); color: #fff; }
-  .blk-plans-zr-row { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; border-bottom: 1px solid var(--color-border); }
-  .blk-plans-zr-row:hover { background: var(--color-surface-2); }
-  .blk-plans-zr-name { font-size: 13px; }
-  .blk-plans-zr-meta { font-size: 11px; color: var(--color-text-muted); margin-top: 2px; }
+  .blk-plans-block-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Счётчик — своя колонка, ширина фиксирована, числа выровнены по правому
+     краю (живой запрос: «предусмотреть одинаковое положение счётчиков при
+     разной длине названий»). Три разных состояния, не только цифра —
+     «загрузка»/«ошибка» не должны читаться как «0» (живой запрос: «не
+     подменяй неизвестное количество нулём»). */
+  .blk-plans-block-count { flex: 0 0 28px; text-align: right; font-variant-numeric: tabular-nums;
+    font-size: 12px; color: var(--color-text-muted); }
+  .blk-plans-block-row.active .blk-plans-block-count { color: rgba(255,255,255,.85); }
+  .blk-plans-block-count.loading { opacity: .5; }
+  .blk-plans-block-count.error { color: var(--color-danger); cursor: help; }
+  .blk-plans-block-row.active .blk-plans-block-count.error { color: #ffd7d2; }
+
+  /* Список ЗР — таблица с выровненными колонками, а не строка через «·»
+     (живой запрос пользователя, 2026-09-10: «план, прогноз, процент и
+     состояние сроков — в выровненных колонках, название работы — основная
+     информация»). */
+  .blk-plans-zr-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .blk-plans-zr-table thead th { position: sticky; top: 0; background: var(--color-surface);
+    text-align: left; font-weight: 600; color: var(--color-text-muted); padding: 4px 6px;
+    border-bottom: 1px solid var(--color-border); }
+  .blk-plans-zr-table th.num, .blk-plans-zr-table td.num { text-align: right; }
+  .blk-plans-zr-table tbody tr { cursor: pointer; }
+  .blk-plans-zr-table tbody tr:hover { background: var(--color-surface-2); }
+  .blk-plans-zr-table td { padding: 5px 6px; border-bottom: 1px solid var(--color-border);
+    vertical-align: top; }
+  .blk-plans-zr-table td.blk-plans-zr-name { font-weight: 500; }
+
+  /* «Журнал факта» (2026-09-10, живой запрос пользователя) — панель
+     отборов ВСЕГДА видна (не dropdown): секции/этажи/виды работ — три
+     компактные колонки со своим скроллом внутри, а не общий скролл всей
+     формы (Full HD 100%, живой запрос: «заголовок, отборы и основные
+     действия должны помещаться в доступную высоту»). */
+  .fj-filters { display: flex; gap: 14px; margin: 10px 0; }
+  .fj-filter-col { flex: 1 1 0; min-width: 0; }
+  .fj-filter-col-wide { flex: 1.6 1 0; }
+  .fj-filter-col-dates { flex: 0 0 130px; }
+  .fj-filter-title { font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .03em; color: var(--color-text-muted); margin-bottom: 4px; }
+  .fj-filter-list { max-height: 130px; overflow-y: auto; border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px; }
+  .fj-filter-list label { display: flex; align-items: center; gap: 5px; padding: 2px 0;
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fj-filter-tree label.block-settings-row { padding-left: 0; }
+  .fj-date-label { display: block; font-size: 12px; margin-bottom: 6px; }
+  .fj-date-label input { width: 100%; font-size: 12px; padding: 4px 6px; margin-top: 2px;
+    border-radius: var(--radius-sm); border: 1px solid var(--color-border);
+    background: var(--color-surface); color: var(--color-text); }
+  .fj-status-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .fj-status-row #fj-new-report { margin-left: auto; }
+  .fj-status-row #fj-count { font-weight: 600; }
+
+  .fj-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .fj-table thead th { position: sticky; top: 0; background: var(--color-surface); z-index: 1;
+    text-align: left; font-weight: 600; color: var(--color-text-muted); padding: 5px 8px;
+    border-bottom: 1px solid var(--color-border); }
+  .fj-table th.num, .fj-table td.num { text-align: right; }
+  .fj-table tbody tr { cursor: pointer; }
+  .fj-table tbody tr:hover { background: var(--color-surface-2); }
+  .fj-table td { padding: 6px 8px; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+  .fj-table td.fj-new { font-weight: 700; }
   /* Подсказка-история факта по наведению на полосу (живой запрос
      пользователя) — тот же визуальный приём, что у #chart-tooltip
      (плавающая карточка у курсора), свой экземпляр: разные источники
@@ -4676,6 +4759,15 @@
                  файла — лишь один из способов, каким график появляется, а
                  сущность здесь — сам график объекта. -->
             <button id="menu-schedule" data-feature="schedule" data-feature-kind="write">График СМР</button>
+            <!-- «Журнал факта» (2026-09-10, живой запрос пользователя) —
+                 прямой доступ к документам «Учёта по блокам» без
+                 предварительного поиска блока/работы; сервер сам скроет
+                 пункт на объектах ЖБИ, как и «Учёт по блокам» выше
+                 (раздел там не применим). kind="read", не "write" — той же
+                 причиной, что у «Учёта по блокам»: документы можно
+                 смотреть и с правом только на чтение, кнопки правки внутри
+                 формы гасятся отдельно (`can("work_progress","write")`). -->
+            <button id="menu-fact-journal" data-feature="work_progress" data-feature-kind="read">Журнал факта</button>
           </div>
         </div>
         <!-- Класс гашения — на КАЖДОМ пункте, а не на группе: часть
@@ -8292,18 +8384,46 @@
     </div>
 
     <!-- «Запланированные работы» (2026-09-10, живой запрос пользователя) —
-         слева блоки объекта, справа ЗР выбранного блока; клик по ЗР
-         открывает её карточку (#block-work-backdrop, та же, что из панели
-         блока «Модели МФР») с реквизитами и списком документов факта. -->
+         слева блоки объекта (счётчик активных ЗР в своей колонке), справа
+         ЗР выбранного блока; клик по ЗР открывает её карточку
+         (#block-work-backdrop, та же, что из панели блока «Модели МФР») с
+         реквизитами и списком документов факта. -->
     <div id="blk-tab-plans" class="blk-panel" style="display:none">
-      <p class="hint-text">Слева — блоки объекта, справа — запланированные работы (ЗР) выбранного
-        блока. Клик по ЗР открывает карточку: реквизиты, сроки, версии прогноза и документы
-        факта — там же их можно поправить или удалить.</p>
+      <details class="card-technical">
+        <summary>Как это работает</summary>
+        <p class="hint-text">Слева — блоки объекта, счётчик — число активных запланированных
+          работ (ЗР) на блоке; снятые с плана в счётчик не входят. Справа — ЗР выбранного блока.
+          Клик по ЗР открывает карточку: реквизиты, сроки, версии прогноза и документы факта —
+          там же их можно поправить или удалить. «В журнал факта» открывает документы блока (или
+          блока и конкретной работы) без карточки ЗР — быстрее, если нужно просто зафиксировать
+          факт или найти уже сохранённый отчёт.</p>
+      </details>
       <div class="blk-plans-layout">
         <div class="blk-plans-blocks-col">
+          <input type="text" id="blk-plans-search" class="blk-plans-search" placeholder="Поиск блока…"/>
           <div id="blk-plans-blocks-list"><div class="hint-text">Загрузка…</div></div>
         </div>
         <div class="blk-plans-zr-col">
+          <div class="blk-plans-zr-head">
+            <div id="blk-plans-zr-title" class="blk-plans-zr-title">Выберите блок слева</div>
+            <button type="button" class="btn btn-sm btn-secondary" id="blk-plans-to-journal" style="display:none">В журнал факта</button>
+          </div>
+          <div class="blk-plans-zr-filters" id="blk-plans-zr-filters" style="display:none">
+            <select id="blk-plans-filter-status">
+              <option value="">Все статусы</option>
+              <option value="plan">План</option>
+              <option value="in_progress">В работе</option>
+              <option value="done">Выполнено</option>
+            </select>
+            <select id="blk-plans-filter-deadline">
+              <option value="">Любые сроки</option>
+              <option value="overdue">Просрочена</option>
+              <option value="behind">Отстаёт</option>
+              <option value="not_started_on_time">Не начата в срок</option>
+              <option value="on_track">В графике</option>
+              <option value="no_dates">Без сроков</option>
+            </select>
+          </div>
           <div id="blk-plans-zr-list" class="hint-text">Выберите блок слева.</div>
         </div>
       </div>
@@ -8367,6 +8487,92 @@
            отчёт») удалять нечего, кнопка скрыта (см. startNewBlockFactReport). -->
       <button class="btn btn-danger" id="block-fact-delete" hidden>Удалить отчёт</button>
       <button class="btn btn-secondary" id="block-fact-close">Закрыть</button>
+    </div>
+    <!-- Статус сохранения — «Сохраняется…»/«Сохранено»/«Не удалось» (живой
+         запрос пользователя, 2026-09-10), рядом с кнопками, а не общей
+         строкой состояния (та же причина, что у #blk-setup-status —
+         физически перекрыта бэкдропом открытой модалки). -->
+    <div id="block-fact-save-status" class="hint-text" style="min-height:1.4em; margin-top:4px"></div>
+  </div>
+</div>
+
+<!-- «Журнал факта» (2026-09-10, живой запрос пользователя) — прямой доступ
+     к документам work_fact_reports ВСЕГО объекта: «чтобы найти документ,
+     приходится сначала найти блок, затем работу, открыть её карточку и
+     только оттуда добраться до документа». Самостоятельный вход из меню
+     «Действия → Документы» и переход из «Учёта по блокам»/панели блока.
+     Клик по строке ЗАКРЫВАЕТ журнал и открывает уже существующую форму
+     «Факт» (#block-fact-backdrop) — без второй реализации и без стека
+     модалок; закрытие формы возвращает в журнал с прежними отборами и
+     прокруткой (fjState, см. app.js). -->
+<div class="modal-backdrop" id="fact-journal-backdrop">
+  <div class="modal modal-sticky" style="max-width:960px">
+    <div class="modal-sticky-head">
+      <h2>Журнал факта — <span id="fj-object-name"></span></h2>
+      <details class="card-technical">
+        <summary>Как это работает</summary>
+        <p class="hint-text">Одна строка — один документ факта (не операция): он относится ко
+          всему блоку. Отбор по виду работ находит документы, где ЕСТЬ эта работа (и работы
+          раздела дерева целиком), но при открытии документ показывает полный состав — что в него
+          не входило, считается отсутствующей записью, а не нулевым выполнением. «Новый отчёт» —
+          сначала выбор блока и даты, дальше обычная форма «Факт». «Удалить отчёт блока» удаляет
+          документ целиком, со всеми его работами.</p>
+      </details>
+      <div class="fj-filters">
+        <div class="fj-filter-col">
+          <div class="fj-filter-title">Секции</div>
+          <div class="fj-filter-list" id="fj-sections-list"></div>
+        </div>
+        <div class="fj-filter-col">
+          <div class="fj-filter-title">Этажи</div>
+          <div class="fj-filter-list" id="fj-levels-list"></div>
+        </div>
+        <div class="fj-filter-col fj-filter-col-wide">
+          <div class="fj-filter-title">Виды работ</div>
+          <div class="fj-filter-list fj-filter-tree scroll-always" id="fj-worktypes-list"></div>
+        </div>
+        <div class="fj-filter-col fj-filter-col-dates">
+          <div class="fj-filter-title">Период</div>
+          <label class="fj-date-label">с <input type="date" id="fj-date-from"></label>
+          <label class="fj-date-label">по <input type="date" id="fj-date-to"></label>
+        </div>
+      </div>
+      <div class="fj-status-row">
+        <span id="fj-active-filters" class="hint-text"></span>
+        <span id="fj-count" class="hint-text"></span>
+        <button type="button" class="link-btn" id="fj-reset-filters">Сбросить отборы</button>
+        <button type="button" class="btn btn-sm btn-primary" id="fj-new-report">Новый отчёт</button>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll" id="fj-table-box"></div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="fj-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- «Новый отчёт» из журнала (2026-09-10, живой запрос пользователя:
+     «сначала явно выбрать блок и дату, затем заполнить существующую форму
+     факта») — журнал, в отличие от панели блока/вкладки «Запланированные
+     работы», не имеет заранее известного блока. -->
+<div class="modal-backdrop" id="fj-new-report-backdrop">
+  <div class="modal" style="max-width:420px">
+    <h2>Новый отчёт: выбор блока</h2>
+    <label class="field">Секция
+      <select id="fj-new-section"></select>
+    </label>
+    <label class="field">Этаж
+      <select id="fj-new-level"></select>
+    </label>
+    <label class="field">Дата отчёта
+      <input type="date" id="fj-new-date"/>
+    </label>
+    <div class="hint-text" id="fj-new-hint"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-primary" id="fj-new-continue">Далее</button>
+      <button class="btn btn-secondary" id="fj-new-cancel">Отмена</button>
     </div>
   </div>
 </div>
