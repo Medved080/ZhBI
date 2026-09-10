@@ -34306,10 +34306,11 @@ document.getElementById("pdf-clear-submit").addEventListener("click", () => {
   );
 });
 
-// Внешние 3D-модели объекта (благоустройство) — «Действия → Обмен данными
-// → Внешние 3D-модели», тем же приёмом, что «Загрузить чертёж»: работает с
-// ТЕКУЩИМ объектом (state.objectId), права те же, что у пункта меню
-// (data-feature="external_models" в index.html решает видимость кнопки).
+// Загрузка из FBX (внешняя 3D-модель объекта, благоустройство) —
+// «Действия → Обмен данными → Загрузить из FBX», тем же приёмом, что
+// «Загрузить чертёж»: работает с ТЕКУЩИМ объектом (state.objectId), права
+// те же, что у пункта меню (data-feature="external_models" в index.html
+// решает видимость кнопки).
 document.getElementById("menu-external-models")?.addEventListener("click", async () => {
   const backdrop = document.getElementById("external-models-backdrop");
   const body = document.getElementById("external-models-body");
@@ -34336,42 +34337,26 @@ document.getElementById("external-models-close")?.addEventListener("click", () =
   document.getElementById("external-models-backdrop").classList.remove("open");
 });
 
-// Перетаскивание внешней модели мышью прямо в открытой 3D-сцене МФР
-// (§8 задания). Работает только если у ТЕКУЩЕГО объекта уже открыт и
-// построен 3D («Модель» → 3D), а нужная модель в нём уже разобрана —
-// иначе двигать нечего, и функция явно отказывает вызывающей панели, а не
-// подставляет фиктивные координаты. Пока только МФР: сцена ЖБИ мутируется
-// на месте и делить один canvas между модалкой настроек и её же 3D видом
-// сложнее (полноценный второй адаптер — отдельная доработка).
-//
-// Диалог настроек на время перетаскивания СКРЫВАЕТСЯ (не закрывается —
-// черновик офсета/поворота остаётся), чтобы courier мыши доставал до
-// canvas позади него; OrbitControls на это время выключены, чтобы вращение
-// камеры не мешало жесту и наоборот.
-function beginExternalModelDrag(model, { onPreviewOffsetMm, onDone, onCancel }) {
-  if (!mfr3d.scene || !mfr3d.renderer || !mfr3d.camera) {
-    return { ok: false, reason: "Сначала откройте 3D этого объекта («Модель» → 3D)." };
-  }
-  if (mfrExternalModels.objectId !== model.object_id || !mfrExternalModels.layer) {
-    return { ok: false, reason: "Модель ещё не разобрана в открытой 3D-сцене — подождите или откройте 3D заново." };
-  }
-  const group = mfrExternalModels.layer.getGroup(model.id);
-  if (!group) {
-    return { ok: false, reason: "Модель ещё не разобрана в открытой 3D-сцене — подождите или откройте 3D заново." };
-  }
-
-  const backdrop = document.getElementById("external-models-backdrop");
-  const canvas = mfr3d.renderer.domElement;
-  const controls = mfr3d.controls;
-  const camera = mfr3d.camera;
+// Перетаскивание внешней модели мышью прямо в открытой 3D-сцене (§8
+// задания) — общее ядро для МФР и ЖБИ, отличаются только: где взять
+// canvas/camera/controls/группу, плоскость перетаскивания (у какого мира
+// какая ось "вверх") и как перевести дельту в МИРОВЫХ координатах сцены в
+// дельту offset_mm (координаты проекта). Диалог настроек на время
+// перетаскивания СКРЫВАЕТСЯ (не закрывается — черновик офсета/поворота
+// остаётся), чтобы курсор доставал до canvas позади него; OrbitControls на
+// это время выключены, чтобы вращение камеры не мешало жесту и наоборот.
+function startExternalModelDragOnPlane({
+  canvas, camera, controls, backdrop, group, planeNormal, worldDeltaToOffsetDelta, startOffset,
+  onPreviewOffsetMm, onDone, onCancel,
+}) {
   const raycaster = new THREE.Raycaster();
-  const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -group.position.z);
+  const plane = new THREE.Plane(planeNormal, -planeNormal.dot(group.position));
   const startGroupPos = group.position.clone();
-  const startOffset = { x: model.offset_mm.x, y: model.offset_mm.y };
   const pointerNdc = new THREE.Vector2();
   const startHit = new THREE.Vector3();
   const hit = new THREE.Vector3();
   let active = false;
+  let finished = false;
 
   function ndcFromEvent(e) {
     const r = canvas.getBoundingClientRect();
@@ -34384,8 +34369,6 @@ function beginExternalModelDrag(model, { onPreviewOffsetMm, onDone, onCancel }) 
     raycaster.setFromCamera(pointerNdc, camera);
     return raycaster.ray.intersectPlane(plane, out);
   }
-
-  let finished = false;
 
   function cleanup() {
     canvas.removeEventListener("pointerdown", onPointerDown);
@@ -34406,8 +34389,9 @@ function beginExternalModelDrag(model, { onPreviewOffsetMm, onDone, onCancel }) 
     finished = true;
     cleanup();
     if (commit && active) {
-      const dx = group.position.x - startGroupPos.x, dy = group.position.y - startGroupPos.y;
-      onDone(startOffset.x + dx, startOffset.y + dy);
+      const worldDelta = group.position.clone().sub(startGroupPos);
+      const { dOffsetX, dOffsetY } = worldDeltaToOffsetDelta(worldDelta);
+      onDone(startOffset.x + dOffsetX, startOffset.y + dOffsetY);
     } else {
       group.position.copy(startGroupPos);
       onCancel();
@@ -34424,10 +34408,10 @@ function beginExternalModelDrag(model, { onPreviewOffsetMm, onDone, onCancel }) 
   function onPointerMove(e) {
     if (!active) return;
     if (!rayHit(e, hit)) return;
-    const dx = hit.x - startHit.x, dy = hit.y - startHit.y;
-    group.position.x = startGroupPos.x + dx;
-    group.position.y = startGroupPos.y + dy;
-    onPreviewOffsetMm(startOffset.x + dx, startOffset.y + dy);
+    const worldDelta = hit.clone().sub(startHit);
+    group.position.copy(startGroupPos).add(worldDelta);
+    const { dOffsetX, dOffsetY } = worldDeltaToOffsetDelta(worldDelta);
+    onPreviewOffsetMm(startOffset.x + dOffsetX, startOffset.y + dOffsetY);
   }
 
   function onPointerUp() { finish(true); }
@@ -34444,6 +34428,49 @@ function beginExternalModelDrag(model, { onPreviewOffsetMm, onDone, onCancel }) 
   window.addEventListener("keydown", onKeyDown);
 
   return { ok: true, stop: () => finish(false) };
+}
+
+// Диспетчер: перетаскивание работает в ЛЮБОЙ уже открытой 3D-сцене этого
+// объекта — МФР («Модель» → 3D) или ЖБИ («Модель» → 3D) — какая сейчас
+// построена для model.object_id, та и используется. Не строит и не
+// разбирает сцену сама: если ни одна не готова, честно отказывает вместо
+// того, чтобы подставить фиктивные координаты.
+function beginExternalModelDrag(model, callbacks) {
+  if (mfr3d.scene && mfr3d.renderer && mfr3d.camera
+      && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer) {
+    const group = mfrExternalModels.layer.getGroup(model.id);
+    if (group) {
+      // МФР: мир X/Y = координаты объекта (после вычитания origin — то же
+      // самое для ДЕЛЬТЫ, origin в разности сокращается), Z — вверх.
+      return startExternalModelDragOnPlane({
+        canvas: mfr3d.renderer.domElement, camera: mfr3d.camera, controls: mfr3d.controls,
+        backdrop: document.getElementById("external-models-backdrop"), group,
+        planeNormal: new THREE.Vector3(0, 0, 1),
+        worldDeltaToOffsetDelta: (d) => ({ dOffsetX: d.x, dOffsetY: d.y }),
+        startOffset: { x: model.offset_mm.x, y: model.offset_mm.y },
+        ...callbacks,
+      });
+    }
+  }
+  if (state.view3d.scene && state.view3d.renderer && state.view3d.camera
+      && zhbiExternalModels.objectId === model.object_id && zhbiExternalModels.layer) {
+    const group = zhbiExternalModels.layer.getGroup(model.id);
+    if (group) {
+      // ЖБИ: мир Y — вверх (three.js по умолчанию), план — плоскость XZ.
+      // Адаптер V=(P.x,P.z,-P.y): дельта мира (dx,dz) → дельта offset
+      // (dx, -dz) — тот же перевод, что и для самих координат, только без
+      // anchor (он сокращается в разности).
+      return startExternalModelDragOnPlane({
+        canvas: state.view3d.renderer.domElement, camera: state.view3d.camera, controls: state.view3d.controls,
+        backdrop: document.getElementById("external-models-backdrop"), group,
+        planeNormal: new THREE.Vector3(0, 1, 0),
+        worldDeltaToOffsetDelta: (d) => ({ dOffsetX: d.x, dOffsetY: -d.z }),
+        startOffset: { x: model.offset_mm.x, y: model.offset_mm.y },
+        ...callbacks,
+      });
+    }
+  }
+  return { ok: false, reason: "Сначала откройте 3D этого объекта («Модель» → 3D) и дождитесь, пока модель разберётся." };
 }
 
 document.getElementById("pdf-import-submit").addEventListener("click", async () => {
