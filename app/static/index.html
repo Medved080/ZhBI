@@ -4562,18 +4562,46 @@
         <div class="submenu">
           <button type="button" class="submenu-trigger">Настройки</button>
           <div class="dropdown-menu submenu-panel">
-            <!-- Первым и жирным (живой запрос 2026-08-02): оформление
-                 меняют чаще, чем пароль, и ищут глазами в начале списка.
-                 Настройка личная: гамма хранится за пользователем, вид меню
-                 — за компьютером. Доступна всем ролям. -->
-            <button id="menu-view-mode" class="menu-item-strong">Цветовая схема</button>
-            <button id="menu-change-password">Сменить пароль</button>
-            <button id="menu-my-sessions">Мои сеансы</button>
-            <button id="menu-label-color" data-feature="users" data-feature-kind="write">Цвет подписей марок</button>
-            <button id="menu-colors" data-feature="dict_status_colors" data-feature-kind="write">Цвета статусов</button>
-            <button id="menu-shapes" data-feature="dict_element_shapes" data-feature-kind="write">Форма маркеров</button>
-            <button id="menu-zone-colors" data-feature="zone_colors" data-feature-kind="write">Цвета зон</button>
-            <button id="menu-info-plate-settings" data-feature="info_plate" data-feature-kind="write">Порог опоздания поставки</button>
+            <!-- Разбито на три подгруппы (живой запрос пользователя,
+                 2026-09-10): «Общие» применимы к любому объекту независимо
+                 от типа, «ЖБИ»/«МФР» — только к своему контуру учёта.
+                 Вложенные .submenu — тот же приём, что у «Справочники», пустая
+                 подгруппа гасится сама (applyRolePermissions, снизу вверх по
+                 глубине). -->
+            <div class="submenu">
+              <button type="button" class="submenu-trigger">Общие</button>
+              <div class="dropdown-menu submenu-panel">
+                <!-- Первым и жирным (живой запрос 2026-08-02): оформление
+                     меняют чаще, чем пароль, и ищут глазами в начале списка.
+                     Настройка личная: гамма хранится за пользователем, вид меню
+                     — за компьютером. Доступна всем ролям. -->
+                <button id="menu-view-mode" class="menu-item-strong">Цветовая схема</button>
+                <button id="menu-change-password">Сменить пароль</button>
+                <button id="menu-my-sessions">Мои сеансы</button>
+              </div>
+            </div>
+            <div class="submenu">
+              <button type="button" class="submenu-trigger">ЖБИ</button>
+              <div class="dropdown-menu submenu-panel">
+                <button id="menu-label-color" data-feature="users" data-feature-kind="write">Цвет подписей марок</button>
+                <button id="menu-colors" data-feature="dict_status_colors" data-feature-kind="write">Цвета статусов</button>
+                <button id="menu-shapes" data-feature="dict_element_shapes" data-feature-kind="write">Форма маркеров</button>
+                <button id="menu-zone-colors" data-feature="zone_colors" data-feature-kind="write">Цвета зон</button>
+                <button id="menu-info-plate-settings" data-feature="info_plate" data-feature-kind="write">Порог опоздания поставки</button>
+              </div>
+            </div>
+            <div class="submenu">
+              <button type="button" class="submenu-trigger">МФР</button>
+              <div class="dropdown-menu submenu-panel">
+                <!-- Была кнопкой «Цвета» в тулбаре «Модели МФР» (живой запрос
+                     2026-09-10 — убрать оттуда, перенести в общие настройки).
+                     Цвет привязан к категории Revit и хранится НА ОБЪЕКТЕ, а
+                     не у пользователя — раздел `revit_model` виден только на
+                     объектах типа МФР (`_ТОЛЬКО_МФР`, app/features.py),
+                     остальным ролям/объектам пункт гасится автоматически. -->
+                <button id="menu-mfr-colors" data-feature="revit_model" data-feature-kind="write">Цвета модели</button>
+              </div>
+            </div>
           </div>
         </div>
         <!-- ДОКУМЕНТЫ (2026-08-11, запрос пользователя) — перед
@@ -5017,9 +5045,6 @@
     <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:10px">
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
         <div class="hint-text" id="revit-plan-head" style="flex:1 1 auto; min-width:0"></div>
-        <button class="btn btn-sm btn-secondary" id="revit-reset-all" hidden>Сбросить фильтры</button>
-        <button class="btn btn-sm btn-secondary" id="revit-colors-open"
-                title="Цветовая схема модели">Цвета</button>
         <div class="view-mode-switch" id="mfr-view-switch" role="group"
              aria-label="Режим отображения модели">
           <button type="button" class="view-mode-btn active" data-mfr-mode="2d">2D</button>
@@ -5084,6 +5109,16 @@
         </div>
       </div>
       <div id="mfr-panel-tab-filters" class="tab-panel">
+        <!-- «Сбросить все фильтры» (2026-09-10, живой запрос — было кнопкой
+             над схемой, ПРЯЧУЩЕЙСЯ, пока хоть один отбор не задан) — теперь
+             как в ЖБИ (#placement-filters, renderPlacementFilters): кнопка
+             ПОСТОЯННО на месте, во всю ширину, вверху панели фильтров, а не
+             условно появляется. Сбрасывает не только Этаж/Секцию, но и «Виды
+             работ»/«Статус выполнения»/«Динамику» — все группы ЭТОЙ вкладки;
+             «Вид» (видимость слоёв, «Шахматка») этой кнопкой не трогается —
+             это не отбор данных, а то, как показан план. -->
+        <button type="button" class="btn btn-sm btn-secondary" id="mfr-reset-all-filters"
+                style="width:100%; margin-bottom:14px">Сбросить все фильтры</button>
         <!-- Отбор МНОЖЕСТВЕННЫЙ в каждой группе: нажатие добавляет и убирает
              строку. У группы с действующим отбором появляется «сбросить», а
              над списком — «сбросить всё». Пустой набор означает «отбор снят»,

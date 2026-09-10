@@ -28863,10 +28863,6 @@ const revitPlanState = { objectId: null, filters: null, data: null, view: null,
 
 const REVIT_GROUPS = ["levels", "sections", "parts", "categories"];
 
-function revitFilterActive() {
-  return REVIT_GROUPS.some((g) => revitPlanState[g].size > 0);
-}
-
 // Цвет привязан к ИМЕНИ категории, а не к её номеру в текущей выборке.
 // По номеру было так: отфильтровал двери — индексы съехали, и стены
 // поменяли цвет. Схема приезжает с сервера (app/revit_colors.py) и
@@ -29062,8 +29058,6 @@ function markRevitPicks() {
     const ссылка = document.querySelector(`.revit-reset[data-reset="${g}"]`);
     if (ссылка) ссылка.hidden = revitPlanState[g].size === 0;
   }
-  const общая = document.getElementById("revit-reset-all");
-  if (общая) общая.hidden = !revitFilterActive();
 }
 
 document.getElementById("mfr-workspace").addEventListener("click", async (e) => {
@@ -31506,13 +31500,49 @@ document.getElementById("mfr-workspace").addEventListener("click", async (e) => 
   await loadRevitPlanElements();
 });
 
-document.getElementById("revit-reset-all").addEventListener("click", async () => {
+// «Сбросить все фильтры» (2026-09-10, живой запрос — было кнопкой над
+// схемой, скрывавшейся, пока нечего сбрасывать; теперь постоянная кнопка
+// вверху вкладки «Фильтры», как #placement-filters у ЖБИ) — сбрасывает
+// ВСЕ группы этой вкладки разом: Этаж/Секция (revitPlanState), «Виды
+// работ»/«Статус выполнения» (blockProgressFilter) и «Динамика факта за
+// период» (mfrDynamics). «Вид» (видимость слоёв, «Шахматка») не трогает —
+// это не отбор данных.
+document.getElementById("mfr-reset-all-filters").addEventListener("click", async () => {
   for (const g of REVIT_GROUPS) revitPlanState[g].clear();
   markRevitPicks();
+  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
+  renderMfrWorktypesList();
+  document.querySelectorAll(".bp-status-check").forEach((cb) => { cb.checked = true; });
+  renderBlockProgressPanel();
+  mfrDynamics = { active: false, from: null, to: null };
+  document.getElementById("mfr-dynamics-toggle").checked = false;
+  document.getElementById("mfr-dynamics-dates").style.display = "none";
+  document.getElementById("mfr-dynamics-from").value = "";
+  document.getElementById("mfr-dynamics-to").value = "";
+  await reloadMfrDynamics();   // сам обновит подсветку/подпись и, если открыта карточка блока, её дерево
   await loadRevitPlanElements();
 });
 
-document.getElementById("revit-colors-open").addEventListener("click", () => {
+// Переехало из кнопки «Цвета» в тулбаре «Модели МФР» в «Действия →
+// Настройки → МФР → Цвета модели» (живой запрос пользователя, 2026-09-10)
+// — доступно теперь и БЕЗ захода в рабочее место «Модель МФР» (гейт по
+// разделу `revit_model` в разметке уже не пускает сюда с объектов не-МФР).
+// Список категорий (`revitPlanState.filters.categories`) при этом может
+// быть ещё не загружен — если «Модель МФР» ни разу не открывали для
+// текущего объекта, подгружаем его тем же запросом, что и
+// `loadRevitPlanFilters`, но БЕЗ побочных эффектов той функции (заголовок,
+// автовыбор этажа, загрузка элементов — здесь незачем).
+document.getElementById("menu-mfr-colors").addEventListener("click", async () => {
+  if (revitPlanState.objectId !== state.objectId || !revitPlanState.filters) {
+    revitPlanState.objectId = state.objectId;
+    try {
+      const res = await fetch(`/revit-plan/filters?object_id=${state.objectId}`);
+      revitPlanState.filters = res.ok ? await res.json() : { categories: [] };
+    } catch (e) {
+      revitPlanState.filters = { categories: [] };
+    }
+    await loadRevitColors();
+  }
   renderRevitColorsDialog();
   document.getElementById("revit-colors-status").textContent = "";
   document.getElementById("revit-colors-backdrop").classList.add("open");
