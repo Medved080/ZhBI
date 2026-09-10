@@ -32390,12 +32390,16 @@ function axisSelect(cssClass, selected) {
 }
 
 // Удаление секции/этажа с предупреждением, а не запретом (живой запрос
-// пользователя, 2026-09-10): первый DELETE без force — сервер, если секция/
-// этаж используются, отвечает 409 с {clears, deletes} (UsageWarning.to_dict
-// в app/blocks.py); здесь это превращается во второй, более details-ный
-// confirm(), и только после «ОК» — повторный DELETE с force=true. У
-// невиновной (неиспользуемой) секции/этажа обычный DELETE в первый же
-// заход отработает молча, без лишнего диалога.
+// пользователя, 2026-09-10): DELETE без force — сервер, если секция/этаж
+// используются, отвечает 409 с {clears, deletes} (UsageWarning.to_dict в
+// app/blocks.py). РОВНО ОДИН confirm(), а не два подряд (само это —
+// самокритика по прошлой версии, живой запрос пользователя «почисти
+// UX»): у пустой, ничем не связанной записи справочника терять нечего —
+// такая просто удаляется без вопросов, как и остальные мелкие записи
+// справочников в этом разделе (правка полей на месте тоже без confirm).
+// Спрашивать есть смысл только когда есть что терять — тогда единственный
+// диалог сразу с точными числами, и только после «ОК» — повторный DELETE
+// с force=true.
 async function deleteBlkEntity(url) {
   try {
     await api(url, { method: "DELETE" });
@@ -32428,7 +32432,6 @@ function renderBlkSections() {
     + "привязка границ секции недоступна, пока не загружена выгрузка Revit с осями."
     + "</div>"}`;
   box.querySelectorAll("[data-del-section]").forEach(btn => btn.addEventListener("click", async () => {
-    if (!confirm("Удалить секцию?")) return;
     try {
       const удалено = await deleteBlkEntity(`/objects/${state.objectId}/sections/${btn.dataset.delSection}`);
       if (!удалено) return;
@@ -32586,7 +32589,6 @@ function renderBlkLevels() {
     } catch (e) { blkSetupStatus(`Этаж «${подпись}»: ${e.message}`, true); await loadBlkSectionsLevels(); }
   }));
   box.querySelectorAll("[data-del-level]").forEach(btn => btn.addEventListener("click", async () => {
-    if (!confirm("Удалить этаж?")) return;
     try {
       const удалено = await deleteBlkEntity(`/objects/${state.objectId}/levels/${btn.dataset.delLevel}`);
       if (!удалено) return;
@@ -32641,6 +32643,19 @@ document.getElementById("blk-level-add").addEventListener("click", async () => {
 });
 
 // -------- Блоки (вкладка «Блоки»): матрица секция × этаж --------
+
+// См. коммент у blkSetupStatus выше — тот же приём для этой вкладки:
+// #blk-geo-warnings рядом виден только пока открыт редактор геометрии
+// конкретного блока, а щёлкнуть клетку матрицы можно и без него.
+let blkMatrixStatusTimer = null;
+function blkMatrixStatus(text, isError) {
+  const el = document.getElementById("blk-matrix-status");
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? "var(--color-danger)" : "var(--color-success)";
+  if (blkMatrixStatusTimer) clearTimeout(blkMatrixStatusTimer);
+  blkMatrixStatusTimer = setTimeout(() => { el.textContent = ""; }, 5000);
+}
 
 async function loadBlkMatrix() {
   if (!blkGeoConfirmDiscard()) return;
@@ -32706,7 +32721,7 @@ function renderBlkMatrix() {
       }
       blkBlocks = await api(`/objects/${state.objectId}/blocks`);
       renderBlkMatrix();
-    } catch (e) { showToast(e.message, "error"); }
+    } catch (e) { blkMatrixStatus(e.message, true); }
   }));
   const openCellEditor = (td) => {
     if (!blkGeoConfirmDiscard()) return;
@@ -32991,8 +33006,12 @@ function renderBlkGeoEditor() {
     box[field] = r.value;
     blkGeoDirty = true;
     renderBlkGeoEditor();
+    // Тот же баг класса «showToast за бэкдропом модалки не виден»
+    // (Docs/block-accounting.md §15) — пишем в свой блок предупреждений
+    // редактора геометрии, а не в общую строку состояния.
     if (r.blocked) {
-      showToast(`Упирается в границу секции «${r.blocked}» — значение подрезано, области не должны пересекаться.`, "warning");
+      document.getElementById("blk-geo-warnings").textContent =
+        `Упирается в границу секции «${r.blocked}» — значение подрезано, области не должны пересекаться.`;
     }
   }));
   document.querySelectorAll("[data-remove-box]").forEach((btn) => btn.addEventListener("click", () => {
@@ -33159,19 +33178,22 @@ document.getElementById("blk-geo-close").addEventListener("click", () => {
   closeBlkGeoEditor();
 });
 document.getElementById("blk-geo-save").addEventListener("click", async () => {
+  const предупреждения = document.getElementById("blk-geo-warnings");
   for (const b of blkGeoBoxes) {
-    if (!(b.x1 > b.x0) || !(b.y1 > b.y0)) { showToast("x1 должен быть больше x0, y1 — больше y0", "error"); return; }
+    // См. коммент у blk-geo-boxes выше — тот же перенос из showToast.
+    if (!(b.x1 > b.x0) || !(b.y1 > b.y0)) { предупреждения.textContent = "x1 должен быть больше x0, y1 — больше y0"; return; }
   }
   try {
     const res = await api(`/objects/${state.objectId}/blocks/${blkGeoBlockId}/boxes`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ boxes: blkGeoBoxes }),
     });
-    document.getElementById("blk-geo-warnings").innerHTML = (res.warnings || []).map(escapeHtml).join("<br>");
-    showToast("Геометрия сохранена", "success");
+    предупреждения.innerHTML = (res.warnings || []).length
+      ? res.warnings.map(escapeHtml).join("<br>")
+      : "Геометрия сохранена";
     blkGeoDirty = false;
     revitPlanState.blocksData = [];   // «Модель МФР» перечитает геометрию при следующем показе
-  } catch (e) { showToast(e.message, "error"); }
+  } catch (e) { предупреждения.textContent = e.message; }
 });
 
 // -------- Виды работ (вкладка «Виды работ»): загрузка xlsx --------
@@ -33215,19 +33237,23 @@ function renderWtSummary(data) {
 
 document.getElementById("wt-apply").addEventListener("click", async () => {
   if (!wtPending) return;
+  // См. коммент у blk-geo-save выше — тот же перенос из showToast:
+  // #wt-status уже используется для «Разбор…»/«Разбор готов» (wt-analyze
+  // выше), сюда же уходит и результат применения.
+  const status = document.getElementById("wt-status");
   try {
     const res = await api(`/objects/${state.objectId}/work-types/apply`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: wtPending.token }),
     });
-    showToast(`Готово: добавлено ${res.added}, возвращено ${res.revived}, списано ${res.retired}, `
-      + `треков планирования ${res.tracks}.`, "success");
+    status.textContent = `Готово: добавлено ${res.added}, возвращено ${res.revived}, списано ${res.retired}, `
+      + `треков планирования ${res.tracks}.`;
     wtPending = null;
     document.getElementById("wt-apply-box").style.display = "none";
     document.getElementById("wt-summary").innerHTML = "";
     document.getElementById("wt-file").value = "";
     await loadWorkTypesTree();
-  } catch (e) { showToast(e.message, "error"); }
+  } catch (e) { status.textContent = e.message; }
 });
 
 // Свёрнуто по умолчанию всё — у реального файла заказчика 224+ строки,
