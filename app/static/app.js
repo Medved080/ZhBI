@@ -30729,13 +30729,17 @@ function renderBlockWorkCard(d) {
     <div class="card-row"><span class="card-key">Процент / статус</span>
       <span class="card-val">${d.percent}%</span></div>
     <fieldset style="margin-top:10px" ${disabled}><legend>Базовый (директивный) срок</legend>
-      <label>Начало <input type="date" id="bw-plan-start" value="${d.plan_start || ""}" ${disabled}></label>
-      <label>Окончание <input type="date" id="bw-plan-end" value="${d.plan_end || ""}" ${disabled}></label>
+      <div class="bw-date-row">
+        <label>Начало <input type="date" id="bw-plan-start" value="${d.plan_start || ""}" ${disabled}></label>
+        <label>Окончание <input type="date" id="bw-plan-end" value="${d.plan_end || ""}" ${disabled}></label>
+      </div>
       <button class="btn btn-sm btn-primary" id="bw-plan-save" ${disabled}>Сохранить</button>
     </fieldset>
     <fieldset style="margin-top:10px" ${disabled}><legend>Актуализированный срок (новая версия при сохранении)</legend>
-      <label>Начало <input type="date" id="bw-forecast-start" value="${d.forecast_start || ""}" ${disabled}></label>
-      <label>Окончание <input type="date" id="bw-forecast-end" value="${d.forecast_end || ""}" ${disabled}></label>
+      <div class="bw-date-row">
+        <label>Начало <input type="date" id="bw-forecast-start" value="${d.forecast_start || ""}" ${disabled}></label>
+        <label>Окончание <input type="date" id="bw-forecast-end" value="${d.forecast_end || ""}" ${disabled}></label>
+      </div>
       <button class="btn btn-sm btn-primary" id="bw-forecast-save" ${disabled}>Сохранить как новую версию</button>
       <div style="margin-top:6px">${версии}</div>
     </fieldset>
@@ -31992,6 +31996,13 @@ window.addEventListener("resize", onMfr3DResize);
 
 function disposeMfr3D() {
   if (mfr3d.loop) cancelAnimationFrame(mfr3d.loop);
+  if (mfr3d.controls) mfr3d.controls.dispose();   // снимает свои DOM-слушатели (pointerdown/wheel/…)
+  // Внешние 3D-модели (app/static/external-models/) СЮДА не входят: их
+  // геометрия/текстуры кэшируются отдельно (mfrExternalModelsState) и
+  // переживают пересборку сцены при смене фильтра — иначе каждая смена
+  // этажа заново парсила бы и перекачивала FBX (см. layer.js, «не
+  // разбирать файл повторно при drag/включении видимости»). Полное
+  // освобождение — только при смене объекта/проекта, disposeMfrExternalModels().
   if (mfr3d.renderer) {
     mfr3d.renderer.dispose();
     mfr3d.renderer.domElement.remove();
@@ -31999,11 +32010,23 @@ function disposeMfr3D() {
   if (mfr3d.scene) {
     mfr3d.scene.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
-      // .material.dispose() текстуру НЕ освобождает (у подписей осей —
-      // canvas-текстура на спрайт) — без явного map.dispose() она копится
-      // в видеопамяти при каждой пересборке сцены.
-      if (o.material?.map) o.material.map.dispose();
-      if (o.material) o.material.dispose();
+      // Материал бывает МАССИВОМ (внешняя FBX-модель — группы материалов
+      // по геометрии, см. app/static/external-models/fbx.js) — раньше код
+      // предполагал ровно один материал и одну карту (.map), а у массива
+      // `.map` — это Array.prototype.map (функция, не текстура): попытка
+      // вызвать на ней .dispose() бросала бы исключение и обрывала весь
+      // traverse, не долистав остальные объекты сцены. Текстурных карт у
+      // материала тоже бывает несколько (map/alphaMap/normalMap/…), не
+      // только .map — у подписей осей (canvas-текстура на спрайт) карта
+      // ОДНА и без явного dispose() копится в видеопамяти при каждой
+      // пересборке, отсюда и сам обход карт, а не только материала.
+      for (const material of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (!material) continue;
+        for (const key of ["map", "alphaMap", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap"]) {
+          if (material[key]) material[key].dispose();
+        }
+        material.dispose();
+      }
     });
   }
   Object.assign(mfr3d, { scene: null, camera: null, renderer: null,
