@@ -30,6 +30,35 @@ class BlockError(Exception):
     """Ошибка, предназначенная пользователю (текст в сообщении)."""
 
 
+class UsageWarning(BlockError):
+    """Секция/этаж используются — не запрет, а предупреждение с точным
+    счётом (живой запрос пользователя, 2026-09-10: «разрешай удалять
+    используемую секцию, предупреждай о количестве элементов, где ссылка
+    будет очищена»). `PRAGMA foreign_keys = ON` держится на каждом
+    соединении (app/db.py) — DELETE родителя САМ выполняет то, что описано
+    в schema.sql: `clears` — таблицы с `ON DELETE SET NULL` (элементы и
+    помещения модели просто теряют привязку), `deletes` — таблицы с
+    `ON DELETE CASCADE` (блоки и всё, что каскадом висит на них — их ЗР,
+    сроки, факты; квартиры; статусы работ, — удаляются безвозвратно вместе
+    с секцией/этажом). Различие существенное — оттого и два отдельных
+    списка в сообщении, а не один общий счётчик."""
+
+    def __init__(self, clears: dict, deletes: dict):
+        self.clears = clears
+        self.deletes = deletes
+        части = []
+        if deletes:
+            части.append("будет удалено безвозвратно: " + ", ".join(
+                f"{label} — {n}" for label, n in deletes.items()))
+        if clears:
+            части.append("потеряют привязку (останутся, но без секции/этажа): " + ", ".join(
+                f"{label} — {n}" for label, n in clears.items()))
+        super().__init__("; ".join(части))
+
+    def to_dict(self) -> dict:
+        return {"message": str(self), "clears": self.clears, "deletes": self.deletes}
+
+
 def _next_sort_order(conn, table: str, object_id: int) -> int:
     row = conn.execute(
         "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM %s WHERE object_id = ?" % table,
@@ -139,25 +168,31 @@ def _set_section_axes(conn, object_id: int, section_id: int,
     )
 
 
-def delete_section(conn, object_id: int, section_id: int) -> None:
+def _count(conn, table: str, column: str, value: int) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM %s WHERE %s = ?" % (table, column), (value,)
+    ).fetchone()["n"]
+
+
+def delete_section(conn, object_id: int, section_id: int, force: bool = False) -> None:
     row = conn.execute(
         "SELECT id FROM object_sections WHERE id = ? AND object_id = ?",
         (section_id, object_id),
     ).fetchone()
     if not row:
         raise BlockError("Секция не найдена.")
-    used = conn.execute(
-        "SELECT 1 FROM blocks WHERE section_id = ? "
-        "UNION SELECT 1 FROM revit_elements WHERE section_id = ? "
-        "UNION SELECT 1 FROM revit_rooms WHERE section_id = ? "
-        "UNION SELECT 1 FROM object_flats WHERE section_id = ? "
-        "UNION SELECT 1 FROM work_progress WHERE section_id = ?",
-        (section_id, section_id, section_id, section_id, section_id),
-    ).fetchone()
-    if used:
-        raise BlockError(
-            "Секция используется (блоки, элементы модели или статусы работ) — "
-            "сначала удалите ссылки на неё.")
+    if not force:
+        clears = {label: n for label, n in (
+            ("элементов модели", _count(conn, "revit_elements", "section_id", section_id)),
+            ("помещений", _count(conn, "revit_rooms", "section_id", section_id)),
+        ) if n}
+        deletes = {label: n for label, n in (
+            ("блоков (со сроками и фактом)", _count(conn, "blocks", "section_id", section_id)),
+            ("квартир", _count(conn, "object_flats", "section_id", section_id)),
+            ("записей статусов работ", _count(conn, "work_progress", "section_id", section_id)),
+        ) if n}
+        if clears or deletes:
+            raise UsageWarning(clears, deletes)
     conn.execute("DELETE FROM object_sections WHERE id = ?", (section_id,))
     conn.commit()
 
@@ -238,23 +273,24 @@ def update_level(conn, object_id: int, level_id: int, name: str = None,
     conn.commit()
 
 
-def delete_level(conn, object_id: int, level_id: int) -> None:
+def delete_level(conn, object_id: int, level_id: int, force: bool = False) -> None:
     row = conn.execute(
         "SELECT id FROM object_levels WHERE id = ? AND object_id = ?",
         (level_id, object_id),
     ).fetchone()
     if not row:
         raise BlockError("Этаж не найден.")
-    used = conn.execute(
-        "SELECT 1 FROM blocks WHERE level_id = ? "
-        "UNION SELECT 1 FROM revit_elements WHERE level_id = ? "
-        "UNION SELECT 1 FROM revit_rooms WHERE level_id = ? "
-        "UNION SELECT 1 FROM object_flats WHERE level_id = ?",
-        (level_id, level_id, level_id, level_id),
-    ).fetchone()
-    if used:
-        raise BlockError(
-            "Этаж используется (блоки или элементы модели) — сначала удалите ссылки на него.")
+    if not force:
+        clears = {label: n for label, n in (
+            ("элементов модели", _count(conn, "revit_elements", "level_id", level_id)),
+            ("помещений", _count(conn, "revit_rooms", "level_id", level_id)),
+        ) if n}
+        deletes = {label: n for label, n in (
+            ("блоков (со сроками и фактом)", _count(conn, "blocks", "level_id", level_id)),
+            ("квартир", _count(conn, "object_flats", "level_id", level_id)),
+        ) if n}
+        if clears or deletes:
+            raise UsageWarning(clears, deletes)
     conn.execute("DELETE FROM object_levels WHERE id = ?", (level_id,))
     conn.commit()
 

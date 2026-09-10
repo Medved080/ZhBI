@@ -435,7 +435,14 @@ async function api(path, opts) {
         { "путь": path, "метод": (opts && opts.method) || "GET",
           "код": res.status, "сообщение": сообщение });
     }
-    throw new Error(сообщение);
+    const err = new Error(сообщение);
+    // 409 у удаления секции/этажа несёт структурированный detail
+    // (UsageWarning.to_dict() — что очистится, что удалится) — вызывающий
+    // код переспрашивает подтверждение по этим данным и повторяет запрос
+    // с force=true (живой запрос пользователя, 2026-09-10).
+    err.status = res.status;
+    err.detail = body && body.detail;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
@@ -32382,6 +32389,25 @@ function axisSelect(cssClass, selected) {
   return `<select class="${cssClass}">${options.join("")}</select>`;
 }
 
+// Удаление секции/этажа с предупреждением, а не запретом (живой запрос
+// пользователя, 2026-09-10): первый DELETE без force — сервер, если секция/
+// этаж используются, отвечает 409 с {clears, deletes} (UsageWarning.to_dict
+// в app/blocks.py); здесь это превращается во второй, более details-ный
+// confirm(), и только после «ОК» — повторный DELETE с force=true. У
+// невиновной (неиспользуемой) секции/этажа обычный DELETE в первый же
+// заход отработает молча, без лишнего диалога.
+async function deleteBlkEntity(url) {
+  try {
+    await api(url, { method: "DELETE" });
+    return true;
+  } catch (e) {
+    if (e.status !== 409 || !e.detail) throw e;
+    if (!confirm(e.detail.message + "\n\nПродолжить?")) return false;
+    await api(url + "?force=true", { method: "DELETE" });
+    return true;
+  }
+}
+
 function renderBlkSections() {
   const box = document.getElementById("blk-sections-list");
   if (!blkSections.length) {
@@ -32404,15 +32430,13 @@ function renderBlkSections() {
   box.querySelectorAll("[data-del-section]").forEach(btn => btn.addEventListener("click", async () => {
     if (!confirm("Удалить секцию?")) return;
     try {
-      await api(`/objects/${state.objectId}/sections/${btn.dataset.delSection}`, { method: "DELETE" });
+      const удалено = await deleteBlkEntity(`/objects/${state.objectId}/sections/${btn.dataset.delSection}`);
+      if (!удалено) return;
       await loadBlkSectionsLevels();
       await refreshMfrPlanIfOpen();
-    // showToast пишет в общую строку состояния — она физически перекрыта
-    // бэкдропом этой модалки и не видна (тот же баг, что был у «Обновить
-    // принадлежность элементов», см. коммент там); отказ удаления
-    // («секция используется») здесь самый частый случай ошибки, и он
-    // должен быть виден, а не молча проглочен (живой отчёт пользователя
-    // «не работает удаление секций», 09-10).
+    // blkSetupStatus, а не showToast — общая строка состояния физически
+    // перекрыта бэкдропом этой модалки и не видна (тот же баг, что был у
+    // «Обновить принадлежность элементов», см. коммент там).
     } catch (e) { blkSetupStatus(e.message, true); }
   }));
   // Всё правится на месте (2026-09-02, живой запрос пользователя: «все
@@ -32564,7 +32588,8 @@ function renderBlkLevels() {
   box.querySelectorAll("[data-del-level]").forEach(btn => btn.addEventListener("click", async () => {
     if (!confirm("Удалить этаж?")) return;
     try {
-      await api(`/objects/${state.objectId}/levels/${btn.dataset.delLevel}`, { method: "DELETE" });
+      const удалено = await deleteBlkEntity(`/objects/${state.objectId}/levels/${btn.dataset.delLevel}`);
+      if (!удалено) return;
       await loadBlkSectionsLevels();
     // См. коммент у data-del-section — тот же невидимый showToast.
     } catch (e) { blkSetupStatus(e.message, true); }

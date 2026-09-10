@@ -6185,13 +6185,20 @@ def rename_block_section(object_id: int, section_id: int, body: BlockSectionRena
 
 
 @app.delete("/objects/{object_id}/sections/{section_id}")
-def delete_block_section(object_id: int, section_id: int,
+def delete_block_section(object_id: int, section_id: int, force: bool = False,
                          user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "blocks", "write")
         try:
-            blocks_mod.delete_section(conn, object_id, section_id)
+            blocks_mod.delete_section(conn, object_id, section_id, force=force)
+        # UsageWarning — подкласс BlockError, ловится ПЕРВЫМ: секция
+        # используется — это не отказ (422), а предупреждение с точным
+        # счётом (409), на которое фронт переспрашивает подтверждение и
+        # повторяет запрос с force=true (живой запрос пользователя,
+        # 2026-09-10 — «разрешай удалять используемую секцию»).
+        except blocks_mod.UsageWarning as e:
+            raise HTTPException(status_code=409, detail=e.to_dict())
         except blocks_mod.BlockError as e:
             raise HTTPException(status_code=422, detail=str(e))
     finally:
@@ -6322,13 +6329,16 @@ def put_block_boxes(object_id: int, block_id: int, body: BlockBoxesIn,
 
 
 @app.delete("/objects/{object_id}/levels/{level_id}")
-def delete_block_level(object_id: int, level_id: int,
+def delete_block_level(object_id: int, level_id: int, force: bool = False,
                        user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "blocks", "write")
         try:
-            blocks_mod.delete_level(conn, object_id, level_id)
+            blocks_mod.delete_level(conn, object_id, level_id, force=force)
+        # См. коммент у delete_block_section — то же 409/force.
+        except blocks_mod.UsageWarning as e:
+            raise HTTPException(status_code=409, detail=e.to_dict())
         except blocks_mod.BlockError as e:
             raise HTTPException(status_code=422, detail=str(e))
     finally:
