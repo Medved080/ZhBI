@@ -30582,13 +30582,23 @@ document.getElementById("block-settings-save").addEventListener("click", async (
 let blockFactBlockId = null;
 let blockFactCurrentReportId = null;   // null = ещё не сохранённый новый отчёт
 let blockFactOptions = [];             // операции, выбранные для блока (Настройки)
+// Работы, совпавшие с отбором, из которого форма открыта (живой запрос
+// пользователя, 2026-09-10: «совпавшие с отбором работы можно подсветить»)
+// — id операций, не групповых узлов (fjState.workTypeIds уже хранит только
+// листья, см. журнал ниже). Пусто у входов без отбора (панель блока,
+// «Настройки») — тогда renderBlockFactItems никого не подсвечивает.
+let blockFactHighlightIds = new Set();
 
 // Открыть «Факт» блока — общая точка для кнопки в панели блока (новый
 // отчёт) и для «Править» в списке документов карточки ЗР (2026-09-10,
 // живой запрос: документ — снимок ВСЕГО блока, поэтому правится тем же
 // экраном, что и обычно, просто сразу на нужном отчёте, а не с чистого листа).
-async function openBlockFactForm(blockId, reportId) {
+async function openBlockFactForm(blockId, reportId, highlightIds) {
   blockFactBlockId = blockId;
+  // Сбрасывается КАЖДЫЙ раз, а не только когда передан непустой набор —
+  // иначе подсветка от предыдущего открытия (скажем, из журнала) осталась
+  // бы висеть на форме, открытой затем без всякого отбора (панель блока).
+  blockFactHighlightIds = new Set(highlightIds || []);
   document.getElementById("block-fact-backdrop").classList.add("open");
   document.getElementById("block-fact-save-status").textContent = "";
   // Редактирование — по правам (живой запрос пользователя, 2026-09-10):
@@ -30679,8 +30689,14 @@ function renderBlockFactItems(percents) {
     ? blockFactOptions.map(o => {
         const { name, crumb } = workTypePathParts(o["путь"]);
         const percent = percents[o.id] || 0;
-        return `<div class="bf-item" data-wt="${o.id}">
-          <div class="bf-item-name">${crumb ? `<span class="hint-text">${escapeHtml(crumb)} / </span>` : ""}${escapeHtml(name)}</div>
+        // Совпадение с отбором, из которого открыта форма — не только
+        // цветом (живой запрос пользователя, 2026-09-10): свой класс
+        // добавляет и левую полосу, и текстовую метку перед названием.
+        const совпала = blockFactHighlightIds.has(o.id);
+        return `<div class="bf-item${совпала ? " bf-item-match" : ""}" data-wt="${o.id}">
+          <div class="bf-item-name">${совпала
+              ? '<span class="bf-item-match-mark" title="Совпадает с отбором">✓ отбор</span> '
+              : ""}${crumb ? `<span class="hint-text">${escapeHtml(crumb)} / </span>` : ""}${escapeHtml(name)}</div>
           <input type="range" min="0" max="100" value="${percent}" class="bf-slider" ${disabled}>
           <input type="number" min="0" max="100" value="${percent}" class="bf-number" ${disabled}>
         </div>`;
@@ -30705,6 +30721,20 @@ document.getElementById("block-fact-new").addEventListener("click", () => startN
 document.getElementById("block-fact-close").addEventListener("click", () => {
   document.getElementById("block-fact-backdrop").classList.remove("open");
   if (fjReturnOnClose) { fjReturnOnClose = false; openFactJournal(); }
+});
+// «К блоку» (живой запрос пользователя, 2026-09-10) — вкладка
+// «Запланированные работы» «Учёта по блокам», НЕ панель блока «Модели
+// МФР»: контур обязан работать и без модели (см. модуль выше). Осознанный
+// уход из потока «журнал → форма» — fjReturnOnClose сбрасывается, иначе
+// следующее закрытие ЛЮБОЙ формы «Факт» неожиданно утащило бы в журнал.
+document.getElementById("block-fact-to-block").addEventListener("click", () => {
+  const blockId = blockFactBlockId;
+  document.getElementById("block-fact-backdrop").classList.remove("open");
+  fjReturnOnClose = false;
+  revitPlanState.objectId = state.objectId;
+  document.getElementById("blocks-backdrop").classList.add("open");
+  blkPlansBlockId = blockId;
+  switchBlocksTab("plans");
 });
 document.getElementById("block-fact-delete").addEventListener("click", async () => {
   if (blockFactCurrentReportId === null) return;
@@ -30968,7 +30998,11 @@ function fjRenderTable(items) {
       fjState.scrollTop = box.scrollTop;
       document.getElementById("fact-journal-backdrop").classList.remove("open");
       fjReturnOnClose = true;
-      openBlockFactForm(Number(row.dataset.blockId), Number(row.dataset.reportId));
+      // Подсветка работ, совпавших с отбором «Виды работ» (живой запрос
+      // пользователя, 2026-09-10) — fjState.workTypeIds уже хранит только
+      // листья дерева (раскрытые группы), ровно то, что нужно сравнивать
+      // с id операций в форме.
+      openBlockFactForm(Number(row.dataset.blockId), Number(row.dataset.reportId), fjState.workTypeIds);
     });
   });
   // «Удалить отчёт блока» — ОТДЕЛЬНОЕ второстепенное действие прямо в
@@ -31044,7 +31078,7 @@ document.getElementById("fj-new-continue").addEventListener("click", async () =>
   document.getElementById("fj-new-report-backdrop").classList.remove("open");
   document.getElementById("fact-journal-backdrop").classList.remove("open");
   fjReturnOnClose = true;
-  await openBlockFactForm(block.id, null);
+  await openBlockFactForm(block.id, null, fjState.workTypeIds);
   // openBlockFactForm -> startNewBlockFactReport предзаполняет СЕГОДНЯШНЕЙ
   // датой — восстанавливаем ту, что выбрал пользователь в этой форме.
   document.getElementById("block-fact-date").value = date;
@@ -31150,7 +31184,9 @@ function renderBlockWorkCard(d) {
       // проверке «Документов факта», 2026-09-10). «Факт» после сохранения
       // сам обновит карточку через refreshPlansTabIfOpen.
       document.getElementById("block-work-backdrop").classList.remove("open");
-      openBlockFactForm(d.block_id, reportId);
+      // Подсвечиваем именно ЭТУ операцию — пользователь пришёл из карточки
+      // конкретной ЗР, а документ показывает состав всего блока целиком.
+      openBlockFactForm(d.block_id, reportId, [d.work_type_id]);
     });
   });
   body.querySelectorAll(".bw-doc-delete").forEach(btn => {

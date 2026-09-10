@@ -3423,6 +3423,13 @@
     padding: 5px 0; border-bottom: 1px solid var(--color-border); font-size: 13px; }
   .bf-item-name { overflow-wrap: anywhere; }
   .bf-item input[type=number] { width: 100%; padding: 3px 4px; text-align: right; }
+  /* Совпадение с отбором журнала (2026-09-10, живой запрос пользователя)
+     — левая полоса ПЛЮС текстовая метка, не только фон/цвет. */
+  .bf-item.bf-item-match { background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+    border-left: 3px solid var(--color-primary); padding-left: 6px; }
+  .bf-item-match-mark { display: inline-block; font-size: 10px; font-weight: 700;
+    color: var(--color-primary); border: 1px solid var(--color-primary); border-radius: 3px;
+    padding: 0 4px; margin-right: 4px; vertical-align: middle; text-transform: uppercase; }
 
   /* ---- справочник видов работ (вкладка «Виды работ»): дерево со сворачиванием,
      значения полей — по своим колонкам, а не слеплены в одну строку. ---- */
@@ -8508,6 +8515,12 @@
       </div>
     </div>
     <div class="actions" style="margin-top:12px">
+      <!-- Переход «из документа — к соответствующему блоку» (живой запрос
+           пользователя, 2026-09-10) — вкладка «Запланированные работы»
+           «Учёта по блокам», а не рабочее место «Модель МФР»: контур
+           обязан работать и без модели. margin-right:auto прижимает её
+           влево — .modal .actions выравнивает остальные кнопки вправо. -->
+      <button type="button" class="link-btn" id="block-fact-to-block" style="margin-right:auto">К блоку</button>
       <button class="btn btn-primary" id="block-fact-save">Сохранить</button>
       <!-- Удаление ДОКУМЕНТА целиком (этап 4, В6) — только у уже
            сохранённого отчёта; у ещё не сохранённого черновика («Новый
