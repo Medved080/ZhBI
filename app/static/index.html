@@ -4774,6 +4774,11 @@
                  внутри формы гасятся отдельно (applyBulkEditRights). -->
             <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
+            <!-- Внешние 3D-модели (благоустройство и т.п., 2026-09-10) —
+                 принадлежат ОБЪЕКТУ (проект — только группировка объектов),
+                 поэтому открывается для текущего объекта, тем же приёмом,
+                 что «Загрузить чертёж» выше. -->
+            <button id="menu-external-models" data-feature="external_models" data-feature-kind="read">Внешние 3D-модели</button>
             <!-- Панели облицовки шахт подъемников ГП1/ГП2 (2026-09-08): отдельный
                  дополняющий импорт внутри объекта ЖБИ, не подменяет обычную
                  загрузку чертежа выше — см. app.shaft_panels. Тот же раздел
@@ -5352,6 +5357,8 @@
               <input type="checkbox" id="mfr-show-facades"/>Фасады</label>
             <label class="toggle" title="Картинки планов этажей с чертежа PDF, обрезанные по контуру здания, — лежат на полу этажа (3D) и подложкой под планом (2D, при выборе одного этажа)">
               <input type="checkbox" id="mfr-show-plans"/>Планы</label>
+            <label class="toggle" title="Внешняя 3D-модель благоустройства объекта (только 3D). Переключатель локальный — на сохранённое положение слоя не влияет">
+              <input type="checkbox" id="mfr-show-external-models" checked/>Благоустройство</label>
           </div>
         </div>
         <!-- Шахматка (2026-09-02, переосмыслена 2026-09-04, живой запрос
@@ -5894,6 +5901,23 @@
   </div>
 </div>
 
+<!-- Внешние 3D-модели объекта (благоустройство), 2026-09-10 — Действия →
+     Обмен данными → «Внешние 3D-модели». Открывается для ТЕКУЩЕГО объекта
+     (как «Загрузить чертёж»); содержимое строит
+     app/static/external-models/settings.js. -->
+<div class="modal-backdrop" id="external-models-backdrop">
+  <div class="modal wide">
+    <h2>Внешние 3D-модели</h2>
+    <p class="hint-text">Модель принадлежит текущему объекту. Виден слой в его
+      3D ЖБИ и «Модели МФР» — переключатель «Благоустройство» там же, во
+      вкладке «Вид».</p>
+    <div id="external-models-body">Загрузка…</div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="external-models-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="pdf-review-backdrop">
   <div class="modal modal-sticky" style="max-width:760px">
     <div class="modal-sticky-head">
@@ -6152,6 +6176,9 @@
     <!-- Солнце и тени в 3D (2026-08-22, запрос пользователя). Настройка, а не
          режим просмотра: свет в сцене есть всегда, галочка добавляет к нему
          тень. Здесь же, где ракурс, — это про то, КАК человек смотрит модель. -->
+    <label class="field" style="margin-top:12px">Благоустройство</label>
+    <label class="toggle"><input type="checkbox" id="zhbi-show-external-models" checked/>
+      Показывать внешнюю 3D-модель благоустройства объекта (если загружена)</label>
     <label class="field" style="margin-top:12px">Тени в 3D</label>
     <label class="toggle"><input type="checkbox" id="shadows-3d"/>
       Солнце и тени — силуэт здания на земле и затенение элементов друг другом</label>

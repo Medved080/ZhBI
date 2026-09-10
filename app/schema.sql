@@ -1425,15 +1425,18 @@ CREATE TABLE IF NOT EXISTS work_fact_items (
     PRIMARY KEY (report_id, work_type_id)
 );
 
--- Внешние 3D-модели проекта (благоустройство, позже фасады) — см.
--- Docs/fbx-ground-implementation-task.md §7. Одна строка на сохранённый
--- слой; несколько слоёв на проект допускаются с самого начала. Привязка к
--- координатам проекта не доказана (placement_mode='unreferenced' в первой
--- версии) — anchor/offset лишь ставят модель в разумное начальное
--- положение и дают её подвинуть, а не геопривязывают.
-CREATE TABLE IF NOT EXISTS project_external_models (
+-- Внешние 3D-модели ОБЪЕКТА (благоустройство, позже фасады) — см.
+-- Docs/fbx-ground-implementation-task.md §7 (решение пользователя
+-- 2026-09-10: модель принадлежит объекту, а не проекту — проект лишь
+-- группирует объекты и своих данных не имеет, как и везде в системе).
+-- Одна строка на сохранённый слой; несколько слоёв на объект допускаются с
+-- самого начала. Привязка к координатам объекта не доказана
+-- (placement_mode='unreferenced' в первой версии) — anchor/offset лишь
+-- ставят модель в разумное начальное положение и дают её подвинуть, а не
+-- геопривязывают.
+CREATE TABLE IF NOT EXISTS object_external_models (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects (id),
+    object_id INTEGER NOT NULL REFERENCES objects (id),
     name TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'ground',
     original_name TEXT NOT NULL,
@@ -1446,18 +1449,24 @@ CREATE TABLE IF NOT EXISTS project_external_models (
     source_anchor_x_mm REAL NOT NULL,
     source_anchor_y_mm REAL NOT NULL,
     source_anchor_z_mm REAL NOT NULL,
-    project_anchor_x_mm REAL NOT NULL,
-    project_anchor_y_mm REAL NOT NULL,
+    object_anchor_x_mm REAL NOT NULL,
+    object_anchor_y_mm REAL NOT NULL,
     centering_revision TEXT,
     offset_x_mm REAL NOT NULL DEFAULT 0,
     offset_y_mm REAL NOT NULL DEFAULT 0,
+    -- Поворот слоя вокруг ЕГО ЖЕ вертикальной оси, вокруг центра
+    -- горизонтального габарита (того же, что даёт source_anchor) — по
+    -- часовой стрелке в градусах, если смотреть сверху на план. Не влияет
+    -- на anchor/offset: они по-прежнему двигают точку, вокруг которой уже
+    -- повёрнутая модель ставится на объекте.
+    rotation_deg REAL NOT NULL DEFAULT 0,
     revision INTEGER NOT NULL DEFAULT 1,
     created_by INTEGER REFERENCES users (id),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_project_external_models_project
-    ON project_external_models (project_id);
+CREATE INDEX IF NOT EXISTS idx_object_external_models_object
+    ON object_external_models (object_id);
 
 -- Построчная история правок отчёта факта (этап 4, 2026-09-10, решение
 -- пользователя В6) — «редактируемый документ не должен терять то, что в

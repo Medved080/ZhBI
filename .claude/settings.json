@@ -8,6 +8,7 @@
       "Read(./data/zhbi.check.db)",
       "Read(./data/backups/**)",
       "Read(./data/zhbi.anon.map.json)",
+      "Read(./Input/**)",
       "Read(./uploads/**)",
       "Read(./test_data/**)",
       "Read(./Модели/**)",

@@ -344,6 +344,13 @@ FEATURES = [
     # --------------------------------------------- Загрузка данных файлом
     Feature("import_history", "Загрузка данных файлом", "Импорт истории статусов",
             None, ["POST /import-history-xlsx"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
+    Feature("external_models", "Загрузка данных файлом",
+            "Внешние 3D-модели (благоустройство и т.п.)",
+            "Модель принадлежит ОБЪЕКТУ (проект — только группировка объектов, своих "
+            "данных не имеет). Видна в 3D ЖБИ и «Модели МФР» этого объекта.",
+            ["GET /objects/{id}/external-models", "POST /objects/{id}/external-models",
+             "PATCH/DELETE /objects/{id}/external-models/{model_id}"],
+            SCOPE_OBJECT, _от(ADMIN, WRITE)),
     Feature("bulk_edit", "Загрузка данных файлом", "Массовая правка через Excel",
             "«Чтение» — только выгрузка снимка в Excel; загрузка правленого файла и "
             "применение правок требуют «Изменения». "

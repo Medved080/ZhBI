@@ -12228,7 +12228,7 @@ function renderCatalogForm() {
 
   // Вложения — под свёрткой и своим запросом: список открывают у одной
   // записи из сотни, грузить файлы заранее незачем.
-  const свёртка = место.querySelector("details");
+  const свёртка = document.getElementById("catalog-attachments")?.closest("details");
   if (свёртка) {
     свёртка.addEventListener("toggle", () => {
       const бокс = document.getElementById("catalog-attachments");
@@ -26354,9 +26354,73 @@ function build3DScene(preserveCamera = false) {
   // взять уже посчитанный низ застройки.
   build3DAxisGrid(Math.min(SITE_BASE_3D_Y, computeBuildingHeightRange().bottom));
 
+  // Внешние 3D-модели (благоустройство) — сцена ЖБИ (в отличие от МФР) не
+  // пересоздаётся на каждый вызов, а мутируется на месте, поэтому свежий
+  // список/геометрия запрашиваются здесь же, но кэш (по object_id и по
+  // id модели внутри слоя) не даёт парсить FBX заново на каждый фильтр.
+  if (state.objectId) {
+    attachZhbiExternalModels(v3.scene, state.objectId)
+      .catch((e) => console.warn("Внешние 3D-модели ЖБИ:", e));
+  }
+
   if (!preserveCamera) fit3DCameraToData();
   requestRender3D();
 }
+
+// -------- внешние 3D-модели (благоустройство) в сцене ЖБИ --------
+// Тот же кэш-контракт, что у mfrExternalModels (см. выше) — отдельный
+// экземпляр слоя: Group нельзя делить между двумя сценами с разными
+// адаптерами/трансформами (§9 задания).
+const zhbiExternalModels = { layer: null, objectId: null, models: null };
+
+function zhbiExternalModelsVisible() {
+  return document.getElementById("zhbi-show-external-models")?.checked ?? true;
+}
+
+function zhbiExternalModelsInvalidateObject(objectId) {
+  if (zhbiExternalModels.objectId === objectId) zhbiExternalModels.models = null;
+}
+
+async function ensureZhbiExternalModelsList(objectId) {
+  if (zhbiExternalModels.objectId !== objectId) {
+    if (zhbiExternalModels.layer) zhbiExternalModels.layer.dispose();
+    Object.assign(zhbiExternalModels, { layer: null, objectId, models: null });
+  }
+  if (zhbiExternalModels.models) return zhbiExternalModels.models;
+  try {
+    const res = await api(`/objects/${objectId}/external-models`);
+    zhbiExternalModels.models = res.models;
+  } catch (e) {
+    zhbiExternalModels.models = [];
+  }
+  return zhbiExternalModels.models;
+}
+
+async function attachZhbiExternalModels(scene, objectId) {
+  const models = await ensureZhbiExternalModelsList(objectId);
+  if (state.view3d.scene !== scene) return;
+  if (!models.length) return;
+  if (!zhbiExternalModels.layer) {
+    const { THREE, FBXLoader, createExternalModelLayer } =
+      await import("/static/external-models/app-bridge.js").then((m) => m.ensureExternalModelsLoaded());
+    if (state.view3d.scene !== scene) return;
+    zhbiExternalModels.layer = createExternalModelLayer({
+      THREE, FBXLoader,
+      fetchContent: (model) => fetch(`/objects/${objectId}/external-models/${model.id}/content`)
+        .then((r) => { if (!r.ok) throw new Error("Не удалось получить файл модели"); return r.arrayBuffer(); }),
+    });
+  }
+  const warnings = await zhbiExternalModels.layer.attachToZhbi(
+    scene, models, { visible: zhbiExternalModelsVisible() });
+  if (state.view3d.scene !== scene) return;
+  for (const w of warnings) console.warn("Внешняя 3D-модель:", w);
+  requestRender3D();
+}
+
+document.getElementById("zhbi-show-external-models")?.addEventListener("change", () => {
+  zhbiExternalModels.layer?.setVisible(zhbiExternalModelsVisible());
+  requestRender3D();
+});
 
 // ---------- сцена, камера, свет, управление ----------
 
@@ -31218,6 +31282,80 @@ document.getElementById("mfr-dynamics-to").addEventListener("change", (e) => {
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
                 loop: null, key: null, поколение: 0 };
 
+// -------- внешние 3D-модели (благоустройство) в сцене МФР --------
+//
+// Слой ПРИНАДЛЕЖИТ ОБЪЕКТУ (решение пользователя 2026-09-10: проект в
+// системе только группирует объекты, своих данных не имеет — как и везде).
+// Список моделей и их геометрия кэшируются по object_id и переживают
+// пересборку сцены на каждый фильтр (buildMfr3D зовётся на каждую смену
+// этажа/слоя) — иначе FBX разбирался бы заново на каждый клик. Полностью
+// сбрасывается только со сменой ОБЪЕКТА (mfrExternalModels.layer.dispose()).
+const mfrExternalModels = { layer: null, objectId: null, models: null };
+
+function mfrExternalModelsVisible() {
+  return document.getElementById("mfr-show-external-models")?.checked ?? true;
+}
+
+// Полное освобождение — при смене объекта (см. вызов там, где
+// revitPlanState.objectId переставляется) и при закрытии панели настроек с
+// удалением/переименованием, если объект сменился.
+function disposeMfrExternalModels() {
+  if (mfrExternalModels.layer) mfrExternalModels.layer.dispose();
+  Object.assign(mfrExternalModels, { layer: null, objectId: null, models: null });
+}
+
+// Панель настроек объекта зовёт это после upload/PATCH/recenter/delete —
+// геометрия уже загруженных моделей не меняется от офсета, поэтому здесь
+// только сброс СПИСКА (метаданные), а не всего слоя: полный dispose() стёр
+// бы кэш разобранного FBX и заставил бы перекачивать его ради смены двух
+// чисел офсета.
+function mfrExternalModelsInvalidateObject(objectId) {
+  if (mfrExternalModels.objectId === objectId) mfrExternalModels.models = null;
+}
+
+async function ensureMfrExternalModelsList(objectId) {
+  if (mfrExternalModels.objectId !== objectId) {
+    if (mfrExternalModels.layer) mfrExternalModels.layer.dispose();
+    Object.assign(mfrExternalModels, { layer: null, objectId, models: null });
+  }
+  if (mfrExternalModels.models) return mfrExternalModels.models;
+  try {
+    const res = await api(`/objects/${objectId}/external-models`);
+    mfrExternalModels.models = res.models;
+  } catch (e) {
+    mfrExternalModels.models = [];
+  }
+  return mfrExternalModels.models;
+}
+
+// Вызывается из buildMfr3D ПОСЛЕ того, как сцена/рендер уже стоят и первый
+// кадр рисуется: внешняя модель не должна задерживать появление здания.
+// Поколение сверяется отдельным аргументом (не через mfr3d.поколение
+// напрямую) — тест на генерацию делает сам вызывающий код.
+async function attachMfrExternalModels(scene, objectId, origin, low) {
+  const models = await ensureMfrExternalModelsList(objectId);
+  if (mfr3d.scene !== scene) return;            // сцену уже пересобрали/снесли
+  if (!models.length) return;
+  if (!mfrExternalModels.layer) {
+    const { THREE, FBXLoader, createExternalModelLayer } =
+      await import("/static/external-models/app-bridge.js").then((m) => m.ensureExternalModelsLoaded());
+    if (mfr3d.scene !== scene) return;
+    mfrExternalModels.layer = createExternalModelLayer({
+      THREE, FBXLoader,
+      fetchContent: (model) => fetch(`/objects/${objectId}/external-models/${model.id}/content`)
+        .then((r) => { if (!r.ok) throw new Error("Не удалось получить файл модели"); return r.arrayBuffer(); }),
+    });
+  }
+  const warnings = await mfrExternalModels.layer.attachToMfr(
+    scene, models, { origin, low, visible: mfrExternalModelsVisible() });
+  if (mfr3d.scene !== scene) return;
+  for (const w of warnings) console.warn("Внешняя 3D-модель:", w);
+}
+
+document.getElementById("mfr-show-external-models")?.addEventListener("change", () => {
+  mfrExternalModels.layer?.setVisible(mfrExternalModelsVisible());
+});
+
 // Фасады объекта (2026-08-31, живой запрос пользователя) — картинки
 // вырезаны из последних листов PDF-комплекта («Фасад в осях 1-4/4-1/А-В/
 // Б-А», Docs/TZ.md §3а) заранее, вручную, и лежат статикой — не
@@ -31928,6 +32066,16 @@ async function buildMfr3D() {
   mfr3d.scene = scene; mfr3d.camera = camera;
   mfr3d.renderer = renderer; mfr3d.controls = controls; mfr3d.key = ключ;
   bindMfr3DPick(renderer.domElement, camera, scene);
+
+  // Внешние 3D-модели (благоустройство) — асинхронно, ПОСЛЕ того, как сцена
+  // и цикл рендера уже готовы: здание не должно ждать загрузку/разбор FBX.
+  // Слой принадлежит ОБЪЕКТУ.
+  {
+    if (revitPlanState.objectId) {
+      attachMfrExternalModels(scene, revitPlanState.objectId, data.origin || [0, 0], низ)
+        .catch((e) => console.warn("Внешние 3D-модели МФР:", e));
+    }
+  }
 
   const кадр = () => {
     mfr3d.loop = requestAnimationFrame(кадр);
@@ -33669,6 +33817,146 @@ document.getElementById("pdf-clear-submit").addEventListener("click", () => {
     document.getElementById("pdf-clear-submit"),
   );
 });
+
+// Внешние 3D-модели объекта (благоустройство) — «Действия → Обмен данными
+// → Внешние 3D-модели», тем же приёмом, что «Загрузить чертёж»: работает с
+// ТЕКУЩИМ объектом (state.objectId), права те же, что у пункта меню
+// (data-feature="external_models" в index.html решает видимость кнопки).
+document.getElementById("menu-external-models")?.addEventListener("click", async () => {
+  const backdrop = document.getElementById("external-models-backdrop");
+  const body = document.getElementById("external-models-body");
+  if (!state.objectId) {
+    showToast("Сначала выберите объект", "error");
+    return;
+  }
+  backdrop.classList.add("open");
+  body.innerHTML = "Загрузка…";
+  const роли = (state.projects.flatMap((p) => p.objects).find((o) => o.id === state.objectId) || {}).roles || [];
+  const { renderExternalModelsPanel } = await import("/static/external-models/settings.js");
+  renderExternalModelsPanel(body, {
+    objectId: state.objectId,
+    canEdit: canOn(роли, "external_models", "write"),
+    api, escapeHtml, showToast,
+    onChanged: () => {
+      mfrExternalModelsInvalidateObject(state.objectId);
+      zhbiExternalModelsInvalidateObject(state.objectId);
+    },
+    beginDrag: beginExternalModelDrag,
+  });
+});
+document.getElementById("external-models-close")?.addEventListener("click", () => {
+  document.getElementById("external-models-backdrop").classList.remove("open");
+});
+
+// Перетаскивание внешней модели мышью прямо в открытой 3D-сцене МФР
+// (§8 задания). Работает только если у ТЕКУЩЕГО объекта уже открыт и
+// построен 3D («Модель» → 3D), а нужная модель в нём уже разобрана —
+// иначе двигать нечего, и функция явно отказывает вызывающей панели, а не
+// подставляет фиктивные координаты. Пока только МФР: сцена ЖБИ мутируется
+// на месте и делить один canvas между модалкой настроек и её же 3D видом
+// сложнее (полноценный второй адаптер — отдельная доработка).
+//
+// Диалог настроек на время перетаскивания СКРЫВАЕТСЯ (не закрывается —
+// черновик офсета/поворота остаётся), чтобы courier мыши доставал до
+// canvas позади него; OrbitControls на это время выключены, чтобы вращение
+// камеры не мешало жесту и наоборот.
+function beginExternalModelDrag(model, { onPreviewOffsetMm, onDone, onCancel }) {
+  if (!mfr3d.scene || !mfr3d.renderer || !mfr3d.camera) {
+    return { ok: false, reason: "Сначала откройте 3D этого объекта («Модель» → 3D)." };
+  }
+  if (mfrExternalModels.objectId !== model.object_id || !mfrExternalModels.layer) {
+    return { ok: false, reason: "Модель ещё не разобрана в открытой 3D-сцене — подождите или откройте 3D заново." };
+  }
+  const group = mfrExternalModels.layer.getGroup(model.id);
+  if (!group) {
+    return { ok: false, reason: "Модель ещё не разобрана в открытой 3D-сцене — подождите или откройте 3D заново." };
+  }
+
+  const backdrop = document.getElementById("external-models-backdrop");
+  const canvas = mfr3d.renderer.domElement;
+  const controls = mfr3d.controls;
+  const camera = mfr3d.camera;
+  const raycaster = new THREE.Raycaster();
+  const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -group.position.z);
+  const startGroupPos = group.position.clone();
+  const startOffset = { x: model.offset_mm.x, y: model.offset_mm.y };
+  const pointerNdc = new THREE.Vector2();
+  const startHit = new THREE.Vector3();
+  const hit = new THREE.Vector3();
+  let active = false;
+
+  function ndcFromEvent(e) {
+    const r = canvas.getBoundingClientRect();
+    pointerNdc.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+    pointerNdc.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+  }
+
+  function rayHit(e, out) {
+    ndcFromEvent(e);
+    raycaster.setFromCamera(pointerNdc, camera);
+    return raycaster.ray.intersectPlane(plane, out);
+  }
+
+  let finished = false;
+
+  function cleanup() {
+    canvas.removeEventListener("pointerdown", onPointerDown);
+    canvas.removeEventListener("pointermove", onPointerMove);
+    canvas.removeEventListener("pointerup", onPointerUp);
+    canvas.removeEventListener("pointercancel", onPointerCancel);
+    window.removeEventListener("keydown", onKeyDown);
+    if (controls) controls.enabled = true;
+    backdrop.classList.add("open");
+  }
+
+  // Общий выход из режима перетаскивания — со всех путей: отпустили кнопку
+  // мыши (commit=true), Esc/pointercancel/повторный клик по кнопке в
+  // панели (commit=false). Вызывается РОВНО ОДИН РАЗ (finished — защита от
+  // двойного onPointerUp+pointercancel на некоторых устройствах).
+  function finish(commit) {
+    if (finished) return;
+    finished = true;
+    cleanup();
+    if (commit && active) {
+      const dx = group.position.x - startGroupPos.x, dy = group.position.y - startGroupPos.y;
+      onDone(startOffset.x + dx, startOffset.y + dy);
+    } else {
+      group.position.copy(startGroupPos);
+      onCancel();
+    }
+  }
+
+  function onPointerDown(e) {
+    if (!rayHit(e, startHit)) return; // луч параллелен плоскости — не NaN, просто пропуск (§8, п.5)
+    active = true;
+    canvas.setPointerCapture(e.pointerId);
+    if (controls) controls.enabled = false;
+  }
+
+  function onPointerMove(e) {
+    if (!active) return;
+    if (!rayHit(e, hit)) return;
+    const dx = hit.x - startHit.x, dy = hit.y - startHit.y;
+    group.position.x = startGroupPos.x + dx;
+    group.position.y = startGroupPos.y + dy;
+    onPreviewOffsetMm(startOffset.x + dx, startOffset.y + dy);
+  }
+
+  function onPointerUp() { finish(true); }
+  function onPointerCancel() { finish(false); }
+  function onKeyDown(e) {
+    if (e.key === "Escape") finish(false);
+  }
+
+  backdrop.classList.remove("open");
+  canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointerup", onPointerUp);
+  canvas.addEventListener("pointercancel", onPointerCancel);
+  window.addEventListener("keydown", onKeyDown);
+
+  return { ok: true, stop: () => finish(false) };
+}
 
 document.getElementById("pdf-import-submit").addEventListener("click", async () => {
   if (!pdfImportFile) { setPdfImportStatus("Сначала выберите файл", true); return; }
