@@ -754,11 +754,38 @@ TABLES = [
     ("note", "TEXT", "", "примечание листа PlanningTrack, если заполнено"),
     ("created_at", "TEXT", "", "момент записи (загрузка справочника видов работ)"),
 ]),
+("project_external_models", "project_external_models — Внешние 3D-модели проекта (благоустройство и т.п.)", C_HIER, S_HIER, [
+    ("id", "INTEGER", "PK", "идентификатор слоя"),
+    ("project_id", "INTEGER", "FK", "проект → projects.id"),
+    ("name", "TEXT", "", "название слоя, показывается пользователю («Благоустройство»)"),
+    ("kind", "TEXT", "", "вид модели: ground (благоустройство); позже facade"),
+    ("original_name", "TEXT", "", "исходное имя файла у пользователя (для отображения, не для пути на диске)"),
+    ("stored_name", "TEXT", "U", "имя на диске (uuid.fbx, в uploads/external_models/)"),
+    ("sha256", "TEXT", "", "хэш содержимого, посчитан сервером по потоку при сохранении"),
+    ("size_bytes", "INTEGER", "", "размер файла, байт"),
+    ("format_version", "INTEGER", "", "версия бинарного формата FBX (сейчас 7400)"),
+    ("placement_mode", "TEXT", "", "unreferenced — нет доказанной связи с координатами проекта (единственный режим в этой версии)"),
+    ("metadata_json", "TEXT", "", "JSON: версия схемы, единицы/оси источника, диагностика загрузки — без вершин и картинок"),
+    ("source_anchor_x_mm", "REAL", "", "X центра горизонтального габарита модели в её каноническом пространстве C, мм"),
+    ("source_anchor_y_mm", "REAL", "", "Y центра горизонтального габарита модели в C, мм"),
+    ("source_anchor_z_mm", "REAL", "", "Z нижней точки габарита модели в C (уровень 0 модели), мм"),
+    ("project_anchor_x_mm", "REAL", "", "X центра горизонтального габарита ВСЕГО проекта на момент центрирования, мм"),
+    ("project_anchor_y_mm", "REAL", "", "Y центра горизонтального габарита проекта, мм (Z всегда 0 — не хранится отдельной колонкой)"),
+    ("centering_revision", "TEXT", "", "ревизия/хэш габарита проекта на момент последнего центрирования — защита от центрирования по устаревшим данным"),
+    ("offset_x_mm", "REAL", "", "ручной сдвиг слоя по X проекта поверх anchor, мм"),
+    ("offset_y_mm", "REAL", "", "ручной сдвиг слоя по Y проекта поверх anchor, мм"),
+    ("revision", "INTEGER", "", "версия строки для оптимистической блокировки PATCH/recenter"),
+    ("created_by", "INTEGER", "FK", "кто загрузил → users.id"),
+    ("created_at", "TEXT", "", "момент загрузки"),
+    ("updated_at", "TEXT", "", "момент последнего сохранения offset/recenter/переименования"),
+]),
 ]
 
 # ------------------------------------------------------------------- связи
 # (таблица-потомок, поле, таблица-предок, поле, подпись)
 FKS = [
+    ("project_external_models", "project_id", "projects", "id", "RESTRICT"),
+    ("project_external_models", "created_by", "users", "id", "SET NULL"),
     ("object_sections", "object_id", "objects", "id", "CASCADE"),
     ("object_levels", "object_id", "objects", "id", "CASCADE"),
     ("object_level_aliases", "object_id", "objects", "id", "CASCADE"),
