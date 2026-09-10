@@ -29908,11 +29908,41 @@ async function loadBlockProgressPanel(blockId) {
       : "";
     const data = await api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/progress${qs}`);
     blockProgressTreeData = data.tree;
+    // «сроки» — агрегат по блоку целиком (app/block_works.py,
+    // merge_dates_into_tree), присутствует ТОЛЬКО в обычном режиме (не
+    // «Динамика за период» — см. комментарий выше). В режиме динамики
+    // строка агрегата в шапке просто не рисуется, это не ошибка.
+    renderBlockDatesSummary(data.сроки || null);
     renderBlockProgressPanel();
   } catch (e) {
     blockProgressTreeData = null;
     box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Короткая дата без года (дд.мм) — компактнее formatDateRu для второй
+// строки операции и шапки карточки, где важен только порядок дат внутри
+// текущего года стройки, не сам год.
+function bwShortDate(iso) {
+  if (!iso) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${m[3]}.${m[2]}` : iso;
+}
+
+function bwDeviationLabel(days) {
+  if (days === null || days === undefined) return "";
+  if (days === 0) return "±0 дн";
+  return `${days > 0 ? "+" : ""}${days} дн`;
+}
+
+// Агрегат по блоку целиком — план/прогноз/средний процент (§6.1 задания
+// «Запланированная работа по блоку», шапка карточки).
+function renderBlockDatesSummary(agg) {
+  const box = document.getElementById("block-progress-dates-summary");
+  if (!agg || !agg.zr_count) { box.textContent = ""; return; }
+  box.innerHTML = `План: ${bwShortDate(agg.plan_start)}–${bwShortDate(agg.plan_end)} · `
+    + `Прогноз: ${bwShortDate(agg.forecast_start)}–${bwShortDate(agg.forecast_end)} · `
+    + `Средний процент: ${agg.percent ?? 0}%`;
 }
 
 // Раздел режет по planning_track_code листа, статус — по status (в режиме
@@ -29965,15 +29995,36 @@ function renderBlockProgressTree(nodes, depth) {
     const label = dynamics
       ? `<span class="bp-percent bp-percent-range">${n.percent_from}% → ${n.percent_to}%</span>`
       : `<span class="bp-percent">${percent}%</span>`;
+    // Строка план/прогноз/отклонение (§6.1 задания «Запланированная работа
+    // по блоку», этап 2) — только в обычном режиме: сервер примешивает эти
+    // поля в узел лишь когда динамика выключена (app/block_works.py,
+    // merge_dates_into_tree). Клик открывает карточку ЗР.
+    const datesLine = (!dynamics && n.block_work_id)
+      ? `<div class="bp-op-dates bp-deadline-${n.deadline}" data-block-work-id="${n.block_work_id}">`
+        + `план ${bwShortDate(n.plan_start)}–${bwShortDate(n.plan_end)} · `
+        + `прогноз ${bwShortDate(n.forecast_start)}–${bwShortDate(n.forecast_end)} · `
+        + `${escapeHtml(n.deadline_label)}`
+        + (n.deviation_end !== null && n.deviation_end !== undefined
+           ? ` (${bwDeviationLabel(n.deviation_end)})` : "")
+        + `</div>`
+      : "";
     return `<div class="bp-op" style="padding-left:${pad}px">
       <div class="bp-op-name">${escapeHtml(n.name || "(без названия)")}</div>
       <div class="bp-op-bar-row">
         <div class="bp-bar" data-work-type-id="${n.id}"><div class="bp-bar-fill bp-${status}" style="width:${percent}%"></div>${marker}</div>
         ${label}
       </div>
+      ${datesLine}
     </div>`;
   }).join("");
 }
+
+// Клик по строке план/прогноз/отклонение — карточка ЗР (делегированный
+// обработчик, дерево перерисовывается целиком при каждом апдейте).
+document.getElementById("block-progress-tree").addEventListener("click", (e) => {
+  const el = e.target.closest(".bp-op-dates");
+  if (el) openBlockWorkCard(Number(el.dataset.blockWorkId));
+});
 
 // -------- История факта операции по наведению (живой запрос пользователя)
 // — та же плавающая карточка, что у #chart-tooltip, свой независимый
@@ -30386,6 +30437,205 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
     // renderBlockCard, а не showBlockCard: выделение трогать незачем.
     if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
   } catch (e) { showToast(e.message, "error"); }
+});
+
+// -------- Карточка ЗР (запланированной работы) — app/block_works.py,
+// этап 2 задания «Запланированная работа по блоку»: обе пары дат с
+// правкой, версии актуализации, история факта той же операции. --------
+
+async function openBlockWorkCard(bwId) {
+  document.getElementById("block-work-backdrop").classList.add("open");
+  const body = document.getElementById("block-work-body");
+  body.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const d = await api(`/objects/${revitPlanState.objectId}/block-works/${bwId}`);
+    renderBlockWorkCard(d);
+  } catch (e) {
+    body.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderBlockWorkCard(d) {
+  document.getElementById("block-work-title").textContent = d["название"] || "Запланированная работа";
+  const body = document.getElementById("block-work-body");
+  const версии = (d.versions || []).map(v =>
+    `<div class="card-row"><span class="card-key">${escapeHtml(formatMomentRu(v.created_at))}</span>` +
+    `<span class="card-val">${bwShortDate(v.forecast_start)}–${bwShortDate(v.forecast_end)}` +
+    (v.created_by ? ` · ${escapeHtml(v.created_by)}` : "") +
+    (v.note ? ` · ${escapeHtml(v.note)}` : "") + `</span></div>`
+  ).join("") || '<div class="hint-text">Версий ещё нет.</div>';
+  const история = (d["история_факта"] || []).map(h =>
+    `<div class="card-row"><span class="card-key">${escapeHtml(h["дата"])}</span>` +
+    `<span class="card-val">${h["процент"]}%${h["пользователь"] ? " · " + escapeHtml(h["пользователь"]) : ""}</span></div>`
+  ).join("") || '<div class="hint-text">Фактов ещё не было.</div>';
+
+  body.innerHTML = `
+    <p class="hint-text">${escapeHtml(d["путь"] || "")}</p>
+    <div class="card-row"><span class="card-key">Признак сроков</span>
+      <span class="card-val bw-deadline-${d.deadline}">${escapeHtml(d.deadline_label)}</span></div>
+    <div class="card-row"><span class="card-key">Процент / статус</span>
+      <span class="card-val">${d.percent}%</span></div>
+    <fieldset style="margin-top:10px"><legend>Базовый (директивный) срок</legend>
+      <label>Начало <input type="date" id="bw-plan-start" value="${d.plan_start || ""}"></label>
+      <label>Окончание <input type="date" id="bw-plan-end" value="${d.plan_end || ""}"></label>
+      <button class="btn btn-sm btn-primary" id="bw-plan-save">Сохранить</button>
+    </fieldset>
+    <fieldset style="margin-top:10px"><legend>Актуализированный срок (новая версия при сохранении)</legend>
+      <label>Начало <input type="date" id="bw-forecast-start" value="${d.forecast_start || ""}"></label>
+      <label>Окончание <input type="date" id="bw-forecast-end" value="${d.forecast_end || ""}"></label>
+      <button class="btn btn-sm btn-primary" id="bw-forecast-save">Сохранить как новую версию</button>
+      <div style="margin-top:6px">${версии}</div>
+    </fieldset>
+    <fieldset style="margin-top:10px"><legend>Примечание</legend>
+      <textarea id="bw-note" rows="2" style="width:100%">${escapeHtml(d.note || "")}</textarea>
+      <button class="btn btn-sm btn-secondary" id="bw-note-save">Сохранить</button>
+    </fieldset>
+    <fieldset style="margin-top:10px"><legend>История факта</legend>${история}</fieldset>
+    <p class="hint-text" style="margin-top:6px">
+      Заведена: ${escapeHtml(formatMomentRu(d.created_at) || "—")}${d.created_by ? " · " + escapeHtml(d.created_by) : ""}
+    </p>`;
+
+  document.getElementById("bw-plan-save").addEventListener("click", async () => {
+    try {
+      const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan_start: document.getElementById("bw-plan-start").value || null,
+          plan_end: document.getElementById("bw-plan-end").value || null,
+        }),
+      });
+      showToast("Базовый срок сохранён", "success");
+      renderBlockWorkCard(updated);
+      refreshOpenBlockCard();
+    } catch (e) { showToast(e.message, "error"); }
+  });
+  document.getElementById("bw-forecast-save").addEventListener("click", async () => {
+    try {
+      const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          forecast_start: document.getElementById("bw-forecast-start").value || null,
+          forecast_end: document.getElementById("bw-forecast-end").value || null,
+        }),
+      });
+      showToast("Новая версия прогноза сохранена", "success");
+      renderBlockWorkCard(updated);
+      refreshOpenBlockCard();
+    } catch (e) { showToast(e.message, "error"); }
+  });
+  document.getElementById("bw-note-save").addEventListener("click", async () => {
+    try {
+      const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: document.getElementById("bw-note").value }),
+      });
+      showToast("Примечание сохранено", "success");
+      renderBlockWorkCard(updated);
+    } catch (e) { showToast(e.message, "error"); }
+  });
+}
+
+// Дерево панели блока не знает о карточке ЗР — после правки дат его нужно
+// перечитать, иначе строка операции показывает устаревшие план/прогноз.
+function refreshOpenBlockCard() {
+  const blockId = currentSelectedBlockId();
+  if (blockId) loadBlockProgressPanel(blockId);
+}
+
+document.getElementById("block-work-close").addEventListener("click", () => {
+  document.getElementById("block-work-backdrop").classList.remove("open");
+});
+
+// -------- «Сроки»: групповая правка дат по отобранным блокам (одному или
+// выделенной группе) — форма §6.2 задания. --------
+
+let blockWorksDatesBlockIds = [];
+
+document.getElementById("block-works-dates-btn").addEventListener("click", async () => {
+  const blockIds = [...revitPlanState.selectedBlocks];
+  if (!blockIds.length) return;
+  blockWorksDatesBlockIds = blockIds;
+  document.getElementById("block-works-dates-backdrop").classList.add("open");
+  document.getElementById("block-works-dates-title").textContent =
+    blockIds.length > 1 ? `Сроки: ${blockIds.length} блоков` : "Сроки";
+  await loadBlockWorksDatesTable();
+});
+
+async function loadBlockWorksDatesTable() {
+  const box = document.getElementById("block-works-dates-table");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const data = await api(`/objects/${revitPlanState.objectId}/block-works`
+      + `?block_ids=${blockWorksDatesBlockIds.join(",")}`);
+    const items = data.items;
+    document.getElementById("block-works-dates-hint").textContent =
+      `Запланированных работ: ${items.length}`;
+    box.innerHTML = items.length ? `<table>
+      <thead><tr><th>Операция</th><th>План начало</th><th>План окончание</th>
+        <th>Прогноз начало</th><th>Прогноз окончание</th><th>Признак</th><th></th></tr></thead>
+      <tbody>${items.map(it => `
+        <tr data-bw-id="${it.id}">
+          <td>${escapeHtml(it["название"] || it["путь"] || "")}</td>
+          <td><input type="date" class="bw-row-plan-start" value="${it.plan_start || ""}"></td>
+          <td><input type="date" class="bw-row-plan-end" value="${it.plan_end || ""}"></td>
+          <td><input type="date" class="bw-row-forecast-start" value="${it.forecast_start || ""}"></td>
+          <td><input type="date" class="bw-row-forecast-end" value="${it.forecast_end || ""}"></td>
+          <td class="bw-deadline-${it.deadline}">${escapeHtml(it.deadline_label)}</td>
+          <td><button class="btn btn-sm btn-secondary bw-row-save">Сохранить</button></td>
+        </tr>`).join("")}</tbody>
+    </table>` : '<div class="hint-text">У отобранных блоков нет ни одной ЗР.</div>';
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+document.getElementById("block-works-dates-table").addEventListener("click", async (e) => {
+  if (!e.target.classList.contains("bw-row-save")) return;
+  const tr = e.target.closest("tr");
+  const bwId = Number(tr.dataset.bwId);
+  try {
+    await api(`/objects/${revitPlanState.objectId}/block-works/${bwId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        plan_start: tr.querySelector(".bw-row-plan-start").value || null,
+        plan_end: tr.querySelector(".bw-row-plan-end").value || null,
+        forecast_start: tr.querySelector(".bw-row-forecast-start").value || null,
+        forecast_end: tr.querySelector(".bw-row-forecast-end").value || null,
+      }),
+    });
+    showToast("Сроки сохранены", "success");
+    await loadBlockWorksDatesTable();
+    refreshOpenBlockCard();
+  } catch (e2) { showToast(e2.message, "error"); }
+});
+
+document.getElementById("block-works-shift-apply").addEventListener("click", async () => {
+  const days = Number(document.getElementById("block-works-shift-days").value);
+  const field = document.getElementById("block-works-shift-field").value;
+  if (!days) { showToast("Укажите ненулевой сдвиг в днях", "error"); return; }
+  await runBlockWorksBulk("shift", { field, days });
+});
+document.getElementById("block-works-forecast-equals-plan").addEventListener("click", async () => {
+  await runBlockWorksBulk("forecast_equals_plan", {});
+});
+
+async function runBlockWorksBulk(op, extra) {
+  try {
+    const rows = [...document.querySelectorAll("#block-works-dates-table tr[data-bw-id]")];
+    const block_work_ids = rows.map(tr => Number(tr.dataset.bwId));
+    if (!block_work_ids.length) return;
+    const res = await api(`/objects/${revitPlanState.objectId}/block-works/bulk`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ block_work_ids, op, ...extra }),
+    });
+    showToast(`Изменено ЗР: ${res.changed} из ${res.requested}`, "success");
+    await loadBlockWorksDatesTable();
+    refreshOpenBlockCard();
+  } catch (e) { showToast(e.message, "error"); }
+}
+
+document.getElementById("block-works-dates-close").addEventListener("click", () => {
+  document.getElementById("block-works-dates-backdrop").classList.remove("open");
 });
 
 // Слои «Элементы»/«Блоки» — независимые переключатели: можно смотреть по

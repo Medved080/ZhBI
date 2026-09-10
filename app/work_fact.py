@@ -46,7 +46,7 @@
 входят — остаются видны только в дереве «Виды работ» и старой матрице.
 """
 
-from app import work_progress
+from app import activity, work_progress
 from app.work_progress import (
     BLOCK_UNITS, STATUS_PLAN, STATUS_IN_PROGRESS, STATUS_DONE,
 )
@@ -116,13 +116,21 @@ def block_settings(conn, object_id: int, block_id: int) -> dict:
 
 
 def save_block_settings(conn, object_id: int, block_id: int, work_type_ids: list,
-                        user_id: int) -> None:
+                        user_id: int, *, log: bool = True) -> None:
     """Состав работ блока = создаёт/удаляет строки `block_works` (не
     удаляет-и-пересоздаёт весь набор разом, как раньше block_work_types):
     у ЗР теперь есть сроки и факт, и снос-с-нуля стёр бы их у операций,
     которые остались выбранными. Правило снятия операции с зафиксированным
     фактом/сроками — открытый вопрос (В7, Docs/block-works-schedule-task.md
-    §11), пока ведёт себя как раньше (без предупреждения)."""
+    §11), пока ведёт себя как раньше (без предупреждения).
+
+    `log` — писать ли в журнал действий отсюда (2026-09-10, коды
+    `block_work_add`/`block_work_remove`, по одной записи на КАЖДОЕ
+    изменённое множество, а не на операцию: список бывает в десятки строк, и
+    журнал ими не заводят так же, как массовая правка статуса не пишет
+    построчно). `False` — у групповой формы (`save_blocks_settings`): там
+    своя, ОДНА запись на весь групповой вызов (`block_work_types_settings` в
+    app/main.py), а не N одинаковых от каждого блока группы."""
     if not _block_exists(conn, object_id, block_id):
         raise FactError(404, "Блок не найден.")
     valid_ids = {r["id"] for r in _block_op_work_types(conn, object_id)}
@@ -142,6 +150,13 @@ def save_block_settings(conn, object_id: int, block_id: int, work_type_ids: list
         conn.executemany(
             "DELETE FROM block_works WHERE id = ?", [(i,) for i in to_remove])
     conn.commit()
+    if log:
+        if to_add:
+            activity.log("block_work_add", user_id=user_id, entity_type="object",
+                         entity_id=object_id, details={"block_id": block_id, "count": len(to_add)})
+        if to_remove:
+            activity.log("block_work_remove", user_id=user_id, entity_type="object",
+                         entity_id=object_id, details={"block_id": block_id, "count": len(to_remove)})
 
 
 def blocks_settings(conn, object_id: int, block_ids: list) -> dict:
@@ -181,7 +196,7 @@ def save_blocks_settings(conn, object_id: int, block_ids: list, work_type_ids: l
     if not block_ids:
         raise FactError(422, "Не выбран ни один блок.")
     for block_id in block_ids:
-        save_block_settings(conn, object_id, block_id, work_type_ids, user_id)
+        save_block_settings(conn, object_id, block_id, work_type_ids, user_id, log=False)
     return len(block_ids)
 
 
@@ -196,6 +211,32 @@ def _current_percents(conn, block_id: int) -> dict:
     result = {}
     for row in rows:
         result[row["work_type_id"]] = row["percent"]  # позже в сортировке — победил
+    return result
+
+
+def current_percents_by_block_work(conn, object_id: int) -> dict:
+    """block_work_id -> текущий процент, тем же принципом, что
+    `_current_percents` (максимальная `report_date`, при равенстве — больший
+    id отчёта), но одним запросом сразу по ВСЕМ ЗР объекта — через прямую
+    ссылку `work_fact_items.block_work_id` (app/db.py, этап 1 задания
+    2026-09-10). Источник для app/block_works.py: там нужен процент сразу у
+    списка ЗР, а не по одному блоку за раз, как в остальных функциях этого
+    модуля.
+
+    Строка без ссылки (осталась NULL — обработка релиза не успела
+    выполниться) сюда не попадает; на список ЗР это влияет тем, что у такой
+    ЗР процент в ответе будет 0 вместо факта — переживаемо для списка/карточки
+    (не источник истины, а витрина), и снимается первым же успешным
+    прогоном `2026-09-10-fill-work-fact-items-block-work-id`."""
+    rows = conn.execute(
+        "SELECT i.block_work_id, i.percent FROM work_fact_items i "
+        "JOIN work_fact_reports r ON r.id = i.report_id "
+        "WHERE r.object_id = ? AND i.block_work_id IS NOT NULL "
+        "ORDER BY r.report_date ASC, r.id ASC", (object_id,),
+    ).fetchall()
+    result = {}
+    for row in rows:
+        result[row["block_work_id"]] = row["percent"]  # позже в сортировке — победил
     return result
 
 

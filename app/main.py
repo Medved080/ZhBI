@@ -86,6 +86,7 @@ from app import revit_sections
 from app import work_progress as work_progress_mod
 from app import work_types_import
 from app import work_fact
+from app import block_works
 from app import pdf_facade_import
 from app import pdf_import
 from app import pdf_rooms
@@ -6429,6 +6430,9 @@ def block_card_endpoint(object_id: int, block_id: int,
         if card is None:
             raise HTTPException(status_code=404, detail="Блок не найден")
         card["статусы_работ"] = work_fact.block_summary(conn, object_id, block_id)
+        from datetime import date as _date
+        card["сроки"] = block_works.block_dates_summary(
+            conn, object_id, block_id, _date.today().isoformat())
         return card
     finally:
         conn.close()
@@ -6554,13 +6558,15 @@ def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWork
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
+            # Журнал — изнутри save_block_settings (block_work_add/
+            # block_work_remove, по множеству, живой запрос задания
+            # 2026-09-10): у одиночного блока это точнее старого общего
+            # block_work_types_settings — видно, что именно изменилось.
             work_fact.save_block_settings(conn, object_id, block_id, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         conn.close()
-    activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
-                details={"block_id": block_id, "count": len(body.work_type_ids)})
     return {"ok": True}
 
 
@@ -6650,7 +6656,104 @@ def get_block_progress(object_id: int, block_id: int, date_from: Optional[str] =
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
         try:
-            return work_fact.block_progress_tree(conn, object_id, block_id, date_from, date_to)
+            tree = work_fact.block_progress_tree(conn, object_id, block_id, date_from, date_to)
+            # Даты/сроки примешиваются ТОЛЬКО в обычном режиме — в режиме
+            # «Динамика за период» (date_from/date_to заданы) узлы несут
+            # percent_from/percent_to, а не percent, и сроки туда не про
+            # это (Docs/block-works-schedule-task.md, этап 2).
+            if date_from is None and date_to is None:
+                from datetime import date as _date
+                tree["сроки"] = block_works.merge_dates_into_tree(
+                    conn, block_id, tree["tree"], _date.today().isoformat())
+            return tree
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+# -------- Запланированная работа (ЗР), этап 2 задания (app/block_works.py):
+# сроки поверх состава работ, который заводят «Настройки» выше. --------
+
+@app.get("/objects/{object_id}/block-works")
+def list_block_works_endpoint(object_id: int, block_ids: Optional[str] = None,
+                              track_code: Optional[str] = None,
+                              user: sqlite3.Row = Depends(get_current_user)):
+    ids = None
+    if block_ids:
+        try:
+            ids = [int(x) for x in block_ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=422, detail="block_ids: ожидается список id через запятую.")
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        from datetime import date as _date
+        return {"items": block_works.list_block_works(
+            conn, object_id, _date.today().isoformat(), block_ids=ids, track_code=track_code)}
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/block-works/{bw_id}")
+def get_block_work_endpoint(object_id: int, bw_id: int,
+                            user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        from datetime import date as _date
+        try:
+            return block_works.get_block_work(conn, object_id, bw_id, _date.today().isoformat())
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+class BlockWorkPatchIn(BaseModel):
+    # Три состояния поля — «не пришло» (правку не трогать), null (очистить
+    # дату), значение (задать) — различаются через `exclude_unset=True` у
+    # эндпоинта: отсутствующее поле не попадает в `.dict()` вовсе, а `null`
+    # попадает со значением None. Без этого снять уже заданную дату PATCH'ем
+    # было бы нечем — null неотличим от «не трогать».
+    plan_start: Optional[str] = None
+    plan_end: Optional[str] = None
+    note: Optional[str] = None
+    forecast_start: Optional[str] = None
+    forecast_end: Optional[str] = None
+
+
+@app.patch("/objects/{object_id}/block-works/{bw_id}")
+def patch_block_work_endpoint(object_id: int, bw_id: int, body: BlockWorkPatchIn,
+                              user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        поля = body.dict(exclude_unset=True)
+        try:
+            return block_works.update_block_work(conn, object_id, bw_id, user["id"], **поля)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+class BlockWorksBulkIn(BaseModel):
+    block_work_ids: list[int]
+    op: str  # "shift" | "forecast_equals_plan"
+    field: Optional[str] = None   # "plan" | "forecast" — для op="shift"
+    days: Optional[int] = None    # для op="shift"
+
+
+@app.put("/objects/{object_id}/block-works/bulk")
+def bulk_block_works_endpoint(object_id: int, body: BlockWorksBulkIn,
+                              user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            return block_works.bulk_edit(conn, object_id, user["id"], body.block_work_ids,
+                                         body.op, field=body.field, days=body.days)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:

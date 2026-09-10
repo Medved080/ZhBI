@@ -3199,6 +3199,31 @@
      большая минимальная ширина, иначе колонка процентов дёргается по
      ширине от строки к строке. */
   #block-progress-tree .bp-percent.bp-percent-range { min-width: 76px; }
+  /* Строка план/прогноз/отклонение под полосой (2026-09-10, ЗР — этап 2
+     задания «Запланированная работа по блоку») — мельче и приглушённее
+     самой операции, кликабельна целиком (курсор-подсказка «открыть
+     карточку ЗР»). Цвет — по признаку сроков (app/block_works.py,
+     DEADLINE_*), тем же приёмом, что bp-bar-fill.bp-* у статуса. */
+  #block-progress-tree .bp-op-dates {
+    font-size: 11px; color: var(--color-text-muted); margin-top: 1px;
+    cursor: pointer; overflow-wrap: anywhere;
+  }
+  #block-progress-tree .bp-op-dates:hover { text-decoration: underline; }
+  #block-progress-tree .bp-deadline-overdue { color: #C0392B; font-weight: 600; }
+  #block-progress-tree .bp-deadline-not_started_on_time { color: #C0392B; }
+  #block-progress-tree .bp-deadline-behind { color: #E8A33D; font-weight: 600; }
+  #block-progress-tree .bp-deadline-on_track { color: #3FA76A; }
+  #block-progress-tree .bp-deadline-no_dates { color: var(--color-text-muted); }
+  /* Агрегат блока (шапка карточки) и таблица «Сроки» (группа) — тот же
+     цвет по признаку, без завязки на #block-progress-tree. */
+  .bw-deadline-overdue { color: #C0392B; font-weight: 600; }
+  .bw-deadline-not_started_on_time { color: #C0392B; }
+  .bw-deadline-behind { color: #E8A33D; font-weight: 600; }
+  .bw-deadline-on_track { color: #3FA76A; }
+  .bw-deadline-no_dates { color: var(--color-text-muted); }
+  #block-works-dates-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #block-works-dates-table th, #block-works-dates-table td { padding: 3px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
+  #block-works-dates-table input[type=date] { width: 128px; font-size: 12px; }
   /* Подсказка-история факта по наведению на полосу (живой запрос
      пользователя) — тот же визуальный приём, что у #chart-tooltip
      (плавающая карточка у курсора), свой экземпляр: разные источники
@@ -5100,7 +5125,9 @@
           <div class="actions" style="margin:8px 0">
             <button class="btn btn-sm btn-secondary" id="block-progress-settings-btn">Настройки</button>
             <button class="btn btn-sm btn-primary" id="block-progress-fact-btn">Факт</button>
+            <button class="btn btn-sm btn-secondary" id="block-works-dates-btn">Сроки</button>
           </div>
+          <div id="block-progress-dates-summary" class="hint-text" style="margin:0 0 6px"></div>
           <!-- Фильтр дашборда блока (раздел/статус) переехал на вкладку
                «Фильтры» целиком (живой запрос пользователя, 2026-09-10) —
                «Виды работ»/«Статус выполнения» ниже; здесь только само
@@ -8196,6 +8223,47 @@
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-primary" id="block-fact-save">Сохранить</button>
       <button class="btn btn-secondary" id="block-fact-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Карточка ЗР (запланированной работы) — app/block_works.py, этап 2
+     задания «Запланированная работа по блоку». Клик по строке операции в
+     панели блока открывает эту модалку: реквизиты, обе пары дат с правкой,
+     версии актуализации, история факта. -->
+<div class="modal-backdrop" id="block-work-backdrop">
+  <div class="modal wide">
+    <h2 id="block-work-title">Запланированная работа</h2>
+    <div id="block-work-body"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-secondary" id="block-work-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Групповая правка сроков ЗР («Сроки») — по отобранным блокам (одному
+     или выделенной группе, Ctrl/Cmd-клик) и текущему отбору «Виды работ».
+     Таблица со сдвигом по ячейке (PATCH на строку) плюс две групповые
+     операции — сдвинуть все на N дней, прогноз = план для не начатых. -->
+<div class="modal-backdrop" id="block-works-dates-backdrop">
+  <div class="modal wide">
+    <h2 id="block-works-dates-title">Сроки</h2>
+    <p class="hint-text" id="block-works-dates-hint"></p>
+    <div class="actions" style="margin-bottom:8px; gap:12px; flex-wrap:wrap">
+      <span>Сдвинуть на
+        <input type="number" id="block-works-shift-days" style="width:60px" value="1">
+        дн. для
+        <select id="block-works-shift-field">
+          <option value="plan">плана</option>
+          <option value="forecast">прогноза</option>
+        </select>
+      </span>
+      <button class="btn btn-sm btn-secondary" id="block-works-shift-apply">Сдвинуть</button>
+      <button class="btn btn-sm btn-secondary" id="block-works-forecast-equals-plan">Прогноз = план (не начатые)</button>
+    </div>
+    <div id="block-works-dates-table" class="scroll-always" style="max-height:50vh"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-secondary" id="block-works-dates-close">Закрыть</button>
     </div>
   </div>
 </div>
