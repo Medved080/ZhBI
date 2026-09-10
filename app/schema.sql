@@ -1424,3 +1424,21 @@ CREATE TABLE IF NOT EXISTS work_fact_items (
     percent INTEGER NOT NULL CHECK (percent BETWEEN 0 AND 100),
     PRIMARY KEY (report_id, work_type_id)
 );
+
+-- Построчная история правок отчёта факта (этап 4, 2026-09-10, решение
+-- пользователя В6) — «редактируемый документ не должен терять то, что в
+-- нём было»: при правке УЖЕ СОХРАНЁННОГО отчёта старое значение ЗАДЕТОЙ
+-- строки (процент реально изменился) пишется сюда, ПЕРЕД тем как
+-- work_fact_items перезапишется новым слепком (app/work_fact.py::save_report).
+-- Строки, пересохранённые с тем же значением, сюда не попадают — история
+-- про ФАКТИЧЕСКИЕ переходы значения, а не про каждое нажатие «Сохранить».
+CREATE TABLE IF NOT EXISTS work_fact_item_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER NOT NULL REFERENCES work_fact_reports (id) ON DELETE CASCADE,
+    block_work_id INTEGER REFERENCES block_works (id) ON DELETE SET NULL,
+    percent_old INTEGER NOT NULL,
+    percent_new INTEGER NOT NULL,
+    changed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    changed_by INTEGER REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_work_fact_item_history_bw ON work_fact_item_history (block_work_id, changed_at);

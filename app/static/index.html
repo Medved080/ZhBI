@@ -8272,6 +8272,10 @@
     </div>
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-primary" id="block-fact-save">Сохранить</button>
+      <!-- Удаление ДОКУМЕНТА целиком (этап 4, В6) — только у уже
+           сохранённого отчёта; у ещё не сохранённого черновика («Новый
+           отчёт») удалять нечего, кнопка скрыта (см. startNewBlockFactReport). -->
+      <button class="btn btn-danger" id="block-fact-delete" hidden>Удалить отчёт</button>
       <button class="btn btn-secondary" id="block-fact-close">Закрыть</button>
     </div>
   </div>

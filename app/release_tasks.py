@@ -690,6 +690,28 @@ def _fill_work_fact_items_block_work_id(conn) -> str:
     return f"проставлено ссылок на ЗР: {cur.rowcount}"
 
 
+def _backfill_work_fact_items_audit(conn) -> str:
+    """work_fact_items.updated_at/updated_by (этап 4 задания
+    «Запланированная работа по блоку», построчный аудит факта, 2026-09-10)
+    — у строк, сохранённых ДО этой версии, взять с отчёта-владельца
+    (work_fact_reports.updated_at/updated_by): точнее источника для старых
+    строк всё равно нет, а это то же самое событие с точки зрения прежней
+    модели (правка документа целиком). Идемпотентно: WHERE updated_at IS NULL.
+    """
+    cur = conn.execute(
+        """
+        UPDATE work_fact_items SET
+            updated_at = (SELECT r.updated_at FROM work_fact_reports r WHERE r.id = work_fact_items.report_id),
+            updated_by = (SELECT r.updated_by FROM work_fact_reports r WHERE r.id = work_fact_items.report_id)
+        WHERE updated_at IS NULL
+        """
+    )
+    conn.commit()
+    if not cur.rowcount:
+        return "все строки факта уже с меткой правки"
+    return f"проставлено меток правки: {cur.rowcount}"
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -898,6 +920,18 @@ RELEASE_TASKS = [
                "заполнит обработка — ПОСЛЕ восстановления ЗР по факту выше",
         "kind": KIND_DATA,
         "run": _fill_work_fact_items_block_work_id,
+    },
+    {
+        "name": "2026-09-10-backfill-work-fact-items-audit",
+        "version": "0.83",
+        "date": "2026-09-10",
+        "title": "Проставить построчный аудит факта на старых строках",
+        "why": "work_fact_items.updated_at/updated_by (этап 4, подсказка "
+               "истории теперь показывает, кто менял ИМЕННО эту операцию) "
+               "у строк, сохранённых до этой версии, пусты — заполняются "
+               "с отчёта-владельца, точнее источника для них нет",
+        "kind": KIND_DATA,
+        "run": _backfill_work_fact_items_audit,
     },
 ]
 

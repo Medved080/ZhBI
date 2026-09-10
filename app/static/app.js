@@ -30498,8 +30498,16 @@ function highlightActiveBlockFactReport() {
     row.classList.toggle("active", Number(row.dataset.report) === blockFactCurrentReportId));
 }
 
+// Кнопка «Удалить отчёт» (этап 4, В6) — только у УЖЕ сохранённого
+// документа: у черновика нового отчёта (blockFactCurrentReportId === null)
+// удалять нечего, форма про него ещё ничего не отправляла на сервер.
+function updateBlockFactDeleteVisibility() {
+  document.getElementById("block-fact-delete").hidden = blockFactCurrentReportId === null;
+}
+
 async function startNewBlockFactReport() {
   blockFactCurrentReportId = null;
+  updateBlockFactDeleteVisibility();
   document.getElementById("block-fact-date").value = new Date().toISOString().slice(0, 10);
   // Предзаполняем ТЕКУЩИМИ процентами (панель блока): за один день обычно
   // меняется немногое, и не нужно перетаскивать все ползунки заново.
@@ -30517,6 +30525,7 @@ async function startNewBlockFactReport() {
 
 async function openExistingBlockFactReport(reportId) {
   blockFactCurrentReportId = reportId;
+  updateBlockFactDeleteVisibility();
   const report = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports/${reportId}`);
   document.getElementById("block-fact-date").value = report.report_date;
   renderBlockFactItems(report.items);
@@ -30550,6 +30559,20 @@ document.getElementById("block-fact-new").addEventListener("click", () => startN
 document.getElementById("block-fact-close").addEventListener("click", () => {
   document.getElementById("block-fact-backdrop").classList.remove("open");
 });
+document.getElementById("block-fact-delete").addEventListener("click", async () => {
+  if (blockFactCurrentReportId === null) return;
+  if (!confirm("Удалить отчёт целиком? Действие необратимо.")) return;
+  try {
+    await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports/${blockFactCurrentReportId}`,
+      { method: "DELETE" });
+    showToast("Отчёт удалён", "success");
+    bpHistoryCache.clear();
+    const reports = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports`);
+    renderBlockFactReportsList(reports);
+    await startNewBlockFactReport();
+    if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
+  } catch (e) { showToast(e.message, "error"); }
+});
 document.getElementById("block-fact-save").addEventListener("click", async () => {
   const items = {};
   document.querySelectorAll("#block-fact-items .bf-item").forEach(item => {
@@ -30569,6 +30592,7 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
         body: JSON.stringify({ report_date, items }),
       });
       blockFactCurrentReportId = res.id;
+      updateBlockFactDeleteVisibility();
     }
     showToast("Отчёт сохранён", "success");
     bpHistoryCache.clear();   // сохранённые значения устарели — история по наведению должна их подхватить
@@ -30612,33 +30636,49 @@ function renderBlockWorkCard(d) {
     `<div class="card-row"><span class="card-key">${escapeHtml(h["дата"])}</span>` +
     `<span class="card-val">${h["процент"]}%${h["пользователь"] ? " · " + escapeHtml(h["пользователь"]) : ""}</span></div>`
   ).join("") || '<div class="hint-text">Фактов ещё не было.</div>';
+  // Построчная история правок (этап 4, В6) — каждая ПРАВКА уже сохранённой
+  // строки («было X% → стало Y%»), отдельно от «Истории факта» выше (та —
+  // снимок по датам отчётов, может быть одно значение на много дней).
+  const историяПравок = (d["история_правок"] || []).map(h =>
+    `<div class="card-row"><span class="card-key">${escapeHtml(formatMomentRu(h["момент"]))}</span>` +
+    `<span class="card-val">${h["было"]}% → ${h["стало"]}%${h["пользователь"] ? " · " + escapeHtml(h["пользователь"]) : ""}</span></div>`
+  ).join("");
+  // Мягко снятая с блока ЗР (В7) — реквизиты и сроки больше не правятся
+  // (операция вне активного плана), но факт/версии/история остаются
+  // видны, ради которых снятие и было мягким, а не удалением строки.
+  const retired = !!d.retired_at;
+  const disabled = retired ? "disabled" : "";
 
   body.innerHTML = `
     <p class="hint-text">${escapeHtml(d["путь"] || "")}</p>
+    ${retired ? `<p class="hint-text" style="color:#C0392B">Операция снята с плана блока `
+      + `${escapeHtml(formatMomentRu(d.retired_at))} — реквизиты доступны только для просмотра.</p>` : ""}
     <div class="card-row"><span class="card-key">Признак сроков</span>
       <span class="card-val bw-deadline-${d.deadline}">${escapeHtml(d.deadline_label)}</span></div>
     <div class="card-row"><span class="card-key">Процент / статус</span>
       <span class="card-val">${d.percent}%</span></div>
-    <fieldset style="margin-top:10px"><legend>Базовый (директивный) срок</legend>
-      <label>Начало <input type="date" id="bw-plan-start" value="${d.plan_start || ""}"></label>
-      <label>Окончание <input type="date" id="bw-plan-end" value="${d.plan_end || ""}"></label>
-      <button class="btn btn-sm btn-primary" id="bw-plan-save">Сохранить</button>
+    <fieldset style="margin-top:10px" ${disabled}><legend>Базовый (директивный) срок</legend>
+      <label>Начало <input type="date" id="bw-plan-start" value="${d.plan_start || ""}" ${disabled}></label>
+      <label>Окончание <input type="date" id="bw-plan-end" value="${d.plan_end || ""}" ${disabled}></label>
+      <button class="btn btn-sm btn-primary" id="bw-plan-save" ${disabled}>Сохранить</button>
     </fieldset>
-    <fieldset style="margin-top:10px"><legend>Актуализированный срок (новая версия при сохранении)</legend>
-      <label>Начало <input type="date" id="bw-forecast-start" value="${d.forecast_start || ""}"></label>
-      <label>Окончание <input type="date" id="bw-forecast-end" value="${d.forecast_end || ""}"></label>
-      <button class="btn btn-sm btn-primary" id="bw-forecast-save">Сохранить как новую версию</button>
+    <fieldset style="margin-top:10px" ${disabled}><legend>Актуализированный срок (новая версия при сохранении)</legend>
+      <label>Начало <input type="date" id="bw-forecast-start" value="${d.forecast_start || ""}" ${disabled}></label>
+      <label>Окончание <input type="date" id="bw-forecast-end" value="${d.forecast_end || ""}" ${disabled}></label>
+      <button class="btn btn-sm btn-primary" id="bw-forecast-save" ${disabled}>Сохранить как новую версию</button>
       <div style="margin-top:6px">${версии}</div>
     </fieldset>
-    <fieldset style="margin-top:10px"><legend>Примечание</legend>
-      <textarea id="bw-note" rows="2" style="width:100%">${escapeHtml(d.note || "")}</textarea>
-      <button class="btn btn-sm btn-secondary" id="bw-note-save">Сохранить</button>
+    <fieldset style="margin-top:10px" ${disabled}><legend>Примечание</legend>
+      <textarea id="bw-note" rows="2" style="width:100%" ${disabled}>${escapeHtml(d.note || "")}</textarea>
+      <button class="btn btn-sm btn-secondary" id="bw-note-save" ${disabled}>Сохранить</button>
     </fieldset>
     <fieldset style="margin-top:10px"><legend>История факта</legend>${история}</fieldset>
+    ${историяПравок ? `<fieldset style="margin-top:10px"><legend>История правок факта</legend>${историяПравок}</fieldset>` : ""}
     <p class="hint-text" style="margin-top:6px">
       Заведена: ${escapeHtml(formatMomentRu(d.created_at) || "—")}${d.created_by ? " · " + escapeHtml(d.created_by) : ""}
     </p>`;
 
+  if (retired) return;   // ниже — только обработчики форм правки, которых для снятой ЗР нет
   document.getElementById("bw-plan-save").addEventListener("click", async () => {
     try {
       const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`, {

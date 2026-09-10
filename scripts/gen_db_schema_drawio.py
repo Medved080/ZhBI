@@ -101,7 +101,8 @@ COLUMNS = [
     # Учёт по блокам: блок (этаж × секция), виды работ, статусы, отчёты факта
     # и запланированная работа (ЗР) со сроками.
     ["blocks", "block_boxes", "work_types", "block_works", "block_work_forecasts",
-     "work_progress", "work_fact_reports", "work_fact_items", "planning_tracks"],
+     "work_progress", "work_fact_reports", "work_fact_items", "work_fact_item_history",
+     "planning_tracks"],
     # Пользователи, доступ, журнал действий, обучение. В середине схемы: на
     # users ссылаются и учёт по блокам слева, и график с историей справа.
     ["users", "sessions", "user_access", "object_roles", "role_features",

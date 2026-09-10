@@ -28,7 +28,7 @@ from app.db import get_connection
 # проценту — один и тот же расчёт что там, что здесь; вторая реализация
 # разошлась бы при первой же правке порогов. Тот же приём, что у импорта
 # `_shift_planned_before_first_event` в app/element_bulk_edit.py.
-from app.work_fact import FactError, _status_from_percent, op_fact_history
+from app.work_fact import FactError, _status_from_percent, op_fact_history, item_edit_history
 # Тоже приватное имя по месту объявления (`app/schedule_versions.py`) — то
 # же вычисление «разница в днях, устойчивая к пустой/битой дате», что у
 # отклонения графика СМР ЖБИ; своя копия разошлась бы при первой же правке.
@@ -230,12 +230,18 @@ def _row_dict(row: sqlite3.Row) -> dict:
         "forecast_start": row["forecast_start"], "forecast_end": row["forecast_end"],
         "forecast_at": row["forecast_at"], "note": row["note"],
         "created_at": row["created_at"], "updated_at": row["updated_at"],
+        "retired_at": row["retired_at"],
     }
 
 
 def _list_rows(conn: sqlite3.Connection, object_id: int, block_ids: Optional[list],
-               track_code: Optional[str]) -> list:
-    clauses = ["bw.object_id = ?"]
+               track_code: Optional[str], *, include_retired: bool = False) -> list:
+    # retired_at IS NULL по умолчанию (В7, этап 4) — снятая «Настройками»
+    # операция не должна попадать в активные списки/отчёты/доску, хотя
+    # строка и сохранена ради истории. include_retired=True — только для
+    # карточки ОДНОЙ ЗР по id (get_block_work): туда обязаны попадать и
+    # снятые, историю по ним смотрят так же, как по активным.
+    clauses = ["bw.object_id = ?"] if include_retired else ["bw.object_id = ?", "bw.retired_at IS NULL"]
     params: list = [object_id]
     if block_ids:
         clauses.append(f"bw.block_id IN ({','.join('?' * len(block_ids))})")
@@ -284,7 +290,7 @@ def list_block_works(conn: sqlite3.Connection, object_id: int, today: str, *,
 
 
 def get_block_work(conn: sqlite3.Connection, object_id: int, bw_id: int, today: str) -> dict:
-    rows = _list_rows(conn, object_id, None, None)
+    rows = _list_rows(conn, object_id, None, None, include_retired=True)
     row = next((r for r in rows if r["id"] == bw_id), None)
     if row is None:
         raise FactError(404, "Запланированная работа не найдена.")
@@ -311,6 +317,11 @@ def get_block_work(conn: sqlite3.Connection, object_id: int, bw_id: int, today: 
             "ORDER BY created_at DESC, id DESC", (bw_id,))
     ]
     d["история_факта"] = op_fact_history(conn, object_id, row["block_id"], row["work_type_id"])
+    # Построчная история правок (этап 4, В6) — отдельно от «истории факта»
+    # выше: та один снимок на отчёт (дата → процент), эта — каждая правка
+    # внутри уже сохранённого документа (было X% → стало Y%, в т.ч. несколько
+    # за один день).
+    d["история_правок"] = item_edit_history(conn, bw_id)
     return d
 
 

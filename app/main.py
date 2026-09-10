@@ -6889,6 +6889,29 @@ def update_block_fact_report(object_id: int, block_id: int, report_id: int, body
     return {"ok": True}
 
 
+@app.delete("/objects/{object_id}/blocks/{block_id}/fact-reports/{report_id}")
+def delete_block_fact_report(object_id: int, block_id: int, report_id: int,
+                             user: sqlite3.Row = Depends(get_current_user)):
+    """Удаление документа «Факт» целиком (этап 4, В6, решение пользователя
+    2026-09-10) — порог тот же, что у сохранения («Изменение» раздела), не
+    отдельное право: как и у графика СМР ЖБИ, удаление документа логируется
+    отдельно от рутинного сохранения (то оставили без общего журнала ещё
+    2026-09-02, см. app/work_fact.py — здесь решение другое: безвозвратная
+    потеря отчёта заслуживает следа в журнале)."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            work_fact.delete_report(conn, object_id, block_id, report_id)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+    activity.log("block_fact_report_delete", user=user, entity_type="object", entity_id=object_id,
+                details={"block_id": block_id, "report_id": report_id})
+    return {"ok": True}
+
+
 @app.post("/import-history-xlsx")
 def import_history_xlsx(
     file: UploadFile = File(...),

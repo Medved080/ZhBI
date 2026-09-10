@@ -160,6 +160,7 @@ ACTIONS = {
     "block_work_plan_set": ("Базовый срок ЗР изменён", _D),
     "block_work_forecast_set": ("Актуализированный срок ЗР сохранён (новая версия)", _D),
     "block_work_bulk_edit": ("Групповая правка сроков ЗР", _D),
+    "block_fact_report_delete": ("Отчёт о выполнении (Факт) удалён", _D),
     "import_dxf_element": ("Обновлено чертежом", _D),
     "schedule_import": ("Даты СМР из графика", _D),
     "schedule_calc": ("Расчёт графика СМР", _D),
