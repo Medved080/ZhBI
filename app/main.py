@@ -6399,13 +6399,18 @@ def create_block_endpoint(object_id: int, body: BlockCreateIn,
 
 
 @app.delete("/objects/{object_id}/blocks/{block_id}")
-def delete_block_endpoint(object_id: int, block_id: int,
+def delete_block_endpoint(object_id: int, block_id: int, force: bool = False,
                           user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "blocks", "write")
         try:
-            blocks_mod.delete_block(conn, object_id, block_id)
+            blocks_mod.delete_block(conn, object_id, block_id, force=force)
+        # См. коммент у delete_block_section — то же 409/force: удаление
+        # занятой клетки матрицы (живой запрос пользователя, 2026-09-10)
+        # предупреждает о ЗР/документах факта, а не тихо их уносит.
+        except blocks_mod.UsageWarning as e:
+            raise HTTPException(status_code=409, detail=e.to_dict())
         except blocks_mod.BlockError as e:
             raise HTTPException(status_code=422, detail=str(e))
     finally:
@@ -6770,6 +6775,24 @@ def list_block_works_endpoint(object_id: int, block_ids: Optional[str] = None,
         conn.close()
 
 
+# Литеральный путь ДО "/block-works/{bw_id}" ниже — FastAPI матчит маршруты
+# по порядку регистрации, а не по специфичности, иначе "active-counts"
+# ловилось бы как значение {bw_id} (живой баг, пойман при живой проверке,
+# 2026-09-10).
+@app.get("/objects/{object_id}/block-works/active-counts")
+def block_works_active_counts_endpoint(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """block_id -> число активных ЗР, одним запросом — колонка счётчика в
+    списке блоков «Запланированные работы» (живой запрос пользователя:
+    «счётчики загружай агрегированно, без отдельного запроса на каждый
+    блок»)."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        return {"counts": block_works.active_counts(conn, object_id)}
+    finally:
+        conn.close()
+
+
 @app.get("/objects/{object_id}/block-works/{bw_id}")
 def get_block_work_endpoint(object_id: int, bw_id: int,
                             user: sqlite3.Row = Depends(get_current_user)):
@@ -6898,6 +6921,44 @@ def get_planning_tracks(object_id: int, user: sqlite3.Row = Depends(get_current_
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
         return {"tracks": work_fact.all_planning_tracks(conn, object_id)}
+    finally:
+        conn.close()
+
+
+# -------- «Журнал факта» (2026-09-10, живой запрос пользователя) — прямой
+# доступ к документам work_fact_reports ВСЕГО объекта, без предварительного
+# поиска блока/работы. Права — тот же раздел "work_progress", что у
+# остального контура факта: новый вход не расширяет доступ. --------
+
+@app.get("/objects/{object_id}/block-work-types")
+def block_work_types_endpoint(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Справочник BLOCK_UNITS объекта («эт/сек», «кв.эт/сек»), без привязки
+    к блоку — источник дерева отбора «Виды работ» в «Журнале факта»."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        return {"options": work_fact.journal_work_type_options(conn, object_id)}
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/fact-journal")
+def fact_journal_endpoint(
+    object_id: int,
+    section_id: Optional[list[int]] = Query(None),
+    level_id: Optional[list[int]] = Query(None),
+    work_type_id: Optional[list[int]] = Query(None),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: sqlite3.Row = Depends(get_current_user),
+):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        items = work_fact.list_journal(
+            conn, object_id, section_ids=section_id, level_ids=level_id,
+            work_type_ids=work_type_id, date_from=date_from, date_to=date_to)
+        return {"items": items}
     finally:
         conn.close()
 
