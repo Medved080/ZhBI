@@ -86,6 +86,8 @@ from app import revit_sections
 from app import work_progress as work_progress_mod
 from app import work_types_import
 from app import work_fact
+from app import block_works
+from app import report_block_schedule
 from app import pdf_facade_import
 from app import pdf_import
 from app import pdf_rooms
@@ -1865,17 +1867,21 @@ def report_block_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_c
     пользователя) — бывшая вкладка «Статусы» «Учёта по блокам», перенесённая
     в «Отчёты»: у операций «эт/сек» в ячейке процент на выбранную дату,
     правится тут же (PUT /objects/{id}/blocks/{id}/work-progress-cell), а не
-    устаревшим клик-циклом. Права — те же, что у «Учёта по блокам»
-    (`work_progress`), отдельного раздела прав не заводится. Выгрузки
-    XLSX/PDF не заведены — это редактируемый экран, а не статичная сводка."""
+    устаревшим клик-циклом. Свой раздел прав `report_block_status` (этап 5
+    задания «Запланированная работа по блоку», 2026-09-10) — до этого был
+    закрыт разделом «Учёт по блокам» (`work_progress`) без своей строки в
+    матрице. Выгрузки XLSX/PDF не заведены — это редактируемый экран, а не
+    статичная сводка."""
     conn = get_connection()
     try:
-        body = _guard_report(conn, user, body, "work_progress", needs_source_file=False)
+        body = _guard_report(conn, user, body, "report_block_status", needs_source_file=False)
         object_id = _report_object_id(conn, body)
         if object_id is None:
             raise HTTPException(status_code=400,
                                 detail="Отчёт строится по объекту — выберите объект в тулбаре")
-        return work_fact.status_report(conn, object_id, body.report_date)
+        from datetime import date as _date
+        return block_works.status_report_with_deadlines(
+            conn, object_id, body.report_date, _date.today().isoformat())
     finally:
         conn.close()
 
@@ -2006,6 +2012,66 @@ def report_delivery_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depe
         conn.close()
     return _report_file_response(build_delivery_schedule_pdf(report),
                                  f"{_delivery_file_base()}.pdf", "application/pdf")
+
+
+def _block_schedule(conn, user, body: "ReportRequestIn") -> dict:
+    """Общая точка для экрана, XLSX и PDF «Графика работ по блокам» (этап 5
+    задания «Запланированная работа по блоку») — тот же приём, что у
+    `_delivery_schedule`: проверка доступа и сборка данных ОДИН раз, все
+    три маршрута зовут её, а не копируют."""
+    body = _guard_report(conn, user, body, "report_block_schedule", needs_source_file=False)
+    object_id = _report_object_id(conn, body)
+    if object_id is None:
+        raise HTTPException(status_code=400,
+                            detail="Отчёт строится по объекту — выберите объект в тулбаре")
+    from datetime import date as _date
+    return report_block_schedule.build_block_schedule_report(
+        conn, object_id, _date.today().isoformat(),
+        group_by=body.group_by, view=body.view)
+
+
+@app.post("/reports/block-schedule")
+def report_block_schedule_endpoint(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «График работ по блокам» — ЗР (запланированные работы) с
+    планом, прогнозом, процентом, отклонением и признаком сроков,
+    группировка строк выбирается на экране."""
+    conn = get_connection()
+    try:
+        return _block_schedule(conn, user, body)
+    finally:
+        conn.close()
+
+
+def _block_schedule_object_name(conn, object_id: int) -> str:
+    row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
+    return row["name"] if row else "—"
+
+
+@app.post("/reports/block-schedule.xlsx")
+def report_block_schedule_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _block_schedule(conn, user, body)
+        имя_объекта = _block_schedule_object_name(conn, report["object_id"])
+    finally:
+        conn.close()
+    return _report_file_response(
+        report_block_schedule.build_block_schedule_xlsx(report, имя_объекта),
+        "График работ по блокам.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.post("/reports/block-schedule.pdf")
+def report_block_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _block_schedule(conn, user, body)
+        имя_объекта = _block_schedule_object_name(conn, report["object_id"])
+    finally:
+        conn.close()
+    return _report_file_response(
+        report_block_schedule.build_block_schedule_pdf(report, имя_объекта),
+        "График работ по блокам.pdf", "application/pdf")
 
 
 # ==================== «Моя работа»: что человек изменил за период ====================
@@ -6429,6 +6495,9 @@ def block_card_endpoint(object_id: int, block_id: int,
         if card is None:
             raise HTTPException(status_code=404, detail="Блок не найден")
         card["статусы_работ"] = work_fact.block_summary(conn, object_id, block_id)
+        from datetime import date as _date
+        card["сроки"] = block_works.block_dates_summary(
+            conn, object_id, block_id, _date.today().isoformat())
         return card
     finally:
         conn.close()
@@ -6554,13 +6623,15 @@ def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWork
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
-            work_fact.save_block_settings(conn, object_id, block_id, body.work_type_ids)
+            # Журнал — изнутри save_block_settings (block_work_add/
+            # block_work_remove, по множеству, живой запрос задания
+            # 2026-09-10): у одиночного блока это точнее старого общего
+            # block_work_types_settings — видно, что именно изменилось.
+            work_fact.save_block_settings(conn, object_id, block_id, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         conn.close()
-    activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
-                details={"block_id": block_id, "count": len(body.work_type_ids)})
     return {"ok": True}
 
 
@@ -6599,7 +6670,7 @@ def set_blocks_work_types_settings(object_id: int, body: BlocksWorkTypesSettings
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
-            work_fact.save_blocks_settings(conn, object_id, body.block_ids, body.work_type_ids)
+            work_fact.save_blocks_settings(conn, object_id, body.block_ids, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
@@ -6650,7 +6721,104 @@ def get_block_progress(object_id: int, block_id: int, date_from: Optional[str] =
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
         try:
-            return work_fact.block_progress_tree(conn, object_id, block_id, date_from, date_to)
+            tree = work_fact.block_progress_tree(conn, object_id, block_id, date_from, date_to)
+            # Даты/сроки примешиваются ТОЛЬКО в обычном режиме — в режиме
+            # «Динамика за период» (date_from/date_to заданы) узлы несут
+            # percent_from/percent_to, а не percent, и сроки туда не про
+            # это (Docs/block-works-schedule-task.md, этап 2).
+            if date_from is None and date_to is None:
+                from datetime import date as _date
+                tree["сроки"] = block_works.merge_dates_into_tree(
+                    conn, block_id, tree["tree"], _date.today().isoformat())
+            return tree
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+# -------- Запланированная работа (ЗР), этап 2 задания (app/block_works.py):
+# сроки поверх состава работ, который заводят «Настройки» выше. --------
+
+@app.get("/objects/{object_id}/block-works")
+def list_block_works_endpoint(object_id: int, block_ids: Optional[str] = None,
+                              track_code: Optional[str] = None,
+                              user: sqlite3.Row = Depends(get_current_user)):
+    ids = None
+    if block_ids:
+        try:
+            ids = [int(x) for x in block_ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=422, detail="block_ids: ожидается список id через запятую.")
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        from datetime import date as _date
+        return {"items": block_works.list_block_works(
+            conn, object_id, _date.today().isoformat(), block_ids=ids, track_code=track_code)}
+    finally:
+        conn.close()
+
+
+@app.get("/objects/{object_id}/block-works/{bw_id}")
+def get_block_work_endpoint(object_id: int, bw_id: int,
+                            user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        from datetime import date as _date
+        try:
+            return block_works.get_block_work(conn, object_id, bw_id, _date.today().isoformat())
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+class BlockWorkPatchIn(BaseModel):
+    # Три состояния поля — «не пришло» (правку не трогать), null (очистить
+    # дату), значение (задать) — различаются через `exclude_unset=True` у
+    # эндпоинта: отсутствующее поле не попадает в `.dict()` вовсе, а `null`
+    # попадает со значением None. Без этого снять уже заданную дату PATCH'ем
+    # было бы нечем — null неотличим от «не трогать».
+    plan_start: Optional[str] = None
+    plan_end: Optional[str] = None
+    note: Optional[str] = None
+    forecast_start: Optional[str] = None
+    forecast_end: Optional[str] = None
+
+
+@app.patch("/objects/{object_id}/block-works/{bw_id}")
+def patch_block_work_endpoint(object_id: int, bw_id: int, body: BlockWorkPatchIn,
+                              user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        поля = body.dict(exclude_unset=True)
+        try:
+            return block_works.update_block_work(conn, object_id, bw_id, user["id"], **поля)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+class BlockWorksBulkIn(BaseModel):
+    block_work_ids: list[int]
+    op: str  # "shift" | "forecast_equals_plan"
+    field: Optional[str] = None   # "plan" | "forecast" — для op="shift"
+    days: Optional[int] = None    # для op="shift"
+
+
+@app.put("/objects/{object_id}/block-works/bulk")
+def bulk_block_works_endpoint(object_id: int, body: BlockWorksBulkIn,
+                              user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            return block_works.bulk_edit(conn, object_id, user["id"], body.block_work_ids,
+                                         body.op, field=body.field, days=body.days)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
@@ -6702,7 +6870,12 @@ def get_blocks_track_progress(object_id: int, track_code: str,
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
-        return work_fact.board_block_values(conn, object_id, track_code)
+        # Обе сводки доски разом — по выполнению (как раньше) и по срокам
+        # (этап 3 задания «Запланированная работа по блоку») — фронт
+        # переключает режим раскраски без нового запроса к серверу.
+        from datetime import date as _date
+        return block_works.board_block_deviation_by_track(
+            conn, object_id, track_code, _date.today().isoformat())
     finally:
         conn.close()
 
@@ -6778,6 +6951,29 @@ def update_block_fact_report(object_id: int, block_id: int, report_id: int, body
             raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         conn.close()
+    return {"ok": True}
+
+
+@app.delete("/objects/{object_id}/blocks/{block_id}/fact-reports/{report_id}")
+def delete_block_fact_report(object_id: int, block_id: int, report_id: int,
+                             user: sqlite3.Row = Depends(get_current_user)):
+    """Удаление документа «Факт» целиком (этап 4, В6, решение пользователя
+    2026-09-10) — порог тот же, что у сохранения («Изменение» раздела), не
+    отдельное право: как и у графика СМР ЖБИ, удаление документа логируется
+    отдельно от рутинного сохранения (то оставили без общего журнала ещё
+    2026-09-02, см. app/work_fact.py — здесь решение другое: безвозвратная
+    потеря отчёта заслуживает следа в журнале)."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            work_fact.delete_report(conn, object_id, block_id, report_id)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+    activity.log("block_fact_report_delete", user=user, entity_type="object", entity_id=object_id,
+                details={"block_id": block_id, "report_id": report_id})
     return {"ok": True}
 
 

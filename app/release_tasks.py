@@ -625,6 +625,93 @@ def _migrate_smu_individuals(conn) -> str:
     return f"объектов разнесено по справочникам СМУ/физлиц: {затронуто}"
 
 
+def _restore_block_works_from_fact(conn) -> str:
+    """ЗР (`block_works`) для операций, у которых факт зафиксирован, а явной
+    пары никогда не было — блок никогда не настраивали «Настройками» ДО
+    перехода плана блока на явный список (Docs/block-works-schedule-task.md
+    §2.2, 2026-09-10: раньше отсутствие настройки читалось как «выбрано
+    всё», и по такому неявному отбору можно было сохранить отчёт о
+    выполнении). Явность плана не должна стирать эту историю — отсюда
+    восстановление с пометкой, откуда строка взялась.
+
+    Идемпотентно: `INSERT ... WHERE NOT EXISTS` добавляет только
+    недостающие пары; UNIQUE(block_id, work_type_id) — вторая, структурная
+    защита от дубля на случай гонки с другим источником записи.
+
+    Порядок в реестре: строго ПЕРЕД `_fill_work_fact_items_block_work_id`
+    ниже — та рассчитывает, что у каждой пары (блок, операция) факта уже
+    есть ЗР, на которую можно сослаться.
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO block_works (object_id, block_id, work_type_id, note)
+        SELECT DISTINCT r.object_id, r.block_id, i.work_type_id,
+               'восстановлена по факту'
+        FROM work_fact_items i
+        JOIN work_fact_reports r ON r.id = i.report_id
+        WHERE NOT EXISTS (
+            SELECT 1 FROM block_works bw
+            WHERE bw.block_id = r.block_id AND bw.work_type_id = i.work_type_id
+        )
+        """
+    )
+    conn.commit()
+    if not cur.rowcount:
+        return "все операции с фактом уже имеют ЗР"
+    return f"восстановлено ЗР по накопленному факту: {cur.rowcount}"
+
+
+def _fill_work_fact_items_block_work_id(conn) -> str:
+    """work_fact_items.block_work_id — заполнить по джойну через
+    (report.block_id, item.work_type_id) → block_works (2026-09-10,
+    Docs/block-works-schedule-task.md §2.4). Пара и так однозначно даёт ЗР;
+    прямая ссылка делает выборки истории по ЗР без лишнего джойна через
+    отчёт, готовя почву для построчного аудита факта (следующий этап).
+
+    Идемпотентно: условие — «ещё не заполнено» (`block_work_id IS NULL`).
+    Порядок в реестре обязателен — строго ПОСЛЕ восстановления ЗР по факту
+    выше, иначе часть строк не нашла бы себе пару и осталась NULL.
+    """
+    cur = conn.execute(
+        """
+        UPDATE work_fact_items
+        SET block_work_id = (
+            SELECT bw.id FROM block_works bw
+            JOIN work_fact_reports r ON r.block_id = bw.block_id
+            WHERE r.id = work_fact_items.report_id
+              AND bw.work_type_id = work_fact_items.work_type_id
+        )
+        WHERE block_work_id IS NULL
+        """
+    )
+    conn.commit()
+    if not cur.rowcount:
+        return "все строки факта уже со ссылкой на ЗР"
+    return f"проставлено ссылок на ЗР: {cur.rowcount}"
+
+
+def _backfill_work_fact_items_audit(conn) -> str:
+    """work_fact_items.updated_at/updated_by (этап 4 задания
+    «Запланированная работа по блоку», построчный аудит факта, 2026-09-10)
+    — у строк, сохранённых ДО этой версии, взять с отчёта-владельца
+    (work_fact_reports.updated_at/updated_by): точнее источника для старых
+    строк всё равно нет, а это то же самое событие с точки зрения прежней
+    модели (правка документа целиком). Идемпотентно: WHERE updated_at IS NULL.
+    """
+    cur = conn.execute(
+        """
+        UPDATE work_fact_items SET
+            updated_at = (SELECT r.updated_at FROM work_fact_reports r WHERE r.id = work_fact_items.report_id),
+            updated_by = (SELECT r.updated_by FROM work_fact_reports r WHERE r.id = work_fact_items.report_id)
+        WHERE updated_at IS NULL
+        """
+    )
+    conn.commit()
+    if not cur.rowcount:
+        return "все строки факта уже с меткой правки"
+    return f"проставлено меток правки: {cur.rowcount}"
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -806,6 +893,45 @@ RELEASE_TASKS = [
                "такие элементы с нуля",
         "kind": KIND_DATA,
         "run": _fill_revit_sections_by_volume,
+    },
+    {
+        "name": "2026-09-10-restore-block-works-from-fact",
+        # Версия — та, с которой выйдет «Запланированная работа по блоку»;
+        # запись журнала версий под неё ещё не согласована с пользователем
+        # (стоячая инструкция).
+        "version": "0.83",
+        "date": "2026-09-10",
+        "title": "Восстановить ЗР по накопленному факту без явной настройки",
+        "why": "план блока стал явным (block_works вместо "
+               "block_work_types+work_types_configured_at) — блок, который "
+               "никогда не настраивали, а отчёт о выполнении по нему уже "
+               "есть, иначе остался бы с фактом без ЗР, на которую тот "
+               "ссылается",
+        "kind": KIND_DATA,
+        "run": _restore_block_works_from_fact,
+    },
+    {
+        "name": "2026-09-10-fill-work-fact-items-block-work-id",
+        "version": "0.83",
+        "date": "2026-09-10",
+        "title": "Проставить work_fact_items.block_work_id",
+        "why": "новая прямая ссылка отчёта факта на ЗР (вместо джойна через "
+               "блок+вид работ) у накопленных строк пуста, пока её не "
+               "заполнит обработка — ПОСЛЕ восстановления ЗР по факту выше",
+        "kind": KIND_DATA,
+        "run": _fill_work_fact_items_block_work_id,
+    },
+    {
+        "name": "2026-09-10-backfill-work-fact-items-audit",
+        "version": "0.83",
+        "date": "2026-09-10",
+        "title": "Проставить построчный аудит факта на старых строках",
+        "why": "work_fact_items.updated_at/updated_by (этап 4, подсказка "
+               "истории теперь показывает, кто менял ИМЕННО эту операцию) "
+               "у строк, сохранённых до этой версии, пусты — заполняются "
+               "с отчёта-владельца, точнее источника для них нет",
+        "kind": KIND_DATA,
+        "run": _backfill_work_fact_items_audit,
     },
 ]
 

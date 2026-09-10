@@ -20286,6 +20286,17 @@ const REPORTS = {
     noFilter: true,
     wide: true,
   },
+  // «График работ по блокам» (этап 5, задание «Запланированная работа по
+  // блоку») — ЗР с планом/прогнозом/процентом/отклонением/признаком сроков,
+  // группировка строк выбирается на экране (app/report_block_schedule.py).
+  block_schedule: {
+    title: "График работ по блокам",
+    endpoint: "/reports/block-schedule",
+    render: renderBlockScheduleReport,
+    needsBlockSchedule: true,
+    noFilter: true,
+    wide: true,
+  },
 };
 let currentReport = "status";
 // Период графика «Динамики» в ФОРМЕ (живой запрос 2026-08-03) — тот же, что
@@ -20345,6 +20356,11 @@ function reportRequestBody() {
   if (REPORTS[currentReport].needsBlockStatusDate) {
     body.report_date = document.getElementById("bs-date").value || null;
     return body;   // фильтр схемы неприменим — это учёт по блокам, не по изделиям
+  }
+  if (REPORTS[currentReport].needsBlockSchedule) {
+    body.group_by = blockScheduleGroupChooser.selected();
+    body.view = document.getElementById("bsch-view").value;
+    return body;   // фильтр схемы неприменим — та же причина, что у block_status
   }
   if (document.getElementById("report-use-filter").checked) {
     body.element_ids = state.elements.filter(passesPlacementFilters).map(e => e.id);
@@ -21007,6 +21023,24 @@ const deliveryGroupChooser = createGroupChooser({
   containerId: "ds-groups", storageKey: DS_GROUPS_KEY,
   allGroups: DS_ALL_GROUPS, defaultOn: DS_DEFAULT_ON, onChange: () => loadReport(),
 });
+
+// «График работ по блокам» — состав уровней продублирован здесь и в
+// app/report_block_schedule.GROUPS (тот же приём и та же оговорка, что у
+// deliveryGroupChooser выше: ключи и подписи обязаны совпадать).
+const BSCH_GROUPS_KEY = "zhbi_block_schedule_groups";
+const BSCH_ALL_GROUPS = [
+  { key: "track", label: "Трек" },
+  { key: "wbs_section", label: "Раздел WBS" },
+  { key: "operation", label: "Операция" },
+  { key: "section", label: "Секция" },
+  { key: "floor", label: "Этаж" },
+];
+const BSCH_DEFAULT_ON = ["track", "wbs_section", "operation", "section", "floor"];
+const blockScheduleGroupChooser = createGroupChooser({
+  containerId: "bsch-groups", storageKey: BSCH_GROUPS_KEY,
+  allGroups: BSCH_ALL_GROUPS, defaultOn: BSCH_DEFAULT_ON, onChange: () => loadReport(),
+});
+document.getElementById("bsch-view").addEventListener("change", loadReport);
 
 // Шаг оси на первом открытии подбирает сервер по ширине периода; как только
 // пользователь выбрал его сам, отправляем выбранное и больше не подменяем.
@@ -21689,6 +21723,10 @@ async function loadReport() {
         // Строка = отдельное изделие (группировки нет), поэтому число одно.
         statusLine.textContent = `Позиций: ${reportData.total.count}`;
       }
+    } else if (def.needsBlockSchedule) {
+      statusLine.textContent = reportData.elements
+        ? `Запланированных работ: ${reportData.elements}`
+        : "Запланированных работ ещё нет — «Настройки» в панели блока";
     } else if (def.needsScale) {
       // «График контрактации»: главное число — не «сколько изделий», а
       // разрыв между потребностью и контрактами. Его и выносим в строку
@@ -21737,6 +21775,8 @@ async function switchReport(key) {
   document.getElementById("report-analytics-box").style.display = REPORTS[key].needsAnalytics ? "" : "none";
   document.getElementById("report-block-status-box").style.display =
     REPORTS[key].needsBlockStatusDate ? "" : "none";
+  document.getElementById("report-block-schedule-box").style.display =
+    REPORTS[key].needsBlockSchedule ? "" : "none";
   document.getElementById("report-completion-box").style.display =
     REPORTS[key].completionViews ? "" : "none";
   document.getElementById("report-use-filter-box").style.display =
@@ -21750,6 +21790,7 @@ async function switchReport(key) {
   // колонок, две из которых — свободный текст «было/стало».
   reportsBackdrop.querySelector(".modal").classList.toggle(
     "report-full", !!(REPORTS[key].needsPeriod || REPORTS[key].needsWorkPeriod || REPORTS[key].wide));
+  if (REPORTS[key].needsBlockSchedule) blockScheduleGroupChooser.render();
   if (REPORTS[key].needsAnalytics) {
     // Дата и горизонт заполняются один раз: вернувшись на вкладку, человек
     // ожидает свой выбор, а не сброс к сегодняшнему дню (тот же приём, что
@@ -22025,6 +22066,12 @@ document.getElementById("menu-report-block-status").addEventListener("click", ()
   switchReport("block_status");
 });
 document.getElementById("bs-date").addEventListener("change", loadReport);
+document.getElementById("menu-report-block-schedule").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  applyReportSize();
+  showBackToReport(false);
+  switchReport("block_schedule");
+});
 document.getElementById("an-only-deficit").addEventListener("change", () => {
   if (reportData) document.getElementById("report-body").innerHTML = renderAnalyticsReport(reportData);
 });
@@ -28922,8 +28969,16 @@ async function openMfrWorkspace() {
   document.getElementById("mfr-chess-legend").style.display = "none";
   // Другой объект — другие доски: коды «1»..«20» у него могут значить
   // совсем другие разделы работ, отбор с прошлого объекта не переносим.
-  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
+  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]),
+    deadlines: new Set(), period: { active: false, field: "plan", from: null, to: null } };
   document.querySelectorAll(".bp-status-check").forEach((cb) => { cb.checked = true; });
+  document.querySelectorAll(".bp-deadline-check").forEach((cb) => { cb.checked = false; });
+  document.getElementById("mfr-period-toggle").checked = false;
+  document.getElementById("mfr-period-field").value = "plan";
+  document.getElementById("mfr-period-dates").style.display = "none";
+  document.getElementById("mfr-period-from").value = "";
+  document.getElementById("mfr-period-to").value = "";
+  updateMfrPeriodTitle();
   // Другой объект — другие блоки: незачем тащить в него дату/подсветку
   // динамики прошлого объекта.
   mfrDynamics = { active: false, from: null, to: null };
@@ -29172,6 +29227,26 @@ const MFR_CHESS_COLORS_3D = { plan: 0x9aa0a6, in_progress: 0xe8a33d, done: 0x3fa
 // принимает строку так же, как число), нужна для HSL-буста ниже.
 const MFR_CHESS_STATUS_HEX = { plan: "#9aa0a6", in_progress: "#e8a33d", done: "#3fa76a" };
 
+// Режим раскраски доски «Шахматка» (этап 3, задание «Запланированная
+// работа по блоку»): «progress» — как было, среднее процентов; «deadline»
+// — худший признак сроков среди операций доски на блоке. Палитра — своя,
+// НЕ пересекается со статусной (иначе «отстаёт» и «в работе» одним и тем
+// же оранжевым читались бы как один и тот же признак, хотя это разные
+// вопросы — процент и срок).
+let mfrChessMode = "progress";
+const MFR_CHESS_DEADLINE_HEX = {
+  on_track: "#3fa76a", behind: "#e8a33d", overdue: "#c0392b",
+  not_started_on_time: "#d35400", no_dates: "#9aa0a6",
+};
+const MFR_CHESS_COLORS_3D_DEADLINE = {
+  on_track: 0x3fa76a, behind: 0xe8a33d, overdue: 0xc0392b,
+  not_started_on_time: 0xd35400, no_dates: 0x9aa0a6, off: 0xbdbdbd,
+};
+const MFR_CHESS_DEADLINE_LABELS = {
+  on_track: "в графике", behind: "отстаёт", overdue: "просрочена",
+  not_started_on_time: "не начата в срок", no_dates: "без сроков",
+};
+
 // Раскладка наклейки «Шахматки» — ОДНА на 2D и 3D (2026-09-05, живой запрос
 // пользователя): строка на операцию, в строке — имя, следом полоса
 // выполнения, следом процент; полосы ВСЕХ строк начинаются с одного x
@@ -29179,12 +29254,16 @@ const MFR_CHESS_STATUS_HEX = { plan: "#9aa0a6", in_progress: "#e8a33d", done: "#
 // высота полосы равна строке. Считается в долях опорного кегля F: 2D и 3D
 // подставляют свой измеритель текста и потом масштабируют результат разом
 // под свой габарит — так план и сцена показывают одно и то же.
-function mfrChessLabelLayout(ops, F, measure) {
+function mfrChessLabelLayout(ops, F, measure, pctSample = "100%") {
   const lineH = F * 1.35, gap = F * 0.45, padX = F * 0.5, padY = F * 0.3;
   const barW = F * 5, barH = F * 1.0;
   let nameW = 0;
   for (const op of ops) nameW = Math.max(nameW, measure(op.name || ""));
-  const pctW = measure("100%");
+  // pctSample — образец САМОЙ ДЛИННОЙ строки колонки процента, под нём
+  // считается ширина. В режиме «по срокам» (этап 3) туда добавляется
+  // «±N дн», колонка шире — без своего образца текст обрезался бы о
+  // габарит плашки, посчитанный под короткую «100%».
+  const pctW = measure(pctSample);
   const barX = padX + nameW + gap;
   return {
     lineH, gap, padX, padY, barW, barH, nameW, pctW, barX,
@@ -29206,10 +29285,56 @@ function mfrChessLabelLayout(ops, F, measure) {
 // долях ширины всего плана. Наклейка центрируется в габарите блока и лежит
 // на своей полупрозрачной плашке, чтобы читаться поверх чертежа.
 const MFR_CHESS_LABEL_F = 100;      // опорный кегль раскладки
+
+// Цвет полосы и текст правой колонки строки операции — по режиму раскраски
+// (этап 3): «progress» — статус и просто процент (как было); «deadline» —
+// признак сроков этой операции и процент с «±N дн» рядом. Общая точка для
+// 2D (mfrChessOpsLabelSvg) и 3D (buildMfrChessLabelFace) — раньше строка
+// строилась в каждой по отдельности, разошлась бы при первой же правке.
+function bwOpLabelBits(op) {
+  if (mfrChessMode === "deadline") {
+    return {
+      color: MFR_CHESS_DEADLINE_HEX[op.deadline] || MFR_CHESS_DEADLINE_HEX.no_dates,
+      pctText: `${op.percent}% ${bwDeviationLabel(op.deviation_end)}`.trim(),
+    };
+  }
+  return {
+    color: MFR_CHESS_STATUS_HEX[op.status] || MFR_CHESS_STATUS_HEX.plan,
+    pctText: `${op.percent}%`,
+  };
+}
+// Образец для ширины колонки процента — самый длинный реальный текст этого
+// режима, не "100%" по умолчанию (см. mfrChessLabelLayout): в режиме сроков
+// строка длиннее на «±N дн».
+const MFR_CHESS_PCT_SAMPLE = { progress: "100%", deadline: "100% +99 дн" };
+
+// Цвет заливки БЛОКА целиком (не отдельной строки операции — см.
+// bwOpLabelBits) — по среднему статусу (progress) или худшему признаку
+// сроков (deadline) доски на этом блоке. 2D берёт CSS-переменную, 3D — hex:
+// те же две палитры, что у MFR_CHESS_COLORS/MFR_CHESS_COLORS_3D.
+function bwChessFill2D(chess) {
+  if (!chess) return "var(--color-text-muted)";
+  return mfrChessMode === "deadline"
+    ? (MFR_CHESS_DEADLINE_HEX[chess.deadline] || MFR_CHESS_DEADLINE_HEX.no_dates)
+    : MFR_CHESS_COLORS[chess.status];
+}
+function bwChessFill3D(chess) {
+  if (!chess) return MFR_CHESS_COLORS_3D.off;
+  return mfrChessMode === "deadline"
+    ? (MFR_CHESS_COLORS_3D_DEADLINE[chess.deadline] ?? MFR_CHESS_COLORS_3D_DEADLINE.no_dates)
+    : MFR_CHESS_COLORS_3D[chess.status];
+}
+function bwChessStatusHexForSelection(chess) {
+  return mfrChessMode === "deadline"
+    ? (MFR_CHESS_DEADLINE_HEX[chess.deadline] || MFR_CHESS_DEADLINE_HEX.no_dates)
+    : MFR_CHESS_STATUS_HEX[chess.status];
+}
+
 const MFR_CHESS_LABEL_PLAN_SHARE = 0.28;   // потолок ширины: доля ширины плана
 function mfrChessOpsLabelSvg(ops, box, planW) {
   const L = mfrChessLabelLayout(ops, MFR_CHESS_LABEL_F,
-    (t) => измеритьТекст(t, `600 ${MFR_CHESS_LABEL_F}px system-ui, sans-serif`));
+    (t) => измеритьТекст(t, `600 ${MFR_CHESS_LABEL_F}px system-ui, sans-serif`),
+    MFR_CHESS_PCT_SAMPLE[mfrChessMode]);
   const s = Math.min(box.rw * 0.92 / L.totalW, box.rh * 0.92 / L.totalH,
                      planW * MFR_CHESS_LABEL_PLAN_SHARE / L.totalW);
   const W = L.totalW * s, H = L.totalH * s;
@@ -29221,7 +29346,7 @@ function mfrChessOpsLabelSvg(ops, box, planW) {
     const baseline = rowTop + L.lineH * 0.5 * s + font * 0.35;   // текст по центру строки
     const barY = rowTop + (L.lineH - L.barH) / 2 * s;
     const barX = x0 + L.barX * s;
-    const fillColor = MFR_CHESS_STATUS_HEX[op.status] || MFR_CHESS_STATUS_HEX.plan;
+    const { color: fillColor, pctText } = bwOpLabelBits(op);
     const filled = barW * Math.max(0, Math.min(100, op.percent)) / 100;
     return `<text x="${x0 + L.padX * s}" y="${baseline}" font-size="${font}" font-weight="600"
         fill="#1a1a1a">${escapeHtml(op.name || "")}</text>
@@ -29230,7 +29355,7 @@ function mfrChessOpsLabelSvg(ops, box, planW) {
       <rect x="${barX}" y="${barY}" width="${filled}" height="${barH}" rx="${barH * 0.25}"
         fill="${fillColor}"/>
       <text x="${x0 + L.pctX * s}" y="${baseline}" font-size="${font}"
-        font-weight="600" fill="#1a1a1a">${op.percent}%</text>`;
+        font-weight="600" fill="#1a1a1a">${escapeHtml(pctText)}</text>`;
   }).join("");
   return `<g style="pointer-events:none">
     <rect x="${x0}" y="${y0}" width="${W}" height="${H}" rx="${font * 0.3}"
@@ -29391,9 +29516,7 @@ function drawRevitPlan(data) {
   // тускло-серым без подписи — «неприменимо», а не «0%», это разные вещи.
   const blockRects = blocks.flatMap((b) => {
     const chess = mfrChessTrackCode ? mfrChessValues[b.id] : null;
-    const fill = mfrChessTrackCode
-      ? (chess ? MFR_CHESS_COLORS[chess.status] : "var(--color-text-muted)")
-      : "var(--color-primary)";
+    const fill = mfrChessTrackCode ? bwChessFill2D(chess) : "var(--color-primary)";
     // Блок — набор прямоугольников (block_boxes, 2026-09-05): один
     // <rect> на каждый, все с одним и тем же data-block-id — клик на
     // любой из них ведёт себя одинаково (см. обработчик клика по SVG).
@@ -29623,7 +29746,7 @@ function mfrHighlightSelection() {
   // насыщенным цветом статуса (среднего по операциям доски) вместо общего
   // MFR_HIGHLIGHT_COLOR (см. выше).
   const chessSel = sel && sel.kind === "block" && mfrChessTrackCode ? mfrChessValues[sel.id] : null;
-  const boldColor = chessSel ? mfrChessBoldColor(MFR_CHESS_STATUS_HEX[chessSel.status]) : null;
+  const boldColor = chessSel ? mfrChessBoldColor(bwChessStatusHexForSelection(chessSel)) : null;
   // Грань выбранного блока — БЕЛАЯ, а не тот же цвет статуса, что заливка
   // (живой запрос пользователя, 2026-09-02: «более контрастные грани»):
   // цветной контур того же тона на цветной заливке читается хуже, особенно
@@ -29889,7 +30012,13 @@ let blockProgressTreeData = null;
 let blockProgressBlockId = null;   // для истории факта по наведению — см. bpHistoryTooltip
 // trackCodes — МНОЖЕСТВЕННЫЙ отбор (2026-09-10, живой запрос, было ОДНО
 // значение trackCode): пустой Set — без отбора, как у Этажа/Секции.
-let blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
+// deadlines — тот же приём, что statuses (пустой Set — без отбора).
+// period — «Период по плану» (этап 3, задание «Запланированная работа по
+// блоку»): field переключает план/прогноз, from/to — границы (обе
+// опциональны, как у mfrDynamics — но ЭТО НЕЗАВИСИМЫЙ отбор, а не «за весь
+// период по умолчанию»: active=false просто выключает группу целиком).
+let blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]),
+  deadlines: new Set(), period: { active: false, field: "plan", from: null, to: null } };
 
 async function loadBlockProgressPanel(blockId) {
   const box = document.getElementById("block-progress-tree");
@@ -29908,11 +30037,54 @@ async function loadBlockProgressPanel(blockId) {
       : "";
     const data = await api(`/objects/${revitPlanState.objectId}/blocks/${blockId}/progress${qs}`);
     blockProgressTreeData = data.tree;
+    // «сроки» — агрегат по блоку целиком (app/block_works.py,
+    // merge_dates_into_tree), присутствует ТОЛЬКО в обычном режиме (не
+    // «Динамика за период» — см. комментарий выше). В режиме динамики
+    // строка агрегата в шапке просто не рисуется, это не ошибка.
+    renderBlockDatesSummary(data.сроки || null);
     renderBlockProgressPanel();
   } catch (e) {
     blockProgressTreeData = null;
     box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Короткая дата без года (дд.мм) — компактнее formatDateRu для второй
+// строки операции и шапки карточки, где важен только порядок дат внутри
+// текущего года стройки, не сам год.
+function bwShortDate(iso) {
+  if (!iso) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${m[3]}.${m[2]}` : iso;
+}
+
+// «Период по плану/прогнозу» (этап 3) — ЗР участвует, если её интервал
+// (start..end) пересекается с выбранным периодом (from..to, любая граница
+// может быть не задана — открытый конец). Без ОБЕИХ собственных дат
+// сравнивать не с чем — ЗР в отбор не попадает (не «неизвестно, значит
+// подходит», а прямо противоположное: без дат нечего сравнивать с периодом).
+function bwPeriodIntersects(start, end, from, to) {
+  if (!start && !end) return false;
+  const s = start || end, e = end || start;   // одна дата задана — точка
+  if (from && e < from) return false;
+  if (to && s > to) return false;
+  return true;
+}
+
+function bwDeviationLabel(days) {
+  if (days === null || days === undefined) return "";
+  if (days === 0) return "±0 дн";
+  return `${days > 0 ? "+" : ""}${days} дн`;
+}
+
+// Агрегат по блоку целиком — план/прогноз/средний процент (§6.1 задания
+// «Запланированная работа по блоку», шапка карточки).
+function renderBlockDatesSummary(agg) {
+  const box = document.getElementById("block-progress-dates-summary");
+  if (!agg || !agg.zr_count) { box.textContent = ""; return; }
+  box.innerHTML = `План: ${bwShortDate(agg.plan_start)}–${bwShortDate(agg.plan_end)} · `
+    + `Прогноз: ${bwShortDate(agg.forecast_start)}–${bwShortDate(agg.forecast_end)} · `
+    + `Средний процент: ${agg.percent ?? 0}%`;
 }
 
 // Раздел режет по planning_track_code листа, статус — по status (в режиме
@@ -29930,6 +30102,18 @@ function filterBlockProgressTree(nodes) {
     if (blockProgressFilter.trackCodes.size && !blockProgressFilter.trackCodes.has(n.planning_track_code)) continue;
     const status = n.status_to || n.status;
     if (!blockProgressFilter.statuses.has(status)) continue;
+    // «Сроки»/«Период» — только в обычном режиме (этап 3, задание
+    // «Запланированная работа по блоку»): в режиме «Динамика за период»
+    // узел несёт percent_from/percent_to, а не deadline/plan_*/forecast_*
+    // — сервер их туда не примешивает (см. block_works.merge_dates_into_tree).
+    if (n.percent_from === undefined) {
+      if (blockProgressFilter.deadlines.size && !blockProgressFilter.deadlines.has(n.deadline)) continue;
+      if (blockProgressFilter.period.active) {
+        const поле = blockProgressFilter.period.field;
+        if (!bwPeriodIntersects(n[`${поле}_start`], n[`${поле}_end`],
+                                blockProgressFilter.period.from, blockProgressFilter.period.to)) continue;
+      }
+    }
     result.push(n);
   }
   return result;
@@ -29965,15 +30149,36 @@ function renderBlockProgressTree(nodes, depth) {
     const label = dynamics
       ? `<span class="bp-percent bp-percent-range">${n.percent_from}% → ${n.percent_to}%</span>`
       : `<span class="bp-percent">${percent}%</span>`;
+    // Строка план/прогноз/отклонение (§6.1 задания «Запланированная работа
+    // по блоку», этап 2) — только в обычном режиме: сервер примешивает эти
+    // поля в узел лишь когда динамика выключена (app/block_works.py,
+    // merge_dates_into_tree). Клик открывает карточку ЗР.
+    const datesLine = (!dynamics && n.block_work_id)
+      ? `<div class="bp-op-dates bp-deadline-${n.deadline}" data-block-work-id="${n.block_work_id}">`
+        + `план ${bwShortDate(n.plan_start)}–${bwShortDate(n.plan_end)} · `
+        + `прогноз ${bwShortDate(n.forecast_start)}–${bwShortDate(n.forecast_end)} · `
+        + `${escapeHtml(n.deadline_label)}`
+        + (n.deviation_end !== null && n.deviation_end !== undefined
+           ? ` (${bwDeviationLabel(n.deviation_end)})` : "")
+        + `</div>`
+      : "";
     return `<div class="bp-op" style="padding-left:${pad}px">
       <div class="bp-op-name">${escapeHtml(n.name || "(без названия)")}</div>
       <div class="bp-op-bar-row">
         <div class="bp-bar" data-work-type-id="${n.id}"><div class="bp-bar-fill bp-${status}" style="width:${percent}%"></div>${marker}</div>
         ${label}
       </div>
+      ${datesLine}
     </div>`;
   }).join("");
 }
+
+// Клик по строке план/прогноз/отклонение — карточка ЗР (делегированный
+// обработчик, дерево перерисовывается целиком при каждом апдейте).
+document.getElementById("block-progress-tree").addEventListener("click", (e) => {
+  const el = e.target.closest(".bp-op-dates");
+  if (el) openBlockWorkCard(Number(el.dataset.blockWorkId));
+});
 
 // -------- История факта операции по наведению (живой запрос пользователя)
 // — та же плавающая карточка, что у #chart-tooltip, свой независимый
@@ -30088,6 +30293,43 @@ document.querySelectorAll(".bp-status-check").forEach((cb) => {
   });
 });
 
+// -------- «Сроки»/«Период по плану» (этап 3, задание «Запланированная
+// работа по блоку») — те же две группы вкладки «Фильтры», режут дерево
+// карточки блока на лету, без похода на сервер (тот же приём, что «Виды
+// работ»/«Статус выполнения» выше). --------
+
+document.querySelectorAll(".bp-deadline-check").forEach((cb) => {
+  cb.addEventListener("change", () => {
+    blockProgressFilter.deadlines = new Set(
+      [...document.querySelectorAll(".bp-deadline-check:checked")].map((c) => c.value));
+    renderBlockProgressPanel();
+  });
+});
+
+function updateMfrPeriodTitle() {
+  document.getElementById("mfr-period-title").textContent =
+    document.getElementById("mfr-period-field").value === "forecast" ? "Период по прогнозу" : "Период по плану";
+}
+
+document.getElementById("mfr-period-toggle").addEventListener("change", (e) => {
+  blockProgressFilter.period.active = e.target.checked;
+  document.getElementById("mfr-period-dates").style.display = e.target.checked ? "" : "none";
+  renderBlockProgressPanel();
+});
+document.getElementById("mfr-period-field").addEventListener("change", (e) => {
+  blockProgressFilter.period.field = e.target.value;
+  updateMfrPeriodTitle();
+  if (blockProgressFilter.period.active) renderBlockProgressPanel();
+});
+document.getElementById("mfr-period-from").addEventListener("change", (e) => {
+  blockProgressFilter.period.from = e.target.value || null;
+  if (blockProgressFilter.period.active) renderBlockProgressPanel();
+});
+document.getElementById("mfr-period-to").addEventListener("change", (e) => {
+  blockProgressFilter.period.to = e.target.value || null;
+  if (blockProgressFilter.period.active) renderBlockProgressPanel();
+});
+
 function currentSelectedBlockId() {
   return revitPlanState.selected && revitPlanState.selected.kind === "block"
     ? revitPlanState.selected.id : null;
@@ -30189,8 +30431,8 @@ document.getElementById("block-progress-settings-btn").addEventListener("click",
     const partial = new Set(один ? [] : data.selected_some);
     document.getElementById("block-settings-hint").textContent = один
       ? (data.configured
-        ? "Отбор для этого блока уже настроен."
-        : "Отбор ещё не настраивали — отмечены все операции «эт/сек» справочника.")
+        ? "Отметьте операции, которые идут на этом блоке."
+        : "У блока ещё нет ни одной операции — отметьте нужные и сохраните.")
       : `Выделено блоков: ${data.blocks} (настроен отбор у ${data.configured}). Галочка — операция`
         + " есть у всех выделенных, серый квадрат — только у части. Сохранение поставит ВСЕМ"
         + " выделенным блокам один и тот же список: то, что осталось серым и не тронуто, будет снято.";
@@ -30266,9 +30508,11 @@ let blockFactBlockId = null;
 let blockFactCurrentReportId = null;   // null = ещё не сохранённый новый отчёт
 let blockFactOptions = [];             // операции, выбранные для блока (Настройки)
 
-document.getElementById("block-progress-fact-btn").addEventListener("click", async () => {
-  const blockId = currentSelectedBlockId();
-  if (!blockId) return;
+// Открыть «Факт» блока — общая точка для кнопки в панели блока (новый
+// отчёт) и для «Править» в списке документов карточки ЗР (2026-09-10,
+// живой запрос: документ — снимок ВСЕГО блока, поэтому правится тем же
+// экраном, что и обычно, просто сразу на нужном отчёте, а не с чистого листа).
+async function openBlockFactForm(blockId, reportId) {
   blockFactBlockId = blockId;
   document.getElementById("block-fact-backdrop").classList.add("open");
   const [settings, reports] = await Promise.all([
@@ -30278,7 +30522,14 @@ document.getElementById("block-progress-fact-btn").addEventListener("click", asy
   const selected = new Set(settings.selected);
   blockFactOptions = settings.options.filter(o => selected.has(o.id));
   renderBlockFactReportsList(reports);
-  await startNewBlockFactReport();
+  if (reportId) await openExistingBlockFactReport(reportId);
+  else await startNewBlockFactReport();
+}
+
+document.getElementById("block-progress-fact-btn").addEventListener("click", () => {
+  const blockId = currentSelectedBlockId();
+  if (!blockId) return;
+  openBlockFactForm(blockId, null);
 });
 
 function renderBlockFactReportsList(reports) {
@@ -30303,8 +30554,16 @@ function highlightActiveBlockFactReport() {
     row.classList.toggle("active", Number(row.dataset.report) === blockFactCurrentReportId));
 }
 
+// Кнопка «Удалить отчёт» (этап 4, В6) — только у УЖЕ сохранённого
+// документа: у черновика нового отчёта (blockFactCurrentReportId === null)
+// удалять нечего, форма про него ещё ничего не отправляла на сервер.
+function updateBlockFactDeleteVisibility() {
+  document.getElementById("block-fact-delete").hidden = blockFactCurrentReportId === null;
+}
+
 async function startNewBlockFactReport() {
   blockFactCurrentReportId = null;
+  updateBlockFactDeleteVisibility();
   document.getElementById("block-fact-date").value = new Date().toISOString().slice(0, 10);
   // Предзаполняем ТЕКУЩИМИ процентами (панель блока): за один день обычно
   // меняется немногое, и не нужно перетаскивать все ползунки заново.
@@ -30322,6 +30581,7 @@ async function startNewBlockFactReport() {
 
 async function openExistingBlockFactReport(reportId) {
   blockFactCurrentReportId = reportId;
+  updateBlockFactDeleteVisibility();
   const report = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports/${reportId}`);
   document.getElementById("block-fact-date").value = report.report_date;
   renderBlockFactItems(report.items);
@@ -30355,6 +30615,21 @@ document.getElementById("block-fact-new").addEventListener("click", () => startN
 document.getElementById("block-fact-close").addEventListener("click", () => {
   document.getElementById("block-fact-backdrop").classList.remove("open");
 });
+document.getElementById("block-fact-delete").addEventListener("click", async () => {
+  if (blockFactCurrentReportId === null) return;
+  if (!confirm("Удалить отчёт целиком? Действие необратимо.")) return;
+  try {
+    await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports/${blockFactCurrentReportId}`,
+      { method: "DELETE" });
+    showToast("Отчёт удалён", "success");
+    bpHistoryCache.clear();
+    const reports = await api(`/objects/${revitPlanState.objectId}/blocks/${blockFactBlockId}/fact-reports`);
+    renderBlockFactReportsList(reports);
+    await startNewBlockFactReport();
+    if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
+    refreshPlansTabIfOpen(blockFactBlockId);
+  } catch (e) { showToast(e.message, "error"); }
+});
 document.getElementById("block-fact-save").addEventListener("click", async () => {
   const items = {};
   document.querySelectorAll("#block-fact-items .bf-item").forEach(item => {
@@ -30374,6 +30649,7 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
         body: JSON.stringify({ report_date, items }),
       });
       blockFactCurrentReportId = res.id;
+      updateBlockFactDeleteVisibility();
     }
     showToast("Отчёт сохранён", "success");
     bpHistoryCache.clear();   // сохранённые значения устарели — история по наведению должна их подхватить
@@ -30385,7 +30661,271 @@ document.getElementById("block-fact-save").addEventListener("click", async () =>
     // фичи: после «Факт» дерево обновлялось, а строка сводки — нет).
     // renderBlockCard, а не showBlockCard: выделение трогать незачем.
     if (currentSelectedBlockId() === blockFactBlockId) renderBlockCard(blockFactBlockId);
+    refreshPlansTabIfOpen(blockFactBlockId);
   } catch (e) { showToast(e.message, "error"); }
+});
+
+// -------- Карточка ЗР (запланированной работы) — app/block_works.py,
+// этап 2 задания «Запланированная работа по блоку»: обе пары дат с
+// правкой, версии актуализации, история факта той же операции. --------
+
+async function openBlockWorkCard(bwId) {
+  document.getElementById("block-work-backdrop").classList.add("open");
+  const body = document.getElementById("block-work-body");
+  body.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const d = await api(`/objects/${revitPlanState.objectId}/block-works/${bwId}`);
+    renderBlockWorkCard(d);
+  } catch (e) {
+    body.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderBlockWorkCard(d) {
+  document.getElementById("block-work-title").textContent = d["название"] || "Запланированная работа";
+  const body = document.getElementById("block-work-body");
+  const версии = (d.versions || []).map(v =>
+    `<div class="card-row"><span class="card-key">${escapeHtml(formatMomentRu(v.created_at))}</span>` +
+    `<span class="card-val">${bwShortDate(v.forecast_start)}–${bwShortDate(v.forecast_end)}` +
+    (v.created_by ? ` · ${escapeHtml(v.created_by)}` : "") +
+    (v.note ? ` · ${escapeHtml(v.note)}` : "") + `</span></div>`
+  ).join("") || '<div class="hint-text">Версий ещё нет.</div>';
+  // Документы факта — ИНТЕРАКТИВНЫЙ список (живой запрос пользователя,
+  // 2026-09-10): не только читается, но и правится/удаляется прямо
+  // отсюда. Документ — снимок ВСЕГО блока на дату (§8 block-accounting.md),
+  // поэтому «Править» открывает тот же «Факт» блока на нужном отчёте, а не
+  // отдельную форму на одну операцию — правка одной операции в отрыве от
+  // остальных документу не соответствовала бы. Процент — «—», если
+  // документ этой операции не коснулся (существовал раньше, чем ЗР).
+  const документы = (d["документы_факта"] || []).map(doc =>
+    `<div class="card-row bw-doc-row" data-report-id="${doc.id}">
+      <span class="card-key">${escapeHtml(formatDateRu(doc.report_date))}</span>
+      <span class="card-val">${doc.percent === null || doc.percent === undefined ? "—" : doc.percent + "%"}
+        ${doc.updated_by || doc.created_by ? "· " + escapeHtml(doc.updated_by || doc.created_by) : ""}
+        <button type="button" class="btn btn-sm btn-secondary bw-doc-edit">Править</button>
+        <button type="button" class="btn btn-sm btn-danger bw-doc-delete">Удалить</button>
+      </span>
+    </div>`
+  ).join("") || '<div class="hint-text">Документов факта ещё не было.</div>';
+  // Построчная история правок (этап 4, В6) — каждая ПРАВКА уже сохранённой
+  // строки («было X% → стало Y%»), отдельно от «Истории факта» выше (та —
+  // снимок по датам отчётов, может быть одно значение на много дней).
+  const историяПравок = (d["история_правок"] || []).map(h =>
+    `<div class="card-row"><span class="card-key">${escapeHtml(formatMomentRu(h["момент"]))}</span>` +
+    `<span class="card-val">${h["было"]}% → ${h["стало"]}%${h["пользователь"] ? " · " + escapeHtml(h["пользователь"]) : ""}</span></div>`
+  ).join("");
+  // Мягко снятая с блока ЗР (В7) — реквизиты и сроки больше не правятся
+  // (операция вне активного плана), но факт/версии/история остаются
+  // видны, ради которых снятие и было мягким, а не удалением строки.
+  const retired = !!d.retired_at;
+  const disabled = retired ? "disabled" : "";
+
+  body.innerHTML = `
+    <p class="hint-text">${escapeHtml(d["путь"] || "")}</p>
+    ${retired ? `<p class="hint-text" style="color:#C0392B">Операция снята с плана блока `
+      + `${escapeHtml(formatMomentRu(d.retired_at))} — реквизиты доступны только для просмотра.</p>` : ""}
+    <div class="card-row"><span class="card-key">Признак сроков</span>
+      <span class="card-val bw-deadline-${d.deadline}">${escapeHtml(d.deadline_label)}</span></div>
+    <div class="card-row"><span class="card-key">Процент / статус</span>
+      <span class="card-val">${d.percent}%</span></div>
+    <fieldset style="margin-top:10px" ${disabled}><legend>Базовый (директивный) срок</legend>
+      <label>Начало <input type="date" id="bw-plan-start" value="${d.plan_start || ""}" ${disabled}></label>
+      <label>Окончание <input type="date" id="bw-plan-end" value="${d.plan_end || ""}" ${disabled}></label>
+      <button class="btn btn-sm btn-primary" id="bw-plan-save" ${disabled}>Сохранить</button>
+    </fieldset>
+    <fieldset style="margin-top:10px" ${disabled}><legend>Актуализированный срок (новая версия при сохранении)</legend>
+      <label>Начало <input type="date" id="bw-forecast-start" value="${d.forecast_start || ""}" ${disabled}></label>
+      <label>Окончание <input type="date" id="bw-forecast-end" value="${d.forecast_end || ""}" ${disabled}></label>
+      <button class="btn btn-sm btn-primary" id="bw-forecast-save" ${disabled}>Сохранить как новую версию</button>
+      <div style="margin-top:6px">${версии}</div>
+    </fieldset>
+    <fieldset style="margin-top:10px" ${disabled}><legend>Примечание</legend>
+      <textarea id="bw-note" rows="2" style="width:100%" ${disabled}>${escapeHtml(d.note || "")}</textarea>
+      <button class="btn btn-sm btn-secondary" id="bw-note-save" ${disabled}>Сохранить</button>
+    </fieldset>
+    <fieldset style="margin-top:10px"><legend>Документы факта</legend>${документы}</fieldset>
+    ${историяПравок ? `<fieldset style="margin-top:10px"><legend>История правок факта</legend>${историяПравок}</fieldset>` : ""}
+    <p class="hint-text" style="margin-top:6px">
+      Заведена: ${escapeHtml(formatMomentRu(d.created_at) || "—")}${d.created_by ? " · " + escapeHtml(d.created_by) : ""}
+    </p>`;
+
+  // Документы факта — правятся/удаляются независимо от того, снята ли ЗР
+  // (документ — снимок всего блока, а не только этой операции; удаление
+  // документа целиком остаётся законным действием и для снятой ЗР).
+  body.querySelectorAll(".bw-doc-edit").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const reportId = Number(btn.closest(".bw-doc-row").dataset.reportId);
+      // Закрываем карточку ЗР перед открытием «Факта» — оба окна одного
+      // z-index, поверх друг друга не видны (живой баг, пойман при
+      // проверке «Документов факта», 2026-09-10). «Факт» после сохранения
+      // сам обновит карточку через refreshPlansTabIfOpen.
+      document.getElementById("block-work-backdrop").classList.remove("open");
+      openBlockFactForm(d.block_id, reportId);
+    });
+  });
+  body.querySelectorAll(".bw-doc-delete").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const reportId = Number(btn.closest(".bw-doc-row").dataset.reportId);
+      if (!confirm("Удалить документ факта целиком? Действие необратимо.")) return;
+      try {
+        await api(`/objects/${revitPlanState.objectId}/blocks/${d.block_id}/fact-reports/${reportId}`,
+          { method: "DELETE" });
+        showToast("Документ удалён", "success");
+        bpHistoryCache.clear();
+        const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`);
+        renderBlockWorkCard(updated);
+        refreshOpenBlockCard();
+        refreshPlansTabIfOpen(d.block_id);
+      } catch (e) { showToast(e.message, "error"); }
+    });
+  });
+
+  if (retired) return;   // ниже — только обработчики форм правки, которых для снятой ЗР нет
+  document.getElementById("bw-plan-save").addEventListener("click", async () => {
+    try {
+      const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan_start: document.getElementById("bw-plan-start").value || null,
+          plan_end: document.getElementById("bw-plan-end").value || null,
+        }),
+      });
+      showToast("Базовый срок сохранён", "success");
+      renderBlockWorkCard(updated);
+      refreshOpenBlockCard();
+      refreshPlansTabIfOpen(d.block_id);
+    } catch (e) { showToast(e.message, "error"); }
+  });
+  document.getElementById("bw-forecast-save").addEventListener("click", async () => {
+    try {
+      const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          forecast_start: document.getElementById("bw-forecast-start").value || null,
+          forecast_end: document.getElementById("bw-forecast-end").value || null,
+        }),
+      });
+      showToast("Новая версия прогноза сохранена", "success");
+      renderBlockWorkCard(updated);
+      refreshOpenBlockCard();
+      refreshPlansTabIfOpen(d.block_id);
+    } catch (e) { showToast(e.message, "error"); }
+  });
+  document.getElementById("bw-note-save").addEventListener("click", async () => {
+    try {
+      const updated = await api(`/objects/${revitPlanState.objectId}/block-works/${d.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: document.getElementById("bw-note").value }),
+      });
+      showToast("Примечание сохранено", "success");
+      renderBlockWorkCard(updated);
+    } catch (e) { showToast(e.message, "error"); }
+  });
+}
+
+// Дерево панели блока не знает о карточке ЗР — после правки дат его нужно
+// перечитать, иначе строка операции показывает устаревшие план/прогноз.
+function refreshOpenBlockCard() {
+  const blockId = currentSelectedBlockId();
+  if (blockId) loadBlockProgressPanel(blockId);
+}
+
+document.getElementById("block-work-close").addEventListener("click", () => {
+  document.getElementById("block-work-backdrop").classList.remove("open");
+});
+
+// -------- «Сроки»: групповая правка дат по отобранным блокам (одному или
+// выделенной группе) — форма §6.2 задания. --------
+
+let blockWorksDatesBlockIds = [];
+
+document.getElementById("block-works-dates-btn").addEventListener("click", async () => {
+  const blockIds = [...revitPlanState.selectedBlocks];
+  if (!blockIds.length) return;
+  blockWorksDatesBlockIds = blockIds;
+  document.getElementById("block-works-dates-backdrop").classList.add("open");
+  document.getElementById("block-works-dates-title").textContent =
+    blockIds.length > 1 ? `Сроки: ${blockIds.length} блоков` : "Сроки";
+  await loadBlockWorksDatesTable();
+});
+
+async function loadBlockWorksDatesTable() {
+  const box = document.getElementById("block-works-dates-table");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const data = await api(`/objects/${revitPlanState.objectId}/block-works`
+      + `?block_ids=${blockWorksDatesBlockIds.join(",")}`);
+    const items = data.items;
+    document.getElementById("block-works-dates-hint").textContent =
+      `Запланированных работ: ${items.length}`;
+    box.innerHTML = items.length ? `<table>
+      <thead><tr><th>Операция</th><th>План начало</th><th>План окончание</th>
+        <th>Прогноз начало</th><th>Прогноз окончание</th><th>Признак</th><th></th></tr></thead>
+      <tbody>${items.map(it => `
+        <tr data-bw-id="${it.id}">
+          <td>${escapeHtml(it["название"] || it["путь"] || "")}</td>
+          <td><input type="date" class="bw-row-plan-start" value="${it.plan_start || ""}"></td>
+          <td><input type="date" class="bw-row-plan-end" value="${it.plan_end || ""}"></td>
+          <td><input type="date" class="bw-row-forecast-start" value="${it.forecast_start || ""}"></td>
+          <td><input type="date" class="bw-row-forecast-end" value="${it.forecast_end || ""}"></td>
+          <td class="bw-deadline-${it.deadline}">${escapeHtml(it.deadline_label)}</td>
+          <td><button class="btn btn-sm btn-secondary bw-row-save">Сохранить</button></td>
+        </tr>`).join("")}</tbody>
+    </table>` : '<div class="hint-text">У отобранных блоков нет ни одной ЗР.</div>';
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+document.getElementById("block-works-dates-table").addEventListener("click", async (e) => {
+  if (!e.target.classList.contains("bw-row-save")) return;
+  const tr = e.target.closest("tr");
+  const bwId = Number(tr.dataset.bwId);
+  try {
+    await api(`/objects/${revitPlanState.objectId}/block-works/${bwId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        plan_start: tr.querySelector(".bw-row-plan-start").value || null,
+        plan_end: tr.querySelector(".bw-row-plan-end").value || null,
+        forecast_start: tr.querySelector(".bw-row-forecast-start").value || null,
+        forecast_end: tr.querySelector(".bw-row-forecast-end").value || null,
+      }),
+    });
+    showToast("Сроки сохранены", "success");
+    await loadBlockWorksDatesTable();
+    refreshOpenBlockCard();
+    refreshPlansTabIfOpen();
+  } catch (e2) { showToast(e2.message, "error"); }
+});
+
+document.getElementById("block-works-shift-apply").addEventListener("click", async () => {
+  const days = Number(document.getElementById("block-works-shift-days").value);
+  const field = document.getElementById("block-works-shift-field").value;
+  if (!days) { showToast("Укажите ненулевой сдвиг в днях", "error"); return; }
+  await runBlockWorksBulk("shift", { field, days });
+});
+document.getElementById("block-works-forecast-equals-plan").addEventListener("click", async () => {
+  await runBlockWorksBulk("forecast_equals_plan", {});
+});
+
+async function runBlockWorksBulk(op, extra) {
+  try {
+    const rows = [...document.querySelectorAll("#block-works-dates-table tr[data-bw-id]")];
+    const block_work_ids = rows.map(tr => Number(tr.dataset.bwId));
+    if (!block_work_ids.length) return;
+    const res = await api(`/objects/${revitPlanState.objectId}/block-works/bulk`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ block_work_ids, op, ...extra }),
+    });
+    showToast(`Изменено ЗР: ${res.changed} из ${res.requested}`, "success");
+    await loadBlockWorksDatesTable();
+    refreshOpenBlockCard();
+    refreshPlansTabIfOpen();
+  } catch (e) { showToast(e.message, "error"); }
+}
+
+document.getElementById("block-works-dates-close").addEventListener("click", () => {
+  document.getElementById("block-works-dates-backdrop").classList.remove("open");
 });
 
 // Слои «Элементы»/«Блоки» — независимые переключатели: можно смотреть по
@@ -30492,6 +31032,34 @@ function updateMfrChessCurrent() {
   nameEl.textContent = track ? track["название"] : "— выключено —";
 }
 
+// Легенда доски — своя палитра под режим раскраски (этап 3): цвета из
+// bwOpLabelBits/bwChessFill2D, подписи — MFR_CHESS_DEADLINE_LABELS для
+// сроков, обычные «план/в работе/выполнено» для процента.
+function renderMfrChessLegend() {
+  const box = document.getElementById("mfr-chess-legend");
+  const строка = (color, label) =>
+    `<span><i class="wp-dot" style="background:${color};border-color:${color}"></i>${escapeHtml(label)}</span>`;
+  box.innerHTML = mfrChessMode === "deadline"
+    ? Object.entries(MFR_CHESS_DEADLINE_LABELS)
+        .map(([code, label]) => строка(MFR_CHESS_DEADLINE_HEX[code], label)).join("")
+    : строка("var(--color-text-muted)", "план") + строка("#E8A33D", "в работе") + строка("#3FA76A", "выполнено");
+}
+
+document.querySelectorAll('input[name="mfr-chess-mode"]').forEach((radio) => {
+  radio.addEventListener("change", (e) => {
+    if (!e.target.checked) return;
+    mfrChessMode = e.target.value;
+    renderMfrChessLegend();
+    if (!mfrChessTrackCode) return;
+    // Тот же редрев, что при смене доски (selectMfrChessTrack) — сервер
+    // уже отдал обе сводки разом (board_block_deviation_by_track), новый
+    // запрос не нужен, только перерисовка готовыми данными.
+    if (revitPlanState.data) drawRevitPlan(revitPlanState.data);
+    mfr3d.key = null;
+    applyMfrMode();
+  });
+});
+
 // Окно выбора — плоский список досок (2026-09-04, было деревом операций):
 // доска — фиксированное название из PlanningTrack, дерево внутри неё не
 // нужно, операции этой доски и так видны построчно на самом блоке.
@@ -30532,6 +31100,7 @@ async function selectMfrChessTrack(trackCode) {
   mfrChessTrackCode = trackCode;
   updateMfrChessCurrent();
   document.getElementById("mfr-chess-legend").style.display = mfrChessTrackCode ? "" : "none";
+  if (mfrChessTrackCode) renderMfrChessLegend();
   if (mfrChessTrackCode) {
     try {
       mfrChessValues = await api(
@@ -30784,7 +31353,7 @@ function buildMfrChessLabelFace(ops) {
   const F = MFR_CHESS_LABEL_CANVAS_F;
   const шрифт = `600 ${F}px system-ui, sans-serif`;
   ctx.font = шрифт;
-  const L = mfrChessLabelLayout(ops, F, (t) => ctx.measureText(t).width);
+  const L = mfrChessLabelLayout(ops, F, (t) => ctx.measureText(t).width, MFR_CHESS_PCT_SAMPLE[mfrChessMode]);
   canvas.width = Math.ceil(L.totalW);
   canvas.height = Math.ceil(L.totalH);
 
@@ -30794,16 +31363,17 @@ function buildMfrChessLabelFace(ops) {
   ops.forEach((op, i) => {
     const rowTop = L.padY + i * L.lineH;
     const серединаСтроки = rowTop + L.lineH / 2;
+    const { color: fillColor, pctText } = bwOpLabelBits(op);
     ctx.font = шрифт;
     ctx.fillStyle = "#1a1a1a";
     ctx.fillText(op.name || "", L.padX, серединаСтроки);
     const barY = rowTop + (L.lineH - L.barH) / 2;
     ctx.fillStyle = "rgba(0,0,0,0.12)";
     ctx.fillRect(L.barX, barY, L.barW, L.barH);
-    ctx.fillStyle = MFR_CHESS_STATUS_HEX[op.status] || MFR_CHESS_STATUS_HEX.plan;
+    ctx.fillStyle = fillColor;
     ctx.fillRect(L.barX, barY, L.barW * Math.max(0, Math.min(100, op.percent)) / 100, L.barH);
     ctx.fillStyle = "#1a1a1a";
-    ctx.fillText(`${op.percent}%`, L.pctX, серединаСтроки);
+    ctx.fillText(pctText, L.pctX, серединаСтроки);
   });
 
   return {
@@ -30995,9 +31565,7 @@ async function buildMfr3D() {
       // и БЕЗ отбора по этажам видно только в 3D — раскраска 2D-плана одной
       // раскраской без неё не решала задачу «сравнить блоки между собой».
       const chess = mfrChessTrackCode ? mfrChessValues[b.id] : null;
-      const colorHex = mfrChessTrackCode
-        ? (chess ? MFR_CHESS_COLORS_3D[chess.status] : MFR_CHESS_COLORS_3D.off)
-        : 0x2f6fed;
+      const colorHex = mfrChessTrackCode ? bwChessFill3D(chess) : 0x2f6fed;
       // Блок — набор прямоугольников (block_boxes, 2026-09-05): один
       // Mesh+рёбра на каждый, все с тем же userData.blockId — раскраска
       // клика (bindMfr3DPick) и подсветки выбора видят блок целиком.
@@ -31510,9 +32078,17 @@ document.getElementById("mfr-workspace").addEventListener("click", async (e) => 
 document.getElementById("mfr-reset-all-filters").addEventListener("click", async () => {
   for (const g of REVIT_GROUPS) revitPlanState[g].clear();
   markRevitPicks();
-  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]) };
+  blockProgressFilter = { trackCodes: new Set(), statuses: new Set(["plan", "in_progress", "done"]),
+    deadlines: new Set(), period: { active: false, field: "plan", from: null, to: null } };
   renderMfrWorktypesList();
   document.querySelectorAll(".bp-status-check").forEach((cb) => { cb.checked = true; });
+  document.querySelectorAll(".bp-deadline-check").forEach((cb) => { cb.checked = false; });
+  document.getElementById("mfr-period-toggle").checked = false;
+  document.getElementById("mfr-period-field").value = "plan";
+  document.getElementById("mfr-period-dates").style.display = "none";
+  document.getElementById("mfr-period-from").value = "";
+  document.getElementById("mfr-period-to").value = "";
+  updateMfrPeriodTitle();
   renderBlockProgressPanel();
   mfrDynamics = { active: false, from: null, to: null };
   document.getElementById("mfr-dynamics-toggle").checked = false;
@@ -31644,14 +32220,100 @@ document.getElementById("blocks-close").addEventListener("click", () => {
 function switchBlocksTab(name) {
   document.querySelectorAll("#blocks-tabs .tab-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.blkTab === name));
-  for (const key of ["setup", "blocks", "worktypes"]) {
+  for (const key of ["setup", "blocks", "worktypes", "plans"]) {
     document.getElementById(`blk-tab-${key}`).style.display = key === name ? "" : "none";
   }
   if (name === "blocks") loadBlkMatrix();
   if (name === "worktypes") loadWorkTypesTree();
+  if (name === "plans") loadBlkPlansBlocks();
 }
 document.querySelectorAll("#blocks-tabs .tab-btn").forEach(btn =>
   btn.addEventListener("click", () => switchBlocksTab(btn.dataset.blkTab)));
+
+// -------- «Запланированные работы» (2026-09-10, живой запрос пользователя)
+// — блоки объекта слева, ЗР выбранного блока справа; клик по ЗР открывает
+// ту же карточку (#block-work-backdrop), что и из панели блока «Модели
+// МФР». Карточка и форма «Факт» читают revitPlanState.objectId, а эта
+// вкладка открывается из общего меню «Действия» и могла НИ РАЗУ не
+// проходить через openMfrWorkspace — отсюда выравнивание ниже (тот же
+// приём, что у menu-mfr-colors: не открывать рабочее место по-настоящему,
+// только привести objectId в соответствие). --------
+
+let blkPlansBlockId = null;
+
+async function loadBlkPlansBlocks() {
+  revitPlanState.objectId = state.objectId;
+  const box = document.getElementById("blk-plans-blocks-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const blocks = await api(`/objects/${state.objectId}/blocks`);
+    if (!blocks.length) {
+      box.innerHTML = '<div class="hint-text">Блоков ещё нет (вкладка «Блоки»).</div>';
+      return;
+    }
+    box.innerHTML = blocks.map(b => {
+      const метка = `${escapeHtml(b.section_code)} · ${escapeHtml(b.level_name || (b.floor + " этаж"))}`;
+      return `<div class="blk-plans-block-row${b.id === blkPlansBlockId ? " active" : ""}"
+        data-block-id="${b.id}">${метка}</div>`;
+    }).join("");
+    box.querySelectorAll(".blk-plans-block-row").forEach(row => {
+      row.addEventListener("click", () => selectBlkPlansBlock(Number(row.dataset.blockId)));
+    });
+    // Уже выбранный блок остаётся выбранным при возврате на вкладку (то же
+    // блоков был выбран раньше) — но если объект сменился, список ЗР мог
+    // относиться к чужому блоку; на всякий случай просто перезагружаем.
+    if (blkPlansBlockId && blocks.some(b => b.id === blkPlansBlockId)) {
+      await loadBlkPlansZrList(blkPlansBlockId);
+    }
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function selectBlkPlansBlock(blockId) {
+  blkPlansBlockId = blockId;
+  document.querySelectorAll("#blk-plans-blocks-list .blk-plans-block-row").forEach(row =>
+    row.classList.toggle("active", Number(row.dataset.blockId) === blockId));
+  loadBlkPlansZrList(blockId);
+}
+
+async function loadBlkPlansZrList(blockId) {
+  const box = document.getElementById("blk-plans-zr-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  try {
+    const data = await api(`/objects/${state.objectId}/block-works?block_ids=${blockId}`);
+    const items = data.items;
+    box.innerHTML = items.length ? items.map(it => `
+      <div class="blk-plans-zr-row" data-bw-id="${it.id}">
+        <div class="blk-plans-zr-name">${escapeHtml(it["название"] || it["путь"] || "")}</div>
+        <div class="blk-plans-zr-meta">
+          план ${bwShortDate(it.plan_start)}–${bwShortDate(it.plan_end)} ·
+          прогноз ${bwShortDate(it.forecast_start)}–${bwShortDate(it.forecast_end)} ·
+          ${it.percent}% ·
+          <span class="bw-deadline-${it.deadline}">${escapeHtml(it.deadline_label)}</span>
+        </div>
+      </div>`).join("")
+      : '<div class="hint-text">У этого блока нет ни одной ЗР — «Настройки» в панели блока «Модели МФР».</div>';
+    box.querySelectorAll(".blk-plans-zr-row").forEach(row => {
+      row.addEventListener("click", () => openBlockWorkCard(Number(row.dataset.bwId)));
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="hint-text">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// Вызывается после правок ЗР/фактов из ДРУГИХ мест (панель блока «Модели
+// МФР», форма «Сроки», «Факт») — список этой вкладки, если она открыта и
+// показывает ТОТ ЖЕ блок, иначе просто устарел бы молча. blockId не
+// передан (групповая правка сразу нескольких блоков) — обновляем без
+// сверки, дороже, но реже, чем правка одной ЗР.
+function refreshPlansTabIfOpen(blockId) {
+  if (!document.getElementById("blocks-backdrop").classList.contains("open")) return;
+  if (document.getElementById("blk-tab-plans").style.display === "none") return;
+  if (!blkPlansBlockId) return;
+  if (blockId && blockId !== blkPlansBlockId) return;
+  loadBlkPlansZrList(blkPlansBlockId);
+}
 
 // -------- Секции и этажи (вкладка «Секции и этажи») --------
 
@@ -32630,6 +33292,18 @@ function bsColumnList(data) {
   return [...blockCols, ...sectionCols, { unit: WP_UNIT_WHOLE, block_id: null, section_id: null, label: "Объект" }];
 }
 
+// Режим показа (§6.5 задания «Запланированная работа по блоку», этап 5) —
+// те же ячейки, другая величина; правка ячейки доступна только в «percent»
+// (см. ветку ниже — остальные режимы рисуют обычный <td>, не <input>).
+let bsStatusMode = "percent";
+
+document.getElementById("bs-mode").addEventListener("change", (e) => {
+  bsStatusMode = e.target.value;
+  if (currentReport === "block_status" && reportData) {
+    document.getElementById("report-body").innerHTML = renderBlockStatusReport(reportData);
+  }
+});
+
 function renderBlockStatusReport(data) {
   if (!data.tree.length) {
     return '<div class="hint-text" style="padding:8px">Справочник видов работ ещё не загружен '
@@ -32655,8 +33329,27 @@ function renderBlockStatusReport(data) {
       if (c.unit === WP_UNIT_BLOCK) {
         const cell = node.cells ? node.cells[c.block_id] : null;
         if (!cell) return `<td class="wp-cell wp-off" title="Операция не выбрана для этого блока — «Настройки» в панели блока"><span class="wp-dot"></span></td>`;
-        return `<td class="wp-cell wp-percent-cell wp-${cell.status}" data-wt="${node.id}" data-block="${c.block_id}">
-          <input type="number" class="wp-percent-input" min="0" max="100" step="1" value="${cell.percent}"/></td>`;
+        if (bsStatusMode === "percent") {
+          return `<td class="wp-cell wp-percent-cell wp-${cell.status}" data-wt="${node.id}" data-block="${c.block_id}">
+            <input type="number" class="wp-percent-input" min="0" max="100" step="1" value="${cell.percent}"/></td>`;
+        }
+        // План/прогноз/отклонение — только показ (правка ячейки есть
+        // исключительно у процента, см. docstring block_works.
+        // status_report_with_deadlines): подсказка «есть N%, по плану
+        // должно быть M%» — везде, где известен ожидаемый процент.
+        const ожидание = cell.expected_percent !== null && cell.expected_percent !== undefined
+          ? `есть ${cell.percent}%, по плану должно быть ${cell.expected_percent}%` : "";
+        if (bsStatusMode === "plan") {
+          return `<td class="wp-cell wp-${cell.status}" title="${escapeHtml(ожидание)}">`
+            + `${bwShortDate(cell.plan_start)}–${bwShortDate(cell.plan_end)}</td>`;
+        }
+        if (bsStatusMode === "forecast") {
+          return `<td class="wp-cell wp-${cell.status}" title="${escapeHtml(ожидание)}">`
+            + `${bwShortDate(cell.forecast_start)}–${bwShortDate(cell.forecast_end)}</td>`;
+        }
+        // deviation
+        return `<td class="wp-cell wp-${cell.status} bw-deadline-${cell.deadline}" title="${escapeHtml(ожидание)}">`
+          + `${cell.deviation_end === null || cell.deviation_end === undefined ? "—" : bwDeviationLabel(cell.deviation_end)}</td>`;
       }
       const status = (c.unit === WP_UNIT_SECTION ? node.cells?.[c.section_id] : node.cells?.["объект"]) || "plan";
       const blockAttr = c.block_id != null ? ` data-block="${c.block_id}"` : "";
@@ -32667,6 +33360,95 @@ function renderBlockStatusReport(data) {
     return `<tr>${nameCell}${cells}</tr>`;
   }).join("");
   return `<table id="wp-matrix-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+// -------- «График работ по блокам» (этап 5, задание «Запланированная
+// работа по блоку») — группировка выбирается на экране (blockScheduleGroupChooser),
+// вид «таблица»/«Гант» переключается локально (данные с сервера одни и те
+// же — обе пары дат и производные уже в каждой строке). --------
+
+function bschAggText(agg) {
+  const доля = agg.доля_выполненных === null ? "—" : `${agg.доля_выполненных}%`;
+  const откл = agg.среднее_отклонение === null ? "—" : `${agg.среднее_отклонение > 0 ? "+" : ""}${agg.среднее_отклонение} дн`;
+  return `всего ${agg.всего} · выполнено ${доля} · среднее отклонение ${откл} · отстают ${agg.отстают}`;
+}
+
+function bschDateRange(report) {
+  let min = null, max = null;
+  const consider = (d) => {
+    if (!d) return;
+    if (!min || d < min) min = d;
+    if (!max || d > max) max = d;
+  };
+  (function walk(nodes) {
+    for (const n of nodes) {
+      for (const r of n.rows) {
+        consider(r.plan_start); consider(r.plan_end);
+        consider(r.forecast_start); consider(r.forecast_end);
+      }
+      walk(n.children);
+    }
+  })(report.rows);
+  return { min, max };
+}
+
+function bschBarStyle(start, end, min, max) {
+  if (!start && !end) return null;
+  const s = start || end, e = end || start;
+  const span = (new Date(max) - new Date(min)) || 1;
+  const left = Math.max(0, (new Date(s) - new Date(min)) / span * 100);
+  const width = Math.max(0.6, (new Date(e) - new Date(s)) / span * 100);
+  return `left:${left.toFixed(2)}%; width:${width.toFixed(2)}%`;
+}
+
+function renderBlockScheduleRows(nodes, depth, range, view) {
+  return nodes.map(n => {
+    const pad = 8 + depth * 16;
+    const header = `<tr class="bsch-group"><td style="padding-left:${pad}px" colspan="8">`
+      + `<b>${escapeHtml(n.label)}</b> <span class="hint-text">${escapeHtml(bschAggText(n.agg))}</span></td></tr>`;
+    const rowsHtml = n.rows.map(r => {
+      if (view === "gantt") {
+        const planStyle = bschBarStyle(r.plan_start, r.plan_end, range.min, range.max);
+        const fcStyle = bschBarStyle(r.forecast_start, r.forecast_end, range.min, range.max);
+        return `<tr class="bsch-row">
+          <td style="padding-left:${pad + 16}px">${escapeHtml(r["название"] || "")}</td>
+          <td colspan="6" class="bsch-gantt-cell">
+            <div class="bsch-gantt-track">
+              ${planStyle ? `<div class="bsch-gantt-bar bsch-gantt-plan" style="${planStyle}" title="План: ${bwShortDate(r.plan_start)}–${bwShortDate(r.plan_end)}"></div>` : ""}
+              ${fcStyle ? `<div class="bsch-gantt-bar bsch-gantt-forecast" style="${fcStyle}" title="Прогноз: ${bwShortDate(r.forecast_start)}–${bwShortDate(r.forecast_end)}"></div>` : ""}
+            </div>
+          </td>
+          <td class="bw-deadline-${r.deadline}">${r.percent}%</td>
+        </tr>`;
+      }
+      return `<tr class="bsch-row">
+        <td style="padding-left:${pad + 16}px">${escapeHtml(r["название"] || "")}</td>
+        <td>${bwShortDate(r.plan_start)}–${bwShortDate(r.plan_end)}</td>
+        <td>${bwShortDate(r.forecast_start)}–${bwShortDate(r.forecast_end)}</td>
+        <td>${r.percent}%</td>
+        <td class="bw-deadline-${r.deadline}">${r.deviation_end === null || r.deviation_end === undefined ? "—" : bwDeviationLabel(r.deviation_end)}</td>
+        <td class="bw-deadline-${r.deadline}">${escapeHtml(r.deadline_label)}</td>
+        <td>${escapeHtml(r["ответственный"] || "")}</td>
+      </tr>`;
+    }).join("");
+    return header + rowsHtml + renderBlockScheduleRows(n.children, depth + 1, range, view);
+  }).join("");
+}
+
+function renderBlockScheduleReport(data) {
+  if (!data.elements) {
+    return '<div class="hint-text" style="padding:8px">Запланированных работ ещё нет — «Настройки» в панели блока.</div>';
+  }
+  const range = bschDateRange(data);
+  const head = data.view === "gantt"
+    ? `<tr><th>Операция</th><th colspan="6">План / прогноз</th><th>%</th></tr>`
+    : `<tr><th>Операция</th><th>План</th><th>Прогноз</th><th>%</th><th>Откл., дн</th><th>Признак</th><th>Ответственный</th></tr>`;
+  return `<table id="bsch-table" class="bsch-table">
+    <thead>${head}</thead>
+    <tbody>${renderBlockScheduleRows(data.rows, 0, range, data.view)}
+      <tr class="bsch-total"><td colspan="8"><b>Итого:</b> ${escapeHtml(bschAggText(data.total))}</td></tr>
+    </tbody>
+  </table>`;
 }
 
 document.getElementById("report-body").addEventListener("change", async (e) => {

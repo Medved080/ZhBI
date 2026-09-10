@@ -472,11 +472,27 @@ FEATURES = [
             SCOPE_OBJECT, _от(ADMIN, WRITE)),
     Feature("work_progress", "Учёт по блокам", "Виды работ и статус по блокам",
             "Справочник видов работ грузится перезагружаемым xlsx (путь по дереву — ключ "
-            "записи). Статус блока ставит человек, не арифметика по изделиям: «Выполнено» "
-            "— это приёмка.",
-            ["POST /objects/{id}/work-types/analyze", "POST /objects/{id}/work-types/apply",
-             "GET /objects/{id}/work-progress", "PUT /objects/{id}/work-progress/cell"],
+            "записи). Для операций «сек»/«компл» статус по-прежнему ставит человек кликом "
+            "(«Выполнено» — приёмка, не арифметика по изделиям). Для «эт/сек»/«кв.эт/сек» "
+            "план блока — явные Запланированные работы (ЗР, «Настройки»): у каждой директивный "
+            "и актуализированный (версиями) срок, процент — документами «Факт» на дату. "
+            "Снятие ЗР с фактом/сроками — мягкая пометка, не удаление.",
+            ["PUT /objects/{id}/blocks/{id}/work-types-settings",
+             "GET/PATCH /objects/{id}/block-works(/{id})", "PUT /objects/{id}/block-works/bulk",
+             "GET/POST/PUT/DELETE /objects/{id}/blocks/{id}/fact-reports",
+             "GET /objects/{id}/blocks/{id}/progress"],
             SCOPE_OBJECT, _от(ADMIN, WRITE), io=IO_IMPORT),
+    Feature("report_block_schedule", "Отчёты", "График работ по блокам",
+            "ЗР с планом, прогнозом, процентом, отклонением и признаком сроков; "
+            "группировка строк — Трек / Раздел WBS / Операция / Секция / Этаж, порядок "
+            "выбирается на экране. Выгрузка XLSX/PDF, включая вид «Гант».",
+            ["POST /reports/block-schedule(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_block_status", "Отчёты", "Учёт по блокам: статусы",
+            "Матрица видов работ × блоков/секций/объекта на выбранную дату — для «эт/сек»/"
+            "«кв.эт/сек» показ переключается процент/план/прогноз/отклонение, правка ячейки "
+            "доступна только в режиме «процент». До 2026-09-10 был закрыт разделом "
+            "«Учёт по блокам» без своей строки в матрице прав.",
+            ["POST /reports/block-status"], SCOPE_OBJECT, _все(READ)),
 ]
 
 # ======================= ПРИМЕНИМОСТЬ К ТИПАМ ОБЪЕКТА =======================
@@ -512,7 +528,7 @@ _ТОЛЬКО_ЖБИ = {
     "plan", "export", "workspace_model", "workspace_foreman",
 }
 _ТОЛЬКО_МФР = {"revit_import", "revit_model", "workspace_mfr", "blocks", "work_progress",
-               "pdf_import"}
+               "pdf_import", "report_block_schedule", "report_block_status"}
 
 FEATURES = [
     f._replace(kinds=_Ж) if f.key in _ТОЛЬКО_ЖБИ else

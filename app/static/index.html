@@ -3199,6 +3199,55 @@
      большая минимальная ширина, иначе колонка процентов дёргается по
      ширине от строки к строке. */
   #block-progress-tree .bp-percent.bp-percent-range { min-width: 76px; }
+  /* Строка план/прогноз/отклонение под полосой (2026-09-10, ЗР — этап 2
+     задания «Запланированная работа по блоку») — мельче и приглушённее
+     самой операции, кликабельна целиком (курсор-подсказка «открыть
+     карточку ЗР»). Цвет — по признаку сроков (app/block_works.py,
+     DEADLINE_*), тем же приёмом, что bp-bar-fill.bp-* у статуса. */
+  #block-progress-tree .bp-op-dates {
+    font-size: 11px; color: var(--color-text-muted); margin-top: 1px;
+    cursor: pointer; overflow-wrap: anywhere;
+  }
+  #block-progress-tree .bp-op-dates:hover { text-decoration: underline; }
+  #block-progress-tree .bp-deadline-overdue { color: #C0392B; font-weight: 600; }
+  #block-progress-tree .bp-deadline-not_started_on_time { color: #C0392B; }
+  #block-progress-tree .bp-deadline-behind { color: #E8A33D; font-weight: 600; }
+  #block-progress-tree .bp-deadline-on_track { color: #3FA76A; }
+  #block-progress-tree .bp-deadline-no_dates { color: var(--color-text-muted); }
+  /* Агрегат блока (шапка карточки) и таблица «Сроки» (группа) — тот же
+     цвет по признаку, без завязки на #block-progress-tree. */
+  .bw-deadline-overdue { color: #C0392B; font-weight: 600; }
+  .bw-deadline-not_started_on_time { color: #C0392B; }
+  .bw-deadline-behind { color: #E8A33D; font-weight: 600; }
+  .bw-deadline-on_track { color: #3FA76A; }
+  .bw-deadline-no_dates { color: var(--color-text-muted); }
+  #block-works-dates-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #block-works-dates-table th, #block-works-dates-table td { padding: 3px 6px; border-bottom: 1px solid var(--color-border); text-align: left; }
+  #block-works-dates-table input[type=date] { width: 128px; font-size: 12px; }
+  /* Отчёт «График работ по блокам» (этап 5) — группировка + вид таблица/
+     Гант, обе на одних и тех же строках (renderBlockScheduleReport). */
+  .bsch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .bsch-table th { text-align: left; padding: 4px 6px; border-bottom: 2px solid var(--color-border); }
+  .bsch-table td { padding: 3px 6px; border-bottom: 1px solid var(--color-border); }
+  .bsch-group td { background: var(--color-surface-2); padding-top: 6px; padding-bottom: 6px; }
+  .bsch-total td { background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
+  .bsch-gantt-cell { padding: 2px 6px; }
+  .bsch-gantt-track { position: relative; height: 16px; background: var(--color-surface-2); border-radius: 3px; }
+  .bsch-gantt-bar { position: absolute; top: 1px; height: 6px; border-radius: 3px; }
+  .bsch-gantt-bar.bsch-gantt-plan { top: 1px; background: #4A86C8; }
+  .bsch-gantt-bar.bsch-gantt-forecast { top: 9px; background: #E8703A; }
+  /* «Учёт по блокам» → «Запланированные работы» (2026-09-10) — блоки
+     слева, ЗР выбранного блока справа. */
+  .blk-plans-layout { display: flex; gap: 16px; height: 60vh; }
+  .blk-plans-blocks-col { flex: 0 0 260px; overflow-y: auto; border-right: 1px solid var(--color-border); padding-right: 8px; }
+  .blk-plans-zr-col { flex: 1 1 auto; overflow-y: auto; }
+  .blk-plans-block-row { padding: 5px 8px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
+  .blk-plans-block-row:hover { background: var(--color-surface-2); }
+  .blk-plans-block-row.active { background: var(--color-primary); color: #fff; }
+  .blk-plans-zr-row { padding: 6px 8px; border-radius: var(--radius); cursor: pointer; border-bottom: 1px solid var(--color-border); }
+  .blk-plans-zr-row:hover { background: var(--color-surface-2); }
+  .blk-plans-zr-name { font-size: 13px; }
+  .blk-plans-zr-meta { font-size: 11px; color: var(--color-text-muted); margin-top: 2px; }
   /* Подсказка-история факта по наведению на полосу (живой запрос
      пользователя) — тот же визуальный приём, что у #chart-tooltip
      (плавающая карточка у курсора), свой экземпляр: разные источники
@@ -4773,6 +4822,12 @@
                  пустой отчёт с пояснением, отдельного права не заводится
                  (те же права, что у самого «Учёта по блокам»). -->
             <button id="menu-report-block-status">Учёт по блокам: статусы</button>
+            <!-- «График работ по блокам» (этап 5 задания «Запланированная
+                 работа по блоку», 2026-09-10) — ЗР с планом, прогнозом,
+                 процентом, отклонением, признаком сроков; группировка
+                 строк и вид «Гант» — на экране. Свой раздел прав
+                 (report_block_schedule), отдельная строка в меню. -->
+            <button id="menu-report-block-schedule">График работ по блокам</button>
           </div>
         </div>
         <!-- «Обучение» (2026-08-14). Инструкция собирается под роли самого
@@ -5100,7 +5155,9 @@
           <div class="actions" style="margin:8px 0">
             <button class="btn btn-sm btn-secondary" id="block-progress-settings-btn">Настройки</button>
             <button class="btn btn-sm btn-primary" id="block-progress-fact-btn">Факт</button>
+            <button class="btn btn-sm btn-secondary" id="block-works-dates-btn">Сроки</button>
           </div>
+          <div id="block-progress-dates-summary" class="hint-text" style="margin:0 0 6px"></div>
           <!-- Фильтр дашборда блока (раздел/статус) переехал на вкладку
                «Фильтры» целиком (живой запрос пользователя, 2026-09-10) —
                «Виды работ»/«Статус выполнения» ниже; здесь только само
@@ -5197,6 +5254,50 @@
             </div>
           </div>
         </div>
+        <!-- «Сроки» (этап 3, задание «Запланированная работа по блоку») —
+             чекбоксы признака ЗР (app/block_works.py, DEADLINE_*), режет
+             дерево карточки блока тем же приёмом, что «Статус выполнения»
+             выше (blockProgressFilter.deadlines, пустой набор — без
+             отбора). -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-deadline-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span>Сроки</span>
+          </div>
+          <div id="mfr-filter-deadline-body">
+            <div class="bp-status-filter">
+              <label><input type="checkbox" class="bp-deadline-check" value="on_track">в графике</label>
+              <label><input type="checkbox" class="bp-deadline-check" value="behind">отстаёт</label>
+              <label><input type="checkbox" class="bp-deadline-check" value="overdue">просрочена</label>
+              <label><input type="checkbox" class="bp-deadline-check" value="not_started_on_time">не начата в срок</label>
+              <label><input type="checkbox" class="bp-deadline-check" value="no_dates">без сроков</label>
+            </div>
+          </div>
+        </div>
+        <!-- «Период по плану» (этап 3) — ЗР, чей план (или, переключателем,
+             прогноз) пересекается с указанным периодом: «что должно идти на
+             этой неделе». Та же пара дат, что «Динамика» ниже, но своя,
+             НЕЗАВИСИМАЯ (разные вопросы: там — что менялось, здесь — что
+             должно идти сейчас). -->
+        <div class="filter-group">
+          <div class="filter-group-header">
+            <button type="button" class="filter-expand-btn" data-collapse="mfr-filter-period-body"
+                    title="Свернуть/развернуть">▾</button>
+            <span id="mfr-period-title">Период по плану</span>
+          </div>
+          <div id="mfr-filter-period-body">
+            <label class="toggle"><input type="checkbox" id="mfr-period-toggle">отбирать по периоду</label>
+            <label>по <select id="mfr-period-field">
+              <option value="plan">плану</option>
+              <option value="forecast">прогнозу</option>
+            </select></label>
+            <div id="mfr-period-dates" class="mfr-dynamics-dates-row" style="display:none">
+              <label>с <input type="date" id="mfr-period-from"></label>
+              <label>по <input type="date" id="mfr-period-to"></label>
+            </div>
+          </div>
+        </div>
         <!-- Динамика факта за период (живой запрос пользователя): подсветка
              блоков, где факт менялся внутри периода, — источник не журнал
              (для «эт/сек»/«кв.эт/сек» его нет), а сравнение двух «снимков на
@@ -5270,11 +5371,17 @@
             <button type="button" class="mfr-chess-current" id="mfr-chess-open">
               <div id="mfr-chess-current-name">— выключено —</div>
             </button>
-            <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px">
-              <span><i class="wp-dot" style="background:var(--color-text-muted);border-color:var(--color-text-muted)"></i>план</span>
-              <span><i class="wp-dot" style="background:#E8A33D;border-color:#E8A33D"></i>в работе</span>
-              <span><i class="wp-dot" style="background:#3FA76A;border-color:#3FA76A"></i>выполнено</span>
+            <!-- Режим раскраски доски (этап 3, задание «Запланированная
+                 работа по блоку») — «по выполнению» (среднее процентов,
+                 как раньше) или «по срокам» (худший признак среди операций
+                 доски на блоке). Сервер отдаёт обе сводки разом
+                 (board_block_deviation_by_track), переключатель не ходит
+                 на сервер повторно. -->
+            <div class="mfr-chess-mode-row" style="margin-top:6px">
+              <label><input type="radio" name="mfr-chess-mode" value="progress" checked>по выполнению</label>
+              <label><input type="radio" name="mfr-chess-mode" value="deadline">по срокам</label>
             </div>
+            <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px"></div>
           </div>
         </div>
       </div>
@@ -7370,6 +7477,36 @@
            «какой день редактируем», см. work_fact.set_cell_percent. -->
       <div class="ds-controls" id="report-block-status-box" style="display:none">
         <label class="field">На дату <input type="date" id="bs-date" style="width:auto"/></label>
+        <!-- Переключатель показа (§6.5 задания «Запланированная работа по
+             блоку», этап 5) — те же ячейки «эт/сек»/«кв.эт/сек», другая
+             величина; правка по-прежнему только в «процент» (клетка тогда
+             редактируемая, в остальных режимах — просто текст). -->
+        <label class="field">Показывать
+          <select id="bs-mode">
+            <option value="percent">процент</option>
+            <option value="plan">план</option>
+            <option value="forecast">прогноз</option>
+            <option value="deviation">отклонение</option>
+          </select>
+        </label>
+      </div>
+      <!-- «График работ по блокам» (этап 5 задания «Запланированная работа
+           по блоку») — группировка строк тем же органом, что у «Графика
+           поставки» (createGroupChooser), плюс переключатель вида
+           таблица/Гант. Фильтр схемы неприменим — это учёт по блокам МФР,
+           не по изделиям ЖБИ (та же причина, что у «Учёта по блокам:
+           статусы» выше). -->
+      <div class="ds-controls" id="report-block-schedule-box" style="display:none">
+        <label class="field">Вид
+          <select id="bsch-view">
+            <option value="table">таблица</option>
+            <option value="gantt">Гант</option>
+          </select>
+        </label>
+        <div class="ds-chips">
+          <span class="hint-text">Группировка:</span>
+          <span id="bsch-groups"></span>
+        </div>
       </div>
       <!-- Сужение фильтром схемы к «Моей работе» неприменимо: там строки —
            события журнала, а не изделия, и часть из них к изделиям вообще
@@ -8016,6 +8153,11 @@
       <button type="button" class="tab-btn active" data-blk-tab="setup">Секции и этажи</button>
       <button type="button" class="tab-btn" data-blk-tab="blocks">Блоки</button>
       <button type="button" class="tab-btn" data-blk-tab="worktypes">Виды работ</button>
+      <!-- «Запланированные работы» (2026-09-10, живой запрос пользователя)
+           — отдельная закладка: слева блоки объекта, справа от выбранного
+           блока — список его ЗР, клик по ЗР открывает ту же карточку, что
+           и из панели блока «Модели МФР» (#block-work-backdrop). -->
+      <button type="button" class="tab-btn" data-blk-tab="plans">Запланированные работы</button>
     </div>
 
     <div id="blk-tab-setup" class="blk-panel">
@@ -8142,6 +8284,24 @@
       <div id="wt-tree-box" style="max-height:50vh; overflow:auto"></div>
     </div>
 
+    <!-- «Запланированные работы» (2026-09-10, живой запрос пользователя) —
+         слева блоки объекта, справа ЗР выбранного блока; клик по ЗР
+         открывает её карточку (#block-work-backdrop, та же, что из панели
+         блока «Модели МФР») с реквизитами и списком документов факта. -->
+    <div id="blk-tab-plans" class="blk-panel" style="display:none">
+      <p class="hint-text">Слева — блоки объекта, справа — запланированные работы (ЗР) выбранного
+        блока. Клик по ЗР открывает карточку: реквизиты, сроки, версии прогноза и документы
+        факта — там же их можно поправить или удалить.</p>
+      <div class="blk-plans-layout">
+        <div class="blk-plans-blocks-col">
+          <div id="blk-plans-blocks-list"><div class="hint-text">Загрузка…</div></div>
+        </div>
+        <div class="blk-plans-zr-col">
+          <div id="blk-plans-zr-list" class="hint-text">Выберите блок слева.</div>
+        </div>
+      </div>
+    </div>
+
     <div id="blk-recalc-report" class="hint-text" style="padding:2px 0 6px"></div>
     <div class="actions" style="justify-content:space-between">
       <button class="btn btn-sm btn-secondary" id="blk-recalc-membership"
@@ -8195,7 +8355,52 @@
     </div>
     <div class="actions" style="margin-top:12px">
       <button class="btn btn-primary" id="block-fact-save">Сохранить</button>
+      <!-- Удаление ДОКУМЕНТА целиком (этап 4, В6) — только у уже
+           сохранённого отчёта; у ещё не сохранённого черновика («Новый
+           отчёт») удалять нечего, кнопка скрыта (см. startNewBlockFactReport). -->
+      <button class="btn btn-danger" id="block-fact-delete" hidden>Удалить отчёт</button>
       <button class="btn btn-secondary" id="block-fact-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Карточка ЗР (запланированной работы) — app/block_works.py, этап 2
+     задания «Запланированная работа по блоку». Клик по строке операции в
+     панели блока открывает эту модалку: реквизиты, обе пары дат с правкой,
+     версии актуализации, история факта. -->
+<div class="modal-backdrop" id="block-work-backdrop">
+  <div class="modal wide">
+    <h2 id="block-work-title">Запланированная работа</h2>
+    <div id="block-work-body"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-secondary" id="block-work-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Групповая правка сроков ЗР («Сроки») — по отобранным блокам (одному
+     или выделенной группе, Ctrl/Cmd-клик) и текущему отбору «Виды работ».
+     Таблица со сдвигом по ячейке (PATCH на строку) плюс две групповые
+     операции — сдвинуть все на N дней, прогноз = план для не начатых. -->
+<div class="modal-backdrop" id="block-works-dates-backdrop">
+  <div class="modal wide">
+    <h2 id="block-works-dates-title">Сроки</h2>
+    <p class="hint-text" id="block-works-dates-hint"></p>
+    <div class="actions" style="margin-bottom:8px; gap:12px; flex-wrap:wrap">
+      <span>Сдвинуть на
+        <input type="number" id="block-works-shift-days" style="width:60px" value="1">
+        дн. для
+        <select id="block-works-shift-field">
+          <option value="plan">плана</option>
+          <option value="forecast">прогноза</option>
+        </select>
+      </span>
+      <button class="btn btn-sm btn-secondary" id="block-works-shift-apply">Сдвинуть</button>
+      <button class="btn btn-sm btn-secondary" id="block-works-forecast-equals-plan">Прогноз = план (не начатые)</button>
+    </div>
+    <div id="block-works-dates-table" class="scroll-always" style="max-height:50vh"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn btn-secondary" id="block-works-dates-close">Закрыть</button>
     </div>
   </div>
 </div>

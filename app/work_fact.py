@@ -13,13 +13,16 @@
 операция), без деления по отдельным квартирам (задел на будущее, решение
 пользователя).
 
-Отбор операций на блоке (`block_work_types`) — ИСКЛЮЧЕНИЕ из общего
-списка, а не отдельное состояние по умолчанию: пока блок не настраивали
-(`blocks.work_types_configured_at IS NULL`), выбранным считается ВЕСЬ
-список операций объекта с единицей из BLOCK_UNITS — так вела себя матрица
-статусов раньше (тогда только для «эт/сек»), отбор её не меняет, пока форму
-«Настройки» не сохранили явно хоть раз (даже если сохранённый список совпал
-с «всё»).
+Отбор операций на блоке — план блока, строки `block_works` («Запланированная
+работа», ЗР — Docs/block-works-schedule-task.md, 2026-09-10). ЯВНЫЙ: у
+блока, который не настраивали, строк нет вовсе, «выбрано всё по умолчанию»
+не бывает — до 2026-09-10 было наоборот (`block_work_types` + отдельный
+флаг `blocks.work_types_configured_at`, отсутствие настройки = «выбран весь
+список»), это поведение снято тем же решением, что завело ЗР: у операции со
+сроками неявного «всё» быть не может, срок ставится на конкретную строку.
+ЗР — не только отбор: у строки `block_works` есть колонки под директивные и
+актуализированные сроки рядом с парой (block_id, work_type_id) — правка и
+показ этих сроков появляются позже, отдельным этапом задания.
 
 Отчёт о фактическом выполнении — ДОКУМЕНТ на дату, а не строка в
 неизменяемом журнале действий: пользователь явно попросил возможность
@@ -43,7 +46,7 @@
 входят — остаются видны только в дереве «Виды работ» и старой матрице.
 """
 
-from app import work_progress
+from app import activity, work_progress
 from app.work_progress import (
     BLOCK_UNITS, STATUS_PLAN, STATUS_IN_PROGRESS, STATUS_DONE,
 )
@@ -85,44 +88,121 @@ def _block_op_work_types(conn, object_id: int) -> list:
 
 def block_settings(conn, object_id: int, block_id: int) -> dict:
     """Список операций «эт/сек» для формы «Настройки»: все варианты плюс
-    те, что сейчас выбраны для блока (или «выбрано всё», если ещё не
-    настраивали)."""
-    row = conn.execute(
-        "SELECT work_types_configured_at FROM blocks WHERE id = ? AND object_id = ?",
-        (block_id, object_id),
-    ).fetchone()
-    if row is None:
+    те, что сейчас в плане блока (`block_works`).
+
+    Явность плана (2026-09-10, Docs/block-works-schedule-task.md §2.2) —
+    у ЗР появились сроки, а неявному «всё» ставить срок некуда. Поэтому у
+    ненастроенного блока `selected` теперь пуст, а не «весь список»: то
+    старое поведение читало `blocks.work_types_configured_at`, это поле
+    здесь и в трёх других местах модуля (`_op_included_percents`,
+    `board_block_values` через него, `used_planning_tracks`) больше не
+    читается вовсе (решение пользователя — «читать перестают»)."""
+    if not _block_exists(conn, object_id, block_id):
         raise FactError(404, "Блок не найден.")
     options = _block_op_work_types(conn, object_id)
-    if row["work_types_configured_at"] is None:
-        selected = {r["id"] for r in options}
-    else:
-        selected = {
-            r["work_type_id"] for r in conn.execute(
-                "SELECT work_type_id FROM block_work_types WHERE block_id = ?", (block_id,))
-        }
+    # retired_at IS NULL — снятые «Настройками» операции (В7, есть факт или
+    # сроки — строка не удаляется, а мягко помечается) не должны выглядеть
+    # выбранными: план блока их больше не содержит, история просто не
+    # потеряна и доступна по id ЗР (app/block_works.py::get_block_work).
+    selected = {
+        r["work_type_id"] for r in conn.execute(
+            "SELECT work_type_id FROM block_works WHERE block_id = ? AND retired_at IS NULL", (block_id,))
+    }
     return {
-        "configured": row["work_types_configured_at"] is not None,
+        # «Настроен» больше не отдельное состояние блока (см. docstring) —
+        # производное: есть хотя бы одна ЗР. Единственный читатель этого
+        # поля на фронте — счётчик «настроен отбор у N» в форме группы
+        # (app/static/app.js), одиночная форма его не показывает.
+        "configured": bool(selected),
         "options": [{"id": r["id"], "путь": r["path"], "код": r["code"]} for r in options],
         "selected": sorted(selected),
     }
 
 
-def save_block_settings(conn, object_id: int, block_id: int, work_type_ids: list) -> None:
+def _block_work_has_history(conn, bw_id: int) -> bool:
+    """У ЗР уже есть заданные сроки или зафиксированный факт (В7) —
+    снимать её с блока «Настройками» безвозвратным DELETE нельзя, только
+    мягкой пометкой `retired_at` (см. save_block_settings)."""
+    row = conn.execute(
+        "SELECT plan_start, plan_end, forecast_start, forecast_end FROM block_works WHERE id = ?",
+        (bw_id,),
+    ).fetchone()
+    if row and (row["plan_start"] or row["plan_end"] or row["forecast_start"] or row["forecast_end"]):
+        return True
+    return conn.execute(
+        "SELECT 1 FROM work_fact_items WHERE block_work_id = ? LIMIT 1", (bw_id,)
+    ).fetchone() is not None
+
+
+def save_block_settings(conn, object_id: int, block_id: int, work_type_ids: list,
+                        user_id: int, *, log: bool = True) -> None:
+    """Состав работ блока = создаёт/удаляет строки `block_works` (не
+    удаляет-и-пересоздаёт весь набор разом, как раньше block_work_types):
+    у ЗР теперь есть сроки и факт, и снос-с-нуля стёр бы их у операций,
+    которые остались выбранными.
+
+    Снятие операции с зафиксированным фактом/сроками (В7, решение
+    пользователя 2026-09-10) — МЯГКОЕ: строка помечается `retired_at`, а не
+    удаляется, если на ней уже есть хоть одна дата или хоть один факт
+    (`_block_work_has_history`); совсем пустую ЗР по-прежнему можно удалить
+    без следа — истории у неё и так нет. Повторное включение той же
+    операции — снятие пометки (`retired_at = NULL`) у уже существующей
+    строки, а не новая вставка: иначе UNIQUE(block_id, work_type_id)
+    столкнулся бы с ней же.
+
+    `log` — писать ли в журнал действий отсюда (2026-09-10, коды
+    `block_work_add`/`block_work_remove`, по одной записи на КАЖДОЕ
+    изменённое множество, а не на операцию: список бывает в десятки строк, и
+    журнал ими не заводят так же, как массовая правка статуса не пишет
+    построчно). `False` — у групповой формы (`save_blocks_settings`): там
+    своя, ОДНА запись на весь групповой вызов (`block_work_types_settings` в
+    app/main.py), а не N одинаковых от каждого блока группы."""
     if not _block_exists(conn, object_id, block_id):
         raise FactError(404, "Блок не найден.")
     valid_ids = {r["id"] for r in _block_op_work_types(conn, object_id)}
     chosen = valid_ids & set(work_type_ids)
-    conn.execute("DELETE FROM block_work_types WHERE block_id = ?", (block_id,))
+    rows = conn.execute(
+        "SELECT id, work_type_id, retired_at FROM block_works WHERE block_id = ?", (block_id,)
+    ).fetchall()
+    active = {r["work_type_id"]: r["id"] for r in rows if r["retired_at"] is None}
+    retired = {r["work_type_id"]: r["id"] for r in rows if r["retired_at"] is not None}
+
+    to_reactivate = (chosen - active.keys()) & retired.keys()
+    to_insert = chosen - active.keys() - retired.keys()
+    to_remove = active.keys() - chosen
+
     conn.executemany(
-        "INSERT INTO block_work_types (block_id, work_type_id) VALUES (?, ?)",
-        [(block_id, wt_id) for wt_id in chosen],
+        "INSERT INTO block_works (object_id, block_id, work_type_id, created_by, updated_by) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [(object_id, block_id, wt_id, user_id, user_id) for wt_id in to_insert],
     )
-    conn.execute(
-        "UPDATE blocks SET work_types_configured_at = datetime('now') WHERE id = ?",
-        (block_id,),
-    )
+    for wt_id in to_reactivate:
+        conn.execute(
+            "UPDATE block_works SET retired_at = NULL, updated_at = datetime('now'), "
+            "updated_by = ? WHERE id = ?", (user_id, retired[wt_id]),
+        )
+    soft_removed, hard_removed = [], []
+    for wt_id in to_remove:
+        bw_id = active[wt_id]
+        if _block_work_has_history(conn, bw_id):
+            conn.execute(
+                "UPDATE block_works SET retired_at = datetime('now'), updated_at = datetime('now'), "
+                "updated_by = ? WHERE id = ?", (user_id, bw_id),
+            )
+            soft_removed.append(bw_id)
+        else:
+            conn.execute("DELETE FROM block_works WHERE id = ?", (bw_id,))
+            hard_removed.append(bw_id)
     conn.commit()
+    to_add = to_insert | to_reactivate
+    if log:
+        if to_add:
+            activity.log("block_work_add", user_id=user_id, entity_type="object",
+                         entity_id=object_id, details={"block_id": block_id, "count": len(to_add)})
+        if to_remove:
+            activity.log("block_work_remove", user_id=user_id, entity_type="object",
+                         entity_id=object_id, details={"block_id": block_id, "count": len(to_remove),
+                                                       "мягко": len(soft_removed), "удалено": len(hard_removed)})
 
 
 def blocks_settings(conn, object_id: int, block_ids: list) -> dict:
@@ -153,7 +233,8 @@ def blocks_settings(conn, object_id: int, block_ids: list) -> dict:
     }
 
 
-def save_blocks_settings(conn, object_id: int, block_ids: list, work_type_ids: list) -> int:
+def save_blocks_settings(conn, object_id: int, block_ids: list, work_type_ids: list,
+                         user_id: int) -> int:
     """Один и тот же список операций — всем выделенным блокам разом. Каждый
     блок проверяется и пишется тем же save_block_settings, что и поодиночке:
     отдельной ветки хранения у группового применения нет, «группа» живёт
@@ -161,7 +242,7 @@ def save_blocks_settings(conn, object_id: int, block_ids: list, work_type_ids: l
     if not block_ids:
         raise FactError(422, "Не выбран ни один блок.")
     for block_id in block_ids:
-        save_block_settings(conn, object_id, block_id, work_type_ids)
+        save_block_settings(conn, object_id, block_id, work_type_ids, user_id, log=False)
     return len(block_ids)
 
 
@@ -176,6 +257,32 @@ def _current_percents(conn, block_id: int) -> dict:
     result = {}
     for row in rows:
         result[row["work_type_id"]] = row["percent"]  # позже в сортировке — победил
+    return result
+
+
+def current_percents_by_block_work(conn, object_id: int) -> dict:
+    """block_work_id -> текущий процент, тем же принципом, что
+    `_current_percents` (максимальная `report_date`, при равенстве — больший
+    id отчёта), но одним запросом сразу по ВСЕМ ЗР объекта — через прямую
+    ссылку `work_fact_items.block_work_id` (app/db.py, этап 1 задания
+    2026-09-10). Источник для app/block_works.py: там нужен процент сразу у
+    списка ЗР, а не по одному блоку за раз, как в остальных функциях этого
+    модуля.
+
+    Строка без ссылки (осталась NULL — обработка релиза не успела
+    выполниться) сюда не попадает; на список ЗР это влияет тем, что у такой
+    ЗР процент в ответе будет 0 вместо факта — переживаемо для списка/карточки
+    (не источник истины, а витрина), и снимается первым же успешным
+    прогоном `2026-09-10-fill-work-fact-items-block-work-id`."""
+    rows = conn.execute(
+        "SELECT i.block_work_id, i.percent FROM work_fact_items i "
+        "JOIN work_fact_reports r ON r.id = i.report_id "
+        "WHERE r.object_id = ? AND i.block_work_id IS NOT NULL "
+        "ORDER BY r.report_date ASC, r.id ASC", (object_id,),
+    ).fetchall()
+    result = {}
+    for row in rows:
+        result[row["block_work_id"]] = row["percent"]  # позже в сортировке — победил
     return result
 
 
@@ -295,24 +402,22 @@ def used_planning_tracks(conn, object_id: int) -> list:
     """Доски «Шахматки» для пикера (2026-09-04, замена used_work_types):
     коды строго «1»-«20» (остальные вне визуализации на модели — см. модуль
     docstring), у которых есть хотя бы одна операция BLOCK_UNITS, реально
-    применимая хотя бы к одному блоку — тот же критерий, что раньше был у
-    used_work_types (неотнастроенный блок использует ВЕСЬ список, значит при
-    наличии такого блока используются вообще все операции, отдельно
-    проверять нечего)."""
+    входящая в план хотя бы одного блока (`block_works`).
+
+    До 2026-09-10 здесь был отдельный случай «есть ненастроенный блок —
+    значит используются вообще все операции»: у него по умолчанию был выбран
+    весь список. Явность плана (§2.2 задания) этот случай убирает —
+    неотнастроенный блок теперь просто ПУСТ, отдельно его больше не
+    проверяют."""
     options = _block_op_work_types(conn, object_id)
     if not options:
         return []
-    has_unconfigured = conn.execute(
-        "SELECT 1 FROM blocks WHERE object_id = ? AND work_types_configured_at IS NULL",
-        (object_id,),
-    ).fetchone() is not None
-    if not has_unconfigured:
-        used_ids = {
-            r["work_type_id"] for r in conn.execute(
-                "SELECT DISTINCT bwt.work_type_id FROM block_work_types bwt "
-                "JOIN blocks b ON b.id = bwt.block_id WHERE b.object_id = ?", (object_id,))
-        }
-        options = [o for o in options if o["id"] in used_ids]
+    used_ids = {
+        r["work_type_id"] for r in conn.execute(
+            "SELECT DISTINCT work_type_id FROM block_works WHERE object_id = ? "
+            "AND retired_at IS NULL", (object_id,))
+    }
+    options = [o for o in options if o["id"] in used_ids]
     used_track_codes = {o["planning_track_code"] for o in options if o["planning_track_code"]}
 
     track_names = {
@@ -336,7 +441,12 @@ def used_planning_tracks(conn, object_id: int) -> list:
 
 def _op_included_percents(conn, object_id: int, work_type_id: int) -> dict:
     """block_id -> процент, только для блоков, где эта операция входит в
-    отбор (см. block_settings) — единица логики для board_block_values."""
+    отбор (см. block_settings) — единица логики для board_block_values.
+
+    Отбор — наличие строки `block_works` (2026-09-10): неявного «включено
+    по умолчанию» у ненастроенного блока больше нет, `blocks.
+    work_types_configured_at` здесь не читается (см. docstring
+    block_settings)."""
     percents = {}
     for row in conn.execute(
         "SELECT i.percent, r.block_id FROM work_fact_items i "
@@ -348,14 +458,11 @@ def _op_included_percents(conn, object_id: int, work_type_id: int) -> dict:
 
     result = {}
     for row in conn.execute(
-        "SELECT b.id, CASE WHEN b.work_types_configured_at IS NULL THEN 1 "
-        "WHEN bwt.work_type_id IS NOT NULL THEN 1 ELSE 0 END AS included "
-        "FROM blocks b LEFT JOIN block_work_types bwt "
-        "ON bwt.block_id = b.id AND bwt.work_type_id = ? "
-        "WHERE b.object_id = ?", (work_type_id, object_id),
+        "SELECT block_id FROM block_works WHERE object_id = ? AND work_type_id = ? "
+        "AND retired_at IS NULL",
+        (object_id, work_type_id),
     ):
-        if row["included"]:
-            result[row["id"]] = percents.get(row["id"], 0)
+        result[row["block_id"]] = percents.get(row["block_id"], 0)
     return result
 
 
@@ -414,6 +521,31 @@ def list_reports(conn, object_id: int, block_id: int) -> list:
     } for r in rows]
 
 
+def list_reports_with_percent(conn, object_id: int, block_id: int, work_type_id: int) -> list:
+    """Документы факта блока — тот же список, что `list_reports`, но с
+    процентом ИМЕННО этой операции в каждом (LEFT JOIN — документ мог не
+    коснуться операции, тогда None). Источник для карточки ЗР (§ живой
+    запрос пользователя, 2026-09-10 — «список документов фиксации факта»,
+    который правится/удаляется прямо оттуда, не только читается)."""
+    rows = conn.execute(
+        "SELECT r.id, r.report_date, r.created_at, r.updated_at, i.percent AS percent, "
+        "cu.last_name AS cu_last, cu.first_name AS cu_first, "
+        "uu.last_name AS uu_last, uu.first_name AS uu_first "
+        "FROM work_fact_reports r "
+        "LEFT JOIN users cu ON cu.id = r.created_by "
+        "LEFT JOIN users uu ON uu.id = r.updated_by "
+        "LEFT JOIN work_fact_items i ON i.report_id = r.id AND i.work_type_id = ? "
+        "WHERE r.object_id = ? AND r.block_id = ? ORDER BY r.report_date DESC, r.id DESC",
+        (work_type_id, object_id, block_id),
+    ).fetchall()
+    return [{
+        "id": r["id"], "report_date": r["report_date"], "percent": r["percent"],
+        "created_at": r["created_at"], "updated_at": r["updated_at"],
+        "created_by": _user_label(r["cu_last"], r["cu_first"]),
+        "updated_by": _user_label(r["uu_last"], r["uu_first"]),
+    } for r in rows]
+
+
 def get_report(conn, object_id: int, block_id: int, report_id: int) -> dict:
     row = conn.execute(
         "SELECT id, report_date FROM work_fact_reports "
@@ -445,6 +577,10 @@ def save_report(conn, object_id: int, user_id: int, block_id: int, report_id, re
         if not isinstance(percent, int) or not (0 <= percent <= 100):
             raise FactError(422, "Процент вне 0..100 у вида работ %s." % wt_id)
 
+    # Старые значения — ДО удаления строк (этап 4, В6): что реально
+    # изменится, известно только сейчас, а после DELETE сравнивать будет не
+    # с чем. Пусто у нового отчёта — сравнивать не с чем, это не правка.
+    old_items = {}
     if report_id is None:
         cur = conn.execute(
             "INSERT INTO work_fact_reports (object_id, block_id, report_date, created_by, "
@@ -459,18 +595,63 @@ def save_report(conn, object_id: int, user_id: int, block_id: int, report_id, re
         ).fetchone()
         if row is None:
             raise FactError(404, "Отчёт не найден.")
+        old_items = {
+            r["work_type_id"]: (r["percent"], r["block_work_id"]) for r in conn.execute(
+                "SELECT work_type_id, percent, block_work_id FROM work_fact_items "
+                "WHERE report_id = ?", (report_id,))
+        }
         conn.execute(
             "UPDATE work_fact_reports SET report_date = ?, updated_by = ?, "
             "updated_at = datetime('now') WHERE id = ?",
             (report_date, user_id, report_id),
         )
         conn.execute("DELETE FROM work_fact_items WHERE report_id = ?", (report_id,))
+    # block_work_id — ссылка на ЗР рядом со «старым» work_type_id (этап 1,
+    # см. _COLUMN_MIGRATIONS в app/db.py): для новых строк заполняется сразу
+    # по тому же block_works, что уже проверил отбор выше (settings), без
+    # лишнего запроса.
+    bw_by_type = {
+        r["work_type_id"]: r["id"] for r in conn.execute(
+            "SELECT id, work_type_id FROM block_works WHERE block_id = ?", (block_id,))
+    }
     conn.executemany(
-        "INSERT INTO work_fact_items (report_id, work_type_id, percent) VALUES (?,?,?)",
-        [(report_id, wt_id, percent) for wt_id, percent in items.items()],
+        "INSERT INTO work_fact_items (report_id, work_type_id, percent, block_work_id, "
+        "updated_at, updated_by) VALUES (?,?,?,?,datetime('now'),?)",
+        [(report_id, wt_id, percent, bw_by_type.get(wt_id), user_id)
+         for wt_id, percent in items.items()],
     )
+    # Построчная история (этап 4, В6) — только ЗАДЕТЫЕ строки: значение
+    # реально изменилось. Пересохранение с тем же числом не правка, строку
+    # истории не заводит (см. docstring таблицы, app/schema.sql).
+    for wt_id, (old_percent, old_bw_id) in old_items.items():
+        new_percent = items.get(wt_id)
+        if new_percent is None or new_percent == old_percent:
+            continue
+        bw_id = old_bw_id or bw_by_type.get(wt_id)
+        conn.execute(
+            "INSERT INTO work_fact_item_history (report_id, block_work_id, percent_old, "
+            "percent_new, changed_by) VALUES (?,?,?,?,?)",
+            (report_id, bw_id, old_percent, new_percent, user_id),
+        )
     conn.commit()
     return report_id
+
+
+def delete_report(conn, object_id: int, block_id: int, report_id: int) -> None:
+    """Удаление документа «Факт» целиком (В6, решение пользователя
+    2026-09-10: разрешено тому, у кого есть право «Изменение» раздела — тот
+    же порог, что у сохранения). Каскадом уносит и work_fact_items, и
+    work_fact_item_history этого отчёта (FK ON DELETE CASCADE) — это не
+    противоречит «истории не терять»: удаляется документ целиком по явному
+    решению человека, а не задета одна его строка."""
+    row = conn.execute(
+        "SELECT id FROM work_fact_reports WHERE id = ? AND object_id = ? AND block_id = ?",
+        (report_id, object_id, block_id),
+    ).fetchone()
+    if row is None:
+        raise FactError(404, "Отчёт не найден.")
+    conn.execute("DELETE FROM work_fact_reports WHERE id = ?", (report_id,))
+    conn.commit()
 
 
 def _percents_as_of(conn, block_id: int, report_date: str) -> dict:
@@ -494,17 +675,24 @@ def op_fact_history(conn, object_id: int, block_id: int, work_type_id: int) -> l
     """История значений факта ОДНОЙ операции на блоке — по всем отчётам, что
     её касаются (живой запрос пользователя: подсказка при наведении на
     полосу прогресса в панели блока — «перечисление дат, значений и
-    пользователя»). Схема не хранит, кто менял именно эту строку внутри
-    документа (только автора/редактора отчёта целиком, см. docstring
-    модуля и `save_report`) — отсюда пользователь тут это создатель отчёта,
-    а если отчёт правили позже, то правивший (то же правило, что у
-    `list_reports`)."""
+    пользователя»).
+
+    Пользователь строки — ИМЕННО тот, кто сохранял ЭТУ операцию последним
+    (этап 4, В6: `work_fact_items.updated_by`, построчный аудит), а не
+    автор/редактор отчёта целиком, как было до 2026-09-10 (документ мог
+    задеть десяток операций разом, и старая версия приписывала правку любой
+    из них тому, кто в последний раз сохранял весь отчёт). Запись без
+    `updated_by` (перенесена обработкой релиза со старой схемы, см.
+    app/db.py) — откат на автора/редактора документа, тем же правилом, что
+    раньше и было."""
     rows = conn.execute(
         "SELECT r.report_date, i.percent, "
+        "iu.last_name AS iu_last, iu.first_name AS iu_first, "
         "cu.last_name AS cu_last, cu.first_name AS cu_first, "
         "uu.last_name AS uu_last, uu.first_name AS uu_first "
         "FROM work_fact_items i "
         "JOIN work_fact_reports r ON r.id = i.report_id "
+        "LEFT JOIN users iu ON iu.id = i.updated_by "
         "LEFT JOIN users cu ON cu.id = r.created_by "
         "LEFT JOIN users uu ON uu.id = r.updated_by "
         "WHERE r.object_id = ? AND r.block_id = ? AND i.work_type_id = ? "
@@ -513,7 +701,29 @@ def op_fact_history(conn, object_id: int, block_id: int, work_type_id: int) -> l
     ).fetchall()
     return [{
         "дата": r["report_date"], "процент": r["percent"],
-        "пользователь": _user_label(r["uu_last"], r["uu_first"]) or _user_label(r["cu_last"], r["cu_first"]),
+        "пользователь": _user_label(r["iu_last"], r["iu_first"])
+            or _user_label(r["uu_last"], r["uu_first"]) or _user_label(r["cu_last"], r["cu_first"]),
+    } for r in rows]
+
+
+def item_edit_history(conn, block_work_id: int) -> list:
+    """Построчная история правок ЗР (этап 4, В6, `work_fact_item_history`)
+    — «было X%, стало Y%», отдельно от `op_fact_history` (та — снимок
+    ПО ДАТАМ отчётов, эта — КАЖДАЯ правка внутри уже сохранённого
+    документа, в том числе несколько за один день)."""
+    rows = conn.execute(
+        "SELECT h.changed_at, h.percent_old, h.percent_new, r.report_date, "
+        "u.last_name, u.first_name "
+        "FROM work_fact_item_history h "
+        "JOIN work_fact_reports r ON r.id = h.report_id "
+        "LEFT JOIN users u ON u.id = h.changed_by "
+        "WHERE h.block_work_id = ? ORDER BY h.changed_at DESC, h.id DESC",
+        (block_work_id,),
+    ).fetchall()
+    return [{
+        "момент": r["changed_at"], "дата_отчёта": r["report_date"],
+        "было": r["percent_old"], "стало": r["percent_new"],
+        "пользователь": _user_label(r["last_name"], r["first_name"]),
     } for r in rows]
 
 
