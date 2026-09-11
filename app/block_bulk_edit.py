@@ -52,13 +52,21 @@ from datetime import datetime
 from typing import Optional
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill, Protection
+from openpyxl.styles import Border, Font, PatternFill, Protection, Side
 from openpyxl.utils import get_column_letter
 
 from app import activity, block_works, work_fact
 from app.element_fields import EXCEL_DATE_FORMAT, to_excel_date
 
 SHEET_DATA = "Работы"
+
+# Сетка (живой запрос 2026-09-11) — тонкая рамка у КАЖДОЙ ячейки таблицы,
+# шапки и данных: без неё цветные полосы читаются как заливка произвольной
+# формы, а не строки/колонки таблицы. Один объект на весь лист — Border
+# неизменяем, плодить его на каждую ячейку смысла нет (тот же приём, что у
+# *_fill ниже).
+_GRID_SIDE = Side(style="thin", color="BFBFBF")
+GRID_BORDER = Border(left=_GRID_SIDE, right=_GRID_SIDE, top=_GRID_SIDE, bottom=_GRID_SIDE)
 
 # --color-primary каждой гаммы (app/static/index.html, :root[data-skin]) —
 # см. п.5 в docstring модуля. "gos" — гамма по умолчанию (SKINS[0] в
@@ -236,6 +244,7 @@ def build_export_workbook(conn, object_id: int, ui_theme: Optional[str] = None) 
     for cell in ws[1]:
         cell.fill = header_fill
         cell.font = header_font
+        cell.border = GRID_BORDER
 
     столбцы_дат = [i + 1 for i, (key, _, _) in enumerate(COLUMNS) if key in _DATE_COLUMNS]
     for номер, row in enumerate(rows, start=2):
@@ -254,6 +263,7 @@ def build_export_workbook(conn, object_id: int, ui_theme: Optional[str] = None) 
         чётная = номер % 2 == 0
         for col_idx, cell in enumerate(ws[номер], start=1):
             cell.font = body_font
+            cell.border = GRID_BORDER
             if col_idx in editable_cols:
                 cell.fill = editable_fill
             elif чётная:
