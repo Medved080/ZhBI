@@ -223,11 +223,22 @@ function nearestSegmentIndexExcluding(px, py, segments, index, maxDist, excludeI
   const cx = Math.floor(px / cellSize), cy = Math.floor(py / cellSize);
   let bestIdx = -1;
   let bestDist = maxDist;
+  // ВСЕГДА обходим полный радиус ringMax, без «нашли — остановимся через
+  // кольцо» — та эвристика зависела от того, в какую именно ЯЧЕЙКУ сетки
+  // попадает точка, а это зависит от АБСОЛЮТНЫХ координат: у одной и той
+  // же геометрии в системе координат объекта (P, абсолютные, часто
+  // многомиллионные мм) и в системе координат FBX (C, у начала координат)
+  // сетка выравнена по-разному относительно геометрии, и связность
+  // (используется в clusterSpatialParts) реально получалась РАЗНОЙ для
+  // буквально идентичной, только повёрнутой/перенесённой геометрии —
+  // подтверждено живой проверкой на реальном объекте анонимной копии
+  // (Docs/fbx-envelope-matching-claude-prompt.md, крупнейшая часть FBX
+  // 12.88М мм против 15.25М мм у той же самой части со стороны объекта).
+  // Полный обход ringMax — детерминированный, не зависит от выравнивания
+  // сетки; для maxDist=800/cellSize=800 это всего 5×5 ячеек, дёшево.
   const ringMax = Math.ceil(maxDist / cellSize) + 1;
   const seen = new Set();
-  let foundAtRing = -1;
   for (let ring = 0; ring <= ringMax; ring++) {
-    if (foundAtRing >= 0 && ring > foundAtRing + 1) break;
     for (let dx = -ring; dx <= ring; dx++) {
       for (let dy = -ring; dy <= ring; dy++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
@@ -242,7 +253,6 @@ function nearestSegmentIndexExcluding(px, py, segments, index, maxDist, excludeI
         }
       }
     }
-    if (bestIdx >= 0 && foundAtRing < 0) foundAtRing = ring;
   }
   return bestIdx;
 }
@@ -257,6 +267,63 @@ export function weightedCentroidXY(segments) {
     sw += len;
   }
   return sw > 0 ? [sx / sw, sy / sw] : [0, 0];
+}
+
+/**
+ * Габарит набора отрезков вдоль направления theta и перпендикуляра —
+ * НЕ axis-aligned bbox (тот врёт для повёрнутого здания), а протяжённость
+ * в СОБСТВЕННЫХ осях (задание §3: «измерь размеры наружных частей в их
+ * собственных направлениях... общий axis-aligned bbox для такой проверки
+ * непригоден»). Возвращает [ширина_вдоль_theta, ширина_поперёк].
+ */
+export function orientedExtent(segments, theta) {
+  // Габарит МНОЖЕСТВА Rz(theta)*p — та же функция rotateXY, что и везде
+  // в проекте (P = Rz(theta)*C + t), а не собственная формула проекции:
+  // ручной вариант с той же матрицей поворота, что и до правки, давал
+  // ПРОТИВОПОЛОЖНЫЙ знак (фактически считал экстент для Rz(-theta), не
+  // Rz(theta)) — на реальном здании это ложно показывало огромное
+  // несовпадение габаритов у буквально идентичной, только повёрнутой
+  // геометрии (Docs/fbx-envelope-matching-claude-prompt.md, живая
+  // проверка: fbxExtent=[53302,72101] против objExtent=[75150,35530] для
+  // одной и той же геометрии под истинным углом).
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  for (const s of segments) {
+    for (const [x, y] of [[s.x1, s.y1], [s.x2, s.y2]]) {
+      const [u, v] = rotateXY(theta, x, y);
+      if (u < minU) minU = u; if (u > maxU) maxU = u;
+      if (v < minV) minV = v; if (v > maxV) maxV = v;
+    }
+  }
+  return [maxU - minU, maxV - minV];
+}
+
+/**
+ * Сравнивает габариты САМОЙ КРУПНОЙ значимой части каждой стороны в
+ * системе координат, куда её ставит кандидат поворота theta — если
+ * несущий контур и фасад отличаются по размеру больше объяснимого
+ * (толщина облицовки + погрешность обмера), это НЕ вопрос точности
+ * переноса, а несовместимая геометрия: подгонка перевода/угла не может
+ * это исправить (задание §3, живой пример: фасад уже объекта на 4м с
+ * одной стороны — coverage/rms этого НЕ ловят, три стороны из четырёх
+ * всё равно совпадают идеально). Возвращает {mismatchMm, hardFail}:
+ * `hardFail` — несовпадение настолько велико, что положение вообще не
+ * должно предлагаться (даже как «неоднозначное» — задание §4: «не
+ * навязывай выбор одного из трёх [заведомо плохих]»).
+ */
+export function checkSizeCompatibility(fbxPart, objectPart, theta, opts = {}) {
+  if (!fbxPart || !objectPart) return { mismatchMm: 0, hardFail: false };
+  const toleranceAbsMm = opts.toleranceAbsMm ?? 600;
+  const toleranceRel = opts.toleranceRel ?? 0.04;
+  const hardMultiplier = opts.hardMultiplier ?? 2.5;
+  const [fbxAlong, fbxAcross] = orientedExtent(fbxPart.segments, theta);
+  const [objAlong, objAcross] = orientedExtent(objectPart.segments, 0);
+  const tolAlong = Math.max(toleranceAbsMm, toleranceRel * objAlong);
+  const tolAcross = Math.max(toleranceAbsMm, toleranceRel * objAcross);
+  const mismatchAlong = Math.abs(fbxAlong - objAlong);
+  const mismatchAcross = Math.abs(fbxAcross - objAcross);
+  const mismatchMm = Math.max(mismatchAlong, mismatchAcross);
+  const hardFail = mismatchAlong > tolAlong * hardMultiplier || mismatchAcross > tolAcross * hardMultiplier;
+  return { mismatchMm, hardFail, fbxExtent: [fbxAlong, fbxAcross], objectExtent: [objAlong, objAcross] };
 }
 
 /** Начальные переносы-кандидаты для поворота theta — ОДИН по самой
@@ -353,11 +420,14 @@ export function nearestOnIndexedSegments(px, py, segments, index, maxDist) {
   const cx = Math.floor(px / cellSize), cy = Math.floor(py / cellSize);
   let best = null;
   let bestDist = maxDist;
+  // ВСЕГДА обходим полный радиус ringMax — см. nearestSegmentIndexExcluding
+  // выше: «нашли — ещё кольцо про запас и стоп» зависит от выравнивания
+  // сетки относительно АБСОЛЮТНЫХ координат, а оно разное у P (объект,
+  // часто многомиллионные мм) и у C (FBX, у начала координат) — тот же
+  // относительный запрос давал разный результат в двух системах координат.
   const ringMax = Math.ceil(maxDist / cellSize) + 1;
   const seen = new Set();
-  let foundAtRing = -1;
   for (let ring = 0; ring <= ringMax; ring++) {
-    if (foundAtRing >= 0 && ring > foundAtRing + 1) break; // ещё одно кольцо про запас и стоп
     for (let dx = -ring; dx <= ring; dx++) {
       for (let dy = -ring; dy <= ring; dy++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
@@ -372,7 +442,6 @@ export function nearestOnIndexedSegments(px, py, segments, index, maxDist) {
         }
       }
     }
-    if (best && foundAtRing < 0) foundAtRing = ring;
   }
   return best;
 }
@@ -562,8 +631,14 @@ export async function fineRefine({ fbxPoints, objectSegments, thetaInit, tInit, 
     stopReason = icp.stopReason;
     ran = true;
   }
+  // ЧИСТАЯ оценка на итоговых theta/t — БЕЗ мутации (раньше здесь стоял
+  // `icpRefine({maxIters:1})`, который всё равно выполняет один полный
+  // шаг Прокруста внутри цикла и СДВИГАЕТ theta/t перед оценкой; функция
+  // возвращала СТАРЫЕ theta/t, но coverage/rms — уже от НОВОГО, сдвинутого
+  // положения — рассинхронизация между возвращённым transform и его же
+  // метриками. `evaluateTransform` ничего не оптимизирует и не сдвигает.
   const finalIndex = buildSegmentGridIndex(objectSegments, Math.max(schedule[schedule.length - 1] / 2, 100));
-  const final = icpRefine({ fbxPoints, objectSegments, objectIndex: finalIndex, thetaInit: theta, tInit: t, opts: { maxIters: 1, maxDist: schedule[schedule.length - 1] } });
+  const final = evaluateTransform(fbxPoints, objectSegments, finalIndex, theta, t, schedule[schedule.length - 1]);
   return {
     theta, t, iterations, stopReason, ran,
     coverage: final.coverage, rmsResidualMm: final.rmsResidualMm, inlierCount: final.inlierCount,
@@ -670,6 +745,19 @@ export async function autoAlignFacade({ fbxSegments, objectSegments, limits = {}
   const objectIndex = buildSegmentGridIndex(objectSegments, limits.gridCellMm ?? 2000);
   const maxDist = limits.icpMaxDistMm ?? 3000;
 
+  // Габарит для проверки соразмерности — по СЫРЫМ отрезкам целиком, МИМО
+  // clusterSpatialParts: та использует единый порог расстояния для
+  // связности и потому хрупка — пограничное расстояние (~800мм) у
+  // реальных данных может ПЕРЕКЛЮЧАТЬСЯ от численного шума при повороте
+  // (подтверждено живой проверкой, Docs/fbx-envelope-matching-claude-
+  // prompt.md: чистый поворот ТОЙ ЖЕ геометрии на 37° дал 127 vs 145
+  // частей и другой состав «крупнейшей»). Крайние (min/max) точки вдоль
+  // любого направления — это по построению НАРУЖНЫЕ точки контура,
+  // независимо от того, как впоследствии разбегаются внутренние
+  // мостики связности — экстремумы устойчивы к этой хрупкости.
+  const fbxAllSignificant = { segments: fbxSegments };
+  const objectAllSignificant = { segments: objectSegments };
+
   // Грубый поиск — быстрый и НАМЕРЕННО не точный (маленький maxIters,
   // широкий maxDist): нужен только чтобы отсеять заведомо плохие старты
   // и найти несколько существенно разных ПРИБЛИЗИТЕЛЬНО верных положений;
@@ -683,11 +771,33 @@ export async function autoAlignFacade({ fbxSegments, objectSegments, limits = {}
       const icp = icpRefine({ fbxPoints, objectSegments, objectIndex, thetaInit: rc.theta, tInit, opts: {
         maxIters: limits.icpMaxItersCoarse ?? 12, maxDist, trimFrac: limits.icpTrimFrac ?? 0.2, convergeTolMm: 1,
       } });
+      // Соразмерность наружных габаритов — на УЖЕ УТОЧНЁННОМ ICP угле
+      // (icp.theta), НЕ на исходном кандидате направления (rc.theta):
+      // пики гистограммы направлений могут отличаться от истинного угла
+      // на несколько градусов (мод mergeDeg/binDeg, распределение веса
+      // между стенами), а проверка габарита ОЧЕНЬ чувствительна к точному
+      // углу — проверка на неуточнённом seed-угле ложно отклоняла
+      // ГЕНУИННО совпадающую геометрию (подтверждено: тест с известным
+      // ответом 22°, пик направлений дал только 18°, экстент на 18°
+      // отличался от объекта, хотя на верных 22° совпадал ТОЧНО). Не
+      // зависит от переноса — проверяется на каждый старт (дёшево).
+      const sizeCheck = checkSizeCompatibility(fbxAllSignificant, objectAllSignificant, icp.theta, {
+        toleranceAbsMm: limits.sizeToleranceAbsMm, toleranceRel: limits.sizeToleranceRel, hardMultiplier: limits.sizeHardMultiplier,
+      });
       const perPart = perPartScores(icp.theta, icp.t, fbxParts, objectSegments, objectIndex, maxDist);
       const worstPartCoverage = perPart.length ? Math.min(...perPart.map((b) => b.coverage)) : 0;
-      rawResults.push({ theta: icp.theta, t: icp.t, coverage: icp.coverage, rmsResidualMm: icp.rmsResidualMm, worstPartCoverage, perPart });
+      rawResults.push({
+        theta: icp.theta, t: icp.t, coverage: icp.coverage, rmsResidualMm: icp.rmsResidualMm, worstPartCoverage, perPart,
+        sizeMismatchMm: sizeCheck.mismatchMm, sizeHardFail: sizeCheck.hardFail,
+      });
     }
   }
+  // Кандидаты с явно несовместимым габаритом крупнейшей части НЕ
+  // предлагаются вовсе — ни как confident, ни в списке ambiguous
+  // (задание §4: «не навязывай выбор одного из [заведомо плохих]»). Не
+  // отбрасываем ДО ICP — перенос иногда сам подсказывает, что размер не
+  // сходится, дешевле проверить постфактум на уже посчитанном theta.
+  const viableRawResults = rawResults.filter((r) => !r.sizeHardFail);
 
   // Сравнение кандидатов: небольшое (< coverageTieEps) преимущество по
   // coverage НЕ должно перевешивать явно лучшую невязку — широкий радиус
@@ -717,7 +827,7 @@ export async function autoAlignFacade({ fbxSegments, objectSegments, limits = {}
     return out;
   }
 
-  const coarseResults = dedupResults(rawResults);
+  const coarseResults = dedupResults(viableRawResults);
 
   // Точное уточнение — ТОЛЬКО для нескольких лучших существенно разных
   // грубых кандидатов (не для всех стартов, включая заведомо плохие):
@@ -778,10 +888,18 @@ export async function autoAlignFacade({ fbxSegments, objectSegments, limits = {}
     fbxSampleCount: fbxPoints.length,
     coarseResultCount: coarseResults.length, distinctResultCount: results.length,
     fineRefinements,
+    rejectedForSizeMismatch: rawResults.length - viableRawResults.length,
   };
 
   if (!results.length) {
-    return { status: "insufficient_geometry", candidates: [], reason: "Не нашлось ни одного пригодного кандидата переноса.", diagnostics };
+    const allRejectedForSize = rawResults.length > 0 && viableRawResults.length === 0;
+    return {
+      status: "insufficient_geometry", candidates: [],
+      reason: allRejectedForSize
+        ? "Наружные габариты фасада и конструктива несовместимы (расхождение больше объяснимого толщиной облицовки) — совмещение не может быть корректным ни при каком повороте/переносе, проверьте исходные файлы."
+        : "Не нашлось ни одного пригодного кандидата переноса.",
+      diagnostics,
+    };
   }
 
   const toCandidateOut = (r) => ({

@@ -17,6 +17,8 @@ import {
   autoAlignFacade,
   candidateToPlacement,
   extractWallSegmentsFromGroup,
+  orientedExtent,
+  checkSizeCompatibility,
 } from "../app/static/external-models/auto-align.js";
 import { rotateXY, canonicalToProject } from "../app/static/external-models/coordinates.js";
 import * as THREE from "../app/static/vendor/three/three.module.min.js";
@@ -285,14 +287,15 @@ for (const thetaTrueDeg of [37, -37, 143, -143]) {
   const fbxSegments = local; // модель — неполная
 
   const result = await autoAlignFacade({ fbxSegments, objectSegments });
-  // Без низкого корпуса у модели остался только несимметричный
-  // прямоугольник башни — этого может не хватить, чтобы однозначно
-  // отличить верный угол от 180°-зеркального по невязке by object (тоже
-  // содержащему такую же башню) — ambiguous тут ЧЕСТНЫЙ, безопасный
-  // исход («нужна проверка человеком»), не грубая ошибка. Важно только,
-  // что confident/low_confidence НЕ дают ложного грубого промаха, если
-  // всё-таки случаются.
-  assertTrue(["confident", "low_confidence", "ambiguous"].includes(result.status),
+  // Без низкого корпуса модель («фасад») ЗАВЕДОМО меньше объекта по
+  // наружному габариту — это ТА ЖЕ ситуация, что несовместимый по
+  // размеру фасад (Docs/fbx-envelope-matching-claude-prompt.md §3):
+  // insufficient_geometry — ЧЕСТНЫЙ отказ («модель заведомо не отражает
+  // весь объект»), не грубая ошибка. ambiguous/confident/low_confidence
+  // тоже допустимы, если ICP всё же нашёл совместимое положение по
+  // оставшейся геометрии — важно только, что если найдётся, оно не
+  // будет грубо промахнувшимся.
+  assertTrue(["confident", "low_confidence", "ambiguous", "insufficient_geometry"].includes(result.status),
     `частично отсутствующая геометрия не даёт грубой ошибки (status=${result.status})`);
   if (result.status === "confident" || result.status === "low_confidence") {
     const c = result.candidates[0];
@@ -302,6 +305,70 @@ for (const thetaTrueDeg of [37, -37, 143, -143]) {
     assertClose(rx + c.tXY[0], ex, 2000, "при частично отсутствующей геометрии, если статус не ambiguous, позиция всё равно верна (X)");
     assertClose(ry + c.tXY[1], ey, 2000, "при частично отсутствующей геометрии, если статус не ambiguous, позиция всё равно верна (Y)");
   }
+}
+
+// ==================== 4б. соразмерность наружных габаритов (Docs/fbx-envelope-matching-claude-prompt.md) ====================
+//
+// Подтверждённый живой дефект: coverage/rms после подгонки переноса НЕ
+// ловят систематическое расхождение размера — утопленный на несколько
+// метров фасад всё равно даёт coverage~84-93%/rms в пределах порога,
+// потому что 3 из 4 сторон совпадают почти идеально. Точное
+// воспроизведение примера из задания — с внутренней стеной в целевом
+// наборе (как в demo аудита) — теперь отклоняется на этапе проверки
+// габарита, а не проходит благодаря случайному совпадению точек.
+
+{
+  const corners = [[0, 0], [20000, 0], [20000, 16000], [0, 16000]];
+  const objectSegments = corners.map(([x1, y1], i) => ({ x1, y1, x2: corners[(i + 1) % 4][0], y2: corners[(i + 1) % 4][1], z0: 0, z1: 3000 }));
+  objectSegments.push({ x1: 4000, y1: 0, x2: 4000, y2: 16000, z0: 0, z1: 3000 }); // внутренняя стена, как в демо аудита
+
+  const facadeCorners = [[4000, 0], [20000, 0], [20000, 16000], [4000, 16000]];
+  const fbxSegments = facadeCorners.map(([x1, y1], i) => ({ x1, y1, x2: facadeCorners[(i + 1) % 4][0], y2: facadeCorners[(i + 1) % 4][1], z0: 0, z1: 3000 }));
+
+  const result = await autoAlignFacade({ fbxSegments, objectSegments, limits: { minSegments: 4 } });
+  assertTrue(result.status === "insufficient_geometry",
+    `утопленный на 4м фасад (демо аудита, с внутренней стеной в целевом наборе) корректно отклонён (получено ${result.status})`);
+  assertTrue(!!result.reason && result.reason.includes("габариты"),
+    "причина отказа явно называет несовместимость габаритов, а не общий отказ");
+}
+
+{
+  // orientedExtent/checkSizeCompatibility должны быть УСТОЙЧИВЫ к
+  // повороту — одна и та же геометрия под известным поворотом должна
+  // давать РОВНО тот же габарит (с точностью до направления проверки).
+  // Живой баг был именно здесь: неверный знак в формуле проекции давал
+  // РАЗНЫЕ числа для одной и той же геометрии (Docs/fbx-envelope-
+  // matching-claude-prompt.md).
+  const local = localBuildingSegments();
+  const thetaTrue = (37 * Math.PI) / 180;
+  const tTrue = [13281000 + 111000, 10662000 - 222000]; // большие координаты, как у реальных объектов
+  const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
+  const [fbxAlong, fbxAcross] = orientedExtent(local, thetaTrue);
+  const [objAlong, objAcross] = orientedExtent(objectSegments, 0);
+  assertClose(fbxAlong, objAlong, 1e-6, "orientedExtent устойчив к повороту и большим координатам (вдоль)");
+  assertClose(fbxAcross, objAcross, 1e-6, "orientedExtent устойчив к повороту и большим координатам (поперёк)");
+
+  const check = checkSizeCompatibility({ segments: local }, { segments: objectSegments }, thetaTrue);
+  assertTrue(!check.hardFail, "checkSizeCompatibility НЕ отклоняет буквально совпадающую (повёрнутую) геометрию");
+  assertClose(check.mismatchMm, 0, 1e-3, "checkSizeCompatibility: несовпадение габарита ~0 для идентичной геометрии");
+}
+
+{
+  // Убедиться, что проверка соразмерности работает на угле ПОСЛЕ
+  // уточнения ICP, а не на исходном кандидате направления — пик
+  // гистограммы направлений может отличаться от истинного угла на
+  // несколько градусов, из-за чего проверка на неуточнённом угле ложно
+  // отклоняла ГЕНУИННО совпадающую геометрию (обнаружено при отладке
+  // этой же задачи на синтетике 40+10 этажей, пик дал 18° вместо 22°).
+  const local = [];
+  for (let floor = 0; floor < 40; floor++) local.push(...rectSegments(0, 0, 20000, 15000, floor * 3500, (floor + 1) * 3500));
+  for (let floor = 0; floor < 10; floor++) local.push(...rectSegments(35000, -2500, 30000, 10000, floor * 3500, (floor + 1) * 3500));
+  const thetaTrue = (22 * Math.PI) / 180;
+  const tTrue = [7000, 9000];
+  const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
+  const result = await autoAlignFacade({ fbxSegments: local, objectSegments });
+  assertTrue(result.status === "confident",
+    `проверка габарита не отклоняет генуинно совпадающую геометрию из-за неточного seed-угла (получено ${result.status}: ${result.reason || ""})`);
 }
 
 // ==================== 5. отрицательные случаи — НЕ должно быть ложной уверенности ====================
