@@ -6894,7 +6894,10 @@ def block_bulk_edit_export(object_id: int, user: sqlite3.Row = Depends(get_curre
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "work_progress", "read")
-        wb = block_bulk_edit.build_export_workbook(conn, object_id)
+        # Через .keys() (тот же приём, что в app/auth.py у AuthMe): колонка
+        # добавлена миграцией, и на не догнавшей её базе просто её нет.
+        ui_theme = user["ui_theme"] if "ui_theme" in user.keys() else None
+        wb = block_bulk_edit.build_export_workbook(conn, object_id, ui_theme)
     finally:
         conn.close()
     buf = io.BytesIO()

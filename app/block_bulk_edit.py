@@ -29,6 +29,22 @@
    сам (см. `analyze`/`_diff_row`) — тот же принцип, что у выпадающих
    списков в app/element_bulk_edit.py («список — удобство, проверка —
    обязанность»).
+
+5. **Шапка и чередование строк — в цветах ЛИЧНОЙ гаммы пользователя**
+   (`users.ui_theme`, живой запрос 2026-09-11), а не фиксированной
+   раскраской: у сервиса семь гамм оформления (`SKINS` в
+   app/static/app.js), и выгрузка не должна расходиться с тем, что человек
+   выбрал себе на экране. `--color-primary` каждой гаммы продублирован
+   здесь как `THEME_PRIMARY` — единственный практичный вариант: сама гамма
+   в БД не хранит цвета, только id, а править семь готовых гамм в
+   index.html не чаще, чем сам этот список (живой запрос 2026-08-02).
+   Текст шапки — белый или тёмный по формуле яркости фона, а не по списку
+   исключений («Неон» с его ярко-жёлтым акцентом иначе остался бы
+   нечитаемым, а новая гамма — не почищенной под это правило вручную).
+   Чередование строк — СВЕТЛЫЙ оттенок акцента (смешан с белым), не сам
+   акцент: у тёмных гамм («Графит», «Индиго») акцент в интерфейсе тёмный
+   специально ради тёмного фона страницы, а лист Excel — светлый документ,
+   и тёмная плашка на нём была бы нечитаема обычным чёрным шрифтом ячейки.
 """
 
 import io
@@ -36,13 +52,44 @@ from datetime import datetime
 from typing import Optional
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Protection
+from openpyxl.styles import Font, PatternFill, Protection
 from openpyxl.utils import get_column_letter
 
 from app import activity, block_works, work_fact
 from app.element_fields import EXCEL_DATE_FORMAT, to_excel_date
 
 SHEET_DATA = "Работы"
+
+# --color-primary каждой гаммы (app/static/index.html, :root[data-skin]) —
+# см. п.5 в docstring модуля. "gos" — гамма по умолчанию (SKINS[0] в
+# app/static/app.js), берётся и когда у пользователя ui_theme не задан.
+THEME_PRIMARY = {
+    "gos": "0D4CD3", "msu": "A31212", "graphite": "7AA2F7",
+    "indigo": "8B9DFF", "neon": "FCEE0A", "emerald": "0E8A5F", "sand": "B4690E",
+}
+DEFAULT_THEME = "gos"
+
+
+def _hex_to_rgb(hex_color: str) -> tuple:
+    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _mix_with_white(hex_color: str, доля: float) -> str:
+    """Смешивает цвет с белым — `доля` (0..1) исходного цвета, остальное
+    белый. Даёт светлый оттенок акцента для чередования строк вместо
+    самого акцента (см. п.5 в docstring модуля)."""
+    r, g, b = _hex_to_rgb(hex_color)
+    смешать = lambda c: round(c * доля + 255 * (1 - доля))
+    return f"{смешать(r):02X}{смешать(g):02X}{смешать(b):02X}"
+
+
+def _readable_text_color(bg_hex: str) -> str:
+    """Белый или тёмный текст по ВОСПРИНИМАЕМОЙ яркости фона — формулой, а
+    не списком исключений «у этой гаммы текст тёмный»: седьмая гамма
+    появилась 2026-08-02, восьмая может появиться и без правки этого файла."""
+    r, g, b = _hex_to_rgb(bg_hex)
+    яркость = (r * 299 + g * 587 + b * 114) / 1000
+    return "1A1D21" if яркость > 150 else "FFFFFF"
 
 KEY_COLUMN = "bw_id"
 
@@ -148,13 +195,21 @@ def display_values(row, percent: "int | None", fact_dates: tuple) -> dict:
     return {key: values[key] for key, _, _ in COLUMNS}
 
 
-def build_export_workbook(conn, object_id: int) -> Workbook:
+def build_export_workbook(conn, object_id: int, ui_theme: Optional[str] = None) -> Workbook:
     """Снимок активных ЗР объекта на текущий момент. Без листов-справочников
     и выпадающих списков — в отличие от ЖБИ, правимые колонки здесь свободные
-    (проценты и даты), выбирать не из чего."""
+    (проценты и даты), выбирать не из чего.
+
+    `ui_theme` — гамма оформления ТОГО, кто выгружает (`users.ui_theme`,
+    см. п.5 в docstring модуля); неизвестная/пустая — гамма по умолчанию."""
     rows = _block_work_rows(conn, object_id)
     percents = work_fact.current_percents_by_block_work(conn, object_id)
     fact_dates = _fact_dates(conn, object_id)
+
+    primary = THEME_PRIMARY.get(ui_theme, THEME_PRIMARY[DEFAULT_THEME])
+    header_fill = PatternFill("solid", fgColor=primary)
+    header_font = Font(bold=True, color=_readable_text_color(primary))
+    stripe_fill = PatternFill("solid", fgColor=_mix_with_white(primary, 0.12))
 
     wb = Workbook()
     ws = wb.active
@@ -162,6 +217,9 @@ def build_export_workbook(conn, object_id: int) -> Workbook:
     ws.append([label for _, label, _ in COLUMNS])
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}1"
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
 
     столбцы_дат = [i + 1 for i, (key, _, _) in enumerate(COLUMNS) if key in _DATE_COLUMNS]
     for номер, row in enumerate(rows, start=2):
@@ -171,6 +229,12 @@ def build_export_workbook(conn, object_id: int) -> Workbook:
                    for key, _, _ in COLUMNS])
         for i in столбцы_дат:
             ws.cell(row=номер, column=i).number_format = EXCEL_DATE_FORMAT
+        # Чередование — по НОМЕРУ СТРОКИ листа, а не по индексу в rows: так
+        # полосы не сбиваются, если состав строк когда-нибудь придёт не
+        # подряд (сейчас подряд, но зависимость от порядка была бы хрупкой).
+        if номер % 2 == 0:
+            for cell in ws[номер]:
+                cell.fill = stripe_fill
 
     _protect(ws, len(rows))
     _widen(ws)
