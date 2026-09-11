@@ -18,6 +18,11 @@
 // («Модель» → 3D, МФР или ЖБИ) — иначе deps.beginPlacement честно
 // отказывает с понятной причиной, а не подставляет фиктивные координаты.
 
+// Вид модели влияет на anchor по Z при разборе (см. fbx.js) и подписи в
+// UI — новый значимый выбор, не просто ярлык (живой запрос пользователя
+// 2026-09-11, второй FBX-файл того же объекта — фасад здания).
+const KIND_LABELS = { ground: "Благоустройство", facade: "Фасад" };
+
 function mmToM(mm) {
   return mm / 1000;
 }
@@ -62,7 +67,7 @@ export function renderExternalModelsPanel(container, deps) {
     return `
       <div class="form-card" data-model-id="${model.id}">
         <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px">
-          <h4 style="margin:0">${escapeHtml(model.name)}</h4>
+          <h4 style="margin:0">${escapeHtml(model.name)} <span class="hint-text">(${KIND_LABELS[model.kind] || model.kind})</span></h4>
           <span class="hint-text">${model.placement_mode === "unreferenced" ? "Привязка не подтверждена" : model.placement_mode}</span>
         </div>
         <div class="hint-text">
@@ -75,7 +80,7 @@ export function renderExternalModelsPanel(container, deps) {
             <input type="text" class="em-offset-x" data-model-id="${model.id}" value="${d.offsetXM}"/></div>
           <div><label class="field">Сдвиг Y, м</label>
             <input type="text" class="em-offset-y" data-model-id="${model.id}" value="${d.offsetYM}"/></div>
-          <div><label class="field" title="0 = верхняя точка габарита модели на отметке 0 объекта (по умолчанию). Положительное — вверх.">Сдвиг Z, м</label>
+          <div><label class="field" title="${model.kind === "facade" ? "0 = нижняя точка габарита модели на отметке 0 объекта (по умолчанию, здание стоит на земле)." : "0 = верхняя точка габарита модели на отметке 0 объекта (по умолчанию, модель уходит под чистый пол)."} Положительное — вверх.">Сдвиг Z, м</label>
             <input type="text" class="em-offset-z" data-model-id="${model.id}" value="${d.offsetZM}"/></div>
           <div><label class="field" title="По часовой стрелке при виде на план сверху, вокруг центра модели">Поворот, °</label>
             <input type="text" class="em-rotation" data-model-id="${model.id}" value="${d.rotationDeg}"/></div>
@@ -106,6 +111,10 @@ export function renderExternalModelsPanel(container, deps) {
       ${canEdit ? `
       <div class="form-card">
         <h4>Загрузить модель</h4>
+        <div class="row" style="gap:16px; margin-bottom:8px">
+          <label><input type="radio" name="em-upload-kind" value="ground" checked/> Благоустройство</label>
+          <label><input type="radio" name="em-upload-kind" value="facade"/> Фасад</label>
+        </div>
         <input type="file" id="em-upload-file" accept=".fbx"/>
         <div class="hint-text" id="em-upload-status"></div>
       </div>` : ""}
@@ -256,17 +265,18 @@ export function renderExternalModelsPanel(container, deps) {
         const file = fileInput.files[0];
         if (!file) return;
         const statusEl = container.querySelector("#em-upload-status");
+        const kind = container.querySelector('input[name="em-upload-kind"]:checked')?.value || "ground";
         statusEl.textContent = "Разбор файла в браузере…";
         try {
           const { ensureExternalModelsLoaded } = await import("/static/external-models/app-bridge.js");
           const { THREE, FBXLoader, loadExternalModelFbx } = await ensureExternalModelsLoaded();
           const buf = await file.arrayBuffer();
-          const parsed = await loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader });
+          const parsed = await loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader, kind });
           statusEl.textContent = `Разобрано: ${parsed.meshCount} меш(ей), ${parsed.triangleCount} треугольников, ` +
             `${parsed.textureCount} текстур. Загрузка на сервер…`;
           const meta = {
-            name: file.name.replace(/\.fbx$/i, "") || "Благоустройство",
-            kind: "ground",
+            name: file.name.replace(/\.fbx$/i, "") || KIND_LABELS[kind] || "Благоустройство",
+            kind,
             source_anchor_mm: { x: parsed.sourceAnchorMm[0], y: parsed.sourceAnchorMm[1], z: parsed.sourceAnchorMm[2] },
             bbox_size_mm: parsed.bboxSizeMm,
             mesh_count: parsed.meshCount,

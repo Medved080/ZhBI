@@ -26373,7 +26373,10 @@ function build3DScene(preserveCamera = false) {
 // адаптерами/трансформами (§9 задания).
 const zhbiExternalModels = { layer: null, objectId: null, models: null };
 
-function zhbiExternalModelsVisible() {
+// Видимость решается ПО ВИДУ модели — независимые чекбоксы благоустройства
+// и фасадов (живой запрос пользователя 2026-09-11), не один флаг на всё.
+function zhbiExternalModelsVisibleForKind(kind) {
+  if (kind === "facade") return document.getElementById("zhbi-show-external-facades")?.checked ?? true;
   return document.getElementById("zhbi-show-external-models")?.checked ?? true;
 }
 
@@ -26411,14 +26414,18 @@ async function attachZhbiExternalModels(scene, objectId) {
     });
   }
   const warnings = await zhbiExternalModels.layer.attachToZhbi(
-    scene, models, { visible: zhbiExternalModelsVisible() });
+    scene, models, { visibleForKind: zhbiExternalModelsVisibleForKind });
   if (state.view3d.scene !== scene) return;
   for (const w of warnings) console.warn("Внешняя 3D-модель:", w);
   requestRender3D();
 }
 
 document.getElementById("zhbi-show-external-models")?.addEventListener("change", () => {
-  zhbiExternalModels.layer?.setVisible(zhbiExternalModelsVisible());
+  zhbiExternalModels.layer?.setVisible(zhbiExternalModelsVisibleForKind);
+  requestRender3D();
+});
+document.getElementById("zhbi-show-external-facades")?.addEventListener("change", () => {
+  zhbiExternalModels.layer?.setVisible(zhbiExternalModelsVisibleForKind);
   requestRender3D();
 });
 
@@ -31662,7 +31669,10 @@ const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
 // сбрасывается только со сменой ОБЪЕКТА (mfrExternalModels.layer.dispose()).
 const mfrExternalModels = { layer: null, objectId: null, models: null };
 
-function mfrExternalModelsVisible() {
+// Видимость решается ПО ВИДУ модели — независимые чекбоксы благоустройства
+// и фасадов (живой запрос пользователя 2026-09-11), не один флаг на всё.
+function mfrExternalModelsVisibleForKind(kind) {
+  if (kind === "facade") return document.getElementById("mfr-show-external-facades")?.checked ?? true;
   return document.getElementById("mfr-show-external-models")?.checked ?? true;
 }
 
@@ -31717,13 +31727,16 @@ async function attachMfrExternalModels(scene, objectId, origin, low) {
     });
   }
   const warnings = await mfrExternalModels.layer.attachToMfr(
-    scene, models, { origin, low, visible: mfrExternalModelsVisible() });
+    scene, models, { origin, low, visibleForKind: mfrExternalModelsVisibleForKind });
   if (mfr3d.scene !== scene) return;
   for (const w of warnings) console.warn("Внешняя 3D-модель:", w);
 }
 
 document.getElementById("mfr-show-external-models")?.addEventListener("change", () => {
-  mfrExternalModels.layer?.setVisible(mfrExternalModelsVisible());
+  mfrExternalModels.layer?.setVisible(mfrExternalModelsVisibleForKind);
+});
+document.getElementById("mfr-show-external-facades")?.addEventListener("change", () => {
+  mfrExternalModels.layer?.setVisible(mfrExternalModelsVisibleForKind);
 });
 
 // Фасады объекта (2026-08-31, живой запрос пользователя) — картинки

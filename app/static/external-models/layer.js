@@ -28,10 +28,11 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
     let entry = cache.get(model.id);
     if (!entry) {
       entry = {
+        kind: model.kind, // для setVisible — переключает по виду без повторного attachTo*
         loadPromise: (async () => {
           const buf = await fetchContent(model);
           if (myGeneration !== generation) return null;
-          return loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader });
+          return loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader, kind: model.kind });
         })(),
         result: null,
       };
@@ -68,8 +69,11 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
    * Добавляет актуальные модели в сцену МФР с текущим адаптером координат.
    * Не бросает исключений на отдельной модели — ошибка одной не должна
    * скрывать остальные; собирает предупреждения в возвращаемом массиве.
+   * `visibleForKind(kind)` — видимость решается ПО ВИДУ модели (ground/
+   * facade — независимые чекбоксы, живой запрос пользователя 2026-09-11),
+   * не одним флагом на все модели объекта разом.
    */
-  async function attachToMfr(scene, models, { origin, low, visible }) {
+  async function attachToMfr(scene, models, { origin, low, visibleForKind }) {
     const myGeneration = generation;
     const warnings = [];
     pruneMissing(models.map((m) => m.id));
@@ -93,7 +97,7 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
       // Отрицательный угол — знак ТРИ.js (против часовой при взгляде с
       // +Z) даёт видимый пользователю поворот ПО часовой при виде сверху.
       result.group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rotationRad(model));
-      result.group.visible = visible;
+      result.group.visible = visibleForKind(model.kind);
       scene.add(result.group);
     }
     return warnings;
@@ -103,8 +107,9 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
    * (план-XY/Z-вверх) локальные координаты группы в мировые three.js
    * (Y-вверх) — см. Docs/fbx-ground-implementation-task.md §5, адаптер
    * ЖБИ V=(P.x,P.z,-P.y). Ручной поворот применяется ДО этого перевода —
-   * вокруг локальной (канонической) вертикали модели, а не мировой Y. */
-  async function attachToZhbi(scene, models, { visible }) {
+   * вокруг локальной (канонической) вертикали модели, а не мировой Y.
+   * `visibleForKind(kind)` — см. attachToMfr. */
+  async function attachToZhbi(scene, models, { visibleForKind }) {
     const myGeneration = generation;
     const warnings = [];
     pruneMissing(models.map((m) => m.id));
@@ -125,7 +130,7 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
       result.group.position.set(v[0], v[1], v[2]);
       const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rotationRad(model));
       result.group.quaternion.copy(axisRemap).multiply(qRotate);
-      result.group.visible = visible;
+      result.group.visible = visibleForKind(model.kind);
       scene.add(result.group);
     }
     return warnings;
@@ -144,10 +149,11 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
   }
 
   /** Переключает видимость всех уже загруженных моделей БЕЗ пересборки
-   * сцены и без повторного разбора FBX — используется чекбоксом слоя. */
-  function setVisible(visible) {
+   * сцены и без повторного разбора FBX — используется чекбоксами слоя.
+   * `visibleForKind(kind)` — см. attachToMfr. */
+  function setVisible(visibleForKind) {
     for (const entry of cache.values()) {
-      if (entry.result) entry.result.group.visible = visible;
+      if (entry.result) entry.result.group.visible = visibleForKind(entry.kind);
     }
   }
 

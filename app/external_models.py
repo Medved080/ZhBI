@@ -33,7 +33,7 @@ router = APIRouter(prefix="/objects/{object_id}/external-models", tags=["externa
 MAX_MODEL_BYTES = min(50 * 1024 * 1024, MAX_UPLOAD_BYTES)
 MAX_OFFSET_MM = 1e9
 MAX_META_JSON_BYTES = 20_000
-SUPPORTED_KINDS = ("ground",)
+SUPPORTED_KINDS = ("ground", "facade")
 FEATURE_KEY = "external_models"
 
 

@@ -5461,7 +5461,9 @@
             <label class="toggle" title="Сетка осей объекта (object_grids) — для сверки геометрии блока с реальными контурами">
               <input type="checkbox" id="mfr-show-axes"/>Оси</label>
             <label class="toggle" title="Фасады здания по сторонам (справочная картинка с чертежа, только 3D)">
-              <input type="checkbox" id="mfr-show-facades"/>Фасады</label>
+              <input type="checkbox" id="mfr-show-facades"/>Фасады (PDF)</label>
+            <label class="toggle" title="Фасады объекта из загруженной FBX-модели (Действия → Обмен данными → Загрузить из FBX). Переключатель локальный — на сохранённое положение слоя не влияет">
+              <input type="checkbox" id="mfr-show-external-facades" checked/>Фасады (FBX)</label>
             <label class="toggle" title="Картинки планов этажей с чертежа PDF, обрезанные по контуру здания, — лежат на полу этажа (3D) и подложкой под планом (2D, при выборе одного этажа)">
               <input type="checkbox" id="mfr-show-plans"/>Планы</label>
             <label class="toggle" title="Внешняя 3D-модель благоустройства объекта (только 3D). Переключатель локальный — на сохранённое положение слоя не влияет">
@@ -6286,6 +6288,9 @@
     <label class="field" style="margin-top:12px">Благоустройство</label>
     <label class="toggle"><input type="checkbox" id="zhbi-show-external-models" checked/>
       Показывать внешнюю 3D-модель благоустройства объекта (если загружена)</label>
+    <label class="field" style="margin-top:12px">Фасады</label>
+    <label class="toggle"><input type="checkbox" id="zhbi-show-external-facades" checked/>
+      Показывать фасады объекта из FBX (если загружены)</label>
     <label class="field" style="margin-top:12px">Тени в 3D</label>
     <label class="toggle"><input type="checkbox" id="shadows-3d"/>
       Солнце и тени — силуэт здания на земле и затенение элементов друг другом</label>

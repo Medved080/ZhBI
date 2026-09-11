@@ -82,9 +82,16 @@ function removeLightsAndCameras(root) {
  * @param {ArrayBuffer} opts.arrayBuffer
  * @param {typeof import('three')} opts.THREE
  * @param {new (manager:any) => any} opts.FBXLoader
+ * @param {'ground'|'facade'} [opts.kind] — влияет только на anchor по Z
+ *   (см. ниже): 'ground' (по умолчанию) — верх габарита на 0 (благоустройство
+ *   уходит вниз, под чистый пол); 'facade' — низ габарита на 0 (здание стоит
+ *   на земле). Оба варианта используют ОДНУ и ту же отметку 0 объекта —
+ *   встречаются на ней, а не расходятся (живой запрос пользователя
+ *   2026-09-11: благоустройство, фасады и загруженные элементы должны быть
+ *   синхронизированы в пространстве).
  * @param {Partial<typeof DEFAULT_LIMITS>} [opts.limits]
  */
-export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, limits = {} }) {
+export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, kind = "ground", limits = {} }) {
   const lim = { ...DEFAULT_LIMITS, ...limits };
   const warnings = [];
 
@@ -141,13 +148,15 @@ export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, limi
     throw new Error("Не удалось вычислить конечный габарит модели (NaN/Infinity в вершинах).");
   }
 
-  // Anchor по высоте — ВЕРХНЯЯ точка габарита (не нижняя): по умолчанию
-  // благоустройство ставится верхней границей на отметку 0 объекта (живой
-  // запрос пользователя 2026-09-11), а не нижней — модель уходит вниз, в
-  // отрицательные локальные Z. Ручной сдвиг по высоте (offset_z_mm,
-  // app/external_models.py) добавляется поверх уже на сервере/в слое, не
-  // здесь.
-  const sourceAnchorMm = [(minX + maxX) / 2, (minY + maxY) / 2, maxZ];
+  // Anchor по высоте зависит от kind (живой запрос пользователя
+  // 2026-09-11): 'ground' — ВЕРХНЯЯ точка габарита на отметку 0 (модель
+  // уходит вниз, под чистый пол); 'facade' — НИЖНЯЯ точка на 0 (здание
+  // стоит на земле, растёт вверх). Оба смотрят на одну и ту же отметку 0
+  // объекта — благоустройство и фасад встречаются на ней, не расходятся.
+  // Ручной сдвиг по высоте (offset_z_mm, app/external_models.py)
+  // добавляется поверх уже на сервере/в слое, не здесь.
+  const anchorZ = kind === "facade" ? minZ : maxZ;
+  const sourceAnchorMm = [(minX + maxX) / 2, (minY + maxY) / 2, anchorZ];
   const translateAnchor = new THREE.Matrix4().makeTranslation(-sourceAnchorMm[0], -sourceAnchorMm[1], -sourceAnchorMm[2]);
 
   const outGroup = new THREE.Group();
