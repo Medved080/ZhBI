@@ -9909,6 +9909,125 @@ document.addEventListener("keydown", (e) => {
   objectSwitchMenu.classList.remove("open");
 });
 
+// -------- плавающие окна: перетаскивание/ресайз/разворот на весь экран --------
+// Живой запрос пользователя 2026-09-11: кнопки не влезали в диалог с
+// несколькими длинными карточками («Загрузка из FBX» с 2+ моделями).
+// Общая надстройка НА ВСЕ модалки разом (их 80+, разметка везде одна —
+// .modal-backdrop > .modal) — один проход по DOM при старте, без правки
+// каждого диалога по отдельности. До первого перетаскивания/ресайза
+// поведение как было (центрирование родителем, авторазмер по контенту) —
+// эти три возможности только ДОБАВЛЯЮТСЯ.
+function enhanceModalWindows() {
+  document.querySelectorAll(".modal-backdrop > .modal").forEach((modal) => {
+    if (modal.dataset.windowEnhanced) return;
+    modal.dataset.windowEnhanced = "1";
+    setupModalWindowControls(modal);
+  });
+}
+
+function setupModalWindowControls(modal) {
+  const bar = document.createElement("div");
+  bar.className = "modal-window-bar";
+  bar.innerHTML = '<span class="modal-window-drag-hint" title="Перетащить окно">⠿⠿</span>'
+    + '<button type="button" class="modal-window-btn modal-window-maximize" title="На весь экран">⛶</button>';
+  modal.insertBefore(bar, modal.firstChild);
+
+  const resizeHandle = document.createElement("div");
+  resizeHandle.className = "modal-window-resize-handle";
+  resizeHandle.title = "Изменить размер (потянуть)";
+  modal.appendChild(resizeHandle);
+
+  // Переводит модалку из авто-центрирования flex-ом родителя в явное
+  // position:fixed по ТЕКУЩИМ экранным координатам — один раз, при первом
+  // перетаскивании/ресайзе; дальше left/top/width/height двигает жест.
+  function ensureFixedPosition() {
+    if (modal.style.position === "fixed") return;
+    const r = modal.getBoundingClientRect();
+    modal.style.position = "fixed";
+    modal.style.left = r.left + "px";
+    modal.style.top = r.top + "px";
+    modal.style.margin = "0";
+  }
+
+  bar.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return; // клик по кнопке разворота — не начало перетаскивания
+    if (modal.classList.contains("modal-window-maximized")) return; // в развороте не тащим
+    ensureFixedPosition();
+    const startX = e.clientX, startY = e.clientY;
+    const startLeft = parseFloat(modal.style.left) || 0;
+    const startTop = parseFloat(modal.style.top) || 0;
+    bar.setPointerCapture(e.pointerId);
+    function onMove(ev) {
+      modal.style.left = (startLeft + ev.clientX - startX) + "px";
+      modal.style.top = (startTop + ev.clientY - startY) + "px";
+    }
+    function onUp() {
+      bar.removeEventListener("pointermove", onMove);
+      bar.removeEventListener("pointerup", onUp);
+      bar.removeEventListener("pointercancel", onUp);
+    }
+    bar.addEventListener("pointermove", onMove);
+    bar.addEventListener("pointerup", onUp);
+    bar.addEventListener("pointercancel", onUp);
+    e.preventDefault();
+  });
+
+  resizeHandle.addEventListener("pointerdown", (e) => {
+    if (modal.classList.contains("modal-window-maximized")) return;
+    ensureFixedPosition();
+    const rect = modal.getBoundingClientRect();
+    const startX = e.clientX, startY = e.clientY;
+    modal.style.width = rect.width + "px";
+    modal.style.height = rect.height + "px";
+    modal.style.maxWidth = "95vw";
+    modal.style.maxHeight = "95vh";
+    resizeHandle.setPointerCapture(e.pointerId);
+    function onMove(ev) {
+      modal.style.width = Math.max(320, rect.width + (ev.clientX - startX)) + "px";
+      modal.style.height = Math.max(200, rect.height + (ev.clientY - startY)) + "px";
+    }
+    function onUp() {
+      resizeHandle.removeEventListener("pointermove", onMove);
+      resizeHandle.removeEventListener("pointerup", onUp);
+      resizeHandle.removeEventListener("pointercancel", onUp);
+    }
+    resizeHandle.addEventListener("pointermove", onMove);
+    resizeHandle.addEventListener("pointerup", onUp);
+    resizeHandle.addEventListener("pointercancel", onUp);
+    e.preventDefault();
+    e.stopPropagation(); // не запустить заодно перетаскивание через .modal-window-bar
+  });
+
+  let savedRect = null; // явные left/top/width/height/maxWidth/maxHeight ДО разворота — для восстановления
+  const maximizeBtn = bar.querySelector(".modal-window-maximize");
+  maximizeBtn.addEventListener("click", () => {
+    if (modal.classList.contains("modal-window-maximized")) {
+      modal.classList.remove("modal-window-maximized");
+      if (savedRect) {
+        Object.assign(modal.style, savedRect);
+      } else {
+        // не было явного положения — вернуть к авто (центрирование/авторазмер)
+        modal.style.position = ""; modal.style.left = ""; modal.style.top = "";
+        modal.style.width = ""; modal.style.height = "";
+        modal.style.maxWidth = ""; modal.style.maxHeight = ""; modal.style.margin = "";
+      }
+      maximizeBtn.textContent = "⛶";
+      maximizeBtn.title = "На весь экран";
+    } else {
+      savedRect = modal.style.position === "fixed" ? {
+        position: "fixed", left: modal.style.left, top: modal.style.top,
+        width: modal.style.width, height: modal.style.height,
+        maxWidth: modal.style.maxWidth, maxHeight: modal.style.maxHeight, margin: modal.style.margin,
+      } : null;
+      modal.classList.add("modal-window-maximized");
+      maximizeBtn.textContent = "🗗";
+      maximizeBtn.title = "Восстановить размер";
+    }
+  });
+}
+
+enhanceModalWindows();
+
 // Открытие переключателя объектов — тем же приёмом, что и меню «Действия»:
 // position: fixed и координаты в JS, иначе поповер обрезается
 // overflow-y: hidden тулбара (уже было багом «меню открывается под схемой»).
