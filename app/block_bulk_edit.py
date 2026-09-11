@@ -173,7 +173,8 @@ def _block_work_rows(conn, object_id: int) -> list:
         """
         SELECT bw.*, wt.path AS wt_path,
                s.code AS section_code, s.sort_order AS section_sort,
-               l.floor AS level_floor, l.elevation_mm AS elevation_mm, l.sort_order AS level_sort,
+               l.floor AS level_floor, l.name AS level_name,
+               l.elevation_mm AS elevation_mm, l.sort_order AS level_sort,
                o.name AS object_name
         FROM block_works bw
         JOIN work_types wt ON wt.id = bw.work_type_id
@@ -199,9 +200,16 @@ def display_values(row, percent: "int | None", fact_dates: tuple) -> dict:
     у ЖБИ (display_values в app/element_bulk_edit.py)."""
     wbs = dict(zip(_WBS_KEYS, _wbs_parts(row["wt_path"])))
     fact_start, fact_end = fact_dates
+    # Этаж — по тому же приоритету, что везде в интерфейсе (app.js:
+    # `level_name || floor + " этаж"`, app/work_fact.py::list_journal):
+    # подпись, если задана, иначе номер. У «кровли» и у этажей, заведённых
+    # руками без номера («Секции и этажи», кнопка «Добавить»), floor может
+    # быть NULL — раньше в этом случае колонка «Этаж» выгружалась пустой,
+    # хотя подпись у уровня есть (живой отчёт пользователя, 2026-09-11).
+    этаж = row["level_name"] or row["level_floor"]
     values = {
         KEY_COLUMN: row["id"], "object_name": row["object_name"],
-        "section_code": row["section_code"], "level_floor": row["level_floor"],
+        "section_code": row["section_code"], "level_floor": этаж,
         "percent": percent, "report_date": None,
         "elevation_mm": row["elevation_mm"],
         "fact_start": fact_start, "fact_end": fact_end,
