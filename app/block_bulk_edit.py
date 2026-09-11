@@ -69,6 +69,15 @@ THEME_PRIMARY = {
 }
 DEFAULT_THEME = "gos"
 
+# Размер шрифта шапки — на 2 пункта больше основного текста (живой запрос
+# 2026-09-11). BODY_FONT_SIZE явно продублирован, а не оставлен неявным
+# дефолтом openpyxl (Calibri 11): дефолт нигде не гарантирован документами
+# формата и может измениться в новой версии библиотеки, а связь «шапка на
+# 2 больше» должна остаться видимой в коде, а не в совпадении с чужой
+# константой.
+BODY_FONT_SIZE = 11
+HEADER_FONT_SIZE = BODY_FONT_SIZE + 2
+
 
 def _hex_to_rgb(hex_color: str) -> tuple:
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
@@ -208,8 +217,15 @@ def build_export_workbook(conn, object_id: int, ui_theme: Optional[str] = None) 
 
     primary = THEME_PRIMARY.get(ui_theme, THEME_PRIMARY[DEFAULT_THEME])
     header_fill = PatternFill("solid", fgColor=primary)
-    header_font = Font(bold=True, color=_readable_text_color(primary))
+    header_font = Font(bold=True, size=HEADER_FONT_SIZE, color=_readable_text_color(primary))
+    # Два разных оттенка ОДНОЙ гаммы (живой запрос 2026-09-11), не два
+    # смысла одним цветом: чередование строк — едва заметная подложка для
+    # чтения (12% акцента), правимая ячейка — заметно ярче (28%), чтобы её
+    # было видно СРАЗУ, независимо от чётности строки.
     stripe_fill = PatternFill("solid", fgColor=_mix_with_white(primary, 0.12))
+    editable_fill = PatternFill("solid", fgColor=_mix_with_white(primary, 0.28))
+    editable_cols = {i + 1 for i, (_, _, editable) in enumerate(COLUMNS) if editable}
+    body_font = Font(size=BODY_FONT_SIZE)
 
     wb = Workbook()
     ws = wb.active
@@ -232,8 +248,15 @@ def build_export_workbook(conn, object_id: int, ui_theme: Optional[str] = None) 
         # Чередование — по НОМЕРУ СТРОКИ листа, а не по индексу в rows: так
         # полосы не сбиваются, если состав строк когда-нибудь придёт не
         # подряд (сейчас подряд, но зависимость от порядка была бы хрупкой).
-        if номер % 2 == 0:
-            for cell in ws[номер]:
+        # Правимые колонки — СВОЙ цвет во ВСЕХ строках, чётных и нечётных:
+        # это не полоса чтения, а метка «сюда можно писать», ей чередование
+        # только мешало бы (пропадала бы через строку).
+        чётная = номер % 2 == 0
+        for col_idx, cell in enumerate(ws[номер], start=1):
+            cell.font = body_font
+            if col_idx in editable_cols:
+                cell.fill = editable_fill
+            elif чётная:
                 cell.fill = stripe_fill
 
     _protect(ws, len(rows))
