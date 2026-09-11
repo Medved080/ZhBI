@@ -34792,6 +34792,7 @@ document.getElementById("menu-external-models")?.addEventListener("click", async
     onChanged: () => refreshExternalModelsInOpenScene(state.objectId),
     beginPlacement: beginExternalModelPlacement,
     beginCalibration: beginExternalModelCalibration,
+    previewPlacement: previewExternalModelPlacement,
   });
 });
 document.getElementById("external-models-close")?.addEventListener("click", () => {
@@ -35017,6 +35018,44 @@ function syncGroupToModel(group, model, projectFn, extra) {
   const pz = model.offset_mm.z || 0;
   const v = projectFn([px, py, pz], ...extra);
   group.position.set(v[0], v[1], v[2]);
+}
+
+// Разовая установка положения группы БЕЗ жеста/захвата controls — только
+// прямой пересчёт position/quaternion по переданному offset/rotation
+// (Docs/fbx-placement-repair-claude-prompt.md §1: кнопка «Совместить
+// автоматически» и список кандидатов при ambiguous должны показывать
+// результат в 3D ДО «Сохранить», не только менять числовые поля).
+// `overrideMm` — {offsetXMm, offsetYMm, rotationDeg}, накладывается на
+// копию model (сама model/сервер не трогаются). Работает в ЛЮБОЙ уже
+// открытой сцене объекта — как beginExternalModelPlacement. Возвращает
+// {ok:false, reason} без исключений, если сцена/группа ещё не готовы —
+// вызывающий код (settings.js) просто не покажет предпросмотр, черновик
+// при этом остаётся источником истины.
+function previewExternalModelPlacement(model, overrideMm) {
+  const modelForPreview = {
+    ...model,
+    offset_mm: { ...model.offset_mm, x: overrideMm.offsetXMm, y: overrideMm.offsetYMm },
+    rotation_deg: overrideMm.rotationDeg,
+  };
+  if (mfr3d.scene && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer) {
+    const group = mfrExternalModels.layer.getGroup(model.id);
+    if (group && externalModelsBridge?.projectToMfrView && mfrExternalModels.origin) {
+      syncGroupToModel(group, modelForPreview, externalModelsBridge.projectToMfrView, [mfrExternalModels.origin, mfrExternalModels.low]);
+      group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(overrideMm.rotationDeg) || 0) * Math.PI / 180);
+      return { ok: true };
+    }
+  }
+  if (state.view3d.scene && zhbiExternalModels.objectId === model.object_id && zhbiExternalModels.layer) {
+    const group = zhbiExternalModels.layer.getGroup(model.id);
+    if (group && externalModelsBridge?.projectToZhbiView) {
+      syncGroupToModel(group, modelForPreview, externalModelsBridge.projectToZhbiView, []);
+      const axisRemap = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(overrideMm.rotationDeg) || 0) * Math.PI / 180);
+      group.quaternion.copy(axisRemap).multiply(qRotate);
+      return { ok: true };
+    }
+  }
+  return { ok: false, reason: "3D этого объекта сейчас не открыт — предпросмотр недоступен, но черновик уже обновлён." };
 }
 
 function beginExternalModelPlacement(model, callbacks) {

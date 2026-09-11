@@ -1,5 +1,6 @@
 // Синтетическая проверка автоматического совмещения фасада
-// (Docs/fbx-auto-placement-claude-prompt.md). ТОЛЬКО синтетика — нет
+// (Docs/fbx-auto-placement-claude-prompt.md,
+// Docs/fbx-placement-repair-claude-prompt.md). ТОЛЬКО синтетика — нет
 // доступа к паре «реальный FBX ↔ реальный revit_elements одного и того же
 // здания» (анонимная копия БД и тестовые FBX относятся к разным объектам).
 // Запуск: node scripts/verify_auto_align.mjs
@@ -8,15 +9,17 @@ import {
   buildDirectionHistogram,
   findDirectionPeaks,
   generateRotationCandidates,
-  clusterHeightBands,
+  clusterSpatialParts,
   weightedCentroidXY,
   weightedProcrustes2D,
   icpRefine,
   buildSegmentGridIndex,
   autoAlignFacade,
   candidateToPlacement,
+  extractWallSegmentsFromGroup,
 } from "../app/static/external-models/auto-align.js";
 import { rotateXY, canonicalToProject } from "../app/static/external-models/coordinates.js";
+import * as THREE from "../app/static/vendor/three/three.module.min.js";
 
 let failures = 0;
 function assertTrue(cond, msg) {
@@ -47,29 +50,22 @@ function rectSegments(cx, cy, w, h, z0, z1, angleDeg = 0) {
   return segs;
 }
 
-/** Здание: башня (прямоугольник) + отдельный объём (другой прямоугольник),
- * оба в ЛОКАЛЬНОЙ (несмещённой) системе, представляющей "истинную"
- * геометрию модели/объекта до глобального поворота-переноса. Второй объём
- * НАМЕРЕННО отделён по высоте зазором больше clusterHeightBands (2м) —
- * проверяет именно разделение по структуре данных (см. задание §«башня +
- * низкая часть»), а не смешение объёмов, которые физически перекрываются
- * по Z (в реальности пристройка на уровне земли перекрывается с первым
- * этажом башни, и это ожидаемо сливается в одну полосу).
- * Каждая стена этой синтетики подробнее одного отрезка на сторону —
- * реальные revit_elements дают тысячи отрезков, здесь важно только
- * превысить minSegments из autoAlignFacade (пороговая защита от почти
- * пустых данных, не от простых форм). */
+/** Здание: башня (прямоугольник, много этажей) + примыкающий НИЗКИЙ
+ * корпус ОТ ТОЙ ЖЕ ЗЕМЛИ (реалистичный случай, ровно тот, что показал
+ * баг слияния в одну Z-полосу, Docs/fbx-placement-repair-claude-
+ * prompt.md §2) — оба объёма начинаются от Z=0, их Z-диапазоны
+ * пересекаются, разделять их обязана пространственная (XY) кластеризация,
+ * а не высотная. Башня — 20 этажей по 3.5м = 70м, низкий корпус — 7
+ * этажей той же высоты этажа, СБОКУ (другой footprint), тоже от земли. */
 function localBuildingSegments() {
   const segs = [];
-  // Башня: 20x15 м, три этажа по 3.5м = 10.5м, с подразбиением стен
-  // (иначе прямоугольник даёт 4 отрезка/этаж — их и так достаточно для
-  // цели теста, подразбиение просто ближе к реальной плотности).
-  for (let floor = 0; floor < 3; floor++) {
-    segs.push(...rectSegments(0, 0, 20000, 15000, floor * 3500, (floor + 1) * 3500));
+  const floorH = 3500;
+  for (let floor = 0; floor < 20; floor++) {
+    segs.push(...rectSegments(0, 0, 20000, 15000, floor * floorH, (floor + 1) * floorH));
   }
-  // Отдельный низкий объём — сдвинут по Z выше кровли башни с зазором >2м
-  // (условно: надстройка/технический объём), 30x10м, высота 6м.
-  segs.push(...rectSegments(20000 + 15000, -2500, 30000, 10000, 13000, 19000));
+  for (let floor = 0; floor < 7; floor++) {
+    segs.push(...rectSegments(20000 + 15000, -2500, 30000, 10000, floor * floorH, (floor + 1) * floorH));
+  }
   return segs;
 }
 
@@ -127,11 +123,38 @@ function addNoise(segments, ampMm, seed = 1) {
 {
   const objSegs = [{ x1: 0, y1: 0, x2: 1000, y2: 0, z0: 0, z1: 3000 }, { x1: 1000, y1: 0, x2: 1000, y2: 1000, z0: 0, z1: 3000 }];
   const index = buildSegmentGridIndex(objSegs, 500);
-  const nn = index && true;
-  assertTrue(!!nn, "buildSegmentGridIndex строит индекс без ошибок");
+  assertTrue(!!index, "buildSegmentGridIndex строит индекс без ошибок");
 }
 
-// ==================== 2. точное восстановление (без шума) ====================
+// ==================== 2. пространственные части (замена высотных полос) ====================
+
+{
+  const local = localBuildingSegments();
+  const parts = clusterSpatialParts(local, 150);
+  assertTrue(parts.length === 2, `башня (20 этажей) + примыкающий корпус (7 этажей) ОТ ТОЙ ЖЕ ЗЕМЛИ образуют 2 пространственные части (получено ${parts.length}) — реалистичный случай, Z-диапазоны ПЕРЕСЕКАЮТСЯ`);
+  const [bigger, smaller] = parts;
+  assertTrue(bigger.totalLength > smaller.totalLength, "части отсортированы по убыванию суммарной длины стен");
+  // Башня (20 этажей по периметру (20000+15000)*2=70000мм) весомее корпуса (7 этажей по (30000+10000)*2=80000мм на этаж)
+  const centroidBig = weightedCentroidXY(bigger.segments);
+  assertTrue(Math.abs(centroidBig[0]) < 1000 || Math.abs(centroidBig[0] - 35000) < 1000,
+    "крупная часть — это либо башня (центр ~0,0), либо корпус (центр ~35000,-2500), не смесь");
+}
+
+{
+  // Здание с ФИЗИЧЕСКИ общей стеной (корпуса касаются) — connectivity
+  // корректно объединяет их в одну часть, это не баг, а архитектурная
+  // реальность (одна связная конструкция).
+  const touching = [
+    ...rectSegments(0, 0, 20000, 15000, 0, 3500), // угол башни: (10000,-7500)
+    // Пристройка сдвинута так, что её угол ТОЧНО совпадает с углом башни:
+    // cx=25000,cy=-2500,w=30000,h=10000 → угол (25000-15000,-2500-5000)=(10000,-7500).
+    ...rectSegments(25000, -2500, 30000, 10000, 0, 3500),
+  ];
+  const parts = clusterSpatialParts(touching, 150);
+  assertTrue(parts.length === 1, `физически смежные (общий угол) объёмы объединяются в одну часть (получено ${parts.length})`);
+}
+
+// ==================== 3. точное восстановление (без шума) ====================
 
 {
   const local = localBuildingSegments();
@@ -139,23 +162,20 @@ function addNoise(segments, ampMm, seed = 1) {
   const thetaTrue = (thetaTrueDeg * Math.PI) / 180;
   const tTrue = [513280, -224660];
   const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
-  const fbxSegments = local; // C == локальные координаты модели (anchor не участвует в этом слое)
+  const fbxSegments = local;
 
-  const result = autoAlignFacade({ fbxSegments, objectSegments, limits: { minSegments: 10 } });
+  const result = autoAlignFacade({ fbxSegments, objectSegments });
   assertTrue(result.status === "confident", `точный случай даёт status=confident (получено ${result.status}: ${result.reason || ""})`);
-  if (result.status === "confident" || result.candidates.length) {
+  if (result.candidates.length) {
     const c = result.candidates[0];
     const gotThetaDeg = (c.theta * 180) / Math.PI;
-    // с точностью до знака направления обхода тест сравнивает по модулю 360, окном допуска
     const angDiff = Math.min(Math.abs(gotThetaDeg - thetaTrueDeg), 360 - Math.abs(gotThetaDeg - thetaTrueDeg));
     assertTrue(angDiff < 1, `точный угол восстановлен (истинный ${thetaTrueDeg}°, получен ${gotThetaDeg.toFixed(2)}°)`);
     assertClose(c.tXY[0], tTrue[0], 500, "точный перенос X восстановлен (допуск 500мм)");
     assertClose(c.tXY[1], tTrue[1], 500, "точный перенос Y восстановлен (допуск 500мм)");
     assertTrue(c.coverage > 0.8, `высокое покрытие для точного случая (${(c.coverage * 100).toFixed(0)}%)`);
+    assertTrue(c.worstPartCoverage > 0.5, `обе части (башня И низкий корпус) хорошо покрыты, не только крупная (худшая ${(c.worstPartCoverage * 100).toFixed(0)}%)`);
 
-    // сквозная проверка: применение найденного theta/t к КАЖДОЙ вершине
-    // локальной геометрии должно точно (с допуском накопленной погрешности
-    // ICP) совпасть с объектной.
     const [sample] = fbxSegments;
     const [rx, ry] = rotateXY(c.theta, sample.x1, sample.y1);
     const gotX = rx + c.tXY[0], gotY = ry + c.tXY[1];
@@ -163,11 +183,9 @@ function addNoise(segments, ampMm, seed = 1) {
     assertClose(gotX, ox + tTrue[0], 500, "проекция первой вершины совпадает с истинной (X)");
     assertClose(gotY, oy + tTrue[1], 500, "проекция первой вершины совпадает с истинной (Y)");
 
-    // placementFromGlobalTransform / candidateToPlacement — не бросает,
-    // даёт консистентный результат с canonicalToProject.
     const sourceAnchorXY = [0, 0];
     const projectAnchorXY = [0, 0];
-    const placement = candidateToPlacement(c, sourceAnchorXY, [0, 0, 0].slice(0, 2)) ;
+    const placement = candidateToPlacement(c, sourceAnchorXY, projectAnchorXY);
     const projected = canonicalToProject(
       [sample.x1, sample.y1, 0], [sourceAnchorXY[0], sourceAnchorXY[1], 0], [projectAnchorXY[0], projectAnchorXY[1], 0],
       placement.offsetXMm, placement.offsetYMm, 0, placement.rotationDeg,
@@ -177,7 +195,7 @@ function addNoise(segments, ampMm, seed = 1) {
   }
 }
 
-// ==================== 3. устойчивость к шуму/неполноте ====================
+// ==================== 4. устойчивость к шуму/неполноте ====================
 
 {
   const local = localBuildingSegments();
@@ -187,7 +205,7 @@ function addNoise(segments, ampMm, seed = 1) {
   objectSegments = addNoise(objectSegments, 40, 7); // ±40мм — реалистичный шум обмера/триангуляции
   const fbxSegments = addNoise(local, 15, 3); // ±15мм — точность геометрии из FBX
 
-  const result = autoAlignFacade({ fbxSegments, objectSegments, limits: { minSegments: 10 } });
+  const result = autoAlignFacade({ fbxSegments, objectSegments });
   assertTrue(result.status === "confident", `шум ±15-40мм не мешает status=confident (получено ${result.status})`);
   if (result.candidates.length) {
     const c = result.candidates[0];
@@ -198,20 +216,35 @@ function addNoise(segments, ampMm, seed = 1) {
 }
 
 {
-  // Пропал весь верхний объём (недомоделированный фрагмент) — направление
-  // и перенос всё равно должны находиться по оставшейся части башни.
-  const local = localBuildingSegments().filter((s) => s.z1 <= 10500);
+  // Пропал весь низкий корпус (недомоделированный фрагмент) — направление
+  // и перенос всё равно должны находиться по оставшейся башне.
+  const local = localBuildingSegments().filter((s) => s.x1 <= 20000 && s.x2 <= 20000);
   const thetaTrue = (15 * Math.PI) / 180;
   const tTrue = [1000, 2000];
   const objectSegments = applyGlobalTransform(localBuildingSegments(), thetaTrue, tTrue); // объект — полный
   const fbxSegments = local; // модель — неполная
 
-  const result = autoAlignFacade({ fbxSegments, objectSegments, limits: { minSegments: 10 } });
-  assertTrue(result.status === "confident" || result.status === "low_confidence",
+  const result = autoAlignFacade({ fbxSegments, objectSegments });
+  // Без низкого корпуса у модели остался только несимметричный
+  // прямоугольник башни — этого может не хватить, чтобы однозначно
+  // отличить верный угол от 180°-зеркального по невязке by object (тоже
+  // содержащему такую же башню) — ambiguous тут ЧЕСТНЫЙ, безопасный
+  // исход («нужна проверка человеком»), не грубая ошибка. Важно только,
+  // что confident/low_confidence НЕ дают ложного грубого промаха, если
+  // всё-таки случаются.
+  assertTrue(["confident", "low_confidence", "ambiguous"].includes(result.status),
     `частично отсутствующая геометрия не даёт грубой ошибки (status=${result.status})`);
+  if (result.status === "confident" || result.status === "low_confidence") {
+    const c = result.candidates[0];
+    const [sample] = fbxSegments;
+    const [rx, ry] = rotateXY(c.theta, sample.x1, sample.y1);
+    const [ex, ey] = rotateXY(thetaTrue, sample.x1, sample.y1).map((v, i) => v + tTrue[i]);
+    assertClose(rx + c.tXY[0], ex, 2000, "при частично отсутствующей геометрии, если статус не ambiguous, позиция всё равно верна (X)");
+    assertClose(ry + c.tXY[1], ey, 2000, "при частично отсутствующей геометрии, если статус не ambiguous, позиция всё равно верна (Y)");
+  }
 }
 
-// ==================== 4. отрицательные случаи — НЕ должно быть ложной уверенности ====================
+// ==================== 5. отрицательные случаи — НЕ должно быть ложной уверенности ====================
 
 {
   // Симметричное здание (квадрат) — 90°-неоднозначность направлений,
@@ -222,13 +255,11 @@ function addNoise(segments, ampMm, seed = 1) {
   const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
   const fbxSegments = local;
   const result = autoAlignFacade({ fbxSegments, objectSegments });
-  assertTrue(result.status !== "confident" || true, "симметричный квадрат обработан без исключений");
-  // Для строго квадратного здания без пристройки любой угол, кратный 90°,
-  // даёт ОДИНАКОВО хорошее совпадение — это должно быть видно по низкому
-  // coverage-разрыву. Проверяем именно это, а не конкретный статус.
-  if (result.candidates.length >= 1) {
-    console.log(`  (диагностика: симметричный случай → status=${result.status}, кандидатов=${result.candidates.length})`);
-  }
+  // Симметричный квадрат без пристройки: поворот на 90° даёт РАВНОЕ по
+  // качеству совпадение — НЕ должно быть заявлено как confident при
+  // отсутствии второго, различающего эти варианты, ориентира.
+  assertTrue(result.status !== "confident",
+    `симметричный квадрат БЕЗ дополнительных ориентиров не даёт ложной confident (получено ${result.status})`);
 }
 
 {
@@ -244,7 +275,6 @@ function addNoise(segments, ampMm, seed = 1) {
 }
 
 {
-  // Недостаточно геометрии вовсе.
   const result = autoAlignFacade({ fbxSegments: [{ x1: 0, y1: 0, x2: 1000, y2: 0, z0: 0, z1: 3000 }], objectSegments: localBuildingSegments() });
   assertTrue(result.status === "insufficient_geometry", "единственный отрезок с одной стороны → insufficient_geometry");
 }
@@ -254,12 +284,9 @@ function addNoise(segments, ampMm, seed = 1) {
   assertTrue(result.status === "insufficient_geometry", "пустые входы не бросают исключение, дают insufficient_geometry");
 }
 
-// ==================== 5. неизменность при служебных операциях ====================
+// ==================== 6. неизменность при служебных операциях ====================
 
 {
-  // Один и тот же вход должен давать один и тот же результат при повторном
-  // запуске (детерминированность — важно для «не пересчитывать при смене
-  // этажного фильтра/камеры»).
   const local = localBuildingSegments();
   const thetaTrue = (63 * Math.PI) / 180;
   const tTrue = [42000, -18000];
@@ -272,29 +299,178 @@ function addNoise(segments, ampMm, seed = 1) {
   }
 }
 
-// ==================== 6. масштаб выборки / время ====================
+// ==================== 7. масштаб выборки / реальное время поиска ====================
 
 {
-  const local = localBuildingSegments();
+  // Реалистичный по объёму синтетический случай (production minSegments=20
+  // по умолчанию НЕ переопределяется — задание §4: тесты с 16 отрезками
+  // при пороге 20 завершались insufficient_geometry мгновенно, и «0 мс» не
+  // было временем поиска вообще). Много этажей → тысячи отрезков.
+  const local = [];
+  for (let floor = 0; floor < 40; floor++) {
+    local.push(...rectSegments(0, 0, 20000, 15000, floor * 3500, (floor + 1) * 3500));
+  }
+  for (let floor = 0; floor < 10; floor++) {
+    local.push(...rectSegments(35000, -2500, 30000, 10000, floor * 3500, (floor + 1) * 3500));
+  }
+  assertTrue(local.length >= 20, `реалистичная синтетика превышает production minSegments=20 (получено ${local.length})`);
   const thetaTrue = (22 * Math.PI) / 180;
   const tTrue = [7000, 9000];
   const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
   const t0 = Date.now();
   const result = autoAlignFacade({ fbxSegments: local, objectSegments });
   const elapsed = Date.now() - t0;
-  assertTrue(elapsed < 5000, `расчёт на типовом здании укладывается в разумное время (${elapsed}мс)`);
-  assertTrue(typeof result.diagnostics.timingMs === "number", "диагностика содержит измеренное время");
-  console.log(`  (диагностика: fbxSegments=${result.diagnostics.fbxSegmentCount}, objectSegments=${result.diagnostics.objectSegmentCount}, timingMs=${result.diagnostics.timingMs})`);
+  assertTrue(result.status === "confident", `реалистичный случай на боевом пороге даёт confident (получено ${result.status})`);
+  assertTrue(result.diagnostics.rotationCandidateCount > 0, "поиск реально сгенерировал кандидатов поворота (не мгновенный отказ)");
+  assertTrue(result.diagnostics.distinctResultCount > 0, "поиск реально дал хотя бы один результат ICP (не мгновенный отказ)");
+  assertTrue(elapsed < 5000, `расчёт на реалистичном здании укладывается в разумное время (${elapsed}мс)`);
+  assertTrue(result.diagnostics.timingMs > 0, "diagnostics.timingMs отражает РЕАЛЬНОЕ время поиска, а не мгновенный отказ");
+  console.log(`  (диагностика: fbxSegments=${result.diagnostics.fbxSegmentCount}, objectSegments=${result.diagnostics.objectSegmentCount}, timingMs=${result.diagnostics.timingMs}, кандидатов=${result.diagnostics.rotationCandidateCount})`);
 }
 
-// ==================== 7. clusterHeightBands / weightedCentroidXY примитивы ====================
+// ==================== 8. extractWallSegmentsFromGroup — устойчивость к порядку/числу мешей ====================
+
+function makeBoxMesh(cx, cy, w, h, zHeight) {
+  // ВАЖНО: extractWallSegmentsFromGroup читает СЫРЫЕ локальные буферы
+  // вершин без применения mesh.matrixWorld (ровно как в fbx.js — там
+  // позиция уже запекается прямо в буфер геометрии при разборе, см.
+  // finalMatrix/tmp.applyMatrix4 в fbx.js). Поэтому положение и здесь
+  // нужно ЗАПЕКАТЬ в геометрию (geometry.translate), а не задавать через
+  // mesh.position — иначе тест проверяет не то поведение, что в проде.
+  const box = new THREE.BoxGeometry(w, h, zHeight);
+  box.rotateX(Math.PI / 2); // Z-up, как в C-пространстве проекта
+  box.translate(cx, cy, zHeight / 2);
+  const mesh = new THREE.Mesh(box);
+  mesh.updateMatrixWorld(true);
+  return mesh;
+}
+
+function groupFootprintXY(segments) {
+  const xs = segments.flatMap((s) => [s.x1, s.x2]);
+  const ys = segments.flatMap((s) => [s.y1, s.y2]);
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+}
+
+{
+  // Два меша (башня и низкий корпус, РАЗНЫЕ footprint) — ОБА должны быть
+  // представлены в извлечённых сегментах независимо от порядка добавления
+  // и от общего бюджета (задание §2: раньше общий счётчик "съедался"
+  // первым мешем целиком, второй пропадал).
+  const sourceAnchorMm = [0, 0, 0];
+  for (const order of [["tower", "annex"], ["annex", "tower"]]) {
+    const group = new THREE.Group();
+    const meshes = {
+      tower: makeBoxMesh(0, 0, 20000, 15000, 70000),
+      annex: makeBoxMesh(35000, -2500, 30000, 10000, 24500),
+    };
+    for (const name of order) group.add(meshes[name]);
+    group.updateMatrixWorld(true);
+    const segments = extractWallSegmentsFromGroup(THREE, group, sourceAnchorMm, { maxTriangles: 40 });
+    const bbox = groupFootprintXY(segments);
+    const coversTower = bbox.minX < -5000 && bbox.minY < -5000; // угол башни (-10000,-7500)
+    const coversAnnex = bbox.maxX > 40000; // угол корпуса (~50000, ...)
+    assertTrue(segments.length > 0, `извлечены сегменты при порядке мешей [${order.join(",")}]`);
+    assertTrue(coversTower && coversAnnex,
+      `ОБА меша представлены в выборке при малом общем бюджете, порядок [${order.join(",")}] (bbox: X[${bbox.minX.toFixed(0)}..${bbox.maxX.toFixed(0)}])`);
+  }
+}
+
+{
+  // Разная плотность триангуляции между мешами (один мелко разбит, другой
+  // грубо) — обе части всё равно должны попасть в выборку.
+  const fineTower = makeBoxMesh(0, 0, 20000, 15000, 70000);
+  fineTower.geometry = fineTower.geometry.toNonIndexed(); // имитация другой плотности
+  const coarseAnnex = makeBoxMesh(35000, -2500, 30000, 10000, 24500);
+  const group = new THREE.Group();
+  group.add(fineTower); group.add(coarseAnnex);
+  group.updateMatrixWorld(true);
+  const segments = extractWallSegmentsFromGroup(THREE, group, [0, 0, 0], { maxTriangles: 60 });
+  const bbox = groupFootprintXY(segments);
+  assertTrue(bbox.minX < -5000 && bbox.maxX > 40000, "разная плотность триангуляции мешей не топит мелкий/грубый меш целиком");
+}
+
+// ==================== 9. icpRefine — честная финальная оценка ====================
 
 {
   const local = localBuildingSegments();
-  const bands = clusterHeightBands(local, 2000);
-  assertTrue(bands.length === 2, `башня+верхний объём образуют 2 полосы по высоте без жёстких отметок (получено ${bands.length})`);
-  const centroid = weightedCentroidXY(local.filter((s) => s.z0 >= 13000));
-  assertTrue(Math.abs(centroid[0] - 35000) < 2000, "центр масс верхнего объёма посчитан корректно (X)");
+  const thetaTrue = (18 * Math.PI) / 180;
+  const tTrue = [3000, -4000];
+  const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
+  const objectIndex = buildSegmentGridIndex(objectSegments, 2000);
+  const fbxPoints = local.slice(0, 40).map((s) => ({ x: s.x1, y: s.y1 }));
+  const icp = icpRefine({ fbxPoints, objectSegments, objectIndex, thetaInit: thetaTrue + 0.2, tInit: [tTrue[0] + 2000, tTrue[1] - 1500] });
+  // Пересчитываем coverage/rms НЕЗАВИСИМО, по ИТОГОВЫМ theta/t, и
+  // сверяем с тем, что вернула сама функция — раньше возвращались
+  // значения ДО последнего обновления transform.
+  let sqSum = 0, count = 0;
+  for (const p of fbxPoints) {
+    const [rx, ry] = rotateXY(icp.theta, p.x, p.y);
+    const nn = (() => {
+      let best = null, bestDist = 3000;
+      for (const s of objectSegments) {
+        const dx = s.x2 - s.x1, dy = s.y2 - s.y1;
+        const len2 = dx * dx + dy * dy || 1;
+        let t = ((rx + icp.t[0] - s.x1) * dx + (ry + icp.t[1] - s.y1) * dy) / len2;
+        t = Math.max(0, Math.min(1, t));
+        const x = s.x1 + t * dx, y = s.y1 + t * dy;
+        const d = Math.hypot(rx + icp.t[0] - x, ry + icp.t[1] - y);
+        if (d < bestDist) { bestDist = d; best = d; }
+      }
+      return best;
+    })();
+    if (nn !== null) { sqSum += nn * nn; count++; }
+  }
+  const independentRms = count ? Math.sqrt(sqSum / count) : Infinity;
+  const independentCoverage = count / fbxPoints.length;
+  assertClose(icp.rmsResidualMm, independentRms, 1e-6, "icpRefine.rmsResidualMm соответствует ИТОГОВОМУ (не предпоследнему) transform");
+  assertClose(icp.coverage, independentCoverage, 1e-6, "icpRefine.coverage соответствует ИТОГОВОМУ transform по ПОЛНОЙ выборке (не обрезанной kept)");
+}
+
+// ==================== 10. сквозной тест: меш → сегменты → поиск → плейсмент ====================
+
+{
+  const thetaTrueDeg = 29;
+  const thetaTrue = (thetaTrueDeg * Math.PI) / 180;
+  const tTrue = [120000, -45000];
+  const sourceAnchorMm = [1000, 500, 2000]; // anchor модели — не (0,0,0), проверяем сложение
+
+  // "FBX"-меши в ЛОКАЛЬНЫХ координатах (уже C - sourceAnchor, как после
+  // fbx.js) — extractWallSegmentsFromGroup обязан прибавить anchor обратно.
+  const localTower = makeBoxMesh(-sourceAnchorMm[0], -sourceAnchorMm[1], 20000, 15000, 70000);
+  const localAnnex = makeBoxMesh(35000 - sourceAnchorMm[0], -2500 - sourceAnchorMm[1], 30000, 10000, 24500);
+  const group = new THREE.Group();
+  group.add(localTower); group.add(localAnnex);
+  group.updateMatrixWorld(true);
+
+  const fbxSegments = extractWallSegmentsFromGroup(THREE, group, sourceAnchorMm, { maxTriangles: 200 });
+  assertTrue(fbxSegments.length > 20, `сквозной тест: извлечено достаточно сегментов из мешей (${fbxSegments.length})`);
+
+  // "Объект" — та же геометрия (в C, до вычета anchor — извлечение уже
+  // вернуло C) под известным глобальным поворотом/переносом.
+  const objectSegments = applyGlobalTransform(fbxSegments, thetaTrue, tTrue);
+
+  const result = autoAlignFacade({ fbxSegments, objectSegments });
+  assertTrue(result.status === "confident", `сквозной тест: статус confident (получено ${result.status}: ${result.reason || ""})`);
+  if (result.candidates.length) {
+    const projectAnchorXY = [500000, 500000]; // anchor объекта — тоже не (0,0)
+    const placement = candidateToPlacement(result.candidates[0], [sourceAnchorMm[0], sourceAnchorMm[1]], projectAnchorXY);
+    // Применяем найденный placement через ТОТ ЖЕ canonicalToProject, что
+    // использует рендер (coordinates.js), и сравниваем с точкой, которую
+    // задание считает эталонной (через applyGlobalTransform).
+    const sampleC = [fbxSegments[0].x1, fbxSegments[0].y1, 0];
+    const projected = canonicalToProject(
+      sampleC, [sourceAnchorMm[0], sourceAnchorMm[1], 0], [projectAnchorXY[0], projectAnchorXY[1], 0],
+      placement.offsetXMm, placement.offsetYMm, 0, placement.rotationDeg,
+    );
+    // placementFromGlobalTransform подбирает offset так, что
+    // canonicalToProject воспроизводит РОВНО P=Rz(theta)*C+t — независимо
+    // от выбора projectAnchorXY (он взаимно сокращается по построению
+    // формулы, coordinates.js:placementFromGlobalTransform), поэтому
+    // сравниваем с эталоном НАПРЯМУЮ, без поправки на anchor.
+    const [expX, expY] = rotateXY(thetaTrue, sampleC[0], sampleC[1]).map((v, i) => v + tTrue[i]);
+    assertClose(projected[0], expX, 1000, "сквозной тест: сохранённый placement воспроизводит эталонную позицию (X)");
+    assertClose(projected[1], expY, 1000, "сквозной тест: сохранённый placement воспроизводит эталонную позицию (Y)");
+  }
 }
 
 // ==================== итог ====================
