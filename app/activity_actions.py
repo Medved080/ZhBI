@@ -175,7 +175,7 @@ ACTIONS = {
     "attachment_delete": ("Вложение удалено", _D),
     "external_model_upload": ("Внешняя 3D-модель загружена", _D),
     "external_model_update": ("Внешняя 3D-модель изменена", _D),
-    "external_model_recenter": ("Внешняя 3D-модель отцентрирована", _D),
+    "external_model_recenter": ("Внешняя 3D-модель — сдвиг и поворот сброшены к исходному", _D),
     "external_model_delete": ("Внешняя 3D-модель удалена", _D),
     "object_create": ("Объект создан", _D),
     "object_rename": ("Объект переименован", _D),

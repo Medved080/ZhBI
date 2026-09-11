@@ -338,13 +338,22 @@ def recenter_external_model(object_id: int, model_id: int, body: RecenterIn,
         if row is None:
             raise HTTPException(status_code=404, detail="Модель не найдена")
 
+        # object_anchor_x/y — информационное поле (центр габарита объекта на
+        # момент последнего сброса), на позиционирование модели больше не
+        # влияет (см. ниже). Сам сброс — просто обнуление ручных offset/
+        # rotation: модель возвращается туда, где её поставил экспорт
+        # (source_anchor — реальные абсолютные координаты из FBX, живой
+        # запрос пользователя 2026-09-11 — собственное центрирование по
+        # bbox объекта только портило положение и рождало потребность в
+        # ручном повороте, раз FBX уже несёт настоящие координаты площадки).
         bounds_result = get_object_bounds(conn, object_id)
         anchor_x, anchor_y = object_anchor_from_bounds(bounds_result["bounds_mm"])
 
         cur = conn.execute(
             "UPDATE object_external_models SET "
             "object_anchor_x_mm = ?, object_anchor_y_mm = ?, centering_revision = ?, "
-            "offset_x_mm = 0, offset_y_mm = 0, revision = revision + 1, updated_at = datetime('now') "
+            "offset_x_mm = 0, offset_y_mm = 0, offset_z_mm = 0, rotation_deg = 0, "
+            "revision = revision + 1, updated_at = datetime('now') "
             "WHERE id = ? AND object_id = ? AND revision = ?",
             (anchor_x, anchor_y, bounds_result["source_revision"], model_id, object_id, body.expected_revision),
         )

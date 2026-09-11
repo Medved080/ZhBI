@@ -10,16 +10,23 @@
 // — явные аргументы, чтения глобалей нет (кроме DOM внутри переданного
 // контейнера).
 //
-// «Сцентрировать» в этой панели сразу шлёт POST .../recenter (реальное
-// сохранение с проверкой revision), а не считает черновой anchor локально
-// по GET bounds, как в задании §8 для диалога с drag — тут отдельного
-// диалога с drag нет, и промежуточный черновик разбирать не с чем.
-// Настройка мышью работает, только если у объекта уже открыт его 3D
-// («Модель» → 3D, МФР или ЖБИ) — иначе deps.beginPlacement честно
-// отказывает с понятной причиной, а не подставляет фиктивные координаты.
+// «Сбросить к исходному» в этой панели сразу шлёт POST .../recenter
+// (реальное сохранение с проверкой revision) — сбрасывает сдвиг и поворот
+// в 0, возвращая модель туда, куда её поставил экспорт (см. ниже, почему
+// это и есть положение по умолчанию). Настройка мышью работает, только
+// если у объекта уже открыт его 3D («Модель» → 3D, МФР или ЖБИ) — иначе
+// deps.beginPlacement честно отказывает с понятной причиной, а не
+// подставляет фиктивные координаты.
+//
+// Положение по умолчанию — РЕАЛЬНЫЕ абсолютные координаты из самого FBX
+// (сдвиг/поворот = 0), без центрирования по объекту (было до 2026-09-11,
+// убрано — живой найдено: собственное автоцентрирование по bbox объекта
+// портило и X/Y, и требовало ручного поворота, хотя реальные FBX уже несут
+// настоящие координаты площадки). Сдвиг/поворот в полях — поверх этого
+// исходного положения, а не поверх центра объекта.
 
-// Вид модели влияет на anchor по Z при разборе (см. fbx.js) и подписи в
-// UI — новый значимый выбор, не просто ярлык (живой запрос пользователя
+// Вид модели — только подпись в UI и независимая видимость (чекбоксы в
+// app.js), на позиционирование не влияет (живой запрос пользователя
 // 2026-09-11, второй FBX-файл того же объекта — фасад здания).
 const KIND_LABELS = { ground: "Благоустройство", facade: "Фасад" };
 
@@ -80,7 +87,7 @@ export function renderExternalModelsPanel(container, deps) {
             <input type="text" class="em-offset-x" data-model-id="${model.id}" value="${d.offsetXM}"/></div>
           <div><label class="field">Сдвиг Y, м</label>
             <input type="text" class="em-offset-y" data-model-id="${model.id}" value="${d.offsetYM}"/></div>
-          <div><label class="field" title="${model.kind === "facade" ? "0 = нижняя точка габарита модели на отметке 0 объекта (по умолчанию, здание стоит на земле)." : "0 = верхняя точка габарита модели на отметке 0 объекта (по умолчанию, модель уходит под чистый пол)."} Положительное — вверх.">Сдвиг Z, м</label>
+          <div><label class="field" title="0 = положение как в файле (реальные абсолютные координаты из FBX). Положительное — вверх.">Сдвиг Z, м</label>
             <input type="text" class="em-offset-z" data-model-id="${model.id}" value="${d.offsetZM}"/></div>
           <div><label class="field" title="По часовой стрелке при виде на план сверху, вокруг центра модели">Поворот, °</label>
             <input type="text" class="em-rotation" data-model-id="${model.id}" value="${d.rotationDeg}"/></div>
@@ -93,7 +100,8 @@ export function renderExternalModelsPanel(container, deps) {
             data-model-id="${model.id}" ${activeGesture && activeGesture.modelId !== model.id ? "disabled" : ""}
             title="Мышью — сдвиг, с зажатой Control — поворот вокруг центра"
             >${activeGesture?.modelId === model.id ? "Настройка…" : "Настроить положение"}</button>` : ""}
-          <button type="button" class="btn btn-sm btn-secondary em-recenter" data-model-id="${model.id}">Сцентрировать с объектом</button>
+          <button type="button" class="btn btn-sm btn-secondary em-recenter" data-model-id="${model.id}"
+            title="Сбросить сдвиг и поворот в 0 — вернуть модель туда, куда её поставил экспорт">Сбросить к исходному</button>
           <button type="button" class="btn btn-sm btn-secondary em-cancel" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Отмена</button>
           <button type="button" class="btn btn-sm btn-primary em-save" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Сохранить</button>
           ${trashButtonHtmlFallback(model.id)}
@@ -231,11 +239,11 @@ export function renderExternalModelsPanel(container, deps) {
         });
         models = models.map((m) => (m.id === id ? updated : m));
         drafts.delete(id);
-        showToast("Модель отцентрирована по объекту", "info");
+        showToast("Положение сброшено к исходному из файла", "info");
         render();
         onChanged && onChanged();
       } catch (e) {
-        showToast(e.message || "Не удалось отцентрировать", "error");
+        showToast(e.message || "Не удалось сбросить положение", "error");
         await reload();
       } finally {
         btn.disabled = false;
@@ -271,7 +279,7 @@ export function renderExternalModelsPanel(container, deps) {
           const { ensureExternalModelsLoaded } = await import("/static/external-models/app-bridge.js");
           const { THREE, FBXLoader, loadExternalModelFbx } = await ensureExternalModelsLoaded();
           const buf = await file.arrayBuffer();
-          const parsed = await loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader, kind });
+          const parsed = await loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader });
           statusEl.textContent = `Разобрано: ${parsed.meshCount} меш(ей), ${parsed.triangleCount} треугольников, ` +
             `${parsed.textureCount} текстур. Загрузка на сервер…`;
           const meta = {
