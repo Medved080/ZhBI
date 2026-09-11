@@ -1465,6 +1465,19 @@ CREATE TABLE IF NOT EXISTS object_external_models (
     -- на anchor/offset: они по-прежнему двигают точку, вокруг которой уже
     -- повёрнутая модель ставится на объекте.
     rotation_deg REAL NOT NULL DEFAULT 0,
+    -- Автоматическое совмещение фасада (Docs/fbx-auto-placement-claude-
+    -- prompt.md) — ОТДЕЛЬНЫЙ явный контракт, не переиспользует
+    -- placement_mode. NULL = не пробовали (ручная загрузка/старые строки).
+    -- 'confident' — применено само; 'ambiguous'/'insufficient'/
+    -- 'low_confidence' — не применялось само, offset/rotation остались
+    -- прежними (обычно 0), auto_placement_json несёт причину и кандидатов
+    -- для показа пользователю.
+    auto_placement_status TEXT,
+    -- JSON с диагностикой попытки: измеренные угол/сдвиг, покрытие,
+    -- невязка, по частям (этажам/уровням), альтернативные кандидаты при
+    -- неоднозначности, время расчёта. Только для показа человеку —
+    -- логика приложения на это поле не полагается.
+    auto_placement_json TEXT,
     revision INTEGER NOT NULL DEFAULT 1,
     created_by INTEGER REFERENCES users (id),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),

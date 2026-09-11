@@ -52,9 +52,47 @@ export function renderExternalModelsPanel(container, deps) {
         offsetZM: mmToM(model.offset_mm.z),
         rotationDeg: model.rotation_deg,
         name: model.name,
+        // Заполняются ТОЛЬКО кнопкой «Совместить автоматически» — «Сохранить»
+        // отправит их вместе со сдвигом/поворотом в ОДНОМ PATCH (см. wire());
+        // ручное перетаскивание/калибровка их не трогают и не сбрасывают.
+        pendingAutoPlacementStatus: undefined,
+        pendingAutoPlacementDiagnostics: undefined,
       });
     }
     return drafts.get(model.id);
+  }
+
+  // Автоматическое совмещение фасада (Docs/fbx-auto-placement-claude-
+  // prompt.md) — общая для авто-триггера при загрузке и для кнопки
+  // «Совместить автоматически» логика: тянет геометрию стен объекта,
+  // извлекает стеновые грани из УЖЕ разобранной группы FBX (group,
+  // sourceAnchorMm — из loadExternalModelFbx, вызывающий код передаёт
+  // либо свежеразобранный при загрузке, либо повторно разобранный из
+  // содержимого уже сохранённой модели) и считает предполагаемую
+  // привязку. НИЧЕГО не пишет сама — только считает и возвращает.
+  async function computeAutoAlignment(THREE, group, sourceAnchorMm) {
+    const [boundsRes, featuresRes] = await Promise.all([
+      api(`/objects/${objectId}/external-models/bounds`),
+      api(`/objects/${objectId}/external-models/geometry-features`),
+    ]);
+    if (featuresRes.source !== "revit" || !featuresRes.segments.length) {
+      return { applicable: false, reason: "У объекта нет модели МФР со стенами (Revit) — сопоставлять не с чем." };
+    }
+    const { ensureExternalModelsLoaded } = await import("/static/external-models/app-bridge.js");
+    const { extractWallSegmentsFromGroup, autoAlignFacade, candidateToPlacement } = await ensureExternalModelsLoaded();
+    const fbxSegments = extractWallSegmentsFromGroup(THREE, group, sourceAnchorMm);
+    const result = autoAlignFacade({ fbxSegments, objectSegments: featuresRes.segments });
+    const statusMap = { insufficient_geometry: "insufficient", ambiguous: "ambiguous", low_confidence: "low_confidence", confident: "confident" };
+    let placement = null;
+    if ((result.status === "confident" || result.status === "low_confidence") && result.candidates.length) {
+      placement = candidateToPlacement(
+        result.candidates[0], [sourceAnchorMm[0], sourceAnchorMm[1]], [boundsRes.object_anchor_mm.x, boundsRes.object_anchor_mm.y],
+      );
+    }
+    return {
+      applicable: true, status: result.status, dbStatus: statusMap[result.status],
+      reason: result.reason, diagnostics: result.diagnostics, placement,
+    };
   }
 
   function isDirty(model) {
@@ -104,6 +142,10 @@ export function renderExternalModelsPanel(container, deps) {
             data-model-id="${model.id}" ${(activeCalibration && activeCalibration.modelId !== model.id) || activeGesture ? "disabled" : ""}
             title="Указать 2 общие точки на FBX-файле и на уже имеющемся конструктиве объекта — поворот и сдвиг посчитаются точно"
             >${activeCalibration?.modelId === model.id ? "Идёт калибровка…" : "Совместить по точкам"}</button>` : ""}
+          ${model.kind === "facade" ? `<button type="button" class="btn btn-sm btn-secondary em-auto-align"
+            data-model-id="${model.id}" ${activeGesture || activeCalibration ? "disabled" : ""}
+            title="Найти поворот и сдвиг автоматически по контурам стен модели МФР объекта (нужна загруженная модель МФР со стенами); результат — в черновик, сохранение отдельной кнопкой"
+            >Совместить автоматически</button>` : ""}
           <button type="button" class="btn btn-sm btn-secondary em-recenter" data-model-id="${model.id}">Сцентрировать с объектом</button>
           <button type="button" class="btn btn-sm btn-secondary em-cancel" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Отмена</button>
           <button type="button" class="btn btn-sm btn-primary em-save" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Сохранить</button>
@@ -186,12 +228,21 @@ export function renderExternalModelsPanel(container, deps) {
       }
       btn.disabled = true;
       try {
+        const body = {
+          offset_x_mm: offsetXMm, offset_y_mm: offsetYMm, offset_z_mm: offsetZMm, rotation_deg: rotationDeg,
+          expected_revision: model.revision,
+        };
+        // Результат «Совместить автоматически» пишется В ТОМ ЖЕ PATCH, что
+        // и сдвиг/поворот (не отдельным запросом) — не должно быть
+        // промежутка, где смещение уже применено, а статус попытки ещё
+        // старый (Docs/fbx-auto-placement-claude-prompt.md).
+        if (d.pendingAutoPlacementStatus !== undefined) {
+          body.auto_placement_status = d.pendingAutoPlacementStatus;
+          body.auto_placement_diagnostics = d.pendingAutoPlacementDiagnostics || {};
+        }
         const updated = await api(`/objects/${objectId}/external-models/${id}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            offset_x_mm: offsetXMm, offset_y_mm: offsetYMm, offset_z_mm: offsetZMm, rotation_deg: rotationDeg,
-            expected_revision: model.revision,
-          }),
+          body: JSON.stringify(body),
         });
         models = models.map((m) => (m.id === id ? updated : m));
         drafts.delete(id);
@@ -300,6 +351,56 @@ export function renderExternalModelsPanel(container, deps) {
       render();
     }));
 
+    container.querySelectorAll(".em-auto-align").forEach((btn) => btn.addEventListener("click", async () => {
+      const id = Number(btn.dataset.modelId);
+      const model = models.find((m) => m.id === id);
+      const d = draftFor(model);
+      btn.disabled = true;
+      btn.textContent = "Ищу совмещение…";
+      try {
+        const { ensureExternalModelsLoaded } = await import("/static/external-models/app-bridge.js");
+        const { THREE, FBXLoader, loadExternalModelFbx } = await ensureExternalModelsLoaded();
+        // Для уже сохранённой модели группа THREE в памяти не хранится
+        // (панель настроек не рисует 3D-предпросмотр) — файл скачивается
+        // повторно и разбирается заново, тем же путём, что при загрузке.
+        const res = await fetch(`/objects/${objectId}/external-models/${id}/content`);
+        if (!res.ok) throw new Error("Не удалось скачать содержимое модели для расчёта");
+        const arrayBuffer = await res.arrayBuffer();
+        const parsed = await loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, kind: "facade" });
+        let outcome;
+        try {
+          outcome = await computeAutoAlignment(THREE, parsed.group, parsed.sourceAnchorMm);
+        } finally {
+          parsed.dispose();
+        }
+        if (!outcome.applicable) {
+          showToast(outcome.reason, "error");
+          return;
+        }
+        if (outcome.status === "confident" || outcome.status === "low_confidence") {
+          d.offsetXM = mmToM(outcome.placement.offsetXMm);
+          d.offsetYM = mmToM(outcome.placement.offsetYMm);
+          d.rotationDeg = outcome.placement.rotationDeg;
+          d.pendingAutoPlacementStatus = outcome.dbStatus;
+          d.pendingAutoPlacementDiagnostics = outcome.diagnostics;
+          showToast(
+            outcome.status === "confident"
+              ? "Совмещено автоматически — проверьте черновик и нажмите «Сохранить»"
+              : `Найдено приблизительное совмещение (${outcome.reason || "невысокая уверенность"}) — проверьте черновик перед сохранением`,
+            "info",
+          );
+          render();
+        } else {
+          showToast(`Автоматическое совмещение не удалось: ${outcome.reason}`, "error");
+        }
+      } catch (e) {
+        showToast(e.message || "Не удалось выполнить автоматическое совмещение", "error");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Совместить автоматически";
+      }
+    }));
+
     container.querySelectorAll(".em-transfer-apply").forEach((btn) => btn.addEventListener("click", async () => {
       const id = Number(btn.dataset.modelId);
       const card = container.querySelector(`.form-card[data-model-id="${id}"]`);
@@ -387,15 +488,52 @@ export function renderExternalModelsPanel(container, deps) {
             texture_count: parsed.textureCount,
             warnings: parsed.warnings,
           };
-          parsed.dispose(); // предпросмотр этой панели не показывается в 3D — только числа; ресурсы не нужны
           const form = new FormData();
           form.append("file", file);
           form.append("meta", JSON.stringify(meta));
-          const created = await api(`/objects/${objectId}/external-models`, { method: "POST", body: form });
+          let created = await api(`/objects/${objectId}/external-models`, { method: "POST", body: form });
+
+          // Автосовмещение — ТОЛЬКО для фасада, сразу после загрузки, по
+          // ЕЩЁ РАЗОБРАННОЙ группе (не заново скачивать) — благоустройство
+          // в поиске ориентации фасада не участвует (см. auto-align.js).
+          if (kind === "facade") {
+            statusEl.textContent = "Модель загружена. Поиск автоматического совмещения по контурам стен объекта…";
+            try {
+              const outcome = await computeAutoAlignment(THREE, parsed.group, parsed.sourceAnchorMm);
+              if (outcome.applicable) {
+                const patchBody = {
+                  auto_placement_status: outcome.dbStatus,
+                  auto_placement_diagnostics: { ...outcome.diagnostics, reason: outcome.reason },
+                  expected_revision: created.revision,
+                };
+                if ((outcome.status === "confident" || outcome.status === "low_confidence") && outcome.placement) {
+                  patchBody.offset_x_mm = outcome.placement.offsetXMm;
+                  patchBody.offset_y_mm = outcome.placement.offsetYMm;
+                  patchBody.rotation_deg = outcome.placement.rotationDeg;
+                }
+                created = await api(`/objects/${objectId}/external-models/${created.id}`, {
+                  method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patchBody),
+                });
+                if (outcome.status === "confident") {
+                  showToast("Фасад совмещён автоматически по контурам стен объекта — проверьте результат", "info");
+                } else if (outcome.status === "low_confidence") {
+                  showToast(`Совмещение найдено приблизительно (${outcome.reason}) — обязательно проверьте положение`, "warning");
+                } else {
+                  showToast(`Автоматическое совмещение не выполнено: ${outcome.reason}. Используйте «Совместить по точкам» или кнопку «Совместить автоматически» после уточнения модели МФР.`, "warning");
+                }
+              }
+            } catch (alignError) {
+              // Ошибка автосовмещения НЕ должна маскировать успешную
+              // загрузку самой модели — она уже есть на сервере как есть.
+              showToast(`Модель загружена, но автосовмещение не удалось: ${alignError.message || alignError}`, "warning");
+            }
+          }
+
+          parsed.dispose();
           models = [...models, created];
           drafts.delete(created.id);
           statusEl.textContent = "";
-          showToast("Модель загружена", "info");
+          if (kind !== "facade") showToast("Модель загружена", "info");
           render();
           onChanged && onChanged();
         } catch (e) {

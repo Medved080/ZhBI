@@ -26,6 +26,7 @@ from app.external_model_storage import (
 )
 from app.fbx_global_settings import FbxGlobalSettingsError, assert_supported_axis_profile, read_fbx_global_settings
 from app.object_geometry_bounds import get_object_bounds, object_anchor_from_bounds
+from app.object_geometry_features import get_wall_segments
 from app.upload_limits import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/objects/{object_id}/external-models", tags=["external-models"])
@@ -64,6 +65,8 @@ def _row_out(row: sqlite3.Row) -> dict:
         "object_anchor_mm": {"x": row["object_anchor_x_mm"], "y": row["object_anchor_y_mm"]},
         "offset_mm": {"x": row["offset_x_mm"], "y": row["offset_y_mm"], "z": row["offset_z_mm"]},
         "rotation_deg": row["rotation_deg"],
+        "auto_placement_status": row["auto_placement_status"],
+        "auto_placement_json": json.loads(row["auto_placement_json"]) if row["auto_placement_json"] else None,
         "centering_revision": row["centering_revision"],
         "revision": row["revision"],
         "created_at": row["created_at"],
@@ -99,6 +102,22 @@ def object_bounds(object_id: int, user: sqlite3.Row = Depends(get_current_user))
             "object_anchor_mm": {"x": anchor[0], "y": anchor[1]},
             "source_revision": result["source_revision"],
         }
+    finally:
+        conn.close()
+
+
+@router.get("/geometry-features")
+def object_geometry_features(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Контуры стен объекта в абсолютных P (мм) — для автоматического
+    совмещения фасада из FBX (Docs/fbx-auto-placement-claude-prompt.md).
+    Права — те же, что у /bounds: это тоже часть подготовки размещения,
+    не отдельный раздел чтения."""
+    conn = get_connection()
+    try:
+        _assert_object_exists(conn, object_id)
+        assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
+        result = get_wall_segments(conn, object_id)
+        return result
     finally:
         conn.close()
 
@@ -246,12 +265,21 @@ def upload_external_model(
     return _row_out(row)
 
 
+ALLOWED_AUTO_PLACEMENT_STATUS = ("confident", "ambiguous", "insufficient", "low_confidence")
+
+
 class PatchIn(BaseModel):
     offset_x_mm: Optional[float] = None
     offset_y_mm: Optional[float] = None
     offset_z_mm: Optional[float] = None
     rotation_deg: Optional[float] = None
     name: Optional[str] = None
+    # Автосовмещение фасада (Docs/fbx-auto-placement-claude-prompt.md) —
+    # пишутся ВМЕСТЕ с offset/rotation_deg одним PATCH, не отдельным
+    # запросом: не должно быть промежутка, где смещение уже применено, а
+    # статус попытки ещё старый (или наоборот).
+    auto_placement_status: Optional[str] = None
+    auto_placement_diagnostics: Optional[dict] = None
     expected_revision: int
 
 
@@ -296,6 +324,14 @@ def patch_external_model(object_id: int, model_id: int, body: PatchIn,
             if not name or len(name) > 255:
                 raise HTTPException(status_code=422, detail="Название пустое или слишком длинное")
             set_parts.append("name = ?"); params.append(name)
+        if body.auto_placement_status is not None:
+            if body.auto_placement_status not in ALLOWED_AUTO_PLACEMENT_STATUS:
+                raise HTTPException(status_code=422, detail="auto_placement_status: недопустимое значение")
+            set_parts.append("auto_placement_status = ?"); params.append(body.auto_placement_status)
+            diag_json = json.dumps(body.auto_placement_diagnostics or {}, ensure_ascii=False)
+            if len(diag_json.encode("utf-8")) > MAX_META_JSON_BYTES:
+                raise HTTPException(status_code=422, detail="Диагностика автосовмещения слишком большая")
+            set_parts.append("auto_placement_json = ?"); params.append(diag_json)
 
         params.extend([model_id, object_id, body.expected_revision])
         cur = conn.execute(

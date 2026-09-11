@@ -14,6 +14,7 @@ import {
   offsetZFromPoint,
   transferPlacementXY,
   transferPlacementZ,
+  placementFromGlobalTransform,
   normalizeRotationDeg,
   projectToZhbiView,
   zhbiViewToProject,
@@ -176,6 +177,23 @@ assertClose(normalizeRotationDeg(360), 0, "normalizeRotationDeg(360) = 0 (пол
   assertClose(first.rotationDeg, -90, "повторная калибровка: первый заход 90°→rotation_deg=-90", 1e-9);
   const second = calibrateByPointPair([0, 0], [1000, 0], [0, 0], [1000, 0], [0, 0], [0, 0]); // 0°, НЕ 90+0
   assertClose(second.rotationDeg, 0, "повторная калибровка: второй заход независим от первого (0°)", 1e-9);
+}
+
+// ==================== 8б. placementFromGlobalTransform (Docs/fbx-auto-placement-claude-prompt.md) ====================
+
+{
+  const A = [100, 50], B = [10, 10];
+  const theta = Math.PI / 6, t = [1000, 2000];
+  const res = placementFromGlobalTransform(theta, t, A, B);
+  assertClose(res.rotationDeg, -30, "placementFromGlobalTransform: rotation_deg", 1e-9);
+  assertClose([res.offsetXMm, res.offsetYMm], [1051.6025403784438, 2083.301270189222], "placementFromGlobalTransform: offset X/Y", 1e-6);
+  // Обратная проверка: применить offset/rotation через canonicalToProject
+  // к произвольной точке C и сравнить с прямым P=Rz(theta)*C+t.
+  const C = [321, -77];
+  const viaContract = canonicalToProject([C[0], C[1], 0], A, B, res.offsetXMm, res.offsetYMm, 0, res.rotationDeg);
+  const [rx, ry] = [Math.cos(theta) * C[0] - Math.sin(theta) * C[1], Math.sin(theta) * C[0] + Math.cos(theta) * C[1]];
+  const viaGlobal = [rx + t[0], ry + t[1]];
+  assertClose([viaContract[0], viaContract[1]], viaGlobal, "placementFromGlobalTransform: согласован с canonicalToProject", 1e-6);
 }
 
 // ==================== 9. Смещение по Z по известной точке ====================

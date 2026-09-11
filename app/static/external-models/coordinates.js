@@ -45,9 +45,9 @@ export function projectAnchorFromBounds(bounds) {
 }
 
 /** Поворот вектора (x,y) на угол thetaRad, математическое направление
- * (против часовой при положительном theta) — общий примитив для всех
- * функций ниже. */
-function rotateXY(thetaRad, x, y) {
+ * (против часовой при положительном theta) — общий примитив, в том числе
+ * для автоматического совмещения (`auto-align.js`), поэтому экспортирован. */
+export function rotateXY(thetaRad, x, y) {
   const c = Math.cos(thetaRad);
   const s = Math.sin(thetaRad);
   return [c * x - s * y, s * x + c * y];
@@ -148,6 +148,27 @@ export function transferPlacementXY(theta, sourceAnchorXY_i, projectAnchorXY_i, 
  * вертикальной системе исходников, см. задание §4). */
 export function transferPlacementZ(offsetZ_i, sourceAnchorZ_i, sourceAnchorZ_j) {
   return offsetZ_i - sourceAnchorZ_i + sourceAnchorZ_j;
+}
+
+/**
+ * Переводит НАЙДЕННОЕ глобальное преобразование плана P.xy = Rz(theta)*C.xy
+ * + t.xy (например, результат автоматического совмещения, Docs/
+ * fbx-auto-placement-claude-prompt.md §«Применение...») в поля offset/
+ * rotation_deg контракта P = Rz(theta)*(C-A) + B + O:
+ *
+ *   rotation_deg = normalize(-theta * 180/PI)
+ *   O.xy = t.xy + Rz(theta)*A.xy - B.xy
+ *
+ * Ровно формула из задания — НЕ пересчитывай/не выводи её заново в другом
+ * месте, здесь единственная реализация.
+ */
+export function placementFromGlobalTransform(theta, tXY, sourceAnchorXY, projectAnchorXY) {
+  const [rax, ray] = rotateXY(theta, sourceAnchorXY[0], sourceAnchorXY[1]);
+  return {
+    rotationDeg: normalizeRotationDeg((-theta * 180) / Math.PI),
+    offsetXMm: tXY[0] + rax - projectAnchorXY[0],
+    offsetYMm: tXY[1] + ray - projectAnchorXY[1],
+  };
 }
 
 /** Адаптер ЖБИ: V = (P.x, P.z, -P.y). */

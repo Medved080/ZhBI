@@ -549,6 +549,11 @@ _COLUMN_MIGRATIONS = [
     # умолчанию (0) верхняя точка полного габарита модели стоит на отметке
     # 0 объекта — см. изменение anchor в fbx.js (было — нижняя точка).
     ("object_external_models", "offset_z_mm", "REAL NOT NULL DEFAULT 0"),
+
+    # Автоматическое совмещение фасада (2026-09-11) — отдельный явный
+    # контракт результата попытки, не переиспользует placement_mode.
+    ("object_external_models", "auto_placement_status", "TEXT"),
+    ("object_external_models", "auto_placement_json", "TEXT"),
 ]
 
 
