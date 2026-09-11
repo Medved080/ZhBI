@@ -1,11 +1,14 @@
 // Раздел «Загрузка из FBX» (внешняя 3D-модель объекта, Действия → Обмен
-// данными): список, загрузка, ручной сдвиг X/Y и поворот (численно —
+// данными): список, загрузка, ручной сдвиг X/Y/Z и поворот (численно —
 // метры/градусы, перевод на границе поля), настройка положения мышью в
 // уже открытой 3D-сцене объекта — МФР или ЖБИ, какая сейчас построена
 // (deps.beginPlacement — диспетчер живёт в app.js, у него есть доступ к
 // обеим сценам/слоям; здесь только UI-обвязка: одна кнопка «Настроить
 // положение» на оба действия — обычное перетаскивание сдвигает модель,
-// перетаскивание с зажатой Control поворачивает её вокруг центра),
+// перетаскивание с зажатой Control поворачивает её вокруг центра), точная
+// калибровка по двум парам точек (deps.beginCalibration — та же схема
+// диспетчера, модуль `calibrate.js`, Docs/fbx-placement-claude-prompt.md),
+// перенос уже откалиброванной привязки на другую модель того же объекта,
 // сохранение на сервере, «Сцентрировать с объектом», удаление. Зависимости
 // — явные аргументы, чтения глобалей нет (кроме DOM внутри переданного
 // контейнера).
@@ -35,10 +38,11 @@ function mToMm(value) {
 }
 
 export function renderExternalModelsPanel(container, deps) {
-  const { objectId, canEdit, api, escapeHtml, showToast, onChanged, beginPlacement } = deps;
+  const { objectId, canEdit, api, escapeHtml, showToast, onChanged, beginPlacement, beginCalibration } = deps;
   let models = [];
   const drafts = new Map(); // modelId -> {offsetXM, offsetYM, rotationDeg, name}
   let activeGesture = null; // {modelId, stop()} — не больше одного разом
+  let activeCalibration = null; // {modelId, stop()} — тоже не больше одного и не одновременно с activeGesture
 
   function draftFor(model) {
     if (!drafts.has(model.id)) {
@@ -88,16 +92,33 @@ export function renderExternalModelsPanel(container, deps) {
         ${beginPlacement && activeGesture?.modelId === model.id ? `<div class="hint-text">
           Диалог скрыт — мышью сдвиг, с зажатой Control поворот. Управляйте плавающей панелью
           поверх 3D («Готово»/«Отмена») или клавишей Esc.</div>` : ""}
+        ${beginCalibration && activeCalibration?.modelId === model.id ? `<div class="hint-text">
+          Диалог скрыт — укажите точки A/B на модели и на объекте плавающей панелью поверх 3D.
+          Esc — отменить всё.</div>` : ""}
         <div class="actions" style="margin-top:8px">
           ${beginPlacement ? `<button type="button" class="btn btn-sm ${activeGesture?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-placement"
-            data-model-id="${model.id}" ${activeGesture && activeGesture.modelId !== model.id ? "disabled" : ""}
+            data-model-id="${model.id}" ${(activeGesture && activeGesture.modelId !== model.id) || activeCalibration ? "disabled" : ""}
             title="Мышью — сдвиг, с зажатой Control — поворот вокруг центра"
             >${activeGesture?.modelId === model.id ? "Настройка…" : "Настроить положение"}</button>` : ""}
+          ${beginCalibration ? `<button type="button" class="btn btn-sm ${activeCalibration?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-calibrate"
+            data-model-id="${model.id}" ${(activeCalibration && activeCalibration.modelId !== model.id) || activeGesture ? "disabled" : ""}
+            title="Точно совместить по двум ориентирам, общим для модели и объекта"
+            >${activeCalibration?.modelId === model.id ? "Идёт калибровка…" : "Совместить по точкам"}</button>` : ""}
           <button type="button" class="btn btn-sm btn-secondary em-recenter" data-model-id="${model.id}">Сцентрировать с объектом</button>
           <button type="button" class="btn btn-sm btn-secondary em-cancel" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Отмена</button>
           <button type="button" class="btn btn-sm btn-primary em-save" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Сохранить</button>
           ${trashButtonHtmlFallback(model.id)}
-        </div>` : ""}
+        </div>
+        ${models.length > 1 ? `
+        <div class="row" style="margin-top:8px; align-items:flex-end; gap:8px">
+          <div style="flex:1"><label class="field" title="Переносит уже подтверждённый поворот и сдвиг ЭТОЙ модели на другую — только если оба файла заведомо из одного и того же источника координат (Docs/DECISIONS.md)">Перенести эту привязку на</label>
+            <select class="em-transfer-target" data-model-id="${model.id}">
+              <option value="">— выберите модель —</option>
+              ${models.filter((m) => m.id !== model.id).map((m) => `<option value="${m.id}">${escapeHtml(m.name)} (${KIND_LABELS[m.kind] || m.kind})</option>`).join("")}
+            </select>
+          </div>
+          <button type="button" class="btn btn-sm btn-secondary em-transfer-apply" data-model-id="${model.id}">Перенести</button>
+        </div>` : ""}` : ""}
       </div>`;
   }
 
@@ -194,20 +215,44 @@ export function renderExternalModelsPanel(container, deps) {
       if (activeGesture) return; // один жест разом
       const model = models.find((m) => m.id === id);
       const d = draftFor(model);
-      const result = beginPlacement(model, {
+      // Жест должен продолжать ТЕКУЩИЙ черновик (числовые поля могли уже
+      // отличаться от сохранённого model.offset_mm/rotation_deg — Docs/
+      // fbx-placement-claude-prompt.md §5), а не откатывать к сохранённому
+      // значению на сервере. Невалидный/пустой ввод в поле — откат к
+      // сохранённому как единственному надёжному числу.
+      const draftOffsetXMm = mToMm(d.offsetXM);
+      const draftOffsetYMm = mToMm(d.offsetYM);
+      const draftRotationDeg = Number(String(d.rotationDeg).trim().replace(",", "."));
+      const modelForGesture = {
+        ...model,
+        offset_mm: {
+          ...model.offset_mm,
+          x: draftOffsetXMm !== null ? draftOffsetXMm : model.offset_mm.x,
+          y: draftOffsetYMm !== null ? draftOffsetYMm : model.offset_mm.y,
+        },
+        rotation_deg: Number.isFinite(draftRotationDeg) ? draftRotationDeg : model.rotation_deg,
+      };
+      // Снимок черновика ДО жеста — onPreview будет менять d прямо во время
+      // перетаскивания; «Отмена»/Esc обязаны откатить черновик к этому
+      // снимку, а не только визуально откатить группу в 3D (§5).
+      const draftSnapshot = { offsetXM: d.offsetXM, offsetYM: d.offsetYM, rotationDeg: d.rotationDeg };
+      const result = beginPlacement(modelForGesture, {
         onPreview: (xMm, yMm, rotationDeg) => {
           d.offsetXM = mmToM(xMm);
           d.offsetYM = mmToM(yMm);
-          d.rotationDeg = rotationDeg.toFixed(1);
+          d.rotationDeg = rotationDeg; // полная точность — округление только при отображении (§5)
         },
         onDone: (xMm, yMm, rotationDeg) => {
           d.offsetXM = mmToM(xMm);
           d.offsetYM = mmToM(yMm);
-          d.rotationDeg = rotationDeg.toFixed(1);
+          d.rotationDeg = rotationDeg;
           activeGesture = null;
           render();
         },
         onCancel: () => {
+          d.offsetXM = draftSnapshot.offsetXM;
+          d.offsetYM = draftSnapshot.offsetYM;
+          d.rotationDeg = draftSnapshot.rotationDeg;
           activeGesture = null;
           render();
         },
@@ -217,6 +262,64 @@ export function renderExternalModelsPanel(container, deps) {
         return;
       }
       activeGesture = { modelId: id, stop: result.stop };
+      render();
+    }));
+
+    container.querySelectorAll(".em-calibrate").forEach((btn) => btn.addEventListener("click", () => {
+      const id = Number(btn.dataset.modelId);
+      if (activeCalibration && activeCalibration.modelId === id) {
+        activeCalibration.stop(); // повторный клик — досрочная отмена
+        return;
+      }
+      if (activeCalibration || activeGesture) return; // один режим разом
+      const model = models.find((m) => m.id === id);
+      // Калибровка сама двигает/крутит группу по мере выбора точек — своя
+      // точка отсчёта, черновик драг-жеста здесь ни при чём. Результат
+      // применяется ТОЛЬКО в draft (§5 задания: до «Сохранить» ничего не
+      // пишем), пользователь подтверждает обычной кнопкой «Сохранить».
+      const d = draftFor(model);
+      const result = beginCalibration(model, {
+        onApply: ({ offsetXMm, offsetYMm, rotationDeg }) => {
+          d.offsetXM = mmToM(offsetXMm);
+          d.offsetYM = mmToM(offsetYMm);
+          d.rotationDeg = rotationDeg;
+          activeCalibration = null;
+          showToast("Привязка рассчитана — проверьте черновик и нажмите «Сохранить»", "info");
+          render();
+        },
+        onCancel: () => {
+          activeCalibration = null;
+          render();
+        },
+      });
+      if (!result.ok) {
+        showToast(result.reason || "Совмещение по точкам сейчас недоступно", "error");
+        return;
+      }
+      activeCalibration = { modelId: id, stop: result.stop };
+      render();
+    }));
+
+    container.querySelectorAll(".em-transfer-apply").forEach((btn) => btn.addEventListener("click", async () => {
+      const id = Number(btn.dataset.modelId);
+      const card = container.querySelector(`.form-card[data-model-id="${id}"]`);
+      const targetId = Number(card.querySelector(".em-transfer-target").value);
+      if (!targetId) { showToast("Выберите модель, на которую перенести привязку", "error"); return; }
+      const sourceModel = models.find((m) => m.id === id);
+      const targetModel = models.find((m) => m.id === targetId);
+      if (!confirm(
+        `Перенести привязку «${sourceModel.name}» на «${targetModel.name}»? ` +
+        `Это осмысленно ТОЛЬКО если оба FBX-файла заведомо из одного и того же источника координат ` +
+        `(например, один и тот же экспорт сцены). Текущий черновик «${targetModel.name}» будет заменён — ` +
+        `сохранение всё ещё отдельным нажатием «Сохранить».`)) return;
+      const { computeTransferToModel } = await import("/static/external-models/app-bridge.js").then((m) => m.ensureExternalModelsLoaded());
+      const { offsetXMm, offsetYMm, offsetZMm, rotationDeg } = computeTransferToModel(sourceModel, targetModel);
+      const d = draftFor(targetModel);
+      d.offsetXM = mmToM(offsetXMm);
+      d.offsetYM = mmToM(offsetYMm);
+      d.offsetZM = mmToM(offsetZMm);
+      d.rotationDeg = rotationDeg;
+      showToast(`Привязка перенесена на «${targetModel.name}» — проверьте черновик и нажмите «Сохранить»`, "info");
       render();
     }));
 

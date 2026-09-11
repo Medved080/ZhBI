@@ -26403,10 +26403,10 @@ async function attachZhbiExternalModels(scene, objectId) {
   const models = await ensureZhbiExternalModelsList(objectId);
   if (state.view3d.scene !== scene) return;
   if (!models.length) return;
+  externalModelsBridge = await import("/static/external-models/app-bridge.js").then((m) => m.ensureExternalModelsLoaded());
+  if (state.view3d.scene !== scene) return;
+  const { THREE, FBXLoader, createExternalModelLayer } = externalModelsBridge;
   if (!zhbiExternalModels.layer) {
-    const { THREE, FBXLoader, createExternalModelLayer } =
-      await import("/static/external-models/app-bridge.js").then((m) => m.ensureExternalModelsLoaded());
-    if (state.view3d.scene !== scene) return;
     zhbiExternalModels.layer = createExternalModelLayer({
       THREE, FBXLoader,
       fetchContent: (model) => fetch(`/objects/${objectId}/external-models/${model.id}/content`)
@@ -31667,7 +31667,14 @@ const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
 // пересборку сцены на каждый фильтр (buildMfr3D зовётся на каждую смену
 // этажа/слоя) — иначе FBX разбирался бы заново на каждый клик. Полностью
 // сбрасывается только со сменой ОБЪЕКТА (mfrExternalModels.layer.dispose()).
-const mfrExternalModels = { layer: null, objectId: null, models: null };
+const mfrExternalModels = { layer: null, objectId: null, models: null, origin: null, low: null };
+
+// Кэш моста внешних 3D-моделей (THREE + чистая математика coordinates.js)
+// после первой загрузки — beginExternalModelPlacement ниже синхронная
+// функция (её так уже используют вызывающие), поэтому не может сама
+// дождаться динамического import(); заполняется тем же промисом, что уже
+// грузят attachMfrExternalModels/attachZhbiExternalModels.
+let externalModelsBridge = null;
 
 // Видимость решается ПО ВИДУ модели — независимые чекбоксы благоустройства
 // и фасадов (живой запрос пользователя 2026-09-11), не один флаг на всё.
@@ -31716,16 +31723,21 @@ async function attachMfrExternalModels(scene, objectId, origin, low) {
   const models = await ensureMfrExternalModelsList(objectId);
   if (mfr3d.scene !== scene) return;            // сцену уже пересобрали/снесли
   if (!models.length) return;
+  externalModelsBridge = await import("/static/external-models/app-bridge.js").then((m) => m.ensureExternalModelsLoaded());
+  if (mfr3d.scene !== scene) return;
+  const { THREE, FBXLoader, createExternalModelLayer } = externalModelsBridge;
   if (!mfrExternalModels.layer) {
-    const { THREE, FBXLoader, createExternalModelLayer } =
-      await import("/static/external-models/app-bridge.js").then((m) => m.ensureExternalModelsLoaded());
-    if (mfr3d.scene !== scene) return;
     mfrExternalModels.layer = createExternalModelLayer({
       THREE, FBXLoader,
       fetchContent: (model) => fetch(`/objects/${objectId}/external-models/${model.id}/content`)
         .then((r) => { if (!r.ok) throw new Error("Не удалось получить файл модели"); return r.arrayBuffer(); }),
     });
   }
+  // origin/низ нужны позже beginExternalModelPlacement, чтобы синхронизировать
+  // визуальную группу с текущим черновиком ДО начала жеста (Docs/
+  // fbx-placement-claude-prompt.md §5) — сам adapter их не хранит.
+  mfrExternalModels.origin = origin;
+  mfrExternalModels.low = low;
   const warnings = await mfrExternalModels.layer.attachToMfr(
     scene, models, { origin, low, visibleForKind: mfrExternalModelsVisibleForKind });
   if (mfr3d.scene !== scene) return;
@@ -34660,6 +34672,7 @@ document.getElementById("menu-external-models")?.addEventListener("click", async
     api, escapeHtml, showToast,
     onChanged: () => refreshExternalModelsInOpenScene(state.objectId),
     beginPlacement: beginExternalModelPlacement,
+    beginCalibration: beginExternalModelCalibration,
   });
 });
 document.getElementById("external-models-close")?.addEventListener("click", () => {
@@ -34870,6 +34883,23 @@ function startExternalModelPlacementOnPlane({
 // нормаль плоскости сдвига (Z у МФР, Y у ЖБИ): локальная вертикаль модели
 // после адаптера просмотрщика совпадает с мировой вертикалью сцены (см.
 // Docs/DECISIONS.md — координатный контракт §5).
+// Синхронизирует ВИЗУАЛЬНУЮ группу с переданным model.offset_mm/
+// rotation_deg — ДО того, как startExternalModelPlacementOnPlane снимет с
+// group.position/quaternion точку отсчёта жеста (armStartGroupPos/
+// armStartQuaternion). Без этого шага group осталась бы там, где её в
+// последний раз поставил attachTo* (сохранённое на сервере положение), а
+// числовые поля панели настроек — уже на черновике: два места разошлись
+// бы, и мышь считала бы дельту от НЕВЕРНОЙ точки отсчёта (Docs/
+// fbx-placement-claude-prompt.md §5). offset_mm.z group не двигает
+// (мышь работает только в плане), поэтому Z не трогаем.
+function syncGroupToModel(group, model, projectFn, extra) {
+  const px = model.object_anchor_mm.x + model.offset_mm.x;
+  const py = model.object_anchor_mm.y + model.offset_mm.y;
+  const pz = model.offset_mm.z || 0;
+  const v = projectFn([px, py, pz], ...extra);
+  group.position.set(v[0], v[1], v[2]);
+}
+
 function beginExternalModelPlacement(model, callbacks) {
   if (mfr3d.scene && mfr3d.renderer && mfr3d.camera
       && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer) {
@@ -34877,6 +34907,10 @@ function beginExternalModelPlacement(model, callbacks) {
     if (group) {
       // МФР: мир X/Y = координаты объекта (после вычитания origin — то же
       // самое для ДЕЛЬТЫ, origin в разности сокращается), Z — вверх.
+      if (externalModelsBridge?.projectToMfrView && mfrExternalModels.origin) {
+        syncGroupToModel(group, model, externalModelsBridge.projectToMfrView, [mfrExternalModels.origin, mfrExternalModels.low]);
+        group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(model.rotation_deg) || 0) * Math.PI / 180);
+      }
       return startExternalModelPlacementOnPlane({
         canvas: mfr3d.renderer.domElement, camera: mfr3d.camera, controls: mfr3d.controls,
         backdrop: document.getElementById("external-models-backdrop"), group,
@@ -34897,6 +34931,12 @@ function beginExternalModelPlacement(model, callbacks) {
       // Адаптер V=(P.x,P.z,-P.y): дельта мира (dx,dz) → дельта offset
       // (dx, -dz) — тот же перевод, что и для самих координат, только без
       // anchor (он сокращается в разности).
+      if (externalModelsBridge?.projectToZhbiView) {
+        syncGroupToModel(group, model, externalModelsBridge.projectToZhbiView, []);
+        const axisRemap = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+        const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(model.rotation_deg) || 0) * Math.PI / 180);
+        group.quaternion.copy(axisRemap).multiply(qRotate);
+      }
       return startExternalModelPlacementOnPlane({
         canvas: state.view3d.renderer.domElement, camera: state.view3d.camera, controls: state.view3d.controls,
         backdrop: document.getElementById("external-models-backdrop"), group,
@@ -34905,6 +34945,59 @@ function beginExternalModelPlacement(model, callbacks) {
         angleOfPoint: (p) => Math.atan2(p.x - group.position.x, p.z - group.position.z),
         startOffset: { x: model.offset_mm.x, y: model.offset_mm.y },
         startRotationDeg: model.rotation_deg,
+        ...callbacks,
+      });
+    }
+  }
+  return { ok: false, reason: "Сначала откройте 3D этого объекта («Модель» → 3D) и дождитесь, пока модель разберётся." };
+}
+
+// Диспетчер «Совместить по точкам» (Docs/fbx-placement-claude-prompt.md
+// §2-3) — та же схема, что у beginExternalModelPlacement: работает в
+// любой уже открытой 3D-сцене объекта, сама точная математика и раскаст —
+// в app/static/external-models/calibrate.js (модуль без знания про МФР/
+// ЖБИ specifics), здесь только адаптеры конкретного просмотрщика.
+function beginExternalModelCalibration(model, callbacks) {
+  if (!externalModelsBridge?.beginPointPairCalibration) {
+    return { ok: false, reason: "Модуль калибровки ещё не загружен — откройте 3D объекта и попробуйте снова." };
+  }
+  if (mfr3d.scene && mfr3d.renderer && mfr3d.camera
+      && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer && mfrExternalModels.origin) {
+    const group = mfrExternalModels.layer.getGroup(model.id);
+    if (group) {
+      const origin = mfrExternalModels.origin, low = mfrExternalModels.low;
+      return externalModelsBridge.beginPointPairCalibration({
+        THREE, canvas: mfr3d.renderer.domElement, camera: mfr3d.camera, controls: mfr3d.controls,
+        backdrop: document.getElementById("external-models-backdrop"),
+        scene: mfr3d.scene, group, excludeObjects: mfrExternalModels.layer.getAllGroups(),
+        sourceAnchorXY: [model.source_anchor_mm.x, model.source_anchor_mm.y],
+        objectAnchorXY: [model.object_anchor_mm.x, model.object_anchor_mm.y],
+        viewToProjectXY: (v) => externalModelsBridge.mfrViewToProject(v, origin, low).slice(0, 2),
+        projectToView: (p) => externalModelsBridge.projectToMfrView(p, origin, low),
+        applyRotationPreview: (g, rotationDeg) => {
+          g.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (-rotationDeg * Math.PI) / 180);
+        },
+        ...callbacks,
+      });
+    }
+  }
+  if (state.view3d.scene && state.view3d.renderer && state.view3d.camera
+      && zhbiExternalModels.objectId === model.object_id && zhbiExternalModels.layer) {
+    const group = zhbiExternalModels.layer.getGroup(model.id);
+    if (group) {
+      return externalModelsBridge.beginPointPairCalibration({
+        THREE, canvas: state.view3d.renderer.domElement, camera: state.view3d.camera, controls: state.view3d.controls,
+        backdrop: document.getElementById("external-models-backdrop"),
+        scene: state.view3d.scene, group, excludeObjects: zhbiExternalModels.layer.getAllGroups(),
+        sourceAnchorXY: [model.source_anchor_mm.x, model.source_anchor_mm.y],
+        objectAnchorXY: [model.object_anchor_mm.x, model.object_anchor_mm.y],
+        viewToProjectXY: (v) => externalModelsBridge.zhbiViewToProject(v).slice(0, 2),
+        projectToView: (p) => externalModelsBridge.projectToZhbiView(p),
+        applyRotationPreview: (g, rotationDeg) => {
+          const axisRemap = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+          const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (-rotationDeg * Math.PI) / 180);
+          g.quaternion.copy(axisRemap).multiply(qRotate);
+        },
         ...callbacks,
       });
     }

@@ -148,6 +148,19 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
     return cache.get(modelId)?.result?.group || null;
   }
 
+  /** Все уже разобранные группы слоя — «Совместить по точкам» (Docs/
+   * fbx-placement-claude-prompt.md §3) раскастывает точку на объекте по
+   * ВСЕЙ сцене за вычетом групп внешних моделей ЭТОГО объекта (своей и
+   * чужих), чтобы случайно не выбрать точку на другом слое благоустройства/
+   * фасада вместо настоящей геометрии объекта. */
+  function getAllGroups() {
+    const groups = [];
+    for (const entry of cache.values()) {
+      if (entry.result) groups.push(entry.result.group);
+    }
+    return groups;
+  }
+
   /** Переключает видимость всех уже загруженных моделей БЕЗ пересборки
    * сцены и без повторного разбора FBX — используется чекбоксами слоя.
    * `visibleForKind(kind)` — см. attachToMfr. */
@@ -165,5 +178,5 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
     cache.clear();
   }
 
-  return { attachToMfr, attachToZhbi, setVisible, getGroup, dispose, bump };
+  return { attachToMfr, attachToZhbi, setVisible, getGroup, getAllGroups, dispose, bump };
 }
