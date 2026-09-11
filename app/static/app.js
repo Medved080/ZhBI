@@ -33223,7 +33223,12 @@ function resetBlkBulk() {
   updateBlkBulkSummary();
 }
 
-document.getElementById("blk-bulk-edit-open").addEventListener("click", () => {
+document.getElementById("menu-block-bulk-edit").addEventListener("click", () => {
+  // Пункт открыт из общего меню «Действия» — тот же приём, что у
+  // menu-fact-journal: если «Учёт по блокам» уже был открыт, не копим
+  // модалку на модалке; state.objectId общий, дополнительно выравнивать
+  // нечего.
+  document.getElementById("blocks-backdrop").classList.remove("open");
   resetBlkBulk();
   document.getElementById("blk-bulk-backdrop").classList.add("open");
 });
