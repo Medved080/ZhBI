@@ -1,19 +1,22 @@
 // Раздел «Загрузка из FBX» (внешняя 3D-модель объекта, Действия → Обмен
 // данными): список, загрузка, ручной сдвиг X/Y и поворот (численно —
-// метры/градусы, перевод на границе поля), перетаскивание мышью в уже
-// открытой 3D-сцене объекта — МФР или ЖБИ, какая сейчас построена
-// (deps.beginDrag — диспетчер живёт в app.js, у него есть доступ к обеим
-// сценам/слоям; здесь только UI-обвязка), сохранение на сервере,
-// «Сцентрировать с объектом», удаление. Зависимости — явные аргументы,
-// чтения глобалей нет (кроме DOM внутри переданного контейнера).
+// метры/градусы, перевод на границе поля), настройка положения мышью в
+// уже открытой 3D-сцене объекта — МФР или ЖБИ, какая сейчас построена
+// (deps.beginPlacement — диспетчер живёт в app.js, у него есть доступ к
+// обеим сценам/слоям; здесь только UI-обвязка: одна кнопка «Настроить
+// положение» на оба действия — обычное перетаскивание сдвигает модель,
+// перетаскивание с зажатой Control поворачивает её вокруг центра),
+// сохранение на сервере, «Сцентрировать с объектом», удаление. Зависимости
+// — явные аргументы, чтения глобалей нет (кроме DOM внутри переданного
+// контейнера).
 //
 // «Сцентрировать» в этой панели сразу шлёт POST .../recenter (реальное
 // сохранение с проверкой revision), а не считает черновой anchor локально
 // по GET bounds, как в задании §8 для диалога с drag — тут отдельного
 // диалога с drag нет, и промежуточный черновик разбирать не с чем.
-// Перетаскивание работает, только если у объекта уже открыт его 3D
-// («Модель» → 3D, МФР или ЖБИ) — иначе deps.beginDrag честно отказывает с
-// понятной причиной, а не подставляет фиктивные координаты.
+// Настройка мышью работает, только если у объекта уже открыт его 3D
+// («Модель» → 3D, МФР или ЖБИ) — иначе deps.beginPlacement честно
+// отказывает с понятной причиной, а не подставляет фиктивные координаты.
 
 function mmToM(mm) {
   return mm / 1000;
@@ -27,16 +30,17 @@ function mToMm(value) {
 }
 
 export function renderExternalModelsPanel(container, deps) {
-  const { objectId, canEdit, api, escapeHtml, showToast, onChanged, beginDrag } = deps;
+  const { objectId, canEdit, api, escapeHtml, showToast, onChanged, beginPlacement } = deps;
   let models = [];
   const drafts = new Map(); // modelId -> {offsetXM, offsetYM, rotationDeg, name}
-  let activeDrag = null; // {modelId, stop()} — не больше одного перетаскивания разом
+  let activeGesture = null; // {modelId, stop()} — не больше одного разом
 
   function draftFor(model) {
     if (!drafts.has(model.id)) {
       drafts.set(model.id, {
         offsetXM: mmToM(model.offset_mm.x),
         offsetYM: mmToM(model.offset_mm.y),
+        offsetZM: mmToM(model.offset_mm.z),
         rotationDeg: model.rotation_deg,
         name: model.name,
       });
@@ -47,6 +51,7 @@ export function renderExternalModelsPanel(container, deps) {
   function isDirty(model) {
     const d = draftFor(model);
     return d.offsetXM !== mmToM(model.offset_mm.x) || d.offsetYM !== mmToM(model.offset_mm.y)
+      || d.offsetZM !== mmToM(model.offset_mm.z)
       || Number(d.rotationDeg) !== Number(model.rotation_deg) || d.name !== model.name;
   }
 
@@ -70,14 +75,19 @@ export function renderExternalModelsPanel(container, deps) {
             <input type="text" class="em-offset-x" data-model-id="${model.id}" value="${d.offsetXM}"/></div>
           <div><label class="field">Сдвиг Y, м</label>
             <input type="text" class="em-offset-y" data-model-id="${model.id}" value="${d.offsetYM}"/></div>
+          <div><label class="field" title="0 = верхняя точка габарита модели на отметке 0 объекта (по умолчанию). Положительное — вверх.">Сдвиг Z, м</label>
+            <input type="text" class="em-offset-z" data-model-id="${model.id}" value="${d.offsetZM}"/></div>
           <div><label class="field" title="По часовой стрелке при виде на план сверху, вокруг центра модели">Поворот, °</label>
             <input type="text" class="em-rotation" data-model-id="${model.id}" value="${d.rotationDeg}"/></div>
         </div>
-        ${beginDrag ? `<div class="hint-text" id="em-drag-hint-${model.id}" ${activeDrag?.modelId === model.id ? "" : "hidden"}>
-          Тащите модель мышью в открытой 3D-сцене объекта. Esc или отпустить кнопку мыши вне модели — отмена.</div>` : ""}
+        ${beginPlacement && activeGesture?.modelId === model.id ? `<div class="hint-text">
+          Диалог скрыт — мышью сдвиг, с зажатой Control поворот. Управляйте плавающей панелью
+          поверх 3D («Готово»/«Отмена») или клавишей Esc.</div>` : ""}
         <div class="actions" style="margin-top:8px">
-          ${beginDrag ? `<button type="button" class="btn btn-sm ${activeDrag?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-drag"
-            data-model-id="${model.id}">${activeDrag?.modelId === model.id ? "Перемещение… (Esc — отмена)" : "Переместить мышью"}</button>` : ""}
+          ${beginPlacement ? `<button type="button" class="btn btn-sm ${activeGesture?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-placement"
+            data-model-id="${model.id}" ${activeGesture && activeGesture.modelId !== model.id ? "disabled" : ""}
+            title="Мышью — сдвиг, с зажатой Control — поворот вокруг центра"
+            >${activeGesture?.modelId === model.id ? "Настройка…" : "Настроить положение"}</button>` : ""}
           <button type="button" class="btn btn-sm btn-secondary em-recenter" data-model-id="${model.id}">Сцентрировать с объектом</button>
           <button type="button" class="btn btn-sm btn-secondary em-cancel" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Отмена</button>
           <button type="button" class="btn btn-sm btn-primary em-save" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Сохранить</button>
@@ -104,7 +114,7 @@ export function renderExternalModelsPanel(container, deps) {
   }
 
   function wire() {
-    container.querySelectorAll(".em-offset-x, .em-offset-y, .em-rotation").forEach((el) => {
+    container.querySelectorAll(".em-offset-x, .em-offset-y, .em-offset-z, .em-rotation").forEach((el) => {
       el.addEventListener("input", () => {
         const id = Number(el.dataset.modelId);
         const model = models.find((m) => m.id === id);
@@ -112,6 +122,7 @@ export function renderExternalModelsPanel(container, deps) {
         const d = draftFor(model);
         if (el.classList.contains("em-offset-x")) d.offsetXM = el.value;
         else if (el.classList.contains("em-offset-y")) d.offsetYM = el.value;
+        else if (el.classList.contains("em-offset-z")) d.offsetZM = el.value;
         else d.rotationDeg = el.value;
         const card = container.querySelector(`.form-card[data-model-id="${id}"]`);
         const dirty = isDirty(model);
@@ -132,9 +143,10 @@ export function renderExternalModelsPanel(container, deps) {
       const d = draftFor(model);
       const offsetXMm = mToMm(d.offsetXM);
       const offsetYMm = mToMm(d.offsetYM);
+      const offsetZMm = mToMm(d.offsetZM);
       const rotationDegNormalized = String(d.rotationDeg).trim().replace(",", ".");
       const rotationDeg = Number(rotationDegNormalized);
-      if (offsetXMm === null || offsetYMm === null) {
+      if (offsetXMm === null || offsetYMm === null || offsetZMm === null) {
         showToast("Сдвиг должен быть числом", "error");
         return;
       }
@@ -147,7 +159,7 @@ export function renderExternalModelsPanel(container, deps) {
         const updated = await api(`/objects/${objectId}/external-models/${id}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            offset_x_mm: offsetXMm, offset_y_mm: offsetYMm, rotation_deg: rotationDeg,
+            offset_x_mm: offsetXMm, offset_y_mm: offsetYMm, offset_z_mm: offsetZMm, rotation_deg: rotationDeg,
             expected_revision: model.revision,
           }),
         });
@@ -164,40 +176,38 @@ export function renderExternalModelsPanel(container, deps) {
       }
     }));
 
-    container.querySelectorAll(".em-drag").forEach((btn) => btn.addEventListener("click", () => {
+    container.querySelectorAll(".em-placement").forEach((btn) => btn.addEventListener("click", () => {
       const id = Number(btn.dataset.modelId);
-      if (activeDrag && activeDrag.modelId === id) {
-        activeDrag.stop(); // повторный клик по «Перемещение…» — досрочная отмена
+      if (activeGesture && activeGesture.modelId === id) {
+        activeGesture.stop(); // повторный клик — досрочная отмена (пока диалог виден, до скрытия)
         return;
       }
-      if (activeDrag) return; // одно перетаскивание разом
+      if (activeGesture) return; // один жест разом
       const model = models.find((m) => m.id === id);
       const d = draftFor(model);
-      const result = beginDrag(model, {
-        onPreviewOffsetMm: (xMm, yMm) => {
-          const card = container.querySelector(`.form-card[data-model-id="${id}"]`);
-          if (!card) return;
+      const result = beginPlacement(model, {
+        onPreview: (xMm, yMm, rotationDeg) => {
           d.offsetXM = mmToM(xMm);
           d.offsetYM = mmToM(yMm);
-          card.querySelector(".em-offset-x").value = d.offsetXM;
-          card.querySelector(".em-offset-y").value = d.offsetYM;
+          d.rotationDeg = rotationDeg.toFixed(1);
         },
-        onDone: (xMm, yMm) => {
+        onDone: (xMm, yMm, rotationDeg) => {
           d.offsetXM = mmToM(xMm);
           d.offsetYM = mmToM(yMm);
-          activeDrag = null;
+          d.rotationDeg = rotationDeg.toFixed(1);
+          activeGesture = null;
           render();
         },
         onCancel: () => {
-          activeDrag = null;
+          activeGesture = null;
           render();
         },
       });
       if (!result.ok) {
-        showToast(result.reason || "Перетаскивание сейчас недоступно", "error");
+        showToast(result.reason || "Настройка положения сейчас недоступна", "error");
         return;
       }
-      activeDrag = { modelId: id, stop: result.stop };
+      activeGesture = { modelId: id, stop: result.stop };
       render();
     }));
 

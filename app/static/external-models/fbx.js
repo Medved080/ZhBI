@@ -141,7 +141,13 @@ export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, limi
     throw new Error("Не удалось вычислить конечный габарит модели (NaN/Infinity в вершинах).");
   }
 
-  const sourceAnchorMm = [(minX + maxX) / 2, (minY + maxY) / 2, minZ];
+  // Anchor по высоте — ВЕРХНЯЯ точка габарита (не нижняя): по умолчанию
+  // благоустройство ставится верхней границей на отметку 0 объекта (живой
+  // запрос пользователя 2026-09-11), а не нижней — модель уходит вниз, в
+  // отрицательные локальные Z. Ручной сдвиг по высоте (offset_z_mm,
+  // app/external_models.py) добавляется поверх уже на сервере/в слое, не
+  // здесь.
+  const sourceAnchorMm = [(minX + maxX) / 2, (minY + maxY) / 2, maxZ];
   const translateAnchor = new THREE.Matrix4().makeTranslation(-sourceAnchorMm[0], -sourceAnchorMm[1], -sourceAnchorMm[2]);
 
   const outGroup = new THREE.Group();

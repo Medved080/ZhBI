@@ -34362,37 +34362,73 @@ document.getElementById("menu-external-models")?.addEventListener("click", async
     objectId: state.objectId,
     canEdit: canOn(роли, "external_models", "write"),
     api, escapeHtml, showToast,
-    onChanged: () => {
-      mfrExternalModelsInvalidateObject(state.objectId);
-      zhbiExternalModelsInvalidateObject(state.objectId);
-    },
-    beginDrag: beginExternalModelDrag,
+    onChanged: () => refreshExternalModelsInOpenScene(state.objectId),
+    beginPlacement: beginExternalModelPlacement,
   });
 });
 document.getElementById("external-models-close")?.addEventListener("click", () => {
   document.getElementById("external-models-backdrop").classList.remove("open");
 });
 
-// Перетаскивание внешней модели мышью прямо в открытой 3D-сцене (§8
+// После загрузки/сохранения офсета-поворота/recenter/удаления модели —
+// СРАЗУ подхватить изменение в уже открытой 3D-сцене (если она открыта для
+// этого же объекта), не дожидаясь следующей пересборки по фильтру. Без
+// этого «Переместить мышью» сразу после загрузки честно отказывало —
+// «модель ещё не разобрана» — хотя открывать 3D заново пользователю не
+// приходило в голову: он не закрывал диалог настроек (живой репорт
+// пользователя, 2026-09-11).
+async function refreshExternalModelsInOpenScene(objectId) {
+  mfrExternalModelsInvalidateObject(objectId);
+  zhbiExternalModelsInvalidateObject(objectId);
+  if (mfr3d.scene && revitPlanState.objectId === objectId) {
+    await attachMfrExternalModels(mfr3d.scene, objectId, revitPlanState.data?.origin || [0, 0], mfr3d.низ || 0);
+  }
+  if (state.view3d.scene && state.objectId === objectId) {
+    await attachZhbiExternalModels(state.view3d.scene, objectId);
+  }
+}
+
+// Настройка положения внешней модели мышью прямо в открытой 3D-сцене (§8
 // задания) — общее ядро для МФР и ЖБИ, отличаются только: где взять
 // canvas/camera/controls/группу, плоскость перетаскивания (у какого мира
-// какая ось "вверх") и как перевести дельту в МИРОВЫХ координатах сцены в
-// дельту offset_mm (координаты проекта). Диалог настроек на время
-// перетаскивания СКРЫВАЕТСЯ (не закрывается — черновик офсета/поворота
-// остаётся), чтобы курсор доставал до canvas позади него; OrbitControls на
-// это время выключены, чтобы вращение камеры не мешало жесту и наоборот.
-function startExternalModelDragOnPlane({
-  canvas, camera, controls, backdrop, group, planeNormal, worldDeltaToOffsetDelta, startOffset,
-  onPreviewOffsetMm, onDone, onCancel,
+// какая ось "вверх"), как перевести дельту в мировых координатах сцены в
+// дельту offset_mm и как посчитать угол вокруг центра модели для поворота.
+//
+// ОДНА кнопка на оба действия (живой запрос пользователя 2026-09-11,
+// заменил прежние раздельные «Переместить»/«Повернуть»): обычное
+// перетаскивание — сдвиг, перетаскивание с зажатой Control — поворот
+// вокруг центра модели. Решает это `onPointerDown` по `e.ctrlKey` в
+// момент нажатия кнопки мыши, дальше до отпускания жест не переключается,
+// даже если Control отпустят/зажмут посреди движения — иначе положение
+// прыгало бы посреди жеста.
+//
+// Диалог настроек на время режима СКРЫВАЕТСЯ (не закрывается — черновик
+// остаётся), чтобы курсор доставал до canvas позади него; OrbitControls
+// выключены, чтобы вращение камеры не мешало жесту и наоборот.
+//
+// РЕЖИМ ПОСТОЯННЫЙ, не на один жест (живой репорт пользователя: закрывать
+// режим после каждого отпускания мыши — не давать нормально
+// отрегулировать). Двигать и крутить можно сколько угодно раз подряд, в
+// любом порядке; выйти — плавающей панелью «Готово»/«Отмена» поверх
+// 3D-вида или клавишей Esc (полная отмена всех правок за этот заход).
+function startExternalModelPlacementOnPlane({
+  canvas, camera, controls, backdrop, group, planeNormal, rotateAxis,
+  worldDeltaToOffsetDelta, angleOfPoint, startOffset, startRotationDeg,
+  onPreview, onDone, onCancel,
 }) {
   const raycaster = new THREE.Raycaster();
   const plane = new THREE.Plane(planeNormal, -planeNormal.dot(group.position));
-  const startGroupPos = group.position.clone();
+  const armStartGroupPos = group.position.clone();     // точка отсчёта Esc/«Отмена» для сдвига
+  const armStartQuaternion = group.quaternion.clone(); // точка отсчёта Esc/«Отмена» для поворота
+  let gestureBasePos = group.position.clone();  // сдвиг: положение ПЕРЕД текущим жестом
+  let gestureBaseAngle = 0;                     // поворот: накоплено ДО текущего жеста
+  let totalAngle = 0;                           // поворот: накоплено включая текущий жест
   const pointerNdc = new THREE.Vector2();
   const startHit = new THREE.Vector3();
   const hit = new THREE.Vector3();
-  let active = false;
-  let finished = false;
+  let active = false;     // сейчас идёт один конкретный жест (кнопка мыши зажата)
+  let rotating = false;   // ТЕКУЩИЙ жест — поворот (Control был зажат на pointerdown), а не сдвиг
+  let finished = false;   // режим завершён целиком (сработал ровно один раз)
 
   function ndcFromEvent(e) {
     const r = canvas.getBoundingClientRect();
@@ -34402,34 +34438,68 @@ function startExternalModelDragOnPlane({
 
   function rayHit(e, out) {
     ndcFromEvent(e);
+    // ОБЯЗАТЕЛЬНО перед setFromCamera: ЖБИ рендерит ПО ТРЕБОВАНИЮ
+    // (requestRender3D), а не непрерывным rAF, как МФР — matrixWorld
+    // камеры мог не обновляться с прошлого кадра, и без этого вызова
+    // раскаст уходит по (0,0,-1) вместо реального направления взгляда
+    // (живой найдено при проверке перетаскивания в ЖБИ).
+    camera.updateMatrixWorld();
     raycaster.setFromCamera(pointerNdc, camera);
     return raycaster.ray.intersectPlane(plane, out);
   }
 
+  function currentOffset() {
+    const worldDelta = group.position.clone().sub(armStartGroupPos);
+    const { dOffsetX, dOffsetY } = worldDeltaToOffsetDelta(worldDelta);
+    return { x: startOffset.x + dOffsetX, y: startOffset.y + dOffsetY };
+  }
+  function currentRotationDeg() {
+    // Знак: положительный rotation_deg — по часовой стрелке при виде
+    // сверху (см. Docs/DECISIONS.md), что в математическом (против
+    // часовой положительном) угле THREE — отрицательное приращение.
+    return startRotationDeg - (totalAngle * 180) / Math.PI;
+  }
+
+  // Плавающая панель поверх 3D — единственный способ штатно завершить
+  // режим, пока диалог настроек скрыт. Простой fixed-div, без CSS-классов
+  // проекта (модуль не тянет за собой стили страницы намеренно).
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed; top:16px; left:50%; transform:translateX(-50%); "
+    + "z-index:1000; background:rgba(20,24,32,.92); color:#fff; padding:10px 14px; "
+    + "border-radius:8px; font:13px sans-serif; display:flex; align-items:center; gap:12px; "
+    + "box-shadow:0 4px 16px rgba(0,0,0,.35)";
+  overlay.innerHTML = '<span>Мышью — сдвиг, с зажатой Control — поворот вокруг центра. '
+    + 'Можно несколько раз. Esc — отменить всё.</span>'
+    + '<button type="button" data-act="done" style="padding:4px 10px; cursor:pointer">Готово</button>'
+    + '<button type="button" data-act="cancel" style="padding:4px 10px; cursor:pointer">Отмена</button>';
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-act="done"]').addEventListener("click", () => finish(true));
+  overlay.querySelector('[data-act="cancel"]').addEventListener("click", () => finish(false));
+
   function cleanup() {
-    canvas.removeEventListener("pointerdown", onPointerDown);
-    canvas.removeEventListener("pointermove", onPointerMove);
-    canvas.removeEventListener("pointerup", onPointerUp);
-    canvas.removeEventListener("pointercancel", onPointerCancel);
+    canvas.removeEventListener("pointerdown", onPointerDown, { capture: true });
+    canvas.removeEventListener("pointermove", onPointerMove, { capture: true });
+    canvas.removeEventListener("pointerup", onPointerUp, { capture: true });
+    canvas.removeEventListener("pointercancel", onPointerCancel, { capture: true });
     window.removeEventListener("keydown", onKeyDown);
+    overlay.remove();
     if (controls) controls.enabled = true;
     backdrop.classList.add("open");
   }
 
-  // Общий выход из режима перетаскивания — со всех путей: отпустили кнопку
-  // мыши (commit=true), Esc/pointercancel/повторный клик по кнопке в
-  // панели (commit=false). Вызывается РОВНО ОДИН РАЗ (finished — защита от
-  // двойного onPointerUp+pointercancel на некоторых устройствах).
+  // Общий выход из РЕЖИМА целиком (не одного жеста) — панель «Готово»,
+  // панель «Отмена» или Esc. Вызывается РОВНО ОДИН РАЗ (finished — защита
+  // от двойного срабатывания).
   function finish(commit) {
     if (finished) return;
     finished = true;
     cleanup();
-    if (commit && active) {
-      const worldDelta = group.position.clone().sub(startGroupPos);
-      const { dOffsetX, dOffsetY } = worldDeltaToOffsetDelta(worldDelta);
-      onDone(startOffset.x + dOffsetX, startOffset.y + dOffsetY);
+    if (commit) {
+      const offset = currentOffset();
+      onDone(offset.x, offset.y, currentRotationDeg());
     } else {
-      group.position.copy(startGroupPos);
+      group.position.copy(armStartGroupPos);
+      group.quaternion.copy(armStartQuaternion);
       onCancel();
     }
   }
@@ -34437,53 +34507,88 @@ function startExternalModelDragOnPlane({
   function onPointerDown(e) {
     if (!rayHit(e, startHit)) return; // луч параллелен плоскости — не NaN, просто пропуск (§8, п.5)
     active = true;
+    rotating = e.ctrlKey;
+    gestureBasePos = group.position.clone();
+    gestureBaseAngle = totalAngle;
     canvas.setPointerCapture(e.pointerId);
-    if (controls) controls.enabled = false;
+    e.preventDefault();
+    e.stopImmediatePropagation(); // не дать OrbitControls свой pointerdown на этом же canvas
   }
 
   function onPointerMove(e) {
     if (!active) return;
     if (!rayHit(e, hit)) return;
-    const worldDelta = hit.clone().sub(startHit);
-    group.position.copy(startGroupPos).add(worldDelta);
-    const { dOffsetX, dOffsetY } = worldDeltaToOffsetDelta(worldDelta);
-    onPreviewOffsetMm(startOffset.x + dOffsetX, startOffset.y + dOffsetY);
+    if (rotating) {
+      const startAngle = angleOfPoint(startHit);
+      const angleNow = angleOfPoint(hit);
+      totalAngle = gestureBaseAngle + (angleNow - startAngle);
+      const q = new THREE.Quaternion().setFromAxisAngle(rotateAxis, totalAngle);
+      group.quaternion.copy(armStartQuaternion).premultiply(q);
+      onPreview(currentOffset().x, currentOffset().y, currentRotationDeg());
+    } else {
+      const gestureDelta = hit.clone().sub(startHit);
+      group.position.copy(gestureBasePos).add(gestureDelta);
+      onPreview(currentOffset().x, currentOffset().y, currentRotationDeg());
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
   }
 
-  function onPointerUp() { finish(true); }
-  function onPointerCancel() { finish(false); }
+  // Отпустили кнопку мыши — заканчивается ТОЛЬКО текущий жест, режим
+  // остаётся активным: следующий pointerdown на canvas начнёт новый жест
+  // (сдвиг или поворот, смотря по Control) от уже изменённого состояния.
+  function onPointerUp(e) {
+    if (active) { e.preventDefault(); e.stopImmediatePropagation(); }
+    active = false;
+  }
+  function onPointerCancel() { active = false; }
   function onKeyDown(e) {
     if (e.key === "Escape") finish(false);
   }
 
+  // OrbitControls ВЫКЛЮЧАЕТСЯ здесь, ДО первого возможного pointerdown —
+  // не внутри onPointerDown. Его собственный слушатель на том же canvas
+  // зарегистрирован раньше нашего (сцена создана до открытия настроек) и
+  // потому получает событие ПЕРВЫМ: выключить controls внутри нашего
+  // onPointerDown значило бы гасить его уже ПОСЛЕ того, как OrbitControls
+  // успел начать свой жест (захватить pointer, включить вращение) — на
+  // отпускании кнопки мыши он же и «отменял» наш drag, откатывая модель
+  // обратно (живой репорт пользователя). stopImmediatePropagation в наших
+  // обработчиках — вторая, независимая линия защиты на тот же случай.
+  if (controls) controls.enabled = false;
   backdrop.classList.remove("open");
-  canvas.addEventListener("pointerdown", onPointerDown);
-  canvas.addEventListener("pointermove", onPointerMove);
-  canvas.addEventListener("pointerup", onPointerUp);
-  canvas.addEventListener("pointercancel", onPointerCancel);
+  canvas.addEventListener("pointerdown", onPointerDown, { capture: true });
+  canvas.addEventListener("pointermove", onPointerMove, { capture: true });
+  canvas.addEventListener("pointerup", onPointerUp, { capture: true });
+  canvas.addEventListener("pointercancel", onPointerCancel, { capture: true });
   window.addEventListener("keydown", onKeyDown);
 
   return { ok: true, stop: () => finish(false) };
 }
 
-// Диспетчер: перетаскивание работает в ЛЮБОЙ уже открытой 3D-сцене этого
-// объекта — МФР («Модель» → 3D) или ЖБИ («Модель» → 3D) — какая сейчас
-// построена для model.object_id, та и используется. Не строит и не
+// Диспетчер: настройка положения работает в ЛЮБОЙ уже открытой 3D-сцене
+// этого объекта — МФР («Модель» → 3D) или ЖБИ («Модель» → 3D) — какая
+// сейчас построена для model.object_id, та и используется. Не строит и не
 // разбирает сцену сама: если ни одна не готова, честно отказывает вместо
-// того, чтобы подставить фиктивные координаты.
-function beginExternalModelDrag(model, callbacks) {
+// того, чтобы подставить фиктивные координаты. Ось вращения — та же, что
+// нормаль плоскости сдвига (Z у МФР, Y у ЖБИ): локальная вертикаль модели
+// после адаптера просмотрщика совпадает с мировой вертикалью сцены (см.
+// Docs/DECISIONS.md — координатный контракт §5).
+function beginExternalModelPlacement(model, callbacks) {
   if (mfr3d.scene && mfr3d.renderer && mfr3d.camera
       && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer) {
     const group = mfrExternalModels.layer.getGroup(model.id);
     if (group) {
       // МФР: мир X/Y = координаты объекта (после вычитания origin — то же
       // самое для ДЕЛЬТЫ, origin в разности сокращается), Z — вверх.
-      return startExternalModelDragOnPlane({
+      return startExternalModelPlacementOnPlane({
         canvas: mfr3d.renderer.domElement, camera: mfr3d.camera, controls: mfr3d.controls,
         backdrop: document.getElementById("external-models-backdrop"), group,
-        planeNormal: new THREE.Vector3(0, 0, 1),
+        planeNormal: new THREE.Vector3(0, 0, 1), rotateAxis: new THREE.Vector3(0, 0, 1),
         worldDeltaToOffsetDelta: (d) => ({ dOffsetX: d.x, dOffsetY: d.y }),
+        angleOfPoint: (p) => Math.atan2(p.y - group.position.y, p.x - group.position.x),
         startOffset: { x: model.offset_mm.x, y: model.offset_mm.y },
+        startRotationDeg: model.rotation_deg,
         ...callbacks,
       });
     }
@@ -34496,12 +34601,14 @@ function beginExternalModelDrag(model, callbacks) {
       // Адаптер V=(P.x,P.z,-P.y): дельта мира (dx,dz) → дельта offset
       // (dx, -dz) — тот же перевод, что и для самих координат, только без
       // anchor (он сокращается в разности).
-      return startExternalModelDragOnPlane({
+      return startExternalModelPlacementOnPlane({
         canvas: state.view3d.renderer.domElement, camera: state.view3d.camera, controls: state.view3d.controls,
         backdrop: document.getElementById("external-models-backdrop"), group,
-        planeNormal: new THREE.Vector3(0, 1, 0),
+        planeNormal: new THREE.Vector3(0, 1, 0), rotateAxis: new THREE.Vector3(0, 1, 0),
         worldDeltaToOffsetDelta: (d) => ({ dOffsetX: d.x, dOffsetY: -d.z }),
+        angleOfPoint: (p) => Math.atan2(p.x - group.position.x, p.z - group.position.z),
         startOffset: { x: model.offset_mm.x, y: model.offset_mm.y },
+        startRotationDeg: model.rotation_deg,
         ...callbacks,
       });
     }

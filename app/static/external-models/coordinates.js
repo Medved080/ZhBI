@@ -15,10 +15,11 @@ export function fbxPointToCanonical(fx, fy, fz) {
   return [1000 * fx, 1000 * -fz, 1000 * fy];
 }
 
-/** Центр горизонтальных габаритов и нижняя точка — anchor источника (мм). */
+/** Центр горизонтальных габаритов и ВЕРХНЯЯ точка — anchor источника (мм).
+ * По умолчанию модель ставится верхней границей на отметку 0 объекта. */
 export function sourceAnchorFromBBox(bbox) {
-  const { minX, maxX, minY, maxY, minZ } = bbox;
-  return [(minX + maxX) / 2, (minY + maxY) / 2, minZ];
+  const { minX, maxX, minY, maxY, maxZ } = bbox;
+  return [(minX + maxX) / 2, (minY + maxY) / 2, maxZ];
 }
 
 /** Центр горизонтальных габаритов проекта, Z всегда 0 (мм). */
@@ -28,17 +29,19 @@ export function projectAnchorFromBounds(bounds) {
 }
 
 /**
- * P = (C - source_anchor) + project_anchor + (offset_x, offset_y, 0).
- * anchors и offset — обычные числовые тройки/пары в мм.
+ * P = (C - source_anchor) + project_anchor + (offset_x, offset_y, offset_z).
+ * anchors и offset — обычные числовые тройки/пары в мм. offset_z по
+ * умолчанию 0 — тогда верхняя точка габарита (source_anchor.z) стоит
+ * ровно на project_anchor.z (всегда 0, см. projectAnchorFromBounds).
  */
-export function canonicalToProject(c, sourceAnchor, projectAnchor, offsetXMm, offsetYMm) {
+export function canonicalToProject(c, sourceAnchor, projectAnchor, offsetXMm, offsetYMm, offsetZMm = 0) {
   const lx = c[0] - sourceAnchor[0];
   const ly = c[1] - sourceAnchor[1];
   const lz = c[2] - sourceAnchor[2];
   return [
     lx + projectAnchor[0] + offsetXMm,
     ly + projectAnchor[1] + offsetYMm,
-    lz + projectAnchor[2],
+    lz + projectAnchor[2] + offsetZMm,
   ];
 }
 

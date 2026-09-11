@@ -62,7 +62,7 @@ def _row_out(row: sqlite3.Row) -> dict:
             "x": row["source_anchor_x_mm"], "y": row["source_anchor_y_mm"], "z": row["source_anchor_z_mm"],
         },
         "object_anchor_mm": {"x": row["object_anchor_x_mm"], "y": row["object_anchor_y_mm"]},
-        "offset_mm": {"x": row["offset_x_mm"], "y": row["offset_y_mm"]},
+        "offset_mm": {"x": row["offset_x_mm"], "y": row["offset_y_mm"], "z": row["offset_z_mm"]},
         "rotation_deg": row["rotation_deg"],
         "centering_revision": row["centering_revision"],
         "revision": row["revision"],
@@ -249,6 +249,7 @@ def upload_external_model(
 class PatchIn(BaseModel):
     offset_x_mm: Optional[float] = None
     offset_y_mm: Optional[float] = None
+    offset_z_mm: Optional[float] = None
     rotation_deg: Optional[float] = None
     name: Optional[str] = None
     expected_revision: int
@@ -278,6 +279,10 @@ def patch_external_model(object_id: int, model_id: int, body: PatchIn,
             if not _finite(body.offset_y_mm) or abs(body.offset_y_mm) > MAX_OFFSET_MM:
                 raise HTTPException(status_code=422, detail="offset_y_mm не является конечным допустимым числом")
             set_parts.append("offset_y_mm = ?"); params.append(float(body.offset_y_mm))
+        if body.offset_z_mm is not None:
+            if not _finite(body.offset_z_mm) or abs(body.offset_z_mm) > MAX_OFFSET_MM:
+                raise HTTPException(status_code=422, detail="offset_z_mm не является конечным допустимым числом")
+            set_parts.append("offset_z_mm = ?"); params.append(float(body.offset_z_mm))
         if body.rotation_deg is not None:
             if not _finite(body.rotation_deg):
                 raise HTTPException(status_code=422, detail="rotation_deg не является конечным числом")

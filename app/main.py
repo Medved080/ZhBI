@@ -775,23 +775,28 @@ def on_startup():
     finally:
         conn.close()
 
-    # Внешние 3D-модели (благоустройство): подчистить забытые temp-файлы
-    # (упавшие между записью и atomic rename) и файлы-сироты без строки в
-    # БД (сбой между rename и commit транзакции — §7 задания). Обычная
-    # фоновая уборка при каждом старте, не должна ронять его при сбое.
+    # Внешние 3D-модели (благоустройство): подчистить только забытые
+    # temp-файлы (упавшие между записью и atomic rename) — это безопасно
+    # ВСЕГДА, .tmp-* не бывают ничьей строкой ни в одной базе.
+    #
+    # УБОРКА ФАЙЛОВ-СИРОТ (cleanup_orphan_model_files) ЗДЕСЬ НЕ ВЫЗЫВАЕТСЯ
+    # — критическая ошибка нашлась и снята 2026-09-11 (живой отчёт
+    # пользователя, 410 Gone на реальном сервере). Каталог
+    # uploads/external_models/ ОДИН на диске для ЛЮБОЙ базы (не зависит от
+    # ZHBI_DB_PATH), а "known" считался ТОЛЬКО по базе ЭТОГО процесса —
+    # значит старт анон-копии удалял файлы боевых строк, и наоборот. При
+    # --reload у пользователя (перезапуск на каждую правку .py) это било
+    # по боевым данным при каждой моей правке кода. Безопасная версия —
+    # ручная кнопка администратора, которая сверяет ОБЕ базы разом или
+    # сравнивает с явно переданным списком; автоматической здесь быть не
+    # должно, пока такой развязки нет.
     try:
-        from app.external_model_storage import cleanup_orphan_model_files, cleanup_orphan_temp_files
+        from app.external_model_storage import cleanup_orphan_temp_files
         removed_temp = cleanup_orphan_temp_files()
-        conn = get_connection()
-        try:
-            known = {r["stored_name"] for r in conn.execute("SELECT stored_name FROM object_external_models")}
-        finally:
-            conn.close()
-        removed_orphan = cleanup_orphan_model_files(known)
-        if removed_temp or removed_orphan:
-            print(f"[startup] внешние 3D-модели: убрано temp-файлов {removed_temp}, файлов-сирот {removed_orphan}")
+        if removed_temp:
+            print(f"[startup] внешние 3D-модели: убрано temp-файлов {removed_temp}")
     except Exception as exc:
-        print(f"[startup] уборка файлов внешних 3D-моделей не выполнена: {exc}")
+        print(f"[startup] уборка temp-файлов внешних 3D-моделей не выполнена: {exc}")
 
 
 # СТРАЖ РЕГИСТРАЦИИ СТАРТА (2026-08-17). Проверка стоит здесь, а не в тестах,

@@ -84,7 +84,8 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
       if (myGeneration !== generation || !result) continue; // устарело или отменено
       const px = model.object_anchor_mm.x + model.offset_mm.x;
       const py = model.object_anchor_mm.y + model.offset_mm.y;
-      const v = projectToMfrView([px, py, 0], origin, low);
+      const pz = model.offset_mm.z || 0; // anchor по Z объекта всегда 0 — только ручной сдвиг
+      const v = projectToMfrView([px, py, pz], origin, low);
       result.group.position.set(v[0], v[1], v[2]);
       // Поворот — ВОКРУГ ЦЕНТРА модели (source_anchor уже центрировал
       // геометрию в 0,0 по горизонтали при разборе, см. fbx.js), поэтому
@@ -119,7 +120,8 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
       if (myGeneration !== generation || !result) continue;
       const px = model.object_anchor_mm.x + model.offset_mm.x;
       const py = model.object_anchor_mm.y + model.offset_mm.y;
-      const v = projectToZhbiView([px, py, 0]);
+      const pz = model.offset_mm.z || 0; // anchor по Z объекта всегда 0 — только ручной сдвиг
+      const v = projectToZhbiView([px, py, pz]);
       result.group.position.set(v[0], v[1], v[2]);
       const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rotationRad(model));
       result.group.quaternion.copy(axisRemap).multiply(qRotate);

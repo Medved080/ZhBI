@@ -1454,6 +1454,11 @@ CREATE TABLE IF NOT EXISTS object_external_models (
     centering_revision TEXT,
     offset_x_mm REAL NOT NULL DEFAULT 0,
     offset_y_mm REAL NOT NULL DEFAULT 0,
+    -- Смещение по высоте от положения по умолчанию (0 = верхняя точка
+    -- полного габарита модели на отметке 0 объекта, см. source_anchor_z_mm
+    -- и fbx.js — при разборе геометрия центрируется так, что её локальный
+    -- максимум Z уже стоит на 0). Положительное — вверх.
+    offset_z_mm REAL NOT NULL DEFAULT 0,
     -- Поворот слоя вокруг ЕГО ЖЕ вертикальной оси, вокруг центра
     -- горизонтального габарита (того же, что даёт source_anchor) — по
     -- часовой стрелке в градусах, если смотреть сверху на план. Не влияет
