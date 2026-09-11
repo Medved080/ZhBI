@@ -19,6 +19,16 @@
    файлу** (сверено с тем, что build_export_workbook ЖБИ не красит ячейки
    вовсе): в реальной выгрузке заливки нет, состав редактируемых колонок
    просто ограничен списком COLUMNS ниже.
+
+4. **Справочные колонки защищены НАСТОЯЩЕЙ защитой листа Excel** (живой
+   запрос пользователя, 2026-09-11: «чтобы пользователь не мог случайно
+   удалить или изменить UID»), а не только цветом/подписью в шапке. Без
+   пароля — это защита от НЕВНИМАТЕЛЬНОСТИ (Excel не даст стереть/сдвинуть
+   ячейку не глядя), а не от злого умысла: снять защиту одним кликом может
+   кто угодно, и сервер при загрузке всё равно проверяет каждое значение
+   сам (см. `analyze`/`_diff_row`) — тот же принцип, что у выпадающих
+   списков в app/element_bulk_edit.py («список — удобство, проверка —
+   обязанность»).
 """
 
 import io
@@ -26,6 +36,7 @@ from datetime import datetime
 from typing import Optional
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Protection
 from openpyxl.utils import get_column_letter
 
 from app import activity, block_works, work_fact
@@ -161,8 +172,28 @@ def build_export_workbook(conn, object_id: int) -> Workbook:
         for i in столбцы_дат:
             ws.cell(row=номер, column=i).number_format = EXCEL_DATE_FORMAT
 
+    _protect(ws, len(rows))
     _widen(ws)
     return wb
+
+
+def _protect(ws, n_rows: int) -> None:
+    """Защита листа (см. п.4 в docstring модуля): по умолчанию openpyxl
+    держит ВСЕ ячейки заблокированными (`Protection(locked=True)`) — здесь
+    явно СНИМАЕТСЯ блокировка только у столбцов с editable=True из COLUMNS,
+    и включается защита листа. Без пароля — она держит от невнимательности
+    (случайно стереть UID/дату факта), а не от того, кто нарочно снимет
+    защиту одним кликом «Сервис → Снять защиту листа»."""
+    editable_cols = [i + 1 for i, (_, _, editable) in enumerate(COLUMNS) if editable]
+    for col in editable_cols:
+        for row in range(2, n_rows + 2):
+            ws.cell(row=row, column=col).protection = Protection(locked=False)
+    ws.protection.sheet = True
+    # Сортировка и автофильтр — разрешены явно (см. ws.auto_filter выше):
+    # по умолчанию OOXML запрещает их вместе с редактированием, а листом
+    # в сотни строк неудобно пользоваться без обоих.
+    ws.protection.sort = False
+    ws.protection.autoFilter = False
 
 
 def _widen(ws) -> None:
