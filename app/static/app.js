@@ -33186,6 +33186,284 @@ document.getElementById("blk-recalc-membership").addEventListener("click", async
   finally { btn.disabled = false; }
 });
 
+// ==================== Массовая правка ЗР через Excel (2026-09-11) ====================
+//
+// Аналог формы ЖБИ (#bulk-edit-backdrop выше), но своя, ОТДЕЛЬНАЯ от неё:
+// контур объектный (эндпоинты — /objects/{state.objectId}/block-works/
+// bulk-edit/*), а тот модуль — общесистемный и уже несёт три режима и
+// перенос базы; втискивать сюда четвёртый значило бы рисковать чужой,
+// давно проверенной формой ради разной по смыслу правки. Экран
+// подтверждения — тот же приём (генерическая таблица по columns/changes из
+// ответа /analyze), но код свой и короче: нет переключателя режима, нет
+// выпадающих справочников (правимые поля — свободные число и даты).
+// Подробности контракта — app/block_bulk_edit.py, Docs/block-accounting.md §18.
+
+let blkBulkChanges = [];   // то, что вернул /analyze
+let blkBulkColumns = [];
+let blkBulkRows = [];      // затронутые ЗР (значения как в XLS)
+let blkBulkChecked = new Set();
+
+function setBlkBulkStatus(text, isError) {
+  const el = document.getElementById("blk-bulk-status");
+  el.textContent = text;
+  el.style.color = isError ? "var(--color-danger)" : "";
+}
+
+function resetBlkBulk() {
+  document.getElementById("blk-bulk-file").value = "";
+  blkBulkChanges = [];
+  blkBulkColumns = [];
+  blkBulkRows = [];
+  blkBulkChecked = new Set();
+  document.getElementById("blk-bulk-table").innerHTML = "";
+  document.getElementById("blk-bulk-rejected").innerHTML = "";
+  document.getElementById("blk-bulk-fields").innerHTML = "";
+  document.getElementById("blk-bulk-intro").style.display = "";
+  setBlkBulkStatus("", false);
+  updateBlkBulkSummary();
+}
+
+document.getElementById("blk-bulk-edit-open").addEventListener("click", () => {
+  resetBlkBulk();
+  document.getElementById("blk-bulk-backdrop").classList.add("open");
+});
+document.getElementById("blk-bulk-cancel").addEventListener("click", () => {
+  document.getElementById("blk-bulk-backdrop").classList.remove("open");
+});
+
+document.getElementById("blk-bulk-export").addEventListener("click", async () => {
+  setBlkBulkStatus("Готовим файл…", false);
+  try {
+    const res = await fetch(`/objects/${state.objectId}/block-works/bulk-edit/export`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Ошибка ${res.status}`);
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = /filename="([^"]+)"/.exec(cd);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : "mfr_block_works.xlsx";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+    setBlkBulkStatus("Файл выгружен. Поправьте его в Excel и загрузите обратно.", false);
+  } catch (e) {
+    setBlkBulkStatus(`Не удалось выгрузить: ${e.message}`, true);
+  }
+});
+
+document.getElementById("blk-bulk-analyze").addEventListener("click", async () => {
+  const file = document.getElementById("blk-bulk-file").files[0];
+  if (!file) { setBlkBulkStatus("Сначала выберите файл .xlsx", true); return; }
+  setBlkBulkStatus("Сверяем файл с базой…", false);
+  document.getElementById("blk-bulk-table").innerHTML = "";
+  document.getElementById("blk-bulk-rejected").innerHTML = "";
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const data = await api(`/objects/${state.objectId}/block-works/bulk-edit/analyze`,
+      { method: "POST", body: formData });
+    blkBulkChanges = data.changes || [];
+    blkBulkColumns = data.columns || [];
+    blkBulkRows = data.block_works || [];
+    // По умолчанию отмечено ВСЁ — та же причина, что у ЖБИ: правку в файл
+    // внесли осознанно, заново отмечать её на экране — работа впустую.
+    blkBulkChecked = new Set(blkBulkChanges.map((_, i) => i));
+    setBlkBulkStatus(
+      `Прочитано строк: ${data.rows_read}. Расхождений: ${blkBulkChanges.length} `
+      + `у ${data.block_works_touched} ЗР.`, false);
+    const rej = document.getElementById("blk-bulk-rejected");
+    if ((data.rejected || []).length) {
+      rej.innerHTML = `<b>Не может быть применено (${data.rejected.length}):</b>`;
+      data.rejected.forEach((r) => {
+        const p = document.createElement("div");
+        p.textContent = `Строка ${r.line}` + (r.bw_id ? ` (UID ${r.bw_id})` : "") + `: ${r.reason}`;
+        rej.appendChild(p);
+      });
+    } else {
+      rej.innerHTML = "";
+    }
+    renderBlkBulkTable();
+  } catch (e) {
+    setBlkBulkStatus(`Не удалось сверить: ${e.message}`, true);
+  }
+});
+
+function blkBulkValueText(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  const текст = String(v);
+  return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2})?/.test(текст) ? formatMomentRu(текст) : текст;
+}
+
+function renderBlkBulkFieldChips() {
+  const box = document.getElementById("blk-bulk-fields");
+  box.innerHTML = "";
+  const counts = new Map();
+  blkBulkChanges.forEach((c) => counts.set(c.field_label, (counts.get(c.field_label) || 0) + 1));
+  if (!counts.size) return;
+  for (const [label, n] of counts) {
+    const wrap = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = blkBulkChanges.some((c, i) => c.field_label === label && blkBulkChecked.has(i));
+    cb.addEventListener("change", () => {
+      blkBulkChanges.forEach((c, i) => {
+        if (c.field_label !== label) return;
+        if (cb.checked) blkBulkChecked.add(i); else blkBulkChecked.delete(i);
+      });
+      renderBlkBulkTable();
+    });
+    wrap.appendChild(cb);
+    wrap.appendChild(document.createTextNode(`${label} (${n})`));
+    box.appendChild(wrap);
+  }
+}
+
+function renderBlkBulkTable() {
+  const intro = document.getElementById("blk-bulk-intro");
+  if (intro) intro.style.display = blkBulkChanges.length ? "none" : "";
+  const table = document.getElementById("blk-bulk-table");
+  table.innerHTML = "";
+  if (!blkBulkChanges.length) { updateBlkBulkSummary(); return; }
+
+  const byRow = new Map();
+  const changedColumns = new Set();
+  blkBulkChanges.forEach((c, i) => {
+    changedColumns.add(c.column);
+    if (!byRow.has(c.bw_id)) byRow.set(c.bw_id, new Map());
+    byRow.get(c.bw_id).set(c.column, i);
+  });
+  const columns = [];
+  blkBulkColumns.forEach((col) => {
+    columns.push({ ...col, kind: "value" });
+    if (changedColumns.has(col.key)) columns.push({ ...col, kind: "new" });
+  });
+
+  const thead = document.createElement("thead");
+  const htr = document.createElement("tr");
+  htr.innerHTML = `<th style="width:26px;"><input type="checkbox" id="blk-bulk-all" title="Отметить все"/></th>`;
+  columns.forEach((col) => {
+    const th = document.createElement("th");
+    if (col.kind !== "new") { th.textContent = col.label; htr.appendChild(th); return; }
+    th.className = "col-new";
+    const inColumn = blkBulkChanges.map((c, i) => (c.column === col.key ? i : -1)).filter((i) => i >= 0);
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.title = `Отметить все правки колонки «${col.label}» (${inColumn.length})`;
+    cb.checked = inColumn.length > 0 && inColumn.every((i) => blkBulkChecked.has(i));
+    cb.indeterminate = !cb.checked && inColumn.some((i) => blkBulkChecked.has(i));
+    cb.addEventListener("change", () => {
+      inColumn.forEach((i) => { if (cb.checked) blkBulkChecked.add(i); else blkBulkChecked.delete(i); });
+      renderBlkBulkTable();
+    });
+    th.appendChild(cb);
+    th.appendChild(document.createTextNode(` → станет (${inColumn.length})`));
+    htr.appendChild(th);
+  });
+  thead.appendChild(htr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  const rows = blkBulkRows.filter((r) => byRow.has(r.bw_id));
+  rows.forEach((row) => {
+    const marks = byRow.get(row.bw_id);
+    const tr = document.createElement("tr");
+    const rowAll = document.createElement("td");
+    const rowCb = document.createElement("input");
+    rowCb.type = "checkbox";
+    rowCb.title = "Отметить все правки этой строки";
+    rowCb.checked = [...marks.values()].every((i) => blkBulkChecked.has(i));
+    rowCb.addEventListener("change", () => {
+      marks.forEach((i) => { if (rowCb.checked) blkBulkChecked.add(i); else blkBulkChecked.delete(i); });
+      renderBlkBulkTable();
+    });
+    rowAll.appendChild(rowCb);
+    tr.appendChild(rowAll);
+
+    columns.forEach((col) => {
+      const td = document.createElement("td");
+      const idx = marks.get(col.key);
+      if (col.kind === "new") {
+        if (idx === undefined) { td.className = "col-new"; tr.appendChild(td); return; }
+        const c = blkBulkChanges[idx];
+        td.className = "col-new changed";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = blkBulkChecked.has(idx);
+        cb.addEventListener("change", () => {
+          if (cb.checked) blkBulkChecked.add(idx); else blkBulkChecked.delete(idx);
+          updateBlkBulkSummary();
+          renderBlkBulkFieldChips();
+          rowCb.checked = [...marks.values()].every((i) => blkBulkChecked.has(i));
+        });
+        td.appendChild(cb);
+        td.appendChild(document.createTextNode(" " + blkBulkValueText(c.now)));
+        // Правка процента — это ещё и НОВЫЙ документ факта на дату (см.
+        // docstring app/block_bulk_edit.py): показываем это рядом, тем же
+        // приёмом, что у ЖБИ показывает «+ статус «Контрактация»».
+        if (c.field === "percent" && c.report_date) {
+          const b = document.createElement("div");
+          b.className = "bulk-edit-warn";
+          b.textContent = "+ факт-документ на " + blkBulkValueText(c.report_date);
+          td.appendChild(b);
+        }
+      } else {
+        td.textContent = blkBulkValueText(row.values[col.key]);
+        if (idx !== undefined) td.className = "was-changed";
+      }
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+
+  document.getElementById("blk-bulk-all").addEventListener("change", (e) => {
+    blkBulkChecked = e.target.checked ? new Set(blkBulkChanges.map((_, i) => i)) : new Set();
+    renderBlkBulkTable();
+  });
+  updateBlkBulkSummary(rows.length);
+  renderBlkBulkFieldChips();
+}
+
+function updateBlkBulkSummary(totalRows) {
+  const el = document.getElementById("blk-bulk-summary");
+  const total = blkBulkChanges.length;
+  const n = blkBulkChecked.size;
+  const applyBtn = document.getElementById("blk-bulk-apply");
+  if (!total) {
+    el.textContent = "";
+  } else {
+    el.textContent = totalRows === undefined
+      ? `Отмечено ${n} из ${total} правок.`
+      : `Показаны все ${totalRows} затронутые ЗР. Отмечено ${n} из ${total} правок.`;
+  }
+  applyBtn.disabled = n === 0;
+}
+
+document.getElementById("blk-bulk-apply").addEventListener("click", async () => {
+  const выбранные = blkBulkChanges.filter((_, i) => blkBulkChecked.has(i));
+  if (!выбранные.length) return;
+  setBlkBulkStatus("Применяем…", false);
+  document.getElementById("blk-bulk-apply").disabled = true;
+  try {
+    const итог = await api(`/objects/${state.objectId}/block-works/bulk-edit/apply`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes: выбранные }),
+    });
+    let текст = `Обновлено ЗР: ${итог.block_works_updated}. Новых документов факта: `
+      + `${итог.fact_reports_created}.`;
+    if (итог.skipped && итог.skipped.length) {
+      текст += ` Пропущено: ${итог.skipped.length} (${итог.skipped.map((s) => s.reason).join("; ")}).`;
+    }
+    setBlkBulkStatus(текст, (итог.skipped || []).length > 0);
+    await loadBlkPlansBlocks();
+    if (blkPlansBlockId) await selectBlkPlansBlock(blkPlansBlockId);
+    resetBlkBulk();
+    document.getElementById("blk-bulk-backdrop").classList.remove("open");
+  } catch (e) {
+    setBlkBulkStatus(`Не удалось применить: ${e.message}`, true);
+    document.getElementById("blk-bulk-apply").disabled = false;
+  }
+});
+
 document.getElementById("blk-section-add").addEventListener("click", async () => {
   const code = document.getElementById("blk-section-code").value.trim();
   const name = document.getElementById("blk-section-name").value.trim();

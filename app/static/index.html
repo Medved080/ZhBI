@@ -8465,11 +8465,80 @@
 
     <div id="blk-recalc-report" class="hint-text" style="padding:2px 0 6px"></div>
     <div class="actions" style="justify-content:space-between">
-      <button class="btn btn-sm btn-secondary" id="blk-recalc-membership"
-              title="Пересчитать этаж и секцию элементов модели заново по их геометрии — на случай, если после ручной правки блоков (осей, прямоугольников) в фильтрах «Модели МФР» остались устаревшие счётчики.">
-        Обновить принадлежность элементов
-      </button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-sm btn-secondary" id="blk-recalc-membership"
+                title="Пересчитать этаж и секцию элементов модели заново по их геометрии — на случай, если после ручной правки блоков (осей, прямоугольников) в фильтрах «Модели МФР» остались устаревшие счётчики.">
+          Обновить принадлежность элементов
+        </button>
+        <!-- Массовая правка ЗР через Excel (2026-09-11, Docs/block-accounting.md
+             §18) — тот же круг, что у «Массовой правки через Excel» ЖБИ
+             (#bulk-edit-backdrop), но своя отдельная форма: контур объектный
+             (нужен текущий state.objectId в URL), и втискивать его в общий
+             модуль ЖБИ (режимы/перенос базы/контрактация) значило бы рисковать
+             тем модулем ради чужой по смыслу правки. -->
+        <button class="btn btn-sm btn-secondary" id="blk-bulk-edit-open">Массовая правка через Excel</button>
+      </div>
       <button class="btn btn-secondary" id="blocks-close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Массовая правка ЗР через Excel (2026-09-11) — см. app/block_bulk_edit.py,
+     Docs/block-accounting.md §18. Переиспользует CSS-классы формы ЖБИ
+     (#bulk-edit-backdrop) — тот же внешний вид, но своё, более простое
+     состояние: нет переключателя режима, нет переноса базы, нет выпадающих
+     справочников (правимые поля — свободные числа/даты, выбирать не из чего). -->
+<div class="modal-backdrop" id="blk-bulk-backdrop">
+  <div class="modal modal-sticky" style="max-width:1100px; width:94vw; max-height:88vh;">
+    <div class="modal-sticky-head">
+      <h2>Массовая правка ЗР через Excel</h2>
+      <div class="bulk-edit-steps">
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">1</span>Выгрузить снимок</div>
+          <div class="bulk-edit-controls">
+            <button class="btn btn-secondary" id="blk-bulk-export">Выгрузить в Excel</button>
+          </div>
+          <div class="bulk-edit-status">Активные запланированные работы (ЗР) текущего объекта.</div>
+        </div>
+        <div class="bulk-edit-block bulk-edit-block-file">
+          <div class="bulk-edit-block-title"><span class="step-num">2</span>Выбрать правленый файл</div>
+          <div class="bulk-edit-controls">
+            <input type="file" id="blk-bulk-file" accept=".xlsx"/>
+          </div>
+        </div>
+        <div class="bulk-edit-block">
+          <div class="bulk-edit-block-title"><span class="step-num">3</span>Сверить с базой</div>
+          <div class="bulk-edit-controls">
+            <button class="btn btn-secondary" id="blk-bulk-analyze">Сверить с базой</button>
+          </div>
+          <div class="bulk-edit-status">Ничего не изменит — только покажет расхождения.</div>
+        </div>
+      </div>
+      <div id="blk-bulk-status" class="bulk-edit-status"></div>
+      <!-- Чипы по полю — тот же приём, что у ЖБИ: отметить/снять разом все
+           правки одного столбца, не щёлкая построчно. -->
+      <div id="blk-bulk-fields" class="bulk-edit-fields"></div>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="blk-bulk-intro">
+        <p class="hint-text" style="margin-top:0;">
+          Правятся только «Прогресс выполнения» (вместе с «Датой фиксации прогресса» —
+          это один документ факта, не два независимых поля) и сроки — базовые и
+          актуализированные. Остальные колонки справочные: WBS-путь, блок, вычисленные
+          даты факта. Несколько ЗР одного блока с ОДНОЙ датой фиксации в файле уйдут
+          ОДНИМ документом факта, разные даты — разными документами.
+        </p>
+      </div>
+      <div class="bulk-edit-table-wrap" id="blk-bulk-table-wrap">
+        <table class="bulk-edit-table" id="blk-bulk-table"></table></div>
+      <div id="blk-bulk-rejected" class="bulk-edit-rejected"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div id="blk-bulk-summary" class="bulk-edit-status"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" id="blk-bulk-cancel">Закрыть</button>
+        <button class="btn btn-primary" id="blk-bulk-apply" disabled>Применить отмеченное</button>
+      </div>
     </div>
   </div>
 </div>

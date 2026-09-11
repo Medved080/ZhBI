@@ -88,6 +88,7 @@ from app import work_progress as work_progress_mod
 from app import work_types_import
 from app import work_fact
 from app import block_works
+from app import block_bulk_edit
 from app import report_block_schedule
 from app import pdf_facade_import
 from app import pdf_import
@@ -6879,6 +6880,72 @@ def bulk_block_works_endpoint(object_id: int, body: BlockWorksBulkIn,
                                          body.op, field=body.field, days=body.days)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+# -------- Массовая правка ЗР через Excel (2026-09-11) — аналог
+# /elements/bulk-edit/* (app/element_bulk_edit.py), но объектная: контур
+# «Учёт по блокам» везде идёт по одному объекту (work_progress), общего
+# порога bulk_edit здесь нет. См. app/block_bulk_edit.py.
+
+@app.post("/objects/{object_id}/block-works/bulk-edit/export")
+def block_bulk_edit_export(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        wb = block_bulk_edit.build_export_workbook(conn, object_id)
+    finally:
+        conn.close()
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    activity.log("block_bulk_export", user=user, entity_type="object", entity_id=object_id)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="mfr_block_works_{stamp}.xlsx"'},
+    )
+
+
+@app.post("/objects/{object_id}/block-works/bulk-edit/analyze")
+def block_bulk_edit_analyze(object_id: int, file: UploadFile = File(...),
+                            user: sqlite3.Row = Depends(get_current_user)):
+    """Сверяет загруженный файл с базой и возвращает список расхождений.
+    НИЧЕГО НЕ ПИШЕТ — применение отдельным вызовом ниже."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        payload = read_upload_limited(file.file)
+        try:
+            return block_bulk_edit.analyze(conn, object_id, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+
+class BlockBulkEditApplyIn(BaseModel):
+    # Ровно те строки, что вернул analyze, отфильтрованные флажками. Файл
+    # заново НЕ читается — тот же довод, что у ЖБИ (app/element_bulk_edit.py).
+    changes: list[dict]
+
+
+@app.post("/objects/{object_id}/block-works/bulk-edit/apply")
+def block_bulk_edit_apply(object_id: int, body: BlockBulkEditApplyIn,
+                          user: sqlite3.Row = Depends(get_current_user)):
+    if not body.changes:
+        raise HTTPException(status_code=400, detail="Не отмечено ни одного изменения")
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        backup_before_import(f"массовая правка ЗР через Excel (объект {object_id})",
+                             audit_display_name(user), user["id"])
+        try:
+            return block_bulk_edit.apply_changes(conn, object_id, body.changes, user["id"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     finally:
         conn.close()
 
