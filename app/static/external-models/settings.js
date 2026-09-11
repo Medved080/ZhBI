@@ -97,7 +97,7 @@ export function renderExternalModelsPanel(container, deps) {
     const { ensureExternalModelsLoaded } = await import("/static/external-models/app-bridge.js");
     const { extractWallSegmentsFromGroup, autoAlignFacade, candidateToPlacement } = await ensureExternalModelsLoaded();
     const fbxSegments = extractWallSegmentsFromGroup(THREE, group, sourceAnchorMm);
-    const result = autoAlignFacade({ fbxSegments, objectSegments: featuresRes.segments });
+    const result = await autoAlignFacade({ fbxSegments, objectSegments: featuresRes.segments });
     const statusMap = { insufficient_geometry: "insufficient", ambiguous: "ambiguous", low_confidence: "low_confidence", confident: "confident" };
     const sourceAnchorXY = [sourceAnchorMm[0], sourceAnchorMm[1]];
     const projectAnchorXY = [model.object_anchor_mm.x, model.object_anchor_mm.y];

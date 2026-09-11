@@ -22,6 +22,16 @@
 
 import { rotateXY, placementFromGlobalTransform } from "./coordinates.js";
 
+/** Уступка циклу событий между дорогими шагами поиска (не даёт разбору
+ * подряд нескольких секунд занимать основной поток целиком — задание
+ * §«обеспечить... отсутствие блокировки UI при длительном расчёте»).
+ * Работает и в браузере, и в Node (тесты) — setTimeout(0) достаточно,
+ * отдельного планировщика/воркера не заводим. НЕ отменяет уже начатый
+ * расчёт (полноценная отмена не реализована — см. Docs/OPEN.md). */
+function yieldToEventLoop() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 // ==================== направления ====================
 
 /** Гистограмма направлений (мод 180° — линии неориентированы), взвешенная
@@ -396,64 +406,169 @@ export function weightedProcrustes2D(pairs) {
 
 // ==================== ICP-уточнение ====================
 
+function nowMs() {
+  return (typeof performance !== "undefined" ? performance : Date).now();
+}
+
 /**
  * Уточняет (theta,t) итерационным ближайшим соответствием точка→отрезок,
  * с отсечением худших по невязке пар (устойчивость к выбросам/неполному
  * перекрытию). Каждая итерация решает ГЛОБАЛЬНО оптимальный поворот+
  * перенос для ТЕКУЩИХ соответствий (weightedProcrustes2D). После цикла —
  * ОТДЕЛЬНАЯ финальная оценка coverage/rms по ПОЛНОМУ набору точек и
- * ПОСЛЕДНЕМУ обновлённому transform (исправление: раньше coverage/rms
- * относились к соответствиям, найденным ДО последнего обновления
- * theta/t — по сути к предыдущему, а не итоговому положению; и считались
- * только по `kept` — обрезанному набору, что завышало coverage. Docs/
- * fbx-placement-repair-claude-prompt.md §2).
+ * ПОСЛЕДНЕМУ обновлённому transform (не по `kept` — обрезанному набору
+ * ДО обновления, что раньше занижало точность и завышало coverage).
+ *
+ * Сходимость проверяется ПО СМЕЩЕНИЮ САМИХ ТОЧЕК ЗДАНИЯ (полная
+ * трансформация применена к fbxPoints до/после шага), а не по «сырому»
+ * изменению theta/t — при больших абсолютных C-координатах даже
+ * небольшое изменение угла даёт большой компенсирующий сдвиг t почти
+ * при неподвижном самом здании; сравнение t напрямую ложно считало бы
+ * это «не сошлось». Возвращает `iterations`/`stopReason` — исчерпание
+ * лимита итераций НЕ считается сходимостью (`stopReason:'maxIters'` ≠
+ * `converged:true`). Docs/fbx-fine-placement-claude-prompt.md §1-2.
  */
+/**
+ * Оценка coverage/rms/matches для ДАННОГО transform на ДАННОМ радиусе
+ * поиска соответствий — общая функция для icpRefine (внутренний цикл) и
+ * для ПОВТОРНОЙ, СРАВНИМОЙ оценки уже уточнённых кандидатов на исходном
+ * (грубом) радиусе, которым оценивались остальные (Docs/fbx-fine-
+ * placement-claude-prompt.md): coverage/rms на УЗКОМ финальном радиусе
+ * точного уточнения (сотни мм) НЕЛЬЗЯ напрямую сравнивать с coverage/rms
+ * на широком радиусе грубого поиска (3000мм) — при прочих равных узкий
+ * радиус всегда даёт МЕНЬШИЙ coverage просто по своей природе, даже если
+ * итоговое положение куда точнее. Раньше это приводило к тому, что более
+ * точный (после уточнения) кандидат проигрывал менее точному просто
+ * из-за разных по смыслу чисел — подтверждено живой проверкой на
+ * реальном объекте анонимной копии.
+ */
+export function evaluateTransform(fbxPoints, objectSegments, objectIndex, theta, t, maxDist) {
+  let sqSum = 0, count = 0;
+  const matches = [];
+  for (const p of fbxPoints) {
+    const [rx, ry] = rotateXY(theta, p.x, p.y);
+    const nn = nearestOnIndexedSegments(rx + t[0], ry + t[1], objectSegments, objectIndex, maxDist);
+    if (nn) {
+      matches.push({ ax: p.x, ay: p.y, bx: nn.x, by: nn.y, dist: nn.distance, part: p.part });
+      sqSum += nn.distance * nn.distance;
+      count++;
+    }
+  }
+  return {
+    matches,
+    coverage: fbxPoints.length > 0 ? count / fbxPoints.length : 0,
+    rmsResidualMm: count > 0 ? Math.sqrt(sqSum / count) : Infinity,
+    inlierCount: count,
+  };
+}
+
 export function icpRefine({ fbxPoints, objectSegments, objectIndex, thetaInit, tInit, opts = {} }) {
   const maxIters = opts.maxIters ?? 12;
   const maxDist = opts.maxDist ?? 3000;
   const trimFrac = opts.trimFrac ?? 0.2;
-  const convergeTol = opts.convergeTol ?? 1e-4;
+  const convergeTolMm = opts.convergeTolMm ?? 0.05;
+  const maxTimeMs = opts.maxTimeMs ?? Infinity;
+  const t0 = nowMs();
   let theta = thetaInit;
   let t = [tInit[0], tInit[1]];
-  let prevKeptRms = Infinity;
 
   function evaluate(th, tt) {
-    let sqSum = 0, count = 0;
-    const matches = [];
-    for (const p of fbxPoints) {
-      const [rx, ry] = rotateXY(th, p.x, p.y);
-      const nn = nearestOnIndexedSegments(rx + tt[0], ry + tt[1], objectSegments, objectIndex, maxDist);
-      if (nn) {
-        matches.push({ ax: p.x, ay: p.y, bx: nn.x, by: nn.y, dist: nn.distance, part: p.part });
-        sqSum += nn.distance * nn.distance;
-        count++;
-      }
-    }
-    return {
-      matches,
-      coverage: fbxPoints.length > 0 ? count / fbxPoints.length : 0,
-      rmsResidualMm: count > 0 ? Math.sqrt(sqSum / count) : Infinity,
-      inlierCount: count,
-    };
+    return evaluateTransform(fbxPoints, objectSegments, objectIndex, th, tt, maxDist);
   }
 
-  let converged = false;
-  for (let iter = 0; iter < maxIters; iter++) {
+  function pointPositions(th, tt) {
+    return fbxPoints.map((p) => {
+      const [rx, ry] = rotateXY(th, p.x, p.y);
+      return [rx + tt[0], ry + tt[1]];
+    });
+  }
+
+  let prevPositions = null;
+  let iterations = 0;
+  let stopReason = "maxIters";
+  for (; iterations < maxIters; iterations++) {
+    if (nowMs() - t0 > maxTimeMs) { stopReason = "timeBudget"; break; }
     const { matches } = evaluate(theta, t);
-    if (matches.length < 3) break;
+    if (matches.length < 3) { stopReason = "tooFewMatches"; break; }
     matches.sort((a, b) => a.dist - b.dist);
     const keepCount = Math.max(3, Math.ceil(matches.length * (1 - trimFrac)));
     const kept = matches.slice(0, keepCount);
     const solved = weightedProcrustes2D(kept.map((m) => ({ ax: m.ax, ay: m.ay, bx: m.bx, by: m.by, w: 1 })));
-    if (!solved) break;
+    if (!solved) { stopReason = "degenerate"; break; }
     theta = solved.theta; t = [solved.tx, solved.ty];
-    const keptRms = Math.sqrt(kept.reduce((s, m) => s + m.dist * m.dist, 0) / kept.length);
-    if (Math.abs(keptRms - prevKeptRms) < convergeTol) { converged = true; prevKeptRms = keptRms; break; }
-    prevKeptRms = keptRms;
+    const curPositions = pointPositions(theta, t);
+    if (prevPositions) {
+      let maxShift = 0;
+      for (let i = 0; i < curPositions.length; i++) {
+        const d = Math.hypot(curPositions[i][0] - prevPositions[i][0], curPositions[i][1] - prevPositions[i][1]);
+        if (d > maxShift) maxShift = d;
+      }
+      if (maxShift < convergeTolMm) { stopReason = "converged"; iterations++; prevPositions = curPositions; break; }
+    }
+    prevPositions = curPositions;
   }
 
   const final = evaluate(theta, t);
-  return { theta, t, converged, coverage: final.coverage, rmsResidualMm: final.rmsResidualMm, inlierCount: final.inlierCount };
+  return {
+    theta, t, converged: stopReason === "converged", iterations, stopReason,
+    coverage: final.coverage, rmsResidualMm: final.rmsResidualMm, inlierCount: final.inlierCount,
+  };
+}
+
+/**
+ * Точное уточнение УЖЕ найденного кандидата — сужающийся радиус поиска
+ * соответствий (по умолчанию 3000→1000→400→120мм), на каждом шаге
+ * бОльший лимит итераций и более строгая сходимость, чем у грубого
+ * поиска. Идея — после того, как поворот/перенос уже близки к верным,
+ * широкий радиус (нужный ТОЛЬКО чтобы вообще НАЙТИ здание) начинает
+ * мешать: он одинаково охотно цепляется за случайную соседнюю стену
+ * (внутреннюю переборку, параллельный пролёт) — сужение радиуса
+ * заставляет соответствия идти именно к БЛИЖАЙШЕЙ, скорее всего верной,
+ * поверхности. Если на каком-то шаге соответствий стало < 3 (радиус
+ * слишком узкий для факта — например, реальный отступ облицовки от
+ * несущей стены превышает эту ступень), результат этого шага
+ * ОТБРАСЫВАЕТСЯ и возвращается положение с ПРЕДЫДУЩЕГО шага — не жёсткий
+ * миллиметровый допуск, а адаптивная остановка на том радиусе, на
+ * котором соответствия ещё есть (Docs/fbx-fine-placement-claude-
+ * prompt.md §3, §6).
+ */
+export async function fineRefine({ fbxPoints, objectSegments, thetaInit, tInit, opts = {} }) {
+  const schedule = opts.radiusScheduleMm ?? [3000, 1000, 400, 120];
+  const maxTimeMsTotal = opts.maxTimeMsTotal ?? 1500;
+  const t0 = nowMs();
+  let theta = thetaInit, t = [tInit[0], tInit[1]];
+  let iterations = 0;
+  let stopReason = "notRun";
+  let ran = false;
+  for (const maxDist of schedule) {
+    await yieldToEventLoop();
+    if (nowMs() - t0 > maxTimeMsTotal) { stopReason = "timeBudget"; break; }
+    const index = buildSegmentGridIndex(objectSegments, Math.max(maxDist / 2, 100));
+    const remainingMs = Math.max(50, maxTimeMsTotal - (nowMs() - t0));
+    const icp = icpRefine({
+      fbxPoints, objectSegments, objectIndex: index, thetaInit: theta, tInit: t,
+      opts: { maxIters: opts.maxItersPerStage ?? 80, maxDist, trimFrac: opts.trimFrac ?? 0.2, convergeTolMm: opts.convergeTolMm ?? 0.01, maxTimeMs: remainingMs },
+    });
+    if (icp.inlierCount < 3) {
+      // Радиус этой ступени слишком узок для фактической геометрии
+      // (например, реальный зазор облицовка/несущая стена) — остаёмся на
+      // положении с предыдущей, более широкой ступени, не откатываемся к
+      // худшему и не считаем это провалом всего уточнения.
+      stopReason = ran ? "radiusTooTight" : "tooFewMatches";
+      break;
+    }
+    theta = icp.theta; t = icp.t;
+    iterations += icp.iterations;
+    stopReason = icp.stopReason;
+    ran = true;
+  }
+  const finalIndex = buildSegmentGridIndex(objectSegments, Math.max(schedule[schedule.length - 1] / 2, 100));
+  const final = icpRefine({ fbxPoints, objectSegments, objectIndex: finalIndex, thetaInit: theta, tInit: t, opts: { maxIters: 1, maxDist: schedule[schedule.length - 1] } });
+  return {
+    theta, t, iterations, stopReason, ran,
+    coverage: final.coverage, rmsResidualMm: final.rmsResidualMm, inlierCount: final.inlierCount,
+    timingMs: Math.round(nowMs() - t0),
+  };
 }
 
 // ==================== оценка кандидата и решение ====================
@@ -501,7 +616,7 @@ function sameTransform(a, b, angleTolDeg = 3, transTolMm = 500) {
  * Масштаб не меняется (Rz — чистый поворот), отражение невозможно
  * (Procrustes без отражения). Z не участвует и не возвращается.
  */
-export function autoAlignFacade({ fbxSegments, objectSegments, limits = {} }) {
+export async function autoAlignFacade({ fbxSegments, objectSegments, limits = {} }) {
   const t0 = (typeof performance !== "undefined" ? performance : Date).now();
   const minSegments = limits.minSegments ?? 20;
   if (!fbxSegments || fbxSegments.length < minSegments || !objectSegments || objectSegments.length < minSegments) {
@@ -555,12 +670,18 @@ export function autoAlignFacade({ fbxSegments, objectSegments, limits = {} }) {
   const objectIndex = buildSegmentGridIndex(objectSegments, limits.gridCellMm ?? 2000);
   const maxDist = limits.icpMaxDistMm ?? 3000;
 
+  // Грубый поиск — быстрый и НАМЕРЕННО не точный (маленький maxIters,
+  // широкий maxDist): нужен только чтобы отсеять заведомо плохие старты
+  // и найти несколько существенно разных ПРИБЛИЗИТЕЛЬНО верных положений;
+  // тратить время точного уточнения на все комбинации поворотов×стартов
+  // не нужно (Docs/fbx-fine-placement-claude-prompt.md §1).
   const rawResults = [];
   for (const rc of rotationCandidates) {
     const seeds = initialTranslationSeeds(rc.theta, fbxParts, fbxSegments, objectParts, objectSegments);
     for (const tInit of seeds) {
+      await yieldToEventLoop();
       const icp = icpRefine({ fbxPoints, objectSegments, objectIndex, thetaInit: rc.theta, tInit, opts: {
-        maxIters: limits.icpMaxIters ?? 12, maxDist, trimFrac: limits.icpTrimFrac ?? 0.2,
+        maxIters: limits.icpMaxItersCoarse ?? 12, maxDist, trimFrac: limits.icpTrimFrac ?? 0.2, convergeTolMm: 1,
       } });
       const perPart = perPartScores(icp.theta, icp.t, fbxParts, objectSegments, objectIndex, maxDist);
       const worstPartCoverage = perPart.length ? Math.min(...perPart.map((b) => b.coverage)) : 0;
@@ -568,18 +689,85 @@ export function autoAlignFacade({ fbxSegments, objectSegments, limits = {} }) {
     }
   }
 
+  // Сравнение кандидатов: небольшое (< coverageTieEps) преимущество по
+  // coverage НЕ должно перевешивать явно лучшую невязку — широкий радиус
+  // грубого поиска одинаково охотно засчитывает случайное совпадение с
+  // соседней стеной, поэтому «больше точек внутри 3м» само по себе не
+  // значит «более верное положение» (Docs/fbx-fine-placement-claude-
+  // prompt.md §4). Существенная разница coverage по-прежнему решает —
+  // кандидат, покрывающий вдвое меньше здания, объективно хуже.
+  const coverageTieEps = limits.coverageTieEps ?? 0.03;
+  function compareResults(a, b) {
+    const covDiff = b.coverage - a.coverage;
+    if (Math.abs(covDiff) > coverageTieEps) return covDiff;
+    return a.rmsResidualMm - b.rmsResidualMm;
+  }
+
   // Дедупликация по ПОЛНОМУ положению (угол и перенос) — независимые
   // старты, сошедшиеся к одному и тому же ответу, не должны считаться
   // «двумя разными кандидатами» при оценке неоднозначности.
-  const results = [];
-  for (const r of rawResults) {
-    const existing = results.find((e) => sameTransform(e, r));
-    if (!existing) { results.push(r); continue; }
-    if (r.coverage > existing.coverage || (r.coverage === existing.coverage && r.rmsResidualMm < existing.rmsResidualMm)) {
-      Object.assign(existing, r);
+  function dedupResults(list) {
+    const out = [];
+    for (const r of list) {
+      const existing = out.find((e) => sameTransform(e, r));
+      if (!existing) { out.push({ ...r }); continue; }
+      if (compareResults(r, existing) < 0) Object.assign(existing, r);
     }
+    out.sort(compareResults);
+    return out;
   }
-  results.sort((a, b) => (b.coverage - a.coverage) || (a.rmsResidualMm - b.rmsResidualMm));
+
+  const coarseResults = dedupResults(rawResults);
+
+  // Точное уточнение — ТОЛЬКО для нескольких лучших существенно разных
+  // грубых кандидатов (не для всех стартов, включая заведомо плохие):
+  // сужающийся радиус соответствий и адаптивная сходимость по смещению
+  // точек, не по числу итераций (см. fineRefine выше).
+  const maxFineCandidates = limits.maxFineCandidates ?? 3;
+  const fineViabilityCoverage = limits.fineViabilityCoverage ?? 0.15;
+  const fineRefinements = [];
+  const refinedResults = [];
+  for (let idx = 0; idx < coarseResults.length; idx++) {
+    const r = coarseResults[idx];
+    if (idx >= maxFineCandidates || r.coverage < fineViabilityCoverage) { refinedResults.push(r); continue; }
+    await yieldToEventLoop();
+    const fine = await fineRefine({
+      fbxPoints, objectSegments, thetaInit: r.theta, tInit: r.t,
+      opts: {
+        radiusScheduleMm: limits.fineRadiusScheduleMm, maxTimeMsTotal: limits.fineMaxTimeMsTotal ?? 1500,
+        maxItersPerStage: limits.fineMaxItersPerStage, convergeTolMm: limits.fineConvergeTolMm,
+      },
+    });
+    fineRefinements.push({
+      coverageBefore: r.coverage, coverageAfter: fine.coverage,
+      rmsBefore: r.rmsResidualMm, rmsAfter: fine.rmsResidualMm,
+      iterations: fine.iterations, stopReason: fine.stopReason, timingMs: fine.timingMs,
+    });
+    // Точный радиус мог законно НЕ найти соответствий (например, реальный
+    // отступ облицовки от несущей стены) — fineRefine в этом случае сам
+    // остаётся на положении с более широкой ступени (ran=true) либо,
+    // если ни одна ступень не дала совпадений вовсе (ran=false),
+    // сохраняем грубый результат как есть, не подставляя худшее.
+    if (!fine.ran) { refinedResults.push(r); continue; }
+    // ВАЖНО: coverage/rms для отбора/сортировки — на ТОМ ЖЕ грубом
+    // радиусе (maxDist), которым оценивались ВСЕ остальные кандидаты, а
+    // не на узком финальном радиусе точного уточнения (fine.coverage) —
+    // иначе более точный кандидат нечестно проигрывает менее точному
+    // просто из-за более строгого мерила (см. evaluateTransform выше).
+    // Точная (узкая) невязка сохраняется отдельно, для показа человеку.
+    const atCoarseRadius = evaluateTransform(fbxPoints, objectSegments, objectIndex, fine.theta, fine.t, maxDist);
+    const perPart = perPartScores(fine.theta, fine.t, fbxParts, objectSegments, objectIndex, maxDist);
+    const worstPartCoverage = perPart.length ? Math.min(...perPart.map((b) => b.coverage)) : 0;
+    refinedResults.push({
+      theta: fine.theta, t: fine.t, coverage: atCoarseRadius.coverage, rmsResidualMm: atCoarseRadius.rmsResidualMm, worstPartCoverage, perPart,
+      refined: true, refineIterations: fine.iterations, refineStopReason: fine.stopReason,
+      fineRmsResidualMm: fine.rmsResidualMm, fineCoverage: fine.coverage,
+    });
+  }
+
+  // После точного уточнения независимые грубые старты могли сойтись к
+  // ОДНОМУ И ТОМУ ЖЕ истинному положению — передедуплицировать.
+  const results = dedupResults(refinedResults);
 
   const timingMs = Math.round(((typeof performance !== "undefined" ? performance : Date).now()) - t0);
   const diagnostics = {
@@ -588,7 +776,8 @@ export function autoAlignFacade({ fbxSegments, objectSegments, limits = {} }) {
     fbxPartCount: fbxParts.length, objectPartCount: objectParts.length,
     fbxPartCountTotal: fbxPartsAll.length, objectPartCountTotal: objectPartsAll.length,
     fbxSampleCount: fbxPoints.length,
-    distinctResultCount: results.length,
+    coarseResultCount: coarseResults.length, distinctResultCount: results.length,
+    fineRefinements,
   };
 
   if (!results.length) {
@@ -598,6 +787,11 @@ export function autoAlignFacade({ fbxSegments, objectSegments, limits = {} }) {
   const toCandidateOut = (r) => ({
     theta: r.theta, tXY: r.t,
     coverage: r.coverage, rmsResidualMm: r.rmsResidualMm, worstPartCoverage: r.worstPartCoverage, perPart: r.perPart,
+    refined: !!r.refined, refineIterations: r.refineIterations, refineStopReason: r.refineStopReason,
+    // Невязка НА УЗКОМ радиусе точного уточнения — точнее отражает
+    // фактическое совпадение геометрии там, где точное уточнение
+    // сработало; отсутствует, если кандидат не уточнялся.
+    fineRmsResidualMm: r.fineRmsResidualMm, fineCoverage: r.fineCoverage,
   });
 
   // Пороги — явные, проверены на синтетике (scripts/verify_auto_align.mjs)

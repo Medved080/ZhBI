@@ -164,24 +164,25 @@ function addNoise(segments, ampMm, seed = 1) {
   const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
   const fbxSegments = local;
 
-  const result = autoAlignFacade({ fbxSegments, objectSegments });
+  const result = await autoAlignFacade({ fbxSegments, objectSegments });
   assertTrue(result.status === "confident", `точный случай даёт status=confident (получено ${result.status}: ${result.reason || ""})`);
   if (result.candidates.length) {
     const c = result.candidates[0];
     const gotThetaDeg = (c.theta * 180) / Math.PI;
     const angDiff = Math.min(Math.abs(gotThetaDeg - thetaTrueDeg), 360 - Math.abs(gotThetaDeg - thetaTrueDeg));
-    assertTrue(angDiff < 1, `точный угол восстановлен (истинный ${thetaTrueDeg}°, получен ${gotThetaDeg.toFixed(2)}°)`);
-    assertClose(c.tXY[0], tTrue[0], 500, "точный перенос X восстановлен (допуск 500мм)");
-    assertClose(c.tXY[1], tTrue[1], 500, "точный перенос Y восстановлен (допуск 500мм)");
+    assertTrue(angDiff < 0.01, `точный угол восстановлен с точностью до сотых градуса после точного уточнения (истинный ${thetaTrueDeg}°, получен ${gotThetaDeg.toFixed(4)}°)`);
+    assertClose(c.tXY[0], tTrue[0], 1, "точный перенос X восстановлен (допуск 1мм — после точного уточнения)");
+    assertClose(c.tXY[1], tTrue[1], 1, "точный перенос Y восстановлен (допуск 1мм — после точного уточнения)");
     assertTrue(c.coverage > 0.8, `высокое покрытие для точного случая (${(c.coverage * 100).toFixed(0)}%)`);
     assertTrue(c.worstPartCoverage > 0.5, `обе части (башня И низкий корпус) хорошо покрыты, не только крупная (худшая ${(c.worstPartCoverage * 100).toFixed(0)}%)`);
+    assertTrue(c.refined === true, "кандидат прошёл этап точного уточнения (refined=true)");
 
     const [sample] = fbxSegments;
     const [rx, ry] = rotateXY(c.theta, sample.x1, sample.y1);
     const gotX = rx + c.tXY[0], gotY = ry + c.tXY[1];
     const [ox, oy] = rotateXY(thetaTrue, sample.x1, sample.y1);
-    assertClose(gotX, ox + tTrue[0], 500, "проекция первой вершины совпадает с истинной (X)");
-    assertClose(gotY, oy + tTrue[1], 500, "проекция первой вершины совпадает с истинной (Y)");
+    assertClose(gotX, ox + tTrue[0], 1, "проекция первой вершины совпадает с истинной (X, допуск 1мм)");
+    assertClose(gotY, oy + tTrue[1], 1, "проекция первой вершины совпадает с истинной (Y, допуск 1мм)");
 
     const sourceAnchorXY = [0, 0];
     const projectAnchorXY = [0, 0];
@@ -195,6 +196,65 @@ function addNoise(segments, ampMm, seed = 1) {
   }
 }
 
+// ==================== 3б. строгая приёмка ≤1мм (Docs/fbx-fine-placement-claude-prompt.md) ====================
+//
+// Максимальная ошибка НЕЗАВИСИМЫХ контрольных точек (не только одной
+// вершины, использованной в §3) — по ВСЕМ вершинам здания, оба знака
+// угла, большие исходные координаты (реалистичный масштаб генплана,
+// ~13 млн мм), разные (не нулевые) anchors источника/объекта, повторный
+// запуск/«пересохранение» без накопления поправок.
+
+function maxVertexError(segments, theta, tXY, thetaTrue, tTrue) {
+  let maxErr = 0;
+  for (const s of segments) {
+    for (const [x, y] of [[s.x1, s.y1], [s.x2, s.y2]]) {
+      const [rx, ry] = rotateXY(theta, x, y);
+      const gotX = rx + tXY[0], gotY = ry + tXY[1];
+      const [ex, ey] = rotateXY(thetaTrue, x, y).map((v, i) => v + tTrue[i]);
+      const err = Math.hypot(gotX - ex, gotY - ey);
+      if (err > maxErr) maxErr = err;
+    }
+  }
+  return maxErr;
+}
+
+for (const thetaTrueDeg of [37, -37, 143, -143]) {
+  const local = localBuildingSegments();
+  const thetaTrue = (thetaTrueDeg * Math.PI) / 180;
+  // Большие исходные координаты — реалистичный масштаб генплана (не 0,0).
+  const tTrue = [13281000 + 111000, 10662000 - 222000];
+  const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
+  const result = await autoAlignFacade({ fbxSegments: local, objectSegments });
+  if (result.status !== "confident" || !result.candidates.length) {
+    assertTrue(false, `строгая приёмка: угол ${thetaTrueDeg}° должен давать confident (получено ${result.status})`);
+    continue;
+  }
+  const c = result.candidates[0];
+  const maxErr = maxVertexError(local, c.theta, c.tXY, thetaTrue, tTrue);
+  assertTrue(maxErr <= 1, `строгая приёмка: угол ${thetaTrueDeg}°, большие координаты — максимальная ошибка вершины ${maxErr.toFixed(4)}мм ≤ 1мм`);
+
+  // Разные (не нулевые) anchors источника/объекта — placement и повторное
+  // применение (имитация reload/пересохранения) должны давать ТО ЖЕ
+  // положение, без накопления поправок.
+  const sourceAnchorXY = [1234, -5678];
+  const projectAnchorXY = [987654, -123456];
+  const placement1 = candidateToPlacement(c, sourceAnchorXY, projectAnchorXY);
+  // "Повторное сохранение": тот же кандидат, применённый ещё раз через
+  // canonicalToProject/placementFromGlobalTransform, не должен смещаться.
+  const placement2 = candidateToPlacement(c, sourceAnchorXY, projectAnchorXY);
+  assertClose(placement1.offsetXMm, placement2.offsetXMm, 1e-9, `угол ${thetaTrueDeg}°: повторное вычисление placement не накапливает поправку (X)`);
+  assertClose(placement1.rotationDeg, placement2.rotationDeg, 1e-9, `угол ${thetaTrueDeg}°: повторное вычисление placement не накапливает поправку (поворот)`);
+
+  const [sample] = local;
+  const projected = canonicalToProject(
+    [sample.x1, sample.y1, 0], [sourceAnchorXY[0], sourceAnchorXY[1], 0], [projectAnchorXY[0], projectAnchorXY[1], 0],
+    placement1.offsetXMm, placement1.offsetYMm, 0, placement1.rotationDeg,
+  );
+  const [rx, ry] = rotateXY(c.theta, sample.x1, sample.y1);
+  assertClose(projected[0], rx + c.tXY[0], 1e-6, `угол ${thetaTrueDeg}°: placement с ненулевыми anchors согласован с сырым transform (X)`);
+  assertClose(projected[1], ry + c.tXY[1], 1e-6, `угол ${thetaTrueDeg}°: placement с ненулевыми anchors согласован с сырым transform (Y)`);
+}
+
 // ==================== 4. устойчивость к шуму/неполноте ====================
 
 {
@@ -205,7 +265,7 @@ function addNoise(segments, ampMm, seed = 1) {
   objectSegments = addNoise(objectSegments, 40, 7); // ±40мм — реалистичный шум обмера/триангуляции
   const fbxSegments = addNoise(local, 15, 3); // ±15мм — точность геометрии из FBX
 
-  const result = autoAlignFacade({ fbxSegments, objectSegments });
+  const result = await autoAlignFacade({ fbxSegments, objectSegments });
   assertTrue(result.status === "confident", `шум ±15-40мм не мешает status=confident (получено ${result.status})`);
   if (result.candidates.length) {
     const c = result.candidates[0];
@@ -224,7 +284,7 @@ function addNoise(segments, ampMm, seed = 1) {
   const objectSegments = applyGlobalTransform(localBuildingSegments(), thetaTrue, tTrue); // объект — полный
   const fbxSegments = local; // модель — неполная
 
-  const result = autoAlignFacade({ fbxSegments, objectSegments });
+  const result = await autoAlignFacade({ fbxSegments, objectSegments });
   // Без низкого корпуса у модели остался только несимметричный
   // прямоугольник башни — этого может не хватить, чтобы однозначно
   // отличить верный угол от 180°-зеркального по невязке by object (тоже
@@ -254,7 +314,7 @@ function addNoise(segments, ampMm, seed = 1) {
   const tTrue = [5000, -3000];
   const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
   const fbxSegments = local;
-  const result = autoAlignFacade({ fbxSegments, objectSegments });
+  const result = await autoAlignFacade({ fbxSegments, objectSegments });
   // Симметричный квадрат без пристройки: поворот на 90° даёт РАВНОЕ по
   // качеству совпадение — НЕ должно быть заявлено как confident при
   // отсутствии второго, различающего эти варианты, ориентира.
@@ -269,18 +329,18 @@ function addNoise(segments, ampMm, seed = 1) {
   const objectSegments = rectSegments(100000, 100000, 8000, 8000, 0, 3000).concat(
     rectSegments(100000, 100000, 8000, 8000, 3000, 6000),
   );
-  const result = autoAlignFacade({ fbxSegments, objectSegments });
+  const result = await autoAlignFacade({ fbxSegments, objectSegments });
   assertTrue(result.status === "insufficient_geometry" || result.status === "low_confidence",
     `совершенно другое здание НЕ даёт confident (получено ${result.status})`);
 }
 
 {
-  const result = autoAlignFacade({ fbxSegments: [{ x1: 0, y1: 0, x2: 1000, y2: 0, z0: 0, z1: 3000 }], objectSegments: localBuildingSegments() });
+  const result = await autoAlignFacade({ fbxSegments: [{ x1: 0, y1: 0, x2: 1000, y2: 0, z0: 0, z1: 3000 }], objectSegments: localBuildingSegments() });
   assertTrue(result.status === "insufficient_geometry", "единственный отрезок с одной стороны → insufficient_geometry");
 }
 
 {
-  const result = autoAlignFacade({ fbxSegments: [], objectSegments: [] });
+  const result = await autoAlignFacade({ fbxSegments: [], objectSegments: [] });
   assertTrue(result.status === "insufficient_geometry", "пустые входы не бросают исключение, дают insufficient_geometry");
 }
 
@@ -291,8 +351,8 @@ function addNoise(segments, ampMm, seed = 1) {
   const thetaTrue = (63 * Math.PI) / 180;
   const tTrue = [42000, -18000];
   const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
-  const r1 = autoAlignFacade({ fbxSegments: local, objectSegments });
-  const r2 = autoAlignFacade({ fbxSegments: local, objectSegments });
+  const r1 = await autoAlignFacade({ fbxSegments: local, objectSegments });
+  const r2 = await autoAlignFacade({ fbxSegments: local, objectSegments });
   assertTrue(r1.status === r2.status, "повторный запуск на тех же данных даёт тот же статус");
   if (r1.candidates.length && r2.candidates.length) {
     assertClose(r1.candidates[0].theta, r2.candidates[0].theta, 1e-9, "повторный запуск детерминирован (theta)");
@@ -318,7 +378,7 @@ function addNoise(segments, ampMm, seed = 1) {
   const tTrue = [7000, 9000];
   const objectSegments = applyGlobalTransform(local, thetaTrue, tTrue);
   const t0 = Date.now();
-  const result = autoAlignFacade({ fbxSegments: local, objectSegments });
+  const result = await autoAlignFacade({ fbxSegments: local, objectSegments });
   const elapsed = Date.now() - t0;
   assertTrue(result.status === "confident", `реалистичный случай на боевом пороге даёт confident (получено ${result.status})`);
   assertTrue(result.diagnostics.rotationCandidateCount > 0, "поиск реально сгенерировал кандидатов поворота (не мгновенный отказ)");
@@ -449,7 +509,7 @@ function groupFootprintXY(segments) {
   // вернуло C) под известным глобальным поворотом/переносом.
   const objectSegments = applyGlobalTransform(fbxSegments, thetaTrue, tTrue);
 
-  const result = autoAlignFacade({ fbxSegments, objectSegments });
+  const result = await autoAlignFacade({ fbxSegments, objectSegments });
   assertTrue(result.status === "confident", `сквозной тест: статус confident (получено ${result.status}: ${result.reason || ""})`);
   if (result.candidates.length) {
     const projectAnchorXY = [500000, 500000]; // anchor объекта — тоже не (0,0)
