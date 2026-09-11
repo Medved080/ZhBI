@@ -93,8 +93,8 @@ export function renderExternalModelsPanel(container, deps) {
           Диалог скрыт — мышью сдвиг, с зажатой Control поворот. Управляйте плавающей панелью
           поверх 3D («Готово»/«Отмена») или клавишей Esc.</div>` : ""}
         ${beginCalibration && activeCalibration?.modelId === model.id ? `<div class="hint-text">
-          Диалог скрыт — укажите точки A/B на модели и на объекте плавающей панелью поверх 3D.
-          Esc — отменить всё.</div>` : ""}
+          Диалог скрыт — укажите точки A/B сначала на FBX-файле, потом на конструктиве объекта,
+          плавающей панелью поверх 3D. Esc — отменить всё.</div>` : ""}
         <div class="actions" style="margin-top:8px">
           ${beginPlacement ? `<button type="button" class="btn btn-sm ${activeGesture?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-placement"
             data-model-id="${model.id}" ${(activeGesture && activeGesture.modelId !== model.id) || activeCalibration ? "disabled" : ""}
@@ -102,7 +102,7 @@ export function renderExternalModelsPanel(container, deps) {
             >${activeGesture?.modelId === model.id ? "Настройка…" : "Настроить положение"}</button>` : ""}
           ${beginCalibration ? `<button type="button" class="btn btn-sm ${activeCalibration?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-calibrate"
             data-model-id="${model.id}" ${(activeCalibration && activeCalibration.modelId !== model.id) || activeGesture ? "disabled" : ""}
-            title="Точно совместить по двум ориентирам, общим для модели и объекта"
+            title="Указать 2 общие точки на FBX-файле и на уже имеющемся конструктиве объекта — поворот и сдвиг посчитаются точно"
             >${activeCalibration?.modelId === model.id ? "Идёт калибровка…" : "Совместить по точкам"}</button>` : ""}
           <button type="button" class="btn btn-sm btn-secondary em-recenter" data-model-id="${model.id}">Сцентрировать с объектом</button>
           <button type="button" class="btn btn-sm btn-secondary em-cancel" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Отмена</button>

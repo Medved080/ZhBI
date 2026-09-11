@@ -73,10 +73,15 @@ function fmtPoint(p) {
   return p ? `${fmt(p[0])}, ${fmt(p[1])} мм` : "не указана";
 }
 
+// Явные подписи — "модель"/"объект" в задании путали пользователя (живой
+// вопрос 2026-09-11: "непонятна терминология"). Здесь "модель" — ЭТОТ,
+// только что загруженный FBX-файл (например, фасад); "объект" — ЛЮБАЯ
+// геометрия объекта, УЖЕ отрисованная в этой же 3D-сцене независимо от
+// FBX (у пользователя — конструктив, импортированный из PDF/Revit).
 const PICK_LABELS = {
-  c1: "A на модели", p1: "A на объекте",
-  c2: "B на модели", p2: "B на объекте",
-  c3: "C на модели (проверка)", p3: "C на объекте (проверка)",
+  c1: "A на FBX-файле", p1: "A на конструктиве объекта",
+  c2: "B на FBX-файле", p2: "B на конструктиве объекта",
+  c3: "C на FBX-файле (проверка)", p3: "C на конструктиве (проверка)",
 };
 
 /**
@@ -125,7 +130,7 @@ export function beginPointPairCalibration(opts) {
     const active = activePick === kind;
     return `
       <div style="display:flex; align-items:center; gap:6px; margin:3px 0">
-        <span style="width:120px; flex-shrink:0">${PICK_LABELS[kind]}:</span>
+        <span style="width:170px; flex-shrink:0">${PICK_LABELS[kind]}:</span>
         <span style="flex:1; opacity:.85">${fmtPoint(picks[kind])}</span>
         <button type="button" data-pick="${kind}" style="padding:2px 8px; cursor:pointer; ${active ? "background:#f39c12" : ""}">
           ${active ? "Кликните в 3D…" : "Указать"}</button>
@@ -136,7 +141,7 @@ export function beginPointPairCalibration(opts) {
   function render(state) {
     const calibBlock = state.calib ? `
       <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,.2)">
-        |A−B| на модели: ${fmt(state.calib.uLen)} мм · на объекте: ${fmt(state.calib.vLen)} мм
+        |A−B| на FBX-файле: ${fmt(state.calib.uLen)} мм · на конструктиве объекта: ${fmt(state.calib.vLen)} мм
         (разница ${fmt(state.calib.lengthDiffMm)} мм, отношение ${fmt(state.calib.lengthRatio, 3)})<br/>
         Поворот: ${fmt(state.calib.rotationDeg, 2)}° · Сдвиг: X=${fmt(state.calib.offsetXMm)} Y=${fmt(state.calib.offsetYMm)} мм
       </div>` : "";
@@ -147,8 +152,9 @@ export function beginPointPairCalibration(opts) {
       : "";
     overlay.innerHTML = `
       <div style="font-weight:600; margin-bottom:6px">Совместить по точкам</div>
-      <div style="opacity:.75; margin-bottom:8px">Укажите одну и ту же физическую точку A на модели и на объекте,
-        затем вторую (B) — по ним считаются поворот и сдвиг.</div>
+      <div style="opacity:.75; margin-bottom:8px">Укажите одну и ту же физическую точку A СНАЧАЛА на только что
+        загруженном FBX-файле, ПОТОМ на уже имеющейся геометрии объекта (конструктив из PDF/Revit — что угодно в
+        этой 3D-сцене, кроме самих FBX-слоёв), затем так же вторую точку B — по ним считаются поворот и сдвиг.</div>
       ${pickRow("c1")}${pickRow("p1")}${pickRow("c2")}${pickRow("p2")}
       ${calibBlock}${warnBlock}
       <div style="margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,.2); opacity:${state.calib ? 1 : .4}">
