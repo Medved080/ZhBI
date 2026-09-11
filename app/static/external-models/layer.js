@@ -86,20 +86,16 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
         continue;
       }
       if (myGeneration !== generation || !result) continue; // устарело или отменено
-      // P = source_anchor (РЕАЛЬНЫЕ абсолютные координаты из самого FBX,
-      // см. fbx.js) + ручной сдвиг (0 по умолчанию) — модель встаёт ТУДА,
-      // ГДЕ ЕЁ ПОСТАВИЛ ЭКСПОРТ, никакого автоцентрирования по объекту
-      // (было до 2026-09-11, убрано — см. Docs/DECISIONS.md).
-      const px = model.source_anchor_mm.x + model.offset_mm.x;
-      const py = model.source_anchor_mm.y + model.offset_mm.y;
-      const pz = model.source_anchor_mm.z + model.offset_mm.z;
+      const px = model.object_anchor_mm.x + model.offset_mm.x;
+      const py = model.object_anchor_mm.y + model.offset_mm.y;
+      const pz = model.offset_mm.z || 0; // anchor по Z объекта всегда 0 — только ручной сдвиг
       const v = projectToMfrView([px, py, pz], origin, low);
       result.group.position.set(v[0], v[1], v[2]);
       // Поворот — ВОКРУГ ЦЕНТРА модели (source_anchor уже центрировал
-      // геометрию в 0,0,0 при разборе, см. fbx.js), поэтому здесь просто
-      // поворот group на месте, без пересчёта позиции. Отрицательный угол
-      // — знак ТРИ.js (против часовой при взгляде с +Z) даёт видимый
-      // пользователю поворот ПО часовой при виде сверху.
+      // геометрию в 0,0 по горизонтали при разборе, см. fbx.js), поэтому
+      // здесь просто поворот group на месте, без пересчёта позиции.
+      // Отрицательный угол — знак ТРИ.js (против часовой при взгляде с
+      // +Z) даёт видимый пользователю поворот ПО часовой при виде сверху.
       result.group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rotationRad(model));
       result.group.visible = visibleForKind(model.kind);
       scene.add(result.group);
@@ -127,10 +123,9 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
         continue;
       }
       if (myGeneration !== generation || !result) continue;
-      // P = source_anchor + ручной сдвиг — см. комментарий в attachToMfr.
-      const px = model.source_anchor_mm.x + model.offset_mm.x;
-      const py = model.source_anchor_mm.y + model.offset_mm.y;
-      const pz = model.source_anchor_mm.z + model.offset_mm.z;
+      const px = model.object_anchor_mm.x + model.offset_mm.x;
+      const py = model.object_anchor_mm.y + model.offset_mm.y;
+      const pz = model.offset_mm.z || 0; // anchor по Z объекта всегда 0 — только ручной сдвиг
       const v = projectToZhbiView([px, py, pz]);
       result.group.position.set(v[0], v[1], v[2]);
       const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rotationRad(model));
