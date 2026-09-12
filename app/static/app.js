@@ -10705,6 +10705,14 @@ document.getElementById("view3d-apply").addEventListener("click", async () => {
     document.getElementById("view3d-yaw").value = обновлён.view3d_yaw_deg;
     статус.textContent = "Ракурс сохранён";
     if (state.view3d.active) fit3DCameraToData();
+    // Сцена «Модель МФР» — своя независимая камера (см. applyMfr3DAngles) —
+    // раньше ракурс сюда вообще не долетал, ни сразу, ни после reload.
+    if (mfr3d.camera && mfr3d.controls && mfr3d.home) {
+      // Сцена рисуется непрерывным requestAnimationFrame-циклом
+      // (mfr3d.loop) — новую позицию камеры подхватит следующий кадр
+      // сам, отдельного «перерисовать сейчас» не нужно.
+      applyMfr3DAngles(mfr3d.camera, mfr3d.controls, mfr3d.home);
+    }
   } catch (e) {
     статус.textContent = "Не удалось сохранить: " + e.message;
   }
@@ -31776,7 +31784,31 @@ document.getElementById("mfr-dynamics-to").addEventListener("change", (e) => {
 // в вендоренном наборе нет, и вендорить новое без спроса нельзя.
 
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
-                loop: null, key: null, поколение: 0 };
+                loop: null, key: null, поколение: 0, home: null };
+
+// Персональный ракурс (initial3DAngles — «Действия → Внешний вид →
+// Начальный ракурс 3D», 2026-08-03) для сцены «Модель МФР» — своя
+// независимая камера, до этой правки вообще не читавшая pitch/yaw
+// пользователя (живой отчёт 2026-09-12: настройка молча не действовала
+// здесь). Отдельная функция (не только внутри buildMfr3D) — «Применить»
+// в настройках должен переставить уже открытую камеру БЕЗ пересборки
+// сцены (разбор геометрии заново — дорогая операция), используя
+// сохранённый габарит `home`. Дистанция подобрана так, чтобы совпасть с
+// прежней жёсткой аксонометрией при значениях по умолчанию (30°/−30°).
+function applyMfr3DAngles(camera, controls, home) {
+  if (!camera || !controls || !home) return;
+  const { pitch, yaw } = initial3DAngles();
+  const distance = home.охват * 1.45;
+  const horizontal = distance * Math.cos(pitch * DEG);
+  camera.up.set(0, 0, 1); // Z — вверх, как в модели МФР (не путать со сценой ЖБИ, Y-up)
+  camera.position.set(
+    home.targetX - horizontal * Math.sin(yaw * DEG),
+    home.targetY - horizontal * Math.cos(yaw * DEG),
+    home.targetZ + distance * Math.sin(pitch * DEG),
+  );
+  controls.target.set(home.targetX, home.targetY, home.targetZ);
+  controls.update();
+}
 
 // -------- внешние 3D-модели (благоустройство) в сцене МФР --------
 //
@@ -32550,13 +32582,13 @@ async function buildMfr3D() {
   camera.up.set(0, 0, 1);          // Z — вверх, как в модели
 
   const охват = Math.max(w, h, верх) || 1000;
-  // Взгляд с юго-запада сверху под ~30°: узнаваемая аксонометрия, в
-  // которой сразу читаются и высота, и обе стороны здания. Камера над
-  // серединой модели, а не над началом координат.
-  camera.position.set(w / 2 - охват * 0.9, h / 2 - охват * 0.9, верх + охват * 0.7);
+  // Габарит — на mfr3d, чтобы «Применить» в настройках ракурса (см.
+  // applyMfr3DAngles ниже) мог переставить камеру без пересборки всей
+  // сцены (разбор геометрии заново — дорогая операция).
+  mfr3d.home = { targetX: w / 2, targetY: h / 2, targetZ: верх / 2, охват };
 
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(w / 2, h / 2, верх / 2);
+  applyMfr3DAngles(camera, controls, mfr3d.home);
   // Колесо крутит медленно на дальней камере: шаг наезда пропорционален
   // расстоянию, а оно тут в десятки метров. Ускоряем и наезжаем В КУРСОР —
   // так не приходится сначала приблизиться, потом отдельно доехать.

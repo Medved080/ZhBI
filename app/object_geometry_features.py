@@ -67,7 +67,12 @@ def get_wall_segments(conn: sqlite3.Connection, object_id: int) -> dict:
     ).fetchall()
 
     revision_parts = []
-    by_level: dict = {}  # round(elevation_mm) -> list[(x1,y1,x2,y2,length,z0,z1)]
+    # Группировка отметок с допуском 200мм (было 10мм — задание/аудит
+    # Docs/fbx-partial-envelope-claude-prompt.md §1: два перекрытия одного
+    # реального этажа на 163.6 и 163.7м оказывались РАЗНЫМИ уровнями,
+    # искусственно дробя суммарный периметр этажа и портя отбор ниже).
+    LEVEL_TOLERANCE_MM = 200.0
+    by_level: dict = {}  # round(elevation_mm/200) -> list[(x1,y1,x2,y2,length,z0,z1)]
     total_before_cap = 0
     for r in rows:
         if r["updated_at"]:
@@ -78,7 +83,7 @@ def get_wall_segments(conn: sqlite3.Connection, object_id: int) -> dict:
         total_before_cap += len(edges)
         if not edges:
             continue
-        level_key = round(z0 / 10.0)  # группировка отметок с допуском 10мм
+        level_key = round(z0 / LEVEL_TOLERANCE_MM)
         by_level.setdefault(level_key, []).extend(
             (x1, y1, x2, y2, length, z0, z1) for (x1, y1, x2, y2, length) in edges
         )
@@ -93,10 +98,44 @@ def get_wall_segments(conn: sqlite3.Connection, object_id: int) -> dict:
         return {"source": "none", "segments": [], "segment_count_total": 0,
                 "source_revision": source_revision}
 
-    # Не берём ВСЕ уровни разом (у высотки их может быть полсотни с лишним)
-    # — сохраняем уровни с БОЛЬШИМ суммарным периметром стен: короткие
-    # технические этажи/антресоли не определяют форму здания.
-    levels_sorted = sorted(by_level.items(), key=lambda kv: -sum(e[4] for e in kv[1]))[:MAX_LEVELS]
+    # Не берём ВСЕ уровни разом (у высотки их может быть полсотни с лишним).
+    # Раньше брали «топ-40 по суммарной длине стен» — это СИСТЕМАТИЧЕСКИ
+    # отбрасывало уникальные широкие этажи (например, стилобат/нижнюю
+    # часть с большим количеством помещений сразу) в пользу многочисленных
+    # повторяющихся узких этажей типовой башни, у которых суммарная длина
+    # стен больше просто из-за числа перегородок — подтверждено на
+    # реальном объекте (Docs/fbx-partial-envelope-claude-prompt.md §1):
+    # единственный широкий уровень 149.9м (36.4×54.5м) исчезал из выборки,
+    # клиент получал только башню 17.6×54.5м, и совмещение по низкой части
+    # было в принципе невозможно — ей нечего было сопоставлять.
+    #
+    # Теперь — РАЗНООБРАЗИЕ ПЛАНА: уровни делятся на MAX_LEVELS интервалов
+    # по высоте (равномерно по всему диапазону здания), и внутри каждого
+    # интервала берётся уровень с САМЫМ ШИРОКИМ контуром в плане (по
+    # диагонали bbox), а не с наибольшей суммарной длиной стен — так
+    # уникальный по форме этаж гарантированно представлен независимо от
+    # того, сколько у него внутренних перегородок.
+    def _level_plan_diagonal(edges):
+        xs = [v for e in edges for v in (e[0], e[2])]
+        ys = [v for e in edges for v in (e[1], e[3])]
+        return math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+
+    level_items = sorted(by_level.items(), key=lambda kv: kv[0])  # по возрастанию отметки
+    if len(level_items) <= MAX_LEVELS:
+        levels_sorted = level_items
+    else:
+        min_key = level_items[0][0]
+        max_key = level_items[-1][0]
+        span = max(max_key - min_key, 1)
+        buckets: dict = {}
+        for key, edges in level_items:
+            bucket_idx = min(MAX_LEVELS - 1, int((key - min_key) * MAX_LEVELS / (span + 1)))
+            best = buckets.get(bucket_idx)
+            diag = _level_plan_diagonal(edges)
+            if best is None or diag > best[1]:
+                buckets[bucket_idx] = (key, diag, edges)
+        levels_sorted = [(key, edges) for key, _diag, edges in
+                         sorted(buckets.values(), key=lambda v: v[0])]
 
     segments = []
     for _level_key, edges in levels_sorted:

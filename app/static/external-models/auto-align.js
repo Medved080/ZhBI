@@ -310,20 +310,57 @@ export function orientedExtent(segments, theta) {
  * должно предлагаться (даже как «неоднозначное» — задание §4: «не
  * навязывай выбор одного из трёх [заведомо плохих]»).
  */
-export function checkSizeCompatibility(fbxPart, objectPart, theta, opts = {}) {
-  if (!fbxPart || !objectPart) return { mismatchMm: 0, hardFail: false };
+/**
+ * Соразмерность наружных габаритов — ПОПАРНО между значимыми частями
+ * (не агрегат-vs-агрегат, задание §4.1 — Docs/fbx-partial-envelope-
+ * claude-prompt.md): каждая значимая часть ОБЪЕКТА должна найти хотя бы
+ * одну часть FBX совместимого размера. Части FBX БЕЗ соответствия в
+ * объекте (соседнее здание в кадре экспорта, благоустройство, элементы
+ * кровли) — НЕ ошибка, а «вне применимости»: они просто не засчитываются
+ * ни за, ни против. `hardFail` — только когда НИ ОДНА часть объекта не
+ * нашла совместимую часть FBX (раньше — агрегат ВСЕХ отрезков против
+ * агрегата ВСЕХ отрезков: одна лишняя деталь в FBX — соседнее здание,
+ * дерево на кровле — проваливала проверку целиком, отклоняя ЛЮБОЙ
+ * поворот, включая верный).
+ *
+ * Принимает как одиночную часть ({segments}), так и массив частей —
+ * для обратной совместимости с прежним вызовом на одной паре.
+ */
+export function checkSizeCompatibility(fbxPartsInput, objectPartsInput, theta, opts = {}) {
+  const fbxParts = Array.isArray(fbxPartsInput) ? fbxPartsInput : (fbxPartsInput ? [fbxPartsInput] : []);
+  const objectParts = Array.isArray(objectPartsInput) ? objectPartsInput : (objectPartsInput ? [objectPartsInput] : []);
+  if (!fbxParts.length || !objectParts.length) return { mismatchMm: 0, hardFail: false, matchedObjectPartCount: 0, totalObjectPartCount: objectParts.length };
+
   const toleranceAbsMm = opts.toleranceAbsMm ?? 600;
   const toleranceRel = opts.toleranceRel ?? 0.04;
-  const hardMultiplier = opts.hardMultiplier ?? 2.5;
-  const [fbxAlong, fbxAcross] = orientedExtent(fbxPart.segments, theta);
-  const [objAlong, objAcross] = orientedExtent(objectPart.segments, 0);
-  const tolAlong = Math.max(toleranceAbsMm, toleranceRel * objAlong);
-  const tolAcross = Math.max(toleranceAbsMm, toleranceRel * objAcross);
-  const mismatchAlong = Math.abs(fbxAlong - objAlong);
-  const mismatchAcross = Math.abs(fbxAcross - objAcross);
-  const mismatchMm = Math.max(mismatchAlong, mismatchAcross);
-  const hardFail = mismatchAlong > tolAlong * hardMultiplier || mismatchAcross > tolAcross * hardMultiplier;
-  return { mismatchMm, hardFail, fbxExtent: [fbxAlong, fbxAcross], objectExtent: [objAlong, objAcross] };
+  const fbxExtents = fbxParts.map((p) => orientedExtent(p.segments, theta));
+
+  let matchedCount = 0;
+  let bestMismatchMm = Infinity;
+  const perObjectPart = [];
+  for (const objPart of objectParts) {
+    const [objAlong, objAcross] = orientedExtent(objPart.segments, 0);
+    const tolAlong = Math.max(toleranceAbsMm, toleranceRel * objAlong);
+    const tolAcross = Math.max(toleranceAbsMm, toleranceRel * objAcross);
+    let matched = false;
+    let localBestMismatch = Infinity;
+    for (const [fbxAlong, fbxAcross] of fbxExtents) {
+      const mismatch = Math.max(Math.abs(fbxAlong - objAlong), Math.abs(fbxAcross - objAcross));
+      if (mismatch < localBestMismatch) localBestMismatch = mismatch;
+      if (Math.abs(fbxAlong - objAlong) <= tolAlong && Math.abs(fbxAcross - objAcross) <= tolAcross) matched = true;
+    }
+    if (matched) {
+      matchedCount++;
+      if (localBestMismatch < bestMismatchMm) bestMismatchMm = localBestMismatch;
+    }
+    perObjectPart.push({ matched, mismatchMm: localBestMismatch, objectExtent: [objAlong, objAcross] });
+  }
+  const hardFail = matchedCount === 0;
+  return {
+    hardFail,
+    mismatchMm: Number.isFinite(bestMismatchMm) ? bestMismatchMm : Math.min(...perObjectPart.map((p) => p.mismatchMm)),
+    matchedObjectPartCount: matchedCount, totalObjectPartCount: objectParts.length, perObjectPart,
+  };
 }
 
 /** Начальные переносы-кандидаты для поворота theta — ОДИН по самой
@@ -399,16 +436,38 @@ function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
 export function buildSegmentGridIndex(segments, cellSize) {
   const grid = new Map();
   const key = (cx, cy) => cx + "," + cy;
+  const add = (cx, cy, i) => {
+    const k = key(cx, cy);
+    let arr = grid.get(k);
+    if (!arr) { arr = []; grid.set(k, arr); }
+    if (arr[arr.length - 1] !== i) arr.push(i); // соседние шаги вдоль отрезка часто попадают в ту же ячейку
+  };
   segments.forEach((s, i) => {
     const minX = Math.min(s.x1, s.x2), maxX = Math.max(s.x1, s.x2);
     const minY = Math.min(s.y1, s.y2), maxY = Math.max(s.y1, s.y2);
     const cx0 = Math.floor(minX / cellSize), cx1 = Math.floor(maxX / cellSize);
     const cy0 = Math.floor(minY / cellSize), cy1 = Math.floor(maxY / cellSize);
-    for (let cx = cx0; cx <= cx1; cx++) {
-      for (let cy = cy0; cy <= cy1; cy++) {
-        const k = key(cx, cy);
-        if (!grid.has(k)) grid.set(k, []);
-        grid.get(k).push(i);
+    const cellCount = (cx1 - cx0 + 1) * (cy1 - cy0 + 1);
+    // Заливка ВСЕГО bbox — дёшево для типичной (почти горизонтальной или
+    // почти вертикальной) стены, но КВАДРАТИЧНА по длине для диагонального
+    // отрезка при мелкой ячейке (bbox почти квадратный) — на реальных
+    // стенах с непрямоугольными участками это оказалось узким местом на
+    // мелких ступенях точного уточнения (живая проверка на объектах 3/4
+    // анонимной копии, 2026-09-12: построение индекса заняло секунды).
+    // При большом bbox — вставляем ТОЛЬКО ячейки, которые отрезок реально
+    // пересекает (шаг вдоль отрезка), а не весь его прямоугольник.
+    if (cellCount <= 400) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        for (let cy = cy0; cy <= cy1; cy++) add(cx, cy, i);
+      }
+    } else {
+      const dx = s.x2 - s.x1, dy = s.y2 - s.y1;
+      const len = Math.hypot(dx, dy) || 1;
+      const steps = Math.max(1, Math.ceil(len / (cellSize * 0.5)));
+      for (let step = 0; step <= steps; step++) {
+        const t = step / steps;
+        const x = s.x1 + dx * t, y = s.y1 + dy * t;
+        add(Math.floor(x / cellSize), Math.floor(y / cellSize), i);
       }
     }
   });
@@ -420,14 +479,19 @@ export function nearestOnIndexedSegments(px, py, segments, index, maxDist) {
   const cx = Math.floor(px / cellSize), cy = Math.floor(py / cellSize);
   let best = null;
   let bestDist = maxDist;
-  // ВСЕГДА обходим полный радиус ringMax — см. nearestSegmentIndexExcluding
-  // выше: «нашли — ещё кольцо про запас и стоп» зависит от выравнивания
-  // сетки относительно АБСОЛЮТНЫХ координат, а оно разное у P (объект,
-  // часто многомиллионные мм) и у C (FBX, у начала координат) — тот же
-  // относительный запрос давал разный результат в двух системах координат.
+  // ЗДЕСЬ (в отличие от nearestSegmentIndexExcluding, где полный обход
+  // критичен для устойчивости clusterSpatialParts к перестановке
+  // координат — см. её комментарий) допустимо приближённое «нашли — ещё
+  // кольцо про запас и стоп»: это горячий цикл ICP (вызывается на каждую
+  // точку каждой итерации), где чуть неоптимальное соответствие не влияет
+  // на сходимость, а полный обход всех колец на плотных реальных данных
+  // (тысячи стен) давал ×5-7 замедление — 14с вместо ~2с на реальном
+  // объекте (Docs/fbx-partial-envelope-claude-prompt.md, живая проверка).
   const ringMax = Math.ceil(maxDist / cellSize) + 1;
   const seen = new Set();
+  let foundAtRing = -1;
   for (let ring = 0; ring <= ringMax; ring++) {
+    if (foundAtRing >= 0 && ring > foundAtRing + 1) break;
     for (let dx = -ring; dx <= ring; dx++) {
       for (let dy = -ring; dy <= ring; dy++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
@@ -442,6 +506,7 @@ export function nearestOnIndexedSegments(px, py, segments, index, maxDist) {
         }
       }
     }
+    if (best && foundAtRing < 0) foundAtRing = ring;
   }
   return best;
 }
@@ -612,7 +677,15 @@ export async function fineRefine({ fbxPoints, objectSegments, thetaInit, tInit, 
   for (const maxDist of schedule) {
     await yieldToEventLoop();
     if (nowMs() - t0 > maxTimeMsTotal) { stopReason = "timeBudget"; break; }
-    const index = buildSegmentGridIndex(objectSegments, Math.max(maxDist / 2, 100));
+    // Пол размера ячейки — НЕ maxDist/2 без ограничения снизу: индекс
+    // строится вставкой сегмента во ВСЕ ячейки его bbox (buildSegmentGrid-
+    // Index), и для длинного диагонального отрезка при мелкой ячейке это
+    // квадратично по длине (bbox почти квадратный) — на реальных стенах
+    // (десятки метров, есть непрямоугольные участки) при ячейке 100мм это
+    // и оказалось узким местом: построение индекса на финальных, самых
+    // мелких ступенях расписания заняло секунды вместо миллисекунд
+    // (живая проверка на объектах 3/4 анонимной копии, 2026-09-12).
+    const index = buildSegmentGridIndex(objectSegments, Math.max(maxDist / 2, 400));
     const remainingMs = Math.max(50, maxTimeMsTotal - (nowMs() - t0));
     const icp = icpRefine({
       fbxPoints, objectSegments, objectIndex: index, thetaInit: theta, tInit: t,
@@ -637,7 +710,7 @@ export async function fineRefine({ fbxPoints, objectSegments, thetaInit, tInit, 
   // возвращала СТАРЫЕ theta/t, но coverage/rms — уже от НОВОГО, сдвинутого
   // положения — рассинхронизация между возвращённым transform и его же
   // метриками. `evaluateTransform` ничего не оптимизирует и не сдвигает.
-  const finalIndex = buildSegmentGridIndex(objectSegments, Math.max(schedule[schedule.length - 1] / 2, 100));
+  const finalIndex = buildSegmentGridIndex(objectSegments, Math.max(schedule[schedule.length - 1] / 2, 400));
   const final = evaluateTransform(fbxPoints, objectSegments, finalIndex, theta, t, schedule[schedule.length - 1]);
   return {
     theta, t, iterations, stopReason, ran,
@@ -745,19 +818,6 @@ export async function autoAlignFacade({ fbxSegments, objectSegments, limits = {}
   const objectIndex = buildSegmentGridIndex(objectSegments, limits.gridCellMm ?? 2000);
   const maxDist = limits.icpMaxDistMm ?? 3000;
 
-  // Габарит для проверки соразмерности — по СЫРЫМ отрезкам целиком, МИМО
-  // clusterSpatialParts: та использует единый порог расстояния для
-  // связности и потому хрупка — пограничное расстояние (~800мм) у
-  // реальных данных может ПЕРЕКЛЮЧАТЬСЯ от численного шума при повороте
-  // (подтверждено живой проверкой, Docs/fbx-envelope-matching-claude-
-  // prompt.md: чистый поворот ТОЙ ЖЕ геометрии на 37° дал 127 vs 145
-  // частей и другой состав «крупнейшей»). Крайние (min/max) точки вдоль
-  // любого направления — это по построению НАРУЖНЫЕ точки контура,
-  // независимо от того, как впоследствии разбегаются внутренние
-  // мостики связности — экстремумы устойчивы к этой хрупкости.
-  const fbxAllSignificant = { segments: fbxSegments };
-  const objectAllSignificant = { segments: objectSegments };
-
   // Грубый поиск — быстрый и НАМЕРЕННО не точный (маленький maxIters,
   // широкий maxDist): нужен только чтобы отсеять заведомо плохие старты
   // и найти несколько существенно разных ПРИБЛИЗИТЕЛЬНО верных положений;
@@ -771,18 +831,20 @@ export async function autoAlignFacade({ fbxSegments, objectSegments, limits = {}
       const icp = icpRefine({ fbxPoints, objectSegments, objectIndex, thetaInit: rc.theta, tInit, opts: {
         maxIters: limits.icpMaxItersCoarse ?? 12, maxDist, trimFrac: limits.icpTrimFrac ?? 0.2, convergeTolMm: 1,
       } });
-      // Соразмерность наружных габаритов — на УЖЕ УТОЧНЁННОМ ICP угле
-      // (icp.theta), НЕ на исходном кандидате направления (rc.theta):
-      // пики гистограммы направлений могут отличаться от истинного угла
-      // на несколько градусов (мод mergeDeg/binDeg, распределение веса
-      // между стенами), а проверка габарита ОЧЕНЬ чувствительна к точному
-      // углу — проверка на неуточнённом seed-угле ложно отклоняла
-      // ГЕНУИННО совпадающую геометрию (подтверждено: тест с известным
-      // ответом 22°, пик направлений дал только 18°, экстент на 18°
-      // отличался от объекта, хотя на верных 22° совпадал ТОЧНО). Не
+      // Соразмерность наружных габаритов — ПОПАРНО по значимым частям
+      // (fbxParts/objectParts, не агрегат всех отрезков — задание §4.1,
+      // Docs/fbx-partial-envelope-claude-prompt.md: одна лишняя деталь в
+      // FBX сверх самого здания — соседний корпус в кадре экспорта,
+      // элемент благоустройства, кровельное ограждение — раньше
+      // проваливала агрегатную проверку целиком, отклоняя ЛЮБОЙ поворот,
+      // включая верный). На УЖЕ УТОЧНЁННОМ ICP угле (icp.theta), НЕ на
+      // исходном кандидате направления (rc.theta): пики гистограммы
+      // направлений могут отличаться от истинного угла на несколько
+      // градусов, а проверка габарита чувствительна к точности угла
+      // (подтверждено: тест с ответом 22°, пик дал только 18°). Не
       // зависит от переноса — проверяется на каждый старт (дёшево).
-      const sizeCheck = checkSizeCompatibility(fbxAllSignificant, objectAllSignificant, icp.theta, {
-        toleranceAbsMm: limits.sizeToleranceAbsMm, toleranceRel: limits.sizeToleranceRel, hardMultiplier: limits.sizeHardMultiplier,
+      const sizeCheck = checkSizeCompatibility(fbxParts, objectParts, icp.theta, {
+        toleranceAbsMm: limits.sizeToleranceAbsMm, toleranceRel: limits.sizeToleranceRel,
       });
       const perPart = perPartScores(icp.theta, icp.t, fbxParts, objectSegments, objectIndex, maxDist);
       const worstPartCoverage = perPart.length ? Math.min(...perPart.map((b) => b.coverage)) : 0;
