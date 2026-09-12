@@ -36,6 +36,28 @@ function mToMm(value) {
   const num = Number(normalized);
   return Number.isFinite(num) ? Math.round(num * 1000) : null;
 }
+function parseRuNumber(value) {
+  const num = Number(String(value).trim().replace(",", "."));
+  return Number.isFinite(num) ? num : null;
+}
+
+// Поле сдвига/поворота со стрелками шага (живой запрос пользователя,
+// 2026-09-13: «стрелочки вверх-вниз, чтобы можно было пошагово сдвигать»).
+// `field` — ключ черновика (offsetXM/offsetYM/offsetZM/rotationDeg),
+// `step` — шаг в тех же единицах, что и значение (метры для сдвига,
+// градусы для поворота); один и тот же HTML используется и в самой
+// карточке, и в плавающей панели поверх 3D (см. openFloatingNumbers) —
+// оба места слушает один и тот же делегированный обработчик
+// (wireNumFields), поэтому разметка идентична.
+function numFieldHtml(modelId, cssClass, field, step, value) {
+  return `<span class="em-num-wrap">
+    <input type="text" class="${cssClass} em-num-input" data-model-id="${modelId}" data-field="${field}" data-step="${step}" value="${value}"/>
+    <span class="em-num-steppers">
+      <button type="button" class="em-num-step" data-model-id="${modelId}" data-field="${field}" data-step="${step}" data-dir="1" tabindex="-1" title="+${step}">▲</button>
+      <button type="button" class="em-num-step" data-model-id="${modelId}" data-field="${field}" data-step="${step}" data-dir="-1" tabindex="-1" title="−${step}">▼</button>
+    </span>
+  </span>`;
+}
 
 const AUTO_STATUS_LABELS = {
   confident: "выполнено автоматически",
@@ -112,6 +134,120 @@ export function renderExternalModelsPanel(container, deps) {
     };
   }
 
+  // Живой предпросмотр (живой запрос пользователя, 2026-09-13: «при
+  // изменении цифры в форме сразу меняй в 3D модели») — вызывается на
+  // КАЖДОЕ изменение поля сдвига/поворота (ввод, стрелка шага), а не
+  // только по «Настроить положение»/«Совместить...». Невалидный текущий
+  // ввод (например, пустая строка на середине набора числа) просто не
+  // даёт предпросмотра в этот момент — не откатывает и не подставляет 0,
+  // ждёт следующего валидного изменения. Без открытой сцены (МФР или
+  // ЖБИ) `previewPlacement` сама ничего не делает (см. app.js) — здесь
+  // намеренно не проверяем это заранее, лишняя проверка синхронизировалась
+  // бы с той же логикой в двух местах.
+  function previewDraft(model, d) {
+    if (!previewPlacement) return;
+    const offsetXMm = mToMm(d.offsetXM);
+    const offsetYMm = mToMm(d.offsetYM);
+    const rotationDeg = parseRuNumber(d.rotationDeg);
+    if (offsetXMm === null || offsetYMm === null || rotationDeg === null) return;
+    previewPlacement(model, { offsetXMm, offsetYMm, rotationDeg });
+  }
+
+  // Поле сдвига/поворота меняется в ДВУХ местах — сама карточка (container)
+  // и плавающая панель поверх 3D (см. openFloatingNumbers, живой запрос
+  // «не закрывая форму, вращать 3D» — панель СКРЫВАЕТ форму, а не
+  // дублирует её одновременно, поэтому это не «два источника правды», а
+  // единственный обработчик для того DOM-дерева, что сейчас видимо.
+  // Разметка (numFieldHtml) в обоих местах одна и та же.
+  function applyNumFieldChange(el) {
+    const id = Number(el.dataset.modelId);
+    const model = models.find((m) => m.id === id);
+    if (!model) return;
+    const d = draftFor(model);
+    d[el.dataset.field] = el.value;
+    const card = container.querySelector(`.form-card[data-model-id="${id}"]`);
+    if (card) {
+      const dirty = isDirty(model);
+      card.querySelector(".em-cancel").disabled = !dirty;
+      card.querySelector(".em-save").disabled = !dirty;
+    }
+    previewDraft(model, d);
+  }
+
+  function wireNumFields(root) {
+    root.addEventListener("input", (e) => {
+      const el = e.target.closest(".em-num-input");
+      if (el) applyNumFieldChange(el);
+    });
+    root.addEventListener("click", (e) => {
+      const btn = e.target.closest(".em-num-step");
+      if (!btn) return;
+      const input = root.querySelector(`.em-num-input[data-model-id="${btn.dataset.modelId}"][data-field="${btn.dataset.field}"]`);
+      if (!input) return;
+      const stepStr = btn.dataset.step;
+      const step = Number(stepStr) * Number(btn.dataset.dir);
+      const current = parseRuNumber(input.value) ?? 0;
+      // Округление до точности шага — иначе бинарная арифметика с плавающей
+      // точкой копит «0.30000000000000004» через десяток кликов подряд.
+      const decimals = stepStr.includes(".") ? stepStr.split(".")[1].length : 0;
+      input.value = String(Number((current + step).toFixed(decimals)));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  // Плавающая панель поверх 3D (живой запрос пользователя, 2026-09-13:
+  // «разреши, не закрывая форму редактирования, вращать 3D модель, чтобы
+  // смотреть как происходит наложение фасада и конструктива») — тот же
+  // принцип «скрыть диалог, показать лёгкую панель», что у «Настроить
+  // положение»/«Совместить по точкам» (startExternalModelPlacementOnPlane,
+  // app.js), но БЕЗ жеста мышью по canvas и БЕЗ отключения OrbitControls:
+  // мышь целиком свободна для вращения/приближения камеры, числа меняются
+  // только вводом или стрелками шага. Один и тот же `deps.previewPlacement`
+  // просто переставляет группу в уже открытой сцене — своей 3D-логики
+  // здесь нет и не нужно.
+  let floatingNumbersPanel = null; // {modelId, el} | null
+
+  function closeFloatingNumbers() {
+    if (!floatingNumbersPanel) return;
+    floatingNumbersPanel.el.remove();
+    floatingNumbersPanel = null;
+    window.removeEventListener("keydown", onFloatingNumbersKeyDown);
+    document.getElementById("external-models-backdrop")?.classList.add("open");
+    render();
+  }
+
+  function onFloatingNumbersKeyDown(e) {
+    if (e.key === "Escape") closeFloatingNumbers();
+  }
+
+  function openFloatingNumbers(model) {
+    if (floatingNumbersPanel) closeFloatingNumbers();
+    const d = draftFor(model);
+    document.getElementById("external-models-backdrop")?.classList.remove("open");
+    const field = (labelText, cssClass, key, step, value) => `
+      <label style="display:flex; flex-direction:column; gap:2px; color:#fff; font:12px sans-serif">
+        <span style="opacity:.8">${labelText}</span>
+        ${numFieldHtml(model.id, cssClass, key, step, value)}
+      </label>`;
+    const panel = document.createElement("div");
+    panel.style.cssText = "position:fixed; top:16px; left:50%; transform:translateX(-50%); "
+      + "z-index:1000; background:rgba(20,24,32,.92); padding:12px 16px; border-radius:8px; "
+      + "display:flex; align-items:flex-end; gap:14px; box-shadow:0 4px 16px rgba(0,0,0,.35)";
+    panel.innerHTML = field("Сдвиг X, м", "em-offset-x", "offsetXM", "0.01", d.offsetXM)
+      + field("Сдвиг Y, м", "em-offset-y", "offsetYM", "0.01", d.offsetYM)
+      + field("Сдвиг Z, м", "em-offset-z", "offsetZM", "0.01", d.offsetZM)
+      + field("Поворот, °", "em-rotation", "rotationDeg", "0.1", d.rotationDeg)
+      + `<div style="display:flex; flex-direction:column; gap:2px; color:#fff; font:12px sans-serif">
+          <span style="opacity:.8">&nbsp;</span>
+          <button type="button" class="btn btn-sm btn-primary" id="em-floating-done">Готово</button>
+        </div>`;
+    document.body.appendChild(panel);
+    wireNumFields(panel);
+    panel.querySelector("#em-floating-done").addEventListener("click", closeFloatingNumbers);
+    window.addEventListener("keydown", onFloatingNumbersKeyDown);
+    floatingNumbersPanel = { modelId: model.id, el: panel };
+  }
+
   function isDirty(model) {
     const d = draftFor(model);
     return d.offsetXM !== mmToM(model.offset_mm.x) || d.offsetYM !== mmToM(model.offset_mm.y)
@@ -141,14 +277,19 @@ export function renderExternalModelsPanel(container, deps) {
         ${canEdit ? `
         <div class="row" style="margin-top:8px">
           <div><label class="field">Сдвиг X, м</label>
-            <input type="text" class="em-offset-x" data-model-id="${model.id}" value="${d.offsetXM}"/></div>
+            ${numFieldHtml(model.id, "em-offset-x", "offsetXM", "0.01", d.offsetXM)}</div>
           <div><label class="field">Сдвиг Y, м</label>
-            <input type="text" class="em-offset-y" data-model-id="${model.id}" value="${d.offsetYM}"/></div>
+            ${numFieldHtml(model.id, "em-offset-y", "offsetYM", "0.01", d.offsetYM)}</div>
           <div><label class="field" title="0 = нижняя точка габарита модели на отметке 0 объекта — чисто техническая точка, НЕ уровень земли/пола (его нельзя вычислить из одного габарита: дерево или антенна задерут верх, а не покажут землю). Для привязки к реальной высоте — числом здесь, либо «Перенести эту привязку на» с уже откалиброванного по высоте файла той же сцены. Положительное — вверх.">Сдвиг Z, м</label>
-            <input type="text" class="em-offset-z" data-model-id="${model.id}" value="${d.offsetZM}"/></div>
+            ${numFieldHtml(model.id, "em-offset-z", "offsetZM", "0.01", d.offsetZM)}</div>
           <div><label class="field" title="По часовой стрелке при виде на план сверху, вокруг центра модели">Поворот, °</label>
-            <input type="text" class="em-rotation" data-model-id="${model.id}" value="${d.rotationDeg}"/></div>
+            ${numFieldHtml(model.id, "em-rotation", "rotationDeg", "0.1", d.rotationDeg)}</div>
         </div>
+        ${previewPlacement ? `<div style="margin-top:4px">
+          <button type="button" class="btn btn-sm btn-secondary em-float-numbers" data-model-id="${model.id}"
+            title="Свернуть это окно и настраивать числа поверх 3D-сцены — камеру при этом можно свободно вращать и приближать мышью, форма не закрывается, только уходит с глаз до «Готово»"
+            >⤢ Настраивать поверх 3D</button>
+        </div>` : ""}
         ${d.ambiguousCandidates && d.ambiguousCandidates.length ? `
         <div class="hint-text" style="margin-top:6px">Автосовмещение неоднозначно — несколько вариантов дали похожее качество.
           Выберите вариант (покажется в 3D, если он открыт), проверьте и нажмите «Сохранить»:</div>
@@ -216,22 +357,13 @@ export function renderExternalModelsPanel(container, deps) {
   }
 
   function wire() {
-    container.querySelectorAll(".em-offset-x, .em-offset-y, .em-offset-z, .em-rotation").forEach((el) => {
-      el.addEventListener("input", () => {
-        const id = Number(el.dataset.modelId);
-        const model = models.find((m) => m.id === id);
-        if (!model) return;
-        const d = draftFor(model);
-        if (el.classList.contains("em-offset-x")) d.offsetXM = el.value;
-        else if (el.classList.contains("em-offset-y")) d.offsetYM = el.value;
-        else if (el.classList.contains("em-offset-z")) d.offsetZM = el.value;
-        else d.rotationDeg = el.value;
-        const card = container.querySelector(`.form-card[data-model-id="${id}"]`);
-        const dirty = isDirty(model);
-        card.querySelector(".em-cancel").disabled = !dirty;
-        card.querySelector(".em-save").disabled = !dirty;
-      });
-    });
+    wireNumFields(container);
+
+    container.querySelectorAll(".em-float-numbers").forEach((btn) => btn.addEventListener("click", () => {
+      const id = Number(btn.dataset.modelId);
+      const model = models.find((m) => m.id === id);
+      if (model) openFloatingNumbers(model);
+    }));
 
     container.querySelectorAll(".em-cancel").forEach((btn) => btn.addEventListener("click", () => {
       const id = Number(btn.dataset.modelId);
