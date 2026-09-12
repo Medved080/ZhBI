@@ -9925,11 +9925,61 @@ function enhanceModalWindows() {
   });
 }
 
+// Живой запрос пользователя 2026-09-12: заголовок полосы выглядел «странно»
+// (только точки-подсказка да одна кнопка разворота, без текста и без
+// кнопки закрытия) — переведено на вид, привычный для ОС, в которой открыт
+// браузер: на macOS — цветные кружки слева и заголовок по центру, иначе —
+// заголовок слева и кнопки-иконки справа. Заголовок НЕ копия текста, а сам
+// узел <h1>/<h2>/<h3> формы, перенесённый в полосу: id и последующие
+// textContent-обновления (например «Элемент» → «Элемент #123») продолжают
+// работать как раньше, просто рендерятся уже в новом месте.
+function isMacPlatformForModalBar() {
+  try {
+    const p = navigator.userAgentData && navigator.userAgentData.platform;
+    if (p) return /mac/i.test(p);
+  } catch (e) { /* userAgentData недоступен — пробуем ниже */ }
+  return /Mac/.test(navigator.platform || "") || /Macintosh/.test(navigator.userAgent || "");
+}
+
 function setupModalWindowControls(modal) {
+  const isMac = isMacPlatformForModalBar();
   const bar = document.createElement("div");
-  bar.className = "modal-window-bar";
-  bar.innerHTML = '<span class="modal-window-drag-hint" title="Перетащить окно">⠿⠿</span>'
-    + '<button type="button" class="modal-window-btn modal-window-maximize" title="На весь экран">⛶</button>';
+  bar.className = "modal-window-bar " + (isMac ? "modal-window-bar-mac" : "modal-window-bar-win");
+
+  const titleWrap = document.createElement("span");
+  titleWrap.className = "modal-window-title";
+  const titleEl = modal.querySelector("h1, h2, h3");
+  if (titleEl) titleWrap.appendChild(titleEl);
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.title = "Закрыть";
+  closeBtn.setAttribute("aria-label", "Закрыть");
+  const maximizeBtn = document.createElement("button");
+  maximizeBtn.type = "button";
+  maximizeBtn.className = "modal-window-btn modal-window-maximize";
+  maximizeBtn.title = "На весь экран";
+  maximizeBtn.setAttribute("aria-label", "На весь экран");
+
+  if (isMac) {
+    closeBtn.className = "modal-window-btn modal-window-close modal-window-dot modal-window-dot-close";
+    maximizeBtn.classList.add("modal-window-dot", "modal-window-dot-max");
+    bar.append(closeBtn, maximizeBtn, titleWrap);
+  } else {
+    closeBtn.className = "modal-window-btn modal-window-close";
+    closeBtn.textContent = "✕";
+    maximizeBtn.textContent = "⛶";
+    bar.append(titleWrap, maximizeBtn, closeBtn);
+  }
+
+  // Закрытие — через уже существующий общий Escape-обработчик (учитывает
+  // dataset.dirty и confirm()), а не classList.remove("open") напрямую: так
+  // кнопка не обходит частные охранники конкретных форм (например,
+  // принудительную смену пароля).
+  closeBtn.addEventListener("click", () => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+
   modal.insertBefore(bar, modal.firstChild);
 
   const resizeHandle = document.createElement("div");
@@ -9999,7 +10049,6 @@ function setupModalWindowControls(modal) {
   });
 
   let savedRect = null; // явные left/top/width/height/maxWidth/maxHeight ДО разворота — для восстановления
-  const maximizeBtn = bar.querySelector(".modal-window-maximize");
   maximizeBtn.addEventListener("click", () => {
     if (modal.classList.contains("modal-window-maximized")) {
       modal.classList.remove("modal-window-maximized");
@@ -10011,7 +10060,7 @@ function setupModalWindowControls(modal) {
         modal.style.width = ""; modal.style.height = "";
         modal.style.maxWidth = ""; modal.style.maxHeight = ""; modal.style.margin = "";
       }
-      maximizeBtn.textContent = "⛶";
+      if (!isMac) maximizeBtn.textContent = "⛶";
       maximizeBtn.title = "На весь экран";
     } else {
       savedRect = modal.style.position === "fixed" ? {
@@ -10020,7 +10069,7 @@ function setupModalWindowControls(modal) {
         maxWidth: modal.style.maxWidth, maxHeight: modal.style.maxHeight, margin: modal.style.margin,
       } : null;
       modal.classList.add("modal-window-maximized");
-      maximizeBtn.textContent = "🗗";
+      if (!isMac) maximizeBtn.textContent = "🗗";
       maximizeBtn.title = "Восстановить размер";
     }
   });

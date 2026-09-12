@@ -2457,16 +2457,42 @@
      по контенту) — .modal-window-bar/-resize-handle только ДОБАВЛЯЮТ
      возможность, не меняют поведение по умолчанию. */
   .modal-window-bar {
-    display: flex; align-items: center; justify-content: flex-end; gap: 4px;
-    margin: -6px -6px 10px; padding: 3px 4px; border-radius: 6px; cursor: move; user-select: none;
+    display: flex; align-items: center; gap: 6px; position: relative; min-height: 26px;
+    margin: -6px -6px 10px; padding: 5px 8px; border-radius: 6px 6px 0 0; cursor: move; user-select: none;
   }
   .modal-window-bar:hover { background: rgba(0,0,0,.05); }
-  .modal-window-drag-hint { margin-right: auto; opacity: .45; font-size: 13px; letter-spacing: 1px; }
+  /* Заголовок в полосе — не копия текста, а сам перенесённый <h1>/<h2>/<h3>
+     формы (см. app.js, setupModalWindowControls): сбрасываем его штатные
+     отступы, чтобы не ломать высоту полосы. */
+  .modal-window-title {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .modal-window-title, .modal-window-title * { margin: 0 !important; }
   .modal-window-btn {
     border: none; background: transparent; cursor: pointer; font-size: 14px; line-height: 1;
-    padding: 3px 7px; border-radius: 4px; color: inherit;
+    padding: 3px 7px; border-radius: 4px; color: inherit; flex: none;
   }
   .modal-window-btn:hover { background: rgba(0,0,0,.1); }
+
+  /* macOS: цветные кружки слева («светофор»), заголовок по центру полосы. */
+  .modal-window-bar-mac .modal-window-title {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    max-width: 55%; text-align: center; font-size: 13px; opacity: .75; pointer-events: none;
+  }
+  .modal-window-dot {
+    width: 12px; height: 12px; padding: 0; border-radius: 50%; font-size: 0; position: relative;
+  }
+  .modal-window-dot-close { background: #ff5f57; }
+  .modal-window-dot-max { background: #28c840; }
+  .modal-window-dot:hover::after {
+    content: ""; position: absolute; inset: -3px; border-radius: 50%; background: rgba(0,0,0,.12);
+  }
+
+  /* Windows/иные ОС: заголовок слева, кнопки-иконки справа. */
+  .modal-window-bar-win .modal-window-title {
+    font-size: 13px; font-weight: 600; opacity: .8; margin-right: auto !important;
+  }
+  .modal-window-bar-win .modal-window-close:hover { background: #e81123; color: #fff; }
   .modal-window-resize-handle {
     position: absolute; right: 3px; bottom: 3px; width: 14px; height: 14px; cursor: nwse-resize; z-index: 1;
     background: linear-gradient(135deg, transparent 0 50%, rgba(0,0,0,.3) 50% 52%, transparent 52% 62%,
