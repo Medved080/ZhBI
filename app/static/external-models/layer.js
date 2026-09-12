@@ -14,6 +14,24 @@ import { projectToMfrView, projectToZhbiView } from "./coordinates.js";
  * @param {new (manager:any) => any} deps.FBXLoader
  * @param {(model:object) => Promise<ArrayBuffer>} deps.fetchContent
  */
+// Живой запрос пользователя 2026-09-12: фасад визуально сливается с
+// поверхностями конструктива внутри объёма (z-fighting на совпадающих
+// гранях). Чисто визуальное увеличение группы фасада НА МЕСТЕ (вокруг её
+// же анchor, без изменения offset_mm/rotation_deg — координаты в БД не
+// трогаются) отодвигает наружную грань фасада от конструктива. Величина
+// подобрана «на глаз»: заметно раздвигает грани, но меньше, чем блоки
+// «Учёта по блокам» (BoxGeometry этажа/секции, app.js) — те и так крупнее
+// объёма здания, поэтому при попадании луча мыши в оба вида сразу раскаст
+// блоков ВСЕГДА проверяется первым (bindMfr3DPick, app.js) и побеждает
+// независимо от масштаба; масштаб здесь решает только z-fighting, не
+// приоритет выбора мышью. Благоустройство (kind: "ground") не масштабируется
+// — оно лежит на грунте и с конструктивом не совпадает.
+const FACADE_VISUAL_SCALE = 1.02;
+
+function visualScaleForKind(kind) {
+  return kind === "facade" ? FACADE_VISUAL_SCALE : 1;
+}
+
 export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
   let generation = 0;
   // modelId -> {loadPromise, result, revisionLoaded}
@@ -97,6 +115,7 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
       // Отрицательный угол — знак ТРИ.js (против часовой при взгляде с
       // +Z) даёт видимый пользователю поворот ПО часовой при виде сверху.
       result.group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rotationRad(model));
+      result.group.scale.setScalar(visualScaleForKind(model.kind));
       result.group.visible = visibleForKind(model.kind);
       scene.add(result.group);
     }
@@ -130,6 +149,7 @@ export function createExternalModelLayer({ THREE, FBXLoader, fetchContent }) {
       result.group.position.set(v[0], v[1], v[2]);
       const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rotationRad(model));
       result.group.quaternion.copy(axisRemap).multiply(qRotate);
+      result.group.scale.setScalar(visualScaleForKind(model.kind));
       result.group.visible = visibleForKind(model.kind);
       scene.add(result.group);
     }
