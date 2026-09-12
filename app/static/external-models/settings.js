@@ -148,9 +148,10 @@ export function renderExternalModelsPanel(container, deps) {
     if (!previewPlacement) return;
     const offsetXMm = mToMm(d.offsetXM);
     const offsetYMm = mToMm(d.offsetYM);
+    const offsetZMm = mToMm(d.offsetZM);
     const rotationDeg = parseRuNumber(d.rotationDeg);
-    if (offsetXMm === null || offsetYMm === null || rotationDeg === null) return;
-    previewPlacement(model, { offsetXMm, offsetYMm, rotationDeg });
+    if (offsetXMm === null || offsetYMm === null || offsetZMm === null || rotationDeg === null) return;
+    previewPlacement(model, { offsetXMm, offsetYMm, offsetZMm, rotationDeg });
   }
 
   // Поле сдвига/поворота меняется в ДВУХ местах — сама карточка (container)

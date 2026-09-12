@@ -35127,9 +35127,17 @@ function syncGroupToModel(group, model, projectFn, extra) {
 // вызывающий код (settings.js) просто не покажет предпросмотр, черновик
 // при этом остаётся источником истины.
 function previewExternalModelPlacement(model, overrideMm) {
+  // offsetZMm — необязательный (кандидаты автосовмещения Z не считают
+  // вовсе, см. auto-align.js — «Z НЕ трогается автоматикой»): без него
+  // берём Z из уже сохранённой модели, а не молча зануляем. Раньше поле
+  // Z вообще не входило в overrideMm — правка «Сдвиг Z» в форме меняла
+  // черновик, но группа в 3D никогда не переставлялась по высоте (живой
+  // отчёт пользователя 2026-09-13: «благоустройство не реагирует на
+  // изменение числа смещения по Z»).
+  const offsetZMm = overrideMm.offsetZMm ?? model.offset_mm.z;
   const modelForPreview = {
     ...model,
-    offset_mm: { ...model.offset_mm, x: overrideMm.offsetXMm, y: overrideMm.offsetYMm },
+    offset_mm: { ...model.offset_mm, x: overrideMm.offsetXMm, y: overrideMm.offsetYMm, z: offsetZMm },
     rotation_deg: overrideMm.rotationDeg,
   };
   if (mfr3d.scene && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer) {
