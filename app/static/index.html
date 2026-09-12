@@ -2323,6 +2323,12 @@
   label.toggle.toggle-sub { color: var(--color-text-muted); }
   label.toggle.toggle-sub:has(input:disabled) { opacity: .45; }
   label.toggle.toggle-sub input:disabled { cursor: not-allowed; }
+  /* Второй уровень иерархии «Показывать → Элементы → категория» (Модель
+     МФР, живой запрос 2026-09-13) — тот же отступ и приглушение, что у
+     «Даты» под маркой (.toggle-sub выше), но список произвольной длины
+     (категории элементов Revit), не один фиксированный подпункт. */
+  #mfr-elements-categories { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; }
+  #mfr-elements-categories .toggle.toggle-sub { margin-left: 20px; }
   #card select { font-size: 12px; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); }
 
   /* -------- поиск по маркам (Фильтры) -------- */
@@ -5498,6 +5504,20 @@
           <div id="mfr-filter-layers-body">
             <label class="toggle" title="Детальные контуры элементов/помещений модели">
               <input type="checkbox" id="mfr-show-elements" checked/>Элементы</label>
+            <!-- Категории элементов (Стены/Окна/Помещение/…) — второй
+                 уровень иерархии ПОД «Элементы» (живой запрос пользователя,
+                 2026-09-13: раньше был отдельной группой «Категория» на
+                 вкладке «Фильтры», убран целиком 2026-09-10 как ненужный на
+                 том объекте; сейчас нужен снова, и явно как часть «что
+                 показывать», а не «какие данные отбирать» — значит на
+                 вкладке «Вид», не «Фильтры»). Список категорий — с сервера
+                 (`/revit-plan/filters`, поле `categories`, не тронуто той
+                 правкой), сама фильтрация — тот же `revitPlanState.categories`
+                 (Set) и `loadRevitPlanElements`, что и раньше: пустой набор
+                 по-прежнему означает «без отбора» (все категории), поэтому
+                 при СНЯТИИ галочки набор становится «все, КРОМЕ снятой», а
+                 не пустым — см. renderMfrElementCategories/app.js. -->
+            <div id="mfr-elements-categories" class="toggle-sub-list"></div>
             <label class="toggle" title="Параллелепипеды блоков «этаж+секция» (Учёт по блокам)">
               <input type="checkbox" id="mfr-show-blocks"/>Блоки</label>
             <label class="toggle" title="Сетка осей объекта (object_grids) — для сверки геометрии блока с реальными контурами">

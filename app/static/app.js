@@ -29289,13 +29289,19 @@ async function loadRevitPlanFilters() {
   }
   document.getElementById("revit-plan-sections").innerHTML = секции.join("");
 
-  // «Раздел» (parts) и «Категория» (categories) сняты с вкладки «Фильтры»
-  // (живой запрос пользователя, 2026-09-10 — на этом объекте не нужны).
-  // revitPlanState.parts/.categories никто больше не пополняет — пустой
-  // Set там и означает «без отбора» (штатный смысл для этих групп), то
-  // есть элементы всех категорий показываются всегда, включая «Помещение»
-  // (раньше исключалось по умолчанию только для читаемости 2D-плана —
-  // сейчас регулировать эту видимость нечем, значит показываем как есть).
+  // «Раздел» (parts) по-прежнему снят с интерфейса (живой запрос
+  // пользователя, 2026-09-10 — на этом объекте всегда один пункт «PDF»,
+  // выбирать нечего). revitPlanState.parts никто не пополняет — пустой
+  // Set там и означает «без отбора» (штатный смысл группы).
+  //
+  // «Категория» (2026-09-13, живой запрос — «раньше был выбор видов
+  // элементов в верхней панели, сейчас не могу найти») ВОССТАНОВЛЕНА, но
+  // не на вкладке «Фильтры» (где жила раньше), а вторым уровнем иерархии
+  // под чекбоксом «Элементы» на вкладке «Вид» — это про то, ЧТО показано
+  // на уже загруженной модели, а не про отбор данных с сервера, хотя
+  // технически смена набора категорий по-прежнему перезапрашивает
+  // `/revit-plan/elements` (см. renderMfrElementCategories ниже).
+  renderMfrElementCategories(f.categories || []);
   markRevitPicks();
   if (группы.size) await loadRevitPlanElements();
   else revitPlanStatus("");
@@ -29319,6 +29325,62 @@ function markRevitPicks() {
     if (ссылка) ссылка.hidden = revitPlanState[g].size === 0;
   }
 }
+
+// Категории элементов — второй уровень иерархии под «Элементы» на
+// вкладке «Вид» (живой запрос пользователя, 2026-09-13). В отличие от
+// «Этаж»/«Секция» (клик-пилюли `.revit-pick`, добавляют категорию В
+// отбор), здесь настоящие чекбоксы с привычной семантикой «отмечено —
+// показано»: список ВСЕГДА рисуется полностью отмеченным, если отбора
+// нет (`revitPlanState.categories.size === 0`, штатное «без отбора»),
+// а снятие ОДНОЙ галочки переводит набор в явный список «все, КРОМЕ
+// этой» — потому что сам `revitPlanState.categories`/сервер понимают
+// только «пусто = всё» / «непусто = только перечисленное», обратной
+// формы («всё, кроме») там нет и заводить её ради одного чекбокса не
+// нужно. Список перестраивается при каждом ответе `/revit-plan/filters`
+// (смена объекта, обновление данных) — обработчики вешаются заново,
+// старые вместе со старыми узлами уходят сборщиком мусора.
+function renderMfrElementCategories(categories) {
+  const box = document.getElementById("mfr-elements-categories");
+  if (!box) return;
+  if (!categories.length) { box.innerHTML = ""; return; }
+  const набор = revitPlanState.categories;
+  box.innerHTML = categories.map(({ category, elements }) => {
+    const имя = category || "(без категории)";
+    const отмечено = набор.size === 0 || набор.has(category);
+    return `<label class="toggle toggle-sub" title="${escapeHtml(имя)}: ${elements} элементов">
+      <input type="checkbox" data-mfr-category="${escapeHtml(category ?? "")}" ${отмечено ? "checked" : ""}/>
+      ${escapeHtml(имя)} <span style="color:var(--color-text-muted)">${elements}</span></label>`;
+  }).join("");
+  syncMfrElementCategoriesDisabled();
+}
+
+// «Элементы» выключен — категории показать нечего, чекбоксы гасим
+// визуально (не трогая их состояние — включат «Элементы» обратно,
+// прежний отбор категорий должен вернуться как был, не сброситься).
+function syncMfrElementCategoriesDisabled() {
+  const включеныЭлементы = mfrShowElements();
+  document.querySelectorAll('#mfr-elements-categories input[type="checkbox"]').forEach((cb) => {
+    cb.disabled = !включеныЭлементы;
+  });
+}
+
+document.getElementById("mfr-elements-categories").addEventListener("change", (e) => {
+  const cb = e.target.closest('input[data-mfr-category]');
+  if (!cb) return;
+  const все = [...document.querySelectorAll('#mfr-elements-categories input[data-mfr-category]')];
+  const отмеченные = все.filter((x) => x.checked);
+  // Все отмечены — это ровно «без отбора» (пустой Set), а не список из
+  // всех имён: так «Категория» ведёт себя как остальные группы
+  // REVIT_GROUPS (сброшенный отбор), а не как незаметно включённый
+  // фильтр с тем же результатом, но с сюрпризом при появлении новой
+  // категории в данных (новая появилась бы уже ВЫКЛЮЧЕННОЙ, раз её нет
+  // в «явном» списке всех старых имён).
+  revitPlanState.categories = отмеченные.length === все.length
+    ? new Set()
+    : new Set(отмеченные.map((x) => x.dataset.mfrCategory));
+  markRevitPicks();
+  loadRevitPlanElements();
+});
 
 document.getElementById("mfr-workspace").addEventListener("click", async (e) => {
   const pick = e.target.closest(".revit-pick");
@@ -31569,6 +31631,7 @@ for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-
   // `mfrShowPlans`) — иначе исключение здесь обрывало бы ВСЮ дальнейшую
   // инициализацию скрипта.
   document.getElementById(id)?.addEventListener("change", () => {
+    if (id === "mfr-show-elements") syncMfrElementCategoriesDisabled();
     if (!revitPlanState.data) return;
     drawRevitPlan(revitPlanState.data);
     mfr3d.key = null;
