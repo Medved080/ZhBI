@@ -179,7 +179,7 @@ _MAX_INFILL_THICKNESS_MM = 600
 # вентшахт у надстройки и периметр техэтажа секции 2 (там помещение на весь
 # этаж, «дальше 1м» ничего не отсекало). Отбор по материалу проще и
 # совпадает с тем, как это читает человек по чертежу.
-_STRUCTURE_ONLY_FLOORS = {"кровля (секция 1)", "технический (секция 2)"}
+_STRUCTURE_ONLY_FLOORS = {"кровля (секция 1)", "технический (секция 2)", "кровля (секция 2)"}
 _STRUCTURE_MATERIALS = {"Монолитный железобетон"}
 
 # Допуск вокруг границы осей секций, внутри которого секция сегмента
@@ -267,6 +267,14 @@ for _n in range(21, 24):
     _SPEC.append((str(_n), 13, _z0, _z0 + _FLOOR_HEIGHT, ("С02",)))
 _SPEC.append(("24", 14, 70650, 73650, ("С02",)))
 _SPEC.append(("технический (секция 2)", 15, 73650, 76800, ("С02",)))
+# Выход на кровлю секции 2 (лист 16: машинное помещение лифта, помещение
+# оконечных устройств, лестничная клетка — 65,1 м² по экспликации) —
+# с 2026-09-12 и в детальном разборе (живой запрос пользователя: «нет
+# следующего этажа с выходом на кровлю»), до того — только в упрощённой
+# загрузке по фасадам (`pdf_facade_import._PLAN_ROOF2_*`). Отметки — по
+# подписям фасадного листа: стоит на верхе техэтажа (+76,800), кровля
+# «Кровля 2 С2» +78,750 (лифтовая головка выше, до +79,800 — не ярус).
+_SPEC.append(("кровля (секция 2)", 16, 76800, 78750, ("С02",)))
 
 FLOOR_PLANS = [RoomPlan(floor=f, page=p, z0=z0, z1=z1, section_codes=s)
               for f, p, z0, z1, s in _SPEC]
@@ -1614,13 +1622,29 @@ def _page_shift_correction(page, canonical_grid: dict) -> tuple:
         ys = [y for poly in polys for _, y in poly]
         bbox = (min(xs) - _AXIS_ENVELOPE_MARGIN_MM, max(xs) + _AXIS_ENVELOPE_MARGIN_MM,
                 min(ys) - _AXIS_ENVELOPE_MARGIN_MM, max(ys) + _AXIS_ENVELOPE_MARGIN_MM)
-    own = page_axis_labels(page, bbox=bbox)
-    by_dir = {"x": [], "y": []}
-    for label, (направление, coord) in own.items():
-        canon = canonical_grid.get(label)
-        if canon is None or canon[0] != направление:
-            continue
-        by_dir[направление].append(coord - canon[1])
+    def _diffs(bbox_limit):
+        own = page_axis_labels(page, bbox=bbox_limit)
+        by_dir = {"x": [], "y": []}
+        for label, (направление, coord) in own.items():
+            canon = canonical_grid.get(label)
+            if canon is None or canon[0] != направление:
+                continue
+            by_dir[направление].append(coord - canon[1])
+        return by_dir
+
+    by_dir = _diffs(bbox)
+    # Рядом с помещениями ни одной общей подписи — лист, где помещения
+    # занимают крошечную часть плана (лист 16: одна надстройка выхода на
+    # кровлю посреди кровли секции 2, подписи осей — по краю всего плана,
+    # в 8-15 м от неё): тогда подписи берутся со ВСЕГО листа. Именно этот
+    # лист «верхним правым углом застройки» ставил угол надстройки в
+    # (0,0), и без поправки надстройка ложилась в угол здания (2026-09-12;
+    # раньше тот же остаток снимал `pdf_facade_import._plan_rooms_
+    # canonical` своей медианой — теперь она там нулевая). Повторное
+    # вхождение подписи в постороннем месте листа (этаж 1) сюда не
+    # доходит: там подписи у помещений находятся сразу.
+    if bbox is not None and not by_dir["x"] and not by_dir["y"]:
+        by_dir = _diffs(None)
     return (median(by_dir["x"]) if by_dir["x"] else 0.0,
             median(by_dir["y"]) if by_dir["y"] else 0.0)
 

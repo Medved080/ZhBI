@@ -102,9 +102,9 @@ def _floor_spec(floor: str) -> tuple:
         return 9, "этаж", "9 этаж (секция 1, техническое пространство)", ["С01"]
     if floor == "кровля (секция 1)":
         return 10, "этаж", "10 этаж (секция 1, выход на кровлю)", ["С01"]
-    # Выход на кровлю секции 2 — ярус только упрощённой загрузки по фасадам
-    # (2026-09-02, `pdf_facade_import._PLAN_ROOF2_FLOOR`): в `FLOOR_PLANS`
-    # его нет, детальный разбор лист 16 не читает (см. `_FACADE_ONLY_LEVELS`).
+    # Выход на кровлю секции 2 — до 2026-09-12 ярус только упрощённой
+    # загрузки по фасадам (`pdf_facade_import._PLAN_ROOF2_FLOOR`), теперь
+    # и детального разбора (лист 16 в `FLOOR_PLANS`); ключ этажа общий.
     if floor == "кровля (секция 2)":
         return 28, "этаж", "Кровля (секция 2)", None
     return int(floor), "этаж", None, None
@@ -147,8 +147,8 @@ def _ensure_level(conn, object_id: int, floor_label: str) -> tuple:
                 "UPDATE object_levels SET key = ?, floor = ?, name = ?, sort_order = ? WHERE id = ?",
                 (key, floor_no, name, floor_no, old["id"]))
             conn.commit()
-    # Высота этажа — из той же таблицы чертежа (`FLOOR_PLANS`/
-    # `_FACADE_ONLY_LEVELS`), явно (`object_levels.height_mm`, 2026-09-02):
+    # Высота этажа — из той же таблицы чертежа (`FLOOR_PLANS`), явно
+    # (`object_levels.height_mm`, 2026-09-02):
     # иначе блок считался бы «до следующего этажа секции», и техпространство
     # секции 1 (1,79м) выходило бы блоком в 3,75м. Уже заведённой высоты не
     # трогает — только дополняет пустую (тот же приём, что у отметки).
@@ -198,13 +198,6 @@ def _ensure_catalog(conn, object_id: int) -> tuple:
     return out, section_ids
 
 
-# Ярусы, которых нет в `pdf_rooms.FLOOR_PLANS` (детальный разбор их не
-# читает), но которые заводит упрощённая загрузка по фасадам — отметки по
-# подписям фасадного листа: выход на кровлю секции 2 стоит на верхе
-# техэтажа (+76,800), его кровля «Кровля 2 С2» +78,750, лифтовая головка
-# выше до +79,800 (2026-09-02, живой запрос пользователя; Docs/backlog.md).
-_FACADE_ONLY_LEVELS = {"кровля (секция 2)": (76800, 78750)}
-
 # Старые ключи этажей секции 1 над 8-м (до 2026-09-02 заводились под
 # свободными номерами 26/27, см. `_floor_spec`) — для переименования на
 # месте в `_ensure_level`.
@@ -215,8 +208,6 @@ def _floor_elevation(floor_label: str) -> tuple:
     for plan in pdf_rooms.FLOOR_PLANS:
         if plan.floor == floor_label:
             return plan.z0, plan.z1
-    if floor_label in _FACADE_ONLY_LEVELS:
-        return _FACADE_ONLY_LEVELS[floor_label]
     raise KeyError(floor_label)
 
 
