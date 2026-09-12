@@ -80,6 +80,29 @@ PT_TO_MM = 25.4 / 72.0
 
 # Площадь: «14,3» — запятая, без единицы (единица «м2» отдельным словом рядом).
 _AREA_RE = re.compile(r'^\d{1,4}[.,]\d$')
+# Разряд тысяч перед ней — отдельным словом («1 199,7 м²» у открытой
+# парковки на листе 3): без склейки площадь читалась как 199,7.
+_THOUSANDS_RE = re.compile(r'^\d{1,3}$')
+
+
+def _area_label(words: list, i: int):
+    """Подпись площади в слове `i`: (значение, м²) или None, если слово
+    `i` — не число вида «14,3» со словом «м2» сразу за ним. Разряд тысяч
+    (`_THOUSANDS_RE`) в предыдущем слове на той же строке и вплотную
+    (зазор не шире высоты строки) склеивается: «1» + «199,7» = 1199,7."""
+    w = words[i]
+    if not _AREA_RE.match(w[4]) or i + 1 >= len(words):
+        return None
+    if "м2" not in words[i + 1][4].replace("²", "2"):
+        return None
+    value = float(w[4].replace(",", "."))
+    if i > 0:
+        prev = words[i - 1]
+        line_h = max(w[3] - w[1], 1.0)
+        if (_THOUSANDS_RE.match(prev[4]) and abs(prev[1] - w[1]) < line_h * 0.5
+                and 0 <= w[0] - prev[2] < line_h):
+            value += int(prev[4]) * 1000
+    return value
 _SCALE_RE = re.compile(r'М\s*1\s*:\s*(\d+)')
 # Подпись оси: «Ас1», «1с2», «15с1» — буква/номер оси + номер секции.
 # Группа 1 — метка оси («А», «15»), группа 2 — номер секции.
@@ -330,9 +353,11 @@ def _valid_outline(poly_mm: list) -> Optional[list]:
     Чинится ТОЛЬКО когда крупнейшая доля сохраняет не меньше
     `_VALID_OUTLINE_MIN_KEEP` площади сырого контура — иначе контур не
     «бантик», а клубок петель (открытая парковка на листе 3: 13 долей,
-    крупнейшая 989 из 1417 м²; фоновая заливка на листе 15: 16 долей), и
-    отрезать от него две трети площади хуже, чем оставить как есть —
-    такой контур возвращается сырым, как рисовался до этой правки.
+    крупнейшая 989 из 1417 м²; техпространство секции 2 на листе 15:
+    16 долей), и отрезать от него две трети площади хуже, чем оставить
+    как есть — такой контур чинится второй стратегией, разрезом по
+    перемычкам (`_axis_chain_outline`, 2026-09-12), а если и она не
+    берёт — возвращается сырым, как рисовался до этой правки.
     Валидный контур возвращается как есть — точки не переупорядочиваются."""
     if len(poly_mm) < 3:
         return None
@@ -350,8 +375,95 @@ def _valid_outline(poly_mm: list) -> Optional[list]:
         return poly_mm
     largest = max(parts, key=lambda p: p.area)
     if shape.area > 0 and largest.area < shape.area * _VALID_OUTLINE_MIN_KEEP:
-        return poly_mm
+        # Не «бантик», а клубок — вторая попытка: разрез по перемычкам
+        # (см. `_axis_chain_outline`); не вышло — сырой, как и раньше.
+        return _axis_chain_outline(poly_mm, largest.area) or poly_mm
     return [(x, y) for x, y in largest.exterior.coords[:-1]]
+
+
+# Ребро контура помещения, у которого И сдвиг по X, И сдвиг по Y больше
+# этого допуска, — не стена плана (там все рёбра осевые, кроме листа
+# закруглённого угла), а «перемычка», которой слой площадей соединяет
+# внешний контур с внутренними островами (см. `_axis_chain_outline`).
+_CHAIN_SPLIT_TOL_MM = 30.0
+
+
+def _axis_chain_outline(poly_mm: list, min_area: float = 0.0) -> Optional[list]:
+    """Починка контура-«клубка» разрезом по перемычкам (2026-09-12, живой
+    запрос пользователя — техническое пространство секции 2 на листе 15
+    «потеряно», см. Docs/backlog.md). Слой площадей рисует помещение с
+    островами (пилоны, ядро) ОДНИМ кольцом: обходит внешний контур,
+    потом по прямой «перемычке» уходит к острову, обходит его, прыгает к
+    следующему — и такой же перемычкой возвращается. `make_valid` режет
+    это на десятки долей (у техпространства — 16, крупнейшая 318 из 495
+    м²), и `_valid_outline` отступал, оставляя сырой контур: в модели —
+    рваные грани, подпись площади внутри не находилась, а на листе 15
+    помещение к тому же выглядело «фоновой заливкой» (`_drop_oversized_
+    rooms`) и уносило с собой охват листа — периметр и колонны этажа
+    отсеивались как легенда (`_LEGEND_MARGIN_MM`).
+
+    Перемычки на плане отличимы: все настоящие рёбра осевые (сдвиг по
+    одной координате), перемычка — диагональ (`_CHAIN_SPLIT_TOL_MM`).
+    Кольцо режется по диагоналям на цепочки, каждая замыкается сама на
+    себя; внешний контур — цепочка с крупнейшим габаритом. Острова
+    (отверстия) отбрасываются, как и везде в конвейере: контур помещения
+    — одно кольцо, дырок в нём нет. Проверено на обоих клубках комплекта:
+    техпространство (лист 15) — внешний контур 500 м² (496 за вычетом
+    островов, по экспликации 494,6), открытая парковка (лист 3) — 1435 м²
+    против 1417 у сырого. Возвращает None, когда внешняя цепочка
+    невалидна или мельче крупнейшей доли `make_valid` (`min_area`) —
+    тогда это не клубок из перемычек, а что-то ещё."""
+    n = len(poly_mm)
+    if n < 4:
+        return None
+    chains, cur = [], [poly_mm[0]]
+    for i in range(1, n + 1):
+        a, b = poly_mm[i - 1], poly_mm[i % n]
+        if abs(a[0] - b[0]) > _CHAIN_SPLIT_TOL_MM and abs(a[1] - b[1]) > _CHAIN_SPLIT_TOL_MM:
+            chains.append(cur)
+            cur = [b]
+        else:
+            cur.append(b)
+    chains.append(cur)
+    if len(chains) < 2:
+        return None
+    # первая и последняя цепочки — один кусок кольца, разорванный в точке 0
+    chains[0] = chains[-1][:-1] + chains[0]
+    chains.pop()
+    rings = []
+    for chain in chains:
+        pts = [tuple(p) for p in chain]
+        if len(pts) >= 2 and pts[0] == pts[-1]:
+            pts.pop()
+        if len(pts) >= 4:
+            rings.append(pts)
+    if not rings:
+        return None
+    outer = max(rings, key=lambda r: box(min(x for x, _ in r), min(y for _, y in r),
+                                         max(x for x, _ in r), max(y for _, y in r)).area)
+    shape = Polygon(outer)
+    if not shape.is_valid or shape.area <= 0 or shape.area < min_area:
+        return None
+    return [(x, y) for x, y in outer]
+
+
+def _containment_shape(poly_mm: list):
+    """Фигура помещения ДЛЯ ПРОВЕРОК «точка внутри» (подпись площади,
+    подпись-спасение большой комнаты, центроид для секции): у невалидного
+    контура `Polygon.contains` ненадёжен — у техпространства листа 15
+    подпись 494,6 м² лежала внутри помещения, а `contains` отвечал «нет».
+    Сам `polygon_mm` при этом НЕ меняется: остальные эвристики листа
+    (охват осей, связность) откалиброваны на сырых контурах и чинятся в
+    самом конце `parse_page` (см. там)."""
+    shape = Polygon(poly_mm)
+    if shape.is_valid:
+        return shape
+    fixed = _valid_outline(poly_mm)
+    if fixed is not None and fixed is not poly_mm:
+        fixed_shape = Polygon(fixed)
+        if fixed_shape.is_valid:
+            return fixed_shape
+    return make_valid(shape)
 
 
 # Доля площади сырого контура, которую обязана сохранить крупнейшая доля
@@ -517,7 +629,8 @@ def _page_section_boundary_mm(page, correction: tuple = (0.0, 0.0)) -> Optional[
 _ROOM_BBOX_RATIO_MAX = 0.4
 
 
-def _drop_oversized_rooms(rooms: list, area_label_points: list = None) -> tuple:
+def _drop_oversized_rooms(rooms: list, area_label_points: list = None,
+                          parking: bool = False) -> tuple:
     """Полигон, чей габарит — почти весь этаж (доля от габарита ОХВАТА
     ВСЕХ помещений листа выше `_ROOM_BBOX_RATIO_MAX`), — не отдельное
     помещение, а фоновая заливка/штриховка на весь этаж (найдено
@@ -539,12 +652,23 @@ def _drop_oversized_rooms(rooms: list, area_label_points: list = None) -> tuple:
     вовсе — точка, а не площадь, разводит эти два случая безопасно, не
     ослабляя эвристику для настоящих обрывков штриховки.
 
-    Спасённая комната сразу помечается СВОЕЙ секцией «Паркинг»
-    (2026-08-31, прямое уточнение пользователя со скриншотом — у зоны
-    паркинга свои оси и чёткая прямоугольная граница, отдельная от С01/
-    С02, а не их объединение): `parse_page` уважает уже проставленную
-    секцию и не пересчитывает её по границе `С01`/`С02`. Возвращает
-    (оставшиеся, отброшенные)."""
+    Спасённая комната на листе подвала (`parking=True`) сразу помечается
+    СВОЕЙ секцией «Паркинг» (2026-08-31, прямое уточнение пользователя со
+    скриншотом — у зоны паркинга свои оси и чёткая прямоугольная граница,
+    отдельная от С01/С02, а не их объединение): `parse_page` уважает уже
+    проставленную секцию и не пересчитывает её по границе `С01`/`С02`.
+
+    На остальных листах спасённая комната — обычное помещение своей
+    секции (2026-09-12): техническое пространство секции 2 на листе 15
+    («Пространство для прокладки коммуникаций», 495 м² по экспликации) —
+    одно помещение на весь этаж с подписью площади внутри, а не заливка.
+    Оно и было вторым из двух «фоновых» полигонов, на которых эвристика
+    калибровалась 08-27 (первый — открытая парковка); настоящих
+    декоративных заливок в комплекте, выходит, нет — правило остаётся
+    страховкой для фигуры вовсе без подписи площади внутри. Подпись
+    ищется в починенной фигуре (`_containment_shape`): сырой контур
+    техпространства — клубок из 145 вершин, `contains` на нём врал.
+    Возвращает (оставшиеся, отброшенные)."""
     if len(rooms) < 2:
         return rooms, []
     xs = [x for r in rooms for x, _ in r.polygon_mm]
@@ -561,13 +685,19 @@ def _drop_oversized_rooms(rooms: list, area_label_points: list = None) -> tuple:
         if own_bbox / total_area <= _ROOM_BBOX_RATIO_MAX:
             kept.append(r)
             continue
-        poly = Polygon(r.polygon_mm)
+        poly = _containment_shape(r.polygon_mm)
         if any(poly.contains(p) for p in label_points):
-            r.section = _PARKING_SECTION
+            if parking:
+                r.section = _PARKING_SECTION
             kept.append(r)
         else:
             dropped.append(r)
     return kept, dropped
+
+
+# Листы, где спасённая большая комната — открытая парковка (`_drop_
+# oversized_rooms`): план подземного этажа.
+_PARKING_PAGES = {plan.page for plan in FLOOR_PLANS if plan.floor == "подземный"}
 
 
 def parse_page(page, correction: tuple = (0.0, 0.0)) -> tuple:
@@ -602,17 +732,19 @@ def parse_page(page, correction: tuple = (0.0, 0.0)) -> tuple:
     # без единой подписи внутри (`_drop_oversized_rooms`).
     area_label_points = [
         to_mm(w[0], w[1]) for i, w in enumerate(words)
-        if _AREA_RE.match(w[4]) and i + 1 < len(words)
-        and "м2" in words[i + 1][4].replace("²", "2")
+        if _area_label(words, i) is not None
     ]
 
     polygons_mm.sort(key=centroid_key)
     rooms = [Room(floor="", index=i, polygon_mm=poly)
             for i, poly in enumerate(polygons_mm)]
-    rooms, oversized = _drop_oversized_rooms(rooms, area_label_points)
+    rooms, oversized = _drop_oversized_rooms(
+        rooms, area_label_points, parking=page.number + 1 in _PARKING_PAGES)
     for i, r in enumerate(rooms):
         r.index = i
-    shapely_rooms = [Polygon(r.polygon_mm) for r in rooms]
+    # Для проверок «точка внутри» и центроида — починенная фигура, сам
+    # контур помещения остаётся сырым до конца функции (`_containment_shape`).
+    shapely_rooms = [_containment_shape(r.polygon_mm) for r in rooms]
 
     # секция: центроид комнаты по одну или другую сторону границы осей
     # «…с1»/«…с2» (см. _axis_boundary_x) — считается один раз на лист, в
@@ -628,21 +760,31 @@ def parse_page(page, correction: tuple = (0.0, 0.0)) -> tuple:
             cx = poly.centroid.x
             room.section = "С01" if cx < boundary_mm else "С02"
 
-    # площадь: число вида «14,3» рядом со словом «м2», центр — в комнате
+    # площадь: число вида «14,3» рядом со словом «м2», центр — в комнате.
+    # Комнат, содержащих точку, может быть несколько — большая с островами
+    # (открытая парковка, техпространство) обнимает комнаты-острова внутри
+    # себя; подпись отдаётся МЕНЬШЕЙ из них (2026-09-12: с починенным
+    # контуром парковка-кольцо забирала у кладовой внутри её 195,5 м²).
+    # У комнаты-кольца остаются и подписи того, что внутри неё не имеет
+    # своего контура (рампа, лестницы, разметка): из нескольких подписей
+    # одной комнаты берётся ближайшая к площади её контура (парковка:
+    # 1435 м² по контуру, подписи 20,1 / 1199,7 — берётся 1199,7).
     matched_area = 0
+    candidates = {}
     for i, w in enumerate(words):
-        if not _AREA_RE.match(w[4]):
-            continue
-        nxt = words[i + 1] if i + 1 < len(words) else None
-        if not nxt or "м2" not in nxt[4].replace("²", "2"):
+        value = _area_label(words, i)
+        if value is None:
             continue
         px, py = to_mm(w[0], w[1])
         point = Point(px, py)
-        for room, poly in zip(rooms, shapely_rooms):
-            if poly.contains(point):
-                room.area_m2 = float(w[4].replace(",", "."))
-                matched_area += 1
-                break
+        owners = [(poly.area, k) for k, poly in enumerate(shapely_rooms)
+                  if poly.contains(point)]
+        if owners:
+            candidates.setdefault(min(owners)[1], []).append(value)
+    for k, values in candidates.items():
+        geometric = shapely_rooms[k].area / 1e6
+        rooms[k].area_m2 = min(values, key=lambda v: abs(v - geometric))
+        matched_area += 1
 
     # врезки — каталог типов квартир, «ФРАГМЕНТ ПЛАНА» и т.п., тем же слоем
     # помещений, что и сам план (см. докстрока `_axis_envelope`) — вне
@@ -678,9 +820,11 @@ def parse_page(page, correction: tuple = (0.0, 0.0)) -> tuple:
         # Контур чинится В САМОМ КОНЦЕ, когда состав помещений листа уже
         # решён: все эвристики выше (подпись площади внутри, отсев фоновой
         # заливки, охват осей, связность) откалиброваны на СЫРЫХ контурах,
-        # и починка до них меняла их исход (2026-09-01: фоновая заливка на
-        # весь этаж на листе 15 из невалидной становилась валидной и
-        # «спасалась» как паркинг, а настоящий паркинг на листе 3 терялся).
+        # и починка до них меняла их исход (2026-09-01: контур на весь
+        # этаж на листе 15 из невалидного становился валидным и «спасался»
+        # как паркинг, а настоящий паркинг на листе 3 терялся; с 09-12 этот
+        # контур — настоящее техпространство, спасается по подписи, но уже
+        # без метки «Паркинг» — `_drop_oversized_rooms`).
         r.polygon_mm = _valid_outline(r.polygon_mm) or r.polygon_mm
 
     warnings = []
