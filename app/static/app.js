@@ -1668,6 +1668,16 @@ async function loadLateThreshold() {
 
 async function switchObject(objectId) {
   if (objectId === state.objectId) return;
+  // Живой запрос пользователя 2026-09-14: переключение на другой объект
+  // должно предупреждать о несохранённых изменениях, как и закрытие формы
+  // (можноЗакрытьФорму, ниже по файлу) — иначе открытая форма настроек
+  // (например, «Загрузка из FBX») молча остаётся висеть над данными уже
+  // ДРУГОГО объекта, а несохранённый черновик просто теряется.
+  const открытаяНесохранённая = document.querySelector('.modal-backdrop.open[data-dirty="1"]');
+  if (открытаяНесохранённая) {
+    if (!можноЗакрытьФорму(открытаяНесохранённая)) return;
+    открытаяНесохранённая.classList.remove("open");
+  }
   state.objectId = objectId;
   renderObjectSwitch();
 
@@ -31896,7 +31906,7 @@ document.getElementById("mfr-dynamics-to").addEventListener("change", (e) => {
 // в вендоренном наборе нет, и вендорить новое без спроса нельзя.
 
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
-                loop: null, key: null, поколение: 0, home: null };
+                loop: null, key: null, filterKey: null, поколение: 0, home: null };
 
 // Персональный ракурс (initial3DAngles — «Действия → Внешний вид →
 // Начальный ракурс 3D», 2026-08-03) для сцены «Модель МФР» — своя
@@ -32242,10 +32252,25 @@ async function buildMfr3D() {
   }
   // Ключ отбора: пересобирать сцену на каждое переключение вкладки незачем,
   // а на смену этажа или слоя «Элементы»/«Блоки» — обязательно.
-  const ключ = JSON.stringify([REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()),
-                               mfrShowElements(), mfrShowBlocks(), mfrShowAxes(), mfrShowFacades(),
-                               mfrShowPlans()]);
+  // Раздельно от фильтра (этаж/секция/часть/категория) — отдельным ключом,
+  // чтобы отличить смену ГЕОМЕТРИИ (фильтр) от простого показа/скрытия уже
+  // построенного (слои «Вид»): см. сохранение ракурса камеры ниже.
+  const filterKey = JSON.stringify(REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()));
+  const viewKey = JSON.stringify([mfrShowElements(), mfrShowBlocks(), mfrShowAxes(), mfrShowFacades(),
+                                   mfrShowPlans()]);
+  const ключ = filterKey + "|" + viewKey;
   if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
+
+  // Живой запрос пользователя 2026-09-14: галочка слоя в «Вид» (не смена
+  // этажа/секции — те меняют саму геометрию) пересобирала сцену с НУЛЯ,
+  // включая камеру — ракурс и зум, которые человек только что настроил
+  // мышью, слетали на «домашний». Раз набор этажей/секций/частей/категорий
+  // не изменился, значит изменился только показ слоёв — камеру переносим
+  // на новую сцену как есть, а не пересчитываем «домашний» ракурс.
+  const сохранитьРакурс = mfr3d.filterKey === filterKey && mfr3d.camera && mfr3d.controls;
+  const сохранённыйРакурс = сохранитьРакурс
+    ? { position: mfr3d.camera.position.clone(), target: mfr3d.controls.target.clone() }
+    : null;
 
   revitPlanStatus(data.elements.length
     ? `Сборка 3D: ${data.elements.length} элементов…`
@@ -32700,7 +32725,13 @@ async function buildMfr3D() {
   mfr3d.home = { targetX: w / 2, targetY: h / 2, targetZ: верх / 2, охват };
 
   const controls = new OrbitControls(camera, renderer.domElement);
-  applyMfr3DAngles(camera, controls, mfr3d.home);
+  if (сохранённыйРакурс) {
+    camera.position.copy(сохранённыйРакурс.position);
+    controls.target.copy(сохранённыйРакурс.target);
+    controls.update();
+  } else {
+    applyMfr3DAngles(camera, controls, mfr3d.home);
+  }
   // Колесо крутит медленно на дальней камере: шаг наезда пропорционален
   // расстоянию, а оно тут в десятки метров. Ускоряем и наезжаем В КУРСОР —
   // так не приходится сначала приблизиться, потом отдельно доехать.
@@ -32722,7 +32753,7 @@ async function buildMfr3D() {
   controls.update();
 
   mfr3d.scene = scene; mfr3d.camera = camera;
-  mfr3d.renderer = renderer; mfr3d.controls = controls; mfr3d.key = ключ;
+  mfr3d.renderer = renderer; mfr3d.controls = controls; mfr3d.key = ключ; mfr3d.filterKey = filterKey;
   bindMfr3DPick(renderer.domElement, camera, scene);
 
   // Внешние 3D-модели (благоустройство) — асинхронно, ПОСЛЕ того, как сцена
@@ -34939,8 +34970,14 @@ document.getElementById("menu-external-models")?.addEventListener("click", async
     previewPlacement: previewExternalModelPlacement,
   });
 });
+// Живой запрос пользователя 2026-09-14: «контролируй закрытие формы...
+// когда могут быть потеряны изменения» — эта кнопка шла В ОБХОД общего
+// сторожа несохранённого (можноЗакрытьФорму, ниже по файлу), закрывая
+// classList.remove("open") напрямую, как Esc делал бы БЕЗ проверки.
 document.getElementById("external-models-close")?.addEventListener("click", () => {
-  document.getElementById("external-models-backdrop").classList.remove("open");
+  const backdrop = document.getElementById("external-models-backdrop");
+  if (!можноЗакрытьФорму(backdrop)) return;
+  backdrop.classList.remove("open");
 });
 
 // После загрузки/сохранения офсета-поворота/recenter/удаления модели —

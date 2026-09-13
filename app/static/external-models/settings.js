@@ -260,11 +260,30 @@ export function renderExternalModelsPanel(container, deps) {
     floatingNumbersPanel = { modelId: model.id, el: panel };
   }
 
+  // Number(...) на ОБЕИХ сторонах каждого сравнения: черновик после правки
+  // хранит СТРОКУ (applyNumFieldChange пишет el.value как есть), а
+  // model.offset_mm/rotation_deg — числа. Без приведения `"1.5" !== 1.5`
+  // всегда true — карточка считалась бы «изменённой» даже когда человек
+  // ввёл ровно то же число, что уже сохранено.
   function isDirty(model) {
     const d = draftFor(model);
-    return d.offsetXM !== mmToM(model.offset_mm.x) || d.offsetYM !== mmToM(model.offset_mm.y)
-      || d.offsetZM !== mmToM(model.offset_mm.z)
+    return Number(d.offsetXM) !== mmToM(model.offset_mm.x) || Number(d.offsetYM) !== mmToM(model.offset_mm.y)
+      || Number(d.offsetZM) !== mmToM(model.offset_mm.z)
       || Number(d.rotationDeg) !== Number(model.rotation_deg) || d.name !== model.name;
+  }
+
+  // Общий сторож несохранённого (живой запрос пользователя 2026-09-14:
+  // «контролируй закрытие формы... когда могут быть потеряны изменения»).
+  // Черновик меняется НЕ ТОЛЬКО вводом в поле (это уже ловит общий
+  // document-level листенер на input/change, app.js) — ещё жестом мышью,
+  // калибровкой по точкам, автосовмещением, переносом привязки: там
+  // событий input/change на DOM нет вовсе, backdrop.dataset.dirty не
+  // выставился бы сам. Синхронизируем явно при каждой перерисовке.
+  function syncDirtyFlag() {
+    const backdrop = container.closest(".modal-backdrop");
+    if (!backdrop) return;
+    if (models.some(isDirty)) backdrop.dataset.dirty = "1";
+    else delete backdrop.dataset.dirty;
   }
 
   // Раскладка карточки (живой запрос пользователя 2026-09-13: «кнопки
@@ -320,18 +339,19 @@ export function renderExternalModelsPanel(container, deps) {
               ${numField('<label class="field" title="По часовой стрелке при виде на план сверху, вокруг центра модели">Поворот, °</label>', "em-rotation", "rotationDeg", "0.1")}
             </div>
             <div class="em-col-foot">
-              ${previewPlacement ? `<button type="button" class="btn btn-sm btn-secondary em-float-numbers" data-model-id="${model.id}"
-                title="Свернуть это окно и настраивать числа поверх 3D-сцены — камеру при этом можно свободно вращать и приближать мышью, форма не закрывается, только уходит с глаз до «Готово»"
-                >⤢ Настраивать поверх 3D</button>` : ""}
               <span class="em-save-group">
                 <button type="button" class="btn btn-sm btn-secondary em-cancel" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Отмена</button>
                 <button type="button" class="btn btn-sm btn-primary em-save" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Сохранить</button>
+                <span class="em-save-feedback" data-model-id="${model.id}"></span>
               </span>
             </div>
           </div>
           <div class="em-col-tools">
             <div class="em-col-title">Подобрать положение</div>
             <div class="em-tools-grid">
+              ${previewPlacement ? `<button type="button" class="btn btn-sm btn-secondary em-float-numbers" data-model-id="${model.id}"
+                title="Свернуть это окно и настраивать числа поверх 3D-сцены — камеру при этом можно свободно вращать и приближать мышью, форма не закрывается, только уходит с глаз до «Готово»"
+                >⤢ Настраивать поверх 3D</button>` : ""}
               ${beginPlacement ? `<button type="button" class="btn btn-sm ${activeGesture?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-placement"
                 data-model-id="${model.id}" ${(activeGesture && activeGesture.modelId !== model.id) || activeCalibration ? "disabled" : ""}
                 title="Мышью — сдвиг, с зажатой Control — поворот вокруг центра"
@@ -381,17 +401,20 @@ export function renderExternalModelsPanel(container, deps) {
       ${canEdit ? `
       <div class="form-card em-upload">
         <span class="em-upload-title">Загрузить модель</span>
-        <div class="view-mode-switch" role="radiogroup" aria-label="Вид модели">
-          ${Object.entries(KIND_LABELS).map(([kind, label]) => `<button type="button"
-            class="view-mode-btn em-upload-kind${kind === uploadKind ? " active" : ""}" role="radio"
-            aria-checked="${kind === uploadKind}" data-kind="${kind}">${label}</button>`).join("")}
+        <div class="em-upload-kind-group" role="radiogroup" aria-label="Вид модели">
+          ${Object.entries(KIND_LABELS).map(([kind, label]) => `<label class="toggle">
+            <input type="radio" name="em-upload-kind" class="em-upload-kind" value="${kind}" ${kind === uploadKind ? "checked" : ""}/>${label}</label>`).join("")}
         </div>
-        <label class="btn btn-sm btn-primary em-upload-pick">Выбрать FBX-файл…
-          <input type="file" id="em-upload-file" accept=".fbx" hidden/></label>
+        <div class="em-upload-file-row">
+          <span class="em-upload-filename" id="em-upload-filename">Файл не выбран</span>
+          <label class="btn btn-sm btn-primary em-upload-pick">Выбрать FBX-файл…
+            <input type="file" id="em-upload-file" accept=".fbx" hidden/></label>
+        </div>
         <span class="hint-text" id="em-upload-status"></span>
       </div>` : ""}
     `;
     wire();
+    syncDirtyFlag();
   }
 
   function wire() {
@@ -420,6 +443,16 @@ export function renderExternalModelsPanel(container, deps) {
     container.querySelectorAll(".em-save").forEach((btn) => btn.addEventListener("click", async () => {
       const id = Number(btn.dataset.modelId);
       const model = models.find((m) => m.id === id);
+      const feedbackEl = () => container.querySelector(`.em-save-feedback[data-model-id="${id}"]`);
+      // Кнопка гаснет, пока черновик не отличается от сохранённого (disabled
+      // не даёт кликнуть) — но живой запрос пользователя прямо просил и этот
+      // ответ («или что ничего не изменилось»), так что проверяем ещё раз
+      // здесь на случай программного клика/будущих изменений разметки.
+      if (!isDirty(model)) {
+        const fb = feedbackEl();
+        if (fb) { fb.textContent = "Изменений нет"; fb.classList.remove("ok"); }
+        return;
+      }
       const d = draftFor(model);
       const offsetXMm = mToMm(d.offsetXM);
       const offsetYMm = mToMm(d.offsetYM);
@@ -456,6 +489,15 @@ export function renderExternalModelsPanel(container, deps) {
         drafts.delete(id);
         showToast("Положение модели сохранено", "info");
         render();
+        // showToast пишет в статус-бар ПОД модалкой (z-index:100 перекрывает
+        // её целиком, живой запрос пользователя 2026-09-14) — отклик ещё и
+        // прямо в карточке, рядом с самой кнопкой.
+        const fb = feedbackEl();
+        if (fb) {
+          fb.textContent = "Изменения сохранены";
+          fb.classList.add("ok");
+          setTimeout(() => { if (fb.isConnected) fb.textContent = ""; }, 4000);
+        }
         onChanged && onChanged();
       } catch (e) {
         showToast(e.message || "Не удалось сохранить", "error");
@@ -692,13 +734,12 @@ export function renderExternalModelsPanel(container, deps) {
       }
     }));
 
-    container.querySelectorAll(".em-upload-kind").forEach((btn) => btn.addEventListener("click", () => {
-      uploadKind = btn.dataset.kind;
-      container.querySelectorAll(".em-upload-kind").forEach((b) => {
-        const on = b === btn;
-        b.classList.toggle("active", on);
-        b.setAttribute("aria-checked", String(on));
-      });
+    // Radio, а не кнопки-«таблетки» (живой запрос пользователя 2026-09-14:
+    // было непонятно, что это ОДИН переключатель из двух состояний, а не
+    // два самостоятельных действия) — состояние держит сам браузер, здесь
+    // только читаем его в модуль-переменную.
+    container.querySelectorAll(".em-upload-kind").forEach((radio) => radio.addEventListener("change", () => {
+      if (radio.checked) uploadKind = radio.value;
     }));
 
     const fileInput = container.querySelector("#em-upload-file");
@@ -706,6 +747,8 @@ export function renderExternalModelsPanel(container, deps) {
       fileInput.addEventListener("change", async () => {
         const file = fileInput.files[0];
         if (!file) return;
+        const filenameEl = container.querySelector("#em-upload-filename");
+        if (filenameEl) { filenameEl.textContent = file.name; filenameEl.classList.add("picked"); }
         const statusEl = container.querySelector("#em-upload-status");
         const kind = uploadKind;
         statusEl.textContent = "Разбор файла в браузере…";

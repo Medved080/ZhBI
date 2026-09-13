@@ -2354,7 +2354,15 @@
      модели ложится в две колонки — слева черновик положения и «Сохранить»,
      справа способы подобрать положение. Раскладка — settings.js,
      modelCardHtml. */
-  #external-models-backdrop .modal { width: min(1120px, 96vw); max-width: 96vw; max-height: 90vh; }
+  /* Ширина ПРОПОРЦИОНАЛЬНА свободной области экрана (живой запрос
+     пользователя 2026-09-14: было near-квадратное окно с фиксированным
+     потолком 1120px — уже свободной ширины экрана, и поля сдвига/поворота
+     заворачивались друг под друга раньше, чем требовалось). От края до
+     края с небольшим отступом, а не квадрат: 32px с каждой стороны,
+     потолок — чтобы на очень широких мониторах строки не расползались
+     нечитаемо. Ручка ресайза (.modal-window-resize-handle) по-прежнему
+     может сузить/расширить конкретное открытое окно поверх этого. */
+  #external-models-backdrop .modal { width: min(calc(100vw - 64px), 1600px); max-width: 96vw; max-height: 90vh; }
   #external-models-backdrop .modal > .hint-text { margin: 0 0 10px; }
   #external-models-backdrop .modal > .actions { margin-top: 8px; }
   /* Контейнер для запроса ширины ниже: окно можно сузить ручкой ресайза,
@@ -2388,7 +2396,17 @@
   .modal .em-num-grid label.field { margin: 0 0 4px; white-space: nowrap; }
   .em-num-grid .em-num-wrap { display: block; }
   .em-col-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-  .em-save-group { display: flex; gap: 8px; margin-left: auto; }
+  /* Отмена/Сохранить — В КОНЦЕ блока «Положение» (живой запрос
+     пользователя 2026-09-14), больше ничего в этой строке нет: «Настраивать
+     поверх 3D» переехала в «Подобрать положение» (справа) — она способ
+     НАСТРОИТЬ черновик, а не сохранить его. */
+  .em-save-group { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  /* Отклик на «Сохранить» (живой запрос пользователя 2026-09-14: кнопка
+     «не реагирует» — реагирует, но текстом в статус-баре ПОД модалкой
+     (.modal-backdrop, z-index:100, полностью её перекрывает), снаружи не
+     видно). Здесь — прямо рядом с кнопкой, внутри той же карточки. */
+  .em-save-feedback { font-size: 12px; color: var(--color-text-muted); }
+  .em-save-feedback.ok { color: var(--color-success, #2a8a4a); }
   /* «Отмена»/«Сохранить» гаснут, пока черновик не отличается от
      сохранённого. Правило точечное по той же причине, что у
      #fill-scope-apply: общего вида выключенной .btn в проекте нет. */
@@ -2405,7 +2423,23 @@
   }
   .em-upload { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 0; }
   .em-upload-title { font-weight: 600; }
-  .em-upload .hint-text { flex: 1 1 240px; margin: 0; }
+  .em-upload .hint-text { flex: 1 1 100%; margin: 0; order: 3; }
+  /* Вид загружаемой модели — классический переключатель radio (живой
+     запрос пользователя 2026-09-14: пара кнопок-«таблеток» рядом читалась
+     как два самостоятельных действия, а не как один переключатель одного
+     из двух состояний; тот же приём `label.toggle` + radio, что у
+     «Начальный ракурс», «Меню» — см. index.html). */
+  .em-upload-kind-group { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+  /* Строка «адреса» файла — как в обычном системном диалоге выбора файла:
+     поле с именем слева, кнопка выбора СПРАВА от него, а не наоборот. */
+  .em-upload-file-row { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; min-width: 220px; }
+  .em-upload-filename {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 6px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    background: var(--color-surface); color: var(--color-text-muted); font-size: 12px;
+  }
+  .em-upload-filename.picked { color: var(--color-text); }
+  .em-upload-pick { flex: 0 0 auto; }
 
   /* -------- поиск по маркам (Фильтры) -------- */
   #mark-search-input {
