@@ -51,12 +51,23 @@ function parseRuNumber(value) {
 // (wireNumFields), поэтому разметка идентична.
 function numFieldHtml(modelId, cssClass, field, step, value) {
   return `<span class="em-num-wrap">
-    <input type="text" class="${cssClass} em-num-input" data-model-id="${modelId}" data-field="${field}" data-step="${step}" value="${value}"/>
+    <input type="text" class="${cssClass} em-num-input" data-model-id="${modelId}" data-field="${field}" data-step="${step}" value="${fieldValueText(value)}"/>
     <span class="em-num-steppers">
       <button type="button" class="em-num-step" data-model-id="${modelId}" data-field="${field}" data-step="${step}" data-dir="1" tabindex="-1" title="+${step}">▲</button>
       <button type="button" class="em-num-step" data-model-id="${modelId}" data-field="${field}" data-step="${step}" data-dir="-1" tabindex="-1" title="−${step}">▼</button>
     </span>
   </span>`;
+}
+
+// Показ числа черновика в поле. Черновик хранит ПОЛНУЮ точность (§5
+// Docs/fbx-placement-claude-prompt.md: «округление только при
+// отображении»), а расчёт калибровки/автосовмещения даёт хвосты двоичной
+// арифметики — поле показывало «-33.80000000000001» и не влезало в ширину.
+// Три знака — миллиметр для сдвига и тысячная градуса для поворота; строку,
+// которую человек набрал сам, не трогаем (он мог ещё не дописать число).
+function fieldValueText(value) {
+  const text = typeof value === "number" && Number.isFinite(value) ? String(Number(value.toFixed(3))) : String(value ?? "");
+  return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 const AUTO_STATUS_LABELS = {
@@ -256,102 +267,128 @@ export function renderExternalModelsPanel(container, deps) {
       || Number(d.rotationDeg) !== Number(model.rotation_deg) || d.name !== model.name;
   }
 
+  // Раскладка карточки (живой запрос пользователя 2026-09-13: «кнопки
+  // вперемешку, форму надо скроллить, хотя всё может поместиться на одном
+  // экране»; экраны всегда 16:9). Шапка — что за файл, в каком он состоянии
+  // и «Удалить» (разрушительное — подальше от «Сохранить»). Тело — две
+  // колонки: слева ЧЕРНОВИК положения (четыре числа, «поверх 3D»,
+  // «Отмена»/«Сохранить» — сохраняется именно он), справа СПОСОБЫ его
+  // получить (мышью, по точкам, автоматически, по центру, перенос с другой
+  // модели) — каждый пишет только в черновик. При узкой карточке колонки
+  // встают друг под друга (container query в index.html).
   function modelCardHtml(model) {
     const d = draftFor(model);
     const bbox = model.metadata && model.metadata.bbox_size_mm;
     const dirty = isDirty(model);
+    const busy = Boolean(activeGesture || activeCalibration);
+    const kindLabel = KIND_LABELS[model.kind] || model.kind;
+    const meta = [
+      escapeHtml(model.original_name),
+      `${(model.size_bytes / (1024 * 1024)).toFixed(1)} МБ`,
+      bbox ? `габарит ${(bbox.x / 1000).toFixed(1)}×${(bbox.y / 1000).toFixed(1)}×${(bbox.z / 1000).toFixed(1)} м` : "",
+    ].filter(Boolean).join(" · ");
+    const numField = (labelHtml, cssClass, key, step) => `
+      <div>${labelHtml}${numFieldHtml(model.id, cssClass, key, step, d[key])}</div>`;
     return `
-      <div class="form-card" data-model-id="${model.id}">
-        <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px">
-          <h4 style="margin:0">${escapeHtml(model.name)} <span class="hint-text">(${KIND_LABELS[model.kind] || model.kind})</span></h4>
-          <span class="hint-text">${model.placement_mode === "unreferenced" ? "Привязка не подтверждена" : model.placement_mode}</span>
+      <div class="form-card em-card" data-model-id="${model.id}">
+        <div class="em-card-head">
+          <div class="em-card-title">
+            <span class="em-card-name">${escapeHtml(model.name)}</span>
+            <span class="em-kind-chip">${escapeHtml(kindLabel)}</span>
+            <span class="hint-text">${meta}</span>
+          </div>
+          <span class="hint-text em-card-state">${model.placement_mode === "unreferenced" ? "Привязка не подтверждена" : escapeHtml(model.placement_mode)}</span>
+          ${canEdit ? `<button type="button" class="btn btn-sm btn-danger em-delete" data-model-id="${model.id}">Удалить</button>` : ""}
         </div>
-        <div class="hint-text">
-          Файл: ${escapeHtml(model.original_name)}, ${(model.size_bytes / (1024 * 1024)).toFixed(1)} МБ
-          ${bbox ? `· габарит ${(bbox.x / 1000).toFixed(1)}×${(bbox.y / 1000).toFixed(1)}×${(bbox.z / 1000).toFixed(1)} м` : ""}
-        </div>
-        ${model.auto_placement_status ? `<div class="hint-text" style="margin-top:2px">
-          Автосовмещение: ${AUTO_STATUS_LABELS[model.auto_placement_status] || model.auto_placement_status}
-          ${model.auto_placement_json?.reason ? ` — ${escapeHtml(model.auto_placement_json.reason)}` : ""}
-          ${dirty ? " (черновик изменён вручную — этот статус относится к ранее сохранённому положению, не к черновику)" : ""}
+        ${model.auto_placement_status ? `<div class="hint-text em-card-note">
+          Автосовмещение: ${AUTO_STATUS_LABELS[model.auto_placement_status] || model.auto_placement_status}${model.auto_placement_json?.reason ? ` — ${escapeHtml(model.auto_placement_json.reason)}` : ""}${dirty ? " (черновик изменён вручную — этот статус относится к ранее сохранённому положению, не к черновику)" : ""}
         </div>` : ""}
+        ${canEdit && beginPlacement && activeGesture?.modelId === model.id ? `<div class="hint-text em-card-note">
+          Диалог скрыт — мышью сдвиг, с зажатой Control поворот. Управляйте плавающей панелью
+          поверх 3D («Готово»/«Отмена») или клавишей Esc.</div>` : ""}
+        ${canEdit && beginCalibration && activeCalibration?.modelId === model.id ? `<div class="hint-text em-card-note">
+          Диалог скрыт — укажите точки A/B сначала на FBX-файле, потом на конструктиве объекта,
+          плавающей панелью поверх 3D. Esc — отменить всё.</div>` : ""}
         ${canEdit ? `
-        <div class="row" style="margin-top:8px">
-          <div><label class="field">Сдвиг X, м</label>
-            ${numFieldHtml(model.id, "em-offset-x", "offsetXM", "0.01", d.offsetXM)}</div>
-          <div><label class="field">Сдвиг Y, м</label>
-            ${numFieldHtml(model.id, "em-offset-y", "offsetYM", "0.01", d.offsetYM)}</div>
-          <div><label class="field" title="0 = нижняя точка габарита модели на отметке 0 объекта — чисто техническая точка, НЕ уровень земли/пола (его нельзя вычислить из одного габарита: дерево или антенна задерут верх, а не покажут землю). Для привязки к реальной высоте — числом здесь, либо «Перенести эту привязку на» с уже откалиброванного по высоте файла той же сцены. Положительное — вверх.">Сдвиг Z, м</label>
-            ${numFieldHtml(model.id, "em-offset-z", "offsetZM", "0.01", d.offsetZM)}</div>
-          <div><label class="field" title="По часовой стрелке при виде на план сверху, вокруг центра модели">Поворот, °</label>
-            ${numFieldHtml(model.id, "em-rotation", "rotationDeg", "0.1", d.rotationDeg)}</div>
+        <div class="em-card-body">
+          <div class="em-col-position">
+            <div class="em-col-title">Положение</div>
+            <div class="em-num-grid">
+              ${numField('<label class="field">Сдвиг X, м</label>', "em-offset-x", "offsetXM", "0.01")}
+              ${numField('<label class="field">Сдвиг Y, м</label>', "em-offset-y", "offsetYM", "0.01")}
+              ${numField('<label class="field" title="0 = нижняя точка габарита модели на отметке 0 объекта — чисто техническая точка, НЕ уровень земли/пола (его нельзя вычислить из одного габарита: дерево или антенна задерут верх, а не покажут землю). Для привязки к реальной высоте — числом здесь, либо «Перенести эту привязку на» с уже откалиброванного по высоте файла той же сцены. Положительное — вверх.">Сдвиг Z, м</label>', "em-offset-z", "offsetZM", "0.01")}
+              ${numField('<label class="field" title="По часовой стрелке при виде на план сверху, вокруг центра модели">Поворот, °</label>', "em-rotation", "rotationDeg", "0.1")}
+            </div>
+            <div class="em-col-foot">
+              ${previewPlacement ? `<button type="button" class="btn btn-sm btn-secondary em-float-numbers" data-model-id="${model.id}"
+                title="Свернуть это окно и настраивать числа поверх 3D-сцены — камеру при этом можно свободно вращать и приближать мышью, форма не закрывается, только уходит с глаз до «Готово»"
+                >⤢ Настраивать поверх 3D</button>` : ""}
+              <span class="em-save-group">
+                <button type="button" class="btn btn-sm btn-secondary em-cancel" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Отмена</button>
+                <button type="button" class="btn btn-sm btn-primary em-save" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Сохранить</button>
+              </span>
+            </div>
+          </div>
+          <div class="em-col-tools">
+            <div class="em-col-title">Подобрать положение</div>
+            <div class="em-tools-grid">
+              ${beginPlacement ? `<button type="button" class="btn btn-sm ${activeGesture?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-placement"
+                data-model-id="${model.id}" ${(activeGesture && activeGesture.modelId !== model.id) || activeCalibration ? "disabled" : ""}
+                title="Мышью — сдвиг, с зажатой Control — поворот вокруг центра"
+                >${activeGesture?.modelId === model.id ? "Настройка…" : "Настроить положение"}</button>` : ""}
+              ${beginCalibration ? `<button type="button" class="btn btn-sm ${activeCalibration?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-calibrate"
+                data-model-id="${model.id}" ${(activeCalibration && activeCalibration.modelId !== model.id) || activeGesture ? "disabled" : ""}
+                title="Указать 2 общие точки на FBX-файле и на уже имеющемся конструктиве объекта — поворот и сдвиг посчитаются точно"
+                >${activeCalibration?.modelId === model.id ? "Идёт калибровка…" : "Совместить по точкам"}</button>` : ""}
+              ${model.kind === "facade" ? `<button type="button" class="btn btn-sm btn-secondary em-auto-align"
+                data-model-id="${model.id}" ${busy ? "disabled" : ""}
+                title="Найти поворот и сдвиг автоматически по контурам стен модели МФР объекта (нужна загруженная модель МФР со стенами); результат — в черновик, сохранение отдельной кнопкой"
+                >Совместить автоматически</button>` : ""}
+              <button type="button" class="btn btn-sm btn-secondary em-recenter" data-model-id="${model.id}"
+                title="Совместить центр модели с центром объекта по X/Y (сдвиг по высоте не трогает) и сразу сохранить">Сцентрировать с объектом</button>
+            </div>
+            ${models.length > 1 ? `
+            <div class="em-transfer">
+              <label class="field" title="Переносит уже подтверждённый поворот и сдвиг ЭТОЙ модели на другую — только если оба файла заведомо из одного и того же источника координат (Docs/DECISIONS.md)">Перенести эту привязку на</label>
+              <select class="em-transfer-target" data-model-id="${model.id}">
+                <option value="">— выберите модель —</option>
+                ${models.filter((m) => m.id !== model.id).map((m) => `<option value="${m.id}">${escapeHtml(m.name)} (${KIND_LABELS[m.kind] || m.kind})</option>`).join("")}
+              </select>
+              <button type="button" class="btn btn-sm btn-secondary em-transfer-apply" data-model-id="${model.id}">Перенести</button>
+            </div>` : ""}
+          </div>
         </div>
-        ${previewPlacement ? `<div style="margin-top:4px">
-          <button type="button" class="btn btn-sm btn-secondary em-float-numbers" data-model-id="${model.id}"
-            title="Свернуть это окно и настраивать числа поверх 3D-сцены — камеру при этом можно свободно вращать и приближать мышью, форма не закрывается, только уходит с глаз до «Готово»"
-            >⤢ Настраивать поверх 3D</button>
-        </div>` : ""}
         ${d.ambiguousCandidates && d.ambiguousCandidates.length ? `
-        <div class="hint-text" style="margin-top:6px">Автосовмещение неоднозначно — несколько вариантов дали похожее качество.
+        <div class="hint-text em-card-note">Автосовмещение неоднозначно — несколько вариантов дали похожее качество.
           Выберите вариант (покажется в 3D, если он открыт), проверьте и нажмите «Сохранить»:</div>
-        <div class="row" style="gap:6px; flex-wrap:wrap; margin-top:4px">
+        <div class="em-candidates">
           ${d.ambiguousCandidates.map((c, i) => `<button type="button" class="btn btn-sm btn-secondary em-auto-candidate"
             data-model-id="${model.id}" data-candidate-index="${i}"
             >Вариант ${i + 1} (покрытие ${(c.coverage * 100).toFixed(0)}%, невязка ${c.rmsResidualMm.toFixed(0)} мм)</button>`).join("")}
-        </div>` : ""}
-        ${beginPlacement && activeGesture?.modelId === model.id ? `<div class="hint-text">
-          Диалог скрыт — мышью сдвиг, с зажатой Control поворот. Управляйте плавающей панелью
-          поверх 3D («Готово»/«Отмена») или клавишей Esc.</div>` : ""}
-        ${beginCalibration && activeCalibration?.modelId === model.id ? `<div class="hint-text">
-          Диалог скрыт — укажите точки A/B сначала на FBX-файле, потом на конструктиве объекта,
-          плавающей панелью поверх 3D. Esc — отменить всё.</div>` : ""}
-        <div class="actions" style="margin-top:8px">
-          ${beginPlacement ? `<button type="button" class="btn btn-sm ${activeGesture?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-placement"
-            data-model-id="${model.id}" ${(activeGesture && activeGesture.modelId !== model.id) || activeCalibration ? "disabled" : ""}
-            title="Мышью — сдвиг, с зажатой Control — поворот вокруг центра"
-            >${activeGesture?.modelId === model.id ? "Настройка…" : "Настроить положение"}</button>` : ""}
-          ${beginCalibration ? `<button type="button" class="btn btn-sm ${activeCalibration?.modelId === model.id ? "btn-primary" : "btn-secondary"} em-calibrate"
-            data-model-id="${model.id}" ${(activeCalibration && activeCalibration.modelId !== model.id) || activeGesture ? "disabled" : ""}
-            title="Указать 2 общие точки на FBX-файле и на уже имеющемся конструктиве объекта — поворот и сдвиг посчитаются точно"
-            >${activeCalibration?.modelId === model.id ? "Идёт калибровка…" : "Совместить по точкам"}</button>` : ""}
-          ${model.kind === "facade" ? `<button type="button" class="btn btn-sm btn-secondary em-auto-align"
-            data-model-id="${model.id}" ${activeGesture || activeCalibration ? "disabled" : ""}
-            title="Найти поворот и сдвиг автоматически по контурам стен модели МФР объекта (нужна загруженная модель МФР со стенами); результат — в черновик, сохранение отдельной кнопкой"
-            >Совместить автоматически</button>` : ""}
-          <button type="button" class="btn btn-sm btn-secondary em-recenter" data-model-id="${model.id}">Сцентрировать с объектом</button>
-          <button type="button" class="btn btn-sm btn-secondary em-cancel" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Отмена</button>
-          <button type="button" class="btn btn-sm btn-primary em-save" data-model-id="${model.id}" ${dirty ? "" : "disabled"}>Сохранить</button>
-          ${trashButtonHtmlFallback(model.id)}
-        </div>
-        ${models.length > 1 ? `
-        <div class="row" style="margin-top:8px; align-items:flex-end; gap:8px">
-          <div style="flex:1"><label class="field" title="Переносит уже подтверждённый поворот и сдвиг ЭТОЙ модели на другую — только если оба файла заведомо из одного и того же источника координат (Docs/DECISIONS.md)">Перенести эту привязку на</label>
-            <select class="em-transfer-target" data-model-id="${model.id}">
-              <option value="">— выберите модель —</option>
-              ${models.filter((m) => m.id !== model.id).map((m) => `<option value="${m.id}">${escapeHtml(m.name)} (${KIND_LABELS[m.kind] || m.kind})</option>`).join("")}
-            </select>
-          </div>
-          <button type="button" class="btn btn-sm btn-secondary em-transfer-apply" data-model-id="${model.id}">Перенести</button>
         </div>` : ""}` : ""}
       </div>`;
   }
 
-  function trashButtonHtmlFallback(modelId) {
-    return `<button type="button" class="btn btn-sm btn-danger em-delete" data-model-id="${modelId}" style="margin-left:auto">Удалить</button>`;
-  }
+  // Вид загружаемой модели — выбор ДО выбора файла (от него зависит разбор,
+  // см. fbx.js), поэтому хранится между перерисовками панели: после
+  // загрузки первой модели форма перерисовывается, и выбор не должен молча
+  // сбрасываться на «Благоустройство».
+  let uploadKind = "ground";
 
   function render() {
     container.innerHTML = `
       ${models.map(modelCardHtml).join("") || '<div class="hint-text">Внешних 3D-моделей пока нет.</div>'}
       ${canEdit ? `
-      <div class="form-card">
-        <h4>Загрузить модель</h4>
-        <div class="row" style="gap:16px; margin-bottom:8px">
-          <label><input type="radio" name="em-upload-kind" value="ground" checked/> Благоустройство</label>
-          <label><input type="radio" name="em-upload-kind" value="facade"/> Фасад</label>
+      <div class="form-card em-upload">
+        <span class="em-upload-title">Загрузить модель</span>
+        <div class="view-mode-switch" role="radiogroup" aria-label="Вид модели">
+          ${Object.entries(KIND_LABELS).map(([kind, label]) => `<button type="button"
+            class="view-mode-btn em-upload-kind${kind === uploadKind ? " active" : ""}" role="radio"
+            aria-checked="${kind === uploadKind}" data-kind="${kind}">${label}</button>`).join("")}
         </div>
-        <input type="file" id="em-upload-file" accept=".fbx"/>
-        <div class="hint-text" id="em-upload-status"></div>
+        <label class="btn btn-sm btn-primary em-upload-pick">Выбрать FBX-файл…
+          <input type="file" id="em-upload-file" accept=".fbx" hidden/></label>
+        <span class="hint-text" id="em-upload-status"></span>
       </div>` : ""}
     `;
     wire();
@@ -655,13 +692,22 @@ export function renderExternalModelsPanel(container, deps) {
       }
     }));
 
+    container.querySelectorAll(".em-upload-kind").forEach((btn) => btn.addEventListener("click", () => {
+      uploadKind = btn.dataset.kind;
+      container.querySelectorAll(".em-upload-kind").forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-checked", String(on));
+      });
+    }));
+
     const fileInput = container.querySelector("#em-upload-file");
     if (fileInput) {
       fileInput.addEventListener("change", async () => {
         const file = fileInput.files[0];
         if (!file) return;
         const statusEl = container.querySelector("#em-upload-status");
-        const kind = container.querySelector('input[name="em-upload-kind"]:checked')?.value || "ground";
+        const kind = uploadKind;
         statusEl.textContent = "Разбор файла в браузере…";
         try {
           const { ensureExternalModelsLoaded } = await import("/static/external-models/app-bridge.js");
