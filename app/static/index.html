@@ -5438,6 +5438,20 @@
            border:1px solid var(--color-border); border-radius:var(--radius);
            background:var(--color-surface); overflow:hidden">
         <div id="revit-plan-canvas" style="position:absolute; inset:0"></div>
+        <!-- Индикатор масштаба + сброс — как у основной схемы ЖБИ (2D)
+             и её 3D (`.zoom-indicator`, живой запрос пользователя
+             2026-09-14: «сделай в МФР как в ЖБИ»). «100%» — тот же смысл,
+             что там: не физический масштаб 1:1, а исходный охват «вписать
+             всё» (revitPlanState.fit / mfr3d.home). Ровно один виден разом
+             — переключаются вместе с режимом 2D/3D, applyMfrMode. -->
+        <div id="mfr-plan-zoom-indicator" class="zoom-indicator">
+          <span id="mfr-plan-zoom-value" class="zoom-value">100%</span>
+          <button class="btn btn-sm btn-secondary" id="mfr-plan-zoom-reset" title="Сбросить на всю схему">⟲</button>
+        </div>
+        <div id="mfr-3d-zoom-indicator" class="zoom-indicator" style="display:none">
+          <span id="mfr-3d-zoom-value" class="zoom-value">100%</span>
+          <button class="btn btn-sm btn-secondary" id="mfr-3d-zoom-reset" title="Сбросить на исходный ракурс">⟲</button>
+        </div>
         <!-- Сцена 3D лежит поверх плана и показывается вместо него. Своя, а
              не общая с 3D чертежа: та завязана на изделия, их статусы и
              расчёт высот эвристиками, а здесь высота и отметка приходят из

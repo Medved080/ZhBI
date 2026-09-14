@@ -29891,8 +29891,32 @@ function drawRevitPlan(data) {
 
   // Исходный охват держим отдельно от текущего вида: «Вписать» должна
   // возвращать именно его, а не пересчитывать по элементам заново.
-  revitPlanState.view = { x: 0, y: 0, w, h };
-  revitPlanState.fit = { x: 0, y: 0, w, h };
+  const fit = { x: 0, y: 0, w, h };
+  // Живой запрос пользователя 2026-09-14 (та же жалоба уже чинилась для
+  // 3D, mfr3d.objectId — здесь тот же принцип для 2D): переключение
+  // галочки «Фильтры»/«Вид» не должно сбрасывать текущий масштаб/пан
+  // плана. Сложность в том, что ЛОКАЛЬНАЯ система координат плана
+  // (minX/minY/h выше) зависит не только от набора элементов, но и от
+  // того, какие слои включены (Блоки/Оси/Планы шире габарита элементов) —
+  // то есть даже повторная отрисовка ТЕХ ЖЕ данных при переключении слоя
+  // может сдвинуть систему координат. Раз объект тот же — переносим
+  // текущий видимый прямоугольник (view) из СТАРОЙ системы координат в
+  // НОВУЮ (перевод: модельные координаты не меняются, меняется только
+  // происхождение локальных). Объект сменился — начинаем заново, как раньше.
+  const originX = ox + minX, originY = oy + minY;
+  const old = revitPlanState.frame;
+  let view;
+  if (revitPlanState.view && old && old.objectId === revitPlanState.objectId) {
+    const v = revitPlanState.view;
+    const dx = old.originX - originX;
+    const dy = (h - old.h) + (originY - old.originY);
+    view = { x: v.x + dx, y: v.y + dy, w: v.w, h: v.h };
+  } else {
+    view = { ...fit };
+  }
+  revitPlanState.view = view;
+  revitPlanState.fit = fit;
+  revitPlanState.frame = { originX, originY, h, objectId: revitPlanState.objectId };
   box.innerHTML = `<svg id="revit-plan-svg" viewBox="0 0 ${w} ${h}"
     style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${planUnderlay}${paths.join("")}${blockRects.join("")}${axisLines.join("")}</svg>`;
 
@@ -29942,6 +29966,7 @@ function bindRevitPlanZoom(svg) {
   const apply = () => {
     svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
     updateMfrAxisLabelSizing(svg, v);
+    updateMfrPlanZoomIndicator();
   };
   revitPlanState.applyView = apply;
   apply();
@@ -30004,12 +30029,25 @@ function bindRevitPlanZoom(svg) {
   });
 }
 
-document.getElementById("revit-plan-fit").addEventListener("click", () => {
+// ---------- индикатор зума + сброс в 2D МФР (живой запрос пользователя
+// 2026-09-14: «сделай в МФР как в ЖБИ») — тот же смысл, что у
+// updateZoomIndicator основной схемы: «100%» — это revitPlanState.fit
+// («Вписать всё»), не физический масштаб 1:1. ----------
+function resetRevitPlanView() {
   const fit = revitPlanState.fit, v = revitPlanState.view;
   if (!fit || !v || !revitPlanState.applyView) return;
   v.x = fit.x; v.y = fit.y; v.w = fit.w; v.h = fit.h;
   revitPlanState.applyView();
-});
+}
+function updateMfrPlanZoomIndicator() {
+  const valueEl = document.getElementById("mfr-plan-zoom-value");
+  if (!valueEl) return;
+  const { fit, view } = revitPlanState;
+  if (!fit || !view || !view.w) { valueEl.textContent = "—"; return; }
+  valueEl.textContent = `${Math.round((fit.w / view.w) * 100)}%`;
+}
+document.getElementById("revit-plan-fit").addEventListener("click", resetRevitPlanView);
+document.getElementById("mfr-plan-zoom-reset").addEventListener("click", resetRevitPlanView);
 
 
 async function showRevitCard(elementId) {
@@ -31906,7 +31944,7 @@ document.getElementById("mfr-dynamics-to").addEventListener("change", (e) => {
 // в вендоренном наборе нет, и вендорить новое без спроса нельзя.
 
 const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
-                loop: null, key: null, filterKey: null, поколение: 0, home: null };
+                loop: null, key: null, objectId: null, поколение: 0, home: null, homeDistance: null };
 
 // Персональный ракурс (initial3DAngles — «Действия → Внешний вид →
 // Начальный ракурс 3D», 2026-08-03) для сцены «Модель МФР» — своя
@@ -31931,6 +31969,23 @@ function applyMfr3DAngles(camera, controls, home) {
   controls.target.set(home.targetX, home.targetY, home.targetZ);
   controls.update();
 }
+
+// ---------- индикатор зума + сброс в 3D МФР (живой запрос пользователя
+// 2026-09-14: «сделай в МФР как в ЖБИ» — там indicator+сброс уже были у
+// обеих сцен, здесь не было вовсе). Тот же приём, что у
+// updateZoomIndicator3D основной сцены: расстояние камера-цель относительно
+// «домашнего» (mfr3d.homeDistance, выше), 100% = вся сцена целиком. ----------
+function updateMfrZoomIndicator3D() {
+  const valueEl = document.getElementById("mfr-3d-zoom-value");
+  if (!valueEl) return;
+  if (!mfr3d.camera || !mfr3d.controls || !mfr3d.homeDistance) { valueEl.textContent = "—"; return; }
+  const currentDistance = mfr3d.camera.position.distanceTo(mfr3d.controls.target);
+  if (!currentDistance) { valueEl.textContent = "—"; return; }
+  valueEl.textContent = `${Math.round((mfr3d.homeDistance / currentDistance) * 100)}%`;
+}
+document.getElementById("mfr-3d-zoom-reset").addEventListener("click", () => {
+  if (mfr3d.camera && mfr3d.controls && mfr3d.home) applyMfr3DAngles(mfr3d.camera, mfr3d.controls, mfr3d.home);
+});
 
 // -------- внешние 3D-модели (благоустройство) в сцене МФР --------
 //
@@ -32106,6 +32161,8 @@ function applyMfrMode() {
   document.getElementById("revit-plan-canvas").style.display = трёхмерный ? "none" : "";
   document.getElementById("mfr-3d-canvas").style.display = трёхмерный ? "" : "none";
   document.getElementById("revit-plan-fit").style.display = трёхмерный ? "none" : "";
+  document.getElementById("mfr-plan-zoom-indicator").style.display = трёхмерный ? "none" : "";
+  document.getElementById("mfr-3d-zoom-indicator").style.display = трёхмерный ? "" : "none";
   if (трёхмерный) buildMfr3D();
 }
 
@@ -32261,13 +32318,18 @@ async function buildMfr3D() {
   const ключ = filterKey + "|" + viewKey;
   if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
 
-  // Живой запрос пользователя 2026-09-14: галочка слоя в «Вид» (не смена
-  // этажа/секции — те меняют саму геометрию) пересобирала сцену с НУЛЯ,
-  // включая камеру — ракурс и зум, которые человек только что настроил
-  // мышью, слетали на «домашний». Раз набор этажей/секций/частей/категорий
-  // не изменился, значит изменился только показ слоёв — камеру переносим
-  // на новую сцену как есть, а не пересчитываем «домашний» ракурс.
-  const сохранитьРакурс = mfr3d.filterKey === filterKey && mfr3d.camera && mfr3d.controls;
+  // Живой запрос пользователя 2026-09-14 (дважды за сессию — первая
+  // правка сохраняла ракурс только при переключении СЛОЁВ показа, но не
+  // при смене этажа/секции/категории через «Фильтры»/«Вид»; тот же
+  // человек прямо попросил не трогать ракурс НИ на одно из этих
+  // переключений): пересобирали сцену с нуля, включая камеру, на КАЖДОЕ
+  // изменение отбора — ракурс и зум, которые человек только что настроил
+  // мышью, слетали на «домашний». Раз объект тот же — камеру переносим на
+  // новую сцену как есть, а не пересчитываем «домашний» ракурс, ЧТО БЫ ни
+  // изменилось в отборе (тот же принцип, что у 2D-плана ниже и у
+  // preserveView основной схемы ЖБИ — сохранять вид по умолчанию, сбрасывать
+  // только на настоящую смену объекта).
+  const сохранитьРакурс = mfr3d.objectId === revitPlanState.objectId && mfr3d.camera && mfr3d.controls;
   const сохранённыйРакурс = сохранитьРакурс
     ? { position: mfr3d.camera.position.clone(), target: mfr3d.controls.target.clone() }
     : null;
@@ -32723,6 +32785,14 @@ async function buildMfr3D() {
   // applyMfr3DAngles ниже) мог переставить камеру без пересборки всей
   // сцены (разбор геометрии заново — дорогая операция).
   mfr3d.home = { targetX: w / 2, targetY: h / 2, targetZ: верх / 2, охват };
+  // Точка отсчёта для индикатора зума 3D (см. updateMfrZoomIndicator3D
+  // ниже, живой запрос пользователя 2026-09-14 — «как в ЖБИ»): реальное
+  // расстояние камера-цель на «домашнем» ракурсе не зависит от pitch/yaw
+  // (applyMfr3DAngles всегда ставит камеру РОВНО на home.охват*1.45 от
+  // цели, при любом угле обзора) — тот же смысл, что у v3.homeDistance
+  // основной сцены ЖБИ, только без необходимости реально переставлять
+  // камеру, чтобы его посчитать.
+  mfr3d.homeDistance = охват * 1.45;
 
   const controls = new OrbitControls(camera, renderer.domElement);
   if (сохранённыйРакурс) {
@@ -32753,7 +32823,7 @@ async function buildMfr3D() {
   controls.update();
 
   mfr3d.scene = scene; mfr3d.camera = camera;
-  mfr3d.renderer = renderer; mfr3d.controls = controls; mfr3d.key = ключ; mfr3d.filterKey = filterKey;
+  mfr3d.renderer = renderer; mfr3d.controls = controls; mfr3d.key = ключ; mfr3d.objectId = revitPlanState.objectId;
   bindMfr3DPick(renderer.domElement, camera, scene);
 
   // Внешние 3D-модели (благоустройство) — асинхронно, ПОСЛЕ того, как сцена
@@ -32769,6 +32839,7 @@ async function buildMfr3D() {
   const кадр = () => {
     mfr3d.loop = requestAnimationFrame(кадр);
     controls.update();
+    updateMfrZoomIndicator3D();
     renderer.render(scene, camera);
   };
   кадр();
