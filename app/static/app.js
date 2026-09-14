@@ -23269,18 +23269,20 @@ function renderDiskPlate(disk) {
     + `${formatBytes(disk.total_bytes)}. `;
   const копии = `Копия базы занимает ${formatBytes(disk.db_bytes)}`
     + (disk.copies_fit ? ` — поместится ещё около ${disk.copies_fit}` : "")
-    + `. Служебных копий хранится ${BACKUP_KEEP} последних, лишние убираются сами; `
-    + `созданные вручную не удаляются никогда.`;
+    + `. Служебные копии (перед стартом сервера и обработкой данных) хранятся `
+    + `${BACKUP_KEEP_DAYS} дней, лишние убираются сами; копии перед загрузкой файла — `
+    + `последние ${BACKUP_KEEP_IMPORT}; созданные вручную не удаляются никогда.`;
   box.innerHTML = disk.message
     ? `<b>${escapeHtml(disk.message)}</b><br>${копии}`
     : место + копии;
 }
 
-// Столько служебных копий держит сервер (app/backups.KEEP_SERVICE_BACKUPS).
-// Число продублировано намеренно и только ради текста подсказки: слать его
-// отдельным полем ответа ради одной фразы не стоит, а разойдясь, оно
-// испортит подсказку, но не поведение.
-const BACKUP_KEEP = 5;
+// Сколько дней/штук держит сервер (app/backups.KEEP_SERVICE_DAYS,
+// app/backups.KEEP_IMPORT_BACKUPS). Числа продублированы намеренно и только
+// ради текста подсказки: слать их отдельными полями ответа ради одной фразы
+// не стоит, а разойдясь, они испортят подсказку, но не поведение.
+const BACKUP_KEEP_DAYS = 15;
+const BACKUP_KEEP_IMPORT = 10;
 
 async function loadBackups() {
   const tbody = document.getElementById("backups-tbody");
