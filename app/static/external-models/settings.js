@@ -88,7 +88,7 @@ const AUTO_STATUS_LABELS = {
 };
 
 export function renderExternalModelsPanel(container, deps) {
-  const { objectId, canEdit, api, escapeHtml, showToast, onChanged, beginPlacement, beginCalibration, previewPlacement } = deps;
+  const { objectId, canEdit, api, escapeHtml, showToast, onChanged, beginPlacement, beginCalibration, previewPlacement, showGizmo, hideGizmo } = deps;
   let models = [];
   const drafts = new Map(); // modelId -> {offsetXM, offsetYM, rotationDeg, name}
   let activeGesture = null; // {modelId, stop()} — не больше одного разом
@@ -242,6 +242,7 @@ export function renderExternalModelsPanel(container, deps) {
     floatingNumbersPanel = null;
     window.removeEventListener("keydown", onFloatingNumbersKeyDown);
     document.getElementById("external-models-backdrop")?.classList.add("open");
+    if (hideGizmo) hideGizmo();
     render();
   }
 
@@ -253,6 +254,11 @@ export function renderExternalModelsPanel(container, deps) {
     if (floatingNumbersPanel) closeFloatingNumbers();
     const d = draftFor(model);
     document.getElementById("external-models-backdrop")?.classList.remove("open");
+    // Гизмо осей X/Y/Z (живой запрос пользователя 2026-09-15: «обозначение
+    // осей... куда двигаем») — прямо в 3D-сцене, а не в этой HTML-панели:
+    // показывается на весь заход в режим, положение обновляет сама
+    // previewExternalModelPlacement (app.js) на каждое изменение поля.
+    if (showGizmo) showGizmo(model);
     const field = (labelText, cssClass, key, step, value) => `
       <label style="display:flex; flex-direction:column; gap:2px; color:#fff; font:12px sans-serif">
         <span style="opacity:.8">${labelText}</span>

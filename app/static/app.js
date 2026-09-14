@@ -35039,6 +35039,8 @@ document.getElementById("menu-external-models")?.addEventListener("click", async
     beginPlacement: beginExternalModelPlacement,
     beginCalibration: beginExternalModelCalibration,
     previewPlacement: previewExternalModelPlacement,
+    showGizmo: showExternalModelGizmo,
+    hideGizmo: hidePlacementGizmo,
   });
 });
 // Живой запрос пользователя 2026-09-14: «контролируй закрытие формы...
@@ -35272,6 +35274,137 @@ function syncGroupToModel(group, model, projectFn, extra) {
   group.position.set(v[0], v[1], v[2]);
 }
 
+// ---------- Гизмо осей X/Y/Z в режиме настройки положения внешней 3D-
+// модели (живой запрос пользователя 2026-09-15: «обозначение осей и где +
+// и где -, чтобы пользователю было понятно куда двигаем») ----------
+//
+// Цвет/подпись закреплены за ПОЛЕМ формы (Сдвиг X/Y/Z), а не за мировой
+// осью сцены: у ЖБИ мир повёрнут относительно плана (Y — вверх, план —
+// плоскость XZ, положительный offset Y уходит в мировой −Z — см.
+// beginExternalModelPlacement/worldDeltaToOffsetDelta выше и
+// coordinates.js), поэтому направления векторов свои для каждой сцены.
+// Гизмо — САМОСТОЯТЕЛЬНЫЙ объект сцены, НЕ child группы модели: если бы
+// он наследовал quaternion группы, стрелка «X+» поворачивалась бы вместе
+// с моделью и переставала показывать, куда реально сдвигается offset —
+// его смысл именно в неподвижности относительно плана/объекта.
+const AXIS_GIZMO_COLORS = { x: 0xe0483e, y: 0x3fa64a, z: 0x3f7fe0 };
+const AXIS_GIZMO_DIRS = {
+  mfr: { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] },
+  // ZHBI: мир X=offsetX, мир Y(вверх)=offsetZ, мир −Z=offsetY (знак минус
+  // обязателен — тот же, что у worldDeltaToOffsetDelta: dOffsetY = −d.z).
+  zhbi: { x: [1, 0, 0], y: [0, 0, -1], z: [0, 1, 0] },
+};
+
+function hexToCss(hex) {
+  return "#" + hex.toString(16).padStart(6, "0");
+}
+
+// Тот же приём, что у build3DLabelSprite/build3DZoneLabelSprite выше
+// (canvas → CanvasTexture → SpriteMaterial → Sprite, масштаб в мировых мм
+// по высоте канваса) — своя копия, а не переиспользование: тем функциям
+// нужен конкретный элемент/зона, здесь — только текст, цвет и целевая
+// высота.
+function buildAxisGizmoLabelSprite(text, colorHex, worldHeight) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const fontPx = 64;
+  const paddingX = 10, paddingY = 8;
+  ctx.font = `bold ${fontPx}px sans-serif`;
+  const textWidth = ctx.measureText(text).width;
+  canvas.width = Math.ceil(textWidth) + paddingX * 2;
+  canvas.height = Math.ceil(fontPx) + paddingY * 2;
+  ctx.fillStyle = hexToCss(colorHex);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textBaseline = "middle";
+  ctx.font = `bold ${fontPx}px sans-serif`;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(text, paddingX, paddingY + fontPx / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, sizeAttenuation: true });
+  const sprite = new THREE.Sprite(material);
+  sprite.renderOrder = 999;
+  const worldPerPx = worldHeight / canvas.height;
+  sprite.scale.set(canvas.width * worldPerPx, canvas.height * worldPerPx, 1);
+  return sprite;
+}
+
+// Длина стрелки «−» — заметно короче «+» (не половина ровно, чтобы
+// направление «главное/основное» читалось с одного взгляда, а не только
+// по подписи), обе стороны всё равно подписаны явно.
+function buildPlacementGizmo(sceneKind, length) {
+  const group = new THREE.Group();
+  group.renderOrder = 999;
+  const dirs = AXIS_GIZMO_DIRS[sceneKind];
+  const labelHeight = length * 0.16;
+  for (const axis of ["x", "y", "z"]) {
+    const dir = new THREE.Vector3(...dirs[axis]);
+    const color = AXIS_GIZMO_COLORS[axis];
+    group.add(new THREE.ArrowHelper(dir, new THREE.Vector3(), length, color, length * 0.22, length * 0.12));
+    group.add(new THREE.ArrowHelper(dir.clone().negate(), new THREE.Vector3(), length * 0.45, color, length * 0.14, length * 0.08));
+    const posLabel = buildAxisGizmoLabelSprite(`${axis.toUpperCase()}+`, color, labelHeight);
+    posLabel.position.copy(dir).multiplyScalar(length * 1.18);
+    group.add(posLabel);
+    const negLabel = buildAxisGizmoLabelSprite(`${axis.toUpperCase()}−`, color, labelHeight * 0.85);
+    negLabel.position.copy(dir).multiplyScalar(-(length * 0.45 + length * 0.2));
+    group.add(negLabel);
+  }
+  return group;
+}
+
+// Единственный активный гизмо разом (режимов настройки положения тоже не
+// бывает больше одного, см. activeGesture/activeCalibration в settings.js).
+let placementGizmo = null; // { object, scene } | null
+
+function hidePlacementGizmo() {
+  if (!placementGizmo) return;
+  const { object, scene } = placementGizmo;
+  scene.remove(object);
+  // ArrowHelper — только удалить из сцены: geometry общая на класс (a не
+  // на экземпляр), dispose() сломал бы её для остальных стрелок этого же
+  // гизмо ДО того, как traverse до них дойдёт. Освобождать стоит только
+  // то, что реально уникально на экземпляр — canvas-текстуры подписей.
+  object.traverse((o) => {
+    if (o.isSprite) { o.material.map?.dispose(); o.material.dispose(); }
+  });
+  placementGizmo = null;
+}
+
+function showPlacementGizmo(scene, sceneKind, position, sizeHintMm) {
+  hidePlacementGizmo();
+  if (!scene) return;
+  const length = Math.min(Math.max((sizeHintMm || 3000) * 0.5, 1500), 8000);
+  const object = buildPlacementGizmo(sceneKind, length);
+  object.position.copy(position);
+  scene.add(object);
+  placementGizmo = { object, scene };
+}
+
+function updatePlacementGizmoPosition(position) {
+  if (placementGizmo) placementGizmo.object.position.copy(position);
+}
+
+function placementGizmoSizeHintMm(model) {
+  const bbox = model?.metadata?.bbox_size_mm;
+  if (!bbox) return null;
+  return Math.max(bbox.x || 0, bbox.y || 0, bbox.z || 0) || null;
+}
+
+// Для режима «Настраивать поверх 3D» (плавающая панель чисел,
+// settings.js) — та же сцена/группа, что резолвит previewExternalModelPlacement,
+// но здесь достаточно один раз найти группу и показать гизмо: жест мышью
+// тут не участвует, позицию двигает previewExternalModelPlacement сама
+// (см. updatePlacementGizmoPosition внутри неё выше).
+function showExternalModelGizmo(model) {
+  if (mfr3d.scene && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer) {
+    const group = mfrExternalModels.layer.getGroup(model.id);
+    if (group) { showPlacementGizmo(mfr3d.scene, "mfr", group.position, placementGizmoSizeHintMm(model)); return; }
+  }
+  if (state.view3d.scene && zhbiExternalModels.objectId === model.object_id && zhbiExternalModels.layer) {
+    const group = zhbiExternalModels.layer.getGroup(model.id);
+    if (group) { showPlacementGizmo(state.view3d.scene, "zhbi", group.position, placementGizmoSizeHintMm(model)); return; }
+  }
+}
+
 // Разовая установка положения группы БЕЗ жеста/захвата controls — только
 // прямой пересчёт position/quaternion по переданному offset/rotation
 // (Docs/fbx-placement-repair-claude-prompt.md §1: кнопка «Совместить
@@ -35313,6 +35446,7 @@ function previewExternalModelPlacement(model, overrideMm) {
       syncGroupToModel(group, modelForPreview, externalModelsBridge.projectToMfrView, [mfrExternalModels.origin, mfrExternalModels.low]);
       group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(overrideMm.rotationDeg) || 0) * Math.PI / 180);
       group.scale.set(scale.x, scale.y, scale.z);
+      updatePlacementGizmoPosition(group.position);
       return { ok: true };
     }
   }
@@ -35324,10 +35458,26 @@ function previewExternalModelPlacement(model, overrideMm) {
       const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(overrideMm.rotationDeg) || 0) * Math.PI / 180);
       group.quaternion.copy(axisRemap).multiply(qRotate);
       group.scale.set(scale.x, scale.y, scale.z);
+      updatePlacementGizmoPosition(group.position);
       return { ok: true };
     }
   }
   return { ok: false, reason: "3D этого объекта сейчас не открыт — предпросмотр недоступен, но черновик уже обновлён." };
+}
+
+// Оборачивает callbacks жеста гизмо-осями: показывает при старте режима,
+// следит за position на каждый предпросмотр, прячет на любой выход
+// («Готово»/«Отмена»/Esc — все три ведут в onDone/onCancel, см.
+// startExternalModelPlacementOnPlane). group.position уже обновлена
+// СИНХРОННО до вызова onPreview (onPointerMove сам двигает группу),
+// поэтому просто читать её здесь — достаточно.
+function withPlacementGizmo(callbacks, group) {
+  return {
+    ...callbacks,
+    onPreview: (...args) => { updatePlacementGizmoPosition(group.position); callbacks.onPreview(...args); },
+    onDone: (...args) => { hidePlacementGizmo(); callbacks.onDone(...args); },
+    onCancel: (...args) => { hidePlacementGizmo(); callbacks.onCancel(...args); },
+  };
 }
 
 function beginExternalModelPlacement(model, callbacks) {
@@ -35341,6 +35491,7 @@ function beginExternalModelPlacement(model, callbacks) {
         syncGroupToModel(group, model, externalModelsBridge.projectToMfrView, [mfrExternalModels.origin, mfrExternalModels.low]);
         group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(model.rotation_deg) || 0) * Math.PI / 180);
       }
+      showPlacementGizmo(mfr3d.scene, "mfr", group.position, placementGizmoSizeHintMm(model));
       return startExternalModelPlacementOnPlane({
         canvas: mfr3d.renderer.domElement, camera: mfr3d.camera, controls: mfr3d.controls,
         backdrop: document.getElementById("external-models-backdrop"), group,
@@ -35349,7 +35500,7 @@ function beginExternalModelPlacement(model, callbacks) {
         angleOfPoint: (p) => Math.atan2(p.y - group.position.y, p.x - group.position.x),
         startOffset: { x: model.offset_mm.x, y: model.offset_mm.y },
         startRotationDeg: model.rotation_deg,
-        ...callbacks,
+        ...withPlacementGizmo(callbacks, group),
       });
     }
   }
@@ -35367,6 +35518,7 @@ function beginExternalModelPlacement(model, callbacks) {
         const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(model.rotation_deg) || 0) * Math.PI / 180);
         group.quaternion.copy(axisRemap).multiply(qRotate);
       }
+      showPlacementGizmo(state.view3d.scene, "zhbi", group.position, placementGizmoSizeHintMm(model));
       return startExternalModelPlacementOnPlane({
         canvas: state.view3d.renderer.domElement, camera: state.view3d.camera, controls: state.view3d.controls,
         backdrop: document.getElementById("external-models-backdrop"), group,
@@ -35375,7 +35527,7 @@ function beginExternalModelPlacement(model, callbacks) {
         angleOfPoint: (p) => Math.atan2(p.x - group.position.x, p.z - group.position.z),
         startOffset: { x: model.offset_mm.x, y: model.offset_mm.y },
         startRotationDeg: model.rotation_deg,
-        ...callbacks,
+        ...withPlacementGizmo(callbacks, group),
       });
     }
   }
