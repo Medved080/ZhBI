@@ -35529,7 +35529,15 @@ function placementGizmoExtentsMm(model) {
   const sizeZ = (bbox?.z || 0) * (scale.z || 1);
   const halfX = Math.max((sizeX / 2) * PLACEMENT_GIZMO_MARGIN, PLACEMENT_GIZMO_MIN_MM);
   const halfY = Math.max((sizeY / 2) * PLACEMENT_GIZMO_MARGIN, PLACEMENT_GIZMO_MIN_MM);
-  const fullZ = Math.max(sizeZ * PLACEMENT_GIZMO_MARGIN, PLACEMENT_GIZMO_MIN_MM);
+  // Живой запрос пользователя 2026-09-15: «стрелки с марками над зданием
+  // сразу над, не удали — верхняя не попадает в видимое поле». Раньше
+  // запас над крышей считался ОТ ВЫСОТЫ ЗДАНИЯ (×0.3 от sizeZ) — на
+  // высотке в 30 этажей это десятки метров сверх и так немаленькой высоты,
+  // камера в «домашнем» ракурсе такую даль не захватывает. Запас теперь
+  // АДДИТИВНЫЙ и с потолком (не растёт неограниченно с высотой здания) —
+  // марка остаётся у самой крыши независимо от того, 5 этажей или 30.
+  const zTopMargin = Math.min(Math.max(sizeZ * 0.06, PLACEMENT_GIZMO_MIN_MM * 0.4), 3000);
+  const fullZ = Math.max(sizeZ + zTopMargin, PLACEMENT_GIZMO_MIN_MM);
   const shortZ = Math.max(sizeZ * 0.15, PLACEMENT_GIZMO_MIN_MM * 0.5);
   return {
     x: { pos: halfX, neg: halfX },
