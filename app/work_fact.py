@@ -466,6 +466,20 @@ def _op_included_percents(conn, object_id: int, work_type_id: int) -> dict:
     return result
 
 
+def board_ops(conn, object_id: int, track_code: str) -> list:
+    """Операции ОДНОЙ доски «Шахматка», в порядке справочника — плоская
+    «Шахматка» (app/chess_flat.py) строит по ним строки блока и печатный
+    бланк: список должен быть один и тот же у соседних блоков независимо от
+    того, применяется ли там каждая конкретная операция (см. docstring
+    `board_block_values` — неприменимая просто не попадает в `percents`
+    блока)."""
+    return [
+        {"id": o["id"], "name": o["name"]}
+        for o in _block_op_work_types(conn, object_id)
+        if o["planning_track_code"] == track_code
+    ]
+
+
 def board_block_values(conn, object_id: int, track_code: str) -> dict:
     """block_id -> {status, percent, ops: [{id, name, percent, status}, …]}
     по ДОСКЕ «Шахматка» (2026-09-04, замена work_type_block_values) — группе
@@ -670,9 +684,13 @@ def get_report(conn, object_id: int, block_id: int, report_id: int) -> dict:
 
 
 def save_report(conn, object_id: int, user_id: int, block_id: int, report_id, report_date: str,
-                items: dict) -> int:
+                items: dict, *, commit: bool = True) -> int:
     """items — {work_type_id: percent}, СТРОГО по операциям, выбранным для
-    блока — сохраняется весь набор разом, форма всегда шлёт полный слепок."""
+    блока — сохраняется весь набор разом, форма всегда шлёт полный слепок.
+
+    `commit=False` (плоская «Шахматка», app/chess_flat.py::commit_batch) —
+    вызывающий код пишет несколько блоков ОДНОЙ транзакцией («весь пакет или
+    ничего») и коммитит сам, одним разом, после последнего блока."""
     if not report_date:
         raise FactError(422, "Не указана дата отчёта.")
     settings = block_settings(conn, object_id, block_id)
@@ -740,7 +758,8 @@ def save_report(conn, object_id: int, user_id: int, block_id: int, report_id, re
             "percent_new, changed_by) VALUES (?,?,?,?,?)",
             (report_id, bw_id, old_percent, new_percent, user_id),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
     return report_id
 
 

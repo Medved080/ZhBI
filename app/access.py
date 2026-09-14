@@ -242,6 +242,42 @@ def object_role_keys(conn: sqlite3.Connection, user: sqlite3.Row, object_id: int
     )}
 
 
+def object_role_sources(conn: sqlite3.Connection, user: sqlite3.Row, object_id: int) -> dict:
+    """Откуда взялась каждая роль человека на объекте — подпись САМОГО
+    частного из трёх уровней, которым она выдана (2026-09-14, «Проверка
+    доступа» — макет подписывает право строкой «Роль «X» → Y»). Роль бывает
+    выдана сразу с нескольких уровней (гранты складываются, и это не
+    противоречие) — показываем ближайший к объекту, как более наглядный.
+    Само право он не меняет: has_feature читает уровни все разом, эта
+    функция только объясняет администратору, откуда что взялось.
+    """
+    rows = conn.execute(
+        f"""
+        SELECT ua.role,
+               (ua.object_id = o.id) AS на_объекте,
+               (ua.object_id IS NULL AND ua.project_id = o.project_id) AS на_проекте,
+               o.name AS имя_объекта, p.name AS имя_проекта
+        FROM user_access ua
+        JOIN objects o ON o.id = ?
+        LEFT JOIN projects p ON p.id = o.project_id
+        WHERE ua.user_id = ? AND ({_ГРАНТ_ПОДХОДИТ})
+        """,
+        (object_id, user["id"]),
+    ).fetchall()
+    итог = {}
+    for r in rows:
+        if r["на_объекте"]:
+            метка, ранг = r["имя_объекта"], 0
+        elif r["на_проекте"]:
+            метка, ранг = f"проект «{r['имя_проекта']}»", 1
+        else:
+            метка, ранг = "все проекты", 2
+        текущий = итог.get(r["role"])
+        if текущий is None or ранг < текущий[1]:
+            итог[r["role"]] = (метка, ранг)
+    return {роль: метка for роль, (метка, ранг) in итог.items()}
+
+
 def all_role_keys(conn: sqlite3.Connection, user: sqlite3.Row) -> set:
     """Все роли человека, где бы они ни были выданы — для общесервисных
     разделов, у которых объекта нет (контрагенты, пользователи, копии).

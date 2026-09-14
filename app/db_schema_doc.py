@@ -821,6 +821,16 @@ TABLES = [
     ("created_at", "TEXT", "", "момент загрузки"),
     ("updated_at", "TEXT", "", "момент последнего сохранения offset/recenter/переименования"),
 ]),
+("chess_flat_batches", "chess_flat_batches — Идемпотентность пакетной записи плоской «Шахматки»", C_ELEM, S_ELEM, [
+    ("id", "INTEGER", "PK", "идентификатор записи"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("idempotency_key", "TEXT", "U", "ключ одной попытки «Подтвердить запись» (с object_id) — повтор того же ключа отдаёт сохранённый результат, а не пишет второй раз"),
+    ("track_code", "TEXT", "", "код доски «Шахматка» (planning_tracks.code), которой был пакет"),
+    ("report_date", "TEXT", "", "дата факта пакета"),
+    ("created_by", "INTEGER", "FK", "кто подтвердил запись → users.id (SET NULL)"),
+    ("result_json", "TEXT", "", "результат первого успешного вызова (id созданных/дополненных отчётов), отдаётся при повторе"),
+    ("created_at", "TEXT", "", "момент записи"),
+]),
 ]
 
 # ------------------------------------------------------------------- связи
@@ -828,6 +838,8 @@ TABLES = [
 FKS = [
     ("object_external_models", "object_id", "objects", "id", "RESTRICT"),
     ("object_external_models", "created_by", "users", "id", "SET NULL"),
+    ("chess_flat_batches", "object_id", "objects", "id", "CASCADE"),
+    ("chess_flat_batches", "created_by", "users", "id", "SET NULL"),
     ("object_sections", "object_id", "objects", "id", "CASCADE"),
     ("object_levels", "object_id", "objects", "id", "CASCADE"),
     ("object_level_aliases", "object_id", "objects", "id", "CASCADE"),

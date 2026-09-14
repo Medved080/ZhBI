@@ -1,0 +1,25 @@
+/* Revision 2: compact workspace; portrait print with dense continuous rows. */
+#chess-flat .top{padding:8px 12px}#chess-flat .crumb{margin-bottom:3px}#chess-flat h1{font-size:20px}#chess-flat h2{font-size:15px}
+#chess-flat .toolbar{padding:8px 12px;gap:14px}#chess-flat .tabs{padding:0 12px}#chess-flat .tab{padding:7px 0}
+#chess-flat .workspace{display:block;padding:10px 12px}#chess-flat .navigator{border:0;padding:0;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:9px}
+#chess-flat .navigator label{display:flex;align-items:center;gap:8px;font-size:12px}#chess-flat .navigator select{height:30px;padding:3px 7px}
+#chess-flat .navigator details{font-size:12px;color:var(--cf-muted)}#chess-flat .navigator details[open]{width:100%}#chess-flat .navigator summary{cursor:pointer}
+#chess-flat .navigator .overview{width:120px;height:256px;margin:5px 0;display:block}#chess-flat .board-head{margin-bottom:6px}#chess-flat .board-head h2{display:none}#chess-flat .grid{gap:4px;grid-template-columns:32px repeat(2,minmax(280px,1fr))}
+#chess-flat .block{border-radius:3px}#chess-flat .block-title{padding:3px 8px}#chess-flat .column-heads span{padding:2px 8px}#chess-flat .current{padding:3px 8px}#chess-flat .entry{padding:2px 7px}#chess-flat .entry input{height:24px;padding:2px 6px;border-radius:3px}#chess-flat .floor-label{padding-top:7px;font-size:16px}
+#chess-flat .empty-block{min-height:112px}#chess-flat .legend{padding-top:7px;gap:12px}#chess-flat .footer{padding:9px 12px}#chess-flat .button{padding:6px 10px}#chess-flat .review{margin:10px 12px;padding:12px}
+#chess-flat .print-settings{padding:9px 12px;gap:10px}#chess-flat .paper-wrap{padding:0 12px 8px;overflow:auto}
+#chess-flat .paper{width:210mm;min-width:210mm;min-height:297mm;padding:6mm;margin:0 auto;border:0;box-shadow:0 0 0 1px #b9bdc3;color:#171717;background:#fff;line-height:1.15;font-size:9pt}
+#chess-flat .paper.a3{width:297mm;min-width:297mm;min-height:420mm}
+#chess-flat .sheet-head{height:12mm;font:9pt/1.1 Arial,sans-serif}#chess-flat .sheet-head>div{display:flex;align-items:center;justify-content:space-between;gap:3mm;height:3.7mm;white-space:nowrap}#chess-flat .sheet-head strong{font-size:11pt;font-weight:500}
+#chess-flat .paper-matrix{border-collapse:collapse;width:100%;table-layout:fixed;font:9pt/1.1 Arial,sans-serif;color:#171717}
+#chess-flat .paper-matrix th,#chess-flat .paper-matrix td{border:.2mm solid #777;padding:0 1mm;overflow:hidden;font-weight:400}
+#chess-flat .paper-matrix thead th{height:4.5mm;white-space:nowrap;background:#f2f2f2;text-align:center}
+#chess-flat .paper-matrix tbody tr{height:6mm}#chess-flat .paper-matrix td{height:6mm}
+#chess-flat .paper-matrix .paper-floor{vertical-align:middle;text-align:center;font-weight:500;font-size:10pt}
+#chess-flat .paper-matrix .floor-start>*{border-top:.4mm solid #333}
+#chess-flat .paper-current>div{display:flex;align-items:center;justify-content:space-between;gap:1mm;white-space:nowrap}#chess-flat .paper-current b{font-weight:500;white-space:nowrap}
+#chess-flat .paper-new{text-align:center}#chess-flat .paper-absent{background:#fafafa}
+#chess-flat .sheet-foot{height:8mm;padding-top:1mm;font:9pt/1.15 Arial,sans-serif}#chess-flat .sheet-foot>div{display:flex;justify-content:space-between;gap:2mm;white-space:nowrap;margin-bottom:.5mm}
+#chess-flat #cf-print-hint{margin:0 12px 8px;padding:6px 9px}
+@media(max-width:800px){#chess-flat .navigator{align-items:start}#chess-flat .navigator label{flex-wrap:wrap}#chess-flat .navigator .overview{display:block}#chess-flat .toolbar{align-items:end}#chess-flat .sheet-head>div,#chess-flat .sheet-foot>div{flex-wrap:nowrap}}
+@media print{#chess-flat{border:0;border-radius:0}#chess-flat .paper-wrap{padding:0;overflow:visible}#chess-flat .paper,#chess-flat .paper.a3{width:auto;min-width:0;min-height:0;padding:0;margin:0;border:0;box-shadow:none;break-after:page}#chess-flat .paper:last-child{break-after:auto}#chess-flat .paper-matrix tbody tr{break-inside:avoid}#chess-flat .paper-matrix thead{display:table-header-group}}

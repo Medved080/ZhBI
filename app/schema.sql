@@ -478,14 +478,14 @@ CREATE TABLE IF NOT EXISTS role_features (
     PRIMARY KEY (role_key, feature_key)
 );
 
--- Три уровня гранта, от общего к частному (project_id стал необязательным
--- 2026-08-02):
+-- Три уровня гранта (project_id стал необязательным 2026-08-02):
 --   project_id IS NULL, object_id IS NULL — ВСЕ проекты, включая будущие;
 --   project_id задан, object_id IS NULL   — весь проект, включая будущие
 --                                           объекты внутри него;
 --   object_id задан                       — конкретный объект.
--- Действующая роль ищется от самого частного к общему (access.object_role):
--- личный грант на объект перекрывает проектный, проектный — общий.
+-- Роли трёх уровней СКЛАДЫВАЮТСЯ, а не перекрывают друг друга (решение
+-- пользователя 2026-08-14, см. app/access.py) — действующий набор на объекте
+-- это объединение ролей со всех подходящих уровней разом.
 CREATE TABLE IF NOT EXISTS user_access (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -1511,3 +1511,23 @@ CREATE TABLE IF NOT EXISTS work_fact_item_history (
     changed_by INTEGER REFERENCES users (id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_work_fact_item_history_bw ON work_fact_item_history (block_work_id, changed_at);
+
+-- Идемпотентность пакетной записи плоской «Шахматки» (2026-09-14,
+-- app/chess_flat.py) — «Проверить и записать» шлёт один пакет фактов сразу
+-- по нескольким блокам; повтор того же запроса после таймаута (сеть,
+-- перезапуск сервиса) не должен завести вторые документы факта. Ключ
+-- генерирует браузер на каждое НАЖАТИЕ «Подтвердить запись» (новое
+-- осознанное подтверждение — новый ключ), сервер при совпадении отдаёт уже
+-- сохранённый результат вместо повторной записи. `result_json` хранит ровно
+-- то, что вернул первый успешный вызов (id созданных/дополненных отчётов).
+CREATE TABLE IF NOT EXISTS chess_flat_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL,
+    track_code TEXT NOT NULL,
+    report_date TEXT NOT NULL,
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, idempotency_key)
+);

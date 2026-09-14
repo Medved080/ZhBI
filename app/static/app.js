@@ -15044,17 +15044,6 @@ function ueRoles(key) {
   return ueAccess.get(key) || new Set();
 }
 
-// Что приедет на этот уровень СВЕРХУ. С 2026-08-14 уровни СКЛАДЫВАЮТСЯ, а
-// не перекрываются: роль, выданная на «все проекты», действует и на объекте,
-// даже если у объекта есть свои роли. Поэтому подпись говорит «плюс
-// сверху», а не «действует» — и понизить человека точечно больше нельзя,
-// можно только не выдавать общий грант.
-function accessInherited(pid, oid) {
-  const сверху = new Set(ueRoles(ACCESS_ALL));
-  if (oid != null) for (const r of ueRoles(accessProjectKey(pid))) сверху.add(r);
-  return [...сверху];
-}
-
 function accessRoleChecks(key) {
   const выбранные = ueRoles(key);
   return objectRoleList().map(r =>
@@ -15063,52 +15052,13 @@ function accessRoleChecks(key) {
     + `${escapeHtml(r.name)}</label>`).join("");
 }
 
-function renderAccessTree() {
-  const box = document.getElementById("ue-access-tree");
-  const заметка = document.getElementById("ue-access-note");
-  const системныйАдмин = document.getElementById("ue-role").value === "admin";
-  заметка.textContent = системныйАдмин
-    ? "Администратор сервиса видит и правит все объекты в обход выданных ролей — дерево ниже ему не нужно."
-    : "Роли складываются: выданное на верхнем уровне действует и ниже. Чтобы дать на одном объекте меньше, не выдавайте роль на все проекты.";
-  box.style.opacity = системныйАдмин ? "0.5" : "";
-
-  const строка = (класс, имя, key, сверху) => {
-    const подпись = (сверху && сверху.length)
-      ? `<span class="access-inherited"> + сверху: ${escapeHtml(сверху.map(objectRoleName).join(", "))}</span>`
-      : "";
-    return `<div class="access-row ${класс}">
-      <span class="access-row-name">${escapeHtml(имя)}${подпись}</span>
-      <span class="access-roles">${accessRoleChecks(key)}</span>
-    </div>`;
-  };
-
-  let html = строка("access-row-all", "Все проекты", ACCESS_ALL, null);
-  for (const проект of state.projects.filter(p => p.id)) {
-    html += строка("access-row-project", проект.name, accessProjectKey(проект.id),
-                   accessInherited(проект.id, null));
-    for (const объект of проект.objects) {
-      html += строка("access-row-object", объект.name, accessObjectKey(проект.id, объект.id),
-                     accessInherited(проект.id, объект.id));
-    }
-  }
-  box.innerHTML = html;
-  box.querySelectorAll("input[data-access-key]").forEach(inp => {
-    inp.disabled = системныйАдмин;
-    inp.addEventListener("change", () => {
-      const key = inp.dataset.accessKey;
-      const набор = new Set(ueRoles(key));
-      if (inp.checked) набор.add(inp.dataset.accessRole); else набор.delete(inp.dataset.accessRole);
-      if (набор.size) ueAccess.set(key, набор); else ueAccess.delete(key);
-      // Пересобираем целиком: правка верхнего уровня меняет подписи
-      // «плюс сверху» у всего, что ниже, и точечно это не выразить.
-      renderAccessTree();
-    });
-  });
+function accessRolesText(набор) {
+  return [...набор].map(objectRoleName).join(", ") || "—";
 }
 
-// Гранты из дерева в том виде, в каком их ждёт сервер: по строке на КАЖДУЮ
-// роль уровня. Уровень «все проекты» — оба поля пустые; проект — только
-// project_id; объект — оба.
+// Гранты из состояния формы в том виде, в каком их ждёт сервер: по строке на
+// КАЖДУЮ роль уровня. Уровень «все проекты» — оба поля пустые; проект —
+// только project_id; объект — оба.
 function collectAccessGrants() {
   const гранты = [];
   for (const [key, роли] of ueAccess) {
@@ -15126,7 +15076,7 @@ function collectAccessGrants() {
 
 async function loadAccessInto(userId) {
   ueAccess = new Map();
-  if (!userId) return;                     // новый пользователь — пустое дерево
+  if (!userId) return;                     // новый пользователь — пустое состояние
   const data = await api(`/users/${userId}/access`);
   for (const g of data.grants) {
     const key = g.project_id == null ? ACCESS_ALL
@@ -15135,6 +15085,114 @@ async function loadAccessInto(userId) {
     if (!ueAccess.has(key)) ueAccess.set(key, new Set());
     ueAccess.get(key).add(g.role);
   }
+}
+
+// ---------- каталог проектов/объектов для сводки доступа ----------
+//
+// state.projects (из /projects-tree) не показывает проект без единого
+// объекта — оправданно для переключателя в тулбаре, но у такого проекта
+// бывает назначение (общее или проектное), и он не должен пропадать из
+// сводки доступа (живое задание 2026-09-14). Добираем его лёгким
+// GET /projects — экран «Пользователи» доступен только администратору
+// сервиса, а он видит там вообще все проекты, включая пустые
+// (app/main.py list_projects, видны_все = accessible_object_ids(...) is None).
+//
+// Кэш живёт, пока форма «Пользователи» не переоткрыта заново
+// (см. menu-users): каталог проектов меняется на порядки реже, чем
+// открывается список пользователей, и обновлять его на каждый renderUsersTable
+// незачем.
+let projectsCatalogCache = null;
+
+async function accessCatalog() {
+  if (projectsCatalogCache) return projectsCatalogCache;
+  const все = await api("/projects");
+  const сОбъектами = new Map(state.projects.filter(p => p.id).map(p => [p.id, p]));
+  projectsCatalogCache = все.map(p => {
+    const полный = сОбъектами.get(p.id);
+    return { id: p.id, name: p.name,
+             objects: полный ? полный.objects.map(o => ({ id: o.id, name: o.name })) : [] };
+  });
+  return projectsCatalogCache;
+}
+
+// Гранты одного пользователя (ответ /users/access-matrix) в ТУ ЖЕ форму
+// ключ->набор ролей, что и ueAccess — общий разбор для списка и карточки.
+function accessMapFromGrants(гранты) {
+  const карта = new Map();
+  for (const g of (гранты || [])) {
+    const key = g.project_id == null ? ACCESS_ALL
+      : g.object_id == null ? accessProjectKey(g.project_id)
+      : accessObjectKey(g.project_id, g.object_id);
+    if (!карта.has(key)) карта.set(key, new Set());
+    карта.get(key).add(g.role);
+  }
+  return карта;
+}
+
+// Свод доступа ОДНОГО человека по каталогу: сколько проектов/объектов
+// реально доступно (без задвоения — объект посчитан один раз, даже если
+// роль на него приходит сразу с двух уровней) и что показывать в сводке.
+// Про системную роль ничего не знает — администратора сервиса решает
+// показывать отдельно вызывающий код (у него сводка не нужна вовсе).
+function buildAccessSummary(accessMap, catalog) {
+  const роли = (key) => accessMap.get(key) || new Set();
+  const allRoles = роли(ACCESS_ALL);
+  let projectsCount = 0, objectsCount = 0;
+  const projects = catalog.map(p => {
+    const projRoles = роли(accessProjectKey(p.id));
+    const objects = p.objects.map(o => {
+      const direct = роли(accessObjectKey(p.id, o.id));
+      const effective = new Set([...allRoles, ...projRoles, ...direct]);
+      return { id: o.id, name: o.name, direct, effective, accessible: effective.size > 0 };
+    });
+    const accessibleObjects = objects.filter(o => o.accessible);
+    const hasProjectGrant = projRoles.size > 0;
+    // Проект считается доступным, если есть хоть один доступный объект ИЛИ
+    // прямой грант на проект (даже если в нём пока нет ни одного объекта —
+    // задание прямо требует не терять такой проект из сводки).
+    const counted = accessibleObjects.length > 0 || hasProjectGrant;
+    if (counted) { projectsCount++; objectsCount += accessibleObjects.length; }
+    return { id: p.id, name: p.name, projRoles, objects,
+              accessibleCount: accessibleObjects.length, totalCount: objects.length,
+              hasProjectGrant, counted };
+  });
+  return { allRoles, projects, projectsCount, objectsCount };
+}
+
+// Русское склонение по числу — «1 проект», «2 проекта», «5 проектов».
+function ruPlural(n, один, немного, много) {
+  const n10 = n % 10, n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return один;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return немного;
+  return много;
+}
+
+// Текст колонки «Доступ» в списке — считает те же числа, что сводка в
+// карточке (buildAccessSummary), чтобы два экрана не могли разойтись.
+function accessSummaryLabel(user, summary) {
+  if (user.role === "admin") return "Полный доступ";
+  if (summary.allRoles.size) return "Все проекты";
+  if (summary.projectsCount) {
+    return `${summary.projectsCount} ${ruPlural(summary.projectsCount, "проект", "проекта", "проектов")} · `
+      + `${summary.objectsCount} ${ruPlural(summary.objectsCount, "объект", "объекта", "объектов")}`;
+  }
+  return "Нет доступа";
+}
+
+// Источники ОДНОЙ роли на объекте — роль может прийти сразу с нескольких
+// уровней, и тогда перечисляются все (требование задания: «источники
+// сохраняются», а не схлопываются в один произвольный).
+function ueObjectSourcesLine(allRoles, projRoles, directRoles) {
+  const роли = new Set([...allRoles, ...projRoles, ...directRoles]);
+  if (!роли.size) return "";
+  const части = [...роли].map(r => {
+    const откуда = [];
+    if (allRoles.has(r)) откуда.push("от всех проектов");
+    if (projRoles.has(r)) откуда.push("от проекта");
+    if (directRoles.has(r)) откуда.push("напрямую");
+    return `${objectRoleName(r)} ${откуда.join(" и ")}`;
+  });
+  return "Источники: " + части.join("; ");
 }
 
 const usersBackdrop = document.getElementById("users-backdrop");
@@ -15155,53 +15213,89 @@ function authMethodLabel(u) {
 
 // Последний загруженный список — нужен предупреждению о запирании сервиса
 // (см. запиретСервисОтАдминистраторов): проверка смотрит на ВСЕХ
-// пользователей, а не только на правимого.
+// пользователей, а не только на правимого. И поиску по списку — тоже.
 let usersCache = [];
+let usersSearch = "";
+// Гранты и каталог для колонки «Доступ» — держим рядом с последней
+// загрузкой: набирая текст в поиске, пересчитывать их незачем, меняются
+// только видимые СТРОКИ, а не сами числа доступа.
+let usersMatrixCache = null;
+let usersCatalogCache = null;
 
-async function renderUsersTable() {
-  const users = await api("/users");
-  usersCache = users;
+const USERS_TABLE_HEAD =
+  "<tr><th>Пользователь</th><th>Учётная запись</th><th>Системная роль</th><th>Доступ</th><th></th></tr>";
+
+function userInitials(u) {
+  const а = (u.last_name || "").trim().charAt(0);
+  const б = (u.first_name || "").trim().charAt(0);
+  return (а + б).toUpperCase() || "?";
+}
+
+function usersMatchesSearch(u, q) {
+  if (!q) return true;
+  return u.display_name.toLowerCase().includes(q)
+    || u.domain_login.toLowerCase().includes(q)
+    || (u.position || "").toLowerCase().includes(q)
+    || (u.department || "").toLowerCase().includes(q);
+}
+
+// Перерисовка СТРОК по уже загруженным данным — поиск фильтрует на клиенте,
+// без похода на сервер: список пользователей и так весь на руках.
+function renderUsersRows() {
   const table = document.getElementById("users-table");
-  const rowsHtml = users.map(u => `
+  document.getElementById("users-count").textContent =
+    `${usersCache.length} ${ruPlural(usersCache.length, "учётная запись", "учётные записи", "учётных записей")}`;
+  const q = usersSearch.trim().toLowerCase();
+  const видимые = usersCache.filter(u => usersMatchesSearch(u, q));
+  const rowsHtml = видимые.length ? видимые.map(u => {
+    const summary = buildAccessSummary(
+      accessMapFromGrants(usersMatrixCache.grants[String(u.id)]), usersCatalogCache);
+    const должность = [u.position, u.department].filter(Boolean).join(" · ");
+    return `
     <tr>
-      <td>${escapeHtml(u.display_name)}</td>
-      <td>${escapeHtml(u.position || "—")}</td>
-      <td>${escapeHtml(u.department || "—")}</td>
-      <td>${escapeHtml(u.domain_login)}</td>
-      <td>${ROLE_LABELS[u.role] || u.role}</td>
-      <td>${authMethodLabel(u)}</td>
-      <td class="user-actions">
-        <!-- Сеткой 2×2 (2026-08-05): четыре кнопки в колонку растягивали
-             строку пользователя на четыре, а по ширине ячейка их всё равно
-             не вмещала. -->
-        <div class="user-actions-grid">
-        <button class="btn btn-sm btn-secondary" data-edit="${u.id}">Изменить</button>
-        <!-- У доменного пользователя пароля сервиса нет и быть не должно —
-             сервер такой запрос отклоняет (409), кнопка гасится здесь же,
-             чтобы это не выяснялось после ввода пароля. -->
-        <button class="btn btn-sm btn-secondary" data-sessions="${u.id}">Сеансы</button>
-        <button class="btn btn-sm btn-secondary" data-pwd="${u.id}"
-                ${u.auth_method === "domain" ? "disabled title=\"Вход по доменной учётной записи — пароль сервиса не используется\"" : ""}>Пароль</button>
-        <!-- «Зайти под пользователем» (2026-08-05) — отладка чужих прав по
-             жалобе «у меня не видно пункт X». Открывает ОТДЕЛЬНУЮ вкладку:
-             своя вкладка администратора остаётся его собственной. Под самим
-             собой заходить незачем — кнопка гасится. -->
-        <button class="btn btn-sm btn-secondary" data-impersonate="${u.id}"
-                ${u.id === state.currentUser.id ? "disabled title=\"Это вы\"" : ""}>Зайти</button>
-        </div>
-      </td>
-    </tr>
-  `).join("");
-  table.innerHTML = `<tr><th>ФИО</th><th>Должность</th><th>Подразделение</th><th>Логин</th><th>Роль</th><th>Вход</th><th></th></tr>${rowsHtml}`;
-  table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openUserEdit(users.find(u => u.id === Number(btn.dataset.edit)))));
-  table.querySelectorAll("[data-pwd]").forEach(btn => btn.addEventListener("click", () => openUserPassword(Number(btn.dataset.pwd))));
-  table.querySelectorAll("[data-sessions]").forEach(btn => btn.addEventListener("click", () => {
-    const u = users.find(x => x.id === Number(btn.dataset.sessions));
-    openSessions("user", u.id, `Сеансы: ${u.display_name}`);
-  }));
-  table.querySelectorAll("[data-impersonate]").forEach(btn => btn.addEventListener("click", () => {
-    startImpersonation(users.find(x => x.id === Number(btn.dataset.impersonate)));
-  }));
+      <td><div class="user-cell"><span class="user-avatar">${escapeHtml(userInitials(u))}</span>
+        <div><button type="button" class="link-btn user-cell-name" data-edit="${u.id}">${escapeHtml(u.display_name)}</button>
+        <small>${escapeHtml(должность || "—")}</small></div></div></td>
+      <td>${escapeHtml(u.domain_login)}<small>${escapeHtml(authMethodLabel(u))}</small></td>
+      <td><span class="ue-tag">${escapeHtml(ROLE_LABELS[u.role] || u.role)}</span></td>
+      <td><button type="button" class="link-btn" data-open-access="${u.id}">${escapeHtml(accessSummaryLabel(u, summary))}</button></td>
+      <td class="user-actions"><button type="button" class="link-btn" data-edit="${u.id}">Изменить</button></td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="5">Пользователи не найдены</td></tr>`;
+  table.innerHTML = USERS_TABLE_HEAD + rowsHtml;
+  table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () =>
+    openUserEdit(usersCache.find(u => u.id === Number(btn.dataset.edit)))));
+  // Значение колонки «Доступ» открывает карточку СРАЗУ на вкладке доступа
+  // (требование задания) — не «Изменить» и потом искать вкладку самому.
+  table.querySelectorAll("[data-open-access]").forEach(btn => btn.addEventListener("click", () =>
+    openUserEdit(usersCache.find(u => u.id === Number(btn.dataset.openAccess)), { tab: "access" })));
+}
+
+document.getElementById("users-search").addEventListener("input", (e) => {
+  usersSearch = e.target.value;
+  renderUsersRows();
+});
+
+// Колонка «Доступ» — агрегированно, одним проходом на ВСЮ таблицу (живое
+// задание 2026-09-14): не «эндпоинт на пользователя», а три уже
+// существующих массовых запроса (список, гранты всех разом, каталог
+// проектов) + подсчёт на клиенте. Пока грузится — «Загрузка…», при ошибке —
+// текст ошибки с кнопкой повтора; НИКОГДА не показывает «0» вместо
+// незагруженного.
+async function renderUsersTable() {
+  const table = document.getElementById("users-table");
+  table.innerHTML = USERS_TABLE_HEAD + `<tr><td colspan="5">Загрузка…</td></tr>`;
+  try {
+    [usersCache, usersMatrixCache, usersCatalogCache] = await Promise.all(
+      [api("/users"), api("/users/access-matrix"), accessCatalog()]);
+  } catch (e) {
+    table.innerHTML = USERS_TABLE_HEAD
+      + `<tr><td colspan="5">Не удалось загрузить список: ${escapeHtml(e.message)} `
+      + `<button class="btn btn-sm btn-secondary" id="users-table-retry">Повторить</button></td></tr>`;
+    document.getElementById("users-table-retry").addEventListener("click", renderUsersTable);
+    return;
+  }
+  renderUsersRows();
 }
 
 // Вкладка открывается ДО запроса и заведомо синхронно, прямо из обработчика
@@ -15229,13 +15323,282 @@ async function startImpersonation(u) {
   }
 }
 
-document.getElementById("menu-users").addEventListener("click", async () => {
+// ---------- «Пользователи и доступ» — один экран, три вкладки ----------
+//
+// 2026-09-14, перенос согласованного макета: раньше это были три
+// независимые формы («Пользователи», «Настройка ролей», «Матрица прав»),
+// каждая со своим пунктом меню и своим backdrop'ом. Теперь один экран
+// (#users-backdrop) с закладками. «Проверка доступа» тоже перестроена под
+// макет (2026-09-14, найдено при сверке остальных вкладок): была таблицей
+// «раздел × Просмотр/Изменение» с галочками, стала списком .u-group/.u-perm
+// с подписью уровня в .u-tag — см. renderRightsMatrix ниже; «Роли»
+// перестроена под макет целиком — список ролей слева и права ОДНОЙ
+// выбранной роли справа вместо таблицы «разделы × все роли разом», см.
+// renderRolesSide/renderRolesDetail ниже.
+let usersModalTab = "users";
+
+async function usersModalSwitchTab(tab) {
+  usersModalTab = tab;
+  document.querySelectorAll("#users-backdrop [data-users-tab]").forEach(b =>
+    b.classList.toggle("active", b.dataset.usersTab === tab));
+  document.querySelectorAll("#users-backdrop .users-tab-panel").forEach(p =>
+    p.style.display = p.dataset.usersPanel === tab ? "" : "none");
+  // «Сохранить» — только на «Роли»: у «Пользователей» и «Проверки доступа»
+  // нечего сохранять пачкой (правки уходят сразу или их вовсе нет).
+  document.getElementById("roles-save").style.display = tab === "roles" ? "" : "none";
+  if (tab !== "roles") {
+    document.getElementById("roles-error").textContent = "";
+    document.getElementById("roles-status").textContent = "";
+  }
+  if (tab === "roles") await loadRolesTab();
+  else if (tab === "check") await loadCheckTab();
+}
+document.querySelectorAll("#users-backdrop [data-users-tab]").forEach(btn =>
+  btn.addEventListener("click", () => usersModalSwitchTab(btn.dataset.usersTab)));
+
+// Единая точка открытия экрана — с любой вкладки. Список пользователей
+// перечитывается ВСЕГДА (а не только на вкладке «Пользователи»): он же даёт
+// имена для выпадающего списка на «Проверке доступа».
+async function openUsersAccessModal(tab) {
   usersBackdrop.classList.add("open");
+  usersSearch = "";
+  document.getElementById("users-search").value = "";
+  // Каталог проектов может устареть между заходами в этот экран (завели
+  // проект/объект) — на каждое ОТКРЫТИЕ формы берём заново, а не на каждую
+  // перерисовку таблицы внутри неё (см. accessCatalog).
+  projectsCatalogCache = null;
   await renderUsersTable();
+  await usersModalSwitchTab(tab || "users");
+}
+
+document.getElementById("menu-users").addEventListener("click", async () => {
+  try {
+    await openUsersAccessModal("users");
+  } catch (e) {
+    showToast("Не удалось открыть пользователей: " + e.message, "warning");
+  }
 });
 document.getElementById("users-close").addEventListener("click", () => usersBackdrop.classList.remove("open"));
 
-async function openUserEdit(user) {
+// ---------- вкладки карточки пользователя ----------
+let ueTab = "profile";
+
+function ueSwitchTab(tab) {
+  ueTab = tab;
+  document.querySelectorAll("#user-edit-backdrop [data-ue-tab]").forEach(b =>
+    b.classList.toggle("active", b.dataset.ueTab === tab));
+  document.querySelectorAll("#user-edit-backdrop .ue-panel").forEach(p =>
+    p.style.display = p.dataset.uePanel === tab ? "" : "none");
+}
+document.querySelectorAll("#user-edit-backdrop [data-ue-tab]").forEach(btn =>
+  btn.addEventListener("click", () => ueSwitchTab(btn.dataset.ueTab)));
+
+// ---------- вкладка «Доступ к объектам» — сводка и правка одной области ----------
+//
+// Раньше здесь было дерево «все уровни разом» с чекбоксом на каждую роль
+// каждого объекта — на полусотне объектов совершенно нечитаемо. Теперь —
+// СВОДКА (что реально доступно, сгруппировано по проекту, роли и источники
+// текстом) и, по кнопке «Изменить»/«Выдать», ПРАВКА ОДНОЙ области в той же
+// панели (не поверх неё второй модалкой — живое требование задания).
+let ueAccessView = "summary";      // "summary" | { edit: key }
+let ueAllAreas = false;            // «Выдать доступ» — показывать и недоступное
+let ueAccessSearch = "";
+// id проектов (строками), СВЁРНУТЫХ вручную — по умолчанию открыты ВСЕ
+// (требование задания: «при первом открытии покажи все доступные проекты и
+// раскрой доступные объекты»), поэтому отслеживается исключение, а не
+// правило: список только что открытой карточки не знает заранее, какие id
+// вообще будут в сводке.
+let ueClosedProjects = new Set();
+
+function ueAreaContextLabel(key, catalog) {
+  if (key === ACCESS_ALL) return "Все проекты";
+  if (key.startsWith("p:")) {
+    const pid = Number(key.slice(2));
+    const p = catalog.find(x => x.id === pid);
+    return `Проект «${escapeHtml(p ? p.name : String(pid))}», весь проект`;
+  }
+  const [, pidStr, oidStr] = key.split(":");
+  const pid = Number(pidStr), oid = Number(oidStr);
+  const p = catalog.find(x => x.id === pid);
+  const o = p && p.objects.find(x => x.id === oid);
+  return `Объект «${escapeHtml(o ? o.name : String(oid))}»`
+    + (p ? ` · проект «${escapeHtml(p.name)}»` : "");
+}
+
+// Что действует НА ЭТОМ уровне независимо от прямых назначений здесь же
+// (пришло сверху), с указанием откуда именно — по каждой роли отдельно, она
+// могла прийти сразу с двух уровней разом.
+function ueInheritedSourcesLine(pid, oid) {
+  const allRoles = ueRoles(ACCESS_ALL);
+  const projRoles = oid != null ? ueRoles(accessProjectKey(pid)) : new Set();
+  const роли = new Set([...allRoles, ...projRoles]);
+  if (!роли.size) return "";
+  return [...роли].map(r => {
+    const откуда = [];
+    if (allRoles.has(r)) откуда.push("от всех проектов");
+    if (projRoles.has(r)) откуда.push("от проекта");
+    return `${objectRoleName(r)} — ${откуда.join(" и ")}`;
+  }).join("; ");
+}
+
+async function renderUeAccessPanel() {
+  const box = document.getElementById("ue-access-summary");
+  const системныйАдмин = document.getElementById("ue-role").value === "admin";
+  if (системныйАдмин) {
+    box.innerHTML = `<div class="ue-note"><strong>Полный доступ ко всем текущим и будущим `
+      + `проектам и объектам.</strong><br>Администратор сервиса видит и правит всё в обход `
+      + `выданных ролей — назначать здесь нечего.</div>`;
+    return;
+  }
+  const catalog = await accessCatalog();
+  if (ueAccessView === "summary") {
+    box.innerHTML = ueSummaryHtml(catalog);
+    ueWireSummary(box);
+  } else {
+    box.innerHTML = ueEditorHtml(ueAccessView.edit, catalog);
+    ueWireEditor(box, ueAccessView.edit);
+  }
+}
+
+function ueSummaryHtml(catalog) {
+  const summary = buildAccessSummary(ueAccess, catalog);
+  const q = ueAccessSearch.trim().toLowerCase();
+  let html = `<div class="ue-access-toolbar">
+    <input type="text" id="ue-access-search" placeholder="Поиск проекта или объекта" value="${escapeHtml(ueAccessSearch)}">
+    <button type="button" class="btn btn-sm btn-secondary" data-ue-expand-all>Развернуть всё</button>
+    <button type="button" class="btn btn-sm btn-secondary" data-ue-collapse-all>Свернуть всё</button>
+    <button type="button" class="btn btn-sm btn-secondary" data-ue-all-areas>`
+    + `${ueAllAreas ? "Только доступные" : "Выдать доступ"}</button></div>`;
+
+  if (summary.allRoles.size) {
+    html += `<div class="ue-note"><strong>Все текущие и будущие проекты</strong><br>`
+      + `${accessRolesText(summary.allRoles)} · назначено на «Все проекты» `
+      + `<button type="button" class="link-btn" data-ue-area="${ACCESS_ALL}">Изменить</button></div>`;
+  } else if (ueAllAreas) {
+    html += `<p><button type="button" class="link-btn" data-ue-area="${ACCESS_ALL}">`
+      + `Назначить роли на все проекты</button></p>`;
+  }
+
+  let показано = 0;
+  for (const p of summary.projects) {
+    if (!ueAllAreas && !p.counted) continue;
+    const совпалПроект = !q || p.name.toLowerCase().includes(q);
+    const совпавшиеОбъекты = p.objects.filter(o => !q || o.name.toLowerCase().includes(q));
+    if (q && !совпалПроект && !совпавшиеОбъекты.length) continue;
+    const объектыКПоказу = q ? (совпалПроект ? p.objects : совпавшиеОбъекты)
+      : (ueAllAreas ? p.objects : p.objects.filter(o => o.accessible));
+    if (!ueAllAreas && !объектыКПоказу.length && !p.hasProjectGrant) continue;
+    показано++;
+    const открыт = !ueClosedProjects.has(String(p.id)) || (q && (совпалПроект || совпавшиеОбъекты.length));
+    // Шапка проекта — заголовок + бейдж охвата слева, действие справа (тот
+    // же приём, что в макете: .u-bar с title-блоком и кнопкой по краям).
+    html += `<details class="ue-project" data-project="${p.id}"${открыт ? " open" : ""}>`
+      + `<summary><div><h4>${escapeHtml(p.name)} `
+      + `<span class="ue-tag">${p.accessibleCount} из ${p.totalCount} объектов</span></h4>`
+      + (p.hasProjectGrant
+        ? `<small>На проекте: ${accessRolesText(p.projRoles)}. Доступны будущие объекты.</small>`
+        : "")
+      + `</div><button type="button" class="link-btn" data-ue-area="${accessProjectKey(p.id)}">`
+      + `${p.hasProjectGrant ? "Изменить роли проекта" : "Назначить на проект"}</button></summary>`;
+    if (!объектыКПоказу.length) {
+      html += `<p class="hint-text">Объектов пока нет; доступ распространится на будущие.</p>`;
+    }
+    for (const o of объектыКПоказу) {
+      const источники = ueObjectSourcesLine(summary.allRoles, p.projRoles, o.direct);
+      // Строка объекта — ДВЕ колонки (см. комментарий у .ue-object-row):
+      // слева имя и, мельче, откуда роли; справа итог пилюлей и действия.
+      html += `<div class="ue-object-row">`
+        + `<div><span class="ue-object-name">${escapeHtml(o.name)}</span>`
+        + (источники ? `<span class="ue-object-sources">${источники}</span>` : "")
+        + `</div><div class="ue-object-actions">`
+        + `<span class="ue-tag">${o.accessible ? accessRolesText(o.effective) : "Нет доступа"}</span>`
+        + `<button type="button" class="link-btn" data-ue-area="${accessObjectKey(p.id, o.id)}">`
+        + `${o.accessible ? "Изменить" : "Выдать"}</button>`
+        + (o.accessible
+          ? `<button type="button" class="link-btn" data-ue-check="${o.id}">Проверить доступ</button>`
+          : "")
+        + `</div></div>`;
+    }
+    html += `</details>`;
+  }
+  if (!показано && !summary.allRoles.size) {
+    html += `<p class="hint-text">Нет доступа к проектам. Нажмите «Выдать доступ», чтобы назначить роли.</p>`;
+  }
+  return html;
+}
+
+function ueWireSummary(box) {
+  const search = document.getElementById("ue-access-search");
+  search.addEventListener("input", () => { ueAccessSearch = search.value; renderUeAccessPanel(); });
+  search.focus();
+  search.selectionStart = search.selectionEnd = search.value.length;
+
+  box.querySelectorAll("details[data-project]").forEach(d => {
+    d.addEventListener("toggle", () => {
+      if (d.open) ueClosedProjects.delete(d.dataset.project); else ueClosedProjects.add(d.dataset.project);
+    });
+  });
+  box.querySelector("[data-ue-expand-all]").addEventListener("click", () => {
+    box.querySelectorAll("details[data-project]").forEach(d => {
+      d.open = true; ueClosedProjects.delete(d.dataset.project);
+    });
+  });
+  box.querySelector("[data-ue-collapse-all]").addEventListener("click", () => {
+    box.querySelectorAll("details[data-project]").forEach(d => {
+      d.open = false; ueClosedProjects.add(d.dataset.project);
+    });
+  });
+  box.querySelector("[data-ue-all-areas]").addEventListener("click", () => {
+    ueAllAreas = !ueAllAreas;
+    renderUeAccessPanel();
+  });
+  box.querySelectorAll("[data-ue-area]").forEach(btn => btn.addEventListener("click", () => {
+    ueAccessView = { edit: btn.dataset.ueArea };
+    renderUeAccessPanel();
+  }));
+  box.querySelectorAll("[data-ue-check]").forEach(btn => btn.addEventListener("click", () => {
+    openRightsMatrix(editingUserId, Number(btn.dataset.ueCheck));
+  }));
+}
+
+function ueEditorHtml(key, catalog) {
+  const контекст = ueAreaContextLabel(key, catalog);
+  const охватБудущего = key === ACCESS_ALL
+    ? "Назначение распространяется на все текущие и будущие проекты."
+    : key.startsWith("p:")
+      ? "Назначение распространяется на текущие и будущие объекты этого проекта."
+      : "";
+  let pid = null, oid = null;
+  if (key.startsWith("p:")) pid = Number(key.slice(2));
+  else if (key.startsWith("o:")) { const части = key.split(":"); pid = Number(части[1]); oid = Number(части[2]); }
+  const унаследовано = key === ACCESS_ALL ? "" : ueInheritedSourcesLine(pid, oid);
+  return `<button type="button" class="link-btn" data-ue-back>← Сводка доступа</button>`
+    + `<h4>${контекст}</h4>`
+    + `<p class="hint-text">Прямые назначения на этом уровне.</p>`
+    + `<div class="ue-role-list">${accessRoleChecks(key)}</div>`
+    + (унаследовано
+      ? `<div class="ue-note">Действует независимо от отмеченного выше (унаследовано): ${унаследовано}. `
+        + `Роли складываются — снять их можно только на том уровне, где они выданы.</div>`
+      : "")
+    + (охватБудущего ? `<div class="ue-note">${охватБудущего}</div>` : "");
+}
+
+function ueWireEditor(box, key) {
+  box.querySelector("[data-ue-back]").addEventListener("click", () => {
+    ueAccessView = "summary";
+    renderUeAccessPanel();
+  });
+  box.querySelectorAll("input[data-access-key]").forEach(inp => {
+    inp.addEventListener("change", () => {
+      const набор = new Set(ueRoles(key));
+      if (inp.checked) набор.add(inp.dataset.accessRole); else набор.delete(inp.dataset.accessRole);
+      if (набор.size) ueAccess.set(key, набор); else ueAccess.delete(key);
+      renderUeAccessPanel();
+    });
+  });
+}
+
+async function openUserEdit(user, opts) {
   editingUserId = user ? user.id : null;
   document.getElementById("user-edit-title").textContent = user ? "Изменить пользователя" : "Новый пользователь";
   document.getElementById("ue-last-name").value = user ? user.last_name : "";
@@ -15253,9 +15616,32 @@ async function openUserEdit(user) {
   updateAuthMethodHint();
   updateFindInDomainButton();
   document.getElementById("user-edit-error").textContent = "";
+
+  // Сеансы/пароль/вход под пользователем — переехали на вкладку «Вход и
+  // безопасность» (2026-09-14), но им, как и раньше, физически нечем
+  // заняться у ЕЩЁ НЕ созданного пользователя — оба блока гасятся (кнопка
+  // «Зайти» теперь в отдельном «Диагностика» рядом, а не в одном блоке).
+  document.getElementById("ue-security-actions").style.display = editingUserId ? "" : "none";
+  document.getElementById("ue-diagnostics").style.display = editingUserId ? "" : "none";
+  const impBtn = document.getElementById("ue-impersonate-btn");
+  impBtn.disabled = !editingUserId || editingUserId === state.currentUser.id;
+  impBtn.title = (editingUserId === state.currentUser.id) ? "Это вы" : "";
+  const pwdBtn = document.getElementById("ue-password-btn");
+  const доменный = !!(user && user.auth_method === "domain");
+  pwdBtn.disabled = !editingUserId || доменный;
+  pwdBtn.title = доменный ? "Вход по доменной учётной записи — пароль сервиса не используется" : "";
+
+  // Вкладка «Доступ» сбрасывается на каждое открытие: прошлый режим правки
+  // одной области не должен всплывать у другого человека.
+  ueAccessView = "summary";
+  ueAllAreas = false;
+  ueAccessSearch = "";
+  ueClosedProjects = new Set();
+  ueSwitchTab((opts && opts.tab) || "profile");
+
   userEditBackdrop.classList.add("open");
   await loadAccessInto(editingUserId);
-  renderAccessTree();
+  await renderUeAccessPanel();
 }
 // Предупреждение о снятии пароля показывается ДО сохранения: перевод на
 // домен необратимо стирает пароль сервиса (app/users.py update_user), и
@@ -15269,13 +15655,22 @@ function updateAuthMethodHint() {
     ? "Вход проверяется у контроллера домена по доменному имени выше. Пароль сервиса у этой "
       + "учётной записи будет снят и перестанет подходить. Настройка подключения — "
       + "«Администрирование → Доменная авторизация»."
-    : "Вход по паролю, который задаётся здесь же кнопкой «Пароль» в списке пользователей.";
+    : "Вход по паролю, который задаётся здесь же кнопкой «Задать пароль» на вкладке «Вход и безопасность».";
 }
 
 document.getElementById("users-add").addEventListener("click", () => openUserEdit(null));
 document.getElementById("ue-auth-method").addEventListener("change", updateAuthMethodHint);
-document.getElementById("ue-role").addEventListener("change", renderAccessTree);
+document.getElementById("ue-role").addEventListener("change", renderUeAccessPanel);
 document.getElementById("user-edit-cancel").addEventListener("click", () => userEditBackdrop.classList.remove("open"));
+document.getElementById("ue-sessions-btn").addEventListener("click", () => {
+  const u = usersCache.find(x => x.id === editingUserId);
+  openSessions("user", editingUserId, `Сеансы: ${u ? u.display_name : ""}`);
+});
+document.getElementById("ue-password-btn").addEventListener("click", () => openUserPassword(editingUserId));
+document.getElementById("ue-impersonate-btn").addEventListener("click", () => {
+  const u = usersCache.find(x => x.id === editingUserId);
+  if (u) startImpersonation(u);
+});
 // Предупреждение о запирании сервиса: после этой правки не осталось бы ни
 // одного администратора сервиса, способного войти БЕЗ домена. Само по себе
 // это законно (домен может быть исправен), поэтому спрашиваем, а не
@@ -15321,12 +15716,14 @@ document.getElementById("user-edit-save").addEventListener("click", async () => 
     }
     // Права — вторым запросом, ПОСЛЕ создания: у нового пользователя ещё нет
     // id, и выдать грант раньше физически нечему. Отправляем СОСТОЯНИЕ
-    // дерева целиком, сервер заменяет им весь набор грантов.
+    // целиком, сервер заменяет им весь набор грантов.
     await api(`/users/${userId}/access`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ grants: collectAccessGrants() }),
     });
     userEditBackdrop.classList.remove("open");
+    // Каталог не устарел (проекты/объекты этой правкой не создаются) —
+    // только гранты, а их renderUsersTable читает заново из access-matrix.
     await renderUsersTable();
   } catch (e) {
     document.getElementById("user-edit-error").textContent = e.message;
@@ -15662,7 +16059,6 @@ async function openAccessMatrix() {
 // данные (выданные доступы) и должна быть отдельным осознанным действием с
 // немедленным результатом, а ячейки правят пачками по всей таблице, и
 // подтверждать каждую — мучение.
-const rolesBackdrop = document.getElementById("roles-backdrop");
 let rolesData = null;        // ответ GET /roles целиком
 let rolesDraft = new Map();  // "роль|раздел" -> уровень, до сохранения
 
@@ -15675,94 +16071,123 @@ function rolesLevel(роль, раздел) {
   return (строка && строка.levels[роль]) || "none";
 }
 
-function renderRolesGrid() {
-  const роли = rolesData.roles;
-  const шапка = `<thead><tr><th class="rf-name">Раздел</th>`
-    + роли.map(r => `<th class="rf-role">${escapeHtml(r.name)}`
-        + `<span class="rf-granted" title="Кому выдана эта роль">выдана: ${r.granted}</span>`
-        + `<span class="rf-role-tools">`
-        + `<button class="btn btn-secondary" data-role-left="${r.key}" title="Левее">←</button>`
-        + `<button class="btn btn-secondary" data-role-right="${r.key}" title="Правее">→</button>`
-        + `<button class="btn btn-secondary" data-role-rename="${r.key}" title="Переименовать">✎</button>`
-        + `<button class="btn btn-secondary" data-role-del="${r.key}" title="Удалить роль">✕</button>`
-        + `</span></th>`).join("")
-    + `<th class="rf-sysadmin">Администратор<br>сервиса</th></tr></thead><tbody>`;
+// Выбранная роль вкладки «Роли» — макет показывает РАЗДЕЛЫ ОДНОЙ роли
+// разом (список ролей слева, её права справа), а не все роли одной широкой
+// таблицей: так читается «что может ЭТА роль», а не «сравнить все сразу»
+// (для сравнения в макете отдельная кнопка, здесь пока не перенесена).
+let rolesSelectedRole = null;
 
-  const строки = [];
-  let группа = null;
-  for (const f of rolesData.features) {
-    if (f.section !== группа) {
-      группа = f.section;
-      // Название группы в отдельном span: сама ячейка растянута на всю
-      // строку и прилипнуть к левому краю не может — уедет вместе с
-      // прокруткой. Липнет ТЕКСТ внутри неё.
-      строки.push(`<tr class="rf-section"><td colspan="${роли.length + 2}">`
-        + `<span class="rf-section-name">${escapeHtml(группа)}</span></td></tr>`);
-    }
-    const название = `<td class="rf-name">${escapeHtml(f.title)}`
-      + `<span class="rf-scope">${escapeHtml(f.scope_label || "")}</span>`
-      // Раздел обмена данными: чем «Чтение» отличается от «Изменения»
-      // (app/features.py, признак io). Отдельной строкой и перед общим
-      // примечанием: администратор ставит галочку в этой самой строке, и
-      // ответ на вопрос «что я сейчас раздаю» обязан стоять у галочки.
-      + (f.io_hint ? `<span class="rf-note rf-io">${escapeHtml(f.io_hint)}</span>` : "")
-      + (f.note ? `<span class="rf-note">${escapeHtml(f.note)}</span>` : "")
-      + `</td>`;
-    if (f.fixed) {
-      // «Своё» роли не подчиняется: показываем, но не даём править —
-      // спрятать строку значило бы оставить перечень неполным, а неполному
-      // перечню перестают доверять.
-      строки.push(`<tr>${название}<td colspan="${роли.length + 1}" class="rf-scope">`
-        + `Своё — меняет каждый сам, роли ни при чём</td></tr>`);
-      continue;
-    }
-    const ячейки = роли.map(r => {
-      const текущий = rolesLevel(r.key, f.key);
-      const изменена = rolesDraft.has(rolesCellKey(r.key, f.key));
-      const опции = Object.entries(rolesData.level_labels).map(([v, l]) =>
-        `<option value="${v}"${v === текущий ? " selected" : ""}>${escapeHtml(l)}</option>`).join("");
-      return `<td class="rf-cell${изменена ? " rf-dirty" : ""}">`
-        + `<select data-cell-role="${r.key}" data-cell-feature="${f.key}"`
-        + ` class="rf-level rf-${текущий}">${опции}</select></td>`;
-    }).join("");
-    // Администратор сервиса проходит проверки в обход настройки, и снять
-    // это нельзя — колонка показана, чтобы вопрос «а он-то что может»
-    // не возникал, но правке не подлежит.
-    строки.push(`<tr>${название}${ячейки}<td class="rf-sysadmin">Изменение</td></tr>`);
-  }
-  document.getElementById("roles-table").innerHTML = шапка + строки.join("") + "</tbody>";
+function renderRolesSide() {
+  const box = document.getElementById("roles-side");
+  box.innerHTML = rolesData.roles.map(r => `
+    <button type="button" data-role-select="${escapeHtml(r.key)}"
+            aria-pressed="${r.key === rolesSelectedRole}">
+      ${escapeHtml(r.name)}<small>выдана: ${r.granted}</small>
+    </button>`).join("");
+}
+
+function updateRolesStatus() {
   document.getElementById("roles-status").textContent =
     rolesDraft.size ? `Не сохранено ячеек: ${rolesDraft.size}` : "";
 }
 
-async function openRolesSetup() {
+function renderRolesDetail() {
+  const box = document.getElementById("roles-detail");
+  if (!rolesSelectedRole) {
+    box.innerHTML = `<p class="hint-text">Ролей пока нет — заведите первую слева.</p>`;
+    return;
+  }
+  const роль = rolesData.roles.find(r => r.key === rolesSelectedRole);
+  let html = `<div class="u-bar">`
+    + `<h3>${escapeHtml(роль ? роль.name : rolesSelectedRole)}</h3>`
+    + `<div class="u-inline">`
+    + `<button type="button" class="btn" data-role-left="${rolesSelectedRole}" title="Левее">←</button>`
+    + `<button type="button" class="btn" data-role-right="${rolesSelectedRole}" title="Правее">→</button>`
+    + `<button type="button" class="btn" data-role-rename="${rolesSelectedRole}">Переименовать</button>`
+    + `<button type="button" class="btn" data-role-del="${rolesSelectedRole}">Удалить роль</button>`
+    + `</div></div>`
+    + `<p class="hint-text">Нет — разрешение не добавляется этой ролью, другие роли могут `
+    + `давать доступ. Администратор сервиса проходит проверки в обход — эта роль на него не `
+    + `влияет.</p>`;
+  let группа = null;
+  for (const f of rolesData.features) {
+    if (f.section !== группа) {
+      группа = f.section;
+      html += `<div class="u-group">${escapeHtml(группа)}</div>`;
+    }
+    if (f.fixed) {
+      // «Своё» роли не подчиняется: показываем, но не даём править —
+      // спрятать строку значило бы оставить перечень неполным, а неполному
+      // перечню перестают доверять.
+      html += `<div class="u-perm"><div>${escapeHtml(f.title)}`
+        + `<small>Своё — меняет каждый сам, роли ни при чём</small></div><div></div></div>`;
+      continue;
+    }
+    const текущий = rolesLevel(rolesSelectedRole, f.key);
+    const изменена = rolesDraft.has(rolesCellKey(rolesSelectedRole, f.key));
+    const сегменты = Object.entries(rolesData.level_labels).map(([v, l]) =>
+      `<button type="button" data-perm-feature="${f.key}" data-perm-level="${v}"`
+      + ` aria-pressed="${v === текущий}">${escapeHtml(l)}</button>`).join("");
+    html += `<div class="u-perm${изменена ? " u-perm-dirty" : ""}"><div>${escapeHtml(f.title)}`
+      + `<small>${escapeHtml(f.scope_label || "")}</small>`
+      // Раздел обмена данными: чем «Чтение» отличается от «Изменения»
+      // (app/features.py, признак io) — подпись перед общим примечанием,
+      // ответ на вопрос «что я сейчас раздаю» обязан стоять у переключателя.
+      + (f.io_hint ? `<small>${escapeHtml(f.io_hint)}</small>` : "")
+      + (f.note ? `<small>${escapeHtml(f.note)}</small>` : "")
+      + `</div><div class="u-seg" aria-label="${escapeHtml(f.title)}">${сегменты}</div></div>`;
+  }
+  box.innerHTML = html;
+}
+
+// Загрузка вкладки «Роли» экрана «Пользователи и доступ» (2026-09-14) — не
+// открывает ничего сама, открытием и переключением вкладок ведает
+// usersModalSwitchTab ниже; здесь только данные и первый рендер.
+async function loadRolesTab() {
   document.getElementById("roles-error").textContent = "";
   rolesData = await api("/roles");
   rolesDraft = new Map();
-  renderRolesGrid();
-  rolesBackdrop.classList.add("open");
+  rolesSelectedRole = rolesData.roles[0] ? rolesData.roles[0].key : null;
+  renderRolesSide();
+  renderRolesDetail();
+  updateRolesStatus();
 }
 
 async function reloadRoles() {
   rolesData = await api("/roles");
-  renderRolesGrid();
+  // Выбранная роль могла пропасть (удалена этой же правкой) — тогда берём
+  // первую из оставшихся, а не показываем панель ни от кого.
+  if (!rolesData.roles.some(r => r.key === rolesSelectedRole)) {
+    rolesSelectedRole = rolesData.roles[0] ? rolesData.roles[0].key : null;
+  }
+  renderRolesSide();
+  renderRolesDetail();
+  updateRolesStatus();
 }
 
-document.getElementById("roles-table").addEventListener("change", (e) => {
-  const sel = e.target.closest("select[data-cell-role]");
-  if (!sel) return;
-  const { cellRole, cellFeature } = sel.dataset;
-  const строка = rolesData.features.find(f => f.key === cellFeature);
-  const было = (строка && строка.levels[cellRole]) || "none";
-  const ключ = rolesCellKey(cellRole, cellFeature);
-  // Вернули как было — правка снимается, а не остаётся «изменением в ноль»:
-  // счётчик несохранённого должен показывать реальную разницу.
-  if (sel.value === было) rolesDraft.delete(ключ);
-  else rolesDraft.set(ключ, sel.value);
-  renderRolesGrid();
+document.getElementById("roles-side").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-role-select]");
+  if (!btn) return;
+  rolesSelectedRole = btn.dataset.roleSelect;
+  renderRolesSide();
+  renderRolesDetail();
 });
 
-document.getElementById("roles-table").addEventListener("click", async (e) => {
+document.getElementById("roles-detail").addEventListener("click", async (e) => {
+  const seg = e.target.closest("button[data-perm-feature]");
+  if (seg) {
+    const { permFeature, permLevel } = seg.dataset;
+    const строка = rolesData.features.find(f => f.key === permFeature);
+    const было = (строка && строка.levels[rolesSelectedRole]) || "none";
+    const ключ = rolesCellKey(rolesSelectedRole, permFeature);
+    // Вернули как было — правка снимается, а не остаётся «изменением в
+    // ноль»: счётчик несохранённого должен показывать реальную разницу.
+    if (permLevel === было) rolesDraft.delete(ключ);
+    else rolesDraft.set(ключ, permLevel);
+    renderRolesDetail();
+    updateRolesStatus();
+    return;
+  }
   const кнопка = e.target.closest("button[data-role-left], button[data-role-right], "
                                  + "button[data-role-rename], button[data-role-del]");
   if (!кнопка) return;
@@ -15820,11 +16245,14 @@ document.getElementById("roles-add").addEventListener("click", async () => {
   ошибка.textContent = "";
   if (!поле.value.trim()) return;
   try {
-    await api("/roles", {
+    const создана = await api("/roles", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: поле.value.trim() }),
     });
     поле.value = "";
+    // Сразу показываем ЕЁ панель — только что завели, отмечать права
+    // сподручнее сразу, не разыскивая новую роль в списке слева.
+    rolesSelectedRole = создана.key;
     await reloadRoles();
     showToast("Роль заведена пустой — отметьте, что ей можно", "info");
   } catch (err) {
@@ -15859,13 +16287,11 @@ document.getElementById("roles-save").addEventListener("click", async () => {
 
 document.getElementById("menu-roles").addEventListener("click", async () => {
   try {
-    await openRolesSetup();
+    await openUsersAccessModal("roles");
   } catch (e) {
     showToast("Не удалось открыть настройку ролей: " + e.message, "warning");
   }
 });
-document.getElementById("roles-close").addEventListener("click", () =>
-  rolesBackdrop.classList.remove("open"));
 
 document.getElementById("menu-access-matrix").addEventListener("click", async () => {
   try {
@@ -15929,19 +16355,36 @@ document.getElementById("access-matrix-save").addEventListener("click", async ()
   }
 });
 
-// ---------- матрица прав ОДНОГО пользователя ----------
+// ---------- «Проверка доступа» — вкладка экрана «Пользователи и доступ» ----------
 // Что именно человеку доступно и в каком объёме. Считает СЕРВЕР
 // (app/rights_matrix.py): требования по разделам живут рядом с проверками,
 // а не вторым списком на клиенте — разъехавшись, такой список врал бы про
 // права, и заметили бы это по жалобе.
-const rightsMatrixBackdrop = document.getElementById("rights-matrix-backdrop");
+//
+// Вкладка самодостаточна (2026-09-14, перенос макета): САМА выбирает и
+// человека, и объект (раньше матрица показывала только объект, а человек
+// приходил снаружи, кнопкой у конкретного пользователя, — теперь так можно
+// прийти и сюда, задав rmUserId/rmPreferredObjectId ДО открытия, см.
+// openRightsMatrix; без этого вкладка сама берёт первого из списка).
 let rmUserId = null;
+// Предвыбранный объект: открытие из строки объекта сводки доступа
+// («Проверить доступ») должно сразу показывать ИМЕННО его, а не текущий
+// открытый на схеме — только на ОДНО открытие, дальше решает сам выпадающий
+// список.
+let rmPreferredObjectId = null;
+
+function rmUserSelectOptions() {
+  return usersCache.map(u =>
+    `<option value="${u.id}"${u.id === rmUserId ? " selected" : ""}>${escapeHtml(u.display_name)}</option>`
+  ).join("");
+}
 
 function rmObjectOptions() {
+  const выбранный = rmPreferredObjectId != null ? rmPreferredObjectId : state.objectId;
   const опции = ['<option value="">— объект не выбран —</option>'];
   for (const проект of state.projects.filter(p => p.id)) {
     const items = проект.objects.map(o =>
-      `<option value="${o.id}"${o.id === state.objectId ? " selected" : ""}>${escapeHtml(o.name)}</option>`).join("");
+      `<option value="${o.id}"${o.id === выбранный ? " selected" : ""}>${escapeHtml(o.name)}</option>`).join("");
     опции.push(`<optgroup label="${escapeHtml(проект.name)}">${items}</optgroup>`);
   }
   return опции.join("");
@@ -15952,53 +16395,81 @@ async function renderRightsMatrix() {
   const params = new URLSearchParams();
   if (objectId) params.set("object_id", objectId);
   const data = await api(`/users/${rmUserId}/rights-matrix?${params}`);
+  // Было `data.object_role_label` — поля с таким именем сервер не отдаёт
+  // (`app/rights_matrix.py` возвращает СПИСОК `object_roles`), и подпись
+  // молча показывала «прав нет» даже там, где роли есть, с самого
+  // появления этого экрана (живой репорт 2026-09-14 — попался при переносе
+  // «Матрицы прав» вкладкой в «Проверку доступа», сам перенос ни при чём).
   document.getElementById("rights-matrix-role").textContent = data.system_admin
     ? "Администратор сервиса — доступ ко всему в обход выданных прав"
-    : (data.object_role_label
-      ? `Роль на объекте: ${data.object_role_label}`
+    : (data.object_roles && data.object_roles.length
+      ? `Роль${data.object_roles.length > 1 ? "и" : ""} на объекте: ${data.object_roles.join(", ")}`
       : "На этом объекте прав нет");
 
-  // Колонки только «Просмотр» и «Изменение»: отдельная колонка
-  // «Отсутствуют» ничего не добавляла — отсутствие прав и так видно по
-  // двум прочеркам в строке (живой запрос 2026-08-04).
+  // Разметка — плоский список .u-perm/.u-tag БЕЗ заголовков разделов: в
+  // макете (function check()/checkResult()) «Проверка доступа» — не
+  // «Роли» с их .u-group по разделам, а простой список строк, каждая с
+  // ОДНОЙ подписью источника «Роль «X» → Y» (нашлось 2026-09-14 при сверке
+  // со скриншотом макета — здесь ошибочно скопировалась группировка
+  // «Ролей», которой в этом экране макета нет).
   //
-  // «Изменение» включает просмотр — роли выстроены лестницей (см.
-  // app/access.py), поэтому у строки с уровнем write галочки стоят в ОБЕИХ
-  // колонках: иначе «может править, но не может смотреть» читалось бы как
-  // ошибка в правах.
-  const отметка = (есть) => есть
-    ? `<span class="rm-yes">✓</span>` : `<span class="rm-no">—</span>`;
-  let html = `<thead><tr><th>Раздел системы</th>`
-    + `<th>Просмотр</th><th>Изменение</th></tr></thead><tbody>`;
-  let раздел = null;
+  // «Неприменимо» (раздел не про этот тип объекта, app/rights_matrix.py
+  // not_applicable) — это НЕ «прав нет»: показывать чужому типу объекта
+  // строку с «Нет» читалось бы как отказ там, где отказывать не в чем
+  // (найдено 2026-09-14 при сверке — Объект-4 это МФР, и вся ветка про ЖБИ
+  // показывала сплошные «Нет», хотя раздела на этом объекте попросту нет).
+  const RIGHTS_LEVEL_LABELS = { none: "Нет", read: "Чтение", write: "Изменение" };
+  const источникТекст = (f) => {
+    if (!f.from_roles || !f.from_roles.length) return "";
+    const пары = f.from_roles.map(r => `«${escapeHtml(r.role)}» → ${escapeHtml(r.source || "")}`);
+    return f.from_roles.length === 1
+      ? `Роль ${пары[0]}`
+      : `Роли: ${пары.join("; ")}`;
+  };
+  let html = "";
   for (const f of data.features) {
-    if (f.section !== раздел) {
-      раздел = f.section;
-      html += `<tr class="rm-section"><td colspan="3">${escapeHtml(раздел)}</td></tr>`;
-    }
-    html += `<tr><td>${escapeHtml(f.title)}`
-      + (f.io_hint ? `<span class="rm-note rf-io">${escapeHtml(f.io_hint)}</span>` : "")
-      + (f.note ? `<span class="rm-note">${escapeHtml(f.note)}</span>` : "")
-      + `</td>`
-      + `<td class="rm-mark">${отметка(f.level === "read" || f.level === "write")}</td>`
-      + `<td class="rm-mark">${отметка(f.level === "write")}</td></tr>`;
+    if (f.not_applicable) continue;
+    const источник = источникТекст(f);
+    html += `<div class="u-perm"><div>${escapeHtml(f.title)}`
+      + (источник ? `<small>${источник}</small>` : "")
+      + (f.io_hint ? `<small>${escapeHtml(f.io_hint)}</small>` : "")
+      + (f.note ? `<small>${escapeHtml(f.note)}</small>` : "")
+      + `</div><span class="u-tag">${escapeHtml(RIGHTS_LEVEL_LABELS[f.level] || f.level)}</span></div>`;
   }
-  document.getElementById("rights-matrix-table").innerHTML = html + `</tbody>`;
+  document.getElementById("rights-matrix-result").innerHTML = html;
 }
 
-async function openRightsMatrix(userId) {
-  rmUserId = userId;
-  const пользователь = amUsers.find(u => u.id === userId) || usersCache.find(u => u.id === userId);
-  document.getElementById("rights-matrix-title").textContent =
-    `Матрица прав — ${пользователь ? пользователь.display_name : `#${userId}`}`;
+// Загрузка вкладки «Проверка доступа» — данные и первый рендер; открытием и
+// переключением вкладок ведает usersModalSwitchTab.
+async function loadCheckTab() {
+  // Без предвыбранного человека (открыли вкладку кликом, а не «Проверить
+  // доступ» откуда-то ещё) — берём первого из списка: пустой выбор для
+  // /users/{id}/rights-matrix не выразить, а форма без результата совсем
+  // читалась бы как «не работает».
+  if (rmUserId == null && usersCache.length) rmUserId = usersCache[0].id;
+  document.getElementById("rights-matrix-user").innerHTML = rmUserSelectOptions();
   document.getElementById("rights-matrix-object").innerHTML = rmObjectOptions();
-  rightsMatrixBackdrop.classList.add("open");
-  await renderRightsMatrix();
+  if (rmUserId != null) await renderRightsMatrix();
 }
 
+// Точка входа СНАРУЖИ (кнопка «Проверить доступ» у объекта в сводке доступа,
+// «Матрица прав» в «Правах пользователей») — задаёт человека и, если он
+// известен, объект, и переключает единый экран на вкладку «Проверка
+// доступа». Не накладывает окно поверх текущего (требование задания) —
+// закрывает то, что было открыто, а не показывает поверх него.
+async function openRightsMatrix(userId, objectId) {
+  rmUserId = userId;
+  rmPreferredObjectId = objectId != null ? objectId : null;
+  userEditBackdrop.classList.remove("open");
+  accessMatrixBackdrop.classList.remove("open");
+  await openUsersAccessModal("check");
+}
+
+document.getElementById("rights-matrix-user").addEventListener("change", async (e) => {
+  rmUserId = Number(e.target.value);
+  await renderRightsMatrix();
+});
 document.getElementById("rights-matrix-object").addEventListener("change", renderRightsMatrix);
-document.getElementById("rights-matrix-close").addEventListener("click", () =>
-  rightsMatrixBackdrop.classList.remove("open"));
 
 // ---------- Памятка администратора (2026-08-03, живой запрос) ----------
 // Содержимое приходит с сервера (app/admin_guide.py) уже подставленным под
@@ -31986,6 +32457,23 @@ async function selectMfrChessTrack(trackCode) {
   // вообще включён; сама reloadMfrDynamics уже сделает свой redraw.
   if (mfrDynamics.active) await reloadMfrDynamics();
 }
+
+// Плоская «Шахматка» (2026-09-14, Docs/design/chess-flat) — самостоятельный
+// экран поверх той же доски: развёртка здания по этажам/секциям, массовый
+// ввод факта и печать бланка обхода. Отдельный ES-модуль с ленивым import()
+// (тот же приём, что у app/static/address.js) — большой новый кусок
+// фронтенда, нужный не на каждом открытии «Модели МФР». Передаём объект и
+// доску, уже выбранную в сайдбаре (если есть) — модуль сам умеет её сменить.
+document.getElementById("mfr-chess-flat-open").addEventListener("click", async () => {
+  const mod = await import("/static/chess-flat.js");
+  // Зависимости передаются явно (тот же приём, что у app/static/address.js):
+  // константы верхнего уровня обычного скрипта на window не попадают, а
+  // модуль читает свои bare-идентификаторы из собственной области видимости.
+  // showToast не передаём: экран — полноэкранный оверлей поверх всего
+  // приложения (z-index 500), строка состояния снизу под ним не видна —
+  // сообщения показываются собственным баннером внутри самого экрана.
+  mod.openChessFlat({ api, escapeHtml }, revitPlanState.objectId, mfrChessTrackCode);
+});
 
 // ==================== ДИНАМИКА ФАКТА ЗА ПЕРИОД (живой запрос пользователя) ====================
 // Подсветка блоков, у которых факт менялся внутри периода. Источника-журнала

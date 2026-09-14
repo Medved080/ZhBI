@@ -1079,9 +1079,8 @@
 
   /* -------- «Учёт по блокам» (2026-08-25, Docs/block-accounting.md) --------
      Второй контур учёта: вид работ × блок (этаж+секция) -> статус. Форма и
-     матрица статусов — по образцу «Графика СМР» и «Настройки ролей»
-     (#roles-table): та же сцепка «шапка и первая колонка прилипают,
-     скроллится содержимое».
+     матрица статусов — по образцу «Графика СМР»: та же сцепка «шапка и
+     первая колонка прилипают, скроллится содержимое».
      Окно растянуто почти на весь экран (2026-09-05, живой запрос
      пользователя): вкладка «Блоки» держит рядом матрицу и редактор
      геометрии с подложкой из PDF, обеим нужно место. */
@@ -1373,34 +1372,70 @@
   .object-card-foot { display: flex; align-items: flex-end; justify-content: space-between;
     gap: 12px; margin-top: 8px; }
   .object-card-foot .hint-text { margin: 0; }
-  /* Дерево доступа в форме пользователя: три уровня (все проекты / проект /
-     объект). Отступ задаётся классом уровня, а не вложенными контейнерами —
-     список плоский, и строка объекта должна прилипать к своей выпадашке в
-     общей сетке, иначе выпадашки разной глубины разъезжаются по ширине. */
-  .access-tree { border: 1px solid var(--color-border); border-radius: 6px;
-    max-height: 260px; overflow-y: auto; padding: 6px; }
-  /* Вторая колонка шире прежних 190px: там теперь НАБОР ролей галочками, а
-     не один выпадающий список — ролей может быть сколько угодно, и они
-     складываются (2026-08-14). */
-  .access-row { display: grid; grid-template-columns: 1fr minmax(240px, 2fr); gap: 8px;
-    align-items: center; padding: 3px 4px; border-radius: 4px; }
-  .access-roles { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  /* Флажки одного уровня доступа — переиспользуются вкладкой «Доступ к
+     объектам» карточки пользователя (редактор одной области, accessRoleChecks
+     в app.js) и раньше принадлежали дереву всех уровней разом; само дерево
+     заменено сводкой (2026-09-14, живое задание) — стили ниже про НЕЁ. */
   .access-role { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
     white-space: nowrap; }
   .access-role input { margin: 0; }
-  .access-row + .access-row { margin-top: 2px; }
-  .access-row-all { font-weight: 600; }
-  .access-row-project { padding-left: 16px; }
-  .access-row-object { padding-left: 34px; }
-  .access-row select { width: 100%; }
-  .access-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; }
-  /* Роли, приходящие СВЕРХУ, — приглушённо и мельче: они не выбраны здесь,
-     а прибавляются к выбранному (уровни складываются, 2026-08-14), и путать
-     их с отмеченными тут нельзя. */
-  .access-inherited { font-size: 11px; color: var(--color-text-muted); }
-  .access-tree-block { margin-top: 14px; border-top: 1px solid var(--color-border);
-    padding-top: 12px; }
+  /* Сводка доступа (2026-09-14) — по образцу согласованного макета
+     (users-access-concept.html): плоские секции с верхней линией-разделителем
+     между проектами (не карточки с рамкой на каждую), пилюли-бэйджи для
+     счётчиков и ролей, приглушённые блоки-примечания для пояснений
+     («Все проекты», унаследовано, охват будущего) — тот же визуальный язык,
+     что и остальная форма (--color-surface-2, --color-text-muted), только
+     оформленный в бэйдж/примечание, как в макете. Раскрытие проекта —
+     нативный <details>: свернуть/развернуть не требует своего JS-состояния
+     (браузер держит его сам), макет сам не разворачивал списком — это
+     добавка из согласованного текста задания (список бывает длинным). */
+  .ue-access-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .ue-access-toolbar input { flex: 1 1 200px; min-width: 0; }
+  .ue-note { background: var(--color-surface-2); border-radius: 6px; padding: 12px 14px;
+    color: var(--color-text-muted); font-size: 12px; margin: 10px 0; }
+  .ue-note strong { color: var(--color-text); }
+  .ue-tag { display: inline-block; border-radius: 4px; background: var(--color-surface-2);
+    padding: 3px 7px; font-size: 12px; color: var(--color-text-muted); white-space: nowrap; }
+  .ue-project { border: 0; border-top: 1px solid var(--color-border); padding-top: 12px; margin-top: 12px; }
+  .ue-project:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+  .ue-project summary { cursor: pointer; list-style: none;
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .ue-project summary::-webkit-details-marker { display: none; }
+  .ue-project summary h4 { margin: 0; font-size: 14px; font-weight: 600; }
+  .ue-project summary h4 .ue-tag { margin-left: 8px; font-weight: 400; }
+  .ue-project summary small { display: block; color: var(--color-text-muted); font-weight: 400;
+    margin-top: 2px; }
+  /* Строка объекта — ДВЕ колонки, как .u-perm в макете: слева имя и (мельче,
+     приглушённо) откуда роли; справа — итоговые роли пилюлей и действия. Не
+     пять колонок таблицей — макет читает объект как одну мысль, а не разбор
+     по столбцам. */
+  .ue-object-row { display: grid; grid-template-columns: minmax(140px,1fr) auto;
+    align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--color-border); }
+  .ue-object-row:first-of-type { border-top: 0; }
+  .ue-object-name { font-weight: 600; }
+  .ue-object-sources { display: block; font-weight: 400; color: var(--color-text-muted); font-size: 11px; }
+  .ue-object-actions { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  .ue-role-list { display: flex; flex-direction: column; gap: 2px; margin: 10px 0; }
+  /* `.link-btn` в остальном приложении — мелкая ссылка-сброс (11px,
+     `.side-report-controls` и т.п.). В макете `.u-link` — обычный размер
+     текста, не мельче соседних слов: здесь и в карточке пользователя
+     (общая с этим экраном часть пилота) держим 14px. */
+  #users-backdrop .link-btn, #user-edit-backdrop .link-btn { font-size: 14px; }
+  /* Из макета буквально: `small{display:block;color:muted;font-size:12px}`
+     на ВЕСЬ экран разом, а не точечно по местам — в приложении `small` по
+     умолчанию строчный (inline), и подпись под именем/ролью/пунктом
+     съезжает в одну строку с ним, а не переносится (уже дважды ловил это
+     по отдельности — заголовок роли и логин в списке; правило одно на всех,
+     чтобы не ловить его в третий раз в новом месте). */
+  #users-backdrop small, #user-edit-backdrop small {
+    display: block; color: var(--color-text-muted); font-size: 12px;
+  }
+  /* Разделитель «блок сверху» — общая мелкая утилита (не про доступ, имя
+     осталось от прежнего дерева, которое ею когда-то и было); используется
+     и вне вкладки доступа — например, «Проверка подключения» в настройке
+     домена. Прежде чем убирать за ненадобностью на одном экране, проверить
+     остальные — здесь уже дважды роняли чужую вёрстку так. */
+  .access-tree-block { margin-top: 14px; border-top: 1px solid var(--color-border); padding-top: 12px; }
   /* Выбор контракта в диалоге смены статуса (2026-08-04) — список, а не
      <select>: у каждого контракта три числа по позиции (всего / разнесено /
      остаток) РАЗНЫМИ цветами, а раскрасить части текста <option> браузер не
@@ -1457,8 +1492,7 @@
      812 → 777 px). Ограничение по числу знаков даёт ему перенос, и ширину
      формы начинает задавать то, ради чего её открывают, — таблица. */
   #access-matrix-modal .modal-sticky-head .hint-text { max-width: 70ch; }
-  /* ОБЕ прокрутки — здесь, тем же приёмом, что у .rf-scroll в «Настройке
-     ролей» (см. её комментарий): `position: sticky` у шапки таблицы
+  /* ОБЕ прокрутки — здесь: `position: sticky` у шапки таблицы
      отсчитывается от ближайшего прокручиваемого предка. Пока по вертикали
      прокручивалось .modal-sticky-scroll снаружи, а .am-scroll отвечал
      только за горизонталь, он всё равно становился этим предком (сам факт
@@ -1555,86 +1589,105 @@
   .am-role-detail-section:first-child { margin-top: 0; }
   .am-role-detail-row { display: flex; justify-content: space-between; gap: 12px;
     padding: 2px 0; border-bottom: 1px solid var(--color-border); }
-  /* Настройка ролей (2026-08-14): матрица «разделы × роли».
-     Ширина по содержимому — колонок столько, сколько ролей завели, и
-     жёсткая ширина при трёх ролях растянула бы форму на весь монитор, а
-     при десяти не хватила бы. Дальше работает прокрутка .rf-scroll. */
-  #roles-modal { width: max-content; max-width: 96vw; }
-  #roles-modal .modal-sticky-head .hint-text { max-width: 88ch; }
-
-  /* Шапка формы — та же карточка, что у блоков сайдбара и групп меню:
-     контур, скругление, тень «света из-под блока». Иначе поле ввода и
-     кнопка висят на голом фоне, а матрица под ними оформлена. */
-  .rf-toolbar {
-    background: var(--color-surface); border: 1px solid var(--color-border);
-    border-radius: var(--radius); box-shadow: var(--shadow-card);
-    padding: 10px 12px; margin-top: 10px;
+  /* users-modal — общий на весь экран «Пользователи и доступ» (2026-09-14):
+     та же ширина «по содержимому», что раньше была только у вкладки
+     «Роли» — самая широкая из трёх, и по ней подстраивается весь экран. */
+  #users-modal { width: max-content; max-width: 96vw; font-size: 14px; }
+  #users-modal [data-users-panel="roles"] > .hint-text { max-width: 88ch; }
+  /* Пилотный экран нового визуального языка (2026-09-14, живой запрос:
+     «делай в точности как макет-образец» — цель не «не выбиваться из
+     старого интерфейса», а поэтапно ПЕРЕЙТИ на новый). Поэтому здесь —
+     не точечные поправки, а величины из users-access-concept.html один в
+     один (заголовок, зазор и насыщенность вкладок, кнопки, поля, отступы
+     таблицы), поверх общих классов формы (`.modal h2`, `.modal .btn`,
+     `.tab-btn`) — те обслуживают ещё ~80 других форм, их не трогаем, но
+     здесь их переопределяем каждый под макет. Цвета — токены приложения
+     (они уже совпадают с макетом визуально, живая проверка это
+     подтвердила), геометрия — из макета буквально. */
+  #users-modal > .modal-sticky-head h2 { font-size: 20px; }
+  #users-modal .tabs.modal-tabs { gap: 20px; }
+  #users-modal .tab-btn { font-size: 14px; font-weight: 400; padding: 13px 0; }
+  #users-backdrop .btn { font-size: 14px; padding: 8px 12px; border-radius: 7px; }
+  #users-backdrop input[type="text"], #users-backdrop select {
+    font-size: 14px; padding: 9px 10px; border-radius: 6px;
+  }
+  #users-backdrop .u-search { width: 300px; max-width: 100%; }
+  /* Вкладка «Роли» — буквально .u-cols/.u-side/.u-perm/.u-seg из макета
+     (roleEditor()), не общая матрица-таблица формы. */
+  #users-backdrop .u-bar { display: flex; gap: 12px; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; margin-bottom: 20px; }
+  #users-backdrop .u-bar h3 { margin: 0; font-size: 18px; font-weight: 600; }
+  #users-backdrop .u-bar > div > small { margin-top: 2px; }
+  #users-backdrop .u-inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #users-backdrop .u-cols { display: grid; grid-template-columns: 220px minmax(0,1fr); gap: 26px; }
+  #users-backdrop .u-side { display: flex; flex-direction: column; gap: 4px; max-height: 60vh;
+    overflow-y: auto; padding-right: 4px; }
+  #users-backdrop .u-side button { display: block; width: 100%; text-align: left; border: 0;
+    border-radius: 7px; background: none; padding: 11px 12px; cursor: pointer; color: var(--color-text);
+    font-size: 14px; }
+  #users-backdrop .u-side button:hover { background: var(--color-surface-2); }
+  #users-backdrop .u-side button small { color: var(--color-text-muted); }
+  #users-backdrop .u-side button[aria-pressed="true"] { background: var(--color-surface-2); color: var(--color-primary); }
+  #users-backdrop .u-side button[aria-pressed="true"] small { color: var(--color-primary); }
+  #users-backdrop #roles-detail { max-height: 60vh; overflow-y: auto; padding-right: 4px; }
+  #users-backdrop .u-group { margin-top: 16px; font-size: 12px; color: var(--color-text-muted); }
+  #users-backdrop .u-group:first-child { margin-top: 0; }
+  #users-backdrop .u-perm { display: grid; grid-template-columns: minmax(120px,1fr) auto; align-items: center;
+    gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--color-border); }
+  #users-backdrop .u-perm.u-perm-dirty { background: var(--color-surface-2); }
+  #users-backdrop .u-perm > div:first-child small { display: block; margin-top: 2px; }
+  #users-backdrop .u-seg { display: flex; border: 1px solid var(--color-border); border-radius: 6px;
+    overflow: hidden; flex-shrink: 0; }
+  #users-backdrop .u-seg button { border: 0; border-right: 1px solid var(--color-border);
+    background: var(--color-surface); padding: 7px 10px; font-size: 12px; cursor: pointer; color: var(--color-text); }
+  #users-backdrop .u-seg button:last-child { border-right: 0; }
+  #users-backdrop .u-seg button:hover { background: var(--color-surface-2); }
+  #users-backdrop .u-seg button[aria-pressed="true"] { background: var(--color-primary); color: #fff; font-weight: 600; }
+  @media (max-width: 720px) {
+    #users-backdrop .u-cols { grid-template-columns: 1fr; }
+    #users-backdrop .u-side { flex-direction: row; flex-wrap: wrap; max-height: none; }
+    #users-backdrop .u-side button { width: auto; }
+  }
+  /* Поля формы — двухколоночная сетка из макета (profile()/security()),
+     не список «подпись сверху, поле на всю ширину» друг под другом: так
+     карточка человека читается вдвое короче, а не длинной анкетой. Общие
+     для экрана и карточки — обе часть одного пилота. */
+  #users-backdrop .u-fields, #user-edit-backdrop .u-fields {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 670px; margin: 14px 0;
+  }
+  #users-backdrop label.u-field, #user-edit-backdrop label.u-field {
+    display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--color-text-muted);
+  }
+  #users-backdrop .u-field input, #users-backdrop .u-field select,
+  #user-edit-backdrop .u-field input, #user-edit-backdrop .u-field select {
+    font-size: 14px; color: var(--color-text); width: 100%;
+  }
+  #users-backdrop .u-span, #user-edit-backdrop .u-span { grid-column: 1 / -1; }
+  /* Блок-разделитель верхней линией (не приглушённый бокс, как .u-note) —
+     для «Диагностики» на вкладке «Вход и безопасность». */
+  #users-backdrop .u-result, #user-edit-backdrop .u-result {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--color-border);
+  }
+  #users-backdrop .u-result h4, #user-edit-backdrop .u-result h4 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+  @media (max-width: 450px) {
+    #users-backdrop .u-fields, #user-edit-backdrop .u-fields { grid-template-columns: 1fr; }
+    #users-backdrop .u-perm { grid-template-columns: 1fr; }
+    #users-backdrop .u-seg { width: 100%; }
+    #users-backdrop .u-seg button { flex: 1; }
   }
 
-  /* ОБЕ прокрутки — здесь, и это обязательно, а не удобство: `position:
-     sticky` у шапки отсчитывается от ближайшего прокручиваемого предка.
-     Пока по вертикали прокручивалось модальное окно снаружи, а .rf-scroll
-     отвечал только за горизонталь, шапка липла к контейнеру, который сам
-     не прокручивается, — и названия ролей уезжали вверх при первом же
-     листании. Заодно `overflow-x: auto` всё равно делал этот блок
-     вертикально прокручиваемым (браузер поднимает overflow-y до auto),
-     так что «горизонтальный» он был только на словах. */
-  .rf-scroll {
-    overflow: auto; max-height: 64vh;
-    background: var(--color-surface); border: 1px solid var(--color-border);
-    border-radius: var(--radius); box-shadow: var(--shadow-card);
+  /* .u-note/.u-tag из макета — использовались в разметке (карточка
+     пользователя, «Проверка доступа»), но стилей для них не было заведено
+     вовсе: текст «висел» обычным абзацем без приглушённого фона макета
+     (найдено 2026-09-14 при сверке «Проверки доступа»). */
+  #users-backdrop .u-note, #user-edit-backdrop .u-note {
+    background: var(--color-surface-2); border-radius: 6px; padding: 12px 14px;
+    color: var(--color-text-muted); font-size: 12px; margin: 16px 0;
   }
-  #roles-table { border-collapse: separate; border-spacing: 0; font-size: 12px;
-    width: 100%; }
-  #roles-table th, #roles-table td {
-    padding: 6px 10px; border-bottom: 1px solid var(--color-border); white-space: nowrap;
-    vertical-align: top; }
-  /* Контур КОЛОНКИ: каждая роль читается как отдельный блок, иначе при
-     шести ролях глаз теряет, в чьём столбце стоит «Изменение». */
-  #roles-table th.rf-role, #roles-table td.rf-cell,
-  #roles-table th.rf-sysadmin, #roles-table td.rf-sysadmin {
-    border-left: 1px solid var(--color-border); }
-  #roles-table thead th { position: sticky; top: 0; z-index: 3;
-    background: var(--color-surface-2); text-align: left; font-weight: 600;
-    /* Полоска снизу вместо общей границы строки: у прилипшей шапки
-       border-bottom уезжает вместе с прокруткой, box-shadow — нет. */
-    box-shadow: inset 0 -1px 0 var(--color-border); }
-  /* Название раздела прилипает слева: при десятке ролей строка уезжает за
-     край, и без этого не видно, чью ячейку правишь. */
-  #roles-table .rf-name { position: sticky; left: 0; z-index: 2;
-    background: var(--color-surface); text-align: left; min-width: 300px; white-space: normal;
-    box-shadow: inset -1px 0 0 var(--color-border); }
-  #roles-table thead .rf-name { z-index: 4; background: var(--color-surface-2);
-    box-shadow: inset -1px 0 0 var(--color-border), inset 0 -1px 0 var(--color-border); }
-  #roles-table .rf-role { min-width: 170px; }
-  #roles-table .rf-granted { display: block; font-weight: 400; font-size: 11px;
-    color: var(--color-text-muted); }
-  #roles-table .rf-role-tools { display: block; margin-top: 3px; }
-  #roles-table .rf-role-tools button { padding: 0 5px; font-size: 12px; line-height: 1.5; }
-  /* Полоса-разделитель групп: утопленный фон и линия сверху — так группа
-     читается блоком, а не очередной строкой таблицы. */
-  #roles-table tr.rf-section td { font-weight: 600; background: var(--color-surface-2);
-    border-top: 1px solid var(--color-border); padding: 7px 10px;
-    color: var(--color-primary); }
-  /* Липнет текст, а не ячейка: ячейка растянута colspan'ом на всю строку, и
-     закрепить её значило бы оторвать фон от содержимого. */
-  #roles-table .rf-section-name { position: sticky; left: 10px; display: inline-block; }
-  #roles-table select.rf-level { font-size: 12px; padding: 2px 4px; width: 100%;
-    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
-    background: var(--color-surface); }
-  /* Цветом отмечено только ИЗМЕНЕНИЕ: оно решает, что человек может
-     испортить, и в длинном столбце должно находиться взглядом. «Чтение» и
-     «Нет» различать краской незачем — их читают по подписи. */
-  #roles-table select.rf-write { font-weight: 600; border-color: var(--color-primary); }
-  #roles-table td.rf-dirty select { outline: 2px solid var(--color-primary); }
-  #roles-table .rf-sysadmin { color: var(--color-text-muted); font-weight: 400; }
-  #roles-table .rf-note { display: block; font-size: 11px; color: var(--color-text-muted);
-    white-space: normal; max-width: 48ch; }
-  #roles-table .rf-scope { display: block; font-size: 11px; color: var(--color-text-muted); }
-  /* Подсказка раздела обмена данными («Чтение» — выгрузка, «Изменение» —
-     загрузка). Не приглушена, в отличие от обычного примечания: это не
-     справка о разделе, а смысл той самой клетки, которую сейчас ставят. */
-  #roles-table .rf-io, #rights-matrix-table .rf-io { color: var(--color-text); }
+  #users-backdrop .u-tag, #user-edit-backdrop .u-tag {
+    display: inline-block; border-radius: 4px; background: var(--color-surface-2);
+    padding: 3px 7px; font-size: 12px;
+  }
   /* Свободное место на диске в форме копий (2026-08-19). Три состояния
      одной плашкой: в норме приглушена и не отвлекает, при нехватке —
      заметна. Цвета берутся из переменных темы, чтобы плашка не выпадала из
@@ -1650,21 +1703,6 @@
   .disk-plate.disk-critical { border-color: var(--color-danger);
     background: color-mix(in srgb, var(--color-danger) 12%, transparent);
     color: var(--color-text); font-weight: 500; }
-  /* Матрица прав одного пользователя: разделы против объёма прав. */
-  #rights-matrix-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  #rights-matrix-table th, #rights-matrix-table td {
-    padding: 5px 10px; border-bottom: 1px solid var(--color-border); }
-  #rights-matrix-table thead th { position: sticky; top: 0; background: var(--color-surface);
-    text-align: center; z-index: 1; }
-  #rights-matrix-table thead th:first-child, #rights-matrix-table td:first-child { text-align: left; }
-  #rights-matrix-table td.rm-mark { text-align: center; font-size: 15px; width: 130px; }
-  #rights-matrix-table .rm-yes { color: var(--color-success); }
-  /* Прочерк, а не красный крестик: строк много, и колонка крестиков читалась
-     как список проблем, хотя это норма — прав у роли просто нет. */
-  #rights-matrix-table .rm-no { color: var(--color-text-muted); }
-  #rights-matrix-table tr.rm-section td { background: var(--color-bg); font-weight: 600; }
-  #rights-matrix-table .rm-note { display: block; font-size: 11px; color: var(--color-text-muted);
-    white-space: normal; max-width: 520px; }
   /* Вложения (2026-08-02). Одна разметка на все три места — карточку
      элемента в правой панели, форму элемента и формы проектов/объектов. */
   /* Выбор гаммы: плитка образцов, у каждого три полосы — фон, поверхность,
@@ -3016,10 +3054,21 @@
   .bulk-edit-fields label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
     border: 1px solid var(--color-border); border-radius: 12px; padding: 2px 9px; cursor: pointer; }
   #bulk-edit-backdrop .modal-sticky-scroll { min-height: 120px; }
-  /* Форма пользователя: дерево доступа делает её длинной, поэтому она тоже
-     modal-sticky. Шире обычной модалки — в строке дерева рядом должны
-     помещаться название объекта и выпадашка роли. */
-  #user-edit-backdrop .modal { max-width: 560px; }
+  /* Форма пользователя — три вкладки (2026-09-14), поэтому modal-sticky;
+     сводка доступа на вкладке «Доступ к объектам» шире обычного поля формы
+     (название проекта/объекта, роли и источники в одной строке) — отсюда и
+     ширина модалки в целом, не только вкладки доступа. */
+  /* Та же пилотная геометрия, что и у «Пользователи и доступ» (см. её
+     комментарий) — карточка человека часть того же перехода на новый
+     визуальный язык, не отдельная форма. */
+  #user-edit-backdrop .modal { max-width: 720px; font-size: 14px; }
+  #user-edit-backdrop h2 { font-size: 20px; }
+  #user-edit-backdrop .tabs.modal-tabs { gap: 20px; }
+  #user-edit-backdrop .tab-btn { font-size: 14px; font-weight: 400; padding: 13px 0; }
+  #user-edit-backdrop .btn { font-size: 14px; padding: 8px 12px; border-radius: 7px; }
+  #user-edit-backdrop input[type="text"], #user-edit-backdrop select {
+    font-size: 14px; padding: 9px 10px; border-radius: 6px;
+  }
   #bulk-edit-mode { margin-bottom: 10px; align-self: flex-start; }
   .bulk-edit-table-wrap { overflow-x: auto; }
   .bulk-edit-table td.col-new, .bulk-edit-table th.col-new { background: rgba(59,130,246,.08); }
@@ -4036,21 +4085,23 @@
   #activity-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   #activity-table td, #activity-table th { padding: 6px 8px; border-bottom: 1px solid var(--color-border); text-align: left; white-space: nowrap; }
   #activity-table th { color: var(--color-text-muted); font-weight: 500; position: sticky; top: 0; background: var(--color-surface); }
-  #users-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
-  #users-table td, #users-table th { padding: 7px 8px; border-bottom: 1px solid var(--color-border); text-align: left; }
-  #users-table th { color: var(--color-text-muted); font-weight: 500; }
-  /* Четыре кнопки строки пользователя — сеткой 2×2 (2026-08-05, живой
-     репорт): в одну колонку они растягивали строку на четыре, а по ширине
-     ячейка их всё равно не вмещала. Сетка, а не flex-wrap: у колонок должна
-     быть ОДНА ширина на всю таблицу, иначе «Пароль» и «Зайти» пляшут по
-     горизонтали от строки к строке — ровно то, на что жаловались в
-     справочнике контрагентов. */
+  /* Размеры — по значениям из согласованного макета (users-access-concept.html:
+     font:14px, th padding 10px 12px, td padding 15px 12px, .u-avatar 36×36px),
+     не по общим для остальных таблиц формы 12px/6px — этот экран сверяли
+     с образцом построчно, «примерно похоже» не просили. */
+  #users-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 12px; }
+  #users-table th { padding: 10px 12px; color: var(--color-text-muted); font-weight: 500; font-size: 12px; text-align: left; }
+  #users-table td { padding: 15px 12px; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: middle; }
   #users-table td.user-actions { width: 1%; white-space: nowrap; }
-  .user-actions-grid {
-    display: grid; grid-template-columns: repeat(2, minmax(84px, 1fr));
-    gap: 4px; justify-items: stretch;
-  }
-  .user-actions-grid .btn { margin: 0; width: 100%; }
+  /* Строка пользователя — по образцу макета (аватар с инициалами + имя +
+     должность/подразделение мельче под ним, вместо трёх отдельных колонок),
+     логин и способ входа тоже сведены в одну ячейку. */
+  .user-cell { display: flex; align-items: center; gap: 12px; }
+  .user-avatar { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%;
+    background: var(--color-surface-2); border: 1px solid var(--color-border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: var(--color-text-muted); }
+  .user-cell-name { font-size: 14px; }
   .default-contract-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
 
   /* -------- выбор файлов/слоёв (п.5, п.13 третьего раунда) -------- */
@@ -4512,7 +4563,7 @@
 
   /* --- образец 3: плотные таблицы --- */
   #users-table, #sessions-table, #backups-table, #activity-table,
-  #access-matrix-table, #rights-matrix-table, #bulk-edit-table,
+  #access-matrix-table, #bulk-edit-table,
   #statuslog-list table, #db-table-backdrop .dbt, #report-body table,
   #ef-history {
     background: var(--color-surface);
@@ -4521,7 +4572,7 @@
   }
   #users-backdrop .modal-sticky-scroll, #sessions-backdrop .modal-sticky-scroll,
   #backups-backdrop .modal-sticky-scroll, #activity-backdrop .modal-sticky-scroll,
-  #access-matrix-backdrop .modal-sticky-scroll, #rights-matrix-backdrop .modal-sticky-scroll,
+  #access-matrix-backdrop .modal-sticky-scroll,
   #bulk-edit-backdrop .modal-sticky-scroll, #statuslog-backdrop .modal-sticky-scroll,
   #db-table-backdrop .modal-sticky-scroll, #reports-backdrop .modal-sticky-scroll {
     background: var(--color-surface-2);
@@ -4749,9 +4800,6 @@
      явно: порядок в разметке для этого ненадёжен (окно живёт рядом с
      остальными, а не последним). */
   #contract-pick-backdrop { z-index: 110; }
-  /* Матрица прав открывается ПОВЕРХ групповой настройки прав — тот же
-     случай двух окон разом, что и у выбора контракта выше. */
-  #rights-matrix-backdrop { z-index: 110; }
   .bulk-row-remove { background: none; border: none; color: var(--color-text-muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; }
   .bulk-row-remove:hover { color: var(--color-danger); }
   .ce-line-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
@@ -5265,16 +5313,23 @@
                  командами обслуживается, и выгружается файлом на свою
                  машину (в аварии сервис как раз может не работать). -->
             <button id="menu-admin-guide" class="admin-only menu-item-strong">Памятка администратора</button>
-            <button id="menu-users" data-feature="users" data-feature-kind="write">Пользователи</button>
+            <!-- «Пользователи и доступ» (2026-09-14, перенос согласованного
+                 макета) — один экран с тремя вкладками: список
+                 пользователей (была отдельная форма «Пользователи»),
+                 «Роли» (была отдельная «Настройка ролей», см. menu-roles
+                 ниже — открывает тот же экран сразу на этой вкладке) и
+                 «Проверка доступа» (была отдельная «Матрица прав»). -->
+            <button id="menu-users" data-feature="users" data-feature-kind="write">Пользователи и доступ</button>
             <!-- Права всех пользователей одной таблицей (2026-08-04, живой
                  запрос). Отдельным пунктом от «Пользователей»: там правят
                  ОДНОГО человека целиком, здесь сравнивают между собой всех
-                 и раздают роли по стройкам. -->
+                 и раздают роли по стройкам. Не объединено с экраном выше —
+                 в согласованном макете этой сводной таблицы нет вовсе, а
+                 убирать её никто не просил. -->
             <button id="menu-access-matrix" data-feature="users" data-feature-kind="read">Права пользователей</button>
-            <!-- Настройка ролей (2026-08-14). Рядом с «Правами
-                 пользователей» и сразу за ними: там роль ВЫДАЮТ, здесь
-                 определяют, что она значит. Порядок пунктов повторяет
-                 порядок вопросов — сначала «кому», потом «что именно». -->
+            <!-- Настройка ролей (2026-08-14) теперь живёт вкладкой «Роли»
+                 экрана «Пользователи и доступ» — пункт меню оставлен
+                 отдельным ярлыком-прыжком сразу на неё. -->
             <button id="menu-roles" data-feature="roles" data-feature-kind="read">Настройка ролей</button>
             <!-- Отдельным пунктом (живой запрос 2026-08-03): «кто сейчас в
                  системе» — вопрос обо всём сервисе, а не о конкретном
@@ -5822,11 +5877,22 @@
               <label><input type="radio" name="mfr-chess-mode" value="deadline">по срокам</label>
             </div>
             <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px"></div>
+            <!-- Плоский вид (2026-09-14, Docs/design/chess-flat) —
+                 самостоятельный экран поверх той же доски: развёртка
+                 здания по этажам/секциям для просмотра, массового ввода
+                 факта и печати бланка обхода. Открывается доской, уже
+                 выбранной здесь (если есть), передаётся объект. -->
+            <button type="button" class="btn btn-sm btn-secondary" id="mfr-chess-flat-open"
+                    style="margin-top:8px; width:100%">Плоская шахматка →</button>
           </div>
         </div>
       </div>
     </div>
   </div>
+  <!-- Точка монтирования плоской «Шахматки» — полноэкранный оверлей поверх
+       всего приложения, наполняется app/static/chess-flat.js лениво, при
+       первом открытии (тот же приём ленивого import(), что у address.js). -->
+  <div id="chess-flat-overlay-root"></div>
   <div id="stage">
     <svg id="svg-root" preserveAspectRatio="xMidYMid meet">
       <g id="flip" transform="scale(1,-1)">
@@ -7012,13 +7078,91 @@
   </div>
 </div>
 
+<!-- «Пользователи и доступ» (2026-09-14, перенос согласованного макета) —
+     один экран, три вкладки вместо трёх разрозненных форм: список
+     пользователей (был отдельной формой «Пользователи»), «Роли» (была
+     отдельная «Настройка ролей») и «Проверка доступа» (была «Матрица
+     прав» с объектом, но без выбора человека — тот приходил СНАРУЖИ,
+     кнопкой у конкретного пользователя; здесь вкладка самодостаточна и
+     сама выбирает и человека, и объект).
+
+     Закладки — общие `.tabs .modal-tabs` (как в «Обучении»), переключение
+     data-users-tab, своим атрибутом. Подвал ОДИН на весь экран: кнопки
+     «Роли» (Сохранить/ошибка/статус) показаны только на своей вкладке,
+     «Закрыть» — общая для всех. -->
 <div class="modal-backdrop" id="users-backdrop">
-  <div class="modal wide">
-    <h2>Пользователи</h2>
-    <table id="users-table"></table>
-    <button class="btn btn-secondary" id="users-add">Добавить пользователя</button>
-    <div class="actions">
-      <button class="btn btn-secondary" id="users-close">Закрыть</button>
+  <div class="modal wide modal-sticky" id="users-modal">
+    <div class="modal-sticky-head">
+      <h2>Пользователи и доступ</h2>
+      <div class="tabs modal-tabs">
+        <button type="button" class="tab-btn active" id="users-tab-list" data-users-tab="users">Пользователи</button>
+        <button type="button" class="tab-btn" id="users-tab-roles" data-users-tab="roles">Роли</button>
+        <button type="button" class="tab-btn" id="users-tab-check" data-users-tab="check">Проверка доступа</button>
+      </div>
+    </div>
+    <div class="modal-sticky-scroll">
+
+      <div class="users-tab-panel" data-users-panel="users">
+        <div class="u-bar">
+          <h3>Пользователи <small id="users-count"></small></h3>
+          <button class="btn btn-primary" id="users-add">Добавить пользователя</button>
+        </div>
+        <div class="u-bar">
+          <input type="text" id="users-search" class="u-search" placeholder="Имя, логин или подразделение">
+        </div>
+        <table id="users-table"></table>
+      </div>
+
+      <!-- Вкладка «Роли» (перестроена 2026-09-14 — живой запрос: раньше здесь
+           была ОДНА большая таблица «разделы × все роли разом» (правки select'ом),
+           хотя макет показывает СПИСОК ролей слева и разделы ОДНОЙ выбранной
+           роли справа, сегментированным переключателем «Нет/Чтение/Изменение»
+           вместо выпадашки — .u-cols/.u-side/.u-perm/.u-seg буквально из
+           users-access-concept.html, roleEditor(). Данные и правки — те же
+           (GET /roles, PUT /roles/features, rolesDraft), поменялась только
+           форма показа. -->
+      <div class="users-tab-panel" data-users-panel="roles" style="display:none;">
+        <div class="u-bar">
+          <div>
+            <h3>Роли на объектах</h3>
+            <small>Независимые наборы разрешений — несколько на одном объекте складываются,
+              действует наибольшее из выданного.</small>
+          </div>
+          <div class="row" style="gap:8px">
+            <input id="roles-new-name" type="text" placeholder="Новая роль" style="max-width:200px">
+            <button class="btn" id="roles-add">Добавить роль</button>
+          </div>
+        </div>
+        <div class="u-cols">
+          <aside class="u-side" id="roles-side"></aside>
+          <section id="roles-detail"></section>
+        </div>
+      </div>
+
+      <div class="users-tab-panel" data-users-panel="check" style="display:none;">
+        <div class="u-bar">
+          <div>
+            <h3>Проверка доступа</h3>
+            <small>Итоговые разрешения и откуда они получены — в отличие от вкладки
+              «Пользователи» (там «куда выдан доступ», здесь «что именно разрешено и почему»).</small>
+          </div>
+        </div>
+        <div class="u-fields">
+          <label class="u-field">Пользователь<select id="rights-matrix-user"></select></label>
+          <label class="u-field">Объект<select id="rights-matrix-object"></select></label>
+        </div>
+        <p class="u-note" id="rights-matrix-role"></p>
+        <div id="rights-matrix-result"></div>
+      </div>
+
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="error-text" id="roles-error"></div>
+      <div class="actions">
+        <span class="hint-text" id="roles-status"></span>
+        <button class="btn" id="users-close">Закрыть</button>
+        <button class="btn btn-primary" id="roles-save" style="display:none;">Сохранить</button>
+      </div>
     </div>
   </div>
 </div>
@@ -7068,126 +7212,103 @@
   </div>
 </div>
 
-<!-- Настройка ролей (2026-08-14): из чего состоит роль на объекте.
-     Слева лестница ступеней, справа разделы системы и порог каждого — с
-     какой ступени раздел виден и с какой его можно менять.
-
-     Почему в одном окне: порог задаётся ИМЕНЕМ ступени, и выбирать его,
-     не видя лестницы, — то же самое, что расставлять приоритеты по памяти.
-     Перечень разделов не настраивается и здесь не правится: раздел
-     заводит разработчик вместе с проверкой, которая его сторожит
-     (app/features.py). -->
-<div class="modal-backdrop" id="roles-backdrop">
-  <div class="modal wide modal-sticky" id="roles-modal">
-    <div class="modal-sticky-head">
-      <h2>Настройка ролей</h2>
-      <p class="hint-text">По вертикали — разделы системы, по горизонтали — роли, в ячейке
-        объём доступа. Роли НЕЗАВИСИМЫ: одна не включает другую, человеку можно выдать
-        несколько на одном объекте, и разрешения складываются — действует наибольшее из
-        выданного. Общесервисные разделы (контрагенты, пользователи, копии) проверяются не на
-        показываемом объекте, а на любом доступном. Администратор сервиса проходит все
-        проверки в обход, снять это нельзя — запереть систему настройкой не получится.</p>
-      <div class="row rf-toolbar" style="gap:8px">
-        <input id="roles-new-name" type="text" placeholder="Новая роль" style="max-width:240px">
-        <button class="btn btn-secondary" id="roles-add">Добавить роль</button>
-        <span class="hint-text">Новая роль заводится пустой — права отмечаются в её колонке.</span>
-      </div>
-    </div>
-    <div class="modal-sticky-scroll">
-      <div class="rf-scroll"><table id="roles-table"></table></div>
-    </div>
-    <div class="modal-sticky-foot">
-      <div class="error-text" id="roles-error"></div>
-      <div class="actions">
-        <span class="hint-text" id="roles-status"></span>
-        <button class="btn btn-secondary" id="roles-close">Закрыть</button>
-        <button class="btn btn-primary" id="roles-save">Сохранить</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Матрица прав ОДНОГО пользователя: по вертикали разделы и инструменты
-     системы, по горизонтали объём прав, на пересечении галочка или крестик.
-     Считается для выбранного объекта — роль это свойство гранта, и на
-     разных стройках она у одного человека разная. -->
-<div class="modal-backdrop" id="rights-matrix-backdrop">
-  <div class="modal wide modal-sticky">
-    <div class="modal-sticky-head">
-      <h2 id="rights-matrix-title">Матрица прав</h2>
-      <div class="row">
-        <label class="field" style="margin:0;">Объект</label>
-        <select id="rights-matrix-object"></select>
-        <span class="hint-text" id="rights-matrix-role"></span>
-      </div>
-    </div>
-    <div class="modal-sticky-scroll"><table id="rights-matrix-table"></table></div>
-    <div class="modal-sticky-foot">
-      <div class="actions">
-        <button class="btn btn-secondary" id="rights-matrix-close">Закрыть</button>
-      </div>
-    </div>
-  </div>
-</div>
+<!-- «Настройка ролей» и «Матрица прав» переехали вкладками («Роли»,
+     «Проверка доступа») в экран «Пользователи и доступ» выше
+     (2026-09-14) — здесь их разметки больше нет. -->
 
 <!-- Форма стала длинной, когда в неё переехало дерево доступа: без
      закреплённого подвала «Сохранить» уезжало за прокрутку, и человек,
      заполнив дерево, не видел кнопки. Тот же приём, что у формы массовой
      смены статуса — скроллится только середина. -->
+<!-- Карточка пользователя — три вкладки (2026-09-14, живой запрос: «ближе к
+     согласованному макету»): Профиль / Доступ к объектам / Вход и
+     безопасность. Закладки — общие `.tabs .modal-tabs`, как в «Обучении»
+     (#training-backdrop) и ещё нескольких формах. Переключение —
+     data-ue-tab, своим атрибутом (не общий data-tab — тот принадлежит
+     вкладкам сайдбара). -->
 <div class="modal-backdrop" id="user-edit-backdrop">
   <div class="modal modal-sticky">
-    <div class="modal-sticky-head"><h2 id="user-edit-title">Пользователь</h2></div>
-    <div class="modal-sticky-scroll">
-    <label class="field">Фамилия</label><input type="text" id="ue-last-name"/>
-    <label class="field">Имя</label><input type="text" id="ue-first-name"/>
-    <label class="field">Отчество</label><input type="text" id="ue-patronymic"/>
-    <label class="field">Должность</label><input type="text" id="ue-position"/>
-    <label class="field">Подразделение</label><input type="text" id="ue-department"/>
-    <label class="field">Доменное имя</label>
-    <!-- Поиск по каталогу (2026-08-03): опечатка в доменном имени выясняется
-         только тогда, когда человек не может войти. Кнопка гасится, если
-         доменная авторизация выключена — искать негде. -->
-    <div class="row" style="gap:6px;">
-      <input type="text" id="ue-domain-login" style="flex:1; min-width:0;"/>
-      <button class="btn btn-sm btn-secondary" type="button" id="ue-find-in-domain">Найти в домене…</button>
+    <div class="modal-sticky-head">
+      <h2 id="user-edit-title">Пользователь</h2>
+      <div class="tabs modal-tabs">
+        <button type="button" class="tab-btn active" id="ue-tab-profile" data-ue-tab="profile">Профиль</button>
+        <button type="button" class="tab-btn" id="ue-tab-access" data-ue-tab="access">Доступ к объектам</button>
+        <button type="button" class="tab-btn" id="ue-tab-security" data-ue-tab="security">Вход и безопасность</button>
+      </div>
     </div>
-    <!-- Способ входа — свойство учётной записи, а не режим всего сервиса
-         (2026-08-03): подрядчики и временные учётки доменной записи не
-         имеют и остаются на пароле сервиса. -->
-    <label class="field">Способ входа</label>
-    <select id="ue-auth-method">
-      <option value="local">Пароль сервиса</option>
-      <option value="domain">Доменная учётная запись</option>
-    </select>
-    <p class="hint-text" id="ue-auth-method-hint"></p>
+    <div class="modal-sticky-scroll">
+    <div class="ue-panel" data-ue-panel="profile">
+    <h4>Основные сведения</h4>
+    <div class="u-fields">
+      <label class="u-field">Фамилия<input type="text" id="ue-last-name"></label>
+      <label class="u-field">Имя<input type="text" id="ue-first-name"></label>
+      <label class="u-field">Отчество<input type="text" id="ue-patronymic" placeholder="Не указано"></label>
+      <label class="u-field">Должность<input type="text" id="ue-position"></label>
+      <label class="u-field u-span">Подразделение<input type="text" id="ue-department"></label>
+      <label class="u-field u-span">Системная роль
+        <select id="ue-role">
+          <option value="admin">Администратор сервиса</option>
+          <option value="user">Пользователь</option>
+          <option value="view">Просмотр</option>
+        </select>
+      </label>
+    </div>
+    <div class="u-note">Системная роль — только про ведение сервиса: пользователи,
+      проекты, объекты, резервные копии, журнал. Права на стройках — вкладка
+      «Доступ к объектам».</div>
+    </div>
+
+    <div class="ue-panel" data-ue-panel="access" style="display:none;">
+      <div id="ue-access-summary"></div>
+    </div>
+
+    <!-- Порядок и группировка — как в security() макета: способ входа и
+         логин рядом в сетке, кнопки диагностики отдельным блоком с верхней
+         линией. «Найти в домене» и «Задать пароль» — реальные возможности,
+         которых в демонстрационном макете нет вовсе (там статичные данные),
+         но встают в ТУ ЖЕ группу кнопок, что и «Сеансы». -->
+    <div class="ue-panel" data-ue-panel="security" style="display:none;">
+    <h4>Способ входа</h4>
+    <div class="u-fields">
+      <label class="u-field">Способ входа
+        <select id="ue-auth-method">
+          <option value="local">Пароль сервиса</option>
+          <option value="domain">Доменная учётная запись</option>
+        </select>
+      </label>
+      <!-- Поиск по каталогу (2026-08-03): опечатка в доменном имени
+           выясняется только тогда, когда человек не может войти. -->
+      <label class="u-field">Доменное имя<input type="text" id="ue-domain-login"></label>
+    </div>
+    <div class="u-note" id="ue-auth-method-hint"></div>
     <!-- По умолчанию включено для НОВОГО пользователя: пароль ему задаёт
          администратор, то есть пароль знают двое. Для доменного входа поле
          скрывается — тот пароль меняется в домене. -->
-    <label class="toggle" id="ue-must-change-row">
+    <label class="toggle" id="ue-must-change-row" style="margin-top:10px;">
       <input type="checkbox" id="ue-must-change"/> Требовать смену пароля при следующем входе
     </label>
-    <label class="field">Системная роль</label>
-    <select id="ue-role">
-      <option value="admin">Администратор сервиса</option>
-      <option value="user">Пользователь</option>
-      <option value="view">Просмотр</option>
-    </select>
-    <p class="hint-text">Системная роль — только про ведение сервиса: пользователи,
-      проекты, объекты, резервные копии, журнал. Права на стройках задаются
-      деревом ниже.</p>
-
-    <div class="access-tree-block">
-      <label class="field">Доступ к проектам и объектам</label>
-      <p class="hint-text" id="ue-access-note"></p>
-      <div id="ue-access-tree" class="access-tree"></div>
-      <p class="hint-text">Роль на объекте перекрывает роль проекта, роль проекта —
-        общую. «Все проекты» и «весь проект» действуют и на то, что появится позже.</p>
+    <div class="u-inline" style="margin-top:14px;">
+      <button class="btn" type="button" id="ue-find-in-domain">Найти в домене…</button>
+      <!-- Сеансы/пароль — переехали сюда из строки списка (2026-09-14): у
+           НОВОГО пользователя (ещё нет id) весь блок скрыт целиком, см.
+           openUserEdit. -->
+      <span id="ue-security-actions">
+        <button class="btn" type="button" id="ue-sessions-btn">Сеансы</button>
+        <button class="btn" type="button" id="ue-password-btn">Задать пароль</button>
+      </span>
+    </div>
+    <div class="u-result" id="ue-diagnostics">
+      <h4>Диагностика</h4>
+      <button class="btn" type="button" id="ue-impersonate-btn">Зайти под пользователем</button>
+      <small style="margin-top:8px">Это рабочий сеанс от имени пользователя; действия
+        регистрируются в журнале.</small>
+    </div>
     </div>
     </div>
     <div class="modal-sticky-foot">
       <div class="error-text" id="user-edit-error"></div>
       <div class="actions">
-        <button class="btn btn-secondary" id="user-edit-cancel">Отмена</button>
+        <button class="btn" id="user-edit-cancel">Отмена</button>
         <button class="btn btn-primary" id="user-edit-save">Сохранить</button>
       </div>
     </div>

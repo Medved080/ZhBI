@@ -88,6 +88,7 @@ from app import work_progress as work_progress_mod
 from app import work_types_import
 from app import work_fact
 from app import block_works
+from app import chess_flat
 from app import block_bulk_edit
 from app import report_block_schedule
 from app import pdf_facade_import
@@ -7004,6 +7005,59 @@ def get_blocks_track_progress(object_id: int, track_code: str,
         from datetime import date as _date
         return block_works.board_block_deviation_by_track(
             conn, object_id, track_code, _date.today().isoformat())
+    finally:
+        conn.close()
+
+
+# -------- Плоская «Шахматка» (2026-09-14, Docs/design/chess-flat) —
+# самостоятельный плоский экран той же доски: просмотр, массовый ввод факта
+# по нескольким блокам разом и печать бланка обхода. Раскладку и пакетную
+# запись строит app/chess_flat.py поверх готовых work_fact/blocks. --------
+
+@app.get("/objects/{object_id}/blocks/chess-flat-layout")
+def get_chess_flat_layout(object_id: int, track_code: str,
+                          user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        try:
+            return chess_flat.layout(conn, object_id, track_code)
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+class ChessFlatBatchItemIn(BaseModel):
+    block_id: int
+    work_type_id: int
+    percent: int
+    expected_percent: int = 0
+
+
+class ChessFlatBatchIn(BaseModel):
+    report_date: str
+    track_code: str
+    idempotency_key: str
+    items: list[ChessFlatBatchItemIn]
+
+
+@app.post("/objects/{object_id}/blocks/chess-flat-batch")
+def post_chess_flat_batch(object_id: int, body: ChessFlatBatchIn,
+                          user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            return chess_flat.commit_batch(
+                conn, object_id, user["id"], track_code=body.track_code,
+                report_date=body.report_date, idempotency_key=body.idempotency_key,
+                items=[it.model_dump() for it in body.items],
+            )
+        except chess_flat.ConflictError as e:
+            raise HTTPException(status_code=409, detail={"conflict": True, "items": e.conflicts})
+        except work_fact.FactError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
         conn.close()
 

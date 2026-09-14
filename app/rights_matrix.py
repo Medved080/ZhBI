@@ -32,6 +32,7 @@ from app.access import (
     object_kind,
     is_system_admin,
     object_role_keys,
+    object_role_sources,
     require_service_feature,
     role_labels,
     role_level,
@@ -59,6 +60,11 @@ def rights_for(conn, user_row, object_id: Optional[int]) -> dict:
     подписи = role_labels(conn)
     роли = (object_role_keys(conn, user_row, object_id)
             if object_id is not None and not is_system_admin(user_row) else set())
+    # Источник роли (объект / проект / все проекты) — только для подписи в
+    # «Проверке доступа» (макет: «Роль «X» → Y»); сама сумма прав откуда
+    # роль взялась не зависит (роли складываются, app/access.py).
+    источники = (object_role_sources(conn, user_row, object_id)
+                 if object_id is not None and not is_system_admin(user_row) else {})
     вид_объекта = object_kind(conn, object_id) if object_id is not None else None
     rows = []
     for f in FEATURES:
@@ -78,12 +84,19 @@ def rights_for(conn, user_row, object_id: Optional[int]) -> dict:
             "io": f.io, "io_hint": IO_HINTS.get(f.io),
             "scope": f.scope, "scope_label": SCOPE_LABELS.get(f.scope),
             "level": feature_level_for(conn, user_row, f.key, цель),
-            # Откуда взялся уровень: какие из ролей человека его дают.
-            # Администратор спрашивает не только «что выйдет», но и
-            # «почему именно столько», а при СЛОЖЕНИИ ролей ответ на второй
-            # вопрос иначе негде взять.
+            # Откуда взялся уровень: какие из ролей человека его дают и с
+            # какого уровня (объект/проект/все проекты) — «Проверка доступа»
+            # подписывает это строкой «Роль «X» → Y», как в макете.
+            # Администратор спрашивает не только «что выйдет», но и «почему
+            # именно столько», а при СЛОЖЕНИИ ролей ответ на второй вопрос
+            # иначе негде взять.
             "from_roles": sorted(
-                подписи.get(р, р) for р in роли if role_level(conn, [р], f.key) != "none"),
+                (
+                    {"role": подписи.get(р, р), "source": источники.get(р)}
+                    for р in роли if role_level(conn, [р], f.key) != "none"
+                ),
+                key=lambda x: x["role"],
+            ),
         })
     return {
         "user_id": user_row["id"],
