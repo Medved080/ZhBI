@@ -441,6 +441,54 @@ def _grant_feature_to_all_roles(conn: sqlite3.Connection, feature_key: str) -> s
     return f"раздел «{feature_key}» открыт ролям: {len(новые)}"
 
 
+def _grant_feature_baseline(conn: sqlite3.Connection, feature_key: str) -> str:
+    """Донакатить ЗАВОДСКУЮ раскладку ОДНОГО раздела ролям, у которых по
+    нему нет вообще ни строки — тем же способом, каким `_seed_object_roles`
+    (app/db.py) раскладывает права при первом запуске, только для раздела,
+    родившегося ПОЗЖЕ той раскладки.
+
+    Почему это вообще нужно. `_seed_object_roles` накатывает `baseline` из
+    app/features.py РОВНО ОДИН РАЗ, за маркером `role_features_seeded`, и
+    её же докстрока говорит прямо: «новый раздел, добавленный будущей
+    версией, не выдаётся никому — строки нет, значит „Нет“». Это
+    осознанный выбор в безопасную сторону, но у 11 разделов, введённых
+    после 2026-08-14 (АРМ прораба, Модель МФР, загрузка из Revit/PDF, учёт
+    по блокам, график СМР, внешние 3D-модели, два отчёта по блокам), это
+    затянулось: раскладку так никто и не подтвердил, и они ЗАКРЫТЫ ВООБЩЕ
+    ВСЕМ, включая роль «Полные права на объекте» — живой разбор 2026-09-14:
+    новый пользователь с любой заводской ролью не видел ни рабочее место
+    «Модель», ни фильтры «АРМ прораба» на объектах своего типа.
+
+    В отличие от `_grant_feature_to_all_roles` (единый READ всем без
+    разбора), здесь уровень для каждой роли берётся из `baseline` самого
+    раздела — так контрактатор и админ получают ту же «Изменение», что
+    получили бы, будь раздел заведён ДО 2026-08-14, а не урезанное
+    «Чтение» всем подряд.
+
+    Идемпотентность — тем же способом и с той же оговоркой, что у
+    `_grant_feature_to_all_roles`: условие «строки ещё нет» неотличимо от
+    «администратор сознательно снял раздел с этой роли», и повтор кнопкой
+    вернул бы такое снятие. Это разовая обработка ДОГОНЯЮЩЕЙ раскладки, а
+    не постоянное поведение: если администратор к моменту её выполнения
+    уже настроил раздел вручную (хотя бы одной ролью), она его не трогает.
+    """
+    from app.features import NONE, feature
+    f = feature(feature_key)
+    существующие_роли = {r["key"] for r in conn.execute("SELECT key FROM object_roles")}
+    заполненные = {r["role_key"] for r in conn.execute(
+        "SELECT DISTINCT role_key FROM role_features WHERE feature_key = ?", (feature_key,))}
+    строки = [
+        (роль, feature_key, уровень) for роль, уровень in f.baseline.items()
+        if роль in существующие_роли and роль not in заполненные and уровень != NONE
+    ]
+    if not строки:
+        return "все роли уже настроены, изменений нет"
+    conn.executemany(
+        "INSERT OR IGNORE INTO role_features (role_key, feature_key, level) VALUES (?, ?, ?)",
+        строки)
+    return f"раздел «{feature_key}» донастроен ролям: {len(строки)}"
+
+
 def _fill_activity_categories(conn: sqlite3.Connection) -> str:
     """Раздать категорию записям журнала, накопленным до 2026-08-20.
 
@@ -932,6 +980,115 @@ RELEASE_TASKS = [
                "с отчёта-владельца, точнее источника для них нет",
         "kind": KIND_DATA,
         "run": _backfill_work_fact_items_audit,
+    },
+    # 2026-09-14 — живой разбор: новый пользователь выбирал проект, но не
+    # видел ни рабочего места, ни фильтров. Причина не в проверке прав
+    # (app/access.py считает верно), а в том, что 11 разделов, введённых
+    # после 2026-08-14, ни разу не донастроили ни одной роли — см. докстроку
+    # _grant_feature_baseline выше. Один раздел — одна обработка (а не цикл
+    # по списку в одной), чтобы «Что нового» показывало каждую отдельно и
+    # упавшую можно было повторить точечно, не трогая остальные.
+    {
+        "name": "2026-09-14-grant-workspace-foreman-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «АРМ прораба» ролям по заводской раскладке",
+        "why": "раздел добавлен 2026-08-14 вместе с самой настройкой ролей, но раскладку "
+               "на него так и не подтвердили — фильтры слева не видел никто",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "workspace_foreman"),
+    },
+    {
+        "name": "2026-09-14-grant-schedule-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «График СМР» ролям по заводской раскладке",
+        "why": "раздел добавлен 2026-08-14 (совещание «WEB»), но раскладка на него не накатана",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "schedule"),
+    },
+    {
+        "name": "2026-09-14-grant-external-models-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «Внешние 3D-модели» ролям по заводской раскладке",
+        "why": "раздел добавлен позже стартовой раскладки ролей и остался закрыт всем",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "external_models"),
+    },
+    {
+        "name": "2026-09-14-grant-revit-import-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «Загрузку из Revit» ролям по заводской раскладке",
+        "why": "раздел добавлен позже стартовой раскладки ролей и остался закрыт всем",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "revit_import"),
+    },
+    {
+        "name": "2026-09-14-grant-workspace-mfr-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «Модель МФР» ролям по заводской раскладке",
+        "why": "основное рабочее место объектов МФР — без него человек с доступом к такому "
+               "объекту попадал на пустой экран",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "workspace_mfr"),
+    },
+    {
+        "name": "2026-09-14-grant-revit-model-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «План модели Revit» ролям по заводской раскладке",
+        "why": "раздел добавлен позже стартовой раскладки ролей и остался закрыт всем",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "revit_model"),
+    },
+    {
+        "name": "2026-09-14-grant-pdf-import-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «Загрузку помещений из PDF» ролям по заводской раскладке",
+        "why": "раздел добавлен позже стартовой раскладки ролей и остался закрыт всем",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "pdf_import"),
+    },
+    {
+        "name": "2026-09-14-grant-blocks-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «Секции, этажи и блоки» ролям по заводской раскладке",
+        "why": "раздел добавлен позже стартовой раскладки ролей и остался закрыт всем",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "blocks"),
+    },
+    {
+        "name": "2026-09-14-grant-work-progress-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть «Виды работ и статус по блокам» ролям по заводской раскладке",
+        "why": "раздел добавлен позже стартовой раскладки ролей и остался закрыт всем",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "work_progress"),
+    },
+    {
+        "name": "2026-09-14-grant-report-block-schedule-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть отчёт «График работ по блокам» ролям по заводской раскладке",
+        "why": "раздел добавлен позже стартовой раскладки ролей и остался закрыт всем",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "report_block_schedule"),
+    },
+    {
+        "name": "2026-09-14-grant-report-block-status-baseline",
+        "version": "0.83",
+        "date": "2026-09-14",
+        "title": "Открыть отчёт «Учёт по блокам: статусы» ролям по заводской раскладке",
+        "why": "раздел получил свою строку в матрице прав только 2026-09-10, а раскладку "
+               "на него так и не подтвердили",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "report_block_status"),
     },
 ]
 

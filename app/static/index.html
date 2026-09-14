@@ -1457,21 +1457,104 @@
      812 → 777 px). Ограничение по числу знаков даёт ему перенос, и ширину
      формы начинает задавать то, ради чего её открывают, — таблица. */
   #access-matrix-modal .modal-sticky-head .hint-text { max-width: 70ch; }
-  .am-scroll { overflow-x: auto; }
+  /* ОБЕ прокрутки — здесь, тем же приёмом, что у .rf-scroll в «Настройке
+     ролей» (см. её комментарий): `position: sticky` у шапки таблицы
+     отсчитывается от ближайшего прокручиваемого предка. Пока по вертикали
+     прокручивалось .modal-sticky-scroll снаружи, а .am-scroll отвечал
+     только за горизонталь, он всё равно становился этим предком (сам факт
+     overflow-x: auto делает элемент контейнером прокрутки), но без
+     собственной вертикальной прокрутки внутри него — и шапка с проектами
+     уезжала вверх при скролле к пользователю (живой репорт 2026-09-14). */
+  .am-scroll {
+    overflow: auto; max-height: 64vh;
+    background: var(--color-surface); border: 1px solid var(--color-border);
+    border-radius: var(--radius); box-shadow: var(--shadow-card);
+  }
   #access-matrix-table { border-collapse: separate; border-spacing: 0; font-size: 12px; }
   #access-matrix-table th, #access-matrix-table td {
     padding: 4px 8px; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
   #access-matrix-table thead th { position: sticky; top: 0; z-index: 3;
     background: var(--color-surface); text-align: left; font-weight: 600; }
+  /* Заголовок — ДВЕ строки (группа-проект сверху, «весь проект»/объекты
+     снизу), и колонки «Пользователь»/«Система»/«Все проекты» растянуты на
+     обе rowspan="2". Вторая строка не может липнуть к тому же top: 0, что
+     и первая, — иначе обе стремятся встать в одну точку и налезают друг
+     на друга при прокрутке (живой репорт 2026-09-14, обнаружено сразу
+     после починки самой прокрутки выше). Сдвиг вниз — на высоту первой
+     строки: 24px замерено при текущих padding/font-size этой таблицы. */
+  #access-matrix-table thead .am-sub { top: 24px; }
   #access-matrix-table .am-user { position: sticky; left: 0; z-index: 2;
     background: var(--color-surface); text-align: left; min-width: 200px; }
   #access-matrix-table thead .am-user { z-index: 4; }
   #access-matrix-table .am-group { font-weight: 600; }
   #access-matrix-table .am-sub { font-weight: 400; color: var(--color-text-muted); font-size: 11px; }
   #access-matrix-table select { font-size: 12px; padding: 1px 4px; min-width: 150px; max-width: 190px; }
+  /* Ячейка — текст выбранного плюс кнопка «✎» на правку (живой репорт
+     2026-09-14): полный список ролей с флажками уехал в отдельное окошко
+     (#am-cell-edit-backdrop), а здесь — только результат, иначе десяток
+     объектов по флажку на роль каждый распирали таблицу вширь и ввысь
+     разом. */
+  /* align-items: flex-start, а не baseline/center: кнопка — ПЕРВЫЙ элемент
+     и держит фиксированный размер, поэтому при переносе длинного перечня
+     ролей на вторую строку она не съезжает вниз следом за текстом — во всей
+     строке пользователя кнопки остаются на одной высоте (живой запрос
+     2026-09-14), а текст у всех ячеек начинается с одного отступа слева.
+
+  #access-matrix-table .am-cell {
+    display: flex; align-items: flex-start; gap: 6px; min-width: 122px;
+  }
+  #access-matrix-table .am-cell-text { white-space: normal; padding-top: 2px; }
+  /* Плашка с тенью — тот же приём, что у .toolbar-tile в шапке (см. её
+     комментарий выше): тень отделяет группу от соседних без лишней линии, а
+     кант нужен на тёмной гамме, где тень физически не видна.
+
+     ОДИН контур на ВЕСЬ ПРОЕКТ, а не на каждую ячейку по отдельности (живой
+     запрос 2026-09-14, второй заход): «весь проект» и его объекты — одна
+     группа данных одного человека, и раньше каждая ячейка была своей
+     плашкой — проект как группа терялся, а решётка внутри выглядела гуще,
+     чем нужно. Теперь контур — на .am-project-group (ставится в td с
+     colspan на всю группу, см. renderAccessMatrix), перегородки между
+     «весь проект» и каждым объектом — border-left на .am-project-sub
+     внутри неё. «Все проекты» — та же группа из одного элемента
+     (.am-project-group-solo), для единообразия ряда. */
+  #access-matrix-table .am-project-group {
+    display: flex; align-items: stretch; box-sizing: border-box;
+    background: var(--color-surface);
+    border: 1px solid var(--dict-card-border); border-radius: var(--radius);
+    box-shadow: var(--shadow-card); overflow: hidden;
+  }
+  #access-matrix-table .am-project-sub {
+    padding: 5px 7px; box-sizing: border-box; flex: 1 1 0; min-width: 0;
+  }
+  #access-matrix-table .am-project-sub + .am-project-sub {
+    border-left: 1px solid var(--color-border);
+  }
+  #access-matrix-table .am-empty { color: var(--color-text-muted); }
+  #access-matrix-table .am-cell-edit-btn, #access-matrix-table .am-cell-edit-spacer {
+    flex: 0 0 auto; width: 20px; height: 20px; box-sizing: border-box; }
+  #access-matrix-table .am-cell-edit-btn { padding: 0; font-size: 11px; line-height: 1; }
   #access-matrix-table tr.am-dirty .am-user { font-weight: 600; }
   #access-matrix-table .am-inherited { display: block; font-size: 10px; color: var(--color-text-muted); }
   #access-matrix-table .am-sysadmin td { color: var(--color-text-muted); }
+  /* Окно правки одной ячейки (2026-09-14): весь список ролей объекта с
+     флажками — здесь, а не в самой таблице «Прав пользователей». */
+  #am-cell-edit-context { max-width: 60ch; }
+  .am-edit-roles { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+  .am-edit-role-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border: 1px solid var(--color-border); border-radius: var(--radius); }
+  .am-edit-role-row input { margin: 0; }
+  .am-edit-role-name { flex: 1 1 auto; }
+  .am-edit-role-row .am-inherited { display: inline; margin-right: auto; padding-left: 8px; }
+  /* Разбор «что даёт роль» — читается как раскрывшаяся подсказка под
+     списком, а не отдельное окно поверх окна: держит контекст, какую ячейку
+     правишь, и позволяет сверить сразу несколько ролей подряд. */
+  .am-role-detail { margin-top: 10px; padding: 10px 12px; border-top: 1px solid var(--color-border); }
+  .am-role-detail h3 { margin: 0 0 8px; font-size: 13px; }
+  .am-role-detail-list { max-height: 40vh; overflow-y: auto; font-size: 12px; }
+  .am-role-detail-section { font-weight: 600; color: var(--color-primary); margin-top: 8px; }
+  .am-role-detail-section:first-child { margin-top: 0; }
+  .am-role-detail-row { display: flex; justify-content: space-between; gap: 12px;
+    padding: 2px 0; border-bottom: 1px solid var(--color-border); }
   /* Настройка ролей (2026-08-14): матрица «разделы × роли».
      Ширина по содержимому — колонок столько, сколько ролей завели, и
      жёсткая ширина при трёх ролях растянула бы форму на весь монитор, а
@@ -6964,6 +7047,23 @@
         <button class="btn btn-secondary" id="access-matrix-close">Закрыть</button>
         <button class="btn btn-primary" id="access-matrix-save">Сохранить</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Правка ролей ОДНОЙ ячейки «Прав пользователей» (живой репорт
+     2026-09-14): общий список показывает только текстом, что уже выбрано,
+     а весь список ролей с флажками и разбор «что даёт роль» — здесь, чтобы
+     не раздувать каждую ячейку общей таблицы на все объекты сразу. -->
+<div class="modal-backdrop" id="am-cell-edit-backdrop">
+  <div class="modal" style="max-width:620px">
+    <h2 id="am-cell-edit-title">Роли</h2>
+    <p class="hint-text" id="am-cell-edit-context"></p>
+    <div id="am-cell-edit-roles" class="am-edit-roles"></div>
+    <div id="am-cell-edit-detail" class="am-role-detail" hidden></div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="am-cell-edit-cancel">Отмена</button>
+      <button class="btn btn-primary" id="am-cell-edit-apply">Применить</button>
     </div>
   </div>
 </div>

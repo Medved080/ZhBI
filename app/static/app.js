@@ -15386,11 +15386,22 @@ function amSnapshot() {
   ]));
 }
 
+// Проекты формы: сначала те, где уже есть данные (хоть один объект с
+// элементами), дальше — пустые. Внутри каждой группы порядок сохраняется
+// (с бэкенда проекты уже идут по алфавиту) — сортировка только разводит
+// группы, не переставляет внутри них.
+function amSortedProjects() {
+  const списком = state.projects.filter(p => p.id);
+  const сИДанными = списком.filter(p => p.objects.some(o => (o.elements || 0) > 0));
+  const пустые = списком.filter(p => !p.objects.some(o => (o.elements || 0) > 0));
+  return [...сИДанными, ...пустые];
+}
+
 // Уровни-колонки в том же порядке, что и дерево в карточке: общий, потом
 // проект и сразу его объекты.
 function amColumns() {
   const columns = [{ key: ACCESS_ALL, label: "Все проекты", kind: "all" }];
-  for (const проект of state.projects.filter(p => p.id)) {
+  for (const проект of amSortedProjects()) {
     columns.push({ key: accessProjectKey(проект.id), label: проект.name, kind: "project",
                    projectId: проект.id, objects: проект.objects.length });
     for (const объект of проект.objects) {
@@ -15415,18 +15426,28 @@ function amInherited(userId, column) {
   return column.kind === "all" ? [] : [...сверху];
 }
 
-function amRoleSelectHtml(userId, column, disabled) {
+// Ячейка общего списка — ТОЛЬКО текст (живой репорт 2026-09-14: список
+// флажков на каждую роль в каждой ячейке утяжелял таблицу — десятки
+// объектов дают десятки колонок, и в каждой сразу видно четыре флажка,
+// хотя выбраны от силы один-два). Что именно выбрано и почему — в
+// отдельном окошке (openAmCellEdit): там и весь список ролей, и подробности
+// про каждую, а здесь — снимок результата и переход к правке.
+function amCellSummaryHtml(userId, column, disabled) {
   const выбранные = (amAccess.get(userId) || new Map()).get(column.key) || new Set();
-  // Множественный выбор: ролей на уровне бывает несколько, и они
-  // складываются. Список, а не набор галочек, — иначе ячейка в таблице на
-  // десяток колонок вырастает в высоту вчетверо.
-  const опции = objectRoleList().map(r =>
-    `<option value="${escapeHtml(r.key)}"${выбранные.has(r.key) ? " selected" : ""}>`
-    + `${escapeHtml(r.name)}</option>`);
   const сверху = amInherited(userId, column);
-  return `<select multiple size="${Math.min(Math.max(опции.length, 2), 4)}"`
-    + ` data-am-user="${userId}" data-am-key="${escapeHtml(column.key)}"`
-    + `${disabled ? " disabled" : ""}>${опции.join("")}</select>`
+  const текст = выбранные.size
+    ? escapeHtml([...выбранные].map(objectRoleName).join(", "))
+    : `<span class="am-empty">не задано</span>`;
+  const кнопка = disabled ? `<span class="am-cell-edit-spacer"></span>` :
+    `<button type="button" class="btn btn-sm btn-secondary am-cell-edit-btn"`
+    + ` data-am-user="${userId}" data-am-key="${escapeHtml(column.key)}" title="Изменить роли">✎</button>`;
+  // Кнопка ПЕРВОЙ и по левому краю (а не после текста): при переносе
+  // длинного перечня ролей на вторую строку она иначе съезжала бы вниз
+  // вместе с текстом, и в строке пользователя кнопки по разным ячейкам
+  // переставали стоять на одной высоте (живой запрос 2026-09-14). Заглушка
+  // той же ширины у нередактируемой строки — чтобы текст у всех ячеек
+  // строки начинался с одного отступа, админ или нет.
+  return `<div class="am-cell">${кнопка}<span class="am-cell-text">${текст}</span></div>`
     + (сверху.length
       ? `<span class="am-inherited">+ сверху: ${escapeHtml(сверху.map(objectRoleName).join(", "))}</span>`
       : "");
@@ -15434,7 +15455,7 @@ function amRoleSelectHtml(userId, column, disabled) {
 
 function renderAccessMatrix() {
   const columns = amColumns();
-  const проекты = state.projects.filter(p => p.id);
+  const проекты = amSortedProjects();
   // Две строки заголовка: проект и его объекты должны читаться как одна
   // группа, иначе в длинном ряду одинаковых названий («Объект-1»,
   // «Объект-1») не видно, чьи они.
@@ -15456,12 +15477,29 @@ function renderAccessMatrix() {
       + Object.entries(ROLE_LABELS).map(([v, l]) =>
         `<option value="${v}"${amSystemRole.get(u.id) === v ? " selected" : ""}>${escapeHtml(l)}</option>`).join("")
       + `</select>`;
-    const ячейки = columns.map(c => `<td>${amRoleSelectHtml(u.id, c, системный)}</td>`).join("");
+    // «Все проекты» — сама себе группа из одного: тот же контур, что и у
+    // проекта, просто без внутренних перегородок (нечего разделять).
+    const allTd = `<td><div class="am-project-group am-project-group-solo">`
+      + `<div class="am-project-sub">${amCellSummaryHtml(u.id, columns[0], системный)}</div></div></td>`;
+    // Один общий контур на ВЕСЬ проект (живой запрос 2026-09-14), внутри —
+    // перегородки между «весь проект» и каждым объектом: было наоборот,
+    // каждая ячейка — своя плашка, и проект как группа терялся. columns
+    // идёт в том же порядке, что и amSortedProjects() (amColumns() сам её
+    // зовёт) — поэтому можно резать один и тот же массив срезами, не считая
+    // объекты дважды.
+    let idx = 1; // columns[0] — «Все проекты», дальше по проекту сразу
+    const projectTds = проекты.map((проект) => {
+      const n = 1 + проект.objects.length;
+      const срез = columns.slice(idx, idx + n);
+      idx += n;
+      const subs = срез.map(c => `<div class="am-project-sub">${amCellSummaryHtml(u.id, c, системный)}</div>`).join("");
+      return `<td colspan="${n}"><div class="am-project-group">${subs}</div></td>`;
+    }).join("");
     // Кнопка — В КОНЦЕ строки (как просили): слева читают, кто это и что
     // ему выдано, а «показать подробно» — уже итог этого чтения.
     return `<tr data-am-row="${u.id}"${системный ? ' class="am-sysadmin"' : ""}>`
       + `<td class="am-user">${escapeHtml(u.display_name)}</td>`
-      + `<td>${системныйSelect}</td>${ячейки}`
+      + `<td>${системныйSelect}</td>${allTd}${projectTds}`
       + `<td><button class="btn btn-sm btn-secondary" data-am-rights="${u.id}"`
       + ` title="Что именно доступно этому человеку">Матрица прав</button></td></tr>`;
   }).join("");
@@ -15478,29 +15516,110 @@ function amUpdateStatus() {
 }
 
 document.getElementById("access-matrix-table").addEventListener("change", (e) => {
-  const sel = e.target.closest("select");
+  const sel = e.target.closest("select[data-am-system]");
   if (!sel) return;
   const userId = Number(sel.dataset.amUser);
-  if (sel.dataset.amSystem) {
-    amSystemRole.set(userId, sel.value);
-    // Администратор сервиса проходит всё в обход грантов — его строка
-    // становится нередактируемой, и это видно сразу, а не после сохранения.
-    renderAccessMatrix();
-    return;
-  }
-  const роли = amAccess.get(userId) || new Map();
-  // Множественный выбор: берём ВСЁ выделенное в списке.
-  const набор = new Set([...sel.selectedOptions].map(o => o.value));
-  if (набор.size) роли.set(sel.dataset.amKey, набор); else роли.delete(sel.dataset.amKey);
-  amAccess.set(userId, роли);
-  // Целиком: правка верхнего уровня меняет подписи «+ сверху» у всего, что
-  // ниже, точечной правкой это не выразить (тот же довод, что в дереве).
+  amSystemRole.set(userId, sel.value);
+  // Администратор сервиса проходит всё в обход грантов — его строка
+  // становится нередактируемой, и это видно сразу, а не после сохранения.
   renderAccessMatrix();
 });
 
 document.getElementById("access-matrix-table").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-am-rights]");
-  if (btn) openRightsMatrix(Number(btn.dataset.amRights));
+  const rightsBtn = e.target.closest("button[data-am-rights]");
+  if (rightsBtn) { openRightsMatrix(Number(rightsBtn.dataset.amRights)); return; }
+  const editBtn = e.target.closest(".am-cell-edit-btn");
+  if (editBtn) openAmCellEdit(Number(editBtn.dataset.amUser), editBtn.dataset.amKey);
+});
+
+// ------------------------------------------ окно правки одной ячейки
+//
+// Ячейка общего списка — уровень (Все проекты / проект / объект) для ОДНОГО
+// пользователя. Здесь — полный список ролей объекта с флажками и, по
+// запросу, разбор каждой: что именно она открывает (живой репорт
+// 2026-09-14 — список показывался прямо в ячейке и распирал таблицу).
+const amCellEditBackdrop = document.getElementById("am-cell-edit-backdrop");
+let amEditUserId = null;
+let amEditColumn = null;
+let amRolesDataCache = null; // GET /roles, лениво и один раз на открытую форму
+
+function amColumnContextLabel(column) {
+  if (column.kind === "all") return "Уровень «Все проекты» — действует на всё, включая будущие проекты";
+  if (column.kind === "project") return `Проект «${column.label}», весь проект (включая будущие объекты в нём)`;
+  const проект = state.projects.find(p => p.id === column.projectId);
+  return `Объект «${column.label}»` + (проект ? ` · проект «${проект.name}»` : "");
+}
+
+function openAmCellEdit(userId, columnKey) {
+  amEditUserId = userId;
+  amEditColumn = amColumns().find(c => c.key === columnKey);
+  if (!amEditColumn) return;
+  const u = amUsers.find(x => x.id === userId);
+  document.getElementById("am-cell-edit-title").textContent =
+    `Роли — ${u ? u.display_name : ""}`;
+  document.getElementById("am-cell-edit-context").textContent = amColumnContextLabel(amEditColumn);
+  document.getElementById("am-cell-edit-detail").hidden = true;
+  renderAmCellEditRoles();
+  amCellEditBackdrop.classList.add("open");
+}
+
+function renderAmCellEditRoles() {
+  const выбранные = (amAccess.get(amEditUserId) || new Map()).get(amEditColumn.key) || new Set();
+  const сверху = new Set(amInherited(amEditUserId, amEditColumn));
+  document.getElementById("am-cell-edit-roles").innerHTML = objectRoleList().map(r => `
+    <label class="am-edit-role-row">
+      <input type="checkbox" data-role="${escapeHtml(r.key)}"${выбранные.has(r.key) ? " checked" : ""}>
+      <span class="am-edit-role-name">${escapeHtml(r.name)}</span>
+      ${сверху.has(r.key) ? '<span class="am-inherited">+ сверху</span>' : ""}
+      <button type="button" class="btn btn-sm btn-secondary" data-role-detail="${escapeHtml(r.key)}"
+        title="Какие разделы даёт эта роль">Что даёт?</button>
+    </label>`).join("");
+}
+
+document.getElementById("am-cell-edit-roles").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-role-detail]");
+  if (!btn) return;
+  if (!amRolesDataCache) amRolesDataCache = await api("/roles");
+  renderAmRoleDetail(btn.dataset.roleDetail);
+});
+
+function renderAmRoleDetail(roleKey) {
+  const роль = amRolesDataCache.roles.find(r => r.key === roleKey);
+  const пункты = [];
+  let группа = null;
+  for (const f of amRolesDataCache.features) {
+    const уровень = (f.levels && f.levels[roleKey]) || "none";
+    if (уровень === "none") continue;
+    if (f.section !== группа) {
+      группа = f.section;
+      пункты.push(`<div class="am-role-detail-section">${escapeHtml(группа)}</div>`);
+    }
+    const метка = (amRolesDataCache.level_labels || {})[уровень] || уровень;
+    пункты.push(`<div class="am-role-detail-row"><span>${escapeHtml(f.title)}</span>`
+      + `<b>${escapeHtml(метка)}</b></div>`);
+  }
+  const панель = document.getElementById("am-cell-edit-detail");
+  панель.innerHTML = `<h3>Что даёт роль «${escapeHtml(роль ? роль.name : roleKey)}»</h3>`
+    + `<div class="am-role-detail-list">`
+    + (пункты.length ? пункты.join("") : `<p class="hint-text">Роль не даёт доступа ни к одному разделу.</p>`)
+    + `</div>`;
+  панель.hidden = false;
+}
+
+document.getElementById("am-cell-edit-cancel").addEventListener("click", () =>
+  amCellEditBackdrop.classList.remove("open"));
+
+document.getElementById("am-cell-edit-apply").addEventListener("click", () => {
+  const выбрано = new Set(
+    [...document.querySelectorAll('#am-cell-edit-roles input[type="checkbox"]:checked')]
+      .map(x => x.dataset.role));
+  const роли = amAccess.get(amEditUserId) || new Map();
+  if (выбрано.size) роли.set(amEditColumn.key, выбрано); else роли.delete(amEditColumn.key);
+  amAccess.set(amEditUserId, роли);
+  amCellEditBackdrop.classList.remove("open");
+  // Целиком: правка верхнего уровня меняет подписи «+ сверху» у всего, что
+  // ниже, точечной правкой это не выразить (тот же довод, что в дереве).
+  renderAccessMatrix();
 });
 
 async function openAccessMatrix() {
@@ -15509,6 +15628,7 @@ async function openAccessMatrix() {
   amUsers = users;
   amAccess = new Map();
   amSystemRole = new Map();
+  amRolesDataCache = null; // роли могли поменяться со времени прошлого открытия
   for (const u of users) {
     amSystemRole.set(u.id, u.role);
     const роли = new Map();
