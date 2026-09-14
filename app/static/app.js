@@ -35448,24 +35448,34 @@ function buildAxisGizmoLabelSprite(text, colorHex, worldHeight) {
   return sprite;
 }
 
-// Длина стрелки «−» — заметно короче «+» (не половина ровно, чтобы
-// направление «главное/основное» читалось с одного взгляда, а не только
-// по подписи), обе стороны всё равно подписаны явно.
-function buildPlacementGizmo(sceneKind, length) {
+// Живой запрос пользователя 2026-09-15 (по итогам первой версии — «так
+// ничего не понятно»): короткие стрелки у anchor тонули в самой геометрии
+// модели. Теперь ось — НАСКВОЗЬ через модель по этому измерению, а марка
+// (подпись) — уже ЗА её пределами, на пустом фоне, а не на самой модели.
+// `extents[axis]` — {pos, neg}, расстояние от anchor до конца линии в мм
+// в каждую сторону (уже с запасом за габарит, см. placementGizmoExtentsMm).
+function buildPlacementGizmo(sceneKind, extents) {
   const group = new THREE.Group();
   group.renderOrder = 999;
   const dirs = AXIS_GIZMO_DIRS[sceneKind];
-  const labelHeight = length * 0.16;
+  const ORIGIN = new THREE.Vector3();
   for (const axis of ["x", "y", "z"]) {
     const dir = new THREE.Vector3(...dirs[axis]);
     const color = AXIS_GIZMO_COLORS[axis];
-    group.add(new THREE.ArrowHelper(dir, new THREE.Vector3(), length, color, length * 0.22, length * 0.12));
-    group.add(new THREE.ArrowHelper(dir.clone().negate(), new THREE.Vector3(), length * 0.45, color, length * 0.14, length * 0.08));
+    const { pos, neg } = extents[axis];
+    // Наконечник — доля от КОРОТКОЙ стороны (обычно «−» по Z, anchor внизу
+    // модели): иначе на длинной оси конус получился бы огромным, а на
+    // короткой — не поместился бы вовсе.
+    const headLen = Math.max(Math.min(pos, neg) * 0.18, 250);
+    const headWidth = headLen * 0.55;
+    group.add(new THREE.ArrowHelper(dir, ORIGIN, pos, color, headLen, headWidth));
+    group.add(new THREE.ArrowHelper(dir.clone().negate(), ORIGIN, neg, color, headLen, headWidth));
+    const labelHeight = Math.max(Math.min(pos, neg) * 0.22, 350);
     const posLabel = buildAxisGizmoLabelSprite(`${axis.toUpperCase()}+`, color, labelHeight);
-    posLabel.position.copy(dir).multiplyScalar(length * 1.18);
+    posLabel.position.copy(dir).multiplyScalar(pos + labelHeight * 1.4);
     group.add(posLabel);
-    const negLabel = buildAxisGizmoLabelSprite(`${axis.toUpperCase()}−`, color, labelHeight * 0.85);
-    negLabel.position.copy(dir).multiplyScalar(-(length * 0.45 + length * 0.2));
+    const negLabel = buildAxisGizmoLabelSprite(`${axis.toUpperCase()}−`, color, labelHeight);
+    negLabel.position.copy(dir).multiplyScalar(-(neg + labelHeight * 1.4));
     group.add(negLabel);
   }
   return group;
@@ -35489,11 +35499,10 @@ function hidePlacementGizmo() {
   placementGizmo = null;
 }
 
-function showPlacementGizmo(scene, sceneKind, position, sizeHintMm) {
+function showPlacementGizmo(scene, sceneKind, position, extents) {
   hidePlacementGizmo();
   if (!scene) return;
-  const length = Math.min(Math.max((sizeHintMm || 3000) * 0.5, 1500), 8000);
-  const object = buildPlacementGizmo(sceneKind, length);
+  const object = buildPlacementGizmo(sceneKind, extents);
   object.position.copy(position);
   scene.add(object);
   placementGizmo = { object, scene };
@@ -35503,10 +35512,30 @@ function updatePlacementGizmoPosition(position) {
   if (placementGizmo) placementGizmo.object.position.copy(position);
 }
 
-function placementGizmoSizeHintMm(model) {
+// Насквозь через РЕАЛЬНЫЙ (с учётом текущего масштаба модели, живой запрос
+// 2026-09-14 — «масштаб по X/Y/Z настраиваемым полем») габарит модели, не
+// только исходный из metadata. Запас за грань (MARGIN) — марка должна
+// оказаться уже СНАРУЖИ модели, не на её поверхности. Anchor по X/Y —
+// ЦЕНТР горизонтального габарита модели (симметрично в обе стороны), а по
+// Z — НИЖНЯЯ точка (Docs/TZ.md, «Первоначальное размещение»): «+Z» должен
+// пройти сквозь ВСЮ высоту модели, «−Z» — там и так почти сразу пусто.
+const PLACEMENT_GIZMO_MARGIN = 1.3;
+const PLACEMENT_GIZMO_MIN_MM = 1200;
+function placementGizmoExtentsMm(model) {
   const bbox = model?.metadata?.bbox_size_mm;
-  if (!bbox) return null;
-  return Math.max(bbox.x || 0, bbox.y || 0, bbox.z || 0) || null;
+  const scale = model?.scale || { x: 1, y: 1, z: 1 };
+  const sizeX = (bbox?.x || 0) * (scale.x || 1);
+  const sizeY = (bbox?.y || 0) * (scale.y || 1);
+  const sizeZ = (bbox?.z || 0) * (scale.z || 1);
+  const halfX = Math.max((sizeX / 2) * PLACEMENT_GIZMO_MARGIN, PLACEMENT_GIZMO_MIN_MM);
+  const halfY = Math.max((sizeY / 2) * PLACEMENT_GIZMO_MARGIN, PLACEMENT_GIZMO_MIN_MM);
+  const fullZ = Math.max(sizeZ * PLACEMENT_GIZMO_MARGIN, PLACEMENT_GIZMO_MIN_MM);
+  const shortZ = Math.max(sizeZ * 0.15, PLACEMENT_GIZMO_MIN_MM * 0.5);
+  return {
+    x: { pos: halfX, neg: halfX },
+    y: { pos: halfY, neg: halfY },
+    z: { pos: fullZ, neg: shortZ },
+  };
 }
 
 // Для режима «Настраивать поверх 3D» (плавающая панель чисел,
@@ -35517,11 +35546,11 @@ function placementGizmoSizeHintMm(model) {
 function showExternalModelGizmo(model) {
   if (mfr3d.scene && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer) {
     const group = mfrExternalModels.layer.getGroup(model.id);
-    if (group) { showPlacementGizmo(mfr3d.scene, "mfr", group.position, placementGizmoSizeHintMm(model)); return; }
+    if (group) { showPlacementGizmo(mfr3d.scene, "mfr", group.position, placementGizmoExtentsMm(model)); return; }
   }
   if (state.view3d.scene && zhbiExternalModels.objectId === model.object_id && zhbiExternalModels.layer) {
     const group = zhbiExternalModels.layer.getGroup(model.id);
-    if (group) { showPlacementGizmo(state.view3d.scene, "zhbi", group.position, placementGizmoSizeHintMm(model)); return; }
+    if (group) { showPlacementGizmo(state.view3d.scene, "zhbi", group.position, placementGizmoExtentsMm(model)); return; }
   }
 }
 
@@ -35611,7 +35640,7 @@ function beginExternalModelPlacement(model, callbacks) {
         syncGroupToModel(group, model, externalModelsBridge.projectToMfrView, [mfrExternalModels.origin, mfrExternalModels.low]);
         group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(model.rotation_deg) || 0) * Math.PI / 180);
       }
-      showPlacementGizmo(mfr3d.scene, "mfr", group.position, placementGizmoSizeHintMm(model));
+      showPlacementGizmo(mfr3d.scene, "mfr", group.position, placementGizmoExtentsMm(model));
       return startExternalModelPlacementOnPlane({
         canvas: mfr3d.renderer.domElement, camera: mfr3d.camera, controls: mfr3d.controls,
         backdrop: document.getElementById("external-models-backdrop"), group,
@@ -35638,7 +35667,7 @@ function beginExternalModelPlacement(model, callbacks) {
         const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(model.rotation_deg) || 0) * Math.PI / 180);
         group.quaternion.copy(axisRemap).multiply(qRotate);
       }
-      showPlacementGizmo(state.view3d.scene, "zhbi", group.position, placementGizmoSizeHintMm(model));
+      showPlacementGizmo(state.view3d.scene, "zhbi", group.position, placementGizmoExtentsMm(model));
       return startExternalModelPlacementOnPlane({
         canvas: state.view3d.renderer.domElement, camera: state.view3d.camera, controls: state.view3d.controls,
         backdrop: document.getElementById("external-models-backdrop"), group,
