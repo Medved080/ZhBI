@@ -36,6 +36,16 @@ function mToMm(value) {
   const num = Number(normalized);
   return Number.isFinite(num) ? Math.round(num * 1000) : null;
 }
+// Масштаб хранится и уходит на сервер отношением (1.0 = без изменений), а
+// в поле формы человек видит проценты (100 = без изменений) — то же самое
+// соотношение «единица хранения / единица поля», что у mmToM/mToMm выше.
+function ratioToPct(ratio) {
+  return ratio * 100;
+}
+function pctToRatio(value) {
+  const num = parseRuNumber(value);
+  return num === null ? null : num / 100;
+}
 function parseRuNumber(value) {
   const num = Number(String(value).trim().replace(",", "."));
   return Number.isFinite(num) ? num : null;
@@ -91,6 +101,9 @@ export function renderExternalModelsPanel(container, deps) {
         offsetYM: mmToM(model.offset_mm.y),
         offsetZM: mmToM(model.offset_mm.z),
         rotationDeg: model.rotation_deg,
+        scaleXPct: ratioToPct(model.scale?.x ?? 1),
+        scaleYPct: ratioToPct(model.scale?.y ?? 1),
+        scaleZPct: ratioToPct(model.scale?.z ?? 1),
         name: model.name,
         // Заполняются ТОЛЬКО кнопкой «Совместить автоматически» — «Сохранить»
         // отправит их вместе со сдвигом/поворотом в ОДНОМ PATCH (см. wire());
@@ -161,8 +174,12 @@ export function renderExternalModelsPanel(container, deps) {
     const offsetYMm = mToMm(d.offsetYM);
     const offsetZMm = mToMm(d.offsetZM);
     const rotationDeg = parseRuNumber(d.rotationDeg);
-    if (offsetXMm === null || offsetYMm === null || offsetZMm === null || rotationDeg === null) return;
-    previewPlacement(model, { offsetXMm, offsetYMm, offsetZMm, rotationDeg });
+    const scaleX = pctToRatio(d.scaleXPct);
+    const scaleY = pctToRatio(d.scaleYPct);
+    const scaleZ = pctToRatio(d.scaleZPct);
+    if (offsetXMm === null || offsetYMm === null || offsetZMm === null || rotationDeg === null
+      || scaleX === null || scaleY === null || scaleZ === null) return;
+    previewPlacement(model, { offsetXMm, offsetYMm, offsetZMm, rotationDeg, scaleX, scaleY, scaleZ });
   }
 
   // Поле сдвига/поворота меняется в ДВУХ местах — сама карточка (container)
@@ -269,7 +286,10 @@ export function renderExternalModelsPanel(container, deps) {
     const d = draftFor(model);
     return Number(d.offsetXM) !== mmToM(model.offset_mm.x) || Number(d.offsetYM) !== mmToM(model.offset_mm.y)
       || Number(d.offsetZM) !== mmToM(model.offset_mm.z)
-      || Number(d.rotationDeg) !== Number(model.rotation_deg) || d.name !== model.name;
+      || Number(d.rotationDeg) !== Number(model.rotation_deg) || d.name !== model.name
+      || Number(d.scaleXPct) !== ratioToPct(model.scale?.x ?? 1)
+      || Number(d.scaleYPct) !== ratioToPct(model.scale?.y ?? 1)
+      || Number(d.scaleZPct) !== ratioToPct(model.scale?.z ?? 1);
   }
 
   // Общий сторож несохранённого (живой запрос пользователя 2026-09-14:
@@ -337,6 +357,12 @@ export function renderExternalModelsPanel(container, deps) {
               ${numField('<label class="field">Сдвиг Y, м</label>', "em-offset-y", "offsetYM", "0.01")}
               ${numField('<label class="field" title="0 = нижняя точка габарита модели на отметке 0 объекта — чисто техническая точка, НЕ уровень земли/пола (его нельзя вычислить из одного габарита: дерево или антенна задерут верх, а не покажут землю). Для привязки к реальной высоте — числом здесь, либо «Перенести эту привязку на» с уже откалиброванного по высоте файла той же сцены. Положительное — вверх.">Сдвиг Z, м</label>', "em-offset-z", "offsetZM", "0.01")}
               ${numField('<label class="field" title="По часовой стрелке при виде на план сверху, вокруг центра модели">Поворот, °</label>', "em-rotation", "rotationDeg", "0.1")}
+            </div>
+            <div class="em-col-title em-scale-title" title="Чисто визуальная растяжка модели вокруг её анкора — против слияния (z-fighting) граней с конструктивом. Offset/поворот/anchor не трогает, на сервере хранится отдельно от привязки. 100% = без изменений.">Масштаб (против слияния с конструктивом)</div>
+            <div class="em-num-grid em-scale-grid">
+              ${numField('<label class="field">По X, %</label>', "em-scale-x", "scaleXPct", "1")}
+              ${numField('<label class="field">По Y, %</label>', "em-scale-y", "scaleYPct", "1")}
+              ${numField('<label class="field">По Z, %</label>', "em-scale-z", "scaleZPct", "1")}
             </div>
             <div class="em-col-foot">
               <span class="em-save-group">
@@ -435,7 +461,10 @@ export function renderExternalModelsPanel(container, deps) {
       // положение, а не оставлять картинку рассинхронизированной с
       // отменённым черновиком.
       if (model && previewPlacement) {
-        previewPlacement(model, { offsetXMm: model.offset_mm.x, offsetYMm: model.offset_mm.y, rotationDeg: model.rotation_deg });
+        previewPlacement(model, {
+          offsetXMm: model.offset_mm.x, offsetYMm: model.offset_mm.y, rotationDeg: model.rotation_deg,
+          scaleX: model.scale?.x ?? 1, scaleY: model.scale?.y ?? 1, scaleZ: model.scale?.z ?? 1,
+        });
       }
       render();
     }));
@@ -459,6 +488,9 @@ export function renderExternalModelsPanel(container, deps) {
       const offsetZMm = mToMm(d.offsetZM);
       const rotationDegNormalized = String(d.rotationDeg).trim().replace(",", ".");
       const rotationDeg = Number(rotationDegNormalized);
+      const scaleX = pctToRatio(d.scaleXPct);
+      const scaleY = pctToRatio(d.scaleYPct);
+      const scaleZ = pctToRatio(d.scaleZPct);
       if (offsetXMm === null || offsetYMm === null || offsetZMm === null) {
         showToast("Сдвиг должен быть числом", "error");
         return;
@@ -467,10 +499,19 @@ export function renderExternalModelsPanel(container, deps) {
         showToast("Поворот должен быть числом", "error");
         return;
       }
+      if (scaleX === null || scaleY === null || scaleZ === null) {
+        showToast("Масштаб должен быть числом", "error");
+        return;
+      }
+      if (scaleX <= 0 || scaleY <= 0 || scaleZ <= 0) {
+        showToast("Масштаб должен быть больше 0%", "error");
+        return;
+      }
       btn.disabled = true;
       try {
         const body = {
           offset_x_mm: offsetXMm, offset_y_mm: offsetYMm, offset_z_mm: offsetZMm, rotation_deg: rotationDeg,
+          scale_x: scaleX, scale_y: scaleY, scale_z: scaleZ,
           expected_revision: model.revision,
         };
         // Результат «Совместить автоматически» пишется В ТОМ ЖЕ PATCH, что

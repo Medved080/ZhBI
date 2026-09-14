@@ -554,6 +554,16 @@ _COLUMN_MIGRATIONS = [
     # контракт результата попытки, не переиспользует placement_mode.
     ("object_external_models", "auto_placement_status", "TEXT"),
     ("object_external_models", "auto_placement_json", "TEXT"),
+
+    # Визуальный масштаб слоя по осям X/Y/Z (2026-09-14, живой запрос
+    # пользователя): раньше фасад увеличивался против слияния граней с
+    # конструктивом фиксированными +2% на все три оси разом, зашитыми в
+    # коде (FACADE_VISUAL_SCALE, layer.js) — теперь настраивается в форме,
+    # отдельно по каждой оси. 1.0 — без изменений (текущее поведение
+    # благоустройства и старых строк, заведённых до этой миграции).
+    ("object_external_models", "scale_x", "REAL NOT NULL DEFAULT 1"),
+    ("object_external_models", "scale_y", "REAL NOT NULL DEFAULT 1"),
+    ("object_external_models", "scale_z", "REAL NOT NULL DEFAULT 1"),
 ]
 
 

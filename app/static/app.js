@@ -35226,11 +35226,22 @@ function previewExternalModelPlacement(model, overrideMm) {
     offset_mm: { ...model.offset_mm, x: overrideMm.offsetXMm, y: overrideMm.offsetYMm, z: offsetZMm },
     rotation_deg: overrideMm.rotationDeg,
   };
+  // Масштаб — как Z выше: поле необязательное (не все вызовы правят
+  // масштаб, например жест мышью/калибровка его не трогают вовсе), без
+  // него берём уже сохранённый на модели, а не молча сбрасываем на 1
+  // (живой запрос пользователя 2026-09-14: масштаб по X/Y/Z настраиваемым
+  // полем формы, с тем же живым предпросмотром, что у сдвига/поворота).
+  const scale = {
+    x: overrideMm.scaleX ?? model.scale?.x ?? 1,
+    y: overrideMm.scaleY ?? model.scale?.y ?? 1,
+    z: overrideMm.scaleZ ?? model.scale?.z ?? 1,
+  };
   if (mfr3d.scene && mfrExternalModels.objectId === model.object_id && mfrExternalModels.layer) {
     const group = mfrExternalModels.layer.getGroup(model.id);
     if (group && externalModelsBridge?.projectToMfrView && mfrExternalModels.origin) {
       syncGroupToModel(group, modelForPreview, externalModelsBridge.projectToMfrView, [mfrExternalModels.origin, mfrExternalModels.low]);
       group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(overrideMm.rotationDeg) || 0) * Math.PI / 180);
+      group.scale.set(scale.x, scale.y, scale.z);
       return { ok: true };
     }
   }
@@ -35241,6 +35252,7 @@ function previewExternalModelPlacement(model, overrideMm) {
       const axisRemap = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
       const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(overrideMm.rotationDeg) || 0) * Math.PI / 180);
       group.quaternion.copy(axisRemap).multiply(qRotate);
+      group.scale.set(scale.x, scale.y, scale.z);
       return { ok: true };
     }
   }

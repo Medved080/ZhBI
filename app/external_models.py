@@ -65,6 +65,7 @@ def _row_out(row: sqlite3.Row) -> dict:
         "object_anchor_mm": {"x": row["object_anchor_x_mm"], "y": row["object_anchor_y_mm"]},
         "offset_mm": {"x": row["offset_x_mm"], "y": row["offset_y_mm"], "z": row["offset_z_mm"]},
         "rotation_deg": row["rotation_deg"],
+        "scale": {"x": row["scale_x"], "y": row["scale_y"], "z": row["scale_z"]},
         "auto_placement_status": row["auto_placement_status"],
         "auto_placement_json": json.loads(row["auto_placement_json"]) if row["auto_placement_json"] else None,
         "centering_revision": row["centering_revision"],
@@ -235,6 +236,15 @@ def upload_external_model(
             "warnings": body.warnings[:50],
         }
 
+        # Масштаб по умолчанию (2026-09-14, живой запрос пользователя —
+        # раньше это была одна зашитая в код константа FACADE_VISUAL_SCALE):
+        # для фасада сразу +2% на все три оси — та же величина, что была
+        # захардкожена в layer.js, против слияния (z-fighting) граней с
+        # конструктивом; для благоустройства — 1.0, без изменений. Теперь
+        # это только ОТПРАВНАЯ точка — правится числовыми полями в карточке
+        # модели, как offset/rotation.
+        default_scale = 1.02 if body.kind == "facade" else 1.0
+
         try:
             cur = conn.execute(
                 "INSERT INTO object_external_models ("
@@ -242,13 +252,14 @@ def upload_external_model(
                 "format_version, placement_mode, metadata_json, "
                 "source_anchor_x_mm, source_anchor_y_mm, source_anchor_z_mm, "
                 "object_anchor_x_mm, object_anchor_y_mm, centering_revision, "
-                "offset_x_mm, offset_y_mm, revision, created_by) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unreferenced', ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, ?)",
+                "offset_x_mm, offset_y_mm, scale_x, scale_y, scale_z, revision, created_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unreferenced', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 1, ?)",
                 (
                     object_id, name, body.kind, (file.filename or "")[:255], stored_name, sha256_hex, size,
                     int(settings["format_version"]), json.dumps(metadata, ensure_ascii=False),
                     anchor_xyz[0], anchor_xyz[1], anchor_xyz[2],
                     object_anchor_x, object_anchor_y, bounds_result["source_revision"],
+                    default_scale, default_scale, default_scale,
                     user["id"],
                 ),
             )
@@ -273,6 +284,9 @@ class PatchIn(BaseModel):
     offset_y_mm: Optional[float] = None
     offset_z_mm: Optional[float] = None
     rotation_deg: Optional[float] = None
+    scale_x: Optional[float] = None
+    scale_y: Optional[float] = None
+    scale_z: Optional[float] = None
     name: Optional[str] = None
     # Автосовмещение фасада (Docs/fbx-auto-placement-claude-prompt.md) —
     # пишутся ВМЕСТЕ с offset/rotation_deg одним PATCH, не отдельным
@@ -319,6 +333,17 @@ def patch_external_model(object_id: int, model_id: int, body: PatchIn,
             # (поле — числовой ввод, не счётчик перетаскиваний).
             normalized = ((float(body.rotation_deg) + 180) % 360) - 180
             set_parts.append("rotation_deg = ?"); params.append(normalized)
+        for field_name, column in (("scale_x", "scale_x"), ("scale_y", "scale_y"), ("scale_z", "scale_z")):
+            value = getattr(body, field_name)
+            if value is None:
+                continue
+            # >0 и в разумных пределах — ноль/отрицательное вырождает
+            # матрицу трансформации (модель схлопывается или отражается
+            # неожиданно для человека), выше ~100x это уже опечатка, не
+            # осознанный выбор.
+            if not _finite(value) or value <= 0 or value > 100:
+                raise HTTPException(status_code=422, detail=f"{field_name} должен быть числом больше 0 и не больше 100")
+            set_parts.append(f"{column} = ?"); params.append(float(value))
         if body.name is not None:
             name = body.name.strip()
             if not name or len(name) > 255:

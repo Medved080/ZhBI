@@ -1478,6 +1478,14 @@ CREATE TABLE IF NOT EXISTS object_external_models (
     -- неоднозначности, время расчёта. Только для показа человеку —
     -- логика приложения на это поле не полагается.
     auto_placement_json TEXT,
+    -- Визуальный масштаб слоя по осям X/Y/Z (2026-09-14, живой запрос
+    -- пользователя) — чисто рендерный приём против слияния (z-fighting)
+    -- граней фасада с гранями конструктива внутри объёма; на offset/
+    -- rotation/anchor не влияет и не более чем визуально раздвигает
+    -- поверхности модели вокруг её же анкора. 1.0 = без изменений.
+    scale_x REAL NOT NULL DEFAULT 1,
+    scale_y REAL NOT NULL DEFAULT 1,
+    scale_z REAL NOT NULL DEFAULT 1,
     revision INTEGER NOT NULL DEFAULT 1,
     created_by INTEGER REFERENCES users (id),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),

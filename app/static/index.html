@@ -2395,6 +2395,11 @@
   .em-num-grid { display: grid; grid-template-columns: repeat(4, minmax(96px, 1fr)); gap: 10px; }
   .modal .em-num-grid label.field { margin: 0 0 4px; white-space: nowrap; }
   .em-num-grid .em-num-wrap { display: block; }
+  /* Масштаб по X/Y/Z (живой запрос пользователя 2026-09-14) — свой
+     подраздел под «Положение», три поля вместо четырёх: своя сетка, а не
+     4-колоночная .em-num-grid с пустой ячейкой. */
+  .em-scale-title { margin-top: 10px; }
+  .em-scale-grid { grid-template-columns: repeat(3, minmax(96px, 1fr)); }
   .em-col-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   /* Отмена/Сохранить — В КОНЦЕ блока «Положение» (живой запрос
      пользователя 2026-09-14), больше ничего в этой строке нет: «Настраивать
