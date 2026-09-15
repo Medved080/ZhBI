@@ -56,6 +56,7 @@ const state = {
   printFormat: "A4",       // "A4" | "A3"
   printPage: 0,
   printBlankId: "",
+  exporting: false,        // true пока идёт запрос .../chess-flat-export.(xlsx|pdf) — кнопки блокируются на время
 };
 
 // ------------------------------------------------------------- утилиты
@@ -500,16 +501,26 @@ function printCapacitySections(format) {
   return Math.max(1, Math.floor(usable / 30));
 }
 
-function computePrintPages() {
-  if (!state.layout) return [];
+// Уровни/секции в текущем отборе печати («Всё здание» или диапазон), ДО
+// разбиения секций на группы по ширине листа — общая точка входа и для
+// печати (`computePrintPages`), и для выгрузки в PDF/XLSX
+// (`exportPayload`): выгрузке ширина листа не мешает (в Excel и в PDF
+// секции для выгрузки не разбиваются на страницы отдельными блоками, см.
+// `exportPayload`), поэтому именно ей нужен состав ДО разбиения.
+function printLevelsAndSections() {
   const asc = ascLevels();
   const levels = state.printScope === "all" ? asc : asc.slice(state.printFrom, state.printTo + 1);
-  const sectionCap = printCapacitySections(state.printFormat);
-
   const levelIds = new Set(levels.flatMap(rowLevelIds));
   const presentSectionIds = new Set();
   for (const b of state.layout.blocks) if (levelIds.has(b.level_id)) presentSectionIds.add(b.section_id);
-  const sectionsAll = state.layout.sections.filter((s) => presentSectionIds.has(s.id));
+  const sections = state.layout.sections.filter((s) => presentSectionIds.has(s.id));
+  return { levels, sections };
+}
+
+function computePrintPages() {
+  if (!state.layout) return [];
+  const { levels, sections: sectionsAll } = printLevelsAndSections();
+  const sectionCap = printCapacitySections(state.printFormat);
 
   const sectionChunks = [];
   for (let i = 0; i < sectionsAll.length; i += sectionCap) sectionChunks.push(sectionsAll.slice(i, i + sectionCap));
@@ -568,31 +579,49 @@ function usedOpsForLevel(level, sections) {
   return [...byName.entries()].map(([name, ids]) => ({ name, ids }));
 }
 
+// Готовые строки бланка обхода как ДАННЫЕ, а не HTML — общий источник и
+// для печати (`paperHtml`), и для выгрузки в PDF/XLSX (`exportPayload`,
+// 2026-09-15): раньше вычислялось прямо внутри `paperHtml`, но выгрузке
+// нужна ТА ЖЕ группировка (по этажу, по имени операции) в виде объекта —
+// вторая копия того же расчёта разошлась бы с первой при следующей же
+// правке (та же логика уже дважды всплывала как источник ошибок бланка).
+// `cells[i]` — процент (число) или `null` («не применяется» у этой
+// секции — как «paper-absent» на бумаге).
+function rowsData(levels, sections) {
+  return levels.map((level) => ({
+    floor: levelFloorLabel(level),
+    ops: usedOpsForLevel(level, sections).map((op) => ({
+      name: op.name,
+      cells: sections.map((section) => {
+        const block = blockAt(section.id, level);
+        const matchId = block ? op.ids.find((id) => Object.prototype.hasOwnProperty.call(block.percents, String(id))) : undefined;
+        return matchId === undefined ? null : block.percents[String(matchId)];
+      }),
+    })),
+  }));
+}
+
 function paperHtml(page, index, total) {
   const sections = page.sections;
   let rows = "";
-  for (const level of page.levels) {
-    const usedOps = usedOpsForLevel(level, sections);
-    if (!usedOps.length) {
-      rows += `<tr class="floor-start"><th class="paper-floor">${esc(levelFloorLabel(level))}</th>` +
+  for (const { floor, ops } of rowsData(page.levels, sections)) {
+    if (!ops.length) {
+      rows += `<tr class="floor-start"><th class="paper-floor">${esc(floor)}</th>` +
         `<td class="paper-absent"></td>` +
         sections.map(() => `<td colspan="2" class="paper-absent"></td>`).join("") + `</tr>`;
       continue;
     }
-    usedOps.forEach((op, oi) => {
+    ops.forEach((op, oi) => {
       rows += `<tr class="${oi === 0 ? "floor-start" : ""}">`;
-      if (oi === 0) rows += `<th class="paper-floor" rowspan="${usedOps.length}">${esc(levelFloorLabel(level))}</th>`;
+      if (oi === 0) rows += `<th class="paper-floor" rowspan="${ops.length}">${esc(floor)}</th>`;
       // Имя операции — ОДНА общая графа на строку, не по секции (живой
       // запрос пользователя 2026-09-15, по образцу пользователя — образец
       // штатного отчёта «Шахматка»): раньше повторялось в каждой секции
       // своей же графой, раздувая ширину листа и оставляя меньше секций на
       // странице.
       rows += `<td class="paper-op-name">${esc(op.name)}</td>`;
-      for (const section of sections) {
-        const block = blockAt(section.id, level);
-        const matchId = block ? op.ids.find((id) => Object.prototype.hasOwnProperty.call(block.percents, String(id))) : undefined;
-        if (matchId === undefined) { rows += `<td colspan="2" class="paper-absent"></td>`; continue; }
-        const pct = block.percents[String(matchId)];
+      for (const pct of op.cells) {
+        if (pct === null) { rows += `<td colspan="2" class="paper-absent"></td>`; continue; }
         rows += `<td class="paper-current-pct">${pct}%</td>` +
                 `<td class="paper-new"></td>`;
       }
@@ -629,6 +658,68 @@ function doPrintAction() {
   stack.innerHTML = pages.map((p, i) =>
     `<div class="paper${state.printFormat === "A3" ? " a3" : ""}">${paperHtml(p, i, pages.length)}</div>`).join("");
   window.print();
+}
+
+// Данные для выгрузки в PDF/XLSX — та же группировка (`rowsData`), что у
+// печати, но БЕЗ разбиения секций на группы по ширине листа
+// (`printCapacitySections`/`sectionChunks` из `computePrintPages`): та
+// разбивка — компромисс ФИЗИЧЕСКОЙ бумаги, у выгрузки его нет (widescreen-
+// таблица в Excel и таблица в PDF, которую сам reportlab при нехватке
+// ширины разложит по секциям на сервере — см. app/chess_flat.py).
+function exportPayload() {
+  const { levels, sections } = printLevelsAndSections();
+  const rangeLabel = levels.length
+    ? `${levelFloorLabel(levels[0])}…${levelFloorLabel(levels[levels.length - 1])}`
+    : "—";
+  return {
+    board: boardName(),
+    object_name: state.objectName,
+    range_label: rangeLabel,
+    snapshot_at: fmtDate(state.snapshotAt),
+    date: fmtDate(state.date),
+    format: state.printFormat,
+    sections: sections.map((s) => s.name || s.code),
+    rows: rowsData(levels, sections),
+  };
+}
+
+// Сохранение бланка обхода в файл (2026-09-15, живой запрос пользователя
+// — кнопки рядом с «Печать»). Не через `deps.api` — тот всегда разбирает
+// ответ как JSON (`app/static/app.js:api`), а здесь бинарный файл; приём
+// тот же, что у `downloadFromServer`/`downloadReport` там же: fetch →
+// blob → временная ссылка `<a download>` → клик → revokeObjectURL. Имя
+// файла — из `Content-Disposition` сервера.
+async function doExportAction(kind) {
+  if (!state.layout || state.exporting) return;
+  state.exporting = true;
+  state.loadError = "";
+  render();
+  try {
+    const res = await fetch(`/objects/${state.objectId}/blocks/chess-flat-export.${kind}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(exportPayload()),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error((body && body.detail) || `${res.status} ${res.statusText}`);
+    }
+    const cd = res.headers.get("Content-Disposition") || "";
+    const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    const plain = /filename="([^"]+)"/i.exec(cd);
+    const name = utf8 ? decodeURIComponent(utf8[1])
+      : (plain ? plain[1] : `Шахматка ${boardName()} ${fmtDate(state.date)} ${state.objectName}.${kind}`);
+    const blobUrl = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = blobUrl; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(blobUrl);
+  } catch (e) {
+    state.loadError = "Не удалось сохранить файл: " + e.message;
+  } finally {
+    state.exporting = false;
+    render();
+  }
 }
 
 // ------------------------------------------------------------- мини-схема здания
@@ -835,7 +926,9 @@ function printPanelHtml() {
         <span class="small muted">Лист ${pages.length ? state.printPage + 1 : 0} из ${pages.length} · ${page.levels.length} уровней</span>
         <button id="cf-next" class="button" type="button" aria-label="Следующая страница" ${state.printPage >= pages.length - 1 ? "disabled" : ""}>→</button>
       </div>
-      <button class="button primary" id="cf-print-action" type="button" ${pages.length ? "" : "disabled"}>Печатать бланк</button>
+      <button class="button primary" id="cf-print-action" type="button" ${pages.length ? "" : "disabled"}>Печать</button>
+      <button class="button" id="cf-export-pdf" type="button" ${!pages.length || state.exporting ? "disabled" : ""}>Сохранить в PDF</button>
+      <button class="button" id="cf-export-xlsx" type="button" ${!pages.length || state.exporting ? "disabled" : ""}>Сохранить в XLSX</button>
     </div>
     <div class="paper-wrap"><div class="paper ${state.printFormat === "A3" ? "a3" : ""}" id="cf-paper-preview">
       ${pages.length ? paperHtml(page, state.printPage, pages.length) : "<p class=\"muted\">Для выбранной доски нет ни одного блока с операциями.</p>"}
@@ -898,6 +991,8 @@ function onRootClick(e) {
   if (e.target.closest("#cf-prev")) { state.printPage = Math.max(0, state.printPage - 1); render(); return; }
   if (e.target.closest("#cf-next")) { state.printPage += 1; render(); return; }
   if (e.target.closest("#cf-print-action")) { doPrintAction(); return; }
+  if (e.target.closest("#cf-export-pdf")) { doExportAction("pdf"); return; }
+  if (e.target.closest("#cf-export-xlsx")) { doExportAction("xlsx"); return; }
 }
 
 function onRootChange(e) {

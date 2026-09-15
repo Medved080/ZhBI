@@ -7062,6 +7062,70 @@ def post_chess_flat_batch(object_id: int, body: ChessFlatBatchIn,
         conn.close()
 
 
+class ChessFlatExportOpIn(BaseModel):
+    name: str
+    cells: list[Optional[int]]
+
+
+class ChessFlatExportRowIn(BaseModel):
+    floor: str
+    ops: list[ChessFlatExportOpIn]
+
+
+class ChessFlatExportIn(BaseModel):
+    """Бланк обхода уже посчитан и сгруппирован в браузере (то же, что
+    видно на экране печати) — сюда приходят готовые строки, а не параметры
+    для пересчёта на сервере: см. докстринг `app/chess_flat.py` над
+    build_walkaround_xlsx/build_walkaround_pdf."""
+    board: str
+    object_name: str
+    range_label: str
+    snapshot_at: str
+    date: str
+    format: str = "A4"
+    sections: list[str]
+    rows: list[ChessFlatExportRowIn]
+
+
+def _chess_flat_export_name(body: ChessFlatExportIn) -> str:
+    """Имя файла — маска пользователя 2026-09-15: «Шахматка», доска, дата,
+    объект (без расширения — его добавляет вызывающая сторона)."""
+    return "Шахматка %s %s %s" % (body.board, body.date, body.object_name)
+
+
+@app.post("/objects/{object_id}/blocks/chess-flat-export.xlsx")
+def post_chess_flat_export_xlsx(object_id: int, body: ChessFlatExportIn,
+                                user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+    finally:
+        conn.close()
+    content = chess_flat.build_walkaround_xlsx(body.model_dump())
+    name = _chess_flat_export_name(body) + ".xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"export.xlsx\"; filename*=UTF-8''{quote(name)}"},
+    )
+
+
+@app.post("/objects/{object_id}/blocks/chess-flat-export.pdf")
+def post_chess_flat_export_pdf(object_id: int, body: ChessFlatExportIn,
+                               user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+    finally:
+        conn.close()
+    content = chess_flat.build_walkaround_pdf(body.model_dump())
+    name = _chess_flat_export_name(body) + ".pdf"
+    return Response(
+        content=content, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=\"export.pdf\"; filename*=UTF-8''{quote(name)}"},
+    )
+
+
 @app.get("/objects/{object_id}/planning-tracks")
 def get_planning_tracks(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
     """Весь справочник треков объекта (не только доски «Шахматки») — для
