@@ -4061,12 +4061,21 @@
   #ds-tooltip .dst-more { color: #9aa0aa; font-style: italic; }
 
   /* Печать: на бумагу уходит только таблица отчёта. Без этого печатались бы
-     схема, сайдбар и затемнение модального окна. */
+     схема, сайдбар и затемнение модального окна.
+     Правило принудительно показывает #reports-backdrop ТОЛЬКО когда он
+     реально открыт (.open) — до 2026-09-15 показывало безусловно: печать
+     была единственным действием `window.print()` на странице, и форма,
+     печатающая, всегда была именно этой открытой. С появлением второй
+     печатающей формы («Плоская шахматка», своё всплывающее окно) печать
+     ОТТУДА тоже подпадала под это правило и показывала пустой закрытый
+     #reports-backdrop (заголовок-заглушка «Отчёт», пустое тело) поверх/
+     вместо содержимого шахматки — живой отчёт пользователя, печать бланка
+     обхода выводила пустую страницу «Отчёт». */
   @media print {
     body * { visibility: hidden; }
-    #reports-backdrop, #reports-backdrop * { visibility: visible; }
-    #reports-backdrop { position: absolute; inset: 0; background: #fff; display: block; }
-    #reports-backdrop .modal { box-shadow: none; max-width: none; width: auto; }
+    #reports-backdrop.open, #reports-backdrop.open * { visibility: visible; }
+    #reports-backdrop.open { position: absolute; inset: 0; background: #fff; display: block; }
+    #reports-backdrop.open .modal { box-shadow: none; max-width: none; width: auto; }
     .report-head, .modal-sticky-foot, #report-use-filter, label.toggle { display: none !important; }
     .modal-sticky-scroll { overflow: visible !important; max-height: none !important; }
     #report-table th, #cmp-table th { position: static; }
@@ -5042,6 +5051,18 @@
            два личных пункта, доступных всем ролям. Остальные три группы
            целиком админские, и у прораба их не видно вовсе. -->
       <div class="dropdown-menu" id="settings-menu">
+        <!-- «Шахматка» — первым разделом (живой запрос пользователя,
+             2026-09-15): «Плоская шахматка» раньше открывалась только
+             кнопкой на вкладке «Вид» рабочего места «Модель МФР» — без
+             захода туда была недостижима. Свой раздел, а не пункт внутри
+             существующего, — часто нужный самостоятельный инструмент
+             массового ввода факта, а не настройка. -->
+        <div class="submenu">
+          <button type="button" class="submenu-trigger">Шахматка</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="menu-chess-flat-open" data-feature="work_progress" data-feature-kind="write">Плоская шахматка</button>
+          </div>
+        </div>
         <div class="submenu">
           <button type="button" class="submenu-trigger">Настройки</button>
           <div class="dropdown-menu submenu-panel">
@@ -5877,20 +5898,15 @@
               <label><input type="radio" name="mfr-chess-mode" value="deadline">по срокам</label>
             </div>
             <div class="wp-legend" id="mfr-chess-legend" style="display:none; margin-top:6px"></div>
-            <!-- Плоский вид (2026-09-14, Docs/design/chess-flat) —
-                 самостоятельный экран поверх той же доски: развёртка
-                 здания по этажам/секциям для просмотра, массового ввода
-                 факта и печати бланка обхода. Открывается доской, уже
-                 выбранной здесь (если есть), передаётся объект. -->
-            <button type="button" class="btn btn-sm btn-secondary" id="mfr-chess-flat-open"
-                    style="margin-top:8px; width:100%">Плоская шахматка →</button>
           </div>
         </div>
       </div>
     </div>
   </div>
-  <!-- Точка монтирования плоской «Шахматки» — полноэкранный оверлей поверх
-       всего приложения, наполняется app/static/chess-flat.js лениво, при
+  <!-- Точка монтирования плоской «Шахматки» — всплывающее окно поверх
+       всего приложения (открывается из «Действия → Шахматка», 2026-09-15;
+       до этого — кнопкой прямо здесь, на вкладке «Вид» рабочего места
+       «Модель МФР»), наполняется app/static/chess-flat.js лениво, при
        первом открытии (тот же приём ленивого import(), что у address.js). -->
   <div id="chess-flat-overlay-root"></div>
   <div id="stage">

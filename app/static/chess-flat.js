@@ -761,11 +761,6 @@ function inputPanelHtml() {
         </details>
       </aside>
       <main>
-        <div class="board-head">
-          <div><h2 id="cf-range-title">${esc(range.title || "")}</h2>
-            <div class="small muted">Каждая строка — операция. Справа — итоговый процент.</div></div>
-          <span class="small muted">${state.layout.ops.length} ${plural(state.layout.ops.length, ["операция", "операции", "операций"])} на блок</span>
-        </div>
         <div class="grid-scroll" role="region" aria-label="Плоская Шахматка">
           <!-- Потолок колонки 380px — не "1fr" (живой отчёт пользователя
                2026-09-14): при нескольких секциях и широком экране "1fr"
@@ -847,14 +842,7 @@ function render() {
 
   root.innerHTML = `
     <header class="top">
-      <div class="row between crumb">
-        <span>ЖБИ / Модель МФР / Учёт по блокам</span>
-        <button type="button" class="button ghost" id="chess-flat-close" aria-label="Закрыть плоскую Шахматку">✕ Закрыть</button>
-      </div>
-      <div class="row between">
-        <div class="row"><h1>Шахматка</h1><span class="view-label">Плоский вид</span></div>
-        <span class="muted small">${esc(state.objectName)}</span>
-      </div>
+      <span class="muted small">${esc(state.objectName)}</span>
     </header>
     <div class="toolbar">
       <label class="field">Доска<select id="cf-board" ${state.reviewing ? "disabled" : ""}>
@@ -879,7 +867,6 @@ function render() {
 // ------------------------------------------------------------- события
 
 function onRootClick(e) {
-  if (e.target.closest("#chess-flat-close")) { hide(); return; }
   if (e.target.closest("#cf-today")) { state.date = todayLocal(); onDateChanged(); return; }
   if (e.target.closest("#cf-clear")) {
     for (const k of Object.keys(state.draft)) if (k.startsWith(state.trackCode + "|")) delete state.draft[k];
@@ -1015,24 +1002,40 @@ function onBeforeUnload(e) {
 }
 
 function onKeydownGlobal(e) {
-  if (e.key === "Escape" && backdrop && backdrop.style.display !== "none" && !state.committing) hide();
+  if (e.key === "Escape" && backdrop && backdrop.classList.contains("open") && !state.committing) hide();
 }
 
 // ------------------------------------------------------------- монтирование/показ
 
 function hide() {
-  backdrop.style.display = "none";
+  backdrop.classList.remove("open");
 }
 
 function show() {
-  backdrop.style.display = "flex";
+  backdrop.classList.add("open");
+  // Всплывающее окно с кнопками закрытия/разворота на весь экран — той же
+  // общей надстройкой, что и у остальных 80+ форм приложения (живой запрос
+  // пользователя 2026-09-15: раньше экран был безусловно во весь экран,
+  // без рамки и без кнопки разворота, — единственная форма в проекте с
+  // таким исключением). `enhanceModalWindows()` сама находит
+  // `.modal-backdrop > .modal` и один раз (свой же `dataset.windowEnhanced`)
+  // добавляет полосу с заголовком (переносит `<h1>`), кнопки ⛶/✕ и ручку
+  // ресайза — вызывать безопасно на каждый показ, повторный вызов ничего
+  // не делает.
+  deps.enhanceModalWindows();
 }
 
 function ensureMounted() {
   if (mounted) return;
   injectStyles();
   const host = document.getElementById("chess-flat-overlay-root");
-  host.innerHTML = `<div id="chess-flat-backdrop" style="display:none"><div id="chess-flat"></div></div>`;
+  // `<h1>` — СТАТИЧНЫЙ, вне `#chess-flat` (тот целиком перестраивается
+  // каждый `render()`): `enhanceModalWindows` переносит заголовок в полосу
+  // ОДИН раз при первом показе, и он должен пережить все последующие
+  // перерисовки содержимого, а не пересоздаваться каждый раз обычным
+  // текстом внутри экрана.
+  host.innerHTML = `<div id="chess-flat-backdrop" class="modal-backdrop"><div class="modal">` +
+    `<h1 class="cf-modal-title">Шахматка</h1><div id="chess-flat"></div></div></div>`;
   backdrop = document.getElementById("chess-flat-backdrop");
   root = document.getElementById("chess-flat");
   root.addEventListener("click", onRootClick);
@@ -1105,14 +1108,22 @@ function injectStyles() {
 // «лишнее»: без него это наложение вернётся при первом же
 // совпадении имени класса.
 const CSS_TEXT = `
-#chess-flat-backdrop{position:fixed;inset:0;z-index:500;background:light-dark(#f2f4f7,#14161a);overflow-x:hidden;overflow-y:auto;flex-direction:column}
-#chess-flat{--cf-bg:light-dark(#f2f4f7,#14161a);--cf-paper:light-dark(#fff,#1e2126);--cf-soft:light-dark(#f7f8fa,#262a30);--cf-line:light-dark(#dde1e6,#424750);--cf-ink:light-dark(#1a1d21,#e8eaed);--cf-muted:light-dark(#626b78,#abb2be);--cf-blue:light-dark(#1353d6,#8bb4ff);--cf-bluefill:light-dark(#edf3ff,#223957);--cf-done:light-dark(#e9f5ee,#203b2d);--cf-donetext:light-dark(#267547,#9edcb4);--cf-work:light-dark(#fff3dc,#44371f);--cf-worktext:light-dark(#815507,#f0cc87);color-scheme:light dark;background:var(--cf-bg);color:var(--cf-ink);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100%;min-width:0;width:100%;display:flex;flex-direction:column}
-#chess-flat *{box-sizing:border-box;margin:0;position:static;border-radius:0;box-shadow:none}#chess-flat button,#chess-flat input,#chess-flat select{font:inherit;color:inherit}#chess-flat button{cursor:pointer}#chess-flat button:disabled{cursor:default;opacity:.45}#chess-flat [hidden]{display:none!important}#chess-flat h1,#chess-flat h2,#chess-flat p{margin:0}#chess-flat h1{font-size:20px;font-weight:500;letter-spacing:-.5px}#chess-flat h2{font-size:15px;font-weight:500}#chess-flat .muted{color:var(--cf-muted)}#chess-flat .small{font-size:12px}#chess-flat .top{padding:8px 12px;background:var(--cf-paper);border-bottom:1px solid var(--cf-line)}#chess-flat .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0}#chess-flat .between{justify-content:space-between}#chess-flat .crumb{font-size:12px;color:var(--cf-muted);margin-bottom:3px}#chess-flat .view-label{padding:5px 9px;background:var(--cf-bluefill);color:var(--cf-blue);border-radius:5px;font-size:12px}#chess-flat .button{border:1px solid var(--cf-line);background:var(--cf-paper);padding:6px 10px;border-radius:7px;white-space:nowrap}#chess-flat .button.primary{background:var(--cf-blue);color:light-dark(#fff,#102039);border-color:var(--cf-blue)}#chess-flat .button.ghost{background:transparent;border-color:transparent}#chess-flat .button:hover:not(:disabled){filter:brightness(.96)}#chess-flat .toolbar{background:var(--cf-paper);padding:8px 12px;display:flex;align-items:end;gap:14px;flex-wrap:nowrap;border-bottom:1px solid var(--cf-line)}#chess-flat .toolbar label.field{flex:0 0 auto}#chess-flat .toolbar-hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#chess-flat label.field{display:grid;gap:5px;font-size:12px;color:var(--cf-muted)}#chess-flat select,#chess-flat input[type=date]{height:36px;border:1px solid var(--cf-line);background:var(--cf-paper);border-radius:6px;padding:6px 9px;color:var(--cf-ink)}#chess-flat .date-controls{display:flex;gap:4px}#chess-flat .tabs{display:flex;border-bottom:1px solid var(--cf-line);background:var(--cf-paper);padding:0 12px;gap:24px}#chess-flat .tab{background:none;border:0;border-bottom:3px solid transparent;padding:7px 0;color:var(--cf-muted)}#chess-flat .tab[aria-selected=true]{border-bottom-color:var(--cf-blue);color:var(--cf-blue);font-weight:500}
-#chess-flat .workspace{display:block;padding:10px 12px}#chess-flat .navigator{border:0;padding:0;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:9px}
+/* Всплывающее окно (2026-09-15, живой запрос — «как с другими доп
+   формами»): backdrop/.modal — общие классы приложения (.modal-backdrop
+   центрирует, enhanceModalWindows добавляет полосу ⛶/✕ и ручку ресайза),
+   размеры и внутренняя раскладка — свои, под ширину матрицы. Разворот на
+   весь экран — готовый общий класс .modal-window-maximized (!important,
+   ничего дополнительно переопределять не нужно). */
+#chess-flat-backdrop .modal{width:min(96vw,1400px);height:min(92vh,880px);max-width:96vw;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;padding:0;margin:0;background:light-dark(#f2f4f7,#14161a)}
+#chess-flat-backdrop .modal-window-bar{position:static;top:auto;margin:0;border-radius:8px 8px 0 0;flex:0 0 auto}
+#chess-flat{--cf-bg:light-dark(#f2f4f7,#14161a);--cf-paper:light-dark(#fff,#1e2126);--cf-soft:light-dark(#f7f8fa,#262a30);--cf-line:light-dark(#dde1e6,#424750);--cf-ink:light-dark(#1a1d21,#e8eaed);--cf-muted:light-dark(#626b78,#abb2be);--cf-blue:light-dark(#1353d6,#8bb4ff);--cf-bluefill:light-dark(#edf3ff,#223957);--cf-done:light-dark(#e9f5ee,#203b2d);--cf-donetext:light-dark(#267547,#9edcb4);--cf-work:light-dark(#fff3dc,#44371f);--cf-worktext:light-dark(#815507,#f0cc87);color-scheme:light dark;background:var(--cf-bg);color:var(--cf-ink);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;flex:1 1 auto;min-height:0;min-width:0;width:100%;display:flex;flex-direction:column}
+#chess-flat *{box-sizing:border-box;margin:0;position:static;border-radius:0;box-shadow:none}#chess-flat button,#chess-flat input,#chess-flat select{font:inherit;color:inherit}#chess-flat button{cursor:pointer}#chess-flat button:disabled{cursor:default;opacity:.45}#chess-flat [hidden]{display:none!important}#chess-flat h1,#chess-flat h2,#chess-flat p{margin:0}#chess-flat h1{font-size:20px;font-weight:500;letter-spacing:-.5px}#chess-flat h2{font-size:15px;font-weight:500}#chess-flat .muted{color:var(--cf-muted)}#chess-flat .small{font-size:12px}#chess-flat .top{flex:0 0 auto;padding:8px 12px;background:var(--cf-paper);border-bottom:1px solid var(--cf-line)}#chess-flat .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0}#chess-flat .between{justify-content:space-between}#chess-flat .button{border:1px solid var(--cf-line);background:var(--cf-paper);padding:6px 10px;border-radius:7px;white-space:nowrap}#chess-flat .button.primary{background:var(--cf-blue);color:light-dark(#fff,#102039);border-color:var(--cf-blue)}#chess-flat .button.ghost{background:transparent;border-color:transparent}#chess-flat .button:hover:not(:disabled){filter:brightness(.96)}#chess-flat .toolbar{flex:0 0 auto;background:var(--cf-paper);padding:8px 12px;display:flex;align-items:end;gap:14px;flex-wrap:nowrap;border-bottom:1px solid var(--cf-line)}#chess-flat .toolbar label.field{flex:0 0 auto}#chess-flat .toolbar-hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#chess-flat label.field{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--cf-muted);white-space:nowrap}#chess-flat select,#chess-flat input[type=date]{height:36px;border:1px solid var(--cf-line);background:var(--cf-paper);border-radius:6px;padding:6px 9px;color:var(--cf-ink)}#chess-flat .date-controls{display:flex;gap:4px}#chess-flat .tabs{flex:0 0 auto;display:flex;border-bottom:1px solid var(--cf-line);background:var(--cf-paper);padding:0 12px;gap:24px}
+#chess-flat>section[role=tabpanel]{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden}#chess-flat .tab{background:none;border:0;border-bottom:3px solid transparent;padding:7px 0;color:var(--cf-muted)}#chess-flat .tab[aria-selected=true]{border-bottom-color:var(--cf-blue);color:var(--cf-blue);font-weight:500}
+#chess-flat .workspace{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;padding:10px 12px}#chess-flat .workspace>main{flex:1 1 auto;min-height:0;min-width:0;display:flex;flex-direction:column}#chess-flat .navigator{flex:0 0 auto;border:0;padding:0;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:9px}
 #chess-flat .navigator label{display:flex;align-items:center;gap:8px;font-size:12px}#chess-flat .navigator select{height:30px;padding:3px 7px}
 #chess-flat .navigator details{font-size:12px;color:var(--cf-muted)}#chess-flat .navigator details[open]{width:100%}#chess-flat .navigator summary{cursor:pointer}
 #chess-flat .overview{width:120px;height:256px;margin:5px 0;display:block}#chess-flat .overview rect{fill:var(--cf-paper);stroke:var(--cf-line);stroke-width:1}#chess-flat .overview rect.selected{fill:var(--cf-bluefill);stroke:var(--cf-blue)}#chess-flat .overview text{fill:var(--cf-muted);font:9px sans-serif}
-#chess-flat .board-head{margin-bottom:6px;display:flex;justify-content:space-between;gap:10px;align-items:start;flex-wrap:wrap}/* overflow-x:auto с overflow-y:visible не работает — спецификация CSS
+/* overflow-x:auto с overflow-y:visible не работает — спецификация CSS
    сама принудительно вычисляет overflow-y как auto, если overflow-x не
    visible («UA-computed value», обойти нельзя). Раз оба всё равно auto —
    даём этому явную и полезную роль: «.grid-scroll» сам становится
@@ -1122,8 +1133,13 @@ const CSS_TEXT = `
    целиком — без этой явной высоты sticky был бы приклеен к контейнеру,
    который сам целиком уезжает вместе со страницей, и подписи секций
    пропадали бы за пределами экрана при скролле (живой запрос
-   пользователя 2026-09-14). */
-#chess-flat .grid-scroll{overflow:auto;max-height:calc(100vh - 300px);max-width:100%}#chess-flat .grid{min-width:640px;display:grid;gap:4px}
+   пользователя 2026-09-14). Высота — с 2026-09-15 не «calc(100vh - N)»
+   (число «на глаз», подобранное под экран целиком), а «flex:1 1 auto»:
+   экран теперь живёт во всплывающем окне переменного размера (обычное/
+   развёрнутое/руками растянутое за уголок), и высота считается от
+   РЕАЛЬНО оставшегося места в цепочке flex-родителей («.workspace>main»
+   выше, «#chess-flat» и панель вкладки), а не от всего окна браузера. */
+#chess-flat .grid-scroll{overflow:auto;flex:1 1 auto;min-height:0;max-width:100%}#chess-flat .grid{min-width:640px;display:grid;gap:4px}
 #chess-flat .section-head{font-size:13px;font-weight:500;padding:4px 0 6px;position:sticky;top:0;background:var(--cf-bg);z-index:2}#chess-flat .grid-corner{position:sticky;top:0;background:var(--cf-bg);z-index:2}#chess-flat .floor-label{padding-top:7px;text-align:center;font-size:16px;font-weight:500;color:var(--cf-muted)}#chess-flat .floor-label span{display:block;font-size:10px;font-weight:400}
 #chess-flat .block{background:var(--cf-paper);border:1px solid var(--cf-line);border-radius:3px;overflow:hidden}#chess-flat .block-title{display:flex;justify-content:space-between;padding:3px 8px;font-size:12px;background:var(--cf-soft);font-weight:500;gap:5px}#chess-flat .block-id{color:var(--cf-muted);font-weight:400}
 #chess-flat .column-heads,#chess-flat .op{display:grid;grid-template-columns:1fr 1fr}#chess-flat .column-heads{color:var(--cf-muted);font-size:11px;border-top:1px solid var(--cf-line);border-bottom:1px solid var(--cf-line)}#chess-flat .column-heads span{padding:5px 10px}#chess-flat .column-heads span+span{border-left:1px solid var(--cf-line)}#chess-flat .op+.op{border-top:1px solid var(--cf-line)}
@@ -1134,7 +1150,7 @@ const CSS_TEXT = `
 #chess-flat .footer{padding:9px 12px;border-top:1px solid var(--cf-line);background:var(--cf-paper);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}#chess-flat .foot-status{font-weight:500}#chess-flat .status-sub{margin-top:3px;color:var(--cf-muted);font-size:12px}
 #chess-flat .notice{color:var(--cf-blue);background:var(--cf-bluefill);padding:9px 12px;margin:0 12px 12px;border-radius:6px;font-size:12px}#chess-flat .error{color:light-dark(#bc352e,#ff988f);padding:0 12px 12px;font-size:12px}
 #chess-flat .review{background:var(--cf-paper);padding:12px;margin:10px 12px;border:1px solid var(--cf-blue);border-radius:9px}#chess-flat .review table{border-collapse:collapse;width:100%;font-size:13px;margin:15px 0}#chess-flat .review th,#chess-flat .review td{text-align:left;padding:9px;border-bottom:1px solid var(--cf-line)}#chess-flat .review th{font-weight:500;color:var(--cf-muted);font-size:12px}
-#chess-flat .print-settings{padding:9px 12px;display:flex;gap:10px;align-items:end;flex-wrap:wrap}#chess-flat .paper-wrap{padding:0 12px 8px;overflow:auto}
+#chess-flat .print-settings{flex:0 0 auto;padding:9px 12px;display:flex;gap:10px;align-items:end;flex-wrap:wrap}#chess-flat .paper-wrap{flex:1 1 auto;min-height:0;padding:0 12px 8px;overflow:auto}
 #chess-flat .paper{width:210mm;min-width:210mm;min-height:297mm;padding:6mm;margin:0 auto;border:0;box-shadow:0 0 0 1px #b9bdc3;color:#171717;background:#fff;line-height:1.15;font-size:9pt}
 #chess-flat .paper.a3{width:297mm;min-width:297mm;min-height:420mm}
 #chess-flat .sheet-head{height:12mm;font:9pt/1.1 Arial,sans-serif}#chess-flat .sheet-head>div{display:flex;align-items:center;justify-content:space-between;gap:3mm;height:3.7mm;white-space:nowrap}#chess-flat .sheet-head strong{font-size:11pt;font-weight:500}
@@ -1153,15 +1169,46 @@ const CSS_TEXT = `
 @media(max-width:800px){#chess-flat .navigator{align-items:start}#chess-flat .navigator label{flex-wrap:wrap}#chess-flat .navigator .overview{display:block}#chess-flat .toolbar{align-items:end}#chess-flat .sheet-head>div,#chess-flat .sheet-foot>div{flex-wrap:nowrap}#chess-flat .review{margin:10px;padding:10px}#chess-flat .review table{min-width:520px}}
 @media(pointer:coarse){#chess-flat button,#chess-flat input,#chess-flat select{min-height:40px}#chess-flat .entry input{font-size:16px}}
 @media print{
+  /* .open в каждом селекторе ниже — иначе печать ЛЮБОЙ другой формы (не
+     только этой) после того, как «Плоскую шахматку» хоть раз открывали за
+     сеанс, тоже принудительно показывала бы её (закрытую, с прошлым
+     содержимым) — та же ошибка, что нашлась и исправилась симметрично у
+     #reports-backdrop в index.html тем же живым отчётом пользователя
+     2026-09-15 («печать бланка обхода выводила пустую страницу „Отчёт“» —
+     оказалось, ровно наоборот: #reports-backdrop лез в печать шахматки). */
+  /* Физический размер листа ЗАКРЕПЛЁН здесь (Paged Media, «page:»,
+     поддерживается Chromium), а не оставлен на усмотрение диалога печати
+     ОС/принтера (живой отчёт пользователя 2026-09-15 — на печати съезжали
+     горизонтальные линии и проценты вылезали за границы строки). Раньше
+     «.paper» на печати терял свою фиксированную ширину/паддинг («width:
+     auto», «padding:0» ниже) — при печати с полями/размером листа, слегка
+     отличающимися от 210×297/297×420мм, графа «Операция» получала ДРУГУЮ
+     фактическую ширину, чем при измерении разбивки на листы на экране
+     («measureLevelsFit», тот же класс «.paper», но с фиксированной
+     шириной) — длинное имя операции переносилось на большее число строк,
+     чем отмерено, высота строки не совпадала с рассчитанной, и текст
+     соседних строк накладывался друг на друга. Теперь размер страницы и
+     ширина/паддинг «.paper» СОВПАДАЮТ на экране и на печати всегда. */
+  @page a4{size:210mm 297mm;margin:0}
+  @page a3{size:297mm 420mm;margin:0}
+  #chess-flat .paper{page:a4}
+  #chess-flat .paper.a3{page:a3}
   body *{visibility:hidden}
-  #chess-flat-backdrop,#chess-flat-backdrop *{visibility:visible}
-  #chess-flat-backdrop{position:absolute;inset:0;background:#fff;overflow:visible;display:block}
-  #chess-flat{border:0;border-radius:0;min-height:0}
+  #chess-flat-backdrop.open,#chess-flat-backdrop.open *{visibility:visible}
+  #chess-flat-backdrop.open{position:absolute;inset:0;background:#fff;overflow:visible;display:block}
+  /* Всплывающее окно (2026-09-15) — на печать возвращаем обычный поток:
+     фикс. размер/скрытие переполнения и добавленную обвязку окна
+     (полоса ⛶/✕, ручка ресайза) в бумагу не переносим, они бумаге не
+     нужны и на печати её только испортили бы клипом по высоте окна. */
+  #chess-flat-backdrop .modal{position:static;width:auto;height:auto;max-width:none;max-height:none;overflow:visible;display:block;padding:0;margin:0}
+  #chess-flat-backdrop .modal-window-bar,#chess-flat-backdrop .modal-window-resize-handle{display:none!important}
+  #chess-flat{border:0;border-radius:0;min-height:0;flex:none;display:block}
+  #chess-flat>section[role=tabpanel]{display:block;flex:none;overflow:visible}
   #chess-flat .top,#chess-flat .toolbar,#chess-flat .tabs,#chess-flat .print-settings,#chess-flat .notice,#chess-flat .footer,#chess-flat .review{display:none!important}
   #chess-flat #cf-paper-preview{display:none!important}
   #chess-flat #cf-paper-print{display:block!important}
-  #chess-flat .paper-wrap{padding:0;overflow:visible}
-  #chess-flat .paper,#chess-flat .paper.a3{width:auto;min-width:0;min-height:0;padding:0;margin:0;border:0;box-shadow:none;break-after:page}
+  #chess-flat .paper-wrap{flex:none;padding:0;overflow:visible}
+  #chess-flat .paper,#chess-flat .paper.a3{margin:0;border:0;box-shadow:none;break-after:page}
   #chess-flat .paper:last-child{break-after:auto}
   #chess-flat .paper-matrix tbody tr{break-inside:avoid}
   #chess-flat .paper-matrix thead{display:table-header-group}
