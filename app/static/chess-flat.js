@@ -489,13 +489,15 @@ function measureLevelsFit(levels, start, sections, format) {
 
 function printCapacitySections(format) {
   const paperWidthMM = format === "A3" ? 297 : 210;
-  const usable = paperWidthMM - 12 - 8; // поля 6+6мм, колонка этажа 8мм
-  // Три графы на секцию (имя операции печатается ПОЛНОСТЬЮ, живой запрос
-  // пользователя 2026-09-14, не сливается с процентом в одной тесной
-  // ячейке): ~30мм под имя (переносится на 2 строки, если не влезает,
-  // высота листа не фиксирована) + 14мм «в системе» + 16мм «новый факт»
-  // под рукописную запись.
-  return Math.max(1, Math.floor(usable / 60));
+  // Колонка «Операция» — ОДНА общая на строку, не по секции (живой запрос
+  // пользователя 2026-09-15, по образцу пользователя — так печатается штатный
+  // отчёт «Шахматка»): резервируем под неё фикс. ширину РАЗ, а не на каждую
+  // секцию — освобождает место под больше секций на листе.
+  const opNameMM = 40;
+  const usable = paperWidthMM - 12 - 8 - opNameMM; // поля 6+6мм, колонка этажа 8мм
+  // Две графы на секцию: 14мм «в системе» + 16мм «на дату» под рукописную
+  // запись.
+  return Math.max(1, Math.floor(usable / 30));
 }
 
 function computePrintPages() {
@@ -558,23 +560,25 @@ function paperHtml(page, index, total) {
     const usedOps = usedOpsForLevel(level, sections);
     if (!usedOps.length) {
       rows += `<tr class="floor-start"><th class="paper-floor">${esc(levelFloorLabel(level))}</th>` +
-        sections.map(() => `<td colspan="3" class="paper-absent"></td>`).join("") + `</tr>`;
+        `<td class="paper-absent"></td>` +
+        sections.map(() => `<td colspan="2" class="paper-absent"></td>`).join("") + `</tr>`;
       continue;
     }
     usedOps.forEach((op, oi) => {
       rows += `<tr class="${oi === 0 ? "floor-start" : ""}">`;
       if (oi === 0) rows += `<th class="paper-floor" rowspan="${usedOps.length}">${esc(levelFloorLabel(level))}</th>`;
+      // Имя операции — ОДНА общая графа на строку, не по секции (живой
+      // запрос пользователя 2026-09-15, по образцу пользователя — образец
+      // штатного отчёта «Шахматка»): раньше повторялось в каждой секции
+      // своей же графой, раздувая ширину листа и оставляя меньше секций на
+      // странице.
+      rows += `<td class="paper-op-name">${esc(op.name)}</td>`;
       for (const section of sections) {
         const block = blockAt(section.id, level);
         const has = block && Object.prototype.hasOwnProperty.call(block.percents, String(op.id));
-        if (!has) { rows += `<td colspan="3" class="paper-absent"></td>`; continue; }
+        if (!has) { rows += `<td colspan="2" class="paper-absent"></td>`; continue; }
         const pct = block.percents[String(op.id)];
-        // Три отдельные графы (живой запрос пользователя 2026-09-14: имя
-        // операции печаталось полностью, текущий факт — отдельной графой,
-        // а не слитно с именем в одной тесной ячейке, где длинное имя
-        // обрезало и имя, и процент разом).
-        rows += `<td class="paper-op-name">${esc(op.name)}</td>` +
-                `<td class="paper-current-pct">${pct}%</td>` +
+        rows += `<td class="paper-current-pct">${pct}%</td>` +
                 `<td class="paper-new"></td>`;
       }
       rows += `</tr>`;
@@ -585,21 +589,21 @@ function paperHtml(page, index, total) {
     : "—";
   return `
     <header class="sheet-head">
-      <div><strong>Шахматка · ${esc(boardName())}</strong><span>Дата факта: <b>${esc(fmtDate(state.date))}</b></span></div>
-      <div><span>${esc(state.objectName)} · уровни ${esc(rangeLabel)}</span><span>Ответственный: __________________</span></div>
-      <div><span>Снимок системы: ${esc(fmtDate(state.snapshotAt))} · итоговый процент 0–100</span><span>${esc(state.printFormat)} · книжная</span></div>
+      <div><strong>Шахматка · ${esc(boardName())}</strong></div>
+      <div><span>${esc(state.objectName)} · уровни ${esc(rangeLabel)}</span></div>
+      <div><span>Снимок системы: ${esc(fmtDate(state.snapshotAt))}</span><span>Дата факта: <b>${esc(fmtDate(state.date))}</b></span></div>
     </header>
     <table class="paper-matrix" aria-label="Бланк обхода по этажам и секциям">
-      <colgroup><col style="width:8mm">${sections.map(() => "<col><col style=\"width:14mm\"><col style=\"width:16mm\">").join("")}</colgroup>
+      <colgroup><col style="width:8mm"><col>${sections.map(() => "<col style=\"width:14mm\"><col style=\"width:16mm\">").join("")}</colgroup>
       <thead>
-        <tr><th rowspan="2">Эт.</th>${sections.map((s) => `<th colspan="3">${esc(s.name || s.code)}</th>`).join("")}</tr>
-        <tr>${sections.map(() => "<th>Операция</th><th>В системе, %</th><th>Новый факт, %</th>").join("")}</tr>
+        <tr><th rowspan="2">Эт.</th><th rowspan="2">Операция</th>${sections.map((s) => `<th colspan="2">${esc(s.name || s.code)}</th>`).join("")}</tr>
+        <tr>${sections.map(() => "<th>В системе</th><th>На дату</th>").join("")}</tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
     <footer class="sheet-foot">
-      <div>Пусто — без записи; 0 — нулевой факт.</div>
-      <div><span>Подпись: ______________________</span><span>Бланк ${esc(state.printBlankId)} · Лист ${index + 1} из ${total}</span></div>
+      <div>Пусто — без записи; 0 — нулевой факт; итоговый процент 0–100.</div>
+      <div><span>Ответственный: ________________ Подпись: ________________</span><span>Бланк ${esc(state.printBlankId)} · Лист ${index + 1} из ${total}</span></div>
     </footer>`;
 }
 

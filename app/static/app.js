@@ -30128,13 +30128,19 @@ async function loadRevitPlanElements() {
   applyMfrMode();
 }
 
-// Блок в плане и в 3D рисуется НА ЭТОТ отступ шире своих осевых границ
-// (живой запрос пользователя, 2026-09-01) — сами стены/фасад иногда чуть
-// выступают за габарит блока (толщина кладки, балконная плита), и клик
-// точно по видимой грани здания промахивался мимо блока. Отступ — только
-// для ОТРИСОВКИ и попадания клика, сама геометрия блока (`blocksData`,
-// общая с полосами фасада) не меняется.
-const MFR_BLOCK_MARGIN_MM = 200;
+// До 2026-09-14 блок в плане и в 3D рисовался и хит-тестился на 200мм шире
+// своих осевых границ (2026-09-01) — сами стены/фасад иногда чуть выступают
+// за габарит блока (толщина кладки, балконная плита), и клик точно по
+// видимой грани здания промахивался мимо блока. Убрано живым запросом
+// пользователя: с приходом фасада из FBX раздутый блок перестал помещаться
+// внутрь фасадной поверхности — вылезал за неё. Клик по блоку вместо
+// элемента под ним по-прежнему уверенно работает и БЕЗ запаса геометрии —
+// за счёт ПРИОРИТЕТА, не размера: в 3D `bindMfr3DPick` проверяет меши
+// блоков раньше мешей элементов, в 2D блоки рисуются В SVG ПОСЛЕ элементов
+// (`paths.join("") + blockRects.join("")` ниже) и потому перекрывают их на
+// экране — `elementFromPoint` находит блок первым везде, где тот реально
+// есть. Геометрия блока (`blocksData`, общая с полосами фасада) теперь
+// используется как есть, без добавочного отступа.
 
 // Те же цвета, что у полосы прогресса в панели блока (.bp-bar-fill) и у
 // точек матрицы «Статусы» (.wp-dot) — одна палитра статуса на весь экран.
@@ -30440,8 +30446,8 @@ function drawRevitPlan(data) {
     // <rect> на каждый, все с одним и тем же data-block-id — клик на
     // любой из них ведёт себя одинаково (см. обработчик клика по SVG).
     const rects = b.boxes.map((box) => {
-      const x0 = box.x0 - ox - minX - MFR_BLOCK_MARGIN_MM, x1 = box.x1 - ox - minX + MFR_BLOCK_MARGIN_MM,
-            y0 = box.y0 - oy - minY - MFR_BLOCK_MARGIN_MM, y1 = box.y1 - oy - minY + MFR_BLOCK_MARGIN_MM;
+      const x0 = box.x0 - ox - minX, x1 = box.x1 - ox - minX,
+            y0 = box.y0 - oy - minY, y1 = box.y1 - oy - minY;
       const rx = Math.min(x0, x1), ry = h - Math.max(y0, y1),
             rw = Math.abs(x1 - x0), rh = Math.abs(y1 - y0);
       return { rx, ry, rw, rh, html: `<rect data-block-id="${b.id}" x="${rx}" y="${ry}" width="${rw}" height="${rh}"
@@ -33076,8 +33082,8 @@ async function buildMfr3D() {
       // Крупнейший прямоугольник несёт наклейку процентом.
       let крупнейший = null;
       for (const box of b.boxes) {
-        const width = box.x1 - box.x0 + MFR_BLOCK_MARGIN_MM * 2,
-              depth = box.y1 - box.y0 + MFR_BLOCK_MARGIN_MM * 2;
+        const width = box.x1 - box.x0,
+              depth = box.y1 - box.y0;
         if (width <= 0 || depth <= 0) continue;
         const geometry = new THREE.BoxGeometry(width, depth, height);
         const material = new THREE.MeshLambertMaterial({
@@ -33085,8 +33091,8 @@ async function buildMfr3D() {
           depthWrite: false, side: THREE.DoubleSide,
         });
         const mesh = new THREE.Mesh(geometry, material);
-        const centerX = (box.x0 - ox) + width / 2 - MFR_BLOCK_MARGIN_MM,
-              centerY = (box.y0 - oy) + depth / 2 - MFR_BLOCK_MARGIN_MM,
+        const centerX = (box.x0 - ox) + width / 2,
+              centerY = (box.y0 - oy) + depth / 2,
               centerZ = (b.z0 - низ) + height / 2;
         mesh.position.set(centerX, centerY, centerZ);
         mesh.userData.blockId = b.id;
