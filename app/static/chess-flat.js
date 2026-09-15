@@ -546,11 +546,26 @@ function boardName() {
 // компромисс — убираем только те операции, что не нужны НИ ОДНОМУ из
 // показанных на листе блоков этого этажа, а там, где применимо лишь к
 // части секций, у остальных в этой же строке просто пусто).
+//
+// Группировка по ИМЕНИ, а не по id (живой запрос пользователя 2026-09-15,
+// скриншот боевого бланка): один и тот же вид работ у разных секций может
+// быть заведён РАЗНЫМИ строками справочника `work_types` (разный id, то же
+// имя — типично для «Паркинг»/техэтажей, настроенных отдельно от типовых
+// секций) — без группировки такая операция печаталась ДВУМЯ строками на
+// одном этаже вместо одной, хотя человеку с бланком обхода это ровно одна
+// строка работ. Возвращает `{name, ids}` — `ids` может быть несколько,
+// applicable-проверка и поиск процента ниже перебирают их все.
 function usedOpsForLevel(level, sections) {
-  return state.layout.ops.filter((op) => sections.some((s) => {
+  const applicable = state.layout.ops.filter((op) => sections.some((s) => {
     const block = blockAt(s.id, level);
     return block && Object.prototype.hasOwnProperty.call(block.percents, String(op.id));
   }));
+  const byName = new Map();
+  for (const op of applicable) {
+    if (!byName.has(op.name)) byName.set(op.name, []);
+    byName.get(op.name).push(op.id);
+  }
+  return [...byName.entries()].map(([name, ids]) => ({ name, ids }));
 }
 
 function paperHtml(page, index, total) {
@@ -575,9 +590,9 @@ function paperHtml(page, index, total) {
       rows += `<td class="paper-op-name">${esc(op.name)}</td>`;
       for (const section of sections) {
         const block = blockAt(section.id, level);
-        const has = block && Object.prototype.hasOwnProperty.call(block.percents, String(op.id));
-        if (!has) { rows += `<td colspan="2" class="paper-absent"></td>`; continue; }
-        const pct = block.percents[String(op.id)];
+        const matchId = block ? op.ids.find((id) => Object.prototype.hasOwnProperty.call(block.percents, String(id))) : undefined;
+        if (matchId === undefined) { rows += `<td colspan="2" class="paper-absent"></td>`; continue; }
+        const pct = block.percents[String(matchId)];
         rows += `<td class="paper-current-pct">${pct}%</td>` +
                 `<td class="paper-new"></td>`;
       }
