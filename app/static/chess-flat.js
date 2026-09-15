@@ -940,6 +940,19 @@ function printPanelHtml() {
       ${pages.length} ${plural(pages.length, ["листе", "листах", "листах"])}.</div>`;
 }
 
+// Заголовок всплывающего окна — «Шахматка. <объект>» (живой запрос
+// пользователя 2026-09-15: раньше объект показывался отдельной строкой в
+// теле экрана, теперь — прямо в заголовке окна). Сам заголовок —
+// статичный `<h1 class="cf-modal-title">` (`ensureMounted`), который
+// `enhanceModalWindows` переносит в полосу окна ОДИН раз при первом
+// показе и дальше не трогает; `render()` целиком пересобирает
+// `#chess-flat`, но ЭТОТ узел вне его — обновлять его текст нужно здесь,
+// напрямую, а не через шаблон innerHTML.
+function updateModalTitle() {
+  const titleEl = document.querySelector(".cf-modal-title");
+  if (titleEl) titleEl.textContent = state.objectName ? `Шахматка. ${state.objectName}` : "Шахматка";
+}
+
 function render() {
   if (!root) return;
   const dateVal = state.date;
@@ -948,10 +961,8 @@ function render() {
     ? "Выбрана прошлая дата. Слева остаётся текущий статус в системе; новый факт будет записан в историю на выбранную дату."
     : future ? "Выбрана будущая дата. Перед записью проверьте дату факта." : "";
 
+  updateModalTitle();
   root.innerHTML = `
-    <header class="top">
-      <span class="muted small">${esc(state.objectName)}</span>
-    </header>
     <div class="toolbar">
       <label class="field">Доска<select id="cf-board" ${state.reviewing ? "disabled" : ""}>
         ${state.tracks.map((t) => `<option value="${esc(t["код"])}" ${t["код"] === state.trackCode ? "selected" : ""}>${esc(t["название"])}</option>`).join("")}
@@ -1227,7 +1238,7 @@ const CSS_TEXT = `
 #chess-flat-backdrop .modal{width:min(96vw,1400px);height:min(92vh,880px);max-width:96vw;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;padding:0;margin:0;background:light-dark(#f2f4f7,#14161a)}
 #chess-flat-backdrop .modal-window-bar{position:static;top:auto;margin:0;border-radius:8px 8px 0 0;flex:0 0 auto}
 #chess-flat{--cf-bg:light-dark(#f2f4f7,#14161a);--cf-paper:light-dark(#fff,#1e2126);--cf-soft:light-dark(#f7f8fa,#262a30);--cf-line:light-dark(#dde1e6,#424750);--cf-ink:light-dark(#1a1d21,#e8eaed);--cf-muted:light-dark(#626b78,#abb2be);--cf-blue:light-dark(#1353d6,#8bb4ff);--cf-bluefill:light-dark(#edf3ff,#223957);--cf-done:light-dark(#e9f5ee,#203b2d);--cf-donetext:light-dark(#267547,#9edcb4);--cf-work:light-dark(#fff3dc,#44371f);--cf-worktext:light-dark(#815507,#f0cc87);color-scheme:light dark;background:var(--cf-bg);color:var(--cf-ink);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;flex:1 1 auto;min-height:0;min-width:0;width:100%;display:flex;flex-direction:column}
-#chess-flat *{box-sizing:border-box;margin:0;position:static;border-radius:0;box-shadow:none}#chess-flat button,#chess-flat input,#chess-flat select{font:inherit;color:inherit}#chess-flat button{cursor:pointer}#chess-flat button:disabled{cursor:default;opacity:.45}#chess-flat [hidden]{display:none!important}#chess-flat h1,#chess-flat h2,#chess-flat p{margin:0}#chess-flat h1{font-size:20px;font-weight:500;letter-spacing:-.5px}#chess-flat h2{font-size:15px;font-weight:500}#chess-flat .muted{color:var(--cf-muted)}#chess-flat .small{font-size:12px}#chess-flat .top{flex:0 0 auto;padding:8px 12px;background:var(--cf-paper);border-bottom:1px solid var(--cf-line)}#chess-flat .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0}#chess-flat .between{justify-content:space-between}#chess-flat .button{border:1px solid var(--cf-line);background:var(--cf-paper);padding:6px 10px;border-radius:7px;white-space:nowrap}#chess-flat .button.primary{background:var(--cf-blue);color:light-dark(#fff,#102039);border-color:var(--cf-blue)}#chess-flat .button.ghost{background:transparent;border-color:transparent}#chess-flat .button:hover:not(:disabled){filter:brightness(.96)}#chess-flat .toolbar{flex:0 0 auto;background:var(--cf-paper);padding:8px 12px;display:flex;align-items:end;gap:14px;flex-wrap:nowrap;border-bottom:1px solid var(--cf-line)}#chess-flat .toolbar label.field{flex:0 0 auto}#chess-flat .toolbar-hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#chess-flat label.field{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--cf-muted);white-space:nowrap}#chess-flat select,#chess-flat input[type=date]{height:36px;border:1px solid var(--cf-line);background:var(--cf-paper);border-radius:6px;padding:6px 9px;color:var(--cf-ink)}#chess-flat .date-controls{display:flex;gap:4px}#chess-flat .tabs{flex:0 0 auto;display:flex;border-bottom:1px solid var(--cf-line);background:var(--cf-paper);padding:0 12px;gap:24px}
+#chess-flat *{box-sizing:border-box;margin:0;position:static;border-radius:0;box-shadow:none}#chess-flat button,#chess-flat input,#chess-flat select{font:inherit;color:inherit}#chess-flat button{cursor:pointer}#chess-flat button:disabled{cursor:default;opacity:.45}#chess-flat [hidden]{display:none!important}#chess-flat h1,#chess-flat h2,#chess-flat p{margin:0}#chess-flat h1{font-size:20px;font-weight:500;letter-spacing:-.5px}#chess-flat h2{font-size:15px;font-weight:500}#chess-flat .muted{color:var(--cf-muted)}#chess-flat .small{font-size:12px}#chess-flat .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0}#chess-flat .between{justify-content:space-between}#chess-flat .button{border:1px solid var(--cf-line);background:var(--cf-paper);padding:6px 10px;border-radius:7px;white-space:nowrap}#chess-flat .button.primary{background:var(--cf-blue);color:light-dark(#fff,#102039);border-color:var(--cf-blue)}#chess-flat .button.ghost{background:transparent;border-color:transparent}#chess-flat .button:hover:not(:disabled){filter:brightness(.96)}#chess-flat .toolbar{flex:0 0 auto;background:var(--cf-paper);padding:8px 12px;display:flex;align-items:end;gap:14px;flex-wrap:nowrap;border-bottom:1px solid var(--cf-line)}#chess-flat .toolbar label.field{flex:0 0 auto}#chess-flat .toolbar-hint{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#chess-flat label.field{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--cf-muted);white-space:nowrap}#chess-flat select,#chess-flat input[type=date]{height:36px;border:1px solid var(--cf-line);background:var(--cf-paper);border-radius:6px;padding:6px 9px;color:var(--cf-ink)}#chess-flat .date-controls{display:flex;gap:4px}#chess-flat .tabs{flex:0 0 auto;display:flex;border-bottom:1px solid var(--cf-line);background:var(--cf-paper);padding:0 12px;gap:24px}
 #chess-flat>section[role=tabpanel]{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden}#chess-flat .tab{background:none;border:0;border-bottom:3px solid transparent;padding:7px 0;color:var(--cf-muted)}#chess-flat .tab[aria-selected=true]{border-bottom-color:var(--cf-blue);color:var(--cf-blue);font-weight:500}
 #chess-flat .workspace{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;padding:10px 12px}#chess-flat .workspace>main{flex:1 1 auto;min-height:0;min-width:0;display:flex;flex-direction:column}#chess-flat .navigator{flex:0 0 auto;border:0;padding:0;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:9px}
 #chess-flat .navigator label{display:flex;align-items:center;gap:8px;font-size:12px}#chess-flat .navigator select{height:30px;padding:3px 7px}
