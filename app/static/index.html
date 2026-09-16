@@ -3162,6 +3162,20 @@
      внутри flex-строки становится flex-basis, и выбор растягивался во всю
      ширину формы, а подпись «Вид инструкции» ломалась на две строки. */
   #training-role-box select { flex: 0 0 auto; width: auto; }
+  /* Инструкция: было ТРИ уровня скролла разом — форма (.modal-sticky-scroll),
+     а внутри неё ещё оглавление и текст раздела со своим (2026-09-16, живой
+     отчёт: «есть часть, которая скроллится сама, а внутри неё 2 колонки
+     тоже отдельно скроллятся»). Причина — колонки мерялись от вьюпорта
+     (60vh) вместо доступного места В ФОРМЕ, и при длинной шапке (плашка
+     «материал пишется» и т.п.) сумма высот превышала бы .modal-sticky-scroll,
+     и та начинала бы прокручиваться тоже.
+     Здесь тот же приём, что у #actions-panel-modal: .modal-sticky-scroll
+     перестаёт скроллиться сам и просто передаёт свою (уже ограниченную
+     `.modal.modal-sticky`) высоту дальше —flex-колонкой; сама прокрутка
+     остаётся только внутри оглавления и текста раздела. */
+  #training-backdrop .modal-sticky-scroll { overflow-y: hidden; display: flex; flex-direction: column; }
+  #training-guide { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  #training-test, #training-my, #training-people { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   .modal-sticky-head h2 { margin-bottom: 14px; }
   .modal-sticky-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 24px; margin: 10px 0; }
   /* Форма панелей облицовки шахт монтируется ES-модулем внутри своего
@@ -5104,6 +5118,13 @@
                      объектах типа МФР (`_ТОЛЬКО_МФР`, app/features.py),
                      остальным ролям/объектам пункт гасится автоматически. -->
                 <button id="menu-mfr-colors" data-feature="revit_model" data-feature-kind="write">Цвета модели</button>
+                <!-- Прямой переход в инструкцию по МФР (2026-09-16, живой
+                     отчёт: «Обучение» в «Действия» есть, но внизу длинного
+                     списка, скроллом легко не заметить). Гейт ТОТ ЖЕ, что у
+                     пункта «Обучение» (`training`, а не `revit_model`): это
+                     ссылка на инструкцию целиком, а не на настройку модели, и
+                     видна должна быть ровно тем, кому доступно «Обучение». -->
+                <button id="menu-mfr-help" data-feature="training" data-feature-kind="read">Справка</button>
               </div>
             </div>
           </div>
@@ -8525,6 +8546,13 @@
     </div>
     <div class="modal-sticky-foot">
       <div class="actions">
+        <!-- Переход в справку (2026-09-16, живой запрос): читаешь про новую
+             функциональность в «Что нового» — тут же, не закрывая и заново не
+             ища «Обучение» в «Действия», открыть инструкцию по ней. Гейт тот
+             же, что у пункта меню «Обучение» — см. #changelog-backdrop
+             [data-feature] в applyRolePermissions. -->
+        <button class="btn btn-secondary" id="changelog-open-training"
+                data-feature="training" data-feature-kind="read">Справка</button>
         <!-- «Ознакомился» фиксируется ЗА ПОЛЬЗОВАТЕЛЕМ (2026-08-03, живой
              запрос): пока кнопка не нажата, форма открывается при каждом
              входе, даже если её просто закрыли. Появится новая запись в

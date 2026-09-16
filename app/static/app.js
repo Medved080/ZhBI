@@ -795,7 +795,12 @@ async function applyRolePermissions() {
   // #toolbar добавлен ради кнопки карты (2026-09-08): она стоит рядом с
   // крошкой выбора объекта, а не в выпадающем меню «Действия», но правило
   // то же самое — раздел решает видимость.
-  document.querySelectorAll("#settings-menu [data-feature], #toolbar [data-feature]").forEach(elm => {
+  // #changelog-backdrop добавлен ради кнопки «Справка» (2026-09-16): она
+  // живёт в «Что нового», а не в «Действия»/тулбаре, но правило то же —
+  // раздел решает видимость, а не отдельная ручная проверка на клике.
+  document.querySelectorAll(
+    "#settings-menu [data-feature], #toolbar [data-feature], #changelog-backdrop [data-feature]",
+  ).forEach(elm => {
     // Разделов у пункта может быть НЕСКОЛЬКО через запятую — тогда пункт
     // виден, если открыт хотя бы один. Так устроена «Смена поставщика»:
     // одна форма ведёт два вида документа («Замена поставщика» и «Обмен
@@ -16641,12 +16646,18 @@ async function trainingLoadGuide() {
   }
 
   trainingState.guide = data;
-  // Выбранный раздел живёт между открытиями формы: человек возвращается к
-  // тому, что читал, а не к началу списка. Если раздела в новом наборе нет
-  // (сменили роль в «глазами роли»), берётся первый доступный.
-  if (!data.blocks.some((б) => б.key === trainingState.blockKey)) {
+  // Целевой раздел (переход «Справка» из МФР/«Что нового», см. openTraining)
+  // важнее запомненного — человек открыл форму НЕ листать с прошлого места,
+  // а посмотреть конкретное. Разовый: следующее открытие снова помнит место.
+  if (trainingState.pendingBlock && data.blocks.some((б) => б.key === trainingState.pendingBlock)) {
+    trainingState.blockKey = trainingState.pendingBlock;
+  } else if (!data.blocks.some((б) => б.key === trainingState.blockKey)) {
+    // Выбранный раздел живёт между открытиями формы: человек возвращается к
+    // тому, что читал, а не к началу списка. Если раздела в новом наборе нет
+    // (сменили роль в «глазами роли»), берётся первый доступный.
     trainingState.blockKey = data.blocks.length ? data.blocks[0].key : null;
   }
+  trainingState.pendingBlock = null;
   trainingRenderGuide();
 }
 
@@ -16768,14 +16779,23 @@ function trainingRenderGuide() {
     || б.paragraphs.some((п) => п.toLowerCase().includes(поиск));
   const видимые = data.blocks.filter(подходит);
 
-  // Секции в порядке блоков, а не по алфавиту: порядок разделов сложился по
-  // смыслу — от схемы к ведению сервиса, — и сортировка перемешала бы его.
-  const секции = [];
+  // Группа верхнего уровня (Общее / ЖБИ / МФР, 2026-09-16) — над секцией
+  // прав, в фиксированном порядке `group_order`: раздел «Отчёты», например,
+  // держит и общие, и ЖБИ-, и МФР-отчёты, и группа их разводит по смыслу.
+  // Секции внутри группы — в порядке появления блоков, а не по алфавиту:
+  // порядок сложился смыслово, и сортировка его перемешала бы.
+  const группы = [];
+  for (const имяГруппы of data.group_order) {
+    группы.push({ name: имяГруппы, caption: data.group_captions[имяГруппы], sections: [] });
+  }
   for (const блок of видимые) {
-    let секция = секции.find((с) => с.name === блок.section);
-    if (!секция) секции.push((секция = { name: блок.section, blocks: [] }));
+    let группа = группы.find((г) => г.name === блок.group);
+    if (!группа) группы.push((группа = { name: блок.group, caption: "", sections: [] }));
+    let секция = группа.sections.find((с) => с.name === блок.section);
+    if (!секция) группа.sections.push((секция = { name: блок.section, blocks: [] }));
     секция.blocks.push(блок);
   }
+  const непустыеГруппы = группы.filter((г) => г.sections.length);
 
   const выбран = видимые.find((б) => б.key === trainingState.blockKey)
     || (видимые.length ? видимые[0] : null);
@@ -16794,20 +16814,26 @@ function trainingRenderGuide() {
       Материал пишется по частям: разделов без описания — ${data.missing.length}.</p>`);
   }
 
-  const оглавление = секции.map((с) => `
-    <div style="margin-bottom:10px;">
-      <div class="hint-text" style="text-transform:uppercase; font-size:11px; letter-spacing:.04em;
-           margin-bottom:2px;">${escapeHtml(с.name)}</div>
-      ${с.blocks.map((б) => `
-        <button class="btn btn-sm ${б.key === trainingState.blockKey ? "btn-primary" : "btn-secondary"}"
-                data-block="${escapeHtml(б.key)}"
-                style="display:block; width:100%; text-align:left; margin-bottom:3px;
-                       white-space:normal;">${escapeHtml(б.title)}</button>`).join("")}
+  const оглавление = непустыеГруппы.map((г) => `
+    <div style="margin-bottom:16px;">
+      <div style="font-weight:600; font-size:13px; margin-bottom:1px;">${escapeHtml(г.name)}</div>
+      ${г.caption ? `<div class="hint-text" style="font-size:11.5px; line-height:1.35;
+           margin-bottom:8px;">${escapeHtml(г.caption)}</div>` : ""}
+      ${г.sections.map((с) => `
+        <div style="margin-bottom:10px;">
+          <div class="hint-text" style="text-transform:uppercase; font-size:11px; letter-spacing:.04em;
+               margin-bottom:2px;">${escapeHtml(с.name)}</div>
+          ${с.blocks.map((б) => `
+            <button class="btn btn-sm ${б.key === trainingState.blockKey ? "btn-primary" : "btn-secondary"}"
+                    data-block="${escapeHtml(б.key)}"
+                    style="display:block; width:100%; text-align:left; margin-bottom:3px;
+                           white-space:normal;">${escapeHtml(б.title)}</button>`).join("")}
+        </div>`).join("")}
     </div>`).join("") || `<p class="hint-text">Ничего не нашлось.</p>`;
 
   const содержимое = выбран ? `
     <h3 style="margin:0 0 4px;">${escapeHtml(выбран.title)}</h3>
-    <p class="hint-text" style="margin:0 0 12px;">${escapeHtml(выбран.section)}${
+    <p class="hint-text" style="margin:0 0 12px;">${escapeHtml(выбран.group)} · ${escapeHtml(выбран.section)}${
       // Уровень подписывается только у блоков РАЗДЕЛА: общие блоки (вход,
       // выбор объекта) правами не управляются, и «вам доступно изменение»
       // у них означало бы несуществующее разрешение.
@@ -16823,21 +16849,31 @@ function trainingRenderGuide() {
   // Колонки прокручиваются ОТДЕЛЬНО: длинный раздел не должен угонять
   // оглавление, а листание оглавления — уводить текст, который человек
   // читает. Поле поиска остаётся на месте — прокручивается только список.
+  //
+  // Высота колонок — не 60vh (2026-09-16, живой отчёт): та мерилась от
+  // вьюпорта целиком, а не от места, реально доступного В ФОРМЕ, и при
+  // длинной шапке (роль, плашка «материал пишется») сумма высот превышала
+  // .modal-sticky-scroll — та начинала прокручиваться ТОЖЕ, поверх уже
+  // прокручивающихся колонок. Здесь `flex:1 1 auto; min-height:0` на самой
+  // строке колонок отдаёт ей РОВНО то, что осталось после шапки и подписи
+  // редакции внизу (родитель — `#training-guide`, flex-колонка на всю
+  // высоту формы, см. CSS), а `align-items:stretch` тянет обе колонки на
+  // высоту этой строки — дальше каждая скроллит уже саму себя.
   box.innerHTML = шапка.join("") + `
-    <div style="display:flex; gap:16px; align-items:flex-start;">
+    <div style="display:flex; gap:16px; align-items:stretch; flex:1 1 auto; min-height:0;">
       <div style="flex:0 0 240px; max-width:240px; display:flex; flex-direction:column;
-                  max-height:60vh;">
+                  min-height:0;">
         <input class="input input-sm" id="training-search" placeholder="Поиск по инструкции"
                value="${escapeHtml(trainingState.search || "")}"
                style="width:100%; margin-bottom:8px; flex:0 0 auto;">
-        <div id="training-nav" style="overflow-y:auto; flex:1 1 auto; padding-right:4px;">
+        <div id="training-nav" style="overflow-y:auto; flex:1 1 auto; min-height:0; padding-right:4px;">
           ${оглавление}
         </div>
       </div>
-      <div id="training-body" style="flex:1 1 auto; min-width:0; overflow-y:auto;
-           max-height:60vh; padding-right:4px;">${содержимое}</div>
+      <div id="training-body" style="flex:1 1 auto; min-width:0; min-height:0; overflow-y:auto;
+           padding-right:4px;">${содержимое}</div>
     </div>
-    <p class="hint-text" style="margin-top:18px;">Редакция материала:
+    <p class="hint-text" style="margin-top:18px; flex:0 0 auto;">Редакция материала:
       ${escapeHtml(data.content_version)}. Разделов у вас: ${data.blocks.length};
       вопросов: ${data.questions_total}; в одной попытке — ${data.questions_per_attempt}.</p>`;
 
@@ -17108,14 +17144,24 @@ async function trainingRenderPeople() {
   }
 }
 
-function openTraining(tab = "guide") {
+// `blockKey` — переход сразу к конкретному разделу инструкции (кнопка
+// «Справка» в «Модели МФР», ссылка из «Что нового», 2026-09-16): человек
+// открывает форму не листать с прошлого места, а посмотреть конкретное.
+function openTraining(tab = "guide", blockKey = null) {
   trainingBackdrop.classList.add("open");
   trainingSetTab(tab);
-  if (tab === "guide") trainingLoadGuide();
+  if (tab === "guide") {
+    if (blockKey) trainingState.pendingBlock = blockKey;
+    trainingLoadGuide();
+  }
 }
 
 document.getElementById("menu-training").addEventListener("click", () => openTraining("guide"));
 document.getElementById("menu-training-history").addEventListener("click", () => openTraining("people"));
+// «Настройки → МФР → Справка» (2026-09-16) — открывает ту же инструкцию, но
+// сразу на разделе рабочего места «Модель МФР», а не с начала общего списка.
+document.getElementById("menu-mfr-help").addEventListener("click", () =>
+  openTraining("guide", "workspace_mfr"));
 document.getElementById("training-close").addEventListener("click", () =>
   trainingBackdrop.classList.remove("open"));
 for (const кнопка of trainingBackdrop.querySelectorAll("[data-training-tab]")) {
@@ -24022,6 +24068,10 @@ document.getElementById("btn-changelog").addEventListener("click", openChangelog
 // форма открывается при каждом входе — в этом и смысл требования.
 document.getElementById("changelog-close").addEventListener("click", () => {
   document.getElementById("changelog-backdrop").classList.remove("open");
+});
+document.getElementById("changelog-open-training").addEventListener("click", () => {
+  document.getElementById("changelog-backdrop").classList.remove("open");
+  openTraining("guide");
 });
 document.getElementById("changelog-ack").addEventListener("click", async () => {
   try {

@@ -48,7 +48,10 @@ from app.db import get_connection
 from app.features import FEATURES, FEATURES_BY_KEY, READ, WRITE
 from app.training_content import (
     CONTENT_VERSION,
+    GROUP_CAPTIONS,
+    GROUP_ORDER,
     blocks_for,
+    group_of,
     missing_features,
     question as найти_вопрос,
     questions_for,
@@ -143,6 +146,7 @@ def _собрать_инструкцию(levels: dict) -> list:
         разделы.append({
             "key": блок.key,
             "feature": блок.feature,
+            "group": group_of(блок),
             "section": section_of(блок),
             "title": блок.title,
             "level": уровень,
@@ -182,6 +186,8 @@ def read_guide(object_id: Optional[int] = Query(None),
             "role_name": role_labels(conn).get(role_key) if role_key else None,
             "object_id": object_id,
             "blocks": _собрать_инструкцию(levels),
+            "group_order": GROUP_ORDER,
+            "group_captions": GROUP_CAPTIONS,
             "questions_total": len(questions_for(levels)),
             "questions_per_attempt": QUESTIONS_PER_ATTEMPT,
             # Разделы, для которых материал ещё не написан. Показывается
