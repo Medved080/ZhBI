@@ -1204,6 +1204,26 @@ document.getElementById("menu-my-sessions").addEventListener("click", () => {
   document.getElementById("settings-menu").classList.remove("open");
   openSessions("me", null, "Мои сеансы");
 });
+// Переключатель V2 (2026-09-16). Cookie, а не localStorage: выбор читает
+// сервер ДО отдачи файла на "/", поэтому сохраняется без лишней загрузки
+// V1 при следующих заходах.
+//
+// Пункт лежит в тулбарном меню "Действия", а любая открытая модалка
+// (.modal-backdrop, z-index:100) перекрывает тулбар целиком — то есть
+// добраться до этого пункта, пока где-то открыта несохранённая форма, и
+// так нельзя: сам факт клика уже значит, что модалок нет. Проверка
+// dataset.dirty ниже — подстраховка на случай НЕмодального редактируемого
+// состояния (сегодня в V1 такого нет, весь риск несохранённого сосредоточен
+// в формах-модалках), а не рабочий сторож для сегодняшнего UI.
+document.getElementById("menu-ui-v2").addEventListener("click", () => {
+  document.getElementById("settings-menu").classList.remove("open");
+  const занятаяФорма = document.querySelector('.modal-backdrop.open[data-dirty="1"]');
+  if (занятаяФорма
+      && !confirm("В открытой форме есть несохранённые изменения. Перейти к новому "
+                  + "интерфейсу без сохранения?")) return;
+  try { document.cookie = "ui_version=v2; path=/; max-age=31536000; samesite=lax"; } catch (e) {}
+  location.href = "/";
+});
 document.getElementById("sessions-close").addEventListener("click", () =>
   sessionsBackdrop.classList.remove("open"));
 document.getElementById("menu-sessions").addEventListener("click", () => {

@@ -1,0 +1,291 @@
+/* Новый интерфейс (V2) — предпросмотр. Документ полностью отдельный от
+   V1 (app/static/index.html): общего DOM нет, поэтому здесь не нужен
+   scoping-префикс вроде #ua-concept из макета-прототипа. */
+
+:root {
+  --bg: light-dark(#fffdfa, #191b20);
+  --surface: light-dark(#f5f2ed, #23262d);
+  --ink: light-dark(#302d29, #eeeae4);
+  --muted: light-dark(#736c62, #b8b2aa);
+  --line: light-dark(#e5dfd6, #3c3d43);
+  --accent: light-dark(#795b36, #e1bd8c);
+  --accent-ink: light-dark(#fffdfa, #211b14);
+  --sel: light-dark(#f0e5d4, #3e3326);
+  --good: light-dark(#28744a, #8dd4ad);
+  --bad: light-dark(#a13c3c, #e8a0a0);
+  color-scheme: light dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .6; }
+
+/* Шапка/навигация/подвал закреплены, прокручивается только тело — иначе
+   длинное дерево проектов в «Доступе к объектам» уводит кнопку
+   «Сохранить» за пределы экрана вместо того, чтобы прокручиваться под ней. */
+#v2-root { height: 100vh; display: flex; flex-direction: column; }
+#v2-root.v2-loading { align-items: center; justify-content: center; color: var(--muted); }
+
+.v2-head {
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.v2-head-title { display: flex; align-items: baseline; gap: 10px; }
+.v2-head-title strong { font-size: 18px; font-weight: 600; }
+.v2-badge {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.v2-head-right { display: flex; align-items: center; gap: 12px; }
+.v2-user-name { font-size: 13px; color: var(--muted); }
+
+.v2-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.v2-back:hover { background: var(--surface); }
+
+.v2-nav {
+  display: flex;
+  gap: 20px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.v2-nav button {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 13px 0;
+  color: var(--muted);
+}
+.v2-nav button[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); }
+
+/* .v2-page — область под шапкой. Просто текст (заглушка "нет доступа",
+   ошибка загрузки) прокручивается целиком через neё; пилот с собственной
+   вкладочной навигацией переключает её в .v2-app — сама не скроллится,
+   прокручивается только вложенный .v2-scroll, а nav/footer остаются на
+   месте (иначе длинный список в "Доступе к объектам" уводил бы кнопку
+   "Сохранить" далеко вниз). */
+.v2-page { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; }
+.v2-page.v2-app { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.v2-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; }
+.v2-note-page { max-width: 640px; margin: 40px auto; text-align: center; color: var(--muted); }
+
+.v2-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+h1, h2, h3 { margin: 0; }
+.v2-page h3, .v2-scroll h3 { font-size: 18px; font-weight: 600; }
+.v2-page h4, .v2-scroll h4 { margin: 0 0 14px; font-size: 14px; font-weight: 600; }
+.v2-muted { color: var(--muted); }
+small { display: block; color: var(--muted); font-size: 12px; }
+
+.v2-btn {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  white-space: nowrap;
+}
+.v2-btn:hover { background: var(--surface); }
+.v2-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.v2-link { border: 0; padding: 0; background: none; color: var(--accent); text-align: left; }
+
+input:not([type="checkbox"]), select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 9px 10px;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.v2-search { width: 300px; max-width: 100%; }
+
+table.v2-table { width: 100%; border-collapse: collapse; text-align: left; }
+.v2-table th {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.v2-table td { padding: 13px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+
+.v2-person { display: flex; gap: 12px; align-items: center; }
+.v2-avatar {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.v2-row-action { min-width: 64px; }
+.v2-tag {
+  display: inline-block;
+  border-radius: 4px;
+  background: var(--surface);
+  padding: 3px 7px;
+  font-size: 12px;
+}
+.v2-ok { color: var(--good); }
+.v2-bad-text { color: var(--bad); }
+
+.v2-cols { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 26px; }
+.v2-side { border-right: 1px solid var(--line); padding-right: 20px; }
+.v2-side button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  padding: 11px 12px;
+  margin-bottom: 4px;
+}
+.v2-side button[aria-pressed="true"] { background: var(--sel); color: var(--accent); }
+
+.v2-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 670px; }
+label.v2-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+label.v2-field input, label.v2-field select { font-size: 14px; color: var(--ink); width: 100%; }
+.v2-span { grid-column: 1 / -1; }
+
+.v2-note {
+  background: var(--surface);
+  border-radius: 6px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 16px 0;
+}
+
+.v2-foot {
+  border-top: 1px solid var(--line);
+  padding: 14px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+.v2-foot-actions { display: flex; gap: 8px; }
+
+.v2-tree { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(260px, 1.6fr); gap: 22px; }
+.v2-tree-list { border-right: 1px solid var(--line); padding-right: 14px; }
+.v2-tree-list button {
+  display: block;
+  border: 0;
+  background: none;
+  text-align: left;
+  width: 100%;
+  padding: 10px 9px;
+  border-radius: 5px;
+}
+.v2-tree-list button[aria-pressed="true"] { background: var(--sel); }
+.v2-indent { margin-left: 12px; border-left: 1px solid var(--line); padding-left: 8px; }
+
+.v2-role-check { padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: flex-start; }
+.v2-role-check input { margin-top: 5px; accent-color: var(--accent); }
+
+.v2-perm {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.v2-seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.v2-seg button { border: 0; border-right: 1px solid var(--line); background: var(--bg); padding: 7px 10px; font-size: 12px; }
+.v2-seg button:last-child { border: 0; }
+.v2-seg button[aria-pressed="true"] { background: var(--sel); color: var(--accent); }
+
+.v2-group { margin-top: 16px; font-size: 12px; color: var(--muted); }
+.v2-result { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.v2-hide { display: none !important; }
+.v2-inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* Экран входа / смены пароля — часть оболочки, не пилота */
+.v2-auth-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.v2-auth-card {
+  width: 340px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 28px;
+  background: var(--surface);
+}
+.v2-auth-card h2 { font-size: 18px; margin-bottom: 4px; }
+.v2-auth-card form { display: flex; flex-direction: column; gap: 14px; margin-top: 18px; }
+.v2-auth-error {
+  color: var(--bad);
+  font-size: 13px;
+  min-height: 18px;
+}
+
+@media (max-width: 720px) {
+  .v2-cols { grid-template-columns: 1fr; }
+  .v2-side { border: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .v2-side button { width: auto; }
+  .v2-page, .v2-scroll { padding: 16px; }
+  .v2-table thead { display: none; }
+  .v2-table tr { display: grid; grid-template-columns: 1fr auto; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .v2-table td { border: 0; padding: 5px; }
+  .v2-tree { grid-template-columns: 1fr; }
+  .v2-tree-list { border: 0; padding: 0; }
+  .v2-head { padding: 12px 15px; }
+  .v2-nav { padding: 0 15px; gap: 16px; }
+}
+
+@media (max-width: 450px) {
+  .v2-fields { grid-template-columns: 1fr; }
+  .v2-perm { grid-template-columns: 1fr; }
+  .v2-seg { width: 100%; }
+  .v2-seg button { flex: 1; }
+  .v2-search { width: 100%; }
+}

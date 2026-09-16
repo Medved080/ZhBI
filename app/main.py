@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
-from app.auth import audit_display_name, format_display_name, get_current_user
+from app.auth import SECURE_COOKIES, audit_display_name, format_display_name, get_current_user
 from app.auth import router as auth_router
 from app.attachments import ATTACHMENTS_DIR, AVATAR_MIME
 from app.attachments import attachment_row
@@ -7622,9 +7622,39 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
     return итог
 
 
+UI_VERSION_COOKIE = "ui_version"
+UI_VERSION_COOKIE_MAX_AGE = 365 * 86400
+
+
 @app.get("/")
-def serve_index():
-    return FileResponse(STATIC_DIR / "index.html")
+def serve_index(request: Request, ui: Optional[str] = None):
+    """Выбор V1/V2 — на сервере, ДО отдачи файла (2026-09-16).
+
+    Не localStorage-редирект: тот сначала заставил бы браузер полностью
+    разобрать документ V1 (~5000 строк CSS), и только потом JS решал бы,
+    что нужен V2. Здесь cookie читается раньше выбора файла — ни лишней
+    загрузки, ни вспышки не переключённого интерфейса.
+
+    `?ui=v1`/`?ui=v2` — не только разовый выбор конкретной версии для этого
+    захода, но и ПОСТОЯННЫЙ сброс cookie: `/?ui=v1` открывает V1, даже если
+    сама страница V2 не загружается вовсе (выбор файла происходит раньше
+    любого JS V2) — прямой аварийный выход, задокументирован в Docs/OPEN.md.
+    """
+    выбор = ui if ui in ("v1", "v2") else request.cookies.get(UI_VERSION_COOKIE)
+    файл = STATIC_DIR / "v2" / "index.html" if выбор == "v2" else STATIC_DIR / "index.html"
+    ответ = FileResponse(файл)
+    if ui in ("v1", "v2"):
+        ответ.set_cookie(UI_VERSION_COOKIE, ui, max_age=UI_VERSION_COOKIE_MAX_AGE,
+                         samesite="lax", secure=SECURE_COOKIES)
+    return ответ
+
+
+@app.get("/v2")
+def serve_v2():
+    """Прямая точка входа в V2 — не зависит от cookie-предпочтения: по
+    этому адресу V2 открывается всегда, даже если общий выбор на `/`
+    указывает на V1 (ссылка/документация на предпросмотр)."""
+    return FileResponse(STATIC_DIR / "v2" / "index.html")
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
