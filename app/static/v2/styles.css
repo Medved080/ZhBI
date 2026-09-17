@@ -72,11 +72,22 @@ button:disabled { cursor: default; opacity: .6; }
 }
 .v2-back:hover { background: var(--surface); }
 
+/* Единая центрированная колонка (DESIGN-SYSTEM.md §5, "workspace" —
+   1120px) — общая для заголовка раздела, вкладок, содержимого и действий
+   подвала, чтобы их левый/правый край СОВПАДАЛ на широком экране. Фон и
+   разделители при этом остаются на всю ширину полосы (см. .v2-nav,
+   .v2-page-head, .v2-scroll, .v2-foot ниже — у них самих нет
+   горизонтальных отступов, только у вложенного .v2-container).
+   Глобальная шапка сервиса (.v2-head) сюда не входит намеренно — у неё
+   своя сетка. */
+.v2-container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
 .v2-nav {
+  border-bottom: 1px solid var(--line);
+}
+.v2-nav .v2-container {
   display: flex;
   gap: 20px;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
 }
 .v2-nav button {
@@ -90,7 +101,7 @@ button:disabled { cursor: default; opacity: .6; }
 
 /* Заголовок раздела — вторая ступень иерархии шапки (приложение → раздел →
    вкладки), отдельно от общего "ЖБИ" сверху. */
-.v2-page-head { padding: 18px 24px 0; }
+.v2-page-head { padding-top: 18px; }
 .v2-page-head h2 { font-size: 20px; font-weight: 600; }
 
 /* .v2-page — область под шапкой. Просто текст (заглушка "нет доступа",
@@ -101,12 +112,8 @@ button:disabled { cursor: default; opacity: .6; }
    "Сохранить" далеко вниз). */
 .v2-page { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; }
 .v2-page.v2-app { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
-.v2-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; }
+.v2-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 0; }
 .v2-note-page { max-width: 640px; margin: 40px auto; text-align: center; color: var(--muted); }
-/* Семейство "workspace" (DESIGN-SYSTEM.md §5): рабочее содержимое не
-   растягивается на весь широкий экран — колонки master/detail иначе
-   разъезжаются до нечитаемой ширины на Full HD и выше. */
-.v2-workspace { max-width: 1120px; margin: 0 auto; }
 
 .v2-bar {
   display: flex;
@@ -208,12 +215,14 @@ label.v2-field input, label.v2-field select { font-size: 14px; color: var(--ink)
 
 .v2-foot {
   border-top: 1px solid var(--line);
-  padding: 14px 24px;
+  padding: 14px 0;
+  background: var(--bg);
+}
+.v2-foot .v2-container {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  background: var(--bg);
   flex-wrap: wrap;
 }
 .v2-foot-actions { display: flex; gap: 8px; }
@@ -298,19 +307,70 @@ label.v2-field input, label.v2-field select { font-size: 14px; color: var(--ink)
 }
 .v2-reorder button:not(:disabled):hover { color: var(--accent); }
 
+/* Поиск объекта в "Проверке доступа" (issue — плоский список сотен
+   объектов): кнопка + выпадающая панель поиска, иерархия "Проект →
+   Объект". Кнопки внутри списка — обычные <button>, клавиатурная
+   доступность (Tab/Enter) у них уже есть сама по себе; стрелки/Escape —
+   в JS. */
+.v2-combobox { position: relative; }
+.v2-combobox-toggle {
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.v2-combobox-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  padding: 8px;
+}
+.v2-combobox-panel .v2-search { width: 100%; margin-bottom: 6px; }
+.v2-combobox-list { max-height: 280px; overflow-y: auto; }
+.v2-combobox-group {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 8px 2px;
+}
+.v2-combobox-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  padding: 8px;
+  color: var(--ink);
+}
+.v2-combobox-option:hover,
+.v2-combobox-option:focus {
+  background: var(--surface);
+  outline: none;
+}
+.v2-combobox-option[aria-selected="true"] { background: var(--sel); color: var(--accent); }
+
 @media (max-width: 720px) {
+  .v2-container { padding: 0 16px; }
   .v2-cols { grid-template-columns: 1fr; }
   .v2-side { border: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
   .v2-side button { width: auto; }
-  .v2-page, .v2-scroll { padding: 16px; }
+  .v2-page { padding: 16px; }
+  .v2-scroll { padding: 16px 0; }
   .v2-table thead { display: none; }
   .v2-table tr { display: grid; grid-template-columns: 1fr auto; padding: 10px 0; border-bottom: 1px solid var(--line); }
   .v2-table td { border: 0; padding: 5px; }
-  .v2-tree { grid-template-columns: 1fr; }
-  .v2-tree-list { border: 0; padding: 0; }
   .v2-head { padding: 12px 15px; }
-  .v2-page-head { padding: 12px 15px 0; }
-  .v2-nav { padding: 0 15px; gap: 16px; }
+  .v2-page-head { padding-top: 12px; }
+  .v2-nav .v2-container { gap: 16px; }
 }
 
 @media (max-width: 450px) {

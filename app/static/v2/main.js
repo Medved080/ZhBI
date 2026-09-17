@@ -94,6 +94,10 @@ function renderShell(user, permissions) {
   };
   const canReadUsers = isSystemAdmin || perms.users !== "none";
   const canReadRoles = isSystemAdmin || perms.roles !== "none";
+  // Список ролей (ключ+имя) для подписей в "Доступе к объектам" и
+  // "Проверке доступа" — часть ЛЮБОГО ответа /me/permissions, не требует
+  // отдельного гранта "roles" (в отличие от GET /roles).
+  const roleList = permissions.roles || [];
 
   root.innerHTML = `
     <header class="v2-head">
@@ -124,11 +128,12 @@ function renderShell(user, permissions) {
     </div>`;
     return;
   }
-  activeModule = mountUsersAccess(content, { api, user, perms, canReadUsers, canReadRoles });
+  activeModule = mountUsersAccess(content, { api, user, perms, canReadUsers, canReadRoles, roleList });
 }
 
 function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 boot();

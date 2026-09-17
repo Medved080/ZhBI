@@ -4,13 +4,17 @@
 // не считает права и не хранит копию бизнес-правил — только показывает
 // то, что вернул сервер, и шлёт туда же изменения.
 //
-// Доработка 2026-09-17 по замечаниям к df4da55: раздельные проверки
-// users/roles, черновик разрешений ролей (как в V1), сводка доступа без
-// перебора объектов, делегирование обработчиков в списке, сторож
-// несохранённого на всех переходах.
+// Доработка 2026-09-17 (df4da55 → живая проверка): единый диалог
+// несохранённого с клавиатурой и фокус-ловушкой, черновик тронут во ВСЕХ
+// формах пилота (не только карточка/доступ/роли), раздельные чтения
+// users/roles (роль-имена — из /me/permissions, не из /roles), разделение
+// ошибки записи и ошибки последующего обновления экрана, единая
+// центрированная колонка заголовка/вкладок/содержимого/подвала, поиск
+// объекта в «Проверке доступа» вместо плоского списка.
 
-const ROLE_LABELS = { admin: "Администратор", user: "Пользователь", view: "Просмотр" };
+const ROLE_LABELS = { user: "Пользователь", view: "Просмотр", admin: "Администратор" };
 const LEVELS = ["none", "read", "write"];
+const LEVEL_LABELS = { none: "Нет", read: "Чтение", write: "Изменение" };
 const ACCESS_ALL = "all";
 
 function ruPlural(n, один, немного, много) {
@@ -20,8 +24,13 @@ function ruPlural(n, один, немного, много) {
   return много;
 }
 
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 export function mountUsersAccess(container, ctx) {
-  const { api, user: currentUser, perms, canReadUsers, canReadRoles } = ctx;
+  const { api, user: currentUser, perms, canReadUsers, canReadRoles, roleList } = ctx;
   const canWriteUsers = perms.isSystemAdmin || perms.users === "write";
   const canWriteRoles = perms.isSystemAdmin || perms.roles === "write";
   // Задать пароль — НЕ через раздел "users": сервер проверяет системную
@@ -29,11 +38,17 @@ export function mountUsersAccess(container, ctx) {
   // ось прав, и приравнивать её к canWriteUsers значило бы либо запереть
   // администратора без гранта "users", либо разрешить лишнее.
   function canSetPassword(u) { return currentUser.role === "admin" || currentUser.id === u.id; }
+  // Имена ролей для сводки/редактора доступа и для «Проверки» берутся из
+  // /me/permissions (roleList, есть у ЛЮБОГО вошедшего) — не из /roles
+  // (требует грант "roles", которого у "users"-администратора может не
+  // быть). Так вкладки "Пользователи"/"Проверка доступа" не зависят от
+  // "roles" вовсе — ровно то независимое чтение, которого не хватало.
+  function roleName(key) { return (roleList || []).find((r) => r.key === key)?.name || key; }
 
   const state = {
     page: canReadUsers ? "users" : "roles",   // users | edit | roles | check
     users: null,
-    roles: null,              // GET /roles (roles+features+sections+level_labels)
+    roles: null,              // GET /roles (roles+features+sections+level_labels) — только вкладка "Роли"
     tree: null,                // GET /projects-tree → projects[] (с объектами)
     catalog: null,              // /projects (ВСЕ проекты, включая без объектов) + объекты из tree
     accessMatrix: null,         // GET /users/access-matrix — гранты всех разом, для колонки "Доступ"
@@ -42,17 +57,19 @@ export function mountUsersAccess(container, ctx) {
     editTab: "profile",
     cardDraft: null,            // рабочая копия полей карточки (профиль + вход)
     cardDirty: false,
+    pendingPassword: null,      // {password, mustChange} — введено, но не отправлено "Задать пароль"
     access: null,               // {system_admin, grants:[...]} рабочая копия для редактора
     accessDirty: false,
-    accessView: "summary",      // "summary" | {edit:"all"|"p<id>"|"o<pid>-<oid>"}
+    accessView: "summary",      // "summary" | {edit:"all"|"p:<id>"|"o:<pid>:<oid>"}
     accessAllAreas: false,      // "Показать все" (иначе только доступные)
     accessSearch: "",
     rolesUi: { selected: null },
     rolesDraft: new Map(),      // "roleKey|featureKey" -> level, до явного сохранения
     rolesSaving: false,
     rolesBusy: false,           // идёт reorder/rename/delete — блокирует повтор
-    check: { userId: null, objectId: null },
+    check: { userId: null, objectId: null, objectQuery: "", pickerOpen: false },
     status: "",
+    retryRefresh: null,         // задать, когда запись прошла, а последующее чтение — нет
   };
 
   // ---------- данные (общий кэш на время жизни модуля) ----------
@@ -88,6 +105,16 @@ export function mountUsersAccess(container, ctx) {
     return state.accessMatrix;
   }
 
+  // Запись прошла, но последующее чтение для обновления экрана — нет:
+  // это НЕ провал операции, а отдельная, более мягкая проблема ("Запись
+  // выполнена, обновление экрана не удалось"). Возвращает true/false, при
+  // false — сохраняет саму функцию в state.retryRefresh, чтобы предложить
+  // повторить именно ЧТЕНИЕ, а не записывающую операцию заново.
+  async function tryRefresh(fn) {
+    try { await fn(); state.retryRefresh = null; return true; }
+    catch (err) { state.retryRefresh = fn; return false; }
+  }
+
   // ---------- свод доступа — та же арифметика, что в V1 (app.js:
   // accessMapFromGrants/buildAccessSummary/accessRolesText), применённая к
   // тем же данным сервера. Не альтернативный расчёт — перенос текстом. ----------
@@ -103,9 +130,6 @@ export function mountUsersAccess(container, ctx) {
     return map;
   }
 
-  function roleName(key) {
-    return (state.roles?.roles || []).find((r) => r.key === key)?.name || key;
-  }
   function accessRolesText(roleSet) {
     return [...roleSet].map(roleName).join(", ") || "—";
   }
@@ -165,12 +189,19 @@ export function mountUsersAccess(container, ctx) {
   function clearDirtyState() { currentDirty = null; }
   function hasUnsavedChanges() { return !!currentDirty; }
 
+  // Диалог — один экземпляр разом: повторный вызов, пока первый ещё не
+  // закрыт (двойной клик, гонка обработчиков), возвращает ТУ ЖЕ обещание,
+  // а не открывает второй поверх первого.
+  let openDialogPromise = null;
+
   function showUnsavedDialog(message) {
-    return new Promise((resolve) => {
+    if (openDialogPromise) return openDialogPromise;
+    openDialogPromise = new Promise((resolve) => {
+      const previouslyFocused = document.activeElement;
       const backdrop = document.createElement("div");
       backdrop.className = "v2-dialog-backdrop";
       backdrop.innerHTML = `
-        <div class="v2-dialog" role="alertdialog" aria-modal="true">
+        <div class="v2-dialog" role="alertdialog" aria-modal="true" aria-label="Несохранённые изменения">
           <p>${escapeHtml(message)}</p>
           <div class="v2-dialog-actions">
             <button type="button" class="v2-btn" data-choice="cancel">Остаться</button>
@@ -178,14 +209,39 @@ export function mountUsersAccess(container, ctx) {
             <button type="button" class="v2-btn v2-primary" data-choice="save">Сохранить и продолжить</button>
           </div>
         </div>`;
+      const dialog = backdrop.querySelector(".v2-dialog");
+
+      function close(choice) {
+        document.removeEventListener("keydown", onKeydown, true);
+        if (backdrop.isConnected) document.body.removeChild(backdrop);
+        openDialogPromise = null;
+        if (previouslyFocused && document.contains(previouslyFocused) && previouslyFocused.focus) {
+          previouslyFocused.focus();
+        }
+        resolve(choice);
+      }
+      function onKeydown(e) {
+        if (e.key === "Escape") { e.preventDefault(); close("cancel"); return; }
+        if (e.key === "Tab") {
+          const items = [...dialog.querySelectorAll("button")];
+          const first = items[0], last = items[items.length - 1];
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      }
       backdrop.addEventListener("click", (e) => {
         const choice = e.target.closest("[data-choice]")?.dataset.choice;
-        if (choice) { document.body.removeChild(backdrop); resolve(choice); }
-        else if (e.target === backdrop) { document.body.removeChild(backdrop); resolve("cancel"); }
+        if (choice) close(choice);
+        else if (e.target === backdrop) close("cancel");
       });
+      document.addEventListener("keydown", onKeydown, true);
       document.body.appendChild(backdrop);
-      backdrop.querySelector('[data-choice="save"]').focus();
+      // Начальный фокус — на "Остаться": уход из формы отменой действия по
+      // умолчанию безопаснее, чем случайное сохранение недописанного ввода
+      // клавишей Enter.
+      dialog.querySelector('[data-choice="cancel"]').focus();
     });
+    return openDialogPromise;
   }
 
   async function requestLeave() {
@@ -205,26 +261,41 @@ export function mountUsersAccess(container, ctx) {
     }
   }
 
-  function escapeHtml(s) {
-    return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-  }
-
   function btn(label, attr = "", primary = false) {
     return `<button type="button" class="v2-btn ${primary ? "v2-primary" : ""}" ${attr}>${label}</button>`;
   }
 
-  // ---------- каркас ----------
+  // Один переход разом: клик по вкладке/записи/списку, пока уже идёт
+  // проверка "можно ли уйти" (диалог ждёт ответа), не должен запускать
+  // ВТОРОЙ, параллельный переход — иначе оба, получив один и тот же
+  // ответ "да" от общего диалога, независимо меняют state.page и рисуют
+  // свою вкладку, и итог зависит от того, чей render() дорисовался
+  // последним (нашлось при проверке двойных кликов).
+  let navGuardBusy = false;
+  async function withNavGuard(fn) {
+    if (navGuardBusy) return;
+    navGuardBusy = true;
+    try { await fn(); } finally { navGuardBusy = false; }
+  }
+
+  // ---------- каркас: заголовок раздела, вкладки, тело и подвал — общая
+  // центрированная колонка (.v2-container, max-width 1120px), одинаковая
+  // во всех четырёх зонах, чтобы левый/правый край совпадали (issue —
+  // раньше заголовок/вкладки стояли в 24px от края, содержимое — в ~400px,
+  // поскольку выравнивался только .v2-workspace внутри .v2-scroll). ----------
 
   container.classList.add("v2-app");
   container.innerHTML = `
-    <div class="v2-page-head"><h2>Пользователи и доступ</h2></div>
-    <nav class="v2-nav" aria-label="Разделы">
+    <div class="v2-page-head"><div class="v2-container"><h2>Пользователи и доступ</h2></div></div>
+    <nav class="v2-nav" aria-label="Разделы"><div class="v2-container">
       <button data-page="users" aria-pressed="true" ${canReadUsers ? "" : "hidden"}>Пользователи</button>
       <button data-page="roles" aria-pressed="false" ${canReadRoles ? "" : "hidden"}>Роли</button>
       <button data-page="check" aria-pressed="false" ${canReadUsers ? "" : "hidden"}>Проверка доступа</button>
-    </nav>
-    <div id="ua-body" class="v2-scroll"><div id="ua-inner" class="v2-workspace"></div></div>
-    <footer class="v2-foot"><span id="ua-status" class="v2-muted"></span><div class="v2-foot-actions" id="ua-foot-actions"></div></footer>
+    </div></nav>
+    <div id="ua-body" class="v2-scroll"><div id="ua-inner" class="v2-container"></div></div>
+    <footer class="v2-foot"><div class="v2-container">
+      <span id="ua-status" class="v2-muted"></span><div class="v2-foot-actions" id="ua-foot-actions"></div>
+    </div></footer>
   `;
   const nav = container.querySelector(".v2-nav");
   const body = container.querySelector("#ua-inner");
@@ -233,16 +304,40 @@ export function mountUsersAccess(container, ctx) {
 
   async function goto(page) {
     if (page === state.page) return;
-    if (!(await requestLeave())) return;
-    state.page = page;
-    state.status = "";
-    await render();
+    await withNavGuard(async () => {
+      if (!(await requestLeave())) return;
+      state.page = page;
+      state.status = "";
+      state.retryRefresh = null;
+      await render();
+    });
   }
 
   nav.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-page]");
     if (b) goto(b.dataset.page);
   });
+
+  function renderStatusRetry() {
+    status.textContent = state.status;
+    const old = footActions.parentElement.querySelector("#ua-status-retry");
+    if (old) old.remove();
+    if (state.retryRefresh) {
+      const retryBtn = document.createElement("button");
+      retryBtn.type = "button";
+      retryBtn.id = "ua-status-retry";
+      retryBtn.className = "v2-link";
+      retryBtn.style.marginLeft = "8px";
+      retryBtn.textContent = "Обновить";
+      retryBtn.addEventListener("click", async () => {
+        const fn = state.retryRefresh;
+        const ok = await tryRefresh(fn);
+        state.status = ok ? "Обновлено" : state.status;
+        await render();
+      });
+      status.after(retryBtn);
+    }
+  }
 
   async function render() {
     // Защита от прямого попадания на недоступную вкладку (например,
@@ -253,14 +348,15 @@ export function mountUsersAccess(container, ctx) {
     nav.querySelectorAll("button[data-page]").forEach((b) =>
       b.setAttribute("aria-pressed", String(b.dataset.page === (state.page === "edit" ? "users" : state.page))));
     footActions.innerHTML = "";
-    status.textContent = state.status;
+    renderStatusRetry();
     try {
       if (state.page === "users") await renderUsers();
       else if (state.page === "edit") await renderEdit();
       else if (state.page === "roles") await renderRoles();
       else if (state.page === "check") await renderCheck();
     } catch (err) {
-      body.innerHTML = `<p class="v2-note">${escapeHtml(err.detail || err.message || err)}</p>`;
+      body.innerHTML = `<p class="v2-note"></p>`;
+      body.querySelector("p").textContent = err.detail || err.message || String(err);
     }
   }
 
@@ -270,7 +366,7 @@ export function mountUsersAccess(container, ctx) {
     const q = state.query.toLowerCase();
     const rows = state.users.filter((u) =>
       !q || `${u.display_name} ${u.domain_login} ${u.department || ""}`.toLowerCase().includes(q));
-    if (!rows.length) return `<tr><td colspan="4">Пользователи не найдены</td></tr>`;
+    if (!rows.length) return `<tr><td colspan="5">Пользователи не найдены</td></tr>`;
     const catalog = state.catalog, matrix = state.accessMatrix;
     return rows.map((u) => {
       let accessCell = "—";
@@ -324,7 +420,41 @@ export function mountUsersAccess(container, ctx) {
       if (openUserBtn) openUser(Number(openUserBtn.dataset.user));
     });
     const newBtn = body.querySelector("[data-new]");
-    if (newBtn) newBtn.addEventListener("click", () => renderNewUserForm());
+    if (newBtn) newBtn.addEventListener("click", async () => {
+      if (!(await requestLeave())) return;
+      renderNewUserForm();
+    });
+  }
+
+  function markNewUserDirty(el) {
+    setDirty({
+      message: "В форме нового пользователя есть введённые данные.",
+      save: () => submitNewUser(el),
+      discard: () => { el.innerHTML = ""; },
+    });
+    status.textContent = "Есть несохранённые изменения";
+  }
+
+  async function submitNewUser(el) {
+    const errorEl = el.querySelector("#nu-error");
+    errorEl.textContent = "";
+    const last_name = el.querySelector("#nu-last").value.trim();
+    const domain_login = el.querySelector("#nu-login").value.trim();
+    if (!last_name || !domain_login) {
+      errorEl.textContent = "Заполните фамилию и логин";
+      throw new Error("Заполните фамилию и логин");
+    }
+    const created = await api.post("/users", {
+      last_name, first_name: el.querySelector("#nu-first").value.trim(),
+      domain_login, role: el.querySelector("#nu-role").value,
+    });
+    // Только что созданного пользователя добавляем в кэш НАПРЯМУЮ (сервер
+    // уже вернул его целиком) — не полагаемся на перечитку списка: тогда
+    // открыть карточку можно, даже если ensureUsers(true) ниже не удастся.
+    state.users = state.users ? [...state.users, created] : [created];
+    clearDirtyState();
+    await tryRefresh(() => ensureAccessMatrix(true));
+    await openUser(created.id);
   }
 
   function renderNewUserForm() {
@@ -337,43 +467,52 @@ export function mountUsersAccess(container, ctx) {
           <label class="v2-field">Имя<input id="nu-first"></label>
           <label class="v2-field">Логин<input id="nu-login" required></label>
           <label class="v2-field">Системная роль
-            <select id="nu-role">${Object.entries(ROLE_LABELS).map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
+            <select id="nu-role">
+              <option value="user" selected>Пользователь</option>
+              <option value="view">Просмотр</option>
+              <option value="admin">Администратор</option>
+            </select>
           </label>
         </div>
+        <p class="v2-note">По умолчанию — обычный пользователь, без административных полномочий. Роль «Администратор» назначается явным выбором.</p>
         <div class="v2-auth-error" id="nu-error"></div>
         <div class="v2-inline" style="margin-top:12px">${btn("Создать", 'id="nu-submit"', true)}${btn("Отмена", 'id="nu-cancel"')}</div>
       </div>`;
-    el.querySelector("#nu-cancel").addEventListener("click", () => { el.innerHTML = ""; });
-    el.querySelector("#nu-submit").addEventListener("click", async () => {
-      const errorEl = el.querySelector("#nu-error");
-      errorEl.textContent = "";
-      const last_name = el.querySelector("#nu-last").value.trim();
-      const domain_login = el.querySelector("#nu-login").value.trim();
-      if (!last_name || !domain_login) { errorEl.textContent = "Заполните фамилию и логин"; return; }
+    el.querySelectorAll("input, select").forEach((f) => {
+      f.addEventListener(f.tagName === "SELECT" ? "change" : "input", () => markNewUserDirty(el));
+    });
+    el.querySelector("#nu-cancel").addEventListener("click", () => {
+      // Сама кнопка уже означает "не сохранять" — переспрашивать тем же
+      // диалогом было бы вторым подтверждением одного и того же намерения.
+      clearDirtyState();
+      el.innerHTML = "";
+    });
+    el.querySelector("#nu-submit").addEventListener("click", async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
       try {
-        const created = await api.post("/users", {
-          last_name, first_name: el.querySelector("#nu-first").value.trim(),
-          domain_login, role: el.querySelector("#nu-role").value,
-        });
-        await ensureUsers(true);
-        await ensureAccessMatrix(true);
-        await openUser(created.id);
+        await submitNewUser(el);
       } catch (err) {
-        errorEl.textContent = err.detail || "Не удалось создать пользователя";
+        el.querySelector("#nu-error").textContent = err.detail || err.message || "Не удалось создать пользователя";
+      } finally {
+        button.disabled = false;
       }
     });
   }
 
   async function openUser(id, tab) {
-    if (!(await requestLeave())) return;
-    state.selectedUserId = id;
-    state.editTab = tab || "profile";
-    state.access = null;
-    state.accessDirty = false;
-    state.accessView = "summary";
-    state.page = "edit";
-    initCardDraft();
-    await render();
+    await withNavGuard(async () => {
+      if (!(await requestLeave())) return;
+      state.selectedUserId = id;
+      state.editTab = tab || "profile";
+      state.access = null;
+      state.accessDirty = false;
+      state.accessView = "summary";
+      state.pendingPassword = null;
+      state.page = "edit";
+      initCardDraft();
+      await render();
+    });
   }
 
   // ---------- Карточка пользователя ----------
@@ -396,33 +535,59 @@ export function mountUsersAccess(container, ctx) {
   }
 
   function markCardDirty() {
-    const wasDirty = state.cardDirty;
+    const wasTracked = state.cardDirty || !!state.pendingPassword;
     state.cardDirty = true;
     setDirty({
       message: "В карточке пользователя есть несохранённые изменения.",
-      save: saveCardOrThrow,
-      discard: () => { initCardDraft(); },
+      save: saveCardAndPasswordOrThrow,
+      discard: () => { initCardDraft(); state.pendingPassword = null; },
     });
     status.textContent = "Есть несохранённые изменения";
     // Кнопки в футере должны появиться с первого же нажатия, а не только
     // на следующей полной перерисовке — иначе "Сохранить" не видно, пока
     // не переключишь вкладку и не вернёшься.
-    if (!wasDirty) renderCardFooter();
+    if (!wasTracked) renderCardFooter();
   }
 
-  async function saveCardOrThrow() {
+  // Общее сохранение вкладок "Профиль"/"Вход и безопасность": обычная
+  // правка полей (PATCH) и/или незавершённый ввод пароля (POST
+  // set-password) — ОДНИМ действием диалога "Сохранить и продолжить",
+  // чтобы смена должности не могла тихо отменить недописанный временный
+  // пароль и наоборот (оба поля живут на одной вкладке одновременно).
+  async function saveCardAndPasswordOrThrow() {
     const u = currentUserBeingEdited();
-    const d = state.cardDraft;
-    const updated = await api.patch(`/users/${u.id}`, {
-      last_name: d.last_name.trim(), first_name: d.first_name.trim(),
-      patronymic: d.patronymic.trim() || null, position: d.position.trim() || null,
-      department: d.department.trim() || null, domain_login: d.domain_login.trim(),
-      role: d.role, auth_method: d.auth_method, must_change_password: d.must_change_password,
-    });
-    Object.assign(u, updated);
-    await ensureAccessMatrix(true); // системная роль/must_change_password влияют на сводку
-    state.cardDirty = false;
+    if (state.cardDirty) {
+      const d = state.cardDraft;
+      const updated = await api.patch(`/users/${u.id}`, {
+        last_name: d.last_name.trim(), first_name: d.first_name.trim(),
+        patronymic: d.patronymic.trim() || null, position: d.position.trim() || null,
+        department: d.department.trim() || null, domain_login: d.domain_login.trim(),
+        role: d.role, auth_method: d.auth_method, must_change_password: d.must_change_password,
+      });
+      Object.assign(u, updated);
+      state.cardDirty = false;
+    }
+    if (state.pendingPassword) {
+      await api.post(`/users/${u.id}/set-password`, {
+        password: state.pendingPassword.password,
+        must_change_password: state.pendingPassword.mustChange,
+      });
+      state.pendingPassword = null;
+      if (await tryRefresh(() => ensureUsers(true))) syncMustChangeFromServer();
+    }
     clearDirtyState();
+    const ok = await tryRefresh(() => ensureAccessMatrix(true));
+    state.status = ok ? "Сохранено" : "Изменения сохранены, но не удалось обновить отображение.";
+  }
+
+  // Точка исправления: "Задать пароль" решает must_change_password СВОИМ
+  // отдельным флагом (может отличаться от того, что стоит в черновике
+  // профиля/входа) — после успешной установки пароля черновик подтягивает
+  // это ОДНО подтверждённое сервером поле, не трогая остальные
+  // несохранённые поля карточки (не откатывает то, что ещё не сохранено).
+  function syncMustChangeFromServer() {
+    const fresh = currentUserBeingEdited();
+    if (fresh && state.cardDraft) state.cardDraft.must_change_password = !!fresh.must_change_password;
   }
 
   async function renderEdit() {
@@ -441,15 +606,14 @@ export function mountUsersAccess(container, ctx) {
         </aside>
         <section id="ua-edit-panel"></section>
       </div>`;
-    body.querySelector("[data-back]").addEventListener("click", async () => {
-      if (!(await requestLeave())) return;
-      goto("users");
-    });
+    body.querySelector("[data-back]").addEventListener("click", () => goto("users"));
     body.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", async () => {
       if (b.dataset.tab === state.editTab) return;
-      if (!(await requestLeave())) return;
-      state.editTab = b.dataset.tab;
-      await render();
+      await withNavGuard(async () => {
+        if (!(await requestLeave())) return;
+        state.editTab = b.dataset.tab;
+        await render();
+      });
     }));
     const panel = body.querySelector("#ua-edit-panel");
     if (state.editTab === "profile") renderProfile(panel, u);
@@ -461,11 +625,12 @@ export function mountUsersAccess(container, ctx) {
   }
 
   function renderCardFooter() {
-    if (!state.cardDirty) return;
+    if (!state.cardDirty && !state.pendingPassword) return;
     footActions.innerHTML = `${btn("Отменить", 'id="card-cancel"')}${btn("Сохранить", 'id="card-save"', true)}`;
     status.textContent = "Есть несохранённые изменения";
     footActions.querySelector("#card-cancel").addEventListener("click", async () => {
       initCardDraft();
+      state.pendingPassword = null;
       clearDirtyState();
       await render();
     });
@@ -473,8 +638,7 @@ export function mountUsersAccess(container, ctx) {
       const button = e.currentTarget;
       button.disabled = true;
       try {
-        await saveCardOrThrow();
-        state.status = "Сохранено";
+        await saveCardAndPasswordOrThrow();
         await render();
       } catch (err) {
         state.status = err.detail || "Не удалось сохранить";
@@ -534,9 +698,9 @@ export function mountUsersAccess(container, ctx) {
         <div class="v2-result">
           <h4>Задать пароль</h4>
           <div class="v2-fields">
-            <label class="v2-field">Новый пароль<input id="sec-pass" type="password"></label>
+            <label class="v2-field">Новый пароль<input id="sec-pass" type="password" value="${escapeHtml(state.pendingPassword?.password || "")}"></label>
           </div>
-          <label class="v2-role-check"><input type="checkbox" id="sec-pw-must" checked><span>Потребовать смену при следующем входе</span></label>
+          <label class="v2-role-check"><input type="checkbox" id="sec-pw-must" ${state.pendingPassword ? (state.pendingPassword.mustChange ? "checked" : "") : "checked"}><span>Потребовать смену при следующем входе</span></label>
           <div class="v2-auth-error" id="sec-error"></div>
           ${btn("Задать пароль", 'id="sec-save"', true)}
         </div>
@@ -549,6 +713,9 @@ export function mountUsersAccess(container, ctx) {
     `;
     panel.querySelector("[data-v1-link]").addEventListener("click", async (e) => {
       e.preventDefault();
+      // Та же блокировка, что у кнопки шапки: переход в V1 не должен
+      // скрыть результат записи, которая ещё выполняется.
+      if (api.hasPendingWrites()) return;
       if (!(await requestLeave())) return;
       location.href = "/?ui=v1";
     });
@@ -562,6 +729,24 @@ export function mountUsersAccess(container, ctx) {
       const mustEl = panel.querySelector("#sec-must");
       if (mustEl) mustEl.addEventListener("change", (e) => { d.must_change_password = e.target.checked; markCardDirty(); });
     }
+    const passEl = panel.querySelector("#sec-pass");
+    if (passEl) {
+      const trackPending = () => {
+        const password = panel.querySelector("#sec-pass").value;
+        const mustChange = panel.querySelector("#sec-pw-must").checked;
+        state.pendingPassword = password ? { password, mustChange } : null;
+        if (state.pendingPassword) markCardDirty();
+        else if (!state.cardDirty) {
+          // Поле очистили руками — снимаем и слежение, и кнопки подвала,
+          // иначе "Сохранить"/"Отменить" остаются висеть без дела.
+          clearDirtyState();
+          footActions.innerHTML = "";
+          status.textContent = "";
+        }
+      };
+      passEl.addEventListener("input", trackPending);
+      panel.querySelector("#sec-pw-must").addEventListener("change", trackPending);
+    }
     const saveBtn = panel.querySelector("#sec-save");
     if (saveBtn) saveBtn.addEventListener("click", async () => {
       const errorEl = panel.querySelector("#sec-error");
@@ -572,9 +757,16 @@ export function mountUsersAccess(container, ctx) {
           password: panel.querySelector("#sec-pass").value,
           must_change_password: panel.querySelector("#sec-pw-must").checked,
         });
+        state.pendingPassword = null;
+        if (!state.cardDirty) { clearDirtyState(); footActions.innerHTML = ""; }
         state.status = "Пароль обновлён";
-        panel.querySelector("#sec-pass").value = "";
-        await ensureUsers(true);
+        if (await tryRefresh(() => ensureUsers(true))) syncMustChangeFromServer();
+        renderStatusRetry();
+        // Перерисовать панель: "Требовать смену пароля" в блоке "Способ
+        // входа" — ДРУГОЙ чекбокс, чем тот, что был только что отправлен
+        // здесь, и обязан отразить подтверждённое сервером значение, а не
+        // то, что было в черновике до этого действия.
+        renderSecurity(panel, u);
       } catch (err) {
         errorEl.textContent = err.detail || "Не удалось задать пароль";
       } finally {
@@ -638,12 +830,16 @@ export function mountUsersAccess(container, ctx) {
     await api.put(`/users/${u.id}/access`, { grants: state.access.grants });
     state.accessDirty = false;
     state.access = null;
-    await ensureAccessMatrix(true);
     clearDirtyState();
+    const ok = await tryRefresh(() => ensureAccessMatrix(true));
+    state.status = ok ? "Доступ сохранён" : "Доступ сохранён, но не удалось обновить отображение.";
   }
 
   async function renderAccess(panel, u) {
-    await Promise.all([ensureRoles(), ensureCatalog()]);
+    // Каталог — не роли: список ролей для чекбоксов берётся из
+    // /me/permissions (roleName/roleList), доступного независимо от
+    // гранта "roles" (см. комментарий у roleName выше).
+    await ensureCatalog();
     await loadAccessFor(u);
     if (state.access.system_admin) {
       panel.innerHTML = `<h4>Полный доступ ко всему сервису</h4>
@@ -657,13 +853,12 @@ export function mountUsersAccess(container, ctx) {
       footActions.innerHTML = `${btn("Отменить", 'id="ua-access-cancel"')}${btn("Сохранить изменения", 'id="ua-access-save"', true)}`;
       footActions.querySelector("#ua-access-save").disabled = !state.accessDirty;
       footActions.querySelector("#ua-access-cancel").disabled = !state.accessDirty;
-      status.textContent = state.accessDirty ? "Есть несохранённые изменения" : "";
+      if (state.accessDirty) status.textContent = "Есть несохранённые изменения";
       footActions.querySelector("#ua-access-save").addEventListener("click", async (e) => {
         const button = e.currentTarget;
         button.disabled = true;
         try {
           await saveAccessOrThrow();
-          state.status = "Доступ сохранён";
           await render();
         } catch (err) {
           state.status = err.detail || "Не удалось сохранить доступ";
@@ -741,7 +936,7 @@ export function mountUsersAccess(container, ctx) {
       <button type="button" class="v2-link" data-back-summary>← Сводка доступа</button>
       <h4>${escapeHtml(areaLabel(key, catalog))}</h4>
       <small>Прямые назначения на этом уровне</small>
-      ${(state.roles.roles || []).map((r) => `
+      ${(roleList || []).map((r) => `
         <label class="v2-role-check"><input type="checkbox" data-grant-role="${r.key}" ${direct.includes(r.key) ? "checked" : ""} ${canWriteUsers ? "" : "disabled"}><span>${escapeHtml(r.name)}</span></label>
       `).join("")}
       ${inherited.length ? `<p class="v2-note">Действует независимо от отмеченного выше (унаследовано): ${escapeHtml(accessRolesText(new Set(inherited)))}. Роли складываются — снять их можно только там, где они выданы.</p>` : ""}
@@ -791,8 +986,9 @@ export function mountUsersAccess(container, ctx) {
     });
     await api.put("/roles/features", { items });
     state.rolesDraft.clear();
-    await ensureRoles(true);
     clearDirtyState();
+    const ok = await tryRefresh(() => ensureRoles(true));
+    state.status = ok ? "Разрешения сохранены" : "Разрешения сохранены, но не удалось обновить отображение.";
   }
 
   async function renderRoles() {
@@ -820,7 +1016,10 @@ export function mountUsersAccess(container, ctx) {
         <section id="role-editor"></section>
       </div>` : `<p class="v2-note">Ролей пока нет — создайте первую кнопкой выше.</p>`}
     `;
-    if (canWriteRoles) body.querySelector("#role-new").addEventListener("click", () => renderRoleCreateForm());
+    if (canWriteRoles) body.querySelector("#role-new").addEventListener("click", async () => {
+      if (!(await requestLeave())) return;
+      renderRoleCreateForm();
+    });
     body.querySelectorAll("[data-role]").forEach((b) => b.addEventListener("click", () => {
       ui.selected = b.dataset.role; renderRoles();
     }));
@@ -847,15 +1046,18 @@ export function mountUsersAccess(container, ctx) {
       saveBtn.disabled = true; cancelBtn.disabled = true;
       try {
         await saveRolesDraftOrThrow();
-        state.status = "Разрешения сохранены";
+        // Флаг снимаем ДО перерисовки: render() строит сегменты с
+        // disabled="!canWriteRoles || rolesSaving" — переставленный ПОСЛЕ
+        // render() флаг оставлял их задизейбленными до следующего
+        // случайного перерендера (issue из код-ревью).
+        state.rolesSaving = false;
         await render();
       } catch (err) {
         // Черновик остаётся — ошибка не должна выглядеть как потеря правок.
         state.status = err.detail || "Не удалось сохранить разрешения";
+        state.rolesSaving = false;
         status.textContent = state.status;
         saveBtn.disabled = false; cancelBtn.disabled = false;
-      } finally {
-        state.rolesSaving = false;
       }
     });
     cancelBtn.addEventListener("click", async () => {
@@ -865,24 +1067,45 @@ export function mountUsersAccess(container, ctx) {
     });
   }
 
+  function markRoleFormDirty(el, formMessage, submitFn) {
+    setDirty({
+      message: formMessage,
+      save: () => submitFn(),
+      discard: () => { el.innerHTML = ""; },
+    });
+    status.textContent = "Есть несохранённые изменения";
+  }
+
   function renderRoleCreateForm() {
     const el = body.querySelector("#role-new-form");
+    async function submit() {
+      const name = el.querySelector("#role-new-name").value.trim();
+      const errorEl = el.querySelector("#role-new-error");
+      errorEl.textContent = "";
+      if (!name) { errorEl.textContent = "Введите название"; throw new Error("Введите название"); }
+      const created = await api.post("/roles", { name });
+      clearDirtyState();
+      await tryRefresh(() => ensureRoles(true));
+      state.rolesUi.selected = created.key;
+      el.innerHTML = "";
+      await render();
+    }
     el.innerHTML = `<div class="v2-inline" style="margin-bottom:14px">
       <input id="role-new-name" placeholder="Название роли">
       ${btn("Создать", 'id="role-new-submit"', true)}${btn("Отмена", 'id="role-new-cancel"')}
       <span class="v2-auth-error" id="role-new-error"></span></div>`;
-    el.querySelector("#role-new-cancel").addEventListener("click", () => { el.innerHTML = ""; });
-    el.querySelector("#role-new-submit").addEventListener("click", async () => {
-      const name = el.querySelector("#role-new-name").value.trim();
-      const errorEl = el.querySelector("#role-new-error");
-      if (!name) { errorEl.textContent = "Введите название"; return; }
-      try {
-        const created = await api.post("/roles", { name });
-        await ensureRoles(true);
-        state.rolesUi.selected = created.key;
-        el.innerHTML = "";
-        await render();
-      } catch (err) { errorEl.textContent = err.detail || "Не удалось создать роль"; }
+    el.querySelector("#role-new-name").addEventListener("input", () =>
+      markRoleFormDirty(el, "В форме новой роли есть введённые данные.", submit));
+    el.querySelector("#role-new-cancel").addEventListener("click", () => {
+      clearDirtyState();
+      el.innerHTML = "";
+    });
+    el.querySelector("#role-new-submit").addEventListener("click", async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      try { await submit(); } catch (err) {
+        el.querySelector("#role-new-error").textContent = err.detail || err.message || "Не удалось создать роль";
+      } finally { button.disabled = false; }
     });
   }
 
@@ -899,14 +1122,16 @@ export function mountUsersAccess(container, ctx) {
       // Порядок не меняет состав ролей/разделов, но черновик мог ссылаться
       // на роль, чья карточка сейчас перерисуется — сбрасываем на всякий
       // случай тем же приёмом, что и после переименования/удаления в V1.
-      await ensureRoles(true);
-      await render();
+      const ok = await tryRefresh(() => ensureRoles(true));
+      state.status = ok ? "" : "Порядок сохранён, но не удалось обновить отображение.";
     } catch (err) {
       state.status = err.detail || "Не удалось изменить порядок";
-    } finally {
-      state.rolesBusy = false;
-      status.textContent = state.status || "";
     }
+    // Флаг снимаем ДО render(): иначе кнопки ▲▼ рисуются disabled и
+    // остаются такими до следующего перерендера (та же ошибка, что и у
+    // rolesSaving выше).
+    state.rolesBusy = false;
+    await render();
   }
 
   function renderRoleEditor(el, role) {
@@ -930,7 +1155,7 @@ export function mountUsersAccess(container, ctx) {
           <div class="v2-perm${dirty ? " v2-perm-dirty" : ""}">
             <div>${escapeHtml(f.title)}<small>${escapeHtml(f.scope_label || "")}</small></div>
             <div class="v2-seg" aria-label="${escapeHtml(f.title)}">
-              ${LEVELS.map((lv) => `<button data-perm="${f.key}" data-level="${lv}" aria-pressed="${level === lv}" ${canWriteRoles && !state.rolesSaving ? "" : "disabled"}>${state.roles.level_labels[lv]}</button>`).join("")}
+              ${LEVELS.map((lv) => `<button data-perm="${f.key}" data-level="${lv}" aria-pressed="${level === lv}" ${canWriteRoles && !state.rolesSaving ? "" : "disabled"}>${LEVEL_LABELS[lv]}</button>`).join("")}
             </div>
           </div>`;
         }).join("")}
@@ -938,8 +1163,14 @@ export function mountUsersAccess(container, ctx) {
       <p class="v2-note">Изменения роли затронут всех, кому она назначена (сейчас — ${role.granted}).</p>
     `;
     if (canWriteRoles) {
-      el.querySelector("#role-delete").addEventListener("click", () => deleteRole(role));
-      el.querySelector("#role-rename").addEventListener("click", () => renderRoleRenameForm(el, role));
+      el.querySelector("#role-delete").addEventListener("click", async () => {
+        if (hasUnsavedChanges() && !(await requestLeave())) return;
+        deleteRole(role);
+      });
+      el.querySelector("#role-rename").addEventListener("click", async () => {
+        if (hasUnsavedChanges() && !(await requestLeave())) return;
+        renderRoleRenameForm(el, role);
+      });
       el.querySelectorAll("[data-perm]").forEach((b) => b.addEventListener("click", () => {
         const featureKey = b.dataset.perm, level = b.dataset.level;
         const key = rolesCellKey(role.key, featureKey);
@@ -957,20 +1188,33 @@ export function mountUsersAccess(container, ctx) {
 
   function renderRoleRenameForm(el, role) {
     const host = el.querySelector("#role-rename-form");
+    async function submit() {
+      const name = host.querySelector("#role-rename-name").value.trim();
+      const errorEl = host.querySelector("#role-rename-error");
+      errorEl.textContent = "";
+      if (!name) { errorEl.textContent = "Введите название"; throw new Error("Введите название"); }
+      await api.patch(`/roles/${role.key}`, { name });
+      clearDirtyState();
+      await tryRefresh(() => ensureRoles(true));
+      host.innerHTML = "";
+      await render();
+    }
     host.innerHTML = `<div class="v2-inline" style="margin-bottom:14px">
       <input id="role-rename-name" value="${escapeHtml(role.name)}">
       ${btn("Сохранить", 'id="role-rename-submit"', true)}${btn("Отмена", 'id="role-rename-cancel"')}
       <span class="v2-auth-error" id="role-rename-error"></span></div>`;
-    host.querySelector("#role-rename-cancel").addEventListener("click", () => { host.innerHTML = ""; });
-    host.querySelector("#role-rename-submit").addEventListener("click", async () => {
-      const name = host.querySelector("#role-rename-name").value.trim();
-      const errorEl = host.querySelector("#role-rename-error");
-      if (!name) { errorEl.textContent = "Введите название"; return; }
-      try {
-        await api.patch(`/roles/${role.key}`, { name });
-        await ensureRoles(true);
-        await render();
-      } catch (err) { errorEl.textContent = err.detail || "Не удалось переименовать"; }
+    host.querySelector("#role-rename-name").addEventListener("input", () =>
+      markRoleFormDirty(host, "Переименование роли не сохранено.", submit));
+    host.querySelector("#role-rename-cancel").addEventListener("click", () => {
+      clearDirtyState();
+      host.innerHTML = "";
+    });
+    host.querySelector("#role-rename-submit").addEventListener("click", async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      try { await submit(); } catch (err) {
+        host.querySelector("#role-rename-error").textContent = err.detail || err.message || "Не удалось переименовать";
+      } finally { button.disabled = false; }
     });
   }
 
@@ -983,30 +1227,124 @@ export function mountUsersAccess(container, ctx) {
       + `настроенных разрешений в матрице: ${plan.permissions}, выданных грантов: ${plan.granted}.`;
     if (!confirm(msg)) return;
     state.rolesBusy = true;
+    // Запись — отдельно от последующего обновления экрана: если сама
+    // операция не прошла, это единственная настоящая ошибка ниже.
     try {
       await api.delete(`/roles/${role.key}`);
-      // Точка исправления регрессии df4da55: полная перечитка (не из кэша)
-      // + сброс всего, что могло ссылаться на удалённую роль.
-      state.rolesDraft.clear();
-      clearDirtyState();
-      state.access = null;         // редактор доступа мог кэшировать её грант
-      await ensureAccessMatrix(true);
-      await ensureRoles(true);
-      state.rolesUi.selected = state.roles.roles[0]?.key ?? null;
-      state.status = plan.granted ? `Роль удалена, снято выдач: ${plan.granted}` : "Роль удалена";
     } catch (err) {
       state.status = err.detail || "Не удалось удалить роль";
-    } finally {
       state.rolesBusy = false;
       await render();
+      return;
     }
+    state.rolesDraft.clear();
+    clearDirtyState();
+    state.access = null; // редактор доступа мог кэшировать её грант
+    let refreshOk = await tryRefresh(() => ensureRoles(true));
+    // Матрица доступа нужна только колонке "Доступ" в списке пользователей
+    // (раздел "users") — если её не видно, даже не пытаемся: не даём
+    // не относящейся к делу 403 выглядеть как провал удаления роли.
+    if (canReadUsers) refreshOk = (await tryRefresh(() => ensureAccessMatrix(true))) && refreshOk;
+    state.rolesUi.selected = state.roles?.roles?.[0]?.key ?? null;
+    const deletedNote = plan.granted ? `Роль удалена, снято выдач: ${plan.granted}` : "Роль удалена";
+    state.status = refreshOk ? deletedNote : `${deletedNote}, но не удалось обновить отображение.`;
+    state.rolesBusy = false;
+    await render();
   }
 
   // ---------- Проверка доступа ----------
 
+  function selectedObjectLabel(tree) {
+    if (state.check.objectId == null) return "— объект не выбран —";
+    for (const p of tree) {
+      const o = p.objects.find((x) => x.id === state.check.objectId);
+      if (o) return `${p.name} / ${o.name}`;
+    }
+    return "— объект не выбран —";
+  }
+
+  // Поиск с клавиатуры вместо плоского списка на сотни объектов: кнопка
+  // открывает панель с полем поиска и списком "Проект → Объект", кнопки
+  // внутри — обычные (Tab/Enter работают сами по себе), плюс стрелки
+  // вверх/вниз и Escape. Смысл поля не меняется — тот же state.check.objectId,
+  // включая null = "объект не выбран".
+  function renderObjectPicker(container, tree) {
+    container.innerHTML = `
+      <div class="v2-combobox" id="chk-combobox">
+        <button type="button" class="v2-combobox-toggle" id="chk-toggle" aria-haspopup="listbox" aria-expanded="false">
+          <span id="chk-toggle-label"></span>
+        </button>
+        <div class="v2-combobox-panel" id="chk-panel" hidden>
+          <input type="text" id="chk-object-search" class="v2-search" placeholder="Поиск проекта или объекта" autocomplete="off">
+          <div class="v2-combobox-list" id="chk-list" role="listbox" aria-label="Объекты"></div>
+        </div>
+      </div>`;
+    const toggle = container.querySelector("#chk-toggle");
+    const label = container.querySelector("#chk-toggle-label");
+    const panel = container.querySelector("#chk-panel");
+    const search = container.querySelector("#chk-object-search");
+    const list = container.querySelector("#chk-list");
+
+    function renderList() {
+      const q = state.check.objectQuery.trim().toLowerCase();
+      let html = `<button type="button" class="v2-combobox-option" data-object-id="" role="option">— Объект не выбран —</button>`;
+      for (const p of tree) {
+        const projectMatches = !q || p.name.toLowerCase().includes(q);
+        const objects = p.objects.filter((o) => projectMatches || o.name.toLowerCase().includes(q));
+        if (!objects.length) continue;
+        html += `<div class="v2-combobox-group">${escapeHtml(p.name)}</div>`;
+        for (const o of objects) {
+          html += `<button type="button" class="v2-combobox-option" data-object-id="${o.id}" role="option" aria-selected="${state.check.objectId === o.id}">${escapeHtml(o.name)}</button>`;
+        }
+      }
+      list.innerHTML = html;
+    }
+
+    function open() {
+      panel.hidden = false;
+      toggle.setAttribute("aria-expanded", "true");
+      state.check.pickerOpen = true;
+      renderList();
+      search.value = state.check.objectQuery;
+      search.focus();
+      document.addEventListener("click", onOutsideClick, true);
+    }
+    function close() {
+      panel.hidden = true;
+      toggle.setAttribute("aria-expanded", "false");
+      state.check.pickerOpen = false;
+      document.removeEventListener("click", onOutsideClick, true);
+    }
+    function onOutsideClick(e) {
+      if (!container.contains(e.target)) close();
+    }
+    toggle.addEventListener("click", () => { if (panel.hidden) open(); else close(); });
+    search.addEventListener("input", (e) => { state.check.objectQuery = e.target.value; renderList(); });
+    search.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); close(); toggle.focus(); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); list.querySelector(".v2-combobox-option")?.focus(); }
+    });
+    list.addEventListener("keydown", (e) => {
+      const items = [...list.querySelectorAll(".v2-combobox-option")];
+      const i = items.indexOf(document.activeElement);
+      if (e.key === "ArrowDown") { e.preventDefault(); (items[i + 1] || items[0])?.focus(); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); (i <= 0 ? items[items.length - 1] : items[i - 1])?.focus(); }
+      else if (e.key === "Escape") { e.preventDefault(); close(); toggle.focus(); }
+    });
+    list.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-object-id]");
+      if (!b) return;
+      state.check.objectId = b.dataset.objectId ? Number(b.dataset.objectId) : null;
+      close();
+      label.textContent = selectedObjectLabel(tree);
+      toggle.focus();
+      loadCheck();
+    });
+    label.textContent = selectedObjectLabel(tree);
+  }
+
   async function renderCheck() {
     await ensureUsers();
-    await ensureRoles();
     const tree = await ensureTree();
     if (state.check.userId === null && state.users.length) state.check.userId = state.users[0].id;
     body.innerHTML = `
@@ -1015,16 +1353,12 @@ export function mountUsersAccess(container, ctx) {
         <label class="v2-field">Пользователь
           <select id="chk-user">${state.users.map((u) => `<option value="${u.id}" ${state.check.userId === u.id ? "selected" : ""}>${escapeHtml(u.display_name)}</option>`).join("")}</select>
         </label>
-        <label class="v2-field">Объект
-          <select id="chk-object"><option value="">— не выбран —</option>
-            ${tree.map((p) => p.objects.map((o) => `<option value="${o.id}" ${state.check.objectId === o.id ? "selected" : ""}>${escapeHtml(p.name)} / ${escapeHtml(o.name)}</option>`).join("")).join("")}
-          </select>
-        </label>
+        <label class="v2-field">Объект<span id="chk-object-holder"></span></label>
       </div>
       <div id="chk-result"></div>
     `;
+    renderObjectPicker(body.querySelector("#chk-object-holder"), tree);
     body.querySelector("#chk-user").addEventListener("change", (e) => { state.check.userId = Number(e.target.value); loadCheck(); });
-    body.querySelector("#chk-object").addEventListener("change", (e) => { state.check.objectId = e.target.value ? Number(e.target.value) : null; loadCheck(); });
     await loadCheck();
   }
 
@@ -1035,7 +1369,7 @@ export function mountUsersAccess(container, ctx) {
     const qs = state.check.objectId ? `?object_id=${state.check.objectId}` : "";
     let data;
     try { data = await api.get(`/users/${state.check.userId}/rights-matrix${qs}`); }
-    catch (err) { el.innerHTML = `<p class="v2-note">${escapeHtml(err.detail || "Не удалось получить права")}</p>`; return; }
+    catch (err) { el.innerHTML = `<p class="v2-note"></p>`; el.querySelector("p").textContent = err.detail || "Не удалось получить права"; return; }
     if (data.system_admin) {
       el.innerHTML = `<p class="v2-note">Полный доступ: администратор сервиса. Назначения на объектах его не ограничивают.</p>`;
       return;
@@ -1046,7 +1380,7 @@ export function mountUsersAccess(container, ctx) {
       ${data.features.filter((f) => !f.not_applicable).map((f) => `
         <div class="v2-perm">
           <div>${escapeHtml(f.title)}<small>${(f.from_roles || []).map((s) => `Роль «${escapeHtml(s.role)}»${s.source ? " → " + escapeHtml(s.source) : ""}`).join(" · ") || "—"}</small></div>
-          <span class="v2-tag">${escapeHtml(state.roles?.level_labels?.[f.level] || f.level)}</span>
+          <span class="v2-tag">${escapeHtml(LEVEL_LABELS[f.level] || f.level)}</span>
         </div>`).join("")}
     `;
   }

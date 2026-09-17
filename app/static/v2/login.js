@@ -81,5 +81,6 @@ export async function renderChangePassword(root, { api, onSuccess }) {
 }
 
 function escapeAttr(s) {
-  return String(s ?? "").replace(/[&"<>]/g, (c) => ({ "&": "&amp;", '"': "&quot;", "<": "&lt;", ">": "&gt;" }[c]));
+  return String(s ?? "").replace(/[&"'<>]/g, (c) =>
+    ({ "&": "&amp;", '"': "&quot;", "'": "&#39;", "<": "&lt;", ">": "&gt;" }[c]));
 }
