@@ -3298,6 +3298,9 @@
      конкретно свой flex: 0 0 auto, как у #picker-contracts, а не
      flex-basis из .mfr-side/.mfr-side-right (ID-селектор их перебивает). */
   #mfr-card-panel { flex: 0 0 auto; width: 300px; }
+  /* Тот же приём, что у #mfr-card-panel выше: свой flex, чтобы
+     makePanelResizer мог задавать ширину через style.width. */
+  #mfr-filters-panel { flex: 0 0 auto; width: 280px; }
   /* Вкладки внутри #mfr-card-panel — общий .tabs залипает с отступом,
      рассчитанным на padding:16px у #sidebar; здесь padding:10px
      (.mfr-side), отступ у своей копии меньше. */
@@ -3590,6 +3593,13 @@
   .bsch-table td { padding: 3px 6px; border-bottom: 1px solid var(--color-border); }
   .bsch-group td { background: var(--color-surface-2); padding-top: 6px; padding-bottom: 6px; }
   .bsch-total td { background: var(--color-surface-2); border-top: 2px solid var(--color-border); }
+  /* «Линейный трек» (2026-09-17) — простая плоская таблица, без группировки
+     и подсветки (в отличие от bsch-table у «Графика работ по блокам»):
+     здесь пока только список, без прогресса и сроков. */
+  .lintrack-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .lintrack-table th { text-align: left; padding: 4px 6px; border-bottom: 2px solid var(--color-border); }
+  .lintrack-table td { padding: 3px 6px; border-bottom: 1px solid var(--color-border); }
+  .lintrack-table td.lintrack-note { color: var(--color-text-muted); }
   .bsch-gantt-cell { padding: 2px 6px; }
   .bsch-gantt-track { position: relative; height: 16px; background: var(--color-surface-2); border-radius: 3px; }
   .bsch-gantt-bar { position: absolute; top: 1px; height: 6px; border-radius: 3px; }
@@ -5329,6 +5339,13 @@
                  строк и вид «Гант» — на экране. Свой раздел прав
                  (report_block_schedule), отдельная строка в меню. -->
             <button id="menu-report-block-schedule">График работ по блокам</button>
+            <!-- «Линейный трек» (живой запрос пользователя, 2026-09-17) —
+                 полный список позиций WBS объекта, без привязки к блоку/
+                 секции: дополняет «График работ по блокам», который
+                 строится только из ЗР (эт/сек/кв.эт/сек) и не показывает
+                 остальные единицы измерения справочника. Свой раздел прав
+                 (report_linear_track), см. app/report_linear_track.py. -->
+            <button id="menu-report-linear-track">Линейный трек</button>
           </div>
         </div>
         <!-- «Обучение» (2026-08-14). Инструкция собирается под роли самого
@@ -5605,6 +5622,15 @@
        (площадочные), а у чертежа свои, и рисовать их в одном холсте
        нельзя (см. app/revit_plan.py). -->
   <div id="mfr-workspace" style="display:none; flex:1 1 auto; min-height:0">
+    <!-- Панель фильтров слева (живой запрос пользователя, аналогично АРМ
+         прораба у ЖБИ) — опционально: по умолчанию фильтры остаются
+         вкладкой #mfr-card-panel справа (см. ниже), сюда переезжает тот же
+         узел #mfr-panel-tab-filters по клику на переключатель стороны
+         внутри него самого (app.js: applyMfrFiltersSide). Скрыта, пока
+         сторона не "left". -->
+    <div id="mfr-filters-panel" class="mfr-side" style="display:none"></div>
+    <div id="mfr-filters-panel-resize" class="panel-resize-handle" style="display:none"
+         title="Перетащите, чтобы изменить ширину панели"></div>
     <div style="flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:10px">
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
         <div class="hint-text" id="revit-plan-head" style="flex:1 1 auto; min-width:0"></div>
@@ -5688,6 +5714,17 @@
         </div>
       </div>
       <div id="mfr-panel-tab-filters" class="tab-panel">
+        <!-- Переключатель стороны (живой запрос пользователя, 2026-09-17):
+             сам узел #mfr-panel-tab-filters переезжает между вкладкой
+             #mfr-card-panel (справа) и #mfr-filters-panel (слева) — тот же
+             приём, что #filters-box у АРМ прораба ЖБИ (app.js:
+             applyMfrFiltersSide). Переключатель — ВНУТРИ переезжающего узла,
+             поэтому виден и остаётся под рукой независимо от стороны. -->
+        <div class="view-mode-switch" id="mfr-filters-side-switch" role="group"
+             aria-label="Расположение панели фильтров" style="margin-bottom:10px">
+          <button type="button" class="view-mode-btn" data-mfr-filters-side="right">Фильтр справа</button>
+          <button type="button" class="view-mode-btn" data-mfr-filters-side="left">Фильтр слева</button>
+        </div>
         <!-- «Сбросить все фильтры» (2026-09-10, живой запрос — было кнопкой
              над схемой, ПРЯЧУЩЕЙСЯ, пока хоть один отбор не задан) — теперь
              как в ЖБИ (#placement-filters, renderPlacementFilters): кнопка

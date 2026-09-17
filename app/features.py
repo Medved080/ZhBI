@@ -500,6 +500,12 @@ FEATURES = [
             "доступна только в режиме «процент». До 2026-09-10 был закрыт разделом "
             "«Учёт по блокам» без своей строки в матрице прав.",
             ["POST /reports/block-status"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_linear_track", "Отчёты", "Линейный трек",
+            "Полный список позиций справочника видов работ (WBS) объекта — без привязки к "
+            "блоку/секции и (пока) без прогресса: дополняет «График работ по блокам», который "
+            "строится только из ЗР (эт/сек/кв.эт/сек) и не показывает остальные единицы "
+            "измерения. Выгрузка XLSX.",
+            ["POST /reports/linear-track(.xlsx)"], SCOPE_OBJECT, _все(READ)),
 ]
 
 # ======================= ПРИМЕНИМОСТЬ К ТИПАМ ОБЪЕКТА =======================
@@ -535,7 +541,7 @@ _ТОЛЬКО_ЖБИ = {
     "plan", "export", "workspace_model", "workspace_foreman",
 }
 _ТОЛЬКО_МФР = {"revit_import", "revit_model", "workspace_mfr", "blocks", "work_progress",
-               "pdf_import", "report_block_schedule", "report_block_status"}
+               "pdf_import", "report_block_schedule", "report_block_status", "report_linear_track"}
 
 FEATURES = [
     f._replace(kinds=_Ж) if f.key in _ТОЛЬКО_ЖБИ else

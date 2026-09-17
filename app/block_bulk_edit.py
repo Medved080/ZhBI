@@ -123,6 +123,7 @@ COLUMNS = [
     ("wbs4", "WBS, 4 уровень", False),
     ("wbs5", "WBS, 5 уровень", False),
     ("section_code", "Секция", False),
+    ("section_name", "Наименование секции", False),
     ("level_floor", "Этаж", False),
     ("percent", "Прогресс выполнения", True),
     ("report_date", "Дата фиксации прогресса", True),
@@ -172,7 +173,7 @@ def _block_work_rows(conn, object_id: int) -> list:
     return conn.execute(
         """
         SELECT bw.*, wt.path AS wt_path,
-               s.code AS section_code, s.sort_order AS section_sort,
+               s.code AS section_code, s.name AS section_name, s.sort_order AS section_sort,
                l.floor AS level_floor, l.name AS level_name,
                l.elevation_mm AS elevation_mm, l.sort_order AS level_sort,
                o.name AS object_name
@@ -209,7 +210,8 @@ def display_values(row, percent: "int | None", fact_dates: tuple) -> dict:
     этаж = row["level_name"] or row["level_floor"]
     values = {
         KEY_COLUMN: row["id"], "object_name": row["object_name"],
-        "section_code": row["section_code"], "level_floor": этаж,
+        "section_code": row["section_code"], "section_name": row["section_name"],
+        "level_floor": этаж,
         "percent": percent, "report_date": None,
         "elevation_mm": row["elevation_mm"],
         "fact_start": fact_start, "fact_end": fact_end,

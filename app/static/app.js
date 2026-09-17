@@ -181,6 +181,7 @@ let state = {
   dateFilters: {
     smrStart: { from: "", to: "", empty: "show" },
     smrEnd: { from: "", to: "", empty: "show" },
+    deliveryPlanned: { from: "", to: "", empty: "show" },
   },
   // Отбор по ИЗМЕНЕНИЯМ (сайдбар → Фильтры → «Изменения», живой запрос
   // 2026-08-03): какие изделия рабочей области кто-то правил за период —
@@ -271,7 +272,7 @@ let state = {
   // и Кран/Стоянку, и Отметку).
   topFilterCollapsed: new Set([
     "zakhvatka", "craneStance", "craneStanceNone", "elevation", "floor", "elementType", "supplier",
-    "noContract", "smr", "changes",
+    "noContract", "smr", "delivery", "changes",
   ]),
   baseMarkerRadius: 1,
   view: null,
@@ -1720,12 +1721,12 @@ async function switchObject(objectId) {
   state.selectedId = null;
   state.multiSelectedIds.clear();
   lastServerTime = null;
-  // Оба набора фильтров: перечислимые категории и диапазоны дат СМР —
-  // структуры разной природы (см. комментарий у state.dateFilters), и
-  // сбрасывать надо обе, иначе диапазон дат от прежнего объекта останется.
+  // Оба набора фильтров: перечислимые категории и диапазоны дат (СМР,
+  // поставка) — структуры разной природы (см. комментарий у
+  // state.dateFilters), и сбрасывать надо обе, иначе диапазон дат от
+  // прежнего объекта останется.
   Object.values(state.placementFilters).forEach((набор) => набор.clear());
-  state.dateFilters.smrStart = { from: "", to: "", empty: "show" };
-  state.dateFilters.smrEnd = { from: "", to: "", empty: "show" };
+  resetAllDateFilters();
   // Третья структура фильтров — отбор по изменениям: в нём лежат id
   // элементов ПРЕЖНЕГО объекта, и без сброса новая схема оказалась бы
   // пустой без единого объяснения.
@@ -2378,11 +2379,23 @@ const PLACEMENT_FILTER_DEFS = [
 // field — имя поля элемента, оно же приходит в дельте автообновления
 // (DELTA_FIELDS), так что фильтр остаётся верным и после чужой правки.
 // title — заголовок подгруппы в форме, shortTitle — то же в краткой сводке
-// у свёрнутого заголовка группы «СМР» (там оба заголовка стоят рядом, и
-// слово «СМР» в каждом из них было бы лишним повтором).
+// у свёрнутого заголовка группы (там оба заголовка стоят рядом, и слово
+// группы в каждом из них было бы лишним повтором). group — ключ верхнего
+// фильтра (DATE_FILTER_GROUPS), к которому относится поле: несколько дат
+// разной природы (СМР — из графика MS Project, поставка — правится вручную
+// в карточке) показываются отдельными свёрнутыми группами, но фильтруются
+// одним и тем же циклом в elementPassesDateFilters.
 const DATE_FILTER_DEFS = [
-  { key: "smrStart", title: "Дата начала СМР", shortTitle: "начало", field: "project_smr_start_date" },
-  { key: "smrEnd", title: "Дата окончания СМР", shortTitle: "окончание", field: "project_delivery_date" },
+  { key: "smrStart", title: "Дата начала СМР", shortTitle: "начало", field: "project_smr_start_date", group: "smr" },
+  { key: "smrEnd", title: "Дата окончания СМР", shortTitle: "окончание", field: "project_delivery_date", group: "smr" },
+  { key: "deliveryPlanned", title: "Плановая дата поставки", shortTitle: "поставка", field: "planned_delivery_date", group: "delivery" },
+];
+
+// Верхнеуровневые группы дат — заголовок свёрнутой группы и ключ для
+// state.topFilterCollapsed (см. buildDateRangeFilterGroup).
+const DATE_FILTER_GROUPS = [
+  { key: "smr", title: "СМР" },
+  { key: "delivery", title: "Поставка" },
 ];
 
 function dateFilterIsActive(key) {
@@ -2888,13 +2901,16 @@ function dateFilterSummary(f) {
   return parts.join(", ");
 }
 
-function buildSmrFilterGroup(onChange) {
-  const active = DATE_FILTER_DEFS.some(d => dateFilterIsActive(d.key));
-  const summary = DATE_FILTER_DEFS
+function buildDateRangeFilterGroup(groupDef, onChange) {
+  const defs = DATE_FILTER_DEFS.filter(d => d.group === groupDef.key);
+  const active = defs.some(d => dateFilterIsActive(d.key));
+  const summary = defs
     .filter(d => dateFilterIsActive(d.key))
     .map(d => `${d.shortTitle}: ${dateFilterSummary(state.dateFilters[d.key])}`)
     .join(" · ");
-  const { wrap, header, body } = filterGroupShell(active ? `СМР · ${summary}` : "СМР", "smr", { actions: false });
+  const { wrap, header, body } = filterGroupShell(
+    active ? `${groupDef.title} · ${summary}` : groupDef.title, groupDef.key, { actions: false }
+  );
 
   const resetBtn = document.createElement("button");
   resetBtn.type = "button";
@@ -2902,12 +2918,12 @@ function buildSmrFilterGroup(onChange) {
   resetBtn.textContent = "сбросить";
   resetBtn.disabled = !active;
   resetBtn.addEventListener("click", () => {
-    resetAllDateFilters();
+    for (const def of defs) resetDateFilter(def.key);
     onChange();
   });
   header.appendChild(resetBtn);
 
-  for (const def of DATE_FILTER_DEFS) body.appendChild(buildDateFilterSubgroup(def, onChange));
+  for (const def of defs) body.appendChild(buildDateFilterSubgroup(def, onChange));
   return wrap;
 }
 
@@ -3797,10 +3813,13 @@ function renderPlacementFilters() {
     ));
   }
 
-  // Даты СМР (из графика MS Project) — одной группой в самом конце
-  // списка, отдельно от групп-перечислений: отбор диапазоном, а не
-  // галочками (см. DATE_FILTER_DEFS/buildSmrFilterGroup).
-  container.appendChild(buildSmrFilterGroup(onPlacementFilterChange));
+  // Диапазоны дат (СМР — из графика MS Project, Поставка — плановая дата
+  // поставки) — отдельными группами в самом конце списка, отдельно от
+  // групп-перечислений: отбор диапазоном, а не галочками (см.
+  // DATE_FILTER_DEFS/DATE_FILTER_GROUPS/buildDateRangeFilterGroup).
+  for (const groupDef of DATE_FILTER_GROUPS) {
+    container.appendChild(buildDateRangeFilterGroup(groupDef, onPlacementFilterChange));
+  }
 
   // «Изменения» — самой последней: отбор не по свойству изделия, а по тому,
   // что с ним делали (данные приходят с сервера, см. buildChangeFilterGroup).
@@ -21153,6 +21172,22 @@ const REPORTS = {
     noFilter: true,
     wide: true,
   },
+  // «Линейный трек» (живой запрос пользователя, 2026-09-17) — полный
+  // список позиций WBS объекта, без привязки к блоку/секции: то, что
+  // «Шахматка»/«График работ по блокам» не показывают, потому что строится
+  // только из ЗР эт/сек (см. app/report_linear_track.py). Пока простой
+  // список без прогресса и сроков — учёт прогресса по этим позициям
+  // (решение пользователя) будет отдельной доработкой, тогда же появится
+  // и выгрузка PDF; сейчас только XLSX.
+  linear_track: {
+    title: "Линейный трек",
+    endpoint: "/reports/linear-track",
+    render: renderLinearTrackReport,
+    linearTrack: true,
+    noFilter: true,
+    noPdf: true,
+    wide: true,
+  },
 };
 let currentReport = "status";
 // Период графика «Динамики» в ФОРМЕ (живой запрос 2026-08-03) — тот же, что
@@ -22583,6 +22618,8 @@ async function loadReport() {
       statusLine.textContent = reportData.elements
         ? `Запланированных работ: ${reportData.elements}`
         : "Запланированных работ ещё нет — «Настройки» в панели блока";
+    } else if (def.linearTrack) {
+      statusLine.textContent = `Позиций: ${reportData.count}`;
     } else if (def.needsScale) {
       // «График контрактации»: главное число — не «сколько изделий», а
       // разрыв между потребностью и контрактами. Его и выносим в строку
@@ -22637,6 +22674,7 @@ async function switchReport(key) {
     REPORTS[key].completionViews ? "" : "none";
   document.getElementById("report-use-filter-box").style.display =
     (REPORTS[key].needsWorkPeriod || REPORTS[key].noFilter) ? "none" : "";
+  document.getElementById("report-pdf").style.display = REPORTS[key].noPdf ? "none" : "";
   // Галочка «учитывать фильтр» — со СВОИМ состоянием у каждого отчёта (см.
   // reportUseFilter): у «Статуса комплектации» она включена по умолчанию, и
   // без этого переход по вкладке молча менял бы отбор соседних отчётов.
@@ -22927,6 +22965,12 @@ document.getElementById("menu-report-block-schedule").addEventListener("click", 
   applyReportSize();
   showBackToReport(false);
   switchReport("block_schedule");
+});
+document.getElementById("menu-report-linear-track").addEventListener("click", () => {
+  reportsBackdrop.classList.add("open");
+  applyReportSize();
+  showBackToReport(false);
+  switchReport("linear_track");
 });
 document.getElementById("an-only-deficit").addEventListener("change", () => {
   if (reportData) document.getElementById("report-body").innerHTML = renderAnalyticsReport(reportData);
@@ -29939,6 +29983,59 @@ function switchMfrPanelTab(name) {
 document.querySelectorAll("#mfr-panel-tabs .tab-btn").forEach(btn =>
   btn.addEventListener("click", () => switchMfrPanelTab(btn.dataset.mfrPanelTab)));
 
+// Сторона панели «Фильтры» МФР (живой запрос пользователя, 2026-09-17,
+// опционально — по образцу АРМ прораба у ЖБИ, см. setWorkspace/filtersBox):
+// локально у пользователя (localStorage), а не общая настройка объекта —
+// это про удобство конкретного человека, не про данные. По умолчанию
+// «справа» — прежнее поведение (вкладка #mfr-card-panel) не меняется, пока
+// кто-то явно не выберет «слева» переключателем внутри самой панели.
+const MFR_FILTERS_SIDE_KEY = "zhbi_mfr_filters_side";
+let mfrFiltersSide = вспомнить(MFR_FILTERS_SIDE_KEY) === "left" ? "left" : "right";
+
+function applyMfrFiltersSide() {
+  const panel = document.getElementById("mfr-panel-tab-filters");
+  const leftHome = document.getElementById("mfr-filters-panel");
+  const rightHome = document.getElementById("mfr-card-panel");
+  const tabBtn = document.querySelector('#mfr-panel-tabs .tab-btn[data-mfr-panel-tab="filters"]');
+  if (!panel || !leftHome || !rightHome) return;
+  const left = mfrFiltersSide === "left";
+  const home = left ? leftHome : rightHome;
+  const moved = panel.parentElement !== home; // ложь при обычной перерисовке/загрузке страницы
+
+  leftHome.style.display = left ? "" : "none";
+  document.getElementById("mfr-filters-panel-resize").style.display = left ? "" : "none";
+  if (tabBtn) tabBtn.style.display = left ? "none" : "";
+
+  if (moved) home.appendChild(panel);
+  if (left) {
+    // Слева фильтры показаны ПОСТОЯННО (не вкладка) — .active нужен ради
+    // .tab-panel.active{display:block}, а сюда её больше не переключает
+    // switchMfrPanelTab (он видит только #mfr-card-panel > .tab-panel).
+    panel.classList.add("active");
+  } else if (moved) {
+    // Только что вернулись на правую панель осознанным переключением —
+    // делаем «Фильтры» активной вкладкой. При обычной загрузке страницы
+    // (moved=false, панель и так уже на месте) трогать активную вкладку
+    // нельзя: разметка по умолчанию открывает «Свойства».
+    switchMfrPanelTab("filters");
+  }
+
+  document.querySelectorAll("#mfr-filters-side-switch .view-mode-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.mfrFiltersSide === mfrFiltersSide));
+}
+document.querySelectorAll("#mfr-filters-side-switch .view-mode-btn").forEach(btn =>
+  btn.addEventListener("click", () => {
+    if (btn.dataset.mfrFiltersSide === mfrFiltersSide) return;
+    mfrFiltersSide = btn.dataset.mfrFiltersSide;
+    запомнить(MFR_FILTERS_SIDE_KEY, mfrFiltersSide);
+    applyMfrFiltersSide();
+  }));
+applyMfrFiltersSide();
+makePanelResizer(
+  document.getElementById("mfr-filters-panel-resize"), document.getElementById("mfr-filters-panel"),
+  { fromRight: false, key: "zhbi_mfr_filters_panel_width", min: 220, max: 520 },
+);
+
 function revitPlanStatus(text, isError) {
   const el = document.getElementById("revit-plan-status");
   el.textContent = text;
@@ -35577,6 +35674,33 @@ function renderBlockScheduleReport(data) {
       <tr class="bsch-total"><td colspan="8"><b>Итого:</b> ${escapeHtml(bschAggText(data.total))}</td></tr>
     </tbody>
   </table>`;
+}
+
+// «Линейный трек» (живой запрос пользователя, 2026-09-17) — плоский список,
+// без группировки и без прогресса (см. app/report_linear_track.py и
+// REPORTS.linear_track выше). "веха" помечена меткой рядом с путём — единиц
+// измерения у вех нет, отдельная колонка была бы почти всегда пустой.
+function renderLinearTrackRow(item) {
+  const путь = item.wbs.filter(Boolean).join(" / ");
+  const вехаМетка = item.row_kind === "веха" ? '<span class="hint-text">[веха] </span>' : "";
+  return `<tr>
+    <td>${вехаМетка}${escapeHtml(путь)}</td>
+    <td>${escapeHtml(item.code || "")}</td>
+    <td>${escapeHtml(item.unit || "")}</td>
+    <td>${escapeHtml(item.track_name || "—")}</td>
+    <td class="lintrack-note">${escapeHtml(item.note || "")}</td>
+  </tr>`;
+}
+
+function renderLinearTrackReport(data) {
+  if (!data.count) {
+    return '<div class="hint-text" style="padding:8px">Справочник видов работ пуст — сначала загрузите WBS («Учёт по блокам»).</div>';
+  }
+  return `<table class="lintrack-table">
+    <thead><tr><th>WBS</th><th>Код</th><th>Ед. изм.</th><th>Трек планирования</th><th>Примечание</th></tr></thead>
+    <tbody>${data.rows.map(renderLinearTrackRow).join("")}</tbody>
+  </table>
+  <div class="hint-text" style="padding:8px 6px 0">Без прогресса и сроков — учёт по этим позициям будет отдельной доработкой.</div>`;
 }
 
 document.getElementById("report-body").addEventListener("change", async (e) => {

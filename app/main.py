@@ -91,6 +91,7 @@ from app import block_works
 from app import chess_flat
 from app import block_bulk_edit
 from app import report_block_schedule
+from app import report_linear_track
 from app import pdf_facade_import
 from app import pdf_import
 from app import pdf_rooms
@@ -2099,6 +2100,42 @@ def report_block_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends
     return _report_file_response(
         report_block_schedule.build_block_schedule_pdf(report, имя_объекта),
         "График работ по блокам.pdf", "application/pdf")
+
+
+def _linear_track(conn, user, body: "ReportRequestIn") -> dict:
+    """Общая точка для экрана и XLSX «Линейного трека» — тот же приём, что
+    у `_block_schedule` (см. комментарий там)."""
+    body = _guard_report(conn, user, body, "report_linear_track", needs_source_file=False)
+    object_id = _report_object_id(conn, body)
+    if object_id is None:
+        raise HTTPException(status_code=400,
+                            detail="Отчёт строится по объекту — выберите объект в тулбаре")
+    return report_linear_track.build_linear_track_report(conn, object_id)
+
+
+@app.post("/reports/linear-track")
+def report_linear_track_endpoint(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Отчёт «Линейный трек» — полный список позиций WBS объекта, без
+    привязки к блоку/секции (см. docstring app/report_linear_track.py)."""
+    conn = get_connection()
+    try:
+        return _linear_track(conn, user, body)
+    finally:
+        conn.close()
+
+
+@app.post("/reports/linear-track.xlsx")
+def report_linear_track_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _linear_track(conn, user, body)
+        имя_объекта = _block_schedule_object_name(conn, report["object_id"])
+    finally:
+        conn.close()
+    return _report_file_response(
+        report_linear_track.build_linear_track_xlsx(report, имя_объекта),
+        "Линейный трек.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ==================== «Моя работа»: что человек изменил за период ====================
