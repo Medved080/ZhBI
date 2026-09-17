@@ -358,11 +358,57 @@ label.v2-field input, label.v2-field select { font-size: 14px; color: var(--ink)
 }
 .v2-combobox-option[aria-selected="true"] { background: var(--sel); color: var(--accent); }
 
+/* Дерево "Проекты и объекты" — переиспользует .v2-cols/.v2-side (master/detail
+   220px, тот же паттерн, что и вкладки "Пользователи и доступ"), но левая
+   панель — не просто список кнопок, а поиск + фильтры + дерево. */
+label.v2-field textarea { font-size: 14px; color: var(--ink); width: 100%; font-family: inherit; resize: vertical; }
+/* Дерево может разрастись до сотен строк (проектов в базе много) — без
+   собственной ограниченной по высоте прокрутки оно тянет весь .v2-cols за
+   собой, и выбор новой записи в форме справа уезжает за пределы экрана
+   вместе со скроллом (issue из живой проверки). sticky + max-height
+   оставляют дерево на месте и прокручивают только его. */
+.v2-tree-pane {
+  display: flex; flex-direction: column; gap: 8px;
+  position: sticky; top: 0; align-self: start;
+  max-height: calc(100vh - 280px); min-height: 320px;
+}
+.v2-tree-pane input, .v2-tree-pane select { width: 100%; font-size: 12px; padding: 7px 8px; flex: none; }
+.v2-tree { flex: 1; min-height: 0; overflow-y: auto; }
+.v2-tree-row { margin: 0 -6px; }
+.v2-tree-node {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 7px 6px; border-radius: 6px; background: none; text-align: left;
+  font-size: 13px; color: var(--ink); overflow: hidden;
+}
+.v2-tree-object { padding-left: 26px; }
+.v2-tree-node:hover { background: var(--surface); }
+.v2-tree-selected { background: var(--sel); color: var(--accent); }
+.v2-tree-chevron { width: 12px; flex: none; color: var(--muted); font-size: 10px; }
+.v2-tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-tree-count { flex: none; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.v2-tree-foot { display: flex; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.v2-tree-foot .v2-btn { flex: 1; font-size: 12px; padding: 7px; }
+.v2-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--muted);
+}
+.v2-status-dot[data-dot="active"] { background: #2F9E44; }
+.v2-status-dot[data-dot="perspective"] { background: #4C6EF5; }
+.v2-status-dot[data-dot="suspended"] { background: #F08C00; }
+.v2-status-dot[data-dot="completed"] { background: #1971C2; }
+.v2-status-dot[data-dot="archived"] { background: #868E96; }
+.v2-dialog-inline {
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
+  margin-top: 16px; background: var(--surface);
+}
+.v2-dialog-inline ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+
 @media (max-width: 720px) {
   .v2-container { padding: 0 16px; }
   .v2-cols { grid-template-columns: 1fr; }
-  .v2-side { border: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
-  .v2-side button { width: auto; }
+  .v2-side:not(.v2-tree-pane) { border: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .v2-side:not(.v2-tree-pane) button { width: auto; }
+  .v2-tree-pane { border: 0; padding: 0; padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
   .v2-page { padding: 16px; }
   .v2-scroll { padding: 16px 0; }
   .v2-table thead { display: none; }

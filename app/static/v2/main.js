@@ -1,9 +1,12 @@
-// Точка входа V2. Логин-гейт → шапка с возвратом в V1 → пилотный раздел
-// «Пользователи и доступ». Другие разделы сюда сознательно не перенесены
-// (см. Docs/OPEN.md) — открываются в текущем интерфейсе.
+// Точка входа V2. Логин-гейт → шапка с возвратом в V1 → переключатель
+// разделов. Раздел «Пользователи и доступ» — пилот (df4da55); «Проекты и
+// объекты» — следующая перенесённая группа (см. отчёт). Остальные разделы
+// сюда сознательно не перенесены (см. Docs/OPEN.md) — открываются в
+// текущем интерфейсе.
 import { api, ApiError } from "./api.js";
 import { renderLogin, renderChangePassword } from "./login.js";
 import { mountUsersAccess } from "./users-access.js";
+import { mountProjectsObjects } from "./projects-objects.js";
 
 const root = document.getElementById("v2-root");
 
@@ -91,13 +94,32 @@ function renderShell(user, permissions) {
     isSystemAdmin,
     users: permissions.features?.users || "none",
     roles: permissions.features?.roles || "none",
+    // "Проекты и объекты" в V1 целиком, включая чтение, гейтится write'ом
+    // (index.html: data-feature-kind="write" у пункта меню) — отдельного
+    // read-only режима у этого экрана в оригинале нет, поэтому в V2 раздел
+    // тоже открывается только при уровне "write".
+    projects: permissions.features?.projects || "none",
+    dictDelete: permissions.features?.dict_delete || "none",
   };
   const canReadUsers = isSystemAdmin || perms.users !== "none";
   const canReadRoles = isSystemAdmin || perms.roles !== "none";
+  const canOpenProjects = isSystemAdmin || perms.projects === "write";
   // Список ролей (ключ+имя) для подписей в "Доступе к объектам" и
   // "Проверке доступа" — часть ЛЮБОГО ответа /me/permissions, не требует
   // отдельного гранта "roles" (в отличие от GET /roles).
   const roleList = permissions.roles || [];
+
+  const sections = [
+    {
+      key: "users-access", title: "Пользователи и доступ", available: canReadUsers || canReadRoles,
+      mount: (el) => mountUsersAccess(el, { api, user, perms, canReadUsers, canReadRoles, roleList }),
+    },
+    {
+      key: "projects-objects", title: "Проекты и объекты", available: canOpenProjects,
+      mount: (el) => mountProjectsObjects(el, { api, user, perms }),
+    },
+  ];
+  const availableSections = sections.filter((s) => s.available);
 
   root.innerHTML = `
     <header class="v2-head">
@@ -110,6 +132,9 @@ function renderShell(user, permissions) {
         <button type="button" class="v2-back" id="v2-back-btn" title="">← Текущий интерфейс</button>
       </div>
     </header>
+    ${availableSections.length > 1 ? `<nav class="v2-nav" aria-label="Разделы"><div class="v2-container">
+      ${availableSections.map((s) => `<button type="button" data-section="${s.key}" aria-pressed="false">${escapeHtml(s.title)}</button>`).join("")}
+    </div></nav>` : ""}
     <main class="v2-page" id="v2-content"></main>
   `;
   const backBtn = document.getElementById("v2-back-btn");
@@ -120,15 +145,25 @@ function renderShell(user, permissions) {
   });
 
   const content = document.getElementById("v2-content");
-  if (!canReadUsers && !canReadRoles) {
+  if (!availableSections.length) {
     content.innerHTML = `<div class="v2-note-page">
-      <h3>Раздел «Пользователи и доступ» недоступен</h3>
-      <p class="v2-muted">Пока в предпросмотре есть только этот раздел — остальные открываются в текущем интерфейсе.</p>
+      <h3>Нет доступных разделов предпросмотра</h3>
+      <p class="v2-muted">Пока в предпросмотре есть «Пользователи и доступ» и «Проекты и объекты» — остальные открываются в текущем интерфейсе.</p>
       <p><a class="v2-link" href="/?ui=v1">← Открыть текущий интерфейс</a></p>
     </div>`;
     return;
   }
-  activeModule = mountUsersAccess(content, { api, user, perms, canReadUsers, canReadRoles, roleList });
+
+  const navButtons = [...document.querySelectorAll(".v2-nav [data-section]")];
+  async function openSection(key) {
+    if (activeModule && !(await activeModule.guardLeave())) return;
+    content.innerHTML = "";
+    navButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.section === key)));
+    const section = availableSections.find((s) => s.key === key);
+    activeModule = section.mount(content);
+  }
+  navButtons.forEach((b) => b.addEventListener("click", () => openSection(b.dataset.section)));
+  openSection(availableSections[0].key);
 }
 
 function escapeHtml(s) {
