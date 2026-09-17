@@ -187,7 +187,25 @@ export function mountUsersAccess(container, ctx) {
   let currentDirty = null; // {message, save: async()=>void (throws при ошибке), discard: ()=>void}
   function setDirty(info) { currentDirty = info; }
   function clearDirtyState() { currentDirty = null; }
-  function hasUnsavedChanges() { return !!currentDirty; }
+  // Черновик разрешений (state.rolesDraft) переживает переключение ролей и
+  // не зависит от currentDirty — но если о нём забыть тут, закрытие вкладки
+  // или "Текущий интерфейс" молча стёрли бы несохранённые ячейки.
+  function hasUnsavedChanges() { return !!currentDirty || state.rolesDraft.size > 0; }
+
+  // Форма переименования/создания роли отслеживается ОТДЕЛЬНО от
+  // currentDirty (issue 2.1, обнаружено при живой проверке): клик по
+  // сегменту черновика прав, пока форма открыта, вызывает markRolesDraftDirty
+  // → setDirty(), который просто ЗАМЕНЯЕТ currentDirty на черновик и стирает
+  // из него сведения о форме. При следующем переключении роли
+  // requestLeaveRoleView() видел только неблокирующий черновик и пропускал
+  // переход без единого предупреждения — правка в поле переименования
+  // терялась молча. roleFormDirty — самостоятельный слот именно для формы,
+  // который черновик не может перезаписать.
+  let roleFormDirty = null;
+  function clearRoleFormDirty() {
+    if (currentDirty === roleFormDirty) clearDirtyState();
+    roleFormDirty = null;
+  }
 
   // Диалог — один экземпляр разом: повторный вызов, пока первый ещё не
   // закрыт (двойной клик, гонка обработчиков), возвращает ТУ ЖЕ обещание,
@@ -244,21 +262,29 @@ export function mountUsersAccess(container, ctx) {
     return openDialogPromise;
   }
 
-  async function requestLeave() {
-    if (!currentDirty) return true;
-    const info = currentDirty;
+  // Общая логика диалога для ЛЮБОГО {message, save, discard} — вынесена,
+  // чтобы requestLeaveRoleView() могла прогнать её для roleFormDirty, не
+  // трогая currentDirty (который к этому моменту может уже указывать на
+  // черновик разрешений, а не на форму).
+  async function resolveDirty(info) {
     const choice = await showUnsavedDialog(info.message);
     if (choice === "cancel") return false;
-    if (choice === "discard") { info.discard?.(); clearDirtyState(); return true; }
+    if (choice === "discard") { info.discard?.(); return true; }
     try {
       await info.save();
-      clearDirtyState();
       return true;
     } catch (err) {
       state.status = err?.detail || err?.message || "Не удалось сохранить";
       status.textContent = state.status;
       return false;
     }
+  }
+
+  async function requestLeave() {
+    if (!currentDirty) return true;
+    const ok = await resolveDirty(currentDirty);
+    if (ok) clearDirtyState();
+    return ok;
   }
 
   function btn(label, attr = "", primary = false) {
@@ -274,6 +300,12 @@ export function mountUsersAccess(container, ctx) {
   let navGuardBusy = false;
   async function withNavGuard(fn) {
     if (navGuardBusy) return;
+    // Issue 2.2 (медленная сеть): пока идёт ЛЮБАЯ запись (роли, профиль,
+    // доступ — api.js считает их все разом), смена вкладки/записи/роли не
+    // должна выполняться — иначе результат операции легко потерять из
+    // вида или, для черновика, потерять сами правки (см. правку
+    // saveRolesDraftOrThrow ниже — снимок, а не поголовная очистка).
+    if (api.hasPendingWrites()) return;
     navGuardBusy = true;
     try { await fn(); } finally { navGuardBusy = false; }
   }
@@ -534,14 +566,18 @@ export function mountUsersAccess(container, ctx) {
     state.cardDirty = false;
   }
 
-  function markCardDirty() {
-    const wasTracked = state.cardDirty || !!state.pendingPassword;
-    state.cardDirty = true;
+  function trackCardDirtyState() {
     setDirty({
       message: "В карточке пользователя есть несохранённые изменения.",
       save: saveCardAndPasswordOrThrow,
       discard: () => { initCardDraft(); state.pendingPassword = null; },
     });
+  }
+
+  function markCardDirty() {
+    const wasTracked = state.cardDirty || !!state.pendingPassword;
+    state.cardDirty = true;
+    trackCardDirtyState();
     status.textContent = "Есть несохранённые изменения";
     // Кнопки в футере должны появиться с первого же нажатия, а не только
     // на следующей полной перерисовке — иначе "Сохранить" не видно, пока
@@ -557,27 +593,51 @@ export function mountUsersAccess(container, ctx) {
   async function saveCardAndPasswordOrThrow() {
     const u = currentUserBeingEdited();
     if (state.cardDirty) {
-      const d = state.cardDraft;
+      // Issue 2.2 — снимок значений на момент отправки: PATCH уходит с
+      // ЭТИМИ значениями; если поля правились дальше, пока запрос был в
+      // пути (в окне между стартом запроса и дизейблом полей, или если
+      // дизейбл почему-то не сработал), сверяем черновик СЕЙЧАС со
+      // снимком и снимаем cardDirty, только если ничего не изменилось.
+      const snapshot = { ...state.cardDraft };
       const updated = await api.patch(`/users/${u.id}`, {
-        last_name: d.last_name.trim(), first_name: d.first_name.trim(),
-        patronymic: d.patronymic.trim() || null, position: d.position.trim() || null,
-        department: d.department.trim() || null, domain_login: d.domain_login.trim(),
-        role: d.role, auth_method: d.auth_method, must_change_password: d.must_change_password,
+        last_name: snapshot.last_name.trim(), first_name: snapshot.first_name.trim(),
+        patronymic: snapshot.patronymic.trim() || null, position: snapshot.position.trim() || null,
+        department: snapshot.department.trim() || null, domain_login: snapshot.domain_login.trim(),
+        role: snapshot.role, auth_method: snapshot.auth_method, must_change_password: snapshot.must_change_password,
       });
       Object.assign(u, updated);
-      state.cardDirty = false;
+      const stillMatchesSnapshot = Object.keys(snapshot).every((k) => snapshot[k] === state.cardDraft[k]);
+      if (stillMatchesSnapshot) state.cardDirty = false;
     }
     if (state.pendingPassword) {
-      await api.post(`/users/${u.id}/set-password`, {
-        password: state.pendingPassword.password,
-        must_change_password: state.pendingPassword.mustChange,
+      // Та же защита: если поле пароля успели тронуть заново, пока шёл
+      // запрос, state.pendingPassword — уже ДРУГОЙ объект (trackPending
+      // создаёт новый при каждом input), и по ссылке это видно без
+      // глубокого сравнения.
+      const sentPassword = state.pendingPassword;
+      const updated = await api.post(`/users/${u.id}/set-password`, {
+        password: sentPassword.password,
+        must_change_password: sentPassword.mustChange,
       });
-      state.pendingPassword = null;
-      if (await tryRefresh(() => ensureUsers(true))) syncMustChangeFromServer();
+      // Issue 2.3: ОТВЕТ set-password — источник истины для
+      // must_change_password сразу, без ожидания отдельного GET
+      // (который дальше — лучший эффорт, не единственный способ узнать
+      // актуальное состояние).
+      Object.assign(u, updated);
+      if (state.pendingPassword === sentPassword) state.pendingPassword = null;
+      syncMustChangeFromServer();
+      await tryRefresh(() => ensureUsers(true));
     }
-    clearDirtyState();
+    if (!state.cardDirty && !state.pendingPassword) clearDirtyState();
+    else trackCardDirtyState(); // новая правка пришла во время записи — сторож остаётся активным
     const ok = await tryRefresh(() => ensureAccessMatrix(true));
-    state.status = ok ? "Сохранено" : "Изменения сохранены, но не удалось обновить отображение.";
+    state.status = !ok ? "Изменения сохранены, но не удалось обновить отображение."
+      : (state.cardDirty || state.pendingPassword) ? "Сохранено. Есть новые несохранённые изменения."
+      : "Сохранено";
+  }
+
+  function setCardFieldsDisabled(disabled) {
+    body.querySelectorAll("#ua-edit-panel input, #ua-edit-panel select").forEach((el) => { el.disabled = disabled; });
   }
 
   // Точка исправления: "Задать пароль" решает must_change_password СВОИМ
@@ -628,22 +688,29 @@ export function mountUsersAccess(container, ctx) {
     if (!state.cardDirty && !state.pendingPassword) return;
     footActions.innerHTML = `${btn("Отменить", 'id="card-cancel"')}${btn("Сохранить", 'id="card-save"', true)}`;
     status.textContent = "Есть несохранённые изменения";
-    footActions.querySelector("#card-cancel").addEventListener("click", async () => {
+    const cancelBtn = footActions.querySelector("#card-cancel");
+    const saveBtn = footActions.querySelector("#card-save");
+    cancelBtn.addEventListener("click", async () => {
       initCardDraft();
       state.pendingPassword = null;
       clearDirtyState();
       await render();
     });
-    footActions.querySelector("#card-save").addEventListener("click", async (e) => {
-      const button = e.currentTarget;
-      button.disabled = true;
+    saveBtn.addEventListener("click", async () => {
+      if (saveBtn.disabled) return; // защита от повторного клика, пока идёт запись
+      saveBtn.disabled = true; cancelBtn.disabled = true;
+      // Issue 2.2: поля дизейблятся сразу, не дожидаясь перерисовки —
+      // иначе правку успевали внести в промежутке между стартом запроса
+      // и следующим render().
+      setCardFieldsDisabled(true);
       try {
         await saveCardAndPasswordOrThrow();
         await render();
       } catch (err) {
         state.status = err.detail || "Не удалось сохранить";
         status.textContent = state.status;
-        button.disabled = false;
+        saveBtn.disabled = false; cancelBtn.disabled = false;
+        setCardFieldsDisabled(false);
       }
     });
   }
@@ -752,15 +819,30 @@ export function mountUsersAccess(container, ctx) {
       const errorEl = panel.querySelector("#sec-error");
       errorEl.textContent = "";
       saveBtn.disabled = true;
+      const passField = panel.querySelector("#sec-pass");
+      const mustField = panel.querySelector("#sec-pw-must");
+      // Issue 2.2 — снимок + немедленный дизейбл: то же самое поле
+      // остаётся видимым и не должно принять новый ввод, пока это
+      // значение ещё в пути на сервер.
+      const sentPassword = passField.value, sentMust = mustField.checked;
+      passField.disabled = true; mustField.disabled = true;
       try {
-        await api.post(`/users/${u.id}/set-password`, {
-          password: panel.querySelector("#sec-pass").value,
-          must_change_password: panel.querySelector("#sec-pw-must").checked,
+        const updated = await api.post(`/users/${u.id}/set-password`, {
+          password: sentPassword,
+          must_change_password: sentMust,
         });
-        state.pendingPassword = null;
-        if (!state.cardDirty) { clearDirtyState(); footActions.innerHTML = ""; }
+        // Issue 2.3: ответ set-password сам по себе — актуальные
+        // подтверждённые настройки, не только повод дождаться GET.
+        Object.assign(u, updated);
+        syncMustChangeFromServer();
+        // Очищаем состояние, только если поле не поменяли, пока запрос
+        // был в пути (сверка со снимком, а не слепой clear()).
+        if (passField.value === sentPassword && mustField.checked === sentMust) {
+          state.pendingPassword = null;
+          if (!state.cardDirty) { clearDirtyState(); footActions.innerHTML = ""; }
+        }
         state.status = "Пароль обновлён";
-        if (await tryRefresh(() => ensureUsers(true))) syncMustChangeFromServer();
+        await tryRefresh(() => ensureUsers(true));
         renderStatusRetry();
         // Перерисовать панель: "Требовать смену пароля" в блоке "Способ
         // входа" — ДРУГОЙ чекбокс, чем тот, что был только что отправлен
@@ -769,6 +851,7 @@ export function mountUsersAccess(container, ctx) {
         renderSecurity(panel, u);
       } catch (err) {
         errorEl.textContent = err.detail || "Не удалось задать пароль";
+        passField.disabled = false; mustField.disabled = false;
       } finally {
         saveBtn.disabled = false;
       }
@@ -827,12 +910,24 @@ export function mountUsersAccess(container, ctx) {
 
   async function saveAccessOrThrow() {
     const u = currentUserBeingEdited();
+    // Issue 2.2 — снимок отправленных грантов: сверяем его с
+    // state.access.grants ПОСЛЕ ответа сервера и обнуляем рабочую копию,
+    // только если ничего не изменилось за время запроса (чекбоксы и так
+    // дизейблены на это время — см. вызывающий код, — но сверка остаётся
+    // подстраховкой, а не единственной защитой).
+    const snapshot = JSON.stringify(state.access.grants);
     await api.put(`/users/${u.id}/access`, { grants: state.access.grants });
-    state.accessDirty = false;
-    state.access = null;
-    clearDirtyState();
+    if (JSON.stringify(state.access.grants) === snapshot) {
+      state.accessDirty = false;
+      state.access = null;
+      clearDirtyState();
+    } else {
+      markAccessDirty();
+    }
     const ok = await tryRefresh(() => ensureAccessMatrix(true));
-    state.status = ok ? "Доступ сохранён" : "Доступ сохранён, но не удалось обновить отображение.";
+    state.status = !ok ? "Доступ сохранён, но не удалось обновить отображение."
+      : state.access ? "Сохранено. Есть новые несохранённые изменения."
+      : "Доступ сохранён";
   }
 
   async function renderAccess(panel, u) {
@@ -854,19 +949,25 @@ export function mountUsersAccess(container, ctx) {
       footActions.querySelector("#ua-access-save").disabled = !state.accessDirty;
       footActions.querySelector("#ua-access-cancel").disabled = !state.accessDirty;
       if (state.accessDirty) status.textContent = "Есть несохранённые изменения";
-      footActions.querySelector("#ua-access-save").addEventListener("click", async (e) => {
-        const button = e.currentTarget;
-        button.disabled = true;
+      const accessSaveBtn = footActions.querySelector("#ua-access-save");
+      const accessCancelBtn = footActions.querySelector("#ua-access-cancel");
+      accessSaveBtn.addEventListener("click", async () => {
+        if (accessSaveBtn.disabled) return;
+        accessSaveBtn.disabled = true; accessCancelBtn.disabled = true;
+        // Issue 2.2: чекбоксы дизейблятся сразу, не дожидаясь перерисовки.
+        panel.querySelectorAll("[data-grant-role]").forEach((cb) => { cb.disabled = true; });
         try {
           await saveAccessOrThrow();
           await render();
         } catch (err) {
           state.status = err.detail || "Не удалось сохранить доступ";
           status.textContent = state.status;
-          button.disabled = false;
+          accessSaveBtn.disabled = false; accessCancelBtn.disabled = false;
+          panel.querySelectorAll("[data-grant-role]").forEach((cb) => { cb.disabled = !canWriteUsers; });
         }
       });
-      footActions.querySelector("#ua-access-cancel").addEventListener("click", async () => {
+      accessCancelBtn.addEventListener("click", async () => {
+        if (accessCancelBtn.disabled) return;
         state.access = null; state.accessDirty = false; clearDirtyState(); await render();
       });
     }
@@ -975,20 +1076,67 @@ export function mountUsersAccess(container, ctx) {
       message: `В матрице разрешений не сохранено ячеек: ${state.rolesDraft.size}.`,
       save: saveRolesDraftOrThrow,
       discard: () => { state.rolesDraft.clear(); },
+      // Черновик — состояние МОДУЛЯ (Map), а не разметки конкретной роли:
+      // выбор другой роли, создание/переименование/удаление и порядок его
+      // не стирают и не показывают частично — незачем спрашивать при
+      // переключении. Спрашивать нужно только там, где данные ДЕЙСТВИТЕЛЬНО
+      // исчезнут — форма переименования/создания привязана к разметке,
+      // которую эти переходы перерисовывают.
+      blocksRoleSwitch: false,
     });
+  }
+
+  // Тот же сторож, что requestLeave(), но не мешает переключению ролей и
+  // соседним действиям на вкладке "Роли", если единственное несохранённое
+  // — общий черновик разрешений (issue 2.1: форма переименования исчезала
+  // без предупреждения при выборе другой роли, а на СЛЕДУЮЩЕЙ вкладке
+  // всплывало предупреждение об уже не существующей форме). Форму проверяем
+  // через roleFormDirty, а НЕ currentDirty: клик по сегменту черновика, пока
+  // форма открыта, замещает currentDirty черновиком — сама форма при этом
+  // остаётся дирти и без roleFormDirty потерялась бы без предупреждения.
+  async function requestLeaveRoleView() {
+    if (roleFormDirty) {
+      const info = roleFormDirty;
+      const ok = await resolveDirty(info);
+      if (ok) clearRoleFormDirty();
+      return ok;
+    }
+    if (currentDirty && currentDirty.blocksRoleSwitch === false) return true;
+    return requestLeave();
   }
 
   async function saveRolesDraftOrThrow() {
     if (!state.rolesDraft.size) return;
-    const items = [...state.rolesDraft].map(([key, level]) => {
+    // Issue 2.2 — снимок на момент отправки, а не постоянная ссылка на
+    // state.rolesDraft: сегменты дизейблятся сразу (см. вызывающий код),
+    // но если правка всё же прошла (например, с клавиатуры), снимаем из
+    // черновика только то, что реально отправили и С ТЕМ ЖЕ значением —
+    // более новая правка той же ячейки останется явно несохранённой, а не
+    // потеряется молча под общим clear().
+    const snapshot = new Map(state.rolesDraft);
+    const items = [...snapshot].map(([key, level]) => {
       const [role_key, feature_key] = key.split("|");
       return { role_key, feature_key, level };
     });
     await api.put("/roles/features", { items });
-    state.rolesDraft.clear();
-    clearDirtyState();
+    for (const [key, level] of snapshot) {
+      if (state.rolesDraft.get(key) === level) state.rolesDraft.delete(key);
+    }
+    if (state.rolesDraft.size) {
+      // Новые правки появились, пока запрос был в пути — черновик и
+      // сторож остаются активными на них.
+      markRolesDraftDirty();
+    } else {
+      clearDirtyState();
+    }
     const ok = await tryRefresh(() => ensureRoles(true));
-    state.status = ok ? "Разрешения сохранены" : "Разрешения сохранены, но не удалось обновить отображение.";
+    state.status = !ok ? "Разрешения сохранены, но не удалось обновить отображение."
+      : state.rolesDraft.size ? `Сохранено. Есть новые несохранённые ячейки: ${state.rolesDraft.size}.`
+      : "Разрешения сохранены";
+  }
+
+  function setRolesSegmentsDisabled(disabled) {
+    body.querySelectorAll("[data-perm]").forEach((b) => { b.disabled = disabled || !canWriteRoles; });
   }
 
   async function renderRoles() {
@@ -1016,19 +1164,27 @@ export function mountUsersAccess(container, ctx) {
         <section id="role-editor"></section>
       </div>` : `<p class="v2-note">Ролей пока нет — создайте первую кнопкой выше.</p>`}
     `;
-    if (canWriteRoles) body.querySelector("#role-new").addEventListener("click", async () => {
-      if (!(await requestLeave())) return;
+    if (canWriteRoles) body.querySelector("#role-new").addEventListener("click", () => withNavGuard(async () => {
+      if (!(await requestLeaveRoleView())) return;
       renderRoleCreateForm();
-    });
-    body.querySelectorAll("[data-role]").forEach((b) => b.addEventListener("click", () => {
-      ui.selected = b.dataset.role; renderRoles();
     }));
-    body.querySelectorAll("[data-role-up],[data-role-down]").forEach((b) => b.addEventListener("click", () => {
+    body.querySelectorAll("[data-role]").forEach((b) => b.addEventListener("click", () => withNavGuard(async () => {
+      if (b.dataset.role === ui.selected) return;
+      if (!(await requestLeaveRoleView())) return;
+      ui.selected = b.dataset.role;
+      renderRoles();
+    })));
+    body.querySelectorAll("[data-role-up],[data-role-down]").forEach((b) => b.addEventListener("click", () => withNavGuard(async () => {
+      if (!(await requestLeaveRoleView())) return;
       const key = b.dataset.roleUp || b.dataset.roleDown;
-      reorderRole(key, !!b.dataset.roleUp);
-    }));
+      await reorderRole(key, !!b.dataset.roleUp);
+    })));
     if (role) renderRoleEditor(body.querySelector("#role-editor"), role);
-    if (state.rolesDraft.size) renderRolesFooter();
+    // Issue 2.1: renderRoles() вызывается напрямую (не через render()), сама
+    // статус-строку не сбрасывает — без else тут текст "Есть несохранённые
+    // изменения" от отказанной (discard) формы переименования/создания
+    // остался бы висеть после перехода на другую роль.
+    if (state.rolesDraft.size) renderRolesFooter(); else { footActions.innerHTML = ""; status.textContent = ""; }
   }
 
   function renderRolesFooter() {
@@ -1044,6 +1200,10 @@ export function mountUsersAccess(container, ctx) {
       if (state.rolesSaving) return;
       state.rolesSaving = true;
       saveBtn.disabled = true; cancelBtn.disabled = true;
+      // Issue 2.2: сегменты дизейблятся СРАЗУ, в уже отрисованном DOM, а
+      // не только на следующей перерисовке — иначе клик по сегменту в
+      // окне между стартом запроса и render() всё ещё регистрируется.
+      setRolesSegmentsDisabled(true);
       try {
         await saveRolesDraftOrThrow();
         // Флаг снимаем ДО перерисовки: render() строит сегменты с
@@ -1058,6 +1218,7 @@ export function mountUsersAccess(container, ctx) {
         state.rolesSaving = false;
         status.textContent = state.status;
         saveBtn.disabled = false; cancelBtn.disabled = false;
+        setRolesSegmentsDisabled(false);
       }
     });
     cancelBtn.addEventListener("click", async () => {
@@ -1068,11 +1229,13 @@ export function mountUsersAccess(container, ctx) {
   }
 
   function markRoleFormDirty(el, formMessage, submitFn) {
-    setDirty({
+    const info = {
       message: formMessage,
       save: () => submitFn(),
       discard: () => { el.innerHTML = ""; },
-    });
+    };
+    roleFormDirty = info;
+    setDirty(info);
     status.textContent = "Есть несохранённые изменения";
   }
 
@@ -1084,7 +1247,7 @@ export function mountUsersAccess(container, ctx) {
       errorEl.textContent = "";
       if (!name) { errorEl.textContent = "Введите название"; throw new Error("Введите название"); }
       const created = await api.post("/roles", { name });
-      clearDirtyState();
+      clearRoleFormDirty();
       await tryRefresh(() => ensureRoles(true));
       state.rolesUi.selected = created.key;
       el.innerHTML = "";
@@ -1097,7 +1260,7 @@ export function mountUsersAccess(container, ctx) {
     el.querySelector("#role-new-name").addEventListener("input", () =>
       markRoleFormDirty(el, "В форме новой роли есть введённые данные.", submit));
     el.querySelector("#role-new-cancel").addEventListener("click", () => {
-      clearDirtyState();
+      clearRoleFormDirty();
       el.innerHTML = "";
     });
     el.querySelector("#role-new-submit").addEventListener("click", async (e) => {
@@ -1163,14 +1326,14 @@ export function mountUsersAccess(container, ctx) {
       <p class="v2-note">Изменения роли затронут всех, кому она назначена (сейчас — ${role.granted}).</p>
     `;
     if (canWriteRoles) {
-      el.querySelector("#role-delete").addEventListener("click", async () => {
-        if (hasUnsavedChanges() && !(await requestLeave())) return;
+      el.querySelector("#role-delete").addEventListener("click", () => withNavGuard(async () => {
+        if (!(await requestLeaveRoleView())) return;
         deleteRole(role);
-      });
-      el.querySelector("#role-rename").addEventListener("click", async () => {
-        if (hasUnsavedChanges() && !(await requestLeave())) return;
+      }));
+      el.querySelector("#role-rename").addEventListener("click", () => withNavGuard(async () => {
+        if (!(await requestLeaveRoleView())) return;
         renderRoleRenameForm(el, role);
-      });
+      }));
       el.querySelectorAll("[data-perm]").forEach((b) => b.addEventListener("click", () => {
         const featureKey = b.dataset.perm, level = b.dataset.level;
         const key = rolesCellKey(role.key, featureKey);
@@ -1180,7 +1343,15 @@ export function mountUsersAccess(container, ctx) {
         if (level === original) state.rolesDraft.delete(key);
         else state.rolesDraft.set(key, level);
         if (state.rolesDraft.size) markRolesDraftDirty(); else clearDirtyState();
-        renderRoleEditor(el, role);
+        // Точечное обновление ряда, а НЕ renderRoleEditor(el, role) целиком
+        // (issue 2.1): полная перерисовка стирала бы открытую тут же форму
+        // переименования той же роли, а currentDirty оставался бы указывать
+        // на уже не существующую разметку — предупреждение всплывало бы
+        // только на СЛЕДУЮЩЕМ переходе, про форму, которой уже нет.
+        const row = b.closest(".v2-perm");
+        row.classList.toggle("v2-perm-dirty", state.rolesDraft.has(key));
+        row.querySelectorAll("[data-perm]").forEach((seg) =>
+          seg.setAttribute("aria-pressed", String(seg.dataset.level === level)));
         if (state.rolesDraft.size) renderRolesFooter(); else { footActions.innerHTML = ""; status.textContent = ""; }
       }));
     }
@@ -1194,7 +1365,7 @@ export function mountUsersAccess(container, ctx) {
       errorEl.textContent = "";
       if (!name) { errorEl.textContent = "Введите название"; throw new Error("Введите название"); }
       await api.patch(`/roles/${role.key}`, { name });
-      clearDirtyState();
+      clearRoleFormDirty();
       await tryRefresh(() => ensureRoles(true));
       host.innerHTML = "";
       await render();
@@ -1206,7 +1377,7 @@ export function mountUsersAccess(container, ctx) {
     host.querySelector("#role-rename-name").addEventListener("input", () =>
       markRoleFormDirty(host, "Переименование роли не сохранено.", submit));
     host.querySelector("#role-rename-cancel").addEventListener("click", () => {
-      clearDirtyState();
+      clearRoleFormDirty();
       host.innerHTML = "";
     });
     host.querySelector("#role-rename-submit").addEventListener("click", async (e) => {
@@ -1237,8 +1408,13 @@ export function mountUsersAccess(container, ctx) {
       await render();
       return;
     }
-    state.rolesDraft.clear();
-    clearDirtyState();
+    // Стираем из черновика только ячейки САМОЙ удалённой роли — они больше
+    // ни к чему не относятся; черновик по ДРУГИМ, ещё существующим ролям
+    // должен пережить удаление, а не пропасть заодно.
+    for (const key of [...state.rolesDraft.keys()]) {
+      if (key.startsWith(`${role.key}|`)) state.rolesDraft.delete(key);
+    }
+    if (state.rolesDraft.size) markRolesDraftDirty(); else clearDirtyState();
     state.access = null; // редактор доступа мог кэшировать её грант
     let refreshOk = await tryRefresh(() => ensureRoles(true));
     // Матрица доступа нужна только колонке "Доступ" в списке пользователей
