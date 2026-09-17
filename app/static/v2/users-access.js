@@ -11,6 +11,7 @@
 // ошибки записи и ошибки последующего обновления экрана, единая
 // центрированная колонка заголовка/вкладок/содержимого/подвала, поиск
 // объекта в «Проверке доступа» вместо плоского списка.
+import { resolveDirty as sharedResolveDirty } from "./dialogs.js";
 
 const ROLE_LABELS = { user: "Пользователь", view: "Просмотр", admin: "Администратор" };
 const LEVELS = ["none", "read", "write"];
@@ -207,77 +208,15 @@ export function mountUsersAccess(container, ctx) {
     roleFormDirty = null;
   }
 
-  // Диалог — один экземпляр разом: повторный вызов, пока первый ещё не
-  // закрыт (двойной клик, гонка обработчиков), возвращает ТУ ЖЕ обещание,
-  // а не открывает второй поверх первого.
-  let openDialogPromise = null;
-
-  function showUnsavedDialog(message) {
-    if (openDialogPromise) return openDialogPromise;
-    openDialogPromise = new Promise((resolve) => {
-      const previouslyFocused = document.activeElement;
-      const backdrop = document.createElement("div");
-      backdrop.className = "v2-dialog-backdrop";
-      backdrop.innerHTML = `
-        <div class="v2-dialog" role="alertdialog" aria-modal="true" aria-label="Несохранённые изменения">
-          <p>${escapeHtml(message)}</p>
-          <div class="v2-dialog-actions">
-            <button type="button" class="v2-btn" data-choice="cancel">Остаться</button>
-            <button type="button" class="v2-btn" data-choice="discard">Не сохранять</button>
-            <button type="button" class="v2-btn v2-primary" data-choice="save">Сохранить и продолжить</button>
-          </div>
-        </div>`;
-      const dialog = backdrop.querySelector(".v2-dialog");
-
-      function close(choice) {
-        document.removeEventListener("keydown", onKeydown, true);
-        if (backdrop.isConnected) document.body.removeChild(backdrop);
-        openDialogPromise = null;
-        if (previouslyFocused && document.contains(previouslyFocused) && previouslyFocused.focus) {
-          previouslyFocused.focus();
-        }
-        resolve(choice);
-      }
-      function onKeydown(e) {
-        if (e.key === "Escape") { e.preventDefault(); close("cancel"); return; }
-        if (e.key === "Tab") {
-          const items = [...dialog.querySelectorAll("button")];
-          const first = items[0], last = items[items.length - 1];
-          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-        }
-      }
-      backdrop.addEventListener("click", (e) => {
-        const choice = e.target.closest("[data-choice]")?.dataset.choice;
-        if (choice) close(choice);
-        else if (e.target === backdrop) close("cancel");
-      });
-      document.addEventListener("keydown", onKeydown, true);
-      document.body.appendChild(backdrop);
-      // Начальный фокус — на "Остаться": уход из формы отменой действия по
-      // умолчанию безопаснее, чем случайное сохранение недописанного ввода
-      // клавишей Enter.
-      dialog.querySelector('[data-choice="cancel"]').focus();
-    });
-    return openDialogPromise;
-  }
-
-  // Общая логика диалога для ЛЮБОГО {message, save, discard} — вынесена,
-  // чтобы requestLeaveRoleView() могла прогнать её для roleFormDirty, не
-  // трогая currentDirty (который к этому моменту может уже указывать на
-  // черновик разрешений, а не на форму).
+  // Диалог "несохранённые изменения" — общий для всех модулей V2, вынесен
+  // в dialogs.js при переносе следующей группы форм (issue из ТЗ: общие
+  // компоненты вместо копий). Локальная обёртка добавляет только показ
+  // ошибки сохранения в статус-строке ЭТОГО модуля.
   async function resolveDirty(info) {
-    const choice = await showUnsavedDialog(info.message);
-    if (choice === "cancel") return false;
-    if (choice === "discard") { info.discard?.(); return true; }
-    try {
-      await info.save();
-      return true;
-    } catch (err) {
+    return sharedResolveDirty(info, (err) => {
       state.status = err?.detail || err?.message || "Не удалось сохранить";
       status.textContent = state.status;
-      return false;
-    }
+    });
   }
 
   async function requestLeave() {
