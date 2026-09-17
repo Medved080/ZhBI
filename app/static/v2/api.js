@@ -10,24 +10,37 @@ export class ApiError extends Error {
   }
 }
 
+// Счётчик запросов НЕ на чтение — нужен, чтобы переключатель версии знал,
+// идёт ли прямо сейчас запись: скрыть результат операции переходом в V1
+// посреди сохранения хуже, чем на секунду заблокировать кнопку перехода.
+let pendingWrites = 0;
+const writeListeners = new Set();
+function notifyPendingWrites() { for (const fn of writeListeners) fn(pendingWrites); }
+
 async function request(method, path, body) {
-  const res = await fetch(path, {
-    method,
-    credentials: "same-origin",
-    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (res.status === 204) return null;
-  let data = null;
-  const text = await res.text();
-  if (text) {
-    try { data = JSON.parse(text); } catch (e) { data = text; }
+  const isWrite = method !== "GET";
+  if (isWrite) { pendingWrites++; notifyPendingWrites(); }
+  try {
+    const res = await fetch(path, {
+      method,
+      credentials: "same-origin",
+      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 204) return null;
+    let data = null;
+    const text = await res.text();
+    if (text) {
+      try { data = JSON.parse(text); } catch (e) { data = text; }
+    }
+    if (!res.ok) {
+      const detail = data && typeof data === "object" && "detail" in data ? data.detail : data;
+      throw new ApiError(res.status, detail || res.statusText);
+    }
+    return data;
+  } finally {
+    if (isWrite) { pendingWrites--; notifyPendingWrites(); }
   }
-  if (!res.ok) {
-    const detail = data && typeof data === "object" && "detail" in data ? data.detail : data;
-    throw new ApiError(res.status, detail || res.statusText);
-  }
-  return data;
 }
 
 export const api = {
@@ -36,4 +49,6 @@ export const api = {
   patch: (path, body) => request("PATCH", path, body ?? {}),
   put: (path, body) => request("PUT", path, body ?? {}),
   delete: (path) => request("DELETE", path),
+  hasPendingWrites: () => pendingWrites > 0,
+  onPendingWritesChange(fn) { writeListeners.add(fn); return () => writeListeners.delete(fn); },
 };

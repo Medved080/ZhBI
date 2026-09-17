@@ -3,28 +3,59 @@
 // эндпоинты app/users.py, app/roles.py, app/rights_matrix.py. Модуль сам
 // не считает права и не хранит копию бизнес-правил — только показывает
 // то, что вернул сервер, и шлёт туда же изменения.
+//
+// Доработка 2026-09-17 по замечаниям к df4da55: раздельные проверки
+// users/roles, черновик разрешений ролей (как в V1), сводка доступа без
+// перебора объектов, делегирование обработчиков в списке, сторож
+// несохранённого на всех переходах.
 
 const ROLE_LABELS = { admin: "Администратор", user: "Пользователь", view: "Просмотр" };
 const LEVELS = ["none", "read", "write"];
+const ACCESS_ALL = "all";
+
+function ruPlural(n, один, немного, много) {
+  const n10 = n % 10, n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return один;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return немного;
+  return много;
+}
 
 export function mountUsersAccess(container, ctx) {
-  const { api, canWrite } = ctx;
+  const { api, user: currentUser, perms, canReadUsers, canReadRoles } = ctx;
+  const canWriteUsers = perms.isSystemAdmin || perms.users === "write";
+  const canWriteRoles = perms.isSystemAdmin || perms.roles === "write";
+  // Задать пароль — НЕ через раздел "users": сервер проверяет системную
+  // роль admin или "себе самому" (app/users.py set_password), это другая
+  // ось прав, и приравнивать её к canWriteUsers значило бы либо запереть
+  // администратора без гранта "users", либо разрешить лишнее.
+  function canSetPassword(u) { return currentUser.role === "admin" || currentUser.id === u.id; }
 
   const state = {
-    page: "users",          // users | edit | roles | check
+    page: canReadUsers ? "users" : "roles",   // users | edit | roles | check
     users: null,
-    roles: null,            // GET /roles (roles+features+sections+level_labels)
-    tree: null,             // GET /projects-tree → projects[]
+    roles: null,              // GET /roles (roles+features+sections+level_labels)
+    tree: null,                // GET /projects-tree → projects[] (с объектами)
+    catalog: null,              // /projects (ВСЕ проекты, включая без объектов) + объекты из tree
+    accessMatrix: null,         // GET /users/access-matrix — гранты всех разом, для колонки "Доступ"
     query: "",
     selectedUserId: null,
     editTab: "profile",
-    access: null,           // {system_admin, grants:[...]} рабочая копия для редактора
+    cardDraft: null,            // рабочая копия полей карточки (профиль + вход)
+    cardDirty: false,
+    access: null,               // {system_admin, grants:[...]} рабочая копия для редактора
     accessDirty: false,
-    selectedNode: null,     // "all" | "p<id>" | "o<projectId>-<objectId>"
+    accessView: "summary",      // "summary" | {edit:"all"|"p<id>"|"o<pid>-<oid>"}
+    accessAllAreas: false,      // "Показать все" (иначе только доступные)
+    accessSearch: "",
     rolesUi: { selected: null },
-    check: { userId: null, objectId: null, data: null },
+    rolesDraft: new Map(),      // "roleKey|featureKey" -> level, до явного сохранения
+    rolesSaving: false,
+    rolesBusy: false,           // идёт reorder/rename/delete — блокирует повтор
+    check: { userId: null, objectId: null },
     status: "",
   };
+
+  // ---------- данные (общий кэш на время жизни модуля) ----------
 
   async function ensureUsers(force) {
     if (!state.users || force) state.users = await api.get("/users");
@@ -34,14 +65,144 @@ export function mountUsersAccess(container, ctx) {
     if (!state.roles || force) state.roles = await api.get("/roles");
     return state.roles;
   }
-  async function ensureTree() {
-    if (!state.tree) state.tree = (await api.get("/projects-tree")).projects;
+  async function ensureTree(force) {
+    if (!state.tree || force) state.tree = (await api.get("/projects-tree")).projects;
     return state.tree;
   }
+  // Каталог для сводки доступа — ВСЕ проекты, включая без единого объекта
+  // (/projects-tree такие прячет, см. app/db.py projects_tree): тот же
+  // приём, что и в V1 (accessCatalog в app.js), иначе проект с прямым
+  // грантом, но без объектов, пропадал бы из сводки.
+  async function ensureCatalog() {
+    if (state.catalog) return state.catalog;
+    const [all, tree] = await Promise.all([api.get("/projects"), ensureTree()]);
+    const withObjects = new Map(tree.map((p) => [p.id, p]));
+    state.catalog = all.map((p) => ({
+      id: p.id, name: p.name,
+      objects: (withObjects.get(p.id)?.objects || []).map((o) => ({ id: o.id, name: o.name })),
+    }));
+    return state.catalog;
+  }
+  async function ensureAccessMatrix(force) {
+    if (!state.accessMatrix || force) state.accessMatrix = await api.get("/users/access-matrix");
+    return state.accessMatrix;
+  }
 
-  function confirmDiscard(msg) {
-    if (!state.accessDirty) return true;
-    return confirm(msg || "Есть несохранённые изменения доступа. Продолжить без сохранения?");
+  // ---------- свод доступа — та же арифметика, что в V1 (app.js:
+  // accessMapFromGrants/buildAccessSummary/accessRolesText), применённая к
+  // тем же данным сервера. Не альтернативный расчёт — перенос текстом. ----------
+
+  function accessMapFromGrants(grants) {
+    const map = new Map();
+    for (const g of grants || []) {
+      const key = g.project_id == null ? ACCESS_ALL
+        : g.object_id == null ? `p:${g.project_id}` : `o:${g.project_id}:${g.object_id}`;
+      if (!map.has(key)) map.set(key, new Set());
+      map.get(key).add(g.role);
+    }
+    return map;
+  }
+
+  function roleName(key) {
+    return (state.roles?.roles || []).find((r) => r.key === key)?.name || key;
+  }
+  function accessRolesText(roleSet) {
+    return [...roleSet].map(roleName).join(", ") || "—";
+  }
+
+  function buildAccessSummary(accessMap, catalog) {
+    const rolesAt = (key) => accessMap.get(key) || new Set();
+    const allRoles = rolesAt(ACCESS_ALL);
+    let projectsCount = 0, objectsCount = 0;
+    const projects = catalog.map((p) => {
+      const projRoles = rolesAt(`p:${p.id}`);
+      const objects = p.objects.map((o) => {
+        const direct = rolesAt(`o:${p.id}:${o.id}`);
+        const effective = new Set([...allRoles, ...projRoles, ...direct]);
+        return { id: o.id, name: o.name, direct, effective, accessible: effective.size > 0 };
+      });
+      const accessibleObjects = objects.filter((o) => o.accessible);
+      const hasProjectGrant = projRoles.size > 0;
+      const counted = accessibleObjects.length > 0 || hasProjectGrant;
+      if (counted) { projectsCount++; objectsCount += accessibleObjects.length; }
+      return { id: p.id, name: p.name, projRoles, objects,
+                accessibleCount: accessibleObjects.length, totalCount: objects.length,
+                hasProjectGrant, counted };
+    });
+    return { allRoles, projects, projectsCount, objectsCount };
+  }
+
+  function accessSummaryLabel(u, summary) {
+    if (u.role === "admin") return "Полный доступ";
+    if (summary.allRoles.size) return "Все проекты";
+    if (summary.projectsCount) {
+      return `${summary.projectsCount} ${ruPlural(summary.projectsCount, "проект", "проекта", "проектов")} · `
+        + `${summary.objectsCount} ${ruPlural(summary.objectsCount, "объект", "объекта", "объектов")}`;
+    }
+    return "Нет доступа";
+  }
+
+  function objectSourcesLine(allRoles, projRoles, directRoles) {
+    const roles = new Set([...allRoles, ...projRoles, ...directRoles]);
+    if (!roles.size) return "";
+    return [...roles].map((r) => {
+      const from = [];
+      if (allRoles.has(r)) from.push("от всех проектов");
+      if (projRoles.has(r)) from.push("от проекта");
+      if (directRoles.has(r)) from.push("напрямую");
+      return `${roleName(r)} ${from.join(" и ")}`;
+    }).join("; ");
+  }
+
+  // ---------- сторож несохранённого — один активный слот: экраны в этом
+  // пилоте показываются по одному, второй незафиксированной формы рядом
+  // одновременно быть не может (переход в другую всегда идёт через этот
+  // же сторож). Используется и для внутренних переходов, и для кнопки
+  // "Текущий интерфейс" в шапке (guardLeave), и для beforeunload. ----------
+
+  let currentDirty = null; // {message, save: async()=>void (throws при ошибке), discard: ()=>void}
+  function setDirty(info) { currentDirty = info; }
+  function clearDirtyState() { currentDirty = null; }
+  function hasUnsavedChanges() { return !!currentDirty; }
+
+  function showUnsavedDialog(message) {
+    return new Promise((resolve) => {
+      const backdrop = document.createElement("div");
+      backdrop.className = "v2-dialog-backdrop";
+      backdrop.innerHTML = `
+        <div class="v2-dialog" role="alertdialog" aria-modal="true">
+          <p>${escapeHtml(message)}</p>
+          <div class="v2-dialog-actions">
+            <button type="button" class="v2-btn" data-choice="cancel">Остаться</button>
+            <button type="button" class="v2-btn" data-choice="discard">Не сохранять</button>
+            <button type="button" class="v2-btn v2-primary" data-choice="save">Сохранить и продолжить</button>
+          </div>
+        </div>`;
+      backdrop.addEventListener("click", (e) => {
+        const choice = e.target.closest("[data-choice]")?.dataset.choice;
+        if (choice) { document.body.removeChild(backdrop); resolve(choice); }
+        else if (e.target === backdrop) { document.body.removeChild(backdrop); resolve("cancel"); }
+      });
+      document.body.appendChild(backdrop);
+      backdrop.querySelector('[data-choice="save"]').focus();
+    });
+  }
+
+  async function requestLeave() {
+    if (!currentDirty) return true;
+    const info = currentDirty;
+    const choice = await showUnsavedDialog(info.message);
+    if (choice === "cancel") return false;
+    if (choice === "discard") { info.discard?.(); clearDirtyState(); return true; }
+    try {
+      await info.save();
+      clearDirtyState();
+      return true;
+    } catch (err) {
+      state.status = err?.detail || err?.message || "Не удалось сохранить";
+      status.textContent = state.status;
+      return false;
+    }
   }
 
   function escapeHtml(s) {
@@ -56,21 +217,23 @@ export function mountUsersAccess(container, ctx) {
 
   container.classList.add("v2-app");
   container.innerHTML = `
+    <div class="v2-page-head"><h2>Пользователи и доступ</h2></div>
     <nav class="v2-nav" aria-label="Разделы">
-      <button data-page="users" aria-pressed="true">Пользователи</button>
-      <button data-page="roles" aria-pressed="false">Роли</button>
-      <button data-page="check" aria-pressed="false">Проверка доступа</button>
+      <button data-page="users" aria-pressed="true" ${canReadUsers ? "" : "hidden"}>Пользователи</button>
+      <button data-page="roles" aria-pressed="false" ${canReadRoles ? "" : "hidden"}>Роли</button>
+      <button data-page="check" aria-pressed="false" ${canReadUsers ? "" : "hidden"}>Проверка доступа</button>
     </nav>
-    <div id="ua-body" class="v2-scroll"></div>
+    <div id="ua-body" class="v2-scroll"><div id="ua-inner" class="v2-workspace"></div></div>
     <footer class="v2-foot"><span id="ua-status" class="v2-muted"></span><div class="v2-foot-actions" id="ua-foot-actions"></div></footer>
   `;
   const nav = container.querySelector(".v2-nav");
-  const body = container.querySelector("#ua-body");
+  const body = container.querySelector("#ua-inner");
   const status = container.querySelector("#ua-status");
   const footActions = container.querySelector("#ua-foot-actions");
 
   async function goto(page) {
-    if (page !== state.page && state.page === "edit" && state.editTab === "access" && !confirmDiscard()) return;
+    if (page === state.page) return;
+    if (!(await requestLeave())) return;
     state.page = page;
     state.status = "";
     await render();
@@ -82,6 +245,11 @@ export function mountUsersAccess(container, ctx) {
   });
 
   async function render() {
+    // Защита от прямого попадания на недоступную вкладку (например,
+    // предыдущее состояние осталось от другого набора прав).
+    if (state.page === "users" && !canReadUsers) state.page = canReadRoles ? "roles" : "users";
+    if (state.page === "roles" && !canReadRoles) state.page = canReadUsers ? "users" : "roles";
+    if (state.page === "check" && !canReadUsers) state.page = canReadRoles ? "roles" : "users";
     nav.querySelectorAll("button[data-page]").forEach((b) =>
       b.setAttribute("aria-pressed", String(b.dataset.page === (state.page === "edit" ? "users" : state.page))));
     footActions.innerHTML = "";
@@ -103,7 +271,14 @@ export function mountUsersAccess(container, ctx) {
     const rows = state.users.filter((u) =>
       !q || `${u.display_name} ${u.domain_login} ${u.department || ""}`.toLowerCase().includes(q));
     if (!rows.length) return `<tr><td colspan="4">Пользователи не найдены</td></tr>`;
-    return rows.map((u) => `
+    const catalog = state.catalog, matrix = state.accessMatrix;
+    return rows.map((u) => {
+      let accessCell = "—";
+      if (catalog && matrix) {
+        const summary = buildAccessSummary(accessMapFromGrants(matrix.grants[String(u.id)]), catalog);
+        accessCell = `<button type="button" class="v2-link" data-open-access="${u.id}">${escapeHtml(accessSummaryLabel(u, summary))}</button>`;
+      }
+      return `
       <tr>
         <td><div class="v2-person">
           <span class="v2-avatar">${escapeHtml(initials(u))}</span>
@@ -112,8 +287,10 @@ export function mountUsersAccess(container, ctx) {
         </div></td>
         <td>${escapeHtml(u.domain_login)}<small>${u.auth_method === "domain" ? "Домен" : (u.has_password ? "Пароль сервиса" : "Пароль не задан")}</small></td>
         <td><span class="v2-tag">${escapeHtml(ROLE_LABELS[u.role] || u.role)}</span></td>
+        <td>${accessCell}</td>
         <td class="v2-row-action"><button class="v2-link" data-user="${u.id}">Открыть</button></td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
   }
 
   function initials(u) {
@@ -122,11 +299,14 @@ export function mountUsersAccess(container, ctx) {
 
   async function renderUsers() {
     await ensureUsers();
+    // Колонка "Доступ" — не обязательна для показа списка: если каталог
+    // недоступен (сеть/права), список всё равно открывается, просто без неё.
+    try { await Promise.all([ensureCatalog(), ensureAccessMatrix()]); } catch (e) { /* см. accessCell="—" */ }
     body.innerHTML = `
       <div class="v2-bar"><h3>Пользователи <small>${state.users.length} учётных записей</small></h3>
-        ${canWrite ? btn("Добавить пользователя", 'data-new', true) : ""}</div>
+        ${canWriteUsers ? btn("Добавить пользователя", 'data-new', true) : ""}</div>
       <div class="v2-bar"><input class="v2-search" id="ua-search" placeholder="Имя, логин или подразделение" value="${escapeHtml(state.query)}"></div>
-      <table class="v2-table"><thead><tr><th>Пользователь</th><th>Учётная запись</th><th>Системная роль</th><th></th></tr></thead>
+      <table class="v2-table"><thead><tr><th>Пользователь</th><th>Учётная запись</th><th>Системная роль</th><th>Доступ</th><th></th></tr></thead>
       <tbody id="ua-rows">${userRows()}</tbody></table>
       <div id="ua-new-user"></div>
     `;
@@ -134,7 +314,15 @@ export function mountUsersAccess(container, ctx) {
       state.query = e.target.value;
       body.querySelector("#ua-rows").innerHTML = userRows();
     });
-    body.querySelectorAll("[data-user]").forEach((el) => el.addEventListener("click", () => openUser(Number(el.dataset.user))));
+    // Делегирование НА ПОСТОЯННЫЙ контейнер таблицы: поиск заменяет только
+    // innerHTML #ua-rows, но обработчик выше него и переживает замену строк
+    // — до правки обработчики вешались на сами <tr> и терялись при вводе.
+    body.querySelector(".v2-table").addEventListener("click", (e) => {
+      const openAccess = e.target.closest("[data-open-access]");
+      if (openAccess) { openUser(Number(openAccess.dataset.openAccess), "access"); return; }
+      const openUserBtn = e.target.closest("[data-user]");
+      if (openUserBtn) openUser(Number(openUserBtn.dataset.user));
+    });
     const newBtn = body.querySelector("[data-new]");
     if (newBtn) newBtn.addEventListener("click", () => renderNewUserForm());
   }
@@ -168,30 +356,80 @@ export function mountUsersAccess(container, ctx) {
           domain_login, role: el.querySelector("#nu-role").value,
         });
         await ensureUsers(true);
-        openUser(created.id);
+        await ensureAccessMatrix(true);
+        await openUser(created.id);
       } catch (err) {
         errorEl.textContent = err.detail || "Не удалось создать пользователя";
       }
     });
   }
 
-  async function openUser(id) {
+  async function openUser(id, tab) {
+    if (!(await requestLeave())) return;
     state.selectedUserId = id;
-    state.editTab = "profile";
+    state.editTab = tab || "profile";
     state.access = null;
     state.accessDirty = false;
+    state.accessView = "summary";
     state.page = "edit";
+    initCardDraft();
     await render();
   }
 
   // ---------- Карточка пользователя ----------
 
-  function currentUser() { return state.users.find((u) => u.id === state.selectedUserId); }
+  function currentUserBeingEdited() { return state.users.find((u) => u.id === state.selectedUserId); }
+
+  function initCardDraft() {
+    const u = currentUserBeingEdited();
+    if (!u) return;
+    state.cardDraft = {
+      last_name: u.last_name, first_name: u.first_name || "", patronymic: u.patronymic || "",
+      position: u.position || "", department: u.department || "", role: u.role,
+      domain_login: u.domain_login, auth_method: u.auth_method || "local",
+      // Точка исправления регрессии df4da55: сохранение профиля больше не
+      // подставляет false вместо действующего значения — черновик стартует
+      // с ТЕКУЩИМ значением, и пока его никто не тронул, PATCH шлёт его же.
+      must_change_password: !!u.must_change_password,
+    };
+    state.cardDirty = false;
+  }
+
+  function markCardDirty() {
+    const wasDirty = state.cardDirty;
+    state.cardDirty = true;
+    setDirty({
+      message: "В карточке пользователя есть несохранённые изменения.",
+      save: saveCardOrThrow,
+      discard: () => { initCardDraft(); },
+    });
+    status.textContent = "Есть несохранённые изменения";
+    // Кнопки в футере должны появиться с первого же нажатия, а не только
+    // на следующей полной перерисовке — иначе "Сохранить" не видно, пока
+    // не переключишь вкладку и не вернёшься.
+    if (!wasDirty) renderCardFooter();
+  }
+
+  async function saveCardOrThrow() {
+    const u = currentUserBeingEdited();
+    const d = state.cardDraft;
+    const updated = await api.patch(`/users/${u.id}`, {
+      last_name: d.last_name.trim(), first_name: d.first_name.trim(),
+      patronymic: d.patronymic.trim() || null, position: d.position.trim() || null,
+      department: d.department.trim() || null, domain_login: d.domain_login.trim(),
+      role: d.role, auth_method: d.auth_method, must_change_password: d.must_change_password,
+    });
+    Object.assign(u, updated);
+    await ensureAccessMatrix(true); // системная роль/must_change_password влияют на сводку
+    state.cardDirty = false;
+    clearDirtyState();
+  }
 
   async function renderEdit() {
     await ensureUsers();
-    const u = currentUser();
+    const u = currentUserBeingEdited();
     if (!u) { state.page = "users"; return render(); }
+    if (!state.cardDraft) initCardDraft();
     body.innerHTML = `
       <div class="v2-bar"><div><button class="v2-link" data-back>← Все пользователи</button>
         <h3 style="margin-top:8px">${escapeHtml(u.display_name)}</h3></div>
@@ -203,9 +441,13 @@ export function mountUsersAccess(container, ctx) {
         </aside>
         <section id="ua-edit-panel"></section>
       </div>`;
-    body.querySelector("[data-back]").addEventListener("click", () => { if (confirmDiscard()) goto("users"); });
+    body.querySelector("[data-back]").addEventListener("click", async () => {
+      if (!(await requestLeave())) return;
+      goto("users");
+    });
     body.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", async () => {
-      if (state.editTab === "access" && b.dataset.tab !== "access" && !confirmDiscard()) return;
+      if (b.dataset.tab === state.editTab) return;
+      if (!(await requestLeave())) return;
       state.editTab = b.dataset.tab;
       await render();
     }));
@@ -213,234 +455,414 @@ export function mountUsersAccess(container, ctx) {
     if (state.editTab === "profile") renderProfile(panel, u);
     else if (state.editTab === "security") renderSecurity(panel, u);
     else await renderAccess(panel, u);
+    if ((state.editTab === "profile" || state.editTab === "security") && canWriteUsers) {
+      renderCardFooter();
+    }
   }
 
-  function renderProfile(panel, u) {
-    panel.innerHTML = `
-      <h4>Основные сведения</h4>
-      <div class="v2-fields">
-        <label class="v2-field">Фамилия<input id="pf-last" value="${escapeHtml(u.last_name)}" ${canWrite ? "" : "disabled"}></label>
-        <label class="v2-field">Имя<input id="pf-first" value="${escapeHtml(u.first_name || "")}" ${canWrite ? "" : "disabled"}></label>
-        <label class="v2-field">Отчество<input id="pf-patr" value="${escapeHtml(u.patronymic || "")}" ${canWrite ? "" : "disabled"}></label>
-        <label class="v2-field">Должность<input id="pf-pos" value="${escapeHtml(u.position || "")}" ${canWrite ? "" : "disabled"}></label>
-        <label class="v2-field v2-span">Подразделение<input id="pf-dept" value="${escapeHtml(u.department || "")}" ${canWrite ? "" : "disabled"}></label>
-        <label class="v2-field">Логин<input id="pf-login" value="${escapeHtml(u.domain_login)}" ${canWrite ? "" : "disabled"}></label>
-        <label class="v2-field">Системная роль
-          <select id="pf-role" ${canWrite ? "" : "disabled"}>${Object.entries(ROLE_LABELS)
-            .map(([v, l]) => `<option value="${v}" ${u.role === v ? "selected" : ""}>${l}</option>`).join("")}</select>
-        </label>
-      </div>
-      <p class="v2-note">Системная роль и роли на объектах — разные настройки (вкладка «Доступ к объектам»).</p>
-      <div class="v2-auth-error" id="pf-error"></div>
-      ${canWrite ? btn("Сохранить", 'id="pf-save"', true) : ""}
-    `;
-    if (!canWrite) return;
-    panel.querySelector("#pf-save").addEventListener("click", async () => {
-      const errorEl = panel.querySelector("#pf-error");
-      errorEl.textContent = "";
+  function renderCardFooter() {
+    if (!state.cardDirty) return;
+    footActions.innerHTML = `${btn("Отменить", 'id="card-cancel"')}${btn("Сохранить", 'id="card-save"', true)}`;
+    status.textContent = "Есть несохранённые изменения";
+    footActions.querySelector("#card-cancel").addEventListener("click", async () => {
+      initCardDraft();
+      clearDirtyState();
+      await render();
+    });
+    footActions.querySelector("#card-save").addEventListener("click", async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
       try {
-        const updated = await api.patch(`/users/${u.id}`, {
-          last_name: panel.querySelector("#pf-last").value.trim(),
-          first_name: panel.querySelector("#pf-first").value.trim(),
-          patronymic: panel.querySelector("#pf-patr").value.trim() || null,
-          position: panel.querySelector("#pf-pos").value.trim() || null,
-          department: panel.querySelector("#pf-dept").value.trim() || null,
-          domain_login: panel.querySelector("#pf-login").value.trim(),
-          role: panel.querySelector("#pf-role").value,
-          auth_method: u.auth_method,
-        });
-        Object.assign(u, updated);
+        await saveCardOrThrow();
         state.status = "Сохранено";
         await render();
       } catch (err) {
-        errorEl.textContent = err.detail || "Не удалось сохранить";
+        state.status = err.detail || "Не удалось сохранить";
+        status.textContent = state.status;
+        button.disabled = false;
       }
     });
   }
 
+  function renderProfile(panel, u) {
+    const d = state.cardDraft;
+    panel.innerHTML = `
+      <h4>Основные сведения</h4>
+      <div class="v2-fields">
+        <label class="v2-field">Фамилия<input id="pf-last" value="${escapeHtml(d.last_name)}" ${canWriteUsers ? "" : "disabled"}></label>
+        <label class="v2-field">Имя<input id="pf-first" value="${escapeHtml(d.first_name)}" ${canWriteUsers ? "" : "disabled"}></label>
+        <label class="v2-field">Отчество<input id="pf-patr" value="${escapeHtml(d.patronymic)}" placeholder="Не указано" ${canWriteUsers ? "" : "disabled"}></label>
+        <label class="v2-field">Должность<input id="pf-pos" value="${escapeHtml(d.position)}" ${canWriteUsers ? "" : "disabled"}></label>
+        <label class="v2-field v2-span">Подразделение<input id="pf-dept" value="${escapeHtml(d.department)}" ${canWriteUsers ? "" : "disabled"}></label>
+        <label class="v2-field v2-span">Системная роль
+          <select id="pf-role" ${canWriteUsers ? "" : "disabled"}>${Object.entries(ROLE_LABELS)
+            .map(([v, l]) => `<option value="${v}" ${d.role === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+        </label>
+      </div>
+      <p class="v2-note">Системная роль — только про ведение сервиса. Права на стройках — вкладка «Доступ к объектам».</p>
+      <div class="v2-auth-error" id="pf-error"></div>
+    `;
+    if (!canWriteUsers) return;
+    const bind = (id, field) => panel.querySelector(id).addEventListener("input", (e) => {
+      d[field] = e.target.value; markCardDirty();
+    });
+    bind("#pf-last", "last_name"); bind("#pf-first", "first_name"); bind("#pf-patr", "patronymic");
+    bind("#pf-pos", "position"); bind("#pf-dept", "department");
+    panel.querySelector("#pf-role").addEventListener("change", (e) => { d.role = e.target.value; markCardDirty(); });
+  }
+
   function renderSecurity(panel, u) {
+    const d = state.cardDraft;
+    const canSetPw = canSetPassword(u);
     panel.innerHTML = `
       <h4>Способ входа</h4>
-      <p class="v2-muted">${u.auth_method === "domain" ? "Доменная учётная запись — паролем управляет домен." : (u.has_password ? "Пароль сервиса задан." : "Пароль не задан — вход запрещён.")}</p>
-      ${canWrite && u.auth_method !== "domain" ? `
-        <div class="v2-fields">
-          <label class="v2-field">Новый пароль<input id="sec-pass" type="password"></label>
+      <div class="v2-fields">
+        <label class="v2-field">Способ входа
+          <select id="sec-auth-method" ${canWriteUsers ? "" : "disabled"}>
+            <option value="local" ${d.auth_method === "local" ? "selected" : ""}>Пароль сервиса</option>
+            <option value="domain" ${d.auth_method === "domain" ? "selected" : ""}>Доменная учётная запись</option>
+          </select>
+        </label>
+        <label class="v2-field">Логин<input id="sec-login" value="${escapeHtml(d.domain_login)}" ${canWriteUsers ? "" : "disabled"}></label>
+      </div>
+      <label class="v2-role-check" id="sec-must-row" ${d.auth_method === "domain" ? "hidden" : ""}>
+        <input type="checkbox" id="sec-must" ${d.must_change_password ? "checked" : ""} ${canWriteUsers ? "" : "disabled"}>
+        <span>Требовать смену пароля при следующем входе</span>
+      </label>
+      <div class="v2-auth-error" id="pf-error"></div>
+      ${canSetPw && d.auth_method !== "domain" ? `
+        <div class="v2-result">
+          <h4>Задать пароль</h4>
+          <div class="v2-fields">
+            <label class="v2-field">Новый пароль<input id="sec-pass" type="password"></label>
+          </div>
+          <label class="v2-role-check"><input type="checkbox" id="sec-pw-must" checked><span>Потребовать смену при следующем входе</span></label>
+          <div class="v2-auth-error" id="sec-error"></div>
+          ${btn("Задать пароль", 'id="sec-save"', true)}
         </div>
-        <label class="v2-role-check"><input type="checkbox" id="sec-must" checked><span>Потребовать смену при следующем входе</span></label>
-        <div class="v2-auth-error" id="sec-error"></div>
-        ${btn("Задать пароль", 'id="sec-save"', true)}
       ` : ""}
+      <div class="v2-result">
+        <h4>Диагностика и доступ к аккаунту</h4>
+        <p class="v2-muted">Поиск в домене, список сеансов и вход «от имени пользователя» — доступны в текущем интерфейсе, в этот пилот пока не перенесены.</p>
+        <a class="v2-link" href="#" data-v1-link>Открыть в текущем интерфейсе →</a>
+      </div>
     `;
+    panel.querySelector("[data-v1-link]").addEventListener("click", async (e) => {
+      e.preventDefault();
+      if (!(await requestLeave())) return;
+      location.href = "/?ui=v1";
+    });
+    if (canWriteUsers) {
+      panel.querySelector("#sec-auth-method").addEventListener("change", (e) => {
+        d.auth_method = e.target.value;
+        markCardDirty();
+        renderSecurity(panel, u); // способ входа меняет видимость полей ниже
+      });
+      panel.querySelector("#sec-login").addEventListener("input", (e) => { d.domain_login = e.target.value; markCardDirty(); });
+      const mustEl = panel.querySelector("#sec-must");
+      if (mustEl) mustEl.addEventListener("change", (e) => { d.must_change_password = e.target.checked; markCardDirty(); });
+    }
     const saveBtn = panel.querySelector("#sec-save");
     if (saveBtn) saveBtn.addEventListener("click", async () => {
       const errorEl = panel.querySelector("#sec-error");
       errorEl.textContent = "";
+      saveBtn.disabled = true;
       try {
         await api.post(`/users/${u.id}/set-password`, {
           password: panel.querySelector("#sec-pass").value,
-          must_change_password: panel.querySelector("#sec-must").checked,
+          must_change_password: panel.querySelector("#sec-pw-must").checked,
         });
         state.status = "Пароль обновлён";
         panel.querySelector("#sec-pass").value = "";
+        await ensureUsers(true);
       } catch (err) {
         errorEl.textContent = err.detail || "Не удалось задать пароль";
+      } finally {
+        saveBtn.disabled = false;
       }
     });
   }
 
-  // ---------- Доступ к объектам ----------
+  // ---------- Доступ к объектам: сводка (без перебора объектов) + точечное редактирование ----------
 
   function grantsAt(key) {
-    if (key === "all") return state.access.grants.filter((g) => g.project_id == null && g.object_id == null);
-    if (key.startsWith("p")) {
-      const pid = Number(key.slice(1));
+    if (key === ACCESS_ALL) return state.access.grants.filter((g) => g.project_id == null && g.object_id == null);
+    if (key.startsWith("p:")) {
+      const pid = Number(key.slice(2));
       return state.access.grants.filter((g) => g.project_id === pid && g.object_id == null);
     }
-    const [, pid, oid] = key.match(/^o(\d+)-(\d+)$/).map(Number);
+    const [, pid, oid] = key.split(":").map((x, i) => (i === 0 ? x : Number(x)));
     return state.access.grants.filter((g) => g.object_id === oid);
   }
 
-  function inheritedRoles(key) {
-    if (key === "all") return [];
-    const all = grantsAt("all").map((g) => g.role);
-    if (key.startsWith("p")) return all;
-    const pid = Number(key.match(/^o(\d+)-/)[1]);
-    return [...all, ...grantsAt("p" + pid).map((g) => g.role)];
+  function inheritedRolesAt(key) {
+    if (key === ACCESS_ALL) return [];
+    const all = [...grantsAt(ACCESS_ALL)].map((g) => g.role);
+    if (key.startsWith("p:")) return all;
+    const pid = Number(key.split(":")[1]);
+    return [...all, ...grantsAt(`p:${pid}`).map((g) => g.role)];
   }
 
-  function effectiveRoles(project, obj) {
-    const all = grantsAt("all").map((g) => g.role);
-    const proj = grantsAt("p" + project.id).map((g) => g.role);
-    const own = state.access.grants.filter((g) => g.object_id === obj.id).map((g) => g.role);
-    return [...new Set([...all, ...proj, ...own])];
+  function areaLabel(key, catalog) {
+    if (key === ACCESS_ALL) return "Все проекты";
+    if (key.startsWith("p:")) return catalog.find((p) => p.id === Number(key.slice(2)))?.name || key;
+    const [, pid, oid] = key.split(":").map((x, i) => (i === 0 ? x : Number(x)));
+    const p = catalog.find((x) => x.id === pid);
+    return `${p?.name || pid} / ${p?.objects.find((o) => o.id === oid)?.name || oid}`;
   }
 
-  function roleNameList(keys) {
-    if (!keys.length) return "Нет назначений";
-    const byKey = Object.fromEntries((state.roles?.roles || []).map((r) => [r.key, r.name]));
-    return keys.map((k) => byKey[k] || k).join(" + ");
+  async function loadAccessFor(u) {
+    if (!state.access || state.access._userId !== u.id) {
+      const data = await api.get(`/users/${u.id}/access`);
+      state.access = {
+        system_admin: data.system_admin,
+        grants: data.grants.map((g) => ({ project_id: g.project_id, object_id: g.object_id, role: g.role })),
+        _userId: u.id,
+      };
+      state.accessDirty = false;
+      state.accessView = "summary";
+    }
+  }
+
+  function markAccessDirty() {
+    state.accessDirty = true;
+    setDirty({
+      message: "В назначениях доступа есть несохранённые изменения.",
+      save: saveAccessOrThrow,
+      discard: () => { state.access = null; },
+    });
+  }
+
+  async function saveAccessOrThrow() {
+    const u = currentUserBeingEdited();
+    await api.put(`/users/${u.id}/access`, { grants: state.access.grants });
+    state.accessDirty = false;
+    state.access = null;
+    await ensureAccessMatrix(true);
+    clearDirtyState();
   }
 
   async function renderAccess(panel, u) {
-    await ensureRoles();
-    if (!state.access || state.access._userId !== u.id) {
-      const data = await api.get(`/users/${u.id}/access`);
-      state.access = { ...data, grants: data.grants.map((g) => ({ project_id: g.project_id, object_id: g.object_id, role: g.role })), _userId: u.id };
-      state.accessDirty = false;
-      state.selectedNode = "all";
-    }
+    await Promise.all([ensureRoles(), ensureCatalog()]);
+    await loadAccessFor(u);
     if (state.access.system_admin) {
       panel.innerHTML = `<h4>Полный доступ ко всему сервису</h4>
         <p class="v2-note">Администратор сервиса имеет доступ ко всем текущим и будущим проектам и объектам. Назначения ролей его не ограничивают.</p>`;
       return;
     }
-    const tree = await ensureTree();
-    const key = state.selectedNode || "all";
-    panel.innerHTML = `
-      <div class="v2-tree">
-        <div class="v2-tree-list">
-          <button data-node="all" aria-pressed="${key === "all"}">Все проекты<small>${roleNameList(grantsAt("all").map((g) => g.role))}</small></button>
-          ${tree.map((p) => `
-            <div>
-              <button data-node="p${p.id}" aria-pressed="${key === "p" + p.id}">${escapeHtml(p.name)}<small>${roleNameList(grantsAt("p" + p.id).map((g) => g.role))}</small></button>
-              <div class="v2-indent">
-                ${p.objects.map((o) => `<button data-node="o${p.id}-${o.id}" aria-pressed="${key === "o" + p.id + "-" + o.id}">${escapeHtml(o.name)}<small>${roleNameList(effectiveRoles(p, o))}</small></button>`).join("")}
-              </div>
-            </div>`).join("")}
-        </div>
-        <div id="ua-node-editor"></div>
-      </div>
-    `;
-    panel.querySelectorAll("[data-node]").forEach((b) => b.addEventListener("click", () => {
-      state.selectedNode = b.dataset.node;
-      renderAccess(panel, u);
-    }));
-    renderNodeEditor(panel.querySelector("#ua-node-editor"), key, tree);
-    // Кнопки — в общем закреплённом футере, а не под деревом: список
-    // проектов бывает длинным (сотни строк), и кнопка внизу панели
-    // прокручивалась бы вместе с ним, а не оставалась под рукой.
-    if (canWrite) {
+    const catalog = state.catalog;
+    if (state.accessView === "summary") renderAccessSummary(panel, catalog);
+    else renderAccessAreaEditor(panel, catalog, state.accessView.edit);
+    if (canWriteUsers) {
       footActions.innerHTML = `${btn("Отменить", 'id="ua-access-cancel"')}${btn("Сохранить изменения", 'id="ua-access-save"', true)}`;
+      footActions.querySelector("#ua-access-save").disabled = !state.accessDirty;
+      footActions.querySelector("#ua-access-cancel").disabled = !state.accessDirty;
       status.textContent = state.accessDirty ? "Есть несохранённые изменения" : "";
-      footActions.querySelector("#ua-access-save").addEventListener("click", async () => {
+      footActions.querySelector("#ua-access-save").addEventListener("click", async (e) => {
+        const button = e.currentTarget;
+        button.disabled = true;
         try {
-          await api.put(`/users/${u.id}/access`, { grants: state.access.grants });
-          state.accessDirty = false;
+          await saveAccessOrThrow();
           state.status = "Доступ сохранён";
-          state.access = null;
           await render();
         } catch (err) {
           state.status = err.detail || "Не удалось сохранить доступ";
-          await render();
+          status.textContent = state.status;
+          button.disabled = false;
         }
       });
       footActions.querySelector("#ua-access-cancel").addEventListener("click", async () => {
-        state.access = null; state.accessDirty = false; await render();
+        state.access = null; state.accessDirty = false; clearDirtyState(); await render();
       });
     }
   }
 
-  function nodeLabel(key, tree) {
-    if (key === "all") return "Все проекты";
-    if (key.startsWith("p")) return tree.find((p) => p.id === Number(key.slice(1)))?.name || key;
-    const [, pid, oid] = key.match(/^o(\d+)-(\d+)$/).map(Number);
-    const p = tree.find((x) => x.id === pid);
-    const o = p?.objects.find((x) => x.id === oid);
-    return `${p?.name || pid} / ${o?.name || oid}`;
+  function renderAccessSummary(panel, catalog) {
+    const summary = buildAccessSummary(accessMapFromGrants(state.access.grants), catalog);
+    const q = state.accessSearch.trim().toLowerCase();
+    let html = `<div class="v2-bar">
+      <input class="v2-search" id="ua-access-search" placeholder="Поиск проекта или объекта" value="${escapeHtml(state.accessSearch)}">
+      ${btn(state.accessAllAreas ? "Только доступные" : "Показать все", 'id="ua-access-all-areas"')}
+    </div>`;
+    if (summary.allRoles.size) {
+      html += `<div class="v2-note"><strong>Все текущие и будущие проекты</strong><br>`
+        + `${accessRolesText(summary.allRoles)} · назначено на «Все проекты» `
+        + `<button type="button" class="v2-link" data-edit-area="${ACCESS_ALL}">Изменить</button></div>`;
+    } else if (state.accessAllAreas) {
+      html += `<p><button type="button" class="v2-link" data-edit-area="${ACCESS_ALL}">Назначить роли на все проекты</button></p>`;
+    }
+    let shown = 0;
+    for (const p of summary.projects) {
+      if (!state.accessAllAreas && !p.counted) continue;
+      const projectMatches = !q || p.name.toLowerCase().includes(q);
+      const matchingObjects = p.objects.filter((o) => !q || o.name.toLowerCase().includes(q));
+      if (q && !projectMatches && !matchingObjects.length) continue;
+      const objectsToShow = q ? (projectMatches ? p.objects : matchingObjects)
+        : (state.accessAllAreas ? p.objects : p.objects.filter((o) => o.accessible));
+      if (!state.accessAllAreas && !objectsToShow.length && !p.hasProjectGrant) continue;
+      shown++;
+      html += `<section class="v2-result"><div class="v2-bar">
+        <div><h4>${escapeHtml(p.name)} <span class="v2-tag">${p.accessibleCount} из ${p.totalCount} объектов</span></h4>
+        ${p.hasProjectGrant ? `<small>На проекте: ${accessRolesText(p.projRoles)}. Доступны будущие объекты.</small>` : ""}</div>
+        <button type="button" class="v2-link" data-edit-area="p:${p.id}">${p.hasProjectGrant ? "Изменить роли проекта" : "Назначить на проект"}</button>
+      </div>`;
+      if (!objectsToShow.length) html += `<p class="v2-note">Объектов пока нет; доступ распространится на будущие.</p>`;
+      for (const o of objectsToShow) {
+        const sources = objectSourcesLine(summary.allRoles, p.projRoles, o.direct);
+        html += `<div class="v2-perm"><div><strong>${escapeHtml(o.name)}</strong>${sources ? `<small>${escapeHtml(sources)}</small>` : ""}</div>
+          <div class="v2-inline"><span class="v2-tag">${o.accessible ? escapeHtml(accessRolesText(o.effective)) : "Нет доступа"}</span>
+          <button type="button" class="v2-link" data-edit-area="o:${p.id}:${o.id}">${o.accessible ? "Изменить" : "Выдать"}</button></div></div>`;
+      }
+      html += `</section>`;
+    }
+    if (!shown && !summary.allRoles.size) {
+      html += `<p class="v2-note">Нет доступа к проектам. Нажмите «Показать все», чтобы назначить роли.</p>`;
+    }
+    panel.innerHTML = html;
+    const search = panel.querySelector("#ua-access-search");
+    search.addEventListener("input", (e) => { state.accessSearch = e.target.value; renderAccessSummary(panel, catalog); });
+    panel.querySelector("#ua-access-all-areas").addEventListener("click", () => {
+      state.accessAllAreas = !state.accessAllAreas; renderAccessSummary(panel, catalog);
+    });
+    if (canWriteUsers) {
+      panel.querySelectorAll("[data-edit-area]").forEach((b) => b.addEventListener("click", () => {
+        state.accessView = { edit: b.dataset.editArea };
+        renderAccessAreaEditor(panel, catalog, b.dataset.editArea);
+      }));
+    }
   }
 
-  function renderNodeEditor(el, key, tree) {
+  function renderAccessAreaEditor(panel, catalog, key) {
     const direct = grantsAt(key).map((g) => g.role);
-    const inherited = inheritedRoles(key);
-    el.innerHTML = `
-      <h4>${escapeHtml(nodeLabel(key, tree))}</h4>
-      <small>Прямые назначения в выбранной области</small>
+    const inherited = inheritedRolesAt(key);
+    const futureNote = key === ACCESS_ALL ? "Назначение распространяется на все текущие и будущие проекты."
+      : key.startsWith("p:") ? "Назначение распространяется на текущие и будущие объекты этого проекта." : "";
+    panel.innerHTML = `
+      <button type="button" class="v2-link" data-back-summary>← Сводка доступа</button>
+      <h4>${escapeHtml(areaLabel(key, catalog))}</h4>
+      <small>Прямые назначения на этом уровне</small>
       ${(state.roles.roles || []).map((r) => `
-        <label class="v2-role-check"><input type="checkbox" data-grant-role="${r.key}" ${direct.includes(r.key) ? "checked" : ""} ${canWrite ? "" : "disabled"}><span>${escapeHtml(r.name)}</span></label>
+        <label class="v2-role-check"><input type="checkbox" data-grant-role="${r.key}" ${direct.includes(r.key) ? "checked" : ""} ${canWriteUsers ? "" : "disabled"}><span>${escapeHtml(r.name)}</span></label>
       `).join("")}
-      <p class="v2-note">${inherited.length ? "Унаследовано: " + roleNameList([...new Set(inherited)]) + ". Прямые назначения складываются с унаследованными." : "Унаследованных ролей нет."}</p>
+      ${inherited.length ? `<p class="v2-note">Действует независимо от отмеченного выше (унаследовано): ${escapeHtml(accessRolesText(new Set(inherited)))}. Роли складываются — снять их можно только там, где они выданы.</p>` : ""}
+      ${futureNote ? `<p class="v2-note">${futureNote}</p>` : ""}
     `;
-    el.querySelectorAll("[data-grant-role]").forEach((cb) => cb.addEventListener("change", () => {
+    panel.querySelector("[data-back-summary]").addEventListener("click", () => {
+      state.accessView = "summary";
+      renderAccessSummary(panel, catalog);
+    });
+    panel.querySelectorAll("[data-grant-role]").forEach((cb) => cb.addEventListener("change", () => {
       const role = cb.dataset.grantRole;
       let project_id = null, object_id = null;
-      if (key.startsWith("p")) project_id = Number(key.slice(1));
-      else if (key.startsWith("o")) {
-        const m = key.match(/^o(\d+)-(\d+)$/);
-        project_id = Number(m[1]); object_id = Number(m[2]);
-      }
+      if (key.startsWith("p:")) project_id = Number(key.slice(2));
+      else if (key.startsWith("o:")) { const [, pid, oid] = key.split(":"); project_id = Number(pid); object_id = Number(oid); }
       const idx = state.access.grants.findIndex((g) => g.project_id === project_id && g.object_id === object_id && g.role === role);
       if (cb.checked && idx === -1) state.access.grants.push({ project_id, object_id, role });
       else if (!cb.checked && idx !== -1) state.access.grants.splice(idx, 1);
-      state.accessDirty = true;
+      markAccessDirty();
       status.textContent = "Есть несохранённые изменения";
-      renderNodeEditor(el, key, tree);
-      // обновить подписи в дереве без полной перерисовки формы недоступно —
-      // достаточно перерисовать панель целиком при следующем открытии узла
+      footActions.querySelector("#ua-access-save")?.removeAttribute("disabled");
+      footActions.querySelector("#ua-access-cancel")?.removeAttribute("disabled");
+      renderAccessAreaEditor(panel, catalog, key);
     }));
   }
 
-  // ---------- Роли ----------
+  // ---------- Роли: черновик разрешений (как в V1), явное сохранение ----------
+
+  function rolesCellKey(roleKey, featureKey) { return `${roleKey}|${featureKey}`; }
+  function rolesLevel(roleKey, featureKey) {
+    if (state.rolesDraft.has(rolesCellKey(roleKey, featureKey))) return state.rolesDraft.get(rolesCellKey(roleKey, featureKey));
+    return state.roles.features.find((f) => f.key === featureKey)?.levels[roleKey] || "none";
+  }
+
+  function markRolesDraftDirty() {
+    setDirty({
+      message: `В матрице разрешений не сохранено ячеек: ${state.rolesDraft.size}.`,
+      save: saveRolesDraftOrThrow,
+      discard: () => { state.rolesDraft.clear(); },
+    });
+  }
+
+  async function saveRolesDraftOrThrow() {
+    if (!state.rolesDraft.size) return;
+    const items = [...state.rolesDraft].map(([key, level]) => {
+      const [role_key, feature_key] = key.split("|");
+      return { role_key, feature_key, level };
+    });
+    await api.put("/roles/features", { items });
+    state.rolesDraft.clear();
+    await ensureRoles(true);
+    clearDirtyState();
+  }
 
   async function renderRoles() {
     await ensureRoles();
     const ui = state.rolesUi;
-    if (ui.selected === null && state.roles.roles.length) ui.selected = state.roles.roles[0].key;
+    if ((ui.selected === null || !state.roles.roles.some((r) => r.key === ui.selected)) && state.roles.roles.length) {
+      ui.selected = state.roles.roles[0].key;
+    }
     const role = state.roles.roles.find((r) => r.key === ui.selected);
     body.innerHTML = `
       <div class="v2-bar"><div><h3>Роли на объектах</h3><small>Независимые наборы разрешений — складываются, не заменяют друг друга</small></div>
-        ${canWrite ? btn("Создать роль", 'id="role-new"') : ""}</div>
+        ${canWriteRoles ? btn("Создать роль", 'id="role-new"', false) : ""}</div>
       <div id="role-new-form"></div>
-      <div class="v2-cols">
+      ${state.roles.roles.length ? `<div class="v2-cols">
         <aside class="v2-side">
-          ${state.roles.roles.map((r) => `<button data-role="${r.key}" aria-pressed="${r.key === ui.selected}">${escapeHtml(r.name)}<small>${r.granted} назначений</small></button>`).join("")}
+          ${state.roles.roles.map((r, i) => `
+            <div class="v2-role-row">
+              ${canWriteRoles ? `<span class="v2-reorder">
+                <button type="button" data-role-up="${r.key}" ${i === 0 || state.rolesBusy ? "disabled" : ""} aria-label="Выше">▲</button>
+                <button type="button" data-role-down="${r.key}" ${i === state.roles.roles.length - 1 || state.rolesBusy ? "disabled" : ""} aria-label="Ниже">▼</button>
+              </span>` : ""}
+              <button data-role="${r.key}" aria-pressed="${r.key === ui.selected}">${escapeHtml(r.name)}<small>${r.granted} назначений</small></button>
+            </div>`).join("")}
         </aside>
         <section id="role-editor"></section>
-      </div>`;
-    if (canWrite) body.querySelector("#role-new").addEventListener("click", () => renderRoleCreateForm());
+      </div>` : `<p class="v2-note">Ролей пока нет — создайте первую кнопкой выше.</p>`}
+    `;
+    if (canWriteRoles) body.querySelector("#role-new").addEventListener("click", () => renderRoleCreateForm());
     body.querySelectorAll("[data-role]").forEach((b) => b.addEventListener("click", () => {
       ui.selected = b.dataset.role; renderRoles();
     }));
+    body.querySelectorAll("[data-role-up],[data-role-down]").forEach((b) => b.addEventListener("click", () => {
+      const key = b.dataset.roleUp || b.dataset.roleDown;
+      reorderRole(key, !!b.dataset.roleUp);
+    }));
     if (role) renderRoleEditor(body.querySelector("#role-editor"), role);
+    if (state.rolesDraft.size) renderRolesFooter();
+  }
+
+  function renderRolesFooter() {
+    footActions.innerHTML = `${btn("Отменить изменения", 'id="roles-cancel"')}${btn("Сохранить изменения", 'id="roles-save"', true)}`;
+    status.textContent = `Не сохранено ячеек: ${state.rolesDraft.size}`;
+    const saveBtn = footActions.querySelector("#roles-save");
+    const cancelBtn = footActions.querySelector("#roles-cancel");
+    saveBtn.disabled = state.rolesSaving;
+    cancelBtn.disabled = state.rolesSaving;
+    saveBtn.addEventListener("click", async () => {
+      // Защита от повторной отправки — двойной клик не шлёт второй PUT,
+      // пока первый не завершился.
+      if (state.rolesSaving) return;
+      state.rolesSaving = true;
+      saveBtn.disabled = true; cancelBtn.disabled = true;
+      try {
+        await saveRolesDraftOrThrow();
+        state.status = "Разрешения сохранены";
+        await render();
+      } catch (err) {
+        // Черновик остаётся — ошибка не должна выглядеть как потеря правок.
+        state.status = err.detail || "Не удалось сохранить разрешения";
+        status.textContent = state.status;
+        saveBtn.disabled = false; cancelBtn.disabled = false;
+      } finally {
+        state.rolesSaving = false;
+      }
+    });
+    cancelBtn.addEventListener("click", async () => {
+      state.rolesDraft.clear();
+      clearDirtyState();
+      await render();
+    });
   }
 
   function renderRoleCreateForm() {
@@ -464,6 +886,29 @@ export function mountUsersAccess(container, ctx) {
     });
   }
 
+  async function reorderRole(key, up) {
+    if (state.rolesBusy) return;
+    const order = state.roles.roles.map((r) => r.key);
+    const i = order.indexOf(key);
+    const j = up ? i - 1 : i + 1;
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    state.rolesBusy = true;
+    try {
+      await api.put("/roles/order", { keys: order });
+      // Порядок не меняет состав ролей/разделов, но черновик мог ссылаться
+      // на роль, чья карточка сейчас перерисуется — сбрасываем на всякий
+      // случай тем же приёмом, что и после переименования/удаления в V1.
+      await ensureRoles(true);
+      await render();
+    } catch (err) {
+      state.status = err.detail || "Не удалось изменить порядок";
+    } finally {
+      state.rolesBusy = false;
+      status.textContent = state.status || "";
+    }
+  }
+
   function renderRoleEditor(el, role) {
     const sections = new Map();
     for (const f of state.roles.features) {
@@ -473,32 +918,39 @@ export function mountUsersAccess(container, ctx) {
     }
     el.innerHTML = `
       <div class="v2-bar"><h3>${escapeHtml(role.name)}</h3>
-        ${canWrite ? `<div class="v2-inline">${btn("Переименовать", 'id="role-rename"')}${btn("Удалить", 'id="role-delete"')}</div>` : ""}</div>
+        ${canWriteRoles ? `<div class="v2-inline">${btn("Переименовать", 'id="role-rename"', false)}${btn("Удалить", 'id="role-delete"', false)}</div>` : ""}</div>
       <div id="role-rename-form"></div>
       <small>Нет — разрешение не добавляется этой ролью. Другие роли могут давать доступ.</small>
       ${[...sections.entries()].map(([section, feats]) => `
         <div class="v2-group">${escapeHtml(section)}</div>
-        ${feats.map((f) => `
-          <div class="v2-perm">
+        ${feats.map((f) => {
+          const level = rolesLevel(role.key, f.key);
+          const dirty = state.rolesDraft.has(rolesCellKey(role.key, f.key));
+          return `
+          <div class="v2-perm${dirty ? " v2-perm-dirty" : ""}">
             <div>${escapeHtml(f.title)}<small>${escapeHtml(f.scope_label || "")}</small></div>
             <div class="v2-seg" aria-label="${escapeHtml(f.title)}">
-              ${LEVELS.map((lv) => `<button data-perm="${f.key}" data-level="${lv}" aria-pressed="${(f.levels[role.key] || "none") === lv}" ${canWrite ? "" : "disabled"}>${state.roles.level_labels[lv]}</button>`).join("")}
+              ${LEVELS.map((lv) => `<button data-perm="${f.key}" data-level="${lv}" aria-pressed="${level === lv}" ${canWriteRoles && !state.rolesSaving ? "" : "disabled"}>${state.roles.level_labels[lv]}</button>`).join("")}
             </div>
-          </div>`).join("")}
+          </div>`;
+        }).join("")}
       `).join("")}
       <p class="v2-note">Изменения роли затронут всех, кому она назначена (сейчас — ${role.granted}).</p>
     `;
-    if (canWrite) {
+    if (canWriteRoles) {
       el.querySelector("#role-delete").addEventListener("click", () => deleteRole(role));
       el.querySelector("#role-rename").addEventListener("click", () => renderRoleRenameForm(el, role));
-      el.querySelectorAll("[data-perm]").forEach((b) => b.addEventListener("click", async () => {
-        const feature_key = b.dataset.perm, level = b.dataset.level;
-        try {
-          await api.put("/roles/features", { items: [{ role_key: role.key, feature_key, level }] });
-          await ensureRoles(true);
-          const fresh = state.roles.roles.find((r) => r.key === role.key);
-          renderRoleEditor(el, fresh);
-        } catch (err) { state.status = err.detail || "Не удалось сохранить разрешение"; status.textContent = state.status; }
+      el.querySelectorAll("[data-perm]").forEach((b) => b.addEventListener("click", () => {
+        const featureKey = b.dataset.perm, level = b.dataset.level;
+        const key = rolesCellKey(role.key, featureKey);
+        const original = state.roles.features.find((f) => f.key === featureKey)?.levels[role.key] || "none";
+        // Вернули как было — правка снимается, а не остаётся "изменением в
+        // ноль": счётчик несохранённого должен показывать реальную разницу.
+        if (level === original) state.rolesDraft.delete(key);
+        else state.rolesDraft.set(key, level);
+        if (state.rolesDraft.size) markRolesDraftDirty(); else clearDirtyState();
+        renderRoleEditor(el, role);
+        if (state.rolesDraft.size) renderRolesFooter(); else { footActions.innerHTML = ""; status.textContent = ""; }
       }));
     }
   }
@@ -523,17 +975,31 @@ export function mountUsersAccess(container, ctx) {
   }
 
   async function deleteRole(role) {
+    if (state.rolesBusy) return;
     let plan;
     try { plan = await api.get(`/roles/${role.key}/delete-plan`); }
     catch (err) { state.status = err.detail || "Не удалось получить сведения об удалении"; return render(); }
     const msg = `Удалить роль «${role.name}»? Будет снята у пользователей: ${plan.users}, `
       + `настроенных разрешений в матрице: ${plan.permissions}, выданных грантов: ${plan.granted}.`;
     if (!confirm(msg)) return;
+    state.rolesBusy = true;
     try {
       await api.delete(`/roles/${role.key}`);
-      state.rolesUi.selected = null;
+      // Точка исправления регрессии df4da55: полная перечитка (не из кэша)
+      // + сброс всего, что могло ссылаться на удалённую роль.
+      state.rolesDraft.clear();
+      clearDirtyState();
+      state.access = null;         // редактор доступа мог кэшировать её грант
+      await ensureAccessMatrix(true);
+      await ensureRoles(true);
+      state.rolesUi.selected = state.roles.roles[0]?.key ?? null;
+      state.status = plan.granted ? `Роль удалена, снято выдач: ${plan.granted}` : "Роль удалена";
+    } catch (err) {
+      state.status = err.detail || "Не удалось удалить роль";
+    } finally {
+      state.rolesBusy = false;
       await render();
-    } catch (err) { state.status = err.detail || "Не удалось удалить роль"; await render(); }
+    }
   }
 
   // ---------- Проверка доступа ----------
@@ -586,4 +1052,5 @@ export function mountUsersAccess(container, ctx) {
   }
 
   render();
+  return { hasUnsavedChanges, guardLeave: requestLeave };
 }
