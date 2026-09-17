@@ -585,6 +585,22 @@ export function mountUsersAccess(container, ctx) {
     if (!wasTracked) renderCardFooter();
   }
 
+  // Issue 2.3 (найдено при живой проверке): ввод в поле "Новый пароль" —
+  // независимый черновик state.pendingPassword, а НЕ полей карточки. Если
+  // отмечать его через markCardDirty(), state.cardDirty остаётся true даже
+  // после того, как отдельная кнопка "Задать пароль" уже подтверждённо
+  // сохранила пароль — её обработчик снимает слежение только при
+  // !state.cardDirty. Итог: успешная установка пароля БЕЗ единой правки
+  // полей профиля всё равно давала ложное "есть несохранённые изменения"
+  // при попытке уйти со вкладки. markPendingPasswordDirty() делает то же
+  // самое (диалог, статус, футер), не трогая cardDirty.
+  function markPendingPasswordDirty() {
+    const wasTracked = state.cardDirty || !!state.pendingPassword;
+    trackCardDirtyState();
+    status.textContent = "Есть несохранённые изменения";
+    if (!wasTracked) renderCardFooter();
+  }
+
   // Общее сохранение вкладок "Профиль"/"Вход и безопасность": обычная
   // правка полей (PATCH) и/или незавершённый ввод пароля (POST
   // set-password) — ОДНИМ действием диалога "Сохранить и продолжить",
@@ -802,7 +818,7 @@ export function mountUsersAccess(container, ctx) {
         const password = panel.querySelector("#sec-pass").value;
         const mustChange = panel.querySelector("#sec-pw-must").checked;
         state.pendingPassword = password ? { password, mustChange } : null;
-        if (state.pendingPassword) markCardDirty();
+        if (state.pendingPassword) markPendingPasswordDirty();
         else if (!state.cardDirty) {
           // Поле очистили руками — снимаем и слежение, и кнопки подвала,
           // иначе "Сохранить"/"Отменить" остаются висеть без дела.
@@ -983,9 +999,9 @@ export function mountUsersAccess(container, ctx) {
     if (summary.allRoles.size) {
       html += `<div class="v2-note"><strong>Все текущие и будущие проекты</strong><br>`
         + `${accessRolesText(summary.allRoles)} · назначено на «Все проекты» `
-        + `<button type="button" class="v2-link" data-edit-area="${ACCESS_ALL}">Изменить</button></div>`;
+        + `<button type="button" class="v2-link" data-edit-area="${ACCESS_ALL}" ${canWriteUsers ? "" : "disabled"}>Изменить</button></div>`;
     } else if (state.accessAllAreas) {
-      html += `<p><button type="button" class="v2-link" data-edit-area="${ACCESS_ALL}">Назначить роли на все проекты</button></p>`;
+      html += `<p><button type="button" class="v2-link" data-edit-area="${ACCESS_ALL}" ${canWriteUsers ? "" : "disabled"}>Назначить роли на все проекты</button></p>`;
     }
     let shown = 0;
     for (const p of summary.projects) {
@@ -1000,14 +1016,14 @@ export function mountUsersAccess(container, ctx) {
       html += `<section class="v2-result"><div class="v2-bar">
         <div><h4>${escapeHtml(p.name)} <span class="v2-tag">${p.accessibleCount} из ${p.totalCount} объектов</span></h4>
         ${p.hasProjectGrant ? `<small>На проекте: ${accessRolesText(p.projRoles)}. Доступны будущие объекты.</small>` : ""}</div>
-        <button type="button" class="v2-link" data-edit-area="p:${p.id}">${p.hasProjectGrant ? "Изменить роли проекта" : "Назначить на проект"}</button>
+        <button type="button" class="v2-link" data-edit-area="p:${p.id}" ${canWriteUsers ? "" : "disabled"}>${p.hasProjectGrant ? "Изменить роли проекта" : "Назначить на проект"}</button>
       </div>`;
       if (!objectsToShow.length) html += `<p class="v2-note">Объектов пока нет; доступ распространится на будущие.</p>`;
       for (const o of objectsToShow) {
         const sources = objectSourcesLine(summary.allRoles, p.projRoles, o.direct);
         html += `<div class="v2-perm"><div><strong>${escapeHtml(o.name)}</strong>${sources ? `<small>${escapeHtml(sources)}</small>` : ""}</div>
           <div class="v2-inline"><span class="v2-tag">${o.accessible ? escapeHtml(accessRolesText(o.effective)) : "Нет доступа"}</span>
-          <button type="button" class="v2-link" data-edit-area="o:${p.id}:${o.id}">${o.accessible ? "Изменить" : "Выдать"}</button></div></div>`;
+          <button type="button" class="v2-link" data-edit-area="o:${p.id}:${o.id}" ${canWriteUsers ? "" : "disabled"}>${o.accessible ? "Изменить" : "Выдать"}</button></div></div>`;
       }
       html += `</section>`;
     }
