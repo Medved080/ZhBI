@@ -139,6 +139,12 @@ small { display: block; color: var(--muted); font-size: 12px; }
 .v2-btn:hover { background: var(--surface); }
 .v2-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .v2-link { border: 0; padding: 0; background: none; color: var(--accent); text-align: left; }
+.v2-icon-btn {
+  border: 0; padding: 6px; background: none; border-radius: 6px;
+  color: var(--muted); display: inline-flex; align-items: center; justify-content: center;
+  flex: none;
+}
+.v2-icon-btn:hover { background: var(--surface); color: var(--bad); }
 
 input:not([type="checkbox"]), select {
   min-width: 0;
@@ -397,12 +403,6 @@ label.v2-field textarea { font-size: 14px; color: var(--ink); width: 100%; font-
 .v2-status-dot[data-dot="suspended"] { background: #F08C00; }
 .v2-status-dot[data-dot="completed"] { background: #1971C2; }
 .v2-status-dot[data-dot="archived"] { background: #868E96; }
-.v2-dialog-inline {
-  border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
-  margin-top: 16px; background: var(--surface);
-}
-.v2-dialog-inline ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
-
 /* Контрагент: договор → спецификация → контракт — вложенные <details>, без
    собственных теней (нет "карточки на карточке"), только отступ и рамка
    слева обозначают уровень. */
