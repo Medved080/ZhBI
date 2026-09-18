@@ -93,8 +93,52 @@
 //       {replacements:{"contract:{id}":"{key}"}, mode:"replace"}, что у
 //       V1, с явным выбором замены и подтверждением; при отсутствии
 //       валидной замены — понятное объяснение вместо пустого списка.
+//
+// Завершающая доработка 2026-09-19 (приёмка по чек-листу
+// Docs/v2-contract-acceptance-checklist.md — прошлый раунд закрыл базовый
+// сценарий каждого пункта, но не смежные/конфликтующие):
+// 5. Устранены гонки при удалении/переносе контракта: сохранение,
+//    удаление и перенос ОДНОГО контракта взаимно исключают друг друга
+//    единым флагом на всё рабочее пространство (contractOpLock,
+//    lockContractWorkspace) — не только на кнопку, которая операцию
+//    начала; повторный клик "Удалить", пока ПЕРВЫЙ вызов ещё читает
+//    delete-plan/candidates (до появления пикера), тоже блокируется
+//    (deleteRequestInFlight — найдено живым тестом, где второй,
+//    "зависший" вызов затирал уже активный пикер замены); сетевой сбой с
+//    неопределённым исходом переспрашивает delete-plan вместо слепого
+//    повтора или отказа (runContractDelete); разблокировка ПЕРЕСЧИТЫВАЕТ,
+//    а не слепо снимает disabled — иначе она случайно возвращала бы
+//    доступность запрещённой архивности или вкладке "Развёрнуто" ещё не
+//    сохранённого контракта.
+// 6. Плановая дата (вкладка "Развёрнуто") получила состояние ПО СТРОКЕ
+//    (entry.rowState — saving/error/pendingValue), а не общий div-заглушку
+//    под таблицей: сохранение/сохранено/ошибка видны у конкретного поля,
+//    "Повторить"/"Вернуть сохранённое" при ошибке, независимость строк
+//    друг от друга и от других открытых контрактов (isExpandedTabStillActive
+//    — завершившийся запрос не трогает чужой DOM), явное предупреждение
+//    при уходе с неудачно сохранённой датой (requestLeaveContract), 403
+//    показывает отдельное сообщение и снимает canEdit у всего контракта.
+// 7. Полный каскад Контрагент→Договор→Спецификация (было сознательно не
+//    перенесено в предыдущем раунде): смену договора/спецификации в
+//    пределах текущего контрагента дополнили сменой САМОГО контрагента —
+//    свой набор {agreements/specs, loaded, error} на любого выбранного
+//    контрагента (state.contractCascade), независимый от state.contracting
+//    (та обслуживает только контрагента открытой карточки), с
+//    race-condition токеном (_cascadeToken) и автовыбором первого варианта
+//    после загрузки/повтора. Перенос к ДРУГОМУ контрагенту закрывает
+//    рабочее пространство с объяснением (в памяти нет и не заводится
+//    копия чужой карточки); норматив "от контрагента" читает выбранного
+//    в форме, не исходного.
+// 8. Редизайн рабочей области: реквизиты и удаление — сворачиваемые блоки
+//    (<details class="v2-collapsible">), не всегда развёрнутая форма над
+//    таблицей; краткая причина запрета архивирования видна всегда, длинное
+//    объяснение — внутри блока; компактная шапка (путь одной строкой, без
+//    отдельного крупного h2). Заголовки таблицы — position:sticky
+//    (потребовало смены border-collapse:collapse→separate — известное
+//    ограничение Chrome для sticky на ячейках коллапсированной таблицы).
 import { showUnsavedDialog, showConfirmDialog, showInfoDialog } from "./dialogs.js";
 import { trashIconHtml } from "./icons.js";
+import { ApiError } from "./api.js";
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -155,6 +199,13 @@ export function mountCounterparties(container, ctx) {
     contractTab: "lines", // "lines" | "expanded" | "incidents" | "capacity"
     contractExpandedCache: new Map(), // contractId -> {loaded, error, rows, canEdit}
     contractDeleteReplacement: null,  // {id, candidates, selectedKey, consequences, error, saving, onSuccess} | null
+    // Раздел 4 приёмки: полный каскад Контрагент→Договор→Спецификация для
+    // смены целевого контрагента контракта — НЕЗАВИСИМЫЙ от state.contracting
+    // (та относится ТОЛЬКО к контрагенту, чья карточка открыта) набор
+    // {agreements/specs, loaded, error} по ЛЮБОМУ контрагенту, который
+    // выбрали в форме контракта. Список самих контрагентов не дублируется —
+    // берётся из уже имеющегося state.list/state.loaded главного модуля.
+    contractCascade: { agreementsByCounterparty: new Map(), specsByAgreement: new Map() },
     status_msg: "",
   };
 
@@ -276,6 +327,19 @@ export function mountCounterparties(container, ctx) {
   // и открытые <select>).
   let body, status, footActions;
   let currentShell = null; // "card" | "contract" | null
+  // Раздел 2 приёмки: сохранение/удаление/перенос ОДНОГО контракта взаимно
+  // исключают друг друга — единый флаг на модуль (рабочее пространство
+  // контракта всегда одно, второе открыть нельзя, пока не закрыто первое),
+  // а не отдельный "занят" у каждой кнопки — про это ниже, у
+  // lockContractWorkspace/runContractDelete.
+  let contractOpLock = null; // { kind: "save" | "delete" } | null
+  // Между "нажал Удалить" и "пикер отрисован" (или "диалог подтверждения
+  // закрыт") — несколько await'ов подряд (delete-plan, candidates, сам
+  // confirm-диалог), и всё это время state.contractDeleteReplacement ещё
+  // не существует — значит его отсутствие одно не защищает от ВТОРОГО
+  // параллельного вызова requestDeleteContract, начатого до того, как
+  // первый успел дойти до создания пикера (раздел 2 приёмки, п. 2.2/2.11).
+  let deleteRequestInFlight = false;
   function ensureCardShell() {
     if (currentShell === "card") return;
     container.classList.remove("v2-app");
@@ -871,8 +935,11 @@ export function mountCounterparties(container, ctx) {
     const d = ruDateFromIso(dateIso);
     return d ? `${number} от ${d}` : number;
   }
-  function buildContractNamePreview(agreement, spec, theme) {
-    const cp = state.list.find((x) => x.id === state.editingId);
+  // counterpartyId — раздел 4 приёмки: превью должно отражать
+  // ВЫБРАННОГО в форме контрагента (после смены), а не всегда того, чья
+  // карточка открыта.
+  function buildContractNamePreview(agreement, spec, theme, counterpartyId) {
+    const cp = state.list.find((x) => x.id === (counterpartyId ?? state.editingId));
     if (!cp || !agreement || !spec) return "";
     let name = `${cp.short_name}/${documentLabel(agreement.number, agreement.agreement_date)}/${documentLabel(spec.number, spec.specification_date)}`;
     if (theme && theme.trim()) name += ` (${theme.trim()})`;
@@ -888,14 +955,24 @@ export function mountCounterparties(container, ctx) {
     const blocks = linked > 0 && !contract.is_archived;
     return {
       blocks,
+      // Раздел 5 приёмки, п. 5.4: краткая причина запрета — ВСЕГДА видна
+      // (не только внутри развёрнутых реквизитов); длинное объяснение
+      // (text) остаётся внутри сворачиваемого блока.
+      shortText: blocks ? `Нельзя архивировать — привязано изделий: ${linked}.` : "",
       text: blocks
-        ? `Перевести в архив нельзя: к контракту привязано изделий — ${linked}. Сначала переназначьте их на другой контракт или снимите привязку в текущем интерфейсе.`
+        ? `Перевести в архив нельзя: к контракту привязано изделий — ${linked}. Перенесите их на другой контракт этой же спецификации через «Удалить контракт» (раздел «Действия») или снимите привязку в текущем интерфейсе (2D/3D схема).`
         : "Архивный контракт не предлагается при смене статуса и не участвует в отчётах и дашбордах; в справочнике и в истории статусов он остаётся.",
     };
   }
 
   function contractFieldsFromSaved(c) {
     return {
+      // Контракт открывается ИЗ карточки этого контрагента — на момент
+      // открытия рабочего пространства вся цепочка (специфика/договор)
+      // заведомо принадлежит ему; смена контрагента (раздел 4 приёмки) —
+      // явное действие пользователя ПОСЛЕ открытия, отдельным полем.
+      counterpartyId: c.counterparty_id ?? state.editingId,
+      agreementId: c.agreement_id ?? null,
       specificationId: c.specification_id,
       theme: c.theme || "", isArchived: !!c.is_archived,
       lines: (c.lines || []).map((l) => ({ elementType: l.element_type || "", mark: l.mark || "", quantity: l.quantity != null ? String(l.quantity) : "" })),
@@ -907,7 +984,7 @@ export function mountCounterparties(container, ctx) {
     };
   }
   function contractDraftFieldsJson(d) {
-    return JSON.stringify({ specificationId: d.specificationId, theme: d.theme, isArchived: d.isArchived, lines: d.lines, incidents: d.incidents, capacity: d.capacity });
+    return JSON.stringify({ counterpartyId: d.counterpartyId, agreementId: d.agreementId, specificationId: d.specificationId, theme: d.theme, isArchived: d.isArchived, lines: d.lines, incidents: d.incidents, capacity: d.capacity });
   }
   function isContractDraftDirty(draft) {
     return draft._original !== undefined && contractDraftFieldsJson(draft) !== draft._original;
@@ -918,13 +995,18 @@ export function mountCounterparties(container, ctx) {
   function ensureContractDraft(id) {
     if (!state.contractDrafts.has(id)) {
       const fields = contractFieldsFromSaved(findContract(id) || {});
-      state.contractDrafts.set(id, { ...fields, _original: JSON.stringify(fields), error: "", saving: false });
+      // _requisitesOpen — чисто UI-состояние сворачиваемого блока реквизитов
+      // (раздел 5 приёмки), НЕ входит в contractDraftFieldsJson: разворачивание
+      // блока не должно помечать контракт "не сохранено". Свёрнут по
+      // умолчанию для уже существующего контракта — цепочка обычно уже верна
+      // и открывать её незачем, таблица сразу получает основную площадь.
+      state.contractDrafts.set(id, { ...fields, _original: JSON.stringify(fields), error: "", saving: false, _requisitesOpen: false });
     }
     return state.contractDrafts.get(id);
   }
   function contractFieldValues(c) {
     const d = state.contractDrafts.get(c.id);
-    if (d) return { specificationId: d.specificationId, theme: d.theme, isArchived: d.isArchived, lines: d.lines, incidents: d.incidents, capacity: d.capacity, error: d.error, saving: d.saving, dirty: isContractDraftDirty(d) };
+    if (d) return { counterpartyId: d.counterpartyId, agreementId: d.agreementId, specificationId: d.specificationId, theme: d.theme, isArchived: d.isArchived, lines: d.lines, incidents: d.incidents, capacity: d.capacity, error: d.error, saving: d.saving, dirty: isContractDraftDirty(d) };
     return { ...contractFieldsFromSaved(c), error: "", saving: false, dirty: false };
   }
   // specificationId — начальная спецификация (место, где нажали "+
@@ -933,33 +1015,24 @@ export function mountCounterparties(container, ctx) {
   // меняется — это только адрес черновика в состоянии модуля, а не то, на
   // какую спецификацию он в итоге сохранится (см. submitNewContract).
   function emptyContractDraft(specificationId) {
-    return { specificationId, theme: "", isArchived: false, lines: [{ elementType: "", mark: "", quantity: "" }], incidents: [], capacity: [], error: "", saving: false };
+    const { agreementId } = findSpecAndAgreementId(specificationId);
+    // Новый контракт — реквизиты сразу развёрнуты (нечего сворачивать,
+    // пока тема/цепочка ещё не заполнены).
+    return { counterpartyId: state.editingId, agreementId, specificationId, theme: "", isArchived: false, lines: [{ elementType: "", mark: "", quantity: "" }], incidents: [], capacity: [], error: "", saving: false, _requisitesOpen: true };
   }
   function contractDraftForKey(key) {
     return key.startsWith("new:") ? state.newContractForms.get(Number(key.slice(4))) : ensureContractDraft(Number(key.slice(5)));
-  }
-  // Только ЧТЕНИЕ, черновик не создаёт (в отличие от contractDraftForKey) —
-  // для мест, где спецификация нужна просто чтобы показать текущий путь
-  // (хлебные крошки, превью имени), а раскрытие/рендер не должны сами по
-  // себе заводить черновик.
-  function currentSpecIdForKey(key) {
-    if (key.startsWith("new:")) {
-      const specIdFromKey = Number(key.slice(4));
-      const draft = state.newContractForms.get(specIdFromKey);
-      return draft ? draft.specificationId : specIdFromKey;
-    }
-    const id = Number(key.slice(5));
-    const draft = state.contractDrafts.get(id);
-    if (draft) return draft.specificationId;
-    const c = findContract(id);
-    return c ? c.specification_id : null;
   }
   function parseRowKey(v) {
     const idx = v.lastIndexOf("|");
     return { key: v.slice(0, idx), i: Number(v.slice(idx + 1)) };
   }
-  function capacityBaseFor(elementType) {
-    const cp = state.list.find((x) => x.id === state.editingId);
+  // Раздел 4 приёмки, п. 4.11: норматив "от контрагента" — для того
+  // контрагента, что ВЫБРАН в форме сейчас (draft.counterpartyId), а не
+  // всегда для карточки, из которой открыли редактор — после смены
+  // контрагента колонка подсказки должна отражать нового.
+  function capacityBaseFor(elementType, counterpartyId) {
+    const cp = state.list.find((x) => x.id === (counterpartyId ?? state.editingId));
     const row = (cp && cp.capacity || []).find((c) => c.element_type === elementType);
     return row ? row.per_day : "не задана";
   }
@@ -992,16 +1065,34 @@ export function mountCounterparties(container, ctx) {
     const draft = state.newContractForms.get(mapKey);
     if (!draft) return;
     if (draft._inFlight) return draft._inFlight;
+    // Новый (ещё не созданный) контракт нечем конфликтующе удалить — но
+    // проверяем contractOpLock всё равно, для единообразия с saveContractDraft
+    // и на случай будущих операций, которые тоже будут её выставлять.
+    if (contractOpLock) throw { message: "Дождитесь завершения текущей операции с контрактом." };
     draft.error = "";
     if (!draft.specificationId) { draft.error = "Выберите спецификацию"; throw { message: draft.error }; }
     const body = buildContractBody(draft);
     if (!body.lines.length) { draft.error = "Добавьте хотя бы одну позицию (тип элемента или марка)"; throw { message: draft.error }; }
     const snapshot = contractDraftFieldsJson(draft);
     draft.saving = true;
+    contractOpLock = { kind: "save" };
     lockContractWorkspace(true);
     draft._inFlight = (async () => {
       try {
         const created = await api.post("/contracts", body);
+        // Раздел 4 приёмки: тот же случай, что и в saveContractDraft — новый
+        // контракт мог быть создан сразу под спецификацией ДРУГОГО
+        // контрагента (пользователь сменил его прямо в форме создания).
+        if (created.counterparty_id !== state.editingId) {
+          state.newContractForms.delete(mapKey);
+          const originalCp = state.list.find((c) => c.id === state.editingId);
+          state.status_msg = `Контракт создан у контрагента «${created.counterparty_short_name}»` +
+            (originalCp ? ` — в карточке «${originalCp.short_name}» он не отображается.` : ".");
+          state.contractKey = null;
+          state.page = "edit";
+          await render();
+          return;
+        }
         pushContractToCache(created);
         const cur = state.newContractForms.get(mapKey);
         const stillSame = cur === draft && contractDraftFieldsJson(cur) === snapshot;
@@ -1016,6 +1107,7 @@ export function mountCounterparties(container, ctx) {
         }
         throw err;
       } finally {
+        contractOpLock = null;
         lockContractWorkspace(false);
       }
     })();
@@ -1026,6 +1118,10 @@ export function mountCounterparties(container, ctx) {
     const draft = state.contractDrafts.get(id);
     if (!draft) return;
     if (draft._inFlight) return draft._inFlight;
+    // Раздел 2 приёмки: сохранение и удаление/перенос ОДНОГО контракта
+    // взаимно исключают друг друга — если сейчас идёт удаление (или его
+    // выбор замены уже подтверждается), сохранение не начинается вовсе.
+    if (contractOpLock) throw { message: "Дождитесь завершения текущей операции с контрактом (удаление/перенос)." };
     draft.error = "";
     const before = findContract(id);
     const previousSpecId = before ? before.specification_id : draft.specificationId;
@@ -1034,6 +1130,7 @@ export function mountCounterparties(container, ctx) {
     if (!body.lines.length) { draft.error = "Добавьте хотя бы одну позицию (тип элемента или марка)"; throw { message: draft.error }; }
     const snapshot = contractDraftFieldsJson(draft);
     draft.saving = true;
+    contractOpLock = { kind: "save" };
     lockContractWorkspace(true);
     draft._inFlight = (async () => {
       try {
@@ -1044,6 +1141,24 @@ export function mountCounterparties(container, ctx) {
         // Убираем из старого места безусловно (и когда спецификация не
         // менялась — это то же самое, что заменить запись на месте).
         removeContractFromCache(id, previousSpecId);
+        // Раздел 4 приёмки, п. 4.10/4.12: контракт мог переехать к ДРУГОМУ
+        // контрагенту (не тому, чья карточка сейчас открыта) — у V2 нет (и
+        // не должно заводиться) копии данных чужой карточки в памяти,
+        // чтобы "добавить" его туда молча; явно объясняем результат и
+        // возвращаем на карточку, из которой ушли, а не оставляем висеть в
+        // рабочем пространстве контракта, которого здесь больше нет.
+        if (updated.counterparty_id !== state.editingId) {
+          state.contractDrafts.delete(id);
+          state.expandedContracts.delete(id);
+          const originalCp = state.list.find((c) => c.id === state.editingId);
+          state.status_msg = `Контракт перенесён контрагенту «${updated.counterparty_short_name}»` +
+            (originalCp ? ` — в карточке «${originalCp.short_name}» он больше не отображается.` : ".");
+          state.contractKey = null;
+          state.contractDeleteReplacement = null;
+          state.page = "edit";
+          await render();
+          return;
+        }
         pushContractToCache(updated);
         const cur = state.contractDrafts.get(id);
         const stillSame = cur && contractDraftFieldsJson(cur) === snapshot;
@@ -1058,40 +1173,63 @@ export function mountCounterparties(container, ctx) {
         }
         throw err;
       } finally {
+        contractOpLock = null;
         lockContractWorkspace(false);
       }
     })();
     return draft._inFlight;
   }
 
-  // Удаление контракта — отдельно от общего confirmAndDelete: контракт
-  // единственный из перенесённых видов, у которого delete-plan умеет
-  // "needs_replacement" (изделия схемы, привязанные к контракту, нужно
-  // сперва перенести на другой контракт той же спецификации — см.
-  // app/dict_delete.py _contract_candidates/_contract_repoint). Выбор
-  // замены — отдельная форма, которой в V2 пока нет; честно объясняем
-  // ограничение и отправляем в текущий интерфейс, а не притворяемся, что
-  // умеем то, чего не умеем.
-  async function confirmAndDeleteContract(id, onSuccess) {
-    let plan;
-    try { plan = await api.get(`/dictionaries/contract/${id}/delete-plan`); }
-    catch (err) { await showInfoDialog(err?.detail || err?.message || "Не удалось получить сведения об удалении"); return; }
-    if (plan.blockers && plan.blockers.length) {
-      await showInfoDialog(`Удалить нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`);
-      return;
-    }
-    if (plan.plan && plan.plan.needs_replacement) {
-      await showInfoDialog("К контракту привязаны изделия схемы. Перенос привязки на другой контракт этой спецификации пока доступен только в текущем интерфейсе (Контракты → удаление) — удалите контракт там, затем список здесь обновится.");
-      return;
-    }
-    const confirmed = await showConfirmDialog("Удалить контракт?", { confirmLabel: "Удалить" });
-    if (!confirmed) return;
+  // Собственно сетевой запрос удаления (обычного и с заменой) — общий
+  // защищённый участок, раздел 2 приёмки: contractOpLock+lockContractWorkspace
+  // выставляются СИНХРОННО, до этого await, единым флагом на ВСЮ операцию
+  // (не только на кнопку, которая её запустила — 2.11). При неопределённом
+  // исходе (сетевой сбой без ответа сервера — не ApiError, а именно обрыв)
+  // не считаем задачу выполненной и не считаем её провалившейся вслепую:
+  // переспрашиваем delete-plan и решаем по факту (2.9/2.10) — 404 там
+  // означает, что запрос всё же дошёл и выполнился, а домой не доехал
+  // только ответ.
+  async function runContractDelete(id, replacements, onSuccess) {
+    contractOpLock = { kind: "delete" };
+    lockContractWorkspace(true);
     try {
-      await api.post(`/dictionaries/contract/${id}/delete`, { replacements: {}, mode: "replace" });
-      await onSuccess();
+      await api.post(`/dictionaries/contract/${id}/delete`, { replacements, mode: "replace" });
     } catch (err) {
-      await showInfoDialog(err?.detail || err?.message || "Не удалось удалить");
+      if (err instanceof ApiError) {
+        // Определённый исход — сервер ОТВЕТИЛ (в том числе отказом).
+        // app/dict_delete.py делает всю проверку/замену/удаление одной
+        // транзакцией — значит отказ гарантирует, что ничего не изменилось.
+        contractOpLock = null;
+        lockContractWorkspace(false);
+        throw err;
+      }
+      let stillExists = true;
+      try {
+        await api.get(`/dictionaries/contract/${id}/delete-plan`);
+      } catch (checkErr) {
+        if (checkErr instanceof ApiError && checkErr.status === 404) stillExists = false;
+        // Любой другой исход проверки (снова сеть упала) — оставляем
+        // stillExists=true: безопаснее считать контракт ещё существующим и
+        // НЕ показывать ложный успех, чем спутать это со свершившимся
+        // удалением.
+      }
+      contractOpLock = null;
+      if (!stillExists) {
+        // Сервер успел выполнить удаление, ответ не доехал — ведём себя
+        // как при успехе, а не показываем ложную ошибку поверх факта.
+        // Разблокировка на всякий случай ДО onSuccess — если он почему-то
+        // не уведёт с рабочего пространства (не должен, но не полагаемся
+        // молча), интерфейс не должен остаться залоченным навсегда.
+        lockContractWorkspace(false);
+        await onSuccess();
+        return;
+      }
+      lockContractWorkspace(false);
+      throw { message: "Не удалось определить результат удаления — соединение прервалось. Контракт, похоже, ещё на месте; проверьте список и повторите вручную." };
     }
+    contractOpLock = null;
+    lockContractWorkspace(false);
+    await onSuccess();
   }
 
   // Раздел 3: постоянные заголовки столбцов (не placeholder вместо
@@ -1114,11 +1252,11 @@ export function mountCounterparties(container, ctx) {
       <td>${trashIconHtml(`data-inc-remove="${key}|${i}"`, "Убрать инцидент")}</td>
     </tr>`;
   }
-  function contractCapacityRowHtml(key, i, c, saving) {
+  function contractCapacityRowHtml(key, i, c, saving, counterpartyId) {
     return `<tr>
       <td>${escapeHtml(c.elementType)}</td>
       <td><input data-cap-per-day="${key}|${i}" type="number" min="0" step="0.1" value="${escapeHtml(c.perDay)}" ${saving ? "disabled" : ""} style="width:90px"></td>
-      <td class="v2-muted">${escapeHtml(capacityBaseFor(c.elementType))}</td>
+      <td class="v2-muted">${escapeHtml(capacityBaseFor(c.elementType, counterpartyId))}</td>
       <td>${trashIconHtml(`data-cap-remove="${key}|${i}"`, "Убрать переопределение")}</td>
     </tr>`;
   }
@@ -1405,10 +1543,36 @@ export function mountCounterparties(container, ctx) {
   // вкладок: переключение между ними не создаёт отдельных копий состояния.
   // ============================================================
 
-  function lockContractWorkspace(locked) {
+  // exceptReplacementPicker=true — блокирует ВСЁ рабочее пространство,
+  // КРОМЕ самого пикера выбора замены (нужно на время, пока пользователь
+  // ВЫБИРАЕТ замену — сетевого запроса ещё нет, но конфликтующие действия
+  // уже нельзя запускать, раздел 2 приёмки п. 2.1/2.5). Без аргумента или
+  // с false — блокирует вообще всё, включая сам пикер (на время реального
+  // запроса удаления/переноса, п. 2.4 — пикер нельзя закрыть кнопкой
+  // "Отмена", пока ответ сервера не получен).
+  function lockContractWorkspace(locked, exceptReplacementPicker) {
     if (currentShell !== "contract") return;
     container.querySelectorAll("#ctr-requisites input, #ctr-requisites select, #ctr-requisites button, #ctr-inner input, #ctr-inner button, #ctr-foot-actions button, .v2-nav button")
-      .forEach((el) => { el.disabled = locked; });
+      .forEach((el) => {
+        if (exceptReplacementPicker && el.closest("#ctr-replacement-picker")) return;
+        el.disabled = locked;
+      });
+    if (!locked) {
+      // Разблокировка НЕ должна случайно снять ограничения, у которых своё
+      // собственное, не связанное с этой операцией правило (запрещённая
+      // архивность — контракт всё ещё держит привязанные изделия; вкладка
+      // "Развёрнуто" — контракт ещё не сохранён) — раздел 2 приёмки, п.
+      // 2.12. Пересчитываем их заново вместо простого "включить всё
+      // обратно": полный ребилд реквизитов дешевле отдельного реестра
+      // "что именно было disabled по другой причине".
+      renderContractRequisites();
+      renderContractFooter();
+      const key = state.contractKey;
+      if (key) {
+        const isNew = key.startsWith("new:");
+        container.querySelectorAll("[data-ctr-tab]").forEach((b) => { b.disabled = b.dataset.ctrTab === "expanded" && isNew; });
+      }
+    }
   }
 
   async function requestLeaveContract() {
@@ -1416,6 +1580,22 @@ export function mountCounterparties(container, ctx) {
     if (!key) return true;
     const isNew = key.startsWith("new:");
     const id = isNew ? Number(key.slice(4)) : Number(key.slice(5));
+    // Раздел 3 приёмки, п. 3.8: неудачно сохранённая плановая дата —
+    // ОТДЕЛЬНОЕ от черновика контракта состояние (пишется сразу, а не
+    // общей кнопкой "Сохранить"), но уход всё равно должен явно
+    // предупредить — иначе неотправленная правка молча теряется без следа.
+    if (!isNew) {
+      const expandedEntry = state.contractExpandedCache.get(id);
+      const failedIds = expandedEntry ? [...expandedEntry.rowState.entries()].filter(([, s]) => s.status === "error").map(([elId]) => elId) : [];
+      if (failedIds.length) {
+        const leave = await showConfirmDialog(
+          `Не удалось сохранить плановую дату у ${failedIds.length} элемент(ов) (вкладка «Развёрнуто»). Уйти и отказаться от этого ввода?`,
+          { confirmLabel: "Уйти и отказаться" },
+        );
+        if (!leave) return false;
+        for (const elId of failedIds) expandedEntry.rowState.delete(elId);
+      }
+    }
     const draft = isNew ? state.newContractForms.get(id) : state.contractDrafts.get(id);
     if (!draft) return true;
     const dirty = isNew || isContractDraftDirty(draft);
@@ -1438,6 +1618,8 @@ export function mountCounterparties(container, ctx) {
 
   async function openContractWorkspace(key) {
     await withNavGuard(async () => {
+      contractOpLock = null; // новое рабочее пространство — заведомо чистое состояние
+      deleteRequestInFlight = false;
       state.contractKey = key;
       state.contractTab = "lines";
       state.contractDeleteReplacement = null;
@@ -1447,7 +1629,31 @@ export function mountCounterparties(container, ctx) {
   }
 
   async function closeContractWorkspace() {
+    // Раздел 2 приёмки, п. 2.5/2.6: уход НЕ должен ни запустить вторую,
+    // конфликтующую запись, ни создать впечатление, что уже отправленная
+    // операция была отменена — пока идёт реальный запрос (contractOpLock),
+    // уход прямо запрещён, а не молча пропущен. ПРОВЕРКА — ДО withNavGuard,
+    // а не внутри него: withNavGuard сам молча ничего не делает, пока
+    // api.hasPendingWrites() истинно (а реальный PATCH/POST контракта его
+    // как раз держит истинным) — без этого клик по "← Контрагент" во время
+    // записи выглядел бы так, будто кнопка просто не реагирует, без
+    // единого объяснения (живой тест нашёл это именно так).
+    if (contractOpLock) {
+      await showInfoDialog("Дождитесь завершения текущей операции с контрактом (сохранение или удаление).");
+      return;
+    }
     await withNavGuard(async () => {
+      // Пикер замены может быть ОТКРЫТ (пользователь ещё выбирает), но
+      // запрос ещё не пошёл (contractOpLock ещё не установлен) — уйти
+      // можно, но не молча: иначе начатое удаление тихо "теряется".
+      if (state.contractDeleteReplacement) {
+        const leave = await showConfirmDialog(
+          "Выбор замены для удаления контракта не завершён. Уйти и отменить удаление?",
+          { confirmLabel: "Уйти и отменить" },
+        );
+        if (!leave) return;
+        state.contractDeleteReplacement = null;
+      }
       if (!(await requestLeaveContract())) { await render(); return; }
       state.contractKey = null;
       state.contractDeleteReplacement = null;
@@ -1466,85 +1672,183 @@ export function mountCounterparties(container, ctx) {
     await render();
   }
 
-  function contractAgreementOptionsHtml(selectedAgreementId) {
-    return state.contracting.agreements.map((a) =>
+  // ---------- раздел 4 приёмки: полный каскад Контрагент→Договор→
+  // Спецификация для смены целевого контрагента контракта ----------
+  //
+  // Место, откуда открыт редактор (карточка контрагента), задаёт значение
+  // ПО УМОЛЧАНИЮ (draft.counterpartyId = state.editingId при создании
+  // черновика), но не снимает возможность сменить контрагента прямо
+  // здесь — тот же выбор, что разрешён в V1 (openContractEdit,
+  // agreementsForContractForm), без нового API и без ослабления серверных
+  // проверок: PATCH /contracts/{id} как и раньше шлёт только
+  // specification_id, а _guard_contract+_guard_specification на сервере
+  // проверяют ОБА конца переноса сами (app/contracts.py).
+  //
+  // Данные ТЕКУЩЕГО контрагента карточки заимствуются из уже загруженного
+  // state.contracting (та же кнопка "Повторить" на вкладке "Контрактация"
+  // её и обслуживает — только у неё есть уникальный ключ project_id или
+  // agreement_id) — второй копии того же чтения не заводим. Для ЛЮБОГО
+  // ДРУГОГО контрагента — свой кэш в state.contractCascade, отдельно на
+  // время открытого рабочего пространства.
+  function cascadeAgreementsEntry(counterpartyId) {
+    if (counterpartyId === state.editingId) {
+      return { agreements: state.contracting.agreements, loaded: state.contracting.agreementsLoaded, error: state.contracting.agreementsError };
+    }
+    return state.contractCascade.agreementsByCounterparty.get(counterpartyId) || { agreements: [], loaded: false, error: null };
+  }
+  function cascadeSpecsEntry(agreementId) {
+    if (agreementId == null) return { specs: [], loaded: false, error: null };
+    const local = state.contracting.specsByAgreement.get(agreementId);
+    if (local) return local;
+    return state.contractCascade.specsByAgreement.get(agreementId) || { specs: [], loaded: false, error: null };
+  }
+  async function ensureCascadeAgreements(counterpartyId) {
+    if (counterpartyId === state.editingId) {
+      if (!state.contracting.agreementsLoaded && !state.contracting.agreementsError) await loadAgreementsList();
+      return;
+    }
+    const existing = state.contractCascade.agreementsByCounterparty.get(counterpartyId);
+    if (existing && (existing.loaded || existing.error)) return;
+    try {
+      const agreements = await api.get(`/agreements?counterparty_id=${counterpartyId}`);
+      state.contractCascade.agreementsByCounterparty.set(counterpartyId, { agreements, loaded: true, error: null });
+    } catch (err) {
+      state.contractCascade.agreementsByCounterparty.set(counterpartyId, { agreements: [], loaded: false, error: err?.detail || err?.message || "Не удалось загрузить договоры" });
+    }
+  }
+  async function ensureCascadeSpecs(agreementId) {
+    if (agreementId == null) return;
+    if (state.contracting.specsByAgreement.has(agreementId)) return;
+    const existing = state.contractCascade.specsByAgreement.get(agreementId);
+    if (existing && (existing.loaded || existing.error)) return;
+    try {
+      const specs = await api.get(`/specifications?agreement_id=${agreementId}`);
+      state.contractCascade.specsByAgreement.set(agreementId, { specs, loaded: true, error: null });
+    } catch (err) {
+      state.contractCascade.specsByAgreement.set(agreementId, { specs: [], loaded: false, error: err?.detail || err?.message || "Не удалось загрузить спецификации" });
+    }
+  }
+  async function retryCascadeAgreements(counterpartyId) {
+    if (counterpartyId === state.editingId) { await retryPiece("agreements"); return; }
+    state.contractCascade.agreementsByCounterparty.delete(counterpartyId);
+    await ensureCascadeAgreements(counterpartyId);
+  }
+  async function retryCascadeSpecs(agreementId) {
+    if (state.contracting.specsByAgreement.has(agreementId)) { await retryPiece("specs", agreementId); return; }
+    state.contractCascade.specsByAgreement.delete(agreementId);
+    await ensureCascadeSpecs(agreementId);
+  }
+  function counterpartyOptionsHtml(selectedId) {
+    return state.list.map((cp) =>
+      `<option value="${cp.id}" ${String(selectedId) === String(cp.id) ? "selected" : ""}>${escapeHtml(cp.short_name)}</option>`).join("");
+  }
+  function cascadeAgreementOptionsHtml(agreements, selectedAgreementId) {
+    return agreements.map((a) =>
       `<option value="${a.id}" ${String(selectedAgreementId) === String(a.id) ? "selected" : ""}>${escapeHtml(a.number)} ${fmtDate(a.agreement_date)}</option>`).join("");
   }
-  function contractSpecOptionsHtml(agreementId, selectedSpecId) {
-    const entry = state.contracting.specsByAgreement.get(agreementId);
-    const specs = entry ? entry.specs : [];
+  function cascadeSpecOptionsHtml(specs, selectedSpecId) {
     return specs.map((s) =>
       `<option value="${s.id}" ${String(selectedSpecId) === String(s.id) ? "selected" : ""}>${escapeHtml(s.number)} ${fmtDate(s.specification_date)}</option>`).join("");
+  }
+  // Раздел 4 приёмки, п. 4.4: загрузка/ошибка/нет вариантов — разные
+  // сообщения рядом с селектом, а не молчаливый пустой список.
+  function cascadeSelectStatusHtml(entry, kind) {
+    if (!entry.loaded && !entry.error) return `<div class="v2-muted">Загрузка…</div>`;
+    if (entry.error) return `<div class="v2-auth-error">${escapeHtml(entry.error)} ${btn("Повторить", `data-cascade-retry="${kind}"`)}</div>`;
+    const list = kind === "agreements" ? entry.agreements : entry.specs;
+    if (!list.length) return `<div class="v2-note">${kind === "agreements" ? "у этого контрагента нет договоров" : "нет спецификаций"}</div>`;
+    return "";
   }
 
   // ---------- удаление контракта, включая перенос привязанных изделий
   // (задача 4В) ----------
   async function requestDeleteContract(id, onSuccess) {
-    let plan;
-    try { plan = await api.get(`/dictionaries/contract/${id}/delete-plan`); }
-    catch (err) { await showInfoDialog(err?.detail || err?.message || "Не удалось получить сведения об удалении"); return; }
-    if (plan.blockers && plan.blockers.length) {
-      await showInfoDialog(`Удалить нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`);
-      return;
-    }
-    const cascadeParts = (plan.plan?.cascade || []).map((c) => `${c.label}: ${c.count}`);
-    const consequences = cascadeParts.length ? `Вместе с контрактом удалятся: ${cascadeParts.join(", ")}.` : "";
-    if (plan.plan && plan.plan.needs_replacement) {
-      // К контракту привязаны изделия схемы — сервер не даст удалить его
-      // без замены (app/dict_delete.py _contract_candidates/_contract_repoint).
-      // Кандидаты — другие контракты ТОЙ ЖЕ спецификации; выбор — прямо
-      // здесь, а не отправкой в V1 (задача 4В: "не считай сообщение
-      // 'сделайте это в V1' завершением переноса").
-      let candidates = [];
-      try { candidates = await api.get(`/dictionaries/contract/candidates?key=${id}`); }
-      catch (err) { await showInfoDialog(err?.detail || err?.message || "Не удалось получить список контрактов на замену"); return; }
-      if (!candidates.length) {
-        await showInfoDialog(`К контракту привязаны изделия схемы, а заменить контракт нечем — под этой спецификацией нет другого контракта. ${consequences} Заведите контракт-замену по этой же спецификации или перенесите привязку изделий в текущем интерфейсе.`);
+    if (contractOpLock) { await showInfoDialog("Дождитесь завершения текущей операции с контрактом."); return; }
+    if (state.contractDeleteReplacement) return; // пикер уже открыт — вторая копия не нужна
+    if (deleteRequestInFlight) return; // тот же клик, пока читаем delete-plan/candidates или ждём диалог
+    deleteRequestInFlight = true;
+    try {
+      let plan;
+      try { plan = await api.get(`/dictionaries/contract/${id}/delete-plan`); }
+      catch (err) { await showInfoDialog(err?.detail || err?.message || "Не удалось получить сведения об удалении"); return; }
+      if (plan.blockers && plan.blockers.length) {
+        await showInfoDialog(`Удалить нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`);
         return;
       }
-      state.contractDeleteReplacement = { id, candidates, selectedKey: candidates[0].key, consequences, error: "", saving: false, onSuccess };
-      renderContractRequisites();
-      return;
-    }
-    const confirmed = await showConfirmDialog(`Удалить контракт?${consequences ? " " + consequences : ""}`, { confirmLabel: "Удалить" });
-    if (!confirmed) return;
-    try {
-      await api.post(`/dictionaries/contract/${id}/delete`, { replacements: {}, mode: "replace" });
-      await onSuccess();
-    } catch (err) {
-      await showInfoDialog(err?.detail || err?.message || "Не удалось удалить");
+      const cascadeParts = (plan.plan?.cascade || []).map((c) => `${c.label}: ${c.count}`);
+      const consequences = cascadeParts.length ? `Вместе с контрактом удалятся: ${cascadeParts.join(", ")}.` : "";
+      if (plan.plan && plan.plan.needs_replacement) {
+        // К контракту привязаны изделия схемы — сервер не даст удалить его
+        // без замены (app/dict_delete.py _contract_candidates/_contract_repoint).
+        // Кандидаты — другие контракты ТОЙ ЖЕ спецификации; выбор — прямо
+        // здесь, а не отправкой в V1 (задача 4В: "не считай сообщение
+        // 'сделайте это в V1' завершением переноса").
+        let candidates = [];
+        try { candidates = await api.get(`/dictionaries/contract/candidates?key=${id}`); }
+        catch (err) { await showInfoDialog(err?.detail || err?.message || "Не удалось получить список контрактов на замену"); return; }
+        if (!candidates.length) {
+          await showInfoDialog(`К контракту привязаны изделия схемы, а заменить контракт нечем — под этой спецификацией нет другого контракта. ${consequences} Заведите контракт-замену по этой же спецификации или перенесите привязку изделий в текущем интерфейсе.`);
+          return;
+        }
+        state.contractDeleteReplacement = { id, candidates, selectedKey: candidates[0].key, consequences, error: "", saving: false, onSuccess };
+        // Пикер только ПОКАЗАН — сетевого запроса ещё нет, но конфликтующие
+        // действия (сохранение, переключение вкладок) уже нельзя запускать,
+        // пока выбор не завершён явным подтверждением или отменой (раздел 2
+        // приёмки, п. 2.1/2.5); сам пикер остаётся активным — блокировка
+        // "кроме пикера".
+        renderContractRequisites();
+        renderContractFooter();
+        lockContractWorkspace(true, true);
+        return;
+      }
+      const confirmed = await showConfirmDialog(`Удалить контракт?${consequences ? " " + consequences : ""}`, { confirmLabel: "Удалить" });
+      if (!confirmed) return;
+      if (contractOpLock) { await showInfoDialog("Дождитесь завершения текущей операции с контрактом."); return; } // могло начаться, пока ждали диалог
+      try {
+        await runContractDelete(id, {}, onSuccess);
+      } catch (err) {
+        await showInfoDialog(err?.detail || err?.message || "Не удалось удалить");
+      }
+    } finally {
+      deleteRequestInFlight = false;
     }
   }
 
   async function confirmContractReplacement() {
     const rep = state.contractDeleteReplacement;
-    if (!rep || rep.saving) return;
+    if (!rep || rep.saving || contractOpLock) return;
     rep.saving = true; rep.error = "";
-    renderContractRequisites();
+    renderContractRequisites(); // "Перенос…", select/подтвердить/отмена пикера сразу недоступны (rep.saving в разметке)
+    lockContractWorkspace(true, false); // и всё ОСТАЛЬНОЕ рабочее пространство тоже — реальный запрос уже пошёл
     try {
-      await api.post(`/dictionaries/contract/${rep.id}/delete`, {
-        replacements: { [`contract:${rep.id}`]: String(rep.selectedKey) }, mode: "replace",
+      await runContractDelete(rep.id, { [`contract:${rep.id}`]: String(rep.selectedKey) }, async () => {
+        const onSuccess = rep.onSuccess;
+        state.contractDeleteReplacement = null;
+        await onSuccess();
       });
-      const onSuccess = rep.onSuccess;
-      state.contractDeleteReplacement = null;
-      await onSuccess();
     } catch (err) {
-      rep.saving = false;
-      rep.error = err?.detail || err?.message || "Не удалось удалить";
+      const cur = state.contractDeleteReplacement;
+      if (cur === rep) {
+        rep.saving = false;
+        rep.error = err?.detail || err?.message || "Не удалось удалить";
+      }
+      // lockContractWorkspace(false) уже вызван внутри runContractDelete на
+      // всех отказных ветках и сам пересобирает реквизиты (включая пикер) —
+      // здесь только гарантируем, что рендер видит актуальный rep.error.
       renderContractRequisites();
     }
   }
 
   function renderReplacementPickerHtml(rep) {
     return `
-      <div class="v2-note" style="margin-top:10px">
+      <div class="v2-note" id="ctr-replacement-picker" style="margin-top:10px">
         <p>К контракту привязаны изделия схемы. ${escapeHtml(rep.consequences)} Выберите контракт этой же спецификации, на который перенести их привязку:</p>
         <div class="v2-inline">
           <select id="ctr-replacement-select" ${rep.saving ? "disabled" : ""}>
             ${rep.candidates.map((c) => `<option value="${escapeHtml(c.key)}" ${String(rep.selectedKey) === String(c.key) ? "selected" : ""}>${escapeHtml(c.label)}</option>`).join("")}
           </select>
-          ${btn(rep.saving ? "Перенос…" : "Подтвердить перенос и удалить", 'id="ctr-replacement-confirm"', true)}
-          ${btn("Отмена", 'id="ctr-replacement-cancel"')}
+          ${btn(rep.saving ? "Перенос…" : "Подтвердить перенос и удалить", `id="ctr-replacement-confirm" ${rep.saving ? "disabled" : ""}`, true)}
+          ${btn("Отмена", `id="ctr-replacement-cancel" ${rep.saving ? "disabled" : ""}`)}
         </div>
         <div class="v2-auth-error" id="ctr-replacement-error">${escapeHtml(rep.error || "")}</div>
       </div>`;
@@ -1558,42 +1862,105 @@ export function mountCounterparties(container, ctx) {
     const id = isNew ? null : Number(key.slice(5));
     const draft = contractDraftForKey(key);
     const contract = isNew ? null : findContract(id);
-    const { spec: curSpec, agreementId: curAgreementId } = findSpecAndAgreementId(draft.specificationId);
-    const namePreview = buildContractNamePreview(findAgreement(curAgreementId), curSpec, draft.theme) || "—";
+    const agEntry = cascadeAgreementsEntry(draft.counterpartyId);
+    const curAgreement = agEntry.agreements.find((a) => a.id === draft.agreementId) || null;
+    const specEntry = cascadeSpecsEntry(draft.agreementId);
+    const curSpec = specEntry.specs.find((s) => s.id === draft.specificationId) || null;
+    const namePreview = buildContractNamePreview(curAgreement, curSpec, draft.theme, draft.counterpartyId) || "—";
     const archiveInfo = !isNew ? contractArchiveHint(contract) : null;
     const rep = state.contractDeleteReplacement && state.contractDeleteReplacement.id === id ? state.contractDeleteReplacement : null;
 
     const el = container.querySelector("#ctr-requisites");
+    // Раздел 5 приёмки: реквизиты — сворачиваемый блок (п. 5.2/5.3), а не
+    // всегда развёрнутая форма над таблицей — раньше именно она съедала
+    // экран настолько, что на 1366×768 в таблице умещалась одна строка.
+    // Краткая причина запрета архивирования видна ВСЕГДА, вне зависимости
+    // от того, свёрнут блок или нет (п. 5.4); удаление — в отдельном
+    // сворачиваемом "Действия", не отдельной большой кнопкой (п. 5.5).
     el.innerHTML = `
-      <div class="v2-fields">
-        <label class="v2-field v2-span">Тема<input id="ctr-theme" value="${escapeHtml(draft.theme)}" placeholder="необязательно" ${draft.saving ? "disabled" : ""}></label>
-      </div>
-      <p class="v2-muted" id="ctr-preview">${escapeHtml(namePreview)}</p>
-      <div class="v2-fields">
-        <label class="v2-field">Договор<select id="ctr-agreement" ${draft.saving ? "disabled" : ""}>${contractAgreementOptionsHtml(curAgreementId)}</select></label>
-        <label class="v2-field">Спецификация<select id="ctr-spec" ${draft.saving ? "disabled" : ""}>${contractSpecOptionsHtml(curAgreementId, draft.specificationId)}</select></label>
-      </div>
+      <details class="v2-collapsible" id="ctr-requisites-details" ${draft._requisitesOpen ? "open" : ""}>
+        <summary>Реквизиты · <span id="ctr-preview">${escapeHtml(namePreview)}</span></summary>
+        <div style="padding:6px 0 4px">
+          <div class="v2-fields">
+            <label class="v2-field v2-span">Тема<input id="ctr-theme" value="${escapeHtml(draft.theme)}" placeholder="необязательно" ${draft.saving ? "disabled" : ""}></label>
+          </div>
+          <div class="v2-fields" style="margin-top:10px">
+            <label class="v2-field">Контрагент<select id="ctr-counterparty" ${draft.saving ? "disabled" : ""}>${counterpartyOptionsHtml(draft.counterpartyId)}</select></label>
+            <label class="v2-field">Договор
+              <select id="ctr-agreement" ${(draft.saving || !agEntry.loaded) ? "disabled" : ""}>${cascadeAgreementOptionsHtml(agEntry.agreements, draft.agreementId)}</select>
+              ${cascadeSelectStatusHtml(agEntry, "agreements")}
+            </label>
+            <label class="v2-field">Спецификация
+              <select id="ctr-spec" ${(draft.saving || !specEntry.loaded) ? "disabled" : ""}>${cascadeSpecOptionsHtml(specEntry.specs, draft.specificationId)}</select>
+              ${cascadeSelectStatusHtml(specEntry, "specs")}
+            </label>
+          </div>
+          ${!isNew ? `
+          <label class="v2-inline" style="margin-top:10px">
+            <input type="checkbox" id="ctr-archived" ${draft.isArchived ? "checked" : ""} ${(archiveInfo.blocks || draft.saving) ? "disabled" : ""}> Архивный
+          </label>
+          <p class="v2-muted">${escapeHtml(archiveInfo.text)}</p>` : ""}
+        </div>
+      </details>
+      ${!isNew && archiveInfo.blocks ? `<p style="color:var(--bad);font-size:12px;margin:4px 0">${escapeHtml(archiveInfo.shortText)}</p>` : ""}
       ${!isNew ? `
-      <label class="v2-inline" style="margin-top:8px">
-        <input type="checkbox" id="ctr-archived" ${draft.isArchived ? "checked" : ""} ${(archiveInfo.blocks || draft.saving) ? "disabled" : ""}> Архивный
-      </label>
-      <p class="v2-muted">${escapeHtml(archiveInfo.text)}</p>
-      <div class="v2-inline" style="margin:8px 0">${btn("Удалить контракт", 'id="ctr-delete"')}</div>` : ""}
-      <div class="v2-auth-error" id="ctr-error">${escapeHtml(draft.error || "")}</div>
+      <details class="v2-collapsible" style="margin-top:2px">
+        <summary>Действия</summary>
+        <div style="padding:6px 0">${btn("Удалить контракт", 'id="ctr-delete"')}</div>
+      </details>` : ""}
+      <div class="v2-auth-error" id="ctr-error" style="${draft.error ? "" : "min-height:0"}">${escapeHtml(draft.error || "")}</div>
       ${rep ? renderReplacementPickerHtml(rep) : ""}
     `;
+    el.querySelector("#ctr-requisites-details").addEventListener("toggle", (e) => {
+      draft._requisitesOpen = e.target.open;
+    });
 
     el.querySelector("#ctr-theme").addEventListener("input", (e) => {
       draft.theme = e.target.value;
       updateContractPreview();
       renderContractFooter();
     });
-    el.querySelector("#ctr-agreement").addEventListener("change", (e) => {
+    // Раздел 4 приёмки: смена контрагента/договора запускает ЗАНОВО
+    // загрузку следующего звена цепочки (п. 4.2/4.3); пока она идёт,
+    // сохранение недоступно (п. 4.5, см. renderContractFooter). Токен на
+    // черновике (_cascadeToken) защищает от того, что более старый ответ
+    // (пользователь успел переключить снова, пока грузилось) подменит
+    // уже актуальный выбор (п. 4.7).
+    el.querySelector("#ctr-counterparty").addEventListener("change", async (e) => {
+      const newCpId = Number(e.target.value);
+      if (newCpId === draft.counterpartyId) return;
+      draft.counterpartyId = newCpId;
+      draft.agreementId = null;
+      draft.specificationId = null;
+      const myToken = (draft._cascadeToken = (draft._cascadeToken || 0) + 1);
+      renderContractRequisites();
+      renderContractFooter();
+      await ensureCascadeAgreements(newCpId);
+      if (draft._cascadeToken !== myToken) return;
+      const entry = cascadeAgreementsEntry(newCpId);
+      if (entry.loaded && entry.agreements.length) {
+        draft.agreementId = entry.agreements[0].id;
+        await ensureCascadeSpecs(draft.agreementId);
+        if (draft._cascadeToken !== myToken) return;
+        const se = cascadeSpecsEntry(draft.agreementId);
+        if (se.loaded && se.specs.length) draft.specificationId = se.specs[0].id;
+      }
+      renderContractRequisites();
+      renderContractFooter();
+    });
+    el.querySelector("#ctr-agreement").addEventListener("change", async (e) => {
       const newAgreementId = Number(e.target.value);
-      const entry = state.contracting.specsByAgreement.get(newAgreementId);
-      const firstSpec = entry && entry.specs[0];
-      draft.specificationId = firstSpec ? firstSpec.id : null;
-      renderContractRequisites(); // спецификация зависит от договора — правка структурная
+      if (newAgreementId === draft.agreementId) return;
+      draft.agreementId = newAgreementId;
+      draft.specificationId = null;
+      const myToken = (draft._cascadeToken = (draft._cascadeToken || 0) + 1);
+      renderContractRequisites();
+      renderContractFooter();
+      await ensureCascadeSpecs(newAgreementId);
+      if (draft._cascadeToken !== myToken) return;
+      const se = cascadeSpecsEntry(newAgreementId);
+      if (se.loaded && se.specs.length) draft.specificationId = se.specs[0].id;
+      renderContractRequisites();
       renderContractFooter();
     });
     el.querySelector("#ctr-spec").addEventListener("change", (e) => {
@@ -1601,12 +1968,46 @@ export function mountCounterparties(container, ctx) {
       updateContractPreview();
       renderContractFooter();
     });
+    el.querySelectorAll("[data-cascade-retry]").forEach((b) => b.addEventListener("click", async () => {
+      const myToken = (draft._cascadeToken = (draft._cascadeToken || 0) + 1);
+      if (b.dataset.cascadeRetry === "agreements") {
+        await retryCascadeAgreements(draft.counterpartyId);
+        if (draft._cascadeToken !== myToken) return;
+        // Тот же автовыбор первого варианта, что и при смене контрагента —
+        // иначе "Повторить" молча оставляет цепочку неполной (кнопка
+        // "Сохранить" остаётся недоступна без единого объяснения почему).
+        if (!draft.agreementId) {
+          const entry = cascadeAgreementsEntry(draft.counterpartyId);
+          if (entry.loaded && entry.agreements.length) {
+            draft.agreementId = entry.agreements[0].id;
+            await ensureCascadeSpecs(draft.agreementId);
+            if (draft._cascadeToken !== myToken) return;
+            const se = cascadeSpecsEntry(draft.agreementId);
+            if (se.loaded && se.specs.length) draft.specificationId = se.specs[0].id;
+          }
+        }
+      } else {
+        await retryCascadeSpecs(draft.agreementId);
+        if (draft._cascadeToken !== myToken) return;
+        if (!draft.specificationId) {
+          const se = cascadeSpecsEntry(draft.agreementId);
+          if (se.loaded && se.specs.length) draft.specificationId = se.specs[0].id;
+        }
+      }
+      renderContractRequisites();
+      renderContractFooter();
+    }));
     el.querySelector("#ctr-archived")?.addEventListener("change", (e) => {
       draft.isArchived = e.target.checked;
       renderContractFooter();
     });
     el.querySelector("#ctr-delete")?.addEventListener("click", () => {
-      if (draft.saving) return;
+      // Кнопка и так недоступна, пока идёт draft.saving/contractOpLock или
+      // уже открыт пикер (см. lockContractWorkspace/requestDeleteContract) —
+      // проверка здесь на случай гонки между событием клика и синхронной
+      // блокировкой (раздел 2 приёмки, п. 2.11 — не полагаться ТОЛЬКО на
+      // disabled кнопки).
+      if (draft.saving || contractOpLock || state.contractDeleteReplacement) return;
       requestDeleteContract(id, async () => {
         state.contractDrafts.delete(id);
         state.expandedContracts.delete(id);
@@ -1615,23 +2016,35 @@ export function mountCounterparties(container, ctx) {
       });
     });
     el.querySelector("#ctr-replacement-select")?.addEventListener("change", (e) => {
+      if (state.contractDeleteReplacement?.saving) return;
       state.contractDeleteReplacement.selectedKey = e.target.value;
     });
     // confirmContractReplacement сама вызывает сохранённый в
     // state.contractDeleteReplacement.onSuccess при успехе.
     el.querySelector("#ctr-replacement-confirm")?.addEventListener("click", () => confirmContractReplacement());
     el.querySelector("#ctr-replacement-cancel")?.addEventListener("click", () => {
+      // До завершения запроса кнопка disabled (см. renderReplacementPickerHtml)
+      // — эта проверка защищает от того же самого программно/гонкой (п. 2.4:
+      // "Отмена" не должна уничтожить состояние операции, пока идёт запись).
+      if (state.contractDeleteReplacement?.saving) return;
       state.contractDeleteReplacement = null;
-      renderContractRequisites();
+      lockContractWorkspace(false, true);
     });
+    const breadcrumbEl = container.querySelector("#ctr-breadcrumb");
+    if (breadcrumbEl) breadcrumbEl.textContent = contractBreadcrumbShort(draft);
   }
 
   function updateContractPreview() {
     const key = state.contractKey;
     const draft = contractDraftForKey(key);
-    const { spec, agreementId } = findSpecAndAgreementId(draft.specificationId);
+    const specEntry = cascadeSpecsEntry(draft.agreementId);
+    const curSpec = specEntry.specs.find((s) => s.id === draft.specificationId) || null;
+    const agEntry = cascadeAgreementsEntry(draft.counterpartyId);
+    const curAgreement = agEntry.agreements.find((a) => a.id === draft.agreementId) || null;
     const preview = container.querySelector("#ctr-preview");
-    if (preview) preview.textContent = buildContractNamePreview(findAgreement(agreementId), spec, draft.theme) || "—";
+    if (preview) preview.textContent = buildContractNamePreview(curAgreement, curSpec, draft.theme, draft.counterpartyId) || "—";
+    const breadcrumb = container.querySelector("#ctr-breadcrumb");
+    if (breadcrumb) breadcrumb.textContent = contractBreadcrumbShort(draft);
   }
 
   // ---------- вкладка "Позиции" ----------
@@ -1713,7 +2126,7 @@ export function mountCounterparties(container, ctx) {
       <p class="v2-muted">Пусто — считается по нормативу контрагента (вкладка «Прочее» карточки контрагента).</p>
       <table class="v2-table">
         <thead><tr><th>Тип элемента</th><th>шт./день на этот контракт</th><th>От контрагента</th><th></th></tr></thead>
-        <tbody>${draft.capacity.length ? draft.capacity.map((c, i) => contractCapacityRowHtml(key, i, c, draft.saving)).join("")
+        <tbody>${draft.capacity.length ? draft.capacity.map((c, i) => contractCapacityRowHtml(key, i, c, draft.saving, draft.counterpartyId)).join("")
           : '<tr><td colspan="4" class="v2-note">переопределений нет</td></tr>'}</tbody>
       </table>
       <div class="v2-inline" style="margin-top:10px">
@@ -1761,7 +2174,7 @@ export function mountCounterparties(container, ctx) {
     body.innerHTML = `<p class="v2-muted">Загрузка…</p>`;
     let entry = state.contractExpandedCache.get(id);
     if (!entry || (!entry.loaded && !entry.error)) {
-      entry = entry || { loaded: false, error: null, rows: [], canEdit: false };
+      entry = entry || { loaded: false, error: null, rows: [], canEdit: false, rowState: new Map() };
       try {
         const rows = await api.get(`/contracts/${id}/elements`);
         const c = findContract(id);
@@ -1774,9 +2187,9 @@ export function mountCounterparties(container, ctx) {
             canEdit = !!perms.system_admin || perms.features?.planned_date === "write";
           } catch (e) { canEdit = false; }
         }
-        entry = { loaded: true, error: null, rows, canEdit };
+        entry = { loaded: true, error: null, rows, canEdit, rowState: new Map() };
       } catch (err) {
-        entry = { loaded: false, error: err?.detail || err?.message || "Не удалось загрузить элементы", rows: [], canEdit: false };
+        entry = { loaded: false, error: err?.detail || err?.message || "Не удалось загрузить элементы", rows: [], canEdit: false, rowState: new Map() };
       }
       state.contractExpandedCache.set(id, entry);
     }
@@ -1784,6 +2197,66 @@ export function mountCounterparties(container, ctx) {
     // тогда результату уже некуда рисоваться.
     if (state.page !== "contract" || state.contractKey !== `edit:${id}` || state.contractTab !== "expanded") return;
     renderContractExpandedTabContent(id);
+  }
+
+  // Раздел 3 приёмки: не то же самое, что показывает вкладку — если
+  // пользователь ПОКА шёл сетевой запрос переключился на другой контракт,
+  // другую вкладку или ушёл со страницы вовсе, дописывать в чужой/уже
+  // не существующий DOM нельзя (п. 3.11).
+  function isExpandedTabStillActive(id) {
+    return state.page === "contract" && state.contractKey === `edit:${id}` && state.contractTab === "expanded";
+  }
+
+  // Плановая дата пишется СРАЗУ по изменению поля (та же семантика, что и
+  // в V1), НЕЗАВИСИМО от черновика/кнопок "Сохранить"/"Отменить" контракта
+  // — у каждой строки СВОЁ состояние {status: "saving"|"error", pendingValue,
+  // error}, лежащее в entry.rowState (не в DOM), поэтому переживает
+  // переключение вкладок контракта (п. 3.7) и не путается между строками
+  // (Map по elementId — п. 3.10) и между контрактами (entry — свой на
+  // contractId в state.contractExpandedCache).
+  async function savePlannedDate(contractId, elementId, value) {
+    const entry = state.contractExpandedCache.get(contractId);
+    if (!entry) return;
+    const st = entry.rowState.get(elementId);
+    if (!st || st.status === "saving") return; // п. 3.9 — не второй запрос по той же строке
+    st.status = "saving"; st.pendingValue = value; st.error = "";
+    if (isExpandedTabStillActive(contractId)) renderContractExpandedTabContent(contractId);
+    try {
+      const updated = await api.patch(`/elements/${elementId}/planned-delivery-date`, { planned_delivery_date: value || null });
+      const cur = state.contractExpandedCache.get(contractId);
+      if (!cur) return; // кэш контракта сброшен (например, контракт удалён) — рисовать больше некуда
+      const row = cur.rows.find((r) => r.id === elementId);
+      if (row) row.planned_delivery_date = updated?.planned_delivery_date ?? (value || null);
+      const curSt = cur.rowState.get(elementId);
+      // Подтверждено — то же значение, что было отправлено (пользователь
+      // мог успеть ввести НОВОЕ значение, пока этот запрос был в пути;
+      // тогда curSt.pendingValue уже другое, и снимать "неподтверждённое"
+      // здесь нельзя — придёт свой ответ на СВОЙ запрос).
+      if (curSt && curSt.pendingValue === value) cur.rowState.delete(elementId);
+      if (isExpandedTabStillActive(contractId)) renderContractExpandedTabContent(contractId);
+    } catch (err) {
+      const cur = state.contractExpandedCache.get(contractId);
+      if (!cur) return;
+      const curSt = cur.rowState.get(elementId);
+      if (curSt && curSt.pendingValue === value) {
+        curSt.status = "error";
+        curSt.error = (err instanceof ApiError && err.status === 403)
+          ? "Нет прав на изменение плановой даты на этом объекте"
+          : (err?.detail || err?.message || "Не удалось сохранить дату");
+        if (err instanceof ApiError && err.status === 403) cur.canEdit = false; // права могли отозвать у ВСЕХ строк сразу
+      }
+      if (isExpandedTabStillActive(contractId)) renderContractExpandedTabContent(contractId);
+    }
+  }
+
+  function elemPlannedRowStatusHtml(elementId, st) {
+    if (!st) return "";
+    if (st.status === "saving") return `<div class="v2-muted">Сохранение…</div>`;
+    if (st.status === "error") {
+      return `<div class="v2-auth-error">${escapeHtml(st.error)}</div>
+        <div class="v2-inline">${btn("Повторить", `data-elem-retry="${elementId}"`)}${btn("Вернуть сохранённое", `data-elem-revert="${elementId}"`)}</div>`;
+    }
+    return "";
   }
 
   function renderContractExpandedTabContent(id) {
@@ -1799,16 +2272,24 @@ export function mountCounterparties(container, ctx) {
     }
     const contract = findContract(id);
     const remainingLines = (contract?.lines || []).filter((l) => l.remaining > 0);
-    const rowsHtml = entry.rows.map((r) => `
+    const rowsHtml = entry.rows.map((r) => {
+      const st = entry.rowState.get(r.id);
+      const displayValue = st ? st.pendingValue : (r.planned_delivery_date || "");
+      const rowDisabled = !entry.canEdit || st?.status === "saving";
+      return `
       <tr>
         <td>№${r.id}${r.mark ? " · " + escapeHtml(r.mark) : ""}</td>
         <td>${escapeHtml(r.element_type || "—")}</td>
         <td>${escapeHtml(r.mark || "—")}</td>
         <td>${escapeHtml(CONTRACT_STATUS_LABELS[r.current_status] || r.current_status)}</td>
         <td>${r.project_delivery_date ? escapeHtml(r.project_delivery_date) : "—"}</td>
-        <td><input type="date" data-elem-planned="${r.id}" value="${r.planned_delivery_date || ""}" ${entry.canEdit ? "" : "disabled"}></td>
+        <td>
+          <input type="date" data-elem-planned="${r.id}" value="${escapeHtml(displayValue)}" ${rowDisabled ? "disabled" : ""}>
+          ${elemPlannedRowStatusHtml(r.id, st)}
+        </td>
         <td>${r.actual_delivery_date ? escapeHtml(r.actual_delivery_date) : "—"}</td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
     const remainingHtml = remainingLines.map((l) => `
       <tr class="v2-muted">
         <td>—</td><td>${escapeHtml(l.element_type || "тип не определён")}</td><td>${escapeHtml(l.mark || "—")}</td>
@@ -1816,28 +2297,29 @@ export function mountCounterparties(container, ctx) {
       </tr>`).join("");
     body.innerHTML = `
       <p class="v2-muted">Сначала — элементы схемы, уже привязанные к контракту (плановую дату можно проставить прямо здесь), затем — незаполненные позиции контракта (ещё без привязки). Саму привязку элемента к контракту меняют в текущем интерфейсе (2D/3D схема).</p>
+      <p class="v2-muted"><strong>Плановые даты сохраняются сразу по изменению поля; кнопки «Отменить»/«Сохранить» контракта на них не влияют и их не отменяют.</strong></p>
       ${!entry.canEdit ? '<p class="v2-note">Плановая дата недоступна для правки — нет прав на этом объекте.</p>' : ""}
       <table class="v2-table">
         <thead><tr><th>Элемент схемы</th><th>Тип</th><th>Марка</th><th>Статус</th><th>Завершение СМР</th><th>Плановая дата</th><th>Фактическая дата</th></tr></thead>
         <tbody>${(rowsHtml + remainingHtml) || '<tr><td colspan="7" class="v2-note">нет элементов</td></tr>'}</tbody>
       </table>
-      <div class="v2-auth-error" id="ctr-expanded-error"></div>
     `;
-    body.querySelectorAll("[data-elem-planned]").forEach((inp) => inp.addEventListener("change", async () => {
+    body.querySelectorAll("[data-elem-planned]").forEach((inp) => inp.addEventListener("change", () => {
       const elementId = Number(inp.dataset.elemPlanned);
-      const errorEl = body.querySelector("#ctr-expanded-error");
-      const value = inp.value;
-      inp.disabled = true;
-      try {
-        await api.patch(`/elements/${elementId}/planned-delivery-date`, { planned_delivery_date: value || null });
-        if (errorEl) errorEl.textContent = "";
-        const row = entry.rows.find((r) => r.id === elementId);
-        if (row) row.planned_delivery_date = value || null;
-      } catch (err) {
-        if (errorEl) errorEl.textContent = "Не удалось сохранить дату: " + (err?.detail || err?.message || "");
-      } finally {
-        inp.disabled = false;
-      }
+      if (entry.rowState.get(elementId)?.status === "saving") return;
+      if (!entry.rowState.has(elementId)) entry.rowState.set(elementId, { status: "idle", pendingValue: inp.value, error: "" });
+      savePlannedDate(id, elementId, inp.value);
+    }));
+    body.querySelectorAll("[data-elem-retry]").forEach((b) => b.addEventListener("click", () => {
+      const elementId = Number(b.dataset.elemRetry);
+      const st = entry.rowState.get(elementId);
+      if (!st || st.status === "saving") return;
+      savePlannedDate(id, elementId, st.pendingValue);
+    }));
+    body.querySelectorAll("[data-elem-revert]").forEach((b) => b.addEventListener("click", () => {
+      const elementId = Number(b.dataset.elemRevert);
+      entry.rowState.delete(elementId);
+      renderContractExpandedTabContent(id);
     }));
   }
 
@@ -1855,7 +2337,11 @@ export function mountCounterparties(container, ctx) {
 
   function wireContractTabsNav() {
     container.querySelectorAll("[data-ctr-tab]").forEach((b) => b.addEventListener("click", () => {
-      if (b.disabled) return;
+      // b.disabled уже отражает lockContractWorkspace — проверка
+      // contractOpLock/пикера здесь на случай гонки клика с синхронной
+      // блокировкой (раздел 2 приёмки, п. 2.5/2.11: конфликтующее действие
+      // не должно проходить и через вкладку).
+      if (b.disabled || contractOpLock || state.contractDeleteReplacement) return;
       const tab = b.dataset.ctrTab;
       if (tab === state.contractTab) return;
       state.contractTab = tab;
@@ -1870,12 +2356,27 @@ export function mountCounterparties(container, ctx) {
     const id = isNew ? Number(key.slice(4)) : Number(key.slice(5));
     const draft = contractDraftForKey(key);
     const dirty = isNew || isContractDraftDirty(draft);
+    // Раздел 2 приёмки, п. 2.3/2.11: подвал ПЕРЕСОЗДАЁТСЯ здесь заново
+    // (innerHTML), поэтому disabled новых кнопок должен учитывать не только
+    // draft.saving (сохранение позиций/темы), но и то, что удаление/перенос
+    // контракта уже идёт (contractOpLock) или пикер замены ещё не закрыт
+    // (state.contractDeleteReplacement) — иначе повторный вызов этой
+    // функции во время активного удаления вернул бы кнопки в рабочее
+    // состояние мимо lockContractWorkspace.
+    const opBusy = !!contractOpLock || !!state.contractDeleteReplacement;
+    const busy = draft.saving || opBusy;
+    // Раздел 4 приёмки, п. 4.5: пока цепочка Контрагент→Договор→
+    // Спецификация неполная (спецификация ещё не выбрана — например,
+    // сразу после смены контрагента/договора, пока подгружается следующее
+    // звено) — сохранять нечего, кнопка недоступна отдельно от busy.
+    const cascadeIncomplete = !draft.specificationId;
     footActions.innerHTML = `${btn("Отменить", 'id="ctr-cancel"')}${btn(draft.saving ? "Сохранение…" : "Сохранить", 'id="ctr-save"', true)}`;
     const saveBtn = footActions.querySelector("#ctr-save");
     const cancelBtn = footActions.querySelector("#ctr-cancel");
-    saveBtn.disabled = draft.saving;
-    cancelBtn.disabled = draft.saving;
+    saveBtn.disabled = busy || cascadeIncomplete;
+    cancelBtn.disabled = busy;
     saveBtn.addEventListener("click", async () => {
+      if (opBusy || cascadeIncomplete) return;
       try {
         if (isNew) await submitNewContract(id); else await saveContractDraft(id);
         if (!state.contractKey) return; // рабочее пространство успели закрыть, пока шло сохранение
@@ -1887,7 +2388,7 @@ export function mountCounterparties(container, ctx) {
       }
     });
     cancelBtn.addEventListener("click", async () => {
-      if (draft.saving) return;
+      if (draft.saving || opBusy) return;
       if (isNew) {
         if (!(await showConfirmDialog("Отменить новый контракт? Введённые данные будут потеряны.", { confirmLabel: "Отменить" }))) return;
         state.newContractForms.delete(id);
@@ -1897,7 +2398,22 @@ export function mountCounterparties(container, ctx) {
         await renderContractWorkspace();
       }
     });
-    status.textContent = dirty ? "Есть несохранённые изменения" : "";
+    status.textContent = opBusy
+      ? "Идёт удаление контракта — дождитесь завершения."
+      : (dirty ? "Есть несохранённые изменения" : "");
+  }
+
+  // Раздел 5 приёмки: краткий путь для компактной шапки — не полный набор
+  // реквизитов (тот теперь в сворачиваемом блоке, см. renderContractRequisites),
+  // а одна строка "Контрагент / Договор / Спецификация", читающая ТЕКУЩИЙ
+  // выбор черновика (включая ещё не сохранённую смену контрагента).
+  function contractBreadcrumbShort(draft) {
+    const cp = state.list.find((x) => x.id === draft.counterpartyId);
+    const agEntry = cascadeAgreementsEntry(draft.counterpartyId);
+    const ag = agEntry.agreements.find((a) => a.id === draft.agreementId);
+    const specEntry = cascadeSpecsEntry(draft.agreementId);
+    const sp = specEntry.specs.find((s) => s.id === draft.specificationId);
+    return [cp?.short_name, ag?.number, sp?.number].filter(Boolean).join(" / ") || "—";
   }
 
   async function renderContractWorkspace() {
@@ -1912,19 +2428,24 @@ export function mountCounterparties(container, ctx) {
     container.innerHTML = `
       <div class="v2-page-head"><div class="v2-container">
         <button type="button" class="v2-link" id="ctr-back">← ${escapeHtml(cp?.short_name || "Контрагент")} · Контрактация</button>
-        <h2>${isNew ? "Новый контракт" : (contract?.theme ? `Контракт «${escapeHtml(contract.theme)}»` : `Контракт №${id}`)}</h2>
+        <div class="v2-inline" style="align-items:baseline;flex-wrap:wrap;margin-top:2px">
+          <strong style="font-size:16px">${isNew ? "Новый контракт" : (contract?.theme ? `Контракт «${escapeHtml(contract.theme)}»` : `Контракт №${id}`)}</strong>
+          <span class="v2-muted" id="ctr-breadcrumb" style="font-size:13px">${escapeHtml(contractBreadcrumbShort(draft))}</span>
+        </div>
       </div></div>
-      <div class="v2-container" id="ctr-requisites"></div>
       <nav class="v2-nav" aria-label="Разделы контракта"><div class="v2-container">
         ${[["lines", "Позиции"], ["expanded", "Развёрнуто"], ["incidents", "Инциденты"], ["capacity", "Производительность"]].map(([k, l]) =>
           `<button type="button" data-ctr-tab="${k}" aria-pressed="${state.contractTab === k}" ${k === "expanded" && isNew ? 'disabled title="Сначала сохраните контракт"' : ""}>${l}</button>`).join("")}
       </div></nav>
-      <div id="ctr-body" class="v2-scroll"><div id="ctr-inner" class="v2-container"></div></div>
+      <div id="ctr-body" class="v2-scroll"><div id="ctr-inner" class="v2-container">
+        <div id="ctr-requisites"></div>
+        <div id="ctr-tab-content"></div>
+      </div></div>
       <footer class="v2-foot"><div class="v2-container">
         <span id="ctr-status" class="v2-muted"></span><div class="v2-foot-actions" id="ctr-foot-actions"></div>
       </div></footer>
     `;
-    body = container.querySelector("#ctr-inner");
+    body = container.querySelector("#ctr-tab-content");
     status = container.querySelector("#ctr-status");
     footActions = container.querySelector("#ctr-foot-actions");
     currentShell = "contract";

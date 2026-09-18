@@ -157,13 +157,24 @@ input:not([type="checkbox"]), select {
 }
 .v2-search { width: 300px; max-width: 100%; }
 
-table.v2-table { width: 100%; border-collapse: collapse; text-align: left; }
+/* border-collapse:separate (не collapse) + border-spacing:0 — визуально
+   не отличается (границы строк рисует .v2-table td сам, не сама таблица),
+   но необходимо для position:sticky на .v2-table th ниже: sticky на
+   ячейках таблицы с border-collapse:collapse ненадёжно работает в Chrome
+   (раздел 5 приёмки, п. 5.8 — заголовки видны при прокрутке). */
+table.v2-table { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; }
 .v2-table th {
   font-size: 12px;
   font-weight: 500;
   color: var(--muted);
   padding: 10px 12px;
   background: var(--surface);
+  /* Раздел 5 приёмки: заголовки остаются видимыми при прокрутке таблицы
+     внутри .v2-scroll — непрозрачный фон обязателен, иначе прокручиваемые
+     строки будут просвечивать сквозь "прилипшую" шапку. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 .v2-table td { padding: 15px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 
@@ -452,6 +463,17 @@ label.v2-field textarea { font-size: 14px; color: var(--ink); width: 100%; font-
 .v2-agreement > summary::before { content: "▸ "; color: var(--muted); }
 .v2-agreement[open] > summary::before { content: "▾ "; }
 .v2-agreement-nested { margin-left: 4px; }
+
+/* Раздел 5 приёмки: сворачиваемый блок — реквизиты рабочего пространства
+   контракта (полная форма без своей "карточки на карточке", тот же
+   summary-паттерн, что и .v2-agreement, но без вложенного отступа —
+   это не иерархия, а один блок целиком) и длинное объяснение запрета
+   архивирования (краткая причина остаётся видна отдельной строкой рядом,
+   не только внутри <details>). */
+.v2-collapsible > summary { cursor: pointer; padding: 6px 0; list-style: none; }
+.v2-collapsible > summary::-webkit-details-marker { display: none; }
+.v2-collapsible > summary::before { content: "▸ "; color: var(--muted); }
+.v2-collapsible[open] > summary::before { content: "▾ "; }
 
 @media (max-width: 720px) {
   .v2-container { padding: 0 16px; }
