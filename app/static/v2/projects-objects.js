@@ -5,12 +5,70 @@
 // (index.html data-feature-kind="write" у пункта меню), отдельного
 // read-only режима у этого экрана нет и в оригинале.
 //
-// Сознательно НЕ перенесено (см. отчёт по этапу): классификатор КЛАДР,
-// автоопределение координат по адресу и мини-карта выбора точки —
-// адрес и координаты здесь простые текстовые/числовые поля, без привязки
-// к справочнику. Также не перенесены загрузка фото объекта и блок
-// вложений. Всё это остаётся доступным в V1 через "Открыть в V1".
+// Классификатор адресов и мини-карта (раздел 6, задача функционального
+// паритета) — те же самые ES-модули V1 (app/static/address.js,
+// app/static/map.js), подключены динамическим import() тем же приёмом,
+// что и в app.js: они не читают DOM/глобали V1, зависимости передаются
+// явно через init({api, geocode}). Никакой копии бизнес-логики адреса или
+// геокодирования здесь нет — только своя разметка вокруг тех же виджетов.
+//
+// Сознательно НЕ перенесено (см. отчёт по этапу): загрузка фото объекта и
+// блок вложений, полный редактор контракта. Остаётся доступным в V1 через
+// "Открыть в V1".
 import { resolveDirty as sharedResolveDirty, showConfirmDialog, showInfoDialog } from "./dialogs.js";
+
+// Кэш загруженных модулей — на уровне файла, а не mountProjectsObjects(): при
+// повторном монтировании раздела (уход на другую вкладку V2 и возврат) не
+// нужно заново дёргать dynamic import, HTTP-кэш браузера тут не спасает от
+// повторного .init().
+let addressModule = null;
+let mapModule = null;
+
+function ensureAddressWidget(api) {
+  if (!addressModule) {
+    addressModule = import("/static/address.js").then((m) => {
+      m.init({
+        api: (path) => api.get(path),
+        // Геокодер — через map.js, тем же приёмом, что и в app.js: адресный
+        // виджет не тянет тяжёлый MapLibre сам, только знает URL Nominatim.
+        geocode: async (query) => (await ensureMapModule(api)).geocodeAddress(query),
+      });
+      return m;
+    });
+  }
+  return addressModule;
+}
+
+function ensureMapModule(api) {
+  if (!mapModule) {
+    mapModule = import("/static/map.js").then((m) => {
+      m.init({ api: (path) => api.get(path) });
+      return m;
+    });
+  }
+  return mapModule;
+}
+
+// Та же логика, что в address.js (собратьЗапросГеокодера, приватная функция
+// модуля) — геокодеру нужны ЧИСТЫЕ имена частей адреса, а не отформатированная
+// строка с сокращениями («г Москва» Nominatim однажды прочитал как «гора
+// Москва» и вернул точку в Красноярском крае). V1 (app.js:
+// geocodeQueryFromAddress) идёт на то же небольшое дублирование ради этого —
+// извлекать приватную функцию ради общего вызова значило бы менять публичный
+// контракт address.js без надобности.
+function geocodeQueryFromAddress(addr) {
+  const части = addr && addr.address_parts;
+  if (!части) return (addr && addr.address) || null;
+  const пункт = части.settlement || части.city || части.area || части.region || null;
+  if (!пункт || !пункт.name) return null;
+  const запрос = { city: пункт.name, country: "Россия" };
+  if (части.region && части.region.name && части.region !== пункт) запрос.state = части.region.name;
+  if (части.street && части.street.name) {
+    const дом = части.house && части.house.name;
+    запрос.street = дом ? `${части.street.name} ${дом}` : части.street.name;
+  }
+  return запрос;
+}
 
 const STATUS_LABELS = {
   perspective: "Перспективный", active: "В работе", suspended: "Приостановлен",
@@ -35,6 +93,9 @@ export function mountProjectsObjects(container, ctx) {
     query: "", status: "active", smu: "", responsible: "",
     draft: null, dirty: false, isNew: false,
     status_msg: "", busy: false,
+    // Координаты уже стоят (сохранены) или тронуты руками/пином — тогда
+    // автоопределение по адресу их больше не перезаписывает (initDraft).
+    coordsLocked: false,
     // Задача 4 (2026-09-19): после мутации данные подтверждаются ОТВЕТОМ
     // самой записи (точечная вставка/замена в projects/objects), а не
     // повторным GET списков — GET нужен только чтобы подтянуть агрегаты,
@@ -66,6 +127,17 @@ export function mountProjectsObjects(container, ctx) {
     if (navGuardBusy || api.hasPendingWrites()) return;
     navGuardBusy = true;
     try { await fn(); } finally { navGuardBusy = false; }
+  }
+
+  // Живая мини-карта формы — держим ссылку, чтобы уничтожить её ПЕРЕД
+  // следующей отрисовкой формы (renderForm полностью перестраивает разметку)
+  // и при уходе с раздела целиком (см. destroy() в конце файла): каждая
+  // карта держит свой graphics-контекст, браузер выдаёт их считанные
+  // десятки — без явного remove() новые карты через некоторое количество
+  // перерисовок просто перестают строиться, молча, без ошибки.
+  let pinMap = null;
+  function destroyPinMap() {
+    if (pinMap) { try { pinMap.карта.remove(); } catch (e) { /* контекст уже мог быть потерян */ } pinMap = null; }
   }
 
   container.innerHTML = `
@@ -158,24 +230,38 @@ export function mountProjectsObjects(container, ctx) {
     });
   }
 
+  // Общие для проекта и объекта поля адреса (AddressFields в app/models.py) —
+  // отдельной функцией, чтобы не повторять пять полей в четырёх местах.
+  function addressFieldsOf(rec) {
+    return {
+      address: rec?.address || "", address_code: rec?.address_code || null,
+      address_source: rec?.address_source || null, address_region: rec?.address_region || null,
+      address_parts: rec?.address_parts || null, postal_code: rec?.postal_code || null,
+      address_note: rec?.address_note || "", lat: rec?.lat ?? "", lon: rec?.lon ?? "",
+    };
+  }
+
   function initDraft() {
     const rec = selectedRecord();
     if (state.selected?.type === "project") {
       state.draft = rec
-        ? { name: rec.name, status: rec.status || "active", description: rec.description || "",
-            address: rec.address || "", address_note: rec.address_note || "", lat: rec.lat ?? "", lon: rec.lon ?? "" }
-        : { name: "", status: "active", description: "", address: "", address_note: "", lat: "", lon: "" };
+        ? { name: rec.name, status: rec.status || "active", description: rec.description || "", ...addressFieldsOf(rec) }
+        : { name: "", status: "active", description: "", ...addressFieldsOf(null) };
     } else {
       state.draft = rec
         ? { name: rec.name, status: rec.status || "active", project_id: rec.project_id,
             kind: rec.kind || "zhbi", description: rec.description || "",
             smu_id: rec.smu_id ?? "", smu_director_id: rec.smu_director_id ?? "", responsible_id: rec.responsible_id ?? "",
-            smr_start_reported: rec.smr_start_reported || "", media_url: rec.media_url || "",
-            address: rec.address || "", address_note: rec.address_note || "", lat: rec.lat ?? "", lon: rec.lon ?? "" }
+            smr_start_reported: rec.smr_start_reported || "", media_url: rec.media_url || "", ...addressFieldsOf(rec) }
         : { name: "", status: "active", project_id: state.newObjectProjectId || (state.projects[0]?.id ?? ""),
             kind: "zhbi", description: "", smu_id: "", smu_director_id: "", responsible_id: "",
-            smr_start_reported: "", media_url: "", address: "", address_note: "", lat: "", lon: "" };
+            smr_start_reported: "", media_url: "", ...addressFieldsOf(null) };
     }
+    // У уже сохранённой записи с координатами автопозиционирование по адресу
+    // не трогает точку — вдруг она уточнена руками именно там, где нужно
+    // (тот же приём, что и в V1: catalog.coordsLocked). Новая или ещё без
+    // координат запись остаётся разблокированной.
+    state.coordsLocked = !!(rec && rec.lat !== null && rec.lat !== undefined);
     state.dirty = false;
     clearDirtyState();
   }
@@ -197,6 +283,13 @@ export function mountProjectsObjects(container, ctx) {
     footActions.querySelector("#po-cancel").addEventListener("click", async () => {
       initDraft();
       status.textContent = "";
+      // renderFooter() — иначе "Отменить"/"Сохранить" остаются висеть в
+      // подвале после отмены (initDraft уже сбросил state.dirty в false):
+      // повторный клик по "Сохранить" отправил бы PATCH без единой реальной
+      // правки, а вид формы врал бы о несохранённых изменениях (найдено
+      // живой проверкой при разделе 6 — тот же класс бага, что и в
+      // counterparties.js/renderFooter).
+      renderFooter();
       await renderForm();
     });
     footActions.querySelector("#po-save").addEventListener("click", async () => {
@@ -247,8 +340,12 @@ export function mountProjectsObjects(container, ctx) {
     const snapshot = { ...state.draft };
     if (!snapshot.name || !snapshot.name.trim()) throw { message: "Укажите наименование" };
     const body = { name: snapshot.name.trim(), status: snapshot.status, description: snapshot.description.trim() || null,
-      address: snapshot.address.trim() || null, address_note: snapshot.address_note.trim() || null,
-      lat: snapshot.lat === "" ? null : Number(snapshot.lat), lon: snapshot.lon === "" ? null : Number(snapshot.lon) };
+      address: (snapshot.address || "").trim() || null, address_note: (snapshot.address_note || "").trim() || null,
+      address_code: snapshot.address_code || null, address_source: snapshot.address_source || null,
+      address_region: snapshot.address_region || null, address_parts: snapshot.address_parts || null,
+      postal_code: snapshot.postal_code || null,
+      lat: snapshot.lat === "" || snapshot.lat === null ? null : Number(snapshot.lat),
+      lon: snapshot.lon === "" || snapshot.lon === null ? null : Number(snapshot.lon) };
     if (type === "object") {
       Object.assign(body, {
         project_id: snapshot.project_id ? Number(snapshot.project_id) : null,
@@ -340,6 +437,10 @@ export function mountProjectsObjects(container, ctx) {
 
   async function renderForm() {
     const el = body.querySelector("#po-form");
+    // Форма перестраивается целиком на каждый выбор записи/сохранение/отмену —
+    // старую карту нужно уничтожить ДО этого, а не полагаться на то, что
+    // innerHTML сам вычистит её WebGL-контекст (см. destroyPinMap выше).
+    destroyPinMap();
     if (!state.selected) {
       el.innerHTML = `<p class="v2-note">Выберите проект или объект слева, чтобы посмотреть и поправить реквизиты.</p>`;
       return;
@@ -373,21 +474,22 @@ export function mountProjectsObjects(container, ctx) {
         <label class="v2-field v2-span">Ссылка на фото/видео<input id="pf-media" value="${escapeHtml(d.media_url)}" placeholder="папка на Яндекс.Диске и т.п. — сервер её не скачивает"></label>
       </div>` : ""}
       <div class="v2-group">Адрес и координаты</div>
-      <p class="v2-muted" style="margin:0 0 12px">Классификатор адресов, автоопределение координат и мини-карта пока доступны только в текущем интерфейсе — здесь адрес и координаты редактируются простыми полями.</p>
-      <div class="v2-fields">
-        <label class="v2-field v2-span">Адрес<input id="pf-address" value="${escapeHtml(d.address)}" placeholder="Населённый пункт, улица, дом"></label>
-        <label class="v2-field v2-span">Уточнение<input id="pf-address-note" value="${escapeHtml(d.address_note)}" placeholder="Корпус, строение, участок, ориентир"></label>
+      <div id="po-address"></div>
+      <div class="v2-coords-row">
         ${fieldRow("Широта", `<input id="pf-lat" type="number" step="0.000001" value="${escapeHtml(d.lat)}">`)}
         ${fieldRow("Долгота", `<input id="pf-lon" type="number" step="0.000001" value="${escapeHtml(d.lon)}">`)}
+        ${btn("Определить заново", 'id="po-coords-refresh"')}
       </div>
+      <div class="hint-text" id="po-coords-status"></div>
+      <div id="po-pin-map" class="v2-pin-map"></div>
       <div class="v2-auth-error" id="pf-error"></div>
     `;
     el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", markDirty));
     el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => {
       const key = { "pf-name": "name", "pf-status": "status", "pf-project": "project_id", "pf-kind": "kind",
         "pf-smu": "smu_id", "pf-smu-director": "smu_director_id", "pf-responsible": "responsible_id",
-        "pf-smr-start": "smr_start_reported", "pf-media": "media_url", "pf-address": "address",
-        "pf-address-note": "address_note", "pf-lat": "lat", "pf-lon": "lon" }[elm.id];
+        "pf-smr-start": "smr_start_reported", "pf-media": "media_url",
+        "pf-lat": "lat", "pf-lon": "lon" }[elm.id];
       if (key) state.draft[key] = elm.value;
     }));
     el.querySelector("#pf-description")?.addEventListener("input", (e) => { state.draft.description = e.target.value; });
@@ -400,6 +502,96 @@ export function mountProjectsObjects(container, ctx) {
     if (el.querySelector("#po-delete")) {
       el.querySelector("#po-delete").addEventListener("click", () => withNavGuard(() => requestDelete(type, state.selected.id)));
     }
+    mountAddressAndMap(el, d);
+  }
+
+  // Классификатор адресов + мини-карта (раздел 6). Тот же приём, что и в
+  // V1 renderCatalogForm: применённые координаты (от геокодера или от
+  // "Определить заново") пишутся сразу в оба места — числовые поля формы и
+  // пин на карте, а pinMap читается в МОМЕНТ ВЫЗОВА (не при объявлении):
+  // карта строится асинхронно и к первому автогеокодированию может быть ещё
+  // не готова, тогда координаты просто ждут её в полях.
+  function mountAddressAndMap(el, d) {
+    const latInput = () => el.querySelector("#pf-lat");
+    const lonInput = () => el.querySelector("#pf-lon");
+    const coordsStatus = el.querySelector("#po-coords-status");
+    function setCoordsStatus(text, warn) {
+      if (!coordsStatus.isConnected) return; // форма могла успеть перерисоваться заново
+      coordsStatus.textContent = text || "";
+      coordsStatus.classList.toggle("address-warn", !!warn);
+    }
+    setCoordsStatus(d.lat !== "" && d.lat !== null ? "Координаты заданы." : "Без координат запись не попадёт на карту проектов.", false);
+
+    function applyFoundCoords(lat, lon) {
+      if (!el.isConnected) return; // ответ геокодера пришёл уже после ухода с формы
+      const li = latInput(), lo = lonInput();
+      if (li) li.value = String(lat);
+      if (lo) lo.value = String(lon);
+      state.draft.lat = lat; state.draft.lon = lon;
+      if (pinMap) pinMap.показать(lat, lon);
+      markDirty();
+      setCoordsStatus("Найдены автоматически по адресу.", false);
+    }
+
+    el.querySelector("#po-coords-refresh")?.addEventListener("click", async () => {
+      state.coordsLocked = false;
+      setCoordsStatus("Ищем координаты…", false);
+      try {
+        const m = await ensureMapModule(api);
+        const query = geocodeQueryFromAddress(state.draft);
+        const found = query ? await m.geocodeAddress(query) : null;
+        if (found) applyFoundCoords(found.lat, found.lon);
+        else setCoordsStatus("Не найдено. Проверьте адрес или укажите точку на карте ниже, когда правка пина будет включена.", true);
+      } catch (e) {
+        setCoordsStatus("Не удалось определить координаты: " + (e.message || ""), true);
+      }
+    });
+    [latInput(), lonInput()].forEach((input) => input?.addEventListener("change", () => {
+      state.coordsLocked = true;
+      const lat = parseFloat(latInput().value), lon = parseFloat(lonInput().value);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        if (pinMap) pinMap.показать(lat, lon);
+        setCoordsStatus("Указаны вручную.", false);
+      }
+    }));
+
+    const pinContainer = el.querySelector("#po-pin-map");
+    ensureMapModule(api).then((m) => m.createPinMap(pinContainer, {
+      lat: d.lat === "" ? null : d.lat, lon: d.lon === "" ? null : d.lon,
+      // Правка кликом/перетаскиванием пина остаётся выключенной, как и в V1
+      // (живой запрос 2026-09-08: случайный клик по карте при просмотре
+      // двигал точку) — координаты задаются через адрес или полями руками.
+      canEdit: false,
+      onMove: () => {},
+    })).then((pin) => {
+      if (!pinContainer.isConnected) { try { pin.карта.remove(); } catch (e) {} return; } // форма уже сменилась
+      pinMap = pin;
+    }).catch((e) => {
+      pinContainer.innerHTML = `<div class="v2-note">Карта недоступна: ${escapeHtml(e.message || "")}</div>`;
+    });
+
+    const addrContainer = el.querySelector("#po-address");
+    ensureAddressWidget(api).then((m) => m.mountAddressWidget(addrContainer, {
+      value: { address: d.address, address_code: d.address_code, address_source: d.address_source,
+        address_region: d.address_region, address_parts: d.address_parts, postal_code: d.postal_code,
+        address_note: d.address_note },
+      canEdit: true,
+      onChange: (values) => {
+        Object.assign(state.draft, values);
+        markDirty();
+      },
+      onGeocode: (lat, lon) => {
+        if (state.coordsLocked) return; // координаты уже стоят или тронуты вручную
+        applyFoundCoords(lat, lon);
+      },
+    })).catch((e) => {
+      // Виджет не загрузился — форма обязана остаться рабочей: обычное поле
+      // без подсказок и без разбора по классификатору.
+      addrContainer.innerHTML = `<label class="v2-field v2-span">Адрес<input id="pf-address-fallback" value="${escapeHtml(d.address)}" placeholder="Населённый пункт, улица, дом"></label>
+        <label class="v2-field v2-span">Уточнение<input id="pf-address-note-fallback" value="${escapeHtml(d.address_note)}"></label>`;
+      addrContainer.querySelector("#pf-address-fallback")?.addEventListener("input", (ev) => { state.draft.address = ev.target.value; markDirty(); });
+      addrContainer.querySelector("#pf-address-note-fallback")?.addEventListener("input", (ev) => { state.draft.address_note = ev.target.value; markDirty(); });
+    });
   }
 
   // Общий диалог V2 вместо системного confirm()/alert() и вместо
@@ -511,5 +703,11 @@ export function mountProjectsObjects(container, ctx) {
 
   render();
 
-  return { hasUnsavedChanges, guardLeave: requestLeave };
+  // Вызывается main.js ПЕРЕД тем, как заменить content.innerHTML при уходе
+  // на другой раздел V2 — иначе живая мини-карта осталась бы держать свой
+  // graphics-контекст, а её DOM-узел просто исчез бы вместе с остальной
+  // разметкой раздела.
+  function destroy() { destroyPinMap(); }
+
+  return { hasUnsavedChanges, guardLeave: requestLeave, destroy };
 }

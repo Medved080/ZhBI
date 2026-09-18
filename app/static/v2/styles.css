@@ -210,6 +210,41 @@ label.v2-field { display: flex; flex-direction: column; gap: 6px; font-size: 12p
 label.v2-field input, label.v2-field select { font-size: 14px; color: var(--ink); width: 100%; }
 .v2-span { grid-column: 1 / -1; }
 
+/* -------- виджет адреса (app/static/address.js) и мини-карта
+   (app/static/map.js) — переиспользуются из V1 как есть (раздел 6), эти
+   классы — их собственная разметка, здесь только внешний вид под токены V2. */
+.object-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 670px; }
+.object-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; position: relative; }
+.object-field > span { font-size: 12px; color: var(--muted); }
+.object-field input { font-size: 14px; color: var(--ink); width: 100%; font-family: inherit; }
+.object-field-wide { grid-column: 1 / -1; }
+.address-field { position: relative; }
+.address-suggest {
+  position: absolute; z-index: 70; left: 0; right: 0; top: 100%;
+  max-height: 260px; overflow-y: auto; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 7px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%); padding: 4px 0;
+}
+button.address-suggest-item {
+  display: block; width: 100%; text-align: left; border: 0; background: none;
+  padding: 6px 10px; cursor: pointer; font-size: 12px; color: var(--ink); font-family: inherit;
+}
+button.address-suggest-item:hover, button.address-suggest-item.kb-focus { background: var(--sel); }
+.address-suggest-label { display: block; }
+.address-suggest-path { display: block; font-size: 11px; color: var(--muted); }
+.address-summary { margin-top: 6px; font-weight: 600; color: var(--ink); }
+.address-mode-hint { margin-top: 4px; }
+.address-house-check { margin-top: 4px; }
+.hint-text { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.hint-text.address-warn, .address-house-check.address-warn { color: var(--bad); }
+.link-like { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.link-like:hover { text-decoration: underline; }
+
+.v2-coords-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; max-width: 670px; margin-top: 12px; }
+.v2-coords-row .v2-field { flex: 0 0 150px; }
+.v2-pin-map { height: 220px; max-width: 670px; border-radius: 7px; overflow: hidden; margin-top: 8px; position: relative; border: 1px solid var(--line); }
+.v2-pin-map .maplibregl-map { position: absolute; inset: 0; }
+
 .v2-note {
   background: var(--surface);
   border-radius: 6px;

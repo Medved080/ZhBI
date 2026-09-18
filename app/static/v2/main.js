@@ -167,6 +167,12 @@ function renderShell(user, permissions) {
   const navButtons = [...document.querySelectorAll(".v2-nav [data-section]")];
   async function openSection(key) {
     if (activeModule && !(await activeModule.guardLeave())) return;
+    // destroy() — необязательный хук раздела (сейчас есть только у
+    // "Проекты и объекты", у него живая мини-карта MapLibre со своим
+    // graphics-контекстом): content.innerHTML ниже уничтожит её DOM-узел,
+    // но не сам контекст — без явного remove() внутри destroy() браузер
+    // рано или поздно перестанет строить новые карты вовсе.
+    activeModule?.destroy?.();
     content.innerHTML = "";
     navButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.section === key)));
     const section = availableSections.find((s) => s.key === key);
