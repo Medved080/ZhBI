@@ -4,6 +4,36 @@
 // включая чтение, открыт только при "counterparties":"write" — как в V1
 // (index.html data-feature-kind="write" у пункта меню).
 //
+// Доработка 2026-09-19 (живая проверка после первого переноса):
+// — Черновики вкладки "Контрактация" (новый/редактируемый договор,
+//   новая/редактируемая спецификация) переехали из DOM в состояние модуля
+//   (state.newAgreementForm/agreementDrafts/newSpecForms/specDrafts).
+//   Раньше полная перерисовка (после ЛЮБОЙ мутации, переключения вкладки,
+//   даже просто раскрытия соседнего договора) стирала введённый, но ещё
+//   не сохранённый номер/дату/объект без единого предупреждения —
+//   agreements/specs/contracts кэшируются в state.contracting и
+//   ПЕРЕЗАГРУЖАЮТСЯ только при открытии другого контрагента, а не при
+//   каждом рендере; переключение самих вкладок карточки не запрашивает
+//   сеть вовсе и ничего не стирает.
+// — Действительно разрушающие черновик переходы (другой контрагент,
+//   закрытие карточки, другой раздел шапки V2) собирают ВСЕ незавершённые
+//   черновики разом (collectDirtyParts) и показывают общий диалог
+//   "Сохранить"/"Не сохранять"/"Остаться"; сохранение одного черновика не
+//   трогает остальные — каждый хранится и сохраняется независимо.
+// — Пустые catch у создания/сохранения спецификации убраны — ошибка
+//   показывается рядом с конкретной формой, ввод сохраняется, повторная
+//   отправка блокируется на время запроса и разблокируется после ошибки.
+// — Мутации (главные поля, договор, спецификация, удаление) подтверждают
+//   свой результат ОТВЕТОМ самой записи и точечно обновляют локальный
+//   кэш — вместо повторного GET списка/дерева после каждой записи. Это не
+//   "заглушка от отказа чтения", а устранение самой причины: раз ответ
+//   мутации уже содержит всё нужное, отдельного чтения для подтверждения
+//   не требуется, и его отказ не может отбросить экран к старым данным.
+// — Системные alert()/confirm() заменены общими диалогами V2
+//   (showConfirmDialog/showInfoDialog, dialogs.js) с фокус-ловушкой и
+//   Escape; эмодзи-корзины — общей SVG-иконкой (icons.js, то же
+//   изображение, что в V1); кликабельный <div> в списке — кнопкой.
+//
 // Сознательно НЕ перенесено (см. отчёт по этапу): полный редактор контракта
 // (позиции спецификации, переопределение производительности на контракте) —
 // это отдельная большая форма (#contract-edit-backdrop в V1), не входящая
@@ -13,7 +43,8 @@
 // сам список в V1 отфильтрован НЕ тем же признаком, что реально проверяет
 // сервер, см. отчёт) — показаны все объекты, реальную проверку в любом
 // случае делает сервер (assert_object_feature "agreements","write").
-import { resolveDirty as sharedResolveDirty } from "./dialogs.js";
+import { showUnsavedDialog, showConfirmDialog, showInfoDialog } from "./dialogs.js";
+import { trashIconHtml } from "./icons.js";
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -23,6 +54,9 @@ function fmtDate(s) {
   if (!s) return "без даты";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
   return m ? `от ${m[3]}.${m[2]}.${m[1]}` : s;
+}
+function emptyContracting() {
+  return { loaded: false, loadError: null, agreements: [], specsByAgreement: new Map(), contractsBySpec: new Map() };
 }
 
 export function mountCounterparties(container, ctx) {
@@ -34,23 +68,82 @@ export function mountCounterparties(container, ctx) {
     editingId: null, tab: "main",
     draft: null, dirty: false,
     objects: [], objectsLoaded: false,
-    agreements: null, contractsBySpec: new Map(),
+    contracting: emptyContracting(),
+    expandedAgreements: new Set(),
+    expandedSpecs: new Set(),
+    newAgreementForm: null,        // {number, date, objectId, error, saving} | null (форма скрыта)
+    agreementDrafts: new Map(),    // id -> {number, date, objectId, error, saving}
+    newSpecForms: new Map(),       // agreementId -> {number, date, error, saving}
+    specDrafts: new Map(),         // id -> {number, date, error, saving}
     status_msg: "",
   };
 
-  let currentDirty = null;
-  function setDirty(info) { currentDirty = info; }
-  function clearDirtyState() { currentDirty = null; }
-  function hasUnsavedChanges() { return !!currentDirty; }
-  async function resolveDirty(info) {
-    return sharedResolveDirty(info, (err) => { state.status_msg = err?.detail || err?.message || "Не удалось сохранить"; });
+  function setCardFieldsDisabled(disabled) {
+    body.querySelectorAll("#cp-main-fields input, #cp-main-fields textarea, #cp-capacity input").forEach((el) => { el.disabled = disabled; });
   }
+
+  // ---------- сбор незавершённых черновиков вкладки "Контрактация" +
+  // главных полей — единая точка для "действительно разрушающих"
+  // переходов (задача 2). Переключение вкладок карточки и раскрытие
+  // <details> сюда НЕ ходят вовсе — они ничего не разрушают. ----------
+
+  function findAgreement(id) { return state.contracting.agreements.find((a) => a.id === id); }
+  function findSpecAndAgreementId(id) {
+    for (const [agreementId, specs] of state.contracting.specsByAgreement) {
+      const s = specs.find((x) => x.id === id);
+      if (s) return { spec: s, agreementId };
+    }
+    return { spec: null, agreementId: null };
+  }
+
+  function collectDirtyParts() {
+    const parts = [];
+    if (state.dirty) parts.push({ label: "карточка контрагента", save: saveMain, discard: () => initDraft() });
+    if (state.newAgreementForm) parts.push({ label: "новый договор", save: submitNewAgreement, discard: () => { state.newAgreementForm = null; } });
+    for (const id of state.agreementDrafts.keys()) {
+      const a = findAgreement(id);
+      parts.push({ label: `договор «${a ? a.number : id}»`, save: () => saveAgreementDraft(id), discard: () => { state.agreementDrafts.delete(id); } });
+    }
+    for (const agreementId of state.newSpecForms.keys()) {
+      parts.push({ label: "новая спецификация", save: () => submitNewSpec(agreementId), discard: () => { state.newSpecForms.delete(agreementId); } });
+    }
+    for (const id of state.specDrafts.keys()) {
+      const { spec } = findSpecAndAgreementId(id);
+      parts.push({ label: `спецификация «${spec ? spec.number : id}»`, save: () => saveSpecDraft(id), discard: () => { state.specDrafts.delete(id); } });
+    }
+    return parts;
+  }
+
+  function hasUnsavedChanges() { return collectDirtyParts().length > 0; }
+
   async function requestLeave() {
-    if (!currentDirty) return true;
-    const ok = await resolveDirty(currentDirty);
-    if (ok) clearDirtyState();
-    return ok;
+    const parts = collectDirtyParts();
+    if (!parts.length) return true;
+    const message = parts.length === 1
+      ? `В карточке контрагента есть несохранённые изменения: ${parts[0].label}.`
+      : `В карточке контрагента есть несохранённые изменения (${parts.length}): ${parts.map((p) => p.label).join(", ")}.`;
+    const choice = await showUnsavedDialog(message);
+    if (choice === "cancel") return false;
+    if (choice === "discard") { parts.forEach((p) => p.discard()); return true; }
+    let anyFailed = false;
+    for (const part of parts) {
+      try { await part.save(); }
+      catch (err) { anyFailed = true; }
+    }
+    if (anyFailed) {
+      state.status_msg = "Не всё удалось сохранить — ошибки показаны в форме. Откройте вкладку «Контрактация», чтобы их увидеть.";
+      // requestLeave() дёргают три разных вызывающих (openCard, backToList,
+      // переключатель разделов в main.js) — ждать, что КАЖДЫЙ из них сам
+      // перерисует экран при неудаче, ненадёжно (main.js про статус-строку
+      // этого модуля вообще не знает). Рендерим сразу здесь: сообщение
+      // должно быть видно немедленно, а не при случайном следующем
+      // render() от несвязанного действия (живой сценарий, где нашли).
+      await render();
+      return false;
+    }
+    return true;
   }
+
   let navGuardBusy = false;
   async function withNavGuard(fn) {
     if (navGuardBusy || api.hasPendingWrites()) return;
@@ -93,40 +186,60 @@ export function mountCounterparties(container, ctx) {
     state.objectsLoaded = true;
   }
 
-  function markDirty(message, save, discard) {
-    state.dirty = true;
-    setDirty({ message, save, discard });
-    renderFooter();
-  }
-
   function renderFooter() {
-    if (state.page !== "edit" || !state.dirty) { footActions.innerHTML = ""; return; }
-    footActions.innerHTML = `${btn("Отменить", 'id="cp-cancel"')}${btn("Сохранить", 'id="cp-save"', true)}`;
-    status.textContent = "Есть несохранённые изменения";
-    footActions.querySelector("#cp-cancel").addEventListener("click", async () => {
-      initDraft();
+    const parts = collectDirtyParts();
+    if (state.page !== "edit" || !parts.length) {
+      footActions.innerHTML = "";
+      // Без этого старый текст ("Не сохранено: ...") оставался бы висеть
+      // после того, как ПОСЛЕДНИЙ черновик сохранён/отменён и свежего
+      // state.status_msg на подходе нет (render() перезапишет этой же
+      // строкой сразу следом, если status_msg всё-таки есть).
       status.textContent = "";
-      await renderCard();
-      renderFooter();
-    });
-    footActions.querySelector("#cp-save").addEventListener("click", async () => {
-      const saveBtn = footActions.querySelector("#cp-save"), cancelBtn = footActions.querySelector("#cp-cancel");
-      saveBtn.disabled = true; cancelBtn.disabled = true;
-      setCardFieldsDisabled(true);
-      try {
-        await saveMain();
+      return;
+    }
+    // Кнопки "Отменить"/"Сохранить" в подвале относятся ТОЛЬКО к главным
+    // полям (у остальных черновиков — своя кнопка "Сохранить" рядом с
+    // полями); подвал в любом случае показывает, что несохранённое ЕСТЬ —
+    // иначе взгляд на подвал не расскажет о черновике на другой вкладке.
+    if (state.dirty) {
+      footActions.innerHTML = `${btn("Отменить", 'id="cp-cancel"')}${btn("Сохранить", 'id="cp-save"', true)}`;
+      footActions.querySelector("#cp-cancel").addEventListener("click", async () => {
+        initDraft();
         await renderCard();
         renderFooter();
-      } catch (err) {
-        status.textContent = err?.detail || err?.message || "Не удалось сохранить";
-        saveBtn.disabled = false; cancelBtn.disabled = false;
-        setCardFieldsDisabled(false);
-      }
-    });
-  }
-
-  function setCardFieldsDisabled(disabled) {
-    body.querySelectorAll("#cp-main-fields input, #cp-main-fields textarea, #cp-capacity input").forEach((el) => { el.disabled = disabled; });
+      });
+      footActions.querySelector("#cp-save").addEventListener("click", async () => {
+        const saveBtn = footActions.querySelector("#cp-save"), cancelBtn = footActions.querySelector("#cp-cancel");
+        saveBtn.disabled = true; cancelBtn.disabled = true;
+        setCardFieldsDisabled(true);
+        try {
+          await saveMain();
+          await renderCard();
+          renderFooter();
+          // saveMain() кладёт "Сохранено."/"Добавлено." в state.status_msg,
+          // но следующий полный render() может случиться намного позже
+          // (например, только при уходе с карточки) — без немедленного
+          // показа тут сообщение "зависало" бы и всплывало у СЛЕДУЮЩЕГО,
+          // не связанного с этим действием render() (найдено живой
+          // проверкой: "Добавлено." от создания контрагента вылезло много
+          // позже, при уходе с карточки после правки договора).
+          if (state.status_msg) { status.textContent = state.status_msg; state.status_msg = ""; }
+        } catch (err) {
+          // renderCard() из шаблона renderMainTab()/renderCapacityTab() —
+          // поля там без атрибута disabled, так что пересоздание само
+          // возвращает им доступность; state.draft при ошибке не менялся,
+          // ввод не теряется. Ошибку показываем ПОСЛЕ renderFooter(),
+          // иначе её тут же перекроет общее "Не сохранено: ..." (задача 3
+          // — "понятная ошибка", а не молчаливый откат к пустой форме).
+          await renderCard();
+          renderFooter();
+          status.textContent = err?.detail || err?.message || "Не удалось сохранить";
+        }
+      });
+    } else {
+      footActions.innerHTML = "";
+    }
+    status.textContent = parts.length === 1 ? `Не сохранено: ${parts[0].label}.` : `Не сохранено (${parts.length}): ${parts.map((p) => p.label).join(", ")}.`;
   }
 
   function initDraft() {
@@ -137,26 +250,33 @@ export function mountCounterparties(container, ctx) {
           code: cp.code || "", capacity: (cp.capacity || []).map((c) => ({ ...c })) }
       : { full_name: "", short_name: "", inn: "", kpp: "", ogrn: "", legal_address: "", contact_person: "", contact_phone: "", code: "", capacity: [] };
     state.dirty = false;
-    clearDirtyState();
   }
 
   async function saveMain() {
     const d = state.draft;
     if (!d.full_name.trim() || !d.short_name.trim()) throw { message: "Укажите полное и краткое наименование" };
+    const snapshotJson = JSON.stringify(d);
+    const snapshot = JSON.parse(snapshotJson);
     const body = {
-      full_name: d.full_name.trim(), short_name: d.short_name.trim(),
-      inn: d.inn.trim() || null, kpp: d.kpp.trim() || null, ogrn: d.ogrn.trim() || null,
-      legal_address: d.legal_address.trim() || null, contact_person: d.contact_person.trim() || null,
-      contact_phone: d.contact_phone.trim() || null, code: d.code.trim() || null,
-      capacity: d.capacity.filter((c) => Number.isFinite(c.per_day) && c.per_day > 0),
+      full_name: snapshot.full_name.trim(), short_name: snapshot.short_name.trim(),
+      inn: snapshot.inn.trim() || null, kpp: snapshot.kpp.trim() || null, ogrn: snapshot.ogrn.trim() || null,
+      legal_address: snapshot.legal_address.trim() || null, contact_person: snapshot.contact_person.trim() || null,
+      contact_phone: snapshot.contact_phone.trim() || null, code: snapshot.code.trim() || null,
+      capacity: snapshot.capacity.filter((c) => Number.isFinite(c.per_day) && c.per_day > 0),
     };
-    const saved = state.editingId ? await api.patch(`/counterparties/${state.editingId}`, body) : await api.post("/counterparties", body);
+    const wasNew = !state.editingId;
+    const saved = wasNew ? await api.post("/counterparties", body) : await api.patch(`/counterparties/${state.editingId}`, body);
+    // Задача 4: подтверждение — из ОТВЕТА записи (полный CounterpartyOut),
+    // без повторного GET /counterparties. Точечно заменяем/добавляем
+    // ровно эту запись в локальном списке.
+    const idx = state.list.findIndex((c) => c.id === saved.id);
+    if (idx === -1) state.list.push(saved); else state.list[idx] = saved;
     state.editingId = saved.id;
-    const ok = await ensureLoaded(true);
-    state.dirty = false;
-    clearDirtyState();
-    state.status_msg = !ok ? "Сохранено, но не удалось обновить список." : "Сохранено.";
-    initDraft();
+    // Сверка со снимком (задача 3 — "медленная сеть"): если поля успели
+    // измениться, пока шёл запрос, снимаем "грязно" только если текущее
+    // состояние всё ещё совпадает с тем, что было отправлено.
+    if (JSON.stringify(state.draft) === snapshotJson) state.dirty = false;
+    state.status_msg = wasNew ? "Добавлено." : "Сохранено.";
   }
 
   function fieldRow(label, id, value, extra = "") {
@@ -165,9 +285,17 @@ export function mountCounterparties(container, ctx) {
 
   async function openCard(id) {
     await withNavGuard(async () => {
-      if (!(await requestLeave())) return;
+      // requestLeave() при неудачном совмещённом сохранении кладёт причину
+      // в state.status_msg и возвращает false — без render() здесь оно
+      // осталось бы невидимым до следующего, не связанного с этим
+      // действием полного рендера (та же находка, что и у "Сохранить" в
+      // подвале).
+      if (!(await requestLeave())) { await render(); return; }
       state.page = "edit"; state.editingId = id; state.tab = "main";
-      state.agreements = null; state.contractsBySpec = new Map();
+      state.contracting = emptyContracting();
+      state.expandedAgreements = new Set(); state.expandedSpecs = new Set();
+      state.newAgreementForm = null; state.agreementDrafts = new Map();
+      state.newSpecForms = new Map(); state.specDrafts = new Map();
       initDraft();
       state.status_msg = "";
       await render();
@@ -176,7 +304,7 @@ export function mountCounterparties(container, ctx) {
 
   async function backToList() {
     await withNavGuard(async () => {
-      if (!(await requestLeave())) return;
+      if (!(await requestLeave())) { await render(); return; }
       state.page = "list";
       await render();
     });
@@ -194,14 +322,20 @@ export function mountCounterparties(container, ctx) {
     } else {
       listEl.innerHTML = state.list.map((cp) => `
         <div class="v2-perm">
-          <div data-open="${cp.id}" style="cursor:pointer"><strong>${escapeHtml(cp.short_name)}</strong>
-            <small>${escapeHtml(cp.full_name)}${cp.inn ? ` · ИНН ${escapeHtml(cp.inn)}` : ""}${cp.code ? ` · код ${escapeHtml(cp.code)}` : ""}</small></div>
-          ${canDelete ? `<button type="button" class="v2-link" data-del="${cp.id}" title="Удалить контрагента">🗑</button>` : ""}
+          <button type="button" class="v2-link" data-open="${cp.id}" style="text-align:left"><strong>${escapeHtml(cp.short_name)}</strong>
+            <small>${escapeHtml(cp.full_name)}${cp.inn ? ` · ИНН ${escapeHtml(cp.inn)}` : ""}${cp.code ? ` · код ${escapeHtml(cp.code)}` : ""}</small></button>
+          ${canDelete ? trashIconHtml(`data-del="${cp.id}"`, "Удалить контрагента") : ""}
         </div>`).join("");
       listEl.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => openCard(Number(el.dataset.open))));
       listEl.querySelectorAll("[data-del]").forEach((el) => el.addEventListener("click", (e) => {
         e.stopPropagation();
-        confirmAndDelete("counterparty", el.dataset.del, () => ensureLoaded(true).then(render));
+        const id = Number(el.dataset.del);
+        confirmAndDelete("counterparty", id, () => {
+          const idx = state.list.findIndex((c) => c.id === id);
+          if (idx !== -1) state.list.splice(idx, 1);
+          state.status_msg = "Контрагент удалён.";
+          render();
+        });
       }));
     }
     body.querySelector("#cp-add").addEventListener("click", () => openCard(null));
@@ -239,7 +373,8 @@ export function mountCounterparties(container, ctx) {
         "cpf-kpp": "kpp", "cpf-ogrn": "ogrn", "cpf-address": "legal_address",
         "cpf-contact-person": "contact_person", "cpf-contact-phone": "contact_phone" }[inp.id];
       state.draft[key] = inp.value;
-      markDirty("В карточке контрагента есть несохранённые изменения.", saveMain, () => { initDraft(); });
+      state.dirty = true;
+      renderFooter();
     }));
   }
 
@@ -248,169 +383,403 @@ export function mountCounterparties(container, ctx) {
     return o ? `${o.project_name ? o.project_name + " · " : ""}${o.name}` : (id ? `объект №${id}` : "объект не указан");
   }
 
+  async function ensureContractingLoaded(force) {
+    if (state.contracting.loaded && !force) return true;
+    await ensureObjects();
+    try {
+      const agreements = await api.get(`/agreements?counterparty_id=${state.editingId}`);
+      let contracts = [];
+      try { contracts = await api.get("/contracts"); } catch (e) { contracts = []; }
+      const contractsBySpec = new Map();
+      for (const c of contracts) {
+        if (!contractsBySpec.has(c.specification_id)) contractsBySpec.set(c.specification_id, []);
+        contractsBySpec.get(c.specification_id).push(c);
+      }
+      const specsByAgreement = new Map();
+      for (const a of agreements) {
+        try { specsByAgreement.set(a.id, await api.get(`/specifications?agreement_id=${a.id}`)); }
+        catch (e) { specsByAgreement.set(a.id, []); }
+      }
+      state.contracting = { loaded: true, loadError: null, agreements, specsByAgreement, contractsBySpec };
+      return true;
+    } catch (err) {
+      state.contracting.loadError = err?.detail || err?.message || "Не удалось загрузить договоры";
+      return false;
+    }
+  }
+
+  // ---------- Черновик нового договора ----------
+
+  async function submitNewAgreement() {
+    const draft = state.newAgreementForm;
+    if (!draft) return;
+    draft.error = "";
+    if (!draft.number.trim()) { draft.error = "Укажите номер договора"; throw { message: draft.error }; }
+    if (!draft.objectId) { draft.error = "Выберите объект, на который заключён договор"; throw { message: draft.error }; }
+    const snapshot = { ...draft };
+    draft.saving = true;
+    try {
+      const created = await api.post("/agreements", {
+        counterparty_id: state.editingId, number: snapshot.number.trim(),
+        object_id: Number(snapshot.objectId), agreement_date: snapshot.date || null,
+      });
+      state.contracting.agreements.push(created);
+      state.contracting.specsByAgreement.set(created.id, []);
+      const cur = state.newAgreementForm;
+      const stillSame = cur === draft && cur.number === snapshot.number && cur.date === snapshot.date && cur.objectId === snapshot.objectId;
+      if (stillSame) state.newAgreementForm = null; else cur.saving = false;
+    } catch (err) {
+      draft.saving = false;
+      draft.error = err?.detail || err?.message || "Не удалось добавить договор";
+      throw err;
+    }
+  }
+
+  // ---------- Черновик правки существующего договора ----------
+
+  async function saveAgreementDraft(id) {
+    const draft = state.agreementDrafts.get(id);
+    if (!draft) return;
+    draft.error = "";
+    if (!draft.number.trim()) { draft.error = "Укажите номер договора"; throw { message: draft.error }; }
+    const snapshot = { ...draft };
+    draft.saving = true;
+    try {
+      const updated = await api.patch(`/agreements/${id}`, {
+        counterparty_id: state.editingId, number: snapshot.number.trim(),
+        object_id: snapshot.objectId ? Number(snapshot.objectId) : null,
+        agreement_date: snapshot.date || null,
+      });
+      const idx = state.contracting.agreements.findIndex((a) => a.id === id);
+      if (idx !== -1) state.contracting.agreements[idx] = updated;
+      const cur = state.agreementDrafts.get(id);
+      const stillSame = cur && cur.number === snapshot.number && cur.date === snapshot.date && cur.objectId === snapshot.objectId;
+      if (stillSame) state.agreementDrafts.delete(id); else cur.saving = false;
+    } catch (err) {
+      draft.saving = false;
+      draft.error = err?.detail || err?.message || "Не удалось сохранить договор";
+      throw err;
+    }
+  }
+
+  // ---------- Черновик новой спецификации (под конкретным договором) ----------
+
+  async function submitNewSpec(agreementId) {
+    const draft = state.newSpecForms.get(agreementId);
+    if (!draft) return;
+    draft.error = "";
+    if (!draft.number.trim()) { draft.error = "Укажите номер спецификации"; throw { message: draft.error }; }
+    const snapshot = { ...draft };
+    draft.saving = true;
+    try {
+      const created = await api.post("/specifications", {
+        agreement_id: agreementId, number: snapshot.number.trim(), specification_date: snapshot.date || null,
+      });
+      if (!state.contracting.specsByAgreement.has(agreementId)) state.contracting.specsByAgreement.set(agreementId, []);
+      state.contracting.specsByAgreement.get(agreementId).push(created);
+      const cur = state.newSpecForms.get(agreementId);
+      const stillSame = cur && cur.number === snapshot.number && cur.date === snapshot.date;
+      if (stillSame) state.newSpecForms.delete(agreementId); else cur.saving = false;
+    } catch (err) {
+      draft.saving = false;
+      draft.error = err?.detail || err?.message || "Не удалось добавить спецификацию";
+      throw err;
+    }
+  }
+
+  // ---------- Черновик правки существующей спецификации ----------
+
+  async function saveSpecDraft(id) {
+    const draft = state.specDrafts.get(id);
+    if (!draft) return;
+    draft.error = "";
+    if (!draft.number.trim()) { draft.error = "Укажите номер спецификации"; throw { message: draft.error }; }
+    const { agreementId } = findSpecAndAgreementId(id);
+    const snapshot = { ...draft };
+    draft.saving = true;
+    try {
+      const updated = await api.patch(`/specifications/${id}`, {
+        agreement_id: agreementId, number: snapshot.number.trim(), specification_date: snapshot.date || null,
+      });
+      const specs = state.contracting.specsByAgreement.get(agreementId) || [];
+      const idx = specs.findIndex((s) => s.id === id);
+      if (idx !== -1) specs[idx] = updated;
+      const cur = state.specDrafts.get(id);
+      const stillSame = cur && cur.number === snapshot.number && cur.date === snapshot.date;
+      if (stillSame) state.specDrafts.delete(id); else cur.saving = false;
+    } catch (err) {
+      draft.saving = false;
+      draft.error = err?.detail || err?.message || "Не удалось сохранить спецификацию";
+      throw err;
+    }
+  }
+
+  // ---------- Удаление — общий диалог V2 вместо confirm()/alert(),
+  // точечная чистка кэша при подтверждённом сервером успехе (задача 4) ----------
+
+  async function confirmAndDelete(kind, id, onSuccess) {
+    let plan;
+    try { plan = await api.get(`/dictionaries/${kind}/${id}/delete-plan`); }
+    catch (err) { await showInfoDialog(err?.detail || err?.message || "Не удалось получить сведения об удалении"); return; }
+    if (plan.blockers && plan.blockers.length) {
+      await showInfoDialog(`Удалить нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`);
+      return;
+    }
+    const label = kind === "counterparty" ? "контрагента" : kind === "agreement" ? "договор" : "спецификацию";
+    const confirmed = await showConfirmDialog(`Удалить ${label}?`, { confirmLabel: "Удалить" });
+    if (!confirmed) return;
+    try {
+      await api.post(`/dictionaries/${kind}/${id}/delete`, { replacements: {}, mode: "replace" });
+      await onSuccess();
+    } catch (err) {
+      await showInfoDialog(err?.detail || err?.message || "Не удалось удалить");
+    }
+  }
+
   async function renderContractingTab() {
     const el = body.querySelector("#cp-tab-body");
     if (!state.editingId) {
       el.innerHTML = `<p class="v2-note">Договоры заводятся после сохранения контрагента — заполните «Основное» и нажмите «Сохранить».</p>`;
       return;
     }
-    el.innerHTML = `<p class="v2-muted">Загрузка…</p>`;
-    await ensureObjects();
-    let agreements, contracts;
-    try { agreements = await api.get(`/agreements?counterparty_id=${state.editingId}`); }
-    catch (err) { el.innerHTML = `<p class="v2-note">${escapeHtml(err?.detail || err?.message || "Не удалось загрузить договоры")}</p>`; return; }
-    try { contracts = await api.get("/contracts"); } catch (err) { contracts = []; }
-    const contractsBySpec = new Map();
-    for (const c of contracts) {
-      if (!contractsBySpec.has(c.specification_id)) contractsBySpec.set(c.specification_id, []);
-      contractsBySpec.get(c.specification_id).push(c);
+    if (!state.contracting.loaded) {
+      el.innerHTML = `<p class="v2-muted">Загрузка…</p>`;
+      const ok = await ensureContractingLoaded();
+      if (!ok) {
+        el.innerHTML = `<p class="v2-note">${escapeHtml(state.contracting.loadError)} ${btn("Повторить", 'id="cp-contracting-retry"')}</p>`;
+        el.querySelector("#cp-contracting-retry").addEventListener("click", renderContractingTab);
+        return;
+      }
     }
-    const specsByAgreement = new Map();
-    for (const a of agreements) {
-      try { specsByAgreement.set(a.id, await api.get(`/specifications?agreement_id=${a.id}`)); }
-      catch (err) { specsByAgreement.set(a.id, []); }
-    }
-    el.innerHTML = `
-      <div class="v2-inline" style="margin-bottom:12px">${btn("+ Договор", 'id="cp-new-agreement-toggle"')}</div>
-      <div id="cp-new-agreement-form" style="display:none" class="v2-inline">
-        <select id="cp-new-agreement-object"><option value="">— выберите объект —</option>
-          ${state.objects.map((o) => `<option value="${o.id}">${escapeHtml(objectLabel(o.id))}</option>`).join("")}</select>
-        <input id="cp-new-agreement-number" placeholder="номер договора">
-        <input id="cp-new-agreement-date" type="date">
-        ${btn("Добавить", 'id="cp-add-agreement"', true)}${btn("Отмена", 'id="cp-new-agreement-cancel"')}
-        <span class="v2-auth-error" id="cp-agreement-error"></span>
-      </div>
-      <div id="cp-agreements-list">
-        ${!agreements.length ? '<p class="v2-note">нет договоров</p>' : agreements.map((a) => `
-          <details class="v2-agreement" data-agreement="${a.id}">
-            <summary>Договор <strong>${escapeHtml(a.number)}</strong> ${fmtDate(a.agreement_date)} — ${escapeHtml(objectLabel(a.object_id))}
-              ${btn("🗑", `data-del-agreement="${a.id}"`)}</summary>
-            <div class="v2-inline" style="margin:10px 0">
-              <input data-a-number="${a.id}" value="${escapeHtml(a.number)}" placeholder="номер">
-              <input data-a-date="${a.id}" type="date" value="${escapeHtml(a.agreement_date || "")}">
-              <select data-a-object="${a.id}"><option value="">— выберите объект —</option>
-                ${state.objects.map((o) => `<option value="${o.id}" ${o.id === a.object_id ? "selected" : ""}>${escapeHtml(objectLabel(o.id))}</option>`).join("")}</select>
-              ${btn("Сохранить", `data-save-agreement="${a.id}"`, true)}
-              <span class="v2-auth-error" data-a-error="${a.id}"></span>
-            </div>
-            <div class="v2-inline" style="margin-bottom:8px">${btn("+ Спецификация", `data-new-spec-toggle="${a.id}"`)}</div>
-            <div data-new-spec-form="${a.id}" style="display:none" class="v2-inline">
-              <input data-spec-number="${a.id}" placeholder="номер"><input data-spec-date="${a.id}" type="date">
-              ${btn("Добавить", `data-add-spec="${a.id}"`, true)}${btn("Отмена", `data-spec-cancel="${a.id}"`)}
-            </div>
-            ${(specsByAgreement.get(a.id) || []).length ? (specsByAgreement.get(a.id) || []).map((s) => `
-              <details class="v2-agreement v2-agreement-nested" data-spec="${s.id}">
-                <summary>Спецификация <strong>${escapeHtml(s.number)}</strong> ${fmtDate(s.specification_date)}
-                  ${btn("🗑", `data-del-spec="${s.id}"`)}</summary>
-                <div class="v2-inline" style="margin:10px 0">
-                  <input data-s-number="${s.id}" value="${escapeHtml(s.number)}" placeholder="номер">
-                  <input data-s-date="${s.id}" type="date" value="${escapeHtml(s.specification_date || "")}">
-                  ${btn("Сохранить", `data-save-spec="${s.id}"`, true)}
-                </div>
-                ${(contractsBySpec.get(s.id) || []).length ? (contractsBySpec.get(s.id) || []).map((c) => `
-                  <div class="v2-perm"><div>Контракт ${c.theme ? `«${escapeHtml(c.theme)}»` : "без темы"}
-                    <small>${c.lines?.length ? `позиций: ${c.lines.length}, всего изделий: ${c.lines.reduce((s2, l) => s2 + (l.quantity || 0), 0)}` : "без позиций"}</small></div>
-                    <a class="v2-link" href="/?ui=v1">Открыть в V1</a></div>`).join("") : '<p class="v2-note">контрактов нет</p>'}
-              </details>`).join("") : '<p class="v2-note">нет спецификаций</p>'}
-          </details>`).join("")}
-      </div>
-    `;
+    el.innerHTML = buildContractingHtml();
     wireContractingHandlers(el);
   }
 
+  function agreementFieldValues(a) {
+    const d = state.agreementDrafts.get(a.id);
+    return d ? { number: d.number, date: d.date, objectId: d.objectId, error: d.error, saving: d.saving, dirty: true }
+      : { number: a.number, date: a.agreement_date || "", objectId: a.object_id ?? "", error: "", saving: false, dirty: false };
+  }
+  function specFieldValues(s) {
+    const d = state.specDrafts.get(s.id);
+    return d ? { number: d.number, date: d.date, error: d.error, saving: d.saving, dirty: true }
+      : { number: s.number, date: s.specification_date || "", error: "", saving: false, dirty: false };
+  }
+
+  function buildContractingHtml() {
+    const { agreements, specsByAgreement, contractsBySpec } = state.contracting;
+    const newForm = state.newAgreementForm;
+    return `
+      <div class="v2-inline" style="margin-bottom:12px">${newForm ? "" : btn("+ Договор", 'id="cp-new-agreement-toggle"')}</div>
+      ${newForm ? `
+      <div id="cp-new-agreement-form" class="v2-inline">
+        <select id="cp-new-agreement-object" ${newForm.saving ? "disabled" : ""}>
+          <option value="">— выберите объект —</option>
+          ${state.objects.map((o) => `<option value="${o.id}" ${String(newForm.objectId) === String(o.id) ? "selected" : ""}>${escapeHtml(objectLabel(o.id))}</option>`).join("")}
+        </select>
+        <input id="cp-new-agreement-number" placeholder="номер договора" value="${escapeHtml(newForm.number)}" ${newForm.saving ? "disabled" : ""}>
+        <input id="cp-new-agreement-date" type="date" value="${escapeHtml(newForm.date)}" ${newForm.saving ? "disabled" : ""}>
+        ${btn("Добавить", 'id="cp-add-agreement"', true)}${btn("Отмена", 'id="cp-new-agreement-cancel"')}
+        <span class="v2-auth-error" id="cp-agreement-error">${escapeHtml(newForm.error || "")}</span>
+      </div>` : ""}
+      <div id="cp-agreements-list">
+        ${!agreements.length ? '<p class="v2-note">нет договоров</p>' : agreements.map((a) => {
+          const av = agreementFieldValues(a);
+          const specs = specsByAgreement.get(a.id) || [];
+          const newSpecForm = state.newSpecForms.get(a.id);
+          return `
+          <details class="v2-agreement" data-agreement="${a.id}" ${state.expandedAgreements.has(a.id) ? "open" : ""}>
+            <summary>Договор <strong>${escapeHtml(a.number)}</strong> ${fmtDate(a.agreement_date)} — ${escapeHtml(objectLabel(a.object_id))}${av.dirty ? " · не сохранено" : ""}
+              ${trashIconHtml(`data-del-agreement="${a.id}"`, "Удалить договор")}</summary>
+            <div class="v2-inline" style="margin:10px 0">
+              <input data-a-number="${a.id}" value="${escapeHtml(av.number)}" placeholder="номер" ${av.saving ? "disabled" : ""}>
+              <input data-a-date="${a.id}" type="date" value="${escapeHtml(av.date)}" ${av.saving ? "disabled" : ""}>
+              <select data-a-object="${a.id}" ${av.saving ? "disabled" : ""}><option value="">— выберите объект —</option>
+                ${state.objects.map((o) => `<option value="${o.id}" ${String(av.objectId) === String(o.id) ? "selected" : ""}>${escapeHtml(objectLabel(o.id))}</option>`).join("")}</select>
+              ${btn("Сохранить", `data-save-agreement="${a.id}"`, true)}
+              <span class="v2-auth-error" data-a-error="${a.id}">${escapeHtml(av.error || "")}</span>
+            </div>
+            <div class="v2-inline" style="margin-bottom:8px">${newSpecForm ? "" : btn("+ Спецификация", `data-new-spec-toggle="${a.id}"`)}</div>
+            ${newSpecForm ? `
+            <div data-new-spec-form="${a.id}" class="v2-inline">
+              <input data-spec-number="${a.id}" placeholder="номер" value="${escapeHtml(newSpecForm.number)}" ${newSpecForm.saving ? "disabled" : ""}>
+              <input data-spec-date="${a.id}" type="date" value="${escapeHtml(newSpecForm.date)}" ${newSpecForm.saving ? "disabled" : ""}>
+              ${btn("Добавить", `data-add-spec="${a.id}"`, true)}${btn("Отмена", `data-spec-cancel="${a.id}"`)}
+              <span class="v2-auth-error" data-spec-form-error="${a.id}">${escapeHtml(newSpecForm.error || "")}</span>
+            </div>` : ""}
+            ${!specs.length ? '<p class="v2-note">нет спецификаций</p>' : specs.map((s) => {
+              const sv = specFieldValues(s);
+              const contracts = contractsBySpec.get(s.id) || [];
+              return `
+              <details class="v2-agreement v2-agreement-nested" data-spec="${s.id}" ${state.expandedSpecs.has(s.id) ? "open" : ""}>
+                <summary>Спецификация <strong>${escapeHtml(s.number)}</strong> ${fmtDate(s.specification_date)}${sv.dirty ? " · не сохранено" : ""}
+                  ${trashIconHtml(`data-del-spec="${s.id}"`, "Удалить спецификацию")}</summary>
+                <div class="v2-inline" style="margin:10px 0">
+                  <input data-s-number="${s.id}" value="${escapeHtml(sv.number)}" placeholder="номер" ${sv.saving ? "disabled" : ""}>
+                  <input data-s-date="${s.id}" type="date" value="${escapeHtml(sv.date)}" ${sv.saving ? "disabled" : ""}>
+                  ${btn("Сохранить", `data-save-spec="${s.id}"`, true)}
+                  <span class="v2-auth-error" data-s-error="${s.id}">${escapeHtml(sv.error || "")}</span>
+                </div>
+                ${contracts.length ? contracts.map((c) => `
+                  <div class="v2-perm"><div>Контракт ${c.theme ? `«${escapeHtml(c.theme)}»` : "без темы"}
+                    <small>${c.lines?.length ? `позиций: ${c.lines.length}, всего изделий: ${c.lines.reduce((s2, l) => s2 + (l.quantity || 0), 0)}` : "без позиций"}</small></div>
+                    <a class="v2-link" href="/?ui=v1">Открыть в V1</a></div>`).join("") : '<p class="v2-note">контрактов нет</p>'}
+              </details>`;
+            }).join("")}
+          </details>`;
+        }).join("")}
+      </div>
+    `;
+  }
+
   function wireContractingHandlers(el) {
-    const toggleBtn = el.querySelector("#cp-new-agreement-toggle");
-    const form = el.querySelector("#cp-new-agreement-form");
-    if (toggleBtn) toggleBtn.addEventListener("click", () => { form.style.display = ""; toggleBtn.style.display = "none"; el.querySelector("#cp-new-agreement-number").focus(); });
+    el.querySelector("#cp-new-agreement-toggle")?.addEventListener("click", () => {
+      state.newAgreementForm = { number: "", date: "", objectId: "", error: "", saving: false };
+      renderContractingTab();
+    });
     el.querySelector("#cp-new-agreement-cancel")?.addEventListener("click", () => {
-      form.style.display = "none"; toggleBtn.style.display = "";
-      el.querySelector("#cp-new-agreement-number").value = ""; el.querySelector("#cp-agreement-error").textContent = "";
+      state.newAgreementForm = null;
+      renderContractingTab();
     });
+    el.querySelector("#cp-new-agreement-number")?.addEventListener("input", (e) => { state.newAgreementForm.number = e.target.value; renderFooter(); });
+    el.querySelector("#cp-new-agreement-date")?.addEventListener("input", (e) => { state.newAgreementForm.date = e.target.value; renderFooter(); });
+    el.querySelector("#cp-new-agreement-object")?.addEventListener("change", (e) => { state.newAgreementForm.objectId = e.target.value; renderFooter(); });
     el.querySelector("#cp-add-agreement")?.addEventListener("click", async () => {
-      const number = el.querySelector("#cp-new-agreement-number").value.trim();
-      const object_id = el.querySelector("#cp-new-agreement-object").value;
-      const errorEl = el.querySelector("#cp-agreement-error");
-      if (!number) { errorEl.textContent = "Укажите номер договора"; return; }
-      if (!object_id) { errorEl.textContent = "Выберите объект, на который заключён договор"; return; }
-      try {
-        await api.post("/agreements", { counterparty_id: state.editingId, number, object_id: Number(object_id),
-          agreement_date: el.querySelector("#cp-new-agreement-date").value || null });
-        await renderContractingTab();
-      } catch (err) { errorEl.textContent = err?.detail || err?.message || "Не удалось добавить договор"; }
+      try { await submitNewAgreement(); } catch (err) { /* ошибка уже в newAgreementForm.error */ }
+      await renderContractingTab();
+      renderFooter();
     });
-    el.querySelectorAll("[data-del-agreement]").forEach((b) => b.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation(); confirmAndDelete("agreement", b.dataset.delAgreement, renderContractingTab);
+
+    el.querySelectorAll("[data-del-agreement]").forEach((b) => b.addEventListener("click", async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const id = Number(b.dataset.delAgreement);
+      await confirmAndDelete("agreement", id, async () => {
+        const idx = state.contracting.agreements.findIndex((a) => a.id === id);
+        if (idx !== -1) state.contracting.agreements.splice(idx, 1);
+        // Каскад — как на сервере (удаление договора уносит с собой его
+        // спецификации): чистим ВСЕ дочерние черновики/раскрытия, иначе
+        // осиротевший черновик спецификации остался бы висеть в
+        // collectDirtyParts() и требовал бы сохранить то, чего больше нет.
+        for (const s of state.contracting.specsByAgreement.get(id) || []) {
+          state.contracting.contractsBySpec.delete(s.id);
+          state.specDrafts.delete(s.id);
+          state.expandedSpecs.delete(s.id);
+        }
+        state.contracting.specsByAgreement.delete(id);
+        state.agreementDrafts.delete(id);
+        state.newSpecForms.delete(id);
+        state.expandedAgreements.delete(id);
+        await renderContractingTab();
+        renderFooter();
+      });
+    }));
+    el.querySelectorAll("[data-a-number]").forEach((inp) => inp.addEventListener("input", () => {
+      const id = Number(inp.dataset.aNumber);
+      const draft = ensureAgreementDraft(id);
+      draft.number = inp.value;
+      renderFooter();
+    }));
+    el.querySelectorAll("[data-a-date]").forEach((inp) => inp.addEventListener("input", () => {
+      const id = Number(inp.dataset.aDate);
+      const draft = ensureAgreementDraft(id);
+      draft.date = inp.value;
+      renderFooter();
+    }));
+    el.querySelectorAll("[data-a-object]").forEach((sel) => sel.addEventListener("change", () => {
+      const id = Number(sel.dataset.aObject);
+      const draft = ensureAgreementDraft(id);
+      draft.objectId = sel.value;
+      renderFooter();
     }));
     el.querySelectorAll("[data-save-agreement]").forEach((b) => b.addEventListener("click", async () => {
-      const id = b.dataset.saveAgreement;
-      const number = el.querySelector(`[data-a-number="${id}"]`).value.trim();
-      const object_id = el.querySelector(`[data-a-object="${id}"]`).value;
-      const errorEl = el.querySelector(`[data-a-error="${id}"]`);
-      if (!number) { errorEl.textContent = "Укажите номер договора"; return; }
-      try {
-        await api.patch(`/agreements/${id}`, { counterparty_id: state.editingId, number,
-          object_id: object_id ? Number(object_id) : null, agreement_date: el.querySelector(`[data-a-date="${id}"]`).value || null });
-        await renderContractingTab();
-      } catch (err) { errorEl.textContent = err?.detail || err?.message || "Не удалось сохранить"; }
+      const id = Number(b.dataset.saveAgreement);
+      try { await saveAgreementDraft(id); } catch (err) { /* ошибка уже в draft.error */ }
+      await renderContractingTab();
+      renderFooter();
     }));
+
     el.querySelectorAll("[data-new-spec-toggle]").forEach((b) => b.addEventListener("click", () => {
-      const id = b.dataset.newSpecToggle;
-      el.querySelector(`[data-new-spec-form="${id}"]`).style.display = ""; b.style.display = "none";
+      const id = Number(b.dataset.newSpecToggle);
+      state.newSpecForms.set(id, { number: "", date: "", error: "", saving: false });
+      renderContractingTab();
     }));
     el.querySelectorAll("[data-spec-cancel]").forEach((b) => b.addEventListener("click", () => {
-      const id = b.dataset.specCancel;
-      el.querySelector(`[data-new-spec-form="${id}"]`).style.display = "none";
-      el.querySelector(`[data-new-spec-toggle="${id}"]`).style.display = "";
+      state.newSpecForms.delete(Number(b.dataset.specCancel));
+      renderContractingTab();
+    }));
+    el.querySelectorAll("[data-spec-number]").forEach((inp) => inp.addEventListener("input", () => {
+      state.newSpecForms.get(Number(inp.dataset.specNumber)).number = inp.value;
+      renderFooter();
+    }));
+    el.querySelectorAll("[data-spec-date]").forEach((inp) => inp.addEventListener("input", () => {
+      state.newSpecForms.get(Number(inp.dataset.specDate)).date = inp.value;
+      renderFooter();
     }));
     el.querySelectorAll("[data-add-spec]").forEach((b) => b.addEventListener("click", async () => {
-      const id = b.dataset.addSpec;
-      const number = el.querySelector(`[data-spec-number="${id}"]`).value.trim();
-      if (!number) return;
-      try {
-        await api.post("/specifications", { agreement_id: Number(id), number, specification_date: el.querySelector(`[data-spec-date="${id}"]`).value || null });
-        await renderContractingTab();
-      } catch (err) { /* тихо, как в V1 */ }
+      const agreementId = Number(b.dataset.addSpec);
+      try { await submitNewSpec(agreementId); } catch (err) { /* ошибка уже в форме */ }
+      await renderContractingTab();
+      renderFooter();
     }));
-    el.querySelectorAll("[data-del-spec]").forEach((b) => b.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation(); confirmAndDelete("specification", b.dataset.delSpec, renderContractingTab);
+    el.querySelectorAll("[data-del-spec]").forEach((b) => b.addEventListener("click", async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const id = Number(b.dataset.delSpec);
+      const { agreementId } = findSpecAndAgreementId(id);
+      await confirmAndDelete("specification", id, async () => {
+        const specs = state.contracting.specsByAgreement.get(agreementId) || [];
+        const idx = specs.findIndex((s) => s.id === id);
+        if (idx !== -1) specs.splice(idx, 1);
+        state.contracting.contractsBySpec.delete(id);
+        state.specDrafts.delete(id);
+        state.expandedSpecs.delete(id);
+        await renderContractingTab();
+        renderFooter();
+      });
+    }));
+    el.querySelectorAll("[data-s-number]").forEach((inp) => inp.addEventListener("input", () => {
+      const id = Number(inp.dataset.sNumber);
+      ensureSpecDraft(id).number = inp.value;
+      renderFooter();
+    }));
+    el.querySelectorAll("[data-s-date]").forEach((inp) => inp.addEventListener("input", () => {
+      const id = Number(inp.dataset.sDate);
+      ensureSpecDraft(id).date = inp.value;
+      renderFooter();
     }));
     el.querySelectorAll("[data-save-spec]").forEach((b) => b.addEventListener("click", async () => {
-      const id = b.dataset.saveSpec;
-      const number = el.querySelector(`[data-s-number="${id}"]`).value.trim();
-      if (!number) return;
-      try {
-        await api.patch(`/specifications/${id}`, { agreement_id: findAgreementIdForSpec(id), number, specification_date: el.querySelector(`[data-s-date="${id}"]`).value || null });
-        await renderContractingTab();
-      } catch (err) { /* тихо, как в V1 */ }
+      const id = Number(b.dataset.saveSpec);
+      try { await saveSpecDraft(id); } catch (err) { /* ошибка уже в draft.error */ }
+      await renderContractingTab();
+      renderFooter();
+    }));
+
+    // Раскрытие/сворачивание переживает перерисовку (задача 2 — "раскрытие
+    // списка не должно уничтожать ввод"): состояние держим в Set, а не
+    // полагаемся на DOM-атрибут open, который каждый renderContractingTab
+    // пересоздаёт заново.
+    el.querySelectorAll("details[data-agreement]").forEach((d) => d.addEventListener("toggle", () => {
+      const id = Number(d.dataset.agreement);
+      if (d.open) state.expandedAgreements.add(id); else state.expandedAgreements.delete(id);
+    }));
+    el.querySelectorAll("details[data-spec]").forEach((d) => d.addEventListener("toggle", () => {
+      const id = Number(d.dataset.spec);
+      if (d.open) state.expandedSpecs.add(id); else state.expandedSpecs.delete(id);
     }));
   }
 
-  function findAgreementIdForSpec(specId) {
-    const details = body.querySelector(`[data-spec="${specId}"]`);
-    const parent = details?.closest("[data-agreement]");
-    return parent ? Number(parent.dataset.agreement) : null;
-  }
-
-  // Как и в V1 (openDictDelete) — сначала delete-plan, отказ при найденных
-  // зависимостях, и только потом сам POST .../delete. Разница с V1: там
-  // это отдельный модальный диалог с полным деревом, здесь — то же
-  // решение через confirm()/alert(), т.к. согласование внутри вложенных
-  // <details> договора/спецификации не даёт места для встроенного блока
-  // (как у "Проекты и объекты" — см. showDeletePlan там).
-  async function confirmAndDelete(kind, id, onDone) {
-    const label = kind === "counterparty" ? "контрагента" : kind === "agreement" ? "договор" : "спецификацию";
-    let plan;
-    try { plan = await api.get(`/dictionaries/${kind}/${id}/delete-plan`); }
-    catch (err) { alert(err?.detail || err?.message || "Не удалось получить сведения об удалении"); return; }
-    if (plan.blockers && plan.blockers.length) {
-      alert(`Удалить нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`);
-      return;
+  function ensureAgreementDraft(id) {
+    if (!state.agreementDrafts.has(id)) {
+      const a = findAgreement(id);
+      state.agreementDrafts.set(id, { number: a.number, date: a.agreement_date || "", objectId: a.object_id ?? "", error: "", saving: false });
     }
-    if (!confirm(`Удалить ${label}?`)) return;
-    try {
-      await api.post(`/dictionaries/${kind}/${id}/delete`, { replacements: {}, mode: "replace" });
-      await onDone();
-    } catch (err) { alert(err?.detail || err?.message || "Не удалось удалить"); }
+    return state.agreementDrafts.get(id);
+  }
+  function ensureSpecDraft(id) {
+    if (!state.specDrafts.has(id)) {
+      const { spec } = findSpecAndAgreementId(id);
+      state.specDrafts.set(id, { number: spec.number, date: spec.specification_date || "", error: "", saving: false });
+    }
+    return state.specDrafts.get(id);
   }
 
   function renderCapacityTab() {
@@ -432,18 +801,21 @@ export function mountCounterparties(container, ctx) {
     if (!state.draft.capacity.length) el.querySelector("#cp-capacity tbody").innerHTML = `<tr><td colspan="3" class="v2-note">Строк пока нет</td></tr>`;
     el.querySelectorAll("[data-cap-per-day]").forEach((inp) => inp.addEventListener("input", () => {
       state.draft.capacity[Number(inp.dataset.capPerDay)].per_day = Number(inp.value);
-      markDirty("В карточке контрагента есть несохранённые изменения.", saveMain, () => { initDraft(); });
+      state.dirty = true;
+      renderFooter();
     }));
     el.querySelectorAll("[data-cap-comment]").forEach((inp) => inp.addEventListener("input", () => {
       state.draft.capacity[Number(inp.dataset.capComment)].comment = inp.value;
-      markDirty("В карточке контрагента есть несохранённые изменения.", saveMain, () => { initDraft(); });
+      state.dirty = true;
+      renderFooter();
     }));
     el.querySelector("#cp-cap-add-row").addEventListener("click", () => {
       const type = el.querySelector("#cp-cap-new-type").value.trim();
       if (!type) return;
       state.draft.capacity.push({ element_type: type, per_day: 0, comment: "" });
-      markDirty("В карточке контрагента есть несохранённые изменения.", saveMain, () => { initDraft(); });
+      state.dirty = true;
       renderCapacityTab();
+      renderFooter();
     });
   }
 
@@ -460,6 +832,10 @@ export function mountCounterparties(container, ctx) {
       <div id="cp-tab-body" style="padding-top:16px"></div>
     `;
     body.querySelector("#cp-back").addEventListener("click", backToList);
+    // Переключение вкладок карточки НЕ спрашивает про несохранённое и НЕ
+    // ходит в сеть: все черновики (главные поля, договоры, спецификации)
+    // живут в state, а не в DOM — вкладка просто перерисовывается из
+    // текущего состояния (задача 2).
     body.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", async () => {
       if (b.dataset.tab === state.tab) return;
       state.tab = b.dataset.tab;
@@ -482,7 +858,10 @@ export function mountCounterparties(container, ctx) {
     if (state.page === "list") renderList();
     else await renderCard();
     renderFooter();
-    if (state.status_msg) { status.textContent = state.status_msg; state.status_msg = ""; } else if (state.page === "list") status.textContent = "";
+    // Разовое сообщение об успехе/ошибке операции важнее постоянного "не
+    // сохранено" — перекрывает его, если есть; renderFooter() выше уже
+    // корректно очистила статус, если не сохранённого нет вовсе.
+    if (state.status_msg) { status.textContent = state.status_msg; state.status_msg = ""; }
   }
 
   render();
