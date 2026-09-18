@@ -245,6 +245,11 @@ button.address-suggest-item:hover, button.address-suggest-item.kb-focus { backgr
 .v2-pin-map { height: 220px; max-width: 670px; border-radius: 7px; overflow: hidden; margin-top: 8px; position: relative; border: 1px solid var(--line); }
 .v2-pin-map .maplibregl-map { position: absolute; inset: 0; }
 
+.v2-avatar-preview { max-width: 220px; max-height: 140px; border-radius: 7px; border: 1px solid var(--line); display: block; margin-bottom: 10px; object-fit: cover; }
+.v2-attach-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.v2-attach-row:last-of-type { border-bottom: 0; }
+.v2-attach-meta { font-size: 12px; }
+
 .v2-note {
   background: var(--surface);
   border-radius: 6px;

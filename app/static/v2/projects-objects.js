@@ -12,10 +12,17 @@
 // явно через init({api, geocode}). Никакой копии бизнес-логики адреса или
 // геокодирования здесь нет — только своя разметка вокруг тех же виджетов.
 //
-// Сознательно НЕ перенесено (см. отчёт по этапу): загрузка фото объекта и
-// блок вложений, полный редактор контракта. Остаётся доступным в V1 через
+// Вложения и превью объекта — те же /attachments, /objects/{id}/avatar, что
+// и renderAttachments в V1 (app.js:7712); права на них выводятся из
+// ВЛАДЕЛЬЦА (app/attachments.py._guard) отдельно от общего доступа к
+// разделу — проект правит только администратор сервиса, объект — по роли
+// именно на нём (attachPermsFor).
+//
+// Сознательно НЕ перенесён (см. отчёт по этапу): полный редактор контракта
+// (позиции, инциденты, производительность) — остаётся доступным в V1 через
 // "Открыть в V1".
 import { resolveDirty as sharedResolveDirty, showConfirmDialog, showInfoDialog } from "./dialogs.js";
+import { trashIconHtml } from "./icons.js";
 
 // Кэш загруженных модулей — на уровне файла, а не mountProjectsObjects(): при
 // повторном монтировании раздела (уход на другую вкладку V2 и возврат) не
@@ -482,6 +489,11 @@ export function mountProjectsObjects(container, ctx) {
       </div>
       <div class="hint-text" id="po-coords-status"></div>
       <div id="po-pin-map" class="v2-pin-map"></div>
+      ${!state.isNew ? `
+      <div class="v2-group">Фото и вложения</div>
+      <div id="po-avatar"></div>
+      <div id="po-attachments"><p class="v2-muted">Загрузка…</p></div>` : `
+      <p class="v2-muted" style="margin:12px 0 0">Вложения станут доступны после первого сохранения.</p>`}
       <div class="v2-auth-error" id="pf-error"></div>
     `;
     el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", markDirty));
@@ -503,6 +515,7 @@ export function mountProjectsObjects(container, ctx) {
       el.querySelector("#po-delete").addEventListener("click", () => withNavGuard(() => requestDelete(type, state.selected.id)));
     }
     mountAddressAndMap(el, d);
+    if (!state.isNew) mountAttachments(el, type, state.selected.id);
   }
 
   // Классификатор адресов + мини-карта (раздел 6). Тот же приём, что и в
@@ -592,6 +605,163 @@ export function mountProjectsObjects(container, ctx) {
       addrContainer.querySelector("#pf-address-fallback")?.addEventListener("input", (ev) => { state.draft.address = ev.target.value; markDirty(); });
       addrContainer.querySelector("#pf-address-note-fallback")?.addEventListener("input", (ev) => { state.draft.address_note = ev.target.value; markDirty(); });
     });
+  }
+
+  // Права на вложения — по их ВЛАДЕЛЬЦУ (app/attachments.py: _guard), а не по
+  // общему уровню раздела: у проекта их ведёт ТОЛЬКО администратор сервиса
+  // ("проекты — его епархия"), у объекта — по роли ИМЕННО НА НЁМ (feature
+  // attachments/attachments_delete), которая может отличаться от системной
+  // роли (например, у прораба). Для объекта запрашиваем /me/permissions
+  // ?object_id=... — тот же эндпоинт и тот же расчёт, что сервер потом
+  // применит к самим POST/DELETE, вместо копирования canOn() на клиенте.
+  async function attachPermsFor(type, id) {
+    if (type === "project") {
+      return { canUpload: ctx.perms.isSystemAdmin, canDelete: ctx.perms.isSystemAdmin };
+    }
+    if (ctx.perms.isSystemAdmin) return { canUpload: true, canDelete: true };
+    try {
+      const perms = await api.get(`/me/permissions?object_id=${id}`);
+      return {
+        canUpload: perms.features?.attachments === "write",
+        canDelete: perms.features?.attachments_delete === "write",
+      };
+    } catch (e) {
+      return { canUpload: false, canDelete: false };
+    }
+  }
+
+  const ATTACHMENT_ICON = "📎";
+  const AVATAR_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return `${bytes} Б`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} КБ`;
+    return `${(bytes / 1048576).toFixed(1)} МБ`;
+  }
+  async function downloadAttachment(id, name) {
+    const res = await fetch(`/attachments/${id}/download`, { credentials: "same-origin" });
+    if (!res.ok) { state.status_msg = "Не удалось скачать файл"; await render(); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Вложения объекта/проекта (раздел 6) — тот же список эндпоинтов
+  // (/attachments, /attachments/{id}/download, /objects/{id}/avatar), что и
+  // renderAttachments в V1 (app.js:7712), но без системных confirm()/alert():
+  // ошибки остаются в статус-строке карточки, удаление — через
+  // showConfirmDialog, крестик — через общую иконку icons.js.
+  async function mountAttachments(el, type, id) {
+    const listEl = el.querySelector("#po-attachments");
+    const avatarEl = el.querySelector("#po-avatar");
+    if (!listEl) return;
+    const { canUpload, canDelete } = await attachPermsFor(type, id);
+    if (!listEl.isConnected) return; // форма уже сменилась, пока считались права
+
+    const rec = type === "object" ? state.objects.find((r) => r.id === id) : null;
+    function renderAvatar() {
+      if (!avatarEl || type !== "object") return;
+      if (rec && rec.has_avatar) {
+        avatarEl.innerHTML = `<img src="/objects/${id}/avatar?t=${Date.now()}" alt="" class="v2-avatar-preview">`;
+      } else {
+        avatarEl.innerHTML = "";
+      }
+    }
+    renderAvatar();
+
+    function paint(list) {
+      if (!listEl.isConnected) return;
+      const rows = list.length ? list.map((a) => {
+        const canPreview = type === "object" && canUpload && AVATAR_MIME_TYPES.includes(a.content_type);
+        const isPreview = rec && rec.avatar_attachment_id === a.id;
+        const previewBtn = canPreview
+          ? (isPreview
+            ? `<button type="button" class="v2-link" data-avatar-unset="${a.id}" title="Убрать как превью объекта">★ превью</button>`
+            : `<button type="button" class="v2-link" data-avatar-set="${a.id}" title="Сделать превью объекта">☆ превью</button>`)
+          : "";
+        return `<div class="v2-attach-row">
+          <button type="button" class="v2-link" data-download="${a.id}" data-name="${escapeHtml(a.filename)}" title="Скачать">${ATTACHMENT_ICON} ${escapeHtml(a.filename)}</button>
+          <span class="v2-muted v2-attach-meta">${formatFileSize(a.size)}${a.description ? " · " + escapeHtml(a.description) : ""}
+            · ${escapeHtml(a.uploaded_by || "—")}, ${escapeHtml((a.uploaded_at || "").slice(0, 16))}</span>
+          ${previewBtn}
+          ${canDelete ? trashIconHtml(`data-del="${a.id}"`, "Удалить вложение") : ""}
+        </div>`;
+      }).join("") : `<p class="v2-muted">Файлов нет.</p>`;
+      listEl.innerHTML = rows + (canUpload ? `
+        <div class="v2-inline" style="margin-top:10px">
+          <input type="file" id="po-attach-file" multiple>
+          <input type="text" id="po-attach-desc" placeholder="описание (необязательно)">
+          ${btn("Приложить", 'id="po-attach-add"')}
+        </div>
+        <div class="v2-muted" id="po-attach-status" style="margin-top:6px"></div>` : "");
+
+      listEl.querySelectorAll("[data-download]").forEach((b) => b.addEventListener("click", () =>
+        downloadAttachment(b.dataset.download, b.dataset.name)));
+      listEl.querySelectorAll("[data-avatar-set],[data-avatar-unset]").forEach((b) => b.addEventListener("click", async () => {
+        const newId = b.dataset.avatarSet ? Number(b.dataset.avatarSet) : null;
+        b.disabled = true;
+        try {
+          await api.put(`/objects/${id}/avatar`, { attachment_id: newId });
+          if (rec) { rec.avatar_attachment_id = newId; rec.has_avatar = !!newId; }
+          renderAvatar();
+          paint(list);
+        } catch (err) {
+          b.disabled = false;
+          state.status_msg = err?.detail || err?.message || "Не удалось назначить превью";
+          await render();
+        }
+      }));
+      listEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
+        const attId = Number(b.dataset.del);
+        const confirmed = await showConfirmDialog("Удалить вложение? Восстановить его будет нечем.", { confirmLabel: "Удалить" });
+        if (!confirmed) return;
+        try {
+          const d = await api.delete(`/attachments/${attId}`);
+          if (rec && rec.avatar_attachment_id === attId) { rec.avatar_attachment_id = null; rec.has_avatar = false; renderAvatar(); }
+          paint(d.attachments);
+        } catch (err) {
+          state.status_msg = err?.detail || err?.message || "Не удалось удалить вложение";
+          await render();
+        }
+      }));
+      const addBtn = listEl.querySelector("#po-attach-add");
+      if (addBtn) addBtn.addEventListener("click", async () => {
+        const fileInput = listEl.querySelector("#po-attach-file");
+        const statusEl = listEl.querySelector("#po-attach-status");
+        if (!fileInput.files.length) { statusEl.textContent = "Выберите файл."; return; }
+        addBtn.disabled = true;
+        let latest = list;
+        try {
+          // По одному файлу за запрос — при отказе на N-м уже загруженные
+          // раньше не теряются вместе со всей пачкой (тот же приём, что и в
+          // renderAttachments V1).
+          for (const file of fileInput.files) {
+            statusEl.textContent = `Загрузка: ${file.name}…`;
+            const fd = new FormData();
+            fd.append("entity_type", type);
+            fd.append("entity_id", String(id));
+            fd.append("description", listEl.querySelector("#po-attach-desc").value.trim());
+            fd.append("file", file);
+            const res = await fetch("/attachments", { method: "POST", body: fd, credentials: "same-origin" });
+            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+            latest = (await res.json()).attachments;
+          }
+          paint(latest);
+        } catch (err) {
+          addBtn.disabled = false;
+          if (statusEl.isConnected) statusEl.textContent = "Не удалось: " + (err.message || "");
+        }
+      });
+    }
+
+    try {
+      const d = await api.get(`/attachments?entity_type=${encodeURIComponent(type)}&entity_id=${id}`);
+      paint(d.attachments);
+    } catch (err) {
+      if (listEl.isConnected) listEl.innerHTML = `<p class="v2-muted">Не удалось загрузить список: ${escapeHtml(err?.detail || err?.message || "")}</p>`;
+    }
   }
 
   // Общий диалог V2 вместо системного confirm()/alert() и вместо
