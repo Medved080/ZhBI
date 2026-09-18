@@ -10,7 +10,7 @@
 // адрес и координаты здесь простые текстовые/числовые поля, без привязки
 // к справочнику. Также не перенесены загрузка фото объекта и блок
 // вложений. Всё это остаётся доступным в V1 через "Открыть в V1".
-import { resolveDirty as sharedResolveDirty } from "./dialogs.js";
+import { resolveDirty as sharedResolveDirty, showConfirmDialog, showInfoDialog } from "./dialogs.js";
 
 const STATUS_LABELS = {
   perspective: "Перспективный", active: "В работе", suspended: "Приостановлен",
@@ -35,7 +35,14 @@ export function mountProjectsObjects(container, ctx) {
     query: "", status: "active", smu: "", responsible: "",
     draft: null, dirty: false, isNew: false,
     status_msg: "", busy: false,
-    deletePlan: null, deleteError: "",
+    // Задача 4 (2026-09-19): после мутации данные подтверждаются ОТВЕТОМ
+    // самой записи (точечная вставка/замена в projects/objects), а не
+    // повторным GET списков — GET нужен только чтобы подтянуть агрегаты,
+    // которые клиент точно посчитать не может (objects_count/
+    // elements_count). pendingListRefresh — функция ЭТОГО best-effort
+    // обновления, если оно не удалось, чтобы кнопка "Повторить" читала
+    // ровно то же самое, а не что-то заново придуманное.
+    pendingListRefresh: null,
   };
 
   let currentDirty = null;
@@ -79,18 +86,43 @@ export function mountProjectsObjects(container, ctx) {
     return `<button type="button" class="v2-btn ${primary ? "v2-primary" : ""}" ${attr}>${label}</button>`;
   }
 
+  async function fetchAllLists() {
+    const [projects, objects, smuList, individualsList] = await Promise.all([
+      api.get("/projects"), api.get("/objects"), api.get("/smu"), api.get("/individuals"),
+    ]);
+    return { projects, objects, smuList, individualsList };
+  }
+
   async function ensureLoaded(force) {
     if (state.loaded && !force) return true;
     try {
-      const [projects, objects, smuList, individualsList] = await Promise.all([
-        api.get("/projects"), api.get("/objects"), api.get("/smu"), api.get("/individuals"),
-      ]);
-      state.projects = projects; state.objects = objects;
-      state.smuList = smuList; state.individualsList = individualsList;
+      const r = await fetchAllLists();
+      state.projects = r.projects; state.objects = r.objects;
+      state.smuList = r.smuList; state.individualsList = r.individualsList;
       state.loaded = true; state.loadError = null;
       return true;
     } catch (err) {
       state.loadError = err?.detail || err?.message || "Не удалось загрузить данные";
+      return false;
+    }
+  }
+
+  // Best-effort обновление после мутации — НЕ источник подтверждения
+  // сохранённых значений (тот приходит из ответа самой записи, задача 4),
+  // а обновление агрегатов (objects_count/elements_count), которые нельзя
+  // посчитать на клиенте. Сервер к этому моменту уже видел мутацию —
+  // успешный ответ здесь не может "откатить" только что подтверждённые
+  // значения, а неудача сюда не относится и не трогает то, что уже
+  // подтверждено ответом записи.
+  async function refreshListsBestEffort() {
+    try {
+      const r = await fetchAllLists();
+      state.projects = r.projects; state.objects = r.objects;
+      state.smuList = r.smuList; state.individualsList = r.individualsList;
+      state.pendingListRefresh = null;
+      return true;
+    } catch (err) {
+      state.pendingListRefresh = refreshListsBestEffort;
       return false;
     }
   }
@@ -187,8 +219,31 @@ export function mountProjectsObjects(container, ctx) {
     body.querySelectorAll("#po-form input, #po-form select, #po-form textarea").forEach((el) => { el.disabled = disabled; });
   }
 
+  // Задача 4: запись подтверждена (см. saveOrThrow/удаление), а фоновое
+  // обновление агрегатов — нет. Кнопка повторяет ТОЛЬКО чтение
+  // (refreshListsBestEffort), никогда не переотправляет запись.
+  function renderListRefreshRetry() {
+    const old = footActions.parentElement.querySelector("#po-status-retry");
+    if (old) old.remove();
+    if (!state.pendingListRefresh) return;
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.id = "po-status-retry";
+    retryBtn.className = "v2-link";
+    retryBtn.style.marginLeft = "8px";
+    retryBtn.textContent = "Повторить обновление";
+    retryBtn.addEventListener("click", async () => {
+      retryBtn.disabled = true;
+      const ok = await state.pendingListRefresh();
+      state.status_msg = ok ? "Обновлено." : "Обновить данные снова не удалось.";
+      await render();
+    });
+    status.after(retryBtn);
+  }
+
   async function saveOrThrow() {
     const type = state.selected.type;
+    const wasNew = state.isNew;
     const snapshot = { ...state.draft };
     if (!snapshot.name || !snapshot.name.trim()) throw { message: "Укажите наименование" };
     const body = { name: snapshot.name.trim(), status: snapshot.status, description: snapshot.description.trim() || null,
@@ -204,13 +259,20 @@ export function mountProjectsObjects(container, ctx) {
       });
     }
     const path = type === "project" ? "/projects" : "/objects";
-    const saved = state.isNew ? await api.post(path, body) : await api.patch(`${path}/${state.selected.id}`, body);
-    const ok = await ensureLoaded(true);
+    const saved = wasNew ? await api.post(path, body) : await api.patch(`${path}/${state.selected.id}`, body);
+    // Задача 4: подтверждение — из ОТВЕТА записи (полный Project/ObjectOut),
+    // без ожидания отдельного GET. Список — точечно: заменяем/добавляем ТУ
+    // ЖЕ запись, поэтому даже при отказе фонового обновления агрегатов
+    // ниже форма и дерево уже показывают подтверждённые, не старые данные.
+    const list = type === "project" ? state.projects : state.objects;
+    const idx = list.findIndex((r) => r.id === saved.id);
+    if (idx === -1) list.push(saved); else list[idx] = saved;
     state.selected = { type, id: saved.id };
     state.isNew = false;
     state.dirty = false;
     clearDirtyState();
-    state.status_msg = !ok ? "Сохранено, но не удалось обновить список." : (state.isNew ? "Добавлено." : "Сохранено.");
+    const ok = await refreshListsBestEffort();
+    state.status_msg = !ok ? "Сохранено, но обновить данные не удалось." : (wasNew ? "Добавлено." : "Сохранено.");
     initDraft();
   }
 
@@ -319,7 +381,6 @@ export function mountProjectsObjects(container, ctx) {
         ${fieldRow("Долгота", `<input id="pf-lon" type="number" step="0.000001" value="${escapeHtml(d.lon)}">`)}
       </div>
       <div class="v2-auth-error" id="pf-error"></div>
-      <div id="po-delete-plan"></div>
     `;
     el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", markDirty));
     el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => {
@@ -337,50 +398,55 @@ export function mountProjectsObjects(container, ctx) {
       });
     }
     if (el.querySelector("#po-delete")) {
-      el.querySelector("#po-delete").addEventListener("click", () => withNavGuard(() => showDeletePlan(type, state.selected.id)));
+      el.querySelector("#po-delete").addEventListener("click", () => withNavGuard(() => requestDelete(type, state.selected.id)));
     }
   }
 
-  async function showDeletePlan(type, id) {
-    const planBox = body.querySelector("#po-delete-plan");
-    planBox.innerHTML = `<p class="v2-muted">Проверяем, что мешает удалению…</p>`;
-    let data;
-    try { data = await api.get(`/dictionaries/${type}/${id}/delete-plan`); }
-    catch (err) { planBox.innerHTML = `<p class="v2-note">${escapeHtml(err?.detail || err?.message || "Не удалось получить сведения об удалении")}</p>`; return; }
-    if (data.blockers && data.blockers.length) {
-      planBox.innerHTML = `<div class="v2-dialog-inline">
-        <p><strong>Удалить нельзя.</strong> Мешает:</p>
-        <ul>${data.blockers.map((b) => `<li>${escapeHtml(b.owner)}: ${escapeHtml(b.label)}${b.count != null ? ` (${b.count})` : ""}</li>`).join("")}</ul>
-      </div>`;
+  // Общий диалог V2 вместо системного confirm()/alert() и вместо
+  // встроенного в форму блока (задача 7 — один и тот же визуальный язык
+  // подтверждения, что и в "Контрагентах", где вложенность <details> не
+  // оставляет места для инлайн-блока).
+  async function requestDelete(type, id) {
+    let plan;
+    try { plan = await api.get(`/dictionaries/${type}/${id}/delete-plan`); }
+    catch (err) {
+      state.status_msg = err?.detail || err?.message || "Не удалось получить сведения об удалении";
+      await render();
       return;
     }
-    planBox.innerHTML = `<div class="v2-dialog-inline">
-      <p>Удалить «${escapeHtml(selectedRecord()?.name || "")}»?</p>
-      <div class="v2-inline">${btn("Отмена", 'id="po-delete-cancel"')}${btn("Удалить", 'id="po-delete-confirm"', true)}</div>
-      <div class="v2-auth-error" id="po-delete-error"></div>
-    </div>`;
-    planBox.querySelector("#po-delete-cancel").addEventListener("click", () => { planBox.innerHTML = ""; });
-    planBox.querySelector("#po-delete-confirm").addEventListener("click", async (e) => {
-      // e.currentTarget становится null после первого await (событие уже
-      // завершило диспетчеризацию) — забираем ссылку на кнопку ДО await,
-      // тем же приёмом, что и в users-access.js.
-      const button = e.currentTarget;
-      button.disabled = true;
-      try {
-        // "replace" — модель по умолчанию (app/dict_delete.py DeleteIn.mode).
-        // "merge" годится только записям с поддеревом на перенос ("adopt" в
-        // реестре видов); ни у проекта, ни у объекта такого поддерева нет —
-        // сервер отвечает 400 на merge даже когда переносить нечего.
-        await api.post(`/dictionaries/${type}/${id}/delete`, { replacements: {}, mode: "replace" });
-        state.selected = null; state.draft = null;
-        const ok = await ensureLoaded(true);
-        state.status_msg = !ok ? `${type === "project" ? "Проект" : "Объект"} удалён, но не удалось обновить список.` : `${type === "project" ? "Проект" : "Объект"} удалён.`;
-        await render();
-      } catch (err) {
-        planBox.querySelector("#po-delete-error").textContent = err?.detail || err?.message || "Не удалось удалить";
-        button.disabled = false;
-      }
-    });
+    if (plan.blockers && plan.blockers.length) {
+      await showInfoDialog(`Удалить нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`);
+      return;
+    }
+    const rec = type === "project" ? state.projects.find((r) => r.id === id) : state.objects.find((r) => r.id === id);
+    const confirmed = await showConfirmDialog(`Удалить «${rec?.name || ""}»?`, { confirmLabel: "Удалить" });
+    if (!confirmed) return;
+    // Пока идёт запрос — поля этой же формы блокируются: иначе правка,
+    // сделанная за то время, что подтверждение уже отправлено, а ответ ещё
+    // не пришёл, потерялась бы молча вместе с безусловным сбросом
+    // state.draft ниже (задача 3 — конфликтующие действия на время записи).
+    setFormFieldsDisabled(true);
+    try {
+      // "replace" — модель по умолчанию (app/dict_delete.py DeleteIn.mode).
+      // "merge" годится только записям с поддеревом на перенос ("adopt" в
+      // реестре видов); ни у проекта, ни у объекта такого поддерева нет —
+      // сервер отвечает 400 на merge даже когда переносить нечего.
+      await api.post(`/dictionaries/${type}/${id}/delete`, { replacements: {}, mode: "replace" });
+      // Успех подтверждён сервером — убираем запись из локальных списков
+      // точечно, без ожидания повторного GET (задача 4).
+      const list = type === "project" ? state.projects : state.objects;
+      const idx = list.findIndex((r) => r.id === id);
+      if (idx !== -1) list.splice(idx, 1);
+      if (state.selected?.type === type && state.selected.id === id) { state.selected = null; state.draft = null; }
+      const ok = await refreshListsBestEffort();
+      const label = type === "project" ? "Проект" : "Объект";
+      state.status_msg = !ok ? `${label} удалён, но обновить данные не удалось.` : `${label} удалён.`;
+      await render();
+    } catch (err) {
+      state.status_msg = err?.detail || err?.message || "Не удалось удалить";
+      setFormFieldsDisabled(false);
+      await render();
+    }
   }
 
   function populateFilterOptions() {
@@ -426,6 +492,7 @@ export function mountProjectsObjects(container, ctx) {
     await renderForm();
     renderFooter();
     if (state.status_msg) { status.textContent = state.status_msg; state.status_msg = ""; }
+    renderListRefreshRetry();
     body.querySelector("#po-search").addEventListener("input", (e) => {
       clearTimeout(body._searchTimer);
       const value = e.target.value;
