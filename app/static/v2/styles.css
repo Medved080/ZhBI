@@ -403,6 +403,16 @@ label.v2-field textarea { font-size: 14px; color: var(--ink); width: 100%; font-
 }
 .v2-dialog-inline ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
 
+/* Контрагент: договор → спецификация → контракт — вложенные <details>, без
+   собственных теней (нет "карточки на карточке"), только отступ и рамка
+   слева обозначают уровень. */
+.v2-agreement { border-left: 2px solid var(--line); padding-left: 14px; margin: 10px 0; }
+.v2-agreement > summary { cursor: pointer; font-size: 13px; padding: 6px 0; list-style: none; }
+.v2-agreement > summary::-webkit-details-marker { display: none; }
+.v2-agreement > summary::before { content: "▸ "; color: var(--muted); }
+.v2-agreement[open] > summary::before { content: "▾ "; }
+.v2-agreement-nested { margin-left: 4px; }
+
 @media (max-width: 720px) {
   .v2-container { padding: 0 16px; }
   .v2-cols { grid-template-columns: 1fr; }

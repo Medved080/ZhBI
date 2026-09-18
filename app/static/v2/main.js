@@ -1,12 +1,13 @@
 // Точка входа V2. Логин-гейт → шапка с возвратом в V1 → переключатель
 // разделов. Раздел «Пользователи и доступ» — пилот (df4da55); «Проекты и
-// объекты» — следующая перенесённая группа (см. отчёт). Остальные разделы
-// сюда сознательно не перенесены (см. Docs/OPEN.md) — открываются в
-// текущем интерфейсе.
+// объекты» и «Контрагенты» — следующая перенесённая группа (см. отчёт).
+// Остальные разделы сюда сознательно не перенесены (см. Docs/OPEN.md) —
+// открываются в текущем интерфейсе.
 import { api, ApiError } from "./api.js";
 import { renderLogin, renderChangePassword } from "./login.js";
 import { mountUsersAccess } from "./users-access.js";
 import { mountProjectsObjects } from "./projects-objects.js";
+import { mountCounterparties } from "./counterparties.js";
 
 const root = document.getElementById("v2-root");
 
@@ -100,10 +101,15 @@ function renderShell(user, permissions) {
     // тоже открывается только при уровне "write".
     projects: permissions.features?.projects || "none",
     dictDelete: permissions.features?.dict_delete || "none",
+    // "Контрагенты" — тот же самый паттерн: write-гейт на весь раздел
+    // (index.html: data-feature-kind="write" у пункта меню), read-only
+    // режима у экрана в V1 нет.
+    counterparties: permissions.features?.counterparties || "none",
   };
   const canReadUsers = isSystemAdmin || perms.users !== "none";
   const canReadRoles = isSystemAdmin || perms.roles !== "none";
   const canOpenProjects = isSystemAdmin || perms.projects === "write";
+  const canOpenCounterparties = isSystemAdmin || perms.counterparties === "write";
   // Список ролей (ключ+имя) для подписей в "Доступе к объектам" и
   // "Проверке доступа" — часть ЛЮБОГО ответа /me/permissions, не требует
   // отдельного гранта "roles" (в отличие от GET /roles).
@@ -117,6 +123,10 @@ function renderShell(user, permissions) {
     {
       key: "projects-objects", title: "Проекты и объекты", available: canOpenProjects,
       mount: (el) => mountProjectsObjects(el, { api, user, perms }),
+    },
+    {
+      key: "counterparties", title: "Контрагенты", available: canOpenCounterparties,
+      mount: (el) => mountCounterparties(el, { api, user, perms }),
     },
   ];
   const availableSections = sections.filter((s) => s.available);
@@ -148,7 +158,7 @@ function renderShell(user, permissions) {
   if (!availableSections.length) {
     content.innerHTML = `<div class="v2-note-page">
       <h3>Нет доступных разделов предпросмотра</h3>
-      <p class="v2-muted">Пока в предпросмотре есть «Пользователи и доступ» и «Проекты и объекты» — остальные открываются в текущем интерфейсе.</p>
+      <p class="v2-muted">Пока в предпросмотре есть «Пользователи и доступ», «Проекты и объекты» и «Контрагенты» — остальные открываются в текущем интерфейсе.</p>
       <p><a class="v2-link" href="/?ui=v1">← Открыть текущий интерфейс</a></p>
     </div>`;
     return;

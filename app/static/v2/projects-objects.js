@@ -361,7 +361,11 @@ export function mountProjectsObjects(container, ctx) {
     </div>`;
     planBox.querySelector("#po-delete-cancel").addEventListener("click", () => { planBox.innerHTML = ""; });
     planBox.querySelector("#po-delete-confirm").addEventListener("click", async (e) => {
-      e.currentTarget.disabled = true;
+      // e.currentTarget становится null после первого await (событие уже
+      // завершило диспетчеризацию) — забираем ссылку на кнопку ДО await,
+      // тем же приёмом, что и в users-access.js.
+      const button = e.currentTarget;
+      button.disabled = true;
       try {
         // "replace" — модель по умолчанию (app/dict_delete.py DeleteIn.mode).
         // "merge" годится только записям с поддеревом на перенос ("adopt" в
@@ -374,7 +378,7 @@ export function mountProjectsObjects(container, ctx) {
         await render();
       } catch (err) {
         planBox.querySelector("#po-delete-error").textContent = err?.detail || err?.message || "Не удалось удалить";
-        e.currentTarget.disabled = false;
+        button.disabled = false;
       }
     });
   }
