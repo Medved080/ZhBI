@@ -11,7 +11,7 @@
 // ошибки записи и ошибки последующего обновления экрана, единая
 // центрированная колонка заголовка/вкладок/содержимого/подвала, поиск
 // объекта в «Проверке доступа» вместо плоского списка.
-import { resolveDirty as sharedResolveDirty } from "./dialogs.js";
+import { resolveDirty as sharedResolveDirty, showConfirmDialog } from "./dialogs.js";
 
 const ROLE_LABELS = { user: "Пользователь", view: "Просмотр", admin: "Администратор" };
 const LEVELS = ["none", "read", "write"];
@@ -70,7 +70,11 @@ export function mountUsersAccess(container, ctx) {
     rolesBusy: false,           // идёт reorder/rename/delete — блокирует повтор
     check: { userId: null, objectId: null, objectQuery: "", pickerOpen: false },
     status: "",
-    retryRefresh: null,         // задать, когда запись прошла, а последующее чтение — нет
+    // Задача 5 (2026-09-19): было ОДНИМ слотом retryRefresh — успешное
+    // чтение затирало сведения о ДРУГОМ, ещё неудавшемся ("запись успешна
+    // → роли не прочитались → матрица доступа прочиталась" теряло память о
+    // ролях). Map — независимый учёт по логическому имени чтения.
+    pendingRefreshes: new Map(), // key ("roles"|"users"|"accessMatrix") -> fn
   };
 
   // ---------- данные (общий кэш на время жизни модуля) ----------
@@ -109,11 +113,13 @@ export function mountUsersAccess(container, ctx) {
   // Запись прошла, но последующее чтение для обновления экрана — нет:
   // это НЕ провал операции, а отдельная, более мягкая проблема ("Запись
   // выполнена, обновление экрана не удалось"). Возвращает true/false, при
-  // false — сохраняет саму функцию в state.retryRefresh, чтобы предложить
-  // повторить именно ЧТЕНИЕ, а не записывающую операцию заново.
-  async function tryRefresh(fn) {
-    try { await fn(); state.retryRefresh = null; return true; }
-    catch (err) { state.retryRefresh = fn; return false; }
+  // false — сохраняет саму функцию в state.pendingRefreshes ПОД СВОИМ
+  // КЛЮЧОМ, чтобы предложить повторить именно ЧТЕНИЕ (и именно то,
+  // которое не удалось), а не записывающую операцию заново и не все чтения
+  // разом. key обязателен — без него независимый учёт не имеет смысла.
+  async function tryRefresh(fn, key) {
+    try { await fn(); state.pendingRefreshes.delete(key); return true; }
+    catch (err) { state.pendingRefreshes.set(key, fn); return false; }
   }
 
   // ---------- свод доступа — та же арифметика, что в V1 (app.js:
@@ -220,6 +226,21 @@ export function mountUsersAccess(container, ctx) {
   }
 
   async function requestLeave() {
+    // roleFormDirty — приоритетно и ОТДЕЛЬНО от currentDirty (раздел 5,
+    // повторная живая проверка issue 2.1): клик по ячейке черновика прав,
+    // пока форма переименования/создания роли открыта, подменяет currentDirty
+    // на черновик и раньше делал текст формы невидимым для этого сторожа —
+    // переключение верхней вкладки ("Пользователи"/"Проверка доступа") молча
+    // уничтожало разметку формы вместе с непрочитанным вводом. Черновик прав
+    // (state.rolesDraft) от этого не страдает и здесь НЕ спрашивается —
+    // он состояние модуля, а не разметки, и переживает переключение вкладок
+    // (см. комментарий у markRolesDraftDirty); увидит его либо возврат на
+    // вкладку "Роли", либо beforeunload/переход в V1 через hasUnsavedChanges().
+    if (roleFormDirty) {
+      const ok = await resolveDirty(roleFormDirty);
+      if (ok) clearRoleFormDirty();
+      return ok;
+    }
     if (!currentDirty) return true;
     const ok = await resolveDirty(currentDirty);
     if (ok) clearDirtyState();
@@ -289,21 +310,31 @@ export function mountUsersAccess(container, ctx) {
     if (b) goto(b.dataset.page);
   });
 
+  const REFRESH_LABELS = { roles: "роли", users: "пользователи", accessMatrix: "доступ" };
+
   function renderStatusRetry() {
     status.textContent = state.status;
     const old = footActions.parentElement.querySelector("#ua-status-retry");
     if (old) old.remove();
-    if (state.retryRefresh) {
+    if (state.pendingRefreshes.size) {
       const retryBtn = document.createElement("button");
       retryBtn.type = "button";
       retryBtn.id = "ua-status-retry";
       retryBtn.className = "v2-link";
       retryBtn.style.marginLeft = "8px";
-      retryBtn.textContent = "Обновить";
+      const names = [...state.pendingRefreshes.keys()].map((k) => REFRESH_LABELS[k] || k).join(", ");
+      retryBtn.textContent = `Обновить (не обновлено: ${names})`;
       retryBtn.addEventListener("click", async () => {
-        const fn = state.retryRefresh;
-        const ok = await tryRefresh(fn);
-        state.status = ok ? "Обновлено" : state.status;
+        // Только чтение — ни один fn в pendingRefreshes не бывает записью
+        // (см. tryRefresh: туда попадают исключительно ensureXxx). Проходим
+        // по СНИМКУ ключей: то, что провалится СНОВА, tryRefresh сам вернёт
+        // в pendingRefreshes — новые правки пользователя тем временем не
+        // трогаем, retry не пишет ничего, кроме уже читаемого им кэша.
+        retryBtn.disabled = true;
+        const entries = [...state.pendingRefreshes.entries()];
+        let allOk = true;
+        for (const [key, fn] of entries) { allOk = (await tryRefresh(fn, key)) && allOk; }
+        state.status = allOk ? "Обновлено" : state.status;
         await render();
       });
       status.after(retryBtn);
@@ -424,7 +455,7 @@ export function mountUsersAccess(container, ctx) {
     // открыть карточку можно, даже если ensureUsers(true) ниже не удастся.
     state.users = state.users ? [...state.users, created] : [created];
     clearDirtyState();
-    await tryRefresh(() => ensureAccessMatrix(true));
+    await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
     await openUser(created.id);
   }
 
@@ -581,11 +612,11 @@ export function mountUsersAccess(container, ctx) {
       Object.assign(u, updated);
       if (state.pendingPassword === sentPassword) state.pendingPassword = null;
       syncMustChangeFromServer();
-      await tryRefresh(() => ensureUsers(true));
+      await tryRefresh(() => ensureUsers(true), "users");
     }
     if (!state.cardDirty && !state.pendingPassword) clearDirtyState();
     else trackCardDirtyState(); // новая правка пришла во время записи — сторож остаётся активным
-    const ok = await tryRefresh(() => ensureAccessMatrix(true));
+    const ok = await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
     state.status = !ok ? "Изменения сохранены, но не удалось обновить отображение."
       : (state.cardDirty || state.pendingPassword) ? "Сохранено. Есть новые несохранённые изменения."
       : "Сохранено";
@@ -797,7 +828,7 @@ export function mountUsersAccess(container, ctx) {
           if (!state.cardDirty) { clearDirtyState(); footActions.innerHTML = ""; }
         }
         state.status = "Пароль обновлён";
-        await tryRefresh(() => ensureUsers(true));
+        await tryRefresh(() => ensureUsers(true), "users");
         renderStatusRetry();
         // Перерисовать панель: "Требовать смену пароля" в блоке "Способ
         // входа" — ДРУГОЙ чекбокс, чем тот, что был только что отправлен
@@ -879,7 +910,7 @@ export function mountUsersAccess(container, ctx) {
     } else {
       markAccessDirty();
     }
-    const ok = await tryRefresh(() => ensureAccessMatrix(true));
+    const ok = await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
     state.status = !ok ? "Доступ сохранён, но не удалось обновить отображение."
       : state.access ? "Сохранено. Есть новые несохранённые изменения."
       : "Доступ сохранён";
@@ -1084,7 +1115,7 @@ export function mountUsersAccess(container, ctx) {
     } else {
       clearDirtyState();
     }
-    const ok = await tryRefresh(() => ensureRoles(true));
+    const ok = await tryRefresh(() => ensureRoles(true), "roles");
     state.status = !ok ? "Разрешения сохранены, но не удалось обновить отображение."
       : state.rolesDraft.size ? `Сохранено. Есть новые несохранённые ячейки: ${state.rolesDraft.size}.`
       : "Разрешения сохранены";
@@ -1138,8 +1169,12 @@ export function mountUsersAccess(container, ctx) {
     // Issue 2.1: renderRoles() вызывается напрямую (не через render()), сама
     // статус-строку не сбрасывает — без else тут текст "Есть несохранённые
     // изменения" от отказанной (discard) формы переименования/создания
-    // остался бы висеть после перехода на другую роль.
-    if (state.rolesDraft.size) renderRolesFooter(); else { footActions.innerHTML = ""; status.textContent = ""; }
+    // остался бы висеть после перехода на другую роль. Чистим через
+    // renderStatusRetry(), а не жёстким "" (задача 5, живая проверка): она
+    // восстанавливает АКТУАЛЬНОЕ state.status и кнопку "Обновить" — жёсткая
+    // "" стирала сообщение вида "Роль удалена, но не удалось обновить
+    // отображение.", выставленное МОМЕНТОМ РАНЬШЕ тем же render()-проходом.
+    if (state.rolesDraft.size) renderRolesFooter(); else { footActions.innerHTML = ""; renderStatusRetry(); }
   }
 
   function renderRolesFooter() {
@@ -1203,7 +1238,7 @@ export function mountUsersAccess(container, ctx) {
       if (!name) { errorEl.textContent = "Введите название"; throw new Error("Введите название"); }
       const created = await api.post("/roles", { name });
       clearRoleFormDirty();
-      await tryRefresh(() => ensureRoles(true));
+      await tryRefresh(() => ensureRoles(true), "roles");
       state.rolesUi.selected = created.key;
       el.innerHTML = "";
       await render();
@@ -1240,7 +1275,7 @@ export function mountUsersAccess(container, ctx) {
       // Порядок не меняет состав ролей/разделов, но черновик мог ссылаться
       // на роль, чья карточка сейчас перерисуется — сбрасываем на всякий
       // случай тем же приёмом, что и после переименования/удаления в V1.
-      const ok = await tryRefresh(() => ensureRoles(true));
+      const ok = await tryRefresh(() => ensureRoles(true), "roles");
       state.status = ok ? "" : "Порядок сохранён, но не удалось обновить отображение.";
     } catch (err) {
       state.status = err.detail || "Не удалось изменить порядок";
@@ -1307,7 +1342,7 @@ export function mountUsersAccess(container, ctx) {
         row.classList.toggle("v2-perm-dirty", state.rolesDraft.has(key));
         row.querySelectorAll("[data-perm]").forEach((seg) =>
           seg.setAttribute("aria-pressed", String(seg.dataset.level === level)));
-        if (state.rolesDraft.size) renderRolesFooter(); else { footActions.innerHTML = ""; status.textContent = ""; }
+        if (state.rolesDraft.size) renderRolesFooter(); else { footActions.innerHTML = ""; renderStatusRetry(); }
       }));
     }
   }
@@ -1321,7 +1356,7 @@ export function mountUsersAccess(container, ctx) {
       if (!name) { errorEl.textContent = "Введите название"; throw new Error("Введите название"); }
       await api.patch(`/roles/${role.key}`, { name });
       clearRoleFormDirty();
-      await tryRefresh(() => ensureRoles(true));
+      await tryRefresh(() => ensureRoles(true), "roles");
       host.innerHTML = "";
       await render();
     }
@@ -1351,7 +1386,7 @@ export function mountUsersAccess(container, ctx) {
     catch (err) { state.status = err.detail || "Не удалось получить сведения об удалении"; return render(); }
     const msg = `Удалить роль «${role.name}»? Будет снята у пользователей: ${plan.users}, `
       + `настроенных разрешений в матрице: ${plan.permissions}, выданных грантов: ${plan.granted}.`;
-    if (!confirm(msg)) return;
+    if (!(await showConfirmDialog(msg, { confirmLabel: "Удалить" }))) return;
     state.rolesBusy = true;
     // Запись — отдельно от последующего обновления экрана: если сама
     // операция не прошла, это единственная настоящая ошибка ниже.
@@ -1371,11 +1406,16 @@ export function mountUsersAccess(container, ctx) {
     }
     if (state.rolesDraft.size) markRolesDraftDirty(); else clearDirtyState();
     state.access = null; // редактор доступа мог кэшировать её грант
-    let refreshOk = await tryRefresh(() => ensureRoles(true));
+    // Задача 5, контрольный сценарий: запись прошла → чтение ролей не
+    // удалось → чтение матрицы доступа удалось. С единым слотом второй
+    // успех стирал бы память о первом отказе (issue из ТЗ) — с Map по
+    // ключу оба остаются независимо видны в pendingRefreshes/кнопке
+    // "Обновить".
+    let refreshOk = await tryRefresh(() => ensureRoles(true), "roles");
     // Матрица доступа нужна только колонке "Доступ" в списке пользователей
     // (раздел "users") — если её не видно, даже не пытаемся: не даём
     // не относящейся к делу 403 выглядеть как провал удаления роли.
-    if (canReadUsers) refreshOk = (await tryRefresh(() => ensureAccessMatrix(true))) && refreshOk;
+    if (canReadUsers) refreshOk = (await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix")) && refreshOk;
     state.rolesUi.selected = state.roles?.roles?.[0]?.key ?? null;
     const deletedNote = plan.granted ? `Роль удалена, снято выдач: ${plan.granted}` : "Роль удалена";
     state.status = refreshOk ? deletedNote : `${deletedNote}, но не удалось обновить отображение.`;
