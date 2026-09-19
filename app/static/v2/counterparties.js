@@ -276,6 +276,34 @@ export function mountCounterparties(container, ctx) {
       const c = findContract(id);
       parts.push({ label: `контракт ${c && c.theme ? `«${c.theme}»` : `№${id}`}`, save: () => saveContractDraft(id), discard: () => { state.contractDrafts.delete(id); } });
     }
+    // "Два оставшихся дефекта" приёмки, раздел 1: неудачно сохранённые
+    // плановые даты — та же природа "несохранённого", что и любой другой
+    // черновик выше, а не отдельный обработчик у одной кнопки "←
+    // Контрагент" (requestLeaveContract). Один "part" на ВСЕ такие ошибки
+    // сразу (во всех контрактах, что есть в модуле) — общий диалог уже
+    // умеет перечислять несколько причин через parts.length>1 ниже.
+    const dateIssues = collectPlannedDateIssues();
+    if (dateIssues.length) {
+      parts.push({
+        label: dateIssues.length === 1 ? "плановая дата поставки (1 элемент)" : `плановые даты поставки (${dateIssues.length} элементов)`,
+        // Повтор — только явным решением "Сохранить и продолжить" в
+        // диалоге, который и вызывает этот save(); ничего не отправляется
+        // автоматически до этого клика.
+        save: async () => {
+          for (const issue of collectPlannedDateIssues()) {
+            await savePlannedDate(issue.contractId, issue.elementId, issue.pendingValue);
+          }
+          if (collectPlannedDateIssues().length) throw { message: "Не все плановые даты удалось сохранить повторно." };
+        },
+        // Отказ трогает ТОЛЬКО неподтверждённые значения (rowState) — уже
+        // записанные сервером даты лежат в entry.rows и этим не затрагиваются.
+        discard: () => {
+          for (const issue of collectPlannedDateIssues()) {
+            state.contractExpandedCache.get(issue.contractId)?.rowState.delete(issue.elementId);
+          }
+        },
+      });
+    }
     return parts;
   }
 
@@ -1075,7 +1103,10 @@ export function mountCounterparties(container, ctx) {
     if (!body.lines.length) { draft.error = "Добавьте хотя бы одну позицию (тип элемента или марка)"; throw { message: draft.error }; }
     const snapshot = contractDraftFieldsJson(draft);
     draft.saving = true;
-    contractOpLock = { kind: "save" };
+    // id:null — у ещё не созданного контракта нет реального id, под которым
+    // могла бы существовать запись в contractExpandedCache/rowState; поле
+    // здесь только ради единообразной формы { kind, id } (см. savePlannedDate).
+    contractOpLock = { kind: "save", id: null };
     lockContractWorkspace(true);
     draft._inFlight = (async () => {
       try {
@@ -1121,7 +1152,14 @@ export function mountCounterparties(container, ctx) {
     // Раздел 2 приёмки: сохранение и удаление/перенос ОДНОГО контракта
     // взаимно исключают друг друга — если сейчас идёт удаление (или его
     // выбор замены уже подтверждается), сохранение не начинается вовсе.
-    if (contractOpLock) throw { message: "Дождитесь завершения текущей операции с контрактом (удаление/перенос)." };
+    // draft.error выставлен ДО throw (не только сам throw) — иначе catch
+    // вызывающего кода перерисует форму пустым сообщением, ничего не
+    // объяснив пользователю (см. "два оставшихся дефекта" приёмки).
+    if (contractOpLock) { draft.error = "Дождитесь завершения текущей операции с контрактом (удаление/перенос)."; throw { message: draft.error }; }
+    // "Два оставшихся дефекта" приёмки, раздел 2: пока идёт запись хотя бы
+    // одной плановой даты ЭТОГО контракта, сохранение самого контракта не
+    // запускается — и наоборот (см. savePlannedDate).
+    if (contractHasPendingPlannedDateWrite(id)) { draft.error = "Дождитесь завершения записи плановой даты этого контракта и повторите."; throw { message: draft.error }; }
     draft.error = "";
     const before = findContract(id);
     const previousSpecId = before ? before.specification_id : draft.specificationId;
@@ -1130,7 +1168,7 @@ export function mountCounterparties(container, ctx) {
     if (!body.lines.length) { draft.error = "Добавьте хотя бы одну позицию (тип элемента или марка)"; throw { message: draft.error }; }
     const snapshot = contractDraftFieldsJson(draft);
     draft.saving = true;
-    contractOpLock = { kind: "save" };
+    contractOpLock = { kind: "save", id };
     lockContractWorkspace(true);
     draft._inFlight = (async () => {
       try {
@@ -1190,7 +1228,7 @@ export function mountCounterparties(container, ctx) {
   // означает, что запрос всё же дошёл и выполнился, а домой не доехал
   // только ответ.
   async function runContractDelete(id, replacements, onSuccess) {
-    contractOpLock = { kind: "delete" };
+    contractOpLock = { kind: "delete", id };
     lockContractWorkspace(true);
     try {
       await api.post(`/dictionaries/contract/${id}/delete`, { replacements, mode: "replace" });
@@ -1580,40 +1618,51 @@ export function mountCounterparties(container, ctx) {
     if (!key) return true;
     const isNew = key.startsWith("new:");
     const id = isNew ? Number(key.slice(4)) : Number(key.slice(5));
-    // Раздел 3 приёмки, п. 3.8: неудачно сохранённая плановая дата —
-    // ОТДЕЛЬНОЕ от черновика контракта состояние (пишется сразу, а не
-    // общей кнопкой "Сохранить"), но уход всё равно должен явно
-    // предупредить — иначе неотправленная правка молча теряется без следа.
-    if (!isNew) {
-      const expandedEntry = state.contractExpandedCache.get(id);
-      const failedIds = expandedEntry ? [...expandedEntry.rowState.entries()].filter(([, s]) => s.status === "error").map(([elId]) => elId) : [];
-      if (failedIds.length) {
-        const leave = await showConfirmDialog(
-          `Не удалось сохранить плановую дату у ${failedIds.length} элемент(ов) (вкладка «Развёрнуто»). Уйти и отказаться от этого ввода?`,
-          { confirmLabel: "Уйти и отказаться" },
-        );
-        if (!leave) return false;
-        for (const elId of failedIds) expandedEntry.rowState.delete(elId);
-      }
-    }
     const draft = isNew ? state.newContractForms.get(id) : state.contractDrafts.get(id);
-    if (!draft) return true;
-    const dirty = isNew || isContractDraftDirty(draft);
-    if (!dirty) return true;
-    const c = isNew ? null : findContract(id);
-    const label = isNew ? "новый контракт" : (c && c.theme ? `контракт «${c.theme}»` : "контракт");
-    const choice = await showUnsavedDialog(`В контракте есть несохранённые изменения: ${label}.`);
-    if (choice === "cancel") return false;
+    const draftDirty = !!draft && (isNew || isContractDraftDirty(draft));
+    // "Два оставшихся дефекта" приёмки, раздел 1: те же плановые даты, что
+    // видит общий collectPlannedDateIssues()/collectDirtyParts(), отфильтрованные
+    // по ЭТОМУ контракту — "выход из редактора" именно этого контракта не
+    // обязан спрашивать про ошибки ДРУГИХ, уже закрытых контрактов (те
+    // ловит общий requestLeave() при уходе с карточки/переключении раздела).
+    const dateIssues = isNew ? [] : collectPlannedDateIssues().filter((iss) => iss.contractId === id);
+    if (!draftDirty && !dateIssues.length) return true;
+
+    // ОДИН диалог на ОБА повода разом — раньше плановые даты и черновик
+    // контракта спрашивались ДВУМЯ последовательными диалогами, и "Уйти и
+    // отказаться" на первом уже необратимо стирал неподтверждённые даты
+    // ДО того, как пользователь успевал ответить на второй; если он там
+    // всё-таки выбирал "Остаться", даты были уже потеряны. Одним решением
+    // на обе части исключает эту гонку — до финального выбора состояние
+    // не трогается вовсе.
+    const labelParts = [];
+    if (dateIssues.length) labelParts.push(dateIssues.length === 1 ? "плановая дата поставки (1 элемент)" : `плановые даты поставки (${dateIssues.length} элементов)`);
+    if (draftDirty) {
+      const c = isNew ? null : findContract(id);
+      labelParts.push(isNew ? "новый контракт" : (c && c.theme ? `контракт «${c.theme}»` : "контракт"));
+    }
+    const choice = await showUnsavedDialog(`В контракте есть несохранённые изменения: ${labelParts.join(", ")}.`);
+    if (choice === "cancel") return false; // "Остаться" — НИЧЕГО не трогаем: ни черновик, ни неподтверждённые даты
     if (choice === "discard") {
-      if (isNew) state.newContractForms.delete(id); else state.contractDrafts.delete(id);
+      // Отказ — теперь, когда решение ОКОНЧАТЕЛЬНОЕ, применяем обе части
+      // сразу; неподтверждённые (не дошедшие до сервера) значения — не
+      // жалко, уже записанные сервером даты (entry.rows) не трогаем.
+      for (const iss of dateIssues) state.contractExpandedCache.get(iss.contractId)?.rowState.delete(iss.elementId);
+      if (draftDirty) { if (isNew) state.newContractForms.delete(id); else state.contractDrafts.delete(id); }
       return true;
     }
-    try {
-      if (isNew) await submitNewContract(id); else await saveContractDraft(id);
-      return true;
-    } catch (err) {
-      return false; // ошибка уже в draft.error, форма остаётся открытой (см. вызывающий renderContractFooter)
+    // "Сохранить и продолжить" — явное действие пользователя, поэтому
+    // повтор неудачных дат здесь разрешён (не автоматический фоновый повтор).
+    let anyFailed = false;
+    for (const iss of dateIssues) {
+      await savePlannedDate(iss.contractId, iss.elementId, iss.pendingValue);
     }
+    if (collectPlannedDateIssues().some((iss) => iss.contractId === id)) anyFailed = true;
+    if (draftDirty) {
+      try { if (isNew) await submitNewContract(id); else await saveContractDraft(id); }
+      catch (err) { anyFailed = true; } // ошибка уже в draft.error, форма остаётся открытой
+    }
+    return !anyFailed;
   }
 
   async function openContractWorkspace(key) {
@@ -1764,6 +1813,9 @@ export function mountCounterparties(container, ctx) {
   // (задача 4В) ----------
   async function requestDeleteContract(id, onSuccess) {
     if (contractOpLock) { await showInfoDialog("Дождитесь завершения текущей операции с контрактом."); return; }
+    // "Два оставшихся дефекта" приёмки, раздел 2: пока идёт запись плановой
+    // даты хотя бы одного изделия этого контракта, удаление не запускается.
+    if (contractHasPendingPlannedDateWrite(id)) { await showInfoDialog("Дождитесь завершения записи плановой даты этого контракта и повторите."); return; }
     if (state.contractDeleteReplacement) return; // пикер уже открыт — вторая копия не нужна
     if (deleteRequestInFlight) return; // тот же клик, пока читаем delete-plan/candidates или ждём диалог
     deleteRequestInFlight = true;
@@ -1804,6 +1856,11 @@ export function mountCounterparties(container, ctx) {
       const confirmed = await showConfirmDialog(`Удалить контракт?${consequences ? " " + consequences : ""}`, { confirmLabel: "Удалить" });
       if (!confirmed) return;
       if (contractOpLock) { await showInfoDialog("Дождитесь завершения текущей операции с контрактом."); return; } // могло начаться, пока ждали диалог
+      // Пока showConfirmDialog ждал ответа, страница уже была заблокирована
+      // модальным бэкдропом — но GET delete-plan ВЫШЕ (до диалога) шёл ещё
+      // при интерактивной странице, и запись плановой даты могла начаться
+      // именно в этом окне; перепроверяем перед самой записью.
+      if (contractHasPendingPlannedDateWrite(id)) { await showInfoDialog("Дождитесь завершения записи плановой даты этого контракта и повторите."); return; }
       try {
         await runContractDelete(id, {}, onSuccess);
       } catch (err) {
@@ -1817,6 +1874,15 @@ export function mountCounterparties(container, ctx) {
   async function confirmContractReplacement() {
     const rep = state.contractDeleteReplacement;
     if (!rep || rep.saving || contractOpLock) return;
+    // "Два оставшихся дефекта" приёмки, раздел 2: defense-in-depth — та же
+    // проверка, что и в requestDeleteContract, здесь на случай прямого
+    // вызова этой функции (не через кнопку пикера, которая и так
+    // недоступна благодаря lockContractWorkspace/wireContractTabsNav).
+    if (contractHasPendingPlannedDateWrite(rep.id)) {
+      rep.error = "Дождитесь завершения записи плановой даты этого контракта и повторите.";
+      renderContractRequisites();
+      return;
+    }
     rep.saving = true; rep.error = "";
     renderContractRequisites(); // "Перенос…", select/подтвердить/отмена пикера сразу недоступны (rep.saving в разметке)
     lockContractWorkspace(true, false); // и всё ОСТАЛЬНОЕ рабочее пространство тоже — реальный запрос уже пошёл
@@ -2207,6 +2273,38 @@ export function mountCounterparties(container, ctx) {
     return state.page === "contract" && state.contractKey === `edit:${id}` && state.contractTab === "expanded";
   }
 
+  // "Два оставшихся дефекта" приёмки, раздел 1: ЕДИНЫЙ источник состояния
+  // неудачно сохранённых плановых дат — сканирует ВСЕ контракты, чьё
+  // состояние есть в модуле (не только тот, что открыт сейчас), а не
+  // только текущее рабочее пространство. До этой правки его читал ТОЛЬКО
+  // requestLeaveContract() (уход именно ИЗ контракта) — общий requestLeave()
+  // и hasUnsavedChanges() (переключение раздела, переход в V1, закрытие
+  // страницы) ничего не знали про такие ошибки и пропускали уход молча.
+  function collectPlannedDateIssues() {
+    const issues = [];
+    for (const [contractId, entry] of state.contractExpandedCache) {
+      for (const [elementId, st] of entry.rowState) {
+        if (st.status === "error") issues.push({ contractId, elementId, pendingValue: st.pendingValue });
+      }
+    }
+    return issues;
+  }
+
+  // "Два оставшихся дефекта" приёмки, раздел 2: пока сохраняется/удаляется/
+  // переносится САМ контракт, новые записи плановой даты его изделий не
+  // запускаются, и наоборот (см. savePlannedDate/contractOpLock). Состояние
+  // привязано к contractId через entry в contractExpandedCache — завершение
+  // операции ОДНОГО контракта не может разблокировать другой, т.к. у
+  // каждого своя запись в этой Map.
+  function contractHasPendingPlannedDateWrite(contractId) {
+    const entry = state.contractExpandedCache.get(contractId);
+    if (!entry) return false;
+    for (const st of entry.rowState.values()) {
+      if (st.status === "saving") return true;
+    }
+    return false;
+  }
+
   // Плановая дата пишется СРАЗУ по изменению поля (та же семантика, что и
   // в V1), НЕЗАВИСИМО от черновика/кнопок "Сохранить"/"Отменить" контракта
   // — у каждой строки СВОЁ состояние {status: "saving"|"error", pendingValue,
@@ -2217,6 +2315,22 @@ export function mountCounterparties(container, ctx) {
   async function savePlannedDate(contractId, elementId, value) {
     const entry = state.contractExpandedCache.get(contractId);
     if (!entry) return;
+    // "Два оставшихся дефекта" приёмки, раздел 2: проверка ДО обращения к
+    // rowState и до первого await — если контракт сейчас сохраняется/
+    // удаляется/переносится (contractOpLock.id === этот контракт), новая
+    // запись даты не отправляется; вместо тихого игнорирования — понятная
+    // ошибка строки с тем же "Повторить", что и у обычного сетевого отказа
+    // (нельзя молча поставить действие в очередь без явного решения
+    // пользователя — повтор только по его клику).
+    if (contractOpLock && contractOpLock.id === contractId) {
+      const blockedSt = entry.rowState.get(elementId) || { status: "idle", pendingValue: value, error: "" };
+      blockedSt.status = "error";
+      blockedSt.pendingValue = value;
+      blockedSt.error = "Дождитесь завершения операции с контрактом (сохранение/удаление/перенос) и повторите.";
+      entry.rowState.set(elementId, blockedSt);
+      if (isExpandedTabStillActive(contractId)) renderContractExpandedTabContent(contractId);
+      return;
+    }
     const st = entry.rowState.get(elementId);
     if (!st || st.status === "saving") return; // п. 3.9 — не второй запрос по той же строке
     st.status = "saving"; st.pendingValue = value; st.error = "";
@@ -2272,10 +2386,17 @@ export function mountCounterparties(container, ctx) {
     }
     const contract = findContract(id);
     const remainingLines = (contract?.lines || []).filter((l) => l.remaining > 0);
+    // "Два оставшихся дефекта" приёмки, раздел 2, п. "Перерисовка таблицы
+    // после ответа другой строки не должна снимать действующую блокировку":
+    // ЛЮБОЙ повторный рендер этой вкладки (например, из-за ответа сервера
+    // по СОСЕДНЕЙ строке) обязан заново учитывать contractOpLock — иначе
+    // новые узлы `<input>` рождались бы уже БЕЗ disabled, поставленного
+    // ранее прямым обращением к DOM через lockContractWorkspace.
+    const lockedByContractOp = !!(contractOpLock && contractOpLock.id === id);
     const rowsHtml = entry.rows.map((r) => {
       const st = entry.rowState.get(r.id);
       const displayValue = st ? st.pendingValue : (r.planned_delivery_date || "");
-      const rowDisabled = !entry.canEdit || st?.status === "saving";
+      const rowDisabled = !entry.canEdit || st?.status === "saving" || lockedByContractOp;
       return `
       <tr>
         <td>№${r.id}${r.mark ? " · " + escapeHtml(r.mark) : ""}</td>
