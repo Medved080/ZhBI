@@ -285,10 +285,21 @@ export function mountProjectsObjects(container, ctx) {
     // координат запись остаётся разблокированной.
     state.coordsLocked = !!(rec && rec.lat !== null && rec.lat !== undefined);
     state.dirty = false;
+    state.draftBaseline = draftFingerprint(state.draft);
     clearDirtyState();
   }
 
+  // «Несохранённое» — это РАЗЛИЧИЕ между формой и подтверждённой записью, а не факт, что в поле что-то набирали:
+  // вернули значение руками — сторож и подвал снимаются. Числа и строки сравниваются одинаково (select даёт строку).
+  function draftFingerprint(d) {
+    return JSON.stringify(d, (k, v) => (v === null || v === undefined ? "" : (typeof v === "object" ? v : String(v))));
+  }
+
   function markDirty() {
+    if (draftFingerprint(state.draft) === state.draftBaseline) {
+      if (state.dirty) { state.dirty = false; clearDirtyState(); renderFooter(); }
+      return;
+    }
     state.dirty = true;
     setDirty({
       message: "В карточке есть несохранённые изменения.",
@@ -395,16 +406,30 @@ export function mountProjectsObjects(container, ctx) {
     clearDirtyState();
     const ok = await refreshListsBestEffort();
     state.status_msg = !ok ? "Сохранено, но обновить данные не удалось." : (wasNew ? "Добавлено." : "Сохранено.");
+    // Форма показывает то, что подтвердил сервер. Поля, изменённые ПОСЛЕ отправки (поле технически можно
+    // изменить, пока идёт запрос: автозаполнение, IME), не затираем — они остаются несохранёнными.
+    const draftNow = state.draft;
     initDraft();
+    if (JSON.stringify(draftNow) !== JSON.stringify(snapshot)) {
+      for (const key of Object.keys(draftNow)) {
+        if (JSON.stringify(draftNow[key]) !== JSON.stringify(snapshot[key])) state.draft[key] = draftNow[key];
+      }
+      state.dirty = true;
+      setDirty({ message: "В карточке есть несохранённые изменения.", save: saveOrThrow, discard: () => { initDraft(); } });
+      state.status_msg = "";
+    }
   }
 
   function renderTree() {
     const rows = [];
+    const filterActive = !!(state.query || (state.status && state.status !== "active") || state.smu || state.responsible);
     for (const p of state.projects) {
       const objs = objectsOf(p.id);
-      const projectMatches = matches(p, p.name);
+      // СМУ и ответственный — реквизиты ОБЪЕКТА (у проекта их нет): при таком фильтре проект остаётся в дереве
+      // только вместе с подошедшими объектами, а не как пустая «оболочка» (иначе фильтр ничего не сужает).
+      const objectOnlyFilter = !!(state.smu || state.responsible);
+      const projectMatches = !objectOnlyFilter && matches(p, p.name);
       const matchingObjects = objs.filter((o) => matches(o, p.name));
-      const filterActive = !!(state.query || (state.status && state.status !== "active") || state.smu || state.responsible);
       if (!projectMatches && !matchingObjects.length) continue;
       const expanded = filterActive || state.expanded.has(p.id);
       const sel = state.selected?.type === "project" && state.selected.id === p.id;
@@ -429,7 +454,8 @@ export function mountProjectsObjects(container, ctx) {
       }
     }
     if (!rows.length) {
-      body.querySelector("#po-tree").innerHTML = `<p class="v2-note">${state.query ? "Ничего не найдено." : "Здесь пока пусто — заведите проект кнопкой ниже."}</p>`;
+      // Пустой результат ФИЛЬТРА (поиск, статус, СМУ, ответственный) — это «ничего не найдено», а не «данных нет».
+      body.querySelector("#po-tree").innerHTML = `<p class="v2-note">${filterActive ? "Ничего не найдено." : "Здесь пока пусто — заведите проект кнопкой ниже."}</p>`;
     } else {
       body.querySelector("#po-tree").innerHTML = rows.join("");
     }

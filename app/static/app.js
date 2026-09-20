@@ -28082,7 +28082,48 @@ async function bootApp() {
   // пустой рабочей области выглядела бы как ошибка загрузки, да и человеку
   // после неё есть куда вернуться. Признак считает сервер (changelog_unseen
   // в /me) — клиенту не нужно тянуть весь журнал, чтобы это выяснить.
-  if (state.currentUser && state.currentUser.changelog_unseen) openChangelog();
+  const переходИзV2 = await applyStartupDeepLink();
+  if (state.currentUser && state.currentUser.changelog_unseen && !переходИзV2) openChangelog();
+}
+
+// Переход из нового интерфейса (V2) к конкретной сущности V1 (2026-09-20, приёмка V2: PO-23, UA-C-08).
+// Раньше V2 отправлял `/?ui=v1&object_id=…`, а V1 параметр не читал: человек попадал на прежний объект, а
+// ссылка «Диагностика и доступ к аккаунту» вела на главный экран. Параметры одноразовые — после разбора
+// стираются из адреса, перезагрузка страницы переход не повторяет. Права те же, что у обычного пути:
+// пункт меню «Пользователи и доступ» — `can("users","write")`, объект — из списка доступных пользователю.
+//   ?object_id=N                          — показать объект N;
+//   ?open=user-security&user_id=N         — форма пользователя N, вкладка «Вход и безопасность»
+//                                           (поиск в домене, сеансы, задать пароль, зайти под пользователем).
+// Возвращает true, если переход был запрошен (тогда автоматическое «Что нового» не перекрывает форму).
+async function applyStartupDeepLink() {
+  const params = new URLSearchParams(location.search);
+  const objectId = Number(params.get("object_id")) || null;
+  const open = params.get("open");
+  const userId = Number(params.get("user_id")) || null;
+  if (!objectId && !open) return false;
+  const остаются = new URLSearchParams();
+  if (params.get("ui")) остаются.set("ui", params.get("ui"));
+  history.replaceState(null, "", location.pathname + (остаются.toString() ? `?${остаются}` : ""));
+  try {
+    if (objectId) {
+      const объект = state.projects.flatMap((p) => p.objects).find((o) => o.id === objectId);
+      if (!объект) showToast("Объект недоступен или не найден — показан прежний", "warning");
+      else if (объект.id !== state.objectId) await switchObject(объект.id);
+    }
+    if (open === "user-security" && userId) {
+      if (!can("users", "write")) {
+        showToast("Форма пользователя открывается ролью «Пользователи и доступ» с правом изменения", "warning");
+      } else {
+        await openUsersAccessModal("users");
+        const пользователь = usersCache.find((u) => u.id === userId);
+        if (!пользователь) showToast("Пользователь не найден", "warning");
+        else await openUserEdit(пользователь, { tab: "security" });
+      }
+    }
+  } catch (e) {
+    showToast("Не удалось выполнить переход: " + e.message, "warning");
+  }
+  return true;
 }
 
 bootApp();

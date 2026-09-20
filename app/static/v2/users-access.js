@@ -446,6 +446,10 @@ export function mountUsersAccess(container, ctx) {
   }
 
   function markNewUserDirty(el) {
+    // Форма «грязная» только пока в ней что-то введено: стёрли — сторож снимается.
+    const filled = ["#nu-last", "#nu-first", "#nu-login"].some((sel) => (el.querySelector(sel)?.value || "").trim());
+    const roleChanged = !!el.querySelector("#nu-role") && el.querySelector("#nu-role").value !== "user"; // «Пользователь» — значение по умолчанию
+    if (!filled && !roleChanged) { clearDirtyState(); status.textContent = ""; return; }
     setDirty({
       message: "В форме нового пользователя есть введённые данные.",
       save: () => submitNewUser(el),
@@ -538,10 +542,9 @@ export function mountUsersAccess(container, ctx) {
 
   function currentUserBeingEdited() { return state.users.find((u) => u.id === state.selectedUserId); }
 
-  function initCardDraft() {
-    const u = currentUserBeingEdited();
-    if (!u) return;
-    state.cardDraft = {
+  // Черновик карточки из записи пользователя, ПОДТВЕРЖДЁННОЙ сервером.
+  function cardDraftFromUser(u) {
+    return {
       last_name: u.last_name, first_name: u.first_name || "", patronymic: u.patronymic || "",
       position: u.position || "", department: u.department || "", role: u.role,
       domain_login: u.domain_login, auth_method: u.auth_method || "local",
@@ -550,6 +553,12 @@ export function mountUsersAccess(container, ctx) {
       // с ТЕКУЩИМ значением, и пока его никто не тронул, PATCH шлёт его же.
       must_change_password: !!u.must_change_password,
     };
+  }
+
+  function initCardDraft() {
+    const u = currentUserBeingEdited();
+    if (!u) return;
+    state.cardDraft = cardDraftFromUser(u);
     state.cardDirty = false;
   }
 
@@ -562,6 +571,14 @@ export function mountUsersAccess(container, ctx) {
   }
 
   function markCardDirty() {
+    // «Несохранённое» — различие с подтверждённой записью, а не факт правки: вернули значения — сторож и подвал снимаются.
+    const u = currentUserBeingEdited();
+    const base = u ? cardDraftFromUser(u) : null;
+    if (base && Object.keys(base).every((k) => state.cardDraft[k] === base[k])) {
+      state.cardDirty = false;
+      if (!state.pendingPassword) { clearDirtyState(); footActions.innerHTML = ""; status.textContent = ""; }
+      return;
+    }
     const wasTracked = state.cardDirty || !!state.pendingPassword;
     state.cardDirty = true;
     trackCardDirtyState();
@@ -609,8 +626,15 @@ export function mountUsersAccess(container, ctx) {
         role: snapshot.role, auth_method: snapshot.auth_method, must_change_password: snapshot.must_change_password,
       });
       Object.assign(u, updated);
-      const stillMatchesSnapshot = Object.keys(snapshot).every((k) => snapshot[k] === state.cardDraft[k]);
-      if (stillMatchesSnapshot) state.cardDirty = false;
+      // Поля показывают то, что подтвердил сервер (клиент отправил значения без пробелов по краям, пустое — как
+      // «не указано»); поля, которые успели изменить ПОСЛЕ отправки, не затираем и оставляем несохранёнными.
+      const confirmed = cardDraftFromUser(u);
+      let keptNewer = false;
+      for (const key of Object.keys(confirmed)) {
+        if (snapshot[key] === state.cardDraft[key]) state.cardDraft[key] = confirmed[key];
+        else keptNewer = true;
+      }
+      if (!keptNewer) state.cardDirty = false;
     }
     if (state.pendingPassword) {
       // Та же защита: если поле пароля успели тронуть заново, пока шёл
@@ -675,6 +699,7 @@ export function mountUsersAccess(container, ctx) {
       await withNavGuard(async () => {
         if (!(await requestLeave())) return;
         state.editTab = b.dataset.tab;
+        state.status = ""; // «Сохранено» относилось к прежней вкладке — на другой оно выглядело бы подтверждением того, чего не было
         await render();
       });
     }));
@@ -697,6 +722,7 @@ export function mountUsersAccess(container, ctx) {
       initCardDraft();
       state.pendingPassword = null;
       clearDirtyState();
+      state.status = "";
       await render();
     });
     saveBtn.addEventListener("click", async () => {
@@ -776,16 +802,21 @@ export function mountUsersAccess(container, ctx) {
       <div class="v2-result">
         <h4>Диагностика и доступ к аккаунту</h4>
         <p class="v2-muted">Поиск в домене, список сеансов и вход «от имени пользователя» — доступны в текущем интерфейсе, в этот пилот пока не перенесены.</p>
-        <a class="v2-link" href="#" data-v1-link>Открыть в текущем интерфейсе →</a>
+        ${canWriteUsers
+          ? `<a class="v2-link" href="/?ui=v1&open=user-security&user_id=${u.id}" data-v1-link>Открыть в текущем интерфейсе →</a>
+             <p class="v2-note">Откроется форма этого пользователя, вкладка «Вход и безопасность».</p>`
+          : `<p class="v2-note">Доступно тем, у кого есть право изменять пользователей.</p>`}
       </div>
     `;
-    panel.querySelector("[data-v1-link]").addEventListener("click", async (e) => {
+    panel.querySelector("[data-v1-link]")?.addEventListener("click", async (e) => {
       e.preventDefault();
       // Та же блокировка, что у кнопки шапки: переход в V1 не должен
-      // скрыть результат записи, которая ещё выполняется.
-      if (api.hasPendingWrites()) return;
+      // скрыть результат записи, которая ещё выполняется — и молча не игнорируется.
+      if (api.hasPendingWrites()) { status.textContent = "Идёт сохранение — переход временно недоступен"; return; }
       if (!(await requestLeave())) return;
-      location.href = "/?ui=v1";
+      // V1 разбирает параметры при старте (app/static/app.js, applyStartupDeepLink): открывает форму именно
+      // этого пользователя на вкладке «Вход и безопасность», а не главный экран.
+      location.href = `/?ui=v1&open=user-security&user_id=${u.id}`;
     });
     if (canWriteUsers) {
       panel.querySelector("#sec-auth-method").addEventListener("change", (e) => {
@@ -895,9 +926,28 @@ export function mountUsersAccess(container, ctx) {
         grants: data.grants.map((g) => ({ project_id: g.project_id, object_id: g.object_id, role: g.role })),
         _userId: u.id,
       };
+      state.access._baseline = grantsFingerprint(state.access.grants);
       state.accessDirty = false;
       state.accessView = "summary";
     }
+  }
+
+  const grantsFingerprint = (grants) => grants.map((g) => `${g.project_id ?? ""}|${g.object_id ?? ""}|${g.role}`).sort().join(";");
+
+  // Правка чекбоксов: несохранённое — только пока набор назначений отличается от записанного на сервере.
+  function syncAccessDirty() {
+    const changed = grantsFingerprint(state.access.grants) !== state.access._baseline;
+    if (changed) {
+      markAccessDirty();
+      status.textContent = "Есть несохранённые изменения";
+    } else {
+      state.accessDirty = false;
+      clearDirtyState();
+      status.textContent = "";
+    }
+    const saveB = footActions.querySelector("#ua-access-save"), cancelB = footActions.querySelector("#ua-access-cancel");
+    if (saveB) saveB.disabled = !changed;
+    if (cancelB) cancelB.disabled = !changed;
   }
 
   function markAccessDirty() {
@@ -917,12 +967,14 @@ export function mountUsersAccess(container, ctx) {
     // дизейблены на это время — см. вызывающий код, — но сверка остаётся
     // подстраховкой, а не единственной защитой).
     const snapshot = JSON.stringify(state.access.grants);
+    const sentFingerprint = grantsFingerprint(state.access.grants);
     await api.put(`/users/${u.id}/access`, { grants: state.access.grants });
     if (JSON.stringify(state.access.grants) === snapshot) {
       state.accessDirty = false;
       state.access = null;
       clearDirtyState();
     } else {
+      state.access._baseline = sentFingerprint; // на сервере теперь то, что отправили; новая правка — различие с этим
       markAccessDirty();
     }
     const ok = await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
@@ -969,7 +1021,9 @@ export function mountUsersAccess(container, ctx) {
       });
       accessCancelBtn.addEventListener("click", async () => {
         if (accessCancelBtn.disabled) return;
-        state.access = null; state.accessDirty = false; clearDirtyState(); await render();
+        state.access = null; state.accessDirty = false; clearDirtyState();
+        state.status = ""; // отмена — не «Сохранено»: прежнее подтверждение к ней не относится
+        await render();
       });
     }
   }
@@ -1078,10 +1132,7 @@ export function mountUsersAccess(container, ctx) {
       const idx = state.access.grants.findIndex((g) => g.project_id === project_id && g.object_id === object_id && g.role === role);
       if (cb.checked && idx === -1) state.access.grants.push({ project_id, object_id, role });
       else if (!cb.checked && idx !== -1) state.access.grants.splice(idx, 1);
-      markAccessDirty();
-      status.textContent = "Есть несохранённые изменения";
-      footActions.querySelector("#ua-access-save")?.removeAttribute("disabled");
-      footActions.querySelector("#ua-access-cancel")?.removeAttribute("disabled");
+      syncAccessDirty();
       // Без перерисовки редактора: чекбокс уже показывает новое состояние, а
       // перестройка разметки унесла бы с него фокус (Пробел с клавиатуры).
     }));
@@ -1285,8 +1336,10 @@ export function mountUsersAccess(container, ctx) {
       <input id="role-new-name" aria-label="Название новой роли" placeholder="Название роли">
       ${btn("Создать", 'id="role-new-submit"', true)}${btn("Отмена", 'id="role-new-cancel"')}
       <span class="v2-auth-error" id="role-new-error"></span></div>`;
-    el.querySelector("#role-new-name").addEventListener("input", () =>
-      markRoleFormDirty(el, "В форме новой роли есть введённые данные.", submit));
+    el.querySelector("#role-new-name").addEventListener("input", (e) => {
+      if (e.target.value.trim()) markRoleFormDirty(el, "В форме новой роли есть введённые данные.", submit);
+      else { clearRoleFormDirty(); status.textContent = ""; }
+    });
     el.querySelector("#role-new-cancel").addEventListener("click", () => {
       clearRoleFormDirty();
       el.innerHTML = "";
@@ -1402,8 +1455,10 @@ export function mountUsersAccess(container, ctx) {
       <input id="role-rename-name" aria-label="Новое название роли" value="${escapeHtml(role.name)}">
       ${btn("Сохранить", 'id="role-rename-submit"', true)}${btn("Отмена", 'id="role-rename-cancel"')}
       <span class="v2-auth-error" id="role-rename-error"></span></div>`;
-    host.querySelector("#role-rename-name").addEventListener("input", () =>
-      markRoleFormDirty(host, "Переименование роли не сохранено.", submit));
+    host.querySelector("#role-rename-name").addEventListener("input", (e) => {
+      if (e.target.value.trim() !== role.name) markRoleFormDirty(host, "Переименование роли не сохранено.", submit);
+      else { clearRoleFormDirty(); status.textContent = ""; }
+    });
     host.querySelector("#role-rename-cancel").addEventListener("click", () => {
       clearRoleFormDirty();
       host.innerHTML = "";

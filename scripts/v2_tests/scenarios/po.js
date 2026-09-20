@@ -103,6 +103,42 @@ export const tests = [
       a.setValue(st, "archived");
       await a.settle(60);
       t.ok(a.$$("[data-project]").length < a.ctl.data.projects.length, "фильтр по статусу сужает список");
+      // СМУ / ответственный / комбинации: в дереве остаются ТОЛЬКО проекты с подошедшими объектами и сами эти объекты
+      a.setValue(st, "");
+      const objs = a.ctl.data.objects;
+      const ids = (list) => list.map((x) => String(x.id)).sort();
+      const shown = (sel) => a.$$(sel).map((el) => el.dataset.project || el.dataset.object).sort();
+      const smuId = objs.find((o) => o.smu_id != null).smu_id;
+      a.setValue(a.$("#po-smu-filter"), String(smuId));
+      await a.settle(80);
+      const bySmu = objs.filter((o) => o.smu_id === smuId);
+      t.eq(shown("[data-object]"), ids(bySmu), "СМУ: показаны ровно объекты этого СМУ");
+      t.eq(shown("[data-project]"), [...new Set(bySmu.map((o) => String(o.project_id)))].sort(), "СМУ: проекты без таких объектов из дерева ушли");
+      const respId = bySmu.find((o) => o.responsible_id != null).responsible_id;
+      a.setValue(a.$("#po-responsible-filter"), String(respId));
+      await a.settle(80);
+      const both = bySmu.filter((o) => o.responsible_id === respId);
+      t.eq(shown("[data-object]"), ids(both), "СМУ + ответственный: пересечение");
+      t.eq(shown("[data-project]"), [...new Set(both.map((o) => String(o.project_id)))].sort(), "СМУ + ответственный: проекты пересечения");
+      // сочетание, которому не отвечает ни один объект: понятный пустой результат, а не «данных нет»
+      let empty = null;
+      for (const s1 of new Set(objs.map((o) => o.smu_id).filter((v) => v != null))) {
+        for (const r1 of new Set(objs.map((o) => o.responsible_id).filter((v) => v != null))) {
+          if (!objs.some((o) => o.smu_id === s1 && o.responsible_id === r1)) { empty = [s1, r1]; break; }
+        }
+        if (empty) break;
+      }
+      t.ok(empty, "в данных стенда есть сочетание СМУ и ответственного без объектов");
+      a.setValue(a.$("#po-smu-filter"), String(empty[0]));
+      a.setValue(a.$("#po-responsible-filter"), String(empty[1]));
+      await a.settle(80);
+      t.eq(a.$$("[data-project]").length, 0, "пустое сочетание: проектов нет");
+      t.has(a.$("#po-tree").textContent, "Ничего не найдено", "пустое сочетание: «Ничего не найдено»");
+      t.notHas(a.$("#po-tree").textContent, "заведите проект", "пустой результат фильтра не выдаётся за отсутствие данных");
+      a.setValue(a.$("#po-smu-filter"), "");
+      a.setValue(a.$("#po-responsible-filter"), "");
+      await a.settle(80);
+      t.eq(a.$$("[data-project]").length >= total, true, "сброс фильтров возвращает дерево");
     },
   },
   {
@@ -475,6 +511,88 @@ export const tests = [
       }
       a.click(a.$("#po-save"));
       await waitFor(() => a.$("#po-status").textContent.includes("Сохранено"), { what: "успех после повторов" });
+    },
+  },
+  {
+    id: "PO-26", title: "Сохранение объекта: форма СРАЗУ показывает подтверждённое сервером (обрезанные пробелы), dirty снят, повторное открытие то же; ввод, внесённый во время запроса, не затирается",
+    async run(t) {
+      const a = await openApp();
+      await openPo(a);
+      await selectObject(a, 1);
+      const orig = a.ctl.data.objects.find((o) => o.id === 1).name;
+      a.setValue(a.$("#pf-name"), `   ${orig} (правка)   `);
+      a.setValue(a.$("#pf-description"), "  описание с пробелами  ");
+      await waitFor(() => a.$("#po-save"), { what: "подвал" });
+      a.click(a.$("#po-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/objects/1") === 1, { what: "PATCH" });
+      await waitFor(() => !a.$("#po-save"), { what: "подвал снят" });
+      await a.settle(80);
+      const entry = a.ctl.log.find((e) => e.method === "PATCH" && e.path.includes("/objects/1"));
+      t.eq([entry.response.name, entry.response.description], [`${orig} (правка)`, "описание с пробелами"], "1) ответ сервера: пробелы по краям убраны");
+      t.eq([a.$("#pf-name").value, a.$("#pf-description").value], [`${orig} (правка)`, "описание с пробелами"], "2) форма сразу показывает подтверждённое сервером");
+      t.has(a.$("#po-status").textContent, "Сохранено", "3) есть подтверждение");
+      t.notHas(a.$("#po-status").textContent, "несохранённые", "4) статус не «есть несохранённые изменения»");
+      const unload = new a.win.Event("beforeunload", { cancelable: true });
+      a.win.dispatchEvent(unload);
+      t.ok(!unload.defaultPrevented, "4) страж закрытия страницы не видит несохранённого");
+      a.click(a.$("[data-object=\"2\"]") || a.$$("[data-object]").find((el) => el.dataset.object !== "1"));
+      await a.settle(150);
+      t.ok(!a.dialog(), "4) при смене записи ложного предупреждения нет");
+      await selectObject(a, 1);
+      t.eq([a.$("#pf-name").value, a.$("#pf-description").value], [`${orig} (правка)`, "описание с пробелами"], "5) после повторного открытия те же значения");
+      // более новый ввод во время запроса
+      a.setValue(a.$("#pf-description"), "первое значение");
+      await waitFor(() => a.$("#po-save"), { what: "подвал" });
+      const hold = a.ctl.hold("PATCH /objects/1");
+      a.click(a.$("#po-save"));
+      await a.settle(60);
+      const d = a.$("#pf-description"); d.disabled = false;
+      a.setValue(d, "написано во время запроса");
+      hold.release();
+      await waitFor(() => a.ctl.count("PATCH", "/objects/1") === 2, { what: "второй PATCH" });
+      await a.settle(200);
+      t.eq(a.ctl.data.objects.find((o) => o.id === 1).description, "первое значение", "6) сервер подтвердил отправленное");
+      t.eq(a.$("#pf-description").value, "написано во время запроса", "6) более новый ввод не затёрт");
+      t.ok(a.$("#po-save"), "6) «Сохранить» на месте — введённое ещё не сохранено");
+      t.has(a.$("#po-status").textContent, "несохранённые", "6) статус честно говорит, что есть несохранённое");
+      a.click(a.$("#po-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/objects/1") === 3 && !a.$("#po-save"), { what: "третий PATCH" });
+      await a.settle(80);
+      t.eq(a.ctl.data.objects.find((o) => o.id === 1).description, "написано во время запроса", "6) новое значение сохранено следующим запросом");
+    },
+  },
+  {
+    id: "PO-27", title: "Несохранённое — это различие с записью: вернули значение руками (текст, список, координата) — подвал, статус и сторож ухода сняты",
+    async run(t) {
+      const a = await openApp();
+      await openPo(a);
+      await selectObject(a, 1);
+      const obj = a.ctl.data.objects.find((o) => o.id === 1);
+      const unload = () => { const e = new a.win.Event("beforeunload", { cancelable: true }); a.win.dispatchEvent(e); return e.defaultPrevented; };
+      t.ok(!unload(), "до правки предупреждения нет");
+      a.setValue(a.$("#pf-name"), obj.name + "!");
+      await waitFor(() => a.$("#po-save"), { what: "подвал после правки" });
+      t.ok(unload(), "после правки сторож закрытия страницы включён");
+      a.setValue(a.$("#pf-name"), obj.name);
+      await a.settle(60);
+      t.ok(!a.$("#po-save"), "значение возвращено — «Сохранить» ушла из подвала");
+      t.notHas(a.$("#po-status").textContent, "несохранённые", "статус не «есть несохранённые изменения»");
+      t.ok(!unload(), "значение возвращено — сторож закрытия страницы снят");
+      // список: другое значение и обратно (select даёт строку, запись хранит число)
+      const other = a.$$("#pf-smu option").map((o) => o.value).find((v) => v && v !== String(obj.smu_id ?? ""));
+      a.setValue(a.$("#pf-smu"), other);
+      await waitFor(() => a.$("#po-save"), { what: "подвал после смены СМУ" });
+      a.setValue(a.$("#pf-smu"), String(obj.smu_id ?? ""));
+      await a.settle(60);
+      t.ok(!a.$("#po-save") && !unload(), "СМУ возвращено — несохранённого нет");
+      // координата: тот же текст, что в записи
+      a.setValue(a.$("#pf-lat"), String(obj.lat));
+      await a.settle(60);
+      t.ok(!a.$("#po-save") && !unload(), "координата набрана тем же значением — несохранённого нет");
+      // уход на другую запись — без диалога
+      a.click(a.$$("[data-object]").find((el) => el.dataset.object !== "1"));
+      await a.settle(150);
+      t.ok(!a.dialog(), "смена записи — ложного диалога нет");
     },
   },
   {

@@ -23,9 +23,9 @@ ALIASES = {
     "SH-12": ["PO-13"], "SH-20": ["SH-20"], "SH-07": ["SH-07", "SH-19"],
     "UA-U-10": ["UA-C-01"], "UA-K-03": ["UA-K-02"], "UA-K-04": ["UA-K-02"],
     "UA-C-03": ["UA-C-03"], "CP-L-09": ["CP-L-09"], "CP-P-03": ["CP-P-02"],
-    "CP-A-06": ["CP-A-06", "CP-S-01"], "CP-S-02": ["CP-S-01"], "CP-S-03": ["CP-S-01", "CP-W-16"],
-    "CP-K-02": ["CP-K-01"], "CP-W-06": ["CP-W-05"], "CP-W-17": ["CP-REG-10"],
-    "CP-W-18": ["CP-REG-02", "CP-W-14"], "CP-REG-03": ["CP-REG-02", "CP-REG-06"],
+    "CP-A-06": ["CP-A-06", "CP-S-01"], "CP-W-05": ["CP-W-05", "CP-W-05b"], "CP-S-02": ["CP-S-01"], "CP-S-03": ["CP-S-01", "CP-W-16"],
+    "CP-K-02": ["CP-K-01"], "CP-W-06": ["CP-W-06", "CP-W-06b"], "CP-W-17": ["CP-REG-10"],
+    "CP-W-18": ["CP-W-18", "CP-REG-02", "CP-W-14"], "CP-REG-03": ["CP-REG-02", "CP-REG-06"],
     "X-ERR-01": ["UA-U-08", "UA-C-03", "UA-A-09", "PO-18", "PO-20", "CP-M-06", "CP-W-11"],
     "X-ERR-02": ["UA-U-08", "UA-C-03", "PO-20", "CP-M-06", "CP-W-11", "CP-W-15"],
     "X-KBD-04": ["UA-R-09", "PO-25", "CP-KBD-01", "CP-KBD-02"],
@@ -124,10 +124,12 @@ def main():
                 status = "пройден"
             elif lv and lv["status"] == "blocked":
                 status = "заблокирован"
+            elif lv and lv["status"] == "fail":
+                status = "ошибка"
             else:
                 status = "не проверен (H ✓, L не выполнен)"
         elif lv:  # строки только с L
-            status = "пройден" if lv["status"] == "pass" else "заблокирован"
+            status = {"pass": "пройден", "fail": "ошибка"}.get(lv["status"], "заблокирован")
         if lv:
             fact = (fact + " · " if fact else "") + f"L: {lv['note']}"
             proof = (proof + ", " if proof else "") + "`live.json`"

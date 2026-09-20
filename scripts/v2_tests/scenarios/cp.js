@@ -321,7 +321,78 @@ export const tests = [
     },
   },
   {
-    id: "CP-P-02", title: "Ёмкость («Прочее»): строка, шт./день, сохранение — в запрос идут только строки с per_day>0",
+    id: "CP-P-02", title: "Ёмкость: после «Сохранить» форма СРАЗУ показывает подтверждённые сервером строки, dirty снят, пользователю объяснено, что не сохранено; после повторного открытия то же",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 7, "other");
+      await waitFor(() => a.$("#cp-cap-new-type"), { what: "форма ёмкости" });
+      for (const type of ["Колонна", "Ригель", "Плита", "Колонна"]) {
+        await a.type(a.$("#cp-cap-new-type"), type, { clear: true });
+        a.click(a.$("#cp-cap-add-row"));
+        await a.settle(40);
+      }
+      await waitFor(() => a.$$("[data-cap-per-day]").length === 4, { what: "четыре строки" });
+      const per = a.$$("[data-cap-per-day]"), com = a.$$("[data-cap-comment]");
+      change(a, per[0], "4.5"); change(a, com[0], "  норматив завода  ");
+      change(a, per[1], "0");          // Ригель — ноль
+      change(a, per[2], "");           // Плита — пусто
+      change(a, per[3], "9");          // второй «Колонна» — сервер берёт первый
+      await waitFor(() => a.$("#cp-save"), { what: "подвал" });
+      a.click(a.$("#cp-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/counterparties/7") === 1, { what: "PATCH" });
+      await waitFor(() => !a.$("#cp-save"), { what: "подвал снят после сохранения" });
+      await a.settle(60);
+      const rows = () => a.$$("[data-cap-per-day]").map((el, i) => [el.closest("tr").firstElementChild.textContent.trim(), el.value, a.$$("[data-cap-comment]")[i].value]);
+      const entry = a.ctl.log.find((e) => e.method === "PATCH" && e.path.includes("/counterparties/7"));
+      // 1) ответ сервера
+      t.eq(entry.response.capacity.map((c) => [c.element_type, c.per_day, c.comment]), [["Колонна", 4.5, "норматив завода"]], "1) ответ сервера: одна строка, комментарий без пробелов по краям");
+      // 2) видимая форма сразу после сохранения
+      t.eq(rows(), [["Колонна", "4.5", "норматив завода"]], "2) форма сразу показывает то, что подтвердил сервер (нулевая, пустая и повторная строки исчезли)");
+      // 3) сообщение пользователю
+      const msg = a.$("#cp-status").textContent;
+      t.has(msg, "Сохранено", "3) есть подтверждение");
+      t.has(msg, "«Ригель»", "3) названа нулевая строка");
+      t.has(msg, "«Плита»", "3) названа пустая строка");
+      t.has(msg, "указан дважды", "3) объяснён повторный тип");
+      // 4) dirty
+      t.notHas(msg, "Не сохранено", "4) статус не «не сохранено»");
+      t.ok(!a.$("#cp-save") && !a.$("#cp-cancel"), "4) кнопок «Сохранить/Отменить» нет — dirty снят");
+      const unload = new a.win.Event("beforeunload", { cancelable: true });
+      a.win.dispatchEvent(unload);
+      t.ok(!unload.defaultPrevented, "4) страж закрытия страницы не видит несохранённого");
+      // 5) повторное открытие
+      a.click(a.$("#cp-back"));
+      await waitFor(() => a.$("#cp-list [data-open]") && !a.dialog(), { what: "список без диалога (ложного предупреждения нет)" });
+      await openCard(a, 7, "other");
+      await waitFor(() => a.$("[data-cap-per-day]"), { what: "ёмкость после повторного открытия" });
+      t.eq(rows(), [["Колонна", "4.5", "норматив завода"]], "5) после повторного открытия те же значения, что и сразу после сохранения");
+    },
+  },
+  {
+    id: "CP-P-03", title: "Ёмкость: строка с нулём/пустая не остаётся на экране как сохранённая — пользователю сказано, почему её нет",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 7, "other");
+      await waitFor(() => a.$("#cp-cap-new-type"), { what: "форма ёмкости" });
+      await a.type(a.$("#cp-cap-new-type"), "Ригель");
+      a.click(a.$("#cp-cap-add-row"));
+      await waitFor(() => a.$("[data-cap-per-day]"), { what: "строка" });
+      change(a, a.$("[data-cap-per-day]"), "0");
+      await waitFor(() => a.$("#cp-save"), { what: "подвал" });
+      a.click(a.$("#cp-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/counterparties/7") === 1 && !a.$("#cp-save"), { what: "сохранение" });
+      await a.settle(60);
+      t.eq(a.$$("[data-cap-per-day]").length, 0, "нулевая строка с экрана убрана");
+      t.has(a.$("#cp-capacity").textContent, "Строк пока нет", "таблица честно пуста");
+      t.has(a.$("#cp-status").textContent, "«Ригель»", "сказано, какая строка не сохранена");
+      t.has(a.$("#cp-status").textContent, "больше 0", "сказано правило: норматив должен быть больше нуля");
+      t.eq(a.ctl.data.counterparties.find((c) => c.id === 7).capacity.length, 0, "на сервере строки нет (семантика нуля не менялась)");
+    },
+  },
+  {
+    id: "CP-P-04", title: "Сохранение карточки: более новый ввод во время запроса не затирается; ошибка — черновик и повтор целы",
     async run(t) {
       const a = await openApp();
       await openCp(a);
@@ -329,16 +400,89 @@ export const tests = [
       await waitFor(() => a.$("#cp-cap-new-type"), { what: "форма ёмкости" });
       await a.type(a.$("#cp-cap-new-type"), "Колонна");
       a.click(a.$("#cp-cap-add-row"));
-      await waitFor(() => a.$("[data-cap-per-day]"), { what: "новая строка" });
-      await a.type(a.$("#cp-cap-new-type"), "Ригель");
-      a.click(a.$("#cp-cap-add-row"));
-      await waitFor(() => a.$$("[data-cap-per-day]").length === 2, { what: "две строки" });
-      change(a, a.$$("[data-cap-per-day]")[0], "4.5");
+      await waitFor(() => a.$("[data-cap-per-day]"), { what: "строка" });
+      change(a, a.$("[data-cap-per-day]"), "4");
       await waitFor(() => a.$("#cp-save"), { what: "подвал" });
+      // ошибка: черновик цел, повтор возможен
+      a.ctl.failNext("PATCH /counterparties/7", { status: 500, detail: "Сбой записи" });
       a.click(a.$("#cp-save"));
-      await waitFor(() => a.ctl.count("PATCH", "/counterparties/7") === 1, { what: "PATCH" });
-      const body = a.ctl.log.find((e) => e.method === "PATCH" && e.path.includes("/counterparties/7")).body;
-      t.eq(body.capacity.map((c) => [c.element_type, c.per_day]), [["Колонна", 4.5]], "в запросе только строка с per_day>0 (нулевая «Ригель» отброшена)");
+      await waitFor(() => a.$("#cp-status").textContent.includes("Сбой записи"), { what: "ошибка" });
+      t.eq(a.$("[data-cap-per-day]").value, "4", "после ошибки введённое цело");
+      t.ok(a.$("#cp-save") && !a.$("#cp-save").disabled, "после ошибки «Сохранить» доступна для повтора");
+      // более новый ввод во время запроса (поле технически можно разблокировать: автозаполнение, IME, программный ввод)
+      const hold = a.ctl.hold("PATCH /counterparties/7");
+      a.click(a.$("#cp-save"));
+      await a.settle(60);
+      const inp = a.$("[data-cap-per-day]");
+      inp.disabled = false;
+      change(a, inp, "7");
+      hold.release();
+      await waitFor(() => a.ctl.count("PATCH", "/counterparties/7") === 2, { what: "второй PATCH" });
+      await a.settle(150);
+      t.eq(a.ctl.data.counterparties.find((c) => c.id === 7).capacity[0].per_day, 4, "сервер подтвердил то, что было отправлено (4)");
+      t.eq(a.$("[data-cap-per-day]").value, "7", "более новый ввод (7) не затёрт ответом сервера");
+      t.ok(a.$("#cp-save"), "остаётся несохранённое — кнопка «Сохранить» на месте");
+      t.has(a.$("#cp-status").textContent, "Не сохранено", "статус честно говорит «не сохранено»");
+      a.click(a.$("#cp-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/counterparties/7") === 3 && !a.$("#cp-save"), { what: "третий PATCH" });
+      await a.settle(60);
+      t.eq(a.ctl.data.counterparties.find((c) => c.id === 7).capacity[0].per_day, 7, "новое значение сохранено следующим запросом");
+      t.eq(a.$("[data-cap-per-day]").value, "7", "форма показывает сохранённое 7");
+    },
+  },
+  {
+    id: "CP-M-09", title: "Несохранённое — различие с записью: вернули значение руками (карточка, норматив, договор, спецификация) — подвал, метка «· не сохранено» и сторож ухода сняты",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 1);
+      await waitFor(() => a.$("#cpf-contact-person"), { what: "форма" });
+      const unload = () => { const e = new a.win.Event("beforeunload", { cancelable: true }); a.win.dispatchEvent(e); return e.defaultPrevented; };
+      const cp = a.ctl.data.counterparties.find((c) => c.id === 1);
+      const orig = a.$("#cpf-contact-person").value;
+      a.setValue(a.$("#cpf-contact-person"), orig + "x");
+      await waitFor(() => a.$("#cp-save"), { what: "подвал" });
+      t.ok(unload(), "после правки сторож включён");
+      a.setValue(a.$("#cpf-contact-person"), orig);
+      await a.settle(60);
+      t.ok(!a.$("#cp-save") && !unload(), "карточка: значение возвращено — подвал и сторож сняты");
+      // норматив
+      a.click(a.$('[data-tab="other"]'));
+      await waitFor(() => a.$("[data-cap-per-day]"), { what: "ёмкость" });
+      const first = a.$("[data-cap-per-day]");
+      const capOrig = first.value;
+      a.setValue(first, String(Number(capOrig) + 1));
+      await waitFor(() => a.$("#cp-save"), { what: "подвал (норматив)" });
+      a.setValue(a.$("[data-cap-per-day]"), capOrig);
+      await a.settle(60);
+      t.ok(!a.$("#cp-save") && !unload(), "норматив: значение возвращено — несохранённого нет");
+      // договор и спецификация
+      a.click(a.$('[data-tab="contracting"]'));
+      await waitFor(() => a.$("[data-a-number]"), { what: "договоры" });
+      const ag = a.$("[data-a-number]");
+      const aid = ag.dataset.aNumber;
+      const agOrig = ag.value;
+      a.setValue(ag, agOrig + "1");
+      await a.settle(60);
+      t.has(a.$(`[data-agreement="${aid}"] > summary`).textContent, "не сохранено", "договор: после правки метка «не сохранено» есть");
+      t.ok(unload(), "договор: сторож включён");
+      a.setValue(a.$(`[data-a-number="${aid}"]`), agOrig);
+      await a.settle(60);
+      t.notHas(a.$(`[data-agreement="${aid}"] > summary`).textContent, "не сохранено", "договор: значение возвращено — метка снята");
+      t.ok(!unload(), "договор: сторож снят");
+      const sp = a.$("[data-s-number]");
+      const sid = sp.dataset.sNumber;
+      const spOrig = sp.value;
+      a.setValue(sp, spOrig + "1");
+      await a.settle(60);
+      t.has(a.$(`[data-spec="${sid}"] > summary`).textContent, "не сохранено", "спецификация: после правки метка есть");
+      a.setValue(a.$(`[data-s-number="${sid}"]`), spOrig);
+      await a.settle(60);
+      t.notHas(a.$(`[data-spec="${sid}"] > summary`).textContent, "не сохранено", "спецификация: значение возвращено — метка снята");
+      t.ok(!unload(), "спецификация: сторож снят");
+      a.click(a.$("#cp-back"));
+      await a.settle(150);
+      t.ok(!a.dialog(), "уход к списку — ложного диалога нет");
     },
   },
   {
@@ -643,7 +787,7 @@ export const tests = [
     },
   },
   {
-    id: "CP-P-01", title: "Ёмкость: пустой тип строку не добавляет; тип добавляет строку; после сохранения значения с сервера",
+    id: "CP-P-01", title: "Ёмкость: пустой тип строку не добавляет; тип добавляет строку; запись доходит до сервера (показ после сохранения — CP-P-02)",
     async run(t) {
       const a = await openApp();
       await openCp(a);
@@ -817,6 +961,185 @@ export const tests = [
       t.eq(body.capacity.length, 0, "нулевая норма производительности не отправляется");
       await a.settle(200);
       t.eq(a.ctl.data.contracts.find((c) => c.id === 4).incidents.length, before + 1, "инцидент сохранён на «сервере»");
+    },
+  },
+  {
+    id: "CP-W-18", title: "Выход при открытом выборе замены (← Контрагент, раздел, «← Текущий интерфейс», закрытие страницы): подтверждение отмены; «Отмена» — пикер на месте, запроса удаления нет",
+    async run(t) {
+      const a = await openApp();
+      await openContract(a, 1, "lines");
+      const acts = a.byText("summary", "Действия"); if (acts) acts.click();
+      a.click(a.$("#ctr-delete"));
+      await waitFor(() => a.$("#ctr-replacement-select"), { what: "пикер замены" });
+      const CONFIRM = "Выбор замены для удаления контракта не завершён";
+      // раздел
+      a.click(a.$(`${NAV}[data-section="users-access"]`));
+      await waitFor(() => a.dialog(), { what: "диалог при уходе в раздел" });
+      t.has(a.dialog().textContent, CONFIRM, "раздел: сказано, что выбор замены не завершён");
+      await a.answerDialog("Отмена");
+      t.ok(a.$("#ctr-replacement-select"), "раздел, «Отмена»: пикер на месте");
+      t.eq(a.$(`${NAV}[data-section="counterparties"]`).getAttribute("aria-pressed"), "true", "раздел, «Отмена»: остались в «Контрагентах»");
+      // «← Текущий интерфейс»
+      a.click(a.$("#v2-back-btn"));
+      await waitFor(() => a.dialog(), { what: "диалог при уходе в V1" });
+      t.has(a.dialog().textContent, CONFIRM, "V1: сказано, что выбор замены не завершён");
+      await a.answerDialog("Отмена");
+      t.ok(a.$("#ctr-replacement-select"), "V1, «Отмена»: пикер на месте");
+      // закрытие страницы
+      const unload = new a.win.Event("beforeunload", { cancelable: true });
+      a.win.dispatchEvent(unload);
+      t.ok(unload.defaultPrevented, "закрытие страницы: предупреждение браузера");
+      // «← Контрагент»
+      a.click(a.$("#ctr-back"));
+      await waitFor(() => a.dialog(), { what: "диалог при «← Контрагент»" });
+      t.has(a.dialog().textContent, CONFIRM, "«← Контрагент»: сказано, что выбор замены не завершён");
+      await a.answerDialog("Отмена");
+      t.ok(a.$("#ctr-replacement-select"), "«← Контрагент», «Отмена»: пикер на месте");
+      t.eq(a.ctl.count("POST", "/dictionaries/contract/1/delete"), 0, "запроса удаления не было ни разу");
+      // подтверждённый уход по разделу
+      a.click(a.$(`${NAV}[data-section="users-access"]`));
+      await waitFor(() => a.dialog(), { what: "диалог" });
+      await a.answerDialog("Уйти и отменить");
+      await waitFor(() => a.$(`${NAV}[data-section="users-access"]`).getAttribute("aria-pressed") === "true", { what: "переход в раздел" });
+      t.eq(a.ctl.count("POST", "/dictionaries/contract/1/delete"), 0, "после подтверждённого ухода удаление не выполнялось");
+      // вернувшись, пикера нет, контракт цел
+      a.click(a.$(`${NAV}[data-section="counterparties"]`));
+      await waitFor(() => a.$("#cp-list [data-open]"), { what: "список" });
+      t.ok(contractOf(a, 1), "контракт цел");
+    },
+  },
+  {
+    id: "CP-W-06", title: "Контракт: после «Сохранить» вкладки СРАЗУ показывают подтверждённое сервером (без нулевой нормы, пустых позиций и инцидентов без даты), сообщение называет отброшенное, dirty снят, повторное открытие то же",
+    async run(t) {
+      const a = await openApp();
+      await openContract(a, 4, "incidents");
+      // инциденты: один без даты (отбросится), один полный
+      a.click(a.$("#ctr-inc-add")); await a.settle(40);
+      a.click(a.$("#ctr-inc-add")); await a.settle(40);
+      a.setValue(a.$('[aria-label="Тип элемента, инцидент 1"]'), "Колонна");                       // без даты
+      a.setValue(a.$('[aria-label="Дата инцидента 2"]'), "2026-09-15");
+      a.setValue(a.$('[aria-label="Тип элемента, инцидент 2"]'), "Плита перекрытия");
+      a.setValue(a.$('[aria-label="Количество, инцидент 2"]'), "2");
+      // производительность: Колонна 7, Ригель 0, второй раз Колонна 3
+      a.click(a.$('[data-ctr-tab="capacity"]')); await a.settle(60);
+      for (const type of ["Колонна", "Ригель", "Колонна"]) { a.setValue(a.$("#ctr-cap-new-type"), type); a.click(a.$("#ctr-cap-add")); await a.settle(40); }
+      const per = a.$$("[data-cap-per-day]");
+      change(a, per[0], "7"); change(a, per[1], "0"); change(a, per[2], "3");
+      // позиции: пустая строка
+      a.click(a.$('[data-ctr-tab="lines"]')); await a.settle(60);
+      const linesBefore = a.$$("[data-line-type]").length;
+      a.click(a.$("#ctr-line-add")); await a.settle(40);
+      a.click(a.$("#ctr-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/contracts/4") === 1, { what: "PATCH" });
+      await waitFor(() => a.$("#ctr-status").textContent.startsWith("Сохранено"), { what: "статус «Сохранено»" });
+      await a.settle(80);
+      const entry = a.ctl.log.find((e) => e.method === "PATCH" && e.path.includes("/contracts/4"));
+      const seeTab = async (k) => { a.click(a.$(`[data-ctr-tab="${k}"]`)); await a.settle(60); };
+      // 1) ответ сервера
+      t.eq(entry.response.capacity.map((c) => [c.element_type, c.per_day]), [["Колонна", 7]], "1) ответ сервера: одна норма (ноль и повтор типа не записаны)");
+      t.eq(entry.response.incidents.map((i) => [i.element_type, i.quantity]), [["Плита перекрытия", 2]], "1) ответ сервера: один инцидент (без даты не записан)");
+      // 2) видимые вкладки сразу после сохранения
+      await seeTab("capacity");
+      t.eq(a.$$("[data-cap-per-day]").map((el) => el.value), ["7"], "2) вкладка «Производительность»: только подтверждённая норма");
+      await seeTab("incidents");
+      t.eq(a.$$("[data-inc-date]").length, 1, "2) вкладка «Инциденты»: один инцидент");
+      await seeTab("lines");
+      t.eq(a.$$("[data-line-type]").length, linesBefore, "2) вкладка «Позиции»: пустой строки нет");
+      // 3) сообщение
+      const msg = a.$("#ctr-status").textContent;
+      t.has(msg, "позиции без типа и марки", "3) названа пустая позиция");
+      t.has(msg, "инциденты без даты или типа", "3) названы инциденты без даты");
+      t.has(msg, "«Ригель»", "3) названа нулевая норма");
+      t.has(msg, "указан дважды", "3) объяснён повторный тип");
+      // 4) dirty
+      t.notHas(msg, "несохранённые", "4) статус не «есть несохранённые изменения»");
+      const unload = new a.win.Event("beforeunload", { cancelable: true });
+      a.win.dispatchEvent(unload);
+      t.ok(!unload.defaultPrevented, "4) страж закрытия страницы не видит несохранённого");
+      a.click(a.$("#ctr-back"));
+      await waitFor(() => !a.$("#ctr-back"), { what: "уход из контракта без диалога" });
+      t.ok(!a.dialog(), "4) при уходе ложного предупреждения нет");
+      // 5) повторное открытие
+      await waitFor(() => a.$('[data-c-open="edit:4"]'), { what: "контракт в списке" });
+      a.click(a.$('[data-c-open="edit:4"]'));
+      await waitFor(() => a.$("#ctr-back"), { what: "контракт открыт заново" });
+      await seeTab("capacity");
+      t.eq(a.$$("[data-cap-per-day]").map((el) => el.value), ["7"], "5) после повторного открытия норма та же");
+      await seeTab("incidents");
+      t.eq(a.$$("[data-inc-date]").length, 1, "5) после повторного открытия инцидент тот же");
+    },
+  },
+  {
+    id: "CP-W-06b", title: "Контракт: ввод, внесённый во время запроса, не затирается ни при создании (дубля контракта нет), ни при правке",
+    async run(t) {
+      // правка существующего
+      const a = await openApp();
+      await openContract(a, 4, "lines");
+      await setTheme(a, " 1");
+      const hold = a.ctl.hold("PATCH /contracts/4");
+      a.click(a.$("#ctr-save"));
+      await a.settle(60);
+      const th = a.$("#ctr-theme"); th.disabled = false;   // технически: автозаполнение/IME/программный ввод
+      change(a, th, "Новая тема во время запроса");
+      hold.release();
+      await waitFor(() => a.ctl.count("PATCH", "/contracts/4") === 1, { what: "PATCH" });
+      await a.settle(150);
+      t.eq(a.$("#ctr-theme").value, "Новая тема во время запроса", "правка: более новый ввод не затёрт");
+      t.notHas(a.$("#ctr-status").textContent, "Сохранено.", "правка: статус не врёт «Сохранено.»");
+      t.has(a.$("#ctr-status").textContent, "ещё не сохранены", "правка: сказано, что новые правки не сохранены");
+      a.click(a.$("#ctr-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/contracts/4") === 2, { what: "второй PATCH" });
+      await a.settle(200);
+      t.eq(contractOf(a, 4).theme, "Новая тема во время запроса", "правка: новое значение сохранено следующим запросом");
+      // создание нового
+      const b = await openApp();
+      await openCp(b);
+      await openCard(b, 5, "contracting");
+      await waitFor(() => b.$("[data-c-new]"), { what: "«+ Контракт»" });
+      b.click(b.$("[data-c-new]"));
+      await waitFor(() => b.$("#ctr-back"), { what: "новый контракт" });
+      await setTheme(b, "Новый");
+      b.setValue(b.$("[data-line-type]"), "Колонна");
+      const qty = b.$$("input").find((i) => /Количество, позиция 1/.test(i.getAttribute("aria-label") || ""));
+      change(b, qty, "2");
+      const before = b.ctl.data.contracts.length;
+      const hold2 = b.ctl.hold("POST /contracts");
+      b.click(b.$("#ctr-save"));
+      await b.settle(60);
+      const th2 = b.$("#ctr-theme"); th2.disabled = false;
+      change(b, th2, "Изменено во время создания");
+      hold2.release();
+      await waitFor(() => b.ctl.count("POST", "/contracts") === 1, { what: "POST" });
+      await b.settle(200);
+      t.eq(b.ctl.data.contracts.length, before + 1, "создание: контракт создан один раз");
+      t.eq(b.$("#ctr-theme").value, "Изменено во время создания", "создание: более новый ввод не затёрт");
+      t.has(b.$("#ctr-status").textContent, "ещё не сохранены", "создание: сказано, что новые правки не сохранены");
+      b.click(b.$("#ctr-save"));
+      await waitFor(() => b.ctl.count("PATCH", "/contracts/") === 1, { what: "второе сохранение — PATCH, а не второй POST" });
+      await b.settle(150);
+      t.eq(b.ctl.count("POST", "/contracts"), 1, "создание: второй POST (дубль) не отправлялся");
+    },
+  },
+  {
+    id: "CP-W-09b", title: "Сохранённый контракт: «Сохранить» недоступна без правок, включается правкой, снова недоступна при возврате значения — пустых PATCH нет",
+    async run(t) {
+      const a = await openApp();
+      await openContract(a, 4, "lines");
+      t.ok(a.$("#ctr-save").disabled, "без правок «Сохранить» недоступна");
+      a.click(a.$("#ctr-save"));
+      await a.settle(60);
+      t.eq(a.ctl.count("PATCH", "/contracts/4"), 0, "пустой PATCH не уходит");
+      const d = a.$("#ctr-requisites-details"); if (d && !d.open) d.open = true;
+      const orig = a.$("#ctr-theme").value;
+      a.setValue(a.$("#ctr-theme"), orig + "!");
+      await waitFor(() => !a.$("#ctr-save").disabled, { what: "«Сохранить» включилась" });
+      a.setValue(a.$("#ctr-theme"), orig);
+      await waitFor(() => a.$("#ctr-save").disabled, { what: "«Сохранить» снова недоступна" });
+      const unload = new a.win.Event("beforeunload", { cancelable: true });
+      a.win.dispatchEvent(unload);
+      t.ok(!unload.defaultPrevented, "значение возвращено — сторож закрытия страницы снят");
+      t.eq(a.$("#ctr-archived").getAttribute("aria-describedby"), "ctr-archived-note", "у «Архивный» пояснение связано с чекбоксом");
+      t.ok(a.$("#ctr-archived-note"), "пояснение есть в разметке");
     },
   },
   {

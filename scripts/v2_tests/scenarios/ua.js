@@ -188,25 +188,54 @@ export const tests = [
     },
   },
   {
-    id: "UA-C-01", title: "Профиль: правка → «Сохранить»: PATCH, подтверждённые сервером данные после повторного открытия",
+    id: "UA-C-01", title: "Профиль: после «Сохранить» форма СРАЗУ показывает подтверждённое сервером (без пробелов по краям), dirty снят, повторное открытие то же; ввод во время запроса не затирается",
     async run(t) {
       const a = await openApp();
       const u = await openCard(a, "qa.noaccess");
       await waitFor(() => a.$("#pf-pos"), { what: "форма профиля" });
       t.notHas(a.$("#ua-status").textContent, "несохранённ", "до правки предупреждения нет");
-      await a.type(a.$("#pf-pos"), " QA-должность", {});
+      a.setValue(a.$("#pf-pos"), "   QA-должность   ");
+      a.setValue(a.$("#pf-dept"), "  Отдел  ");
+      a.setValue(a.$("#pf-patr"), "   ");     // одни пробелы — «не указано»
       await waitFor(() => a.$("#card-save"), { what: "подвал с «Сохранить»" });
       t.has(a.$("#ua-status").textContent, "Есть несохранённые изменения", "подвал показывает несохранённое");
       a.click(a.$("#card-save"));
       await waitFor(() => a.ctl.count("PATCH", `/users/${u.id}`) === 1 && !a.$("#card-save"), { what: "сохранение" });
-      t.eq(a.ctl.count("PATCH", `/users/${u.id}`), 1, "один PATCH");
-      t.has(byLogin(a, "qa.noaccess").position, "QA-должность", "в фейковой БД записано");
+      await a.settle(60);
+      const entry = a.ctl.log.find((e) => e.method === "PATCH" && e.path.includes(`/users/${u.id}`));
+      t.eq([entry.response.position, entry.response.department, entry.response.patronymic], ["QA-должность", "Отдел", null], "1) ответ сервера: то, что записано");
+      t.eq([a.$("#pf-pos").value, a.$("#pf-dept").value, a.$("#pf-patr").value], ["QA-должность", "Отдел", ""], "2) форма сразу показывает подтверждённое (без пробелов, пустое отчество пустым)");
+      t.has(a.$("#ua-status").textContent, "Сохранено", "3) есть подтверждение");
+      t.notHas(a.$("#ua-status").textContent, "несохранённ", "4) статус не «есть несохранённые изменения»");
+      const unload = new a.win.Event("beforeunload", { cancelable: true });
+      a.win.dispatchEvent(unload);
+      t.ok(!unload.defaultPrevented, "4) страж закрытия страницы не видит несохранённого");
       a.click(a.$("[data-back]"));
       await openList(a);
+      t.ok(!a.dialog(), "4) при уходе ложного предупреждения нет");
       a.click(a.$(`[data-user="${u.id}"]`));
       await waitFor(() => a.$("#pf-pos"), { what: "повторное открытие" });
-      t.has(a.$("#pf-pos").value, "QA-должность", "повторное открытие показывает данные сервера");
-      t.eq(a.$("#card-save"), null, "после сохранения ложного предупреждения/кнопок нет");
+      t.eq([a.$("#pf-pos").value, a.$("#pf-dept").value, a.$("#pf-patr").value], ["QA-должность", "Отдел", ""], "5) после повторного открытия то же, что сразу после сохранения");
+      t.eq(a.$("#card-save"), null, "после сохранения кнопок нет");
+      // 6) более новый ввод во время запроса
+      a.setValue(a.$("#pf-pos"), "первое");
+      await waitFor(() => a.$("#card-save"), { what: "подвал" });
+      const hold = a.ctl.hold(`PATCH /users/${u.id}`);
+      a.click(a.$("#card-save"));
+      await a.settle(60);
+      const pos = a.$("#pf-pos"); pos.disabled = false;
+      a.setValue(pos, "написано во время запроса");
+      hold.release();
+      await waitFor(() => a.ctl.count("PATCH", `/users/${u.id}`) === 2, { what: "второй PATCH" });
+      await a.settle(200);
+      t.eq(byLogin(a, "qa.noaccess").position, "первое", "6) сервер подтвердил отправленное");
+      t.eq(a.$("#pf-pos").value, "написано во время запроса", "6) более новый ввод не затёрт");
+      t.ok(a.$("#card-save"), "6) «Сохранить» на месте — введённое ещё не сохранено");
+      t.has(a.$("#ua-status").textContent, "несохранённые", "6) статус честно говорит, что есть несохранённое");
+      a.click(a.$("#card-save"));
+      await waitFor(() => a.ctl.count("PATCH", `/users/${u.id}`) === 3 && !a.$("#card-save"), { what: "третий PATCH" });
+      await a.settle(80);
+      t.eq(byLogin(a, "qa.noaccess").position, "написано во время запроса", "6) новое значение сохранено следующим запросом");
     },
   },
   {
@@ -322,13 +351,28 @@ export const tests = [
     },
   },
   {
-    id: "UA-C-08", title: "Блок «Диагностика…» честно говорит про V1 и даёт рабочую ссылку",
+    id: "UA-C-08", title: "Блок «Диагностика…»: ссылка несёт выбранного пользователя (форма V1, вкладка «Вход и безопасность»), защищена от потери несохранённого, у не-администраторов пользователей её нет",
     async run(t) {
       const a = await openApp();
-      await openCard(a, "qa.noaccess", "security");
-      await waitFor(() => a.doc.body.innerText.includes("в этот пилот пока не перенесены") || a.$('a[href*="ui=v1"], button'), { what: "вкладка безопасности" });
+      const u = await openCard(a, "qa.noaccess", "security");
+      await waitFor(() => a.$("[data-v1-link]"), { what: "ссылка в V1" });
       t.has(lastText(a), "доступны в текущем интерфейсе", "сказано, что функции остаются в V1");
-      t.ok(a.byText("a, button", "Открыть в текущем интерфейсе"), "есть ссылка/кнопка перехода в V1");
+      t.eq(a.$("[data-v1-link]").getAttribute("href"), `/?ui=v1&open=user-security&user_id=${u.id}`, "ссылка ведёт к форме ИМЕННО этого пользователя, а не на главный экран V1");
+      t.has(lastText(a), "вкладка «Вход и безопасность»", "пользователю сказано, что откроется");
+      // несохранённое: ссылка не уводит молча
+      a.setValue(a.$("#sec-login"), "qa.noaccess.changed");
+      await waitFor(() => a.$("#card-save"), { what: "подвал" });
+      a.click(a.$("[data-v1-link]"));
+      await waitFor(() => a.dialog(), { what: "диалог несохранённого" });
+      t.eq(a.$$(".v2-dialog button").map((b) => b.textContent.trim()), ["Остаться", "Не сохранять", "Сохранить и продолжить"], "три варианта");
+      await a.answerDialog("Остаться");
+      t.ok(a.$("[data-v1-link]") && a.$("#sec-login").value === "qa.noaccess.changed", "«Остаться» — остаёмся в V2, ввод цел");
+      // право «только чтение»: ссылки нет, объяснение есть
+      const r = await openApp({ perm: "readonly" });
+      await openCard(r, "qa.noaccess", "security");
+      await a.settle(60);
+      t.ok(!r.$("[data-v1-link]"), "без права изменять пользователей ссылки нет");
+      t.has(lastText(r), "право изменять пользователей", "сказано, почему");
     },
   },
   {
@@ -437,6 +481,102 @@ export const tests = [
       await a.type(a.$("#ua-access-search"), "нетТакого");
       t.has(lastText(a), "Ничего не найдено по запросу", "пустой поиск у пользователя с доступом объяснён запросом");
       t.ok(!lastText(a).includes("Нет доступа к проектам"), "не выдаётся за отсутствие доступа");
+    },
+  },
+  {
+    id: "UA-A-08b", title: "Подтверждение «Сохранено» не переезжает на другую вкладку и не остаётся после «Отменить» доступа",
+    async run(t) {
+      const a = await openApp();
+      const u = await openCard(a, "qa.noaccess");
+      a.setValue(a.$("#pf-pos"), "Должность");
+      await waitFor(() => a.$("#card-save"), { what: "подвал" });
+      a.click(a.$("#card-save"));
+      await waitFor(() => a.ctl.count("PATCH", `/users/${u.id}`) === 1 && !a.$("#card-save"), { what: "сохранение" });
+      await a.settle(60);
+      t.has(a.$("#ua-status").textContent, "Сохранено", "сразу после сохранения — «Сохранено»");
+      a.click(a.$('[data-tab="access"]'));
+      await waitFor(() => a.$("#ua-access-search"), { what: "вкладка доступа" });
+      t.notHas(a.$("#ua-status").textContent, "Сохранено", "на другой вкладке прежнее «Сохранено» не висит");
+      a.click(a.byText("button", "Показать все"));
+      await a.settle(40);
+      a.click(a.$$("[data-edit-area^='o:']")[0]);
+      await waitFor(() => a.$("[data-grant-role]"), { what: "редактор" });
+      a.click(a.$$("[data-grant-role]")[0]);
+      await waitFor(() => a.$("#ua-access-cancel") && !a.$("#ua-access-cancel").disabled, { what: "подвал доступа" });
+      a.click(a.$("#ua-access-cancel"));
+      await a.settle(120);
+      t.notHas(a.$("#ua-status").textContent, "Сохранено", "после «Отменить» доступа «Сохранено» не показывается");
+      t.eq(a.ctl.count("PUT", `/users/${u.id}/access`), 0, "запроса записи доступа не было");
+    },
+  },
+  {
+    id: "UA-C-11", title: "Несохранённое — различие с записью: профиль, доступ, форма нового пользователя, новая/переименованная роль — вернули значение, стёрли ввод — подвал и сторож сняты",
+    async run(t) {
+      const a = await openApp();
+      const unload = () => { const e = new a.win.Event("beforeunload", { cancelable: true }); a.win.dispatchEvent(e); return e.defaultPrevented; };
+      const u = await openCard(a, "qa.noaccess");
+      await waitFor(() => a.$("#pf-pos"), { what: "профиль" });
+      const orig = a.$("#pf-pos").value;
+      a.setValue(a.$("#pf-pos"), orig + "х");
+      await waitFor(() => a.$("#card-save"), { what: "подвал" });
+      t.ok(unload(), "профиль: после правки сторож включён");
+      a.setValue(a.$("#pf-pos"), orig);
+      await a.settle(60);
+      t.ok(!a.$("#card-save") && !unload(), "профиль: значение возвращено — подвал и сторож сняты");
+      const roleOrig = a.$("#pf-role").value;
+      a.setValue(a.$("#pf-role"), roleOrig === "user" ? "view" : "user");
+      await waitFor(() => a.$("#card-save"), { what: "подвал (роль)" });
+      a.setValue(a.$("#pf-role"), roleOrig);
+      await a.settle(60);
+      t.ok(!a.$("#card-save") && !unload(), "профиль: системная роль возвращена — несохранённого нет");
+      // доступ: поставили и сняли ту же галочку
+      a.click(a.$('[data-tab="access"]'));
+      await waitFor(() => a.$("#ua-access-search"), { what: "доступ" });
+      a.click(a.byText("button", "Показать все"));
+      await a.settle(40);
+      a.click(a.$$("[data-edit-area^='o:']")[0]);
+      await waitFor(() => a.$("[data-grant-role]"), { what: "редактор" });
+      a.click(a.$("[data-grant-role]"));
+      await waitFor(() => a.$("#ua-access-save") && !a.$("#ua-access-save").disabled, { what: "подвал доступа" });
+      t.ok(unload(), "доступ: после галочки сторож включён");
+      a.click(a.$("[data-grant-role]"));
+      await a.settle(60);
+      t.ok(a.$("#ua-access-save").disabled && !unload(), "доступ: галочку сняли обратно — «Сохранить» недоступна, сторож снят");
+      t.notHas(a.$("#ua-status").textContent, "несохранённые", "доступ: статус не «есть несохранённые изменения»");
+      // новый пользователь: ввели и стёрли
+      a.click(a.$("[data-back-summary]"));
+      a.click(a.$('[data-back]'));
+      await openList(a);
+      a.click(a.byText("button", "Добавить пользователя"));
+      await waitFor(() => a.$("#nu-last"), { what: "форма" });
+      a.setValue(a.$("#nu-last"), "Х");
+      await a.settle(40);
+      t.ok(unload(), "новый пользователь: после ввода сторож включён");
+      a.setValue(a.$("#nu-last"), "");
+      await a.settle(60);
+      t.ok(!unload(), "новый пользователь: ввод стёрт — сторож снят");
+      // роли: создание и переименование
+      a.click(a.byText(".v2-nav button[data-page]", "Роли"));
+      await waitFor(() => a.$("#role-editor"), { what: "роли" });
+      a.click(a.$("#role-new"));
+      await waitFor(() => a.$("#role-new-name"), { what: "форма роли" });
+      a.setValue(a.$("#role-new-name"), "Тестовая");
+      await a.settle(40);
+      t.ok(unload(), "новая роль: после ввода сторож включён");
+      a.setValue(a.$("#role-new-name"), "");
+      await a.settle(60);
+      t.ok(!unload(), "новая роль: ввод стёрт — сторож снят");
+      a.click(a.$("#role-new-cancel"));
+      await a.settle(40);
+      a.click(a.$("#role-rename"));
+      await waitFor(() => a.$("#role-rename-name"), { what: "переименование" });
+      const rn = a.$("#role-rename-name").value;
+      a.setValue(a.$("#role-rename-name"), rn + "!");
+      await a.settle(40);
+      t.ok(unload(), "переименование: после правки сторож включён");
+      a.setValue(a.$("#role-rename-name"), rn);
+      await a.settle(60);
+      t.ok(!unload(), "переименование: имя возвращено — сторож снят");
     },
   },
   {

@@ -2814,6 +2814,8 @@ export function installFakeBackend(opts = {}) {
     }
     const spec = await server.handle(req);
     entry.status = spec.status;
+    // Тело ответа сервера — для проверок «что сервер подтвердил» отдельно от «что ушло в запросе».
+    try { entry.response = spec.json === undefined ? undefined : JSON.parse(JSON.stringify(spec.json)); } catch (e) { /* не JSON — не пишем */ }
     return makeResponse(spec, url);
   }
 

@@ -307,9 +307,24 @@ export function mountCounterparties(container, ctx) {
     return parts;
   }
 
-  function hasUnsavedChanges() { return collectDirtyParts().length > 0; }
+  // Открытый выбор замены при удалении контракта — тоже «незавершённое»: уход (раздел, V1, закрытие страницы)
+  // молча отменял бы начатое удаление (критерий CP-W-18: подтверждение отмены пикера на ВСЕХ путях выхода).
+  function hasUnsavedChanges() { return collectDirtyParts().length > 0 || !!state.contractDeleteReplacement; }
 
   async function requestLeave() {
+    if (state.contractDeleteReplacement) {
+      const leave = await showConfirmDialog(
+        "Выбор замены для удаления контракта не завершён. Уйти и отменить удаление?",
+        { confirmLabel: "Уйти и отменить" },
+      );
+      if (!leave) return false;
+    }
+    const ok = await requestLeaveDirtyParts();
+    if (ok) state.contractDeleteReplacement = null; // выход подтверждён целиком — начатое удаление отменено
+    return ok;
+  }
+
+  async function requestLeaveDirtyParts() {
     const parts = collectDirtyParts();
     if (!parts.length) return true;
     const message = parts.length === 1
@@ -365,6 +380,9 @@ export function mountCounterparties(container, ctx) {
   // а не отдельный "занят" у каждой кнопки — про это ниже, у
   // lockContractWorkspace/runContractDelete.
   let contractOpLock = null; // { kind: "save" | "delete", id: number | null } | null
+  // Итог последнего успешного сохранения контракта для строки статуса: что сервер не записал и почему,
+  // либо предупреждение, что правки, внесённые во время запроса, остались несохранёнными.
+  let lastContractSaveNote = "";
   // Между "нажал Удалить" и "пикер отрисован" (или "диалог подтверждения
   // закрыт") — несколько await'ов подряд (delete-plan, candidates, сам
   // confirm-диалог), и всё это время state.contractDeleteReplacement ещё
@@ -493,14 +511,47 @@ export function mountCounterparties(container, ctx) {
     status.textContent = parts.length === 1 ? `Не сохранено: ${parts[0].label}.` : `Не сохранено (${parts.length}): ${parts.map((p) => p.label).join(", ")}.`;
   }
 
-  function initDraft() {
-    const cp = state.editingId ? state.list.find((c) => c.id === state.editingId) : null;
-    state.draft = cp
+  // Форма карточки из записи, ПОДТВЕРЖДЁННОЙ сервером (список / ответ на POST/PATCH).
+  function draftFromRecord(cp) {
+    return cp
       ? { full_name: cp.full_name, short_name: cp.short_name, inn: cp.inn || "", kpp: cp.kpp || "", ogrn: cp.ogrn || "",
           legal_address: cp.legal_address || "", contact_person: cp.contact_person || "", contact_phone: cp.contact_phone || "",
           code: cp.code || "", capacity: (cp.capacity || []).map((c) => ({ ...c })) }
       : { full_name: "", short_name: "", inn: "", kpp: "", ogrn: "", legal_address: "", contact_person: "", contact_phone: "", code: "", capacity: [] };
+  }
+
+  function initDraft() {
+    const cp = state.editingId ? state.list.find((c) => c.id === state.editingId) : null;
+    state.draft = draftFromRecord(cp);
     state.dirty = false;
+  }
+
+  // «Несохранённое» — различие между формой и подтверждённой записью, а не факт правки: вернули значение — снято.
+  const draftFingerprint = (d) => JSON.stringify(d, (k, v) => (v === null || v === undefined ? "" : (typeof v === "object" ? v : String(v))));
+  function syncMainDirty() {
+    const cp = state.editingId ? state.list.find((c) => c.id === state.editingId) : null;
+    state.dirty = draftFingerprint(state.draft) !== draftFingerprint(draftFromRecord(cp));
+    renderFooter();
+  }
+
+  // Что сервер молча не сохраняет в нормативах производительности (app/capacity.py, _clean): норматив должен
+  // быть больше нуля (ноль и «пусто» — не значения), один тип дважды — берётся первая строка. Пользователь
+  // видит после сохранения ровно то, что записано, и ему сказано, какие строки не записаны и почему.
+  // rows: [{type, perDay}] в порядке ввода; perDay — число или NaN для пустого поля.
+  function capacityDropNote(rows) {
+    const zero = [], dup = [], seen = new Set();
+    for (const r of rows) {
+      const type = String(r.type || "").trim();
+      if (!type) continue;
+      if (!(Number.isFinite(r.perDay) && r.perDay > 0)) { if (!zero.includes(type)) zero.push(type); continue; }
+      if (seen.has(type)) { if (!dup.includes(type)) dup.push(type); continue; }
+      seen.add(type);
+    }
+    const quote = (list) => list.map((t) => `«${t}»`).join(", ");
+    const parts = [];
+    if (zero.length) parts.push(`Не сохранены строки без норматива (шт./день должно быть больше 0): ${quote(zero)}.`);
+    if (dup.length) parts.push(`Тип ${quote(dup)} указан дважды — сохранена первая строка.`);
+    return parts.join(" ");
   }
 
   async function saveMain() {
@@ -523,11 +574,19 @@ export function mountCounterparties(container, ctx) {
     const idx = state.list.findIndex((c) => c.id === saved.id);
     if (idx === -1) state.list.push(saved); else state.list[idx] = saved;
     state.editingId = saved.id;
-    // Сверка со снимком (задача 3 — "медленная сеть"): если поля успели
-    // измениться, пока шёл запрос, снимаем "грязно" только если текущее
-    // состояние всё ещё совпадает с тем, что было отправлено.
-    if (JSON.stringify(state.draft) === snapshotJson) state.dirty = false;
-    state.status_msg = wasNew ? "Добавлено." : "Сохранено.";
+    // Форма показывает то, что ПОДТВЕРДИЛ сервер (обрезанные пробелы, присвоенный код, убранные строки ёмкости),
+    // а не то, что было введено. Исключение — поля, которые пользователь успел изменить ПОСЛЕ отправки
+    // (задача 3, «медленная сеть»): их не затираем, и «не сохранено» остаётся для них честно.
+    const confirmed = draftFromRecord(saved);
+    let keptNewer = false;
+    for (const key of Object.keys(confirmed)) {
+      if (JSON.stringify(state.draft[key]) === JSON.stringify(snapshot[key])) state.draft[key] = confirmed[key];
+      else keptNewer = true;
+    }
+    state.dirty = keptNewer;
+    if (keptNewer) { state.status_msg = ""; return; } // подвал скажет «Не сохранено: …» — ложного «Сохранено.» не пишем
+    const note = capacityDropNote(snapshot.capacity.map((c) => ({ type: c.element_type, perDay: Number(c.per_day) })));
+    state.status_msg = (wasNew ? "Добавлено." : "Сохранено.") + (note ? " " + note : "");
   }
 
   function fieldRow(label, id, value, extra = "") {
@@ -626,8 +685,7 @@ export function mountCounterparties(container, ctx) {
         "cpf-kpp": "kpp", "cpf-ogrn": "ogrn", "cpf-address": "legal_address",
         "cpf-contact-person": "contact_person", "cpf-contact-phone": "contact_phone" }[inp.id];
       state.draft[key] = inp.value;
-      state.dirty = true;
-      renderFooter();
+      syncMainDirty();
     }));
   }
 
@@ -1111,6 +1169,19 @@ export function mountCounterparties(container, ctx) {
     return row ? row.per_day : "не задана";
   }
 
+  // Что не попадёт в контракт при сохранении (buildContractBody + app/capacity.py): пустые и неполные строки.
+  // Их убирают молча только с экрана — пользователю нужно сказать, что именно не записано.
+  function contractDropNote(draft) {
+    const parts = [];
+    const blankLines = draft.lines.filter((l) => !((l.elementType || "").trim() || (l.mark || "").trim())).length;
+    if (blankLines) parts.push(`позиции без типа и марки (${blankLines})`);
+    const badIncidents = draft.incidents.filter((i) => !((i.elementType || "").trim() && i.incidentDate)).length;
+    if (badIncidents) parts.push(`инциденты без даты или типа (${badIncidents})`);
+    const head = parts.length ? `Не сохранены пустые или неполные строки: ${parts.join("; ")}.` : "";
+    const capacity = capacityDropNote(draft.capacity.map((c) => ({ type: c.elementType, perDay: Number(c.perDay) })));
+    return [head, capacity].filter(Boolean).join(" ");
+  }
+
   function buildContractBody(draft) {
     const lines = draft.lines
       .map((l) => ({ element_type: (l.elementType || "").trim() || null, mark: (l.mark || "").trim() || null, quantity: Number(l.quantity) || 0 }))
@@ -1149,6 +1220,7 @@ export function mountCounterparties(container, ctx) {
     if (!body.lines.length) { draft.error = "Добавьте хотя бы одну позицию (тип элемента или марка)"; throw { message: draft.error }; }
     const snapshot = contractDraftFieldsJson(draft);
     draft.saving = true;
+    lastContractSaveNote = "";
     // id:null — у ещё не созданного контракта нет реального id, под которым
     // могла бы существовать запись в contractExpandedCache/rowState; поле
     // здесь только ради единообразной формы { kind, id } (см. savePlannedDate).
@@ -1173,8 +1245,22 @@ export function mountCounterparties(container, ctx) {
         pushContractToCache(created);
         const cur = state.newContractForms.get(mapKey);
         const stillSame = cur === draft && contractDraftFieldsJson(cur) === snapshot;
-        if (stillSame) { state.newContractForms.delete(mapKey); state.contractKey = `edit:${created.id}`; }
-        else if (cur) { cur.saving = false; delete cur._inFlight; }
+        if (stillSame) {
+          lastContractSaveNote = contractDropNote(draft);
+          state.newContractForms.delete(mapKey); state.contractKey = `edit:${created.id}`;
+        } else if (cur) {
+          // Пока шёл запрос, форму успели изменить. Контракт уже СОЗДАН на сервере — вторая отправка той же
+          // «новой» формы создала бы дубль. Переводим форму в черновик созданного контракта, перенося поля,
+          // изменённые после отправки; остальное показываем по подтверждённому сервером.
+          const sent = JSON.parse(snapshot);
+          const confirmed = contractFieldsFromSaved(created);
+          const fields = { ...confirmed };
+          for (const key of Object.keys(fields)) if (JSON.stringify(cur[key]) !== JSON.stringify(sent[key])) fields[key] = cur[key];
+          state.newContractForms.delete(mapKey);
+          state.contractDrafts.set(created.id, { ...fields, _original: JSON.stringify(confirmed), error: "", saving: false, _requisitesOpen: !!cur._requisitesOpen });
+          state.contractKey = `edit:${created.id}`;
+          lastContractSaveNote = "Контракт создан, но правки, внесённые во время сохранения, ещё не сохранены.";
+        }
       } catch (err) {
         const cur = state.newContractForms.get(mapKey);
         if (cur === draft) {
@@ -1214,6 +1300,7 @@ export function mountCounterparties(container, ctx) {
     if (!body.lines.length) { draft.error = "Добавьте хотя бы одну позицию (тип элемента или марка)"; throw { message: draft.error }; }
     const snapshot = contractDraftFieldsJson(draft);
     draft.saving = true;
+    lastContractSaveNote = "";
     contractOpLock = { kind: "save", id };
     lockContractWorkspace(true);
     draft._inFlight = (async () => {
@@ -1246,8 +1333,13 @@ export function mountCounterparties(container, ctx) {
         pushContractToCache(updated);
         const cur = state.contractDrafts.get(id);
         const stillSame = cur && contractDraftFieldsJson(cur) === snapshot;
-        if (stillSame) state.contractDrafts.delete(id);
-        else if (cur) { cur.saving = false; delete cur._inFlight; }
+        if (stillSame) { lastContractSaveNote = contractDropNote(cur); state.contractDrafts.delete(id); }
+        else if (cur) {
+          // Ввод, внесённый во время запроса, не затираем; «исходным» для сравнения становится подтверждённое сервером.
+          cur.saving = false; delete cur._inFlight;
+          cur._original = JSON.stringify(contractFieldsFromSaved(updated));
+          lastContractSaveNote = "Часть изменений сохранена, но правки, внесённые во время сохранения, ещё не сохранены.";
+        }
       } catch (err) {
         const cur = state.contractDrafts.get(id);
         if (cur === draft) {
@@ -1488,29 +1580,41 @@ export function mountCounterparties(container, ctx) {
     }));
     // «· не сохранено» в заголовке договора/спецификации появляется сразу при
     // правке (а не только после следующей перерисовки списка).
-    const markDirty = (selector) => {
+    // Черновик договора/спецификации, совпавший с сохранённой записью (значение вернули руками), удаляется: метка
+    // и сторож показывают различие, а не факт правки.
+    const settleDrafts = (kind, id) => {
+      if (kind === "agreement") {
+        const a = findAgreement(id), d = state.agreementDrafts.get(id);
+        if (a && d && !d.saving && d.number === a.number && d.date === (a.agreement_date || "") && String(d.objectId) === String(a.object_id ?? "")) state.agreementDrafts.delete(id);
+        return state.agreementDrafts.has(id);
+      }
+      const { spec } = findSpecAndAgreementId(id), d = state.specDrafts.get(id);
+      if (spec && d && !d.saving && d.number === spec.number && d.date === (spec.specification_date || "")) state.specDrafts.delete(id);
+      return state.specDrafts.has(id);
+    };
+    const markDirty = (selector, kind, id) => {
       const mark = el.querySelector(`${selector} > summary [data-dirty-mark]`);
-      if (mark) mark.textContent = " · не сохранено";
+      if (mark) mark.textContent = settleDrafts(kind, id) ? " · не сохранено" : "";
     };
     el.querySelectorAll("[data-a-number]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.aNumber);
       const draft = ensureAgreementDraft(id);
       draft.number = inp.value;
-      markDirty(`[data-agreement="${id}"]`);
+      markDirty(`[data-agreement="${id}"]`, "agreement", id);
       renderFooter();
     }));
     el.querySelectorAll("[data-a-date]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.aDate);
       const draft = ensureAgreementDraft(id);
       draft.date = inp.value;
-      markDirty(`[data-agreement="${id}"]`);
+      markDirty(`[data-agreement="${id}"]`, "agreement", id);
       renderFooter();
     }));
     el.querySelectorAll("[data-a-object]").forEach((sel) => sel.addEventListener("change", () => {
       const id = Number(sel.dataset.aObject);
       const draft = ensureAgreementDraft(id);
       draft.objectId = sel.value;
-      markDirty(`[data-agreement="${id}"]`);
+      markDirty(`[data-agreement="${id}"]`, "agreement", id);
       renderFooter();
     }));
     el.querySelectorAll("[data-save-agreement]").forEach((b) => b.addEventListener("click", async () => {
@@ -1571,13 +1675,13 @@ export function mountCounterparties(container, ctx) {
     el.querySelectorAll("[data-s-number]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.sNumber);
       ensureSpecDraft(id).number = inp.value;
-      markDirty(`[data-spec="${id}"]`);
+      markDirty(`[data-spec="${id}"]`, "spec", id);
       renderFooter();
     }));
     el.querySelectorAll("[data-s-date]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.sDate);
       ensureSpecDraft(id).date = inp.value;
-      markDirty(`[data-spec="${id}"]`);
+      markDirty(`[data-spec="${id}"]`, "spec", id);
       renderFooter();
     }));
     el.querySelectorAll("[data-save-spec]").forEach((b) => b.addEventListener("click", async () => {
@@ -2035,9 +2139,9 @@ export function mountCounterparties(container, ctx) {
           </div>
           ${!isNew ? `
           <label class="v2-inline" style="margin-top:10px">
-            <input type="checkbox" id="ctr-archived" ${draft.isArchived ? "checked" : ""} ${(archiveInfo.blocks || draft.saving) ? "disabled" : ""}> Архивный
+            <input type="checkbox" id="ctr-archived" aria-describedby="ctr-archived-note" ${draft.isArchived ? "checked" : ""} ${(archiveInfo.blocks || draft.saving) ? "disabled" : ""}> Архивный
           </label>
-          <p class="v2-muted">${escapeHtml(archiveInfo.text)}</p>` : ""}
+          <p class="v2-muted" id="ctr-archived-note">${escapeHtml(archiveInfo.text)}</p>` : ""}
         </div>
       </details>
       ${!isNew && archiveInfo.blocks ? `<p style="color:var(--bad);font-size:12px;margin:4px 0">${escapeHtml(archiveInfo.shortText)}</p>` : ""}
@@ -2566,7 +2670,9 @@ export function mountCounterparties(container, ctx) {
     footActions.innerHTML = `${btn("Отменить", 'id="ctr-cancel"')}${btn(draft.saving ? "Сохранение…" : "Сохранить", 'id="ctr-save"', true)}`;
     const saveBtn = footActions.querySelector("#ctr-save");
     const cancelBtn = footActions.querySelector("#ctr-cancel");
-    saveBtn.disabled = busy || cascadeIncomplete;
+    // У сохранённого контракта «Сохранить» доступна, только когда есть что сохранять (как у карточек всех разделов):
+    // иначе кнопка слала PATCH без единой правки, писала «Сохранено.» и пополняла журнал пустым событием.
+    saveBtn.disabled = busy || cascadeIncomplete || !dirty;
     cancelBtn.disabled = busy;
     saveBtn.addEventListener("click", async () => {
       if (opBusy || cascadeIncomplete) return;
@@ -2574,7 +2680,9 @@ export function mountCounterparties(container, ctx) {
         if (isNew) await submitNewContract(id); else await saveContractDraft(id);
         if (!state.contractKey) return; // рабочее пространство успели закрыть, пока шло сохранение
         await renderContractWorkspace();
-        status.textContent = "Сохранено.";
+        const partial = lastContractSaveNote.startsWith("Часть изменений") || lastContractSaveNote.startsWith("Контракт создан, но");
+        status.textContent = partial ? lastContractSaveNote : ("Сохранено." + (lastContractSaveNote ? " " + lastContractSaveNote : ""));
+        lastContractSaveNote = "";
       } catch (err) {
         renderContractRequisites();
         renderContractFooter();
@@ -2684,19 +2792,17 @@ export function mountCounterparties(container, ctx) {
     if (!state.draft.capacity.length) el.querySelector("#cp-capacity tbody").innerHTML = `<tr><td colspan="3" class="v2-note">Строк пока нет</td></tr>`;
     el.querySelectorAll("[data-cap-per-day]").forEach((inp) => inp.addEventListener("input", () => {
       state.draft.capacity[Number(inp.dataset.capPerDay)].per_day = Number(inp.value);
-      state.dirty = true;
-      renderFooter();
+      syncMainDirty();
     }));
     el.querySelectorAll("[data-cap-comment]").forEach((inp) => inp.addEventListener("input", () => {
       state.draft.capacity[Number(inp.dataset.capComment)].comment = inp.value;
-      state.dirty = true;
-      renderFooter();
+      syncMainDirty();
     }));
     el.querySelector("#cp-cap-add-row").addEventListener("click", () => {
       const type = el.querySelector("#cp-cap-new-type").value.trim();
       if (!type) return;
       state.draft.capacity.push({ element_type: type, per_day: 0, comment: "" });
-      state.dirty = true;
+      state.dirty = true; // добавленная строка — различие с записью
       renderCapacityTab();
       renderFooter();
     });
