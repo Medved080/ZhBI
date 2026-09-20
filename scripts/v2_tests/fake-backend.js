@@ -2693,6 +2693,10 @@ function createServer(opts) {
 
   // цвета кранов по объектам — data.settings.zoneColors {objectId: [{category,name,color}]}
   const zoneColorsOf = (oid) => ((data.settings.zoneColors ||= {})[oid] ||= [{ category: "Кран", name: "Кран 1", color: "#c0392b" }, { category: "Кран", name: "Кран 2", color: "#1f8a4c" }]);
+  route("GET", "/training/guide", () => ({ content_version: "QA", role_key: null, role_name: null, object_id: null,
+    blocks: [{ key: "intro", feature: null, group: "Общее", section: "Начало работы", title: "Что это за система", level: "write", paragraphs: ["Первый абзац QA.", "<b>Второй</b> абзац QA."], questions: 3 },
+      { key: "zh", feature: null, group: "Управление сборным ЖБИ", section: "Схема", title: "Как читать схему", level: "write", paragraphs: ["Абзац про схему."], questions: 1 }],
+    group_order: ["Общее", "Управление сборным ЖБИ"], group_captions: { "Общее": "Подпись группы QA" }, questions_total: 4, questions_per_attempt: 2, missing: [] }));
   route("GET", "/zone-colors", (ctx) => { const oid = queryValue(ctx, "object_id", { type: "int", required: true }); return deepClone(zoneColorsOf(oid)); });
   route("PUT", "/zone-colors", (ctx) => {
     const oid = queryValue(ctx, "object_id", { type: "int", required: true });

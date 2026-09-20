@@ -32,7 +32,7 @@ export const tests = [
         a.click(a.$(`${NAV}[data-section="${s.id}"]`));
         await waitFor(() => loaded(a) && a.$(".v2-screen h2")?.textContent.trim() === s.title, { what: `экран ${s.id}` });
         t.ok(!a.$(".v2-callout-bad"), `${s.id}: нет ошибки загрузки`);
-        const shown = a.$$("#rd-body tbody tr").length + a.$$("#rd-body dt").length;
+        const shown = a.$$("#rd-body tbody tr").length + a.$$("#rd-body dt").length + a.$$("#rd-body details").length;
         t.ok(shown > 0 || /нет|пуст|Записей нет|не найден/i.test(body(a).textContent), `${s.id}: показаны строки/поля или явное «пусто» (${shown})`);
         t.ok(a.$(`a[data-v1-link]`), `${s.id}: есть переход в текущий интерфейс`);
       };
@@ -324,6 +324,21 @@ export const tests = [
       await openScreen(a, "report-linear-track");
       await waitFor(() => a.$("[data-export]"), { what: "кнопки выгрузки трека" });
       t.eq(a.$$("[data-export]").map((b) => b.dataset.export), ["xlsx"], "у «Линейного трека» только XLSX");
+    },
+  },
+  {
+    id: "RD-16", title: "Инструкция («Обучение»): блоки по группам, абзацы как текст (разметка не исполняется), поиск по тексту",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await openScreen(a, "training");
+      await waitFor(() => a.$$("#rd-body details").length === 2, { what: "блоки инструкции" });
+      t.has(body(a).textContent, "Подпись группы QA", "подпись группы показана");
+      t.eq(a.$$("#rd-body h3").map((h) => h.textContent.replace(/\s+/g, " ").trim()), ["Общее · 1", "Управление сборным ЖБИ · 1"], "группы по порядку сервера");
+      t.ok(!a.$("#rd-body details b"), "разметка из текста абзаца не превращается в теги");
+      t.has(a.$("#rd-body details .v2-wire-body").textContent, "<b>Второй</b>", "тег виден как текст");
+      await a.type(a.$("#rd-search"), "схем");
+      await waitFor(() => a.$$("#rd-body details").length === 1, { what: "поиск" });
+      t.has(body(a).textContent, "Как читать схему", "найден нужный блок");
     },
   },
 ];

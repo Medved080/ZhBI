@@ -78,6 +78,21 @@ function paintRecord(sec, data) {
   return `${fields ? `<dl class="v2-facts">${fields}</dl>` : ""}${tables}`;
 }
 
+// Инструкция («Обучение»): блоки по группам, раскрывающиеся; только текст абзацев (без разметки), поиск по заголовкам и тексту
+function paintGuide(data, search) {
+  const q = String(search || "").trim().toLowerCase();
+  const blocks = (data?.blocks || []).filter((b) => !q || `${b.section} ${b.title} ${(b.paragraphs || []).join(" ")}`.toLowerCase().includes(q));
+  const groups = data?.group_order || [...new Set((data?.blocks || []).map((b) => b.group))];
+  const html = groups.map((g) => {
+    const items = blocks.filter((b) => b.group === g);
+    if (!items.length) return "";
+    return `<h3 class="v2-report-h">${esc(g)} <span class="v2-muted">· ${items.length}</span></h3>
+      ${data.group_captions?.[g] ? `<p class="v2-muted">${esc(data.group_captions[g])}</p>` : ""}
+      ${items.map((b) => `<details class="v2-wire"><summary>${esc(b.section)} › ${esc(b.title)}</summary><div class="v2-wire-body">${(b.paragraphs || []).map((p) => `<p>${esc(p)}</p>`).join("")}</div></details>`).join("")}`;
+  }).join("");
+  return `<p class="v2-muted" role="status">Блоков инструкции: ${blocks.length} из ${(data?.blocks || []).length}. Вопросов теста: ${esc(data?.questions_total ?? "?")}.</p>${html || `<p class="v2-muted">Ничего не найдено по запросу «${esc(search)}».</p>`}`;
+}
+
 function errorText(err) {
   if (err instanceof ApiError) {
     const d = err.detail;
@@ -203,7 +218,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const s = st[active];
     const body = $("#rd-body");
     searchInput.hidden = sec.kind === "record" || (sec.kind === "report" && !sec.search);
-    $("#rd-count").hidden = sec.kind === "record" || sec.kind === "report";
+    $("#rd-count").hidden = sec.kind === "record" || sec.kind === "report" || sec.kind === "guide";
     refreshBtn.disabled = s.status === "loading";
     $("#rd-count").textContent = "";
     if (s.status === "idle" || s.status === "loading") { body.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`; return; }
@@ -216,6 +231,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     }
     if (sec.kind === "record") { body.innerHTML = paintRecord(sec, s.data); return; }
     if (sec.kind === "report") { paintReport(sec, s, body); return; }
+    if (sec.kind === "guide") { body.innerHTML = paintGuide(s.data, s.search); return; }
     const q = sec.serverSearch ? "" : s.search.trim().toLowerCase();
     const keys = sec.search || sec.columns.map((c) => c.key);
     const rows = q ? s.rows.filter((r) => keys.some((k) => String(pick(r, k) ?? "").toLowerCase().includes(q))) : s.rows;
