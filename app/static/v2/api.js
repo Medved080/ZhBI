@@ -71,8 +71,10 @@ let pendingWrites = 0;
 const writeListeners = new Set();
 function notifyPendingWrites() { for (const fn of writeListeners) fn(pendingWrites); }
 
-async function request(method, path, body) {
-  const isWrite = method !== "GET";
+async function request(method, path, body, { read = false } = {}) {
+  // read: POST-запрос, который ТОЛЬКО читает (отчёты V1 берут параметры отбора телом запроса). Он не считается
+  // записью: не блокирует переходы и не показывает «идёт сохранение».
+  const isWrite = method !== "GET" && !read;
   // FormData (загрузка файла) уходит как есть: Content-Type с boundary
   // браузер выставляет сам, ручной JSON-заголовок его бы сломал.
   const isForm = typeof FormData !== "undefined" && body instanceof FormData;
@@ -114,6 +116,11 @@ export const api = {
   put: (path, body) => request("PUT", path, body ?? {}),
   delete: (path) => request("DELETE", path),
   upload: (path, formData) => request("POST", path, formData),
+  // Чтение POST-запросом. Допустимы только отчёты (`/reports/…`) — остальное это запись и должно идти через post().
+  readPost: (path, body) => {
+    if (!/^\/reports\/[a-z0-9-]+$/.test(path)) throw new Error(`readPost: «${path}» не отчёт — это запись, используйте post()`);
+    return request("POST", path, body ?? {}, { read: true });
+  },
   hasPendingWrites: () => pendingWrites > 0,
   onPendingWritesChange(fn) { writeListeners.add(fn); return () => writeListeners.delete(fn); },
 };

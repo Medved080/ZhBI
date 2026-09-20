@@ -2570,6 +2570,41 @@ function createServer(opts) {
     return { database: {}, domains: [], tables: [{ name: "qa_table", caption: "qa_table — QA", domain: "QA-область", described: true, rows: 7, bytes: 4096, index_bytes: 0, fields: [] }], relations: [], soft_relations: [], drift: [] };
   });
 
+  // ---- отчёты (POST только читает; форма ответов — как у настоящего backend) ----
+  const reportBody = (ctx) => { const b = ctx.body || {}; if (!b.object_id) fail(422, "object_id: обязательное поле"); return b; };
+  route("POST", "/reports/status", (ctx) => {
+    reportBody(ctx);
+    const v = (a, b, c, d, e) => ({ contracting: a, delivered: b, installed: c, remainder: d, total: e });
+    return { title: "Статус монтажа", root_label: "ЖБ изделия",
+      columns: [{ key: "contracting", label: "Контрактация" }, { key: "delivered", label: "Доставлен" }, { key: "installed", label: "Смонтирован" }, { key: "remainder", label: "Остаток" }, { key: "total", label: "В проекте" }],
+      rows: [
+        { label: "Захватка 1", level: 0, values: v(10, 5, 3, 2, 20), children: [{ label: "1 этаж", level: 1, values: v(10, 5, 3, 2, 20), children: [{ label: "Колонна нижняя", level: 2, values: v(10, 5, 3, 2, 20), children: [] }] }] },
+        { label: "Захватка 2", level: 0, values: v(1, 1, 1, 0, 2), children: [{ label: "2 этаж", level: 1, values: v(1, 1, 1, 0, 2), children: [] }] },
+      ], total: { label: "В проекте", values: v(11, 6, 4, 2, 22) } };
+  });
+  route("POST", "/reports/completion", (ctx) => {
+    reportBody(ctx);
+    const rows = Array.from({ length: 450 }, (_, i) => ({ crane: 1, stance: 1, element_type: "Колонна", subtype: "верхняя", mark: `К-${i + 1}`, count: 1, status: "Запланирован", status_color: "#b1b3b4", status_order: 0, counterparty: null, agreement: null, specification: null, plan_date: "2026-08-01", fact_date: null, need_date: "2026-08-29", guid: `g${i}` }));
+    return { title: "Статус комплектации", columns: [{ key: "crane", label: "Кран", kind: "num" }, { key: "element_type", label: "Тип", kind: "text" }, { key: "mark", label: "Маркировка изделий", kind: "text" }, { key: "count", label: "Кол-во", kind: "num" }, { key: "status", label: "Статус", kind: "status" }, { key: "plan_date", label: "Плановая дата поставки", kind: "date" }, { key: "guid", label: "GUID", kind: "text" }],
+      rows, total: { label: "Итого", count: 450 }, warning: "QA-предупреждение о требуемой дате" };
+  });
+  route("POST", "/reports/analytics", (ctx) => {
+    const b = reportBody(ctx);
+    const days = b.horizon_days || 30;
+    return { title: "Аналитическая справка", object_id: b.object_id, object_name: "QA-объект", report_date: b.report_date || "2026-09-20", horizon_days: days, horizon_end: `2026-10-${String(days).padStart(2, "0")}`,
+      horizons: [{ days: 14, label: "2 недели" }, { days: 30, label: "1 месяц" }], disclaimer: "QA-оговорка",
+      tiles: [{ key: "contracting", value: "86 %", label: "законтрактовано", hint: "8212 из 9580 шт." }],
+      conclusions: [{ severity: "critical", text: "QA-вывод: не хватает 4 шт." }],
+      stages: { columns: [{ key: "crane", label: "Кран", kind: "text" }], rows: [{ crane: "Кран 1" }] }, progress: { columns: [], rows: [] }, front: { columns: [], rows: [] }, critical: { columns: [], rows: [] }, capacity_gaps: [] };
+  });
+  route("POST", "/reports/dynamics", (ctx) => {
+    const b = reportBody(ctx);
+    return { title: "Отчёт о динамике поставки и монтажа", subtitle: "QA-подзаголовок", report_date: b.report_date || "2026-09-20", weeks: ["2026-09-07", "2026-09-14"],
+      series: { plan_smr: [1, 2], fact_montage: [0, 1] }, series_labels: { plan_smr: "Монтаж (план)", fact_montage: "Монтаж (факт)" }, series_order: ["plan_smr", "fact_montage"],
+      montage: { total: 10, cumulative: { plan: 3, fact: 1, deviation: -2 }, day: { plan: 1, fact: 0, deviation: -1 }, percent: 10 }, delivery: { total: 10, cumulative: { plan: 2, fact: 2, deviation: 0 }, day: { plan: 0, fact: 0, deviation: 0 }, percent: 20 },
+      finish: { montage: { plan: "2026-12-30", forecast: "2027-01-12", deviation_days: 13 } } };
+  });
+
   // ---- карта (app/project_map.py) ----
   route("GET", "/map/config", (ctx) => {
     assertFeature(ctx.user, "map", "read");

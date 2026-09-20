@@ -34,8 +34,9 @@ export const tests = [
         t.ok(shown > 0 || /нет|пуст|Записей нет|не найден/i.test(body(a).textContent), `${s.id}: показаны строки/поля или явное «пусто» (${shown})`);
         t.ok(a.$(`a[data-v1-link]`), `${s.id}: есть переход в текущий интерфейс`);
       }
-      const writes = a.ctl.log.filter((e) => e.method !== "GET");
-      t.eq(writes.map((e) => `${e.method} ${e.path}`), [], "во время просмотра не отправлено ни одного изменяющего запроса");
+      // отчёты запрашиваются POST-ом, но это чтение: разрешён только /reports/*
+      const writes = a.ctl.log.filter((e) => e.method !== "GET" && !(e.method === "POST" && /^\/reports\/[a-z0-9-]+$/.test(e.path)));
+      t.eq(writes.map((e) => `${e.method} ${e.path}`), [], "во время просмотра не отправлено ни одного изменяющего запроса (кроме чтения отчётов)");
       t.eq(a.errors?.length || 0, 0, "нет необработанных JS-ошибок");
     },
   },
@@ -175,6 +176,66 @@ export const tests = [
       const keys = a.$$(NAV).map((b) => b.dataset.section);
       for (const k of ["backups", "ldap", "activity", "db-status"]) t.ok(!keys.includes(k), `${k}: административный экран скрыт без прав`);
       t.ok(keys.includes("changelog") || keys.includes("statuslog"), "экраны без ограничений по разделам доступны");
+    },
+  },
+  {
+    id: "RD-10", title: "Отчёт «Статус монтажа»: дерево — значения и итог из ответа, сворачивание узлов, чтение не блокирует переходы",
+    async run(t) {
+      const a = await openApp({ home: true });
+      const hold = a.ctl.hold("POST /reports/status");
+      await waitFor(() => a.$(`${NAV}[data-section="report-status"]`), { what: "навигация" });
+      a.click(a.$(`${NAV}[data-section="report-status"]`));
+      await waitFor(() => a.ctl.log.some((e) => e.path === "/reports/status"), { what: "запрос отчёта ушёл" });
+      t.eq(a.$("#v2-nav-note").textContent, "", "чтение отчёта POST-ом не показывает «идёт сохранение»");
+      t.ok(!a.$(`${NAV}[data-section="home"]`).disabled, "переходы не заблокированы во время чтения отчёта");
+      const req = a.ctl.log.find((e) => e.path === "/reports/status");
+      t.ok(req.body.object_id > 0, "запрос отчёта с id выбранного объекта");
+      hold.release();
+      await waitFor(() => a.$$("#rd-body tbody tr").length > 0, { what: "дерево отчёта" });
+      const text = () => body(a).textContent.replace(/\s+/g, " ");
+      t.has(text(), "Захватка 1", "первая захватка видна");
+      t.has(text(), "Колонна нижняя", "первая захватка развёрнута (как в V1)");
+      t.ok(!text().includes("2 этаж"), "вторая захватка свёрнута");
+      const toggle = a.$$(".v2-tree-toggle").find((b) => b.dataset.path === "Захватка 2");
+      a.click(toggle);
+      await waitFor(() => text().includes("2 этаж"), { what: "вторая захватка развёрнута" });
+      t.eq([...a.$$("tr.lvl-total")[0].children].map((td) => td.textContent.trim()), ["В проекте", "11", "6", "4", "2", "22"], "итоговая строка совпадает с ответом");
+      hold.dispose?.();
+    },
+  },
+  {
+    id: "RD-11", title: "Отчёт «Статус комплектации»: страницы по 200, поиск на клиенте, предупреждение сервера показано",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await openScreen(a, "report-completion");
+      await waitFor(() => a.$$("#rd-body tbody tr").length > 0, { what: "перечень" });
+      t.eq(a.$$("#rd-body tbody tr").length, 200, "первая страница — 200 строк");
+      t.has(body(a).textContent, "QA-предупреждение о требуемой дате", "предупреждение сервера показано");
+      t.has(body(a).textContent, "Позиций: 450", "общее число позиций");
+      t.ok(!body(a).textContent.includes("GUID"), "служебная колонка GUID не показывается");
+      a.click(a.$("[data-page=next]"));
+      await waitFor(() => a.$$("#rd-body tbody tr")[0]?.textContent.includes("К-201"), { what: "вторая страница" });
+      await a.type(a.$("#rd-search"), "К-45");
+      await waitFor(() => /Найдено \d+ из 450/.test(body(a).textContent), { what: "поиск" });
+      t.ok(a.$$("#rd-body tbody tr").length < 200, "поиск сузил перечень");
+      t.eq(a.ctl.count("POST", "/reports/completion"), 1, "поиск по перечню без нового запроса к серверу");
+    },
+  },
+  {
+    id: "RD-12", title: "Аналитическая справка: смена горизонта перезапрашивает отчёт с новым параметром; ошибка отчёта — понятное сообщение",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await openScreen(a, "report-analytics");
+      await waitFor(() => a.$("select[data-param=horizon_days]"), { what: "элементы управления" });
+      t.has(body(a).textContent, "QA-вывод", "вывод справки показан");
+      a.setValue(a.$("select[data-param=horizon_days]"), "14");
+      await waitFor(() => a.ctl.log.filter((e) => e.path === "/reports/analytics").length === 2, { what: "второй запрос" });
+      t.eq(a.ctl.log.filter((e) => e.path === "/reports/analytics")[1].body.horizon_days, 14, "в запросе новый горизонт");
+      await waitFor(() => body(a).textContent.includes("горизонт до 2026-10-14".replace("2026-10-14", "14.10.2026")) || body(a).textContent.includes("14.10.2026"), { what: "справка пересчитана" });
+      a.ctl.failNext("POST /reports/analytics", { status: 500, detail: "Сбой расчёта (QA)" });
+      a.setValue(a.$("select[data-param=horizon_days]"), "30");
+      await waitFor(() => a.$(".v2-callout-bad"), { what: "сообщение об ошибке отчёта" });
+      t.has(a.$(".v2-callout-bad").textContent, "Сбой расчёта (QA)", "показан текст ошибки");
     },
   },
 ];

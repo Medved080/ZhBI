@@ -7,6 +7,7 @@
 import { ApiError } from "./api.js";
 import { STATUS_LABEL } from "./registry.js";
 import { esc, linkList } from "./screen-view.js";
+import { REPORT_RENDERERS, bindReport } from "./reports.js";
 
 const RENDER_LIMIT = 500;
 
@@ -88,7 +89,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   const sections = screen.read.sections;
   let dead = false;
   let active = 0;
-  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null }));
+  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null, params: {}, rs: {} }));
 
   el.innerHTML = `
     <div class="v2-container v2-screen">
@@ -132,9 +133,12 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     s.status = "loading"; s.error = "";
     paint();
     try {
-      const data = await api.get(urlFor(sec, s));
+      const data = sec.kind === "report"
+        ? await api.readPost(sec.endpoint, { object_id: objectId, source_file: null, ...(sec.body || {}), ...s.params })
+        : await api.get(urlFor(sec, s));
       if (dead || seq !== s.seq) return; // запоздавший ответ: вкладку/объект уже сменили
       s.data = data;
+      if (sec.kind === "report") { s.rs = { search: s.rs.search || "" }; s.status = "ok"; if (i === active) paint(); return; }
       let rows = sec.rowsPath ? pick(data, sec.rowsPath) : data;
       if (sec.asEntries && rows && typeof rows === "object") rows = Object.entries(rows).map(([key, value]) => ({ key, value }));
       s.rows = Array.isArray(rows) ? rows : [];
@@ -152,8 +156,8 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const sec = sections[active];
     const s = st[active];
     const body = $("#rd-body");
-    searchInput.hidden = sec.kind === "record";
-    $("#rd-count").hidden = sec.kind === "record";
+    searchInput.hidden = sec.kind === "record" || (sec.kind === "report" && !sec.search);
+    $("#rd-count").hidden = sec.kind === "record" || sec.kind === "report";
     refreshBtn.disabled = s.status === "loading";
     $("#rd-count").textContent = "";
     if (s.status === "idle" || s.status === "loading") { body.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`; return; }
@@ -165,6 +169,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       return;
     }
     if (sec.kind === "record") { body.innerHTML = paintRecord(sec, s.data); return; }
+    if (sec.kind === "report") { paintReport(sec, s, body); return; }
     const q = sec.serverSearch ? "" : s.search.trim().toLowerCase();
     const keys = sec.search || sec.columns.map((c) => c.key);
     const rows = q ? s.rows.filter((r) => keys.some((k) => String(pick(r, k) ?? "").toLowerCase().includes(q))) : s.rows;
@@ -186,6 +191,32 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     }
   }
 
+  function paintReport(sec, s, bodyEl) {
+    const controls = (sec.controls || []).map((c) => {
+      const cur = s.params[c.param] ?? "";
+      if (c.type === "select") {
+        const opts = pick(s.data, c.optionsFrom) || [];
+        const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? "";
+        return `<label class="v2-wire-field"><span>${esc(c.label)}</span><select data-param="${esc(c.param)}">${opts.map((o) => `<option value="${esc(o[c.valueKey])}" ${String(o[c.valueKey]) === String(val) ? "selected" : ""}>${esc(o[c.labelKey])}</option>`).join("")}</select></label>`;
+      }
+      const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? "";
+      return `<label class="v2-wire-field"><span>${esc(c.label)}</span><input type="date" data-param="${esc(c.param)}" value="${esc(val)}"></label>`;
+    }).join("");
+    const render = REPORT_RENDERERS[sec.report];
+    bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}<div id="rd-report">${render(s.data, s.rs)}</div>`;
+    const repaint = (focusPath) => {
+      bodyEl.querySelector("#rd-report").innerHTML = render(s.data, s.rs);
+      bindReport(sec.report, bodyEl, s.rs, repaint);
+      if (focusPath) bodyEl.querySelector(`[data-path="${CSS.escape(focusPath)}"]`)?.focus();
+    };
+    bindReport(sec.report, bodyEl, s.rs, repaint);
+    bodyEl.querySelectorAll("[data-param]").forEach((inp) => inp.addEventListener("change", () => {
+      if (!inp.value) return; // пустая дата — прежнее значение, а не запрос без даты
+      s.params[inp.dataset.param] = inp.type === "date" ? inp.value : Number(inp.value) || inp.value;
+      load(active);
+    }));
+  }
+
   el.querySelectorAll(".v2-read-tab").forEach((b) => b.addEventListener("click", () => {
     active = Number(b.dataset.tab);
     el.querySelectorAll(".v2-read-tab").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
@@ -200,6 +231,10 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       // поиск на сервере: перезагрузка с первой страницы после паузы в наборе (одна загрузка, а не по букве)
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => { st[i].offset = 0; if (!dead && i === active) load(i); }, 350);
+    } else if (sections[i].kind === "report" && st[i].status === "ok") {
+      st[i].rs.search = searchInput.value; st[i].rs.page = 0;
+      const box = el.querySelector("#rd-report");
+      if (box) { box.innerHTML = REPORT_RENDERERS[sections[i].report](st[i].data, st[i].rs); bindReport(sections[i].report, el.querySelector("#rd-body"), st[i].rs, () => paintReport(sections[i], st[i], $("#rd-body"))); }
     } else if (st[i].status === "ok") paint();
   });
   refreshBtn.addEventListener("click", () => load(active));

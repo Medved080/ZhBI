@@ -627,3 +627,17 @@ input:disabled, select:disabled, textarea:disabled {
 .v2-read-tbl { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; min-width: max-content; }
 .v2-read-tbl th { font-size: 12px; font-weight: 500; color: var(--muted); padding: 10px 12px; background: var(--surface); position: sticky; top: 0; z-index: 1; white-space: nowrap; }
 .v2-read-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+
+/* Отчёты */
+.v2-read-tbl td.num, .v2-read-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.v2-tree-tbl tr.lvl-0 td { font-weight: 600; background: var(--surface); }
+.v2-tree-tbl tr.lvl-total td { border-top: 2px solid var(--line); }
+.v2-tree-toggle { border: 0; background: none; width: 22px; padding: 0; color: var(--muted); }
+.v2-tree-toggle-gap { display: inline-block; width: 22px; }
+.v2-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 12px 0; }
+.v2-tile { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.v2-tile-value { font-size: 22px; font-weight: 600; }
+.v2-conclusions { padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.v2-sev-critical { color: var(--bad); border-color: currentColor; }
+.v2-sev-warning { color: var(--accent); border-color: currentColor; }
+.v2-report-controls { margin-bottom: 10px; }
