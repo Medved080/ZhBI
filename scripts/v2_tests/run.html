@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>V2 — автоматические сценарии</title>
+<style>
+  body { font: 14px/1.4 -apple-system, "Segoe UI", sans-serif; margin: 16px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+  td, th { border: 1px solid #ccc; padding: 4px 8px; text-align: left; vertical-align: top; }
+  .pass { color: #1a7f37; } .fail { color: #b42318; font-weight: 600; }
+  #frames { position: absolute; left: -9999px; top: 0; } /* сценарии работают в невидимых iframe */
+  pre { white-space: pre-wrap; margin: 4px 0 0; font-size: 12px; }
+</style>
+</head>
+<body>
+<h3 id="summary">Сценарии V2: идёт прогон…</h3>
+<p>Выбор набора: <code>?suite=shell,ua,po</code> (по умолчанию все). Один сценарий: <code>?only=UA-A-03</code>. Результат в <code>window.__results</code>.</p>
+<table id="tbl"><thead><tr><th>ID</th><th>Сценарий</th><th>Итог</th><th>Проверки</th></tr></thead><tbody></tbody></table>
+<div id="frames"></div>
+<script type="module" src="/tests/run.js"></script>
+</body>
+</html>

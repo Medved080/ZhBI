@@ -318,13 +318,17 @@ export function mountCounterparties(container, ctx) {
     const choice = await showUnsavedDialog(message);
     if (choice === "cancel") return false;
     if (choice === "discard") { parts.forEach((p) => p.discard()); return true; }
-    let anyFailed = false;
+    const failures = [];
     for (const part of parts) {
       try { await part.save(); }
-      catch (err) { anyFailed = true; }
+      catch (err) { failures.push(`${part.label}: ${err?.detail || err?.message || "не удалось сохранить"}`); }
     }
-    if (anyFailed) {
-      state.status_msg = "Не всё удалось сохранить — ошибки показаны в форме. Откройте вкладку «Контрактация», чтобы их увидеть.";
+    if (failures.length) {
+      // Реальный текст ошибки каждой части — а не общая фраза «ошибки
+      // показаны в форме»: ошибка карточки (например, не заполнено
+      // наименование) в форме не показывается вовсе.
+      const failText = `Не удалось сохранить — ${failures.join("; ")}.`;
+      state.status_msg = failText;
       // requestLeave() дёргают три разных вызывающих (openCard, backToList,
       // переключатель разделов в main.js) — ждать, что КАЖДЫЙ из них сам
       // перерисует экран при неудаче, ненадёжно (main.js про статус-строку
@@ -332,6 +336,10 @@ export function mountCounterparties(container, ctx) {
       // должно быть видно немедленно, а не при случайном следующем
       // render() от несвязанного действия (живой сценарий, где нашли).
       await render();
+      // В воркспейсе контракта render() не выводит status_msg (у него свой
+      // подвал) — ставим текст в актуальную строку статуса явно.
+      status.textContent = failText;
+      state.status_msg = "";
       return false;
     }
     return true;
@@ -377,7 +385,7 @@ export function mountCounterparties(container, ctx) {
       </div></div>
       <div id="cp-body" class="v2-scroll"><div id="cp-inner" class="v2-container"></div></div>
       <footer class="v2-foot"><div class="v2-container">
-        <span id="cp-status" class="v2-muted"></span><div class="v2-foot-actions" id="cp-foot-actions"></div>
+        <span id="cp-status" class="v2-muted" role="status" aria-live="polite"></span><div class="v2-foot-actions" id="cp-foot-actions"></div>
       </div></footer>
     `;
     body = container.querySelector("#cp-inner");
@@ -564,7 +572,7 @@ export function mountCounterparties(container, ctx) {
         <div class="v2-perm">
           <button type="button" class="v2-link" data-open="${cp.id}" style="text-align:left"><strong>${escapeHtml(cp.short_name)}</strong>
             <small>${escapeHtml(cp.full_name)}${cp.inn ? ` · ИНН ${escapeHtml(cp.inn)}` : ""}${cp.code ? ` · код ${escapeHtml(cp.code)}` : ""}</small></button>
-          ${canDelete ? trashIconHtml(`data-del="${cp.id}"`, "Удалить контрагента") : ""}
+          ${canDelete ? trashIconHtml(`data-del="${cp.id}"`, `Удалить контрагента «${cp.short_name}»`) : ""}
         </div>`).join("");
       listEl.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => openCard(Number(el.dataset.open))));
       listEl.querySelectorAll("[data-del]").forEach((el) => el.addEventListener("click", (e) => {
@@ -606,7 +614,6 @@ export function mountCounterparties(container, ctx) {
           ${fieldRow("Контактный телефон", "cpf-contact-phone", d.contact_phone)}
         </div>
       </div>
-      <div class="v2-auth-error" id="cpf-error"></div>
     `;
     el.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", () => {
       const key = { "cpf-code": "code", "cpf-short": "short_name", "cpf-full": "full_name", "cpf-inn": "inn",
@@ -881,7 +888,15 @@ export function mountCounterparties(container, ctx) {
   // ---------- Удаление — общий диалог V2 вместо confirm()/alert(),
   // точечная чистка кэша при подтверждённом сервером успехе (задача 4) ----------
 
+  const deletingNow = new Set();
   async function confirmAndDelete(kind, id, onSuccess) {
+    const deleteKey = `${kind}:${id}`;
+    if (deletingNow.has(deleteKey)) return; // повторный клик, пока первое удаление ещё идёт
+    deletingNow.add(deleteKey);
+    try { await confirmAndDeleteOnce(kind, id, onSuccess); } finally { deletingNow.delete(deleteKey); }
+  }
+
+  async function confirmAndDeleteOnce(kind, id, onSuccess) {
     let plan;
     try { plan = await api.get(`/dictionaries/${kind}/${id}/delete-plan`); }
     catch (err) { await showInfoDialog(err?.detail || err?.message || "Не удалось получить сведения об удалении"); return; }
@@ -890,7 +905,7 @@ export function mountCounterparties(container, ctx) {
       return;
     }
     const label = kind === "counterparty" ? "контрагента" : kind === "agreement" ? "договор" : "спецификацию";
-    const confirmed = await showConfirmDialog(`Удалить ${label}?`, { confirmLabel: "Удалить" });
+    const confirmed = await showConfirmDialog(`Удалить ${label}?`, { confirmLabel: "Удалить", danger: true });
     if (!confirmed) return;
     try {
       await api.post(`/dictionaries/${kind}/${id}/delete`, { replacements: {}, mode: "replace" });
@@ -1096,7 +1111,7 @@ export function mountCounterparties(container, ctx) {
     // Новый (ещё не созданный) контракт нечем конфликтующе удалить — но
     // проверяем contractOpLock всё равно, для единообразия с saveContractDraft
     // и на случай будущих операций, которые тоже будут её выставлять.
-    if (contractOpLock) throw { message: "Дождитесь завершения текущей операции с контрактом." };
+    if (contractOpLock) { draft.error = "Дождитесь завершения текущей операции с контрактом."; throw { message: draft.error }; }
     draft.error = "";
     if (!draft.specificationId) { draft.error = "Выберите спецификацию"; throw { message: draft.error }; }
     const body = buildContractBody(draft);
@@ -1275,27 +1290,27 @@ export function mountCounterparties(container, ctx) {
   // визуальным языком, что и остальные таблицы V2.
   function contractLineRowHtml(key, i, l, saving) {
     return `<tr>
-      <td><input data-line-type="${key}|${i}" placeholder="например, Колонна" value="${escapeHtml(l.elementType)}" ${saving ? "disabled" : ""}></td>
-      <td><input data-line-mark="${key}|${i}" placeholder="необязательно" value="${escapeHtml(l.mark)}" ${saving ? "disabled" : ""}></td>
-      <td><input data-line-qty="${key}|${i}" type="number" min="0" value="${escapeHtml(l.quantity)}" ${saving ? "disabled" : ""} style="width:90px"></td>
-      <td>${trashIconHtml(`data-line-remove="${key}|${i}"`, "Убрать позицию")}</td>
+      <td><input data-line-type="${key}|${i}" aria-label="Тип элемента, позиция ${i + 1}" placeholder="например, Колонна" value="${escapeHtml(l.elementType)}" ${saving ? "disabled" : ""}></td>
+      <td><input data-line-mark="${key}|${i}" aria-label="Марка, позиция ${i + 1}" placeholder="необязательно" value="${escapeHtml(l.mark)}" ${saving ? "disabled" : ""}></td>
+      <td><input data-line-qty="${key}|${i}" aria-label="Количество, позиция ${i + 1}" type="number" min="0" value="${escapeHtml(l.quantity)}" ${saving ? "disabled" : ""} style="width:90px"></td>
+      <td>${trashIconHtml(`data-line-remove="${key}|${i}"`, `Убрать позицию ${i + 1}`)}</td>
     </tr>`;
   }
   function contractIncidentRowHtml(key, i, inc, saving) {
     return `<tr>
-      <td><input data-inc-date="${key}|${i}" type="date" value="${escapeHtml(inc.incidentDate)}" ${saving ? "disabled" : ""}></td>
-      <td><input data-inc-type="${key}|${i}" placeholder="тип элемента" value="${escapeHtml(inc.elementType)}" ${saving ? "disabled" : ""}></td>
-      <td><input data-inc-qty="${key}|${i}" type="number" min="0" value="${escapeHtml(inc.quantity)}" ${saving ? "disabled" : ""} style="width:90px"></td>
-      <td><input data-inc-desc="${key}|${i}" placeholder="описание" value="${escapeHtml(inc.description)}" ${saving ? "disabled" : ""}></td>
-      <td>${trashIconHtml(`data-inc-remove="${key}|${i}"`, "Убрать инцидент")}</td>
+      <td><input data-inc-date="${key}|${i}" aria-label="Дата инцидента ${i + 1}" type="date" value="${escapeHtml(inc.incidentDate)}" ${saving ? "disabled" : ""}></td>
+      <td><input data-inc-type="${key}|${i}" aria-label="Тип элемента, инцидент ${i + 1}" placeholder="тип элемента" value="${escapeHtml(inc.elementType)}" ${saving ? "disabled" : ""}></td>
+      <td><input data-inc-qty="${key}|${i}" aria-label="Количество, инцидент ${i + 1}" type="number" min="0" value="${escapeHtml(inc.quantity)}" ${saving ? "disabled" : ""} style="width:90px"></td>
+      <td><input data-inc-desc="${key}|${i}" aria-label="Описание, инцидент ${i + 1}" placeholder="описание" value="${escapeHtml(inc.description)}" ${saving ? "disabled" : ""}></td>
+      <td>${trashIconHtml(`data-inc-remove="${key}|${i}"`, `Убрать инцидент ${i + 1}`)}</td>
     </tr>`;
   }
   function contractCapacityRowHtml(key, i, c, saving, counterpartyId) {
     return `<tr>
       <td>${escapeHtml(c.elementType)}</td>
-      <td><input data-cap-per-day="${key}|${i}" type="number" min="0" step="0.1" value="${escapeHtml(c.perDay)}" ${saving ? "disabled" : ""} style="width:90px"></td>
+      <td><input data-cap-per-day="${key}|${i}" aria-label="Штук в день на этот контракт, строка ${i + 1}" type="number" min="0" step="0.1" value="${escapeHtml(c.perDay)}" ${saving ? "disabled" : ""} style="width:90px"></td>
       <td class="v2-muted">${escapeHtml(capacityBaseFor(c.elementType, counterpartyId))}</td>
-      <td>${trashIconHtml(`data-cap-remove="${key}|${i}"`, "Убрать переопределение")}</td>
+      <td>${trashIconHtml(`data-cap-remove="${key}|${i}"`, `Убрать переопределение ${i + 1}`)}</td>
     </tr>`;
   }
 
@@ -1303,7 +1318,7 @@ export function mountCounterparties(container, ctx) {
   // куски: отказ чтения объектов показывается РЯДОМ с селектом ("Повторить"
   // читает только /objects), а не молчаливым пустым списком опций.
   function objectSelectHtml(attr, selectedId, disabled) {
-    return `<select ${attr} ${disabled ? "disabled" : ""}><option value="">— выберите объект —</option>
+    return `<select ${attr} aria-label="Объект договора" ${disabled ? "disabled" : ""}><option value="">— выберите объект —</option>
       ${state.objects.map((o) => `<option value="${o.id}" ${String(selectedId) === String(o.id) ? "selected" : ""}>${escapeHtml(objectLabel(o.id))}</option>`).join("")}
       </select>
       ${state.objectsError ? `<span class="v2-auth-error">${escapeHtml(state.objectsError)} ${btn("Повторить", 'data-objects-retry="1"')}</span>` : ""}`;
@@ -1318,8 +1333,8 @@ export function mountCounterparties(container, ctx) {
       ${newForm ? `
       <div id="cp-new-agreement-form" class="v2-inline">
         ${objectSelectHtml('id="cp-new-agreement-object"', newForm.objectId, newForm.saving)}
-        <input id="cp-new-agreement-number" placeholder="номер договора" value="${escapeHtml(newForm.number)}" ${newForm.saving ? "disabled" : ""}>
-        <input id="cp-new-agreement-date" type="date" value="${escapeHtml(newForm.date)}" ${newForm.saving ? "disabled" : ""}>
+        <input id="cp-new-agreement-number" aria-label="Номер нового договора" placeholder="номер договора" value="${escapeHtml(newForm.number)}" ${newForm.saving ? "disabled" : ""}>
+        <input id="cp-new-agreement-date" aria-label="Дата нового договора" type="date" value="${escapeHtml(newForm.date)}" ${newForm.saving ? "disabled" : ""}>
         ${btn("Добавить", 'id="cp-add-agreement"', true)}${btn("Отмена", 'id="cp-new-agreement-cancel"')}
         <span class="v2-auth-error" id="cp-agreement-error">${escapeHtml(newForm.error || "")}</span>
       </div>` : ""}
@@ -1332,10 +1347,10 @@ export function mountCounterparties(container, ctx) {
           return `
           <details class="v2-agreement" data-agreement="${a.id}" ${state.expandedAgreements.has(a.id) ? "open" : ""}>
             <summary>Договор <strong>${escapeHtml(a.number)}</strong> ${fmtDate(a.agreement_date)} — ${escapeHtml(objectLabel(a.object_id))}${av.dirty ? " · не сохранено" : ""}
-              ${trashIconHtml(`data-del-agreement="${a.id}"`, "Удалить договор")}</summary>
+              ${trashIconHtml(`data-del-agreement="${a.id}"`, `Удалить договор ${a.number}`)}</summary>
             <div class="v2-inline" style="margin:10px 0">
-              <input data-a-number="${a.id}" value="${escapeHtml(av.number)}" placeholder="номер" ${av.saving ? "disabled" : ""}>
-              <input data-a-date="${a.id}" type="date" value="${escapeHtml(av.date)}" ${av.saving ? "disabled" : ""}>
+              <input data-a-number="${a.id}" aria-label="Номер договора" value="${escapeHtml(av.number)}" placeholder="номер" ${av.saving ? "disabled" : ""}>
+              <input data-a-date="${a.id}" aria-label="Дата договора" type="date" value="${escapeHtml(av.date)}" ${av.saving ? "disabled" : ""}>
               ${objectSelectHtml(`data-a-object="${a.id}"`, av.objectId, av.saving)}
               ${btn("Сохранить", `data-save-agreement="${a.id}"`, true)}
               <span class="v2-auth-error" data-a-error="${a.id}">${escapeHtml(av.error || "")}</span>
@@ -1343,8 +1358,8 @@ export function mountCounterparties(container, ctx) {
             <div class="v2-inline" style="margin-bottom:8px">${newSpecForm ? "" : btn("+ Спецификация", `data-new-spec-toggle="${a.id}"`)}</div>
             ${newSpecForm ? `
             <div data-new-spec-form="${a.id}" class="v2-inline">
-              <input data-spec-number="${a.id}" placeholder="номер" value="${escapeHtml(newSpecForm.number)}" ${newSpecForm.saving ? "disabled" : ""}>
-              <input data-spec-date="${a.id}" type="date" value="${escapeHtml(newSpecForm.date)}" ${newSpecForm.saving ? "disabled" : ""}>
+              <input data-spec-number="${a.id}" aria-label="Номер новой спецификации" placeholder="номер" value="${escapeHtml(newSpecForm.number)}" ${newSpecForm.saving ? "disabled" : ""}>
+              <input data-spec-date="${a.id}" aria-label="Дата новой спецификации" type="date" value="${escapeHtml(newSpecForm.date)}" ${newSpecForm.saving ? "disabled" : ""}>
               ${btn("Добавить", `data-add-spec="${a.id}"`, true)}${btn("Отмена", `data-spec-cancel="${a.id}"`)}
               <span class="v2-auth-error" data-spec-form-error="${a.id}">${escapeHtml(newSpecForm.error || "")}</span>
             </div>` : ""}
@@ -1355,10 +1370,10 @@ export function mountCounterparties(container, ctx) {
               return `
               <details class="v2-agreement v2-agreement-nested" data-spec="${s.id}" ${state.expandedSpecs.has(s.id) ? "open" : ""}>
                 <summary>Спецификация <strong>${escapeHtml(s.number)}</strong> ${fmtDate(s.specification_date)}${sv.dirty ? " · не сохранено" : ""}
-                  ${trashIconHtml(`data-del-spec="${s.id}"`, "Удалить спецификацию")}</summary>
+                  ${trashIconHtml(`data-del-spec="${s.id}"`, `Удалить спецификацию ${s.number}`)}</summary>
                 <div class="v2-inline" style="margin:10px 0">
-                  <input data-s-number="${s.id}" value="${escapeHtml(sv.number)}" placeholder="номер" ${sv.saving ? "disabled" : ""}>
-                  <input data-s-date="${s.id}" type="date" value="${escapeHtml(sv.date)}" ${sv.saving ? "disabled" : ""}>
+                  <input data-s-number="${s.id}" aria-label="Номер спецификации" value="${escapeHtml(sv.number)}" placeholder="номер" ${sv.saving ? "disabled" : ""}>
+                  <input data-s-date="${s.id}" aria-label="Дата спецификации" type="date" value="${escapeHtml(sv.date)}" ${sv.saving ? "disabled" : ""}>
                   ${btn("Сохранить", `data-save-spec="${s.id}"`, true)}
                   <span class="v2-auth-error" data-s-error="${s.id}">${escapeHtml(sv.error || "")}</span>
                 </div>
@@ -1853,7 +1868,7 @@ export function mountCounterparties(container, ctx) {
         lockContractWorkspace(true, true);
         return;
       }
-      const confirmed = await showConfirmDialog(`Удалить контракт?${consequences ? " " + consequences : ""}`, { confirmLabel: "Удалить" });
+      const confirmed = await showConfirmDialog(`Удалить контракт?${consequences ? " " + consequences : ""}`, { confirmLabel: "Удалить", danger: true });
       if (!confirmed) return;
       if (contractOpLock) { await showInfoDialog("Дождитесь завершения текущей операции с контрактом."); return; } // могло начаться, пока ждали диалог
       // Пока showConfirmDialog ждал ответа, страница уже была заблокирована
@@ -1910,7 +1925,7 @@ export function mountCounterparties(container, ctx) {
       <div class="v2-note" id="ctr-replacement-picker" style="margin-top:10px">
         <p>К контракту привязаны изделия схемы. ${escapeHtml(rep.consequences)} Выберите контракт этой же спецификации, на который перенести их привязку:</p>
         <div class="v2-inline">
-          <select id="ctr-replacement-select" ${rep.saving ? "disabled" : ""}>
+          <select id="ctr-replacement-select" aria-label="Контракт, на который перенести привязку изделий" ${rep.saving ? "disabled" : ""}>
             ${rep.candidates.map((c) => `<option value="${escapeHtml(c.key)}" ${String(rep.selectedKey) === String(c.key) ? "selected" : ""}>${escapeHtml(c.label)}</option>`).join("")}
           </select>
           ${btn(rep.saving ? "Перенос…" : "Подтвердить перенос и удалить", `id="ctr-replacement-confirm" ${rep.saving ? "disabled" : ""}`, true)}
@@ -2196,7 +2211,7 @@ export function mountCounterparties(container, ctx) {
           : '<tr><td colspan="4" class="v2-note">переопределений нет</td></tr>'}</tbody>
       </table>
       <div class="v2-inline" style="margin-top:10px">
-        <input id="ctr-cap-new-type" placeholder="тип элемента" ${draft.saving ? "disabled" : ""}>
+        <input id="ctr-cap-new-type" aria-label="Тип элемента для нового переопределения" placeholder="тип элемента" ${draft.saving ? "disabled" : ""}>
         ${btn("+ строка", 'id="ctr-cap-add"')}
       </div>
     `;
@@ -2405,7 +2420,7 @@ export function mountCounterparties(container, ctx) {
         <td>${escapeHtml(CONTRACT_STATUS_LABELS[r.current_status] || r.current_status)}</td>
         <td>${r.project_delivery_date ? escapeHtml(r.project_delivery_date) : "—"}</td>
         <td>
-          <input type="date" data-elem-planned="${r.id}" value="${escapeHtml(displayValue)}" ${rowDisabled ? "disabled" : ""}>
+          <input type="date" data-elem-planned="${r.id}" aria-label="Плановая дата поставки, элемент ${r.id}" value="${escapeHtml(displayValue)}" ${rowDisabled ? "disabled" : ""}>
           ${elemPlannedRowStatusHtml(r.id, st)}
         </td>
         <td>${r.actual_delivery_date ? escapeHtml(r.actual_delivery_date) : "—"}</td>
@@ -2563,7 +2578,7 @@ export function mountCounterparties(container, ctx) {
         <div id="ctr-tab-content"></div>
       </div></div>
       <footer class="v2-foot"><div class="v2-container">
-        <span id="ctr-status" class="v2-muted"></span><div class="v2-foot-actions" id="ctr-foot-actions"></div>
+        <span id="ctr-status" class="v2-muted" role="status" aria-live="polite"></span><div class="v2-foot-actions" id="ctr-foot-actions"></div>
       </div></footer>
     `;
     body = container.querySelector("#ctr-tab-content");
@@ -2600,12 +2615,12 @@ export function mountCounterparties(container, ctx) {
       <table class="v2-table" id="cp-capacity"><thead><tr><th>Тип элемента</th><th>шт./день</th><th>Комментарий</th></tr></thead><tbody>
         ${state.draft.capacity.map((c, i) => `<tr>
           <td>${escapeHtml(c.element_type)}</td>
-          <td><input data-cap-per-day="${i}" type="number" min="0" step="0.1" value="${c.per_day ?? ""}" style="width:90px"></td>
-          <td><input data-cap-comment="${i}" value="${escapeHtml(c.comment || "")}"></td>
+          <td><input data-cap-per-day="${i}" aria-label="Штук в день, строка ${i + 1}" type="number" min="0" step="0.1" value="${c.per_day ?? ""}" style="width:90px"></td>
+          <td><input data-cap-comment="${i}" aria-label="Комментарий, строка ${i + 1}" value="${escapeHtml(c.comment || "")}"></td>
         </tr>`).join("")}
       </tbody></table>
       <div class="v2-inline" style="margin-top:12px">
-        <input id="cp-cap-new-type" placeholder="Тип элемента">
+        <input id="cp-cap-new-type" aria-label="Тип элемента для новой строки" placeholder="Тип элемента">
         ${btn("+ Строка", 'id="cp-cap-add-row"')}
       </div>
     `;

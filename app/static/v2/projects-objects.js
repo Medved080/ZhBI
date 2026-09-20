@@ -119,7 +119,12 @@ export function mountProjectsObjects(container, ctx) {
   function hasUnsavedChanges() { return !!currentDirty; }
   async function resolveDirty(info) {
     return sharedResolveDirty(info, (err) => {
-      state.status_msg = err?.detail || err?.message || "Не удалось сохранить";
+      // Ошибка сохранения из диалога ухода показывается СРАЗУ в строке
+      // статуса: вызывающие (selectNode, «Открыть в V1», смена раздела) при
+      // отказе просто выходят без перерисовки, и текст, отложенный в
+      // state.status_msg, пользователь бы не увидел вовсе. Переход отменён,
+      // черновик и кнопки «Отменить/Сохранить» остаются, повтор возможен.
+      status.textContent = err?.detail || err?.message || "Не удалось сохранить";
     });
   }
   async function requestLeave() {
@@ -154,9 +159,14 @@ export function mountProjectsObjects(container, ctx) {
     </div></div>
     <div id="po-body" class="v2-scroll"><div id="po-inner" class="v2-container"></div></div>
     <footer class="v2-foot"><div class="v2-container">
-      <span id="po-status" class="v2-muted"></span><div class="v2-foot-actions" id="po-foot-actions"></div>
+      <span id="po-status" class="v2-muted" role="status" aria-live="polite"></span><div class="v2-foot-actions" id="po-foot-actions"></div>
     </div></footer>
   `;
+  // Закреплённый подвал и прокрутка только внутри #po-body держатся на классе
+  // v2-app контейнера. Раздел ставит его сам: раньше он появлялся здесь лишь
+  // как «утечка» после захода в «Пользователи и доступ», и вид зависел от
+  // порядка посещения разделов. main.js сбрасывает класс при каждой смене.
+  container.classList.add("v2-app");
   const body = container.querySelector("#po-inner");
   const status = container.querySelector("#po-status");
   const footActions = container.querySelector("#po-foot-actions");
@@ -284,7 +294,10 @@ export function mountProjectsObjects(container, ctx) {
   }
 
   function renderFooter() {
-    if (!state.dirty) { footActions.innerHTML = ""; return; }
+    // Без несохранённых изменений подвал пуст и статус «Есть несохранённые
+    // изменения» не остаётся висеть (например, после «Не сохранять»); текст
+    // результата операции («Сохранено.») render() ставит уже после этого.
+    if (!state.dirty) { footActions.innerHTML = ""; status.textContent = ""; return; }
     footActions.innerHTML = `${btn("Отменить", 'id="po-cancel"')}${btn("Сохранить", 'id="po-save"', true)}`;
     status.textContent = "Есть несохранённые изменения";
     footActions.querySelector("#po-cancel").addEventListener("click", async () => {
@@ -494,7 +507,6 @@ export function mountProjectsObjects(container, ctx) {
       <div id="po-avatar"></div>
       <div id="po-attachments"><p class="v2-muted">Загрузка…</p></div>` : `
       <p class="v2-muted" style="margin:12px 0 0">Вложения станут доступны после первого сохранения.</p>`}
-      <div class="v2-auth-error" id="pf-error"></div>
     `;
     el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", markDirty));
     el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => {
@@ -686,13 +698,13 @@ export function mountProjectsObjects(container, ctx) {
           <span class="v2-muted v2-attach-meta">${formatFileSize(a.size)}${a.description ? " · " + escapeHtml(a.description) : ""}
             · ${escapeHtml(a.uploaded_by || "—")}, ${escapeHtml((a.uploaded_at || "").slice(0, 16))}</span>
           ${previewBtn}
-          ${canDelete ? trashIconHtml(`data-del="${a.id}"`, "Удалить вложение") : ""}
+          ${canDelete ? trashIconHtml(`data-del="${a.id}"`, `Удалить вложение ${a.filename}`) : ""}
         </div>`;
       }).join("") : `<p class="v2-muted">Файлов нет.</p>`;
       listEl.innerHTML = rows + (canUpload ? `
         <div class="v2-inline" style="margin-top:10px">
-          <input type="file" id="po-attach-file" multiple>
-          <input type="text" id="po-attach-desc" placeholder="описание (необязательно)">
+          <input type="file" id="po-attach-file" aria-label="Файлы для вложения" multiple>
+          <input type="text" id="po-attach-desc" aria-label="Описание вложения" placeholder="описание (необязательно)">
           ${btn("Приложить", 'id="po-attach-add"')}
         </div>
         <div class="v2-muted" id="po-attach-status" style="margin-top:6px"></div>` : "");
@@ -721,7 +733,7 @@ export function mountProjectsObjects(container, ctx) {
         // отправить второй DELETE по тому же id, пока первый в пути.
         listEl.querySelectorAll("[data-del]").forEach((x) => { x.disabled = true; });
         const unlockDeleteButtons = () => listEl.querySelectorAll("[data-del]").forEach((x) => { x.disabled = false; });
-        const confirmed = await showConfirmDialog("Удалить вложение? Восстановить его будет нечем.", { confirmLabel: "Удалить" });
+        const confirmed = await showConfirmDialog("Удалить вложение? Восстановить его будет нечем.", { confirmLabel: "Удалить", danger: true });
         if (!confirmed) { unlockDeleteButtons(); return; }
         try {
           const d = await api.delete(`/attachments/${attId}`);
@@ -789,7 +801,7 @@ export function mountProjectsObjects(container, ctx) {
       return;
     }
     const rec = type === "project" ? state.projects.find((r) => r.id === id) : state.objects.find((r) => r.id === id);
-    const confirmed = await showConfirmDialog(`Удалить «${rec?.name || ""}»?`, { confirmLabel: "Удалить" });
+    const confirmed = await showConfirmDialog(`Удалить «${rec?.name || ""}»?`, { confirmLabel: "Удалить", danger: true });
     if (!confirmed) return;
     // Пока идёт запрос — поля этой же формы блокируются: иначе правка,
     // сделанная за то время, что подтверждение уже отправлено, а ответ ещё
@@ -845,13 +857,13 @@ export function mountProjectsObjects(container, ctx) {
     body.innerHTML = `
       <div class="v2-cols">
         <aside class="v2-side v2-tree-pane">
-          <input id="po-search" placeholder="Найти по названию или адресу" value="${escapeHtml(state.query)}">
-          <select id="po-status-filter">
+          <input id="po-search" aria-label="Поиск проекта или объекта" placeholder="Найти по названию или адресу" value="${escapeHtml(state.query)}">
+          <select id="po-status-filter" aria-label="Фильтр по статусу">
             ${[["active", "В работе"], ["perspective", "Перспективный"], ["suspended", "Приостановлен"], ["completed", "Завершён"], ["archived", "Архивный"], ["", "Все"]]
               .map(([v, l]) => `<option value="${v}" ${state.status === v ? "selected" : ""}>${l}</option>`).join("")}
           </select>
-          <select id="po-smu-filter"></select>
-          <select id="po-responsible-filter"></select>
+          <select id="po-smu-filter" aria-label="Фильтр по СМУ"></select>
+          <select id="po-responsible-filter" aria-label="Фильтр по ответственному"></select>
           <div id="po-tree" class="v2-tree"></div>
           <div class="v2-tree-foot">${btn("+ Проект", 'id="po-add-project"')}${btn("+ Объект", 'id="po-add-object"')}</div>
         </aside>

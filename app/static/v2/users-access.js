@@ -286,7 +286,7 @@ export function mountUsersAccess(container, ctx) {
     </div></nav>
     <div id="ua-body" class="v2-scroll"><div id="ua-inner" class="v2-container"></div></div>
     <footer class="v2-foot"><div class="v2-container">
-      <span id="ua-status" class="v2-muted"></span><div class="v2-foot-actions" id="ua-foot-actions"></div>
+      <span id="ua-status" class="v2-muted" role="status" aria-live="polite"></span><div class="v2-foot-actions" id="ua-foot-actions"></div>
     </div></footer>
   `;
   const nav = container.querySelector(".v2-nav");
@@ -295,7 +295,9 @@ export function mountUsersAccess(container, ctx) {
   const footActions = container.querySelector("#ua-foot-actions");
 
   async function goto(page) {
-    if (page === state.page) return;
+    // Клик по уже открытой вкладке ничего не делает — кроме случая, когда её
+    // чтение упало: тогда это повторная попытка.
+    if (page === state.page && !state.renderFailed) return;
     await withNavGuard(async () => {
       if (!(await requestLeave())) return;
       state.page = page;
@@ -356,9 +358,19 @@ export function mountUsersAccess(container, ctx) {
       else if (state.page === "edit") await renderEdit();
       else if (state.page === "roles") await renderRoles();
       else if (state.page === "check") await renderCheck();
+      state.renderFailed = false;
     } catch (err) {
-      body.innerHTML = `<p class="v2-note"></p>`;
-      body.querySelector("p").textContent = err.detail || err.message || String(err);
+      // Ошибка чтения — не пустой экран и не тупик: причина текстом и кнопка
+      // «Повторить»; повторный клик по той же вкладке тоже перечитывает
+      // (см. goto).
+      state.renderFailed = true;
+      body.innerHTML = `<div class="v2-note"><span id="ua-read-error"></span> ${btn("Повторить", 'id="ua-read-retry"')}</div>`;
+      body.querySelector("#ua-read-error").textContent = err.detail || err.message || String(err);
+      const retry = body.querySelector("#ua-read-retry");
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        await render();
+      });
     }
   }
 
@@ -403,7 +415,7 @@ export function mountUsersAccess(container, ctx) {
     body.innerHTML = `
       <div class="v2-bar"><h3>Пользователи <small>${state.users.length} учётных записей</small></h3>
         ${canWriteUsers ? btn("Добавить пользователя", 'data-new', true) : ""}</div>
-      <div class="v2-bar"><input class="v2-search" id="ua-search" placeholder="Имя, логин или подразделение" value="${escapeHtml(state.query)}"></div>
+      <div class="v2-bar"><input class="v2-search" id="ua-search" aria-label="Поиск пользователя" placeholder="Имя, логин или подразделение" value="${escapeHtml(state.query)}"></div>
       <table class="v2-table"><thead><tr><th>Пользователь</th><th>Учётная запись</th><th>Системная роль</th><th>Доступ</th><th></th></tr></thead>
       <tbody id="ua-rows">${userRows()}</tbody></table>
       <div id="ua-new-user"></div>
@@ -717,7 +729,6 @@ export function mountUsersAccess(container, ctx) {
         </label>
       </div>
       <p class="v2-note">Системная роль — только про ведение сервиса. Права на стройках — вкладка «Доступ к объектам».</p>
-      <div class="v2-auth-error" id="pf-error"></div>
     `;
     if (!canWriteUsers) return;
     const bind = (id, field) => panel.querySelector(id).addEventListener("input", (e) => {
@@ -746,7 +757,6 @@ export function mountUsersAccess(container, ctx) {
         <input type="checkbox" id="sec-must" ${d.must_change_password ? "checked" : ""} ${canWriteUsers ? "" : "disabled"}>
         <span>Требовать смену пароля при следующем входе</span>
       </label>
-      <div class="v2-auth-error" id="pf-error"></div>
       ${canSetPw && d.auth_method !== "domain" ? `
         <div class="v2-result">
           <h4>Задать пароль</h4>
@@ -959,13 +969,32 @@ export function mountUsersAccess(container, ctx) {
     }
   }
 
+  // Каркас (поле поиска + переключатель областей) строится ОДИН раз и живёт,
+  // пока открыта сводка; на каждый ввод перерисовывается только контейнер
+  // результатов. Раньше panel.innerHTML пересоздавал и само поле — после
+  // первого символа оно теряло фокус и каретку.
   function renderAccessSummary(panel, catalog) {
+    panel.innerHTML = `<div class="v2-bar">
+      <input class="v2-search" id="ua-access-search" placeholder="Поиск проекта или объекта" aria-label="Поиск проекта или объекта" value="${escapeHtml(state.accessSearch)}">
+      ${btn(state.accessAllAreas ? "Только доступные" : "Показать все", 'id="ua-access-all-areas"')}
+    </div><div id="ua-access-results"></div>`;
+    panel.querySelector("#ua-access-search").addEventListener("input", (e) => {
+      state.accessSearch = e.target.value;
+      paintAccessResults(panel, catalog);
+    });
+    const allAreasBtn = panel.querySelector("#ua-access-all-areas");
+    allAreasBtn.addEventListener("click", () => {
+      state.accessAllAreas = !state.accessAllAreas;
+      allAreasBtn.textContent = state.accessAllAreas ? "Только доступные" : "Показать все";
+      paintAccessResults(panel, catalog);
+    });
+    paintAccessResults(panel, catalog);
+  }
+
+  function paintAccessResults(panel, catalog) {
     const summary = buildAccessSummary(accessMapFromGrants(state.access.grants), catalog);
     const q = state.accessSearch.trim().toLowerCase();
-    let html = `<div class="v2-bar">
-      <input class="v2-search" id="ua-access-search" placeholder="Поиск проекта или объекта" value="${escapeHtml(state.accessSearch)}">
-      ${btn(state.accessAllAreas ? "Только доступные" : "Показать все", 'id="ua-access-all-areas"')}
-    </div>`;
+    let html = "";
     if (summary.allRoles.size) {
       html += `<div class="v2-note"><strong>Все текущие и будущие проекты</strong><br>`
         + `${accessRolesText(summary.allRoles)} · назначено на «Все проекты» `
@@ -1000,14 +1029,10 @@ export function mountUsersAccess(container, ctx) {
     if (!shown && !summary.allRoles.size) {
       html += `<p class="v2-note">Нет доступа к проектам. Нажмите «Показать все», чтобы назначить роли.</p>`;
     }
-    panel.innerHTML = html;
-    const search = panel.querySelector("#ua-access-search");
-    search.addEventListener("input", (e) => { state.accessSearch = e.target.value; renderAccessSummary(panel, catalog); });
-    panel.querySelector("#ua-access-all-areas").addEventListener("click", () => {
-      state.accessAllAreas = !state.accessAllAreas; renderAccessSummary(panel, catalog);
-    });
+    const results = panel.querySelector("#ua-access-results");
+    results.innerHTML = html;
     if (canWriteUsers) {
-      panel.querySelectorAll("[data-edit-area]").forEach((b) => b.addEventListener("click", () => {
+      results.querySelectorAll("[data-edit-area]").forEach((b) => b.addEventListener("click", () => {
         state.accessView = { edit: b.dataset.editArea };
         renderAccessAreaEditor(panel, catalog, b.dataset.editArea);
       }));
@@ -1045,7 +1070,8 @@ export function mountUsersAccess(container, ctx) {
       status.textContent = "Есть несохранённые изменения";
       footActions.querySelector("#ua-access-save")?.removeAttribute("disabled");
       footActions.querySelector("#ua-access-cancel")?.removeAttribute("disabled");
-      renderAccessAreaEditor(panel, catalog, key);
+      // Без перерисовки редактора: чекбокс уже показывает новое состояние, а
+      // перестройка разметки унесла бы с него фокус (Пробел с клавиатуры).
     }));
   }
 
@@ -1386,7 +1412,7 @@ export function mountUsersAccess(container, ctx) {
     catch (err) { state.status = err.detail || "Не удалось получить сведения об удалении"; return render(); }
     const msg = `Удалить роль «${role.name}»? Будет снята у пользователей: ${plan.users}, `
       + `настроенных разрешений в матрице: ${plan.permissions}, выданных грантов: ${plan.granted}.`;
-    if (!(await showConfirmDialog(msg, { confirmLabel: "Удалить" }))) return;
+    if (!(await showConfirmDialog(msg, { confirmLabel: "Удалить", danger: true }))) return;
     state.rolesBusy = true;
     // Запись — отдельно от последующего обновления экрана: если сама
     // операция не прошла, это единственная настоящая ошибка ниже.

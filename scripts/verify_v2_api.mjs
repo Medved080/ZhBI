@@ -73,7 +73,8 @@ console.log("upload: сетевой сбой опускает счётчик");
   calls.pop().reject(new TypeError("Failed to fetch"));
   let err = null;
   try { await p; } catch (e) { err = e; }
-  check(err instanceof TypeError, "сетевая ошибка проброшена");
+  check(err instanceof ApiError && err.status === 0, "сетевой сбой → ApiError(status 0), не английский TypeError");
+  check(/связи с сервером/.test(err.detail), "текст сетевой ошибки читаем по-русски");
   check(!api.hasPendingWrites(), "после сетевого сбоя счётчик опущен");
 }
 
@@ -87,6 +88,40 @@ console.log("две параллельные записи: счётчик не �
   c2.resolve(jsonResponse(200, {}));
   await p2;
   check(!api.hasPendingWrites(), "обе завершены — false");
+}
+
+
+console.log("ApiError: читаемый текст для любых форм detail (не [object Object])");
+{
+  const text = (status, detail) => new ApiError(status, detail).detail;
+  check(text(409, "Логин занят") === "Логин занят", "строка detail — как есть");
+  const t422 = text(422, [{ loc: ["body", "name"], msg: "Field required", type: "missing" },
+                          { loc: ["body", "lat"], msg: "Input should be a valid number", type: "float_parsing" }]);
+  check(!t422.includes("[object") && t422.includes("name: обязательное поле") && t422.includes("lat: нужно число"), "422 со списком → «поле: причина» по-русски");
+  check(text(422, [{ msg: "Что-то не так" }]).includes("Что-то не так"), "элемент списка без loc/type — msg сервера");
+  check(text(400, { message: "Нельзя удалить" }) === "Нельзя удалить", "объект с message");
+  check(text(400, { detail: "Вложенный текст" }) === "Вложенный текст", "объект с detail");
+  check(text(400, { code: 7 }) === "Ошибка запроса", "объект без текста → общий текст, не [object Object]");
+  check(text(500, "<html><body>Bad gateway</body></html>") === "Ошибка сервера (500). Повторите позже.", "HTML прокси не показывается пользователю");
+  check(text(500, "x".repeat(400)).startsWith("Ошибка сервера"), "очень длинный текст обрезается до общего сообщения");
+  check(text(403, "") === "Недостаточно прав для этого действия.", "пустой detail при 403 — понятная причина");
+  check(text(404, null).includes("Запись не найдена"), "пустой detail при 404");
+  check(text(0, undefined).includes("Нет связи"), "status 0 — нет связи");
+  check(new ApiError(422, [{ msg: "m" }]).message === new ApiError(422, [{ msg: "m" }]).detail, "message совпадает с detail");
+  check(Array.isArray(new ApiError(422, [{ msg: "m" }]).rawDetail), "исходный detail сохранён в rawDetail");
+}
+
+console.log("HTTP-ответы через fetch: 422 и HTML 500");
+{
+  const p = api.post("/x", {});
+  calls.pop().resolve({ ok: false, status: 422, statusText: "", text: async () => JSON.stringify({ detail: [{ loc: ["body", "name"], msg: "Field required", type: "missing" }] }) });
+  let err = null; try { await p; } catch (e) { err = e; }
+  check(err instanceof ApiError && err.status === 422 && err.detail.includes("name: обязательное поле"), "422 разобран в читаемый текст");
+  const p2 = api.patch("/x", {});
+  calls.pop().resolve({ ok: false, status: 500, statusText: "Internal Server Error", text: async () => "<html>oops</html>" });
+  err = null; try { await p2; } catch (e) { err = e; }
+  check(err instanceof ApiError && err.status === 500 && !err.detail.includes("<html>"), "HTML 500 не попадает в сообщение");
+  check(!api.hasPendingWrites(), "после отказов счётчик опущен");
 }
 
 console.log(failures ? `\nПРОВАЛЕНО проверок: ${failures}` : "\nВсе проверки пройдены");

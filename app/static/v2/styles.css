@@ -498,3 +498,28 @@ label.v2-field textarea { font-size: 14px; color: var(--ink); width: 100%; font-
   .v2-seg button { flex: 1; }
   .v2-search { width: 100%; }
 }
+
+
+/* ---- Состояния, которых не хватало (приёмка V2): фокус, danger, disabled ---- */
+
+/* Фокус с клавиатуры — outline 2px accent, отступ 2px (эталон DESIGN-SYSTEM);
+   :where() держит специфичность нулевой, поэтому собственные правила
+   элементов (например, подсветка пункта комбобокса) не перебиваются. */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Опасное действие (необратимое удаление) — не коричневый акцент. */
+.v2-btn.v2-danger { background: var(--bad); border-color: var(--bad); color: var(--accent-ink); }
+.v2-btn.v2-danger:hover { filter: brightness(.94); }
+
+/* Заблокированные поля не должны выглядеть как обычные редактируемые. */
+input:disabled, select:disabled, textarea:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+  background: var(--surface);
+}
+
+/* Пояснение, почему переход между разделами временно недоступен. */
+.v2-nav-note { align-self: center; font-size: 12px; color: var(--muted); }

@@ -25,6 +25,11 @@ function applyThemeFamily(uiTheme) {
 
 let activeModule = null; // {hasUnsavedChanges, guardLeave} текущего смонтированного раздела
 
+// Один переход за раз: пока идёт guardLeave (диалог «Несохранённые
+// изменения», возможное сохранение) и монтирование нового раздела, вторые и
+// третьи клики по вкладкам разделов и по «← Текущий интерфейс» игнорируются.
+let navBusy = false;
+
 function setBackToV1() {
   // Постоянный сброс (не только переход): «Действия ▾» в V1 не должно
   // немедленно вернуть сюда же по cookie-предпочтению.
@@ -32,13 +37,18 @@ function setBackToV1() {
 }
 
 async function onBackClick() {
-  if (api.hasPendingWrites()) return; // кнопка и так задизейблена — вторая защита на всякий случай
-  if (activeModule && !(await activeModule.guardLeave())) return;
-  setBackToV1();
+  if (navBusy || api.hasPendingWrites()) return; // кнопка и так задизейблена — вторая защита на всякий случай
+  navBusy = true;
+  try {
+    if (activeModule && !(await activeModule.guardLeave())) return;
+    setBackToV1();
+  } finally { navBusy = false; }
 }
 
 window.addEventListener("beforeunload", (e) => {
-  if (activeModule && activeModule.hasUnsavedChanges()) {
+  // Незавершённая запись тоже требует предупреждения: закрытие страницы
+  // посреди сохранения оставило бы пользователя без ответа сервера.
+  if ((activeModule && activeModule.hasUnsavedChanges()) || api.hasPendingWrites()) {
     // Стандартное предупреждение браузера — текстом управлять нельзя (и не
     // обещаем это), возвращаемое значение только включает диалог.
     e.preventDefault();
@@ -138,6 +148,7 @@ function renderShell(user, permissions) {
         <span class="v2-badge">Новый интерфейс · Предварительная версия</span>
       </div>
       <div class="v2-head-right">
+        <span class="v2-nav-note" id="v2-nav-note" role="status" aria-live="polite"></span>
         <span class="v2-user-name">${escapeHtml(user.display_name)}</span>
         <button type="button" class="v2-back" id="v2-back-btn" title="">← Текущий интерфейс</button>
       </div>
@@ -149,9 +160,17 @@ function renderShell(user, permissions) {
   `;
   const backBtn = document.getElementById("v2-back-btn");
   backBtn.addEventListener("click", onBackClick);
+  // Пока идёт любая запись (сохранение, удаление, загрузка файла) переходы
+  // между разделами и в V1 недоступны, а причина написана рядом с вкладками —
+  // не только в подсказке заблокированной кнопки. Снимается и после успеха,
+  // и после ошибки: счётчик записей опускается в finally самого запроса.
+  const WAIT_TEXT = "Идёт сохранение — переход временно недоступен";
   api.onPendingWritesChange((n) => {
     backBtn.disabled = n > 0;
     backBtn.title = n > 0 ? "Дождитесь завершения сохранения" : "";
+    document.querySelectorAll(".v2-nav [data-section]").forEach((b) => { b.disabled = n > 0; });
+    const note = document.getElementById("v2-nav-note");
+    if (note) note.textContent = n > 0 ? WAIT_TEXT : "";
   });
 
   const content = document.getElementById("v2-content");
@@ -166,17 +185,27 @@ function renderShell(user, permissions) {
 
   const navButtons = [...document.querySelectorAll(".v2-nav [data-section]")];
   async function openSection(key) {
-    if (activeModule && !(await activeModule.guardLeave())) return;
-    // destroy() — необязательный хук раздела (сейчас есть только у
-    // "Проекты и объекты", у него живая мини-карта MapLibre со своим
-    // graphics-контекстом): content.innerHTML ниже уничтожит её DOM-узел,
-    // но не сам контекст — без явного remove() внутри destroy() браузер
-    // рано или поздно перестанет строить новые карты вовсе.
-    activeModule?.destroy?.();
-    content.innerHTML = "";
-    navButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.section === key)));
-    const section = availableSections.find((s) => s.key === key);
-    activeModule = section.mount(content);
+    if (navBusy || api.hasPendingWrites()) return;
+    navBusy = true;
+    try {
+      if (activeModule && !(await activeModule.guardLeave())) return;
+      // guardLeave мог сохранять данные и сам начать/закончить запись; если
+      // после него запись всё ещё идёт (например, второй поток), не уходим.
+      if (api.hasPendingWrites()) return;
+      // destroy() — необязательный хук раздела (сейчас есть только у
+      // "Проекты и объекты", у него живая мини-карта MapLibre со своим
+      // graphics-контекстом): content.innerHTML ниже уничтожит её DOM-узел,
+      // но не сам контекст — без явного remove() внутри destroy() браузер
+      // рано или поздно перестанет строить новые карты вовсе.
+      activeModule?.destroy?.();
+      content.innerHTML = "";
+      // Оформление раздела не должно зависеть от порядка посещения: классы,
+      // которые раздел мог повесить на общий контейнер, сбрасываются здесь.
+      content.className = "v2-page";
+      navButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.section === key)));
+      const section = availableSections.find((s) => s.key === key);
+      activeModule = section.mount(content);
+    } finally { navBusy = false; }
   }
   navButtons.forEach((b) => b.addEventListener("click", () => openSection(b.dataset.section)));
   openSection(availableSections[0].key);
