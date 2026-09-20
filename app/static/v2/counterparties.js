@@ -1,4 +1,4 @@
-// V2: «Контрагенты» (список) и «Контрагент» (карточка, три вкладки) — те
+// V2: «Контрагенты» (список) и «Контрагент» (карточка: «Основное», «Контрактация», «Прочее» + рабочее пространство контракта) — те
 // же эндпоинты, что у V1 (app/counterparties.py: /counterparties,
 // /agreements, /specifications, /contracts, /dictionaries/*). Раздел,
 // включая чтение, открыт только при "counterparties":"write" — как в V1
@@ -364,7 +364,7 @@ export function mountCounterparties(container, ctx) {
   // контракта всегда одно, второе открыть нельзя, пока не закрыто первое),
   // а не отдельный "занят" у каждой кнопки — про это ниже, у
   // lockContractWorkspace/runContractDelete.
-  let contractOpLock = null; // { kind: "save" | "delete" } | null
+  let contractOpLock = null; // { kind: "save" | "delete", id: number | null } | null
   // Между "нажал Удалить" и "пикер отрисован" (или "диалог подтверждения
   // закрыт") — несколько await'ов подряд (delete-plan, candidates, сам
   // confirm-диалог), и всё это время state.contractDeleteReplacement ещё
@@ -723,6 +723,9 @@ export function mountCounterparties(container, ctx) {
     else if (kind === "agreements") await loadAgreementsList();
     else if (kind === "contracts") await loadContractsList();
     else if (kind === "specs") await loadSpecsFor(agreementId);
+    // Пока шло чтение, пользователь мог уйти в рабочее пространство контракта —
+    // его подвал («Сохранить/Отменить») этот вызов не должен ни перерисовать, ни очистить.
+    if (currentShell !== "card") return;
     await renderContractingTab();
     renderFooter();
   }
@@ -922,7 +925,12 @@ export function mountCounterparties(container, ctx) {
   }
 
   async function renderContractingTab() {
+    // Запоздавший ответ (повтор чтения объектов, спецификаций…) может прийти,
+    // когда пользователь уже в рабочем пространстве контракта: `body` тогда
+    // указывает на его область, а не на карточку. Чужой экран не трогаем.
+    if (currentShell !== "card") return;
     const el = body.querySelector("#cp-tab-body");
+    if (!el) return;
     if (!state.editingId) {
       el.innerHTML = `<p class="v2-note">Договоры заводятся после сохранения контрагента — заполните «Основное» и нажмите «Сохранить».</p>`;
       return;
@@ -936,6 +944,7 @@ export function mountCounterparties(container, ctx) {
     if (needsInitialContractingLoad()) {
       el.innerHTML = `<p class="v2-muted">Загрузка…</p>`;
       await ensureContractingLoaded();
+      if (!el.isConnected) return; // за время чтения экран сменился
     }
     if (!state.contracting.agreementsLoaded) {
       el.innerHTML = `<p class="v2-note">${escapeHtml(state.contracting.agreementsError || "Не удалось загрузить договоры")} ${btn("Повторить", 'id="cp-contracting-retry"')}</p>`;
@@ -966,10 +975,9 @@ export function mountCounterparties(container, ctx) {
   // открывает контракт глобальной формой со свободным каскадом
   // Контрагент→Договор→Спецификация; спецификация уже известна из места, где
   // открыта форма — своя бизнес-логика не изобреталась, изменилась только
-  // точка входа). Сознательно не перенесена вкладка "Развёрнуто" (элементы
-  // схемы, привязанные к контракту, с правкой плановой даты) — V2 нигде не
-  // показывает схему/изделия, переносить только эту таблицу ради одной
-  // формы значило бы тащить отдельный кусок функциональности не по разделу.
+  // точка входа). Вкладка "Развёрнуто" (элементы схемы, привязанные к
+  // контракту, с правкой плановой даты) перенесена позже — см.
+  // renderContractExpandedTabContent и savePlannedDate ниже.
   //
   // Наименование контракта генерируется СЕРВЕРОМ (build_contract_name,
   // app/contracts.py) — buildContractNamePreview ниже дублирует ровно эту
@@ -1354,7 +1362,7 @@ export function mountCounterparties(container, ctx) {
           const newSpecForm = state.newSpecForms.get(a.id);
           return `
           <details class="v2-agreement" data-agreement="${a.id}" ${state.expandedAgreements.has(a.id) ? "open" : ""}>
-            <summary>Договор <strong>${escapeHtml(a.number)}</strong> ${fmtDate(a.agreement_date)} — ${escapeHtml(objectLabel(a.object_id))}${av.dirty ? " · не сохранено" : ""}
+            <summary>Договор <strong>${escapeHtml(a.number)}</strong> ${fmtDate(a.agreement_date)} — ${escapeHtml(objectLabel(a.object_id))}<span data-dirty-mark>${av.dirty ? " · не сохранено" : ""}</span>
               ${canDeleteRecords ? trashIconHtml(`data-del-agreement="${a.id}"`, `Удалить договор ${a.number}`) : ""}</summary>
             <div class="v2-inline" style="margin:10px 0">
               <input data-a-number="${a.id}" aria-label="Номер договора" value="${escapeHtml(av.number)}" placeholder="номер" ${av.saving ? "disabled" : ""}>
@@ -1377,7 +1385,7 @@ export function mountCounterparties(container, ctx) {
               const contracts = contractsBySpec.get(s.id) || [];
               return `
               <details class="v2-agreement v2-agreement-nested" data-spec="${s.id}" ${state.expandedSpecs.has(s.id) ? "open" : ""}>
-                <summary>Спецификация <strong>${escapeHtml(s.number)}</strong> ${fmtDate(s.specification_date)}${sv.dirty ? " · не сохранено" : ""}
+                <summary>Спецификация <strong>${escapeHtml(s.number)}</strong> ${fmtDate(s.specification_date)}<span data-dirty-mark>${sv.dirty ? " · не сохранено" : ""}</span>
                   ${canDeleteRecords ? trashIconHtml(`data-del-spec="${s.id}"`, `Удалить спецификацию ${s.number}`) : ""}</summary>
                 <div class="v2-inline" style="margin:10px 0">
                   <input data-s-number="${s.id}" aria-label="Номер спецификации" value="${escapeHtml(sv.number)}" placeholder="номер" ${sv.saving ? "disabled" : ""}>
@@ -1461,22 +1469,31 @@ export function mountCounterparties(container, ctx) {
         renderFooter();
       });
     }));
+    // «· не сохранено» в заголовке договора/спецификации появляется сразу при
+    // правке (а не только после следующей перерисовки списка).
+    const markDirty = (selector) => {
+      const mark = el.querySelector(`${selector} > summary [data-dirty-mark]`);
+      if (mark) mark.textContent = " · не сохранено";
+    };
     el.querySelectorAll("[data-a-number]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.aNumber);
       const draft = ensureAgreementDraft(id);
       draft.number = inp.value;
+      markDirty(`[data-agreement="${id}"]`);
       renderFooter();
     }));
     el.querySelectorAll("[data-a-date]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.aDate);
       const draft = ensureAgreementDraft(id);
       draft.date = inp.value;
+      markDirty(`[data-agreement="${id}"]`);
       renderFooter();
     }));
     el.querySelectorAll("[data-a-object]").forEach((sel) => sel.addEventListener("change", () => {
       const id = Number(sel.dataset.aObject);
       const draft = ensureAgreementDraft(id);
       draft.objectId = sel.value;
+      markDirty(`[data-agreement="${id}"]`);
       renderFooter();
     }));
     el.querySelectorAll("[data-save-agreement]").forEach((b) => b.addEventListener("click", async () => {
@@ -1537,11 +1554,13 @@ export function mountCounterparties(container, ctx) {
     el.querySelectorAll("[data-s-number]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.sNumber);
       ensureSpecDraft(id).number = inp.value;
+      markDirty(`[data-spec="${id}"]`);
       renderFooter();
     }));
     el.querySelectorAll("[data-s-date]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.sDate);
       ensureSpecDraft(id).date = inp.value;
+      markDirty(`[data-spec="${id}"]`);
       renderFooter();
     }));
     el.querySelectorAll("[data-save-spec]").forEach((b) => b.addEventListener("click", async () => {

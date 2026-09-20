@@ -589,6 +589,256 @@ export const tests = [
       t.ok(inArea(a), "«+ Договор»: фокус перешёл в форму (не потерян)");
     },
   },
+  {
+    id: "CP-A-08", title: "Повтор чтения объектов + вход в контракт до ответа: поздний ответ не роняет экран необработанной ошибкой",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      const errs = [];
+      a.win.addEventListener("unhandledrejection", (e) => errs.push(String(e.reason && (e.reason.message || e.reason))));
+      a.win.addEventListener("error", (e) => errs.push(String(e.message)));
+      a.ctl.failNext("=/objects", { method: "GET", status: 500, detail: "Объекты недоступны" });
+      await openCard(a, 1, "contracting");
+      await waitFor(() => a.$("[data-objects-retry]") && a.$('[data-c-open="edit:4"]'), { what: "ошибка объектов и контракты" });
+      const hold = a.ctl.hold("=/objects", "GET");
+      a.click(a.$("[data-objects-retry]"));
+      await waitFor(() => hold.pending >= 1, { what: "повтор чтения объектов завис" });
+      a.click(a.$('[data-c-open="edit:4"]'));
+      await waitFor(() => a.$("#ctr-back"), { what: "рабочее пространство" });
+      hold.release();
+      await a.settle(300);
+      t.eq(errs, [], "необработанных ошибок нет");
+      t.ok(a.$("#ctr-back"), "рабочее пространство контракта на месте");
+      t.ok(a.$("#ctr-save") && a.$("#ctr-cancel"), "подвал контракта («Отменить/Сохранить») не очищен запоздавшим ответом");
+    },
+  },
+  {
+    id: "CP-P-01", title: "Ёмкость: пустой тип строку не добавляет; тип добавляет строку; после сохранения значения с сервера",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 7, "other");
+      await waitFor(() => a.$("#cp-cap-new-type"), { what: "форма" });
+      const before = a.$$("[data-cap-per-day]").length;
+      a.click(a.$("#cp-cap-add-row")); await a.settle(60);
+      t.eq(a.$$("[data-cap-per-day]").length, before, "пустой тип — строка не добавлена");
+      await a.type(a.$("#cp-cap-new-type"), "Плита");
+      a.click(a.$("#cp-cap-add-row"));
+      await waitFor(() => a.$$("[data-cap-per-day]").length === before + 1, { what: "строка добавлена" });
+      change(a, a.$$("[data-cap-per-day]")[before], "3");
+      await waitFor(() => a.$("#cp-save"), { what: "подвал" });
+      a.click(a.$("#cp-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/counterparties/7") === 1, { what: "PATCH" });
+      await a.settle(150);
+      t.eq(a.ctl.data.counterparties.find((c) => c.id === 7).capacity.map((c) => [c.element_type, c.per_day]), [["Плита", 3]], "ёмкость записана на сервере");
+    },
+  },
+  {
+    id: "CP-A-03", title: "Независимые ошибки кусков: контракты и спецификации падают отдельно, «Повторить» перечитывает только их",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      a.ctl.failNext("=/contracts", { method: "GET", status: 500, detail: "Контракты недоступны" });
+      await openCard(a, 1, "contracting");
+      await waitFor(() => a.$("#cp-contracts-retry"), { what: "«Повторить» для контрактов" });
+      t.has(text(a), "Контракты: Контракты недоступны", "ошибка контрактов названа");
+      t.ok(a.$$("[data-agreement]").length === 2, "договоры при этом показаны");
+      a.click(a.$("#cp-contracts-retry"));
+      await waitFor(() => a.$('[data-c-open="edit:4"]'), { what: "контракты после повтора" });
+      t.eq(a.ctl.count("GET", "=/agreements"), 1, "повтор перечитал только контракты, не договоры");
+    },
+  },
+  {
+    id: "CP-A-05", title: "Правка договора: «· не сохранено» → «Сохранить» → PATCH; ошибка рядом с формой, ввод цел",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 1, "contracting");
+      await waitFor(() => a.$('[data-a-number="1"]'), { what: "договор" });
+      a.$("[data-agreement='1']").open = true;
+      await a.type(a.$('[data-a-number="1"]'), "-X");
+      await a.settle(60);
+      t.has(a.$("[data-agreement='1'] summary").textContent, "не сохранено", "в заголовке «· не сохранено»");
+      a.ctl.failNext("PATCH /agreements/1", { status: 409, detail: "Такой номер уже есть" });
+      a.click(a.$('[data-save-agreement="1"]'));
+      await waitFor(() => a.$("[data-agreement='1']").textContent.includes("Такой номер уже есть"), { what: "ошибка рядом" });
+      t.has(a.$('[data-a-number="1"]').value, "-X", "ввод цел");
+      a.click(a.$('[data-save-agreement="1"]'));
+      await waitFor(() => a.ctl.count("PATCH", "/agreements/1") === 2, { what: "повтор" });
+      await a.settle(150);
+      t.has(a.ctl.data.agreements.find((g) => g.id === 1).number, "-X", "записано на сервере");
+    },
+  },
+  {
+    id: "CP-S-01", title: "Спецификация: пустой номер — сообщение; создание — один POST; правка — PATCH; удаление по правам",
+    async run(t) {
+      const a = await openApp({ perm: "deleter" });
+      await openCp(a);
+      await openCard(a, 1, "contracting");
+      await waitFor(() => a.$('[data-new-spec-toggle="1"]'), { what: "кнопка" });
+      a.$("[data-agreement='1']").open = true;
+      a.click(a.$('[data-new-spec-toggle="1"]'));
+      await waitFor(() => a.$('[data-add-spec="1"]'), { what: "форма" });
+      a.click(a.$('[data-add-spec="1"]')); await a.settle(60);
+      t.has(a.$("[data-agreement='1']").textContent, "Укажите номер спецификации", "валидация номера");
+      await a.type(a.$('[data-spec-number="1"]'), "QA-СП-НОВАЯ");
+      const hold = a.ctl.hold("POST /specifications");
+      a.click(a.$('[data-add-spec="1"]')); a.click(a.$('[data-add-spec="1"]'));
+      await a.settle(60);
+      t.eq(a.ctl.count("POST", "/specifications"), 1, "двойной клик — один POST");
+      hold.release();
+      await waitFor(() => a.ctl.data.specifications.some((x) => x.number === "QA-СП-НОВАЯ"), { what: "создание" });
+      const sp = a.ctl.data.specifications.find((x) => x.number === "QA-СП-НОВАЯ");
+      await waitFor(() => a.$(`[data-s-number="${sp.id}"]`), { what: "спецификация в списке" });
+      a.$(`[data-spec="${sp.id}"]`).open = true;
+      await a.type(a.$(`[data-s-number="${sp.id}"]`), "-2");
+      a.click(a.$(`[data-save-spec="${sp.id}"]`));
+      await waitFor(() => a.ctl.count("PATCH", `/specifications/${sp.id}`) === 1, { what: "PATCH" });
+      await a.ctl.whenIdle(); await a.settle(150); // запись завершена — иначе корзина занята сохранением
+      a.click(a.$(`[data-del-spec="${sp.id}"]`));
+      await waitFor(() => a.dialog(), { what: "подтверждение" });
+      await a.answerDialog("Удалить");
+      await waitFor(() => !a.ctl.data.specifications.some((x) => x.id === sp.id), { what: "удаление" });
+    },
+  },
+  {
+    id: "CP-K-01", title: "Список контрактов под спецификацией: «позиций: N, всего изделий: M»; «+ Контракт» → «Есть неотправленный новый контракт»",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 1, "contracting");
+      await waitFor(() => a.$('[data-c-open="edit:1"]'), { what: "контракты" });
+      t.ok(/позиций: \d+, всего изделий: \d+/.test(a.$("[data-spec='1']").textContent), "счётчики позиций и изделий у контракта");
+      a.click(a.$('[data-c-new="1"]'));
+      await waitFor(() => a.$("#ctr-back"), { what: "новый контракт" });
+      await a.settle(200);
+      a.click(a.$("#ctr-back"));
+      await waitFor(() => a.dialog(), { what: "диалог (новый контракт всегда несохранённый)" });
+      await a.answerDialog("Остаться");
+      t.ok(a.$("#ctr-back"), "«Остаться» — остаёмся в новом контракте");
+    },
+  },
+  {
+    id: "CP-W-02", title: "Реквизиты: каскад контрагент → договор → спецификация подставляет первые значения; «Сохранить» доступна",
+    async run(t) {
+      const a = await openApp();
+      await openContract(a, 4, "lines");
+      a.$("#ctr-requisites-details").open = true; await a.settle(60);
+      const before = a.$("#ctr-spec").value;
+      a.setValue(a.$("#ctr-counterparty"), "2");
+      await waitFor(() => a.$("#ctr-agreement").value && a.$("#ctr-spec").value && a.$("#ctr-spec").value !== before, { what: "каскад" });
+      const agIds = [...a.$("#ctr-agreement").options].map((o) => o.value).filter(Boolean);
+      const expected = a.ctl.data.agreements.filter((g) => g.counterparty_id === 2).map((g) => String(g.id));
+      t.eq(agIds.sort(), expected.sort(), "в списке договоров — только договоры выбранного контрагента");
+      t.ok(!a.$("#ctr-save").disabled, "«Сохранить» доступна после завершения каскада");
+    },
+  },
+  {
+    id: "CP-W-04", title: "Позиции: пустые строки отбрасываются; без единой позиции сохранить нельзя — сообщение",
+    async run(t) {
+      const a = await openApp();
+      await openContract(a, 4, "lines");
+      // убираем все позиции контракта 4
+      let guard = 0;
+      while (a.$$("[data-line-remove]").length && guard++ < 20) { a.click(a.$("[data-line-remove]")); await a.settle(40); }
+      a.click(a.$("#ctr-line-add")); await a.settle(60);
+      t.eq(a.$$("[data-line-type]").length, 1, "осталась одна пустая строка");
+      await setTheme(a, " q");
+      a.click(a.$("#ctr-save")); await a.settle(120);
+      t.has(a.$("#ctr-error").textContent, "Добавьте хотя бы одну позицию", "сообщение про позицию");
+      t.eq(a.ctl.count("PATCH", "/contracts/4"), 0, "запрос не отправлен");
+    },
+  },
+  {
+    id: "CP-W-05", title: "Инциденты и производительность: добавление строк; строки без даты/типа/значения отбрасываются понятно",
+    async run(t) {
+      const a = await openApp();
+      await openContract(a, 4, "incidents");
+      a.click(a.$("#ctr-inc-add")); await a.settle(60);
+      t.ok(a.$$("[data-inc-date]").length >= 1, "строка инцидента добавлена");
+      a.click(a.$('[data-ctr-tab="capacity"]')); await a.settle(80);
+      await a.type(a.$("#ctr-cap-new-type"), "Колонна");
+      a.click(a.$("#ctr-cap-add")); await a.settle(60);
+      t.ok(a.$$("[data-cap-per-day]").length >= 1, "строка переопределения добавлена");
+      t.has(a.$("#ctr-tab-content").textContent, "От контрагента", "показана колонка «От контрагента»");
+    },
+  },
+  {
+    id: "CP-W-07", title: "«Развёрнуто»: ошибка чтения — «Повторить»; после — таблица элементов со статусами по-русски и остатком",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 1, "contracting");
+      await waitFor(() => a.$('[data-c-open="edit:1"]'), { what: "контракты" });
+      a.click(a.$('[data-c-open="edit:1"]'));
+      await waitFor(() => a.$("#ctr-back"), { what: "воркспейс" });
+      a.ctl.failNext("/contracts/1/elements", { method: "GET", status: 500, detail: "Изделия недоступны" });
+      a.click(a.$('[data-ctr-tab="expanded"]'));
+      await waitFor(() => a.$("#ctr-expanded-retry"), { what: "«Повторить»" });
+      t.has(text(a), "Изделия недоступны", "причина видна");
+      a.click(a.$("#ctr-expanded-retry"));
+      await waitFor(() => a.$$("[data-elem-planned]").length >= 5, { what: "элементы" });
+      t.has(a.$("#ctr-tab-content").textContent, "остаток", "остаточные строки «без привязки к элементу схемы · остаток N шт.»");
+      t.notHas(a.$("#ctr-tab-content").textContent, "delivered", "статусы не показаны сырыми кодами (по-русски)");
+    },
+  },
+  {
+    id: "CP-W-08", title: "Новый контракт: позиции → «Сохранить» → POST; контракт становится существующим, «Развёрнуто» доступна",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 1, "contracting");
+      await waitFor(() => a.$('[data-c-new="1"]'), { what: "кнопка" });
+      a.click(a.$('[data-c-new="1"]'));
+      await waitFor(() => a.$("#ctr-back"), { what: "воркспейс" });
+      t.ok(a.$('[data-ctr-tab="expanded"]').disabled, "у нового «Развёрнуто» отключена");
+      await a.type(a.$("[data-line-type]"), "Колонна");
+      change(a, a.$("[data-line-qty]"), "2");
+      await waitFor(() => !a.$("#ctr-save").disabled, { what: "Сохранить" });
+      a.click(a.$("#ctr-save"));
+      await waitFor(() => a.ctl.count("POST", "/contracts") === 1, { what: "POST" });
+      await a.settle(200);
+      t.ok(a.ctl.data.contracts.some((c) => c.lines?.some?.((l) => l.element_type === "Колонна" && l.quantity === 2) && c.specification_id === 1), "контракт создан на сервере с позицией");
+      t.ok(!a.$('[data-ctr-tab="expanded"]').disabled, "после сохранения «Развёрнуто» доступна");
+    },
+  },
+  {
+    id: "CP-W-10", title: "Отмена нового контракта: подтверждение; «Отмена» диалога оставляет форму",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 1, "contracting");
+      await waitFor(() => a.$('[data-c-new="1"]'), { what: "кнопка" });
+      a.click(a.$('[data-c-new="1"]'));
+      await waitFor(() => a.$("#ctr-cancel"), { what: "воркспейс" });
+      a.click(a.$("#ctr-cancel"));
+      await waitFor(() => a.dialog(), { what: "подтверждение" });
+      t.has(a.dialog().textContent, "Отменить новый контракт", "текст подтверждения");
+      await a.answerDialog("Отмена");
+      t.ok(a.$("#ctr-back"), "«Отмена» диалога — форма на месте");
+      a.click(a.$("#ctr-cancel"));
+      await waitFor(() => a.dialog(), { what: "подтверждение" });
+      await a.answerDialog("Отменить");
+      await waitFor(() => !a.$("#ctr-back"), { what: "выход из нового контракта" });
+      t.eq(a.ctl.count("POST", "/contracts"), 0, "ничего не отправлено");
+    },
+  },
+  {
+    id: "CP-W-12", title: "Перенос контракта: смена контрагента/договора/спецификации → «Сохранить» → воркспейс закрыт с пояснением",
+    async run(t) {
+      const a = await openApp();
+      await openContract(a, 4, "lines");
+      a.$("#ctr-requisites-details").open = true; await a.settle(60);
+      const before = a.$("#ctr-spec").value;
+      a.setValue(a.$("#ctr-counterparty"), "2");
+      await waitFor(() => a.$("#ctr-spec").value && a.$("#ctr-spec").value !== before && !a.$("#ctr-save").disabled, { what: "каскад" });
+      a.click(a.$("#ctr-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/contracts/4") === 1, { what: "PATCH" });
+      await waitFor(() => !a.$("#ctr-back"), { what: "воркспейс закрыт" });
+      t.has(a.$("#cp-status").textContent, "перенесён контрагенту", "пояснение о переносе");
+      t.notHas(a.$("#cp-inner").textContent, "Плиты без привязок", "в карточке прежнего контрагента контракта больше нет");
+    },
+  },
   // ---------------- Обязательная регрессия плановых дат и блокировок ----------------
   {
     id: "CP-REG-01", title: "Неудачная запись плановой даты: ошибка на строке, значение не теряется; 403 снимает права у всего контракта",

@@ -31,6 +31,8 @@ async function openRoles(a) {
   a.click(a.byText(".v2-nav button[data-page]", "Роли"));
   await waitFor(() => a.$("#role-editor"), { what: "редактор роли" });
 }
+const byNavRoles = (a) => a.byText(".v2-nav button[data-page]", "Роли");
+const byNavCheck = (a) => a.byText(".v2-nav button[data-page]", "Проверка доступа");
 const navTab = (a, title) => a.byText(".v2-nav button[data-page]", title);
 
 export const tests = [
@@ -720,6 +722,141 @@ export const tests = [
       const cur = a.doc.activeElement;
       t.ok(cur && cur !== a.doc.body, "фокус не на <body>");
       t.eq([cur.dataset?.perm, cur.dataset?.level], [perm, level], "фокус остался на той же кнопке сегмента");
+    },
+  },
+  {
+    id: "UA-U-09", title: "Форма нового пользователя с данными: «Отмена» — без предупреждения; уход — диалог; после создания предупреждения нет",
+    async run(t) {
+      const a = await openApp();
+      await openList(a);
+      a.click(a.byText("button", "Добавить пользователя"));
+      await waitFor(() => a.$("#nu-last"), { what: "форма" });
+      await a.type(a.$("#nu-last"), "QA-Х");
+      a.click(a.$("#nu-cancel"));
+      await a.settle(60);
+      a.click(a.$('.v2-nav [data-section="projects-objects"]'));
+      await waitFor(() => a.$("#po-tree"), { what: "переход без диалога после «Отмена»" });
+      t.eq(a.dialog(), null, "после «Отмена» формы предупреждения нет");
+      a.click(a.$('.v2-nav [data-section="users-access"]'));
+      await openList(a);
+      a.click(a.byText("button", "Добавить пользователя"));
+      await waitFor(() => a.$("#nu-last"), { what: "форма" });
+      await a.type(a.$("#nu-last"), "QA-Y"); await a.type(a.$("#nu-login"), "qa_y_login");
+      a.click(a.$('.v2-nav [data-section="projects-objects"]'));
+      await waitFor(() => a.dialog(), { what: "диалог при уходе" });
+      await a.answerDialog("Остаться");
+      t.eq(a.$("#nu-login").value, "qa_y_login", "«Остаться» — введённое цело");
+      a.click(a.$("#nu-submit"));
+      await waitFor(() => a.$("[data-tab]"), { what: "карточка" });
+      a.click(a.$("[data-back]"));
+      await openList(a);
+      t.eq(a.dialog(), null, "после создания уход без предупреждения");
+    },
+  },
+  {
+    id: "UA-C-05", title: "Вход и безопасность: «Требовать смену пароля» → «Сохранить» — PATCH с новым значением, подтверждение с сервера",
+    async run(t) {
+      const a = await openApp();
+      const u = await openCard(a, "qa.noaccess", "security");
+      await waitFor(() => a.$("#sec-must"), { what: "вкладка" });
+      const before = a.$("#sec-must").checked;
+      a.click(a.$("#sec-must"));
+      await waitFor(() => a.$("#card-save"), { what: "подвал" });
+      a.click(a.$("#card-save"));
+      await waitFor(() => a.ctl.count("PATCH", `/users/${u.id}`) === 1, { what: "PATCH" });
+      await a.settle(150);
+      const body = a.ctl.log.find((e) => e.method === "PATCH" && e.path.includes(`/users/${u.id}`)).body;
+      t.eq(body.must_change_password, !before, "в запросе новое значение флага");
+      t.eq(byLogin(a, "qa.noaccess").must_change_password, !before, "записано в фейковую БД");
+      t.eq(a.$("#card-save"), null, "после сохранения ложных кнопок нет");
+    },
+  },
+  {
+    id: "UA-C-10", title: "Права read: карточка и доступ только для просмотра — поля заблокированы, «Сохранить» и «Выдать» нет/недоступны",
+    async run(t) {
+      const a = await openApp({ perm: "readonly" });
+      await openList(a);
+      a.click(a.$(`[data-user="${byLogin(a, "qa.noaccess").id}"]`));
+      await waitFor(() => a.$("#pf-pos"), { what: "карточка" });
+      t.ok(a.$("#pf-pos").disabled && a.$("#pf-last").disabled, "поля профиля заблокированы");
+      t.eq(a.$("#card-save"), null, "подвал «Сохранить» отсутствует");
+      a.click(a.$('[data-tab="access"]'));
+      await waitFor(() => a.$("#ua-access-search"), { what: "доступ" });
+      a.click(a.byText("button", "Показать все")); await a.settle(60);
+      t.ok(a.$$("[data-edit-area]").every((b) => b.disabled), "кнопки «Выдать/Изменить» заблокированы");
+      t.eq(a.$("#ua-access-save"), null, "«Сохранить изменения» доступа отсутствует");
+    },
+  },
+  {
+    id: "UA-R-10", title: "Права read на роли: список и матрица только для просмотра",
+    async run(t) {
+      const a = await openApp({ perm: "readonly" });
+      await openList(a);
+      a.click(byNavRoles(a));
+      await waitFor(() => a.$("#role-editor"), { what: "роли" });
+      t.eq(a.$("#role-new"), null, "«Создать роль» отсутствует");
+      t.eq(a.$("#role-rename") || a.$("#role-delete"), null, "«Переименовать/Удалить» отсутствуют");
+      t.ok(a.$$("[data-perm]").length > 0 && a.$$("[data-perm]").every((b) => b.disabled), "сегменты матрицы заблокированы");
+      t.eq(a.$$("[data-role-up]").length, 0, "порядок ▲▼ недоступен");
+    },
+  },
+  {
+    id: "UA-A-06", title: "Роль на проекте и на «все проекты»: PUT с project_id / без него; сводка показывает наследование",
+    async run(t) {
+      const a = await openApp();
+      const u = await openAccess(a, "qa.noaccess");
+      a.click(a.byText("button", "Показать все")); await a.settle(60);
+      const projBtn = a.$$("[data-edit-area^='p:']")[0];
+      const pid = Number(projBtn.dataset.editArea.slice(2));
+      a.click(projBtn);
+      await waitFor(() => a.$("[data-grant-role]"), { what: "редактор проекта" });
+      const roleBox = a.$$("[data-grant-role]")[0];
+      a.click(roleBox);
+      await waitFor(() => a.$("#ua-access-save") && !a.$("#ua-access-save").disabled, { what: "сохранить" });
+      a.click(a.$("#ua-access-save"));
+      await waitFor(() => a.ctl.count("PUT", `/users/${u.id}/access`) === 1, { what: "PUT" });
+      await a.settle(120);
+      const put1 = a.ctl.log.find((e) => e.method === "PUT");
+      t.eq(put1.body.grants, [{ project_id: pid, object_id: null, role: roleBox.dataset.grantRole }], "грант на проекте: object_id=null");
+      t.has(lastText(a), "Доступны будущие объекты", "сводка объясняет, что роль на проекте действует и на будущие объекты");
+      // на «все проекты»
+      a.click(a.byText("button", "Назначить роли на все проекты"));
+      await waitFor(() => a.$("[data-grant-role]"), { what: "редактор" });
+      a.click(a.$$("[data-grant-role]")[1]);
+      await waitFor(() => a.$("#ua-access-save") && !a.$("#ua-access-save").disabled, { what: "сохранить" });
+      a.click(a.$("#ua-access-save"));
+      await waitFor(() => a.ctl.count("PUT", `/users/${u.id}/access`) === 2, { what: "второй PUT" });
+      await a.settle(120);
+      const put2 = a.ctl.log.filter((e) => e.method === "PUT")[1];
+      t.ok(put2.body.grants.some((g) => g.project_id === null && g.object_id === null), "грант на «все проекты»: project_id и object_id = null");
+      t.has(lastText(a), "Все текущие и будущие проекты", "сводка показывает назначение на все проекты");
+    },
+  },
+  {
+    id: "UA-K-05", title: "Согласованность: выданная роль видна в «Проверке доступа» по этому пользователю и объекту",
+    async run(t) {
+      const a = await openApp();
+      const u = await openAccess(a, "qa.noaccess");
+      a.click(a.byText("button", "Показать все")); await a.settle(60);
+      const editBtn = a.$$("[data-edit-area^='o:']")[0];
+      const oid = Number(editBtn.dataset.editArea.split(":")[2]);
+      a.click(editBtn);
+      await waitFor(() => a.$("[data-grant-role]"), { what: "редактор" });
+      const roleBox = a.$$("[data-grant-role]")[0];
+      const roleName = roleBox.closest("label").textContent.trim();
+      a.click(roleBox);
+      await waitFor(() => a.$("#ua-access-save") && !a.$("#ua-access-save").disabled, { what: "сохранить" });
+      a.click(a.$("#ua-access-save"));
+      await waitFor(() => a.ctl.count("PUT", `/users/${u.id}/access`) === 1, { what: "PUT" });
+      await a.settle(150);
+      a.click(byNavCheck(a));
+      await waitFor(() => a.$("#chk-user"), { what: "проверка" });
+      a.setValue(a.$("#chk-user"), String(u.id));
+      a.click(a.$("#chk-toggle")); await waitFor(() => !a.$("#chk-panel").hidden, { what: "панель" });
+      a.$(`[data-object-id="${oid}"]`).click();
+      await waitFor(() => a.$$("#chk-result .v2-perm").length > 3, { what: "права" });
+      t.notHas(a.$("#chk-result").textContent, "Прямых ролей на объекте нет", "у пользователя теперь есть прямая роль на объекте");
+      t.has(a.$("#chk-result").textContent, roleName, `«Проверка доступа» называет выданную роль (${roleName})`);
     },
   },
   {

@@ -14,6 +14,8 @@ export async function waitFor(fn, { timeout = 4000, step = 20, what = "усло�
   }
 }
 
+const createdApps = [];
+
 export async function openApp({ perm, session, w = 1366, h = 768, query = "" } = {}) {
   const q = new URLSearchParams(query);
   if (perm) q.set("perm", perm);
@@ -23,7 +25,11 @@ export async function openApp({ perm, session, w = 1366, h = 768, query = "" } =
   iframe.src = `/tests/app.html?${q}`;
   document.getElementById("frames").append(iframe);
   await waitFor(() => iframe.contentDocument?.documentElement?.dataset.harness === "ready", { what: "загрузка стенда", timeout: 8000 });
-  return makeApp(iframe.contentWindow, iframe.contentDocument, iframe.contentWindow.__fake, iframe);
+  const app = makeApp(iframe.contentWindow, iframe.contentDocument, iframe.contentWindow.__fake, iframe);
+  // Любая необработанная ошибка страницы во время сценария — провал сценария.
+  app.errors = iframe.contentWindow.__errors; // собирает boot.js с начала загрузки
+  createdApps.push(app);
+  return app;
 }
 
 // Помощники поверх ЛЮБОГО окна со стендом: iframe сценария или сама страница
@@ -119,7 +125,14 @@ export async function runTests(tests, { onResult } = {}) {
   for (const test of tests) {
     const t = new T();
     const r = { id: test.id, title: test.title, status: "pass", checks: t.checks, error: null };
+    createdApps.length = 0;
     try { await test.run(t); } catch (e) { r.status = "fail"; r.error = String(e && e.stack || e); }
+    // страховка: необработанные ошибки страницы (кроме заведомо ожидаемых сценарием)
+    const expected = test.allowErrors || [];
+    for (const a of createdApps) {
+      const bad = (a.errors || []).filter((m) => !expected.some((x) => m.includes(x)));
+      if (bad.length) t.ok(false, `необработанные ошибки страницы: ${[...new Set(bad)].slice(0, 3).join(" | ")}`);
+    }
     if (t.checks.some((c) => !c.ok)) r.status = "fail";
     if (!t.checks.length && !r.error) { r.status = "fail"; r.error = "сценарий не сделал ни одной проверки"; }
     results.push(r);

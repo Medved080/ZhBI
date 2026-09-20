@@ -26,6 +26,64 @@ export const tests = [
     },
   },
   {
+    id: "SH-02", title: "Экран входа: отказ сервера — читаемое сообщение (401 строкой и 422 списком), логин остаётся, повтор возможен",
+    async run(t) {
+      const a = await openApp({ session: false });
+      await waitFor(() => a.$("#v2-login-form"), { what: "форма входа" });
+      a.$("#v2-login-user").value = "qa.admin"; // пароль в тесте не вводится: сервер стенда всё равно отвечает заданным отказом
+      a.ctl.failNext("POST /login", { status: 401, detail: "Неверный логин или пароль" });
+      a.$("#v2-login-form").requestSubmit();
+      await waitFor(() => a.$("#v2-login-error").textContent, { what: "сообщение" });
+      t.has(a.$("#v2-login-error").textContent, "Неверный логин или пароль", "текст отказа виден");
+      t.eq(a.$("#v2-login-user").value, "qa.admin", "логин не очищен");
+      a.ctl.failNext("POST /login", { status: 422, detail: [{ loc: ["body", "password"], msg: "x", type: "missing" }] });
+      a.$("#v2-login-form").requestSubmit();
+      await waitFor(() => a.$("#v2-login-error").textContent.includes("password"), { what: "422" });
+      t.notHas(a.$("#v2-login-error").textContent, "[object", "422 без [object Object]");
+      a.ctl.failNext("POST /login", { network: true });
+      a.$("#v2-login-form").requestSubmit();
+      await waitFor(() => a.$("#v2-login-error").textContent.includes("Нет связи"), { what: "сеть" });
+      t.eq(a.ctl.count("POST", "/login"), 3, "три попытки — три запроса, кнопка «Войти» не залипла");
+    },
+  },
+  {
+    id: "SH-03", title: "Обязательная смена пароля: экран смены вместо разделов",
+    async run(t) {
+      const a = await openApp({ query: "loginAs=8" });
+      await waitFor(() => a.$("#v2-pwd-form"), { what: "экран смены пароля" });
+      t.has(a.doc.body.innerText, "Смена пароля", "заголовок");
+      t.eq(a.$$(NAV).length, 0, "разделов нет до смены пароля");
+      t.ok(a.$("#v2-pwd-error")?.getAttribute("role") === "alert", "ошибка объявляется (role=alert)");
+    },
+  },
+  {
+    id: "SH-14", title: "«← Текущий интерфейс» при несохранённом: диалог, «Остаться» — остаёмся; быстрые клики — один диалог",
+    async run(t) {
+      const a = await openApp();
+      await makeUaDirty(a);
+      const b = a.$("#v2-back-btn");
+      a.click(b); a.click(b); a.click(b);
+      await waitFor(() => a.dialog(), { what: "диалог" });
+      await a.settle(60);
+      t.eq(a.$$(".v2-dialog").length, 1, "один диалог при трёх кликах");
+      await a.answerDialog("Остаться");
+      t.eq(pressed(a), ["users-access"], "«Остаться» — остаёмся в V2");
+      t.eq(a.$("#nu-login").value, "qa_ivanov", "введённое цело");
+      t.ok(!a.$("#v2-back-btn").disabled, "кнопка снова доступна");
+    },
+  },
+  {
+    id: "SH-22", title: "Тёмная гамма пользователя → тёмная схема; светлая по умолчанию",
+    async run(t) {
+      const dark = await openApp({ query: `me=${encodeURIComponent(JSON.stringify({ ui_theme: "graphite" }))}` });
+      await waitFor(() => dark.$$(NAV).length >= 1 || dark.$(".v2-page-head"), { what: "оболочка" });
+      t.eq(dark.doc.documentElement.style.colorScheme, "dark", "graphite → dark");
+      const light = await openApp();
+      await waitFor(() => light.$$(NAV).length >= 1 || light.$(".v2-page-head"), { what: "оболочка" });
+      t.eq(light.doc.documentElement.style.colorScheme, "light", "по умолчанию → light");
+    },
+  },
+  {
     id: "SH-04", title: "Администратор: три раздела, открыт первый",
     async run(t) {
       const a = await openApp();
