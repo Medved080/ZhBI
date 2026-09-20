@@ -70,7 +70,9 @@ class Handler(SimpleHTTPRequestHandler):
             return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout.strip()
 
         data["rev"] = git("rev-parse", "--short", "HEAD")
-        data["tree_dirty"] = bool(git("status", "--porcelain", "--", "app/static/v2", "scripts/v2_tests"))
+        data["tree_dirty"] = bool(git("status", "--porcelain", "--", "app/static", "scripts/v2_tests"))
+        # Хэш дерева интерфейса (V2 и V1) на этой ревизии: результаты действительны ТОЛЬКО для него.
+        data["app_static_tree"] = git("rev-parse", "HEAD:app/static")
         data["ran_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         out_dir = ROOT / "Docs" / "v2-acceptance-results"
         out_dir.mkdir(parents=True, exist_ok=True)

@@ -580,6 +580,56 @@ export const tests = [
     },
   },
   {
+    id: "UA-R-11", title: "Роль создана/переименована/удалена во вкладке «Роли» — редактор доступа СРАЗУ предлагает актуальный набор и названия (без перезагрузки страницы)",
+    async run(t) {
+      const a = await openApp();
+      await openRoles(a);
+      a.click(a.$("#role-new"));
+      await waitFor(() => a.$("#role-new-name"), { what: "форма роли" });
+      a.setValue(a.$("#role-new-name"), "Тестовая роль доступа");
+      a.click(a.$("#role-new-submit"));
+      await waitFor(() => a.$$("[data-role]").some((b) => b.textContent.includes("Тестовая роль доступа")), { what: "роль создана" });
+      const key = a.$$("[data-role]").find((b) => b.textContent.includes("Тестовая роль доступа")).dataset.role;
+      const openEditor = async () => {
+        a.click(navTab(a, "Пользователи"));
+        await openList(a);
+        a.click(a.$(`[data-user="${byLogin(a, "qa.noaccess").id}"]`));
+        await waitFor(() => a.$('[data-tab="access"]'), { what: "карточка" });
+        a.click(a.$('[data-tab="access"]'));
+        await waitFor(() => a.$("#ua-access-search"), { what: "доступ" });
+        if (a.$("#ua-access-all-areas").textContent.trim() === "Показать все") a.click(a.$("#ua-access-all-areas"));
+        await a.settle(40);
+        a.click(a.$$("[data-edit-area^='p:']")[0]);
+        await waitFor(() => a.$("[data-grant-role]"), { what: "редактор" });
+      };
+      await openEditor();
+      t.ok(a.$(`[data-grant-role="${key}"]`), "созданная роль есть среди чекбоксов сразу, без перезагрузки");
+      // переименование
+      a.click(byNavRoles(a));
+      await waitFor(() => a.$("#role-editor"), { what: "роли" });
+      a.click(a.$$("[data-role]").find((b) => b.dataset.role === key));
+      await a.settle(60);
+      a.click(a.$("#role-rename"));
+      await waitFor(() => a.$("#role-rename-name"), { what: "переименование" });
+      a.setValue(a.$("#role-rename-name"), "Переименованная роль");
+      a.click(a.$("#role-rename-submit"));
+      await waitFor(() => a.$$("[data-role]").some((b) => b.textContent.includes("Переименованная роль")), { what: "переименована" });
+      await openEditor();
+      t.has(a.$(`[data-grant-role="${key}"]`).closest("label, div").textContent, "Переименованная роль", "переименованная роль показана новым названием");
+      // удаление
+      a.click(byNavRoles(a));
+      await waitFor(() => a.$("#role-editor"), { what: "роли" });
+      a.click(a.$$("[data-role]").find((b) => b.dataset.role === key));
+      await a.settle(60);
+      a.click(a.$("#role-delete"));
+      await waitFor(() => a.dialog(), { what: "подтверждение удаления" });
+      await a.answerDialog("Удалить");
+      await waitFor(() => !a.$$("[data-role]").some((b) => b.dataset.role === key), { what: "роль удалена" });
+      await openEditor();
+      t.ok(!a.$(`[data-grant-role="${key}"]`), "удалённой роли в редакторе доступа больше нет");
+    },
+  },
+  {
     id: "UA-A-05", title: "Выдать роль на объекте → «Сохранить»: PUT, сводка, повторное открытие, «Проверка доступа» согласована",
     async run(t) {
       const a = await openApp();

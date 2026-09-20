@@ -53,9 +53,21 @@ VIS_FORMS = {
 SIZES = ["1920x1080", "1920x900", "1366x768"]
 
 
+def current_tree():
+    import subprocess
+    return subprocess.run(["git", "rev-parse", "HEAD:app/static"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+
 def load_live():
+    """Живые результаты действительны только для той версии интерфейса, для которой сняты (хэш app/static)."""
     f = RES_DIR / "live.json"
-    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"rows": {}}
+    if not f.exists():
+        return {"rows": {}}
+    d = json.loads(f.read_text(encoding="utf-8"))
+    if d.get("app_static_tree") != current_tree():
+        print("ВНИМАНИЕ: live.json снят на другой версии app/static — живые результаты не засчитываются", d.get("app_static_tree"), "≠", current_tree())
+        return {"rows": {}, "stale": True}
+    return d
 
 
 def load_results():
@@ -64,7 +76,10 @@ def load_results():
         if f.name == "live.json":
             continue
         d = json.loads(f.read_text(encoding="utf-8"))
-        revs.add(d.get("rev", "?") + ("+" if d.get("tree_dirty") else ""))
+        if d.get("app_static_tree") != current_tree() or d.get("tree_dirty"):
+            print(f"ВНИМАНИЕ: {f.name} снят на другой/не зафиксированной версии — стендовые результаты не засчитываются")
+            continue
+        revs.add(d.get("rev", "?"))
         for r in d.get("results", []):
             merged[r["id"]] = {**r, "rev": d.get("rev", "?"), "file": f.name}
     return merged, revs
@@ -101,7 +116,12 @@ def main():
             continue
         found = find(merged, rid)
         method = row["Способ"]
-        status = row["Статус"]
+        # Статус пересчитывается ЗАНОВО из действительных результатов: устаревшее «пройден» не переживает смену версии кода.
+        status = "не проверен"
+        if "Факт" in row:
+            row["Факт"] = "—"
+        if "Дока-во" in row:
+            row["Дока-во"] = "—"
         lv = live_rows.get(rid)
         needs_l = "L" in re.split(r"[+ ]", method)
         fact = None
@@ -133,7 +153,7 @@ def main():
         if lv:
             fact = (fact + " · " if fact else "") + f"L: {lv['note']}"
             proof = (proof + ", " if proof else "") + "`live.json`"
-        if fact is not None or lv:
+        if True:
             if "Факт" in row and fact is not None:
                 row["Факт"] = fact
             if "Дока-во" in row and proof is not None:

@@ -84,8 +84,16 @@ export function mountUsersAccess(container, ctx) {
     return state.users;
   }
   async function ensureRoles(force) {
-    if (!state.roles || force) state.roles = await api.get("/roles");
+    if (!state.roles || force) { state.roles = await api.get("/roles"); syncRoleList(); }
     return state.roles;
+  }
+  // Список ролей для чекбоксов и подписей приходит один раз при входе (/me/permissions). Роли создают, переименовывают
+  // и удаляют ВНУТРИ этого же раздела — без синхронизации редактор доступа предлагал бы старый набор и старые названия.
+  function syncRoleList() {
+    const fresh = (state.roles?.roles || []).map((r) => ({ key: r.key, name: r.name, rank: r.rank }));
+    if (!fresh.length || !Array.isArray(roleList)) return;
+    roleList.length = 0;
+    roleList.push(...fresh);
   }
   async function ensureTree(force) {
     if (!state.tree || force) state.tree = (await api.get("/projects-tree")).projects;

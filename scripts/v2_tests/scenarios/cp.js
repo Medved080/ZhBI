@@ -876,13 +876,14 @@ export const tests = [
     },
   },
   {
-    id: "CP-K-01", title: "Список контрактов под спецификацией: «позиций: N, всего изделий: M»; «+ Контракт» → «Есть неотправленный новый контракт»",
+    id: "CP-K-01", title: "Список контрактов под спецификацией: «позиций: N, всего изделий: M»; «+ Контракт» — форма нового контракта, выход из неё только через диалог, после «Не сохранять» черновика нет",
     async run(t) {
       const a = await openApp();
       await openCp(a);
       await openCard(a, 1, "contracting");
       await waitFor(() => a.$('[data-c-open="edit:1"]'), { what: "контракты" });
       t.ok(/позиций: \d+, всего изделий: \d+/.test(a.$("[data-spec='1']").textContent), "счётчики позиций и изделий у контракта");
+      t.has(a.$('[data-c-open="edit:1"]').textContent, "Открыть контракт", "«Открыть контракт →»");
       a.click(a.$('[data-c-new="1"]'));
       await waitFor(() => a.$("#ctr-back"), { what: "новый контракт" });
       await a.settle(200);
@@ -890,6 +891,15 @@ export const tests = [
       await waitFor(() => a.dialog(), { what: "диалог (новый контракт всегда несохранённый)" });
       await a.answerDialog("Остаться");
       t.ok(a.$("#ctr-back"), "«Остаться» — остаёмся в новом контракте");
+      a.click(a.$("#ctr-back"));
+      await waitFor(() => a.dialog(), { what: "диалог" });
+      await a.answerDialog("Не сохранять");
+      await waitFor(() => a.$('[data-c-new="1"]'), { what: "список после «Не сохранять»" });
+      t.notHas(a.$("[data-spec='1']").textContent, "неотправленный", "черновика в списке нет — заметки о нём быть не может");
+      t.eq(a.ctl.count("POST", "/contracts"), 0, "контракт не создавался");
+      a.click(a.$('[data-c-new="1"]'));
+      await waitFor(() => a.$("#ctr-back"), { what: "новая форма" });
+      t.eq(a.$("#ctr-theme").value, "", "повторный «+ Контракт» открывает чистую форму");
     },
   },
   {
@@ -905,6 +915,13 @@ export const tests = [
       const expected = a.ctl.data.agreements.filter((g) => g.counterparty_id === 2).map((g) => String(g.id));
       t.eq(agIds.sort(), expected.sort(), "в списке договоров — только договоры выбранного контрагента");
       t.ok(!a.$("#ctr-save").disabled, "«Сохранить» доступна после завершения каскада");
+      // контрагент без договоров: цепочка пуста — «Сохранить» недоступна и сказано, почему
+      const empty = a.ctl.data.counterparties.find((c) => !a.ctl.data.agreements.some((g) => g.counterparty_id === c.id));
+      a.setValue(a.$("#ctr-counterparty"), String(empty.id));
+      await waitFor(() => a.$("#ctr-save").disabled, { what: "«Сохранить» недоступна при пустой цепочке" });
+      t.has(a.$("#ctr-status").textContent, "выберите договор и спецификацию", "причина названа в подвале");
+      await waitFor(() => a.$("#ctr-requisites-details").textContent.includes("нет договоров"), { what: "в реквизитах: у контрагента нет договоров" });
+      t.ok(a.$("#ctr-save").disabled, "«Сохранить» остаётся недоступной");
     },
   },
   {

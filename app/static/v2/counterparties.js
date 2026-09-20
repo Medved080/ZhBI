@@ -1502,9 +1502,7 @@ export function mountCounterparties(container, ctx) {
                   ${btn("Сохранить", `data-save-spec="${s.id}"`, true)}
                   <span class="v2-auth-error" data-s-error="${s.id}">${escapeHtml(sv.error || "")}</span>
                 </div>
-                ${state.newContractForms.has(s.id)
-                  ? `<p class="v2-note">Есть неотправленный новый контракт — <button type="button" class="v2-link" data-c-open="new:${s.id}">продолжить</button></p>`
-                  : `<div class="v2-inline" style="margin-bottom:8px">${btn("+ Контракт", `data-c-new="${s.id}"`)}</div>`}
+                <div class="v2-inline" style="margin-bottom:8px">${btn("+ Контракт", `data-c-new="${s.id}"`)}</div>
                 ${contracts.length ? contracts.map((c) => {
                   const cv = contractFieldValues(c);
                   return `
@@ -2699,9 +2697,11 @@ export function mountCounterparties(container, ctx) {
         await renderContractWorkspace();
       }
     });
+    // «Сохранить» недоступна без спецификации — и пользователю сказано, почему и что сделать.
     status.textContent = opBusy
       ? "Идёт удаление контракта — дождитесь завершения."
-      : (dirty ? "Есть несохранённые изменения" : "");
+      : (cascadeIncomplete ? "Сохранить нельзя: выберите договор и спецификацию — контракт заводится под спецификацией."
+        : (dirty ? "Есть несохранённые изменения" : ""));
   }
 
   // Раздел 5 приёмки: краткий путь для компактной шапки — не полный набор
