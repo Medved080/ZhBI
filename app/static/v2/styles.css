@@ -656,3 +656,5 @@ input:disabled, select:disabled, textarea:disabled {
 .v2-field-wide textarea { width: 100%; font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); resize: vertical; }
 textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface); }
 .v2-rn-list li { align-items: center; margin-bottom: 4px; }
+.v2-matrix th, .v2-matrix td { padding: 6px 8px; font-size: 13px; white-space: nowrap; } .v2-matrix td:nth-child(2) { white-space: normal; min-width: 220px; }
+.v2-matrix thead th { text-align: center; }

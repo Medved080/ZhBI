@@ -150,7 +150,34 @@ function blockScheduleReport(data) {
     ${(data.rows || []).length ? (data.rows || []).map(bsGroup).join("") : `<p class="v2-muted">Запланированных работ нет.</p>`}`;
 }
 
-export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport, mywork: myworkReport, linear: linearTrackReport, blocksched: blockScheduleReport };
+
+// ---- «Учёт по блокам: статусы»: матрица «операция WBS × блок (секция/этаж)» с процентом на дату
+function blockStatusReport(data, state) {
+  const blocks = data.blocks || [];
+  const leaves = [];
+  const walk = (n) => { if (n.children?.length) n.children.forEach(walk); else leaves.push(n); };
+  (data.tree || []).forEach(walk);
+  const rows = state.all ? leaves : leaves.filter((l) => l.cells && Object.keys(l.cells).length);
+  // шапка: секции (colspan) и уровни; блоки уже отсортированы сервером по секции и этажу
+  const groups = [];
+  for (const b of blocks) { const g = groups[groups.length - 1]; if (g && g.code === b.section_code) g.n++; else groups.push({ code: b.section_code, n: 1 }); }
+  const cell = (c) => {
+    if (c == null) return "";
+    if (typeof c === "string") return esc(BW_STATUS[c] || c);
+    const label = `${BW_STATUS[c.status] || c.status || ""}${c.deadline_label ? `, ${c.deadline_label}` : ""}`;
+    return `<span title="${esc(label)}">${esc(num(c.percent))}</span>`;
+  };
+  const shown = rows.slice(0, 400);
+  return `<p class="v2-muted" role="status">Блоков: ${blocks.length} · операций WBS: ${leaves.length}, с данными: ${leaves.filter((l) => l.cells && Object.keys(l.cells).length).length} · на ${esc(dateRu(data.report_date))}</p>
+    <label class="v2-wire-check"><input type="checkbox" id="bs-all" ${state.all ? "checked" : ""}> Показать все операции WBS (по умолчанию — только с данными)</label>
+    ${rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl v2-matrix"><thead>
+      <tr><th rowspan="2">Код</th><th rowspan="2">Работа</th><th rowspan="2">Объект</th>${groups.map((g) => `<th colspan="${g.n}">${esc(g.code)}</th>`).join("")}</tr>
+      <tr>${blocks.map((b) => `<th title="${esc(b.level_name)}">${esc(String(b.level_name).slice(0, 12))}</th>`).join("")}</tr></thead>
+      <tbody>${shown.map((l) => `<tr><td>${esc(l.code || "")}</td><td>${esc(l.name)}</td><td class="num">${cell(l.cells?.["объект"])}</td>${blocks.map((b) => `<td class="num">${cell(l.cells?.[String(b.id)])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      ${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${shown.length} из ${rows.length}.</p>` : ""}` : `<p class="v2-muted">Операций с данными нет.</p>`}`;
+}
+
+export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport, mywork: myworkReport, linear: linearTrackReport, blocksched: blockScheduleReport, blockstatus: blockStatusReport };
 
 // Взаимодействие: сворачивание узлов дерева, страницы перечня. Возвращает true, если надо перерисовать.
 export function bindReport(name, root, state, repaint) {
@@ -160,6 +187,9 @@ export function bindReport(name, root, state, repaint) {
       if (state.collapsed.has(p)) state.collapsed.delete(p); else state.collapsed.add(p);
       repaint(p);
     }));
+  }
+  if (name === "blockstatus") {
+    root.querySelector("#bs-all")?.addEventListener("change", (e) => { state.all = e.target.checked; repaint(); });
   }
   if (name === "completion") {
     root.querySelectorAll("[data-page]").forEach((b) => b.addEventListener("click", () => {

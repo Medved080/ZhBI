@@ -2694,6 +2694,11 @@ function createServer(opts) {
     return { status: "ok" };
   });
   route("GET", "/training/ratings", () => ({ users: [{ id: 1, name: "QA-Админов", position: "QA", rating: { attempts: 2, best: 18, total: 20 } }, { id: 2, name: "QA-Второй", position: null, rating: null }] }));
+  route("GET", "/supplier-changes", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    return [{ id: 2, object_id: oid, kind: "link_swap", kind_title: "Обмен привязками", status: "draft", status_title: "Черновик", number: "2", doc_date: "2026-08-11", mark: "4П-12", reason: "Ошибка в привязке", comment: null,
+      created_at: "2026-08-11 13:29:48", created_by: "QA", posted_at: null, posted_by: null, from_contract_id: 14, to_contract_id: 12, from_contract_name: "QA-контракт А", to_contract_name: "QA-контракт Б", items: 14 }];
+  });
   // ---- учёт по блокам объекта МФР (чтение): форма ответов — как у настоящего backend ----
   const mfrObject = (ctx) => { const id = Number(ctx.params.id); if (!objectById(id)) fail(404, "Объект не найден"); return id; };
   route("GET", "/objects/:id/blocks", (ctx) => { mfrObject(ctx); return [
@@ -2741,6 +2746,16 @@ function createServer(opts) {
       finish: { montage: { plan: "2026-12-30", forecast: "2027-01-12", deviation_days: 13 } } };
   });
 
+  route("POST", "/reports/block-status", (ctx) => {
+    const b = reportBody(ctx);
+    const op = (id, code, name, cells) => ({ id, row_kind: "оп", code, name, unit: "эт/сек", note: null, track_code: "3", children: [], addressable: true, cells });
+    const cellV = (percent, status) => ({ percent, status, plan_start: null, plan_end: null, forecast_start: null, forecast_end: null, deviation_start: null, deviation_end: null, deadline: "no_dates", deadline_label: "без сроков", expected_percent: null });
+    return { report_date: b.report_date || "2026-09-20",
+      sections: [{ id: 1, code: "С01", name: "С01", sort_order: 1 }, { id: 2, code: "С02", name: "С02", sort_order: 2 }],
+      blocks: [{ id: 11, section_id: 1, section_code: "С01", section_sort: 1, level_id: 5, level_name: "Этаж 1", floor: 1, level_sort: 1 }, { id: 12, section_id: 1, section_code: "С01", section_sort: 1, level_id: 6, level_name: "Этаж 2", floor: 2, level_sort: 2 }, { id: 13, section_id: 2, section_code: "С02", section_sort: 2, level_id: 5, level_name: "Этаж 1", floor: 1, level_sort: 1 }],
+      tree: [{ id: 1, row_kind: "узел", code: "-", name: "Строительство", unit: null, note: null, track_code: null, addressable: false, children: [
+        op(2, "180-02-02", "Кладка стен QA", { "11": cellV(40, "in_progress"), "12": cellV(0, "plan") }), op(3, "180-02-03", "Без данных QA", {}), op(4, "130-01-01", "Объектная QA", { "объект": "plan" })] }] };
+  });
   route("POST", "/reports/linear-track", (ctx) => {
     reportBody(ctx);
     return { title: "Линейный трек", object_id: ctx.body.object_id, count: 2, rows: [

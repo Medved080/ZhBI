@@ -266,4 +266,26 @@ export const tests = [
       t.eq(a.ctl.log.filter((e) => e.path === "/reports/my-work")[1].body.date_from, "2026-09-01", "новая начальная дата в запросе");
     },
   },
+  {
+    id: "RD-14", title: "«Учёт по блокам: статусы»: матрица операция × блок — шапка секций, проценты из ответа, «Показать все» добавляет операции без данных; смена даты перезапрашивает",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await waitFor(() => a.$("#v2-object") && a.$$(NAV).length > 3, { what: "оболочка" });
+      const mfr = a.ctl.data.objects.find((o) => o.kind === "mfr");
+      a.setValue(a.$("#v2-object"), String(mfr.id));
+      await openScreen(a, "report-block-status");
+      await waitFor(() => a.$(".v2-matrix"), { what: "матрица" });
+      t.eq(a.$$(".v2-matrix thead tr:first-child th").map((th) => th.textContent.trim()).slice(3), ["С01", "С02"], "в шапке — секции");
+      t.eq(a.$$(".v2-matrix thead tr:first-child th")[3].getAttribute("colspan"), "2", "секция С01 занимает два столбца (два этажа)");
+      const bodyRows = () => a.$$(".v2-matrix tbody tr").map((tr) => [...tr.children].map((td) => td.textContent.trim()));
+      t.eq(bodyRows().map((r) => r[0]), ["180-02-02", "130-01-01"], "по умолчанию только операции с данными");
+      t.eq(bodyRows()[0].slice(3), ["40", "0", ""], "проценты по блокам из ответа");
+      t.eq(bodyRows()[1][2], "план", "ячейка «объект» показывает статус словами");
+      a.click(a.$("#bs-all"));
+      await waitFor(() => bodyRows().length === 3, { what: "все операции" });
+      a.setValue(a.$("input[data-param=report_date]"), "2026-09-01");
+      await waitFor(() => a.ctl.log.filter((e) => e.path === "/reports/block-status").length === 2, { what: "перезапрос с датой" });
+      t.eq(a.ctl.log.filter((e) => e.path === "/reports/block-status")[1].body.report_date, "2026-09-01", "новая дата в запросе");
+    },
+  },
 ];
