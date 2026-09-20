@@ -98,9 +98,20 @@ export const tests = [
     async run(t) {
       const a = await openApp();
       await openCp(a);
+      // Контрагент без вложенных записей: в подтверждении нет перечня последствий.
+      a.click(a.$('[data-del="4"]'));
+      await waitFor(() => a.dialog(), { what: "подтверждение пустого контрагента" });
+      t.eq(a.dialog().querySelector("p").textContent, "Удалить контрагента?", "пустой контрагент: без перечня последствий");
+      await a.answerDialog("Отмена");
       a.click(a.$('[data-del="5"]'));
       await waitFor(() => a.dialog(), { what: "подтверждение" });
       t.ok(a.$(".v2-dialog .v2-danger"), "кнопка «Удалить» — danger");
+      // С контрагентом уходят его договор, спецификация и контракт — пользователь должен это видеть до подтверждения.
+      const text = a.dialog().textContent;
+      t.has(text, "Вместе с контрагентом удалятся:", "подтверждение перечисляет вложенные записи");
+      t.has(text, "Договор: 1", "договор назван");
+      t.has(text, "Спецификация: 1", "спецификация названа");
+      t.has(text, "Контракт: 1", "контракт назван");
       await a.answerDialog("Отмена");
       t.ok(a.ctl.data.counterparties.some((c) => c.id === 5), "отмена не удаляет");
       a.click(a.$('[data-del="5"]'));
@@ -401,6 +412,8 @@ export const tests = [
       a.click(a.$('[data-del-agreement="7"]'));
       await waitFor(() => a.dialog(), { what: "подтверждение" });
       t.ok(a.$(".v2-dialog .v2-danger"), "красная кнопка удаления");
+      t.has(a.dialog().textContent, "Вместе с договором удалятся:", "подтверждение договора перечисляет вложенные записи");
+      t.has(a.dialog().textContent, "Спецификация: 1", "спецификация договора названа");
       await a.answerDialog("Отмена");
       t.ok(a.ctl.data.agreements.some((g) => g.id === 7), "отмена не удаляет");
     },
@@ -778,6 +791,32 @@ export const tests = [
       a.click(a.$("#ctr-cap-add")); await a.settle(60);
       t.ok(a.$$("[data-cap-per-day]").length >= 1, "строка переопределения добавлена");
       t.has(a.$("#ctr-tab-content").textContent, "От контрагента", "показана колонка «От контрагента»");
+    },
+  },
+  {
+    id: "CP-W-05b", title: "Инциденты и производительность СОХРАНЯЮТСЯ: инцидент с датой и типом уходит в PATCH, без даты — отбрасывается, ноль в норме — отбрасывается (D-32)",
+    async run(t) {
+      const a = await openApp();
+      await openContract(a, 4, "incidents");
+      const before = a.ctl.data.contracts.find((c) => c.id === 4).incidents.length;
+      a.click(a.$("#ctr-inc-add")); await a.settle(60);
+      a.click(a.$("#ctr-inc-add")); await a.settle(60);
+      a.setValue(a.$('[aria-label="Дата инцидента 1"]'), "2026-09-15");
+      a.setValue(a.$('[aria-label="Тип элемента, инцидент 1"]'), "Колонна");
+      a.setValue(a.$('[aria-label="Количество, инцидент 1"]'), "2");
+      a.setValue(a.$('[aria-label="Описание, инцидент 1"]'), "QA-ACC инцидент");
+      a.setValue(a.$('[aria-label="Тип элемента, инцидент 2"]'), "Балка"); // без даты — не сохраняется
+      a.click(a.$('[data-ctr-tab="capacity"]')); await a.settle(80);
+      a.setValue(a.$("#ctr-cap-new-type"), "Колонна"); a.click(a.$("#ctr-cap-add")); await a.settle(60);
+      a.setValue(a.$('[data-cap-per-day]'), "0");
+      a.click(a.$("#ctr-save"));
+      await waitFor(() => a.ctl.count("PATCH", "/contracts/4") === 1, { what: "PATCH контракта" });
+      const body = a.ctl.log.find((e) => e.method === "PATCH" && e.path.includes("/contracts/4")).body;
+      t.eq(body.incidents.length, 1, "в запрос ушёл ровно один инцидент (с датой и типом)");
+      t.eq([body.incidents[0].element_type, body.incidents[0].quantity, body.incidents[0].incident_date, body.incidents[0].description], ["Колонна", 2, "2026-09-15", "QA-ACC инцидент"], "поля инцидента переданы");
+      t.eq(body.capacity.length, 0, "нулевая норма производительности не отправляется");
+      await a.settle(200);
+      t.eq(a.ctl.data.contracts.find((c) => c.id === 4).incidents.length, before + 1, "инцидент сохранён на «сервере»");
     },
   },
   {

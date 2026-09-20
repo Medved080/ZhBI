@@ -1031,8 +1031,15 @@ export function mountUsersAccess(container, ctx) {
       }
       html += `</section>`;
     }
-    if (!shown && !summary.allRoles.size) {
-      html += `<p class="v2-note">Нет доступа к проектам. Нажмите «Показать все», чтобы назначить роли.</p>`;
+    // Пустой результат объясняется его причиной: у пользователя с доступом
+    // поиск без совпадений раньше писал «Нет доступа к проектам…» — неправда.
+    if (!shown) {
+      if (q) html += `<p class="v2-note">Ничего не найдено по запросу «${escapeHtml(state.accessSearch.trim())}».</p>`;
+      else if (!summary.allRoles.size) {
+        html += state.accessAllAreas
+          ? `<p class="v2-note">В каталоге пока нет проектов.</p>`
+          : `<p class="v2-note">Нет доступа к проектам. Нажмите «Показать все», чтобы назначить роли.</p>`;
+      }
     }
     const results = panel.querySelector("#ua-access-results");
     results.innerHTML = html;

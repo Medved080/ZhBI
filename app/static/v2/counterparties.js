@@ -905,6 +905,21 @@ export function mountCounterparties(container, ctx) {
     try { await confirmAndDeleteOnce(kind, id, onSuccess); } finally { deletingNow.delete(deleteKey); }
   }
 
+  // Что уйдёт вместе с записью: подчинённые узлы плана (договоры → спецификации →
+  // контракты) и «позиции» (cascade). Без этого перечня подтверждение «Удалить
+  // контрагента?» молча уносило бы его договоры, спецификации и контракты.
+  function planConsequences(node, ownerLabel) {
+    const counts = new Map();
+    const add = (name, n) => { if (n > 0) counts.set(name, (counts.get(name) || 0) + n); };
+    const walk = (n) => {
+      for (const c of n.cascade || []) add(c.label, c.count || 0);
+      for (const child of n.children || []) { add(child.kind_title, 1); walk(child); }
+    };
+    if (node) walk(node);
+    if (!counts.size) return "";
+    return ` Вместе с ${ownerLabel} удалятся: ${[...counts].map(([name, n]) => `${name}: ${n}`).join(", ")}.`;
+  }
+
   async function confirmAndDeleteOnce(kind, id, onSuccess) {
     let plan;
     try { plan = await api.get(`/dictionaries/${kind}/${id}/delete-plan`); }
@@ -914,7 +929,9 @@ export function mountCounterparties(container, ctx) {
       return;
     }
     const label = kind === "counterparty" ? "контрагента" : kind === "agreement" ? "договор" : "спецификацию";
-    const confirmed = await showConfirmDialog(`Удалить ${label}?`, { confirmLabel: "Удалить", danger: true });
+    const withLabel = kind === "counterparty" ? "контрагентом" : kind === "agreement" ? "договором" : "спецификацией";
+    const consequences = planConsequences(plan.plan, withLabel);
+    const confirmed = await showConfirmDialog(`Удалить ${label}?${consequences}`, { confirmLabel: "Удалить", danger: true });
     if (!confirmed) return;
     try {
       await api.post(`/dictionaries/${kind}/${id}/delete`, { replacements: {}, mode: "replace" });
@@ -1100,7 +1117,7 @@ export function mountCounterparties(container, ctx) {
       .filter((l) => l.element_type || l.mark);
     const incidents = draft.incidents
       .map((i) => ({ element_type: (i.elementType || "").trim(), quantity: Number(i.quantity) || 0, incident_date: i.incidentDate, description: (i.description || "").trim() || null }))
-      .filter((i) => i.element_type && i.incidentDate);
+      .filter((i) => i.element_type && i.incident_date); // фильтр — по УЖЕ преобразованному объекту: раньше проверялось несуществующее поле incidentDate, и инциденты не сохранялись никогда
     const capacity = draft.capacity
       .map((c) => ({ element_type: c.elementType, per_day: Number(c.perDay), comment: null }))
       .filter((c) => c.element_type && Number.isFinite(c.per_day) && c.per_day > 0);
