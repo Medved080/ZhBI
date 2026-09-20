@@ -2549,7 +2549,21 @@ function createServer(opts) {
     if (!queryValue(ctx, "object_id", { type: "int" })) fail(400, "Справочник подтипов свой у каждого объекта — укажите объект");
     return { "Колонна": ["верхняя", "нижняя"], "Ригель": [] };
   });
-  route("GET", "/settings/info-plate", (ctx) => { queryValue(ctx, "object_id", { type: "int", required: true }); return { late_threshold_days: 3 }; });
+  // порог опоздания поставки — по объекту; хранится в data.settings.lateThreshold {objectId: дни}
+  route("GET", "/settings/info-plate", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    if (FEATURE_BY_KEY.has("info_plate")) assertFeature(ctx.user, "info_plate", "read", oid);
+    return { late_threshold_days: (data.settings.lateThreshold || {})[oid] ?? 3 };
+  });
+  route("PUT", "/settings/info-plate", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    if (FEATURE_BY_KEY.has("info_plate")) assertFeature(ctx.user, "info_plate", "write", oid);
+    const v = ctx.body?.late_threshold_days;
+    if (!Number.isInteger(v)) fail(422, "late_threshold_days: нужно целое число");
+    if (v < 0) fail(400, "Порог не может быть отрицательным");
+    (data.settings.lateThreshold ||= {})[oid] = v;
+    return { late_threshold_days: v };
+  });
   route("GET", "/settings/project-card", (ctx) => {
     queryValue(ctx, "object_id", { type: "int", required: true });
     return { title: "QA-карточка", montage_deadline: "2026-12-30", delivery_deadline: "2026-12-06", milestones: [{ label: "QA-веха", date: "2026-09-13" }], key_events: [], key_tasks: [], open_questions: [] };

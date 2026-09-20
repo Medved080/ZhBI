@@ -642,3 +642,4 @@ input:disabled, select:disabled, textarea:disabled {
 .v2-sev-warning { color: var(--accent); border-color: currentColor; }
 .v2-report-controls { margin-bottom: 10px; }
 .v2-summary-list { columns: 2; padding-left: 18px; margin: 6px 0 14px; }
+.v2-page h3.v2-report-h, .v2-scroll h3.v2-report-h { font-size: 15px; margin: 18px 0 8px; }

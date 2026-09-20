@@ -4,6 +4,8 @@
   "ua",
   "po",
   "cp",
+  "rd",
+  "de",
   "vis",
   "a11y"
  ],
@@ -51,23 +53,25 @@
   },
   {
    "id": "SH-04",
-   "title": "Администратор: три раздела, открыт первый",
-   "status": "pass",
-   "failed": [],
+   "title": "Администратор: начальная страница, навигация по всем разделам, три перенесённых раздела помечены «в V2»",
+   "status": "fail",
+   "failed": [
+    "пометка «в V2» — ровно у трёх перенесённых разделов — ожидали 3, получили 5"
+   ],
    "error": null,
-   "checks": 2
+   "checks": 9
   },
   {
    "id": "SH-05",
-   "title": "Пользователь без доступа: «Нет доступных разделов»",
+   "title": "Пользователь без прав: перенесённых разделов нет, экраны с ограничением скрыты, V1 доступен",
    "status": "pass",
    "failed": [],
    "error": null,
-   "checks": 2
+   "checks": 9
   },
   {
    "id": "SH-06",
-   "title": "Только чтение: виден только доступный раздел, без запрещённых действий",
+   "title": "Только чтение: доступный раздел открывается, без запрещённых действий; недоступные скрыты",
    "status": "pass",
    "failed": [],
    "error": null,
@@ -607,7 +611,7 @@
    "status": "pass",
    "failed": [],
    "error": null,
-   "checks": 6
+   "checks": 8
   },
   {
    "id": "PO-08",
@@ -1234,6 +1238,190 @@
    "checks": 3
   },
   {
+   "id": "RD-01",
+   "title": "Каждый экран чтения открывается из навигации и показывает присланные данные; ошибок и записей нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 78
+  },
+  {
+   "id": "RD-02",
+   "title": "Данные совпадают с присланными: СМУ, контракты, вкладки зон",
+   "status": "fail",
+   "failed": [],
+   "error": "TypeError: Cannot read properties of undefined (reading 'title')\n    at openScreen (http://127.0.0.1:8051/tests/scenarios/rd.js:14:63)\n    at async Object.run (http://127.0.0.1:8051/tests/scenarios/rd.js:47:7)\n    at async runTests (http://127.0.0.1:8051/tests/helpers.js:153:11)\n    at async http://127.0.0.1:8051/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "RD-03",
+   "title": "Ошибка загрузки: текст сервера и «Повторить»; поиск сохраняется; после успеха таблица",
+   "status": "fail",
+   "failed": [],
+   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8051/tests/helpers.js:74:22)\n    at Object.run (http://127.0.0.1:8051/tests/scenarios/rd.js:72:9)\n    at async runTests (http://127.0.0.1:8051/tests/helpers.js:153:11)\n    at async http://127.0.0.1:8051/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "RD-04",
+   "title": "Пусто и «ничего не найдено» — разные сообщения; поиск фильтрует и считает",
+   "status": "fail",
+   "failed": [],
+   "error": "TypeError: Cannot read properties of undefined (reading 'title')\n    at openScreen (http://127.0.0.1:8051/tests/scenarios/rd.js:14:63)\n    at async Object.run (http://127.0.0.1:8051/tests/scenarios/rd.js:83:7)\n    at async runTests (http://127.0.0.1:8051/tests/helpers.js:153:11)\n    at async http://127.0.0.1:8051/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "RD-05",
+   "title": "Запоздавший ответ прежней вкладки не подменяет таблицу текущей",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "RD-06",
+   "title": "Повторные клики «Обновить» — один запрос; кнопка недоступна, пока идёт загрузка",
+   "status": "fail",
+   "failed": [],
+   "error": "TypeError: Cannot read properties of undefined (reading 'title')\n    at openScreen (http://127.0.0.1:8051/tests/scenarios/rd.js:14:63)\n    at async Object.run (http://127.0.0.1:8051/tests/scenarios/rd.js:119:7)\n    at async runTests (http://127.0.0.1:8051/tests/helpers.js:153:11)\n    at async http://127.0.0.1:8051/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "RD-07",
+   "title": "Экран объекта: запрос с id выбранного объекта; смена объекта в шапке перезагружает экран",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "RD-08",
+   "title": "Постраничный журнал: первая страница, «Дальше»/«Назад», поиск на сервере",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "RD-09",
+   "title": "Права: экраны, требующие ролей, скрыты пользователю без прав; экраны без ограничений видны",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "RD-10",
+   "title": "Отчёт «Статус монтажа»: дерево — значения и итог из ответа, сворачивание узлов, чтение не блокирует переходы",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "RD-11",
+   "title": "Отчёт «Статус комплектации»: страницы по 200, поиск на клиенте, предупреждение сервера показано",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "RD-12",
+   "title": "Аналитическая справка: смена горизонта перезапрашивает отчёт с новым параметром; ошибка отчёта — понятное сообщение",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "RD-13",
+   "title": "«Моя работа»: период по умолчанию — сегодня, границы дня в UTC уходят в запрос, смена периода перезапрашивает",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "DE-01",
+   "title": "Добавление: тело запроса обрезано, список перечитан, ввод очищен, статус из ответа сервера",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "DE-02",
+   "title": "Дубликат (409): текст сервера, ввод остаётся, список не менялся",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "DE-03",
+   "title": "Повторный сабмит во время записи: один запрос; управление заблокировано; конфликтующие действия невозможны",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "DE-04",
+   "title": "Переименование: id из строки, Enter сохраняет, отмена ничего не пишет, пустое имя отклоняется",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "DE-05",
+   "title": "Несохранённый ввод: «Остаться» / «Не сохранять» / «Сохранить и продолжить»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "DE-06",
+   "title": "Обрыв связи при добавлении: без автоповтора, без ложного успеха, ввод остаётся",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "DE-07",
+   "title": "Удаление неиспользуемой записи: план → подтверждение → запрос с id → список перечитан; отказ ничего не пишет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "DE-08",
+   "title": "Запись, на которую ссылаются объекты, здесь не удаляется: объяснение и переход в V1, запросов на удаление нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "DE-09",
+   "title": "Без права изменения: справочник виден, кнопок добавления/правки/удаления нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "DE-10",
+   "title": "Физлица: добавление и удаление идут по своим API (вид individual)",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
    "id": "VIS-login-1920x1080",
    "title": "Вход — 1920×1080",
    "status": "pass",
@@ -1259,7 +1447,7 @@
   },
   {
    "id": "VIS-no-sections-1920x1080",
-   "title": "Нет доступных разделов — 1920×1080",
+   "title": "Пользователь без прав: начальная страница — 1920×1080",
    "status": "pass",
    "failed": [],
    "error": null,
@@ -1267,7 +1455,7 @@
   },
   {
    "id": "VIS-no-sections-1920x900",
-   "title": "Нет доступных разделов — 1920×900",
+   "title": "Пользователь без прав: начальная страница — 1920×900",
    "status": "pass",
    "failed": [],
    "error": null,
@@ -1275,7 +1463,175 @@
   },
   {
    "id": "VIS-no-sections-1366x768",
-   "title": "Нет доступных разделов — 1366×768",
+   "title": "Пользователь без прав: начальная страница — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-home-1920x1080",
+   "title": "Оболочка: начальная страница (все разделы) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-home-1920x900",
+   "title": "Оболочка: начальная страница (все разделы) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-home-1366x768",
+   "title": "Оболочка: начальная страница (все разделы) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-table-1920x1080",
+   "title": "Оболочка: экран чтения — таблица (Журнал действий, постранично) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-table-1920x900",
+   "title": "Оболочка: экран чтения — таблица (Журнал действий, постранично) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-table-1366x768",
+   "title": "Оболочка: экран чтения — таблица (Журнал действий, постранично) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-tabs-1920x1080",
+   "title": "Оболочка: экран чтения — вкладки (Зоны) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-tabs-1920x900",
+   "title": "Оболочка: экран чтения — вкладки (Зоны) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-tabs-1366x768",
+   "title": "Оболочка: экран чтения — вкладки (Зоны) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-record-1920x1080",
+   "title": "Оболочка: экран чтения — запись (Доменная авторизация) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-record-1920x900",
+   "title": "Оболочка: экран чтения — запись (Доменная авторизация) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-record-1366x768",
+   "title": "Оболочка: экран чтения — запись (Доменная авторизация) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dict-edit-1920x1080",
+   "title": "Оболочка: редактор справочника (СМУ, правка строки) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dict-edit-1920x900",
+   "title": "Оболочка: редактор справочника (СМУ, правка строки) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dict-edit-1366x768",
+   "title": "Оболочка: редактор справочника (СМУ, правка строки) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-form-1920x1080",
+   "title": "Оболочка: экран V1-формы (каркас, «Контракты») — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-form-1920x900",
+   "title": "Оболочка: экран V1-формы (каркас, «Контракты») — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-form-1366x768",
+   "title": "Оболочка: экран V1-формы (каркас, «Контракты») — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-report-1920x1080",
+   "title": "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа») — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-report-1920x900",
+   "title": "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа») — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-report-1366x768",
+   "title": "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа») — 1366×768",
    "status": "pass",
    "failed": [],
    "error": null,
@@ -2010,6 +2366,64 @@
    "checks": 3
   },
   {
+   "id": "A11Y-shell-home",
+   "title": "Оболочка: начальная страница (все разделы): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-read-table",
+   "title": "Оболочка: экран чтения — таблица (Журнал действий, постранично): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-read-tabs",
+   "title": "Оболочка: экран чтения — вкладки (Зоны): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-read-record",
+   "title": "Оболочка: экран чтения — запись (Доменная авторизация): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-dict-edit",
+   "title": "Оболочка: редактор справочника (СМУ, правка строки): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-shell-screen-form",
+   "title": "Оболочка: экран V1-формы (каркас, «Контракты»): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-shell-screen-report",
+   "title": "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа»): доступные имена, tabindex, aria-live",
+   "status": "fail",
+   "failed": [
+    "уровни заголовков не перескакивают — ожидали [], получили [4]"
+   ],
+   "error": null,
+   "checks": 5
+  },
+  {
    "id": "A11Y-ua-users",
    "title": "UA: список пользователей: доступные имена, tabindex, aria-live",
    "status": "pass",
@@ -2250,8 +2664,8 @@
    "checks": 5
   }
  ],
- "rev": "678118c",
+ "rev": "f3c65f8",
  "tree_dirty": false,
- "app_static_tree": "1abed692e59e2afce77a654b612e80ca10e6fb91",
- "ran_at": "2026-09-20 22:56:36"
+ "app_static_tree": "7ae2560233f2f0e40dbbba48ed135fc306ef59d7",
+ "ran_at": "2026-09-21 00:14:36"
 }

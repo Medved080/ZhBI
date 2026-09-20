@@ -79,15 +79,15 @@ function analyticsReport(data) {
   const tables = ANALYTICS_TABLES.map(([k, title]) => {
     const t = data[k];
     if (!t?.columns) return "";
-    return `<h4>${esc(title)}</h4>${(t.rows || []).length ? tableHtml(t.columns, t.rows) : `<p class="v2-muted">Нет данных.</p>`}`;
+    return `<h3 class="v2-report-h">${esc(title)}</h3>${(t.rows || []).length ? tableHtml(t.columns, t.rows) : `<p class="v2-muted">Нет данных.</p>`}`;
   }).join("");
   const gaps = data.capacity_gaps || [];
   return `<p class="v2-muted">${esc(data.object_name || "")} · на ${esc(dateRu(data.report_date))}, горизонт до ${esc(dateRu(data.horizon_end))}</p>
     ${data.disclaimer ? `<p class="v2-muted">${esc(data.disclaimer)}</p>` : ""}
     <div class="v2-tiles">${tiles}</div>
-    <h4>Выводы</h4>${concl ? `<ul class="v2-conclusions">${concl}</ul>` : `<p class="v2-muted">Выводов нет.</p>`}
+    <h3 class="v2-report-h">Выводы</h3>${concl ? `<ul class="v2-conclusions">${concl}</ul>` : `<p class="v2-muted">Выводов нет.</p>`}
     ${tables}
-    ${gaps.length ? `<h4>Не задана производительность завода</h4>${tableHtml([{ key: "counterparty", label: "Завод" }, { key: "element_type", label: "Тип изделия" }, { key: "elements", label: "Изделий", kind: "num" }], gaps)}` : ""}`;
+    ${gaps.length ? `<h3 class="v2-report-h">Не задана производительность завода</h3>${tableHtml([{ key: "counterparty", label: "Завод" }, { key: "element_type", label: "Тип изделия" }, { key: "elements", label: "Изделий", kind: "num" }], gaps)}` : ""}`;
 }
 
 // ---- «Динамика поставки и монтажа»: сводные числа и недельная таблица (график V1 в V2 не перенесён)
@@ -106,7 +106,7 @@ function dynamicsReport(data) {
   return `<p class="v2-muted">${esc(data.subtitle || "")} на ${esc(dateRu(data.report_date))}</p>
     <div class="v2-tiles">${summary("Монтаж", data.montage)}${summary("Поставка", data.delivery)}</div>
     ${fin?.montage ? `<p>Окончание монтажа: план ${esc(dateRu(fin.montage.plan))}${fin.montage.forecast ? `, прогноз ${esc(dateRu(fin.montage.forecast))} (${esc(num(fin.montage.deviation_days))} дн.)` : ""}.</p>` : ""}
-    <h4>Динамика по неделям</h4><p class="v2-muted">Значения по неделям таблицей; график V1 в новом интерфейсе пока не перенесён.</p>
+    <h3 class="v2-report-h">Динамика по неделям</h3><p class="v2-muted">Значения по неделям таблицей; график V1 в новом интерфейсе пока не перенесён.</p>
     ${rows.length ? tableHtml(cols, rows, { cap: 200 }) : `<p class="v2-muted">Данных по неделям нет.</p>`}`;
 }
 
@@ -120,8 +120,8 @@ function myworkReport(data) {
   const rows = (data.rows || []).map((r) => ({ ...r, at_text: timeNoMs(r.at) }));
   const summary = (data.by_action || []).map((i) => `<li>${esc(i.title)}: <strong>${esc(num(i.count))}</strong></li>`).join("");
   return `<p class="v2-muted" role="status">Событий: ${esc(num(data.total))}${data.truncated ? ` (показаны ${esc(num(data.shown))} — сузьте период)` : ""} · период ${esc(dateRu(data.date_from))} — ${esc(dateRu(data.date_to))}</p>
-    ${summary ? `<h4>Сводка по действиям</h4><ul class="v2-summary-list">${summary}</ul>` : ""}
-    <h4>События</h4>
+    ${summary ? `<h3 class="v2-report-h">Сводка по действиям</h3><ul class="v2-summary-list">${summary}</ul>` : ""}
+    <h3 class="v2-report-h">События</h3>
     ${rows.length ? tableHtml([{ key: "at_text", label: "Время" }, { key: "user_name", label: "Пользователь" }, { key: "action_title", label: "Действие" }, { key: "item", label: "Что" }, { key: "old_text", label: "Было" }, { key: "new_text", label: "Стало" }], rows, { cap: 300 }) : `<p class="v2-muted">За период событий нет.</p>`}`;
 }
 

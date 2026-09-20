@@ -68,7 +68,7 @@ function paintRecord(sec, data) {
   const tables = (sec.tables || []).map((t) => {
     const rows = pick(data, t.rowsPath);
     const list = Array.isArray(rows) ? rows : [];
-    return `<h4>${esc(t.title)}</h4>` + (list.length
+    return `<h3 class="v2-report-h">${esc(t.title)}</h3>` + (list.length
       ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${t.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}</tr></thead>
          <tbody>${list.slice(0, RENDER_LIMIT).map((r) => `<tr>${t.columns.map((c) => `<td>${cellHtml(c, r, data)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
       : `<p class="v2-muted">${esc(t.empty || "Записей нет.")}</p>`);

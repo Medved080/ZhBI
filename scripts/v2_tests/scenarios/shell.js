@@ -95,8 +95,9 @@ export const tests = [
       for (const k of MODULE_KEYS) t.ok(keys.includes(k), `в навигации есть перенесённый раздел ${k}`);
       t.ok(keys.length >= 40, `в навигации много разделов сервиса (${keys.length})`);
       t.ok(a.$$(".v2-card").length >= 6, "на начальной странице карточки групп");
-      const inV2 = a.$$(".v2-card-list .v2-chip-ok").length;
-      t.eq(inV2, 3, "пометка «в V2» — ровно у трёх перенесённых разделов");
+      const chips = (text) => a.$$(".v2-card-list .v2-chip").filter((c) => c.textContent.trim() === text).length;
+      t.eq(chips("в V2"), 3, "пометка «в V2» — ровно у трёх перенесённых разделов");
+      t.eq(chips("правка"), 2, "пометка «правка» — у двух редактируемых справочников (СМУ, физлица)");
       t.ok(a.$(`.v2-card-list a[data-screen-link="contracts"]`), "экран, не перенесённый целиком, тоже достижим с начальной страницы");
     },
   },

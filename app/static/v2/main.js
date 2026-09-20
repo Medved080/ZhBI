@@ -12,6 +12,7 @@ import { loadRegistry, screenAllowed } from "./registry.js";
 import { mountScreenView, mountHome } from "./screen-view.js";
 import { mountReadScreen } from "./read-screen.js";
 import { mountDictEdit } from "./dict-edit.js";
+import { mountSettingEdit } from "./setting-edit.js";
 
 const root = document.getElementById("v2-root");
 
@@ -243,7 +244,7 @@ async function renderShell(user, permissions) {
         return `<div class="v2-nav-group">
           <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
           ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "dict-edit" ? ` <span class="v2-nav-tag" title="Справочник правится в новом интерфейсе; удаление с заменой — в текущем">прав.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
+            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "dict-edit" || s.impl === "setting-edit" ? ` <span class="v2-nav-tag" title="Справочник правится в новом интерфейсе; удаление с заменой — в текущем">прав.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
         </div>`;
       }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
     const search = document.getElementById("v2-nav-search");
@@ -294,7 +295,7 @@ async function renderShell(user, permissions) {
         content.dataset.note = "unavailable";
       }
       if (key === currentKey && !opts.force) { if (opts.fromHash) restoreHash(); return; }
-      if (activeModule && !(await activeModule.guardLeave())) { if (opts.fromHash) restoreHash(); return; }
+      if (activeModule && !opts.guarded && !(await activeModule.guardLeave())) { if (opts.fromHash) restoreHash(); return; }
       // guardLeave мог сохранять данные и сам начать/закончить запись; если
       // после него запись всё ещё идёт (например, второй поток), не уходим.
       if (api.hasPendingWrites()) { if (opts.fromHash) restoreHash(); return; }
@@ -321,6 +322,11 @@ async function renderShell(user, permissions) {
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = MODULES[target.id](content, moduleCtx);
+      } else if (target.impl === "setting-edit" && target.setting) {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountSettingEdit(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+        });
       } else if (target.impl === "dict-edit" && target.edit) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountDictEdit(content, {
@@ -351,6 +357,15 @@ async function renderShell(user, permissions) {
   objectSelect.addEventListener("change", async () => {
     const id = Number(objectSelect.value) || null;
     if (!id || id === objectId) return;
+    // Экран может держать несохранённую правку ЭТОГО объекта: перед сменой — тот же сторож, что при уходе с экрана.
+    // Отказ («Остаться») возвращает выбор в шапке на прежний объект, чтобы шапка и экран не расходились.
+    if (navBusy) { objectSelect.value = String(objectId); return; }
+    if (activeModule?.hasUnsavedChanges?.()) {
+      navBusy = true;
+      let stay = false;
+      try { stay = !(await activeModule.guardLeave()); } finally { navBusy = false; }
+      if (stay) { objectSelect.value = String(objectId); return; }
+    }
     objectId = id;
     writeSession("v2.objectId", String(id));
     rightsOk = await loadRights();
@@ -359,8 +374,8 @@ async function renderShell(user, permissions) {
     renderNav();
     // Экран, недоступный на новом объекте (или перерисовка каркаса с новой ссылкой в V1), обновляется.
     const cur = currentKey === "home" ? null : screenOf(currentKey);
-    if (cur && !isModule(cur)) openSection(currentKey, { force: true });
-    else if (currentKey === "home") openSection("home", { force: true });
+    if (cur && !isModule(cur)) openSection(currentKey, { force: true, guarded: true });
+    else if (currentKey === "home") openSection("home", { force: true, guarded: true });
   });
 
   renderNav();

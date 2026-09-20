@@ -41,14 +41,13 @@ export const tests = [
     },
   },
   {
-    id: "RD-02", title: "Данные совпадают с присланными: СМУ, контракты, вкладки зон",
+    id: "RD-02", title: "Данные совпадают с присланными: префиксы марок, вкладки зон",
     async run(t) {
       const a = await openApp({ home: true });
-      await openScreen(a, "dict-smu");
-      const shown = a.$$("#rd-body tbody tr").map((tr) => tr.children[1].textContent.trim()).sort();
-      const expected = a.ctl.data.smu.map((r) => r.name).sort();
-      t.eq(shown, expected, "названия СМУ совпадают с ответом сервера");
-      t.has(a.$("#rd-count").textContent, `Записей: ${expected.length}`, "счётчик записей");
+      await openScreen(a, "mark-prefixes");
+      const shown = a.$$("#rd-body tbody tr").map((tr) => `${tr.children[0].textContent.trim()}→${tr.children[1].textContent.trim()}`);
+      t.eq(shown, ["КН→Колонна", "ПП→Плита перекрытия", "РГ→Ригель"], "префиксы совпадают с ответом сервера");
+      t.has(a.$("#rd-count").textContent, "Записей: 3", "счётчик записей");
       await openScreen(a, "zones");
       t.eq(a.$$(".v2-read-tab").map((b) => b.textContent.trim()), ["Захватки", "Зоны кранов", "Стоянки кранов"], "три вкладки зон");
       t.eq(a.$$("#rd-body tbody tr").length, 2, "захватки: две зоны");
@@ -63,29 +62,29 @@ export const tests = [
     id: "RD-03", title: "Ошибка загрузки: текст сервера и «Повторить»; поиск сохраняется; после успеха таблица",
     async run(t) {
       const a = await openApp({ home: true });
-      a.ctl.failNext("GET /smu", { status: 500, detail: "База недоступна (QA)" });
-      await waitFor(() => a.$(`${NAV}[data-section="dict-smu"]`), { what: "навигация" });
-      a.click(a.$(`${NAV}[data-section="dict-smu"]`));
+      a.ctl.failNext("GET /mark-type-prefixes", { status: 500, detail: "База недоступна (QA)" });
+      await waitFor(() => a.$(`${NAV}[data-section="mark-prefixes"]`), { what: "навигация" });
+      a.click(a.$(`${NAV}[data-section="mark-prefixes"]`));
       await waitFor(() => a.$(".v2-callout-bad"), { what: "сообщение об ошибке" });
       t.has(a.$(".v2-callout-bad").textContent, "База недоступна (QA)", "показан текст ошибки сервера");
       t.ok(!a.$("#rd-body tbody"), "таблицы нет, ложных данных нет");
       a.click(a.$("#rd-retry"));
       await waitFor(() => a.$$("#rd-body tbody tr").length > 0, { what: "повтор загрузил данные" });
       t.ok(!a.$(".v2-callout-bad"), "после успешного повтора ошибки нет");
-      t.eq(a.ctl.count("GET", "/smu"), 2, "ровно два запроса: неудачный и повторный");
+      t.eq(a.ctl.count("GET", "/mark-type-prefixes"), 2, "ровно два запроса: неудачный и повторный");
     },
   },
   {
     id: "RD-04", title: "Пусто и «ничего не найдено» — разные сообщения; поиск фильтрует и считает",
     async run(t) {
       const a = await openApp({ home: true });
-      a.ctl.data.smu.length = 0;
-      await openScreen(a, "dict-smu");
-      t.has(body(a).textContent, "Справочник СМУ пуст.", "пустой справочник назван пустым");
-      a.ctl.data.smu.push({ id: 1, name: "СМУ-Альфа" }, { id: 2, name: "СМУ-Бета" });
+      a.ctl.data.settings.markPrefixes = [];
+      await openScreen(a, "mark-prefixes");
+      t.has(body(a).textContent, "Префиксов нет.", "пустой справочник назван пустым");
+      a.ctl.data.settings.markPrefixes = [{ prefix: "АЛ", element_type: "Альфа-тип" }, { prefix: "БТ", element_type: "Бета-тип" }];
       a.click(a.$("#rd-refresh"));
       await waitFor(() => a.$$("#rd-body tbody tr").length === 2, { what: "обновление подхватило записи" });
-      await a.type(a.$("#rd-search"), "альф");
+      await a.type(a.$("#rd-search"), "альфа");
       await a.settle(60);
       t.eq(a.$$("#rd-body tbody tr").length, 1, "поиск оставил одну строку");
       t.has(a.$("#rd-count").textContent, "Найдено 1 из 2", "счётчик поиска");
@@ -116,16 +115,16 @@ export const tests = [
     id: "RD-06", title: "Повторные клики «Обновить» — один запрос; кнопка недоступна, пока идёт загрузка",
     async run(t) {
       const a = await openApp({ home: true });
-      await openScreen(a, "dict-smu");
-      const before = a.ctl.count("GET", "/smu");
-      const hold = a.ctl.hold("GET /smu");
+      await openScreen(a, "mark-prefixes");
+      const before = a.ctl.count("GET", "/mark-type-prefixes");
+      const hold = a.ctl.hold("GET /mark-type-prefixes");
       a.click(a.$("#rd-refresh"));
       await a.settle(40);
       t.eq(a.click(a.$("#rd-refresh")), false, "повторный клик невозможен: кнопка заблокирована");
       t.eq(a.click(a.$("#rd-refresh")), false, "и третий тоже");
       hold.release();
       await waitFor(() => loaded(a) && !a.$("#rd-refresh").disabled, { what: "загрузка завершена" });
-      t.eq(a.ctl.count("GET", "/smu") - before, 1, "ушёл ровно один запрос");
+      t.eq(a.ctl.count("GET", "/mark-type-prefixes") - before, 1, "ушёл ровно один запрос");
       hold.dispose?.();
     },
   },
