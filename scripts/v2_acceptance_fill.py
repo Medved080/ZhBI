@@ -5,6 +5,9 @@
   * есть L (живой сервер) — строка остаётся «не проверен», пока L не выполнен; результат H записывается в «Факт»;
   * только H/T — «пройден», если ВСЕ сопоставленные сценарии зелёные; «ошибка», если хоть один красный;
   * нет сопоставленного сценария — статус не меняется.
+  * есть живой результат Docs/v2-acceptance-results/live.json (шаги L1–L12 на реальном сервере): pass → «пройден»
+    (при зелёном H), blocked → «заблокирован» (причина в «Факт»); L-строки без H (SH-13, SH-15, UA-C-08, UA-K-05, PO-23)
+    берут статус из live.json.
 Запуск: python3 scripts/v2_acceptance_fill.py
 """
 import json
@@ -50,9 +53,16 @@ VIS_FORMS = {
 SIZES = ["1920x1080", "1920x900", "1366x768"]
 
 
+def load_live():
+    f = RES_DIR / "live.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"rows": {}}
+
+
 def load_results():
     merged, revs = {}, set()
     for f in sorted(RES_DIR.glob("*.json")):
+        if f.name == "live.json":
+            continue
         d = json.loads(f.read_text(encoding="utf-8"))
         revs.add(d.get("rev", "?") + ("+" if d.get("tree_dirty") else ""))
         for r in d.get("results", []):
@@ -71,6 +81,8 @@ def find(merged, row_id):
 
 def main():
     merged, revs = load_results()
+    live = load_live()
+    live_rows = live.get("rows", {})
     lines = DOC.read_text(encoding="utf-8").split("\n")
     header = None
     counts = {"пройден": 0, "ошибка": 0, "не проверен": 0, "заблокирован": 0}
@@ -90,6 +102,11 @@ def main():
         found = find(merged, rid)
         method = row["Способ"]
         status = row["Статус"]
+        lv = live_rows.get(rid)
+        needs_l = "L" in re.split(r"[+ ]", method)
+        fact = None
+        proof = None
+        ok = None
         if found:
             ok = all(r["status"] == "pass" for r in found)
             n_checks = sum(r.get("checks", 0) for r in found)
@@ -98,13 +115,26 @@ def main():
             if not ok:
                 fact += " — " + "; ".join((r["failed"] or [r.get("error") or ""])[0][:80] for r in found if r["status"] != "pass")
             proof = ", ".join(sorted({f"`{r['file']}`" for r in found}))
-            if "L" in re.split(r"[+ ]", method):
-                status = "ошибка" if not ok else "не проверен (H ✓, L ждёт входа)"
+        if found and not needs_l:
+            status = "пройден" if ok else "ошибка"
+        elif found and needs_l:
+            if not ok:
+                status = "ошибка"
+            elif lv and lv["status"] == "pass":
+                status = "пройден"
+            elif lv and lv["status"] == "blocked":
+                status = "заблокирован"
             else:
-                status = "пройден" if ok else "ошибка"
-            if "Факт" in row:
+                status = "не проверен (H ✓, L не выполнен)"
+        elif lv:  # строки только с L
+            status = "пройден" if lv["status"] == "pass" else "заблокирован"
+        if lv:
+            fact = (fact + " · " if fact else "") + f"L: {lv['note']}"
+            proof = (proof + ", " if proof else "") + "`live.json`"
+        if fact is not None or lv:
+            if "Факт" in row and fact is not None:
                 row["Факт"] = fact
-            if "Дока-во" in row:
+            if "Дока-во" in row and proof is not None:
                 row["Дока-во"] = proof
             row["Статус"] = status
             lines[n] = "| " + " | ".join(row[h] for h in header) + " |"
@@ -119,11 +149,19 @@ def main():
             ids = [f"VIS-{sc}-{size}" for sc in scenes]
             res = [merged[i] for i in ids if i in merged]
             if len(res) == len(ids):
-                cells.append("H ✓ · L —" if all(r["status"] == "pass" for r in res) else "H ✗ · L —")
+                l_ok = live_rows.get("X-VIS-*", {}).get("status") == "pass"
+                cells.append(("H ✓" if all(r["status"] == "pass" for r in res) else "H ✗") + (" · L ✓" if l_ok else " · L —"))
             else:
                 cells.append("не проверен")
         pat = re.compile(r"^\| " + re.escape(form) + r" \| .* \| .* \| .* \|$", re.M)
         text = pat.sub(f"| {form} | {cells[0]} | {cells[1]} | {cells[2]} |", text)
+    # строка X-VIS-* (без столбцов «Факт»/«Дока-во»)
+    vis_live = live_rows.get("X-VIS-*")
+    if vis_live:
+        vis_ids = [i for i in merged if i.startswith("VIS-")]
+        vis_ok = bool(vis_ids) and all(merged[i]["status"] == "pass" for i in vis_ids)
+        st = "пройден" if vis_ok and vis_live["status"] == "pass" else ("ошибка" if not vis_ok else "заблокирован")
+        text = re.sub(r"^(\| X-VIS-\* \|.*\| H\+L \| )[^|]*(\|)$", lambda m: m.group(1) + st + " " + m.group(2), text, flags=re.M)
     DOC.write_text(text, encoding="utf-8")
     print("ревизии результатов:", ", ".join(sorted(revs)) or "—", "| строки матрицы:", counts)
 

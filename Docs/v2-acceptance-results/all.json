@@ -327,7 +327,7 @@
    "status": "pass",
    "failed": [],
    "error": null,
-   "checks": 13
+   "checks": 14
   },
   {
    "id": "UA-A-04",
@@ -335,7 +335,7 @@
    "status": "pass",
    "failed": [],
    "error": null,
-   "checks": 1
+   "checks": 3
   },
   {
    "id": "UA-A-05",
@@ -759,7 +759,7 @@
    "status": "pass",
    "failed": [],
    "error": null,
-   "checks": 5
+   "checks": 10
   },
   {
    "id": "CP-L-08",
@@ -776,6 +776,14 @@
    "failed": [],
    "error": null,
    "checks": 3
+  },
+  {
+   "id": "CP-M-01",
+   "title": "Поля карточки: ограничения длины (код ≤10, ИНН ≤12, КПП ≤9, ОГРН ≤15) и цифровой ввод; порядок Tab по разметке",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 7
   },
   {
    "id": "CP-M-02",
@@ -863,7 +871,7 @@
    "status": "pass",
    "failed": [],
    "error": null,
-   "checks": 2
+   "checks": 4
   },
   {
    "id": "CP-W-01",
@@ -1016,6 +1024,14 @@
    "failed": [],
    "error": null,
    "checks": 3
+  },
+  {
+   "id": "CP-W-05b",
+   "title": "Инциденты и производительность СОХРАНЯЮТСЯ: инцидент с датой и типом уходит в PATCH, без даты — отбрасывается, ноль в норме — отбрасывается (D-33)",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
   },
   {
    "id": "CP-W-07",
@@ -2138,7 +2154,7 @@
    "checks": 5
   }
  ],
- "rev": "7e372bc",
+ "rev": "1f34671",
  "tree_dirty": false,
- "ran_at": "2026-09-20 17:42:07"
+ "ran_at": "2026-09-20 20:06:46"
 }

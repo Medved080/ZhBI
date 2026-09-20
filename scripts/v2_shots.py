@@ -53,6 +53,8 @@ def shoot(port, scene, size, out_dir, profile):
         os.killpg(proc.pid, 15)
     except ProcessLookupError:
         pass
+    except PermissionError:  # в песочнице killpg запрещён — гасим сам процесс
+        proc.terminate()
     proc.wait(timeout=10)
     return target.exists() and target.stat().st_size > 0
 

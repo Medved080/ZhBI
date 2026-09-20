@@ -286,7 +286,10 @@
 `scenarios/{shell,ua,po,cp,vis,a11y}.js`, прогонщик `run.html`),
 `scripts/v2_shots.py` (безголовые снимки), `scripts/verify_v2_api.mjs` и
 `fake-backend.selftest.mjs` (Node), `scripts/v2_acceptance_fill.py` (заполнение
-матрицы `Docs/v2-release-acceptance.md`). Ни БД, ни `app.main`, ни входа не нужно.
+матрицы `Docs/v2-release-acceptance.md`, учитывает и живые результаты
+`Docs/v2-acceptance-results/live.json`). Ни БД, ни `app.main`, ни входа не нужно.
+Стенд не заменяет живую приёмку: он не видел, что инциденты контракта не
+сохранялись (D-33), — порядок живых шагов L1–L12 описан в разделе 3а матрицы.
 
 ## Стражи и инвентаризация
 
