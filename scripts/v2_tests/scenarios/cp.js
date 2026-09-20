@@ -433,6 +433,24 @@ export const tests = [
     },
   },
   {
+    id: "CP-W-16", title: "Права: корзины договора/спецификации и «Удалить контракт» — только при dict_delete=write (единый серверный эндпоинт удаления)",
+    async run(t) {
+      const w = await openApp({ perm: "writer" });
+      await openContract(w, 4, "lines");
+      t.eq(w.$("#ctr-delete"), null, "писатель без dict_delete: «Удалить контракт» нет");
+      t.eq(w.byText("summary", "Действия"), null, "блока «Действия» нет — в нём только удаление");
+      w.click(w.$("#ctr-back"));
+      await waitFor(() => w.$$("[data-agreement]").length > 0, { what: "договоры" });
+      t.eq(w.$$("[data-del-agreement], [data-del-spec]").length, 0, "корзин договоров и спецификаций нет");
+      const d = await openApp({ perm: "deleter" });
+      await openContract(d, 4, "lines");
+      t.ok(d.$("#ctr-delete"), "dict_delete=write: «Удалить контракт» есть");
+      d.click(d.$("#ctr-back"));
+      await waitFor(() => d.$$("[data-agreement]").length > 0, { what: "договоры" });
+      t.ok(d.$$("[data-del-agreement]").length > 0 && d.$$("[data-del-spec]").length > 0, "корзины договоров и спецификаций есть");
+    },
+  },
+  {
     id: "CP-W-11", title: "Сохранение контракта: двойной клик — один PATCH; 403/409/422/500/сеть — ошибка видна, повтор возможен",
     async run(t) {
       const a = await openApp();
@@ -524,6 +542,53 @@ export const tests = [
     },
   },
 
+  {
+    id: "CP-KBD-01", title: "Клавиатура: после действий в контракте фокус остаётся в рабочей области, а не сбрасывается на <body>",
+    async run(t) {
+      const inArea = (a) => { const el = a.doc.activeElement; return !!el && el !== a.doc.body && !!el.closest("#v2-content"); };
+      const a = await openApp();
+      await openContract(a, 4, "lines");
+      a.$("#ctr-line-add").focus();
+      a.click(a.$("#ctr-line-add"));
+      await a.settle(120);
+      t.ok(inArea(a), "«+ строка»: фокус остался в области контракта");
+      a.$('[data-ctr-tab="incidents"]').focus();
+      a.click(a.$('[data-ctr-tab="incidents"]')); await a.settle(100);
+      t.ok(inArea(a), "смена вкладки контракта: фокус в области");
+      a.$("#ctr-inc-add").focus();
+      a.click(a.$("#ctr-inc-add")); await a.settle(120);
+      t.ok(inArea(a), "«+ инцидент»: фокус в области");
+      // плановая дата: правка с клавиатуры не должна уводить фокус со строки
+      const b = await openApp();
+      await openContract(b, 1);
+      const el = dateInput(b, 102);
+      el.focus();
+      change(b, el, "2026-10-07");
+      await waitFor(() => elemDate(b, 102) === "2026-10-07", { what: "запись даты" });
+      await b.settle(150);
+      t.ok(inArea(b), "запись плановой даты: фокус не сброшен на <body>");
+      t.eq(b.doc.activeElement?.dataset?.elemPlanned, "102", "фокус остался на той же строке даты");
+    },
+  },
+  {
+    id: "CP-KBD-02", title: "Клавиатура: смена вкладки карточки и добавление договора не сбрасывают фокус на <body>",
+    async run(t) {
+      const inArea = (a) => { const el = a.doc.activeElement; return !!el && el !== a.doc.body && !!el.closest("#v2-content"); };
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 4);
+      a.$('[data-tab="contracting"]').focus();
+      a.click(a.$('[data-tab="contracting"]'));
+      await waitFor(() => a.$("#cp-new-agreement-toggle"), { what: "вкладка" });
+      await a.settle(80);
+      t.ok(inArea(a), "смена вкладки карточки: фокус в области");
+      a.$("#cp-new-agreement-toggle").focus();
+      a.click(a.$("#cp-new-agreement-toggle"));
+      await waitFor(() => a.$("#cp-new-agreement-object"), { what: "форма договора" });
+      await a.settle(80);
+      t.ok(inArea(a), "«+ Договор»: фокус перешёл в форму (не потерян)");
+    },
+  },
   // ---------------- Обязательная регрессия плановых дат и блокировок ----------------
   {
     id: "CP-REG-01", title: "Неудачная запись плановой даты: ошибка на строке, значение не теряется; 403 снимает права у всего контракта",

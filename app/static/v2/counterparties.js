@@ -374,7 +374,11 @@ export function mountCounterparties(container, ctx) {
   let deleteRequestInFlight = false;
   function ensureCardShell() {
     if (currentShell === "card") return;
-    container.classList.remove("v2-app");
+    // Закреплённый подвал и прокрутка только внутри #cp-body — как у остальных
+    // экранов V2 (v2-app). Раньше класс снимался: список/карточка целиком
+    // прокручивались страницей, и «Сохранить/Отменить» уходили под нижний
+    // край экрана (1366×768 и даже 1920×900).
+    container.classList.add("v2-app");
     container.innerHTML = `
       <div class="v2-page-head"><div class="v2-container">
         <h2>Контрагенты</h2>
@@ -394,6 +398,12 @@ export function mountCounterparties(container, ctx) {
   function btn(label, attr = "", primary = false) {
     return `<button type="button" class="v2-btn ${primary ? "v2-primary" : ""}" ${attr}>${label}</button>`;
   }
+
+  // Удаление контрагента, договора, спецификации и контракта — один и тот же
+  // серверный эндпоинт (app/dict_delete.py): план требует dict_delete=read,
+  // само удаление — write. Без права элементы удаления не показываются, а не
+  // заведомо кончаются отказом сервера.
+  const canDeleteRecords = ctx.perms.isSystemAdmin || ctx.perms.dictDelete === "write";
 
   async function ensureLoaded(force) {
     if (state.loaded && !force) return true;
@@ -1345,7 +1355,7 @@ export function mountCounterparties(container, ctx) {
           return `
           <details class="v2-agreement" data-agreement="${a.id}" ${state.expandedAgreements.has(a.id) ? "open" : ""}>
             <summary>Договор <strong>${escapeHtml(a.number)}</strong> ${fmtDate(a.agreement_date)} — ${escapeHtml(objectLabel(a.object_id))}${av.dirty ? " · не сохранено" : ""}
-              ${trashIconHtml(`data-del-agreement="${a.id}"`, `Удалить договор ${a.number}`)}</summary>
+              ${canDeleteRecords ? trashIconHtml(`data-del-agreement="${a.id}"`, `Удалить договор ${a.number}`) : ""}</summary>
             <div class="v2-inline" style="margin:10px 0">
               <input data-a-number="${a.id}" aria-label="Номер договора" value="${escapeHtml(av.number)}" placeholder="номер" ${av.saving ? "disabled" : ""}>
               <input data-a-date="${a.id}" aria-label="Дата договора" type="date" value="${escapeHtml(av.date)}" ${av.saving ? "disabled" : ""}>
@@ -1368,7 +1378,7 @@ export function mountCounterparties(container, ctx) {
               return `
               <details class="v2-agreement v2-agreement-nested" data-spec="${s.id}" ${state.expandedSpecs.has(s.id) ? "open" : ""}>
                 <summary>Спецификация <strong>${escapeHtml(s.number)}</strong> ${fmtDate(s.specification_date)}${sv.dirty ? " · не сохранено" : ""}
-                  ${trashIconHtml(`data-del-spec="${s.id}"`, `Удалить спецификацию ${s.number}`)}</summary>
+                  ${canDeleteRecords ? trashIconHtml(`data-del-spec="${s.id}"`, `Удалить спецификацию ${s.number}`) : ""}</summary>
                 <div class="v2-inline" style="margin:10px 0">
                   <input data-s-number="${s.id}" aria-label="Номер спецификации" value="${escapeHtml(sv.number)}" placeholder="номер" ${sv.saving ? "disabled" : ""}>
                   <input data-s-date="${s.id}" aria-label="Дата спецификации" type="date" value="${escapeHtml(sv.date)}" ${sv.saving ? "disabled" : ""}>
@@ -1400,7 +1410,9 @@ export function mountCounterparties(container, ctx) {
   function wireContractingHandlers(el) {
     el.querySelector("#cp-new-agreement-toggle")?.addEventListener("click", () => {
       state.newAgreementForm = { number: "", date: "", objectId: "", error: "", saving: false };
-      renderContractingTab();
+      // Кнопка «+ Договор» заменяется формой — фокус переходит на её первое поле
+      // (иначе он падал бы на <body> и клавиатурный пользователь терял место).
+      Promise.resolve(renderContractingTab()).then(() => container.querySelector("#cp-new-agreement-object")?.focus());
     });
     el.querySelector("#cp-new-agreement-cancel")?.addEventListener("click", () => {
       // Кнопка и так задизейблена на время записи (setControlsDisabled в
@@ -1477,7 +1489,7 @@ export function mountCounterparties(container, ctx) {
     el.querySelectorAll("[data-new-spec-toggle]").forEach((b) => b.addEventListener("click", () => {
       const id = Number(b.dataset.newSpecToggle);
       state.newSpecForms.set(id, { number: "", date: "", error: "", saving: false });
-      renderContractingTab();
+      Promise.resolve(renderContractingTab()).then(() => container.querySelector(`[data-spec-number="${id}"]`)?.focus());
     }));
     el.querySelectorAll("[data-spec-cancel]").forEach((b) => b.addEventListener("click", () => {
       const id = Number(b.dataset.specCancel);
@@ -1993,7 +2005,7 @@ export function mountCounterparties(container, ctx) {
         </div>
       </details>
       ${!isNew && archiveInfo.blocks ? `<p style="color:var(--bad);font-size:12px;margin:4px 0">${escapeHtml(archiveInfo.shortText)}</p>` : ""}
-      ${!isNew ? `
+      ${!isNew && canDeleteRecords ? `
       <details class="v2-collapsible" style="margin-top:2px">
         <summary>Действия</summary>
         <div style="padding:6px 0">${btn("Удалить контракт", 'id="ctr-delete"')}</div>

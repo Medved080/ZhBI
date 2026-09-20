@@ -511,6 +511,19 @@ export const tests = [
     },
   },
   {
+    id: "PO-25", title: "Клавиатура: выбор узла дерева оставляет фокус на этом узле после перерисовки формы",
+    async run(t) {
+      const a = await openApp();
+      await openPo(a);
+      const node = a.$('[data-project="2"]');
+      node.focus();
+      a.click(node);
+      await waitFor(() => a.$("#pf-name") && a.$("#pf-name").value === a.ctl.data.projects.find((p) => p.id === 2).name, { what: "карточка" });
+      await a.settle(150);
+      t.eq(a.doc.activeElement?.dataset?.project, "2", "фокус остался на выбранном узле дерева (data-project=2)");
+    },
+  },
+  {
     id: "PO-24", title: "Длинные названия и адреса не ломают форму и не создают горизонтальную прокрутку",
     async run(t) {
       const a = await openApp();

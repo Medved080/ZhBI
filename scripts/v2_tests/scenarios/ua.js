@@ -707,6 +707,22 @@ export const tests = [
     },
   },
   {
+    id: "UA-R-09", title: "Клавиатура: клик по сегменту матрицы не уводит фокус на <body> (перерисовка редактора роли)",
+    async run(t) {
+      const a = await openApp();
+      await openRoles(a);
+      const seg = a.$$("[data-perm]").find((b) => b.getAttribute("aria-pressed") !== "true");
+      const perm = seg.dataset.perm, level = seg.dataset.level;
+      seg.focus();
+      a.click(seg);
+      await waitFor(() => a.$("#roles-save"), { what: "подвал" });
+      await a.settle(100);
+      const cur = a.doc.activeElement;
+      t.ok(cur && cur !== a.doc.body, "фокус не на <body>");
+      t.eq([cur.dataset?.perm, cur.dataset?.level], [perm, level], "фокус остался на той же кнопке сегмента");
+    },
+  },
+  {
     id: "UA-K-01", title: "Проверка доступа: выбор пользователя и объекта (мышь и клавиатура)",
     async run(t) {
       const a = await openApp();

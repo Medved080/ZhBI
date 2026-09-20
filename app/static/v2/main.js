@@ -8,6 +8,7 @@ import { renderLogin, renderChangePassword } from "./login.js";
 import { mountUsersAccess } from "./users-access.js";
 import { mountProjectsObjects } from "./projects-objects.js";
 import { mountCounterparties } from "./counterparties.js";
+import { keepFocus } from "./focus.js";
 
 const root = document.getElementById("v2-root");
 
@@ -183,6 +184,9 @@ function renderShell(user, permissions) {
     return;
   }
 
+  // Общий хранитель фокуса на контейнере раздела: перерисовка области через
+  // innerHTML не должна сбрасывать фокус клавиатуры на <body>.
+  const focusKeeper = keepFocus(content);
   const navButtons = [...document.querySelectorAll(".v2-nav [data-section]")];
   async function openSection(key) {
     if (navBusy || api.hasPendingWrites()) return;
@@ -198,6 +202,7 @@ function renderShell(user, permissions) {
       // но не сам контекст — без явного remove() внутри destroy() браузер
       // рано или поздно перестанет строить новые карты вовсе.
       activeModule?.destroy?.();
+      focusKeeper.reset();
       content.innerHTML = "";
       // Оформление раздела не должно зависеть от порядка посещения: классы,
       // которые раздел мог повесить на общий контейнер, сбрасываются здесь.
