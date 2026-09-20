@@ -2335,6 +2335,13 @@ function createServer(opts) {
       checked: (r) => [["objects.smu_director_id", r.usedBy || 0, "перевод на замену"]],
       remove: (r) => { data.individuals.splice(data.individuals.indexOf(r), 1); },
     },
+    mark_prefix: {
+      title: "Префикс марки",
+      load: (key) => { const r = prefixRows().find((x) => x.prefix === key); return r ? { id: r.prefix, prefix: r.prefix, element_type: r.element_type } : null; },
+      label: (r) => `${r.prefix} → ${r.element_type}`,
+      checked: () => [],
+      remove: (r) => { const rows = prefixRows(); rows.splice(rows.findIndex((x) => x.prefix === r.prefix), 1); },
+    },
     contract: {
       title: "Контракт", parentKind: "specification",
       load: (id) => contractById(id),
@@ -2380,6 +2387,11 @@ function createServer(opts) {
   }
   function dictRow(kind, key) {
     const view = dictView(kind);
+    if (kind === "mark_prefix") {
+      const rowP = view.load(decodeURIComponent(String(key)));
+      if (!rowP) fail(404, `${view.title}: запись не найдена`);
+      return rowP;
+    }
     if (!/^\s*[+-]?\d+\s*$/.test(String(key))) fail(422, "Неверный ключ записи");
     const row = view.load(Number(key));
     if (!row) fail(404, `${view.title}: запись не найдена`);
@@ -2526,8 +2538,19 @@ function createServer(opts) {
   // ---- экраны «только чтение» полного интерфейса (форма ответов — как у настоящего backend, 2026-09-20) ----
   // Данные синтетические и намеренно узнаваемые: тест сверяет, что экран показал ровно присланное.
   const readGate = (ctx, key) => { if (FEATURE_BY_KEY.has(key)) assertFeature(ctx.user, key, "read"); };
-  route("GET", "/mark-type-prefixes", () => data.settings.markPrefixes || [
+  const prefixRows = () => (data.settings.markPrefixes ||= [
     { prefix: "КН", element_type: "Колонна" }, { prefix: "ПП", element_type: "Плита перекрытия" }, { prefix: "РГ", element_type: "Ригель" }]);
+  route("GET", "/mark-type-prefixes", () => deepClone(prefixRows()));
+  route("POST", "/mark-type-prefixes", (ctx) => {
+    if (FEATURE_BY_KEY.has("dict_mark_prefixes")) assertFeature(ctx.user, "dict_mark_prefixes", "write");
+    const b = ctx.body || {};
+    if (typeof b.prefix !== "string" || typeof b.element_type !== "string") fail(422, "prefix, element_type: обязательные поля");
+    const rows = prefixRows();
+    const row = rows.find((r) => r.prefix === b.prefix);
+    if (row) row.element_type = b.element_type; else rows.push({ prefix: b.prefix, element_type: b.element_type });
+    return { prefix: b.prefix, element_type: b.element_type };
+  });
+  route("GET", "/label-visibility", (ctx) => { queryValue(ctx, "object_id", { type: "int", required: true }); return { "Колонна": false, "Плита перекрытия": false, "Ригель": false }; });
   route("GET", "/zones", (ctx) => {
     const cat = queryValue(ctx, "category", { required: true });
     if (!["Захватка", "Кран", "Стоянка"].includes(cat)) fail(400, "Неизвестная категория зоны");
@@ -2556,7 +2579,8 @@ function createServer(opts) {
     data.settings.statusColors = { ...(data.settings.statusColors || { planned: "#b1b3b4", contracting: "#eab308", installed: "#00f55a" }), ...body };
     return data.settings.statusColors;
   });
-  route("GET", "/layer-type-combinations", () => [{ layer: "QA_слой", element_type: "Колонна", shape: "outline" }]);
+  route("GET", "/layer-type-combinations", () => deepClone(data.settings.layerCombos || [
+    { layer: "QA_слой_1", element_type: "Колонна", shape: "outline" }, { layer: "QA_слой_2", element_type: "Плита перекрытия", shape: "outline" }, { layer: "QA_слой_3", element_type: "Ригель", shape: "outline" }]));
   route("GET", "/allowed-subtypes", (ctx) => {
     if (!queryValue(ctx, "object_id", { type: "int" })) fail(400, "Справочник подтипов свой у каждого объекта — укажите объект");
     return { "Колонна": ["верхняя", "нижняя"], "Ригель": [] };
