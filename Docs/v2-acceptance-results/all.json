@@ -1247,7 +1247,7 @@
    "status": "pass",
    "failed": [],
    "error": null,
-   "checks": 85
+   "checks": 88
   },
   {
    "id": "RD-02",
@@ -1360,6 +1360,14 @@
    "failed": [],
    "error": null,
    "checks": 12
+  },
+  {
+   "id": "RD-16",
+   "title": "Инструкция («Обучение»): блоки по группам, абзацы как текст (разметка не исполняется), поиск по тексту",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
   },
   {
    "id": "DE-01",
@@ -3138,8 +3146,8 @@
    "checks": 5
   }
  ],
- "rev": "f763393",
+ "rev": "c781f21",
  "tree_dirty": false,
- "app_static_tree": "b0867f49a27b0fd0438c673a02f5f94cf26986a0",
- "ran_at": "2026-09-21 02:08:27"
+ "app_static_tree": "7da8d749c1335043a18b71ee2ff79af21465cf87",
+ "ran_at": "2026-09-21 02:30:57"
 }
