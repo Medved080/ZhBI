@@ -110,7 +110,22 @@ function dynamicsReport(data) {
     ${rows.length ? tableHtml(cols, rows, { cap: 200 }) : `<p class="v2-muted">Данных по неделям нет.</p>`}`;
 }
 
-export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport };
+// ---- «Моя работа»: что человек изменил за период (события журнала)
+const timeNoMs = (v) => {
+  const t = String(v ?? "");
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : t.replace(" ", "T") + "Z");
+  return Number.isNaN(d.getTime()) ? t : d.toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "medium" });
+};
+function myworkReport(data) {
+  const rows = (data.rows || []).map((r) => ({ ...r, at_text: timeNoMs(r.at) }));
+  const summary = (data.by_action || []).map((i) => `<li>${esc(i.title)}: <strong>${esc(num(i.count))}</strong></li>`).join("");
+  return `<p class="v2-muted" role="status">Событий: ${esc(num(data.total))}${data.truncated ? ` (показаны ${esc(num(data.shown))} — сузьте период)` : ""} · период ${esc(dateRu(data.date_from))} — ${esc(dateRu(data.date_to))}</p>
+    ${summary ? `<h4>Сводка по действиям</h4><ul class="v2-summary-list">${summary}</ul>` : ""}
+    <h4>События</h4>
+    ${rows.length ? tableHtml([{ key: "at_text", label: "Время" }, { key: "user_name", label: "Пользователь" }, { key: "action_title", label: "Действие" }, { key: "item", label: "Что" }, { key: "old_text", label: "Было" }, { key: "new_text", label: "Стало" }], rows, { cap: 300 }) : `<p class="v2-muted">За период событий нет.</p>`}`;
+}
+
+export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport, mywork: myworkReport };
 
 // Взаимодействие: сворачивание узлов дерева, страницы перечня. Возвращает true, если надо перерисовать.
 export function bindReport(name, root, state, repaint) {

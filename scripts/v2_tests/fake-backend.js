@@ -2605,6 +2605,13 @@ function createServer(opts) {
       finish: { montage: { plan: "2026-12-30", forecast: "2027-01-12", deviation_days: 13 } } };
   });
 
+  route("POST", "/reports/my-work", (ctx) => {
+    const b = reportBody(ctx);
+    const rows = Array.from({ length: 3 }, (_, i) => ({ id: i + 1, at: "2026-09-20 10:00:00.000", user_id: 1, user_name: "QA-Админов", action: "smu_create", action_title: "СМУ создано", entity_type: "smu", entity_id: i, item: `СМУ-${i}`, old_text: "", new_text: "новое", element: null }));
+    return { title: "Моя работа", date_from: b.date_from, date_to: b.date_to, at_from: b.at_from, at_to: b.at_to, users: [{ id: 1, display_name: "QA-Админов" }], total: 3, shown: 3, truncated: false,
+      by_action: [{ action: "smu_create", title: "СМУ создано", count: 3 }], rows };
+  });
+
   // ---- карта (app/project_map.py) ----
   route("GET", "/map/config", (ctx) => {
     assertFeature(ctx.user, "map", "read");

@@ -641,3 +641,4 @@ input:disabled, select:disabled, textarea:disabled {
 .v2-sev-critical { color: var(--bad); border-color: currentColor; }
 .v2-sev-warning { color: var(--accent); border-color: currentColor; }
 .v2-report-controls { margin-bottom: 10px; }
+.v2-summary-list { columns: 2; padding-left: 18px; margin: 6px 0 14px; }

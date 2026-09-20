@@ -238,4 +238,22 @@ export const tests = [
       t.has(a.$(".v2-callout-bad").textContent, "Сбой расчёта (QA)", "показан текст ошибки");
     },
   },
+  {
+    id: "RD-13", title: "«Моя работа»: период по умолчанию — сегодня, границы дня в UTC уходят в запрос, смена периода перезапрашивает",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await openScreen(a, "report-mywork");
+      await waitFor(() => a.$$("#rd-body tbody tr").length === 3, { what: "события" });
+      const req = a.ctl.log.filter((e) => e.path === "/reports/my-work")[0].body;
+      const now = new Date(); const p = (n) => String(n).padStart(2, "0");
+      const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+      t.eq([req.date_from, req.date_to], [today, today], "период по умолчанию — сегодня (местная дата)");
+      t.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.000$/.test(req.at_from) && /\.999$/.test(req.at_to), "границы суток в UTC с миллисекундами, как в V1");
+      t.eq([req.all_users, req.user_ids], [false, null], "запрос только по себе");
+      t.has(body(a).textContent, "Событий: 3", "счётчик событий из ответа");
+      a.setValue(a.$("input[data-param=date_from]"), "2026-09-01");
+      await waitFor(() => a.ctl.log.filter((e) => e.path === "/reports/my-work").length === 2, { what: "перезапрос" });
+      t.eq(a.ctl.log.filter((e) => e.path === "/reports/my-work")[1].body.date_from, "2026-09-01", "новая начальная дата в запросе");
+    },
+  },
 ];

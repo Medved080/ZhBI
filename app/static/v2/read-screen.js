@@ -89,7 +89,18 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   const sections = screen.read.sections;
   let dead = false;
   let active = 0;
+  const todayIso = () => { const d = new Date(); const p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+  // Границы дня: журнал хранит время в UTC, а человек выбирает дни по местным часам (та же функция, что в V1).
+  const boundUtc = (dateStr, end) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || "");
+    if (!m) return dateStr || null;
+    const d = end ? new Date(+m[1], +m[2] - 1, +m[3], 23, 59, 59, 999) : new Date(+m[1], +m[2] - 1, +m[3], 0, 0, 0, 0);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, "0")}`;
+  };
   const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null, params: {}, rs: {} }));
+
+  sections.forEach((sec, i) => (sec.controls || []).forEach((c) => { if (c.default === "today") st[i].params[c.param] = todayIso(); }));
 
   el.innerHTML = `
     <div class="v2-container v2-screen">
@@ -134,7 +145,14 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     paint();
     try {
       const data = sec.kind === "report"
-        ? await api.readPost(sec.endpoint, { object_id: objectId, source_file: null, ...(sec.body || {}), ...s.params })
+        ? await api.readPost(sec.endpoint, (() => {
+          const body = { object_id: objectId, source_file: null, ...(sec.body || {}), ...s.params };
+          if (sec.derive === "activity-bounds") {
+            body.at_from = boundUtc(body.date_from, false); body.at_to = boundUtc(body.date_to, true);
+            body.tz_offset_minutes = new Date().getTimezoneOffset();
+          }
+          return body;
+        })())
         : await api.get(urlFor(sec, s));
       if (dead || seq !== s.seq) return; // запоздавший ответ: вкладку/объект уже сменили
       s.data = data;
