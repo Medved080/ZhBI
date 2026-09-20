@@ -445,7 +445,8 @@ console.log("Адрес, карта, заглушки, маршрутизаци�
   check(cfg.online === false && cfg.geocode_url === null && cfg.basemaps.length === 0, "карта: онлайн-сервисы выключены (геокодер не вызывается)");
   const mo = await api.get("/map/objects");
   check(mo.objects.length > 0 && mo.without_coords > 0, "map/objects: точки и «без координат»");
-  check((await api.get("/counterparties")).length === 0, "GET /counterparties — заглушка");
+  const cpl = await api.get("/counterparties");
+  check(cpl.length === 7 && cpl[0].short_name === "QA-ДСК-2", "GET /counterparties — настоящий список фикстур (7), сортировка по краткому наименованию");
   const nf = await fetch("/nope");
   check(nf.status === 404 && (await nf.json()).detail === "Not Found", "неизвестный маршрут → 404");
   const mm = await fetch("/objects/1/avatar", { method: "POST" });
@@ -474,12 +475,470 @@ console.log("Задержка, whenIdle, waitFor, регистрация зап�
   check(ctl.log.length === 0, "clearLog()");
 }
 
+// ============================ Контрактация («Контрагенты») ============================
+// Тело PATCH /contracts/{id} из ответа GET /contracts — ровно то, что шлёт клиент V2 (buildContractBody).
+const bodyOf = (c, o = {}) => ({
+  specification_id: c.specification_id, theme: c.theme, is_archived: c.is_archived,
+  lines: c.lines.map(({ element_type, mark, quantity }) => ({ element_type, mark, quantity })),
+  incidents: c.incidents.map(({ element_type, quantity, incident_date, description }) => ({ element_type, quantity, incident_date, description })),
+  capacity: c.capacity.map(({ element_type, per_day }) => ({ element_type, per_day, comment: null })), ...o,
+});
+const flatNodes = (n) => [n, ...n.children.flatMap(flatNodes)];
+
+console.log("Контрагенты: список, создание, правка, права");
+{
+  ctl.reset();
+  const list = await api.get("/counterparties");
+  check(list.length === 7 && list.map((c) => c.id).join() === "2,1,7,3,4,6,5", "GET /counterparties: 7 фикстур, сортировка по short_name (как ORDER BY в SQLite)");
+  const cp1 = list.find((c) => c.id === 1);
+  check(cp1.capacity.map((c) => c.element_type).join() === "Балка,Колонна,Плита перекрытия" && cp1.capacity.find((c) => c.element_type === "Колонна").per_day === 12.5,
+    "ёмкость завода: три норматива, отсортированы по типу");
+  check(list.every((c) => !("unaccounted" in c) && "capacity" in c && "code" in c) && list.find((c) => c.id === 3).short_name.length > 120 && list.find((c) => c.id === 3).legal_address.length > 250,
+    "служебные поля не уходят наружу; у контрагента 3 очень длинные названия и адрес");
+  check(list.find((c) => c.id === 7).inn === null && list.find((c) => c.id === 7).code === null, "контрагент 7: только обязательные поля");
+  const full = await api.get("/counterparties/full");
+  check(full.find((c) => c.id === 1).agreements.length === 2 && full.find((c) => c.id === 1).agreements[0].specifications.length === 2, "GET /counterparties/full: дерево договоры → спецификации");
+
+  const created = await api.post("/counterparties", { full_name: "QA-Полное", short_name: "QA-Новый Завод", inn: "7700000077",
+    capacity: [{ element_type: " Колонна ", per_day: 5, comment: " уточнение " }, { element_type: "Колонна", per_day: 9 },
+      { element_type: "Балка", per_day: 0 }, { element_type: "  ", per_day: 3 }] });
+  check(created.id === 8 && created.code === "QA-НОВ" && created.kpp === null && created.capacity.length === 1
+    && created.capacity[0].element_type === "Колонна" && created.capacity[0].per_day === 5 && created.capacity[0].comment === "уточнение",
+    "POST /counterparties: код по умолчанию из краткого наименования; ёмкость очищена (дубль типа, нуль и пустой тип отброшены)");
+  const second = await api.post("/counterparties", { full_name: "QA-Полное 2", short_name: "QA-Новый Другой" });
+  check(second.code === "QA-НОВ2" && second.capacity.length === 0, "коллизия кода → числовой суффикс; без capacity — пустая ёмкость");
+  const withCode = await api.post("/counterparties", { full_name: "QA-Полное 3", short_name: "QA-Третий", code: "МОЙ", capacity: null });
+  check(withCode.code === "МОЙ", "код, присланный явно, сохраняется как есть");
+  check((await api.get("/counterparties")).length === 10 && (await api.get("/counterparties")).some((c) => c.id === 8), "новые видны в следующем GET");
+  let e = await rejects(api.post("/counterparties", {}));
+  check(isApiError(e, 422) && /full_name: обязательное поле/.test(e.detail) && /short_name: обязательное поле/.test(e.detail), "нет full_name/short_name → 422 списком");
+  e = await rejects(api.post("/counterparties", { full_name: 5, short_name: "x" }));
+  check(isApiError(e, 422) && /full_name: Input should be a valid string/.test(e.detail), "full_name не строка → 422");
+  e = await rejects(api.post("/counterparties", { full_name: "x", short_name: "y", capacity: [{ element_type: "Колонна" }] }));
+  check(isApiError(e, 422) && /capacity\.0\.per_day: обязательное поле/.test(e.detail), "строка ёмкости без per_day → 422 с индексом строки");
+
+  const upd = await api.patch("/counterparties/8", { full_name: "QA-Полное 4", short_name: "QA-Новый Завод", inn: null, code: "НОВ" });
+  check(upd.full_name === "QA-Полное 4" && upd.inn === null && upd.code === "НОВ" && upd.capacity.length === 1, "PATCH: поля записаны; capacity не прислана — нормативы сохранены");
+  const upd2 = await api.patch("/counterparties/8", { full_name: "QA-Полное 4", short_name: "QA-Новый Завод", capacity: [] });
+  check(upd2.capacity.length === 0 && upd2.code === null, "capacity: [] снимает нормативы; код без присланного значения обнуляется (как в бэкенде)");
+  const upd3 = await api.patch("/counterparties/8", { full_name: "QA-Полное 5", short_name: "QA-Новый Завод", capacity: [{ element_type: "Плита", per_day: 2.5, comment: "c" }] });
+  check(upd3.capacity[0].per_day === 2.5 && (await api.get("/counterparties")).find((c) => c.id === 8).full_name === "QA-Полное 5", "PATCH виден в следующем GET");
+  e = await rejects(api.patch("/counterparties/999", { full_name: "x", short_name: "y" }));
+  check(isApiError(e, 404) && e.detail === "Контрагент не найден", "PATCH несуществующего → 404");
+  e = await rejects(api.patch("/counterparties/abc", { full_name: "x", short_name: "y" }));
+  check(isApiError(e, 422) && /counterparty_id: нужно целое число/.test(e.detail), "id не число → 422");
+
+  ctl.loginAs(3);
+  check(Array.isArray(await api.get("/counterparties")), "чтение справочника — любому вошедшему");
+  e = await rejects(api.post("/counterparties", { full_name: "x", short_name: "y" }));
+  check(isApiError(e, 403) && /^«Справочник контрагентов»: изменение требует роли хотя бы на одном объекте/.test(e.detail), "Наблюдатель: POST → 403 (право «Контрагенты» — write)");
+  e = await rejects(api.post("/counterparties", {}));
+  check(isApiError(e, 403), "403 раньше 422 (порядок как у зависимостей FastAPI)");
+  ctl.loginAs(2);
+  check((await api.post("/counterparties", { full_name: "QA-От комплектовщика", short_name: "QA-Комплект" })).id === 11, "qa.writer (Комплектовщик на объекте 4) создаёт контрагента");
+  ctl.loginAs(1);
+}
+
+console.log("Контракты: GET /contracts, группировка, права видимости, развёрнутый вид");
+{
+  ctl.reset();
+  const all = await api.get("/contracts");
+  check(all.length === 11 && all.map((c) => c.id).join() === "6,7,8,1,2,3,4,5,9,11,10", "GET /contracts: все 11, порядок «контрагент/договор/спецификация»");
+  const bySpec = new Map();
+  for (const c of all) bySpec.set(c.specification_id, [...(bySpec.get(c.specification_id) || []), c.id]);
+  check(bySpec.get(1).join() === "1,2,3" && bySpec.get(4).join() === "6,7" && bySpec.get(2).join() === "4" && bySpec.size === 8, "группировка по specification_id (как строит клиент)");
+  const c1 = all.find((c) => c.id === 1);
+  check(c1.name === "QA-ЗЖБИ-1/QA-Д-101 от 15.03.2026/QA-С-1 от 20.03.2026 (Колонны и плиты, секция А)", "наименование контракта генерируется по цепочке");
+  check(c1.linked_elements === 8 && c1.is_archived === false && c1.agreement_id === 1 && c1.counterparty_id === 1 && c1.counterparty_code === "ЗЖБИ1"
+    && c1.specification_number === "QA-С-1" && c1.agreement_number === "QA-Д-101", "ContractOut: цепочка, linked_elements, код контрагента");
+  check(c1.lines.map((l) => `${l.mark}:${l.quantity}/${l.fact}/${l.damaged}/${l.remaining}`).join() === "QA-К1:10/3/1/6,QA-К2:6/2/1/3,QA-П1:20/3/2/15" && c1.lines.every((l) => l.exceeded === false),
+    "позиции: план/факт/повреждено/остаток (остаток = план − факт − повреждённые), у всех остаток > 0");
+  check(c1.incidents.map((i) => i.incident_date).join() === "2026-08-27,2026-08-20" && c1.incidents[0].description === "QA-Трещина при монтаже", "инциденты: по дате по убыванию");
+  check(c1.capacity.length === 1 && c1.capacity[0].element_type === "Колонна" && c1.capacity[0].per_day === 8 && c1.capacity[0].comment === null, "переопределение производительности контракта");
+  check(all.every((c) => !("historyRecords" in c) && !("defaultRefs" in c)) && all.find((c) => c.id === 6).is_archived === true && all.find((c) => c.id === 5).linked_elements === 2 && all.find((c) => c.id === 8).linked_elements === 3,
+    "служебные поля не уходят; архивный c6, привязки c5 и c8");
+  check(all.find((c) => c.id === 7).lines.map((l) => l.remaining).join() === "20,100" && all.find((c) => c.id === 7).lines[0].mark === null, "позиция без марки — первой (NULL раньше в ORDER BY)");
+  check(all.find((c) => c.id === 9).theme.length > 90 && all.find((c) => c.id === 9).agreement_number.length > 80, "контракт 9: длинные тема и номер договора");
+
+  const els = await api.get("/contracts/1/elements");
+  check(els.map((x) => x.id).join() === "101,102,103,104,105,106,107,108" && new Set(els.map((x) => x.current_status)).size === 6, "GET /contracts/1/elements: 8 изделий, шесть разных статусов, порядок тип/марка/id");
+  check(els.filter((x) => x.planned_delivery_date === null).map((x) => x.id).join() === "103,105,108" && els[0].planned_delivery_date === "2026-09-01" && els[0].actual_delivery_date === "2026-09-02 10:15:00",
+    "часть с плановыми датами, часть без; факт — с временем");
+  check(["id", "element_type", "mark", "current_status", "planned_delivery_date", "project_delivery_date", "project_smr_start_date", "actual_delivery_date"].every((k) => k in els[0]), "форма строки — как у list_contract_elements");
+  check((await api.get("/contracts/4/elements")).length === 0, "у контракта без привязок — пустой список");
+  let e = await rejects(api.get("/contracts/999/elements"));
+  check(isApiError(e, 404) && e.detail === "Контракт не найден", "элементы несуществующего контракта → 404");
+  check(isApiError(await rejects(api.get("/contracts/abc/elements")), 422), "id не число → 422");
+
+  ctl.loginAs(2);
+  const mine = await api.get("/contracts");
+  check(mine.map((c) => c.id).join() === "6,7,8,1,2,3,4,5", "qa.writer: только контракты договоров на доступные объекты (1, 2, 4)");
+  check((await api.get("/agreements?counterparty_id=2")).map((a) => a.id).join() === "3,4", "безобъектный договор 7 не виден не-админу");
+  e = await rejects(api.get("/specifications?agreement_id=7"));
+  check(isApiError(e, 403) && e.detail === "Договор не привязан к объекту — правит администратор сервиса", "спецификации безобъектного договора — только админу");
+  e = await rejects(api.get("/specifications?agreement_id=5"));
+  check(isApiError(e, 403) && /«Договоры и спецификации»: просмотр требует роли на объекте/.test(e.detail), "договор чужого объекта → 403 с текстом как у бэкенда");
+  ctl.loginAs(4);
+  check((await api.get("/contracts")).length === 0 && isApiError(await rejects(api.get("/contracts/1/elements")), 403), "без грантов: список контрактов пуст, элементы → 403");
+  ctl.loginAs(1);
+  check((await api.get("/contracts")).length === 11, "админ снова видит всё");
+}
+
+console.log("Договоры и спецификации: создание, правка, ошибки");
+{
+  ctl.reset();
+  check((await api.get("/agreements?counterparty_id=1")).map((a) => a.number).join() === "QA-Д-101,QA-Д-102" && (await api.get("/agreements?counterparty_id=2")).map((a) => a.id).join() === "3,4,7",
+    "GET /agreements: по контрагенту, порядок по номеру");
+  check((await api.get("/agreements?counterparty_id=4")).length === 0 && (await api.get("/agreements?counterparty_id=999")).length === 0, "у контрагента без договоров — []; несуществующий контрагент — тоже []");
+  let e = await rejects(api.get("/agreements"));
+  check(isApiError(e, 422) && /counterparty_id: обязательное поле/.test(e.detail), "GET /agreements без counterparty_id → 422");
+  const a1 = (await api.get("/agreements?counterparty_id=1"))[0];
+  check(a1.id === 1 && a1.agreement_date === "2026-03-15" && a1.object_id === 1 && a1.counterparty_id === 1 && !("created_at" in a1), "форма AgreementOut");
+
+  e = await rejects(api.post("/agreements", { counterparty_id: 4, number: "QA-Н-1" }));
+  check(isApiError(e, 400) && /^Укажите объект, на который заключён договор/.test(e.detail), "POST /agreements без объекта → 400");
+  e = await rejects(api.post("/agreements", { counterparty_id: 4, number: "QA-Н-1", object_id: 999 }));
+  check(isApiError(e, 404) && e.detail === "Объект не найден", "несуществующий объект → 404");
+  e = await rejects(api.post("/agreements", { counterparty_id: 999, number: "QA-Н-1", object_id: 1 }));
+  check(isApiError(e, 404) && e.detail === "Контрагент не найден", "несуществующий контрагент → 404");
+  e = await rejects(api.post("/agreements", { counterparty_id: 1, number: "QA-Д-101", object_id: 1 }));
+  check(isApiError(e, 400) && e.detail === "У этого контрагента уже есть договор с таким номером", "дубль номера → 400");
+  e = await rejects(api.post("/agreements", { counterparty_id: 1, number: "QA-Х", object_id: 6 }));
+  check(isApiError(e, 403), "договор на объект МФР: раздел «Договоры» к нему не применим → 403 даже админу");
+  e = await rejects(api.post("/agreements", { number: "x" }));
+  check(isApiError(e, 422) && /counterparty_id: обязательное поле/.test(e.detail), "нет counterparty_id → 422 раньше остальных проверок");
+  const ag = await api.post("/agreements", { counterparty_id: 4, number: "QA-Н-1", agreement_date: "2026-09-01", object_id: 14 });
+  check(ag.id === 9 && ag.object_id === 14 && (await api.get("/agreements?counterparty_id=4")).length === 1, "POST /agreements: создан и виден в следующем GET");
+  check((await api.get("/dictionaries/object/14/delete-plan")).blockers.find((b) => b.label === "Договоры").count === 2, "объект 14: «Договоры» в delete-plan считаются по таблице (договор 6 + новый)");
+
+  e = await rejects(api.patch("/agreements/1", { counterparty_id: 1, number: "QA-Д-101", object_id: null }));
+  check(isApiError(e, 400) && /^Укажите объект/.test(e.detail), "PATCH договора без объекта → 400");
+  e = await rejects(api.patch("/agreements/1", { counterparty_id: 1, number: "QA-Д-101", agreement_date: "2026-03-15", object_id: 3 }));
+  check(isApiError(e, 409) && /законтрактовано изделий другого объекта: 8/.test(e.detail), "смена объекта при привязанных изделиях → 409");
+  const pa = await api.patch("/agreements/1", { counterparty_id: 1, number: "QA-Д-101/1", agreement_date: "2026-03-16", object_id: 1 });
+  check(pa.number === "QA-Д-101/1" && (await api.get("/contracts")).find((c) => c.id === 1).name.startsWith("QA-ЗЖБИ-1/QA-Д-101/1 от 16.03.2026/"), "PATCH договора: виден в GET /contracts (имя контракта пересобрано)");
+  e = await rejects(api.patch("/agreements/1", { counterparty_id: 1, number: "QA-Д-102", object_id: 1 }));
+  check(isApiError(e, 500) && (await api.get("/agreements?counterparty_id=1"))[0].number === "QA-Д-101/1", "дубль номера при PATCH — необработанное исключение бэкенда (500), данные не тронуты");
+  e = await rejects(api.patch("/agreements/999", { counterparty_id: 1, number: "x", object_id: 1 }));
+  check(isApiError(e, 404) && e.detail === "Договор не найден", "PATCH несуществующего договора → 404");
+  const moved = await api.patch("/agreements/7", { counterparty_id: 2, number: "QA-ДГ-старый", agreement_date: "2025-01-10", object_id: 4 });
+  check(moved.object_id === 4, "админ проставляет объект безобъектному договору");
+  ctl.reset();
+  ctl.loginAs(2);
+  e = await rejects(api.patch("/agreements/7", { counterparty_id: 2, number: "QA-ДГ-старый", object_id: 1 }));
+  check(isApiError(e, 403) && e.detail === "Договор не привязан к объекту — правит администратор сервиса", "безобъектный договор не-админу → 403");
+  e = await rejects(api.post("/agreements", { counterparty_id: 2, number: "QA-Н-2", object_id: 5 }));
+  check(isApiError(e, 403), "договор на чужой объект (5: только чтение у Наблюдателя? у qa.writer доступа нет) → 403");
+  ctl.loginAs(1);
+
+  // спецификации
+  check((await api.get("/specifications?agreement_id=1")).map((s) => s.number).join() === "QA-С-1,QA-С-2", "GET /specifications: по договору");
+  check(isApiError(await rejects(api.get("/specifications?agreement_id=999")), 404) && isApiError(await rejects(api.get("/specifications")), 422), "несуществующий договор → 404; без параметра → 422");
+  const sp = await api.post("/specifications", { agreement_id: 1, number: "QA-С-3", specification_date: "2026-09-02" });
+  check(sp.id === 10 && sp.agreement_id === 1 && sp.specification_date === "2026-09-02", "POST /specifications: создана");
+  const again = await api.post("/specifications", { agreement_id: 1, number: "QA-С-3", specification_date: "2030-01-01" });
+  check(again.id === 10 && again.specification_date === "2026-09-02" && (await api.get("/specifications?agreement_id=1")).length === 3, "повтор номера возвращает СУЩЕСТВУЮЩУЮ спецификацию (find_or_create), дубля нет");
+  e = await rejects(api.post("/specifications", { agreement_id: 999, number: "x" }));
+  check(isApiError(e, 404) && e.detail === "Договор не найден", "спецификация к несуществующему договору → 404");
+  const ps = await api.patch("/specifications/10", { agreement_id: 1, number: "QA-С-3А", specification_date: null });
+  check(ps.number === "QA-С-3А" && ps.specification_date === null, "PATCH спецификации");
+  e = await rejects(api.patch("/specifications/10", { agreement_id: 1, number: "QA-С-1" }));
+  check(isApiError(e, 500), "дубль номера при PATCH спецификации — 500 (нарушение UNIQUE)");
+  check((await api.patch("/specifications/10", { agreement_id: 2, number: "QA-С-3А" })).agreement_id === 2 && (await api.get("/specifications?agreement_id=2")).some((s) => s.id === 10), "спецификацию можно перевесить на другой договор");
+  e = await rejects(api.patch("/specifications/999", { agreement_id: 1, number: "x" }));
+  check(isApiError(e, 404) && e.detail === "Спецификация не найдена", "PATCH несуществующей спецификации → 404");
+}
+
+console.log("Контракты: создание, правка, перенос, архивация, страж покрытия");
+{
+  ctl.reset();
+  const before = await api.get("/contracts");
+  let e = await rejects(api.post("/contracts", { specification_id: 2 }));
+  check(isApiError(e, 422) && /lines: обязательное поле/.test(e.detail), "POST /contracts без lines → 422");
+  e = await rejects(api.post("/contracts", { specification_id: 999, lines: [] }));
+  check(isApiError(e, 404) && e.detail === "Спецификация не найдена", "несуществующая спецификация → 404");
+  e = await rejects(api.post("/contracts", { specification_id: 2, lines: [{ element_type: "Плита", mark: "X", quantity: 1 }, { element_type: "Плита", mark: "X", quantity: 2 }] }));
+  check(isApiError(e, 500) && (await api.get("/contracts")).length === before.length, "дубль позиции (тип, марка) — 500 бэкенда, контракт не создан");
+  e = await rejects(api.post("/contracts", { specification_id: 2, lines: [{ element_type: "Плита", mark: "X", quantity: "много" }] }));
+  check(isApiError(e, 422) && /lines\.0\.quantity: нужно целое число/.test(e.detail), "количество не число → 422 с индексом строки");
+  const c = await api.post("/contracts", { specification_id: 2, theme: "QA-Новый", is_archived: false,
+    lines: [{ element_type: "Колонна", mark: "QA-К99", quantity: 7 }], incidents: [{ element_type: "Колонна", quantity: 1, incident_date: "2026-09-01", description: null }],
+    capacity: [{ element_type: "Колонна", per_day: 3, comment: null }] });
+  check(c.id === 12 && c.specification_id === 2 && c.counterparty_id === 1 && c.counterparty_short_name === "QA-ЗЖБИ-1" && c.linked_elements === 0
+    && c.lines[0].remaining === 6 && c.name.endsWith("/QA-С-2 от 01.04.2026 (QA-Новый)") && c.capacity[0].per_day === 3, "POST /contracts: полный ContractOut (остаток учитывает инцидент)");
+  check((await api.get("/contracts")).length === before.length + 1, "новый контракт виден в GET /contracts");
+  const moved = await api.patch("/contracts/12", bodyOf(c, { specification_id: 4, incidents: [], capacity: null }));
+  check(moved.counterparty_id === 2 && moved.counterparty_short_name === "QA-ДСК-2" && moved.agreement_id === 3 && moved.incidents.length === 0 && moved.capacity.length === 1,
+    "перенос к другому контрагенту через смену спецификации; инциденты заменены, capacity=null — переопределение сохранено");
+  check((await api.get("/contracts")).find((x) => x.id === 12).counterparty_id === 2, "перенос виден в следующем GET");
+
+  const all = await api.get("/contracts");
+  const c1 = all.find((x) => x.id === 1), c4 = all.find((x) => x.id === 4), c6 = all.find((x) => x.id === 6);
+  e = await rejects(api.patch("/contracts/1", bodyOf(c1, { is_archived: true })));
+  check(isApiError(e, 409) && /^К контракту привязано изделий: 8\. В архив можно перевести только контракт/.test(e.detail), "архивация при linked_elements > 0 → 409");
+  check((await api.get("/contracts")).find((x) => x.id === 1).is_archived === false, "контракт остался неархивным");
+  check((await api.patch("/contracts/4", bodyOf(c4, { is_archived: true }))).is_archived === true, "контракт без привязок архивируется");
+  check((await api.patch("/contracts/6", bodyOf(c6, { is_archived: false }))).is_archived === false, "из архива вернуть можно всегда");
+  check((await api.patch("/contracts/1", bodyOf(c1, { is_archived: false }))).is_archived === false, "повторное сохранение неархивного с привязками — без проверки");
+
+  e = await rejects(api.patch("/contracts/1", bodyOf(c1, { lines: [{ element_type: "Колонна", mark: "QA-К1", quantity: 2 }, { element_type: "Колонна", mark: "QA-К2", quantity: 6 }, { element_type: "Плита перекрытия", mark: "QA-П1", quantity: 20 }] })));
+  check(isApiError(e, 409) && /^Правка спецификации оставила бы изделия без основания: Колонна «QA-К1»: остаётся по спецификации 2, а привязано изделий 3 и списано повреждёнными 1\. Сначала переназначьте/.test(e.detail),
+    "уменьшение количества ниже привязанного → 409 (страж покрытия)");
+  e = await rejects(api.patch("/contracts/1", bodyOf(c1, { lines: c1.lines.filter((l) => l.mark !== "QA-П1").map(({ element_type, mark, quantity }) => ({ element_type, mark, quantity })) })));
+  check(isApiError(e, 409) && /Плита перекрытия «QA-П1»: позиции не остаётся, а привязано изделий: 3/.test(e.detail), "удаление позиции с привязанными изделиями → 409");
+  check((await api.get("/contracts")).find((x) => x.id === 1).lines.length === 3 && (await api.get("/contracts")).find((x) => x.id === 1).lines[0].quantity === 10, "после отказа контракт не изменился");
+  const oldIds = c1.lines.map((l) => l.id).join();
+  const up = await api.patch("/contracts/1", bodyOf(c1, { theme: "QA-Тема 2", lines: c1.lines.map(({ element_type, mark, quantity }) => ({ element_type, mark, quantity: mark === "QA-К1" ? 12 : quantity })) }));
+  check(up.lines[0].quantity === 12 && up.lines[0].remaining === 8 && up.name.endsWith("(QA-Тема 2)") && up.lines.map((l) => l.id).join() !== oldIds, "разрешённая правка: количество выросло, имя пересобрано, позиции получили новые id");
+  e = await rejects(api.patch("/contracts/999", bodyOf(c1)));
+  check(isApiError(e, 404) && e.detail === "Контракт не найден", "PATCH несуществующего контракта → 404");
+  e = await rejects(api.patch("/contracts/1", bodyOf(c1, { specification_id: 999 })));
+  check(isApiError(e, 404) && e.detail === "Спецификация не найдена", "перенос на несуществующую спецификацию → 404");
+  e = await rejects(api.patch("/contracts/1", { theme: "x" }));
+  check(isApiError(e, 422) && /specification_id: обязательное поле/.test(e.detail) && /lines: обязательное поле/.test(e.detail), "PATCH без обязательных полей → 422");
+
+  ctl.loginAs(2);
+  e = await rejects(api.patch("/contracts/1", bodyOf(c1)));
+  check(isApiError(e, 403) && /^«Контракты и их позиции»: изменение требует роли на объекте/.test(e.detail), "Прораб (contracts=read) не правит контракт объекта 1 → 403");
+  const c8 = (await api.get("/contracts")).find((x) => x.id === 8);
+  check((await api.patch("/contracts/8", bodyOf(c8, { theme: "QA-Комплектовщик правит" }))).theme === "QA-Комплектовщик правит", "Комплектовщик на объекте 4 правит контракт 8");
+  e = await rejects(api.patch("/contracts/8", bodyOf(c8, { specification_id: 1 })));
+  check(isApiError(e, 403), "перенос контракта на спецификацию объекта, где нет права «Контракты» на запись, → 403 (проверяется и получатель)");
+  ctl.loginAs(1);
+}
+
+console.log("delete-plan, кандидаты и удаление с заменой: контрагент / договор / спецификация / контракт");
+{
+  ctl.reset();
+  const cp1 = await api.get("/dictionaries/counterparty/1/delete-plan");
+  const nodes = flatNodes(cp1.plan);
+  check(cp1.plan.kind_title === "Контрагент" && cp1.plan.label === "QA-ЗЖБИ-1" && cp1.plan.needs_replacement === true && cp1.plan.replaceable === true && cp1.plan.mergeable === true
+    && cp1.plan.adopt_title === "договоры со всем содержимым" && cp1.blockers.length === 0, "план контрагента 1: needs_replacement, mergeable, без blockers");
+  check(nodes.map((n) => n.kind).join() === "counterparty,agreement,specification,contract,contract,contract,specification,contract,agreement,specification,contract", "дерево: договоры → спецификации → контракты (порядок по номеру/id)");
+  check(cp1.plan.checked.map((c) => c.label).join() === "agreements.counterparty_id,counterparty_capacity.counterparty_id" && cp1.plan.checked.every((c) => c.handled !== "НЕ УЧТЕНО"), "checked контрагента — из реестра fk_handled");
+  const cn = nodes.find((n) => n.kind === "contract" && n.key === "1");
+  check(cn.refs.map((r) => `${r.label}:${r.count}`).join() === "Изделия:8,Записи истории статусов:14,Контракт по умолчанию:1" && cn.cascade.map((r) => `${r.label}:${r.count}`).join() === "Позиции контракта:3,Инциденты повреждения:2"
+    && cn.needs_replacement === true && cn.parent_kind === "specification" && cn.mergeable === false, "узел контракта 1: refs, cascade, needs_replacement");
+
+  const c1 = await api.get("/dictionaries/contract/1/delete-plan");
+  check(c1.blockers.length === 0 && c1.plan.needs_replacement === true && c1.plan.label.startsWith("QA-ЗЖБИ-1/QA-Д-101 от 15.03.2026/QA-С-1 от 20.03.2026"), "delete-plan контракта 1: needs_replacement:true, blockers нет");
+  check((await api.get("/dictionaries/contract/4/delete-plan")).plan.needs_replacement === false && (await api.get("/dictionaries/contract/4/delete-plan")).plan.cascade[0].label === "Позиции контракта", "контракт 4 без привязок: замена не нужна, cascade — позиции");
+  check((await api.get("/dictionaries/contract/6/delete-plan")).plan.needs_replacement === false, "архивный контракт без привязок — тоже без замены");
+  const cand = await api.get("/dictionaries/contract/candidates?key=1");
+  check(cand.map((x) => x.key).join() === "2,3" && cand[0].label.startsWith("QA-ЗЖБИ-1/QA-Д-101 от 15.03.2026/QA-С-1 от 20.03.2026 (Колонны и плиты, секция Б"), "кандидаты на замену контракта 1: контракты той же спецификации (2 и 3)");
+  check((await api.get("/dictionaries/contract/candidates?key=5")).length === 0, "контракт 5: кандидатов нет (единственный в спецификации)");
+  check((await api.get("/dictionaries/contract/candidates?key=1&parent=2")).map((x) => x.key).join() === "4", "candidates?parent=: замены берутся у спецификации, выбранной владельцу-замене");
+  check((await api.get("/dictionaries/counterparty/candidates?key=1")).map((x) => x.key).join() === "2,7,3,4,6,5" && (await api.get("/dictionaries/agreement/candidates?key=1")).map((x) => x.key).join() === "2"
+    && (await api.get("/dictionaries/specification/candidates?key=1")).map((x) => x.key).join() === "2", "кандидаты контрагента / договора / спецификации");
+  check((await api.get("/dictionaries/object/candidates?key=1")).length === 0, "у объекта замены нет — []");
+  let e = await rejects(api.get("/dictionaries/contract/candidates"));
+  check(isApiError(e, 422) && /key: обязательное поле/.test(e.detail), "candidates без key → 422");
+  e = await rejects(api.get("/dictionaries/contract/candidates?key=abc"));
+  check(isApiError(e, 422) && e.detail === "Неверный ключ записи", "нечисловой key → 422");
+  e = await rejects(api.get("/dictionaries/contract/candidates?key=999"));
+  check(isApiError(e, 404) && e.detail === "Контракт: запись не найдена", "несуществующий контракт → 404");
+  e = await rejects(api.get("/dictionaries/zzz/candidates?key=1"));
+  check(isApiError(e, 404) && e.detail === "Неизвестный справочник: zzz", "неизвестный вид → 404");
+
+  const cp5 = await api.get("/dictionaries/counterparty/5/delete-plan");
+  check(cp5.blockers.length === 0 && cp5.plan.needs_replacement === false && flatNodes(cp5.plan).length === 4, "контрагент 5: чистое удаление (4 записи дерева, без замены)");
+  const cp6 = await api.get("/dictionaries/counterparty/6/delete-plan");
+  check(cp6.blockers.length === 1 && cp6.blockers[0].label === "неучтённая ссылка qa_payments.counterparty_id" && cp6.blockers[0].count === 3 && cp6.blockers[0].owner === "Контрагент «QA-Поставщик с зависимостями»"
+    && cp6.plan.checked.some((c) => c.handled === "НЕ УЧТЕНО"), "контрагент 6: blockers {owner,label,count} от неучтённой ссылки");
+  check((await api.get("/dictionaries/counterparty/4/delete-plan")).plan.children.length === 0, "контрагент 4: без договоров");
+  e = await rejects(api.post("/dictionaries/counterparty/6/delete", { replacements: {}, mode: "replace" }));
+  check(isApiError(e, 409) && /^Удалить нельзя, за записью ещё стоят данные: Контрагент «QA-Поставщик с зависимостями»: неучтённая ссылка qa_payments\.counterparty_id — 3/.test(e.detail), "удаление с blockers → 409");
+  e = await rejects(api.post("/dictionaries/counterparty/1/delete", { replacements: {}, mode: "replace" }));
+  check(isApiError(e, 400) && e.detail === "Не выбрана замена: Контрагент «QA-ЗЖБИ-1»", "удаление контрагента с привязанными изделиями без замены → 400");
+  e = await rejects(api.post("/dictionaries/contract/1/delete", { replacements: {}, mode: "replace" }));
+  check(isApiError(e, 400) && /^Не выбрана замена: Контракт «QA-ЗЖБИ-1\//.test(e.detail), "удаление контракта с изделиями без замены → 400");
+  e = await rejects(api.post("/dictionaries/contract/1/delete", { replacements: { "contract:1": "4" }, mode: "replace" }));
+  check(isApiError(e, 400) && /не подходит выбранному владельцу/.test(e.detail), "замена из другой спецификации → 400");
+  e = await rejects(api.post("/dictionaries/contract/5/delete", { replacements: { "contract:5": "1" }, mode: "replace" }));
+  check(isApiError(e, 409) && /^Заменить нечем: у выбранного владельца нет другой записи «Контракт»/.test(e.detail), "контракт без кандидата: 409 «Заменить нечем»");
+  e = await rejects(api.post("/dictionaries/contract/1/delete", { replacements: { "contract:1": 2 }, mode: "replace" }));
+  check(isApiError(e, 422), "замена не строкой → 422");
+  e = await rejects(api.post("/dictionaries/contract/1/delete", { replacements: { "contract:1": "3" }, mode: "replace" }));
+  check(isApiError(e, 409) && /^Перевод изделий на замену оставил бы их без позиции в контракте: /.test(e.rawDetail) && /Колонна «QA-К1»: позиции не остаётся, а привязано изделий: 3/.test(e.rawDetail),
+    "замена, не покрывающая позиции, → 409 (страж покрытия; текст длиннее 300 знаков — клиент V2 покажет запасной, полный — в rawDetail)");
+  const still = await api.get("/contracts");
+  check(still.length === 11 && still.find((x) => x.id === 1).linked_elements === 8 && still.find((x) => x.id === 3).linked_elements === 0 && (await api.get("/contracts/1/elements")).length === 8,
+    "после отказа (откат транзакции) ничего не перенесено");
+
+  const r = await api.post("/dictionaries/contract/1/delete", { replacements: { "contract:1": "2" }, mode: "replace" });
+  check(r.deleted.length === 1 && r.deleted[0].kind === "contract" && r.moved.length === 1 && r.moved[0].from.startsWith("QA-ЗЖБИ-1/") && r.moved[0].moved.map((m) => `${m.label}:${m.count}`).join() === "Изделия:8,Записи истории статусов:14,Контракт по умолчанию:1",
+    "удаление с заменой: {deleted, moved[{from,to,moved}]}");
+  const after = await api.get("/contracts");
+  check(after.length === 10 && !after.some((x) => x.id === 1) && after.find((x) => x.id === 2).linked_elements === 8, "контракт удалён, привязка изделий перенесена на контракт 2");
+  check((await api.get("/contracts/2/elements")).map((x) => x.id).join() === "101,102,103,104,105,106,107,108" && isApiError(await rejects(api.get("/contracts/1/elements")), 404), "изделия видны у контракта-замены");
+  check((await api.get("/dictionaries/contract/2/delete-plan")).plan.refs.map((x) => `${x.label}:${x.count}`).join() === "Изделия:8,Записи истории статусов:14,Контракт по умолчанию:1", "история и «по умолчанию» переехали на замену");
+  check((await api.get("/contracts")).find((x) => x.id === 2).lines.map((l) => l.remaining).join() === "12,6,27", "остатки контракта-замены пересчитаны по привязанным изделиям");
+  e = await rejects(api.post("/dictionaries/contract/1/delete", { replacements: {}, mode: "replace" }));
+  check(isApiError(e, 404) && e.detail === "Контракт: запись не найдена", "повторное удаление → 404");
+  e = await rejects(api.get("/dictionaries/contract/1/delete-plan"));
+  check(isApiError(e, 404), "delete-plan удалённого → 404");
+
+  const rc = await api.post("/dictionaries/contract/4/delete", { replacements: {}, mode: "replace" });
+  check(rc.deleted.length === 1 && rc.moved.length === 0 && !(await api.get("/contracts")).some((x) => x.id === 4), "контракт без привязок удаляется без замены");
+  e = await rejects(api.post("/dictionaries/agreement/2/delete", { replacements: {}, mode: "replace" }));
+  check(isApiError(e, 400) && /^Не выбрана замена: Договор «Договор QA-Д-102 от 10.04.2026»/.test(e.detail), "договор с привязанными изделиями без замены → 400");
+  const sp = await api.post("/dictionaries/specification/8/delete", { replacements: {}, mode: "replace" });
+  check(sp.deleted[0].kind === "specification" && sp.deleted[0].label === "Спецификация QA-С-0" && !(await api.get("/specifications?agreement_id=7")).length, "спецификация без контрактов удаляется");
+
+  const clean = await api.post("/dictionaries/counterparty/5/delete", { replacements: {}, mode: "replace" });
+  check(clean.deleted.map((d) => d.kind).join() === "counterparty,agreement,specification,contract" && clean.moved.length === 0, "чистое удаление контрагента уносит договор, спецификацию и контракт");
+  check(!(await api.get("/counterparties")).some((x) => x.id === 5) && (await api.get("/agreements?counterparty_id=5")).length === 0 && !(await api.get("/contracts")).some((x) => x.id === 10),
+    "контрагент 5 и его дерево исчезли из GET");
+  check((await api.get("/dictionaries/object/14/delete-plan")).blockers.every((b) => b.label !== "Договоры"), "объект 14: договоров больше нет — blocker «Договоры» пропал");
+  await api.post("/dictionaries/counterparty/4/delete", { replacements: {}, mode: "replace" });
+  check(!(await api.get("/counterparties")).some((x) => x.id === 4), "контрагент без договоров удалён");
+
+  const merge = await api.post("/dictionaries/counterparty/2/delete", { replacements: { "counterparty:2": "1" }, mode: "merge" });
+  check(merge.deleted.length === 1 && merge.moved[0].kind === "counterparty" && merge.moved[0].to === "QA-ЗЖБИ-1" && merge.moved[0].adopted.some((a) => a === "договор QA-ДГ-7/2026 перенесён"),
+    "режим merge: подчинённые переехали к выбранному контрагенту, удалена опустевшая запись");
+  check((await api.get("/agreements?counterparty_id=1")).length === 5 && (await api.get("/contracts")).find((x) => x.id === 7).counterparty_short_name === "QA-ЗЖБИ-1", "после merge договоры и контракты числятся у контрагента-получателя");
+  e = await rejects(api.post("/dictionaries/counterparty/1/delete", { replacements: {}, mode: "merge" }));
+  check(isApiError(e, 400) && e.detail === "Выберите запись, к которой перенести подчинённые", "merge без выбранной записи → 400");
+  e = await rejects(api.post("/dictionaries/object/20/delete", { replacements: {}, mode: "merge" }));
+  check(isApiError(e, 400) && /нет подчинённых/.test(e.detail), "merge у объекта по-прежнему 400");
+
+  ctl.reset();
+  const ag3 = await api.post("/dictionaries/agreement/3/delete", { replacements: {}, mode: "replace" });
+  check(ag3.deleted.map((d) => d.kind).join() === "agreement,specification,contract,contract" && !(await api.get("/contracts")).some((x) => x.id === 6 || x.id === 7),
+    "договор без изделий уходит вместе со спецификациями и контрактами");
+
+  ctl.setPermissions({ system_admin: false, features: { counterparties: "write", dict_delete: "none" } }, { replace: true });
+  e = await rejects(api.get("/dictionaries/contract/4/delete-plan"));
+  check(isApiError(e, 403) && /«Удаление записей справочников с заменой ссылок»/.test(e.detail), "без dict_delete: delete-plan → 403");
+  check(isApiError(await rejects(api.get("/dictionaries/contract/candidates?key=1")), 403) && isApiError(await rejects(api.post("/dictionaries/contract/4/delete", {})), 403), "candidates и delete → 403");
+  ctl.setPermissions(null);
+}
+
+console.log("Плановая дата изделия и права: PATCH /elements/{id}/planned-delivery-date, /me/permissions");
+{
+  ctl.reset();
+  const r = await api.patch("/elements/103/planned-delivery-date", { planned_delivery_date: "2026-09-30" });
+  check(r.id === 103 && r.planned_delivery_date === "2026-09-30" && r.contract_id === 1 && r.counterparty_code === "ЗЖБИ1" && Array.isArray(r.history) && r.current_status === "shipped",
+    "PATCH planned-delivery-date: вернулась карточка изделия с новой датой");
+  check((await api.get("/contracts/1/elements")).find((x) => x.id === 103).planned_delivery_date === "2026-09-30", "дата видна в следующем GET /contracts/{id}/elements");
+  check((await api.patch("/elements/103/planned-delivery-date", { planned_delivery_date: null })).planned_delivery_date === null
+    && (await api.get("/contracts/1/elements")).find((x) => x.id === 103).planned_delivery_date === null, "null снимает дату");
+  await api.patch("/elements/103/planned-delivery-date", { planned_delivery_date: "2026-09-30" });
+  check((await api.patch("/elements/103/planned-delivery-date", {})).planned_delivery_date === null, "тело без поля тоже снимает дату (как в бэкенде)");
+  let e;
+  for (const bad of ["abc", "30.09.2026", "2026-02-30", "2026-9-3", ""]) {
+    e = await rejects(api.patch("/elements/103/planned-delivery-date", { planned_delivery_date: bad }));
+    check(isApiError(e, 422) && /planned_delivery_date: /.test(e.detail), `неверная дата «${bad}» → 422`);
+  }
+  e = await rejects(api.patch("/elements/103/planned-delivery-date", { planned_delivery_date: 5 }));
+  check(isApiError(e, 422) && /planned_delivery_date: Input should be a valid string/.test(e.detail), "не строка → 422");
+  check((await api.get("/contracts/1/elements")).find((x) => x.id === 103).planned_delivery_date === null, "после 422 данные не изменились");
+  e = await rejects(api.patch("/elements/999/planned-delivery-date", { planned_delivery_date: "2026-09-30" }));
+  check(isApiError(e, 404) && e.detail === "Элемент не найден", "несуществующий элемент → 404");
+  check(isApiError(await rejects(api.patch("/elements/abc/planned-delivery-date", {})), 422), "id не число → 422");
+
+  ctl.loginAs(3);
+  e = await rejects(api.patch("/elements/301/planned-delivery-date", { planned_delivery_date: "2026-09-30" }));
+  check(isApiError(e, 403) && /^«Плановая дата поставки изделия»: изменение требует роли на объекте/.test(e.detail), "Наблюдатель на объекте: PATCH → 403");
+  e = await rejects(api.patch("/elements/301/planned-delivery-date", { planned_delivery_date: "не дата" }));
+  check(isApiError(e, 422), "422 раньше 403 (тело проверяется до прав на объект)");
+  check((await api.get("/contracts/8/elements")).length === 3, "…но читать элементы контракта Наблюдатель может");
+  ctl.loginAs(1);
+  check((await api.get("/contracts/8/elements")).find((x) => x.id === 301).planned_delivery_date === "2026-08-18", "403 ничего не изменил");
+  ctl.loginAs(2);
+  check((await api.patch("/elements/301/planned-delivery-date", { planned_delivery_date: "2026-09-30" })).planned_delivery_date === "2026-09-30", "Комплектовщик на объекте 4: PATCH проходит");
+  check((await api.patch("/elements/101/planned-delivery-date", { planned_delivery_date: "2026-09-29" })).planned_delivery_date === "2026-09-29", "Прораб на объекте 1 (planned_date=write): PATCH проходит");
+  ctl.loginAs(1);
+
+  const perm = (o) => api.get(`/me/permissions?object_id=${o}`);
+  check((await perm(1)).features.planned_date === "write" && (await perm(6)).features.planned_date === "none" && (await perm(6)).not_applicable.includes("planned_date"), "админ: write на объекте ЖБИ, none (не применимо) на объекте МФР");
+  ctl.loginAs(2);
+  check((await perm(1)).features.planned_date === "write" && (await perm(4)).features.planned_date === "write" && (await perm(5)).features.planned_date === "none", "loginAs(2): write на объектах 1 и 4, none на чужом");
+  ctl.loginAs(3);
+  check((await perm(4)).features.planned_date === "read" && (await perm(1)).features.planned_date === "none", "loginAs(3): read на объекте 4");
+  ctl.loginAs(1);
+
+  const PROFILES = {
+    readonly: { system_admin: false, features: { users: "read", roles: "read", projects: "read", counterparties: "read", dict_delete: "none" } },
+    none: { system_admin: false, features: {} },
+    writer: { system_admin: false, features: { users: "write", roles: "write", projects: "write", counterparties: "write", dict_delete: "none" } },
+    deleter: { system_admin: false, features: { users: "write", roles: "write", projects: "write", counterparties: "write", dict_delete: "write" } },
+  };
+  const levels = {};
+  for (const [name, profile] of Object.entries(PROFILES)) {
+    ctl.setPermissions(profile, { replace: true });
+    const p = await perm(1);
+    levels[name] = [p.system_admin, p.features.planned_date, p.features.agreements, p.features.contracts].join("/");
+  }
+  check(levels.writer === "false/write/write/write" && levels.deleter === "false/write/write/write" && levels.readonly === "false/read/read/read" && levels.none === "false/none/none/none",
+    "профили boot.js: planned_date/agreements/contracts выводятся из уровня «Контрагенты» (writer/deleter — write, readonly — read, none — none)");
+  ctl.setPermissions(PROFILES.writer, { replace: true });
+  check((await perm(6)).features.planned_date === "none" && (await api.get("/me/permissions")).features.planned_date === "none", "профиль writer: на объекте МФР и без объекта — none");
+  check((await api.patch("/elements/104/planned-delivery-date", { planned_delivery_date: "2026-11-11" })).planned_delivery_date === "2026-11-11", "профиль writer: PATCH даты проходит");
+  check((await api.post("/agreements", { counterparty_id: 4, number: "QA-Профиль", object_id: 1 })).number === "QA-Профиль", "профиль writer: договор создаётся");
+  ctl.setPermissions({ features: { planned_date: "none" } });
+  check((await perm(1)).features.planned_date === "none" && isApiError(await rejects(api.patch("/elements/104/planned-delivery-date", { planned_delivery_date: "2026-11-12" })), 403), "явное planned_date в профиле главнее вывода: PATCH → 403");
+  ctl.setPermissions(PROFILES.readonly, { replace: true });
+  e = await rejects(api.patch("/elements/104/planned-delivery-date", { planned_delivery_date: "2026-11-12" }));
+  check(isApiError(e, 403) && (await api.get("/agreements?counterparty_id=1")).length === 2 && isApiError(await rejects(api.post("/agreements", { counterparty_id: 4, number: "QA-Р", object_id: 1 })), 403),
+    "профиль readonly: читать договоры можно, писать (planned_date, agreements) — 403");
+  ctl.setPermissions(PROFILES.none, { replace: true });
+  check(isApiError(await rejects(api.post("/counterparties", { full_name: "x", short_name: "y" })), 403) && isApiError(await rejects(api.get("/contracts/1/elements")), 403), "профиль none: запись контрагентов и чтение элементов контракта → 403");
+  ctl.setPermissions(null);
+  check((await perm(1)).features.planned_date === "write", "сброс профиля — снова администратор");
+}
+
+console.log("reset(overrides), hold() и ctl.count() для операций контрактации");
+{
+  ctl.reset({ contracts: (rows) => rows.slice(0, 1), elements: [] });
+  check((await api.get("/contracts")).length === 1 && (await api.get("/contracts"))[0].linked_elements === 0, "reset(overrides): contracts — функцией, elements — массивом целиком");
+  ctl.reset({ counterparties: (rows) => rows.slice(0, 1), agreements: [], specifications: [], contracts: [], elements: [] });
+  check((await api.get("/counterparties")).length === 1 && (await api.get("/contracts")).length === 0 && (await api.get("/agreements?counterparty_id=1")).length === 0, "reset(overrides): пустая контрактация");
+  ctl.reset();
+  check((await api.get("/counterparties")).length === 7 && ctl.data.contracts.length === 11 && ctl.data.elements.length === 13 && ctl.data.specifications.length === 9 && ctl.data.agreements.length === 8, "reset() возвращает фикстуры; таблицы доступны в ctl.data");
+  ctl.clearLog();
+
+  const hDate = ctl.hold("PATCH /elements/104/planned-delivery-date");
+  const hContract = ctl.hold("PATCH /contracts/4");
+  const hDelete = ctl.hold("POST /dictionaries/contract/7/delete");
+  const c4 = (await api.get("/contracts")).find((x) => x.id === 4);
+  ctl.clearLog();
+  const pDate = api.patch("/elements/104/planned-delivery-date", { planned_delivery_date: "2026-11-01" });
+  const pContract = api.patch("/contracts/4", bodyOf(c4, { theme: "QA-Удержан" }));
+  const pDelete = api.post("/dictionaries/contract/7/delete", { replacements: {}, mode: "replace" });
+  await Promise.all([hDate.waitForRequest(), hContract.waitForRequest(), hDelete.waitForRequest()]);
+  check(ctl.count("PATCH", "/planned-delivery-date") === 1 && ctl.count("PATCH", "=/contracts/4") === 1 && ctl.count("POST", "/dictionaries/contract/7/delete") === 1,
+    "ctl.count() видит отправленные запросы, пока они удерживаются");
+  check(hDate.pending === 1 && hContract.pending === 1 && hDelete.pending === 1 && ctl.data.elements.find((x) => x.id === 104).planned_delivery_date === "2026-10-05"
+    && ctl.data.contracts.find((x) => x.id === 4).theme !== "QA-Удержан" && ctl.data.contracts.some((x) => x.id === 7), "пока запросы удерживаются, данные не менялись");
+  hContract.release();
+  const updated = await pContract;
+  check(updated.theme === "QA-Удержан" && !(await settledWithin(pDate, 30)) && !(await settledWithin(pDelete, 30)), "release() одного hold не отпускает остальные");
+  hDate.release();
+  check((await pDate).planned_delivery_date === "2026-11-01" && !(await settledWithin(pDelete, 30)), "второй hold отпущен независимо");
+  hDelete.fail(503, "Сервис перегружен");
+  const ed = await rejects(pDelete);
+  check(isApiError(ed, 503) && ed.detail === "Сервис перегружен" && ctl.data.contracts.some((x) => x.id === 7), "fail() на удалении: контракт остался");
+  ctl.failNext("PATCH /elements/104/planned-delivery-date", { status: 500, detail: "Сбой записи даты" });
+  const ef = await rejects(api.patch("/elements/104/planned-delivery-date", { planned_delivery_date: "2026-12-01" }));
+  check(isApiError(ef, 500) && ef.detail === "Сбой записи даты" && ctl.data.elements.find((x) => x.id === 104).planned_delivery_date === "2026-11-01", "failNext на PATCH даты: данные не тронуты");
+}
+
 console.log("Итоги");
 {
   check(ctl.internalErrors.length === 0, "внутренних ошибок стенда нет");
   check(api.hasPendingWrites() === false, "незавершённых записей нет");
   ctl.uninstall();
   check(globalThis.fetch === originalFetch, "uninstall() вернул оригинальный fetch");
+}
+
+console.log("strictDates: false — как в настоящем бэкенде, любая строка принимается");
+{
+  const ctl2 = installFakeBackend({ strictDates: false });
+  const r = await api.patch("/elements/101/planned-delivery-date", { planned_delivery_date: "когда-нибудь" });
+  check(r.planned_delivery_date === "когда-нибудь" && ctl2.internalErrors.length === 0, "PATCH planned-delivery-date без проверки формата");
+  ctl2.uninstall();
+  check(globalThis.fetch === originalFetch, "второй стенд снят, fetch восстановлен");
 }
 
 console.log(failures ? `\nПровалено проверок: ${failures}` : "\nВсе проверки пройдены");

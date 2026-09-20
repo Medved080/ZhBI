@@ -12,8 +12,15 @@
 // models.py, reference_catalogs.py, attachments.py, dict_delete.py, kladr.py,
 // project_map.py, counterparties.py, contracts.py, contract_guard.py, capacity.py,
 // element_dates.py и обработчиков /projects, /objects, /elements/{id}/planned-delivery-date
-// в app/main.py. Реестр
-// разделов прав (FEATURE_ROWS) выгружен из app/features.py как есть.
+// в app/main.py. Реестр разделов прав (FEATURE_ROWS) выгружен из app/features.py как есть.
+//
+// Маршруты «Контрагенты»: GET/POST /counterparties, GET /counterparties/full, PATCH /counterparties/{id};
+// GET/POST /agreements, PATCH /agreements/{id}; GET/POST /specifications, PATCH /specifications/{id};
+// GET/POST /contracts, PATCH /contracts/{id}, GET /contracts/{id}/elements;
+// PATCH /elements/{id}/planned-delivery-date; GET /dictionaries/{вид}/{ключ}/delete-plan,
+// GET /dictionaries/{вид}/candidates?key=&parent=, POST /dictionaries/{вид}/{ключ}/delete
+// (режимы replace и merge). Мутации контрактации выполняются «транзакцией»: при отказе на середине
+// (409 стража покрытия, 500 нарушения UNIQUE) таблицы и счётчики id возвращаются как были.
 //
 // Осознанные ОТЛИЧИЯ от настоящего бэкенда (тесты не должны на них опираться):
 //   * тексты 401 — «Требуется вход» (по заданию стенда), а не «Не авторизован»;
@@ -45,7 +52,11 @@
 //     значение в features профиля всегда главнее;
 //   * ответ PATCH planned-delivery-date — усечённая карточка изделия (без
 //     зон, геометрии и истории статусов: history всегда []);
-//   * GET /counterparties/full без служебных created_at/updated_at.
+//   * GET /counterparties/full без служебных created_at/updated_at;
+//   * откат неудачной «транзакции» подменяет объекты-строки таблиц контрактации копиями: ссылка на саму
+//     таблицу (ctl.data.contracts) остаётся действительной, а ссылка на отдельную строку — нет (перечитайте её);
+//   * текст 409 стража покрытия бывает длиннее 300 знаков: клиентский api.js тогда подставляет запасной
+//     текст «Конфликт данных…», полный — в ApiError.rawDetail (так же будет и с настоящим бэкендом).
 //
 // Паттерны маршрутов (pathPattern) везде одинаковы: строка — ПОДСТРОКА
 // «МЕТОД /путь?запрос» (например "POST /users" или "/users/3/access"), либо
@@ -1753,8 +1764,14 @@ function createServer(opts) {
   const TX_TABLES = ["counterparties", "agreements", "specifications", "contracts", "elements"];
   function transaction(fn) {
     const snapshot = TX_TABLES.map((t) => [t, deepClone(data[t])]);
+    const savedCounters = { ...counters }; // sqlite_sequence откатывается вместе с транзакцией
     try { return fn(); }
-    catch (e) { for (const [t, rows] of snapshot) setRows(t, rows); throw e; }
+    catch (e) {
+      for (const [t, rows] of snapshot) setRows(t, rows);
+      for (const k of Object.keys(counters)) delete counters[k];
+      Object.assign(counters, savedCounters);
+      throw e;
+    }
   }
   // id строк позиций и инцидентов контракта — сквозные (AUTOINCREMENT): при полной замене списка получают новые.
   function takeChildId(kind) {
@@ -2070,7 +2087,7 @@ function createServer(opts) {
   route("GET", "/contracts", (ctx) => {
     const ids = visibleObjectIds(ctx.user);
     return data.contracts
-      .filter((c) => { const { a } = chainOf(c); return a && agreementVisible(ctx.user, a, ids); })
+      .filter((c) => { const { s, a, cp } = chainOf(c); return s && a && cp && agreementVisible(ctx.user, a, ids); })
       .sort((x, y) => {
         const cx = chainOf(x), cy = chainOf(y);
         return strCmp(cx.cp.short_name, cy.cp.short_name) || strCmp(cx.a.number, cy.a.number) || strCmp(cx.s.number, cy.s.number) || cmp(x.id, y.id);

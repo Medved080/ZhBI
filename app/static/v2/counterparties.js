@@ -327,19 +327,10 @@ export function mountCounterparties(container, ctx) {
       // Реальный текст ошибки каждой части — а не общая фраза «ошибки
       // показаны в форме»: ошибка карточки (например, не заполнено
       // наименование) в форме не показывается вовсе.
-      const failText = `Не удалось сохранить — ${failures.join("; ")}.`;
-      state.status_msg = failText;
-      // requestLeave() дёргают три разных вызывающих (openCard, backToList,
-      // переключатель разделов в main.js) — ждать, что КАЖДЫЙ из них сам
-      // перерисует экран при неудаче, ненадёжно (main.js про статус-строку
-      // этого модуля вообще не знает). Рендерим сразу здесь: сообщение
-      // должно быть видно немедленно, а не при случайном следующем
-      // render() от несвязанного действия (живой сценарий, где нашли).
-      await render();
-      // В воркспейсе контракта render() не выводит status_msg (у него свой
-      // подвал) — ставим текст в актуальную строку статуса явно.
-      status.textContent = failText;
-      state.status_msg = "";
+      state.status_msg = `Не удалось сохранить — ${failures.join("; ")}.`;
+      // Экран перерисовывает КАЖДЫЙ вызывающий (openCard/backToList — сами,
+      // переключатель разделов — через guardLeave ниже), а render() выводит
+      // status_msg и на карточке, и в рабочем пространстве контракта.
       return false;
     }
     return true;
@@ -1253,8 +1244,10 @@ export function mountCounterparties(container, ctx) {
     try {
       await api.post(`/dictionaries/contract/${id}/delete`, { replacements, mode: "replace" });
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (err instanceof ApiError && err.status !== 0) {
         // Определённый исход — сервер ОТВЕТИЛ (в том числе отказом).
+        // status 0 — ответа не было вовсе (обрыв связи): исход неизвестен и
+        // разбирается ниже проверкой delete-plan.
         // app/dict_delete.py делает всю проверку/замену/удаление одной
         // транзакцией — значит отказ гарантирует, что ничего не изменилось.
         contractOpLock = null;
@@ -1629,7 +1622,18 @@ export function mountCounterparties(container, ctx) {
       if (key) {
         const isNew = key.startsWith("new:");
         container.querySelectorAll("[data-ctr-tab]").forEach((b) => { b.disabled = b.dataset.ctrTab === "expanded" && isNew; });
+        // Вкладка «Развёрнуто»: у поля даты своё правило блокировки (нет права
+        // planned_date на объекте, идёт запись строки). Общее «включить всё»
+        // выше снимало и его — перерисовываем вкладку, чтобы правила
+        // применились заново.
+        if (!isNew && state.contractTab === "expanded") {
+          const cid = Number(key.slice(5));
+          if (isExpandedTabStillActive(cid)) renderContractExpandedTabContent(cid);
+        }
       }
+      // Пикер замены при удалении контракта остался открытым (ошибка переноса):
+      // остальное рабочее пространство по-прежнему заблокировано, кроме пикера.
+      if (state.contractDeleteReplacement) lockContractWorkspace(true, true);
     }
   }
 
@@ -2682,6 +2686,7 @@ export function mountCounterparties(container, ctx) {
       // Своя "оболочка" (см. ensureCardShell/renderContractWorkspace) —
       // список/карточка контрагента сюда не подмешиваются.
       await renderContractWorkspace();
+      if (state.status_msg) { status.textContent = state.status_msg; state.status_msg = ""; }
       return;
     }
     ensureCardShell();
@@ -2704,5 +2709,13 @@ export function mountCounterparties(container, ctx) {
 
   render();
 
-  return { hasUnsavedChanges, guardLeave: requestLeave };
+  // Для main.js (смена раздела, переход в V1): при отказе от ухода экран
+  // перерисовывается, чтобы причина отказа (status_msg) стала видна.
+  async function guardLeave() {
+    const ok = await requestLeave();
+    if (!ok) await render();
+    return ok;
+  }
+
+  return { hasUnsavedChanges, guardLeave };
 }

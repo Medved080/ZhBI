@@ -33,8 +33,10 @@ function describeDetail(detail, status) {
   if (typeof detail === "string") {
     const t = detail.trim();
     if (!t) return fallbackText(status);
-    if (t.length > 300 || t.startsWith("<")) return fallbackText(status);
-    return t;
+    if (t.startsWith("<")) return fallbackText(status); // HTML прокси/страница ошибки — не показываем разметку
+    // Длинный обычный текст (например, 409 стража покрытия контрактов) — это
+    // объяснение сервера, оно показывается целиком; режем только заведомо огромное.
+    return t.length > 1000 ? t.slice(0, 1000) + "…" : t;
   }
   if (Array.isArray(detail)) {
     const parts = detail.map((d) => {
