@@ -45,6 +45,8 @@ export function formatCell(col, row, data) {
   if (dict && v != null && dict[v] !== undefined) v = dict[v];
   switch (col.fmt) {
     case "size": return fmtSize(v);
+    // итог обучения: «лучший из всего, попыток N»; нет попыток — прочерк (как в V1: trainingScoreText)
+    case "score": return v && v.attempts ? `${v.best} из ${v.total}, попыток ${v.attempts}` : "—";
     case "date": return fmtDate(v);
     case "datetime": return fmtDateTime(v);
     case "bool": return v === true || v === 1 ? "да" : v === false || v === 0 ? "нет" : "";

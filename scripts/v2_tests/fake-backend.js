@@ -2606,6 +2606,8 @@ function createServer(opts) {
     return { database: {}, domains: [], tables: [{ name: "qa_table", caption: "qa_table — QA", domain: "QA-область", described: true, rows: 7, bytes: 4096, index_bytes: 0, fields: [] }], relations: [], soft_relations: [], drift: [] };
   });
 
+  route("GET", "/zone-colors", (ctx) => { queryValue(ctx, "object_id", { type: "int", required: true }); return [{ category: "Кран", name: "Кран 1", color: "#c0392b" }, { category: "Кран", name: "Кран 2", color: "#1f8a4c" }]; });
+  route("GET", "/training/ratings", () => ({ users: [{ id: 1, name: "QA-Админов", position: "QA", rating: { attempts: 2, best: 18, total: 20 } }, { id: 2, name: "QA-Второй", position: null, rating: null }] }));
   // ---- отчёты (POST только читает; форма ответов — как у настоящего backend) ----
   const reportBody = (ctx) => { const b = ctx.body || {}; if (!b.object_id) fail(422, "object_id: обязательное поле"); return b; };
   route("POST", "/reports/status", (ctx) => {
