@@ -2543,7 +2543,19 @@ function createServer(opts) {
     return { backups: [{ name: "zhbi_qa_auto", created_at: "2026-09-20 09:00:00", kind: "auto", kind_label: "служебная — QA", user_name: null, user_id: null, comment: "QA-копия", size_bytes: 5242880, stats: {} }], disk: { known: true } };
   });
   route("GET", "/changelog", () => [{ version: "9.99", date: "20.09.2026", title: "QA-версия: проверка журнала", items: ["Пункт"], unseen: false }]);
-  route("GET", "/status-colors", () => ({ planned: "#b1b3b4", installed: "#00f55a" }));
+  // цвета статусов — общие; хранятся в data.settings.statusColors
+  const STATUS_KEYS = ["planned", "contracting", "in_production", "shipped", "delivered", "installed", "accepted"];
+  route("GET", "/status-colors", () => data.settings.statusColors || { planned: "#b1b3b4", contracting: "#eab308", installed: "#00f55a" });
+  route("PUT", "/status-colors", (ctx) => {
+    if (FEATURE_BY_KEY.has("dict_status_colors")) assertFeature(ctx.user, "dict_status_colors", "write");
+    const body = ctx.body || {};
+    for (const [k, v] of Object.entries(body)) {
+      if (!STATUS_KEYS.includes(k)) fail(422, `Неизвестный статус: ${k}`);
+      if (!/^#[0-9a-fA-F]{6}$/.test(v)) fail(422, "Цвет статуса: нужен цвет вида #rrggbb");
+    }
+    data.settings.statusColors = { ...(data.settings.statusColors || { planned: "#b1b3b4", contracting: "#eab308", installed: "#00f55a" }), ...body };
+    return data.settings.statusColors;
+  });
   route("GET", "/layer-type-combinations", () => [{ layer: "QA_слой", element_type: "Колонна", shape: "outline" }]);
   route("GET", "/allowed-subtypes", (ctx) => {
     if (!queryValue(ctx, "object_id", { type: "int" })) fail(400, "Справочник подтипов свой у каждого объекта — укажите объект");
@@ -2606,7 +2618,21 @@ function createServer(opts) {
     return { database: {}, domains: [], tables: [{ name: "qa_table", caption: "qa_table — QA", domain: "QA-область", described: true, rows: 7, bytes: 4096, index_bytes: 0, fields: [] }], relations: [], soft_relations: [], drift: [] };
   });
 
-  route("GET", "/zone-colors", (ctx) => { queryValue(ctx, "object_id", { type: "int", required: true }); return [{ category: "Кран", name: "Кран 1", color: "#c0392b" }, { category: "Кран", name: "Кран 2", color: "#1f8a4c" }]; });
+  // цвета кранов по объектам — data.settings.zoneColors {objectId: [{category,name,color}]}
+  const zoneColorsOf = (oid) => ((data.settings.zoneColors ||= {})[oid] ||= [{ category: "Кран", name: "Кран 1", color: "#c0392b" }, { category: "Кран", name: "Кран 2", color: "#1f8a4c" }]);
+  route("GET", "/zone-colors", (ctx) => { const oid = queryValue(ctx, "object_id", { type: "int", required: true }); return deepClone(zoneColorsOf(oid)); });
+  route("PUT", "/zone-colors", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    if (FEATURE_BY_KEY.has("zone_colors")) assertFeature(ctx.user, "zone_colors", "write", oid);
+    if (!Array.isArray(ctx.body)) fail(422, "Ожидался список");
+    const rows = zoneColorsOf(oid);
+    for (const it of ctx.body) {
+      if (!/^#[0-9a-fA-F]{6}$/.test(it.color)) fail(422, "Цвет: нужен вид #rrggbb");
+      const row = rows.find((r) => r.name === it.name);
+      if (row) row.color = it.color; else rows.push({ category: "Кран", name: it.name, color: it.color });
+    }
+    return { status: "ok" };
+  });
   route("GET", "/training/ratings", () => ({ users: [{ id: 1, name: "QA-Админов", position: "QA", rating: { attempts: 2, best: 18, total: 20 } }, { id: 2, name: "QA-Второй", position: null, rating: null }] }));
   // ---- отчёты (POST только читает; форма ответов — как у настоящего backend) ----
   const reportBody = (ctx) => { const b = ctx.body || {}; if (!b.object_id) fail(422, "object_id: обязательное поле"); return b; };
