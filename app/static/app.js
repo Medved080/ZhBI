@@ -28092,15 +28092,25 @@ async function bootApp() {
 // стираются из адреса, перезагрузка страницы переход не повторяет. Права те же, что у обычного пути:
 // пункт меню «Пользователи и доступ» — `can("users","write")`, объект — из списка доступных пользователю.
 //   ?object_id=N                          — показать объект N;
+//   ?ws=model|mfr|picker|foreman          — рабочее место (если оно доступно роли);
+//   ?view=2d|3d|3d-light                  — вид схемы (кнопки переключателя вида);
+//   ?open=menu&item=<id пункта меню>      — то же, что клик по пункту «Действия» (2026-09-20, полный интерфейс V2:
+//                                           каждый экран V2, не перенесённый целиком, ведёт в свою форму V1);
 //   ?open=user-security&user_id=N         — форма пользователя N, вкладка «Вход и безопасность»
 //                                           (поиск в домене, сеансы, задать пароль, зайти под пользователем).
 // Возвращает true, если переход был запрошен (тогда автоматическое «Что нового» не перекрывает форму).
+// Пункт меню открывается ТОЛЬКО если он виден этой роли (та же проверка прав, что у человека, кликающего мышью:
+// скрыт сам пункт или его группа — переход отклонён) и не «опасный» (очистка истории и подобное вызываются
+// только осознанным кликом в самом меню).
 async function applyStartupDeepLink() {
   const params = new URLSearchParams(location.search);
   const objectId = Number(params.get("object_id")) || null;
   const open = params.get("open");
   const userId = Number(params.get("user_id")) || null;
-  if (!objectId && !open) return false;
+  const ws = params.get("ws");
+  const view = params.get("view");
+  const menuItem = open === "menu" ? params.get("item") : null;
+  if (!objectId && !open && !ws && !view) return false;
   const остаются = new URLSearchParams();
   if (params.get("ui")) остаются.set("ui", params.get("ui"));
   history.replaceState(null, "", location.pathname + (остаются.toString() ? `?${остаются}` : ""));
@@ -28119,6 +28129,24 @@ async function applyStartupDeepLink() {
         if (!пользователь) showToast("Пользователь не найден", "warning");
         else await openUserEdit(пользователь, { tab: "security" });
       }
+    }
+    if (ws && ["model", "mfr", "picker", "foreman"].includes(ws)) {
+      const кнопка = document.getElementById("btn-ws-" + ws);
+      if (!кнопка || кнопка.style.display === "none") showToast("Это рабочее место недоступно вашей роли", "warning");
+      else кнопка.click();
+    }
+    if (view && ["2d", "3d", "3d-light"].includes(view)) {
+      const кнопка = document.getElementById("btn-view-" + view);
+      if (кнопка && кнопка.style.display !== "none" && !кнопка.disabled) кнопка.click();
+    }
+    if (menuItem) {
+      const пункт = /^(menu|btn)-[a-z0-9-]+$/.test(menuItem) ? document.querySelector("#settings-menu #" + menuItem) : null;
+      let скрыт = !пункт || пункт.disabled || пункт.classList.contains("menu-item-danger");
+      for (let p = пункт; p && p !== settingsMenu && !скрыт; p = p.parentElement) {
+        if (p.style.display === "none") скрыт = true;
+      }
+      if (скрыт) showToast("Этот пункт меню недоступен вашей роли или не найден", "warning");
+      else пункт.click();
     }
   } catch (e) {
     showToast("Не удалось выполнить переход: " + e.message, "warning");
