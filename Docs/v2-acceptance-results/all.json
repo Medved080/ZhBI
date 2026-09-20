@@ -55,10 +55,8 @@
   {
    "id": "SH-04",
    "title": "Администратор: начальная страница, навигация по всем разделам, три перенесённых раздела помечены «в V2»",
-   "status": "fail",
-   "failed": [
-    "пометка «правка» — у двух редактируемых справочников (СМУ, физлица) — ожидали 2, получили 3"
-   ],
+   "status": "pass",
+   "failed": [],
    "error": null,
    "checks": 10
   },
@@ -1244,7 +1242,7 @@
    "status": "pass",
    "failed": [],
    "error": null,
-   "checks": 75
+   "checks": 81
   },
   {
    "id": "RD-02",
@@ -1289,10 +1287,10 @@
   {
    "id": "RD-07",
    "title": "Экран объекта: запрос с id выбранного объекта; смена объекта в шапке перезагружает экран",
-   "status": "fail",
+   "status": "pass",
    "failed": [],
-   "error": "TypeError: Cannot read properties of undefined (reading 'title')\n    at openScreen (http://127.0.0.1:8051/tests/scenarios/rd.js:14:63)\n    at async Object.run (http://127.0.0.1:8051/tests/scenarios/rd.js:135:7)\n    at async runTests (http://127.0.0.1:8051/tests/helpers.js:153:11)\n    at async http://127.0.0.1:8051/tests/run.js:20:17",
-   "checks": 0
+   "error": null,
+   "checks": 3
   },
   {
    "id": "RD-08",
@@ -1421,6 +1419,22 @@
    "failed": [],
    "error": null,
    "checks": 2
+  },
+  {
+   "id": "DE-11",
+   "title": "Переименование в уже существующее имя (409): текст сервера, правка остаётся открытой, запись не менялась",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "DE-12",
+   "title": "Запись удалили в другом месте: переименование и удаление (404) — список обновляется, понятное сообщение, без ложного успеха",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
   },
   {
    "id": "SE-01",
@@ -2743,8 +2757,8 @@
    "checks": 5
   }
  ],
- "rev": "0270249",
+ "rev": "e506d16",
  "tree_dirty": false,
- "app_static_tree": "64623f7977ad9c07c096523fe83c35de5be14302",
- "ran_at": "2026-09-21 00:27:16"
+ "app_static_tree": "84d58bb7adae615f965dd44f1292f8917e5918ae",
+ "ran_at": "2026-09-21 00:35:36"
 }
