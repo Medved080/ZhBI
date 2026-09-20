@@ -5,7 +5,9 @@
 модуль `scripts/v2_tests/fake-backend.js` (подмена fetch), поэтому ни рабочая
 БД, ни `data/*.db`, ни `app.main` здесь не открываются и не импортируются.
 
-Запуск:  python3 scripts/v2_test_server.py [порт]        (по умолчанию 8031)
+Запуск:  python3 scripts/v2_test_server.py [порт] [--static КАТАЛОГ]   (порт по умолчанию 8031)
+         --static — подставить другой каталог `app/static` (например, распакованный
+         `git archive <коммит> app/static`), чтобы прогнать те же сценарии на старом коде.
 Страницы: http://127.0.0.1:8031/tests/app.html   — V2 против фейкового бэкенда
           http://127.0.0.1:8031/tests/run.html   — автоматические сценарии
 Слушает только 127.0.0.1.
@@ -55,7 +57,12 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8031
+    args = sys.argv[1:]
+    if "--static" in args:
+        i = args.index("--static")
+        MOUNTS["/static/"] = Path(args[i + 1]).resolve()
+        del args[i:i + 2]
+    port = int(args[0]) if args else 8031
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"Стенд V2 (без БД и без входа): http://127.0.0.1:{port}/tests/app.html", flush=True)
     server.serve_forever()

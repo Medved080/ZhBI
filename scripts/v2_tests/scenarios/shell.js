@@ -185,22 +185,28 @@ export const tests = [
     },
   },
   {
-    id: "SH-17", title: "beforeunload во время записи — предупреждение",
+    id: "SH-17", title: "beforeunload во время записи БЕЗ несохранённых данных — предупреждение (закрытие посреди сохранения)",
     async run(t) {
       const a = await openApp();
-      await makeUaDirty(a);
-      const hold = a.ctl.hold("POST /users");
-      a.click(a.$("#nu-submit"));
-      await waitFor(() => a.ctl.count("POST", "/users") === 1, { what: "запрос" });
+      await waitFor(() => a.$("#ua-rows"), { what: "список" });
+      a.click(a.byText(".v2-nav button[data-page]", "Роли"));
+      await waitFor(() => a.$("#role-editor"), { what: "роли" });
+      t.eq(a.$("#roles-save"), null, "несохранённых изменений нет (запись — перестановка ролей, а не форма)");
+      const clean = new a.win.Event("beforeunload", { cancelable: true });
+      a.win.dispatchEvent(clean);
+      t.eq(clean.defaultPrevented, false, "без записи и без правок предупреждения нет");
+      const hold = a.ctl.hold("PUT /roles/order");
+      a.click(a.$$("[data-role-down]")[0]);
+      await waitFor(() => a.ctl.count("PUT", "/roles/order") === 1, { what: "запрос ушёл" });
       const ev = new a.win.Event("beforeunload", { cancelable: true });
       a.win.dispatchEvent(ev);
       t.eq(ev.defaultPrevented, true, "закрытие посреди записи предупреждает");
       hold.release();
       await waitFor(() => !a.$$(NAV).some((b) => b.disabled), { what: "конец записи" });
-      await a.settle(60);
+      await a.settle(80);
       const ev2 = new a.win.Event("beforeunload", { cancelable: true });
       a.win.dispatchEvent(ev2);
-      t.eq(ev2.defaultPrevented, false, "после записи (форма закрыта, данных нет) предупреждения нет");
+      t.eq(ev2.defaultPrevented, false, "после записи предупреждения нет");
     },
   },
   {

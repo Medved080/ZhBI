@@ -1,9 +1,9 @@
 import { runTests } from "/tests/helpers.js";
 
 const params = new URLSearchParams(location.search);
-const SUITES = ["shell", "ua", "po", "cp"];
+const SUITES = ["shell", "ua", "po", "cp", "vis"];
 const wanted = (params.get("suite") || SUITES.join(",")).split(",").filter(Boolean);
-const only = params.get("only");
+const only = (params.get("only") || "").split(",").filter(Boolean); // список id или префиксов
 
 let tests = [];
 for (const name of wanted) {
@@ -14,7 +14,7 @@ for (const name of wanted) {
     console.warn(`набор «${name}» не загружен:`, e.message);
   }
 }
-if (only) tests = tests.filter((t) => t.id === only || t.id.startsWith(only));
+if (only.length) tests = tests.filter((t) => only.some((o) => t.id === o || t.id.startsWith(o)));
 
 const tbody = document.querySelector("#tbl tbody");
 const results = await runTests(tests, {

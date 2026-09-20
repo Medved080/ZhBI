@@ -48,7 +48,7 @@ button:disabled { cursor: default; opacity: .6; }
 .v2-head-title { display: flex; align-items: baseline; gap: 10px; }
 .v2-head-title strong { font-size: 18px; font-weight: 600; }
 .v2-badge {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -242,7 +242,7 @@ button.address-suggest-item {
 }
 button.address-suggest-item:hover, button.address-suggest-item.kb-focus { background: var(--sel); }
 .address-suggest-label { display: block; }
-.address-suggest-path { display: block; font-size: 11px; color: var(--muted); }
+.address-suggest-path { display: block; font-size: 12px; color: var(--muted); }
 .address-summary { margin-top: 6px; font-weight: 600; color: var(--ink); }
 .address-mode-hint { margin-top: 4px; }
 .address-house-check { margin-top: 4px; }
@@ -360,7 +360,7 @@ button.address-suggest-item:hover, button.address-suggest-item.kb-focus { backgr
 .v2-reorder { display: flex; flex-direction: column; }
 .v2-reorder button {
   border: 0; background: none; color: var(--muted);
-  padding: 0 4px; font-size: 10px; line-height: 1.6;
+  padding: 0 4px; font-size: 12px; line-height: 1.6;
 }
 .v2-reorder button:not(:disabled):hover { color: var(--accent); }
 
@@ -430,19 +430,21 @@ label.v2-field textarea { font-size: 14px; color: var(--ink); width: 100%; font-
   max-height: calc(100vh - 280px); min-height: 320px;
 }
 .v2-tree-pane input, .v2-tree-pane select { width: 100%; font-size: 12px; padding: 7px 8px; flex: none; }
-.v2-tree { flex: 1; min-height: 0; overflow-y: auto; }
+/* Отрицательные поля строк (.v2-tree-row) уходят в собственный padding контейнера:
+   иначе строки шире области и появляется горизонтальная прокрутка. */
+.v2-tree { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 6px; }
 .v2-tree-row { margin: 0 -6px; }
-.v2-tree-node {
+.v2-side .v2-tree-node {
   display: flex; align-items: center; gap: 6px; width: 100%;
   padding: 7px 6px; border-radius: 6px; background: none; text-align: left;
   font-size: 13px; color: var(--ink); overflow: hidden;
 }
-.v2-tree-object { padding-left: 26px; }
-.v2-tree-node:hover { background: var(--surface); }
-.v2-tree-selected { background: var(--sel); color: var(--accent); }
-.v2-tree-chevron { width: 12px; flex: none; color: var(--muted); font-size: 10px; }
+.v2-side .v2-tree-object { padding-left: 26px; }
+.v2-side .v2-tree-node:hover { background: var(--surface); }
+.v2-side .v2-tree-selected { background: var(--sel); color: var(--accent); }
+.v2-tree-chevron { width: 12px; flex: none; color: var(--muted); font-size: 12px; }
 .v2-tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-tree-count { flex: none; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.v2-tree-count { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .v2-tree-foot { display: flex; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .v2-tree-foot .v2-btn { flex: 1; font-size: 12px; padding: 7px; }
 .v2-status-dot {

@@ -10,7 +10,9 @@
 // проверок (401 → 403 → 422 → логика) и коды статусов перенесены из
 // app/auth.py, users.py, roles.py, rights_matrix.py, access.py, features.py,
 // models.py, reference_catalogs.py, attachments.py, dict_delete.py, kladr.py,
-// project_map.py и обработчиков /projects, /objects в app/main.py. Реестр
+// project_map.py, counterparties.py, contracts.py, contract_guard.py, capacity.py,
+// element_dates.py и обработчиков /projects, /objects, /elements/{id}/planned-delivery-date
+// в app/main.py. Реестр
 // разделов прав (FEATURE_ROWS) выгружен из app/features.py как есть.
 //
 // Осознанные ОТЛИЧИЯ от настоящего бэкенда (тесты не должны на них опираться):
@@ -19,10 +21,31 @@
 //     (string_too_short) — настоящий бэкенд такое принимает; клиент V2 такую
 //     форму до отправки не пропускает, так что 422 нужен только стенду;
 //     отключается опцией strictUserNames: false;
-//   * GET /counterparties — заглушка, всегда пустой список (нужна, чтобы
-//     раздел «Контрагенты» смонтировался без ошибки); остальное — 404;
-//   * delete-plan для объекта/проекта перечисляет ссылки (`checked`) только
-//     из реестра fk_handled dict_delete.py, а не по PRAGMA всей схемы.
+//   * delete-plan перечисляет ссылки (`checked`) только из реестра fk_handled
+//     dict_delete.py, а не по PRAGMA всей схемы; виды справочников — только
+//     project/object/counterparty/agreement/specification/contract (остальные
+//     виды настоящего бэкенда — марки, СМУ, зоны и т.д. — отвечают 404);
+//   * «Контрагенты»: blockers у контрагента/договора/спецификации/контракта в
+//     настоящем бэкенде бывают только от «неучтённых» внешних ключей (новая
+//     колонка без объяснения в реестре); в стенде их создаёт поле строки
+//     `unaccounted: [{label, count}]` (фикстура — контрагент 6);
+//   * «Контрагенты»: «история статусов» и «контракт по умолчанию» (refs
+//     delete-plan контракта) имитируются числовыми полями строки контракта
+//     historyRecords/defaultRefs — самих таблиц status_history/default_contracts
+//     в стенде нет; изделия схемы — только те, что привязаны к контрактам
+//     (data.elements), независимо от счётчиков elements_current у объектов;
+//   * PATCH /elements/{id}/planned-delivery-date: настоящий бэкенд принимает
+//     ЛЮБУЮ строку (поле Optional[str] без формата) — стенд по умолчанию
+//     отвечает 422 на не-дату (не ГГГГ-ММ-ДД); отключается strictDates: false;
+//   * профили прав из boot.js (writer/deleter/readonly/none) не перечисляют
+//     разделы «Договоры и спецификации», «Контракты», «Плановая дата»,
+//     «Контракт по умолчанию»; стенд выводит их из уровня «Контрагенты» в
+//     профиле по заводской раскладке ролей (write — как «Комплектовщик», read —
+//     как «Наблюдатель», иначе none) и только на конкретном объекте; явное
+//     значение в features профиля всегда главнее;
+//   * ответ PATCH planned-delivery-date — усечённая карточка изделия (без
+//     зон, геометрии и истории статусов: history всегда []);
+//   * GET /counterparties/full без служебных created_at/updated_at.
 //
 // Паттерны маршрутов (pathPattern) везде одинаковы: строка — ПОДСТРОКА
 // «МЕТОД /путь?запрос» (например "POST /users" или "/users/3/access"), либо
@@ -36,16 +59,18 @@
 // поэтому «следующие N запросов» определяются порядком вызовов.
 
 // ------------------------------------ ИНТЕРФЕЙС ------------------------------
-//   const ctl = installFakeBackend({overrides, latency, origin, now, external, strictUserNames, maxUploadMb});
+//   const ctl = installFakeBackend({overrides, latency, origin, now, external, strictUserNames, strictDates, maxUploadMb});
 //   ctl.uninstall()                       — вернуть оригинальный fetch (удерживаемые запросы падают как сетевой сбой)
 //   ctl.reset(overrides?)                 — данные заново из фикстур; сбрасываются журнал, задержки, failNext, hold.
 //                                            overrides: users|roles|roleFeatures|access(grants)|projects|objects|smu|
-//                                            individuals|attachments — массив ЦЕЛИКОМ или функция rows => rows;
+//                                            individuals|attachments|counterparties|agreements|specifications|
+//                                            contracts|elements — массив ЦЕЛИКОМ или функция rows => rows;
 //                                            settings — слияние; me / permissions — как setUser / setPermissions;
 //                                            session (bool|{active,userId}); userId. Неизвестный ключ — ошибка.
 //   ctl.data                              — изменяемые таблицы (ссылка стабильна; строки правятся на месте):
 //                                            users, roles, roleFeatures, access (= grants), projects, objects, smu,
-//                                            individuals, attachments, settings, session, mePatch, permissionsPatch;
+//                                            individuals, attachments, counterparties, agreements, specifications,
+//                                            contracts, elements, settings, session, mePatch, permissionsPatch;
 //                                            data.avatars — ПРОИЗВОДНАЯ {objectId: attachmentId} (только чтение).
 //   ctl.log / ctl.clearLog() / ctl.count([method,] pathPattern) / ctl.waitFor([method,] pathPattern, {count,timeout})
 //   ctl.setLatency(pathPattern, ms, method?)   ms=0 снимает
@@ -80,6 +105,25 @@
 //   координаты (для карты/наследования): объекты 1,2,3,4,7,11,14,17; у проектов 1,2,3,6,8,11
 // Вложения (data.attachments): 1 png (превью объекта 3), 2 pdf, 3 docx с длинным именем — объект 3;
 //   4 png — объект 1; 5 pdf — проект 1.  СМУ 1–5, физлица 1–5 (у СМУ 4 длинное название).
+// Контрактация (data.counterparties / agreements / specifications / contracts / elements; всё «QA-»):
+//   контрагенты: 1 «QA-ЗЖБИ-1» — три норматива производительности, договоры на объекты 1 и 2, контракты с
+//     привязанными изделиями (удаление требует замены: без неё POST delete → 400 «Не выбрана замена»);
+//     2 «QA-ДСК-2» — договоры на объекты 1 и 4 и «старый» безобъектный договор (виден только админу);
+//     3 — очень длинные названия, адрес, номера договора и спецификации, тема контракта;
+//     4 — без договоров; 5 — удаляется чисто (договор → спецификация → контракт без изделий);
+//     6 — delete-plan с blockers (неучтённая ссылка qa_payments.counterparty_id ×3);
+//     7 — только обязательные поля, код пуст.
+//   договоры 1–8 (номер → объект): 1 QA-Д-101→1, 2 QA-Д-102→2, 3 QA-ДГ-7/2026→1, 4 QA-ДГ-8/2026→4,
+//     5 длинный→7, 6 QA-Ч-1→14, 7 QA-ДГ-старый→БЕЗ объекта, 8 QA-З-1→12. Спецификации 1–9 (s1,s2 у договора 1;
+//     s3 — 2; s4 — 3; s5 — 4; s6 — 5; s7 — 6; s8 — 7; s9 — 8).
+//   контракты 1–11 (спецификация): 1 (s1) «с привязанными изделиями»: 8 изделий (101–108) с шестью статусами,
+//     часть с плановыми датами, инциденты, переопределение производительности, остатки > 0 → нельзя
+//     архивировать (linked_elements=8), delete-plan needs_replacement, кандидаты 2 и 3; 2 (s1) — замена, покрывает
+//     все позиции контракта 1; 3 (s1) — замена, НЕ покрывает позиции (перевод изделий → 409);
+//     4 (s2) — без привязок, архивируется/удаляется чисто; 5 (s3, объект 2) — изделия 201–202, единственный
+//     контракт спецификации → «без кандидата для замены»; 6 (s4) — АРХИВНЫЙ; 7 (s4) — без привязок;
+//     8 (s5, объект 4) — изделия 301–303 (объект с ролью Комплектовщика у qa.writer, Наблюдатель у qa.reader);
+//     9 (s6) — длинная тема; 10 (s7) — контрагент 5, чистое удаление; 11 (s9) — контрагент 6.
 
 // ======================= реестр разделов прав (app/features.py) ==============
 
@@ -371,6 +415,36 @@ const OBJECT_PATCH_SPEC = {
 const AVATAR_SPEC = { attachment_id: { type: "int", nullable: true } };
 const DELETE_SPEC = { replacements: { type: "dictstr", default: {} }, mode: S({ default: "replace" }) };
 const CATALOG_ENTRY_SPEC = { name: S({ required: true }) };
+// Контрактация: CapacityIn / CounterpartyIn / AgreementIn / SpecificationIn / Contract*In (app/capacity.py,
+// counterparties.py, contracts.py). Пустые (после trim) строки бэкенд НЕ отклоняет — только тип и обязательность.
+const CAPACITY_SPEC = { element_type: S({ required: true }), per_day: { type: "float", required: true }, comment: S({ nullable: true }) };
+const COUNTERPARTY_SPEC = {
+  full_name: S({ required: true }), short_name: S({ required: true }), inn: S({ nullable: true }), kpp: S({ nullable: true }),
+  ogrn: S({ nullable: true }), legal_address: S({ nullable: true }), contact_person: S({ nullable: true }),
+  contact_phone: S({ nullable: true }), code: S({ nullable: true }),
+  // null / нет поля — «форма про производительность ничего не прислала» (сохранённое остаётся); [] — «удалить все».
+  capacity: { type: "list", nullable: true, items: CAPACITY_SPEC },
+};
+const AGREEMENT_SPEC = {
+  counterparty_id: { type: "int", required: true }, number: S({ required: true }),
+  agreement_date: S({ nullable: true }), object_id: { type: "int", nullable: true },
+};
+const SPECIFICATION_SPEC = { agreement_id: { type: "int", required: true }, number: S({ required: true }), specification_date: S({ nullable: true }) };
+const CONTRACT_LINE_SPEC = { element_type: S({ nullable: true }), mark: S({ nullable: true }), quantity: { type: "int", required: true } };
+const CONTRACT_INCIDENT_SPEC = {
+  element_type: S({ required: true }), quantity: { type: "int", required: true },
+  incident_date: S({ required: true }), description: S({ nullable: true }),
+};
+const CONTRACT_SPEC = {
+  specification_id: { type: "int", required: true }, theme: S({ nullable: true }), is_archived: { type: "bool", default: false },
+  lines: { type: "list", required: true, items: CONTRACT_LINE_SPEC },
+  incidents: { type: "list", default: [], items: CONTRACT_INCIDENT_SPEC },
+  capacity: { type: "list", nullable: true, items: CAPACITY_SPEC },
+};
+const PLANNED_DATE_SPEC = { planned_delivery_date: S({ nullable: true }) };
+// Разделы, чей уровень на объекте в профиле прав стенда (boot.js) выводится из уровня «Контрагенты»
+// (заводская раскладка ролей app/features.py: Комплектовщик — write, Наблюдатель — read).
+const FOLLOWS_COUNTERPARTIES = ["agreements", "contracts", "planned_date", "default_contracts"];
 // Синтетический пароль фикстуры: случайный на каждый запуск, в коде не хранится.
 function secret() { return "s-" + Math.random().toString(36).slice(2, 12); }
 
@@ -498,7 +572,9 @@ function buildFixtures() {
       address: "г Тестоград, ул QA-Ленина, д 10, корпус 1", address_region: "Тестовая область", postal_code: "101000",
       lat: 55.7512, lon: 37.6184, smu_id: 1, smu_director_id: 1, responsible_id: 2, elements_current: 1240, elements_retired: 12,
       mounted: 612, drawings: [dwg("QA-корпус-1-1_v3.dxf"), dwg("QA-корпус-1-1_v2.dxf", false, "2026-08-10 09:00:00")],
-      deps: { zones: 8, agreements: 2, marks: 15 }, cascade: { app_settings: 1, label_visibility: 0, zone_colors: 0, report_notes: 3, default_contracts: 0 },
+      // agreements: 0 — «Договоры: 2» теперь даёт data.agreements (договоры 1 и 3); число в deps — только
+      // ДОБАВКА к строкам таблицы (договоры без модели), см. agreementsOfObject.
+      deps: { zones: 8, agreements: 0, marks: 15 }, cascade: { app_settings: 1, label_visibility: 0, zone_colors: 0, report_notes: 3, default_contracts: 0 },
       media_url: "https://example.invalid/qa-media-1", smr_start_reported: "2026-02-15", smr_start: "2026-03-01", smr_end: "2027-06-30" }),
     O(2, 1, "QA-Корпус 1.2", { address: "г Тестоград, ул QA-Ленина, д 10, корпус 2", lat: 55.7520, lon: 37.6200,
       smu_id: 1, responsible_id: 3, elements_current: 860, mounted: 130, drawings: [dwg("QA-корпус-1-2_v1.dxf")],
@@ -564,8 +640,116 @@ function buildFixtures() {
     F(5, "project", 1, "QA-договор-проекта.pdf", "application/pdf", textBytes("%PDF-1.4 QA project"), { description: "Договор" }),
   ];
 
+  // ---- Контрактация: контрагенты → договоры → спецификации → контракты, изделия схемы (карта — в шапке файла) ----
+  const longCpShort = "QA-Общество с ограниченной ответственностью «Тестовый научно-производственный комплекс железобетонных "
+    + "конструкций и изделий имени Героев-Строителей Тестового края»";
+  const longCpFull = longCpShort + ", филиал в городском округе Тестоградский, обособленное подразделение по производству "
+    + "многопустотных плит перекрытия, колонн, ригелей, лестничных маршей и площадок, ферм и балок покрытия, а также "
+    + "стеновых панелей всех типоразмеров по серии QA-1.020-1/87 и индивидуальным заказам";
+  const CP = (id, short_name, full_name, o = {}) => ({
+    id, short_name, full_name, inn: null, kpp: null, ogrn: null, legal_address: null, contact_person: null,
+    contact_phone: null, code: null, capacity: [], ...o,
+  });
+  const counterparties = [
+    // 1 — с производительностью; договоры на объекты 1 и 2; контракты с привязанными изделиями.
+    CP(1, "QA-ЗЖБИ-1", "Общество с ограниченной ответственностью «QA-Завод железобетонных изделий №1»", {
+      inn: "7700000011", kpp: "770001001", ogrn: "1027700000011", legal_address: "г Тестоград, ул QA-Заводская, д 1",
+      contact_person: "QA-Иванов Пётр Сергеевич", contact_phone: "+7 (000) 000-00-01", code: "ЗЖБИ1",
+      capacity: [
+        { element_type: "Колонна", per_day: 12.5, comment: "две формы, две смены" },
+        { element_type: "Плита перекрытия", per_day: 30, comment: null },
+        { element_type: "Балка", per_day: 8, comment: "QA-норматив по заводскому регламенту" },
+      ] }),
+    CP(2, "QA-ДСК-2", "Общество с ограниченной ответственностью «QA-Домостроительный комбинат №2»", {
+      inn: "7700000022", kpp: "770001002", ogrn: "1027700000022", legal_address: "г Тестоград, шоссе QA-Южное, д 22",
+      contact_person: "QA-Петрова Анна Игоревна", contact_phone: "+7 (000) 000-00-02", code: "ДСК2" }),
+    // 3 — очень длинные названия, адрес, контакты.
+    CP(3, longCpShort, longCpFull, {
+      inn: "770000003300", kpp: "770001003", ogrn: "1027700000033", legal_address: longAddress,
+      contact_person: "QA-Длинноименов-Перегрудин Александр-Максимилиан Константинович-Оглы",
+      contact_phone: "+7 (000) 000-00-03 доб. 123, 124, 125, 126, 127, 128, 129", code: "ДЛИННЫЙ" }),
+    // 4 — без договоров.
+    CP(4, "QA-Поставщик без договоров", "Общество с ограниченной ответственностью «QA-Поставщик без договоров»", {
+      inn: "7700000044", kpp: "770001004", ogrn: "1027700000044", code: "БЕЗДОГ" }),
+    // 5 — удаляется чисто: договор → спецификация → контракт без изделий.
+    CP(5, "QA-Поставщик чистое удаление", "Общество с ограниченной ответственностью «QA-Поставщик чистое удаление»", {
+      inn: "7700000055", kpp: "770001005", ogrn: "1027700000055", code: "ЧИСТО" }),
+    // 6 — delete-plan с blockers: «неучтённые» ссылки на контрагента (см. шапку файла).
+    CP(6, "QA-Поставщик с зависимостями", "Общество с ограниченной ответственностью «QA-Поставщик с зависимостями»", {
+      inn: "7700000066", kpp: "770001006", ogrn: "1027700000066", code: "ЗАВИС",
+      unaccounted: [{ label: "qa_payments.counterparty_id", count: 3 }] }),
+    // 7 — только обязательные поля.
+    CP(7, "QA-Минимальный", "QA-Минимальный контрагент"),
+  ];
+
+  const longAgreementNo = "QA-Д-2026/ДЛИННЫЙ-НОМЕР-ГЕНЕРАЛЬНОГО-ПОДРЯДА-НА-ПОСТАВКУ-ЖЕЛЕЗОБЕТОННЫХ-КОНСТРУКЦИЙ-№-1234567890";
+  const longSpecNo = "QA-С-ДЛИННАЯ-СПЕЦИФИКАЦИЯ-НА-ПОСТАВКУ-КОЛОНН-И-РИГЕЛЕЙ-ПЕРВОЙ-ОЧЕРЕДИ-1234567890";
+  const AG = (id, counterparty_id, number, agreement_date, object_id) => ({ id, counterparty_id, number, agreement_date, object_id });
+  const agreements = [
+    AG(1, 1, "QA-Д-101", "2026-03-15", 1), AG(2, 1, "QA-Д-102", "2026-04-10", 2),
+    AG(3, 2, "QA-ДГ-7/2026", "2026-02-01", 1), AG(4, 2, "QA-ДГ-8/2026", "2026-05-20", 4),
+    AG(5, 3, longAgreementNo, "2026-06-01", 7), AG(6, 5, "QA-Ч-1", "2026-07-01", 14),
+    AG(7, 2, "QA-ДГ-старый", "2025-01-10", null), // накопленный договор без объекта — виден и правится только админом
+    AG(8, 6, "QA-З-1", "2026-08-01", 12),
+  ];
+  const SP = (id, agreement_id, number, specification_date) => ({ id, agreement_id, number, specification_date });
+  const specifications = [
+    SP(1, 1, "QA-С-1", "2026-03-20"), SP(2, 1, "QA-С-2", "2026-04-01"), SP(3, 2, "QA-С-1", "2026-04-15"),
+    SP(4, 3, "QA-С-А", "2026-02-10"), SP(5, 4, "QA-С-1", "2026-05-25"), SP(6, 5, longSpecNo, "2026-06-05"),
+    SP(7, 6, "QA-С-1", "2026-07-05"), SP(8, 7, "QA-С-0", null), SP(9, 8, "QA-С-1", "2026-08-05"),
+  ];
+
+  let lineSeq = 0, incidentSeq = 0;
+  const LN = (element_type, mark, quantity) => ({ id: ++lineSeq, element_type, mark, quantity });
+  const IN = (element_type, quantity, incident_date, description = null) => ({ id: ++incidentSeq, element_type, quantity, incident_date, description });
+  const CT = (id, specification_id, theme, o = {}) => ({
+    id, specification_id, theme, is_archived: false, lines: [], incidents: [], capacity: [],
+    historyRecords: 0, defaultRefs: 0, ...o,
+  });
+  const contracts = [
+    CT(1, 1, "Колонны и плиты, секция А", {
+      lines: [LN("Колонна", "QA-К1", 10), LN("Колонна", "QA-К2", 6), LN("Плита перекрытия", "QA-П1", 20)],
+      incidents: [IN("Колонна", 1, "2026-08-20", "QA-Скол угла при разгрузке"), IN("Плита перекрытия", 2, "2026-08-27", "QA-Трещина при монтаже")],
+      capacity: [{ element_type: "Колонна", per_day: 8, comment: null }], historyRecords: 14, defaultRefs: 1 }),
+    CT(2, 1, "Колонны и плиты, секция Б (замена)", {
+      lines: [LN("Колонна", "QA-К1", 15), LN("Колонна", "QA-К2", 8), LN("Плита перекрытия", "QA-П1", 30)] }),
+    CT(3, 1, "Балки (не покрывает позиции контракта 1)", { lines: [LN("Балка", "QA-Б1", 5)] }),
+    CT(4, 2, "Плиты без привязок", { lines: [LN("Плита перекрытия", "QA-П2", 12)] }),
+    CT(5, 3, "Балки объекта 2 (без кандидата на замену)", { lines: [LN("Балка", "QA-Б1", 5)], historyRecords: 4 }),
+    CT(6, 4, "Архив: лестничные марши", { is_archived: true, lines: [LN("Лестничный марш", "QA-Л1", 4)] }),
+    CT(7, 4, "Перегородки", { lines: [LN("Перегородка", "QA-ПГ1", 100), LN("Перегородка", null, 20)] }),
+    CT(8, 5, "Колонны объекта 4", { lines: [LN("Колонна", "QA-К7", 4)], historyRecords: 6 }),
+    CT(9, 6, "Колонны, ригели и стеновые панели первой очереди строительства жилого комплекса с подземной автостоянкой", {
+      lines: [LN("Колонна", "QA-К9", 40)] }),
+    CT(10, 7, "Чистое удаление", { lines: [LN("Колонна", "QA-К10", 3)] }),
+    CT(11, 9, "Контракт контрагента с зависимостями", { lines: [LN("Балка", "QA-Б11", 2)] }),
+  ];
+
+  // Изделия схемы, привязанные к контрактам (статус «Запланирован» контракта не имеет — инвариант бэкенда).
+  const EL = (id, object_id, contract_id, element_type, mark, current_status, o = {}) => ({
+    id, object_id, contract_id, element_type, mark, current_status, project_delivery_date: null,
+    project_smr_start_date: null, planned_delivery_date: null, actual_delivery_date: null,
+    updated_at: ts("12", "09:00:00"), ...o,
+  });
+  const elements = [
+    EL(101, 1, 1, "Колонна", "QA-К1", "delivered", { project_delivery_date: "2026-08-30", planned_delivery_date: "2026-09-01", actual_delivery_date: "2026-09-02 10:15:00" }),
+    EL(102, 1, 1, "Колонна", "QA-К1", "installed", { project_delivery_date: "2026-08-20", planned_delivery_date: "2026-08-25", actual_delivery_date: "2026-08-28 09:40:00" }),
+    EL(103, 1, 1, "Колонна", "QA-К1", "shipped", { project_delivery_date: "2026-09-15" }),
+    EL(104, 1, 1, "Колонна", "QA-К2", "in_production", { project_delivery_date: "2026-10-01", planned_delivery_date: "2026-10-05" }),
+    EL(105, 1, 1, "Колонна", "QA-К2", "contracting", { project_delivery_date: "2026-10-15" }),
+    EL(106, 1, 1, "Плита перекрытия", "QA-П1", "accepted", { project_delivery_date: "2026-07-10", planned_delivery_date: "2026-07-15", actual_delivery_date: "2026-07-20 14:05:00" }),
+    EL(107, 1, 1, "Плита перекрытия", "QA-П1", "delivered", { project_delivery_date: "2026-09-08", planned_delivery_date: "2026-09-10", actual_delivery_date: "2026-09-11 08:30:00" }),
+    EL(108, 1, 1, "Плита перекрытия", "QA-П1", "shipped"),
+    EL(201, 2, 5, "Балка", "QA-Б1", "delivered", { project_delivery_date: "2026-09-05", planned_delivery_date: "2026-09-12", actual_delivery_date: "2026-09-13 11:00:00" }),
+    EL(202, 2, 5, "Балка", "QA-Б1", "shipped"),
+    EL(301, 4, 8, "Колонна", "QA-К7", "installed", { project_delivery_date: "2026-08-10", planned_delivery_date: "2026-08-18", actual_delivery_date: "2026-08-19 15:20:00" }),
+    EL(302, 4, 8, "Колонна", "QA-К7", "delivered", { actual_delivery_date: "2026-09-14 09:10:00" }),
+    EL(303, 4, 8, "Колонна", "QA-К7", "in_production", { planned_delivery_date: "2026-10-20" }),
+  ];
+
   return {
     users, roles, roleFeatures, access, projects, objects, smu, individuals, attachments,
+    counterparties, agreements, specifications, contracts, elements,
     // Настройки «сервера»: включена ли доменная авторизация, открыт ли список логинов на экране
     // входа, что загружено в классификатор КЛАДР (пусто = «не загружен»).
     settings: { ldapEnabled: true, publicLoginList: true, kladrLoaded: [], onlineTiles: false },
@@ -596,7 +780,8 @@ function createServer(opts) {
   // grants — синоним access («гранты по пользователям»: строки user_access).
   Object.defineProperty(data, "grants", { enumerable: false, configurable: false, get() { return data.access; } });
 
-  const TABLES = ["users", "roles", "roleFeatures", "access", "projects", "objects", "smu", "individuals", "attachments"];
+  const TABLES = ["users", "roles", "roleFeatures", "access", "projects", "objects", "smu", "individuals", "attachments",
+    "counterparties", "agreements", "specifications", "contracts", "elements"];
   const OVERRIDE_ALIASES = { grants: "access", role_features: "roleFeatures" };
 
   // Таблицы правятся НА МЕСТЕ: тест может держать ссылку ctl.data.access и после удаления строк.
@@ -718,7 +903,17 @@ function createServer(opts) {
       if (f.kinds.length && objectId != null && !f.kinds.includes(objectKind(objectId))) return "none";
       return p.features[key];
     }
-    return computeLevel(user, key, objectId, isAdmin(user));
+    const base = computeLevel(user, key, objectId, isAdmin(user));
+    // Профиль стенда «не админ» (boot.js: writer/deleter/readonly/none) не перечисляет объектные разделы
+    // контрактации — выводим их из уровня «Контрагенты» по заводской раскладке ролей (см. шапку файла);
+    // грант пользователя, если он даёт больше, остаётся в силе.
+    if (p && p.system_admin === false && objectId != null && FOLLOWS_COUNTERPARTIES.includes(key)
+        && !(f.kinds.length && !f.kinds.includes(objectKind(objectId)))) {
+      const cp = p.features && p.features.counterparties;
+      const inferred = cp === "write" ? "write" : cp === "read" ? "read" : "none";
+      return LEVELS[Math.max(LEVELS.indexOf(base), LEVELS.indexOf(inferred))];
+    }
+    return base;
   }
   // ВИДИМОСТЬ ДАННЫХ (списки проектов/объектов, дерево, карта) определяется учётной записью,
   // а не профилем прав из ctl.setPermissions(): «system_admin:false» в профиле сужает
@@ -1537,15 +1732,492 @@ function createServer(opts) {
     return { attachments: attachmentsFor(att.entity_type, att.entity_id) };
   });
 
-  // ---- удаление записей справочников (app/dict_delete.py): проект и объект ----
+  // ==================== КОНТРАКТАЦИЯ: контрагенты → договоры → спецификации → контракты ====================
+  // app/counterparties.py, app/contracts.py, app/contract_guard.py, app/capacity.py, app/element_dates.py.
+  // Порядок проверок — как у FastAPI: 401 → 403 (зависимости) → 422 (тело) → проверки внутри обработчика
+  // (404/403 по объекту → 400/409 логики). Мутации идут «транзакцией»: при отказе на середине состояние
+  // таблиц контрактации возвращается как было (см. transaction).
+
   const nonEmpty = (pairs) => pairs.filter(([, n]) => n).map(([label, count]) => ({ label, count }));
+  const cpById = (id) => data.counterparties.find((c) => c.id === id) || null;
+  const agreementById = (id) => data.agreements.find((a) => a.id === id) || null;
+  const specById = (id) => data.specifications.find((s) => s.id === id) || null;
+  const contractById = (id) => data.contracts.find((c) => c.id === id) || null;
+  const linkedTo = (contractId) => data.elements.filter((e) => e.contract_id === contractId);
+  // Договоры объекта для delete-plan: строки data.agreements + «добавка» deps.agreements (договоры без модели).
+  const agreementsOfObject = (o) => (o.deps.agreements || 0) + data.agreements.filter((a) => a.object_id === o.id).length;
+  // Необработанное исключение настоящего бэкенда (нарушение UNIQUE/FK при UPDATE): голый текст, без JSON.
+  const serverError = () => new HttpError(500, "Internal Server Error",
+    { rawBody: "Internal Server Error", contentType: "text/plain; charset=utf-8" });
+
+  const TX_TABLES = ["counterparties", "agreements", "specifications", "contracts", "elements"];
+  function transaction(fn) {
+    const snapshot = TX_TABLES.map((t) => [t, deepClone(data[t])]);
+    try { return fn(); }
+    catch (e) { for (const [t, rows] of snapshot) setRows(t, rows); throw e; }
+  }
+  // id строк позиций и инцидентов контракта — сквозные (AUTOINCREMENT): при полной замене списка получают новые.
+  function takeChildId(kind) {
+    const max = data.contracts.reduce((m, c) => (c[kind] || []).reduce((mm, x) => Math.max(mm, x.id || 0), m), 0);
+    counters["contract_" + kind] = Math.max(counters["contract_" + kind] || 1, max + 1);
+    return counters["contract_" + kind]++;
+  }
+
+  const ruDate = (s) => {
+    if (!s) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : s;
+  };
+  const docLabel = (number, date) => (date ? `${number} от ${ruDate(date)}` : number);
+  function chainOf(c) {
+    const s = specById(c.specification_id), a = s ? agreementById(s.agreement_id) : null, cp = a ? cpById(a.counterparty_id) : null;
+    return { s, a, cp };
+  }
+  // build_contract_name: «Контрагент/Договор от ДД.ММ.ГГГГ/Спецификация от ДД.ММ.ГГГГ (тема)».
+  function contractName(c) {
+    const { s, a, cp } = chainOf(c);
+    if (!cp) return `Контракт #${c.id}`;
+    return `${cp.short_name}/${docLabel(a.number, a.agreement_date)}/${docLabel(s.number, s.specification_date)}`
+      + (c.theme ? ` (${c.theme})` : "");
+  }
+
+  // ---- производительность (app/capacity.py: _clean) ----
+  function cleanCapacity(items, withComment) {
+    const out = [], seen = new Set();
+    for (const it of items || []) {
+      const type = (it.element_type || "").trim();
+      if (!type || it.per_day == null || it.per_day <= 0) continue;
+      if (seen.has(type)) continue; // один тип дважды — берётся первый
+      seen.add(type);
+      out.push({ element_type: type, per_day: Number(it.per_day), comment: withComment ? ((it.comment || "").trim() || null) : null });
+    }
+    return out;
+  }
+  const capacityOut = (rows) => [...(rows || [])].sort((a, b) => cmp(a.element_type, b.element_type))
+    .map((x) => ({ element_type: x.element_type, per_day: x.per_day, comment: x.comment ?? null }));
+
+  // ---- выходные формы ----
+  const cpOut = (c) => ({
+    full_name: c.full_name, short_name: c.short_name, inn: c.inn ?? null, kpp: c.kpp ?? null, ogrn: c.ogrn ?? null,
+    legal_address: c.legal_address ?? null, contact_person: c.contact_person ?? null, contact_phone: c.contact_phone ?? null,
+    code: c.code ?? null, capacity: capacityOut(c.capacity), id: c.id,
+  });
+  const agreementOut = (a) => ({
+    counterparty_id: a.counterparty_id, number: a.number, agreement_date: a.agreement_date ?? null,
+    object_id: a.object_id ?? null, id: a.id,
+  });
+  const specOut = (s) => ({ agreement_id: s.agreement_id, number: s.number, specification_date: s.specification_date ?? null, id: s.id });
+  const strCmp = (a, b) => cmp(a ?? "", b ?? "");
+  function contractOut(c) {
+    const { s, a, cp } = chainOf(c);
+    const linked = linkedTo(c.id);
+    const lines = [...c.lines].sort((x, y) => cmpNullFirst(x.element_type, y.element_type) || cmpNullFirst(x.mark, y.mark)).map((l) => {
+      const fact = linked.filter((e) => e.current_status !== "planned" && (e.element_type ?? null) === (l.element_type ?? null)
+        && (e.mark ?? null) === (l.mark ?? null)).length;
+      const damaged = c.incidents.filter((i) => i.element_type === l.element_type).reduce((n, i) => n + (i.quantity || 0), 0);
+      return {
+        element_type: l.element_type ?? null, mark: l.mark ?? null, quantity: l.quantity, id: l.id, fact, damaged,
+        remaining: l.quantity - fact - damaged, exceeded: fact + damaged > l.quantity,
+      };
+    });
+    const incidents = [...c.incidents].sort((x, y) => cmp(y.incident_date, x.incident_date) || cmp(y.id, x.id)).map((i) => ({
+      element_type: i.element_type, quantity: i.quantity, incident_date: i.incident_date, description: i.description ?? null, id: i.id,
+    }));
+    return {
+      id: c.id, name: contractName(c), theme: c.theme ?? null, specification_id: s.id, specification_number: s.number,
+      specification_date: s.specification_date ?? null, agreement_id: a.id, agreement_number: a.number,
+      agreement_date: a.agreement_date ?? null, counterparty_id: cp.id, counterparty_short_name: cp.short_name,
+      counterparty_code: cp.code ?? null, is_archived: !!c.is_archived, linked_elements: linked.length,
+      lines, incidents, capacity: capacityOut(c.capacity),
+    };
+  }
+  function elementOut(e) {
+    const c = e.contract_id != null ? contractById(e.contract_id) : null;
+    const cp = c ? chainOf(c).cp : null;
+    return {
+      id: e.id, object_id: e.object_id ?? null, element_type: e.element_type, mark: e.mark ?? null, contract_id: e.contract_id ?? null,
+      current_status: e.current_status, planned_delivery_date: e.planned_delivery_date ?? null,
+      project_delivery_date: e.project_delivery_date ?? null, project_smr_start_date: e.project_smr_start_date ?? null,
+      actual_delivery_date: e.actual_delivery_date ?? null, counterparty_code: cp ? cp.code ?? null : null,
+      history: [], updated_at: e.updated_at ?? null,
+    };
+  }
+
+  // ---- доступ ----
+  const visibleObjectIds = (user) => new Set(visibleObjects(user).map((o) => o.id));
+  // Безобъектные договоры видит только администратор сервиса (_accessible_agreements_clause).
+  const agreementVisible = (user, a, ids) => seesAll(user) || (a.object_id != null && ids.has(a.object_id));
+  // Права на договор — по объекту, на который он заключён; безобъектный договор правит только админ.
+  function guardAgreement(user, agreementId, kind) {
+    const a = agreementById(agreementId);
+    if (!a) fail(404, "Договор не найден");
+    if (a.object_id == null) {
+      if (user.role !== "admin") fail(403, "Договор не привязан к объекту — правит администратор сервиса");
+      return a;
+    }
+    assertObjectFeature(user, a.object_id, "agreements", kind);
+    return a;
+  }
+  function guardSpecOwner(user, specId, kind, key) {
+    const s = specById(specId);
+    if (!s) fail(404, "Спецификация не найдена");
+    const a = agreementById(s.agreement_id);
+    if (a.object_id == null) {
+      if (user.role !== "admin") fail(403, "Договор спецификации не привязан к объекту — правит администратор сервиса");
+      return s;
+    }
+    assertObjectFeature(user, a.object_id, key, kind);
+    return s;
+  }
+  function guardContract(user, contractId, kind) {
+    const c = contractById(contractId);
+    if (!c) fail(404, "Контракт не найден");
+    const a = chainOf(c).a;
+    if (a.object_id == null) {
+      if (user.role !== "admin") fail(403, "Контракт не привязан к объекту — доступен администратору сервиса");
+      return c;
+    }
+    assertObjectFeature(user, a.object_id, "contracts", kind);
+    return c;
+  }
+
+  // ---- контрагенты ----
+  // Код по умолчанию: первое слово краткого наименования, до 6 символов, верхний регистр; при коллизии — суффикс.
+  function generateCounterpartyCode(shortName) {
+    const words = shortName.split(/\s+/).filter(Boolean);
+    const base = ((words.length ? words[0] : shortName).toUpperCase().slice(0, 6)) || "К";
+    const taken = new Set(data.counterparties.map((c) => c.code).filter((c) => c != null));
+    let candidate = base, n = 2;
+    while (taken.has(candidate)) candidate = `${base}${n++}`;
+    return candidate;
+  }
+  const sortedCounterparties = () => [...data.counterparties].sort((a, b) => cmp(a.short_name, b.short_name) || cmp(a.id, b.id));
+
+  route("GET", "/counterparties", () => sortedCounterparties().map(cpOut));
+
+  // Дерево Контрагент → Договоры → Спецификации (доступные договоры; спецификации — вслед за договорами).
+  route("GET", "/counterparties/full", (ctx) => {
+    const ids = visibleObjectIds(ctx.user);
+    const agreements = data.agreements.filter((a) => agreementVisible(ctx.user, a, ids)).sort((a, b) => cmp(a.number, b.number) || cmp(a.id, b.id));
+    return sortedCounterparties().map((c) => ({
+      ...cpOut(c),
+      agreements: agreements.filter((a) => a.counterparty_id === c.id).map((a) => ({
+        ...agreementOut(a),
+        specifications: data.specifications.filter((s) => s.agreement_id === a.id).sort((x, y) => cmp(x.number, y.number) || cmp(x.id, y.id)).map(specOut),
+      })),
+    }));
+  });
+
+  route("POST", "/counterparties", (ctx) => {
+    assertFeature(ctx.user, "counterparties", "write");
+    const { values: b } = parse(ctx, COUNTERPARTY_SPEC);
+    const row = {
+      id: takeId("counterparties"), full_name: b.full_name, short_name: b.short_name, inn: b.inn, kpp: b.kpp, ogrn: b.ogrn,
+      legal_address: b.legal_address, contact_person: b.contact_person, contact_phone: b.contact_phone,
+      code: b.code || generateCounterpartyCode(b.short_name), capacity: cleanCapacity(b.capacity, true),
+    };
+    data.counterparties.push(row);
+    return cpOut(row);
+  });
+
+  route("PATCH", "/counterparties/:counterparty_id", (ctx) => {
+    assertFeature(ctx.user, "counterparties", "write");
+    const id = pathInt(ctx, "counterparty_id");
+    const { values: b } = parse(ctx, COUNTERPARTY_SPEC);
+    const row = cpById(id);
+    if (!row) fail(404, "Контрагент не найден");
+    // Как в бэкенде: поля пишутся как есть (без trim), код — тоже (null очищает его); capacity=null — не менять.
+    Object.assign(row, {
+      full_name: b.full_name, short_name: b.short_name, inn: b.inn, kpp: b.kpp, ogrn: b.ogrn, legal_address: b.legal_address,
+      contact_person: b.contact_person, contact_phone: b.contact_phone, code: b.code,
+    });
+    if (b.capacity !== null) row.capacity = cleanCapacity(b.capacity, true);
+    return cpOut(row);
+  });
+
+  // ---- договоры ----
+  route("GET", "/agreements", (ctx) => {
+    const cpId = queryValue(ctx, "counterparty_id", { type: "int", required: true });
+    const ids = visibleObjectIds(ctx.user);
+    return data.agreements.filter((a) => a.counterparty_id === cpId && agreementVisible(ctx.user, a, ids))
+      .sort((a, b) => cmp(a.number, b.number) || cmp(a.id, b.id)).map(agreementOut);
+  });
+
+  route("POST", "/agreements", (ctx) => {
+    const { values: b } = parse(ctx, AGREEMENT_SPEC);
+    if (b.object_id === null) {
+      fail(400, "Укажите объект, на который заключён договор — без него договор не виден ни в одном контракте объекта");
+    }
+    assertObjectFeature(ctx.user, b.object_id, "agreements", "write");
+    if (!cpById(b.counterparty_id)) fail(404, "Контрагент не найден");
+    if (data.agreements.some((a) => a.counterparty_id === b.counterparty_id && a.number === b.number)) {
+      fail(400, "У этого контрагента уже есть договор с таким номером");
+    }
+    const row = { id: takeId("agreements"), counterparty_id: b.counterparty_id, number: b.number, agreement_date: b.agreement_date, object_id: b.object_id };
+    data.agreements.push(row);
+    return agreementOut(row);
+  });
+
+  route("PATCH", "/agreements/:agreement_id", (ctx) => {
+    const id = pathInt(ctx, "agreement_id");
+    const { values: b } = parse(ctx, AGREEMENT_SPEC);
+    const existing = guardAgreement(ctx.user, id, "write");
+    if (b.object_id === null) {
+      fail(400, "Укажите объект, на который заключён договор — без него договор не виден ни в одном контракте объекта");
+    }
+    if (b.object_id !== existing.object_id) {
+      assertObjectFeature(ctx.user, b.object_id, "agreements", "write");
+      // Объект контракта выводится по цепочке контракт → спецификация → договор: пока по договору есть изделия
+      // ДРУГОГО объекта, объект договора не меняется.
+      const busy = data.elements.filter((e) => {
+        const c = e.contract_id != null ? contractById(e.contract_id) : null;
+        const s = c ? specById(c.specification_id) : null;
+        return s && s.agreement_id === id && (e.object_id ?? null) !== b.object_id;
+      }).length;
+      if (busy) {
+        fail(409, `По контрактам этого договора уже законтрактовано изделий другого объекта: ${busy}. Сменить объект договора нельзя — `
+          + "сначала снимите контракт с этих изделий.");
+      }
+    }
+    // UPDATE без проверок: нарушение UNIQUE (контрагент, номер) или FK контрагента — необработанное исключение (500).
+    if (!cpById(b.counterparty_id)) throw serverError();
+    if (data.agreements.some((a) => a.id !== id && a.counterparty_id === b.counterparty_id && a.number === b.number)) throw serverError();
+    Object.assign(existing, { counterparty_id: b.counterparty_id, number: b.number, agreement_date: b.agreement_date, object_id: b.object_id });
+    return agreementOut(existing);
+  });
+
+  // ---- спецификации ----
+  route("GET", "/specifications", (ctx) => {
+    const agreementId = queryValue(ctx, "agreement_id", { type: "int", required: true });
+    guardAgreement(ctx.user, agreementId, "read");
+    return data.specifications.filter((s) => s.agreement_id === agreementId).sort((a, b) => cmp(a.number, b.number) || cmp(a.id, b.id)).map(specOut);
+  });
+
+  route("POST", "/specifications", (ctx) => {
+    const { values: b } = parse(ctx, SPECIFICATION_SPEC);
+    guardAgreement(ctx.user, b.agreement_id, "write");
+    // find_or_create_specification: номер уже есть у договора — возвращается СУЩЕСТВУЮЩАЯ строка (без ошибки).
+    const existing = data.specifications.find((s) => s.agreement_id === b.agreement_id && s.number === b.number);
+    if (existing) return specOut(existing);
+    const row = { id: takeId("specifications"), agreement_id: b.agreement_id, number: b.number, specification_date: b.specification_date };
+    data.specifications.push(row);
+    return specOut(row);
+  });
+
+  route("PATCH", "/specifications/:specification_id", (ctx) => {
+    const id = pathInt(ctx, "specification_id");
+    const { values: b } = parse(ctx, SPECIFICATION_SPEC);
+    const row = guardSpecOwner(ctx.user, id, "write", "agreements");
+    guardAgreement(ctx.user, b.agreement_id, "write");
+    if (data.specifications.some((s) => s.id !== id && s.agreement_id === b.agreement_id && s.number === b.number)) throw serverError();
+    Object.assign(row, { agreement_id: b.agreement_id, number: b.number, specification_date: b.specification_date });
+    return specOut(row);
+  });
+
+  // ---- страж «изделие ↔ позиция контракта» (app/contract_guard.py) ----
+  const norm = (v) => (v || "").trim().toLowerCase();
+  const covKey = (type, mark) => `${norm(type)}${norm(mark)}`;
+  const covLabel = (type, mark) => `${type || "тип не определён"} «${mark || "без марки"}»`;
+  function coverageState(contractId) {
+    const c = contractById(contractId);
+    if (!c) return {};
+    const state = {};
+    const cell = (key, type, mark) => {
+      const x = (state[key] ||= { quantity: 0, linked: 0, damaged: 0, label: null });
+      if (x.label === null && (type || mark)) x.label = covLabel(type, mark);
+      return x;
+    };
+    for (const l of c.lines) cell(covKey(l.element_type, l.mark), l.element_type, l.mark).quantity += l.quantity || 0;
+    for (const e of data.elements) {
+      if (e.contract_id !== contractId || e.current_status === "planned") continue;
+      cell(covKey(e.element_type, e.mark), e.element_type, e.mark).linked += 1;
+    }
+    const dmg = {};
+    for (const i of c.incidents) dmg[norm(i.element_type)] = (dmg[norm(i.element_type)] || 0) + (i.quantity || 0);
+    for (const [key, x] of Object.entries(state)) x.damaged = dmg[key.split("")[0]] || 0;
+    return state;
+  }
+  const shortage = (x) => Math.max(0, x.linked + x.damaged - x.quantity);
+  const coverageLabel = (key, x) => (x && x.label ? x.label : covLabel(...key.split("")));
+  // Что стало ХУЖЕ между двумя состояниями (накопленные нарушения, которые не выросли, молчат).
+  function regressions(before, after) {
+    const out = [];
+    for (const key of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {
+      const empty = { quantity: 0, linked: 0, damaged: 0, label: null };
+      const was = shortage(before[key] || empty);
+      const now = after[key] || { ...empty, label: (before[key] || empty).label };
+      if (shortage(now) <= was) continue;
+      if (now.quantity === 0) {
+        out.push(`${coverageLabel(key, now)}: позиции не остаётся, а привязано изделий: ${now.linked}`);
+      } else {
+        out.push(`${coverageLabel(key, now)}: остаётся по спецификации ${now.quantity}, а привязано изделий ${now.linked}`
+          + (now.damaged ? ` и списано повреждёнными ${now.damaged}` : ""));
+      }
+    }
+    return out;
+  }
+  function assertNoRegression(contractIds, before, header) {
+    const problems = [];
+    for (const id of contractIds) problems.push(...regressions(before[id] || {}, coverageState(id)));
+    if (problems.length) {
+      fail(409, `${header} ${problems.slice(0, 10).join("; ")}${problems.length > 10 ? ` (и ещё ${problems.length - 10})` : ""}. `
+        + "Сначала переназначьте изделия на другой контракт или снимите с них привязку.");
+    }
+  }
+  const coverageAll = () => Object.fromEntries(data.contracts.map((c) => [c.id, coverageState(c.id)]));
+
+  // ---- контракты ----
+  route("GET", "/contracts", (ctx) => {
+    const ids = visibleObjectIds(ctx.user);
+    return data.contracts
+      .filter((c) => { const { a } = chainOf(c); return a && agreementVisible(ctx.user, a, ids); })
+      .sort((x, y) => {
+        const cx = chainOf(x), cy = chainOf(y);
+        return strCmp(cx.cp.short_name, cy.cp.short_name) || strCmp(cx.a.number, cy.a.number) || strCmp(cx.s.number, cy.s.number) || cmp(x.id, y.id);
+      })
+      .map(contractOut);
+  });
+
+  // Полная замена позиций/инцидентов/переопределения (как DELETE + INSERT в бэкенде); дубль (тип, марка) нарушает
+  // idx_contract_lines_unique — необработанное исключение (500).
+  function fillContractParts(c, b) {
+    const seen = new Set();
+    for (const l of b.lines) {
+      const k = `${l.element_type ?? ""}${l.mark ?? ""}`;
+      if (seen.has(k)) throw serverError();
+      seen.add(k);
+    }
+    c.lines = b.lines.map((l) => ({ id: takeChildId("lines"), element_type: l.element_type ?? null, mark: l.mark ?? null, quantity: l.quantity }));
+    c.incidents = b.incidents.map((i) => ({
+      id: takeChildId("incidents"), element_type: i.element_type, quantity: i.quantity, incident_date: i.incident_date,
+      description: i.description ?? null,
+    }));
+    if (b.capacity !== null) c.capacity = cleanCapacity(b.capacity, false);
+  }
+
+  route("POST", "/contracts", (ctx) => {
+    const { values: b } = parse(ctx, CONTRACT_SPEC);
+    guardSpecOwner(ctx.user, b.specification_id, "write", "contracts");
+    return transaction(() => {
+      const c = {
+        id: takeId("contracts"), specification_id: b.specification_id, theme: b.theme, is_archived: !!b.is_archived,
+        lines: [], incidents: [], capacity: [], historyRecords: 0, defaultRefs: 0,
+      };
+      data.contracts.push(c);
+      fillContractParts(c, b);
+      return contractOut(c);
+    });
+  });
+
+  route("PATCH", "/contracts/:contract_id", (ctx) => {
+    const id = pathInt(ctx, "contract_id");
+    const { values: b } = parse(ctx, CONTRACT_SPEC);
+    // ОБЕ проверки: чей контракт правим и куда его переносим (перенос на спецификацию другого договора и есть
+    // смена контрагента/договора).
+    const c = guardContract(ctx.user, id, "write");
+    guardSpecOwner(ctx.user, b.specification_id, "write", "contracts");
+    // Архивность проверяется только при ВКЛЮЧЕНИИ: снять её можно всегда.
+    if (b.is_archived && !c.is_archived) {
+      const n = linkedTo(id).length;
+      if (n) {
+        fail(409, `К контракту привязано изделий: ${n}. В архив можно перевести только контракт, за которым не осталось изделий `
+          + "схемы — сначала переназначьте их на другой контракт или снимите привязку.");
+      }
+    }
+    return transaction(() => {
+      const before = { [id]: coverageState(id) };
+      Object.assign(c, { specification_id: b.specification_id, theme: b.theme, is_archived: !!b.is_archived });
+      fillContractParts(c, b);
+      assertNoRegression([id], before, "Правка спецификации оставила бы изделия без основания:");
+      return contractOut(c);
+    });
+  });
+
+  // Развёрнутый вид: одна строка на изделие схемы, привязанное к контракту.
+  route("GET", "/contracts/:contract_id/elements", (ctx) => {
+    const id = pathInt(ctx, "contract_id");
+    guardContract(ctx.user, id, "read");
+    return linkedTo(id)
+      .sort((a, b) => strCmp(a.element_type, b.element_type) || cmpNullFirst(a.mark ?? null, b.mark ?? null) || cmp(a.id, b.id))
+      .map((e) => ({
+        id: e.id, element_type: e.element_type, mark: e.mark ?? null, current_status: e.current_status,
+        planned_delivery_date: e.planned_delivery_date ?? null, project_delivery_date: e.project_delivery_date ?? null,
+        project_smr_start_date: e.project_smr_start_date ?? null, actual_delivery_date: e.actual_delivery_date ?? null,
+      }));
+  });
+
+  // Плановая дата — независимое живое поле изделия (app/element_dates.py); право «Плановая дата поставки изделия»
+  // проверяется по объекту изделия (_guard_elements): изделие без объекта — только админ сервиса.
+  const validIsoDate = (s) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const d = new Date(`${s}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  };
+  route("PATCH", "/elements/:element_id/planned-delivery-date", (ctx) => {
+    const id = pathInt(ctx, "element_id");
+    const { values: b } = parse(ctx, PLANNED_DATE_SPEC);
+    if (opts.strictDates !== false && b.planned_delivery_date !== null && !validIsoDate(b.planned_delivery_date)) {
+      throw validation([{ type: "value_error", loc: ["body", "planned_delivery_date"],
+        msg: "Value error, дата должна быть в формате ГГГГ-ММ-ДД", input: b.planned_delivery_date }]);
+    }
+    const el = data.elements.find((e) => e.id === id);
+    if (el) {
+      if (el.object_id == null) {
+        if (!isAdmin(ctx.user)) fail(403, "Элемент не привязан к объекту — операция доступна администратору сервиса");
+      } else assertObjectFeature(ctx.user, el.object_id, "planned_date", "write");
+    }
+    if (!el) fail(404, "Элемент не найден");
+    el.planned_delivery_date = b.planned_delivery_date;
+    el.updated_at = nowStr(nowFn);
+    return elementOut(el);
+  });
+
+  // ---- удаление записей справочников (app/dict_delete.py) ----
+  // Виды: project/object (удаляются только пустыми) и цепочка контрактации counterparty → agreement →
+  // specification → contract (подчинённые уходят вместе, ссылки на контракт переводятся на замену).
+
+  // Слияние подчинённых (режим merge): рекурсивно, по совпавшим номерам.
+  function mergeContracts(srcId, dstId, report) {
+    const moved = data.contracts.filter((c) => c.specification_id === srcId);
+    moved.forEach((c) => { c.specification_id = dstId; });
+    if (moved.length) report.push(`контрактов перенесено: ${moved.length}`);
+  }
+  function mergeSpecifications(srcId, dstId, report) {
+    for (const s of data.specifications.filter((x) => x.agreement_id === srcId)) {
+      const twin = data.specifications.find((x) => x.agreement_id === dstId && x.number === s.number);
+      if (twin) {
+        mergeContracts(s.id, twin.id, report);
+        setRows("specifications", data.specifications.filter((x) => x.id !== s.id));
+        report.push(`спецификация ${s.number} слита с одноимённой`);
+      } else {
+        s.agreement_id = dstId;
+        report.push(`спецификация ${s.number} перенесена`);
+      }
+    }
+  }
+  function mergeAgreements(srcId, dstId, report) {
+    for (const a of data.agreements.filter((x) => x.counterparty_id === srcId)) {
+      const twin = data.agreements.find((x) => x.counterparty_id === dstId && x.number === a.number);
+      if (twin) {
+        mergeSpecifications(a.id, twin.id, report);
+        setRows("agreements", data.agreements.filter((x) => x.id !== a.id));
+        report.push(`договор ${a.number} слит с одноимённым`);
+      } else {
+        a.counterparty_id = dstId;
+        report.push(`договор ${a.number} перенесён`);
+      }
+    }
+  }
+
+  const byNumber = (a, b) => cmp(a.number, b.number) || cmp(a.id, b.id);
   const DICT_KINDS = {
     object: {
       title: "Объект",
       load: (id) => objectById(id),
+      label: (o) => o.name,
       blockers: (o) => nonEmpty([
         ["Изделия", (o.elements_current || 0) + (o.elements_retired || 0)], ["Зоны", o.deps.zones],
-        ["Договоры", o.deps.agreements], ["Версии чертежа", o.drawings.length], ["Марки", o.deps.marks],
+        ["Договоры", agreementsOfObject(o)], ["Версии чертежа", o.drawings.length], ["Марки", o.deps.marks],
       ]),
       cascade: (o) => nonEmpty([
         ["Настройки объекта", o.cascade.app_settings], ["Видимость подписей", o.cascade.label_visibility],
@@ -1554,7 +2226,7 @@ function createServer(opts) {
         ["Выданные доступы", data.access.filter((g) => g.object_id === o.id).length],
       ]),
       checked: (o) => [
-        ["agreements.object_id", o.deps.agreements, "держит удаление"],
+        ["agreements.object_id", agreementsOfObject(o), "держит удаление"],
         ["app_settings.object_id", o.cascade.app_settings, "удаляется вместе"],
         ["default_contracts.object_id", o.cascade.default_contracts, "удаляется вместе"],
         ["elements.object_id", (o.elements_current || 0) + (o.elements_retired || 0), "держит удаление"],
@@ -1572,6 +2244,7 @@ function createServer(opts) {
     project: {
       title: "Проект",
       load: (id) => projectById(id),
+      label: (p) => p.name,
       blockers: (p) => nonEmpty([["Объекты", data.objects.filter((o) => o.project_id === p.id).length]]),
       cascade: (p) => nonEmpty([["Выданные доступы", data.access.filter((g) => g.project_id === p.id).length]]),
       checked: (p) => [
@@ -1580,42 +2253,217 @@ function createServer(opts) {
       ],
       remove: (p) => removeProject(p.id),
     },
+    counterparty: {
+      title: "Контрагент",
+      load: (id) => cpById(id),
+      label: (c) => c.short_name,
+      children: (c) => data.agreements.filter((a) => a.counterparty_id === c.id).sort(byNumber).map((a) => ["agreement", String(a.id)]),
+      candidates: (c) => data.counterparties.filter((x) => x.id !== c.id).sort((a, b) => cmpNoCase(a.short_name, b.short_name))
+        .map((x) => ({ key: String(x.id), label: x.short_name })),
+      adopt: mergeAgreements, adoptTitle: "договоры со всем содержимым",
+      checked: (c) => [
+        ["agreements.counterparty_id", data.agreements.filter((a) => a.counterparty_id === c.id).length, "подчинённые записи, уходят вместе"],
+        ["counterparty_capacity.counterparty_id", (c.capacity || []).length, "удаляется вместе"],
+      ],
+      remove: (c) => setRows("counterparties", data.counterparties.filter((x) => x.id !== c.id)),
+    },
+    agreement: {
+      title: "Договор", parentKind: "counterparty",
+      load: (id) => agreementById(id),
+      label: (a) => "Договор " + docLabel(a.number, a.agreement_date),
+      children: (a) => data.specifications.filter((s) => s.agreement_id === a.id).sort(byNumber).map((s) => ["specification", String(s.id)]),
+      // Владелец — контрагент: если его заменяют, список берётся у контрагента-ЗАМЕНЫ.
+      candidates: (a, parent) => {
+        const cpId = parent ? Number(parent) : a.counterparty_id;
+        return data.agreements.filter((x) => x.counterparty_id === cpId && x.id !== a.id).sort(byNumber)
+          .map((x) => ({ key: String(x.id), label: docLabel(x.number, x.agreement_date) }));
+      },
+      adopt: mergeSpecifications, adoptTitle: "спецификации со всем содержимым",
+      checked: (a) => [["specifications.agreement_id", data.specifications.filter((s) => s.agreement_id === a.id).length, "подчинённые записи, уходят вместе"]],
+      remove: (a) => setRows("agreements", data.agreements.filter((x) => x.id !== a.id)),
+    },
+    specification: {
+      title: "Спецификация", parentKind: "agreement",
+      load: (id) => specById(id),
+      label: (s) => "Спецификация " + docLabel(s.number, s.specification_date),
+      children: (s) => data.contracts.filter((c) => c.specification_id === s.id).sort((a, b) => cmp(a.id, b.id)).map((c) => ["contract", String(c.id)]),
+      candidates: (s, parent) => {
+        const agreementId = parent ? Number(parent) : s.agreement_id;
+        return data.specifications.filter((x) => x.agreement_id === agreementId && x.id !== s.id).sort(byNumber)
+          .map((x) => ({ key: String(x.id), label: docLabel(x.number, x.specification_date) }));
+      },
+      adopt: mergeContracts, adoptTitle: "контракты",
+      checked: (s) => [["contracts.specification_id", data.contracts.filter((c) => c.specification_id === s.id).length, "подчинённые записи, уходят вместе"]],
+      remove: (s) => setRows("specifications", data.specifications.filter((x) => x.id !== s.id)),
+    },
+    contract: {
+      title: "Контракт", parentKind: "specification",
+      load: (id) => contractById(id),
+      label: (c) => contractName(c),
+      refs: (c) => nonEmpty([["Изделия", linkedTo(c.id).length], ["Записи истории статусов", c.historyRecords || 0],
+        ["Контракт по умолчанию", c.defaultRefs || 0]]),
+      cascade: (c) => nonEmpty([["Позиции контракта", c.lines.length], ["Инциденты повреждения", c.incidents.length]]),
+      // Другие контракты ТОЙ ЖЕ спецификации (или выбранной владельцу-замене), по возрастанию id.
+      candidates: (c, parent) => {
+        const specId = parent ? Number(parent) : c.specification_id;
+        return data.contracts.filter((x) => x.specification_id === specId && x.id !== c.id).sort((a, b) => cmp(a.id, b.id))
+          .map((x) => ({ key: String(x.id), label: contractName(x) }));
+      },
+      repoint: (c, target) => {
+        const els = linkedTo(c.id);
+        els.forEach((e) => { e.contract_id = target.id; e.updated_at = nowStr(nowFn); });
+        const history = c.historyRecords || 0, defaults = c.defaultRefs || 0;
+        target.historyRecords = (target.historyRecords || 0) + history;
+        target.defaultRefs = (target.defaultRefs || 0) + defaults;
+        c.historyRecords = 0; c.defaultRefs = 0;
+        return nonEmpty([["Изделия", els.length], ["Записи истории статусов", history], ["Контракт по умолчанию", defaults]]);
+      },
+      checked: (c) => [
+        ["contract_capacity.contract_id", (c.capacity || []).length, "удаляется вместе"],
+        ["contract_incidents.contract_id", c.incidents.length, "удаляется вместе"],
+        ["contract_lines.contract_id", c.lines.length, "удаляется вместе"],
+        ["default_contracts.contract_id", c.defaultRefs || 0, "перевод на замену"],
+        ["elements.contract_id", linkedTo(c.id).length, "перевод на замену"],
+        ["status_history.contract_id", c.historyRecords || 0, "перевод на замену"],
+      ],
+      remove: (c) => {
+        // ON DELETE SET NULL у изделий — на практике недостижимо: ссылки к этому моменту уже переведены на замену.
+        data.elements.forEach((e) => { if (e.contract_id === c.id) e.contract_id = null; });
+        setRows("contracts", data.contracts.filter((x) => x.id !== c.id));
+      },
+    },
   };
 
-  function buildPlan(kind, key) {
+  function dictView(kind) {
     const view = DICT_KINDS[kind];
     if (!view) fail(404, `Неизвестный справочник: ${kind}`);
+    return view;
+  }
+  function dictRow(kind, key) {
+    const view = dictView(kind);
     if (!/^\s*[+-]?\d+\s*$/.test(String(key))) fail(422, "Неверный ключ записи");
     const row = view.load(Number(key));
     if (!row) fail(404, `${view.title}: запись не найдена`);
-    return {
-      kind, key: String(row.id), kind_title: view.title, label: row.name, parent_kind: null, refs: [],
-      cascade: view.cascade(row), checked: view.checked(row).map(([label, count, handled]) => ({ label, count, handled })),
-      blockers: view.blockers(row), children: [], needs_replacement: false, replaceable: false, mergeable: false,
-      adopt_title: null, _row: row,
-    };
+    return row;
   }
-  const planOut = ({ _row, ...rest }) => rest;
-  const planBlockers = (plan) => plan.blockers.map((b) => ({ ...b, owner: `${plan.kind_title} «${plan.label}»` }));
+
+  // Дерево: сама запись, её подчинённые, ссылки на каждом уровне. needs_replacement — ссылки есть у неё самой ИЛИ у
+  // кого-то из подчинённых (и замену вообще есть чем выбрать).
+  function buildPlan(kind, key) {
+    const view = dictView(kind);
+    const row = dictRow(kind, key);
+    const refs = view.refs ? view.refs(row) : [];
+    const children = (view.children ? view.children(row) : []).map(([k, id]) => buildPlan(k, id));
+    const replaceable = !!view.candidates;
+    const node = {
+      kind, key: String(row.id), kind_title: view.title, label: view.label(row), parent_kind: view.parentKind || null, refs,
+      cascade: view.cascade ? view.cascade(row) : [],
+      checked: [
+        ...view.checked(row).map(([label, count, handled]) => ({ label, count, handled })),
+        // «Неучтённая» ссылка (новая колонка без объяснения в реестре) держит удаление — см. шапку файла.
+        ...(row.unaccounted || []).map((u) => ({ label: u.label, count: u.count, handled: "НЕ УЧТЕНО" })),
+      ],
+      blockers: view.blockers ? view.blockers(row) : [], children,
+      needs_replacement: (refs.length > 0 || children.some((c) => c.needs_replacement)) && replaceable,
+      replaceable, mergeable: replaceable && !!view.adopt && children.length > 0, adopt_title: view.adoptTitle || null,
+    };
+    Object.defineProperty(node, "_row", { value: row, enumerable: false });
+    return node;
+  }
+  const allNodes = (node) => [node, ...node.children.flatMap(allNodes)];
+  function planBlockers(plan) {
+    const out = [];
+    for (const n of allNodes(plan)) {
+      const owner = `${n.kind_title} «${n.label}»`;
+      for (const b of n.blockers) out.push({ ...b, owner });
+      for (const c of n.checked) {
+        if (c.handled === "НЕ УЧТЕНО" && c.count) out.push({ label: `неучтённая ссылка ${c.label}`, count: c.count, owner });
+      }
+      if (n.needs_replacement === false && n.refs.length && !n.replaceable) for (const r of n.refs) out.push({ ...r, owner });
+    }
+    return out;
+  }
 
   route("GET", "/dictionaries/:kind/:key/delete-plan", (ctx) => {
     assertFeature(ctx.user, "dict_delete", "read");
     const plan = buildPlan(ctx.params.kind, ctx.params.key);
-    return { plan: planOut(plan), blockers: planBlockers(plan) };
+    return { plan, blockers: planBlockers(plan) };
   });
 
+  // Чем можно заменить запись key, если её ВЛАДЕЛЕЦ заменён на parent.
+  route("GET", "/dictionaries/:kind/candidates", (ctx) => {
+    assertFeature(ctx.user, "dict_delete", "read");
+    const key = queryValue(ctx, "key", { required: true });
+    const parent = queryValue(ctx, "parent");
+    const view = dictView(ctx.params.kind);
+    if (!view.candidates) return [];
+    return view.candidates(dictRow(ctx.params.kind, key), parent);
+  });
+
+  // Обход сверху вниз: замена указана и допустима (по списку кандидатов — он и есть иерархия владельцев).
+  function collectActions(node, replacements, ownerChoice, actions) {
+    const view = dictView(node.kind);
+    const target = replacements[`${node.kind}:${node.key}`];
+    if (node.needs_replacement) {
+      if (!target) fail(400, `Не выбрана замена: ${view.title} «${node.label}»`);
+      const allowed = new Set(view.candidates(dictRow(node.kind, node.key), ownerChoice).map((c) => c.key));
+      if (!allowed.size) {
+        fail(409, `Заменить нечем: у выбранного владельца нет другой записи «${view.title}». Заведите её и повторите удаление.`);
+      }
+      if (!allowed.has(target)) fail(400, `Замена для «${node.label}» не подходит выбранному владельцу — выберите из списка`);
+      if (node.refs.length) actions.push([node, dictRow(node.kind, target)]);
+    }
+    for (const child of node.children) collectActions(child, replacements, target, actions);
+  }
+  function removeBottomUp(node) {
+    for (const child of node.children) removeBottomUp(child);
+    dictView(node.kind).remove(dictRow(node.kind, node.key));
+  }
+
+  // Проверка → перевод ссылок на замену → удаление, всё в ОДНОЙ транзакции (при отказе — как было).
   route("POST", "/dictionaries/:kind/:key/delete", (ctx) => {
     assertFeature(ctx.user, "dict_delete", "write");
     const { values } = parse(ctx, DELETE_SPEC);
+    const coverageBefore = coverageAll();
     const plan = buildPlan(ctx.params.kind, ctx.params.key);
     const blocking = planBlockers(plan);
     if (blocking.length) {
       fail(409, "Удалить нельзя, за записью ещё стоят данные: "
         + blocking.map((b) => `${b.owner}: ${b.label} — ${b.count}`).join(", "));
     }
-    if (values.mode === "merge") fail(400, `У записи «${plan.kind_title}» нет подчинённых, которые можно перенести`);
-    DICT_KINDS[plan.kind].remove(plan._row);
-    return { deleted: [{ kind: plan.kind, label: plan.label }], moved: [] };
+    const summary = [];
+    transaction(() => {
+      if (values.mode === "merge") {
+        const view = dictView(plan.kind);
+        if (!view.adopt) fail(400, `У записи «${view.title}» нет подчинённых, которые можно перенести`);
+        const targetKey = values.replacements[`${plan.kind}:${plan.key}`];
+        const row = dictRow(plan.kind, plan.key);
+        const allowed = new Set(view.candidates(row, null).map((c) => c.key));
+        if (!targetKey || !allowed.has(targetKey)) fail(400, "Выберите запись, к которой перенести подчинённые");
+        const target = dictRow(plan.kind, targetKey);
+        const report = [];
+        view.adopt(row.id, target.id, report);
+        const moved = view.repoint ? view.repoint(row, target) : [];
+        summary.push({ kind: plan.kind, from: plan.label, to: view.label(target), moved, adopted: report });
+        // Удаляется ТОЛЬКО опустевшая запись: подчинённые уже уехали.
+        view.remove(dictRow(plan.kind, plan.key));
+      } else {
+        const actions = [];
+        collectActions(plan, values.replacements, null, actions);
+        for (const [node, target] of actions) {
+          const view = dictView(node.kind);
+          const moved = view.repoint(dictRow(node.kind, node.key), target);
+          summary.push({ kind: node.kind, from: node.label, to: view.label(target), moved });
+        }
+        removeBottomUp(plan);
+      }
+      // Перевод изделий на замену — тоже привязка: изделие держится за позицию спецификации.
+      assertNoRegression(data.contracts.map((c) => c.id), coverageBefore, "Перевод изделий на замену оставил бы их без позиции в контракте:");
+    });
+    // В режиме переноса удалена ОДНА запись — подчинённые уехали, а не исчезли.
+    const deleted = values.mode === "merge" ? [{ kind: plan.kind, label: plan.label }]
+      : allNodes(plan).map((n) => ({ kind: n.kind, label: n.label }));
+    return { deleted, moved: summary };
   });
 
   // ---- адресный классификатор (app/kladr.py) ----
@@ -1664,9 +2512,6 @@ function createServer(opts) {
     }
     return { objects: out, without_coords: without };
   });
-
-  // ---- заглушки (см. заголовок файла) ----
-  route("GET", "/counterparties", () => []);
 
   // ------------------------------ диспетчер ----------------------------------
 

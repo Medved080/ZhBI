@@ -23,9 +23,12 @@ export async function openApp({ perm, session, w = 1366, h = 768, query = "" } =
   iframe.src = `/tests/app.html?${q}`;
   document.getElementById("frames").append(iframe);
   await waitFor(() => iframe.contentDocument?.documentElement?.dataset.harness === "ready", { what: "загрузка стенда", timeout: 8000 });
-  const win = iframe.contentWindow;
-  const doc = iframe.contentDocument;
-  const ctl = win.__fake;
+  return makeApp(iframe.contentWindow, iframe.contentDocument, iframe.contentWindow.__fake, iframe);
+}
+
+// Помощники поверх ЛЮБОГО окна со стендом: iframe сценария или сама страница
+// (сцены для снимков, boot.js ?scene=).
+export function makeApp(win, doc, ctl, iframe = null) {
   const app = {
     win, doc, ctl, iframe,
     $: (sel, root = doc) => root.querySelector(sel),
@@ -98,7 +101,7 @@ export async function openApp({ perm, session, w = 1366, h = 768, query = "" } =
       b.click();
       await sleep(20);
     },
-    close() { iframe.remove(); },
+    close() { iframe?.remove(); },
   };
   return app;
 }

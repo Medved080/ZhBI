@@ -25,5 +25,21 @@ if (profile) ctl.setPermissions(profile);
 const failNext = params.get("failNext");
 if (failNext) { const { pattern, ...o } = JSON.parse(failNext); ctl.failNext(pattern, o); }
 
+// ?scene=<id> — довести экран до именованного состояния (scenes.js) для снимков.
+const sceneId = params.get("scene");
+let scene = null;
+if (sceneId) {
+  const { SCENES } = await import("/tests/scenes.js");
+  scene = SCENES[sceneId];
+  if (!scene) throw new Error(`Нет сцены «${sceneId}»`);
+  scene.pre?.(ctl);
+}
+
 await import("/static/v2/main.js");
+if (scene) {
+  const { makeApp } = await import("/tests/helpers.js");
+  try { await scene.open(makeApp(window, document, ctl)); }
+  catch (e) { document.documentElement.dataset.sceneError = String(e && e.message || e); }
+  document.documentElement.dataset.scene = "ready";
+}
 document.documentElement.dataset.harness = "ready";

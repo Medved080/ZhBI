@@ -50,8 +50,9 @@ export const tests = [
   {
     id: "PO-02", title: "Чтение падает: явная ошибка + «Повторить», не пустое дерево",
     async run(t) {
-      const a = await openApp({ query: failBoot({ pattern: "=/projects", method: "GET", status: 500, detail: "База недоступна" }) });
-      await waitFor(() => a.$(`${NAV}[data-section="projects-objects"]`), { what: "навигация" });
+      const a = await openApp();
+      await waitFor(() => a.$(`${NAV}[data-section="projects-objects"]`) && a.$("#ua-rows"), { what: "навигация и первый раздел" });
+      a.ctl.failNext("=/projects", { method: "GET", status: 500, detail: "База недоступна" });
       a.click(a.$(`${NAV}[data-section="projects-objects"]`));
       await waitFor(() => a.$("#po-retry"), { what: "«Повторить»" });
       t.has(text(a), "База недоступна", "причина видна");
@@ -280,10 +281,14 @@ export const tests = [
       await waitFor(() => a.$$(".v2-attach-row").length === 4, { what: "4 вложения после загрузки" });
       t.eq(a.ctl.count("POST", "/attachments"), 1, "один POST /attachments");
       t.ok(a.ctl.data.attachments.some((x) => x.filename === "qa-acc.txt"), "файл в фейковой БД");
-      // превью
-      const setBtn = a.$("[data-avatar-set]");
-      a.click(setBtn);
-      await waitFor(() => a.ctl.count("PUT", "/objects/3/avatar") === 1, { what: "PUT avatar" });
+      // превью: у объекта 3 оно уже назначено — снимаем, затем назначаем снова
+      t.ok(a.$("[data-avatar-unset]"), "у объекта 3 превью назначено (★)");
+      a.click(a.$("[data-avatar-unset]"));
+      await waitFor(() => a.ctl.count("PUT", "/objects/3/avatar") === 1, { what: "PUT avatar (снять)" });
+      await waitFor(() => a.$("[data-avatar-set]") && !a.$("[data-avatar-unset]"), { what: "превью снято" });
+      a.click(a.$("[data-avatar-set]"));
+      await waitFor(() => a.ctl.count("PUT", "/objects/3/avatar") === 2, { what: "PUT avatar (назначить)" });
+      await waitFor(() => a.$("[data-avatar-unset]"), { what: "превью назначено" });
       // удаление загруженного
       const rowsBefore = a.$$(".v2-attach-row").length;
       const row = a.$$(".v2-attach-row").find((r) => r.textContent.includes("qa-acc.txt"));
@@ -403,7 +408,7 @@ export const tests = [
         const a = await openApp();
         await openPo(a);
         await selectObject(a, 1);
-        await dirty(a, "#pf-description", " Z");
+        await dirty(a, "#pf-description", "Z");
         a.ctl.failNext("PATCH /objects/1", fail);
         a.click(a.$('[data-object="2"]'));
         await waitFor(() => a.dialog(), { what: "диалог" });
@@ -413,12 +418,12 @@ export const tests = [
         t.has(a.$("#po-status").textContent.toLowerCase(), expectText, `[${name}] ошибка видна в строке статуса сразу`);
         t.notHas(a.$("#po-status").textContent, "[object", `[${name}] нет [object Object]`);
         t.eq(a.$("#pf-name").value, a.ctl.data.objects.find((o) => o.id === 1).name, `[${name}] переход отменён`);
-        t.has(a.$("#pf-description").value, " Z", `[${name}] введённые данные целы`);
+        t.has(a.$("#pf-description").value, "Z", `[${name}] введённые данные целы`);
         t.ok(a.$("#po-save") && !a.$("#po-save").disabled, `[${name}] «Сохранить» доступна для повтора`);
         a.click(a.$("#po-save"));
         await waitFor(() => a.ctl.count("PATCH", "/objects/1") === 2, { what: "повтор" });
         await a.settle(120);
-        t.has(a.ctl.data.objects.find((o) => o.id === 1).description, " Z", `[${name}] повтор сохранил данные`);
+        t.has(a.ctl.data.objects.find((o) => o.id === 1).description, "Z", `[${name}] повтор сохранил данные`);
         a.close();
       }
     },
@@ -478,12 +483,12 @@ export const tests = [
       const a = await openApp();
       await openPo(a);
       await selectObject(a, 1);
-      await dirty(a, "#pf-description", " R");
+      await dirty(a, "#pf-description", "R");
       a.ctl.failNext("=/projects", { method: "GET", status: 500, detail: "Обновление недоступно" });
       a.click(a.$("#po-save"));
       await waitFor(() => a.$("#po-status").textContent.includes("обновить данные не удалось"), { what: "сообщение" });
       t.ok(a.$("#po-status-retry"), "кнопка «Повторить обновление»");
-      t.has(a.$("#pf-description").value, " R", "форма показывает подтверждённое сервером значение");
+      t.has(a.$("#pf-description").value, "R", "форма показывает подтверждённое сервером значение");
       a.click(a.$("#po-status-retry"));
       await waitFor(() => !a.$("#po-status-retry"), { what: "повторное обновление" });
       t.notHas(a.$("#po-status").textContent, "не удалось", "после успешного повтора предупреждения нет");

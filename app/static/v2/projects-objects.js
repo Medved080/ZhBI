@@ -412,7 +412,7 @@ export function mountProjectsObjects(container, ctx) {
         <button type="button" class="v2-tree-node v2-tree-project${sel ? " v2-tree-selected" : ""}" data-project="${p.id}">
           <span class="v2-tree-chevron">${expanded ? "▼" : "▶"}</span>
           <span class="v2-status-dot" data-dot="${p.status || "active"}"></span>
-          <span class="v2-tree-name">${escapeHtml(p.name)}</span>
+          <span class="v2-tree-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
           <span class="v2-tree-count">${p.objects_count} · ${p.elements_count}</span>
         </button></div>`);
       if (expanded) {
@@ -422,7 +422,7 @@ export function mountProjectsObjects(container, ctx) {
           rows.push(`<div class="v2-tree-row">
             <button type="button" class="v2-tree-node v2-tree-object${oSel ? " v2-tree-selected" : ""}" data-object="${o.id}">
               <span class="v2-status-dot" data-dot="${o.status || "active"}"></span>
-              <span class="v2-tree-name">${escapeHtml(o.name)}</span>
+              <span class="v2-tree-name" title="${escapeHtml(o.name)}">${escapeHtml(o.name)}</span>
               <span class="v2-tree-count">${o.elements_current || "пусто"}</span>
             </button></div>`);
         }
@@ -513,14 +513,16 @@ export function mountProjectsObjects(container, ctx) {
       <div id="po-attachments"><p class="v2-muted">Загрузка…</p></div>` : `
       <p class="v2-muted" style="margin:12px 0 0">Вложения станут доступны после первого сохранения.</p>`}
     `;
-    el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", markDirty));
-    el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => {
-      const key = { "pf-name": "name", "pf-status": "status", "pf-project": "project_id", "pf-kind": "kind",
-        "pf-smu": "smu_id", "pf-smu-director": "smu_director_id", "pf-responsible": "responsible_id",
-        "pf-smr-start": "smr_start_reported", "pf-media": "media_url",
-        "pf-lat": "lat", "pf-lon": "lon" }[elm.id];
-      if (key) state.draft[key] = elm.value;
-    }));
+    // Значение попадает в черновик и на input, и на change: раньше на input
+    // только ставился признак «изменено», а сам черновик обновлялся лишь при
+    // уходе фокуса — форма могла считаться изменённой при устаревшем черновике.
+    const FIELD_KEYS = { "pf-name": "name", "pf-status": "status", "pf-project": "project_id", "pf-kind": "kind",
+      "pf-smu": "smu_id", "pf-smu-director": "smu_director_id", "pf-responsible": "responsible_id",
+      "pf-smr-start": "smr_start_reported", "pf-media": "media_url",
+      "pf-lat": "lat", "pf-lon": "lon" };
+    const syncDraftField = (elm) => { const key = FIELD_KEYS[elm.id]; if (key) state.draft[key] = elm.value; };
+    el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", () => { syncDraftField(elm); markDirty(); }));
+    el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => syncDraftField(elm)));
     el.querySelector("#pf-description")?.addEventListener("input", (e) => { state.draft.description = e.target.value; });
     if (el.querySelector("#po-open-v1")) {
       el.querySelector("#po-open-v1").addEventListener("click", async () => {
