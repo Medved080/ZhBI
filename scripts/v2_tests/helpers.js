@@ -20,11 +20,22 @@ export async function openApp({ perm, session, w = 1366, h = 768, query = "" } =
   const q = new URLSearchParams(query);
   if (perm) q.set("perm", perm);
   if (session === false) q.set("session", "0");
-  const iframe = document.createElement("iframe");
-  iframe.style.cssText = `width:${w}px;height:${h}px;border:1px solid #bbb;background:#fff`;
-  iframe.src = `/tests/app.html?${q}`;
-  document.getElementById("frames").append(iframe);
-  await waitFor(() => iframe.contentDocument?.documentElement?.dataset.harness === "ready", { what: "загрузка стенда", timeout: 8000 });
+  // Загрузка стенда — инфраструктура, не продукт: при редком зависании страницы
+  // (нагрузка на машину) — один повтор с чистым iframe, а не ложный провал сценария.
+  let iframe = null;
+  for (let attempt = 1; ; attempt++) {
+    iframe = document.createElement("iframe");
+    iframe.style.cssText = `width:${w}px;height:${h}px;border:1px solid #bbb;background:#fff`;
+    iframe.src = `/tests/app.html?${q}`;
+    document.getElementById("frames").append(iframe);
+    try {
+      await waitFor(() => iframe.contentDocument?.documentElement?.dataset.harness === "ready", { what: "загрузка стенда", timeout: 20000 });
+      break;
+    } catch (e) {
+      iframe.remove();
+      if (attempt >= 2) throw e;
+    }
+  }
   const app = makeApp(iframe.contentWindow, iframe.contentDocument, iframe.contentWindow.__fake, iframe);
   // Любая необработанная ошибка страницы во время сценария — провал сценария.
   app.errors = iframe.contentWindow.__errors; // собирает boot.js с начала загрузки
