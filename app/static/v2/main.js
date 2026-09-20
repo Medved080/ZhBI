@@ -377,7 +377,7 @@ async function renderShell(user, permissions) {
       } else if (target.impl === "read" && target.read) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountReadScreen(content, {
-          screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else {
         document.title = `${target.title} — ЖБИ`;

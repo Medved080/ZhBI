@@ -2743,9 +2743,30 @@ function createServer(opts) {
     { id: 11, section_id: 1, section_code: "С01", section_name: "С01", level_id: 5, level_key: "этаж:1", floor: 1, kind: "надземный", level_name: "Этаж 1", level_sort: 1 },
     { id: 12, section_id: 1, section_code: "С01", section_name: "С01", level_id: 6, level_key: "этаж:2", floor: 2, kind: "надземный", level_name: "Этаж 2", level_sort: 2 },
     { id: 13, section_id: 2, section_code: "С02", section_name: "С02", level_id: 5, level_key: "этаж:1", floor: 1, kind: "надземный", level_name: "Этаж 1", level_sort: 1 }]; });
-  route("GET", "/objects/:id/block-works", (ctx) => { mfrObject(ctx); return { items: [
-    { id: 1, object_id: 4, block_id: 11, work_type_id: 7, "путь": "Строительство / Кладка", "код": "180-02-02", "название": "Кладка стен QA", unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: 1, plan_start: "2026-09-01", plan_end: "2026-09-20", forecast_start: null, forecast_end: null, deadline_label: "без сроков", percent: 0, status: "plan" },
-    { id: 2, object_id: 4, block_id: 12, work_type_id: 7, "путь": "Строительство / Кладка", "код": "180-02-03", "название": "Перегородки QA", unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: 2, plan_start: null, plan_end: null, forecast_start: null, forecast_end: null, deadline_label: "без сроков", percent: 40, status: "in_progress" }] }; });
+  // запланированные работы объекта МФР (data.settings.blockWorks {oid: [..]}); PATCH различает «не пришло» и null (как exclude_unset)
+  const worksOf = (oid) => ((data.settings.blockWorks ||= {})[oid] ||= [
+    { id: 1, object_id: oid, block_id: 11, work_type_id: 7, "путь": "Строительство / Кладка", "код": "180-02-02", "название": "Кладка стен QA", unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: 1, plan_start: "2026-09-01", plan_end: "2026-09-20", forecast_start: null, forecast_end: null, note: null, updated_at: "2026-09-01 10:00:00", retired_at: null, deadline_label: "без сроков", percent: 0, status: "plan" },
+    { id: 2, object_id: oid, block_id: 12, work_type_id: 7, "путь": "Строительство / Кладка", "код": "180-02-03", "название": "Перегородки QA", unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: 2, plan_start: null, plan_end: null, forecast_start: null, forecast_end: null, note: null, updated_at: "2026-09-01 10:00:00", retired_at: null, deadline_label: "без сроков", percent: 40, status: "in_progress" }]);
+  let bwTick = 0;
+  route("GET", "/objects/:id/block-works", (ctx) => { const oid = mfrObject(ctx); return { items: deepClone(worksOf(oid)) }; });
+  route("GET", "/objects/:id/block-works/:bw", (ctx) => {
+    const oid = mfrObject(ctx); const w = worksOf(oid).find((x) => x.id === Number(ctx.params.bw));
+    if (!w) fail(404, "Запланированная работа не найдена.");
+    return deepClone(w);
+  });
+  route("PATCH", "/objects/:id/block-works/:bw", (ctx) => {
+    const oid = mfrObject(ctx);
+    if (FEATURE_BY_KEY.has("work_progress")) assertFeature(ctx.user, "work_progress", "write", oid);
+    const w = worksOf(oid).find((x) => x.id === Number(ctx.params.bw));
+    if (!w) fail(404, "Запланированная работа не найдена.");
+    const b = ctx.body || {};
+    let changed = false;
+    for (const f of ["plan_start", "plan_end", "note", "forecast_start", "forecast_end"]) {
+      if (f in b && (b[f] ?? null) !== (w[f] ?? null)) { w[f] = b[f] ?? null; changed = true; }
+    }
+    if (changed) w.updated_at = `2026-09-21 11:00:${String(++bwTick % 60).padStart(2, "0")}`;
+    return deepClone(w);
+  });
   route("GET", "/objects/:id/block-work-types", (ctx) => { mfrObject(ctx); return { options: [{ id: 7, path: "Строительство / Кладка / Стены", code: "180-02-02", name: "Кладка стен QA", planning_track_code: "3", sort_order: 1 }] }; });
   route("GET", "/objects/:id/fact-journal", (ctx) => { mfrObject(ctx); return { items: [
     { id: 42, report_date: "2026-09-14", block_id: 11, section_id: 1, section_code: "С01", level_id: 5, level_name: "Этаж 1", ops_count: 2, created_at: "2026-09-14 19:30:34", updated_at: "2026-09-14 19:36:09", created_by: "QA-Админов", updated_by: "QA-Админов" }] }; });

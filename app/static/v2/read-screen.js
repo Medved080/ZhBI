@@ -8,6 +8,7 @@ import { ApiError } from "./api.js";
 import { STATUS_LABEL } from "./registry.js";
 import { esc, linkList } from "./screen-view.js";
 import { REPORT_RENDERERS, bindReport } from "./reports.js";
+import { mountBlockWorkForm } from "./block-work-form.js";
 
 const RENDER_LIMIT = 500;
 
@@ -101,11 +102,14 @@ function errorText(err) {
   return String(err?.message || err);
 }
 
-export function mountReadScreen(el, { screen, structure, objectId, api, groupTitle }) {
+export function mountReadScreen(el, { screen, structure, objectId, api, groupTitle, rights }) {
   el.className = "v2-page";
   const sections = screen.read.sections;
   let dead = false;
   let active = 0;
+  let editor = null; // открытая карточка строки (правка запланированной работы)
+  const canEditRows = (sec) => !!sec.rowEdit && (!!rights?.system_admin || rights?.features?.[sec.rowEdit.feature] === "write");
+  async function closeEditor() { if (editor) { if (!(await editor.guard())) return false; editor.destroy(); editor = null; } return true; }
   const todayIso = () => { const d = new Date(); const p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
   // Границы дня: журнал хранит время в UTC, а человек выбирает дни по местным часам (та же функция, что в V1).
   const boundUtc = (dateStr, end) => {
@@ -138,6 +142,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
         <span class="v2-muted" id="rd-count" role="status" aria-live="polite"></span>
         <button type="button" class="v2-btn" id="rd-refresh">Обновить</button>
       </div>
+      <div id="rd-editor"></div>
       <div id="rd-body"></div>
     </div>`;
   const $ = (s) => el.querySelector(s);
@@ -243,10 +248,16 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       return;
     }
     body.innerHTML = `${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${RENDER_LIMIT} из ${rows.length} — уточните поиск.</p>` : ""}
-      <div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${sec.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}</tr></thead>
-      <tbody>${shown.map((r) => `<tr>${sec.columns.map((c) => `<td>${cellHtml(c, r, s.data)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      <div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${sec.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}${canEditRows(sec) ? "<th></th>" : ""}</tr></thead>
+      <tbody>${shown.map((r) => `<tr>${sec.columns.map((c) => `<td>${cellHtml(c, r, s.data)}</td>`).join("")}${canEditRows(sec) ? `<td><button type="button" class="v2-btn" data-row-edit="${esc(r.id)}" aria-label="Открыть карточку работы ${esc(r["код"] ?? r.id)}">Сроки</button></td>` : ""}</tr>`).join("")}</tbody></table></div>
       ${sec.paging ? `<div class="v2-bar"><button type="button" class="v2-btn" id="rd-prev" ${s.offset <= 0 ? "disabled" : ""}>← Назад</button>
         <button type="button" class="v2-btn" id="rd-next" ${s.total != null && s.offset + s.rows.length >= s.total ? "disabled" : ""}>Дальше →</button></div>` : ""}`;
+    body.querySelectorAll("[data-row-edit]").forEach((b) => b.addEventListener("click", async () => {
+      if (!(await closeEditor())) return;
+      const host = $("#rd-editor");
+      editor = mountBlockWorkForm(host, { api, objectId, id: b.dataset.rowEdit, canWrite: canEditRows(sec), onSaved: () => load(active), onClose: () => closeEditor() });
+      host.scrollIntoView?.({ block: "nearest" });
+    }));
     if (sec.paging) {
       $("#rd-prev")?.addEventListener("click", () => { s.offset = Math.max(0, s.offset - sec.paging.limit); load(active); });
       $("#rd-next")?.addEventListener("click", () => { s.offset += sec.paging.limit; load(active); });
@@ -281,7 +292,8 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     }));
   }
 
-  el.querySelectorAll(".v2-read-tab").forEach((b) => b.addEventListener("click", () => {
+  el.querySelectorAll(".v2-read-tab").forEach((b) => b.addEventListener("click", async () => {
+    if (!(await closeEditor())) return;
     active = Number(b.dataset.tab);
     el.querySelectorAll(".v2-read-tab").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
     searchInput.value = st[active].search;
@@ -303,5 +315,5 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   });
   refreshBtn.addEventListener("click", () => load(active));
   load(0);
-  return { hasUnsavedChanges: () => false, guardLeave: async () => true, destroy() { dead = true; clearTimeout(searchTimer); } };
+  return { hasUnsavedChanges: () => !!editor?.dirty(), guardLeave: async () => (editor ? editor.guard() : true), destroy() { dead = true; clearTimeout(searchTimer); editor?.destroy(); } };
 }
