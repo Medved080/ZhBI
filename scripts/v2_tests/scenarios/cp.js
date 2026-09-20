@@ -144,6 +144,23 @@ export const tests = [
     },
   },
   {
+    id: "CP-M-01", title: "Поля карточки: ограничения длины (код ≤10, ИНН ≤12, КПП ≤9, ОГРН ≤15) и цифровой ввод; порядок Tab по разметке",
+    async run(t) {
+      const a = await openApp();
+      await openCp(a);
+      await openCard(a, 7);
+      await waitFor(() => a.$("#cpf-short"), { what: "форма" });
+      t.eq(a.$("#cpf-code").maxLength, 10, "код — не более 10 символов");
+      t.eq(a.$("#cpf-inn").maxLength, 12, "ИНН — не более 12");
+      t.eq(a.$("#cpf-kpp").maxLength, 9, "КПП — не более 9");
+      t.eq(a.$("#cpf-ogrn").maxLength, 15, "ОГРН — не более 15");
+      t.ok(["cpf-inn", "cpf-kpp", "cpf-ogrn"].every((id) => a.$(`#${id}`).inputMode === "numeric"), "ИНН/КПП/ОГРН — цифровая клавиатура");
+      const order = a.$$("#cp-main-fields input, #cp-main-fields textarea, #cp-main-fields select").map((el) => el.id);
+      t.eq(order.slice(0, 3), ["cpf-code", "cpf-short", "cpf-full"], "порядок полей в разметке: Код, Краткое, Полное");
+      t.ok(a.$$("[tabindex]").every((el) => Number(el.getAttribute("tabindex")) <= 0), "положительных tabindex нет");
+    },
+  },
+  {
     id: "CP-M-02", title: "Новый контрагент без полного/краткого наименования: сообщение, запрос не уходит",
     async run(t) {
       const a = await openApp();
