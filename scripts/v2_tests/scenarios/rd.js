@@ -25,7 +25,9 @@ export const tests = [
       const a = await openApp({ home: true });
       const screens = await readScreens();
       t.ok(screens.length >= 20, `экранов чтения в реестре: ${screens.length}`);
-      for (const s of screens) {
+      await waitFor(() => a.$("#v2-object") && a.$$(NAV).length > 3, { what: "оболочка" });
+      const mfr = a.ctl.data.objects.find((o) => o.kind === "mfr");
+      const check = async (s) => {
         await waitFor(() => a.$(`${NAV}[data-section="${s.id}"]`), { what: `в навигации есть ${s.id}` });
         a.click(a.$(`${NAV}[data-section="${s.id}"]`));
         await waitFor(() => loaded(a) && a.$(".v2-screen h2")?.textContent.trim() === s.title, { what: `экран ${s.id}` });
@@ -33,6 +35,15 @@ export const tests = [
         const shown = a.$$("#rd-body tbody tr").length + a.$$("#rd-body dt").length;
         t.ok(shown > 0 || /нет|пуст|Записей нет|не найден/i.test(body(a).textContent), `${s.id}: показаны строки/поля или явное «пусто» (${shown})`);
         t.ok(a.$(`a[data-v1-link]`), `${s.id}: есть переход в текущий интерфейс`);
+      };
+      // экраны учёта по блокам есть только у объекта МФР: сначала всё, что доступно на исходном объекте, затем — на МФР
+      const later = [];
+      for (const s of screens) { if (a.$(`${NAV}[data-section="${s.id}"]`)) await check(s); else later.push(s); }
+      t.ok(later.length === 0 || !!mfr, "для экранов, скрытых на исходном объекте, в стенде есть объект МФР");
+      if (later.length && mfr) {
+        a.setValue(a.$("#v2-object"), String(mfr.id));
+        await waitFor(() => a.$(`${NAV}[data-section="${later[0].id}"]`), { what: "экраны МФР доступны после смены объекта" });
+        for (const s of later) await check(s);
       }
       // отчёты запрашиваются POST-ом, но это чтение: разрешён только /reports/*
       const writes = a.ctl.log.filter((e) => e.method !== "GET" && !(e.method === "POST" && /^\/reports\/[a-z0-9-]+$/.test(e.path)));

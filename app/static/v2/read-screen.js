@@ -131,11 +131,14 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
 
   function urlFor(sec, s) {
     const p = new URLSearchParams(sec.query || {});
-    if (sec.object) p.set("object_id", String(objectId));
+    // объект в пути (`/objects/{object}/…`) — подставляется в адрес; иначе параметром запроса
+    const inPath = sec.endpoint.includes("{object}");
+    if (sec.object && !inPath) p.set("object_id", String(objectId));
     if (sec.paging) { p.set("limit", String(sec.paging.limit)); p.set("offset", String(s.offset)); }
     if (sec.serverSearch && s.search.trim()) p.set(sec.serverSearch, s.search.trim());
     const q = p.toString();
-    return sec.endpoint + (q ? (sec.endpoint.includes("?") ? "&" : "?") + q : "");
+    const base = sec.endpoint.replace("{object}", String(objectId));
+    return base + (q ? (base.includes("?") ? "&" : "?") + q : "");
   }
 
   async function load(i) {

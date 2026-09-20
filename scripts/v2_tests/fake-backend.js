@@ -2694,6 +2694,18 @@ function createServer(opts) {
     return { status: "ok" };
   });
   route("GET", "/training/ratings", () => ({ users: [{ id: 1, name: "QA-Админов", position: "QA", rating: { attempts: 2, best: 18, total: 20 } }, { id: 2, name: "QA-Второй", position: null, rating: null }] }));
+  // ---- учёт по блокам объекта МФР (чтение): форма ответов — как у настоящего backend ----
+  const mfrObject = (ctx) => { const id = Number(ctx.params.id); if (!objectById(id)) fail(404, "Объект не найден"); return id; };
+  route("GET", "/objects/:id/blocks", (ctx) => { mfrObject(ctx); return [
+    { id: 11, section_id: 1, section_code: "С01", section_name: "С01", level_id: 5, level_key: "этаж:1", floor: 1, kind: "надземный", level_name: "Этаж 1", level_sort: 1 },
+    { id: 12, section_id: 1, section_code: "С01", section_name: "С01", level_id: 6, level_key: "этаж:2", floor: 2, kind: "надземный", level_name: "Этаж 2", level_sort: 2 },
+    { id: 13, section_id: 2, section_code: "С02", section_name: "С02", level_id: 5, level_key: "этаж:1", floor: 1, kind: "надземный", level_name: "Этаж 1", level_sort: 1 }]; });
+  route("GET", "/objects/:id/block-works", (ctx) => { mfrObject(ctx); return { items: [
+    { id: 1, object_id: 4, block_id: 11, work_type_id: 7, "путь": "Строительство / Кладка", "код": "180-02-02", "название": "Кладка стен QA", unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: 1, plan_start: "2026-09-01", plan_end: "2026-09-20", forecast_start: null, forecast_end: null, deadline_label: "без сроков", percent: 0, status: "plan" },
+    { id: 2, object_id: 4, block_id: 12, work_type_id: 7, "путь": "Строительство / Кладка", "код": "180-02-03", "название": "Перегородки QA", unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: 2, plan_start: null, plan_end: null, forecast_start: null, forecast_end: null, deadline_label: "без сроков", percent: 40, status: "in_progress" }] }; });
+  route("GET", "/objects/:id/block-work-types", (ctx) => { mfrObject(ctx); return { options: [{ id: 7, path: "Строительство / Кладка / Стены", code: "180-02-02", name: "Кладка стен QA", planning_track_code: "3", sort_order: 1 }] }; });
+  route("GET", "/objects/:id/fact-journal", (ctx) => { mfrObject(ctx); return { items: [
+    { id: 42, report_date: "2026-09-14", block_id: 11, section_id: 1, section_code: "С01", level_id: 5, level_name: "Этаж 1", ops_count: 2, created_at: "2026-09-14 19:30:34", updated_at: "2026-09-14 19:36:09", created_by: "QA-Админов", updated_by: "QA-Админов" }] }; });
   // ---- отчёты (POST только читает; форма ответов — как у настоящего backend) ----
   const reportBody = (ctx) => { const b = ctx.body || {}; if (!b.object_id) fail(422, "object_id: обязательное поле"); return b; };
   route("POST", "/reports/status", (ctx) => {
@@ -2729,6 +2741,19 @@ function createServer(opts) {
       finish: { montage: { plan: "2026-12-30", forecast: "2027-01-12", deviation_days: 13 } } };
   });
 
+  route("POST", "/reports/linear-track", (ctx) => {
+    reportBody(ctx);
+    return { title: "Линейный трек", object_id: ctx.body.object_id, count: 2, rows: [
+      { id: 1, row_kind: "оп", code: "130-01-01", wbs: ["Площадка", "Подготовка", "Сети"], unit: "компл", note: null, track_code: "компл", track_name: "" },
+      { id: 2, row_kind: "оп", code: "130-01-02", wbs: ["Площадка", "Подготовка", "ВЛЭП"], unit: "компл", note: null, track_code: "компл", track_name: "Комплекс" }] };
+  });
+  route("POST", "/reports/block-schedule", (ctx) => {
+    reportBody(ctx);
+    const row = (id, name, st, pct) => ({ id, object_id: 4, block_id: 11, work_type_id: 7, "код": `180-02-0${id}`, "название": name, unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: id, plan_start: "2026-09-01", plan_end: "2026-09-20", forecast_start: null, forecast_end: null, deadline_label: "без сроков", percent: pct, status: st });
+    return { title: "График работ по блокам", object_id: ctx.body.object_id, group_by: ctx.body.group_by, view: ctx.body.view, today: "2026-09-20", elements: 2,
+      rows: [{ label: "Кладка QA", level: 0, gkey: "3", children: [], rows: [row(1, "Кладка стен QA", "plan", 0), row(2, "Перегородки QA", "in_progress", 40)], agg: {} }],
+      total: { "всего": 2, "выполнено": 0, "доля_выполненных": 0, "среднее_отклонение": null, "отстают": 0 } };
+  });
   route("POST", "/reports/my-work", (ctx) => {
     const b = reportBody(ctx);
     const rows = Array.from({ length: 3 }, (_, i) => ({ id: i + 1, at: "2026-09-20 10:00:00.000", user_id: 1, user_name: "QA-Админов", action: "smu_create", action_title: "СМУ создано", entity_type: "smu", entity_id: i, item: `СМУ-${i}`, old_text: "", new_text: "новое", element: null }));

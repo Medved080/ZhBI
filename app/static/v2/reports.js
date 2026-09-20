@@ -125,7 +125,32 @@ function myworkReport(data) {
     ${rows.length ? tableHtml([{ key: "at_text", label: "Время" }, { key: "user_name", label: "Пользователь" }, { key: "action_title", label: "Действие" }, { key: "item", label: "Что" }, { key: "old_text", label: "Было" }, { key: "new_text", label: "Стало" }], rows, { cap: 300 }) : `<p class="v2-muted">За период событий нет.</p>`}`;
 }
 
-export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport, mywork: myworkReport };
+// ---- «Линейный трек»: список позиций WBS объекта без привязки к блоку (только просмотр)
+function linearTrackReport(data) {
+  const rows = (data.rows || []).map((r) => ({ ...r, wbs_text: (r.wbs || []).join(" › "), track_text: r.track_name || r.track_code || "" }));
+  return `<p class="v2-muted" role="status">Позиций: ${esc(num(data.count ?? rows.length))}</p>
+    ${rows.length ? tableHtml([{ key: "code", label: "Код" }, { key: "row_kind", label: "Вид строки" }, { key: "wbs_text", label: "Путь в WBS" }, { key: "unit", label: "Ед." }, { key: "track_text", label: "Трек" }], rows, { cap: 400 }) : `<p class="v2-muted">Позиций нет.</p>`}`;
+}
+
+// ---- «График работ по блокам» (вид «таблица»): группы → запланированные работы с планом, прогнозом и отклонением
+const BW_STATUS = { plan: "план", in_progress: "в работе", done: "выполнено" };
+const BW_COLS = [{ key: "код", label: "Код" }, { key: "название", label: "Работа" }, { key: "section_code", label: "Секция" }, { key: "level_floor", label: "Этаж" },
+  { key: "plan_start", label: "План: начало", kind: "date" }, { key: "plan_end", label: "План: конец", kind: "date" },
+  { key: "forecast_start", label: "Прогноз: начало", kind: "date" }, { key: "forecast_end", label: "Прогноз: конец", kind: "date" },
+  { key: "deadline_label", label: "Сроки" }, { key: "percent", label: "%", kind: "num" }, { key: "status_text", label: "Статус" }];
+function bsGroup(g) {
+  const rows = (g.rows || []).map((r) => ({ ...r, status_text: BW_STATUS[r.status] || r.status || "" }));
+  const kids = (g.children || []).map(bsGroup).join("");
+  return `<h3 class="v2-report-h">${esc(g.label)} <span class="v2-muted">· работ: ${rows.length}</span></h3>${rows.length ? tableHtml(BW_COLS, rows, { cap: 300 }) : ""}${kids}`;
+}
+function blockScheduleReport(data) {
+  const t = data.total || {};
+  const pct = (v) => (v == null ? "—" : `${esc(num(Math.round(v * 1000) / 10))} %`);
+  return `<p class="v2-muted" role="status">Всего работ: ${esc(num(t["всего"]))} · выполнено: ${esc(num(t["выполнено"]))} (${pct(t["доля_выполненных"])}) · отстают: ${esc(num(t["отстают"]))} · среднее отклонение: ${t["среднее_отклонение"] == null ? "—" : esc(num(t["среднее_отклонение"]))} · на ${esc(dateRu(data.today))}</p>
+    ${(data.rows || []).length ? (data.rows || []).map(bsGroup).join("") : `<p class="v2-muted">Запланированных работ нет.</p>`}`;
+}
+
+export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport, mywork: myworkReport, linear: linearTrackReport, blocksched: blockScheduleReport };
 
 // Взаимодействие: сворачивание узлов дерева, страницы перечня. Возвращает true, если надо перерисовать.
 export function bindReport(name, root, state, repaint) {

@@ -18,6 +18,9 @@ const createdApps = [];
 
 export async function openApp({ perm, session, w = 1366, h = 768, query = "", home = false } = {}) {
   const q = new URLSearchParams(query);
+  // sessionStorage общее у всех iframe одного источника: выбранный в шапке объект и свёрнутые группы навигации из
+  // предыдущего сценария не должны влиять на следующий
+  try { sessionStorage.removeItem("v2.objectId"); sessionStorage.removeItem("v2.navCollapsed"); } catch (e) { /* нет доступа — не страшно */ }
   if (perm) q.set("perm", perm);
   if (session === false) q.set("session", "0");
   // Загрузка стенда — инфраструктура, не продукт: при редком зависании страницы
