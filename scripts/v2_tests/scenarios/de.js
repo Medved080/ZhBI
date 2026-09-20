@@ -208,4 +208,43 @@ export const tests = [
       t.ok(a.ctl.log.some((e) => e.path === `/dictionaries/individual/${row.id}/delete`), "удаление по виду individual");
     },
   },
+  {
+    id: "DE-11", title: "Переименование в уже существующее имя (409): текст сервера, правка остаётся открытой, запись не менялась",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await open(a);
+      const [r0, r1] = a.ctl.data.smu;
+      a.click(a.$(`#de-body tr[data-id="${r0.id}"] [data-act="rename"]`));
+      await waitFor(() => a.$("#de-edit-input"), { what: "поле правки" });
+      await a.type(a.$("#de-edit-input"), r1.name, { clear: true });
+      a.click(a.$('[data-act="save"]'));
+      await waitFor(() => /уже есть/.test(a.$("#de-status").textContent), { what: "отказ по дублю" });
+      t.ok(a.$("#de-edit-input"), "поле правки осталось открытым");
+      t.eq(a.$("#de-edit-input").value, r1.name, "введённое не потеряно");
+      t.eq(a.ctl.data.smu.find((r) => r.id === r0.id).name, r0.name, "на сервере имя прежнее");
+    },
+  },
+  {
+    id: "DE-12", title: "Запись удалили в другом месте: переименование и удаление (404) — список обновляется, понятное сообщение, без ложного успеха",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await open(a);
+      const row = a.ctl.data.smu[0];
+      a.click(a.$(`#de-body tr[data-id="${row.id}"] [data-act="rename"]`));
+      await waitFor(() => a.$("#de-edit-input"), { what: "поле правки" });
+      await a.type(a.$("#de-edit-input"), "Новое имя", { clear: true });
+      a.ctl.data.smu.splice(a.ctl.data.smu.indexOf(row), 1); // кто-то удалил запись
+      a.click(a.$('[data-act="save"]'));
+      await waitFor(() => /уже удалена/.test(a.$("#de-status").textContent), { what: "сообщение об удалении" });
+      t.ok(!a.$$("#de-body tbody tr").some((tr) => tr.dataset.id === String(row.id)), "удалённой записи в списке нет");
+      t.ok(!/Переименовано/.test(a.$("#de-status").textContent), "ложного успеха нет");
+      const row2 = a.ctl.data.smu[0];
+      a.click(a.$(`#de-body tr[data-id="${row2.id}"] [data-act="delete"]`));
+      await waitFor(() => a.dialog(), { what: "подтверждение" });
+      a.ctl.data.smu.splice(a.ctl.data.smu.indexOf(row2), 1); // и эту тоже удалили, пока подтверждали
+      await a.answerDialog("Удалить");
+      await waitFor(() => /уже удалена/.test(a.$("#de-status").textContent), { what: "удаление уже удалённой" });
+      t.ok(!a.$$("#de-body tbody tr").some((tr) => tr.dataset.id === String(row2.id)), "список обновлён");
+    },
+  },
 ];
