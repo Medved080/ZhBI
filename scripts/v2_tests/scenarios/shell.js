@@ -97,7 +97,10 @@ export const tests = [
       t.ok(a.$$(".v2-card").length >= 6, "на начальной странице карточки групп");
       const chips = (text) => a.$$(".v2-card-list .v2-chip").filter((c) => c.textContent.trim() === text).length;
       t.eq(chips("в V2"), 3, "пометка «в V2» — ровно у трёх перенесённых разделов");
-      t.eq(chips("правка"), 3, "пометка «правка» — у трёх редактируемых экранов (СМУ, физлица, порог опоздания)");
+      const reg = await (await fetch("/static/v2/screens.json", { cache: "no-cache" })).json();
+      const editable = reg.screens.filter((s) => ["dict-edit", "setting-edit", "color-edit", "prefix-edit"].includes(s.impl)).length;
+      t.ok(editable >= 6, `в реестре редактируемых экранов: ${editable}`);
+      t.eq(chips("правка"), editable, "пометка «правка» — ровно у экранов с правкой в V2 (по реестру)");
       t.ok(a.$(`.v2-card-list a[data-screen-link="contracts"]`), "экран, не перенесённый целиком, тоже достижим с начальной страницы");
     },
   },
