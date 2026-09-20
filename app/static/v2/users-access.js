@@ -258,8 +258,10 @@ export function mountUsersAccess(container, ctx) {
   // свою вкладку, и итог зависит от того, чей render() дорисовался
   // последним (нашлось при проверке двойных кликов).
   let navGuardBusy = false;
+  const NAV_BUSY_TEXT = "Идёт загрузка — переход станет доступен после ответа сервера";
   async function withNavGuard(fn) {
-    if (navGuardBusy) return;
+    // Клик во время незавершённого перехода/чтения не пропадает молча.
+    if (navGuardBusy) { status.textContent = NAV_BUSY_TEXT; return; }
     // Issue 2.2 (медленная сеть): пока идёт ЛЮБАЯ запись (роли, профиль,
     // доступ — api.js считает их все разом), смена вкладки/записи/роли не
     // должна выполняться — иначе результат операции легко потерять из
@@ -267,7 +269,10 @@ export function mountUsersAccess(container, ctx) {
     // saveRolesDraftOrThrow ниже — снимок, а не поголовная очистка).
     if (api.hasPendingWrites()) return;
     navGuardBusy = true;
-    try { await fn(); } finally { navGuardBusy = false; }
+    try { await fn(); } finally {
+      navGuardBusy = false;
+      if (status.textContent === NAV_BUSY_TEXT) status.textContent = "";
+    }
   }
 
   // ---------- каркас: заголовок раздела, вкладки, тело и подвал — общая
@@ -1270,7 +1275,7 @@ export function mountUsersAccess(container, ctx) {
       await render();
     }
     el.innerHTML = `<div class="v2-inline" style="margin-bottom:14px">
-      <input id="role-new-name" placeholder="Название роли">
+      <input id="role-new-name" aria-label="Название новой роли" placeholder="Название роли">
       ${btn("Создать", 'id="role-new-submit"', true)}${btn("Отмена", 'id="role-new-cancel"')}
       <span class="v2-auth-error" id="role-new-error"></span></div>`;
     el.querySelector("#role-new-name").addEventListener("input", () =>
@@ -1333,7 +1338,7 @@ export function mountUsersAccess(container, ctx) {
           return `
           <div class="v2-perm${dirty ? " v2-perm-dirty" : ""}">
             <div>${escapeHtml(f.title)}<small>${escapeHtml(f.scope_label || "")}</small></div>
-            <div class="v2-seg" aria-label="${escapeHtml(f.title)}">
+            <div class="v2-seg" role="group" aria-label="${escapeHtml(f.title)}">
               ${LEVELS.map((lv) => `<button data-perm="${f.key}" data-level="${lv}" aria-pressed="${level === lv}" ${canWriteRoles && !state.rolesSaving ? "" : "disabled"}>${LEVEL_LABELS[lv]}</button>`).join("")}
             </div>
           </div>`;
@@ -1387,7 +1392,7 @@ export function mountUsersAccess(container, ctx) {
       await render();
     }
     host.innerHTML = `<div class="v2-inline" style="margin-bottom:14px">
-      <input id="role-rename-name" value="${escapeHtml(role.name)}">
+      <input id="role-rename-name" aria-label="Новое название роли" value="${escapeHtml(role.name)}">
       ${btn("Сохранить", 'id="role-rename-submit"', true)}${btn("Отмена", 'id="role-rename-cancel"')}
       <span class="v2-auth-error" id="role-rename-error"></span></div>`;
     host.querySelector("#role-rename-name").addEventListener("input", () =>
@@ -1559,14 +1564,22 @@ export function mountUsersAccess(container, ctx) {
     await loadCheck();
   }
 
+  // Номер последнего запроса проверки: ответ на прежний выбор пользователя/
+  // объекта, пришедший ПОЗЖЕ актуального, не должен затирать экран.
+  let checkSeq = 0;
   async function loadCheck() {
     const el = body.querySelector("#chk-result");
     if (!el) return;
+    const seq = ++checkSeq;
     el.innerHTML = `<p class="v2-muted">Загрузка…</p>`;
     const qs = state.check.objectId ? `?object_id=${state.check.objectId}` : "";
     let data;
     try { data = await api.get(`/users/${state.check.userId}/rights-matrix${qs}`); }
-    catch (err) { el.innerHTML = `<p class="v2-note"></p>`; el.querySelector("p").textContent = err.detail || "Не удалось получить права"; return; }
+    catch (err) {
+      if (seq !== checkSeq || !el.isConnected) return;
+      el.innerHTML = `<p class="v2-note"></p>`; el.querySelector("p").textContent = err.detail || "Не удалось получить права"; return;
+    }
+    if (seq !== checkSeq || !el.isConnected) return;
     if (data.system_admin) {
       el.innerHTML = `<p class="v2-note">Полный доступ: администратор сервиса. Назначения на объектах его не ограничивают.</p>`;
       return;

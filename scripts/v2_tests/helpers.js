@@ -64,6 +64,23 @@ export async function openApp({ perm, session, w = 1366, h = 768, query = "" } =
       }
       return { lostFocusAt: lost, stillFocused: doc.activeElement === el };
     },
+    // Backspace n раз от текущей каретки (с проверкой, что поле сохранило фокус).
+    async backspace(el, n = 1) {
+      el.focus();
+      const lost = [];
+      for (let i = 0; i < n; i++) {
+        if (doc.activeElement !== el) { lost.push(i); el.focus?.(); }
+        el.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+        const start = el.selectionStart ?? el.value.length, end = el.selectionEnd ?? el.value.length;
+        const from = start === end ? Math.max(0, start - 1) : start;
+        el.value = el.value.slice(0, from) + el.value.slice(end);
+        try { el.setSelectionRange(from, from); } catch (e) { /* не текстовое поле */ }
+        el.dispatchEvent(new win.InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+        await sleep(0);
+      }
+      return { lostFocusAt: lost, stillFocused: doc.activeElement === el };
+    },
+    select(el, start, end = start) { el.focus(); el.setSelectionRange(start, end); },
     setValue(el, value, evt = "change") {
       el.value = value;
       el.dispatchEvent(new win.Event(evt === "change" ? "input" : evt, { bubbles: true }));

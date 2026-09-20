@@ -74,7 +74,8 @@ export const tests = [
       await makeUaDirty(a);
       a.click(a.$(`${NAV}[data-section="projects-objects"]`));
       await waitFor(() => a.dialog(), { what: "диалог несохранённого" });
-      t.has(a.dialog().textContent, "несохранённ", "диалог про несохранённые изменения");
+      t.eq(a.$$(".v2-dialog button").map((b) => b.textContent.trim()), ["Остаться", "Не сохранять", "Сохранить и продолжить"], "диалог несохранённого: три варианта ответа");
+      t.eq(a.doc.activeElement.textContent.trim(), "Остаться", "начальный фокус — на безопасном «Остаться»");
       await a.answerDialog("Остаться");
       t.eq(pressed(a), ["users-access"], "«Остаться» — раздел не сменился");
       t.eq(a.$("#nu-login").value, "qa_ivanov", "введённые данные целы");

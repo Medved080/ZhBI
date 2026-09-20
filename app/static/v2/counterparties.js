@@ -346,10 +346,15 @@ export function mountCounterparties(container, ctx) {
   }
 
   let navGuardBusy = false;
+  const NAV_BUSY_TEXT = "Идёт загрузка — переход станет доступен после ответа сервера";
   async function withNavGuard(fn) {
-    if (navGuardBusy || api.hasPendingWrites()) return;
+    if (api.hasPendingWrites()) return; // причина уже показана в шапке (main.js)
+    if (navGuardBusy) { status.textContent = NAV_BUSY_TEXT; return; }
     navGuardBusy = true;
-    try { await fn(); } finally { navGuardBusy = false; }
+    try { await fn(); } finally {
+      navGuardBusy = false;
+      if (status.textContent === NAV_BUSY_TEXT) status.textContent = "";
+    }
   }
 
   // Раздел 3: у карточки контрагента и у рабочего пространства контракта —
