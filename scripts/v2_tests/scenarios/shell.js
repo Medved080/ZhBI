@@ -220,12 +220,17 @@ export const tests = [
       // и при успешном переходе без dirty — монтируется один раз
       const b = await openApp();
       await waitFor(() => b.$$(NAV).length === 3, { what: "навигация" });
+      // Замер «до» — только когда стартовые чтения раздела «Пользователи» закончились (счётчик не растёт 300 мс):
+      // иначе запоздавший стартовый GET /projects засчитывался переходу и тест краснел под нагрузкой.
+      let stable = b.ctl.count("GET", "/projects");
+      for (let i = 0; i < 20; i++) { await b.settle(300); const now = b.ctl.count("GET", "/projects"); if (now === stable) break; stable = now; }
       const before = b.ctl.count("GET", "/projects");
       const nav = b.$(`${NAV}[data-section="projects-objects"]`);
       for (let i = 0; i < 5; i++) b.click(nav);
       await waitFor(() => pressed(b)[0] === "projects-objects", { what: "переход" });
       await b.settle(150);
-      t.ok(b.ctl.count("GET", "/projects") - before <= 2, "раздел смонтирован один раз (не пять)");
+      const extra = b.ctl.count("GET", "/projects") - before;
+      t.ok(extra <= 2, `раздел смонтирован один раз (не пять): запросов /projects — ${extra}`);
     },
   },
   {
