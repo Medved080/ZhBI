@@ -2571,6 +2571,17 @@ function createServer(opts) {
     { id: "cur000000001", current: true, created_at: "2026-09-20 10:00:00", last_seen_at: "2026-09-20 11:00:00", expires_at: "2026-10-20 10:00:00", ip: "127.0.0.1", user_agent: "QA-браузер (текущий)", impersonated_by: null },
     { id: "oth000000002", current: false, created_at: "2026-09-19 09:00:00", last_seen_at: "2026-09-19 12:00:00", expires_at: "2026-10-19 09:00:00", ip: "10.0.0.5", user_agent: "QA-ноутбук", impersonated_by: null },
     { id: "oth000000003", current: false, created_at: "2026-09-18 08:00:00", last_seen_at: "2026-09-18 08:30:00", expires_at: "2026-10-18 08:00:00", ip: "10.0.0.6", user_agent: "QA-планшет", impersonated_by: null }]);
+  // личная цветовая гамма: только себе (как у настоящего backend)
+  route("PATCH", "/users/:id/ui-theme", (ctx) => {
+    const id = pathInt(ctx, "id");
+    if (id !== ctx.user.id && !isAdmin(ctx.user)) fail(403, "Можно менять только своё оформление");
+    const theme = (ctx.body || {}).ui_theme ?? null;
+    if (theme !== null && !["gos", "msu", "graphite", "indigo", "neon", "emerald", "sand"].includes(theme)) fail(400, `Неизвестное оформление «${theme}»`);
+    const row = data.users.find((u) => u.id === id);
+    if (!row) fail(404, "Пользователь не найден");
+    row.ui_theme = theme;
+    return userOut(row);
+  });
   route("GET", "/me/sessions", () => ({ sessions: deepClone(sessionsOf()), idle_hours: 12, ttl_days: 30 }));
   route("DELETE", "/me/sessions/:id", (ctx) => {
     const list = sessionsOf(), i = list.findIndex((x) => x.id === ctx.params.id);

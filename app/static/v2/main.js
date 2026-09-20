@@ -19,6 +19,7 @@ import { mountProjectCardEdit, mountReportNotesEdit } from "./card-edit.js";
 import { mountExportForm } from "./export-form.js";
 import { mountSessionsEdit } from "./sessions-edit.js";
 import { mountSubtypesEdit } from "./subtypes-edit.js";
+import { mountAppearanceEdit } from "./appearance-edit.js";
 
 const root = document.getElementById("v2-root");
 
@@ -328,6 +329,11 @@ async function renderShell(user, permissions) {
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = MODULES[target.id](content, moduleCtx);
+      } else if (target.impl === "appearance-edit") {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountAppearanceEdit(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, user, applyTheme: applyThemeFamily, groupTitle: groupTitle(target.group),
+        });
       } else if (target.impl === "subtypes-edit" && target.subtypes) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSubtypesEdit(content, {
