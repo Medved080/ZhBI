@@ -544,12 +544,11 @@ export function mountProjectsObjects(container, ctx) {
     // уходе фокуса — форма могла считаться изменённой при устаревшем черновике.
     const FIELD_KEYS = { "pf-name": "name", "pf-status": "status", "pf-project": "project_id", "pf-kind": "kind",
       "pf-smu": "smu_id", "pf-smu-director": "smu_director_id", "pf-responsible": "responsible_id",
-      "pf-smr-start": "smr_start_reported", "pf-media": "media_url",
+      "pf-smr-start": "smr_start_reported", "pf-media": "media_url", "pf-description": "description",
       "pf-lat": "lat", "pf-lon": "lon" };
     const syncDraftField = (elm) => { const key = FIELD_KEYS[elm.id]; if (key) state.draft[key] = elm.value; };
     el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", () => { syncDraftField(elm); markDirty(); }));
     el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => syncDraftField(elm)));
-    el.querySelector("#pf-description")?.addEventListener("input", (e) => { state.draft.description = e.target.value; });
     if (el.querySelector("#po-open-v1")) {
       el.querySelector("#po-open-v1").addEventListener("click", async () => {
         if (!(await requestLeave())) return;
