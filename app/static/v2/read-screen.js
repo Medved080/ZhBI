@@ -141,6 +141,36 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     return base + (q ? (base.includes("?") ? "&" : "?") + q : "");
   }
 
+  function reportBody(sec, s) {
+    const body = { object_id: objectId, source_file: null, ...(sec.body || {}), ...s.params };
+    if (sec.derive === "activity-bounds") {
+      body.at_from = boundUtc(body.date_from, false); body.at_to = boundUtc(body.date_to, true);
+      body.tz_offset_minutes = new Date().getTimezoneOffset();
+    }
+    return body;
+  }
+
+  // Выгрузка отчёта в файл: тот же запрос, что у отчёта на экране (файл показывает то, что на экране)
+  async function exportReport(sec, s, ext) {
+    if (s.exporting) return;
+    s.exporting = true; paintExportState(true);
+    const status = el.querySelector("#rd-export-status");
+    if (status) status.textContent = `Формируется файл ${ext.toUpperCase()}…`;
+    try {
+      const blob = await api.download(`${sec.endpoint}.${ext}`, reportBody(sec, s));
+      if (dead) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${screen.title}.${ext}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      if (status) status.textContent = `Файл «${screen.title}.${ext}» сформирован (${Math.max(1, Math.round(blob.size / 1024))} КБ).`;
+    } catch (err) {
+      if (status && !dead) status.textContent = `Не удалось выгрузить: ${errorText(err)}`;
+    } finally { s.exporting = false; if (!dead) paintExportState(false); }
+  }
+  function paintExportState(busy) { el.querySelectorAll("[data-export]").forEach((b) => { b.disabled = busy; }); }
+
   async function load(i) {
     const sec = sections[i];
     const s = st[i];
@@ -150,14 +180,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     paint();
     try {
       const data = sec.kind === "report"
-        ? await api.readPost(sec.endpoint, (() => {
-          const body = { object_id: objectId, source_file: null, ...(sec.body || {}), ...s.params };
-          if (sec.derive === "activity-bounds") {
-            body.at_from = boundUtc(body.date_from, false); body.at_to = boundUtc(body.date_to, true);
-            body.tz_offset_minutes = new Date().getTimezoneOffset();
-          }
-          return body;
-        })())
+        ? await api.readPost(sec.endpoint, reportBody(sec, s))
         : await api.get(urlFor(sec, s));
       if (dead || seq !== s.seq) return; // запоздавший ответ: вкладку/объект уже сменили
       s.data = data;
@@ -226,7 +249,9 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       return `<label class="v2-wire-field"><span>${esc(c.label)}</span><input type="date" data-param="${esc(c.param)}" value="${esc(val)}"></label>`;
     }).join("");
     const render = REPORT_RENDERERS[sec.report];
-    bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}<div id="rd-report">${render(s.data, s.rs)}</div>`;
+    const exportsBar = (sec.exports || []).length ? `<div class="v2-bar v2-export-bar">${sec.exports.map((x) => `<button type="button" class="v2-btn" data-export="${x}">Выгрузить в ${x.toUpperCase()}</button>`).join("")}<span class="v2-muted" id="rd-export-status" role="status" aria-live="polite"></span></div>` : "";
+    bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}${exportsBar}<div id="rd-report">${render(s.data, s.rs)}</div>`;
+    bodyEl.querySelectorAll("[data-export]").forEach((b) => b.addEventListener("click", () => exportReport(sec, s, b.dataset.export)));
     const repaint = (focusPath) => {
       bodyEl.querySelector("#rd-report").innerHTML = render(s.data, s.rs);
       bindReport(sec.report, bodyEl, s.rs, repaint);

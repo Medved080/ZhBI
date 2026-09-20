@@ -288,4 +288,41 @@ export const tests = [
       t.eq(a.ctl.log.filter((e) => e.path === "/reports/block-status")[1].body.report_date, "2026-09-01", "новая дата в запросе");
     },
   },
+  {
+    id: "RD-15", title: "Выгрузка отчёта в файл: тот же запрос, что у отчёта на экране; файл формируется; сбой — сообщение; не считается записью; у «Линейного трека» только XLSX",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await openScreen(a, "report-status");
+      await waitFor(() => a.$("[data-export=xlsx]"), { what: "кнопки выгрузки" });
+      t.eq(a.$$("[data-export]").map((b) => b.dataset.export), ["xlsx", "pdf"], "у «Статуса монтажа» XLSX и PDF");
+      const made = [];
+      const orig = a.win.URL.createObjectURL.bind(a.win.URL);
+      a.win.URL.createObjectURL = (blob) => { made.push(blob); return orig(blob); };
+      const hold = a.ctl.hold("POST /reports/status.xlsx");
+      a.click(a.$("[data-export=xlsx]"));
+      await hold.waitForRequest(1, 3000);
+      t.ok(a.$("[data-export=xlsx]").disabled && a.$("[data-export=pdf]").disabled, "на время выгрузки кнопки заблокированы");
+      t.eq(a.click(a.$("[data-export=xlsx]")), false, "второй клик невозможен");
+      t.eq(a.$("#v2-nav-note").textContent, "", "выгрузка отчёта не «идёт сохранение»");
+      hold.release();
+      await waitFor(() => /сформирован/.test(a.$("#rd-export-status").textContent), { what: "файл сформирован" });
+      const view = a.ctl.log.find((e) => e.path === "/reports/status");
+      const exp = a.ctl.log.filter((e) => e.path === "/reports/status.xlsx");
+      t.eq(exp.length, 1, "один запрос выгрузки");
+      t.eq(exp[0].body, view.body, "тело выгрузки = тело отчёта на экране");
+      t.eq(made.length, 1, "создан один файл для скачивания");
+      t.ok(made[0].size > 0, "файл не пустой");
+      hold.dispose?.();
+      a.ctl.failNext("POST /reports/status.pdf", { status: 500, detail: "Сбой выгрузки (QA)" });
+      a.click(a.$("[data-export=pdf]"));
+      await waitFor(() => /Не удалось выгрузить/.test(a.$("#rd-export-status").textContent), { what: "сообщение о сбое" });
+      t.has(a.$("#rd-export-status").textContent, "Сбой выгрузки (QA)", "показан текст ошибки сервера");
+      t.ok(!a.$("[data-export=pdf]").disabled, "после сбоя выгрузку можно повторить");
+      const mfr = a.ctl.data.objects.find((o) => o.kind === "mfr");
+      a.setValue(a.$("#v2-object"), String(mfr.id));
+      await openScreen(a, "report-linear-track");
+      await waitFor(() => a.$("[data-export]"), { what: "кнопки выгрузки трека" });
+      t.eq(a.$$("[data-export]").map((b) => b.dataset.export), ["xlsx"], "у «Линейного трека» только XLSX");
+    },
+  },
 ];

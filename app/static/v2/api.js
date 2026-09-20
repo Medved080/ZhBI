@@ -116,6 +116,20 @@ export const api = {
   put: (path, body) => request("PUT", path, body ?? {}),
   delete: (path) => request("DELETE", path),
   upload: (path, formData) => request("POST", path, formData),
+  // Выгрузка отчёта в файл (POST → blob). Это чтение: допустимы только `/reports/<имя>.xlsx|pdf`; в счётчик записей не входит.
+  async download(path, body) {
+    if (!/^\/reports\/[a-z0-9-]+\.(xlsx|pdf)$/.test(path)) throw new Error(`download: «${path}» — не выгрузка отчёта`);
+    let res;
+    try {
+      res = await fetch(path, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    } catch (netErr) { throw new ApiError(0, null); }
+    if (!res.ok) {
+      let detail = null;
+      try { const j = await res.json(); detail = j && typeof j === "object" && "detail" in j ? j.detail : j; } catch (e) { /* не JSON */ }
+      throw new ApiError(res.status, detail || res.statusText);
+    }
+    return res.blob();
+  },
   // Чтение POST-запросом. Допустимы только отчёты (`/reports/…`) — остальное это запись и должно идти через post().
   readPost: (path, body) => {
     if (!/^\/reports\/[a-z0-9-]+$/.test(path)) throw new Error(`readPost: «${path}» не отчёт — это запись, используйте post()`);

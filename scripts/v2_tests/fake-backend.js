@@ -2756,6 +2756,15 @@ function createServer(opts) {
       tree: [{ id: 1, row_kind: "узел", code: "-", name: "Строительство", unit: null, note: null, track_code: null, addressable: false, children: [
         op(2, "180-02-02", "Кладка стен QA", { "11": cellV(40, "in_progress"), "12": cellV(0, "plan") }), op(3, "180-02-03", "Без данных QA", {}), op(4, "130-01-01", "Объектная QA", { "объект": "plan" })] }] };
   });
+  // выгрузка отчётов в файл (форма — как у настоящего backend: тот же POST + расширение)
+  for (const n of ["status", "dynamics", "completion", "analytics", "my-work", "block-schedule", "linear-track"]) {
+    for (const ext of ["xlsx", "pdf"]) {
+      route("POST", `/reports/${n}.${ext}`, (ctx) => {
+        reportBody(ctx);
+        return { __blob: { bytes: new TextEncoder().encode(`QA-файл ${n}.${ext}`), type: ext === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers: {} } };
+      });
+    }
+  }
   route("POST", "/reports/linear-track", (ctx) => {
     reportBody(ctx);
     return { title: "Линейный трек", object_id: ctx.body.object_id, count: 2, rows: [
