@@ -188,6 +188,8 @@ export const tests = [
       const a = await openApp();
       await openPo(a);
       await selectProject(a, 1);
+      if (a.$$("[data-object]").length) { a.click(a.$('[data-project="1"]')); await a.settle(80); } // проект свёрнут — самый неудобный случай
+      t.eq(a.$$("[data-object]").length, 0, "проект свёрнут");
       a.click(a.$("#po-add-object"));
       await waitFor(() => a.$("#pf-project") && a.$("#pf-name").value === "", { what: "форма нового объекта" });
       t.has(a.$("#po-form h3").textContent, "Новый объект", "заголовок");
@@ -204,6 +206,9 @@ export const tests = [
       t.eq(String(body.smu_id), smuOpt.value, "в запросе выбранное СМУ");
       t.ok(a.ctl.data.objects.some((o) => o.name === "QA-ACC-объект"), "объект создан в фейковой БД");
       t.has(a.$("#po-status").textContent, "Добавлено", "«Добавлено.»");
+      const created = a.ctl.data.objects.find((o) => o.name === "QA-ACC-объект");
+      await waitFor(() => a.$(`[data-object="${created.id}"]`), { what: "новый объект в дереве" });
+      t.ok(a.$(`[data-object="${created.id}"]`).classList.contains("v2-tree-selected"), "новый объект в дереве и выбран (родительский проект раскрыт)");
     },
   },
   {

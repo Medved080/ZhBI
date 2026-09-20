@@ -401,6 +401,8 @@ export function mountProjectsObjects(container, ctx) {
     const idx = list.findIndex((r) => r.id === saved.id);
     if (idx === -1) list.push(saved); else list[idx] = saved;
     state.selected = { type, id: saved.id };
+    // Новый/сохранённый объект должен быть виден в дереве: родительский проект раскрывается, иначе выбранная строка скрыта.
+    if (type === "object" && saved.project_id != null) state.expanded.add(saved.project_id);
     state.isNew = false;
     state.dirty = false;
     clearDirtyState();
