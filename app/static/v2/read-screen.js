@@ -30,16 +30,49 @@ function fmtDateTime(v) {
   const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(" ", "T") + "Z");
   return Number.isNaN(d.getTime()) ? s : d.toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "medium" });
 }
-export function formatCell(col, row) {
+function fmtSize(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(1)} ГБ`;
+  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} МБ`;
+  if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(1)} КБ`;
+  return `${n} Б`;
+}
+export function formatCell(col, row, data) {
   let v = pick(row, col.key);
-  if (col.map && v != null && col.map[v] !== undefined) v = col.map[v];
+  const dict = col.mapFrom ? pick(data, col.mapFrom) : col.map;
+  if (dict && v != null && dict[v] !== undefined) v = dict[v];
   switch (col.fmt) {
+    case "size": return fmtSize(v);
     case "date": return fmtDate(v);
     case "datetime": return fmtDateTime(v);
     case "bool": return v === true || v === 1 ? "да" : v === false || v === 0 ? "нет" : "";
     case "list": return Array.isArray(v) ? v.join(", ") : v == null ? "" : String(v);
     default: return v == null ? "" : String(v);
   }
+}
+
+function cellHtml(col, row, data) {
+  const text = formatCell(col, row, data);
+  if (col.fmt === "color" && text) return `<span class="v2-swatch" style="background:${esc(text)}" aria-hidden="true"></span> ${esc(text)}`;
+  return esc(text);
+}
+
+// Запись (один объект ответа): список «поле — значение» и вложенные таблицы.
+function paintRecord(sec, data) {
+  const fields = (sec.fields || []).map((f) => {
+    const text = formatCell(f, data ?? {}, data);
+    return `<dt>${esc(f.title)}</dt><dd>${f.fmt === "color" && text ? cellHtml(f, data, data) : esc(text) || `<span class="v2-muted">не задано</span>`}</dd>`;
+  }).join("");
+  const tables = (sec.tables || []).map((t) => {
+    const rows = pick(data, t.rowsPath);
+    const list = Array.isArray(rows) ? rows : [];
+    return `<h4>${esc(t.title)}</h4>` + (list.length
+      ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${t.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}</tr></thead>
+         <tbody>${list.slice(0, RENDER_LIMIT).map((r) => `<tr>${t.columns.map((c) => `<td>${cellHtml(c, r, data)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+      : `<p class="v2-muted">${esc(t.empty || "Записей нет.")}</p>`);
+  }).join("");
+  return `${fields ? `<dl class="v2-facts">${fields}</dl>` : ""}${tables}`;
 }
 
 function errorText(err) {
@@ -55,7 +88,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   const sections = screen.read.sections;
   let dead = false;
   let active = 0;
-  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0 }));
+  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null }));
 
   el.innerHTML = `
     <div class="v2-container v2-screen">
@@ -86,6 +119,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const p = new URLSearchParams(sec.query || {});
     if (sec.object) p.set("object_id", String(objectId));
     if (sec.paging) { p.set("limit", String(sec.paging.limit)); p.set("offset", String(s.offset)); }
+    if (sec.serverSearch && s.search.trim()) p.set(sec.serverSearch, s.search.trim());
     const q = p.toString();
     return sec.endpoint + (q ? (sec.endpoint.includes("?") ? "&" : "?") + q : "");
   }
@@ -100,7 +134,9 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     try {
       const data = await api.get(urlFor(sec, s));
       if (dead || seq !== s.seq) return; // запоздавший ответ: вкладку/объект уже сменили
-      const rows = sec.rowsPath ? pick(data, sec.rowsPath) : data;
+      s.data = data;
+      let rows = sec.rowsPath ? pick(data, sec.rowsPath) : data;
+      if (sec.asEntries && rows && typeof rows === "object") rows = Object.entries(rows).map(([key, value]) => ({ key, value }));
       s.rows = Array.isArray(rows) ? rows : [];
       s.total = sec.totalPath ? pick(data, sec.totalPath) : null;
       s.status = "ok";
@@ -116,6 +152,8 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const sec = sections[active];
     const s = st[active];
     const body = $("#rd-body");
+    searchInput.hidden = sec.kind === "record";
+    $("#rd-count").hidden = sec.kind === "record";
     refreshBtn.disabled = s.status === "loading";
     $("#rd-count").textContent = "";
     if (s.status === "idle" || s.status === "loading") { body.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`; return; }
@@ -126,19 +164,20 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       $("#rd-retry").addEventListener("click", () => load(active));
       return;
     }
-    const q = s.search.trim().toLowerCase();
+    if (sec.kind === "record") { body.innerHTML = paintRecord(sec, s.data); return; }
+    const q = sec.serverSearch ? "" : s.search.trim().toLowerCase();
     const keys = sec.search || sec.columns.map((c) => c.key);
     const rows = q ? s.rows.filter((r) => keys.some((k) => String(pick(r, k) ?? "").toLowerCase().includes(q))) : s.rows;
     const shown = rows.slice(0, RENDER_LIMIT);
     const total = s.total ?? s.rows.length;
-    $("#rd-count").textContent = `${q ? `Найдено ${rows.length} из ${s.rows.length}` : `Записей: ${total}`}${s.total != null && s.rows.length < s.total ? ` (загружено ${s.rows.length})` : ""}`;
+    $("#rd-count").textContent = `${sec.serverSearch && s.search.trim() ? `Найдено на сервере: ${total}` : q ? `Найдено ${rows.length} из ${s.rows.length}` : `Записей: ${total}`}${s.total != null && s.rows.length < s.total ? ` (загружено ${s.rows.length})` : ""}`;
     if (!rows.length) {
-      body.innerHTML = `<p class="v2-muted">${q ? `Ничего не найдено по запросу «${esc(s.search)}».` : esc(sec.empty || "Записей нет.")}</p>`;
+      body.innerHTML = `<p class="v2-muted">${q || (sec.serverSearch && s.search.trim()) ? `Ничего не найдено по запросу «${esc(s.search)}».` : esc(sec.empty || "Записей нет.")}</p>`;
       return;
     }
     body.innerHTML = `${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${RENDER_LIMIT} из ${rows.length} — уточните поиск.</p>` : ""}
-      <div class="v2-read-table"><table class="v2-table"><thead><tr>${sec.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}</tr></thead>
-      <tbody>${shown.map((r) => `<tr>${sec.columns.map((c) => `<td>${esc(formatCell(c, r))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      <div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${sec.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}</tr></thead>
+      <tbody>${shown.map((r) => `<tr>${sec.columns.map((c) => `<td>${cellHtml(c, r, s.data)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
       ${sec.paging ? `<div class="v2-bar"><button type="button" class="v2-btn" id="rd-prev" ${s.offset <= 0 ? "disabled" : ""}>← Назад</button>
         <button type="button" class="v2-btn" id="rd-next" ${s.total != null && s.offset + s.rows.length >= s.total ? "disabled" : ""}>Дальше →</button></div>` : ""}`;
     if (sec.paging) {
@@ -153,8 +192,17 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     searchInput.value = st[active].search;
     if (st[active].status === "idle" || st[active].status === "error") load(active); else paint();
   }));
-  searchInput.addEventListener("input", () => { st[active].search = searchInput.value; if (st[active].status === "ok") paint(); });
+  let searchTimer = null;
+  searchInput.addEventListener("input", () => {
+    const i = active;
+    st[i].search = searchInput.value;
+    if (sections[i].serverSearch) {
+      // поиск на сервере: перезагрузка с первой страницы после паузы в наборе (одна загрузка, а не по букве)
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { st[i].offset = 0; if (!dead && i === active) load(i); }, 350);
+    } else if (st[i].status === "ok") paint();
+  });
   refreshBtn.addEventListener("click", () => load(active));
   load(0);
-  return { hasUnsavedChanges: () => false, guardLeave: async () => true, destroy() { dead = true; } };
+  return { hasUnsavedChanges: () => false, guardLeave: async () => true, destroy() { dead = true; clearTimeout(searchTimer); } };
 }

@@ -615,3 +615,15 @@ input:disabled, select:disabled, textarea:disabled {
   .v2-nav.v2-shellnav { width: auto; max-height: 36vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .v2-facts { grid-template-columns: 1fr; }
 }
+
+/* Экраны «только чтение» */
+.v2-read-tabs { margin: 12px 0; }
+.v2-read-tab { border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px; background: var(--bg); }
+.v2-read-tab[aria-selected="true"] { background: var(--sel); border-color: var(--accent); font-weight: 600; }
+.v2-read-table { overflow-x: auto; }
+.v2-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -2px; }
+.v2-callout-bad { border-left-color: var(--bad); }
+.v2-screen dl.v2-facts dd { overflow-wrap: anywhere; }
+.v2-read-tbl { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; min-width: max-content; }
+.v2-read-tbl th { font-size: 12px; font-weight: 500; color: var(--muted); padding: 10px 12px; background: var(--surface); position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+.v2-read-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }

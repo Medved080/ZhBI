@@ -122,7 +122,7 @@ export function mountHome(el, { registry, allowed, hiddenCount, go }) {
     return `<section class="v2-card">
       <h3>${esc(g.title)} <span class="v2-muted">· ${items.length}</span></h3>
       <ul class="v2-card-list">${items.map((s) => `<li><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
-        ${s.impl.startsWith("module:") ? `<span class="v2-chip v2-chip-ok" title="${esc(STATUS_LABEL[s.status])}">в V2</span>` : `<span class="v2-chip" title="Функции работают в текущем интерфейсе">в V1</span>`}</li>`).join("")}</ul>
+        ${s.impl.startsWith("module:") ? `<span class="v2-chip v2-chip-ok" title="${esc(STATUS_LABEL[s.status])}">в V2</span>` : s.impl === "read" ? `<span class="v2-chip" title="Просмотр в новом интерфейсе, изменение — в текущем">просмотр</span>` : `<span class="v2-chip" title="Функции работают в текущем интерфейсе">в V1</span>`}</li>`).join("")}</ul>
     </section>`;
   }).join("");
   const total = registry.screens.filter((s) => allowed(s)).length;

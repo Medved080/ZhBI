@@ -2501,6 +2501,75 @@ function createServer(opts) {
     fail(404, "Адрес по этому коду не найден");
   });
 
+  // ---- экраны «только чтение» полного интерфейса (форма ответов — как у настоящего backend, 2026-09-20) ----
+  // Данные синтетические и намеренно узнаваемые: тест сверяет, что экран показал ровно присланное.
+  const readGate = (ctx, key) => { if (FEATURE_BY_KEY.has(key)) assertFeature(ctx.user, key, "read"); };
+  route("GET", "/mark-type-prefixes", () => data.settings.markPrefixes || [
+    { prefix: "КН", element_type: "Колонна" }, { prefix: "ПП", element_type: "Плита перекрытия" }, { prefix: "РГ", element_type: "Ригель" }]);
+  route("GET", "/zones", (ctx) => {
+    const cat = queryValue(ctx, "category", { required: true });
+    if (!["Захватка", "Кран", "Стоянка"].includes(cat)) fail(400, "Неизвестная категория зоны");
+    const names = { "Захватка": ["Захватка 1", "Захватка 2"], "Кран": ["Кран 1"], "Стоянка": [] };
+    return names[cat].map((name, i) => ({ id: 100 + i, category: cat, number: i + 1, name, parent_zone_id: null, parent_name: null, is_current: true, match_status: "matched", levels: [], elements: 10 * (i + 1) }));
+  });
+  route("GET", "/me/sessions", () => ({
+    sessions: [{ id: "aaaabbbbcccc", current: true, created_at: "2026-09-20 10:00:00", last_seen_at: "2026-09-20 11:00:00", expires_at: "2026-10-20 10:00:00", ip: "127.0.0.1", user_agent: "QA-браузер", impersonated_by: null }],
+    idle_hours: 12, ttl_days: 30,
+  }));
+  route("GET", "/admin/backups", (ctx) => {
+    readGate(ctx, "backups");
+    return { backups: [{ name: "zhbi_qa_auto", created_at: "2026-09-20 09:00:00", kind: "auto", kind_label: "служебная — QA", user_name: null, user_id: null, comment: "QA-копия", size_bytes: 5242880, stats: {} }], disk: { known: true } };
+  });
+  route("GET", "/changelog", () => [{ version: "9.99", date: "20.09.2026", title: "QA-версия: проверка журнала", items: ["Пункт"], unseen: false }]);
+  route("GET", "/status-colors", () => ({ planned: "#b1b3b4", installed: "#00f55a" }));
+  route("GET", "/layer-type-combinations", () => [{ layer: "QA_слой", element_type: "Колонна", shape: "outline" }]);
+  route("GET", "/allowed-subtypes", (ctx) => {
+    if (!queryValue(ctx, "object_id", { type: "int" })) fail(400, "Справочник подтипов свой у каждого объекта — укажите объект");
+    return { "Колонна": ["верхняя", "нижняя"], "Ригель": [] };
+  });
+  route("GET", "/settings/info-plate", (ctx) => { queryValue(ctx, "object_id", { type: "int", required: true }); return { late_threshold_days: 3 }; });
+  route("GET", "/settings/project-card", (ctx) => {
+    queryValue(ctx, "object_id", { type: "int", required: true });
+    return { title: "QA-карточка", montage_deadline: "2026-12-30", delivery_deadline: "2026-12-06", milestones: [{ label: "QA-веха", date: "2026-09-13" }], key_events: [], key_tasks: [], open_questions: [] };
+  });
+  route("GET", "/settings/report-notes", (ctx) => {
+    queryValue(ctx, "object_id", { type: "int", required: true });
+    return { revisions: [{ effective_date: "2026-07-30", updated_at: "2026-07-30 12:30:01", updated_by: "QA", key_events: ["событие"], key_tasks: [], open_questions: [] }] };
+  });
+  route("GET", "/schedule-versions", (ctx) => {
+    queryValue(ctx, "object_id", { type: "int", required: true });
+    return { versions: [{ id: 1, kind: "current", kind_label: "Актуализированный", title: "QA-график", source_file: null, origin: "calc", loaded_at: "2026-08-14 20:59:06", loaded_by: "QA", note: "QA", elements: 100 }], baseline_id: null };
+  });
+  route("GET", "/activity", (ctx) => {
+    readGate(ctx, "activity_log");
+    const limit = queryValue(ctx, "limit", { type: "int" }) || 200;
+    const offset = queryValue(ctx, "offset", { type: "int" }) || 0;
+    const text = (queryValue(ctx, "text") || "").toLowerCase();
+    let all = Array.from({ length: 250 }, (_, i) => ({ id: 250 - i, at: "2026-09-20 10:00:00.000", source: "server", user_id: 1, user_name: "QA-Админов", action: i % 2 ? "login" : "smu_create", entity_type: null, entity_id: null, element_type: null, subtype: null, mark: `М-${250 - i}`, old_value: null, new_value: null, category: "data" }));
+    if (text) all = all.filter((r) => `${r.mark} ${r.action}`.toLowerCase().includes(text));
+    return { total: all.length, rows: all.slice(offset, offset + limit), actions: [], values: {}, action_titles: { login: "Вход", smu_create: "СМУ создано" }, category_titles: { data: "Данные" }, category_order: ["data"] };
+  });
+  route("GET", "/element-catalog", (ctx) => {
+    const limit = queryValue(ctx, "limit", { type: "int" }) || 200;
+    const offset = queryValue(ctx, "offset", { type: "int" }) || 0;
+    const search = (queryValue(ctx, "search") || "").toLowerCase();
+    let all = Array.from({ length: 230 }, (_, i) => ({ id: i + 1, mark: `Э-${i + 1}`, element_type: "Колонна", subtype: null, address: "1/А", current_status: "planned", floor: 1, planned_delivery_date: "2026-09-25", actual_delivery_date: null, source_file: "QA.dxf" }));
+    if (search) all = all.filter((r) => r.mark.toLowerCase().includes(search));
+    return { total: all.length, rows: all.slice(offset, offset + limit) };
+  });
+  route("GET", "/ldap-settings", (ctx) => {
+    readGate(ctx, "ldap");
+    return { config: { enabled: false, host: "ldap.qa.local", port: 389, use_ssl: false, start_tls: false, verify_certificate: true, login_template: "{login}@qa.local", timeout_seconds: 5, base_dn: "" }, domain_users: 0, library_available: true, library_error: null };
+  });
+  route("GET", "/admin-guide", (ctx) => {
+    readGate(ctx, "backups");
+    return { facts: [{ name: "Версия сервиса", value: "9.99" }], sections: [{ id: "orientation", title: "Как всё устроено", intro: "QA-введение", items: [] }] };
+  });
+  route("GET", "/admin/db-status", (ctx) => {
+    readGate(ctx, "backups");
+    return { database: {}, domains: [], tables: [{ name: "qa_table", caption: "qa_table — QA", domain: "QA-область", described: true, rows: 7, bytes: 4096, index_bytes: 0, fields: [] }], relations: [], soft_relations: [], drift: [] };
+  });
+
   // ---- карта (app/project_map.py) ----
   route("GET", "/map/config", (ctx) => {
     assertFeature(ctx.user, "map", "read");
