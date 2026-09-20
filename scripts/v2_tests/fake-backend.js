@@ -2313,6 +2313,28 @@ function createServer(opts) {
       checked: (s) => [["contracts.specification_id", data.contracts.filter((c) => c.specification_id === s.id).length, "подчинённые записи, уходят вместе"]],
       remove: (s) => setRows("specifications", data.specifications.filter((x) => x.id !== s.id)),
     },
+    // Простые справочники «название» (СМУ, физлица). Число ссылок объектов имитируется числовым полем строки
+    // `usedBy` (тест выставляет его сам): >0 — запись держится объектами и удаляется только с заменой.
+    smu: {
+      title: "СМУ",
+      load: (id) => data.smu.find((r) => r.id === id),
+      label: (r) => r.name,
+      refs: (r) => nonEmpty([["Объекты", r.usedBy || 0]]),
+      candidates: (r) => data.smu.filter((x) => x.id !== r.id).map((x) => ({ key: String(x.id), label: x.name })),
+      repoint: (r, target) => { const n = r.usedBy || 0; target.usedBy = (target.usedBy || 0) + n; r.usedBy = 0; return nonEmpty([["Объекты", n]]); },
+      checked: (r) => [["objects.smu_id", r.usedBy || 0, "перевод на замену"]],
+      remove: (r) => { data.smu.splice(data.smu.indexOf(r), 1); },
+    },
+    individual: {
+      title: "Физлицо",
+      load: (id) => data.individuals.find((r) => r.id === id),
+      label: (r) => r.name,
+      refs: (r) => nonEmpty([["Объекты (директор СМУ)", r.usedBy || 0]]),
+      candidates: (r) => data.individuals.filter((x) => x.id !== r.id).map((x) => ({ key: String(x.id), label: x.name })),
+      repoint: (r, target) => { const n = r.usedBy || 0; target.usedBy = (target.usedBy || 0) + n; r.usedBy = 0; return nonEmpty([["Объекты (директор СМУ)", n]]); },
+      checked: (r) => [["objects.smu_director_id", r.usedBy || 0, "перевод на замену"]],
+      remove: (r) => { data.individuals.splice(data.individuals.indexOf(r), 1); },
+    },
     contract: {
       title: "Контракт", parentKind: "specification",
       load: (id) => contractById(id),
