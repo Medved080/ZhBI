@@ -624,9 +624,9 @@ input:disabled, select:disabled, textarea:disabled {
 .v2-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -2px; }
 .v2-callout-bad { border-left-color: var(--bad); }
 .v2-screen dl.v2-facts dd { overflow-wrap: anywhere; }
-.v2-read-tbl { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; min-width: max-content; }
+.v2-read-tbl { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; }
 .v2-read-tbl th { font-size: 12px; font-weight: 500; color: var(--muted); padding: 10px 12px; background: var(--surface); position: sticky; top: 0; z-index: 1; white-space: nowrap; }
-.v2-read-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.v2-read-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; max-width: 420px; }
 
 /* Отчёты */
 .v2-read-tbl td.num, .v2-read-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -643,3 +643,10 @@ input:disabled, select:disabled, textarea:disabled {
 .v2-report-controls { margin-bottom: 10px; }
 .v2-summary-list { columns: 2; padding-left: 18px; margin: 6px 0 14px; }
 .v2-page h3.v2-report-h, .v2-scroll h3.v2-report-h { font-size: 15px; margin: 18px 0 8px; }
+
+/* Узкое окно: правая часть шапки переносится, а не уходит за край */
+@media (max-width: 800px) {
+  .v2-head-right { flex-wrap: wrap; width: 100%; }
+  .v2-ctx { flex: 1 1 100%; }
+  .v2-ctx select { flex: 1; max-width: none; }
+}
