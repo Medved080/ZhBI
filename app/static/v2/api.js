@@ -116,12 +116,15 @@ export const api = {
   put: (path, body) => request("PUT", path, body ?? {}),
   delete: (path) => request("DELETE", path),
   upload: (path, formData) => request("POST", path, formData),
-  // Выгрузка отчёта в файл (POST → blob). Это чтение: допустимы только `/reports/<имя>.xlsx|pdf`; в счётчик записей не входит.
-  async download(path, body) {
-    if (!/^\/reports\/[a-z0-9-]+\.(xlsx|pdf)$/.test(path)) throw new Error(`download: «${path}» — не выгрузка отчёта`);
+  // Выгрузка в файл (blob). Это чтение: допустимы только `/reports/<имя>.xlsx|pdf` (POST), `/export.xlsx` (POST) и
+  // `/export.pdf?…` (GET); в счётчик записей не входит.
+  async download(path, body, { method = "POST" } = {}) {
+    const okPath = /^\/reports\/[a-z0-9-]+\.(xlsx|pdf)$/.test(path) || path === "/export.xlsx" || /^\/export\.pdf(\?|$)/.test(path);
+    if (!okPath || (method !== "POST" && method !== "GET")) throw new Error(`download: «${path}» — не выгрузка`);
     let res;
     try {
-      res = await fetch(path, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+      res = await fetch(path, method === "GET" ? { method, credentials: "same-origin" }
+        : { method, credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
     } catch (netErr) { throw new ApiError(0, null); }
     if (!res.ok) {
       let detail = null;

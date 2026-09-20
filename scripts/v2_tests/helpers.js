@@ -39,6 +39,18 @@ export async function openApp({ perm, session, w = 1366, h = 768, query = "", ho
       if (attempt >= 2) throw e;
     }
   }
+  // Сценарии выгрузки файлов создают ссылку с атрибутом download и «кликают» её: без подмены браузер РЕАЛЬНО сохранил бы
+  // файл в «Загрузки» (macOS спрашивает разрешение на каждое сохранение). Подменяем click() у ссылок с download на запись
+  // в win.__downloads — сам вызов и имя файла остаются проверяемыми, на диск ничего не пишется.
+  try {
+    const w = iframe.contentWindow;
+    const origClick = w.HTMLAnchorElement.prototype.click;
+    w.__downloads = [];
+    w.HTMLAnchorElement.prototype.click = function () {
+      if (this.hasAttribute("download")) { w.__downloads.push({ name: this.download, href: this.href }); return; }
+      return origClick.call(this);
+    };
+  } catch (e) { /* iframe чужого источника не бывает; но сценарий не должен падать из-за подмены */ }
   const app = makeApp(iframe.contentWindow, iframe.contentDocument, iframe.contentWindow.__fake, iframe);
   // Любая необработанная ошибка страницы во время сценария — провал сценария.
   app.errors = iframe.contentWindow.__errors; // собирает boot.js с начала загрузки

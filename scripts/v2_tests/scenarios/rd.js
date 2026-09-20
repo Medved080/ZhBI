@@ -312,6 +312,7 @@ export const tests = [
       t.eq(exp[0].body, view.body, "тело выгрузки = тело отчёта на экране");
       t.eq(made.length, 1, "создан один файл для скачивания");
       t.ok(made[0].size > 0, "файл не пустой");
+      t.eq(a.win.__downloads.map((d) => d.name), ["Статус монтажа.xlsx"], "скачивание запрошено с понятным именем файла (на диск в тесте ничего не пишется)");
       hold.dispose?.();
       a.ctl.failNext("POST /reports/status.pdf", { status: 500, detail: "Сбой выгрузки (QA)" });
       a.click(a.$("[data-export=pdf]"));

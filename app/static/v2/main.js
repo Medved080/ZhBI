@@ -16,6 +16,7 @@ import { mountSettingEdit } from "./setting-edit.js";
 import { mountColorEdit } from "./color-edit.js";
 import { mountPrefixEdit } from "./prefix-edit.js";
 import { mountProjectCardEdit, mountReportNotesEdit } from "./card-edit.js";
+import { mountExportForm } from "./export-form.js";
 
 const root = document.getElementById("v2-root");
 
@@ -247,7 +248,7 @@ async function renderShell(user, permissions) {
         return `<div class="v2-nav-group">
           <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
           ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Справочник правится в новом интерфейсе; удаление с заменой — в текущем">прав.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
+            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Справочник правится в новом интерфейсе; удаление с заменой — в текущем">прав.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
         </div>`;
       }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
     const search = document.getElementById("v2-nav-search");
@@ -325,6 +326,12 @@ async function renderShell(user, permissions) {
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = MODULES[target.id](content, moduleCtx);
+      } else if (target.impl === "export-form" && target.export) {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountExportForm(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
+          object: activeObjects.find((o) => o.id === objectId) || null,
+        });
       } else if (target.impl === "card-edit" && target.card) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountProjectCardEdit(content, {

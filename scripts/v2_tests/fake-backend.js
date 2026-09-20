@@ -2711,6 +2711,18 @@ function createServer(opts) {
   route("GET", "/objects/:id/block-work-types", (ctx) => { mfrObject(ctx); return { options: [{ id: 7, path: "Строительство / Кладка / Стены", code: "180-02-02", name: "Кладка стен QA", planning_track_code: "3", sort_order: 1 }] }; });
   route("GET", "/objects/:id/fact-journal", (ctx) => { mfrObject(ctx); return { items: [
     { id: 42, report_date: "2026-09-14", block_id: 11, section_id: 1, section_code: "С01", level_id: 5, level_name: "Этаж 1", ops_count: 2, created_at: "2026-09-14 19:30:34", updated_at: "2026-09-14 19:36:09", created_by: "QA-Админов", updated_by: "QA-Админов" }] }; });
+  // выгрузка схемы (чтение): по чертежу объекта
+  const exportBlob = (name, type) => ({ __blob: { bytes: new TextEncoder().encode(`QA-файл ${name}`), type, headers: {} } });
+  route("POST", "/export.xlsx", (ctx) => {
+    const b = ctx.body || {};
+    if (!["snapshot", "history"].includes(b.mode)) fail(422, "mode должен быть 'snapshot' или 'history'");
+    if (!b.source_file) fail(400, "Укажите чертёж или набор элементов: иначе выгрузка охватила бы все объекты");
+    return exportBlob(`${b.mode}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  });
+  route("GET", "/export.pdf", (ctx) => {
+    if (!queryValue(ctx, "source_file")) fail(422, "source_file: обязательное поле");
+    return exportBlob("schema.pdf", "application/pdf");
+  });
   // ---- отчёты (POST только читает; форма ответов — как у настоящего backend) ----
   const reportBody = (ctx) => { const b = ctx.body || {}; if (!b.object_id) fail(422, "object_id: обязательное поле"); return b; };
   route("POST", "/reports/status", (ctx) => {
