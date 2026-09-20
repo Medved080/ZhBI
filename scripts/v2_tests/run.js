@@ -31,4 +31,12 @@ document.getElementById("summary").textContent =
   `Сценарии V2: ${results.length - failed.length} PASS / ${failed.length} FAIL из ${results.length}`;
 document.title = `${failed.length ? "FAIL" : "PASS"} ${results.length - failed.length}/${results.length}`;
 window.__results = results.map((r) => ({ id: r.id, title: r.title, status: r.status, failed: r.checks.filter((c) => !c.ok).map((c) => c.msg), error: r.error, checks: r.checks.length }));
+// Сохранить результаты вместе с версией кода (стенд запишет Docs/v2-acceptance-results/<имя>.json).
+try {
+  const name = (params.get("save") || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  if (name) {
+    const r = await fetch(`/save-results?name=${name}`, { method: "POST", body: JSON.stringify({ suites: wanted, only, results: window.__results }) });
+    window.__saved = await r.json();
+  }
+} catch (e) { window.__saved = { error: String(e) }; }
 window.__done = true;

@@ -864,7 +864,7 @@ export function mountProjectsObjects(container, ctx) {
     body.innerHTML = `
       <div class="v2-cols">
         <aside class="v2-side v2-tree-pane">
-          <input id="po-search" aria-label="Поиск проекта или объекта" placeholder="Найти по названию или адресу" value="${escapeHtml(state.query)}">
+          <input id="po-search" aria-label="Поиск проекта или объекта" placeholder="Название или адрес" value="${escapeHtml(state.query)}">
           <select id="po-status-filter" aria-label="Фильтр по статусу">
             ${[["active", "В работе"], ["perspective", "Перспективный"], ["suspended", "Приостановлен"], ["completed", "Завершён"], ["archived", "Архивный"], ["", "Все"]]
               .map(([v, l]) => `<option value="${v}" ${state.status === v ? "selected" : ""}>${l}</option>`).join("")}

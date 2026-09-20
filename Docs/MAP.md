@@ -279,6 +279,15 @@
   Введение расширено бизнес-рамкой: выгоды, риски, которые закрывает
   инструмент, направление развития — предиктивная аналитика (09-16).
 
+## Стенд V2 без входа и БД (2026-09-20)
+
+Настоящие модули V2 против фейкового бэкенда в памяти: `scripts/v2_test_server.py`
+(порт 8031), `scripts/v2_tests/` (`fake-backend.js`, `scenes.js`, наборы
+`scenarios/{shell,ua,po,cp,vis,a11y}.js`, прогонщик `run.html`),
+`scripts/v2_shots.py` (безголовые снимки), `scripts/verify_v2_api.mjs` и
+`fake-backend.selftest.mjs` (Node), `scripts/v2_acceptance_fill.py` (заполнение
+матрицы `Docs/v2-release-acceptance.md`). Ни БД, ни `app.main`, ни входа не нужно.
+
 ## Стражи и инвентаризация
 
 Запускаются вручную, если не сказано иное; находка — код возврата 1.

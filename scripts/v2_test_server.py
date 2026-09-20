@@ -12,8 +12,12 @@
           http://127.0.0.1:8031/tests/run.html   — автоматические сценарии
 Слушает только 127.0.0.1.
 """
+import json
 import mimetypes
+import re
+import subprocess
 import sys
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -50,6 +54,31 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             return
         super().do_GET()
+
+    def do_POST(self):
+        """POST /save-results?name=<имя>: сохранить результаты прогона (Docs/v2-acceptance-results/<имя>.json)
+        вместе с версией кода — доказательство для матрицы приёмки. Только loopback, только этот путь."""
+        parts = urlsplit(self.path)
+        if parts.path != "/save-results":
+            self.send_error(404)
+            return
+        name = re.sub(r"[^a-zA-Z0-9_-]", "", (parts.query.split("name=")[-1] if "name=" in parts.query else "results")) or "results"
+        length = int(self.headers.get("Content-Length") or 0)
+        data = json.loads(self.rfile.read(length) or b"{}")
+
+        def git(*a):
+            return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+        data["rev"] = git("rev-parse", "--short", "HEAD")
+        data["tree_dirty"] = bool(git("status", "--porcelain", "--", "app/static/v2", "scripts/v2_tests"))
+        data["ran_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        out_dir = ROOT / "Docs" / "v2-acceptance-results"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"{name}.json").write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"saved": f"Docs/v2-acceptance-results/{name}.json", "rev": data["rev"], "tree_dirty": data["tree_dirty"]}).encode())
 
     def log_message(self, fmt, *args):  # тише: только ошибки
         if args and str(args[1]).startswith(("4", "5")):
