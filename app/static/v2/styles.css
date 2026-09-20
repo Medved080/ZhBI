@@ -650,3 +650,9 @@ input:disabled, select:disabled, textarea:disabled {
   .v2-ctx { flex: 1 1 100%; }
   .v2-ctx select { flex: 1; max-width: none; }
 }
+
+/* Формы карточек */
+.v2-field-wide { display: flex; width: 100%; max-width: 760px; }
+.v2-field-wide textarea { width: 100%; font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); resize: vertical; }
+textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface); }
+.v2-rn-list li { align-items: center; margin-bottom: 4px; }

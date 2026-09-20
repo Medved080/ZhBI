@@ -2600,13 +2600,49 @@ function createServer(opts) {
     (data.settings.lateThreshold ||= {})[oid] = v;
     return { late_threshold_days: v };
   });
+  // карточка объекта: PUT заменяет ЦЕЛИКОМ (поля, которых нет в теле, — умолчания), как у настоящего backend
+  const cardOf = (oid) => ((data.settings.projectCards ||= {})[oid] ||= { title: "QA-карточка", montage_deadline: "2026-12-30", delivery_deadline: "2026-12-06",
+    milestones: [{ label: "QA-веха", date: "2026-09-13" }], key_events: ["событие-карточки"], key_tasks: ["задача-карточки"], open_questions: [] });
   route("GET", "/settings/project-card", (ctx) => {
-    queryValue(ctx, "object_id", { type: "int", required: true });
-    return { title: "QA-карточка", montage_deadline: "2026-12-30", delivery_deadline: "2026-12-06", milestones: [{ label: "QA-веха", date: "2026-09-13" }], key_events: [], key_tasks: [], open_questions: [] };
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    if (FEATURE_BY_KEY.has("project_card")) assertFeature(ctx.user, "project_card", "read", oid);
+    return deepClone(cardOf(oid));
   });
+  route("PUT", "/settings/project-card", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    if (FEATURE_BY_KEY.has("project_card")) assertFeature(ctx.user, "project_card", "write", oid);
+    const b = ctx.body || {};
+    if (b.title != null && typeof b.title !== "string") fail(422, "title: нужна строка");
+    data.settings.projectCards[oid] = { title: b.title ?? "", montage_deadline: b.montage_deadline ?? null, delivery_deadline: b.delivery_deadline ?? null,
+      milestones: b.milestones ?? [], key_events: b.key_events ?? [], key_tasks: b.key_tasks ?? [], open_questions: b.open_questions ?? [] };
+    return deepClone(cardOf(oid));
+  });
+  // заметки отчётов — редакции на дату (upsert по (объект, дата)); updated_at меняется при каждой записи
+  const notesOf = (oid) => ((data.settings.reportNotes ||= {})[oid] ||= [{ effective_date: "2026-07-30", updated_at: "2026-07-30 12:30:01", updated_by: "QA", key_events: ["событие"], key_tasks: [], open_questions: [] }]);
+  const notesSorted = (oid) => [...notesOf(oid)].sort((x, y) => (x.effective_date < y.effective_date ? 1 : -1)).map(deepClone);
+  let notesTick = 0;
   route("GET", "/settings/report-notes", (ctx) => {
-    queryValue(ctx, "object_id", { type: "int", required: true });
-    return { revisions: [{ effective_date: "2026-07-30", updated_at: "2026-07-30 12:30:01", updated_by: "QA", key_events: ["событие"], key_tasks: [], open_questions: [] }] };
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    if (FEATURE_BY_KEY.has("report_notes")) assertFeature(ctx.user, "report_notes", "read", oid);
+    return { revisions: notesSorted(oid) };
+  });
+  route("PUT", "/settings/report-notes", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    if (FEATURE_BY_KEY.has("report_notes")) assertFeature(ctx.user, "report_notes", "write", oid);
+    const b = ctx.body || {};
+    if (typeof b.effective_date !== "string") fail(422, "effective_date: обязательное поле");
+    const list = notesOf(oid), date = b.effective_date.slice(0, 10);
+    const row = list.find((r) => r.effective_date === date);
+    const fields = { key_events: b.key_events ?? [], key_tasks: b.key_tasks ?? [], open_questions: b.open_questions ?? [], updated_at: `2026-09-21 10:00:${String(++notesTick % 60).padStart(2, "0")}`, updated_by: displayName(ctx.user) };
+    if (row) Object.assign(row, fields); else list.push({ effective_date: date, ...fields });
+    return { revisions: notesSorted(oid) };
+  });
+  route("DELETE", "/settings/report-notes/:date", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    if (FEATURE_BY_KEY.has("report_notes")) assertFeature(ctx.user, "report_notes", "write", oid);
+    const list = notesOf(oid), i = list.findIndex((r) => r.effective_date === ctx.params.date.slice(0, 10));
+    if (i >= 0) list.splice(i, 1);
+    return { __status: 204, body: null };
   });
   route("GET", "/schedule-versions", (ctx) => {
     queryValue(ctx, "object_id", { type: "int", required: true });

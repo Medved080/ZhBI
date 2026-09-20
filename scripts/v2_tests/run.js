@@ -1,7 +1,7 @@
 import { runTests } from "/tests/helpers.js";
 
 const params = new URLSearchParams(location.search);
-const SUITES = ["shell", "ua", "po", "cp", "rd", "de", "se", "ce", "pe", "vis", "a11y"];
+const SUITES = ["shell", "ua", "po", "cp", "rd", "de", "se", "ce", "pe", "oc", "vis", "a11y"];
 const wanted = (params.get("suite") || SUITES.join(",")).split(",").filter(Boolean);
 const only = (params.get("only") || "").split(",").filter(Boolean); // список id или префиксов
 
