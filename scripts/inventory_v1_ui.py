@@ -430,6 +430,68 @@ def structure(root):
     return out
 
 
+
+# ------------------------------------------------------------------ содержимое, которое V1 строит скриптом
+def strip_interpolations(tpl):
+    """Шаблонная строка JS → текст разметки с подстановками `${…}`, заменёнными многоточием (скобки считаются)."""
+    out, i, n = [], 0, len(tpl)
+    while i < n:
+        if tpl.startswith("${", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if tpl[j] == "{":
+                    depth += 1
+                elif tpl[j] == "}":
+                    depth -= 1
+                j += 1
+            out.append("…")
+            i = j
+        else:
+            out.append(tpl[i])
+            i += 1
+    return "".join(out)
+
+
+TPL_FUNC_HINT = re.compile(r"^(render|open|build|fill|show|draw|make|switch|load|init|refresh)")
+
+
+def dynamic_structure(toks, funcs, calls, max_funcs=14, max_blocks=80):
+    """Структура разметки из шаблонных строк функций, которые вызывает обработчик (и их прямых вызовов с «говорящими»
+    именами). Это не полная картина (DOM, собранный через createElement, здесь не виден), а подсказка: какие поля,
+    таблицы и кнопки V1 создаёт динамически. Результат помечается на экране как «извлечено из шаблонов»."""
+    order, seen = [], set()
+    frontier = [c for c in calls if c in funcs]
+    for depth in range(2):
+        nxt = []
+        for name in frontier:
+            if name in seen or len(order) >= max_funcs:
+                continue
+            seen.add(name)
+            order.append(name)
+            fa, fb = funcs[name]
+            for k in range(fa, fb):
+                if toks[k][0] == "id" and toks[k + 1][1] == "(" and toks[k][1] in funcs and TPL_FUNC_HINT.match(toks[k][1]) and toks[k][1] not in seen:
+                    nxt.append(toks[k][1])
+        frontier = nxt
+    blocks = []
+    for name in order:
+        fa, fb = funcs[name]
+        for k in range(fa, fb + 1):
+            kind, val, ln = toks[k]
+            if kind == "tpl" and "<" in val and len(val) > 24:
+                frag = Tree()
+                try:
+                    frag.feed(strip_interpolations(val))
+                except Exception:
+                    continue
+                for b in structure(frag.root):
+                    if b not in blocks:
+                        blocks.append(b)
+                if len(blocks) >= max_blocks:
+                    return {"functions": order, "blocks": blocks[:max_blocks]}
+    return {"functions": order, "blocks": blocks}
+
+
 # ------------------------------------------------------------------ сборка
 def menu_entries(tree):
     """Пункты меню «Действия»: путь групп, подпись, id, право (data-feature), вид права."""
@@ -521,8 +583,13 @@ def build():
         "getElementById_текстом": len(re.findall(r"getElementById\(", src)),
         "токенов": len(toks), "функций_верхнего_уровня": len(funcs), "обработчиков_по_id": len(hs),
     }
+    handlers_out = {k: {"calls": v["calls"], "api": sorted(v["api"]), "line": v["line"]} for k, v in hs.items()}
+    for k, v in handlers_out.items():
+        # шаблоны разбираются только для обработчиков, на которые ссылается меню или панель (остальные — внутренние)
+        if k in {m["id"] for m in menu} | {t["id"] for t in tb}:
+            v["dynamic"] = dynamic_structure(toks, funcs, hs[k]["calls"])
     return {"menu": menu, "modals": mods, "toolbar": tb, "regions": regions(tree), "checks": checks, "handlers_total": len(hs),
-            "handlers": {k: {"calls": v["calls"], "api": sorted(v["api"]), "line": v["line"]} for k, v in hs.items()}}
+            "handlers": handlers_out}
 
 
 def main():

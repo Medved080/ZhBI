@@ -16,7 +16,7 @@ export async function waitFor(fn, { timeout = 4000, step = 20, what = "усло�
 
 const createdApps = [];
 
-export async function openApp({ perm, session, w = 1366, h = 768, query = "" } = {}) {
+export async function openApp({ perm, session, w = 1366, h = 768, query = "", home = false } = {}) {
   const q = new URLSearchParams(query);
   if (perm) q.set("perm", perm);
   if (session === false) q.set("session", "0");
@@ -40,6 +40,19 @@ export async function openApp({ perm, session, w = 1366, h = 768, query = "" } =
   // Любая необработанная ошибка страницы во время сценария — провал сценария.
   app.errors = iframe.contentWindow.__errors; // собирает boot.js с начала загрузки
   createdApps.push(app);
+  // Оболочка полного интерфейса открывается на начальной странице. Сценарии трёх перенесённых разделов написаны в
+  // расчёте на «открыт первый доступный раздел» (как было до полного интерфейса) — воспроизводим это явным кликом
+  // по навигации. Сценарии самой оболочки просят `home: true` и работают с начальной страницей.
+  if (!home && session !== false) {
+    try {
+      await waitFor(() => app.$(".v2-shellnav, .v2-note-page, input[type=password]"), { what: "оболочка", timeout: 8000 });
+      const first = ["users-access", "projects-objects", "counterparties"].map((k) => app.$(`.v2-shellnav [data-section="${k}"]`)).find(Boolean);
+      if (first) {
+        first.click();
+        await waitFor(() => first.getAttribute("aria-pressed") === "true" || app.$(`.v2-shellnav [data-section="${first.dataset.section}"]`)?.getAttribute("aria-pressed") === "true", { what: "первый раздел открыт", timeout: 8000 });
+      }
+    } catch (e) { /* сценарий сам сообщит о том, чего не дождался */ }
+  }
   return app;
 }
 

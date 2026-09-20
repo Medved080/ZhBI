@@ -2,6 +2,7 @@
 import { openApp, waitFor } from "/tests/helpers.js";
 
 const NAV = ".v2-nav [data-section]";
+const MODULE_KEYS = ["users-access", "projects-objects", "counterparties"];
 const sectionTitles = (a) => a.$$(NAV).map((b) => b.textContent.trim());
 const pressed = (a) => a.$$(NAV).filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.dataset.section);
 
@@ -84,30 +85,41 @@ export const tests = [
     },
   },
   {
-    id: "SH-04", title: "Администратор: три раздела, открыт первый",
+    id: "SH-04", title: "Администратор: начальная страница, навигация по всем разделам, три перенесённых раздела помечены «в V2»",
     async run(t) {
-      const a = await openApp();
-      await waitFor(() => a.$$(NAV).length === 3, { what: "навигация из 3 разделов" });
-      t.eq(sectionTitles(a), ["Пользователи и доступ", "Проекты и объекты", "Контрагенты"], "названия разделов");
-      t.eq(pressed(a), ["users-access"], "нажат первый раздел");
+      const a = await openApp({ home: true });
+      await waitFor(() => a.$$(NAV).length > 3, { what: "навигация по разделам сервиса" });
+      t.eq(pressed(a), ["home"], "открыта начальная страница");
+      t.has(a.$("#v2-content").innerText, "Новый интерфейс · предварительная версия", "заголовок начальной страницы");
+      const keys = a.$$(NAV).map((b) => b.dataset.section);
+      for (const k of MODULE_KEYS) t.ok(keys.includes(k), `в навигации есть перенесённый раздел ${k}`);
+      t.ok(keys.length >= 40, `в навигации много разделов сервиса (${keys.length})`);
+      t.ok(a.$$(".v2-card").length >= 6, "на начальной странице карточки групп");
+      const inV2 = a.$$(".v2-card-list .v2-chip-ok").length;
+      t.eq(inV2, 3, "пометка «в V2» — ровно у трёх перенесённых разделов");
+      t.ok(a.$(`.v2-card-list a[data-screen-link="contracts"]`), "экран, не перенесённый целиком, тоже достижим с начальной страницы");
     },
   },
   {
-    id: "SH-05", title: "Пользователь без доступа: «Нет доступных разделов»",
+    id: "SH-05", title: "Пользователь без прав: перенесённых разделов нет, экраны с ограничением скрыты, V1 доступен",
     async run(t) {
-      const a = await openApp({ perm: "none" });
-      await waitFor(() => a.doc.body.innerText.includes("Нет доступных разделов"), { what: "заглушка" });
-      t.ok(a.$('a[href="/?ui=v1"]'), "ссылка на V1 присутствует");
-      t.eq(a.$$(NAV).length, 0, "кнопок разделов нет");
+      const a = await openApp({ perm: "none", home: true });
+      await waitFor(() => a.$$(NAV).length >= 1, { what: "навигация" });
+      const keys = a.$$(NAV).map((b) => b.dataset.section);
+      for (const k of MODULE_KEYS) t.ok(!keys.includes(k), `раздел ${k} скрыт`);
+      for (const k of ["counterparties", "users-access", "backups", "blocks"]) t.ok(!keys.includes(k), `экран ${k} с ограничением по правам скрыт`);
+      t.ok(a.$('a[href="/?ui=v1"], #v2-back-btn'), "возврат в V1 доступен");
+      t.has(a.$("#v2-content").innerText, "Скрыто по правам", "начальная страница говорит, что часть разделов скрыта");
     },
   },
   {
-    id: "SH-06", title: "Только чтение: виден только доступный раздел, без запрещённых действий",
+    id: "SH-06", title: "Только чтение: доступный раздел открывается, без запрещённых действий; недоступные скрыты",
     async run(t) {
       const a = await openApp({ perm: "readonly" });
       await waitFor(() => a.$(".v2-page-head h2"), { what: "заголовок раздела" });
-      t.eq(a.$(".v2-page-head h2").textContent.trim(), "Пользователи и доступ", "открыт единственный доступный раздел");
-      t.eq(a.$$(NAV).length, 0, "навигации между разделами нет (раздел один)");
+      t.eq(a.$(".v2-page-head h2").textContent.trim(), "Пользователи и доступ", "доступен раздел «Пользователи и доступ»");
+      const keys = a.$$(NAV).map((b) => b.dataset.section);
+      t.ok(!keys.includes("projects-objects") && !keys.includes("counterparties"), "разделы, требующие изменения, скрыты");
       await waitFor(() => a.$("#ua-rows"), { what: "список пользователей" });
       t.ok(!a.byText("button", "Добавить пользователя"), "кнопки «Добавить пользователя» нет при уровне read");
     },
@@ -116,7 +128,7 @@ export const tests = [
     id: "SH-07", title: "Переключение разделов без dirty: aria-pressed, класс каркаса, карта уничтожается",
     async run(t) {
       const a = await openApp();
-      await waitFor(() => a.$$(NAV).length === 3, { what: "навигация" });
+      await waitFor(() => a.$$(NAV).length > 3, { what: "навигация" });
       for (const key of ["projects-objects", "counterparties", "projects-objects", "users-access"]) {
         a.click(a.$(`${NAV}[data-section="${key}"]`));
         await waitFor(() => pressed(a)[0] === key, { what: `раздел ${key}` });
@@ -219,7 +231,7 @@ export const tests = [
       t.eq(pressed(a), ["users-access"], "раздел не сменился");
       // и при успешном переходе без dirty — монтируется один раз
       const b = await openApp();
-      await waitFor(() => b.$$(NAV).length === 3, { what: "навигация" });
+      await waitFor(() => b.$$(NAV).length > 3, { what: "навигация" });
       // Замер «до» — только когда стартовые чтения раздела «Пользователи» закончились (счётчик не растёт 300 мс):
       // иначе запоздавший стартовый GET /projects засчитывался переходу и тест краснел под нагрузкой.
       let stable = b.ctl.count("GET", "/projects");
@@ -285,7 +297,7 @@ export const tests = [
     id: "SH-19", title: "Оформление не зависит от порядка посещения: v2-app у каждого раздела свой",
     async run(t) {
       const a = await openApp();
-      await waitFor(() => a.$$(NAV).length === 3, { what: "навигация" });
+      await waitFor(() => a.$$(NAV).length > 3, { what: "навигация" });
       const cls = () => a.$("#v2-content").className.split(/\s+/).filter(Boolean).sort().join(" ");
       const order = ["users-access", "projects-objects", "counterparties", "projects-objects", "users-access", "counterparties", "users-access"];
       const seen = {};

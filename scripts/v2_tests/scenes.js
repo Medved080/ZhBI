@@ -38,7 +38,10 @@ async function poObject(a, id) {
 
 export const SCENES = {
   "login": { title: "Вход", pre: (ctl) => ctl.setSession(false), open: async (a) => { await waitFor(() => a.$("input[type=password]"), { what: "форма входа" }); } },
-  "no-sections": { title: "Нет доступных разделов", pre: (ctl) => ctl.setPermissions({ system_admin: false, features: {} }), open: async (a) => { await waitFor(() => a.doc.body.innerText.includes("Нет доступных разделов"), { what: "заглушка" }); } },
+  "no-sections": { title: "Пользователь без прав: начальная страница", pre: (ctl) => ctl.setPermissions({ system_admin: false, features: {} }), open: async (a) => { await waitFor(() => a.doc.body.innerText.includes("Скрыто по правам"), { what: "начальная страница без прав" }); } },
+  "shell-home": { title: "Оболочка: начальная страница (все разделы)", open: async (a) => { await waitFor(() => a.$(`${NAV}[data-section="home"]`), { what: "навигация" }); a.click(a.$(`${NAV}[data-section="home"]`)); await waitFor(() => a.$(".v2-card"), { what: "начальная страница" }); await a.settle(120); } },
+  "shell-screen-form": { title: "Оболочка: экран V1-формы (каркас, «Контракты»)", open: async (a) => { await waitFor(() => a.$(`${NAV}[data-section="contracts"]`), { what: "навигация" }); a.click(a.$(`${NAV}[data-section="contracts"]`)); await waitFor(() => a.$(".v2-screen h2"), { what: "каркас экрана" }); await a.settle(150); } },
+  "shell-screen-report": { title: "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа»)", open: async (a) => { await waitFor(() => a.$(`${NAV}[data-section="report-dynamics"]`), { what: "навигация" }); a.click(a.$(`${NAV}[data-section="report-dynamics"]`)); await waitFor(() => a.$(".v2-screen h2"), { what: "каркас экрана" }); await a.settle(150); } },
   "ua-users": { title: "UA: список пользователей", open: waitList },
   "ua-new-user": { title: "UA: форма нового пользователя", async open(a) {
     await waitList(a);

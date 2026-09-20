@@ -1,0 +1,160 @@
+// Экран V2 «только чтение»: таблица данных из существующего GET-эндпоинта (справочники, списки, журналы).
+// Описание секций — в screens.json (`read.sections`): endpoint, колонки, поиск, постраничность. Никаких
+// изменяющих запросов здесь нет: правка остаётся в текущем интерфейсе, ссылка на неё — в плашке экрана.
+//
+// Состояния: загрузка, ошибка (текст сервера + «Повторить»), пусто, «нужен объект». Ответ, пришедший после
+// смены вкладки, объекта или ухода с экрана, отбрасывается (счётчик запросов) и чужую таблицу не перерисовывает.
+import { ApiError } from "./api.js";
+import { STATUS_LABEL } from "./registry.js";
+import { esc, linkList } from "./screen-view.js";
+
+const RENDER_LIMIT = 500;
+
+function pick(obj, path) {
+  let cur = obj;
+  for (const k of String(path).split(".")) {
+    if (cur == null) return undefined;
+    cur = cur[k];
+  }
+  return cur;
+}
+
+function fmtDate(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v ?? ""));
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : String(v ?? "");
+}
+function fmtDateTime(v) {
+  if (!v) return "";
+  const s = String(v);
+  // Сервер отдаёт время журнала в UTC без указания пояса — трактуем как UTC и показываем по местным часам.
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(" ", "T") + "Z");
+  return Number.isNaN(d.getTime()) ? s : d.toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "medium" });
+}
+export function formatCell(col, row) {
+  let v = pick(row, col.key);
+  if (col.map && v != null && col.map[v] !== undefined) v = col.map[v];
+  switch (col.fmt) {
+    case "date": return fmtDate(v);
+    case "datetime": return fmtDateTime(v);
+    case "bool": return v === true || v === 1 ? "да" : v === false || v === 0 ? "нет" : "";
+    case "list": return Array.isArray(v) ? v.join(", ") : v == null ? "" : String(v);
+    default: return v == null ? "" : String(v);
+  }
+}
+
+function errorText(err) {
+  if (err instanceof ApiError) {
+    const d = err.detail;
+    return typeof d === "string" ? d : Array.isArray(d) ? d.map((x) => x.msg || JSON.stringify(x)).join("; ") : `Ошибка ${err.status}`;
+  }
+  return String(err?.message || err);
+}
+
+export function mountReadScreen(el, { screen, structure, objectId, api, groupTitle }) {
+  el.className = "v2-page";
+  const sections = screen.read.sections;
+  let dead = false;
+  let active = 0;
+  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0 }));
+
+  el.innerHTML = `
+    <div class="v2-container v2-screen">
+      <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
+      <div class="v2-screen-head">
+        <h2>${esc(screen.title)}</h2>
+        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span>
+      </div>
+      <p class="v2-muted">${esc(screen.summary || "")}</p>
+      <div class="v2-callout" role="note">
+        <strong>Просмотр в новом интерфейсе.</strong> ${esc(screen.read.note || "Изменение данных этого экрана пока выполняется в текущем интерфейсе.")}
+        <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div>
+      </div>
+      ${sections.length > 1 ? `<div class="v2-wire-tabs v2-read-tabs" role="tablist">${sections.map((s, i) =>
+        `<button type="button" role="tab" class="v2-read-tab" data-tab="${i}" aria-selected="${i === 0}">${esc(s.title)}</button>`).join("")}</div>` : ""}
+      <div class="v2-bar v2-read-bar">
+        <input type="search" id="rd-search" class="v2-search" placeholder="Поиск по таблице" aria-label="Поиск по таблице">
+        <span class="v2-muted" id="rd-count" role="status" aria-live="polite"></span>
+        <button type="button" class="v2-btn" id="rd-refresh">Обновить</button>
+      </div>
+      <div id="rd-body"></div>
+    </div>`;
+  const $ = (s) => el.querySelector(s);
+  const searchInput = $("#rd-search");
+  const refreshBtn = $("#rd-refresh");
+
+  function urlFor(sec, s) {
+    const p = new URLSearchParams(sec.query || {});
+    if (sec.object) p.set("object_id", String(objectId));
+    if (sec.paging) { p.set("limit", String(sec.paging.limit)); p.set("offset", String(s.offset)); }
+    const q = p.toString();
+    return sec.endpoint + (q ? (sec.endpoint.includes("?") ? "&" : "?") + q : "");
+  }
+
+  async function load(i) {
+    const sec = sections[i];
+    const s = st[i];
+    if (sec.object && !objectId) { s.status = "no-object"; s.rows = []; paint(); return; }
+    const seq = ++s.seq;
+    s.status = "loading"; s.error = "";
+    paint();
+    try {
+      const data = await api.get(urlFor(sec, s));
+      if (dead || seq !== s.seq) return; // запоздавший ответ: вкладку/объект уже сменили
+      const rows = sec.rowsPath ? pick(data, sec.rowsPath) : data;
+      s.rows = Array.isArray(rows) ? rows : [];
+      s.total = sec.totalPath ? pick(data, sec.totalPath) : null;
+      s.status = "ok";
+    } catch (err) {
+      if (dead || seq !== s.seq) return;
+      s.status = "error"; s.error = errorText(err);
+    }
+    if (i === active) paint();
+  }
+
+  function paint() {
+    if (dead) return;
+    const sec = sections[active];
+    const s = st[active];
+    const body = $("#rd-body");
+    refreshBtn.disabled = s.status === "loading";
+    $("#rd-count").textContent = "";
+    if (s.status === "idle" || s.status === "loading") { body.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`; return; }
+    if (s.status === "no-object") { body.innerHTML = `<p class="v2-muted">Выберите объект в шапке — данные этого экрана относятся к объекту.</p>`; return; }
+    if (s.status === "error") {
+      body.innerHTML = `<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(s.error)}
+        <div class="v2-callout-actions"><button type="button" class="v2-btn" id="rd-retry">Повторить</button></div></div>`;
+      $("#rd-retry").addEventListener("click", () => load(active));
+      return;
+    }
+    const q = s.search.trim().toLowerCase();
+    const keys = sec.search || sec.columns.map((c) => c.key);
+    const rows = q ? s.rows.filter((r) => keys.some((k) => String(pick(r, k) ?? "").toLowerCase().includes(q))) : s.rows;
+    const shown = rows.slice(0, RENDER_LIMIT);
+    const total = s.total ?? s.rows.length;
+    $("#rd-count").textContent = `${q ? `Найдено ${rows.length} из ${s.rows.length}` : `Записей: ${total}`}${s.total != null && s.rows.length < s.total ? ` (загружено ${s.rows.length})` : ""}`;
+    if (!rows.length) {
+      body.innerHTML = `<p class="v2-muted">${q ? `Ничего не найдено по запросу «${esc(s.search)}».` : esc(sec.empty || "Записей нет.")}</p>`;
+      return;
+    }
+    body.innerHTML = `${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${RENDER_LIMIT} из ${rows.length} — уточните поиск.</p>` : ""}
+      <div class="v2-read-table"><table class="v2-table"><thead><tr>${sec.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}</tr></thead>
+      <tbody>${shown.map((r) => `<tr>${sec.columns.map((c) => `<td>${esc(formatCell(c, r))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      ${sec.paging ? `<div class="v2-bar"><button type="button" class="v2-btn" id="rd-prev" ${s.offset <= 0 ? "disabled" : ""}>← Назад</button>
+        <button type="button" class="v2-btn" id="rd-next" ${s.total != null && s.offset + s.rows.length >= s.total ? "disabled" : ""}>Дальше →</button></div>` : ""}`;
+    if (sec.paging) {
+      $("#rd-prev")?.addEventListener("click", () => { s.offset = Math.max(0, s.offset - sec.paging.limit); load(active); });
+      $("#rd-next")?.addEventListener("click", () => { s.offset += sec.paging.limit; load(active); });
+    }
+  }
+
+  el.querySelectorAll(".v2-read-tab").forEach((b) => b.addEventListener("click", () => {
+    active = Number(b.dataset.tab);
+    el.querySelectorAll(".v2-read-tab").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+    searchInput.value = st[active].search;
+    if (st[active].status === "idle" || st[active].status === "error") load(active); else paint();
+  }));
+  searchInput.addEventListener("input", () => { st[active].search = searchInput.value; if (st[active].status === "ok") paint(); });
+  refreshBtn.addEventListener("click", () => load(active));
+  load(0);
+  return { hasUnsavedChanges: () => false, guardLeave: async () => true, destroy() { dead = true; } };
+}

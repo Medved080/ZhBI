@@ -120,11 +120,18 @@ def build_structure(data, d):
         for i in s.get("regions", []):
             entry["regions"].append({"id": i, "structure": d["regions"][i]["structure"]})
         ids = list(s["v1"]["menu"]) + list(s["v1"]["toolbar"])
+        dyn = []
         for i in ids:
             h = d["handlers"].get(i)
             if h:
                 entry["api"] = sorted(set(entry["api"]) | set(h["api"]))
                 entry["calls"] = list(dict.fromkeys(entry["calls"] + h["calls"]))[:6]
+                for b in (h.get("dynamic") or {}).get("blocks", []):
+                    if b not in dyn:
+                        dyn.append(b)
+        # шаблоны V1 показываем, только если статическая разметка бедна (иначе дублируют и шумят)
+        static_n = sum(1 for m in entry["modals"] for b in m["structure"] if b["t"] in ("field", "table", "btn", "check", "radio"))
+        entry["dynamic"] = dyn[:60] if static_n < 6 else []
         entry["toolbar"] = [{"id": i, "text": tbs[i]["text"]} for i in s["v1"]["toolbar"]]
         entry["menu_features"] = feats
         out[s["id"]] = entry
