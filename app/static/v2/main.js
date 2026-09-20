@@ -18,6 +18,7 @@ import { mountPrefixEdit } from "./prefix-edit.js";
 import { mountProjectCardEdit, mountReportNotesEdit } from "./card-edit.js";
 import { mountExportForm } from "./export-form.js";
 import { mountSessionsEdit } from "./sessions-edit.js";
+import { mountSubtypesEdit } from "./subtypes-edit.js";
 
 const root = document.getElementById("v2-root");
 
@@ -327,6 +328,11 @@ async function renderShell(user, permissions) {
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = MODULES[target.id](content, moduleCtx);
+      } else if (target.impl === "subtypes-edit" && target.subtypes) {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountSubtypesEdit(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+        });
       } else if (target.impl === "sessions-edit") {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSessionsEdit(content, {

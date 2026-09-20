@@ -2335,6 +2335,15 @@ function createServer(opts) {
       checked: (r) => [["objects.smu_director_id", r.usedBy || 0, "перевод на замену"]],
       remove: (r) => { data.individuals.splice(data.individuals.indexOf(r), 1); },
     },
+    subtype: {
+      title: "Подтип",
+      load: (key) => { const [oid, type, sub] = String(key).split("|"); const list = subtypesOf(Number(oid))[type]; return list && list.includes(sub) ? { id: key, oid: Number(oid), type, sub } : null; },
+      label: (r) => `${r.type} · ${r.sub}`,
+      refs: (r) => nonEmpty([["Изделия", (data.settings.subtypeUse || {})[r.id] || 0]]),
+      candidates: (r) => (subtypesOf(r.oid)[r.type] || []).filter((x) => x !== r.sub).map((x) => ({ key: `${r.oid}|${r.type}|${x}`, label: x })),
+      checked: (r) => [["elements.subtype", (data.settings.subtypeUse || {})[r.id] || 0, "перевод на замену"]],
+      remove: (r) => { const list = subtypesOf(r.oid)[r.type]; list.splice(list.indexOf(r.sub), 1); },
+    },
     mark_prefix: {
       title: "Префикс марки",
       load: (key) => { const r = prefixRows().find((x) => x.prefix === key); return r ? { id: r.prefix, prefix: r.prefix, element_type: r.element_type } : null; },
@@ -2387,7 +2396,7 @@ function createServer(opts) {
   }
   function dictRow(kind, key) {
     const view = dictView(kind);
-    if (kind === "mark_prefix") {
+    if (kind === "mark_prefix" || kind === "subtype") {
       const rowP = view.load(decodeURIComponent(String(key)));
       if (!rowP) fail(404, `${view.title}: запись не найдена`);
       return rowP;
@@ -2594,9 +2603,21 @@ function createServer(opts) {
   });
   route("GET", "/layer-type-combinations", () => deepClone(data.settings.layerCombos || [
     { layer: "QA_слой_1", element_type: "Колонна", shape: "outline" }, { layer: "QA_слой_2", element_type: "Плита перекрытия", shape: "outline" }, { layer: "QA_слой_3", element_type: "Ригель", shape: "outline" }]));
+  // подтипы по объектам (data.settings.subtypes {oid: {тип: [подтипы]}}); использование подтипа изделиями — data.settings.subtypeUse {ключ: число}
+  const subtypesOf = (oid) => ((data.settings.subtypes ||= {})[oid] ||= { "Колонна": ["верхняя", "нижняя"], "Ригель": [], "Панель": ["Цоколь"] });
   route("GET", "/allowed-subtypes", (ctx) => {
-    if (!queryValue(ctx, "object_id", { type: "int" })) fail(400, "Справочник подтипов свой у каждого объекта — укажите объект");
-    return { "Колонна": ["верхняя", "нижняя"], "Ригель": [] };
+    const oid = queryValue(ctx, "object_id", { type: "int" });
+    if (!oid) fail(400, "Справочник подтипов свой у каждого объекта — укажите объект");
+    return deepClone(subtypesOf(oid));
+  });
+  route("POST", "/allowed-subtypes", (ctx) => {
+    if (FEATURE_BY_KEY.has("dict_subtypes")) assertFeature(ctx.user, "dict_subtypes", "write");
+    const b = ctx.body || {};
+    const map = subtypesOf(b.object_id);
+    if (!(b.element_type in map)) fail(422, `Неизвестный тип элемента: ${b.element_type}`);
+    if (typeof b.subtype !== "string" || !b.subtype.trim()) fail(422, "Подтип не может быть пустым");
+    if (!map[b.element_type].includes(b.subtype.trim())) map[b.element_type].push(b.subtype.trim());
+    return { status: "ok" };
   });
   // порог опоздания поставки — по объекту; хранится в data.settings.lateThreshold {objectId: дни}
   route("GET", "/settings/info-plate", (ctx) => {
