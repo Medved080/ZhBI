@@ -1,0 +1,2144 @@
+{
+ "suites": [
+  "shell",
+  "ua",
+  "po",
+  "cp",
+  "vis",
+  "a11y"
+ ],
+ "only": [],
+ "results": [
+  {
+   "id": "SH-01",
+   "title": "Нет сессии → форма входа V2",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "SH-02",
+   "title": "Экран входа: отказ сервера — читаемое сообщение (401 строкой и 422 списком), логин остаётся, повтор возможен",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-03",
+   "title": "Обязательная смена пароля: экран смены вместо разделов",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "SH-14",
+   "title": "«← Текущий интерфейс» при несохранённом: диалог, «Остаться» — остаёмся; быстрые клики — один диалог",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-22",
+   "title": "Тёмная гамма пользователя → тёмная схема; светлая по умолчанию",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-04",
+   "title": "Администратор: три раздела, открыт первый",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-05",
+   "title": "Пользователь без доступа: «Нет доступных разделов»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-06",
+   "title": "Только чтение: виден только доступный раздел, без запрещённых действий",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "SH-07",
+   "title": "Переключение разделов без dirty: aria-pressed, класс каркаса, карта уничтожается",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-08",
+   "title": "Dirty + переключение раздела: «Остаться» / «Не сохранять»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "SH-08b",
+   "title": "Dirty + «Сохранить и продолжить»: запись, затем переход",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-09",
+   "title": "Dirty + сохранение падает (500): ошибка видна, переход отменён, данные целы, повтор доступен",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "SH-10",
+   "title": "Идёт запись (медленный ответ): переход недоступен с причиной; после успеха и ошибки — снова доступен",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 14
+  },
+  {
+   "id": "SH-11",
+   "title": "Быстрые повторные клики по вкладкам разделов при dirty: один диалог",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-16",
+   "title": "beforeunload: с dirty — предупреждение, без dirty — нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-17",
+   "title": "beforeunload во время записи БЕЗ несохранённых данных — предупреждение (закрытие посреди сохранения)",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-18",
+   "title": "/me/permissions отвечает 500: «Не удалось загрузить интерфейс», без [object Object]",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-19",
+   "title": "Оформление не зависит от порядка посещения: v2-app у каждого раздела свой",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "SH-20",
+   "title": "Диалог: фокус на безопасной кнопке, ловушка Tab, Esc = отмена, возврат фокуса",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "SH-21",
+   "title": "Второй диалог с ДРУГИМ вопросом не получает чужой ответ; одинаковый — делит один диалог",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "UA-U-01",
+   "title": "Список пользователей: 8 записей, колонки, счётчик",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-U-02",
+   "title": "Поиск пользователей: непрерывный ввод, Backspace, каретка, пустой результат, сброс",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "UA-U-03",
+   "title": "GET /users падает: ошибка чтения вместо пустого списка, «Повторить» работает",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-U-03b",
+   "title": "Клик по уже открытой вкладке после ошибки чтения — повторная попытка",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "UA-U-04",
+   "title": "Каталог/матрица доступа недоступны: список виден, колонка «Доступ» без ошибки",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-U-05",
+   "title": "Создание пользователя: валидация пустых полей",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-U-06",
+   "title": "Создание пользователя: запись, карточка, повторное открытие показывает данные сервера",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "UA-U-07",
+   "title": "Создание: двойной клик и медленный ответ → один POST",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-U-08",
+   "title": "Создание: 409/422/500/сеть — читаемое сообщение, ввод цел, кнопка доступна",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 16
+  },
+  {
+   "id": "UA-C-01",
+   "title": "Профиль: правка → «Сохранить»: PATCH, подтверждённые сервером данные после повторного открытия",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "UA-C-02",
+   "title": "Профиль: правка → «Отменить»: значения возвращены, подвал скрыт, запроса нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-C-03",
+   "title": "Профиль: 403/409/422/500/сеть при сохранении — читаемо, поля разблокированы, ввод цел",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 20
+  },
+  {
+   "id": "UA-C-04",
+   "title": "Профиль: двойной клик и медленный ответ → один PATCH; поля заблокированы на время записи",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-C-07",
+   "title": "Профиль dirty: вкладка карточки / «← Все пользователи» → диалог; после сохранения ложного нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-C-07b",
+   "title": "Профиль dirty + сохранение из диалога ухода падает: ошибка видна, уход отменён, ввод цел",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-C-08",
+   "title": "Блок «Диагностика…» честно говорит про V1 и даёт рабочую ссылку",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-C-09",
+   "title": "Медленная загрузка доступа: клик «← Все пользователи» не пропадает молча; после ответа переход работает; чужие гранты не подмешиваются",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "UA-A-01",
+   "title": "Доступ пользователя без назначений: пустое состояние; «Показать все» раскрывает каталог",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-A-02",
+   "title": "Доступ пользователя с назначениями: прямые и унаследованные видны, счётчики верны",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-A-03",
+   "title": "Поиск в доступах: НЕПРЕРЫВНЫЙ ввод с клавиатуры без потери фокуса, Backspace, каретка, выделение, сброс",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 13
+  },
+  {
+   "id": "UA-A-04",
+   "title": "«Только доступные» ↔ «Показать все» сохраняет поисковый запрос",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "UA-A-05",
+   "title": "Выдать роль на объекте → «Сохранить»: PUT, сводка, повторное открытие, «Проверка доступа» согласована",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "UA-A-07",
+   "title": "Снять роль → «Сохранить»: грант удалён, сводка обновлена",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-A-08",
+   "title": "Правка доступа не сохранена: «Отменить», «← Сводка», диалог при уходе",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-A-09",
+   "title": "Сохранение доступа: двойной клик, 403/409/422/500/сеть — один PUT, читаемо, данные на месте",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "UA-A-11",
+   "title": "Клавиатура: пробел на чекбоксе роли не уводит фокус",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-R-01",
+   "title": "Роли: список, «N назначений», матрица разрешений",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-R-02",
+   "title": "Матрица: правка ячейки → «Не сохранено ячеек» → «Сохранить» / «Отменить»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "UA-R-03",
+   "title": "Матрица: двойной клик; ошибки 500/422/сеть — один PUT, читаемо, черновик цел",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "UA-R-04",
+   "title": "Создание роли: пустое имя, дубль, успех, отмена",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-R-05",
+   "title": "Переименование роли: пустое, успех, отмена",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-R-06",
+   "title": "Порядок ролей ▲▼: границы заблокированы, один PUT на клик, порядок сохраняется",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-R-07",
+   "title": "Удаление роли: delete-plan → подтверждение (danger) → удалена; отмена не удаляет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-R-08",
+   "title": "Dirty матрицы: переключение роли не теряет черновик, смена вкладки — диалог",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-R-09",
+   "title": "Клавиатура: клик по сегменту матрицы не уводит фокус на <body> (перерисовка редактора роли)",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-U-09",
+   "title": "Форма нового пользователя с данными: «Отмена» — без предупреждения; уход — диалог; после создания предупреждения нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-C-05",
+   "title": "Вход и безопасность: «Требовать смену пароля» → «Сохранить» — PATCH с новым значением, подтверждение с сервера",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-C-10",
+   "title": "Права read: карточка и доступ только для просмотра — поля заблокированы, «Сохранить» и «Выдать» нет/недоступны",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-R-10",
+   "title": "Права read на роли: список и матрица только для просмотра",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-A-06",
+   "title": "Роль на проекте и на «все проекты»: PUT с project_id / без него; сводка показывает наследование",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-K-05",
+   "title": "Согласованность: выданная роль видна в «Проверке доступа» по этому пользователю и объекту",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-K-01",
+   "title": "Проверка доступа: выбор пользователя и объекта (мышь и клавиатура)",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "UA-K-02",
+   "title": "Проверка доступа: администратор — «Полный доступ»; пользователь без ролей — «Прямых ролей нет»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "UA-K-06",
+   "title": "Проверка доступа: ошибка чтения — читаемо, повтор возможен",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-K-07",
+   "title": "Проверка доступа: поздний ответ прежнего выбора не перезаписывает актуальный",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "PO-01",
+   "title": "Загрузка: дерево проектов со счётчиками, форма-подсказка",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-02",
+   "title": "Чтение падает: явная ошибка + «Повторить», не пустое дерево",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "PO-03",
+   "title": "Дерево: раскрытие, выбор проекта и объекта, карточка соответствует выбранному",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-04",
+   "title": "Поиск и фильтры: непрерывный ввод, статус «Все», пустой результат, сброс",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "PO-05",
+   "title": "Новый проект: без наименования сохранить нельзя (сообщение, запрос не уходит)",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PO-06",
+   "title": "Новый проект: сохранение → дерево, «Добавлено.», данные после повторного открытия",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PO-07",
+   "title": "Новый объект: проект по умолчанию из выбранного, справочники, сохранение",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "PO-08",
+   "title": "Правка → «Отменить»: значения возвращены, подвал скрыт, запросов нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "PO-09",
+   "title": "Правка → «Сохранить»: PATCH, «Сохранено.», данные сервера после повторного открытия",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-10",
+   "title": "Адрес и координаты: ручной ввод, координаты помечают форму изменённой, «Определить заново»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-11",
+   "title": "Удаление: чистый объект / с блокерами / отмена / двойной клик / ошибка",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "PO-11b",
+   "title": "Удаление: двойной клик по «Удалить» — один диалог и один POST; ошибка 500 — читаемо, поля доступны",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PO-12",
+   "title": "Вложения: загрузка синтетического файла, скачивание, превью, удаление",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PO-13",
+   "title": "Загрузка вложения идёт медленно: переходы заблокированы с причиной, после — снова доступны",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "PO-14",
+   "title": "Удаление вложения: пока открыт диалог, вторые корзины заблокированы; отмена возвращает; один DELETE",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PO-16",
+   "title": "Права: «Удалить» только при dictDelete=write; вложения проекта — только админ сервиса",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-17",
+   "title": "Dirty: смена записи → диалог; «Остаться» / «Не сохранять» / «Сохранить и продолжить»; нет ложного после сохранения",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PO-18",
+   "title": "Dirty + сохранение из диалога ухода падает: ошибка видна СРАЗУ, переход отменён, данные целы, повтор доступен",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 18
+  },
+  {
+   "id": "PO-19",
+   "title": "«Не сохранять» и «Остаться»: строка статуса не залипает на «Есть несохранённые изменения»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "PO-20",
+   "title": "Сохранение: двойной клик, 403/409/422/500/сеть — один PATCH, читаемо, нет ложного «Сохранено.»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 10
+  },
+  {
+   "id": "PO-21",
+   "title": "Запись прошла, обновление списков упало: «Сохранено, но обновить данные не удалось» + «Повторить обновление»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "PO-22",
+   "title": "Поздний ответ вложений прежней записи не портит карточку текущей",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "PO-25",
+   "title": "Клавиатура: выбор узла дерева оставляет фокус на этом узле после перерисовки формы",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "PO-24",
+   "title": "Длинные названия и адреса не ломают форму и не создают горизонтальную прокрутку",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-L-01",
+   "title": "Список контрагентов: 7 строк, краткое имя и «полное · ИНН · код»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-L-02",
+   "title": "Контрагентов нет: «Контрагентов пока нет.»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "CP-L-03",
+   "title": "GET /counterparties падает: ошибка + «Повторить», не пустой список",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-L-06",
+   "title": "Права: корзина контрагента только для администратора / dict_delete=write",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-L-07",
+   "title": "Удаление чистого контрагента: delete-plan → подтверждение (danger) → удалён; отмена не удаляет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-L-08",
+   "title": "Контрагент с зависимостями: «Удалить нельзя. Мешает…», запроса на удаление нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-L-09",
+   "title": "Корзина: двойной клик — один диалог и один POST; ошибка удаления читаема, контрагент цел",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-M-02",
+   "title": "Новый контрагент без полного/краткого наименования: сообщение, запрос не уходит",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-M-03",
+   "title": "Создание контрагента: POST, «Добавлено.», в списке, вкладка «Контрактация» доступна, данные после повторного открытия",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-M-04",
+   "title": "Правка → «Отменить»: значения возвращены; «Сохранить»: PATCH, «Сохранено.»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-M-06",
+   "title": "Сохранение карточки: двойной клик; 403/409/422/500/сеть — один запрос, читаемо, ввод цел",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "CP-M-07",
+   "title": "Dirty: «← Все контрагенты» → диалог 3 вариантов; после сохранения ложного предупреждения нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-M-08",
+   "title": "Сохранение из диалога ухода не проходит валидацию: РЕАЛЬНЫЙ текст ошибки виден, уход отменён, ввод цел",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-P-02",
+   "title": "Ёмкость («Прочее»): строка, шт./день, сохранение — в запрос идут только строки с per_day>0",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "CP-A-01",
+   "title": "Новый контрагент: «Контрактация» просит сначала сохранить карточку",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "CP-A-02",
+   "title": "«Контрактация»: договоры, спецификации, контракты загружаются; ошибка списка — текст + «Повторить»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-A-04",
+   "title": "Новый договор: валидации, создание, двойной клик — один POST, ошибка рядом с формой",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-A-06",
+   "title": "Удаление договора и спецификации: подтверждение (danger), каскад, один DELETE",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-W-01",
+   "title": "Рабочее пространство контракта: 4 вкладки, у существующего «Развёрнуто» доступна",
+   "status": "fail",
+   "failed": [],
+   "error": "Error: Не дождались: загрузка стенда (8000 мс)\n    at waitFor (http://127.0.0.1:8031/tests/helpers.js:12:49)\n    at async openApp (http://127.0.0.1:8031/tests/helpers.js:27:3)\n    at async Object.run (http://127.0.0.1:8031/tests/scenarios/cp.js:394:17)\n    at async runTests (http://127.0.0.1:8031/tests/helpers.js:129:11)\n    at async http://127.0.0.1:8031/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-W-03",
+   "title": "Архивность: у контракта с привязанными изделиями чекбокс заблокирован с пояснением; без изделий — работает",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-09",
+   "title": "Контракт: правка темы → «Отменить» откатывает; «Сохранить» — PATCH, «Сохранено.»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-W-16",
+   "title": "Права: корзины договора/спецификации и «Удалить контракт» — только при dict_delete=write (единый серверный эндпоинт удаления)",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-W-11",
+   "title": "Сохранение контракта: двойной клик — один PATCH; 403/409/422/500/сеть — ошибка видна, повтор возможен",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-W-13",
+   "title": "Удаление контракта без замены: delete-plan → подтверждение (danger) → удалён; SQL-аналог",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-14",
+   "title": "Контракт с изделиями: пикер замены; подтверждение переносит привязку; нет кандидатов — понятное сообщение; 409 — ошибка в пикере",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-W-15",
+   "title": "Обрыв связи на удалении: не «успех», а сообщение «не удалось определить результат»; контракт цел",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-KBD-01",
+   "title": "Клавиатура: после действий в контракте фокус остаётся в рабочей области, а не сбрасывается на <body>",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-KBD-02",
+   "title": "Клавиатура: смена вкладки карточки и добавление договора не сбрасывают фокус на <body>",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-A-08",
+   "title": "Повтор чтения объектов + вход в контракт до ответа: поздний ответ не роняет экран необработанной ошибкой",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-P-01",
+   "title": "Ёмкость: пустой тип строку не добавляет; тип добавляет строку; после сохранения значения с сервера",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-A-03",
+   "title": "Независимые ошибки кусков: контракты и спецификации падают отдельно, «Повторить» перечитывает только их",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-A-05",
+   "title": "Правка договора: «· не сохранено» → «Сохранить» → PATCH; ошибка рядом с формой, ввод цел",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-S-01",
+   "title": "Спецификация: пустой номер — сообщение; создание — один POST; правка — PATCH; удаление по правам",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-K-01",
+   "title": "Список контрактов под спецификацией: «позиций: N, всего изделий: M»; «+ Контракт» → «Есть неотправленный новый контракт»",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-W-02",
+   "title": "Реквизиты: каскад контрагент → договор → спецификация подставляет первые значения; «Сохранить» доступна",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-W-04",
+   "title": "Позиции: пустые строки отбрасываются; без единой позиции сохранить нельзя — сообщение",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-05",
+   "title": "Инциденты и производительность: добавление строк; строки без даты/типа/значения отбрасываются понятно",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-07",
+   "title": "«Развёрнуто»: ошибка чтения — «Повторить»; после — таблица элементов со статусами по-русски и остатком",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-08",
+   "title": "Новый контракт: позиции → «Сохранить» → POST; контракт становится существующим, «Развёрнуто» доступна",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-10",
+   "title": "Отмена нового контракта: подтверждение; «Отмена» диалога оставляет форму",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-12",
+   "title": "Перенос контракта: смена контрагента/договора/спецификации → «Сохранить» → воркспейс закрыт с пояснением",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-REG-01",
+   "title": "Неудачная запись плановой даты: ошибка на строке, значение не теряется; 403 снимает права у всего контракта",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-REG-02",
+   "title": "Уход с неподтверждённой датой: «← Контрагент», верхний раздел, V1-кнопка — везде предупреждение",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "CP-REG-04",
+   "title": "Повтор записи даты — только по явному действию; автоповтора нет",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-REG-05",
+   "title": "Отказ от неподтверждённого значения: сбрасывается только оно, уже записанные даты не откатываются",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-REG-06",
+   "title": "Черновик контракта + ошибка даты: ОДИН диалог, «Остаться» — ничего не потеряно; «Сохранить» — сохранены обе части",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "CP-REG-07",
+   "title": "Конфликт A: идёт запись даты → сохранение/удаление контракта не стартуют (счёт запросов)",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-REG-08",
+   "title": "Конфликт B: идёт операция контракта → запись даты не стартует даже при прямом вызове обработчика",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-REG-09",
+   "title": "Две разные даты параллельно; повторный клик по одной — один запрос на строку; перерисовка ответом другой строки блокировку не снимает",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-REG-10",
+   "title": "Блокировка снимается после успеха и после ошибки; ограничения по правам и архивности сохраняются после разблокировки",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "VIS-login-1920x1080",
+   "title": "Вход — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-login-1920x900",
+   "title": "Вход — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-login-1366x768",
+   "title": "Вход — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-no-sections-1920x1080",
+   "title": "Нет доступных разделов — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-no-sections-1920x900",
+   "title": "Нет доступных разделов — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-no-sections-1366x768",
+   "title": "Нет доступных разделов — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-users-1920x1080",
+   "title": "UA: список пользователей — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-users-1920x900",
+   "title": "UA: список пользователей — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-users-1366x768",
+   "title": "UA: список пользователей — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-new-user-1920x1080",
+   "title": "UA: форма нового пользователя — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-new-user-1920x900",
+   "title": "UA: форма нового пользователя — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-new-user-1366x768",
+   "title": "UA: форма нового пользователя — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-profile-1920x1080",
+   "title": "UA: карточка — профиль (есть несохранённое) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-profile-1920x900",
+   "title": "UA: карточка — профиль (есть несохранённое) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-profile-1366x768",
+   "title": "UA: карточка — профиль (есть несохранённое) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-1920x1080",
+   "title": "UA: карточка — доступ к объектам (сводка) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-1920x900",
+   "title": "UA: карточка — доступ к объектам (сводка) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-1366x768",
+   "title": "UA: карточка — доступ к объектам (сводка) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-editor-1920x1080",
+   "title": "UA: карточка — редактор области доступа — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-editor-1920x900",
+   "title": "UA: карточка — редактор области доступа — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-editor-1366x768",
+   "title": "UA: карточка — редактор области доступа — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-security-1920x1080",
+   "title": "UA: карточка — вход и безопасность — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-security-1920x900",
+   "title": "UA: карточка — вход и безопасность — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-security-1366x768",
+   "title": "UA: карточка — вход и безопасность — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-1920x1080",
+   "title": "UA: роли и матрица разрешений — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-1920x900",
+   "title": "UA: роли и матрица разрешений — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-1366x768",
+   "title": "UA: роли и матрица разрешений — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-dirty-1920x1080",
+   "title": "UA: роли — несохранённые ячейки — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-dirty-1920x900",
+   "title": "UA: роли — несохранённые ячейки — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-dirty-1366x768",
+   "title": "UA: роли — несохранённые ячейки — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-check-1920x1080",
+   "title": "UA: проверка доступа (пользователь с ролями, объект выбран) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-check-1920x900",
+   "title": "UA: проверка доступа (пользователь с ролями, объект выбран) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-check-1366x768",
+   "title": "UA: проверка доступа (пользователь с ролями, объект выбран) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-tree-1920x1080",
+   "title": "PO: дерево без выбора — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-tree-1920x900",
+   "title": "PO: дерево без выбора — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-tree-1366x768",
+   "title": "PO: дерево без выбора — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1920x1080",
+   "title": "PO: карточка объекта с вложениями — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1920x900",
+   "title": "PO: карточка объекта с вложениями — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1366x768",
+   "title": "PO: карточка объекта с вложениями — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1920x1080",
+   "title": "PO: объект с очень длинными названием и адресом — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1920x900",
+   "title": "PO: объект с очень длинными названием и адресом — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1366x768",
+   "title": "PO: объект с очень длинными названием и адресом — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1920x1080",
+   "title": "PO: проект с очень длинным названием — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1920x900",
+   "title": "PO: проект с очень длинным названием — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1366x768",
+   "title": "PO: проект с очень длинным названием — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1920x1080",
+   "title": "PO: новый проект — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1920x900",
+   "title": "PO: новый проект — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1366x768",
+   "title": "PO: новый проект — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-dirty-error-1920x1080",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-dirty-error-1920x900",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-dirty-error-1366x768",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-unsaved-1920x1080",
+   "title": "Диалог: несохранённые изменения — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-unsaved-1920x900",
+   "title": "Диалог: несохранённые изменения — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-unsaved-1366x768",
+   "title": "Диалог: несохранённые изменения — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1920x1080",
+   "title": "Диалог: подтверждение удаления (danger) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1920x900",
+   "title": "Диалог: подтверждение удаления (danger) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1366x768",
+   "title": "Диалог: подтверждение удаления (danger) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-list-1920x1080",
+   "title": "CP: список контрагентов — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-list-1920x900",
+   "title": "CP: список контрагентов — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-list-1366x768",
+   "title": "CP: список контрагентов — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-1920x1080",
+   "title": "CP: карточка — основное — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-1920x900",
+   "title": "CP: карточка — основное — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-1366x768",
+   "title": "CP: карточка — основное — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-long-1920x1080",
+   "title": "CP: карточка с очень длинными названиями — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-long-1920x900",
+   "title": "CP: карточка с очень длинными названиями — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-long-1366x768",
+   "title": "CP: карточка с очень длинными названиями — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-dirty-1920x1080",
+   "title": "CP: карточка — есть несохранённое — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-dirty-1920x900",
+   "title": "CP: карточка — есть несохранённое — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-dirty-1366x768",
+   "title": "CP: карточка — есть несохранённое — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-contracting-1920x1080",
+   "title": "CP: карточка — контрактация (договоры, спецификации, контракты) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-contracting-1920x900",
+   "title": "CP: карточка — контрактация (договоры, спецификации, контракты) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-contracting-1366x768",
+   "title": "CP: карточка — контрактация (договоры, спецификации, контракты) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-other-1920x1080",
+   "title": "CP: карточка — ёмкость («Прочее») — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-other-1920x900",
+   "title": "CP: карточка — ёмкость («Прочее») — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-other-1366x768",
+   "title": "CP: карточка — ёмкость («Прочее») — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-lines-1920x1080",
+   "title": "CP: контракт — позиции (реквизиты раскрыты) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-lines-1920x900",
+   "title": "CP: контракт — позиции (реквизиты раскрыты) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-lines-1366x768",
+   "title": "CP: контракт — позиции (реквизиты раскрыты) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-1920x1080",
+   "title": "CP: контракт — «Развёрнуто» (плановые даты) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-1920x900",
+   "title": "CP: контракт — «Развёрнуто» (плановые даты) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-1366x768",
+   "title": "CP: контракт — «Развёрнуто» (плановые даты) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-error-1920x1080",
+   "title": "CP: контракт — «Развёрнуто», ошибка записи даты на строке — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-error-1920x900",
+   "title": "CP: контракт — «Развёрнуто», ошибка записи даты на строке — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-error-1366x768",
+   "title": "CP: контракт — «Развёрнуто», ошибка записи даты на строке — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-incidents-1920x1080",
+   "title": "CP: контракт — инциденты — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-incidents-1920x900",
+   "title": "CP: контракт — инциденты — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-incidents-1366x768",
+   "title": "CP: контракт — инциденты — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-capacity-1920x1080",
+   "title": "CP: контракт — производительность — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-capacity-1920x900",
+   "title": "CP: контракт — производительность — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-capacity-1366x768",
+   "title": "CP: контракт — производительность — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-long-1920x1080",
+   "title": "CP: контракт с очень длинными названиями — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-long-1920x900",
+   "title": "CP: контракт с очень длинными названиями — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-long-1366x768",
+   "title": "CP: контракт с очень длинными названиями — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-replacement-1920x1080",
+   "title": "CP: контракт — выбор замены при удалении — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-replacement-1920x900",
+   "title": "CP: контракт — выбор замены при удалении — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-replacement-1366x768",
+   "title": "CP: контракт — выбор замены при удалении — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-sticky-users-1366x768",
+   "title": "Шапка таблицы пользователей закреплена при прокрутке списка — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "A11Y-ua-users",
+   "title": "UA: список пользователей: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-new-user",
+   "title": "UA: форма нового пользователя: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-card-profile",
+   "title": "UA: карточка — профиль (есть несохранённое): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-card-access",
+   "title": "UA: карточка — доступ к объектам (сводка): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-card-access-editor",
+   "title": "UA: карточка — редактор области доступа: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-card-security",
+   "title": "UA: карточка — вход и безопасность: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-roles",
+   "title": "UA: роли и матрица разрешений: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-roles-dirty",
+   "title": "UA: роли — несохранённые ячейки: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-check",
+   "title": "UA: проверка доступа (пользователь с ролями, объект выбран): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-tree",
+   "title": "PO: дерево без выбора: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-object",
+   "title": "PO: карточка объекта с вложениями: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-object-long",
+   "title": "PO: объект с очень длинными названием и адресом: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-project-long",
+   "title": "PO: проект с очень длинным названием: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-new",
+   "title": "PO: новый проект: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-dirty-error",
+   "title": "PO: ошибка сохранения при уходе (видна сразу): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-dialog-unsaved",
+   "title": "Диалог: несохранённые изменения: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-dialog-confirm-danger",
+   "title": "Диалог: подтверждение удаления (danger): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-list",
+   "title": "CP: список контрагентов: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-main",
+   "title": "CP: карточка — основное: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-main-long",
+   "title": "CP: карточка с очень длинными названиями: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-main-dirty",
+   "title": "CP: карточка — есть несохранённое: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-contracting",
+   "title": "CP: карточка — контрактация (договоры, спецификации, контракты): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-other",
+   "title": "CP: карточка — ёмкость («Прочее»): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-lines",
+   "title": "CP: контракт — позиции (реквизиты раскрыты): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-expanded",
+   "title": "CP: контракт — «Развёрнуто» (плановые даты): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-expanded-error",
+   "title": "CP: контракт — «Развёрнуто», ошибка записи даты на строке: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-incidents",
+   "title": "CP: контракт — инциденты: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-capacity",
+   "title": "CP: контракт — производительность: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-long",
+   "title": "CP: контракт с очень длинными названиями: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-replacement",
+   "title": "CP: контракт — выбор замены при удалении: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 5
+  }
+ ],
+ "rev": "78cac49",
+ "tree_dirty": false,
+ "ran_at": "2026-09-20 17:39:15"
+}
