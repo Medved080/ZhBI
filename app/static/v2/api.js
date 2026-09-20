@@ -19,13 +19,16 @@ function notifyPendingWrites() { for (const fn of writeListeners) fn(pendingWrit
 
 async function request(method, path, body) {
   const isWrite = method !== "GET";
+  // FormData (загрузка файла) уходит как есть: Content-Type с boundary
+  // браузер выставляет сам, ручной JSON-заголовок его бы сломал.
+  const isForm = typeof FormData !== "undefined" && body instanceof FormData;
   if (isWrite) { pendingWrites++; notifyPendingWrites(); }
   try {
     const res = await fetch(path, {
       method,
       credentials: "same-origin",
-      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: body !== undefined && !isForm ? { "Content-Type": "application/json" } : undefined,
+      body: body === undefined ? undefined : (isForm ? body : JSON.stringify(body)),
     });
     if (res.status === 204) return null;
     let data = null;
@@ -49,6 +52,7 @@ export const api = {
   patch: (path, body) => request("PATCH", path, body ?? {}),
   put: (path, body) => request("PUT", path, body ?? {}),
   delete: (path) => request("DELETE", path),
+  upload: (path, formData) => request("POST", path, formData),
   hasPendingWrites: () => pendingWrites > 0,
   onPendingWritesChange(fn) { writeListeners.add(fn); return () => writeListeners.delete(fn); },
 };

@@ -714,14 +714,21 @@ export function mountProjectsObjects(container, ctx) {
         }
       }));
       listEl.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
+        if (b.disabled) return;
         const attId = Number(b.dataset.del);
+        // Блокировка ДО диалога: второй клик по той же кнопке (или по кнопке
+        // соседнего вложения) не должен открыть ещё одно подтверждение и
+        // отправить второй DELETE по тому же id, пока первый в пути.
+        listEl.querySelectorAll("[data-del]").forEach((x) => { x.disabled = true; });
+        const unlockDeleteButtons = () => listEl.querySelectorAll("[data-del]").forEach((x) => { x.disabled = false; });
         const confirmed = await showConfirmDialog("Удалить вложение? Восстановить его будет нечем.", { confirmLabel: "Удалить" });
-        if (!confirmed) return;
+        if (!confirmed) { unlockDeleteButtons(); return; }
         try {
           const d = await api.delete(`/attachments/${attId}`);
           if (rec && rec.avatar_attachment_id === attId) { rec.avatar_attachment_id = null; rec.has_avatar = false; renderAvatar(); }
           paint(d.attachments);
         } catch (err) {
+          unlockDeleteButtons();
           state.status_msg = err?.detail || err?.message || "Не удалось удалить вложение";
           await render();
         }
@@ -744,9 +751,10 @@ export function mountProjectsObjects(container, ctx) {
             fd.append("entity_id", String(id));
             fd.append("description", listEl.querySelector("#po-attach-desc").value.trim());
             fd.append("file", file);
-            const res = await fetch("/attachments", { method: "POST", body: fd, credentials: "same-origin" });
-            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
-            latest = (await res.json()).attachments;
+            // Через api.upload, а не сырой fetch: тогда идущая закачка видна
+            // счётчику записей и блокирует смену раздела/уход в V1 наравне
+            // с остальными записями.
+            latest = (await api.upload("/attachments", fd)).attachments;
           }
           paint(latest);
         } catch (err) {
