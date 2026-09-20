@@ -132,16 +132,16 @@ export const tests = [
     id: "RD-07", title: "Экран объекта: запрос с id выбранного объекта; смена объекта в шапке перезагружает экран",
     async run(t) {
       const a = await openApp({ home: true });
-      await openScreen(a, "late-threshold");
+      await openScreen(a, "project-card");
       const sel = a.$("#v2-object");
       const first = Number(sel.value);
-      const reqFirst = a.ctl.log.filter((e) => e.path.startsWith("/settings/info-plate"));
+      const reqFirst = a.ctl.log.filter((e) => e.path.startsWith("/settings/project-card"));
       t.ok(reqFirst.some((e) => e.path.includes(`object_id=${first}`)), "запрос ушёл с id выбранного объекта");
       const other = [...sel.options].map((o) => Number(o.value)).find((v) => v && v !== first);
       a.setValue(sel, String(other));
-      await waitFor(() => a.ctl.log.some((e) => e.path.startsWith("/settings/info-plate") && e.path.includes(`object_id=${other}`)), { what: "перезагрузка под другим объектом" });
+      await waitFor(() => a.ctl.log.some((e) => e.path.startsWith("/settings/project-card") && e.path.includes(`object_id=${other}`)), { what: "перезагрузка под другим объектом" });
       await waitFor(() => loaded(a), { what: "данные нового объекта" });
-      t.has(a.$("#rd-body").textContent, "Порог опоздания поставки", "показаны данные объекта");
+      t.has(a.$("#rd-body").textContent, "QA-карточка", "показаны данные объекта");
       // объект запомнен на время сеанса вкладки и НЕ записан на сервер
       t.eq(a.ctl.log.filter((e) => e.method === "PUT").length, 0, "выбор объекта не записывается на сервер");
     },
