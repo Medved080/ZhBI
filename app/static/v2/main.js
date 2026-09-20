@@ -17,6 +17,7 @@ import { mountColorEdit } from "./color-edit.js";
 import { mountPrefixEdit } from "./prefix-edit.js";
 import { mountProjectCardEdit, mountReportNotesEdit } from "./card-edit.js";
 import { mountExportForm } from "./export-form.js";
+import { mountSessionsEdit } from "./sessions-edit.js";
 
 const root = document.getElementById("v2-root");
 
@@ -326,6 +327,11 @@ async function renderShell(user, permissions) {
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = MODULES[target.id](content, moduleCtx);
+      } else if (target.impl === "sessions-edit") {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountSessionsEdit(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
+        });
       } else if (target.impl === "export-form" && target.export) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountExportForm(content, {

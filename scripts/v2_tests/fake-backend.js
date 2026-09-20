@@ -2557,10 +2557,23 @@ function createServer(opts) {
     const names = { "Захватка": ["Захватка 1", "Захватка 2"], "Кран": ["Кран 1"], "Стоянка": [] };
     return names[cat].map((name, i) => ({ id: 100 + i, category: cat, number: i + 1, name, parent_zone_id: null, parent_name: null, is_current: true, match_status: "matched", levels: [], elements: 10 * (i + 1) }));
   });
-  route("GET", "/me/sessions", () => ({
-    sessions: [{ id: "aaaabbbbcccc", current: true, created_at: "2026-09-20 10:00:00", last_seen_at: "2026-09-20 11:00:00", expires_at: "2026-10-20 10:00:00", ip: "127.0.0.1", user_agent: "QA-браузер", impersonated_by: null }],
-    idle_hours: 12, ttl_days: 30,
-  }));
+  // свои сеансы: текущий + два чужих (data.settings.sessions); завершение — DELETE, «все кроме текущего» — POST
+  const sessionsOf = () => (data.settings.sessions ||= [
+    { id: "cur000000001", current: true, created_at: "2026-09-20 10:00:00", last_seen_at: "2026-09-20 11:00:00", expires_at: "2026-10-20 10:00:00", ip: "127.0.0.1", user_agent: "QA-браузер (текущий)", impersonated_by: null },
+    { id: "oth000000002", current: false, created_at: "2026-09-19 09:00:00", last_seen_at: "2026-09-19 12:00:00", expires_at: "2026-10-19 09:00:00", ip: "10.0.0.5", user_agent: "QA-ноутбук", impersonated_by: null },
+    { id: "oth000000003", current: false, created_at: "2026-09-18 08:00:00", last_seen_at: "2026-09-18 08:30:00", expires_at: "2026-10-18 08:00:00", ip: "10.0.0.6", user_agent: "QA-планшет", impersonated_by: null }]);
+  route("GET", "/me/sessions", () => ({ sessions: deepClone(sessionsOf()), idle_hours: 12, ttl_days: 30 }));
+  route("DELETE", "/me/sessions/:id", (ctx) => {
+    const list = sessionsOf(), i = list.findIndex((x) => x.id === ctx.params.id);
+    if (i < 0) fail(404, "Сеанс не найден — возможно, он уже завершён");
+    list.splice(i, 1);
+    return { status: "ok" };
+  });
+  route("POST", "/me/sessions/close-others", () => {
+    const list = sessionsOf(); const before = list.length;
+    data.settings.sessions = list.filter((x) => x.current);
+    return { closed: before - data.settings.sessions.length };
+  });
   route("GET", "/admin/backups", (ctx) => {
     readGate(ctx, "backups");
     return { backups: [{ name: "zhbi_qa_auto", created_at: "2026-09-20 09:00:00", kind: "auto", kind_label: "служебная — QA", user_name: null, user_id: null, comment: "QA-копия", size_bytes: 5242880, stats: {} }], disk: { known: true } };
