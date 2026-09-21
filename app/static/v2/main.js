@@ -48,10 +48,17 @@ let activeModule = null; // {hasUnsavedChanges, guardLeave} текущего с�
 // третьи клики по вкладкам разделов и по «← Текущий интерфейс» игнорируются.
 let navBusy = false;
 
+// Контекст для перехода обратно в V1: выбранный в шапке объект и (если открыто рабочее место со схемой) само рабочее место.
+// V1 разбирает их при запуске (applyStartupDeepLink) и сам проверяет права: недоступное рабочее место он не открывает.
+const switchCtx = { objectId: null, ws: null };
+
 function setBackToV1() {
   // Постоянный сброс (не только переход): «Действия ▾» в V1 не должно
   // немедленно вернуть сюда же по cookie-предпочтению.
-  location.href = "/?ui=v1";
+  const p = new URLSearchParams({ ui: "v1" });
+  if (switchCtx.objectId) p.set("object_id", String(switchCtx.objectId));
+  if (switchCtx.ws) p.set("ws", switchCtx.ws);
+  location.href = "/?" + p;
 }
 
 async function onBackClick() {
@@ -187,6 +194,7 @@ async function renderShell(user, permissions) {
   if (fromV1) { try { history.replaceState(null, "", location.pathname + location.hash); } catch (e) { /* адрес не критичен */ } }
   const pick = (id) => activeObjects.find((o) => o.id === id);
   let objectId = (pick(fromV1) || pick(remembered) || pick(tree.last_object_id) || activeObjects.find((o) => o.elements > 0) || activeObjects[0] || {}).id ?? null;
+  switchCtx.objectId = objectId;
   let rights = permissions;
   async function loadRights() {
     if (!objectId) { rights = permissions; return true; }
@@ -335,6 +343,7 @@ async function renderShell(user, permissions) {
       content.className = "v2-page";
       root.classList.toggle("v2-ws-mode", !!target && target.impl === "workspace");
       currentKey = key;
+      switchCtx.ws = target?.ws && target.impl === "workspace" ? target.ws : null;
       const wanted = key === "home" ? "#/" : `#/${key}`;
       if (location.hash !== wanted && !(key === "home" && (location.hash === "" || location.hash === "#"))) {
         history.pushState(null, "", wanted);
@@ -473,6 +482,7 @@ async function renderShell(user, permissions) {
       if (stay) { objectSelect.value = String(objectId); return; }
     }
     objectId = id;
+    switchCtx.objectId = id;
     writeSession("v2.objectId", String(id));
     rightsOk = await loadRights();
     const note = document.getElementById("v2-nav-note");

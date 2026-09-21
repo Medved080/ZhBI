@@ -1264,7 +1264,9 @@ document.getElementById("menu-ui-v2").addEventListener("click", () => {
   if (занятаяФорма
       && !confirm("В открытой форме есть несохранённые изменения. Перейти к новому "
                   + "интерфейсу без сохранения?")) return;
-  location.href = state.objectId ? `/v2?object_id=${state.objectId}` : "/v2";
+  // Объект и рабочее место переходят вместе с человеком: V2 откроет то же рабочее место на том же объекте (если оно ему доступно)
+  const wsRoute = { model: "ws-model", mfr: "ws-mfr", picker: "ws-picker", foreman: "ws-foreman" }[workspace];
+  location.href = (state.objectId ? `/v2?object_id=${state.objectId}` : "/v2") + (wsRoute ? `#/${wsRoute}` : "");
 });
 document.getElementById("sessions-close").addEventListener("click", () =>
   sessionsBackdrop.classList.remove("open"));
