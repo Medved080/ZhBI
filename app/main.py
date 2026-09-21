@@ -70,6 +70,7 @@ from app.reference_catalogs import router as reference_catalogs_router
 from app import zone_recalc
 from app.db import (
     DB_PATH,
+    begin_write,
     get_connection,
     init_db,
     object_source_file,
@@ -403,6 +404,8 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 app.add_middleware(ImpersonationMiddleware)
 
 app.include_router(auth_router)
+from app.allocation import router as allocation_router  # noqa: E402
+app.include_router(allocation_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
 # не должен иметь ни единого шанса уехать в {user_id}.
 app.include_router(rights_matrix_router)
@@ -1169,7 +1172,9 @@ def update_status(
     element_id: int, body: StatusUpdateIn, user: sqlite3.Row = Depends(get_current_user)
 ):
     conn = get_connection()
+    events = activity.defer_begin()   # события status_change уходят в журнал только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверки остатка (app/db.py)
         _guard_elements(conn, user, [element_id], "status", "write")
         # contract_id для новой записи — явно выбранный в диалоге (даже null —
         # "без контракта" осознанно) или унаследованный от предыдущей записи
@@ -1183,8 +1188,10 @@ def update_status(
         except LookupError:
             raise HTTPException(status_code=404, detail="Элемент не найден")
         conn.commit()
+        activity.defer_flush(events)
         return data
     finally:
+        activity.defer_end(events)   # откат/исключение: несброшенные события отбрасываются
         conn.close()
 
 
@@ -1199,7 +1206,9 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get
     if not body.items:
         raise HTTPException(status_code=400, detail="Пустой список элементов")
     conn = get_connection()
+    events = activity.defer_begin()   # события status_change уходят в журнал только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверки остатка (app/db.py)
         ids = [item.element_id for item in body.items]
         placeholders = ",".join("?" * len(ids))
         existing_ids = {
@@ -1218,8 +1227,10 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get
             )
             updated.append(data)
         conn.commit()
+        activity.defer_flush(events)
         return {"updated": updated}
     finally:
+        activity.defer_end(events)   # откат/исключение: несброшенные события отбрасываются
         conn.close()
 
 
@@ -1254,6 +1265,7 @@ def set_element_contract(element_id: int, body: ElementContractIn,
     """
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверки остатка (app/db.py)
         row = conn.execute(
             "SELECT id, current_status, element_type, mark, contract_id FROM elements WHERE id = ?",
             (element_id,),
@@ -1425,6 +1437,7 @@ def update_history_entry(
 
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверок (app/db.py): не читать устаревшее состояние перед записью
         # Объект — из элемента, которому принадлежит запись истории.
         element = conn.execute("SELECT object_id FROM elements WHERE id = ?", (element_id,)).fetchone()
         if element is None:
@@ -1495,6 +1508,7 @@ def delete_history_entry(
     времени запись."""
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверок (app/db.py): не читать устаревшее состояние перед записью
         row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
@@ -3877,6 +3891,7 @@ def update_element_fields(
 
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверок (app/db.py): не читать устаревшее состояние перед записью
         row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Элемент не найден")
@@ -4063,6 +4078,7 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
                          audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверок (app/db.py): не читать устаревшее состояние перед записью
         if body.mode == "contracting":
             try:
                 return contracting_bulk_edit.apply_changes(
@@ -7366,9 +7382,11 @@ def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query
                          audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
+        # Файл разбирается ДО блокировки (это долго и от БД не зависит); блокировка записи — до чтения БД и до записи (app/db.py)
+        parsed = parse_contracting_xlsx(content)
+        begin_write(conn)
         if conn.execute("SELECT id FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="Объект не найден")
-        parsed = parse_contracting_xlsx(content)
         итог = import_contracting(conn, parsed, object_id)
         activity.log("import_contracting", user=admin, entity_type="object", entity_id=object_id,
                      new_value=f"{file.filename or 'файл'}: "

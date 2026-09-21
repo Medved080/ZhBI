@@ -139,11 +139,63 @@ def log(
         # последствия действия; здесь только «а нажимал это администратор».
         **_impersonation_columns(),
     }
+    deferred = getattr(_local, "buf", None)
+    if deferred is not None:
+        deferred.append(event)   # копится до подтверждённого commit (defer_flush); при откате отбрасывается (defer_end)
+        return
     try:
         _queue.put_nowait(event)
     except queue.Full:
         with _dropped_lock:
             _dropped += 1
+
+
+# ---- Отложенные события: журнал подтверждает только то, что зафиксировано (commit) ----
+#
+# `log()` кладёт событие в очередь СРАЗУ. Операции, которые пишут в БД несколькими шагами и могут откатиться целиком (пачка смены статуса,
+# проведение документа, распределение), логировали каждый шаг по ходу дела — при откате в журнале оставались события об изменениях, которых
+# нет. Решение в рамках прежней архитектуры (очередь + писатель не менялись): на время операции события копятся в списке потока и уходят в
+# очередь ОДНИМ вызовом `defer_flush` после подтверждённого commit; не сброшенное к `defer_end` (откат, исключение) отбрасывается и считается.
+# Автор, режим «от имени» и `at` фиксируются в момент `log()` — как и раньше; порядок событий сохраняется. Ошибки очереди прежние: переполнение
+# считается в `_dropped` и видно в состоянии журнала.
+_local = threading.local()
+_discarded = 0
+
+
+def defer_begin() -> list:
+    """Начать накопление событий этого потока; вернуть буфер (передаётся в defer_flush/defer_end)."""
+    buf: list = []
+    _local.buf = buf
+    return buf
+
+
+def defer_flush(buf: list) -> None:
+    """Отправить накопленные события в очередь — ТОЛЬКО после подтверждённого commit. Дальнейшие log() идут сразу."""
+    global _dropped
+    if getattr(_local, "buf", None) is buf:
+        _local.buf = None
+    for event in buf:
+        try:
+            _queue.put_nowait(event)
+        except queue.Full:
+            with _dropped_lock:
+                _dropped += 1
+    buf.clear()
+
+
+def defer_end(buf: list) -> None:
+    """Завершить накопление: несброшенные события (откат, исключение) отбрасываются — журнал не подтверждает несостоявшееся."""
+    global _discarded
+    if getattr(_local, "buf", None) is buf:
+        _local.buf = None
+    if buf:
+        _discarded += len(buf)
+        buf.clear()
+
+
+def discarded_count() -> int:
+    """Сколько событий отброшено из-за отката (для проверок и диагностики)."""
+    return _discarded
 
 
 def new_request_id() -> str:

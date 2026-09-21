@@ -217,6 +217,16 @@ def link_problem(
     if current_contract_id == contract_id and current_status and current_status != "planned":
         return None
 
+    # Контракт обязан быть ТОГО ЖЕ объекта, что и изделие. Одиночное назначение (set_element_contract) это проверяло
+    # всегда, а смена статуса — одиночная и пачкой — нет: контракт чужого объекта с позицией под ту же марку принимался.
+    if element_id is not None:
+        объекты = conn.execute(
+            "SELECT e.object_id AS eo, a.object_id AS co FROM elements e, contracts c "
+            "JOIN specifications s ON s.id = c.specification_id JOIN agreements a ON a.id = s.agreement_id "
+            "WHERE e.id = ? AND c.id = ?", (element_id, contract_id)).fetchone()
+        if объекты is not None and объекты["eo"] != объекты["co"]:
+            return "Контракт относится к другому объекту — привязать изделие к нему нельзя."
+
     key = line_key(element_type, mark)
     закуплено = 0
     for r in conn.execute(
