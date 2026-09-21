@@ -145,29 +145,29 @@
   {
    "id": "VIS-po-dirty-error-1920x1080",
    "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×1080",
-   "status": "pass",
-   "blocked": 0,
+   "status": "gate-blocked",
+   "blocked": 1,
    "failed": [],
-   "error": null,
-   "checks": 9
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
   },
   {
    "id": "VIS-po-dirty-error-1920x900",
    "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×900",
-   "status": "pass",
-   "blocked": 0,
+   "status": "gate-blocked",
+   "blocked": 1,
    "failed": [],
-   "error": null,
-   "checks": 9
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
   },
   {
    "id": "VIS-po-dirty-error-1366x768",
    "title": "PO: ошибка сохранения при уходе (видна сразу) — 1366×768",
-   "status": "pass",
-   "blocked": 0,
+   "status": "gate-blocked",
+   "blocked": 1,
    "failed": [],
-   "error": null,
-   "checks": 9
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
   },
   {
    "id": "VIS-dialog-confirm-danger-1920x1080",
@@ -200,5 +200,5 @@
  "rev": "dfa6569",
  "tree_dirty": false,
  "app_static_tree": "e84cfd6e8c3701faff9bea49815d056c25e61565",
- "ran_at": "2026-09-21 11:48:36"
+ "ran_at": "2026-09-21 11:47:33"
 }
