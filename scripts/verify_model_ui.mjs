@@ -865,7 +865,9 @@ if (want("3d")) {
     picked = /Выбран: /.test(await statusBar(b3));
   }
   ok("3D: щелчок по изделию выбирает его (панель показывает карточку)", picked && /Ригель|Плита|Колонна|Стена|Балка/.test((await panel(b3)).slice(0, 200)) || picked, (await statusBar(b3)).replace(/\n/g, " | "));
-  await b3.clickSel('.ws-tools [data-tool="clear"]'); await b3.sleep(500);
+  await b3.clickSel('.ws-tools [data-tool="clear"]');
+  // программный WebGL (swiftshader) рисует кадр медленно: ждём до 8 с, а не фиксированные 0,5 с; если выбор так и не снят — проверка падает
+  await b3.waitFor(`/Ничего не выбрано/.test(document.querySelector('#ws-status')?.innerText||'')`, 8000).catch(() => {});
   ok("3D: «Снять выбор» очищает", /Ничего не выбрано/.test(await statusBar(b3)));
   ok("3D: нет исключений", b3.exceptions.length === 0, JSON.stringify(b3.exceptions.slice(0, 2)));
   await b3.close();
