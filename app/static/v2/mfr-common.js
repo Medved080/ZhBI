@@ -45,6 +45,15 @@ export function canAccounting(rights, level) {
 // ------------------------------------------------------------------ модальное окно
 // Одно окно на экран: содержимое рисует вызывающий код. Закрытие крестиком/Esc/подложкой идёт через `onRequestClose`
 // (сторож несохранённого): вернул false — остаёмся. Фокус возвращается на прежний элемент.
+// Реестр открытых окон: экран спрашивает, есть ли в них несохранённое (смена объекта, уход с экрана), и просит сторожа каждого окна.
+const OPEN_MODALS = new Set();
+export const anyModalDirty = () => [...OPEN_MODALS].some((m) => m.dirty?.());
+export async function guardModals() {
+  for (const m of [...OPEN_MODALS]) { if (m.dirty?.() && m.guard && !(await m.guard())) return false; }
+  return true;
+}
+export function closeAllModals() { for (const m of [...OPEN_MODALS]) m.close(); }
+
 export function openModal({ title, wide = false, onRequestClose }) {
   const prev = document.activeElement;
   const back = document.createElement("div");
@@ -58,8 +67,9 @@ export function openModal({ title, wide = false, onRequestClose }) {
     body: back.querySelector(".mfr-modal-body"),
     setTitle: (t) => { back.querySelector("h3").textContent = t; box.setAttribute("aria-label", t); },
     get closed() { return closed; },
-    close(force = true) { if (closed) return; closed = true; document.removeEventListener("keydown", onKey, true); back.remove(); if (prev && document.contains(prev)) prev.focus?.(); },
+    close(force = true) { if (closed) return; closed = true; OPEN_MODALS.delete(api); document.removeEventListener("keydown", onKey, true); back.remove(); if (prev && document.contains(prev)) prev.focus?.(); },
   };
+  OPEN_MODALS.add(api);
   async function request() { if (closed) return; if (onRequestClose && (await onRequestClose()) === false) return; api.close(); }
   function onKey(e) {
     if (closed) return;

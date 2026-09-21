@@ -3,7 +3,7 @@
 // Права и API — как у V1 (`blocks: read` для списка блоков, `work_progress` для работ и факта). Список блоков и работ читается всегда;
 // изменяющие кнопки видны только при праве «Учёт по блокам: изменение» на объекте. Каждая запись — через `api.js` и шлюз `write-gate.js`.
 import { ApiError } from "./api.js";
-import { esc, errText, shortDate, canAccounting, DEADLINE, WORK_STATUS } from "./mfr-common.js";
+import { anyModalDirty, guardModals, closeAllModals, esc, errText, shortDate, canAccounting, DEADLINE, WORK_STATUS } from "./mfr-common.js";
 import { STATUS_LABEL } from "./registry.js";
 import { linkList } from "./screen-view.js";
 import { openFactDialog, openZrDialog, openSettingsDialog, openBulkDatesDialog } from "./mfr-dialogs.js";
@@ -257,8 +257,8 @@ export function mountBlocksScreen(el, { screen, structure, objectId, api, rights
   el.querySelectorAll(".v2-read-tab").forEach((b) => b.addEventListener("click", () => { tab = b.dataset.tab; st.search = ""; paint(); }));
   loadBase();
   return {
-    hasUnsavedChanges: () => false,
-    guardLeave: async () => true,
-    destroy() { dead = true; document.querySelectorAll(".mfr-modal-back").forEach((n) => n.remove()); },
+    hasUnsavedChanges: () => anyModalDirty(),
+    guardLeave: () => guardModals(),
+    destroy() { dead = true; closeAllModals(); },
   };
 }

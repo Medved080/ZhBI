@@ -43,3 +43,10 @@ export function checker(title) {
   const ok = (cond, label, extra = "") => { rows.push({ ok: !!cond, label, extra }); console.log(`  ${cond ? "ok  " : "FAIL"} ${label}${extra ? " — " + extra : ""}`); return !!cond; };
   return { ok, rows, done() { const bad = rows.filter((r) => !r.ok); console.log(`${title}: ${rows.length - bad.length} ok / ${bad.length} FAIL`); return bad.length; } };
 }
+
+// щелчок настоящим событием мыши по элементу, предварительно прокрутив его в видимую область своей панели
+export async function tap(b, sel, o) {
+  await b.eval(`document.querySelector(${JSON.stringify(sel)})?.scrollIntoView({block:'center',inline:'nearest'})`);
+  await sleep(120);
+  await b.clickSel(sel, o);
+}

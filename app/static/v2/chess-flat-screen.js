@@ -247,6 +247,6 @@ export function mountChessFlatScreen(el, { screen, structure, objectId, api, rig
   return {
     hasUnsavedChanges: () => st.draft.size > 0,
     guardLeave: guard,
-    destroy() { dead = true; modal?.close(); document.querySelectorAll(".mfr-modal-back").forEach((n) => n.remove()); },
+    destroy() { dead = true; modal?.close(); },
   };
 }

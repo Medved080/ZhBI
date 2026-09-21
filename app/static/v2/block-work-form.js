@@ -32,7 +32,7 @@ export function mountBlockWorkForm(host, { api, objectId, id, canWrite, onSaved,
 
   // Политика шлюза (write-gate.js): какие группы полей можно сохранять в этом интерфейсе.
   const groupOfField = (f) => Object.keys(GROUPS).find((g) => GROUPS[g].fields.includes(f));
-  const groupOpen = (g) => checkWrite("PATCH", `/objects/${objectId}/block-works/0`, { ...Object.fromEntries(GROUPS[g].fields.map((f) => [f, null])), expected_rev: "x" }).allowed;
+  const groupOpen = (g) => checkWrite("PATCH", `/objects/${objectId}/block-works/0`, { ...Object.fromEntries(GROUPS[g].fields.map((f) => [f, g === "note" ? "" : null])), expected_rev: "x" }).allowed;
 
   function paint() {
     if (dead) return;

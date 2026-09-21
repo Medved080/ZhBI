@@ -47,7 +47,14 @@ export const tests = [
         ["DELETE", "/settings/report-notes/2026-09-01?object_id=1", undefined], ["POST", "/allowed-subtypes", {}], ["POST", "/dictionaries/subtype/A%20B/delete", {}],
         ["POST", "/mark-type-prefixes", {}], ["POST", "/dictionaries/mark_prefix/QA/delete", {}], ["PUT", "/settings/info-plate?object_id=2", { late_threshold_days: 2 }],
         ["PUT", "/zone-colors?object_id=2", []], ["PUT", "/status-colors", {}], ["PUT", "/element-shapes", []], ["PUT", "/revit-plan/colors?object_id=4", {}],
-        ["PATCH", "/objects/4/block-works/9", { plan_start: null, plan_end: null }], ["POST", "/login", {}],
+        ["PATCH", "/objects/4/block-works/9", { plan_start: null, plan_end: null, expected_rev: "abc123" }], ["POST", "/login", {}],
+        ["PATCH", "/objects/4/block-works/9", { forecast_start: "2026-10-01", forecast_end: null, expected_rev: "abc123" }], ["PATCH", "/objects/4/block-works/9", { note: "x", expected_rev: "abc123" }],
+        ["PUT", "/objects/4/block-works/bulk", { block_work_ids: [1, 2], op: "shift", field: "plan", days: 3, expected: { 1: "a", 2: "b" } }],
+        ["PUT", "/objects/4/blocks/5/work-types-settings", { work_type_ids: [3], expected: "abc" }], ["PUT", "/objects/4/blocks/work-types-settings", { block_ids: [5, 6], work_type_ids: [3], expected: { 5: "a", 6: "b" } }],
+        ["POST", "/objects/4/blocks/5/fact-reports", { report_date: "2026-09-21", items: { 3: 50 } }], ["PUT", "/objects/4/blocks/5/fact-reports/9", { report_date: "2026-09-21", items: { 3: 50 }, expected_rev: "0123456789ab" }],
+        ["DELETE", "/objects/4/blocks/5/fact-reports/9?expected_rev=0123456789ab", undefined],
+        ["POST", "/objects/4/blocks/chess-flat-batch", { report_date: "2026-09-21", track_code: "3", idempotency_key: "12345678-key", items: [{ block_id: 5, work_type_id: 3, percent: 50, expected_percent: 0 }] }],
+        ["POST", "/objects/4/block-works/bulk-edit/analyze", undefined], ["POST", "/objects/4/block-works/bulk-edit/apply-strict", { changes: [{ bw_id: 1, field: "plan_end", was: null, now: "2026-10-01" }] }],
       ]) t.ok(ok(m, p, b), `разрешено: ${m} ${p}`);
       for (const [m, p, b] of [
         ["POST", "/users", {}], ["PATCH", "/users/5", {}], ["POST", "/users/5/set-password", {}], ["PUT", "/users/5/access", {}],
@@ -58,7 +65,11 @@ export const tests = [
         ["PATCH", "/contracts/1", {}], ["POST", "/dictionaries/contract/1/delete", {}], ["POST", "/dictionaries/counterparty/1/delete", {}], ["PATCH", "/elements/1/planned-delivery-date", {}],
         ["POST", "/projects", {}], ["PATCH", "/objects/1", {}], ["PUT", "/objects/1/avatar", {}], ["POST", "/attachments", {}], ["DELETE", "/attachments/3", undefined],
         ["POST", "/dictionaries/object/1/delete", {}], ["POST", "/something-new", {}], ["PUT", "/imports/anything", {}], ["DELETE", "/smu/3", undefined],
-        ["PATCH", "/objects/4/block-works/9", { note: "x" }], ["PATCH", "/objects/4/block-works/9", { forecast_start: "2026-01-01", forecast_end: null }], ["PATCH", "/objects/4/block-works/9", { plan_start: null, note: "x" }],
+        ["PATCH", "/objects/4/block-works/9", { note: "x" }], ["PATCH", "/objects/4/block-works/9", { forecast_start: "2026-01-01", forecast_end: null }], ["PATCH", "/objects/4/block-works/9", { plan_start: null, note: "x", expected_rev: "abc123" }],
+        ["PATCH", "/objects/4/block-works/9", { plan_start: null, plan_end: null }], ["PATCH", "/objects/4/block-works/9", { plan_start: "2026-13-40", plan_end: null, expected_rev: "abc123" }],
+        ["PUT", "/objects/4/block-works/bulk", { block_work_ids: [1, 2], op: "shift", field: "plan", days: 3 }], ["PUT", "/objects/4/blocks/work-types-settings", { block_ids: [5], work_type_ids: [3] }],
+        ["DELETE", "/objects/4/blocks/5/fact-reports/9", undefined], ["POST", "/objects/4/blocks/5/fact-reports", { report_date: "2026-09-21", items: { 3: 150 } }],
+        ["POST", "/objects/4/block-works/bulk-edit/apply", { changes: [{ bw_id: 1, field: "plan_end", now: "2026-10-01" }] }],
         ["PUT", "/settings/info-plate?object_id=2", { late_threshold_days: 2, other: 1 }],
       ]) t.ok(!ok(m, p, b), `отключено: ${m} ${p}${b && Object.keys(b).length ? " " + JSON.stringify(b) : ""}`);
       t.has(g.checkWrite("POST", "/users", {}).message, "отключена в экспериментальном интерфейсе", "текст отказа");
@@ -140,7 +151,7 @@ export const tests = [
     },
   },
   {
-    id: "GT-05", title: "Экраны с частичной политикой: физлица и сеансы — только просмотр; ЗР — прогноз и примечание отключены, базовый срок работает",
+    id: "GT-05", title: "Экраны с частичной политикой: физлица и сеансы — только просмотр; ЗР — базовый срок, прогноз и примечание работают (с отпечатком работы)",
     async run(t) {
       await guard(t, async () => {
         const a = await openApp({ home: true });
@@ -158,15 +169,14 @@ export const tests = [
         a.setValue(a.$("#v2-object"), String(mfr.id));
         await waitFor(() => a.$(`${NAV}[data-section="blocks"]`), { what: "учёт по блокам" });
         a.click(a.$(`${NAV}[data-section="blocks"]`));
-        await waitFor(() => a.$$(".v2-read-tab").length === 3, { what: "вкладки" });
-        a.click(a.$$(".v2-read-tab")[1]);
-        await waitFor(() => a.$("[data-row-edit]"), { what: "таблица работ" });
-        a.click(a.$('[data-row-edit="1"]'));
-        await waitFor(() => a.$("[data-f=plan_start]") && a.$("#bw-status"), { what: "карточка работы" });
+        await waitFor(() => a.$$(".mfr-blk").length >= 3, { what: "блоки" });
+        a.click(a.$('.mfr-blk[data-b="11"]'));
+        await waitFor(() => a.$("tr[data-bw]"), { what: "таблица работ" });
+        a.click(a.$('tr[data-bw="1"]'));
+        await waitFor(() => a.$("[data-f=plan_start]") && a.$("#bw-status") && a.$("[data-save=note]"), { what: "карточка работы" });
         t.ok(!a.$("[data-f=plan_start]").disabled, "базовый срок доступен");
-        t.ok(a.$("[data-f=forecast_start]").disabled && a.$("[data-f=note]").disabled, "прогноз и примечание отключены");
-        t.ok(!(a.$("[data-save=forecast]") || a.$("[data-save=note]")), "кнопок сохранения прогноза и примечания нет");
-        t.has(a.$("#v2-content").textContent, "отключены", "объяснение на экране");
+        t.ok(!a.$("[data-f=forecast_start]").disabled && !a.$("[data-f=note]").disabled, "прогноз и примечание доступны");
+        t.ok(a.$("[data-save=forecast]") && a.$("[data-save=note]"), "кнопки сохранения прогноза и примечания есть");
       });
     },
   },
@@ -188,11 +198,11 @@ export const tests = [
         a.setValue(a.$("#v2-object"), String(mfr.id));
         await waitFor(() => a.$(`${NAV}[data-section="blocks"]`), { what: "учёт по блокам" });
         a.click(a.$(`${NAV}[data-section="blocks"]`));
-        await waitFor(() => a.$$(".v2-read-tab").length === 3, { what: "вкладки" });
-        a.click(a.$$(".v2-read-tab")[1]);
-        await waitFor(() => a.$("[data-row-edit]"), { what: "таблица" });
-        a.click(a.$('[data-row-edit="1"]'));
-        await waitFor(() => a.$("[data-f=plan_start]") && a.$("#bw-status"), { what: "карточка" });
+        await waitFor(() => a.$$(".mfr-blk").length >= 3, { what: "блоки" });
+        a.click(a.$('.mfr-blk[data-b="11"]'));
+        await waitFor(() => a.$("tr[data-bw]"), { what: "таблица" });
+        a.click(a.$('tr[data-bw="1"]'));
+        await waitFor(() => a.$("[data-f=plan_start]") && a.$("#bw-status") && a.$("[data-f=plan_start]").closest(".v2-card") && !a.$("[data-f=plan_start]").closest(".v2-card").textContent.includes("Загрузка работы"), { what: "карточка" });
         a.setValue(a.$("[data-f=plan_start]"), "2026-11-01");
         a.setValue(a.$("[data-f=plan_end]"), "2026-11-05");
         await waitFor(() => !a.$("[data-save=plan]").disabled, { what: "правка" });
@@ -201,7 +211,7 @@ export const tests = [
         catch (e) { throw new Error(`${e.message}; статус: «${a.$("#bw-status")?.textContent}»; диалог: ${a.dialog() ? "да" : "нет"}; журнал: ${JSON.stringify(a.ctl.log.filter((x) => x.method !== "GET").map((x) => x.method + " " + x.path))}`); }
         const p = writes(a)[1];
         t.eq(p.method, "PATCH", "PATCH");
-        t.eq(Object.keys(p.body).sort(), ["plan_end", "plan_start"], "в теле только поля базового срока");
+        t.eq(Object.keys(p.body).sort(), ["expected_rev", "plan_end", "plan_start"], "в теле только поля базового срока и отпечаток работы");
       });
     },
   },

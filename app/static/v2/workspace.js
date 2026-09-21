@@ -14,7 +14,7 @@ import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
 import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
-import { createMfrBlockPanel } from "./mfr-block-panel.js";
+import { anyModalDirty, guardModals } from "./mfr-common.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -68,7 +68,10 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const groupSearch = new Map();
   let frameKey = 0;
   // МФР: панель работ блока (ЗР, факт, сроки, отбор, шахматка, динамика) — отдельный модуль mfr-block-panel.js
-  const mbp = mfr ? createMfrBlockPanel({ api, send, repaint: () => paintPanel(), getObjectId: () => curObject }) : null;
+  // (модуль подгружается при открытии рабочего места МФР, а не при старте V2)
+  let mbp = null;
+  if (mfr) import("./mfr-block-panel.js").then((m) => { if (dead) return; mbp = m.createMfrBlockPanel({ api, send, repaint: () => paintPanel(), getObjectId: () => curObject }); if (sc) mbp.onScene(sc); paintAll(); }).catch(() => { notice = "Панель работ блока не загрузилась"; paintStatus(); });
+  const panelHtml = (name, ...args) => (mbp ? mbp[name](...args) : `<p class="v2-muted ws-pad">Загрузка панели работ…</p>`);
 
   el.innerHTML = `
     <div class="ws-top">
@@ -634,7 +637,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     if (!sel) {
       return `<div class="ws-pad ws-empty"><h3 class="ws-h">Ничего не выбрано</h3>
         <p class="v2-muted">Нажмите на элемент или блок на плане. Ctrl (⌘) + щелчок добавляет блок к выбору.</p>
-        <dl class="ws-dl">${row("Элементов на плане", m.elements)}${row("Блоков", m.blocks || "")}${row("Отбор", m.filtersActive ? "задан" : "не задан")}</dl>${mbp.blocksListHtml(m)}</div>`;
+        <dl class="ws-dl">${row("Элементов на плане", m.elements)}${row("Блоков", m.blocks || "")}${row("Отбор", m.filtersActive ? "задан" : "не задан")}</dl>${mbp ? mbp.blocksListHtml(m) : ""}</div>`;
     }
     const key = `${sel.kind}:${sel.id}`;
     const d = detail.id === key ? detail.data : null;
@@ -649,7 +652,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc([d["секция"], d["этаж"]].filter(Boolean).join(" · ") || "Блок")}</div><div class="ws-type">Блок модели</div></div>${many}${actions}
         <h4>Состав</h4><dl class="ws-dl">${row("Элементов модели", d["элементов"])}${row("Помещений", d["помещений"])}${row("Габарит", dim)}</dl>
         <h4>Виды работ</h4>${st["всего"] ? `<dl class="ws-dl">${row("План", st["план"])}${row("В работе", st["в_работе"])}${row("Выполнено", st["выполнено"])}${row("Всего", st["всего"])}</dl>` : `<p class="v2-muted">Видов работ, адресуемых на блок, не заведено.</p>`}
-        ${mbp.blockHtml(Number(sel.id), (m.selectedBlocks || []).map(Number))}</div>`;
+        ${panelHtml("blockHtml", Number(sel.id), (m.selectedBlocks || []).map(Number))}</div>`;
     }
     const params = Object.entries(d["параметры"] || {});
     const shares = d["доли по секциям"] || [];
@@ -673,7 +676,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       + sec("categories", "Категории элементов", m.categories.length
         ? m.categories.map((c) => `<label class="ws-check"><input type="checkbox" data-mcat="${esc(c.category)}" ${c.on ? "checked" : ""}> <span>${esc(c.label)}</span><em>${c.count}</em></label>`).join("")
         : `<p class="v2-muted">Нет данных</p>`)
-      + mbp.filtersHtml();
+      + (mbp ? mbp.filtersHtml() : "");
   }
   const closedGroups = new Set();
 
@@ -740,7 +743,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     return `<div class="ws-pad"><h3 class="ws-h">Режим схемы</h3>
       <div class="ws-seg ws-seg-wide" role="group" aria-label="Режим схемы">${views.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="${sc?.view === k}">${t}</button>`).join("")}</div>
       <p class="v2-muted">${mfr ? "2D — план по этажам; 3D — модель здания." : "2D — плоская схема; 3D — модель; 3D лёгкий — упрощённая модель для слабых компьютеров."}</p>
-      ${mfr ? mbp.viewHtml() : ""}
+      ${mbp ? mbp.viewHtml() : ""}
       ${mfr && sc?.mfr?.layers?.length ? `<h4>Слои</h4>${sc.mfr.layers.map((l) => `<label class="ws-check"><input type="checkbox" data-mlayer="${esc(l.key)}" ${l.on ? "checked" : ""} ${l.disabled ? "disabled" : ""}> <span>${esc(l.label)}</span></label>`).join("")}` : ""}
       ${zones.length ? `<h4>Зоны на схеме</h4>${zones.map((z) => `<label class="ws-check"><input type="checkbox" data-zone="${esc(z.category)}" ${z.on ? "checked" : ""}> <span>${esc(z.category === "Кран" ? "Краны" : "Захватки")}</span></label>`).join("")}` : ""}
       <h4>Масштаб</h4><div class="ws-actions"><button type="button" class="v2-btn" data-tool="fit">Вписать в экран</button></div></div>`;
@@ -951,8 +954,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   return {
     // Введённое в форме смены статуса, но не отправленное — несохранённое; идущий запрос уйти не даёт (шлюз оболочки блокирует переходы)
-    hasUnsavedChanges: () => Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at)),
+    hasUnsavedChanges: () => anyModalDirty() || Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at)),
     guardLeave: async () => {
+      if (!(await guardModals())) return false;   // окна МФР (факт, ЗР, состав работ) с несохранённым вводом
       if (!Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at))) return true;
       const choice = await showUnsavedDialog("В форме смены статуса есть введённое, но не отправленное. Что сделать?");
       if (choice === "cancel") return false;

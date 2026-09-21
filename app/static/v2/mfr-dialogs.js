@@ -12,6 +12,7 @@ export function openFactDialog({ api, objectId, blockId, blockLabel, reportId = 
   let form = null;
   const m = openModal({ title: `Факт · ${blockLabel}`, wide: true, onRequestClose: async () => (form ? form.guard() : true) });
   form = mountFactForm(m.body, { api, objectId, blockId, blockLabel, reportId, date, highlight, canWrite, onChanged, onClose: () => m.requestClose() });
+  m.dirty = () => !!form?.dirty(); m.guard = () => form.guard();
   const close = m.close;
   m.close = () => { form?.destroy(); close(); onClosed?.(); };
   return m;
@@ -31,6 +32,7 @@ export function openZrDialog({ api, objectId, id, canWrite, onSaved, onClosed, b
       openFactDialog({ api, objectId, blockId, blockLabel: blockLabels[blockId] || `блок ${blockId}`, reportId, highlight, canWrite, onChanged: onSaved });
     },
   });
+  m.dirty = () => !!form?.dirty(); m.guard = () => form.guard();
   const close = m.close;
   m.close = () => { form?.destroy(); close(); onClosed?.(); };
   return m;
@@ -55,6 +57,8 @@ export function openSettingsDialog({ api, objectId, blocks, canWrite, onSaved, o
   });
   const chosen = () => (tree ? new Set(tree.selected()) : new Set(st.initial));
   const changed = () => { const a = chosen(), b = st.initial; return a.size !== b.size || [...a].some((x) => !b.has(x)); };
+  m.dirty = () => canWrite && !!tree && !dead && changed();
+  m.guard = async () => { const c = await showUnsavedDialog("Состав работ изменён, но не сохранён. Что сделать?"); return c === "discard"; };
   const setStatus = (t, kind = "") => { st.status = t; st.kind = kind; const n = m.body.querySelector("#ss-status"); if (n) { n.textContent = t; n.className = `mfr-status ${kind}`; } };
 
   async function load() {

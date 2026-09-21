@@ -1,7 +1,7 @@
 // «Журнал факта» в V2: документы фактического выполнения работ по блокам ВСЕГО объекта с отбором по секциям, этажам, видам работ и периоду;
 // открытие и исправление документа (форма «Факт»), создание нового, удаление (необратимо, по подтверждению с последствиями).
 // Те же API и права, что у V1 (`/objects/{id}/fact-journal`, раздел `work_progress`); запись — только через шлюз `write-gate.js`.
-import { esc, errText, fmtDate, fmtMoment, canAccounting, todayIso, isRealDate, settle, conflictText, OUTCOME_TEXT } from "./mfr-common.js";
+import { anyModalDirty, guardModals, closeAllModals, esc, errText, fmtDate, fmtMoment, canAccounting, todayIso, isRealDate, settle, conflictText, OUTCOME_TEXT } from "./mfr-common.js";
 import { STATUS_LABEL } from "./registry.js";
 import { showConfirmDialog } from "./dialogs.js";
 import { mountWorkTypeTree } from "./mfr-tree.js";
@@ -152,5 +152,5 @@ export function mountFactJournalScreen(el, { screen, structure, objectId, api, r
   }
 
   loadBase();
-  return { hasUnsavedChanges: () => false, guardLeave: async () => true, destroy() { dead = true; document.querySelectorAll(".mfr-modal-back").forEach((n) => n.remove()); } };
+  return { hasUnsavedChanges: () => anyModalDirty(), guardLeave: () => guardModals(), destroy() { dead = true; closeAllModals(); } };
 }

@@ -3,7 +3,7 @@
 // (раскраска плана по доске) — эти два режима ведёт движок схемы в кадре, панель управляет ими командами моста `zhbi-scene/1`
 // (`mfrChess`, `mfrDynamics`). Список блоков со счётчиками ЗР показан ДО выбора блока: число работ видно, не открывая блок.
 // Права и API — как у V1 (`blocks: read`, `work_progress`); запись — только через окна `mfr-dialogs.js` и шлюз `write-gate.js`.
-import { esc, errText, shortDate, canAccounting, DEADLINE, WORK_STATUS } from "./mfr-common.js";
+import { esc, errText, shortDate, canAccounting, closeAllModals, DEADLINE, WORK_STATUS } from "./mfr-common.js";
 import { openFactDialog, openZrDialog, openSettingsDialog, openBulkDatesDialog } from "./mfr-dialogs.js";
 import { newFilter, filterActive, periodIntersects } from "./blocks-screen.js";
 
@@ -231,6 +231,6 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
     },
     summary() { return { chess: st.chess.tracks.find((t) => t.code === st.chess.track)?.name || null, mode: st.chess.mode, dyn: st.dyn.on ? { ...st.dyn } : null, filter: filterActive(st.filter) }; },
     reset() { st.objectId = null; st.blocks = null; st.rights = null; st.progress.clear(); ensureBase(); },
-    destroy() { dead = true; document.querySelectorAll(".mfr-modal-back").forEach((n) => n.remove()); },
+    destroy() { dead = true; closeAllModals(); },
   };
 }

@@ -12,10 +12,6 @@ import { loadRegistry, screenAllowed } from "./registry.js";
 import { mountScreenView, mountHome, linkList } from "./screen-view.js";
 import { mountReadScreen } from "./read-screen.js";
 import { mountWorkspace } from "./workspace.js";
-import { mountBlocksScreen } from "./blocks-screen.js";
-import { mountFactJournalScreen } from "./fact-journal-screen.js";
-import { mountChessFlatScreen } from "./chess-flat-screen.js";
-import { mountBlockBulkScreen } from "./block-bulk-screen.js";
 import { mountDictEdit } from "./dict-edit.js";
 import { mountSettingEdit } from "./setting-edit.js";
 import { mountColorEdit } from "./color-edit.js";
@@ -130,7 +126,13 @@ function renderFatal(err) {
 // Модульные экраны (перенесены целиком) → их монтирование. Остальные экраны реестра показывают каркас
 // с переходом в V1 (screen-view.js).
 // Экраны области «МФР / учёт по блокам» (рабочие модули с записью через шлюз): impl экрана → монтирование
-const MFR_SCREENS = { "blocks-edit": mountBlocksScreen, "fact-journal-edit": mountFactJournalScreen, "chess-flat-edit": mountChessFlatScreen, "block-bulk-edit": mountBlockBulkScreen };
+// (модули грузятся при первом открытии экрана, а не при старте: холодный запуск V2 не тяжелеет)
+const MFR_SCREENS = {
+  "blocks-edit": () => import("./blocks-screen.js").then((m) => m.mountBlocksScreen),
+  "fact-journal-edit": () => import("./fact-journal-screen.js").then((m) => m.mountFactJournalScreen),
+  "chess-flat-edit": () => import("./chess-flat-screen.js").then((m) => m.mountChessFlatScreen),
+  "block-bulk-edit": () => import("./block-bulk-screen.js").then((m) => m.mountBlockBulkScreen),
+};
 
 const MODULES = {
   "users-access": (el, ctx) => mountUsersAccess(el, ctx),
@@ -451,7 +453,8 @@ async function renderShell(user, permissions) {
         });
       } else if (MFR_SCREENS[target.impl]) {
         document.title = `${target.title} — ЖБИ`;
-        activeModule = MFR_SCREENS[target.impl](content, {
+        const mountMfr = await MFR_SCREENS[target.impl]();
+        activeModule = mountMfr(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "read" && target.read) {
