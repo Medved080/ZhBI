@@ -236,6 +236,15 @@ wb.save(dst)`;
   await b.eval("location.reload()"); await sleep(1500);
   await openScreen(b, "blk-bulk", `document.querySelector('#bb-analyze')`);
   c.ok(true, "экран открывается после перезагрузки");
+  console.log("V1 (настоящий интерфейс V1) показывает результат пакетов шахматки и Excel-правки");
+  await b.goto(`${BASE}/?ui=v1&object_id=4`, 2500);
+  await b.waitFor(`typeof openFactJournal==='function' && typeof state!=='undefined' && state.objectId===4`, 60000);
+  await b.eval(`revitPlanState.objectId = state.objectId; document.getElementById('menu-fact-journal').click()`);
+  await b.waitFor(`document.querySelectorAll('#fj-table-box tbody tr').length>0`, 20000);
+  const v1rows = await b.eval(`document.querySelectorAll('#fj-table-box tbody tr').length`);
+  c.ok(v1rows === one("SELECT COUNT(*) n FROM work_fact_reports WHERE object_id=4").n, `V1: «Журнал факта» показывает все документы, включая созданные пакетом шахматки и Excel-правкой (${v1rows} = SQL)`);
+  const rowHas = await b.eval(`[...document.querySelectorAll('#fj-table-box tbody tr')].some(tr=>tr.textContent.includes('20.09.2026'))`);
+  c.ok(rowHas, "V1: в журнале есть документ пакета шахматки от 20.09.2026");
   c.ok(b.exceptions.length === 0, "исключений JavaScript нет", JSON.stringify(b.exceptions.slice(0, 2)));
 } catch (e) { console.log("СБОЙ СЦЕНАРИЯ:", e.message); c.ok(false, "сценарий завершён", e.message); await shot(b, "c-fail").catch(() => {}); }
 finally { await b.close(); }
