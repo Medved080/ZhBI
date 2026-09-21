@@ -196,6 +196,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const s = st[i];
     if (sec.object && !objectId) { s.status = "no-object"; s.rows = []; paint(); return; }
     const seq = ++s.seq;
+    if (!s.acking) s.ackMsg = ""; // прежнее сообщение об отметке не должно соседствовать с новыми данными
     s.status = "loading"; s.error = "";
     paint();
     try {
@@ -251,12 +252,12 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const body = $("#rd-body");
     searchInput.hidden = sec.kind === "record" || (sec.kind === "report" && !sec.search);
     $("#rd-count").hidden = sec.kind === "record" || sec.kind === "report" || sec.kind === "guide";
-    refreshBtn.disabled = s.status === "loading";
+    refreshBtn.disabled = s.status === "loading" || s.acking;
     $("#rd-count").textContent = "";
     if (s.status === "idle" || s.status === "loading") { body.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`; return; }
     if (s.status === "no-object") { body.innerHTML = `<p class="v2-muted">Выберите объект в шапке — данные этого экрана относятся к объекту.</p>`; return; }
     if (s.status === "error") {
-      body.innerHTML = `<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(s.error)}
+      body.innerHTML = `<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(s.error)}${s.ackMsg ? ` ${esc(s.ackMsg)}` : ""}
         <div class="v2-callout-actions"><button type="button" class="v2-btn" id="rd-retry">Повторить</button></div></div>`;
       $("#rd-retry").addEventListener("click", () => load(active));
       return;
@@ -272,6 +273,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     $("#rd-count").textContent = `${sec.serverSearch && s.search.trim() ? `Найдено на сервере: ${total}` : q ? `Найдено ${rows.length} из ${s.rows.length}` : `Записей: ${total}`}${s.total != null && s.rows.length < s.total ? ` (загружено ${s.rows.length})` : ""}`;
     if (!rows.length) {
       body.innerHTML = `${ackBarHtml(sec, s)}<p class="v2-muted">${q || (sec.serverSearch && s.search.trim()) ? `Ничего не найдено по запросу «${esc(s.search)}».` : esc(sec.empty || "Записей нет.")}</p>`;
+      $("#rd-ack")?.addEventListener("click", () => ackSection(active));
       return;
     }
     body.innerHTML = `${ackBarHtml(sec, s)}${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${RENDER_LIMIT} из ${rows.length} — уточните поиск.</p>` : ""}

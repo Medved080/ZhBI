@@ -174,4 +174,41 @@ export const tests = [
       t.eq(saved(a).colors[evil], "#010203", "у сервера записан тот же ключ");
     },
   },
+  {
+    id: "RC-08", title: "Запись прошла, перечитать не удалось: экран не «грязный», «Обновить» работает, повторное сохранение не показывает ложный конфликт",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await open(a);
+      setColor(a, "Стены", "#0a0b0c");
+      const hold = a.ctl.hold("PUT /revit-plan");
+      a.click(a.$("#rc-save"));
+      await hold.waitForRequest(1, 3000);
+      a.ctl.failNext("GET /revit-plan", { status: 500, detail: "Чтение недоступно (QA)" });
+      hold.release();
+      await waitFor(() => /перечитать не удалось/.test(a.$("#rc-status").textContent), { what: "сообщение" });
+      t.eq(saved(a).colors["Стены"], "#0a0b0c", "сервер схему сохранил");
+      t.ok(a.$("#rc-save").disabled, "экран не считается несохранённым");
+      a.click(a.$("#rc-refresh"));
+      await waitFor(() => !/перечитать не удалось|Сначала сохраните/.test(a.$("#rc-status").textContent) || a.ctl.count("GET", "/revit-plan/colors?object_id=" + mfrId(a)) >= 3, { what: "обновление" });
+      t.eq(puts(a).length, 1, "повторной записи нет");
+      t.ok(!a.dialog(), "ложного диалога о конфликте нет");
+      hold.dispose?.();
+    },
+  },
+  {
+    id: "RC-09", title: "Правка, начатая пока идёт «Обновить», не затирается ответом",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await open(a);
+      const hold = a.ctl.hold("GET /revit-plan/colors");
+      a.click(a.$("#rc-refresh"));
+      await hold.waitForRequest(1, 3000);
+      setColor(a, "Стены", "#445566");
+      hold.release();
+      await waitFor(() => /правка на экране сохранена/.test(a.$("#rc-status").textContent), { what: "ответ пришёл" });
+      t.eq(a.$('input[data-cat="Стены"]').value, "#445566", "правка на месте");
+      t.ok(!a.$("#rc-save").disabled, "«Сохранить» доступна");
+      hold.dispose?.();
+    },
+  },
 ];

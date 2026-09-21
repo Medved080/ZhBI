@@ -31,8 +31,8 @@ export function mountAccessView(el, { screen, structure, objectId, api, groupTit
     </div>`;
   const $ = (s) => el.querySelector(s);
 
-  function grantsText(list, catalog, labels) {
-    if (!list.length) return `<span class="v2-muted">не задан</span>`;
+  function grantsText(list, catalog, labels, isAdmin) {
+    if (!list.length) return isAdmin ? "" : `<span class="v2-muted">не задан</span>`;
     const projName = (id) => catalog.projects.get(id) || `проект ${id}`;
     const objName = (id) => catalog.objects.get(id) || `объект ${id}`;
     const byLevel = new Map();
@@ -58,15 +58,16 @@ export function mountAccessView(el, { screen, structure, objectId, api, groupTit
     }
     const { users, grants, labels, catalog } = st.data;
     const q = st.search.trim().toLowerCase();
+    // администратор сервиса проходит проверки в обход ролей: явных грантов у него может не быть, но «без доступа» он не бывает
     const rows = users.filter((u) => {
-      const has = (grants[String(u.id)] || []).length > 0;
+      const has = u.role === "admin" || (grants[String(u.id)] || []).length > 0;
       if (st.onlyWithoutAccess && has) return false;
       return !q || `${u.display_name} ${u.domain_login} ${u.position || ""}`.toLowerCase().includes(q);
     });
     $("#av-count").textContent = `Пользователей: ${rows.length} из ${users.length}`;
     body.innerHTML = rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Пользователь</th><th>Системная роль</th><th>Выданный доступ</th></tr></thead><tbody>
       ${rows.map((u) => `<tr><td>${esc(u.display_name)}<div class="v2-muted">${esc(u.domain_login)}${u.position ? " · " + esc(u.position) : ""}</div></td>
-        <td>${esc(SYSTEM_ROLE[u.role] || u.role)}</td><td>${grantsText(grants[String(u.id)] || [], catalog, labels)}</td></tr>`).join("")}
+        <td>${esc(SYSTEM_ROLE[u.role] || u.role)}</td><td>${u.role === "admin" ? `<div><strong>Полный доступ:</strong> администратор сервиса</div>` : ""}${grantsText(grants[String(u.id)] || [], catalog, labels, u.role === "admin")}</td></tr>`).join("")}
       </tbody></table></div>` : `<p class="v2-muted">Нет пользователей по этому условию.</p>`;
   }
 

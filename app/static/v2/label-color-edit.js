@@ -10,14 +10,22 @@ import { showUnsavedDialog } from "./dialogs.js";
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const DEFAULT_COLOR = "#222222"; // как DEFAULT_LABEL_COLOR в V1
 const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || e));
+// Сервер допускает #RGB и #RRGGBBAA, а поле выбора цвета — только #rrggbb: для показа приводим к шести знакам (альфа не показывается).
+const to6 = (v) => {
+  const x = String(v || "").trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(x)) return x;
+  if (/^#[0-9a-f]{3,4}$/.test(x)) return "#" + [...x.slice(1, 4)].map((c) => c + c).join("");
+  if (/^#[0-9a-f]{8}$/.test(x)) return x.slice(0, 7);
+  return DEFAULT_COLOR;
+};
 
 export function mountLabelColorEdit(el, { screen, structure, objectId, api, user, rights, groupTitle }) {
   el.className = "v2-page";
   const canWrite = !!rights?.system_admin || rights?.features?.users === "write";
   let dead = false, busy = false;
   let saved = (user.label_color || "").toLowerCase() || null; // то, что хранит сервер (null — цвет по умолчанию)
-  let draft = saved || DEFAULT_COLOR;
-  const shown = (v) => v || DEFAULT_COLOR;
+  const shown = (v) => (v ? to6(v) : DEFAULT_COLOR);
+  let draft = shown(saved);
   const dirty = () => draft.toLowerCase() !== shown(saved).toLowerCase();
 
   el.innerHTML = `
@@ -66,7 +74,11 @@ export function mountLabelColorEdit(el, { screen, structure, objectId, api, user
     try {
       await api.patch(`/users/${user.id}/label-color`, { label_color: want });
       let got;
-      try { got = await readBack(); } catch { busy = false; setStatus("Сохранено, но перечитать не удалось — обновите страницу и проверьте."); paint(); return; }
+      try { got = await readBack(); } catch {
+        // запись прошла, а прочитать не вышло: принимаем отправленное как сохранённое, чтобы экран не считался несохранённым
+        if (!dead) { saved = want; user.label_color = want; draft = shown(want); setStatus("Сохранено, но перечитать не удалось — обновите страницу и проверьте."); }
+        busy = false; paint(); return;
+      }
       if (dead) return;
       saved = got; user.label_color = got; draft = shown(got);
       setStatus(got === want ? (want === null ? "Сброшено на цвет по умолчанию, подтверждено чтением." : "Цвет сохранён и подтверждён чтением.") : "Сервер вернул другой цвет — проверьте.");

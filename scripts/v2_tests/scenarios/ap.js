@@ -37,10 +37,10 @@ export const tests = [
       a.click(a.$('[data-skin="gos"]'));
       await a.settle(60);
       t.eq(patches(a).length, 0, "выбранная гамма не пишется повторно");
-      a.ctl.failNext("PATCH /users", { status: 500, detail: "Сбой (QA)" });
+      a.ctl.failNext("PATCH /users", { status: 422, detail: "Отказ (QA)" });
       a.click(a.$('[data-skin="neon"]'));
-      await waitFor(() => /Не удалось сохранить/.test(a.$("#ap-status").textContent), { what: "сообщение о сбое" });
-      t.has(a.$("#ap-status").textContent, "Сбой (QA)", "показан текст ошибки");
+      await waitFor(() => /Не удалось сохранить/.test(a.$("#ap-status").textContent), { what: "сообщение об отказе" });
+      t.has(a.$("#ap-status").textContent, "Отказ (QA)", "показан текст ошибки");
       t.ok(a.$('[data-skin="gos"][aria-pressed="true"]'), "выбор остался прежним — ложного успеха нет");
       t.eq(patches(a).length, 1, "запись не повторялась автоматически");
       const hold = a.ctl.hold("PATCH /users");
@@ -52,6 +52,24 @@ export const tests = [
       await waitFor(() => a.$('[data-skin="emerald"][aria-pressed="true"]'), { what: "выбрана" });
       t.eq(patches(a).length, 2, "два PATCH: неудачный и повторный вручную");
       hold.dispose?.();
+    },
+  },
+  {
+    id: "AP-03", title: "Неизвестный исход: 5xx на записи → проверка чтением без повтора; сбой чтения после успешной записи — не «сбой сохранения», гамма применена",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await open(a);
+      a.ctl.failNext("PATCH /users", { status: 503, detail: "Недоступно (QA)" });
+      a.click(a.$('[data-skin="indigo"]'));
+      await waitFor(() => /не подтверждено/i.test(a.$("#ap-status").textContent), { what: "не подтверждено" });
+      t.eq(patches(a).length, 1, "5xx не повторён автоматически");
+      t.ok(a.$('[data-skin="gos"][aria-pressed="true"]'), "выбор прежний — сервер гамму не записал");
+      a.ctl.failNext("GET /me", { status: 500, detail: "Чтение недоступно (QA)" });
+      a.click(a.$('[data-skin="msu"]'));
+      await waitFor(() => /перечитать не удалось/.test(a.$("#ap-status").textContent), { what: "сбой чтения" });
+      t.ok(!/Не удалось сохранить/.test(a.$("#ap-status").textContent), "сбой чтения не выдаётся за сбой записи");
+      t.eq(patches(a).length, 2, "запись выполнена один раз");
+      t.eq(a.ctl.data.users.find((u) => u.domain_login === "qa.admin").ui_theme, "msu", "сервер гамму сохранил");
     },
   },
 ];

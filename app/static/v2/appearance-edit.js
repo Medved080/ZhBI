@@ -40,19 +40,31 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
       <strong>${esc(s.name)}</strong> ${s.id === current ? `<span class="v2-chip v2-chip-ok">выбрана</span>` : ""}
       <span class="v2-skin-swatch">${s.swatch.map((c) => `<span style="background:${c}"></span>`).join("")}</span></button>`).join("");
   }
+  const nameOf = (id) => SKINS.find((s) => s.id === id)?.name || id;
+  // Общий объект user и тема окна обновляются по повторному чтению даже после ухода с экрана: гамма уже сохранена на сервере.
+  function adopt(me) { user.ui_theme = me.ui_theme; applyTheme?.(me.ui_theme); if (!dead) current = me.ui_theme || "gos"; }
   async function choose(id) {
     if (busy || id === current) return;
     busy = true; paint(); setStatus("Сохранение…");
+    let known = true; // ответ на запись получен
     try {
       await api.patch(`/users/${user.id}/ui-theme`, { ui_theme: id });
-      const me = await api.get("/me");
-      if (dead) return;
-      current = me.ui_theme || "gos"; user.ui_theme = me.ui_theme;
-      applyTheme?.(me.ui_theme);
-      setStatus(current === id ? `Гамма «${SKINS.find((s) => s.id === id).name}» сохранена и подтверждена чтением.` : "Сервер вернул другую гамму — проверьте.");
     } catch (e) {
-      if (!dead) setStatus(`Не удалось сохранить: ${errText(e)}`);
-    } finally { busy = false; paint(); }
+      if (e instanceof ApiError && e.status > 0 && e.status < 500) { // отказ сервера: записи не было
+        busy = false; if (!dead) { setStatus(`Не удалось сохранить: ${errText(e)}`); paint(); }
+        return;
+      }
+      known = false; // сеть/5xx — исход неизвестен: повторно не отправляем, сначала читаем
+    }
+    try {
+      const me = await api.get("/me");
+      adopt(me);
+      const ok = (me.ui_theme || "gos") === id;
+      if (!dead) setStatus(ok ? (known ? `Гамма «${nameOf(id)}» сохранена и подтверждена чтением.` : "Сервер сохранил гамму, хотя ответ не дошёл.")
+        : known ? "Сервер вернул другую гамму — проверьте." : `Изменение не подтверждено. Выбор остался прежним — повторите вручную.`);
+    } catch (e) {
+      if (!dead) setStatus(known ? "Гамма отправлена, но перечитать не удалось — обновите страницу и проверьте." : `Неизвестно, сохранена ли гамма (${errText(e)}). Обновите страницу и проверьте.`);
+    } finally { busy = false; if (!dead) paint(); }
   }
   el.addEventListener("click", (e) => { const b = e.target.closest("[data-skin]"); if (b) choose(b.dataset.skin); });
   paint();

@@ -17,10 +17,10 @@ const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || 
 // Приведение схемы к виду, в котором её хранит сервер (для сверки «черновик ↔ записано»).
 export function normScheme(s) {
   const colors = {};
-  for (const [k, v] of Object.entries(s?.colors || {})) if (HEX.test(String(v || "").trim())) colors[k] = String(v).trim().toLowerCase();
+  for (const [k, v] of Object.entries(s?.colors || {})) if (HEX.test(String(v || "").trim())) colors[String(k).slice(0, 100)] = String(v).trim().toLowerCase();
   const num = (m, max) => {
     const out = {};
-    for (const [k, v] of Object.entries(m || {})) { const n = Math.trunc(Number(v)); if (Number.isFinite(n) && n > 0) out[k] = Math.max(0, Math.min(max, n)); }
+    for (const [k, v] of Object.entries(m || {})) { const n = Math.trunc(Number(v)); if (Number.isFinite(n) && n > 0) out[String(k).slice(0, 100)] = Math.max(0, Math.min(max, n)); }
     return out;
   };
   const sortKeys = (o) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
@@ -118,14 +118,21 @@ export function mountRevitColorsEdit(el, { screen, structure, objectId, api, gro
     return { s, cats: (f.categories || []).map((c) => c.category).filter(Boolean) };
   }
 
+  const adopt = (r, keepDraft) => {
+    st.saved = { preset: r.s.preset, colors: r.s.colors || {}, opacity: r.s.opacity || {}, glow: r.s.glow || {} };
+    if (!keepDraft) st.draft = clone(st.saved);
+    st.cats = r.cats;
+  };
   async function load() {
     if (!objectId) { paint(); return; }
     const seq = ++st.seq;
     try {
-      const { s, cats } = await readAll();
+      const r = await readAll();
       if (dead || seq !== st.seq) return;
-      st.saved = { preset: s.preset, colors: s.colors || {}, opacity: s.opacity || {}, glow: s.glow || {} };
-      st.draft = clone(st.saved); st.presets = s.presets || []; st.fallback = s.fallback || "#c8c8c8"; st.cats = cats; st.error = "";
+      const keep = dirty(); // пока шёл запрос, человек мог начать правку — её ответом не затираем
+      adopt(r, keep);
+      st.presets = r.s.presets || []; st.fallback = r.s.fallback || "#c8c8c8"; st.error = "";
+      if (keep) setStatus("Схема на сервере обновлена; ваша правка на экране сохранена.");
     } catch (e) {
       if (dead || seq !== st.seq) return;
       if (!st.saved) st.error = errText(e); else setStatus(`Схема не обновилась: ${errText(e)}`);
@@ -152,26 +159,27 @@ export function mountRevitColorsEdit(el, { screen, structure, objectId, api, gro
       }
       setStatus("Сохранение…");
       await api.put(`${spec.endpoint}${q}`, payload);
-      st.busy = false;
       try {
-        const { s, cats } = await readAll();
+        const r = await readAll();
         if (dead) return;
-        st.saved = { preset: s.preset, colors: s.colors || {}, opacity: s.opacity || {}, glow: s.glow || {} };
-        st.cats = cats; st.draft = clone(st.saved);
-        setStatus(normScheme(s) === want ? "Схема сохранена и подтверждена чтением." : "Сервер вернул схему, отличную от отправленной — проверьте значения.");
-      } catch { setStatus("Сохранено, но перечитать не удалось — нажмите «Обновить»."); }
-      paint();
+        adopt(r, false);
+        setStatus(normScheme(r.s) === want ? "Схема сохранена и подтверждена чтением." : "Сервер вернул схему, отличную от отправленной — проверьте значения.");
+      } catch {
+        // запись прошла, а прочитать не вышло: принимаем отправленное как сохранённое, чтобы экран не считался несохранённым
+        if (!dead) { st.saved = clone(payload); st.draft = clone(payload); setStatus("Сохранено, но перечитать не удалось — нажмите «Обновить»."); }
+      }
+      st.busy = false; paint();
     } catch (e) {
-      st.busy = false;
+      if (dead) return;
       if (e instanceof ApiError && (e.status === 0 || e.status >= 500)) {
         try {
-          const { s, cats } = await readAll();
+          const r = await readAll();
           if (dead) return;
-          if (normScheme(s) === want) { st.saved = { preset: s.preset, colors: s.colors || {}, opacity: s.opacity || {}, glow: s.glow || {} }; st.cats = cats; st.draft = clone(st.saved); setStatus("Сервер сохранил схему, хотя ответ не дошёл."); }
+          if (normScheme(r.s) === want) { adopt(r, false); setStatus("Сервер сохранил схему, хотя ответ не дошёл."); }
           else setStatus(`Изменение не подтверждено (${errText(e)}). Проверьте схему и повторите вручную.`);
         } catch { if (!dead) setStatus(`Неизвестно, сохранена ли схема (${errText(e)}). Нажмите «Обновить» и проверьте.`); }
-      } else if (!dead) setStatus(`Не удалось сохранить: ${errText(e)}`); // 4xx: введённое остаётся
-      paint();
+      } else setStatus(`Не удалось сохранить: ${errText(e)}`); // 4xx: введённое остаётся
+      st.busy = false; paint();
     }
   }
 

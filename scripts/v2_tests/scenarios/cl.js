@@ -56,4 +56,21 @@ export const tests = [
       t.eq(acks(a).length, 3, "двойной клик дал один запрос");
     },
   },
+  {
+    id: "CL-03", title: "Поиск без совпадений: кнопка «Ознакомился» остаётся рабочей; сообщение об отметке не переживает обновление",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await open(a, true);
+      await a.type(a.$("#rd-search"), "нет-такого-слова");
+      await waitFor(() => /Ничего не найдено/.test(a.$("#rd-body").textContent), { what: "пустой результат поиска" });
+      t.ok(a.$("#rd-ack"), "кнопка видна при пустом результате поиска");
+      a.click(a.$("#rd-ack"));
+      await waitFor(() => acks(a).length === 1, { what: "запрос отметки" });
+      await waitFor(() => /подтверждено чтением/.test(a.$("#rd-ack-status")?.textContent || ""), { what: "подтверждение" });
+      a.ctl.data.settings.changelogAck = null; // вышла новая версия
+      a.click(a.$("#rd-refresh"));
+      await waitFor(() => a.$("#rd-ack"), { what: "снова есть непрочитанные" });
+      t.eq(a.$("#rd-ack-status").textContent.trim(), "", "старое «подтверждено» рядом с новой кнопкой не остаётся");
+    },
+  },
 ];

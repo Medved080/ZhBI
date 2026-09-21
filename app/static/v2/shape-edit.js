@@ -90,7 +90,11 @@ export function mountShapeEdit(el, { screen, structure, objectId, api, rights, g
     try {
       const data = await api.get(spec.endpoint);
       if (dead || seq !== st.seq) return;
-      st.rows = Array.isArray(data) ? data : []; st.draft = {}; st.error = "";
+      const rows = Array.isArray(data) ? data : [];
+      // правка, начатая пока шёл запрос, ответом не затирается: оставляем только те изменения, чьи пары ещё есть в списке
+      const keep = {};
+      for (const r of rows) { const k = keyOf(r); if (st.draft[k] && st.draft[k] !== r.shape) keep[k] = st.draft[k]; }
+      st.rows = rows; st.draft = keep; st.error = "";
     } catch (e) {
       if (dead || seq !== st.seq) return;
       if (st.rows === null) st.error = errText(e); else setStatus(`Формы не обновились: ${errText(e)}`);
@@ -114,17 +118,22 @@ export function mountShapeEdit(el, { screen, structure, objectId, api, rights, g
     const applied = (again) => sent.filter((x) => again.some((r) => r.layer === x.layer && r.element_type === x.element_type && r.shape === x.shape)).length;
     try {
       await api.put(spec.put, sent);
-      st.busy = false;
       try {
         const again = await confirmRead();
         if (again) {
           st.rows = again; st.draft = {};
           setStatus(applied(again) === sent.length ? `Сохранено и подтверждено чтением: ${sent.length} шт.` : "Сервер вернул другие формы для части пар — проверьте список.");
         }
-      } catch { setStatus("Сохранено, но перечитать не удалось — нажмите «Обновить»."); }
-      paint();
+      } catch {
+        // запись прошла, а прочитать не вышло: принимаем отправленное как сохранённое, чтобы экран не считался несохранённым
+        if (!dead) {
+          for (const x of sent) { const r = st.rows.find((y) => y.layer === x.layer && y.element_type === x.element_type); if (r) r.shape = x.shape; }
+          st.draft = {}; setStatus("Сохранено, но перечитать не удалось — нажмите «Обновить».");
+        }
+      }
+      st.busy = false; paint();
     } catch (e) {
-      st.busy = false;
+      if (dead) return;
       if (e instanceof ApiError && (e.status === 0 || e.status >= 500)) {
         try {
           const again = await confirmRead();
@@ -132,7 +141,7 @@ export function mountShapeEdit(el, { screen, structure, objectId, api, rights, g
           else if (again) setStatus(`Изменения не подтверждены (${errText(e)}). Проверьте список и повторите вручную.`);
         } catch { setStatus(`Неизвестно, сохранены ли формы (${errText(e)}). Нажмите «Обновить» и проверьте.`); }
       } else setStatus(`Не удалось сохранить: ${errText(e)}`); // 4xx: введённое остаётся
-      paint();
+      st.busy = false; paint();
     }
   }
 

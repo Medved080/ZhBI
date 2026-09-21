@@ -67,4 +67,18 @@ export const tests = [
       await waitFor(() => a.$(`${NAV}[data-section="access-matrix"]`), { what: "экран виден при праве чтения" });
     },
   },
+  {
+    id: "AV-04", title: "Администратор сервиса не попадает в «без выданного доступа» — у него полный доступ в обход ролей",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await open(a);
+      const admins = a.ctl.data.users.filter((u) => u.role === "admin");
+      t.ok(admins.length >= 1, "в данных есть администратор сервиса");
+      const rowOf = (u) => [...a.$$("#av-body tbody tr")].find((r) => r.textContent.includes(u.last_name));
+      t.has(rowOf(admins[0]).textContent, "Полный доступ", "администратору показан полный доступ, а не «не задан»");
+      a.click(a.$("#av-none"));
+      await waitFor(() => a.$$("#av-body tbody tr").length < a.ctl.data.users.length, { what: "фильтр" });
+      t.ok(!rowOf(admins[0]), "в отборе «без доступа» администратора нет");
+    },
+  },
 ];

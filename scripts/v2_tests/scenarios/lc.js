@@ -97,4 +97,28 @@ export const tests = [
       await waitFor(() => a.$(`${NAV}[data-section="label-color"]`), { what: "экран доступен при праве записи" });
     },
   },
+  {
+    id: "LC-05", title: "Значение #RGB, допустимое для сервера: поле показывает его верно (#ffaa00, не чёрным), экран не «грязный»",
+    async run(t) {
+      const a = await openApp({ home: true, query: "me=" + encodeURIComponent(JSON.stringify({ label_color: "#fa0" })) });
+      await open(a);
+      t.eq(a.$("#lc-color").value, "#ffaa00", "#fa0 показано как #ffaa00");
+      t.ok(a.$("#lc-save").disabled, "без правки «Сохранить» недоступна");
+      t.eq(patches(a).length, 0, "ничего не записано");
+    },
+  },
+  {
+    id: "LC-06", title: "Запись прошла, перечитать не удалось: экран не считается несохранённым, запись не повторяется",
+    async run(t) {
+      const a = await openApp({ home: true });
+      await open(a);
+      setColor(a, "#123456");
+      a.ctl.failNext("GET /me", { status: 500, detail: "Чтение недоступно (QA)" });
+      a.click(a.$("#lc-save"));
+      await waitFor(() => /перечитать не удалось/.test(a.$("#lc-status").textContent), { what: "сбой чтения" });
+      t.ok(a.$("#lc-save").disabled, "запись прошла — экран не считается несохранённым");
+      t.eq(a.ctl.data.users.find((u) => u.domain_login === "qa.admin").label_color, "#123456", "сервер цвет сохранил");
+      t.eq(patches(a).length, 1, "запись не повторялась");
+    },
+  },
 ];
