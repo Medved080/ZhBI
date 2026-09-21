@@ -73,3 +73,24 @@ export async function clickSelScrolled(b, sel, o) {
   await sleep(120);
   await b.clickSel(sel, o);
 }
+
+/** Подготовка копии для сценариев контрагентов: роли + синтетические записи «QA-Старый» (с изделиями на контракте) и «QA-Новый» (замены). */
+export function prepareCp(db) {
+  prepareCopy(db);
+  const ins = (q) => { exec(db, q); return Number(sql1(db, "SELECT last_insert_rowid()")); };
+  const one = (q) => Number(sql1(db, q));
+  exec(db, `INSERT INTO counterparties (full_name, short_name, code) VALUES ('ООО «QA-Старый»','QA-Старый','QAOLD'),('ООО «QA-Новый»','QA-Новый','QANEW');`);
+  const old = one("SELECT id FROM counterparties WHERE short_name='QA-Старый'"), nw = one("SELECT id FROM counterparties WHERE short_name='QA-Новый'");
+  exec(db, `INSERT INTO agreements (counterparty_id, number, agreement_date, object_id) VALUES (${old},'QA-Д1','2026-09-01',1),(${nw},'QA-Д2','2026-09-02',1),(${nw},'QA-Д3','2026-09-03',1);`);
+  const ag = (n) => one(`SELECT id FROM agreements WHERE number='${n}'`);
+  exec(db, `INSERT INTO specifications (agreement_id, number, specification_date) VALUES (${ag("QA-Д1")},'QA-С1','2026-09-01'),(${ag("QA-Д2")},'QA-С2','2026-09-02'),(${ag("QA-Д3")},'QA-С4','2026-09-03');`);
+  const sp = (n) => one(`SELECT id FROM specifications WHERE number='${n}'`);
+  exec(db, `INSERT INTO contracts (specification_id, theme) VALUES (${sp("QA-С1")},'QA-старый'),(${sp("QA-С2")},'QA-новый'),(${sp("QA-С4")},'QA-плохой');`);
+  const co = (t) => one(`SELECT id FROM contracts WHERE theme='${t}'`);
+  exec(db, `INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (${co("QA-старый")},'Ригель','3Р19',5),(${co("QA-новый")},'Ригель','3Р19',20),(${co("QA-плохой")},'Колонна','4Кв3.1',5);`);
+  const els = sql(db, "SELECT id FROM elements WHERE object_id=1 AND is_current=1 AND contract_id IS NULL AND current_status='planned' AND mark='3Р19' ORDER BY id LIMIT 3").map((r) => r.id);
+  exec(db, `UPDATE elements SET contract_id=${co("QA-старый")}, current_status='contracting' WHERE id IN (${els.join(",")});`);
+  for (const id of els) exec(db, `INSERT INTO status_history (element_id, status, changed_by, contract_id, comment) VALUES (${id}, 'contracting', 'тест', ${co("QA-старый")}, 'QA');`);
+}
+export const CP_TABLES = ["counterparties", "counterparty_capacity", "agreements", "specifications", "contracts", "contract_lines", "contract_incidents", "elements", "status_history", "default_contracts"];
+export const setInput = (b, sel, value) => b.eval(`(()=>{const e=document.querySelector(${JSON.stringify(sel)});if(!e)throw new Error('нет поля ${sel}');e.value=${JSON.stringify(String(value))};e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))})()`);

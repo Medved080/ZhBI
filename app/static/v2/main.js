@@ -13,6 +13,7 @@ import { mountScreenView, mountHome, linkList } from "./screen-view.js";
 import { mountReadScreen } from "./read-screen.js";
 import { mountWorkspace } from "./workspace.js";
 import { mountSupplierDocs } from "./supplier-docs.js";
+import { mountContractsList } from "./contracts-list.js";
 import { mountDictEdit } from "./dict-edit.js";
 import { mountSettingEdit } from "./setting-edit.js";
 import { mountColorEdit } from "./color-edit.js";
@@ -286,7 +287,7 @@ async function renderShell(user, permissions) {
         return `<div class="v2-nav-group">
           <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
           ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) || s.impl === "supplier-docs" ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
+            ${escapeHtml(s.title)}${isModule(s) || s.impl === "supplier-docs" || s.impl === "contracts-list" ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
         </div>`;
       }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
     const search = document.getElementById("v2-nav-search");
@@ -443,6 +444,10 @@ async function renderShell(user, permissions) {
         activeModule = mountWorkspace(content, {
           screen: target, objectId, api, groupTitle: groupTitle(target.group), ws: target.ws || "model",
         });
+      } else if (target.impl === "contracts-list") {
+        // Контракты: список и переход к работе с контрактом в карточке контрагента (там же создание и правка)
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountContractsList(content, { screen: target, objectId, api, rights, go: (k) => openSection(k) });
       } else if (target.impl === "supplier-docs") {
         // Документы контрактации (замена поставщика, обмен привязками): права и данные — по выбранному объекту
         document.title = `${target.title} — ЖБИ`;

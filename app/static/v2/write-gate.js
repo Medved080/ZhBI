@@ -130,17 +130,21 @@ function bodyKeys(body) {
 export function checkWrite(method, pathWithQuery, body) {
   const m = String(method || "").toUpperCase();
   const path = String(pathWithQuery || "").split("?")[0];
+  let problem = null;   // причина отказа проверки формы у ПОДХОДЯЩЕЙ по методу и пути строки — текст точнее, чем «операция отключена»
   for (const r of ALLOWED) {
     if (r.method !== m || !r.path.test(path)) continue;
-    if (r.onlyKeys && !bodyKeys(body).every((k) => r.onlyKeys.includes(k))) continue; // поля вне разрешённой группы
-    if (r.check && r.check(body)) continue;                                            // тело не той формы, что проверена
+    if (r.onlyKeys && !bodyKeys(body).every((k) => r.onlyKeys.includes(k))) { problem = problem || "лишние поля в запросе"; continue; } // поля вне разрешённой группы
+    if (r.check) { const p = r.check(body); if (p) { problem = problem || p; continue; } }                                            // тело не той формы, что проверена
     return { allowed: true, rule: r };
   }
   const known = POLICY.find((r) => !r.allowed && r.path.test(path));
   return {
     allowed: false,
     rule: known || null,
-    message: `Операция отключена в экспериментальном интерфейсе${known ? ` («${known.action}»)` : ""}. Выполните её в текущем интерфейсе.`,
+    problem,
+    message: problem
+      ? `Запрос не отправлен: ${problem}.`
+      : `Операция отключена в экспериментальном интерфейсе${known ? ` («${known.action}»)` : ""}. Выполните её в текущем интерфейсе.`,
   };
 }
 

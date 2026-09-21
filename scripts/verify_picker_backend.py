@@ -307,6 +307,36 @@ def run():
             call(sc.unpost_supplier_change, d["id"], ADMIN)
     ok("гонка «удаление ↔ проведение» (10 раундов): либо удалён и не тронуто, либо проведён и перенесено", not bad, str(bad[:1]))
     ok("…блокировка освобождена", not clean(), str(clean()))
+    # два проведения одного документа одновременно: ровно одно применяется, второе — 409 «уже проведён»; история не задваивается
+    bad = []
+    for rnd in range(8):
+        c = db()
+        c.execute("UPDATE elements SET contract_id = ? WHERE id IN (%s)" % ",".join(map(str, ids[:3])), (a,))
+        c.commit(); c.close()
+        d = call(sc.create_supplier_change, sin([ids[2]], num=f"П{rnd}"), ADMIN)[1]
+        hist0 = db().execute("SELECT COUNT(*) n FROM status_history WHERE element_id = ?", (ids[2],)).fetchone()["n"]
+        res = race([(sc.post_supplier_change, d["id"], ADMIN), (sc.post_supplier_change, d["id"], ADMIN)])
+        hist1 = db().execute("SELECT COUNT(*) n FROM status_history WHERE element_id = ?", (ids[2],)).fetchone()["n"]
+        codes = sorted(str(x[0]) for x in res)
+        if codes != ["409", "ok"] or hist1 != hist0 + 1:
+            bad.append((rnd, codes, hist0, hist1))
+        call(sc.unpost_supplier_change, d["id"], ADMIN)
+    ok("два одновременных проведения одного документа (8 раундов): одно ok, второе 409; запись истории одна", not bad, str(bad[:1]))
+    # два одновременных «Отменить проведение»
+    bad = []
+    for rnd in range(6):
+        c = db()
+        c.execute("UPDATE elements SET contract_id = ? WHERE id = ?", (a, ids[2]))
+        c.commit(); c.close()
+        d = call(sc.create_supplier_change, sin([ids[2]], num=f"О{rnd}"), ADMIN)[1]
+        call(sc.post_supplier_change, d["id"], ADMIN)
+        res = race([(sc.unpost_supplier_change, d["id"], ADMIN), (sc.unpost_supplier_change, d["id"], ADMIN)])
+        codes = sorted(str(x[0]) for x in res)
+        cnow = db().execute("SELECT contract_id FROM elements WHERE id = ?", (ids[2],)).fetchone()["contract_id"]
+        if codes != ["409", "ok"] or cnow != a:
+            bad.append((rnd, codes, cnow))
+    ok("два одновременных «Отменить проведение» (6 раундов): одно ok, второе 409; изделие на прежнем контракте", not bad, str(bad[:1]))
+    ok("…блокировка освобождена", not clean(), str(clean()))
     # одновременные создания получают разные номера
     res = race([(sc.create_supplier_change, sin([ids[0]]), ADMIN)] * 3)
     nums = [r_[1]["number"] for r_ in res if r_[0] == "ok"]

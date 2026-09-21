@@ -209,6 +209,13 @@ try {
   const act5 = await activity(db, `id>${a5}`);
   check("D8.2 журнал: одно событие supplier_change_delete; один DELETE", act5.length === 1 && act5[0].action === "supplier_change_delete" && writeReqs(b, mark).length === 1, JSON.stringify(act5));
 
+  console.log("\n== V1-совместимость вызовов без тела ==");
+  const dc = await rawApi(b, "POST", "/supplier-changes", { object_id: 1, kind: "supplier_change", doc_date: "2026-09-21", from_contract_id: A, to_contract_id: B, element_ids: [ids[4]] });
+  const p0 = await b.eval(`fetch('/supplier-changes/${dc.json.id}/post',{method:'POST',credentials:'same-origin'}).then(r=>r.status)`);
+  const u0 = await b.eval(`fetch('/supplier-changes/${dc.json.id}/unpost',{method:'POST',credentials:'same-origin'}).then(r=>r.status)`);
+  const dd = await rawApi(b, "DELETE", `/supplier-changes/${dc.json.id}`);
+  check("D8.3 совместимость V1: проведение и отмена БЕЗ тела запроса (как шлёт V1) — 200, удаление черновика — 200", dc.status === 200 && p0 === 200 && u0 === 200 && dd.status === 200, `${dc.status}/${p0}/${u0}/${dd.status}`);
+
   // ---------------------------------------------------------------- 9. обмен привязками
   console.log("\n== обмен привязками ==");
   const SA = sql(db, `SELECT id FROM elements WHERE contract_id=${A} AND mark='${MARK}' AND is_current=1 ORDER BY floor, address, id LIMIT 3`).map((r) => r.id);

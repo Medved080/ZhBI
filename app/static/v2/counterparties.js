@@ -2992,7 +2992,24 @@ export function mountCounterparties(container, ctx) {
     if (state.status_msg) { status.textContent = state.status_msg; state.status_msg = ""; }
   }
 
-  render();
+  // Переход из раздела «Контракты» (contracts-list.js): открыть карточку контрагента и нужный контракт (или форму нового под спецификацией).
+  // Ссылка разовая: читается и стирается при монтировании; недоступный контрагент/контракт молча оставляет список.
+  async function applyDeepLink(dl) {
+    if (!(await ensureLoaded())) return;
+    if (!state.list.some((c) => c.id === dl.cp)) return;
+    await openCard(dl.cp);
+    state.tab = "contracting";
+    await render();
+    await ensureContractingLoaded();
+    if (dl.contract && findContract(dl.contract)) { await openContractWorkspace(`edit:${dl.contract}`); return; }
+    if (dl.newSpec && findSpecAndAgreementId(dl.newSpec).spec) {
+      if (!state.newContractForms.has(dl.newSpec)) state.newContractForms.set(dl.newSpec, emptyContractDraft(dl.newSpec));
+      await openContractWorkspace(`new:${dl.newSpec}`);
+    } else await renderContractingTab();
+  }
+  let pendingLink = null;
+  try { pendingLink = JSON.parse(sessionStorage.getItem("v2.cp.deeplink") || "null"); sessionStorage.removeItem("v2.cp.deeplink"); } catch (e) { pendingLink = null; }
+  if (pendingLink && Number.isInteger(pendingLink.cp)) applyDeepLink(pendingLink); else render();
 
   // Для main.js (смена раздела, переход в V1): при отказе от ухода экран
   // перерисовывается, чтобы причина отказа (status_msg) стала видна.
