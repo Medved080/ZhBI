@@ -360,6 +360,7 @@ if (want("group")) {
   const p2 = await b.eval(`document.querySelector('.eo-preview').innerText`);
   ok("предпросмотр возврата: «Контракт будет СНЯТ у 4», «фактическая дата очищена у 2», нет записи", /Контракт будет СНЯТ у 4/.test(p2) && /очищена у 2/.test(p2) && q(`select count(*) n from elements where id in (${ids.join(",")}) and current_status='planned'`)[0].n === 0, p2);
   ok("предпросмотр называет контракты, с которых снимутся изделия", /контракт|Контрагент/i.test(p2));
+  ok("предпросмотр показывает, у КАКИХ изделий снимется контракт (список из 4)", await b.eval(`(()=>{const d=document.querySelector('.eo-rel');return !!d&&d.querySelectorAll('li').length===4&&/Колонна|Ригель|Плита/.test(d.textContent)})()`));
   await clickBtn(b, "#eo-gform", "Применить к");
   await b.waitFor(`!!document.querySelector('.v2-dialog')`, 10000);
   const d2 = await dialogText(b);

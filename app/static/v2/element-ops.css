@@ -44,3 +44,5 @@
 .eo-cons-sub { margin: 3px 0 2px; padding-left: 16px; font-size: 12px; color: var(--muted); list-style: disc; }
 .eo-cons-sub li { margin: 1px 0; }
 .eo-banner-warn { border-left-color: var(--accent); }
+.eo-rel summary { cursor: pointer; font-size: 12px; margin: 4px 0; color: var(--accent); }
+.eo-rel[open] { margin-bottom: 6px; }

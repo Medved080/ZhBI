@@ -571,9 +571,14 @@ export function createElementOps(ctx) {
     if (pv) {
       const c = pv.resp.consequences, lines = consequenceItems(c, statusLabel(g.status));
       const probs = pv.resp.problems || [];
+      // «у каких изделий»: список изделий, у которых контракт будет снят (по ответу предпросмотра)
+      const names = new Map((c.released_by_contract || []).map((x) => [x.contract_id, x.name]));
+      const rel = (pv.resp.items || []).filter((i) => i.contract_before != null && i.contract_after == null);
+      const relHtml = rel.length ? `<details class="eo-rel"><summary>У каких изделий снимется контракт (${nf(rel.length)})</summary><ul class="eo-cons-sub">${rel.slice(0, 200).map((i) => `<li>${esc(i.element_type)} «${esc(i.mark || "без марки")}» — ${esc(names.get(i.contract_before) || "контракт №" + i.contract_before)}</li>`).join("")}${rel.length > 200 ? `<li>… и ещё ${nf(rel.length - 200)}</li>` : ""}</ul></details>` : "";
       prevHtml = `<div class="eo-preview" role="status"><b>Предпросмотр (ничего не записано)</b>
         <p>Будет изменено: <b>${nf(pv.body.items.length)}</b> изд.${pv.skipped ? `; не изменятся: ${nf(pv.skipped)} (уже «${esc(statusLabel(g.status))}»)` : ""}.</p>
         ${lines.length ? `<ul class="eo-cons">${lines.map((l) => `<li>${esc(l.text)}${l.sub?.length ? `<ul class="eo-cons-sub">${l.sub.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ul>` : `<p class="v2-muted">Контракты сохраняются прежними. Последствий сверх смены статуса нет.</p>`}
+        ${relHtml}
         ${probs.length ? `<p class="ws-err" role="alert">Контракт не позволяет записать: ${esc(probs.slice(0, 3).map((p) => `${p.element_type} «${p.mark || "без марки"}» — ${p.message}`).join(" "))}${probs.length > 3 ? ` (и ещё ${probs.length - 3})` : ""}</p>` : ""}
         <div class="ws-actions"><button type="button" class="v2-btn v2-primary" data-eo="g-apply" ${g.busy || probs.length ? "disabled" : ""}>${g.busy ? "Сохранение…" : `Применить к ${nf(pv.body.items.length)} изд.`}</button>
           <button type="button" class="v2-btn" data-eo="g-cancel" ${g.busy ? "disabled" : ""}>Изменить</button></div></div>`;

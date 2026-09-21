@@ -429,6 +429,25 @@ def main_run():
     foreign = pick("current_status = 'planned'", 1, obj=2)[0]
     check("изделие чужого объекта у пользователя без доступа — 403", api("GET", f"/element-ops/state?ids={ids[0]},{foreign}", user=USER2)[0] == 403)
 
+    print("S15 предельная пачка (2000 изделий): время предпросмотра и записи, откат при конфликте на последнем изделии")
+    big = contracted("contracting", 2000)
+    bb = sb(big, "in_production", "preview")
+    t0 = time.time(); st, js = api("POST", "/element-ops/status-batch", bb); t_prev = time.time() - t0
+    check(f"предпросмотр 2000 изд.: 200, {t_prev:.1f} с, ничего не записано", st == 200 and len(js.get("items", [])) == 2000 and all(el(i)["current_status"] == "contracting" for i in big[:20]), f"{st}")
+    check("предпросмотр 2000 изд. укладывается в 30 с", t_prev < 30, f"{t_prev:.1f}")
+    snap = H.checksum()
+    c = db(); c.execute("UPDATE elements SET current_status = 'shipped' WHERE id = ?", (big[-1],)); c.commit(); c.close()   # другой пользователь изменил ПОСЛЕДНЕЕ изделие
+    snap2 = H.checksum()
+    st, js = api("POST", "/element-ops/status-batch", sb(big, "in_production", "apply", expect={"release_contracts": 0, "without_contract": 0}) | {"items": [{"element_id": i["element_id"], "expected_status": "contracting", "expected_contract_id": i["expected_contract_id"]} for i in bb["items"]]})
+    check("конфликт на последнем изделии: 409, ни одно из 2000 не изменено", st == 409 and H.checksum() == snap2, f"{st}")
+    c = db(); c.execute("UPDATE elements SET current_status = 'contracting' WHERE id = ?", (big[-1],)); c.commit(); c.close()
+    mark_events()
+    t0 = time.time(); st, js = api("POST", "/element-ops/status-batch", sb(big, "in_production")); t_apply = time.time() - t0
+    check(f"запись 2000 изд.: 200, {t_apply:.1f} с, все в «В производстве», контракты целы", st == 200 and len(js.get("applied", [])) == 2000 and t_apply < 60, f"{st} {t_apply:.1f}")
+    c = db(); n_ok = c.execute(f"SELECT COUNT(*) n FROM elements WHERE id IN ({','.join(map(str, big))}) AND current_status = 'in_production' AND contract_id IS NOT NULL").fetchone()["n"]; c.close()
+    check("в БД 2000 изделий в «В производстве» с контрактами", n_ok == 2000, str(n_ok))
+    check("журнал: 2000 событий status_change", len(events("status_change", set(big))) == 2000)
+
     print("S13 совместимость прежних операций V1 (ничего не сломано)")
     ids = contracted("contracting", 2)
     st, js = api("PATCH", f"/elements/{ids[0]}/comment", {"comment": "проверка"})
