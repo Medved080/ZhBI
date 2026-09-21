@@ -640,12 +640,14 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_u
 @router.patch("/{contract_id}", response_model=ContractOut)
 def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
-    begin_write(conn)   # блокировка записи ДО чтения и сверки покрытия (app/db.py): гонка с распределением изделий
-    # ОБЕ проверки: чей контракт правим и куда его переносим. Одной второй
-    # было мало — см. _guard_contract.
-    _guard_contract(conn, admin, contract_id)
-    _guard_specification(conn, admin, body.specification_id)
     try:
+        # Начало транзакции и ВСЕ проверки — внутри try/finally: отказ в правах или отсутствующий контракт не должны оставлять
+        # соединение с открытой пишущей транзакцией (иначе второй писатель получает «database is locked»).
+        begin_write(conn)   # блокировка записи ДО чтения и сверки покрытия (app/db.py): гонка с распределением изделий
+        # ОБЕ проверки: чей контракт правим и куда его переносим. Одной второй
+        # было мало — см. _guard_contract.
+        _guard_contract(conn, admin, contract_id)
+        _guard_specification(conn, admin, body.specification_id)
         existing = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Контракт не найден")
