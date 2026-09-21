@@ -26,7 +26,7 @@ import openpyxl  # noqa: E402
 
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -642,10 +642,81 @@ def section_drawing():
     check(rows("SELECT COUNT(*) n FROM axis_lines WHERE source_file=?", f"v2_{tag}_b.dxf")[0]["n"] > 0, "после повтора сетка осей записана")
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing}
+
+def section_input():
+    print("== загрузка из папки Input")
+    import os
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    tag = str(int(time.time()))[-5:]
+    admin = login("admin")
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Input")   # каталог Input/ этой (тестовой) рабочей копии
+    os.makedirs(root, exist_ok=True)
+    created = []
+
+    def put(name, content):
+        path = os.path.join(root, name)
+        with open(path, "wb") as fh:
+            fh.write(content)
+        created.append(path)
+
+    try:
+        # объект под пачку
+        name = f"Тест-В2 папка {tag}"
+        HEAD = ["Наименование ОС", "Адрес", "СМУ", "Директор СМУ", "ДП / РП", "Статус ОС", "Широта", "Долгота", "Фото/Видео", "Старт СМР"]
+        f = xlsx_bytes([[name, None, None, None, None, "Активный", None, None, None, None]], HEAD, "Объекты на карте")
+        ch = admin.post(BASE + "/objects-import/analyze", files={"file": ("o.xlsx", f, XLSX)}).json()["changes"]
+        admin.post(BASE + "/objects-import/apply", json={"changes": ch})
+        oid = rows("SELECT id FROM objects WHERE name=?", name)[0]["id"]
+        # права
+        for user in ("user2", "user4"):
+            s2 = login(user)
+            r = s2.get(BASE + "/admin/input-files")
+            r2 = s2.post(BASE + "/admin/import-input", json={"object_id": oid})
+            check(r.status_code == 403 and r2.status_code == 403, f"{user}: список папки и загрузка → {r.status_code}/{r2.status_code}")
+        # пустая папка
+        r = admin.get(BASE + "/admin/input-files")
+        check(r.status_code == 200 and r.json() == {"dxf": [], "xlsx": []}, f"пустая папка: {r.text[:80]}")
+        # файлы: рабочий чертёж, битый чертёж, таблица графика и таблица без маршрута
+        put(f"input_{tag}.dxf", sample(admin, "dxf"))
+        put(f"broken_{tag}.dxf", b"not a drawing")
+        put(f"прогноз_{tag}.xlsx", xlsx_bytes([["Колонна нижняя", "Пн 05.10.26", "Пт 09.10.26", "Кран 1", "Захватка 1", "Стоянка 01", "1 этаж"]], ["Тип и Подтип", "Начало", "Окончание", "Кран", "Захватка", "Стоянка", "Этаж"], "График СМР"))
+        put(f"прочее_{tag}.xlsx", xlsx_bytes([[1]], ["A"], "Лист1"))
+        lst = admin.get(BASE + "/admin/input-files").json()
+        check(len(lst["dxf"]) == 2 and len(lst["xlsx"]) == 2, f"список папки: {lst}")
+        before = snap()
+        r = admin.post(BASE + "/admin/import-input", json={"object_id": 99999})
+        check(r.status_code == 404 and snap() == before, f"несуществующий объект → {r.status_code}, БД не изменена")
+        j0 = journal_max()
+        # двойная отправка: вторая при работающей первой получает 409
+        def go(_):
+            return login("admin").post(BASE + "/admin/import-input", json={"object_id": oid}, timeout=600)
+        with ThreadPoolExecutor(2) as ex:
+            res = list(ex.map(go, range(2)))
+        codes = sorted(x.status_code for x in res)
+        check(codes in ([200, 200], [200, 409]), f"две одновременные загрузки: {codes}")
+        ok = next(x for x in res if x.status_code == 200).json()["report"]
+        text = "\n".join(ok)
+        check(f"input_{tag}.dxf" in text and "элементов" in text, f"отчёт: чертёж загружен ({[l[:70] for l in ok][:2]})")
+        check(f"broken_{tag}.dxf" in text and "ОШИБКА" in text, "отчёт: битый чертёж — ошибка отдельной строкой, остальные загружены")
+        check(rows("SELECT COUNT(*) n FROM elements WHERE source_file=?", f"input_{tag}.dxf")[0]["n"] == 5, "в БД 5 изделий чертежа из папки")
+        ev = journal_since(j0, "import_input")
+        check(len(ev) >= 1, f"журнал: событие import_input ({len(ev)})")
+        # повтор безопасен
+        r = admin.post(BASE + "/admin/import-input", json={"object_id": oid}, timeout=600)
+        check(r.status_code == 200 and rows("SELECT COUNT(*) n FROM elements WHERE source_file=?", f"input_{tag}.dxf")[0]["n"] == 5, "повторная загрузка: число изделий то же")
+    finally:
+        for p in created:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")

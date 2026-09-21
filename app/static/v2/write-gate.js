@@ -90,6 +90,7 @@ export const POLICY = [
   { id: "bulk.analyze", screen: "bulk-edit", action: "Массовая правка через Excel: сверка файла с базой (ничего не пишет)", method: "POST", path: re("/elements/bulk-edit/analyze"), check: uploadCheck({ ext: ["xlsx"], fields: { mode: isOneOf(["fields", "statuses", "contracting"]) } }), risk: "чтение (сверка), данные не меняются", allowed: true, proof: "настоящий backend: расхождения по трём режимам, 400/422 на неверный файл, отказ 403" },
   { id: "drawing.analyze", screen: "upload-drawing", action: "Загрузка чертежа DXF: разбор и сводка изменений по выбранному объекту (в базу не пишет, файл сохраняется в uploads/)", method: "POST", path: re("/import-dxf/analyze"), check: uploadCheck({ ext: ["dxf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются; файл кладётся во временную папку сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF, отказ 403 у user2/user4, 4xx на пустой и битый файл" },
   { id: "drawing.apply", screen: "upload-drawing", action: "Загрузка чертежа DXF: применить показанную сводку (изделия, сетка осей, зоны и привязки объекта)", method: "POST", path: re("/import-dxf/apply"), check: dxfApplyProblem, risk: "геометрия и привязки изделий объекта; этапами (не одна транзакция, как в V1), копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, двойная отправка — один запрос, отказ 403, журнал после сохранения" },
+  { id: "input.import", screen: "import-input", action: "Загрузка из папки Input/ сервера: чертежи и таблицы пачкой в выбранный объект", method: "POST", path: re("/admin/import-input"), check: inputImportProblem, risk: "геометрия изделий объекта и график СМР; каждый файл отдельно (ошибка одного не отменяет остальные), копия базы перед загрузкой", allowed: true, proof: "настоящий backend: построчный отчёт, отказ 403 у не-админа, повтор безопасен (обновление по handle), журнал" },
   { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
@@ -222,5 +223,13 @@ function dxfApplyProblem(body) {
   if (!Array.isArray(body.keep_mark_element_ids) || !Array.isArray(body.create_new_zone_ids) || body.create_new_zone_ids.some((x) => !Number.isInteger(x))) return "списки решений неверны";
   const r = body.refill_manual_fields;
   if (!r || typeof r !== "object" || Array.isArray(r) || Object.entries(r).some(([k, v]) => !/^\d+$/.test(k) || !Array.isArray(v) || v.some((f) => typeof f !== "string"))) return "решения по ручным полям неверны";
+  return null;
+}
+
+// Загрузка из папки Input: только объект пачки (целое число).
+function inputImportProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => k !== "object_id")) return "лишние поля";
+  if (!Number.isInteger(body.object_id) || body.object_id <= 0) return "не указан объект";
   return null;
 }

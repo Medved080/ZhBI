@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import threading
 import os
 import shutil
 import sqlite3
@@ -2437,6 +2438,9 @@ def admin_input_files(user: sqlite3.Row = Depends(require_service_feature("impor
     return list_input_files()
 
 
+_INPUT_IMPORT_LOCK = threading.Lock()
+
+
 class ImportInputIn(BaseModel):
     # В какой объект грузится ВСЯ пачка (2026-08-21, запрос пользователя).
     # Необязателен ради старого клиента и первой в жизни установки, где
@@ -2483,9 +2487,15 @@ def admin_import_input(body: Optional[ImportInputIn] = None,
             assert_object_feature(conn, user, object_id, "drawings", "write")
         finally:
             conn.close()
-    backup_before_import("папка Input", audit_display_name(user), user["id"])
-    report = import_input_dxf(object_id)
-    report += import_input_xlsx(object_id)
+    # Одна загрузка из папки за раз: вторая (двойная отправка, вторая вкладка) получает отказ, а не параллельную обработку тех же файлов
+    if not _INPUT_IMPORT_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Загрузка из папки Input уже выполняется — дождитесь завершения")
+    try:
+        backup_before_import("папка Input", audit_display_name(user), user["id"])
+        report = import_input_dxf(object_id)
+        report += import_input_xlsx(object_id)
+    finally:
+        _INPUT_IMPORT_LOCK.release()
     # В журнал: до 2026-07-30 массовая загрузка из Input/ нигде не
     # фиксировалась, кроме stdout сервера, — а она перезаписывает геометрию
     # всех элементов и создаёт контракты (живой репорт пользователя о

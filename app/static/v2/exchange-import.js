@@ -6,7 +6,6 @@
 //  * «справочник объектов» — сверка (ничего не пишет) → отметка флажками → применение отмеченного; перед применением сверка перечитывается,
 //    и если что-то изменилось с момента показа, применение не выполняется (устаревшая сверка).
 // Общая логика запуска одна на все загрузки (`runUpload`): один запрос за раз, подтверждение, обработка отказа и неизвестного исхода.
-import { api as sharedApi } from "./api.js";
 import { showConfirmDialog } from "./dialogs.js";
 import {
   esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, mountTemplates, makeStatus, unknownOutcomeHtml, verifyOutcome,
@@ -357,8 +356,86 @@ function mountObjectsImport(el, ctx) {
   };
 }
 
+// ---------------------------------------------------------------- загрузка из папки Input сервера
+// V1: пункт «Загрузить из папки Input» — список файлов папки, предупреждение о перезаписи геометрии, выбор объекта, запуск, построчный отчёт.
+// Файлы кладёт на сервер человек (не через браузер): здесь только просмотр списка и явная команда. Один битый файл не мешает остальным
+// (построчный отчёт) — это частичный режим V1; копия базы снимается один раз на всю пачку.
+function mountInputImport(el, ctx) {
+  const { screen, groupTitle, api, objects, objectId } = ctx;
+  let dead = false, busy = false, list = null;
+  el.className = "v2-page";
+  el.innerHTML = pageFrame({
+    screen, groupTitle, summary: "Пакетная загрузка чертежей (.dxf) и таблиц (.xlsx), лежащих в папке Input/ на сервере, в выбранный объект.",
+    body: `<div id="in-list"><p class="v2-muted" role="status">Читаю папку…</p></div>
+      <form id="in-form" autocomplete="off" novalidate>
+        <label class="v2-wire-field v2-field-wide"><span>Объект (в него уйдёт вся пачка)</span>
+          <select id="in-object" aria-label="Объект">${(objects || []).some((o) => o.id === objectId) ? "" : `<option value="" selected>— выберите объект —</option>`}${objectOptions(objects, objectId)}</select></label>
+        <p class="v2-muted v2-ex-hint">Один объект на всю пачку: папка — способ положить на сервер тяжёлый чертёж, а не разложить стройку по зданиям. Файл контрактации из папки не загружается — для него есть «Импорт контрактации из XLS».</p>
+        <div class="v2-bar"><button type="submit" class="v2-btn v2-primary" id="in-go" disabled>Загрузить из папки</button><button type="button" class="v2-btn" id="in-refresh">Обновить список</button></div>
+      </form>
+      <div id="in-status" class="v2-ex-status" role="status" aria-live="polite"></div>
+      <div id="in-report"></div>`,
+  });
+  const $ = (s) => el.querySelector(s);
+  const status = makeStatus($("#in-status"));
+
+  async function refresh() {
+    $("#in-list").innerHTML = `<p class="v2-muted" role="status">Читаю папку…</p>`; $("#in-go").disabled = true;
+    try {
+      const d = await api.get("/admin/input-files");
+      if (dead) return;
+      list = d;
+      const rows = [];
+      if (d.dxf.length) rows.push(`<p><b>Чертежи (.dxf):</b></p><ul class="v2-ex-list">${d.dxf.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`);
+      if (d.xlsx.length) rows.push(`<p><b>Таблицы (.xlsx):</b></p><ul class="v2-ex-list">${d.xlsx.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`);
+      $("#in-list").innerHTML = (rows.length ? rows.join("") : `<p class="v2-muted">Папка Input/ пуста — загружать нечего.</p>`)
+        + (d.dxf.length ? `<div class="v2-callout v2-callout-bad" role="note">Геометрия уже загруженных элементов этих чертежей будет перезаписана. Статусы, история и привязка к контрактам хранятся отдельно и не затрагиваются.</div>` : "");
+      $("#in-go").disabled = !(d.dxf.length || d.xlsx.length);
+    } catch (err) {
+      if (dead) return;
+      list = null;
+      $("#in-list").innerHTML = `<div class="v2-callout v2-callout-bad" role="alert">Не удалось прочитать папку: ${esc(errText(err))}</div>`;
+    }
+  }
+
+  async function run() {
+    if (busy || !list) return;
+    const oid = Number($("#in-object").value) || null;
+    if (!oid) { status.set("Сначала выберите объект", "bad"); return; }
+    busy = true; $("#in-go").disabled = true; $("#in-refresh").disabled = true;
+    let sentAt = null;
+    try {
+      const o = (objects || []).find((x) => x.id === oid);
+      if (!(await showConfirmDialog(`Загрузить из папки Input/ сервера в объект «${o ? o.name : oid}»?\n\nЧертежей: ${list.dxf.length}, таблиц: ${list.xlsx.length}.${list.dxf.length ? "\nГеометрия уже загруженных элементов этих чертежей будет перезаписана (статусы, история и контракты не затрагиваются)." : ""}\n\nПеред загрузкой сервер сохранит копию базы. Файлы обрабатываются по очереди: ошибка одного файла не отменяет остальные — итог показывается построчно.`, { confirmLabel: "Загрузить", multiline: true }))) { status.set("Загрузка отменена — ничего не выполнено.", ""); return; }
+      if (dead) return;
+      status.set("Загрузка… это может занять до нескольких минут. Не закрывайте страницу.", "busy");
+      $("#in-report").innerHTML = "";
+      sentAt = Date.now();
+      const res = await api.post("/admin/import-input", { object_id: oid });
+      if (dead) return;
+      const bad = (res.report || []).filter((l) => /ОШИБКА|НЕ ЗАГРУЖЕН/.test(l)).length;
+      status.set(`Готово: обработано строк отчёта — ${(res.report || []).length}${bad ? `, с ошибками — ${bad}` : ""}.`, bad ? "bad" : "ok");
+      $("#in-report").innerHTML = `<ul class="v2-ex-list">${(res.report || []).map((l) => `<li class="${/ОШИБКА|НЕ ЗАГРУЖЕН/.test(l) ? "v2-bad-text" : ""}">${esc(l)}</li>`).join("")}</ul>`;
+      await refresh();
+    } catch (err) {
+      if (dead) return;
+      if (err.blockedByPolicy) status.set(errText(err), "bad");
+      else if (isUnknownOutcome(err)) {
+        status.html(unknownOutcomeHtml("загрузка из папки Input"), "bad");
+        const box = $("#in-status");
+        box.querySelector("[data-verify]")?.addEventListener("click", () => verifyOutcome(api, box, { action: "import_input", entityId: oid, sinceMs: sentAt || Date.now(), what: "загрузка из папки Input" }));
+      } else status.set(`Не выполнено: ${errText(err)}`, "bad");
+    } finally { busy = false; if (!dead) { $("#in-refresh").disabled = false; $("#in-go").disabled = !list || !(list.dxf.length || list.xlsx.length); } }
+  }
+  $("#in-form").addEventListener("submit", (e) => { e.preventDefault(); run(); });
+  $("#in-refresh").addEventListener("click", () => { if (!busy) refresh(); });
+  refresh();
+  return { hasUnsavedChanges: () => false, guardLeave: async () => true, destroy() { dead = true; } };
+}
+
 // ---------------------------------------------------------------- вход
 export const IMPORT_OPS = {
+  "import-input": mountInputImport,
   "contracting-import": (el, ctx) => mountUploadOp(el, ctx, contractingCfg(ctx)),
   "schedule-import": (el, ctx) => mountUploadOp(el, ctx, scheduleCfg(ctx)),
   "history-import": (el, ctx) => mountUploadOp(el, ctx, historyCfg(ctx)),
