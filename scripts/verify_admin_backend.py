@@ -653,6 +653,20 @@ def del_call():
 ths = [threading.Thread(target=del_call) for _ in range(2)]
 [t.start() for t in ths]; [t.join() for t in ths]
 check("D14 два одновременных удаления объекта: один 200 и один 404", sorted(res) == [200, 404], str(res))
+# откат удаления объекта: сбой на последнем шаге — объект, вложение (запись И ФАЙЛ на диске), выданный доступ остаются
+s, o8 = ADMIN.post("/objects", {"name": "QA Объект откат", "project_id": 1})
+ADMIN.put(f"/users/{TU}/access", {"grants": [{"project_id": 1, "object_id": o8["id"], "role": "user"}]})
+s, att8 = ADMIN.upload("/attachments", {"entity_type": "object", "entity_id": o8["id"]}, {"file": ("keep.txt", b"must survive rollback", "text/plain")})
+stored8 = q1("SELECT stored_name s FROM attachments WHERE entity_type='object' AND entity_id=?", (o8["id"],))["s"]
+c = db(); c.execute("CREATE TRIGGER qa_del_abort BEFORE DELETE ON objects WHEN OLD.id = %d BEGIN SELECT RAISE(ABORT, 'qa: отказ при удалении объекта'); END" % o8["id"]); c.commit(); c.close()
+try:
+    s, e = ADMIN.post(f"/dictionaries/object/{o8['id']}/delete", {"replacements": {}, "mode": "replace"})
+finally:
+    c = db(); c.execute("DROP TRIGGER qa_del_abort"); c.commit(); c.close()
+check("D14 сбой при удалении объекта: ошибка и ПОЛНЫЙ откат (объект, вложение, доступ)", s >= 400 and q1("SELECT 1 x FROM objects WHERE id=?", (o8["id"],)) is not None and q1("SELECT COUNT(*) n FROM attachments WHERE entity_type='object' AND entity_id=?", (o8["id"],))["n"] == 1 and q1("SELECT COUNT(*) n FROM user_access WHERE object_id=?", (o8["id"],))["n"] == 1, f"{s}")
+check("D14 файл вложения НЕ удалён при откате (запись и файл согласованы)", os.path.isfile(os.path.join(ATT_DIR, stored8)))
+s, r = ADMIN.post(f"/dictionaries/object/{o8['id']}/delete", {"replacements": {}, "mode": "replace"})
+check("D14 повтор без сбоя: удаление проходит, файл удалён после commit", s == 200 and not os.path.isfile(os.path.join(ATT_DIR, stored8)) and q1("SELECT 1 x FROM objects WHERE id=?", (o8["id"],)) is None)
 # физлица
 mark = last_log_id()
 s, i1 = ADMIN.post("/individuals", {"name": "QA Иванов Иван"})

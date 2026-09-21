@@ -4715,7 +4715,11 @@ def delete_project(project_id: int, admin: sqlite3.Row = Depends(require_service
         delete_attachments_for(conn, "project", project_id)
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
+        from app.attachments import flush_pending_unlinks
+        flush_pending_unlinks()   # файлы вложений стираются только после commit
     finally:
+        from app.attachments import discard_pending_unlinks
+        discard_pending_unlinks()   # при откате — ничего не стирать (после успешного flush пусто)
         conn.close()
     activity.log("project_delete", user=admin, entity_type="project", entity_id=project_id)
     return {"deleted": project_id}

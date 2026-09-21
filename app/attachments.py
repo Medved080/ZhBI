@@ -24,6 +24,7 @@
 
 import re
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -158,16 +159,32 @@ def counts_for(conn, entity_type: str, entity_ids) -> dict:
     }
 
 
+# Файлы удаляемых вложений (2026-09-21): физически стираются ТОЛЬКО после commit, иначе откат удаления владельца оставил бы записи вложений без
+# файлов (410 при скачивании). Вызывающий после commit зовёт flush_pending_unlinks(), при откате — discard_pending_unlinks(); если забыл — файл
+# остаётся на диске (безвредная утечка), а не пропадает.
+_pending = threading.local()
+
+
+def flush_pending_unlinks() -> None:
+    names, _pending.names = getattr(_pending, "names", []), []
+    for name in names:
+        _unlink(name)
+
+
+def discard_pending_unlinks() -> None:
+    _pending.names = []
+
+
 def delete_for_entity(conn, entity_type: str, entity_id: int) -> int:
     """Снести вложения вместе с владельцем. Внешнего ключа на три разные
     таблицы не выразить, поэтому каскад — руками, из тех мест, где владелец
-    удаляется."""
+    удаляется. Записи удаляются в транзакции вызывающего; файлы — после его commit
+    (`flush_pending_unlinks`)."""
     rows = conn.execute(
         "SELECT stored_name FROM attachments WHERE entity_type = ? AND entity_id = ?",
         (entity_type, entity_id),
     ).fetchall()
-    for r in rows:
-        _unlink(r["stored_name"])
+    _pending.names = getattr(_pending, "names", []) + [r["stored_name"] for r in rows]
     conn.execute("DELETE FROM attachments WHERE entity_type = ? AND entity_id = ?",
                  (entity_type, entity_id))
     return len(rows)
