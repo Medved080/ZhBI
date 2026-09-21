@@ -22,6 +22,7 @@ import { mountSubtypesEdit } from "./subtypes-edit.js";
 import { mountAppearanceEdit } from "./appearance-edit.js";
 import { mountLabelColorEdit } from "./label-color-edit.js";
 import { mountRevitColorsEdit } from "./revit-colors-edit.js";
+import { mountAccessView } from "./access-view.js";
 
 const root = document.getElementById("v2-root");
 
@@ -340,6 +341,11 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountRevitColorsEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+        });
+      } else if (target.impl === "access-view") {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountAccessView(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "label-color-edit") {
         document.title = `${target.title} — ЖБИ`;
