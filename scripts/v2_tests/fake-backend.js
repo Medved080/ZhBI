@@ -3117,24 +3117,42 @@ function createServer(opts) {
     { id: 1, object_id: oid, block_id: 11, work_type_id: 7, "путь": "Строительство / Кладка", "код": "180-02-02", "название": "Кладка стен QA", unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: 1, plan_start: "2026-09-01", plan_end: "2026-09-20", forecast_start: null, forecast_end: null, note: null, updated_at: "2026-09-01 10:00:00", retired_at: null, deadline_label: "без сроков", percent: 0, status: "plan" },
     { id: 2, object_id: oid, block_id: 12, work_type_id: 7, "путь": "Строительство / Кладка", "код": "180-02-03", "название": "Перегородки QA", unit: "эт/сек", track_code: "3", section_code: "С01", level_floor: 2, plan_start: null, plan_end: null, forecast_start: null, forecast_end: null, note: null, updated_at: "2026-09-01 10:00:00", retired_at: null, deadline_label: "без сроков", percent: 40, status: "in_progress" }]);
   let bwTick = 0;
-  route("GET", "/objects/:id/block-works", (ctx) => { const oid = mfrObject(ctx); return { items: deepClone(worksOf(oid)) }; });
+  // отпечаток ЗР (как block_works.rev_of на backend): метка изменения, значения, признак снятия и процент
+  const revOf = (w) => `r${[w.updated_at, w.plan_start, w.plan_end, w.forecast_start, w.forecast_end, w.note, w.retired_at, w.percent].map((v) => v ?? "").join("|")}`;
+  const withRev = (w) => ({ ...deepClone(w), rev: revOf(w), deadline: w.deadline || "no_dates", block_id: w.block_id });
+  route("GET", "/objects/:id/block-works", (ctx) => {
+    const oid = mfrObject(ctx);
+    const ids = (ctx.query.get("block_ids") || "").split(",").filter(Boolean).map(Number);
+    return { items: worksOf(oid).filter((w) => !w.retired_at && (!ids.length || ids.includes(w.block_id))).map(withRev) };
+  });
+  route("GET", "/objects/:id/block-works/active-counts", (ctx) => {
+    const oid = mfrObject(ctx); const counts = {};
+    for (const w of worksOf(oid)) if (!w.retired_at) counts[w.block_id] = (counts[w.block_id] || 0) + 1;
+    return { counts };
+  });
+  route("GET", "/objects/:id/planning-tracks", (ctx) => { mfrObject(ctx); return { tracks: [{ "код": "3", "название": "Кладка QA" }] }; });
   route("GET", "/objects/:id/block-works/:bw", (ctx) => {
     const oid = mfrObject(ctx); const w = worksOf(oid).find((x) => x.id === Number(ctx.params.bw));
     if (!w) fail(404, "Запланированная работа не найдена.");
-    return deepClone(w);
+    return { ...withRev(w), versions: deepClone(w.versions || []), "документы_факта": [], "история_правок": [] };
   });
   route("PATCH", "/objects/:id/block-works/:bw", (ctx) => {
     const oid = mfrObject(ctx);
     if (FEATURE_BY_KEY.has("work_progress")) assertFeature(ctx.user, "work_progress", "write", oid);
     const w = worksOf(oid).find((x) => x.id === Number(ctx.params.bw));
     if (!w) fail(404, "Запланированная работа не найдена.");
-    const b = ctx.body || {};
-    let changed = false;
+    const { expected_rev: expected, ...b } = ctx.body || {};
+    // проверка отпечатка — как на backend, под «блокировкой»: расхождение → 409 conflict, ничего не меняется
+    if (expected !== undefined && expected !== revOf(w)) fail(409, { message: "Работу изменили после того, как вы её открыли — ничего не сохранено.", conflict: true, items: [{ id: w.id, reason: "changed" }] });
+    if (w.retired_at) fail(409, "Работа снята с плана блока — правка сроков и примечания недоступна.");
+    let changed = false, forecastChanged = false;
     for (const f of ["plan_start", "plan_end", "note", "forecast_start", "forecast_end"]) {
-      if (f in b && (b[f] ?? null) !== (w[f] ?? null)) { w[f] = b[f] ?? null; changed = true; }
+      if (f in b && (b[f] ?? null) !== (w[f] ?? null)) { w[f] = b[f] ?? null; changed = true; if (f.startsWith("forecast_")) forecastChanged = true; }
     }
+    // версия прогноза — одна на PATCH (как на backend), копится и не отменяется
+    if (forecastChanged) w.versions = [{ id: (w.versions || []).length + 1, forecast_start: w.forecast_start, forecast_end: w.forecast_end, created_at: "2026-09-21 11:00:00", created_by: "QA", note: null }, ...(w.versions || [])];
     if (changed) w.updated_at = `2026-09-21 11:00:${String(++bwTick % 60).padStart(2, "0")}`;
-    return deepClone(w);
+    return { ...withRev(w), versions: deepClone(w.versions || []), "документы_факта": [], "история_правок": [] };
   });
   route("GET", "/objects/:id/block-work-types", (ctx) => { mfrObject(ctx); return { options: [{ id: 7, path: "Строительство / Кладка / Стены", code: "180-02-02", name: "Кладка стен QA", planning_track_code: "3", sort_order: 1 }] }; });
   route("GET", "/objects/:id/fact-journal", (ctx) => { mfrObject(ctx); return { items: [

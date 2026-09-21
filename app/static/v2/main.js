@@ -125,6 +125,15 @@ function renderFatal(err) {
 
 // Модульные экраны (перенесены целиком) → их монтирование. Остальные экраны реестра показывают каркас
 // с переходом в V1 (screen-view.js).
+// Экраны области «МФР / учёт по блокам» (рабочие модули с записью через шлюз): impl экрана → монтирование
+// (модули грузятся при первом открытии экрана, а не при старте: холодный запуск V2 не тяжелеет)
+const MFR_SCREENS = {
+  "blocks-edit": () => import("./blocks-screen.js").then((m) => m.mountBlocksScreen),
+  "fact-journal-edit": () => import("./fact-journal-screen.js").then((m) => m.mountFactJournalScreen),
+  "chess-flat-edit": () => import("./chess-flat-screen.js").then((m) => m.mountChessFlatScreen),
+  "block-bulk-edit": () => import("./block-bulk-screen.js").then((m) => m.mountBlockBulkScreen),
+};
+
 const MODULES = {
   "users-access": (el, ctx) => mountUsersAccess(el, ctx),
   "projects-objects": (el, ctx) => mountProjectsObjects(el, ctx),
@@ -441,6 +450,12 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountWorkspace(content, {
           screen: target, objectId, api, groupTitle: groupTitle(target.group), ws: target.ws || "model",
+        });
+      } else if (MFR_SCREENS[target.impl]) {
+        document.title = `${target.title} — ЖБИ`;
+        const mountMfr = await MFR_SCREENS[target.impl]();
+        activeModule = mountMfr(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "read" && target.read) {
         document.title = `${target.title} — ЖБИ`;

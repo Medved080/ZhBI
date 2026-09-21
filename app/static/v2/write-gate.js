@@ -45,6 +45,50 @@ export function allocationBodyProblem(body) {
   return null;
 }
 
+
+// ---- формы тел операций области «МФР / учёт по блокам» (`check` возвращает текст проблемы или null; тело в запрос уходит только такой формы) ----
+const isObj = (b) => b && typeof b === "object" && !Array.isArray(b);
+const realDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v ?? "")); if (!m) return false; const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3]; };
+const dateOrNull = (v) => v === null || realDate(v);
+const hasRev = (b) => typeof b.expected_rev === "string" && b.expected_rev.length > 0;
+// ЗР: правка ОДНОЙ группы полей (срок / прогноз / примечание) с отпечатком работы
+export const blockWorkGroupProblem = (group) => (b) => {
+  if (!isObj(b) || !hasRev(b)) return "нет отпечатка работы";
+  if (group === "plan") return "plan_start" in b && "plan_end" in b && dateOrNull(b.plan_start) && dateOrNull(b.plan_end) ? null : "форма базового срока";
+  if (group === "forecast") return "forecast_start" in b && "forecast_end" in b && dateOrNull(b.forecast_start) && dateOrNull(b.forecast_end) ? null : "форма прогноза";
+  return typeof b.note === "string" && b.note.length <= 4000 ? null : "форма примечания";
+};
+const idsOk = (a, max = 2000) => Array.isArray(a) && a.length > 0 && a.length <= max && a.every((x) => Number.isInteger(x) && x > 0) && new Set(a).size === a.length;
+export function blockWorksBulkProblem(b) {
+  if (!isObj(b) || !idsOk(b.block_work_ids) || !isObj(b.expected)) return "нет набора работ или их отпечатков";
+  if (!b.block_work_ids.every((i) => typeof b.expected[String(i)] === "string")) return "нет отпечатка у работы";
+  if (b.op === "shift") return ["plan", "forecast"].includes(b.field) && Number.isInteger(b.days) && b.days !== 0 && Math.abs(b.days) <= 3650 ? null : "форма сдвига";
+  return b.op === "forecast_equals_plan" && b.field === undefined && b.days === undefined ? null : "неизвестная операция";
+}
+export function blockSettingsProblem(b) {
+  if (!isObj(b) || !Array.isArray(b.work_type_ids) || !b.work_type_ids.every((x) => Number.isInteger(x) && x > 0) || typeof b.expected !== "string") return "форма состава работ";
+  return null;
+}
+export function blocksSettingsProblem(b) {
+  if (!isObj(b) || !idsOk(b.block_ids) || !Array.isArray(b.work_type_ids) || !b.work_type_ids.every((x) => Number.isInteger(x) && x > 0) || !isObj(b.expected)) return "форма группового состава работ";
+  return b.block_ids.every((i) => typeof b.expected[String(i)] === "string") ? null : "нет отпечатка блока";
+}
+export function factReportProblem(b) {
+  if (!isObj(b) || !realDate(b.report_date) || !isObj(b.items) || !Object.keys(b.items).length) return "форма документа факта";
+  return Object.entries(b.items).every(([k, v]) => /^\d+$/.test(k) && Number.isInteger(v) && v >= 0 && v <= 100) ? null : "процент вне 0..100";
+}
+export const factReportUpdateProblem = (b) => factReportProblem(b) || (hasRev(b) ? null : "нет отпечатка документа");
+export function chessBatchProblem(b) {
+  if (!isObj(b) || !realDate(b.report_date) || typeof b.track_code !== "string" || !b.track_code || typeof b.idempotency_key !== "string" || b.idempotency_key.length < 8) return "форма пакета";
+  if (!Array.isArray(b.items) || !b.items.length || b.items.length > 2000) return "пакет пуст или слишком велик";
+  return b.items.every((i) => isObj(i) && Number.isInteger(i.block_id) && Number.isInteger(i.work_type_id) && Number.isInteger(i.percent) && i.percent >= 0 && i.percent <= 100 && Number.isInteger(i.expected_percent) && Object.keys(i).length === 4) ? null : "строка пакета";
+}
+const BULK_FIELDS = ["percent", "plan_start", "plan_end", "forecast_start", "forecast_end"];
+export function strictApplyProblem(b) {
+  if (!isObj(b) || !Array.isArray(b.changes) || !b.changes.length || b.changes.length > 20000) return "форма набора изменений";
+  return b.changes.every((c) => isObj(c) && Number.isInteger(c.bw_id) && BULK_FIELDS.includes(c.field) && "was" in c && "now" in c) ? null : "строка изменения";
+}
+
 // allowed: true — операция разрешена (пройден барьер безопасности и есть проверка на настоящем backend);
 // allowed: false — отключена, `why` — коротко почему; `onlyKeys` — разрешены только эти поля тела (остальные — отказ).
 // risk: «личная» — своя настройка пользователя; «общая» — настройка, видимая всем пользователям (V1 тоже); «данные» — рабочие
@@ -72,7 +116,6 @@ export const POLICY = [
   { id: "shape.set", screen: "marker-shapes", action: "Форма маркера по паре «слой / тип» (только изменённые)", method: "PUT", path: re("/element-shapes"), risk: "общая для всех (видна в V1)", allowed: true, proof: "живая проверка: контур→круг→контур, изменена одна строка" },
   { id: "revit.colors", screen: "mfr-colors", action: "Цветовая схема модели МФР объекта (целиком)", method: "PUT", path: re("/revit-plan/colors"), risk: "общая для объекта", allowed: true, proof: "живая проверка: запись, шаблон, возврат" },
   { id: "element.allocate", screen: "ws-picker", action: "Комплектовщик: распределение изделий одной позиции на контракт — одна пачка (запланированные → «Контрактация», прочие статусы сохраняются; всё или ничего)", method: "POST", path: re(`/contracts/\\d+/allocations`), check: allocationBodyProblem, risk: "рабочие данные, история статусов (не отменяется), остатки контракта", allowed: ALLOCATION_ENABLED, proof: "проверено на копии БД по HTTP (scripts/verify_allocation.py) и в браузере; остаток под блокировкой записи, конфликт вместо молчаливого сужения", why: "включается только вместе с исправлением backend (атомарность остатка, `app/allocation.py`); без него на сервере старого образца остаток при одновременных запросах не гарантирован" },
-  { id: "block-work.plan", screen: "blocks", action: "ЗР: базовый срок (начало / конец)", method: "PATCH", path: re(`/objects/\\d+/block-works/\\d+`), onlyKeys: ["plan_start", "plan_end"], risk: "данные учёта по блокам", allowed: true, proof: "живая проверка: пусто → срок → пусто, SQL, журнал" },
 
   // ==== разрешённые операции по областям переноса: каждая область дописывает строки ТОЛЬКО в свой блок (меньше конфликтов слияния) ====
   // ==== область: model (прораб, модель ЖБИ, операции над элементами) ====
@@ -86,12 +129,23 @@ export const POLICY = [
   { id: "element.history.edit", screen: "element-ops", action: "Карточка изделия: правка записи истории статусов (статус, момент, автор, комментарий; пересчёт текущего статуса)", method: "PATCH", path: re(`/elements/\\d+/history/\\d+`), check: historyEditBodyProblem, risk: "аудит истории статусов", allowed: true, proof: "браузер на настоящем backend; права раздела «История» проверяет сервер" },
   { id: "element.history.delete", screen: "element-ops", action: "Карточка изделия: удаление записи истории статусов (пересчёт текущего статуса, последнюю запись удалить нельзя)", method: "DELETE", path: re(`/elements/\\d+/history/\\d+`), risk: "аудит истории статусов (не отменяется)", allowed: true, proof: "браузер на настоящем backend; права раздела «История» проверяет сервер" },
   // ==== область: mfr (МФР, учёт по блокам, факт, сроки) ====
+  { id: "block-work.plan", screen: "blocks", action: "ЗР: базовый срок (начало / конец) — с отпечатком работы (конкуренция проверяется сервером)", method: "PATCH", path: re(`/objects/\\d+/block-works/\\d+`), onlyKeys: ["plan_start", "plan_end", "expected_rev"], check: blockWorkGroupProblem("plan"), risk: "данные учёта по блокам", allowed: true, proof: "браузер и HTTP на настоящем backend (scripts/verify_mfr_ops.py): срок → SQL → журнал; 409 при устаревшем отпечатке; 403 у чтения" },
+  { id: "block-work.forecast", screen: "blocks", action: "ЗР: новая версия прогноза (версии копятся и не отменяются; перед записью — подтверждение)", method: "PATCH", path: re(`/objects/\\d+/block-works/\\d+`), onlyKeys: ["forecast_start", "forecast_end", "expected_rev"], check: blockWorkGroupProblem("forecast"), risk: "данные, необратимо (версии прогноза копятся)", allowed: true, proof: "браузер и HTTP на настоящем backend: версия +1 в block_work_forecasts, журнал, 409, 403" },
+  { id: "block-work.note", screen: "blocks", action: "ЗР: примечание", method: "PATCH", path: re(`/objects/\\d+/block-works/\\d+`), onlyKeys: ["note", "expected_rev"], check: blockWorkGroupProblem("note"), risk: "данные учёта по блокам", allowed: true, proof: "браузер и HTTP на настоящем backend: запись → SQL, 409, 403" },
+  { id: "block-work.bulk", screen: "blocks", action: "ЗР: групповая правка сроков (сдвиг плана/прогноза; прогноз = план) — только по предпросмотру, с отпечатками работ, одна транзакция", method: "PUT", path: re(`/objects/\\d+/block-works/bulk`), onlyKeys: ["block_work_ids", "op", "field", "days", "expected"], check: blockWorksBulkProblem, risk: "данные, версии прогноза необратимы", allowed: true, proof: "HTTP и браузер: предпросмотр = результат; 409 при чужой правке; откат целиком; два вызова одновременно; журнал" },
+  { id: "block-settings.set", screen: "blocks", action: "Состав работ блока (ЗР): добавить / снять (с историей — мягко) — по предпросмотру, с отпечатком состава", method: "PUT", path: re(`/objects/\\d+/blocks/\\d+/work-types-settings`), onlyKeys: ["work_type_ids", "expected"], check: blockSettingsProblem, risk: "данные учёта по блокам", allowed: true, proof: "браузер и HTTP на настоящем backend: мягкое снятие при факте/сроках, удаление пустой ЗР, возврат снятой, 409, 403" },
+  { id: "block-settings.group", screen: "blocks", action: "Состав работ ГРУППЫ блоков — по предпросмотру, все блоки одной транзакцией (всё или ничего)", method: "PUT", path: re(`/objects/\\d+/blocks/work-types-settings`), onlyKeys: ["block_ids", "work_type_ids", "expected"], check: blocksSettingsProblem, risk: "данные, групповая операция", allowed: true, proof: "HTTP и браузер: атомарность (отказ на блоке — откат всех), 409, два вызова одновременно, журнал одним событием" },
+  { id: "fact.create", screen: "fact-journal", action: "Факт: новый документ на дату (проценты по работам блока)", method: "POST", path: re(`/objects/\\d+/blocks/\\d+/fact-reports`), onlyKeys: ["report_date", "items"], check: factReportProblem, risk: "данные факта (документ на дату)", allowed: true, proof: "браузер и HTTP на настоящем backend: документ и строки в SQL, проценты после перезагрузки, 403, валидация" },
+  { id: "fact.update", screen: "fact-journal", action: "Факт: исправить документ (с отпечатком документа; построчная история правок пишется сервером)", method: "PUT", path: re(`/objects/\\d+/blocks/\\d+/fact-reports/\\d+`), onlyKeys: ["report_date", "items", "expected_rev"], check: factReportUpdateProblem, risk: "данные факта", allowed: true, proof: "браузер и HTTP: правка → SQL, work_fact_item_history, 409 при чужой правке, 403" },
+  { id: "fact.delete", screen: "fact-journal", action: "Факт: удалить документ целиком (необратимо; по подтверждению с последствиями, с отпечатком документа)", method: "DELETE", path: re(`/objects/\\d+/blocks/\\d+/fact-reports/\\d+`), check: (b, q) => (/(^|&)expected_rev=[0-9a-f]{12}(&|$)/.test(q) ? null : "нет отпечатка документа"), risk: "данные факта, необратимо", allowed: true, proof: "браузер и HTTP: удаление → SQL (документ, строки, история), журнал block_fact_report_delete, 409, 403" },
+  { id: "chess.batch", screen: "chess-flat", action: "Шахматка: пакетный ввод факта по нескольким блокам (одна транзакция, ключ идемпотентности, сверка «ожидалось»)", method: "POST", path: re(`/objects/\\d+/blocks/chess-flat-batch`), onlyKeys: ["report_date", "track_code", "idempotency_key", "items"], check: chessBatchProblem, risk: "данные факта, групповая операция", allowed: true, proof: "HTTP и браузер: пакет целиком, повтор с тем же ключом, 409 при чужой правке, два пакета одновременно, откат целиком" },
+  { id: "bulk-edit.analyze", screen: "blk-bulk", action: "Excel-правка ЗР: сверка загруженного файла с базой (ничего не пишет)", method: "POST", path: re(`/objects/\\d+/block-works/bulk-edit/analyze`), risk: "чтение (загрузка файла для сверки)", allowed: true, proof: "HTTP и браузер: сверка на копии, БД до/после не изменилась" },
+  { id: "bulk-edit.apply", screen: "blk-bulk", action: "Excel-правка ЗР: применить отмеченное — «всё или ничего», по сверке, с проверкой изменившегося после сверки", method: "POST", path: re(`/objects/\\d+/block-works/bulk-edit/apply-strict`), onlyKeys: ["changes"], check: strictApplyProblem, risk: "данные, групповая операция, версии прогноза необратимы", allowed: true, proof: "HTTP и браузер: применение → SQL; 409 при изменении после сверки; откат целиком при отказе внутри пачки; два вызова одновременно" },
   // ==== область: picker (комплектовщик, контрагенты, договоры, спецификации, контракты, замена поставщика) ====
   // ==== область: admin (пользователи, роли, доступы, пароли, проекты и объекты, справочники, настройки) ====
   // ==== область: exchange (импорт, экспорт, документы, отчёты) ====
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
-  { id: "block-work.forecast-note", screen: "blocks", action: "ЗР: версия прогноза и примечание", method: "PATCH", path: re(`/objects/\\d+/block-works/\\d+`), allowed: false, risk: "данные, необратимо (версии прогноза копятся и не отменяются)", why: "на настоящем backend не проверялись" },
   { id: "users.write", screen: "users-access", action: "Пользователи: создание и правка", method: "POST/PATCH", path: re(`/users(/\\d+)?`), allowed: false, risk: "права и учётные записи", why: "приёмка раздела не завершена" },
   { id: "users.password", screen: "users-access", action: "Задать пароль пользователю", method: "POST", path: re(`/users/\\d+/set-password`), allowed: false, risk: "пароли", why: "пароли выполняются только человеком в текущем интерфейсе" },
   { id: "users.access", screen: "users-access", action: "Доступ к проектам и объектам (выдача, снятие ролей)", method: "PUT", path: re(`/users/\\d+/access`), allowed: false, risk: "права", why: "приёмка раздела не завершена" },
@@ -113,11 +167,11 @@ function bodyKeys(body) {
 /** Можно ли отправить изменяющий запрос. Не бросает: возвращает {allowed, rule?, message?}. */
 export function checkWrite(method, pathWithQuery, body) {
   const m = String(method || "").toUpperCase();
-  const path = String(pathWithQuery || "").split("?")[0];
+  const [path, query = ""] = String(pathWithQuery || "").split("?");
   for (const r of ALLOWED) {
     if (r.method !== m || !r.path.test(path)) continue;
     if (r.onlyKeys && !bodyKeys(body).every((k) => r.onlyKeys.includes(k))) continue; // поля вне разрешённой группы
-    if (r.check && r.check(body)) continue;                                            // тело не той формы, что проверена
+    if (r.check && r.check(body, query)) continue;                                     // тело/запрос не той формы, что проверена
     return { allowed: true, rule: r };
   }
   const known = POLICY.find((r) => !r.allowed && r.path.test(path));

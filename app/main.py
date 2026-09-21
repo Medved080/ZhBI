@@ -409,6 +409,8 @@ app.include_router(allocation_router)
 app.include_router(allocation_state_router)
 from app.element_ops import router as element_ops_router  # noqa: E402
 app.include_router(element_ops_router)
+from app.block_ops import router as block_ops_router  # noqa: E402  (предпросмотры и строгая Excel-правка ЗР, интерфейс V2)
+app.include_router(block_ops_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
 # не должен иметь ни единого шанса уехать в {user_id}.
 app.include_router(rights_matrix_router)
@@ -6712,14 +6714,24 @@ def get_block_work_types_settings(object_id: int, block_id: int,
 
 class BlockWorkTypesSettingsIn(BaseModel):
     work_type_ids: list[int]
+    # Отпечаток состава работ блока, который видел человек (POST .../work-types-settings/preview): не совпал — 409, ничего не менялось.
+    # Необязателен: прежние вызовы V1 его не шлют.
+    expected: Optional[str] = None
 
 
 @app.put("/objects/{object_id}/blocks/{block_id}/work-types-settings")
 def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWorkTypesSettingsIn,
                                   user: sqlite3.Row = Depends(get_current_user)):
+    from app import block_ops
     conn = get_connection()
+    events = activity.defer_begin()   # журнал — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if body.expected is not None:
+            stale = block_ops.stale_block_selections(conn, {block_id: body.expected})
+            if stale:
+                raise block_ops.conflict("Состав работ блока изменили после того, как вы его открыли — ничего не сохранено.", stale)
         try:
             # Журнал — изнутри save_block_settings (block_work_add/
             # block_work_remove, по множеству, живой запрос задания
@@ -6728,7 +6740,9 @@ def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWork
             work_fact.save_block_settings(conn, object_id, block_id, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        activity.defer_flush(events)
     finally:
+        activity.defer_end(events)
         conn.close()
     return {"ok": True}
 
@@ -6759,25 +6773,36 @@ def get_blocks_work_types_settings(object_id: int, block_ids: str,
 class BlocksWorkTypesSettingsIn(BaseModel):
     block_ids: list[int]
     work_type_ids: list[int]
+    # Отпечатки составов работ блоков, которые видел человек (POST .../work-types-settings/preview); необязательны (V1 их не шлёт)
+    expected: Optional[dict[str, str]] = None
 
 
 @app.put("/objects/{object_id}/blocks/work-types-settings")
 def set_blocks_work_types_settings(object_id: int, body: BlocksWorkTypesSettingsIn,
                                    user: sqlite3.Row = Depends(get_current_user)):
+    from app import block_ops
     conn = get_connection()
+    events = activity.defer_begin()   # журнал — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py); все блоки группы — ОДНА транзакция
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if body.expected is not None:
+            stale = block_ops.stale_block_selections(conn, {b: body.expected.get(str(b), "") for b in body.block_ids})
+            if stale:
+                raise block_ops.conflict("Состав работ блоков изменили после предпросмотра — ничего не сохранено.", stale)
         try:
             work_fact.save_blocks_settings(conn, object_id, body.block_ids, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        # Тот же код журнала, что у одиночного блока: действие одно и то же, просто
+        # применённое к нескольким блокам — новый код завёл бы в отчётах вторую
+        # строку про то же самое (см. app/activity_actions.py).
+        activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
+                    details={"block_ids": body.block_ids, "count": len(body.work_type_ids)})
+        activity.defer_flush(events)
     finally:
+        activity.defer_end(events)
         conn.close()
-    # Тот же код журнала, что у одиночного блока: действие одно и то же, просто
-    # применённое к нескольким блокам — новый код завёл бы в отчётах вторую
-    # строку про то же самое (см. app/activity_actions.py).
-    activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
-                details={"block_ids": body.block_ids, "count": len(body.work_type_ids)})
     return {"ok": True, "blocks": len(body.block_ids)}
 
 
@@ -6800,6 +6825,7 @@ def set_block_percent_cell(object_id: int, block_id: int, body: BlockPercentCell
     задвоением, не новой информацией)."""
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
             result = work_fact.set_cell_percent(conn, user["id"], object_id, block_id,
@@ -6902,20 +6928,39 @@ class BlockWorkPatchIn(BaseModel):
     note: Optional[str] = None
     forecast_start: Optional[str] = None
     forecast_end: Optional[str] = None
+    # Отпечаток ЗР, который видел человек (поле `rev` из GET): не совпал с текущим под блокировкой записи — 409, ничего не менялось.
+    # Необязателен: прежние вызовы V1 его не шлют. Не поле ЗР — до `update_block_work` не доходит.
+    expected_rev: Optional[str] = None
 
 
 @app.patch("/objects/{object_id}/block-works/{bw_id}")
 def patch_block_work_endpoint(object_id: int, bw_id: int, body: BlockWorkPatchIn,
                               user: sqlite3.Row = Depends(get_current_user)):
+    from app import block_ops
     conn = get_connection()
+    events = activity.defer_begin()   # журнал (план/прогноз) — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         поля = body.dict(exclude_unset=True)
+        expected_rev = поля.pop("expected_rev", None)
+        if expected_rev is not None:
+            stale = block_ops.stale_block_works(conn, object_id, {bw_id: expected_rev})
+            if stale:
+                raise block_ops.conflict("Работу изменили после того, как вы её открыли — ничего не сохранено.", stale)
+        row = conn.execute("SELECT * FROM block_works WHERE id = ? AND object_id = ?", (bw_id, object_id)).fetchone()
+        if row is not None and row["retired_at"]:
+            raise HTTPException(status_code=409, detail="Работа снята с плана блока — правка сроков и примечания недоступна.")
+        if row is not None:
+            block_ops.validate_block_work_patch(row, поля)
         try:
-            return block_works.update_block_work(conn, object_id, bw_id, user["id"], **поля)
+            result = block_works.update_block_work(conn, object_id, bw_id, user["id"], **поля)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        activity.defer_flush(events)
+        return result
     finally:
+        activity.defer_end(events)
         conn.close()
 
 
@@ -6924,20 +6969,36 @@ class BlockWorksBulkIn(BaseModel):
     op: str  # "shift" | "forecast_equals_plan"
     field: Optional[str] = None   # "plan" | "forecast" — для op="shift"
     days: Optional[int] = None    # для op="shift"
+    # Отпечатки ЗР из предпросмотра (POST .../block-works/bulk-preview, поле `expected`): любое расхождение под блокировкой
+    # записи — 409 с перечнем, ничего не менялось. Необязательно: прежние вызовы V1 его не шлют.
+    expected: Optional[dict[str, str]] = None
 
 
 @app.put("/objects/{object_id}/block-works/bulk")
 def bulk_block_works_endpoint(object_id: int, body: BlockWorksBulkIn,
                               user: sqlite3.Row = Depends(get_current_user)):
+    from app import block_ops
     conn = get_connection()
+    events = activity.defer_begin()   # журнал (план/прогноз/сводное событие) — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py); вся пачка — одна транзакция
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if body.expected is not None:
+            missing = [i for i in body.block_work_ids if str(i) not in body.expected]
+            if missing:
+                raise HTTPException(status_code=422, detail="Нет отпечатка состояния для работ: %s" % missing[:10])
+            stale = block_ops.stale_block_works(conn, object_id, {i: body.expected[str(i)] for i in body.block_work_ids})
+            if stale:
+                raise block_ops.conflict("Работы изменили после предпросмотра — ничего не изменено. Обновите список и повторите.", stale)
         try:
-            return block_works.bulk_edit(conn, object_id, user["id"], body.block_work_ids,
-                                         body.op, field=body.field, days=body.days)
+            result = block_works.bulk_edit(conn, object_id, user["id"], body.block_work_ids,
+                                           body.op, field=body.field, days=body.days)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        activity.defer_flush(events)
+        return result
     finally:
+        activity.defer_end(events)
         conn.close()
 
 
@@ -7103,6 +7164,7 @@ def post_chess_flat_batch(object_id: int, body: ChessFlatBatchIn,
                           user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО сверки «ожидалось/есть» и записи пакета (app/db.py): два пакета не пройдут одновременно
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
             return chess_flat.commit_batch(
@@ -7260,6 +7322,9 @@ def get_block_fact_report(object_id: int, block_id: int, report_id: int,
 class FactReportIn(BaseModel):
     report_date: str
     items: dict[int, int]   # work_type_id -> процент
+    # Отпечаток документа, который видел человек (`rev` из GET): при правке (PUT) не совпал под блокировкой записи — 409, ничего
+    # не менялось. Необязателен: прежние вызовы V1 его не шлют.
+    expected_rev: Optional[str] = None
 
 
 @app.post("/objects/{object_id}/blocks/{block_id}/fact-reports")
@@ -7267,6 +7332,7 @@ def create_block_fact_report(object_id: int, block_id: int, body: FactReportIn,
                              user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состава работ блока (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
             report_id = work_fact.save_report(conn, object_id, user["id"], block_id, None,
@@ -7283,7 +7349,13 @@ def update_block_fact_report(object_id: int, block_id: int, report_id: int, body
                              user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения документа и проверки отпечатка (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if body.expected_rev is not None:
+            from app import block_ops
+            if work_fact.report_rev(conn, report_id) != body.expected_rev:
+                raise block_ops.conflict("Документ факта изменили после того, как вы его открыли — ничего не сохранено.",
+                                         [{"id": report_id, "reason": "changed"}])
         try:
             work_fact.save_report(conn, object_id, user["id"], block_id, report_id,
                                   body.report_date, body.items)
@@ -7295,7 +7367,7 @@ def update_block_fact_report(object_id: int, block_id: int, report_id: int, body
 
 
 @app.delete("/objects/{object_id}/blocks/{block_id}/fact-reports/{report_id}")
-def delete_block_fact_report(object_id: int, block_id: int, report_id: int,
+def delete_block_fact_report(object_id: int, block_id: int, report_id: int, expected_rev: Optional[str] = None,
                              user: sqlite3.Row = Depends(get_current_user)):
     """Удаление документа «Факт» целиком (этап 4, В6, решение пользователя
     2026-09-10) — порог тот же, что у сохранения («Изменение» раздела), не
@@ -7304,16 +7376,25 @@ def delete_block_fact_report(object_id: int, block_id: int, report_id: int,
     2026-09-02, см. app/work_fact.py — здесь решение другое: безвозвратная
     потеря отчёта заслуживает следа в журнале)."""
     conn = get_connection()
+    events = activity.defer_begin()   # событие журнала — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО проверки отпечатка и удаления (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if expected_rev is not None:
+            from app import block_ops
+            if work_fact.report_rev(conn, report_id) != expected_rev:
+                raise block_ops.conflict("Документ факта изменили после того, как вы его открыли — ничего не удалено.",
+                                         [{"id": report_id, "reason": "changed"}])
         try:
             work_fact.delete_report(conn, object_id, block_id, report_id)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        activity.log("block_fact_report_delete", user=user, entity_type="object", entity_id=object_id,
+                    details={"block_id": block_id, "report_id": report_id})
+        activity.defer_flush(events)
     finally:
+        activity.defer_end(events)
         conn.close()
-    activity.log("block_fact_report_delete", user=user, entity_type="object", entity_id=object_id,
-                details={"block_id": block_id, "report_id": report_id})
     return {"ok": True}
 
 
