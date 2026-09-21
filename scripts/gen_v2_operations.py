@@ -412,6 +412,15 @@ def collect_perms(mod, fn, modules, feats, depth=3, seen=None, binds=None):
                             out.append({"func": "require_system_admin", "keys": [], "level": None, "mode": "требуется", "via": "Depends"})
                         elif tname in tmod.funcs and depth > 0:
                             out += collect_perms(tmod, tmod.funcs[tname], modules, feats, depth - 1, seen, binds)
+    # проверка системной роли прямо в коде: `user["role"] != "admin"` / `== "admin"`
+    for c in ast.walk(fn):
+        if isinstance(c, ast.Compare):
+            parts = [c.left] + list(c.comparators)
+            has_role = any(isinstance(x, ast.Subscript) and isinstance(x.slice, ast.Constant) and x.slice.value == "role" for x in parts)
+            has_admin = any(isinstance(x, ast.Constant) and x.value == "admin" for x in parts)
+            if has_role and has_admin:
+                out.append({"func": "role", "keys": [], "level": None, "mode": "требуется", "via": "тело"})
+                break
     # тело
     for c in ast.walk(fn):
         if isinstance(c, ast.Call):
@@ -442,7 +451,9 @@ def perm_text(perms, feats):
     for p in perms:
         if p["func"] == "get_current_user":
             continue
-        if p["func"] in ("require_system_admin", "is_system_admin"):
+        if p["func"] == "role":
+            t = "системная роль admin (проверка в коде; может допускать и «свою запись»)"
+        elif p["func"] in ("require_system_admin", "is_system_admin"):
             t = "администратор сервиса" + (" (условно)" if p["mode"] == "условно" else "")
         elif p["level"] == "access":
             t = "доступ к объекту" + (" (условно)" if p["mode"] == "условно" else "")
@@ -1893,6 +1904,13 @@ CLIENT_TEXT = {
 # ======================================================================================================================
 # Сборка матрицы
 # ======================================================================================================================
+# Ресурсы, адрес которых V1 не пишет в коде, а получает от сервера или библиотеки (`<img src>` из ответа, плитки карты): статический разбор
+# их не видит, поэтому без этой пометки они выглядели бы «не вызываемыми». Перечень короткий и проверяемый вручную.
+INDIRECT_USE = {
+    ("GET", "/objects/{object_id}/plan-images/{level_id}.png"): {"note": "картинка подложки: адрес приходит в ответе GET /objects/{id}/plan-images", "scene": True},
+    ("GET", "/map/tiles/{name}"): {"note": "плитки карты: адрес формирует библиотека карты по настройкам GET /map/config", "scene": False},
+}
+
 # Данные, которые читает сцена схемы V1 в кадре рабочих мест V2 (Docs/v2-workspaces.md §1–2, протокол zhbi-scene/1). Перечень
 # ограничивает граф вызовов от bootApp (в нём много несвязанного: список пользователей, обновления и т.п.).
 SCENE_DATA_RE = re.compile(r"^(/plan-data|/changes|/source-files|/elements/changed|/elements/\{[^}]+\}|/elements/\{[^}]+\}/activity|/revit-plan/[a-z]+|"
@@ -1994,7 +2012,8 @@ def build_matrix(cur_ref, pub_ref):
         v1u = v1_by_route.get(key, [])
         v2u = C["v2_by_route"].get(key, [])
         pv2u = P["v2_by_route"].get(key, [])
-        scene = key in scene_keys and eff in ("read", "read-post")
+        indirect = INDIRECT_USE.get(key)
+        scene = (key in scene_keys or bool(indirect and indirect["scene"])) and eff in ("read", "read-post")
         # шлюз
         sample = path_sample(r["path"])
         allowed, disabled = gate_for(C["gate"], r["method"], sample) if eff in ("write", "analyze") else ([], [])
@@ -2058,7 +2077,7 @@ def build_matrix(cur_ref, pub_ref):
             if v2_impl:
                 pub_impl = bool(pv2u) or (scene and pub_scene_ok)
                 state = "published" if pub_impl and key in pub_route_keys else "branch"
-            elif not v1u:
+            elif not v1u and not indirect:
                 state = "unused"
             else:
                 state = "only_v1" if scr else "none"
@@ -2092,7 +2111,8 @@ def build_matrix(cur_ref, pub_ref):
             "download": bool(FILE_OUT_RE.search(r["path"])) and eff != "write",
             "scenario": shorten(scenario, 240), "backend": f"{r['file']}:{r['line']} {r['func']}",
             "perms": ptxt, "perm_items": r["perm_items"], "feature_keys": r["feature_keys"],
-            "v1": {"used": bool(v1u), "entries": v1_entries, "calls": v1_calls[:3], "generic_entry": generic},
+            "v1": {"used": bool(v1u) or bool(indirect), "entries": v1_entries, "calls": v1_calls[:3] + ([indirect["note"]] if indirect else []),
+                   "generic_entry": generic},
             "v2": {"state": state, "impl": v2_impl, "scene": scene,
                    "calls": [f"{u['file']}:{u['line']}" for u in v2u][:4], "modules": sorted({u["file"] for u in v2u}),
                    "screens": v2_screens, "screen": primary, "screen_title": scr["title"] if scr else None,
@@ -2310,6 +2330,10 @@ def derive_action(op, scr, C):
         if write:
             return (f"нет формы: экран «{title}» лишь ведёт в V1; нужны форма/диалог V2, строка `allowed: true` в блоке области {area} "
                     f"и проверки (см. «Перечень проверок»).{lim_txt}")
+        simg = op["v2"]["screen_impl"] or ""
+        if not write and simg not in ("v1", "read", "workspace", ""):
+            return (f"экран «{title}» реализован в V2 модулем `{simg.split(':')[-1]}`, но это чтение он не вызывает — вероятно, заменено другим запросом; "
+                    f"сверить с V1 и подключить, если данные нужны пользователю.{lim_txt}")
         return f"нет в V2: экран «{title}» лишь ведёт в V1; подключить {verb} в экран.{lim_txt}"
     if write:
         return f"нет экрана и формы: завести экран, форму, строку шлюза в блоке области {area} и проверки (см. «Перечень проверок»)"
@@ -2586,6 +2610,22 @@ def render_md(M, checks, cur_ref, pub_ref):
     for s in SECTIONS:
         c = ss.get(s, Counter())
         w(f"| {s} | " + " | ".join(str(c.get(x, 0)) for x in STATE_ORDER) + f" | {sum(c.values())} |")
+    w("")
+    # экраны
+    w("## Экраны V2: статус и состав операций")
+    w("")
+    w("Экран операции — где она реализована в V2, а если не реализована, то экран, который лишь ведёт в V1 (по правилу пути и точкам входа V1). "
+      "Статус — из `screens.json` (1 не начат … 5 рабочий и проверенный).")
+    w("")
+    w("| Экран | Название | Статус | Реализация | " + " | ".join(STATE_LABEL[s] for s in STATE_ORDER) + " |")
+    w("| --- | --- | --- | --- | " + " | ".join("---" for _ in STATE_ORDER) + " |")
+    by_screen = defaultdict(Counter)
+    for o in non_tech:
+        if o["v2"]["screen"]:
+            by_screen[o["v2"]["screen"]][o["v2"]["state"]] += 1
+    for sid, sc_ in M["screens"].items():
+        c = by_screen.get(sid, Counter())
+        w(f"| `{sid}` | {cell(sc_['title'])} | {sc_['status']} | {cell(sc_.get('impl', ''))} | " + " | ".join(str(c.get(x, 0)) for x in STATE_ORDER) + " |")
     w("")
     # самопроверки
     w("## Самопроверки генератора")
