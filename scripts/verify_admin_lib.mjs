@@ -44,7 +44,13 @@ export async function http(base, login, password = PASSWORD) {
   };
   const r = await call("POST", "/login", { domain_login: login, password });
   if (r.status !== 200) throw new Error(`вход ${login}: ${r.status} ${JSON.stringify(r.data)}`);
-  return { call, get: (p) => call("GET", p), post: (p, b) => call("POST", p, b ?? {}), put: (p, b) => call("PUT", p, b), patch: (p, b) => call("PATCH", p, b), del: (p) => call("DELETE", p), me: r.data, jar };
+  // Проверки других разделов могут завершить сеансы этого клиента (например, «завершить все, кроме моего»): один раз входим заново настоящим POST /login.
+  const relogin = async (method, path, body) => {
+    let res = await call(method, path, body);
+    if (res.status === 401 && path !== "/login") { const l = await call("POST", "/login", { domain_login: login, password }); if (l.status === 200) res = await call(method, path, body); }
+    return res;
+  };
+  return { call: relogin, get: (p) => relogin("GET", p), post: (p, b) => relogin("POST", p, b ?? {}), put: (p, b) => relogin("PUT", p, b), patch: (p, b) => relogin("PATCH", p, b), del: (p) => relogin("DELETE", p), me: r.data, jar };
 }
 
 /** Сеанс браузера: запуск, вход настоящей формой V2. */
