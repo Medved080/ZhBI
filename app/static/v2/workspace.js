@@ -21,6 +21,8 @@ const TABS_FOREMAN = TABS.filter(([k]) => k !== "filters");
 // МФР: свойства блока/элемента модели Revit, фильтры (этажи, секции, категории) и вид (слои, 2D/3D)
 const VIEWS_MFR = [["2d", "2D"], ["3d", "3D"]];
 const TABS_MFR = [["props", "Свойства"], ["filters", "Фильтры"], ["view", "Вид"]];
+// Комплектовщик: срезы отбора, показатели, контракты (свой отбор, независимый от фильтров «Модели»), свойства выбранного элемента, вид
+const TABS_PICKER = [["pick", "Отбор"], ["metrics", "Показатели"], ["contracts", "Контракты"], ["props", "Свойства"], ["view", "Вид"]];
 const FRAME_TIMEOUT_MS = 45000;
 
 const fmtDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]}` : (v ? String(v) : "—"); };
@@ -33,8 +35,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   el.className = "v2-page v2-app v2-ws";
   const foreman = ws === "foreman";
   const mfr = ws === "mfr";
+  const picker = ws === "picker";
   const views = mfr ? VIEWS_MFR : VIEWS;
-  const tabs = mfr ? TABS_MFR : foreman ? TABS_FOREMAN : TABS;
+  const tabs = mfr ? TABS_MFR : picker ? TABS_PICKER : foreman ? TABS_FOREMAN : TABS;
   const WS_TITLE = screen.title;
   let dead = false;
   let curObject = objectId;
@@ -45,11 +48,13 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   let sc = null;               // последний снимок сцены из кадра
   let filters = null;          // модель фильтров
   let notice = "";             // последнее сообщение движка
-  let tab = "props";
+  let tab = ws === "picker" ? "pick" : "props";
+  let pk = null;                // модель отбора комплектовщика (срезы, показатели, контракты)
+  let onlyRemainder = false;    // «только с остатком» — вид списка контрактов, отбор схемы не меняет
   let panelHidden = false;
-  let panelW = readNum("v2.ws.panelW", 340);
+  let panelW = readNum(ws === "picker" ? "v2.ws.panelW.picker" : "v2.ws.panelW", ws === "picker" ? 430 : 340);
   const detail = { id: null, data: null, error: "", seq: 0 };
-  const openGroups = new Set(["status"]);
+  const openGroups = new Set(["status", "pk:elementType"]);
   const openItems = new Set();
   const groupSearch = new Map();
   let frameKey = 0;
@@ -108,6 +113,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       onScene(m.state);
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
       filters = m.model; paintPanel();
+    } else if (m.evt === "picker" && m.model && Array.isArray(m.model.slicers)) {
+      pk = m.model; paintPanel();
     } else if (m.evt === "search-result" && Array.isArray(m.items)) {
       if (qInput && m.text === qInput.value) paintFound(m);
     } else if (m.evt === "notice") {
@@ -132,7 +139,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   async function startFrame() {
     if (dead) return;
     stopFrame();
-    ready = false; sc = null; filters = null; notice = "";
+    ready = false; sc = null; filters = null; pk = null; notice = "";
     const key = ++frameKey;
     paintAll();
     let html;
@@ -252,7 +259,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const body = $("#ws-panel-body");
     const keepScroll = body.scrollTop;
     if (!tabs.some(([k]) => k === tab)) tab = "props";
-    body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? (mfr ? mfrFiltersHtml() : filtersHtml()) : viewHtml();
+    body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? (mfr ? mfrFiltersHtml() : filtersHtml())
+      : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
     body.scrollTop = keepScroll;
     bindPanel(body);
     const left = $("#ws-left-body");
@@ -388,6 +396,63 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   }
   const closedGroups = new Set();
 
+  // ---- комплектовщик: срезы отбора со счётчиками (модель / контракт / Δ), плитки показателей, контракты с остатками
+  const nf = (n) => Number(n).toLocaleString("ru-RU");
+  const pkLoading = () => `<p class="v2-muted ws-pad">${sc?.error ? "Схема не загружена" : "Загрузка…"}</p>`;
+  const PK_ROWS_LIMIT = 150;
+  function pickHtml() {
+    if (!pk) return pkLoading();
+    const head = `<div class="ws-fhead"><span>В срезе: ${nf(pk.base)} из ${nf(sc?.total ?? 0)}</span><button type="button" class="v2-btn" data-pk-clear="" ${pk.selectionActive || pk.contractSelected ? "" : "disabled"}>Сбросить всё</button></div>`;
+    return head + pk.slicers.map((g) => {
+      const id = `pk:${g.key}`;
+      const open = openGroups.has(id) || (g.selected > 0 && !closedGroups.has(id));
+      const q = (groupSearch.get(id) || "").toLowerCase();
+      const rows = g.rows.filter((r) => !q || r.label.toLowerCase().includes(q));
+      const avail = rows.filter((r) => r.available), other = rows.filter((r) => !r.available);
+      const shown = [...avail, ...other].slice(0, PK_ROWS_LIMIT);
+      const rowHtml = (r) => `<label class="ws-check ws-pkrow${r.available ? "" : " ws-dim"}"><input type="checkbox" data-pk="${esc(g.key)}" data-v="${esc(JSON.stringify(r.v))}" ${r.on ? "checked" : ""}> <span>${esc(r.label)}</span><em>${nf(r.count)}</em>${g.contractedShown ? `<em class="ws-pkc">${nf(r.contracted)}</em><em class="${r.contracted - r.count > 0 ? "ws-pos" : r.contracted - r.count < 0 ? "ws-neg" : ""}">${r.contracted - r.count > 0 ? "+" : ""}${nf(r.contracted - r.count)}</em>` : ""}</label>`;
+      let list = "";
+      let sepDone = false;
+      for (const [i, r] of shown.entries()) {
+        if (!sepDone && i >= avail.length && other.length && avail.length) { list += `<div class="ws-sep">нет в текущем срезе</div>`; sepDone = true; }
+        list += rowHtml(r);
+      }
+      const body = !open ? "" : `<div class="ws-fbody">
+        ${g.rows.length > 12 ? `<input type="search" class="ws-fsearch" data-search="${esc(id)}" placeholder="Найти…" value="${esc(groupSearch.get(id) || "")}" aria-label="Найти в срезе «${esc(g.title)}»">` : ""}
+        <div class="ws-pkcols"><span></span><em>модель</em>${g.contractedShown ? `<em class="ws-pkc">контракт</em><em>Δ</em>` : ""}</div>
+        ${list || `<p class="v2-muted">Нет значений</p>`}
+        ${rows.length > shown.length ? `<p class="v2-muted ws-fnote">Показаны первые ${PK_ROWS_LIMIT} из ${rows.length}. Уточните поиск.</p>` : ""}</div>`;
+      return `<section class="ws-fgroup"><button type="button" class="ws-fh" data-pkgroup="${esc(id)}" aria-expanded="${open}"><span>${open ? "▾" : "▸"} ${esc(g.title)}</span>${g.selected ? `<b class="ws-badge">выбрано: ${g.selected}</b>` : ""}</button>${body}</section>`;
+    }).join("");
+  }
+  function metricsHtml() {
+    if (!pk) return pkLoading();
+    return `<div class="ws-pad"><p class="v2-muted">Числа считаются по элементам выбранного среза. Плитку можно нажать — на схеме и в срезах останутся только подходящие элементы.</p>
+      <div class="ws-tiles">${pk.metrics.map((m) => {
+        const color = m.status ? sw(m.status) : null;
+        const val = m.value === null ? "—" : nf(m.value);
+        const sub = m.key === "contracted" && m.value !== null ? `модель: ${nf(m.base)} · ${m.value >= m.base ? "покрыто" : "дефицит " + nf(m.base - m.value)}` : m.share !== null && m.share !== undefined ? `${m.share}% среза` : "";
+        const tag = m.clickable ? "button" : "div";
+        return `<${tag} ${m.clickable ? `type="button" data-pkm="${esc(m.key)}" aria-pressed="${m.on}"` : ""} class="ws-tile${m.on ? " on" : ""}" title="${esc(m.reason || m.hint || "")}" ${color ? `style="border-left-color:${esc(color)}"` : ""}><span class="ws-tile-t">${esc(m.title)}</span><b class="ws-tile-v">${esc(val)}</b><span class="ws-tile-s">${esc(m.value === null ? (m.reason || "") : sub)}</span></${tag}>`;
+      }).join("")}</div></div>`;
+  }
+  function contractsHtml() {
+    if (!pk) return pkLoading();
+    const groups = pk.contracts.map((g) => ({ ...g, rows: onlyRemainder ? g.rows.filter((r) => r.on || r.remainder !== 0) : g.rows })).filter((g) => g.rows.length);
+    const head = `<div class="ws-pad ws-pk-tools"><button type="button" class="v2-btn" data-pkhl="1" aria-pressed="${pk.highlightUnlinked}">${pk.highlightUnlinked ? "Подсветка несвязанных включена" : "Подсветить несвязанные"}</button>
+      <button type="button" class="v2-btn" data-pkrem="1" aria-pressed="${onlyRemainder}">${onlyRemainder ? "Только с остатком" : "Показать только с остатком"}</button>
+      ${pk.contractSelected ? `<button type="button" class="v2-btn" data-pk-clear="contract">Сбросить контракты (${pk.contractSelected})</button>` : ""}</div>`;
+    if (!groups.length && !pk.unlinked) return head + `<p class="v2-muted ws-pad">${pk.contracts.length ? "Нет контрактов с остатком." : "У объекта нет контрактов."}</p>`;
+    const cols = `<div class="ws-pkcols ws-pkcols-c"><span></span><em>всего</em><em>привязано</em><em>остаток</em></div>`;
+    const remCls = (n) => (n > 0 ? "ws-pos" : n < 0 ? "ws-neg" : "");
+    return head + `<div class="ws-fbody">${cols}` + groups.map((g) => {
+      const ids = g.rows.map((r) => r.id), all = ids.length && g.rows.every((r) => r.on);
+      return `<div class="ws-cgroup${g.inSlice ? "" : " ws-dim"}"><button type="button" class="ws-crow ws-chead${all ? " on" : ""}${g.over ? " over" : ""}" data-pkgrp="${ids.join(",")}" data-on="${all ? 0 : 1}" title="${g.over ? "Есть привязки мимо спецификации или сверх количества" : "Выбрать все контракты контрагента"}"><span>${esc(g.name)}</span><em>${nf(g.total)}</em><em>${nf(g.linked)}</em><em class="${remCls(g.total - g.linked)}">${nf(g.total - g.linked)}</em></button>
+        ${g.rows.map((r) => `<button type="button" class="ws-crow ws-cnest${r.on ? " on" : ""}${r.inSlice ? "" : " ws-dim"}${r.over ? " over" : ""}" data-pkc="${r.id}" aria-pressed="${r.on}" title="${esc(r.name)}"><span>${esc(r.label)}</span><em>${nf(r.total)}</em><em>${nf(r.linked)}</em><em class="${remCls(r.remainder)}">${nf(r.remainder)}</em></button>`).join("")}</div>`;
+    }).join("")
+    + (pk.unlinked || pk.unlinkedOn ? `<button type="button" class="ws-crow ws-chead${pk.unlinkedOn ? " on" : ""}" data-pkn="1" aria-pressed="${pk.unlinkedOn}"><span>Элементы без контракта</span><em></em><em>${nf(pk.unlinked)}</em><em></em></button>` : "") + `</div>`;
+  }
+
   function viewHtml() {
     const zones = sc?.zones || [];
     return `<div class="ws-pad"><h3 class="ws-h">Режим схемы</h3>
@@ -407,6 +472,15 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }));
     body.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => tool(b.dataset.tool)));
     body.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => send("setView", { mode: b.dataset.view })));
+    body.querySelectorAll("input[data-pk]").forEach((c) => c.addEventListener("change", () => { let v; try { v = JSON.parse(c.dataset.v); } catch (e) { return; } send("pickerToggle", { key: c.dataset.pk, value: v }); }));
+    body.querySelectorAll("[data-pkgroup]").forEach((b) => b.addEventListener("click", () => { const g = b.dataset.pkgroup; if (openGroups.has(g)) { openGroups.delete(g); closedGroups.add(g); } else { openGroups.add(g); closedGroups.delete(g); } paintPanel(); }));
+    body.querySelectorAll("[data-pk-clear]").forEach((b) => b.addEventListener("click", () => send("pickerClear", { key: b.dataset.pkClear || null })));
+    body.querySelectorAll("[data-pkm]").forEach((b) => b.addEventListener("click", () => send("pickerMetric", { key: b.dataset.pkm, on: b.getAttribute("aria-pressed") !== "true" })));
+    body.querySelectorAll("[data-pkc]").forEach((b) => b.addEventListener("click", () => send("pickerToggle", { key: "contract", value: Number(b.dataset.pkc) })));
+    body.querySelectorAll("[data-pkgrp]").forEach((b) => b.addEventListener("click", () => send("pickerSet", { key: "contract", values: b.dataset.pkgrp.split(",").map(Number), on: b.dataset.on === "1" })));
+    body.querySelectorAll("[data-pkn]").forEach((b) => b.addEventListener("click", () => send("pickerToggle", { key: "contract", value: pk?.noneValue ?? "__none__" })));
+    body.querySelectorAll("[data-pkhl]").forEach((b) => b.addEventListener("click", () => send("pickerHighlight", { on: b.getAttribute("aria-pressed") !== "true" })));
+    body.querySelectorAll("[data-pkrem]").forEach((b) => b.addEventListener("click", () => { onlyRemainder = !onlyRemainder; paintPanel(); }));
     body.querySelectorAll("[data-mpick]").forEach((b) => b.addEventListener("click", () => send("mfrPick", { kind: b.dataset.mpick, id: b.dataset.id })));
     body.querySelectorAll("[data-mcat]").forEach((c) => c.addEventListener("change", () => send("mfrCategory", { category: c.dataset.mcat, on: c.checked })));
     body.querySelectorAll("[data-mlayer]").forEach((c) => c.addEventListener("change", () => send("mfrLayer", { layer: c.dataset.mlayer, on: c.checked })));
@@ -467,7 +541,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       return;
     }
     const sel = sc.multi?.count > 1 ? `Выбрано: ${sc.multi.count}` : sc.selected ? `Выбран: ${sc.selected.mark || sc.selected.element_type}` : "Ничего не выбрано";
-    s.innerHTML = `<span>Показано <b>${sc.shown}</b> из <b>${sc.total}</b></span><span>${esc(sel)}</span><span>${sc.excluded ? `Фильтры активны: снято ${sc.excluded}` : "Фильтры не заданы"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+    s.innerHTML = `<span>Показано <b>${sc.shown}</b> из <b>${sc.total}</b></span><span>${esc(sel)}</span><span>${sc.excluded ? (picker ? `Отбор задан: выбрано ${sc.excluded}` : `Фильтры активны: снято ${sc.excluded}`) : (picker ? "Отбор не задан" : "Фильтры не заданы")}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
   }
 
   // ---- поиск по марке/адресу (среди показанных на схеме элементов)
@@ -525,7 +599,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   });
 
   // ширина правой панели: мышью и стрелками
-  function setW(w) { panelW = Math.max(260, Math.min(640, Math.round(w))); panel.style.width = panelW + "px"; writeSess("v2.ws.panelW", panelW); }
+  function setW(w) { panelW = Math.max(260, Math.min(640, Math.round(w))); panel.style.width = panelW + "px"; writeSess(picker ? "v2.ws.panelW.picker" : "v2.ws.panelW", panelW); }
   setW(panelW);
   const rz = $("#ws-resize");
   rz.addEventListener("pointerdown", (e) => {

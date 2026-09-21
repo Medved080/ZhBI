@@ -10,7 +10,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}
+//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on}; событие picker{model}
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
 (() => {
   "use strict";
@@ -78,6 +78,7 @@
   }
   function snapshot() {
     const base = snapshotBase();
+    if (PICKER) return { ...base, excluded: pickerSelCount() };
     if (!MFR) return base;
     const m = mfrSnapshot();
     return { ...base, mfr: m, hasDrawing: m.hasModel, view: m.mode, loading: !m.hasData && !mfrError, loaded: m.hasData && !mfrError, error: mfrError,
@@ -159,6 +160,102 @@
     };
   }
 
+
+  // ---------------- рабочее место комплектовщика (ws=picker): срезы, показатели, контракты ----------------
+  // Отбор ведёт движок (state.picker.sel/metrics + pickerElementPasses, он же режет схему); мост считает те же числа теми же функциями.
+  const PICKER = EMBED_QUERY.get("ws") === "picker";
+  const PICKER_KEYS = () => PICKER_SLICERS.map((d) => d.key);
+  function pickerModel() {
+    const P = state.picker;
+    const base = state.elements.filter((e) => pickerElementPasses(e, "__metric__"));
+    const slicers = PICKER_SLICERS.filter((d) => d.key !== "contract").map((def) => {
+      const counts = new Map();
+      for (const e of state.elements) {
+        const v = def.valueFn(e);
+        if (!counts.has(v)) counts.set(v, 0);
+        if (pickerElementPasses(e, def.key)) counts.set(v, counts.get(v) + 1);
+      }
+      const sel = P.sel[def.key];
+      const values = Array.from(new Set([...counts.keys(), ...sel]));
+      values.sort(placementComparator(def.labelFor, { compareRaw: !!def.compareRaw }));
+      const cs = pickerContractedFor(def.key, null) !== null;
+      return {
+        key: def.key, title: def.title, selected: sel.size, contractedShown: cs,
+        rows: values.map((v) => {
+          const count = counts.get(v) || 0;
+          const contracted = cs ? (pickerContractedFor(def.key, v) || 0) : null;
+          return { v, label: def.labelFor(v), count, contracted, on: sel.has(v), available: count > 0 || sel.has(v) };
+        }),
+      };
+    });
+    const metrics = PICKER_METRICS.map((m) => {
+      if (m.key === "contracted") {
+        const c = pickerContracted();
+        return { key: m.key, title: m.title, hint: m.hint, status: m.status || null, value: c.value, reason: c.reason || null,
+          skippedNoMark: c.skippedNoMark || 0, base: base.length, clickable: false, on: false };
+      }
+      const count = m.test ? base.filter(m.test).length : base.length;
+      return { key: m.key, title: m.title, hint: m.hint, status: m.status || null, value: count, base: base.length,
+        share: m.test && base.length ? Math.round((count / base.length) * 100) : null, clickable: !!m.test, on: P.metrics.has(m.key) };
+    });
+    // Контракты: «всего» — из позиций контракта, «привязано» — по элементам, прошедшим ОСТАЛЬНЫЕ срезы (как в панели V1)
+    const sel = P.sel.contract;
+    const totals = pickerContractTotals();
+    const linked = new Map(); const keysSlice = new Set();
+    let unlinked = 0;
+    for (const e of state.elements) {
+      if (!pickerElementPasses(e, "contract")) continue;
+      const mk = markKey(e.mark), tk = typeKey(e.element_type);
+      if (mk) keysSlice.add(mk);
+      if (tk) keysSlice.add(tk);
+      if (!e.contract_id) { unlinked++; continue; }
+      linked.set(e.contract_id, (linked.get(e.contract_id) || 0) + 1);
+    }
+    const lineKeys = new Map();
+    for (const line of state.contractLineTotals) {
+      if (!lineKeys.has(line.contract_id)) lineKeys.set(line.contract_id, new Set());
+      const k = pickerLineKey(line);
+      if (k) lineKeys.get(line.contract_id).add(k);
+    }
+    const inSlice = (id) => {
+      if (sel.has(id) || (linked.get(id) || 0) > 0) return true;
+      const ks = lineKeys.get(id);
+      if (!ks || !ks.size) return false;
+      for (const k of ks) if (keysSlice.has(k)) return true;
+      return false;
+    };
+    const groups = new Map();
+    for (const c of activeContracts()) {
+      const key = c.counterparty_short_name || placementNoneLabel("supplier");
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
+    }
+    const contracts = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b, "ru", { numeric: true })).map((name) => {
+      const list = groups.get(name).slice().sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }));
+      const rows = list.map((c) => {
+        const total = totals.get(c.id) || 0, lk = linked.get(c.id) || 0;
+        return { id: c.id, label: [c.agreement_number, c.specification_number, c.theme].filter(Boolean).join(" · ") || c.name, name: c.name,
+          total, linked: lk, remainder: total - lk, inSlice: inSlice(c.id), on: sel.has(c.id), over: contractHasOverflow(c.id) };
+      });
+      return { name, rows, total: rows.reduce((a, r) => a + r.total, 0), linked: rows.reduce((a, r) => a + r.linked, 0),
+        inSlice: rows.some((r) => r.inSlice), over: rows.some((r) => r.over) };
+    });
+    return {
+      slicers, metrics, contracts, unlinked, unlinkedOn: sel.has(PLACEMENT_NONE), contractSelected: sel.size,
+      selectionActive: pickerSelectionActive(), base: base.length,
+      highlightUnlinked: !!P.highlightUnlinked, noneValue: PLACEMENT_NONE,
+    };
+  }
+  const pickerSelCount = () => PICKER_SLICERS.reduce((n, d) => n + state.picker.sel[d.key].size, 0) + state.picker.metrics.size;
+  let pickerTimer = null;
+  function sendPicker() {
+    if (!PICKER || pickerTimer) return;
+    pickerTimer = setTimeout(() => {
+      pickerTimer = null;
+      try { post({ evt: "picker", model: pickerModel() }); } catch (e) { post({ evt: "cmd-error", cmd: "picker", message: String((e && e.message) || e) }); }
+    }, 90);
+  }
+
   // ---------------- перехват событий движка (обёртки, поведение движка не меняется) ----------------
   const wrap = (name, make) => {
     const orig = globalThis[name];
@@ -177,7 +274,7 @@
       loadError = String((e && e.message) || e) || "Не удалось загрузить схему";
       throw e;
     } finally {
-      scheduleState(); sendFilters();
+      scheduleState(); sendFilters(); sendPicker();
     }
   });
   if (MFR) {
@@ -193,7 +290,7 @@
     wrap("clearBlockSelection", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); return r; });
     wrap("applyMfrMode", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); return r; });
   }
-  wrap("applyPlacementFilters", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); return r; });
+  wrap("applyPlacementFilters", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); sendPicker(); return r; });
   wrap("setViewMode", (orig) => async function () { try { return await orig.apply(this, arguments); } finally { scheduleState(); } });
   wrap("showToast", (orig) => function (message, kind) {
     try { post({ evt: "notice", message: String(message), kind: String(kind || "warning") }); } catch (e) { /* не критично */ }
@@ -207,6 +304,7 @@
     if (state.elements.length && !loadedOnce) { loadedOnce = true; loading = false; sendFilters(); }
     let sig = state.objectId + "|" + state.elements.length + "|" + state.selectedId + "|" + state.multiSelectedIds.size + "|"
       + Array.from(state.multiSelectedIds).slice(0, 40).join(",");
+    if (PICKER) sig += "|p|" + pickerSelCount();
     if (MFR) {
       const st = revitPlanState;
       sig += "|m|" + st.objectId + "|" + (st.data ? st.data.elements.length : -1) + "|" + (st.selected ? st.selected.kind + st.selected.id : "") + "|"
@@ -486,6 +584,38 @@
     getFilters() { scheduleState(); },
     search() { post({ evt: "search-result", text: "", total: 0, items: [] }); },
   });
+  if (PICKER) Object.assign(COMMANDS, {
+    pickerToggle(a) {
+      if (!PICKER_KEYS().includes(a.key) || !isVal(a.value)) throw new Error("параметры");
+      const set = state.picker.sel[a.key];
+      if (set.has(a.value)) set.delete(a.value); else set.add(a.value);
+      onPickerChange();
+    },
+    pickerSet(a) {
+      if (!PICKER_KEYS().includes(a.key) || !Array.isArray(a.values) || a.values.length > 500 || !a.values.every(isVal) || typeof a.on !== "boolean") throw new Error("параметры");
+      const set = state.picker.sel[a.key];
+      for (const v of a.values) { if (a.on) set.add(v); else set.delete(v); }
+      onPickerChange();
+    },
+    pickerClear(a) {
+      if (a.key === null || a.key === undefined) { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); }
+      else if (PICKER_KEYS().includes(a.key)) state.picker.sel[a.key].clear();
+      else throw new Error("key");
+      onPickerChange();
+    },
+    pickerMetric(a) {
+      if (!PICKER_METRICS.some((m) => m.key === a.key && m.test) || typeof a.on !== "boolean") throw new Error("параметры");
+      if (a.on) state.picker.metrics.add(a.key); else state.picker.metrics.delete(a.key);
+      onPickerChange();
+    },
+    pickerHighlight(a) {
+      if (typeof a.on !== "boolean") throw new Error("on");
+      state.picker.highlightUnlinked = a.on;
+      onPickerChange();
+    },
+    resetFilters() { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); onPickerChange(); },
+    getFilters() { sendPicker(); scheduleState(); },
+  });
   function viewMode2() { return (document.querySelector("#mfr-view-switch .view-mode-btn.active")?.dataset.mfrMode) || "2d"; }
 
   window.addEventListener("message", (e) => {
@@ -505,5 +635,5 @@
   loadedOnce = state.elements.length > 0;
   post({ evt: "ready" });
   scheduleState();
-  if (loadedOnce) sendFilters();
+  if (loadedOnce) { sendFilters(); sendPicker(); }
 })();

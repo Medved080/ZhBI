@@ -820,3 +820,35 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-pill[aria-pressed="true"] em { color: inherit; opacity: .85; }
 .ws-fnote { margin: 0 0 6px; font-size: 12px; }
 .ws-warn { color: var(--bad); }
+
+/* комплектовщик: срезы с колонками «модель / контракт / Δ», плитки показателей, контракты */
+.ws-pkrow em { min-width: 34px; text-align: right; }
+.ws-pkcols { display: flex; justify-content: flex-end; gap: 0; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.ws-pkcols span { flex: 1; }
+.ws-pkcols em { min-width: 52px; text-align: right; font-style: normal; }
+.ws-pkc { color: var(--accent); }
+.ws-pos { color: var(--good); }
+.ws-neg { color: var(--bad); }
+.ws-sep { margin: 6px 0 2px; padding-top: 4px; border-top: 1px dashed var(--line); font-size: 11px; color: var(--muted); }
+.ws-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; }
+.ws-tile { display: flex; flex-direction: column; gap: 2px; text-align: left; border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px; background: var(--bg); padding: 8px 10px; min-height: 84px; }
+button.ws-tile:hover { background: var(--surface); }
+.ws-tile.on { outline: 2px solid var(--accent); background: var(--sel); }
+.ws-tile-t { font-size: 12px; color: var(--muted); }
+.ws-tile-v { font-size: 22px; font-weight: 600; line-height: 1.15; }
+.ws-tile-s { font-size: 11px; color: var(--muted); }
+.ws-pk-tools { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 4px; }
+.ws-pk-tools .v2-btn { font-size: 12px; padding: 4px 10px; }
+.ws-pk-tools .v2-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.ws-cgroup { margin-bottom: 6px; }
+.ws-crow { display: flex; width: 100%; align-items: baseline; gap: 0; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; padding: 4px 6px; font-size: 13px; }
+.ws-crow span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ws-crow em { min-width: 56px; text-align: right; font-style: normal; color: var(--muted); }
+.ws-crow:hover { background: var(--surface); }
+.ws-chead { font-weight: 600; }
+.ws-cnest { padding-left: 18px; }
+.ws-crow.on { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+.ws-crow.over span::after { content: " ⚠"; color: var(--bad); }
+.ws-cgroup.ws-dim .ws-chead { opacity: .6; }
+.ws-crow.ws-dim { opacity: .55; }
+.ws-pkcols-c { padding-right: 6px; }
