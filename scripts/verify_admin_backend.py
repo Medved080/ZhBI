@@ -9,7 +9,9 @@
   A — доступ (замена набора грантов, валидация, «устарело», права); S — сводка доступного = то, что человек видит на самом деле;
   B — групповая выдача (предпросмотр, атомарность, откат, конкуренция); R — роли (создание, порядок, матрица, удаление по плану, «устарело»);
   N — сеансы (свои, чужие, завершение, 404); C — смена собственного пароля (в том числе обязательная);
-  D — проекты и объекты (создание, правка с версией, удаление по плану и каскад, вложения, превью), справочник «Физлица».
+  D — проекты и объекты (создание, правка с версией, удаление по плану и каскад, вложения, превью), справочник «Физлица»;
+  E — служебные операции (резервные копии, LDAP, подложка карты, очистка журнала, обработки обновления);
+  Z — сброс истории статусов (в самом конце: меняет данные ВСЕХ изделий копии).
 
 Запуск:  .venv/bin/python scripts/verify_admin_backend.py <порт> <каталог_копии>   (копия — файл work.db из real_auth_server.py)
 """
@@ -677,6 +679,121 @@ if used:
 s, e = ADMIN.post(f"/dictionaries/individual/{IID}/delete", {"replacements": {}, "mode": "replace"})
 check("D17 повторное удаление: 404", s in (404,), f"{s}")
 
+# ============================================================ E — служебные операции
+print("E — служебные операции")
+BK_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "backups")
+# --- резервные копии
+mark = last_log_id()
+s, m1 = ADMIN.post("/admin/backups", {"comment": "QA копия 1"})
+check("E1 создание копии: 200, файл и описание на диске", s == 200 and os.path.isfile(os.path.join(BK_DIR, m1["name"])) and os.path.isfile(os.path.join(BK_DIR, m1["name"] + ".json")), f"{s} {m1}")
+check("E1 в описании автор и комментарий; вид «ручная»", m1["comment"] == "QA копия 1" and m1["kind"] == "manual" and m1["user_name"])
+s, lst = ADMIN.get("/admin/backups")
+check("E1 копия в списке; диск описан", s == 200 and any(b["name"] == m1["name"] for b in lst["backups"]) and "disk" in lst)
+check("E1 журнал: backup_create", len([e for e in log_since(mark) if e["action"] == "backup_create"]) == 1)
+s, e = USER2.post("/admin/backups", {"comment": "x"})
+check("E2 user2 создаёт копию: 403", s == 403)
+s, e = USER4.get("/admin/backups")
+check("E2 user4 читает список копий: 403", s == 403)
+s, e = ADMIN.post(f"/admin/backups/{'..%2F..%2Fetc%2Fpasswd'}/restore")
+check("E2 имя копии с путём: отказ", s in (400, 404), f"{s}")
+s, e = ADMIN.post("/admin/backups/zhbi_нет_такой.db/restore")
+check("E2 несуществующая копия: 404/400", s in (400, 404), f"{s}")
+# восстановление: снимок → изменение → восстановление → изменения нет, служебная копия есть
+s, mk = ADMIN.post("/admin/backups", {"comment": "QA точка восстановления"})
+n_users_before = q1("SELECT COUNT(*) n FROM users")["n"]
+ADMIN.post("/users", {"last_name": "После точки", "domain_login": "qa_after_backup", "role": "user"})
+check("E3 подготовка: пользователь создан после копии", q1("SELECT COUNT(*) n FROM users")["n"] == n_users_before + 1)
+n_safety = len([b for b in ADMIN.get("/admin/backups")[1]["backups"] if "before_restore" in b["kind"]])
+s, e = USER2.post(f"/admin/backups/{mk['name']}/restore")
+check("E3 user2 восстанавливает: 403, данные не тронуты", s == 403 and q1("SELECT COUNT(*) n FROM users")["n"] == n_users_before + 1)
+mark = last_log_id()
+s, r = ADMIN.post(f"/admin/backups/{mk['name']}/restore")
+check("E3 восстановление: 200, названа служебная копия", s == 200 and r["restored_from"] == mk["name"] and r["safety_backup"]["name"], f"{s} {str(r)[:160]}")
+check("E3 пользователь, созданный ПОСЛЕ копии, исчез", q1("SELECT COUNT(*) n FROM users")["n"] == n_users_before and q1("SELECT 1 x FROM users WHERE domain_login='qa_after_backup'") is None)
+s, lst = ADMIN.get("/admin/backups")
+check("E3 служебная копия «перед восстановлением» есть в списке", len([b for b in lst["backups"] if "before_restore" in b["kind"]]) == n_safety + 1 if s == 200 else False, f"{s}")
+check("E3 сеанс администратора пережил восстановление (был в копии)", ADMIN.get("/me")[0] == 200)
+flush_wait()
+check("E3 журнал: backup_restore записан (после восстановления журнал — из копии, поэтому ищем по действию, а не по номеру)", len(q("SELECT * FROM activity_log WHERE action='backup_restore'")) == 1)
+# удаление
+s, e = USER2.delete(f"/admin/backups/{m1['name']}")
+check("E4 user2 удаляет копию: 403 и файл на месте", s == 403 and os.path.isfile(os.path.join(BK_DIR, m1["name"])))
+s, e = ADMIN.delete(f"/admin/backups/{m1['name']}")
+check("E4 удаление копии: 204, файл и описание исчезли", s == 204 and not os.path.isfile(os.path.join(BK_DIR, m1["name"])) and not os.path.isfile(os.path.join(BK_DIR, m1["name"] + ".json")))
+s, e = ADMIN.delete(f"/admin/backups/{m1['name']}")
+check("E4 повтор: 404", s in (404, 400), f"{s}")
+# --- LDAP
+s, l0 = ADMIN.get("/ldap-settings")
+cfg0 = l0["config"]
+s, e = USER2.get("/ldap-settings")
+check("E5 user2 читает настройки LDAP: 403", s == 403)
+bad = dict(cfg0, enabled=True, host="")
+s, e = ADMIN.put("/ldap-settings", bad)
+check("E5 включить без адреса: 422", s == 422, f"{s}")
+s, e = ADMIN.put("/ldap-settings", dict(cfg0, enabled=True, host="127.0.0.1", port=70000))
+check("E5 порт вне диапазона: 422", s == 422)
+s, e = ADMIN.put("/ldap-settings", dict(cfg0, enabled=True, host="127.0.0.1", login_template="без_подстановки"))
+check("E5 шаблон без {login}: 422", s == 422)
+s, e = ADMIN.put("/ldap-settings", dict(cfg0, port="abc"))
+check("E5 порт не число: 422", s == 422)
+s, e = ADMIN.put("/ldap-settings", dict(cfg0, host="127.0.0.1", use_ssl=True, start_tls=True, enabled=True))
+check("E5 SSL и STARTTLS вместе: 422", s == 422)
+check("E5 отказы не изменили настройку", ADMIN.get("/ldap-settings")[1]["config"] == cfg0)
+mark = last_log_id()
+new_cfg = dict(cfg0, enabled=False, host="dc.qa.example", port=636, use_ssl=True, base_dn="DC=qa,DC=example")
+s, e = USER2.put("/ldap-settings", new_cfg)
+check("E5 user2 сохраняет настройки LDAP: 403", s == 403 and ADMIN.get("/ldap-settings")[1]["config"] == cfg0)
+s, r = ADMIN.put("/ldap-settings", new_cfg)
+check("E5 сохранение настроек (выключенных): 200 и читается обратно", s == 200 and ADMIN.get("/ldap-settings")[1]["config"] == new_cfg, f"{s} {r}")
+check("E5 журнал: ldap_settings", len([e for e in log_since(mark) if e["action"] == "ldap_settings"]) == 1)
+s, t = ADMIN.post("/ldap-settings/test", {"login": "qa.user", "password": "Fake-Pass-000", "config": dict(new_cfg, enabled=True, host="127.0.0.1", port=1, use_ssl=False, timeout_seconds=2)})
+check("E6 пробная привязка к недоступному серверу: 200, ok=false, причина названа", s == 200 and t["ok"] is False and t["detail"], f"{s} {t}")
+s, t = USER2.post("/ldap-settings/test", {"login": "a", "password": "b"})
+check("E6 user2 проверяет соединение: 403", s == 403)
+flush_wait()
+check("E6 пароль проверки не попал в журнал", "Fake-Pass-000" not in json.dumps(q("SELECT * FROM activity_log"), ensure_ascii=False))
+ADMIN.put("/ldap-settings", cfg0)
+# --- подложка карты
+s, mc = ADMIN.get("/map/config")
+online0 = mc["online"]
+s, e = USER2.put("/map/online-tiles", {"enabled": not online0})
+check("E7 user2 переключает подложку: 403", s == 403 and ADMIN.get("/map/config")[1]["online"] == online0)
+s, e = ADMIN.put("/map/online-tiles", {"enabled": not online0})
+check("E7 переключение подложки: 200 и в конфигурации", s == 200 and ADMIN.get("/map/config")[1]["online"] == (not online0))
+ADMIN.put("/map/online-tiles", {"enabled": online0})
+MAP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "map")
+s, e = ADMIN.upload("/map/tiles/upload", {}, {"file": ("qa_bad.pmtiles", "это не карта, просто текст".encode("utf-8"), "application/octet-stream")})
+check("E8 файл не PMTiles: 400 и на диске не остаётся", s == 400 and not os.path.exists(os.path.join(MAP_DIR, "qa_bad.pmtiles")), f"{s} {e}")
+s, e = ADMIN.upload("/map/tiles/upload", {}, {"file": ("../evil.pmtiles", b"PMTiles\x03" + b"\0" * 100, "application/octet-stream")})
+check("E8 имя с путём: файл кладётся только по базовому имени внутри каталога карты", s in (200, 400) and not os.path.exists(os.path.join(MAP_DIR, "..", "evil.pmtiles")))
+s, e = ADMIN.upload("/map/tiles/upload", {}, {"file": ("qa_ok.pmtiles", b"PMTiles\x03" + b"\0" * 100, "application/octet-stream")})
+check("E8 файл с заголовком PMTiles: 200, виден в конфигурации", s == 200 and any(b["name"] == "qa_ok.pmtiles" for b in ADMIN.get("/map/config")[1]["basemaps"]), f"{s} {e}")
+s, e = USER2.upload("/map/tiles/upload", {}, {"file": ("qa_403.pmtiles", b"PMTiles\x03" + b"\0" * 100, "application/octet-stream")})
+check("E8 user2 загружает подложку: 403 и файла нет", s == 403 and not os.path.exists(os.path.join(MAP_DIR, "qa_403.pmtiles")))
+# --- очистка журнала
+mark = last_log_id()
+old_n = q1("SELECT COUNT(*) n FROM activity_log WHERE at < '2026-09-21 00:00:00.000'")["n"]
+s, c = ADMIN.get("/activity?date_to=2026-09-20&limit=1")
+check("E9 счёт для очистки через журнал совпадает с SQL (раньше 21.09)", s == 200 and c["total"] == old_n, f"{c.get('total')} vs {old_n}")
+s, e = USER2.post("/activity/cleanup?before=2026-09-21")
+check("E9 user2 очищает журнал: 403, ничего не удалено", s == 403 and q1("SELECT COUNT(*) n FROM activity_log WHERE at < '2026-09-21 00:00:00.000'")["n"] == old_n)
+s, e = ADMIN.post("/activity/cleanup")
+check("E9 без даты: 422", s == 422)
+s, r = ADMIN.post("/activity/cleanup?before=2026-09-21")
+check("E9 очистка: удалено столько, сколько показал счёт; более новые записи целы", s == 200 and r["deleted"] == old_n and q1("SELECT COUNT(*) n FROM activity_log WHERE at < '2026-09-21 00:00:00.000'")["n"] == 0 and q1("SELECT COUNT(*) n FROM activity_log")["n"] > 0, f"{s} {r}")
+check("E9 факт очистки записан в журнал", any(e["action"] == "activity_cleanup" for e in log_since(mark)))
+# --- обработки обновления
+s, rs = ADMIN.get("/release-status")
+task = next((t for t in rs.get("tasks", []) if t["status"] == "ok" and t.get("kind", "data") == "data"), None)
+s, e = USER2.post(f"/release-tasks/{task['name']}/run") if task else (0, None)
+check("E10 user2 запускает обработку: 403", task is not None and s == 403)
+s, e = ADMIN.post("/release-tasks/нет-такой/run")
+check("E10 несуществующая обработка: 404", s == 404)
+s, e = ADMIN.post(f"/release-tasks/{task['name']}/run")
+check("E10 повтор выполненной обработки: 200 и база в порядке (идемпотентность)", s == 200 and e.get("status") == "ok" and ADMIN.get("/release-status")[1]["complete"], f"{s} {str(e)[:120]}")
+s, e = USER2.get("/release-status")
+check("E10 обычному пользователю отдаётся статус без списка обработок", s == 200 and "tasks" not in e)
+
 # ============================================================ журнал без секретов
 print("L — журнал без паролей и хэшей")
 flush_wait()
@@ -686,6 +803,40 @@ hashes = [r["password_hash"] for r in q("SELECT password_hash FROM users WHERE p
 blob = json.dumps(rows, ensure_ascii=False, default=str)
 check("L1 ни один пароль не встречается в журнале", not any(p in blob for p in pw_strings))
 check("L1 ни один хэш и соль не встречается в журнале", not any(h and h in blob for h in hashes))
+
+# ============================================================ Z — сброс истории статусов
+print("Z — сброс истории статусов")
+s, pv0 = ADMIN.get("/admin/reset-status-history/preview")
+check("Z1 предпросмотр: 200, числа совпадают с SQL", s == 200 and pv0["elements"] == q1("SELECT COUNT(*) n FROM elements")["n"] and pv0["history_rows"] == q1("SELECT COUNT(*) n FROM status_history")["n"] and pv0["not_planned"] == q1("SELECT COUNT(*) n FROM elements WHERE current_status<>'planned'")["n"], str(pv0)[:200])
+s, e = USER2.get("/admin/reset-status-history/preview")
+check("Z1 user2 смотрит предпросмотр: 403", s == 403)
+s, e = USER4.post("/admin/reset-status-history")
+check("Z1 user4 сбрасывает историю: 403, данные не тронуты", s == 403 and q1("SELECT COUNT(*) n FROM status_history")["n"] == pv0["history_rows"])
+def state_hash():
+    c = db()
+    try:
+        return hashlib.sha1(json.dumps([tuple(r) for r in c.execute("SELECT id, current_status, contract_id, actual_delivery_date FROM elements ORDER BY id")] + [tuple(r) for r in c.execute("SELECT COUNT(*), MAX(id) FROM status_history")]).encode()).hexdigest()
+    finally:
+        c.close()
+h0 = state_hash()
+s, e = ADMIN.post(f"/admin/reset-status-history?expected_history={pv0['history_rows'] + 7}")
+check("Z2 предпросмотр устарел (число записей иное): 409, ничего не сброшено", s == 409 and state_hash() == h0, f"{s} {e}")
+# сбой внутри операции: триггер на копии обрывает вставку новых записей истории — вся операция откатывается
+c = db(); c.execute("CREATE TRIGGER qa_reset_abort BEFORE INSERT ON status_history WHEN NEW.comment LIKE 'массовый сброс%' BEGIN SELECT RAISE(ABORT, 'qa: отказ внутри сброса'); END"); c.commit(); c.close()
+mark = last_log_id()
+try:
+    s, e = ADMIN.post(f"/admin/reset-status-history?expected_history={pv0['history_rows']}")
+finally:
+    c = db(); c.execute("DROP TRIGGER qa_reset_abort"); c.commit(); c.close()
+check("Z3 сбой внутри операции: ошибка и ПОЛНЫЙ откат (история, статусы, контракты — как были)", s >= 400 and state_hash() == h0, f"{s}")
+check("Z3 журнал не подтверждает несостоявшийся сброс", not any(e["action"] == "status_history_reset" for e in log_since(mark)))
+mark = last_log_id()
+s, r = ADMIN.post(f"/admin/reset-status-history?expected_history={pv0['history_rows']}")
+check("Z4 сброс по актуальному предпросмотру: 200, число изделий верное", s == 200 and r["reset_count"] == pv0["elements"], f"{s} {r}")
+check("Z4 все изделия «planned», без контракта и даты; история — по одной записи на изделие", q1("SELECT COUNT(*) n FROM elements WHERE current_status<>'planned' OR contract_id IS NOT NULL OR actual_delivery_date IS NOT NULL")["n"] == 0 and q1("SELECT COUNT(*) n FROM status_history")["n"] == pv0["elements"])
+check("Z4 журнал: status_history_reset ровно одно", len([e for e in log_since(mark) if e["action"] == "status_history_reset"]) == 1)
+s, pv1 = ADMIN.get("/admin/reset-status-history/preview")
+check("Z4 повторный предпросмотр: не «Запланирован» = 0", s == 200 and pv1["not_planned"] == 0 and pv1["with_contract"] == 0)
 
 print(f"\nИТОГО: пройдено {PASSED[0]}, провалов {len(FAILS)}")
 for f_ in FAILS:

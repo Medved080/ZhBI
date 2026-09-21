@@ -1,25 +1,9 @@
 // Экраны области «администрирование» (impl: "admin:<имя>"): смена своего пароля, сводка «Мой доступ» и др. Один вход для оболочки (main.js),
 // внутри — диспетчер по имени. Каждый экран возвращает {hasUnsavedChanges, guardLeave, destroy}.
-import { ApiError } from "./api.js";
 import { esc } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
 import { mountPasswordForm } from "./password-form.js";
-
-export const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || e));
-
-/** Общий каркас экрана: хлебные крошки, заголовок, статус реализации, пояснение. Возвращает узел содержимого. */
-export function frame(el, screen, groupTitle) {
-  el.className = "v2-page";
-  el.innerHTML = `
-    <div class="v2-container v2-screen">
-      <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
-      <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
-      <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div id="as-body"></div>
-    </div>`;
-  return el.querySelector("#as-body");
-}
+import { frame, errText } from "./admin-common.js";
+import { mountResetHistory, mountBackups, mountLdap, mountMapAdmin, mountActivity, mountChangelogTasks } from "./admin-service.js";
 
 // ---------------------------------------------------------------- «Сменить пароль»
 function mountPassword(el, { screen, groupTitle, user, api }) {
@@ -71,6 +55,12 @@ function mountMyAccess(el, { screen, groupTitle, api }) {
 const SCREENS = {
   "admin:password": mountPassword,
   "admin:my-access": mountMyAccess,
+  "admin:reset-history": mountResetHistory,
+  "admin:backups": mountBackups,
+  "admin:ldap": mountLdap,
+  "admin:map": mountMapAdmin,
+  "admin:activity": mountActivity,
+  "admin:changelog": mountChangelogTasks,
 };
 
 export function hasAdminScreen(impl) { return Object.prototype.hasOwnProperty.call(SCREENS, impl); }

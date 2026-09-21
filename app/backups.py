@@ -307,7 +307,10 @@ def _db_stats(path: Path) -> dict:
     оси, сессии и журнал действий. Выборочного экспорта здесь нет и быть не
     может — нечему потеряться."""
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        # immutable=1: копия снята с базы в режиме WAL и несёт его признак в заголовке; «mode=ro» без готовых файлов -wal/-shm открыть такую копию не
+        # может («unable to open database file»), из-за чего пустела статистика копий, а восстановление отвечало 500 (найдено 2026-09-21).
+        # Файл копии после создания не меняется, поэтому неизменяемый режим безопасен.
+        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
         conn.row_factory = sqlite3.Row
         try:
             tables = [r["name"] for r in conn.execute(
@@ -578,7 +581,7 @@ def restore_backup(name: str, user_name: Optional[str] = None, user_id: Optional
         comment=f"автоматически перед восстановлением из «{name}»",
     )
 
-    source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    source = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)   # см. _db_stats: копия WAL-базы иначе не открывается
     try:
         target = sqlite3.connect(_db.DB_PATH)
         try:

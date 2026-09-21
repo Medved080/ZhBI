@@ -2869,7 +2869,8 @@ def get_changes(
 
 
 @app.post("/admin/reset-status-history")
-def reset_status_history(user: sqlite3.Row = Depends(require_service_feature("reset_history", "write"))):
+def reset_status_history(expected_history: Optional[int] = Query(None),
+                         user: sqlite3.Row = Depends(require_service_feature("reset_history", "write"))):
     """Массовый сброс истории статусов ВСЕХ элементов — только для
     тестирования (живой запрос пользователя, см. Docs/backlog.md), НЕ
     ограничен одним чертежом/файлом. Каждый элемент возвращается в
@@ -2885,7 +2886,14 @@ def reset_status_history(user: sqlite3.Row = Depends(require_service_feature("re
     статусов (партии убраны, см. "Контрактация 2.0")."""
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО подсчёта: число из предпросмотра и сама операция — под одной блокировкой; ошибка откатывает всё
         n = conn.execute("SELECT COUNT(*) AS n FROM elements").fetchone()["n"]
+        if expected_history is not None:
+            # V2 показал предпросмотр («записей истории: N») и просит сбросить именно это; данных стало иначе — не сбрасываем вслепую.
+            actual = conn.execute("SELECT COUNT(*) AS n FROM status_history").fetchone()["n"]
+            if actual != expected_history:
+                raise HTTPException(status_code=409, detail=f"История статусов изменилась с момента предпросмотра (было записей {expected_history}, "
+                                                            f"стало {actual}). Ничего не сброшено — откройте предпросмотр заново.")
         conn.execute("DELETE FROM status_history")
         conn.execute(
             "UPDATE elements SET current_status='planned', contract_id=NULL, "

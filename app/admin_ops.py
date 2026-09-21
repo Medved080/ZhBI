@@ -280,3 +280,27 @@ def access_bulk(body: BulkIn, admin: sqlite3.Row = Depends(require_service_featu
     finally:
         activity.defer_end(events)
         conn.close()
+
+
+# ----------------------------------------------------------------- предпросмотр сброса истории статусов
+
+@router.get("/admin/reset-status-history/preview")
+def reset_history_preview(user: sqlite3.Row = Depends(require_service_feature("reset_history", "write"))):
+    """Что затронет `POST /admin/reset-status-history` — до того, как оно выполнено (только чтение, ничего не меняет)."""
+    conn = get_connection()
+    try:
+        one = lambda sql: conn.execute(sql).fetchone()["n"]  # noqa: E731
+        by_object = [dict(r) for r in conn.execute(
+            "SELECT COALESCE(o.name, '(без объекта)') AS object, COUNT(e.id) AS elements, "
+            "SUM(e.current_status <> 'planned') AS not_planned, SUM(e.contract_id IS NOT NULL) AS with_contract "
+            "FROM elements e LEFT JOIN objects o ON o.id = e.object_id GROUP BY e.object_id ORDER BY elements DESC LIMIT 30")]
+        return {
+            "elements": one("SELECT COUNT(*) AS n FROM elements"),
+            "history_rows": one("SELECT COUNT(*) AS n FROM status_history"),
+            "not_planned": one("SELECT COUNT(*) AS n FROM elements WHERE current_status <> 'planned'"),
+            "with_contract": one("SELECT COUNT(*) AS n FROM elements WHERE contract_id IS NOT NULL"),
+            "with_actual_date": one("SELECT COUNT(*) AS n FROM elements WHERE actual_delivery_date IS NOT NULL"),
+            "by_object": by_object,
+        }
+    finally:
+        conn.close()
