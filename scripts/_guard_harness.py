@@ -184,3 +184,68 @@ def other_writer_ok():
         return False
     finally:
         w.close()
+
+
+# ---------------------------------------------------------------- HTTP-сервер для проверок
+def start_http_server(port=0, default_admin=False):
+    """Настоящий сервер (uvicorn, маршруты, пул потоков, обработчики ошибок) в потоке ЭТОГО процесса на временной копии БД.
+
+    Авторизация: заголовок `X-Test-User: <id>` (или cookie `test_user`) подставляет пользователя КОПИИ; без него запрос идёт штатной проверкой
+    сеанса → 401 (настоящий отказ). default_admin=True — без заголовка работать от администратора копии (для браузерной проверки на копии).
+    Стартовые обработки приложения (миграции, копии БД) НЕ выполняются (lifespan="off"); писатель журнала запускается вручную.
+    """
+    import socket
+
+    import uvicorn
+    from fastapi import Request
+
+    import app.activity as activity
+    import app.auth as auth
+    import app.main as main
+
+    orig = auth.get_current_user
+
+    def override(request: Request):
+        uid = request.headers.get("X-Test-User") or request.cookies.get("test_user")
+        if uid:
+            row = user_row("id = ?", (int(uid),))
+            if row is None:
+                raise HTTPException(status_code=401, detail="нет такого тестового пользователя")
+            return row
+        if default_admin:
+            return user_row()
+        return orig(request)
+
+    main.app.dependency_overrides[auth.get_current_user] = override
+    if not port:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
+    t = threading.Thread(target=server.run, daemon=True)
+    t.start()
+    for _ in range(100):
+        if server.started:
+            break
+        time.sleep(0.1)
+    activity.start_worker()
+    return port, server
+
+
+def http(port, method, path, body=None, user=None, timeout=60):
+    import http.client
+    import json
+
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    headers = {"Content-Type": "application/json"}
+    if user:
+        headers["X-Test-User"] = str(user)
+    from urllib.parse import quote
+    c.request(method, quote(path, safe="/?=&%"), json.dumps(body) if body is not None else None, headers)
+    r = c.getresponse()
+    data = r.read()
+    c.close()
+    try:
+        return r.status, json.loads(data)
+    except Exception:  # noqa: BLE001
+        return r.status, data.decode("utf-8", "replace")[:200]

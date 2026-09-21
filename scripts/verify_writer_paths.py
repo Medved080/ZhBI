@@ -72,6 +72,9 @@ def paths():
         ("POST /import-contracting-xlsx (импорт контрактации)", lambda: _import_stub(), "блокировка (разбор файла — до неё); проверки «до/после» в самом импорте нет"),
         ("POST /dictionaries/{kind}/{key}/delete (замена записи справочника)", lambda: dict_delete.delete_entry("contract", "99999999", dict_delete.DeleteIn(), ADMIN), "блокировка + сверка «до/после»"),
     ]
+    if allocation is not None:
+        P.append(("POST /contracts/{id}/allocations (allocate)", lambda: allocation.allocate(99999999, allocation.AllocationIn(
+            object_id=1, element_type="x", mark=None, items=[allocation.AllocationItem(element_id=1, expected_status="planned")]), ADMIN), "блокировка + страж остатка + сверка состояния"))
     return P
 
 

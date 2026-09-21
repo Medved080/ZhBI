@@ -207,8 +207,20 @@ def run():
         if not ok:
             FAILS.append("валидация")
 
-    if allocation is not None and hasattr(allocation, "ALLOCATION_LOCK_CASES"):
-        allocation.ALLOCATION_LOCK_CASES(check, H)
+    if allocation is not None:
+        print("allocate (POST /contracts/{id}/allocations)")
+        reset(); pos, ids = prep_elements(); cid = pos["contract_id"]; before = H.checksum()
+
+        def ab(items):
+            return allocation.AllocationIn(object_id=1, element_type=pos["element_type"], mark=pos["mark"],
+                                           items=[allocation.AllocationItem(element_id=i, expected_status="planned") for i in items])
+        check("allocate: отказ в правах", before, call(allocation.allocate, cid, ab(ids[:2]), NOBODY), 403)
+        check("allocate: нет контракта", before, call(allocation.allocate, 99999999, ab(ids[:2]), ADMIN), 404)
+        check("allocate: нет изделия", before, call(allocation.allocate, cid, ab([99999999]), ADMIN), 404)
+        check("allocate: превышение остатка внутри операции (откат пачки)", before, call(allocation.allocate, cid, ab(ids[:4]), ADMIN), 409)
+        check("allocate: исключение внутри операции (после записи)", before,
+              with_patch(allocation, "_position_state", boom, lambda: call(allocation.allocate, cid, ab(ids[:2]), ADMIN)), "exc")
+        check("allocate: таймаут ожидания блокировки", before, lock_timeout(lambda: call(allocation.allocate, cid, ab(ids[:2]), ADMIN)), 503)
 
 
 if __name__ == "__main__":
