@@ -872,3 +872,27 @@ button.ws-tile:hover { background: var(--surface); }
 .ws-al-n { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 11px; letter-spacing: 0; }
 .ws-al-step select { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .ws-al-bad li { color: var(--muted); }
+
+/* ==== Обмен данными (exchange*.js): загрузки, сверка и применение, выгрузки ==== */
+.v2-ex .v2-fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; margin: 10px 0; }
+.v2-ex .v2-fieldset legend { font-size: 12px; color: var(--muted); padding: 0 6px; }
+.v2-ex-hint { margin: 2px 0 10px; font-size: 12px; }
+.v2-ex-status { margin: 12px 0; min-height: 20px; font-size: 13px; overflow-wrap: anywhere; }
+.v2-ex-status.v2-ex-ok { color: var(--ink); border-left: 4px solid var(--accent); padding: 8px 12px; background: var(--surface); border-radius: 6px; }
+.v2-ex-status.v2-ex-bad { color: var(--bad); border-left: 4px solid var(--bad); padding: 8px 12px; background: var(--surface); border-radius: 6px; }
+.v2-ex-status.v2-ex-busy { color: var(--muted); }
+.v2-ex-list { margin: 4px 0 12px; padding-left: 20px; font-size: 13px; }
+.v2-ex-list-title { margin: 10px 0 0; font-size: 13px; }
+.v2-ex-facts { margin: 10px 0 14px; }
+.v2-ex-chips { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0; font-size: 13px; }
+.v2-ex-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+.v2-ex-warn { font-size: 12px; color: var(--bad); margin-top: 2px; }
+.v2-ex-changes { max-height: 52vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 10px 0 4px; }
+.v2-ex-changes .v2-read-tbl td { max-width: 320px; }
+.v2-ex-changes tr.v2-ex-off td { opacity: .55; }
+.v2-ex-tplbox { margin: 10px 0 0; }
+.v2-ex-tpl-body { padding: 4px 4px 10px; font-size: 13px; }
+.v2-ex-tpl-body h4 { margin: 12px 0 6px; }
+.v2-ex-sample { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 6px 0 4px; font-size: 12px; }
+.v2-ex-verify { margin-top: 10px; }
+.v2-ex .v2-seg { max-width: 640px; margin: 8px 0 12px; }

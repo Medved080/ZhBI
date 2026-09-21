@@ -515,6 +515,11 @@ def apply_changes(conn, selections: list, admin) -> dict:
                                 "reason": "Объект с таким наименованием уже появился в базе — обновите сверку"})
                 continue
             fields = dict(creates[0].get("fields") or {})
+            # Имена колонок «Нового объекта» приходят из клиентского JSON и попадают в текст INSERT — только то, что сверка
+            # (analyze) вообще кладёт в fields; иначе тело запроса позволило бы записать любую колонку и подставить SQL.
+            неизвестные_поля = set(fields) - (_UPDATE_FIELDS | _ADDRESS_LINK_FIELDS)
+            if неизвестные_поля:
+                raise ValueError("Недопустимые поля нового объекта: " + ", ".join(sorted(неизвестные_поля)))
             статус = _valid_status(fields.pop("status", None))
             if "smu_id" in fields:
                 fields["smu_id"] = find_or_create_smu(conn, fields["smu_id"])
