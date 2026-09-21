@@ -17,7 +17,7 @@ try {
   let done = false;
   while (Date.now() - t0 < minutes * 60000) {
     await sleep(5000);
-    try { await b.send("Page.handleJavaScriptDialog", { accept: true }); } catch { /* диалога нет */ }
+    try { await Promise.race([b.send("Page.handleJavaScriptDialog", { accept: true }), sleep(3000)]); } catch { /* диалога нет */ }
     try { done = await Promise.race([b.eval("window.__done===true"), sleep(4000).then(() => "hang")]); } catch { done = false; }
     if (done === true) break;
   }

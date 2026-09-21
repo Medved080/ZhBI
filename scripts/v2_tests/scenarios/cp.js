@@ -259,7 +259,8 @@ export const tests = [
       for (const [name, fail, expectText] of [
         ["409", { status: 409, detail: "Такой ИНН уже есть" }, "такой инн уже есть"],
         ["422", { status: 422, detail: [{ loc: ["body", "inn"], msg: "bad", type: "string_too_long" }] }, "inn: слишком длинное значение"],
-        ["сеть", { network: true }, "нет связи"],
+        // обрыв связи: автоповтора нет, факт читается с сервера («изменение не применено» — запись прежняя, ввод цел)
+        ["сеть", { network: true }, "изменение не применено"],
       ]) {
         a.ctl.failNext("PATCH /counterparties/7", fail);
         a.click(a.$("#cp-save"));
@@ -640,7 +641,7 @@ export const tests = [
       t.ok(!a.$("#ctr-save").disabled && !a.$("#ctr-theme").disabled, "после ошибки кнопки и поля доступны");
       for (const [name, fail, expectText] of [
         ["422", { status: 422, detail: [{ loc: ["body", "lines", 0, "quantity"], msg: "bad", type: "int_parsing" }] }, "нужно целое число"],
-        ["сеть", { network: true }, "нет связи"],
+        ["сеть", { network: true }, "изменение не применено"],   // обрыв связи: факт читается с сервера, автоповтора нет
       ]) {
         a.ctl.failNext("PATCH /contracts/4", fail);
         a.click(a.$("#ctr-save"));
