@@ -852,6 +852,15 @@ button.ws-tile:hover { background: var(--surface); }
 .ws-cgroup.ws-dim .ws-chead { opacity: .6; }
 .ws-crow.ws-dim { opacity: .55; }
 .ws-pkcols-c { padding-right: 6px; }
+/* АРМ комплектовщика (picker-panels.js): сортировка колонок среза, разворот контракта по маркам */
+.ws-pkhead { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.ws-pkhead:hover { color: var(--ink); text-decoration: underline; }
+.ws-pkhead.on { color: var(--ink); font-weight: 600; }
+.ws-crowline { display: flex; align-items: baseline; border-bottom: 1px solid var(--line); }
+.ws-crowline .ws-crow { border-bottom: 0; flex: 1; padding-left: 4px; }
+.ws-cex { border: 0; background: none; width: 22px; padding: 0 0 0 6px; color: var(--muted); cursor: pointer; font-size: 12px; }
+.ws-cex:hover { color: var(--ink); }
+.ws-mrow { padding-left: 30px; font-size: 12px; }
 
 /* форма смены статуса одного элемента */
 .ws-form { display: flex; flex-direction: column; gap: 8px; }

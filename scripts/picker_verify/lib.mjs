@@ -101,3 +101,13 @@ export async function typeInto(b, sel, text) {
   await b.type(text);
   await b.eval(`document.querySelector(${JSON.stringify(sel)})?.dispatchEvent(new Event('change',{bubbles:true}))`);
 }
+
+// Переход с полной перезагрузкой страницы: несохранённое состояние экрана включает предупреждение браузера при уходе (beforeunload) — в безголовом
+// Chrome оно блокирует протокол, пока его не подтвердить. Здесь подтверждаем уход командой протокола (это НЕ проверка сторожа, сторож проверяется отдельно).
+export async function hardGoto(b, url, wait = 1200) {
+  b.send("Page.navigate", { url: "about:blank" }).catch(() => {});
+  await sleep(500);
+  try { await b.send("Page.handleJavaScriptDialog", { accept: true }); } catch { /* диалога не было */ }
+  await sleep(300);
+  await b.goto(url, wait);
+}

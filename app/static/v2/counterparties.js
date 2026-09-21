@@ -136,9 +136,10 @@
 //    отдельного крупного h2). Заголовки таблицы — position:sticky
 //    (потребовало смены border-collapse:collapse→separate — известное
 //    ограничение Chrome для sticky на ячейках коллапсированной таблицы).
-import { showUnsavedDialog, showConfirmDialog, showInfoDialog } from "./dialogs.js";
+import { showUnsavedDialog, showConfirmDialog, showInfoDialog, showChoices } from "./dialogs.js";
 import { trashIconHtml } from "./icons.js";
 import { ApiError } from "./api.js";
+import { runDeleteFlow } from "./delete-plan.js";
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -554,6 +555,105 @@ export function mountCounterparties(container, ctx) {
     return parts.join(" ");
   }
 
+  // ---------- проверка устаревших данных (app/record_version.py) ----------
+  //
+  // Правка контрагента, договора, спецификации и контракта заменяет запись ЦЕЛИКОМ: без проверки форма, открытая до чужой правки, молча
+  // затёрла бы её. К каждой правке прикладывается `expected_version` — версия, которую человек видел. Если сервер ответил конфликтом
+  // (409 stale_version, ничего не изменено), показываем выбор: оставить свой ввод, показать актуальные данные (ввод сбрасывается) либо
+  // сохранить поверх (значения ВСЕХ полей формы заменят чужие; версия берётся из свежего чтения). Второй конфликт подряд — обычная ошибка.
+  const isStale = (err) => err instanceof ApiError && err.status === 409 && err.rawDetail && typeof err.rawDetail === "object" && err.rawDetail.conflict === "stale_version";
+  async function fetchFreshRecord(kind, id) {
+    if (kind === "counterparty") return (await api.get("/counterparties")).find((x) => x.id === id) || null;
+    if (kind === "agreement") return (await api.get(`/agreements?counterparty_id=${state.editingId}`)).find((x) => x.id === id) || null;
+    if (kind === "specification") { const { agreementId } = findSpecAndAgreementId(id); return agreementId == null ? null : ((await api.get(`/specifications?agreement_id=${agreementId}`)).find((x) => x.id === id) || null); }
+    if (kind === "contract") return (await api.get("/contracts")).find((x) => x.id === id) || null;
+    return null;
+  }
+  function applyFreshRecord(kind, id, fresh) {
+    if (kind === "counterparty") { const i = state.list.findIndex((x) => x.id === id); if (i !== -1) state.list[i] = fresh; initDraft(); }
+    else if (kind === "agreement") { const i = state.contracting.agreements.findIndex((x) => x.id === id); if (i !== -1) state.contracting.agreements[i] = fresh; state.agreementDrafts.delete(id); }
+    else if (kind === "specification") {
+      const { agreementId } = findSpecAndAgreementId(id);
+      const specs = state.contracting.specsByAgreement.get(agreementId)?.specs || [];
+      const i = specs.findIndex((x) => x.id === id); if (i !== -1) specs[i] = fresh;
+      state.specDrafts.delete(id);
+    } else if (kind === "contract") {
+      const before = findContract(id);
+      removeContractFromCache(id, before ? before.specification_id : fresh.specification_id);
+      pushContractToCache(fresh); state.contractDrafts.delete(id);
+    }
+  }
+  // ---------- неизвестный исход записи (ответа нет: обрыв связи, status 0) ----------
+  // Автоповтора НЕТ: повторное создание дало бы дубль, повторная правка — вторую запись в журнал. Факт читается с сервера: если запись
+  // создана / изменена именно так, как отправлено, операция считается выполненной («сервер подтвердил»); иначе человеку сказано, что не выполнено.
+  const isNoAnswer = (err) => err instanceof ApiError && err.status === 0 && !err.blockedByPolicy;
+  const noAnswer = (text) => ({ detail: text, message: text, noAnswer: true });
+  const N = (v) => (v === undefined || v === "" ? null : v);
+  const setJson = (rows) => JSON.stringify(rows.map((r) => JSON.stringify(r)).sort());
+  function sameAsBody(kind, r, b, creating = false) {
+    if (kind === "counterparty") {
+      const cap = (list) => setJson((list || []).map((c) => [c.element_type, Number(c.per_day)]));
+      // при создании пустой код сервер генерирует сам — его сравнивать нечем
+      return ["full_name", "short_name", "inn", "kpp", "ogrn", "legal_address", "contact_person", "contact_phone", "code"].every((k) => (creating && k === "code" && N(b.code) === null) || N(r[k]) === N(b[k])) && cap(r.capacity) === cap(b.capacity);
+    }
+    if (kind === "agreement") return r.number === b.number && N(r.agreement_date) === N(b.agreement_date) && N(r.object_id) === N(b.object_id) && r.counterparty_id === b.counterparty_id;
+    if (kind === "specification") return r.number === b.number && N(r.specification_date) === N(b.specification_date) && r.agreement_id === b.agreement_id;
+    if (kind === "contract") {
+      return r.specification_id === b.specification_id && N(r.theme) === N(b.theme) && !!r.is_archived === !!b.is_archived
+        && setJson((r.lines || []).map((l) => [N(l.element_type), N(l.mark), l.quantity])) === setJson((b.lines || []).map((l) => [N(l.element_type), N(l.mark), l.quantity]))
+        && setJson((r.incidents || []).map((i) => [i.element_type, i.quantity, String(i.incident_date || "").slice(0, 10), N(i.description)])) === setJson((b.incidents || []).map((i) => [i.element_type, i.quantity, String(i.incident_date || "").slice(0, 10), N(i.description)]));
+    }
+    return false;
+  }
+  async function findCreated(kind, body) {
+    if (kind === "counterparty") return (await api.get("/counterparties")).find((x) => !state.list.some((o) => o.id === x.id) && sameAsBody(kind, x, body, true)) || null;
+    if (kind === "agreement") return (await api.get(`/agreements?counterparty_id=${body.counterparty_id}`)).find((x) => !state.contracting.agreements.some((o) => o.id === x.id) && sameAsBody(kind, x, body)) || null;
+    if (kind === "specification") return (await api.get(`/specifications?agreement_id=${body.agreement_id}`)).find((x) => !(state.contracting.specsByAgreement.get(body.agreement_id)?.specs || []).some((o) => o.id === x.id) && sameAsBody(kind, x, body)) || null;
+    if (kind === "contract") {
+      const known = new Set([...state.contracting.contractsBySpec.values()].flat().map((c) => c.id));
+      return (await api.get("/contracts")).find((x) => !known.has(x.id) && sameAsBody(kind, x, body)) || null;
+    }
+    return null;
+  }
+  async function createChecked(kind, path, body) {
+    try { return await api.post(path, body); }
+    catch (err) {
+      if (!isNoAnswer(err)) throw err;
+      let rec;
+      try { rec = await findCreated(kind, body); } catch (e) { throw noAnswer("Ответ сервера не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите раздел и проверьте список."); }
+      if (rec) return rec;   // сервер подтвердил: запись создана, потерялся только ответ
+      throw noAnswer("Ответ сервера не получен. Проверка сервером: запись НЕ создана — введённое сохранено, можно повторить.");
+    }
+  }
+  async function reconcileUpdate(kind, id, body, current) {
+    let fresh;
+    try { fresh = await fetchFreshRecord(kind, id); } catch (e) { throw noAnswer("Ответ сервера не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите раздел."); }
+    if (!fresh) throw noAnswer("Ответ сервера не получен; запись на сервере не найдена — обновите раздел.");
+    if (sameAsBody(kind, fresh, body)) return fresh;   // применено: потерялся только ответ
+    if (current && fresh.version === current.version) throw noAnswer("Ответ сервера не получен. Проверка сервером: изменение НЕ применено — запись прежняя, введённое сохранено, можно повторить.");
+    throw noAnswer("Ответ сервера не получен; запись на сервере отличается и от прежней, и от вашей (её мог изменить другой пользователь). Обновите данные раздела.");
+  }
+  async function patchChecked(kind, id, path, body, current) {
+    const send = (version) => api.patch(path, version ? { ...body, expected_version: version } : body);
+    try { return await send(current?.version); }
+    catch (err) {
+      if (isNoAnswer(err)) return await reconcileUpdate(kind, id, body, current);
+      if (!isStale(err)) throw err;
+      let fresh = null;
+      try { fresh = await fetchFreshRecord(kind, id); } catch (e) { /* без свежих данных «поверх» и «показать» недоступны — остаётся отказ */ }
+      const choice = await showChoices(
+        `${err.detail}\n\n«Показать актуальные данные» сбросит ваш ввод. «Сохранить поверх» запишет ваши значения ВСЕХ полей поверх чужих изменений.`,
+        [{ key: "cancel", label: "Отмена (оставить мой ввод)", focus: true }, { key: "reload", label: "Показать актуальные данные" }, { key: "overwrite", label: "Сохранить поверх", danger: true }],
+        { label: "Конфликт данных", multiline: true });
+      if (choice === "overwrite" && fresh) return await send(fresh.version);
+      if (choice === "reload" && fresh) {
+        applyFreshRecord(kind, id, fresh);
+        throw { staleReloaded: true, detail: "Показаны актуальные данные — ваши правки не сохранены.", message: "Показаны актуальные данные — ваши правки не сохранены." };
+      }
+      throw err;
+    }
+  }
+
   async function saveMain() {
     const d = state.draft;
     if (!d.full_name.trim() || !d.short_name.trim()) throw { message: "Укажите полное и краткое наименование" };
@@ -567,7 +667,7 @@ export function mountCounterparties(container, ctx) {
       capacity: snapshot.capacity.filter((c) => Number.isFinite(c.per_day) && c.per_day > 0),
     };
     const wasNew = !state.editingId;
-    const saved = wasNew ? await api.post("/counterparties", body) : await api.patch(`/counterparties/${state.editingId}`, body);
+    const saved = wasNew ? await createChecked("counterparty", "/counterparties", body) : await patchChecked("counterparty", state.editingId, `/counterparties/${state.editingId}`, body, state.list.find((c) => c.id === state.editingId));
     // Задача 4: подтверждение — из ОТВЕТА записи (полный CounterpartyOut),
     // без повторного GET /counterparties. Точечно заменяем/добавляем
     // ровно эту запись в локальном списке.
@@ -813,7 +913,7 @@ export function mountCounterparties(container, ctx) {
     setButtonSaving("#cp-add-agreement", true);
     draft._inFlight = (async () => {
       try {
-        const created = await api.post("/agreements", {
+        const created = await createChecked("agreement", "/agreements", {
           counterparty_id: state.editingId, number: snapshot.number.trim(),
           object_id: Number(snapshot.objectId), agreement_date: snapshot.date || null,
         });
@@ -852,11 +952,11 @@ export function mountCounterparties(container, ctx) {
     setButtonSaving(`[data-save-agreement="${id}"]`, true);
     draft._inFlight = (async () => {
       try {
-        const updated = await api.patch(`/agreements/${id}`, {
+        const updated = await patchChecked("agreement", id, `/agreements/${id}`, {
           counterparty_id: state.editingId, number: snapshot.number.trim(),
           object_id: snapshot.objectId ? Number(snapshot.objectId) : null,
           agreement_date: snapshot.date || null,
-        });
+        }, findAgreement(id));
         const idx = state.contracting.agreements.findIndex((a) => a.id === id);
         if (idx !== -1) state.contracting.agreements[idx] = updated;
         const cur = state.agreementDrafts.get(id);
@@ -890,7 +990,7 @@ export function mountCounterparties(container, ctx) {
     setButtonSaving(`[data-add-spec="${agreementId}"]`, true);
     draft._inFlight = (async () => {
       try {
-        const created = await api.post("/specifications", {
+        const created = await createChecked("specification", "/specifications", {
           agreement_id: agreementId, number: snapshot.number.trim(), specification_date: snapshot.date || null,
         });
         if (!state.contracting.specsByAgreement.has(agreementId)) state.contracting.specsByAgreement.set(agreementId, emptySpecsEntry());
@@ -929,9 +1029,9 @@ export function mountCounterparties(container, ctx) {
     setButtonSaving(`[data-save-spec="${id}"]`, true);
     draft._inFlight = (async () => {
       try {
-        const updated = await api.patch(`/specifications/${id}`, {
+        const updated = await patchChecked("specification", id, `/specifications/${id}`, {
           agreement_id: agreementId, number: snapshot.number.trim(), specification_date: snapshot.date || null,
-        });
+        }, findSpecAndAgreementId(id).spec);
         const specs = state.contracting.specsByAgreement.get(agreementId)?.specs || [];
         const idx = specs.findIndex((s) => s.id === id);
         if (idx !== -1) specs[idx] = updated;
@@ -963,40 +1063,20 @@ export function mountCounterparties(container, ctx) {
     try { await confirmAndDeleteOnce(kind, id, onSuccess); } finally { deletingNow.delete(deleteKey); }
   }
 
-  // Что уйдёт вместе с записью: подчинённые узлы плана (договоры → спецификации →
-  // контракты) и «позиции» (cascade). Без этого перечня подтверждение «Удалить
-  // контрагента?» молча уносило бы его договоры, спецификации и контракты.
-  function planConsequences(node, ownerLabel) {
-    const counts = new Map();
-    const add = (name, n) => { if (n > 0) counts.set(name, (counts.get(name) || 0) + n); };
-    const walk = (n) => {
-      for (const c of n.cascade || []) add(c.label, c.count || 0);
-      for (const child of n.children || []) { add(child.kind_title, 1); walk(child); }
-    };
-    if (node) walk(node);
-    if (!counts.size) return "";
-    return ` Вместе с ${ownerLabel} удалятся: ${[...counts].map(([name, n]) => `${name}: ${n}`).join(", ")}.`;
-  }
-
+  // Удаление контрагента, договора и спецификации — общий поток по плану последствий (delete-plan.js): что уйдёт, что держит запись,
+  // выбор замены для каждой записи поддерева (если на неё ссылаются изделия, история, контракт по умолчанию), перечитывание плана
+  // непосредственно перед удалением, неизвестный исход без автоповтора. Контракт удаляется своим потоком (requestDeleteContract).
   async function confirmAndDeleteOnce(kind, id, onSuccess) {
-    let plan;
-    try { plan = await api.get(`/dictionaries/${kind}/${id}/delete-plan`); }
-    catch (err) { await showInfoDialog(err?.detail || err?.message || "Не удалось получить сведения об удалении"); return; }
-    if (plan.blockers && plan.blockers.length) {
-      await showInfoDialog(`Удалить нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`);
-      return;
+    const outcome = await runDeleteFlow({ api, kind, id });
+    if (outcome === "deleted") await onSuccess();
+    else if (outcome === "failed" || outcome === "exists" || outcome === "unknown") {
+      // Сервер мог отказать, потому что данные изменились, — перечитываем то, что на экране, а не показываем устаревшее
+      try { await refreshAfterDeleteProblem(kind); } catch (e) { /* экран остаётся как был; сообщение уже показано */ }
     }
-    const label = kind === "counterparty" ? "контрагента" : kind === "agreement" ? "договор" : "спецификацию";
-    const withLabel = kind === "counterparty" ? "контрагентом" : kind === "agreement" ? "договором" : "спецификацией";
-    const consequences = planConsequences(plan.plan, withLabel);
-    const confirmed = await showConfirmDialog(`Удалить ${label}?${consequences}`, { confirmLabel: "Удалить", danger: true });
-    if (!confirmed) return;
-    try {
-      await api.post(`/dictionaries/${kind}/${id}/delete`, { replacements: {}, mode: "replace" });
-      await onSuccess();
-    } catch (err) {
-      await showInfoDialog(err?.detail || err?.message || "Не удалось удалить");
-    }
+  }
+  async function refreshAfterDeleteProblem(kind) {
+    if (kind === "counterparty") { await ensureLoaded(true); if (state.page === "list") renderList(); }
+    else if (currentShell === "card" && state.page === "edit") { await ensureContractingLoaded(true); await renderContractingTab(); renderFooter(); }
   }
 
   async function renderContractingTab() {
@@ -1228,7 +1308,7 @@ export function mountCounterparties(container, ctx) {
     lockContractWorkspace(true);
     draft._inFlight = (async () => {
       try {
-        const created = await api.post("/contracts", body);
+        const created = await createChecked("contract", "/contracts", body);
         // Раздел 4 приёмки: тот же случай, что и в saveContractDraft — новый
         // контракт мог быть создан сразу под спецификацией ДРУГОГО
         // контрагента (пользователь сменил его прямо в форме создания).
@@ -1305,7 +1385,7 @@ export function mountCounterparties(container, ctx) {
     lockContractWorkspace(true);
     draft._inFlight = (async () => {
       try {
-        const updated = await api.patch(`/contracts/${id}`, body);
+        const updated = await patchChecked("contract", id, `/contracts/${id}`, body, before);
         // Переназначение на другую спецификацию (задача 4Б) двигает запись
         // между списками кэша — иначе она осталась бы висеть под старой
         // спецификацией ВТОРОЙ копией, пока не перечитается с сервера.
@@ -1413,11 +1493,36 @@ export function mountCounterparties(container, ctx) {
   // Раздел 3: постоянные заголовки столбцов (не placeholder вместо
   // подписи) — обычные <table class="v2-table"> вместо строк-<div>, тем же
   // визуальным языком, что и остальные таблицы V2.
-  function contractLineRowHtml(key, i, l, saving) {
+  // Что уже привязано к позициям СОХРАНЁННОГО контракта (факт и списанное повреждённым — с сервера) и что произойдёт с остатком при правке:
+  // количество меньше привязанного, удалённая или переименованная позиция с привязанными изделиями сервер не сохранит (страж покрытия,
+  // app/contract_guard.py). Показываем это ДО нажатия «Сохранить», а не только текстом отказа.
+  function contractLinesImpact(key, draft) {
+    if (key.startsWith("new:")) return null;
+    const saved = findContract(Number(key.slice(5)));
+    if (!saved) return null;
+    const norm = (v) => String(v || "").trim().toLowerCase();
+    const byKey = new Map();
+    for (const sl of saved.lines || []) byKey.set(`${norm(sl.element_type)}|${norm(sl.mark)}`, sl);
+    const matched = new Set();
+    const rows = draft.lines.map((l) => {
+      const k = `${norm(l.elementType)}|${norm(l.mark)}`, sl = byKey.get(k);
+      if (sl) matched.add(k);
+      const qty = Number(l.quantity) || 0;
+      return sl ? { known: true, fact: sl.fact || 0, damaged: sl.damaged || 0, after: qty - (sl.fact || 0) - (sl.damaged || 0) } : { known: false };
+    });
+    const orphans = [...byKey].filter(([k]) => !matched.has(k)).map(([, sl]) => sl).filter((sl) => (sl.fact || 0) > 0);
+    return { rows, orphans };
+  }
+  function contractLineRowHtml(key, i, l, saving, impact) {
+    const im = impact?.rows[i];
+    const cells = im ? (im.known
+      ? `<td>${im.fact}${im.damaged ? ` <small class="v2-muted">(+${im.damaged} списано)</small>` : ""}</td><td data-line-after="${i}" class="${im.after < 0 ? "v2-auth-error" : ""}" ${im.after < 0 ? 'title="Меньше привязанного и списанного: сервер откажет, если это ухудшит остаток"' : ""}>${im.after}</td>`
+      : `<td class="v2-muted">—</td><td class="v2-muted">—</td>`) : "";
     return `<tr>
       <td><input data-line-type="${key}|${i}" aria-label="Тип элемента, позиция ${i + 1}" placeholder="например, Колонна" value="${escapeHtml(l.elementType)}" ${saving ? "disabled" : ""}></td>
       <td><input data-line-mark="${key}|${i}" aria-label="Марка, позиция ${i + 1}" placeholder="необязательно" value="${escapeHtml(l.mark)}" ${saving ? "disabled" : ""}></td>
-      <td><input data-line-qty="${key}|${i}" aria-label="Количество, позиция ${i + 1}" type="number" min="0" value="${escapeHtml(l.quantity)}" ${saving ? "disabled" : ""} style="width:90px"></td>
+      <td><input data-line-qty="${key}|${i}" aria-label="Количество, позиция ${i + 1}" type="number" min="0" step="1" value="${escapeHtml(l.quantity)}" ${saving ? "disabled" : ""} style="width:90px"></td>
+      ${cells}
       <td>${trashIconHtml(`data-line-remove="${key}|${i}"`, `Убрать позицию ${i + 1}`)}</td>
     </tr>`;
   }
@@ -2288,24 +2393,49 @@ export function mountCounterparties(container, ctx) {
   }
 
   // ---------- вкладка "Позиции" ----------
+  function linesWarnHtml(impact) {
+    if (!impact) return "";
+    const lowRows = impact.rows.filter((r) => r.known && r.after < 0).length;
+    return `${lowRows ? `<p class="v2-auth-error" role="alert">Позиций с количеством меньше привязанного: ${lowRows}. Если правка ухудшит остаток, сохранение будет отклонено целиком.</p>` : ""}
+      ${impact.orphans.length ? `<p class="v2-auth-error" role="alert">Позиции с привязанными изделиями удалены или переименованы: ${impact.orphans.map((o) => `${escapeHtml(o.element_type || "—")} · ${escapeHtml(o.mark || "без марки")} (${o.fact})`).join(", ")}. Сервер такое сохранение отклонит: сначала переназначьте изделия на другой контракт.</p>` : ""}`;
+  }
+  // Живое обновление «Остатка» и предупреждений при вводе — без пересборки таблицы (фокус остаётся в поле)
+  function refreshLinesImpact(key, draft) {
+    const impact = contractLinesImpact(key, draft);
+    if (!impact) return;
+    const warn = body.querySelector("#ctr-lines-warn");
+    if (warn) warn.innerHTML = linesWarnHtml(impact);
+    impact.rows.forEach((r, i) => {
+      const cell = body.querySelector(`[data-line-after="${i}"]`);
+      if (!cell) return;
+      cell.textContent = r.known ? String(r.after) : "—";
+      cell.className = r.known && r.after < 0 ? "v2-auth-error" : "v2-muted";
+    });
+  }
   function renderContractLinesTab(key, draft) {
+    const impact = contractLinesImpact(key, draft);
     body.innerHTML = `
+      ${impact ? `<p class="v2-muted" style="margin:0 0 8px">«Привязано» — изделий схемы, уже привязанных к позиции (плюс списанные повреждённым); «Остаток» — количество минус привязанное. Количество ниже привязанного, удаление или переименование позиции с привязанными изделиями сервер не сохранит.</p>` : ""}
+      <div id="ctr-lines-warn">${linesWarnHtml(impact)}</div>
       <table class="v2-table">
-        <thead><tr><th>Тип элемента</th><th>Марка</th><th>Количество</th><th></th></tr></thead>
-        <tbody>${draft.lines.map((l, i) => contractLineRowHtml(key, i, l, draft.saving)).join("")}</tbody>
+        <thead><tr><th>Тип элемента</th><th>Марка</th><th>Количество</th>${impact ? "<th>Привязано</th><th>Остаток</th>" : ""}<th></th></tr></thead>
+        <tbody>${draft.lines.map((l, i) => contractLineRowHtml(key, i, l, draft.saving, impact)).join("")}</tbody>
       </table>
       <div style="margin-top:10px">${btn("+ строка", 'id="ctr-line-add"')}</div>
     `;
     body.querySelectorAll("[data-line-type]").forEach((inp) => inp.addEventListener("input", () => {
       draft.lines[parseRowKey(inp.dataset.lineType).i].elementType = inp.value;
+      refreshLinesImpact(key, draft);
       renderContractFooter();
     }));
     body.querySelectorAll("[data-line-mark]").forEach((inp) => inp.addEventListener("input", () => {
       draft.lines[parseRowKey(inp.dataset.lineMark).i].mark = inp.value;
+      refreshLinesImpact(key, draft);
       renderContractFooter();
     }));
     body.querySelectorAll("[data-line-qty]").forEach((inp) => inp.addEventListener("input", () => {
       draft.lines[parseRowKey(inp.dataset.lineQty).i].quantity = inp.value;
+      refreshLinesImpact(key, draft);
       renderContractFooter();
     }));
     body.querySelectorAll("[data-line-remove]").forEach((b) => b.addEventListener("click", (e) => {
@@ -2682,6 +2812,7 @@ export function mountCounterparties(container, ctx) {
         status.textContent = partial ? lastContractSaveNote : ("Сохранено." + (lastContractSaveNote ? " " + lastContractSaveNote : ""));
         lastContractSaveNote = "";
       } catch (err) {
+        if (err?.staleReloaded && state.contractKey) { await renderContractWorkspace(); status.textContent = err.detail; return; } // показаны актуальные данные
         renderContractRequisites();
         renderContractFooter();
       }

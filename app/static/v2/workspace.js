@@ -14,6 +14,7 @@ import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
 import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
+import { createPickerPanels } from "./picker-panels.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -675,32 +676,10 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   // ---- комплектовщик: срезы отбора со счётчиками (модель / контракт / Δ), плитки показателей, контракты с остатками
   const nf = (n) => Number(n).toLocaleString("ru-RU");
   const pkLoading = () => `<p class="v2-muted ws-pad">${sc?.error ? "Схема не загружена" : "Загрузка…"}</p>`;
-  const PK_ROWS_LIMIT = 150;
-  function pickHtml() {
-    if (!pk) return pkLoading();
-    const head = `<div class="ws-fhead"><span>В срезе: ${nf(pk.base)} из ${nf(sc?.total ?? 0)}</span><button type="button" class="v2-btn" data-pk-clear="" ${pk.selectionActive || pk.contractSelected ? "" : "disabled"}>Сбросить всё</button></div>`;
-    return head + pk.slicers.map((g) => {
-      const id = `pk:${g.key}`;
-      const open = openGroups.has(id) || (g.selected > 0 && !closedGroups.has(id));
-      const q = (groupSearch.get(id) || "").toLowerCase();
-      const rows = g.rows.filter((r) => !q || r.label.toLowerCase().includes(q));
-      const avail = rows.filter((r) => r.available), other = rows.filter((r) => !r.available);
-      const shown = [...avail, ...other].slice(0, PK_ROWS_LIMIT);
-      const rowHtml = (r) => `<label class="ws-check ws-pkrow${r.available ? "" : " ws-dim"}"><input type="checkbox" data-pk="${esc(g.key)}" data-v="${esc(JSON.stringify(r.v))}" ${r.on ? "checked" : ""}> <span>${esc(r.label)}</span><em>${nf(r.count)}</em>${g.contractedShown ? `<em class="ws-pkc">${nf(r.contracted)}</em><em class="${r.contracted - r.count > 0 ? "ws-pos" : r.contracted - r.count < 0 ? "ws-neg" : ""}">${r.contracted - r.count > 0 ? "+" : ""}${nf(r.contracted - r.count)}</em>` : ""}</label>`;
-      let list = "";
-      let sepDone = false;
-      for (const [i, r] of shown.entries()) {
-        if (!sepDone && i >= avail.length && other.length && avail.length) { list += `<div class="ws-sep">нет в текущем срезе</div>`; sepDone = true; }
-        list += rowHtml(r);
-      }
-      const body = !open ? "" : `<div class="ws-fbody">
-        ${g.rows.length > 12 ? `<input type="search" class="ws-fsearch" data-search="${esc(id)}" placeholder="Найти…" value="${esc(groupSearch.get(id) || "")}" aria-label="Найти в срезе «${esc(g.title)}»">` : ""}
-        <div class="ws-pkcols"><span></span><em>модель</em>${g.contractedShown ? `<em class="ws-pkc">контракт</em><em>Δ</em>` : ""}</div>
-        ${list || `<p class="v2-muted">Нет значений</p>`}
-        ${rows.length > shown.length ? `<p class="v2-muted ws-fnote">Показаны первые ${PK_ROWS_LIMIT} из ${rows.length}. Уточните поиск.</p>` : ""}</div>`;
-      return `<section class="ws-fgroup"><button type="button" class="ws-fh" data-pkgroup="${esc(id)}" aria-expanded="${open}"><span>${open ? "▾" : "▸"} ${esc(g.title)}</span>${g.selected ? `<b class="ws-badge">выбрано: ${g.selected}</b>` : ""}</button>${body}</section>`;
-    }).join("");
-  }
+  // Панели «Отбор» и «Контракты» (срезы «модель / контракт / Δ», остатки, разворот по маркам) — picker-panels.js; здесь только связка с состоянием
+  const panels = createPickerPanels({ esc, nf, send, sw, loadingHtml: pkLoading, getPk: () => pk,
+    ui: { openGroups, closedGroups, groupSearch, repaint: () => paintPanel(), onlyRemainder: () => onlyRemainder, total: () => sc?.total ?? 0 } });
+  function pickHtml() { return panels.pickHtml(); }
   function metricsHtml() {
     if (!pk) return pkLoading();
     return `<div class="ws-pad"><p class="v2-muted">Числа считаются по элементам выбранного среза. Плитку можно нажать — на схеме и в срезах останутся только подходящие элементы.</p>
@@ -712,23 +691,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
         return `<${tag} ${m.clickable ? `type="button" data-pkm="${esc(m.key)}" aria-pressed="${m.on}"` : ""} class="ws-tile${m.on ? " on" : ""}" title="${esc(m.reason || m.hint || "")}" ${color ? `style="border-left-color:${esc(color)}"` : ""}><span class="ws-tile-t">${esc(m.title)}</span><b class="ws-tile-v">${esc(val)}</b><span class="ws-tile-s">${esc(m.value === null ? (m.reason || "") : sub)}</span></${tag}>`;
       }).join("")}</div></div>`;
   }
-  function contractsHtml() {
-    if (!pk) return pkLoading();
-    const groups = pk.contracts.map((g) => ({ ...g, rows: onlyRemainder ? g.rows.filter((r) => r.on || r.remainder !== 0) : g.rows })).filter((g) => g.rows.length);
-    const swap = `<p class="v2-muted ws-fnote ws-pad">Смена планируемого поставщика по марке («Замена поставщика» и «Обмен привязками») выполняется документом в текущем интерфейсе: <a href="/?ui=v1&object_id=${encodeURIComponent(sc?.objectId ?? curObject)}&ws=picker&open=menu&item=menu-supplier-change">открыть с этим объектом</a>.</p>`;
-    const head = swap + `<div class="ws-pad ws-pk-tools"><button type="button" class="v2-btn" data-pkhl="1" aria-pressed="${pk.highlightUnlinked}">${pk.highlightUnlinked ? "Подсветка несвязанных включена" : "Подсветить несвязанные"}</button>
-      <button type="button" class="v2-btn" data-pkrem="1" aria-pressed="${onlyRemainder}">${onlyRemainder ? "Только с остатком" : "Показать только с остатком"}</button>
-      ${pk.contractSelected ? `<button type="button" class="v2-btn" data-pk-clear="contract">Сбросить контракты (${pk.contractSelected})</button>` : ""}</div>`;
-    if (!groups.length && !pk.unlinked) return head + `<p class="v2-muted ws-pad">${pk.contracts.length ? "Нет контрактов с остатком." : "У объекта нет контрактов."}</p>`;
-    const cols = `<div class="ws-pkcols ws-pkcols-c"><span></span><em>всего</em><em>привязано</em><em>остаток</em></div>`;
-    const remCls = (n) => (n > 0 ? "ws-pos" : n < 0 ? "ws-neg" : "");
-    return head + `<div class="ws-fbody">${cols}` + groups.map((g) => {
-      const ids = g.rows.map((r) => r.id), all = ids.length && g.rows.every((r) => r.on);
-      return `<div class="ws-cgroup${g.inSlice ? "" : " ws-dim"}"><button type="button" class="ws-crow ws-chead${all ? " on" : ""}${g.over ? " over" : ""}" data-pkgrp="${ids.join(",")}" data-on="${all ? 0 : 1}" title="${g.over ? "Есть привязки мимо спецификации или сверх количества" : "Выбрать все контракты контрагента"}"><span>${esc(g.name)}</span><em>${nf(g.total)}</em><em>${nf(g.linked)}</em><em class="${remCls(g.total - g.linked)}">${nf(g.total - g.linked)}</em></button>
-        ${g.rows.map((r) => `<button type="button" class="ws-crow ws-cnest${r.on ? " on" : ""}${r.inSlice ? "" : " ws-dim"}${r.over ? " over" : ""}" data-pkc="${r.id}" aria-pressed="${r.on}" title="${esc(r.name)}"><span>${esc(r.label)}</span><em>${nf(r.total)}</em><em>${nf(r.linked)}</em><em class="${remCls(r.remainder)}">${nf(r.remainder)}</em></button>`).join("")}</div>`;
-    }).join("")
-    + (pk.unlinked || pk.unlinkedOn ? `<button type="button" class="ws-crow ws-chead${pk.unlinkedOn ? " on" : ""}" data-pkn="1" aria-pressed="${pk.unlinkedOn}"><span>Элементы без контракта</span><em></em><em>${nf(pk.unlinked)}</em><em></em></button>` : "") + `</div>`;
-  }
+  function contractsHtml() { return panels.contractsHtml(); }
 
   function viewHtml() {
     const zones = sc?.zones || [];
@@ -758,6 +721,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     body.querySelectorAll("[data-pkn]").forEach((b) => b.addEventListener("click", () => send("pickerToggle", { key: "contract", value: pk?.noneValue ?? "__none__" })));
     body.querySelectorAll("[data-pkhl]").forEach((b) => b.addEventListener("click", () => send("pickerHighlight", { on: b.getAttribute("aria-pressed") !== "true" })));
     body.querySelectorAll("[data-pkrem]").forEach((b) => b.addEventListener("click", () => { onlyRemainder = !onlyRemainder; paintPanel(); }));
+    panels.bind(body);
     bindStatusForm(body);
     body.querySelectorAll("[data-al]").forEach((b) => b.addEventListener(b.tagName === "SELECT" ? "change" : "click", () => {
       const a = b.dataset.al;

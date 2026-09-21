@@ -235,20 +235,68 @@
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(c);
     }
+    // Позиции контрактов по маркам (разворот контракта, как в V1: buildContractMarkRows) и марки изделий без контракта (buildNoContractMarkRows).
+    // Привязано по позиции — по изделиям, прошедшим остальные срезы, БЕЗ отбора по контракту/марке/типу (РАЗВОРОТ_БЕЗ): разворот обязан оставаться
+    // полным, чтобы к отбору можно было добавить вторую марку. «Чужие» марки (привязаны мимо спецификации) — по ВСЕМ изделиям контракта.
+    const posLinked = new Map();      // contract_id -> Map(ключ позиции -> число)
+    const orphanBy = new Map();       // contract_id -> Map(ключ -> {mark, element_type, count})
+    const noneMarks = new Map();      // подпись -> {label, mark, type, n}
+    for (const e of state.elements) {
+      const passesExp = pickerElementPasses(e, РАЗВОРОТ_БЕЗ);
+      if (!e.contract_id) {
+        if (!passesExp) continue;
+        const label = e.mark || `${e.element_type || "тип не определён"} · без марки`;
+        if (!noneMarks.has(label)) noneMarks.set(label, { label, mark: e.mark || null, type: e.element_type || null, n: 0 });
+        noneMarks.get(label).n += 1;
+        continue;
+      }
+      const ks = lineKeys.get(e.contract_id) || new Set();
+      const mk = markKey(e.mark), tk = typeKey(e.element_type);
+      const fb = mk || tk;
+      if (fb && !ks.has(fb)) {
+        if (!orphanBy.has(e.contract_id)) orphanBy.set(e.contract_id, new Map());
+        const m = orphanBy.get(e.contract_id);
+        if (m.has(fb)) m.get(fb).count += 1; else m.set(fb, { mark: e.mark, element_type: e.element_type, count: 1 });
+      }
+      if (passesExp) {
+        const key = ks.has(mk) ? mk : (ks.has(tk) ? tk : mk);
+        if (key) { if (!posLinked.has(e.contract_id)) posLinked.set(e.contract_id, new Map()); const m = posLinked.get(e.contract_id); m.set(key, (m.get(key) || 0) + 1); }
+      }
+    }
+    const linesOf = (c) => {
+      const lines = state.contractLineTotals.filter((l) => l.contract_id === c.id);
+      const lp = posLinked.get(c.id) || new Map();
+      const rows = lines.map((l) => {
+        const key = pickerLineKey(l) || PLACEMENT_NONE, total = l.quantity || 0, lk = lp.get(key) || 0;
+        return { label: l.mark || `${l.element_type || "тип не определён"} · без марки`, mark: l.mark || null, type: l.element_type || null, total, linked: lk, remainder: total - lk,
+          orphan: false, over: total - lk < 0, on: l.mark ? P.sel.mark.has(l.mark) : P.sel.elementType.has(l.element_type) };
+      });
+      for (const [, o] of orphanBy.get(c.id) || []) {
+        rows.push({ label: o.mark || `${o.element_type || "тип не определён"} · без марки`, mark: o.mark || null, type: o.element_type || null, total: null, linked: o.count, remainder: null,
+          orphan: true, over: true, on: o.mark ? P.sel.mark.has(o.mark) : P.sel.elementType.has(o.element_type) });
+      }
+      rows.sort((a, b) => a.label.localeCompare(b.label, "ru", { numeric: true }));
+      return rows;
+    };
     const contracts = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b, "ru", { numeric: true })).map((name) => {
       const list = groups.get(name).slice().sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }));
       const rows = list.map((c) => {
         const total = totals.get(c.id) || 0, lk = linked.get(c.id) || 0;
         return { id: c.id, label: [c.agreement_number, c.specification_number, c.theme].filter(Boolean).join(" · ") || c.name, name: c.name,
-          total, linked: lk, remainder: total - lk, inSlice: inSlice(c.id), on: sel.has(c.id), over: contractHasOverflow(c.id) };
+          total, linked: lk, remainder: total - lk, inSlice: inSlice(c.id), on: sel.has(c.id), over: contractHasOverflow(c.id), lines: linesOf(c) };
       });
       return { name, rows, total: rows.reduce((a, r) => a + r.total, 0), linked: rows.reduce((a, r) => a + r.linked, 0),
         inSlice: rows.some((r) => r.inSlice), over: rows.some((r) => r.over) };
     });
+    // Срез сужен свойством изделия — «привязано» и «остаток» считаются внутри среза, «всего» остаётся документальным (V1: оговорка в шапке области)
+    const narrowed = PICKER_SLICERS.some((d) => d.key !== "contract" && P.sel[d.key].size) || P.metrics.size > 0;
     return {
       slicers, metrics, contracts, unlinked, unlinkedOn: sel.has(PLACEMENT_NONE), contractSelected: sel.size,
       selectionActive: pickerSelectionActive(), base: base.length,
       highlightUnlinked: !!P.highlightUnlinked, noneValue: PLACEMENT_NONE,
+      highlightCount: state.pendingLinkIds ? state.pendingLinkIds.size : 0, narrowed, positionSelected: P.sel.mark.size + P.sel.elementType.size, metricsSelected: P.metrics.size,
+      noneMarks: Array.from(noneMarks.values()).sort((a, b) => a.label.localeCompare(b.label, "ru", { numeric: true }))
+        .map((m) => ({ ...m, on: m.mark ? P.sel.mark.has(m.mark) : P.sel.elementType.has(m.type) })),
     };
   }
   const pickerSelCount = () => PICKER_SLICERS.reduce((n, d) => n + state.picker.sel[d.key].size, 0) + state.picker.metrics.size;
