@@ -91,20 +91,24 @@ export function fieldsBodyProblem(body) {
 
 // ---- тексты последствий (по ответу сервера в режиме preview) ----
 const n = (x) => Number(x).toLocaleString("ru-RU");
-/** Строки последствий операции для показа ДО подтверждения; пусто — последствий сверх смены статуса нет. */
-export function consequenceLines(c, targetLabel) {
+/** Последствия операции для показа ДО подтверждения: [{text, sub?: [строки]}]; пусто — последствий сверх смены статуса нет. */
+export function consequenceItems(c, targetLabel) {
   const L = [];
   if (!c) return L;
   if (c.release_contracts) {
-    const by = (c.released_by_contract || []).map((x) => `${x.name || "контракт №" + x.contract_id} — ${n(x.count)} шт.`).join("; ");
-    L.push(`Контракт будет СНЯТ у ${n(c.release_contracts)} изд. (статус «${targetLabel}» контракта не имеет)${by ? ": " + by : ""}. Изделия вернутся в остаток позиции контракта.`);
+    L.push({ text: `Контракт будет СНЯТ у ${n(c.release_contracts)} изд. (статус «${targetLabel}» контракта не имеет); изделия вернутся в остаток позиции контракта.`,
+      sub: (c.released_by_contract || []).map((x) => `${x.name || "контракт №" + x.contract_id} — ${n(x.count)} шт.`) });
   }
-  if (c.actual_date_cleared) L.push(`Фактическая дата поставки будет очищена у ${n(c.actual_date_cleared)} изд.`);
-  if (c.without_contract) L.push(`${n(c.without_contract)} изд. уйдут из «Запланирован» БЕЗ контракта (контракт назначается позже — в карточке изделия или распределением).`);
-  if (c.assigned) L.push(`Будет назначен контракт: ${n(c.assigned)} изд.`);
-  if (c.effective_differs) L.push(`У ${n(c.effective_differs)} изд. в истории есть более поздние записи: запись «${targetLabel}» будет добавлена, но итоговый статус не изменится.`);
-  for (const w of c.warnings || []) L.push(`Превышение по контракту «${w.contract_name}»: по спецификации ${w.quantity}, фактически ${w.fact}${w.damaged ? `, брак ${w.damaged}` : ""}.`);
+  if (c.actual_date_cleared) L.push({ text: `Фактическая дата поставки будет очищена у ${n(c.actual_date_cleared)} изд.` });
+  if (c.without_contract) L.push({ text: `${n(c.without_contract)} изд. уйдут из «Запланирован» БЕЗ контракта (контракт назначается позже — в карточке изделия или распределением).` });
+  if (c.assigned) L.push({ text: `Будет назначен контракт: ${n(c.assigned)} изд.` });
+  if (c.effective_differs) L.push({ text: `У ${n(c.effective_differs)} изд. в истории есть более поздние записи: запись «${targetLabel}» будет добавлена, но итоговый статус не изменится.` });
+  for (const w of c.warnings || []) L.push({ text: `Превышение по контракту «${w.contract_name}»: по спецификации ${w.quantity}, фактически ${w.fact}${w.damaged ? `, брак ${w.damaged}` : ""}.` });
   return L;
+}
+/** То же плоскими строками (для диалогов подтверждения и сообщений). */
+export function consequenceLines(c, targetLabel) {
+  return consequenceItems(c, targetLabel).flatMap((x) => [x.text, ...(x.sub || []).map((t) => "     – " + t)]);
 }
 
 /** Нужны ли последствия к явному подтверждению человеком (иначе одиночная смена статуса записывается сразу). */

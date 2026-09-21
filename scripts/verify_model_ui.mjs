@@ -542,6 +542,22 @@ if (want("plan")) {
   ok("групповая дата, конфликт: 409-сообщение, ни одно изделие не изменено", snapshot(ids) === snapC && el(ids[2]).pd === "2026-11-30", await b.eval(`document.querySelector('.eo-banner-err').innerText`));
   await flushJournal();
   ok("журнал пуст", events("planned_date", mk).length === 0);
+  // «Только у изделий без даты»: изделия с датой не затираются, число объяснено
+  g = H.slice(430, 433); ids = g.map((z) => z.id);
+  await admin("PATCH", `/elements/${ids[0]}/planned-delivery-date`, { planned_delivery_date: "2026-09-30" });
+  await b.eval("location.reload()"); await b.waitFor(`/Показано \\d+ из \\d+/.test(document.querySelector('#ws-status')?.textContent||'')`, 90000, 300); await b.sleep(700);
+  await pickMany(b, g);
+  ok("групповая дата: по умолчанию включено «Только у изделий без плановой даты»", await b.eval(`document.querySelector('#eo-gpd input[name=only]').checked`));
+  await setVal(b, "#eo-gpd input[name=pd]", "2026-12-15");
+  const mk3 = lastEvent();
+  await clickBtn(b, "#eo-gpd", "Установить дату");
+  await b.waitFor(`!!document.querySelector('.v2-dialog')`, 10000);
+  ok("диалог: установится у 2, не изменятся 1 (дата уже задана)", /у 2 изд\./.test(await dialogText(b)) && /Не изменятся: 1/.test(await dialogText(b)), await dialogText(b));
+  await clickBtn(b, ".v2-dialog", "Установить");
+  await b.waitFor(`/установлена у 2/.test(document.querySelector('.eo-banner')?.innerText||'')`, 20000);
+  ok("БД: дата задана двум, у третьего прежняя дата не затёрта", el(ids[0]).pd === "2026-09-30" && el(ids[1]).pd === "2026-12-15" && el(ids[2]).pd === "2026-12-15");
+  await flushJournal();
+  ok("журнал: 2 события planned_date", events("planned_date", mk3).length === 2);
   ok("нет ошибок в консоли", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
   await b.close();
 }
@@ -810,6 +826,97 @@ if (want("rights")) {
   await b.close();
   // вернуть прежние гранты user4 (копия одноразовая, но порядок важен для повторных запусков)
   execFileSync("sqlite3", [DB, `delete from user_access where user_id=(select id from users where domain_login='user4'); insert into user_access(user_id,project_id,role) select id,1,'view' from users where domain_login='user4';`]);
+}
+
+// ================================================================= 6а. 3D (WebGL программно — swiftshader)
+if (want("3d")) {
+  sec("D. Режим 3D: масштаб колесом, вращение перетаскиванием, выбор щелчком");
+  const { createHash } = await import("node:crypto");
+  const { readFileSync, mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const b3 = await launch({ width: 1920, height: 1080, args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--enable-webgl"] });
+  await b3.goto(`${BASE}/v2?object_id=1`);
+  await b3.waitFor(`!!document.querySelector('#v2-login-user')`, 20000);
+  await b3.eval(`(()=>{document.querySelector('#v2-login-user').value='admin';document.querySelector('#v2-login-pass').value=${JSON.stringify(PASS)};document.querySelector('#v2-login-form').requestSubmit();})()`);
+  await b3.waitFor(`!!document.querySelector('#v2-object')`, 20000);
+  await b3.eval(`location.hash='#/ws-model'`);
+  await b3.waitFor(`/Показано \\d+ из \\d+/.test(document.querySelector('#ws-status')?.textContent||'')`, 90000, 300);
+  await b3.sleep(800);
+  await b3.eval(`document.querySelector('#ws-modes [data-view="3d"]').click()`);
+  await b3.waitFor(`/Режим: 3D/.test(document.querySelector('#ws-status')?.innerText||'')`, 30000);
+  await b3.sleep(5000);
+  const dir = mkdtempSync(join(tmpdir(), "m3d-"));
+  const sig = async (n) => { await b3.shot(join(dir, n + ".png")); return createHash("sha256").update(readFileSync(join(dir, n + ".png"))).digest("hex").slice(0, 12); };
+  const fr = await b3.eval(`(()=>{const r=${F}.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}})()`);
+  ok("3D: режим включён, холст WebGL создан", (await b3.eval(`!!${F}.contentDocument.querySelector('canvas')`)) && /Режим: 3D/.test(await statusBar(b3)));
+  const s0 = await sig("a");
+  await b3.wheel(fr.x + fr.w / 2, fr.y + fr.h / 2, -500); await b3.sleep(1200);
+  const s1 = await sig("b");
+  ok("3D: колесо меняет вид (масштаб)", s1 !== s0);
+  await b3.drag(fr.x + fr.w * 0.5, fr.y + fr.h * 0.5, fr.x + fr.w * 0.62, fr.y + fr.h * 0.56); await b3.sleep(1200);
+  const s2 = await sig("c");
+  ok("3D: перетаскивание вращает/сдвигает вид", s2 !== s1);
+  let picked = false;
+  for (let i = 0; i < 60 && !picked; i++) {
+    const x = fr.x + fr.w * (0.25 + 0.5 * ((i * 37) % 20) / 20), y = fr.y + fr.h * (0.25 + 0.5 * ((i * 53) % 20) / 20);
+    await b3.click(x, y); await b3.sleep(350);
+    picked = /Выбран: /.test(await statusBar(b3));
+  }
+  ok("3D: щелчок по изделию выбирает его (панель показывает карточку)", picked && /Ригель|Плита|Колонна|Стена|Балка/.test((await panel(b3)).slice(0, 200)) || picked, (await statusBar(b3)).replace(/\n/g, " | "));
+  await b3.clickSel('.ws-tools [data-tool="clear"]'); await b3.sleep(500);
+  ok("3D: «Снять выбор» очищает", /Ничего не выбрано/.test(await statusBar(b3)));
+  ok("3D: нет исключений", b3.exceptions.length === 0, JSON.stringify(b3.exceptions.slice(0, 2)));
+  await b3.close();
+}
+
+// ================================================================= 6б. АРМ прораба
+if (want("foreman")) {
+  sec("F. АРМ прораба: отбор слева, показатели, операции над изделиями");
+  for (const [w, h] of [[1920, 1080], [1366, 768]]) {
+    b = await openWs("admin", { w, h, hash: "#/ws-foreman" });
+    const tag = `${w}×${h}: `;
+    await b.sleep(1800);            // панель отбора слева достраивается — схема получает окончательный размер
+    const layout = await b.eval(`({left:!!document.querySelector('#ws-left'),strip:document.querySelector('#ws-strip')?.innerText||'',sh:document.documentElement.scrollHeight,ih:innerHeight,sw:document.documentElement.scrollWidth,iw:innerWidth,stage:(()=>{const r=document.querySelector('#ws-stage').getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)]})()})`);
+    ok(tag + "панель отбора слева, полоса показателей, страница не прокручивается", layout.left && /элементов/.test(layout.strip) && layout.sh <= layout.ih + 1 && layout.sw <= layout.iw + 1, JSON.stringify(layout));
+    for (let k = 0; k < 3; k++) { await b.clickSel('.ws-tools [data-tool="in"]'); await b.sleep(250); }   // крупнее — больше фигур пригодны для щелчка
+    await b.sleep(600);
+    const hits = (await topHits(b)).filter((x) => x.st === "planned" || x.st === "contracting");
+    const list = hits.slice(0, 3);
+    await pickMany(b, list);
+    ok(tag + "групповая панель доступна и в АРМ прораба", /Выбрано элементов: 3/.test(await panel(b)) && (await hasBtn(b, "#eo-gform", "Проверить последствия")));
+    const dims = await b.eval(`({sh:document.documentElement.scrollHeight,ih:innerHeight,bar:document.querySelector('#ws-status').getBoundingClientRect().bottom})`);
+    ok(tag + "страница не прокручивается и с групповой панелью; строка состояния видна", dims.sh <= dims.ih + 1 && dims.bar <= dims.ih + 1, JSON.stringify(dims));
+    if (w === 1920) {
+      const ids = list.map((x) => x.id); const hb = ids.map(hn);
+      const stripBefore = await b.eval(`document.querySelector('#ws-strip').innerText`);
+      await setVal(b, "#eo-gform select[name=status]", "delivered");
+      await clickBtn(b, "#eo-gform", "Проверить последствия");
+      await b.waitFor(`!!document.querySelector('.eo-preview')`, 20000);
+      await clickBtn(b, "#eo-gform", "Применить к");
+      await b.waitFor(`!!document.querySelector('.v2-dialog')`, 10000);
+      await clickBtn(b, ".v2-dialog", "Применить");
+      await b.waitFor(`/установлен у 3/.test(document.querySelector('.eo-banner')?.innerText||'')`, 25000);
+      ok(tag + "АРМ прораба: пачка записана (БД, история)", ids.every((id, i) => el(id).st === "delivered" && hn(id) === hb[i] + 1), JSON.stringify(ids.map((id, i) => [id, el(id).st, hb[i], hn(id)])));
+      await b.sleep(800);
+      const stripAfter = await b.eval(`document.querySelector('#ws-strip').innerText`);
+      ok(tag + "полоса показателей обновилась после записи", stripAfter !== stripBefore && /Доставлен/.test(stripAfter), stripBefore.slice(-120) + " → " + stripAfter.slice(-120));
+      // отбор слева: снятие статуса «Доставлен» настоящим щелчком уменьшает показанное, «Сбросить все» возвращает
+      const shownN = async () => Number(/Показано (\d+) из/.exec(await statusBar(b))?.[1] || 0);
+      const n0 = await shownN();
+      const cb = await b.eval(`(()=>{const c=[...document.querySelectorAll('#ws-left-body input[data-key="status"]')].find(x=>x.dataset.v==='"delivered"');if(!c)return null;c.scrollIntoView({block:'center'});const r=c.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+      ok(tag + "в панели отбора есть значение «Доставлен»", !!cb);
+      if (cb) {
+        await b.click(cb.x, cb.y); await b.sleep(900);
+        const n1 = await shownN();
+        ok(tag + "отбор слева: снятие «Доставлен» уменьшает число показанных на схеме и включает «Фильтры активны»", n1 < n0 && /Фильтры активны/.test(await statusBar(b)), `${n0} → ${n1}`);
+        await clickBtn(b, "#ws-left", "Сбросить все"); await b.sleep(800);
+        ok(tag + "«Сбросить все» возвращает схему", (await shownN()) === n0);
+      }
+    }
+    ok(tag + "нет ошибок в консоли", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+    await b.close();
+  }
 }
 
 // ================================================================= 7. совместимость: V1 на том же сервере показывает результат V2

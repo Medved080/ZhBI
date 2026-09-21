@@ -13,7 +13,7 @@ import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
 import { showConfirmDialog, showInfoDialog, showUnsavedDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
-import { MAX_BATCH, consequenceLines, needsConfirm, conflictText } from "./element-ops-rules.js";
+import { MAX_BATCH, consequenceLines, consequenceItems, needsConfirm, conflictText } from "./element-ops-rules.js";
 
 // стили модуля — отдельным файлом (не трогаем общий styles.css)
 (() => {
@@ -95,8 +95,8 @@ export function createElementOps(ctx) {
   const banner = { kind: "", text: "" };
   const setBanner = (kind, text) => { banner.kind = kind; banner.text = text; };
   const bannerHtml = () => banner.text ? `<div class="eo-banner eo-banner-${banner.kind}" role="${banner.kind === "err" ? "alert" : "status"}"><span>${esc(banner.text)}</span><button type="button" class="eo-x" data-eo="banner-x" aria-label="Скрыть сообщение">✕</button></div>` : "";
-  const G = { st: { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }, pd: { date: "", busy: false, error: "", done: "" } };
-  function reset() { forms.clear(); Object.assign(G.st, { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }); Object.assign(G.pd, { date: "", busy: false, error: "", done: "" }); setBanner("", ""); contracts.byObject = null; }
+  const G = { st: { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }, pd: { date: "", onlyEmpty: true, busy: false, error: "", done: "" } };
+  function reset() { forms.clear(); Object.assign(G.st, { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }); Object.assign(G.pd, { date: "", onlyEmpty: true, busy: false, error: "", done: "" }); setBanner("", ""); contracts.byObject = null; }
 
   // ------------------------------------------------------------ контракты объекта (из кадра) и позиции (сервер)
   const contracts = { byObject: null, waiters: [] };
@@ -557,11 +557,11 @@ export function createElementOps(ctx) {
     const pv = g.prev && g.prev.sig === sigOf(items, `${g.status}|${g.at}|${g.comment}`) ? g.prev : null;
     let prevHtml = "";
     if (pv) {
-      const c = pv.resp.consequences, lines = consText(c, g.status);
+      const c = pv.resp.consequences, lines = consequenceItems(c, statusLabel(g.status));
       const probs = pv.resp.problems || [];
       prevHtml = `<div class="eo-preview" role="status"><b>Предпросмотр (ничего не записано)</b>
         <p>Будет изменено: <b>${nf(pv.body.items.length)}</b> изд.${pv.skipped ? `; не изменятся: ${nf(pv.skipped)} (уже «${esc(statusLabel(g.status))}»)` : ""}.</p>
-        ${lines.length ? `<ul class="eo-cons">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : `<p class="v2-muted">Контракты сохраняются прежними. Последствий сверх смены статуса нет.</p>`}
+        ${lines.length ? `<ul class="eo-cons">${lines.map((l) => `<li>${esc(l.text)}${l.sub?.length ? `<ul class="eo-cons-sub">${l.sub.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ul>` : `<p class="v2-muted">Контракты сохраняются прежними. Последствий сверх смены статуса нет.</p>`}
         ${probs.length ? `<p class="ws-err" role="alert">Контракт не позволяет записать: ${esc(probs.slice(0, 3).map((p) => `${p.element_type} «${p.mark || "без марки"}» — ${p.message}`).join(" "))}${probs.length > 3 ? ` (и ещё ${probs.length - 3})` : ""}</p>` : ""}
         <div class="ws-actions"><button type="button" class="v2-btn v2-primary" data-eo="g-apply" ${g.busy || probs.length ? "disabled" : ""}>${g.busy ? "Сохранение…" : `Применить к ${nf(pv.body.items.length)} изд.`}</button>
           <button type="button" class="v2-btn" data-eo="g-cancel" ${g.busy ? "disabled" : ""}>Изменить</button></div></div>`;
@@ -642,14 +642,16 @@ export function createElementOps(ctx) {
   // ---- плановая дата пачки
   function groupPlannedHtml(items) {
     const p = G.pd;
-    const changed = p.date ? items.filter((i) => (i.planned_delivery_date || "") !== p.date).length : 0;
+    const pool = p.onlyEmpty ? items.filter((i) => !i.planned_delivery_date) : items;
+    const changed = p.date ? pool.filter((i) => (i.planned_delivery_date || "") !== p.date).length : 0;
     const same = p.date ? items.length - changed : 0;
     const hasDate = items.filter((i) => i.planned_delivery_date).length;
     return `<h4>Плановая дата поставки</h4>
       <form class="ws-form" id="eo-gpd" autocomplete="off" novalidate>
         <label class="ws-fld">Дата
           <input type="date" name="pd" value="${esc(p.date)}" ${p.busy ? "disabled" : ""}></label>
-        ${p.date ? `<p class="v2-muted ws-fnote">Будет установлена у ${nf(changed)} изд.${same ? `; уже стоит эта дата у ${nf(same)} — не изменятся` : ""}${changed && hasDate ? "; ранее заданные другие даты будут заменены" : ""}.</p>` : `<p class="v2-muted ws-fnote">Одна дата на все выделенные изделия. Ранее заданная дата сверяется с сервером: если её изменил кто-то другой, пачка не применится.</p>`}
+        <label class="ws-check"><input type="checkbox" name="only" ${p.onlyEmpty ? "checked" : ""} ${p.busy ? "disabled" : ""}> <span>Только у изделий без плановой даты (заданные не менять)</span></label>
+        ${p.date ? `<p class="v2-muted ws-fnote">Будет установлена у ${nf(changed)} изд.${same ? `; не изменятся: ${nf(same)} (${p.onlyEmpty ? "дата уже задана или совпадает" : "уже стоит эта дата"})` : ""}${changed && !p.onlyEmpty && hasDate ? "; ранее заданные другие даты будут заменены" : ""}.</p>` : `<p class="v2-muted ws-fnote">Одна дата на все выделенные изделия. Ранее заданная дата сверяется с сервером: если её изменил кто-то другой, пачка не применится.</p>`}
         <div class="ws-actions"><button type="submit" class="v2-btn" ${p.busy || !p.date || !changed ? "disabled" : ""}>Установить дату…</button>
           <button type="button" class="v2-btn" data-eo="gpd-clear" ${p.busy || !hasDate ? "disabled" : ""}>Снять дату у ${nf(hasDate)}…</button></div>
         ${p.error ? `<p class="ws-err" role="alert">${esc(p.error)}</p>` : ""}
@@ -661,13 +663,13 @@ export function createElementOps(ctx) {
     const all = s.multiItems;
     const target = clear ? null : (p.date || null);
     if (!clear && !target) return;
-    const items = all.filter((i) => (i.planned_delivery_date || null) !== target);
+    const items = all.filter((i) => (i.planned_delivery_date || null) !== target && (clear || !p.onlyEmpty || !i.planned_delivery_date));
     p.error = ""; p.done = "";
-    if (!items.length) { p.error = clear ? "У выделенных изделий плановой даты нет." : "Эта дата уже стоит у всех выделенных изделий."; repaint(); return; }
+    if (!items.length) { p.error = clear ? "У выделенных изделий плановой даты нет." : (p.onlyEmpty ? "У всех выделенных изделий плановая дата уже задана — снимите отметку «Только у изделий без плановой даты», чтобы заменить её." : "Эта дата уже стоит у всех выделенных изделий."); repaint(); return; }
     const replaced = items.filter((i) => i.planned_delivery_date).length;
     const msg = [target ? `Установить плановую дату поставки ${fmtDate(target)} у ${nf(items.length)} изд.?` : `Снять плановую дату поставки у ${nf(items.length)} изд.?`, "",
       replaced ? `• Ранее заданная дата будет заменена${target ? "" : " (снята)"} у ${nf(replaced)} изд.` : "• Плановая дата ранее не была задана.",
-      all.length - items.length ? `• Не изменятся: ${nf(all.length - items.length)} (уже ${target ? "с этой датой" : "без даты"}).` : "", "", "Пачка применяется целиком либо не применяется."].filter((x, i, a) => x !== "" || (i > 0 && a[i - 1] !== "")).join("\n");
+      all.length - items.length ? `• Не изменятся: ${nf(all.length - items.length)} (${target ? (p.onlyEmpty ? "дата уже задана или совпадает" : "уже с этой датой") : "уже без даты"}).` : "", "", "Пачка применяется целиком либо не применяется."].filter((x, i, a) => x !== "" || (i > 0 && a[i - 1] !== "")).join("\n");
     const ok = await showConfirmDialog(msg, { confirmLabel: target ? "Установить" : "Снять дату", multiline: true });
     if (!ok || isDead() || p.busy) return;
     p.busy = true; setBanner("", ""); repaint();
@@ -741,6 +743,7 @@ export function createElementOps(ctx) {
     const gp = body.querySelector("#eo-gpd");
     if (gp) {
       gp.querySelector('[name="pd"]').addEventListener("input", (ev) => { G.pd.date = ev.target.value; G.pd.error = ""; G.pd.done = ""; repaint(); });
+      gp.querySelector('[name="only"]').addEventListener("change", (ev) => { G.pd.onlyEmpty = ev.target.checked; G.pd.error = ""; repaint(); });
       gp.addEventListener("submit", (ev) => { ev.preventDefault(); groupPlanned(false); });
     }
     on('[data-eo="gpd-clear"]', "click", () => groupPlanned(true));

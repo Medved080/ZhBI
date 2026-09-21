@@ -41,3 +41,5 @@
 .eo-banner-ok { border-left-color: var(--good); color: var(--good); }
 .eo-banner-err { border-left-color: var(--bad); color: var(--bad); }
 .eo-banner .eo-x { flex: none; padding: 0 4px; }
+.eo-cons-sub { margin: 3px 0 2px; padding-left: 16px; font-size: 12px; color: var(--muted); list-style: disc; }
+.eo-cons-sub li { margin: 1px 0; }

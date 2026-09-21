@@ -2326,13 +2326,14 @@ function createServer(opts) {
     for (const [it, e] of todo) {
       const wantAssign = assign !== null && target !== "planned" && (it.expected_contract_id ?? null) === null;
       if (wantAssign) { const pr = linkProblem(e, assign, 0); if (pr) { problems.push({ element_id: e.id, mark: e.mark, element_type: e.element_type, reason: "contract_guard", message: pr.detail.message }); continue; } }
-      const had = e.contract_id ?? null, wasPlanned = e.current_status === "planned";
+      const had = e.contract_id ?? null, wasPlanned = e.current_status === "planned", hadActual = !!e.actual_delivery_date;
       historyOf(e).push({ status: target, changed_at: b.changed_at || nowStr(nowFn), changed_by: ctx.user.display_name || "QA", comment: b.comment ?? null });
       e.current_status = target;
       e.contract_id = target === "planned" ? null : (had !== null ? had : (wantAssign ? assign : null));
       if (target === "planned") e.actual_delivery_date = null; else if (target === "delivered" && !e.actual_delivery_date) e.actual_delivery_date = b.changed_at || nowStr(nowFn);
       e.updated_at = nowStr(nowFn);
       if (had !== null && e.contract_id === null) { cons.release_contracts++; relBy.set(had, (relBy.get(had) || 0) + 1); }
+      if (hadActual && !e.actual_delivery_date) cons.actual_date_cleared++;
       if (had === null && e.contract_id !== null) cons.assigned++;
       if (wasPlanned && target !== "planned" && e.contract_id === null) cons.without_contract++;
     }

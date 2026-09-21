@@ -656,6 +656,9 @@ export const tests = [
       t.eq(dateOps().length, 1, "двойная отправка — один запрос");
       t.eq(dateOps()[0].body, { object_id: 1, planned_date: "2026-10-05", items: [{ element_id: 105, expected_planned_date: null }] }, "тело: дата и ожидаемая прежняя дата");
       t.eq(a.ctl.data.elements.find((e) => e.id === 105).planned_delivery_date, "2026-10-05", "у сервера дата установлена");
+      // движок присылает обновлённый снимок выбранного (по подтверждению сервера): теперь дата задана
+      emitSel(a, 105, { mark: "К-105", current_status: "contracting", contract_id: 1, object_id: 1, planned_delivery_date: "2026-10-05", comment: null });
+      await waitFor(() => a.byText("#ws-panel-body button", "Изменить плановую дату"), { what: "кнопка изменения даты" });
       // конфликт: другой пользователь изменил дату
       a.click(a.byText("#ws-panel-body button", "Изменить плановую дату"));
       await waitFor(() => a.$("#eo-pd-form"), { what: "форма даты" });
