@@ -13,6 +13,7 @@ CLI-скриптов) — открытый ezdxf-документ переисп
 import logging
 import sys
 from dataclasses import dataclass, field
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -400,16 +401,23 @@ def apply_drawing(
                 details={"чертёж": parsed.source_file,
                          "подтипы": [list(p) for p in parsed.new_subtypes]},
             )
-        applied = element_sync.apply_import(
-            conn, object_id, parsed.source_file, parsed.rows, analysis["match"],
-            accept_mark_changes=accept_mark_changes,
-            keep_mark_element_ids=set(keep_mark_element_ids or ()),
-            refill_manual_fields={
-                int(element_id): set(fields)
-                for element_id, fields in (refill_manual_fields or {}).items()
-            },
-            user=user, request_id=request_id,
-        )
+        # Поэлементные события apply_import пишутся ДО его commit; журнал должен подтверждать только зафиксированное — события копятся и
+        # уходят в очередь сразу после commit внутри apply_import (app/activity.py, defer_*). Этапы загрузки остаются отдельными транзакциями (как в V1).
+        события = activity.defer_begin()
+        try:
+            applied = element_sync.apply_import(
+                conn, object_id, parsed.source_file, parsed.rows, analysis["match"],
+                accept_mark_changes=accept_mark_changes,
+                keep_mark_element_ids=set(keep_mark_element_ids or ()),
+                refill_manual_fields={
+                    int(element_id): set(fields)
+                    for element_id, fields in (refill_manual_fields or {}).items()
+                },
+                user=user, request_id=request_id,
+            )
+            activity.defer_flush(события)
+        finally:
+            activity.defer_end(события)
         n_numeric, n_letter = import_elements.save_axis_grid(conn, parsed.grid, parsed.source_file)
 
         if parsed.zones or parsed.new_records:
@@ -489,6 +497,25 @@ def get_pending(token: str):
 
 def forget_pending(token: str) -> None:
     _PENDING_IMPORTS.pop(token, None)
+
+
+# Токен, который применяется прямо сейчас: второй запрос с тем же токеном (двойная отправка, повтор из другой вкладки) не запускает вторую загрузку
+# параллельно с первой — получает отказ 409. После успеха токен забывается (`forget_pending`), и повтор получает 410 «разбор недоступен».
+_APPLYING: set = set()
+_APPLYING_LOCK = threading.Lock()
+
+
+def claim_pending(token: str) -> bool:
+    with _APPLYING_LOCK:
+        if token in _APPLYING:
+            return False
+        _APPLYING.add(token)
+        return True
+
+
+def release_pending(token: str) -> None:
+    with _APPLYING_LOCK:
+        _APPLYING.discard(token)
 
 
 def process_upload(dxf_path: Path, source_file: str, object_id: Optional[int] = None,

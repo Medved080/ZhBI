@@ -3,8 +3,9 @@
 // (массовая правка), позже — exchange-drawing.js (чертежи и связанные загрузки).
 import { IMPORT_OPS } from "./exchange-import.js";
 import { mountBulkEdit } from "./exchange-bulk.js";
+import { mountDrawingUpload } from "./exchange-drawing.js";
 
-const OPS = { ...IMPORT_OPS, "bulk-edit": mountBulkEdit };
+const OPS = { ...IMPORT_OPS, "bulk-edit": mountBulkEdit, "upload-drawing": mountDrawingUpload };
 
 export function hasExchangeOp(key) { return Object.prototype.hasOwnProperty.call(OPS, key); }
 

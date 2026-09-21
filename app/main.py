@@ -78,7 +78,7 @@ from app.db import (
     visible_elements_clause,
 )
 from app.dxf_import import (
-    DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, forget_pending,
+    DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, claim_pending, forget_pending, release_pending,
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
     save_uploaded_file,
 )
@@ -5719,6 +5719,20 @@ def analyze_dxf(
         # ещё нет: справочник тогда пуст, и все подтипы файла новые.
         parsed = parse_drawing(saved_path, name, object_id)
         analysis = analyze_drawing(parsed, object_id)
+        # Имя чертежа уникально на весь сервис вместе с handle элемента (UNIQUE(source_file, dxf_handle)): файл с именем, под которым изделия
+        # уже загружены в ДРУГОЙ объект, применить нельзя — раньше это выяснялось только на применении и заканчивалось ошибкой сервера.
+        conn = get_connection()
+        try:
+            чужой = conn.execute(
+                "SELECT o.name FROM elements e JOIN objects o ON o.id = e.object_id "
+                "WHERE e.source_file = ? AND e.object_id <> ? LIMIT 1", (name, analysis["object_id"])).fetchone()
+        finally:
+            conn.close()
+        if чужой:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Чертёж с именем «{name}» уже загружен в объект «{чужой['name']}». Имя чертежа не должно совпадать "
+                       f"с чертежом другого объекта — переименуйте файл и загрузите его снова.")
         token = remember_pending(parsed, analysis)
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -5744,6 +5758,16 @@ def analyze_dxf(
 @app.post("/import-dxf/apply", response_model=DxfImportResult)
 def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
     """Фаза 2: применяет уже показанную пользователю сводку."""
+    # Один токен применяется один раз и не параллельно: второй запрос с тем же токеном (двойная отправка) получает отказ, не запуская вторую загрузку
+    if not claim_pending(body.token):
+        raise HTTPException(status_code=409, detail="Этот разбор чертежа уже применяется — дождитесь завершения")
+    try:
+        return _apply_dxf_claimed(body, user)
+    finally:
+        release_pending(body.token)
+
+
+def _apply_dxf_claimed(body: DxfApplyIn, user: sqlite3.Row):
     try:
         parsed, analysis = get_pending(body.token)
         # Объект уже выбран на фазе анализа и лежит в токене — проверяем ЕГО,

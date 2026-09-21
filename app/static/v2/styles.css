@@ -897,3 +897,9 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-ex-verify { margin-top: 10px; }
 .v2-ex .v2-seg { max-width: 640px; margin: 8px 0 12px; }
 .v2-ex-stickybar { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.v2-ex-steps { margin: 6px 0 12px 18px; padding: 0; font-size: 13px; color: var(--muted); }
+.v2-ex-counts { margin: 8px 0 12px; font-size: 13px; }
+.v2-ex-details { font-size: 12px; margin: 6px 0 10px; max-height: 40vh; overflow: auto; }
+.v2-ex-details > div { margin-bottom: 4px; }
+.v2-ex-indent { margin-left: 22px; }
+.v2-ex-inline { display: inline-flex; margin-left: 10px; }

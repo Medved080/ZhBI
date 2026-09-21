@@ -88,6 +88,8 @@ export const POLICY = [
   { id: "objects.analyze", screen: "objects-import", action: "Справочник объектов из Excel: сверка файла со справочником (ничего не пишет)", method: "POST", path: re("/objects-import/analyze"), check: uploadCheck({ ext: ["xlsx"] }), risk: "чтение (сверка), данные не меняются", allowed: true, proof: "настоящий backend: расхождения построчно, 422 на неверный файл, отказ 403" },
   { id: "objects.apply", screen: "objects-import", action: "Справочник объектов из Excel: применить отмеченные правки (создание объектов и проектов, правка реквизитов)", method: "POST", path: re("/objects-import/apply"), check: objectsApplyProblem, risk: "справочник объектов и проектов, одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, повтор без дублей, откат, отказ 403, журнал после сохранения" },
   { id: "bulk.analyze", screen: "bulk-edit", action: "Массовая правка через Excel: сверка файла с базой (ничего не пишет)", method: "POST", path: re("/elements/bulk-edit/analyze"), check: uploadCheck({ ext: ["xlsx"], fields: { mode: isOneOf(["fields", "statuses", "contracting"]) } }), risk: "чтение (сверка), данные не меняются", allowed: true, proof: "настоящий backend: расхождения по трём режимам, 400/422 на неверный файл, отказ 403" },
+  { id: "drawing.analyze", screen: "upload-drawing", action: "Загрузка чертежа DXF: разбор и сводка изменений по выбранному объекту (в базу не пишет, файл сохраняется в uploads/)", method: "POST", path: re("/import-dxf/analyze"), check: uploadCheck({ ext: ["dxf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются; файл кладётся во временную папку сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF, отказ 403 у user2/user4, 4xx на пустой и битый файл" },
+  { id: "drawing.apply", screen: "upload-drawing", action: "Загрузка чертежа DXF: применить показанную сводку (изделия, сетка осей, зоны и привязки объекта)", method: "POST", path: re("/import-dxf/apply"), check: dxfApplyProblem, risk: "геометрия и привязки изделий объекта; этапами (не одна транзакция, как в V1), копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, двойная отправка — один запрос, отказ 403, журнал после сохранения" },
   { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
@@ -208,5 +210,17 @@ function bulkApplyProblem(body) {
   if (!Array.isArray(body.changes) || !body.changes.length || body.changes.length > 100000) return "правок нет или больше 100000";
   if (body.changes.some((c) => !c || typeof c !== "object" || Array.isArray(c))) return "правка неверной формы";
   if (body.contracting_date != null && (body.mode !== "fields" || typeof body.contracting_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.contracting_date))) return "дата статуса неверна";
+  return null;
+}
+
+// Применение чертежа: токен разбора и решения человека (принять смену марок; перезаполнить ручные поля: {id изделия: [поля]}; создать новые записи зон).
+function dxfApplyProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => !["token", "accept_mark_changes", "keep_mark_element_ids", "refill_manual_fields", "create_new_zone_ids"].includes(k))) return "лишние поля";
+  if (typeof body.token !== "string" || !/^[0-9a-f]{16,64}$/.test(body.token)) return "нет токена разбора";
+  if (typeof body.accept_mark_changes !== "boolean") return "решение по маркам не задано";
+  if (!Array.isArray(body.keep_mark_element_ids) || !Array.isArray(body.create_new_zone_ids) || body.create_new_zone_ids.some((x) => !Number.isInteger(x))) return "списки решений неверны";
+  const r = body.refill_manual_fields;
+  if (!r || typeof r !== "object" || Array.isArray(r) || Object.entries(r).some(([k, v]) => !/^\d+$/.test(k) || !Array.isArray(v) || v.some((f) => typeof f !== "string"))) return "решения по ручным полям неверны";
   return null;
 }

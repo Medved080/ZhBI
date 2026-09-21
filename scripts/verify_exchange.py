@@ -26,7 +26,7 @@ import openpyxl  # noqa: E402
 
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -556,10 +556,96 @@ def section_bulk():
         check(bool(an["rejected"]), f"количество ниже привязанного отклонено уже на сверке ({an['rejected'][:1]})")
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk}
+
+def section_drawing():
+    print("== загрузка чертежа DXF")
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    tag = str(int(time.time()))[-5:]
+    admin = login("admin")
+    sample_dxf = sample(admin, "dxf")
+    # свежий объект под чертёж (через справочник объектов, как в интерфейсе)
+    name = f"Тест-В2 чертёж {tag}"
+    HEAD = ["Наименование ОС", "Адрес", "СМУ", "Директор СМУ", "ДП / РП", "Статус ОС", "Широта", "Долгота", "Фото/Видео", "Старт СМР"]
+    f = xlsx_bytes([[name, None, None, None, None, "Активный", None, None, None, None]], HEAD, "Объекты на карте")
+    ch = admin.post(BASE + "/objects-import/analyze", files={"file": ("o.xlsx", f, XLSX)}).json()["changes"]
+    admin.post(BASE + "/objects-import/apply", json={"changes": ch})
+    oid = rows("SELECT id FROM objects WHERE name=?", name)[0]["id"]
+
+    def analyze(session, dxf=sample_dxf, fname=f"v2_{tag}.dxf", object_id=oid):
+        data = {"object_id": str(object_id)} if object_id is not None else {}
+        return session.post(BASE + "/import-dxf/analyze", files={"file": (fname, dxf, "application/octet-stream")}, data=data, timeout=300)
+
+    # права на разбор
+    for user in ("user2", "user4"):
+        before = snap()
+        r = analyze(login(user))
+        check(r.status_code == 403 and snap() == before, f"analyze: {user} → {r.status_code}, БД не изменена")
+    # валидация файла
+    for fname, content in (("empty.dxf", b""), ("junk.dxf", "это не чертёж".encode("utf-8")), ("note.txt", b"hello")):
+        before = snap()
+        r = analyze(admin, content, fname)
+        check(400 <= r.status_code < 500 and snap() == before, f"analyze: {fname} → {r.status_code} ({r.text[:80]}), БД не изменена")
+    r = admin.post(BASE + "/import-dxf/analyze", data={"object_id": str(oid)})
+    check(r.status_code == 422, f"analyze без файла → {r.status_code}")
+    r = analyze(admin, object_id=99999)
+    check(400 <= r.status_code < 500, f"analyze: несуществующий объект → {r.status_code}")
+    # разбор ничего не пишет
+    before = snap()
+    r = analyze(admin)
+    check(r.status_code == 200 and r.json()["counts"]["new"] > 0, f"analyze: 200, новых {r.json()['counts']['new']}")
+    check(snap() == before, "analyze: изделия, зоны, справочники и объекты не изменены (снимок БД совпал)")
+    an = r.json()
+    token = an["token"]
+    check(rows("SELECT COUNT(*) n FROM elements WHERE object_id=?", oid)[0]["n"] == 0, "analyze: изделий объекта в БД нет")
+    # права на применение (токен принадлежит разбору админа)
+    for user in ("user2", "user4"):
+        r = login(user).post(BASE + "/import-dxf/apply", json={"token": token, "accept_mark_changes": True, "keep_mark_element_ids": [], "refill_manual_fields": {}, "create_new_zone_ids": []})
+        check(r.status_code == 403 and snap() == before, f"apply: {user} → {r.status_code}, БД не изменена")
+    r = admin.post(BASE + "/import-dxf/apply", json={"token": "0" * 32, "accept_mark_changes": True, "keep_mark_element_ids": [], "refill_manual_fields": {}, "create_new_zone_ids": []})
+    check(r.status_code == 410, f"apply: неизвестный токен → {r.status_code} ({r.text[:70]})")
+    # двойная отправка: два одновременных применения одного токена
+    body = {"token": token, "accept_mark_changes": True, "keep_mark_element_ids": [], "refill_manual_fields": {}, "create_new_zone_ids": []}
+    j0 = journal_max()
+
+    def go(_):
+        return login("admin").post(BASE + "/import-dxf/apply", json=body, timeout=300)
+    with ThreadPoolExecutor(2) as ex:
+        res = list(ex.map(go, range(2)))
+    codes = sorted(x.status_code for x in res)
+    check(codes[0] == 200 and codes[1] in (409, 410), f"два одновременных применения одного токена: {codes} — выполнено один раз")
+    n_el = rows("SELECT COUNT(*) n FROM elements WHERE object_id=? AND is_current=1", oid)[0]["n"]
+    check(n_el == an["counts"]["new"], f"в БД {n_el} изделий (= новых в разборе)")
+    ev = journal_since(j0)
+    check(len([x for x in ev if x["action"] == "import_dxf"]) == 1, "журнал: одно событие import_dxf")
+    r = admin.post(BASE + "/import-dxf/apply", json=body)
+    check(r.status_code == 410, f"повторное применение того же токена → {r.status_code}")
+    check(rows("SELECT COUNT(*) n FROM object_drawings WHERE object_id=? AND is_current=1", oid)[0]["n"] == 1, "у объекта один актуальный чертёж")
+    # повторный разбор того же чертежа: все сопоставлены по handle, применение не задваивает
+    an2 = analyze(admin).json()
+    check(an2["counts"]["new"] == 0 and an2["counts"]["matched_by_handle"] == n_el, f"повторный разбор: сопоставлено по handle {an2['counts']['matched_by_handle']}, новых 0")
+    r = admin.post(BASE + "/import-dxf/apply", json={**body, "token": an2["token"]}, timeout=300)
+    check(r.status_code == 200 and r.json()["inserted"] == 0, f"повторное применение чертежа: новых 0 ({r.text[:80]})")
+    check(rows("SELECT COUNT(*) n FROM elements WHERE object_id=? AND is_current=1", oid)[0]["n"] == n_el, "повторная загрузка: число изделий то же")
+    # этапность (как в V1): сбой на этапе зон оставляет записанными завершённые этапы; повтор с тем же токеном догружает
+    an3 = analyze(admin, fname=f"v2_{tag}_b.dxf").json()
+    body3 = {**body, "token": an3["token"]}
+    j0 = journal_max()
+    with Fault("CREATE TRIGGER v2_fault BEFORE INSERT ON axis_lines BEGIN SELECT RAISE(ABORT, 'v2 fault'); END"):
+        r = admin.post(BASE + "/import-dxf/apply", json=body3, timeout=300)
+    check(r.status_code >= 500, f"сбой на этапе «сетка осей»: ответ {r.status_code}")
+    check(rows("SELECT COUNT(*) n FROM elements WHERE source_file=?", f"v2_{tag}_b.dxf")[0]["n"] > 0, "этапность: изделия нового файла уже записаны (завершённый этап остался, как в V1)")
+    ev = journal_since(j0)
+    check(not [x for x in ev if x["action"] == "import_dxf"], "сводное событие import_dxf при сбое не пишется")
+    r = admin.post(BASE + "/import-dxf/apply", json=body3, timeout=300)
+    check(r.status_code == 200, f"повтор с тем же токеном после сбоя догружает загрузку ({r.status_code})")
+    check(rows("SELECT COUNT(*) n FROM axis_lines WHERE source_file=?", f"v2_{tag}_b.dxf")[0]["n"] > 0, "после повтора сетка осей записана")
+
+
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")
