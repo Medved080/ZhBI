@@ -1064,4 +1064,104 @@ if (want("training")) {
   await a.close();
 }
 
+// ====================================================================== совместимость с V1 на том же сервере
+if (want("v1compat")) {
+  console.log("== Совместимость с V1 (браузер, тот же сервер)");
+  // Данные, созданные через API как это делает V2, должны быть видны в текущем интерфейсе (V1).
+  const mk = async (call) => (await call).data;
+  const uid = (await admin.post("/users", { last_name: "ВПервый", first_name: "Тест", domain_login: "qa_v1_user", role: "user" })).data.id;
+  const pj = await mk(admin.post("/projects", { name: "QA V1 Проект" }));
+  await mk(admin.post("/objects", { name: "QA V1 Объект", project_id: pj.id }));
+  await admin.post("/individuals", { name: "QA V1 Физлицо" });
+  const role = await mk(admin.post("/roles", { name: "QA V1 роль" }));
+  await admin.put(`/users/${uid}/access`, { grants: [{ project_id: pj.id, object_id: null, role: role.key }] });
+  const bk = await mk(admin.post("/admin/backups", { comment: "QA V1 копия" }));
+  const ld = (await admin.get("/ldap-settings")).data.config;
+  await admin.put("/ldap-settings", { ...ld, host: "v1.qa.example" });
+  const b = await session(BASE, "admin");
+  await b.goto(BASE + "/?ui=v1", 1500);
+  await b.waitFor("!!document.querySelector('#user-name') && document.querySelector('#user-name').innerText.length>0", 30000);
+  ok("V1-0 текущий интерфейс открывается на том же сервере под тем же входом", true);
+  const open = async (menuId) => { await b.eval(`document.getElementById('${menuId}').click()`); await b.sleep(4000); };
+  await open("menu-users");
+  ok("V1-1 «Пользователи»: созданный из V2 пользователь виден в таблице V1 с доступом «1 проект»", await b.eval(`(document.getElementById('users-table')||{}).innerText?.includes('qa_v1_user')`));
+  await b.eval("document.getElementById('users-close').click()"); await b.sleep(300);
+  await open("menu-catalog"); await b.waitFor("(document.getElementById('catalog-tree')||{}).innerText?.length>0", 15000);
+  ok("V1-2 «Проекты и объекты»: проект и объект, созданные из V2, видны в дереве V1", await b.eval(`(document.getElementById('catalog-tree')||{}).innerText?.includes('QA V1 Проект')`));
+  await b.eval("document.getElementById('catalog-close').click()"); await b.sleep(300);
+  await open("menu-backups");
+  ok("V1-3 «Резервные копии»: копия, созданная из V2, видна в таблице V1 (с комментарием)", await b.eval(`(document.getElementById('backups-tbody')||{}).innerText?.includes('QA V1 копия')`));
+  await b.eval("document.getElementById('backups-close').click()"); await b.sleep(300);
+  await open("menu-ldap");
+  ok("V1-4 «Доменная авторизация»: настройки, сохранённые из V2, показаны формой V1", (await b.eval("document.getElementById('ldap-host').value")) === "v1.qa.example");
+  await b.eval("document.getElementById('ldap-cancel').click()"); await b.sleep(300);
+  await open("menu-roles");
+  ok("V1-5 «Роли»: роль, созданная из V2, видна в списке V1", await b.eval(`(document.getElementById('roles-side')||{}).innerText?.includes('QA V1 роль')`));
+  await b.eval("document.getElementById('users-close').click()"); await b.sleep(300);
+  ok("V1-6 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  await admin.put("/ldap-settings", ld);
+}
+
+// ====================================================================== карточка объекта и справочник СМУ (тот же компонент, что и «Физлица»)
+if (want("card")) {
+  console.log("== Карточка объекта и СМУ (браузер)");
+  const b = await session(BASE, "admin");
+  const cardOf = async () => (await admin.get("/settings/project-card?object_id=1")).data;
+  await openSection(b, "project-card"); await b.waitFor("!!document.querySelector('#pc-title')", 20000);
+  const c0 = await cardOf();
+  const t0 = one("SELECT COUNT(*) n FROM activity_log WHERE action='project_card'").n;
+  await fill(b, "#pc-title", "QA Карточка UI");
+  let mark = b.requests.length;
+  await b.eval("document.querySelector('#pc-save').scrollIntoView({block:'center'})");
+  const r0 = await b.rect("#pc-save"); await b.click(r0.cx, r0.cy); await b.click(r0.cx, r0.cy);
+  await b.waitFor("(document.querySelector('.v2-screen [role=status]')||{}).innerText?.includes('подтверждено')", 15000);
+  ok("PC-UI-1 двойной клик «Сохранить»: РОВНО ОДИН PUT; на сервере новое наименование, остальное не тронуто", wr(b, mark).filter((x) => x.method === "PUT").length === 1 && (await cardOf()).title === "QA Карточка UI" && JSON.stringify((await cardOf()).key_events) === JSON.stringify(c0.key_events));
+  await flush();
+  ok("PC-UI-1 журнал: project_card записан", one("SELECT COUNT(*) n FROM activity_log WHERE action='project_card'").n === t0 + 1);
+  await reload(b); await b.waitFor("!!document.querySelector('#pc-title')", 20000);
+  ok("PC-UI-1 после ПЕРЕЗАГРУЗКИ форма показывает сохранённое", (await b.eval("document.querySelector('#pc-title').value")) === "QA Карточка UI");
+  // конфликт
+  await fill(b, "#pc-title", "Моя правка");
+  await admin.put("/settings/project-card?object_id=1", { ...(await cardOf()), title: "Правка коллеги" });
+  await click(b, "#pc-save"); await b.waitFor("!!document.querySelector('.v2-dialog')", 10000);
+  ok("PC-UI-2 карточку изменили после открытия: подтверждение «перезаписать?», без него ничего не записывается", (await text(b, ".v2-dialog")).includes("изменили") && (await cardOf()).title === "Правка коллеги");
+  await confirmDialog(b, "cancel"); await b.sleep(400);
+  ok("PC-UI-2 отказ: правка коллеги на сервере цела, форма показывает мою (несохранённую)", (await cardOf()).title === "Правка коллеги" && (await b.eval("document.querySelector('#pc-title').value")) === "Моя правка");
+  // обрыв ответа
+  await dropNextResponse(b, "/settings/project-card", "PUT");
+  mark = b.requests.length;
+  await click(b, "#pc-save"); await b.waitFor("!!document.querySelector('.v2-dialog')", 10000); await confirmDialog(b);
+  await b.sleep(2500);
+  ok("PC-UI-3 обрыв ответа: ОДИН PUT, автоповтора нет, сервер сохранил, интерфейс сверился и сказал об этом", wr(b, mark).filter((x) => x.method === "PUT").length === 1 && (await cardOf()).title === "Моя правка" && (await text(b, ".v2-screen [role=status]")).includes("хотя ответ не дошёл"), await text(b, ".v2-screen [role=status]"));
+  await admin.put("/settings/project-card?object_id=1", c0);
+  await b.close();
+  const v = await session(BASE, "user4");
+  await openSection(v, "project-card"); await v.sleep(1500);
+  ok("PC-UI-4 user4 (просмотр): кнопки «Сохранить» нет; PUT напрямую — 403", !(await exists(v, "#pc-save")) && (await (await http(BASE, "user4")).put("/settings/project-card?object_id=1", c0)).status === 403);
+  await v.close();
+
+  // ---------------- СМУ
+  const s2 = await session(BASE, "admin");
+  await openSection(s2, "dict-smu"); await s2.waitFor("!!document.querySelector('#de-add-input')");
+  await fill(s2, "#de-add-input", "QA СМУ UI");
+  await click(s2, "#de-add-btn"); await s2.waitFor("(document.querySelector('#de-status')||{}).innerText?.startsWith('Добавлено')", 10000);
+  const smu = one("SELECT id FROM smu_catalog WHERE name='QA СМУ UI'");
+  ok("SM-UI-1 СМУ: добавление, запись в БД, журнал", !!smu && (await flush(), q("SELECT * FROM activity_log WHERE action='smu_create' AND entity_id=" + smu.id).length === 1));
+  await fill(s2, "#de-add-input", "qa сму ui");
+  await click(s2, "#de-add-btn"); await s2.waitFor("(document.querySelector('#de-status')||{}).innerText?.includes('уже есть')", 10000);
+  ok("SM-UI-2 дубль другим регистром (кириллица): отказ 409, в БД одна запись", one("SELECT COUNT(*) n FROM smu_catalog WHERE name LIKE 'QA СМУ UI' OR name LIKE 'qa сму ui'").n === 1);
+  await fill(s2, "#de-add-input", "");
+  const usedSmu = one("SELECT smu_id s FROM objects WHERE smu_id IS NOT NULL ORDER BY id LIMIT 1").s;
+  const usedName = one(`SELECT name FROM smu_catalog WHERE id=${usedSmu}`).name;
+  await fill(s2, "#de-search", usedName);
+  await click(s2, `[data-act=delete][data-id="${usedSmu}"]`); await s2.waitFor("!!document.querySelector('#de-repl')", 10000);
+  await s2.eval(`(()=>{const s=document.querySelector('#de-repl'); s.value='${smu.id}'; s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  const nRef = one(`SELECT COUNT(*) n FROM objects WHERE smu_id=${usedSmu}`).n;
+  mark = s2.requests.length;
+  await click(s2, ".v2-dialog [data-choice=confirm]"); await s2.waitFor("(document.querySelector('#de-status')||{}).innerText?.startsWith('Удалено')", 12000);
+  ok("SM-UI-3 удаление используемого СМУ с заменой: ОДИН POST; ссылки объектов переведены на замену (SQL), запись удалена", wr(s2, mark).filter((x) => x.url.includes("/delete")).length === 1 && one(`SELECT COUNT(*) n FROM smu_catalog WHERE id=${usedSmu}`).n === 0 && one(`SELECT COUNT(*) n FROM objects WHERE smu_id=${smu.id}`).n === nRef);
+  await s2.close();
+}
+
 process.exit(summary() ? 1 : 0);
