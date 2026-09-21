@@ -51,6 +51,46 @@ try {
   const sqlCounts = Object.fromEntries(sql("SELECT block_id, COUNT(*) n FROM block_works WHERE object_id=4 AND retired_at IS NULL GROUP BY block_id").map((r) => [r.block_id, String(r.n)]));
   c.ok(listed > 0 && counts.every(([id, t]) => t === (sqlCounts[id] || "0")), `до выбора блока панель показывает блоки текущего этажа (${listed}) со счётчиками ЗР, равными SQL`);
 
+  console.log("выбор этажа и секции щелчками (вкладка «Фильтры»)");
+  const adm0 = await loginNode("admin");
+  const okBlocks = async (levels, sections) => {
+    const q = [...levels.map((x) => `level_id=${x}`), ...sections.map((x) => `section_id=${x}`)].join("&");
+    const g = await (await adm0("GET", `/objects/4/blocks/geometry?${q}`)).json();
+    return (Array.isArray(g) ? g : g.blocks || []).filter((x) => x.ok).length;
+  };
+  const statusBlocks = async () => Number(await b.eval(`/блоков (\\d+)/.exec(document.querySelector('.ws-status').textContent)?.[1] ?? -1`));
+  await tap(b, `.ws-tabs [data-tab="filters"]`);
+  await b.waitFor(`document.querySelector('[data-mpick="level"]')`);
+  const on = async (kind) => JSON.parse(await b.eval(`JSON.stringify([...document.querySelectorAll('[data-mpick="${kind}"]')].filter(p=>p.getAttribute('aria-pressed')==='true').map(p=>p.dataset.id))`));
+  const all = async (kind) => JSON.parse(await b.eval(`JSON.stringify([...document.querySelectorAll('[data-mpick="${kind}"]')].map(p=>p.dataset.id))`));
+  const lv = await all("level"), sc0 = await all("section");
+  const start = await on("level");
+  c.ok(start.length === 1, `стартовый вид: выбран один этаж (${start.join(",")}), а не «все этажи, наложенные друг на друга»`);
+  const want0 = await okBlocks(start, []);
+  await b.waitFor(`/блоков (\\d+)/.exec(document.querySelector('.ws-status').textContent)?.[1]==='${want0}'`, 30000).catch(() => {});
+  // (число «блоков» в строке состояния сразу после автовыбора этажа движок не пересчитывает — проверяется после следующего щелчка)
+  await tap(b, `.ws-tabs [data-tab="props"]`);
+  await b.waitFor(`document.querySelectorAll('#ws-panel-body .mfr-blk').length>0`, 20000);
+  c.ok((await b.eval(`document.querySelectorAll('#ws-panel-body .mfr-blk').length`)) === want0, `список блоков в панели (${want0}) = ответ сервера по выбранному этажу`);
+  await tap(b, `.ws-tabs [data-tab="filters"]`);
+  const other = lv.find((x) => !start.includes(x));
+  await tap(b, `[data-mpick="level"][data-id="${other}"]`);
+  await b.waitFor(`document.querySelectorAll('[data-mpick="level"][aria-pressed="true"]').length===2`);
+  await sleep(1500);
+  c.ok((await statusBlocks()) === (await okBlocks([...start, other], [])), `щелчок по второму этажу добавил его: блоков на плане ${await statusBlocks()} = ответ сервера`);
+  const secA = await b.eval(`[...document.querySelectorAll('[data-mpick="section"]')].find(p=>/\\s[1-9]\\d*\\s*$/.test(p.textContent.trim()))?.dataset.id`);
+  await tap(b, `[data-mpick="section"][data-id="${secA}"]`);
+  await b.waitFor(`document.querySelectorAll('[data-mpick="section"][aria-pressed="true"]').length===1`);
+  await sleep(1500);
+  c.ok((await statusBlocks()) === (await okBlocks([...start, other], [secA])), `+ секция: блоков на плане ${await statusBlocks()} = ответ сервера`);
+  await tap(b, `[data-mpick="level"][data-id="${other}"]`);
+  await b.waitFor(`document.querySelectorAll('[data-mpick="level"][aria-pressed="true"]').length===1`);
+  await tap(b, `[data-mpick="section"][data-id="${secA}"]`);
+  await b.waitFor(`document.querySelectorAll('[data-mpick="section"][aria-pressed="true"]').length===0`);
+  await sleep(1200);
+  c.ok((await statusBlocks()) === (await okBlocks(start, [])), "повторные щелчки снимают выбор: вернулось прежнее число блоков");
+  await tap(b, `.ws-tabs [data-tab="props"]`);
+
   console.log("выбор блоков на плане настоящими событиями мыши");
   const ids = JSON.parse(await b.eval(`JSON.stringify(${visibleBlockIds()})`)).map(Number);
   let p1 = null, id1 = null, id2 = null, p2 = null;

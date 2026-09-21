@@ -88,6 +88,7 @@ export function openModal({ title, wide = false, onRequestClose }) {
   back.querySelector("[data-mclose]").addEventListener("click", request);
   document.addEventListener("keydown", onKey, true);
   document.body.appendChild(back);
+  box.tabIndex = -1; box.focus({ preventScroll: true });   // фокус — в окно (читалки объявят диалог); Tab дальше идёт по содержимому
   api.requestClose = request;
   return api;
 }
