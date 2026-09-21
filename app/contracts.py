@@ -40,7 +40,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app import activity, contract_guard, impersonation
+from app import activity, contract_guard, impersonation, record_version
 from app.access import (
     assert_object_feature,
     require_feature,
@@ -128,6 +128,9 @@ class ContractIn(BaseModel):
     # присылала — сохранённое переопределение остаётся; [] = «переопределений
     # нет, считать по контрагенту».
     capacity: Optional[list[CapacityIn]] = None
+    # Версия контракта, которую видел клиент (см. app/record_version.py): при расхождении с текущей правка отклоняется 409 и ничего не
+    # меняет. Необязательна — клиент без проверки (V1) поведения не меняет. Факт и остаток в версию не входят.
+    expected_version: Optional[str] = None
 
 
 class ContractOut(BaseModel):
@@ -154,6 +157,8 @@ class ContractOut(BaseModel):
     # справочника контрагентов, который у неё и так загружен, — дублировать
     # их здесь значило бы завести второй источник правды на одно значение.
     capacity: list[CapacityIn] = []
+    # Версия содержимого контракта — база для expected_version следующей правки (см. ContractIn.expected_version)
+    version: Optional[str] = None
 
 
 def _ru_date(date_str: Optional[str]) -> Optional[str]:
@@ -363,6 +368,8 @@ def _to_contract_out(conn, contract_row, bundle: Optional[dict] = None) -> Contr
         linked_elements=bundle["linked"].get(cid, 0),
         lines=lines, incidents=incidents,
         capacity=[CapacityIn(**c) for c in bundle["capacity"].get(cid, [])],
+        version=record_version.contract_version(
+            contract_row, line_rows, incident_rows, bundle["capacity"].get(cid, [])),
     )
 
 
@@ -601,6 +608,19 @@ def _guard_archivable(conn, contract_id: int) -> None:
         )
 
 
+def _insert_lines(conn, contract_id: int, lines) -> None:
+    """Вставка позиций контракта. Одна и та же пара (тип, марка) дважды нарушает уникальный индекс `idx_contract_lines_unique`:
+    раньше это выходило наружу ошибкой 500 без объяснения — теперь понятный отказ 400, транзакция откатывается вызывающим."""
+    try:
+        for line in lines:
+            conn.execute(
+                "INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)",
+                (contract_id, line.element_type, line.mark, line.quantity),
+            )
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="В контракте позиция с одним типом и маркой повторяется — оставьте одну строку")
+
+
 @router.post("", response_model=ContractOut)
 def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
@@ -614,11 +634,7 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_u
             (body.specification_id, body.theme, 1 if body.is_archived else 0),
         )
         contract_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-        for line in body.lines:
-            conn.execute(
-                "INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)",
-                (contract_id, line.element_type, line.mark, line.quantity),
-            )
+        _insert_lines(conn, contract_id, body.lines)
         for inc in body.incidents:
             conn.execute(
                 "INSERT INTO contract_incidents (contract_id, element_type, quantity, incident_date, description) "
@@ -651,7 +667,10 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         existing = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Контракт не найден")
-        прежнее_имя = _to_contract_out(conn, existing).name
+        прежний = _to_contract_out(conn, existing)
+        прежнее_имя = прежний.name
+        # Проверка устаревших данных (V2): клиент прислал версию, которую видел; изменена другим — отказ до всяких записей
+        record_version.assert_fresh(body.expected_version, прежний.version, "Контракт")
         spec = conn.execute("SELECT id FROM specifications WHERE id = ?", (body.specification_id,)).fetchone()
         if not spec:
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
@@ -675,11 +694,7 @@ def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Dep
         # строками: списанное повреждённым съедает тот же остаток.
         покрытие_до = contract_guard.coverage_state(conn, contract_id)
         conn.execute("DELETE FROM contract_lines WHERE contract_id = ?", (contract_id,))
-        for line in body.lines:
-            conn.execute(
-                "INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)",
-                (contract_id, line.element_type, line.mark, line.quantity),
-            )
+        _insert_lines(conn, contract_id, body.lines)
         conn.execute("DELETE FROM contract_incidents WHERE contract_id = ?", (contract_id,))
         for inc in body.incidents:
             conn.execute(

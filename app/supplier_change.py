@@ -71,7 +71,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app import activity, contract_guard, impersonation
+from app import activity, contract_guard, impersonation, record_version
 from app.access import (
     assert_object_any_feature,
     assert_object_feature,
@@ -135,6 +135,14 @@ class SupplierChangeIn(BaseModel):
     element_ids: list[int] = []
     side_a: list[int] = []
     side_b: list[int] = []
+    # Версия документа, которую видел клиент (см. _doc_version): при расхождении правка отклоняется 409 и ничего не меняет.
+    # Необязательна — клиент без проверки (V1) поведения не меняет. Для создания игнорируется.
+    expected_version: Optional[str] = None
+
+
+class DocActionIn(BaseModel):
+    """Необязательное тело проведения / отмены проведения: версия документа, которую видел человек, нажимая кнопку. Без тела — как раньше."""
+    expected_version: Optional[str] = None
 
 
 def _contract_name(conn, contract_id: int) -> str:
@@ -544,6 +552,25 @@ def _doc_items(conn, doc_id: int) -> list:
     ]
 
 
+def _doc_version(conn, doc) -> str:
+    """Отпечаток документа для проверки устаревших данных: шапка (то, что правит форма), состояние и состав по сторонам и парам.
+    Не зависит от служебных полей, которые проведение дописывает (status_at_move, prev_*)."""
+    items = conn.execute(
+        "SELECT element_id, side, pair_no FROM supplier_change_items WHERE doc_id = ? ORDER BY side, pair_no, element_id",
+        (doc["id"],)).fetchall()
+    return record_version.digest({
+        "status": doc["status"], "number": doc["number"], "doc_date": doc["doc_date"], "from": doc["from_contract_id"],
+        "to": doc["to_contract_id"], "mark": doc["mark"], "reason": doc["reason"], "comment": doc["comment"],
+        "items": [[i["element_id"], i["side"], i["pair_no"]] for i in items],
+    })
+
+
+def _doc_full(conn, doc_id: int) -> dict:
+    """Документ целиком (шапка + состав + версия) — ответ создания, правки, проведения и отмены."""
+    doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
+    return {**_doc_head(conn, doc), "items": _doc_items(conn, doc_id), "version": _doc_version(conn, doc)}
+
+
 @router.get("")
 def list_supplier_changes(object_id: int = Query(...),
                           user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "read"))):
@@ -570,7 +597,7 @@ def get_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_use
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
         assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "read")
-        return {**_doc_head(conn, doc), "items": _doc_items(conn, doc_id)}
+        return {**_doc_head(conn, doc), "items": _doc_items(conn, doc_id), "version": _doc_version(conn, doc)}
     finally:
         conn.close()
 
@@ -664,6 +691,9 @@ def create_supplier_change(body: SupplierChangeIn,
     только намерение; применяет его отдельная кнопка «Провести»."""
     conn = get_connection()
     try:
+        # Блокировка записи первым действием: номер документа выдаётся по максимуму существующих — без неё два одновременных
+        # черновика получили бы один номер (один из них упал бы на уникальном индексе)
+        begin_write(conn)
         assert_object_feature(conn, user, body.object_id, _раздел(body.kind), "write")
         _validate_head(conn, body)
         номер = (body.number or "").strip() or _next_number(conn, body.object_id)
@@ -689,9 +719,7 @@ def create_supplier_change(body: SupplierChangeIn,
                      entity_type="supplier_change", entity_id=doc_id,
                      new_value=f"{KIND_TITLES[body.kind]} № {номер}",
                      details={"kind": body.kind, "object_id": body.object_id})
-        return {**_doc_head(conn, conn.execute(
-            "SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()),
-            "items": _doc_items(conn, doc_id)}
+        return _doc_full(conn, doc_id)
     finally:
         conn.close()
 
@@ -704,6 +732,10 @@ def update_supplier_change(doc_id: int, body: SupplierChangeIn,
     сделанную втихую. Нужно поправить — отмените проведение."""
     conn = get_connection()
     try:
+        # Блокировка записи первым действием: статус «черновик» проверяется и состав переписывается под одной блокировкой — иначе
+        # параллельное проведение успевало бы между проверкой и записью, и состав ПРОВЕДЁННОГО документа менялся бы под уже
+        # разошедшимися движениями
+        begin_write(conn)
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -711,6 +743,7 @@ def update_supplier_change(doc_id: int, body: SupplierChangeIn,
         if doc["status"] != DRAFT:
             raise HTTPException(status_code=409,
                                 detail="Документ проведён — сначала отмените проведение")
+        record_version.assert_fresh(body.expected_version, _doc_version(conn, doc), "Документ")
         body.object_id = doc["object_id"]
         body.kind = doc["kind"]      # вид операции у существующего документа не меняется
         _validate_head(conn, body)
@@ -728,9 +761,7 @@ def update_supplier_change(doc_id: int, body: SupplierChangeIn,
         )
         _save_items(conn, doc_id, doc["kind"], doc["object_id"], body)
         conn.commit()
-        return {**_doc_head(conn, conn.execute(
-            "SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()),
-            "items": _doc_items(conn, doc_id)}
+        return _doc_full(conn, doc_id)
     finally:
         conn.close()
 
@@ -741,6 +772,9 @@ def delete_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
     которое ссылаются движения по изделиям."""
     conn = get_connection()
     try:
+        # Блокировка записи первым действием: проверка «это черновик» и удаление — под одной блокировкой (параллельное проведение не
+        # должно успеть между ними: иначе удалялся бы уже проведённый документ вместе со своими движениями)
+        begin_write(conn)
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -960,7 +994,7 @@ def _post_link_swap(conn, doc, items, автор, user_id) -> dict:
 
 
 @router.post("/{doc_id}/post")
-def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_user)):
+def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_user), body: Optional[DocActionIn] = None):
     conn = get_connection()
     events = activity.defer_begin()   # события supplier_change по изделиям — только после commit (app/activity.py)
     try:
@@ -971,6 +1005,8 @@ def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_us
         assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "write")
         if doc["status"] == POSTED:
             raise HTTPException(status_code=409, detail="Документ уже проведён")
+        # Провести можно только то, что человек видел: состав/шапку мог изменить другой пользователь, пока форма была открыта
+        record_version.assert_fresh(body.expected_version if body else None, _doc_version(conn, doc), "Документ")
         items = conn.execute(
             "SELECT * FROM supplier_change_items WHERE doc_id = ? ORDER BY pair_no, side, id", (doc_id,)
         ).fetchall()
@@ -1015,16 +1051,14 @@ def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_us
                      entity_type="supplier_change", entity_id=doc_id,
                      new_value=f"{KIND_TITLES.get(doc['kind'], doc['kind'])} № {doc['number']} проведён",
                      details={"kind": doc["kind"], **итог})
-        return {**_doc_head(conn, conn.execute(
-            "SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()),
-            "items": _doc_items(conn, doc_id), **итог}
+        return {**_doc_full(conn, doc_id), **итог}
     finally:
         activity.defer_end(events)
         conn.close()
 
 
 @router.post("/{doc_id}/unpost")
-def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_user)):
+def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_user), body: Optional[DocActionIn] = None):
     """Отмена проведения: изделия возвращаются в состояние до документа.
 
     Порядок обратный проведению — сначала снимаются записи, созданные
@@ -1041,6 +1075,7 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
         assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "write")
         if doc["status"] != POSTED:
             raise HTTPException(status_code=409, detail="Документ не проведён")
+        record_version.assert_fresh(body.expected_version if body else None, _doc_version(conn, doc), "Документ")
         items = conn.execute(
             "SELECT * FROM supplier_change_items WHERE doc_id = ?", (doc_id,)
         ).fetchall()
@@ -1098,8 +1133,6 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
                      old_value=f"{KIND_TITLES.get(doc['kind'], doc['kind'])} № {doc['number']} проведён",
                      new_value="проведение отменено",
                      details={"kind": doc["kind"], "elements": len(затронутые)})
-        return {**_doc_head(conn, conn.execute(
-            "SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()),
-            "items": _doc_items(conn, doc_id), "elements": len(затронутые)}
+        return {**_doc_full(conn, doc_id), "elements": len(затронутые)}
     finally:
         conn.close()

@@ -22,9 +22,9 @@ from app.access import (
     require_service_feature,
 )
 from app.auth import get_current_user
-from app import activity
+from app import activity, record_version
 from app.capacity import CapacityIn, load_counterparty_capacity, save_counterparty_capacity
-from app.db import get_connection
+from app.db import begin_write, get_connection
 
 router = APIRouter(tags=["counterparties"])
 
@@ -45,10 +45,14 @@ class CounterpartyIn(BaseModel):
     # («все строки удалены»): по None сохранённые нормативы остаются на
     # месте, иначе любой старый клиент стирал бы их молча.
     capacity: Optional[list[CapacityIn]] = None
+    # Версия записи, которую видел клиент (см. app/record_version.py): при расхождении с текущей правка отклоняется 409
+    # и ничего не меняет. Необязательна — клиент без проверки (V1) поведения не меняет.
+    expected_version: Optional[str] = None
 
 
 class CounterpartyOut(CounterpartyIn):
     id: int
+    version: Optional[str] = None      # текущая версия записи — база для expected_version следующей правки
 
 
 class AgreementIn(BaseModel):
@@ -60,20 +64,24 @@ class AgreementIn(BaseModel):
     # договоров он NULL, и правка такого договора без указания объекта не
     # должна падать валидацией — иначе проставить объект было бы нечем.
     object_id: Optional[int] = None
+    expected_version: Optional[str] = None   # см. CounterpartyIn.expected_version
 
 
 class AgreementOut(AgreementIn):
     id: int
+    version: Optional[str] = None
 
 
 class SpecificationIn(BaseModel):
     agreement_id: int
     number: str
     specification_date: Optional[str] = None
+    expected_version: Optional[str] = None   # см. CounterpartyIn.expected_version
 
 
 class SpecificationOut(SpecificationIn):
     id: int
+    version: Optional[str] = None
 
 
 class MarkTypePrefixIn(BaseModel):
@@ -177,7 +185,9 @@ def _with_capacity(conn, rows) -> list:
         нормативы.setdefault(r["counterparty_id"], []).append(
             {"element_type": r["element_type"], "per_day": r["per_day"], "comment": r["comment"]}
         )
-    return [dict(row, capacity=нормативы.get(row["id"], [])) for row in rows]
+    return [dict(row, capacity=нормативы.get(row["id"], []),
+                 version=record_version.counterparty_version(row, нормативы.get(row["id"], [])))
+            for row in rows]
 
 
 @router.get("/counterparties", response_model=list[CounterpartyOut])
@@ -205,11 +215,11 @@ def list_counterparties_full(user: sqlite3.Row = Depends(get_current_user)):
         # что уже признали закрытым. Спецификации сужаются вслед за
         # договорами: своего объекта у них нет, он выводится по цепочке.
         доступ, доступ_params = _accessible_agreements_clause(conn, user)
-        agreements = [dict(r) for r in conn.execute(
+        agreements = [dict(r, version=record_version.agreement_version(r)) for r in conn.execute(
             f"SELECT * FROM agreements WHERE {доступ} ORDER BY number", доступ_params)]
         if agreements:
             marks = ",".join("?" * len(agreements))
-            specifications = [dict(r) for r in conn.execute(
+            specifications = [dict(r, version=record_version.specification_version(r)) for r in conn.execute(
                 f"SELECT * FROM specifications WHERE agreement_id IN ({marks}) ORDER BY number",
                 [a["id"] for a in agreements])]
         else:
@@ -254,6 +264,7 @@ def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(requi
         conn.commit()
         row = dict(conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone())
         row["capacity"] = load_counterparty_capacity(conn, counterparty_id)
+        row["version"] = record_version.counterparty_version(row, row["capacity"])
         activity.log("counterparty_create", user=admin, entity_type="counterparty",
                      entity_id=counterparty_id, new_value=f"{body.short_name} ({code})")
         return row
@@ -265,9 +276,15 @@ def create_counterparty(body: CounterpartyIn, admin: sqlite3.Row = Depends(requi
 def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlite3.Row = Depends(require_contracting)):
     conn = get_connection()
     try:
+        # Блокировка записи первым действием: сверка версии и запись идут под одной блокировкой (app/db.py, record_version.py)
+        begin_write(conn)
         existing = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Контрагент не найден")
+        record_version.assert_fresh(
+            body.expected_version,
+            record_version.counterparty_version(existing, load_counterparty_capacity(conn, counterparty_id)),
+            "Контрагент")
         conn.execute(
             "UPDATE counterparties SET full_name=?, short_name=?, inn=?, kpp=?, ogrn=?, legal_address=?, "
             "contact_person=?, contact_phone=?, code=?, updated_at=datetime('now') WHERE id=?",
@@ -280,6 +297,7 @@ def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlit
         conn.commit()
         row = dict(conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone())
         row["capacity"] = load_counterparty_capacity(conn, counterparty_id)
+        row["version"] = record_version.counterparty_version(row, row["capacity"])
         activity.log("counterparty_update", user=admin, entity_type="counterparty",
                      entity_id=counterparty_id,
                      old_value=f"{existing['short_name']} ({existing['code']})",
@@ -305,7 +323,7 @@ def list_agreements(counterparty_id: int = Query(...), user: sqlite3.Row = Depen
             f"SELECT * FROM agreements WHERE counterparty_id = ? AND {доступ} ORDER BY number",
             (counterparty_id, *доступ_params),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r, version=record_version.agreement_version(r)) for r in rows]
     finally:
         conn.close()
 
@@ -402,6 +420,9 @@ def create_agreement(body: AgreementIn, user: sqlite3.Row = Depends(get_current_
         )
     conn = get_connection()
     try:
+        # Блокировка записи первым действием: проверка «номер занят» и вставка идут под одной блокировкой — параллельный дубль получает
+        # чистый отказ 400, а не ошибку уникального индекса (500).
+        begin_write(conn)
         assert_object_feature(conn, user, body.object_id, "agreements", "write")
         counterparty = conn.execute(
             "SELECT id FROM counterparties WHERE id = ?", (body.counterparty_id,)
@@ -430,7 +451,7 @@ def create_agreement(body: AgreementIn, user: sqlite3.Row = Depends(get_current_
         activity.log("agreement_create", user=user, entity_type="agreement", entity_id=agreement_id,
                      new_value=body.number, details={"object_id": body.object_id,
                                                      "counterparty_id": body.counterparty_id})
-        return dict(row)
+        return dict(row, version=record_version.agreement_version(row))
     finally:
         conn.close()
 
@@ -438,12 +459,14 @@ def create_agreement(body: AgreementIn, user: sqlite3.Row = Depends(get_current_
 @router.patch("/agreements/{agreement_id}", response_model=AgreementOut)
 def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
-    _guard_agreement(conn, admin, agreement_id)
     try:
-        existing = conn.execute(
-            "SELECT id, number, object_id FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+        # Блокировка записи первым действием: права, сверка версии и запись — под одной блокировкой (app/record_version.py)
+        begin_write(conn)
+        _guard_agreement(conn, admin, agreement_id)
+        existing = conn.execute("SELECT * FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Договор не найден")
+        record_version.assert_fresh(body.expected_version, record_version.agreement_version(existing), "Договор")
         if body.object_id is None:
             raise HTTPException(
                 status_code=400,
@@ -488,7 +511,7 @@ def update_agreement(agreement_id: int, body: AgreementIn, admin: sqlite3.Row = 
                      old_value=existing["number"], new_value=body.number,
                      details={"object_id": body.object_id,
                               "прежний объект": existing["object_id"]})
-        return dict(row)
+        return dict(row, version=record_version.agreement_version(row))
     finally:
         conn.close()
 
@@ -508,7 +531,7 @@ def list_specifications(agreement_id: int = Query(...), user: sqlite3.Row = Depe
         rows = conn.execute(
             "SELECT * FROM specifications WHERE agreement_id = ? ORDER BY number", (agreement_id,)
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r, version=record_version.specification_version(r)) for r in rows]
     finally:
         conn.close()
 
@@ -516,11 +539,18 @@ def list_specifications(agreement_id: int = Query(...), user: sqlite3.Row = Depe
 @router.post("/specifications", response_model=SpecificationOut)
 def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
-    _guard_agreement(conn, admin, body.agreement_id)
     try:
+        # Блокировка записи первым действием: см. create_agreement
+        begin_write(conn)
+        _guard_agreement(conn, admin, body.agreement_id)
         agreement = conn.execute("SELECT id FROM agreements WHERE id = ?", (body.agreement_id,)).fetchone()
         if not agreement:
             raise HTTPException(status_code=404, detail="Договор не найден")
+        # find_or_create_specification при занятом номере молча ВОЗВРАЩАЕТ существующую запись, и интерфейс показал бы «добавлено», ничего
+        # не добавив (исключение ниже никогда не срабатывало). Здесь человек нажал «+ Спецификация» — как у договора, номер занят = отказ.
+        if conn.execute("SELECT 1 FROM specifications WHERE agreement_id = ? AND number = ?",
+                        (body.agreement_id, body.number)).fetchone():
+            raise HTTPException(status_code=400, detail="У этого договора уже есть спецификация с таким номером")
         try:
             specification_id = find_or_create_specification(
                 conn, body.agreement_id, body.number, body.specification_date
@@ -532,7 +562,7 @@ def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(get
         activity.log("specification_create", user=admin, entity_type="specification",
                      entity_id=specification_id, new_value=body.number,
                      details={"agreement_id": body.agreement_id})
-        return dict(row)
+        return dict(row, version=record_version.specification_version(row))
     finally:
         conn.close()
 
@@ -540,18 +570,17 @@ def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(get
 @router.patch("/specifications/{specification_id}", response_model=SpecificationOut)
 def update_specification(specification_id: int, body: SpecificationIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
-    # Сначала — чья спецификация правится, потом — куда её переносят. Без
-    # первой проверки админ объекта А перевешивал чужую спецификацию на свой
-    # договор (аудит безопасности 2026-08-03), тот же дефект, что был у
-    # правки контракта.
-    _guard_specification_owner(conn, admin, specification_id)
-    _guard_agreement(conn, admin, body.agreement_id)
     try:
-        existing = conn.execute(
-            "SELECT id, number, agreement_id FROM specifications WHERE id = ?",
-            (specification_id,)).fetchone()
+        # Блокировка записи первым действием (см. update_agreement), затем — чья спецификация правится, потом — куда её переносят. Без
+        # первой проверки админ объекта А перевешивал чужую спецификацию на свой договор (аудит безопасности 2026-08-03), тот же
+        # дефект, что был у правки контракта.
+        begin_write(conn)
+        _guard_specification_owner(conn, admin, specification_id)
+        _guard_agreement(conn, admin, body.agreement_id)
+        existing = conn.execute("SELECT * FROM specifications WHERE id = ?", (specification_id,)).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
+        record_version.assert_fresh(body.expected_version, record_version.specification_version(existing), "Спецификация")
         conn.execute(
             "UPDATE specifications SET agreement_id=?, number=?, specification_date=?, updated_at=datetime('now') WHERE id=?",
             (body.agreement_id, body.number, body.specification_date, specification_id),
@@ -562,7 +591,7 @@ def update_specification(specification_id: int, body: SpecificationIn, admin: sq
                      entity_id=specification_id, old_value=existing["number"], new_value=body.number,
                      details={"agreement_id": body.agreement_id,
                               "прежний договор": existing["agreement_id"]})
-        return dict(row)
+        return dict(row, version=record_version.specification_version(row))
     finally:
         conn.close()
 
