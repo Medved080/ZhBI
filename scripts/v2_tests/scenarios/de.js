@@ -157,20 +157,27 @@ export const tests = [
     },
   },
   {
-    id: "DE-08", title: "Запись, на которую ссылаются объекты, здесь не удаляется: объяснение и переход в V1, запросов на удаление нет",
+    id: "DE-08", title: "Запись, на которую ссылаются объекты, удаляется только с заменой: диалог со списком замен, «Заменить и удалить» — после выбора; один POST с replacements",
     async run(t) {
       const a = await openApp({ home: true });
       a.ctl.data.smu[0].usedBy = 2;
       await open(a);
       const row = a.ctl.data.smu[0];
       a.click(a.$(`#de-body tr[data-id="${row.id}"] [data-act="delete"]`));
-      await waitFor(() => a.dialog(), { what: "объяснение" });
+      await waitFor(() => a.$("#de-repl"), { what: "диалог замены" });
       t.has(a.dialog().textContent, "используется", "сказано, что запись используется");
-      t.has(a.dialog().textContent, "в текущем интерфейсе", "указан путь: удаление с заменой — в текущем интерфейсе");
-      await a.answerDialog("Понятно");
-      t.eq(a.ctl.log.filter((e) => e.method === "POST").length, 0, "запроса на удаление нет");
+      t.ok(a.$(".v2-dialog [data-choice=confirm]").disabled, "«Заменить и удалить» выключена, пока замена не выбрана");
+      await a.answerDialog("Отмена");
+      t.eq(a.ctl.log.filter((e) => e.method === "POST").length, 0, "отмена: запроса на удаление нет");
       t.ok(names(a).includes(row.name), "запись на месте");
-      t.ok(a.$("a[data-v1-link]"), "переход в текущий интерфейс доступен");
+      a.click(a.$(`#de-body tr[data-id="${row.id}"] [data-act="delete"]`));
+      await waitFor(() => a.$("#de-repl"), { what: "диалог замены" });
+      const other = a.ctl.data.smu.find((x) => x.id !== row.id);
+      a.setValue(a.$("#de-repl"), String(other.id));
+      await a.answerDialog("Заменить и удалить");
+      await waitFor(() => !names(a).includes(row.name), { what: "запись удалена" });
+      t.eq(a.ctl.count("POST", `/dictionaries/smu/${row.id}/delete`), 1, "один POST delete");
+      t.has(a.ctl.log.find((e) => e.method === "POST" && e.path.includes("/delete")).body.replacements[`smu:${row.id}`], String(other.id), "в теле — выбранная замена");
     },
   },
   {

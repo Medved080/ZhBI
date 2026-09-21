@@ -502,6 +502,7 @@ def get_current_user(request: Request) -> sqlite3.Row:
 _ALLOWED_WHILE_PASSWORD_EXPIRED = frozenset({
     "/me",                  # клиенту надо узнать, что от него хотят
     "/me/change-password",  # собственно смена
+    "/password-policy",     # требования к новому паролю — форма смены показывает их до отправки (только чтение)
     "/logout",              # уйти всегда можно
 })
 
@@ -629,6 +630,9 @@ class UserOut(BaseModel):
     # сервер (changelog_unseen_of): иначе клиент тянул бы весь журнал версий
     # при каждом входе только чтобы решить, показывать его или нет.
     changelog_unseen: bool = False
+    # Отпечаток редактируемых полей карточки (2026-09-21, V2): форма отправляет его назад как `expected_version`, и
+    # сервер откажет 409, если запись за это время изменил кто-то другой, — вместо молчаливой перезаписи.
+    version: Optional[str] = None
     # Персональный начальный ракурс 3D в градусах (2026-08-03).
     view3d_pitch_deg: float = DEFAULT_VIEW3D_PITCH
     view3d_yaw_deg: float = DEFAULT_VIEW3D_YAW
@@ -653,6 +657,15 @@ def menu_prefs_of(user: sqlite3.Row) -> Optional[dict]:
     return значение if isinstance(значение, dict) else None
 
 
+def user_version(user: sqlite3.Row) -> str:
+    """Отпечаток полей, которые правит форма карточки пользователя (для проверки «запись устарела»). Личные настройки
+    (тема, цвет подписей, меню, ракурс) в него НЕ входят: их меняет сам человек, и это не повод отказывать администратору."""
+    import hashlib
+    parts = [str(user[k]) if user[k] is not None else "" for k in ("last_name", "first_name", "patronymic", "position", "department", "domain_login", "role")]
+    parts += [auth_method_of(user), "1" if must_change_password_of(user) else "0", "1" if user["password_hash"] is not None else "0"]
+    return hashlib.sha1("\x1f".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
 def user_out(user: sqlite3.Row) -> UserOut:
     pitch, yaw = view3d_angles_of(user)
     # Только про ТУ учётную запись, от чьего имени идёт работа: user_out
@@ -675,6 +688,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
         label_color=user["label_color"],
         auth_method=auth_method_of(user),
         must_change_password=must_change_password_of(user),
+        version=user_version(user),
         ui_theme=user["ui_theme"] if "ui_theme" in user.keys() else None,
         menu_prefs=menu_prefs_of(user),
         changelog_unseen=changelog_unseen_of(user),

@@ -9,8 +9,9 @@
 //    сервера (он обрезает пробелы);
 //  * неизвестный исход (сеть/5xx) НЕ повторяется автоматически: справочник перечитывается и по факту говорится,
 //    появилась ли запись; дубль не создаётся;
-//  * удаление: сначала план последствий с сервера; запись, на которую ссылаются другие данные, здесь НЕ удаляется
-//    (нужна замена — это остаётся в текущем интерфейсе), тихого каскада нет.
+//  * удаление: сначала план последствий с сервера; если на запись ссылаются другие данные, удалить можно ТОЛЬКО с заменой: человек выбирает
+//    другую запись из списка кандидатов сервера, ссылки переводятся на неё и запись удаляется одной серверной операцией (проверка → перевод →
+//    удаление в одной транзакции, при отказе ничего не меняется); тихого каскада и обнуления ссылок нет.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
 import { STATUS_LABEL } from "./registry.js";
@@ -35,7 +36,7 @@ export function mountDictEdit(el, { screen, structure, objectId, api, groupTitle
         <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>${canWrite ? "Правка справочника в новом интерфейсе." : "Просмотр справочника."}</strong>
-        ${canWrite ? esc(`Можно добавить, переименовать и удалить неиспользуемую запись. Удаление записи, на которую ссылаются объекты (с заменой), — в текущем интерфейсе.`) : (gateOpen ? "У вас нет права изменять этот справочник." : "Изменение этого справочника в экспериментальном интерфейсе отключено — выполняйте его в текущем интерфейсе.")}
+        ${canWrite ? esc(`Можно добавить, переименовать и удалить запись. Если на запись ссылаются объекты, при удалении нужно выбрать другую запись — ссылки будут переведены на неё.`) : (gateOpen ? "У вас нет права изменять этот справочник." : "Изменение этого справочника в экспериментальном интерфейсе отключено — выполняйте его в текущем интерфейсе.")}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       ${canWrite ? `<form id="de-add" class="v2-bar" autocomplete="off">
         <input type="text" id="de-add-input" class="v2-search" placeholder="${esc(spec.addPlaceholder || "Название")}" aria-label="${esc(spec.addPlaceholder || "Название")}" maxlength="200">
@@ -175,22 +176,66 @@ export function mountDictEdit(el, { screen, structure, objectId, api, groupTitle
       catch (err) { setStatus(`Не удалось получить план удаления: ${errText(err)}`); return; }
       setStatus("");
       if (plan.blockers?.length) { await showInfoDialog(`Удалить «${rec.name}» нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner || ""}${b.owner ? ": " : ""}${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`); return; }
-      if (plan.needs_replacement || (plan.refs || []).some((r) => r.count > 0)) {
-        await showInfoDialog(`«${rec.name}» используется: ${(plan.refs || []).map((r) => `${r.label} — ${r.count}`).join("; ") || "другими данными"}.\nУдаление с заменой выполняется в текущем интерфейсе — здесь оно недоступно, чтобы ничего не потерять.`);
-        return;
-      }
-      if (!(await showConfirmDialog(`Удалить «${rec.name}»? Запись нигде не используется.`, { confirmLabel: "Удалить", danger: true }))) return;
+      let replacementKey = null;
+      const refs = (plan.refs || []).filter((r) => r.count > 0);
+      if (plan.needs_replacement || refs.length) {
+        // На запись ссылаются другие данные: удалить можно только с заменой на другую запись справочника.
+        let cands = [];
+        try { cands = await api.get(`/dictionaries/${spec.dictKind}/candidates?key=${encodeURIComponent(plan.key)}`); }
+        catch (err) { setStatus(`Не удалось получить список замен: ${errText(err)}`); return; }
+        if (!cands.length) { await showInfoDialog(`«${rec.name}» используется: ${refs.map((r) => `${r.label} — ${r.count}`).join("; ") || "другими данными"}.\nЗаменить нечем: в справочнике нет другой записи. Заведите её и повторите удаление.`); return; }
+        replacementKey = await askReplacement(rec.name, refs, cands);
+        if (!replacementKey) return;
+      } else if (!(await showConfirmDialog(`Удалить «${rec.name}»? Запись нигде не используется.`, { confirmLabel: "Удалить", danger: true }))) return;
+      const replName = replacementKey ? cands_label(replacementKey) : "";
       try {
-        await api.post(`/dictionaries/${spec.dictKind}/${id}/delete`, { replacements: {}, mode: "replace" });
+        const r = await api.post(`/dictionaries/${spec.dictKind}/${id}/delete`, replacementKey ? { replacements: { [`${plan.kind}:${plan.key}`]: replacementKey }, mode: "replace" } : { replacements: {}, mode: "replace" });
         const ok = await load();
-        setStatus(ok ? `Удалено: «${rec.name}».` : `Удалено: «${rec.name}», но список обновить не удалось — нажмите «Обновить».`);
+        const moved = (r?.moved || []).flatMap((m) => (m.moved || []).map((x) => `${x.label}: ${x.count}`)).join("; ");
+        const base = replacementKey ? `Удалено: «${rec.name}»; ссылки переведены на «${replName}»${moved ? ` (${moved})` : ""}.` : `Удалено: «${rec.name}».`;
+        setStatus(ok ? base : `${base} Список обновить не удалось — нажмите «Обновить».`);
       } catch (err) {
         if (err instanceof ApiError && err.status === 404) { await load(); setStatus("Запись уже удалена — список обновлён."); }
         else if (err instanceof ApiError && (err.status === 0 || err.status >= 500)) {
           const ok = await load();
           setStatus(ok && !state.rows.some((r) => r.id === id) ? `Запись «${rec.name}» удалена, хотя ответ не дошёл.` : `Неизвестно, удалена ли запись (${errText(err)}). Проверьте список.`);
-        } else setStatus(errText(err));
+        } else { setStatus(errText(err)); if (err instanceof ApiError && err.status === 409) await load(); }
       }
+    });
+  }
+
+  let candidateLabels = new Map();
+  const cands_label = (key) => candidateLabels.get(String(key)) || String(key);
+  // Выбор замены: диалог со списком кандидатов сервера; «Заменить и удалить» доступно только после выбора.
+  function askReplacement(name, refs, cands) {
+    candidateLabels = new Map(cands.map((c) => [String(c.key), c.label]));
+    return new Promise((resolve) => {
+      const previouslyFocused = document.activeElement;
+      const backdrop = document.createElement("div");
+      backdrop.className = "v2-dialog-backdrop";
+      backdrop.innerHTML = `<div class="v2-dialog" role="alertdialog" aria-modal="true" aria-label="Удаление с заменой">
+        <p style="white-space:pre-line">${esc(`«${name}» используется:\n${refs.map((r) => `• ${r.label} — ${r.count}`).join("\n")}\n\nВыберите запись, на которую будут переведены эти ссылки. Затем «${name}» будет удалена. Это необратимо.`)}</p>
+        <label class="v2-field">Заменить на<select id="de-repl"><option value="">— выберите —</option>${cands.map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join("")}</select></label>
+        <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-choice="cancel">Отмена</button>
+          <button type="button" class="v2-btn v2-danger" data-choice="confirm" disabled>Заменить и удалить</button></div></div>`;
+      const sel = backdrop.querySelector("#de-repl"), okBtn = backdrop.querySelector('[data-choice="confirm"]');
+      const close = (v) => { document.removeEventListener("keydown", onKey, true); if (backdrop.isConnected) document.body.removeChild(backdrop); if (previouslyFocused?.focus && document.contains(previouslyFocused)) previouslyFocused.focus(); resolve(v); };
+      function onKey(e) {
+        if (e.key === "Escape") { e.preventDefault(); close(null); }
+        else if (e.key === "Tab") {
+          const items = [...backdrop.querySelectorAll("select, button:not([disabled])")], first = items[0], last = items[items.length - 1];
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      }
+      sel.addEventListener("change", () => { okBtn.disabled = !sel.value; });
+      backdrop.addEventListener("click", (e) => {
+        const c = e.target.closest("[data-choice]")?.dataset.choice;
+        if (c === "confirm" && sel.value) close(sel.value); else if (c === "cancel" || e.target === backdrop) close(null);
+      });
+      document.addEventListener("keydown", onKey, true);
+      document.body.appendChild(backdrop);
+      sel.focus();
     });
   }
 

@@ -340,6 +340,20 @@ export function mountProjectsObjects(container, ctx) {
         status.textContent = err?.detail || err?.message || "Не удалось сохранить";
         saveBtn.disabled = false; cancelBtn.disabled = false;
         setFormFieldsDisabled(false);
+        if (err && err.status === 409 && /Ничего не сохранено/.test(err.detail || "")) {
+          // Запись изменил кто-то другой: молча не перезаписываем; человек сам выбирает перечитать актуальное (его правки при этом отбрасываются).
+          const reload = document.createElement("button");
+          reload.type = "button"; reload.id = "po-stale-reload"; reload.className = "v2-btn";
+          reload.textContent = "Перечитать актуальные данные (мои правки будут отброшены)";
+          footActions.prepend(reload);
+          reload.addEventListener("click", async () => {
+            reload.disabled = true;
+            await refreshListsBestEffort();
+            initDraft();
+            state.status_msg = "Данные перечитаны.";
+            await render();
+          });
+        }
       }
     });
   }
@@ -392,7 +406,35 @@ export function mountProjectsObjects(container, ctx) {
       });
     }
     const path = type === "project" ? "/projects" : "/objects";
-    const saved = wasNew ? await api.post(path, body) : await api.patch(`${path}/${state.selected.id}`, body);
+    if (!wasNew) {
+      // Версия записи, которую форма видела при открытии: изменил кто-то другой — сервер откажет 409 («Ничего не сохранено»).
+      body.expected_version = selectedRecord()?.version;
+    }
+    let saved;
+    try {
+      saved = wasNew ? await api.post(path, body) : await api.patch(`${path}/${state.selected.id}`, body);
+    } catch (err) {
+      if (!(err && (err.status === 0 || err.status >= 500))) throw err;
+      // Исход неизвестен (обрыв связи, 5xx): повторно НЕ отправляем — читаем справочник и сверяем с тем, что отправляли.
+      let found = null, read = false;
+      try {
+        const r = await fetchAllLists(); read = true;
+        state.projects = r.projects; state.objects = r.objects; state.smuList = r.smuList; state.individualsList = r.individualsList;
+        const list = type === "project" ? r.projects : r.objects;
+        const norm = (v) => (v === undefined || v === null || v === "" ? null : String(v));
+        const cmp = ["name", "status", "description", "address", "address_note", "kind", "project_id", "smu_id", "smu_director_id", "responsible_id", "smr_start_reported", "media_url"];
+        found = wasNew
+          ? list.find((r0) => r0.name === body.name && (type === "project" || String(r0.project_id) === String(body.project_id)))
+          : list.find((r0) => r0.id === state.selected.id && cmp.every((k) => !(k in body) || norm(r0[k]) === norm(body[k])));
+      } catch (e) { /* нет связи — сверить нечем */ }
+      if (!found) {
+        throw Object.assign(new Error(err.detail), { status: err.status, detail: read
+          ? `${err.detail} На сервере ${wasNew ? "запись не найдена" : "правка не найдена"} — можно нажать «Сохранить» ещё раз.`
+          : `${err.detail} Неизвестно, ${wasNew ? "создана ли запись" : "сохранена ли правка"}: проверьте связь и обновите данные.` });
+      }
+      saved = found;
+      state.unknownOutcomeNote = wasNew ? "Сервер создал запись, хотя ответ не дошёл." : "Сервер сохранил изменения, хотя ответ не дошёл.";
+    }
     // Задача 4: подтверждение — из ОТВЕТА записи (полный Project/ObjectOut),
     // без ожидания отдельного GET. Список — точечно: заменяем/добавляем ТУ
     // ЖЕ запись, поэтому даже при отказе фонового обновления агрегатов
@@ -407,7 +449,8 @@ export function mountProjectsObjects(container, ctx) {
     state.dirty = false;
     clearDirtyState();
     const ok = await refreshListsBestEffort();
-    state.status_msg = !ok ? "Сохранено, но обновить данные не удалось." : (wasNew ? "Добавлено." : "Сохранено.");
+    state.status_msg = !ok ? "Сохранено, но обновить данные не удалось." : (state.unknownOutcomeNote || (wasNew ? "Добавлено." : "Сохранено."));
+    state.unknownOutcomeNote = "";
     // Форма показывает то, что подтвердил сервер. Поля, изменённые ПОСЛЕ отправки (поле технически можно
     // изменить, пока идёт запрос: автозаполнение, IME), не затираем — они остаются несохранёнными.
     const draftNow = state.draft;
@@ -805,7 +848,14 @@ export function mountProjectsObjects(container, ctx) {
           paint(latest);
         } catch (err) {
           addBtn.disabled = false;
-          if (statusEl.isConnected) statusEl.textContent = "Не удалось: " + (err.message || "");
+          const msg = err?.detail || err?.message || "";
+          // Сверяемся с сервером: часть файлов могла загрузиться до сбоя, а при обрыве ответа — и сам сбойный. Повторно ничего не отправляем.
+          try {
+            const d = await api.get(`/attachments?entity_type=${encodeURIComponent(type)}&entity_id=${id}`);
+            paint(d.attachments);
+            const st2 = listEl.querySelector("#po-attach-status");
+            if (st2) st2.textContent = `Не удалось: ${msg} Список показывает то, что реально есть на сервере.`;
+          } catch (e2) { if (statusEl.isConnected) statusEl.textContent = "Не удалось: " + msg; }
         }
       });
     }
@@ -818,48 +868,99 @@ export function mountProjectsObjects(container, ctx) {
     }
   }
 
-  // Общий диалог V2 вместо системного confirm()/alert() и вместо
-  // встроенного в форму блока (задача 7 — один и тот же визуальный язык
-  // подтверждения, что и в "Контрагентах", где вложенность <details> не
-  // оставляет места для инлайн-блока).
+  // Подтверждение ВВОДОМ названия — для необратимого удаления проекта или объекта: диалог перечисляет последствия, кнопка «Удалить»
+  // доступна только после точного ввода названия (случайный Enter или двойной клик ничего не удалят).
+  function askTypedConfirm(message, name) {
+    return new Promise((resolve) => {
+      const previouslyFocused = document.activeElement;
+      const backdrop = document.createElement("div");
+      backdrop.className = "v2-dialog-backdrop";
+      backdrop.innerHTML = `<div class="v2-dialog" role="alertdialog" aria-modal="true" aria-label="Подтверждение удаления">
+        <p style="white-space:pre-line">${escapeHtml(message)}</p>
+        <label class="v2-field">Для подтверждения введите название: <b>${escapeHtml(name)}</b><input id="po-typed" autocomplete="off" aria-label="Название для подтверждения"></label>
+        <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-choice="cancel">Отмена</button>
+          <button type="button" class="v2-btn v2-danger" data-choice="confirm" disabled>Удалить</button></div></div>`;
+      const input = backdrop.querySelector("#po-typed"), okBtn = backdrop.querySelector('[data-choice="confirm"]');
+      function close(v) {
+        document.removeEventListener("keydown", onKey, true);
+        if (backdrop.isConnected) document.body.removeChild(backdrop);
+        if (previouslyFocused && document.contains(previouslyFocused) && previouslyFocused.focus) previouslyFocused.focus();
+        resolve(v);
+      }
+      function onKey(e) {
+        if (e.key === "Escape") { e.preventDefault(); close(false); }
+        else if (e.key === "Enter" && e.target === input) { e.preventDefault(); if (!okBtn.disabled) close(true); }
+        else if (e.key === "Tab") {
+          const items = [...backdrop.querySelectorAll("input, button:not([disabled])")];
+          const first = items[0], last = items[items.length - 1];
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      }
+      input.addEventListener("input", () => { okBtn.disabled = input.value.trim() !== name.trim(); });
+      backdrop.addEventListener("click", (e) => {
+        const c = e.target.closest("[data-choice]")?.dataset.choice;
+        if (c === "confirm" && !okBtn.disabled) close(true); else if (c === "cancel" || e.target === backdrop) close(false);
+      });
+      document.addEventListener("keydown", onKey, true);
+      document.body.appendChild(backdrop);
+      input.focus();
+    });
+  }
+
+  // Удаление проекта/объекта: сначала ПЛАН последствий с сервера (что мешает, что удалится вместе), потом подтверждение вводом названия,
+  // затем одна серверная операция (проверка → удаление в одной транзакции, при отказе ничего не меняется).
   async function requestDelete(type, id) {
-    let plan;
-    try { plan = await api.get(`/dictionaries/${type}/${id}/delete-plan`); }
+    let planResp;
+    try { planResp = await api.get(`/dictionaries/${type}/${id}/delete-plan`); }
     catch (err) {
-      state.status_msg = err?.detail || err?.message || "Не удалось получить сведения об удалении";
+      state.status_msg = err?.status === 404 ? "Запись уже удалена — список обновлён." : (err?.detail || err?.message || "Не удалось получить сведения об удалении");
+      if (err?.status === 404) await refreshListsBestEffort();
       await render();
       return;
     }
-    if (plan.blockers && plan.blockers.length) {
-      await showInfoDialog(`Удалить нельзя. Мешает:\n${plan.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}`);
+    if (planResp.blockers && planResp.blockers.length) {
+      await showInfoDialog(`Удалить нельзя. Мешает:\n${planResp.blockers.map((b) => `${b.owner}: ${b.label}${b.count != null ? ` (${b.count})` : ""}`).join("\n")}\n\nСначала уберите эти данные: удалить можно только пустую запись.`);
       return;
     }
     const rec = type === "project" ? state.projects.find((r) => r.id === id) : state.objects.find((r) => r.id === id);
-    const confirmed = await showConfirmDialog(`Удалить «${rec?.name || ""}»?`, { confirmLabel: "Удалить", danger: true });
-    if (!confirmed) return;
-    // Пока идёт запрос — поля этой же формы блокируются: иначе правка,
-    // сделанная за то время, что подтверждение уже отправлено, а ответ ещё
-    // не пришёл, потерялась бы молча вместе с безусловным сбросом
-    // state.draft ниже (задача 3 — конфликтующие действия на время записи).
+    const cascade = (planResp.plan?.cascade || []).map((c) => `${c.label} — ${c.count}`);
+    let attachN = 0;
+    try { attachN = (await api.get(`/attachments?entity_type=${encodeURIComponent(type)}&entity_id=${id}`)).attachments.length; } catch (e) { /* вторично: сервер всё равно удалит вложения вместе с записью */ }
+    if (attachN) cascade.push(`Вложения (файлы удаляются с диска) — ${attachN}`);
+    const label = type === "project" ? "проект" : "объект";
+    const message = `Удалить ${label} «${rec?.name || planResp.plan?.label || ""}»? Это необратимо.\n\n`
+      + (cascade.length ? `Вместе с ним будет удалено:\n${cascade.map((c) => "• " + c).join("\n")}` : `За записью ничего не стоит; вместе с ней ничего не удаляется.`);
+    const typed = rec?.name || planResp.plan?.label || "";
+    if (!(await askTypedConfirm(message, typed))) return;
+    // Пока идёт запрос — поля этой же формы блокируются: иначе правка, сделанная за то время, что подтверждение уже отправлено, а ответ ещё
+    // не пришёл, потерялась бы молча вместе с безусловным сбросом state.draft ниже (задача 3 — конфликтующие действия на время записи).
     setFormFieldsDisabled(true);
-    try {
-      // "replace" — модель по умолчанию (app/dict_delete.py DeleteIn.mode).
-      // "merge" годится только записям с поддеревом на перенос ("adopt" в
-      // реестре видов); ни у проекта, ни у объекта такого поддерева нет —
-      // сервер отвечает 400 на merge даже когда переносить нечего.
-      await api.post(`/dictionaries/${type}/${id}/delete`, { replacements: {}, mode: "replace" });
-      // Успех подтверждён сервером — убираем запись из локальных списков
-      // точечно, без ожидания повторного GET (задача 4).
+    const finishGone = async (note) => {
       const list = type === "project" ? state.projects : state.objects;
       const idx = list.findIndex((r) => r.id === id);
       if (idx !== -1) list.splice(idx, 1);
       if (state.selected?.type === type && state.selected.id === id) { state.selected = null; state.draft = null; }
       const ok = await refreshListsBestEffort();
-      const label = type === "project" ? "Проект" : "Объект";
-      state.status_msg = !ok ? `${label} удалён, но обновить данные не удалось.` : `${label} удалён.`;
+      state.status_msg = !ok ? `${note} Обновить данные не удалось.` : note;
       await render();
+    };
+    try {
+      // "replace" — модель по умолчанию (app/dict_delete.py DeleteIn.mode). У проекта и объекта поддерева на перенос нет.
+      await api.post(`/dictionaries/${type}/${id}/delete`, { replacements: {}, mode: "replace" });
+      await finishGone(`${label[0].toUpperCase()}${label.slice(1)} удалён.`);
     } catch (err) {
-      state.status_msg = err?.detail || err?.message || "Не удалось удалить";
+      if (err?.status === 404) { await finishGone("Запись уже удалена — список обновлён."); return; }
+      if (err && (err.status === 0 || err.status >= 500)) {
+        // Исход неизвестен: повторно не отправляем; читаем справочник и говорим по факту.
+        let gone = false, read = false;
+        try { const r = await fetchAllLists(); read = true; gone = !(type === "project" ? r.projects : r.objects).some((x) => x.id === id); } catch (e) { /* нет связи */ }
+        if (gone) { await finishGone(`Сервер удалил ${label}, хотя ответ не дошёл.`); return; }
+        state.status_msg = read ? `${err.detail} Запись на сервере осталась — можно повторить удаление.` : `${err.detail} Неизвестно, удалена ли запись: проверьте связь и обновите данные.`;
+      } else {
+        state.status_msg = err?.detail || err?.message || "Не удалось удалить";
+        if (err?.status === 409) await refreshListsBestEffort();   // за записью появились данные — покажем актуальное
+      }
       setFormFieldsDisabled(false);
       await render();
     }

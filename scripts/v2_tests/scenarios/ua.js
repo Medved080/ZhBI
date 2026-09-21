@@ -351,28 +351,54 @@ export const tests = [
     },
   },
   {
-    id: "UA-C-08", title: "Блок «Диагностика…»: ссылка несёт выбранного пользователя (форма V1, вкладка «Вход и безопасность»), защищена от потери несохранённого, у не-администраторов пользователей её нет",
+    id: "UA-C-08", title: "Вкладка «Вход и безопасность»: блоки пароля, сеансов и «Зайти под пользователем» вместо ссылки в V1; без права изменять пользователей отладки нет",
     async run(t) {
       const a = await openApp();
-      const u = await openCard(a, "qa.noaccess", "security");
-      await waitFor(() => a.$("#v2-content [data-v1-link]"), { what: "ссылка в V1" });
-      t.has(lastText(a), "доступны в текущем интерфейсе", "сказано, что функции остаются в V1");
-      t.eq(a.$("#v2-content [data-v1-link]").getAttribute("href"), `/?ui=v1&open=user-security&user_id=${u.id}`, "ссылка ведёт к форме ИМЕННО этого пользователя, а не на главный экран V1");
-      t.has(lastText(a), "вкладка «Вход и безопасность»", "пользователю сказано, что откроется");
-      // несохранённое: ссылка не уводит молча
-      a.setValue(a.$("#sec-login"), "qa.noaccess.changed");
-      await waitFor(() => a.$("#card-save"), { what: "подвал" });
-      a.click(a.$("#v2-content [data-v1-link]"));
-      await waitFor(() => a.dialog(), { what: "диалог несохранённого" });
-      t.eq(a.$$(".v2-dialog button").map((b) => b.textContent.trim()), ["Остаться", "Не сохранять", "Сохранить и продолжить"], "три варианта");
-      await a.answerDialog("Остаться");
-      t.ok(a.$("#v2-content [data-v1-link]") && a.$("#sec-login").value === "qa.noaccess.changed", "«Остаться» — остаёмся в V2, ввод цел");
-      // право «только чтение»: ссылки нет, объяснение есть
+      await openCard(a, "qa.noaccess", "security");
+      await waitFor(() => a.$("#sec-impersonate"), { what: "кнопка отладки" });
+      t.ok(!a.$("#v2-content [data-v1-link]"), "ссылки «Открыть в текущем интерфейсе» больше нет: операции выполняются здесь");
+      t.has(lastText(a), "Зайти под пользователем", "есть отладка прав");
+      t.ok(a.$("#sec-sessions"), "блок «Сеансы пользователя» есть");
+      t.ok(a.$("#sec-pass") && a.$("#sec-pass2"), "форма пароля: новый и повтор");
+      t.has(lastText(a), "Не короче", "требования к паролю показаны");
+      // право «только чтение»: изменять и отлаживать нельзя
       const r = await openApp({ perm: "readonly" });
       await openCard(r, "qa.noaccess", "security");
       await a.settle(60);
-      t.ok(!r.$("#v2-content [data-v1-link]"), "без права изменять пользователей ссылки нет");
+      t.ok(!r.$("#sec-impersonate"), "без права изменять пользователей «Зайти под пользователем» нет");
       t.has(lastText(r), "право изменять пользователей", "сказано, почему");
+    },
+  },
+  {
+    id: "UA-C-12", title: "Поиск в домене: пароль и логин вводит человек, найденное подставляется в ПУСТЫЕ поля профиля (заполненные не трогаются), пароль очищается, карточка «грязная»",
+    async run(t) {
+      const a = await openApp();
+      const u = await openCard(a, "qa.noaccess", "profile");
+      await waitFor(() => a.$("#pf-domain-search") && !a.$("#pf-domain-search").disabled, { what: "кнопка поиска в домене" });
+      a.setValue(a.$("#pf-last"), "Своя фамилия");
+      a.setValue(a.$("#pf-pos"), "");
+      a.setValue(a.$("#pf-first"), "");
+      a.click(a.$("#pf-domain-search"));
+      await waitFor(() => a.$("#lds-run"), { what: "панель поиска" });
+      a.setValue(a.$("#lds-query"), "Петров");
+      a.click(a.$("#lds-run"));
+      await waitFor(() => /Введите свои доменные логин и пароль/.test(a.$("#lds-error").textContent), { what: "проверка полей" });
+      t.eq(a.ctl.log.filter((e) => e.path === "/ldap-search").length, 0, "без пароля запрос не отправляется");
+      a.setValue(a.$("#lds-pass"), "неверный");
+      a.click(a.$("#lds-run"));
+      await waitFor(() => /Неверный логин или пароль домена/.test(a.$("#lds-error").textContent), { what: "отказ домена" });
+      t.eq(a.$("#lds-pass").value, "", "пароль очищен из поля после поиска");
+      a.setValue(a.$("#lds-pass"), "Fake-Pass-000");
+      a.click(a.$("#lds-run"));
+      await waitFor(() => a.$$("[data-lds-pick]").length === 2, { what: "результаты" });
+      t.eq(a.$("#lds-pass").value, "", "пароль очищен и после успешного поиска");
+      a.click(a.$$("[data-lds-pick]")[0]);
+      await waitFor(() => a.$("#card-save"), { what: "подвал: карточка изменена" });
+      t.eq(a.$("#pf-last").value, "Своя фамилия", "заполненное поле не тронуто");
+      t.eq(a.$("#pf-first").value, "Пётр", "пустое поле «Имя» заполнено из домена");
+      t.eq(a.$("#pf-pos").value, "Прораб", "пустое поле «Должность» заполнено из домена");
+      t.ok(!a.ctl.log.some((e) => e.method === "PATCH"), "сама подстановка ничего не сохраняет");
+      t.ok(!JSON.stringify(a.ctl.log).includes("Fake-Pass-000") || a.ctl.log.every((e) => e.path === "/ldap-search" || !JSON.stringify(e.body || {}).includes("Fake-Pass")), "пароль ушёл только в запрос поиска");
     },
   },
   {

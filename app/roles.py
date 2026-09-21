@@ -36,12 +36,12 @@ import re
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app import activity
 from app.access import require_service_feature, role_keys, role_list
-from app.db import get_connection
+from app.db import begin_write, get_connection
 from app.features import (FEATURES, IO_HINTS, LEVEL_LABELS, LEVELS, NONE, SCOPE_LABELS,
                           SCOPE_SELF, SECTIONS)
 
@@ -82,6 +82,8 @@ def _выдано(conn: sqlite3.Connection, key: str) -> int:
 
 class RoleIn(BaseModel):
     name: str
+    # V2: название, которое форма видела при открытии (для переименования). Не передано — проверки нет (V1).
+    expected_name: Optional[str] = None
 
 
 class RoleOrderIn(BaseModel):
@@ -92,6 +94,8 @@ class CellIn(BaseModel):
     role_key: str
     feature_key: str
     level: str          # none | read | write
+    # V2: уровень ячейки, который форма видела при открытии. Не передан — проверки нет (V1). Не совпал — 409, ничего не записано.
+    was: Optional[str] = None
 
 
 class CellsIn(BaseModel):
@@ -172,9 +176,12 @@ def rename_role(key: str, body: RoleIn,
         raise HTTPException(status_code=400, detail="Название роли не может быть пустым")
     conn = get_connection()
     try:
+        begin_write(conn)
         было = conn.execute("SELECT name FROM object_roles WHERE key = ?", (key,)).fetchone()
         if было is None:
             raise HTTPException(status_code=404, detail="Роль не найдена")
+        if body.expected_name is not None and body.expected_name != было["name"]:
+            raise HTTPException(status_code=409, detail=f"Роль уже переименовали («{было['name']}»), пока форма была открыта. Обновите данные и повторите.")
         if conn.execute("SELECT 1 FROM object_roles WHERE name = ? AND key <> ?",
                         (name, key)).fetchone():
             raise HTTPException(status_code=409, detail=f"Роль «{name}» уже есть")
@@ -233,7 +240,8 @@ def delete_plan(key: str, user: sqlite3.Row = Depends(require_service_feature("r
 
 
 @router.delete("/{key}", status_code=200)
-def delete_role(key: str, user: sqlite3.Row = Depends(require_service_feature("roles", "write"))):
+def delete_role(key: str, expected_granted: Optional[int] = Query(None),
+                user: sqlite3.Row = Depends(require_service_feature("roles", "write"))):
     """Удаление роли: её разрешения и все её выдачи исчезают.
 
     Замены нет намеренно (см. заголовок модуля): роли складываются, и
@@ -243,9 +251,13 @@ def delete_role(key: str, user: sqlite3.Row = Depends(require_service_feature("r
     """
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО подсчёта выдач: число из плана и удаление — под одной блокировкой
         if conn.execute("SELECT 1 FROM object_roles WHERE key = ?", (key,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="Роль не найдена")
         снято = _выдано(conn, key)
+        if expected_granted is not None and expected_granted != снято:
+            # V2 показал план удаления («выдано N») и просит удалить именно то, что показал; выдач стало иначе — не удаляем вслепую.
+            raise HTTPException(status_code=409, detail=f"Выдачи этой роли изменились с момента, когда вы смотрели план удаления (было {expected_granted}, стало {снято}). Ничего не удалено — откройте план заново.")
         # Порядок: сначала выдачи, потом сама роль. Внешний ключ у
         # role_features каскадный, у user_access — нет, и это правильно:
         # молча терять чьи-то доступы каскадом нельзя, они снимаются здесь,
@@ -271,6 +283,7 @@ def set_cells(body: CellsIn,
     """
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения текущих уровней: сверка `was` и запись — под одной блокировкой
         известные = {f.key: f for f in FEATURES}
         роли = set(role_keys(conn))
         изменено = []
@@ -291,6 +304,11 @@ def set_cells(body: CellsIn,
                 "SELECT level FROM role_features WHERE role_key = ? AND feature_key = ?",
                 (item.role_key, item.feature_key)).fetchone()
             было = строка["level"] if строка else NONE
+            if item.was is not None and item.was != было:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Разрешение «{раздел.title}» уже изменил кто-то другой (сейчас «{LEVEL_LABELS.get(было, было)}»). "
+                           "Ничего не сохранено — обновите матрицу и повторите правку.")
             if было == item.level:
                 continue
             if item.level == NONE:

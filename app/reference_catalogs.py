@@ -36,7 +36,7 @@ from pydantic import BaseModel
 from app import activity
 from app.access import require_service_feature
 from app.auth import get_current_user
-from app.db import get_connection
+from app.db import begin_write, get_connection
 
 router = APIRouter(tags=["reference-catalogs"])
 
@@ -82,6 +82,16 @@ def find_or_create_individual(conn, name: Optional[str]) -> Optional[int]:
     ).fetchone()["id"]
 
 
+def _name_taken(conn, table: str, name: str, exclude_id: Optional[int] = None) -> bool:
+    """Есть ли запись с таким же названием, набранным иначе (регистр, лишние пробелы). Сравнение — В PYTHON: SQLite без ICU кириллицу к одному
+    регистру не приводит (Docs/DECISIONS.md, «Регистронезависимое сравнение кириллицы — только на стороне Python»); `COLLATE NOCASE` пропускал
+    «иванов» рядом с «Иванов». Таблица — только из двух литералов ниже."""
+    assert table in ("smu_catalog", "individuals")
+    key = " ".join(name.split()).lower()
+    return any(r["id"] != exclude_id and " ".join(str(r["name"] or "").split()).lower() == key
+               for r in conn.execute(f"SELECT id, name FROM {table}"))
+
+
 # ------------------------------------------------------------------- СМУ
 
 @router.get("/smu")
@@ -102,7 +112,8 @@ def create_smu(body: CatalogEntryIn, admin: sqlite3.Row = Depends(require_servic
         raise HTTPException(status_code=400, detail="Наименование СМУ не может быть пустым")
     conn = get_connection()
     try:
-        if conn.execute("SELECT 1 FROM smu_catalog WHERE name = ? COLLATE NOCASE", (name,)).fetchone():
+        begin_write(conn)   # проверка «уже есть» и вставка — под одной блокировкой записи
+        if _name_taken(conn, "smu_catalog", name):
             raise HTTPException(status_code=409, detail="Такое СМУ уже есть в справочнике")
         conn.execute("INSERT INTO smu_catalog (name) VALUES (?)", (name,))
         conn.commit()
@@ -121,12 +132,11 @@ def rename_smu(smu_id: int, body: CatalogEntryIn,
         raise HTTPException(status_code=400, detail="Наименование СМУ не может быть пустым")
     conn = get_connection()
     try:
+        begin_write(conn)
         row = conn.execute("SELECT * FROM smu_catalog WHERE id = ?", (smu_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="СМУ не найдено")
-        if conn.execute(
-            "SELECT 1 FROM smu_catalog WHERE name = ? COLLATE NOCASE AND id <> ?", (name, smu_id)
-        ).fetchone():
+        if _name_taken(conn, "smu_catalog", name, smu_id):
             raise HTTPException(status_code=409, detail="Такое СМУ уже есть в справочнике")
         было = row["name"]
         conn.execute(
@@ -163,7 +173,8 @@ def create_individual(body: CatalogEntryIn,
         raise HTTPException(status_code=400, detail="ФИО не может быть пустым")
     conn = get_connection()
     try:
-        if conn.execute("SELECT 1 FROM individuals WHERE name = ? COLLATE NOCASE", (name,)).fetchone():
+        begin_write(conn)   # проверка «уже есть» и вставка — под одной блокировкой записи
+        if _name_taken(conn, "individuals", name):
             raise HTTPException(status_code=409, detail="Такое физлицо уже есть в справочнике")
         conn.execute("INSERT INTO individuals (name) VALUES (?)", (name,))
         conn.commit()
@@ -182,12 +193,11 @@ def rename_individual(individual_id: int, body: CatalogEntryIn,
         raise HTTPException(status_code=400, detail="ФИО не может быть пустым")
     conn = get_connection()
     try:
+        begin_write(conn)
         row = conn.execute("SELECT * FROM individuals WHERE id = ?", (individual_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Физлицо не найдено")
-        if conn.execute(
-            "SELECT 1 FROM individuals WHERE name = ? COLLATE NOCASE AND id <> ?", (name, individual_id)
-        ).fetchone():
+        if _name_taken(conn, "individuals", name, individual_id):
             raise HTTPException(status_code=409, detail="Такое физлицо уже есть в справочнике")
         было = row["name"]
         conn.execute(

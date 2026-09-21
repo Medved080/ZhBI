@@ -1213,11 +1213,17 @@ def delete_entry(kind: str, key: str, body: DeleteIn,
             покрытие_до,
             "Перевод изделий на замену оставил бы их без позиции в контракте:")
         conn.commit()
+        from app.attachments import flush_pending_unlinks
+        flush_pending_unlinks()   # файлы вложений стираются только после commit (откат оставил бы записи без файлов)
     except HTTPException:
         conn.rollback()
+        from app.attachments import discard_pending_unlinks
+        discard_pending_unlinks()
         raise
     except Exception:
         conn.rollback()
+        from app.attachments import discard_pending_unlinks
+        discard_pending_unlinks()
         raise
     finally:
         conn.close()
