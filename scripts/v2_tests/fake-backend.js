@@ -2775,7 +2775,7 @@ function createServer(opts) {
     const oid = queryValue(ctx, "object_id", { type: "int", required: true });
     assertObjectFeature(ctx.user, oid, "revit_model", "read");
     return { levels: [], sections: [], parts: [], without_level: 0, without_section: 0, grids: [],
-      categories: [{ category: "Стены", elements: 300 }, { category: "Перегородки", elements: 120 }, { category: "Окна", elements: 80 }, { category: "Перекрытия", elements: 20 }, { category: "Помещение", elements: 60 }] };
+      categories: data.settings.revitCats || [{ category: "Стены", elements: 300 }, { category: "Перегородки", elements: 120 }, { category: "Окна", elements: 80 }, { category: "Перекрытия", elements: 20 }, { category: "Помещение", elements: 60 }] };
   });
   route("PUT", "/revit-plan/colors", (ctx) => {
     const oid = queryValue(ctx, "object_id", { type: "int", required: true });

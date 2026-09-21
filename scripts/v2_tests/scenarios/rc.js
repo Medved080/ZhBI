@@ -152,4 +152,26 @@ export const tests = [
       await waitFor(() => a.$(`${NAV}[data-section="mfr-colors"]`), { what: "при праве записи экран есть" });
     },
   },
+  {
+    id: "RC-07", title: "Названия категорий приходят из файлов: кавычки и теги не ломают разметку, ключ записывается точно как есть",
+    async run(t) {
+      const a = await openApp({ home: true });
+      const evil = 'Стены "Х" <b>жирно</b> & \'у\'';
+      a.ctl.data.settings.revitCats = [{ category: evil, elements: 3 }, { category: "Окна", elements: 2 }];
+      await waitFor(() => a.$("#v2-object") && a.$$(NAV).length > 3, { what: "оболочка" });
+      a.setValue(a.$("#v2-object"), String(mfrId(a)));
+      await waitFor(() => a.$(`${NAV}[data-section="mfr-colors"]`), { what: "навигация" });
+      a.click(a.$(`${NAV}[data-section="mfr-colors"]`));
+      await waitFor(() => a.$$("input[data-cat]").length === 2, { what: "две категории" });
+      t.eq(a.$$("#rc-body b").length, 0, "тег из названия не превратился в разметку");
+      const inp = a.$$("input[data-cat]").find((i) => i.dataset.cat === evil);
+      t.ok(inp, "ключ категории на элементе — как есть");
+      a.setValue(inp, "#010203");
+      await waitFor(() => !a.$("#rc-save").disabled, { what: "правка" });
+      a.click(a.$("#rc-save"));
+      await waitFor(() => /подтверждена чтением/.test(a.$("#rc-status").textContent), { what: "подтверждение" });
+      t.eq(puts(a)[0].body.colors[evil], "#010203", "в запросе ключ точно как в названии");
+      t.eq(saved(a).colors[evil], "#010203", "у сервера записан тот же ключ");
+    },
+  },
 ];
