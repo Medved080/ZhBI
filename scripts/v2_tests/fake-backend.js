@@ -2189,6 +2189,30 @@ function createServer(opts) {
     return elementOut(el);
   });
 
+  // Карточка изделия и смена статуса ОДНОГО изделия (app/main.py: GET /elements/{id}, PATCH /elements/{id}/status).
+  // Права — по объекту изделия (_guard_elements, ключ «status»); тело: status, changed_at, comment, contract_id (по желанию).
+  const ELEMENT_STATUSES = ["planned", "contracting", "in_production", "shipped", "delivered", "installed", "accepted"];
+  const historyOf = (e) => (e.history_rows ||= [{ status: e.current_status, changed_at: "2026-08-01 09:00:00", changed_by: "QA", comment: null }]);
+  route("GET", "/elements/:element_id", (ctx) => {
+    const el = data.elements.find((e) => e.id === pathInt(ctx, "element_id"));
+    if (!el) fail(404, "Элемент не найден");
+    return { ...elementOut(el), history: historyOf(el).slice().reverse().map((h) => ({ status: h.status, changed_at: h.changed_at, changed_by: h.changed_by, comment: h.comment })).reverse() };
+  });
+  route("PATCH", "/elements/:element_id/status", (ctx) => {
+    const id = pathInt(ctx, "element_id");
+    const b = ctx.body && typeof ctx.body === "object" ? ctx.body : {};
+    if (!ELEMENT_STATUSES.includes(b.status)) throw validation([{ type: "enum", loc: ["body", "status"], msg: "Input should be a valid status", input: b.status }]);
+    const el = data.elements.find((e) => e.id === id);
+    if (!el) fail(404, "Элемент не найден");
+    if (el.object_id != null) assertObjectFeature(ctx.user, el.object_id, "status", "write");
+    else if (!isAdmin(ctx.user)) fail(403, "Элемент не привязан к объекту — операция доступна администратору сервиса");
+    const now = nowStr(nowFn);
+    historyOf(el).push({ status: b.status, changed_at: b.changed_at || now, changed_by: ctx.user.display_name || "QA", comment: b.comment ?? null });
+    el.current_status = b.status;
+    el.updated_at = now;
+    return { ...elementOut(el), history: historyOf(el).map((h) => ({ status: h.status, changed_at: h.changed_at, changed_by: h.changed_by, comment: h.comment })), contract_warning: null };
+  });
+
   // ---- удаление записей справочников (app/dict_delete.py) ----
   // Виды: project/object (удаляются только пустыми) и цепочка контрактации counterparty → agreement →
   // specification → contract (подчинённые уходят вместе, ссылки на контракт переводятся на замену).

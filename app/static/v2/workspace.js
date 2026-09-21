@@ -425,7 +425,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const cardRows = (d) => Object.entries(d).filter(([k, v]) => !SKIP_CARD.has(k) && v !== null && v !== "" && v !== false && typeof v !== "object")
     .map(([k, v]) => row(k, String(v))).join("");
   function mfrPropsHtml() {
-    if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Модель загружается…</p>`;
+    if (!sc || !sc.loaded || !sc.mfr) return `<p class="v2-muted ws-pad">Модель загружается…</p>`;
     const m = sc.mfr;
     const sel = m.selected;
     if (!sel) {
@@ -460,7 +460,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     return `<div class="ws-pills">${items.map((it) => `<button type="button" class="ws-pill" data-mpick="${kind}" data-id="${esc(it.id)}" aria-pressed="${it.on}" title="${esc(it.title || it.label)}">${esc(it.label)}${it.warn ? " ⚠" : ""} <em>${it.count}</em></button>`).join("")}</div>`;
   }
   function mfrFiltersHtml() {
-    if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Модель загружается…</p>`;
+    if (!sc || !sc.loaded || !sc.mfr) return `<p class="v2-muted ws-pad">Модель загружается…</p>`;
     const m = sc.mfr;
     const head = `<div class="ws-fhead"><span>Элементов: ${m.elements}</span><button type="button" class="v2-btn" data-act="reset-filters" ${m.filtersActive ? "" : "disabled"}>Сбросить все</button></div>`;
     const sec = (id, title, body, note) => `<section class="ws-fgroup"><button type="button" class="ws-fh" data-group="${id}" aria-expanded="${!closedGroups.has(id)}"><span>${closedGroups.has(id) ? "▸" : "▾"} ${esc(title)}</span></button>${closedGroups.has(id) ? "" : `<div class="ws-fbody">${note ? `<p class="v2-muted ws-fnote">${esc(note)}</p>` : ""}${body}</div>`}</section>`;
@@ -612,7 +612,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const s = $("#ws-status");
     if (!sc || !sc.loaded) { s.textContent = sc?.error ? "Схема не загружена" : "Загрузка схемы…"; return; }
     if (mfr) {
-      const m = sc.mfr || {};
+      if (!sc.mfr) { s.textContent = "Загрузка модели…"; return; }
+      const m = sc.mfr;
       const n = m.selectedBlocks?.length || 0;
       const selT = n > 1 ? `Выбрано блоков: ${n}` : m.selected ? (m.selected.kind === "block" ? "Выбран блок" : "Выбран элемент") : "Ничего не выбрано";
       s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;

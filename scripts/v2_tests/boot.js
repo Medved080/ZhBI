@@ -13,6 +13,8 @@ import { installFakeBackend } from "/tests/fake-backend.js";
 const PROFILES = {
   readonly: { system_admin: false, features: { users: "read", roles: "read", projects: "read", counterparties: "read", dict_delete: "none" } },
   none: { system_admin: false, features: {} },
+  // рабочие места со схемой: просмотр без права менять статусы
+  viewer: { system_admin: false, features: { workspace_model: "read", workspace_mfr: "read", workspace_picker: "read", workspace_foreman: "read", status: "read" } },
   writer: { system_admin: false, features: { users: "write", roles: "write", projects: "write", counterparties: "write", dict_delete: "none" } },
   deleter: { system_admin: false, features: { users: "write", roles: "write", projects: "write", counterparties: "write", dict_delete: "write" } },
 };
