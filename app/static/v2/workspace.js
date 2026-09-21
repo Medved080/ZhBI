@@ -16,15 +16,20 @@ import { ApiError } from "./api.js";
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
 const TABS = [["props", "Свойства"], ["status", "Статус"], ["filters", "Фильтры"], ["view", "Вид"]];
+// У прораба фильтры — постоянная панель слева (как в V1), поэтому в правой панели вкладки «Фильтры» нет.
+const TABS_FOREMAN = TABS.filter(([k]) => k !== "filters");
 const FRAME_TIMEOUT_MS = 45000;
 
 const fmtDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]}` : (v ? String(v) : "—"); };
 const fmtDateTime = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}` : fmtDate(v); };
 const readNum = (k, d) => { try { const v = Number(sessionStorage.getItem(k)); return Number.isFinite(v) && v > 0 ? v : d; } catch (e) { return d; } };
 const writeSess = (k, v) => { try { sessionStorage.setItem(k, String(v)); } catch (e) { /* хранилище недоступно — не критично */ } };
+const readSess = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
 
 export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "model" }) {
   el.className = "v2-page v2-app v2-ws";
+  const foreman = ws === "foreman";
+  const tabs = foreman ? TABS_FOREMAN : TABS;
   const WS_TITLE = screen.title;
   let dead = false;
   let curObject = objectId;
@@ -48,11 +53,14 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     <div class="ws-top">
       <div class="ws-title"><strong>${esc(WS_TITLE)}</strong><span class="ws-crumb" id="ws-crumb"></span></div>
       <div class="ws-seg" role="group" aria-label="Режим схемы" id="ws-modes">${VIEWS.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="false">${t}</button>`).join("")}</div>
+      <div class="ws-search"><input type="search" id="ws-q" placeholder="Найти марку или адрес" aria-label="Найти элемент по марке или адресу" autocomplete="off" maxlength="60"><div class="ws-found" id="ws-found" role="listbox" hidden></div></div>
       <span class="ws-spacer"></span>
-      <button type="button" class="ws-ibtn" id="ws-nav" title="Свернуть или показать общую навигацию" aria-pressed="false">☰ Навигация</button>
+      <button type="button" class="ws-ibtn" id="ws-nav" title="Показать или скрыть общую навигацию" aria-pressed="true">☰ Навигация</button>
       <button type="button" class="ws-ibtn" id="ws-panel-toggle" title="Свернуть или показать правую панель" aria-pressed="true">Панель ▸</button>
     </div>
+    ${foreman ? `<div class="ws-strip" id="ws-strip" role="status" aria-label="Показатели по показанным элементам"></div>` : ""}
     <div class="ws-main">
+      ${foreman ? `<aside class="ws-left" id="ws-left" aria-label="Фильтры"><div class="ws-left-head">Отбор элементов</div><div class="ws-panel-body" id="ws-left-body"></div></aside>` : ""}
       <div class="ws-stage" id="ws-stage">
         <div class="ws-tools" role="toolbar" aria-label="Инструменты схемы">
           <button type="button" data-tool="fit" title="Вписать схему в экран" aria-label="Вписать схему в экран">⤢</button>
@@ -64,7 +72,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       </div>
       <div class="ws-resize" id="ws-resize" role="separator" aria-orientation="vertical" aria-label="Ширина правой панели" tabindex="0"></div>
       <aside class="ws-panel" id="ws-panel" aria-label="Панель рабочего места">
-        <div class="ws-tabs" role="tablist">${TABS.map(([k, t]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="false">${t}</button>`).join("")}</div>
+        <div class="ws-tabs" role="tablist">${tabs.map(([k, t]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="false">${t}</button>`).join("")}</div>
         <div class="ws-panel-body" id="ws-panel-body"></div>
       </aside>
     </div>
@@ -95,6 +103,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       onScene(m.state);
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
       filters = m.model; paintPanel();
+    } else if (m.evt === "search-result" && Array.isArray(m.items)) {
+      if (m.text === $("#ws-q").value) paintFound(m);
     } else if (m.evt === "notice") {
       notice = String(m.message || "").slice(0, 300); paintStatus();
     } else if (m.evt === "cmd-error") {
@@ -131,7 +141,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     frame.title = `Схема: ${WS_TITLE}`;
     frame.style.visibility = "hidden";
     const p = new URLSearchParams({ embed: "scene", object_id: String(curObject) });
-    if (ws !== "model") p.set("ws", ws);
+    // Схема прораба — та же схема ЖБИ (его постоянную панель отбора рисует оболочка), поэтому кадр открывается как «Модель»
+    if (ws === "mfr" || ws === "picker") p.set("ws", ws);
     frame.setAttribute("data-zhbi-scene", p.toString());
     frame.srcdoc = html;
     stage.prepend(frame);
@@ -170,7 +181,21 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   }
 
   // ------------------------------------------------------------ отрисовка
-  function paintAll() { if (dead) return; paintTop(); paintOverlay(); paintPanel(); paintStatus(); }
+  function paintAll() { if (dead) return; paintTop(); paintOverlay(); paintPanel(); paintStatus(); paintStrip(); }
+
+  // Показатели прораба: статусы показанных элементов и доля смонтированных/принятых (по тому же составу, что на схеме).
+  function paintStrip() {
+    const strip = $("#ws-strip");
+    if (!strip) return;
+    if (!sc || !sc.loaded) { strip.textContent = ""; return; }
+    const counts = new Map(sc.statusCounts || []);
+    const order = sc.statusOrder?.length ? sc.statusOrder : Array.from(counts.keys());
+    const shown = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+    const done = (counts.get("installed") || 0) + (counts.get("accepted") || 0);
+    strip.innerHTML = `<span class="ws-kpi"><b>${shown}</b> элементов${sc.excluded ? ` из ${sc.total}` : ""}</span>`
+      + `<span class="ws-kpi" title="Доля смонтированных и принятых среди показанных"><b>${shown ? Math.round((done / shown) * 100) : 0}%</b> смонтировано и принято</span>`
+      + order.filter((k) => counts.get(k)).map((k) => `<span class="ws-chip"><i class="ws-sw" style="background:${esc(sw(k))}"></i>${esc(stLabel(k))}: <b>${counts.get(k)}</b></span>`).join("");
+  }
 
   function paintTop() {
     const crumb = $("#ws-crumb");
@@ -204,9 +229,12 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     for (const b of el.querySelectorAll(".ws-tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     const body = $("#ws-panel-body");
     const keepScroll = body.scrollTop;
+    if (!tabs.some(([k]) => k === tab)) tab = "props";
     body.innerHTML = tab === "props" ? propsHtml() : tab === "status" ? statusHtml() : tab === "filters" ? filtersHtml() : viewHtml();
     body.scrollTop = keepScroll;
     bindPanel(body);
+    const left = $("#ws-left-body");
+    if (left) { const ks = left.scrollTop; left.innerHTML = filtersHtml(); left.scrollTop = ks; bindPanel(left); }
   }
 
   function row(k, v) { return v === null || v === undefined || v === "" ? "" : `<div class="ws-kv"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`; }
@@ -350,19 +378,51 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     s.innerHTML = `<span>Показано <b>${sc.shown}</b> из <b>${sc.total}</b></span><span>${esc(sel)}</span><span>${sc.excluded ? `Фильтры активны: снято ${sc.excluded}` : "Фильтры не заданы"}</span><span>Режим: ${esc((VIEWS.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
   }
 
+  // ---- поиск по марке/адресу (среди показанных на схеме элементов)
+  const qInput = $("#ws-q"), found = $("#ws-found");
+  let qTimer = null;
+  function paintFound(m) {
+    if (!m.text.trim()) { found.hidden = true; found.innerHTML = ""; return; }
+    found.hidden = false;
+    found.innerHTML = m.items.length
+      ? m.items.map((it) => `<button type="button" role="option" data-id="${it.id}"><i class="ws-sw" style="background:${esc(sw(it.status))}"></i><b>${esc(it.mark || "—")}</b> <span>${esc(it.type || "")}</span><small>${esc(it.address || "")}</small></button>`).join("")
+        + (m.total > m.items.length ? `<div class="ws-found-more">Показаны первые ${m.items.length} из ${m.total}. Уточните запрос.</div>` : "")
+      : `<div class="ws-found-more">Ничего не найдено среди показанных на схеме элементов.</div>`;
+  }
+  qInput.addEventListener("input", () => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => send("search", { text: qInput.value }), 250);
+    if (!qInput.value.trim()) { found.hidden = true; found.innerHTML = ""; }
+  });
+  qInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { qInput.value = ""; found.hidden = true; }
+    else if (e.key === "Enter") { const b = found.querySelector("button[data-id]"); if (b) { b.click(); e.preventDefault(); } }
+  });
+  found.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-id]"); if (!b) return;
+    const id = Number(b.dataset.id);
+    send("select", { id }); send("locate", { id });
+    found.hidden = true;
+  });
+  document.addEventListener("pointerdown", onDocDown, true);
+  function onDocDown(e) { if (!found.hidden && !e.target.closest(".ws-search")) found.hidden = true; }
+
   // ------------------------------------------------------------ управление
   $("#ws-modes").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) send("setView", { mode: b.dataset.view }); });
   el.querySelector(".ws-tools").addEventListener("click", (e) => { const b = e.target.closest("[data-tool]"); if (b) tool(b.dataset.tool); });
   el.querySelector(".ws-tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (b) { tab = b.dataset.tab; paintPanel(); } });
 
+  // Глобальная навигация сворачивается: на узком экране схеме нужна вся ширина, поэтому там по умолчанию свёрнута.
   const shellSide = () => document.getElementById("v2-side");
   const navWasHidden = shellSide()?.hidden === true;
-  $("#ws-nav").addEventListener("click", () => {
+  const navBtn = $("#ws-nav");
+  function setNav(hidden) {
     const side = shellSide(); if (!side) return;
-    side.hidden = !side.hidden;
-    $("#ws-nav").setAttribute("aria-pressed", String(side.hidden));
+    side.hidden = hidden; navBtn.setAttribute("aria-pressed", String(!hidden)); writeSess("v2.ws.navHidden", hidden ? "1" : "0");
     setTimeout(() => window.dispatchEvent(new Event("resize")), 30);
-  });
+  }
+  navBtn.addEventListener("click", () => { const side = shellSide(); if (side) setNav(!side.hidden); });
+  setNav((readSess("v2.ws.navHidden") ?? (window.innerWidth < 1500 ? "1" : "0")) === "1");
   $("#ws-panel-toggle").addEventListener("click", () => {
     panelHidden = !panelHidden;
     panel.hidden = panelHidden; $("#ws-resize").hidden = panelHidden;
@@ -397,7 +457,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       return true;
     },
     destroy() {
-      dead = true; window.removeEventListener("message", onMessage); stopFrame(); queue.length = 0;
+      dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
+      clearTimeout(qTimer); stopFrame(); queue.length = 0;
       const side = shellSide(); if (side) side.hidden = navWasHidden;
     },
   };

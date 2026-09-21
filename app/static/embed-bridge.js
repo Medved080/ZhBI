@@ -5,11 +5,12 @@
 //   кадр → родитель:  { proto, evt: "ready" }                       — мост установлен (родитель может слать команды);
 //                     { proto, evt: "state", state: {...} }         — снимок: объект, режим 2D/3D, загрузка, ошибка, счётчики, выбор;
 //                     { proto, evt: "filters", model: {...} }       — модель фильтров (группы → значения → включено/доступно/число);
+//                     { proto, evt: "search-result", text, total, items } — результат поиска по марке/адресу;
 //                     { proto, evt: "notice", message }             — сообщение движка (то, что V1 показал бы в строке состояния);
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · getFilters · reload
+//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · reload
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
 (() => {
   "use strict";
@@ -341,6 +342,21 @@
       renderZones();
       if (typeof apply3DZoneVisibility === "function") apply3DZoneVisibility();
       scheduleState();
+    },
+    // Поиск по марке/адресу среди ПОКАЗАННЫХ на схеме элементов (те, что убрал фильтр, не ищутся); ответ — событие search-result
+    search(a) {
+      if (typeof a.text !== "string" || a.text.length > 60) throw new Error("text");
+      const q = a.text.trim().toLowerCase();
+      const items = []; let total = 0;
+      if (q) {
+        for (const e of state.elements) {
+          if (!passesPlacementFilters(e)) continue;
+          if (!(String(e.mark || "").toLowerCase().includes(q) || String(e.address || "").toLowerCase().includes(q))) continue;
+          total++;
+          if (items.length < 30) items.push({ id: e.id, mark: e.mark, type: e.element_type, status: e.current_status, address: e.address });
+        }
+      }
+      post({ evt: "search-result", text: a.text, total, items });
     },
     getFilters() { sendFilters(); scheduleState(); },
     async reload() { await loadPlan(true); },
