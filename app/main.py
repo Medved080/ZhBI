@@ -407,6 +407,8 @@ app.include_router(auth_router)
 from app.allocation import router as allocation_router, state_router as allocation_state_router  # noqa: E402
 app.include_router(allocation_router)
 app.include_router(allocation_state_router)
+from app.element_ops import router as element_ops_router  # noqa: E402
+app.include_router(element_ops_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
 # не должен иметь ни единого шанса уехать в {user_id}.
 app.include_router(rights_matrix_router)

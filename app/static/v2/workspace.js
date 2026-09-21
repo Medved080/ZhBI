@@ -15,6 +15,7 @@ import { ApiError } from "./api.js";
 import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
 import { verifyAllocationBatch, verdictText } from "./alloc-verify.js";
+import { createElementOps } from "./element-ops.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -58,11 +59,13 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   let panelHidden = false;
   let panelW = readNum(ws === "picker" ? "v2.ws.panelW.picker" : "v2.ws.panelW", ws === "picker" ? 430 : 340);
   const detail = { id: null, data: null, error: "", seq: 0 };
-  // Смена статуса одного элемента (единственная запись рабочего места ЖБИ). Состояние формы хранится по id элемента:
-  // переключение выбора не теряет ввод и не переносит его на другой элемент.
-  const wrs = new Map();
-  const wrOf = (id) => { if (!wrs.has(id)) wrs.set(id, { status: "", at: "", comment: "", busy: false, error: "", unknown: false, done: "", warn: "" }); return wrs.get(id); };
-  let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте
+  // Операции над изделиями (смена статуса одного и пачки, плановая дата, контракт, комментарий, история, реквизиты) — модуль element-ops.js.
+  // Здесь только связка: снимок сцены, права, перерисовка панели, команды кадру.
+  const ops = createElementOps({
+    api, send: (c, a) => send(c, a), getScene: () => sc, getObjectId: () => curObject, statusLabel: (k) => stLabel(k), statusColor: (k) => sw(k),
+    repaint: () => paintPanel(), reloadDetail: (id) => loadDetail(id), isDead: () => dead, getDetail: (id) => (detail.id === id ? detail.data : null), groupOps: !picker,
+  });
+  let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте (распределение комплектовщика)
   const openGroups = new Set(["status", "pk:elementType"]);
   const openItems = new Set();
   const groupSearch = new Map();
@@ -126,6 +129,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       pk = m.model;
       if (al.loaded && contractIdsKey() !== al.idsKey) al.loaded = false;   // сцена догрузилась и состав контрактов объекта изменился — перечитать, а не показывать «нет контрактов»
       paintPanel();
+    } else if (m.evt === "contracts" && Array.isArray(m.items)) {
+      ops.setContracts(m.objectId, m.items);
     } else if (m.evt === "candidates" && Array.isArray(m.items)) {
       al.cand = { elementType: m.elementType, mark: m.mark, items: m.items }; al.candAsked = true; paintPanel();
     } else if (m.evt === "search-result" && Array.isArray(m.items)) {
@@ -295,47 +300,30 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     for (const b of el.querySelectorAll(".ws-tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     const body = $("#ws-panel-body");
     const keepScroll = body.scrollTop;
+    const restoreFocus = ops.captureFocus(body);     // фокус и курсор переживают перерисовку (снимки сцены приходят часто)
     if (!tabs.some(([k]) => k === tab)) tab = "props";
     body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? (mfr ? mfrFiltersHtml() : filtersHtml())
       : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
     body.scrollTop = keepScroll;
     bindPanel(body);
+    restoreFocus();
     const left = $("#ws-left-body");
     if (left) { const ks = left.scrollTop; left.innerHTML = filtersHtml(); left.scrollTop = ks; bindPanel(left); }
   }
 
   function row(k, v) { return v === null || v === undefined || v === "" ? "" : `<div class="ws-kv"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`; }
 
-  function propsHtml() {
+  function propsHtml() { return ops.bannerHtml() + propsInner(); }
+  function propsInner() {
     if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Схема загружается…</p>`;
-    if (sc.multi && sc.multi.count > 1) {
-      const m = sc.multi;
-      return `<div class="ws-pad"><h3 class="ws-h">Выбрано элементов: ${m.count}</h3>
-        <p class="v2-muted">Показаны сведения по всей выборке. Групповые изменения статуса выполняются в текущем интерфейсе.</p>
-        <h4>По типам</h4><ul class="ws-list">${m.byType.sort((a, b) => b[1] - a[1]).map(([t, n]) => `<li><span>${esc(t)}</span><b>${n}</b></li>`).join("")}</ul>
-        <h4>По статусам</h4><ul class="ws-list">${m.byStatus.sort((a, b) => b[1] - a[1]).map(([s, n]) => `<li><span><i class="ws-sw" style="background:${esc(sw(s))}"></i>${esc(stLabel(s))}</span><b>${n}</b></li>`).join("")}</ul>
-        <button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button></div>`;
-    }
+    if (sc.multi && sc.multi.count > 1) return ops.groupHtml();   // групповое выделение: сводка и групповые операции
     const e = sc.selected;
     if (!e) {
       return `<div class="ws-pad ws-empty"><h3 class="ws-h">Ничего не выбрано</h3>
         <p class="v2-muted">Нажмите на элемент схемы, чтобы увидеть его свойства. Shift + перетаскивание — выбор рамкой.</p>
         <dl class="ws-dl">${row("Показано на схеме", `${sc.shown} из ${sc.total}`)}${row("Активных фильтров", sc.excluded ? String(sc.excluded) : "нет")}</dl></div>`;
     }
-    const d = detail.id === e.id ? detail.data : null;
-    const z = e.zones || {};
-    const hist = d?.history || [];
-    return `<div class="ws-pad"><div class="ws-card-head">
-        <div class="ws-mark">${esc(e.mark || "—")}</div>
-        <div class="ws-type">${esc(e.element_type)}${e.subtype ? ` <span class="v2-muted">· ${esc(e.subtype)}</span>` : ""}</div>
-        <div class="ws-chip"><i class="ws-sw" style="background:${esc(sw(e.current_status))}"></i>${esc(stLabel(e.current_status))}</div></div>
-      <div class="ws-actions"><button type="button" class="v2-btn" data-act="locate">Показать на схеме</button><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button></div>
-      <h4>Размещение</h4><dl class="ws-dl">${row("Адрес по осям", e.address)}${row("Этаж", e.floor)}${row("Отметка, мм", e.elevation_mm)}${row("Захватка", z.zakhvatka)}${row("Кран", z.crane)}${row("Стоянка", z.stance)}</dl>
-      <h4>Контрактация</h4><dl class="ws-dl">${e.contract_id ? `${row("Контрагент", e.supplier)}${row("Контракт", e.contractName)}` : row("Контракт", "не назначен")}</dl>
-      <h4>Даты</h4><dl class="ws-dl">${row("Начало СМР", fmtDate(e.project_smr_start_date))}${row("Плановая поставка", fmtDate(e.planned_delivery_date))}${row("Фактическая поставка", fmtDate(e.actual_delivery_date))}${row("Завершение СМР", fmtDate(e.project_delivery_date))}</dl>
-      ${e.comment ? `<h4>Комментарий</h4><p class="ws-comment">${esc(e.comment)}</p>` : ""}
-      <h4>История статусов</h4>${detail.error ? `<p class="v2-muted">${esc(detail.error)}</p>` : !d ? `<p class="v2-muted">Загрузка…</p>` : hist.length ? `<ul class="ws-hist">${hist.map((h) => `<li><i class="ws-sw" style="background:${esc(sw(h.status))}"></i><span>${esc(stLabel(h.status))}</span><small>${esc(fmtDateTime(h.changed_at))}${h.changed_by ? " · " + esc(h.changed_by) : ""}</small></li>`).join("")}</ul>` : `<p class="v2-muted">Изменений статуса нет.</p>`}
-      ${statusFormHtml(e)}</div>`;
+    return ops.cardHtml(e, { detail: detail.id === e.id ? detail.data : null, detailError: detail.id === e.id ? detail.error : "" });
   }
 
   function statusHtml() {
@@ -379,78 +367,6 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }).join("");
   }
 
-
-
-  // ---- смена статуса ОДНОГО элемента: форма, отправка, разбор исхода
-  function statusFormHtml(e) {
-    if (canStatus === null) return "";
-    if (!canStatus) return `<p class="v2-muted ws-ro">Смена статуса недоступна: нет права изменять статусы на этом объекте.</p>`;
-    const w = wrOf(e.id);
-    // «Запланирован» не предлагается: возврат на него СНИМАЕТ контракт изделия (правило backend), это делается в текущем интерфейсе
-    const opts = (sc?.statusOrder || []).filter((k) => k !== e.current_status && k !== "planned");
-    return `<h4>Изменить статус</h4>
-      <form class="ws-form" id="ws-sform" autocomplete="off" novalidate>
-        <label class="ws-fld">Новый статус
-          <select name="status" ${w.busy ? "disabled" : ""}><option value="">— выберите —</option>${opts.map((k) => `<option value="${esc(k)}" ${w.status === k ? "selected" : ""}>${esc(stLabel(k))}</option>`).join("")}</select></label>
-        <label class="ws-fld">Дата и время изменения <small>(пусто — сейчас)</small>
-          <input type="datetime-local" name="at" value="${esc(w.at)}" ${w.busy ? "disabled" : ""}></label>
-        <label class="ws-fld">Комментарий
-          <textarea name="comment" rows="2" maxlength="500" ${w.busy ? "disabled" : ""}>${esc(w.comment)}</textarea></label>
-        <p class="v2-muted ws-fnote">Контракт изделия сохраняется прежним (форма его не передаёт). Возврат в «Запланирован» снимает контракт — он выполняется в текущем интерфейсе. Изменение попадёт в историю статусов и не отменяется здесь.</p>
-        <div class="ws-actions"><button type="submit" class="v2-btn v2-primary" ${w.busy || !w.status ? "disabled" : ""}>${w.busy ? "Сохранение…" : "Сохранить статус"}</button></div>
-        ${w.error ? `<p class="ws-err" role="alert">${esc(w.error)}</p>` : ""}
-        ${w.warn ? `<p class="ws-warnbox" role="status">${esc(w.warn)}</p>` : ""}
-        ${w.done ? `<p class="ws-ok" role="status">${esc(w.done)}</p>` : ""}
-      </form>`;
-  }
-  function bindStatusForm(body) {
-    const f = body.querySelector("#ws-sform");
-    if (!f || !sc?.selected) return;
-    const id = sc.selected.id; const w = wrOf(id);
-    f.querySelector('[name="status"]').addEventListener("change", (ev) => { w.status = ev.target.value; w.error = ""; w.done = ""; paintPanel(); });
-    f.querySelector('[name="at"]').addEventListener("input", (ev) => { w.at = ev.target.value; });
-    f.querySelector('[name="comment"]').addEventListener("input", (ev) => { w.comment = ev.target.value; });
-    f.addEventListener("submit", (ev) => { ev.preventDefault(); submitStatus(id); });
-  }
-  async function submitStatus(id) {
-    const w = wrOf(id);
-    if (w.busy || !w.status || !canStatus) return;            // повторная отправка, пока идёт запрос, невозможна
-    const el0 = sc?.selected;
-    if (!el0 || el0.id !== id) return;                        // форма всегда про ВЫБРАННЫЙ элемент
-    const wanted = w.status;
-    const body = { status: wanted };
-    if (w.at) body.changed_at = w.at.replace("T", " ") + ":00";
-    if (w.comment.trim()) body.comment = w.comment.trim();
-    w.busy = true; w.error = ""; w.done = ""; w.warn = ""; w.unknown = false; paintPanel();
-    try {
-      const res = await api.patch(`/elements/${id}/status`, body);
-      w.done = `Статус изменён: ${stLabel(res?.current_status || wanted)}.`;
-      if (res?.contract_warning) {
-        const c = res.contract_warning;
-        w.warn = `Внимание по контракту «${c.contract_name}»: по спецификации ${c.quantity}, фактически ${c.fact}${c.damaged ? `, брак ${c.damaged}` : ""}.`;
-      }
-      w.status = ""; w.at = ""; w.comment = "";
-      send("refreshElement", { id });                          // схема обновляется тем, что подтвердил сервер
-      if (sc?.selected?.id === id) loadDetail(id);            // история — заново с сервера
-    } catch (err) {
-      if (err instanceof ApiError && !err.blockedByPolicy && (err.status === 0 || err.status >= 500)) {
-        // исход неизвестен: запрос мог дойти. Повторно НЕ отправляем — читаем элемент и говорим, что видит сервер
-        w.unknown = true;
-        try {
-          const d = await api.get(`/elements/${id}`);
-          if (d.current_status === wanted) { w.done = `Сервер подтвердил: статус «${stLabel(d.current_status)}» уже установлен.`; w.status = ""; w.at = ""; w.comment = ""; send("refreshElement", { id }); loadDetail(id); }
-          else w.error = `Ответ не получен, изменение не подтверждено: сервер показывает статус «${stLabel(d.current_status)}». Введённое сохранено — проверьте связь и отправьте снова.`;
-        } catch (e2) {
-          w.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и посмотрите историю статусов элемента.";
-        }
-      } else {
-        w.error = err instanceof ApiError ? err.detail : "Не удалось сохранить статус";   // ввод остаётся в форме
-      }
-    } finally {
-      w.busy = false;
-      if (!dead) paintPanel();
-    }
-  }
 
 
   // ---- комплектовщик: распределение изделий одной позиции на контракт (поставщик → контракт → марка → изделия → подтверждение)
@@ -759,7 +675,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     body.querySelectorAll("[data-pkn]").forEach((b) => b.addEventListener("click", () => send("pickerToggle", { key: "contract", value: pk?.noneValue ?? "__none__" })));
     body.querySelectorAll("[data-pkhl]").forEach((b) => b.addEventListener("click", () => send("pickerHighlight", { on: b.getAttribute("aria-pressed") !== "true" })));
     body.querySelectorAll("[data-pkrem]").forEach((b) => b.addEventListener("click", () => { onlyRemainder = !onlyRemainder; paintPanel(); }));
-    bindStatusForm(body);
+    ops.bind(body);
     body.querySelectorAll("[data-al]").forEach((b) => b.addEventListener(b.tagName === "SELECT" ? "change" : "click", () => {
       const a = b.dataset.al;
       if (a === "supplier") { al.supplier = b.value; al.contractId = null; al.lineKey = null; al.cand = null; al.candAsked = false; al.error = ""; al.done = ""; paintPanel(); }
@@ -828,6 +744,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function capabilities() {
     const c = [];
     if (!mfr && canStatus) c.push("смена статуса");
+    if (!mfr && ops.rights.plannedDate) c.push("плановая дата");
+    if (!mfr && ops.rights.comment) c.push("комментарии");
     if (picker && allocEnabled()) c.push("распределение по контрактам");
     return c;
   }
@@ -924,12 +842,14 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   // Права на смену статусов считаются по объекту (как в V1): не получилось узнать — формы нет, а не открываем лишнее
   async function loadStatusRights() {
     if (mfr) { canStatus = false; return; }
+    ops.reset();
     const obj = curObject;
     try {
       const r = await api.get(`/me/permissions?object_id=${obj}`);
       if (dead || obj !== curObject) return;
       canStatus = !!r.system_admin || (r.features?.status === "write" && !(r.not_applicable || []).includes("status"));
-    } catch (e) { if (dead || obj !== curObject) return; canStatus = false; }
+      ops.setRights(r);
+    } catch (e) { if (dead || obj !== curObject) return; canStatus = false; ops.rightsFailed(); }
     paintPanel(); paintStatus();
   }
   loadStatusRights();
@@ -938,22 +858,13 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   return {
     // Введённое в форме смены статуса, но не отправленное — несохранённое; идущий запрос уйти не даёт (шлюз оболочки блокирует переходы)
-    hasUnsavedChanges: () => Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at)),
-    guardLeave: async () => {
-      if (!Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at))) return true;
-      const choice = await showUnsavedDialog("В форме смены статуса есть введённое, но не отправленное. Что сделать?");
-      if (choice === "cancel") return false;
-      if (choice === "discard") { wrs.clear(); return true; }
-      // «Сохранить и продолжить»: отправляем форму выбранного элемента и уходим только при успехе
-      const id = sc?.selected?.id;
-      if (id) await submitStatus(id);
-      return !Array.from(wrs.values()).some((w) => w.status || w.comment.trim() || w.at);
-    },
+    hasUnsavedChanges: () => ops.hasUnsaved(),
+    guardLeave: () => ops.guardLeave(),
     // Смена объекта в шапке V2: тот же кадр получает команду (кадр сам сбрасывает несовместимую выборку и фильтры,
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; wrs.clear(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      curObject = id; ops.reset(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },

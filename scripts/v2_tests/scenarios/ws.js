@@ -29,6 +29,7 @@ const STUB_HTML = `<!doctype html><html><head><meta charset="utf-8"></head><body
     else if (m.cmd === "setView") window.__emit({ view: m.args.mode });
     else if (m.cmd === "clearSelection") window.__emit({ selected: null, selectedId: null, multiItems: [] });
     else if (m.cmd === "setObject") window.__emit({ objectId: m.args.objectId });
+    else if (m.cmd === "getContracts") send({ evt: "contracts", objectId: 1, items: window.__contracts || [] });
     else if (m.cmd === "pickerCandidates") send({ evt: "candidates", elementType: m.args.elementType, mark: m.args.mark, items: window.__cands || [] });
     else if (m.cmd === "pickerSelectIds") window.__emit({ multiItems: m.args.ids.map(function (id) { return { id: id, mark: "QA-Z1", element_type: "QA-Тип", current_status: "planned", contract_id: null }; }) });
   });
@@ -257,55 +258,74 @@ export const tests = [
     },
   },
   {
-    id: "WS-08", title: "Смена статуса одного элемента: форма только при праве, PATCH без контракта, двойной клик — один запрос, сбой — без автоповтора и с сохранением ввода, refreshElement после успеха",
+    id: "WS-08", title: "Смена статуса одного изделия: форма только при праве; предпросмотр и запись БЕЗ контрактов «для записи»; двойной клик — один запрос; сбой — без автоповтора и с сохранением ввода; последствия возврата на «Запланирован» — до записи",
     async run(t) {
       const a = await openApp({ home: true });
       stub(a);
       await openWs(a);
-      emitSel(a, 105, { mark: "К-105", current_status: "contracting" });
+      emitSel(a, 105, { mark: "К-105", current_status: "contracting", contract_id: 1, object_id: 1 });
       await waitFor(() => a.$("#ws-sform"), { what: "форма смены статуса" });
+      const ops = () => a.ctl.log.filter((e) => e.method === "POST" && e.path === "/element-ops/status-batch");
       t.ok(!a.$$("#ws-sform select option").some((o) => o.value === "contracting"), "текущий статус в списке не предлагается");
-      t.ok(!a.$$("#ws-sform select option").some((o) => o.value === "planned"), "«Запланирован» не предлагается: возврат на него снимает контракт");
-      t.has(a.$("#ws-sform").textContent, "Возврат в «Запланирован» снимает контракт", "об этом сказано в форме");
+      t.ok(a.$$("#ws-sform select option").some((o) => o.value === "planned"), "«Запланирован» предлагается: последствия показываются до записи");
+      t.has(a.$("#ws-sform").textContent, "Контракт изделия сохраняется прежним", "об этом сказано в форме");
       t.ok(a.$("#ws-sform button[type=submit]").disabled, "без выбора статуса «Сохранить» недоступно");
       // отказ сервера: текст показан, ввод остался, повтора нет
       a.setValue(a.$("#ws-sform select"), "delivered");
       a.setValue(a.$("#ws-sform textarea"), "приняли на площадке");
-      a.ctl.failNext("PATCH /elements", { status: 409, detail: "QA: контракт исчерпан" });
+      a.ctl.failNext("POST /element-ops", { status: 409, detail: "QA: контракт исчерпан" });
       a.click(a.$("#ws-sform button[type=submit]"));
       await waitFor(() => /QA: контракт исчерпан/.test(a.$("#ws-sform .ws-err")?.textContent || ""), { what: "сообщение об отказе" });
       t.eq(a.$("#ws-sform select").value, "delivered", "выбранный статус остался");
       t.eq(a.$("#ws-sform textarea").value, "приняли на площадке", "комментарий остался");
-      t.eq(a.ctl.log.filter((e) => e.method === "PATCH").length, 1, "автоповтора нет");
+      t.eq(ops().length, 1, "автоповтора нет");
       // сетевой сбой: исход неизвестен → чтение, повторная отправка не делается
-      a.ctl.failNext("PATCH /elements", { network: true });
+      a.ctl.failNext("POST /element-ops", { network: true });
       a.click(a.$("#ws-sform button[type=submit]"));
       await waitFor(() => /не подтверждено/.test(a.$("#ws-sform .ws-err")?.textContent || ""), { what: "неизвестный исход" });
-      t.eq(a.ctl.log.filter((e) => e.method === "PATCH").length, 2, "после сетевого сбоя запрос не повторён автоматически");
-      t.ok(a.ctl.log.some((e) => e.method === "GET" && /\/elements\/105$/.test(e.path)), "исход проверен чтением элемента");
+      t.eq(ops().length, 2, "после сетевого сбоя запрос не повторён автоматически");
+      t.ok(a.ctl.log.some((e) => e.method === "GET" && e.path.startsWith("/element-ops/state")), "исход проверен чтением текущего состояния изделия");
       t.eq(a.$("#ws-sform select").value, "delivered", "ввод сохранён после сбоя");
-      // успех + двойной клик: один запрос
-      const hold = a.ctl.hold("PATCH /elements");
+      // успех + двойной клик: один предпросмотр и одна запись
+      const hold = a.ctl.hold("POST /element-ops");
       a.click(a.$("#ws-sform button[type=submit]"));
       await hold.waitForRequest(1, 3000);
       t.ok(a.$("#ws-sform button[type=submit]").disabled && a.$("#ws-sform select").disabled, "на время записи форма заблокирована");
       a.$("#ws-sform").requestSubmit(); a.$("#ws-sform").requestSubmit();
       hold.release();
       await waitFor(() => /Статус изменён/.test(a.$("#ws-sform .ws-ok")?.textContent || ""), { what: "подтверждение" });
-      const patches = a.ctl.log.filter((e) => e.method === "PATCH");
-      t.eq(patches.length, 3, "двойная отправка не размножила запрос");
-      t.eq(patches[2].path, "/elements/105/status", "PATCH ушёл на выбранный элемент");
-      t.eq(Object.keys(patches[2].body).sort(), ["comment", "status"], "в теле только статус и комментарий — без контракта");
-      await waitFor(() => cmds(a).some((c) => c.cmd === "refreshElement"), { what: "обновление схемы" });
-      t.eq(cmds(a).find((c) => c.cmd === "refreshElement").args, { id: 105 }, "схема обновляется по подтверждённому элементу");
-      t.eq(a.ctl.data.elements.find((e) => e.id === 105).current_status, "delivered", "у сервера статус изменён");
-      // шлюз: контракт и массовая смена — отказ без сети
+      const posts = ops();
+      t.eq(posts.length, 4, "двойная отправка не размножила запросы (предпросмотр + запись)");
+      t.eq(posts[2].body.mode, "preview", "сначала предпросмотр");
+      t.eq(posts[3].body.mode, "apply", "затем запись");
+      t.eq(posts[3].body.items, [{ element_id: 105, expected_status: "contracting", expected_contract_id: 1 }], "в теле только ожидаемое состояние изделия — без контрактов «для записи»");
+      t.ok(!("contract_id" in posts[3].body) && !("assign_contract_id" in posts[3].body), "контракт в запросе не передаётся");
+      t.eq(posts[3].body.expect, { release_contracts: 0, without_contract: 0 }, "подтверждены последствия предпросмотра");
+      await waitFor(() => cmds(a).some((c) => c.cmd === "applyElements"), { what: "обновление схемы" });
+      t.eq(cmds(a).find((c) => c.cmd === "applyElements").args.items[0].current_status, "delivered", "схема обновляется по ответу сервера");
+      const srv = a.ctl.data.elements.find((e) => e.id === 105);
+      t.eq([srv.current_status, srv.contract_id], ["delivered", 1], "у сервера статус изменён, контракт сохранён");
+      // возврат на «Запланирован»: последствия до записи, отмена ничего не пишет
+      emitSel(a, 107, { mark: "К-107", current_status: "delivered", contract_id: 1, object_id: 1 });
+      await waitFor(() => /К-107/.test(a.$("#ws-panel-body .ws-mark")?.textContent || ""), { what: "карточка 107" });
+      a.setValue(a.$("#ws-sform select"), "planned");
+      t.has(a.$("#ws-sform").textContent, "СНИМАЕТ контракт", "форма предупреждает о снятии контракта");
+      a.click(a.$("#ws-sform button[type=submit]"));
+      const d = await waitFor(() => a.dialog(), { what: "диалог последствий" });
+      t.has(d.textContent, "Контракт будет СНЯТ у 1", "последствия названы");
+      t.has(d.textContent, "Фактическая дата поставки будет очищена", "очистка фактической даты названа");
+      t.eq(ops().filter((e) => e.body.mode === "apply").length, 1, "до подтверждения записи нет");
+      await a.answerDialog("Отмена");
+      await a.settle(60);
+      t.eq(a.ctl.data.elements.find((e) => e.id === 107).current_status, "delivered", "отмена: изделие не изменено");
+      // шлюз: контракты по строкам, массовая V1 и прежний PATCH — отказ без сети
       const gate = await import("/static/v2/write-gate.js");
-      t.ok(gate.checkWrite("PATCH", "/elements/5/status", { status: "delivered", comment: "x" }).allowed || gate.POLICY.length === 0, "смена статуса разрешена политикой");
+      t.ok(gate.checkWrite("POST", "/element-ops/status-batch", { mode: "preview", object_id: 1, status: "delivered", items: [{ element_id: 5, expected_status: "planned", expected_contract_id: null }] }).allowed || gate.POLICY.length === 0, "смена статуса через безопасный маршрут разрешена");
       if (gate.POLICY.length) {
-        t.ok(!gate.checkWrite("PATCH", "/elements/5/status", { status: "delivered", contract_id: 3 }).allowed, "смена с контрактом шлюзом отклонена");
-        t.ok(!gate.checkWrite("PATCH", "/elements/bulk-status", { items: [], status: "delivered" }).allowed, "массовая смена шлюзом отклонена");
-        t.ok(!gate.checkWrite("PATCH", "/elements/5/contract", { contract_id: 1 }).allowed, "смена контракта элемента шлюзом отклонена");
+        t.ok(!gate.checkWrite("POST", "/element-ops/status-batch", { mode: "apply", object_id: 1, status: "delivered", expect: { release_contracts: 0, without_contract: 0 }, items: [{ element_id: 5, expected_status: "planned", contract_id: 3 }] }).allowed, "контракт в строке пачки шлюзом отклонён");
+        t.ok(!gate.checkWrite("PATCH", "/elements/bulk-status", { items: [], status: "delivered" }).allowed, "массовая смена V1 шлюзом отклонена");
+        t.ok(!gate.checkWrite("PATCH", "/elements/5/status", { status: "delivered" }).allowed, "прежний PATCH статуса шлюзом отклонён");
+        t.ok(!gate.checkWrite("PATCH", "/elements/5/contract", { contract_id: 1 }).allowed, "прежний PATCH контракта шлюзом отклонён");
       }
       a.close();
     },
@@ -318,7 +338,7 @@ export const tests = [
       await waitFor(() => a.$(`${NAV}[data-section="ws-model"]`) || a.$(".v2-note-page"), { what: "навигация" });
       if (a.$(`${NAV}[data-section="ws-model"]`)) {
         await openWs(a);
-        emitSel(a, 105, { mark: "К-105", current_status: "contracting" });
+        emitSel(a, 105, { mark: "К-105", current_status: "contracting", contract_id: 1 });
         await waitFor(() => /К-105/.test(a.$("#ws-panel-body .ws-mark")?.textContent || ""), { what: "карточка" });
         await a.settle(150);
         t.ok(!a.$("#ws-sform"), "без права изменять статусы формы нет");
@@ -339,7 +359,7 @@ export const tests = [
       await b.settle(60);
       t.ok(!!b.$(".ws-frame"), "«Остаться» — рабочее место открыто, ввод на месте");
       t.eq(b.$("#ws-sform select").value, "installed", "введённый статус сохранён");
-      t.eq(b.ctl.log.filter((e) => e.method === "PATCH").length, 0, "ничего не отправлено");
+      t.eq(b.ctl.log.filter((e) => e.method === "POST" && /element-ops/.test(e.path)).length, 0, "ничего не отправлено");
       b.close();
     },
   },
@@ -520,7 +540,7 @@ export const tests = [
     },
   },
   {
-    id: "WS-13", title: "Распределение: потеря ответа после commit, крайние изделия пачки в ожидаемом состоянии, среднее — нет: успех всей пачки НЕ заявляется",
+    id: "WS-16", title: "Распределение: потеря ответа после commit, крайние изделия пачки в ожидаемом состоянии, среднее — нет: успех всей пачки НЕ заявляется",
     async run(t) {
       const a = await openApp({ home: true });
       const gate = await import("/static/v2/write-gate.js");
@@ -602,6 +622,163 @@ export const tests = [
       d.elements.find((e) => e.id === 913).current_status = "shipped";
       const stale = await call(1, [913]);
       t.eq(stale[0], 409, "изменившийся статус — конфликт, а не подгонка");
+      a.close();
+    },
+  },
+  {
+    id: "WS-13", title: "Групповая смена статуса: панель группы; предпросмотр ничего не пишет; подтверждение; контракты сохраняются; конфликт — ничего не применено; двойной клик — одна запись; итог в баннере",
+    async run(t) {
+      const a = await openApp({ home: true });
+      stub(a);
+      await openWs(a);
+      const items = (patch = {}) => [105, 101, 102].map((id) => { const e = a.ctl.data.elements.find((x) => x.id === id); return { id, mark: e.mark, element_type: e.element_type, current_status: e.current_status, contract_id: e.contract_id, planned_delivery_date: e.planned_delivery_date ?? null, ...patch }; });
+      const emitGroup = () => frameWin(a).__emit({ selected: null, selectedId: null, multi: { count: 3, byType: [["Колонна", 3]], byStatus: [["contracting", 1], ["delivered", 1], ["installed", 1]] }, multiItems: items() });
+      const ops = () => a.ctl.log.filter((e) => e.method === "POST" && e.path === "/element-ops/status-batch");
+      emitGroup();
+      await waitFor(() => a.$("#eo-gform"), { what: "форма групповой смены" });
+      t.has(a.$("#ws-panel-body").textContent, "Выбрано элементов: 3", "панель группы");
+      t.has(a.$("#eo-gform").textContent, "Контракты изделий СОХРАНЯЮТСЯ", "форма говорит, что контракты сохраняются");
+      t.ok(a.$("#eo-gform button[type=submit]").disabled, "без статуса проверка недоступна");
+      a.setValue(a.$("#eo-gform select"), "shipped");
+      const before = a.ctl.data.elements.filter((e) => [105, 101, 102].includes(e.id)).map((e) => [e.id, e.current_status, e.contract_id]);
+      a.click(a.$("#eo-gform button[type=submit]"));
+      await waitFor(() => a.$(".eo-preview"), { what: "предпросмотр" });
+      t.eq(ops().map((e) => e.body.mode), ["preview"], "предпросмотр — один запрос");
+      t.eq(ops()[0].body.items.map((i) => i.expected_contract_id), [1, 1, 1], "в запросе — ожидаемые контракты, а не контракты «для записи»");
+      t.eq(a.ctl.data.elements.filter((e) => [105, 101, 102].includes(e.id)).map((e) => [e.id, e.current_status, e.contract_id]), before, "предпросмотр ничего не записал");
+      t.has(a.$(".eo-preview").textContent, "Будет изменено: 3", "число изменяемых");
+      t.has(a.$(".eo-preview").textContent, "Контракты сохраняются", "контракты сохраняются");
+      // подтверждение → запись
+      a.click(a.byText(".eo-preview button", "Применить к"));
+      const d = await waitFor(() => a.dialog(), { what: "диалог подтверждения" });
+      t.has(d.textContent, "Изменить статус у 3 изд.", "диалог называет число изделий");
+      await a.answerDialog("Отмена");
+      await a.settle(60);
+      t.eq(ops().length, 1, "«Отмена» в диалоге записи не даёт");
+      a.click(a.byText(".eo-preview button", "Применить к"));
+      await waitFor(() => a.dialog(), { what: "диалог подтверждения" });
+      await a.answerDialog("Применить");
+      await waitFor(() => /установлен у 3/.test(a.$(".eo-banner")?.textContent || ""), { what: "итог" });
+      t.eq(ops().map((e) => e.body.mode), ["preview", "apply"], "одна запись после предпросмотра");
+      t.eq(ops()[1].body.expect, { release_contracts: 0, without_contract: 0 }, "подтверждены последствия");
+      t.eq(a.ctl.data.elements.filter((e) => [105, 101, 102].includes(e.id)).map((e) => [e.current_status, e.contract_id]), [["shipped", 1], ["shipped", 1], ["shipped", 1]], "статусы изменены, контракты СОХРАНЕНЫ");
+      t.eq(cmds(a).filter((c) => c.cmd === "applyElements").pop().args.items.length, 3, "схема обновляется по ответу сервера");
+      // возврат на «Запланирован»: последствия, потом конфликт
+      frameWin(a).__emit({ multiItems: items() });
+      await a.settle(80);
+      a.setValue(a.$("#eo-gform select"), "planned");
+      a.click(a.$("#eo-gform button[type=submit]"));
+      await waitFor(() => /СНЯТ у 3/.test(a.$(".eo-preview")?.textContent || ""), { what: "последствия возврата" });
+      t.eq(ops().filter((e) => e.body.mode === "apply").length, 1, "возврат: до подтверждения записи нет");
+      a.ctl.data.elements.find((e) => e.id === 101).contract_id = null;    // другой пользователь снял контракт после предпросмотра
+      a.click(a.byText(".eo-preview button", "Применить к"));
+      await waitFor(() => a.dialog(), { what: "диалог возврата" });
+      t.has(a.dialog().textContent, "СНЯТ у 3", "диалог повторяет последствия");
+      await a.answerDialog("Применить");
+      await waitFor(() => /изменились|Изделий/.test(a.$(".eo-banner-err")?.textContent || ""), { what: "конфликт" });
+      t.eq(a.ctl.data.elements.filter((e) => [105, 101, 102].includes(e.id)).map((e) => e.current_status), ["shipped", "shipped", "shipped"], "конфликт: ни одно изделие не изменено");
+      t.ok(cmds(a).some((c) => c.cmd === "reload"), "схема перечитывается, чтобы показать актуальное");
+      // двойной клик по «Применить» в диалоге: одна запись
+      a.ctl.data.elements.find((e) => e.id === 101).contract_id = 1;
+      frameWin(a).__emit({ multiItems: items() });
+      await a.settle(80);
+      a.setValue(a.$("#eo-gform select"), "delivered");
+      a.click(a.$("#eo-gform button[type=submit]"));
+      await waitFor(() => a.$(".eo-preview"), { what: "предпросмотр" });
+      const n0 = ops().filter((e) => e.body.mode === "apply").length;
+      const hold = a.ctl.hold("POST /element-ops");
+      a.click(a.byText(".eo-preview button", "Применить к"));
+      await waitFor(() => a.dialog(), { what: "диалог" });
+      const ok = a.dialog().querySelector('[data-choice="confirm"]');
+      ok.click(); ok.click();
+      await hold.waitForRequest(1, 3000);
+      hold.release();
+      await waitFor(() => /установлен у 3/.test(a.$(".eo-banner")?.textContent || ""), { what: "итог" });
+      t.eq(ops().filter((e) => e.body.mode === "apply").length - n0, 1, "двойной клик — одна запись");
+      a.close();
+    },
+  },
+  {
+    id: "WS-14", title: "Одно изделие: плановая дата (сверка прежней), комментарий, контракт (выбор, снятие, конфликт) — только через разрешённые маршруты",
+    async run(t) {
+      const a = await openApp({ home: true });
+      stub(a);
+      await openWs(a);
+      emitSel(a, 105, { mark: "К-105", current_status: "contracting", contract_id: 1, object_id: 1, planned_delivery_date: null, comment: null });
+      await waitFor(() => a.byText("#ws-panel-body button", "Задать плановую дату"), { what: "кнопка плановой даты" });
+      const dateOps = () => a.ctl.log.filter((e) => e.method === "POST" && e.path === "/element-ops/planned-date-batch");
+      a.click(a.byText("#ws-panel-body button", "Задать плановую дату"));
+      await waitFor(() => a.$("#eo-pd-form"), { what: "форма даты" });
+      a.setValue(a.$("#eo-pd-form input"), "2026-10-05");
+      a.$("#eo-pd-form").requestSubmit(); a.$("#eo-pd-form").requestSubmit();
+      await waitFor(() => /Плановая дата поставки: 05\.10\.2026/.test(a.$("#ws-panel-body")?.textContent || ""), { what: "подтверждение даты" });
+      t.eq(dateOps().length, 1, "двойная отправка — один запрос");
+      t.eq(dateOps()[0].body, { object_id: 1, planned_date: "2026-10-05", items: [{ element_id: 105, expected_planned_date: null }] }, "тело: дата и ожидаемая прежняя дата");
+      t.eq(a.ctl.data.elements.find((e) => e.id === 105).planned_delivery_date, "2026-10-05", "у сервера дата установлена");
+      // движок присылает обновлённый снимок выбранного (по подтверждению сервера): теперь дата задана
+      emitSel(a, 105, { mark: "К-105", current_status: "contracting", contract_id: 1, object_id: 1, planned_delivery_date: "2026-10-05", comment: null });
+      await waitFor(() => a.byText("#ws-panel-body button", "Изменить плановую дату"), { what: "кнопка изменения даты" });
+      // конфликт: другой пользователь изменил дату
+      a.click(a.byText("#ws-panel-body button", "Изменить плановую дату"));
+      await waitFor(() => a.$("#eo-pd-form"), { what: "форма даты" });
+      a.ctl.data.elements.find((e) => e.id === 105).planned_delivery_date = "2026-11-01";
+      a.setValue(a.$("#eo-pd-form input"), "2026-12-01");
+      a.$("#eo-pd-form").requestSubmit();
+      await waitFor(() => /изменилась|Плановая дата изделий/.test(a.$("#eo-pd-form .ws-err")?.textContent || ""), { what: "конфликт даты" });
+      t.eq(a.ctl.data.elements.find((e) => e.id === 105).planned_delivery_date, "2026-11-01", "чужая дата не перезаписана");
+      // комментарий
+      a.click(a.byText("#ws-panel-body button", "Отмена"));
+      await a.settle(60);
+      a.click(a.byText("#ws-panel-body button", "Добавить комментарий"));
+      await waitFor(() => a.$("#eo-cm-form"), { what: "форма комментария" });
+      a.setValue(a.$("#eo-cm-form textarea"), "отбит угол");
+      a.$("#eo-cm-form").requestSubmit();
+      await waitFor(() => /Комментарий сохранён/.test(a.$("#ws-panel-body")?.textContent || ""), { what: "комментарий" });
+      const cm = a.ctl.log.filter((e) => e.method === "PATCH" && e.path === "/elements/105/comment");
+      t.eq(cm.length, 1, "один запрос комментария");
+      t.eq(cm[0].body, { comment: "отбит угол" }, "тело — только текст");
+      t.ok(cmds(a).some((c) => c.cmd === "patchComment" && c.args.id === 105), "схема получила подтверждённый комментарий");
+      // контракт: выбор и снятие
+      frameWin(a).__contracts = [{ id: 1, name: "QA-контракт", theme: null, specification_number: "С-1", specification_date: null, agreement_number: "Д-1", agreement_date: null, counterparty_short_name: "QA-поставщик", is_archived: false },
+        { id: 2, name: "QA-контракт 2", theme: null, specification_number: "С-2", specification_date: null, agreement_number: "Д-2", agreement_date: null, counterparty_short_name: "QA-поставщик 2", is_archived: false }];
+      a.click(a.byText("#ws-panel-body button", "Изменить контракт"));
+      const dlg = await waitFor(() => a.$(".eo-dialog .eo-crow"), { what: "окно выбора контракта" });
+      t.ok(!!dlg, "окно выбора контракта открыто");
+      t.ok(a.$('.eo-dialog .eo-crow[data-c="2"]')?.disabled, "контракт без позиции под марку выбрать нельзя");
+      t.has(a.$(".eo-dialog").textContent, "нет позиции под эту марку", "причина названа");
+      const ctOps = () => a.ctl.log.filter((e) => e.method === "POST" && e.path === "/element-ops/contract");
+      a.click(a.$('.eo-dialog .eo-crow[data-c="none"]'));
+      await waitFor(() => /Контракт снят/.test(a.$("#ws-panel-body")?.textContent || ""), { what: "снятие контракта" });
+      t.eq(ctOps()[0].body, { element_id: 105, expected_status: "contracting", expected_contract_id: 1, contract_id: null }, "тело: ожидаемое состояние и цель");
+      t.eq(a.ctl.data.elements.find((e) => e.id === 105).contract_id, null, "у сервера контракт снят, статус не тронут");
+      // шлюз
+      const gate = await import("/static/v2/write-gate.js");
+      if (gate.POLICY.length) {
+        t.ok(!gate.checkWrite("PATCH", "/elements/5/comment", { comment: "x", extra: 1 }).allowed, "комментарий с лишним полем шлюзом отклонён");
+        t.ok(!gate.checkWrite("PATCH", "/elements/5/fields", { status: "delivered" }).allowed, "поле «статус» через реквизиты шлюзом отклонено");
+        t.ok(!gate.checkWrite("PATCH", "/elements/5/history/2", { contract_id: 3 }).allowed, "правка истории с посторонним полем отклонена");
+        t.ok(gate.checkWrite("DELETE", "/elements/5/history/2", undefined).allowed, "удаление записи истории разрешено политикой (права проверяет сервер)");
+      }
+      a.close();
+    },
+  },
+  {
+    id: "WS-15", title: "Права: без права «плановая дата»/«комментарий» кнопок нет; только просмотр — групповых форм нет, причина названа",
+    async run(t) {
+      const a = await openApp({ home: true, perm: "viewer" });
+      stub(a);
+      await waitFor(() => a.$(`${NAV}[data-section="ws-model"]`) || a.$(".v2-note-page"), { what: "навигация" });
+      if (!a.$(`${NAV}[data-section="ws-model"]`)) { t.ok(true, "раздел недоступен профилю"); a.close(); return; }
+      await openWs(a);
+      emitSel(a, 105, { mark: "К-105", current_status: "contracting", contract_id: 1 });
+      await waitFor(() => /К-105/.test(a.$("#ws-panel-body .ws-mark")?.textContent || ""), { what: "карточка" });
+      await a.settle(150);
+      t.ok(!a.byText("#ws-panel-body button", "Задать плановую дату") && !a.byText("#ws-panel-body button", "Добавить комментарий") && !a.byText("#ws-panel-body button", "Изменить контракт"), "у просмотра нет кнопок записи");
+      frameWin(a).__emit({ selected: null, selectedId: null, multi: { count: 2, byType: [["Колонна", 2]], byStatus: [["contracting", 2]] }, multiItems: [{ id: 105, mark: "a", element_type: "Колонна", current_status: "contracting", contract_id: 1 }, { id: 104, mark: "b", element_type: "Колонна", current_status: "in_production", contract_id: 1 }] });
+      await waitFor(() => /Выбрано элементов: 2/.test(a.$("#ws-panel-body")?.textContent || ""), { what: "панель группы" });
+      await a.settle(100);
+      t.ok(!a.$("#eo-gform") && !a.$("#eo-gpd"), "групповых форм нет");
+      t.has(a.$("#ws-panel-body").textContent, "Групповые изменения недоступны", "причина названа");
       a.close();
     },
   },
