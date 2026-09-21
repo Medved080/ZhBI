@@ -9,6 +9,7 @@
   S6  откат при отказе внутри пачки: ни статусов, ни контрактов, ни записей истории, ни updated_at не остаётся;
   S7  ожидание блокировки: писатель ждёт не дольше busy_timeout, затем чистый отказ (без частичных изменений), после освобождения — успех;
   S10 контракт ЧУЖОГО объекта с позицией под ту же марку не принимается (пачкой и одиночной сменой статуса);
+  S11 одиночная смена статуса без contract_id (как делает форма V2) — что происходит с контрактом (наблюдение);
   S9  журнал действий (audit) при откате пачки — наблюдение;
   S8  СВОЙСТВА пачки bulk-status (не гонка): что она делает с контрактом (перезапись устаревшим, снятие, «Запланирован», архивный, чужой объект).
 
@@ -472,6 +473,33 @@ def s10(round_no):
     return bad, Counter([f"пачка {r1[0]}", f"одиночная {r2[0]}"])
 
 
+def s11(round_no):
+    """Одиночная смена статуса БЕЗ contract_id в теле (так делает форма V2): что происходит с контрактом изделия. Наблюдения."""
+    fresh_db()
+    c = db()
+    pos, ids = find_position(c, 4)
+    cid = pos["contract_id"]
+    make_room(c, pos, 3)
+    e_linked, e_plan, e_back = ids[0], ids[1], ids[2]
+    for e in (e_linked, e_back):
+        c.execute("UPDATE elements SET contract_id = ?, current_status = 'contracting' WHERE id = ?", (cid, e))
+        c.execute("INSERT INTO status_history (element_id, status, changed_by, contract_id) VALUES (?, 'contracting', 'тест', ?)", (e, cid))
+    c.commit()
+    c.close()
+
+    def cur(x):
+        return tuple(db().execute("SELECT current_status, contract_id FROM elements WHERE id = ?", (x,)).fetchone())
+
+    facts = {}
+    r = call(main.update_status, e_linked, StatusUpdateIn(status=Status("in_production")), USER)
+    facts["контракт есть, «В производстве» без contract_id → " + str(r[0])] = f"итог: {cur(e_linked)} (контракт сохранён)"
+    r = call(main.update_status, e_plan, StatusUpdateIn(status=Status("contracting")), USER)
+    facts["«Запланирован» → «Контрактация» без contract_id → " + str(r[0])] = f"итог: {cur(e_plan)} (контракт не назначается — его выбирают отдельно)"
+    r = call(main.update_status, e_back, StatusUpdateIn(status=Status("planned")), USER)
+    facts["контракт есть, возврат в «Запланирован» без contract_id → " + str(r[0])] = f"итог: {cur(e_back)} (контракт СНЯТ)"
+    return [], facts
+
+
 SCENARIOS = [("S1", "последнее место: 8 одновременных пачек по 1 изделию", s1), ("S2", "две пачки по 2 на остаток 3 (всё или ничего)", s2),
              ("S3", "три разных обработчика на последнее место", s3), ("S4", "проведение замены поставщика против распределения", s4),
              ("S5", "уменьшение количества контракта против распределения", s5), ("S6", "откат при отказе внутри пачки", s6),
@@ -498,6 +526,11 @@ if __name__ == "__main__":
         _, f9 = s9(0)
         print("S9 журнал действий при откате пачки (наблюдение):")
         for k, v in f9.items():
+            print(f"    {k}: {v}")
+    if not ONLY or "S11" in ONLY:
+        _, f11 = s11(0)
+        print("S11 одиночная смена статуса без contract_id (наблюдения):")
+        for k, v in f11.items():
             print(f"    {k}: {v}")
     if not ONLY or "S8" in ONLY:
         _, facts = s8(0)
