@@ -852,3 +852,13 @@ button.ws-tile:hover { background: var(--surface); }
 .ws-cgroup.ws-dim .ws-chead { opacity: .6; }
 .ws-crow.ws-dim { opacity: .55; }
 .ws-pkcols-c { padding-right: 6px; }
+
+/* форма смены статуса одного элемента */
+.ws-form { display: flex; flex-direction: column; gap: 8px; }
+.ws-fld { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.ws-fld small { font-weight: 400; }
+.ws-fld select, .ws-fld input, .ws-fld textarea { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font-size: 13px; }
+.ws-fld textarea { resize: vertical; }
+.ws-err { margin: 0; padding: 6px 8px; border-left: 3px solid var(--bad); background: var(--surface); color: var(--bad); font-size: 13px; }
+.ws-ok { margin: 0; padding: 6px 8px; border-left: 3px solid var(--good); background: var(--surface); color: var(--good); font-size: 13px; }
+.ws-warnbox { margin: 0; padding: 6px 8px; border-left: 3px solid var(--accent); background: var(--surface); font-size: 13px; }

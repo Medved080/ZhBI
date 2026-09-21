@@ -10,7 +10,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on}; событие picker{model}
+//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on}; событие picker{model}
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
 (() => {
   "use strict";
@@ -524,6 +524,18 @@
       post({ evt: "search-result", text: a.text, total, items });
     },
     getFilters() { sendFilters(); scheduleState(); },
+    // После записи, выполненной оболочкой V2: заново читает ОДИН элемент с сервера (GET) и применяет его штатным
+    // точечным обновлением V1 (заливка 2D/3D, счётчики, фильтры). Показывается то, что подтвердил сервер, а не то, что ввёл человек.
+    async refreshElement(a) {
+      if (!isInt(a.id)) throw new Error("id");
+      const r = await fetch(`/elements/${a.id}`, { credentials: "same-origin" });
+      if (!r.ok) throw new Error("не удалось прочитать элемент (" + r.status + ")");
+      const fresh = await r.json();
+      const changed = applyElementDelta(fresh);
+      if (changed) { renderLegend(); applyPlacementFilters(); }
+      scheduleState(); sendFilters();
+      post({ evt: "refreshed", id: a.id, changed });
+    },
     async reload() { await loadPlan(true); },
   };
 

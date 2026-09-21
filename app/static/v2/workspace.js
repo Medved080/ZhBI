@@ -12,6 +12,7 @@
 // Уход с рабочего места: слушатель снимается, кадр обнуляется и удаляется — вместе с документом освобождаются WebGL-контексты и таймеры.
 import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
+import { showUnsavedDialog } from "./dialogs.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -54,6 +55,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   let panelHidden = false;
   let panelW = readNum(ws === "picker" ? "v2.ws.panelW.picker" : "v2.ws.panelW", ws === "picker" ? 430 : 340);
   const detail = { id: null, data: null, error: "", seq: 0 };
+  // Смена статуса одного элемента (единственная запись рабочего места ЖБИ). Состояние формы хранится по id элемента:
+  // переключение выбора не теряет ввод и не переносит его на другой элемент.
+  const wrs = new Map();
+  const wrOf = (id) => { if (!wrs.has(id)) wrs.set(id, { status: "", at: "", comment: "", busy: false, error: "", unknown: false, done: "", warn: "" }); return wrs.get(id); };
+  let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте
   const openGroups = new Set(["status", "pk:elementType"]);
   const openItems = new Set();
   const groupSearch = new Map();
@@ -298,7 +304,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       <h4>Даты</h4><dl class="ws-dl">${row("Начало СМР", fmtDate(e.project_smr_start_date))}${row("Плановая поставка", fmtDate(e.planned_delivery_date))}${row("Фактическая поставка", fmtDate(e.actual_delivery_date))}${row("Завершение СМР", fmtDate(e.project_delivery_date))}</dl>
       ${e.comment ? `<h4>Комментарий</h4><p class="ws-comment">${esc(e.comment)}</p>` : ""}
       <h4>История статусов</h4>${detail.error ? `<p class="v2-muted">${esc(detail.error)}</p>` : !d ? `<p class="v2-muted">Загрузка…</p>` : hist.length ? `<ul class="ws-hist">${hist.map((h) => `<li><i class="ws-sw" style="background:${esc(sw(h.status))}"></i><span>${esc(stLabel(h.status))}</span><small>${esc(fmtDateTime(h.changed_at))}${h.changed_by ? " · " + esc(h.changed_by) : ""}</small></li>`).join("")}</ul>` : `<p class="v2-muted">Изменений статуса нет.</p>`}
-      <p class="v2-muted ws-ro">Изменение статуса и дат выполняется в текущем интерфейсе.</p></div>`;
+      ${statusFormHtml(e)}</div>`;
   }
 
   function statusHtml() {
@@ -342,6 +348,77 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }).join("");
   }
 
+
+
+  // ---- смена статуса ОДНОГО элемента: форма, отправка, разбор исхода
+  function statusFormHtml(e) {
+    if (canStatus === null) return "";
+    if (!canStatus) return `<p class="v2-muted ws-ro">Смена статуса недоступна: нет права изменять статусы на этом объекте.</p>`;
+    const w = wrOf(e.id);
+    const opts = (sc?.statusOrder || []).filter((k) => k !== e.current_status);
+    return `<h4>Изменить статус</h4>
+      <form class="ws-form" id="ws-sform" autocomplete="off" novalidate>
+        <label class="ws-fld">Новый статус
+          <select name="status" ${w.busy ? "disabled" : ""}><option value="">— выберите —</option>${opts.map((k) => `<option value="${esc(k)}" ${w.status === k ? "selected" : ""}>${esc(stLabel(k))}</option>`).join("")}</select></label>
+        <label class="ws-fld">Дата и время изменения <small>(пусто — сейчас)</small>
+          <input type="datetime-local" name="at" value="${esc(w.at)}" ${w.busy ? "disabled" : ""}></label>
+        <label class="ws-fld">Комментарий
+          <textarea name="comment" rows="2" maxlength="500" ${w.busy ? "disabled" : ""}>${esc(w.comment)}</textarea></label>
+        <p class="v2-muted ws-fnote">Контракт элемента не меняется. Изменение попадёт в историю статусов и не отменяется в этом интерфейсе.</p>
+        <div class="ws-actions"><button type="submit" class="v2-btn v2-primary" ${w.busy || !w.status ? "disabled" : ""}>${w.busy ? "Сохранение…" : "Сохранить статус"}</button></div>
+        ${w.error ? `<p class="ws-err" role="alert">${esc(w.error)}</p>` : ""}
+        ${w.warn ? `<p class="ws-warnbox" role="status">${esc(w.warn)}</p>` : ""}
+        ${w.done ? `<p class="ws-ok" role="status">${esc(w.done)}</p>` : ""}
+      </form>`;
+  }
+  function bindStatusForm(body) {
+    const f = body.querySelector("#ws-sform");
+    if (!f || !sc?.selected) return;
+    const id = sc.selected.id; const w = wrOf(id);
+    f.querySelector('[name="status"]').addEventListener("change", (ev) => { w.status = ev.target.value; w.error = ""; w.done = ""; paintPanel(); });
+    f.querySelector('[name="at"]').addEventListener("input", (ev) => { w.at = ev.target.value; });
+    f.querySelector('[name="comment"]').addEventListener("input", (ev) => { w.comment = ev.target.value; });
+    f.addEventListener("submit", (ev) => { ev.preventDefault(); submitStatus(id); });
+  }
+  async function submitStatus(id) {
+    const w = wrOf(id);
+    if (w.busy || !w.status || !canStatus) return;            // повторная отправка, пока идёт запрос, невозможна
+    const el0 = sc?.selected;
+    if (!el0 || el0.id !== id) return;                        // форма всегда про ВЫБРАННЫЙ элемент
+    const wanted = w.status;
+    const body = { status: wanted };
+    if (w.at) body.changed_at = w.at.replace("T", " ") + ":00";
+    if (w.comment.trim()) body.comment = w.comment.trim();
+    w.busy = true; w.error = ""; w.done = ""; w.warn = ""; w.unknown = false; paintPanel();
+    try {
+      const res = await api.patch(`/elements/${id}/status`, body);
+      w.done = `Статус изменён: ${stLabel(res?.current_status || wanted)}.`;
+      if (res?.contract_warning) {
+        const c = res.contract_warning;
+        w.warn = `Внимание по контракту «${c.contract_name}»: по спецификации ${c.quantity}, фактически ${c.fact}${c.damaged ? `, брак ${c.damaged}` : ""}.`;
+      }
+      w.status = ""; w.at = ""; w.comment = "";
+      send("refreshElement", { id });                          // схема обновляется тем, что подтвердил сервер
+      if (sc?.selected?.id === id) loadDetail(id);            // история — заново с сервера
+    } catch (err) {
+      if (err instanceof ApiError && !err.blockedByPolicy && (err.status === 0 || err.status >= 500)) {
+        // исход неизвестен: запрос мог дойти. Повторно НЕ отправляем — читаем элемент и говорим, что видит сервер
+        w.unknown = true;
+        try {
+          const d = await api.get(`/elements/${id}`);
+          if (d.current_status === wanted) { w.done = `Сервер подтвердил: статус «${stLabel(d.current_status)}» уже установлен.`; w.status = ""; w.at = ""; w.comment = ""; send("refreshElement", { id }); loadDetail(id); }
+          else w.error = `Ответ не получен, изменение не подтверждено: сервер показывает статус «${stLabel(d.current_status)}». Введённое сохранено — проверьте связь и отправьте снова.`;
+        } catch (e2) {
+          w.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и посмотрите историю статусов элемента.";
+        }
+      } else {
+        w.error = err instanceof ApiError ? err.detail : "Не удалось сохранить статус";   // ввод остаётся в форме
+      }
+    } finally {
+      w.busy = false;
+      if (!dead) paintPanel();
+    }
+  }
 
   // ---- МФР: свойства выбранного блока/элемента модели, отбор по этажам, секциям и категориям
   const SKIP_CARD = new Set(["параметры", "id", "доли по секциям", "геометрия", "статусы_работ"]);
@@ -481,6 +558,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     body.querySelectorAll("[data-pkn]").forEach((b) => b.addEventListener("click", () => send("pickerToggle", { key: "contract", value: pk?.noneValue ?? "__none__" })));
     body.querySelectorAll("[data-pkhl]").forEach((b) => b.addEventListener("click", () => send("pickerHighlight", { on: b.getAttribute("aria-pressed") !== "true" })));
     body.querySelectorAll("[data-pkrem]").forEach((b) => b.addEventListener("click", () => { onlyRemainder = !onlyRemainder; paintPanel(); }));
+    bindStatusForm(body);
     body.querySelectorAll("[data-mpick]").forEach((b) => b.addEventListener("click", () => send("mfrPick", { kind: b.dataset.mpick, id: b.dataset.id })));
     body.querySelectorAll("[data-mcat]").forEach((c) => c.addEventListener("change", () => send("mfrCategory", { category: c.dataset.mcat, on: c.checked })));
     body.querySelectorAll("[data-mlayer]").forEach((c) => c.addEventListener("change", () => send("mfrLayer", { layer: c.dataset.mlayer, on: c.checked })));
@@ -611,16 +689,39 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   });
   rz.addEventListener("keydown", (e) => { if (e.key === "ArrowLeft") { setW(panelW + 20); e.preventDefault(); } else if (e.key === "ArrowRight") { setW(panelW - 20); e.preventDefault(); } });
 
+  // Права на смену статусов считаются по объекту (как в V1): не получилось узнать — формы нет, а не открываем лишнее
+  async function loadStatusRights() {
+    if (mfr) { canStatus = false; return; }
+    const obj = curObject;
+    try {
+      const r = await api.get(`/me/permissions?object_id=${obj}`);
+      if (dead || obj !== curObject) return;
+      canStatus = !!r.system_admin || (r.features?.status === "write" && !(r.not_applicable || []).includes("status"));
+    } catch (e) { if (dead || obj !== curObject) return; canStatus = false; }
+    paintPanel();
+  }
+  loadStatusRights();
+
   startFrame();
 
   return {
-    hasUnsavedChanges: () => false,
-    guardLeave: async () => true,
+    // Введённое в форме смены статуса, но не отправленное — несохранённое; идущий запрос уйти не даёт (шлюз оболочки блокирует переходы)
+    hasUnsavedChanges: () => Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at)),
+    guardLeave: async () => {
+      if (!Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at))) return true;
+      const choice = await showUnsavedDialog("В форме смены статуса есть введённое, но не отправленное. Что сделать?");
+      if (choice === "cancel") return false;
+      if (choice === "discard") { wrs.clear(); return true; }
+      // «Сохранить и продолжить»: отправляем форму выбранного элемента и уходим только при успехе
+      const id = sc?.selected?.id;
+      if (id) await submitStatus(id);
+      return !Array.from(wrs.values()).some((w) => w.status || w.comment.trim() || w.at);
+    },
     // Смена объекта в шапке V2: тот же кадр получает команду (кадр сам сбрасывает несовместимую выборку и фильтры,
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      curObject = id; wrs.clear(); canStatus = null; loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },
