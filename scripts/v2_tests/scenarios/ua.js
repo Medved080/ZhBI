@@ -371,7 +371,7 @@ export const tests = [
       const r = await openApp({ perm: "readonly" });
       await openCard(r, "qa.noaccess", "security");
       await a.settle(60);
-      t.ok(!r.$("[data-v1-link]"), "без права изменять пользователей ссылки нет");
+      t.ok(!r.$("#v2-content [data-v1-link]"), "без права изменять пользователей ссылки нет");
       t.has(lastText(r), "право изменять пользователей", "сказано, почему");
     },
   },

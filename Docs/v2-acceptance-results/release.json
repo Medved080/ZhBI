@@ -47,11 +47,11 @@
   {
    "id": "SH-03",
    "title": "Обязательная смена пароля: экран смены вместо разделов",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
    "failed": [],
-   "error": "Error: Не дождались: экран смены пароля (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:54:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
-   "checks": 0
+   "error": null,
+   "checks": 1
   },
   {
    "id": "SH-14",
@@ -74,11 +74,9 @@
   {
    "id": "SH-04",
    "title": "Администратор: начальная страница, навигация по всем разделам, три перенесённых раздела помечены «в V2»",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
-   "failed": [
-    "пометка «правка» — ровно у экранов с правкой в V2 (по реестру) — ожидали 13, получили 11"
-   ],
+   "failed": [],
    "error": null,
    "checks": 11
   },
@@ -121,28 +119,28 @@
   {
    "id": "SH-08b",
    "title": "Dirty + «Сохранить и продолжить»: запись, затем переход",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запись (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:172:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запись (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:174:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "SH-09",
    "title": "Dirty + сохранение падает (500): ошибка видна, переход отменён, данные целы, повтор доступен",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: первая попытка записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:186:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: первая попытка записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:188:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "SH-10",
    "title": "Идёт запись (медленный ответ): переход недоступен с причиной; после успеха и ошибки — снова доступен",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:208:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:210:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -166,10 +164,10 @@
   {
    "id": "SH-17",
    "title": "beforeunload во время записи БЕЗ несохранённых данных — предупреждение (закрытие посреди сохранения)",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:280:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:282:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
@@ -247,11 +245,9 @@
   {
    "id": "UA-U-04",
    "title": "Каталог/матрица доступа недоступны: список виден, колонка «Доступ» без ошибки",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
-   "failed": [
-    "ошибка второстепенного чтения не вытесняет список — найдено «матрица»"
-   ],
+   "failed": [],
    "error": null,
    "checks": 2
   },
@@ -267,28 +263,28 @@
   {
    "id": "UA-U-06",
    "title": "Создание пользователя: запись, карточка, повторное открытие показывает данные сервера",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: карточка нового пользователя (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:131:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: карточка нового пользователя (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:131:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "UA-U-07",
    "title": "Создание: двойной клик и медленный ответ → один POST",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "три клика — один запрос — ожидали 1, получили 0",
     "кнопка заблокирована на время записи"
    ],
-   "error": "Error: Не дождались: карточка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:158:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: карточка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:158:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "UA-U-08",
    "title": "Создание: 409/422/500/сеть — читаемое сообщение, ввод цел, кнопка доступна",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 4,
    "failed": [
     "[409 дубль логина (настоящая логика бэкенда)] текст: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «уже» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
@@ -302,10 +298,10 @@
   {
    "id": "UA-C-01",
    "title": "Профиль: после «Сохранить» форма СРАЗУ показывает подтверждённое сервером (без пробелов по краям), dirty снят, повторное открытие то же; ввод во время запроса не затирается",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:203:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:203:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
@@ -320,7 +316,7 @@
   {
    "id": "UA-C-03",
    "title": "Профиль: 403/409/422/500/сеть при сохранении — читаемо, поля разблокированы, ввод цел",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 5,
    "failed": [
     "[403] сообщение: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «недостаточно прав» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
@@ -335,31 +331,31 @@
   {
    "id": "UA-C-04",
    "title": "Профиль: двойной клик и медленный ответ → один PATCH; поля заблокированы на время записи",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "два клика — один запрос — ожидали 1, получили 0",
     "поля заблокированы на время записи"
    ],
-   "error": "Error: Не дождались: конец записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:301:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: конец записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:301:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "UA-C-07",
    "title": "Профиль dirty: вкладка карточки / «← Все пользователи» → диалог; после сохранения ложного нет",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: конец записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:328:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: конец записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:328:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 3
   },
   {
    "id": "UA-C-07b",
    "title": "Профиль dirty + сохранение из диалога ухода падает: ошибка видна, уход отменён, ввод цел",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: попытка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:345:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: попытка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:345:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -368,18 +364,18 @@
    "status": "fail",
    "blocked": 0,
    "failed": [
-    "ссылка ведёт к форме ИМЕННО этого пользователя, а не на главный экран V1 — ожидали \"/?ui=v1&open=user-security&user_id=4\", получили \"/?ui=v1&object_id=1&open=menu&item=menu-users\""
+    "без права изменять пользователей ссылки нет"
    ],
-   "error": "Error: Не дождались: диалог несохранённого (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:366:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
-   "checks": 3
+   "error": null,
+   "checks": 7
   },
   {
    "id": "UA-C-09",
    "title": "Медленная загрузка доступа: клик «← Все пользователи» не пропадает молча; после ответа переход работает; чужие гранты не подмешиваются",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PUT доступа (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:411:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PUT доступа (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:411:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 4
   },
   {
@@ -421,10 +417,10 @@
   {
    "id": "UA-A-08b",
    "title": "Подтверждение «Сохранено» не переезжает на другую вкладку и не остаётся после «Отменить» доступа",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:494:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:494:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -439,28 +435,28 @@
   {
    "id": "UA-R-11",
    "title": "Роль создана/переименована/удалена во вкладке «Роли» — редактор доступа СРАЗУ предлагает актуальный набор и названия (без перезагрузки страницы)",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: роль создана (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:591:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: роль создана (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:591:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "UA-A-05",
    "title": "Выдать роль на объекте → «Сохранить»: PUT, сводка, повторное открытие, «Проверка доступа» согласована",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:649:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:649:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
    "id": "UA-A-07",
    "title": "Снять роль → «Сохранить»: грант удалён, сводка обновлена",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:674:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:674:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
@@ -475,13 +471,13 @@
   {
    "id": "UA-A-09",
    "title": "Сохранение доступа: двойной клик, 403/409/422/500/сеть — один PUT, читаемо, данные на месте",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "двойной клик — один PUT — ожидали 1, получили 0",
     "чекбоксы заблокированы на время записи"
    ],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:723:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:723:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
@@ -505,58 +501,58 @@
   {
    "id": "UA-R-02",
    "title": "Матрица: правка ячейки → «Не сохранено ячеек» → «Сохранить» / «Отменить»",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:777:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:777:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "UA-R-03",
    "title": "Матрица: двойной клик; ошибки 500/422/сеть — один PUT, читаемо, черновик цел",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "двойной клик — один PUT — ожидали 1, получили 0",
     "сегменты заблокированы на время записи"
    ],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:800:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:800:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "UA-R-04",
    "title": "Создание роли: пустое имя, дубль, успех, отмена",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 2,
    "failed": [],
-   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:825:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:825:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 3
   },
   {
    "id": "UA-R-05",
    "title": "Переименование роли: пустое, успех, отмена",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: переименование (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:844:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: переименование (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:844:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
    "id": "UA-R-06",
    "title": "Порядок ролей ▲▼: границы заблокированы, один PUT на клик, порядок сохраняется",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PUT order (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:859:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PUT order (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:859:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "UA-R-07",
    "title": "Удаление роли: delete-plan → подтверждение (danger) → удалена; отмена не удаляет",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:874:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:874:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -580,19 +576,19 @@
   {
    "id": "UA-U-09",
    "title": "Форма нового пользователя с данными: «Отмена» — без предупреждения; уход — диалог; после создания предупреждения нет",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: карточка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:945:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: карточка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:945:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "UA-C-05",
    "title": "Вход и безопасность: «Требовать смену пароля» → «Сохранить» — PATCH с новым значением, подтверждение с сервера",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:961:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:961:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -616,19 +612,19 @@
   {
    "id": "UA-A-06",
    "title": "Роль на проекте и на «все проекты»: PUT с project_id / без него; сводка показывает наследование",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:1012:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:1012:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "UA-K-05",
    "title": "Согласованность: выданная роль видна в «Проверке доступа» по этому пользователю и объекту",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:1045:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:1045:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -715,19 +711,19 @@
   {
    "id": "PO-06",
    "title": "Новый проект: сохранение → дерево, «Добавлено.», данные после повторного открытия",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запись (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:171:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запись (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:171:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "PO-07",
    "title": "Новый объект: проект по умолчанию из выбранного, справочники, сохранение",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: POST /objects (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:202:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: POST /objects (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:202:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 3
   },
   {
@@ -742,10 +738,10 @@
   {
    "id": "PO-09",
    "title": "Правка → «Сохранить»: PATCH, «Сохранено.», данные сервера после повторного открытия",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:237:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:237:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -760,46 +756,46 @@
   {
    "id": "PO-11",
    "title": "Удаление: чистый объект / с блокерами / отмена / двойной клик / ошибка",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:284:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:284:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 4
   },
   {
    "id": "PO-11b",
    "title": "Удаление: двойной клик по «Удалить» — один диалог и один POST; ошибка 500 — читаемо, поля доступны",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запрос (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:304:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запрос (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:304:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
    "id": "PO-12",
    "title": "Вложения: загрузка синтетического файла, скачивание, превью, удаление",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: 4 вложения после загрузки (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:322:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: 4 вложения после загрузки (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:322:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "PO-13",
    "title": "Загрузка вложения идёт медленно: переходы заблокированы с причиной, после — снова доступны",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:355:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:355:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "PO-14",
    "title": "Удаление вложения: пока открыт диалог, вторые корзины заблокированы; отмена возвращает; один DELETE",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: DELETE (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:392:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: DELETE (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:392:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 4
   },
   {
@@ -814,19 +810,19 @@
   {
    "id": "PO-17",
    "title": "Dirty: смена записи → диалог; «Остаться» / «Не сохранять» / «Сохранить и продолжить»; нет ложного после сохранения",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: переход на объект 2 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:428:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: переход на объект 2 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:428:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "PO-18",
    "title": "Dirty + сохранение из диалога ухода падает: ошибка видна СРАЗУ, переход отменён, данные целы, повтор доступен",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: попытка сохранения (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:457:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: попытка сохранения (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:457:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -841,22 +837,22 @@
   {
    "id": "PO-20",
    "title": "Сохранение: двойной клик, 403/409/422/500/сеть — один PATCH, читаемо, нет ложного «Сохранено.»",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "двойной клик — один запрос — ожидали 1, получили 0",
     "поля заблокированы на время записи"
    ],
-   "error": "Error: Не дождались: ошибка 403 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:503:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка 403 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:503:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "PO-26",
    "title": "Сохранение объекта: форма СРАЗУ показывает подтверждённое сервером (обрезанные пробелы), dirty снят, повторное открытие то же; ввод, внесённый во время запроса, не затирается",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:532:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:532:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -871,10 +867,10 @@
   {
    "id": "PO-21",
    "title": "Запись прошла, обновление списков упало: «Сохранено, но обновить данные не удалось» + «Повторить обновление»",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: сообщение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:612:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: сообщение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:612:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -943,10 +939,10 @@
   {
    "id": "CP-L-07",
    "title": "Удаление чистого контрагента: delete-plan → подтверждение (danger) → удалён; отмена не удаляет",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:120:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:120:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 7
   },
   {
@@ -961,10 +957,10 @@
   {
    "id": "CP-L-09",
    "title": "Корзина: двойной клик — один диалог и один POST; ошибка удаления читаема, контрагент цел",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: сообщение об ошибке (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:151:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: сообщение об ошибке (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:151:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
@@ -988,40 +984,40 @@
   {
    "id": "CP-M-03",
    "title": "Создание контрагента: POST, «Добавлено.», в списке, вкладка «Контрактация» доступна, данные после повторного открытия",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: POST (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:202:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: POST (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:202:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-M-04",
    "title": "Правка → «Отменить»: значения возвращены; «Сохранить»: PATCH, «Сохранено.»",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:235:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:235:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "CP-M-06",
    "title": "Сохранение карточки: двойной клик; 403/409/422/500/сеть — один запрос, читаемо, ввод цел",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "двойной клик — один PATCH — ожидали 1, получили 0",
     "поля заблокированы на время записи"
    ],
-   "error": "Error: Не дождались: 403 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:257:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: 403 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:257:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
    "id": "CP-M-07",
    "title": "Dirty: «← Все контрагенты» → диалог 3 вариантов; после сохранения ложного предупреждения нет",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: список (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:293:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: список (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:293:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 3
   },
   {
@@ -1036,28 +1032,28 @@
   {
    "id": "CP-P-02",
    "title": "Ёмкость: после «Сохранить» форма СРАЗУ показывает подтверждённые сервером строки, dirty снят, пользователю объяснено, что не сохранено; после повторного открытия то же",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:343:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:343:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-P-03",
    "title": "Ёмкость: строка с нулём/пустая не остаётся на экране как сохранённая — пользователю сказано, почему её нет",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:385:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:385:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-P-04",
    "title": "Сохранение карточки: более новый ввод во время запроса не затирается; ошибка — черновик и повтор целы",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:409:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:409:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -1090,12 +1086,12 @@
   {
    "id": "CP-A-04",
    "title": "Новый договор: валидации, создание, двойной клик — один POST, ошибка рядом с формой",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "двойной клик — один POST — ожидали 1, получили 0"
    ],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:542:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:542:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 3
   },
   {
@@ -1128,10 +1124,10 @@
   {
    "id": "CP-W-09",
    "title": "Контракт: правка темы → «Отменить» откатывает; «Сохранить» — PATCH, «Сохранено.»",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:603:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:603:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
@@ -1146,21 +1142,21 @@
   {
    "id": "CP-W-11",
    "title": "Сохранение контракта: двойной клик — один PATCH; 403/409/422/500/сеть — ошибка видна, повтор возможен",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "двойной клик — один PATCH — ожидали 1, получили 0"
    ],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:639:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:639:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
    "id": "CP-W-13",
    "title": "Удаление контракта без замены: delete-plan → подтверждение (danger) → удалён; SQL-аналог",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:666:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:666:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
@@ -1175,19 +1171,19 @@
   {
    "id": "CP-W-15",
    "title": "Обрыв связи на удалении: не «успех», а сообщение «не удалось определить результат»; контракт цел",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: сообщение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:711:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: сообщение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:711:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-KBD-01",
    "title": "Клавиатура: после действий в контракте фокус остаётся в рабочей области, а не сбрасывается на <body>",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запись даты (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:741:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запись даты (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:741:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 3
   },
   {
@@ -1211,10 +1207,10 @@
   {
    "id": "CP-P-01",
    "title": "Ёмкость: пустой тип строку не добавляет; тип добавляет строку; запись доходит до сервера (показ после сохранения — CP-P-02)",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:805:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:805:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
@@ -1229,21 +1225,21 @@
   {
    "id": "CP-A-05",
    "title": "Правка договора: «· не сохранено» → «Сохранить» → PATCH; ошибка рядом с формой, ввод цел",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: ошибка рядом (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:838:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка рядом (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:838:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
    "id": "CP-S-01",
    "title": "Спецификация: пустой номер — сообщение; создание — один POST; правка — PATCH; удаление по правам",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [
     "двойной клик — один POST — ожидали 1, получили 0"
    ],
-   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:864:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:864:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 2
   },
   {
@@ -1285,10 +1281,10 @@
   {
    "id": "CP-W-05b",
    "title": "Инциденты и производительность СОХРАНЯЮТСЯ: инцидент с датой и типом уходит в PATCH, без даты — отбрасывается, ноль в норме — отбрасывается (D-33)",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH контракта (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:974:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH контракта (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:974:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -1303,19 +1299,19 @@
   {
    "id": "CP-W-06",
    "title": "Контракт: после «Сохранить» вкладки СРАЗУ показывают подтверждённое сервером (без нулевой нормы, пустых позиций и инцидентов без даты), сообщение называет отброшенное, dirty снят, повторное открытие то же",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1050:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1050:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-W-06b",
    "title": "Контракт: ввод, внесённый во время запроса, не затирается ни при создании (дубля контракта нет), ни при правке",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1102:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1102:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -1339,10 +1335,10 @@
   {
    "id": "CP-W-08",
    "title": "Новый контракт: позиции → «Сохранить» → POST; контракт становится существующим, «Развёрнуто» доступна",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: POST (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1195:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: POST (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1195:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
@@ -1357,16 +1353,16 @@
   {
    "id": "CP-W-12",
    "title": "Перенос контракта: смена контрагента/договора/спецификации → «Сохранить» → воркспейс закрыт с пояснением",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1232:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1232:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-REG-01",
    "title": "Неудачная запись плановой даты: ошибка на строке, значение не теряется; 403 снимает права у всего контракта",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 2,
    "failed": [
     "ошибка видна на строке — нет «Сбой записи даты» в «ЖБИ\nНовый интерфейс — экспериментальный\nОбъект\nQA-Корпус 1.1 · 1240\nQA-Корпус 1.2 · 860\nQA-Корпус 1.3 (вложения и превью) · 300\nQA-МФР Корпус 2.3 · 640\nQA-Секци»"
@@ -1377,7 +1373,7 @@
   {
    "id": "CP-REG-02",
    "title": "Уход с неподтверждённой датой: «← Контрагент», верхний раздел, V1-кнопка — везде предупреждение",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 4,
    "failed": [
     "при beforeunload новых запросов записи не уходит — ожидали 1, получили 0"
@@ -1388,66 +1384,66 @@
   {
    "id": "CP-REG-04",
    "title": "Повтор записи даты — только по явному действию; автоповтора нет",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 2,
    "failed": [
     "автоповтора нет: ровно одна попытка — ожидали 1, получили 0"
    ],
-   "error": "Error: Не дождались: повтор по клику (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1298:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: повтор по клику (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1298:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 1
   },
   {
    "id": "CP-REG-05",
    "title": "Отказ от неподтверждённого значения: сбрасывается только оно, уже записанные даты не откатываются",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: дата 102 записана (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1309:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: дата 102 записана (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1309:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-REG-06",
    "title": "Черновик контракта + ошибка даты: ОДИН диалог, «Остаться» — ничего не потеряно; «Сохранить» — сохранены обе части",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 3,
    "failed": [],
-   "error": "Error: Не дождались: выход (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1342:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: выход (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1342:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 4
   },
   {
    "id": "CP-REG-07",
    "title": "Конфликт A: идёт запись даты → сохранение/удаление контракта не стартуют (счёт запросов)",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запись даты в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1354:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запись даты в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1354:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-REG-08",
    "title": "Конфликт B: идёт операция контракта → запись даты не стартует даже при прямом вызове обработчика",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: сохранение контракта в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1377:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: сохранение контракта в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1377:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-REG-09",
    "title": "Две разные даты параллельно; повторный клик по одной — один запрос на строку; перерисовка ответом другой строки блокировку не снимает",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 2,
    "failed": [],
-   "error": "Error: Не дождались: две записи в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1400:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: две записи в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1400:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "CP-REG-10",
    "title": "Блокировка снимается после успеха и после ошибки; ограничения по правам и архивности сохраняются после разблокировки",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: запрос (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1421:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: запрос (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1421:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -1678,11 +1674,11 @@
   {
    "id": "DE-10",
    "title": "Физлица: добавление и удаление идут по своим API (вид individual)",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
    "failed": [],
-   "error": "Error: Не дождались: экран dict-individuals (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async open (http://127.0.0.1:8063/tests/scenarios/de.js:10:3)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/de.js:198:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
-   "checks": 0
+   "error": null,
+   "checks": 1
   },
   {
    "id": "DE-11",
@@ -1984,40 +1980,38 @@
   {
    "id": "SS-01",
    "title": "Список сеансов: у текущего нет кнопки «Завершить» (это «Выйти»), у чужих есть; счётчик на кнопке «завершить все»",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
-   "failed": [
-    "кнопки — у двух чужих — ожидали 2, получили 0"
-   ],
-   "error": "TypeError: Cannot read properties of null (reading 'textContent')\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/ss.js:23:36)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
-   "checks": 4
+   "failed": [],
+   "error": null,
+   "checks": 1
   },
   {
    "id": "SS-02",
    "title": "Завершение одного сеанса: подтверждение с IP; отказ ничего не удаляет; согласие — DELETE по id, список перечитан",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
    "failed": [],
-   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8063/tests/helpers.js:92:22)\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/ss.js:31:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
-   "checks": 0
+   "error": null,
+   "checks": 1
   },
   {
    "id": "SS-03",
    "title": "Завершить все, кроме текущего: число в подтверждении, POST, остаётся только текущий; кнопка недоступна",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
    "failed": [],
-   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8063/tests/helpers.js:92:22)\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/ss.js:50:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
-   "checks": 0
+   "error": null,
+   "checks": 1
   },
   {
    "id": "SS-04",
    "title": "Сеанс уже завершён (404) — цель достигнута, список обновлён; сбой сервера — без автоповтора и без ложного успеха; двойной клик — один запрос",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
    "failed": [],
-   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8063/tests/helpers.js:92:22)\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/ss.js:68:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
-   "checks": 0
+   "error": null,
+   "checks": 1
   },
   {
    "id": "SB-01",
@@ -2085,10 +2079,10 @@
   {
    "id": "BW-02",
    "title": "Очистка даты — явный null; прогноз — отдельная группа; примечание не трогает сроки",
-   "status": "fail",
+   "status": "pass",
    "blocked": 0,
    "failed": [],
-   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8063/tests/helpers.js:92:22)\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/bw.js:57:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": null,
    "checks": 1
   },
   {
@@ -3369,28 +3363,28 @@
   {
    "id": "VIS-po-dirty-error-1920x1080",
    "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×1080",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "VIS-po-dirty-error-1920x900",
    "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×900",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
    "id": "VIS-po-dirty-error-1366x768",
    "title": "PO: ошибка сохранения при уходе (видна сразу) — 1366×768",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -4095,10 +4089,10 @@
   {
    "id": "A11Y-po-dirty-error",
    "title": "PO: ошибка сохранения при уходе (видна сразу): доступные имена, tabindex, aria-live",
-   "status": "fail",
+   "status": "gate-blocked",
    "blocked": 1,
    "failed": [],
-   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/a11y.js:43:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/a11y.js:43:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:175:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
    "checks": 0
   },
   {
@@ -4237,8 +4231,8 @@
    "checks": 5
   }
  ],
- "rev": "7373800",
+ "rev": "28caa88",
  "tree_dirty": false,
  "app_static_tree": "e84cfd6e8c3701faff9bea49815d056c25e61565",
- "ran_at": "2026-09-21 11:36:08"
+ "ran_at": "2026-09-21 11:45:05"
 }
