@@ -51,7 +51,7 @@ from pydantic import BaseModel
 from app import activity, contract_guard
 from app.access import require_service_feature
 from app.contracts import build_contract_name, build_document_label
-from app.db import get_connection
+from app.db import begin_write, get_connection
 
 router = APIRouter(tags=["dictionaries"])
 
@@ -1148,6 +1148,7 @@ def delete_entry(kind: str, key: str, body: DeleteIn,
     """
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверок (app/db.py): не читать устаревшее состояние перед записью
         # Покрытие контрактов ДО удаления: перевод ссылок на замену — это
         # тоже привязка изделий к контракту, и она подчиняется общему
         # правилу «изделие держится за позицию спецификации» (2026-08-14,

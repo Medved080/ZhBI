@@ -141,15 +141,19 @@ def checksum(tables=TABLES):
 
 # ---------------------------------------------------------------- соединения
 TRACKED = []
+TRACE = []   # (номер соединения, SQL) — порядок выполнения на каждом соединении обработчиков (без PRAGMA)
 
 
 def track_connections(*modules):
-    """Запоминает каждое соединение, открытое обработчиками (ссылки держим, чтобы освобождение не зависело от сборщика мусора)."""
+    """Запоминает каждое соединение, открытое обработчиками (ссылки держим, чтобы освобождение не зависело от сборщика мусора)
+    и записывает выполняемые ими SQL-выражения (для проверки «блокировка записи — первым действием»)."""
     orig = appdb.get_connection
 
     def tracking():
         c = orig()
+        idx = len(TRACKED)
         TRACKED.append(c)
+        c.set_trace_callback(lambda sql, i=idx: TRACE.append((i, sql)) if not sql.lstrip().upper().startswith("PRAGMA") else None)
         return c
 
     for m in modules:

@@ -44,14 +44,15 @@ def begin_write(conn: sqlite3.Connection) -> None:
 
     Ожидание дольше BUSY_TIMEOUT_MS — чистый отказ 503 с текстом (БД не изменена), а не «database is
     locked» из глубины запроса. Отказ внутри операции по-прежнему откатывает ВСЁ: соединение
-    закрывается без commit. Вызывать первым действием после get_connection() и ТОЛЬКО в операциях,
+    закрывается без commit. Вызывать первым действием ВНУТРИ try/finally обработчика (finally закрывает соединение) и ТОЛЬКО в операциях,
     которые пишут (иначе читатель зря займёт блокировку).
     """
     from fastapi import HTTPException  # локально: db.py импортируют и скрипты без веб-слоя
     try:
         conn.execute("BEGIN IMMEDIATE")
     except sqlite3.OperationalError as e:
-        conn.close()
+        # Соединение НЕ закрываем: его закрывает вызывающий (try/finally обработчика), а обработчики вроде dict_delete на исключении
+        # делают rollback — закрытое соединение подменило бы отказ 503 на «Cannot operate on a closed database».
         if "locked" in str(e).lower() or "busy" in str(e).lower():
             raise HTTPException(
                 status_code=503,
