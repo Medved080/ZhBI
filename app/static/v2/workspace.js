@@ -52,7 +52,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   let notice = "";             // последнее сообщение движка
   let tab = ws === "picker" ? "pick" : "props";
   let pk = null;                // модель отбора комплектовщика (срезы, показатели, контракты)
-  const al = { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, busy: false, error: "", done: "", warn: "" };
+  const al = { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" };
   let onlyRemainder = false;    // «только с остатком» — вид списка контрактов, отбор схемы не меняет
   let panelHidden = false;
   let panelW = readNum(ws === "picker" ? "v2.ws.panelW.picker" : "v2.ws.panelW", ws === "picker" ? 430 : 340);
@@ -124,7 +124,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     } else if (m.evt === "picker" && m.model && Array.isArray(m.model.slicers)) {
       pk = m.model; paintPanel();
     } else if (m.evt === "candidates" && Array.isArray(m.items)) {
-      al.cand = { elementType: m.elementType, mark: m.mark, items: m.items }; paintPanel();
+      al.cand = { elementType: m.elementType, mark: m.mark, items: m.items }; al.candAsked = true; paintPanel();
     } else if (m.evt === "search-result" && Array.isArray(m.items)) {
       if (qInput && m.text === qInput.value) paintFound(m);
     } else if (m.evt === "notice") {
@@ -450,13 +450,14 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   }
 
 
-  // ---- комплектовщик: распределение изделий одной марки на контракт (поставщик → контракт → марка → изделия → подтверждение)
-  // Числа контракта — с сервера (`GET /contracts`: план, факт, повреждено, остаток по позициям); запись — одна пачка
-  // `PATCH /elements/bulk-status` (статус «Контрактация» + контракт, всё или ничего; остаток проверяет сервер, страж contract_guard).
+  // ---- комплектовщик: распределение изделий одной позиции на контракт (поставщик → контракт → марка → изделия → подтверждение)
+  // Числа контракта — с сервера (`GET /contracts`: план, факт, повреждено, остаток по позициям). Запись — ОДНА серверная операция на всю пачку:
+  // `POST /contracts/{id}/allocations` (под блокировкой записи сервер проверяет права, остаток и то, что изделия всё ещё без контракта и в том же статусе;
+  // «Запланирован» → «Контрактация», остальные статусы сохраняются; всё или ничего). Пачка не сужается молча: неподходящее выделение не отправляется.
   const nrm = (x) => String(x ?? "").trim().toLowerCase();
   const lineKey = (l) => `${l.element_type}|${l.mark ?? ""}`;
   const sameLine = (i, l) => nrm(i.element_type) === nrm(l.element_type) && nrm(i.mark) === nrm(l.mark);
-  const allocProbe = () => checkWrite("PATCH", "/elements/bulk-status", { status: "contracting", items: [{ element_id: 1, contract_id: 1 }] });
+  const allocProbe = () => checkWrite("POST", "/contracts/1/allocations", { object_id: 1, element_type: "x", mark: null, items: [{ element_id: 1, expected_status: "planned" }] });
   function allocEnabled() { return !!canStatus && allocProbe().allowed; }
   function objectContractIds() { return new Set((pk?.contracts || []).flatMap((g) => g.rows.map((r) => r.id))); }
   async function loadAlloc() {
@@ -478,6 +479,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const cLabel = (c) => [c.agreement_number, c.specification_number, c.theme].filter(Boolean).join(" · ") || c.name;
   const curContract = () => al.contracts.find((c) => c.id === al.contractId) || null;
   const curLine = () => curContract()?.lines.find((l) => lineKey(l) === al.lineKey) || null;
+  // Выделение на схеме → что можно распределить: изделия ЭТОЙ позиции без контракта (любой статус). Остальное — причины, из-за которых пачка не уйдёт.
   function allocPlan() {
     const line = curLine();
     const sel = sc?.multiItems || [];
@@ -485,20 +487,30 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const why = (t) => bad.set(t, (bad.get(t) || 0) + 1);
     for (const i of sel) {
       if (!line || !sameLine(i, line)) why("другой позиции (тип или марка)");
-      else if (i.contract_id != null) why("уже привязано к контракту");
-      else if (i.current_status !== "planned") why(`в статусе «${stLabel(i.current_status)}» — контракт им назначается отдельно, в текущем интерфейсе`);
+      else if (i.contract_id != null) why("уже с контрактом");
       else ok.push(i);
     }
-    return { line, ok, bad: Array.from(bad), badN: sel.length - ok.length, total: sel.length, over: line ? ok.length > Math.max(line.remaining, 0) : false };
+    const planned = ok.filter((i) => i.current_status === "planned").length;
+    return { line, ok, bad: Array.from(bad), badN: sel.length - ok.length, total: sel.length, planned, kept: ok.length - planned,
+      over: line ? ok.length > Math.max(line.remaining, 0) : false };
   }
-  function candPlanned() {
+  function candList() {
     const line = curLine();
     if (!line || !al.cand || nrm(al.cand.elementType) !== nrm(line.element_type) || nrm(al.cand.mark) !== nrm(line.mark)) return null;
-    const noContract = al.cand.items.filter(([, , c]) => c == null);
-    const free = noContract.filter(([, st]) => st === "planned");          // распределяются пачкой: «Запланирован» → «Контрактация» + контракт
-    return { free, nonPlanned: noContract.length - free.length, linked: al.cand.items.length - noContract.length, all: al.cand.items.length };
+    const free = al.cand.items.filter(([, , c]) => c == null).sort((a, b) => (a[1] === "planned" ? 0 : 1) - (b[1] === "planned" ? 0 : 1) || a[0] - b[0]);
+    const planned = free.filter(([, st]) => st === "planned").length;
+    return { free, planned, kept: free.length - planned, linked: al.cand.items.length - free.length };
   }
   const v1Link = () => `/?ui=v1&object_id=${encodeURIComponent(sc?.objectId ?? curObject)}&ws=picker`;
+  const REASONS = { contract_assigned: "уже получили контракт (его назначил другой пользователь)", status_changed: "изменили статус", other_position: "относятся к другой позиции",
+    other_object: "относятся к другому объекту", not_current: "не входят в актуальный чертёж", partly_applied: "уже частично распределены на этот контракт", duplicate: "повторяются в пачке", not_found: "не найдены" };
+  function conflictText(err) {
+    const d = err.rawDetail;
+    if (!d || typeof d !== "object" || !Array.isArray(d.conflicts)) return err.detail;
+    const by = new Map();
+    for (const c of d.conflicts) by.set(c.reason, (by.get(c.reason) || 0) + 1);
+    return `${d.message} Изделий: ${Array.from(by, ([r, n]) => `${n} ${REASONS[r] || r}`).join("; ")}.`;
+  }
   function allocHtml() {
     if (!pk) return pkLoading();
     if (canStatus === null) return `<p class="v2-muted ws-pad">Проверка прав…</p>`;
@@ -509,7 +521,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }
     const sup = suppliers();
     if (!sup.length) return `<p class="v2-muted ws-pad">У объекта нет действующих контрактов, на которые можно распределять.</p>`;
-    const c = curContract(), plan = allocPlan(), cand = candPlanned();
+    const c = curContract(), plan = allocPlan(), cand = candList();
+    if (plan.line && !cand && sc?.loaded && !al.candAsked) { al.candAsked = true; queueMicrotask(() => send("pickerCandidates", { elementType: plan.line.element_type, mark: plan.line.mark ?? null })); }
     const en = allocEnabled();
     const step = (n, t, body) => `<section class="ws-al-step"><h4><span class="ws-al-n">${n}</span> ${t}</h4>${body}</section>`;
     const cols = `<div class="ws-pkcols ws-pkcols-c"><span></span><em>всего, шт.</em><em>распред.</em><em>доступно</em></div>`;
@@ -530,15 +543,15 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }
     if (plan.line) {
       const rem = Math.max(plan.line.remaining, 0);
-      html += step(4, "Изделия на схеме", `<p class="ws-fnote">Изделий этой позиции без контракта: ${cand ? `<b>${nf(cand.free.length + cand.nonPlanned)}</b>. Из них «Запланирован» — <b>${nf(cand.free.length)}</b> (распределяются пачкой: статус станет «Контрактация»)${cand.nonPlanned ? `; в других статусах — ${nf(cand.nonPlanned)} (им контракт назначается отдельной операцией без смены статуса — в карточке изделия в текущем интерфейсе)` : ""}${cand.linked ? `; уже с контрактом — ${nf(cand.linked)}` : ""}` : "считаем…"}. Доступно по позиции: <b>${nf(rem)}</b> шт.</p>
+      html += step(4, "Изделия на схеме", `<p class="ws-fnote">Изделий этой позиции без контракта: ${cand ? `<b>${nf(cand.free.length)}</b>. Из них «Запланирован» — <b>${nf(cand.planned)}</b> (станут «Контрактация»); в других статусах — <b>${nf(cand.kept)}</b> (статус сохранится, назначится контракт)${cand.linked ? `; уже с контрактом — ${nf(cand.linked)}` : ""}` : "считаем…"}. Доступно по позиции: <b>${nf(rem)}</b> шт.</p>
         <div class="ws-actions"><button type="button" class="v2-btn" data-al="pick" ${!cand || !cand.free.length || !rem || al.busy ? "disabled" : ""}>Выбрать ${cand ? nf(Math.min(rem, cand.free.length)) : ""} на схеме</button><button type="button" class="v2-btn" data-al="clear" ${plan.total && !al.busy ? "" : "disabled"}>Снять выделение</button></div>
         <p class="v2-muted ws-fnote">Или выделите изделия на схеме сами: Shift + перетаскивание (рамкой). Выделено: <b>${nf(plan.total)}</b>; подходят: <b>${nf(plan.ok.length)}</b>.</p>
         ${plan.bad.length ? `<ul class="ws-list ws-al-bad">${plan.bad.map(([t, n]) => `<li><span>Не распределяются: ${esc(t)}</span><b>${nf(n)}</b></li>`).join("")}</ul>
           <p class="ws-err" role="alert">В выделении ${nf(plan.badN)} изд., которые нельзя распределить этой операцией. Пачка не отправляется, пока они выделены: выделение молча не сужается.</p>
           ${plan.ok.length ? `<div class="ws-actions"><button type="button" class="v2-btn" data-al="keep">Оставить только подходящие (${nf(plan.ok.length)})</button></div>` : ""}` : ""}
         ${plan.over ? `<p class="ws-err" role="alert">Подходящих изделий больше доступного остатка (${nf(plan.ok.length)} > ${nf(rem)}). Уменьшите выбор.</p>` : ""}`);
-      html += step(5, "Подтверждение", `<dl class="ws-dl">${row("Поставщик", al.supplier)}${row("Контракт", c.name)}${row("Позиция", `${plan.line.element_type}, ${plan.line.mark || "без марки"}`)}${row("Будет распределено", `${nf(plan.ok.length)} шт.`)}${row("Доступно по позиции", `${nf(rem)} → ${nf(rem - plan.ok.length)} шт.`)}${row("Статус изделий", "«Запланирован» → «Контрактация»")}</dl>
-        <p class="v2-muted ws-fnote">Меняются только эти изделия: статус и контракт. Остальные поля, изделия и контракты не затрагиваются.</p>
+      html += step(5, "Подтверждение", `<dl class="ws-dl">${row("Поставщик", al.supplier)}${row("Контракт", c.name)}${row("Позиция", `${plan.line.element_type}, ${plan.line.mark || "без марки"}`)}${row("Будет распределено", `${nf(plan.ok.length)} шт.`)}${row("Доступно по позиции", `${nf(rem)} → ${nf(rem - plan.ok.length)} шт.`)}${row("Статусы", `«Запланирован» → «Контрактация»: ${nf(plan.planned)} шт.; остальные сохраняются: ${nf(plan.kept)} шт.`)}</dl>
+        <p class="v2-muted ws-fnote">Всё или ничего: сервер применяет пачку целиком и проверяет остаток под блокировкой. Если изделия за это время изменились, пачка не применится, придёт перечень расхождений. Историю статусов и прочие поля операция не переписывает.</p>
         <div class="ws-actions"><button type="button" class="v2-btn v2-primary" data-al="submit" ${plan.ok.length && !plan.badN && !plan.over && !al.busy && en ? "" : "disabled"}>${al.busy ? "Сохранение…" : `Распределить ${plan.ok.length ? nf(plan.ok.length) + " шт." : ""}`}</button></div>
         ${en ? "" : `<p class="ws-warnbox" role="status">Распределение в новом интерфейсе отключено: ${esc(allocProbe().message || "операция не разрешена")} Выполните его в текущем интерфейсе — <a href="${esc(v1Link())}">открыть с этим объектом</a>.</p>`}`);
     }
@@ -548,38 +561,60 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     return html + `</div>`;
   }
 
+  const elemDelta = (u) => ({ id: u.id, current_status: u.current_status, contract_id: u.contract_id ?? null, counterparty_code: u.counterparty_code ?? null,
+    planned_delivery_date: u.planned_delivery_date ?? null, actual_delivery_date: u.actual_delivery_date ?? null, project_delivery_date: u.project_delivery_date ?? null,
+    project_smr_start_date: u.project_smr_start_date ?? null });
+  // Сверка с сервером после неопределённого исхода: пачка атомарна, поэтому первого и последнего изделия достаточно
+  async function verifyAllocation(ids, cid) {
+    const probe = ids.length > 1 ? [ids[0], ids[ids.length - 1]] : [ids[0]];
+    const got = [];
+    for (const id of probe) got.push((await api.get(`/elements/${id}`)).contract_id);
+    if (got.every((v) => v === cid)) return "applied";
+    if (got.every((v) => v == null)) return "not_applied";
+    return "unclear";
+  }
+
   async function allocSubmit() {
     const plan = allocPlan(), c = curContract();
     if (al.busy || !c || !plan.line || !plan.ok.length || plan.badN || plan.over || !allocEnabled()) return;
     const rem = Math.max(plan.line.remaining, 0);
     const msg = [`Распределить изделия на контракт?`, ``, `Поставщик: ${al.supplier}`, `Контракт: ${c.name}`, `Позиция: ${plan.line.element_type}, ${plan.line.mark || "без марки"}`,
-      `Изделий: ${plan.ok.length} шт.`, `Доступно по позиции: ${rem} → ${rem - plan.ok.length} шт.`, `Статус изделий: «Запланирован» → «Контрактация»`, ``, `Другие изделия, поля и контракты не меняются.`].join("\n");
+      `Изделий: ${plan.ok.length} шт.`, `Доступно по позиции: ${rem} → ${rem - plan.ok.length} шт.`,
+      `Статусы: «Запланирован» → «Контрактация» — ${plan.planned} шт.; остальные сохраняются — ${plan.kept} шт.`, ``, `Пачка применяется целиком либо не применяется. Другие изделия, поля и контракты не меняются.`].join("\n");
     if (!(await showConfirmDialog(msg, { confirmLabel: "Распределить", multiline: true }))) return;
     if (dead || al.busy) return;
     const ids = plan.ok.map((i) => i.id);
-    const body = { status: "contracting", items: ids.map((id) => ({ element_id: id, contract_id: c.id })) };
+    const body = { object_id: sc?.objectId ?? curObject, element_type: plan.line.element_type, mark: plan.line.mark ?? null,
+      items: plan.ok.map((i) => ({ element_id: i.id, expected_status: i.current_status })) };
     al.busy = true; al.error = ""; al.done = ""; al.warn = ""; paintPanel();
-    try {
-      const res = await api.patch("/elements/bulk-status", body);
-      const upd = Array.isArray(res?.updated) ? res.updated : [];
-      const okN = upd.filter((u) => u.current_status === "contracting" && u.contract_id === c.id).length;
-      al.done = `Распределено: ${okN} шт. на «${c.name}» (по ответу сервера). Позиция ${plan.line.element_type}, ${plan.line.mark || "без марки"}.`;
-      if (okN !== ids.length) al.warn = `Сервер подтвердил ${okN} из ${ids.length} изделий — проверьте историю.`;
-      send("applyElements", { items: upd.map((u) => ({ id: u.id, current_status: u.current_status, contract_id: u.contract_id ?? null, counterparty_code: u.counterparty_code ?? null,
-        planned_delivery_date: u.planned_delivery_date ?? null, actual_delivery_date: u.actual_delivery_date ?? null, project_delivery_date: u.project_delivery_date ?? null, project_smr_start_date: u.project_smr_start_date ?? null })) });
+    const after = (applied) => {                       // обновление схемы и остатков по ответу/состоянию сервера
+      if (applied.length) send("applyElements", { items: applied.map(elemDelta) });
       send("clearSelection");
-      al.loaded = false; al.cand = null; send("pickerCandidates", { elementType: plan.line.element_type, mark: plan.line.mark ?? null });
+      al.loaded = false; al.cand = null; al.candAsked = false;
       loadAlloc();
+    };
+    try {
+      const res = await api.post(`/contracts/${c.id}/allocations`, body);
+      const applied = res?.applied || [], already = res?.already || [];
+      if (res?.already_applied) {
+        al.done = `Уже распределено: ${already.length} шт. — сервер подтвердил состояние, повторная запись не выполнялась и остаток второй раз не расходовался.`;
+      } else {
+        al.done = `Распределено: ${applied.length} шт. на «${c.name}» (по ответу сервера): «Контрактация» — ${plan.planned} шт., статус сохранён — ${plan.kept} шт. Остаток по позиции: ${res?.position?.remaining ?? "—"} шт.`;
+        if (applied.length !== ids.length) al.warn = `Сервер подтвердил ${applied.length} из ${ids.length} изделий — проверьте историю.`;
+      }
+      after([...applied, ...already]);
     } catch (err) {
       if (err instanceof ApiError && !err.blockedByPolicy && (err.status === 0 || err.status >= 500)) {
-        // исход неизвестен: повторно НЕ отправляем; сверяемся с сервером по первому изделию пачки (пачка применяется целиком или не применяется)
+        // исход неизвестен: повторно НЕ отправляем, сначала сверяемся с сервером (пачка применяется целиком или не применяется)
         try {
-          const d = await api.get(`/elements/${ids[0]}`);
-          if (d.current_status === "contracting" && d.contract_id === c.id) {
-            al.done = "Ответ не получен, но сервер подтвердил: распределение применено. Схема и остатки перечитаны с сервера.";
-            send("reload"); send("clearSelection"); al.loaded = false; loadAlloc();
-          } else al.error = "Ответ не получен, изменение не подтверждено: изделие на сервере без изменений. Выбор сохранён — проверьте связь и подтвердите снова.";
+          const v = await verifyAllocation(ids, c.id);
+          if (v === "applied") { al.done = "Ответ не получен, но сервер подтвердил: распределение применено. Схема и остатки перечитаны с сервера."; send("reload"); after([]); }
+          else if (v === "not_applied") al.error = "Ответ не получен, изменение не подтверждено: изделия на сервере без контракта. Выбор сохранён — проверьте связь и подтвердите снова.";
+          else al.error = "Ответ не получен, состояние изделий на сервере неоднозначно. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта.";
         } catch (e2) { al.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта."; }
+      } else if (err instanceof ApiError && err.status === 409 && err.rawDetail && typeof err.rawDetail === "object") {
+        al.error = conflictText(err);                   // расхождения: ничего не применено; схема перечитывается, чтобы показать актуальное
+        send("reload"); send("clearSelection"); al.cand = null; al.candAsked = false; al.loaded = false; loadAlloc();
       } else al.error = err instanceof ApiError ? err.detail : "Не удалось распределить";   // выбор и введённое остаются
     } finally { al.busy = false; if (!dead) paintPanel(); }
   }
@@ -726,16 +761,16 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     bindStatusForm(body);
     body.querySelectorAll("[data-al]").forEach((b) => b.addEventListener(b.tagName === "SELECT" ? "change" : "click", () => {
       const a = b.dataset.al;
-      if (a === "supplier") { al.supplier = b.value; al.contractId = null; al.lineKey = null; al.cand = null; al.error = ""; al.done = ""; paintPanel(); }
+      if (a === "supplier") { al.supplier = b.value; al.contractId = null; al.lineKey = null; al.cand = null; al.candAsked = false; al.error = ""; al.done = ""; paintPanel(); }
       else if (a === "reload") { al.loadError = ""; loadAlloc(); }
       else if (a === "clear") send("clearSelection");
       else if (a === "keep") send("pickerSelectIds", { ids: allocPlan().ok.map((i) => i.id) });
-      else if (a === "pick") { const cand = candPlanned(), line = curLine(); if (cand && line) send("pickerSelectIds", { ids: cand.free.slice(0, Math.max(line.remaining, 0)).map(([id]) => id) }); }
+      else if (a === "pick") { const cand = candList(), line = curLine(); if (cand && line) send("pickerSelectIds", { ids: cand.free.slice(0, Math.max(line.remaining, 0)).map(([id]) => id) }); }
       else if (a === "submit") allocSubmit();
     }));
-    body.querySelectorAll("[data-al-c]").forEach((b) => b.addEventListener("click", () => { al.contractId = Number(b.dataset.alC); al.lineKey = null; al.cand = null; al.error = ""; al.done = ""; paintPanel(); }));
+    body.querySelectorAll("[data-al-c]").forEach((b) => b.addEventListener("click", () => { al.contractId = Number(b.dataset.alC); al.lineKey = null; al.cand = null; al.candAsked = false; al.error = ""; al.done = ""; paintPanel(); }));
     body.querySelectorAll("[data-al-l]").forEach((b) => b.addEventListener("click", () => {
-      al.lineKey = b.dataset.alL; al.error = ""; al.done = ""; al.cand = null;
+      al.lineKey = b.dataset.alL; al.error = ""; al.done = ""; al.cand = null; al.candAsked = true;
       const l = curLine(); if (l) send("pickerCandidates", { elementType: l.element_type, mark: l.mark ?? null });
       paintPanel();
     }));
@@ -917,7 +952,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; wrs.clear(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      curObject = id; wrs.clear(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },

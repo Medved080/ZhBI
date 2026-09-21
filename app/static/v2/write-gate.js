@@ -22,21 +22,23 @@ export const EXPERIMENTAL_NOTICE =
 const ID = "[^/]+";
 const re = (s) => new RegExp("^" + s + "$");
 
-// Распределение изделий на контракт (пачка `PATCH /elements/bulk-status`): ОТКЛЮЧЕНО, пока backend не гарантирует атомарность проверки
-// остатка (см. Docs/v2-workspaces.md, «Блокер: гонка остатка»). Флаг — единственное место включения; общей настройки «разрешить» нет.
+// Распределение изделий на контракт (`POST /contracts/{id}/allocations`, одна серверная операция на пачку): включается ТОЛЬКО вместе с версией backend,
+// где остаток проверяется под блокировкой записи (Docs/v2-workspaces.md, §9). Флаг — единственное место включения; общей настройки «разрешить» нет.
 export const ALLOCATION_ENABLED = false;
 
-// Жёсткая форма тела распределения: статус «Контрактация» и пачка изделий, у КАЖДОГО из которых назначен контракт (не null); лишних полей нет.
+// Жёсткая форма тела распределения (`POST /contracts/{id}/allocations`): объект, позиция (тип + марка) и пачка изделий с ожидаемым статусом; лишних полей нет.
 export function allocationBodyProblem(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
-  if (Object.keys(body).some((k) => !["status", "items"].includes(k))) return "лишние поля";
-  if (body.status !== "contracting") return "статус не «Контрактация»";
+  if (Object.keys(body).some((k) => !["object_id", "element_type", "mark", "items"].includes(k))) return "лишние поля";
+  if (!Number.isInteger(body.object_id) || body.object_id <= 0) return "не указан объект";
+  if (typeof body.element_type !== "string" || !body.element_type || !(body.mark === null || typeof body.mark === "string")) return "не указана позиция";
   if (!Array.isArray(body.items) || !body.items.length || body.items.length > 500) return "пачка пуста или больше 500";
-  const contract = body.items[0]?.contract_id;
+  const seen = new Set();
   for (const it of body.items) {
-    if (!it || typeof it !== "object" || Object.keys(it).some((k) => !["element_id", "contract_id"].includes(k))) return "лишние поля изделия";
-    if (!Number.isInteger(it.element_id) || it.element_id <= 0 || !Number.isInteger(it.contract_id) || it.contract_id <= 0) return "у изделия нет контракта";
-    if (it.contract_id !== contract) return "в пачке больше одного контракта";
+    if (!it || typeof it !== "object" || Object.keys(it).some((k) => !["element_id", "expected_status"].includes(k))) return "лишние поля изделия";
+    if (!Number.isInteger(it.element_id) || it.element_id <= 0 || typeof it.expected_status !== "string" || !it.expected_status) return "у изделия нет идентификатора или ожидаемого статуса";
+    if (seen.has(it.element_id)) return "изделие повторяется";
+    seen.add(it.element_id);
   }
   return null;
 }
@@ -68,7 +70,7 @@ export const POLICY = [
   { id: "shape.set", screen: "marker-shapes", action: "Форма маркера по паре «слой / тип» (только изменённые)", method: "PUT", path: re("/element-shapes"), risk: "общая для всех (видна в V1)", allowed: true, proof: "живая проверка: контур→круг→контур, изменена одна строка" },
   { id: "revit.colors", screen: "mfr-colors", action: "Цветовая схема модели МФР объекта (целиком)", method: "PUT", path: re("/revit-plan/colors"), risk: "общая для объекта", allowed: true, proof: "живая проверка: запись, шаблон, возврат" },
   { id: "element.status", screen: "ws-model", action: "Схема: смена статуса ОДНОГО элемента (контракт не передаётся и сохраняется прежним; «Запланирован» не предлагается — возврат на него снимает контракт; дата/время и комментарий — по желанию)", method: "PATCH", path: re(`/elements/\\d+/status`), onlyKeys: ["status", "changed_at", "comment"], risk: "рабочие данные, история статусов (не отменяется)", allowed: true, proof: "живая проверка на настоящем backend: статус → SQL и история → схема; контракт не передаётся; повтор и сбой — без автоповтора" },
-  { id: "element.allocate", screen: "ws-picker", action: "Комплектовщик: распределение изделий одной марки на контракт (статус «Запланирован» → «Контрактация» + контракт, пачкой)", method: "PATCH", path: re("/elements/bulk-status"), check: allocationBodyProblem, risk: "рабочие данные, история статусов (не отменяется), остатки контракта", allowed: ALLOCATION_ENABLED, proof: "проверено на копии БД (сквозной сценарий, отказ/сбой/повтор); гонка остатка — см. why", why: "backend не гарантирует остаток при одновременных запросах (проверено: 3 из 3 параллельных запросов прошли на остатке 1); ждёт исправления backend" },
+  { id: "element.allocate", screen: "ws-picker", action: "Комплектовщик: распределение изделий одной позиции на контракт — одна пачка (запланированные → «Контрактация», прочие статусы сохраняются; всё или ничего)", method: "POST", path: re(`/contracts/\\d+/allocations`), check: allocationBodyProblem, risk: "рабочие данные, история статусов (не отменяется), остатки контракта", allowed: ALLOCATION_ENABLED, proof: "проверено на копии БД по HTTP (scripts/verify_allocation.py) и в браузере; остаток под блокировкой записи, конфликт вместо молчаливого сужения", why: "включается только вместе с исправлением backend (атомарность остатка, `app/allocation.py`); без него на сервере старого образца остаток при одновременных запросах не гарантирован" },
   { id: "block-work.plan", screen: "blocks", action: "ЗР: базовый срок (начало / конец)", method: "PATCH", path: re(`/objects/\\d+/block-works/\\d+`), onlyKeys: ["plan_start", "plan_end"], risk: "данные учёта по блокам", allowed: true, proof: "живая проверка: пусто → срок → пусто, SQL, журнал" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
