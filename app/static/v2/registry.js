@@ -27,7 +27,9 @@ function levelOk(level, kind) {
 // его типу (not_applicable), не показывается даже администратору; администратор сервиса видит остальное;
 // пункт с несколькими разделами виден, если открыт хотя бы один. Экран без ограничений (нет data-feature) — всем.
 export function screenAllowed(screen, structure, rights) {
-  const need = [...(structure?.menu_features || []), ...(screen.feature || [])];
+  // `menuFeatures` в реестре ПЕРЕОПРЕДЕЛЯЕТ права пунктов меню V1 (screen-structure.json): нужно, когда один экран V2 объединяет пункты V1 с разными
+  // правами (например, «Мои сеансы» — всем, «Сеансы пользователей» — по праву), и доступ к нему определяется самим экраном.
+  const need = [...(screen.menuFeatures ?? structure?.menu_features ?? []), ...(screen.feature || [])];
   if (!need.length) return true;
   const notApplicable = new Set(rights?.not_applicable || []);
   const features = rights?.features || {};

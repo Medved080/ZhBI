@@ -1182,7 +1182,21 @@ export function mountUsersAccess(container, ctx) {
     const snapshot = JSON.stringify(state.access.grants);
     const sentFingerprint = grantsFingerprint(state.access.grants);
     const expected = state.access._baselineGrants;
-    await api.put(`/users/${u.id}/access`, { grants: state.access.grants, expected_grants: expected });
+    let serverNote = "";
+    try {
+      await api.put(`/users/${u.id}/access`, { grants: state.access.grants, expected_grants: expected });
+    } catch (err) {
+      if (!(err && (err.status === 0 || err.status >= 500))) throw err;
+      // Исход неизвестен (обрыв связи, 5xx): повторно НЕ отправляем, а читаем доступ с сервера и сверяем с отправленным набором.
+      let fresh = null;
+      try { fresh = (await api.get(`/users/${u.id}/access`)).grants; } catch (e) { /* нет связи — сверить нечем */ }
+      if (!fresh || grantsFingerprint(fresh) !== sentFingerprint) {
+        throw Object.assign(new Error(err.detail), { status: err.status, detail: fresh
+          ? `${err.detail} На сервере правка не найдена — можно нажать «Сохранить» ещё раз.`
+          : `${err.detail} Неизвестно, сохранён ли доступ: проверьте связь и обновите данные.` });
+      }
+      serverNote = "Сервер сохранил доступ, хотя ответ не дошёл.";
+    }
     if (JSON.stringify(state.access.grants) === snapshot) {
       state.accessDirty = false;
       state.access = null;
@@ -1195,7 +1209,7 @@ export function mountUsersAccess(container, ctx) {
     const ok = await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
     state.status = !ok ? "Доступ сохранён, но не удалось обновить отображение."
       : state.access ? "Сохранено. Есть новые несохранённые изменения."
-      : "Доступ сохранён";
+      : (serverNote || "Доступ сохранён");
   }
 
   async function renderAccess(panel, u) {

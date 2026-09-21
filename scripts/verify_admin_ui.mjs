@@ -274,4 +274,324 @@ if (want("passwords")) {
   await f.close();
 }
 
+// ====================================================================== доступ к проектам и объектам
+if (want("access")) {
+  console.log("== Доступ (браузер)");
+  const uid = one("SELECT id FROM users WHERE domain_login='qa_ui_user1'")?.id
+    ?? (await admin.post("/users", { last_name: "Интерфейсов", first_name: "Тест", domain_login: "qa_ui_user1", role: "user" })).data.id;
+  await admin.put(`/users/${uid}/access`, { grants: [] });
+  const proj = one("SELECT id, name FROM projects ORDER BY id LIMIT 1");
+  const obj = one(`SELECT id, name FROM objects WHERE project_id=${proj.id} ORDER BY id LIMIT 1`);
+  const grants = () => q(`SELECT project_id, object_id, role FROM user_access WHERE user_id=${uid} ORDER BY project_id, object_id, role`);
+  const b = await session(BASE, "admin");
+  await openUserCard(b, "qa_ui_user1", "access");
+  await b.waitFor("!!document.querySelector('#ua-access-all-areas')");
+  ok("A-UI-0 у пользователя без доступа: «Нет доступа», кнопка «Сохранить» выключена", (await text(b, "#ua-access-results")).includes("Нет доступа") && (await b.eval("document.querySelector('#ua-access-save').disabled")) === true);
+  await click(b, "#ua-access-all-areas");
+  await b.waitFor(`!!document.querySelector('[data-edit-area="p:${proj.id}"]')`);
+  await click(b, `[data-edit-area="p:${proj.id}"]`);
+  await b.waitFor("!!document.querySelector('[data-grant-role=view]')");
+  await click(b, "[data-grant-role=view]");
+  ok("A-UI-1 отметка роли включает «Сохранить» и сторож несохранённого", (await b.eval("document.querySelector('#ua-access-save').disabled")) === false && (await uaStatus(b)).includes("несохранённые"));
+  // сторож: уход на другую вкладку спрашивает
+  await click(b, "[data-tab=profile]"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  ok("A-UI-2 уход с несохранённым доступом: диалог «Несохранённые изменения»", (await text(b, ".v2-dialog")).includes("несохранённые"));
+  await confirmDialog(b, "cancel");                              // «Остаться»
+  ok("A-UI-2 «Остаться»: правка на месте, запроса нет", (await b.eval("document.querySelector('[data-grant-role=view]').checked")) === true && grants().length === 0);
+  // сохранить: двойной клик
+  let mark = b.requests.length;
+  await b.eval("document.querySelector('#ua-access-save').scrollIntoView({block:'center'})");
+  const r = await b.rect("#ua-access-save"); await b.click(r.cx, r.cy); await b.click(r.cx, r.cy);
+  await b.waitFor("(document.querySelector('#ua-status')||{}).innerText==='Доступ сохранён'", 10000);
+  const puts = wr(b, mark).filter((x) => x.method === "PUT" && x.url.endsWith("/access"));
+  ok("A-UI-3 двойной клик «Сохранить»: ОДИН PUT, в теле grants и expected_grants", puts.length === 1 && Array.isArray(JSON.parse(puts[0].body).expected_grants), `PUT: ${puts.length}`);
+  ok("A-UI-3 в БД грант проекта с ролью «view»", JSON.stringify(grants()) === JSON.stringify([{ project_id: proj.id, object_id: null, role: "view" }]));
+  await flush();
+  ok("A-UI-3 журнал: access_replace ровно одно для этого пользователя", q(`SELECT * FROM activity_log WHERE action='access_replace' AND entity_id=${uid}`).length >= 1);
+  await reload(b);
+  await openUserCard(b, "qa_ui_user1", "access");
+  ok("A-UI-4 после ПЕРЕЗАГРУЗКИ сводка показывает выданный доступ (проект, роль)", (await text(b, "#ua-access-results")).includes(proj.name) && (await text(b, "#ua-access-results")).includes("Наблюдатель") || (await text(b, "#ua-access-results")).includes(proj.name));
+  // конфликт: коллега изменил доступ, пока форма открыта
+  await click(b, "#ua-access-all-areas");
+  await b.waitFor(`!!document.querySelector('[data-edit-area="o:${proj.id}:${obj.id}"]')`);
+  await click(b, `[data-edit-area="o:${proj.id}:${obj.id}"]`);
+  await b.waitFor("!!document.querySelector('[data-grant-role=user]')");
+  const colleague = await admin.put(`/users/${uid}/access`, { grants: [{ project_id: proj.id, object_id: null, role: "view" }, { project_id: null, object_id: null, role: "contract" }] });
+  ok("A-UI-5 подготовка: коллега изменил доступ по HTTP", colleague.status === 200);
+  await click(b, "[data-grant-role=user]");
+  const beforeGrants = JSON.stringify(grants());
+  await click(b, "#ua-access-save");
+  await b.waitFor("!!document.querySelector('#ua-stale-reload')", 10000);
+  ok("A-UI-5 устаревший доступ: отказ 409, ничего не перезаписано (SQL), предложено перечитать", (await uaStatus(b)).includes("Ничего не сохранено") && JSON.stringify(grants()) === beforeGrants && grants().some((g) => g.role === "contract"));
+  await click(b, "#ua-stale-reload"); await b.waitFor("!!document.querySelector('#ua-access-search')");
+  await b.sleep(600);
+  ok("A-UI-5 «Перечитать»: видна правка коллеги («Все проекты»), моя отметка отброшена", (await text(b, "#ua-inner")).includes("Все текущие и будущие проекты"));
+  // обрыв ответа
+  await click(b, "#ua-access-all-areas");
+  await b.waitFor(`!!document.querySelector('[data-edit-area="o:${proj.id}:${obj.id}"]')`);
+  await click(b, `[data-edit-area="o:${proj.id}:${obj.id}"]`);
+  await b.waitFor("!!document.querySelector('[data-grant-role=user]')");
+  await click(b, "[data-grant-role=user]");
+  await dropNextResponse(b, `/users/${uid}/access`, "PUT");
+  mark = b.requests.length;
+  await click(b, "#ua-access-save"); await b.sleep(1800);
+  ok("A-UI-6 обрыв ответа: ОДИН PUT, автоповтора нет, сервер сохранил (SQL), интерфейс сверился и сказал об этом", wr(b, mark).filter((x) => x.method === "PUT").length === 1 && grants().some((g) => g.object_id === obj.id && g.role === "user") && (await uaStatus(b)).includes("хотя ответ не дошёл"), await uaStatus(b));
+  // нет связи
+  await click(b, "#ua-access-all-areas");
+  await b.waitFor(`!!document.querySelector('[data-edit-area="o:${proj.id}:${obj.id}"]')`);
+  await click(b, `[data-edit-area="o:${proj.id}:${obj.id}"]`);
+  await b.waitFor("!!document.querySelector('[data-grant-role=contract]')");
+  await click(b, "[data-grant-role=contract]");
+  await b.offline(true); mark = b.requests.length;
+  await click(b, "#ua-access-save"); await b.sleep(1200); await b.offline(false);
+  ok("A-UI-7 нет связи: сообщение, отметка осталась, в БД прежнее", (await uaStatus(b)).includes("Нет связи") && (await b.eval("document.querySelector('[data-grant-role=contract]').checked")) === true && !grants().some((g) => g.object_id === obj.id && g.role === "contract"));
+  await click(b, "#ua-access-cancel"); await b.sleep(400);
+  // сводка в карточке = сводке сервера (user2)
+  const u2 = one("SELECT id FROM users WHERE domain_login='user2'").id;
+  await openUserCard(b, "user2", "access"); await b.waitFor("!!document.querySelector('#ua-access-all-areas')");
+  if ((await text(b, "#ua-access-all-areas")).includes("Только доступные")) await click(b, "#ua-access-all-areas");
+  await b.waitFor("!!document.querySelector('#ua-access-results .v2-perm')");
+  const shown = await b.eval("document.querySelectorAll('#ua-access-results .v2-perm').length");
+  const server = (await admin.get(`/users/${u2}/access-summary`)).data;
+  ok("A-UI-8 сводка доступных объектов в карточке (user2) = сводке сервера", shown === server.totals.objects, `${shown} vs ${server.totals.objects}`);
+  await b.shot(SHOTS + "/access_tab.png");
+  ok("A-UI-9 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  // user2: раздел «Мой доступ»
+  const c2 = await session(BASE, "user2");
+  await openSection(c2, "my-access"); await c2.waitFor("!!document.querySelector('#ma-body .v2-result')");
+  const mine = (await user2.get("/me/access-summary")).data;
+  const rows = await c2.eval("document.querySelectorAll('#ma-body .v2-read-tbl tbody tr').length");
+  const tree = (await user2.get("/projects-tree")).data.projects.reduce((n, p) => n + p.objects.length, 0);
+  ok("A-UI-10 «Мой доступ» (user2): число объектов = сводке сервера = тому, что виден в переключателе объектов", rows === mine.totals.objects && rows === tree, `${rows}/${mine.totals.objects}/${tree}`);
+  await c2.close();
+}
+
+// ====================================================================== роли
+if (want("roles")) {
+  console.log("== Роли (браузер)");
+  const b = await session(BASE, "admin");
+  await openSection(b, "users-access"); await b.waitFor("!!document.querySelector('[data-page=roles]')");
+  await click(b, "[data-page=roles]"); await b.waitFor("!!document.querySelector('#role-new')");
+  let mark = b.requests.length;
+  await click(b, "#role-new"); await b.waitFor("!!document.querySelector('#role-new-name')");
+  await click(b, "#role-new-submit"); await b.sleep(300);
+  ok("R-UI-1 пустое название: сообщение, НЕТ запроса", (await text(b, "#role-new-error")).includes("Введите название") && wr(b, mark).length === 0);
+  await fill(b, "#role-new-name", "QA роль интерфейса");
+  await b.eval("document.querySelector('#role-new-submit').scrollIntoView({block:'center'})");
+  const r = await b.rect("#role-new-submit"); await b.click(r.cx, r.cy); await b.click(r.cx, r.cy);
+  await b.waitFor("(document.querySelector('#role-editor h3')||{}).innerText==='QA роль интерфейса'", 10000);
+  ok("R-UI-1 двойной клик «Создать»: ОДИН POST /roles, роль в БД без разрешений", wr(b, mark).filter((x) => x.method === "POST" && x.url.endsWith("/roles")).length === 1 && one("SELECT COUNT(*) n FROM object_roles WHERE name='QA роль интерфейса'").n === 1);
+  const key = one("SELECT key FROM object_roles WHERE name='QA роль интерфейса'").key;
+  ok("R-UI-1 новая роль пуста: разрешений нет", one(`SELECT COUNT(*) n FROM role_features WHERE role_key='${key}'`).n === 0);
+  // матрица: первая ячейка «Чтение»
+  const featBtn = await b.eval("(()=>{const e=document.querySelector('[data-perm][data-level=read]');return e?e.dataset.perm:null})()");
+  await click(b, `[data-perm="${featBtn}"][data-level=read]`);
+  ok("R-UI-2 отметка ячейки: несохранённое, «Сохранить» в подвале", (await text(b, "#ua-status")).includes("Не сохранено ячеек: 1"));
+  mark = b.requests.length;
+  await click(b, "#roles-save");
+  await b.waitFor("(document.querySelector('#ua-status')||{}).innerText==='Разрешения сохранены'", 10000);
+  const put = wr(b, mark).find((x) => x.method === "PUT" && x.url.endsWith("/roles/features"));
+  ok("R-UI-2 PUT с «было» (ожидаемым прежним уровнем)", put && JSON.parse(put.body).items[0].was === "none", put?.body);
+  ok("R-UI-2 в БД уровень «read»; журнал role_permissions", one(`SELECT level FROM role_features WHERE role_key='${key}' AND feature_key='${featBtn}'`).level === "read");
+  await flush();
+  ok("R-UI-2 журнал: role_permissions", q("SELECT * FROM activity_log WHERE action='role_permissions'").length >= 1);
+  // конфликт: коллега поменял ту же ячейку
+  await click(b, `[data-perm="${featBtn}"][data-level=write]`);
+  const cw = await admin.put("/roles/features", { items: [{ role_key: key, feature_key: featBtn, level: "none", was: "read" }] });
+  ok("R-UI-3 подготовка: коллега сбросил ячейку по HTTP", cw.status === 200);
+  await click(b, "#roles-save");
+  await b.waitFor("!!document.querySelector('#ua-stale-reload')", 10000);
+  ok("R-UI-3 устаревшая ячейка: отказ 409, в БД правка коллеги (ячейки нет), предложено перечитать", (await uaStatus(b)).includes("Ничего не сохранено") && one(`SELECT COUNT(*) n FROM role_features WHERE role_key='${key}'`).n === 0);
+  await click(b, "#ua-stale-reload"); await b.waitFor("!!document.querySelector('#role-editor')"); await b.sleep(500);
+  // переименование
+  await click(b, "#role-rename"); await b.waitFor("!!document.querySelector('#role-rename-name')");
+  await fill(b, "#role-rename-name", "QA роль (новое имя)");
+  mark = b.requests.length;
+  await click(b, "#role-rename-submit");
+  await b.waitFor("(document.querySelector('#role-editor h3')||{}).innerText==='QA роль (новое имя)'", 10000);
+  ok("R-UI-4 переименование: PATCH с expected_name, в БД новое название", JSON.parse(wr(b, mark).find((x) => x.method === "PATCH").body).expected_name === "QA роль интерфейса" && one(`SELECT name FROM object_roles WHERE key='${key}'`).name === "QA роль (новое имя)");
+  // порядок
+  const orderBefore = q("SELECT key FROM object_roles ORDER BY rank").map((x) => x.key);
+  await b.waitFor(`!!document.querySelector('[data-role-up="${key}"]')`);
+  await click(b, `[data-role-up="${key}"]`); await b.waitFor("!!document.querySelector('#role-editor')"); await b.sleep(700);
+  const orderAfter = q("SELECT key FROM object_roles ORDER BY rank").map((x) => x.key);
+  ok("R-UI-5 порядок ролей: новая роль поднялась на одну позицию (SQL)", orderAfter.indexOf(key) === orderBefore.indexOf(key) - 1);
+  // удаление: выдача роли человеку → план показывает число выдач, подтверждение с названием
+  const uid = one("SELECT id FROM users WHERE domain_login='qa_ui_user1'")?.id ?? (await admin.post("/users", { last_name: "Интерфейсов", first_name: "Тест", domain_login: "qa_ui_user1", role: "user" })).data.id;
+  await admin.put(`/users/${uid}/access`, { grants: [{ project_id: null, object_id: null, role: key }] });
+  await reload(b);
+  await openSection(b, "users-access"); await b.waitFor("!!document.querySelector('[data-page=roles]')");
+  await click(b, "[data-page=roles]"); await b.waitFor(`!!document.querySelector('[data-role="${key}"]')`);
+  await click(b, `[data-role="${key}"]`); await b.waitFor("!!document.querySelector('#role-delete')");
+  await click(b, "#role-delete"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  const msg = await text(b, ".v2-dialog");
+  ok("R-UI-6 диалог удаления называет роль и число выдач из плана", msg.includes("QA роль (новое имя)") && msg.includes("выданных грантов: 1"), msg);
+  await confirmDialog(b, "cancel");
+  ok("R-UI-6 отмена: роль на месте (SQL)", one(`SELECT COUNT(*) n FROM object_roles WHERE key='${key}'`).n === 1);
+  // план устарел: диалог открыт (в плане 1 выдача), пока человек читает, коллега выдал роль ещё одному — подтверждение должно получить 409
+  await click(b, "#role-delete"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  await admin.put(`/users/${one("SELECT id FROM users WHERE domain_login='user5'").id}/access`, { grants: [{ project_id: null, object_id: null, role: key }] });
+  mark = b.requests.length;
+  await confirmDialog(b);
+  await b.sleep(1500);
+  ok("R-UI-7 устаревший план: отказ 409 (DELETE с expected_granted=1), роль цела, интерфейс показал актуальное число", wr(b, mark).filter((x) => x.method === "DELETE" && x.url.includes("expected_granted=1")).length === 1 && one(`SELECT COUNT(*) n FROM object_roles WHERE key='${key}'`).n === 1 && (await uaStatus(b)).includes("изменились") && (await text(b, "#role-editor")).includes("(сейчас — 2)"), await uaStatus(b));
+  await click(b, "#role-delete"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  ok("R-UI-8 повторный план показывает 2 выдачи", (await text(b, ".v2-dialog")).includes("выданных грантов: 2"));
+  await confirmDialog(b);
+  await b.waitFor(`!document.querySelector('[data-role="${key}"]')`, 10000);
+  ok("R-UI-8 удаление по актуальному плану: роль, её разрешения и обе выдачи исчезли (SQL); чужие доступы целы", one(`SELECT COUNT(*) n FROM object_roles WHERE key='${key}'`).n === 0 && one(`SELECT COUNT(*) n FROM user_access WHERE role='${key}'`).n === 0 && one("SELECT COUNT(*) n FROM user_access WHERE user_id=" + one("SELECT id FROM users WHERE domain_login='user2'").id).n >= 1);
+  await flush();
+  ok("R-UI-8 журнал: role_delete", q("SELECT * FROM activity_log WHERE action='role_delete'").length >= 1);
+  await b.shot(SHOTS + "/roles.png");
+  ok("R-UI-9 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  for (const login of ["user2", "user4"]) {
+    const bb = await session(BASE, login);
+    ok(`R-UI-10 ${login}: раздела ролей в навигации нет`, !(await text(bb, "#v2-side")).includes("Пользователи и доступ"));
+    await bb.close();
+  }
+}
+
+// ====================================================================== сеансы (мои и все)
+if (want("sessions")) {
+  console.log("== Сеансы (браузер)");
+  const extra = [await http(BASE, "admin"), await http(BASE, "admin"), await http(BASE, "admin")];
+  const b = await session(BASE, "admin");
+  await openSection(b, "sessions"); await b.waitFor("!!document.querySelector('#ss-body table') && !!document.querySelector('#ss-all table')");
+  const mine = one("SELECT COUNT(*) n FROM sessions WHERE user_id=" + one("SELECT id FROM users WHERE domain_login='admin'").id).n;
+  ok("N-UI-1 «мои сеансы»: строк столько, сколько в БД, текущий помечен и без кнопки", (await b.eval("document.querySelectorAll('#ss-body tbody tr').length")) === mine && (await text(b, "#ss-body")).includes("этот сеанс"));
+  let mark = b.requests.length;
+  await click(b, "#ss-body [data-end]"); await confirmDialog(b);
+  await b.waitFor(`document.querySelectorAll('#ss-body tbody tr').length===${mine - 1}`);
+  ok("N-UI-2 завершение своего другого сеанса: один DELETE /me/sessions/{id}, в БД на один меньше", wr(b, mark).filter((x) => x.method === "DELETE" && x.url.includes("/me/sessions/")).length === 1 && one("SELECT COUNT(*) n FROM sessions WHERE user_id=" + one("SELECT id FROM users WHERE domain_login='admin'").id).n === mine - 1);
+  // все сеансы: чужие
+  const other = await http(BASE, "user4"), other2 = await http(BASE, "user4");
+  await click(b, "#ss-all-refresh"); await b.sleep(800);
+  ok("N-UI-3 «все сеансы»: видны сеансы user4", (await text(b, "#ss-all")).includes("user4"));
+  mark = b.requests.length;
+  await click(b, "#ss-all [data-aend]"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  ok("N-UI-3 подтверждение называет пользователя", (await text(b, ".v2-dialog")).includes("Завершить сеанс пользователя"));
+  await confirmDialog(b);
+  await b.sleep(1200);
+  ok("N-UI-3 завершение чужого сеанса: DELETE /sessions/{id}", wr(b, mark).filter((x) => x.method === "DELETE" && /\/sessions\//.test(x.url) && !x.url.includes("/me/")).length === 1);
+  mark = b.requests.length;
+  await click(b, "#ss-all-close-others"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  const dlg = await text(b, ".v2-dialog");
+  ok("N-UI-4 «завершить все, кроме моего»: подтверждение с числом", /\(\d+\)/.test(dlg));
+  await confirmDialog(b);
+  await b.sleep(1500);
+  const left = q("SELECT s.token, u.domain_login FROM sessions s JOIN users u ON u.id=s.user_id");
+  ok("N-UI-4 в БД остался ТОЛЬКО сеанс администратора, вошедшего в браузере; сеанс жив (страница работает)", left.length === 1 && left[0].domain_login === "admin" && (await b.eval("fetch('/me').then(r=>r.status)")) === 200, JSON.stringify(left));
+  ok("N-UI-4 остальные HTTP-сеансы мертвы", (await other.get("/me")).status === 401 && (await extra[0].get("/me")).status === 401);
+  await b.shot(SHOTS + "/sessions.png");
+  ok("N-UI-5 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  const c = await session(BASE, "user2");
+  await openSection(c, "sessions"); await c.waitFor("!!document.querySelector('#ss-body table')");
+  ok("N-UI-6 user2: блока «Сеансы всех пользователей» нет", !(await exists(c, "#ss-all")));
+  await c.close();
+}
+
+// ====================================================================== групповая выдача доступа
+if (want("bulk")) {
+  console.log("== Групповая выдача (браузер)");
+  const ids = [];
+  for (const n of [1, 2, 3]) {
+    const login = `qa_bulk${n}`;
+    const ex = one(`SELECT id FROM users WHERE domain_login='${login}'`);
+    ids.push(ex ? ex.id : (await admin.post("/users", { last_name: `Групповой${n}`, first_name: "Тест", domain_login: login, role: "user" })).data.id);
+    await admin.put(`/users/${ids[ids.length - 1]}/access`, { grants: [] });
+  }
+  const proj = one("SELECT id, name FROM projects ORDER BY id LIMIT 1");
+  const obj = one(`SELECT id, name FROM objects WHERE project_id=${proj.id} ORDER BY id LIMIT 1`);
+  const cnt = () => one(`SELECT COUNT(*) n FROM user_access WHERE user_id IN (${ids.join(",")})`).n;
+  const b = await session(BASE, "admin");
+  await openSection(b, "access-matrix"); await b.waitFor("!!document.querySelector('#av-bulk #bk-preview')");
+  ok("B-UI-0 экран «Права пользователей» показывает панель групповой выдачи администратору", true);
+  ok("B-UI-0 без выбора кнопка «Предпросмотр» выключена, причина названа", (await b.eval("document.querySelector('#bk-preview').disabled")) && (await text(b, "#bk-problem")).includes("пользователя"));
+  // выбрать область «Проект», роль, трёх людей
+  await b.eval("document.querySelector('#bk-area').focus()");
+  await b.eval("(()=>{const s=document.querySelector('#bk-area'); s.value='project'; s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  await b.waitFor("!!document.querySelector('#bk-project')");
+  await b.eval(`(()=>{const s=document.querySelector('#bk-project'); s.value='${proj.id}'; s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await click(b, "[data-bk-role=view]");
+  for (const id of ids) await click(b, `[data-bk-user="${id}"]`);
+  await b.waitFor("!document.querySelector('#bk-preview').disabled");
+  let mark = b.requests.length;
+  const before = cnt();
+  await click(b, "#bk-preview"); await b.waitFor("!!document.querySelector('#bk-apply')");
+  const dry = wr(b, mark).filter((x) => x.url.endsWith("/users/access-bulk"));
+  ok("B-UI-1 предпросмотр: один POST с dry_run=true, в таблице три человека и «будет выдано»", dry.length === 1 && JSON.parse(dry[0].body).dry_run === true && (await b.eval("document.querySelectorAll('#bk-preview-box tbody tr').length")) === 3 && (await text(b, "#bk-preview-box")).includes("Пока вы не нажали «Применить», ничего не записано"));
+  ok("B-UI-1 предпросмотр ничего не записал (SQL)", cnt() === before);
+  await flush();
+  ok("B-UI-1 предпросмотр не попал в журнал", q("SELECT * FROM activity_log WHERE action='access_bulk'").length === 0);
+  await b.shot(SHOTS + "/bulk_preview.png");
+  // устарело: коллега изменил доступ одного из выбранных между предпросмотром и применением
+  await admin.put(`/users/${ids[1]}/access`, { grants: [{ project_id: null, object_id: null, role: "contract" }] });
+  const snap = JSON.stringify(q(`SELECT * FROM user_access WHERE user_id IN (${ids.join(",")}) ORDER BY id`));
+  mark = b.requests.length;
+  await click(b, "#bk-apply"); await confirmDialog(b);
+  await b.waitFor("(document.querySelector('#bk-msg')||{}).innerText?.includes('устарели')", 10000);
+  ok("B-UI-2 устаревшие данные: отказ 409, ничего не применено (SQL), предпросмотр сброшен", JSON.stringify(q(`SELECT * FROM user_access WHERE user_id IN (${ids.join(",")}) ORDER BY id`)) === snap && !(await exists(b, "#bk-apply")));
+  // откат внутри пачки: триггер на копии обрывает вставку гранта третьему человеку
+  sqlExec(DB, `CREATE TRIGGER qa_ui_abort BEFORE INSERT ON user_access WHEN NEW.user_id = ${ids[2]} BEGIN SELECT RAISE(ABORT, 'qa: отказ внутри пачки'); END`);
+  await click(b, "#bk-preview"); await b.waitFor("!!document.querySelector('#bk-apply')");
+  const snap2 = JSON.stringify(q(`SELECT * FROM user_access WHERE user_id IN (${ids.join(",")}) ORDER BY id`));
+  await click(b, "#bk-apply"); await confirmDialog(b);
+  await b.sleep(2000);
+  sqlExec(DB, "DROP TRIGGER qa_ui_abort");
+  ok("B-UI-3 сбой внутри пачки: интерфейс показал ошибку, в БД НИЧЕГО не применено (полный откат)", JSON.stringify(q(`SELECT * FROM user_access WHERE user_id IN (${ids.join(",")}) ORDER BY id`)) === snap2 && (await text(b, "#bk-msg")).length > 0, await text(b, "#bk-msg"));
+  await flush();
+  ok("B-UI-3 журнал не подтверждает несостоявшееся", q("SELECT * FROM activity_log WHERE action='access_bulk'").length === 0);
+  // успех: предпросмотр → применить (в подтверждении числа), один POST без dry_run
+  await b.waitFor("!document.querySelector('#bk-preview').disabled");
+  await click(b, "#bk-preview"); await b.waitFor("!!document.querySelector('#bk-apply')");
+  mark = b.requests.length;
+  await click(b, "#bk-apply"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  const dtext = await text(b, ".v2-dialog");
+  ok("B-UI-4 подтверждение называет число людей, выдаваемых и снимаемых назначений и область", dtext.includes("Затронуто людей: 3") && dtext.includes(proj.name), dtext.slice(0, 200));
+  await confirmDialog(b);
+  await b.waitFor("(document.querySelector('#bk-msg')||{}).innerText?.startsWith('Применено')", 12000);
+  const applied = wr(b, mark).filter((x) => x.url.endsWith("/users/access-bulk"));
+  ok("B-UI-4 применение: ОДИН POST без dry_run", applied.length === 1 && !JSON.parse(applied[0].body).dry_run);
+  ok("B-UI-4 в БД у каждого из троих проектная роль «view» (SQL)", ids.every((id) => q(`SELECT * FROM user_access WHERE user_id=${id} AND project_id=${proj.id} AND object_id IS NULL AND role='view'`).length === 1));
+  await flush();
+  ok("B-UI-4 журнал: access_bulk ×1 и access_replace на каждого", q("SELECT * FROM activity_log WHERE action='access_bulk'").length === 1 && q("SELECT * FROM activity_log WHERE action='access_replace' AND new_value LIKE '%групповая%'").length === 3);
+  await reload(b);
+  await b.waitFor("!!document.querySelector('#av-body table')");
+  ok("B-UI-5 после ПЕРЕЗАГРУЗКИ сводка показывает выданное (проект и роль у qa_bulk1)", (await text(b, "#av-body")).includes(`Проект «${proj.name}»`));
+  // снятие: отозвать «view» у двоих, обрыв ответа при применении
+  await b.waitFor("!!document.querySelector('#av-bulk')");
+  await click(b, "input[name=bk-action][value=revoke]");
+  await b.eval("(()=>{const s=document.querySelector('#bk-area'); s.value='project'; s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  await b.waitFor("!!document.querySelector('#bk-project')");
+  await b.eval(`(()=>{const s=document.querySelector('#bk-project'); s.value='${proj.id}'; s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await click(b, "[data-bk-role=view]");
+  await click(b, `[data-bk-user="${ids[0]}"]`); await click(b, `[data-bk-user="${ids[2]}"]`);
+  await click(b, "#bk-preview"); await b.waitFor("!!document.querySelector('#bk-apply')");
+  ok("B-UI-6 предпросмотр снятия: две строки, «будет снято»", (await b.eval("document.querySelectorAll('#bk-preview-box tbody tr').length")) === 2 && (await text(b, "#bk-preview-box")).includes("будет снято"));
+  await dropNextResponse(b, "/users/access-bulk", "POST");
+  mark = b.requests.length;
+  // dropNextResponse срабатывает на ближайший POST access-bulk — применение (предпросмотр уже показан)
+  await click(b, "#bk-apply"); await confirmDialog(b);
+  await b.sleep(2500);
+  ok("B-UI-7 обрыв ответа при применении: ОДИН POST, автоповтора нет, сервер применил (SQL), интерфейс сверился и сказал об этом",
+    wr(b, mark).filter((x) => x.url.endsWith("/users/access-bulk")).length === 1 && q(`SELECT * FROM user_access WHERE user_id IN (${ids[0]},${ids[2]}) AND role='view'`).length === 0 && (await text(b, "#bk-msg")).includes("хотя ответ не дошёл"), await text(b, "#bk-msg"));
+  // системная роль: себя разжаловать нельзя
+  await click(b, "input[name=bk-action][value=sysrole]");
+  await b.eval("(()=>{const s=document.querySelector('#bk-sysrole'); s.value='view'; s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  const selfId = one("SELECT id FROM users WHERE domain_login='admin'").id;
+  await click(b, `[data-bk-user="${selfId}"]`);
+  await click(b, "#bk-preview"); await b.sleep(1000);
+  ok("B-UI-8 разжаловать себя: отказ сервера 409, роль admin цела (SQL)", (await text(b, "#bk-msg")).includes("самого себя") && one("SELECT role FROM users WHERE domain_login='admin'").role === "admin", await text(b, "#bk-msg"));
+  ok("B-UI-9 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  for (const login of ["user2", "user4"]) {
+    const bb = await session(BASE, login);
+    ok(`B-UI-10 ${login}: раздела «Права пользователей» нет`, !(await text(bb, "#v2-side")).includes("Права пользователей"));
+    await bb.close();
+  }
+}
+
 process.exit(summary() ? 1 : 0);

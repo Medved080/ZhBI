@@ -400,7 +400,7 @@ async function renderShell(user, permissions) {
       } else if (target.impl === "access-view") {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountAccessView(content, {
-          screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "shape-edit" && target.shape) {
         document.title = `${target.title} — ЖБИ`;

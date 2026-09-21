@@ -872,3 +872,6 @@ button.ws-tile:hover { background: var(--surface); }
 .ws-al-n { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 11px; letter-spacing: 0; }
 .ws-al-step select { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .ws-al-bad li { color: var(--muted); }
+
+/* Групповая выдача доступа («Права пользователей», admin, 2026-09-21): список людей с прокруткой внутри панели, без прокрутки страницы. */
+.v2-bulk-people { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 16px; }
