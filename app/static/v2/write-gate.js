@@ -24,7 +24,7 @@ const re = (s) => new RegExp("^" + s + "$");
 
 // Распределение изделий на контракт (`POST /contracts/{id}/allocations`, одна серверная операция на пачку): включается ТОЛЬКО вместе с версией backend,
 // где остаток проверяется под блокировкой записи (Docs/v2-workspaces.md, §9). Флаг — единственное место включения; общей настройки «разрешить» нет.
-export const ALLOCATION_ENABLED = false;
+export const ALLOCATION_ENABLED = true;
 
 // Жёсткая форма тела распределения (`POST /contracts/{id}/allocations`): объект, позиция (тип + марка) и пачка изделий с ожидаемым статусом; лишних полей нет.
 export function allocationBodyProblem(body) {
