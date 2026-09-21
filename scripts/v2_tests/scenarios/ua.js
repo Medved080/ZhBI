@@ -101,7 +101,7 @@ export const tests = [
       const a = await openApp({ query: failBoot({ pattern: "=/users/access-matrix", method: "GET", status: 500, detail: "матрица" }) });
       await openList(a);
       t.eq(rows(a).length, 8, "список пользователей показан");
-      t.notHas(lastText(a), "матрица", "ошибка второстепенного чтения не вытесняет список");
+      t.notHas(a.$("#v2-content").innerText, "матрица", "ошибка второстепенного чтения не вытесняет список"); // только область раздела: пояснение шлюза над ней слово «матрица» содержит
     },
   },
   {
@@ -355,18 +355,18 @@ export const tests = [
     async run(t) {
       const a = await openApp();
       const u = await openCard(a, "qa.noaccess", "security");
-      await waitFor(() => a.$("[data-v1-link]"), { what: "ссылка в V1" });
+      await waitFor(() => a.$("#v2-content [data-v1-link]"), { what: "ссылка в V1" });
       t.has(lastText(a), "доступны в текущем интерфейсе", "сказано, что функции остаются в V1");
-      t.eq(a.$("[data-v1-link]").getAttribute("href"), `/?ui=v1&open=user-security&user_id=${u.id}`, "ссылка ведёт к форме ИМЕННО этого пользователя, а не на главный экран V1");
+      t.eq(a.$("#v2-content [data-v1-link]").getAttribute("href"), `/?ui=v1&open=user-security&user_id=${u.id}`, "ссылка ведёт к форме ИМЕННО этого пользователя, а не на главный экран V1");
       t.has(lastText(a), "вкладка «Вход и безопасность»", "пользователю сказано, что откроется");
       // несохранённое: ссылка не уводит молча
       a.setValue(a.$("#sec-login"), "qa.noaccess.changed");
       await waitFor(() => a.$("#card-save"), { what: "подвал" });
-      a.click(a.$("[data-v1-link]"));
+      a.click(a.$("#v2-content [data-v1-link]"));
       await waitFor(() => a.dialog(), { what: "диалог несохранённого" });
       t.eq(a.$$(".v2-dialog button").map((b) => b.textContent.trim()), ["Остаться", "Не сохранять", "Сохранить и продолжить"], "три варианта");
       await a.answerDialog("Остаться");
-      t.ok(a.$("[data-v1-link]") && a.$("#sec-login").value === "qa.noaccess.changed", "«Остаться» — остаёмся в V2, ввод цел");
+      t.ok(a.$("#v2-content [data-v1-link]") && a.$("#sec-login").value === "qa.noaccess.changed", "«Остаться» — остаёмся в V2, ввод цел");
       // право «только чтение»: ссылки нет, объяснение есть
       const r = await openApp({ perm: "readonly" });
       await openCard(r, "qa.noaccess", "security");

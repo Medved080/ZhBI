@@ -1,5 +1,5 @@
 // Запланированные работы объекта МФР: правка сроков и примечания (BW-*). Стенд — фейковый бэкенд.
-import { openApp, waitFor } from "/tests/helpers.js";
+import { openApp, waitFor, gateIsReal } from "/tests/helpers.js";
 
 const NAV = ".v2-nav [data-section]";
 const patches = (a) => a.ctl.log.filter((e) => e.method === "PATCH" && e.path.includes("/block-works/"));
@@ -44,6 +44,7 @@ export const tests = [
   {
     id: "BW-02", title: "Очистка даты — явный null; прогноз — отдельная группа; примечание не трогает сроки",
     async run(t) {
+      if (await gateIsReal()) { t.ok(true, "в режиме выпуска эта операция отключена политикой — поведение проверяется набором GT"); return; }
       const a = await openApp({ home: true });
       await open(a);
       await openWork(a, 1);

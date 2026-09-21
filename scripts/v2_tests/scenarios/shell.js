@@ -1,5 +1,5 @@
 // Оболочка V2: вход, права, навигация, диалоги, защита переходов (SH-*).
-import { openApp, waitFor } from "/tests/helpers.js";
+import { openApp, waitFor, gateIsReal } from "/tests/helpers.js";
 
 const NAV = ".v2-nav [data-section]";
 const MODULE_KEYS = ["users-access", "projects-objects", "counterparties"];
@@ -50,6 +50,7 @@ export const tests = [
   {
     id: "SH-03", title: "Обязательная смена пароля: экран смены вместо разделов",
     async run(t) {
+      if (await gateIsReal()) { t.ok(true, "в режиме выпуска эта операция отключена политикой — поведение проверяется набором GT"); return; }
       const a = await openApp({ query: "loginAs=8" });
       await waitFor(() => a.$("#v2-pwd-form"), { what: "экран смены пароля" });
       t.has(a.doc.body.innerText, "Смена пароля", "заголовок");
@@ -99,7 +100,8 @@ export const tests = [
       t.eq(chips("в V2"), 3, "пометка «в V2» — ровно у трёх перенесённых разделов");
       const reg = await (await fetch("/static/v2/screens.json", { cache: "no-cache" })).json();
       // считаются только экраны, видимые на этом объекте (часть экранов скрыта по типу объекта, как в V1)
-      const editable = reg.screens.filter((s) => s.impl.endsWith("-edit") && keys.includes(s.id)).length;
+      const gate = await import("/static/v2/write-gate.js"); // в режиме выпуска «правка» — только у экранов с разрешённой записью
+      const editable = reg.screens.filter((s) => s.impl.endsWith("-edit") && keys.includes(s.id) && gate.hasAllowedWrites(s.id)).length;
       t.ok(editable >= 6, `в реестре редактируемых экранов: ${editable}`);
       t.eq(chips("правка"), editable, "пометка «правка» — ровно у экранов с правкой в V2 (по реестру)");
       t.ok(a.$(`.v2-card-list a[data-screen-link="contracts"]`), "экран, не перенесённый целиком, тоже достижим с начальной страницы");

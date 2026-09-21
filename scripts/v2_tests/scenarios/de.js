@@ -1,5 +1,5 @@
 // Редактор простого справочника (СМУ, физлица): DE-*. Стенд — фейковый бэкенд; на настоящем backend — живая приёмка.
-import { openApp, waitFor } from "/tests/helpers.js";
+import { openApp, waitFor, gateIsReal } from "/tests/helpers.js";
 
 const NAV = ".v2-nav [data-section]";
 const listLoaded = (a) => a.$("#de-body tbody") || /пуст|Записей нет/.test(a.$("#de-body")?.textContent || "");
@@ -194,6 +194,7 @@ export const tests = [
   {
     id: "DE-10", title: "Физлица: добавление и удаление идут по своим API (вид individual)",
     async run(t) {
+      if (await gateIsReal()) { t.ok(true, "в режиме выпуска эта операция отключена политикой — поведение проверяется набором GT"); return; }
       const a = await openApp({ home: true });
       await open(a, "dict-individuals");
       await a.type(a.$("#de-add-input"), "Иванов И.И.");

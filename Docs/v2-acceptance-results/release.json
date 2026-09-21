@@ -1,0 +1,4244 @@
+{
+ "suites": [
+  "shell",
+  "ua",
+  "po",
+  "cp",
+  "rd",
+  "de",
+  "se",
+  "ce",
+  "pe",
+  "oc",
+  "ex",
+  "ss",
+  "sb",
+  "bw",
+  "ap",
+  "lc",
+  "rc",
+  "av",
+  "cl",
+  "sp",
+  "gt",
+  "vis",
+  "a11y"
+ ],
+ "only": [],
+ "results": [
+  {
+   "id": "SH-01",
+   "title": "Нет сессии → форма входа V2",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "SH-02",
+   "title": "Экран входа: отказ сервера — читаемое сообщение (401 строкой и 422 списком), логин остаётся, повтор возможен",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-03",
+   "title": "Обязательная смена пароля: экран смены вместо разделов",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [],
+   "error": "Error: Не дождались: экран смены пароля (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:54:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "SH-14",
+   "title": "«← Текущий интерфейс» при несохранённом: диалог, «Остаться» — остаёмся; быстрые клики — один диалог",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-22",
+   "title": "Тёмная гамма пользователя → тёмная схема; светлая по умолчанию",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-04",
+   "title": "Администратор: начальная страница, навигация по всем разделам, три перенесённых раздела помечены «в V2»",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "пометка «правка» — ровно у экранов с правкой в V2 (по реестру) — ожидали 13, получили 11"
+   ],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "SH-05",
+   "title": "Пользователь без прав: перенесённых разделов нет, экраны с ограничением скрыты, V1 доступен",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "SH-06",
+   "title": "Только чтение: доступный раздел открывается, без запрещённых действий; недоступные скрыты",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "SH-07",
+   "title": "Переключение разделов без dirty: aria-pressed, класс каркаса, карта уничтожается",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-08",
+   "title": "Dirty + переключение раздела: «Остаться» / «Не сохранять»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "SH-08b",
+   "title": "Dirty + «Сохранить и продолжить»: запись, затем переход",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запись (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:172:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "SH-09",
+   "title": "Dirty + сохранение падает (500): ошибка видна, переход отменён, данные целы, повтор доступен",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: первая попытка записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:186:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "SH-10",
+   "title": "Идёт запись (медленный ответ): переход недоступен с причиной; после успеха и ошибки — снова доступен",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:208:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "SH-11",
+   "title": "Быстрые повторные клики по вкладкам разделов при dirty: один диалог",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SH-16",
+   "title": "beforeunload: с dirty — предупреждение, без dirty — нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-17",
+   "title": "beforeunload во время записи БЕЗ несохранённых данных — предупреждение (закрытие посреди сохранения)",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/shell.js:280:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "SH-18",
+   "title": "/me/permissions отвечает 500: «Не удалось загрузить интерфейс», без [object Object]",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SH-19",
+   "title": "Оформление не зависит от порядка посещения: v2-app у каждого раздела свой",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "SH-20",
+   "title": "Диалог: фокус на безопасной кнопке, ловушка Tab, Esc = отмена, возврат фокуса",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "SH-21",
+   "title": "Второй диалог с ДРУГИМ вопросом не получает чужой ответ; одинаковый — делит один диалог",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "UA-U-01",
+   "title": "Список пользователей: 8 записей, колонки, счётчик",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-U-02",
+   "title": "Поиск пользователей: непрерывный ввод, Backspace, каретка, пустой результат, сброс",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "UA-U-03",
+   "title": "GET /users падает: ошибка чтения вместо пустого списка, «Повторить» работает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-U-03b",
+   "title": "Клик по уже открытой вкладке после ошибки чтения — повторная попытка",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "UA-U-04",
+   "title": "Каталог/матрица доступа недоступны: список виден, колонка «Доступ» без ошибки",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "ошибка второстепенного чтения не вытесняет список — найдено «матрица»"
+   ],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-U-05",
+   "title": "Создание пользователя: валидация пустых полей",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-U-06",
+   "title": "Создание пользователя: запись, карточка, повторное открытие показывает данные сервера",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: карточка нового пользователя (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:131:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "UA-U-07",
+   "title": "Создание: двойной клик и медленный ответ → один POST",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "три клика — один запрос — ожидали 1, получили 0",
+    "кнопка заблокирована на время записи"
+   ],
+   "error": "Error: Не дождались: карточка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:158:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-U-08",
+   "title": "Создание: 409/422/500/сеть — читаемое сообщение, ввод цел, кнопка доступна",
+   "status": "fail",
+   "blocked": 4,
+   "failed": [
+    "[409 дубль логина (настоящая логика бэкенда)] текст: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «уже» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
+    "[422 список ошибок] текст: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «last_name: обязательное поле» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
+    "[500 строкой] текст: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «внутренняя ошибка сервера» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
+    "[сетевой сбой] текст: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «нет связи с сервером» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»"
+   ],
+   "error": null,
+   "checks": 16
+  },
+  {
+   "id": "UA-C-01",
+   "title": "Профиль: после «Сохранить» форма СРАЗУ показывает подтверждённое сервером (без пробелов по краям), dirty снят, повторное открытие то же; ввод во время запроса не затирается",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:203:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-C-02",
+   "title": "Профиль: правка → «Отменить»: значения возвращены, подвал скрыт, запроса нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-C-03",
+   "title": "Профиль: 403/409/422/500/сеть при сохранении — читаемо, поля разблокированы, ввод цел",
+   "status": "fail",
+   "blocked": 5,
+   "failed": [
+    "[403] сообщение: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «недостаточно прав» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
+    "[409] сообщение: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «логин уже занят» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
+    "[422 список] сообщение: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «role: bad» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
+    "[500] сообщение: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «сбой» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»",
+    "[сеть] сообщение: Операция отключена в экспериментальном интерфейсе («Пользователи: создание и правка»). Выполните её в текущем интерфейсе. — нет «нет связи» в «операция отключена в экспериментальном интерфейсе («пользователи: создание и правка»). выполните её в текущем интерфейсе.»"
+   ],
+   "error": null,
+   "checks": 20
+  },
+  {
+   "id": "UA-C-04",
+   "title": "Профиль: двойной клик и медленный ответ → один PATCH; поля заблокированы на время записи",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "два клика — один запрос — ожидали 1, получили 0",
+    "поля заблокированы на время записи"
+   ],
+   "error": "Error: Не дождались: конец записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:301:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-C-07",
+   "title": "Профиль dirty: вкладка карточки / «← Все пользователи» → диалог; после сохранения ложного нет",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: конец записи (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:328:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 3
+  },
+  {
+   "id": "UA-C-07b",
+   "title": "Профиль dirty + сохранение из диалога ухода падает: ошибка видна, уход отменён, ввод цел",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: попытка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:345:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "UA-C-08",
+   "title": "Блок «Диагностика…»: ссылка несёт выбранного пользователя (форма V1, вкладка «Вход и безопасность»), защищена от потери несохранённого, у не-администраторов пользователей её нет",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "ссылка ведёт к форме ИМЕННО этого пользователя, а не на главный экран V1 — ожидали \"/?ui=v1&open=user-security&user_id=4\", получили \"/?ui=v1&object_id=1&open=menu&item=menu-users\""
+   ],
+   "error": "Error: Не дождались: диалог несохранённого (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:366:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 3
+  },
+  {
+   "id": "UA-C-09",
+   "title": "Медленная загрузка доступа: клик «← Все пользователи» не пропадает молча; после ответа переход работает; чужие гранты не подмешиваются",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PUT доступа (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:411:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 4
+  },
+  {
+   "id": "UA-A-01",
+   "title": "Доступ пользователя без назначений: пустое состояние; «Показать все» раскрывает каталог",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-A-02",
+   "title": "Доступ пользователя с назначениями: прямые и унаследованные видны, счётчики верны",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-A-03",
+   "title": "Поиск в доступах: НЕПРЕРЫВНЫЙ ввод с клавиатуры без потери фокуса, Backspace, каретка, выделение, сброс",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 14
+  },
+  {
+   "id": "UA-A-04",
+   "title": "«Только доступные» ↔ «Показать все» сохраняет поисковый запрос",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-A-08b",
+   "title": "Подтверждение «Сохранено» не переезжает на другую вкладку и не остаётся после «Отменить» доступа",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:494:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "UA-C-11",
+   "title": "Несохранённое — различие с записью: профиль, доступ, форма нового пользователя, новая/переименованная роль — вернули значение, стёрли ввод — подвал и сторож сняты",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 12
+  },
+  {
+   "id": "UA-R-11",
+   "title": "Роль создана/переименована/удалена во вкладке «Роли» — редактор доступа СРАЗУ предлагает актуальный набор и названия (без перезагрузки страницы)",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: роль создана (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:591:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "UA-A-05",
+   "title": "Выдать роль на объекте → «Сохранить»: PUT, сводка, повторное открытие, «Проверка доступа» согласована",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:649:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "UA-A-07",
+   "title": "Снять роль → «Сохранить»: грант удалён, сводка обновлена",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:674:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-A-08",
+   "title": "Правка доступа не сохранена: «Отменить», «← Сводка», диалог при уходе",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-A-09",
+   "title": "Сохранение доступа: двойной клик, 403/409/422/500/сеть — один PUT, читаемо, данные на месте",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "двойной клик — один PUT — ожидали 1, получили 0",
+    "чекбоксы заблокированы на время записи"
+   ],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:723:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-A-11",
+   "title": "Клавиатура: пробел на чекбоксе роли не уводит фокус",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-R-01",
+   "title": "Роли: список, «N назначений», матрица разрешений",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-R-02",
+   "title": "Матрица: правка ячейки → «Не сохранено ячеек» → «Сохранить» / «Отменить»",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:777:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-R-03",
+   "title": "Матрица: двойной клик; ошибки 500/422/сеть — один PUT, читаемо, черновик цел",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "двойной клик — один PUT — ожидали 1, получили 0",
+    "сегменты заблокированы на время записи"
+   ],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:800:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-R-04",
+   "title": "Создание роли: пустое имя, дубль, успех, отмена",
+   "status": "fail",
+   "blocked": 2,
+   "failed": [],
+   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:825:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 3
+  },
+  {
+   "id": "UA-R-05",
+   "title": "Переименование роли: пустое, успех, отмена",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: переименование (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:844:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "UA-R-06",
+   "title": "Порядок ролей ▲▼: границы заблокированы, один PUT на клик, порядок сохраняется",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PUT order (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:859:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-R-07",
+   "title": "Удаление роли: delete-plan → подтверждение (danger) → удалена; отмена не удаляет",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:874:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "UA-R-08",
+   "title": "Dirty матрицы: переключение роли не теряет черновик, смена вкладки — диалог",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-R-09",
+   "title": "Клавиатура: клик по сегменту матрицы не уводит фокус на <body> (перерисовка редактора роли)",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "UA-U-09",
+   "title": "Форма нового пользователя с данными: «Отмена» — без предупреждения; уход — диалог; после создания предупреждения нет",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: карточка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:945:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "UA-C-05",
+   "title": "Вход и безопасность: «Требовать смену пароля» → «Сохранить» — PATCH с новым значением, подтверждение с сервера",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:961:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "UA-C-10",
+   "title": "Права read: карточка и доступ только для просмотра — поля заблокированы, «Сохранить» и «Выдать» нет/недоступны",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-R-10",
+   "title": "Права read на роли: список и матрица только для просмотра",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "UA-A-06",
+   "title": "Роль на проекте и на «все проекты»: PUT с project_id / без него; сводка показывает наследование",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:1012:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "UA-K-05",
+   "title": "Согласованность: выданная роль видна в «Проверке доступа» по этому пользователю и объекту",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PUT (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/ua.js:1045:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "UA-K-01",
+   "title": "Проверка доступа: выбор пользователя и объекта (мышь и клавиатура)",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "UA-K-02",
+   "title": "Проверка доступа: администратор — «Полный доступ»; пользователь без ролей — «Прямых ролей нет»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "UA-K-06",
+   "title": "Проверка доступа: ошибка чтения — читаемо, повтор возможен",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "UA-K-07",
+   "title": "Проверка доступа: поздний ответ прежнего выбора не перезаписывает актуальный",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "PO-01",
+   "title": "Загрузка: дерево проектов со счётчиками, форма-подсказка",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-02",
+   "title": "Чтение падает: явная ошибка + «Повторить», не пустое дерево",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "PO-03",
+   "title": "Дерево: раскрытие, выбор проекта и объекта, карточка соответствует выбранному",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-04",
+   "title": "Поиск и фильтры: непрерывный ввод, статус «Все», пустой результат, сброс",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 16
+  },
+  {
+   "id": "PO-05",
+   "title": "Новый проект: без наименования сохранить нельзя (сообщение, запрос не уходит)",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PO-06",
+   "title": "Новый проект: сохранение → дерево, «Добавлено.», данные после повторного открытия",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запись (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:171:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "PO-07",
+   "title": "Новый объект: проект по умолчанию из выбранного, справочники, сохранение",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: POST /objects (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:202:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 3
+  },
+  {
+   "id": "PO-08",
+   "title": "Правка → «Отменить»: значения возвращены, подвал скрыт, запросов нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "PO-09",
+   "title": "Правка → «Сохранить»: PATCH, «Сохранено.», данные сервера после повторного открытия",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:237:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "PO-10",
+   "title": "Адрес и координаты: ручной ввод, координаты помечают форму изменённой, «Определить заново»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-11",
+   "title": "Удаление: чистый объект / с блокерами / отмена / двойной клик / ошибка",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:284:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 4
+  },
+  {
+   "id": "PO-11b",
+   "title": "Удаление: двойной клик по «Удалить» — один диалог и один POST; ошибка 500 — читаемо, поля доступны",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запрос (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:304:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "PO-12",
+   "title": "Вложения: загрузка синтетического файла, скачивание, превью, удаление",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: 4 вложения после загрузки (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:322:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "PO-13",
+   "title": "Загрузка вложения идёт медленно: переходы заблокированы с причиной, после — снова доступны",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запрос ушёл (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:355:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "PO-14",
+   "title": "Удаление вложения: пока открыт диалог, вторые корзины заблокированы; отмена возвращает; один DELETE",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: DELETE (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:392:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 4
+  },
+  {
+   "id": "PO-16",
+   "title": "Права: «Удалить» только при dictDelete=write; вложения проекта — только админ сервиса",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PO-17",
+   "title": "Dirty: смена записи → диалог; «Остаться» / «Не сохранять» / «Сохранить и продолжить»; нет ложного после сохранения",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: переход на объект 2 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:428:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "PO-18",
+   "title": "Dirty + сохранение из диалога ухода падает: ошибка видна СРАЗУ, переход отменён, данные целы, повтор доступен",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: попытка сохранения (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:457:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "PO-19",
+   "title": "«Не сохранять» и «Остаться»: строка статуса не залипает на «Есть несохранённые изменения»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "PO-20",
+   "title": "Сохранение: двойной клик, 403/409/422/500/сеть — один PATCH, читаемо, нет ложного «Сохранено.»",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "двойной клик — один запрос — ожидали 1, получили 0",
+    "поля заблокированы на время записи"
+   ],
+   "error": "Error: Не дождались: ошибка 403 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:503:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "PO-26",
+   "title": "Сохранение объекта: форма СРАЗУ показывает подтверждённое сервером (обрезанные пробелы), dirty снят, повторное открытие то же; ввод, внесённый во время запроса, не затирается",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:532:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "PO-27",
+   "title": "Несохранённое — это различие с записью: вернули значение руками (текст, список, координата) — подвал, статус и сторож ухода сняты",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 8
+  },
+  {
+   "id": "PO-21",
+   "title": "Запись прошла, обновление списков упало: «Сохранено, но обновить данные не удалось» + «Повторить обновление»",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: сообщение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/po.js:612:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "PO-22",
+   "title": "Поздний ответ вложений прежней записи не портит карточку текущей",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "PO-25",
+   "title": "Клавиатура: выбор узла дерева оставляет фокус на этом узле после перерисовки формы",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "PO-24",
+   "title": "Длинные названия и адреса не ломают форму и не создают горизонтальную прокрутку",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-L-01",
+   "title": "Список контрагентов: 7 строк, краткое имя и «полное · ИНН · код»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-L-02",
+   "title": "Контрагентов нет: «Контрагентов пока нет.»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "CP-L-03",
+   "title": "GET /counterparties падает: ошибка + «Повторить», не пустой список",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-L-06",
+   "title": "Права: корзина контрагента только для администратора / dict_delete=write",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-L-07",
+   "title": "Удаление чистого контрагента: delete-plan → подтверждение (danger) → удалён; отмена не удаляет",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:120:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 7
+  },
+  {
+   "id": "CP-L-08",
+   "title": "Контрагент с зависимостями: «Удалить нельзя. Мешает…», запроса на удаление нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-L-09",
+   "title": "Корзина: двойной клик — один диалог и один POST; ошибка удаления читаема, контрагент цел",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: сообщение об ошибке (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:151:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "CP-M-01",
+   "title": "Поля карточки: ограничения длины (код ≤10, ИНН ≤12, КПП ≤9, ОГРН ≤15) и цифровой ввод; порядок Tab по разметке",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "CP-M-02",
+   "title": "Новый контрагент без полного/краткого наименования: сообщение, запрос не уходит",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-M-03",
+   "title": "Создание контрагента: POST, «Добавлено.», в списке, вкладка «Контрактация» доступна, данные после повторного открытия",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: POST (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:202:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-M-04",
+   "title": "Правка → «Отменить»: значения возвращены; «Сохранить»: PATCH, «Сохранено.»",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:235:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "CP-M-06",
+   "title": "Сохранение карточки: двойной клик; 403/409/422/500/сеть — один запрос, читаемо, ввод цел",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "двойной клик — один PATCH — ожидали 1, получили 0",
+    "поля заблокированы на время записи"
+   ],
+   "error": "Error: Не дождались: 403 (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:257:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "CP-M-07",
+   "title": "Dirty: «← Все контрагенты» → диалог 3 вариантов; после сохранения ложного предупреждения нет",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: список (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:293:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 3
+  },
+  {
+   "id": "CP-M-08",
+   "title": "Сохранение из диалога ухода не проходит валидацию: РЕАЛЬНЫЙ текст ошибки виден, уход отменён, ввод цел",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-P-02",
+   "title": "Ёмкость: после «Сохранить» форма СРАЗУ показывает подтверждённые сервером строки, dirty снят, пользователю объяснено, что не сохранено; после повторного открытия то же",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:343:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-P-03",
+   "title": "Ёмкость: строка с нулём/пустая не остаётся на экране как сохранённая — пользователю сказано, почему её нет",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: сохранение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:385:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-P-04",
+   "title": "Сохранение карточки: более новый ввод во время запроса не затирается; ошибка — черновик и повтор целы",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:409:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-M-09",
+   "title": "Несохранённое — различие с записью: вернули значение руками (карточка, норматив, договор, спецификация) — подвал, метка «· не сохранено» и сторож ухода сняты",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "CP-A-01",
+   "title": "Новый контрагент: «Контрактация» просит сначала сохранить карточку",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "CP-A-02",
+   "title": "«Контрактация»: договоры, спецификации, контракты загружаются; ошибка списка — текст + «Повторить»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-A-04",
+   "title": "Новый договор: валидации, создание, двойной клик — один POST, ошибка рядом с формой",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "двойной клик — один POST — ожидали 1, получили 0"
+   ],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:542:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 3
+  },
+  {
+   "id": "CP-A-06",
+   "title": "Удаление договора и спецификации: подтверждение (danger), каскад, один DELETE",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-W-01",
+   "title": "Рабочее пространство контракта: 4 вкладки, у существующего «Развёрнуто» доступна",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-W-03",
+   "title": "Архивность: у контракта с привязанными изделиями чекбокс заблокирован с пояснением; без изделий — работает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-09",
+   "title": "Контракт: правка темы → «Отменить» откатывает; «Сохранить» — PATCH, «Сохранено.»",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:603:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "CP-W-16",
+   "title": "Права: корзины договора/спецификации и «Удалить контракт» — только при dict_delete=write (единый серверный эндпоинт удаления)",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-W-11",
+   "title": "Сохранение контракта: двойной клик — один PATCH; 403/409/422/500/сеть — ошибка видна, повтор возможен",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "двойной клик — один PATCH — ожидали 1, получили 0"
+   ],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:639:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "CP-W-13",
+   "title": "Удаление контракта без замены: delete-plan → подтверждение (danger) → удалён; SQL-аналог",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: удаление (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:666:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "CP-W-14",
+   "title": "Контракт с изделиями: пикер замены; подтверждение переносит привязку; нет кандидатов — понятное сообщение; 409 — ошибка в пикере",
+   "status": "pass",
+   "blocked": 1,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-W-15",
+   "title": "Обрыв связи на удалении: не «успех», а сообщение «не удалось определить результат»; контракт цел",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: сообщение (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:711:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-KBD-01",
+   "title": "Клавиатура: после действий в контракте фокус остаётся в рабочей области, а не сбрасывается на <body>",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запись даты (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:741:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 3
+  },
+  {
+   "id": "CP-KBD-02",
+   "title": "Клавиатура: смена вкладки карточки и добавление договора не сбрасывают фокус на <body>",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CP-A-08",
+   "title": "Повтор чтения объектов + вход в контракт до ответа: поздний ответ не роняет экран необработанной ошибкой",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-P-01",
+   "title": "Ёмкость: пустой тип строку не добавляет; тип добавляет строку; запись доходит до сервера (показ после сохранения — CP-P-02)",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:805:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "CP-A-03",
+   "title": "Независимые ошибки кусков: контракты и спецификации падают отдельно, «Повторить» перечитывает только их",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-A-05",
+   "title": "Правка договора: «· не сохранено» → «Сохранить» → PATCH; ошибка рядом с формой, ввод цел",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: ошибка рядом (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:838:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "CP-S-01",
+   "title": "Спецификация: пустой номер — сообщение; создание — один POST; правка — PATCH; удаление по правам",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [
+    "двойной клик — один POST — ожидали 1, получили 0"
+   ],
+   "error": "Error: Не дождались: создание (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:864:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 2
+  },
+  {
+   "id": "CP-K-01",
+   "title": "Список контрактов под спецификацией: «позиций: N, всего изделий: M»; «+ Контракт» — форма нового контракта, выход из неё только через диалог, после «Не сохранять» черновика нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "CP-W-02",
+   "title": "Реквизиты: каскад контрагент → договор → спецификация подставляет первые значения; «Сохранить» доступна",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-W-04",
+   "title": "Позиции: пустые строки отбрасываются; без единой позиции сохранить нельзя — сообщение",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-05",
+   "title": "Инциденты и производительность: добавление строк; строки без даты/типа/значения отбрасываются понятно",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-05b",
+   "title": "Инциденты и производительность СОХРАНЯЮТСЯ: инцидент с датой и типом уходит в PATCH, без даты — отбрасывается, ноль в норме — отбрасывается (D-33)",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH контракта (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:974:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-W-18",
+   "title": "Выход при открытом выборе замены (← Контрагент, раздел, «← Текущий интерфейс», закрытие страницы): подтверждение отмены; «Отмена» — пикер на месте, запроса удаления нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "CP-W-06",
+   "title": "Контракт: после «Сохранить» вкладки СРАЗУ показывают подтверждённое сервером (без нулевой нормы, пустых позиций и инцидентов без даты), сообщение называет отброшенное, dirty снят, повторное открытие то же",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1050:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-W-06b",
+   "title": "Контракт: ввод, внесённый во время запроса, не затирается ни при создании (дубля контракта нет), ни при правке",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1102:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-W-09b",
+   "title": "Сохранённый контракт: «Сохранить» недоступна без правок, включается правкой, снова недоступна при возврате значения — пустых PATCH нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "CP-W-07",
+   "title": "«Развёрнуто»: ошибка чтения — «Повторить»; после — таблица элементов со статусами по-русски и остатком",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-08",
+   "title": "Новый контракт: позиции → «Сохранить» → POST; контракт становится существующим, «Развёрнуто» доступна",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: POST (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1195:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "CP-W-10",
+   "title": "Отмена нового контракта: подтверждение; «Отмена» диалога оставляет форму",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CP-W-12",
+   "title": "Перенос контракта: смена контрагента/договора/спецификации → «Сохранить» → воркспейс закрыт с пояснением",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: PATCH (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1232:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-REG-01",
+   "title": "Неудачная запись плановой даты: ошибка на строке, значение не теряется; 403 снимает права у всего контракта",
+   "status": "fail",
+   "blocked": 2,
+   "failed": [
+    "ошибка видна на строке — нет «Сбой записи даты» в «ЖБИ\nНовый интерфейс — экспериментальный\nОбъект\nQA-Корпус 1.1 · 1240\nQA-Корпус 1.2 · 860\nQA-Корпус 1.3 (вложения и превью) · 300\nQA-МФР Корпус 2.3 · 640\nQA-Секци»"
+   ],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CP-REG-02",
+   "title": "Уход с неподтверждённой датой: «← Контрагент», верхний раздел, V1-кнопка — везде предупреждение",
+   "status": "fail",
+   "blocked": 4,
+   "failed": [
+    "при beforeunload новых запросов записи не уходит — ожидали 1, получили 0"
+   ],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "CP-REG-04",
+   "title": "Повтор записи даты — только по явному действию; автоповтора нет",
+   "status": "fail",
+   "blocked": 2,
+   "failed": [
+    "автоповтора нет: ровно одна попытка — ожидали 1, получили 0"
+   ],
+   "error": "Error: Не дождались: повтор по клику (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1298:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "CP-REG-05",
+   "title": "Отказ от неподтверждённого значения: сбрасывается только оно, уже записанные даты не откатываются",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: дата 102 записана (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1309:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-REG-06",
+   "title": "Черновик контракта + ошибка даты: ОДИН диалог, «Остаться» — ничего не потеряно; «Сохранить» — сохранены обе части",
+   "status": "fail",
+   "blocked": 3,
+   "failed": [],
+   "error": "Error: Не дождались: выход (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1342:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 4
+  },
+  {
+   "id": "CP-REG-07",
+   "title": "Конфликт A: идёт запись даты → сохранение/удаление контракта не стартуют (счёт запросов)",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запись даты в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1354:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-REG-08",
+   "title": "Конфликт B: идёт операция контракта → запись даты не стартует даже при прямом вызове обработчика",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: сохранение контракта в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1377:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-REG-09",
+   "title": "Две разные даты параллельно; повторный клик по одной — один запрос на строку; перерисовка ответом другой строки блокировку не снимает",
+   "status": "fail",
+   "blocked": 2,
+   "failed": [],
+   "error": "Error: Не дождались: две записи в пути (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1400:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "CP-REG-10",
+   "title": "Блокировка снимается после успеха и после ошибки; ограничения по правам и архивности сохраняются после разблокировки",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: запрос (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/cp.js:1421:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "RD-01",
+   "title": "Каждый экран чтения открывается из навигации и показывает присланные данные; ошибок и записей нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 82
+  },
+  {
+   "id": "RD-02",
+   "title": "Данные совпадают с присланными: журнал версий, вкладки зон",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "RD-03",
+   "title": "Ошибка загрузки: текст сервера и «Повторить»; поиск сохраняется; после успеха таблица",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "RD-04",
+   "title": "Пусто и «ничего не найдено» — разные сообщения; поиск фильтрует и считает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "RD-05",
+   "title": "Запоздавший ответ прежней вкладки не подменяет таблицу текущей",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "RD-06",
+   "title": "Повторные клики «Обновить» — один запрос; кнопка недоступна, пока идёт загрузка",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "RD-07",
+   "title": "Экран объекта: запрос с id выбранного объекта; смена объекта в шапке перезагружает экран",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "RD-08",
+   "title": "Постраничный журнал: первая страница, «Дальше»/«Назад», поиск на сервере",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "RD-09",
+   "title": "Права: экраны, требующие ролей, скрыты пользователю без прав; экраны без ограничений видны",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "RD-10",
+   "title": "Отчёт «Статус монтажа»: дерево — значения и итог из ответа, сворачивание узлов, чтение не блокирует переходы",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "RD-11",
+   "title": "Отчёт «Статус комплектации»: страницы по 200, поиск на клиенте, предупреждение сервера показано",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "RD-12",
+   "title": "Аналитическая справка: смена горизонта перезапрашивает отчёт с новым параметром; ошибка отчёта — понятное сообщение",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "RD-13",
+   "title": "«Моя работа»: период по умолчанию — сегодня, границы дня в UTC уходят в запрос, смена периода перезапрашивает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "RD-14",
+   "title": "«Учёт по блокам: статусы»: матрица операция × блок — шапка секций, проценты из ответа, «Показать все» добавляет операции без данных; смена даты перезапрашивает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "RD-15",
+   "title": "Выгрузка отчёта в файл: тот же запрос, что у отчёта на экране; файл формируется; сбой — сообщение; не считается записью; у «Линейного трека» только XLSX",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 12
+  },
+  {
+   "id": "RD-16",
+   "title": "Инструкция («Обучение»): блоки по группам, абзацы как текст (разметка не исполняется), поиск по тексту",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "DE-01",
+   "title": "Добавление: тело запроса обрезано, список перечитан, ввод очищен, статус из ответа сервера",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "DE-02",
+   "title": "Дубликат (409): текст сервера, ввод остаётся, список не менялся",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "DE-03",
+   "title": "Повторный сабмит во время записи: один запрос; управление заблокировано; конфликтующие действия невозможны",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "DE-04",
+   "title": "Переименование: id из строки, Enter сохраняет, отмена ничего не пишет, пустое имя отклоняется",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "DE-05",
+   "title": "Несохранённый ввод: «Остаться» / «Не сохранять» / «Сохранить и продолжить»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "DE-06",
+   "title": "Обрыв связи при добавлении: без автоповтора, без ложного успеха, ввод остаётся",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "DE-07",
+   "title": "Удаление неиспользуемой записи: план → подтверждение → запрос с id → список перечитан; отказ ничего не пишет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "DE-08",
+   "title": "Запись, на которую ссылаются объекты, здесь не удаляется: объяснение и переход в V1, запросов на удаление нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "DE-09",
+   "title": "Без права изменения: справочник виден, кнопок добавления/правки/удаления нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "DE-10",
+   "title": "Физлица: добавление и удаление идут по своим API (вид individual)",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [],
+   "error": "Error: Не дождались: экран dict-individuals (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async open (http://127.0.0.1:8063/tests/scenarios/de.js:10:3)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/de.js:198:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "DE-11",
+   "title": "Переименование в уже существующее имя (409): текст сервера, правка остаётся открытой, запись не менялась",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "DE-12",
+   "title": "Запись удалили в другом месте: переименование и удаление (404) — список обновляется, понятное сообщение, без ложного успеха",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "SE-01",
+   "title": "Загрузка значения, правка, сохранение: запрос с id выбранного объекта, повторное чтение подтверждает значение",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 8
+  },
+  {
+   "id": "SE-02",
+   "title": "Некорректный ввод (отрицательное, дробное, пусто) на сервер не уходит; ввод остаётся",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "SE-03",
+   "title": "Сбой сервера: без автоповтора, введённое остаётся, ложного успеха нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SE-04",
+   "title": "Двойной клик «Сохранить»: один запрос, управление заблокировано на время записи",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "SE-05",
+   "title": "Смена объекта в шапке при несохранённой правке: «Остаться» возвращает выбор; «Не сохранять»; «Сохранить» — запись ТОГО объекта",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "SE-06",
+   "title": "Права как в V1: пункт виден только при праве изменения; при праве чтения экран скрыт и по прямой ссылке ведёт на начальную страницу",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CE-01",
+   "title": "Цвета зон: правка одной строки → PUT только с изменённой строкой и id объекта из шапки; повторное чтение подтверждает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "CE-02",
+   "title": "Цвета статусов: тело — объект только с изменёнными статусами",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "CE-03",
+   "title": "Сбой сервера: без автоповтора, правка остаётся, ложного успеха нет; повтор вручную проходит",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "CE-04",
+   "title": "Двойной клик «Сохранить»: один запрос; на время записи всё заблокировано",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CE-05",
+   "title": "Отмена правки ничего не пишет; смена объекта при несохранённой правке: «Остаться» / «Сохранить» (запись ТОГО объекта) / «Не сохранять»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "PE-01",
+   "title": "Добавление нового префикса: тело запроса с обрезанным префиксом и выбранным типом, список перечитан, статус из ответа",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PE-02",
+   "title": "Существующий префикс: замена типа только после подтверждения; отказ ничего не пишет; тот же тип — без запроса",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "PE-03",
+   "title": "Удаление: план последствий → подтверждение → запрос по ключу → список перечитан; отказ ничего не удаляет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PE-04",
+   "title": "Пустой префикс не отправляется; сбой сервера — без автоповтора, ввод остаётся; двойной сабмит — один запрос",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "PE-05",
+   "title": "Несохранённый ввод: «Остаться» / «Не сохранять» / «Сохранить и продолжить»; «Изменить тип» подставляет префикс в форму",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PC-01",
+   "title": "Карточка: правка наименования и вехи → PUT с ЦЕЛОЙ карточкой (нетронутые списки не обнулены), id объекта из шапки, повторное чтение подтверждает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 10
+  },
+  {
+   "id": "PC-02",
+   "title": "Карточка: веха без даты не отправляется, сообщение называет веху; ввод остаётся; удаление вехи и сохранение сохраняют лишние поля остальных вех",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "PC-03",
+   "title": "Карточку изменили после открытия: подтверждение перезаписи; отказ ничего не пишет; согласие пишет правки поверх",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "PC-04",
+   "title": "Сбой сервера при записи: без автоповтора, введённое остаётся; двойной клик — один PUT",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "PC-05",
+   "title": "Смена объекта при несохранённой правке карточки: «Остаться» / «Сохранить» (запись ТОГО объекта) / «Не сохранять»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "RN-01",
+   "title": "Заметки: список редакций, открытие, правка → PUT с очищенными строками (пустые отброшены), повторное чтение подтверждает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "RN-02",
+   "title": "Новая редакция: пустая/несуществующая дата не отправляется; занятая дата не перезаписывается; свободная создаётся",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "RN-03",
+   "title": "Удаление редакции: содержимое в подтверждении, отказ не удаляет, согласие — DELETE по дате и объекту, список перечитан",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "RN-04",
+   "title": "Редакцию изменили после открытия: подтверждение перезаписи; отказ ничего не пишет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "RN-05",
+   "title": "Переход на другую редакцию при несохранённой правке: «Остаться» / «Не сохранять» / «Сохранить и продолжить»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "EX-01",
+   "title": "XLS «история»: запрос по чертежу выбранного объекта с датами периода, файл формируется",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "EX-02",
+   "title": "XLS «на дату»: режим snapshot, дата в запросе только если задана; периодные поля скрыты",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "EX-03",
+   "title": "Некорректный период (начало позже конца, несуществующая дата) не отправляется",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "EX-04",
+   "title": "PDF: GET по чертежу с датой; сбой сервера — сообщение, повтор возможен; двойной клик — один запрос",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "EX-05",
+   "title": "Объект без чертежа: выгрузка недоступна, запросов нет (сервер для администратора выгрузил бы все объекты)",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SS-01",
+   "title": "Список сеансов: у текущего нет кнопки «Завершить» (это «Выйти»), у чужих есть; счётчик на кнопке «завершить все»",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "кнопки — у двух чужих — ожидали 2, получили 0"
+   ],
+   "error": "TypeError: Cannot read properties of null (reading 'textContent')\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/ss.js:23:36)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 4
+  },
+  {
+   "id": "SS-02",
+   "title": "Завершение одного сеанса: подтверждение с IP; отказ ничего не удаляет; согласие — DELETE по id, список перечитан",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [],
+   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8063/tests/helpers.js:92:22)\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/ss.js:31:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "SS-03",
+   "title": "Завершить все, кроме текущего: число в подтверждении, POST, остаётся только текущий; кнопка недоступна",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [],
+   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8063/tests/helpers.js:92:22)\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/ss.js:50:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "SS-04",
+   "title": "Сеанс уже завершён (404) — цель достигнута, список обновлён; сбой сервера — без автоповтора и без ложного успеха; двойной клик — один запрос",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [],
+   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8063/tests/helpers.js:92:22)\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/ss.js:68:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "SB-01",
+   "title": "Добавление подтипа: тело запроса с объектом из шапки и обрезанным названием, список перечитан, статус после чтения",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "SB-02",
+   "title": "Пустой подтип и повтор существующего (без учёта регистра) на сервер не отправляются",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SB-03",
+   "title": "Удаление неиспользуемого подтипа: план по ключу объект|тип|подтип → подтверждение → запрос; отказ ничего не удаляет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "SB-04",
+   "title": "Подтип с изделиями здесь не удаляется: объяснение, запросов на удаление нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SB-05",
+   "title": "Несохранённый ввод: «Остаться» / «Не сохранять» / «Сохранить и продолжить»; смена объекта проходит тот же сторож",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "SB-06",
+   "title": "Сбой сервера: без автоповтора, ввод остаётся; двойной клик — один запрос",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "BW-01",
+   "title": "Базовый срок: PATCH только с двумя полями группы (не стирает прогноз и примечание), повторное чтение подтверждает, список обновляется",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "BW-02",
+   "title": "Очистка даты — явный null; прогноз — отдельная группа; примечание не трогает сроки",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [],
+   "error": "Error: click: элемента нет\n    at Object.click (http://127.0.0.1:8063/tests/helpers.js:92:22)\n    at Object.run (http://127.0.0.1:8063/tests/scenarios/bw.js:57:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 1
+  },
+  {
+   "id": "BW-03",
+   "title": "Некорректные даты (конец раньше начала) не отправляются; ввод остаётся",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "BW-04",
+   "title": "Работу изменили после открытия: подтверждение перезаписи; отказ ничего не пишет; согласие — запись",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "BW-05",
+   "title": "Несохранённая правка: сторож при закрытии карточки, смене вкладки и смене объекта; сбой без автоповтора; двойной клик — один запрос",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "AP-01",
+   "title": "Гамма: семь вариантов, выбрана текущая; выбор → PATCH себе, повторное чтение /me подтверждает, отметка переезжает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "AP-02",
+   "title": "Повторный клик по выбранной гамме ничего не пишет; сбой сервера — сообщение и прежний выбор; двойной клик — один запрос",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "AP-03",
+   "title": "Неизвестный исход: 5xx на записи → проверка чтением без повтора; сбой чтения после успешной записи — не «сбой сохранения», гамма применена",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "LC-01",
+   "title": "Цвет подписей: по умолчанию #222222; выбор → PATCH себе с одним полем, повторное чтение /me подтверждает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "LC-02",
+   "title": "Сброс на умолчание шлёт null; отмена правки ничего не пишет; двойной клик — один запрос; сбой — введённое остаётся, автоповтора нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "LC-03",
+   "title": "Сервер 5xx с записью: исход не повторяется, проверяется чтением; несохранённое — под сторожем",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "LC-04",
+   "title": "Права как в V1: без права записи в «Пользователи» экран скрыт; с правом записи — доступен",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "LC-05",
+   "title": "Значение #RGB, допустимое для сервера: поле показывает его верно (#ffaa00, не чёрным), экран не «грязный»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "LC-06",
+   "title": "Запись прошла, перечитать не удалось: экран не считается несохранённым, запись не повторяется",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "RC-01",
+   "title": "Схема: категории объекта, значения с сервера; правка цвета → PUT целой схемы (шаблон становится «custom»), объект из шапки, повторное чтение подтверждает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 11
+  },
+  {
+   "id": "RC-02",
+   "title": "Прозрачность и свечение: ползунки пишутся вместе с цветами; ноль не хранится, но подтверждается сверкой по правилам сервера",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "RC-03",
+   "title": "Шаблон: применяется к черновику с предупреждением, заменяет схему целиком только при сохранении; отмена возвращает сохранённое",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "RC-04",
+   "title": "Один запрос при двойном клике; сбой 4xx — введённое остаётся, без автоповтора; 5xx — проверка чтением, не повтор",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "RC-05",
+   "title": "Чужая правка после открытия: перезапись только по подтверждению; «Отмена» ничего не пишет; сторож при смене объекта",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "RC-06",
+   "title": "Права как в V1: экран есть только на объекте МФР и при праве записи в «Модель Revit»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "RC-07",
+   "title": "Названия категорий приходят из файлов: кавычки и теги не ломают разметку, ключ записывается точно как есть",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "RC-08",
+   "title": "Запись прошла, перечитать не удалось: экран не «грязный», «Обновить» работает, повторное сохранение не показывает ложный конфликт",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "RC-09",
+   "title": "Правка, начатая пока идёт «Обновить», не затирается ответом",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "AV-01",
+   "title": "Сводка: все пользователи, системная роль и выданный доступ по уровням; только GET, записей нет",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "AV-02",
+   "title": "Поиск и «только без доступа» — на клиенте, без запросов; ошибка загрузки → сообщение и «Повторить»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 4
+  },
+  {
+   "id": "AV-03",
+   "title": "Права: экран виден только при праве чтения «Пользователи»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 1
+  },
+  {
+   "id": "AV-04",
+   "title": "Администратор сервиса не попадает в «без выданного доступа» — у него полный доступ в обход ролей",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "CL-01",
+   "title": "Есть непрочитанные: кнопка со счётчиком; клик → один POST без тела, успех после повторного чтения, кнопка исчезает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "CL-02",
+   "title": "Все прочитано — кнопки нет; двойной клик — один запрос; 4xx — сообщение; 5xx без записи — не повторяется, «не подтверждено»",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "CL-03",
+   "title": "Поиск без совпадений: кнопка «Ознакомился» остаётся рабочей; сообщение об отметке не переживает обновление",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "SP-01",
+   "title": "Правка одной пары → PUT только изменённой (не все три), пара определяется строкой, повторное чтение подтверждает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 8
+  },
+  {
+   "id": "SP-02",
+   "title": "Поиск не теряет правку; отмена возвращает сохранённое и ничего не пишет; несколько пар — один PUT",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "SP-03",
+   "title": "Один запрос при двойном клике; 4xx — введённое остаётся, без автоповтора; 5xx — проверка чтением, не повтор",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 7
+  },
+  {
+   "id": "SP-04",
+   "title": "Сторож несохранённого при уходе с экрана; права как в V1 (запись в «Форма маркеров»)",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 2
+  },
+  {
+   "id": "GT-01",
+   "title": "Пометка экспериментального режима: точный текст предупреждения, возврат в V1 — в шапке и в пометке; на каждом экране",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 8
+  },
+  {
+   "id": "GT-02",
+   "title": "Политика: разрешённые операции проходят, отключённые и неизвестные — отказ; поля тела ограничены; GET не затрагивается",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 58
+  },
+  {
+   "id": "GT-03",
+   "title": "Отключённые записи не отправляют запросов: создание пользователя (кнопка и Enter), контрагента, проекта; причина видна, ввод цел",
+   "status": "pass",
+   "blocked": 3,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "GT-04",
+   "title": "Сохранение из диалога ухода в отключённом разделе: запрос не уходит, переход отменён, ввод цел",
+   "status": "pass",
+   "blocked": 1,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "GT-05",
+   "title": "Экраны с частичной политикой: физлица и сеансы — только просмотр; ЗР — прогноз и примечание отключены, базовый срок работает",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "GT-06",
+   "title": "Разрешённая операция проходит шлюз и барьер: СМУ — добавление в режиме выпуска (ровно один POST); ЗР — базовый срок (PATCH только двух полей)",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "GT-07",
+   "title": "Отказ шлюза — обычный отказ 4xx: не считается идущей записью, нет автоповтора; чтение отчётов шлюзом не блокируется",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 6
+  },
+  {
+   "id": "GT-08",
+   "title": "Обязательная смена пароля и вход: вместо формы смены — объяснение и переход в V1; на входе — предупреждение",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "VIS-login-1920x1080",
+   "title": "Вход — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-login-1920x900",
+   "title": "Вход — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-login-1366x768",
+   "title": "Вход — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-no-sections-1920x1080",
+   "title": "Пользователь без прав: начальная страница — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-no-sections-1920x900",
+   "title": "Пользователь без прав: начальная страница — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-no-sections-1366x768",
+   "title": "Пользователь без прав: начальная страница — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-home-1920x1080",
+   "title": "Оболочка: начальная страница (все разделы) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-home-1920x900",
+   "title": "Оболочка: начальная страница (все разделы) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-home-1366x768",
+   "title": "Оболочка: начальная страница (все разделы) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-table-1920x1080",
+   "title": "Оболочка: экран чтения — таблица (Журнал действий, постранично) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-table-1920x900",
+   "title": "Оболочка: экран чтения — таблица (Журнал действий, постранично) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-table-1366x768",
+   "title": "Оболочка: экран чтения — таблица (Журнал действий, постранично) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-tabs-1920x1080",
+   "title": "Оболочка: экран чтения — вкладки (Зоны) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-tabs-1920x900",
+   "title": "Оболочка: экран чтения — вкладки (Зоны) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-tabs-1366x768",
+   "title": "Оболочка: экран чтения — вкладки (Зоны) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-record-1920x1080",
+   "title": "Оболочка: экран чтения — запись (Доменная авторизация) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-record-1920x900",
+   "title": "Оболочка: экран чтения — запись (Доменная авторизация) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-read-record-1366x768",
+   "title": "Оболочка: экран чтения — запись (Доменная авторизация) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dict-edit-1920x1080",
+   "title": "Оболочка: редактор справочника (СМУ, правка строки) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dict-edit-1920x900",
+   "title": "Оболочка: редактор справочника (СМУ, правка строки) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dict-edit-1366x768",
+   "title": "Оболочка: редактор справочника (СМУ, правка строки) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-setting-edit-1920x1080",
+   "title": "Оболочка: редактор настройки объекта (порог опоздания, есть правка) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-setting-edit-1920x900",
+   "title": "Оболочка: редактор настройки объекта (порог опоздания, есть правка) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-setting-edit-1366x768",
+   "title": "Оболочка: редактор настройки объекта (порог опоздания, есть правка) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-color-edit-1920x1080",
+   "title": "Оболочка: редактор цветов (цвета зон, есть правка) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-color-edit-1920x900",
+   "title": "Оболочка: редактор цветов (цвета зон, есть правка) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-color-edit-1366x768",
+   "title": "Оболочка: редактор цветов (цвета зон, есть правка) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-prefix-edit-1920x1080",
+   "title": "Оболочка: редактор префиксов марок (введён префикс) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-prefix-edit-1920x900",
+   "title": "Оболочка: редактор префиксов марок (введён префикс) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-prefix-edit-1366x768",
+   "title": "Оболочка: редактор префиксов марок (введён префикс) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-card-edit-1920x1080",
+   "title": "Оболочка: карточка объекта (есть правка) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-card-edit-1920x900",
+   "title": "Оболочка: карточка объекта (есть правка) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-card-edit-1366x768",
+   "title": "Оболочка: карточка объекта (есть правка) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-notes-edit-1920x1080",
+   "title": "Оболочка: события, задачи, вопросы (новая редакция) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-notes-edit-1920x900",
+   "title": "Оболочка: события, задачи, вопросы (новая редакция) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-notes-edit-1366x768",
+   "title": "Оболочка: события, задачи, вопросы (новая редакция) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-appearance-edit-1920x1080",
+   "title": "Оболочка: «Внешний вид» (семь гамм, выбрана «Графит») — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-appearance-edit-1920x900",
+   "title": "Оболочка: «Внешний вид» (семь гамм, выбрана «Графит») — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-appearance-edit-1366x768",
+   "title": "Оболочка: «Внешний вид» (семь гамм, выбрана «Графит») — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-label-color-edit-1920x1080",
+   "title": "Оболочка: «Цвет подписей марок» (выбран новый цвет) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-label-color-edit-1920x900",
+   "title": "Оболочка: «Цвет подписей марок» (выбран новый цвет) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-label-color-edit-1366x768",
+   "title": "Оболочка: «Цвет подписей марок» (выбран новый цвет) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-revit-colors-edit-1920x1080",
+   "title": "Оболочка: «Цвета модели МФР» (правка цвета стен) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-revit-colors-edit-1920x900",
+   "title": "Оболочка: «Цвета модели МФР» (правка цвета стен) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-revit-colors-edit-1366x768",
+   "title": "Оболочка: «Цвета модели МФР» (правка цвета стен) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-access-view-1920x1080",
+   "title": "Оболочка: «Права пользователей» (сводка доступа, чтение) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-access-view-1920x900",
+   "title": "Оболочка: «Права пользователей» (сводка доступа, чтение) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-access-view-1366x768",
+   "title": "Оболочка: «Права пользователей» (сводка доступа, чтение) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shape-edit-1920x1080",
+   "title": "Оболочка: «Форма маркеров» (изменена одна пара) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shape-edit-1920x900",
+   "title": "Оболочка: «Форма маркеров» (изменена одна пара) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shape-edit-1366x768",
+   "title": "Оболочка: «Форма маркеров» (изменена одна пара) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-form-1920x1080",
+   "title": "Оболочка: экран V1-формы (каркас, «Контракты») — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-form-1920x900",
+   "title": "Оболочка: экран V1-формы (каркас, «Контракты») — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-form-1366x768",
+   "title": "Оболочка: экран V1-формы (каркас, «Контракты») — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-report-1920x1080",
+   "title": "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа») — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-report-1920x900",
+   "title": "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа») — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-shell-screen-report-1366x768",
+   "title": "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа») — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-users-1920x1080",
+   "title": "UA: список пользователей — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-users-1920x900",
+   "title": "UA: список пользователей — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-users-1366x768",
+   "title": "UA: список пользователей — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-new-user-1920x1080",
+   "title": "UA: форма нового пользователя — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-new-user-1920x900",
+   "title": "UA: форма нового пользователя — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-new-user-1366x768",
+   "title": "UA: форма нового пользователя — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-profile-1920x1080",
+   "title": "UA: карточка — профиль (есть несохранённое) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-profile-1920x900",
+   "title": "UA: карточка — профиль (есть несохранённое) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-profile-1366x768",
+   "title": "UA: карточка — профиль (есть несохранённое) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-1920x1080",
+   "title": "UA: карточка — доступ к объектам (сводка) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-1920x900",
+   "title": "UA: карточка — доступ к объектам (сводка) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-1366x768",
+   "title": "UA: карточка — доступ к объектам (сводка) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-editor-1920x1080",
+   "title": "UA: карточка — редактор области доступа — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-editor-1920x900",
+   "title": "UA: карточка — редактор области доступа — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-access-editor-1366x768",
+   "title": "UA: карточка — редактор области доступа — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-security-1920x1080",
+   "title": "UA: карточка — вход и безопасность — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-security-1920x900",
+   "title": "UA: карточка — вход и безопасность — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-card-security-1366x768",
+   "title": "UA: карточка — вход и безопасность — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-1920x1080",
+   "title": "UA: роли и матрица разрешений — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-1920x900",
+   "title": "UA: роли и матрица разрешений — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-1366x768",
+   "title": "UA: роли и матрица разрешений — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-dirty-1920x1080",
+   "title": "UA: роли — несохранённые ячейки — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-dirty-1920x900",
+   "title": "UA: роли — несохранённые ячейки — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-roles-dirty-1366x768",
+   "title": "UA: роли — несохранённые ячейки — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-check-1920x1080",
+   "title": "UA: проверка доступа (пользователь с ролями, объект выбран) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-check-1920x900",
+   "title": "UA: проверка доступа (пользователь с ролями, объект выбран) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-ua-check-1366x768",
+   "title": "UA: проверка доступа (пользователь с ролями, объект выбран) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-tree-1920x1080",
+   "title": "PO: дерево без выбора — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-tree-1920x900",
+   "title": "PO: дерево без выбора — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-tree-1366x768",
+   "title": "PO: дерево без выбора — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1920x1080",
+   "title": "PO: карточка объекта с вложениями — 1920×1080",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1920x900",
+   "title": "PO: карточка объекта с вложениями — 1920×900",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1366x768",
+   "title": "PO: карточка объекта с вложениями — 1366×768",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1920x1080",
+   "title": "PO: объект с очень длинными названием и адресом — 1920×1080",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1920x900",
+   "title": "PO: объект с очень длинными названием и адресом — 1920×900",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1366x768",
+   "title": "PO: объект с очень длинными названием и адресом — 1366×768",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1920x1080",
+   "title": "PO: проект с очень длинным названием — 1920×1080",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1920x900",
+   "title": "PO: проект с очень длинным названием — 1920×900",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1366x768",
+   "title": "PO: проект с очень длинным названием — 1366×768",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1920x1080",
+   "title": "PO: новый проект — 1920×1080",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1920x900",
+   "title": "PO: новый проект — 1920×900",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1366x768",
+   "title": "PO: новый проект — 1366×768",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-dirty-error-1920x1080",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×1080",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "VIS-po-dirty-error-1920x900",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×900",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "VIS-po-dirty-error-1366x768",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1366×768",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/vis.js:85:9)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "VIS-dialog-unsaved-1920x1080",
+   "title": "Диалог: несохранённые изменения — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-unsaved-1920x900",
+   "title": "Диалог: несохранённые изменения — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-unsaved-1366x768",
+   "title": "Диалог: несохранённые изменения — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1920x1080",
+   "title": "Диалог: подтверждение удаления (danger) — 1920×1080",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1920x900",
+   "title": "Диалог: подтверждение удаления (danger) — 1920×900",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1366x768",
+   "title": "Диалог: подтверждение удаления (danger) — 1366×768",
+   "status": "fail",
+   "blocked": 0,
+   "failed": [
+    "содержимое не вылезает за рамки и не обрезается молча — ожидали [], получили [\"div#po-pin-map.v2-pin-map.maplibregl-map содержимое обрезается без многоточия (901 > 668)\",\"div.v2-note содержимое шире рамки (901 > 668)\"]"
+   ],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-list-1920x1080",
+   "title": "CP: список контрагентов — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-list-1920x900",
+   "title": "CP: список контрагентов — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-list-1366x768",
+   "title": "CP: список контрагентов — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-1920x1080",
+   "title": "CP: карточка — основное — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-1920x900",
+   "title": "CP: карточка — основное — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-1366x768",
+   "title": "CP: карточка — основное — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-long-1920x1080",
+   "title": "CP: карточка с очень длинными названиями — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-long-1920x900",
+   "title": "CP: карточка с очень длинными названиями — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-long-1366x768",
+   "title": "CP: карточка с очень длинными названиями — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-dirty-1920x1080",
+   "title": "CP: карточка — есть несохранённое — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-dirty-1920x900",
+   "title": "CP: карточка — есть несохранённое — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-main-dirty-1366x768",
+   "title": "CP: карточка — есть несохранённое — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-contracting-1920x1080",
+   "title": "CP: карточка — контрактация (договоры, спецификации, контракты) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-contracting-1920x900",
+   "title": "CP: карточка — контрактация (договоры, спецификации, контракты) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-contracting-1366x768",
+   "title": "CP: карточка — контрактация (договоры, спецификации, контракты) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-other-1920x1080",
+   "title": "CP: карточка — ёмкость («Прочее») — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-other-1920x900",
+   "title": "CP: карточка — ёмкость («Прочее») — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-card-other-1366x768",
+   "title": "CP: карточка — ёмкость («Прочее») — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-lines-1920x1080",
+   "title": "CP: контракт — позиции (реквизиты раскрыты) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-lines-1920x900",
+   "title": "CP: контракт — позиции (реквизиты раскрыты) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-lines-1366x768",
+   "title": "CP: контракт — позиции (реквизиты раскрыты) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-1920x1080",
+   "title": "CP: контракт — «Развёрнуто» (плановые даты) — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-1920x900",
+   "title": "CP: контракт — «Развёрнуто» (плановые даты) — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-1366x768",
+   "title": "CP: контракт — «Развёрнуто» (плановые даты) — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-error-1920x1080",
+   "title": "CP: контракт — «Развёрнуто», ошибка записи даты на строке — 1920×1080",
+   "status": "pass",
+   "blocked": 1,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-error-1920x900",
+   "title": "CP: контракт — «Развёрнуто», ошибка записи даты на строке — 1920×900",
+   "status": "pass",
+   "blocked": 1,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-expanded-error-1366x768",
+   "title": "CP: контракт — «Развёрнуто», ошибка записи даты на строке — 1366×768",
+   "status": "pass",
+   "blocked": 1,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-incidents-1920x1080",
+   "title": "CP: контракт — инциденты — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-incidents-1920x900",
+   "title": "CP: контракт — инциденты — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-incidents-1366x768",
+   "title": "CP: контракт — инциденты — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-capacity-1920x1080",
+   "title": "CP: контракт — производительность — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-capacity-1920x900",
+   "title": "CP: контракт — производительность — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-capacity-1366x768",
+   "title": "CP: контракт — производительность — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-long-1920x1080",
+   "title": "CP: контракт с очень длинными названиями — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-long-1920x900",
+   "title": "CP: контракт с очень длинными названиями — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-long-1366x768",
+   "title": "CP: контракт с очень длинными названиями — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-replacement-1920x1080",
+   "title": "CP: контракт — выбор замены при удалении — 1920×1080",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-replacement-1920x900",
+   "title": "CP: контракт — выбор замены при удалении — 1920×900",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-cp-contract-replacement-1366x768",
+   "title": "CP: контракт — выбор замены при удалении — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-sticky-users-1366x768",
+   "title": "Шапка таблицы пользователей закреплена при прокрутке списка — 1366×768",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 3
+  },
+  {
+   "id": "A11Y-shell-home",
+   "title": "Оболочка: начальная страница (все разделы): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-read-table",
+   "title": "Оболочка: экран чтения — таблица (Журнал действий, постранично): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-read-tabs",
+   "title": "Оболочка: экран чтения — вкладки (Зоны): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-read-record",
+   "title": "Оболочка: экран чтения — запись (Доменная авторизация): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-dict-edit",
+   "title": "Оболочка: редактор справочника (СМУ, правка строки): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-setting-edit",
+   "title": "Оболочка: редактор настройки объекта (порог опоздания, есть правка): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-color-edit",
+   "title": "Оболочка: редактор цветов (цвета зон, есть правка): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-prefix-edit",
+   "title": "Оболочка: редактор префиксов марок (введён префикс): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-card-edit",
+   "title": "Оболочка: карточка объекта (есть правка): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-notes-edit",
+   "title": "Оболочка: события, задачи, вопросы (новая редакция): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-appearance-edit",
+   "title": "Оболочка: «Внешний вид» (семь гамм, выбрана «Графит»): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-label-color-edit",
+   "title": "Оболочка: «Цвет подписей марок» (выбран новый цвет): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-revit-colors-edit",
+   "title": "Оболочка: «Цвета модели МФР» (правка цвета стен): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-access-view",
+   "title": "Оболочка: «Права пользователей» (сводка доступа, чтение): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-shape-edit",
+   "title": "Оболочка: «Форма маркеров» (изменена одна пара): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-shell-screen-form",
+   "title": "Оболочка: экран V1-формы (каркас, «Контракты»): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-shell-screen-report",
+   "title": "Оболочка: экран отчёта (каркас, «Динамика поставки и монтажа»): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-users",
+   "title": "UA: список пользователей: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-new-user",
+   "title": "UA: форма нового пользователя: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-card-profile",
+   "title": "UA: карточка — профиль (есть несохранённое): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-card-access",
+   "title": "UA: карточка — доступ к объектам (сводка): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-card-access-editor",
+   "title": "UA: карточка — редактор области доступа: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-card-security",
+   "title": "UA: карточка — вход и безопасность: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-roles",
+   "title": "UA: роли и матрица разрешений: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-roles-dirty",
+   "title": "UA: роли — несохранённые ячейки: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-ua-check",
+   "title": "UA: проверка доступа (пользователь с ролями, объект выбран): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-tree",
+   "title": "PO: дерево без выбора: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-object",
+   "title": "PO: карточка объекта с вложениями: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-object-long",
+   "title": "PO: объект с очень длинными названием и адресом: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-project-long",
+   "title": "PO: проект с очень длинным названием: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-new",
+   "title": "PO: новый проект: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-po-dirty-error",
+   "title": "PO: ошибка сохранения при уходе (видна сразу): доступные имена, tabindex, aria-live",
+   "status": "fail",
+   "blocked": 1,
+   "failed": [],
+   "error": "Error: Не дождались: ошибка (4000 мс)\n    at waitFor (http://127.0.0.1:8063/tests/helpers.js:12:49)\n    at async Object.open (http://127.0.0.1:8063/tests/scenes.js:125:5)\n    at async Object.run (http://127.0.0.1:8063/tests/scenarios/a11y.js:43:7)\n    at async runTests (http://127.0.0.1:8063/tests/helpers.js:171:11)\n    at async http://127.0.0.1:8063/tests/run.js:20:17",
+   "checks": 0
+  },
+  {
+   "id": "A11Y-dialog-unsaved",
+   "title": "Диалог: несохранённые изменения: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-dialog-confirm-danger",
+   "title": "Диалог: подтверждение удаления (danger): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-list",
+   "title": "CP: список контрагентов: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-main",
+   "title": "CP: карточка — основное: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-main-long",
+   "title": "CP: карточка с очень длинными названиями: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-main-dirty",
+   "title": "CP: карточка — есть несохранённое: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-contracting",
+   "title": "CP: карточка — контрактация (договоры, спецификации, контракты): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-card-other",
+   "title": "CP: карточка — ёмкость («Прочее»): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-lines",
+   "title": "CP: контракт — позиции (реквизиты раскрыты): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-expanded",
+   "title": "CP: контракт — «Развёрнуто» (плановые даты): доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-expanded-error",
+   "title": "CP: контракт — «Развёрнуто», ошибка записи даты на строке: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 1,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-incidents",
+   "title": "CP: контракт — инциденты: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-capacity",
+   "title": "CP: контракт — производительность: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-long",
+   "title": "CP: контракт с очень длинными названиями: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  },
+  {
+   "id": "A11Y-cp-contract-replacement",
+   "title": "CP: контракт — выбор замены при удалении: доступные имена, tabindex, aria-live",
+   "status": "pass",
+   "blocked": 0,
+   "failed": [],
+   "error": null,
+   "checks": 5
+  }
+ ],
+ "rev": "7373800",
+ "tree_dirty": false,
+ "app_static_tree": "e84cfd6e8c3701faff9bea49815d056c25e61565",
+ "ran_at": "2026-09-21 11:36:08"
+}

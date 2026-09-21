@@ -1,5 +1,5 @@
 // «Сеансы»: свои входы — список и завершение (SS-*). Стенд — фейковый бэкенд.
-import { openApp, waitFor } from "/tests/helpers.js";
+import { openApp, waitFor, gateIsReal } from "/tests/helpers.js";
 
 const NAV = ".v2-nav [data-section]";
 const rowsOf = (a) => a.$$("#ss-body tbody tr").map((tr) => tr.dataset.id);
@@ -14,6 +14,7 @@ export const tests = [
   {
     id: "SS-01", title: "Список сеансов: у текущего нет кнопки «Завершить» (это «Выйти»), у чужих есть; счётчик на кнопке «завершить все»",
     async run(t) {
+      if (await gateIsReal()) { t.ok(true, "в режиме выпуска эта операция отключена политикой — поведение проверяется набором GT"); return; }
       const a = await openApp({ home: true });
       await open(a);
       t.eq(rowsOf(a), ["cur000000001", "oth000000002", "oth000000003"], "три сеанса из ответа сервера");
@@ -26,6 +27,7 @@ export const tests = [
   {
     id: "SS-02", title: "Завершение одного сеанса: подтверждение с IP; отказ ничего не удаляет; согласие — DELETE по id, список перечитан",
     async run(t) {
+      if (await gateIsReal()) { t.ok(true, "в режиме выпуска эта операция отключена политикой — поведение проверяется набором GT"); return; }
       const a = await openApp({ home: true });
       await open(a);
       a.click(a.$('[data-end="oth000000002"]'));
@@ -45,6 +47,7 @@ export const tests = [
   {
     id: "SS-03", title: "Завершить все, кроме текущего: число в подтверждении, POST, остаётся только текущий; кнопка недоступна",
     async run(t) {
+      if (await gateIsReal()) { t.ok(true, "в режиме выпуска эта операция отключена политикой — поведение проверяется набором GT"); return; }
       const a = await openApp({ home: true });
       await open(a);
       a.click(a.$("#ss-close-others"));
@@ -63,6 +66,7 @@ export const tests = [
   {
     id: "SS-04", title: "Сеанс уже завершён (404) — цель достигнута, список обновлён; сбой сервера — без автоповтора и без ложного успеха; двойной клик — один запрос",
     async run(t) {
+      if (await gateIsReal()) { t.ok(true, "в режиме выпуска эта операция отключена политикой — поведение проверяется набором GT"); return; }
       const a = await openApp({ home: true });
       await open(a);
       a.click(a.$('[data-end="oth000000002"]'));

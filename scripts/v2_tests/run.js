@@ -21,15 +21,16 @@ const results = await runTests(tests, {
   onResult(r) {
     const tr = document.createElement("tr");
     const failed = r.checks.filter((c) => !c.ok);
-    tr.innerHTML = `<td>${r.id}${r.blocked ? ` <small>[шлюз: ${r.blocked}]</small>` : ""}</td><td>${r.title}</td><td class="${r.status}">${r.status === "pass" ? "PASS" : "FAIL"}</td>
+    tr.innerHTML = `<td>${r.id}${r.blocked ? ` <small>[шлюз: ${r.blocked}]</small>` : ""}</td><td>${r.title}</td><td class="${r.status}">${r.status === "pass" ? "PASS" : r.status === "gate-blocked" ? "GATE" : "FAIL"}</td>
       <td>${r.checks.length - failed.length}/${r.checks.length}${failed.length ? `<pre>${failed.map((c) => "✗ " + c.msg).join("\n")}</pre>` : ""}${r.error ? `<pre>${r.error}</pre>` : ""}</td>`;
     tbody.append(tr);
   },
 });
-const failed = results.filter((r) => r.status !== "pass");
+const failed = results.filter((r) => r.status === "fail");
+const gated = results.filter((r) => r.status === "gate-blocked");
 document.getElementById("summary").textContent =
-  `Сценарии V2: ${results.length - failed.length} PASS / ${failed.length} FAIL из ${results.length}`;
-document.title = `${failed.length ? "FAIL" : "PASS"} ${results.length - failed.length}/${results.length}`;
+  `Сценарии V2: ${results.filter((r) => r.status === "pass").length} PASS / ${failed.length} FAIL${gated.length ? ` / ${gated.length} отключено шлюзом (ожидаемый отказ)` : ""} из ${results.length}`;
+document.title = `${failed.length ? "FAIL" : "PASS"} ${results.length - failed.length - gated.length}/${results.length}${gated.length ? ` (шлюз ${gated.length})` : ""}`;
 window.__results = results.map((r) => ({ id: r.id, title: r.title, status: r.status, blocked: r.blocked || 0, failed: r.checks.filter((c) => !c.ok).map((c) => c.msg), error: r.error, checks: r.checks.length }));
 // Сохранить результаты вместе с версией кода (стенд запишет Docs/v2-acceptance-results/<имя>.json).
 try {

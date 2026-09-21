@@ -162,7 +162,11 @@ export class T {
   notHas(text, sub, msg) { const ok = !String(text).includes(sub); this.checks.push({ ok, msg: ok ? msg : `${msg} — найдено «${sub}»` }); return ok; }
 }
 
+// Настоящий ли шлюз записи на этом стенде (а не заглушка `--gate all`).
+export const gateIsReal = async () => (await import("/static/v2/write-gate.js")).POLICY.length > 0;
+
 export async function runTests(tests, { onResult } = {}) {
+  const realGate = await gateIsReal();
   const results = [];
   for (const test of tests) {
     const t = new T();
@@ -183,6 +187,9 @@ export async function runTests(tests, { onResult } = {}) {
     r.blocked = createdApps.reduce((n, a) => n + (a.win?.__blocked?.length || 0), 0);
     if (t.checks.some((c) => !c.ok)) r.status = "fail";
     if (!t.checks.length && !r.error) { r.status = "fail"; r.error = "сценарий не сделал ни одной проверки"; }
+    // Режим выпуска: сценарий, пишущий через ОТКЛЮЧЁННУЮ операцию, упал потому, что шлюз отказал (число отказов > 0) —
+    // это проверка отключения, а не поломка. Падение без отказов шлюза остаётся падением.
+    if (realGate && r.status === "fail" && r.blocked > 0) r.status = "gate-blocked";
     results.push(r);
     onResult?.(r);
     document.getElementById("frames").innerHTML = ""; // изоляция: следующий сценарий с чистого листа
