@@ -370,6 +370,38 @@ export const tests = [
     },
   },
   {
+    id: "UA-C-12", title: "Поиск в домене: пароль и логин вводит человек, найденное подставляется в ПУСТЫЕ поля профиля (заполненные не трогаются), пароль очищается, карточка «грязная»",
+    async run(t) {
+      const a = await openApp();
+      const u = await openCard(a, "qa.noaccess", "profile");
+      await waitFor(() => a.$("#pf-domain-search") && !a.$("#pf-domain-search").disabled, { what: "кнопка поиска в домене" });
+      a.setValue(a.$("#pf-last"), "Своя фамилия");
+      a.setValue(a.$("#pf-pos"), "");
+      a.setValue(a.$("#pf-first"), "");
+      a.click(a.$("#pf-domain-search"));
+      await waitFor(() => a.$("#lds-run"), { what: "панель поиска" });
+      a.setValue(a.$("#lds-query"), "Петров");
+      a.click(a.$("#lds-run"));
+      await waitFor(() => /Введите свои доменные логин и пароль/.test(a.$("#lds-error").textContent), { what: "проверка полей" });
+      t.eq(a.ctl.log.filter((e) => e.path === "/ldap-search").length, 0, "без пароля запрос не отправляется");
+      a.setValue(a.$("#lds-pass"), "неверный");
+      a.click(a.$("#lds-run"));
+      await waitFor(() => /Неверный логин или пароль домена/.test(a.$("#lds-error").textContent), { what: "отказ домена" });
+      t.eq(a.$("#lds-pass").value, "", "пароль очищен из поля после поиска");
+      a.setValue(a.$("#lds-pass"), "Fake-Pass-000");
+      a.click(a.$("#lds-run"));
+      await waitFor(() => a.$$("[data-lds-pick]").length === 2, { what: "результаты" });
+      t.eq(a.$("#lds-pass").value, "", "пароль очищен и после успешного поиска");
+      a.click(a.$$("[data-lds-pick]")[0]);
+      await waitFor(() => a.$("#card-save"), { what: "подвал: карточка изменена" });
+      t.eq(a.$("#pf-last").value, "Своя фамилия", "заполненное поле не тронуто");
+      t.eq(a.$("#pf-first").value, "Пётр", "пустое поле «Имя» заполнено из домена");
+      t.eq(a.$("#pf-pos").value, "Прораб", "пустое поле «Должность» заполнено из домена");
+      t.ok(!a.ctl.log.some((e) => e.method === "PATCH"), "сама подстановка ничего не сохраняет");
+      t.ok(!JSON.stringify(a.ctl.log).includes("Fake-Pass-000") || a.ctl.log.every((e) => e.path === "/ldap-search" || !JSON.stringify(e.body || {}).includes("Fake-Pass")), "пароль ушёл только в запрос поиска");
+    },
+  },
+  {
     id: "UA-C-09", title: "Медленная загрузка доступа: клик «← Все пользователи» не пропадает молча; после ответа переход работает; чужие гранты не подмешиваются",
     async run(t) {
       const a = await openApp();

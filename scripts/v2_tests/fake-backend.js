@@ -2876,9 +2876,18 @@ function createServer(opts) {
     if (search) all = all.filter((r) => r.mark.toLowerCase().includes(search));
     return { total: all.length, rows: all.slice(offset, offset + limit) };
   });
+  route("POST", "/ldap-search", (ctx) => {
+    readGate(ctx, "ldap");
+    const b = ctx.body || {};
+    if (b.password === "неверный") return { ok: false, detail: "Неверный логин или пароль домена" };
+    return { ok: true, limit: 20, users: [
+      { domain_login: "petrov.pv", display_name: "Петров Пётр Петрович", last_name: "Петров", first_name: "Пётр", patronymic: "Петрович", position: "Прораб", department: "СМУ-7", mail: "petrov@qa.local" },
+      { domain_login: "petrova.ap", display_name: "Петрова Анна Павловна", last_name: "Петрова", first_name: "Анна", patronymic: "Павловна", position: "Инженер", department: "ПТО", mail: "petrova@qa.local" },
+    ] };
+  });
   route("GET", "/ldap-settings", (ctx) => {
     readGate(ctx, "ldap");
-    return { config: { enabled: false, host: "ldap.qa.local", port: 389, use_ssl: false, start_tls: false, verify_certificate: true, login_template: "{login}@qa.local", timeout_seconds: 5, base_dn: "" }, domain_users: 0, library_available: true, library_error: null };
+    return { config: { enabled: true, host: "ldap.qa.local", port: 389, use_ssl: false, start_tls: false, verify_certificate: true, login_template: "{login}@qa.local", timeout_seconds: 5, base_dn: "" }, domain_users: 0, library_available: true, library_error: null };
   });
   route("GET", "/admin-guide", (ctx) => {
     readGate(ctx, "backups");
@@ -2945,6 +2954,9 @@ function createServer(opts) {
     (data.settings.revitColors ||= {})[oid] = { preset: REVIT_PRESETS[preset] ? preset : "custom", colors: clean, opacity: num(opacity, 95), glow: num(glow, 100) };
     return deepClone(data.settings.revitColors[oid]);
   });
+  // Обучение (2026-09-21): состояние теста и история попыток — минимальные ответы формы настоящего backend
+  route("GET", "/training/state", () => ({ attempt: null, rating: { attempts: 2, best: 18, total: 20 }, questions_per_attempt: 20 }));
+  route("GET", "/training/attempts", () => ({ user_id: 1, attempts: [] }));
   route("GET", "/training/ratings", () => ({ users: [{ id: 1, name: "QA-Админов", position: "QA", rating: { attempts: 2, best: 18, total: 20 } }, { id: 2, name: "QA-Второй", position: null, rating: null }] }));
   route("GET", "/supplier-changes", (ctx) => {
     const oid = queryValue(ctx, "object_id", { type: "int", required: true });
