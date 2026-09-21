@@ -27,3 +27,17 @@ html.embed-scene .toast-stack { display: none !important; }
 html.embed-scene #app-root { height: 100vh; display: flex; flex-direction: column; }
 html.embed-scene #body { flex: 1 1 auto; min-height: 0; display: flex; }
 html.embed-scene #stage-area { flex: 1 1 auto; min-width: 0; min-height: 0; width: 100%; }
+
+/* Рабочее место МФР: панели фильтров и карточек, шапка и легенда плана рисует оболочка V2; в кадре остаётся холст плана/3D */
+html.embed-scene #mfr-filters-panel,
+html.embed-scene #mfr-filters-panel-resize,
+html.embed-scene #mfr-card-panel,
+html.embed-scene #mfr-card-panel-resize,
+html.embed-scene #mfr-workspace #revit-plan-head,
+html.embed-scene #mfr-workspace #mfr-view-switch,
+html.embed-scene #mfr-workspace #revit-plan-fit,
+html.embed-scene #mfr-workspace #revit-plan-legend,
+html.embed-scene #mfr-workspace #revit-plan-status { display: none !important; }
+html.embed-scene #mfr-workspace > div[style*="padding:10px"] { padding: 0 !important; }
+html.embed-scene #mfr-workspace > div[style*="padding:10px"] > div:first-child { display: none !important; }
+html.embed-scene #mfr-workspace { width: 100%; }

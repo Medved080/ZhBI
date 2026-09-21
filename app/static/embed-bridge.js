@@ -10,7 +10,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · reload
+//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
 (() => {
   "use strict";
@@ -77,6 +77,14 @@
     return Array.from(m);
   }
   function snapshot() {
+    const base = snapshotBase();
+    if (!MFR) return base;
+    const m = mfrSnapshot();
+    return { ...base, mfr: m, hasDrawing: m.hasModel, view: m.mode, loading: !m.hasData && !mfrError, loaded: m.hasData && !mfrError, error: mfrError,
+      total: m.elements, shown: m.elements, selected: null, selectedId: null, multi: null, multiIds: [], excluded: m.filtersActive,
+      statusCounts: [], zones: [] };
+  }
+  function snapshotBase() {
     const cur = (typeof currentObject === "function") ? currentObject() : null;
     const multi = Array.from(state.multiSelectedIds);
     const present = new Set(state.zones.map((z) => z.category));
@@ -110,6 +118,47 @@
     stateTimer = setTimeout(() => { stateTimer = null; post({ evt: "state", state: snapshot() }); }, 40);
   }
 
+
+  // ---------------- рабочее место МФР (ws=mfr): модель Revit — план 2D/3D, этажи, секции, категории, блоки ----------------
+  // Логику отбора и выбора ведёт движок V1 (revitPlanState, обработчики кликов); мост читает его состояние и вызывает те же обработчики.
+  const MFR = EMBED_QUERY.get("ws") === "mfr";
+  let mfrError = null;
+  const byId = (i) => document.getElementById(i);
+  const MFR_LAYERS = { elements: "mfr-show-elements", blocks: "mfr-show-blocks", axes: "mfr-show-axes", facades: "mfr-show-facades",
+    externalFacades: "mfr-show-external-facades", plans: "mfr-show-plans", externalModels: "mfr-show-external-models" };
+  const num = (t) => Number(String(t || "").replace(/\s/g, "")) || 0;
+  function mfrPickList(boxId, kind) {
+    return Array.from(byId(boxId)?.querySelectorAll(`.revit-pick[data-kind="${kind}"]`) || []).map((el) => {
+      const span = el.querySelector("span");
+      const label = Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim();
+      return { id: el.dataset.id, label: label || el.dataset.id, count: span ? num(span.textContent) : 0, on: el.classList.contains("revit-pick-on"),
+        title: el.title || "", warn: el.textContent.includes("⚠") };
+    });
+  }
+  function mfrSnapshot() {
+    const st = revitPlanState;
+    const hasData = !!st.data && st.objectId === state.objectId;
+    const cats = Array.from(document.querySelectorAll("#mfr-elements-categories input[data-mfr-category]")).map((cb) => {
+      const sp = cb.parentElement.querySelector("span");
+      return { category: cb.dataset.mfrCategory, label: cb.dataset.mfrCategory || "(без категории)", count: sp ? num(sp.textContent) : 0, on: cb.checked };
+    });
+    const layers = Object.entries(MFR_LAYERS).map(([key, id]) => {
+      const cb = byId(id);
+      return cb ? { key, on: cb.checked, disabled: cb.disabled, label: cb.parentElement.textContent.replace(/\s+/g, " ").trim() } : null;
+    }).filter(Boolean);
+    const sel = st.selected ? { kind: st.selected.kind, id: st.selected.id } : null;
+    return {
+      hasData, hasModel: !/ещё не загружались/.test(byId("revit-plan-head")?.textContent || ""), head: (byId("revit-plan-head")?.textContent || "").trim(), status: (byId("revit-plan-status")?.textContent || "").trim(),
+      truncated: !!(st.data && st.data.truncated),
+      elements: hasData && st.data.elements ? st.data.elements.length : 0,
+      blocks: hasData ? (st.blocksData || []).filter((b) => b.ok).length : 0,
+      levels: mfrPickList("revit-plan-levels", "level"), sections: mfrPickList("revit-plan-sections", "section"), categories: cats, layers,
+      selected: sel, selectedBlocks: Array.from(st.selectedBlocks || []),
+      filtersActive: (st.levels?.size || 0) + (st.sections?.size || 0) + (st.categories?.size || 0),
+      mode: (document.querySelector("#mfr-view-switch .view-mode-btn.active")?.dataset.mfrMode) || "2d",
+    };
+  }
+
   // ---------------- перехват событий движка (обёртки, поведение движка не меняется) ----------------
   const wrap = (name, make) => {
     const orig = globalThis[name];
@@ -131,6 +180,19 @@
       scheduleState(); sendFilters();
     }
   });
+  if (MFR) {
+    // Карточку элемента/блока рисует панель V2 (читает те же GET-ы), поэтому в кадре сами карточки не строятся: только выбор и подсветка
+    globalThis.showRevitCard = async function (id) {
+      revitPlanState.selected = { kind: "element", id: Number(id) }; mfrHighlightSelection(); scheduleState();
+    };
+    globalThis.renderBlockCard = async function (id) {
+      revitPlanState.selected = { kind: "block", id: Number(id) }; updateBlockGroupUi(); mfrHighlightSelection(); scheduleState();
+    };
+    wrap("revitPlanStatus", (orig) => function (text, isError) { mfrError = isError ? String(text) : null; scheduleState(); return orig.apply(this, arguments); });
+    wrap("loadRevitPlanElements", (orig) => async function () { try { return await orig.apply(this, arguments); } finally { scheduleState(); } });
+    wrap("clearBlockSelection", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); return r; });
+    wrap("applyMfrMode", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); return r; });
+  }
   wrap("applyPlacementFilters", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); return r; });
   wrap("setViewMode", (orig) => async function () { try { return await orig.apply(this, arguments); } finally { scheduleState(); } });
   wrap("showToast", (orig) => function (message, kind) {
@@ -143,8 +205,13 @@
   setInterval(() => {
     // мост может подключиться уже ПОСЛЕ начала первой загрузки: доводим состояние по фактическому наличию схемы
     if (state.elements.length && !loadedOnce) { loadedOnce = true; loading = false; sendFilters(); }
-    const sig = state.objectId + "|" + state.elements.length + "|" + state.selectedId + "|" + state.multiSelectedIds.size + "|"
+    let sig = state.objectId + "|" + state.elements.length + "|" + state.selectedId + "|" + state.multiSelectedIds.size + "|"
       + Array.from(state.multiSelectedIds).slice(0, 40).join(",");
+    if (MFR) {
+      const st = revitPlanState;
+      sig += "|m|" + st.objectId + "|" + (st.data ? st.data.elements.length : -1) + "|" + (st.selected ? st.selected.kind + st.selected.id : "") + "|"
+        + Array.from(st.selectedBlocks || []).join(",") + "|" + st.levels.size + "|" + st.sections.size + "|" + st.categories.size;
+    }
     if (sig !== lastSig) { lastSig = sig; scheduleState(); }
   }, 150);
 
@@ -361,6 +428,65 @@
     getFilters() { sendFilters(); scheduleState(); },
     async reload() { await loadPlan(true); },
   };
+
+  // Команды МФР. Обращения к элементам — только по фиксированным идентификаторам и проверенным значениям.
+  const isIds = (x) => typeof x === "string" && /^\d+(,\d+)*$/.test(x);
+  if (MFR) Object.assign(COMMANDS, {
+    setView(a) {
+      if (!["2d", "3d"].includes(a.mode)) throw new Error("mode");
+      const b = document.querySelector(`#mfr-view-switch [data-mfr-mode="${a.mode}"]`);
+      if (!b) throw new Error("режим недоступен");
+      b.click();
+    },
+    fit() { (viewMode2() === "3d" ? byId("mfr-3d-zoom-reset") : byId("revit-plan-fit")).click(); scheduleState(); },
+    zoom(a) {
+      const f = Number(a.factor);
+      if (!(f > 0.1 && f < 10)) throw new Error("factor");
+      if (viewMode2() === "3d") {
+        if (!mfr3d.camera || !mfr3d.controls) return;
+        const off = mfr3d.camera.position.clone().sub(mfr3d.controls.target).multiplyScalar(f);
+        mfr3d.camera.position.copy(mfr3d.controls.target).add(off);
+        mfr3d.controls.update();
+      } else {
+        const v = revitPlanState.view;
+        if (!v || !revitPlanState.applyView) return;
+        const cx = v.x + v.w / 2, cy = v.y + v.h / 2;
+        v.w *= f; v.h *= f; v.x = cx - v.w / 2; v.y = cy - v.h / 2;
+        revitPlanState.applyView();
+      }
+    },
+    mfrPick(a) {
+      if (!["level", "section"].includes(a.kind) || !isIds(a.id)) throw new Error("параметры");
+      const box = byId(a.kind === "level" ? "revit-plan-levels" : "revit-plan-sections");
+      const el = Array.from(box?.querySelectorAll(".revit-pick") || []).find((x) => x.dataset.kind === a.kind && x.dataset.id === a.id);
+      if (!el) throw new Error("значения нет в списке");
+      el.click();
+    },
+    mfrCategory(a) {
+      if (typeof a.category !== "string" || a.category.length > 200 || typeof a.on !== "boolean") throw new Error("параметры");
+      const cb = Array.from(document.querySelectorAll("#mfr-elements-categories input[data-mfr-category]")).find((x) => x.dataset.mfrCategory === a.category);
+      if (!cb) throw new Error("категории нет в списке");
+      if (cb.checked !== a.on) { cb.checked = a.on; cb.dispatchEvent(new Event("change", { bubbles: true })); }
+    },
+    mfrLayer(a) {
+      if (!Object.prototype.hasOwnProperty.call(MFR_LAYERS, a.layer) || typeof a.on !== "boolean") throw new Error("параметры");
+      const cb = byId(MFR_LAYERS[a.layer]);
+      if (!cb) throw new Error("слоя нет");
+      if (cb.checked !== a.on) { cb.checked = a.on; cb.dispatchEvent(new Event("change", { bubbles: true })); }
+      scheduleState();
+    },
+    mfrReset() { byId("mfr-reset-all-filters").click(); },
+    mfrSelect(a) {
+      if (!["element", "block"].includes(a.kind) || !isInt(a.id)) throw new Error("параметры");
+      return a.kind === "element" ? showRevitCard(a.id) : showBlockCard(a.id, a.additive === true);
+    },
+    clearSelection() { revitPlanState.selectedBlocks.clear(); revitPlanState.selected = null; updateBlockGroupUi(); mfrHighlightSelection(); scheduleState(); },
+    locate() { /* в модели МФР показ на плане не поддержан: элемент виден на плане и подсвечен */ },
+    resetFilters() { byId("mfr-reset-all-filters").click(); },
+    getFilters() { scheduleState(); },
+    search() { post({ evt: "search-result", text: "", total: 0, items: [] }); },
+  });
+  function viewMode2() { return (document.querySelector("#mfr-view-switch .view-mode-btn.active")?.dataset.mfrMode) || "2d"; }
 
   window.addEventListener("message", (e) => {
     if (e.source !== parentWin || e.origin !== ORIGIN) return;

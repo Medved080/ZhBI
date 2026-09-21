@@ -483,6 +483,12 @@ async function renderShell(user, permissions) {
     // Рабочее место со схемой остаётся смонтированным и сам переключает сцену на новый объект (без пересоздания кадра),
     // если экран доступен на новом объекте; иначе — обычный путь (экран недоступен → начальная страница).
     if (cur && cur.impl === "workspace" && allowedScreen(cur) && activeModule?.onObjectChange?.(objectId)) { updateGateNote(cur); return; }
+    // Рабочее место другого типа учёта (ЖБИ ↔ МФР) на новом объекте не применяется — открываем парное, а не начальную страницу.
+    if (cur && cur.impl === "workspace" && !allowedScreen(cur)) {
+      const twin = registry.screens.find((x) => x.impl === "workspace" && x.id !== cur.id && allowedScreen(x)
+        && (cur.ws === "mfr" ? x.ws === "model" : x.ws === "mfr"));
+      if (twin) { openSection(twin.id, { force: true, guarded: true }); return; }
+    }
     if (cur && !isModule(cur)) openSection(currentKey, { force: true, guarded: true });
     else if (currentKey === "home") openSection("home", { force: true, guarded: true });
   });

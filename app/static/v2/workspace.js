@@ -18,6 +18,9 @@ const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
 const TABS = [["props", "Свойства"], ["status", "Статус"], ["filters", "Фильтры"], ["view", "Вид"]];
 // У прораба фильтры — постоянная панель слева (как в V1), поэтому в правой панели вкладки «Фильтры» нет.
 const TABS_FOREMAN = TABS.filter(([k]) => k !== "filters");
+// МФР: свойства блока/элемента модели Revit, фильтры (этажи, секции, категории) и вид (слои, 2D/3D)
+const VIEWS_MFR = [["2d", "2D"], ["3d", "3D"]];
+const TABS_MFR = [["props", "Свойства"], ["filters", "Фильтры"], ["view", "Вид"]];
 const FRAME_TIMEOUT_MS = 45000;
 
 const fmtDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]}` : (v ? String(v) : "—"); };
@@ -29,7 +32,9 @@ const readSess = (k) => { try { return sessionStorage.getItem(k); } catch (e) { 
 export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "model" }) {
   el.className = "v2-page v2-app v2-ws";
   const foreman = ws === "foreman";
-  const tabs = foreman ? TABS_FOREMAN : TABS;
+  const mfr = ws === "mfr";
+  const views = mfr ? VIEWS_MFR : VIEWS;
+  const tabs = mfr ? TABS_MFR : foreman ? TABS_FOREMAN : TABS;
   const WS_TITLE = screen.title;
   let dead = false;
   let curObject = objectId;
@@ -52,8 +57,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   el.innerHTML = `
     <div class="ws-top">
       <div class="ws-title"><strong>${esc(WS_TITLE)}</strong><span class="ws-crumb" id="ws-crumb"></span></div>
-      <div class="ws-seg" role="group" aria-label="Режим схемы" id="ws-modes">${VIEWS.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="false">${t}</button>`).join("")}</div>
-      <div class="ws-search"><input type="search" id="ws-q" placeholder="Найти марку или адрес" aria-label="Найти элемент по марке или адресу" autocomplete="off" maxlength="60"><div class="ws-found" id="ws-found" role="listbox" hidden></div></div>
+      <div class="ws-seg" role="group" aria-label="Режим схемы" id="ws-modes">${views.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="false">${t}</button>`).join("")}</div>
+      ${mfr ? "" : `<div class="ws-search"><input type="search" id="ws-q" placeholder="Найти марку или адрес" aria-label="Найти элемент по марке или адресу" autocomplete="off" maxlength="60"><div class="ws-found" id="ws-found" role="listbox" hidden></div></div>`}
       <span class="ws-spacer"></span>
       <button type="button" class="ws-ibtn" id="ws-nav" title="Показать или скрыть общую навигацию" aria-pressed="true">☰ Навигация</button>
       <button type="button" class="ws-ibtn" id="ws-panel-toggle" title="Свернуть или показать правую панель" aria-pressed="true">Панель ▸</button>
@@ -104,7 +109,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
       filters = m.model; paintPanel();
     } else if (m.evt === "search-result" && Array.isArray(m.items)) {
-      if (m.text === $("#ws-q").value) paintFound(m);
+      if (qInput && m.text === qInput.value) paintFound(m);
     } else if (m.evt === "notice") {
       notice = String(m.message || "").slice(0, 300); paintStatus();
     } else if (m.evt === "cmd-error") {
@@ -158,24 +163,36 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   }
 
   function onScene(s) {
-    const prevSel = sc?.selectedId ?? null;
+    const prevSel = selKey(sc);
     sc = s;
     if (frame) frame.style.visibility = (s.loaded || s.loading) && !s.error ? "visible" : "hidden";
-    if ((s.selectedId ?? null) !== prevSel) loadDetail(s.selectedId ?? null);
+    if (selKey(s) !== prevSel) loadDetail(selKey(s));
     paintAll();
   }
 
+  // Ключ выбора: у ЖБИ — id элемента, у МФР — «вид:id» (элемент или блок модели)
+  function selKey(s) {
+    if (!s) return null;
+    if (mfr) return s.mfr?.selected ? `${s.mfr.selected.kind}:${s.mfr.selected.id}` : null;
+    return s.selectedId ?? null;
+  }
+  function detailUrl(id) {
+    if (!mfr) return `/elements/${id}`;
+    const [kind, n] = String(id).split(":");
+    const obj = sc?.objectId ?? curObject;
+    return kind === "element" ? `/revit-plan/element?object_id=${obj}&element_id=${n}` : `/objects/${obj}/blocks/${n}/card`;
+  }
   async function loadDetail(id) {
     detail.id = id; detail.data = null; detail.error = "";
     const seq = ++detail.seq;
     if (id === null) return;
     try {
-      const d = await api.get(`/elements/${id}`);
+      const d = await api.get(detailUrl(id));
       if (dead || seq !== detail.seq || detail.id !== id) return; // запоздавший ответ прежнего выбора не подменяет текущий
       detail.data = d;
     } catch (e) {
       if (dead || seq !== detail.seq) return;
-      detail.error = e instanceof ApiError ? String(e.detail) : "Не удалось загрузить историю элемента";
+      detail.error = e instanceof ApiError ? String(e.detail) : "Не удалось загрузить карточку";
     }
     paintPanel();
   }
@@ -210,15 +227,20 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     if (sc?.error) {
       html = `<div class="ws-msg ws-msg-bad" role="alert"><strong>Схему не удалось показать.</strong><p>${esc(sc.error)}</p><button type="button" class="v2-btn v2-primary" data-act="retry">Повторить</button></div>`;
     } else if (sc && sc.loaded && !sc.loading && sc.hasDrawing === false) {
-      html = `<div class="ws-msg"><strong>У объекта нет загруженного чертежа.</strong><p>Схему показать нечем: загрузите чертёж в разделе «Обмен данными» текущего интерфейса.</p></div>`;
-    } else if (sc && sc.loaded && !sc.loading && sc.total === 0) {
-      html = `<div class="ws-msg"><strong>В схеме нет элементов.</strong><p>У выбранного объекта чертёж загружен, но элементов в нём нет.</p></div>`;
+      html = mfr
+        ? `<div class="ws-msg"><strong>У объекта нет загруженной модели.</strong><p>Загрузите выгрузку Revit в разделе «Обмен данными» текущего интерфейса.</p></div>`
+        : `<div class="ws-msg"><strong>У объекта нет загруженного чертежа.</strong><p>Схему показать нечем: загрузите чертёж в разделе «Обмен данными» текущего интерфейса.</p></div>`;
+    } else if (sc && sc.loaded && !sc.loading && sc.total === 0 && !(mfr && sc.mfr?.blocks)) {
+      html = mfr
+        ? `<div class="ws-msg"><strong>По выбранному отбору элементов нет.</strong><p>${sc.mfr?.filtersActive ? "Снимите часть фильтров на вкладке «Фильтры»." : "Модель загружена, но элементов в ней нет."}</p>${sc.mfr?.filtersActive ? `<button type="button" class="v2-btn v2-primary" data-act="reset-filters">Сбросить отбор</button>` : ""}</div>`
+        : `<div class="ws-msg"><strong>В схеме нет элементов.</strong><p>У выбранного объекта чертёж загружен, но элементов в нём нет.</p></div>`;
     } else if (!sc || sc.loading || !sc.loaded) {
       html = `<div class="ws-msg ws-msg-load"><span class="ws-spin" aria-hidden="true"></span> Загрузка схемы…</div>`;
     }
     o.innerHTML = html;
     o.hidden = !html;
     o.querySelector('[data-act="retry"]')?.addEventListener("click", () => startFrame());
+    o.querySelector('[data-act="reset-filters"]')?.addEventListener("click", () => send("resetFilters"));
   }
 
   const sw = (status) => sc?.statusColors?.[status] || "#999";
@@ -230,7 +252,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const body = $("#ws-panel-body");
     const keepScroll = body.scrollTop;
     if (!tabs.some(([k]) => k === tab)) tab = "props";
-    body.innerHTML = tab === "props" ? propsHtml() : tab === "status" ? statusHtml() : tab === "filters" ? filtersHtml() : viewHtml();
+    body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? (mfr ? mfrFiltersHtml() : filtersHtml()) : viewHtml();
     body.scrollTop = keepScroll;
     bindPanel(body);
     const left = $("#ws-left-body");
@@ -312,11 +334,66 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }).join("");
   }
 
+
+  // ---- МФР: свойства выбранного блока/элемента модели, отбор по этажам, секциям и категориям
+  const SKIP_CARD = new Set(["параметры", "id", "доли по секциям", "геометрия", "статусы_работ"]);
+  const cardRows = (d) => Object.entries(d).filter(([k, v]) => !SKIP_CARD.has(k) && v !== null && v !== "" && v !== false && typeof v !== "object")
+    .map(([k, v]) => row(k, String(v))).join("");
+  function mfrPropsHtml() {
+    if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Модель загружается…</p>`;
+    const m = sc.mfr;
+    const sel = m.selected;
+    if (!sel) {
+      return `<div class="ws-pad ws-empty"><h3 class="ws-h">Ничего не выбрано</h3>
+        <p class="v2-muted">Нажмите на элемент или блок на плане. Ctrl (⌘) + щелчок добавляет блок к выбору.</p>
+        <dl class="ws-dl">${row("Элементов на плане", m.elements)}${row("Блоков", m.blocks || "")}${row("Отбор", m.filtersActive ? "задан" : "не задан")}</dl></div>`;
+    }
+    const key = `${sel.kind}:${sel.id}`;
+    const d = detail.id === key ? detail.data : null;
+    const many = m.selectedBlocks.length > 1 ? `<p class="v2-muted">Выбрано блоков: ${m.selectedBlocks.length}. Ниже — сведения о последнем выбранном.</p>` : "";
+    const actions = `<div class="ws-actions"><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button></div>`;
+    if (detail.id === key && detail.error) return `<div class="ws-pad"><h3 class="ws-h">${sel.kind === "block" ? "Блок" : "Элемент"}</h3><p class="v2-muted">${esc(detail.error)}</p>${actions}</div>`;
+    if (!d) return `<div class="ws-pad"><h3 class="ws-h">${sel.kind === "block" ? "Блок" : "Элемент"}</h3><p class="v2-muted">Загрузка…</p>${actions}</div>`;
+    if (sel.kind === "block") {
+      const g = d["геометрия"] || {}, st = d["статусы_работ"] || {};
+      const boxes = g.boxes || [];
+      const dim = g.ok && boxes.length ? `${Math.round(Math.max(...boxes.map((b) => b.x1)) - Math.min(...boxes.map((b) => b.x0)))}×${Math.round(Math.max(...boxes.map((b) => b.y1)) - Math.min(...boxes.map((b) => b.y0)))}×${Math.round(g.z1 - g.z0)} мм` : `недоступна: ${g.reason || "не определена"}`;
+      return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc([d["секция"], d["этаж"]].filter(Boolean).join(" · ") || "Блок")}</div><div class="ws-type">Блок модели</div></div>${many}${actions}
+        <h4>Состав</h4><dl class="ws-dl">${row("Элементов модели", d["элементов"])}${row("Помещений", d["помещений"])}${row("Габарит", dim)}</dl>
+        <h4>Виды работ</h4>${st["всего"] ? `<dl class="ws-dl">${row("План", st["план"])}${row("В работе", st["в_работе"])}${row("Выполнено", st["выполнено"])}${row("Всего", st["всего"])}</dl>` : `<p class="v2-muted">Видов работ, адресуемых на блок, не заведено.</p>`}
+        <p class="v2-muted ws-ro">Факт, настройки и сроки работ блока — в текущем интерфейсе.</p></div>`;
+    }
+    const params = Object.entries(d["параметры"] || {});
+    const shares = d["доли по секциям"] || [];
+    return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc(d["имя"] || d["название"] || d["категория"] || "Элемент модели")}</div><div class="ws-type">Элемент модели Revit</div></div>${actions}
+      <h4>Свойства</h4><dl class="ws-dl">${cardRows(d)}</dl>
+      ${shares.length ? `<h4>Доли по секциям</h4><dl class="ws-dl">${shares.map((x) => row(x["код"], x["доля"] != null ? `${x["доля"]}%` : "—")).join("")}</dl>` : ""}
+      ${params.length ? `<h4>Параметры Revit</h4><dl class="ws-dl">${params.map(([k, v]) => row(k, String(v))).join("")}</dl>` : ""}</div>`;
+  }
+
+  function pills(items, kind) {
+    return `<div class="ws-pills">${items.map((it) => `<button type="button" class="ws-pill" data-mpick="${kind}" data-id="${esc(it.id)}" aria-pressed="${it.on}" title="${esc(it.title || it.label)}">${esc(it.label)}${it.warn ? " ⚠" : ""} <em>${it.count}</em></button>`).join("")}</div>`;
+  }
+  function mfrFiltersHtml() {
+    if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Модель загружается…</p>`;
+    const m = sc.mfr;
+    const head = `<div class="ws-fhead"><span>Элементов: ${m.elements}</span><button type="button" class="v2-btn" data-act="reset-filters" ${m.filtersActive ? "" : "disabled"}>Сбросить все</button></div>`;
+    const sec = (id, title, body, note) => `<section class="ws-fgroup"><button type="button" class="ws-fh" data-group="${id}" aria-expanded="${!closedGroups.has(id)}"><span>${closedGroups.has(id) ? "▸" : "▾"} ${esc(title)}</span></button>${closedGroups.has(id) ? "" : `<div class="ws-fbody">${note ? `<p class="v2-muted ws-fnote">${esc(note)}</p>` : ""}${body}</div>`}</section>`;
+    return head
+      + sec("levels", "Этаж", m.levels.length ? pills(m.levels, "level") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все этажи.")
+      + sec("sections", "Секция", m.sections.length ? pills(m.sections, "section") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все секции.")
+      + sec("categories", "Категории элементов", m.categories.length
+        ? m.categories.map((c) => `<label class="ws-check"><input type="checkbox" data-mcat="${esc(c.category)}" ${c.on ? "checked" : ""}> <span>${esc(c.label)}</span><em>${c.count}</em></label>`).join("")
+        : `<p class="v2-muted">Нет данных</p>`);
+  }
+  const closedGroups = new Set();
+
   function viewHtml() {
     const zones = sc?.zones || [];
     return `<div class="ws-pad"><h3 class="ws-h">Режим схемы</h3>
-      <div class="ws-seg ws-seg-wide" role="group" aria-label="Режим схемы">${VIEWS.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="${sc?.view === k}">${t}</button>`).join("")}</div>
-      <p class="v2-muted">2D — плоская схема; 3D — модель; 3D лёгкий — упрощённая модель для слабых компьютеров.</p>
+      <div class="ws-seg ws-seg-wide" role="group" aria-label="Режим схемы">${views.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="${sc?.view === k}">${t}</button>`).join("")}</div>
+      <p class="v2-muted">${mfr ? "2D — план по этажам; 3D — модель здания." : "2D — плоская схема; 3D — модель; 3D лёгкий — упрощённая модель для слабых компьютеров."}</p>
+      ${mfr && sc?.mfr?.layers?.length ? `<h4>Слои</h4>${sc.mfr.layers.map((l) => `<label class="ws-check"><input type="checkbox" data-mlayer="${esc(l.key)}" ${l.on ? "checked" : ""} ${l.disabled ? "disabled" : ""}> <span>${esc(l.label)}</span></label>`).join("")}` : ""}
       ${zones.length ? `<h4>Зоны на схеме</h4>${zones.map((z) => `<label class="ws-check"><input type="checkbox" data-zone="${esc(z.category)}" ${z.on ? "checked" : ""}> <span>${esc(z.category === "Кран" ? "Краны" : "Захватки")}</span></label>`).join("")}` : ""}
       <h4>Масштаб</h4><div class="ws-actions"><button type="button" class="v2-btn" data-tool="fit">Вписать в экран</button></div></div>`;
   }
@@ -330,8 +407,16 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }));
     body.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => tool(b.dataset.tool)));
     body.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => send("setView", { mode: b.dataset.view })));
+    body.querySelectorAll("[data-mpick]").forEach((b) => b.addEventListener("click", () => send("mfrPick", { kind: b.dataset.mpick, id: b.dataset.id })));
+    body.querySelectorAll("[data-mcat]").forEach((c) => c.addEventListener("change", () => send("mfrCategory", { category: c.dataset.mcat, on: c.checked })));
+    body.querySelectorAll("[data-mlayer]").forEach((c) => c.addEventListener("change", () => send("mfrLayer", { layer: c.dataset.mlayer, on: c.checked })));
     body.querySelectorAll("[data-zone]").forEach((c) => c.addEventListener("change", () => send("setZoneVisible", { category: c.dataset.zone, on: c.checked })));
-    body.querySelectorAll("[data-group]").forEach((b) => b.addEventListener("click", () => { const g = b.dataset.group; openGroups.has(g) ? openGroups.delete(g) : openGroups.add(g); paintPanel(); }));
+    body.querySelectorAll("[data-group]").forEach((b) => b.addEventListener("click", () => {
+      const g = b.dataset.group;
+      if (mfr) closedGroups.has(g) ? closedGroups.delete(g) : closedGroups.add(g);
+      else openGroups.has(g) ? openGroups.delete(g) : openGroups.add(g);
+      paintPanel();
+    }));
     body.querySelectorAll("[data-exp]").forEach((b) => b.addEventListener("click", () => { const g = b.dataset.exp; openItems.has(g) ? openItems.delete(g) : openItems.add(g); paintPanel(); }));
     body.querySelectorAll("[data-search]").forEach((i) => i.addEventListener("input", () => {
       groupSearch.set(i.dataset.search, i.value); const pos = i.selectionStart; paintPanel();
@@ -374,8 +459,15 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function paintStatus() {
     const s = $("#ws-status");
     if (!sc || !sc.loaded) { s.textContent = sc?.error ? "Схема не загружена" : "Загрузка схемы…"; return; }
+    if (mfr) {
+      const m = sc.mfr || {};
+      const n = m.selectedBlocks?.length || 0;
+      const selT = n > 1 ? `Выбрано блоков: ${n}` : m.selected ? (m.selected.kind === "block" ? "Выбран блок" : "Выбран элемент") : "Ничего не выбрано";
+      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+      return;
+    }
     const sel = sc.multi?.count > 1 ? `Выбрано: ${sc.multi.count}` : sc.selected ? `Выбран: ${sc.selected.mark || sc.selected.element_type}` : "Ничего не выбрано";
-    s.innerHTML = `<span>Показано <b>${sc.shown}</b> из <b>${sc.total}</b></span><span>${esc(sel)}</span><span>${sc.excluded ? `Фильтры активны: снято ${sc.excluded}` : "Фильтры не заданы"}</span><span>Режим: ${esc((VIEWS.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+    s.innerHTML = `<span>Показано <b>${sc.shown}</b> из <b>${sc.total}</b></span><span>${esc(sel)}</span><span>${sc.excluded ? `Фильтры активны: снято ${sc.excluded}` : "Фильтры не заданы"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
   }
 
   // ---- поиск по марке/адресу (среди показанных на схеме элементов)
@@ -389,23 +481,25 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
         + (m.total > m.items.length ? `<div class="ws-found-more">Показаны первые ${m.items.length} из ${m.total}. Уточните запрос.</div>` : "")
       : `<div class="ws-found-more">Ничего не найдено среди показанных на схеме элементов.</div>`;
   }
-  qInput.addEventListener("input", () => {
-    clearTimeout(qTimer);
-    qTimer = setTimeout(() => send("search", { text: qInput.value }), 250);
-    if (!qInput.value.trim()) { found.hidden = true; found.innerHTML = ""; }
-  });
-  qInput.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { qInput.value = ""; found.hidden = true; }
-    else if (e.key === "Enter") { const b = found.querySelector("button[data-id]"); if (b) { b.click(); e.preventDefault(); } }
-  });
-  found.addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-id]"); if (!b) return;
-    const id = Number(b.dataset.id);
-    send("select", { id }); send("locate", { id });
-    found.hidden = true;
-  });
+  if (qInput) {
+    qInput.addEventListener("input", () => {
+      clearTimeout(qTimer);
+      qTimer = setTimeout(() => send("search", { text: qInput.value }), 250);
+      if (!qInput.value.trim()) { found.hidden = true; found.innerHTML = ""; }
+    });
+    qInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { qInput.value = ""; found.hidden = true; }
+      else if (e.key === "Enter") { const b = found.querySelector("button[data-id]"); if (b) { b.click(); e.preventDefault(); } }
+    });
+    found.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-id]"); if (!b) return;
+      const id = Number(b.dataset.id);
+      send("select", { id }); send("locate", { id });
+      found.hidden = true;
+    });
+  }
   document.addEventListener("pointerdown", onDocDown, true);
-  function onDocDown(e) { if (!found.hidden && !e.target.closest(".ws-search")) found.hidden = true; }
+  function onDocDown(e) { if (found && !found.hidden && !e.target.closest(".ws-search")) found.hidden = true; }
 
   // ------------------------------------------------------------ управление
   $("#ws-modes").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) send("setView", { mode: b.dataset.view }); });
@@ -452,7 +546,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null } : sc;
+      curObject = id; detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },

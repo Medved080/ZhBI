@@ -812,3 +812,11 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-strip { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 12px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 13px; }
 .ws-kpi b { font-size: 15px; }
 .ws-strip .ws-chip { padding: 0 8px; font-size: 12px; }
+.ws-pills { display: flex; flex-wrap: wrap; gap: 5px; }
+.ws-pill { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+.ws-pill em { font-style: normal; color: var(--muted); margin-left: 2px; }
+.ws-pill:hover { background: var(--surface); }
+.ws-pill[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.ws-pill[aria-pressed="true"] em { color: inherit; opacity: .85; }
+.ws-fnote { margin: 0 0 6px; font-size: 12px; }
+.ws-warn { color: var(--bad); }
