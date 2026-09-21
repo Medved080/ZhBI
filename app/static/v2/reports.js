@@ -1,6 +1,7 @@
 // Отображение отчётов V2 (только чтение). Данные — те же ответы `POST /reports/*`, что и у V1: никаких расчётов
 // здесь нет, только вёрстка присланного. Печать, выгрузка в XLSX/PDF и графики V1 в V2 пока не перенесены.
 import { esc } from "./screen-view.js";
+import { EXCHANGE_REPORT_RENDERERS, bindExchangeReport } from "./reports-exchange.js";
 
 const num = (v) => (v == null ? "" : typeof v === "number" ? v.toLocaleString("ru-RU") : String(v));
 const dateRu = (v) => {
@@ -177,10 +178,11 @@ function blockStatusReport(data, state) {
       ${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${shown.length} из ${rows.length}.</p>` : ""}` : `<p class="v2-muted">Операций с данными нет.</p>`}`;
 }
 
-export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport, mywork: myworkReport, linear: linearTrackReport, blocksched: blockScheduleReport, blockstatus: blockStatusReport };
+export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport, mywork: myworkReport, linear: linearTrackReport, blocksched: blockScheduleReport, blockstatus: blockStatusReport, ...EXCHANGE_REPORT_RENDERERS };
 
 // Взаимодействие: сворачивание узлов дерева, страницы перечня. Возвращает true, если надо перерисовать.
 export function bindReport(name, root, state, repaint) {
+  bindExchangeReport(name, root, state, repaint);   // «График поставки» и «График контрактации и поставки» (reports-exchange.js)
   if (name === "status") {
     root.querySelectorAll(".v2-tree-toggle").forEach((b) => b.addEventListener("click", () => {
       const p = b.dataset.path;
