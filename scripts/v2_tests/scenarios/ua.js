@@ -351,27 +351,21 @@ export const tests = [
     },
   },
   {
-    id: "UA-C-08", title: "Блок «Диагностика…»: ссылка несёт выбранного пользователя (форма V1, вкладка «Вход и безопасность»), защищена от потери несохранённого, у не-администраторов пользователей её нет",
+    id: "UA-C-08", title: "Вкладка «Вход и безопасность»: блоки пароля, сеансов и «Зайти под пользователем» вместо ссылки в V1; без права изменять пользователей отладки нет",
     async run(t) {
       const a = await openApp();
-      const u = await openCard(a, "qa.noaccess", "security");
-      await waitFor(() => a.$("#v2-content [data-v1-link]"), { what: "ссылка в V1" });
-      t.has(lastText(a), "доступны в текущем интерфейсе", "сказано, что функции остаются в V1");
-      t.eq(a.$("#v2-content [data-v1-link]").getAttribute("href"), `/?ui=v1&open=user-security&user_id=${u.id}`, "ссылка ведёт к форме ИМЕННО этого пользователя, а не на главный экран V1");
-      t.has(lastText(a), "вкладка «Вход и безопасность»", "пользователю сказано, что откроется");
-      // несохранённое: ссылка не уводит молча
-      a.setValue(a.$("#sec-login"), "qa.noaccess.changed");
-      await waitFor(() => a.$("#card-save"), { what: "подвал" });
-      a.click(a.$("#v2-content [data-v1-link]"));
-      await waitFor(() => a.dialog(), { what: "диалог несохранённого" });
-      t.eq(a.$$(".v2-dialog button").map((b) => b.textContent.trim()), ["Остаться", "Не сохранять", "Сохранить и продолжить"], "три варианта");
-      await a.answerDialog("Остаться");
-      t.ok(a.$("#v2-content [data-v1-link]") && a.$("#sec-login").value === "qa.noaccess.changed", "«Остаться» — остаёмся в V2, ввод цел");
-      // право «только чтение»: ссылки нет, объяснение есть
+      await openCard(a, "qa.noaccess", "security");
+      await waitFor(() => a.$("#sec-impersonate"), { what: "кнопка отладки" });
+      t.ok(!a.$("#v2-content [data-v1-link]"), "ссылки «Открыть в текущем интерфейсе» больше нет: операции выполняются здесь");
+      t.has(lastText(a), "Зайти под пользователем", "есть отладка прав");
+      t.ok(a.$("#sec-sessions"), "блок «Сеансы пользователя» есть");
+      t.ok(a.$("#sec-pass") && a.$("#sec-pass2"), "форма пароля: новый и повтор");
+      t.has(lastText(a), "Не короче", "требования к паролю показаны");
+      // право «только чтение»: изменять и отлаживать нельзя
       const r = await openApp({ perm: "readonly" });
       await openCard(r, "qa.noaccess", "security");
       await a.settle(60);
-      t.ok(!r.$("#v2-content [data-v1-link]"), "без права изменять пользователей ссылки нет");
+      t.ok(!r.$("#sec-impersonate"), "без права изменять пользователей «Зайти под пользователем» нет");
       t.has(lastText(r), "право изменять пользователей", "сказано, почему");
     },
   },

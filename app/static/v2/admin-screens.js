@@ -64,4 +64,4 @@ const SCREENS = {
 };
 
 export function hasAdminScreen(impl) { return Object.prototype.hasOwnProperty.call(SCREENS, impl); }
-export function mountAdminScreen(el, ctx) { return SCREENS[ctx.screen.impl](el, ctx); }
+export function mountAdminScreen(el, ctx, key) { return SCREENS[key || ctx.screen.impl](el, ctx); }

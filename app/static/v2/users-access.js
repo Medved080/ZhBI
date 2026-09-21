@@ -822,14 +822,74 @@ export function mountUsersAccess(container, ctx) {
         </label>
       </div>
       <p class="v2-note">Системная роль — только про ведение сервиса. Права на стройках — вкладка «Доступ к объектам».${u.id === currentUser.id && u.role === "admin" ? " Роль администратора сервиса с самого себя снять нельзя: вернуть её будет некому — это может сделать другой администратор." : ""}</p>
+      ${canWriteUsers ? `<div class="v2-inline">${btn("Найти в домене…", 'id="pf-domain-search" disabled title="Проверяем, включена ли доменная авторизация…"')}</div><div id="pf-domain-panel"></div>` : ""}
     `;
     if (!canWriteUsers) return;
+    const dsBtn = panel.querySelector("#pf-domain-search");
+    ensureLdapEnabled().then((on) => {
+      if (!dsBtn.isConnected) return;
+      dsBtn.disabled = !on;
+      dsBtn.title = on ? "Найти человека в каталоге домена и подставить его данные в пустые поля" : "Доменная авторизация выключена — включите её в «Администрирование → Доменная авторизация»";
+    });
+    dsBtn.addEventListener("click", () => mountDomainSearch(panel.querySelector("#pf-domain-panel"), {
+      getFields: () => ({ query: d.domain_login || d.last_name }),
+      onPick: (found) => {
+        // Пустые поля заполняем, заполненные НЕ трогаем: человека мог завести администратор с уточнениями, которых в каталоге нет.
+        const set = (field, id, value) => { if (value && !String(d[field] || "").trim()) { d[field] = value; panel.querySelector(id).value = value; } };
+        if (found.domain_login) { d.domain_login = found.domain_login; }
+        set("last_name", "#pf-last", found.last_name); set("first_name", "#pf-first", found.first_name); set("patronymic", "#pf-patr", found.patronymic);
+        set("position", "#pf-pos", found.position); set("department", "#pf-dept", found.department);
+        markCardDirty();
+        status.textContent = `Взято из домена: ${found.display_name || found.domain_login}. Проверьте поля и нажмите «Сохранить».`;
+      },
+    }));
     const bind = (id, field) => panel.querySelector(id).addEventListener("input", (e) => {
       d[field] = e.target.value; markCardDirty();
     });
     bind("#pf-last", "last_name"); bind("#pf-first", "first_name"); bind("#pf-patr", "patronymic");
     bind("#pf-pos", "position"); bind("#pf-dept", "department");
     panel.querySelector("#pf-role").addEventListener("change", (e) => { d.role = e.target.value; markCardDirty(); });
+  }
+
+  // ---------- Поиск человека в каталоге домена (как в V1: «Найти в домене»): логин и пароль ЭТОГО администратора вводит человек, они уходят только
+  // на поиск и нигде не сохраняются; найденное подставляется в ПУСТЫЕ поля карточки, заполненные не трогаются. ----------
+  let ldapEnabled = null;
+  async function ensureLdapEnabled() {
+    if (ldapEnabled === null) { try { ldapEnabled = !!(await api.get("/ldap-settings")).config.enabled; } catch (e) { ldapEnabled = false; } }
+    return ldapEnabled;
+  }
+  function mountDomainSearch(host, { getFields, onPick }) {
+    host.innerHTML = `<div class="v2-result"><h4>Найти человека в домене</h4>
+      <p class="v2-muted">Введите свои доменные логин и пароль (они нигде не сохраняются) и часть фамилии или логина искомого.</p>
+      <div class="v2-fields"><label class="v2-field">Ваш доменный логин<input id="lds-login" autocomplete="off" value="${escapeHtml(currentUser.domain_login || "")}"></label>
+        <label class="v2-field">Ваш доменный пароль<input id="lds-pass" type="password" autocomplete="new-password"></label>
+        <label class="v2-field v2-span">Кого искать<input id="lds-query" autocomplete="off" value="${escapeHtml(getFields?.().query || "")}"></label></div>
+      <div class="v2-auth-error" id="lds-error" role="alert"></div>
+      <div class="v2-inline">${btn("Искать", 'id="lds-run"', true)}${btn("Закрыть", 'id="lds-close"')}</div><div id="lds-results" aria-live="polite"></div></div>`;
+    const $ = (sel) => host.querySelector(sel);
+    let busy = false;
+    async function run() {
+      if (busy) return;
+      $("#lds-error").textContent = "";
+      const login = $("#lds-login").value.trim(), password = $("#lds-pass").value, query = $("#lds-query").value.trim();
+      if (!login || !password) { $("#lds-error").textContent = "Введите свои доменные логин и пароль"; return; }
+      if (query.length < 2) { $("#lds-error").textContent = "Введите хотя бы два символа"; return; }
+      busy = true; $("#lds-run").disabled = true; $("#lds-results").innerHTML = `<p class="v2-muted" role="status">Ищем…</p>`;
+      try {
+        const res = await api.post("/ldap-search", { login, password, query });
+        if (!res.ok) { $("#lds-error").textContent = res.detail; $("#lds-results").innerHTML = ""; return; }
+        const users = res.users || [];
+        $("#lds-results").innerHTML = users.length ? users.map((u, i) => `<div class="v2-perm"><div><strong>${escapeHtml(u.display_name || u.domain_login)}</strong><small>${escapeHtml(u.domain_login)} · ${escapeHtml([u.position, u.department, u.mail].filter(Boolean).join(" · ") || "—")}</small></div>
+          ${btn("Взять в карточку", `data-lds-pick="${i}"`)}</div>`).join("") + (users.length >= res.limit ? `<p class="v2-muted">Показаны первые ${res.limit} — уточните запрос.</p>` : "")
+          : `<p class="v2-muted">Никого не нашлось. Попробуйте фамилию или логин целиком.</p>`;
+        $("#lds-results").querySelectorAll("[data-lds-pick]").forEach((b) => b.addEventListener("click", () => { onPick(users[Number(b.dataset.ldsPick)]); host.innerHTML = ""; }));
+      } catch (err) { $("#lds-error").textContent = err.detail || err.message || "Не удалось выполнить поиск"; $("#lds-results").innerHTML = ""; }
+      finally { busy = false; $("#lds-pass").value = ""; if ($("#lds-run")) $("#lds-run").disabled = false; }   // пароль не остаётся в поле после поиска
+    }
+    $("#lds-run").addEventListener("click", run);
+    $("#lds-query").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } });
+    $("#lds-close").addEventListener("click", () => { $("#lds-pass").value = ""; host.innerHTML = ""; });
+    $("#lds-pass").focus();
   }
 
   // Политика пароля читается с сервера (GET /password-policy) — правило одно, в `auth.validate_password_strength`; здесь оно только показывается.

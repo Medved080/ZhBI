@@ -2721,6 +2721,10 @@ function createServer(opts) {
     row.label_color = c === null ? null : String(c).trim();
     return userOut(row);
   });
+  // Администрирование (2026-09-21): требования к паролю, сеансы человека и «Мой доступ» — минимальные ответы формы настоящего backend
+  route("GET", "/password-policy", () => ({ min_length: 8, need_letters: true, need_digits: true, text: "Не короче 8 символов, обязательно и буквы, и цифры." }));
+  route("GET", "/users/:id/sessions", () => ({ sessions: [] }));
+  route("GET", "/me/access-summary", (ctx) => ({ user_id: ctx.user?.id ?? 1, system_admin: !!ctx.user?.system_admin, all_projects_roles: [], projects: [], totals: { projects: 0, objects: 0 } }));
   route("GET", "/me/sessions", () => ({ sessions: deepClone(sessionsOf()), idle_hours: 12, ttl_days: 30 }));
   route("DELETE", "/me/sessions/:id", (ctx) => {
     const list = sessionsOf(), i = list.findIndex((x) => x.id === ctx.params.id);
