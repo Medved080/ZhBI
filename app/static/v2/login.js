@@ -3,7 +3,8 @@
 // здесь только форма поверх тех же эндпоинтов, что уже использует V1
 // (POST /login, POST /me/change-password) — без своей копии правил.
 import { ApiError } from "./api.js";
-import { EXPERIMENTAL_NOTICE, checkWrite } from "./write-gate.js";
+import { EXPERIMENTAL_NOTICE } from "./write-gate.js";
+import { mountPasswordForm } from "./password-form.js";
 
 export async function renderLogin(root, { api, onSuccess }) {
   root.innerHTML = `
@@ -46,52 +47,24 @@ export async function renderLogin(root, { api, onSuccess }) {
   });
 }
 
-export async function renderChangePassword(root, { api, onSuccess }) {
-  // Смена пароля отключена политикой ограниченного выпуска (пароли — только в текущем интерфейсе): вместо формы —
-  // объяснение и переход, чтобы человек не вводил пароли в экран, который всё равно откажет.
-  if (!checkWrite("POST", "/me/change-password", {}).allowed) {
-    root.innerHTML = `
-      <div class="v2-auth-screen">
-        <div class="v2-auth-card">
-          <h2>Смена пароля</h2>
-          <small>${EXPERIMENTAL_NOTICE}.</small>
-          <p>Перед продолжением нужно задать свой пароль. В экспериментальном интерфейсе эта операция отключена — выполните её в текущем интерфейсе: войдите там, и система предложит задать новый пароль.</p>
-          <p><a class="v2-btn v2-primary" href="/?ui=v1">Открыть текущий интерфейс</a></p>
-        </div>
-      </div>`;
-    return;
-  }
+export async function renderChangePassword(root, { api, onSuccess, user }) {
+  // Обязательная смена пароля после входа: администратор задал временный пароль. Форма — общая с разделом «Сменить пароль»
+  // (password-form.js); пока пароль не заменён, сервер не пускает никуда, кроме /me, смены пароля, политики и выхода.
   root.innerHTML = `
     <div class="v2-auth-screen">
       <div class="v2-auth-card">
         <h2>Смена пароля</h2>
         <small>Администратор задал временный пароль — перед продолжением задайте свой</small>
-        <form id="v2-pwd-form">
-          <label class="v2-field">Текущий пароль
-            <input id="v2-pwd-cur" type="password" autocomplete="current-password" required>
-          </label>
-          <label class="v2-field">Новый пароль
-            <input id="v2-pwd-new" type="password" autocomplete="new-password" required>
-          </label>
-          <div class="v2-auth-error" id="v2-pwd-error" role="alert"></div>
-          <button type="submit" class="v2-btn v2-primary">Сменить пароль</button>
-        </form>
+        <div id="v2-pwd-host"></div>
       </div>
     </div>`;
-
-  root.querySelector("#v2-pwd-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const errorEl = root.querySelector("#v2-pwd-error");
-    errorEl.textContent = "";
-    try {
-      const user = await api.post("/me/change-password", {
-        current_password: root.querySelector("#v2-pwd-cur").value,
-        new_password: root.querySelector("#v2-pwd-new").value,
-      });
-      onSuccess(user);
-    } catch (err) {
-      errorEl.textContent = err instanceof ApiError ? String(err.detail) : "Не удалось сменить пароль";
-    }
+  mountPasswordForm(root.querySelector("#v2-pwd-host"), {
+    api, user, forced: true,
+    onSuccess: (u) => onSuccess(u),
+    onLogout: async () => {
+      try { await api.post("/logout", {}); } catch (e) { /* сеанс мог уже истечь — выход всё равно выполняется */ }
+      location.reload();
+    },
   });
 }
 

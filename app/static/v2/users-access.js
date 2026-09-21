@@ -11,7 +11,7 @@
 // ошибки записи и ошибки последующего обновления экрана, единая
 // центрированная колонка заголовка/вкладок/содержимого/подвала, поиск
 // объекта в «Проверке доступа» вместо плоского списка.
-import { resolveDirty as sharedResolveDirty, showConfirmDialog } from "./dialogs.js";
+import { resolveDirty as sharedResolveDirty, showConfirmDialog, showInfoDialog } from "./dialogs.js";
 
 const ROLE_LABELS = { user: "Пользователь", view: "Просмотр", admin: "Администратор" };
 const LEVELS = ["none", "read", "write"];
@@ -356,6 +356,29 @@ export function mountUsersAccess(container, ctx) {
     }
   }
 
+  // Отказ 409 «Ничего не сохранено» (запись изменил кто-то другой): предлагаем перечитать актуальные данные. Правки при этом отбрасываются —
+  // человек сам выбирает это кнопкой, а не получает молчаливую перезапись чужого.
+  function isStaleConflict(err) { return !!err && err.status === 409 && /Ничего не сохранено|уже изменил|изменились с момента/.test(err.detail || ""); }
+  function offerReload(err) {
+    if (!isStaleConflict(err)) return false;
+    let b = footActions.querySelector("#ua-stale-reload");
+    if (!b) {
+      b = document.createElement("button");
+      b.type = "button"; b.id = "ua-stale-reload"; b.className = "v2-btn";
+      footActions.prepend(b);
+    }
+    b.textContent = "Перечитать актуальные данные (мои правки будут отброшены)";
+    b.onclick = async () => {
+      b.disabled = true;
+      clearDirtyState(); clearRoleFormDirty();
+      state.cardDirty = false; state.cardDraft = null; state.pendingPassword = null;
+      state.access = null; state.accessDirty = false; state.rolesDraft.clear();
+      state.users = null; state.accessMatrix = null; state.roles = null; state.status = "Данные перечитаны";
+      await render();
+    };
+    return true;
+  }
+
   async function render() {
     // Защита от прямого попадания на недоступную вкладку (например,
     // предыдущее состояние осталось от другого набора прав).
@@ -620,6 +643,7 @@ export function mountUsersAccess(container, ctx) {
   // пароль и наоборот (оба поля живут на одной вкладке одновременно).
   async function saveCardAndPasswordOrThrow() {
     const u = currentUserBeingEdited();
+    let serverNote = "";   // «сервер сохранил, хотя ответ не дошёл» — переживает итоговую строку статуса
     if (state.cardDirty) {
       // Issue 2.2 — снимок значений на момент отправки: PATCH уходит с
       // ЭТИМИ значениями; если поля правились дальше, пока запрос был в
@@ -627,12 +651,38 @@ export function mountUsersAccess(container, ctx) {
       // дизейбл почему-то не сработал), сверяем черновик СЕЙЧАС со
       // снимком и снимаем cardDirty, только если ничего не изменилось.
       const snapshot = { ...state.cardDraft };
-      const updated = await api.patch(`/users/${u.id}`, {
+      if (!(await confirmLocalAdminLoss(u, { role: snapshot.role, auth_method: snapshot.auth_method, has_password: snapshot.auth_method === "domain" ? false : u.has_password },
+        `Вы сохраняете правку «${u.display_name}» (роль «${ROLE_LABELS[snapshot.role] || snapshot.role}», вход: ${snapshot.auth_method === "domain" ? "домен" : "пароль сервиса"}).`))) {
+        throw Object.assign(new Error("Сохранение отменено"), { detail: "Сохранение отменено" });
+      }
+      const sent = {
         last_name: snapshot.last_name.trim(), first_name: snapshot.first_name.trim(),
         patronymic: snapshot.patronymic.trim() || null, position: snapshot.position.trim() || null,
         department: snapshot.department.trim() || null, domain_login: snapshot.domain_login.trim(),
         role: snapshot.role, auth_method: snapshot.auth_method, must_change_password: snapshot.must_change_password,
-      });
+        // Версия записи, которую форма видела при открытии: если её за это время изменил кто-то другой, сервер откажет 409
+        // («Ничего не сохранено») вместо молчаливой перезаписи чужой правки.
+        expected_version: u.version,
+      };
+      let updated;
+      try {
+        updated = await api.patch(`/users/${u.id}`, sent);
+      } catch (err) {
+        if (!(err && (err.status === 0 || err.status >= 500))) throw err;
+        // Исход неизвестен (обрыв связи, 5xx): повторно НЕ отправляем, а читаем запись с сервера и сверяем с тем, что отправляли.
+        let fresh = null;
+        try { fresh = (await api.get("/users")).find((x) => x.id === u.id) || null; } catch (e) { /* нет связи — сверить нечем */ }
+        const same = fresh && ["last_name", "first_name", "patronymic", "position", "department", "domain_login", "role", "auth_method"].every((k) => (fresh[k] || null) === (sent[k] || null))
+          && !!fresh.must_change_password === (sent.auth_method === "domain" ? false : !!sent.must_change_password);
+        if (!same) {
+          throw Object.assign(new Error(err.detail), { status: err.status, detail: fresh
+            ? `${err.detail} На сервере правка не найдена — можно нажать «Сохранить» ещё раз.`
+            : `${err.detail} Неизвестно, сохранена ли правка: проверьте связь и обновите карточку.` });
+        }
+        updated = fresh;   // сервер выполнил операцию, хотя ответ не дошёл
+        serverNote = "Сервер сохранил изменения, хотя ответ не дошёл.";
+        state.users = (state.users || []).map((x) => (x.id === u.id ? fresh : x));
+      }
       Object.assign(u, updated);
       // Поля показывают то, что подтвердил сервер (клиент отправил значения без пробелов по краям, пустое — как
       // «не указано»); поля, которые успели изменить ПОСЛЕ отправки, не затираем и оставляем несохранёнными.
@@ -645,6 +695,9 @@ export function mountUsersAccess(container, ctx) {
       if (!keptNewer) state.cardDirty = false;
     }
     if (state.pendingPassword) {
+      if (state.pendingPassword.repeat !== undefined && state.pendingPassword.repeat !== state.pendingPassword.password) {
+        throw Object.assign(new Error("Пароли не совпадают"), { detail: "Пароли не совпадают — повторите ввод нового пароля" });
+      }
       // Та же защита: если поле пароля успели тронуть заново, пока шёл
       // запрос, state.pendingPassword — уже ДРУГОЙ объект (trackPending
       // создаёт новый при каждом input), и по ссылке это видно без
@@ -668,7 +721,7 @@ export function mountUsersAccess(container, ctx) {
     const ok = await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
     state.status = !ok ? "Изменения сохранены, но не удалось обновить отображение."
       : (state.cardDirty || state.pendingPassword) ? "Сохранено. Есть новые несохранённые изменения."
-      : "Сохранено";
+      : (serverNote || "Сохранено");
   }
 
   function setCardFieldsDisabled(disabled) {
@@ -713,7 +766,7 @@ export function mountUsersAccess(container, ctx) {
     }));
     const panel = body.querySelector("#ua-edit-panel");
     if (state.editTab === "profile") renderProfile(panel, u);
-    else if (state.editTab === "security") renderSecurity(panel, u);
+    else if (state.editTab === "security") { await ensurePasswordPolicy(); renderSecurity(panel, u); }
     else await renderAccess(panel, u);
     if ((state.editTab === "profile" || state.editTab === "security") && canWriteUsers) {
       renderCardFooter();
@@ -748,6 +801,7 @@ export function mountUsersAccess(container, ctx) {
         status.textContent = state.status;
         saveBtn.disabled = false; cancelBtn.disabled = false;
         setCardFieldsDisabled(false);
+        offerReload(err);
       }
     });
   }
@@ -763,11 +817,11 @@ export function mountUsersAccess(container, ctx) {
         <label class="v2-field">Должность<input id="pf-pos" value="${escapeHtml(d.position)}" ${canWriteUsers ? "" : "disabled"}></label>
         <label class="v2-field v2-span">Подразделение<input id="pf-dept" value="${escapeHtml(d.department)}" ${canWriteUsers ? "" : "disabled"}></label>
         <label class="v2-field v2-span">Системная роль
-          <select id="pf-role" ${canWriteUsers ? "" : "disabled"}>${Object.entries(ROLE_LABELS)
+          <select id="pf-role" ${canWriteUsers && !(u.id === currentUser.id && u.role === "admin") ? "" : "disabled"}>${Object.entries(ROLE_LABELS)
             .map(([v, l]) => `<option value="${v}" ${d.role === v ? "selected" : ""}>${l}</option>`).join("")}</select>
         </label>
       </div>
-      <p class="v2-note">Системная роль — только про ведение сервиса. Права на стройках — вкладка «Доступ к объектам».</p>
+      <p class="v2-note">Системная роль — только про ведение сервиса. Права на стройках — вкладка «Доступ к объектам».${u.id === currentUser.id && u.role === "admin" ? " Роль администратора сервиса с самого себя снять нельзя: вернуть её будет некому — это может сделать другой администратор." : ""}</p>
     `;
     if (!canWriteUsers) return;
     const bind = (id, field) => panel.querySelector(id).addEventListener("input", (e) => {
@@ -778,9 +832,116 @@ export function mountUsersAccess(container, ctx) {
     panel.querySelector("#pf-role").addEventListener("change", (e) => { d.role = e.target.value; markCardDirty(); });
   }
 
+  // Политика пароля читается с сервера (GET /password-policy) — правило одно, в `auth.validate_password_strength`; здесь оно только показывается.
+  let passwordPolicy = null;
+  async function ensurePasswordPolicy() {
+    if (passwordPolicy) return passwordPolicy;
+    try { passwordPolicy = await api.get("/password-policy"); } catch (e) { passwordPolicy = { text: "" }; }
+    return passwordPolicy;
+  }
+
+  // Останется ли после правки хоть один администратор, способный войти БЕЗ домена (та же проверка, что «запретСервисОтАдминистраторов» в V1):
+  // если нет, при сбое домена чинить систему будет некому, и восстанавливать придётся на самом сервере.
+  function leavesNoLocalAdmin(userId, after) {
+    const list = (state.users || []).map((x) => (x.id === userId ? { ...x, ...after } : x));
+    return !list.some((x) => x.role === "admin" && x.auth_method !== "domain" && x.has_password);
+  }
+  async function confirmLocalAdminLoss(u, after, what) {
+    if (leavesNoLocalAdmin(u.id, {})) return true;            // и до правки такого администратора не было — не наша забота
+    if (!leavesNoLocalAdmin(u.id, after)) return true;
+    const ok = await showConfirmDialog(
+      `${what}\n\nПосле этой правки ни один администратор сервиса не сможет войти без домена. Если домен окажется недоступен или настроен неверно, `
+      + "зайти и починить будет некому — учётную запись придётся восстанавливать на самом сервере (scripts/reset_password.py).\n\nВсё равно сохранить?",
+      { confirmLabel: "Всё равно сохранить", danger: true, multiline: true });
+    return ok;
+  }
+
+  // Сеансы пользователя (для администратора): список, завершение одного и всех. Неизвестный исход не повторяется — список перечитывается.
+  function mountUserSessions(host, u) {
+    const st = { data: null, error: "", busy: false, note: "" };
+    const when = (v) => (v ? String(v).replace("T", " ").slice(0, 16) : "—");
+    function paint() {
+      if (!host.isConnected) return;
+      if (!st.data) {
+        host.innerHTML = st.error ? `<p class="v2-note" role="alert"></p>` : `<p class="v2-muted" role="status">Загрузка…</p>`;
+        if (st.error) host.querySelector("p").textContent = st.error;
+        return;
+      }
+      const rows = st.data.sessions || [];
+      host.innerHTML = `
+        <p class="v2-muted">Активных сеансов: ${rows.length}. Завершение сеанса не меняет пароль: человек просто войдёт заново.</p>
+        ${rows.length ? `<table class="v2-table"><thead><tr><th>Начат</th><th>Активность</th><th>IP</th><th>Браузер</th><th></th></tr></thead><tbody>
+          ${rows.map((r) => `<tr><td>${escapeHtml(when(r.created_at))}${r.impersonated_by ? `<small>режим «от имени», открыл ${escapeHtml(r.impersonated_by)}</small>` : ""}</td><td>${escapeHtml(when(r.last_seen_at))}</td><td>${escapeHtml(r.ip || "")}</td><td>${escapeHtml(String(r.user_agent || "").slice(0, 60))}</td>
+            <td class="v2-row-action">${canWriteUsers ? `<button type="button" class="v2-link" data-end-session="${escapeHtml(r.id)}" ${st.busy ? "disabled" : ""}>Завершить</button>` : ""}</td></tr>`).join("")}</tbody></table>` : ""}
+        <div class="v2-inline" style="margin-top:8px">${btn("Обновить", 'data-sessions-refresh')}${canWriteUsers && rows.length ? btn(`Завершить все сеансы (${rows.length})`, `data-end-all ${st.busy ? "disabled" : ""}`) : ""}</div>
+        <div class="v2-muted" role="status" aria-live="polite" data-sessions-note>${escapeHtml(st.note)}</div>`;
+    }
+    async function load() {
+      try { st.data = await api.get(`/users/${u.id}/sessions`); st.error = ""; return true; }
+      catch (err) { if (!st.data) st.error = err.status === 403 ? "Нет права смотреть сеансы пользователей (раздел «Сеансы пользователей»)." : (err.detail || "Не удалось получить сеансы"); else st.note = `Список не обновился: ${err.detail || err.message}`; return false; }
+      finally { paint(); }
+    }
+    async function act(fn, okText, verify) {
+      if (st.busy) return;
+      st.busy = true; st.note = "Выполняется…"; paint();
+      try { await fn(); st.note = okText; }
+      catch (err) {
+        if (err.status === 404) st.note = "Уже завершён — список обновлён.";
+        else if (err.status === 0 || err.status >= 500) {
+          // исход неизвестен: повторно не отправляем, а сверяемся с сервером
+          st.busy = false; const ok = await load();
+          st.note = ok && verify() ? "Сервер выполнил операцию, хотя ответ не дошёл." : `Неизвестно, выполнена ли операция (${err.detail || err.message}). Проверьте список.`;
+          st.busy = false; paint(); return;
+        } else st.note = err.detail || "Не удалось выполнить";
+      }
+      st.busy = false;
+      const ok = await load();
+      if (!ok) st.note += " Список обновить не удалось — нажмите «Обновить».";
+      paint();
+    }
+    host.addEventListener("click", async (e) => {
+      if (e.target.closest("[data-sessions-refresh]")) { await load(); return; }
+      const one = e.target.closest("[data-end-session]");
+      if (one && !st.busy) {
+        const id = one.dataset.endSession;
+        const r = st.data.sessions.find((x) => x.id === id);
+        if (!(await showConfirmDialog(`Завершить сеанс «${u.display_name}» с IP ${r?.ip || "?"}, начатый ${when(r?.created_at)}? На том устройстве придётся войти заново.`, { confirmLabel: "Завершить", danger: true }))) return;
+        await act(() => api.delete(`/sessions/${encodeURIComponent(id)}`), "Сеанс завершён.", () => !st.data.sessions.some((x) => x.id === id));
+        return;
+      }
+      if (e.target.closest("[data-end-all]") && !st.busy) {
+        const n = st.data.sessions.length;
+        if (!(await showConfirmDialog(`Завершить ВСЕ сеансы «${u.display_name}» (${n})? Пароль не меняется; человек войдёт заново.`, { confirmLabel: `Завершить все (${n})`, danger: true }))) return;
+        await act(() => api.delete(`/users/${u.id}/sessions`), `Завершено сеансов: ${n}.`, () => !st.data.sessions.length);
+      }
+    });
+    load();
+  }
+
+  // «Зайти под пользователем» (отладка чужих прав): сервер выдаёт отладочный сеанс, а вкладка открывается в текущем интерфейсе — только он умеет
+  // подставлять токен во ВСЕ обращения к серверу (в V2 рабочие места — вложенные кадры со своими запросами, и часть запросов ушла бы от имени администратора).
+  async function startImpersonation(u, statusEl) {
+    if (!(await showConfirmDialog(
+      `Открыть новую вкладку и работать в ней от имени «${u.display_name}»?\n\nВы увидите систему ровно так, как её видит этот человек. Всё, что будет изменено в этой вкладке, попадёт в журнал `
+      + "с отметкой, что это сделали вы от его имени, — и в историю статусов изделий тоже.", { confirmLabel: "Открыть вкладку", multiline: true }))) return;
+    const tab = window.open("", "_blank");   // сразу по клику: после await браузер посчитал бы это всплывающим окном
+    try {
+      const res = await api.post(`/users/${u.id}/impersonate`, {});
+      if (!tab) { statusEl.textContent = "Браузер заблокировал новую вкладку — разрешите всплывающие окна для этого сайта и повторите."; return; }
+      tab.location.href = `/#impersonate=${encodeURIComponent(res.token)}`;
+      statusEl.textContent = `Открыта вкладка от имени «${res.display_name}» (режим закроется сам через ${res.ttl_hours} ч).`;
+    } catch (err) {
+      if (tab) tab.close();
+      statusEl.textContent = err.detail || "Не удалось открыть режим";
+    }
+  }
+
   function renderSecurity(panel, u) {
     const d = state.cardDraft;
-    const canSetPw = canSetPassword(u);
+    const isSelf = u.id === currentUser.id;
+    // Себе пароль задаётся отдельным разделом «Сменить пароль» (он спрашивает текущий); чужой — только уполномоченным.
+    const canSetPw = canSetPassword(u) && !isSelf;
+    const policyText = passwordPolicy?.text || "";
     panel.innerHTML = `
       <h4>Способ входа</h4>
       <div class="v2-fields">
@@ -796,36 +957,34 @@ export function mountUsersAccess(container, ctx) {
         <input type="checkbox" id="sec-must" ${d.must_change_password ? "checked" : ""} ${canWriteUsers ? "" : "disabled"}>
         <span>Требовать смену пароля при следующем входе</span>
       </label>
-      ${canSetPw && d.auth_method !== "domain" ? `
-        <div class="v2-result">
-          <h4>Задать пароль</h4>
-          <div class="v2-fields">
-            <label class="v2-field">Новый пароль<input id="sec-pass" type="password" value="${escapeHtml(state.pendingPassword?.password || "")}"></label>
-          </div>
-          <label class="v2-role-check"><input type="checkbox" id="sec-pw-must" ${state.pendingPassword ? (state.pendingPassword.mustChange ? "checked" : "") : "checked"}><span>Потребовать смену при следующем входе</span></label>
-          <div class="v2-auth-error" id="sec-error"></div>
-          ${btn("Задать пароль", 'id="sec-save"', true)}
-        </div>
-      ` : ""}
+      <div class="v2-result" id="sec-password-block">
+        <h4>Пароль</h4>
+        ${d.auth_method === "domain"
+          ? `<p class="v2-note">Доменная учётная запись: пароль хранится в домене, пароль сервиса не используется.</p>`
+          : isSelf
+            ? `<p class="v2-note">Это ваша учётная запись. Свой пароль меняется в разделе <a class="v2-link" href="#/change-password">«Сменить пароль»</a> — он спрашивает текущий пароль. Заблокировать вход в собственной учётной записи нельзя.</p>`
+            : canSetPw ? `
+              <p class="v2-muted">${u.has_password ? "Пароль задан." : "Пароль не задан — войти по паролю нельзя."} ${escapeHtml(policyText)}</p>
+              <div class="v2-fields">
+                <label class="v2-field">Новый пароль<input id="sec-pass" type="password" autocomplete="new-password" value="${escapeHtml(state.pendingPassword?.password || "")}"></label>
+                <label class="v2-field">Повторите пароль<input id="sec-pass2" type="password" autocomplete="new-password" value="${escapeHtml(state.pendingPassword?.repeat || "")}"></label>
+              </div>
+              <label class="v2-role-check"><input type="checkbox" id="sec-pw-must" ${state.pendingPassword ? (state.pendingPassword.mustChange ? "checked" : "") : "checked"}><span>Потребовать смену при следующем входе</span></label>
+              <div class="v2-auth-error" id="sec-error" role="alert"></div>
+              <div class="v2-inline">${btn("Задать пароль", 'id="sec-save"', true)}${u.has_password ? btn("Заблокировать вход по паролю", 'id="sec-block"') : ""}</div>
+              <p class="v2-note">Смена пароля завершает все остальные сеансы человека. Заблокированный вход оживляется заданием нового пароля.</p>`
+            : `<p class="v2-note">Задавать пароли других пользователей может только администратор сервиса.</p>`}
+      </div>
+      ${canWriteUsers || currentUser.role === "admin" ? `
+      <div class="v2-result"><h4>Сеансы пользователя</h4><div id="sec-sessions"></div></div>` : ""}
       <div class="v2-result">
-        <h4>Диагностика и доступ к аккаунту</h4>
-        <p class="v2-muted">Поиск в домене, список сеансов и вход «от имени пользователя» — доступны в текущем интерфейсе, в этот пилот пока не перенесены.</p>
-        ${canWriteUsers
-          ? `<a class="v2-link" href="/?ui=v1&open=user-security&user_id=${u.id}" data-v1-link>Открыть в текущем интерфейсе →</a>
-             <p class="v2-note">Откроется форма этого пользователя, вкладка «Вход и безопасность».</p>`
-          : `<p class="v2-note">Доступно тем, у кого есть право изменять пользователей.</p>`}
+        <h4>Отладка прав</h4>
+        ${canWriteUsers && !isSelf
+          ? `<div class="v2-inline">${btn("Зайти под пользователем…", 'id="sec-impersonate"')}</div><div class="v2-muted" role="status" id="sec-impersonate-status"></div>
+             <p class="v2-note">Откроется новая вкладка, где система ведёт себя так же, как у этого человека. Все действия там записываются на ваше имя.</p>`
+          : `<p class="v2-note">${isSelf ? "Это ваша учётная запись." : "Доступно тем, у кого есть право изменять пользователей."}</p>`}
       </div>
     `;
-    panel.querySelector("[data-v1-link]")?.addEventListener("click", async (e) => {
-      e.preventDefault();
-      // Та же блокировка, что у кнопки шапки: переход в V1 не должен
-      // скрыть результат записи, которая ещё выполняется — и молча не игнорируется.
-      if (api.hasPendingWrites()) { status.textContent = "Идёт сохранение — переход временно недоступен"; return; }
-      if (!(await requestLeave())) return;
-      // V1 разбирает параметры при старте (app/static/app.js, applyStartupDeepLink): открывает форму именно
-      // этого пользователя на вкладке «Вход и безопасность», а не главный экран.
-      location.href = `/?ui=v1&open=user-security&user_id=${u.id}`;
-    });
     if (canWriteUsers) {
       panel.querySelector("#sec-auth-method").addEventListener("change", (e) => {
         d.auth_method = e.target.value;
@@ -840,8 +999,9 @@ export function mountUsersAccess(container, ctx) {
     if (passEl) {
       const trackPending = () => {
         const password = panel.querySelector("#sec-pass").value;
+        const repeat = panel.querySelector("#sec-pass2").value;
         const mustChange = panel.querySelector("#sec-pw-must").checked;
-        state.pendingPassword = password ? { password, mustChange } : null;
+        state.pendingPassword = password || repeat ? { password, repeat, mustChange } : null;
         if (state.pendingPassword) markPendingPasswordDirty();
         else if (!state.cardDirty) {
           // Поле очистили руками — снимаем и слежение, и кнопки подвала,
@@ -852,20 +1012,25 @@ export function mountUsersAccess(container, ctx) {
         }
       };
       passEl.addEventListener("input", trackPending);
+      panel.querySelector("#sec-pass2").addEventListener("input", trackPending);
       panel.querySelector("#sec-pw-must").addEventListener("change", trackPending);
     }
     const saveBtn = panel.querySelector("#sec-save");
     if (saveBtn) saveBtn.addEventListener("click", async () => {
       const errorEl = panel.querySelector("#sec-error");
       errorEl.textContent = "";
-      saveBtn.disabled = true;
-      const passField = panel.querySelector("#sec-pass");
+      if (saveBtn.disabled) return;
+      const passField = panel.querySelector("#sec-pass"), repeatField = panel.querySelector("#sec-pass2");
       const mustField = panel.querySelector("#sec-pw-must");
+      // Пустой пароль НЕ отправляется вовсе: на сервере пустая строка — это блокировка входа, а не «пароль не введён».
+      if (!passField.value) { errorEl.textContent = "Введите новый пароль. Чтобы запретить вход по паролю, есть отдельная кнопка «Заблокировать вход по паролю»."; passField.focus(); return; }
+      if (passField.value !== repeatField.value) { errorEl.textContent = "Пароли не совпадают — повторите ввод."; repeatField.focus(); return; }
+      saveBtn.disabled = true;
       // Issue 2.2 — снимок + немедленный дизейбл: то же самое поле
       // остаётся видимым и не должно принять новый ввод, пока это
       // значение ещё в пути на сервер.
       const sentPassword = passField.value, sentMust = mustField.checked;
-      passField.disabled = true; mustField.disabled = true;
+      passField.disabled = true; repeatField.disabled = true; mustField.disabled = true;
       try {
         const updated = await api.post(`/users/${u.id}/set-password`, {
           password: sentPassword,
@@ -881,7 +1046,7 @@ export function mountUsersAccess(container, ctx) {
           state.pendingPassword = null;
           if (!state.cardDirty) { clearDirtyState(); footActions.innerHTML = ""; }
         }
-        state.status = "Пароль обновлён";
+        state.status = "Пароль обновлён, остальные сеансы человека завершены";
         await tryRefresh(() => ensureUsers(true), "users");
         renderStatusRetry();
         // Перерисовать панель: "Требовать смену пароля" в блоке "Способ
@@ -890,12 +1055,49 @@ export function mountUsersAccess(container, ctx) {
         // то, что было в черновике до этого действия.
         renderSecurity(panel, u);
       } catch (err) {
-        errorEl.textContent = err.detail || "Не удалось задать пароль";
-        passField.disabled = false; mustField.disabled = false;
+        if (err.status === 0 || err.status >= 500) {
+          // Неизвестный исход: повторно не отправляем. Пароль мог быть записан — сверяем с сервером (has_password не скажет «тот ли»,
+          // поэтому честно говорим, что проверить можно только входом этим паролем или повторной установкой).
+          await tryRefresh(() => ensureUsers(true), "users");
+          errorEl.textContent = `Неизвестно, записан ли пароль (${err.detail || err.message}). Ничего не повторено автоматически: проверьте состояние и при необходимости задайте пароль ещё раз.`;
+        } else errorEl.textContent = err.detail || "Не удалось задать пароль";
+        passField.disabled = false; repeatField.disabled = false; mustField.disabled = false;
       } finally {
         saveBtn.disabled = false;
       }
     });
+    const blockBtn = panel.querySelector("#sec-block");
+    if (blockBtn) blockBtn.addEventListener("click", async () => {
+      const errorEl = panel.querySelector("#sec-error");
+      errorEl.textContent = "";
+      if (blockBtn.disabled) return;
+      if (!(await showConfirmDialog(
+        `Заблокировать вход по паролю для «${u.display_name}»?\n\nЧеловек не сможет войти, пока вы не зададите новый пароль. Его текущие сеансы будут завершены.`,
+        { confirmLabel: "Заблокировать", danger: true, multiline: true }))) return;
+      if (!(await confirmLocalAdminLoss(u, { has_password: false }, `Вы блокируете вход по паролю у «${u.display_name}».`))) return;
+      blockBtn.disabled = true;
+      try {
+        const updated = await api.post(`/users/${u.id}/set-password`, { password: "" });
+        Object.assign(u, updated);
+        syncMustChangeFromServer();
+        state.pendingPassword = null;
+        if (!state.cardDirty) { clearDirtyState(); footActions.innerHTML = ""; }
+        state.status = "Вход по паролю заблокирован";
+        await tryRefresh(() => ensureUsers(true), "users");
+        renderStatusRetry();
+        renderSecurity(panel, u);
+      } catch (err) {
+        if (err.status === 0 || err.status >= 500) {
+          await tryRefresh(() => ensureUsers(true), "users");
+          errorEl.textContent = `Неизвестно, заблокирован ли вход (${err.detail || err.message}). Ничего не повторено автоматически — проверьте признак «Пароль задан» после обновления.`;
+          renderSecurity(panel, currentUserBeingEdited() || u);
+        } else errorEl.textContent = err.detail || "Не удалось заблокировать вход";
+        blockBtn.disabled = false;
+      }
+    });
+    const sessHost = panel.querySelector("#sec-sessions");
+    if (sessHost) mountUserSessions(sessHost, u);
+    panel.querySelector("#sec-impersonate")?.addEventListener("click", () => startImpersonation(u, panel.querySelector("#sec-impersonate-status")));
   }
 
   // ---------- Доступ к объектам: сводка (без перебора объектов) + точечное редактирование ----------
@@ -935,6 +1137,9 @@ export function mountUsersAccess(container, ctx) {
         _userId: u.id,
       };
       state.access._baseline = grantsFingerprint(state.access.grants);
+      // Набор, который форма ВИДЕЛА: уходит на сервер как expected_grants — если доступ человека за это время изменил
+      // кто-то другой, сервер откажет 409 и ничего не запишет.
+      state.access._baselineGrants = state.access.grants.map((g) => ({ ...g }));
       state.accessDirty = false;
       state.accessView = "summary";
     }
@@ -976,13 +1181,15 @@ export function mountUsersAccess(container, ctx) {
     // подстраховкой, а не единственной защитой).
     const snapshot = JSON.stringify(state.access.grants);
     const sentFingerprint = grantsFingerprint(state.access.grants);
-    await api.put(`/users/${u.id}/access`, { grants: state.access.grants });
+    const expected = state.access._baselineGrants;
+    await api.put(`/users/${u.id}/access`, { grants: state.access.grants, expected_grants: expected });
     if (JSON.stringify(state.access.grants) === snapshot) {
       state.accessDirty = false;
       state.access = null;
       clearDirtyState();
     } else {
       state.access._baseline = sentFingerprint; // на сервере теперь то, что отправили; новая правка — различие с этим
+      state.access._baselineGrants = JSON.parse(snapshot);
       markAccessDirty();
     }
     const ok = await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
@@ -1025,6 +1232,7 @@ export function mountUsersAccess(container, ctx) {
           status.textContent = state.status;
           accessSaveBtn.disabled = false; accessCancelBtn.disabled = false;
           panel.querySelectorAll("[data-grant-role]").forEach((cb) => { cb.disabled = !canWriteUsers; });
+          offerReload(err);
         }
       });
       accessCancelBtn.addEventListener("click", async () => {
@@ -1199,7 +1407,9 @@ export function mountUsersAccess(container, ctx) {
     const snapshot = new Map(state.rolesDraft);
     const items = [...snapshot].map(([key, level]) => {
       const [role_key, feature_key] = key.split("|");
-      return { role_key, feature_key, level };
+      // was — уровень ячейки, который форма видела при открытии: изменил кто-то другой — сервер откажет 409 без записи.
+      const was = state.roles.features.find((f) => f.key === feature_key)?.levels[role_key] || "none";
+      return { role_key, feature_key, level, was };
     });
     await api.put("/roles/features", { items });
     for (const [key, level] of snapshot) {
@@ -1306,6 +1516,7 @@ export function mountUsersAccess(container, ctx) {
         status.textContent = state.status;
         saveBtn.disabled = false; cancelBtn.disabled = false;
         setRolesSegmentsDisabled(false);
+        offerReload(err);
       }
     });
     cancelBtn.addEventListener("click", async () => {
@@ -1453,7 +1664,7 @@ export function mountUsersAccess(container, ctx) {
       const errorEl = host.querySelector("#role-rename-error");
       errorEl.textContent = "";
       if (!name) { errorEl.textContent = "Введите название"; throw new Error("Введите название"); }
-      await api.patch(`/roles/${role.key}`, { name });
+      await api.patch(`/roles/${role.key}`, { name, expected_name: role.name });
       clearRoleFormDirty();
       await tryRefresh(() => ensureRoles(true), "roles");
       host.innerHTML = "";
@@ -1476,6 +1687,7 @@ export function mountUsersAccess(container, ctx) {
       button.disabled = true;
       try { await submit(); } catch (err) {
         host.querySelector("#role-rename-error").textContent = err.detail || err.message || "Не удалось переименовать";
+        if (isStaleConflict(err)) { clearRoleFormDirty(); await tryRefresh(() => ensureRoles(true), "roles"); state.status = err.detail; await render(); }
       } finally { button.disabled = false; }
     });
   }
@@ -1492,10 +1704,12 @@ export function mountUsersAccess(container, ctx) {
     // Запись — отдельно от последующего обновления экрана: если сама
     // операция не прошла, это единственная настоящая ошибка ниже.
     try {
-      await api.delete(`/roles/${role.key}`);
+      // expected_granted — число выдач из плана, который человек видел: изменилось — сервер откажет 409 и не удалит вслепую.
+      await api.delete(`/roles/${role.key}?expected_granted=${plan.granted}`);
     } catch (err) {
       state.status = err.detail || "Не удалось удалить роль";
       state.rolesBusy = false;
+      if (isStaleConflict(err)) await tryRefresh(() => ensureRoles(true), "roles"); // план устарел — покажем актуальные числа
       await render();
       return;
     }

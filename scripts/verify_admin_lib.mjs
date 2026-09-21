@@ -56,7 +56,7 @@ export async function session(base, login, { width = 1920, height = 1080, passwo
   await b.clickSel("#v2-login-user"); await b.type(login);
   await b.clickSel("#v2-login-pass"); await b.type(password);
   await b.clickSel("#v2-login-form button[type=submit]");
-  await b.waitFor("!!document.querySelector('#v2-side') || !!document.querySelector('#v2-pwd-form')", 20000);
+  await b.waitFor("!!document.querySelector('#v2-side') || !!document.querySelector('#pw-form')", 20000);
   return b;
 }
 export const text = (b, sel) => b.eval(`(document.querySelector(${JSON.stringify(sel)})||{}).innerText||''`);
@@ -66,3 +66,37 @@ export async function openSection(b, id) {
   await b.sleep(500);
 }
 export const writes = (b, from = 0) => b.requests.slice(from).filter((r) => r.method !== "GET");
+
+/** Заполнить поле настоящим вводом: тройной щелчок выделяет содержимое, затем вставка текста (события input). */
+export async function fill(b, sel, value) {
+  await b.waitFor(`!!document.querySelector(${JSON.stringify(sel)})`);
+  await b.eval(`document.querySelector(${JSON.stringify(sel)}).scrollIntoView({block:'center'})`);
+  const r = await b.rect(sel);
+  await b.click(r.cx, r.cy, { count: 3 });
+  if (value === "") { await b.key("Backspace"); return; }
+  await b.type(value);
+}
+/** Щелчок по кнопке/ссылке с точным текстом внутри контейнера (настоящее событие мыши в центре элемента). */
+export async function clickText(b, text, scope = "body") {
+  const pos = await b.eval(`(()=>{const root=document.querySelector(${JSON.stringify(scope)})||document.body;const els=[...root.querySelectorAll('button,a,[role=button]')].filter(e=>e.offsetParent!==null&&!e.disabled&&(e.innerText||'').trim()===${JSON.stringify(text)});const e=els[0];if(!e)return null;e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+  if (!pos) throw new Error(`нет кнопки «${text}»`);
+  await b.click(pos.x, pos.y);
+}
+export const visibleText = (b) => b.eval("document.body.innerText");
+
+/** Щелчок по элементу (селектор): сначала прокрутить в видимую область, затем настоящее событие мыши в его центре. */
+export async function click(b, sel, opts) {
+  await b.waitFor(`!!document.querySelector(${JSON.stringify(sel)})`);
+  await b.eval(`document.querySelector(${JSON.stringify(sel)}).scrollIntoView({block:'center'})`);
+  await b.sleep(60);
+  const r = await b.rect(sel);
+  await b.click(r.cx, r.cy, opts);
+}
+
+/** Настоящая перезагрузка страницы (тот же адрес, тот же сеанс): проверяет, что результат операции живёт на сервере, а не в памяти вкладки. */
+export async function reload(b, wait = 900) {
+  await b.send("Page.reload", {});
+  await b.sleep(400);
+  for (let i = 0; i < 100; i++) { try { if ((await b.eval("document.readyState")) === "complete") break; } catch (e) { /* страница ещё грузится */ } await b.sleep(100); }
+  await b.sleep(wait);
+}
