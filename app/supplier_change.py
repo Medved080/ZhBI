@@ -962,6 +962,7 @@ def _post_link_swap(conn, doc, items, автор, user_id) -> dict:
 @router.post("/{doc_id}/post")
 def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    events = activity.defer_begin()   # события supplier_change по изделиям — только после commit (app/activity.py)
     try:
         begin_write(conn)   # блокировка записи ДО чтения документа, остатков и покрытия (app/db.py)
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
@@ -1008,6 +1009,7 @@ def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_us
         touch_elements(conn, [r["element_id"] for r in conn.execute(
             "SELECT element_id FROM supplier_change_items WHERE doc_id = ?", (doc_id,))])
         conn.commit()
+        activity.defer_flush(events)
         activity.log("supplier_change_post", user_id=user["id"],
                      user_name=impersonation.plain_name(автор),
                      entity_type="supplier_change", entity_id=doc_id,
@@ -1017,6 +1019,7 @@ def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_us
             "SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()),
             "items": _doc_items(conn, doc_id), **итог}
     finally:
+        activity.defer_end(events)
         conn.close()
 
 

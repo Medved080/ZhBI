@@ -1170,6 +1170,7 @@ def update_status(
     element_id: int, body: StatusUpdateIn, user: sqlite3.Row = Depends(get_current_user)
 ):
     conn = get_connection()
+    events = activity.defer_begin()   # события status_change уходят в журнал только после commit (app/activity.py)
     try:
         begin_write(conn)   # блокировка записи ДО чтения и проверки остатка (app/db.py)
         _guard_elements(conn, user, [element_id], "status", "write")
@@ -1185,8 +1186,10 @@ def update_status(
         except LookupError:
             raise HTTPException(status_code=404, detail="Элемент не найден")
         conn.commit()
+        activity.defer_flush(events)
         return data
     finally:
+        activity.defer_end(events)   # откат/исключение: несброшенные события отбрасываются
         conn.close()
 
 
@@ -1201,6 +1204,7 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get
     if not body.items:
         raise HTTPException(status_code=400, detail="Пустой список элементов")
     conn = get_connection()
+    events = activity.defer_begin()   # события status_change уходят в журнал только после commit (app/activity.py)
     try:
         begin_write(conn)   # блокировка записи ДО чтения и проверки остатка (app/db.py)
         ids = [item.element_id for item in body.items]
@@ -1221,8 +1225,10 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get
             )
             updated.append(data)
         conn.commit()
+        activity.defer_flush(events)
         return {"updated": updated}
     finally:
+        activity.defer_end(events)   # откат/исключение: несброшенные события отбрасываются
         conn.close()
 
 

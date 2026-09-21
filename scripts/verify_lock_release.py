@@ -91,10 +91,10 @@ def contract_body(pos):
     return contracts_mod.ContractIn(specification_id=co["specification_id"], theme=co["theme"], is_archived=False, lines=lines, incidents=[], capacity=[])
 
 
-def make_doc():
+def make_doc(skip=0):
     """Черновик замены поставщика: одно изделие с контракта A на контракт B (остаток в B есть)."""
     c = db()
-    pos, ids = H.find_position(c, 4)
+    pos, ids = H.find_position(c, 4, skip=skip)
     a = pos["contract_id"]
     b = c.execute("SELECT co.id FROM contracts co JOIN specifications s ON s.id = co.specification_id JOIN agreements ag ON ag.id = s.agreement_id "
                   "WHERE ag.object_id = 1 AND co.is_archived = 0 AND co.id != ? ORDER BY co.id LIMIT 1", (a,)).fetchone()["id"]

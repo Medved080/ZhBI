@@ -81,7 +81,7 @@ def race(jobs):
 
 
 # ---------------------------------------------------------------- данные
-def find_position(c, need_free, obj=1):
+def find_position(c, need_free, obj=1, skip=0):
     """Позиция контракта объекта, у которой есть >= need_free запланированных изделий без контракта той же (тип, марка)."""
     rows = c.execute(
         "SELECT cl.contract_id, cl.element_type, cl.mark, co.specification_id FROM contract_lines cl "
@@ -92,6 +92,9 @@ def find_position(c, need_free, obj=1):
             "SELECT id FROM elements WHERE object_id = ? AND element_type = ? AND mark = ? AND contract_id IS NULL "
             "AND current_status = 'planned' ORDER BY id LIMIT ?", (obj, r["element_type"], r["mark"], need_free + 4))]
         if len(ids) >= need_free:
+            if skip:
+                skip -= 1
+                continue
             return dict(r), ids
     raise SystemExit("в копии не нашлось подходящей позиции")
 
