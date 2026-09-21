@@ -9,7 +9,7 @@
 import { showConfirmDialog } from "./dialogs.js";
 import {
   esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, mountTemplates, makeStatus, unknownOutcomeHtml, verifyOutcome,
-  objectOptions, factsHtml, listHtml, valueText, changesTableHtml, wireChangesTable, applyIndeterminate,
+  objectOptions, factsHtml, listHtml, changesTableHtml, wireChangesTable, applyIndeterminate,
 } from "./exchange-common.js";
 
 // ---------------------------------------------------------------- общий каркас одной загрузки
@@ -442,4 +442,3 @@ export const IMPORT_OPS = {
   "status-restore": (el, ctx) => mountUploadOp(el, ctx, restoreCfg(ctx)),
   "objects-import": mountObjectsImport,
 };
-export { valueText };

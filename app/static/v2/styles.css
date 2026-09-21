@@ -896,7 +896,7 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-ex-sample { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 6px 0 4px; font-size: 12px; }
 .v2-ex-verify { margin-top: 10px; }
 .v2-ex .v2-seg { max-width: 640px; margin: 8px 0 12px; }
-.v2-ex-stickybar { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.v2-ex-stickybar { position: sticky; bottom: -24px; margin-bottom: 0; z-index: 2; background: var(--bg); padding: 10px 0 34px; border-top: 1px solid var(--line); flex-wrap: wrap; }
 .v2-ex-steps { margin: 6px 0 12px 18px; padding: 0; font-size: 13px; color: var(--muted); }
 .v2-ex-counts { margin: 8px 0 12px; font-size: 13px; }
 .v2-ex-details { font-size: 12px; margin: 6px 0 10px; max-height: 40vh; overflow: auto; }
@@ -912,3 +912,4 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-cs-child td { background: var(--surface); font-size: 12px; }
 .v2-ex-preview { width: 100%; max-height: 340px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .v2-ex-filelist { margin: 4px 0 10px; font-size: 13px; }
+.v2-ex [hidden] { display: none !important; }

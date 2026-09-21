@@ -12,7 +12,7 @@
 // показывается ответ сервера и предлагается разобрать заново. Повторное применение того же токена сервер не принимает.
 import { showConfirmDialog } from "./dialogs.js";
 import {
-  esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, makeStatus, unknownOutcomeHtml, verifyOutcome, objectOptions, factsHtml,
+  esc, errText, isUnknownOutcome, checkFile, pageFrame, makeStatus, unknownOutcomeHtml, verifyOutcome, objectOptions, factsHtml,
 } from "./exchange-common.js";
 
 const FIELD_LABELS = { mark: "Марка", element_type: "Тип", subtype: "Подтип", elevation_mm: "Отметка", floor: "Этаж" };
