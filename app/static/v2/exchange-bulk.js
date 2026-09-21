@@ -61,7 +61,7 @@ export function mountBulkEdit(el, ctx) {
       <div id="bk-chips" class="v2-ex-chips"></div>
       <div id="bk-table"></div>
       <div id="bk-summary" class="v2-muted"></div>
-      <div class="v2-bar" id="bk-applybar" hidden>
+      <div class="v2-bar v2-ex-stickybar" id="bk-applybar" hidden>
         <label class="v2-wire-field" id="bk-datebox" hidden><span>Дата статуса «Контрактация» для запланированных элементов</span><input type="date" id="bk-date"></label>
         <button type="button" class="v2-btn v2-primary" id="bk-apply">Применить отмеченное</button>
       </div>
@@ -184,7 +184,7 @@ export function mountBulkEdit(el, ctx) {
       if (dead) return;
       analysis = null; renderAnalysis(); $("#bk-rejected").innerHTML = "";
       status.set(`Сверка не удалась: ${errText(err)}`, "bad");
-    } finally { busy = false; if (!dead) $("#bk-analyze").disabled = false; }
+    } finally { busy = false; if (!dead) { $("#bk-analyze").disabled = false; $("#bk-apply").disabled = !analysis || checked.size === 0; } }
   });
 
   // ---- применение

@@ -246,7 +246,7 @@ function mountObjectsImport(el, ctx) {
       <div id="ex-issues"></div>
       <div id="ex-table"></div>
       <div id="ex-summary" class="v2-muted"></div>
-      <div class="v2-bar" id="ex-applybar" hidden><button type="button" class="v2-btn v2-primary" id="ex-apply">Применить отмеченное</button></div>
+      <div class="v2-bar v2-ex-stickybar" id="ex-applybar" hidden><button type="button" class="v2-btn v2-primary" id="ex-apply">Применить отмеченное</button></div>
       <div id="ex-result"></div>`,
   });
   const $ = (s) => el.querySelector(s);
@@ -297,7 +297,7 @@ function mountObjectsImport(el, ctx) {
       if (dead) return;
       analysis = null; $("#ex-issues").innerHTML = ""; renderTable();
       status.set(`Сверка не удалась: ${errText(err)}`, "bad");
-    } finally { busy = false; if (!dead) { $("#ex-analyze").disabled = false; } }
+    } finally { busy = false; if (!dead) { $("#ex-analyze").disabled = false; $("#ex-apply").disabled = !analysis || checked.size === 0; } }
   }
 
   async function apply() {

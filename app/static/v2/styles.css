@@ -896,3 +896,4 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-ex-sample { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 6px 0 4px; font-size: 12px; }
 .v2-ex-verify { margin-top: 10px; }
 .v2-ex .v2-seg { max-width: 640px; margin: 8px 0 12px; }
+.v2-ex-stickybar { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }

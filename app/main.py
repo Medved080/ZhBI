@@ -7501,6 +7501,8 @@ def import_schedule_xlsx(file: UploadFile = File(...),
     try:
         if kind not in ("baseline", "current"):
             raise HTTPException(status_code=422, detail="Неизвестный вид графика")
+        if object_id is not None and conn.execute("SELECT 1 FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
         # Файл разбирается ДО копии базы и до блокировки: нечитаемый файл отвечает 4xx, не оставляя ни копии, ни блокировки
         parsed = parse_schedule_xlsx(content)
         backup_before_import(f"график MS Project из {file.filename or 'файла'}",

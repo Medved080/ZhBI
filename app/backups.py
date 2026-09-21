@@ -497,7 +497,7 @@ def rotate_service_backups(keep_days: int = KEEP_SERVICE_DAYS,
     for имя in list(убрано):
         try:
             delete_backup(имя)
-        except OSError as exc:
+        except (OSError, BackupError) as exc:   # BackupError(404): файл уже убрала параллельная ротация соседнего запроса
             убрано.remove(имя)
             print(f"[backups] не удалось убрать старую копию {имя}: {exc}")
     if убрано:
@@ -514,7 +514,7 @@ def rotate_service_backups(keep_days: int = KEEP_SERVICE_DAYS,
         try:
             delete_backup(имя)
             убрано.append(имя)
-        except OSError as exc:
+        except (OSError, BackupError) as exc:   # два одновременных импорта ротируют одни и те же копии: уже удалённую пропускаем, а не роняем импорт 404
             print(f"[backups] не удалось убрать старую копию {имя}: {exc}")
     if убрано:
         print(f"[backups] копий «загрузки» оставлено {keep_import}, убрано лишних: "
