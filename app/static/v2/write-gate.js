@@ -91,6 +91,8 @@ export const POLICY = [
   { id: "drawing.analyze", screen: "upload-drawing", action: "Загрузка чертежа DXF: разбор и сводка изменений по выбранному объекту (в базу не пишет, файл сохраняется в uploads/)", method: "POST", path: re("/import-dxf/analyze"), check: uploadCheck({ ext: ["dxf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются; файл кладётся во временную папку сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF, отказ 403 у user2/user4, 4xx на пустой и битый файл" },
   { id: "drawing.apply", screen: "upload-drawing", action: "Загрузка чертежа DXF: применить показанную сводку (изделия, сетка осей, зоны и привязки объекта)", method: "POST", path: re("/import-dxf/apply"), check: dxfApplyProblem, risk: "геометрия и привязки изделий объекта; этапами (не одна транзакция, как в V1), копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, двойная отправка — один запрос, отказ 403, журнал после сохранения" },
   { id: "input.import", screen: "import-input", action: "Загрузка из папки Input/ сервера: чертежи и таблицы пачкой в выбранный объект", method: "POST", path: re("/admin/import-input"), check: inputImportProblem, risk: "геометрия изделий объекта и график СМР; каждый файл отдельно (ошибка одного не отменяет остальные), копия базы перед загрузкой", allowed: true, proof: "настоящий backend: построчный отчёт, отказ 403 у не-админа, повтор безопасен (обновление по handle), журнал" },
+  { id: "revit.analyze", screen: "revit-import", action: "Загрузка из Revit: разбор пакетов выгрузки по выбранному объекту и сводка (в базу не пишет)", method: "POST", path: re("/import-revit/analyze"), check: uploadCheck({ ext: ["gz", "json"], fileField: "files", maxFiles: 12, fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического пакета КР, отказ 403 у не-админа, 4xx на битый пакет и на дубль раздела" },
+  { id: "revit.apply", screen: "revit-import", action: "Загрузка из Revit: применить показанную сводку (секции, этажи, элементы и помещения модели объекта)", method: "POST", path: re("/import-revit/apply"), check: tokenOnlyProblem, risk: "справочники и элементы модели МФР объекта; этапами (как в V1), копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, списание исчезнувших внутри раздела" },
   { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
@@ -164,18 +166,19 @@ function isOneOf(list) { return (v) => typeof v === "string" && list.includes(v)
 
 // Проверка формы загрузки: ровно один непустой файл разрешённого расширения (не больше лимита сервера), только перечисленные поля формы
 // и параметры адреса (все обязательны). Возвращает функцию (body, pathWithQuery) → текст проблемы или null (в проверке — «проблема ⇒ отказ»).
-function uploadCheck({ ext, fields = {}, query = {}, maxBytes = 200 * 1024 * 1024 }) {
+function uploadCheck({ ext, fields = {}, query = {}, maxBytes = 200 * 1024 * 1024, fileField = "file", maxFiles = 1 }) {
   return (body, pathWithQuery) => {
     if (typeof FormData === "undefined" || !(body instanceof FormData)) return "не форма загрузки";
     const keys = [...new Set([...body.keys()])];
-    if (keys.some((k) => k !== "file" && !(k in fields))) return "лишние поля формы";
-    const files = body.getAll("file");
-    if (files.length !== 1 || typeof files[0] !== "object" || files[0] === null || typeof files[0].name !== "string") return "нужен ровно один файл";
-    const f = files[0];
-    const e = (f.name.split(".").pop() || "").toLowerCase();
-    if (!ext.includes(e)) return "неверное расширение файла";
-    if (!(f.size > 0)) return "файл пуст";
-    if (f.size > maxBytes) return "файл больше лимита сервера";
+    if (keys.some((k) => k !== fileField && !(k in fields))) return "лишние поля формы";
+    const files = body.getAll(fileField);
+    if (files.length < 1 || files.length > maxFiles || files.some((f) => typeof f !== "object" || f === null || typeof f.name !== "string")) return maxFiles === 1 ? "нужен ровно один файл" : `нужно от 1 до ${maxFiles} файлов`;
+    for (const f of files) {
+      const e = (f.name.split(".").pop() || "").toLowerCase();
+      if (!ext.includes(e)) return "неверное расширение файла";
+      if (!(f.size > 0)) return "файл пуст";
+      if (f.size > maxBytes) return "файл больше лимита сервера";
+    }
     for (const [k, valid] of Object.entries(fields)) {
       const vals = body.getAll(k);
       if (vals.length !== 1 || !valid(vals[0])) return `поле «${k}» не заполнено или неверно`;
@@ -231,5 +234,13 @@ function inputImportProblem(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
   if (Object.keys(body).some((k) => k !== "object_id")) return "лишние поля";
   if (!Number.isInteger(body.object_id) || body.object_id <= 0) return "не указан объект";
+  return null;
+}
+
+// Применение по токену разбора без иных решений (Revit).
+function tokenOnlyProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => k !== "token")) return "лишние поля";
+  if (typeof body.token !== "string" || !/^[0-9a-f]{16,64}$/.test(body.token)) return "нет токена разбора";
   return null;
 }

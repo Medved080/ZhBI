@@ -4,8 +4,9 @@
 import { IMPORT_OPS } from "./exchange-import.js";
 import { mountBulkEdit } from "./exchange-bulk.js";
 import { mountDrawingUpload } from "./exchange-drawing.js";
+import { mountRevitImport } from "./exchange-revit.js";
 
-const OPS = { ...IMPORT_OPS, "bulk-edit": mountBulkEdit, "upload-drawing": mountDrawingUpload };
+const OPS = { ...IMPORT_OPS, "bulk-edit": mountBulkEdit, "upload-drawing": mountDrawingUpload, "revit-import": mountRevitImport };
 
 export function hasExchangeOp(key) { return Object.prototype.hasOwnProperty.call(OPS, key); }
 

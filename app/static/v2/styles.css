@@ -910,3 +910,5 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-ds-gap-legend { background: color-mix(in srgb, var(--bad) 18%, transparent); padding: 0 4px; border-radius: 3px; }
 .v2-cs-s0 { color: var(--ink); } .v2-cs-s1 { color: var(--accent); } .v2-cs-s2 { color: var(--muted); } .v2-cs-s3 { color: var(--bad); }
 .v2-cs-child td { background: var(--surface); font-size: 12px; }
+.v2-ex-preview { width: 100%; max-height: 340px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.v2-ex-filelist { margin: 4px 0 10px; font-size: 13px; }

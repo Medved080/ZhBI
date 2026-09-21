@@ -26,7 +26,7 @@ import openpyxl  # noqa: E402
 
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -713,10 +713,92 @@ def section_input():
                 pass
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input}
+
+def section_revit():
+    print("== загрузка из Revit")
+    import gzip
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    tag = str(int(time.time()))[-5:]
+    admin = login("admin")
+    global TABLES
+    saved_tables = TABLES
+    TABLES = saved_tables + ["revit_elements", "revit_packages", "object_levels", "object_sections", "object_flats"]
+    try:
+        def package(section="КР", n=3, uid_tag="a", mark="М", date="2026-09-21", drop_from=0):
+            els = []
+            for i in range(drop_from, n):
+                els.append({"uid": f"v2{tag}-{uid_tag}-{section}-{i:04d}", "id": 1000 + i, "категория": "Стены", "семейство": "Стена", "типоразмер": "Стена_200", "марка": f"{mark}{i}",
+                            "уровень": "С01-02_1_этаж_основной_0.000", "отметка_низа": 0, "высота": 3000, "точка": [i * 1000.0, 0.0, 0.0],
+                            "контур": [[i * 1000.0, 0], [i * 1000.0 + 800, 0], [i * 1000.0 + 800, 200], [i * 1000.0, 200]], "MCY_Секция": "С01"})
+            return json.dumps({"формат": "zhbi-revit-package", "версия_схемы": 1, "выгрузка": {"раздел": section, "модель": "synthetic", "дата": date, "единицы": "мм", "координаты": "общие"},
+                               "уровни": [{"имя": "С01-02_1_этаж_основной_0.000", "отметка": 0}], "элементы": els, "помещения": [], "оси": []}, ensure_ascii=False).encode("utf-8")
+        pr = admin.get(BASE + "/projects-tree").json()["projects"]
+        pid = next(p["id"] for p in pr if any(o["kind"] == "mfr" for o in p["objects"]))
+        r = admin.post(BASE + "/objects", json={"name": f"Тест-В2 МФР {tag}", "project_id": pid, "kind": "mfr"})
+        check(r.status_code == 200, f"создан объект МФР ({r.status_code})")
+        oid = r.json()["id"]
+
+        def analyze(session, files, object_id=oid):
+            return session.post(BASE + "/import-revit/analyze", files=[("files", (n, c, "application/octet-stream")) for n, c in files], data={"object_id": str(object_id)}, timeout=300)
+
+        kr = ("kr.zhbi.json", package())
+        for user in ("user2", "user4"):
+            before = snap()
+            r = analyze(login(user), [kr])
+            check(r.status_code == 403 and snap() == before, f"analyze: {user} → {r.status_code}, БД не изменена")
+        for label, files in (("пустой файл", [("e.json", b"")]), ("не JSON", [("j.json", b"not json")]), ("чужой формат", [("o.json", b'{"format":"other"}')]),
+                             ("два пакета одного раздела", [kr, ("kr2.zhbi.json", package(uid_tag="z"))])):
+            before = snap()
+            r = analyze(admin, files)
+            check(400 <= r.status_code < 500 and snap() == before, f"analyze: {label} → {r.status_code} ({r.text[:70]}), БД не изменена")
+        r = admin.post(BASE + "/import-revit/analyze", data={"object_id": str(oid)})
+        check(r.status_code == 422, f"analyze без файлов → {r.status_code}")
+        r = analyze(admin, [kr], object_id=99999)
+        check(r.status_code == 404, f"analyze: несуществующий объект → {r.status_code}")
+        before = snap()
+        r = analyze(admin, [kr, ("ar.zhbi.json", package(section="АР", n=2, uid_tag="b"))])
+        check(r.status_code == 200 and r.json()["elements"]["counts"]["новых"] == 5, f"analyze: 200, новых {r.json()['elements']['counts'].get('новых')}")
+        check(snap() == before, "analyze: справочники и элементы модели не изменены (снимок БД совпал)")
+        token = r.json()["token"]
+        for user in ("user2", "user4"):
+            r2 = login(user).post(BASE + "/import-revit/apply", json={"token": token})
+            check(r2.status_code == 403 and snap() == before, f"apply: {user} → {r2.status_code}, БД не изменена")
+        check(admin.post(BASE + "/import-revit/apply", json={"token": "0" * 32}).status_code == 410, "apply: неизвестный токен → 410")
+        j0 = journal_max()
+
+        def go(_):
+            return login("admin").post(BASE + "/import-revit/apply", json={"token": token}, timeout=300)
+        with ThreadPoolExecutor(2) as ex:
+            res = list(ex.map(go, range(2)))
+        codes = sorted(x.status_code for x in res)
+        check(codes[0] == 200 and codes[1] in (409, 410), f"два одновременных применения одного токена: {codes}")
+        check(rows("SELECT COUNT(*) n FROM revit_elements WHERE object_id=? AND is_current=1", oid)[0]["n"] == 5, "в БД 5 элементов модели объекта")
+        check(len(journal_since(j0, "import_revit")) == 1, "журнал: одно событие import_revit")
+        check(admin.post(BASE + "/import-revit/apply", json={"token": token}).status_code == 410, "повторное применение токена → 410")
+        # повторный разбор того же — без изменений
+        r = analyze(admin, [kr, ("ar.zhbi.json", package(section="АР", n=2, uid_tag="b"))])
+        c = r.json()["elements"]["counts"]
+        check(c.get("новых", 0) == 0 and c.get("без изменений") == 5, f"повторный разбор: новых 0, без изменений {c.get('без изменений')}")
+        # пакет КР без двух элементов: исчезновение списывается только внутри раздела КР
+        small = ("kr.zhbi.json", package(n=3, drop_from=2))
+        r = analyze(admin, [small])
+        c = r.json()["elements"]["counts"]
+        check(c.get("исчезло из модели") == 2, f"исчезло из модели (раздел КР): {c.get('исчезло из модели')} — АР не затронут")
+        res = admin.post(BASE + "/import-revit/apply", json={"token": r.json()["token"]}, timeout=300)
+        check(res.status_code == 200 and res.json()["retired"] == 2, f"apply: списано 2 ({res.text[:80]})")
+        check(rows("SELECT COUNT(*) n FROM revit_elements WHERE object_id=? AND is_current=1 AND section_code='АР'", oid)[0]["n"] == 2, "элементы АР остались текущими")
+        # старая выгрузка: предупреждение
+        r = analyze(admin, [("kr.zhbi.json", package(date="2026-01-01"))])
+        check(any("СТАРШЕ" in w for w in r.json()["warnings"]), "выгрузка старше загруженной — предупреждение в сводке")
+    finally:
+        TABLES = saved_tables
+
+
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")

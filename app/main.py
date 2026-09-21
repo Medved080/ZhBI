@@ -5967,6 +5967,16 @@ def analyze_revit(
 @app.post("/import-revit/apply", response_model=RevitImportResult)
 def apply_revit(body: RevitApplyIn, user: sqlite3.Row = Depends(get_current_user)):
     """Фаза 2: применяет уже показанную сводку."""
+    # Один токен применяется один раз и не параллельно (двойная отправка получает 409); токены DXF и Revit — разные uuid, набор общий
+    if not claim_pending(body.token):
+        raise HTTPException(status_code=409, detail="Этот разбор уже применяется — дождитесь завершения")
+    try:
+        return _apply_revit_claimed(body, user)
+    finally:
+        release_pending(body.token)
+
+
+def _apply_revit_claimed(body: RevitApplyIn, user: sqlite3.Row):
     try:
         packages, analysis = revit_import.get_pending(body.token)
     except revit_import.RevitProcessingError as e:
