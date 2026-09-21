@@ -266,7 +266,7 @@ if (want("passwords")) {
   await fill(f, "#pw-cur", "Qa-New-Pass-32"); await fill(f, "#pw-new", "Qa-Self-Pass-41"); await fill(f, "#pw-rep", "Qa-Self-Pass-41");
   const s3 = await http(BASE, "qa_ui_user1", "Qa-New-Pass-32");    // другой сеанс этого человека — должен погибнуть
   await click(f, "#pw-submit"); await f.waitFor("(document.querySelector('#pw-note')||{}).innerText?.includes('Пароль изменён')", 12000);
-  ok("P-UI-12 добровольная смена: сообщение, свой сеанс жив, чужой завершён", (await f.eval("fetch('/me').then(r=>r.status)")) === 200 && (await s3.get("/me")).status === 401);
+  ok("P-UI-12 добровольная смена: сообщение, свой сеанс жив, чужой завершён", (await f.eval("fetch('/me').then(r=>r.status)")) === 200 && (await s3.raw("GET", "/me")).status === 401);
   await f.shot(SHOTS + "/change_password.png");
   await click(f, "#v2-logout-btn"); await f.waitFor("!!document.querySelector('#v2-login-form')", 12000);
   ok("P-UI-13 «Выйти»: экран входа, сеанс на сервере удалён", (await f.eval("fetch('/me').then(r=>r.status)")) === 401);
@@ -483,7 +483,7 @@ if (want("sessions")) {
   await b.sleep(1500);
   const left = q("SELECT s.token, u.domain_login FROM sessions s JOIN users u ON u.id=s.user_id");
   ok("N-UI-4 в БД остался ТОЛЬКО сеанс администратора, вошедшего в браузере; сеанс жив (страница работает)", left.length === 1 && left[0].domain_login === "admin" && (await b.eval("fetch('/me').then(r=>r.status)")) === 200, JSON.stringify(left));
-  ok("N-UI-4 остальные HTTP-сеансы мертвы", (await other.get("/me")).status === 401 && (await extra[0].get("/me")).status === 401);
+  ok("N-UI-4 остальные HTTP-сеансы мертвы", (await other.raw("GET", "/me")).status === 401 && (await extra[0].raw("GET", "/me")).status === 401);
   await b.shot(SHOTS + "/sessions.png");
   ok("N-UI-5 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
   await b.close();

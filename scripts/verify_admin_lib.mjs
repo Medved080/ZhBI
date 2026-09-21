@@ -50,7 +50,7 @@ export async function http(base, login, password = PASSWORD) {
     if (res.status === 401 && path !== "/login") { const l = await call("POST", "/login", { domain_login: login, password }); if (l.status === 200) res = await call(method, path, body); }
     return res;
   };
-  return { call: relogin, get: (p) => relogin("GET", p), post: (p, b) => relogin("POST", p, b ?? {}), put: (p, b) => relogin("PUT", p, b), patch: (p, b) => relogin("PATCH", p, b), del: (p) => relogin("DELETE", p), me: r.data, jar };
+  return { raw: call, call: relogin, get: (p) => relogin("GET", p), post: (p, b) => relogin("POST", p, b ?? {}), put: (p, b) => relogin("PUT", p, b), patch: (p, b) => relogin("PATCH", p, b), del: (p) => relogin("DELETE", p), me: r.data, jar };
 }
 
 /** Сеанс браузера: запуск, вход настоящей формой V2. */
