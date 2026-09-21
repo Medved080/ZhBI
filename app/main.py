@@ -4514,6 +4514,20 @@ def _адрес_из_строки(row) -> dict:
     return out
 
 
+# Отпечаток редактируемых полей записи справочника (2026-09-21, V2): форма шлёт его назад как `expected_version`, сервер откажет
+# 409, если запись за это время изменил кто-то другой. Аватар и служебные метки времени в него не входят: их меняет сама форма.
+_PROJECT_VERSION_COLS = ("name", "status", "description") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
+_OBJECT_VERSION_COLS = ("name", "status", "project_id", "kind", "description", "smu_id", "smu_director_id", "responsible_id",
+                        "media_url", "smr_start_reported") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
+
+
+def _row_version(row, columns) -> str:
+    import hashlib
+    ключи = row.keys()
+    части = ["" if (c not in ключи or row[c] is None) else str(row[c]) for c in columns]
+    return hashlib.sha1("\x1f".join(части).encode("utf-8")).hexdigest()[:16]
+
+
 def _проверить_архивацию_проекта(conn, project_id: int, статус: str) -> None:
     """Проект уходит в архив, только когда в нём не осталось активных
     объектов. Иначе стройка исчезла бы из переключателя вместе с проектом,
@@ -4571,6 +4585,7 @@ def list_projects(user: sqlite3.Row = Depends(get_current_user)):
                 elements_count=a["elements_count"] if a else 0,
                 smr_start=a["smr_start"] if a else None,
                 smr_end=a["smr_end"] if a else None,
+                version=_row_version(row, _PROJECT_VERSION_COLS),
                 **_адрес_из_строки(row),
             ))
         return out
@@ -4613,9 +4628,13 @@ def update_project(project_id: int, body: ProjectPatchIn, admin: sqlite3.Row = D
     записать = []          # (колонка, значение)
     события = []           # (код действия, было, стало)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения: проверка «запись устарела» и запись — под одной блокировкой
         row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Проект не найден")
+        if body.expected_version is not None and body.expected_version != _row_version(row, _PROJECT_VERSION_COLS):
+            raise HTTPException(status_code=409, detail="Проект уже изменил кто-то другой, пока форма была открыта. "
+                                                        "Ничего не сохранено — обновите данные и повторите правку.")
 
         if "name" in body.model_fields_set:
             name = (body.name or "").strip()
@@ -4871,6 +4890,7 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 smr_start_reported=row["smr_start_reported"] if "smr_start_reported" in row.keys() else None,
                 has_avatar=bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False,
                 avatar_attachment_id=(row["avatar_attachment_id"] if "avatar_attachment_id" in row.keys() else None),
+                version=_row_version(row, _OBJECT_VERSION_COLS),
                 **_адрес_из_строки(row),
             ))
         return result
@@ -4962,9 +4982,13 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
     записать = []
     события = []
     try:
+        begin_write(conn)   # блокировка записи ДО чтения: проверка «запись устарела» и запись — под одной блокировкой
         row = conn.execute("SELECT * FROM objects WHERE id = ?", (object_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Объект не найден")
+        if body.expected_version is not None and body.expected_version != _row_version(row, _OBJECT_VERSION_COLS):
+            raise HTTPException(status_code=409, detail="Объект уже изменил кто-то другой, пока форма была открыта. "
+                                                        "Ничего не сохранено — обновите данные и повторите правку.")
 
         if "name" in body.model_fields_set:
             name = (body.name or "").strip()

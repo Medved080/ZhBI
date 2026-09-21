@@ -8,7 +8,8 @@
   P — пароли (задать, политика, слабый пароль, сброс/блокировка, свой пароль, отзыв прочих сеансов, журнал без паролей и хэшей);
   A — доступ (замена набора грантов, валидация, «устарело», права); S — сводка доступного = то, что человек видит на самом деле;
   B — групповая выдача (предпросмотр, атомарность, откат, конкуренция); R — роли (создание, порядок, матрица, удаление по плану, «устарело»);
-  N — сеансы (свои, чужие, завершение, 404); C — смена собственного пароля (в том числе обязательная).
+  N — сеансы (свои, чужие, завершение, 404); C — смена собственного пароля (в том числе обязательная);
+  D — проекты и объекты (создание, правка с версией, удаление по плану и каскад, вложения, превью), справочник «Физлица».
 
 Запуск:  .venv/bin/python scripts/verify_admin_backend.py <порт> <каталог_копии>   (копия — файл work.db из real_auth_server.py)
 """
@@ -71,6 +72,14 @@ class Client:
         except Exception:
             data = r.text
         return r.status_code, data
+
+    def upload(self, path, data, files):
+        r = self.s.post(BASE + path, data=data, files=files)
+        try:
+            body = r.json()
+        except Exception:
+            body = r.text
+        return r.status_code, body
 
     def get(self, p): return self.req("GET", p)
     def post(self, p, b=None): return self.req("POST", p, {} if b is None else b)
@@ -514,6 +523,159 @@ c = db(); c.execute("UPDATE users SET auth_method='domain' WHERE id=?", (TU,)); 
 dm = Client("qa_admin_u1", "Qa-New-Pass-22")   # вход с локальным паролем у domain-пользователя не пройдёт (нужен домен)
 check("C5 доменный пользователь с локальным паролем не входит", dm.status in (401, 403, 503))
 c = db(); c.execute("UPDATE users SET auth_method='local' WHERE id=?", (TU,)); c.commit(); c.close()
+
+# ============================================================ D — проекты, объекты, вложения, физлица
+print("D — проекты, объекты, вложения, физлица")
+import os
+mark = last_log_id()
+s, p1 = ADMIN.post("/projects", {"name": "QA Проект D1", "status": "active", "description": "проверка", "address": "г Москва, ул Тестовая, д 1"})
+check("D1 создание проекта: 200, версия отдаётся", s == 200 and p1["version"], f"{s} {p1}")
+PID = p1["id"]
+check("D1 проект в БД, журнал project_create", q1("SELECT name FROM projects WHERE id=?", (PID,)) is not None and len([e for e in log_since(mark) if e["action"] == "project_create"]) == 1)
+before = snapshot()
+s, e = ADMIN.post("/projects", {"name": "  "})
+check("D2 пустое наименование проекта: 400", s == 400)
+s, e = ADMIN.post("/projects", {"name": "QA Проект D1"})
+check("D2 дубль наименования проекта: 409", s == 409)
+s, e = ADMIN.post("/projects", {"name": "QA Проект статус", "status": "непонятно"})
+check("D2 неизвестный статус проекта: 400", s == 400, f"{s} {e}")
+s, e = USER2.post("/projects", {"name": "QA 403"})
+check("D3 user2 создаёт проект: 403", s == 403)
+s, e = USER4.post("/projects", {"name": "QA 403"})
+check("D3 user4 создаёт проект: 403", s == 403 and q1("SELECT 1 x FROM projects WHERE name='QA 403'") is None)
+s, up = ADMIN.patch(f"/projects/{PID}", {"name": "QA Проект D1 (правка)", "description": "новое", "expected_version": p1["version"]})
+check("D4 правка проекта с актуальной версией: 200", s == 200 and up["name"] == "QA Проект D1 (правка)" and up["version"] != p1["version"], f"{s} {up}")
+s, e = ADMIN.patch(f"/projects/{PID}", {"description": "устарело", "expected_version": p1["version"]})
+check("D4 устаревшая версия проекта: 409 и запись не тронута", s == 409 and q1("SELECT description d FROM projects WHERE id=?", (PID,))["d"] == "новое", f"{s} {e}")
+s, e = USER2.patch(f"/projects/{PID}", {"description": "чужой"})
+check("D4 user2 правит проект: 403", s == 403)
+# объект
+s, o1 = ADMIN.post("/objects", {"name": "QA Объект D1", "project_id": PID, "kind": "zhbi", "status": "active", "description": "проверка"})
+check("D5 создание объекта: 200, версия", s == 200 and o1["version"] and o1["project_id"] == PID, f"{s} {o1}")
+OID = o1["id"]
+s, e = ADMIN.post("/objects", {"name": "QA Объект D1", "project_id": PID})
+check("D6 дубль наименования объекта: 409", s == 409)
+s, e = ADMIN.post("/objects", {"name": "QA без проекта", "project_id": 999999})
+check("D6 несуществующий проект: 404", s == 404)
+s, e = ADMIN.post("/objects", {"name": "QA плохой тип", "project_id": PID, "kind": "xyz"})
+check("D6 неизвестный тип объекта: 400", s == 400)
+s, e = ADMIN.post("/objects", {"name": " ", "project_id": PID})
+check("D6 пустое наименование объекта: 400", s == 400)
+s, e = ADMIN.post("/objects", {"name": "QA плохое СМУ", "project_id": PID, "smu_id": 999999})
+check("D6 несуществующее СМУ: 404, объект не создан", s == 404 and q1("SELECT 1 x FROM objects WHERE name='QA плохое СМУ'") is None)
+s, e = USER2.post("/objects", {"name": "QA 403", "project_id": PID})
+check("D6 user2 создаёт объект: 403", s == 403)
+s, uo = ADMIN.patch(f"/objects/{OID}", {"description": "правка", "lat": 55.75, "lon": 37.61, "expected_version": o1["version"]})
+check("D7 правка объекта: 200, координаты", s == 200 and uo["lat"] == 55.75, f"{s} {uo}")
+s, e = ADMIN.patch(f"/objects/{OID}", {"description": "устарело", "expected_version": o1["version"]})
+check("D7 устаревшая версия объекта: 409, запись не тронута", s == 409 and q1("SELECT description d FROM objects WHERE id=?", (OID,))["d"] == "правка")
+s, e = ADMIN.patch(f"/objects/{OID}", {"lat": 999, "expected_version": uo["version"]})
+check("D7 широта вне диапазона: 400", s == 400)
+# проект с активным объектом нельзя архивировать
+s, e = ADMIN.patch(f"/projects/{PID}", {"status": "archived", "expected_version": up["version"]})
+check("D8 архивация проекта с активным объектом: 409", s == 409, f"{s} {e}")
+# перенос объекта
+s, p2 = ADMIN.post("/projects", {"name": "QA Проект D2"})
+s, mv = ADMIN.patch(f"/objects/{OID}", {"project_id": p2["id"], "expected_version": uo["version"]})
+check("D8 перенос объекта в другой проект: 200 и в БД", s == 200 and q1("SELECT project_id p FROM objects WHERE id=?", (OID,))["p"] == p2["id"])
+s, mv = ADMIN.patch(f"/objects/{OID}", {"project_id": PID, "expected_version": mv["version"]})
+# вложения
+files = {"file": ("qa_note.txt", b"QA attachment body", "text/plain")}
+s, att = ADMIN.upload("/attachments", {"entity_type": "object", "entity_id": OID, "description": "проверка"}, files)
+check("D9 вложение к объекту: 200, в списке", s == 200 and len(att["attachments"]) == 1, f"{s} {att}")
+AID = att["attachments"][0]["id"]
+stored = q1("SELECT stored_name FROM attachments WHERE id=?", (AID,))["stored_name"]
+ATT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "attachments")
+check("D9 файл лежит на диске под сгенерированным именем", os.path.isfile(os.path.join(ATT_DIR, stored)) and stored != "qa_note.txt")
+s, d = ADMIN.upload("/attachments", {"entity_type": "object", "entity_id": OID}, {"file": ("empty.txt", b"", "text/plain")})
+check("D9 пустой файл: 400", s == 400)
+s, d = USER2.upload("/attachments", {"entity_type": "project", "entity_id": PID}, {"file": ("x.txt", b"x", "text/plain")})
+check("D9 user2 прикладывает файл к проекту: 403", s == 403)
+s, d = USER4.upload("/attachments", {"entity_type": "object", "entity_id": OID}, {"file": ("x.txt", b"x", "text/plain")})
+check("D9 user4 (просмотр) прикладывает к объекту: 403", s == 403)
+s, d = ADMIN.upload("/attachments", {"entity_type": "object", "entity_id": 999999}, {"file": ("x.txt", b"x", "text/plain")})
+check("D9 несуществующий объект: 404/403", s in (403, 404))
+# превью только из изображения
+s, e = ADMIN.put(f"/objects/{OID}/avatar", {"attachment_id": AID})
+check("D10 превью из не-изображения: 400", s == 400)
+png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000001e221bc330000000049454e44ae426082")
+s, att2 = ADMIN.upload("/attachments", {"entity_type": "object", "entity_id": OID}, {"file": ("pic.png", png, "image/png")})
+PID_ATT = [a for a in att2["attachments"] if a["filename"] == "pic.png"][0]["id"]
+s, e = ADMIN.put(f"/objects/{OID}/avatar", {"attachment_id": PID_ATT})
+check("D10 превью из изображения: 200, в БД", s == 200 and q1("SELECT avatar_attachment_id a FROM objects WHERE id=?", (OID,))["a"] == PID_ATT)
+s, e = ADMIN.put(f"/objects/{OID}/avatar", {"attachment_id": 999999})
+check("D10 превью из чужого/несуществующего вложения: 404", s == 404)
+s, e = USER2.put(f"/objects/{OID}/avatar", {"attachment_id": None})
+check("D10 user2 снимает превью объекта без права: 403", s == 403 and q1("SELECT avatar_attachment_id a FROM objects WHERE id=?", (OID,))["a"] == PID_ATT)
+s, e = ADMIN.put(f"/objects/{OID}/avatar", {"attachment_id": None})
+check("D10 превью снято", s == 200 and q1("SELECT avatar_attachment_id a FROM objects WHERE id=?", (OID,))["a"] is None)
+s, e = USER2.delete(f"/attachments/{AID}")
+check("D11 user2 удаляет вложение объекта: 403 и файл на месте", s == 403 and os.path.isfile(os.path.join(ATT_DIR, stored)))
+s, e = ADMIN.delete(f"/attachments/{AID}")
+check("D11 удаление вложения: 200, запись и файл исчезли", s == 200 and q1("SELECT 1 x FROM attachments WHERE id=?", (AID,)) is None and not os.path.isfile(os.path.join(ATT_DIR, stored)))
+s, e = ADMIN.delete(f"/attachments/{AID}")
+check("D11 повтор: 404", s == 404)
+# удаление: план, каскад, отказ для непустого
+s, plan = ADMIN.get(f"/dictionaries/object/{OID}/delete-plan")
+check("D12 план удаления пустого объекта: нет мешающих, каскад перечислен (вложения, выданные доступы)", s == 200 and not plan["blockers"], str(plan)[:200])
+ADMIN.put(f"/users/{TU}/access", {"grants": [{"project_id": PID, "object_id": OID, "role": "user"}]})
+snap_obj = snapshot()
+s, plan = ADMIN.get(f"/dictionaries/object/1/delete-plan")
+check("D12 план для объекта с данными: мешающие есть", s == 200 and len(plan["blockers"]) >= 1)
+s, e = ADMIN.post("/dictionaries/object/1/delete", {"replacements": {}, "mode": "replace"})
+check("D12 удаление объекта с данными: 409 и БД не тронута", s == 409 and q1("SELECT 1 x FROM objects WHERE id=1") is not None, f"{s}")
+s, e = USER2.post(f"/dictionaries/object/{OID}/delete", {"replacements": {}, "mode": "replace"})
+check("D12 user2 удаляет объект: 403", s == 403 and q1("SELECT 1 x FROM objects WHERE id=?", (OID,)) is not None)
+s, plan = ADMIN.get(f"/dictionaries/project/{PID}/delete-plan")
+check("D12 проект с объектом: удалять нельзя (мешают «Объекты»)", s == 200 and any(b["label"] == "Объекты" for b in plan["blockers"]))
+s, e = ADMIN.post(f"/dictionaries/project/{PID}/delete", {"replacements": {}, "mode": "replace"})
+check("D12 удаление проекта с объектом: 409", s == 409 and q1("SELECT 1 x FROM projects WHERE id=?", (PID,)) is not None)
+mark = last_log_id()
+s, att3 = ADMIN.upload("/attachments", {"entity_type": "object", "entity_id": OID}, {"file": ("del.txt", b"cascade body", "text/plain")})
+stored3 = q1("SELECT stored_name s FROM attachments WHERE entity_type='object' AND entity_id=?", (OID,))["s"]
+s, r = ADMIN.post(f"/dictionaries/object/{OID}/delete", {"replacements": {}, "mode": "replace"})
+check("D13 удаление пустого объекта: 200", s == 200, f"{s} {r}")
+check("D13 объект, его выданные доступы и вложение (в БД и на диске) исчезли; чужие доступы целы", q1("SELECT 1 x FROM objects WHERE id=?", (OID,)) is None and q1("SELECT COUNT(*) n FROM user_access WHERE object_id=?", (OID,))["n"] == 0 and q1("SELECT COUNT(*) n FROM attachments WHERE entity_type='object' AND entity_id=?", (OID,))["n"] == 0 and not os.path.isfile(os.path.join(ATT_DIR, stored3)) and q1("SELECT COUNT(*) n FROM user_access WHERE user_id=?", (USER2.me["id"],))["n"] >= 1)
+check("D13 журнал: удаление записано", any("delete" in e["action"] for e in log_since(mark)))
+s, r = ADMIN.post(f"/dictionaries/object/{OID}/delete", {"replacements": {}, "mode": "replace"})
+check("D13 повтор (двойная отправка): 404", s == 404)
+s, r = ADMIN.post(f"/dictionaries/project/{PID}/delete", {"replacements": {}, "mode": "replace"})
+check("D13 пустой проект удаляется: 200", s == 200 and q1("SELECT 1 x FROM projects WHERE id=?", (PID,)) is None)
+s, r = ADMIN.post(f"/dictionaries/project/{p2['id']}/delete", {"replacements": {}, "mode": "replace"})
+# конкуренция: два одновременных удаления одного пустого объекта — один 200, второй 404
+s, o9 = ADMIN.post("/objects", {"name": "QA Объект гонка", "project_id": 1})
+res = []
+def del_call():
+    res.append(Client("admin").post(f"/dictionaries/object/{o9['id']}/delete", {"replacements": {}, "mode": "replace"})[0])
+ths = [threading.Thread(target=del_call) for _ in range(2)]
+[t.start() for t in ths]; [t.join() for t in ths]
+check("D14 два одновременных удаления объекта: один 200 и один 404", sorted(res) == [200, 404], str(res))
+# физлица
+mark = last_log_id()
+s, i1 = ADMIN.post("/individuals", {"name": "QA Иванов Иван"})
+check("D15 физлицо: создание 200", s == 200 and i1["id"], f"{s} {i1}")
+IID = i1["id"]
+s, e = ADMIN.post("/individuals", {"name": "qa иванов иван"})
+check("D15 дубль без учёта регистра: 409", s == 409)
+s, e = ADMIN.post("/individuals", {"name": "  "})
+check("D15 пустое имя: 400", s == 400)
+s, e = USER2.post("/individuals", {"name": "QA 403"})
+check("D15 user2 создаёт физлицо: 403", s == 403)
+s, e = ADMIN.patch(f"/individuals/{IID}", {"name": "QA Иванов И."})
+check("D16 переименование: 200 и в БД", s == 200 and q1("SELECT name FROM individuals WHERE id=?", (IID,))["name"] == "QA Иванов И.")
+s, e = ADMIN.patch(f"/individuals/{IID}", {"name": "QA Иванов И."})
+s, e = ADMIN.patch("/individuals/999999", {"name": "x"})
+check("D16 несуществующее физлицо: 404", s == 404)
+s, e = USER2.patch(f"/individuals/{IID}", {"name": "Чужой"})
+check("D16 user2 переименовывает: 403", s == 403)
+s, e = ADMIN.post(f"/dictionaries/individual/{IID}/delete", {"replacements": {}, "mode": "replace"})
+check("D17 удаление неиспользуемого физлица: 200", s == 200 and q1("SELECT 1 x FROM individuals WHERE id=?", (IID,)) is None)
+used = q1("SELECT responsible_id r FROM objects WHERE responsible_id IS NOT NULL LIMIT 1")
+if used:
+    s, e = ADMIN.post(f"/dictionaries/individual/{used['r']}/delete", {"replacements": {}, "mode": "replace"})
+    check("D17 удаление используемого физлица без замены: отказ, запись цела", s in (400, 409) and q1("SELECT 1 x FROM individuals WHERE id=?", (used["r"],)) is not None, f"{s}")
+s, e = ADMIN.post(f"/dictionaries/individual/{IID}/delete", {"replacements": {}, "mode": "replace"})
+check("D17 повторное удаление: 404", s in (404,), f"{s}")
 
 # ============================================================ журнал без секретов
 print("L — журнал без паролей и хэшей")

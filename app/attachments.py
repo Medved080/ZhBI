@@ -78,6 +78,11 @@ def _guard(conn, user, entity_type: str, entity_id: int, key: str, kind: str) ->
     if object_id is None:
         # Владельца нет или он без объекта: в обоих случаях это данные без
         # известного хозяина — только администратору сервиса.
+        # НО несуществующему владельцу вложение не кладётся никому (2026-09-21): форма, открытая до того, как объект удалили, иначе
+        # тихо создавала бы «сироту» — запись и файл на диске без хозяина. Объект без объекта бывает только у элемента.
+        owner_table = {"object": "objects", "element": "elements"}[entity_type]
+        if conn.execute(f"SELECT 1 FROM {owner_table} WHERE id = ?", (entity_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail=f"{ENTITY_LABELS[entity_type].capitalize()} не найден")
         if not is_system_admin(user):
             raise HTTPException(
                 status_code=404,
