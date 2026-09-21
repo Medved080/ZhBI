@@ -20,6 +20,8 @@ import { mountExportForm } from "./export-form.js";
 import { mountSessionsEdit } from "./sessions-edit.js";
 import { mountSubtypesEdit } from "./subtypes-edit.js";
 import { mountAppearanceEdit } from "./appearance-edit.js";
+import { mountLabelColorEdit } from "./label-color-edit.js";
+import { mountRevitColorsEdit } from "./revit-colors-edit.js";
 
 const root = document.getElementById("v2-root");
 
@@ -333,6 +335,16 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountAppearanceEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, user, applyTheme: applyThemeFamily, groupTitle: groupTitle(target.group),
+        });
+      } else if (target.impl === "revit-colors-edit" && target.revit) {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountRevitColorsEdit(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+        });
+      } else if (target.impl === "label-color-edit") {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountLabelColorEdit(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, user, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "subtypes-edit" && target.subtypes) {
         document.title = `${target.title} — ЖБИ`;

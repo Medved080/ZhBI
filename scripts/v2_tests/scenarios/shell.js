@@ -98,7 +98,8 @@ export const tests = [
       const chips = (text) => a.$$(".v2-card-list .v2-chip").filter((c) => c.textContent.trim() === text).length;
       t.eq(chips("в V2"), 3, "пометка «в V2» — ровно у трёх перенесённых разделов");
       const reg = await (await fetch("/static/v2/screens.json", { cache: "no-cache" })).json();
-      const editable = reg.screens.filter((s) => s.impl.endsWith("-edit")).length;
+      // считаются только экраны, видимые на этом объекте (часть экранов скрыта по типу объекта, как в V1)
+      const editable = reg.screens.filter((s) => s.impl.endsWith("-edit") && keys.includes(s.id)).length;
       t.ok(editable >= 6, `в реестре редактируемых экранов: ${editable}`);
       t.eq(chips("правка"), editable, "пометка «правка» — ровно у экранов с правкой в V2 (по реестру)");
       t.ok(a.$(`.v2-card-list a[data-screen-link="contracts"]`), "экран, не перенесённый целиком, тоже достижим с начальной страницы");

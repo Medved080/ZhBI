@@ -2582,6 +2582,17 @@ function createServer(opts) {
     row.ui_theme = theme;
     return userOut(row);
   });
+  // цвет подписей марок: как у настоящего backend — право записи в «Пользователи», формат #RGB…#RRGGBBAA
+  route("PATCH", "/users/:id/label-color", (ctx) => {
+    assertFeature(ctx.user, "users", "write");
+    const id = pathInt(ctx, "id");
+    const c = (ctx.body || {}).label_color ?? null;
+    if (c !== null && !/^#[0-9a-fA-F]{3,8}$/.test(String(c).trim())) fail(422, `Цвет подписей должен быть в формате #RGB/#RRGGBB (получено: '${c}')`);
+    const row = data.users.find((u) => u.id === id);
+    if (!row) fail(404, "Пользователь не найден");
+    row.label_color = c === null ? null : String(c).trim();
+    return userOut(row);
+  });
   route("GET", "/me/sessions", () => ({ sessions: deepClone(sessionsOf()), idle_hours: 12, ttl_days: 30 }));
   route("DELETE", "/me/sessions/:id", (ctx) => {
     const list = sessionsOf(), i = list.findIndex((x) => x.id === ctx.params.id);
@@ -2741,6 +2752,43 @@ function createServer(opts) {
       if (row) row.color = it.color; else rows.push({ category: "Кран", name: it.name, color: it.color });
     }
     return { status: "ok" };
+  });
+  // Цветовая схема модели МФР (как app/revit_colors.py): хранится целиком по объекту, сервер чистит значения
+  const REVIT_CATS = ["Стены", "Перегородки", "Перекрытия", "Двери", "Окна", "Фундамент несущей конструкции", "Несущие колонны", "Каркас несущий", "Лестницы", "Крыши", "Потолки", "Обобщенные модели"];
+  const revitPreset = (title, hint, base) => ({ title, hint, colors: Object.fromEntries(REVIT_CATS.map((c, i) => [c, base[i % base.length]])), opacity: { Окна: 90 }, glow: { Окна: 35 } });
+  const REVIT_PRESETS = {
+    grey: revitPreset("Оттенки серого", "Конструкции читаются по светлоте", ["#d4d4d4", "#e8e8e8", "#8a8a8a", "#f7f7f7"]),
+    pastel: revitPreset("Пастельная", "Категории различаются цветом", ["#a9c6dd", "#cadeed", "#e0cfa8", "#c9b6dd"]),
+    contrast: revitPreset("Контрастная", "Для разбора состава модели", ["#4a7fb5", "#8ab0d6", "#b58b4a", "#7a4ab5"]),
+  };
+  const revitSchemeOf = (oid) => {
+    const saved = (data.settings.revitColors ||= {})[oid];
+    const base = saved || { preset: "grey", colors: { ...REVIT_PRESETS.grey.colors }, opacity: { ...REVIT_PRESETS.grey.opacity }, glow: { ...REVIT_PRESETS.grey.glow } };
+    return deepClone(base);
+  };
+  route("GET", "/revit-plan/colors", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    assertObjectFeature(ctx.user, oid, "revit_model", "read");
+    return { ...revitSchemeOf(oid), presets: Object.entries(REVIT_PRESETS).map(([key, v]) => ({ key, ...deepClone(v) })), fallback: "#c8c8c8" };
+  });
+  route("GET", "/revit-plan/filters", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    assertObjectFeature(ctx.user, oid, "revit_model", "read");
+    return { levels: [], sections: [], parts: [], without_level: 0, without_section: 0, grids: [],
+      categories: [{ category: "Стены", elements: 300 }, { category: "Перегородки", elements: 120 }, { category: "Окна", elements: 80 }, { category: "Перекрытия", elements: 20 }, { category: "Помещение", elements: 60 }] };
+  });
+  route("PUT", "/revit-plan/colors", (ctx) => {
+    const oid = queryValue(ctx, "object_id", { type: "int", required: true });
+    assertObjectFeature(ctx.user, oid, "revit_model", "write");
+    const b = ctx.body || {};
+    let colors = b.colors || {}, opacity = b.opacity || {}, glow = b.glow || {};
+    const preset = b.preset || "custom";
+    if (REVIT_PRESETS[preset] && !Object.keys(colors).length) { colors = REVIT_PRESETS[preset].colors; opacity = REVIT_PRESETS[preset].opacity; glow = REVIT_PRESETS[preset].glow; }
+    const clean = {};
+    for (const [k, v] of Object.entries(colors)) { const c = String(v || "").trim(); if (c.length === 7 && c[0] === "#" && /^[0-9a-fA-F]{6}$/.test(c.slice(1))) clean[String(k).slice(0, 100)] = c.toLowerCase(); }
+    const num = (m, max) => { const out = {}; for (const [k, v] of Object.entries(m)) { const n = parseInt(v, 10); if (Number.isFinite(n) && n > 0) out[String(k).slice(0, 100)] = Math.max(0, Math.min(max, n)); } return out; };
+    (data.settings.revitColors ||= {})[oid] = { preset: REVIT_PRESETS[preset] ? preset : "custom", colors: clean, opacity: num(opacity, 95), glow: num(glow, 100) };
+    return deepClone(data.settings.revitColors[oid]);
   });
   route("GET", "/training/ratings", () => ({ users: [{ id: 1, name: "QA-Админов", position: "QA", rating: { attempts: 2, best: 18, total: 20 } }, { id: 2, name: "QA-Второй", position: null, rating: null }] }));
   route("GET", "/supplier-changes", (ctx) => {
