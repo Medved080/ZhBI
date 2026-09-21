@@ -1,0 +1,153 @@
+/* Область «МФР / учёт по блокам» (V2): экраны «Учёт по блокам», «Журнал факта», «Плоская шахматка», «Массовая правка ЗР»,
+   окна факта / карточки ЗР / состава работ / групповой правки сроков и панель блока в рабочем месте МФР.
+   Токены цвета — общие с styles.css (светлая и тёмная гамма); отдельных цветов только два: «предупреждение» (янтарь) и метки сроков. */
+:root { --mfr-warn: light-dark(#a86a00, #f0c56a); }
+
+.v2-page.mfr-scr { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.mfr-head { flex: none; padding: 10px 20px 8px; border-bottom: 1px solid var(--line); }
+.mfr-head .v2-crumbs { margin: 0 0 2px; font-size: 12px; }
+.mfr-head .v2-screen-head h2 { font-size: 18px; }
+.mfr-head .v2-wire-tabs { margin: 8px 0 0; display: flex; gap: 4px; align-items: center; }
+.mfr-tab-link { margin-left: auto; font-size: 13px; }
+.mfr-body { flex: 1; min-height: 0; padding: 10px 20px 12px; display: flex; flex-direction: column; overflow: hidden; }
+.mfr-body > .v2-bar { flex: none; }
+.mfr-two { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; }
+.mfr-left, .mfr-right { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.mfr-left { border-right: 1px solid var(--line); padding-right: 12px; }
+.mfr-scroll { flex: 1; min-height: 0; overflow: auto; }
+.mfr-tblwrap { border: 1px solid var(--line); border-radius: 8px; }
+.mfr-hint { font-size: 12px; margin: 6px 0 0; }
+.mfr-spacer { flex: 1; }
+.mfr-cap { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+.mfr-cap.on { color: var(--good); border-color: currentColor; }
+.mfr-empty { padding: 32px 8px; }
+.mfr-steps { margin: 4px 0 8px; padding-left: 20px; font-size: 12px; }
+.mfr-file input { max-width: 260px; }
+
+.mfr-status { margin: 4px 0; min-height: 1.3em; font-size: 13px; color: var(--muted); }
+.mfr-status.ok { color: var(--good); }
+.mfr-status.bad { color: var(--bad); }
+.mfr-mini { padding: 2px 8px; font-size: 12px; }
+.v2-btn.on, .v2-btn[aria-pressed="true"].mfr-tabbtn { background: var(--sel); border-color: var(--accent); }
+.v2-btn.v2-danger { color: var(--bad); border-color: var(--bad); }
+
+/* блоки объекта */
+.mfr-sec { margin-bottom: 8px; }
+.mfr-sec-head { display: flex; align-items: center; gap: 6px; padding: 4px 2px; }
+.mfr-blk { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; text-align: left; border: 1px solid transparent; background: none; border-radius: 6px; padding: 5px 8px; }
+.mfr-blk:hover { background: var(--surface); }
+.mfr-blk.on { background: var(--sel); border-color: var(--accent); }
+.mfr-count { min-width: 26px; text-align: center; font-size: 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); padding: 0 7px; }
+.mfr-count.loading { color: var(--muted); }
+.mfr-count.error { color: var(--bad); border-color: var(--bad); }
+
+/* работы выбранных блоков */
+.mfr-works-head { flex: none; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.mfr-works-head h3 { margin: 0 0 2px; font-size: 16px; }
+.mfr-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mfr-filters { flex: none; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.mfr-filters .v2-search { max-width: 220px; }
+.mfr-dd { position: relative; }
+.mfr-dd > summary { list-style: none; cursor: pointer; border: 1px solid var(--line); border-radius: 7px; padding: 6px 12px; background: var(--bg); white-space: nowrap; }
+.mfr-dd[open] > summary { background: var(--sel); border-color: var(--accent); }
+.mfr-dd-body { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 220px; max-height: 320px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / 14%); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.mfr-chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.mfr-chk em { font-style: normal; color: var(--muted); }
+.mfr-checks { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.mfr-tbl td, .mfr-tbl th { padding: 7px 10px; }
+.mfr-row { cursor: pointer; }
+.mfr-row:hover td, .mfr-row:focus-visible td { background: var(--surface); }
+.mfr-dl { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+.mfr-dl-on_track { color: var(--good); border-color: currentColor; }
+.mfr-dl-behind, .mfr-dl-not_started_on_time { color: var(--mfr-warn); border-color: currentColor; }
+.mfr-dl-overdue { color: var(--bad); border-color: currentColor; }
+.mfr-dl-no_dates { color: var(--muted); }
+.mfr-dim td { color: var(--muted); }
+.mfr-conf td { background: var(--sel); }
+
+/* модальное окно */
+.mfr-modal-back { position: fixed; inset: 0; z-index: 90; background: rgba(15, 20, 30, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.mfr-modal { width: 640px; max-width: 100%; max-height: calc(100vh - 32px); display: flex; flex-direction: column; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 48px rgb(0 0 0 / 22%); }
+.mfr-modal-wide { width: 1080px; }
+.mfr-modal-head { flex: none; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.mfr-modal-head h3 { margin: 0; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mfr-modal-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 16px; }
+.mfr-modal-body .v2-card { border: 0; padding: 0; }
+
+.mfr-fold { margin: 8px 0; }
+.mfr-fold > summary { cursor: pointer; font-weight: 600; }
+.mfr-list { margin: 6px 0; padding-left: 20px; }
+.mfr-list li { margin: 2px 0; }
+
+/* дерево видов работ */
+.mfr-tree { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.mfr-set-tree .mfr-tree { max-height: 42vh; }
+.mfr-tree-search { width: 100%; margin-bottom: 6px; }
+.mfr-tree-group, .mfr-tree-op { display: flex; align-items: center; gap: 6px; padding-top: 2px; padding-bottom: 2px; font-size: 13px; }
+.mfr-tree-group { font-weight: 600; }
+.mfr-fj-filters .mfr-tree { max-height: 30vh; }
+.mfr-fj-filters h4 { margin: 10px 0 6px; }
+
+/* форма факта */
+.mfr-fact { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 14px; }
+.mfr-fact-list { border-right: 1px solid var(--line); padding-right: 10px; max-height: 66vh; overflow: auto; }
+.mfr-fact-reports { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.mfr-fact-rep { display: flex; flex-direction: column; text-align: left; border: 1px solid var(--line); border-radius: 6px; background: none; padding: 5px 8px; font-size: 13px; }
+.mfr-fact-rep.on { background: var(--sel); border-color: var(--accent); }
+.mfr-fact-rep span { font-size: 11px; }
+.mfr-fact-rows { max-height: 52vh; overflow: auto; border-top: 1px solid var(--line); margin-top: 8px; }
+.mfr-fact-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px 70px auto; gap: 8px; align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.mfr-fact-row.match { border-left: 3px solid var(--accent); background: var(--sel); }
+.mfr-fact-row input[type="number"] { width: 70px; }
+.mfr-fact-name { font-size: 13px; overflow-wrap: anywhere; }
+.mfr-fact-mark { font-size: 11px; color: var(--accent); font-weight: 600; }
+.mfr-fact-audit { grid-column: 1 / -1; padding: 4px 8px 8px; font-size: 12px; }
+.mfr-audit-tbl { max-width: 520px; }
+.mfr-audit-edits { margin-top: 6px; }
+
+/* плоская шахматка */
+.mfr-cf { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.mfr-cf-bar { flex-wrap: wrap; align-items: flex-end; }
+.mfr-cf-nav { flex: none; display: flex; gap: 6px; flex-wrap: wrap; }
+.mfr-cf-grid-wrap { border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.mfr-cf-grid { display: grid; grid-template-columns: 110px repeat(var(--cols), minmax(190px, 1fr)); gap: 6px; align-items: stretch; }
+.mfr-cf-sec { text-align: center; font-weight: 600; padding: 4px; position: sticky; top: 0; background: var(--bg); z-index: 1; }
+.mfr-cf-lvl { display: flex; align-items: center; padding: 4px; }
+.mfr-cf-cell { border: 1px solid var(--line); border-left: 4px solid var(--pc, var(--line)); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; }
+.mfr-cf-cell.none { align-items: center; justify-content: center; border-left-color: var(--line); min-height: 46px; }
+.mfr-cf-cell-h { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.mfr-cf-op { display: grid; grid-template-columns: minmax(0, 1fr) 42px 52px; gap: 6px; align-items: center; font-size: 12px; }
+.mfr-cf-op span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mfr-cf-op em { font-style: normal; color: var(--muted); text-align: right; }
+.mfr-cf-op input { width: 52px; padding: 3px 5px; text-align: right; }
+.mfr-cf-op input.changed { border-color: var(--accent); background: var(--sel); }
+.mfr-cf-op input.bad { border-color: var(--bad); }
+.mfr-review-list { max-height: 46vh; border: 1px solid var(--line); border-radius: 8px; }
+
+/* групповая правка сроков, Excel-правка */
+.mfr-bulk-tbl { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.mfr-bb { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.mfr-newrep { display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
+
+/* панель блока в рабочем месте МФР (правая панель, узкая) */
+.mfr-wp { padding: 8px 10px 12px; }
+.mfr-wp .v2-btn { padding: 4px 9px; font-size: 12px; }
+.mfr-wp-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.mfr-wp-sum { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+.mfr-wp-op { border-bottom: 1px solid var(--line); padding: 6px 0; cursor: pointer; }
+.mfr-wp-op:hover { background: var(--surface); }
+.mfr-wp-name { font-size: 13px; overflow-wrap: anywhere; }
+.mfr-wp-bar { position: relative; height: 8px; border-radius: 4px; background: var(--surface); border: 1px solid var(--line); margin: 4px 0 2px; overflow: hidden; }
+.mfr-wp-bar > i { display: block; height: 100%; background: var(--good); }
+.mfr-wp-bar > b { position: absolute; top: -1px; bottom: -1px; width: 2px; background: var(--ink); }
+.mfr-wp-meta { display: flex; justify-content: space-between; gap: 6px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+.mfr-wp-node { font-size: 12px; font-weight: 600; color: var(--muted); padding: 6px 0 2px; }
+.mfr-wp .ws-fgroup { margin-bottom: 6px; }
+
+@media (max-width: 1200px) {
+  .mfr-two { grid-template-columns: 260px minmax(0, 1fr); gap: 10px; }
+  .mfr-head { padding: 8px 12px 6px; }
+  .mfr-body { padding: 8px 12px; }
+  .mfr-fact { grid-template-columns: 170px minmax(0, 1fr); }
+  .mfr-fact-row { grid-template-columns: minmax(0, 1fr) 120px 64px auto; }
+}

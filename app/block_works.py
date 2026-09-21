@@ -236,6 +236,17 @@ def _row_dict(row: sqlite3.Row) -> dict:
     }
 
 
+def rev_of(row, percent: int) -> str:
+    """Отпечаток состояния ЗР для проверки конкуренции (интерфейс V2): срок, прогноз, примечание, признак снятия,
+    метка изменения и текущий процент факта. `updated_at` — с точностью до секунды, поэтому одного его мало:
+    отпечаток учитывает и сами значения. Клиент присылает отпечаток, который видел; сервер под блокировкой записи
+    сравнивает с текущим и при расхождении отвечает 409, ничего не меняя (app/block_ops.py)."""
+    import hashlib
+    parts = [row["updated_at"], row["plan_start"], row["plan_end"], row["forecast_start"], row["forecast_end"],
+             row["note"], row["retired_at"], percent]
+    return hashlib.sha1("|".join("" if p is None else str(p) for p in parts).encode("utf-8")).hexdigest()[:12]
+
+
 def _list_rows(conn: sqlite3.Connection, object_id: int, block_ids: Optional[list],
                track_code: Optional[str], *, include_retired: bool = False) -> list:
     # retired_at IS NULL по умолчанию (В7, этап 4) — снятая «Настройками»
@@ -283,6 +294,7 @@ def list_block_works(conn: sqlite3.Connection, object_id: int, today: str, *,
         d = _row_dict(row)
         percent = percents.get(row["id"], 0)
         d.update(derive(d, percent, today))
+        d["rev"] = rev_of(d, percent)
         if status and d["status"] not in status:
             continue
         if deadline and d["deadline"] not in deadline:
@@ -317,6 +329,7 @@ def get_block_work(conn: sqlite3.Connection, object_id: int, bw_id: int, today: 
     percent = current_percents_by_block_work(conn, object_id).get(bw_id, 0)
     d = _row_dict(row)
     d.update(derive(d, percent, today))
+    d["rev"] = rev_of(d, percent)
 
     def _user_label(uid):
         if not uid:
@@ -383,7 +396,7 @@ _UNSET = object()
 
 def update_block_work(conn: sqlite3.Connection, object_id: int, bw_id: int, user_id: int, *,
                       plan_start=_UNSET, plan_end=_UNSET, note=_UNSET,
-                      forecast_start=_UNSET, forecast_end=_UNSET) -> dict:
+                      forecast_start=_UNSET, forecast_end=_UNSET, commit: bool = True) -> dict:
     """PATCH карточки ЗР — правка директивных сроков (сразу, с журналом
     старое/новое — §3: «базовая дата... меняется только явной правкой»),
     примечания (тем же полем реквизитов, своего кода в журнале не заведено
@@ -422,7 +435,8 @@ def update_block_work(conn: sqlite3.Connection, object_id: int, bw_id: int, user
         if new_fs != row["forecast_start"] or new_fe != row["forecast_end"]:
             _save_forecast_version(conn, bw_id, object_id, row["block_id"], user_id,
                                    new_fs, new_fe, None)
-    conn.commit()
+    if commit:   # commit=False — строгая пакетная правка (app/block_ops.py): фиксирует вызывающий, одной транзакцией
+        conn.commit()
     from datetime import date
     return get_block_work(conn, object_id, bw_id, date.today().isoformat())
 

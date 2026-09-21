@@ -12,6 +12,10 @@ import { loadRegistry, screenAllowed } from "./registry.js";
 import { mountScreenView, mountHome, linkList } from "./screen-view.js";
 import { mountReadScreen } from "./read-screen.js";
 import { mountWorkspace } from "./workspace.js";
+import { mountBlocksScreen } from "./blocks-screen.js";
+import { mountFactJournalScreen } from "./fact-journal-screen.js";
+import { mountChessFlatScreen } from "./chess-flat-screen.js";
+import { mountBlockBulkScreen } from "./block-bulk-screen.js";
 import { mountDictEdit } from "./dict-edit.js";
 import { mountSettingEdit } from "./setting-edit.js";
 import { mountColorEdit } from "./color-edit.js";
@@ -125,6 +129,9 @@ function renderFatal(err) {
 
 // Модульные экраны (перенесены целиком) → их монтирование. Остальные экраны реестра показывают каркас
 // с переходом в V1 (screen-view.js).
+// Экраны области «МФР / учёт по блокам» (рабочие модули с записью через шлюз): impl экрана → монтирование
+const MFR_SCREENS = { "blocks-edit": mountBlocksScreen, "fact-journal-edit": mountFactJournalScreen, "chess-flat-edit": mountChessFlatScreen, "block-bulk-edit": mountBlockBulkScreen };
+
 const MODULES = {
   "users-access": (el, ctx) => mountUsersAccess(el, ctx),
   "projects-objects": (el, ctx) => mountProjectsObjects(el, ctx),
@@ -441,6 +448,11 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountWorkspace(content, {
           screen: target, objectId, api, groupTitle: groupTitle(target.group), ws: target.ws || "model",
+        });
+      } else if (MFR_SCREENS[target.impl]) {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = MFR_SCREENS[target.impl](content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "read" && target.read) {
         document.title = `${target.title} — ЖБИ`;
