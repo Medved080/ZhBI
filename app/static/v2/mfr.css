@@ -29,7 +29,6 @@
 .mfr-status.bad { color: var(--bad); }
 .mfr-mini { padding: 2px 8px; font-size: 12px; }
 .v2-btn.on, .v2-btn[aria-pressed="true"].mfr-tabbtn { background: var(--sel); border-color: var(--accent); }
-.v2-btn.v2-danger { color: var(--bad); border-color: var(--bad); }
 
 /* блоки объекта */
 .mfr-sec { margin-bottom: 8px; }

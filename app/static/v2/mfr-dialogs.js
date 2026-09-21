@@ -192,7 +192,7 @@ export function openBulkDatesDialog({ api, objectId, items, canWrite, onDone, on
         ${!p ? `<button type="button" class="v2-btn v2-primary" id="bd-preview" ${busy || !validInput() ? "disabled" : ""}>Предпросмотр</button>` : ""}</div>
       <div id="bd-pv">${p ? previewHtml(p) : `<p class="v2-muted">Выбрано работ: ${ids.length}. Сначала — предпросмотр: изменения записываются только после него.</p>`}</div>
       <p id="bd-status" class="mfr-status ${esc(st.kind)}" role="status" aria-live="polite">${esc(st.status)}</p>
-      ${p ? `<div class="v2-bar mfr-actions"><button type="button" class="v2-btn v2-primary" id="bd-apply" ${busy || !p.will_change || !canWrite ? "disabled" : ""}>Применить: ${p.will_change} из ${p.requested}</button><button type="button" class="v2-btn" id="bd-back" ${busy ? "disabled" : ""}>Назад</button></div>` : ""}</div>`;
+      ${p ? `<div class="v2-bar mfr-actions"><button type="button" class="v2-btn v2-primary" id="bd-apply" ${busy || !p.will_change || !canWrite || p.items.some((i) => i.blocked) ? "disabled" : ""}>Применить: ${p.will_change} из ${p.requested}</button><button type="button" class="v2-btn" id="bd-back" ${busy ? "disabled" : ""}>Назад</button></div>` : ""}</div>`;
     m.body.querySelector("#bd-op")?.addEventListener("change", (e) => { st.op = e.target.value; paint(); });
     m.body.querySelector("#bd-field")?.addEventListener("change", (e) => { st.field = e.target.value; });
     m.body.querySelector("#bd-days")?.addEventListener("input", (e) => { st.days = e.target.value; const b = m.body.querySelector("#bd-preview"); if (b) b.disabled = !validInput(); });
@@ -207,7 +207,8 @@ export function openBulkDatesDialog({ api, objectId, items, canWrite, onDone, on
       const aft = i.will_change ? `${shortDate(i.after[key + "_start"])}–${shortDate(i.after[key + "_end"])}` : "—";
       return `<tr class="${i.will_change ? "" : "mfr-dim"}"><td>${esc(i.section_code ?? "")} · ${esc(i.level_floor ?? "")}</td><td>${esc(i.name || "")}</td><td>${esc(bef)}</td><td>${esc(aft)}</td><td>${i.will_change ? "изменится" : esc(i.reason || "")}</td></tr>`;
     }).join("");
-    return `${p.note ? `<div class="v2-callout" role="note"><strong>${esc(p.note)}.</strong> Новая версия прогноза добавляется, старая остаётся в истории.</div>` : ""}
+    const blocked = p.items.filter((i) => i.blocked).length;
+    return `${blocked ? `<div class="v2-callout v2-callout-bad" role="alert"><strong>Применить нельзя.</strong> У ${blocked} работ сдвиг выводит дату за допустимые границы — исключите их из набора (операция применяется целиком или не применяется вовсе).</div>` : ""}${p.note ? `<div class="v2-callout" role="note"><strong>${esc(p.note)}.</strong> Новая версия прогноза добавляется, старая остаётся в истории.</div>` : ""}
       <p><b>Изменится: ${p.will_change} из ${p.requested}</b>${p.requested - p.will_change ? ` · без изменений: ${p.requested - p.will_change}` : ""}</p>
       <div class="v2-read-table mfr-bulk-tbl"><table class="v2-read-tbl"><thead><tr><th>Секция · этаж</th><th>Работа</th><th>Сейчас</th><th>Станет</th><th>Итог</th></tr></thead><tbody>${rows}</tbody></table></div>
       ${p.items.length > 300 ? `<p class="v2-muted">Показаны первые 300 из ${p.items.length}; применяется ко всем.</p>` : ""}`;
