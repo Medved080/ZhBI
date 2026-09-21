@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import threading
 import os
 import shutil
 import sqlite3
@@ -78,7 +79,7 @@ from app.db import (
     visible_elements_clause,
 )
 from app.dxf_import import (
-    DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, forget_pending,
+    DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, claim_pending, forget_pending, release_pending,
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
     save_uploaded_file,
 )
@@ -2442,6 +2443,9 @@ def admin_input_files(user: sqlite3.Row = Depends(require_service_feature("impor
     return list_input_files()
 
 
+_INPUT_IMPORT_LOCK = threading.Lock()
+
+
 class ImportInputIn(BaseModel):
     # В какой объект грузится ВСЯ пачка (2026-08-21, запрос пользователя).
     # Необязателен ради старого клиента и первой в жизни установки, где
@@ -2488,9 +2492,15 @@ def admin_import_input(body: Optional[ImportInputIn] = None,
             assert_object_feature(conn, user, object_id, "drawings", "write")
         finally:
             conn.close()
-    backup_before_import("папка Input", audit_display_name(user), user["id"])
-    report = import_input_dxf(object_id)
-    report += import_input_xlsx(object_id)
+    # Одна загрузка из папки за раз: вторая (двойная отправка, вторая вкладка) получает отказ, а не параллельную обработку тех же файлов
+    if not _INPUT_IMPORT_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Загрузка из папки Input уже выполняется — дождитесь завершения")
+    try:
+        backup_before_import("папка Input", audit_display_name(user), user["id"])
+        report = import_input_dxf(object_id)
+        report += import_input_xlsx(object_id)
+    finally:
+        _INPUT_IMPORT_LOCK.release()
     # В журнал: до 2026-07-30 массовая загрузка из Input/ нигде не
     # фиксировалась, кроме stdout сервера, — а она перезаписывает геометрию
     # всех элементов и создаёт контракты (живой репорт пользователя о
@@ -3987,6 +3997,9 @@ class BulkEditExportIn(BaseModel):
     # фронтенде, и второй их реализации на сервере быть не должно. Список на
     # тысячи значений не помещается в query string, поэтому выгрузка — POST.
     element_ids: Optional[list[int]] = None
+    # Выгрузить элементы ОДНОГО объекта (новый интерфейс: там нет фильтра схемы, а «всё всех объектов» не всегда нужно). Сервер сам берёт те же
+    # видимые элементы, что и фильтр схемы; вместе с element_ids не принимается; для контрактации (строка — позиция контракта) не применяется.
+    object_id: Optional[int] = None
 
 
 @app.post("/elements/bulk-edit/export")
@@ -4006,11 +4019,21 @@ def bulk_edit_export(body: BulkEditExportIn, admin: sqlite3.Row = Depends(requir
     """
     _check_bulk_mode(body.mode)
     ids = set(body.element_ids) if body.element_ids is not None else None
+    if body.object_id is not None and (body.element_ids is not None or body.mode == "contracting"):
+        raise HTTPException(status_code=400,
+                            detail="Отбор по объекту не сочетается с отбором по фильтру схемы и не применяется к контрактации")
     if ids is not None and not ids:
         raise HTTPException(status_code=400,
                             detail="Фильтр схемы не пропускает ни одного элемента — выгружать нечего")
     conn = get_connection()
     try:
+        if body.object_id is not None:
+            if conn.execute("SELECT 1 FROM objects WHERE id = ?", (body.object_id,)).fetchone() is None:
+                raise HTTPException(status_code=404, detail="Объект не найден")
+            ids = {r["id"] for r in conn.execute(
+                f"SELECT id FROM elements WHERE object_id = ? AND {visible_elements_clause()}", (body.object_id,))}
+            if not ids:
+                raise HTTPException(status_code=400, detail="У выбранного объекта нет элементов — выгружать нечего")
         if body.mode == "contracting":
             # Отбора по фильтру схемы у контрактации нет: строка файла — не
             # элемент, а позиция контракта (форма в этом режиме галочку и не
@@ -4082,43 +4105,50 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
     backup_before_import(f"массовая правка через Excel ({body.mode})",
                          audit_display_name(admin), admin["id"])
     conn = get_connection()
+    # События журнала копятся и уходят в очередь только после commit: применение может откатиться целиком (страж остатка контракта
+    # внутри apply_status_change), а поэлементные события пишутся по ходу дела (app/activity.py, defer_*).
+    события = activity.defer_begin()
     try:
         begin_write(conn)   # блокировка записи ДО чтения и проверок (app/db.py): не читать устаревшее состояние перед записью
         if body.mode == "contracting":
             try:
-                return contracting_bulk_edit.apply_changes(
+                итог = contracting_bulk_edit.apply_changes(
                     conn, body.changes, audit_display_name(admin), admin["id"]
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
-        if body.mode == "statuses":
+        elif body.mode == "statuses":
             try:
-                return status_bulk_edit.apply_changes(
+                итог = status_bulk_edit.apply_changes(
                     conn, body.changes, audit_display_name(admin), admin["id"]
                 )
             except ValueError as exc:
                 # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
                 # а не сбой сервера (тот же белый список, что у реквизитов).
                 raise HTTPException(status_code=400, detail=str(exc))
-        stamp = None
-        if body.contracting_date:
+        else:
+            stamp = None
+            if body.contracting_date:
+                try:
+                    datetime.strptime(body.contracting_date, "%Y-%m-%d")
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Дата статуса — в виде ГГГГ-ММ-ДД")
+                # Полдень, а не полночь: запись «Запланирован» от импорта чертежа
+                # несёт реальное время суток, и событие в 00:00 того же дня
+                # оказалось бы РАНЬШЕ неё, то есть не подействовало бы.
+                stamp = f"{body.contracting_date} 12:00:00"
             try:
-                datetime.strptime(body.contracting_date, "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Дата статуса — в виде ГГГГ-ММ-ДД")
-            # Полдень, а не полночь: запись «Запланирован» от импорта чертежа
-            # несёт реальное время суток, и событие в 00:00 того же дня
-            # оказалось бы РАНЬШЕ неё, то есть не подействовало бы.
-            stamp = f"{body.contracting_date} 12:00:00"
-        try:
-            return apply_bulk_edit(
-                conn, body.changes, audit_display_name(admin), admin["id"], stamp
-            )
-        except ValueError as exc:
-            # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
-            # а не сбой сервера: см. белый список в app/element_bulk_edit.py.
-            raise HTTPException(status_code=400, detail=str(exc))
+                итог = apply_bulk_edit(
+                    conn, body.changes, audit_display_name(admin), admin["id"], stamp
+                )
+            except ValueError as exc:
+                # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
+                # а не сбой сервера: см. белый список в app/element_bulk_edit.py.
+                raise HTTPException(status_code=400, detail=str(exc))
+        activity.defer_flush(события)   # commit внутри apply_changes выполнен — события в журнал
+        return итог
     finally:
+        activity.defer_end(события)
         conn.close()
 
 
@@ -5704,6 +5734,20 @@ def analyze_dxf(
         # ещё нет: справочник тогда пуст, и все подтипы файла новые.
         parsed = parse_drawing(saved_path, name, object_id)
         analysis = analyze_drawing(parsed, object_id)
+        # Имя чертежа уникально на весь сервис вместе с handle элемента (UNIQUE(source_file, dxf_handle)): файл с именем, под которым изделия
+        # уже загружены в ДРУГОЙ объект, применить нельзя — раньше это выяснялось только на применении и заканчивалось ошибкой сервера.
+        conn = get_connection()
+        try:
+            чужой = conn.execute(
+                "SELECT o.name FROM elements e JOIN objects o ON o.id = e.object_id "
+                "WHERE e.source_file = ? AND e.object_id <> ? LIMIT 1", (name, analysis["object_id"])).fetchone()
+        finally:
+            conn.close()
+        if чужой:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Чертёж с именем «{name}» уже загружен в объект «{чужой['name']}». Имя чертежа не должно совпадать "
+                       f"с чертежом другого объекта — переименуйте файл и загрузите его снова.")
         token = remember_pending(parsed, analysis)
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -5729,6 +5773,16 @@ def analyze_dxf(
 @app.post("/import-dxf/apply", response_model=DxfImportResult)
 def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
     """Фаза 2: применяет уже показанную пользователю сводку."""
+    # Один токен применяется один раз и не параллельно: второй запрос с тем же токеном (двойная отправка) получает отказ, не запуская вторую загрузку
+    if not claim_pending(body.token):
+        raise HTTPException(status_code=409, detail="Этот разбор чертежа уже применяется — дождитесь завершения")
+    try:
+        return _apply_dxf_claimed(body, user)
+    finally:
+        release_pending(body.token)
+
+
+def _apply_dxf_claimed(body: DxfApplyIn, user: sqlite3.Row):
     try:
         parsed, analysis = get_pending(body.token)
         # Объект уже выбран на фазе анализа и лежит в токене — проверяем ЕГО,
@@ -5918,6 +5972,16 @@ def analyze_revit(
 @app.post("/import-revit/apply", response_model=RevitImportResult)
 def apply_revit(body: RevitApplyIn, user: sqlite3.Row = Depends(get_current_user)):
     """Фаза 2: применяет уже показанную сводку."""
+    # Один токен применяется один раз и не параллельно (двойная отправка получает 409); токены DXF и Revit — разные uuid, набор общий
+    if not claim_pending(body.token):
+        raise HTTPException(status_code=409, detail="Этот разбор уже применяется — дождитесь завершения")
+    try:
+        return _apply_revit_claimed(body, user)
+    finally:
+        release_pending(body.token)
+
+
+def _apply_revit_claimed(body: RevitApplyIn, user: sqlite3.Row):
     try:
         packages, analysis = revit_import.get_pending(body.token)
     except revit_import.RevitProcessingError as e:
@@ -7406,9 +7470,11 @@ def import_history_xlsx(
     admin: sqlite3.Row = Depends(get_current_user),
 ):
     content = read_upload_limited(file.file)
-    backup_before_import(f"история статусов из {file.filename or 'файла'}",
-                         audit_display_name(admin), admin["id"])
     conn = get_connection()
+    # События журнала (сводное и поэлементные) копятся и уходят в очередь ТОЛЬКО после подтверждённого commit:
+    # импорт истории может откатиться целиком (страж покрытия контрактов, 409) уже после того, как поэлементные события
+    # были «залогированы», и журнал утверждал бы то, чего не случилось (app/activity.py, defer_*).
+    события = activity.defer_begin()
     # Соединение живёт до конца запроса и закрывается ОДИН раз, в finally
     # ниже. До 2026-08-12 здесь стоял отдельный `finally: conn.close()`
     # вокруг проверки доступа — и весь импорт истории падал 500
@@ -7417,7 +7483,13 @@ def import_history_xlsx(
     # живой проверкой формы.
     try:
         _guard_source_file(conn, admin, source_file, "import_history", "write")
+        # Файл разбирается ДО копии базы и до блокировки записи (от БД не зависит): нечитаемый файл отвечает 4xx, не оставляя ни копии, ни блокировки
+        if mode not in ("replace", "merge", "sync"):
+            raise HTTPException(status_code=422, detail="mode должен быть 'replace', 'merge' или 'sync'")
         parsed = parse_history_xlsx(content)
+        backup_before_import(f"история статусов из {file.filename or 'файла'}",
+                             audit_display_name(admin), admin["id"])
+        begin_write(conn)   # блокировка записи ДО чтения и записи (app/db.py): два импорта истории не идут одновременно
         # Общая метка операции: сводное событие ниже и поэлементные события
         # внутри import_history связываются через неё (activity.new_request_id).
         операция = activity.new_request_id()
@@ -7442,10 +7514,12 @@ def import_history_xlsx(
         # нормальная ситуация вроде «элемента нет в этом чертеже».
         summary["invalid_dates"] = parsed["invalid_dates"]
         summary["invalid_date_examples"] = parsed["invalid_date_examples"]
+        activity.defer_flush(события)   # импорт зафиксирован (commit внутри import_history) — теперь события в журнал
         return summary
     except HistoryImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
+        activity.defer_end(события)     # откат/исключение: несброшенные события отбрасываются
         conn.close()
 
 
@@ -7462,12 +7536,13 @@ def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query
     не берётся из текущего вида схемы: файл контрактации приходит от
     снабжения и вполне может относиться к соседнему зданию."""
     content = read_upload_limited(file.file)
-    backup_before_import(f"контрактация из {file.filename or 'файла'}",
-                         audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
-        # Файл разбирается ДО блокировки (это долго и от БД не зависит); блокировка записи — до чтения БД и до записи (app/db.py)
+        # Файл разбирается ДО копии базы и ДО блокировки (это долго и от БД не зависит): нечитаемый файл отвечает 4xx, не оставляя
+        # ни копии, ни блокировки. Блокировка записи — до чтения БД и до записи (app/db.py)
         parsed = parse_contracting_xlsx(content)
+        backup_before_import(f"контрактация из {file.filename or 'файла'}",
+                             audit_display_name(admin), admin["id"])
         begin_write(conn)
         if conn.execute("SELECT id FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="Объект не найден")
@@ -7517,13 +7592,18 @@ def objects_import_apply(body: ObjectsImportApplyIn,
     backup_before_import("загрузка справочника объектов из Excel",
                          audit_display_name(admin), admin["id"])
     conn = get_connection()
+    события = activity.defer_begin()   # журнал подтверждает только зафиксированное (app/activity.py, defer_*)
     try:
-        return objects_import.apply_changes(conn, body.changes, admin)
+        begin_write(conn)   # блокировка записи ДО чтения и записи (app/db.py): два применения не идут одновременно
+        итог = objects_import.apply_changes(conn, body.changes, admin)
+        activity.defer_flush(события)   # commit внутри apply_changes выполнен
+        return итог
     except ValueError as exc:
         # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400), а не
         # сбой сервера (тот же белый список, что у element_bulk_edit).
         raise HTTPException(status_code=400, detail=str(exc))
     finally:
+        activity.defer_end(события)
         conn.close()
 
 
@@ -7542,11 +7622,20 @@ def import_schedule_xlsx(file: UploadFile = File(...),
     даты, проставляются в изделия) или «актуализированный» (прогноз, живёт
     отдельной версией и полей изделия не трогает)."""
     content = read_upload_limited(file.file)
-    backup_before_import(f"график MS Project из {file.filename or 'файла'}",
-                         audit_display_name(admin), admin["id"])
     conn = get_connection()
+    # Поэлементные события графика пишутся внутри import_schedule ДО commit; журнал должен подтверждать только зафиксированное —
+    # события копятся и уходят в очередь после commit (app/activity.py, defer_*).
+    события = activity.defer_begin()
     try:
+        if kind not in ("baseline", "current"):
+            raise HTTPException(status_code=422, detail="Неизвестный вид графика")
+        if object_id is not None and conn.execute("SELECT 1 FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
+        # Файл разбирается ДО копии базы и до блокировки: нечитаемый файл отвечает 4xx, не оставляя ни копии, ни блокировки
         parsed = parse_schedule_xlsx(content)
+        backup_before_import(f"график MS Project из {file.filename or 'файла'}",
+                             audit_display_name(admin), admin["id"])
+        begin_write(conn)   # блокировка записи ДО чтения и записи (app/db.py)
         операция = activity.new_request_id()
         итог = import_schedule(conn, parsed, admin, операция, object_id=object_id,
                                kind=kind, source_file=file.filename)
@@ -7556,10 +7645,12 @@ def import_schedule_xlsx(file: UploadFile = File(...),
                      new_value=f"{file.filename or 'файл'} ({вид}): строк {итог['rows_processed']}, "
                                f"изделий в версии {итог['elements_in_version']}, "
                                f"обновлено {итог['elements_updated']}")
+        activity.defer_flush(события)
         return итог
     except ScheduleImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
+        activity.defer_end(события)
         conn.close()
 
 

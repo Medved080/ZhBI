@@ -18,6 +18,7 @@ import { mountColorEdit } from "./color-edit.js";
 import { mountPrefixEdit } from "./prefix-edit.js";
 import { mountProjectCardEdit, mountReportNotesEdit } from "./card-edit.js";
 import { mountExportForm } from "./export-form.js";
+import { mountExchange, hasExchangeOp } from "./exchange.js";
 import { mountSessionsEdit } from "./sessions-edit.js";
 import { mountSubtypesEdit } from "./subtypes-edit.js";
 import { mountAppearanceEdit } from "./appearance-edit.js";
@@ -294,7 +295,7 @@ async function renderShell(user, permissions) {
         return `<div class="v2-nav-group">
           <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
           ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
+            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl === "exchange" ? ` <span class="v2-nav-tag" title="Загрузка и выгрузка файлов выполняются в новом интерфейсе">обмен</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
         </div>`;
       }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
     const search = document.getElementById("v2-nav-search");
@@ -408,6 +409,12 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSessionsEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
+        });
+      } else if (target.impl === "exchange" && hasExchangeOp(target.exchange)) {
+        // Импорт/экспорт файлов и связанные операции обмена данными (exchange*.js)
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountExchange(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, user, rights, objects: activeObjects, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "export-form" && target.export) {
         document.title = `${target.title} — ЖБИ`;

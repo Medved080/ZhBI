@@ -144,6 +144,21 @@ export const POLICY = [
   // ==== область: picker (комплектовщик, контрагенты, договоры, спецификации, контракты, замена поставщика) ====
   // ==== область: admin (пользователи, роли, доступы, пароли, проекты и объекты, справочники, настройки) ====
   // ==== область: exchange (импорт, экспорт, документы, отчёты) ====
+  // Загрузка файла — multipart (FormData): `check` видит поля формы и сам файл (расширение, размер) и параметры адреса. Разбор и проверки — на сервере, здесь
+  // только форма запроса, которую проверили на настоящем backend (scripts/verify_exchange.py и живая проверка в браузере, Docs/v2-progress/exchange.md).
+  { id: "import.contracting", screen: "contracting-import", action: "Импорт контрактации из XLSX в выбранный объект (контрагенты, договоры, спецификации, контракты, позиции)", method: "POST", path: re("/import-contracting-xlsx"), check: uploadCheck({ ext: ["xlsx"], query: { object_id: isIntStr } }), risk: "данные контрактации, одна транзакция (всё или ничего), копия базы перед загрузкой", allowed: true, proof: "настоящий backend: успех и повтор без дублей, отказ 403 у user2/user4, 422 на неверный файл, откат, журнал только после сохранения, двойной клик — один запрос" },
+  { id: "import.schedule", screen: "schedule-import", action: "Импорт графика MS Project из XLSX (базовый — даты изделий; актуализированный — новая версия прогноза)", method: "POST", path: re("/import-schedule-xlsx"), check: uploadCheck({ ext: ["xlsx"], fields: { object_id: isIntStr, kind: isOneOf(["baseline", "current"]) } }), risk: "данные графика и даты изделий, копия базы перед загрузкой", allowed: true, proof: "настоящий backend: базовый и прогноз, отказ 403, 422 на неверный файл, откат, журнал после сохранения" },
+  { id: "import.history", screen: "history-import", action: "Импорт истории статусов из XLSX по чертежу объекта (скорректировать / дополнить / заменить)", method: "POST", path: re("/import-history-xlsx"), check: uploadCheck({ ext: ["xlsx"], fields: { source_file: isNonEmpty, mode: isOneOf(["sync", "merge", "replace"]) } }), risk: "история статусов (режим «заменить» удаляет текущую историю сопоставленных изделий), копия базы перед загрузкой", allowed: true, proof: "настоящий backend: три режима, откат страж покрытия, отказ 403, журнал после сохранения" },
+  { id: "status.restore", screen: "status-restore", action: "Восстановление статусов из выгрузки (режим «заменить» по чертежу объекта)", method: "POST", path: re("/import-history-xlsx"), check: uploadCheck({ ext: ["xlsx"], fields: { source_file: isNonEmpty, mode: isOneOf(["replace"]) } }), risk: "история статусов пересоздаётся по файлу, копия базы перед загрузкой", allowed: true, proof: "настоящий backend: замена истории по файлу, отказ 403, откат" },
+  { id: "objects.analyze", screen: "objects-import", action: "Справочник объектов из Excel: сверка файла со справочником (ничего не пишет)", method: "POST", path: re("/objects-import/analyze"), check: uploadCheck({ ext: ["xlsx"] }), risk: "чтение (сверка), данные не меняются", allowed: true, proof: "настоящий backend: расхождения построчно, 422 на неверный файл, отказ 403" },
+  { id: "objects.apply", screen: "objects-import", action: "Справочник объектов из Excel: применить отмеченные правки (создание объектов и проектов, правка реквизитов)", method: "POST", path: re("/objects-import/apply"), check: objectsApplyProblem, risk: "справочник объектов и проектов, одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, повтор без дублей, откат, отказ 403, журнал после сохранения" },
+  { id: "bulk.analyze", screen: "bulk-edit", action: "Массовая правка через Excel: сверка файла с базой (ничего не пишет)", method: "POST", path: re("/elements/bulk-edit/analyze"), check: uploadCheck({ ext: ["xlsx"], fields: { mode: isOneOf(["fields", "statuses", "contracting"]) } }), risk: "чтение (сверка), данные не меняются", allowed: true, proof: "настоящий backend: расхождения по трём режимам, 400/422 на неверный файл, отказ 403" },
+  { id: "drawing.analyze", screen: "upload-drawing", action: "Загрузка чертежа DXF: разбор и сводка изменений по выбранному объекту (в базу не пишет, файл сохраняется в uploads/)", method: "POST", path: re("/import-dxf/analyze"), check: uploadCheck({ ext: ["dxf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются; файл кладётся во временную папку сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF, отказ 403 у user2/user4, 4xx на пустой и битый файл" },
+  { id: "drawing.apply", screen: "upload-drawing", action: "Загрузка чертежа DXF: применить показанную сводку (изделия, сетка осей, зоны и привязки объекта)", method: "POST", path: re("/import-dxf/apply"), check: dxfApplyProblem, risk: "геометрия и привязки изделий объекта; этапами (не одна транзакция, как в V1), копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, двойная отправка — один запрос, отказ 403, журнал после сохранения" },
+  { id: "input.import", screen: "import-input", action: "Загрузка из папки Input/ сервера: чертежи и таблицы пачкой в выбранный объект", method: "POST", path: re("/admin/import-input"), check: inputImportProblem, risk: "геометрия изделий объекта и график СМР; каждый файл отдельно (ошибка одного не отменяет остальные), копия базы перед загрузкой", allowed: true, proof: "настоящий backend: построчный отчёт, отказ 403 у не-админа, повтор безопасен (обновление по handle), журнал" },
+  { id: "revit.analyze", screen: "revit-import", action: "Загрузка из Revit: разбор пакетов выгрузки по выбранному объекту и сводка (в базу не пишет)", method: "POST", path: re("/import-revit/analyze"), check: uploadCheck({ ext: ["gz", "json"], fileField: "files", maxFiles: 12, fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического пакета КР, отказ 403 у не-админа, 4xx на битый пакет и на дубль раздела" },
+  { id: "revit.apply", screen: "revit-import", action: "Загрузка из Revit: применить показанную сводку (секции, этажи, элементы и помещения модели объекта)", method: "POST", path: re("/import-revit/apply"), check: tokenOnlyProblem, risk: "справочники и элементы модели МФР объекта; этапами (как в V1), копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, списание исчезнувших внутри раздела" },
+  { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
   { id: "users.write", screen: "users-access", action: "Пользователи: создание и правка", method: "POST/PATCH", path: re(`/users(/\\d+)?`), allowed: false, risk: "права и учётные записи", why: "приёмка раздела не завершена" },
@@ -171,7 +186,7 @@ export function checkWrite(method, pathWithQuery, body) {
   for (const r of ALLOWED) {
     if (r.method !== m || !r.path.test(path)) continue;
     if (r.onlyKeys && !bodyKeys(body).every((k) => r.onlyKeys.includes(k))) continue; // поля вне разрешённой группы
-    if (r.check && r.check(body, query)) continue;                                     // тело/запрос не той формы, что проверена
+    if (r.check && r.check(body, query, pathWithQuery)) continue;                      // тело/запрос/адрес не той формы, что проверена
     return { allowed: true, rule: r };
   }
   const known = POLICY.find((r) => !r.allowed && r.path.test(path));
@@ -204,4 +219,92 @@ export function announceBlocked(result, method, path) {
   try {
     window.dispatchEvent(new CustomEvent(BLOCKED_EVENT, { detail: { message: result.message, method, path, rule: result.rule?.id || null } }));
   } catch (e) { /* уведомление вторично, отказ уже принят */ }
+}
+
+// ==== вспомогательные проверки области exchange: форма загрузки (multipart) и тела разбора/применения ====
+// Объявлены как function (поднимаются в начало модуля), потому что строки POLICY выше вычисляются при загрузке модуля.
+
+function isIntStr(v) { return typeof v === "string" && /^[1-9][0-9]{0,9}$/.test(v); }
+function isNonEmpty(v) { return typeof v === "string" && v.trim() !== "" && v.length <= 500; }
+function isOneOf(list) { return (v) => typeof v === "string" && list.includes(v); }
+
+// Проверка формы загрузки: ровно один непустой файл разрешённого расширения (не больше лимита сервера), только перечисленные поля формы
+// и параметры адреса (все обязательны). Возвращает функцию (body, query, pathWithQuery) → текст проблемы или null (в проверке — «проблема ⇒ отказ»).
+function uploadCheck({ ext, fields = {}, query = {}, maxBytes = 200 * 1024 * 1024, fileField = "file", maxFiles = 1 }) {
+  return (body, _query, pathWithQuery) => {
+    if (typeof FormData === "undefined" || !(body instanceof FormData)) return "не форма загрузки";
+    const keys = [...new Set([...body.keys()])];
+    if (keys.some((k) => k !== fileField && !(k in fields))) return "лишние поля формы";
+    const files = body.getAll(fileField);
+    if (files.length < 1 || files.length > maxFiles || files.some((f) => typeof f !== "object" || f === null || typeof f.name !== "string")) return maxFiles === 1 ? "нужен ровно один файл" : `нужно от 1 до ${maxFiles} файлов`;
+    for (const f of files) {
+      const e = (f.name.split(".").pop() || "").toLowerCase();
+      if (!ext.includes(e)) return "неверное расширение файла";
+      if (!(f.size > 0)) return "файл пуст";
+      if (f.size > maxBytes) return "файл больше лимита сервера";
+    }
+    for (const [k, valid] of Object.entries(fields)) {
+      const vals = body.getAll(k);
+      if (vals.length !== 1 || !valid(vals[0])) return `поле «${k}» не заполнено или неверно`;
+    }
+    const q = new URLSearchParams(String(pathWithQuery || "").split("?")[1] || "");
+    const qkeys = [...new Set([...q.keys()])];
+    if (qkeys.some((k) => !(k in query))) return "лишние параметры адреса";
+    for (const [k, valid] of Object.entries(query)) {
+      const vals = q.getAll(k);
+      if (vals.length !== 1 || !valid(vals[0])) return `параметр «${k}» не задан или неверен`;
+    }
+    return null;
+  };
+}
+
+// Применение справочника объектов: только `changes`; каждая правка — объект с известным видом. Ничего сверх этого сервер и не принимает.
+function objectsApplyProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => k !== "changes")) return "лишние поля";
+  if (!Array.isArray(body.changes) || !body.changes.length || body.changes.length > 5000) return "правок нет или больше 5000";
+  const kinds = ["create", "update", "address_link"];
+  for (const c of body.changes) {
+    if (!c || typeof c !== "object" || Array.isArray(c) || !kinds.includes(c.kind) || typeof c.key !== "string" || !c.key.trim()) return "правка неверной формы";
+  }
+  return null;
+}
+
+// Применение массовой правки: `changes` (правки, как их вернула сверка), режим и — только для режима реквизитов — дата статуса «Контрактация».
+function bulkApplyProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => !["changes", "mode", "contracting_date"].includes(k))) return "лишние поля";
+  if (!["fields", "statuses", "contracting"].includes(body.mode)) return "неизвестный режим";
+  if (!Array.isArray(body.changes) || !body.changes.length || body.changes.length > 100000) return "правок нет или больше 100000";
+  if (body.changes.some((c) => !c || typeof c !== "object" || Array.isArray(c))) return "правка неверной формы";
+  if (body.contracting_date != null && (body.mode !== "fields" || typeof body.contracting_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.contracting_date))) return "дата статуса неверна";
+  return null;
+}
+
+// Применение чертежа: токен разбора и решения человека (принять смену марок; перезаполнить ручные поля: {id изделия: [поля]}; создать новые записи зон).
+function dxfApplyProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => !["token", "accept_mark_changes", "keep_mark_element_ids", "refill_manual_fields", "create_new_zone_ids"].includes(k))) return "лишние поля";
+  if (typeof body.token !== "string" || !/^[0-9a-f]{16,64}$/.test(body.token)) return "нет токена разбора";
+  if (typeof body.accept_mark_changes !== "boolean") return "решение по маркам не задано";
+  if (!Array.isArray(body.keep_mark_element_ids) || !Array.isArray(body.create_new_zone_ids) || body.create_new_zone_ids.some((x) => !Number.isInteger(x))) return "списки решений неверны";
+  const r = body.refill_manual_fields;
+  if (!r || typeof r !== "object" || Array.isArray(r) || Object.entries(r).some(([k, v]) => !/^\d+$/.test(k) || !Array.isArray(v) || v.some((f) => typeof f !== "string"))) return "решения по ручным полям неверны";
+  return null;
+}
+
+// Загрузка из папки Input: только объект пачки (целое число).
+function inputImportProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => k !== "object_id")) return "лишние поля";
+  if (!Number.isInteger(body.object_id) || body.object_id <= 0) return "не указан объект";
+  return null;
+}
+
+// Применение по токену разбора без иных решений (Revit).
+function tokenOnlyProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => k !== "token")) return "лишние поля";
+  if (typeof body.token !== "string" || !/^[0-9a-f]{16,64}$/.test(body.token)) return "нет токена разбора";
+  return null;
 }

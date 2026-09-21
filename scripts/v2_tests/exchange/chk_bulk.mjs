@@ -1,0 +1,117 @@
+import { clk, open, screen, setFile, text, reload, mkbulk, TAG, EX, SP, snap, sql, maxid, journal, changed, chk, summary, posts } from "./hx.mjs";
+const AN = "/elements/bulk-edit/analyze", AP = "/elements/bulk-edit/apply", EXP = "/elements/bulk-edit/export";
+const b = await open("admin");
+await screen(b, "bulk-edit");
+const st = () => text(b, "#bk-status");
+const dialog = () => b.eval(`(()=>{const d=document.querySelector('.v2-dialog');return d?d.innerText:null})()`);
+const info = mkbulk("fields", "bk_fields.xlsx");
+console.log("== режимы и выгрузка");
+chk((await text(b, "#bk-modes")).includes("Реквизиты") && (await text(b, "#bk-modes")).includes("История статусов") && (await text(b, "#bk-modes")).includes("Контрактация"), "три режима на экране");
+chk((await text(b, "#v2-content")).includes("Перенос базы целиком"), "про «Перенос базы» сказано, что он остаётся в V1");
+await b.clickSel("#bk-export"); await b.waitFor(`document.querySelector('#bk-status').className.includes('ok')`, 30000);
+chk(posts(b, EXP).length === 1 && posts(b, EXP)[0].status === 200, "выгрузка: один POST export → 200; " + (await st()).slice(0, 80));
+chk(JSON.parse(posts(b, EXP)[0].body).mode === "fields" && !("object_id" in JSON.parse(posts(b, EXP)[0].body)), "выгрузка «все объекты»: тело {mode:fields}");
+await b.eval(`document.querySelector('input[name="bk-scope"][value="object"]').click()`);
+await b.clickSel("#bk-export"); await b.sleep(400); await b.waitFor(`!document.querySelector('#bk-export').disabled`, 30000);
+const last = JSON.parse(posts(b, EXP).at(-1).body);
+chk(last.mode === "fields" && Number.isInteger(last.object_id), "выгрузка «только объект»: в теле object_id=" + last.object_id);
+console.log("== сверка → отметка → применение");
+await setFile(b, "#bk-file", EX + "/bk_fields.xlsx");
+await clk(b, "#bk-analyze"); await b.waitFor(`document.querySelector('#bk-table table')`, 20000);
+chk(await b.eval(`document.querySelectorAll('#bk-table tbody tr').length`) === 3, "сверка: 3 расхождения в таблице (2 комментария, этаж)");
+chk((await st()).includes("Расхождений: 3"), "строка состояния: " + (await st()));
+await b.shot(SP + "/exchange_work/s_bulk_table.png");
+// снять флажок с этажа (последняя строка) — применится 2 из 3
+const s0 = snap();
+await clk(b, "#bk-table tbody tr:last-child input[data-i]");
+chk((await text(b, "#bk-summary")).includes("Отмечено 2 из 3"), "флажок снят: " + (await text(b, "#bk-summary")));
+// переключатель по полю (чип) «Этаж» — включить обратно и снова выключить
+await b.eval(`document.querySelector('#bk-chips input[data-field="Этаж"]').click()`);
+chk((await text(b, "#bk-summary")).includes("Отмечено 3 из 3"), "чип поля включил этаж обратно");
+await b.eval(`document.querySelector('#bk-chips input[data-field="Этаж"]').click()`);
+chk(JSON.stringify(snap()) === JSON.stringify(s0) && posts(b, "/apply").length === 0, "до нажатия «Применить» ничего не записано");
+const j0 = maxid();
+await b.eval(`window.__f = window.fetch; window.fetch = async (...a) => { if (String(a[0]).includes('bulk-edit/apply')) await new Promise(r => setTimeout(r, 1500)); return window.__f(...a); }`);
+await clk(b, "#bk-apply");
+await b.waitFor(`document.querySelector('.v2-dialog')`, 5000);
+chk((await dialog()).includes("Применить 2 изменений"), "диалог подтверждения: " + (await dialog()).replace(/\n/g, " ").slice(0, 120));
+await b.clickSel('[data-choice="confirm"]');
+await b.sleep(500);
+chk(await b.eval(`document.querySelector('#bk-apply').disabled`), "во время применения кнопка заблокирована");
+await clk(b, "#bk-apply"); await clk(b, "#bk-apply");
+await b.waitFor(`document.querySelector('#bk-status').className.includes('ok') && document.querySelector('#bk-status').innerText.includes('Готово')`, 30000);
+chk(posts(b, AP).length === 1, `применение: один запрос (${posts(b, AP).length})`);
+const body = JSON.parse(posts(b, AP)[0].body);
+chk(body.mode === "fields" && body.changes.length === 2 && !body.contracting_date, "тело: 2 отмеченные правки, mode=fields");
+chk((await text(b, "#bk-result")).includes("Элементов обновлено"), "результат: " + (await text(b, "#bk-result")).replace(/\n/g, " ").slice(0, 100));
+const rowsDb = sql(`select id, comment, floor from elements where id in (${info.ids.join(",")})`);
+chk(rowsDb.filter((r) => String(r.comment || "").includes("браузер")).length === 2, "в БД записаны 2 комментария");
+chk(!rowsDb.some((r) => r.floor === info.floor), "этаж (снятый флажок) в БД НЕ изменён");
+await b.sleep(1800);
+chk(journal("element_bulk_edit", j0).length === 2, "журнал: 2 события element_bulk_edit");
+console.log("== после перезагрузки страницы и в V1");
+await reload(b, "#/bulk-edit");
+const v = await b.eval(`fetch('/elements/${info.ids[0]}').then(r=>r.ok?r.json():null).catch(()=>null)`);
+chk(sql(`select count(*) n from elements where id in (${info.ids.join(",")}) and comment like 'браузер%'`)[0].n === 2, "значения (2 комментария) сохранились после перезагрузки страницы");
+await b.goto("http://127.0.0.1:8150/?ui=v1"); await b.sleep(3500);
+chk(!b.exceptions.length, "V1 открылся без исключений");
+console.log("== устаревшая сверка: данные изменились после показа таблицы");
+const info2 = mkbulk("fields", "bk_fields2.xlsx", TAG + "9");
+await reload(b, "#/bulk-edit");
+await setFile(b, "#bk-file", EX + "/bk_fields2.xlsx");
+await clk(b, "#bk-analyze"); await b.waitFor(`document.querySelector('#bk-table table')`, 20000);
+// другой пользователь (второй админ user3) меняет комментарий того же изделия ПОСЛЕ показа сверки
+const other = await b.eval(`(async()=>{const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain_login:'user3',password:'Test-Pass-1234!'})});return r.status})()`);
+await b.eval(`fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain_login:'admin',password:'Test-Pass-1234!'})})`);
+const c = await import("node:child_process");
+console.log("PATCH другого пользователя:", c.execFileSync("python3", ["-W", "ignore", "-c", `
+import warnings; warnings.filterwarnings("ignore")
+import requests, sqlite3
+BASE="${"http://127.0.0.1:8150"}"
+s=requests.Session(); s.post(BASE+"/login",json={"domain_login":"user3","password":"Test-Pass-1234!"})
+r=s.patch(BASE+"/elements/${sql(`select id from elements where element_uid='${info2.uid3}'`)[0].id}/fields",json={"floor":5}); print(r.status_code, r.text[:100])
+`], {encoding: "utf8"}).trim());
+const s1 = snap(); const jn = posts(b, AP).length;
+await clk(b, "#bk-apply"); await b.sleep(800); console.log("STATE", await b.eval(`JSON.stringify({dlg: !!document.querySelector('.v2-dialog'), dis: document.querySelector('#bk-apply').disabled, hidden: document.querySelector('#bk-applybar').hidden, st: document.querySelector('#bk-status').innerText.slice(0,200)})`));
+await b.waitFor(`document.querySelector('.v2-dialog')`, 5000); await b.clickSel('[data-choice="confirm"]');
+await b.waitFor(`document.querySelector('#bk-status').className.includes('bad') || document.querySelector('#bk-status').className.includes('ok')`, 20000);
+chk((await st()).includes("Сверка устарела"), "показано «Сверка устарела»: " + (await st()).slice(0, 110));
+chk(posts(b, AP).length === jn, "применение НЕ отправлялось");
+chk(JSON.stringify(snap()) === JSON.stringify(s1), "БД не изменена устаревшим применением");
+console.log("== неизвестный исход применения");
+const info3 = mkbulk("fields", "bk_fields3.xlsx", TAG + "7");
+await reload(b, "#/bulk-edit");
+await setFile(b, "#bk-file", EX + "/bk_fields3.xlsx");
+await clk(b, "#bk-analyze"); await b.waitFor(`document.querySelector('#bk-table table')`, 20000);
+await b.eval(`window.__f = window.fetch; window.fetch = async (...a) => { const r = await window.__f(...a); if (String(a[0]).includes('bulk-edit/apply')) throw new TypeError('Failed to fetch'); return r; }`);
+const j3 = maxid(), n3 = posts(b, AP).length;
+await clk(b, "#bk-apply"); await b.waitFor(`document.querySelector('.v2-dialog')`, 5000); await b.clickSel('[data-choice="confirm"]');
+await b.waitFor(`document.querySelector('#bk-status [data-verify]')`, 20000);
+await b.sleep(1500);
+chk(posts(b, AP).length === n3 + 1, "без автоповтора: один запрос применения");
+await b.clickSel('#bk-status [data-verify]');
+await b.waitFor(`document.querySelector('[data-verify-out]').innerText.includes('выполнена')`, 8000);
+chk((await text(b, "[data-verify-out]")).includes("Операция выполнена"), "сверка по журналу: " + (await text(b, "[data-verify-out]")).replace(/\n/g, " ").slice(0, 100));
+console.log("== смена режима с несохранённой сверкой");
+await reload(b, "#/bulk-edit");
+const info4 = mkbulk("statuses", "bk_st.xlsx", TAG + "5");
+await b.eval(`document.querySelector('#bk-modes [data-mode="statuses"]').click()`);
+await setFile(b, "#bk-file", EX + "/bk_st.xlsx");
+await clk(b, "#bk-analyze"); await b.waitFor(`document.querySelector('#bk-table table')`, 20000);
+chk((await st()).includes("Расхождений: 1"), "режим «История статусов»: " + (await st()).slice(0, 80));
+await b.eval(`document.querySelector('#bk-modes [data-mode="fields"]').click()`);
+await b.waitFor(`document.querySelector('.v2-dialog')`, 3000);
+chk((await dialog()).includes("не применена"), "при смене режима — предупреждение о потере сверки");
+await b.clickSel('[data-choice="cancel"]');
+chk(await b.eval(`document.querySelector('#bk-modes [data-mode="statuses"]').getAttribute('aria-pressed')`) === "true", "«Остаться» — режим прежний, таблица на месте");
+// уход с экрана — сторож
+const j5 = maxid();
+await clk(b, "#bk-apply"); await b.waitFor(`document.querySelector('.v2-dialog')`, 5000); await b.clickSel('[data-choice="confirm"]');
+await b.waitFor(`document.querySelector('#bk-status').innerText.includes('Готово') || document.querySelector('#bk-status').className.includes('bad')`, 20000);
+chk((await st()).includes("Готово"), "применение истории статусов: " + (await st()).slice(0, 100));
+chk((await text(b, "#bk-result")).includes("Записей истории изменено"), "результат: " + (await text(b, "#bk-result")).replace(/\n/g, " ").slice(0, 90));
+await b.sleep(1800);
+chk(journal("status_bulk_edit", j5).length === 1, "журнал: status_bulk_edit");
+chk(!b.exceptions.length, "исключений страницы нет: " + JSON.stringify(b.exceptions.slice(0, 2)));
+summary();
+await b.close();

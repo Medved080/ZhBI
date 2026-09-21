@@ -1,0 +1,13 @@
+import { open, screen, text, chk, summary, posts } from "./hx.mjs";
+const b = await open("admin");
+await b.eval(`(()=>{const s=document.querySelector('#v2-object');s.value='2';s.dispatchEvent(new Event('change',{bubbles:true}))})()`); await b.sleep(1200);
+await screen(b, "report-dynamics");
+await b.waitFor(`document.querySelector('#rd-report')`, 30000); await b.sleep(800);
+chk(JSON.parse(posts(b, "/reports/dynamics")[0].body).dyn_mode === "both", "по умолчанию dyn_mode=both");
+await b.eval(`(()=>{const s=document.querySelector('[data-param="dyn_mode"]');s.value='delivery';s.dispatchEvent(new Event('change',{bubbles:true}))})()`); await b.sleep(1500);
+chk(JSON.parse(posts(b, "/reports/dynamics").at(-1).body).dyn_mode === "delivery", "выбор «Только поставку» уходит в запрос");
+await b.eval(`document.querySelector('[data-export="xlsx"]').click()`);
+await b.waitFor(`document.querySelector('#rd-export-status').innerText.includes('сформирован')`, 30000);
+chk(JSON.parse(b.requests.filter((r)=>r.url.includes('/reports/dynamics.xlsx')).at(-1).body).dyn_mode === "delivery", "выгрузка использует тот же режим");
+chk(!b.exceptions.length, "исключений нет");
+summary(); await b.close();
