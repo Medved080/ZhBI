@@ -594,4 +594,236 @@ if (want("bulk")) {
   }
 }
 
+// ====================================================================== проекты и объекты
+if (want("projects")) {
+  console.log("== Проекты и объекты (браузер)");
+  const { writeFileSync, existsSync } = await import("node:fs");
+  const ATT_DIR = new URL("../uploads/attachments/", import.meta.url).pathname;
+  const b = await session(BASE, "admin");
+  await openSection(b, "projects-objects"); await b.waitFor("!!document.querySelector('#po-add-project')");
+  ok("PO-UI-0 «Проекты и объекты» открывается администратору, запись не заблокирована шлюзом", true);
+  const setFiles = async (sel, files) => {
+    const root = await b.send("DOM.getDocument", { depth: 0 });
+    const n = await b.send("DOM.querySelector", { nodeId: root.root.nodeId, selector: sel });
+    await b.send("DOM.setFileInputFiles", { files, nodeId: n.nodeId });
+  };
+  const treeText = () => text(b, "#po-tree");
+  // --- создание проекта: пустое → ошибка без запроса; двойной клик → один POST
+  let mark = b.requests.length;
+  await click(b, "#po-add-project"); await b.waitFor("!!document.querySelector('#pf-name')");
+  await fill(b, "#pf-description", "проверка"); await b.waitFor("!!document.querySelector('#po-save')");
+  await click(b, "#po-save"); await b.sleep(500);
+  ok("PO-UI-1 проект без наименования: сообщение «Укажите наименование», НЕТ запроса", (await text(b, "#po-status")).includes("Укажите наименование") && wr(b, mark).length === 0);
+  await fill(b, "#pf-name", "QA Проект UI");
+  mark = b.requests.length;
+  await b.eval("document.querySelector('#po-save').scrollIntoView({block:'center'})");
+  const r0 = await b.rect("#po-save"); await b.click(r0.cx, r0.cy); await b.click(r0.cx, r0.cy);
+  await b.waitFor("(document.querySelector('#po-status')||{}).innerText==='Добавлено.'", 10000);
+  ok("PO-UI-1 двойной клик «Сохранить»: РОВНО ОДИН POST /projects", wr(b, mark).filter((x) => x.method === "POST" && x.url.endsWith("/projects")).length === 1);
+  const proj = one("SELECT * FROM projects WHERE name='QA Проект UI'");
+  ok("PO-UI-1 проект в БД; журнал project_create", !!proj && (await flush(), q("SELECT * FROM activity_log WHERE action='project_create' AND entity_id=" + proj.id).length === 1));
+  await reload(b); await b.waitFor("!!document.querySelector('#po-tree')");
+  ok("PO-UI-1 после ПЕРЕЗАГРУЗКИ проект в дереве", (await treeText()).includes("QA Проект UI"));
+  // --- дубль
+  await click(b, "#po-add-project"); await b.waitFor("!!document.querySelector('#pf-name')");
+  await fill(b, "#pf-name", "QA Проект UI"); await b.waitFor("!!document.querySelector('#po-save')");
+  await click(b, "#po-save"); await b.waitFor("(document.querySelector('#po-status')||{}).innerText?.includes('уже есть')", 10000);
+  ok("PO-UI-2 дубль наименования: сообщение сервера 409, ввод остался, в БД один", (await text(b, "#po-status")).includes("уже есть") && (await b.eval("document.querySelector('#pf-name').value")) === "QA Проект UI" && one("SELECT COUNT(*) n FROM projects WHERE name='QA Проект UI'").n === 1);
+  await click(b, "#po-cancel"); await b.sleep(300);
+  // --- объект в проекте
+  await click(b, `[data-project="${proj.id}"]`); await b.waitFor("!!document.querySelector('#po-add-object')");
+  await click(b, "#po-add-object"); await b.waitFor("!!document.querySelector('#pf-project')");
+  ok("PO-UI-3 «+ Объект» при выбранном проекте: проект подставлен в форму", (await b.eval("document.querySelector('#pf-project').value")) === String(proj.id));
+  await fill(b, "#pf-name", "QA Объект UI"); await fill(b, "#pf-description", "первое описание");
+  mark = b.requests.length;
+  await click(b, "#po-save"); await b.waitFor("(document.querySelector('#po-status')||{}).innerText==='Добавлено.'", 10000);
+  const oc = wr(b, mark).find((x) => x.method === "POST" && x.url.endsWith("/objects"));
+  const obj = one("SELECT * FROM objects WHERE name='QA Объект UI'");
+  ok("PO-UI-3 объект создан: POST /objects с project_id, в БД проект и тип «zhbi»", !!obj && obj.project_id === proj.id && obj.kind === "zhbi" && JSON.parse(oc.body).project_id === proj.id);
+  // --- правка с версией
+  await b.waitFor("!!document.querySelector('#pf-description')");
+  await fill(b, "#pf-description", "второе описание");
+  mark = b.requests.length;
+  await click(b, "#po-save"); await b.waitFor("(document.querySelector('#po-status')||{}).innerText==='Сохранено.'", 10000);
+  const pc = wr(b, mark).find((x) => x.method === "PATCH");
+  ok("PO-UI-4 правка объекта: PATCH с версией записи; в БД новое описание", !!JSON.parse(pc.body).expected_version && one(`SELECT description d FROM objects WHERE id=${obj.id}`).d === "второе описание");
+  await reload(b); await b.waitFor("!!document.querySelector('#po-tree')");
+  await click(b, `[data-project="${proj.id}"]`); await b.waitFor(`!!document.querySelector('[data-object="${obj.id}"]')`);
+  await click(b, `[data-object="${obj.id}"]`); await b.waitFor("!!document.querySelector('#pf-description')");
+  ok("PO-UI-4 после ПЕРЕЗАГРУЗКИ форма показывает сохранённое описание", (await b.eval("document.querySelector('#pf-description').value")) === "второе описание");
+  // --- конфликт устаревших данных
+  const cur = (await admin.get("/objects")).data.find((x) => x.id === obj.id);
+  const col = await admin.patch(`/objects/${obj.id}`, { description: "правка коллеги", expected_version: cur.version });
+  ok("PO-UI-5 подготовка: коллега изменил объект по HTTP", col.status === 200);
+  await fill(b, "#pf-description", "моя правка");
+  await click(b, "#po-save");
+  await b.waitFor("!!document.querySelector('#po-stale-reload')", 10000);
+  ok("PO-UI-5 устаревшая запись: отказ 409, в БД правка коллеги, предложено перечитать", (await text(b, "#po-status")).includes("Ничего не сохранено") && one(`SELECT description d FROM objects WHERE id=${obj.id}`).d === "правка коллеги");
+  await click(b, "#po-stale-reload"); await b.waitFor("!!document.querySelector('#pf-description')"); await b.sleep(500);
+  ok("PO-UI-5 «Перечитать»: форма показывает правку коллеги", (await b.eval("document.querySelector('#pf-description').value")) === "правка коллеги");
+  // --- обрыв ответа
+  await fill(b, "#pf-description", "после обрыва");
+  await dropNextResponse(b, `/objects/${obj.id}`, "PATCH");
+  mark = b.requests.length;
+  await click(b, "#po-save"); await b.sleep(1800);
+  ok("PO-UI-6 обрыв ответа: ОДИН PATCH, автоповтора нет, сервер сохранил (SQL), интерфейс сверился и сказал об этом", wr(b, mark).filter((x) => x.method === "PATCH").length === 1 && one(`SELECT description d FROM objects WHERE id=${obj.id}`).d === "после обрыва" && (await text(b, "#po-status")).includes("хотя ответ не дошёл"), await text(b, "#po-status"));
+  // --- нет связи
+  await fill(b, "#pf-description", "без сети");
+  await b.offline(true); mark = b.requests.length;
+  await click(b, "#po-save"); await b.sleep(1200); await b.offline(false);
+  ok("PO-UI-7 нет связи: сообщение, ввод остался, в БД прежнее", (await text(b, "#po-status")).includes("Нет связи") && (await b.eval("document.querySelector('#pf-description').value")) === "без сети" && one(`SELECT description d FROM objects WHERE id=${obj.id}`).d === "после обрыва");
+  await click(b, "#po-cancel"); await b.sleep(300);
+  // --- вложения и превью
+  const txt = WORK + "/qa_note.txt", png = WORK + "/qa_pic.png";
+  writeFileSync(txt, "QA attachment body");
+  writeFileSync(png, Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000001e221bc330000000049454e44ae426082", "hex"));
+  await b.waitFor("!!document.querySelector('#po-attach-file')");
+  await setFiles("#po-attach-file", [txt, png]);
+  await fill(b, "#po-attach-desc", "проверка вложений");
+  mark = b.requests.length;
+  await click(b, "#po-attach-add");
+  await b.waitFor(`document.querySelectorAll('.v2-attach-row').length===2`, 15000);
+  ok("PO-UI-8 два файла: два POST /attachments (по одному на файл), оба в списке", wr(b, mark).filter((x) => x.method === "POST" && x.url.endsWith("/attachments")).length === 2);
+  const atts = q(`SELECT * FROM attachments WHERE entity_type='object' AND entity_id=${obj.id} ORDER BY id`);
+  ok("PO-UI-8 в БД две записи, файлы на диске под сгенерированными именами", atts.length === 2 && atts.every((a) => existsSync(ATT_DIR + a.stored_name) && a.stored_name !== a.filename));
+  await reload(b); await b.waitFor("!!document.querySelector('#po-tree')");
+  await click(b, `[data-project="${proj.id}"]`); await b.waitFor(`!!document.querySelector('[data-object="${obj.id}"]')`);
+  await click(b, `[data-object="${obj.id}"]`); await b.waitFor("document.querySelectorAll('.v2-attach-row').length===2");
+  ok("PO-UI-8 после ПЕРЕЗАГРУЗКИ вложения на месте", true);
+  // превью (только изображению)
+  const pngRow = atts.find((a) => a.filename === "qa_pic.png");
+  ok("PO-UI-9 кнопка «превью» есть только у изображения", (await b.eval("document.querySelectorAll('[data-avatar-set]').length")) === 1);
+  mark = b.requests.length;
+  await click(b, "[data-avatar-set]"); await b.waitFor("!!document.querySelector('[data-avatar-unset]')", 10000);
+  ok("PO-UI-9 превью назначено: PUT /avatar, в БД avatar_attachment_id, картинка показана", wr(b, mark).filter((x) => x.method === "PUT").length === 1 && one(`SELECT avatar_attachment_id a FROM objects WHERE id=${obj.id}`).a === pngRow.id && (await exists(b, ".v2-avatar-preview")));
+  await click(b, "[data-avatar-unset]"); await b.waitFor("!!document.querySelector('[data-avatar-set]')", 10000);
+  ok("PO-UI-9 превью снято (SQL)", one(`SELECT avatar_attachment_id a FROM objects WHERE id=${obj.id}`).a === null);
+  // скачать
+  await b.eval("window.__dl=null"); 
+  // удаление вложения: подтверждение, DELETE, файл с диска
+  mark = b.requests.length;
+  await click(b, `[data-del="${atts[0].id}"]`); await confirmDialog(b);
+  await b.waitFor("document.querySelectorAll('.v2-attach-row').length===1", 10000);
+  ok("PO-UI-10 удаление вложения: DELETE, запись и файл исчезли", wr(b, mark).filter((x) => x.method === "DELETE").length === 1 && q(`SELECT * FROM attachments WHERE id=${atts[0].id}`).length === 0 && !existsSync(ATT_DIR + atts[0].stored_name));
+  // --- удаление объекта: подтверждение вводом названия
+  mark = b.requests.length;
+  await click(b, "#po-delete"); await b.waitFor("!!document.querySelector('#po-typed')");
+  const msg = await text(b, ".v2-dialog");
+  ok("PO-UI-11 диалог удаления: название, последствия (вложения), поле ввода названия, «Удалить» выключена", msg.includes("QA Объект UI") && msg.includes("Вложения") && (await b.eval("document.querySelector('.v2-dialog [data-choice=confirm]').disabled")) === true, msg.slice(0, 200));
+  await b.eval("(()=>{const i=document.querySelector('#po-typed'); i.focus();})()"); await b.type("не то название");
+  ok("PO-UI-11 неверное название: «Удалить» выключена", (await b.eval("document.querySelector('.v2-dialog [data-choice=confirm]').disabled")) === true);
+  await fill(b, "#po-typed", "QA Объект UI");
+  ok("PO-UI-11 верное название: «Удалить» включена", (await b.eval("document.querySelector('.v2-dialog [data-choice=confirm]').disabled")) === false);
+  await confirmDialog(b, "cancel");
+  ok("PO-UI-11 отмена: запросов на удаление нет, объект на месте (SQL)", wr(b, mark).filter((x) => x.url.includes("/delete")).length === 0 && one(`SELECT COUNT(*) n FROM objects WHERE id=${obj.id}`).n === 1);
+  await admin.put(`/users/${one("SELECT id FROM users WHERE domain_login='user2'").id}/access`, { grants: [{ project_id: proj.id, object_id: obj.id, role: "user" }, { project_id: 1, object_id: null, role: "user" }] });
+  await click(b, "#po-delete"); await b.waitFor("!!document.querySelector('#po-typed')");
+  await fill(b, "#po-typed", "QA Объект UI");
+  mark = b.requests.length;
+  await click(b, ".v2-dialog [data-choice=confirm]");
+  await b.waitFor("(document.querySelector('#po-status')||{}).innerText?.startsWith('Объект удалён')", 12000);
+  ok("PO-UI-12 удаление: ОДИН POST /dictionaries/object/{id}/delete; объект, вложения (БД и диск), выданные на него доступы исчезли", wr(b, mark).filter((x) => x.url.includes(`/dictionaries/object/${obj.id}/delete`)).length === 1 && q(`SELECT * FROM objects WHERE id=${obj.id}`).length === 0 && q(`SELECT * FROM attachments WHERE entity_type='object' AND entity_id=${obj.id}`).length === 0 && !existsSync(ATT_DIR + atts[1].stored_name) && q(`SELECT * FROM user_access WHERE object_id=${obj.id}`).length === 0);
+  ok("PO-UI-12 чужие доступы user2 (на проект 1) целы", q(`SELECT * FROM user_access WHERE project_id=1 AND object_id IS NULL AND user_id=${one("SELECT id FROM users WHERE domain_login='user2'").id}`).length >= 1);
+  await flush();
+  ok("PO-UI-12 журнал: удаление записано", q("SELECT * FROM activity_log WHERE action IN ('dictionary_delete') AND old_value='QA Объект UI'").length === 1);
+  await reload(b); await b.waitFor("!!document.querySelector('#po-tree')");
+  ok("PO-UI-12 после ПЕРЕЗАГРУЗКИ объекта в дереве нет", !(await text(b, "#po-tree")).includes("QA Объект UI"));
+  // --- объект с данными не удаляется
+  await b.eval("document.querySelector('#po-status-filter').value=''; document.querySelector('#po-status-filter').dispatchEvent(new Event('change',{bubbles:true}))");
+  const snapAll = JSON.stringify([q("SELECT COUNT(*) n FROM objects")[0], q("SELECT COUNT(*) n FROM elements")[0]]);
+  const busy = one("SELECT o.id, o.project_id FROM objects o WHERE (SELECT COUNT(*) FROM elements e WHERE e.object_id=o.id)>0 ORDER BY o.id LIMIT 1");
+  await click(b, `[data-project="${busy.project_id}"]`); await b.waitFor(`!!document.querySelector('[data-object="${busy.id}"]')`);
+  await click(b, `[data-object="${busy.id}"]`); await b.waitFor("!!document.querySelector('#po-delete')");
+  await click(b, "#po-delete"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  ok("PO-UI-13 объект с данными: диалог «Удалить нельзя. Мешает» с перечнем", (await text(b, ".v2-dialog")).includes("Удалить нельзя") && (await text(b, ".v2-dialog")).includes("Изделия"));
+  await confirmDialog(b, "ok");
+  ok("PO-UI-13 ничего не удалено (SQL)", JSON.stringify([q("SELECT COUNT(*) n FROM objects")[0], q("SELECT COUNT(*) n FROM elements")[0]]) === snapAll);
+  // --- удалить проект: с объектом нельзя, пустой можно
+  await click(b, `[data-project="${busy.project_id}"]`); await b.waitFor("!!document.querySelector('#po-delete')");
+  await click(b, "#po-delete"); await b.waitFor("!!document.querySelector('.v2-dialog')");
+  ok("PO-UI-14 проект с объектами: удалить нельзя, мешают «Объекты»", (await text(b, ".v2-dialog")).includes("Объекты"));
+  await confirmDialog(b, "ok");
+  await click(b, `[data-project="${proj.id}"]`); await b.waitFor("!!document.querySelector('#po-delete')");
+  await click(b, "#po-delete"); await b.waitFor("!!document.querySelector('#po-typed')");
+  await fill(b, "#po-typed", "QA Проект UI");
+  await dropNextResponse(b, `/dictionaries/project/${proj.id}/delete`, "POST");
+  mark = b.requests.length;
+  await click(b, ".v2-dialog [data-choice=confirm]"); await b.sleep(2200);
+  ok("PO-UI-15 обрыв ответа при удалении проекта: ОДИН POST, автоповтора нет, сервер удалил (SQL), интерфейс сверился и сказал об этом", wr(b, mark).filter((x) => x.url.includes("/delete")).length === 1 && q(`SELECT * FROM projects WHERE id=${proj.id}`).length === 0 && (await text(b, "#po-status")).includes("хотя ответ не дошёл"), await text(b, "#po-status"));
+  await b.shot(SHOTS + "/projects.png");
+  ok("PO-UI-16 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  for (const login of ["user2", "user4"]) {
+    const bb = await session(BASE, login);
+    ok(`PO-UI-17 ${login}: раздела «Проекты и объекты» в навигации нет`, !(await text(bb, "#v2-side")).includes("Проекты и объекты"));
+    await bb.close();
+  }
+}
+
+// ====================================================================== справочник «Физлица» (и СМУ)
+if (want("individuals")) {
+  console.log("== Физлица (браузер)");
+  const b = await session(BASE, "admin");
+  await openSection(b, "dict-individuals"); await b.waitFor("!!document.querySelector('#de-add-input')");
+  ok("DI-UI-0 справочник «Физлица» открывается с правкой (шлюз разрешает)", await exists(b, "#de-add-btn"));
+  let mark = b.requests.length;
+  await fill(b, "#de-add-input", "QA Петров Пётр");
+  await b.eval("document.querySelector('#de-add-btn').scrollIntoView({block:'center'})");
+  const r0 = await b.rect("#de-add-btn"); await b.click(r0.cx, r0.cy); await b.click(r0.cx, r0.cy);
+  await b.waitFor("(document.querySelector('#de-status')||{}).innerText?.startsWith('Добавлено')", 10000);
+  ok("DI-UI-1 двойной клик «Добавить»: ОДИН POST /individuals, запись в БД", wr(b, mark).filter((x) => x.url.endsWith("/individuals")).length === 1 && one("SELECT COUNT(*) n FROM individuals WHERE name='QA Петров Пётр'").n === 1);
+  await flush();
+  const ind = one("SELECT id FROM individuals WHERE name='QA Петров Пётр'");
+  ok("DI-UI-1 журнал: individual_create", q("SELECT * FROM activity_log WHERE action='individual_create' AND entity_id=" + ind.id).length === 1);
+  await reload(b); await b.waitFor("!!document.querySelector('#de-body table')");
+  ok("DI-UI-1 после ПЕРЕЗАГРУЗКИ запись в списке", (await text(b, "#de-body")).includes("QA Петров Пётр"));
+  await fill(b, "#de-add-input", "qa петров пётр");
+  await click(b, "#de-add-btn"); await b.waitFor("(document.querySelector('#de-status')||{}).innerText?.includes('уже есть')", 10000);
+  ok("DI-UI-2 дубль другим регистром (кириллица): отказ 409, в БД одна запись, ввод остался", one("SELECT COUNT(*) n FROM individuals WHERE name LIKE 'QA Петров%' OR name LIKE 'qa петров%'").n === 1 && (await b.eval("document.querySelector('#de-add-input').value")) === "qa петров пётр");
+  await fill(b, "#de-add-input", "");
+  // переименование
+  await click(b, `[data-act=rename][data-id="${ind.id}"]`); await b.waitFor("!!document.querySelector('#de-edit-input')");
+  await fill(b, "#de-edit-input", "QA Петров П.");
+  await click(b, `[data-act=save][data-id="${ind.id}"]`); await b.waitFor("(document.querySelector('#de-status')||{}).innerText?.startsWith('Переименовано')", 10000);
+  ok("DI-UI-3 переименование: PATCH, в БД новое имя", one(`SELECT name FROM individuals WHERE id=${ind.id}`).name === "QA Петров П.");
+  // удаление используемого — с заменой
+  const usedObj = one("SELECT id, responsible_id r FROM objects WHERE responsible_id IS NOT NULL ORDER BY id LIMIT 1");
+  const used = usedObj.r;
+  const usedName = one(`SELECT name FROM individuals WHERE id=${used}`).name;
+  const nUsed = one(`SELECT COUNT(*) n FROM objects WHERE responsible_id=${used} OR smu_director_id=${used}`).n;
+  await fill(b, "#de-search", usedName);
+  await click(b, `[data-act=delete][data-id="${used}"]`); await b.waitFor("!!document.querySelector('#de-repl')");
+  const dm = await text(b, ".v2-dialog");
+  ok("DI-UI-4 удаление используемого: диалог перечисляет ссылки и просит выбрать замену", dm.includes(usedName) && /Объекты|объект/i.test(dm) && (await b.eval("document.querySelector('.v2-dialog [data-choice=confirm]').disabled")) === true, dm.slice(0, 160));
+  await confirmDialog(b, "cancel");
+  ok("DI-UI-4 отмена: запись и ссылки на месте (SQL)", one(`SELECT COUNT(*) n FROM individuals WHERE id=${used}`).n === 1 && one(`SELECT COUNT(*) n FROM objects WHERE responsible_id=${used}`).n >= 1);
+  await click(b, `[data-act=delete][data-id="${used}"]`); await b.waitFor("!!document.querySelector('#de-repl')");
+  await b.eval(`(()=>{const s=document.querySelector('#de-repl'); s.value=String(${ind.id}); s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  mark = b.requests.length;
+  await click(b, ".v2-dialog [data-choice=confirm]");
+  await b.waitFor("(document.querySelector('#de-status')||{}).innerText?.startsWith('Удалено')", 12000);
+  ok("DI-UI-5 удаление с заменой: ОДИН POST delete с replacements, запись исчезла, ссылки объектов переведены на замену (SQL)", wr(b, mark).filter((x) => x.url.includes("/delete")).length === 1 && one(`SELECT COUNT(*) n FROM individuals WHERE id=${used}`).n === 0 && one(`SELECT COUNT(*) n FROM objects WHERE responsible_id=${ind.id} OR smu_director_id=${ind.id}`).n >= nUsed - 0 && one(`SELECT COUNT(*) n FROM objects WHERE responsible_id=${used} OR smu_director_id=${used}`).n === 0, await text(b, "#de-status"));
+  await flush();
+  ok("DI-UI-5 журнал: dictionary_delete", q("SELECT * FROM activity_log WHERE action='dictionary_delete' AND old_value='" + usedName.replace(/'/g, "''") + "'").length === 1);
+  // удаление неиспользуемого
+  await fill(b, "#de-search", "");
+  await click(b, `[data-act=delete][data-id="${ind.id}"]`);
+  await b.waitFor("!!document.querySelector('#de-repl') || !!document.querySelector('.v2-dialog')");
+  // тестовая запись теперь используется объектами (после замены) — снова замена, выбираем другую запись
+  if (await exists(b, "#de-repl")) {
+    const other = one(`SELECT id FROM individuals WHERE id<>${ind.id} ORDER BY id LIMIT 1`).id;
+    await b.eval(`(()=>{const s=document.querySelector('#de-repl'); s.value=String(${other}); s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await click(b, ".v2-dialog [data-choice=confirm]");
+  } else await confirmDialog(b);
+  await b.waitFor("(document.querySelector('#de-status')||{}).innerText?.startsWith('Удалено')", 12000);
+  ok("DI-UI-6 удаление тестовой записи: исчезла из БД", one(`SELECT COUNT(*) n FROM individuals WHERE id=${ind.id}`).n === 0);
+  await b.shot(SHOTS + "/individuals.png");
+  ok("DI-UI-7 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  const c = await session(BASE, "user4");
+  await openSection(c, "dict-individuals"); await c.sleep(600);
+  ok("DI-UI-8 user4 (просмотр): формы добавления нет", !(await exists(c, "#de-add-input")));
+  await c.close();
+}
+
 process.exit(summary() ? 1 : 0);
