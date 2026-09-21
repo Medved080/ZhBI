@@ -692,3 +692,108 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 }
 .v2-gate-note[hidden] { display: none; }
 .v2-gate-note .v2-btn { margin-left: 6px; }
+
+/* ================= Рабочее место со схемой (workspace.js): сцена на основной площади, справа панель, снизу строка состояния ================= */
+
+.v2-shellnav[hidden] { display: none; }
+/* компактная шапка, пока открыто рабочее место: экрану нужна каждая строка высоты */
+#v2-root.v2-ws-mode .v2-head { padding: 5px 14px; gap: 8px; }
+#v2-root.v2-ws-mode .v2-head-title strong { font-size: 15px; }
+#v2-root.v2-ws-mode .v2-exp-banner { padding: 2px 14px; font-size: 12px; }
+#v2-root.v2-ws-mode .v2-gate-note { padding: 3px 14px; font-size: 12px; }
+
+.v2-page.v2-ws { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.ws-top { display: flex; align-items: center; gap: 10px; padding: 4px 10px; border-bottom: 1px solid var(--line); min-height: 38px; flex: none; }
+.ws-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.ws-title strong { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.ws-crumb { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-spacer { flex: 1; }
+.ws-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.ws-seg button { border: 0; background: var(--bg); padding: 4px 11px; font-size: 13px; border-right: 1px solid var(--line); }
+.ws-seg button:last-child { border-right: 0; }
+.ws-seg button:hover { background: var(--surface); }
+.ws-seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.ws-seg-wide { display: flex; margin: 8px 0; }
+.ws-seg-wide button { flex: 1; }
+.ws-ibtn { border: 1px solid var(--line); background: var(--bg); border-radius: 7px; padding: 4px 10px; font-size: 13px; }
+.ws-ibtn:hover { background: var(--surface); }
+
+.ws-main { flex: 1; min-height: 0; display: flex; }
+.ws-stage { position: relative; flex: 1; min-width: 0; min-height: 0; background: var(--surface); }
+.ws-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--surface); }
+.ws-tools { position: absolute; left: 10px; top: 10px; z-index: 3; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgb(0 0 0 / .12); }
+.ws-tools button { border: 0; border-bottom: 1px solid var(--line); background: var(--bg); width: 34px; height: 32px; font-size: 16px; line-height: 1; }
+.ws-tools button:last-child { border-bottom: 0; }
+.ws-tools button:hover { background: var(--sel); }
+.ws-overlay { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.ws-overlay[hidden] { display: none; }
+.ws-msg { pointer-events: auto; max-width: 440px; padding: 16px 20px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 2px 10px rgb(0 0 0 / .15); text-align: center; }
+.ws-msg p { margin: 6px 0 12px; color: var(--muted); }
+.ws-msg-bad { border-color: var(--bad); }
+.ws-msg-load { pointer-events: none; color: var(--muted); padding: 8px 14px; }
+.ws-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; vertical-align: -2px; animation: ws-spin .8s linear infinite; }
+@keyframes ws-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ws-spin { animation: none; } }
+
+.ws-resize { flex: none; width: 5px; cursor: col-resize; background: var(--line); }
+.ws-resize:hover, .ws-resize:focus-visible { background: var(--accent); outline: none; }
+.ws-resize[hidden], .ws-panel[hidden] { display: none; }
+.ws-panel { flex: none; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.ws-tabs { display: flex; border-bottom: 1px solid var(--line); flex: none; }
+.ws-tabs button { flex: 1; border: 0; background: none; padding: 8px 4px; font-size: 13px; border-bottom: 2px solid transparent; }
+.ws-tabs button:hover { background: var(--surface); }
+.ws-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); font-weight: 600; }
+.ws-panel-body { flex: 1; min-height: 0; overflow-y: auto; }
+.ws-pad { padding: 12px 14px 20px; }
+.ws-pad h4 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.ws-h { font-size: 15px; margin-bottom: 6px; }
+.ws-empty p { margin: 4px 0 12px; }
+.ws-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.ws-mark { font-size: 18px; font-weight: 600; word-break: break-all; }
+.ws-type { flex-basis: 100%; }
+.ws-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 13px; }
+.ws-sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid rgb(0 0 0 / .25); flex: none; }
+.ws-chip .ws-sw { margin-right: 0; }
+.ws-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 2px; }
+.ws-dl { margin: 0; }
+.ws-kv { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.ws-kv dt { flex: 0 0 42%; color: var(--muted); }
+.ws-kv dd { margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ws-comment { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ws-list { list-style: none; margin: 0 0 8px; padding: 0; }
+.ws-list li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.ws-hist { list-style: none; margin: 0; padding: 0; }
+.ws-hist li { display: grid; grid-template-columns: auto 1fr; gap: 0 6px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.ws-hist small { grid-column: 2; color: var(--muted); }
+.ws-ro { margin-top: 14px; font-size: 12px; }
+
+.ws-fhead { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 13px; }
+.ws-fhead .v2-btn { padding: 3px 10px; font-size: 12px; }
+.ws-fgroup { border-bottom: 1px solid var(--line); }
+.ws-fh { display: flex; justify-content: space-between; align-items: center; width: 100%; border: 0; background: none; text-align: left; padding: 8px 12px; font-weight: 600; font-size: 13px; }
+.ws-fh:hover { background: var(--surface); }
+.ws-badge { font-weight: 400; font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 7px; }
+.ws-fbody { padding: 0 12px 10px; }
+.ws-fsearch { width: 100%; margin: 2px 0 6px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.ws-factions { display: flex; gap: 12px; margin-bottom: 4px; }
+.ws-factions button { border: 0; background: none; color: var(--accent); padding: 0; font-size: 12px; text-decoration: underline; }
+.ws-check { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 13px; cursor: pointer; }
+.ws-check span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ws-check em { font-style: normal; color: var(--muted); font-size: 12px; }
+.ws-check.ws-dim span, .ws-check.ws-dim em { opacity: .5; }
+.ws-tree-row { display: flex; align-items: center; }
+.ws-tree-row .ws-check { flex: 1; min-width: 0; }
+.ws-exp { flex: none; width: 20px; height: 20px; border: 0; background: none; padding: 0; color: var(--muted); }
+.ws-branch { margin: 0 0 4px 22px; padding-left: 8px; border-left: 2px solid var(--line); }
+.ws-btitle { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 2px; }
+
+.ws-status { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 18px; padding: 3px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); background: var(--surface); min-height: 26px; }
+.ws-status b { color: var(--ink); font-weight: 600; }
+.ws-ro-chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.ws-notice { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+
+@media (max-width: 760px) {
+  .ws-main { flex-direction: column; }
+  .ws-panel { width: auto !important; max-height: 45%; }
+  .ws-resize { display: none; }
+}

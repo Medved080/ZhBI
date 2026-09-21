@@ -11,6 +11,7 @@ import { keepFocus } from "./focus.js";
 import { loadRegistry, screenAllowed } from "./registry.js";
 import { mountScreenView, mountHome, linkList } from "./screen-view.js";
 import { mountReadScreen } from "./read-screen.js";
+import { mountWorkspace } from "./workspace.js";
 import { mountDictEdit } from "./dict-edit.js";
 import { mountSettingEdit } from "./setting-edit.js";
 import { mountColorEdit } from "./color-edit.js";
@@ -267,7 +268,7 @@ async function renderShell(user, permissions) {
         return `<div class="v2-nav-group">
           <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
           ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
+            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
         </div>`;
       }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
     const search = document.getElementById("v2-nav-search");
@@ -332,6 +333,7 @@ async function renderShell(user, permissions) {
       // Оформление раздела не должно зависеть от порядка посещения: классы,
       // которые раздел мог повесить на общий контейнер, сбрасываются здесь.
       content.className = "v2-page";
+      root.classList.toggle("v2-ws-mode", !!target && target.impl === "workspace");
       currentKey = key;
       const wanted = key === "home" ? "#/" : `#/${key}`;
       if (location.hash !== wanted && !(key === "home" && (location.hash === "" || location.hash === "#"))) {
@@ -416,6 +418,12 @@ async function renderShell(user, permissions) {
         activeModule = mountDictEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
+      } else if (target.impl === "workspace") {
+        // Рабочее место со схемой: сцена V1 в кадре только для чтения + собственные панели V2 (workspace.js).
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountWorkspace(content, {
+          screen: target, objectId, api, groupTitle: groupTitle(target.group), ws: target.ws || "model",
+        });
       } else if (target.impl === "read" && target.read) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountReadScreen(content, {
@@ -472,6 +480,9 @@ async function renderShell(user, permissions) {
     renderNav();
     // Экран, недоступный на новом объекте (или перерисовка каркаса с новой ссылкой в V1), обновляется.
     const cur = currentKey === "home" ? null : screenOf(currentKey);
+    // Рабочее место со схемой остаётся смонтированным и сам переключает сцену на новый объект (без пересоздания кадра),
+    // если экран доступен на новом объекте; иначе — обычный путь (экран недоступен → начальная страница).
+    if (cur && cur.impl === "workspace" && allowedScreen(cur) && activeModule?.onObjectChange?.(objectId)) { updateGateNote(cur); return; }
     if (cur && !isModule(cur)) openSection(currentKey, { force: true, guarded: true });
     else if (currentKey === "home") openSection("home", { force: true, guarded: true });
   });

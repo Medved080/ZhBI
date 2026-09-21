@@ -1,0 +1,29 @@
+/* Режим «сцена внутри V2» (?embed=scene): в кадре виден ТОЛЬКО блок сцены. Подключается из app.js лишь в этом режиме.
+   Шапка, меню, боковые панели, строка состояния и панели рабочих мест V1 скрыты — их роль выполняет оболочка V2. */
+html.embed-scene, html.embed-scene body { margin: 0; height: 100%; overflow: hidden; }
+
+html.embed-scene #toolbar,
+html.embed-scene #impersonation-bar,
+html.embed-scene #update-banner,
+html.embed-scene #workdate-banner,
+html.embed-scene #sidebar,
+html.embed-scene #sidebar-rail,
+html.embed-scene #resize-handle,
+html.embed-scene #statusbar,
+html.embed-scene #picker-panel,
+html.embed-scene #picker-panel-resize,
+html.embed-scene #foreman-panel,
+html.embed-scene #foreman-panel-resize,
+html.embed-scene #picker-contracts,
+html.embed-scene #picker-contracts-resize,
+html.embed-scene #picker-metrics,
+html.embed-scene #back-to-report,
+html.embed-scene #multi-select-panel,
+html.embed-scene #ctx-menu,
+html.embed-scene .modal-backdrop,
+html.embed-scene .toast-stack { display: none !important; }
+
+/* сцена занимает весь документ кадра */
+html.embed-scene #app-root { height: 100vh; display: flex; flex-direction: column; }
+html.embed-scene #body { flex: 1 1 auto; min-height: 0; display: flex; }
+html.embed-scene #stage-area { flex: 1 1 auto; min-width: 0; min-height: 0; width: 100%; }

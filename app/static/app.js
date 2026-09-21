@@ -1,3 +1,48 @@
+// ============ РЕЖИМ «СЦЕНА ВНУТРИ V2» (?embed=scene, 2026-09-21) ============
+//
+// V2 показывает рабочее место с настоящей схемой, а сам движок схемы (2D SVG, 3D Three.js, выбор, фильтры) живёт здесь, в V1, и
+// завязан на глобальный DOM этого документа. Поэтому оболочка V2 открывает V1 в кадре в специальном режиме: виден ТОЛЬКО блок
+// сцены (`#stage-area`), шапка, меню, боковые панели и строка состояния скрыты (`embed-scene.css`), а управление идёт через узкий
+// мост `embed-bridge.js` (postMessage, белый список команд, проверка источника). Никакого второго рабочего процесса в кадре нет.
+//
+// Кадр работает ТОЛЬКО НА ЧТЕНИЕ: любой изменяющий запрос (кроме чтения геометрии `POST /plan-data`) отсекается здесь же, до сети, —
+// все записи делает оболочка V2 через свой шлюз операций (`v2/write-gate.js`). Так контекстное меню сцены, двойной клик,
+// групповые действия и прямые вызовы старых обработчиков не могут обойти ограничения записи V2.
+// Режим включается только внутри чужого окна (кадра); обычный запуск V1 этого блока не задевает.
+// Параметры кадра: оболочка V2 создаёт кадр из srcdoc (сервер запрещает показывать свои страницы в чужих кадрах —
+// X-Frame-Options/frame-ancestors, менять их нельзя), поэтому адреса у документа нет и параметры лежат в атрибуте
+// `data-zhbi-scene` самого <iframe> (тот же origin, frameElement доступен). Запасной путь — обычный адрес `?embed=scene`.
+const EMBED_QUERY = (() => {
+  try {
+    if (window.parent === window) return null;
+    const fe = window.frameElement;
+    const q = fe ? fe.getAttribute("data-zhbi-scene") : null;
+    if (q !== null) return new URLSearchParams(q);
+    const p = new URLSearchParams(location.search);
+    return p.get("embed") === "scene" ? p : null;
+  } catch (e) { return null; }
+})();
+const EMBED_SCENE = !!EMBED_QUERY;
+if (EMBED_SCENE) {
+  document.documentElement.classList.add("embed-scene");
+  const embedCss = document.createElement("link");
+  embedCss.rel = "stylesheet"; embedCss.href = "/static/embed-scene.css";
+  document.head.appendChild(embedCss);
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const isReq = typeof Request !== "undefined" && input instanceof Request;
+    const method = String((init && init.method) || (isReq ? input.method : "GET")).toUpperCase();
+    let path = "";
+    try { path = new URL(isReq ? input.url : String(input), document.baseURI).pathname; } catch (e) { path = ""; }
+    if (method === "GET" || method === "HEAD" || (method === "POST" && path === "/plan-data")) return realFetch(input, init);
+    // журнал действий V1 (POST /activity) в кадре не ведётся — тихий отказ без шума в интерфейсе
+    if (path === "/activity") return Promise.resolve(new Response(null, { status: 204 }));
+    return Promise.resolve(new Response(JSON.stringify({ detail: "В окне схемы запись отключена — операции выполняются в панели рабочего места" }),
+      { status: 403, headers: { "Content-Type": "application/json" } }));
+  };
+  try { navigator.sendBeacon = () => false; } catch (e) { /* не критично */ }
+}
+
 // ============ РЕЖИМ «ЗАЙТИ ПОД ПОЛЬЗОВАТЕЛЕМ» (2026-08-05) ============
 //
 // Администратор открывает ДОПОЛНИТЕЛЬНУЮ вкладку, в которой система ведёт
@@ -28079,7 +28124,7 @@ async function bootApp() {
   // после неё есть куда вернуться. Признак считает сервер (changelog_unseen
   // в /me) — клиенту не нужно тянуть весь журнал, чтобы это выяснить.
   const переходИзV2 = await applyStartupDeepLink();
-  if (state.currentUser && state.currentUser.changelog_unseen && !переходИзV2) openChangelog();
+  if (state.currentUser && state.currentUser.changelog_unseen && !переходИзV2 && !EMBED_SCENE) openChangelog();
 }
 
 // Переход из нового интерфейса (V2) к конкретной сущности V1 (2026-09-20, приёмка V2: PO-23, UA-C-08).
@@ -28099,7 +28144,7 @@ async function bootApp() {
 // скрыт сам пункт или его группа — переход отклонён) и не «опасный» (очистка истории и подобное вызываются
 // только осознанным кликом в самом меню).
 async function applyStartupDeepLink() {
-  const params = new URLSearchParams(location.search);
+  const params = EMBED_SCENE ? EMBED_QUERY : new URLSearchParams(location.search);
   const objectId = Number(params.get("object_id")) || null;
   const open = params.get("open");
   const userId = Number(params.get("user_id")) || null;
@@ -28109,7 +28154,8 @@ async function applyStartupDeepLink() {
   if (!objectId && !open && !ws && !view) return false;
   const остаются = new URLSearchParams();
   if (params.get("ui")) остаются.set("ui", params.get("ui"));
-  history.replaceState(null, "", location.pathname + (остаются.toString() ? `?${остаются}` : ""));
+  if (params.get("embed")) остаются.set("embed", params.get("embed"));
+  if (!EMBED_SCENE) history.replaceState(null, "", location.pathname + (остаются.toString() ? `?${остаются}` : ""));
   try {
     if (objectId) {
       const объект = state.projects.flatMap((p) => p.objects).find((o) => o.id === objectId);
@@ -28150,6 +28196,12 @@ async function applyStartupDeepLink() {
   return true;
 }
 
+// Режим кадра: мост связи с оболочкой V2 (только в этом режиме; V1 обычным запуском файл не запрашивает).
+if (EMBED_SCENE) {
+  const embedBridge = document.createElement("script");
+  embedBridge.src = "/static/embed-bridge.js";
+  document.head.appendChild(embedBridge);
+}
 bootApp();
 
 // ==================== МАССОВАЯ ПРАВКА РЕКВИЗИТОВ ЧЕРЕЗ EXCEL ====================
