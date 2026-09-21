@@ -215,7 +215,7 @@ git -C /Users/max/zhbi-tool reset --hard pre-v2-workspaces-8000   # метка =
 | `a1eb746` | `app/db.py: begin_write(conn)` — `BEGIN IMMEDIATE` первым действием обработчика, до чтения исходного состояния. Подключено в: `update_status`, `update_status_bulk`, `set_element_contract` (`app/main.py`), `post_supplier_change`, `unpost_supplier_change` (`app/supplier_change.py`), `update_contract` (`app/contracts.py`). Чтение, проверка стража и запись идут под ОДНОЙ блокировкой записи; читатели (WAL) не блокируются. Ожидание дольше `BUSY_TIMEOUT_MS` (15 с) — отказ 503 с текстом «База занята другой операцией — ничего не изменено» вместо «database is locked» из глубины запроса. |
 | `3e0538b` | (отдельно от блокировки) `contract_guard.link_problem` отклоняет контракт ДРУГОГО объекта. Наблюдение S8/S10: `set_element_contract` это проверял всегда, а смена статуса с `contract_id` (пачкой и одиночная) принимала контракт чужого объекта с позицией под ту же марку. |
 
-**Воспроизводимая проверка** `scripts/verify_contract_guard_concurrency.py` (в ветке `proposal/atomic-contract-guard`; работает на КОПИИ обезличенной БД, каждый раунд — на свежей временной копии; вызывает сами обработчики в потоках с отдельным
+**Воспроизводимая проверка** `scripts/verify_contract_guard_concurrency.py` (в ветке `proposal/atomic-contract-guard`, HEAD `3614cf6`: сценарий S11 добавлен отдельным коммитом; работает на КОПИИ обезличенной БД, каждый раунд — на свежей временной копии; вызывает сами обработчики в потоках с отдельным
 соединением у каждого, как в пуле потоков сервера; авторизация не задействована — не HTTP-запросы, вход в копию делает человек):
 
 ```bash
