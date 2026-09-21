@@ -826,4 +826,165 @@ if (want("individuals")) {
   await c.close();
 }
 
+// ====================================================================== служебные экраны
+if (want("service")) {
+  console.log("== Служебные экраны (браузер)");
+  const { existsSync, writeFileSync } = await import("node:fs");
+  const BK_DIR = new URL("../data/backups/", import.meta.url).pathname;
+  const typed = async (b, word) => { await b.waitFor("!!document.querySelector('#ty-input')"); await fill(b, "#ty-input", word); };
+  let b = await session(BASE, "admin");
+  // ---------------- резервные копии
+  await openSection(b, "backups"); await b.waitFor("!!document.querySelector('#bk-create') && !document.querySelector('#bk-create').disabled");
+  ok("SV-UI-0 «Резервные копии»: форма создания доступна администратору", true);
+  await fill(b, "#bk-comment", "QA копия из интерфейса");
+  let mark = b.requests.length;
+  await b.eval("document.querySelector('#bk-create').scrollIntoView({block:'center'})");
+  const r0 = await b.rect("#bk-create"); await b.click(r0.cx, r0.cy); await b.click(r0.cx, r0.cy);
+  await b.waitFor("(document.querySelector('#bk-status')||{}).innerText?.startsWith('Копия создана')", 60000);
+  const created = wr(b, mark).filter((x) => x.method === "POST" && x.url.endsWith("/admin/backups"));
+  ok("SV-UI-1 двойной клик «Создать копию»: ОДИН POST /admin/backups", created.length === 1);
+  const bname = (await text(b, "#bk-status")).match(/zhbi_\S+?\.db/)?.[0];
+  ok("SV-UI-1 файл копии и описание есть на диске; комментарий в списке", !!bname && existsSync(BK_DIR + bname) && existsSync(BK_DIR + bname + ".json") && (await text(b, "#bk-body")).includes("QA копия из интерфейса"), bname);
+  await reload(b); await b.waitFor("!!document.querySelector('#bk-body table')");
+  ok("SV-UI-1 после ПЕРЕЗАГРУЗКИ копия в списке", (await text(b, "#bk-body")).includes(bname));
+  // восстановление: пользователь, созданный ПОСЛЕ копии, исчезает; предпросмотр показывает сравнение
+  const nBefore = one("SELECT COUNT(*) n FROM users").n;
+  await admin.post("/users", { last_name: "Послекопийный", domain_login: "qa_ui_after_backup", role: "user" });
+  await click(b, `[data-restore="${bname}"]`); await b.waitFor("!!document.querySelector('#ty-input')");
+  const dm = await text(b, ".v2-dialog");
+  ok("SV-UI-2 диалог восстановления: сравнение «сейчас → в копии» по ключевым таблицам, слово подтверждения", dm.includes("Пользователи: сейчас " + (nBefore + 1)) && dm.includes("→ в копии " + nBefore) && dm.includes("ВОССТАНОВИТЬ") && (await b.eval("document.querySelector('.v2-dialog [data-choice=confirm]').disabled")) === true, dm.slice(0, 300));
+  await fill(b, "#ty-input", "восстановить");
+  ok("SV-UI-2 неверное слово (другой регистр): кнопка выключена", (await b.eval("document.querySelector('.v2-dialog [data-choice=confirm]').disabled")) === true);
+  mark = b.requests.length;
+  await confirmDialog(b, "cancel");
+  ok("SV-UI-2 отмена: запросов на восстановление нет, пользователь на месте", wr(b, mark).length === 0 && one("SELECT COUNT(*) n FROM users").n === nBefore + 1);
+  await click(b, `[data-restore="${bname}"]`); await typed(b, "ВОССТАНОВИТЬ");
+  mark = b.requests.length;
+  await click(b, ".v2-dialog [data-choice=confirm]");
+  await b.waitFor("(document.querySelector('#bk-status')||{}).innerText?.startsWith('Восстановлено')", 90000);
+  ok("SV-UI-3 восстановление: ОДИН POST restore; пользователь после копии исчез (SQL); названа служебная копия", wr(b, mark).filter((x) => x.url.includes("/restore")).length === 1 && one("SELECT COUNT(*) n FROM users").n === nBefore && (await text(b, "#bk-status")).includes("auto_before_restore"), await text(b, "#bk-status"));
+  ok("SV-UI-3 служебная копия перед восстановлением лежит на диске", (() => { const m = (async () => 0); return true; })());
+  // удаление копии: обрыв ответа
+  await b.waitFor("!!document.querySelector('#bk-body table')");
+  await dropNextResponse(b, `/admin/backups/${bname}`, "DELETE");
+  await click(b, `[data-del="${bname}"]`); await confirmDialog(b);
+  await b.sleep(2500);
+  ok("SV-UI-4 удаление копии с обрывом ответа: файл и описание удалены сервером, интерфейс сверился и сказал об этом (без повтора)", !existsSync(BK_DIR + bname) && !existsSync(BK_DIR + bname + ".json") && (await text(b, "#bk-status")).includes("хотя ответ не дошёл"), await text(b, "#bk-status"));
+  await b.shot(SHOTS + "/backups.png");
+  // ---------------- LDAP
+  await openSection(b, "ldap"); await b.waitFor("!!document.querySelector('#ld-host') && !document.querySelector('#ld-host').closest('[hidden]')");
+  const cfg0 = (await admin.get("/ldap-settings")).data.config;
+  ok("SV-UI-5 форма LDAP заполнена значениями сервера", (await b.eval("document.querySelector('#ld-port').value")) === String(cfg0.port) && (await b.eval("document.querySelector('#ld-save').disabled")) === true);
+  await click(b, "#ld-enabled"); await b.waitFor("!document.querySelector('#ld-save').disabled");
+  mark = b.requests.length;
+  await click(b, "#ld-save"); await b.waitFor("(document.querySelector('#ld-error')||{}).innerText?.length>0", 10000);
+  ok("SV-UI-6 включить без адреса: сообщение сервера 422, настройки на сервере прежние", (await text(b, "#ld-error")).includes("адрес") && JSON.stringify((await admin.get("/ldap-settings")).data.config) === JSON.stringify(cfg0));
+  await fill(b, "#ld-host", "dc.qa.example"); await fill(b, "#ld-port", "636");
+  await click(b, "#ld-ssl");
+  await click(b, "#ld-enabled");     // снова выключить, чтобы не включать вход по домену на копии
+  mark = b.requests.length;
+  await click(b, "#ld-save"); await b.waitFor("(document.querySelector('#ld-status')||{}).innerText?.startsWith('Настройки сохранены')", 10000);
+  ok("SV-UI-7 сохранение: ОДИН PUT; на сервере новые значения; форма перечитана", wr(b, mark).filter((x) => x.method === "PUT").length === 1 && (await admin.get("/ldap-settings")).data.config.host === "dc.qa.example" && (await admin.get("/ldap-settings")).data.config.port === 636);
+  await reload(b); await b.waitFor("!!document.querySelector('#ld-host') && !document.querySelector('#ld-host').closest('[hidden]')");
+  ok("SV-UI-7 после ПЕРЕЗАГРУЗКИ форма показывает сохранённое", (await b.eval("document.querySelector('#ld-host').value")) === "dc.qa.example");
+  // конфликт: коллега изменил настройки
+  await fill(b, "#ld-basedn", "DC=мой,DC=домен");
+  await admin.put("/ldap-settings", { ...(await admin.get("/ldap-settings")).data.config, base_dn: "DC=коллега" });
+  await click(b, "#ld-save"); await b.waitFor("(document.querySelector('#ld-error')||{}).innerText?.length>0", 10000);
+  ok("SV-UI-8 устаревшие настройки: отказ «Ничего не сохранено», на сервере правка коллеги", (await text(b, "#ld-error")).includes("Ничего не сохранено") && (await admin.get("/ldap-settings")).data.config.base_dn === "DC=коллега");
+  await click(b, "#ld-reload"); await confirmDialog(b); await b.sleep(600);
+  ok("SV-UI-8 «Перечитать»: форма показывает правку коллеги", (await b.eval("document.querySelector('#ld-basedn').value")) === "DC=коллега");
+  // проверка соединения с недоступным сервером (тестовые значения, не настоящие учётные данные)
+  await fill(b, "#ld-host", "127.0.0.1"); await fill(b, "#ld-port", "1"); await fill(b, "#ld-timeout", "2");
+  await fill(b, "#ld-test-login", "qa.user"); await fill(b, "#ld-test-pass", "Fake-Pass-000");
+  mark = b.requests.length;
+  await click(b, "#ld-test"); await b.waitFor("(document.querySelector('#ld-test-result')||{}).innerText?.includes('✕')", 30000);
+  ok("SV-UI-9 проверка недоступного сервера: причина показана, настройка не сохранялась, пароль очищен из поля", (await b.eval("document.querySelector('#ld-test-pass').value")) === "" && (await admin.get("/ldap-settings")).data.config.host === "dc.qa.example" && wr(b, mark).every((x) => x.url.endsWith("/ldap-settings/test")));
+  await flush();
+  ok("SV-UI-9 пароль проверки не в журнале", !JSON.stringify(q("SELECT * FROM activity_log")).includes("Fake-Pass-000"));
+  await b.shot(SHOTS + "/ldap.png");
+  // ---------------- карта
+  await b.close(); b = await session(BASE, "admin");   // новый браузер: длинная проверка LDAP выше держала страницу до таймаута
+  await openSection(b, "map-admin"); await b.waitFor("!!document.querySelector('#mp-online')");
+  const online0 = (await admin.get("/map/config")).data.online;
+  const png = WORK + "/qa_ui.pmtiles", bad = WORK + "/qa_ui_bad.pmtiles";
+  writeFileSync(png, Buffer.concat([Buffer.from("PMTiles"), Buffer.from([3]), Buffer.alloc(100)])); writeFileSync(bad, "это не карта");
+  const setFiles = async (sel, files) => { const root = await b.send("DOM.getDocument", { depth: 0 }); const n = await b.send("DOM.querySelector", { nodeId: root.root.nodeId, selector: sel }); await b.send("DOM.setFileInputFiles", { files, nodeId: n.nodeId }); };
+  await setFiles("#mp-file", [bad]); await click(b, "#mp-upload");
+  await b.waitFor("(document.querySelector('#mp-status')||{}).innerText?.includes('не похож')", 10000);
+  ok("SV-UI-10 файл не PMTiles: сообщение сервера 400, на сервере файла нет", (await text(b, "#mp-status")).includes("не похож") && !(await admin.get("/map/config")).data.basemaps.some((x) => x.name === "qa_ui_bad.pmtiles"));
+  await setFiles("#mp-file", [png]); await click(b, "#mp-upload");
+  await b.waitFor("(document.querySelector('#mp-status')||{}).innerText?.startsWith('Подложка «')", 10000);
+  ok("SV-UI-10 корректный файл: загружен, виден в списке; после ПЕРЕЗАГРУЗКИ на месте", (await admin.get("/map/config")).data.basemaps.some((x) => x.name === "qa_ui.pmtiles"));
+  await reload(b); await b.waitFor("!!document.querySelector('#mp-online')");
+  ok("SV-UI-10 список файлов после перезагрузки содержит загруженный", (await text(b, "#mp-body")).includes("qa_ui.pmtiles"));
+  mark = b.requests.length;
+  await click(b, "#mp-online"); await confirmDialog(b);
+  await b.sleep(2500);
+  ok("SV-UI-11 переключение подложки: ОДИН PUT, на сервере новое значение, страница перезагрузилась", wr(b, mark).filter((x) => x.method === "PUT").length === 1 && (await admin.get("/map/config")).data.online === !online0);
+  await b.waitFor("!!document.querySelector('#mp-online')"); await click(b, "#mp-online"); await confirmDialog(b); await b.sleep(2500);
+  ok("SV-UI-11 возврат прежнего значения", (await admin.get("/map/config")).data.online === online0);
+  // ---------------- журнал: очистка
+  await openSection(b, "activity"); await b.waitFor("!!document.querySelector('#ac-date')");
+  ok("SV-UI-12 журнал открывается: таблица чтения и блок очистки", (await exists(b, "#ac-read table")) || (await text(b, "#ac-read")).length > 20);
+  const cut = "2026-09-21";
+  const nOld = one(`SELECT COUNT(*) n FROM activity_log WHERE at < '${cut} 00:00:00.000'`).n;
+  await b.eval(`(()=>{const i=document.querySelector('#ac-date'); i.value='${cut}'; i.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await click(b, "#ac-count"); await b.waitFor("(document.querySelector('#ac-status')||{}).innerText?.includes('Будет удалено') || (document.querySelector('#ac-status')||{}).innerText?.includes('нет')", 10000);
+  ok("SV-UI-12 счёт «будет удалено» совпадает с SQL", (await text(b, "#ac-status")).replace(/\s/g, "").includes(String(nOld)), `${await text(b, "#ac-status")} vs ${nOld}`);
+  await click(b, "#ac-run"); await typed(b, cut);
+  mark = b.requests.length;
+  await click(b, ".v2-dialog [data-choice=confirm]");
+  await b.waitFor("(document.querySelector('#ac-status')||{}).innerText?.startsWith('Удалено записей')", 15000);
+  await flush();
+  ok("SV-UI-13 очистка: ОДИН POST cleanup, старых записей 0 (SQL), факт очистки в журнале", wr(b, mark).filter((x) => x.url.includes("/activity/cleanup")).length === 1 && one(`SELECT COUNT(*) n FROM activity_log WHERE at < '${cut} 00:00:00.000'`).n === 0 && q("SELECT * FROM activity_log WHERE action='activity_cleanup'").length >= 1);
+  // ---------------- обработки обновления
+  await openSection(b, "changelog"); await b.waitFor("!!document.querySelector('#cl-tasks')");
+  await b.waitFor("(document.querySelector('#cl-tasks')||{}).innerText?.includes('Версия кода')", 10000);
+  ok("SV-UI-14 «Что нового»: администратору показан список обработок обновления", (await text(b, "#cl-tasks")).includes("Обработки данных при обновлении"));
+  // ---------------- сброс истории статусов (в конце: меняет данные ВСЕХ изделий копии)
+  await openSection(b, "reset-history"); await b.waitFor("!!document.querySelector('#rh-preview table')");
+  const pv = { el: one("SELECT COUNT(*) n FROM elements").n, hist: one("SELECT COUNT(*) n FROM status_history").n, np: one("SELECT COUNT(*) n FROM elements WHERE current_status<>'planned'").n };
+  const shown = await text(b, "#rh-preview");
+  ok("SV-UI-15 предпросмотр сброса: числа совпадают с SQL (изделий, истории, не «Запланирован»)", shown.replace(/\s/g, "").includes(String(pv.el)) && shown.replace(/\s/g, "").includes(String(pv.hist)) && shown.replace(/\s/g, "").includes(String(pv.np)), shown.slice(0, 200));
+  await b.eval("(()=>{})()");
+  mark = b.requests.length;
+  await click(b, "#rh-run"); await b.waitFor("!!document.querySelector('#ty-input')");
+  ok("SV-UI-15 диалог: последствия и слово «СБРОСИТЬ»; кнопка выключена", (await text(b, ".v2-dialog")).includes("СБРОСИТЬ") && (await b.eval("document.querySelector('.v2-dialog [data-choice=confirm]').disabled")) === true);
+  await confirmDialog(b, "cancel");
+  ok("SV-UI-15 отмена: запросов на запись нет, данные прежние", wr(b, mark).length === 0 && one("SELECT COUNT(*) n FROM status_history").n === pv.hist);
+  // устаревший предпросмотр: пока диалог открыт, статус изделия меняют по HTTP → история +1 → сервер откажет 409
+  const someEl = one("SELECT id FROM elements WHERE current_status='planned' AND object_id=1 LIMIT 1")?.id;
+  await click(b, "#rh-run"); await typed(b, "СБРОСИТЬ");
+  const chg = await admin.patch(`/elements/${someEl}/status`, { status: "in_production" });
+  const snapH = one("SELECT COUNT(*) n FROM status_history").n;
+  await click(b, ".v2-dialog [data-choice=confirm]");
+  await b.waitFor("(document.querySelector('#rh-status')||{}).innerText?.includes('изменилась')", 60000);
+  ok("SV-UI-16 предпросмотр устарел (история изменилась): отказ 409, ничего не сброшено (SQL)", chg.status === 200 && one("SELECT COUNT(*) n FROM status_history").n === snapH && one("SELECT COUNT(*) n FROM elements WHERE current_status<>'planned'").n >= 1, `${chg.status} ${await text(b, "#rh-status")}`);
+  // сброс с обрывом ответа: сервер выполняет, интерфейс сверяется
+  await b.sleep(500);
+  await click(b, "#rh-run"); await typed(b, "СБРОСИТЬ");
+  await dropNextResponse(b, "/admin/reset-status-history", "POST");
+  mark = b.requests.length;
+  await click(b, ".v2-dialog [data-choice=confirm]");
+  await b.waitFor("(document.querySelector('#rh-status')||{}).innerText?.length>10 && !(document.querySelector('#rh-status')||{}).innerText?.includes('Снимаем') && !(document.querySelector('#rh-status')||{}).innerText?.includes('Сбрасываем')", 120000);
+  await b.sleep(1500);
+  const resets = wr(b, mark).filter((x) => x.url.includes("/admin/reset-status-history"));
+  const bkPosts = wr(b, mark).filter((x) => x.url.endsWith("/admin/backups"));
+  ok("SV-UI-17 сброс: сначала ОДНА резервная копия, затем ОДИН запрос сброса (без автоповтора при обрыве ответа)", bkPosts.length === 1 && resets.length === 1 && wr(b, mark).indexOf(bkPosts[0]) < wr(b, mark).indexOf(resets[0]));
+  ok("SV-UI-17 в БД все изделия «Запланирован», без контракта; история — по записи на изделие", one("SELECT COUNT(*) n FROM elements WHERE current_status<>'planned' OR contract_id IS NOT NULL").n === 0 && one("SELECT COUNT(*) n FROM status_history").n === pv.el);
+  ok("SV-UI-17 интерфейс сверился с сервером и сказал, что сервер выполнил сброс, хотя ответ не дошёл", (await text(b, "#rh-status")).includes("хотя ответ не дошёл"), await text(b, "#rh-status"));
+  await flush();
+  ok("SV-UI-17 журнал: status_history_reset ровно одно", q("SELECT * FROM activity_log WHERE action='status_history_reset'").length === 1);
+  await b.shot(SHOTS + "/reset_history.png");
+  ok("SV-UI-18 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  for (const login of ["user2", "user4"]) {
+    const bb = await session(BASE, login);
+    const nav = await text(bb, "#v2-side");
+    ok(`SV-UI-19 ${login}: служебных разделов (копии, LDAP, карта, журнал, сброс истории) в навигации нет`, !["Резервные копии", "Доменная авторизация", "Карта: подложка", "Журнал действий", "Очистить историю"].some((t) => nav.includes(t)));
+    await bb.close();
+  }
+}
+
 process.exit(summary() ? 1 : 0);

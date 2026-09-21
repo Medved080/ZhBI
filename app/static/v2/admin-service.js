@@ -100,7 +100,7 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
     <p class="v2-muted" id="bk-status" role="status" aria-live="polite"></p><div id="bk-body"></div>`;
   const $ = (s) => body.querySelector(s);
   const setStatus = (t) => { const n = $("#bk-status"); if (n) n.textContent = t; };
-  const lock = () => body.querySelectorAll("#bk-body button, #bk-create, #bk-refresh, #bk-comment").forEach((c) => { c.disabled = busy; });
+  const lock = () => body.querySelectorAll("#bk-body button, #bk-create, #bk-refresh, #bk-comment").forEach((c) => { c.disabled = busy || (c.id === "bk-create" && !st.data); });   // до загрузки списка «Создать» выключена
   function paint() {
     if (dead) return;
     const box = $("#bk-body");
@@ -184,6 +184,7 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
     if (!b || busy) return;
     if (b.dataset.restore) restore(b.dataset.restore); else if (b.dataset.del) del(b.dataset.del);
   });
+  lock();
   load();
   return { hasUnsavedChanges: () => !!($("#bk-comment")?.value || "").trim(), guardLeave: async () => !busy, destroy() { dead = true; } };
 }
