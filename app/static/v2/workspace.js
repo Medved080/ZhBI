@@ -663,12 +663,13 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const shellSide = () => document.getElementById("v2-side");
   const navWasHidden = shellSide()?.hidden === true;
   const navBtn = $("#ws-nav");
-  function setNav(hidden) {
+  function setNav(hidden, remember = false) {
     const side = shellSide(); if (!side) return;
-    side.hidden = hidden; navBtn.setAttribute("aria-pressed", String(!hidden)); writeSess("v2.ws.navHidden", hidden ? "1" : "0");
+    side.hidden = hidden; navBtn.setAttribute("aria-pressed", String(!hidden));
+    if (remember) writeSess("v2.ws.navHidden", hidden ? "1" : "0");   // запоминается только выбор человека, а не умолчание по ширине
     setTimeout(() => window.dispatchEvent(new Event("resize")), 30);
   }
-  navBtn.addEventListener("click", () => { const side = shellSide(); if (side) setNav(!side.hidden); });
+  navBtn.addEventListener("click", () => { const side = shellSide(); if (side) setNav(!side.hidden, true); });
   setNav((readSess("v2.ws.navHidden") ?? (window.innerWidth < 1500 ? "1" : "0")) === "1");
   $("#ws-panel-toggle").addEventListener("click", () => {
     panelHidden = !panelHidden;
