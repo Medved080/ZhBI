@@ -119,7 +119,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const p = (n) => String(n).padStart(2, "0");
     return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, "0")}`;
   };
-  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null, params: {}, rs: {} }));
+  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null, params: {}, rs: {}, acking: false, ackMsg: "" }));
 
   sections.forEach((sec, i) => (sec.controls || []).forEach((c) => { if (c.default === "today") st[i].params[c.param] = todayIso(); }));
 
@@ -217,6 +217,33 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     if (i === active) paint();
   }
 
+  // «Ознакомился» (секция с `ack`): личная отметка «прочитано» — версию подставляет сервер, тело запроса пустое. Кнопка
+  // видна, пока в списке есть непрочитанные записи; успех — только после повторного чтения списка.
+  function ackBarHtml(sec, s) {
+    if (!sec.ack) return "";
+    const unseen = s.rows.filter((r) => pick(r, sec.ack.flag)).length;
+    const msg = s.ackMsg ? `<span class="v2-muted" id="rd-ack-status" role="status" aria-live="polite">${esc(s.ackMsg)}</span>` : `<span id="rd-ack-status" role="status" aria-live="polite"></span>`;
+    return `<div class="v2-bar v2-ack-bar">${unseen ? `<button type="button" class="v2-btn v2-primary" id="rd-ack" ${s.acking ? "disabled" : ""}>${esc(sec.ack.label)} (${unseen})</button>` : ""}${msg}</div>`;
+  }
+  async function ackSection(i) {
+    const sec = sections[i], s = st[i];
+    if (!sec.ack || s.acking) return;
+    s.acking = true; s.ackMsg = "Отмечаем…"; paint();
+    const unseenNow = () => s.rows.filter((r) => pick(r, sec.ack.flag)).length;
+    let known = true; // исход известен (ответ получен)
+    try { await api.post(sec.ack.path); } catch (err) {
+      if (err instanceof ApiError && err.status > 0 && err.status < 500) { s.ackMsg = `Не удалось отметить: ${errorText(err)}`; s.acking = false; paint(); return; }
+      known = false; // сеть/5xx — исход неизвестен: повторно не отправляем, сначала читаем
+    }
+    await load(i);
+    if (dead) return;
+    s.acking = false;
+    if (s.status !== "ok") s.ackMsg = "Отметка отправлена, но перечитать список не удалось — нажмите «Обновить».";
+    else if (unseenNow() === 0) s.ackMsg = known ? "Отмечено: непрочитанных записей нет (подтверждено чтением)." : "Сервер отметил записи, хотя ответ не дошёл.";
+    else s.ackMsg = known ? "Сервер вернул непрочитанные записи — проверьте." : "Отметка не подтверждена — повторите вручную.";
+    paint();
+  }
+
   function paint() {
     if (dead) return;
     const sec = sections[active];
@@ -244,14 +271,15 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const total = s.total ?? s.rows.length;
     $("#rd-count").textContent = `${sec.serverSearch && s.search.trim() ? `Найдено на сервере: ${total}` : q ? `Найдено ${rows.length} из ${s.rows.length}` : `Записей: ${total}`}${s.total != null && s.rows.length < s.total ? ` (загружено ${s.rows.length})` : ""}`;
     if (!rows.length) {
-      body.innerHTML = `<p class="v2-muted">${q || (sec.serverSearch && s.search.trim()) ? `Ничего не найдено по запросу «${esc(s.search)}».` : esc(sec.empty || "Записей нет.")}</p>`;
+      body.innerHTML = `${ackBarHtml(sec, s)}<p class="v2-muted">${q || (sec.serverSearch && s.search.trim()) ? `Ничего не найдено по запросу «${esc(s.search)}».` : esc(sec.empty || "Записей нет.")}</p>`;
       return;
     }
-    body.innerHTML = `${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${RENDER_LIMIT} из ${rows.length} — уточните поиск.</p>` : ""}
+    body.innerHTML = `${ackBarHtml(sec, s)}${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${RENDER_LIMIT} из ${rows.length} — уточните поиск.</p>` : ""}
       <div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${sec.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}${canEditRows(sec) ? "<th></th>" : ""}</tr></thead>
       <tbody>${shown.map((r) => `<tr>${sec.columns.map((c) => `<td>${cellHtml(c, r, s.data)}</td>`).join("")}${canEditRows(sec) ? `<td><button type="button" class="v2-btn" data-row-edit="${esc(r.id)}" aria-label="Открыть карточку работы ${esc(r["код"] ?? r.id)}">Сроки</button></td>` : ""}</tr>`).join("")}</tbody></table></div>
       ${sec.paging ? `<div class="v2-bar"><button type="button" class="v2-btn" id="rd-prev" ${s.offset <= 0 ? "disabled" : ""}>← Назад</button>
         <button type="button" class="v2-btn" id="rd-next" ${s.total != null && s.offset + s.rows.length >= s.total ? "disabled" : ""}>Дальше →</button></div>` : ""}`;
+    $("#rd-ack")?.addEventListener("click", () => ackSection(active));
     body.querySelectorAll("[data-row-edit]").forEach((b) => b.addEventListener("click", async () => {
       if (!(await closeEditor())) return;
       const host = $("#rd-editor");

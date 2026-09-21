@@ -2609,7 +2609,16 @@ function createServer(opts) {
     readGate(ctx, "backups");
     return { backups: [{ name: "zhbi_qa_auto", created_at: "2026-09-20 09:00:00", kind: "auto", kind_label: "служебная — QA", user_name: null, user_id: null, comment: "QA-копия", size_bytes: 5242880, stats: {} }], disk: { known: true } };
   });
-  route("GET", "/changelog", () => [{ version: "9.99", date: "20.09.2026", title: "QA-версия: проверка журнала", items: ["Пункт"], unseen: false }]);
+  // журнал версий: «непрочитано» — всё, что выше подтверждённой версии (как в app/main.py); подтверждение — личное
+  const CHANGELOG_QA = [{ version: "9.99", date: "20.09.2026", title: "QA-версия: проверка журнала", items: ["Пункт"] }, { version: "9.98", date: "19.09.2026", title: "QA-версия: предыдущая", items: ["Пункт"] }];
+  const changelogAck = () => ("changelogAck" in data.settings ? data.settings.changelogAck : "9.99"); // по умолчанию всё прочитано
+  route("GET", "/changelog", () => {
+    const ack = changelogAck();
+    const border = CHANGELOG_QA.findIndex((e) => e.version === ack);
+    const limit = border >= 0 ? border : CHANGELOG_QA.length;
+    return CHANGELOG_QA.map((e, i) => ({ ...e, unseen: i < limit }));
+  });
+  route("POST", "/changelog/ack", () => { data.settings.changelogAck = CHANGELOG_QA[0].version; return { acknowledged_version: CHANGELOG_QA[0].version }; });
   // цвета статусов — общие; хранятся в data.settings.statusColors
   const STATUS_KEYS = ["planned", "contracting", "in_production", "shipped", "delivered", "installed", "accepted"];
   route("GET", "/status-colors", () => data.settings.statusColors || { planned: "#b1b3b4", contracting: "#eab308", installed: "#00f55a" });
