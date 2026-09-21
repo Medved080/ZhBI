@@ -227,6 +227,7 @@ async function renderShell(user, permissions) {
       <div class="v2-head-title">
         <strong>ЖБИ</strong>
         <span class="v2-badge">Новый интерфейс — экспериментальный</span>
+        <span class="v2-build" id="v2-build" hidden></span>
       </div>
       <div class="v2-head-right">
         <label class="v2-ctx" title="Права и переходы в текущий интерфейс считаются по выбранному объекту">Объект
@@ -249,6 +250,14 @@ async function renderShell(user, permissions) {
       <main class="v2-page" id="v2-content"></main>
     </div>
   `;
+  // Индикатор версии сборки: метка кода, который сейчас отдаёт сервер (файл пишется при публикации, scripts/stamp_v2_build.py)
+  fetch("/static/v2/build.json", { credentials: "same-origin", cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).then((b) => {
+    const el = document.getElementById("v2-build");
+    if (!el || !b || !b.commit) return;
+    el.textContent = `сборка ${String(b.commit).slice(0, 7)}`;
+    el.title = `Сборка нового интерфейса: код ${b.commit}${b.built ? `, опубликовано ${b.built}` : ""}`;
+    el.hidden = false;
+  }).catch(() => { /* индикатор вторичен */ });
   const backBtn = document.getElementById("v2-back-btn");
   backBtn.addEventListener("click", onBackClick);
   document.getElementById("v2-banner-back").addEventListener("click", (e) => { e.preventDefault(); onBackClick(); });

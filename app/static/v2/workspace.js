@@ -608,6 +608,19 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     else if (t === "clear") send("clearSelection");
   }
 
+  // Что человеку реально доступно на этом рабочем месте (а не постоянное «только просмотр»)
+  function capabilities() {
+    const c = [];
+    if (!mfr && canStatus) c.push("смена статуса");
+    return c;
+  }
+  function capsChip() {
+    const c = capabilities();
+    return c.length
+      ? `<span class="ws-cap-chip" title="Операции, доступные вам на этом рабочем месте; остальное — в текущем интерфейсе">можно: ${esc(c.join(", "))}</span>`
+      : `<span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>`;
+  }
+
   function paintStatus() {
     const s = $("#ws-status");
     if (!sc || !sc.loaded) { s.textContent = sc?.error ? "Схема не загружена" : "Загрузка схемы…"; return; }
@@ -616,11 +629,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       const m = sc.mfr;
       const n = m.selectedBlocks?.length || 0;
       const selT = n > 1 ? `Выбрано блоков: ${n}` : m.selected ? (m.selected.kind === "block" ? "Выбран блок" : "Выбран элемент") : "Ничего не выбрано";
-      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
       return;
     }
     const sel = sc.multi?.count > 1 ? `Выбрано: ${sc.multi.count}` : sc.selected ? `Выбран: ${sc.selected.mark || sc.selected.element_type}` : "Ничего не выбрано";
-    s.innerHTML = `<span>Показано <b>${sc.shown}</b> из <b>${sc.total}</b></span><span>${esc(sel)}</span><span>${sc.excluded ? (picker ? `Отбор задан: выбрано ${sc.excluded}` : `Фильтры активны: снято ${sc.excluded}`) : (picker ? "Отбор не задан" : "Фильтры не заданы")}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span><span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+    s.innerHTML = `<span>Показано <b>${sc.shown}</b> из <b>${sc.total}</b></span><span>${esc(sel)}</span><span>${sc.excluded ? (picker ? `Отбор задан: выбрано ${sc.excluded}` : `Фильтры активны: снято ${sc.excluded}`) : (picker ? "Отбор не задан" : "Фильтры не заданы")}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
   }
 
   // ---- поиск по марке/адресу (среди показанных на схеме элементов)
@@ -700,7 +713,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       if (dead || obj !== curObject) return;
       canStatus = !!r.system_admin || (r.features?.status === "write" && !(r.not_applicable || []).includes("status"));
     } catch (e) { if (dead || obj !== curObject) return; canStatus = false; }
-    paintPanel();
+    paintPanel(); paintStatus();
   }
   loadStatusRights();
 
