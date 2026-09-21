@@ -2613,10 +2613,11 @@ function createServer(opts) {
   const CHANGELOG_QA = [{ version: "9.99", date: "20.09.2026", title: "QA-версия: проверка журнала", items: ["Пункт"] }, { version: "9.98", date: "19.09.2026", title: "QA-версия: предыдущая", items: ["Пункт"] }];
   const changelogAck = () => ("changelogAck" in data.settings ? data.settings.changelogAck : "9.99"); // по умолчанию всё прочитано
   route("GET", "/changelog", () => {
+    const list = data.settings.changelogEntries || CHANGELOG_QA; // тесты могут подменить состав журнала
     const ack = changelogAck();
-    const border = CHANGELOG_QA.findIndex((e) => e.version === ack);
-    const limit = border >= 0 ? border : CHANGELOG_QA.length;
-    return CHANGELOG_QA.map((e, i) => ({ ...e, unseen: i < limit }));
+    const border = list.findIndex((e) => e.version === ack);
+    const limit = border >= 0 ? border : list.length;
+    return list.map((e, i) => ({ ...e, unseen: i < limit }));
   });
   route("POST", "/changelog/ack", () => { data.settings.changelogAck = CHANGELOG_QA[0].version; return { acknowledged_version: CHANGELOG_QA[0].version }; });
   // цвета статусов — общие; хранятся в data.settings.statusColors
@@ -2632,8 +2633,21 @@ function createServer(opts) {
     data.settings.statusColors = { ...(data.settings.statusColors || { planned: "#b1b3b4", contracting: "#eab308", installed: "#00f55a" }), ...body };
     return data.settings.statusColors;
   });
-  route("GET", "/layer-type-combinations", () => deepClone(data.settings.layerCombos || [
-    { layer: "QA_слой_1", element_type: "Колонна", shape: "outline" }, { layer: "QA_слой_2", element_type: "Плита перекрытия", shape: "outline" }, { layer: "QA_слой_3", element_type: "Ригель", shape: "outline" }]));
+  route("PUT", "/element-shapes", (ctx) => {
+    assertFeature(ctx.user, "dict_element_shapes", "write");
+    if (!Array.isArray(ctx.body)) fail(422, "Ожидался список");
+    const SH = ["circle", "square", "triangle", "diamond", "hexagon", "outline"];
+    for (const it of ctx.body) if (!SH.includes(it.shape)) fail(422, `Неизвестная форма: ${it.shape}`);
+    const rows = layerCombosOf();
+    for (const it of ctx.body) {
+      const row = rows.find((r) => r.layer === it.layer && r.element_type === it.element_type);
+      if (row) row.shape = it.shape;
+    }
+    return { status: "ok" };
+  });
+  const layerCombosOf = () => (data.settings.layerCombos ||= [
+    { layer: "QA_слой_1", element_type: "Колонна", shape: "outline" }, { layer: "QA_слой_2", element_type: "Плита перекрытия", shape: "outline" }, { layer: "QA_слой_3", element_type: "Ригель", shape: "outline" }]);
+  route("GET", "/layer-type-combinations", () => deepClone(layerCombosOf()));
   // подтипы по объектам (data.settings.subtypes {oid: {тип: [подтипы]}}); использование подтипа изделиями — data.settings.subtypeUse {ключ: число}
   const subtypesOf = (oid) => ((data.settings.subtypes ||= {})[oid] ||= { "Колонна": ["верхняя", "нижняя"], "Ригель": [], "Панель": ["Цоколь"] });
   route("GET", "/allowed-subtypes", (ctx) => {

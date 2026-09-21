@@ -52,13 +52,13 @@ export const tests = [
     },
   },
   {
-    id: "RD-02", title: "Данные совпадают с присланными: формы маркеров, вкладки зон",
+    id: "RD-02", title: "Данные совпадают с присланными: журнал версий, вкладки зон",
     async run(t) {
       const a = await openApp({ home: true });
-      await openScreen(a, "marker-shapes");
-      const shown = a.$$("#rd-body tbody tr").map((tr) => `${tr.children[0].textContent.trim()}→${tr.children[1].textContent.trim()}`);
-      t.eq(shown, ["QA_слой_1→Колонна", "QA_слой_2→Плита перекрытия", "QA_слой_3→Ригель"], "сочетания слой→тип совпадают с ответом сервера");
-      t.has(a.$("#rd-count").textContent, "Записей: 3", "счётчик записей");
+      await openScreen(a, "changelog");
+      const shown = a.$$("#rd-body tbody tr").map((tr) => `${tr.children[0].textContent.trim()}→${tr.children[2].textContent.trim()}`);
+      t.eq(shown, ["9.99→QA-версия: проверка журнала", "9.98→QA-версия: предыдущая"], "сочетания слой→тип совпадают с ответом сервера");
+      t.has(a.$("#rd-count").textContent, "Записей: 2", "счётчик записей");
       await openScreen(a, "zones");
       t.eq(a.$$(".v2-read-tab").map((b) => b.textContent.trim()), ["Захватки", "Зоны кранов", "Стоянки кранов"], "три вкладки зон");
       t.eq(a.$$("#rd-body tbody tr").length, 2, "захватки: две зоны");
@@ -73,26 +73,26 @@ export const tests = [
     id: "RD-03", title: "Ошибка загрузки: текст сервера и «Повторить»; поиск сохраняется; после успеха таблица",
     async run(t) {
       const a = await openApp({ home: true });
-      a.ctl.failNext("GET /layer-type-combinations", { status: 500, detail: "База недоступна (QA)" });
-      await waitFor(() => a.$(`${NAV}[data-section="marker-shapes"]`), { what: "навигация" });
-      a.click(a.$(`${NAV}[data-section="marker-shapes"]`));
+      a.ctl.failNext("GET /changelog", { status: 500, detail: "База недоступна (QA)" });
+      await waitFor(() => a.$(`${NAV}[data-section="changelog"]`), { what: "навигация" });
+      a.click(a.$(`${NAV}[data-section="changelog"]`));
       await waitFor(() => a.$(".v2-callout-bad"), { what: "сообщение об ошибке" });
       t.has(a.$(".v2-callout-bad").textContent, "База недоступна (QA)", "показан текст ошибки сервера");
       t.ok(!a.$("#rd-body tbody"), "таблицы нет, ложных данных нет");
       a.click(a.$("#rd-retry"));
       await waitFor(() => a.$$("#rd-body tbody tr").length > 0, { what: "повтор загрузил данные" });
       t.ok(!a.$(".v2-callout-bad"), "после успешного повтора ошибки нет");
-      t.eq(a.ctl.count("GET", "/layer-type-combinations"), 2, "ровно два запроса: неудачный и повторный");
+      t.eq(a.ctl.count("GET", "/changelog"), 2, "ровно два запроса: неудачный и повторный");
     },
   },
   {
     id: "RD-04", title: "Пусто и «ничего не найдено» — разные сообщения; поиск фильтрует и считает",
     async run(t) {
       const a = await openApp({ home: true });
-      a.ctl.data.settings.layerCombos = [];
-      await openScreen(a, "marker-shapes");
-      t.has(body(a).textContent, "Сочетаний нет.", "пустой справочник назван пустым");
-      a.ctl.data.settings.layerCombos = [{ layer: "АЛ", element_type: "Альфа-тип", shape: "outline" }, { layer: "БТ", element_type: "Бета-тип", shape: "outline" }];
+      a.ctl.data.settings.changelogEntries = [];
+      await openScreen(a, "changelog");
+      t.has(body(a).textContent, "Записей нет.", "пустой журнал назван пустым");
+      a.ctl.data.settings.changelogEntries = [{ version: "1.1", date: "01.01.2026", title: "Альфа-версия", items: [] }, { version: "1.2", date: "02.01.2026", title: "Бета-версия", items: [] }];
       a.click(a.$("#rd-refresh"));
       await waitFor(() => a.$$("#rd-body tbody tr").length === 2, { what: "обновление подхватило записи" });
       await a.type(a.$("#rd-search"), "альфа");
@@ -126,16 +126,16 @@ export const tests = [
     id: "RD-06", title: "Повторные клики «Обновить» — один запрос; кнопка недоступна, пока идёт загрузка",
     async run(t) {
       const a = await openApp({ home: true });
-      await openScreen(a, "marker-shapes");
-      const before = a.ctl.count("GET", "/layer-type-combinations");
-      const hold = a.ctl.hold("GET /layer-type-combinations");
+      await openScreen(a, "changelog");
+      const before = a.ctl.count("GET", "/changelog");
+      const hold = a.ctl.hold("GET /changelog");
       a.click(a.$("#rd-refresh"));
       await a.settle(40);
       t.eq(a.click(a.$("#rd-refresh")), false, "повторный клик невозможен: кнопка заблокирована");
       t.eq(a.click(a.$("#rd-refresh")), false, "и третий тоже");
       hold.release();
       await waitFor(() => loaded(a) && !a.$("#rd-refresh").disabled, { what: "загрузка завершена" });
-      t.eq(a.ctl.count("GET", "/layer-type-combinations") - before, 1, "ушёл ровно один запрос");
+      t.eq(a.ctl.count("GET", "/changelog") - before, 1, "ушёл ровно один запрос");
       hold.dispose?.();
     },
   },
