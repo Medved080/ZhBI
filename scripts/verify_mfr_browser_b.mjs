@@ -135,8 +135,12 @@ try {
   await shot(b, "b-settings-preview");
   const fpBefore = one(`SELECT retired_at FROM block_works WHERE id=${softId}`);
   c.ok(fpBefore.retired_at === null, "до применения работа не снята (предпросмотр ничего не пишет)");
-  await tap(b, "#ss-apply");
+  const rs = await b.rect("#ss-apply");
+  const ps0 = reqs(b, "PUT", /work-types-settings$/);
+  await b.click(rs.cx, rs.cy, { count: 2 });   // двойной клик
   await b.waitFor(`/подтверждён чтением/.test(document.querySelector('#ss-status').textContent)`);
+  await sleep(400);
+  c.ok(reqs(b, "PUT", /work-types-settings$/) === ps0 + 1, "двойной клик по «Применить» (состав работ) — ровно один PUT");
   c.ok(one(`SELECT retired_at IS NOT NULL r FROM block_works WHERE id=${softId}`).r === 1, "ЗР со сроками снята мягко: строка цела, retired_at заполнен (SQL)");
   await closeModal(b);
   await b.waitFor(`!document.querySelector('.mfr-modal')`);
@@ -172,7 +176,7 @@ try {
   await dialogBtn(b, "Применить");   // подтверждение: в набор входят пустые работы, их удаление необратимо
   await b.waitFor(`/изменили после предпросмотра|Обновить состав/.test(document.querySelector('#ss-status').textContent + (document.querySelector('#ss-reload')?.textContent||''))`);
   c.ok(JSON.stringify(sql(`SELECT id, retired_at FROM block_works WHERE block_id IN (${blk},${blk2}) ORDER BY id`)) === snap, "конфликт при применении группы: ни один блок не изменился (SQL)");
-  await closeModal(b);
+  await tap(b, ".mfr-modal [data-mclose]");
   await dialogBtn(b, "Не сохранять");   // сторож: состав изменён, но не сохранён
   await b.waitFor(`!document.querySelector('.mfr-modal')`);
   c.ok(true, "закрытие окна с несохранённым составом спрашивает подтверждение (сторож)");
@@ -213,12 +217,33 @@ try {
   await tap(b, "#bd-preview");
   await b.waitFor(`document.querySelector('#bd-apply')`);
   const ev1 = await lastEv();
-  await tap(b, "#bd-apply");
-  await b.waitFor(`/Применено/.test(document.querySelector('#bd-status').textContent)`);
+  const pb0 = reqs(b, "PUT", /block-works\/bulk$/);
+  const rb = await b.rect("#bd-apply");
+  await b.click(rb.cx, rb.cy, { count: 2 });   // двойной клик
+  await b.waitFor(`/Применено/.test(document.querySelector('#bd-status').textContent)`, 30000);
+  await sleep(400);
+  c.ok(reqs(b, "PUT", /block-works\/bulk$/) === pb0 + 1, "двойной клик по «Применить» (групповая правка сроков) — ровно один PUT");
   const after = sql(`SELECT id, plan_start, plan_end FROM block_works WHERE id IN (${ids.join(",")}) ORDER BY id`);
   const shifted = (d, n) => { if (!d) return d; const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
   c.ok(before.every((r, i) => after[i].plan_start === shifted(r.plan_start, 3) && after[i].plan_end === shifted(r.plan_end, 3)), "после применения все даты сдвинуты на +3 дня (SQL)");
   c.ok((await events("block_work_bulk_edit", ev1)) === 1, "журнал: одно сводное block_work_bulk_edit");
+  // сетевой сбой и потерянный ответ на групповой записи (плюс 2 дня): без автоповтора, сверка чтением
+  const snapBulk = () => JSON.stringify(sql(`SELECT id, plan_start, plan_end FROM block_works WHERE id IN (${ids.join(",")}) ORDER BY id`));
+  await b.waitFor(`document.querySelector('#bd-back') || document.querySelector('#bd-preview')`).catch(() => {});
+  await b.eval(`(document.querySelector('#bd-back')||{click(){}}).click()`); await sleep(300);
+  await tap(b, "#bd-days"); await b.eval(`document.querySelector('#bd-days').select()`); await b.type("2");
+  await tap(b, "#bd-preview");
+  await b.waitFor(`document.querySelector('#bd-apply')`);
+  const snapB0 = snapBulk(); const pb1 = reqs(b, "PUT", /block-works\/bulk$/);
+  await b.offline(true);
+  await tap(b, "#bd-apply");
+  await b.waitFor(`/на сервере не найдено|исход неизвестен/.test(document.querySelector('#bd-status').textContent)`, 20000);
+  await b.offline(false); await sleep(600);
+  c.ok(reqs(b, "PUT", /block-works\/bulk$/) === pb1 + 1 && snapBulk() === snapB0, "групповая запись, сетевой сбой: один PUT, автоповтора нет, БД не менялась (SQL)");
+  await b.eval(`(()=>{ if(!window.__of){ window.__of=window.fetch.bind(window); window.fetch=async (...a)=>{ const r=await window.__of(...a); if(window.__dropNext && a[1] && (a[1].method==='PUT'||a[1].method==='POST'||a[1].method==='DELETE')){ window.__dropNext=false; throw new TypeError('Failed to fetch'); } return r; }; } window.__dropNext=true; })()`);
+  await tap(b, "#bd-apply");
+  await b.waitFor(`/сервер подтвердил/.test(document.querySelector('#bd-status').textContent)`, 20000);
+  c.ok(snapBulk() !== snapB0 && reqs(b, "PUT", /block-works\/bulk$/) === pb1 + 2, "групповая запись, потерян ответ ПОСЛЕ записи: запись состоялась, интерфейс подтвердил чтением, повтора нет");
   await closeModal(b);
   // граница дат: работа с датой 9999-12-30 → применение недоступно
   const w9 = await (await o3("GET", `/objects/4/block-works/${ids[0]}`)).json();
@@ -234,6 +259,23 @@ try {
   await sleep(500);
   c.ok(await b.eval(`document.querySelector('#bd-apply') ? document.querySelector('#bd-apply').disabled : true`), "сдвиг за границу дат: «Применить» недоступна (набор применяется целиком или никак)");
   await closeModal(b);
+  console.log("V1 (настоящий интерфейс V1 на том же сервере) показывает результат, сохранённый в V2");
+  const adm = await loginNode("admin");
+  const keepBlk = blk2;
+  const kw = sql(`SELECT work_type_id w FROM block_works WHERE block_id=${keepBlk} AND retired_at IS NULL ORDER BY id`).map((r) => r.w);
+  const kr = await (await adm("POST", `/objects/4/blocks/${keepBlk}/fact-reports`, { report_date: "2026-09-17", items: { [kw[0]]: 42 } })).json();
+  await b.goto(`${BASE}/?ui=v1&object_id=4`, 2500);
+  await b.waitFor(`typeof openBlockFactForm==='function' && typeof state!=='undefined' && state.objectId===4`, 60000);
+  await b.eval(`revitPlanState.objectId = state.objectId; openBlockFactForm(${keepBlk}, ${kr.id})`);
+  await b.waitFor(`document.querySelector('#block-fact-items .bf-item[data-wt="${kw[0]}"] .bf-number')`, 20000);
+  c.ok((await b.eval(`document.querySelector('#block-fact-items .bf-item[data-wt="${kw[0]}"] .bf-number').value`)) === "42" && (await b.eval(`document.querySelector('#block-fact-date').value`)) === "2026-09-17", "V1: форма «Факт» показывает документ, созданный через API V2: дата 17.09.2026, 42%");
+  const softV1 = one(`SELECT id FROM block_works WHERE id=${softId}`).id;
+  await b.eval(`openBlockWorkCard(${softId})`);
+  await b.waitFor(`document.querySelector('#bw-plan-start')`, 20000);
+  c.ok((await b.eval(`document.querySelector('#bw-plan-start').value`)) === one(`SELECT plan_start p FROM block_works WHERE id=${softId}`).p, "V1: карточка ЗР показывает срок, сохранённый из V2 (после снятия и возврата состава)");
+  await b.eval(`document.getElementById('menu-fact-journal').click()`);
+  await b.waitFor(`document.querySelectorAll('#fj-table-box tbody tr').length>0`, 20000);
+  c.ok((await b.eval(`document.querySelectorAll('#fj-table-box tbody tr').length`)) === one("SELECT COUNT(*) n FROM work_fact_reports WHERE object_id=4").n, "V1: «Журнал факта» показывает столько же документов, сколько в БД");
   c.ok(b.exceptions.length === 0, "исключений JavaScript нет", JSON.stringify(b.exceptions.slice(0, 2)));
 } catch (e) { console.log("СБОЙ СЦЕНАРИЯ:", e.message); c.ok(false, "сценарий завершён", e.message); await shot(b, "b-fail").catch(() => {}); }
 finally { await b.close(); }
