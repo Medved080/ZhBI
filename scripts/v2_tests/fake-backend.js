@@ -2193,6 +2193,17 @@ function createServer(opts) {
   // Права — по объекту изделия (_guard_elements, ключ «status»); тело: status, changed_at, comment, contract_id (по желанию).
   const ELEMENT_STATUSES = ["planned", "contracting", "in_production", "shipped", "delivered", "installed", "accepted"];
   const historyOf = (e) => (e.history_rows ||= [{ status: e.current_status, changed_at: "2026-08-01 09:00:00", changed_by: "QA", comment: null }]);
+  // Состояние всей пачки для сверки после неопределённого исхода распределения (app/allocation.py: GET /allocation-state?ids=…)
+  route("GET", "/allocation-state", (ctx) => {
+    const ids = String(ctx.query.get("ids") || "").split(",").filter((x) => x.trim() !== "").map(Number);
+    if (!ids.length || ids.some((x) => !Number.isInteger(x))) fail(400, "ids: ожидаются целые числа через запятую");
+    if (ids.length > 500) fail(400, "Не больше 500 изделий за запрос");
+    const uniq = [...new Set(ids)];
+    const found = uniq.map((i) => data.elements.find((e) => e.id === i)).filter(Boolean);
+    for (const e of found) if (e.object_id != null) assertObjectFeature(ctx.user, e.object_id, "plan", "read");
+    return { items: found.map((e) => ({ id: e.id, object_id: e.object_id, current_status: e.current_status, contract_id: e.contract_id ?? null })),
+             missing: uniq.filter((i) => !found.some((e) => e.id === i)) };
+  });
   route("GET", "/elements/:element_id", (ctx) => {
     const el = data.elements.find((e) => e.id === pathInt(ctx, "element_id"));
     if (!el) fail(404, "Элемент не найден");

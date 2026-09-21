@@ -404,8 +404,9 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 app.add_middleware(ImpersonationMiddleware)
 
 app.include_router(auth_router)
-from app.allocation import router as allocation_router  # noqa: E402
+from app.allocation import router as allocation_router, state_router as allocation_state_router  # noqa: E402
 app.include_router(allocation_router)
+app.include_router(allocation_state_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
 # не должен иметь ни единого шанса уехать в {user_id}.
 app.include_router(rights_matrix_router)

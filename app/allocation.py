@@ -22,7 +22,7 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app import activity, contract_guard
@@ -31,6 +31,7 @@ from app.contracts import _line_damaged, _line_fact, apply_status_change, enrich
 from app.db import begin_write, get_connection
 
 router = APIRouter(prefix="/contracts", tags=["allocation"])
+state_router = APIRouter(prefix="/allocation-state", tags=["allocation"])
 
 MAX_ITEMS = 500
 
@@ -158,3 +159,35 @@ def allocate(contract_id: int, body: AllocationIn, user=Depends(get_current_user
         activity.defer_end(events)   # откат/исключение: несброшенные события отбрасываются
         conn.close()
 
+
+
+@state_router.get("")
+def allocation_state(ids: str = Query(..., description="Идентификаторы изделий через запятую (не больше MAX_ITEMS)"), user=Depends(get_current_user)):
+    """Текущее состояние ВСЕЙ пачки изделий — для сверки после неопределённого исхода распределения (потерян ответ).
+
+    Только чтение: статус и контракт каждого изделия ОДНИМ запросом (один снимок, а не цепочка отдельных чтений).
+    Не отвечает на вопрос «чей запрос это сделал»: идентификатора операции сервер не хранит, поэтому по этому ответу
+    клиент различает лишь текущее состояние изделий, а не подтверждённый результат конкретной операции.
+    Права — как у чтения карточки изделия (`plan: read` по объектам изделий); несуществующие id возвращаются в `missing`.
+    """
+    try:
+        wanted = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ids: ожидаются целые числа через запятую")
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Не указаны изделия")
+    if len(wanted) > MAX_ITEMS:
+        raise HTTPException(status_code=400, detail=f"Не больше {MAX_ITEMS} изделий за запрос")
+    wanted = list(dict.fromkeys(wanted))
+    conn = get_connection()
+    try:
+        from app.main import _guard_elements
+        _guard_elements(conn, user, wanted, "plan", "read")
+        q = ",".join("?" * len(wanted))
+        rows = {r["id"]: r for r in conn.execute(
+            f"SELECT id, object_id, current_status, contract_id FROM elements WHERE id IN ({q})", wanted)}
+        return {"items": [{"id": i, "object_id": rows[i]["object_id"], "current_status": rows[i]["current_status"], "contract_id": rows[i]["contract_id"]}
+                          for i in wanted if i in rows],
+                "missing": [i for i in wanted if i not in rows]}
+    finally:
+        conn.close()

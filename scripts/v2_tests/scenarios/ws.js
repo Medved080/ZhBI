@@ -483,7 +483,7 @@ export const tests = [
       a.click(a.$("[data-al=submit]")); await a.answerDialog("Распределить");
       await waitFor(() => /не подтверждено/.test(a.$("#ws-panel-body .ws-err")?.textContent || ""), { what: "неизвестный исход" });
       t.eq(posts().length, 2, "после потери ответа запрос не повторён автоматически (1 конфликт + 1 сбой)");
-      t.ok(a.ctl.log.some((e) => e.method === "GET" && /\/elements\/901$/.test(e.path)) && a.ctl.log.some((e) => e.method === "GET" && /\/elements\/905$/.test(e.path)), "исход проверен чтением первого и последнего изделия");
+      t.ok(a.ctl.log.some((e) => e.method === "GET" && /allocation-state\?ids=901(,|%2C)902(,|%2C)905$/.test(e.path)), "состояние проверено по ВСЕЙ пачке (901, 902, 905) одним чтением, а не по крайним изделиям");
       // 3) успех + двойной клик: одна запись
       const hold = a.ctl.hold("POST /contracts");
       a.click(a.$("[data-al=submit]")); await a.answerDialog("Распределить");
@@ -510,10 +510,69 @@ export const tests = [
       const realFetch = a.win.fetch;
       a.win.fetch = async (u, o) => { const r = await realFetch(u, o); if (o && o.method === "POST" && /allocations/.test(String(u))) throw new TypeError("network lost"); return r; };
       a.click(a.$("[data-al=submit]")); await a.answerDialog("Распределить");
-      await waitFor(() => /сервер подтвердил: распределение применено/.test(a.$("#ws-panel-body .ws-ok")?.textContent || ""), { what: "сверка после потери ответа" });
+      await waitFor(() => /Сверка всей пачки: все 1 изд\./.test(a.$("#ws-panel-body .ws-warnbox")?.textContent || ""), { what: "сверка после потери ответа" });
+      t.has(a.$("#ws-panel-body .ws-warnbox").textContent, "подтвердить, что его создал именно этот запрос, нельзя", "текущее состояние не выдано за подтверждённый результат запроса");
+      t.ok(!a.$("#ws-panel-body .ws-ok"), "успех не заявлен (подтверждение — только ответом сервера)");
       a.win.fetch = realFetch;
       t.eq(posts().length, 4, "после потери ответа запись не повторялась");
       t.eq(d.elements.find((e) => e.id === 903).contract_id, 1, "изделие распределено ровно один раз");
+      a.close();
+    },
+  },
+  {
+    id: "WS-13", title: "Распределение: потеря ответа после commit, крайние изделия пачки в ожидаемом состоянии, среднее — нет: успех всей пачки НЕ заявляется",
+    async run(t) {
+      const a = await openApp({ home: true });
+      const gate = await import("/static/v2/write-gate.js");
+      if (gate.POLICY.length && !gate.checkWrite("POST", "/contracts/1/allocations", { object_id: 1, element_type: "x", mark: null, items: [{ element_id: 1, expected_status: "planned" }] }).allowed) { a.close(); return; }
+      const d = a.ctl.data;
+      const c1 = d.contracts.find((c) => c.id === 1);
+      c1.lines.push({ id: 9901, element_type: "QA-Тип", mark: "QA-Z1", quantity: 10 });
+      const mk = (id, st) => ({ id, object_id: 1, contract_id: null, element_type: "QA-Тип", mark: "QA-Z1", current_status: st, project_delivery_date: null, project_smr_start_date: null, planned_delivery_date: null, actual_delivery_date: null, updated_at: "2026-09-12 09:00:00" });
+      const batch = [[901, "planned"], [902, "planned"], [903, "shipped"], [904, "planned"]];
+      for (const [id, st] of batch) d.elements.push(mk(id, st));
+      const list = await (await a.win.fetch("/contracts")).json();
+      const cont = list.find((c) => c.id === 1);
+      stub(a);
+      await openWs(a, "ws-picker");
+      frameWin(a).__cands = batch.map(([id, st]) => [id, st, null]);
+      frameWin(a).__send({ proto: "zhbi-scene/1", evt: "picker", model: { slicers: [], metrics: [], contracts: [{ name: cont.counterparty_short_name, total: 0, linked: 0, inSlice: true, over: false,
+        rows: [{ id: 1, label: "Д · С", name: cont.name, total: 0, linked: 0, remainder: 0, inSlice: true, on: false, over: false }] }], unlinked: 0, unlinkedOn: false, contractSelected: 0, selectionActive: false, base: 4, highlightUnlinked: false, noneValue: "__none__" } });
+      await waitFor(() => a.byText(".ws-tabs button", "Распределение"), { what: "вкладка «Распределение»" });
+      a.click(a.byText(".ws-tabs button", "Распределение"));
+      await waitFor(() => a.$("select[data-al=supplier]"), { what: "поставщик" });
+      a.setValue(a.$("select[data-al=supplier]"), cont.counterparty_short_name);
+      await waitFor(() => a.$("[data-al-c]"), { what: "контракты" });
+      a.click(a.$("[data-al-c=\"1\"]"));
+      await waitFor(() => a.byText("[data-al-l]", "QA-Z1"), { what: "марки" });
+      a.click(a.byText("[data-al-l]", "QA-Z1"));
+      await waitFor(() => cmds(a).some((c) => c.cmd === "pickerCandidates"), { what: "кандидаты" });
+      frameWin(a).__emit({ multiItems: batch.map(([id, st]) => ({ id, mark: "QA-Z1", element_type: "QA-Тип", current_status: st, contract_id: null })) });
+      await waitFor(() => /подходят: 4/.test(a.$("#ws-panel-body").textContent) && !a.$("[data-al=submit]").disabled, { what: "выделение пачки из четырёх" });
+      // запись состоялась (commit), но ответ потерян, а СРЕДНЕЕ изделие (902) потом снял с контракта другой пользователь: крайние (901, 904) совпадают с ожидаемым
+      const realFetch = a.win.fetch;
+      a.win.fetch = async (u, o) => {
+        const r = await realFetch(u, o);
+        if (o && o.method === "POST" && /allocations/.test(String(u))) {
+          const mid = d.elements.find((e) => e.id === 902); mid.contract_id = null; mid.current_status = "planned";   // чужая правка после commit
+          throw new TypeError("network lost");
+        }
+        return r;
+      };
+      a.click(a.$("[data-al=submit]")); await a.answerDialog("Распределить");
+      await waitFor(() => /НЕОДНОЗНАЧНО/.test(a.$("#ws-panel-body .ws-err")?.textContent || ""), { what: "итог сверки всей пачки" });
+      a.win.fetch = realFetch;
+      const txt = a.$("#ws-panel-body").textContent;
+      t.eq(d.elements.filter((e) => [901, 904].includes(e.id)).map((e) => [e.current_status, e.contract_id]), [["contracting", 1], ["contracting", 1]], "предпосылка: крайние изделия в ожидаемом состоянии");
+      t.eq([d.elements.find((e) => e.id === 902).current_status, d.elements.find((e) => e.id === 902).contract_id], ["planned", null], "предпосылка: среднее изделие не в ожидаемом состоянии");
+      t.has(txt, "из 4 изд. соответствуют результату распределения 3", "показано, сколько изделий соответствует, — не «всё»");
+      t.has(txt, "без изменений 1", "показано изделие без изменений");
+      t.has(txt, "№902", "названо расходящееся изделие");
+      t.ok(!a.$("#ws-panel-body .ws-ok"), "успех всей пачки НЕ заявлен (нет сообщения об успешном распределении)");
+      t.ok(!/Распределено: 4|сервер подтвердил|применено/.test(txt), "нет текста об успешном распределении пачки");
+      const ids = a.ctl.log.filter((e) => e.method === "GET" && /allocation-state/.test(e.path)).map((e) => e.path);
+      t.ok(ids.some((x) => /ids=901(,|%2C)902(,|%2C)903(,|%2C)904$/.test(x)), "прочитано состояние ВСЕХ четырёх изделий, а не двух крайних");
+      t.eq(a.ctl.log.filter((e) => e.method === "POST" && /allocations/.test(e.path)).length, 1, "автоповтора записи нет");
       a.close();
     },
   },

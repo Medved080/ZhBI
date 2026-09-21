@@ -1,0 +1,13 @@
+import { classifyAllocation, expectedStatusAfter } from "../app/static/v2/alloc-verify.js";
+let bad = 0; const eq = (a, b, m) => { if (JSON.stringify(a) !== JSON.stringify(b)) { bad++; console.log("FAIL", m, JSON.stringify(a)); } else console.log("ok  ", m); };
+const items = [1, 2, 3, 4, 5].map((id) => ({ element_id: id, expected_status: id === 3 ? "shipped" : "planned" }));
+const st = (over = {}) => ({ items: items.map((i) => ({ id: i.element_id, current_status: expectedStatusAfter(i.expected_status), contract_id: 7, ...(over[i.element_id] || {}) })) });
+eq(classifyAllocation(items, st(), 7).kind, "state_matches", "все соответствуют → текущее состояние совпало");
+eq(classifyAllocation(items, st({ 3: { contract_id: null, current_status: "shipped" } }), 7).kind, "mixed", "крайние в норме, среднее нет → НЕ успех");
+eq(classifyAllocation(items, st({ 3: { current_status: "installed" } }), 7).kind, "mixed", "среднее с другим статусом → НЕ успех");
+eq(classifyAllocation(items, st({ 2: { contract_id: 9 } }), 7).other, 1, "чужой контракт у среднего — считается «иначе изменено»");
+const none = { items: items.map((i) => ({ id: i.element_id, current_status: i.expected_status, contract_id: null })) };
+eq(classifyAllocation(items, none, 7).kind, "not_applied", "все без изменений → не применено");
+eq(classifyAllocation(items, { items: st().items.slice(0, 4), missing: [5] }, 7).kind, "mixed", "нет данных по одному → неоднозначно");
+eq(classifyAllocation(items, { items: [] , missing: [1,2,3,4,5]}, 7).kind, "mixed", "ничего не найдено → неоднозначно, не «не применено»");
+process.exit(bad ? 1 : 0);

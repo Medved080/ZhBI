@@ -14,6 +14,7 @@ import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
 import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
+import { verifyAllocationBatch, verdictText } from "./alloc-verify.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -122,7 +123,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
       filters = m.model; paintPanel();
     } else if (m.evt === "picker" && m.model && Array.isArray(m.model.slicers)) {
-      pk = m.model; paintPanel();
+      pk = m.model;
+      if (al.loaded && contractIdsKey() !== al.idsKey) al.loaded = false;   // сцена догрузилась и состав контрактов объекта изменился — перечитать, а не показывать «нет контрактов»
+      paintPanel();
     } else if (m.evt === "candidates" && Array.isArray(m.items)) {
       al.cand = { elementType: m.elementType, mark: m.mark, items: m.items }; al.candAsked = true; paintPanel();
     } else if (m.evt === "search-result" && Array.isArray(m.items)) {
@@ -460,6 +463,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const allocProbe = () => checkWrite("POST", "/contracts/1/allocations", { object_id: 1, element_type: "x", mark: null, items: [{ element_id: 1, expected_status: "planned" }] });
   function allocEnabled() { return !!canStatus && allocProbe().allowed; }
   function objectContractIds() { return new Set((pk?.contracts || []).flatMap((g) => g.rows.map((r) => r.id))); }
+  const contractIdsKey = () => Array.from(objectContractIds()).sort((a, b) => a - b).join(",");
   async function loadAlloc() {
     if (al.loading) return;
     al.loading = true; al.loadError = ""; paintPanel();
@@ -469,11 +473,16 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       if (dead || obj !== curObject) return;
       const ids = objectContractIds();
       al.contracts = list.filter((c) => ids.has(c.id) && !c.is_archived);
+      al.idsKey = contractIdsKey();
       al.loaded = true;
     } catch (e) {
       if (dead || obj !== curObject) return;
       al.loadError = e instanceof ApiError ? e.detail : "Не удалось загрузить контракты";
-    } finally { al.loading = false; if (!dead) paintPanel(); }
+    } finally {
+      al.loading = false;
+      if (al.loaded && contractIdsKey() !== al.idsKey) al.loaded = false;   // состав контрактов сцены изменился, пока шла загрузка
+      if (!dead) paintPanel();
+    }
   }
   const suppliers = () => Array.from(new Set(al.contracts.map((c) => c.counterparty_short_name))).sort((a, b) => a.localeCompare(b, "ru", { numeric: true }));
   const cLabel = (c) => [c.agreement_number, c.specification_number, c.theme].filter(Boolean).join(" · ") || c.name;
@@ -564,16 +573,6 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const elemDelta = (u) => ({ id: u.id, current_status: u.current_status, contract_id: u.contract_id ?? null, counterparty_code: u.counterparty_code ?? null,
     planned_delivery_date: u.planned_delivery_date ?? null, actual_delivery_date: u.actual_delivery_date ?? null, project_delivery_date: u.project_delivery_date ?? null,
     project_smr_start_date: u.project_smr_start_date ?? null });
-  // Сверка с сервером после неопределённого исхода: пачка атомарна, поэтому первого и последнего изделия достаточно
-  async function verifyAllocation(ids, cid) {
-    const probe = ids.length > 1 ? [ids[0], ids[ids.length - 1]] : [ids[0]];
-    const got = [];
-    for (const id of probe) got.push((await api.get(`/elements/${id}`)).contract_id);
-    if (got.every((v) => v === cid)) return "applied";
-    if (got.every((v) => v == null)) return "not_applied";
-    return "unclear";
-  }
-
   async function allocSubmit() {
     const plan = allocPlan(), c = curContract();
     if (al.busy || !c || !plan.line || !plan.ok.length || plan.badN || plan.over || !allocEnabled()) return;
@@ -605,13 +604,15 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       after([...applied, ...already]);
     } catch (err) {
       if (err instanceof ApiError && !err.blockedByPolicy && (err.status === 0 || err.status >= 500)) {
-        // исход неизвестен: повторно НЕ отправляем, сначала сверяемся с сервером (пачка применяется целиком или не применяется)
+        // исход неизвестен: повторно НЕ отправляем; сверяем КАЖДОЕ изделие пачки одним чтением (alloc-verify.js) и не выдаём
+        // текущее состояние за подтверждённый результат запроса
         try {
-          const v = await verifyAllocation(ids, c.id);
-          if (v === "applied") { al.done = "Ответ не получен, но сервер подтвердил: распределение применено. Схема и остатки перечитаны с сервера."; send("reload"); after([]); }
-          else if (v === "not_applied") al.error = "Ответ не получен, изменение не подтверждено: изделия на сервере без контракта. Выбор сохранён — проверьте связь и подтвердите снова.";
-          else al.error = "Ответ не получен, состояние изделий на сервере неоднозначно. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта.";
-        } catch (e2) { al.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта."; }
+          const v = await verifyAllocationBatch(api, body.items, c.id);
+          const r = verdictText(v, c.name);
+          if (v.kind === "state_matches") { al.warn = r.text; send("reload"); after([]); }
+          else if (v.kind === "not_applied") al.error = r.text;                    // выбор и ввод сохранены: решение о повторе — за человеком
+          else { al.error = r.text; send("reload"); send("clearSelection"); al.cand = null; al.candAsked = false; al.loaded = false; loadAlloc(); }
+        } catch (e2) { al.error = "Ответ не получен, и проверить состояние пачки не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта."; }
       } else if (err instanceof ApiError && err.status === 409 && err.rawDetail && typeof err.rawDetail === "object") {
         al.error = conflictText(err);                   // расхождения: ничего не применено; схема перечитывается, чтобы показать актуальное
         send("reload"); send("clearSelection"); al.cand = null; al.candAsked = false; al.loaded = false; loadAlloc();
