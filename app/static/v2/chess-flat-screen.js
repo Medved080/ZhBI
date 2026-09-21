@@ -167,8 +167,8 @@ export function mountChessFlatScreen(el, { screen, structure, objectId, api, rig
     if (!st.layout || busy) return;
     const its = items();
     if (!its.length) return;
+    modal?.close(); modal = null;          // прежнее окно закрывается ДО записи нового состояния (его close сбрасывает st.review)
     st.review = { items: its, key: uuid(), conflicts };
-    modal?.close(); modal = null;
     modal = openModal({ title: "Проверка перед записью", wide: true, onRequestClose: async () => !busy });
     const done = modal.close;
     modal.close = () => { modal = null; done(); st.review = null; };

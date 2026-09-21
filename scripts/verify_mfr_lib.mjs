@@ -50,3 +50,10 @@ export async function tap(b, sel, o) {
   await sleep(120);
   await b.clickSel(sel, o);
 }
+
+// закрыть окно кнопкой «Закрыть» и дождаться, что его нет (иначе следующий щелчок попадёт в подложку)
+export async function closeModal(b) {
+  await tap(b, ".mfr-modal [data-mclose]");
+  await b.waitFor(`!document.querySelector('.mfr-modal')`, 8000);
+  await sleep(150);
+}

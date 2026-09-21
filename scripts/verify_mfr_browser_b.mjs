@@ -2,7 +2,7 @@
 // конкуренция) и групповой правки сроков (предпросмотр, применение, конкуренция, отказ внутри пачки) на НАСТОЯЩЕМ backend и временной копии БД.
 // Только scripts/cdp.mjs (настоящие события мыши и клавиатуры). Запуск: MFR_BASE=... MFR_DB=<копия БД> MFR_SHOTS=<каталог> node scripts/verify_mfr_browser_b.mjs
 import { execFileSync } from "node:child_process";
-import { session, openScreen, shot, sleep, checker, txt, exists, tap } from "./verify_mfr_lib.mjs";
+import { session, openScreen, shot, sleep, checker, txt, exists, tap, closeModal } from "./verify_mfr_lib.mjs";
 
 const BASE = process.env.MFR_BASE || "http://127.0.0.1:8120";
 const DB = process.env.MFR_DB;
@@ -117,7 +117,7 @@ try {
   await b.waitFor(`/удалён/.test(document.querySelector('#ff-status').textContent)`);
   c.ok(one(`SELECT COUNT(*) n FROM work_fact_reports WHERE id=${rep.id}`).n === 0 && one(`SELECT COUNT(*) n FROM work_fact_items WHERE report_id=${rep.id}`).n === 0 && one(`SELECT COUNT(*) n FROM work_fact_item_history WHERE report_id=${rep.id}`).n === 0, "документ, строки и история удалены (SQL)");
   c.ok((await events("block_fact_report_delete", ev0)) === 1, "журнал: block_fact_report_delete");
-  await tap(b, ".mfr-modal [data-mclose]");
+  await closeModal(b);
 
   console.log("Состав работ одного блока: мягкое снятие, предпросмотр");
   const zrsoft = sql(`SELECT id, work_type_id w FROM block_works WHERE block_id=${blk} AND retired_at IS NULL AND (plan_start IS NOT NULL OR forecast_start IS NOT NULL) ORDER BY id LIMIT 1`)[0];
@@ -138,7 +138,7 @@ try {
   await tap(b, "#ss-apply");
   await b.waitFor(`/подтверждён чтением/.test(document.querySelector('#ss-status').textContent)`);
   c.ok(one(`SELECT retired_at IS NOT NULL r FROM block_works WHERE id=${softId}`).r === 1, "ЗР со сроками снята мягко: строка цела, retired_at заполнен (SQL)");
-  await tap(b, ".mfr-modal [data-mclose]");
+  await closeModal(b);
   await b.waitFor(`!document.querySelector('.mfr-modal')`);
   // возврат: включить обратно
   await tap(b, "#bs-settings");
@@ -149,7 +149,7 @@ try {
   await tap(b, "#ss-apply");
   await b.waitFor(`/подтверждён чтением/.test(document.querySelector('#ss-status').textContent)`);
   c.ok(one(`SELECT retired_at IS NULL a FROM block_works WHERE id=${softId}`).a === 1, "возврат: retired_at очищен, строка та же (SQL)");
-  await tap(b, ".mfr-modal [data-mclose]");
+  await closeModal(b);
 
   console.log("Состав работ ГРУППЫ блоков: предпросмотр, конкуренция, атомарность");
   await tap(b, `.mfr-blk[data-b="${blk2}"]`, { meta: true });
@@ -172,7 +172,7 @@ try {
   await dialogBtn(b, "Применить");   // подтверждение: в набор входят пустые работы, их удаление необратимо
   await b.waitFor(`/изменили после предпросмотра|Обновить состав/.test(document.querySelector('#ss-status').textContent + (document.querySelector('#ss-reload')?.textContent||''))`);
   c.ok(JSON.stringify(sql(`SELECT id, retired_at FROM block_works WHERE block_id IN (${blk},${blk2}) ORDER BY id`)) === snap, "конфликт при применении группы: ни один блок не изменился (SQL)");
-  await tap(b, ".mfr-modal [data-mclose]");
+  await closeModal(b);
   await dialogBtn(b, "Не сохранять");   // сторож: состав изменён, но не сохранён
   await b.waitFor(`!document.querySelector('.mfr-modal')`);
   c.ok(true, "закрытие окна с несохранённым составом спрашивает подтверждение (сторож)");
@@ -219,7 +219,7 @@ try {
   const shifted = (d, n) => { if (!d) return d; const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
   c.ok(before.every((r, i) => after[i].plan_start === shifted(r.plan_start, 3) && after[i].plan_end === shifted(r.plan_end, 3)), "после применения все даты сдвинуты на +3 дня (SQL)");
   c.ok((await events("block_work_bulk_edit", ev1)) === 1, "журнал: одно сводное block_work_bulk_edit");
-  await tap(b, ".mfr-modal [data-mclose]");
+  await closeModal(b);
   // граница дат: работа с датой 9999-12-30 → применение недоступно
   const w9 = await (await o3("GET", `/objects/4/block-works/${ids[0]}`)).json();
   await o3("PATCH", `/objects/4/block-works/${ids[0]}`, { plan_start: "9999-12-01", plan_end: "9999-12-30", expected_rev: w9.rev });
@@ -233,7 +233,7 @@ try {
   await b.waitFor(`document.querySelector('#bd-pv')`);
   await sleep(500);
   c.ok(await b.eval(`document.querySelector('#bd-apply') ? document.querySelector('#bd-apply').disabled : true`), "сдвиг за границу дат: «Применить» недоступна (набор применяется целиком или никак)");
-  await tap(b, ".mfr-modal [data-mclose]");
+  await closeModal(b);
   c.ok(b.exceptions.length === 0, "исключений JavaScript нет", JSON.stringify(b.exceptions.slice(0, 2)));
 } catch (e) { console.log("СБОЙ СЦЕНАРИЯ:", e.message); c.ok(false, "сценарий завершён", e.message); await shot(b, "b-fail").catch(() => {}); }
 finally { await b.close(); }

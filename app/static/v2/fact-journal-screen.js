@@ -76,7 +76,7 @@ export function mountFactJournalScreen(el, { screen, structure, objectId, api, r
           <div class="mfr-actions">${canWrite ? `<button type="button" class="v2-btn v2-primary" id="fj-new">Новый отчёт</button>` : ""}<button type="button" class="v2-btn" id="fj-refresh">Обновить</button></div></div>
         <p id="fj-msg" class="mfr-status ${esc(st.msgKind)}" role="status" aria-live="polite">${esc(st.msg)}</p>
         <div class="mfr-scroll mfr-tblwrap" id="fj-tbl"></div></section></div>`;
-    tree = mountWorkTypeTree($("#fj-tree"), st.types, st.typeSel, { onChange: () => { st.typeSel = new Set(tree.selected()); load(); } });
+    tree = mountWorkTypeTree($("#fj-tree"), st.types, st.typeSel, { onChange: () => { st.typeSel = new Set(tree.selected()); load(); paintReset(); } });
     el.querySelectorAll("[data-sec]").forEach((c) => c.addEventListener("change", () => { const id = Number(c.dataset.sec); c.checked ? st.secSel.add(id) : st.secSel.delete(id); load(); paintReset(); }));
     el.querySelectorAll("[data-lvl]").forEach((c) => c.addEventListener("change", () => { const id = Number(c.dataset.lvl); c.checked ? st.lvlSel.add(id) : st.lvlSel.delete(id); load(); paintReset(); }));
     $("#fj-from").addEventListener("change", (e) => { st.from = e.target.value; load(); paintReset(); });
