@@ -10,7 +10,7 @@
   S7  ожидание блокировки: писатель ждёт не дольше busy_timeout, затем чистый отказ (без частичных изменений), после освобождения — успех;
   S10 контракт ЧУЖОГО объекта с позицией под ту же марку не принимается (пачкой и одиночной сменой статуса);
   S11 одиночная смена статуса без contract_id (как делает форма V2) — что происходит с контрактом (наблюдение);
-  S9  журнал действий (audit) при откате пачки — наблюдение;
+  (журнал действий при откате пачки проверяет scripts/verify_activity_journal.py)
   S8  СВОЙСТВА пачки bulk-status (не гонка): что она делает с контрактом (перезапись устаревшим, снятие, «Запланирован», архивный, чужой объект).
 
 Запуск (только на КОПИИ обезличенной БД; сама БД не меняется — каждый раунд работает на временной копии):
@@ -156,6 +156,14 @@ def state_of(c, ids):
 
 
 # ------------------------------------------------------------------ сценарии
+def alloc_job(ids, cid, pos):
+    """Работа для race(): то же распределение новым маршрутом POST /contracts/{id}/allocations (одна пачка, сверка состояния)."""
+    import app.allocation as alloc
+    body = alloc.AllocationIn(object_id=1, element_type=pos["element_type"], mark=pos["mark"],
+                              items=[alloc.AllocationItem(element_id=i, expected_status="planned") for i in ids])
+    return (alloc.allocate, cid, body, USER)
+
+
 def s1(round_no):
     fresh_db()
     c = db()
@@ -245,7 +253,7 @@ def s3(round_no):
     return bad, Counter(str(r[0]) for r in res)
 
 
-def s4(round_no):
+def s4(round_no, alloc=False):
     """Замена поставщика: документ переносит одно изделие A→B, одновременно на последнее место B распределяют другое изделие."""
     fresh_db()
     c = db()
@@ -266,7 +274,7 @@ def s4(round_no):
     doc = sc.create_supplier_change(sc.SupplierChangeIn(object_id=1, doc_date="2026-09-21", from_contract_id=a_id, to_contract_id=b_id, element_ids=[ids[0]]), USER)
     res = race([
         (sc.post_supplier_change, doc["id"], USER),
-        (main.update_status_bulk, bulk_body([ids[3]], b_id), USER),
+        (alloc_job([ids[3]], b_id, pos) if alloc else (main.update_status_bulk, bulk_body([ids[3]], b_id), USER)),
     ])
     c = db()
     n = linked_n(c, b_id, pos["element_type"], pos["mark"]); q = bought(c, b_id, pos["element_type"], pos["mark"])
@@ -279,7 +287,7 @@ def s4(round_no):
     return bad, Counter(str(r[0]) for r in res)
 
 
-def s5(round_no):
+def s5(round_no, alloc=False):
     """Количество позиции уменьшают до числа уже привязанного, одновременно распределяют ещё одно изделие."""
     fresh_db()
     c = db()
@@ -296,7 +304,7 @@ def s5(round_no):
     body = contracts_mod.ContractIn(specification_id=co["specification_id"], theme=co["theme"], is_archived=bool(co["is_archived"]), lines=lines, incidents=incs, capacity=[])
     res = race([
         (contracts_mod.update_contract, cid, body, USER),
-        (main.update_status_bulk, bulk_body([ids[0]], cid), USER),
+        (alloc_job([ids[0]], cid, pos) if alloc else (main.update_status_bulk, bulk_body([ids[0]], cid), USER)),
     ])
     c = db()
     n = linked_n(c, cid, pos["element_type"], pos["mark"]); q = bought(c, cid, pos["element_type"], pos["mark"])
@@ -425,25 +433,6 @@ def s8(round_no):
     return [], facts
 
 
-def s9(round_no):
-    """Журнал действий (audit) при откате пачки: события ставятся в очередь по ходу операции, ДО commit — фиксируем, остаются ли следы."""
-    from app import activity
-    fresh_db()
-    c = db()
-    pos, ids = find_position(c, 3)
-    make_room(c, pos, 2)
-    n0 = c.execute("SELECT COUNT(*) n FROM activity_log WHERE action = 'status_change'").fetchone()["n"]
-    c.close()
-    activity.start_worker()
-    r = call(main.update_status_bulk, bulk_body(ids[:3], pos["contract_id"]), USER)   # 3-е изделие не помещается → откат всей пачки
-    activity.flush_for_tests()
-    c = db()
-    n1 = c.execute("SELECT COUNT(*) n FROM activity_log WHERE action = 'status_change'").fetchone()["n"]
-    hist = hist_n(c, ids[:3])
-    c.close()
-    return [], {f"откат пачки ({r[0]}): записей status_change в журнале действий после отказа": n1 - n0, "записей status_history добавилось": hist - hist_n(sqlite3.connect(BASE), ids[:3]) if False else "0 (см. S6)"}
-
-
 def s10(round_no):
     """Контракт ЧУЖОГО объекта с позицией под ту же марку не должен приниматься ни пачкой, ни одиночной сменой статуса."""
     fresh_db()
@@ -503,7 +492,9 @@ def s11(round_no):
 SCENARIOS = [("S1", "последнее место: 8 одновременных пачек по 1 изделию", s1), ("S2", "две пачки по 2 на остаток 3 (всё или ничего)", s2),
              ("S3", "три разных обработчика на последнее место", s3), ("S4", "проведение замены поставщика против распределения", s4),
              ("S5", "уменьшение количества контракта против распределения", s5), ("S6", "откат при отказе внутри пачки", s6),
-             ("S7", "ожидание блокировки и чистый отказ", s7), ("S10", "контракт чужого объекта отклоняется", s10)]
+             ("S7", "ожидание блокировки и чистый отказ", s7), ("S10", "контракт чужого объекта отклоняется", s10),
+             ("S12", "проведение замены поставщика против НОВОГО распределения (allocations)", lambda k: s4(k, alloc=True)),
+             ("S13", "уменьшение количества позиции против НОВОГО распределения (allocations)", lambda k: s5(k, alloc=True))]
 
 if __name__ == "__main__":
     USER = admin_row()
@@ -522,11 +513,6 @@ if __name__ == "__main__":
                 first_bad = first_bad or bad
         total_bad += bad_rounds
         print(f"{sid} {title}: раундов {rounds}, нарушений {bad_rounds}; исходы запросов: {dict(outcomes)}" + (f"\n    пример нарушения: {'; '.join(first_bad)}" if first_bad else ""))
-    if not ONLY or "S9" in ONLY:
-        _, f9 = s9(0)
-        print("S9 журнал действий при откате пачки (наблюдение):")
-        for k, v in f9.items():
-            print(f"    {k}: {v}")
     if not ONLY or "S11" in ONLY:
         _, f11 = s11(0)
         print("S11 одиночная смена статуса без contract_id (наблюдения):")

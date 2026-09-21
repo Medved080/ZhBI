@@ -445,7 +445,10 @@ export const tests = [
       a.click(a.byText("[data-al=keep]", "Оставить только подходящие (1)"));
       await waitFor(() => cmds(a).filter((c) => c.cmd === "pickerSelectIds").length >= 2, { what: "явное сужение выделения" });
       t.eq(cmds(a).filter((c) => c.cmd === "pickerSelectIds").pop().args, { ids: [901] }, "сужение — только по явной команде человека");
-      if (await gateIsReal()) {
+      // Разрешено ли распределение ТЕКУЩИМ шлюзом: выключено — проверяем отказ на экране, включено — весь сценарий записи (с настоящим шлюзом или без него)
+      const gate = await import("/static/v2/write-gate.js");
+      const allowedByGate = gate.POLICY.length === 0 || gate.checkWrite("POST", "/contracts/1/allocations", { object_id: 1, element_type: "x", mark: null, items: [{ element_id: 1, expected_status: "planned" }] }).allowed;
+      if (!allowedByGate) {
         frameWin(a).__emit({ multiItems: mixed });
         await waitFor(() => /Выделено: 3; подходят: 3/.test(a.$("#ws-panel-body").textContent), { what: "пачка" });
         t.ok(a.$("[data-al=submit]").disabled, "шлюз: «Распределить» недоступно");
