@@ -162,6 +162,11 @@
       selected: sel, selectedBlocks: Array.from(st.selectedBlocks || []),
       filtersActive: (st.levels?.size || 0) + (st.sections?.size || 0) + (st.categories?.size || 0),
       mode: (document.querySelector("#mfr-view-switch .view-mode-btn.active")?.dataset.mfrMode) || "2d",
+      // шахматка (раскраска блоков по доске) и динамика факта за период: состояние ведёт движок, мост его отдаёт (панель МФР в V2)
+      chess: { tracks: (typeof mfrChessTracks !== "undefined" ? mfrChessTracks : []).map((t) => ({ code: t["код"], name: t["название"] })),
+        track: typeof mfrChessTrackCode !== "undefined" ? mfrChessTrackCode : null, mode: typeof mfrChessMode !== "undefined" ? mfrChessMode : "progress",
+        deadlineColors: typeof MFR_CHESS_DEADLINE_HEX !== "undefined" ? { ...MFR_CHESS_DEADLINE_HEX } : {} },
+      dynamics: typeof mfrDynamics !== "undefined" ? { active: !!mfrDynamics.active, from: mfrDynamics.from || null, to: mfrDynamics.to || null, blocks: typeof mfrDynamicsBlocks !== "undefined" ? mfrDynamicsBlocks.size : 0 } : { active: false, from: null, to: null, blocks: 0 },
     };
   }
 
@@ -591,6 +596,24 @@
       scheduleState();
     },
     mfrReset() { byId("mfr-reset-all-filters").click(); },
+    // Шахматка: раскраска плана по доске (группе видов работ одного трека) — {track: код доски | null, mode: "progress" | "deadline"}
+    async mfrChess(a) {
+      if (!(a.track === null || (typeof a.track === "string" && a.track.length <= 40)) || !["progress", "deadline"].includes(a.mode)) throw new Error("параметры");
+      if (a.track !== null && !mfrChessTracks.some((t) => t["код"] === a.track)) throw new Error("доски нет в списке");
+      const radio = document.querySelector(`input[name="mfr-chess-mode"][value="${a.mode}"]`);
+      if (radio && !radio.checked) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
+      if (a.track !== mfrChessTrackCode || a.refresh === true) await selectMfrChessTrack(a.track);
+      else if (a.track) { renderMfrChessLegend(); }
+      scheduleState();
+    },
+    // Динамика факта за период: подсветка блоков, где факт менялся в периоде — {on, from, to} (пустые даты — «за весь период»)
+    async mfrDynamics(a) {
+      const okDate = (d) => d === null || d === "" || (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d));
+      if (typeof a.on !== "boolean" || !okDate(a.from ?? null) || !okDate(a.to ?? null)) throw new Error("параметры");
+      mfrDynamics.active = a.on; mfrDynamics.from = a.from || null; mfrDynamics.to = a.to || null;
+      await reloadMfrDynamics();
+      scheduleState();
+    },
     mfrSelect(a) {
       if (!["element", "block"].includes(a.kind) || !isInt(a.id)) throw new Error("параметры");
       return a.kind === "element" ? showRevitCard(a.id) : showBlockCard(a.id, a.additive === true);

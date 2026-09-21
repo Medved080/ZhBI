@@ -66,6 +66,22 @@ def stale_block_selections(conn, expected: dict) -> list:
     return out
 
 
+def validate_block_work_patch(row, fields: dict) -> None:
+    """Серверная проверка правки ЗР (PATCH): даты — существующие ГГГГ-ММ-ДД или null; конец не раньше начала в паре, которую правят;
+    примечание — не длиннее 4000 знаков. Форма V1/V2 это обеспечивает, прямой вызов API — нет."""
+    for f in ("plan_start", "plan_end", "forecast_start", "forecast_end"):
+        if f in fields and fields[f] is not None and not work_fact.is_iso_date(fields[f]):
+            raise HTTPException(status_code=422, detail="Неверная дата в поле «%s» — нужна существующая дата вида ГГГГ-ММ-ДД." % f)
+    for a, b, title in (("plan_start", "plan_end", "базового срока"), ("forecast_start", "forecast_end", "прогноза")):
+        if a in fields or b in fields:
+            start = fields[a] if a in fields else row[a]
+            end = fields[b] if b in fields else row[b]
+            if start and end and end < start:
+                raise HTTPException(status_code=422, detail="Конец %s раньше начала." % title)
+    if "note" in fields and fields["note"] is not None and len(fields["note"]) > 4000:
+        raise HTTPException(status_code=422, detail="Примечание длиннее 4000 знаков.")
+
+
 def _feature_write(conn, user, object_id: int) -> None:
     from app.access import assert_object_feature
     assert_object_feature(conn, user, object_id, "work_progress", "write")
@@ -92,8 +108,8 @@ def bulk_preview(object_id: int, body: BulkPreviewIn, user=Depends(get_current_u
     if body.op == "shift":
         if body.field not in ("plan", "forecast"):
             raise HTTPException(status_code=422, detail="Для сдвига укажите field: 'plan' или 'forecast'.")
-        if not isinstance(body.days, int) or body.days == 0:
-            raise HTTPException(status_code=422, detail="Укажите ненулевой сдвиг в днях.")
+        if not isinstance(body.days, int) or body.days == 0 or abs(body.days) > 3650:
+            raise HTTPException(status_code=422, detail="Укажите ненулевой сдвиг в днях (не больше 3650).")
     elif body.op != "forecast_equals_plan":
         raise HTTPException(status_code=422, detail="Неизвестная групповая операция «%s»." % body.op)
     conn = get_connection()
@@ -117,8 +133,14 @@ def bulk_preview(object_id: int, body: BulkPreviewIn, user=Depends(get_current_u
                     "rev": block_works.rev_of(row, pct), "will_change": False, "after": None, "reason": ""}
             if body.op == "shift":
                 pre = body.field
-                a = block_works._shift_date(row[pre + "_start"], body.days)
-                b = block_works._shift_date(row[pre + "_end"], body.days)
+                try:
+                    a = block_works._shift_date(row[pre + "_start"], body.days)
+                    b = block_works._shift_date(row[pre + "_end"], body.days)
+                except work_fact.FactError as exc:
+                    item["reason"] = exc.message
+                    item["blocked"] = True   # применение такого набора будет отклонено целиком (422)
+                    items.append(item)
+                    continue
                 if a == row[pre + "_start"] and b == row[pre + "_end"]:
                     item["reason"] = "нет дат — сдвигать нечего"
                 else:

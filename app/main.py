@@ -6945,9 +6945,11 @@ def patch_block_work_endpoint(object_id: int, bw_id: int, body: BlockWorkPatchIn
             stale = block_ops.stale_block_works(conn, object_id, {bw_id: expected_rev})
             if stale:
                 raise block_ops.conflict("Работу изменили после того, как вы её открыли — ничего не сохранено.", stale)
-        row = conn.execute("SELECT retired_at FROM block_works WHERE id = ? AND object_id = ?", (bw_id, object_id)).fetchone()
+        row = conn.execute("SELECT * FROM block_works WHERE id = ? AND object_id = ?", (bw_id, object_id)).fetchone()
         if row is not None and row["retired_at"]:
             raise HTTPException(status_code=409, detail="Работа снята с плана блока — правка сроков и примечания недоступна.")
+        if row is not None:
+            block_ops.validate_block_work_patch(row, поля)
         try:
             result = block_works.update_block_work(conn, object_id, bw_id, user["id"], **поля)
         except work_fact.FactError as e:

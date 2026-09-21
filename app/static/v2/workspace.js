@@ -14,6 +14,7 @@ import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
 import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
+import { createMfrBlockPanel } from "./mfr-block-panel.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -66,6 +67,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const openItems = new Set();
   const groupSearch = new Map();
   let frameKey = 0;
+  // МФР: панель работ блока (ЗР, факт, сроки, отбор, шахматка, динамика) — отдельный модуль mfr-block-panel.js
+  const mbp = mfr ? createMfrBlockPanel({ api, send, repaint: () => paintPanel(), getObjectId: () => curObject }) : null;
 
   el.innerHTML = `
     <div class="ws-top">
@@ -193,6 +196,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function onScene(s) {
     const prevSel = selKey(sc);
     sc = s;
+    mbp?.onScene(s);
     mfrStartView(s);
     if (frame) frame.style.visibility = (s.loaded || s.loading) && !s.error ? "visible" : "hidden";
     if (selKey(s) !== prevSel) loadDetail(selKey(s));
@@ -630,7 +634,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     if (!sel) {
       return `<div class="ws-pad ws-empty"><h3 class="ws-h">Ничего не выбрано</h3>
         <p class="v2-muted">Нажмите на элемент или блок на плане. Ctrl (⌘) + щелчок добавляет блок к выбору.</p>
-        <dl class="ws-dl">${row("Элементов на плане", m.elements)}${row("Блоков", m.blocks || "")}${row("Отбор", m.filtersActive ? "задан" : "не задан")}</dl></div>`;
+        <dl class="ws-dl">${row("Элементов на плане", m.elements)}${row("Блоков", m.blocks || "")}${row("Отбор", m.filtersActive ? "задан" : "не задан")}</dl>${mbp.blocksListHtml(m)}</div>`;
     }
     const key = `${sel.kind}:${sel.id}`;
     const d = detail.id === key ? detail.data : null;
@@ -645,7 +649,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc([d["секция"], d["этаж"]].filter(Boolean).join(" · ") || "Блок")}</div><div class="ws-type">Блок модели</div></div>${many}${actions}
         <h4>Состав</h4><dl class="ws-dl">${row("Элементов модели", d["элементов"])}${row("Помещений", d["помещений"])}${row("Габарит", dim)}</dl>
         <h4>Виды работ</h4>${st["всего"] ? `<dl class="ws-dl">${row("План", st["план"])}${row("В работе", st["в_работе"])}${row("Выполнено", st["выполнено"])}${row("Всего", st["всего"])}</dl>` : `<p class="v2-muted">Видов работ, адресуемых на блок, не заведено.</p>`}
-        <p class="v2-muted ws-ro">Факт, настройки и сроки работ блока — в текущем интерфейсе.</p></div>`;
+        ${mbp.blockHtml(Number(sel.id), (m.selectedBlocks || []).map(Number))}</div>`;
     }
     const params = Object.entries(d["параметры"] || {});
     const shares = d["доли по секциям"] || [];
@@ -668,7 +672,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       + sec("sections", "Секция", m.sections.length ? pills(m.sections, "section") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все секции.")
       + sec("categories", "Категории элементов", m.categories.length
         ? m.categories.map((c) => `<label class="ws-check"><input type="checkbox" data-mcat="${esc(c.category)}" ${c.on ? "checked" : ""}> <span>${esc(c.label)}</span><em>${c.count}</em></label>`).join("")
-        : `<p class="v2-muted">Нет данных</p>`);
+        : `<p class="v2-muted">Нет данных</p>`)
+      + mbp.filtersHtml();
   }
   const closedGroups = new Set();
 
@@ -735,6 +740,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     return `<div class="ws-pad"><h3 class="ws-h">Режим схемы</h3>
       <div class="ws-seg ws-seg-wide" role="group" aria-label="Режим схемы">${views.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="${sc?.view === k}">${t}</button>`).join("")}</div>
       <p class="v2-muted">${mfr ? "2D — план по этажам; 3D — модель здания." : "2D — плоская схема; 3D — модель; 3D лёгкий — упрощённая модель для слабых компьютеров."}</p>
+      ${mfr ? mbp.viewHtml() : ""}
       ${mfr && sc?.mfr?.layers?.length ? `<h4>Слои</h4>${sc.mfr.layers.map((l) => `<label class="ws-check"><input type="checkbox" data-mlayer="${esc(l.key)}" ${l.on ? "checked" : ""} ${l.disabled ? "disabled" : ""}> <span>${esc(l.label)}</span></label>`).join("")}` : ""}
       ${zones.length ? `<h4>Зоны на схеме</h4>${zones.map((z) => `<label class="ws-check"><input type="checkbox" data-zone="${esc(z.category)}" ${z.on ? "checked" : ""}> <span>${esc(z.category === "Кран" ? "Краны" : "Захватки")}</span></label>`).join("")}` : ""}
       <h4>Масштаб</h4><div class="ws-actions"><button type="button" class="v2-btn" data-tool="fit">Вписать в экран</button></div></div>`;
@@ -759,6 +765,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     body.querySelectorAll("[data-pkhl]").forEach((b) => b.addEventListener("click", () => send("pickerHighlight", { on: b.getAttribute("aria-pressed") !== "true" })));
     body.querySelectorAll("[data-pkrem]").forEach((b) => b.addEventListener("click", () => { onlyRemainder = !onlyRemainder; paintPanel(); }));
     bindStatusForm(body);
+    mbp?.bind(body, { selectedBlocks: () => (sc?.mfr?.selectedBlocks || []).map(Number) });
     body.querySelectorAll("[data-al]").forEach((b) => b.addEventListener(b.tagName === "SELECT" ? "change" : "click", () => {
       const a = b.dataset.al;
       if (a === "supplier") { al.supplier = b.value; al.contractId = null; al.lineKey = null; al.cand = null; al.candAsked = false; al.error = ""; al.done = ""; paintPanel(); }
@@ -828,6 +835,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const c = [];
     if (!mfr && canStatus) c.push("смена статуса");
     if (picker && allocEnabled()) c.push("распределение по контрактам");
+    if (mfr && mbp?.canWrite()) c.push("факт, состав работ, сроки блока");
     return c;
   }
   function capsChip() {
@@ -837,6 +845,12 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       : `<span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>`;
   }
 
+  // МФР: шахматка, динамика и отбор работ блока — в строке состояния (их ведёт mfr-block-panel.js)
+  function mfrStatusExtra() {
+    const x = mbp?.summary(); if (!x) return "";
+    return (x.chess ? `<span>Шахматка: ${esc(x.chess)}, ${x.mode === "deadline" ? "по срокам" : "по выполнению"}</span>` : "")
+      + (x.dyn ? `<span>Динамика факта: ${esc(x.dyn.from || "с начала")} — ${esc(x.dyn.to || "по сегодня")}</span>` : "") + (x.filter ? `<span>Отбор работ задан</span>` : "");
+  }
   function paintStatus() {
     const s = $("#ws-status");
     if (!sc || !sc.loaded) { s.textContent = sc?.error ? "Схема не загружена" : "Загрузка схемы…"; return; }
@@ -845,7 +859,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       const m = sc.mfr;
       const n = m.selectedBlocks?.length || 0;
       const selT = n > 1 ? `Выбрано блоков: ${n}` : m.selected ? (m.selected.kind === "block" ? "Выбран блок" : "Выбран элемент") : "Ничего не выбрано";
-      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${mfrStatusExtra()}${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
       return;
     }
     const sel = sc.multi?.count > 1 ? `Выбрано: ${sc.multi.count}` : sc.selected ? `Выбран: ${sc.selected.mark || sc.selected.element_type}` : "Ничего не выбрано";
@@ -952,13 +966,13 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; wrs.clear(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      curObject = id; mbp?.reset(); wrs.clear(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },
     destroy() {
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
-      clearTimeout(qTimer); clearTimeout(stripRetry); stopFrame(); queue.length = 0;
+      clearTimeout(qTimer); clearTimeout(stripRetry); stopFrame(); queue.length = 0; mbp?.destroy();
       const side = shellSide(); if (side) side.hidden = navWasHidden;
     },
   };

@@ -58,6 +58,18 @@ from app.work_progress import (
 _DYNAMICS_MIN_DATE = "0001-01-01"
 
 
+def is_iso_date(value) -> bool:
+    """Календарная дата вида ГГГГ-ММ-ДД (серверная проверка: поле даты формы V1/V2 её гарантирует, прямой вызов API — нет)."""
+    from datetime import date
+    if not isinstance(value, str) or len(value) != 10:
+        return False
+    try:
+        date.fromisoformat(value)
+        return True
+    except ValueError:
+        return False
+
+
 class FactError(Exception):
     def __init__(self, status_code: int, message: str):
         self.status_code = status_code
@@ -709,6 +721,8 @@ def save_report(conn, object_id: int, user_id: int, block_id: int, report_id, re
     ничего») и коммитит сам, одним разом, после последнего блока."""
     if not report_date:
         raise FactError(422, "Не указана дата отчёта.")
+    if not is_iso_date(report_date):
+        raise FactError(422, "Неверная дата отчёта — нужна существующая дата вида ГГГГ-ММ-ДД.")
     settings = block_settings(conn, object_id, block_id)
     selected_ids = set(settings["selected"])
     bad = set(items) - selected_ids

@@ -462,8 +462,8 @@ def bulk_edit(conn: sqlite3.Connection, object_id: int, user_id: int, bw_ids: li
     if op == "shift":
         if field not in ("plan", "forecast"):
             raise FactError(422, "Для сдвига укажите field: 'plan' или 'forecast'.")
-        if not isinstance(days, int) or days == 0:
-            raise FactError(422, "Укажите ненулевой сдвиг в днях.")
+        if not isinstance(days, int) or days == 0 or abs(days) > 3650:
+            raise FactError(422, "Укажите ненулевой сдвиг в днях (не больше 3650).")
         затронуто = _bulk_shift(conn, object_id, user_id, bw_ids, field, days)
     elif op == "forecast_equals_plan":
         затронуто = _bulk_forecast_equals_plan(conn, object_id, user_id, bw_ids)
@@ -481,7 +481,11 @@ def _shift_date(value, days: int):
     if not value:
         return value
     from datetime import date, timedelta
-    return (date.fromisoformat(value[:10]) + timedelta(days=days)).isoformat()
+    try:
+        return (date.fromisoformat(value[:10]) + timedelta(days=days)).isoformat()
+    except OverflowError:
+        # сдвиг выводит дату за допустимые границы (год 1…9999): отказ, а не 500 — вся групповая операция откатывается
+        raise FactError(422, "Сдвиг на %+d дн. выводит дату %s за допустимые границы." % (days, value[:10]))
 
 
 def _bulk_shift(conn, object_id, user_id, bw_ids, field, days) -> int:
