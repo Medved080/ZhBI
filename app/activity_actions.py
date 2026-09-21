@@ -112,6 +112,7 @@ ACTIONS = {
     "user_password": ("Пароль изменён", _S),
     "user_auth_method": ("Способ входа изменён", _S),
     "access_replace": ("Права пользователя изменены", _S),
+    "access_bulk": ("Групповая правка прав", _S),
     "role_create": ("Роль создана", _S),
     "role_rename": ("Роль переименована", _S),
     "role_delete": ("Роль удалена", _S),

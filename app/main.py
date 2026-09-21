@@ -406,6 +406,8 @@ app.add_middleware(ImpersonationMiddleware)
 app.include_router(auth_router)
 from app.allocation import router as allocation_router  # noqa: E402
 app.include_router(allocation_router)
+from app.admin_ops import router as admin_ops_router  # noqa: E402  (администрирование V2: политика пароля, сводка доступа, групповая выдача)
+app.include_router(admin_ops_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
 # не должен иметь ни единого шанса уехать в {user_id}.
 app.include_router(rights_matrix_router)
