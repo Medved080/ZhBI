@@ -1,7 +1,7 @@
 import { runTests } from "/tests/helpers.js";
 
 const params = new URLSearchParams(location.search);
-const SUITES = ["shell", "ua", "po", "cp", "rd", "de", "se", "ce", "pe", "oc", "ex", "ss", "sb", "bw", "ap", "lc", "rc", "av", "cl", "sp", "vis", "a11y"];
+const SUITES = ["shell", "ua", "po", "cp", "rd", "de", "se", "ce", "pe", "oc", "ex", "ss", "sb", "bw", "ap", "lc", "rc", "av", "cl", "sp", "gt", "vis", "a11y"];
 const wanted = (params.get("suite") || SUITES.join(",")).split(",").filter(Boolean);
 const only = (params.get("only") || "").split(",").filter(Boolean); // список id или префиксов
 
@@ -39,4 +39,6 @@ try {
     window.__saved = await r.json();
   }
 } catch (e) { window.__saved = { error: String(e) }; }
+// Изменяющие запросы, замеченные за прогон: [«МЕТОД путь», тело] — для сверки политики ограниченного выпуска.
+window.__writeSeenList = [...(window.__writeSeen || new Map()).entries()];
 window.__done = true;

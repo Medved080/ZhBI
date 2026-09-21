@@ -6,6 +6,7 @@ import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
 import { STATUS_LABEL } from "./registry.js";
 import { showConfirmDialog } from "./dialogs.js";
+import { checkWrite } from "./write-gate.js";
 import { formatCell } from "./read-screen.js";
 
 const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || e));
@@ -13,6 +14,7 @@ const unknownOutcome = (e) => e instanceof ApiError && (e.status === 0 || e.stat
 const when = (v) => formatCell({ key: "v", fmt: "datetime" }, { v }, {});
 
 export function mountSessionsEdit(el, { screen, structure, objectId, api, groupTitle }) {
+  const canEnd = checkWrite("DELETE", "/me/sessions/x").allowed; // политика ограниченного выпуска (write-gate.js)
   el.className = "v2-page";
   let dead = false, busy = false, seq = 0;
   const st = { data: null, error: "" };
@@ -42,10 +44,10 @@ export function mountSessionsEdit(el, { screen, structure, objectId, api, groupT
     const rows = st.data.sessions || [];
     body.innerHTML = `<div class="v2-bar"><span class="v2-muted">Сеансов: ${rows.length}${st.data.idle_hours ? ` · простой более ${esc(st.data.idle_hours)} ч завершает сеанс, срок жизни — ${esc(st.data.ttl_days)} дн.` : ""}</span>
       <button type="button" class="v2-btn" id="ss-refresh">Обновить</button>
-      <button type="button" class="v2-btn v2-danger" id="ss-close-others" ${others().length ? "" : "disabled"}>Завершить все, кроме текущего (${others().length})</button></div>
+      ${canEnd ? `<button type="button" class="v2-btn v2-danger" id="ss-close-others" ${others().length ? "" : "disabled"}>Завершить все, кроме текущего (${others().length})</button>` : `<span class="v2-muted">Завершение сеансов в экспериментальном интерфейсе отключено — выполняйте его в текущем интерфейсе.</span>`}</div>
       <div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Начат</th><th>Последняя активность</th><th>Действует до</th><th>IP</th><th>Браузер</th><th></th></tr></thead><tbody>
       ${rows.map((r) => `<tr data-id="${esc(r.id)}"><td>${esc(when(r.created_at))}</td><td>${esc(when(r.last_seen_at))}</td><td>${esc(when(r.expires_at))}</td><td>${esc(r.ip || "")}</td><td>${esc(String(r.user_agent || "").slice(0, 80))}</td>
-        <td>${r.current ? `<span class="v2-chip v2-chip-ok">этот сеанс</span>` : `<button type="button" class="v2-btn" data-end="${esc(r.id)}" aria-label="Завершить сеанс с IP ${esc(r.ip || "")}">Завершить</button>`}</td></tr>`).join("")}</tbody></table></div>`;
+        <td>${r.current ? `<span class="v2-chip v2-chip-ok">этот сеанс</span>` : (canEnd ? `<button type="button" class="v2-btn" data-end="${esc(r.id)}" aria-label="Завершить сеанс с IP ${esc(r.ip || "")}">Завершить</button>` : "")}</td></tr>`).join("")}</tbody></table></div>`;
     lock();
   }
   const lock = () => el.querySelectorAll("#ss-body button").forEach((b) => { if (busy) b.disabled = true; else if (b.id === "ss-close-others") b.disabled = !others().length; else b.disabled = false; });

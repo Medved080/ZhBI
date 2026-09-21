@@ -9,7 +9,7 @@ import { mountProjectsObjects } from "./projects-objects.js";
 import { mountCounterparties } from "./counterparties.js";
 import { keepFocus } from "./focus.js";
 import { loadRegistry, screenAllowed } from "./registry.js";
-import { mountScreenView, mountHome } from "./screen-view.js";
+import { mountScreenView, mountHome, linkList } from "./screen-view.js";
 import { mountReadScreen } from "./read-screen.js";
 import { mountDictEdit } from "./dict-edit.js";
 import { mountSettingEdit } from "./setting-edit.js";
@@ -24,6 +24,7 @@ import { mountLabelColorEdit } from "./label-color-edit.js";
 import { mountRevitColorsEdit } from "./revit-colors-edit.js";
 import { mountAccessView } from "./access-view.js";
 import { mountShapeEdit } from "./shape-edit.js";
+import { EXPERIMENTAL_NOTICE, BLOCKED_EVENT, disabledForScreen, hasAllowedWrites } from "./write-gate.js";
 
 const root = document.getElementById("v2-root");
 
@@ -179,8 +180,12 @@ async function renderShell(user, permissions) {
   const activeObjects = tree.projects.flatMap((p) => (p.objects || []).map((o) => ({ ...o, project_name: p.name })))
     .filter((o) => (o.status || "active") !== "archived");
   const remembered = Number(readSession("v2.objectId")) || null;
+  // Переход из V1 («Новый интерфейс — экспериментальный») несёт текущий объект: `/v2?object_id=N`. Параметр разовый —
+  // стирается из адреса; объект берётся только из списка доступных пользователю (как и остальные источники выбора).
+  const fromV1 = Number(new URLSearchParams(location.search).get("object_id")) || null;
+  if (fromV1) { try { history.replaceState(null, "", location.pathname + location.hash); } catch (e) { /* адрес не критичен */ } }
   const pick = (id) => activeObjects.find((o) => o.id === id);
-  let objectId = (pick(remembered) || pick(tree.last_object_id) || activeObjects.find((o) => o.elements > 0) || activeObjects[0] || {}).id ?? null;
+  let objectId = (pick(fromV1) || pick(remembered) || pick(tree.last_object_id) || activeObjects.find((o) => o.elements > 0) || activeObjects[0] || {}).id ?? null;
   let rights = permissions;
   async function loadRights() {
     if (!objectId) { rights = permissions; return true; }
@@ -212,7 +217,7 @@ async function renderShell(user, permissions) {
     <header class="v2-head">
       <div class="v2-head-title">
         <strong>ЖБИ</strong>
-        <span class="v2-badge">Новый интерфейс · Предварительная версия</span>
+        <span class="v2-badge">Новый интерфейс — экспериментальный</span>
       </div>
       <div class="v2-head-right">
         <label class="v2-ctx" title="Права и переходы в текущий интерфейс считаются по выбранному объекту">Объект
@@ -225,6 +230,11 @@ async function renderShell(user, permissions) {
         <button type="button" class="v2-back" id="v2-back-btn" title="">← Текущий интерфейс</button>
       </div>
     </header>
+    <div class="v2-exp-banner" id="v2-exp-banner" role="note">
+      <span id="v2-exp-text">${escapeHtml(EXPERIMENTAL_NOTICE)}.</span>
+      <a href="/?ui=v1" id="v2-banner-back">Вернуться в текущий интерфейс</a>
+    </div>
+    <div class="v2-gate-note" id="v2-gate-note" role="status" aria-live="polite" hidden></div>
     <div class="v2-body">
       <nav class="v2-nav v2-shellnav" aria-label="Разделы" id="v2-side"></nav>
       <main class="v2-page" id="v2-content"></main>
@@ -232,6 +242,8 @@ async function renderShell(user, permissions) {
   `;
   const backBtn = document.getElementById("v2-back-btn");
   backBtn.addEventListener("click", onBackClick);
+  document.getElementById("v2-banner-back").addEventListener("click", (e) => { e.preventDefault(); onBackClick(); });
+  const gateNote = document.getElementById("v2-gate-note");
   const objectSelect = document.getElementById("v2-object");
   const content = document.getElementById("v2-content");
   const side = document.getElementById("v2-side");
@@ -255,7 +267,7 @@ async function renderShell(user, permissions) {
         return `<div class="v2-nav-group">
           <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
           ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Справочник правится в новом интерфейсе; удаление с заменой — в текущем">прав.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
+            ${escapeHtml(s.title)}${isModule(s) ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
         </div>`;
       }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
     const search = document.getElementById("v2-nav-search");
@@ -415,8 +427,22 @@ async function renderShell(user, permissions) {
           screen: target, structure: registry.structure[target.id], objectId, rights, groupTitle: groupTitle(target.group),
         });
       }
+      updateGateNote(key === "home" ? null : target);
     } finally { navBusy = false; }
   }
+  // Пояснение об отключённых операциях экрана (ограниченный выпуск): что именно не работает в экспериментальном
+  // интерфейсе и куда идти. Сама защита — в `api.js` (write-gate.js), это только видимый текст.
+  function updateGateNote(target, hit) {
+    const off = target ? disabledForScreen(target.id) : [];
+    if (!off.length && !hit) { gateNote.hidden = true; gateNote.innerHTML = ""; return; }
+    const link = target ? linkList(target, registry.structure[target.id], objectId) : "";
+    gateNote.innerHTML = (hit ? `<strong>Не выполнено:</strong> ${escapeHtml(hit)} ` : "")
+      + (off.length ? `<strong>В этом разделе отключено в экспериментальном интерфейсе:</strong> ${off.map((r) => escapeHtml(r.action)).join("; ")}. Просмотр доступен. ` : "")
+      + link;
+    gateNote.hidden = false;
+  }
+  // Отказ шлюза записи (api.js → write-gate.js): показываем причину над содержимым, даже если модуль сам её не вывел.
+  window.addEventListener(BLOCKED_EVENT, (e) => updateGateNote(currentKey && currentKey !== "home" ? screenOf(currentKey) : null, e.detail?.message));
   function restoreHash() {
     // Переход отклонён (несохранённое, идёт запись): адрес должен снова показывать открытый экран.
     const wanted = currentKey === "home" || !currentKey ? "#/" : `#/${currentKey}`;

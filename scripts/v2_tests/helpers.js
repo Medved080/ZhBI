@@ -172,6 +172,11 @@ export async function runTests(tests, { onResult } = {}) {
       const bad = (a.errors || []).filter((m) => !expected.some((x) => m.includes(x)));
       if (bad.length) t.ok(false, `необработанные ошибки страницы: ${[...new Set(bad)].slice(0, 3).join(" | ")}`);
     }
+    // Учёт ВСЕХ изменяющих запросов, которые интерфейс реально отправил за прогон: по нему сверяется политика ограниченного
+    // выпуска (`scripts/check_write_policy_coverage.mjs`) — путь операции в политике не должен расходиться с настоящим.
+    for (const a of createdApps) for (const e of (a.ctl?.log || [])) {
+      if (e.method !== "GET" && !/^\/reports\//.test(e.path)) (window.__writeSeen ||= new Map()).set(`${e.method} ${e.path.split("?")[0]}`, JSON.stringify(e.body ?? null));
+    }
     if (t.checks.some((c) => !c.ok)) r.status = "fail";
     if (!t.checks.length && !r.error) { r.status = "fail"; r.error = "сценарий не сделал ни одной проверки"; }
     results.push(r);

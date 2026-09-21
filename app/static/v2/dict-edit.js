@@ -15,13 +15,16 @@ import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
 import { STATUS_LABEL } from "./registry.js";
 import { showConfirmDialog, showInfoDialog, showUnsavedDialog } from "./dialogs.js";
+import { checkWrite } from "./write-gate.js";
 
 const collator = new Intl.Collator("ru", { sensitivity: "base" });
 
 export function mountDictEdit(el, { screen, structure, objectId, api, groupTitle, rights }) {
   const spec = screen.edit;
   el.className = "v2-page";
-  const canWrite = !!rights?.system_admin || rights?.features?.[spec.feature] === "write";
+  // политика ограниченного выпуска (write-gate.js): у справочников без разрешённой записи — только просмотр
+  const gateOpen = checkWrite("POST", spec.endpoint, { name: "x" }).allowed;
+  const canWrite = gateOpen && (!!rights?.system_admin || rights?.features?.[spec.feature] === "write");
   let dead = false;
   const state = { rows: null, error: "", loadSeq: 0, busy: false, editId: null, editText: "", addText: "", status: "", search: "" };
 
@@ -32,7 +35,7 @@ export function mountDictEdit(el, { screen, structure, objectId, api, groupTitle
         <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>${canWrite ? "Правка справочника в новом интерфейсе." : "Просмотр справочника."}</strong>
-        ${canWrite ? esc(`Можно добавить, переименовать и удалить неиспользуемую запись. Удаление записи, на которую ссылаются объекты (с заменой), — в текущем интерфейсе.`) : "У вас нет права изменять этот справочник."}
+        ${canWrite ? esc(`Можно добавить, переименовать и удалить неиспользуемую запись. Удаление записи, на которую ссылаются объекты (с заменой), — в текущем интерфейсе.`) : (gateOpen ? "У вас нет права изменять этот справочник." : "Изменение этого справочника в экспериментальном интерфейсе отключено — выполняйте его в текущем интерфейсе.")}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       ${canWrite ? `<form id="de-add" class="v2-bar" autocomplete="off">
         <input type="text" id="de-add-input" class="v2-search" placeholder="${esc(spec.addPlaceholder || "Название")}" aria-label="${esc(spec.addPlaceholder || "Название")}" maxlength="200">

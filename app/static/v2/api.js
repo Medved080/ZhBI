@@ -54,6 +54,8 @@ function describeDetail(detail, status) {
   return fallbackText(status);
 }
 
+import { checkWrite, announceBlocked } from "./write-gate.js";
+
 export class ApiError extends Error {
   constructor(status, detail) {
     const text = describeDetail(detail, status);
@@ -78,7 +80,19 @@ async function request(method, path, body, { read = false } = {}) {
   // FormData (загрузка файла) уходит как есть: Content-Type с boundary
   // браузер выставляет сам, ручной JSON-заголовок его бы сломал.
   const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-  if (isWrite) { pendingWrites++; notifyPendingWrites(); }
+  if (isWrite) {
+    // Ограниченный выпуск: изменяющий запрос, не разрешённый политикой `write-gate.js`, НЕ уходит на сервер вообще
+    // (ни fetch, ни счётчик записей). Отказ — обычный ApiError 4xx: модули показывают его текст и оставляют ввод на месте,
+    // а не «повторяют» и не проверяют чтением, как при неизвестном исходе.
+    const verdict = checkWrite(method, path, isForm ? undefined : body);
+    if (!verdict.allowed) {
+      announceBlocked(verdict, method, path);
+      const err = new ApiError(403, verdict.message);
+      err.blockedByPolicy = true;
+      throw err;
+    }
+    pendingWrites++; notifyPendingWrites();
+  }
   try {
     let res;
     try {

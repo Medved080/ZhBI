@@ -5,7 +5,10 @@
 модуль `scripts/v2_tests/fake-backend.js` (подмена fetch), поэтому ни рабочая
 БД, ни `data/*.db`, ни `app.main` здесь не открываются и не импортируются.
 
-Запуск:  python3 scripts/v2_test_server.py [порт] [--static КАТАЛОГ]   (порт по умолчанию 8031)
+Запуск:  python3 scripts/v2_test_server.py [порт] [--static КАТАЛОГ] [--gate all]   (порт по умолчанию 8031)
+         --gate all — подменить `write-gate.js` заглушкой «разрешено всё» (`scripts/v2_tests/write-gate.allow-all.js`): так
+         прогоняются сценарии самих операций записи (полный набор до ограниченного выпуска). БЕЗ этого ключа стенд отдаёт
+         настоящий шлюз ограниченного выпуска — так работает V2 в поставке. В приложение заглушка не входит.
          --static — подставить другой каталог `app/static` (например, распакованный
          `git archive <коммит> app/static`), чтобы прогнать те же сценарии на старом коде.
 Страницы: http://127.0.0.1:8031/tests/app.html   — V2 против фейкового бэкенда
@@ -31,9 +34,15 @@ mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 
 
+GATE_ALL = "--gate" in sys.argv and sys.argv[sys.argv.index("--gate") + 1:][:1] == ["all"]
+GATE_STUB = ROOT / "scripts" / "v2_tests" / "write-gate.allow-all.js"
+
+
 class Handler(SimpleHTTPRequestHandler):
     def translate_path(self, path):
         clean = unquote(urlsplit(path).path)
+        if GATE_ALL and clean == "/static/v2/write-gate.js":
+            return str(GATE_STUB)
         for prefix, base in MOUNTS.items():
             if clean.startswith(prefix):
                 target = (base / clean[len(prefix):]).resolve()
@@ -92,6 +101,9 @@ if __name__ == "__main__":
     if "--static" in args:
         i = args.index("--static")
         MOUNTS["/static/"] = Path(args[i + 1]).resolve()
+        del args[i:i + 2]
+    if "--gate" in args:
+        i = args.index("--gate")
         del args[i:i + 2]
     port = int(args[0]) if args else 8031
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)

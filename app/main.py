@@ -7660,29 +7660,26 @@ def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(r
 
 
 UI_VERSION_COOKIE = "ui_version"
-UI_VERSION_COOKIE_MAX_AGE = 365 * 86400
 
 
 @app.get("/")
 def serve_index(request: Request, ui: Optional[str] = None):
-    """Выбор V1/V2 — на сервере, ДО отдачи файла (2026-09-16).
+    """Корневой адрес — ВСЕГДА V1; V2 открывается только явно (2026-09-21, ограниченный выпуск).
 
-    Не localStorage-редирект: тот сначала заставил бы браузер полностью
-    разобрать документ V1 (~5000 строк CSS), и только потом JS решал бы,
-    что нужен V2. Здесь cookie читается раньше выбора файла — ни лишней
-    загрузки, ни вспышки не переключённого интерфейса.
+    До ограниченного выпуска здесь выбор делала cookie `ui_version=v2` (2026-09-16): человек, однажды нажавший «Новый
+    интерфейс», при следующем входе сразу попадал в предпросмотр. Для выпуска V1 обязан оставаться основным интерфейсом,
+    поэтому cookie больше НЕ выбирает файл — предпочтение, сохранённое браузером до обновления, не переводит пользователя
+    в экспериментальную версию. Явный выбор V2 — пункт меню «Новый интерфейс — экспериментальный» в V1 (ведёт на `/v2`)
+    или прямой адрес `/v2`. Устаревшая cookie при заходе стирается, чтобы не путать (`/?ui=v1` — аварийный выход в V1,
+    как и раньше, и он тоже её стирает).
 
-    `?ui=v1`/`?ui=v2` — не только разовый выбор конкретной версии для этого
-    захода, но и ПОСТОЯННЫЙ сброс cookie: `/?ui=v1` открывает V1, даже если
-    сама страница V2 не загружается вовсе (выбор файла происходит раньше
-    любого JS V2) — прямой аварийный выход, задокументирован в Docs/OPEN.md.
+    Выбор остаётся на сервере, до отдачи файла (не localStorage-редирект): тот заставил бы браузер сначала разобрать
+    документ V1 (~5000 строк CSS), и только потом JS решал бы, что нужен V2.
     """
-    выбор = ui if ui in ("v1", "v2") else request.cookies.get(UI_VERSION_COOKIE)
-    файл = STATIC_DIR / "v2" / "index.html" if выбор == "v2" else STATIC_DIR / "index.html"
+    файл = STATIC_DIR / "v2" / "index.html" if ui == "v2" else STATIC_DIR / "index.html"
     ответ = FileResponse(файл)
-    if ui in ("v1", "v2"):
-        ответ.set_cookie(UI_VERSION_COOKIE, ui, max_age=UI_VERSION_COOKIE_MAX_AGE,
-                         samesite="lax", secure=SECURE_COOKIES)
+    if ui in ("v1", "v2") or UI_VERSION_COOKIE in request.cookies:
+        ответ.delete_cookie(UI_VERSION_COOKIE, path="/", samesite="lax", secure=SECURE_COOKIES)
     return ответ
 
 

@@ -11,6 +11,7 @@ import { ApiError } from "./api.js";
 import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { isRealDate } from "./card-edit.js";
+import { checkWrite } from "./write-gate.js";
 
 const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || e));
 const unknownOutcome = (e) => e instanceof ApiError && (e.status === 0 || e.status >= 500);
@@ -31,6 +32,10 @@ export function mountBlockWorkForm(host, { api, objectId, id, canWrite, onSaved,
   const setStatus = (t) => { st.status = t; const n = host.querySelector("#bw-status"); if (n) n.textContent = t; };
   const retired = () => !!st.work?.retired_at;
 
+  // Политика ограниченного выпуска (write-gate.js): какие группы полей можно сохранять в этом интерфейсе.
+  const groupOfField = (f) => Object.keys(GROUPS).find((g) => GROUPS[g].fields.includes(f));
+  const groupOpen = (g) => checkWrite("PATCH", `/objects/${objectId}/block-works/0`, Object.fromEntries(GROUPS[g].fields.map((f) => [f, null]))).allowed;
+
   function paint() {
     if (dead) return;
     if (!st.work) {
@@ -41,16 +46,18 @@ export function mountBlockWorkForm(host, { api, objectId, id, canWrite, onSaved,
       return;
     }
     const w = st.work, dis = canWrite && !retired() ? "" : "disabled";
-    const dfield = (f, label) => `<label class="v2-wire-field"><span>${label}</span><input type="date" data-f="${f}" value="${esc(st.draft[f] ?? "")}" ${dis}></label>`;
+    const disOf = (f) => (canWrite && !retired() && groupOpen(groupOfField(f)) ? "" : "disabled");
+    const dfield = (f, label) => `<label class="v2-wire-field"><span>${label}</span><input type="date" data-f="${f}" value="${esc(st.draft[f] ?? "")}" ${disOf(f)}></label>`;
     host.innerHTML = `<section class="v2-card" aria-label="Запланированная работа">
       <div class="v2-bar"><h3 class="v2-report-h">${esc(w["код"] || "")} · ${esc(w["название"] || "")}</h3><button type="button" class="v2-btn" id="bw-close">Закрыть</button></div>
       <p class="v2-muted">Секция ${esc(w.section_code ?? "")}, этаж ${esc(w.level_floor ?? "")} · готовность ${esc(w.percent ?? 0)} % · ${esc(w.deadline_label ?? "")}${retired() ? " · <strong>работа снята — правка недоступна</strong>" : ""}</p>
       <div class="v2-wire-row">${dfield("plan_start", "Базовый срок: начало")}${dfield("plan_end", "Базовый срок: конец")}
         ${canWrite && !retired() ? `<button type="button" class="v2-btn" data-save="plan" ${groupDirty("plan") ? "" : "disabled"}>Сохранить базовый срок</button>` : ""}</div>
       <div class="v2-wire-row">${dfield("forecast_start", "Прогноз: начало")}${dfield("forecast_end", "Прогноз: конец")}
-        ${canWrite && !retired() ? `<button type="button" class="v2-btn" data-save="forecast" ${groupDirty("forecast") ? "" : "disabled"}>Сохранить новую версию прогноза</button>` : ""}</div>
-      <label class="v2-wire-field v2-field-wide"><span>Примечание</span><textarea data-f="note" rows="2" ${dis}>${esc(st.draft.note ?? "")}</textarea></label>
-      ${canWrite && !retired() ? `<div class="v2-bar"><button type="button" class="v2-btn" data-save="note" ${groupDirty("note") ? "" : "disabled"}>Сохранить примечание</button></div>` : ""}
+        ${canWrite && !retired() && groupOpen("forecast") ? `<button type="button" class="v2-btn" data-save="forecast" ${groupDirty("forecast") ? "" : "disabled"}>Сохранить новую версию прогноза</button>` : ""}</div>
+      <label class="v2-wire-field v2-field-wide"><span>Примечание</span><textarea data-f="note" rows="2" ${disOf("note")}>${esc(st.draft.note ?? "")}</textarea></label>
+      ${canWrite && !retired() && groupOpen("note") ? `<div class="v2-bar"><button type="button" class="v2-btn" data-save="note" ${groupDirty("note") ? "" : "disabled"}>Сохранить примечание</button></div>` : ""}
+      ${groupOpen("forecast") && groupOpen("note") ? "" : `<p class="v2-muted">Версия прогноза и примечание в экспериментальном интерфейсе отключены — выполняйте их в текущем интерфейсе.</p>`}
       <p id="bw-status" class="v2-muted" role="status" aria-live="polite">${esc(st.status)}</p></section>`;
     host.querySelectorAll("[data-f]").forEach((i) => i.addEventListener("input", () => { st.draft[i.dataset.f] = i.value; sync(); }));
     host.querySelectorAll("[data-save]").forEach((b) => b.addEventListener("click", () => save(b.dataset.save)));
@@ -58,7 +65,7 @@ export function mountBlockWorkForm(host, { api, objectId, id, canWrite, onSaved,
     lock();
   }
   const sync = () => host.querySelectorAll("[data-save]").forEach((b) => { b.disabled = busy || !groupDirty(b.dataset.save); });
-  const lock = () => { host.querySelectorAll("[data-f], [data-save], #bw-close").forEach((c) => { if (c.id === "bw-close") c.disabled = busy; else if (c.dataset.save) c.disabled = busy || !groupDirty(c.dataset.save); else c.disabled = busy || !canWrite || retired(); }); };
+  const lock = () => { host.querySelectorAll("[data-f], [data-save], #bw-close").forEach((c) => { if (c.id === "bw-close") c.disabled = busy; else if (c.dataset.save) c.disabled = busy || !groupDirty(c.dataset.save); else c.disabled = busy || !canWrite || retired() || !groupOpen(groupOfField(c.dataset.f)); }); };
 
   async function load() {
     const my = ++seq;

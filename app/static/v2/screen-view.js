@@ -6,6 +6,7 @@
 // текстом сказано: функция работает только в текущем интерфейсе, здесь показан состав экрана — так что
 // ложного успеха и непроверенных запросов нет. Данные не показываются вовсе (демо-режима нет).
 import { STATUS_LABEL, v1Href } from "./registry.js";
+import { hasAllowedWrites } from "./write-gate.js";
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -122,14 +123,14 @@ export function mountHome(el, { registry, allowed, hiddenCount, go }) {
     return `<section class="v2-card">
       <h3>${esc(g.title)} <span class="v2-muted">· ${items.length}</span></h3>
       <ul class="v2-card-list">${items.map((s) => `<li><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
-        ${s.impl.startsWith("module:") ? `<span class="v2-chip v2-chip-ok" title="${esc(STATUS_LABEL[s.status])}">в V2</span>` : s.impl === "export-form" ? `<span class="v2-chip v2-chip-ok" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") ? `<span class="v2-chip v2-chip-ok" title="Правится в новом интерфейсе">правка</span>` : s.impl === "read" ? `<span class="v2-chip" title="Просмотр в новом интерфейсе, изменение — в текущем">просмотр</span>` : `<span class="v2-chip" title="Функции работают в текущем интерфейсе">в V1</span>`}</li>`).join("")}</ul>
+        ${s.impl.startsWith("module:") ? `<span class="v2-chip v2-chip-ok" title="${esc(STATUS_LABEL[s.status])}">в V2</span>` : s.impl === "export-form" ? `<span class="v2-chip v2-chip-ok" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? `<span class="v2-chip v2-chip-ok" title="Правится в новом интерфейсе">правка</span>` : s.impl.endsWith("-edit") ? `<span class="v2-chip" title="Просмотр в новом интерфейсе, изменение — в текущем">просмотр</span>` : s.impl === "read" ? `<span class="v2-chip" title="Просмотр в новом интерфейсе, изменение — в текущем">просмотр</span>` : `<span class="v2-chip" title="Функции работают в текущем интерфейсе">в V1</span>`}</li>`).join("")}</ul>
     </section>`;
   }).join("");
   const total = registry.screens.filter((s) => allowed(s)).length;
   const inV2 = registry.screens.filter((s) => allowed(s) && s.impl.startsWith("module:")).length;
   el.innerHTML = `<div class="v2-container">
-    <h2 class="v2-home-title">Новый интерфейс · предварительная версия</h2>
-    <p class="v2-muted">Все разделы сервиса доступны отсюда. Разделы с пометкой «в V2» работают в новом интерфейсе;
+    <h2 class="v2-home-title">Новый интерфейс — экспериментальный</h2>
+    <p class="v2-muted">Все разделы сервиса доступны отсюда. Разделы с пометкой «в V2» открываются в новом интерфейсе (часть операций в них отключена — это указано в самом разделе);
       остальные показывают состав экрана и открывают нужную форму в текущем интерфейсе (пометка «в V1»).
       Доступно вам: ${total} разделов, из них в новом интерфейсе — ${inV2}.${hiddenCount ? ` Скрыто по правам: ${hiddenCount}.` : ""}</p>
     <div class="v2-cards">${cards}</div>

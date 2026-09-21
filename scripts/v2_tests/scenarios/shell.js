@@ -90,7 +90,7 @@ export const tests = [
       const a = await openApp({ home: true });
       await waitFor(() => a.$$(NAV).length > 3, { what: "навигация по разделам сервиса" });
       t.eq(pressed(a), ["home"], "открыта начальная страница");
-      t.has(a.$("#v2-content").innerText, "Новый интерфейс · предварительная версия", "заголовок начальной страницы");
+      t.has(a.$("#v2-content").innerText, "Новый интерфейс — экспериментальный", "заголовок начальной страницы");
       const keys = a.$$(NAV).map((b) => b.dataset.section);
       for (const k of MODULE_KEYS) t.ok(keys.includes(k), `в навигации есть перенесённый раздел ${k}`);
       t.ok(keys.length >= 40, `в навигации много разделов сервиса (${keys.length})`);

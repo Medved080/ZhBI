@@ -3,13 +3,14 @@
 // здесь только форма поверх тех же эндпоинтов, что уже использует V1
 // (POST /login, POST /me/change-password) — без своей копии правил.
 import { ApiError } from "./api.js";
+import { EXPERIMENTAL_NOTICE, checkWrite } from "./write-gate.js";
 
 export async function renderLogin(root, { api, onSuccess }) {
   root.innerHTML = `
     <div class="v2-auth-screen">
       <div class="v2-auth-card">
         <h2>ЖБИ — новый интерфейс</h2>
-        <small>Предварительная версия · вход тем же паролем, что и в текущем интерфейсе</small>
+        <small>${EXPERIMENTAL_NOTICE}. Вход тем же паролем, что и в текущем интерфейсе.</small>
         <form id="v2-login-form">
           <label class="v2-field">Логин
             <input id="v2-login-user" name="domain_login" autocomplete="username" list="v2-login-users" required>
@@ -46,6 +47,20 @@ export async function renderLogin(root, { api, onSuccess }) {
 }
 
 export async function renderChangePassword(root, { api, onSuccess }) {
+  // Смена пароля отключена политикой ограниченного выпуска (пароли — только в текущем интерфейсе): вместо формы —
+  // объяснение и переход, чтобы человек не вводил пароли в экран, который всё равно откажет.
+  if (!checkWrite("POST", "/me/change-password", {}).allowed) {
+    root.innerHTML = `
+      <div class="v2-auth-screen">
+        <div class="v2-auth-card">
+          <h2>Смена пароля</h2>
+          <small>${EXPERIMENTAL_NOTICE}.</small>
+          <p>Перед продолжением нужно задать свой пароль. В экспериментальном интерфейсе эта операция отключена — выполните её в текущем интерфейсе: войдите там, и система предложит задать новый пароль.</p>
+          <p><a class="v2-btn v2-primary" href="/?ui=v1">Открыть текущий интерфейс</a></p>
+        </div>
+      </div>`;
+    return;
+  }
   root.innerHTML = `
     <div class="v2-auth-screen">
       <div class="v2-auth-card">

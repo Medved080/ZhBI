@@ -670,3 +670,25 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .v2-lc input[type=color] { width: 64px; height: 36px; padding: 2px; }
 .v2-lc-sample { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; font-weight: 600; }
 .v2-lc .v2-bar { flex-basis: 100%; }
+
+/* Ограниченный выпуск: постоянная пометка экспериментального режима и пояснение об отключённых операциях экрана. */
+.v2-exp-banner {
+  padding: 7px 24px;
+  font-size: 13px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+}
+.v2-exp-banner a { color: var(--ink); text-decoration: underline; white-space: nowrap; }
+.v2-gate-note {
+  padding: 8px 24px;
+  font-size: 13px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  border-left: 4px solid var(--accent, #8a5a1a);
+}
+.v2-gate-note[hidden] { display: none; }
+.v2-gate-note .v2-btn { margin-left: 6px; }
