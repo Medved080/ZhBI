@@ -112,7 +112,8 @@
       // состав выделения рамкой (для проверки перед распределением): только скаляры, не больше 3000 элементов
       multiItems: state.multiSelectedIds.size <= 3000 ? Array.from(state.multiSelectedIds).map((id) => {
         const e = state.byId.get(id);
-        return e ? { id, mark: e.mark ?? null, element_type: e.element_type, current_status: e.current_status, contract_id: e.contract_id ?? null } : null;
+        return e ? { id, mark: e.mark ?? null, element_type: e.element_type, current_status: e.current_status, contract_id: e.contract_id ?? null,
+          planned_delivery_date: e.planned_delivery_date ?? null } : null;
       }).filter(Boolean) : null,
       excluded: excludedCount(),
     };
@@ -543,6 +544,71 @@
     },
     async reload() { await loadPlan(true); },
   };
+
+  // Команды операций над изделиями (модель ЖБИ, АРМ прораба; те же безопасны и для комплектовщика): кадр по-прежнему только читает,
+  // изменения выполняет оболочка через шлюз записи, а здесь лишь применяется то, что подтвердил сервер.
+  const COMMANDS_EL = {
+    // Контракты выбранного объекта (то, что движок получил вместе со схемой): только скаляры, для выбора контракта в оболочке
+    getContracts() {
+      const items = (state.contracts || []).filter((c) => c && isInt(c.id)).slice(0, 2000).map((c) => {
+        const o = {};
+        for (const k of ["id", "name", "theme", "specification_id", "specification_number", "specification_date", "agreement_id", "agreement_number",
+          "agreement_date", "counterparty_id", "counterparty_short_name", "counterparty_code"]) {
+          const v = c[k]; if (v === null || typeof v === "string" || typeof v === "number") o[k] = v;
+        }
+        o.is_archived = !!c.is_archived;
+        return o;
+      });
+      post({ evt: "contracts", objectId: state.objectId, items });
+    },
+    // Применить к схеме то, что подтвердил сервер (ответ операции): известные скалярные поля статуса/контракта/дат и комментарий
+    applyElements(a) {
+      if (!Array.isArray(a.items) || a.items.length > 3000) throw new Error("items");
+      let changed = 0;
+      for (const it of a.items) {
+        if (!it || !isInt(it.id)) throw new Error("item");
+        const fresh = { id: it.id };
+        for (const f of DELTA_FIELDS) {
+          if (!(f in it)) continue;
+          const v = it[f];
+          if (!(v === null || typeof v === "string" || (typeof v === "number" && Number.isFinite(v)))) throw new Error("поле " + f);
+          fresh[f] = v;
+        }
+        if (applyElementDelta(fresh)) changed++;
+      }
+      if (changed) { clearContractPositionsCache(); renderLegend(); applyPlacementFilters(); }
+      scheduleState(); sendFilters();
+      post({ evt: "refreshed", changed });
+    },
+    // Комментарий изделия после подтверждённой сервером записи (в наборе полей дельты его нет)
+    patchComment(a) {
+      if (!isInt(a.id) || !(a.comment === null || (typeof a.comment === "string" && a.comment.length <= 2000))) throw new Error("параметры");
+      const e = state.byId.get(a.id);
+      if (!e) throw new Error("элемента нет на схеме");
+      e.comment = a.comment;
+      scheduleState();
+    },
+  };
+  if (!MFR) Object.assign(COMMANDS, COMMANDS_EL);
+
+  // Ctrl/⌘ + щелчок по изделию на плане (2D): добавляет его к выделению или убирает из него (V1 умел только убирать, и только из рамки).
+  // Перехват на этапе захвата: обработчик V1 на том же узле после этого не вызывается. Рабочее место комплектовщика не затрагивается.
+  if (!MFR && !PICKER) {
+    const root = document.getElementById("svg-root");
+    if (root) root.addEventListener("click", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || (typeof dragMoved !== "undefined" && dragMoved)) return;
+      const shape = e.target.closest && e.target.closest(".element-shape");
+      if (!shape) return;
+      const el = state.byId.get(Number(shape.getAttribute("data-id")));
+      if (!el) return;
+      e.stopImmediatePropagation();
+      const ids = new Set(state.multiSelectedIds);
+      if (ids.size === 0 && state.selectedId !== null && state.selectedId !== el.id) ids.add(state.selectedId);   // уже выбранное одиночно — часть группы
+      if (ids.has(el.id)) ids.delete(el.id); else ids.add(el.id);
+      setMultiSelection(ids);
+      scheduleState();
+    }, true);
+  }
 
   // Команды МФР. Обращения к элементам — только по фиксированным идентификаторам и проверенным значениям.
   const isIds = (x) => typeof x === "string" && /^\d+(,\d+)*$/.test(x);

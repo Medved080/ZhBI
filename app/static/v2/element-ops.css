@@ -1,0 +1,43 @@
+/* Операции над изделиями на схеме (element-ops.js): формы карточки, групповая панель, окна выбора контракта и реквизитов.
+   Использует переменные и компоненты общего файла V2 (styles.css); здесь только то, чего там нет. */
+.eo-dialog { width: 560px; max-width: calc(100vw - 32px); max-height: calc(100vh - 48px); overflow: auto; }
+.eo-dlg-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.eo-dlg-head strong { font-size: 15px; overflow-wrap: anywhere; }
+.eo-x { border: 0; background: none; font-size: 15px; color: var(--muted); padding: 2px 6px; }
+.eo-x:hover { color: var(--ink); }
+.eo-hint { margin: 0 0 8px; font-size: 12px; }
+.eo-clist { max-height: 52vh; overflow-y: auto; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.eo-cg { position: sticky; top: 0; background: var(--surface); padding: 5px 10px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--line); }
+.eo-crow { display: flex; align-items: baseline; gap: 0; width: 100%; border: 0; border-bottom: 1px solid var(--line); background: var(--bg); text-align: left; padding: 6px 10px 6px 18px; font-size: 13px; }
+.eo-crow:hover:not(:disabled) { background: var(--surface); }
+.eo-crow.on { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+.eo-crow.eo-blocked { opacity: .55; cursor: not-allowed; }
+.eo-cname { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.eo-crow em { min-width: 62px; text-align: right; font-style: normal; color: var(--muted); }
+.eo-crow em.ws-pos { color: var(--good); }
+.eo-crow em.ws-neg { color: var(--bad); }
+.eo-why { flex: none; min-width: 0 !important; font-size: 12px; }
+.eo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.eo-grid .eo-span { grid-column: 1 / -1; }
+.eo-foot { justify-content: flex-end; margin-top: 4px; }
+.eo-inline { margin: 6px 0 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.eo-hist li { position: relative; padding-right: 0; }
+.eo-row-actions { grid-column: 2; display: flex; gap: 10px; margin-top: 1px; }
+.eo-link { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; text-decoration: underline; }
+.eo-link.eo-bad { color: var(--bad); }
+.eo-pickrow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.eo-pickrow .v2-btn { padding: 3px 10px; font-size: 12px; }
+.eo-pickval { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--ink); font-size: 13px; }
+.eo-preview { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.eo-preview p { margin: 4px 0; }
+.eo-cons { margin: 4px 0 6px; padding-left: 18px; }
+.eo-cons li { margin: 2px 0; }
+.eo-sum { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px; }
+.eo-sumrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; }
+.eo-sumrow > .v2-muted { flex: none; min-width: 66px; }
+.eo-sumchip { padding: 0 8px; font-size: 12px; }
+.eo-banner { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin: 10px 14px 0; padding: 7px 9px; border-left: 3px solid var(--accent); background: var(--surface); font-size: 13px; }
+.eo-banner span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.eo-banner-ok { border-left-color: var(--good); color: var(--good); }
+.eo-banner-err { border-left-color: var(--bad); color: var(--bad); }
+.eo-banner .eo-x { flex: none; padding: 0 4px; }

@@ -2095,6 +2095,19 @@ function createServer(opts) {
       .map(contractOut);
   });
 
+  // Позиции контрактов по ТИПУ изделия (app/contracts.py: GET /contracts/positions): все марки, план/факт/остаток
+  route("GET", "/contracts/positions", (ctx) => {
+    const type = ctx.query?.get ? ctx.query.get("element_type") : (ctx.query || {}).element_type;
+    const ids = visibleObjectIds(ctx.user);
+    const out = [];
+    for (const c of data.contracts) {
+      const { s, a, cp } = chainOf(c);
+      if (c.is_archived || !s || !a || !cp || !agreementVisible(ctx.user, a, ids)) continue;
+      for (const l of contractOut(c).lines) if (l.element_type === type) out.push({ contract_id: c.id, mark: l.mark, quantity: l.quantity, fact: l.fact, damaged: l.damaged, remaining: l.remaining, exceeded: l.exceeded });
+    }
+    return out;
+  });
+
   // Полная замена позиций/инцидентов/переопределения (как DELETE + INSERT в бэкенде); дубль (тип, марка) нарушает
   // idx_contract_lines_unique — необработанное исключение (500).
   function fillContractParts(c, b) {
@@ -2254,6 +2267,132 @@ function createServer(opts) {
       throw err;
     }
     return { updated: els.map((e) => ({ ...elementOut(e), history: historyOf(e).map((h) => ({ status: h.status, changed_at: h.changed_at, changed_by: h.changed_by, comment: h.comment })), contract_warning: null })) };
+  });
+
+  // Безопасные операции над изделиями со схемы (app/element_ops.py): смена статуса пачки (предпросмотр последствий, ожидаемое состояние,
+  // контракт сохраняется, «Запланирован» снимает контракт, повтор идемпотентен), плановая дата пачки, контракт одного изделия; комментарий.
+  const problem = (status, message, conflicts = [], extra = {}) => new HttpError(status, { message, conflicts, ...extra });
+  const linkProblem = (e, cid, taken) => {
+    const c = contractById(cid);
+    if (!c) return problem(404, "Контракт не найден");
+    if (c.is_archived) return problem(409, "Контракт архивный — назначать его нельзя");
+    const { a } = chainOf(c);
+    if (!a || a.object_id !== e.object_id) return problem(400, "Контракт относится к другому объекту — назначить его этому изделию нельзя");
+    const same = (x, y) => (x ?? null) === (y ?? null);
+    const line = c.lines.find((l) => same(l.element_type, e.element_type) && same(l.mark, e.mark));
+    const label = `${e.element_type}, марка «${e.mark ?? "без марки"}»`;
+    if (!line) return problem(409, `В спецификации контракта нет позиции под ${label} — привязать изделие к этому контракту нельзя.`);
+    const n = taken + data.elements.filter((x) => x.id !== e.id && x.contract_id === cid && x.current_status !== "planned" && same(x.element_type, e.element_type) && same(x.mark, e.mark)).length;
+    const damaged = c.incidents.filter((x) => x.element_type === e.element_type).reduce((k, x) => k + (x.quantity || 0), 0);
+    if (n + damaged + 1 > line.quantity) return problem(409, `По позиции ${label} закуплено ${line.quantity}, уже привязано ${n} — свободного количества в контракте нет.`);
+    return null;
+  };
+  const guardStatus = (user, e, key) => {
+    if (e.object_id != null) assertObjectFeature(user, e.object_id, key, "write");
+    else if (!isAdmin(user)) fail(403, "Элемент не привязан к объекту — операция доступна администратору сервиса");
+  };
+  const okOut = (e) => { const o = elementOut(e); return { id: o.id, current_status: o.current_status, contract_id: o.contract_id, counterparty_code: o.counterparty_code, planned_delivery_date: o.planned_delivery_date,
+    actual_delivery_date: o.actual_delivery_date, project_delivery_date: o.project_delivery_date, project_smr_start_date: o.project_smr_start_date, comment: e.comment ?? null }; };
+  route("POST", "/element-ops/status-batch", (ctx) => {
+    const b = ctx.body && typeof ctx.body === "object" ? ctx.body : {};
+    if (!["preview", "apply"].includes(b.mode)) throw validation([{ type: "literal_error", loc: ["body", "mode"], msg: "Input should be 'preview' or 'apply'", input: b.mode }]);
+    if (!ELEMENT_STATUSES.includes(b.status)) throw validation([{ type: "enum", loc: ["body", "status"], msg: "Input should be a valid status", input: b.status }]);
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!items.length) throw problem(400, "Пустая пачка");
+    if (b.mode === "apply" && !b.expect) throw problem(400, "Для записи нужно подтверждение последствий (expect): сначала выполните предпросмотр");
+    const ids = items.map((i) => i.element_id);
+    if (new Set(ids).size !== ids.length) throw problem(400, "В пачке повторяются изделия — ничего не изменено", ids.filter((x, k) => ids.indexOf(x) !== k).map((x) => ({ element_id: x, reason: "duplicate" })));
+    const els = items.map((i) => data.elements.find((e) => e.id === i.element_id));
+    const missing = ids.filter((x, k) => !els[k]);
+    if (missing.length) throw problem(404, "Изделий нет в базе — ничего не изменено", missing.map((x) => ({ element_id: x, reason: "not_found" })));
+    for (const e of els) guardStatus(ctx.user, e, "status");
+    const target = b.status, assign = b.assign_contract_id ?? null;
+    const after = (it) => (target === "planned" ? null : (it.expected_contract_id ?? null) !== null ? it.expected_contract_id : assign);
+    const conflicts = [], todo = [], done = [];
+    items.forEach((it, k) => {
+      const e = els[k], base = { element_id: e.id, current_status: e.current_status, contract_id: e.contract_id ?? null };
+      if (e.object_id !== b.object_id) conflicts.push({ ...base, reason: "other_object" });
+      else if (it.expected_status === target) conflicts.push({ ...base, reason: "same_status" });
+      else if (e.current_status === it.expected_status && (e.contract_id ?? null) === (it.expected_contract_id ?? null)) todo.push([it, e]);
+      else if (e.current_status === target && (e.contract_id ?? null) === after(it)) done.push([it, e]);
+      else conflicts.push({ ...base, reason: "state_changed", expected_status: it.expected_status, expected_contract_id: it.expected_contract_id ?? null });
+    });
+    if (conflicts.length) throw problem(409, "Состояние изделий изменилось или пачка не подходит — ничего не изменено. Обновите схему и выберите заново.", conflicts);
+    if (done.length && todo.length) throw problem(409, "Часть изделий уже изменена этой операцией, часть — нет — ничего не изменено. Обновите схему и выберите заново.", [...done, ...todo].map(([, e]) => ({ element_id: e.id, reason: "partly_applied" })));
+    const zero = { release_contracts: 0, without_contract: 0, actual_date_cleared: 0, assigned: 0, released_by_contract: [], effective_differs: 0 };
+    if (!todo.length) return { mode: b.mode, already_applied: true, applied: [], already: done.map(([, e]) => okOut(e)), consequences: zero, problems: [] };
+    const snap = todo.map(([, e]) => ({ e, st: e.current_status, c: e.contract_id, ad: e.actual_delivery_date, h: e.history_rows ? e.history_rows.slice() : null }));
+    const cons = { ...zero, released_by_contract: [] }, problems = [], relBy = new Map();
+    for (const [it, e] of todo) {
+      const wantAssign = assign !== null && target !== "planned" && (it.expected_contract_id ?? null) === null;
+      if (wantAssign) { const pr = linkProblem(e, assign, 0); if (pr) { problems.push({ element_id: e.id, mark: e.mark, element_type: e.element_type, reason: "contract_guard", message: pr.detail.message }); continue; } }
+      const had = e.contract_id ?? null, wasPlanned = e.current_status === "planned";
+      historyOf(e).push({ status: target, changed_at: b.changed_at || nowStr(nowFn), changed_by: ctx.user.display_name || "QA", comment: b.comment ?? null });
+      e.current_status = target;
+      e.contract_id = target === "planned" ? null : (had !== null ? had : (wantAssign ? assign : null));
+      if (target === "planned") e.actual_delivery_date = null; else if (target === "delivered" && !e.actual_delivery_date) e.actual_delivery_date = b.changed_at || nowStr(nowFn);
+      e.updated_at = nowStr(nowFn);
+      if (had !== null && e.contract_id === null) { cons.release_contracts++; relBy.set(had, (relBy.get(had) || 0) + 1); }
+      if (had === null && e.contract_id !== null) cons.assigned++;
+      if (wasPlanned && target !== "planned" && e.contract_id === null) cons.without_contract++;
+    }
+    for (const [cid, n] of relBy) { const c = contractById(cid); cons.released_by_contract.push({ contract_id: cid, name: c ? c.name : `№${cid}`, count: n }); }
+    const rollback = () => snap.forEach(({ e, st, c, ad, h }) => { e.current_status = st; e.contract_id = c; e.actual_delivery_date = ad; e.history_rows = h || undefined; });
+    if (b.mode === "preview") { rollback(); return { mode: "preview", already_applied: false, applied: [], already: [], consequences: cons, problems, items: [] }; }
+    if (problems.length) { rollback(); throw problem(409, "Контракт не позволяет записать пачку — ничего не изменено", problems, { kind: "contract_guard" }); }
+    if (b.expect.release_contracts !== cons.release_contracts || b.expect.without_contract !== cons.without_contract) {
+      rollback(); throw problem(409, "Последствия операции изменились с момента предпросмотра — ничего не изменено. Проверьте их и подтвердите заново.", [], { kind: "consequences_changed", consequences: cons });
+    }
+    return { mode: "apply", already_applied: false, applied: todo.map(([, e]) => okOut(e)), already: [], consequences: cons, problems: [] };
+  });
+  route("POST", "/element-ops/planned-date-batch", (ctx) => {
+    const b = ctx.body && typeof ctx.body === "object" ? ctx.body : {};
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!items.length) throw problem(400, "Пустая пачка");
+    if (b.planned_date !== null && b.planned_date !== undefined && !validIsoDate(b.planned_date)) throw problem(400, "Дата указана неверно (нужно ГГГГ-ММ-ДД)");
+    const target = b.planned_date ?? null;
+    const els = items.map((i) => data.elements.find((e) => e.id === i.element_id));
+    const missing = items.filter((i, k) => !els[k]).map((i) => i.element_id);
+    if (missing.length) throw problem(404, "Изделий нет в базе — ничего не изменено", missing.map((x) => ({ element_id: x, reason: "not_found" })));
+    for (const e of els) guardStatus(ctx.user, e, "planned_date");
+    const conflicts = [], todo = [], done = [];
+    items.forEach((it, k) => {
+      const e = els[k], cur = e.planned_delivery_date ?? null, base = { element_id: e.id, planned_delivery_date: cur };
+      if (e.object_id !== b.object_id) conflicts.push({ ...base, reason: "other_object" });
+      else if ((it.expected_planned_date ?? null) === target) conflicts.push({ ...base, reason: "same_value" });
+      else if (cur === (it.expected_planned_date ?? null)) todo.push(e);
+      else if (cur === target) done.push(e);
+      else conflicts.push({ ...base, reason: "state_changed" });
+    });
+    if (conflicts.length) throw problem(409, "Плановая дата изделий изменилась или пачка не подходит — ничего не изменено. Обновите схему и выберите заново.", conflicts);
+    if (done.length && todo.length) throw problem(409, "Часть изделий уже изменена этой операцией, часть — нет — ничего не изменено.", [...done, ...todo].map((e) => ({ element_id: e.id, reason: "partly_applied" })));
+    if (!todo.length) return { already_applied: true, applied: [], already: done.map(okOut) };
+    for (const e of todo) { e.planned_delivery_date = target; e.updated_at = nowStr(nowFn); }
+    return { already_applied: false, applied: todo.map(okOut), already: [] };
+  });
+  route("POST", "/element-ops/contract", (ctx) => {
+    const b = ctx.body && typeof ctx.body === "object" ? ctx.body : {};
+    const e = data.elements.find((x) => x.id === b.element_id);
+    if (!e) throw problem(404, "Изделие не найдено");
+    guardStatus(ctx.user, e, "status");
+    const cid = b.contract_id ?? null;
+    if (!(e.current_status === b.expected_status && (e.contract_id ?? null) === (b.expected_contract_id ?? null))) {
+      if (e.current_status === b.expected_status && (e.contract_id ?? null) === cid) return { already_applied: true, element: okOut(e), position: null };
+      throw problem(409, "Изделие изменилось после открытия формы — ничего не изменено. Обновите данные и повторите.", [{ element_id: e.id, reason: "state_changed" }]);
+    }
+    if (e.current_status === "planned") throw problem(409, "У изделия в статусе «Запланирован» контракта быть не может — он проставляется при переводе в следующий статус");
+    if (cid === (e.contract_id ?? null)) throw problem(400, "Этот контракт уже назначен — менять нечего");
+    if (cid !== null) { const pr = linkProblem(e, cid, 0); if (pr) throw pr; }
+    e.contract_id = cid; e.updated_at = nowStr(nowFn);
+    return { already_applied: false, element: okOut(e), position: null };
+  });
+  route("PATCH", "/elements/:element_id/comment", (ctx) => {
+    const e = data.elements.find((x) => x.id === pathInt(ctx, "element_id"));
+    if (!e) fail(404, "Элемент не найден");
+    guardStatus(ctx.user, e, "comment");
+    const t = ctx.body && typeof ctx.body.comment === "string" ? ctx.body.comment.trim() : "";
+    e.comment = t || null; e.updated_at = nowStr(nowFn);
+    return { id: e.id, comment: e.comment };
   });
 
   // Атомарное распределение пачки (app/allocation.py: POST /contracts/{id}/allocations): сверка состояния, конфликт вместо молчаливого сужения,
