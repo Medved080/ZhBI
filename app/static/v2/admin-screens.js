@@ -3,6 +3,8 @@
 import { esc } from "./screen-view.js";
 import { mountPasswordForm } from "./password-form.js";
 import { frame, errText } from "./admin-common.js";
+import { statusEntries, clearStatusEntries } from "./statuslog.js";
+import { mountTraining, mountTrainingHistory } from "./training-ui.js";
 import { mountResetHistory, mountBackups, mountLdap, mountMapAdmin, mountActivity, mountChangelogTasks } from "./admin-service.js";
 
 // ---------------------------------------------------------------- «Сменить пароль»
@@ -52,6 +54,27 @@ function mountMyAccess(el, { screen, groupTitle, api }) {
   return { hasUnsavedChanges: () => false, guardLeave: async () => true, destroy() { dead = true; } };
 }
 
+// ---------------------------------------------------------------- «Сообщения за сеанс»
+function mountStatusLog(el, { screen, groupTitle }) {
+  const body = frame(el, screen, groupTitle);
+  body.setAttribute("data-statuslog-skip", "");   // саму ленту в ленту не пишем
+  let dead = false;
+  const fmt = (d) => d.toLocaleTimeString("ru-RU");
+  function paint() {
+    if (dead) return;
+    const rows = statusEntries();
+    body.innerHTML = `<div class="v2-callout" role="note"><strong>Все сообщения об операциях с момента загрузки страницы</strong> (последние ${rows.length}), новые сверху. Это не журнал действий сервера: лента живёт только в этой вкладке и пропадает при перезагрузке.</div>
+      <div class="v2-bar"><button type="button" class="v2-btn" id="sl-refresh">Обновить</button><button type="button" class="v2-btn" id="sl-clear" ${rows.length ? "" : "disabled"}>Очистить ленту</button></div>
+      ${rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Время</th><th>Сообщение</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(fmt(r.at))}</td><td>${esc(r.text)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="v2-muted">Сообщений пока нет.</p>`}`;
+  }
+  body.addEventListener("click", (e) => {
+    if (e.target.id === "sl-refresh") paint();
+    else if (e.target.id === "sl-clear") { clearStatusEntries(); paint(); }
+  });
+  paint();
+  return { hasUnsavedChanges: () => false, guardLeave: async () => true, destroy() { dead = true; } };
+}
+
 const SCREENS = {
   "admin:password": mountPassword,
   "admin:my-access": mountMyAccess,
@@ -61,6 +84,9 @@ const SCREENS = {
   "admin:map": mountMapAdmin,
   "admin:activity": mountActivity,
   "admin:changelog": mountChangelogTasks,
+  "admin:statuslog": mountStatusLog,
+  "admin:training": mountTraining,
+  "admin:training-history": mountTrainingHistory,
 };
 
 export function hasAdminScreen(impl) { return Object.prototype.hasOwnProperty.call(SCREENS, impl); }

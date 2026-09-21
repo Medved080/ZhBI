@@ -25,6 +25,7 @@ import { mountLabelColorEdit } from "./label-color-edit.js";
 import { mountRevitColorsEdit } from "./revit-colors-edit.js";
 import { mountAccessView } from "./access-view.js";
 import { hasAdminScreen, mountAdminScreen } from "./admin-screens.js";
+import { startStatusLog } from "./statuslog.js";
 import { mountShapeEdit } from "./shape-edit.js";
 import { EXPERIMENTAL_NOTICE, BLOCKED_EVENT, disabledForScreen, hasAllowedWrites } from "./write-gate.js";
 
@@ -534,6 +535,7 @@ async function renderShell(user, permissions) {
     else if (currentKey === "home") openSection("home", { force: true, guarded: true });
   });
 
+  startStatusLog();   // лента «Сообщения за сеанс» (раздел «Обучение и справка»)
   renderNav();
   openSection(routeFromHash());
 }

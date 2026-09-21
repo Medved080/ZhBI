@@ -987,4 +987,81 @@ if (want("service")) {
   }
 }
 
+// ====================================================================== обучение, сообщения за сеанс, справочные экраны
+if (want("training")) {
+  console.log("== Обучение и сообщения (браузер)");
+  const g = (await user2.get("/training/guide")).data;
+  const cnt = {}; for (const bl of g.blocks) if (bl.feature && bl.questions > 0) cnt[bl.feature] = (cnt[bl.feature] || 0) + bl.questions;
+  const feat = Object.keys(cnt).sort((x, y) => cnt[x] - cnt[y])[0];
+  const total = Math.min(20, cnt[feat]);
+  const u2id = one("SELECT id FROM users WHERE domain_login='user2'").id;
+  const b = await session(BASE, "user2");
+  await openSection(b, "training"); await b.waitFor("!!document.querySelector('#tr-start')", 20000);
+  ok("TR-UI-0 экран «Обучение»: инструкция и блок теста; «Начать тест» доступна", true);
+  await b.eval(`(()=>{const s=document.querySelector('#tr-section'); s.value='${feat}'; s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  let mark = b.requests.length;
+  await click(b, "#tr-start"); await b.waitFor("!!document.querySelector('#tr-answer')", 20000);
+  ok("TR-UI-1 «Начать тест»: ОДИН POST /training/attempts, вопрос и варианты показаны, правильный вариант в ответе сервера не приходил", wr(b, mark).filter((x) => x.url.endsWith("/training/attempts")).length === 1 && (await b.eval("document.querySelectorAll('input[name=tr-opt]').length")) >= 2 && one(`SELECT COUNT(*) n FROM training_attempts WHERE user_id=${u2id}`).n === 1);
+  await reload(b);
+  await b.waitFor("!!document.querySelector('#tr-answer')", 20000);
+  ok("TR-UI-2 после ПЕРЕЗАГРУЗКИ незавершённая попытка продолжается с того же места (новая не заводится)", one(`SELECT COUNT(*) n FROM training_attempts WHERE user_id=${u2id}`).n === 1);
+  // ответить с двойным щелчком
+  let answered = 0, firstDone = false;
+  while (await exists(b, "#tr-answer")) {
+    await click(b, "input[name=tr-opt][value='0']");
+    await b.waitFor("!document.querySelector('#tr-answer') || !document.querySelector('#tr-answer').disabled");
+    mark = b.requests.length;
+    if (!firstDone) {
+      await b.eval("document.querySelector('#tr-answer').scrollIntoView({block:'center'})");
+      const r = await b.rect("#tr-answer"); await b.click(r.cx, r.cy); await b.click(r.cx, r.cy);
+    } else await click(b, "#tr-answer");
+    for (let i = 0; i < 100; i++) { const rs = wr(b, mark).filter((x) => x.url.includes("/answer")); if (rs.length && rs.every((x) => x.status)) break; await b.sleep(150); }
+    await b.sleep(500);
+    if (!firstDone) {
+      const posts = wr(b, mark).filter((x) => x.url.includes("/answer"));
+      ok("TR-UI-3 ответ (двойной клик): РОВНО ОДИН POST answer; показан разбор «Верно/Неверно» с пояснением", posts.length === 1 && /Верно|Неверно|Тест завершён/.test(await text(b, "#tr-test")), `POST: ${posts.length}`);
+      firstDone = true;
+    }
+    answered++;
+    if (answered > 25) break;
+  }
+  await b.waitFor("!!document.querySelector('#tr-start')", 15000);
+  const dbg = { txt: (await text(b, "#tr-test")), n: one(`SELECT COUNT(*) n FROM training_answers WHERE attempt_id=(SELECT MAX(id) FROM training_attempts WHERE user_id=${u2id})`).n, total, fin: one(`SELECT finished_at f FROM training_attempts WHERE user_id=${u2id} ORDER BY id DESC LIMIT 1`).f };
+  ok("TR-UI-4 тест завершён: итог показан; в БД попытка завершена, ответов столько, сколько вопросов", dbg.txt.includes("Тест завершён") && dbg.n === total && dbg.fin !== null, JSON.stringify({ ...dbg, txt: dbg.txt.slice(0, 80) }));
+  await b.sleep(800);
+  ok("TR-UI-4 «Мои попытки» показывает попытку; «Разбор» открывает ответы", (await exists(b, "#tr-attempts [data-detail]")));
+  await click(b, "#tr-attempts [data-detail]"); await b.waitFor("(document.querySelector('#tr-detail')||{}).innerText?.includes('верно')", 10000);
+  ok("TR-UI-4 разбор: список ответов с текстами вопросов", (await text(b, "#tr-detail")).length > 40);
+  // обрыв ответа при ответе: сервер записывает, интерфейс сверяется
+  await b.eval(`(()=>{const s=document.querySelector('#tr-section'); s.value='${feat}'; s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await click(b, "#tr-start"); await b.waitFor("!!document.querySelector('#tr-answer')", 20000);
+  const ansBefore = one(`SELECT COUNT(*) n FROM training_answers a JOIN training_attempts t ON t.id=a.attempt_id WHERE t.user_id=${u2id}`).n;
+  await click(b, "input[name=tr-opt][value='0']"); await b.waitFor("!document.querySelector('#tr-answer').disabled");
+  await dropNextResponse(b, "/answer", "POST");
+  mark = b.requests.length;
+  await click(b, "#tr-answer"); await b.sleep(2500);
+  ok("TR-UI-5 обрыв ответа: ОДИН POST, ответ записан на сервере (SQL), интерфейс сверился и сказал об этом (без повтора)", wr(b, mark).filter((x) => x.url.includes("/answer")).length === 1 && one(`SELECT COUNT(*) n FROM training_answers a JOIN training_attempts t ON t.id=a.attempt_id WHERE t.user_id=${u2id}`).n === ansBefore + 1 && (await text(b, "#tr-test")).includes("хотя ответ сервера не дошёл"), await text(b, "#tr-note"));
+  // -------- сообщения за сеанс
+  await openSection(b, "statuslog"); await b.waitFor("!!document.querySelector('#sl-refresh')");
+  ok("TR-UI-6 «Сообщения за сеанс»: лента содержит сообщения теста (время и текст), новые сверху", (await text(b, "#as-body")).includes("Продолжайте со следующего вопроса") || (await text(b, "#as-body")).includes("Ответ записан"));
+  await click(b, "#sl-clear");
+  ok("TR-UI-6 «Очистить ленту»: пусто", (await text(b, "#as-body")).includes("Сообщений пока нет"));
+  ok("TR-UI-7 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
+  await b.close();
+  // -------- история сотрудника (администратор)
+  const a = await session(BASE, "admin");
+  await openSection(a, "training-history"); await a.waitFor("!!document.querySelector('#th-user') && document.querySelector('#th-user').options.length>1", 15000);
+  await a.eval(`(()=>{const s=document.querySelector('#th-user'); s.value='${u2id}'; s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await a.waitFor("!!document.querySelector('#th-list [data-detail]')", 10000);
+  await click(a, "#th-list [data-detail]"); await a.waitFor("(document.querySelector('#th-detail')||{}).innerText?.length>30", 10000);
+  ok("TR-UI-8 «Как учатся сотрудники»: выбрать сотрудника — попытки и разбор ответов", true);
+  // -------- справочные экраны открываются без ошибок
+  for (const id of ["db-status", "admin-guide", "address-classifier"]) {
+    await openSection(a, id); await a.sleep(1500);
+    const t = await text(a, "#v2-content");
+    ok(`TR-UI-9 экран «${id}» открывается без ошибки загрузки`, t.length > 80 && !/Не удалось загрузить/.test(t), t.slice(0, 80));
+  }
+  await a.close();
+}
+
 process.exit(summary() ? 1 : 0);

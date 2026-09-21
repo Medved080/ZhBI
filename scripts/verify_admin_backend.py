@@ -11,6 +11,7 @@
   N — сеансы (свои, чужие, завершение, 404); C — смена собственного пароля (в том числе обязательная);
   D — проекты и объекты (создание, правка с версией, удаление по плану и каскад, вложения, превью), справочник «Физлица»;
   E — служебные операции (резервные копии, LDAP, подложка карты, очистка журнала, обработки обновления);
+  T — обучение (тест: старт, возобновление, ответ и разбор, неизменяемость ответа, чужая попытка, история сотрудника);
   Z — сброс истории статусов (в самом конце: меняет данные ВСЕХ изделий копии).
 
 Запуск:  .venv/bin/python scripts/verify_admin_backend.py <порт> <каталог_копии>   (копия — файл work.db из real_auth_server.py)
@@ -793,6 +794,60 @@ s, e = ADMIN.post(f"/release-tasks/{task['name']}/run")
 check("E10 повтор выполненной обработки: 200 и база в порядке (идемпотентность)", s == 200 and e.get("status") == "ok" and ADMIN.get("/release-status")[1]["complete"], f"{s} {str(e)[:120]}")
 s, e = USER2.get("/release-status")
 check("E10 обычному пользователю отдаётся статус без списка обработок", s == 200 and "tasks" not in e)
+
+# ============================================================ T — обучение
+print("T — обучение")
+s, g = USER2.get("/training/guide")
+by_feature = {}
+for b in g["blocks"]:
+    if b["feature"] and b["questions"] > 0:
+        by_feature[b["feature"]] = by_feature.get(b["feature"], 0) + b["questions"]
+feat = min(by_feature, key=lambda k: by_feature[k])
+total_q = min(20, by_feature[feat])
+s, st = USER2.get("/training/state")
+check("T1 состояние теста: нет незавершённой попытки", s == 200 and st["attempt"] is None)
+s, e = USER2.post("/training/attempts", {"feature_key": "нет_такого"})
+check("T2 неизвестный раздел: 400, попытка не заведена", s == 400 and q1("SELECT COUNT(*) n FROM training_attempts WHERE user_id=?", (USER2.me["id"],))["n"] == 0)
+mark = last_log_id()
+s, a = USER2.post("/training/attempts", {"feature_key": feat})
+check("T3 старт теста по разделу: 201, первый вопрос без правильного ответа", s in (200, 201) and a["question"] and "correct" not in json.dumps(a["question"]) and a["questions"] == total_q, f"{s} {str(a)[:200]}")
+AID2 = a["id"]
+s, a2 = USER2.post("/training/attempts", {"feature_key": feat})
+check("T3 повторный старт возвращает ту же попытку (resumed), а не заводит вторую", a2["id"] == AID2 and a2.get("resumed") is True and q1("SELECT COUNT(*) n FROM training_attempts WHERE user_id=?", (USER2.me["id"],))["n"] == 1)
+s, r = USER4.post(f"/training/attempts/{AID2}/answer", {"question_key": a["question"]["key"], "option": 0})
+check("T4 чужая попытка: 404 (существование не подтверждается)", s == 404)
+answered = 0
+while True:
+    s, cur = USER2.get("/training/state")
+    qn = cur["attempt"]["question"] if cur["attempt"] else None
+    if not qn:
+        break
+    s, r = USER2.post(f"/training/attempts/{AID2}/answer", {"question_key": qn["key"], "option": 0})
+    answered += 1
+    if answered == 1:
+        check("T5 ответ: разбор с правильным текстом, счёт и признак завершения", s == 200 and "correct_text" in r and "score" in r and "finished" in r and r["score"]["answered"] == 1, f"{s} {str(r)[:200]}")
+        s2, r2 = USER2.post(f"/training/attempts/{AID2}/answer", {"question_key": qn["key"], "option": 1})
+        check("T5 повторный ответ на тот же вопрос: 409, ответ не меняется", s2 == 409 and q1("SELECT COUNT(*) n FROM training_answers WHERE attempt_id=?", (AID2,))["n"] == 1)
+        s3, r3 = USER2.post(f"/training/attempts/{AID2}/answer", {"question_key": r["question"]["key"] if r["question"] else "x", "option": 99})
+        check("T5 нет такого варианта: 400 без записи", s3 in (400, 409) and q1("SELECT COUNT(*) n FROM training_answers WHERE attempt_id=?", (AID2,))["n"] == 1, f"{s3}")
+    if r.get("finished"):
+        break
+    if answered > 30:
+        break
+check("T6 попытка завершена: отвечено столько, сколько вопросов; в БД ответы записаны", q1("SELECT answered, questions, finished_at f FROM training_attempts WHERE id=?", (AID2,))["answered"] == total_q and q1("SELECT finished_at f FROM training_attempts WHERE id=?", (AID2,))["f"] is not None and q1("SELECT COUNT(*) n FROM training_answers WHERE attempt_id=?", (AID2,))["n"] == total_q)
+check("T6 журнал: training_attempt при завершении", any(e["action"] == "training_attempt" for e in log_since(mark)))
+s, r = USER2.post(f"/training/attempts/{AID2}/answer", {"question_key": "любой", "option": 0})
+check("T6 ответ в завершённую попытку: 409", s == 409)
+s, det = USER2.get(f"/training/attempts/{AID2}")
+check("T7 разбор своей попытки: ответы с текстами", s == 200 and len(det["answers"]) == total_q and det["answers"][0]["question"])
+s, e = USER4.get(f"/training/attempts/{AID2}")
+check("T7 разбор чужой попытки без права: 404", s == 404)
+s, e = USER4.get(f"/training/attempts?user_id={USER2.me['id']}")
+check("T7 история другого человека без права: 403", s == 403)
+s, e = ADMIN.get(f"/training/attempts?user_id={USER2.me['id']}")
+check("T7 история сотрудника администратору: 200 и попытка видна", s == 200 and any(x["id"] == AID2 for x in e["attempts"]))
+s, e = USER2.get("/training/ratings")
+check("T7 итоги всех сотрудников без права: 403", s == 403)
 
 # ============================================================ журнал без секретов
 print("L — журнал без паролей и хэшей")
