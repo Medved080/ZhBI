@@ -80,7 +80,7 @@ export function mountBlockBulkScreen(el, { screen, structure, objectId, api, rig
     if (dead) return;
     const body = $("#bb-body");
     const d = st.data;
-    if (!d) { body.innerHTML = `<p class="v2-muted">Загрузите файл — здесь появятся расхождения с базой.</p>`; return; }
+    if (!d) { body.innerHTML = `${st.applied ? `<div class="v2-callout" role="status"><strong>Применено.</strong> ${esc(st.applied)}</div>` : ""}<p class="v2-muted">Загрузите файл — здесь появятся расхождения с базой.</p>`; return; }
     const names = rowsById();
     const fieldCounts = new Map(); for (const c of d.changes) fieldCounts.set(c.field, (fieldCounts.get(c.field) || 0) + 1);
     const vis = visible();
