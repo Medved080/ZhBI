@@ -230,6 +230,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function paintAll() { if (dead) return; paintTop(); paintOverlay(); paintPanel(); paintStatus(); paintStrip(); }
 
   // Показатели прораба: статусы показанных элементов и доля смонтированных/принятых (по тому же составу, что на схеме).
+  let stripRetry = null;
   function paintStrip() {
     const strip = $("#ws-strip");
     if (!strip) return;
@@ -237,6 +238,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const counts = new Map(sc.statusCounts || []);
     const order = sc.statusOrder?.length ? sc.statusOrder : Array.from(counts.keys());
     const shown = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+    if (shown !== sc.shown) {                 // снимок собран между этапами загрузки: не выдаём неверный ноль, просим свежий снимок
+      strip.textContent = "Считаем показатели…";
+      if (!stripRetry) { stripRetry = setTimeout(() => { stripRetry = null; send("getFilters"); }, 400); }
+      return;
+    }
     const done = (counts.get("installed") || 0) + (counts.get("accepted") || 0);
     strip.innerHTML = `<span class="ws-kpi"><b>${shown}</b> элементов${sc.excluded ? ` из ${sc.total}` : ""}</span>`
       + `<span class="ws-kpi" title="Доля смонтированных и принятых среди показанных"><b>${shown ? Math.round((done / shown) * 100) : 0}%</b> смонтировано и принято</span>`
@@ -377,7 +383,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     if (canStatus === null) return "";
     if (!canStatus) return `<p class="v2-muted ws-ro">Смена статуса недоступна: нет права изменять статусы на этом объекте.</p>`;
     const w = wrOf(e.id);
-    const opts = (sc?.statusOrder || []).filter((k) => k !== e.current_status);
+    // «Запланирован» не предлагается: возврат на него СНИМАЕТ контракт изделия (правило backend), это делается в текущем интерфейсе
+    const opts = (sc?.statusOrder || []).filter((k) => k !== e.current_status && k !== "planned");
     return `<h4>Изменить статус</h4>
       <form class="ws-form" id="ws-sform" autocomplete="off" novalidate>
         <label class="ws-fld">Новый статус
@@ -386,7 +393,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
           <input type="datetime-local" name="at" value="${esc(w.at)}" ${w.busy ? "disabled" : ""}></label>
         <label class="ws-fld">Комментарий
           <textarea name="comment" rows="2" maxlength="500" ${w.busy ? "disabled" : ""}>${esc(w.comment)}</textarea></label>
-        <p class="v2-muted ws-fnote">Контракт элемента не меняется. Изменение попадёт в историю статусов и не отменяется в этом интерфейсе.</p>
+        <p class="v2-muted ws-fnote">Контракт изделия сохраняется прежним (форма его не передаёт). Возврат в «Запланирован» снимает контракт — он выполняется в текущем интерфейсе. Изменение попадёт в историю статусов и не отменяется здесь.</p>
         <div class="ws-actions"><button type="submit" class="v2-btn v2-primary" ${w.busy || !w.status ? "disabled" : ""}>${w.busy ? "Сохранение…" : "Сохранить статус"}</button></div>
         ${w.error ? `<p class="ws-err" role="alert">${esc(w.error)}</p>` : ""}
         ${w.warn ? `<p class="ws-warnbox" role="status">${esc(w.warn)}</p>` : ""}
@@ -479,16 +486,17 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     for (const i of sel) {
       if (!line || !sameLine(i, line)) why("другой позиции (тип или марка)");
       else if (i.contract_id != null) why("уже привязано к контракту");
-      else if (i.current_status !== "planned") why(`статус не «Запланирован» (${stLabel(i.current_status)})`);
+      else if (i.current_status !== "planned") why(`в статусе «${stLabel(i.current_status)}» — контракт им назначается отдельно, в текущем интерфейсе`);
       else ok.push(i);
     }
-    return { line, ok, bad: Array.from(bad), total: sel.length, over: line ? ok.length > Math.max(line.remaining, 0) : false };
+    return { line, ok, bad: Array.from(bad), badN: sel.length - ok.length, total: sel.length, over: line ? ok.length > Math.max(line.remaining, 0) : false };
   }
   function candPlanned() {
     const line = curLine();
     if (!line || !al.cand || nrm(al.cand.elementType) !== nrm(line.element_type) || nrm(al.cand.mark) !== nrm(line.mark)) return null;
-    const free = al.cand.items.filter(([, st, c]) => st === "planned" && c == null);
-    return { free, other: al.cand.items.length - free.length, all: al.cand.items.length };
+    const noContract = al.cand.items.filter(([, , c]) => c == null);
+    const free = noContract.filter(([, st]) => st === "planned");          // распределяются пачкой: «Запланирован» → «Контрактация» + контракт
+    return { free, nonPlanned: noContract.length - free.length, linked: al.cand.items.length - noContract.length, all: al.cand.items.length };
   }
   const v1Link = () => `/?ui=v1&object_id=${encodeURIComponent(sc?.objectId ?? curObject)}&ws=picker`;
   function allocHtml() {
@@ -522,14 +530,16 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }
     if (plan.line) {
       const rem = Math.max(plan.line.remaining, 0);
-      html += step(4, "Изделия на схеме", `<p class="ws-fnote">Свободных изделий этой позиции на схеме: ${cand ? `<b>${nf(cand.free.length)}</b> (в статусе «Запланирован», без контракта)${cand.other ? `; ещё ${nf(cand.other)} уже привязаны или в другом статусе — здесь не распределяются` : ""}` : "считаем…"}. Доступно по позиции: <b>${nf(rem)}</b> шт.</p>
+      html += step(4, "Изделия на схеме", `<p class="ws-fnote">Изделий этой позиции без контракта: ${cand ? `<b>${nf(cand.free.length + cand.nonPlanned)}</b>. Из них «Запланирован» — <b>${nf(cand.free.length)}</b> (распределяются пачкой: статус станет «Контрактация»)${cand.nonPlanned ? `; в других статусах — ${nf(cand.nonPlanned)} (им контракт назначается отдельной операцией без смены статуса — в карточке изделия в текущем интерфейсе)` : ""}${cand.linked ? `; уже с контрактом — ${nf(cand.linked)}` : ""}` : "считаем…"}. Доступно по позиции: <b>${nf(rem)}</b> шт.</p>
         <div class="ws-actions"><button type="button" class="v2-btn" data-al="pick" ${!cand || !cand.free.length || !rem || al.busy ? "disabled" : ""}>Выбрать ${cand ? nf(Math.min(rem, cand.free.length)) : ""} на схеме</button><button type="button" class="v2-btn" data-al="clear" ${plan.total && !al.busy ? "" : "disabled"}>Снять выделение</button></div>
         <p class="v2-muted ws-fnote">Или выделите изделия на схеме сами: Shift + перетаскивание (рамкой). Выделено: <b>${nf(plan.total)}</b>; подходят: <b>${nf(plan.ok.length)}</b>.</p>
-        ${plan.bad.length ? `<ul class="ws-list ws-al-bad">${plan.bad.map(([t, n]) => `<li><span>Не распределяются: ${esc(t)}</span><b>${nf(n)}</b></li>`).join("")}</ul>` : ""}
+        ${plan.bad.length ? `<ul class="ws-list ws-al-bad">${plan.bad.map(([t, n]) => `<li><span>Не распределяются: ${esc(t)}</span><b>${nf(n)}</b></li>`).join("")}</ul>
+          <p class="ws-err" role="alert">В выделении ${nf(plan.badN)} изд., которые нельзя распределить этой операцией. Пачка не отправляется, пока они выделены: выделение молча не сужается.</p>
+          ${plan.ok.length ? `<div class="ws-actions"><button type="button" class="v2-btn" data-al="keep">Оставить только подходящие (${nf(plan.ok.length)})</button></div>` : ""}` : ""}
         ${plan.over ? `<p class="ws-err" role="alert">Подходящих изделий больше доступного остатка (${nf(plan.ok.length)} > ${nf(rem)}). Уменьшите выбор.</p>` : ""}`);
       html += step(5, "Подтверждение", `<dl class="ws-dl">${row("Поставщик", al.supplier)}${row("Контракт", c.name)}${row("Позиция", `${plan.line.element_type}, ${plan.line.mark || "без марки"}`)}${row("Будет распределено", `${nf(plan.ok.length)} шт.`)}${row("Доступно по позиции", `${nf(rem)} → ${nf(rem - plan.ok.length)} шт.`)}${row("Статус изделий", "«Запланирован» → «Контрактация»")}</dl>
         <p class="v2-muted ws-fnote">Меняются только эти изделия: статус и контракт. Остальные поля, изделия и контракты не затрагиваются.</p>
-        <div class="ws-actions"><button type="button" class="v2-btn v2-primary" data-al="submit" ${plan.ok.length && !plan.over && !al.busy && en ? "" : "disabled"}>${al.busy ? "Сохранение…" : `Распределить ${plan.ok.length ? nf(plan.ok.length) + " шт." : ""}`}</button></div>
+        <div class="ws-actions"><button type="button" class="v2-btn v2-primary" data-al="submit" ${plan.ok.length && !plan.badN && !plan.over && !al.busy && en ? "" : "disabled"}>${al.busy ? "Сохранение…" : `Распределить ${plan.ok.length ? nf(plan.ok.length) + " шт." : ""}`}</button></div>
         ${en ? "" : `<p class="ws-warnbox" role="status">Распределение в новом интерфейсе отключено: ${esc(allocProbe().message || "операция не разрешена")} Выполните его в текущем интерфейсе — <a href="${esc(v1Link())}">открыть с этим объектом</a>.</p>`}`);
     }
     if (al.error) html += `<p class="ws-err" role="alert">${esc(al.error)}</p>`;
@@ -540,7 +550,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   async function allocSubmit() {
     const plan = allocPlan(), c = curContract();
-    if (al.busy || !c || !plan.line || !plan.ok.length || plan.over || !allocEnabled()) return;
+    if (al.busy || !c || !plan.line || !plan.ok.length || plan.badN || plan.over || !allocEnabled()) return;
     const rem = Math.max(plan.line.remaining, 0);
     const msg = [`Распределить изделия на контракт?`, ``, `Поставщик: ${al.supplier}`, `Контракт: ${c.name}`, `Позиция: ${plan.line.element_type}, ${plan.line.mark || "без марки"}`,
       `Изделий: ${plan.ok.length} шт.`, `Доступно по позиции: ${rem} → ${rem - plan.ok.length} шт.`, `Статус изделий: «Запланирован» → «Контрактация»`, ``, `Другие изделия, поля и контракты не меняются.`].join("\n");
@@ -719,6 +729,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       if (a === "supplier") { al.supplier = b.value; al.contractId = null; al.lineKey = null; al.cand = null; al.error = ""; al.done = ""; paintPanel(); }
       else if (a === "reload") { al.loadError = ""; loadAlloc(); }
       else if (a === "clear") send("clearSelection");
+      else if (a === "keep") send("pickerSelectIds", { ids: allocPlan().ok.map((i) => i.id) });
       else if (a === "pick") { const cand = candPlanned(), line = curLine(); if (cand && line) send("pickerSelectIds", { ids: cand.free.slice(0, Math.max(line.remaining, 0)).map(([id]) => id) }); }
       else if (a === "submit") allocSubmit();
     }));
@@ -912,7 +923,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     },
     destroy() {
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
-      clearTimeout(qTimer); stopFrame(); queue.length = 0;
+      clearTimeout(qTimer); clearTimeout(stripRetry); stopFrame(); queue.length = 0;
       const side = shellSide(); if (side) side.hidden = navWasHidden;
     },
   };

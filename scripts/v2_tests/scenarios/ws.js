@@ -265,6 +265,8 @@ export const tests = [
       emitSel(a, 105, { mark: "К-105", current_status: "contracting" });
       await waitFor(() => a.$("#ws-sform"), { what: "форма смены статуса" });
       t.ok(!a.$$("#ws-sform select option").some((o) => o.value === "contracting"), "текущий статус в списке не предлагается");
+      t.ok(!a.$$("#ws-sform select option").some((o) => o.value === "planned"), "«Запланирован» не предлагается: возврат на него снимает контракт");
+      t.has(a.$("#ws-sform").textContent, "Возврат в «Запланирован» снимает контракт", "об этом сказано в форме");
       t.ok(a.$("#ws-sform button[type=submit]").disabled, "без выбора статуса «Сохранить» недоступно");
       // отказ сервера: текст показан, ввод остался, повтора нет
       a.setValue(a.$("#ws-sform select"), "delivered");
@@ -416,8 +418,9 @@ export const tests = [
       a.click(lineBtn);
       await waitFor(() => cmds(a).some((c) => c.cmd === "pickerCandidates"), { what: "запрос кандидатов" });
       t.eq(cmds(a).find((c) => c.cmd === "pickerCandidates").args, { elementType: "QA-Тип", mark: "QA-Z1" }, "кандидаты запрошены по типу и марке позиции");
-      await waitFor(() => /Свободных изделий этой позиции на схеме:\s*5/.test(a.$("#ws-panel-body").textContent), { what: "число свободных" });
-      t.has(a.$("#ws-panel-body").textContent, "ещё 1 уже привязаны или в другом статусе", "изделия в другом статусе названы и не берутся");
+      await waitFor(() => /«Запланирован» — 5 /.test(a.$("#ws-panel-body").textContent), { what: "число кандидатов" });
+      t.has(a.$("#ws-panel-body").textContent, "Изделий этой позиции без контракта: 6", "кандидаты — изделия марки без контракта (любой статус)");
+      t.has(a.$("#ws-panel-body").textContent, "в других статусах — 1", "изделия в других статусах названы и пачкой не распределяются");
       a.click(a.byText("[data-al=pick]", "Выбрать"));
       await waitFor(() => cmds(a).some((c) => c.cmd === "pickerSelectIds"), { what: "выбор на схеме" });
       t.eq(cmds(a).find((c) => c.cmd === "pickerSelectIds").args, { ids: [901, 902, 903] }, "«Выбрать» берёт не больше остатка (3 из 5)");
@@ -433,9 +436,14 @@ export const tests = [
         { id: 901, mark: "QA-Z1", element_type: "QA-Тип", current_status: "planned", contract_id: null },
         { id: 906, mark: "QA-Z1", element_type: "QA-Тип", current_status: "shipped", contract_id: null },
         { id: 101, mark: "QA-К1", element_type: "Колонна", current_status: "delivered", contract_id: 1 }] });
-      await waitFor(() => /статус не «Запланирован»/.test(a.$("#ws-panel-body").textContent), { what: "причины исключения" });
+      await waitFor(() => /в статусе «Отгружен»/.test(a.$("#ws-panel-body").textContent), { what: "причины исключения" });
       t.has(a.$("#ws-panel-body").textContent, "другой позиции", "чужая марка не распределяется");
       t.has(a.$("#ws-panel-body").textContent, "Выделено: 3; подходят: 1", "считаются только подходящие");
+      t.ok(a.$("[data-al=submit]").disabled, "смешанное выделение: пачка не отправляется (выбор молча не сужается)");
+      t.has(a.$("#ws-panel-body .ws-err").textContent, "Пачка не отправляется", "причина названа");
+      a.click(a.byText("[data-al=keep]", "Оставить только подходящие (1)"));
+      await waitFor(() => cmds(a).some((c) => c.cmd === "pickerSelectIds" && c.args.ids.length === 1), { what: "явное сужение выделения" });
+      t.eq(cmds(a).filter((c) => c.cmd === "pickerSelectIds").pop().args, { ids: [901] }, "сужение — только по явной команде человека");
       if (await gateIsReal()) {
         // публикуемая сборка: операция отключена шлюзом — кнопка недоступна, причина и переход в V1 названы
         t.ok(a.$("[data-al=submit]").disabled, "шлюз: «Распределить» недоступно");
