@@ -2213,6 +2213,49 @@ function createServer(opts) {
     return { ...elementOut(el), history: historyOf(el).map((h) => ({ status: h.status, changed_at: h.changed_at, changed_by: h.changed_by, comment: h.comment })), contract_warning: null };
   });
 
+  // Массовая смена статуса с контрактом (app/main.py: PATCH /elements/bulk-status + contract_guard.link_problem): пачка «всё или ничего»,
+  // остаток по позиции считается по элементам с контрактом не в статусе «Запланирован»; места, занятые ранее в этой же пачке, видны.
+  route("PATCH", "/elements/bulk-status", (ctx) => {
+    const b = ctx.body && typeof ctx.body === "object" ? ctx.body : {};
+    if (!ELEMENT_STATUSES.includes(b.status)) throw validation([{ type: "enum", loc: ["body", "status"], msg: "Input should be a valid status", input: b.status }]);
+    if (!Array.isArray(b.items) || !b.items.length) fail(400, "Пустой список элементов");
+    const els = b.items.map((it) => data.elements.find((e) => e.id === it.element_id));
+    const missing = b.items.filter((it, i) => !els[i]).map((it) => it.element_id);
+    if (missing.length) fail(404, `Элементы не найдены: [${missing.join(", ")}]`);
+    for (const e of els) {
+      if (e.object_id != null) assertObjectFeature(ctx.user, e.object_id, "status", "write");
+      else if (!isAdmin(ctx.user)) fail(403, "Элемент не привязан к объекту — операция доступна администратору сервиса");
+    }
+    const snap = els.map((e) => ({ e, st: e.current_status, c: e.contract_id, h: e.history_rows ? e.history_rows.slice() : null }));
+    try {
+      b.items.forEach((it, i) => {
+        const e = els[i];
+        const cid = it.contract_id ?? null;
+        if (cid !== null && b.status !== "planned") {
+          const c = contractById(cid);
+          if (!c) fail(404, "Контракт не найден");
+          const { a } = chainOf(c);
+          if (!a || a.object_id !== e.object_id) fail(400, "Контракт относится к другому объекту — назначить его этому изделию нельзя");
+          const same = (x, y) => (x ?? null) === (y ?? null);
+          const line = c.lines.find((l) => same(l.element_type, e.element_type) && same(l.mark, e.mark));
+          const label = `${e.element_type}, марка «${e.mark ?? "без марки"}»`;
+          if (!line) fail(409, `В спецификации контракта нет позиции под ${label} — привязать изделие к этому контракту нельзя.`);
+          const taken = data.elements.filter((x) => x.id !== e.id && x.contract_id === cid && x.current_status !== "planned" && same(x.element_type, e.element_type) && same(x.mark, e.mark)).length;
+          const damaged = c.incidents.filter((x) => x.element_type === e.element_type).reduce((n, x) => n + (x.quantity || 0), 0);
+          if (taken + damaged + 1 > line.quantity) fail(409, `По позиции ${label} закуплено ${line.quantity}, уже привязано ${taken} — свободного количества в контракте нет.`);
+        }
+        historyOf(e).push({ status: b.status, changed_at: b.changed_at || nowStr(nowFn), changed_by: ctx.user.display_name || "QA", comment: null });
+        e.current_status = b.status;
+        e.contract_id = b.status === "planned" ? null : cid;
+        e.updated_at = nowStr(nowFn);
+      });
+    } catch (err) {
+      snap.forEach(({ e, st, c, h }) => { e.current_status = st; e.contract_id = c; e.history_rows = h || undefined; });
+      throw err;
+    }
+    return { updated: els.map((e) => ({ ...elementOut(e), history: historyOf(e).map((h) => ({ status: h.status, changed_at: h.changed_at, changed_by: h.changed_by, comment: h.comment })), contract_warning: null })) };
+  });
+
   // ---- удаление записей справочников (app/dict_delete.py) ----
   // Виды: project/object (удаляются только пустыми) и цепочка контрактации counterparty → agreement →
   // specification → contract (подчинённые уходят вместе, ссылки на контракт переводятся на замену).

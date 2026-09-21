@@ -12,7 +12,8 @@
 // Уход с рабочего места: слушатель снимается, кадр обнуляется и удаляется — вместе с документом освобождаются WebGL-контексты и таймеры.
 import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
-import { showUnsavedDialog } from "./dialogs.js";
+import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
+import { checkWrite } from "./write-gate.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -23,7 +24,7 @@ const TABS_FOREMAN = TABS.filter(([k]) => k !== "filters");
 const VIEWS_MFR = [["2d", "2D"], ["3d", "3D"]];
 const TABS_MFR = [["props", "Свойства"], ["filters", "Фильтры"], ["view", "Вид"]];
 // Комплектовщик: срезы отбора, показатели, контракты (свой отбор, независимый от фильтров «Модели»), свойства выбранного элемента, вид
-const TABS_PICKER = [["pick", "Отбор"], ["metrics", "Показатели"], ["contracts", "Контракты"], ["props", "Свойства"], ["view", "Вид"]];
+const TABS_PICKER = [["pick", "Отбор"], ["metrics", "Показатели"], ["contracts", "Контракты"], ["alloc", "Распределение"], ["props", "Свойства"], ["view", "Вид"]];
 const FRAME_TIMEOUT_MS = 45000;
 
 const fmtDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]}` : (v ? String(v) : "—"); };
@@ -51,6 +52,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   let notice = "";             // последнее сообщение движка
   let tab = ws === "picker" ? "pick" : "props";
   let pk = null;                // модель отбора комплектовщика (срезы, показатели, контракты)
+  const al = { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, busy: false, error: "", done: "", warn: "" };
   let onlyRemainder = false;    // «только с остатком» — вид списка контрактов, отбор схемы не меняет
   let panelHidden = false;
   let panelW = readNum(ws === "picker" ? "v2.ws.panelW.picker" : "v2.ws.panelW", ws === "picker" ? 430 : 340);
@@ -121,6 +123,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       filters = m.model; paintPanel();
     } else if (m.evt === "picker" && m.model && Array.isArray(m.model.slicers)) {
       pk = m.model; paintPanel();
+    } else if (m.evt === "candidates" && Array.isArray(m.items)) {
+      al.cand = { elementType: m.elementType, mark: m.mark, items: m.items }; paintPanel();
     } else if (m.evt === "search-result" && Array.isArray(m.items)) {
       if (qInput && m.text === qInput.value) paintFound(m);
     } else if (m.evt === "notice") {
@@ -175,9 +179,21 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     ready = false;
   }
 
+  // МФР: без отбора план показывает ВСЕ этажи разом (блоки накладываются друг на друга) — это не стартовый вид. При первом открытии
+  // объекта выбирается первый этаж; «все этажи» остаются явным режимом (сбросом отбора) и подписаны в шапке.
+  const mfrAutoLevel = new Set();
+  function mfrStartView(s) {
+    const m = s.mfr;
+    if (!mfr || !s.loaded || !m?.hasData || !m.levels?.length || mfrAutoLevel.has(s.objectId)) return;
+    mfrAutoLevel.add(s.objectId);
+    if (m.levels.some((l) => l.on)) return;
+    const first = m.levels.find((l) => /^1 этаж/.test(l.label)) || m.levels.find((l) => l.count > 0 && !/^без /.test(l.label));
+    if (first) send("mfrPick", { kind: "level", id: first.id });
+  }
   function onScene(s) {
     const prevSel = selKey(sc);
     sc = s;
+    mfrStartView(s);
     if (frame) frame.style.visibility = (s.loaded || s.loading) && !s.error ? "visible" : "hidden";
     if (selKey(s) !== prevSel) loadDetail(selKey(s));
     paintAll();
@@ -229,8 +245,14 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   function paintTop() {
     const crumb = $("#ws-crumb");
-    const name = sc?.objectName ? `${sc.projectName ? sc.projectName + " · " : ""}${sc.objectName}` : "";
+    let name = sc?.objectName ? `${sc.projectName ? sc.projectName + " · " : ""}${sc.objectName}` : "";
+    if (mfr && sc?.mfr?.hasData) {
+      const on = (arr) => (arr || []).filter((x) => x.on).map((x) => x.label);
+      const lv = on(sc.mfr.levels), sec = on(sc.mfr.sections);
+      name += ` · ${lv.length ? "этаж: " + (lv.length > 3 ? `${lv.length} выбрано` : lv.join(", ")) : "все этажи (блоки разных этажей накладываются)"} · ${sec.length ? "секции: " + sec.join(", ") : "все секции"}`;
+    }
     crumb.textContent = name;
+    crumb.title = name;
     for (const b of el.querySelectorAll("#ws-modes button")) b.setAttribute("aria-pressed", String(sc?.view === b.dataset.view));
   }
 
@@ -266,7 +288,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const keepScroll = body.scrollTop;
     if (!tabs.some(([k]) => k === tab)) tab = "props";
     body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? (mfr ? mfrFiltersHtml() : filtersHtml())
-      : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
+      : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
     body.scrollTop = keepScroll;
     bindPanel(body);
     const left = $("#ws-left-body");
@@ -420,6 +442,138 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }
   }
 
+
+  // ---- комплектовщик: распределение изделий одной марки на контракт (поставщик → контракт → марка → изделия → подтверждение)
+  // Числа контракта — с сервера (`GET /contracts`: план, факт, повреждено, остаток по позициям); запись — одна пачка
+  // `PATCH /elements/bulk-status` (статус «Контрактация» + контракт, всё или ничего; остаток проверяет сервер, страж contract_guard).
+  const nrm = (x) => String(x ?? "").trim().toLowerCase();
+  const lineKey = (l) => `${l.element_type}|${l.mark ?? ""}`;
+  const sameLine = (i, l) => nrm(i.element_type) === nrm(l.element_type) && nrm(i.mark) === nrm(l.mark);
+  const allocProbe = () => checkWrite("PATCH", "/elements/bulk-status", { status: "contracting", items: [{ element_id: 1, contract_id: 1 }] });
+  function allocEnabled() { return !!canStatus && allocProbe().allowed; }
+  function objectContractIds() { return new Set((pk?.contracts || []).flatMap((g) => g.rows.map((r) => r.id))); }
+  async function loadAlloc() {
+    if (al.loading) return;
+    al.loading = true; al.loadError = ""; paintPanel();
+    const obj = curObject;
+    try {
+      const list = await api.get("/contracts");
+      if (dead || obj !== curObject) return;
+      const ids = objectContractIds();
+      al.contracts = list.filter((c) => ids.has(c.id) && !c.is_archived);
+      al.loaded = true;
+    } catch (e) {
+      if (dead || obj !== curObject) return;
+      al.loadError = e instanceof ApiError ? e.detail : "Не удалось загрузить контракты";
+    } finally { al.loading = false; if (!dead) paintPanel(); }
+  }
+  const suppliers = () => Array.from(new Set(al.contracts.map((c) => c.counterparty_short_name))).sort((a, b) => a.localeCompare(b, "ru", { numeric: true }));
+  const cLabel = (c) => [c.agreement_number, c.specification_number, c.theme].filter(Boolean).join(" · ") || c.name;
+  const curContract = () => al.contracts.find((c) => c.id === al.contractId) || null;
+  const curLine = () => curContract()?.lines.find((l) => lineKey(l) === al.lineKey) || null;
+  function allocPlan() {
+    const line = curLine();
+    const sel = sc?.multiItems || [];
+    const ok = [], bad = new Map();
+    const why = (t) => bad.set(t, (bad.get(t) || 0) + 1);
+    for (const i of sel) {
+      if (!line || !sameLine(i, line)) why("другой позиции (тип или марка)");
+      else if (i.contract_id != null) why("уже привязано к контракту");
+      else if (i.current_status !== "planned") why(`статус не «Запланирован» (${stLabel(i.current_status)})`);
+      else ok.push(i);
+    }
+    return { line, ok, bad: Array.from(bad), total: sel.length, over: line ? ok.length > Math.max(line.remaining, 0) : false };
+  }
+  function candPlanned() {
+    const line = curLine();
+    if (!line || !al.cand || nrm(al.cand.elementType) !== nrm(line.element_type) || nrm(al.cand.mark) !== nrm(line.mark)) return null;
+    const free = al.cand.items.filter(([, st, c]) => st === "planned" && c == null);
+    return { free, other: al.cand.items.length - free.length, all: al.cand.items.length };
+  }
+  const v1Link = () => `/?ui=v1&object_id=${encodeURIComponent(sc?.objectId ?? curObject)}&ws=picker`;
+  function allocHtml() {
+    if (!pk) return pkLoading();
+    if (canStatus === null) return `<p class="v2-muted ws-pad">Проверка прав…</p>`;
+    if (!canStatus) return `<p class="v2-muted ws-pad">Распределение недоступно: нет права изменять статусы изделий на этом объекте.</p>`;
+    if (!al.loaded) {
+      if (!al.loading && !al.loadError) queueMicrotask(loadAlloc);
+      return al.loadError ? `<div class="ws-pad"><p class="ws-err" role="alert">${esc(al.loadError)}</p><button type="button" class="v2-btn" data-al="reload">Повторить</button></div>` : `<p class="v2-muted ws-pad">Загрузка контрактов…</p>`;
+    }
+    const sup = suppliers();
+    if (!sup.length) return `<p class="v2-muted ws-pad">У объекта нет действующих контрактов, на которые можно распределять.</p>`;
+    const c = curContract(), plan = allocPlan(), cand = candPlanned();
+    const en = allocEnabled();
+    const step = (n, t, body) => `<section class="ws-al-step"><h4><span class="ws-al-n">${n}</span> ${t}</h4>${body}</section>`;
+    const cols = `<div class="ws-pkcols ws-pkcols-c"><span></span><em>всего, шт.</em><em>распред.</em><em>доступно</em></div>`;
+    const contractsOf = al.contracts.filter((x) => x.counterparty_short_name === al.supplier);
+    let html = `<div class="ws-pad">`;
+    html += step(1, "Поставщик", `<select data-al="supplier" aria-label="Поставщик" ${al.busy ? "disabled" : ""}><option value="">— выберите —</option>${sup.map((n) => `<option value="${esc(n)}" ${al.supplier === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`);
+    if (al.supplier) {
+      html += step(2, "Договор · спецификация · контракт", cols + contractsOf.map((x) => {
+        const tot = x.lines.reduce((a, l) => a + (l.quantity || 0), 0), fact = x.lines.reduce((a, l) => a + (l.fact || 0), 0), rem = x.lines.reduce((a, l) => a + Math.max(l.remaining || 0, 0), 0);
+        return `<button type="button" class="ws-crow ws-cnest${x.id === al.contractId ? " on" : ""}" data-al-c="${x.id}" aria-pressed="${x.id === al.contractId}" title="${esc(x.name)}" ${al.busy ? "disabled" : ""}><span>${esc(cLabel(x))}</span><em title="Всего по контракту, шт.">${nf(tot)}</em><em title="Уже распределено, шт.">${nf(fact)}</em><em title="Доступно к распределению, шт.">${nf(rem)}</em></button>`;
+      }).join(""));
+    }
+    if (c) {
+      html += step(3, "Марка (позиция контракта)", c.lines.length ? cols + c.lines.map((l) => {
+        const k = lineKey(l), on = k === al.lineKey, rem = Math.max(l.remaining || 0, 0);
+        return `<button type="button" class="ws-crow ws-cnest${on ? " on" : ""}${rem ? "" : " ws-dim"}" data-al-l="${esc(k)}" aria-pressed="${on}" ${al.busy ? "disabled" : ""}><span>${esc(l.element_type)} · ${esc(l.mark || "без марки")}</span><em>${nf(l.quantity)}</em><em>${nf(l.fact)}${l.damaged ? ` (+${nf(l.damaged)} брак)` : ""}</em><em class="${l.exceeded ? "ws-neg" : rem ? "ws-pos" : ""}">${nf(rem)}</em></button>`;
+      }).join("") : `<p class="v2-muted">В контракте нет позиций.</p>`);
+    }
+    if (plan.line) {
+      const rem = Math.max(plan.line.remaining, 0);
+      html += step(4, "Изделия на схеме", `<p class="ws-fnote">Свободных изделий этой позиции на схеме: ${cand ? `<b>${nf(cand.free.length)}</b> (в статусе «Запланирован», без контракта)${cand.other ? `; ещё ${nf(cand.other)} уже привязаны или в другом статусе — здесь не распределяются` : ""}` : "считаем…"}. Доступно по позиции: <b>${nf(rem)}</b> шт.</p>
+        <div class="ws-actions"><button type="button" class="v2-btn" data-al="pick" ${!cand || !cand.free.length || !rem || al.busy ? "disabled" : ""}>Выбрать ${cand ? nf(Math.min(rem, cand.free.length)) : ""} на схеме</button><button type="button" class="v2-btn" data-al="clear" ${plan.total && !al.busy ? "" : "disabled"}>Снять выделение</button></div>
+        <p class="v2-muted ws-fnote">Или выделите изделия на схеме сами: Shift + перетаскивание (рамкой). Выделено: <b>${nf(plan.total)}</b>; подходят: <b>${nf(plan.ok.length)}</b>.</p>
+        ${plan.bad.length ? `<ul class="ws-list ws-al-bad">${plan.bad.map(([t, n]) => `<li><span>Не распределяются: ${esc(t)}</span><b>${nf(n)}</b></li>`).join("")}</ul>` : ""}
+        ${plan.over ? `<p class="ws-err" role="alert">Подходящих изделий больше доступного остатка (${nf(plan.ok.length)} > ${nf(rem)}). Уменьшите выбор.</p>` : ""}`);
+      html += step(5, "Подтверждение", `<dl class="ws-dl">${row("Поставщик", al.supplier)}${row("Контракт", c.name)}${row("Позиция", `${plan.line.element_type}, ${plan.line.mark || "без марки"}`)}${row("Будет распределено", `${nf(plan.ok.length)} шт.`)}${row("Доступно по позиции", `${nf(rem)} → ${nf(rem - plan.ok.length)} шт.`)}${row("Статус изделий", "«Запланирован» → «Контрактация»")}</dl>
+        <p class="v2-muted ws-fnote">Меняются только эти изделия: статус и контракт. Остальные поля, изделия и контракты не затрагиваются.</p>
+        <div class="ws-actions"><button type="button" class="v2-btn v2-primary" data-al="submit" ${plan.ok.length && !plan.over && !al.busy && en ? "" : "disabled"}>${al.busy ? "Сохранение…" : `Распределить ${plan.ok.length ? nf(plan.ok.length) + " шт." : ""}`}</button></div>
+        ${en ? "" : `<p class="ws-warnbox" role="status">Распределение в новом интерфейсе отключено: ${esc(allocProbe().message || "операция не разрешена")} Выполните его в текущем интерфейсе — <a href="${esc(v1Link())}">открыть с этим объектом</a>.</p>`}`);
+    }
+    if (al.error) html += `<p class="ws-err" role="alert">${esc(al.error)}</p>`;
+    if (al.warn) html += `<p class="ws-warnbox" role="status">${esc(al.warn)}</p>`;
+    if (al.done) html += `<p class="ws-ok" role="status">${esc(al.done)}</p>`;
+    return html + `</div>`;
+  }
+
+  async function allocSubmit() {
+    const plan = allocPlan(), c = curContract();
+    if (al.busy || !c || !plan.line || !plan.ok.length || plan.over || !allocEnabled()) return;
+    const rem = Math.max(plan.line.remaining, 0);
+    const msg = [`Распределить изделия на контракт?`, ``, `Поставщик: ${al.supplier}`, `Контракт: ${c.name}`, `Позиция: ${plan.line.element_type}, ${plan.line.mark || "без марки"}`,
+      `Изделий: ${plan.ok.length} шт.`, `Доступно по позиции: ${rem} → ${rem - plan.ok.length} шт.`, `Статус изделий: «Запланирован» → «Контрактация»`, ``, `Другие изделия, поля и контракты не меняются.`].join("\n");
+    if (!(await showConfirmDialog(msg, { confirmLabel: "Распределить", multiline: true }))) return;
+    if (dead || al.busy) return;
+    const ids = plan.ok.map((i) => i.id);
+    const body = { status: "contracting", items: ids.map((id) => ({ element_id: id, contract_id: c.id })) };
+    al.busy = true; al.error = ""; al.done = ""; al.warn = ""; paintPanel();
+    try {
+      const res = await api.patch("/elements/bulk-status", body);
+      const upd = Array.isArray(res?.updated) ? res.updated : [];
+      const okN = upd.filter((u) => u.current_status === "contracting" && u.contract_id === c.id).length;
+      al.done = `Распределено: ${okN} шт. на «${c.name}» (по ответу сервера). Позиция ${plan.line.element_type}, ${plan.line.mark || "без марки"}.`;
+      if (okN !== ids.length) al.warn = `Сервер подтвердил ${okN} из ${ids.length} изделий — проверьте историю.`;
+      send("applyElements", { items: upd.map((u) => ({ id: u.id, current_status: u.current_status, contract_id: u.contract_id ?? null, counterparty_code: u.counterparty_code ?? null,
+        planned_delivery_date: u.planned_delivery_date ?? null, actual_delivery_date: u.actual_delivery_date ?? null, project_delivery_date: u.project_delivery_date ?? null, project_smr_start_date: u.project_smr_start_date ?? null })) });
+      send("clearSelection");
+      al.loaded = false; al.cand = null; send("pickerCandidates", { elementType: plan.line.element_type, mark: plan.line.mark ?? null });
+      loadAlloc();
+    } catch (err) {
+      if (err instanceof ApiError && !err.blockedByPolicy && (err.status === 0 || err.status >= 500)) {
+        // исход неизвестен: повторно НЕ отправляем; сверяемся с сервером по первому изделию пачки (пачка применяется целиком или не применяется)
+        try {
+          const d = await api.get(`/elements/${ids[0]}`);
+          if (d.current_status === "contracting" && d.contract_id === c.id) {
+            al.done = "Ответ не получен, но сервер подтвердил: распределение применено. Схема и остатки перечитаны с сервера.";
+            send("reload"); send("clearSelection"); al.loaded = false; loadAlloc();
+          } else al.error = "Ответ не получен, изменение не подтверждено: изделие на сервере без изменений. Выбор сохранён — проверьте связь и подтвердите снова.";
+        } catch (e2) { al.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта."; }
+      } else al.error = err instanceof ApiError ? err.detail : "Не удалось распределить";   // выбор и введённое остаются
+    } finally { al.busy = false; if (!dead) paintPanel(); }
+  }
+
   // ---- МФР: свойства выбранного блока/элемента модели, отбор по этажам, секциям и категориям
   const SKIP_CARD = new Set(["параметры", "id", "доли по секциям", "геометрия", "статусы_работ"]);
   const cardRows = (d) => Object.entries(d).filter(([k, v]) => !SKIP_CARD.has(k) && v !== null && v !== "" && v !== false && typeof v !== "object")
@@ -516,7 +670,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function contractsHtml() {
     if (!pk) return pkLoading();
     const groups = pk.contracts.map((g) => ({ ...g, rows: onlyRemainder ? g.rows.filter((r) => r.on || r.remainder !== 0) : g.rows })).filter((g) => g.rows.length);
-    const head = `<div class="ws-pad ws-pk-tools"><button type="button" class="v2-btn" data-pkhl="1" aria-pressed="${pk.highlightUnlinked}">${pk.highlightUnlinked ? "Подсветка несвязанных включена" : "Подсветить несвязанные"}</button>
+    const swap = `<p class="v2-muted ws-fnote ws-pad">Смена планируемого поставщика по марке («Замена поставщика» и «Обмен привязками») выполняется документом в текущем интерфейсе: <a href="/?ui=v1&object_id=${encodeURIComponent(sc?.objectId ?? curObject)}&ws=picker&open=menu&item=menu-supplier-change">открыть с этим объектом</a>.</p>`;
+    const head = swap + `<div class="ws-pad ws-pk-tools"><button type="button" class="v2-btn" data-pkhl="1" aria-pressed="${pk.highlightUnlinked}">${pk.highlightUnlinked ? "Подсветка несвязанных включена" : "Подсветить несвязанные"}</button>
       <button type="button" class="v2-btn" data-pkrem="1" aria-pressed="${onlyRemainder}">${onlyRemainder ? "Только с остатком" : "Показать только с остатком"}</button>
       ${pk.contractSelected ? `<button type="button" class="v2-btn" data-pk-clear="contract">Сбросить контракты (${pk.contractSelected})</button>` : ""}</div>`;
     if (!groups.length && !pk.unlinked) return head + `<p class="v2-muted ws-pad">${pk.contracts.length ? "Нет контрактов с остатком." : "У объекта нет контрактов."}</p>`;
@@ -559,6 +714,20 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     body.querySelectorAll("[data-pkhl]").forEach((b) => b.addEventListener("click", () => send("pickerHighlight", { on: b.getAttribute("aria-pressed") !== "true" })));
     body.querySelectorAll("[data-pkrem]").forEach((b) => b.addEventListener("click", () => { onlyRemainder = !onlyRemainder; paintPanel(); }));
     bindStatusForm(body);
+    body.querySelectorAll("[data-al]").forEach((b) => b.addEventListener(b.tagName === "SELECT" ? "change" : "click", () => {
+      const a = b.dataset.al;
+      if (a === "supplier") { al.supplier = b.value; al.contractId = null; al.lineKey = null; al.cand = null; al.error = ""; al.done = ""; paintPanel(); }
+      else if (a === "reload") { al.loadError = ""; loadAlloc(); }
+      else if (a === "clear") send("clearSelection");
+      else if (a === "pick") { const cand = candPlanned(), line = curLine(); if (cand && line) send("pickerSelectIds", { ids: cand.free.slice(0, Math.max(line.remaining, 0)).map(([id]) => id) }); }
+      else if (a === "submit") allocSubmit();
+    }));
+    body.querySelectorAll("[data-al-c]").forEach((b) => b.addEventListener("click", () => { al.contractId = Number(b.dataset.alC); al.lineKey = null; al.cand = null; al.error = ""; al.done = ""; paintPanel(); }));
+    body.querySelectorAll("[data-al-l]").forEach((b) => b.addEventListener("click", () => {
+      al.lineKey = b.dataset.alL; al.error = ""; al.done = ""; al.cand = null;
+      const l = curLine(); if (l) send("pickerCandidates", { elementType: l.element_type, mark: l.mark ?? null });
+      paintPanel();
+    }));
     body.querySelectorAll("[data-mpick]").forEach((b) => b.addEventListener("click", () => send("mfrPick", { kind: b.dataset.mpick, id: b.dataset.id })));
     body.querySelectorAll("[data-mcat]").forEach((c) => c.addEventListener("change", () => send("mfrCategory", { category: c.dataset.mcat, on: c.checked })));
     body.querySelectorAll("[data-mlayer]").forEach((c) => c.addEventListener("change", () => send("mfrLayer", { layer: c.dataset.mlayer, on: c.checked })));
@@ -612,6 +781,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function capabilities() {
     const c = [];
     if (!mfr && canStatus) c.push("смена статуса");
+    if (picker && allocEnabled()) c.push("распределение по контрактам");
     return c;
   }
   function capsChip() {
@@ -736,7 +906,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; wrs.clear(); canStatus = null; loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      curObject = id; wrs.clear(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },

@@ -862,6 +862,13 @@ button.ws-tile:hover { background: var(--surface); }
 .ws-err { margin: 0; padding: 6px 8px; border-left: 3px solid var(--bad); background: var(--surface); color: var(--bad); font-size: 13px; }
 .ws-ok { margin: 0; padding: 6px 8px; border-left: 3px solid var(--good); background: var(--surface); color: var(--good); font-size: 13px; }
 .ws-warnbox { margin: 0; padding: 6px 8px; border-left: 3px solid var(--accent); background: var(--surface); font-size: 13px; }
-.v2-build { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v2-build { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .v2-build[hidden] { display: none; }
 .ws-cap-chip { border: 1px solid var(--good); color: var(--good); border-radius: 999px; padding: 0 8px; }
+
+/* распределение изделий на контракт */
+.ws-al-step { margin-bottom: 10px; }
+.ws-al-step h4 { display: flex; align-items: center; gap: 6px; }
+.ws-al-n { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 11px; letter-spacing: 0; }
+.ws-al-step select { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.ws-al-bad li { color: var(--muted); }

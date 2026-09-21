@@ -10,7 +10,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on}; событие picker{model}
+//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
 (() => {
   "use strict";
@@ -109,6 +109,11 @@
       shown: state.elements.length ? shownCount() : 0,
       selectedId: state.selectedId,
       multiIds: Array.from(state.multiSelectedIds),
+      // состав выделения рамкой (для проверки перед распределением): только скаляры, не больше 3000 элементов
+      multiItems: state.multiSelectedIds.size <= 3000 ? Array.from(state.multiSelectedIds).map((id) => {
+        const e = state.byId.get(id);
+        return e ? { id, mark: e.mark ?? null, element_type: e.element_type, current_status: e.current_status, contract_id: e.contract_id ?? null } : null;
+      }).filter(Boolean) : null,
       excluded: excludedCount(),
     };
   }
@@ -624,6 +629,42 @@
       if (typeof a.on !== "boolean") throw new Error("on");
       state.picker.highlightUnlinked = a.on;
       onPickerChange();
+    },
+    // Кандидаты на распределение: изделия ОДНОЙ позиции (тип + марка) объекта — их id и текущий статус/контракт (всё остальное не отдаётся)
+    pickerCandidates(a) {
+      if (typeof a.elementType !== "string" || a.elementType.length > 200 || !(a.mark === null || (typeof a.mark === "string" && a.mark.length <= 200))) throw new Error("параметры");
+      const key = markKey(a.mark), tk = typeKey(a.elementType);
+      const items = [];
+      for (const e of state.elements) {
+        if (typeKey(e.element_type) !== tk || markKey(e.mark) !== key) continue;
+        items.push([e.id, e.current_status, e.contract_id ?? null]);
+        if (items.length >= 5000) break;
+      }
+      post({ evt: "candidates", elementType: a.elementType, mark: a.mark, items });
+    },
+    pickerSelectIds(a) {
+      if (!Array.isArray(a.ids) || a.ids.length > 3000 || !a.ids.every(isInt)) throw new Error("ids");
+      setMultiSelection(new Set(a.ids.filter((id) => state.byId.has(id))));
+      scheduleState();
+    },
+    // Применить к схеме то, что подтвердил сервер (ответ PATCH): только известные скалярные поля, только существующие на схеме изделия
+    applyElements(a) {
+      if (!Array.isArray(a.items) || a.items.length > 3000) throw new Error("items");
+      let changed = 0;
+      for (const it of a.items) {
+        if (!it || !isInt(it.id)) throw new Error("item");
+        const fresh = { id: it.id };
+        for (const f of DELTA_FIELDS) {
+          if (!(f in it)) continue;
+          const v = it[f];
+          if (!(v === null || typeof v === "string" || (typeof v === "number" && Number.isFinite(v)))) throw new Error("поле " + f);
+          fresh[f] = v;
+        }
+        if (applyElementDelta(fresh)) changed++;
+      }
+      if (changed) { clearContractPositionsCache(); renderLegend(); applyPlacementFilters(); }
+      scheduleState(); sendFilters(); sendPicker();
+      post({ evt: "refreshed", changed });
     },
     resetFilters() { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); onPickerChange(); },
     getFilters() { sendPicker(); scheduleState(); },

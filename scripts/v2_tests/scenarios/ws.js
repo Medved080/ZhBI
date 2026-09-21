@@ -2,7 +2,7 @@
 // Стенд — фейковый бэкенд БЕЗ геометрии, поэтому вместо движка V1 в кадр подставляется страница-заглушка, которая говорит
 // по тому же протоколу (ready / state / filters, журнал команд в window.__cmds). Настоящий движок и настоящая геометрия
 // проверяются живой проверкой на настоящем backend (Docs/v2-workspaces.md, «Проверка»); эти сценарии — регрессия оболочки.
-import { openApp, waitFor } from "/tests/helpers.js";
+import { openApp, waitFor, gateIsReal } from "/tests/helpers.js";
 
 const NAV = ".v2-shellnav [data-section]";
 const STUB_HTML = `<!doctype html><html><head><meta charset="utf-8"></head><body><!-- /static/app.js --><script>
@@ -27,8 +27,10 @@ const STUB_HTML = `<!doctype html><html><head><meta charset="utf-8"></head><body
     window.__cmds.push({ cmd: m.cmd, args: m.args });
     if (m.cmd === "getFilters") send({ evt: "filters", model: F });
     else if (m.cmd === "setView") window.__emit({ view: m.args.mode });
-    else if (m.cmd === "clearSelection") window.__emit({ selected: null, selectedId: null });
+    else if (m.cmd === "clearSelection") window.__emit({ selected: null, selectedId: null, multiItems: [] });
     else if (m.cmd === "setObject") window.__emit({ objectId: m.args.objectId });
+    else if (m.cmd === "pickerCandidates") send({ evt: "candidates", elementType: m.args.elementType, mark: m.args.mark, items: window.__cands || [] });
+    else if (m.cmd === "pickerSelectIds") window.__emit({ multiItems: m.args.ids.map(function (id) { return { id: id, mark: "QA-Z1", element_type: "QA-Тип", current_status: "planned", contract_id: null }; }) });
   });
   send({ evt: "ready" }); send({ evt: "state", state: S });
 })();
@@ -354,7 +356,7 @@ export const tests = [
       const b = await openApp({ home: true });
       stub(b);
       await openWs(b, "ws-picker");
-      t.eq(b.$$(".ws-tabs button").map((x) => x.textContent), ["Отбор", "Показатели", "Контракты", "Свойства", "Вид"], "комплектовщик: вкладки");
+      t.eq(b.$$(".ws-tabs button").map((x) => x.textContent), ["Отбор", "Показатели", "Контракты", "Распределение", "Свойства", "Вид"], "комплектовщик: вкладки");
       frameWin(b).__send({ proto: "zhbi-scene/1", evt: "picker", model: { slicers: [{ key: "elementType", title: "Тип элемента", selected: 0, contractedShown: true,
         rows: [{ v: "Колонна", label: "Колонна", count: 5, contracted: 7, on: false, available: true }, { v: "Балка", label: "Балка", count: 3, contracted: 2, on: false, available: true }] }],
         metrics: [{ key: "model", title: "В модели", value: 8, base: 8, clickable: false, on: false }, { key: "delivered", title: "Доставлено", value: 3, base: 8, share: 38, clickable: true, on: false, status: "delivered" }],
@@ -377,6 +379,143 @@ export const tests = [
       await waitFor(() => cmds(b).some((c) => c.cmd === "pickerToggle" && c.args.key === "contract"), { what: "выбор контракта" });
       t.eq(cmds(b).filter((c) => c.cmd === "pickerToggle").pop().args, { key: "contract", value: 7 }, "выбор контракта по id");
       b.close();
+    },
+  },
+  {
+    id: "WS-11", title: "Комплектовщик: поставщик → контракт → марка → изделия на схеме → подтверждение → запись пачкой → остатки и схема из ответа сервера",
+    async run(t) {
+      const a = await openApp({ home: true });
+      // данные: контракт 1 объекта 1, позиция «Колонна · QA-Z1» на 3 шт., пять свободных запланированных изделий этой марки + одно в другом статусе
+      const d = a.ctl.data;
+      const c1 = d.contracts.find((c) => c.id === 1);
+      c1.lines.push({ id: 9901, element_type: "QA-Тип", mark: "QA-Z1", quantity: 3 });
+      for (const [id, st] of [[901, "planned"], [902, "planned"], [903, "planned"], [904, "planned"], [905, "planned"], [906, "shipped"]]) {
+        d.elements.push({ id, object_id: 1, contract_id: null, element_type: "QA-Тип", mark: "QA-Z1", current_status: st, project_delivery_date: null, project_smr_start_date: null, planned_delivery_date: null, actual_delivery_date: null, updated_at: "2026-09-12 09:00:00" });
+      }
+      const before = JSON.stringify(d.elements.filter((e) => e.id < 900 || e.id === 906));
+      const list = await (await a.win.fetch("/contracts")).json();
+      const cont = list.find((c) => c.id === 1);
+      stub(a);
+      await openWs(a, "ws-picker");
+      const items = [901, 902, 903, 904, 905, 906].map((id) => [id, id === 906 ? "shipped" : "planned", null]);
+      frameWin(a).__cands = items;
+      frameWin(a).__send({ proto: "zhbi-scene/1", evt: "picker", model: { slicers: [], metrics: [], contracts: [{ name: cont.counterparty_short_name, total: 0, linked: 0, inSlice: true, over: false,
+        rows: [{ id: 1, label: "Д · С", name: cont.name, total: 0, linked: 0, remainder: 0, inSlice: true, on: false, over: false }] }], unlinked: 0, unlinkedOn: false, contractSelected: 0, selectionActive: false, base: 8, highlightUnlinked: false, noneValue: "__none__" } });
+      await waitFor(() => a.byText(".ws-tabs button", "Распределение"), { what: "вкладка «Распределение»" });
+      a.click(a.byText(".ws-tabs button", "Распределение"));
+      await waitFor(() => a.$("select[data-al=supplier]"), { what: "шаг 1: поставщик" });
+      t.eq(a.$$("select[data-al=supplier] option").map((o) => o.textContent).slice(1), [cont.counterparty_short_name], "в списке поставщика — поставщики контрактов объекта");
+      a.setValue(a.$("select[data-al=supplier]"), cont.counterparty_short_name);
+      await waitFor(() => a.$("[data-al-c]"), { what: "шаг 2: контракты" });
+      t.has(a.$("#ws-panel-body").textContent, "всего, шт.", "у чисел подписи и единицы");
+      a.click(a.$("[data-al-c=\"1\"]"));
+      await waitFor(() => a.byText("[data-al-l]", "QA-Z1"), { what: "шаг 3: марки" });
+      const lineBtn = a.byText("[data-al-l]", "QA-Z1");
+      t.eq(lineBtn.querySelectorAll("em").length, 3, "у позиции три числа: всего, распределено, доступно");
+      t.eq(lineBtn.querySelectorAll("em")[2].textContent.trim(), "3", "доступно = 3 (с сервера)");
+      a.click(lineBtn);
+      await waitFor(() => cmds(a).some((c) => c.cmd === "pickerCandidates"), { what: "запрос кандидатов" });
+      t.eq(cmds(a).find((c) => c.cmd === "pickerCandidates").args, { elementType: "QA-Тип", mark: "QA-Z1" }, "кандидаты запрошены по типу и марке позиции");
+      await waitFor(() => /Свободных изделий этой позиции на схеме:\s*5/.test(a.$("#ws-panel-body").textContent), { what: "число свободных" });
+      t.has(a.$("#ws-panel-body").textContent, "ещё 1 уже привязаны или в другом статусе", "изделия в другом статусе названы и не берутся");
+      a.click(a.byText("[data-al=pick]", "Выбрать"));
+      await waitFor(() => cmds(a).some((c) => c.cmd === "pickerSelectIds"), { what: "выбор на схеме" });
+      t.eq(cmds(a).find((c) => c.cmd === "pickerSelectIds").args, { ids: [901, 902, 903] }, "«Выбрать» берёт не больше остатка (3 из 5)");
+      await waitFor(() => /Будет распределено/.test(a.$("#ws-panel-body").textContent) && /3 шт\./.test(a.$("[data-al=submit]")?.textContent || ""), { what: "итог перед подтверждением" });
+      t.has(a.$("#ws-panel-body").textContent, "3 → 0 шт.", "показано: было доступно → станет");
+      t.has(a.$("#ws-panel-body").textContent, "«Запланирован» → «Контрактация»", "показан переход статуса");
+      // сверх остатка: интерфейс не даёт отправить
+      frameWin(a).__emit({ multiItems: [901, 902, 903, 904].map((id) => ({ id, mark: "QA-Z1", element_type: "QA-Тип", current_status: "planned", contract_id: null })) });
+      await waitFor(() => /больше доступного остатка/.test(a.$("#ws-panel-body").textContent), { what: "предупреждение о превышении" });
+      t.ok(a.$("[data-al=submit]").disabled, "сверх остатка кнопка «Распределить» недоступна");
+      // смешанное выделение: причины исключения
+      frameWin(a).__emit({ multiItems: [
+        { id: 901, mark: "QA-Z1", element_type: "QA-Тип", current_status: "planned", contract_id: null },
+        { id: 906, mark: "QA-Z1", element_type: "QA-Тип", current_status: "shipped", contract_id: null },
+        { id: 101, mark: "QA-К1", element_type: "Колонна", current_status: "delivered", contract_id: 1 }] });
+      await waitFor(() => /статус не «Запланирован»/.test(a.$("#ws-panel-body").textContent), { what: "причины исключения" });
+      t.has(a.$("#ws-panel-body").textContent, "другой позиции", "чужая марка не распределяется");
+      t.has(a.$("#ws-panel-body").textContent, "Выделено: 3; подходят: 1", "считаются только подходящие");
+      if (await gateIsReal()) {
+        // публикуемая сборка: операция отключена шлюзом — кнопка недоступна, причина и переход в V1 названы
+        t.ok(a.$("[data-al=submit]").disabled, "шлюз: «Распределить» недоступно");
+        t.has(a.$("#ws-panel-body .ws-warnbox").textContent, "отключено", "причина названа");
+        t.has(a.$("#ws-panel-body .ws-warnbox a").getAttribute("href"), "ui=v1&object_id=1&ws=picker", "ссылка в V1 несёт объект и рабочее место");
+        t.eq(a.ctl.log.filter((e) => e.method === "PATCH").length, 0, "ничего не отправлено");
+        a.close();
+        return;
+      }
+      // ---- запись (стенд с разрешающим шлюзом): выбор → подтверждение → пачка
+      frameWin(a).__emit({ multiItems: [901, 902, 903].map((id) => ({ id, mark: "QA-Z1", element_type: "QA-Тип", current_status: "planned", contract_id: null })) });
+      await waitFor(() => /подходят: 3/.test(a.$("#ws-panel-body").textContent) && !a.$("[data-al=submit]").disabled, { what: "кнопка распределения" });
+      // отказ сервера (остаток занят другим): текст сервера, выбор остаётся, без автоповтора
+      a.ctl.failNext("PATCH /elements/bulk-status", { status: 409, detail: "По позиции Колонна, марка «QA-Z1» закуплено 3, уже привязано 3 — свободного количества в контракте нет." });
+      a.click(a.$("[data-al=submit]"));
+      let dlg = await waitFor(() => a.dialog(), { what: "подтверждение" });
+      t.has(dlg.textContent, "QA-Z1", "в подтверждении — марка"); t.has(dlg.textContent, "Изделий: 3 шт.", "в подтверждении — количество");
+      t.has(dlg.textContent, cont.counterparty_short_name, "в подтверждении — поставщик"); t.has(dlg.textContent, cont.name, "в подтверждении — контракт");
+      await a.answerDialog("Распределить");
+      await waitFor(() => /свободного количества в контракте нет/.test(a.$("#ws-panel-body .ws-err")?.textContent || ""), { what: "отказ сервера" });
+      t.eq(a.ctl.log.filter((e) => e.method === "PATCH").length, 1, "после отказа автоповтора нет");
+      t.eq(a.$$("[data-al-l].on").length, 1, "выбранная позиция осталась");
+      t.ok(!a.$("[data-al=submit]").disabled, "после отказа можно подтвердить снова (выбор сохранён)");
+      // сетевой сбой: исход неизвестен, перечитываем изделие, повтора нет
+      a.ctl.failNext("PATCH /elements/bulk-status", { network: true });
+      a.click(a.$("[data-al=submit]"));
+      await a.answerDialog("Распределить");
+      await waitFor(() => /не подтверждено/.test(a.$("#ws-panel-body .ws-err")?.textContent || ""), { what: "неизвестный исход" });
+      t.eq(a.ctl.log.filter((e) => e.method === "PATCH").length, 2, "после сетевого сбоя запрос не повторён");
+      t.ok(a.ctl.log.some((e) => e.method === "GET" && /\/elements\/901$/.test(e.path)), "исход проверен чтением изделия");
+      // успех + двойной клик: одна запись
+      const hold = a.ctl.hold("PATCH /elements/bulk-status");
+      a.click(a.$("[data-al=submit]"));
+      await a.answerDialog("Распределить");
+      await hold.waitForRequest(1, 3000);
+      t.ok(a.$("[data-al=submit]").disabled && a.$("select[data-al=supplier]").disabled, "на время записи всё заблокировано");
+      a.click(a.$("[data-al=submit]"));
+      hold.release();
+      await waitFor(() => /Распределено: 3 шт\./.test(a.$("#ws-panel-body .ws-ok")?.textContent || ""), { what: "подтверждение результата" });
+      const patches = a.ctl.log.filter((e) => e.method === "PATCH" && e.path === "/elements/bulk-status");
+      t.eq(patches.length, 3, "двойной клик не размножил запрос");
+      t.eq(patches[2].body, { status: "contracting", items: [901, 902, 903].map((id) => ({ element_id: id, contract_id: 1 })) }, "тело: статус «Контрактация» и по контракту на каждое изделие");
+      // результат у «сервера»: три изделия распределены, остальные не тронуты
+      const now = a.ctl.data.elements;
+      t.eq(now.filter((e) => [901, 902, 903].includes(e.id)).map((e) => [e.current_status, e.contract_id]), [["contracting", 1], ["contracting", 1], ["contracting", 1]], "у сервера: статус и контракт назначены");
+      t.eq(JSON.stringify(now.filter((e) => e.id < 900 || e.id === 906)), before, "прочие изделия не изменены");
+      t.eq(now.filter((e) => [904, 905].includes(e.id)).map((e) => [e.current_status, e.contract_id]), [["planned", null], ["planned", null]], "невыбранные изделия той же марки не тронуты");
+      // схема и остатки обновлены из ответа сервера
+      await waitFor(() => cmds(a).some((c) => c.cmd === "applyElements"), { what: "обновление схемы" });
+      const ap = cmds(a).find((c) => c.cmd === "applyElements").args.items;
+      t.eq(ap.map((i) => [i.id, i.current_status, i.contract_id]), [[901, "contracting", 1], [902, "contracting", 1], [903, "contracting", 1]], "схема получает то, что вернул сервер");
+      await waitFor(() => /Доступно по позиции: <b>0/.test(a.$("#ws-panel-body").innerHTML) || /Доступно по позиции: 0/.test(a.$("#ws-panel-body").textContent), { what: "остаток после записи" });
+      t.eq(a.byText("[data-al-l]", "QA-Z1").querySelectorAll("em")[1].textContent.trim(), "3", "распределено 3 (перечитано с сервера)");
+      t.eq(a.byText("[data-al-l]", "QA-Z1").querySelectorAll("em")[2].textContent.trim(), "0", "доступно 0 (перечитано с сервера)");
+      t.ok(cmds(a).some((c) => c.cmd === "clearSelection"), "выделение снято");
+      // остаток исчерпан: новая попытка распределить ещё одно изделие — отказ сервера, а не молчаливое превышение
+      frameWin(a).__emit({ multiItems: [{ id: 904, mark: "QA-Z1", element_type: "QA-Тип", current_status: "planned", contract_id: null }] });
+      await waitFor(() => /больше доступного остатка/.test(a.$("#ws-panel-body").textContent), { what: "остаток исчерпан" });
+      t.ok(a.$("[data-al=submit]").disabled, "при нулевом остатке распределить нельзя");
+      a.close();
+    },
+  },
+  {
+    id: "WS-12", title: "Распределение: сервер сам держит остаток (пачка «всё или ничего»), чужая марка и чужой объект отвергаются — фейковый бэкенд повторяет contract_guard",
+    async run(t) {
+      const a = await openApp({ home: true });
+      const d = a.ctl.data;
+      d.contracts.find((c) => c.id === 1).lines.push({ id: 9902, element_type: "QA-Тип", mark: "QA-Z2", quantity: 2 });
+      for (const id of [911, 912, 913]) d.elements.push({ id, object_id: 1, contract_id: null, element_type: "QA-Тип", mark: "QA-Z2", current_status: "planned", project_delivery_date: null, project_smr_start_date: null, planned_delivery_date: null, actual_delivery_date: null, updated_at: "2026-09-12 09:00:00" });
+      const call = async (body) => { const r = await a.win.fetch("/elements/bulk-status", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); return [r.status, await r.text()]; };
+      const over = await call({ status: "contracting", items: [911, 912, 913].map((id) => ({ element_id: id, contract_id: 1 })) });
+      t.eq(over[0], 409, "3 изделия при остатке 2 — отказ сервера");
+      t.eq(d.elements.filter((e) => [911, 912, 913].includes(e.id)).map((e) => e.current_status), ["planned", "planned", "planned"], "пачка не применена частично (всё или ничего)");
+      const other = await call({ status: "contracting", items: [{ element_id: 911, contract_id: 2 }] });
+      t.ok(other[0] === 409 || other[0] === 400, "контракт без позиции под марку или чужого объекта — отказ");
+      const ok = await call({ status: "contracting", items: [911, 912].map((id) => ({ element_id: id, contract_id: 1 })) });
+      t.eq(ok[0], 200, "ровно по остатку — принято");
+      const again = await call({ status: "contracting", items: [{ element_id: 913, contract_id: 1 }] });
+      t.eq(again[0], 409, "остаток исчерпан — следующая привязка отклонена");
+      a.close();
     },
   },
 ];
