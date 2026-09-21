@@ -79,7 +79,7 @@ from app.access import (
 )
 from app.auth import audit_display_name, get_current_user
 from app.contracts import _specification_chain, build_contract_name, recompute_status_and_actual_date
-from app.db import get_connection, touch_elements
+from app.db import begin_write, get_connection, touch_elements
 from app.models import STATUS_LABELS_RU, STATUS_ORDER
 
 router = APIRouter(prefix="/supplier-changes", tags=["supplier-change"])
@@ -963,6 +963,7 @@ def _post_link_swap(conn, doc, items, автор, user_id) -> dict:
 def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения документа, остатков и покрытия (app/db.py)
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")
@@ -1030,6 +1031,7 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
     """
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения документа и возврата привязок (app/db.py)
         doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             raise HTTPException(status_code=404, detail="Документ не найден")

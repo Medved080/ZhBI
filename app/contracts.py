@@ -48,7 +48,7 @@ from app.access import (
 )
 from app.auth import get_current_user
 from app.capacity import CapacityIn, load_contract_capacity, save_contract_capacity
-from app.db import get_connection
+from app.db import begin_write, get_connection
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
 
@@ -640,6 +640,7 @@ def create_contract(body: ContractIn, admin: sqlite3.Row = Depends(get_current_u
 @router.patch("/{contract_id}", response_model=ContractOut)
 def update_contract(contract_id: int, body: ContractIn, admin: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
+    begin_write(conn)   # блокировка записи ДО чтения и сверки покрытия (app/db.py): гонка с распределением изделий
     # ОБЕ проверки: чей контракт правим и куда его переносим. Одной второй
     # было мало — см. _guard_contract.
     _guard_contract(conn, admin, contract_id)

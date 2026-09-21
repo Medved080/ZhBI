@@ -32,6 +32,34 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def begin_write(conn: sqlite3.Connection) -> None:
+    """Открыть ПИШУЩУЮ транзакцию (BEGIN IMMEDIATE) ДО чтения исходного состояния.
+
+    Зачем. Страж контрактации (app/contract_guard.py) считает занятые места запросом и только потом
+    пишет. Пока чтение шло вне транзакции, два одновременных запроса оба видели свободное место и
+    оба записывали — остаток превышался (проверено, scripts/verify_contract_guard_concurrency.py).
+    Здесь писатель берёт блокировку записи ПЕРВЫМ действием: чтение исходного состояния, проверка
+    и запись идут под одной блокировкой, второй писатель ждёт (busy_timeout) и видит уже
+    зафиксированный результат первого. Читатели при WAL не блокируются.
+
+    Ожидание дольше BUSY_TIMEOUT_MS — чистый отказ 503 с текстом (БД не изменена), а не «database is
+    locked» из глубины запроса. Отказ внутри операции по-прежнему откатывает ВСЁ: соединение
+    закрывается без commit. Вызывать первым действием после get_connection() и ТОЛЬКО в операциях,
+    которые пишут (иначе читатель зря займёт блокировку).
+    """
+    from fastapi import HTTPException  # локально: db.py импортируют и скрипты без веб-слоя
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError as e:
+        conn.close()
+        if "locked" in str(e).lower() or "busy" in str(e).lower():
+            raise HTTPException(
+                status_code=503,
+                detail="База занята другой операцией — ничего не изменено. Повторите через несколько секунд.",
+            )
+        raise
+
+
 def touch_elements(conn: sqlite3.Connection, element_ids) -> None:
     """Переставить `updated_at` затронутых изделий на МОМЕНТ ЗАВЕРШЕНИЯ
     длинной транзакции. Вызывать последним действием перед `commit()`.

@@ -70,6 +70,7 @@ from app.reference_catalogs import router as reference_catalogs_router
 from app import zone_recalc
 from app.db import (
     DB_PATH,
+    begin_write,
     get_connection,
     init_db,
     object_source_file,
@@ -1170,6 +1171,7 @@ def update_status(
 ):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверки остатка (app/db.py)
         _guard_elements(conn, user, [element_id], "status", "write")
         # contract_id для новой записи — явно выбранный в диалоге (даже null —
         # "без контракта" осознанно) или унаследованный от предыдущей записи
@@ -1200,6 +1202,7 @@ def update_status_bulk(body: BulkStatusUpdateIn, user: sqlite3.Row = Depends(get
         raise HTTPException(status_code=400, detail="Пустой список элементов")
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверки остатка (app/db.py)
         ids = [item.element_id for item in body.items]
         placeholders = ",".join("?" * len(ids))
         existing_ids = {
@@ -1254,6 +1257,7 @@ def set_element_contract(element_id: int, body: ElementContractIn,
     """
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения и проверки остатка (app/db.py)
         row = conn.execute(
             "SELECT id, current_status, element_type, mark, contract_id FROM elements WHERE id = ?",
             (element_id,),
